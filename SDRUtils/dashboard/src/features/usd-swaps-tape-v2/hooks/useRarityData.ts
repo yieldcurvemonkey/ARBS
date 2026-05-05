@@ -1,9 +1,13 @@
 // Fetches distribution bins + stats + percentile rows + recency for the
 // analytics dock's Rarity tab from /api/usd-swaps-tape-v2/rarity.
 //
-// Phase 2 perf: AbortController per fetch + result cache so basis /
-// histogram-metric toggles don't refetch the same SQL.
-import { useCallback, useEffect, useRef, useState } from 'react'
+// Phase 5 (analytics-fetching): SWR-backed internals. The bespoke
+// `Map`-cache + AbortController scaffolding has moved into SWR's
+// dedup + stale-while-revalidate behaviour, plus a route-local LRU
+// + ETag emission on the server. Public return shape is unchanged so
+// the TradeRarityTab consumer doesn't see any API change.
+import { useMemo } from 'react'
+import useSWR from 'swr'
 import { TAPE_V2_API_BASE } from '../constants'
 import type {
   DistributionStats,
@@ -12,6 +16,7 @@ import type {
   MetricRow,
   RecencyBucket,
 } from '../components/AnalyticsPanel/analytics-types'
+import { rarityKey } from '@/lib/usd-swaps-tape-v2/analyticsCacheKeys'
 
 type FocusedPercentile = { combined: number; custy: number; idb: number }
 
@@ -40,6 +45,48 @@ const EMPTY_STATS: DistributionStats = {
 
 const EMPTY_PCT: FocusedPercentile = { combined: 50, custy: 50, idb: 50 }
 
+interface RarityResponse {
+  bins?: HistogramBin[]
+  binMetric?: RarityBinMetric
+  binWidth?: number
+  stats?: DistributionStats
+  binStats?: DistributionStats
+  metricRows?: MetricRow[]
+  recency?: RecencyBucket | null
+  focusedPercentile?: FocusedPercentile
+}
+
+export function buildRarityUrl(
+  focused: FocusedTrade,
+  opts: {
+    lookback: number
+    primaryTol: number
+    sizeTol: number
+    binMetric: RarityBinMetric
+  },
+): string {
+  const q = new URLSearchParams({
+    value: focused.tape_label ?? '',
+    groupBy: 'tape_label',
+    lookback: String(opts.lookback),
+    primaryTol: String(opts.primaryTol),
+    sizeTol: String(opts.sizeTol),
+    binMetric: opts.binMetric,
+  })
+  const rate = focused.fixed_rate_bps
+  const dv01 = focused.dv01_usd_per_bp
+  const notional = focused.notional_usd
+  if (rate != null) q.set('focusedRate', String(rate))
+  // dv01 / notional are aggregated abs-sums across legs; an orphan
+  // package with no leg data hits this hook with 0 / 0 and would
+  // otherwise produce a bogus P0 percentile + "rank #N" reading.
+  // Drop them when zero so the server treats the rarity row as
+  // notional-unknown and emits null bucketRank instead.
+  if (dv01 != null && dv01 > 0) q.set('focusedDv01', String(dv01))
+  if (notional != null && notional > 0) q.set('focusedNotional', String(notional))
+  return `${TAPE_V2_API_BASE}/rarity?${q.toString()}`
+}
+
 export function useRarityData(
   focused: FocusedTrade | null,
   opts: {
@@ -49,93 +96,71 @@ export function useRarityData(
     binMetric?: RarityBinMetric
   } = {},
 ): UseRarityDataReturn {
-  const [bins, setBins] = useState<HistogramBin[]>([])
-  const [binMetric, setBinMetric] = useState<RarityBinMetric>('dv01')
-  const [binWidth, setBinWidth] = useState<number>(1)
-  const [stats, setStats] = useState<DistributionStats>(EMPTY_STATS)
-  const [binStats, setBinStats] = useState<DistributionStats>(EMPTY_STATS)
-  const [metricRows, setMetricRows] = useState<MetricRow[]>([])
-  const [recency, setRecency] = useState<RecencyBucket | null>(null)
-  const [focusedPercentile, setFocusedPercentile] = useState<FocusedPercentile>(EMPTY_PCT)
-  const [loading, setLoading] = useState(false)
-  const [error, setError] = useState<string | null>(null)
-  const abortRef = useRef<AbortController | null>(null)
-
-  const bucket = focused?.tape_label ?? null
-  const rate = focused?.fixed_rate_bps ?? null
-  const dv01 = focused?.dv01_usd_per_bp ?? null
-  const notional = focused?.notional_usd ?? null
   const lookback = opts.lookback ?? 90
   const primaryTol = opts.primaryTol ?? 2.0
   const sizeTol = opts.sizeTol ?? 0.25
   const requestedBinMetric: RarityBinMetric = opts.binMetric ?? 'fixed_rate'
 
-  const fetchData = useCallback(async () => {
-    if (!bucket) {
-      setBins([]); setStats(EMPTY_STATS); setMetricRows([]); setRecency(null)
-      setBinStats(EMPTY_STATS)
-      setFocusedPercentile(EMPTY_PCT)
-      return
-    }
-    abortRef.current?.abort()
-    const controller = new AbortController()
-    abortRef.current = controller
-    setLoading(true)
-    setError(null)
-    try {
-      const q = new URLSearchParams({
-        value: bucket,
-        groupBy: 'tape_label',
-        lookback: String(lookback),
-        primaryTol: String(primaryTol),
-        sizeTol: String(sizeTol),
+  const enabled = focused != null && focused.tape_label != null
+
+  const swrKey = useMemo(() => {
+    if (!enabled) return null
+    return rarityKey({
+      bucket: `tape_label:${focused.tape_label}`,
+      groupBy: 'tape_label',
+      groupValueOverride: null,
+      options: {
+        lookback,
+        primaryTol,
+        sizeTol,
         binMetric: requestedBinMetric,
-      })
-      if (rate != null) q.set('focusedRate', String(rate))
-      // dv01 / notional are aggregated abs-sums across legs; an orphan
-      // package with no leg data hits this hook with 0 / 0 and would
-      // otherwise produce a bogus P0 percentile + "rank #N" reading.
-      // Drop them when zero so the server treats the rarity row as
-      // notional-unknown and emits null bucketRank instead.
-      if (dv01 != null && dv01 > 0) q.set('focusedDv01', String(dv01))
-      if (notional != null && notional > 0) q.set('focusedNotional', String(notional))
-      const res = await fetch(`${TAPE_V2_API_BASE}/rarity?${q}`, { signal: controller.signal })
-      if (!res.ok) throw new Error(`rarity ${res.status}`)
-      const data = await res.json()
-      if (controller.signal.aborted) return
-      setBins(data.bins ?? [])
-      const responseMetric: RarityBinMetric =
-        data.binMetric === 'dv01' || data.binMetric === 'notional'
-          ? data.binMetric
-          : 'fixed_rate'
-      setBinMetric(responseMetric)
-      setBinWidth(typeof data.binWidth === 'number' && data.binWidth > 0 ? data.binWidth : 1)
-      setStats(data.stats ?? EMPTY_STATS)
-      setBinStats(data.binStats ?? data.stats ?? EMPTY_STATS)
-      setMetricRows(data.metricRows ?? [])
-      setRecency(data.recency ?? null)
-      setFocusedPercentile(data.focusedPercentile ?? EMPTY_PCT)
-    } catch (e) {
-      if ((e as { name?: string })?.name === 'AbortError') return
-      setError(e instanceof Error ? e.message : 'rarity failed')
-    } finally {
-      if (!controller.signal.aborted) setLoading(false)
-    }
-  }, [bucket, rate, dv01, notional, lookback, primaryTol, sizeTol, requestedBinMetric])
+        // The focused row's own metrics shape the response (focusedRate,
+        // focusedDv01, focusedNotional change which percentile rows /
+        // similar prints are computed) — pin them to the cache key.
+        focusedRate: focused.fixed_rate_bps ?? null,
+        focusedDv01: focused.dv01_usd_per_bp ?? null,
+        focusedNotional: focused.notional_usd ?? null,
+      },
+    })
+  }, [enabled, focused, lookback, primaryTol, sizeTol, requestedBinMetric])
 
-  useEffect(() => {
-    fetchData()
-  }, [fetchData])
+  const url = useMemo(() => {
+    if (!enabled) return null
+    return buildRarityUrl(focused, {
+      lookback,
+      primaryTol,
+      sizeTol,
+      binMetric: requestedBinMetric,
+    })
+  }, [enabled, focused, lookback, primaryTol, sizeTol, requestedBinMetric])
 
-  useEffect(() => {
-    return () => {
-      abortRef.current?.abort()
-    }
-  }, [])
+  const { data, error, isLoading, mutate } = useSWR<RarityResponse>(
+    swrKey,
+    url ? () => fetch(url).then((r) => r.json()) : null,
+  )
+
+  const bins = data?.bins ?? []
+  const responseMetric: RarityBinMetric =
+    data?.binMetric === 'dv01' || data?.binMetric === 'notional'
+      ? data.binMetric
+      : 'fixed_rate'
 
   return {
-    bins, binMetric, binWidth, binStats,
-    stats, metricRows, recency, focusedPercentile,
-    loading, error, refetch: fetchData,
+    bins,
+    binMetric: responseMetric,
+    binWidth:
+      typeof data?.binWidth === 'number' && data.binWidth > 0
+        ? data.binWidth
+        : 1,
+    stats: data?.stats ?? EMPTY_STATS,
+    binStats: data?.binStats ?? data?.stats ?? EMPTY_STATS,
+    metricRows: data?.metricRows ?? [],
+    recency: data?.recency ?? null,
+    focusedPercentile: data?.focusedPercentile ?? EMPTY_PCT,
+    loading: isLoading,
+    error: error ? (error instanceof Error ? error.message : String(error)) : null,
+    refetch: () => {
+      mutate()
+    },
   }
 }
