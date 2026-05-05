@@ -37,28 +37,28 @@ class DateSample:
 # dates already cached from earlier 5-date backfill (2023-02-21, 2023-03-13,
 # 2024-08-15, 2024-09-19, 2026-05-04) are kept first to maximize cache reuse.
 REGIME_CALENDAR: List[Tuple[datetime.date, str]] = [
-    # === Cached from earlier backfill (5 dates) ===
+    # === Cached from earlier 12-date backfill ===
     (datetime.date(2023, 2, 21), "pre-SVB calm"),
     (datetime.date(2023, 3, 13), "post-SVB stress peak"),
     (datetime.date(2024, 8, 15), "pre-Sep24 cut"),
     (datetime.date(2024, 9, 19), "post-50bp cut"),
     (datetime.date(2026, 5, 4), "current"),
-
-    # === New dates spanning regime gaps (7 dates) ===
-    # Hike regime
     (datetime.date(2022, 12, 1), "Dec22 cycle peak"),
-    # Stress (more SVB context)
     (datetime.date(2023, 3, 20), "SVB+1w recovering"),
-    # Pivot (post-Sep24 follow-up + Dec24 SEP shock)
     (datetime.date(2024, 12, 19), "Dec24 hawkish SEP"),
-    # Stress 2025
     (datetime.date(2025, 4, 4), "post-tariff shock"),
-    # Calm 2025
     (datetime.date(2025, 6, 16), "summer 2025"),
-    # Pivot 2025
     (datetime.date(2025, 9, 17), "Sep25 cut restart"),
-    # Calm 2026 pre-current
     (datetime.date(2026, 2, 17), "early-2026 calm"),
+
+    # === New hike-cycle dates (fill n=1 gap in hike regime) ===
+    # 2022 ramping cycle: 75bp era from Jun 2022 onward
+    (datetime.date(2022, 6, 16), "Jun22 first 75bp"),
+    (datetime.date(2022, 7, 28), "Jul22 75bp follow-up"),
+    (datetime.date(2022, 9, 22), "Sep22 75bp"),
+    (datetime.date(2022, 11, 3), "Nov22 75bp"),
+    (datetime.date(2023, 1, 12), "early-2023 hike pause expectation"),
+    (datetime.date(2023, 5, 4), "May23 25bp + pause guidance"),
 ]
 
 
