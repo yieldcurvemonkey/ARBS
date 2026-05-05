@@ -211,11 +211,26 @@ def test_regime_classifier_hike():
         DistributionScreenerConfig, RegimeBucket, classify_regime,
     )
 
+    # Hike: moderate negative skew, residual ratio in [10, 60]
     bucket = classify_regime(
         residual_ratio=11.0, skew=-0.45, tail_upper_50bp=0.12,
         config=DistributionScreenerConfig(),
     )
     assert bucket == RegimeBucket.HIKE
+
+
+def test_regime_classifier_high_vol_hike_routes_to_stress():
+    """High-vol hike-cycle dates (Jul22 ratio=130) collapse into stress.
+    That's correct: they're trade-flag-equivalent to acute stress."""
+    from RVUtils.SR3ZQDistributionScreener import (
+        DistributionScreenerConfig, RegimeBucket, classify_regime,
+    )
+
+    bucket = classify_regime(
+        residual_ratio=130.0, skew=-0.03, tail_upper_50bp=0.245,
+        config=DistributionScreenerConfig(),
+    )
+    assert bucket == RegimeBucket.STRESS
 
 
 # --- _signals --------------------------------------------------------------

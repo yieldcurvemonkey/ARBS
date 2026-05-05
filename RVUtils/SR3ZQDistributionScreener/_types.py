@@ -236,11 +236,13 @@ class DistributionScreenerConfig:
     lambda_grid: Tuple[float, ...] = (1e-5, 5e-5, 1e-4, 5e-4, 1e-3)
     lambda_grid_stress: Tuple[float, ...] = (1e-6, 5e-6, 1e-5, 5e-5, 1e-4)
 
-    # Regime classifier thresholds (calibrated from 12+6 backfill quantiles)
-    regime_residual_ratio_stress_p25: float = 50.0     # stress p25 ≈ 84; conservative 50
-    regime_tail_upper_50bp_stress_p25: float = 0.20    # stress p25 ≈ 0.20
-    regime_skew_pivot_p75: float = -1.0                # pivot p75 ≈ -1.37
-    regime_skew_calm_p25: float = 0.20                 # calm p25 ≈ 0.28
+    # Regime classifier thresholds — calibrated from 18-date backfill quantiles
+    # (3 calm + 3 stress + 4 pivot + 7 hike samples spanning 2022 hike cycle
+    # through 2026 current).
+    regime_residual_ratio_stress_p25: float = 60.0     # stress p25=84; buffer below
+    regime_tail_upper_50bp_stress_p25: float = 0.20    # stress p25=0.20
+    regime_skew_pivot_p75: float = -1.0                # pivot p75=-1.37; hike p75=-0.24
+    regime_skew_calm_p25: float = 0.20                 # calm p25=-0.38; not currently gated
 
     # Trade flag thresholds (per spec §3)
     vol_cone_residual_ratio_pctl: float = 0.90    # top decile residual ratio = sell vol
