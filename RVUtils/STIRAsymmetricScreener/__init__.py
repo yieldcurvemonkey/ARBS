@@ -23,17 +23,25 @@ from RVUtils.STIRAsymmetricScreener._universe import (
     enumerate_contracts,
     resolve_universe,
 )
+from RVUtils.STIRAsymmetricScreener._market_data import (
+    LegMarket,
+    STIRMarketData,
+    load_market_data,
+)
 
 __all__ = [
     "ArchetypeType",
     "CandidateDef",
     "CandidateResult",
     "ContractEntry",
+    "LegMarket",
     "OptionLeg",
+    "STIRMarketData",
     "ScreenerConfig",
     "ScreenerSnapshot",
     "UniverseEntry",
     "attach_strike_grid",
     "enumerate_contracts",
+    "load_market_data",
     "resolve_universe",
 ]
