@@ -366,6 +366,9 @@ def _execute_ddl_bundle(engine: Engine, ddl: str) -> None:
             conn.execute(text(tail))
 
 
+_schema_ensured: set[str] = set()
+
+
 def ensure_schema(engine: Engine) -> None:
     """Create v2 tables / indexes / view if they don't already exist.
 
@@ -373,11 +376,19 @@ def ensure_schema(engine: Engine) -> None:
     fresh environments (§4.11). Writes after Phase 4 cutover target v2
     only; v1 is preserved for instant rollback via the dashboard's
     TAPE_DISPLAY_VIEW constant.
+
+    Guarded per-engine-URL so DDL (which takes AccessExclusiveLock on
+    views) runs at most once per process, avoiding deadlocks during
+    multi-date backfills.
     """
+    key = str(engine.url)
+    if key in _schema_ensured:
+        return
     _execute_ddl_bundle(engine, TAPE_SCHEMA_SQL)
     _execute_ddl_bundle(engine, TAPE_SCHEMA_SQL_V2)
     # Phase 6 monitoring view
     _execute_ddl_bundle(engine, MONITORING_SQL_V2)
+    _schema_ensured.add(key)
 
 
 # ---------------------------------------------------------------------------
