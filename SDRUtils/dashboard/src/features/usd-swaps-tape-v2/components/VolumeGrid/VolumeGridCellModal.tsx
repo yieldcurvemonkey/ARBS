@@ -11,10 +11,16 @@ import {
   Tooltip, XAxis, YAxis,
 } from 'recharts'
 import { useVolumeGridCell } from '../../hooks/useVolumeGridCell'
-import { fwdLabel, tenorLabel } from './buckets'
+import { lookupLabel } from './buckets'
 import type {
   VolumeCellRange, VolumeMetric,
+  VolumeGridSchemaAxis,
 } from '../../types/volume-grid.types'
+import type {
+  ForwardSchemaId,
+  PackageTypeGroupId,
+  TenorSchemaId,
+} from '@/lib/usd-swaps-tape-v2/volumeGridBuckets'
 
 const KEY_RANGE = 'usd-tape-v2:volume-grid:cell-range'
 
@@ -37,6 +43,11 @@ const fmtTime = (ts: string): string =>
 export interface VolumeGridCellModalProps {
   cell: { fwd: string; tenor: string } | null
   metric: VolumeMetric
+  forwardSchema: ForwardSchemaId
+  tenorSchema: TenorSchemaId
+  packageType: PackageTypeGroupId
+  forwardAxis: VolumeGridSchemaAxis | undefined
+  tenorAxis: VolumeGridSchemaAxis | undefined
   onClose: () => void
   onSelectPackage: (packageId: string) => void
 }
@@ -53,11 +64,16 @@ export function VolumeGridCellModal(props: VolumeGridCellModalProps): JSX.Elemen
   }
 
   const { data, error, isLoading } = useVolumeGridCell({
-    cell: props.cell, metric: props.metric, range,
+    cell: props.cell,
+    metric: props.metric,
+    range,
+    forwardSchema: props.forwardSchema,
+    tenorSchema: props.tenorSchema,
+    packageType: props.packageType,
   })
 
   const headerLabel = props.cell
-    ? `${fwdLabel(props.cell.fwd)} × ${tenorLabel(props.cell.tenor)} — Volume detail`
+    ? `${lookupLabel(props.forwardAxis, props.cell.fwd)} × ${lookupLabel(props.tenorAxis, props.cell.tenor)} — Volume detail`
     : 'Volume detail'
 
   return (

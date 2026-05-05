@@ -3,35 +3,38 @@
 
 import type { JSX } from 'react'
 import { useMemo } from 'react'
-import { FORWARD_AXIS, TENOR_AXIS, fwdLabel } from './buckets'
 import { VolumeGridCell } from './VolumeGridCell'
 import { colorForPercentile, foregroundForPercentile } from './colorRamp'
 import type {
-  VolumeGridCell as Cell, VolumeGridResponse, VolumeMetric, VolumePeriod,
+  VolumeGridCell as Cell, VolumeGridResponse, VolumeGridViewMode,
+  VolumeMetric, VolumePeriod,
 } from '../../types/volume-grid.types'
 
 export interface VolumeGridProps {
   data: VolumeGridResponse
   metric: VolumeMetric
   period: VolumePeriod
-  onCellClick: (id: { fwd: Cell['fwd']; tenor: Cell['tenor'] }) => void
+  viewMode: VolumeGridViewMode
+  onCellClick: (id: { fwd: string; tenor: string }) => void
 }
 
-export function VolumeGrid({ data, metric, period, onCellClick }: VolumeGridProps): JSX.Element {
+export function VolumeGrid({ data, metric, period, viewMode, onCellClick }: VolumeGridProps): JSX.Element {
   const cellMap = useMemo(() => {
     const m = new Map<string, Cell>()
     for (const c of data.cells) m.set(`${c.fwd}|${c.tenor}`, c)
     return m
   }, [data.cells])
+  const forwardAxis = data.axes.forward
+  const tenorAxis = data.axes.tenor
   return (
     <div
       className="grid gap-px font-mono text-[10.5px] text-slate-300"
       style={{
-        gridTemplateColumns: `minmax(54px,auto) repeat(${TENOR_AXIS.length},minmax(58px,1fr)) minmax(64px,auto)`,
+        gridTemplateColumns: `minmax(60px,auto) repeat(${tenorAxis.buckets.length},minmax(58px,1fr)) minmax(64px,auto)`,
       }}
     >
       <div />
-      {TENOR_AXIS.map((t) => (
+      {tenorAxis.buckets.map((t) => (
         <div
           key={t.id}
           data-testid="volume-grid-col-label"
@@ -46,14 +49,17 @@ export function VolumeGrid({ data, metric, period, onCellClick }: VolumeGridProp
       >
         Total
       </div>
-      {FORWARD_AXIS.map((f) => (
+      {forwardAxis.buckets.map((f) => (
         <RowFragment
           key={f.id}
           fwd={f.id}
-          fwdLabelText={fwdLabel(f.id)}
+          fwdLabelText={f.label}
           cellMap={cellMap}
           metric={metric}
           period={period}
+          viewMode={viewMode}
+          tenorAxis={tenorAxis}
+          forwardAxis={forwardAxis}
           rowTotal={data.totals.rowTotals[f.id]}
           onCellClick={onCellClick}
         />
@@ -64,18 +70,16 @@ export function VolumeGrid({ data, metric, period, onCellClick }: VolumeGridProp
       >
         Total
       </div>
-      {TENOR_AXIS.map((t) => (
+      {tenorAxis.buckets.map((t) => (
         <TotalCell
           key={t.id}
           value={data.totals.colTotals[t.id]?.current ?? 0}
           percentile={data.totals.colTotals[t.id]?.percentile ?? null}
-          metric={metric}
         />
       ))}
       <TotalCell
         value={data.totals.grand.current}
         percentile={data.totals.grand.percentile}
-        metric={metric}
         emphasized
       />
     </div>
@@ -83,11 +87,14 @@ export function VolumeGrid({ data, metric, period, onCellClick }: VolumeGridProp
 }
 
 function RowFragment(props: {
-  fwd: Cell['fwd']
+  fwd: string
   fwdLabelText: string
   cellMap: Map<string, Cell>
   metric: VolumeMetric
   period: VolumePeriod
+  viewMode: VolumeGridViewMode
+  forwardAxis: VolumeGridResponse['axes']['forward']
+  tenorAxis: VolumeGridResponse['axes']['tenor']
   rowTotal: { current: number; percentile: number | null } | undefined
   onCellClick: VolumeGridProps['onCellClick']
 }): JSX.Element {
@@ -99,13 +106,14 @@ function RowFragment(props: {
       >
         {props.fwdLabelText}
       </div>
-      {TENOR_AXIS.map((t) => {
+      {props.tenorAxis.buckets.map((t) => {
         const cell =
           props.cellMap.get(`${props.fwd}|${t.id}`) ??
           ({
             fwd: props.fwd,
             tenor: t.id,
-            current: 0, tradeCount: 0,
+            current: 0, idbCurrent: 0, custyCurrent: 0,
+            tradeCount: 0,
             baseline: { p25: 0, p50: 0, p75: 0, min: 0, max: 0, n: 0 },
             percentile: null,
           } as Cell)
@@ -115,6 +123,9 @@ function RowFragment(props: {
               cell={cell}
               metric={props.metric}
               period={props.period}
+              viewMode={props.viewMode}
+              forwardAxis={props.forwardAxis}
+              tenorAxis={props.tenorAxis}
               onClick={props.onCellClick}
             />
           </div>
@@ -123,7 +134,6 @@ function RowFragment(props: {
       <TotalCell
         value={props.rowTotal?.current ?? 0}
         percentile={props.rowTotal?.percentile ?? null}
-        metric={props.metric}
       />
     </>
   )
@@ -132,10 +142,8 @@ function RowFragment(props: {
 function TotalCell(props: {
   value: number
   percentile: number | null
-  metric: VolumeMetric
   emphasized?: boolean
 }): JSX.Element {
-  void props.metric
   const fmt = (() => {
     const abs = Math.abs(props.value)
     if (abs >= 1e9) return `${(abs / 1e9).toFixed(1)}B`

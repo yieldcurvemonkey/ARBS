@@ -1,7 +1,7 @@
 'use client'
 // ABOUTME: Collapsible top-of-page card hosting the volume-grid heatmap.
-// Owns metric/period state with localStorage persistence; opens the cell
-// drill-down modal on click (modal wired in a later task).
+// Owns metric/period/schema/packageType state with localStorage
+// persistence; opens the cell drill-down modal on click.
 
 import type { JSX } from 'react'
 import { useCallback, useEffect, useState } from 'react'
@@ -9,13 +9,45 @@ import { VolumeGrid } from './VolumeGrid'
 import { VolumeGridCellModal } from './VolumeGridCellModal'
 import { useVolumeGrid } from '../../hooks/useVolumeGrid'
 import type {
+  VolumeGridViewMode,
   VolumeMetric, VolumePeriod,
   VolumeGridCell as Cell,
 } from '../../types/volume-grid.types'
+import {
+  FORWARD_SCHEMA_IDS,
+  PACKAGE_TYPE_GROUP_IDS,
+  PACKAGE_TYPE_GROUP_LABELS,
+  TENOR_SCHEMA_IDS,
+  type ForwardSchemaId,
+  type PackageTypeGroupId,
+  type TenorSchemaId,
+} from '@/lib/usd-swaps-tape-v2/volumeGridBuckets'
 
 const KEY_COLLAPSED = 'usd-tape-v2:volume-grid:collapsed'
 const KEY_METRIC    = 'usd-tape-v2:volume-grid:metric'
 const KEY_PERIOD    = 'usd-tape-v2:volume-grid:period'
+const KEY_FWD_SCHEMA  = 'usd-tape-v2:volume-grid:forward-schema'
+const KEY_TENOR_SCHEMA = 'usd-tape-v2:volume-grid:tenor-schema'
+const KEY_PACKAGE_TYPE = 'usd-tape-v2:volume-grid:package-type'
+const KEY_VIEW_MODE = 'usd-tape-v2:volume-grid:view-mode'
+
+const VIEW_MODE_IDS: ReadonlyArray<VolumeGridViewMode> = ['volume', 'idb_custy']
+const VIEW_MODE_LABELS: Record<VolumeGridViewMode, string> = {
+  volume: 'Volume',
+  idb_custy: 'IDB / CUSTY',
+}
+
+const FORWARD_SCHEMA_LABELS: Record<ForwardSchemaId, string> = {
+  default: 'Default',
+  legacy: 'Legacy',
+  imm16: 'IMM 16',
+  fomc: 'FOMC',
+}
+const TENOR_SCHEMA_LABELS: Record<TenorSchemaId, string> = {
+  default: 'Default',
+  legacy: 'Legacy',
+  venue: 'Venue',
+}
 
 function readBool(key: string, fallback: boolean): boolean {
   if (typeof window === 'undefined') return fallback
@@ -40,7 +72,19 @@ export function VolumeGridCard({ onSelectPackage }: VolumeGridCardProps): JSX.El
   const [period, setPeriod] = useState<VolumePeriod>(() =>
     readEnum<VolumePeriod>(KEY_PERIOD, ['today', '1h', '24h', '1w'], 'today'),
   )
-  const [selectedCell, setSelectedCell] = useState<{ fwd: Cell['fwd']; tenor: Cell['tenor'] } | null>(null)
+  const [forwardSchema, setForwardSchema] = useState<ForwardSchemaId>(() =>
+    readEnum<ForwardSchemaId>(KEY_FWD_SCHEMA, FORWARD_SCHEMA_IDS, 'default'),
+  )
+  const [tenorSchema, setTenorSchema] = useState<TenorSchemaId>(() =>
+    readEnum<TenorSchemaId>(KEY_TENOR_SCHEMA, TENOR_SCHEMA_IDS, 'default'),
+  )
+  const [packageType, setPackageType] = useState<PackageTypeGroupId>(() =>
+    readEnum<PackageTypeGroupId>(KEY_PACKAGE_TYPE, PACKAGE_TYPE_GROUP_IDS, 'outright'),
+  )
+  const [viewMode, setViewMode] = useState<VolumeGridViewMode>(() =>
+    readEnum<VolumeGridViewMode>(KEY_VIEW_MODE, VIEW_MODE_IDS, 'volume'),
+  )
+  const [selectedCell, setSelectedCell] = useState<{ fwd: string; tenor: string } | null>(null)
 
   useEffect(() => {
     if (typeof window === 'undefined') return
@@ -54,10 +98,29 @@ export function VolumeGridCard({ onSelectPackage }: VolumeGridCardProps): JSX.El
     if (typeof window === 'undefined') return
     window.localStorage.setItem(KEY_PERIOD, period)
   }, [period])
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    window.localStorage.setItem(KEY_FWD_SCHEMA, forwardSchema)
+  }, [forwardSchema])
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    window.localStorage.setItem(KEY_TENOR_SCHEMA, tenorSchema)
+  }, [tenorSchema])
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    window.localStorage.setItem(KEY_PACKAGE_TYPE, packageType)
+  }, [packageType])
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    window.localStorage.setItem(KEY_VIEW_MODE, viewMode)
+  }, [viewMode])
 
-  const grid = useVolumeGrid({ metric, period, collapsed })
+  const grid = useVolumeGrid({
+    metric, period, collapsed,
+    forwardSchema, tenorSchema, packageType, viewMode,
+  })
 
-  const onCellClick = useCallback((id: { fwd: Cell['fwd']; tenor: Cell['tenor'] }) => {
+  const onCellClick = useCallback((id: { fwd: string; tenor: string }) => {
     setSelectedCell(id)
   }, [])
 
@@ -70,7 +133,7 @@ export function VolumeGridCard({ onSelectPackage }: VolumeGridCardProps): JSX.El
       data-testid="volume-grid-card"
       className="border-b border-slate-800 bg-slate-900/40 ring-1 ring-slate-800"
     >
-      <header className="flex items-center gap-2 px-3 py-1.5 text-slate-300">
+      <header className="flex flex-wrap items-center gap-2 px-3 py-1.5 text-slate-300">
         <button
           type="button"
           aria-label="Toggle volume grid"
@@ -93,6 +156,42 @@ export function VolumeGridCard({ onSelectPackage }: VolumeGridCardProps): JSX.El
           ]}
           value={period}
           onChange={setPeriod}
+        />
+        <Select
+          aria-label="Package type"
+          value={packageType}
+          onChange={(v) => setPackageType(v as PackageTypeGroupId)}
+          options={PACKAGE_TYPE_GROUP_IDS.map((id) => ({
+            id,
+            label: PACKAGE_TYPE_GROUP_LABELS[id],
+          }))}
+        />
+        <Select
+          aria-label="View mode"
+          value={viewMode}
+          onChange={(v) => setViewMode(v as VolumeGridViewMode)}
+          options={VIEW_MODE_IDS.map((id) => ({
+            id,
+            label: `View: ${VIEW_MODE_LABELS[id]}`,
+          }))}
+        />
+        <Select
+          aria-label="Forward schema"
+          value={forwardSchema}
+          onChange={(v) => setForwardSchema(v as ForwardSchemaId)}
+          options={FORWARD_SCHEMA_IDS.map((id) => ({
+            id,
+            label: `Fwd: ${FORWARD_SCHEMA_LABELS[id]}`,
+          }))}
+        />
+        <Select
+          aria-label="Tenor schema"
+          value={tenorSchema}
+          onChange={(v) => setTenorSchema(v as TenorSchemaId)}
+          options={TENOR_SCHEMA_IDS.map((id) => ({
+            id,
+            label: `Tenor: ${TENOR_SCHEMA_LABELS[id]}`,
+          }))}
         />
         {asOf && (
           <span className="ml-1 rounded bg-slate-800/60 px-1.5 py-[1px] font-mono text-[9.5px] text-slate-400">
@@ -121,6 +220,7 @@ export function VolumeGridCard({ onSelectPackage }: VolumeGridCardProps): JSX.El
               data={grid.data}
               metric={metric}
               period={period}
+              viewMode={viewMode}
               onCellClick={onCellClick}
             />
           ) : (
@@ -131,6 +231,11 @@ export function VolumeGridCard({ onSelectPackage }: VolumeGridCardProps): JSX.El
       <VolumeGridCellModal
         cell={selectedCell}
         metric={metric}
+        forwardSchema={forwardSchema}
+        tenorSchema={tenorSchema}
+        packageType={packageType}
+        forwardAxis={grid.data?.axes.forward}
+        tenorAxis={grid.data?.axes.tenor}
         onClose={() => setSelectedCell(null)}
         onSelectPackage={onSelectPackage}
       />
@@ -157,10 +262,35 @@ function Toggle<T extends string>({
   )
 }
 
+interface SelectOption {
+  id: string
+  label: string
+}
+
+function Select(props: {
+  'aria-label': string
+  value: string
+  onChange: (v: string) => void
+  options: ReadonlyArray<SelectOption>
+}): JSX.Element {
+  return (
+    <select
+      aria-label={props['aria-label']}
+      value={props.value}
+      onChange={(e) => props.onChange(e.target.value)}
+      className="rounded border border-slate-700 bg-slate-900 px-2 py-[2px] font-mono text-[10.5px] text-slate-200 hover:bg-slate-800"
+    >
+      {props.options.map((o) => (
+        <option key={o.id} value={o.id}>{o.label}</option>
+      ))}
+    </select>
+  )
+}
+
 function SkeletonGrid(): JSX.Element {
   return (
     <div className="grid h-32 animate-pulse grid-cols-12 gap-px">
-      {Array.from({ length: 12 * 6 }).map((_, i) => (
+      {Array.from({ length: 12 * 8 }).map((_, i) => (
         <div key={i} className="rounded-sm bg-slate-800/40" />
       ))}
     </div>

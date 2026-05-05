@@ -5,11 +5,19 @@ import type {
   VolumeCellRange, VolumeMetric,
   VolumeGridCellResponse,
 } from '../types/volume-grid.types'
+import type {
+  ForwardSchemaId,
+  PackageTypeGroupId,
+  TenorSchemaId,
+} from '@/lib/usd-swaps-tape-v2/volumeGridBuckets'
 
 export interface UseVolumeGridCellArgs {
   cell: { fwd: string; tenor: string } | null
   metric: VolumeMetric
   range: VolumeCellRange
+  forwardSchema: ForwardSchemaId
+  tenorSchema: TenorSchemaId
+  packageType: PackageTypeGroupId
   recentLimit?: number
   fetcher?: typeof fetch
 }
@@ -22,12 +30,20 @@ export interface UseVolumeGridCellReturn {
 }
 
 export function buildVolumeGridCellUrl(
-  args: Pick<UseVolumeGridCellArgs, 'cell' | 'metric' | 'range' | 'recentLimit'>,
+  args: Pick<
+    UseVolumeGridCellArgs,
+    'cell' | 'metric' | 'range' | 'recentLimit' | 'forwardSchema' | 'tenorSchema' | 'packageType'
+  >,
 ): string | null {
   if (!args.cell) return null
   const q = new URLSearchParams({
-    fwd: args.cell.fwd, tenor: args.cell.tenor,
-    metric: args.metric, range: args.range,
+    fwd: args.cell.fwd,
+    tenor: args.cell.tenor,
+    metric: args.metric,
+    range: args.range,
+    forwardSchema: args.forwardSchema,
+    tenorSchema: args.tenorSchema,
+    packageType: args.packageType,
   })
   if (args.recentLimit != null) q.set('recentLimit', String(args.recentLimit))
   return `${TAPE_V2_API_BASE}/volume-grid/cell?${q}`
