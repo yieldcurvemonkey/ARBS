@@ -10,8 +10,10 @@
 // today; their option-bag entries (lookback, primaryTol, sizeTol,
 // binMetric) all change which rows / aggregations the warehouse
 // returns and therefore must remain in the cache key.
-
-import { createHash } from 'node:crypto'
+//
+// Hash is FNV-1a 32-bit (sync, isomorphic) — this file is imported
+// by client code (useAnalyticsPrefetch) so node:crypto is unavailable.
+// Cache-key hashing has no security requirement.
 
 export type AnalyticsCacheKey = readonly [
   namespace: 'usd-swaps-tape-v2',
@@ -29,14 +31,20 @@ const ORTHOGONAL_DISPLAY_OPTIONS = new Set<string>([
   'excludeLargeCusty',
 ])
 
+function fnv1a32(input: string): string {
+  let h = 0x811c9dc5
+  for (let i = 0; i < input.length; i++) {
+    h ^= input.charCodeAt(i)
+    h = Math.imul(h, 0x01000193) >>> 0
+  }
+  return h.toString(16).padStart(8, '0')
+}
+
 function hashOptions(options: Record<string, unknown>): string {
   const filtered = Object.entries(options)
     .filter(([k]) => !ORTHOGONAL_DISPLAY_OPTIONS.has(k))
     .sort(([a], [b]) => a.localeCompare(b))
-  return createHash('sha1')
-    .update(JSON.stringify(filtered))
-    .digest('hex')
-    .slice(0, 16)
+  return fnv1a32(JSON.stringify(filtered))
 }
 
 export interface TimeseriesKeyArgs {
