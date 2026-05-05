@@ -8,8 +8,12 @@ eight structural archetypes from the design spec
 Implementation plan: ``docs/plans/2026-05-04-stir-asymmetric-screener.md``.
 """
 
-from RVUtils.STIRAsymmetricScreener._types import ArchetypeType
+from RVUtils.STIRAsymmetricScreener._types import (
+    ArchetypeType,
+    OptionLeg,
+)
 
 __all__ = [
     "ArchetypeType",
+    "OptionLeg",
 ]
