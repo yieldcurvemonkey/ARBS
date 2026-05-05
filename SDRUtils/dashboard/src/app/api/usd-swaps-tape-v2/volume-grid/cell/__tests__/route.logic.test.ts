@@ -48,6 +48,19 @@ describe('parseVolumeGridCellParams', () => {
       ).ok,
     ).toBe(false)
   })
+  it('accepts venue MIC code as tenor under venue schema', () => {
+    const out = parseVolumeGridCellParams(
+      new URLSearchParams('fwd=spot&tenor=BBSF&tenorSchema=venue'),
+    )
+    expect(out.ok).toBe(true)
+  })
+  it('rejects malformed MIC under venue schema', () => {
+    expect(
+      parseVolumeGridCellParams(
+        new URLSearchParams('fwd=spot&tenor=oops!&tenorSchema=venue'),
+      ).ok,
+    ).toBe(false)
+  })
 })
 
 describe('rangeToStartDate', () => {

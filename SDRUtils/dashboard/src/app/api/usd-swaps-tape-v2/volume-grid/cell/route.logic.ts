@@ -71,7 +71,12 @@ export function parseVolumeGridCellParams(
   } else if (!forwardSchema.buckets.some((b) => b.id === fwd)) {
     return { ok: false, error: `unknown fwd: ${fwd} (schema=${forwardSchema.id})` }
   }
-  if (!tenorSchema.buckets.some((b) => b.id === tenor)) {
+  if (tenorSchema.kind === 'venue') {
+    // Venue MIC codes are 3-5 uppercase alphanumerics in the SDR feed.
+    if (!/^[A-Z0-9]{3,5}$/.test(tenor)) {
+      return { ok: false, error: `tenor must be a venue MIC like 'BBSF' (got ${tenor})` }
+    }
+  } else if (!tenorSchema.buckets.some((b) => b.id === tenor)) {
     return { ok: false, error: `unknown tenor: ${tenor} (schema=${tenorSchema.id})` }
   }
   const metric = (search.get('metric') ?? 'notional').toLowerCase() as VolumeMetric

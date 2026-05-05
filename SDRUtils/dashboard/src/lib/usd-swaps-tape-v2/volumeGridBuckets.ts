@@ -22,7 +22,8 @@ export interface BucketDef {
 }
 
 export type ForwardSchemaId = 'default' | 'legacy' | 'imm16' | 'fomc'
-export type TenorSchemaId = 'default' | 'legacy'
+/** Column-axis schemas — tenor-by-years or platform_identifier (venue). */
+export type TenorSchemaId = 'default' | 'legacy' | 'venue'
 
 /**
  * Identifies how a forward schema's buckets are bound in SQL.
@@ -31,6 +32,15 @@ export type TenorSchemaId = 'default' | 'legacy'
  *                     bucket list is discovered dynamically from the data.
  */
 export type ForwardSchemaKind = 'years' | 'fomc_label'
+
+/**
+ * Identifies how a column-axis schema's buckets are bound in SQL.
+ *   - `tenor_years`:  tenor_years vs lo/hi range CASE (default)
+ *   - `venue`:        bucket id is `platform_identifier` (a MIC code);
+ *                     buckets are discovered dynamically from the data
+ *                     and ordered IDB-first then CUSTY-first.
+ */
+export type TenorSchemaKind = 'tenor_years' | 'venue'
 
 const ONE_DAY_MS = 86_400_000
 const YEARS_PER_DAY = 1 / 365.25
@@ -107,6 +117,7 @@ const FORWARD_SCHEMA_LABELS: Record<ForwardSchemaId, string> = {
 const TENOR_SCHEMA_LABELS: Record<TenorSchemaId, string> = {
   default: 'Default',
   legacy: 'Legacy',
+  venue: 'Venue (MIC)',
 }
 
 /**
@@ -171,13 +182,14 @@ export interface ResolvedSchema {
   buckets: ReadonlyArray<BucketDef>
   /**
    * How the schema's bucket id is computed in SQL.
-   *  - 'years': bucket id from a year-range CASE on `forward_start_years`
-   *    (the default for forward schemas + every tenor schema)
-   *  - 'fomc_label': bucket id is `${alias}.fomc_meeting_label` directly.
-   *    The schema's `buckets` list starts empty and is filled in by the
-   *    route handler from the distinct values returned by the SQL query.
+   *  - 'years' / 'tenor_years': year-range CASE on the relevant column
+   *    (default for forward + tenor schemas)
+   *  - 'fomc_label': forward schema only — bucket id is `${alias}.fomc_meeting_label`
+   *    directly; bucket list is discovered post-query.
+   *  - 'venue': tenor (column) schema only — bucket id is `${alias}.platform_identifier`
+   *    (MIC code); bucket list is discovered post-query.
    */
-  kind?: ForwardSchemaKind
+  kind?: ForwardSchemaKind | TenorSchemaKind
   /** Extra SQL fragment AND-joined into the legs CTE WHERE clause. */
   extraFilterSql?: string
 }
@@ -196,7 +208,12 @@ export function resolveForwardSchema(
         id, label,
         buckets: [], // populated post-query from distinct meeting labels
         kind: 'fomc_label',
-        extraFilterSql: 'l.is_fomc_dated = TRUE AND l.fomc_meeting_label IS NOT NULL',
+        // The v2 legs feed populates `fomc_meeting_label` for any leg
+        // whose payment schedule references an FOMC meeting; the
+        // separate `is_fomc_dated` boolean isn't always set even for
+        // FOMC-anchored prints, so filter only on the label being
+        // present.
+        extraFilterSql: 'l.fomc_meeting_label IS NOT NULL',
       }
   }
 }
@@ -204,13 +221,51 @@ export function resolveForwardSchema(
 export function resolveTenorSchema(id: TenorSchemaId): ResolvedSchema {
   const label = TENOR_SCHEMA_LABELS[id]
   switch (id) {
-    case 'default': return { id, label, buckets: TENOR_DEFAULT }
-    case 'legacy':  return { id, label, buckets: TENOR_LEGACY }
+    case 'default': return { id, label, buckets: TENOR_DEFAULT, kind: 'tenor_years' }
+    case 'legacy':  return { id, label, buckets: TENOR_LEGACY, kind: 'tenor_years' }
+    case 'venue':
+      return {
+        id, label,
+        buckets: [], // populated post-query from distinct platform_identifier MICs
+        kind: 'venue',
+        extraFilterSql: 'l.platform_identifier IS NOT NULL',
+      }
   }
 }
 
 export const FORWARD_SCHEMA_IDS: ReadonlyArray<ForwardSchemaId> = ['default', 'legacy', 'imm16', 'fomc']
-export const TENOR_SCHEMA_IDS: ReadonlyArray<TenorSchemaId> = ['default', 'legacy']
+export const TENOR_SCHEMA_IDS: ReadonlyArray<TenorSchemaId> = ['default', 'legacy', 'venue']
+
+// Authoritative venue ordering: IDB MICs first, then CUSTY MICs, both in
+// alphabetical order so the column layout stays stable across requests
+// (the data doesn't always include every MIC). Used by the post-query
+// venue bucket builder.
+const VENUE_MIC_ORDER: ReadonlyArray<string> = [
+  // IDB
+  'BGCD', 'DWSF', 'IGDL', 'ISWV', 'TPSE', 'TSEF',
+  // CUSTY
+  'BBSF', 'BILT', 'TWSF', 'XOFF', 'XXXX',
+]
+
+/**
+ * Build a venue (column) bucket list from observed platform_identifier
+ * values. MICs in the canonical order come first, then any extra MICs
+ * the feed produced (sorted alphabetically) so newer venues still
+ * surface without a code change.
+ */
+export function buildVenueBucketsFromIdentifiers(
+  identifiers: ReadonlyArray<string>,
+): BucketDef[] {
+  const seen = new Set(identifiers.filter((s) => s != null && s !== ''))
+  const inOrder = VENUE_MIC_ORDER.filter((mic) => seen.has(mic))
+  const known = new Set(inOrder)
+  const extras = [...seen]
+    .filter((mic) => !known.has(mic))
+    .sort((a, b) => a.localeCompare(b))
+  return [...inOrder, ...extras].map((mic) => ({
+    id: mic, label: mic, lo: null, hi: null,
+  }))
+}
 
 /**
  * Parse a SDR fomc_meeting_label like "APR26" into a Date for sorting.
@@ -230,17 +285,25 @@ export function parseFomcLabel(label: string): Date | null {
 
 /**
  * Build the FOMC schema's bucket list from a set of observed meeting
- * labels. Sorts chronologically (FOMC label format: "APR26"), drops any
- * that are unparseable.
+ * labels. Sorts chronologically (FOMC label format: "APR26"), drops
+ * unparseable inputs, and trims to a useful window: starting from
+ * `windowStart` (default = 30 days ago) onward, take at most `limit`
+ * (default = 16) meetings going forward in time.
  */
 export function buildFomcBucketsFromLabels(
   labels: ReadonlyArray<string>,
+  opts: { now?: Date; windowStart?: Date; limit?: number } = {},
 ): BucketDef[] {
+  const now = opts.now ?? new Date()
+  const windowStart =
+    opts.windowStart ?? new Date(now.getTime() - 30 * ONE_DAY_MS)
+  const limit = opts.limit ?? 16
   const parsed = labels
     .map((label) => ({ label, date: parseFomcLabel(label) }))
     .filter((x): x is { label: string; date: Date } => x.date !== null)
+    .filter((x) => x.date.getTime() >= windowStart.getTime())
   parsed.sort((a, b) => a.date.getTime() - b.date.getTime())
-  return parsed.map(({ label }) => ({
+  return parsed.slice(0, limit).map(({ label }) => ({
     id: label,
     label,
     lo: null,
@@ -377,19 +440,14 @@ export function buildBucketPredicate(
   tenorId: string,
   startParamIndex: number,
 ): { sql: string; params: Array<number | string> } {
-  const tenor = tenorSchema.buckets.find((b) => b.id === tenorId)
-  if (!tenor) {
-    throw new Error(`unknown tenor bucket id "${tenorId}" in schema "${tenorSchema.id}"`)
-  }
   const params: Array<number | string> = []
   const a = legAlias
   const parts: string[] = []
   let pi = startParamIndex
 
   if (forwardSchema.kind === 'fomc_label') {
-    // Schema-level filter (`l.is_fomc_dated = TRUE …`) is applied
-    // upstream in the route's WHERE chain. Here we just match the
-    // specific meeting label.
+    // Schema-level filter (label NOT NULL) is applied upstream in the
+    // route's WHERE chain. Here we just match the specific meeting label.
     if (!/^[A-Z]{3}\d{2}$/.test(fwdId)) {
       throw new Error(`fwd id "${fwdId}" is not a valid FOMC meeting label`)
     }
@@ -421,22 +479,33 @@ export function buildBucketPredicate(
     }
   }
 
-  if (tenor.lo == null) {
-    if (tenor.hi != null) {
-      parts.push(`(${a}.tenor_years IS NULL OR ${a}.tenor_years < $${pi})`)
-      params.push(tenor.hi)
-      pi += 1
-    } else {
-      parts.push(`${a}.tenor_years IS NOT NULL`)
-    }
-  } else {
-    parts.push(`${a}.tenor_years >= $${pi}`)
-    params.push(tenor.lo)
+  if (tenorSchema.kind === 'venue') {
+    // Venue (column) drill-down: match the platform_identifier MIC.
+    parts.push(`${a}.platform_identifier = $${pi}`)
+    params.push(tenorId)
     pi += 1
-    if (tenor.hi != null) {
-      parts.push(`${a}.tenor_years < $${pi}`)
-      params.push(tenor.hi)
+  } else {
+    const tenor = tenorSchema.buckets.find((b) => b.id === tenorId)
+    if (!tenor) {
+      throw new Error(`unknown tenor bucket id "${tenorId}" in schema "${tenorSchema.id}"`)
+    }
+    if (tenor.lo == null) {
+      if (tenor.hi != null) {
+        parts.push(`(${a}.tenor_years IS NULL OR ${a}.tenor_years < $${pi})`)
+        params.push(tenor.hi)
+        pi += 1
+      } else {
+        parts.push(`${a}.tenor_years IS NOT NULL`)
+      }
+    } else {
+      parts.push(`${a}.tenor_years >= $${pi}`)
+      params.push(tenor.lo)
       pi += 1
+      if (tenor.hi != null) {
+        parts.push(`${a}.tenor_years < $${pi}`)
+        params.push(tenor.hi)
+        pi += 1
+      }
     }
   }
   return { sql: parts.join(' AND '), params }

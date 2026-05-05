@@ -46,6 +46,7 @@ const FORWARD_SCHEMA_LABELS: Record<ForwardSchemaId, string> = {
 const TENOR_SCHEMA_LABELS: Record<TenorSchemaId, string> = {
   default: 'Default',
   legacy: 'Legacy',
+  venue: 'Venue',
 }
 
 function readBool(key: string, fallback: boolean): boolean {
