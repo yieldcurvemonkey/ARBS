@@ -854,6 +854,30 @@ extension just adds another cohort blow-up. The headline conclusion
 ("realised-PnL stop required, sub-Kelly sizing required") is locked
 in at this sample size.
 
+#### Cache evolution snapshot — listed_cache = 400, window 2024-10-16 → 2026-04-28
+
+| name | trades | unrealized | sharpe | maxDD ($) | finalMTM ($) | winRate | avgHoldDays | wallSec |
+|---|---|---|---|---|---|---|---|---|
+| `a_outright_conservative` | 91 | 3 | −2.93 | −383,006,284 | −378,998,529 | 26 % | 12.2 | 24.3 |
+| `b_calendar_only` (asym ≥ 3) | 148 | 2 | −0.50 | −261,962,563,545 | **−119,838,320,696** | 49 % | 14.5 | 33.1 |
+| `c_butterfly_only` (asym ≥ 3) | 177 | 0 | **−0.08** | −104,200,056,227 | **−14,316,788,746** | **54 %** | 8.4 | 35.8 |
+| `d_all_structures_default` (asym ≥ 1.5) | 209 | 3 | −3.26 | −937,558,475 | −932,786,391 | 33 % | 9.1 | 51.3 |
+| `e_aggressive_concurrency` (asym ≥ 1.2) | 407 | 8 | −3.04 | −1,762,591,503 | −1,752,744,924 | 33 % | 9.7 | 86.6 |
+| `f_daily_rebalance` (asym ≥ 1.5) | 298 | 5 | −2.83 | −1,892,224,906 | −1,888,597,860 | 38 % | 7.8 | 66.1 |
+
+18.5-month window. cache=371 → cache=400 added 29 BDs (Oct–Nov 2024) and
+the cohort added very few new losers — `b_calendar_only` finalMTM
+basically flat at −$120 B, `c_butterfly_only` flat at −$14.3 B, sharpe
+unchanged. October 2024 was a benign cohort.
+
+`c_butterfly_only` winRate ticked up to 54 % across 177 trades — every
+new milestone confirms butterflies have the highest mean-reversion
+hit-rate at the asym ≥ 3 gate. The −$14 B finalMTM (vs the calendar's
+−$120 B) reflects the smaller per-trade payoff magnitude on flies than
+calendars; loss-tail magnitudes scale linearly with effective bpv.
+
+Prime now 400 / 1,649 ≈ 24 % done after ~4 wall-days of priming.
+
 ## Reproduction
 
 ```bash
