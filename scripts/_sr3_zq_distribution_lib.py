@@ -328,7 +328,76 @@ class SignalRecord:
     n_strikes_used: int = 0
     prices_source: str = ""
 
+    # λ optimization (when optimize_lambda=True)
+    chosen_lambda: float = 1e-4
+    lambda_scores: Dict[float, float] = field(default_factory=dict)
+
     warnings: Tuple[str, ...] = ()
+
+
+def _score_lambda(
+    *,
+    smile,
+    leg_market,
+    config: ScreenerConfig,
+    as_of: datetime.date,
+    smoothing_param: float,
+) -> Tuple[float, "RNDRecord"]:
+    """Fit BL with a candidate λ and return (score, rnd_record).
+
+    Score combines:
+      - raw negative-density mass (lower is better, weight 1.0)
+      - smoothing-sensitivity Δp under λ × {0.1, 10} (lower is better, weight 0.5)
+      - extrapolation_dominated penalty (binary 0 or 5)
+
+    Lower score = better fit.
+    """
+    cfg_local = ScreenerConfig()
+    # Override smoothing param via field assignment (mutable dataclass)
+    cfg_local.rnd_smoothing_param = smoothing_param
+    rnd = extract_per_expiry_rnd(
+        smile=smile, leg_market=leg_market, config=cfg_local, as_of=as_of
+    )
+    score = (
+        rnd.negative_density_pct
+        + 0.5 * rnd.smoothing_sensitivity_pp
+        + (5.0 if rnd.extrapolation_dominated else 0.0)
+    )
+    return float(score), rnd
+
+
+def optimize_smoothing_lambda(
+    *,
+    smile,
+    leg_market,
+    as_of: datetime.date,
+    grid: Tuple[float, ...] = (1e-5, 5e-5, 1e-4, 5e-4, 1e-3),
+) -> Tuple[float, "RNDRecord", Dict[float, float]]:
+    """Pick the λ that minimizes the composite stability score.
+
+    Returns ``(best_lambda, best_rnd, scores_by_lambda)``.
+    """
+    scores: Dict[float, float] = {}
+    best_lambda: Optional[float] = None
+    best_score = float("inf")
+    best_rnd = None
+    for lam in grid:
+        try:
+            score, rnd = _score_lambda(
+                smile=smile, leg_market=leg_market,
+                config=ScreenerConfig(),
+                as_of=as_of, smoothing_param=lam,
+            )
+            scores[lam] = score
+            if score < best_score:
+                best_score = score
+                best_lambda = lam
+                best_rnd = rnd
+        except Exception:
+            scores[lam] = float("inf")
+    if best_lambda is None or best_rnd is None:
+        raise RuntimeError("All λ values failed")
+    return best_lambda, best_rnd, scores
 
 
 def compute_distribution_signals(
@@ -339,6 +408,8 @@ def compute_distribution_signals(
     ref_end: datetime.date,
     zq_months_range: Tuple[Tuple[int, int], Tuple[int, int]],
     intermeeting_daily_vol_bp: float = 0.3,
+    optimize_lambda: bool = False,
+    lambda_grid: Tuple[float, ...] = (1e-5, 5e-5, 1e-4, 5e-4, 1e-3),
 ) -> SignalRecord:
     """Run the full distribution-comparison pipeline on a single ``as_of``.
 
@@ -396,14 +467,21 @@ def compute_distribution_signals(
     # 5. Day-weighted variance
     zq_var_bp2, _ = day_weighted_meeting_variance_bp2(nodes, ref_start=ref_start, ref_end=ref_end)
 
-    # 6. SR3 smile + RND
+    # 6. SR3 smile + RND (with optional λ-grid optimization)
     opt_mdp = STIRFutureOptionMDP(source="BARCHART_STIRFO-QL")
     smile = opt_mdp.fetch_sabr_smile(
         {"symbol": sr3_contract, "as_of": as_of, "strike_offsets_bps": "listed"}
     )
-    rnd = extract_per_expiry_rnd(
-        smile=smile, leg_market={}, config=ScreenerConfig(), as_of=as_of
-    )
+    if optimize_lambda:
+        chosen_lambda, rnd, lambda_scores = optimize_smoothing_lambda(
+            smile=smile, leg_market={}, as_of=as_of, grid=lambda_grid,
+        )
+    else:
+        chosen_lambda = ScreenerConfig().rnd_smoothing_param
+        lambda_scores = {}
+        rnd = extract_per_expiry_rnd(
+            smile=smile, leg_market={}, config=ScreenerConfig(), as_of=as_of
+        )
     sr3_total_var_bp2 = (rnd.std_rate * 100.0) ** 2
     fwd_rate_pct = 100.0 - smile.params.forward_price
 
@@ -458,5 +536,7 @@ def compute_distribution_signals(
         negative_density_pct=float(rnd.negative_density_pct),
         n_strikes_used=int(rnd.n_strikes_observed),
         prices_source=str(rnd.prices_source),
+        chosen_lambda=float(chosen_lambda),
+        lambda_scores=lambda_scores,
         warnings=tuple(warnings),
     )
