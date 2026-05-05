@@ -3,7 +3,11 @@ import { __internal } from '../useAnalyticsTimeseries'
 import { timeseriesKey } from '@/lib/usd-swaps-tape-v2/analyticsCacheKeys'
 
 describe('useAnalyticsTimeseries query wiring', () => {
-  it('sends Net/Gross DV01 and custy-outlier toggles to the analytics route', () => {
+  it('does NOT include orthogonal display toggles on the request URL', () => {
+    // Post-Phase-C contract: server returns the full variant grid
+    // regardless, so dropping these from the URL keeps the dock-hook
+    // and hover-prefetch URLs identical and lets one in-flight fetch
+    // satisfy both code paths.
     const q = __internal.buildAnalyticsTimeseriesQuery(
       'USD-SOFR 10Y',
       'DAILY_CLOSE',
@@ -11,8 +15,11 @@ describe('useAnalyticsTimeseries query wiring', () => {
       { useGrossDv01: true, excludeLargeCusty: false },
     )
 
-    expect(q.get('useGrossDv01')).toBe('true')
-    expect(q.get('excludeLargeCusty')).toBe('false')
+    expect(q.get('useGrossDv01')).toBeNull()
+    expect(q.get('excludeLargeCusty')).toBeNull()
+    expect(q.get('value')).toBe('USD-SOFR 10Y')
+    expect(q.get('view')).toBe('DAILY_CLOSE')
+    expect(q.get('range')).toBe('1M')
   })
 
   it('orthogonal display toggles do NOT change the SWR cache key', () => {

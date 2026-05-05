@@ -82,18 +82,16 @@ function buildAnalyticsTimeseriesQuery(
   // not the focused trade's tape_label. Allow an explicit override.
   const value = opts.groupValueOverride ?? bucket
   // Phase 5 (orthogonal-payload split): useGrossDv01 +
-  // excludeLargeCusty are no longer wire-level switches — the server
-  // returns the full (gross|net) × (raw|excl-large) variant grid in a
-  // single payload. We retain the params on the request for backward
-  // compatibility with any out-of-tree caller, but the route ignores
-  // them on the response side.
+  // excludeLargeCusty are display-only toggles; the server returns the
+  // full (gross|net) × (raw|excl-large) variant grid in a single
+  // payload regardless. Drop them from the URL so the dock-hook +
+  // hover-prefetch hooks build identical URLs and one in-flight fetch
+  // can satisfy both code paths.
   return new URLSearchParams({
     value,
     view,
     range,
     groupBy,
-    useGrossDv01: opts.useGrossDv01 ? 'true' : 'false',
-    excludeLargeCusty: opts.excludeLargeCusty === false ? 'false' : 'true',
   })
 }
 
