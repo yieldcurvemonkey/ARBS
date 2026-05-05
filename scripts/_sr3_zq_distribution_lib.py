@@ -321,6 +321,13 @@ class SignalRecord:
     tail_upper_75: float
     tail_upper_100: float
 
+    # New: stability diagnostics
+    smoothing_sensitivity_pp: float = 0.0
+    order_sensitivity_pp: float = 0.0
+    negative_density_pct: float = 0.0
+    n_strikes_used: int = 0
+    prices_source: str = ""
+
     warnings: Tuple[str, ...] = ()
 
 
@@ -446,5 +453,10 @@ def compute_distribution_signals(
         tail_upper_50=_tail_above(fwd_rate_pct + 0.50),
         tail_upper_75=_tail_above(fwd_rate_pct + 0.75),
         tail_upper_100=_tail_above(fwd_rate_pct + 1.00),
+        smoothing_sensitivity_pp=float(rnd.smoothing_sensitivity_pp),
+        order_sensitivity_pp=float(rnd.order_sensitivity_pp),
+        negative_density_pct=float(rnd.negative_density_pct),
+        n_strikes_used=int(rnd.n_strikes_observed),
+        prices_source=str(rnd.prices_source),
         warnings=tuple(warnings),
     )

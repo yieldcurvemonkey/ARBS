@@ -137,6 +137,11 @@ def main():
                 "tail_-100bp": round(r.tail_lower_100, 4),
                 "tail_+100bp": round(r.tail_upper_100, 4),
                 "stability": r.sr3_stability_flag,
+                "smooth_pp": round(r.smoothing_sensitivity_pp, 2),
+                "order_pp": round(r.order_sensitivity_pp, 2),
+                "neg_pct": round(r.negative_density_pct, 2),
+                "n_strikes": r.n_strikes_used,
+                "source": r.prices_source,
             }
         )
     df = pd.DataFrame(rows)

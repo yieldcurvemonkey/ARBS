@@ -74,6 +74,9 @@ class RNDRecord:
     parity_violation_max: float = 0.0
     forward_rate: float = 0.0
     forward_price: float = 0.0
+    smoothing_sensitivity_pp: float = 0.0  # max |Δp| over λ × {0.1, 10}
+    order_sensitivity_pp: float = 0.0      # max |Δp| over order ± 1
+    negative_density_pct: float = 0.0      # raw negative-mass fraction before clipping
     warnings: Tuple[str, ...] = ()
     prices_source: str = "sabr_smile"  # "sabr_smile" or "market_listed"
 
@@ -265,27 +268,58 @@ def _build_observed_rnd_input(
     leg_market: Dict[Tuple[str, datetime.date, str, float], LegMarket],
     *,
     as_of: datetime.date,
+    raw_market_open_interest_min: float = 100.0,
+    raw_market_otm_only: bool = True,
 ):
-    """Build an RNDInput from observed leg-market quotes when available;
-    fall back to ``smile_to_rnd_input(use_sabr_vols=True)``.
+    """Build an RNDInput per JPM Tech Appendix A.
+
+    Priority order:
+    1. Observed market premiums attached to ``smile.points`` (preferred —
+       this is what the JPM appendix specifies and what
+       ``SFRImpliedDistribution`` uses by default). Filter on OI ≥ 100,
+       OTM-only; put-call parity converts puts to equivalent calls.
+    2. External ``leg_market`` dict (legacy path, retained for callers
+       that wire per-leg quotes through a separate channel).
+    3. SABR-modeled call premiums on listed strikes (fallback when no
+       observed market data is available — e.g., synthetic test smiles).
+
+    Returns ``(rnd_input, max_parity_violation_ticks, source_label)``.
     """
     contract = str(smile.symbol).strip().upper()
     expiry = smile.params.expiry_date
+    fwd = float(smile.params.forward_price)
+    df = 1.0  # futures options are daily-margined
 
-    # Observed strikes for this (contract, expiry)
+    # === Path 1: smile.points carries observed market premiums (JPM path) ===
+    n_points_with_market = sum(
+        1 for pt in smile.points
+        if getattr(pt, "market_price", None) is not None
+        and math.isfinite(float(getattr(pt, "market_price", float("nan")) or float("nan")))
+        and float(getattr(pt, "market_price", 0.0)) > 0.0
+    )
+    if n_points_with_market >= 8:
+        rnd_input = smile_to_rnd_input(
+            smile,
+            use_sabr_vols=False,
+            sabr_extrapolation=False,
+            raw_market_open_interest_min=raw_market_open_interest_min,
+            raw_market_otm_only=raw_market_otm_only,
+        )
+        # Parity violations measured by smile_to_rnd_input itself when both
+        # call and put are observed at same strike. We don't track per-strike
+        # here; downstream stability checks catch fitting issues.
+        return rnd_input, 0.0, "market_listed_jpm"
+
+    # === Path 2: external leg_market dict (legacy) ===
     observed_rows: List[LegMarket] = [
         lm
         for (c, exp, _r, _k), lm in leg_market.items()
         if c == contract and exp == expiry and not math.isnan(lm.premium_ticks)
     ]
     if len(observed_rows) >= 8:
-        # We have enough observed strikes — build an RNDInput directly
-        # using observed call premiums, with put-call parity for puts.
         from RVUtils.ImpliedDistribution._bachelier import put_to_call_parity
         from RVUtils.ImpliedDistribution._types import RNDInput
 
-        fwd = float(smile.params.forward_price)
-        df = 1.0  # futures options
         by_strike: Dict[float, float] = {}
         parity_violations: List[float] = []
         for lm in observed_rows:
@@ -293,7 +327,6 @@ def _build_observed_rnd_input(
             if lm.right == "C":
                 call_premium = premium_price
             else:
-                # put-call parity: call = put + (forward - strike) * df
                 call_premium = put_to_call_parity(premium_price, lm.strike, fwd, df)
             existing = by_strike.get(lm.strike)
             if existing is not None:
@@ -316,14 +349,11 @@ def _build_observed_rnd_input(
             call_premiums=np.asarray(
                 [by_strike[k] for k in sorted_strikes], dtype=float
             ),
-            strike_source="observed_market",
+            strike_source="observed_market_legmarket",
         )
-        return rnd_input, max_parity_violation_ticks, "market_listed"
+        return rnd_input, max_parity_violation_ticks, "market_legmarket"
 
-    # Fallback: SABR-modeled call premiums. When the smile has no observed
-    # points attached (e.g. a synthetic test smile), we extrapolate the
-    # strike grid from the SABR model itself rather than the empty point
-    # set — this matches the spec §12 ghost-extrapolation flow.
+    # === Path 3: SABR fallback (synthetic / empty smiles) ===
     use_extrap = len(smile.points) == 0
     rnd_input = smile_to_rnd_input(
         smile,
@@ -462,8 +492,22 @@ def extract_per_expiry_rnd(
     if pre_norm_mass < 0.95 or pre_norm_mass > 1.05:
         warnings.append(f"mass_violation:{pre_norm_mass:.3f}")
 
-    # Negative-density check (BL clips, but flagged in `bl.warnings`)
-    has_negative = any("negative density" in w for w in bl.warnings)
+    # Negative-density check.
+    # BL warns at 0.01% (numerical noise) and already clips. We only flag
+    # `negative_density` when the raw fit produced *materially* unphysical
+    # mass (default >5%). Parse magnitude from the warning string —
+    # format: "negative density mass clipped (X.XX% of total)".
+    neg_density_pct = 0.0
+    for w in bl.warnings:
+        if "negative density" not in w:
+            continue
+        # extract the percentage between '(' and '%'
+        try:
+            inside = w[w.index("(") + 1 : w.index("%")]
+            neg_density_pct = max(neg_density_pct, float(inside))
+        except (ValueError, IndexError):
+            pass
+    has_negative = neg_density_pct > 5.0
 
     # Bimodality detection
     mode_count, mode_idx = _bimodality_count(density, height_fraction=0.5)
@@ -577,6 +621,9 @@ def extract_per_expiry_rnd(
         parity_violation_max=parity_violation_ticks,
         forward_rate=fwd_rate,
         forward_price=fwd,
+        smoothing_sensitivity_pp=float(smoothing_delta),
+        order_sensitivity_pp=float(order_delta),
+        negative_density_pct=float(neg_density_pct),
         warnings=tuple(warnings),
         prices_source=prices_source,
     )
