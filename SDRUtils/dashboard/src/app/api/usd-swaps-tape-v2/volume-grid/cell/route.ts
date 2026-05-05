@@ -7,6 +7,11 @@ import { ServerLru } from '@/lib/usd-swaps-tape-v2/serverLru'
 import { computeEtag, matchesIfNoneMatch } from '@/lib/usd-swaps-tape-v2/etag'
 import {
   buildBucketPredicate,
+  buildPackageTypeFilter,
+  resolveForwardSchema,
+  resolveTenorSchema,
+} from '@/lib/usd-swaps-tape-v2/volumeGridBuckets'
+import {
   buildRecentTradesSql,
   buildTimeseriesSql,
   parseVolumeGridCellParams,
@@ -47,21 +52,38 @@ export async function GET(request: Request) {
     return NextResponse.json(hit.payload, { headers: { ETag: hit.etag, ...CACHE_HEADERS } })
   }
 
-  const parsed = parseVolumeGridCellParams(url.searchParams)
+  const now = new Date()
+  const parsed = parseVolumeGridCellParams(url.searchParams, now)
   if (!parsed.ok) return NextResponse.json({ error: parsed.error }, { status: 400 })
   const p = parsed.value
 
-  const rangeStart = rangeToStartDate(p.range)
-  const predicate = buildBucketPredicate('l', p.fwd, p.tenor, 2)
+  const forwardSchema = resolveForwardSchema(p.forwardSchema, now)
+  const tenorSchema = resolveTenorSchema(p.tenorSchema)
+  const rangeStart = rangeToStartDate(p.range, now)
+  const predicate = buildBucketPredicate('l', forwardSchema, tenorSchema, p.fwd, p.tenor, 2)
+  const pkgFilter = buildPackageTypeFilter(
+    p.packageType, 'p', 2 + predicate.params.length,
+  )
 
-  const tsSql = buildTimeseriesSql().replace('%BUCKET_PREDICATE%', predicate.sql)
-  const tradesSql = buildRecentTradesSql()
-    .replace('%BUCKET_PREDICATE%', predicate.sql)
-    .replace('%LIMIT_PLACEHOLDER%', `$${2 + predicate.params.length}`)
+  const tsSql = buildTimeseriesSql({
+    bucketPredicateSql: predicate.sql,
+    packageFilterSql: pkgFilter.sql,
+  })
+  const limitParamIndex = 2 + predicate.params.length + pkgFilter.params.length
+  const tradesSql = buildRecentTradesSql({
+    bucketPredicateSql: predicate.sql,
+    packageFilterSql: pkgFilter.sql,
+    limitParam: `$${limitParamIndex}`,
+  })
 
   try {
-    const tsParams = [rangeStart.toISOString(), ...predicate.params]
-    const tradesParams = [rangeStart.toISOString(), ...predicate.params, p.recentLimit]
+    const tsParams = [rangeStart.toISOString(), ...predicate.params, ...pkgFilter.params]
+    const tradesParams = [
+      rangeStart.toISOString(),
+      ...predicate.params,
+      ...pkgFilter.params,
+      p.recentLimit,
+    ]
 
     const [tsResult, tradesResult] = await Promise.all([
       query<Record<string, unknown>>(tsSql, tsParams),
@@ -90,10 +112,15 @@ export async function GET(request: Request) {
       is_block_any: (r.is_block_any as boolean | null) ?? null,
     }))
     const payload: VolumeGridCellResponse = {
-      fwd: p.fwd as VolumeGridCellResponse['fwd'],
-      tenor: p.tenor as VolumeGridCellResponse['tenor'],
-      metric: p.metric, range: p.range,
-      timeseries, recentTrades,
+      fwd: p.fwd,
+      tenor: p.tenor,
+      metric: p.metric,
+      range: p.range,
+      forwardSchema: p.forwardSchema,
+      tenorSchema: p.tenorSchema,
+      packageType: p.packageType,
+      timeseries,
+      recentTrades,
     }
     const etag = computeEtag(payload)
     lru.set(key, { payload, etag })

@@ -1,12 +1,15 @@
 // ABOUTME: GET /api/usd-swaps-tape-v2/volume-grid
 // Returns the forward x tenor matrix of {current, baseline, percentile}
-// per (metric, period). Server LRU + ETag matches analytics-timeseries
-// caching so SWR hits stay cheap.
+// per (metric, period, schemas, packageType). Server LRU + ETag.
 
 import { NextResponse } from 'next/server'
 import { query } from '@/lib/db'
 import { ServerLru } from '@/lib/usd-swaps-tape-v2/serverLru'
 import { computeEtag, matchesIfNoneMatch } from '@/lib/usd-swaps-tape-v2/etag'
+import {
+  resolveForwardSchema,
+  resolveTenorSchema,
+} from '@/lib/usd-swaps-tape-v2/volumeGridBuckets'
 import {
   buildVolumeGridSql,
   computeWindowBounds,
@@ -46,29 +49,21 @@ export async function GET(request: Request) {
   const parsed = parseVolumeGridParams(url.searchParams)
   if (!parsed.ok) return NextResponse.json({ error: parsed.error }, { status: 400 })
 
-  const bounds = computeWindowBounds(parsed.value.period, parsed.value.lookbackDays)
-  let sql = buildVolumeGridSql(parsed.value.metric, bounds)
-  let params: Array<string | number>
-  if (bounds.kind === 'time_of_day') {
-    params = [
-      bounds.lookbackStart.toISOString(),
-      bounds.lookbackEnd.toISOString(),
-      bounds.todayDateEt,
-      bounds.todSecondsLo,
-      bounds.todSecondsHi,
-    ]
-  } else {
-    sql = sql.replace('%WINDOW_ID_SQL%', bounds.windowIdSql)
-    params = [
-      bounds.lookbackStart.toISOString(),
-      bounds.lookbackEnd.toISOString(),
-      bounds.currentStart.toISOString(),
-    ]
-  }
+  const now = new Date()
+  const bounds = computeWindowBounds(parsed.value.period, parsed.value.lookbackDays, now)
+  const forwardSchema = resolveForwardSchema(parsed.value.forwardSchema, now)
+  const tenorSchema = resolveTenorSchema(parsed.value.tenorSchema)
+  const built = buildVolumeGridSql({
+    metric: parsed.value.metric,
+    forwardSchema,
+    tenorSchema,
+    packageType: parsed.value.packageType,
+    bounds,
+  })
 
   try {
-    const { rows } = await query<RawVolumeGridRow>(sql, params)
-    const payload = shapeVolumeGridResponse(rows, parsed.value)
+    const { rows } = await query<RawVolumeGridRow>(built.sql, built.params)
+    const payload = shapeVolumeGridResponse(rows, parsed.value, forwardSchema, tenorSchema)
     const etag = computeEtag(payload)
     lru.set(key, { payload, etag })
     if (matchesIfNoneMatch(etag, ifNoneMatch)) {

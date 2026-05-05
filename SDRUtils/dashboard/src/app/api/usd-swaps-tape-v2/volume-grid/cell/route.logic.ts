@@ -4,8 +4,15 @@
 
 import {
   buildBucketPredicate,
-  FORWARD_BUCKETS,
-  TENOR_BUCKETS,
+  buildPackageTypeFilter,
+  FORWARD_SCHEMA_IDS,
+  PACKAGE_TYPE_GROUP_IDS,
+  resolveForwardSchema,
+  resolveTenorSchema,
+  TENOR_SCHEMA_IDS,
+  type ForwardSchemaId,
+  type PackageTypeGroupId,
+  type TenorSchemaId,
 } from '@/lib/usd-swaps-tape-v2/volumeGridBuckets'
 import type {
   VolumeCellRange,
@@ -18,6 +25,9 @@ export interface VolumeGridCellParams {
   metric: VolumeMetric
   range: VolumeCellRange
   recentLimit: number
+  forwardSchema: ForwardSchemaId
+  tenorSchema: TenorSchemaId
+  packageType: PackageTypeGroupId
 }
 
 export type ParseResult<T> =
@@ -26,16 +36,38 @@ export type ParseResult<T> =
 
 const VALID_METRICS: ReadonlySet<VolumeMetric> = new Set(['notional', 'dv01'])
 const VALID_RANGES: ReadonlySet<VolumeCellRange> = new Set(['1M', '3M', '6M', '1Y'])
+const VALID_FORWARD_SCHEMAS: ReadonlySet<ForwardSchemaId> = new Set(FORWARD_SCHEMA_IDS)
+const VALID_TENOR_SCHEMAS: ReadonlySet<TenorSchemaId> = new Set(TENOR_SCHEMA_IDS)
+const VALID_PACKAGE_GROUPS: ReadonlySet<PackageTypeGroupId> = new Set(PACKAGE_TYPE_GROUP_IDS)
 
 export function parseVolumeGridCellParams(
   search: URLSearchParams,
+  now: Date = new Date(),
 ): ParseResult<VolumeGridCellParams> {
   const fwd = search.get('fwd')
   const tenor = search.get('tenor')
   if (!fwd) return { ok: false, error: 'fwd is required' }
   if (!tenor) return { ok: false, error: 'tenor is required' }
-  if (!FORWARD_BUCKETS.some((b) => b.id === fwd)) return { ok: false, error: `unknown fwd: ${fwd}` }
-  if (!TENOR_BUCKETS.some((b) => b.id === tenor)) return { ok: false, error: `unknown tenor: ${tenor}` }
+  const forwardSchemaRaw = (search.get('forwardSchema') ?? 'default').toLowerCase()
+  const tenorSchemaRaw = (search.get('tenorSchema') ?? 'default').toLowerCase()
+  const packageTypeRaw = (search.get('packageType') ?? 'outright').toLowerCase()
+  if (!VALID_FORWARD_SCHEMAS.has(forwardSchemaRaw as ForwardSchemaId)) {
+    return { ok: false, error: `forwardSchema must be one of ${FORWARD_SCHEMA_IDS.join(', ')}` }
+  }
+  if (!VALID_TENOR_SCHEMAS.has(tenorSchemaRaw as TenorSchemaId)) {
+    return { ok: false, error: `tenorSchema must be one of ${TENOR_SCHEMA_IDS.join(', ')}` }
+  }
+  if (!VALID_PACKAGE_GROUPS.has(packageTypeRaw as PackageTypeGroupId)) {
+    return { ok: false, error: `packageType must be one of ${PACKAGE_TYPE_GROUP_IDS.join(', ')}` }
+  }
+  const forwardSchema = resolveForwardSchema(forwardSchemaRaw as ForwardSchemaId, now)
+  const tenorSchema = resolveTenorSchema(tenorSchemaRaw as TenorSchemaId)
+  if (!forwardSchema.buckets.some((b) => b.id === fwd)) {
+    return { ok: false, error: `unknown fwd: ${fwd} (schema=${forwardSchema.id})` }
+  }
+  if (!tenorSchema.buckets.some((b) => b.id === tenor)) {
+    return { ok: false, error: `unknown tenor: ${tenor} (schema=${tenorSchema.id})` }
+  }
   const metric = (search.get('metric') ?? 'notional').toLowerCase() as VolumeMetric
   if (!VALID_METRICS.has(metric)) return { ok: false, error: `unknown metric: ${metric}` }
   const range = (search.get('range') ?? '3M').toUpperCase() as VolumeCellRange
@@ -49,7 +81,19 @@ export function parseVolumeGridCellParams(
     }
     recentLimit = Math.floor(n)
   }
-  return { ok: true, value: { fwd, tenor, metric, range, recentLimit } }
+  return {
+    ok: true,
+    value: {
+      fwd,
+      tenor,
+      metric,
+      range,
+      recentLimit,
+      forwardSchema: forwardSchemaRaw as ForwardSchemaId,
+      tenorSchema: tenorSchemaRaw as TenorSchemaId,
+      packageType: packageTypeRaw as PackageTypeGroupId,
+    },
+  }
 }
 
 export function rangeToStartDate(range: VolumeCellRange, now: Date = new Date()): Date {
@@ -62,8 +106,16 @@ export function rangeToStartDate(range: VolumeCellRange, now: Date = new Date())
   }
 }
 
-export function buildTimeseriesSql(): string {
-  // Bind order: $1=range_start, $2..N=bucket predicate params.
+/**
+ * Build the timeseries SQL. Bind layout:
+ *   $1            = range_start timestamptz
+ *   $2..(n+1)     = bucket predicate params
+ *   $(n+2)..(n+1+m) = package_type filter params
+ */
+export function buildTimeseriesSql(opts: {
+  bucketPredicateSql: string
+  packageFilterSql: string
+}): string {
   return `
     WITH legs AS (
       SELECT
@@ -72,9 +124,11 @@ export function buildTimeseriesSql(): string {
         ABS(COALESCE(l.risk, 0))     AS dv01,
         l.venue
       FROM arbs_usd_swap_tape_legs_v2 l
+      JOIN arbs_usd_swap_tape_packages_v2 p ON p.package_id = l.package_id
       WHERE COALESCE(l.contributes_to_flow, FALSE) = TRUE
         AND COALESCE(l.original_execution_timestamp, l.execution_timestamp) >= $1::timestamptz
-        AND %BUCKET_PREDICATE%
+        AND ${opts.bucketPredicateSql}
+        AND ${opts.packageFilterSql}
     )
     SELECT
       date_trunc('day', ts AT TIME ZONE 'America/New_York')::date AS day,
@@ -89,15 +143,20 @@ export function buildTimeseriesSql(): string {
   `
 }
 
-export function buildRecentTradesSql(): string {
-  // Bind order: $1=range_start, $2..N=bucket predicate params, $LAST=limit.
+export function buildRecentTradesSql(opts: {
+  bucketPredicateSql: string
+  packageFilterSql: string
+  limitParam: string // e.g. '$8'
+}): string {
   return `
     WITH eligible_packages AS (
       SELECT DISTINCT l.package_id
       FROM arbs_usd_swap_tape_legs_v2 l
+      JOIN arbs_usd_swap_tape_packages_v2 p ON p.package_id = l.package_id
       WHERE COALESCE(l.contributes_to_flow, FALSE) = TRUE
         AND COALESCE(l.original_execution_timestamp, l.execution_timestamp) >= $1::timestamptz
-        AND %BUCKET_PREDICATE%
+        AND ${opts.bucketPredicateSql}
+        AND ${opts.packageFilterSql}
     )
     SELECT
       p.package_id,
@@ -112,8 +171,8 @@ export function buildRecentTradesSql(): string {
     FROM arbs_usd_swap_tape_packages_v2 p
     JOIN eligible_packages e ON e.package_id = p.package_id
     ORDER BY p.execution_start DESC
-    LIMIT %LIMIT_PLACEHOLDER%
+    LIMIT ${opts.limitParam}
   `
 }
 
-export { buildBucketPredicate }
+export { buildBucketPredicate, buildPackageTypeFilter }

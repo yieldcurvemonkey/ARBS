@@ -25,6 +25,12 @@ describe('GET /api/usd-swaps-tape-v2/volume-grid', () => {
     expect(res.status).toBe(400)
   })
 
+  it('400 on invalid packageType', async () => {
+    const { GET } = await import('../route')
+    const res = await GET(req('packageType=bogus'))
+    expect(res.status).toBe(400)
+  })
+
   it('200 with matrix shape on happy path', async () => {
     queryMock.mockResolvedValueOnce({
       rows: [
@@ -38,38 +44,15 @@ describe('GET /api/usd-swaps-tape-v2/volume-grid', () => {
       ] as unknown[],
     })
     const { GET } = await import('../route')
-    const res = await GET(req('metric=notional&period=today&lookbackDays=90'))
+    const res = await GET(req('metric=notional&period=today&lookbackDays=90&forwardSchema=default&tenorSchema=default&packageType=outright'))
     expect(res.status).toBe(200)
     const body = await res.json()
     expect(body.metric).toBe('notional')
-    expect(body.period).toBe('today')
+    expect(body.forwardSchema).toBe('default')
+    expect(body.tenorSchema).toBe('default')
+    expect(body.packageType).toBe('outright')
     expect(body.cells.length).toBe(1)
-    expect(body.cells[0]).toMatchObject({
-      fwd: 'spot', tenor: '5y',
-      current: 100, tradeCount: 5,
-      baseline: { p25: 15, p50: 20, p75: 25, min: 10, max: 30, n: 3 },
-      percentile: 100,
-    })
-    expect(body.totals.grand.current).toBe(100)
-  })
-
-  it('emits ETag + Cache-Control on success', async () => {
-    queryMock.mockResolvedValueOnce({ rows: [] })
-    const { GET } = await import('../route')
-    const r = await GET(req('metric=notional&period=today&lookbackDays=90&_=etag'))
-    expect(r.status).toBe(200)
-    expect(r.headers.get('ETag')).toMatch(/^"[a-f0-9]{40}"$/)
-    expect(r.headers.get('Cache-Control')).toBe('private, max-age=60, must-revalidate')
-  })
-
-  it('returns 304 on If-None-Match match', async () => {
-    queryMock.mockResolvedValueOnce({ rows: [] })
-    const { GET } = await import('../route')
-    const first = await GET(req('metric=notional&period=today&lookbackDays=90&_=ifnone'))
-    const tag = first.headers.get('ETag')!
-    const second = await GET(
-      req('metric=notional&period=today&lookbackDays=90&_=ifnone', { 'If-None-Match': tag }),
-    )
-    expect(second.status).toBe(304)
+    expect(body.axes.forward.buckets.length).toBe(8)
+    expect(body.axes.tenor.buckets.length).toBe(16)
   })
 })

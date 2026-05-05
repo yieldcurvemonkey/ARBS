@@ -3,10 +3,11 @@
 
 import type { JSX } from 'react'
 import { colorForPercentile, foregroundForPercentile } from './colorRamp'
-import { fwdLabel, tenorLabel } from './buckets'
 import type {
   VolumeGridCell as Cell, VolumeMetric, VolumePeriod,
+  VolumeGridSchemaAxis,
 } from '../../types/volume-grid.types'
+import { lookupLabel } from './buckets'
 
 export const fmtCompact = (n: number, _metric: VolumeMetric): string => {
   void _metric
@@ -22,14 +23,11 @@ export interface VolumeGridCellProps {
   cell: Cell
   metric: VolumeMetric
   period: VolumePeriod
-  onClick: (id: { fwd: Cell['fwd']; tenor: Cell['tenor'] }) => void
+  forwardAxis?: VolumeGridSchemaAxis
+  tenorAxis?: VolumeGridSchemaAxis
+  onClick: (id: { fwd: string; tenor: string }) => void
 }
 
-/**
- * Period-specific phrasing for the percentile comparison. Mirrors the
- * SQL window definition in route.logic so the trader sees what the
- * percentile is actually ranking against.
- */
 function comparisonForPeriod(period: VolumePeriod): string {
   switch (period) {
     case 'today': return 'vs prior days at the same time-of-day ET'
@@ -39,12 +37,16 @@ function comparisonForPeriod(period: VolumePeriod): string {
   }
 }
 
-export function VolumeGridCell({ cell, metric, period, onClick }: VolumeGridCellProps): JSX.Element {
+export function VolumeGridCell({
+  cell, metric, period, forwardAxis, tenorAxis, onClick,
+}: VolumeGridCellProps): JSX.Element {
   const isEmpty = cell.tradeCount === 0 || cell.percentile == null
   const bg = isEmpty ? 'transparent' : colorForPercentile(cell.percentile)
   const fg = foregroundForPercentile(cell.percentile)
   const comparison = comparisonForPeriod(period)
-  const label = `${fwdLabel(cell.fwd)} x ${tenorLabel(cell.tenor)} — ${fmtCompact(cell.current, metric)} ${metric}, ${cell.percentile == null ? 'no history' : `${Math.round(cell.percentile)}th percentile ${comparison}`}`
+  const fwdLabelText = lookupLabel(forwardAxis, cell.fwd)
+  const tenorLabelText = lookupLabel(tenorAxis, cell.tenor)
+  const label = `${fwdLabelText} x ${tenorLabelText} — ${fmtCompact(cell.current, metric)} ${metric}, ${cell.percentile == null ? 'no history' : `${Math.round(cell.percentile)}th percentile ${comparison}`}`
   const tooltip = isEmpty
     ? 'No trades in this bucket for the current window'
     : `${fmtCompact(cell.current, metric)} ${metric} (${cell.tradeCount} trades, ${period}) | ${comparison} P25=${fmtCompact(cell.baseline.p25, metric)} P50=${fmtCompact(cell.baseline.p50, metric)} P75=${fmtCompact(cell.baseline.p75, metric)} min=${fmtCompact(cell.baseline.min, metric)} max=${fmtCompact(cell.baseline.max, metric)} (n=${cell.baseline.n})`

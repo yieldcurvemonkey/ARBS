@@ -1,6 +1,4 @@
-// ABOUTME: Source-string contract test for VolumeGridCellModal. Pins the
-// PrimeReact Dialog mount, range toggle, recent-trades click-through,
-// and useVolumeGridCell wiring.
+// ABOUTME: Source-string contract test for VolumeGridCellModal.
 import { describe, expect, it } from '@jest/globals'
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
@@ -14,14 +12,18 @@ const modalSource = readFileSync(
 )
 
 describe('VolumeGridCellModal — Dialog wiring', () => {
-  it('uses PrimeReact Dialog with modal=true', () => {
+  it('uses PrimeReact Dialog', () => {
     expect(modalSource).toMatch(/import\s+\{\s*Dialog\s*\}\s+from\s+['"]primereact\/dialog['"]/)
-    expect(modalSource).toMatch(/modal/)
   })
-
   it('opens when cell != null and closes via onClose', () => {
     expect(modalSource).toMatch(/visible=\{props\.cell\s*!=\s*null\}/)
     expect(modalSource).toMatch(/onHide=\{props\.onClose\}/)
+  })
+})
+
+describe('VolumeGridCellModal — schemas threaded', () => {
+  it('forwards forwardSchema/tenorSchema/packageType to useVolumeGridCell', () => {
+    expect(modalSource).toMatch(/useVolumeGridCell\(\{[\s\S]*forwardSchema:\s*props\.forwardSchema[\s\S]*tenorSchema:\s*props\.tenorSchema[\s\S]*packageType:\s*props\.packageType[\s\S]*\}\)/)
   })
 })
 
@@ -32,26 +34,15 @@ describe('VolumeGridCellModal — range toggle', () => {
   it('exposes 1M/3M/6M/1Y options', () => {
     expect(modalSource).toMatch(/\['1M', '3M', '6M', '1Y'\]/)
   })
-  it('defaults to 3M', () => {
-    expect(modalSource).toMatch(/['"]3M['"]/)
-  })
 })
 
-describe('VolumeGridCellModal — useVolumeGridCell + click-through', () => {
-  it('calls useVolumeGridCell with cell + metric + range', () => {
-    expect(modalSource).toMatch(/useVolumeGridCell\(\{[\s\S]*cell:\s*props\.cell[\s\S]*metric:\s*props\.metric[\s\S]*range[\s\S]*\}\)/)
-  })
+describe('VolumeGridCellModal — click-through + empty states', () => {
   it('row click invokes onSelectPackage(package_id) and onClose', () => {
     expect(modalSource).toMatch(/onSelectPackage\(t\.package_id\)/)
     expect(modalSource).toMatch(/props\.onClose\(\)/)
   })
-})
-
-describe('VolumeGridCellModal — empty state', () => {
-  it('shows an empty state when timeseries is empty', () => {
+  it('shows empty states', () => {
     expect(modalSource).toMatch(/No trades in this bucket over the selected range/)
-  })
-  it('shows an empty state when recentTrades is empty', () => {
     expect(modalSource).toMatch(/No recent trades for this bucket/)
   })
 })

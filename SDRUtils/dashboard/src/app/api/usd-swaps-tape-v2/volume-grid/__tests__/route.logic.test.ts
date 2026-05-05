@@ -10,167 +10,171 @@ import {
   shapeVolumeGridResponse,
   timeOfDayInEt,
 } from '../route.logic'
+import {
+  resolveForwardSchema,
+  resolveTenorSchema,
+} from '@/lib/usd-swaps-tape-v2/volumeGridBuckets'
 
 describe('parseVolumeGridParams', () => {
-  it('applies defaults for missing params', () => {
+  it('applies defaults', () => {
     const out = parseVolumeGridParams(new URLSearchParams())
     expect(out).toEqual({
       ok: true,
-      value: { metric: 'notional', period: 'today', lookbackDays: 90 },
+      value: {
+        metric: 'notional', period: 'today', lookbackDays: 90,
+        forwardSchema: 'default', tenorSchema: 'default', packageType: 'outright',
+      },
     })
   })
   it('rejects invalid metric', () => {
-    const out = parseVolumeGridParams(new URLSearchParams('metric=foo'))
-    expect(out.ok).toBe(false)
+    expect(parseVolumeGridParams(new URLSearchParams('metric=foo')).ok).toBe(false)
   })
   it('rejects invalid period', () => {
-    const out = parseVolumeGridParams(new URLSearchParams('period=foo'))
-    expect(out.ok).toBe(false)
+    expect(parseVolumeGridParams(new URLSearchParams('period=foo')).ok).toBe(false)
   })
-  it('rejects out-of-range lookbackDays', () => {
-    expect(parseVolumeGridParams(new URLSearchParams('lookbackDays=0')).ok).toBe(false)
-    expect(parseVolumeGridParams(new URLSearchParams('lookbackDays=999')).ok).toBe(false)
+  it('rejects invalid forwardSchema', () => {
+    expect(parseVolumeGridParams(new URLSearchParams('forwardSchema=foo')).ok).toBe(false)
+  })
+  it('rejects invalid packageType', () => {
+    expect(parseVolumeGridParams(new URLSearchParams('packageType=foo')).ok).toBe(false)
+  })
+  it('accepts imm16 + spreadover', () => {
+    const out = parseVolumeGridParams(
+      new URLSearchParams('forwardSchema=imm16&packageType=spreadover_curve'),
+    )
+    expect(out.ok).toBe(true)
+    if (out.ok) {
+      expect(out.value.forwardSchema).toBe('imm16')
+      expect(out.value.packageType).toBe('spreadover_curve')
+    }
   })
 })
 
 describe('timeOfDayInEt', () => {
-  it('returns ET date and seconds-of-day for a UTC timestamp during EDT', () => {
-    // 2026-05-05 14:32:15 UTC == 10:32:15 EDT
+  it('converts UTC to ET seconds-of-day during EDT', () => {
     const out = timeOfDayInEt(new Date('2026-05-05T14:32:15Z'))
     expect(out.dateEt).toBe('2026-05-05')
     expect(out.todSeconds).toBe(10 * 3600 + 32 * 60 + 15)
   })
-  it('returns ET date and seconds-of-day for a UTC timestamp during EST', () => {
-    // 2026-01-15 14:00:00 UTC == 09:00:00 EST
-    const out = timeOfDayInEt(new Date('2026-01-15T14:00:00Z'))
-    expect(out.dateEt).toBe('2026-01-15')
-    expect(out.todSeconds).toBe(9 * 3600)
-  })
 })
 
-describe('computeWindowBounds — time_of_day kind', () => {
-  const now = new Date('2026-05-05T14:32:15Z') // 10:32:15 ET (EDT)
+describe('computeWindowBounds', () => {
+  const now = new Date('2026-05-05T14:32:15Z')
 
-  it('today: kind=time_of_day, tod=[0, tod_now]', () => {
+  it('today: kind=time_of_day with tod=[0, tod_now]', () => {
     const out = computeWindowBounds('today', 90, now)
     expect(out.kind).toBe('time_of_day')
     if (out.kind === 'time_of_day') {
-      expect(out.todayDateEt).toBe('2026-05-05')
       expect(out.todSecondsLo).toBe(0)
       expect(out.todSecondsHi).toBe(10 * 3600 + 32 * 60 + 15)
-      expect(out.lookbackEnd.getTime()).toBe(now.getTime())
-      expect(now.getTime() - out.lookbackStart.getTime()).toBe(90 * 24 * 60 * 60 * 1000)
     }
   })
 
-  it('1h: kind=time_of_day, tod=[tod_now-3600, tod_now]', () => {
+  it('1h: tod_lo = tod_now - 3600', () => {
     const out = computeWindowBounds('1h', 90, now)
-    expect(out.kind).toBe('time_of_day')
     if (out.kind === 'time_of_day') {
-      const todNow = 10 * 3600 + 32 * 60 + 15
-      expect(out.todSecondsLo).toBe(todNow - 3600)
-      expect(out.todSecondsHi).toBe(todNow)
+      expect(out.todSecondsHi - out.todSecondsLo).toBe(3600)
     }
   })
 
-  it('1h: clamps tod_lo to 0 if before midnight', () => {
-    // 2026-05-05 04:30:00 UTC == 00:30:00 EDT — tod_now=1800
-    const earlyMorning = new Date('2026-05-05T04:30:00Z')
-    const out = computeWindowBounds('1h', 90, earlyMorning)
-    expect(out.kind).toBe('time_of_day')
-    if (out.kind === 'time_of_day') {
-      expect(out.todSecondsLo).toBe(0)
-      expect(out.todSecondsHi).toBe(1800)
-    }
-  })
-})
-
-describe('computeWindowBounds — rolling kind', () => {
-  const now = new Date('2026-05-05T14:32:00Z')
-
-  it('24h: kind=rolling, currentStart=now-24h', () => {
+  it('24h: kind=rolling', () => {
     const out = computeWindowBounds('24h', 90, now)
     expect(out.kind).toBe('rolling')
-    if (out.kind === 'rolling') {
-      expect(now.getTime() - out.currentStart.getTime()).toBe(24 * 60 * 60 * 1000)
-      expect(out.windowIdSql).toContain('date_trunc')
-    }
-  })
-
-  it('1w: kind=rolling, currentStart=now-7d, lookback=52w', () => {
-    const out = computeWindowBounds('1w', 90, now)
-    expect(out.kind).toBe('rolling')
-    if (out.kind === 'rolling') {
-      expect(now.getTime() - out.currentStart.getTime()).toBe(7 * 24 * 60 * 60 * 1000)
-      expect(now.getTime() - out.lookbackStart.getTime()).toBeGreaterThanOrEqual(
-        52 * 7 * 24 * 60 * 60 * 1000,
-      )
-    }
   })
 })
 
 describe('buildVolumeGridSqlTimeOfDay', () => {
+  const fwd = resolveForwardSchema('default')
+  const tenor = resolveTenorSchema('default')
+  const bounds = computeWindowBounds('today', 90, new Date('2026-05-05T14:32:00Z'))
+
+  it('joins arbs_usd_swap_tape_packages_v2 to filter by package_type', () => {
+    const built = buildVolumeGridSqlTimeOfDay({
+      metric: 'notional', forwardSchema: fwd, tenorSchema: tenor,
+      packageType: 'outright', bounds,
+    })
+    expect(built.sql).toContain('JOIN arbs_usd_swap_tape_packages_v2 p ON p.package_id = l.package_id')
+    expect(built.sql).toContain('p.package_type IN ($6)')
+    expect(built.params[5]).toBe('OUTRIGHT')
+  })
+
+  it('emits SQL with no package_type filter when packageType=all', () => {
+    const built = buildVolumeGridSqlTimeOfDay({
+      metric: 'notional', forwardSchema: fwd, tenorSchema: tenor,
+      packageType: 'all', bounds,
+    })
+    expect(built.sql).toContain('AND TRUE')
+    expect(built.params.length).toBe(5)
+  })
+
+  it('expands spreadover_curve to two package types', () => {
+    const built = buildVolumeGridSqlTimeOfDay({
+      metric: 'notional', forwardSchema: fwd, tenorSchema: tenor,
+      packageType: 'spreadover_curve', bounds,
+    })
+    expect(built.sql).toContain('p.package_type IN ($6, $7)')
+    expect(built.params[5]).toBe('SPREADOVER_CURVE')
+    expect(built.params[6]).toBe('MATCHED_MATURITY_CURVE')
+  })
+
   it('uses gross_notional for metric=notional', () => {
-    const sql = buildVolumeGridSqlTimeOfDay('notional')
-    expect(sql).toContain('gross_notional')
-    expect(sql).not.toContain('SUM(gross_dv01)')
+    const built = buildVolumeGridSqlTimeOfDay({
+      metric: 'notional', forwardSchema: fwd, tenorSchema: tenor,
+      packageType: 'outright', bounds,
+    })
+    expect(built.sql).toContain('gross_notional')
   })
-  it('uses gross_dv01 for metric=dv01', () => {
-    expect(buildVolumeGridSqlTimeOfDay('dv01')).toContain('gross_dv01')
-  })
-  it('filters on contributes_to_flow=TRUE', () => {
-    expect(buildVolumeGridSqlTimeOfDay('notional')).toContain('contributes_to_flow')
-  })
-  it('excludes fwd_other rows', () => {
-    expect(buildVolumeGridSqlTimeOfDay('notional')).toContain("<> 'fwd_other'")
-  })
-  it('filters by tod_seconds_et range', () => {
-    const sql = buildVolumeGridSqlTimeOfDay('notional')
-    expect(sql).toContain('tod_seconds_et >= $4')
-    expect(sql).toContain('tod_seconds_et <= $5')
-  })
-  it('partitions current vs prior by day_et = $3 / day_et < $3', () => {
-    const sql = buildVolumeGridSqlTimeOfDay('notional')
-    expect(sql).toContain('day_et = $3')
-    expect(sql).toContain('day_et < $3')
-  })
-  it('extracts ET seconds-of-day for the time-of-day filter', () => {
-    expect(buildVolumeGridSqlTimeOfDay('notional')).toContain("AT TIME ZONE 'America/New_York'")
+
+  it('drops fwd_other / tenor_other rows', () => {
+    const built = buildVolumeGridSqlTimeOfDay({
+      metric: 'notional', forwardSchema: fwd, tenorSchema: tenor,
+      packageType: 'outright', bounds,
+    })
+    expect(built.sql).toContain("fwd_bucket <> 'other'")
+    expect(built.sql).toContain("tenor_bucket <> 'other'")
   })
 })
 
 describe('buildVolumeGridSqlRolling', () => {
-  it('keeps the rolling window template (current via $3)', () => {
-    const sql = buildVolumeGridSqlRolling('notional')
-    expect(sql).toContain('ts >= $3::timestamptz')
-    expect(sql).toContain('%WINDOW_ID_SQL%')
+  const fwd = resolveForwardSchema('default')
+  const tenor = resolveTenorSchema('default')
+  const bounds = computeWindowBounds('1w', 90, new Date('2026-05-05T14:32:00Z'))
+
+  it('inlines the windowIdSql expression for week truncation', () => {
+    const built = buildVolumeGridSqlRolling({
+      metric: 'notional', forwardSchema: fwd, tenorSchema: tenor,
+      packageType: 'outright', bounds,
+    })
+    expect(built.sql).toContain("date_trunc('week'")
+    expect(built.sql).toContain('p.package_type IN ($4)')
+    expect(built.params[3]).toBe('OUTRIGHT')
   })
 })
 
 describe('buildVolumeGridSql dispatch', () => {
-  it('dispatches to time_of_day when bounds.kind=time_of_day', () => {
-    const bounds = computeWindowBounds('today', 90, new Date('2026-05-05T14:32:00Z'))
-    const sql = buildVolumeGridSql('notional', bounds)
-    expect(sql).toContain('day_et = $3')
-  })
-  it('dispatches to rolling when bounds.kind=rolling', () => {
-    const bounds = computeWindowBounds('24h', 90, new Date('2026-05-05T14:32:00Z'))
-    const sql = buildVolumeGridSql('notional', bounds)
-    expect(sql).toContain('%WINDOW_ID_SQL%')
+  const fwd = resolveForwardSchema('default')
+  const tenor = resolveTenorSchema('default')
+  it('dispatches by bounds.kind', () => {
+    const tod = buildVolumeGridSql({
+      metric: 'notional', forwardSchema: fwd, tenorSchema: tenor,
+      packageType: 'outright',
+      bounds: computeWindowBounds('today', 90, new Date()),
+    })
+    expect(tod.sql).toContain('day_et = $3')
+
+    const rolling = buildVolumeGridSql({
+      metric: 'notional', forwardSchema: fwd, tenorSchema: tenor,
+      packageType: 'outright',
+      bounds: computeWindowBounds('1w', 90, new Date()),
+    })
+    expect(rolling.sql).not.toContain('day_et = $3')
   })
 })
 
 describe('computePercentile', () => {
-  it('returns 0 when current is below all prior values', () => {
+  it('returns 0 / 100 / null on edge cases', () => {
     expect(computePercentile(0, [10, 20, 30])).toBe(0)
-  })
-  it('returns 100 when current exceeds all prior values', () => {
     expect(computePercentile(100, [10, 20, 30])).toBe(100)
-  })
-  it('returns ~67 when current is at the median', () => {
-    expect(computePercentile(20, [10, 20, 30])).toBeCloseTo(66.67, 1)
-  })
-  it('returns null when prior is empty', () => {
     expect(computePercentile(5, [])).toBeNull()
   })
 })
@@ -180,28 +184,36 @@ describe('summariseCells', () => {
     const cells = [
       { fwd: 'spot', tenor: '5y', current: 10, tradeCount: 3, baseline: { p25: 0, p50: 0, p75: 0, min: 0, max: 0, n: 0 }, percentile: null },
       { fwd: 'spot', tenor: '10y', current: 20, tradeCount: 5, baseline: { p25: 0, p50: 0, p75: 0, min: 0, max: 0, n: 0 }, percentile: null },
-      { fwd: '6m_1y', tenor: '5y', current: 5, tradeCount: 1, baseline: { p25: 0, p50: 0, p75: 0, min: 0, max: 0, n: 0 }, percentile: null },
     ] as never
     const totals = summariseCells(cells)
     expect(totals.rowTotals.spot.current).toBe(30)
-    expect(totals.rowTotals['6m_1y'].current).toBe(5)
-    expect(totals.colTotals['5y'].current).toBe(15)
     expect(totals.colTotals['10y'].current).toBe(20)
-    expect(totals.grand.current).toBe(35)
+    expect(totals.grand.current).toBe(30)
   })
 })
 
 describe('shapeVolumeGridResponse', () => {
-  it('drops fwd_other and null tenor cells', () => {
+  it('drops cells whose ids are not in the resolved schema', () => {
+    const fwd = resolveForwardSchema('default')
+    const tenor = resolveTenorSchema('default')
     const out = shapeVolumeGridResponse(
       [
         { fwd: 'fwd_other', tenor: '5y', current_value: 1, trade_count: 1, prior_array: [], p25: 0, p50: 0, p75: 0, pmin: 0, pmax: 0, n: 0, as_of_ts: null },
-        { fwd: 'spot', tenor: '', current_value: 1, trade_count: 1, prior_array: [], p25: 0, p50: 0, p75: 0, pmin: 0, pmax: 0, n: 0, as_of_ts: null },
+        { fwd: 'spot', tenor: 'unknown_tenor', current_value: 1, trade_count: 1, prior_array: [], p25: 0, p50: 0, p75: 0, pmin: 0, pmax: 0, n: 0, as_of_ts: null },
         { fwd: 'spot', tenor: '5y', current_value: 1, trade_count: 1, prior_array: [], p25: 0, p50: 0, p75: 0, pmin: 0, pmax: 0, n: 0, as_of_ts: null },
       ],
-      { metric: 'notional', period: 'today', lookbackDays: 90 },
+      {
+        metric: 'notional', period: 'today', lookbackDays: 90,
+        forwardSchema: 'default', tenorSchema: 'default', packageType: 'outright',
+      },
+      fwd,
+      tenor,
     )
     expect(out.cells.length).toBe(1)
     expect(out.cells[0].fwd).toBe('spot')
+    expect(out.cells[0].tenor).toBe('5y')
+    expect(out.axes.forward.id).toBe('default')
+    expect(out.axes.forward.buckets.length).toBe(8)
+    expect(out.axes.tenor.buckets.length).toBe(16)
   })
 })

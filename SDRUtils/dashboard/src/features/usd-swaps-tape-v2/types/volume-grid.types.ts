@@ -1,7 +1,11 @@
 // ABOUTME: Response shapes for /volume-grid and /volume-grid/cell.
 // Imported by the route handlers and the SWR hooks.
 
-import type { ForwardBucketId, TenorBucketId } from '@/lib/usd-swaps-tape-v2/volumeGridBuckets'
+import type {
+  ForwardSchemaId,
+  PackageTypeGroupId,
+  TenorSchemaId,
+} from '@/lib/usd-swaps-tape-v2/volumeGridBuckets'
 
 export type VolumeMetric = 'notional' | 'dv01'
 export type VolumePeriod = 'today' | '1h' | '24h' | '1w'
@@ -17,8 +21,8 @@ export interface VolumeGridBaseline {
 }
 
 export interface VolumeGridCell {
-  fwd: Exclude<ForwardBucketId, 'fwd_other'>
-  tenor: TenorBucketId
+  fwd: string
+  tenor: string
   current: number
   tradeCount: number
   baseline: VolumeGridBaseline
@@ -31,11 +35,23 @@ export interface VolumeGridTotalEntry {
   percentile: number | null
 }
 
+export interface VolumeGridSchemaAxis {
+  id: string
+  label: string
+  buckets: ReadonlyArray<{ id: string; label: string }>
+}
+
 export interface VolumeGridResponse {
   asOf: string
   metric: VolumeMetric
   period: VolumePeriod
   lookbackDays: number
+  forwardSchema: ForwardSchemaId
+  tenorSchema: TenorSchemaId
+  packageType: PackageTypeGroupId
+  /** Echo of the resolved axes — clients use this to render headers without
+   *  re-deriving them. Especially useful for IMM where buckets rotate. */
+  axes: { forward: VolumeGridSchemaAxis; tenor: VolumeGridSchemaAxis }
   cells: VolumeGridCell[]
   totals: {
     rowTotals: Record<string, VolumeGridTotalEntry>
@@ -66,10 +82,13 @@ export interface VolumeGridCellRecentTrade {
 }
 
 export interface VolumeGridCellResponse {
-  fwd: Exclude<ForwardBucketId, 'fwd_other'>
-  tenor: TenorBucketId
+  fwd: string
+  tenor: string
   metric: VolumeMetric
   range: VolumeCellRange
+  forwardSchema: ForwardSchemaId
+  tenorSchema: TenorSchemaId
+  packageType: PackageTypeGroupId
   timeseries: VolumeGridCellTimeseriesPoint[]
   recentTrades: VolumeGridCellRecentTrade[]
 }
