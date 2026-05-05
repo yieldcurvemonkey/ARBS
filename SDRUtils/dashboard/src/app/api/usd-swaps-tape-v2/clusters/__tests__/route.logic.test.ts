@@ -1,5 +1,5 @@
 import { describe, expect, it } from '@jest/globals'
-import { CLUSTERS_SQL } from '../route'
+import { CLUSTERS_SQL } from '../route.logic'
 
 describe('CLUSTERS_SQL', () => {
   it('groups per cluster_id with min/max timestamps', () => {

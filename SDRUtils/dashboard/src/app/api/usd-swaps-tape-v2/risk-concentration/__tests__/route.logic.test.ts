@@ -1,5 +1,5 @@
 import { describe, expect, it } from '@jest/globals'
-import { buildRiskConcentrationSql, GROUPABLE } from '../route'
+import { buildRiskConcentrationSql, GROUPABLE } from '../route.logic'
 
 describe('buildRiskConcentrationSql', () => {
   it('emits a grouped aggregate on the requested column', () => {

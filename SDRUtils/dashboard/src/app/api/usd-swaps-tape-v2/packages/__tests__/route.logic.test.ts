@@ -1,5 +1,5 @@
 import { describe, expect, it } from '@jest/globals'
-import { buildPackagesSql } from '../route'
+import { buildPackagesSql } from '../route.logic'
 
 describe('buildPackagesSql', () => {
   it('sorts by absolute risk by default', () => {

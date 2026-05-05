@@ -32,6 +32,11 @@ const KEY_TENOR_SCHEMA = 'usd-tape-v2:volume-grid:tenor-schema'
 const KEY_PACKAGE_TYPE = 'usd-tape-v2:volume-grid:package-type'
 const KEY_VIEW_MODE = 'usd-tape-v2:volume-grid:view-mode'
 const KEY_COLOR_MODE = 'usd-tape-v2:volume-grid:color-mode'
+const KEY_DEFAULTS_VERSION = 'usd-tape-v2:volume-grid:defaults-version'
+const DEFAULTS_VERSION = 'open-dv01-1w-v1'
+const DEFAULT_COLLAPSED = false
+const DEFAULT_METRIC: VolumeMetric = 'dv01'
+const DEFAULT_PERIOD: VolumePeriod = '1w'
 
 const VIEW_MODE_IDS: ReadonlyArray<VolumeGridViewMode> = ['volume', 'idb_custy']
 const VIEW_MODE_LABELS: Record<VolumeGridViewMode, string> = {
@@ -66,22 +71,32 @@ function readEnum<T extends string>(key: string, allowed: ReadonlyArray<T>, fall
   const v = window.localStorage.getItem(key)
   return (allowed as ReadonlyArray<string>).includes(v ?? '') ? (v as T) : fallback
 }
+function shouldApplyCurrentDefaults(): boolean {
+  if (typeof window === 'undefined') return true
+  return window.localStorage.getItem(KEY_DEFAULTS_VERSION) !== DEFAULTS_VERSION
+}
 
 export interface VolumeGridCardProps {
   onSelectPackage: (packageId: string) => void
 }
 
 export function VolumeGridCard({ onSelectPackage }: VolumeGridCardProps): JSX.Element {
-  const [collapsed, setCollapsed] = useState<boolean>(() => readBool(KEY_COLLAPSED, true))
+  const [collapsed, setCollapsed] = useState<boolean>(() =>
+    shouldApplyCurrentDefaults() ? DEFAULT_COLLAPSED : readBool(KEY_COLLAPSED, DEFAULT_COLLAPSED),
+  )
   const [metric, setMetric] = useState<VolumeMetric>(() =>
-    readEnum<VolumeMetric>(KEY_METRIC, ['notional', 'dv01'], 'notional'),
+    shouldApplyCurrentDefaults()
+      ? DEFAULT_METRIC
+      : readEnum<VolumeMetric>(KEY_METRIC, ['notional', 'dv01'], DEFAULT_METRIC),
   )
   const [period, setPeriod] = useState<VolumePeriod>(() =>
-    readEnum<VolumePeriod>(
-      KEY_PERIOD,
-      ['today', '1h', '24h', '1w', '2w', '3w', '1m', '3m'],
-      'today',
-    ),
+    shouldApplyCurrentDefaults()
+      ? DEFAULT_PERIOD
+      : readEnum<VolumePeriod>(
+          KEY_PERIOD,
+          ['today', '1h', '24h', '1w', '2w', '3w', '1m', '3m'],
+          DEFAULT_PERIOD,
+        ),
   )
   const [forwardSchema, setForwardSchema] = useState<ForwardSchemaId>(() =>
     readEnum<ForwardSchemaId>(KEY_FWD_SCHEMA, FORWARD_SCHEMA_IDS, 'default'),
@@ -104,6 +119,10 @@ export function VolumeGridCard({ onSelectPackage }: VolumeGridCardProps): JSX.El
     if (typeof window === 'undefined') return
     window.localStorage.setItem(KEY_COLLAPSED, String(collapsed))
   }, [collapsed])
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    window.localStorage.setItem(KEY_DEFAULTS_VERSION, DEFAULTS_VERSION)
+  }, [])
   useEffect(() => {
     if (typeof window === 'undefined') return
     window.localStorage.setItem(KEY_METRIC, metric)

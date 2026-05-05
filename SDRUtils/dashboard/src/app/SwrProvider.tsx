@@ -7,7 +7,7 @@
 // use SWR.
 'use client'
 
-import { SWRConfig } from 'swr'
+import { SWRConfig, type Cache } from 'swr'
 import { useEffect, useState, type ReactNode } from 'react'
 import {
   createIndexedDBCacheProvider,
@@ -53,7 +53,7 @@ export function SwrProvider({ children }: { children: ReactNode }) {
   return (
     <SWRConfig
       value={{
-        provider: () => provider as unknown as Map<string, unknown>,
+        provider: () => provider as unknown as Cache,
         fetcher: createFetcher(),
         revalidateOnFocus: false,
         // Match the server LRU TTL + Cache-Control max-age so a row

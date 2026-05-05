@@ -28,6 +28,9 @@ describe('VolumeGridCard — localStorage keys', () => {
   it('uses key for color-mode state', () => {
     expect(cardSource).toMatch(/'usd-tape-v2:volume-grid:color-mode'/)
   })
+  it('uses a version key for default-state migrations', () => {
+    expect(cardSource).toMatch(/'usd-tape-v2:volume-grid:defaults-version'/)
+  })
 })
 
 describe('VolumeGridCard — toggles', () => {
@@ -53,14 +56,19 @@ describe('VolumeGridCard — toggles', () => {
 })
 
 describe('VolumeGridCard — defaults', () => {
-  it('starts collapsed=true', () => {
-    expect(cardSource).toMatch(/readBool\(KEY_COLLAPSED, true\)/)
+  it('starts open', () => {
+    expect(cardSource).toMatch(/const DEFAULT_COLLAPSED = false/)
   })
-  it('defaults metric to notional', () => {
-    expect(cardSource).toMatch(/readEnum<VolumeMetric>\([^)]*'notional'\)/)
+  it('defaults metric to dv01', () => {
+    expect(cardSource).toMatch(/const DEFAULT_METRIC: VolumeMetric = 'dv01'/)
   })
-  it('defaults period to today', () => {
-    expect(cardSource).toMatch(/readEnum<VolumePeriod>\([\s\S]*'today'[\s\S]*\)/)
+  it('defaults period to 1w', () => {
+    expect(cardSource).toMatch(/const DEFAULT_PERIOD: VolumePeriod = '1w'/)
+  })
+  it('applies updated defaults before honoring persisted grid state', () => {
+    expect(cardSource).toMatch(/shouldApplyCurrentDefaults\(\) \? DEFAULT_COLLAPSED/)
+    expect(cardSource).toMatch(/shouldApplyCurrentDefaults\(\)[\s\S]*\? DEFAULT_METRIC/)
+    expect(cardSource).toMatch(/shouldApplyCurrentDefaults\(\)[\s\S]*\? DEFAULT_PERIOD/)
   })
   it('defaults forward schema to default', () => {
     expect(cardSource).toMatch(/readEnum<ForwardSchemaId>\([^)]*'default'\)/)

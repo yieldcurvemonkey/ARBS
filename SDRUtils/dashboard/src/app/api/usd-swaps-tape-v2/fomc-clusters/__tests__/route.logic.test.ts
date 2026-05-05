@@ -1,5 +1,5 @@
 import { describe, expect, it } from '@jest/globals'
-import { FOMC_CLUSTERS_SQL } from '../route'
+import { FOMC_CLUSTERS_SQL } from '../route.logic'
 
 describe('FOMC_CLUSTERS_SQL', () => {
   it('aggregates over FOMC-dated legs per meeting label', () => {

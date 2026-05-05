@@ -280,7 +280,7 @@ export function TradeRarityTab(props: TradeRarityTabProps): JSX.Element {
           {settingsOpen ? (
             <div className="absolute right-0 top-9 z-10 w-72 rounded border border-slate-700 bg-slate-950/95 p-3 shadow-xl">
               <div className="mb-2 text-[10px] uppercase tracking-wider text-slate-500">
-                What counts as "similar"
+                What counts as &quot;similar&quot;
               </div>
               <label className="mb-2 block text-[11px] font-mono text-slate-300">
                 <div className="flex justify-between">
@@ -313,7 +313,7 @@ export function TradeRarityTab(props: TradeRarityTabProps): JSX.Element {
                 />
               </label>
               <div className="mt-2 text-[10px] text-slate-500">
-                These drive "last similar trade", "frequency last 90d", and similarity count.
+                These drive &quot;last similar trade&quot;, &quot;frequency last 90d&quot;, and similarity count.
               </div>
             </div>
           ) : null}
@@ -349,8 +349,8 @@ export function TradeRarityTab(props: TradeRarityTabProps): JSX.Element {
         >
           <span className="font-semibold text-slate-200">No prints in lookback window.</span>
           <div className="mt-1 text-[10.5px] text-slate-500">
-            The {focused.tape_label} bucket hasn't traded in the configured 90-day window —
-            either the tenor is too rare, the trade type doesn't print to this tape, or the
+            The {focused.tape_label} bucket hasn&apos;t traded in the configured 90-day window —
+            either the tenor is too rare, the trade type doesn&apos;t print to this tape, or the
             most recent print is older than the lookback. Widen the rate / size tolerance in
             the gear menu, or pin the trade and check back after the next ingest run.
           </div>

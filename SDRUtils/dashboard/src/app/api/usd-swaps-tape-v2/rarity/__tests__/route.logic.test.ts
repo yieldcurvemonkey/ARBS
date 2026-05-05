@@ -1,5 +1,5 @@
 import { describe, expect, it } from '@jest/globals'
-import { sampleMatchesSimilarity } from '../route'
+import { sampleMatchesSimilarity } from '../route.logic'
 
 describe('rarity similarity matching', () => {
   it('ignores size tolerance when focused notional is unavailable', () => {

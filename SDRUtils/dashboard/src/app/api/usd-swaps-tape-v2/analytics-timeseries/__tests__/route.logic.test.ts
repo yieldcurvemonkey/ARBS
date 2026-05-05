@@ -3,7 +3,7 @@ import {
   custyNotionalOutlierPredicate,
   parseBooleanParam,
   riskAggregateExpression,
-} from '../route'
+} from '../route.logic'
 
 describe('analytics-timeseries route options', () => {
   it('defaults to net DV01 and clean custy-notional outlier mode', () => {

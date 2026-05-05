@@ -28,6 +28,10 @@ type WindowMode = 'preset' | 'custom'
 type DisplayTransform = 'absolute' | 'rebased'
 type FormulaDraftLeg = { id: string; seriesId: string; weight: number }
 type TechnicalStudyDraft = { kind: TimeseriesTechnicalStudyKind; window: number }
+type PlotlyEventTarget = HTMLDivElement & {
+  on?: (event: 'plotly_relayout', handler: (eventData: Record<string, unknown>) => void) => void
+  removeListener?: (event: 'plotly_relayout', handler: (eventData: Record<string, unknown>) => void) => void
+}
 
 const LABEL_CLASS =
   'block text-[10px] font-semibold uppercase tracking-[0.18em] text-slate-500'
@@ -271,6 +275,7 @@ function PlotlyFigure({
     let disposed = false
     let plotly: any = null
     const container = rootRef.current
+    const plotlyContainer = container as PlotlyEventTarget | null
     const handleRelayout = (eventData: Record<string, unknown>) => {
       relayoutHandlerRef.current?.(eventData)
     }
@@ -280,11 +285,11 @@ function PlotlyFigure({
       plotly = (plotlyModule as any).default ?? plotlyModule
       if (disposed || !container) return
       await plotly.react(container, data, layout, config)
-      if (typeof container.on === 'function') {
-        if (typeof container.removeListener === 'function') {
-          container.removeListener('plotly_relayout', handleRelayout)
+      if (typeof plotlyContainer?.on === 'function') {
+        if (typeof plotlyContainer.removeListener === 'function') {
+          plotlyContainer.removeListener('plotly_relayout', handleRelayout)
         }
-        container.on('plotly_relayout', handleRelayout)
+        plotlyContainer.on('plotly_relayout', handleRelayout)
       }
     }
 
@@ -294,8 +299,8 @@ function PlotlyFigure({
 
     return () => {
       disposed = true
-      if (container && typeof container.removeListener === 'function') {
-        container.removeListener('plotly_relayout', handleRelayout)
+      if (typeof plotlyContainer?.removeListener === 'function') {
+        plotlyContainer.removeListener('plotly_relayout', handleRelayout)
       }
       if (plotly && container) {
         try {

@@ -7,7 +7,7 @@
 // the dock click handler still calls the SWR-backed hooks directly,
 // so a prefetch is purely a cache warmer — never sets state.
 import { useCallback, useEffect, useRef } from 'react'
-import { unstable_serialize, useSWRConfig } from 'swr'
+import { unstable_serialize, useSWRConfig, type Key } from 'swr'
 import {
   timeseriesKey,
   rarityKey,
@@ -196,7 +196,7 @@ export function useAnalyticsPrefetch(options: PrefetchOptions = {}) {
           eParams.set('focusedNotional', String(focused.notional_usd))
         const eUrl = `${TAPE_V2_API_BASE}/extremes?${eParams.toString()}`
 
-        const fireIfMissing = (key: unknown, url: string) => {
+        const fireIfMissing = (key: Key, url: string) => {
           // SWR stores cache entries under a stable-hash of the tuple
           // key, NOT the tuple itself. Serialise here so cache.get
           // looks up under the same string SWR uses internally; without

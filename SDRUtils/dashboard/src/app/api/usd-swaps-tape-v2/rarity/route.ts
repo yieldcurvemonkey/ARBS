@@ -9,7 +9,6 @@ import {
   distributionStats,
   packageAnalyticsCtes,
   packageAnalyticsFilterPredicate,
-  percentile,
   percentileRank,
   rarityDescriptor,
   rarityZone,
@@ -18,6 +17,7 @@ import {
 } from '@/lib/usd-swaps-tape-v2/analytics'
 import { ServerLru } from '@/lib/usd-swaps-tape-v2/serverLru'
 import { computeEtag, matchesIfNoneMatch } from '@/lib/usd-swaps-tape-v2/etag'
+import { sampleMatchesSimilarity, type SimilaritySample } from './route.logic'
 
 // Per-route in-memory LRU. Bound configurable via ANALYTICS_LRU_MAX env
 // var; 60 s TTL aligns with the client-facing Cache-Control max-age.
@@ -77,29 +77,6 @@ type RecordRow = {
   ts: string | null
   venue: string | null
   platform: 'IDB' | 'CUSTY' | null
-}
-
-export type SimilaritySample = {
-  fixed_rate: number | null
-  notional: number | null
-}
-
-export function sampleMatchesSimilarity(
-  sample: SimilaritySample,
-  opts: {
-    focusedRateBps: number
-    primaryTol: number
-    focusedNotional: number
-    sizeTolPct: number
-  },
-): boolean {
-  if (!Number.isFinite(opts.focusedRateBps)) return false
-  const rateOk =
-    Math.abs(rateToBps(sample.fixed_rate) - opts.focusedRateBps) <= opts.primaryTol
-  if (!rateOk) return false
-  if (!Number.isFinite(opts.focusedNotional)) return true
-  const sizeTol = opts.focusedNotional * opts.sizeTolPct
-  return Math.abs(Math.abs(safeNum(sample.notional)) - opts.focusedNotional) <= sizeTol
 }
 
 type RarityResult = { status: number; payload: unknown }
@@ -460,6 +437,3 @@ export async function GET(request: Request) {
   return NextResponse.json(payload, { status })
 }
 
-// Unused helper exported for potential reuse by callers; silences
-// the import-tree linter that wants percentile exercised from this file.
-export const _percentileProbe = (arr: number[], p: number) => percentile(arr.slice().sort((a, b) => a - b), p)
