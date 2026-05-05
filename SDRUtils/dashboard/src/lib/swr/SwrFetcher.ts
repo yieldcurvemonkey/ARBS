@@ -1,40 +1,24 @@
-// ABOUTME: ETag-aware fetch wrapper for SWR. Retains the last seen
-// ETag + payload per URL; sends If-None-Match on subsequent fetches;
-// returns the cached payload on 304. Errors on any other non-200.
+// ABOUTME: SWR fetcher used by the analytics-dock hooks. Pairs with
+// the server-side LRU + ETag wrappers on the three USD swaps tape v2
+// analytics routes (analytics-timeseries / rarity / extremes).
 //
-// Pairs with the server-side LRU+ETag wrappers on the three USD swaps
-// tape v2 analytics routes (analytics-timeseries / rarity / extremes).
-
-interface CacheEntry<T> {
-  etag: string
-  payload: T
-}
+// The browser's native HTTP cache handles ETag + If-None-Match
+// automatically when the response carries `Cache-Control: max-age=...,
+// must-revalidate`: within max-age the browser serves from cache with
+// no network round-trip, and after max-age it sends If-None-Match
+// transparently and substitutes the cached body on 304. We don't need
+// (or want) a parallel JS-level ETag cache — that path doesn't survive
+// page reload, so the browser cache is strictly more capable. fetcher
+// just hands the URL to fetch() and parses the JSON response.
 
 export function createFetcher() {
-  const cache = new Map<string, CacheEntry<unknown>>()
-
   return async function fetcher<T>(url: string): Promise<T> {
-    const prior = cache.get(url)
-    const headers: Record<string, string> = {}
-    if (prior?.etag) headers['If-None-Match'] = prior.etag
-
-    const response = await fetch(url, { headers })
-
-    if (response.status === 304 && prior) {
-      return prior.payload as T
-    }
-
+    const response = await fetch(url)
     if (!response.ok) {
       throw new Error(
         `Request failed: ${response.status} ${response.statusText}`,
       )
     }
-
-    const payload = (await response.json()) as T
-    const etag = response.headers.get('ETag')
-    if (etag) {
-      cache.set(url, { etag, payload })
-    }
-    return payload
+    return (await response.json()) as T
   }
 }

@@ -18,27 +18,7 @@ describe('SwrFetcher', () => {
     expect(r).toEqual({ ok: true })
   })
 
-  it('caches ETag for next request via If-None-Match', async () => {
-    const fetcher = createFetcher()
-    ;(global.fetch as jest.Mock).mockResolvedValueOnce(
-      new Response(JSON.stringify({ v: 1 }), {
-        status: 200,
-        headers: { ETag: '"abc"' },
-      }),
-    )
-    await fetcher('/api/x')
-
-    ;(global.fetch as jest.Mock).mockResolvedValueOnce(
-      new Response(null, { status: 304 }),
-    )
-    const r = await fetcher('/api/x')
-
-    const secondCall = (global.fetch as jest.Mock).mock.calls[1]
-    expect((secondCall[1] as { headers: Record<string, string> }).headers['If-None-Match']).toBe('"abc"')
-    expect(r).toEqual({ v: 1 }) // 304 reuses prior payload
-  })
-
-  it('throws on non-200/304 responses', async () => {
+  it('throws on non-2xx responses', async () => {
     ;(global.fetch as jest.Mock).mockResolvedValueOnce(
       new Response('err', { status: 500 }),
     )
@@ -46,44 +26,21 @@ describe('SwrFetcher', () => {
     await expect(fetcher('/api/x')).rejects.toThrow(/500/)
   })
 
-  it('does not send If-None-Match on first request', async () => {
-    const fetcher = createFetcher()
-    ;(global.fetch as jest.Mock).mockResolvedValueOnce(
-      new Response('{}', { status: 200, headers: { ETag: '"a"' } }),
+  it('hands the URL to fetch() with default cache mode (no manual ETag layer)', async () => {
+    // The browser's HTTP cache handles ETag + If-None-Match natively
+    // when the response carries Cache-Control + ETag. We deliberately
+    // do NOT add a parallel JS-level ETag cache — that path doesn't
+    // survive page reload, while the browser's HTTP cache does.
+    ;(global.fetch as jest.Mock).mockImplementation(
+      () => Promise.resolve(new Response(JSON.stringify({ v: 1 }), { status: 200 })),
     )
-    await fetcher('/api/y')
+    const fetcher = createFetcher()
+    await fetcher('/api/x')
+    await fetcher('/api/x')
     const firstCall = (global.fetch as jest.Mock).mock.calls[0]
-    expect(
-      (firstCall[1] as { headers: Record<string, string> }).headers['If-None-Match'],
-    ).toBeUndefined()
-  })
-
-  it('keeps separate ETag caches per URL', async () => {
-    const fetcher = createFetcher()
-    ;(global.fetch as jest.Mock).mockResolvedValueOnce(
-      new Response(JSON.stringify({ v: 'a' }), {
-        status: 200,
-        headers: { ETag: '"a"' },
-      }),
-    )
-    await fetcher('/api/a')
-
-    ;(global.fetch as jest.Mock).mockResolvedValueOnce(
-      new Response(JSON.stringify({ v: 'b' }), {
-        status: 200,
-        headers: { ETag: '"b"' },
-      }),
-    )
-    await fetcher('/api/b')
-
-    ;(global.fetch as jest.Mock).mockResolvedValueOnce(
-      new Response(null, { status: 304 }),
-    )
-    await fetcher('/api/a')
-
-    const aCall = (global.fetch as jest.Mock).mock.calls[2]
-    expect(
-      (aCall[1] as { headers: Record<string, string> }).headers['If-None-Match'],
-    ).toBe('"a"')
+    const secondCall = (global.fetch as jest.Mock).mock.calls[1]
+    // No If-None-Match header injected by JS — the browser owns that.
+    expect(firstCall[1]).toBeUndefined()
+    expect(secondCall[1]).toBeUndefined()
   })
 })
