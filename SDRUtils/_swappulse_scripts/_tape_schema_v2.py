@@ -279,9 +279,7 @@ ALTER TABLE {LEGS_TABLE_V2} ADD COLUMN IF NOT EXISTS canonical_underlier_key TEX
 CREATE INDEX IF NOT EXISTS idx_tape_v2_legs_canonical_orig
   ON {LEGS_TABLE_V2}(canonical_underlier_key, original_execution_timestamp DESC NULLS LAST);
 
-DROP VIEW IF EXISTS {DISPLAY_VIEW_V2};
-
-CREATE VIEW {DISPLAY_VIEW_V2} AS
+CREATE OR REPLACE VIEW {DISPLAY_VIEW_V2} AS
 SELECT
   p.package_id,
   p.manual_link_id,
