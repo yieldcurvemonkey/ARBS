@@ -30,6 +30,7 @@ import {
 import type { UsdSwapTapeRow } from '../../types'
 import { LegsSubTable } from './LegsSubTable'
 import { getColumns, rowClassName, type MetricMode } from './columns'
+import { useAnalyticsPrefetch } from '../../hooks/useAnalyticsPrefetch'
 import {
   hasActiveConstraints,
   matchFilterMetaWithRow,
@@ -113,6 +114,12 @@ export function TradeTapeTable(props: TradeTapeTableProps): JSX.Element {
 
   // URL-backed column filter + sort state.
   const columnFilters = useColumnFilters()
+
+  // Phase 5 (analytics-fetching): debounced prefetch on row hover.
+  // 150 ms after a hover the analytics dock's three routes are
+  // pre-warmed for that bucket so a subsequent click renders instantly.
+  // Behind feature flag NEXT_PUBLIC_ENABLE_HOVER_PREFETCH (default on).
+  const analyticsPrefetch = useAnalyticsPrefetch()
 
   // Guards against double-triggering `onLoadMore` within a single paging cycle.
   // Historically this flag could get stuck `true` when `onLoadMore` bailed
@@ -544,6 +551,10 @@ export function TradeTapeTable(props: TradeTapeTableProps): JSX.Element {
         scrollHeight="flex"
         stripedRows={false}
         rowClassName={dataTableRowClassName as any}
+        onRowMouseEnter={(e) =>
+          analyticsPrefetch.onHover(e.data as UsdSwapTapeRow)
+        }
+        onRowMouseLeave={() => analyticsPrefetch.onLeave()}
         loading={loading && displayRows.length === 0}
         selectionMode={onSelectionChange ? 'multiple' : undefined}
         cellSelection={false}
