@@ -46,6 +46,23 @@ describe('<VolumeGridCell>', () => {
     expect(html).toMatch(/aria-label="[^"]*spot[^"]*5y[^"]*88th percentile/i)
   })
 
+  it('aria-label cites the period-specific comparison phrasing', () => {
+    const todayHtml = renderToStaticMarkup(
+      <VolumeGridCell cell={baseCell} metric="notional" period="today" onClick={() => {}} />,
+    )
+    expect(todayHtml).toMatch(/same time-of-day/i)
+
+    const hourHtml = renderToStaticMarkup(
+      <VolumeGridCell cell={baseCell} metric="notional" period="1h" onClick={() => {}} />,
+    )
+    expect(hourHtml).toMatch(/same 1h slot/i)
+
+    const weekHtml = renderToStaticMarkup(
+      <VolumeGridCell cell={baseCell} metric="notional" period="1w" onClick={() => {}} />,
+    )
+    expect(weekHtml).toMatch(/prior weeks/i)
+  })
+
   it('renders a dash glyph for empty cells', () => {
     const html = renderToStaticMarkup(
       <VolumeGridCell

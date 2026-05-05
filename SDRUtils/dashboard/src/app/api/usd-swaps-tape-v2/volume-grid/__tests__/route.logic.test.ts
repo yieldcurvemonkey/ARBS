@@ -1,11 +1,14 @@
 import { describe, expect, it } from '@jest/globals'
 import {
   buildVolumeGridSql,
+  buildVolumeGridSqlTimeOfDay,
+  buildVolumeGridSqlRolling,
   computeWindowBounds,
   computePercentile,
   summariseCells,
   parseVolumeGridParams,
   shapeVolumeGridResponse,
+  timeOfDayInEt,
 } from '../route.logic'
 
 describe('parseVolumeGridParams', () => {
@@ -30,49 +33,130 @@ describe('parseVolumeGridParams', () => {
   })
 })
 
-describe('computeWindowBounds', () => {
-  const now = new Date('2026-05-05T14:32:00Z')
-  it('today: current=since 00:00 ET, baseline=last 90 trading days', () => {
-    const out = computeWindowBounds('today', 90, now)
-    expect(out.currentStart.getTime()).toBeLessThan(now.getTime())
-    expect(out.baselineStart.getTime()).toBeLessThan(out.currentStart.getTime())
-    expect(out.windowIdSql).toContain('date_trunc')
+describe('timeOfDayInEt', () => {
+  it('returns ET date and seconds-of-day for a UTC timestamp during EDT', () => {
+    // 2026-05-05 14:32:15 UTC == 10:32:15 EDT
+    const out = timeOfDayInEt(new Date('2026-05-05T14:32:15Z'))
+    expect(out.dateEt).toBe('2026-05-05')
+    expect(out.todSeconds).toBe(10 * 3600 + 32 * 60 + 15)
   })
-  it('1h: current is now-1h..now', () => {
-    const out = computeWindowBounds('1h', 90, now)
-    expect(now.getTime() - out.currentStart.getTime()).toBe(60 * 60 * 1000)
-  })
-  it('24h: current is now-24h..now', () => {
-    const out = computeWindowBounds('24h', 90, now)
-    expect(now.getTime() - out.currentStart.getTime()).toBe(24 * 60 * 60 * 1000)
-  })
-  it('1w: current is now-7d..now, baseline is 52 weeks', () => {
-    const out = computeWindowBounds('1w', 90, now)
-    expect(now.getTime() - out.currentStart.getTime()).toBe(7 * 24 * 60 * 60 * 1000)
-    expect(now.getTime() - out.baselineStart.getTime()).toBeGreaterThanOrEqual(
-      52 * 7 * 24 * 60 * 60 * 1000,
-    )
+  it('returns ET date and seconds-of-day for a UTC timestamp during EST', () => {
+    // 2026-01-15 14:00:00 UTC == 09:00:00 EST
+    const out = timeOfDayInEt(new Date('2026-01-15T14:00:00Z'))
+    expect(out.dateEt).toBe('2026-01-15')
+    expect(out.todSeconds).toBe(9 * 3600)
   })
 })
 
-describe('buildVolumeGridSql', () => {
+describe('computeWindowBounds — time_of_day kind', () => {
+  const now = new Date('2026-05-05T14:32:15Z') // 10:32:15 ET (EDT)
+
+  it('today: kind=time_of_day, tod=[0, tod_now]', () => {
+    const out = computeWindowBounds('today', 90, now)
+    expect(out.kind).toBe('time_of_day')
+    if (out.kind === 'time_of_day') {
+      expect(out.todayDateEt).toBe('2026-05-05')
+      expect(out.todSecondsLo).toBe(0)
+      expect(out.todSecondsHi).toBe(10 * 3600 + 32 * 60 + 15)
+      expect(out.lookbackEnd.getTime()).toBe(now.getTime())
+      expect(now.getTime() - out.lookbackStart.getTime()).toBe(90 * 24 * 60 * 60 * 1000)
+    }
+  })
+
+  it('1h: kind=time_of_day, tod=[tod_now-3600, tod_now]', () => {
+    const out = computeWindowBounds('1h', 90, now)
+    expect(out.kind).toBe('time_of_day')
+    if (out.kind === 'time_of_day') {
+      const todNow = 10 * 3600 + 32 * 60 + 15
+      expect(out.todSecondsLo).toBe(todNow - 3600)
+      expect(out.todSecondsHi).toBe(todNow)
+    }
+  })
+
+  it('1h: clamps tod_lo to 0 if before midnight', () => {
+    // 2026-05-05 04:30:00 UTC == 00:30:00 EDT — tod_now=1800
+    const earlyMorning = new Date('2026-05-05T04:30:00Z')
+    const out = computeWindowBounds('1h', 90, earlyMorning)
+    expect(out.kind).toBe('time_of_day')
+    if (out.kind === 'time_of_day') {
+      expect(out.todSecondsLo).toBe(0)
+      expect(out.todSecondsHi).toBe(1800)
+    }
+  })
+})
+
+describe('computeWindowBounds — rolling kind', () => {
+  const now = new Date('2026-05-05T14:32:00Z')
+
+  it('24h: kind=rolling, currentStart=now-24h', () => {
+    const out = computeWindowBounds('24h', 90, now)
+    expect(out.kind).toBe('rolling')
+    if (out.kind === 'rolling') {
+      expect(now.getTime() - out.currentStart.getTime()).toBe(24 * 60 * 60 * 1000)
+      expect(out.windowIdSql).toContain('date_trunc')
+    }
+  })
+
+  it('1w: kind=rolling, currentStart=now-7d, lookback=52w', () => {
+    const out = computeWindowBounds('1w', 90, now)
+    expect(out.kind).toBe('rolling')
+    if (out.kind === 'rolling') {
+      expect(now.getTime() - out.currentStart.getTime()).toBe(7 * 24 * 60 * 60 * 1000)
+      expect(now.getTime() - out.lookbackStart.getTime()).toBeGreaterThanOrEqual(
+        52 * 7 * 24 * 60 * 60 * 1000,
+      )
+    }
+  })
+})
+
+describe('buildVolumeGridSqlTimeOfDay', () => {
   it('uses gross_notional for metric=notional', () => {
-    const sql = buildVolumeGridSql('notional', 'today')
+    const sql = buildVolumeGridSqlTimeOfDay('notional')
     expect(sql).toContain('gross_notional')
     expect(sql).not.toContain('SUM(gross_dv01)')
   })
   it('uses gross_dv01 for metric=dv01', () => {
-    const sql = buildVolumeGridSql('dv01', 'today')
-    expect(sql).toContain('gross_dv01')
+    expect(buildVolumeGridSqlTimeOfDay('dv01')).toContain('gross_dv01')
   })
   it('filters on contributes_to_flow=TRUE', () => {
-    const sql = buildVolumeGridSql('notional', 'today')
-    expect(sql).toContain('contributes_to_flow')
-    expect(sql).toContain('TRUE')
+    expect(buildVolumeGridSqlTimeOfDay('notional')).toContain('contributes_to_flow')
   })
   it('excludes fwd_other rows', () => {
-    const sql = buildVolumeGridSql('notional', 'today')
-    expect(sql).toContain("<> 'fwd_other'")
+    expect(buildVolumeGridSqlTimeOfDay('notional')).toContain("<> 'fwd_other'")
+  })
+  it('filters by tod_seconds_et range', () => {
+    const sql = buildVolumeGridSqlTimeOfDay('notional')
+    expect(sql).toContain('tod_seconds_et >= $4')
+    expect(sql).toContain('tod_seconds_et <= $5')
+  })
+  it('partitions current vs prior by day_et = $3 / day_et < $3', () => {
+    const sql = buildVolumeGridSqlTimeOfDay('notional')
+    expect(sql).toContain('day_et = $3')
+    expect(sql).toContain('day_et < $3')
+  })
+  it('extracts ET seconds-of-day for the time-of-day filter', () => {
+    expect(buildVolumeGridSqlTimeOfDay('notional')).toContain("AT TIME ZONE 'America/New_York'")
+  })
+})
+
+describe('buildVolumeGridSqlRolling', () => {
+  it('keeps the rolling window template (current via $3)', () => {
+    const sql = buildVolumeGridSqlRolling('notional')
+    expect(sql).toContain('ts >= $3::timestamptz')
+    expect(sql).toContain('%WINDOW_ID_SQL%')
+  })
+})
+
+describe('buildVolumeGridSql dispatch', () => {
+  it('dispatches to time_of_day when bounds.kind=time_of_day', () => {
+    const bounds = computeWindowBounds('today', 90, new Date('2026-05-05T14:32:00Z'))
+    const sql = buildVolumeGridSql('notional', bounds)
+    expect(sql).toContain('day_et = $3')
+  })
+  it('dispatches to rolling when bounds.kind=rolling', () => {
+    const bounds = computeWindowBounds('24h', 90, new Date('2026-05-05T14:32:00Z'))
+    const sql = buildVolumeGridSql('notional', bounds)
+    expect(sql).toContain('%WINDOW_ID_SQL%')
   })
 })
 

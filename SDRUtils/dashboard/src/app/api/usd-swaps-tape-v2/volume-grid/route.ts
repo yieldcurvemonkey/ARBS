@@ -47,15 +47,27 @@ export async function GET(request: Request) {
   if (!parsed.ok) return NextResponse.json({ error: parsed.error }, { status: 400 })
 
   const bounds = computeWindowBounds(parsed.value.period, parsed.value.lookbackDays)
-  const sqlTemplate = buildVolumeGridSql(parsed.value.metric, parsed.value.period)
-  const sql = sqlTemplate.replace('$WINDOW_ID_SQL', bounds.windowIdSql)
+  let sql = buildVolumeGridSql(parsed.value.metric, bounds)
+  let params: Array<string | number>
+  if (bounds.kind === 'time_of_day') {
+    params = [
+      bounds.lookbackStart.toISOString(),
+      bounds.lookbackEnd.toISOString(),
+      bounds.todayDateEt,
+      bounds.todSecondsLo,
+      bounds.todSecondsHi,
+    ]
+  } else {
+    sql = sql.replace('%WINDOW_ID_SQL%', bounds.windowIdSql)
+    params = [
+      bounds.lookbackStart.toISOString(),
+      bounds.lookbackEnd.toISOString(),
+      bounds.currentStart.toISOString(),
+    ]
+  }
 
   try {
-    const { rows } = await query<RawVolumeGridRow>(sql, [
-      bounds.baselineStart.toISOString(),
-      bounds.currentEnd.toISOString(),
-      bounds.currentStart.toISOString(),
-    ])
+    const { rows } = await query<RawVolumeGridRow>(sql, params)
     const payload = shapeVolumeGridResponse(rows, parsed.value)
     const etag = computeEtag(payload)
     lru.set(key, { payload, etag })

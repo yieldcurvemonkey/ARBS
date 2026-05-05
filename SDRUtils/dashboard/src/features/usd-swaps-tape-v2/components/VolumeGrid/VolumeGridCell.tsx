@@ -25,14 +25,29 @@ export interface VolumeGridCellProps {
   onClick: (id: { fwd: Cell['fwd']; tenor: Cell['tenor'] }) => void
 }
 
+/**
+ * Period-specific phrasing for the percentile comparison. Mirrors the
+ * SQL window definition in route.logic so the trader sees what the
+ * percentile is actually ranking against.
+ */
+function comparisonForPeriod(period: VolumePeriod): string {
+  switch (period) {
+    case 'today': return 'vs prior days at the same time-of-day ET'
+    case '1h':    return 'vs prior days in the same 1h slot ET'
+    case '24h':   return 'vs rolling 24h windows in lookback'
+    case '1w':    return 'vs prior weeks in lookback'
+  }
+}
+
 export function VolumeGridCell({ cell, metric, period, onClick }: VolumeGridCellProps): JSX.Element {
   const isEmpty = cell.tradeCount === 0 || cell.percentile == null
   const bg = isEmpty ? 'transparent' : colorForPercentile(cell.percentile)
   const fg = foregroundForPercentile(cell.percentile)
-  const label = `${fwdLabel(cell.fwd)} x ${tenorLabel(cell.tenor)} — ${fmtCompact(cell.current, metric)} ${metric}, ${cell.percentile == null ? 'no history' : `${Math.round(cell.percentile)}th percentile vs lookback`}`
+  const comparison = comparisonForPeriod(period)
+  const label = `${fwdLabel(cell.fwd)} x ${tenorLabel(cell.tenor)} — ${fmtCompact(cell.current, metric)} ${metric}, ${cell.percentile == null ? 'no history' : `${Math.round(cell.percentile)}th percentile ${comparison}`}`
   const tooltip = isEmpty
     ? 'No trades in this bucket for the current window'
-    : `${fmtCompact(cell.current, metric)} ${metric} (${cell.tradeCount} trades, ${period}) | vs P25=${fmtCompact(cell.baseline.p25, metric)} P50=${fmtCompact(cell.baseline.p50, metric)} P75=${fmtCompact(cell.baseline.p75, metric)} min=${fmtCompact(cell.baseline.min, metric)} max=${fmtCompact(cell.baseline.max, metric)} (n=${cell.baseline.n})`
+    : `${fmtCompact(cell.current, metric)} ${metric} (${cell.tradeCount} trades, ${period}) | ${comparison} P25=${fmtCompact(cell.baseline.p25, metric)} P50=${fmtCompact(cell.baseline.p50, metric)} P75=${fmtCompact(cell.baseline.p75, metric)} min=${fmtCompact(cell.baseline.min, metric)} max=${fmtCompact(cell.baseline.max, metric)} (n=${cell.baseline.n})`
   return (
     <button
       type="button"
