@@ -908,6 +908,32 @@ Each structure type has its own ~biannual catastrophic cohort cycle.
 
 Prime now 450 / 1,649 ≈ 27 % done.
 
+#### Cache evolution snapshot — listed_cache = 503, window 2024-05-24 → 2026-04-28
+
+| name | trades | unrealized | sharpe | maxDD ($) | finalMTM ($) | winRate | avgHoldDays | wallSec |
+|---|---|---|---|---|---|---|---|---|
+| `a_outright_conservative` | 105 | 3 | −2.97 | −481,398,749 | −477,419,588 | 27 % | 11.4 | 24.7 |
+| `b_calendar_only` (asym ≥ 3) | 196 | 2 | −0.45 | −276,119,916,486 | **−133,995,334,830** | 46 % | 13.4 | 39.7 |
+| `c_butterfly_only` (asym ≥ 3) | 226 | 0 | −0.12 | −286,300,425,741 | **−58,859,582,008** | **51 %** | 8.7 | 49.9 |
+| `d_all_structures_default` (asym ≥ 1.5) | 269 | 3 | −3.25 | −1,120,670,950 | −1,115,800,905 | 37 % | 9.0 | 63.9 |
+| `e_aggressive_concurrency` (asym ≥ 1.2) | 541 | 8 | −3.22 | −2,238,276,948 | −2,227,710,588 | 37 % | 9.1 | 114.7 |
+| `f_daily_rebalance` (asym ≥ 1.5) | 393 | 5 | −3.08 | −2,474,935,496 | −2,471,910,859 | 39 % | 7.5 | 91.3 |
+
+23-month window. cache=450 → cache=503 (53 BDs added, May–July 2024
+cohort in window):
+- `c_butterfly_only` widened by **$40 B** (−$19 B → −$59 B) — summer
+  2024 was the worst butterfly cohort observed across all milestones.
+- `b_calendar_only` widened by $14 B (−$120 B → −$134 B).
+- `f_daily_rebalance` widened by ~$500 M.
+
+Summer 2024 stands out as a cross-structure adverse regime — both
+calendars and butterflies took losses. Prior fly catastrophes (May
+2025, August 2025) were each ~$5 B; summer 2024 was 8x larger. The
+cohort coincides with the late-cycle rate-cut pricing reversal that
+the Fed-skip narrative drove during Q3 2024.
+
+Prime now 503 / 1,649 ≈ 30 % done.
+
 ### Prime stopped — SOCKS5 proxy auth expired (final state: cache = 466)
 
 Around `2024-08-07` while pulling the SQU24 (September 2024) wing
