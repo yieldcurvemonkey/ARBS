@@ -16,12 +16,24 @@ from RVUtils.STIRAsymmetricScreener._types import (
     ScreenerConfig,
     ScreenerSnapshot,
 )
+from RVUtils.STIRAsymmetricScreener._universe import (
+    ContractEntry,
+    UniverseEntry,
+    attach_strike_grid,
+    enumerate_contracts,
+    resolve_universe,
+)
 
 __all__ = [
     "ArchetypeType",
     "CandidateDef",
     "CandidateResult",
+    "ContractEntry",
     "OptionLeg",
     "ScreenerConfig",
     "ScreenerSnapshot",
+    "UniverseEntry",
+    "attach_strike_grid",
+    "enumerate_contracts",
+    "resolve_universe",
 ]
