@@ -34,6 +34,11 @@ from RVUtils.STIRAsymmetricScreener._rnd import (
     payoff_zone_probability,
     sabr_rnd_payoff_zone_diff,
 )
+from RVUtils.STIRAsymmetricScreener._catalysts import (
+    Catalyst,
+    catalysts_inside_window,
+    load_catalyst_calendar,
+)
 
 __all__ = [
     "ArchetypeType",
