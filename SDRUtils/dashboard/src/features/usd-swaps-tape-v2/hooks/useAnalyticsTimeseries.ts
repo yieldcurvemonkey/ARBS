@@ -45,6 +45,31 @@ interface TimeseriesResponse {
   range?: string
 }
 
+// Phase 5 (orthogonal-payload split): the server returns extra fields
+// alongside TimeseriesPointAug so the client can re-derive the legacy
+// idbDv01 / custyDv01 etc. without re-fetching.
+interface PointVariants {
+  idbDv01_gross?: number
+  idbDv01_net?: number
+  custyDv01_gross?: number
+  custyDv01_net?: number
+  custyDv01_gross_excl_large?: number
+  custyDv01_net_excl_large?: number
+  custyNotional_raw?: number
+  custyNotional_excl_large?: number
+  custyPrints_raw?: number
+  custyPrints_excl_large?: number
+}
+
+function safeNumLocal(
+  primary: number | null | undefined,
+  fallback: number | null | undefined = 0,
+): number {
+  if (typeof primary === 'number' && Number.isFinite(primary)) return primary
+  if (typeof fallback === 'number' && Number.isFinite(fallback)) return fallback
+  return 0
+}
+
 function buildAnalyticsTimeseriesQuery(
   bucket: string,
   view: 'INTRADAY' | 'DAILY_CLOSE',
@@ -56,6 +81,12 @@ function buildAnalyticsTimeseriesQuery(
   // identifier is the canonical key (e.g. "USD/SOFR-OIS/COMPOUND"),
   // not the focused trade's tape_label. Allow an explicit override.
   const value = opts.groupValueOverride ?? bucket
+  // Phase 5 (orthogonal-payload split): useGrossDv01 +
+  // excludeLargeCusty are no longer wire-level switches — the server
+  // returns the full (gross|net) × (raw|excl-large) variant grid in a
+  // single payload. We retain the params on the request for backward
+  // compatibility with any out-of-tree caller, but the route ignores
+  // them on the response side.
   return new URLSearchParams({
     value,
     view,
@@ -150,8 +181,46 @@ export function useAnalyticsTimeseries(
     intradayUrl ? () => fetch(intradayUrl).then((r) => r.json()) : null,
   )
 
-  const dailyClose: TimeseriesPointAug[] = dailySwr.data?.points ?? []
-  const intraday: TimeseriesPointAug[] = intradaySwr.data?.points ?? []
+  // Phase 5 (orthogonal-payload split): the server returns the full
+  // variant grid; we re-project idbDv01 / custyDv01 / custyNotional /
+  // custyPrints from the variant fields based on the *current* toggle
+  // state. This means flipping useGrossDv01 / excludeLargeCusty
+  // produces a re-render but no network request — the SWR cache key
+  // stays stable.
+  function projectPoint(
+    p: TimeseriesPointAug & PointVariants,
+  ): TimeseriesPointAug {
+    const idbDv01 = useGrossDv01
+      ? safeNumLocal(p.idbDv01_gross, p.idbDv01)
+      : safeNumLocal(p.idbDv01_net, p.idbDv01)
+    const custyDv01 = excludeLargeCusty
+      ? useGrossDv01
+        ? safeNumLocal(p.custyDv01_gross_excl_large, p.custyDv01)
+        : safeNumLocal(p.custyDv01_net_excl_large, p.custyDv01)
+      : useGrossDv01
+        ? safeNumLocal(p.custyDv01_gross, p.custyDv01)
+        : safeNumLocal(p.custyDv01_net, p.custyDv01)
+    const custyNotional = excludeLargeCusty
+      ? safeNumLocal(p.custyNotional_excl_large, p.custyNotional)
+      : safeNumLocal(p.custyNotional_raw, p.custyNotional)
+    const custyPrints = excludeLargeCusty
+      ? safeNumLocal(p.custyPrints_excl_large, p.custyPrints)
+      : safeNumLocal(p.custyPrints_raw, p.custyPrints)
+    return {
+      ...p,
+      idbDv01,
+      custyDv01,
+      custyNotional,
+      custyPrints,
+    }
+  }
+
+  const dailyClose: TimeseriesPointAug[] = (dailySwr.data?.points ?? []).map(
+    (p) => projectPoint(p as TimeseriesPointAug & PointVariants),
+  )
+  const intraday: TimeseriesPointAug[] = (intradaySwr.data?.points ?? []).map(
+    (p) => projectPoint(p as TimeseriesPointAug & PointVariants),
+  )
 
   const loading =
     (dailyEnabled && dailySwr.isLoading) ||
