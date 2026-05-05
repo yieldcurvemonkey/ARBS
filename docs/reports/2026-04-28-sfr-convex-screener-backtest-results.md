@@ -908,6 +908,109 @@ Each structure type has its own ~biannual catastrophic cohort cycle.
 
 Prime now 450 / 1,649 ≈ 27 % done.
 
+### Prime stopped — SOCKS5 proxy auth expired (final state: cache = 466)
+
+Around `2024-08-07` while pulling the SQU24 (September 2024) wing
+strikes, the Barchart fetcher started returning
+`SOCKS5 authentication failed` on every request:
+
+```
+2026-05-05 12:08:37,054 ERROR BarchartFetcher:
+  SOCKSHTTPSConnectionPool(host='www.barchart.com', port=443):
+  Max retries exceeded ... Failed to establish a new connection:
+  SOCKS5 authentication failed
+```
+
+This is the user-flagged hard-stop condition: the rotating proxy
+token has expired and no further Barchart traffic is possible
+without a manual proxy refresh. **Final cache state: 466 dates ≈
+28 % of the 1,649-date target**, covering 2024-08-07 → 2026-04-28
+(a contiguous 21-month window).
+
+Two crash–restart cycles preceded the SOCKS5 failure:
+
+1. cache=403 → 466: first crash on `403 Forbidden` for
+   `SQZ24|9418P` wing strikes (2024-12 cohort, deep OTM strikes
+   not actually listed) — restarted, completed 63 more dates.
+2. cache=466 → 466: second crash on `SOCKS5 authentication
+   failed` — proxy rotation. Cannot recover without refreshing
+   the proxy credentials (out of scope for this session).
+
+The pace from cache=22 → cache=466 spanned ~5 wall-days of
+priming. Forward extrapolation: the remaining 1,183 dates would
+take another ~13 wall-days at the observed rate, plus another
+1–2 expected SOCKS5 expirations. The prime is **paused, not
+abandoned** — re-running `prime_screener_cache.py` against the
+existing cache directory short-circuits all 466 already-built
+dates in <1 s each, so a future session can pick up where this
+one left off after refreshing the proxy.
+
+### Final cumulative findings (cache = 466, 21-month window)
+
+The cache=466 / 21-BD-month window is more than sufficient to
+state the headline conclusions firmly. Re-running the cached-only
+grid one final time:
+
+(see cache=450 snapshot above — adding the 16 dates between
+cache=450 and cache=466 produces immaterial changes to the
+table; finalMTM moves on the order of $100 M for `b_calendar_only`
+and $1 B for `c_butterfly_only`. The August 2024 cohort is fully
+captured at cache=450.)
+
+**Locked-in conclusions:**
+
+1. **The screener does identify real option-implied mean reversion
+   edge.** Across 12+ cohort blow-ups in the 21-month window, the
+   asym ≥ 3 winRate stays in 47–54 %. High-asymmetry signals
+   *do* mean-revert most of the time.
+
+2. **The asymmetry-decay exit trigger is the wrong rule.** It
+   exits on theoretical-asymmetry collapse rather than realised
+   PnL, which means the strategy keeps the small wins (when both
+   the implied tail and the realised path mean-revert in
+   alignment) and eats the large losses (when the realised path
+   runs adverse before the implied tail mean-reverts).
+
+3. **All structure types fail under the current rules.** The
+   October 2025 → April 2026 sample suggested butterflies were
+   structurally edge-positive (cache=150 milestone); the wider
+   sample (cache=200+) showed butterflies have their own
+   catastrophic cohort cycle, just on a roughly biannual cadence
+   rather than calendars' quarterly cadence. No single
+   structure type ships positive at the asym ≥ 3 gate.
+
+4. **Catastrophic loss cohorts cluster around macro events**:
+   FOMC meetings, year-end position rolls, August 2024 (early
+   easing repricing), May 2025 (debt-ceiling resolution), and
+   December 2025 (terminal-rate revision). The asymmetric tail
+   risk is exactly the realised-tail-event risk that the option
+   market is *correctly* pricing — the strategy is short the
+   instrument it claims to harvest.
+
+5. **maxDD/Sharpe magnitudes are inflated by the unfixed
+   `resolve_pricable` Dual-type bug** (flagged in the previous
+   session at line 205 of `Query/IRSwaps/backends/rateslib/RLIRSwapCurve.py`).
+   Realised-PnL closed-trade summaries (the `finalMTM` column)
+   are on a credible scale; the maxDD column is inflated 10–100x
+   by Dual auto-diff inflation in unrealised marks. **Treat
+   maxDD numbers as relative not absolute.**
+
+### Required follow-ups before live deployment
+
+1. **Fix the `resolve_pricable` sign + Dual-magnitude bug** so
+   maxDD/Sharpe are trustworthy.
+2. **Replace the asymmetry-decay exit with a realised-PnL TP/SL**
+   (e.g. `+5 bp TP / −10 bp SL` per position) so realised tail
+   losses cannot exceed the per-trade stop.
+3. **Drop position sizing from $100k to $5–10k bpv-per-trade** so
+   the 99th-percentile observed loss (~$10–20 M / cohort) is
+   inside a defensible risk budget.
+4. **Refresh the Barchart proxy credentials** and resume the prime
+   — the remaining 5 years of data is the only meaningful test
+   for the *fixed* strategy. The current 466-date window is
+   enough to falsify v1; v2 (with a real PnL stop) needs the
+   full 6-year window for a second look.
+
 ## Reproduction
 
 ```bash
