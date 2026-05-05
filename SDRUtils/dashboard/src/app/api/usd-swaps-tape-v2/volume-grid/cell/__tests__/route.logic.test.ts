@@ -35,6 +35,19 @@ describe('parseVolumeGridCellParams', () => {
   it('rejects unknown forwardSchema', () => {
     expect(parseVolumeGridCellParams(new URLSearchParams('fwd=spot&tenor=5y&forwardSchema=foo')).ok).toBe(false)
   })
+  it('accepts FOMC schema with a meeting label fwd id', () => {
+    const out = parseVolumeGridCellParams(
+      new URLSearchParams('fwd=APR26&tenor=5y&forwardSchema=fomc&packageType=fomc'),
+    )
+    expect(out.ok).toBe(true)
+  })
+  it('rejects malformed FOMC label under fomc schema', () => {
+    expect(
+      parseVolumeGridCellParams(
+        new URLSearchParams('fwd=garbage&tenor=5y&forwardSchema=fomc'),
+      ).ok,
+    ).toBe(false)
+  })
 })
 
 describe('rangeToStartDate', () => {

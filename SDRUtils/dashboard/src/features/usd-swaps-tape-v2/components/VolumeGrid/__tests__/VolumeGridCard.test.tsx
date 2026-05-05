@@ -22,6 +22,9 @@ describe('VolumeGridCard — localStorage keys', () => {
     expect(cardSource).toMatch(/'usd-tape-v2:volume-grid:tenor-schema'/)
     expect(cardSource).toMatch(/'usd-tape-v2:volume-grid:package-type'/)
   })
+  it('uses key for view-mode state', () => {
+    expect(cardSource).toMatch(/'usd-tape-v2:volume-grid:view-mode'/)
+  })
 })
 
 describe('VolumeGridCard — toggles', () => {
@@ -73,6 +76,9 @@ describe('VolumeGridCard — exposes axis dropdowns', () => {
   })
   it('renders a Tenor schema select', () => {
     expect(cardSource).toMatch(/aria-label="Tenor schema"/)
+  })
+  it('renders a View mode select', () => {
+    expect(cardSource).toMatch(/aria-label="View mode"/)
   })
 })
 

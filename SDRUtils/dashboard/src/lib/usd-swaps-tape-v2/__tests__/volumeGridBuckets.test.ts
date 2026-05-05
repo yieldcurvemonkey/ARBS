@@ -2,9 +2,11 @@ import { describe, expect, it } from '@jest/globals'
 import {
   buildBucketCaseSql,
   buildBucketPredicate,
+  buildFomcBucketsFromLabels,
   buildPackageTypeFilter,
   computeImmDates,
   PACKAGE_TYPE_GROUPS,
+  parseFomcLabel,
   resolveForwardSchema,
   resolveTenorSchema,
   thirdWednesdayUtc,
@@ -32,6 +34,35 @@ describe('resolveForwardSchema', () => {
     // First IMM after 2026-05-05 is 2026-06-17 (third Wed of Jun 2026).
     expect(out.buckets[0].label).toMatch(/Jun26/)
     expect(out.buckets[15].label).toMatch(/Mar30/)
+    expect(out.kind).toBe('years')
+  })
+  it('fomc schema is fomc_label kind with empty bucket list (resolved post-query)', () => {
+    const out = resolveForwardSchema('fomc')
+    expect(out.kind).toBe('fomc_label')
+    expect(out.buckets.length).toBe(0)
+    expect(out.extraFilterSql).toMatch(/is_fomc_dated\s*=\s*TRUE/)
+  })
+})
+
+describe('parseFomcLabel', () => {
+  it('parses APR26 to a 2026-04 date', () => {
+    const out = parseFomcLabel('APR26')
+    expect(out).not.toBeNull()
+    if (out) {
+      expect(out.getUTCFullYear()).toBe(2026)
+      expect(out.getUTCMonth()).toBe(3)
+    }
+  })
+  it('returns null on garbage input', () => {
+    expect(parseFomcLabel('FOO')).toBeNull()
+    expect(parseFomcLabel('apr26')).toBeNull()
+  })
+})
+
+describe('buildFomcBucketsFromLabels', () => {
+  it('sorts labels chronologically and drops unparseable ones', () => {
+    const out = buildFomcBucketsFromLabels(['DEC26', 'JAN27', 'APR26', 'GARBAGE', 'JUN26'])
+    expect(out.map((b) => b.id)).toEqual(['APR26', 'JUN26', 'DEC26', 'JAN27'])
   })
 })
 
@@ -115,6 +146,18 @@ describe('buildBucketPredicate', () => {
   it('rejects unknown bucket ids', () => {
     expect(() => buildBucketPredicate('l', fwd, tenor, 'bogus', '5y', 1)).toThrow(/forward bucket/)
     expect(() => buildBucketPredicate('l', fwd, tenor, 'spot', 'bogus', 1)).toThrow(/tenor bucket/)
+  })
+
+  it('uses fomc_meeting_label equality for fomc schema', () => {
+    const fomcSchema = resolveForwardSchema('fomc')
+    const out = buildBucketPredicate('l', fomcSchema, tenor, 'APR26', '5y', 2)
+    expect(out.sql).toMatch(/l\.fomc_meeting_label = \$2/)
+    expect(out.params).toEqual(['APR26', 4.5, 5.5])
+  })
+
+  it('rejects malformed FOMC labels', () => {
+    const fomcSchema = resolveForwardSchema('fomc')
+    expect(() => buildBucketPredicate('l', fomcSchema, tenor, 'foo', '5y', 1)).toThrow(/FOMC/)
   })
 })
 

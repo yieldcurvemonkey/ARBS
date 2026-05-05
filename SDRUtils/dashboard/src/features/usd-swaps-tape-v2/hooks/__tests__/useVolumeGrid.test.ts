@@ -6,6 +6,7 @@ describe('buildVolumeGridUrl', () => {
     const url = buildVolumeGridUrl({
       metric: 'notional', period: 'today',
       forwardSchema: 'default', tenorSchema: 'default', packageType: 'outright',
+      viewMode: 'volume',
     })
     expect(url).toContain('/api/usd-swaps-tape-v2/volume-grid?')
     expect(url).toContain('metric=notional')
@@ -19,16 +20,19 @@ describe('buildVolumeGridUrl', () => {
     const url = buildVolumeGridUrl({
       metric: 'dv01', period: '1w', lookbackDays: 365,
       forwardSchema: 'imm16', tenorSchema: 'default', packageType: 'spreadover',
+      viewMode: 'idb_custy',
     })
     expect(url).toContain('lookbackDays=365')
     expect(url).toContain('forwardSchema=imm16')
     expect(url).toContain('packageType=spreadover')
+    expect(url).toContain('viewMode=idb_custy')
   })
 
   it('omits lookbackDays when undefined', () => {
     const url = buildVolumeGridUrl({
       metric: 'notional', period: '1h',
       forwardSchema: 'default', tenorSchema: 'default', packageType: 'outright',
+      viewMode: 'volume',
     })
     expect(url).not.toContain('lookbackDays')
   })

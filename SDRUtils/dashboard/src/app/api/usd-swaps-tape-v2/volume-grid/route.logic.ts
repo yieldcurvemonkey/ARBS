@@ -7,9 +7,14 @@
 //     (used for periods 'today' and '1h').
 //   - rolling: today's last 24h or 7d vs prior 24h/7d windows shifted in
 //     time (used for periods '24h' and '1w').
+//
+// Two view modes:
+//   - volume (default): single-percentile colored cell with total
+//   - idb_custy: split bar showing IDB vs CUSTY share of the cell total
 
 import {
   buildBucketCaseSql,
+  buildFomcBucketsFromLabels,
   buildPackageTypeFilter,
   FORWARD_SCHEMA_IDS,
   PACKAGE_TYPE_GROUP_IDS,
@@ -26,6 +31,7 @@ import type {
   VolumeMetric,
   VolumePeriod,
   VolumeGridResponse,
+  VolumeGridViewMode,
 } from '@/features/usd-swaps-tape-v2/types/volume-grid.types'
 
 export interface VolumeGridParams {
@@ -35,6 +41,7 @@ export interface VolumeGridParams {
   forwardSchema: ForwardSchemaId
   tenorSchema: TenorSchemaId
   packageType: PackageTypeGroupId
+  viewMode: VolumeGridViewMode
 }
 
 export type ParseResult<T> =
@@ -46,6 +53,7 @@ const VALID_PERIODS: ReadonlySet<VolumePeriod> = new Set(['today', '1h', '24h', 
 const VALID_FORWARD_SCHEMAS: ReadonlySet<ForwardSchemaId> = new Set(FORWARD_SCHEMA_IDS)
 const VALID_TENOR_SCHEMAS: ReadonlySet<TenorSchemaId> = new Set(TENOR_SCHEMA_IDS)
 const VALID_PACKAGE_GROUPS: ReadonlySet<PackageTypeGroupId> = new Set(PACKAGE_TYPE_GROUP_IDS)
+const VALID_VIEW_MODES: ReadonlySet<VolumeGridViewMode> = new Set(['volume', 'idb_custy'])
 
 export function parseVolumeGridParams(search: URLSearchParams): ParseResult<VolumeGridParams> {
   const metricRaw = (search.get('metric') ?? 'notional').toLowerCase()
@@ -53,6 +61,7 @@ export function parseVolumeGridParams(search: URLSearchParams): ParseResult<Volu
   const forwardSchemaRaw = (search.get('forwardSchema') ?? 'default').toLowerCase()
   const tenorSchemaRaw = (search.get('tenorSchema') ?? 'default').toLowerCase()
   const packageTypeRaw = (search.get('packageType') ?? 'outright').toLowerCase()
+  const viewModeRaw = (search.get('viewMode') ?? 'volume').toLowerCase()
   const lookbackRaw = search.get('lookbackDays')
   if (!VALID_METRICS.has(metricRaw as VolumeMetric)) {
     return { ok: false, error: `metric must be one of ${[...VALID_METRICS].join(', ')}` }
@@ -68,6 +77,9 @@ export function parseVolumeGridParams(search: URLSearchParams): ParseResult<Volu
   }
   if (!VALID_PACKAGE_GROUPS.has(packageTypeRaw as PackageTypeGroupId)) {
     return { ok: false, error: `packageType must be one of ${PACKAGE_TYPE_GROUP_IDS.join(', ')}` }
+  }
+  if (!VALID_VIEW_MODES.has(viewModeRaw as VolumeGridViewMode)) {
+    return { ok: false, error: `viewMode must be one of ${[...VALID_VIEW_MODES].join(', ')}` }
   }
   let lookbackDays = 90
   if (lookbackRaw != null) {
@@ -86,6 +98,7 @@ export function parseVolumeGridParams(search: URLSearchParams): ParseResult<Volu
       forwardSchema: forwardSchemaRaw as ForwardSchemaId,
       tenorSchema: tenorSchemaRaw as TenorSchemaId,
       packageType: packageTypeRaw as PackageTypeGroupId,
+      viewMode: viewModeRaw as VolumeGridViewMode,
     },
   }
 }
@@ -147,21 +160,15 @@ export function computeWindowBounds(
       const { dateEt, todSeconds } = timeOfDayInEt(now)
       const lookbackStart = new Date(now.getTime() - lookbackDays * ONE_DAY_MS)
       return {
-        kind: 'time_of_day',
-        lookbackStart,
-        lookbackEnd,
-        todayDateEt: dateEt,
-        todSecondsLo: 0,
-        todSecondsHi: todSeconds,
+        kind: 'time_of_day', lookbackStart, lookbackEnd,
+        todayDateEt: dateEt, todSecondsLo: 0, todSecondsHi: todSeconds,
       }
     }
     case '1h': {
       const { dateEt, todSeconds } = timeOfDayInEt(now)
       const lookbackStart = new Date(now.getTime() - lookbackDays * ONE_DAY_MS)
       return {
-        kind: 'time_of_day',
-        lookbackStart,
-        lookbackEnd,
+        kind: 'time_of_day', lookbackStart, lookbackEnd,
         todayDateEt: dateEt,
         todSecondsLo: Math.max(0, todSeconds - ONE_HOUR_S),
         todSecondsHi: todSeconds,
@@ -170,9 +177,7 @@ export function computeWindowBounds(
     case '24h': {
       const lookbackStart = new Date(now.getTime() - lookbackDays * ONE_DAY_MS)
       return {
-        kind: 'rolling',
-        lookbackStart,
-        lookbackEnd,
+        kind: 'rolling', lookbackStart, lookbackEnd,
         currentStart: new Date(now.getTime() - 24 * ONE_HOUR_MS),
         windowIdSql: `date_trunc('day', ts AT TIME ZONE 'America/New_York')`,
       }
@@ -180,9 +185,7 @@ export function computeWindowBounds(
     case '1w': {
       const lookbackStart = new Date(now.getTime() - 52 * 7 * ONE_DAY_MS)
       return {
-        kind: 'rolling',
-        lookbackStart,
-        lookbackEnd,
+        kind: 'rolling', lookbackStart, lookbackEnd,
         currentStart: new Date(now.getTime() - 7 * ONE_DAY_MS),
         windowIdSql: `date_trunc('week', ts AT TIME ZONE 'America/New_York')`,
       }
@@ -203,23 +206,57 @@ export interface BuiltSql {
   params: Array<string | number>
 }
 
+const PLATFORM_CASE_SQL = `
+  CASE
+    WHEN UPPER(COALESCE(l.venue, '')) = 'D2D' THEN 'IDB'
+    WHEN UPPER(COALESCE(l.platform_identifier, '')) IN
+      ('BGCD', 'DWSF', 'IGDL', 'ISWV', 'TPSE', 'TSEF') THEN 'IDB'
+    ELSE 'CUSTY'
+  END
+`
+
+/**
+ * Build the fwd-bucket SQL expression for a forward schema. For years-
+ * kind schemas this is a CASE on `forward_start_years` boundaries. For
+ * fomc-label schemas it just reads `fomc_meeting_label` directly.
+ */
+function buildForwardBucketSql(forwardSchema: ResolvedSchema, alias: string): string {
+  if (forwardSchema.kind === 'fomc_label') {
+    return `${alias}.fomc_meeting_label`
+  }
+  return buildBucketCaseSql(alias, 'forward_start_years', forwardSchema.buckets)
+}
+
+/**
+ * Test whether a row's fwd-bucket id is "valid" for the schema. For
+ * years schemas, we drop 'other'. For fomc, any non-null label is fine.
+ */
+function fwdBucketIsValidSqlPredicate(forwardSchema: ResolvedSchema): string {
+  return forwardSchema.kind === 'fomc_label'
+    ? `fwd_bucket IS NOT NULL`
+    : `fwd_bucket <> 'other'`
+}
+
 /**
  * Build the SQL for a time-of-day comparison ('today' / '1h').
  *
  * Bind order:
- *   $1                    = lookbackStart timestamptz
- *   $2                    = lookbackEnd   timestamptz
- *   $3                    = todayDateEt   date
- *   $4                    = todSecondsLo  numeric
- *   $5                    = todSecondsHi  numeric
+ *   $1 = lookbackStart timestamptz
+ *   $2 = lookbackEnd   timestamptz
+ *   $3 = todayDateEt   date
+ *   $4 = todSecondsLo  numeric
+ *   $5 = todSecondsHi  numeric
  *   $6.. (when packageType filter active) = package_type values
  */
 export function buildVolumeGridSqlTimeOfDay(ctx: SqlBuildContext): BuiltSql {
   if (ctx.bounds.kind !== 'time_of_day') throw new Error('expected time_of_day bounds')
-  const fwdCase = buildBucketCaseSql('l', 'forward_start_years', ctx.forwardSchema.buckets)
+  const fwdBucketExpr = buildForwardBucketSql(ctx.forwardSchema, 'l')
   const tenorCase = buildBucketCaseSql('l', 'tenor_years', ctx.tenorSchema.buckets)
   const metricCol = ctx.metric === 'notional' ? 'gross_notional' : 'gross_dv01'
   const pkgFilter = buildPackageTypeFilter(ctx.packageType, 'p', 6)
+  const extraFilter = ctx.forwardSchema.extraFilterSql
+    ? `AND ${ctx.forwardSchema.extraFilterSql}`
+    : ''
   const params: Array<string | number> = [
     ctx.bounds.lookbackStart.toISOString(),
     ctx.bounds.lookbackEnd.toISOString(),
@@ -234,8 +271,9 @@ export function buildVolumeGridSqlTimeOfDay(ctx: SqlBuildContext): BuiltSql {
         COALESCE(l.original_execution_timestamp, l.execution_timestamp) AS ts,
         ABS(COALESCE(l.notional, 0)) AS gross_notional,
         ABS(COALESCE(l.risk, 0))     AS gross_dv01,
-        ${fwdCase} AS fwd_bucket,
+        ${fwdBucketExpr} AS fwd_bucket,
         ${tenorCase} AS tenor_bucket,
+        ${PLATFORM_CASE_SQL} AS platform,
         (date_trunc('day', COALESCE(l.original_execution_timestamp, l.execution_timestamp) AT TIME ZONE 'America/New_York'))::date AS day_et,
         EXTRACT(EPOCH FROM (
           (COALESCE(l.original_execution_timestamp, l.execution_timestamp) AT TIME ZONE 'America/New_York')
@@ -247,10 +285,11 @@ export function buildVolumeGridSqlTimeOfDay(ctx: SqlBuildContext): BuiltSql {
         AND COALESCE(l.original_execution_timestamp, l.execution_timestamp) >= $1::timestamptz
         AND COALESCE(l.original_execution_timestamp, l.execution_timestamp) <  $2::timestamptz
         AND ${pkgFilter.sql}
+        ${extraFilter}
     ),
     bucketed AS (
       SELECT * FROM legs
-      WHERE fwd_bucket <> 'other' AND tenor_bucket <> 'other'
+      WHERE ${fwdBucketIsValidSqlPredicate(ctx.forwardSchema)} AND tenor_bucket <> 'other'
         AND tod_seconds_et >= $4::numeric
         AND tod_seconds_et <= $5::numeric
     ),
@@ -276,6 +315,8 @@ export function buildVolumeGridSqlTimeOfDay(ctx: SqlBuildContext): BuiltSql {
     current_agg AS (
       SELECT fwd_bucket, tenor_bucket,
         SUM(${metricCol}) AS current_value,
+        SUM(${metricCol}) FILTER (WHERE platform = 'IDB')   AS idb_current,
+        SUM(${metricCol}) FILTER (WHERE platform = 'CUSTY') AS custy_current,
         COUNT(*)::int AS trade_count,
         MAX(ts) AS last_ts
       FROM bucketed
@@ -286,6 +327,8 @@ export function buildVolumeGridSqlTimeOfDay(ctx: SqlBuildContext): BuiltSql {
       COALESCE(c.fwd_bucket, p.fwd_bucket)     AS fwd,
       COALESCE(c.tenor_bucket, p.tenor_bucket) AS tenor,
       COALESCE(c.current_value, 0)             AS current_value,
+      COALESCE(c.idb_current, 0)               AS idb_current,
+      COALESCE(c.custy_current, 0)             AS custy_current,
       COALESCE(c.trade_count, 0)               AS trade_count,
       COALESCE(p.prior_array, ARRAY[]::numeric[]) AS prior_array,
       COALESCE(p.p25, 0)  AS p25,
@@ -303,19 +346,16 @@ export function buildVolumeGridSqlTimeOfDay(ctx: SqlBuildContext): BuiltSql {
 
 /**
  * Build the SQL for a rolling-window comparison ('24h' / '1w').
- *
- * Bind order:
- *   $1 = lookbackStart timestamptz
- *   $2 = lookbackEnd   timestamptz
- *   $3 = currentStart  timestamptz
- *   $4.. = package_type values when filter active
  */
 export function buildVolumeGridSqlRolling(ctx: SqlBuildContext): BuiltSql {
   if (ctx.bounds.kind !== 'rolling') throw new Error('expected rolling bounds')
-  const fwdCase = buildBucketCaseSql('l', 'forward_start_years', ctx.forwardSchema.buckets)
+  const fwdBucketExpr = buildForwardBucketSql(ctx.forwardSchema, 'l')
   const tenorCase = buildBucketCaseSql('l', 'tenor_years', ctx.tenorSchema.buckets)
   const metricCol = ctx.metric === 'notional' ? 'gross_notional' : 'gross_dv01'
   const pkgFilter = buildPackageTypeFilter(ctx.packageType, 'p', 4)
+  const extraFilter = ctx.forwardSchema.extraFilterSql
+    ? `AND ${ctx.forwardSchema.extraFilterSql}`
+    : ''
   const params: Array<string | number> = [
     ctx.bounds.lookbackStart.toISOString(),
     ctx.bounds.lookbackEnd.toISOString(),
@@ -328,18 +368,20 @@ export function buildVolumeGridSqlRolling(ctx: SqlBuildContext): BuiltSql {
         COALESCE(l.original_execution_timestamp, l.execution_timestamp) AS ts,
         ABS(COALESCE(l.notional, 0)) AS gross_notional,
         ABS(COALESCE(l.risk, 0))     AS gross_dv01,
-        ${fwdCase} AS fwd_bucket,
-        ${tenorCase} AS tenor_bucket
+        ${fwdBucketExpr} AS fwd_bucket,
+        ${tenorCase} AS tenor_bucket,
+        ${PLATFORM_CASE_SQL} AS platform
       FROM arbs_usd_swap_tape_legs_v2 l
       JOIN arbs_usd_swap_tape_packages_v2 p ON p.package_id = l.package_id
       WHERE COALESCE(l.contributes_to_flow, FALSE) = TRUE
         AND COALESCE(l.original_execution_timestamp, l.execution_timestamp) >= $1::timestamptz
         AND COALESCE(l.original_execution_timestamp, l.execution_timestamp) <  $2::timestamptz
         AND ${pkgFilter.sql}
+        ${extraFilter}
     ),
     bucketed AS (
       SELECT * FROM legs
-      WHERE fwd_bucket <> 'other'
+      WHERE ${fwdBucketIsValidSqlPredicate(ctx.forwardSchema)}
         AND tenor_bucket <> 'other'
     ),
     windowed AS (
@@ -373,6 +415,8 @@ export function buildVolumeGridSqlRolling(ctx: SqlBuildContext): BuiltSql {
     current_agg AS (
       SELECT fwd_bucket, tenor_bucket,
         SUM(${metricCol}) AS current_value,
+        SUM(${metricCol}) FILTER (WHERE platform = 'IDB')   AS idb_current,
+        SUM(${metricCol}) FILTER (WHERE platform = 'CUSTY') AS custy_current,
         COUNT(*)::int AS trade_count,
         MAX(ts) AS last_ts
       FROM windowed
@@ -383,6 +427,8 @@ export function buildVolumeGridSqlRolling(ctx: SqlBuildContext): BuiltSql {
       COALESCE(c.fwd_bucket, p.fwd_bucket)     AS fwd,
       COALESCE(c.tenor_bucket, p.tenor_bucket) AS tenor,
       COALESCE(c.current_value, 0)             AS current_value,
+      COALESCE(c.idb_current, 0)               AS idb_current,
+      COALESCE(c.custy_current, 0)             AS custy_current,
       COALESCE(c.trade_count, 0)               AS trade_count,
       COALESCE(p.prior_array, ARRAY[]::numeric[]) AS prior_array,
       COALESCE(p.p25, 0)  AS p25,
@@ -443,6 +489,8 @@ export interface RawVolumeGridRow {
   fwd: string
   tenor: string
   current_value: number | string
+  idb_current: number | string
+  custy_current: number | string
   trade_count: number | string
   prior_array: Array<number | string>
   p25: number | string
@@ -465,17 +513,34 @@ export function shapeVolumeGridResponse(
   forwardSchema: ResolvedSchema,
   tenorSchema: ResolvedSchema,
 ): VolumeGridResponse {
-  const validFwd = new Set(forwardSchema.buckets.map((b) => b.id))
+  // For dynamic-bucket (FOMC) schemas the bucket list isn't known until we see
+  // the data — discover it from the rows.
+  const resolvedForward: ResolvedSchema =
+    forwardSchema.kind === 'fomc_label'
+      ? {
+          ...forwardSchema,
+          buckets: buildFomcBucketsFromLabels(
+            Array.from(new Set(rows.map((r) => r.fwd).filter((s): s is string => !!s))),
+          ),
+        }
+      : forwardSchema
+
+  const validFwd = new Set(resolvedForward.buckets.map((b) => b.id))
   const validTenor = new Set(tenorSchema.buckets.map((b) => b.id))
+
   const cells: VolumeGridCell[] = rows
     .filter((r) => validFwd.has(r.fwd) && validTenor.has(r.tenor))
     .map((r) => {
       const prior = r.prior_array.map(num)
       const current = num(r.current_value)
+      const idbCurrent = num(r.idb_current)
+      const custyCurrent = num(r.custy_current)
       return {
         fwd: r.fwd,
         tenor: r.tenor,
         current,
+        idbCurrent,
+        custyCurrent,
         tradeCount: num(r.trade_count),
         baseline: {
           p25: num(r.p25),
@@ -503,11 +568,12 @@ export function shapeVolumeGridResponse(
     forwardSchema: params.forwardSchema,
     tenorSchema: params.tenorSchema,
     packageType: params.packageType,
+    viewMode: params.viewMode,
     axes: {
       forward: {
-        id: forwardSchema.id,
-        label: forwardSchema.label,
-        buckets: forwardSchema.buckets.map((b) => ({ id: b.id, label: b.label })),
+        id: resolvedForward.id,
+        label: resolvedForward.label,
+        buckets: resolvedForward.buckets.map((b) => ({ id: b.id, label: b.label })),
       },
       tenor: {
         id: tenorSchema.id,

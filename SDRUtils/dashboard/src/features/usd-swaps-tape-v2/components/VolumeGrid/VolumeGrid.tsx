@@ -6,17 +6,19 @@ import { useMemo } from 'react'
 import { VolumeGridCell } from './VolumeGridCell'
 import { colorForPercentile, foregroundForPercentile } from './colorRamp'
 import type {
-  VolumeGridCell as Cell, VolumeGridResponse, VolumeMetric, VolumePeriod,
+  VolumeGridCell as Cell, VolumeGridResponse, VolumeGridViewMode,
+  VolumeMetric, VolumePeriod,
 } from '../../types/volume-grid.types'
 
 export interface VolumeGridProps {
   data: VolumeGridResponse
   metric: VolumeMetric
   period: VolumePeriod
+  viewMode: VolumeGridViewMode
   onCellClick: (id: { fwd: string; tenor: string }) => void
 }
 
-export function VolumeGrid({ data, metric, period, onCellClick }: VolumeGridProps): JSX.Element {
+export function VolumeGrid({ data, metric, period, viewMode, onCellClick }: VolumeGridProps): JSX.Element {
   const cellMap = useMemo(() => {
     const m = new Map<string, Cell>()
     for (const c of data.cells) m.set(`${c.fwd}|${c.tenor}`, c)
@@ -55,6 +57,7 @@ export function VolumeGrid({ data, metric, period, onCellClick }: VolumeGridProp
           cellMap={cellMap}
           metric={metric}
           period={period}
+          viewMode={viewMode}
           tenorAxis={tenorAxis}
           forwardAxis={forwardAxis}
           rowTotal={data.totals.rowTotals[f.id]}
@@ -89,6 +92,7 @@ function RowFragment(props: {
   cellMap: Map<string, Cell>
   metric: VolumeMetric
   period: VolumePeriod
+  viewMode: VolumeGridViewMode
   forwardAxis: VolumeGridResponse['axes']['forward']
   tenorAxis: VolumeGridResponse['axes']['tenor']
   rowTotal: { current: number; percentile: number | null } | undefined
@@ -108,7 +112,8 @@ function RowFragment(props: {
           ({
             fwd: props.fwd,
             tenor: t.id,
-            current: 0, tradeCount: 0,
+            current: 0, idbCurrent: 0, custyCurrent: 0,
+            tradeCount: 0,
             baseline: { p25: 0, p50: 0, p75: 0, min: 0, max: 0, n: 0 },
             percentile: null,
           } as Cell)
@@ -118,6 +123,7 @@ function RowFragment(props: {
               cell={cell}
               metric={props.metric}
               period={props.period}
+              viewMode={props.viewMode}
               forwardAxis={props.forwardAxis}
               tenorAxis={props.tenorAxis}
               onClick={props.onCellClick}

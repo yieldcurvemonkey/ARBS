@@ -62,7 +62,13 @@ export function parseVolumeGridCellParams(
   }
   const forwardSchema = resolveForwardSchema(forwardSchemaRaw as ForwardSchemaId, now)
   const tenorSchema = resolveTenorSchema(tenorSchemaRaw as TenorSchemaId)
-  if (!forwardSchema.buckets.some((b) => b.id === fwd)) {
+  // Years-kind schemas have a fixed bucket list; fomc-label schemas
+  // accept any string matching the SDR fomc_meeting_label format.
+  if (forwardSchema.kind === 'fomc_label') {
+    if (!/^[A-Z]{3}\d{2}$/.test(fwd)) {
+      return { ok: false, error: `fwd must be a FOMC meeting label like 'APR26' (got ${fwd})` }
+    }
+  } else if (!forwardSchema.buckets.some((b) => b.id === fwd)) {
     return { ok: false, error: `unknown fwd: ${fwd} (schema=${forwardSchema.id})` }
   }
   if (!tenorSchema.buckets.some((b) => b.id === tenor)) {
@@ -115,7 +121,9 @@ export function rangeToStartDate(range: VolumeCellRange, now: Date = new Date())
 export function buildTimeseriesSql(opts: {
   bucketPredicateSql: string
   packageFilterSql: string
+  schemaExtraFilterSql?: string
 }): string {
+  const extraFilter = opts.schemaExtraFilterSql ? `AND ${opts.schemaExtraFilterSql}` : ''
   return `
     WITH legs AS (
       SELECT
@@ -129,6 +137,7 @@ export function buildTimeseriesSql(opts: {
         AND COALESCE(l.original_execution_timestamp, l.execution_timestamp) >= $1::timestamptz
         AND ${opts.bucketPredicateSql}
         AND ${opts.packageFilterSql}
+        ${extraFilter}
     )
     SELECT
       date_trunc('day', ts AT TIME ZONE 'America/New_York')::date AS day,
@@ -146,8 +155,10 @@ export function buildTimeseriesSql(opts: {
 export function buildRecentTradesSql(opts: {
   bucketPredicateSql: string
   packageFilterSql: string
+  schemaExtraFilterSql?: string
   limitParam: string // e.g. '$8'
 }): string {
+  const extraFilter = opts.schemaExtraFilterSql ? `AND ${opts.schemaExtraFilterSql}` : ''
   return `
     WITH eligible_packages AS (
       SELECT DISTINCT l.package_id
@@ -157,6 +168,7 @@ export function buildRecentTradesSql(opts: {
         AND COALESCE(l.original_execution_timestamp, l.execution_timestamp) >= $1::timestamptz
         AND ${opts.bucketPredicateSql}
         AND ${opts.packageFilterSql}
+        ${extraFilter}
     )
     SELECT
       p.package_id,

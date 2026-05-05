@@ -11,6 +11,7 @@ const fixture: VolumeGridResponse = {
   forwardSchema: 'default',
   tenorSchema: 'default',
   packageType: 'outright',
+  viewMode: 'volume',
   axes: {
     forward: {
       id: 'default',
@@ -50,7 +51,7 @@ const fixture: VolumeGridResponse = {
     },
   },
   cells: [
-    { fwd: 'spot', tenor: '5y', current: 1e9, tradeCount: 5,
+    { fwd: 'spot', tenor: '5y', current: 1e9, idbCurrent: 4e8, custyCurrent: 6e8, tradeCount: 5,
       baseline: { p25: 1e8, p50: 5e8, p75: 9e8, min: 0, max: 1.2e9, n: 90 },
       percentile: 88 },
   ],
@@ -64,7 +65,7 @@ const fixture: VolumeGridResponse = {
 describe('<VolumeGrid>', () => {
   it('renders 8 forward + 1 total row labels and 16 + 1 tenor col labels', () => {
     const html = renderToStaticMarkup(
-      <VolumeGrid data={fixture} metric="notional" period="today" onCellClick={() => {}} />,
+      <VolumeGrid data={fixture} metric="notional" period="today" viewMode="volume" onCellClick={() => {}} />,
     )
     const rowLabelMatches = html.match(/data-testid="volume-grid-row-label"/g) ?? []
     const colLabelMatches = html.match(/data-testid="volume-grid-col-label"/g) ?? []
@@ -76,7 +77,7 @@ describe('<VolumeGrid>', () => {
 
   it('renders the populated 1.0B cell with the correct percentile badge', () => {
     const html = renderToStaticMarkup(
-      <VolumeGrid data={fixture} metric="notional" period="today" onCellClick={() => {}} />,
+      <VolumeGrid data={fixture} metric="notional" period="today" viewMode="volume" onCellClick={() => {}} />,
     )
     expect(html).toMatch(/1\.0B/)
     expect(html).toMatch(/P88/)
@@ -84,7 +85,7 @@ describe('<VolumeGrid>', () => {
 
   it('renders all tenor labels from axes payload', () => {
     const html = renderToStaticMarkup(
-      <VolumeGrid data={fixture} metric="notional" period="today" onCellClick={() => {}} />,
+      <VolumeGrid data={fixture} metric="notional" period="today" viewMode="volume" onCellClick={() => {}} />,
     )
     expect(html).toMatch(/>1M-3M</)
     expect(html).toMatch(/>30Y\+</)

@@ -10,6 +10,7 @@ import type {
 export type VolumeMetric = 'notional' | 'dv01'
 export type VolumePeriod = 'today' | '1h' | '24h' | '1w'
 export type VolumeCellRange = '1M' | '3M' | '6M' | '1Y'
+export type VolumeGridViewMode = 'volume' | 'idb_custy'
 
 export interface VolumeGridBaseline {
   p25: number
@@ -24,9 +25,10 @@ export interface VolumeGridCell {
   fwd: string
   tenor: string
   current: number
+  idbCurrent: number
+  custyCurrent: number
   tradeCount: number
   baseline: VolumeGridBaseline
-  /** 0..100 rank of `current` within the prior-window distribution; null when `n=0`. */
   percentile: number | null
 }
 
@@ -49,8 +51,7 @@ export interface VolumeGridResponse {
   forwardSchema: ForwardSchemaId
   tenorSchema: TenorSchemaId
   packageType: PackageTypeGroupId
-  /** Echo of the resolved axes — clients use this to render headers without
-   *  re-deriving them. Especially useful for IMM where buckets rotate. */
+  viewMode: VolumeGridViewMode
   axes: { forward: VolumeGridSchemaAxis; tenor: VolumeGridSchemaAxis }
   cells: VolumeGridCell[]
   totals: {

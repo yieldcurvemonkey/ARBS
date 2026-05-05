@@ -23,8 +23,22 @@ describe('parseVolumeGridParams', () => {
       value: {
         metric: 'notional', period: 'today', lookbackDays: 90,
         forwardSchema: 'default', tenorSchema: 'default', packageType: 'outright',
+        viewMode: 'volume',
       },
     })
+  })
+  it('rejects invalid viewMode', () => {
+    expect(parseVolumeGridParams(new URLSearchParams('viewMode=foo')).ok).toBe(false)
+  })
+  it('accepts idb_custy viewMode', () => {
+    const out = parseVolumeGridParams(new URLSearchParams('viewMode=idb_custy'))
+    expect(out.ok).toBe(true)
+    if (out.ok) expect(out.value.viewMode).toBe('idb_custy')
+  })
+  it('accepts fomc forward schema', () => {
+    const out = parseVolumeGridParams(new URLSearchParams('forwardSchema=fomc'))
+    expect(out.ok).toBe(true)
+    if (out.ok) expect(out.value.forwardSchema).toBe('fomc')
   })
   it('rejects invalid metric', () => {
     expect(parseVolumeGridParams(new URLSearchParams('metric=foo')).ok).toBe(false)
@@ -133,6 +147,28 @@ describe('buildVolumeGridSqlTimeOfDay', () => {
     expect(built.sql).toContain("fwd_bucket <> 'other'")
     expect(built.sql).toContain("tenor_bucket <> 'other'")
   })
+
+  it('emits per-platform IDB / CUSTY aggregates in current_agg', () => {
+    const built = buildVolumeGridSqlTimeOfDay({
+      metric: 'notional', forwardSchema: fwd, tenorSchema: tenor,
+      packageType: 'outright', bounds,
+    })
+    expect(built.sql).toContain("FILTER (WHERE platform = 'IDB')")
+    expect(built.sql).toContain("FILTER (WHERE platform = 'CUSTY')")
+    expect(built.sql).toContain('idb_current')
+    expect(built.sql).toContain('custy_current')
+  })
+
+  it('uses fomc_meeting_label as bucket id for the fomc schema', () => {
+    const fomc = resolveForwardSchema('fomc')
+    const built = buildVolumeGridSqlTimeOfDay({
+      metric: 'notional', forwardSchema: fomc, tenorSchema: tenor,
+      packageType: 'outright', bounds,
+    })
+    expect(built.sql).toContain('l.fomc_meeting_label AS fwd_bucket')
+    // schema-level extra filter applied
+    expect(built.sql).toContain('l.is_fomc_dated = TRUE')
+  })
 })
 
 describe('buildVolumeGridSqlRolling', () => {
@@ -193,27 +229,50 @@ describe('summariseCells', () => {
 })
 
 describe('shapeVolumeGridResponse', () => {
-  it('drops cells whose ids are not in the resolved schema', () => {
+  it('drops cells whose ids are not in the resolved schema and surfaces idb/custy splits', () => {
     const fwd = resolveForwardSchema('default')
     const tenor = resolveTenorSchema('default')
     const out = shapeVolumeGridResponse(
       [
-        { fwd: 'fwd_other', tenor: '5y', current_value: 1, trade_count: 1, prior_array: [], p25: 0, p50: 0, p75: 0, pmin: 0, pmax: 0, n: 0, as_of_ts: null },
-        { fwd: 'spot', tenor: 'unknown_tenor', current_value: 1, trade_count: 1, prior_array: [], p25: 0, p50: 0, p75: 0, pmin: 0, pmax: 0, n: 0, as_of_ts: null },
-        { fwd: 'spot', tenor: '5y', current_value: 1, trade_count: 1, prior_array: [], p25: 0, p50: 0, p75: 0, pmin: 0, pmax: 0, n: 0, as_of_ts: null },
+        { fwd: 'fwd_other', tenor: '5y', current_value: 1, idb_current: 0, custy_current: 1, trade_count: 1, prior_array: [], p25: 0, p50: 0, p75: 0, pmin: 0, pmax: 0, n: 0, as_of_ts: null },
+        { fwd: 'spot', tenor: 'unknown_tenor', current_value: 1, idb_current: 0, custy_current: 1, trade_count: 1, prior_array: [], p25: 0, p50: 0, p75: 0, pmin: 0, pmax: 0, n: 0, as_of_ts: null },
+        { fwd: 'spot', tenor: '5y', current_value: 100, idb_current: 40, custy_current: 60, trade_count: 1, prior_array: [], p25: 0, p50: 0, p75: 0, pmin: 0, pmax: 0, n: 0, as_of_ts: null },
       ],
       {
         metric: 'notional', period: 'today', lookbackDays: 90,
         forwardSchema: 'default', tenorSchema: 'default', packageType: 'outright',
+        viewMode: 'volume',
       },
       fwd,
       tenor,
     )
     expect(out.cells.length).toBe(1)
     expect(out.cells[0].fwd).toBe('spot')
-    expect(out.cells[0].tenor).toBe('5y')
-    expect(out.axes.forward.id).toBe('default')
+    expect(out.cells[0].idbCurrent).toBe(40)
+    expect(out.cells[0].custyCurrent).toBe(60)
     expect(out.axes.forward.buckets.length).toBe(8)
     expect(out.axes.tenor.buckets.length).toBe(16)
+    expect(out.viewMode).toBe('volume')
+  })
+
+  it('discovers fomc bucket labels from rows for the fomc schema', () => {
+    const fwd = resolveForwardSchema('fomc')
+    const tenor = resolveTenorSchema('default')
+    const out = shapeVolumeGridResponse(
+      [
+        { fwd: 'JUN26', tenor: '2y', current_value: 1, idb_current: 1, custy_current: 0, trade_count: 1, prior_array: [], p25: 0, p50: 0, p75: 0, pmin: 0, pmax: 0, n: 0, as_of_ts: null },
+        { fwd: 'APR26', tenor: '5y', current_value: 1, idb_current: 0, custy_current: 1, trade_count: 1, prior_array: [], p25: 0, p50: 0, p75: 0, pmin: 0, pmax: 0, n: 0, as_of_ts: null },
+        { fwd: 'JUN26', tenor: '5y', current_value: 1, idb_current: 0, custy_current: 1, trade_count: 1, prior_array: [], p25: 0, p50: 0, p75: 0, pmin: 0, pmax: 0, n: 0, as_of_ts: null },
+      ],
+      {
+        metric: 'notional', period: 'today', lookbackDays: 90,
+        forwardSchema: 'fomc', tenorSchema: 'default', packageType: 'fomc',
+        viewMode: 'volume',
+      },
+      fwd,
+      tenor,
+    )
+    // Sorted chronologically: APR26 first, then JUN26
+    expect(out.axes.forward.buckets.map((b) => b.id)).toEqual(['APR26', 'JUN26'])
   })
 })

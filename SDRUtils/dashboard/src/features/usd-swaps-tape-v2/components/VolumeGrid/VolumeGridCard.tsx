@@ -9,6 +9,7 @@ import { VolumeGrid } from './VolumeGrid'
 import { VolumeGridCellModal } from './VolumeGridCellModal'
 import { useVolumeGrid } from '../../hooks/useVolumeGrid'
 import type {
+  VolumeGridViewMode,
   VolumeMetric, VolumePeriod,
   VolumeGridCell as Cell,
 } from '../../types/volume-grid.types'
@@ -28,11 +29,19 @@ const KEY_PERIOD    = 'usd-tape-v2:volume-grid:period'
 const KEY_FWD_SCHEMA  = 'usd-tape-v2:volume-grid:forward-schema'
 const KEY_TENOR_SCHEMA = 'usd-tape-v2:volume-grid:tenor-schema'
 const KEY_PACKAGE_TYPE = 'usd-tape-v2:volume-grid:package-type'
+const KEY_VIEW_MODE = 'usd-tape-v2:volume-grid:view-mode'
+
+const VIEW_MODE_IDS: ReadonlyArray<VolumeGridViewMode> = ['volume', 'idb_custy']
+const VIEW_MODE_LABELS: Record<VolumeGridViewMode, string> = {
+  volume: 'Volume',
+  idb_custy: 'IDB / CUSTY',
+}
 
 const FORWARD_SCHEMA_LABELS: Record<ForwardSchemaId, string> = {
   default: 'Default',
   legacy: 'Legacy',
   imm16: 'IMM 16',
+  fomc: 'FOMC',
 }
 const TENOR_SCHEMA_LABELS: Record<TenorSchemaId, string> = {
   default: 'Default',
@@ -71,6 +80,9 @@ export function VolumeGridCard({ onSelectPackage }: VolumeGridCardProps): JSX.El
   const [packageType, setPackageType] = useState<PackageTypeGroupId>(() =>
     readEnum<PackageTypeGroupId>(KEY_PACKAGE_TYPE, PACKAGE_TYPE_GROUP_IDS, 'outright'),
   )
+  const [viewMode, setViewMode] = useState<VolumeGridViewMode>(() =>
+    readEnum<VolumeGridViewMode>(KEY_VIEW_MODE, VIEW_MODE_IDS, 'volume'),
+  )
   const [selectedCell, setSelectedCell] = useState<{ fwd: string; tenor: string } | null>(null)
 
   useEffect(() => {
@@ -97,10 +109,14 @@ export function VolumeGridCard({ onSelectPackage }: VolumeGridCardProps): JSX.El
     if (typeof window === 'undefined') return
     window.localStorage.setItem(KEY_PACKAGE_TYPE, packageType)
   }, [packageType])
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    window.localStorage.setItem(KEY_VIEW_MODE, viewMode)
+  }, [viewMode])
 
   const grid = useVolumeGrid({
     metric, period, collapsed,
-    forwardSchema, tenorSchema, packageType,
+    forwardSchema, tenorSchema, packageType, viewMode,
   })
 
   const onCellClick = useCallback((id: { fwd: string; tenor: string }) => {
@@ -150,6 +166,15 @@ export function VolumeGridCard({ onSelectPackage }: VolumeGridCardProps): JSX.El
           }))}
         />
         <Select
+          aria-label="View mode"
+          value={viewMode}
+          onChange={(v) => setViewMode(v as VolumeGridViewMode)}
+          options={VIEW_MODE_IDS.map((id) => ({
+            id,
+            label: `View: ${VIEW_MODE_LABELS[id]}`,
+          }))}
+        />
+        <Select
           aria-label="Forward schema"
           value={forwardSchema}
           onChange={(v) => setForwardSchema(v as ForwardSchemaId)}
@@ -194,6 +219,7 @@ export function VolumeGridCard({ onSelectPackage }: VolumeGridCardProps): JSX.El
               data={grid.data}
               metric={metric}
               period={period}
+              viewMode={viewMode}
               onCellClick={onCellClick}
             />
           ) : (

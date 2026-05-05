@@ -3,7 +3,7 @@
 import useSWR from 'swr'
 import { TAPE_V2_API_BASE } from '../constants'
 import type {
-  VolumeGridResponse, VolumeMetric, VolumePeriod,
+  VolumeGridResponse, VolumeGridViewMode, VolumeMetric, VolumePeriod,
 } from '../types/volume-grid.types'
 import type {
   ForwardSchemaId,
@@ -18,6 +18,7 @@ export interface UseVolumeGridArgs {
   forwardSchema: ForwardSchemaId
   tenorSchema: TenorSchemaId
   packageType: PackageTypeGroupId
+  viewMode: VolumeGridViewMode
   collapsed: boolean
   /** Test seam — defaults to the package-wide `fetch`. */
   fetcher?: typeof fetch
@@ -35,7 +36,7 @@ const DEFAULT_REFRESH_INTERVAL_MS = 30_000
 export function buildVolumeGridUrl(
   args: Pick<
     UseVolumeGridArgs,
-    'metric' | 'period' | 'lookbackDays' | 'forwardSchema' | 'tenorSchema' | 'packageType'
+    'metric' | 'period' | 'lookbackDays' | 'forwardSchema' | 'tenorSchema' | 'packageType' | 'viewMode'
   >,
 ): string {
   const q = new URLSearchParams({
@@ -44,6 +45,7 @@ export function buildVolumeGridUrl(
     forwardSchema: args.forwardSchema,
     tenorSchema: args.tenorSchema,
     packageType: args.packageType,
+    viewMode: args.viewMode,
   })
   if (args.lookbackDays != null) q.set('lookbackDays', String(args.lookbackDays))
   return `${TAPE_V2_API_BASE}/volume-grid?${q}`

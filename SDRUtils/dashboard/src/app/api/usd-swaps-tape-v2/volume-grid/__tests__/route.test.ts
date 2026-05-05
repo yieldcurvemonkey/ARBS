@@ -36,7 +36,8 @@ describe('GET /api/usd-swaps-tape-v2/volume-grid', () => {
       rows: [
         {
           fwd: 'spot', tenor: '5y',
-          current_value: 100, trade_count: 5,
+          current_value: 100, idb_current: 40, custy_current: 60,
+          trade_count: 5,
           prior_array: [10, 20, 30],
           p25: 15, p50: 20, p75: 25, pmin: 10, pmax: 30, n: 3,
           as_of_ts: '2026-05-05T14:32:00Z',
@@ -44,15 +45,24 @@ describe('GET /api/usd-swaps-tape-v2/volume-grid', () => {
       ] as unknown[],
     })
     const { GET } = await import('../route')
-    const res = await GET(req('metric=notional&period=today&lookbackDays=90&forwardSchema=default&tenorSchema=default&packageType=outright'))
+    const res = await GET(req('metric=notional&period=today&lookbackDays=90&forwardSchema=default&tenorSchema=default&packageType=outright&viewMode=volume'))
     expect(res.status).toBe(200)
     const body = await res.json()
     expect(body.metric).toBe('notional')
     expect(body.forwardSchema).toBe('default')
     expect(body.tenorSchema).toBe('default')
     expect(body.packageType).toBe('outright')
+    expect(body.viewMode).toBe('volume')
     expect(body.cells.length).toBe(1)
+    expect(body.cells[0].idbCurrent).toBe(40)
+    expect(body.cells[0].custyCurrent).toBe(60)
     expect(body.axes.forward.buckets.length).toBe(8)
     expect(body.axes.tenor.buckets.length).toBe(16)
+  })
+
+  it('400 on invalid viewMode', async () => {
+    const { GET } = await import('../route')
+    const res = await GET(req('viewMode=foo'))
+    expect(res.status).toBe(400)
   })
 })

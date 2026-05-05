@@ -68,11 +68,13 @@ export async function GET(request: Request) {
   const tsSql = buildTimeseriesSql({
     bucketPredicateSql: predicate.sql,
     packageFilterSql: pkgFilter.sql,
+    schemaExtraFilterSql: forwardSchema.extraFilterSql,
   })
   const limitParamIndex = 2 + predicate.params.length + pkgFilter.params.length
   const tradesSql = buildRecentTradesSql({
     bucketPredicateSql: predicate.sql,
     packageFilterSql: pkgFilter.sql,
+    schemaExtraFilterSql: forwardSchema.extraFilterSql,
     limitParam: `$${limitParamIndex}`,
   })
 
