@@ -10,7 +10,9 @@ import datetime
 import math
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
+
+import pandas as pd
 
 
 class ArchetypeType(Enum):
@@ -240,3 +242,149 @@ class ScreenerConfig:
 
     def archetype_names(self) -> Tuple[str, ...]:
         return tuple(a.value for a in self.archetypes)
+
+
+@dataclass(frozen=True)
+class CandidateResult:
+    """Final scored candidate. Fields match spec §7 verbatim.
+
+    Premiums and payoffs are in **ticks** (0.25bp). Strikes are in price
+    space (100 - rate). DTE is computed from ``candidate_def.expiry`` and
+    the ``as_of`` argument.
+    """
+
+    candidate_def: CandidateDef
+    ref_underlying_price: float
+    net_premium: float
+    max_payoff: float
+    max_loss: float
+    breakevens: Tuple[float, ...]
+    payoff_zone: Tuple[float, float]
+    # Greeks at entry
+    delta: float
+    gamma: float
+    vega: float
+    theta: float
+    vega_aged_1m: float
+    theta_to_expiry: float
+    # Carry
+    carry_3m: float
+    carry_to_expiry: float
+    # Asymmetry / probability metrics
+    asymmetry_ratio: float
+    implied_prob_full_payoff_rnd: float
+    implied_prob_full_payoff_sabr: float
+    prob_density_divergence: float
+    conditional_prob_full_payoff: float
+    prob_edge: float
+    prob_source: str  # "rnd" or "sabr_fallback"
+    # Path / catalyst / liquidity / SDR
+    path_scenario: str
+    path_delta_required_bp: float
+    triggers: Tuple[str, ...]
+    catalyst_count: int
+    liquidity_score: float
+    sdr_confirmation: bool
+    # Composite
+    composite_score: float
+    # Optional explanatory diagnostics
+    failed_gates: Tuple[str, ...] = ()
+    composite_components: Dict[str, float] = field(default_factory=dict)
+    payoff_multiple_score: float = 0.0
+    probability_edge_score: float = 0.0
+    carry_quality_score: float = 0.0
+    liquidity_score_component: float = 0.0
+    rank: int = 0
+
+    @property
+    def candidate_id(self) -> str:
+        return self.candidate_def.candidate_id
+
+    @property
+    def structure_type(self) -> str:
+        return self.candidate_def.archetype.value
+
+    @property
+    def underlying(self) -> str:
+        return self.candidate_def.underlying
+
+    @property
+    def expiry_date(self) -> datetime.date:
+        return self.candidate_def.expiry
+
+    def compute_dte(self, as_of: datetime.date) -> int:
+        return (self.expiry_date - as_of).days
+
+    def to_dict(self, *, as_of: Optional[datetime.date] = None) -> Dict[str, Any]:
+        dte = (
+            self.compute_dte(as_of)
+            if as_of is not None
+            else (self.expiry_date - datetime.date.today()).days
+        )
+        return {
+            "structure_type": self.structure_type,
+            "underlying": self.underlying,
+            "expiry_date": self.expiry_date.isoformat(),
+            "dte": dte,
+            "legs": [leg.to_dict() for leg in self.candidate_def.legs],
+            "ref_underlying_price": self.ref_underlying_price,
+            "net_premium": self.net_premium,
+            "max_payoff": self.max_payoff,
+            "max_loss": self.max_loss,
+            "breakevens": list(self.breakevens),
+            "payoff_zone": list(self.payoff_zone),
+            "delta": self.delta,
+            "gamma": self.gamma,
+            "vega": self.vega,
+            "theta": self.theta,
+            "vega_aged_1m": self.vega_aged_1m,
+            "theta_to_expiry": self.theta_to_expiry,
+            "carry_3m": self.carry_3m,
+            "carry_to_expiry": self.carry_to_expiry,
+            "asymmetry_ratio": self.asymmetry_ratio,
+            "implied_prob_full_payoff_rnd": self.implied_prob_full_payoff_rnd,
+            "implied_prob_full_payoff_sabr": self.implied_prob_full_payoff_sabr,
+            "prob_density_divergence": self.prob_density_divergence,
+            "conditional_prob_full_payoff": self.conditional_prob_full_payoff,
+            "prob_edge": self.prob_edge,
+            "prob_source": self.prob_source,
+            "path_scenario": self.path_scenario,
+            "path_delta_required_bp": self.path_delta_required_bp,
+            "triggers": list(self.triggers),
+            "catalyst_count": self.catalyst_count,
+            "liquidity_score": self.liquidity_score,
+            "sdr_confirmation": self.sdr_confirmation,
+            "composite_score": self.composite_score,
+            "candidate_id": self.candidate_id,
+            "rank": self.rank,
+            "failed_gates": list(self.failed_gates),
+        }
+
+
+@dataclass(frozen=True)
+class ScreenerSnapshot:
+    """Top-level container — output of :func:`screener.build_snapshot`."""
+
+    as_of: datetime.date
+    results: Tuple[CandidateResult, ...]
+    config_summary: Dict[str, Any]
+    run_warnings: Tuple[str, ...] = ()
+
+    def to_dataframe(self) -> pd.DataFrame:
+        if not self.results:
+            return pd.DataFrame()
+        rows: List[Dict[str, Any]] = []
+        for r in self.results:
+            row = r.to_dict(as_of=self.as_of)
+            # legs as a JSON-serializable inline string for parquet/dataframe ergonomics
+            row["legs"] = row.get("legs", [])
+            rows.append(row)
+        return pd.DataFrame(rows)
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "as_of": self.as_of.isoformat(),
+            "config": self.config_summary,
+            "run_warnings": list(self.run_warnings),
+            "results": [r.to_dict(as_of=self.as_of) for r in self.results],
+        }

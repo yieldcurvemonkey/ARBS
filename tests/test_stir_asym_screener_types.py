@@ -183,6 +183,146 @@ def test_screener_config_is_mutable():
     assert cfg.dte_floor == 30
 
 
+SPEC_OUTPUT_FIELDS = {
+    "structure_type",
+    "underlying",
+    "expiry_date",
+    "dte",
+    "legs",
+    "ref_underlying_price",
+    "net_premium",
+    "max_payoff",
+    "max_loss",
+    "breakevens",
+    "payoff_zone",
+    "delta",
+    "gamma",
+    "vega",
+    "theta",
+    "vega_aged_1m",
+    "theta_to_expiry",
+    "carry_3m",
+    "carry_to_expiry",
+    "asymmetry_ratio",
+    "implied_prob_full_payoff_rnd",
+    "implied_prob_full_payoff_sabr",
+    "prob_density_divergence",
+    "conditional_prob_full_payoff",
+    "prob_edge",
+    "path_scenario",
+    "path_delta_required_bp",
+    "triggers",
+    "catalyst_count",
+    "liquidity_score",
+    "sdr_confirmation",
+    "composite_score",
+    "candidate_id",
+    "prob_source",
+}
+
+
+def _stub_candidate_result():
+    from RVUtils.STIRAsymmetricScreener._types import (
+        ArchetypeType,
+        CandidateDef,
+        CandidateResult,
+        OptionLeg,
+    )
+
+    leg = OptionLeg(
+        contract="SFRU6",
+        expiry=datetime.date(2026, 9, 11),
+        right="P",
+        strike=96.50,
+        quantity=1,
+        premium_ticks=3.0,
+        open_interest=1500.0,
+    )
+    cdef = CandidateDef.from_components(
+        archetype=ArchetypeType.WING,
+        underlying="SFRU6",
+        expiry=datetime.date(2026, 9, 11),
+        legs=(leg,),
+    )
+    return CandidateResult(
+        candidate_def=cdef,
+        ref_underlying_price=96.30,
+        net_premium=3.0,
+        max_payoff=24.5,
+        max_loss=3.0,
+        breakevens=(96.47,),
+        payoff_zone=(95.50, 96.4925),
+        delta=0.18,
+        gamma=0.012,
+        vega=0.45,
+        theta=-0.08,
+        vega_aged_1m=0.32,
+        theta_to_expiry=-0.50,
+        carry_3m=-0.20,
+        carry_to_expiry=-0.40,
+        asymmetry_ratio=8.17,
+        implied_prob_full_payoff_rnd=0.10,
+        implied_prob_full_payoff_sabr=0.07,
+        prob_density_divergence=0.04,
+        conditional_prob_full_payoff=0.18,
+        prob_edge=0.08,
+        prob_source="rnd",
+        path_scenario="0_cuts_through_Sep26",
+        path_delta_required_bp=-50.0,
+        triggers=("path_bias", "wing_cheapness"),
+        catalyst_count=2,
+        liquidity_score=0.85,
+        sdr_confirmation=False,
+        composite_score=0.62,
+    )
+
+
+def test_candidate_result_to_dict_has_all_spec_fields():
+    res = _stub_candidate_result()
+    d = res.to_dict()
+    missing = SPEC_OUTPUT_FIELDS - set(d.keys())
+    assert not missing, f"Missing spec §7 fields: {missing}"
+
+
+def test_candidate_result_dte_property_uses_as_of():
+    res = _stub_candidate_result()
+    assert res.compute_dte(datetime.date(2026, 8, 12)) == 30
+
+
+def test_screener_snapshot_to_dataframe_has_spec_columns():
+    import pandas as pd
+
+    from RVUtils.STIRAsymmetricScreener._types import ScreenerSnapshot
+
+    res = _stub_candidate_result()
+    snap = ScreenerSnapshot(
+        as_of=datetime.date(2026, 8, 12),
+        results=(res, res),
+        config_summary={"dte_floor": 7},
+        run_warnings=("smile_fallback_walked_back_1d",),
+    )
+    df = snap.to_dataframe()
+    assert isinstance(df, pd.DataFrame)
+    assert len(df) == 2
+    missing = SPEC_OUTPUT_FIELDS - set(df.columns)
+    assert not missing, f"Missing spec §7 columns: {missing}"
+
+
+def test_screener_snapshot_to_dataframe_empty_when_no_results():
+    import pandas as pd
+
+    from RVUtils.STIRAsymmetricScreener._types import ScreenerSnapshot
+
+    snap = ScreenerSnapshot(
+        as_of=datetime.date(2026, 8, 12),
+        results=(),
+        config_summary={},
+    )
+    df = snap.to_dataframe()
+    assert isinstance(df, pd.DataFrame)
+    assert len(df) == 0
+
+
 def test_candidate_def_wing_id_format():
     from RVUtils.STIRAsymmetricScreener._types import (
         ArchetypeType,

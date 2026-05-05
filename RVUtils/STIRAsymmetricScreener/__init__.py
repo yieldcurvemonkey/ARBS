@@ -11,13 +11,17 @@ Implementation plan: ``docs/plans/2026-05-04-stir-asymmetric-screener.md``.
 from RVUtils.STIRAsymmetricScreener._types import (
     ArchetypeType,
     CandidateDef,
+    CandidateResult,
     OptionLeg,
     ScreenerConfig,
+    ScreenerSnapshot,
 )
 
 __all__ = [
     "ArchetypeType",
     "CandidateDef",
+    "CandidateResult",
     "OptionLeg",
     "ScreenerConfig",
+    "ScreenerSnapshot",
 ]
