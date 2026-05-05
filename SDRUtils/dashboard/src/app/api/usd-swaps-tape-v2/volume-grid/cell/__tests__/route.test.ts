@@ -48,12 +48,26 @@ describe('GET /api/usd-swaps-tape-v2/volume-grid/cell', () => {
           },
         ] as unknown[],
       })
+      .mockResolvedValueOnce({
+        rows: [
+          {
+            bucket_index: 0,
+            minute_of_day: 30,
+            current_value: 1e9,
+            average_value: 8e8,
+            observed_days: 12,
+            as_of_ts: '2026-05-05T13:00:00Z',
+          },
+        ] as unknown[],
+      })
     const { GET } = await import('../route')
     const res = await GET(req('fwd=spot&tenor=5y&forwardSchema=default&tenorSchema=default&packageType=outright'))
     expect(res.status).toBe(200)
     const body = await res.json()
     expect(body.timeseries.length).toBe(1)
     expect(body.recentTrades.length).toBe(1)
+    expect(body.intradaySeasonality.points.length).toBe(1)
+    expect(body.intradaySeasonality.observedDays).toBe(12)
     expect(body.forwardSchema).toBe('default')
     expect(body.packageType).toBe('outright')
   })

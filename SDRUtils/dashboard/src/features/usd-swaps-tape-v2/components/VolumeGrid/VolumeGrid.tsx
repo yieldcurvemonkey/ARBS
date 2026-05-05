@@ -6,7 +6,7 @@ import { useMemo } from 'react'
 import { VolumeGridCell } from './VolumeGridCell'
 import { colorForPercentile, foregroundForPercentile } from './colorRamp'
 import type {
-  VolumeGridCell as Cell, VolumeGridResponse, VolumeGridViewMode,
+  VolumeGridCell as Cell, VolumeGridColorMode, VolumeGridResponse, VolumeGridViewMode,
   VolumeMetric, VolumePeriod,
 } from '../../types/volume-grid.types'
 
@@ -15,15 +15,27 @@ export interface VolumeGridProps {
   metric: VolumeMetric
   period: VolumePeriod
   viewMode: VolumeGridViewMode
+  colorMode: VolumeGridColorMode
   onCellClick: (id: { fwd: string; tenor: string }) => void
 }
 
-export function VolumeGrid({ data, metric, period, viewMode, onCellClick }: VolumeGridProps): JSX.Element {
+export function VolumeGrid({ data, metric, period, viewMode, colorMode, onCellClick }: VolumeGridProps): JSX.Element {
   const cellMap = useMemo(() => {
     const m = new Map<string, Cell>()
     for (const c of data.cells) m.set(`${c.fwd}|${c.tenor}`, c)
     return m
   }, [data.cells])
+  const gridMaxCurrent = useMemo(
+    () =>
+      data.cells.reduce(
+        (max, c) =>
+          c.tradeCount > 0 && Number.isFinite(c.current)
+            ? Math.max(max, Math.abs(c.current))
+            : max,
+        0,
+      ),
+    [data.cells],
+  )
   const forwardAxis = data.axes.forward
   const tenorAxis = data.axes.tenor
   return (
@@ -58,6 +70,8 @@ export function VolumeGrid({ data, metric, period, viewMode, onCellClick }: Volu
           metric={metric}
           period={period}
           viewMode={viewMode}
+          colorMode={colorMode}
+          gridMaxCurrent={gridMaxCurrent}
           tenorAxis={tenorAxis}
           forwardAxis={forwardAxis}
           rowTotal={data.totals.rowTotals[f.id]}
@@ -93,6 +107,8 @@ function RowFragment(props: {
   metric: VolumeMetric
   period: VolumePeriod
   viewMode: VolumeGridViewMode
+  colorMode: VolumeGridColorMode
+  gridMaxCurrent: number
   forwardAxis: VolumeGridResponse['axes']['forward']
   tenorAxis: VolumeGridResponse['axes']['tenor']
   rowTotal: { current: number; percentile: number | null } | undefined
@@ -124,6 +140,12 @@ function RowFragment(props: {
               metric={props.metric}
               period={props.period}
               viewMode={props.viewMode}
+              colorMode={props.colorMode}
+              colorPercentile={
+                props.gridMaxCurrent > 0
+                  ? (Math.abs(cell.current) / props.gridMaxCurrent) * 100
+                  : null
+              }
               forwardAxis={props.forwardAxis}
               tenorAxis={props.tenorAxis}
               onClick={props.onCellClick}

@@ -7,13 +7,14 @@ import type { JSX, ReactNode } from 'react'
 import { useState } from 'react'
 import { Dialog } from 'primereact/dialog'
 import {
-  Bar, BarChart, CartesianGrid, ReferenceLine, ResponsiveContainer,
+  Bar, BarChart, CartesianGrid, Line, LineChart, ReferenceLine, ResponsiveContainer,
   Tooltip, XAxis, YAxis,
 } from 'recharts'
 import { useVolumeGridCell } from '../../hooks/useVolumeGridCell'
 import { lookupLabel } from './buckets'
 import type {
   VolumeCellRange, VolumeMetric,
+  VolumeGridIntradaySeasonality,
   VolumeGridSchemaAxis,
 } from '../../types/volume-grid.types'
 import type {
@@ -23,6 +24,7 @@ import type {
 } from '@/lib/usd-swaps-tape-v2/volumeGridBuckets'
 
 const KEY_RANGE = 'usd-tape-v2:volume-grid:cell-range'
+const SEASONALITY_X_TICKS = [0, 360, 720, 1080, 1440]
 
 const fmtCompact = (n: number, _metric: VolumeMetric): string => {
   void _metric
@@ -39,6 +41,15 @@ const fmtTime = (ts: string): string =>
     timeZone: 'America/New_York', month: '2-digit', day: '2-digit',
     hour: '2-digit', minute: '2-digit',
   })
+
+const fmtMinuteOfDay = (minuteOfDay: number): string => {
+  if (!Number.isFinite(minuteOfDay)) return '--:--'
+  const clamped = Math.max(0, Math.min(1440, Math.floor(minuteOfDay)))
+  if (clamped >= 1440) return '24:00'
+  const hours = Math.floor(clamped / 60)
+  const minutes = clamped % 60
+  return `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}`
+}
 
 export interface VolumeGridCellModalProps {
   cell: { fwd: string; tenor: string } | null
@@ -98,39 +109,45 @@ export function VolumeGridCellModal(props: VolumeGridCellModalProps): JSX.Elemen
             </span>
           )}
         </div>
-        <div data-testid="volume-grid-cell-chart" className="h-[40%] min-h-[200px]">
-          {data?.timeseries.length ? (
-            <ResponsiveContainer width="100%" height="100%">
-              <BarChart data={data.timeseries}>
-                <CartesianGrid strokeDasharray="3 3" stroke="rgba(148,163,184,0.2)" />
-                <XAxis dataKey="day" tick={{ fontSize: 10, fill: '#94a3b8' }} />
-                <YAxis tick={{ fontSize: 10, fill: '#94a3b8' }}
-                       tickFormatter={(v) => fmtCompact(Number(v), props.metric)} />
-                <Tooltip
-                  contentStyle={{ background: '#0f172a', border: '1px solid #1e293b', fontSize: 11 }}
-                  formatter={(value: number, name: string) => {
-                    if (name === 'tradeCount') return [String(value), 'trades']
-                    return [fmtCompact(value, props.metric), props.metric]
-                  }}
-                />
-                <Bar
-                  dataKey={props.metric === 'notional' ? 'notional' : 'dv01'}
-                  fill="#6366f1"
-                />
-                {data.timeseries.length > 1 && (
-                  <ReferenceLine
-                    y={median(data.timeseries.map((p) => p[props.metric === 'notional' ? 'notional' : 'dv01']))}
-                    stroke="#94a3b8"
-                    strokeDasharray="4 2"
+        <div className="grid min-h-[230px] gap-3 lg:grid-cols-2">
+          <div data-testid="volume-grid-cell-chart" className="h-[230px]">
+            {data?.timeseries.length ? (
+              <ResponsiveContainer width="100%" height="100%">
+                <BarChart data={data.timeseries}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="rgba(148,163,184,0.2)" />
+                  <XAxis dataKey="day" tick={{ fontSize: 10, fill: '#94a3b8' }} />
+                  <YAxis tick={{ fontSize: 10, fill: '#94a3b8' }}
+                         tickFormatter={(v) => fmtCompact(Number(v), props.metric)} />
+                  <Tooltip
+                    contentStyle={{ background: '#0f172a', border: '1px solid #1e293b', fontSize: 11 }}
+                    formatter={(value: number, name: string) => {
+                      if (name === 'tradeCount') return [String(value), 'trades']
+                      return [fmtCompact(value, props.metric), props.metric]
+                    }}
                   />
-                )}
-              </BarChart>
-            </ResponsiveContainer>
-          ) : (
-            <div className="flex h-full items-center justify-center text-sm text-slate-500">
-              No trades in this bucket over the selected range.
-            </div>
-          )}
+                  <Bar
+                    dataKey={props.metric === 'notional' ? 'notional' : 'dv01'}
+                    fill="#6366f1"
+                  />
+                  {data.timeseries.length > 1 && (
+                    <ReferenceLine
+                      y={median(data.timeseries.map((p) => p[props.metric === 'notional' ? 'notional' : 'dv01']))}
+                      stroke="#94a3b8"
+                      strokeDasharray="4 2"
+                    />
+                  )}
+                </BarChart>
+              </ResponsiveContainer>
+            ) : (
+              <div className="flex h-full items-center justify-center text-sm text-slate-500">
+                No trades in this bucket over the selected range.
+              </div>
+            )}
+          </div>
+          <IntradaySeasonalityChart
+            seasonality={data?.intradaySeasonality}
+            metric={props.metric}
+          />
         </div>
         <div className="flex-1 overflow-auto rounded border border-slate-800">
           <table className="w-full text-left font-mono text-[11px]">
@@ -168,6 +185,104 @@ export function VolumeGridCellModal(props: VolumeGridCellModalProps): JSX.Elemen
         </div>
       </div>
     </Dialog>
+  )
+}
+
+function IntradaySeasonalityChart({
+  seasonality,
+  metric,
+}: {
+  seasonality: VolumeGridIntradaySeasonality | undefined
+  metric: VolumeMetric
+}): JSX.Element {
+  const points = seasonality?.points ?? []
+  const hasSeries = points.some((p) => p.current != null || p.average != null)
+  const averageLabel = seasonality?.observedDays
+    ? `${seasonality.observedDays}d avg`
+    : 'avg'
+
+  return (
+    <div
+      data-testid="volume-grid-cell-intraday-seasonality"
+      className="h-[230px] rounded border border-slate-800 bg-slate-950/25 p-2"
+    >
+      <div className="mb-1 flex items-center justify-between gap-2 font-mono text-[10px] text-slate-400">
+        <span className="uppercase tracking-wide text-slate-300">
+          Intraday seasonality
+        </span>
+        <span>
+          <span className="text-amber-300">current</span>
+          <span className="mx-1 text-slate-600">/</span>
+          <span className="text-amber-100/75">{averageLabel}</span>
+        </span>
+      </div>
+      {hasSeries ? (
+        <ResponsiveContainer width="100%" height="88%">
+          <LineChart data={points} margin={{ top: 8, right: 14, bottom: 8, left: 4 }}>
+            <CartesianGrid
+              vertical={false}
+              stroke="rgba(148,163,184,0.18)"
+              strokeDasharray="3 3"
+            />
+            <XAxis
+              dataKey="minuteOfDay"
+              type="number"
+              domain={[0, 1440]}
+              ticks={SEASONALITY_X_TICKS}
+              tickFormatter={(v) => fmtMinuteOfDay(Number(v))}
+              tick={{ fontSize: 10, fill: '#94a3b8' }}
+              axisLine={{ stroke: '#334155' }}
+              tickLine={{ stroke: '#475569' }}
+            />
+            <YAxis
+              tick={{ fontSize: 10, fill: '#94a3b8' }}
+              tickFormatter={(v) => fmtCompact(Number(v), metric)}
+              axisLine={{ stroke: '#334155' }}
+              tickLine={{ stroke: '#475569' }}
+              width={48}
+            />
+            <Tooltip
+              contentStyle={{ background: '#0f172a', border: '1px solid #1e293b', fontSize: 11 }}
+              labelFormatter={(label) => fmtMinuteOfDay(Number(label))}
+              formatter={(value: unknown, name: string) => [
+                value == null ? '-' : fmtCompact(Number(value), metric),
+                name === 'current' ? 'current' : averageLabel,
+              ]}
+            />
+            {seasonality?.asOfMinuteOfDay != null && (
+              <ReferenceLine
+                x={seasonality.asOfMinuteOfDay}
+                stroke="#ef4444"
+                strokeDasharray="4 3"
+              />
+            )}
+            <Line
+              type="stepAfter"
+              dataKey="average"
+              stroke="#fef3c7"
+              strokeDasharray="4 3"
+              strokeWidth={1.5}
+              dot={false}
+              connectNulls={false}
+              isAnimationActive={false}
+            />
+            <Line
+              type="stepAfter"
+              dataKey="current"
+              stroke="#fbbf24"
+              strokeWidth={2}
+              dot={false}
+              connectNulls={false}
+              isAnimationActive={false}
+            />
+          </LineChart>
+        </ResponsiveContainer>
+      ) : (
+        <div className="flex h-[88%] items-center justify-center text-sm text-slate-500">
+          No intraday seasonality for this bucket.
+        </div>
+      )}
+    </div>
   )
 }
 

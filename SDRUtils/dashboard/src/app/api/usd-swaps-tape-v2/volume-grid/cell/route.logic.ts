@@ -16,6 +16,7 @@ import {
 } from '@/lib/usd-swaps-tape-v2/volumeGridBuckets'
 import type {
   VolumeCellRange,
+  VolumeGridIntradaySeasonality,
   VolumeMetric,
 } from '@/features/usd-swaps-tape-v2/types/volume-grid.types'
 
@@ -39,6 +40,8 @@ const VALID_RANGES: ReadonlySet<VolumeCellRange> = new Set(['1M', '3M', '6M', '1
 const VALID_FORWARD_SCHEMAS: ReadonlySet<ForwardSchemaId> = new Set(FORWARD_SCHEMA_IDS)
 const VALID_TENOR_SCHEMAS: ReadonlySet<TenorSchemaId> = new Set(TENOR_SCHEMA_IDS)
 const VALID_PACKAGE_GROUPS: ReadonlySet<PackageTypeGroupId> = new Set(PACKAGE_TYPE_GROUP_IDS)
+export const INTRADAY_SEASONALITY_BUCKET_MINUTES = 1
+const MINUTES_PER_DAY = 24 * 60
 
 export function parseVolumeGridCellParams(
   search: URLSearchParams,
@@ -117,6 +120,41 @@ export function rangeToStartDate(range: VolumeCellRange, now: Date = new Date())
   }
 }
 
+export function easternDateKey(now: Date = new Date()): string {
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'America/New_York',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).formatToParts(now)
+  const get = (type: string): string => parts.find((p) => p.type === type)?.value ?? '00'
+  return `${get('year')}-${get('month')}-${get('day')}`
+}
+
+function easternMinuteOfDay(value: Date | string | null | undefined): number | null {
+  if (!value) return null
+  const date = value instanceof Date ? value : new Date(String(value))
+  if (Number.isNaN(date.getTime())) return null
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'America/New_York',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+  }).formatToParts(date)
+  const hour = Number(parts.find((p) => p.type === 'hour')?.value ?? 0) % 24
+  const minute = Number(parts.find((p) => p.type === 'minute')?.value ?? 0)
+  if (!Number.isFinite(hour) || !Number.isFinite(minute)) return null
+  return hour * 60 + minute
+}
+
+function formatMinuteLabel(minuteOfDay: number): string {
+  const clamped = Math.max(0, Math.min(MINUTES_PER_DAY, Math.floor(minuteOfDay)))
+  if (clamped >= MINUTES_PER_DAY) return '24:00'
+  const hours = Math.floor(clamped / 60)
+  const minutes = clamped % 60
+  return `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}`
+}
+
 /**
  * Build the timeseries SQL. Bind layout:
  *   $1            = range_start timestamptz
@@ -157,6 +195,130 @@ export function buildTimeseriesSql(opts: {
   `
 }
 
+export function buildIntradaySeasonalitySql(opts: {
+  metric: VolumeMetric
+  bucketPredicateSql: string
+  packageFilterSql: string
+  schemaExtraFilterSql?: string
+}): string {
+  const metricCol = opts.metric === 'notional' ? 'notional' : 'dv01'
+  const extraFilter = opts.schemaExtraFilterSql ? `AND ${opts.schemaExtraFilterSql}` : ''
+  return `
+    WITH params AS (
+      SELECT
+        $1::date AS current_day,
+        $3::int AS bucket_minutes,
+        (1440 / $3::int)::int AS bucket_count
+    ),
+    buckets AS (
+      SELECT generate_series(0, (SELECT bucket_count - 1 FROM params))::int AS bucket_index
+    ),
+    legs AS (
+      SELECT
+        COALESCE(l.original_execution_timestamp, l.execution_timestamp) AS ts,
+        ABS(COALESCE(l.notional, 0)) AS notional,
+        ABS(COALESCE(l.risk, 0))     AS dv01,
+        date_trunc(
+          'day',
+          COALESCE(l.original_execution_timestamp, l.execution_timestamp) AT TIME ZONE 'America/New_York'
+        )::date AS day_et,
+        LEAST(
+          (SELECT bucket_count - 1 FROM params),
+          GREATEST(
+            0,
+            floor(
+              EXTRACT(EPOCH FROM (
+                (
+                  COALESCE(l.original_execution_timestamp, l.execution_timestamp)
+                  AT TIME ZONE 'America/New_York'
+                )
+                - date_trunc(
+                  'day',
+                  COALESCE(l.original_execution_timestamp, l.execution_timestamp)
+                  AT TIME ZONE 'America/New_York'
+                )
+              )) / ((SELECT bucket_minutes FROM params) * 60)
+            )::int
+          )
+        ) AS bucket_index
+      FROM arbs_usd_swap_tape_legs_v2 l
+      JOIN arbs_usd_swap_tape_packages_v2 p ON p.package_id = l.package_id
+      WHERE COALESCE(l.contributes_to_flow, FALSE) = TRUE
+        AND COALESCE(l.original_execution_timestamp, l.execution_timestamp) >= $2::timestamptz
+        AND COALESCE(l.original_execution_timestamp, l.execution_timestamp) <
+          (($1::date + INTERVAL '1 day')::timestamp AT TIME ZONE 'America/New_York')
+        AND ${opts.bucketPredicateSql}
+        AND ${opts.packageFilterSql}
+        ${extraFilter}
+    ),
+    daily_bucket AS (
+      SELECT day_et, bucket_index, SUM(${metricCol}) AS bucket_value
+      FROM legs
+      GROUP BY day_et, bucket_index
+    ),
+    baseline_days AS (
+      SELECT DISTINCT day_et
+      FROM daily_bucket
+      WHERE day_et < (SELECT current_day FROM params)
+    ),
+    baseline_grid AS (
+      SELECT d.day_et, b.bucket_index
+      FROM baseline_days d
+      CROSS JOIN buckets b
+    ),
+    baseline_cumulative AS (
+      SELECT bucket_index, AVG(cumulative_value) AS average_value
+      FROM (
+        SELECT
+          g.day_et,
+          g.bucket_index,
+          SUM(COALESCE(db.bucket_value, 0)) OVER (
+            PARTITION BY g.day_et
+            ORDER BY g.bucket_index
+            ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+          ) AS cumulative_value
+        FROM baseline_grid g
+        LEFT JOIN daily_bucket db
+          ON db.day_et = g.day_et
+         AND db.bucket_index = g.bucket_index
+      ) s
+      GROUP BY bucket_index
+    ),
+    current_grid AS (
+      SELECT (SELECT current_day FROM params) AS day_et, b.bucket_index
+      FROM buckets b
+    ),
+    current_cumulative AS (
+      SELECT
+        g.bucket_index,
+        SUM(COALESCE(db.bucket_value, 0)) OVER (
+          ORDER BY g.bucket_index
+          ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+        ) AS current_value
+      FROM current_grid g
+      LEFT JOIN daily_bucket db
+        ON db.day_et = g.day_et
+       AND db.bucket_index = g.bucket_index
+    ),
+    current_asof AS (
+      SELECT MAX(ts) AS as_of_ts
+      FROM legs
+      WHERE day_et = (SELECT current_day FROM params)
+    )
+    SELECT
+      b.bucket_index,
+      ((b.bucket_index + 1) * (SELECT bucket_minutes FROM params))::int AS minute_of_day,
+      COALESCE(c.current_value, 0) AS current_value,
+      a.average_value,
+      (SELECT COUNT(*) FROM baseline_days)::int AS observed_days,
+      (SELECT as_of_ts FROM current_asof) AS as_of_ts
+    FROM buckets b
+    LEFT JOIN current_cumulative c USING (bucket_index)
+    LEFT JOIN baseline_cumulative a USING (bucket_index)
+    ORDER BY b.bucket_index ASC
+  `
+}
+
 export function buildRecentTradesSql(opts: {
   bucketPredicateSql: string
   packageFilterSql: string
@@ -190,6 +352,69 @@ export function buildRecentTradesSql(opts: {
     ORDER BY p.execution_start DESC
     LIMIT ${opts.limitParam}
   `
+}
+
+export interface RawIntradaySeasonalityRow {
+  bucket_index: number | string
+  minute_of_day: number | string
+  current_value: number | string | null
+  average_value: number | string | null
+  observed_days: number | string
+  as_of_ts: string | Date | null
+}
+
+const num = (v: unknown): number => {
+  const n = typeof v === 'number' ? v : Number(v)
+  return Number.isFinite(n) ? n : 0
+}
+
+export function shapeIntradaySeasonalityResponse(
+  rows: ReadonlyArray<RawIntradaySeasonalityRow>,
+  bucketMinutes: number = INTRADAY_SEASONALITY_BUCKET_MINUTES,
+): VolumeGridIntradaySeasonality {
+  const rawAsOf = rows.find((r) => r.as_of_ts != null)?.as_of_ts ?? null
+  const asOfDate =
+    rawAsOf instanceof Date
+      ? (Number.isNaN(rawAsOf.getTime()) ? null : rawAsOf)
+      : rawAsOf == null
+        ? null
+        : new Date(String(rawAsOf))
+  const asOf =
+    asOfDate && !Number.isNaN(asOfDate.getTime()) ? asOfDate.toISOString() : null
+  const asOfMinuteOfDay = asOfDate ? easternMinuteOfDay(asOfDate) : null
+  const currentBucketEnd =
+    asOfMinuteOfDay == null
+      ? null
+      : Math.min(
+          MINUTES_PER_DAY,
+          Math.floor(asOfMinuteOfDay / bucketMinutes) * bucketMinutes + bucketMinutes,
+        )
+  const observedDays = rows.reduce(
+    (max, r) => Math.max(max, Math.floor(num(r.observed_days))),
+    0,
+  )
+  const points = rows.map((r) => {
+    const minuteOfDay = Math.floor(num(r.minute_of_day))
+    const currentRaw = num(r.current_value)
+    const averageRaw =
+      r.average_value == null || r.average_value === '' ? null : num(r.average_value)
+    return {
+      minuteOfDay,
+      time: formatMinuteLabel(minuteOfDay),
+      current:
+        currentBucketEnd == null || minuteOfDay > currentBucketEnd
+          ? null
+          : currentRaw,
+      average: averageRaw,
+    }
+  })
+  return {
+    bucketMinutes,
+    observedDays,
+    asOf,
+    asOfMinuteOfDay,
+    points,
+  }
 }
 
 export { buildBucketPredicate, buildPackageTypeFilter }

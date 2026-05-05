@@ -18,11 +18,12 @@ describe('buildVolumeGridUrl', () => {
 
   it('appends lookbackDays when provided', () => {
     const url = buildVolumeGridUrl({
-      metric: 'dv01', period: '1w', lookbackDays: 365,
+      metric: 'dv01', period: '3m', lookbackDays: 365,
       forwardSchema: 'imm16', tenorSchema: 'default', packageType: 'spreadover',
       viewMode: 'idb_custy',
     })
     expect(url).toContain('lookbackDays=365')
+    expect(url).toContain('period=3m')
     expect(url).toContain('forwardSchema=imm16')
     expect(url).toContain('packageType=spreadover')
     expect(url).toContain('viewMode=idb_custy')

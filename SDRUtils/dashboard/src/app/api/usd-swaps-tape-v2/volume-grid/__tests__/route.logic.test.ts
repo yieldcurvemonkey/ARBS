@@ -46,6 +46,13 @@ describe('parseVolumeGridParams', () => {
   it('rejects invalid period', () => {
     expect(parseVolumeGridParams(new URLSearchParams('period=foo')).ok).toBe(false)
   })
+  it('accepts extended rolling periods', () => {
+    for (const period of ['2w', '3w', '1m', '3m']) {
+      const out = parseVolumeGridParams(new URLSearchParams(`period=${period}`))
+      expect(out.ok).toBe(true)
+      if (out.ok) expect(out.value.period).toBe(period)
+    }
+  })
   it('rejects invalid forwardSchema', () => {
     expect(parseVolumeGridParams(new URLSearchParams('forwardSchema=foo')).ok).toBe(false)
   })
@@ -94,6 +101,15 @@ describe('computeWindowBounds', () => {
   it('24h: kind=rolling', () => {
     const out = computeWindowBounds('24h', 90, now)
     expect(out.kind).toBe('rolling')
+  })
+
+  it('3m: kind=rolling with a quarter baseline and extended lookback', () => {
+    const out = computeWindowBounds('3m', 90, now)
+    expect(out.kind).toBe('rolling')
+    if (out.kind === 'rolling') {
+      expect(out.windowIdSql).toContain("date_trunc('quarter'")
+      expect(now.getTime() - out.lookbackStart.getTime()).toBeGreaterThan(300 * 86_400_000)
+    }
   })
 })
 

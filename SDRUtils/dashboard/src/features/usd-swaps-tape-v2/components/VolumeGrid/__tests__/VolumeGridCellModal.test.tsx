@@ -44,5 +44,15 @@ describe('VolumeGridCellModal — click-through + empty states', () => {
   it('shows empty states', () => {
     expect(modalSource).toMatch(/No trades in this bucket over the selected range/)
     expect(modalSource).toMatch(/No recent trades for this bucket/)
+    expect(modalSource).toMatch(/No intraday seasonality for this bucket/)
+  })
+})
+
+describe('VolumeGridCellModal intraday seasonality', () => {
+  it('renders a current-vs-average line chart from intradaySeasonality', () => {
+    expect(modalSource).toMatch(/IntradaySeasonalityChart/)
+    expect(modalSource).toMatch(/intradaySeasonality/)
+    expect(modalSource).toMatch(/dataKey="current"/)
+    expect(modalSource).toMatch(/dataKey="average"/)
   })
 })

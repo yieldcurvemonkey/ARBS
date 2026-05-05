@@ -25,6 +25,9 @@ describe('VolumeGridCard — localStorage keys', () => {
   it('uses key for view-mode state', () => {
     expect(cardSource).toMatch(/'usd-tape-v2:volume-grid:view-mode'/)
   })
+  it('uses key for color-mode state', () => {
+    expect(cardSource).toMatch(/'usd-tape-v2:volume-grid:color-mode'/)
+  })
 })
 
 describe('VolumeGridCard — toggles', () => {
@@ -32,11 +35,20 @@ describe('VolumeGridCard — toggles', () => {
     expect(cardSource).toMatch(/id: 'notional'[\s\S]*Notional/)
     expect(cardSource).toMatch(/id: 'dv01'[\s\S]*DV01/)
   })
-  it('exposes Today/1h/24h/1w period options', () => {
+  it('exposes Today/1h/24h/1w/2w/3w/1m/3m period options', () => {
     expect(cardSource).toMatch(/id: 'today'[\s\S]*Today/)
     expect(cardSource).toMatch(/id: '1h'/)
     expect(cardSource).toMatch(/id: '24h'/)
     expect(cardSource).toMatch(/id: '1w'/)
+    expect(cardSource).toMatch(/id: '2w'/)
+    expect(cardSource).toMatch(/id: '3w'/)
+    expect(cardSource).toMatch(/id: '1m'/)
+    expect(cardSource).toMatch(/id: '3m'/)
+  })
+  it('exposes Activity/Grid color mode options', () => {
+    expect(cardSource).toMatch(/COLOR_MODE_LABELS/)
+    expect(cardSource).toMatch(/activity:\s*'Activity'/)
+    expect(cardSource).toMatch(/grid:\s*'Grid'/)
   })
 })
 
@@ -48,7 +60,7 @@ describe('VolumeGridCard — defaults', () => {
     expect(cardSource).toMatch(/readEnum<VolumeMetric>\([^)]*'notional'\)/)
   })
   it('defaults period to today', () => {
-    expect(cardSource).toMatch(/readEnum<VolumePeriod>\([^)]*'today'\)/)
+    expect(cardSource).toMatch(/readEnum<VolumePeriod>\([\s\S]*'today'[\s\S]*\)/)
   })
   it('defaults forward schema to default', () => {
     expect(cardSource).toMatch(/readEnum<ForwardSchemaId>\([^)]*'default'\)/)
@@ -79,6 +91,9 @@ describe('VolumeGridCard — exposes axis dropdowns', () => {
   })
   it('renders a View mode select', () => {
     expect(cardSource).toMatch(/aria-label="View mode"/)
+  })
+  it('passes colorMode to VolumeGrid', () => {
+    expect(cardSource).toMatch(/colorMode=\{colorMode\}/)
   })
 })
 

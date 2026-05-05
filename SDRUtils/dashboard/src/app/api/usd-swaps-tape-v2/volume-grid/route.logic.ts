@@ -50,7 +50,16 @@ export type ParseResult<T> =
   | { ok: false; error: string }
 
 const VALID_METRICS: ReadonlySet<VolumeMetric> = new Set(['notional', 'dv01'])
-const VALID_PERIODS: ReadonlySet<VolumePeriod> = new Set(['today', '1h', '24h', '1w'])
+const VALID_PERIODS: ReadonlySet<VolumePeriod> = new Set([
+  'today',
+  '1h',
+  '24h',
+  '1w',
+  '2w',
+  '3w',
+  '1m',
+  '3m',
+])
 const VALID_FORWARD_SCHEMAS: ReadonlySet<ForwardSchemaId> = new Set(FORWARD_SCHEMA_IDS)
 const VALID_TENOR_SCHEMAS: ReadonlySet<TenorSchemaId> = new Set(TENOR_SCHEMA_IDS)
 const VALID_PACKAGE_GROUPS: ReadonlySet<PackageTypeGroupId> = new Set(PACKAGE_TYPE_GROUP_IDS)
@@ -125,6 +134,22 @@ const ONE_HOUR_MS = 60 * 60 * 1000
 const ONE_DAY_MS = 24 * ONE_HOUR_MS
 const ONE_HOUR_S = 60 * 60
 
+function rollingBounds(
+  now: Date,
+  lookbackDays: number,
+  windowDays: number,
+  windowIdSql: string,
+): Extract<WindowBounds, { kind: 'rolling' }> {
+  const effectiveLookbackDays = Math.max(lookbackDays, windowDays * 4)
+  return {
+    kind: 'rolling',
+    lookbackStart: new Date(now.getTime() - effectiveLookbackDays * ONE_DAY_MS),
+    lookbackEnd: now,
+    currentStart: new Date(now.getTime() - windowDays * ONE_DAY_MS),
+    windowIdSql,
+  }
+}
+
 export function timeOfDayInEt(now: Date): { dateEt: string; todSeconds: number } {
   const fmt = new Intl.DateTimeFormat('en-CA', {
     timeZone: 'America/New_York',
@@ -176,20 +201,52 @@ export function computeWindowBounds(
       }
     }
     case '24h': {
-      const lookbackStart = new Date(now.getTime() - lookbackDays * ONE_DAY_MS)
-      return {
-        kind: 'rolling', lookbackStart, lookbackEnd,
-        currentStart: new Date(now.getTime() - 24 * ONE_HOUR_MS),
-        windowIdSql: `date_trunc('day', ts AT TIME ZONE 'America/New_York')`,
-      }
+      return rollingBounds(
+        now,
+        lookbackDays,
+        1,
+        `date_trunc('day', ts AT TIME ZONE 'America/New_York')`,
+      )
     }
     case '1w': {
-      const lookbackStart = new Date(now.getTime() - 52 * 7 * ONE_DAY_MS)
-      return {
-        kind: 'rolling', lookbackStart, lookbackEnd,
-        currentStart: new Date(now.getTime() - 7 * ONE_DAY_MS),
-        windowIdSql: `date_trunc('week', ts AT TIME ZONE 'America/New_York')`,
-      }
+      return rollingBounds(
+        now,
+        Math.max(lookbackDays, 52 * 7),
+        7,
+        `date_trunc('week', ts AT TIME ZONE 'America/New_York')`,
+      )
+    }
+    case '2w': {
+      return rollingBounds(
+        now,
+        lookbackDays,
+        14,
+        `floor(EXTRACT(EPOCH FROM (ts - $1::timestamptz)) / ${14 * 24 * 3600})`,
+      )
+    }
+    case '3w': {
+      return rollingBounds(
+        now,
+        lookbackDays,
+        21,
+        `floor(EXTRACT(EPOCH FROM (ts - $1::timestamptz)) / ${21 * 24 * 3600})`,
+      )
+    }
+    case '1m': {
+      return rollingBounds(
+        now,
+        lookbackDays,
+        30,
+        `date_trunc('month', ts AT TIME ZONE 'America/New_York')`,
+      )
+    }
+    case '3m': {
+      return rollingBounds(
+        now,
+        lookbackDays,
+        90,
+        `date_trunc('quarter', ts AT TIME ZONE 'America/New_York')`,
+      )
     }
   }
 }

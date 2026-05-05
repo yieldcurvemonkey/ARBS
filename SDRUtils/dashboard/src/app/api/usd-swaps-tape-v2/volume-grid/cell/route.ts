@@ -12,10 +12,15 @@ import {
   resolveTenorSchema,
 } from '@/lib/usd-swaps-tape-v2/volumeGridBuckets'
 import {
+  buildIntradaySeasonalitySql,
   buildRecentTradesSql,
   buildTimeseriesSql,
+  easternDateKey,
+  INTRADAY_SEASONALITY_BUCKET_MINUTES,
   parseVolumeGridCellParams,
   rangeToStartDate,
+  shapeIntradaySeasonalityResponse,
+  type RawIntradaySeasonalityRow,
 } from './route.logic'
 import type {
   VolumeGridCellResponse,
@@ -80,6 +85,25 @@ export async function GET(request: Request) {
     schemaExtraFilterSql: combinedExtra || undefined,
     limitParam: `$${limitParamIndex}`,
   })
+  const intradayPredicate = buildBucketPredicate(
+    'l',
+    forwardSchema,
+    tenorSchema,
+    p.fwd,
+    p.tenor,
+    4,
+  )
+  const intradayPkgFilter = buildPackageTypeFilter(
+    p.packageType,
+    'p',
+    4 + intradayPredicate.params.length,
+  )
+  const intradaySql = buildIntradaySeasonalitySql({
+    metric: p.metric,
+    bucketPredicateSql: intradayPredicate.sql,
+    packageFilterSql: intradayPkgFilter.sql,
+    schemaExtraFilterSql: combinedExtra || undefined,
+  })
 
   try {
     const tsParams = [rangeStart.toISOString(), ...predicate.params, ...pkgFilter.params]
@@ -89,10 +113,18 @@ export async function GET(request: Request) {
       ...pkgFilter.params,
       p.recentLimit,
     ]
+    const intradayParams = [
+      easternDateKey(now),
+      rangeStart.toISOString(),
+      INTRADAY_SEASONALITY_BUCKET_MINUTES,
+      ...intradayPredicate.params,
+      ...intradayPkgFilter.params,
+    ]
 
-    const [tsResult, tradesResult] = await Promise.all([
+    const [tsResult, tradesResult, intradayResult] = await Promise.all([
       query<Record<string, unknown>>(tsSql, tsParams),
       query<Record<string, unknown>>(tradesSql, tradesParams),
+      query<RawIntradaySeasonalityRow>(intradaySql, intradayParams),
     ])
 
     const timeseries: VolumeGridCellTimeseriesPoint[] = tsResult.rows.map((r) => ({
@@ -125,6 +157,10 @@ export async function GET(request: Request) {
       tenorSchema: p.tenorSchema,
       packageType: p.packageType,
       timeseries,
+      intradaySeasonality: shapeIntradaySeasonalityResponse(
+        intradayResult.rows,
+        INTRADAY_SEASONALITY_BUCKET_MINUTES,
+      ),
       recentTrades,
     }
     const etag = computeEtag(payload)

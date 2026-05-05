@@ -1,9 +1,12 @@
 import { describe, expect, it } from '@jest/globals'
 import {
   parseVolumeGridCellParams,
+  buildIntradaySeasonalitySql,
   buildTimeseriesSql,
   buildRecentTradesSql,
+  easternDateKey,
   rangeToStartDate,
+  shapeIntradaySeasonalityResponse,
 } from '../route.logic'
 
 describe('parseVolumeGridCellParams', () => {
@@ -83,6 +86,55 @@ describe('buildTimeseriesSql', () => {
     expect(sql).toContain('AND l.forward_start_years < 1')
     expect(sql).toContain('AND p.package_type IN ($2)')
     expect(sql).toContain('GROUP BY day')
+  })
+})
+
+describe('buildIntradaySeasonalitySql', () => {
+  it('builds a current-vs-baseline cumulative intraday profile query', () => {
+    const sql = buildIntradaySeasonalitySql({
+      metric: 'dv01',
+      bucketPredicateSql: 'l.forward_start_years < $4',
+      packageFilterSql: 'p.package_type IN ($5)',
+    })
+    expect(sql).toContain('generate_series')
+    expect(sql).toContain('JOIN arbs_usd_swap_tape_packages_v2 p ON p.package_id = l.package_id')
+    expect(sql).toContain('baseline_cumulative')
+    expect(sql).toContain('current_cumulative')
+    expect(sql).toContain('SUM(dv01)')
+  })
+})
+
+describe('shapeIntradaySeasonalityResponse', () => {
+  it('nulls current points after the current as-of bucket and keeps the average line', () => {
+    const out = shapeIntradaySeasonalityResponse([
+      {
+        bucket_index: 0,
+        minute_of_day: 30,
+        current_value: 10,
+        average_value: 8,
+        observed_days: 5,
+        as_of_ts: '2026-05-05T13:05:00Z',
+      },
+      {
+        bucket_index: 30,
+        minute_of_day: 930,
+        current_value: 20,
+        average_value: 18,
+        observed_days: 5,
+        as_of_ts: '2026-05-05T13:05:00Z',
+      },
+    ])
+    expect(out.bucketMinutes).toBe(1)
+    expect(out.observedDays).toBe(5)
+    expect(out.asOf).toBe('2026-05-05T13:05:00.000Z')
+    expect(out.points[0]).toMatchObject({ minuteOfDay: 30, current: 10, average: 8 })
+    expect(out.points[1]).toMatchObject({ minuteOfDay: 930, current: null, average: 18 })
+  })
+})
+
+describe('easternDateKey', () => {
+  it('formats dates in America/New_York', () => {
+    expect(easternDateKey(new Date('2026-05-05T03:30:00Z'))).toBe('2026-05-04')
   })
 })
 

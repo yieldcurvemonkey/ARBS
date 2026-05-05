@@ -8,9 +8,10 @@ import type {
 } from '@/lib/usd-swaps-tape-v2/volumeGridBuckets'
 
 export type VolumeMetric = 'notional' | 'dv01'
-export type VolumePeriod = 'today' | '1h' | '24h' | '1w'
+export type VolumePeriod = 'today' | '1h' | '24h' | '1w' | '2w' | '3w' | '1m' | '3m'
 export type VolumeCellRange = '1M' | '3M' | '6M' | '1Y'
 export type VolumeGridViewMode = 'volume' | 'idb_custy'
+export type VolumeGridColorMode = 'activity' | 'grid'
 
 export interface VolumeGridBaseline {
   p25: number
@@ -70,6 +71,21 @@ export interface VolumeGridCellTimeseriesPoint {
   custyCount: number
 }
 
+export interface VolumeGridIntradaySeasonalityPoint {
+  minuteOfDay: number
+  time: string
+  current: number | null
+  average: number | null
+}
+
+export interface VolumeGridIntradaySeasonality {
+  bucketMinutes: number
+  observedDays: number
+  asOf: string | null
+  asOfMinuteOfDay: number | null
+  points: VolumeGridIntradaySeasonalityPoint[]
+}
+
 export interface VolumeGridCellRecentTrade {
   package_id: string
   execution_start: string
@@ -91,5 +107,6 @@ export interface VolumeGridCellResponse {
   tenorSchema: TenorSchemaId
   packageType: PackageTypeGroupId
   timeseries: VolumeGridCellTimeseriesPoint[]
+  intradaySeasonality: VolumeGridIntradaySeasonality
   recentTrades: VolumeGridCellRecentTrade[]
 }

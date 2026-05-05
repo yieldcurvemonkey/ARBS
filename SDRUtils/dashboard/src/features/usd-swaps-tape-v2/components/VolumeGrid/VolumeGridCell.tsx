@@ -8,7 +8,7 @@
 import type { JSX } from 'react'
 import { colorForPercentile, foregroundForPercentile } from './colorRamp'
 import type {
-  VolumeGridCell as Cell, VolumeGridViewMode, VolumeMetric, VolumePeriod,
+  VolumeGridCell as Cell, VolumeGridColorMode, VolumeGridViewMode, VolumeMetric, VolumePeriod,
   VolumeGridSchemaAxis,
 } from '../../types/volume-grid.types'
 import { lookupLabel } from './buckets'
@@ -28,6 +28,8 @@ export interface VolumeGridCellProps {
   metric: VolumeMetric
   period: VolumePeriod
   viewMode: VolumeGridViewMode
+  colorMode?: VolumeGridColorMode
+  colorPercentile?: number | null
   forwardAxis?: VolumeGridSchemaAxis
   tenorAxis?: VolumeGridSchemaAxis
   onClick: (id: { fwd: string; tenor: string }) => void
@@ -39,6 +41,10 @@ function comparisonForPeriod(period: VolumePeriod): string {
     case '1h':    return 'vs prior days in the same 1h slot ET'
     case '24h':   return 'vs rolling 24h windows in lookback'
     case '1w':    return 'vs prior weeks in lookback'
+    case '2w':    return 'vs prior 2w windows in lookback'
+    case '3w':    return 'vs prior 3w windows in lookback'
+    case '1m':    return 'vs prior months in lookback'
+    case '3m':    return 'vs prior quarters in lookback'
   }
 }
 
@@ -50,11 +56,13 @@ function safeShare(part: number, total: number): number {
 }
 
 export function VolumeGridCell({
-  cell, metric, period, viewMode, forwardAxis, tenorAxis, onClick,
+  cell, metric, period, viewMode, colorMode = 'activity', colorPercentile, forwardAxis, tenorAxis, onClick,
 }: VolumeGridCellProps): JSX.Element {
-  const isEmpty = cell.tradeCount === 0 || cell.percentile == null
-  const bg = isEmpty ? 'transparent' : colorForPercentile(cell.percentile)
-  const fg = foregroundForPercentile(cell.percentile)
+  const isEmpty = cell.tradeCount === 0
+  const heatmapPercentile =
+    colorMode === 'grid' ? colorPercentile : cell.percentile
+  const bg = isEmpty ? 'transparent' : colorForPercentile(heatmapPercentile ?? null)
+  const fg = foregroundForPercentile(heatmapPercentile ?? null)
   const comparison = comparisonForPeriod(period)
   const fwdLabelText = lookupLabel(forwardAxis, cell.fwd)
   const tenorLabelText = lookupLabel(tenorAxis, cell.tenor)
@@ -63,10 +71,16 @@ export function VolumeGridCell({
   const idbPct = Math.round(idbShare * 100)
   const custyPct = Math.round(custyShare * 100)
   const splitNote = `IDB ${fmtCompact(cell.idbCurrent, metric)} (${idbPct}%) / CUSTY ${fmtCompact(cell.custyCurrent, metric)} (${custyPct}%)`
-  const label = `${fwdLabelText} x ${tenorLabelText} — ${fmtCompact(cell.current, metric)} ${metric}, ${cell.percentile == null ? 'no history' : `${Math.round(cell.percentile)}th percentile ${comparison}`}; ${splitNote}`
+  const colorLabel =
+    colorMode === 'grid'
+      ? `${Math.round(colorPercentile ?? 0)}% of max visible bucket`
+      : cell.percentile == null
+        ? 'no history'
+        : `${Math.round(cell.percentile)}th percentile ${comparison}`
+  const label = `${fwdLabelText} x ${tenorLabelText} — ${fmtCompact(cell.current, metric)} ${metric}, ${colorLabel}; ${splitNote}`
   const tooltip = isEmpty
     ? 'No trades in this bucket for the current window'
-    : `${fmtCompact(cell.current, metric)} ${metric} (${cell.tradeCount} trades, ${period}) | ${comparison} P25=${fmtCompact(cell.baseline.p25, metric)} P50=${fmtCompact(cell.baseline.p50, metric)} P75=${fmtCompact(cell.baseline.p75, metric)} min=${fmtCompact(cell.baseline.min, metric)} max=${fmtCompact(cell.baseline.max, metric)} (n=${cell.baseline.n}) | ${splitNote}`
+    : `${fmtCompact(cell.current, metric)} ${metric} (${cell.tradeCount} trades, ${period}) | color: ${colorLabel} | ${comparison} P25=${fmtCompact(cell.baseline.p25, metric)} P50=${fmtCompact(cell.baseline.p50, metric)} P75=${fmtCompact(cell.baseline.p75, metric)} min=${fmtCompact(cell.baseline.min, metric)} max=${fmtCompact(cell.baseline.max, metric)} (n=${cell.baseline.n}) | ${splitNote}`
   const isSplitView = viewMode === 'idb_custy'
   return (
     <button
@@ -108,7 +122,13 @@ export function VolumeGridCell({
       ) : (
         <>
           <span className="tabular-nums">{fmtCompact(cell.current, metric)}</span>
-          <span className="text-[9.5px] text-slate-400">P{Math.round(cell.percentile ?? 0)}</span>
+          <span className="text-[9.5px] text-slate-400">
+            {colorMode === 'grid'
+              ? `G${Math.round(colorPercentile ?? 0)}`
+              : cell.percentile == null
+                ? 'P-'
+                : `P${Math.round(cell.percentile)}`}
+          </span>
         </>
       )}
     </button>

@@ -65,7 +65,7 @@ const fixture: VolumeGridResponse = {
 describe('<VolumeGrid>', () => {
   it('renders 8 forward + 1 total row labels and 16 + 1 tenor col labels', () => {
     const html = renderToStaticMarkup(
-      <VolumeGrid data={fixture} metric="notional" period="today" viewMode="volume" onCellClick={() => {}} />,
+      <VolumeGrid data={fixture} metric="notional" period="today" viewMode="volume" colorMode="activity" onCellClick={() => {}} />,
     )
     const rowLabelMatches = html.match(/data-testid="volume-grid-row-label"/g) ?? []
     const colLabelMatches = html.match(/data-testid="volume-grid-col-label"/g) ?? []
@@ -77,7 +77,7 @@ describe('<VolumeGrid>', () => {
 
   it('renders the populated 1.0B cell with the correct percentile badge', () => {
     const html = renderToStaticMarkup(
-      <VolumeGrid data={fixture} metric="notional" period="today" viewMode="volume" onCellClick={() => {}} />,
+      <VolumeGrid data={fixture} metric="notional" period="today" viewMode="volume" colorMode="activity" onCellClick={() => {}} />,
     )
     expect(html).toMatch(/1\.0B/)
     expect(html).toMatch(/P88/)
@@ -85,9 +85,17 @@ describe('<VolumeGrid>', () => {
 
   it('renders all tenor labels from axes payload', () => {
     const html = renderToStaticMarkup(
-      <VolumeGrid data={fixture} metric="notional" period="today" viewMode="volume" onCellClick={() => {}} />,
+      <VolumeGrid data={fixture} metric="notional" period="today" viewMode="volume" colorMode="activity" onCellClick={() => {}} />,
     )
     expect(html).toMatch(/>1M-3M</)
     expect(html).toMatch(/>30Y\+</)
+  })
+
+  it('can color buckets by cross-sectional grid intensity', () => {
+    const html = renderToStaticMarkup(
+      <VolumeGrid data={fixture} metric="notional" period="today" viewMode="volume" colorMode="grid" onCellClick={() => {}} />,
+    )
+    expect(html).toMatch(/G100/)
+    expect(html).toMatch(/max visible bucket/)
   })
 })

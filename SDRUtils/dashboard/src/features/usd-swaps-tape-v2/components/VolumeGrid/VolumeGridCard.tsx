@@ -9,6 +9,7 @@ import { VolumeGrid } from './VolumeGrid'
 import { VolumeGridCellModal } from './VolumeGridCellModal'
 import { useVolumeGrid } from '../../hooks/useVolumeGrid'
 import type {
+  VolumeGridColorMode,
   VolumeGridViewMode,
   VolumeMetric, VolumePeriod,
   VolumeGridCell as Cell,
@@ -30,11 +31,17 @@ const KEY_FWD_SCHEMA  = 'usd-tape-v2:volume-grid:forward-schema'
 const KEY_TENOR_SCHEMA = 'usd-tape-v2:volume-grid:tenor-schema'
 const KEY_PACKAGE_TYPE = 'usd-tape-v2:volume-grid:package-type'
 const KEY_VIEW_MODE = 'usd-tape-v2:volume-grid:view-mode'
+const KEY_COLOR_MODE = 'usd-tape-v2:volume-grid:color-mode'
 
 const VIEW_MODE_IDS: ReadonlyArray<VolumeGridViewMode> = ['volume', 'idb_custy']
 const VIEW_MODE_LABELS: Record<VolumeGridViewMode, string> = {
   volume: 'Volume',
   idb_custy: 'IDB / CUSTY',
+}
+const COLOR_MODE_IDS: ReadonlyArray<VolumeGridColorMode> = ['activity', 'grid']
+const COLOR_MODE_LABELS: Record<VolumeGridColorMode, string> = {
+  activity: 'Activity',
+  grid: 'Grid',
 }
 
 const FORWARD_SCHEMA_LABELS: Record<ForwardSchemaId, string> = {
@@ -70,7 +77,11 @@ export function VolumeGridCard({ onSelectPackage }: VolumeGridCardProps): JSX.El
     readEnum<VolumeMetric>(KEY_METRIC, ['notional', 'dv01'], 'notional'),
   )
   const [period, setPeriod] = useState<VolumePeriod>(() =>
-    readEnum<VolumePeriod>(KEY_PERIOD, ['today', '1h', '24h', '1w'], 'today'),
+    readEnum<VolumePeriod>(
+      KEY_PERIOD,
+      ['today', '1h', '24h', '1w', '2w', '3w', '1m', '3m'],
+      'today',
+    ),
   )
   const [forwardSchema, setForwardSchema] = useState<ForwardSchemaId>(() =>
     readEnum<ForwardSchemaId>(KEY_FWD_SCHEMA, FORWARD_SCHEMA_IDS, 'default'),
@@ -83,6 +94,9 @@ export function VolumeGridCard({ onSelectPackage }: VolumeGridCardProps): JSX.El
   )
   const [viewMode, setViewMode] = useState<VolumeGridViewMode>(() =>
     readEnum<VolumeGridViewMode>(KEY_VIEW_MODE, VIEW_MODE_IDS, 'volume'),
+  )
+  const [colorMode, setColorMode] = useState<VolumeGridColorMode>(() =>
+    readEnum<VolumeGridColorMode>(KEY_COLOR_MODE, COLOR_MODE_IDS, 'activity'),
   )
   const [selectedCell, setSelectedCell] = useState<{ fwd: string; tenor: string } | null>(null)
 
@@ -114,6 +128,10 @@ export function VolumeGridCard({ onSelectPackage }: VolumeGridCardProps): JSX.El
     if (typeof window === 'undefined') return
     window.localStorage.setItem(KEY_VIEW_MODE, viewMode)
   }, [viewMode])
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    window.localStorage.setItem(KEY_COLOR_MODE, colorMode)
+  }, [colorMode])
 
   const grid = useVolumeGrid({
     metric, period, collapsed,
@@ -153,9 +171,21 @@ export function VolumeGridCard({ onSelectPackage }: VolumeGridCardProps): JSX.El
             { id: '1h', label: '1h' },
             { id: '24h', label: '24h' },
             { id: '1w', label: '1w' },
+            { id: '2w', label: '2w' },
+            { id: '3w', label: '3w' },
+            { id: '1m', label: '1m' },
+            { id: '3m', label: '3m' },
           ]}
           value={period}
           onChange={setPeriod}
+        />
+        <Toggle
+          options={COLOR_MODE_IDS.map((id) => ({
+            id,
+            label: COLOR_MODE_LABELS[id],
+          }))}
+          value={colorMode}
+          onChange={setColorMode}
         />
         <Select
           aria-label="Package type"
@@ -221,6 +251,7 @@ export function VolumeGridCard({ onSelectPackage }: VolumeGridCardProps): JSX.El
               metric={metric}
               period={period}
               viewMode={viewMode}
+              colorMode={colorMode}
               onCellClick={onCellClick}
             />
           ) : (
