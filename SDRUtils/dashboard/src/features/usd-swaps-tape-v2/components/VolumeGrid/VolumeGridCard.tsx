@@ -6,6 +6,7 @@
 import type { JSX } from 'react'
 import { useCallback, useEffect, useState } from 'react'
 import { VolumeGrid } from './VolumeGrid'
+import { VolumeGridCellModal } from './VolumeGridCellModal'
 import { useVolumeGrid } from '../../hooks/useVolumeGrid'
 import type {
   VolumeMetric, VolumePeriod,
@@ -63,10 +64,6 @@ export function VolumeGridCard({ onSelectPackage }: VolumeGridCardProps): JSX.El
   const asOf = grid.data?.asOf
     ? new Date(grid.data.asOf).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', timeZone: 'America/New_York' })
     : null
-
-  // selectedCell + onSelectPackage are wired to the modal in a later task.
-  void onSelectPackage
-  void selectedCell
 
   return (
     <section
@@ -131,6 +128,12 @@ export function VolumeGridCard({ onSelectPackage }: VolumeGridCardProps): JSX.El
           )}
         </div>
       )}
+      <VolumeGridCellModal
+        cell={selectedCell}
+        metric={metric}
+        onClose={() => setSelectedCell(null)}
+        onSelectPackage={onSelectPackage}
+      />
     </section>
   )
 }
