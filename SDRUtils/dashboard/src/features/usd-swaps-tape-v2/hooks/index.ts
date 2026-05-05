@@ -39,3 +39,13 @@ export type {
   SequencePerTradeEntry,
   UseAnalyticsSequenceReturn,
 } from './useAnalyticsSequence'
+export { useVolumeGrid, buildVolumeGridUrl } from './useVolumeGrid'
+export type {
+  UseVolumeGridArgs,
+  UseVolumeGridReturn,
+} from './useVolumeGrid'
+export { useVolumeGridCell, buildVolumeGridCellUrl } from './useVolumeGridCell'
+export type {
+  UseVolumeGridCellArgs,
+  UseVolumeGridCellReturn,
+} from './useVolumeGridCell'

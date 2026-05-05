@@ -2,7 +2,8 @@
 // ABOUTME: Main orchestrator for the USD swap tape v2 feature.
 import type { JSX } from 'react'
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { PrimeReactProvider } from 'primereact/api'
+import { usePathname, useRouter, useSearchParams } from 'next/navigation'
+import { FilterMatchMode, PrimeReactProvider } from 'primereact/api'
 import 'primereact/resources/themes/lara-dark-indigo/theme.css'
 import 'primereact/resources/primereact.min.css'
 import 'primeicons/primeicons.css'
@@ -12,6 +13,7 @@ import 'primeicons/primeicons.css'
 import { TradeTapeTable } from './TradeTapeTable/TradeTapeTable'
 import { ManualLinksDialog } from './ManualLinksDialog/ManualLinksDialog'
 import { AnalyticsPanel } from './AnalyticsPanel'
+import { VolumeGridCard } from './VolumeGrid/VolumeGridCard'
 import { groupLinkedRows } from '@/lib/manual-links-ui/grouping'
 import { ManualLinkDetailModal } from '@/lib/manual-links-ui/components/ManualLinkDetailModal'
 import { TAPE_V2_API_BASE } from '../constants'
@@ -43,6 +45,7 @@ import {
   useRowSelection,
   useTradeTapeData,
 } from '../hooks'
+import { COLUMN_FILTER_QUERY_KEY } from '../hooks/useColumnFilters'
 import { normalizeFocusedTrade } from '../hooks/useFocusedTrade'
 
 type ModalName = 'links' | null
@@ -60,6 +63,23 @@ export default function UsdSwapsTradeTape(): JSX.Element {
   const [adminPassword, setAdminPassword] = useState('')
   const [savedUser, setSavedUser] = useSavedUser()
   const focus = useFocusedTrade()
+
+  // Volume-grid modal click-through: writes a package_id URL filter so
+  // the tape narrows to the clicked package. Mirrors the AnalyticsPanel
+  // onBinBrush pattern.
+  const router = useRouter()
+  const pathname = usePathname()
+  const searchParams = useSearchParams()
+  const onSelectPackageFromGrid = useCallback((packageId: string) => {
+    const next = new URLSearchParams(searchParams?.toString() ?? '')
+    next.set(
+      COLUMN_FILTER_QUERY_KEY,
+      JSON.stringify({
+        package_id: { value: packageId, matchMode: FilterMatchMode.EQUALS },
+      }),
+    )
+    router.replace(`${pathname}?${next.toString()}`, { scroll: false })
+  }, [pathname, router, searchParams])
 
   const handleOpenManualLink = useCallback((linkId: string) => {
     setDetailLinkId(linkId)
@@ -113,6 +133,7 @@ export default function UsdSwapsTradeTape(): JSX.Element {
   return (
     <PrimeReactProvider>
       <div className="usd-swaps-tape-shell flex h-full min-h-0 flex-col bg-slate-950 text-slate-100 pb-12">
+        <VolumeGridCard onSelectPackage={onSelectPackageFromGrid} />
         <div className="flex flex-1 min-h-0 overflow-hidden">
           <TradeTapeTable
             rows={groupedRows}
