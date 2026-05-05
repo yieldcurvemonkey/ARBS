@@ -81,3 +81,74 @@ def test_option_leg_is_frozen():
     )
     with pytest.raises(Exception):
         leg.strike = 99.0  # type: ignore[misc]
+
+
+def test_candidate_def_id_uniqueness_and_legs_are_tuple():
+    from RVUtils.STIRAsymmetricScreener._types import (
+        ArchetypeType,
+        CandidateDef,
+        OptionLeg,
+    )
+
+    leg1 = OptionLeg(
+        contract="SFRU6",
+        expiry=datetime.date(2026, 9, 11),
+        right="P",
+        strike=96.50,
+        quantity=1,
+    )
+    leg2 = OptionLeg(
+        contract="SFRU6",
+        expiry=datetime.date(2026, 9, 11),
+        right="P",
+        strike=96.25,
+        quantity=-1,
+    )
+    cdef_a = CandidateDef.from_components(
+        archetype=ArchetypeType.WIDE_VERTICAL,
+        underlying="SFRU6",
+        expiry=datetime.date(2026, 9, 11),
+        legs=(leg1, leg2),
+    )
+    cdef_b = CandidateDef.from_components(
+        archetype=ArchetypeType.WIDE_VERTICAL,
+        underlying="SFRU6",
+        expiry=datetime.date(2026, 9, 11),
+        legs=(leg1,),
+    )
+    assert cdef_a.candidate_id != cdef_b.candidate_id
+    assert isinstance(cdef_a.legs, tuple)
+    # candidate_id is deterministic
+    cdef_c = CandidateDef.from_components(
+        archetype=ArchetypeType.WIDE_VERTICAL,
+        underlying="SFRU6",
+        expiry=datetime.date(2026, 9, 11),
+        legs=(leg1, leg2),
+    )
+    assert cdef_a.candidate_id == cdef_c.candidate_id
+
+
+def test_candidate_def_wing_id_format():
+    from RVUtils.STIRAsymmetricScreener._types import (
+        ArchetypeType,
+        CandidateDef,
+        OptionLeg,
+    )
+
+    leg = OptionLeg(
+        contract="SFRU6",
+        expiry=datetime.date(2026, 9, 11),
+        right="P",
+        strike=96.50,
+        quantity=1,
+    )
+    cdef = CandidateDef.from_components(
+        archetype=ArchetypeType.WING,
+        underlying="SFRU6",
+        expiry=datetime.date(2026, 9, 11),
+        legs=(leg,),
+    )
+    # underlying, expiry ISO, archetype, leg description should all be encoded
+    assert "SFRU6" in cdef.candidate_id
+    assert "2026-09-11" in cdef.candidate_id
+    assert "WING" in cdef.candidate_id

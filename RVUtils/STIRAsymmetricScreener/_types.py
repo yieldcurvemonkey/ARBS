@@ -74,3 +74,74 @@ class OptionLeg:
             "bid": self.bid,
             "ask": self.ask,
         }
+
+
+def _strike_token(strike: float) -> str:
+    """Convert a strike (price space) to a stable token usable in IDs."""
+    # 4 decimal places handles 6.25bp grid (e.g. 96.4375); strip trailing zeros
+    return f"{strike:.4f}".rstrip("0").rstrip(".")
+
+
+def _legs_token(legs: Tuple["OptionLeg", ...]) -> str:
+    parts = []
+    # canonical ordering by (right, strike, quantity) so identical structures
+    # collide on the same id even if enumerated in different orders
+    sorted_legs = sorted(legs, key=lambda l: (l.right, l.strike, l.quantity))
+    for leg in sorted_legs:
+        sign = "+" if leg.quantity >= 0 else "-"
+        parts.append(
+            f"{sign}{abs(leg.quantity)}{leg.right}{_strike_token(leg.strike)}"
+        )
+    return "_".join(parts)
+
+
+@dataclass(frozen=True)
+class CandidateDef:
+    """Immutable definition of a candidate trade, prior to any computation.
+
+    ``candidate_id`` is a deterministic string built from
+    (underlying, expiry, archetype, legs). Use ``from_components`` to
+    construct — ID generation lives there so callers don't have to think.
+    """
+
+    archetype: ArchetypeType
+    underlying: str
+    expiry: datetime.date
+    legs: Tuple[OptionLeg, ...]
+    candidate_id: str
+
+    @classmethod
+    def from_components(
+        cls,
+        *,
+        archetype: ArchetypeType,
+        underlying: str,
+        expiry: datetime.date,
+        legs: Tuple[OptionLeg, ...],
+    ) -> "CandidateDef":
+        if not isinstance(legs, tuple):
+            legs = tuple(legs)
+        cid = "_".join(
+            [
+                underlying,
+                expiry.isoformat(),
+                archetype.name,
+                _legs_token(legs),
+            ]
+        )
+        return cls(
+            archetype=archetype,
+            underlying=underlying,
+            expiry=expiry,
+            legs=legs,
+            candidate_id=cid,
+        )
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "archetype": self.archetype.value,
+            "underlying": self.underlying,
+            "expiry": self.expiry.isoformat(),
+            "candidate_id": self.candidate_id,
+            "legs": [leg.to_dict() for leg in self.legs],
+        }
