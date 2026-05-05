@@ -3,15 +3,11 @@
 // view: intraday payload only fires when the user actually switches to
 // the intraday tab, and daily loads don't re-run on view-only changes.
 //
-// Phase 2 perf hardening:
-//   * AbortController per fetch — when the bucket / range / view swaps
-//     mid-flight, the prior request is cancelled instead of racing to
-//     update state with stale data.
-//   * In-memory result cache keyed by (bucket, view, range) so flipping
-//     between tabs doesn't re-issue the same SQL.
-//   * Cache TTL bound (60s) so traders see fresh prints when polling
-//     bumps an active bucket.
-import { useCallback, useEffect, useRef, useState } from 'react'
+// Phase 5 (analytics-fetching): SWR-backed internals; the bespoke
+// in-memory Map cache + AbortController scaffolding is gone — caching
+// flows through SwrFetcher (ETag, 304 reuse) and the route LRU.
+import { useCallback, useMemo } from 'react'
+import useSWR from 'swr'
 import { TAPE_V2_API_BASE } from '../constants'
 import type {
   AnalyticsGroupBy,
@@ -20,6 +16,7 @@ import type {
   FocusedTrade,
   TimeseriesPointAug,
 } from '../components/AnalyticsPanel/analytics-types'
+import { timeseriesKey } from '@/lib/usd-swaps-tape-v2/analyticsCacheKeys'
 
 export interface UseAnalyticsTimeseriesReturn {
   dailyClose: TimeseriesPointAug[]
@@ -28,11 +25,6 @@ export interface UseAnalyticsTimeseriesReturn {
   error: string | null
   pickForView: (view: AnalyticsViewKey) => TimeseriesPointAug[]
   refetch: () => void
-}
-
-type CacheEntry = {
-  points: TimeseriesPointAug[]
-  fetchedAt: number
 }
 
 export type AnalyticsTimeseriesOptions = {
@@ -46,24 +38,11 @@ export type AnalyticsTimeseriesOptions = {
   groupValueOverride?: string | null
 }
 
-const RESULT_CACHE_TTL_MS = 60_000
-const resultCache = new Map<string, CacheEntry>()
-
-function cacheKey(
-  bucket: string,
-  view: 'INTRADAY' | 'DAILY_CLOSE',
-  range: AnalyticsRangeKey,
-  opts: AnalyticsTimeseriesOptions = {},
-): string {
-  return [
-    bucket,
-    view,
-    range,
-    opts.useGrossDv01 ? 'gross' : 'net',
-    opts.excludeLargeCusty === false ? 'raw-custy' : 'clean-custy',
-    opts.groupBy ?? 'tape_label',
-    opts.groupValueOverride ?? '',
-  ].join('::')
+interface TimeseriesResponse {
+  points?: TimeseriesPointAug[]
+  count?: number
+  view?: string
+  range?: string
 }
 
 function buildAnalyticsTimeseriesQuery(
@@ -87,27 +66,14 @@ function buildAnalyticsTimeseriesQuery(
   })
 }
 
-async function fetchSeries(
+export function buildTimeseriesUrl(
   bucket: string,
   view: 'INTRADAY' | 'DAILY_CLOSE',
   range: AnalyticsRangeKey,
-  opts: AnalyticsTimeseriesOptions,
-  signal: AbortSignal,
-): Promise<TimeseriesPointAug[]> {
-  const key = cacheKey(bucket, view, range, opts)
-  const cached = resultCache.get(key)
-  if (cached && Date.now() - cached.fetchedAt < RESULT_CACHE_TTL_MS) {
-    return cached.points
-  }
+  opts: AnalyticsTimeseriesOptions = {},
+): string {
   const q = buildAnalyticsTimeseriesQuery(bucket, view, range, opts)
-  const res = await fetch(`${TAPE_V2_API_BASE}/analytics-timeseries?${q}`, { signal })
-  if (!res.ok) {
-    throw new Error(`analytics-timeseries ${view} ${res.status}`)
-  }
-  const data = await res.json()
-  const points = (data.points ?? []) as TimeseriesPointAug[]
-  resultCache.set(key, { points, fetchedAt: Date.now() })
-  return points
+  return `${TAPE_V2_API_BASE}/analytics-timeseries?${q.toString()}`
 }
 
 export function useAnalyticsTimeseries(
@@ -116,14 +82,6 @@ export function useAnalyticsTimeseries(
   view: AnalyticsViewKey = 'DAILY_CLOSE',
   opts: AnalyticsTimeseriesOptions = {},
 ): UseAnalyticsTimeseriesReturn {
-  const [dailyClose, setDailyClose] = useState<TimeseriesPointAug[]>([])
-  const [intraday, setIntraday] = useState<TimeseriesPointAug[]>([])
-  const [loading, setLoading] = useState(false)
-  const [error, setError] = useState<string | null>(null)
-
-  const dailyAbortRef = useRef<AbortController | null>(null)
-  const intradayAbortRef = useRef<AbortController | null>(null)
-
   const bucket = focused?.tape_label ?? null
   const needsIntraday = view === 'INTRADAY'
   const useGrossDv01 = Boolean(opts.useGrossDv01)
@@ -131,90 +89,90 @@ export function useAnalyticsTimeseries(
   const groupBy: AnalyticsGroupBy = opts.groupBy ?? 'tape_label'
   const groupValueOverride = opts.groupValueOverride ?? null
 
-  const fetchDaily = useCallback(async () => {
-    if (!bucket || needsIntraday) return
-    dailyAbortRef.current?.abort()
-    const controller = new AbortController()
-    dailyAbortRef.current = controller
-    setLoading(true)
-    setError(null)
-    try {
-      const daily = await fetchSeries(
-        bucket,
-        'DAILY_CLOSE',
-        range,
-        { useGrossDv01, excludeLargeCusty, groupBy, groupValueOverride },
-        controller.signal,
-      )
-      if (controller.signal.aborted) return
-      setDailyClose(daily)
-    } catch (e) {
-      if ((e as { name?: string })?.name === 'AbortError') return
-      setError(e instanceof Error ? e.message : 'analytics-timeseries failed')
-    } finally {
-      if (!controller.signal.aborted) setLoading(false)
-    }
-  }, [bucket, range, needsIntraday, useGrossDv01, excludeLargeCusty, groupBy, groupValueOverride])
+  // Daily: always fetched when bucket is set + view !== INTRADAY.
+  const dailyEnabled = bucket != null && !needsIntraday
+  const dailyKey = useMemo(() => {
+    if (!dailyEnabled) return null
+    return timeseriesKey({
+      bucket: groupValueOverride ?? bucket!,
+      view: 'DAILY_CLOSE',
+      range,
+      groupBy,
+      groupValueOverride,
+      // useGrossDv01 + excludeLargeCusty are dropped from the key by
+      // analyticsCacheKeys.ORTHOGONAL_DISPLAY_OPTIONS so the cache
+      // survives orthogonal-toggle changes.
+      options: { useGrossDv01, excludeLargeCusty },
+    })
+  }, [dailyEnabled, bucket, groupValueOverride, range, groupBy, useGrossDv01, excludeLargeCusty])
 
-  const fetchIntraday = useCallback(async () => {
-    if (!bucket || !needsIntraday) return
-    intradayAbortRef.current?.abort()
-    const controller = new AbortController()
-    intradayAbortRef.current = controller
-    setLoading(true)
-    setError(null)
-    try {
-      const intra = await fetchSeries(
-        bucket,
-        'INTRADAY',
-        '1D',
-        { useGrossDv01, excludeLargeCusty, groupBy, groupValueOverride },
-        controller.signal,
-      )
-      if (controller.signal.aborted) return
-      setIntraday(intra)
-    } catch (e) {
-      if ((e as { name?: string })?.name === 'AbortError') return
-      setError(e instanceof Error ? e.message : 'analytics-timeseries failed')
-    } finally {
-      if (!controller.signal.aborted) setLoading(false)
-    }
-  }, [bucket, needsIntraday, useGrossDv01, excludeLargeCusty, groupBy, groupValueOverride])
+  const dailyUrl = useMemo(() => {
+    if (!dailyEnabled) return null
+    return buildTimeseriesUrl(bucket!, 'DAILY_CLOSE', range, {
+      useGrossDv01,
+      excludeLargeCusty,
+      groupBy,
+      groupValueOverride,
+    })
+  }, [dailyEnabled, bucket, range, useGrossDv01, excludeLargeCusty, groupBy, groupValueOverride])
 
-  useEffect(() => { fetchDaily() }, [fetchDaily])
-  useEffect(() => { fetchIntraday() }, [fetchIntraday])
+  const dailySwr = useSWR<TimeseriesResponse>(
+    dailyKey,
+    dailyUrl ? () => fetch(dailyUrl).then((r) => r.json()) : null,
+  )
 
-  // Reset caches when bucket changes so a stale series from a different
-  // focused trade doesn't briefly flash while the new fetch is in flight.
-  useEffect(() => {
-    setDailyClose([])
-    setIntraday([])
-  }, [bucket])
+  // Intraday: lazy — only fires when view === 'INTRADAY'.
+  const intradayEnabled = bucket != null && needsIntraday
+  const intradayKey = useMemo(() => {
+    if (!intradayEnabled) return null
+    return timeseriesKey({
+      bucket: groupValueOverride ?? bucket!,
+      view: 'INTRADAY',
+      range: '1D',
+      groupBy,
+      groupValueOverride,
+      options: { useGrossDv01, excludeLargeCusty },
+    })
+  }, [intradayEnabled, bucket, groupValueOverride, groupBy, useGrossDv01, excludeLargeCusty])
 
-  // Abort any in-flight fetch on unmount so navigating away from the
-  // dock doesn't leak fetches that update state on a torn-down hook.
-  useEffect(() => {
-    return () => {
-      dailyAbortRef.current?.abort()
-      intradayAbortRef.current?.abort()
-    }
-  }, [])
+  const intradayUrl = useMemo(() => {
+    if (!intradayEnabled) return null
+    return buildTimeseriesUrl(bucket!, 'INTRADAY', '1D', {
+      useGrossDv01,
+      excludeLargeCusty,
+      groupBy,
+      groupValueOverride,
+    })
+  }, [intradayEnabled, bucket, useGrossDv01, excludeLargeCusty, groupBy, groupValueOverride])
+
+  const intradaySwr = useSWR<TimeseriesResponse>(
+    intradayKey,
+    intradayUrl ? () => fetch(intradayUrl).then((r) => r.json()) : null,
+  )
+
+  const dailyClose: TimeseriesPointAug[] = dailySwr.data?.points ?? []
+  const intraday: TimeseriesPointAug[] = intradaySwr.data?.points ?? []
+
+  const loading =
+    (dailyEnabled && dailySwr.isLoading) ||
+    (intradayEnabled && intradaySwr.isLoading)
+  const error = (() => {
+    const e = dailySwr.error ?? intradaySwr.error
+    if (!e) return null
+    return e instanceof Error ? e.message : String(e)
+  })()
 
   const pickForView = useCallback(
     (v: AnalyticsViewKey) => (v === 'INTRADAY' ? intraday : dailyClose),
     [intraday, dailyClose],
   )
 
-  const refetch = useCallback(async () => {
-    if (bucket) {
-      const cacheOpts = { useGrossDv01, excludeLargeCusty, groupBy, groupValueOverride }
-      resultCache.delete(cacheKey(bucket, 'DAILY_CLOSE', range, cacheOpts))
-      resultCache.delete(cacheKey(bucket, 'INTRADAY', '1D', cacheOpts))
-    }
-    await (needsIntraday ? fetchIntraday() : fetchDaily())
-  }, [bucket, range, fetchDaily, fetchIntraday, needsIntraday, useGrossDv01, excludeLargeCusty, groupBy, groupValueOverride])
+  const refetch = useCallback(() => {
+    if (dailyEnabled) dailySwr.mutate()
+    if (intradayEnabled) intradaySwr.mutate()
+  }, [dailyEnabled, intradayEnabled, dailySwr, intradaySwr])
 
   return { dailyClose, intraday, loading, error, pickForView, refetch }
 }
 
-export const __internal = { resultCache, cacheKey, buildAnalyticsTimeseriesQuery }
+export const __internal = { buildAnalyticsTimeseriesQuery, buildTimeseriesUrl }

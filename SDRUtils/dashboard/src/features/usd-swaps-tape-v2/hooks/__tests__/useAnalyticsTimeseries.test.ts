@@ -1,5 +1,6 @@
 import { describe, expect, it } from '@jest/globals'
 import { __internal } from '../useAnalyticsTimeseries'
+import { timeseriesKey } from '@/lib/usd-swaps-tape-v2/analyticsCacheKeys'
 
 describe('useAnalyticsTimeseries query wiring', () => {
   it('sends Net/Gross DV01 and custy-outlier toggles to the analytics route', () => {
@@ -14,16 +15,47 @@ describe('useAnalyticsTimeseries query wiring', () => {
     expect(q.get('excludeLargeCusty')).toBe('false')
   })
 
-  it('keys the cache by risk basis and custy outlier mode', () => {
-    const netClean = __internal.cacheKey('bucket', 'DAILY_CLOSE', '1Y', {
-      useGrossDv01: false,
-      excludeLargeCusty: true,
+  it('orthogonal display toggles do NOT change the SWR cache key', () => {
+    // Phase B/C contract: useGrossDv01 + excludeLargeCusty are display
+    // options that change which numbers the chart shows, not which
+    // warehouse aggregation runs. They MUST not bust the cache.
+    const netClean = timeseriesKey({
+      bucket: 'bucket',
+      view: 'DAILY_CLOSE',
+      range: '1Y',
+      groupBy: 'tape_label',
+      groupValueOverride: null,
+      options: { useGrossDv01: false, excludeLargeCusty: true },
     })
-    const grossRaw = __internal.cacheKey('bucket', 'DAILY_CLOSE', '1Y', {
-      useGrossDv01: true,
-      excludeLargeCusty: false,
+    const grossRaw = timeseriesKey({
+      bucket: 'bucket',
+      view: 'DAILY_CLOSE',
+      range: '1Y',
+      groupBy: 'tape_label',
+      groupValueOverride: null,
+      options: { useGrossDv01: true, excludeLargeCusty: false },
     })
 
-    expect(netClean).not.toBe(grossRaw)
+    expect(netClean).toEqual(grossRaw)
+  })
+
+  it('range / view / groupBy DO change the SWR cache key', () => {
+    const a = timeseriesKey({
+      bucket: 'bucket',
+      view: 'DAILY_CLOSE',
+      range: '1M',
+      groupBy: 'tape_label',
+      groupValueOverride: null,
+      options: {},
+    })
+    const b = timeseriesKey({
+      bucket: 'bucket',
+      view: 'DAILY_CLOSE',
+      range: '1Y',
+      groupBy: 'tape_label',
+      groupValueOverride: null,
+      options: {},
+    })
+    expect(a).not.toEqual(b)
   })
 })
