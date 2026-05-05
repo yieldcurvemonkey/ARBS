@@ -11,6 +11,26 @@ import {
   rateToBps,
   safeNum,
 } from '@/lib/usd-swaps-tape-v2/analytics'
+import { ServerLru } from '@/lib/usd-swaps-tape-v2/serverLru'
+import { computeEtag, matchesIfNoneMatch } from '@/lib/usd-swaps-tape-v2/etag'
+
+// Per-route in-memory LRU. Bound configurable via ANALYTICS_LRU_MAX env
+// var; 60 s TTL aligns with the client-facing Cache-Control max-age.
+const LRU_MAX = Number(process.env.ANALYTICS_LRU_MAX ?? 512)
+const lru = new ServerLru<{ payload: unknown; etag: string }>({
+  max: LRU_MAX,
+  ttlMs: 60_000,
+})
+
+function cacheKey(url: URL): string {
+  const params = new URLSearchParams(url.search)
+  const sorted = [...params.entries()].sort()
+  return JSON.stringify(sorted)
+}
+
+const CACHE_HEADERS = {
+  'Cache-Control': 'private, max-age=60, must-revalidate',
+} as const
 
 // Phase 2 cutover: extremes reads from the v2 leg table.
 const LEGS_TABLE = 'arbs_usd_swap_tape_legs_v2'
@@ -51,22 +71,16 @@ type SimilarDbRow = {
   venue: string | null
 }
 
-export async function GET(req: Request) {
+async function produceExtremes(req: Request): Promise<{ status: number; payload: unknown }> {
   const { searchParams } = new URL(req.url)
   const value = searchParams.get('value')
   if (!value) {
-    return NextResponse.json(
-      { error: 'value parameter is required' },
-      { status: 400 },
-    )
+    return { status: 400, payload: { error: 'value parameter is required' } }
   }
   const groupBy = (searchParams.get('groupBy') ?? 'tape_label').toLowerCase()
   const filterPredicate = packageAnalyticsFilterPredicate(groupBy, '$1', LEGS_TABLE)
   if (!filterPredicate) {
-    return NextResponse.json(
-      { error: `invalid groupBy: ${groupBy}` },
-      { status: 400 },
-    )
+    return { status: 400, payload: { error: `invalid groupBy: ${groupBy}` } }
   }
   const focusedRateBps = Number(searchParams.get('focusedRate') ?? 'NaN')
   const focusedNotional = Number(searchParams.get('focusedNotional') ?? 'NaN')
@@ -200,10 +214,48 @@ export async function GET(req: Request) {
       }
     })
 
-    return NextResponse.json({ extremes, recentSimilar })
+    return { status: 200, payload: { extremes, recentSimilar } }
   } catch (error) {
     console.error('usd-swaps-tape-v2/extremes error', error)
     const message = error instanceof Error ? error.message : 'Failed to fetch extremes'
-    return NextResponse.json({ error: message }, { status: 500 })
+    return { status: 500, payload: { error: message } }
   }
+}
+
+export async function GET(request: Request) {
+  const url = new URL(request.url)
+  const ifNoneMatch = request.headers.get('If-None-Match')
+  const key = cacheKey(url)
+
+  const hit = lru.get(key)
+  if (hit) {
+    if (matchesIfNoneMatch(hit.etag, ifNoneMatch)) {
+      return new Response(null, {
+        status: 304,
+        headers: { ETag: hit.etag, ...CACHE_HEADERS },
+      })
+    }
+    return NextResponse.json(hit.payload, {
+      headers: { ETag: hit.etag, ...CACHE_HEADERS },
+    })
+  }
+
+  const { status, payload } = await produceExtremes(request)
+
+  if (status === 200) {
+    const etag = computeEtag(payload)
+    lru.set(key, { payload, etag })
+    if (matchesIfNoneMatch(etag, ifNoneMatch)) {
+      return new Response(null, {
+        status: 304,
+        headers: { ETag: etag, ...CACHE_HEADERS },
+      })
+    }
+    return NextResponse.json(payload, {
+      status,
+      headers: { ETag: etag, ...CACHE_HEADERS },
+    })
+  }
+
+  return NextResponse.json(payload, { status })
 }
