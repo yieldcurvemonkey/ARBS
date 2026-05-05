@@ -2,6 +2,7 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import "./globals.css";
+import { SwrProvider } from "./SwrProvider";
 
 export const metadata: Metadata = {
   title: "yieldcurvemonkey's jungle",
@@ -16,6 +17,7 @@ export default function RootLayout({
   return (
     <html lang="en">
       <body className="antialiased">
+        <SwrProvider>
         <div className="min-h-screen bg-slate-950 text-slate-100">
           <header className="border-b border-slate-800 bg-slate-900/70 backdrop-blur">
             <div className="mx-auto flex max-w-[120rem] items-center justify-between px-4 py-4">
@@ -96,6 +98,7 @@ export default function RootLayout({
             {children}
           </main>
         </div>
+        </SwrProvider>
       </body>
     </html>
   );
