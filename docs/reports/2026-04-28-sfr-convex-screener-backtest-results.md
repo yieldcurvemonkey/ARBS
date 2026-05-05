@@ -878,6 +878,36 @@ calendars; loss-tail magnitudes scale linearly with effective bpv.
 
 Prime now 400 / 1,649 ≈ 24 % done after ~4 wall-days of priming.
 
+#### Cache evolution snapshot — listed_cache = 450, window 2024-08-07 → 2026-04-28
+
+| name | trades | unrealized | sharpe | maxDD ($) | finalMTM ($) | winRate | avgHoldDays | wallSec |
+|---|---|---|---|---|---|---|---|---|
+| `a_outright_conservative` | 97 | 3 | −2.84 | −394,780,314 | −390,969,776 | 27 % | 11.9 | 25.2 |
+| `b_calendar_only` (asym ≥ 3) | 163 | 2 | −0.47 | −262,533,749,703 | −120,410,676,450 | 47 % | 14.5 | 33.4 |
+| `c_butterfly_only` (asym ≥ 3) | 194 | 0 | −0.10 | −109,135,254,704 | **−19,253,282,136** | **53 %** | 9.1 | 37.2 |
+| `d_all_structures_default` (asym ≥ 1.5) | 238 | 3 | −3.37 | −1,051,948,381 | −1,048,285,350 | 32 % | 9.0 | 54.5 |
+| `e_aggressive_concurrency` (asym ≥ 1.2) | 471 | 8 | −3.15 | −1,971,340,255 | −1,963,489,079 | 32 % | 9.4 | 103.5 |
+| `f_daily_rebalance` (asym ≥ 1.5) | 334 | 5 | −2.79 | −1,988,708,084 | −1,985,454,926 | 39 % | 7.9 | 77.0 |
+
+21-month window. cache=400 → cache=450 (50 BDs added, August 2024 cohort
+in window):
+- `c_butterfly_only` widened by $5 B (−$14.3 B → −$19.3 B) — the
+  August 2024 cohort was a fly-heavy adverse event.
+- `b_calendar_only` finalMTM flat (−$120 B → −$120 B): August 2024 was
+  benign for calendars.
+- `f_daily_rebalance` widened ~$100 M.
+
+Asymmetric structure-type behaviour across cohorts continues:
+- December 2025: calendar blow-up (~$4 B incremental loss for `b`)
+- August 2025: butterfly blow-up (~$2 B for `c`)
+- May 2025: butterfly blow-up (~$4 B for `c`)
+- Late 2024: calendar blow-up (~$110 B for `b`)
+- August 2024: butterfly blow-up (~$5 B for `c`)
+
+Each structure type has its own ~biannual catastrophic cohort cycle.
+
+Prime now 450 / 1,649 ≈ 27 % done.
+
 ## Reproduction
 
 ```bash
