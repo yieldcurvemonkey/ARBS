@@ -1,0 +1,72 @@
+{
+  "start": "2022-01-03",
+  "end": "2026-05-05",
+  "latest_signal_date": "2026-05-05",
+  "raw_shape": [
+    1084,
+    4
+  ],
+  "raw_complete_shape": [
+    1083,
+    4
+  ],
+  "panel_shape": [
+    1083,
+    14
+  ],
+  "raw_missing_fraction": {
+    "2Y": 0.0009225092250922509,
+    "5Y": 0.0009225092250922509,
+    "10Y": 0.0,
+    "30Y": 0.0009225092250922509
+  },
+  "config": {
+    "curve": "USD-SOFR-1D",
+    "pca_window_days": 260,
+    "pca_components": 3,
+    "residual_z_entry": 1.5,
+    "residual_z_exit": 0.25,
+    "residual_z_stop": 3.0,
+    "phase1_lookback_days": 63,
+    "phase1_min_realized_sharpe": 0.0,
+    "require_momentum_confirmation": false,
+    "require_positioning_confirmation": false,
+    "covariance_lookback_days": 63,
+    "risk_aversion": 1.0,
+    "l2_to_phase1": 10.0,
+    "max_abs_weight": 0.35,
+    "min_abs_target_weight": 0.02,
+    "gross_leverage": 1.0,
+    "target_annual_vol": null,
+    "min_overlay_scale_to_trade": 0.05,
+    "trade_bpv": 100000.0,
+    "max_concurrent_positions": 10,
+    "max_holding_days": 22,
+    "no_duplicate_ideas": true,
+    "exit_when_signal_missing": false,
+    "round_trip_cost_bp": 0.0
+  },
+  "latest_overlay_scale": 1.0,
+  "latest_n_signals": 0,
+  "latest_pca_explained_total": 0.9696157864161421,
+  "latest_pca_explained_by_pc": [
+    0.8117451405020549,
+    0.10747446957195832,
+    0.05039617634212894
+  ],
+  "signal_days": 144,
+  "avg_signals_per_active_day": 5.611111111111111,
+  "max_signals_on_day": 10,
+  "top_signal_ideas": {
+    "5Y/10Y": 82,
+    "2Y/5Y": 80,
+    "2Y/30Y": 77,
+    "10Y/30Y": 72,
+    "2Y/5Y/30Y": 72,
+    "5Y/10Y/30Y": 66,
+    "2Y/5Y/10Y": 65,
+    "5Y/30Y": 64,
+    "2Y/10Y": 47,
+    "2Y/10Y/30Y": 41
+  }
+}

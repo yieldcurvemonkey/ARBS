@@ -14,7 +14,9 @@ import {
 import { ServerLru } from '@/lib/usd-swaps-tape-v2/serverLru'
 import { computeEtag, matchesIfNoneMatch } from '@/lib/usd-swaps-tape-v2/etag'
 import {
+  buildOutrightTapeLabelCandidates,
   custyNotionalOutlierPredicate,
+  isOutrightTapeLabelCandidate,
   parseBooleanParam,
   riskAggregateExpression,
 } from './route.logic'
@@ -113,6 +115,282 @@ type AnalyticsTimeseriesPayload =
       range: string
     }
 
+function mapDailyRowsToPoints(
+  rows: DailyRow[],
+  useGrossDv01: boolean,
+  excludeLargeCusty: boolean,
+): Array<Record<string, unknown>> {
+  return rows.map((r) => {
+    // Phase 5: orthogonal-payload split. The legacy idbDv01 /
+    // custyDv01 / *Notional / *Prints fields are populated with the
+    // requested (gross|net) x (raw|excl-large) variant so existing
+    // clients see no API change. New *_gross / *_net /
+    // *_excl_large_custy fields let the client toggle locally.
+    const idbDv01Picked = useGrossDv01
+      ? safeNum(r.idb_dv01_gross)
+      : safeNum(r.idb_dv01_net)
+    const custyDv01Picked = excludeLargeCusty
+      ? useGrossDv01
+        ? safeNum(r.custy_dv01_gross_excl_large)
+        : safeNum(r.custy_dv01_net_excl_large)
+      : useGrossDv01
+        ? safeNum(r.custy_dv01_gross)
+        : safeNum(r.custy_dv01_net)
+    const custyNotionalPicked = excludeLargeCusty
+      ? safeNum(r.custy_notional_excl_large)
+      : safeNum(r.custy_notional)
+    const custyPrintsPicked = excludeLargeCusty
+      ? safeNum(r.custy_prints_excl_large)
+      : safeNum(r.custy_prints)
+    return {
+      ts: typeof r.day === 'string' ? r.day : new Date(r.day as unknown as Date).toISOString(),
+      idbClose: r.idb_close != null ? rateToBps(r.idb_close) : null,
+      custyClose: r.custy_close != null ? rateToBps(r.custy_close) : null,
+      open: r.idb_open != null ? rateToBps(r.idb_open) : null,
+      high: r.idb_high != null ? rateToBps(r.idb_high) : null,
+      low: r.idb_low != null ? rateToBps(r.idb_low) : null,
+      close: r.idb_close != null ? rateToBps(r.idb_close) : null,
+      idbDv01: idbDv01Picked,
+      custyDv01: custyDv01Picked,
+      idbNotional: safeNum(r.idb_notional),
+      custyNotional: custyNotionalPicked,
+      idbPrints: safeNum(r.idb_prints),
+      custyPrints: custyPrintsPicked,
+      // Orthogonal-option payload split: full variant grid so the
+      // client can flip useGrossDv01 / excludeLargeCusty without
+      // re-fetching.
+      idbDv01_gross: safeNum(r.idb_dv01_gross),
+      idbDv01_net: safeNum(r.idb_dv01_net),
+      custyDv01_gross: safeNum(r.custy_dv01_gross),
+      custyDv01_net: safeNum(r.custy_dv01_net),
+      custyDv01_gross_excl_large: safeNum(r.custy_dv01_gross_excl_large),
+      custyDv01_net_excl_large: safeNum(r.custy_dv01_net_excl_large),
+      custyNotional_raw: safeNum(r.custy_notional),
+      custyNotional_excl_large: safeNum(r.custy_notional_excl_large),
+      custyPrints_raw: safeNum(r.custy_prints),
+      custyPrints_excl_large: safeNum(r.custy_prints_excl_large),
+    }
+  })
+}
+
+async function produceOutrightPackageTimeseries(args: {
+  labelCandidates: string[]
+  view: string
+  range: string
+  startDate: Date
+  endDate: Date
+  useGrossDv01: boolean
+  excludeLargeCusty: boolean
+  removeZeroRates: boolean
+}): Promise<{ status: number; payload: AnalyticsTimeseriesPayload }> {
+  const {
+    labelCandidates,
+    view,
+    range,
+    startDate,
+    endDate,
+    useGrossDv01,
+    excludeLargeCusty,
+    removeZeroRates,
+  } = args
+  const outlierPredicate = custyNotionalOutlierPredicate('b', 't', excludeLargeCusty)
+
+  if (view === 'INTRADAY') {
+    const INTRADAY_HOURS = 72
+    const intradaySql = `
+      WITH anchor AS (
+        SELECT COALESCE(MAX(COALESCE(p.original_execution_start, p.execution_start)), NOW()) AS last_ts
+        FROM ${PACKAGES_TABLE} p
+        WHERE UPPER(COALESCE(p.tape_label, '')) = ANY($1::text[])
+          AND UPPER(COALESCE(p.package_type, '')) = 'OUTRIGHT'
+          AND NOT COALESCE(p.is_unwind, false)
+      ),
+      package_rows AS (
+        SELECT
+          COALESCE(p.original_execution_start, p.execution_start) AS ts,
+          p.weighted_fixed_rate::float AS fixed_rate,
+          p.total_risk::float AS risk,
+          COALESCE(
+            ABS(p.total_notional::float),
+            ABS(p.gross_notional::float),
+            0
+          ) AS notional,
+          p.venue
+        FROM ${PACKAGES_TABLE} p
+        WHERE UPPER(COALESCE(p.tape_label, '')) = ANY($1::text[])
+          AND UPPER(COALESCE(p.package_type, '')) = 'OUTRIGHT'
+          AND NOT COALESCE(p.is_unwind, false)
+          AND COALESCE(p.original_execution_start, p.execution_start)
+                >= (SELECT last_ts FROM anchor) - INTERVAL '${INTRADAY_HOURS} hours'
+          AND p.weighted_fixed_rate IS NOT NULL
+      ),
+      base AS (
+        SELECT
+          ts,
+          fixed_rate,
+          risk,
+          notional,
+          CASE
+            WHEN UPPER(COALESCE(r.venue, '')) = 'D2D' THEN 'IDB'
+            ELSE 'CUSTY'
+          END AS platform
+        FROM package_rows r
+      ),
+      custy_threshold AS (
+        SELECT
+          percentile_cont(0.5) WITHIN GROUP (ORDER BY ABS(notional)) AS median_notional
+        FROM base
+        WHERE platform = 'CUSTY' AND notional IS NOT NULL
+      )
+      SELECT
+        b.ts,
+        b.platform,
+        b.fixed_rate,
+        b.risk,
+        b.notional
+      FROM base b
+      CROSS JOIN custy_threshold t
+      WHERE ${outlierPredicate}
+        ${removeZeroRates ? 'AND b.fixed_rate <> 0' : ''}
+      ORDER BY b.ts ASC
+      LIMIT ${INTRADAY_TICK_CAP}
+    `
+    const { rows } = await query<IntradayRow>(intradaySql, [labelCandidates])
+    const points = rows.map((r) => ({
+      ts: r.ts,
+      idbClose: r.platform === 'IDB' ? rateToBps(r.fixed_rate) : null,
+      custyClose: r.platform === 'CUSTY' ? rateToBps(r.fixed_rate) : null,
+      idbDv01: r.platform === 'IDB'
+        ? useGrossDv01 ? Math.abs(safeNum(r.risk)) : safeNum(r.risk)
+        : 0,
+      custyDv01: r.platform === 'CUSTY'
+        ? useGrossDv01 ? Math.abs(safeNum(r.risk)) : safeNum(r.risk)
+        : 0,
+      idbNotional: r.platform === 'IDB' ? Math.abs(safeNum(r.notional)) : 0,
+      custyNotional: r.platform === 'CUSTY' ? Math.abs(safeNum(r.notional)) : 0,
+      idbPrints: r.platform === 'IDB' ? 1 : 0,
+      custyPrints: r.platform === 'CUSTY' ? 1 : 0,
+    }))
+    return {
+      status: 200,
+      payload: { points, count: points.length, view, range },
+    }
+  }
+
+  const dailySql = `
+    WITH package_rows AS (
+      SELECT
+        COALESCE(p.original_execution_start, p.execution_start) AS ts,
+        p.weighted_fixed_rate::float AS fixed_rate,
+        p.total_risk::float AS risk,
+        COALESCE(
+          ABS(p.total_notional::float),
+          ABS(p.gross_notional::float),
+          0
+        ) AS notional,
+        p.venue
+      FROM ${PACKAGES_TABLE} p
+      WHERE UPPER(COALESCE(p.tape_label, '')) = ANY($1::text[])
+        AND UPPER(COALESCE(p.package_type, '')) = 'OUTRIGHT'
+        AND NOT COALESCE(p.is_unwind, false)
+        AND COALESCE(p.original_execution_start, p.execution_start)
+              >= $2::timestamptz
+        AND COALESCE(p.original_execution_start, p.execution_start)
+              <= $3::timestamptz
+        AND p.weighted_fixed_rate IS NOT NULL
+    ),
+    base AS (
+      SELECT
+        ts,
+        fixed_rate,
+        risk,
+        notional,
+        CASE
+          WHEN UPPER(COALESCE(r.venue, '')) = 'D2D' THEN 'IDB'
+          ELSE 'CUSTY'
+        END AS platform,
+        DATE_TRUNC('day', ts AT TIME ZONE 'America/New_York') AS day
+      FROM package_rows r
+      ${removeZeroRates ? 'WHERE fixed_rate <> 0' : ''}
+    ),
+    custy_threshold AS (
+      SELECT
+        percentile_cont(0.5) WITHIN GROUP (ORDER BY ABS(notional)) AS median_notional
+      FROM base
+      WHERE platform = 'CUSTY' AND notional IS NOT NULL
+    ),
+    classified AS (
+      SELECT
+        b.*,
+        CASE
+          WHEN b.platform <> 'CUSTY' THEN TRUE
+          WHEN t.median_notional IS NULL OR t.median_notional <= 0 THEN TRUE
+          WHEN ABS(COALESCE(b.notional, 0)) > t.median_notional * 5 THEN FALSE
+          ELSE TRUE
+        END AS excl_large_custy
+      FROM base b
+      CROSS JOIN custy_threshold t
+    ),
+    per_day_platform AS (
+      SELECT
+        day,
+        platform,
+        (array_agg(fixed_rate ORDER BY ts DESC)
+          FILTER (WHERE fixed_rate IS NOT NULL))[1] AS close_rate,
+        (array_agg(fixed_rate ORDER BY ts ASC)
+          FILTER (WHERE fixed_rate IS NOT NULL))[1] AS open_rate,
+        MAX(fixed_rate) AS high_rate,
+        MIN(fixed_rate) AS low_rate,
+        SUM(ABS(risk)) AS daily_dv01_gross,
+        SUM(risk) AS daily_dv01_net,
+        SUM(ABS(risk)) FILTER (WHERE excl_large_custy) AS daily_dv01_gross_excl_large,
+        SUM(risk) FILTER (WHERE excl_large_custy) AS daily_dv01_net_excl_large,
+        SUM(ABS(notional)) AS daily_notional,
+        SUM(ABS(notional)) FILTER (WHERE excl_large_custy) AS daily_notional_excl_large,
+        COUNT(*) AS prints,
+        COUNT(*) FILTER (WHERE excl_large_custy) AS prints_excl_large
+      FROM classified
+      GROUP BY day, platform
+    )
+    SELECT
+      day,
+      MAX(close_rate) FILTER (WHERE platform = 'IDB')   AS idb_close,
+      MAX(close_rate) FILTER (WHERE platform = 'CUSTY') AS custy_close,
+      MAX(open_rate)  FILTER (WHERE platform = 'IDB')   AS idb_open,
+      MAX(open_rate)  FILTER (WHERE platform = 'CUSTY') AS custy_open,
+      MAX(high_rate)  FILTER (WHERE platform = 'IDB')   AS idb_high,
+      MIN(low_rate)   FILTER (WHERE platform = 'IDB')   AS idb_low,
+      MAX(high_rate)  FILTER (WHERE platform = 'CUSTY') AS custy_high,
+      MIN(low_rate)   FILTER (WHERE platform = 'CUSTY') AS custy_low,
+      COALESCE(MAX(daily_dv01_gross) FILTER (WHERE platform = 'IDB'),   0)            AS idb_dv01_gross,
+      COALESCE(MAX(daily_dv01_gross) FILTER (WHERE platform = 'CUSTY'), 0)            AS custy_dv01_gross,
+      COALESCE(MAX(daily_dv01_net)   FILTER (WHERE platform = 'IDB'),   0)            AS idb_dv01_net,
+      COALESCE(MAX(daily_dv01_net)   FILTER (WHERE platform = 'CUSTY'), 0)            AS custy_dv01_net,
+      COALESCE(MAX(daily_dv01_gross_excl_large) FILTER (WHERE platform = 'CUSTY'), 0) AS custy_dv01_gross_excl_large,
+      COALESCE(MAX(daily_dv01_net_excl_large)   FILTER (WHERE platform = 'CUSTY'), 0) AS custy_dv01_net_excl_large,
+      COALESCE(MAX(daily_notional)              FILTER (WHERE platform = 'IDB'),   0) AS idb_notional,
+      COALESCE(MAX(daily_notional)              FILTER (WHERE platform = 'CUSTY'), 0) AS custy_notional,
+      COALESCE(MAX(daily_notional_excl_large)   FILTER (WHERE platform = 'CUSTY'), 0) AS custy_notional_excl_large,
+      COALESCE(MAX(prints)            FILTER (WHERE platform = 'IDB'),   0)           AS idb_prints,
+      COALESCE(MAX(prints)            FILTER (WHERE platform = 'CUSTY'), 0)           AS custy_prints,
+      COALESCE(MAX(prints_excl_large) FILTER (WHERE platform = 'CUSTY'), 0)           AS custy_prints_excl_large
+    FROM per_day_platform
+    GROUP BY day
+    ORDER BY day ASC
+    LIMIT ${DAILY_ROW_CAP}
+  `
+  const { rows } = await query<DailyRow>(dailySql, [
+    labelCandidates,
+    startDate.toISOString(),
+    endDate.toISOString(),
+  ])
+  const points = mapDailyRowsToPoints(rows, useGrossDv01, excludeLargeCusty)
+  return {
+    status: 200,
+    payload: { points, count: points.length, view, range },
+  }
+}
+
 async function produceAnalyticsTimeseries(
   request: Request,
 ): Promise<{ status: number; payload: AnalyticsTimeseriesPayload }> {
@@ -145,6 +423,22 @@ async function produceAnalyticsTimeseries(
   const outlierPredicate = custyNotionalOutlierPredicate('b', 't', excludeLargeCusty)
 
   try {
+    if (groupBy === 'tape_label' && isOutrightTapeLabelCandidate(value)) {
+      const fast = await produceOutrightPackageTimeseries({
+        labelCandidates: buildOutrightTapeLabelCandidates(value),
+        view,
+        range,
+        startDate,
+        endDate,
+        useGrossDv01,
+        excludeLargeCusty,
+        removeZeroRates,
+      })
+      if ('count' in fast.payload && fast.payload.count > 0) {
+        return fast
+      }
+    }
+
     if (view === 'INTRADAY') {
       // Intraday is intrinsically a short-window view — pin the server
       // lookback to the latest N trading-ish days regardless of the

@@ -1,3 +1,5 @@
+import { normalizeAnalyticsTapeLabel } from '@/lib/usd-swaps-tape-v2/analytics'
+
 export function parseBooleanParam(
   searchParams: URLSearchParams,
   key: string,
@@ -27,4 +29,37 @@ export function custyNotionalOutlierPredicate(
             AND ${thresholdAlias}.median_notional > 0
             AND ABS(COALESCE(${rowAlias}.notional, 0)) > ${thresholdAlias}.median_notional * 5
           )`
+}
+
+function compactUpperLabel(value: string): string {
+  return value.trim().replace(/\s+/g, ' ').toUpperCase()
+}
+
+function addSofrOisCompoundVariants(
+  candidates: Set<string>,
+  value: string,
+): void {
+  const compact = compactUpperLabel(value)
+  candidates.add(compact)
+  if (compact.startsWith('USD-SOFR-COMPOUND ')) {
+    candidates.add(compact.replace(/^USD-SOFR-COMPOUND/, 'USD-SOFR-OIS COMPOUND'))
+  }
+  if (compact.startsWith('USD-SOFR-OIS COMPOUND ')) {
+    candidates.add(compact.replace(/^USD-SOFR-OIS COMPOUND/, 'USD-SOFR-COMPOUND'))
+  }
+}
+
+export function buildOutrightTapeLabelCandidates(value: string): string[] {
+  const candidates = new Set<string>()
+  addSofrOisCompoundVariants(candidates, value)
+  addSofrOisCompoundVariants(candidates, normalizeAnalyticsTapeLabel(value))
+  return [...candidates].filter((candidate) => candidate.length > 0)
+}
+
+export function isOutrightTapeLabelCandidate(value: string): boolean {
+  const label = ` ${compactUpperLabel(value)} `
+  return (
+    label.includes(' OUTRIGHT ') &&
+    !/( CURVE | FLY | MMS | PACKAGE | SPREAD )/.test(label)
+  )
 }
