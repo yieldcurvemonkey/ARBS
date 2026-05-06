@@ -20,7 +20,6 @@ export type AnalyticsMetricKey =
   | 'dv01'
   | 'notional'
   | 'spread_to_mid'
-  | 'tenor_years'
 
 export type AnalyticsViewKey = 'INTRADAY' | 'DAILY_CLOSE' | 'DAILY_OHLC' | 'VOLUME'
 

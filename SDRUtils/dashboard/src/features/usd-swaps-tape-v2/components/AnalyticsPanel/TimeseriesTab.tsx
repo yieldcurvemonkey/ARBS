@@ -18,6 +18,7 @@ import {
   YAxis,
 } from 'recharts'
 import { ANALYTICS_COLORS, fmtDv01Compact, sequenceColor } from './analytics-format'
+import { DockTimeseriesChart } from './DockTimeseriesChart'
 import {
   ANALYTICS_METRICS,
   ANALYTICS_RANGES,
@@ -561,10 +562,84 @@ export function TimeseriesTab(props: TimeseriesTabProps): JSX.Element {
         </div>
       ) : null}
 
-      {/* chart */}
+      {/*
+        chart — Plotly (matching the UST RV / USTF Vol modules) for the
+        rate metrics (fixed_rate / spread_to_mid). DV01 / Notional /
+        VOLUME views still render the Recharts ComposedChart below
+        because their stacked-bar story is cleaner there.
+      */}
+      {data.length > 0 && (effectiveMetric === 'fixed_rate' || effectiveMetric === 'spread_to_mid') && !renderBars ? (
+        <div
+          className="relative rounded border border-slate-800 bg-slate-950/60 p-2"
+          style={{ height: chartHeight }}
+        >
+          <DockTimeseriesChart
+            data={data}
+            focused={focused}
+            metric={effectiveMetric}
+            view={view}
+            unit={metricConf.unit}
+            showCusty={showCusty}
+            showIdb={showIdb}
+            showSigmaBands={showSigmaBands}
+            showIqrBand={showIqrBand}
+            showDots={showDots}
+            stats={stats}
+            focusedValue={focusedValue}
+            focusedPercentile={focusedPercentile}
+            yMin={yMin}
+            yMax={yMax}
+            height={chartHeight - 16}
+            sequence={overlayTrades.length > 0 ? overlayTrades : undefined}
+            hiddenSequenceIds={hiddenTradeIds}
+          />
+          <div className="pointer-events-none absolute bottom-2 left-14 flex items-center gap-3 font-mono text-[10px] text-slate-400">
+            {showCusty ? (
+              <span className="flex items-center gap-1.5">
+                <span className="inline-block h-[2px] w-4" style={{ backgroundColor: ANALYTICS_COLORS.custy }} />
+                Custy
+              </span>
+            ) : null}
+            {showIdb ? (
+              <span className="flex items-center gap-1.5">
+                <span className="inline-block h-[2px] w-4" style={{ backgroundColor: ANALYTICS_COLORS.idb }} />
+                IDB
+              </span>
+            ) : null}
+            {effectiveMetric === 'fixed_rate' ? (
+              <span className="flex items-center gap-1.5">
+                <span
+                  className="inline-block h-[2px] w-4 border-t border-dashed"
+                  style={{ borderColor: ANALYTICS_COLORS.focused }}
+                />
+                Focused trade
+              </span>
+            ) : null}
+            {effectiveMetric === 'fixed_rate' && showIqrBand ? (
+              <span className="flex items-center gap-1.5">
+                <span
+                  className="inline-block h-2 w-3 rounded-sm"
+                  style={{ backgroundColor: 'rgba(34,211,238,0.25)' }}
+                />
+                IQR
+              </span>
+            ) : null}
+          </div>
+        </div>
+      ) : null}
+
+      {/* chart — Recharts ComposedChart for DV01 / Notional / VOLUME */}
       <div
         className="relative rounded border border-slate-800 bg-slate-950/60 p-2"
-        style={{ height: chartHeight, display: data.length === 0 ? 'none' : undefined }}
+        style={{
+          height: chartHeight,
+          display:
+            data.length === 0
+              ? 'none'
+              : (effectiveMetric === 'fixed_rate' || effectiveMetric === 'spread_to_mid') && !renderBars
+                ? 'none'
+                : undefined,
+        }}
       >
         <ResponsiveContainer width="100%" height="100%">
           <ComposedChart data={data} margin={{ top: 12, right: 60, bottom: 34, left: 48 }}>

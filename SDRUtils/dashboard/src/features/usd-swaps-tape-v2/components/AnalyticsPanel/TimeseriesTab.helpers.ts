@@ -95,7 +95,7 @@ export function projectTimeseriesPoint(
   point: TimeseriesPointAug,
   index: number,
   metric: AnalyticsMetricKey,
-  focused: Pick<FocusedTrade, 'tenor_years'>,
+  _focused: Pick<FocusedTrade, 'tenor_years'>,
 ): TimeseriesPointAug & { idxPos: number } {
   let idb: number | null = point.idbClose ?? null
   let custy: number | null = point.custyClose ?? null
@@ -115,9 +115,6 @@ export function projectTimeseriesPoint(
   } else if (metric === 'notional') {
     idb = point.idbNotional != null ? point.idbNotional / 1e6 : null
     custy = point.custyNotional != null ? point.custyNotional / 1e6 : null
-  } else if (metric === 'tenor_years') {
-    idb = focused.tenor_years
-    custy = focused.tenor_years
   }
 
   return {
@@ -135,8 +132,10 @@ export function focusedTimeseriesValue(
   if (metric === 'fixed_rate') return focused.fixed_rate_bps
   if (metric === 'dv01') return focused.dv01_usd_per_bp
   if (metric === 'notional') return focused.notional_usd / 1e6
-  if (metric === 'spread_to_mid') return -0.9
-  return focused.tenor_years
+  // spread_to_mid: placeholder mid-quote offset; the dock-side formula
+  // returns the focused trade's signed deviation, defaulted to a small
+  // negative value when no live mid is available.
+  return -0.9
 }
 
 const MINUTE_MS = 60_000
