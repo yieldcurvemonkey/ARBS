@@ -70,6 +70,42 @@ describe('package summary analytics SQL', () => {
     ).toBe('USD-SOFR-TERM 3M SPOT 5Y OUTRIGHT PHYS')
   })
 
+  it('strips lifecycle / event flag tokens so unwind / restate prints bucket with their underlying instrument', () => {
+    // Reproduces the empty-chart bug filed 2026-05-05: clicking an
+    // UNWIND row left the timeseries chart blank because the bucket
+    // value (raw tape_label with " ... CURVE MMS UNWIND UFRO PHYS")
+    // matched only itself. After stripping UNWIND the bucket falls
+    // back to the underlying instrument and other prints surface.
+    const unwindLabel = normalizeAnalyticsTapeLabel(
+      'USD-SOFR-OIS Compound 1D Constant Spot 10Y1M/30Y1M CURVE MMS UNWIND UFRO PHYS',
+    )
+    const flowLabel = normalizeAnalyticsTapeLabel(
+      'USD-SOFR-OIS Compound 1D Constant Spot 10Y1M/30Y1M CURVE MMS UFRO PHYS',
+    )
+    expect(unwindLabel).toBe(flowLabel)
+    expect(unwindLabel).toBe(
+      'USD-SOFR-OIS COMPOUND 1D CONSTANT SPOT 10Y1M/30Y1M CURVE MMS UFRO PHYS',
+    )
+  })
+
+  it('strips the rest of the per-row lifecycle tokens (TERM/CORR/MODI/CLRG/...)', () => {
+    expect(
+      normalizeAnalyticsTapeLabel(
+        'USD-SOFR-COMPOUND 1D Constant Spot 5Y Outright TERM CORR MODI CLRG NOVA-IN NOVA-OUT EXER XD-TERM PARTIAL-UNWIND PHYS',
+      ),
+    ).toBe('USD-SOFR-OIS COMPOUND 1D CONSTANT SPOT 5Y OUTRIGHT PHYS')
+  })
+
+  it('keeps UFRO / BLOCK / MMS / MAC tokens that carry economic identity', () => {
+    expect(
+      normalizeAnalyticsTapeLabel(
+        'USD-SOFR-COMPOUND 1D Constant Spot 5Y Outright UFRO BLOCK MMS MAC PHYS',
+      ),
+    ).toBe(
+      'USD-SOFR-OIS COMPOUND 1D CONSTANT SPOT 5Y OUTRIGHT UFRO BLOCK MMS MAC PHYS',
+    )
+  })
+
   it('uses normalized tape labels for analytics filtering while retaining exact-match fast path', () => {
     const predicate = packageAnalyticsFilterPredicate(
       'tape_label',

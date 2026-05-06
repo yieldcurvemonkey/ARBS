@@ -478,10 +478,43 @@ export function TimeseriesTab(props: TimeseriesTabProps): JSX.Element {
         source="/api/usd-swaps-tape-v2/timeseries"
       />
 
+      {/*
+        No-data empty state. The analytics-timeseries query buckets by
+        normalized tape_label; even after the lifecycle/event flag
+        stripping, some instruments are genuinely one-of-a-kind and
+        have no historical context to render. Surface that explicitly
+        instead of letting Recharts paint an empty axis-less canvas
+        which traders read as "the chart is broken".
+      */}
+      {data.length === 0 ? (
+        <div
+          data-testid="timeseries-empty-state"
+          className="rounded border border-dashed border-slate-800 bg-slate-950/40 px-4 py-6 font-mono text-[11px] text-slate-400"
+          style={{ minHeight: chartHeight }}
+        >
+          <div className="flex h-full flex-col items-center justify-center gap-1.5 text-center">
+            <span className="h-1.5 w-1.5 rounded-full bg-slate-600" />
+            <div className="text-[12px] uppercase tracking-wider text-slate-300">
+              No prints in this bucket
+            </div>
+            <div className="max-w-[440px] text-[10.5px] text-slate-500">
+              The analytics dock found no historical prints matching{' '}
+              <span className="text-slate-300">{focused.tape_label}</span>{' '}
+              over the selected range. The focused trade rate is{' '}
+              <span className="text-amber-200">
+                {focusedValue.toFixed(2)} {metricConf.unit}
+              </span>
+              . Widen the range or pivot the bucket selector to a canonical
+              underlier to surface comparable flow.
+            </div>
+          </div>
+        </div>
+      ) : null}
+
       {/* chart */}
       <div
         className="relative rounded border border-slate-800 bg-slate-950/60 p-2"
-        style={{ height: chartHeight }}
+        style={{ height: chartHeight, display: data.length === 0 ? 'none' : undefined }}
       >
         <ResponsiveContainer width="100%" height="100%">
           <ComposedChart data={data} margin={{ top: 12, right: 60, bottom: 34, left: 48 }}>

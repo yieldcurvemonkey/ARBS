@@ -61,9 +61,38 @@ const SOFR_TERM_PREFIX_RE = /^USD[-\s]+SOFR[-\s]+(?:CME[-\s]+)?TERM/i
 const SOFR_OIS_PREFIX_RE =
   /^USD[-\s]+SOFR(?:[-\s]+OIS)?(?:[-\s]+COMPOUND|\s+COMPOUND)?/i
 
+// Lifecycle / event flags that the ingest layer (`trade_tape.py
+// _label_for_row`) appends to the package tape_label. They make every
+// unwind / clearing / restate row produce a bucket-of-one against the
+// analytics-timeseries query (which filters by tape_label), so the dock
+// chart had no historical context for unwind / restate / clearing rows.
+// Strip them so an UNWIND row buckets with the underlying instrument's
+// flow prints. UFRO (off-market upfront marker) and BLOCK (size flag)
+// stay in — they describe the trade economics, not its lifecycle.
+const ANALYTICS_LIFECYCLE_FLAG_TOKENS = [
+  'UNWIND',
+  'PARTIAL-UNWIND',
+  'TERM',
+  'CORR',
+  'MODI',
+  'XD-TERM',
+  'NOVA-IN',
+  'NOVA-OUT',
+  'EXER',
+  'CLRG',
+] as const
+
+export const __analyticsLifecycleFlagTokens = ANALYTICS_LIFECYCLE_FLAG_TOKENS
+
+const LIFECYCLE_FLAG_RE = new RegExp(
+  `(^|\\s)(?:${ANALYTICS_LIFECYCLE_FLAG_TOKENS.join('|')})(?=\\s|$)`,
+  'gi',
+)
+
 // Tape-label analytics should bucket by economic label, not by SDR/UPI
-// spelling. Keep this intentionally narrow: SOFR OIS source prefixes
-// and PHY/PHYS delivery spelling are observed aliases for the same trade.
+// spelling. Keep this intentionally narrow: SOFR OIS source prefixes,
+// PHY/PHYS delivery spelling, and the lifecycle/event flag tokens
+// that mark per-print state (UNWIND / TERM / CORR / MODI / etc.).
 export function normalizeAnalyticsTapeLabel(
   label: string | null | undefined,
 ): string {
@@ -79,6 +108,13 @@ export function normalizeAnalyticsTapeLabel(
   } else {
     text = text.replace(SOFR_OIS_PREFIX_RE, 'USD-SOFR-OIS COMPOUND')
   }
+  // Strip lifecycle / event flag tokens so per-row state doesn't
+  // shatter the bucket. Run repeatedly so adjacent flags
+  // ("MMS UNWIND") collapse cleanly without leaving doubled spaces.
+  while (LIFECYCLE_FLAG_RE.test(text)) {
+    LIFECYCLE_FLAG_RE.lastIndex = 0
+    text = text.replace(LIFECYCLE_FLAG_RE, '$1')
+  }
   return text.replace(/\s+/g, ' ').trim()
 }
 
@@ -92,6 +128,25 @@ function normalizeDeliverySql(valueExpr: string): string {
   return `REGEXP_REPLACE(${physical}, '(^|[[:space:]])PHY($|[[:space:]])', '\\1PHYS\\2', 'g')`
 }
 
+function stripLifecycleFlagsSql(valueExpr: string): string {
+  // Mirror ANALYTICS_LIFECYCLE_FLAG_TOKENS — strip lifecycle / event
+  // tokens that the ingest layer appends per row so unwind / restate /
+  // clearing rows still bucket against their underlying instrument.
+  // POSIX regex has no word boundaries; pad the value with spaces and
+  // match `[[:space:]]TOKEN[[:space:]]`, replacing with a single space,
+  // then collapse consecutive spaces and trim.
+  const tokens = ANALYTICS_LIFECYCLE_FLAG_TOKENS.join('|')
+  // Two passes so adjacent flags ("MMS UNWIND PHYS") collapse cleanly:
+  // each pass consumes both surrounding spaces, so sequential flags
+  // need a second sweep to re-pair the new boundaries.
+  const padded = `(' ' || ${valueExpr} || ' ')`
+  const stripOnce = (expr: string): string =>
+    `REGEXP_REPLACE(${expr}, '[[:space:]](${tokens})[[:space:]]', ' ', 'gi')`
+  const stripped = stripOnce(stripOnce(padded))
+  const collapsed = `REGEXP_REPLACE(${stripped}, '[[:space:]]+', ' ', 'g')`
+  return `BTRIM(${collapsed})`
+}
+
 export function normalizeAnalyticsTapeLabelSql(valueExpr: string): string {
   const cleaned = cleanTapeLabelSql(valueExpr)
   const delivery = normalizeDeliverySql(cleaned)
@@ -99,10 +154,11 @@ export function normalizeAnalyticsTapeLabelSql(valueExpr: string): string {
   const sofrOisPattern = '^USD[[:space:]-]+SOFR([[:space:]-]+OIS)?([[:space:]-]+COMPOUND)?'
   const term = `REGEXP_REPLACE(${delivery}, '${termPattern}', 'USD-SOFR-TERM', 'i')`
   const sofrOis = `REGEXP_REPLACE(${delivery}, '${sofrOisPattern}', 'USD-SOFR-OIS COMPOUND', 'i')`
-  return `BTRIM(CASE
+  const prefixed = `CASE
     WHEN ${delivery} ~* '${termPattern}' THEN ${term}
     ELSE ${sofrOis}
-  END)`
+  END`
+  return stripLifecycleFlagsSql(`(${prefixed})`)
 }
 
 export function packageAnalyticsFilterPredicate(
