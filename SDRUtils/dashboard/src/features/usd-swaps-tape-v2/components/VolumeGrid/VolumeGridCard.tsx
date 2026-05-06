@@ -44,25 +44,29 @@ const DEFAULT_PERIOD: VolumePeriod = '1w'
 // Period (the current measurement window) so the trader can ask
 // "today's run-rate vs the last week / month / quarter" independently
 // of which period unit the cells display.
-type LookbackId = '1w' | '2w' | '1m' | '3m' | '6m' | '1y' | '2y'
-const LOOKBACK_IDS: ReadonlyArray<LookbackId> = ['1w', '2w', '1m', '3m', '6m', '1y', '2y']
+type LookbackId = '1w' | '2w' | '3w' | '1m' | '3m' | '6m' | '1y' | '2y'
+const LOOKBACK_IDS: ReadonlyArray<LookbackId> = ['1w', '2w', '3w', '1m', '3m', '6m', '1y', '2y']
 const LOOKBACK_DAYS: Record<LookbackId, number> = {
   '1w': 7,
   '2w': 14,
+  '3w': 21,
   '1m': 30,
   '3m': 90,
   '6m': 180,
   '1y': 365,
   '2y': 730,
 }
+// Lowercase to match the Window toggle (today / 1h / 24h / 1w / ...)
+// — both rows now read as the same family of compact units.
 const LOOKBACK_LABELS: Record<LookbackId, string> = {
-  '1w': '1W',
-  '2w': '2W',
-  '1m': '1M',
-  '3m': '3M',
-  '6m': '6M',
-  '1y': '1Y',
-  '2y': '2Y',
+  '1w': '1w',
+  '2w': '2w',
+  '3w': '3w',
+  '1m': '1m',
+  '3m': '3m',
+  '6m': '6m',
+  '1y': '1y',
+  '2y': '2y',
 }
 const DEFAULT_LOOKBACK: LookbackId = '3m'
 
@@ -215,13 +219,6 @@ export function VolumeGridCard({ onSelectPackage }: VolumeGridCardProps): JSX.El
         >
           {collapsed ? '▲ Volume Grid' : '▼ Volume Grid'}
         </button>
-        <span
-          data-testid="volume-grid-tagline"
-          className="font-mono text-[10px] text-slate-500"
-          title={taglineTitle(period, lookback)}
-        >
-          {taglineText(period, lookback)}
-        </span>
         <Toggle
           options={[{ id: 'notional', label: 'Notional' }, { id: 'dv01', label: 'DV01' }]}
           value={metric}
@@ -316,6 +313,15 @@ export function VolumeGridCard({ onSelectPackage }: VolumeGridCardProps): JSX.El
           </span>
         )}
       </header>
+      {!collapsed && (
+        <div
+          data-testid="volume-grid-tagline"
+          className="px-3 pb-1.5 font-mono text-[10px] text-slate-500"
+          title={taglineTitle(period, lookback)}
+        >
+          {taglineText(period, lookback)}
+        </div>
+      )}
       {!collapsed && (
         <div className="px-3 pb-3" data-testid="volume-grid">
           {grid.data ? (
