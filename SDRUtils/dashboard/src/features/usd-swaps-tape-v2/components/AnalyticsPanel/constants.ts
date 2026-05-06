@@ -12,7 +12,6 @@ export const ANALYTICS_METRICS: AnalyticsMetricConfig[] = [
   { key: 'dv01',          label: 'DV01',          unit: 'USD/bp',  accessor: 'dv01_usd_per_bp' },
   { key: 'notional',      label: 'Notional',      unit: 'USD mm',  accessor: 'notional_usd' },
   { key: 'spread_to_mid', label: 'Spread to Mid', unit: 'bps',     accessor: null },
-  { key: 'tenor_years',   label: 'Tenor',         unit: 'years',   accessor: 'tenor_years' },
 ]
 
 export const ANALYTICS_VIEWS: Array<{ key: AnalyticsViewKey; label: string }> = [
@@ -78,6 +77,10 @@ export const TIMESERIES_DEFAULT_STATE = {
   showDots: false,
   useGrossDv01: false,
   excludeComicallyLargeCusty: true,
+  // Default ON: most reported-0 fixed_rate prints in the SDR feed are
+  // compression / off-market markers, not real flow. Trader can toggle
+  // off to inspect the raw distribution.
+  removeZeroRates: true,
   yMin: '',
   yMax: '',
   // Phase 4: bucket selector defaults to tape_label so existing flows

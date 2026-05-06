@@ -20,7 +20,6 @@ export type AnalyticsMetricKey =
   | 'dv01'
   | 'notional'
   | 'spread_to_mid'
-  | 'tenor_years'
 
 export type AnalyticsViewKey = 'INTRADAY' | 'DAILY_CLOSE' | 'DAILY_OHLC' | 'VOLUME'
 
@@ -206,6 +205,9 @@ export type TimeseriesState = {
   // Trader-requested: exclude absurd custy prints (> 5× median notional)
   // from the chart so outliers don't dominate the y-axis scale.
   excludeComicallyLargeCusty: boolean
+  // Trader-requested: drop reported-0 fixed-rate prints (compression /
+  // off-market markers) from the bucket aggregation. Default ON.
+  removeZeroRates: boolean
   yMin: string
   yMax: string
   // Phase 4: bucket selector. Default 'tape_label' preserves existing

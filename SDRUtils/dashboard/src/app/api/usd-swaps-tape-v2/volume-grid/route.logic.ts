@@ -209,9 +209,12 @@ export function computeWindowBounds(
       )
     }
     case '1w': {
+      // Caller's lookbackDays flows through; rollingBounds enforces a
+      // 4× floor (28 days) so the percentile still sees ≥ 4 prior
+      // weekly windows even if the trader picks a small lookback.
       return rollingBounds(
         now,
-        Math.max(lookbackDays, 52 * 7),
+        lookbackDays,
         7,
         `date_trunc('week', ts AT TIME ZONE 'America/New_York')`,
       )

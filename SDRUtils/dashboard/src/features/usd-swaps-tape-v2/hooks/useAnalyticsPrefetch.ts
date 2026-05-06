@@ -130,7 +130,11 @@ export function useAnalyticsPrefetch(options: PrefetchOptions = {}) {
           range,
           groupBy,
           groupValueOverride: null,
-          options: {},
+          // Mirror the dock-hook default so prefetch and the first
+          // dock fetch hash to the same cache slot. Without this,
+          // the dock fires a fresh request on row click even though
+          // hover prefetched the right URL.
+          options: { removeZeroRates: true },
         })
         const rKey = rarityKey({
           bucket: `tape_label:${bucket}`,

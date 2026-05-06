@@ -27,6 +27,7 @@ import {
 const KEY_COLLAPSED = 'usd-tape-v2:volume-grid:collapsed'
 const KEY_METRIC    = 'usd-tape-v2:volume-grid:metric'
 const KEY_PERIOD    = 'usd-tape-v2:volume-grid:period'
+const KEY_LOOKBACK  = 'usd-tape-v2:volume-grid:lookback'
 const KEY_FWD_SCHEMA  = 'usd-tape-v2:volume-grid:forward-schema'
 const KEY_TENOR_SCHEMA = 'usd-tape-v2:volume-grid:tenor-schema'
 const KEY_PACKAGE_TYPE = 'usd-tape-v2:volume-grid:package-type'
@@ -37,6 +38,37 @@ const DEFAULTS_VERSION = 'open-dv01-1w-v1'
 const DEFAULT_COLLAPSED = false
 const DEFAULT_METRIC: VolumeMetric = 'dv01'
 const DEFAULT_PERIOD: VolumePeriod = '1w'
+
+// Lookback (baseline-history length) controls how many prior days /
+// rolling windows the percentile rank is drawn from. Decoupled from
+// Period (the current measurement window) so the trader can ask
+// "today's run-rate vs the last week / month / quarter" independently
+// of which period unit the cells display.
+type LookbackId = '1w' | '2w' | '3w' | '1m' | '3m' | '6m' | '1y' | '2y'
+const LOOKBACK_IDS: ReadonlyArray<LookbackId> = ['1w', '2w', '3w', '1m', '3m', '6m', '1y', '2y']
+const LOOKBACK_DAYS: Record<LookbackId, number> = {
+  '1w': 7,
+  '2w': 14,
+  '3w': 21,
+  '1m': 30,
+  '3m': 90,
+  '6m': 180,
+  '1y': 365,
+  '2y': 730,
+}
+// Lowercase to match the Window toggle (today / 1h / 24h / 1w / ...)
+// — both rows now read as the same family of compact units.
+const LOOKBACK_LABELS: Record<LookbackId, string> = {
+  '1w': '1w',
+  '2w': '2w',
+  '3w': '3w',
+  '1m': '1m',
+  '3m': '3m',
+  '6m': '6m',
+  '1y': '1y',
+  '2y': '2y',
+}
+const DEFAULT_LOOKBACK: LookbackId = '3m'
 
 const VIEW_MODE_IDS: ReadonlyArray<VolumeGridViewMode> = ['volume', 'idb_custy']
 const VIEW_MODE_LABELS: Record<VolumeGridViewMode, string> = {
@@ -98,6 +130,9 @@ export function VolumeGridCard({ onSelectPackage }: VolumeGridCardProps): JSX.El
           DEFAULT_PERIOD,
         ),
   )
+  const [lookback, setLookback] = useState<LookbackId>(() =>
+    readEnum<LookbackId>(KEY_LOOKBACK, LOOKBACK_IDS, DEFAULT_LOOKBACK),
+  )
   const [forwardSchema, setForwardSchema] = useState<ForwardSchemaId>(() =>
     readEnum<ForwardSchemaId>(KEY_FWD_SCHEMA, FORWARD_SCHEMA_IDS, 'default'),
   )
@@ -133,6 +168,10 @@ export function VolumeGridCard({ onSelectPackage }: VolumeGridCardProps): JSX.El
   }, [period])
   useEffect(() => {
     if (typeof window === 'undefined') return
+    window.localStorage.setItem(KEY_LOOKBACK, lookback)
+  }, [lookback])
+  useEffect(() => {
+    if (typeof window === 'undefined') return
     window.localStorage.setItem(KEY_FWD_SCHEMA, forwardSchema)
   }, [forwardSchema])
   useEffect(() => {
@@ -154,6 +193,7 @@ export function VolumeGridCard({ onSelectPackage }: VolumeGridCardProps): JSX.El
 
   const grid = useVolumeGrid({
     metric, period, collapsed,
+    lookbackDays: LOOKBACK_DAYS[lookback],
     forwardSchema, tenorSchema, packageType, viewMode,
   })
 
@@ -184,6 +224,9 @@ export function VolumeGridCard({ onSelectPackage }: VolumeGridCardProps): JSX.El
           value={metric}
           onChange={setMetric}
         />
+        <span className="font-mono text-[9.5px] uppercase tracking-wider text-slate-500" title="Window the cell value is summed over (current measurement window).">
+          window
+        </span>
         <Toggle
           options={[
             { id: 'today', label: 'Today' },
@@ -197,6 +240,14 @@ export function VolumeGridCard({ onSelectPackage }: VolumeGridCardProps): JSX.El
           ]}
           value={period}
           onChange={setPeriod}
+        />
+        <span className="font-mono text-[9.5px] uppercase tracking-wider text-slate-500" title="Length of the prior history the percentile (heatmap colour) is drawn from.">
+          baseline
+        </span>
+        <Toggle
+          options={LOOKBACK_IDS.map((id) => ({ id, label: LOOKBACK_LABELS[id] }))}
+          value={lookback}
+          onChange={setLookback}
         />
         <Toggle
           options={COLOR_MODE_IDS.map((id) => ({
@@ -262,6 +313,15 @@ export function VolumeGridCard({ onSelectPackage }: VolumeGridCardProps): JSX.El
           </span>
         )}
       </header>
+      {!collapsed && (
+        <div
+          data-testid="volume-grid-tagline"
+          className="px-3 pb-1.5 font-mono text-[10px] text-slate-500"
+          title={taglineTitle(period, lookback)}
+        >
+          {taglineText(period, lookback)}
+        </div>
+      )}
       {!collapsed && (
         <div className="px-3 pb-3" data-testid="volume-grid">
           {grid.data ? (
@@ -345,4 +405,52 @@ function SkeletonGrid(): JSX.Element {
       ))}
     </div>
   )
+}
+
+// Period framing — the cell value is summed over the "current
+// window"; the percentile (heatmap colour) ranks that value against
+// a "baseline" drawn from the configured lookback. Periods split
+// into two semantic families:
+//   - time_of_day (today / 1h): cell = today's open→now (or last
+//     hour) cumulative; baseline = same time-of-day on each prior
+//     trading day in the lookback.
+//   - rolling (24h / 1w / 2w / 3w / 1m / 3m): cell = trailing N-day
+//     sum; baseline = prior non-overlapping N-day windows shifted
+//     backward across the lookback.
+function periodFamily(period: VolumePeriod): 'time_of_day' | 'rolling' {
+  return period === 'today' || period === '1h' ? 'time_of_day' : 'rolling'
+}
+
+function currentWindowLabel(period: VolumePeriod): string {
+  switch (period) {
+    case 'today': return "today's intraday (open → as-of)"
+    case '1h':    return 'last 1 hour'
+    case '24h':   return 'trailing 24h'
+    case '1w':    return 'trailing 1-week'
+    case '2w':    return 'trailing 2-week'
+    case '3w':    return 'trailing 3-week'
+    case '1m':    return 'trailing 1-month'
+    case '3m':    return 'trailing 3-month'
+  }
+}
+
+function baselineWindowLabel(period: VolumePeriod, lookback: LookbackId): string {
+  if (periodFamily(period) === 'time_of_day') {
+    return `same time-of-day on prior ${LOOKBACK_LABELS[lookback]} of trading days`
+  }
+  return `prior non-overlapping ${currentWindowLabel(period).replace(/^trailing /, '')} windows over last ${LOOKBACK_LABELS[lookback]}`
+}
+
+function taglineText(period: VolumePeriod, lookback: LookbackId): string {
+  return `intraday volume seasonality heatmap · cell = ${currentWindowLabel(period)}; colour = percentile vs ${baselineWindowLabel(period, lookback)}`
+}
+
+function taglineTitle(period: VolumePeriod, lookback: LookbackId): string {
+  const fam = periodFamily(period)
+  const cur = currentWindowLabel(period)
+  const base = baselineWindowLabel(period, lookback)
+  if (fam === 'time_of_day') {
+    return `Each cell sums ${cur} for that (forward × tenor) bucket. The colour ranks that cumulative volume against the same point in the trading session on prior ${LOOKBACK_LABELS[lookback]} of days, so red = busier than usual at this time of day, blue = quieter.`
+  }
+  return `Each cell sums ${cur} for that (forward × tenor) bucket. The colour ranks that against ${base}, so red = busier than the typical trailing ${currentWindowLabel(period).replace(/^trailing /, '')} window, blue = quieter.`
 }

@@ -126,6 +126,11 @@ async function produceAnalyticsTimeseries(
   const groupBy = (searchParams.get('groupBy') ?? 'tape_label').toLowerCase()
   const useGrossDv01 = parseBooleanParam(searchParams, 'useGrossDv01', false)
   const excludeLargeCusty = parseBooleanParam(searchParams, 'excludeLargeCusty', true)
+  // Trader-requested: drop reported-0 fixed_rate prints from the
+  // bucket aggregation entirely. Most are compression / off-market
+  // markers and dragging the median down. Default ON; client can
+  // pass `removeZeroRates=false` to inspect the raw distribution.
+  const removeZeroRates = parseBooleanParam(searchParams, 'removeZeroRates', true)
   const filterPredicate = packageAnalyticsFilterPredicate(groupBy, '$1', LEGS_TABLE)
   if (!filterPredicate) {
     return { status: 400, payload: { error: `invalid groupBy: ${groupBy}` } }
@@ -176,6 +181,7 @@ async function produceAnalyticsTimeseries(
         FROM package_summary b
         CROSS JOIN custy_threshold t
         WHERE ${outlierPredicate}
+          ${removeZeroRates ? 'AND b.fixed_rate <> 0' : ''}
         ORDER BY b.ts ASC
         LIMIT ${INTRADAY_TICK_CAP}
       `
@@ -247,6 +253,7 @@ async function produceAnalyticsTimeseries(
           platform,
           DATE_TRUNC('day', ts AT TIME ZONE 'America/New_York') AS day
         FROM package_summary
+        ${removeZeroRates ? 'WHERE fixed_rate <> 0' : ''}
       ),
       custy_threshold AS (
         SELECT
