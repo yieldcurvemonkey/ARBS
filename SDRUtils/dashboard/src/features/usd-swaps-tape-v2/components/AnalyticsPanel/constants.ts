@@ -78,6 +78,10 @@ export const TIMESERIES_DEFAULT_STATE = {
   showDots: false,
   useGrossDv01: false,
   excludeComicallyLargeCusty: true,
+  // Default ON: most reported-0 fixed_rate prints in the SDR feed are
+  // compression / off-market markers, not real flow. Trader can toggle
+  // off to inspect the raw distribution.
+  removeZeroRates: true,
   yMin: '',
   yMax: '',
   // Phase 4: bucket selector defaults to tape_label so existing flows

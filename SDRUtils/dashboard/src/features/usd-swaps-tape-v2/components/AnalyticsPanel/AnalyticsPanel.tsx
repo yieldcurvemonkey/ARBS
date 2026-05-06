@@ -161,6 +161,7 @@ export function AnalyticsPanel(props: AnalyticsPanelProps): JSX.Element {
       groupBy: tsState.groupBy,
       groupValueOverride:
         tsState.groupBy === 'canonical' ? tsState.canonicalKey : null,
+      removeZeroRates: tsState.removeZeroRates,
     },
     rarityOptions: {
       lookback: 90,
@@ -254,6 +255,7 @@ export function AnalyticsPanel(props: AnalyticsPanelProps): JSX.Element {
     groupBy: tsState.groupBy,
     groupValueOverride:
       tsState.groupBy === 'canonical' ? tsState.canonicalKey : null,
+    removeZeroRates: tsState.removeZeroRates,
   })
   const rarity = useRarityData(baseTrade, {
     lookback: 90,

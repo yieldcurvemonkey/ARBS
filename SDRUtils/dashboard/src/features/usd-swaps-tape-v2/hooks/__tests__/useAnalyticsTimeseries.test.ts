@@ -22,6 +22,49 @@ describe('useAnalyticsTimeseries query wiring', () => {
     expect(q.get('range')).toBe('1M')
   })
 
+  it('omits removeZeroRates from the URL when the flag is left at the default (true)', () => {
+    // Server defaults `removeZeroRates` to true. Keep the URL tidy
+    // when the trader never touches the toggle so the canonical URL
+    // matches the previous-cache hits during rollout.
+    const q = __internal.buildAnalyticsTimeseriesQuery(
+      'USD-SOFR 10Y',
+      'DAILY_CLOSE',
+      '1M',
+      { removeZeroRates: true },
+    )
+    expect(q.get('removeZeroRates')).toBeNull()
+  })
+
+  it('writes removeZeroRates=false on the URL when the trader toggles 0-rate prints back in', () => {
+    const q = __internal.buildAnalyticsTimeseriesQuery(
+      'USD-SOFR 10Y',
+      'DAILY_CLOSE',
+      '1M',
+      { removeZeroRates: false },
+    )
+    expect(q.get('removeZeroRates')).toBe('false')
+  })
+
+  it('removeZeroRates DOES change the SWR cache key (it changes the warehouse aggregation)', () => {
+    const withZeros = timeseriesKey({
+      bucket: 'bucket',
+      view: 'DAILY_CLOSE',
+      range: '1Y',
+      groupBy: 'tape_label',
+      groupValueOverride: null,
+      options: { removeZeroRates: false },
+    })
+    const withoutZeros = timeseriesKey({
+      bucket: 'bucket',
+      view: 'DAILY_CLOSE',
+      range: '1Y',
+      groupBy: 'tape_label',
+      groupValueOverride: null,
+      options: { removeZeroRates: true },
+    })
+    expect(withZeros).not.toEqual(withoutZeros)
+  })
+
   it('orthogonal display toggles do NOT change the SWR cache key', () => {
     // Phase B/C contract: useGrossDv01 + excludeLargeCusty are display
     // options that change which numbers the chart shows, not which

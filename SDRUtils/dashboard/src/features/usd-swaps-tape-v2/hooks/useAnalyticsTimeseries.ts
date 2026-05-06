@@ -36,6 +36,11 @@ export type AnalyticsTimeseriesOptions = {
   // canonical bucket key as the value via groupValueOverride).
   groupBy?: AnalyticsGroupBy
   groupValueOverride?: string | null
+  // Drops reported-0 fixed_rate prints from the bucket aggregation
+  // (compression / off-market markers). Server defaults to true when
+  // the param is absent so the in-flight rollout doesn't break
+  // existing clients.
+  removeZeroRates?: boolean
 }
 
 interface TimeseriesResponse {
@@ -87,12 +92,19 @@ function buildAnalyticsTimeseriesQuery(
   // payload regardless. Drop them from the URL so the dock-hook +
   // hover-prefetch hooks build identical URLs and one in-flight fetch
   // can satisfy both code paths.
-  return new URLSearchParams({
+  //
+  // removeZeroRates DOES change which rows the warehouse aggregation
+  // sees, so it stays in the URL and in the SWR cache key.
+  const params = new URLSearchParams({
     value,
     view,
     range,
     groupBy,
   })
+  if (opts.removeZeroRates === false) {
+    params.set('removeZeroRates', 'false')
+  }
+  return params
 }
 
 export function buildTimeseriesUrl(
@@ -117,6 +129,7 @@ export function useAnalyticsTimeseries(
   const excludeLargeCusty = opts.excludeLargeCusty !== false
   const groupBy: AnalyticsGroupBy = opts.groupBy ?? 'tape_label'
   const groupValueOverride = opts.groupValueOverride ?? null
+  const removeZeroRates = opts.removeZeroRates !== false
 
   // Daily: always fetched when bucket is set + view !== INTRADAY.
   const dailyEnabled = bucket != null && !needsIntraday
@@ -130,10 +143,11 @@ export function useAnalyticsTimeseries(
       groupValueOverride,
       // useGrossDv01 + excludeLargeCusty are dropped from the key by
       // analyticsCacheKeys.ORTHOGONAL_DISPLAY_OPTIONS so the cache
-      // survives orthogonal-toggle changes.
-      options: { useGrossDv01, excludeLargeCusty },
+      // survives orthogonal-toggle changes. removeZeroRates DOES
+      // change the warehouse result, so it MUST stay in the key.
+      options: { useGrossDv01, excludeLargeCusty, removeZeroRates },
     })
-  }, [dailyEnabled, bucket, groupValueOverride, range, groupBy, useGrossDv01, excludeLargeCusty])
+  }, [dailyEnabled, bucket, groupValueOverride, range, groupBy, useGrossDv01, excludeLargeCusty, removeZeroRates])
 
   const dailyUrl = useMemo(() => {
     if (!dailyEnabled) return null
@@ -142,8 +156,9 @@ export function useAnalyticsTimeseries(
       excludeLargeCusty,
       groupBy,
       groupValueOverride,
+      removeZeroRates,
     })
-  }, [dailyEnabled, bucket, range, useGrossDv01, excludeLargeCusty, groupBy, groupValueOverride])
+  }, [dailyEnabled, bucket, range, useGrossDv01, excludeLargeCusty, groupBy, groupValueOverride, removeZeroRates])
 
   const dailySwr = useSWR<TimeseriesResponse>(
     dailyKey,
@@ -160,9 +175,9 @@ export function useAnalyticsTimeseries(
       range: '1D',
       groupBy,
       groupValueOverride,
-      options: { useGrossDv01, excludeLargeCusty },
+      options: { useGrossDv01, excludeLargeCusty, removeZeroRates },
     })
-  }, [intradayEnabled, bucket, groupValueOverride, groupBy, useGrossDv01, excludeLargeCusty])
+  }, [intradayEnabled, bucket, groupValueOverride, groupBy, useGrossDv01, excludeLargeCusty, removeZeroRates])
 
   const intradayUrl = useMemo(() => {
     if (!intradayEnabled) return null
@@ -171,8 +186,9 @@ export function useAnalyticsTimeseries(
       excludeLargeCusty,
       groupBy,
       groupValueOverride,
+      removeZeroRates,
     })
-  }, [intradayEnabled, bucket, useGrossDv01, excludeLargeCusty, groupBy, groupValueOverride])
+  }, [intradayEnabled, bucket, useGrossDv01, excludeLargeCusty, groupBy, groupValueOverride, removeZeroRates])
 
   const intradaySwr = useSWR<TimeseriesResponse>(
     intradayKey,

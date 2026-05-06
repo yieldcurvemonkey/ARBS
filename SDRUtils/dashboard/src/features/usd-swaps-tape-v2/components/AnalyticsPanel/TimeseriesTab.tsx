@@ -35,6 +35,7 @@ import {
   focusedTimeseriesValue,
   formatTimeseriesTickParts,
   formatTimeseriesTooltipTime,
+  interpolateIntradayMinutely,
   projectTimeseriesPoint,
 } from './TimeseriesTab.helpers'
 import type {
@@ -244,7 +245,8 @@ export function TimeseriesTab(props: TimeseriesTabProps): JSX.Element {
   const overlayTrades = sequence ?? []
   const {
     view, metric, range, showCusty, showIdb, showSigmaBands, showIqrBand,
-    showDots, useGrossDv01, excludeComicallyLargeCusty, yMin, yMax,
+    showDots, useGrossDv01, excludeComicallyLargeCusty, removeZeroRates,
+    yMin, yMax,
   } = state
 
   const effectiveMetric = effectiveTimeseriesMetric(metric, view)
@@ -257,7 +259,22 @@ export function TimeseriesTab(props: TimeseriesTabProps): JSX.Element {
     view === 'VOLUME' ||
     effectiveMetric === 'dv01' ||
     effectiveMetric === 'notional'
-  const rawData = isIntraday ? intraday : filterRangeDays(dailyClose, range)
+  const rawTicks = isIntraday ? intraday : filterRangeDays(dailyClose, range)
+  // Intraday + fixed_rate: forward-fill rates onto a uniform per-minute
+  // grid. The raw SDR feed produces sparse ticks (sub-second clusters
+  // around dealer activity, then quiet stretches), so the unfilled
+  // chart looked like disconnected sticks even when the rate was
+  // continuously knowable. LOCF interpolation gives the trader a
+  // continuous step-line that matches the prevailing market rate at
+  // any minute. DV01 / notional / VOLUME views skip the fill — those
+  // are event values, summing them across a forward-filled minute
+  // grid would multiply volume.
+  const rawData = useMemo(() => {
+    if (isIntraday && effectiveMetric === 'fixed_rate') {
+      return interpolateIntradayMinutely(rawTicks)
+    }
+    return rawTicks
+  }, [isIntraday, effectiveMetric, rawTicks])
 
   // Re-project the series for metrics other than fixed_rate. Null stays
   // null — the chart draws gaps on days where one side didn't print
@@ -427,6 +444,13 @@ export function TimeseriesTab(props: TimeseriesTabProps): JSX.Element {
           accent="emerald"
           hint="Drop custy prints > 5× median so outliers don't dominate the scale. Trader-requested default: ON."
         />
+        <ToggleSwitch
+          label="Remove 0s"
+          on={removeZeroRates}
+          onChange={(v) => setState((s) => ({ ...s, removeZeroRates: v }))}
+          accent="emerald"
+          hint="Drop trades reporting fixed_rate = 0 (compression / off-market markers). Trader-requested default: ON."
+        />
         <div className="ml-auto flex items-center gap-1.5">
           <NumberInput
             label="Y min"
@@ -474,6 +498,32 @@ export function TimeseriesTab(props: TimeseriesTabProps): JSX.Element {
               </span>
             ),
           },
+          {
+            label: 'Remove 0s',
+            value: removeZeroRates ? 'ON' : 'OFF',
+            trailing: (
+              <span
+                className={`ml-1 rounded px-1 py-[1px] text-[9px] ring-1 ${
+                  removeZeroRates
+                    ? 'bg-emerald-500/15 text-emerald-200 ring-emerald-500/30'
+                    : 'bg-amber-500/15 text-amber-200 ring-amber-500/30'
+                }`}
+              >
+                {removeZeroRates ? 'no-zeros' : 'with-zeros'}
+              </span>
+            ),
+          },
+          ...(isIntraday && effectiveMetric === 'fixed_rate'
+            ? [{
+                label: 'Interp',
+                value: 'minute LOCF',
+                trailing: (
+                  <span className="ml-1 rounded bg-cyan-500/15 px-1 py-[1px] text-[9px] text-cyan-200 ring-1 ring-cyan-500/30">
+                    fwd-fill
+                  </span>
+                ),
+              }]
+            : []),
         ]}
         source="/api/usd-swaps-tape-v2/timeseries"
       />
