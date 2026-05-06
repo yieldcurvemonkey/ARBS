@@ -3,6 +3,7 @@
 import type { JSX } from 'react'
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { usePathname, useRouter, useSearchParams } from 'next/navigation'
+import { HelpCircle } from 'lucide-react'
 import { FilterMatchMode, PrimeReactProvider } from 'primereact/api'
 import 'primereact/resources/themes/lara-dark-indigo/theme.css'
 import 'primereact/resources/primereact.min.css'
@@ -14,6 +15,11 @@ import { TradeTapeTable } from './TradeTapeTable/TradeTapeTable'
 import { ManualLinksDialog } from './ManualLinksDialog/ManualLinksDialog'
 import { AnalyticsPanel } from './AnalyticsPanel'
 import { VolumeGridCard } from './VolumeGrid/VolumeGridCard'
+import {
+  hasSeenUsdSwapsOnboarding,
+  markUsdSwapsOnboardingSeen,
+  UsdSwapsOnboardingGuide,
+} from './UsdSwapsOnboardingGuide'
 import { groupLinkedRows } from '@/lib/manual-links-ui/grouping'
 import { ManualLinkDetailModal } from '@/lib/manual-links-ui/components/ManualLinkDetailModal'
 import { TAPE_V2_API_BASE } from '../constants'
@@ -56,6 +62,7 @@ export default function UsdSwapsTradeTape(): JSX.Element {
 
   const [activeModal, setActiveModal] = useState<ModalName>(null)
   const [analyticsOpen, setAnalyticsOpen] = useState<boolean>(false)
+  const [onboardingOpen, setOnboardingOpen] = useState(false)
   // Detail-modal state. Opened when the trader clicks a row's manual-link
   // badge; closed via the modal's close button. The admin password and
   // user inputs live here so they survive the modal open/close cycle.
@@ -86,6 +93,30 @@ export default function UsdSwapsTradeTape(): JSX.Element {
   }, [])
   const handleCloseManualLink = useCallback(() => {
     setDetailLinkId(null)
+  }, [])
+  const openOnboarding = useCallback(() => {
+    setOnboardingOpen(true)
+  }, [])
+  const closeOnboarding = useCallback(() => {
+    if (typeof window !== 'undefined') {
+      try {
+        markUsdSwapsOnboardingSeen(window.localStorage)
+      } catch {
+        setOnboardingOpen(false)
+        return
+      }
+    }
+    setOnboardingOpen(false)
+  }, [])
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    try {
+      if (hasSeenUsdSwapsOnboarding(window.localStorage)) return
+      setOnboardingOpen(true)
+    } catch {
+      setOnboardingOpen(false)
+    }
   }, [])
 
   // Per-column filters live in the URL via useColumnFilters; thread the
@@ -159,6 +190,16 @@ export default function UsdSwapsTradeTape(): JSX.Element {
                     Link {selection.count} selected
                   </button>
                 ) : null}
+                <button
+                  type="button"
+                  onClick={openOnboarding}
+                  title="Open the how-to guide"
+                  aria-label="Open the how-to guide"
+                  className="inline-flex items-center gap-1 rounded border border-slate-700 px-2.5 py-1 font-mono text-[10.5px] text-slate-200 ring-1 ring-transparent hover:bg-slate-800"
+                >
+                  <HelpCircle className="h-3.5 w-3.5" aria-hidden="true" />
+                  <span>How to use</span>
+                </button>
                 <button
                   type="button"
                   onClick={() => setAnalyticsOpen((v) => !v)}
@@ -392,6 +433,10 @@ export default function UsdSwapsTradeTape(): JSX.Element {
           onAdminPasswordChange={setAdminPassword}
           packageTypeOptions={PACKAGE_TYPE_OPTIONS}
           linkReasonOptions={LINK_REASON_OPTIONS}
+        />
+        <UsdSwapsOnboardingGuide
+          open={onboardingOpen}
+          onClose={closeOnboarding}
         />
       </div>
     </PrimeReactProvider>

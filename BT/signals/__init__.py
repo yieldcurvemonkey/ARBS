@@ -90,6 +90,17 @@ from BT.signals.jpm_rv_backtest import (
     JPMRVBacktestResult,
     run_jpm_rv_backtest,
 )
+from BT.signals.risk_premia_pairs_pca_backtest import (
+    RiskPremiaPairsPCAConfig,
+    RiskPremiaPCASignal,
+    RiskPremiaPCASnapshot,
+    RiskPremiaPairsPCABacktestResult,
+    RiskPremiaPCATrigger,
+    build_risk_premia_pca_signal_table,
+    build_irswap_spread_signal_panel,
+    make_irs_query_factory,
+    run_risk_premia_pairs_pca_backtest,
+)
 
 __all__ = [
     "PCAMomentumConfig",
@@ -162,4 +173,13 @@ __all__ = [
     "JPMRVBacktestConfig",
     "JPMRVBacktestResult",
     "run_jpm_rv_backtest",
+    "RiskPremiaPairsPCAConfig",
+    "RiskPremiaPCASignal",
+    "RiskPremiaPCASnapshot",
+    "RiskPremiaPairsPCABacktestResult",
+    "RiskPremiaPCATrigger",
+    "build_risk_premia_pca_signal_table",
+    "build_irswap_spread_signal_panel",
+    "make_irs_query_factory",
+    "run_risk_premia_pairs_pca_backtest",
 ]
