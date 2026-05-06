@@ -179,6 +179,13 @@ export function VolumeGridCard({ onSelectPackage }: VolumeGridCardProps): JSX.El
         >
           {collapsed ? '▲ Volume Grid' : '▼ Volume Grid'}
         </button>
+        <span
+          data-testid="volume-grid-tagline"
+          className="font-mono text-[10px] text-slate-500"
+          title="Each cell ranks current-window volume against the same time-of-day on prior trading days, so the colour reads as 'how busy is this forward × tenor right now vs. its own seasonality?'"
+        >
+          intraday volume seasonality heatmap · forward × tenor, ranked vs same-time-of-day prior days
+        </span>
         <Toggle
           options={[{ id: 'notional', label: 'Notional' }, { id: 'dv01', label: 'DV01' }]}
           value={metric}
