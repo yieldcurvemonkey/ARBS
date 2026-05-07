@@ -1,10 +1,9 @@
 // ABOUTME: GET /api/usd-swaps-tape-v2/volume-grid/cell.
 // Returns daily volume timeseries + most-recent N packages for the bucket.
 
-import { NextResponse } from 'next/server'
 import { query } from '@/lib/db'
 import { ServerLru } from '@/lib/usd-swaps-tape-v2/serverLru'
-import { computeEtag, matchesIfNoneMatch } from '@/lib/usd-swaps-tape-v2/etag'
+import { analyticsHandler } from '@/lib/usd-swaps-tape-v2/analyticsHandler'
 import {
   buildBucketPredicate,
   buildPackageTypeFilter,
@@ -36,31 +35,16 @@ const lru = new ServerLru<{ payload: unknown; etag: string }>({
 })
 const CACHE_HEADERS = { 'Cache-Control': 'private, max-age=300, stale-while-revalidate=600' } as const
 
-const cacheKey = (url: URL): string => {
-  const sorted = [...new URLSearchParams(url.search).entries()].sort()
-  return JSON.stringify(sorted)
-}
-
 const num = (v: unknown): number => {
   const n = typeof v === 'number' ? v : Number(v)
   return Number.isFinite(n) ? n : 0
 }
 
-export async function GET(request: Request) {
-  const url = new URL(request.url)
-  const ifNoneMatch = request.headers.get('If-None-Match')
-  const key = cacheKey(url)
-  const hit = lru.get(key)
-  if (hit) {
-    if (matchesIfNoneMatch(hit.etag, ifNoneMatch)) {
-      return new Response(null, { status: 304, headers: { ETag: hit.etag, ...CACHE_HEADERS } })
-    }
-    return NextResponse.json(hit.payload, { headers: { ETag: hit.etag, ...CACHE_HEADERS } })
-  }
-
+async function produceVolumeGridCell(request: Request): Promise<{ status: number; payload: unknown }> {
+  const { searchParams } = new URL(request.url)
   const now = new Date()
-  const parsed = parseVolumeGridCellParams(url.searchParams, now)
-  if (!parsed.ok) return NextResponse.json({ error: parsed.error }, { status: 400 })
+  const parsed = parseVolumeGridCellParams(searchParams, now)
+  if (!parsed.ok) return { status: 400, payload: { error: parsed.error } }
   const p = parsed.value
 
   const forwardSchema = resolveForwardSchema(p.forwardSchema, now)
@@ -164,15 +148,15 @@ export async function GET(request: Request) {
       ),
       recentTrades,
     }
-    const etag = computeEtag(payload)
-    lru.set(key, { payload, etag })
-    if (matchesIfNoneMatch(etag, ifNoneMatch)) {
-      return new Response(null, { status: 304, headers: { ETag: etag, ...CACHE_HEADERS } })
-    }
-    return NextResponse.json(payload, { headers: { ETag: etag, ...CACHE_HEADERS } })
+    return { status: 200, payload }
   } catch (error) {
     console.error('usd-swaps-tape-v2/volume-grid/cell error', error)
     const message = error instanceof Error ? error.message : 'failed to fetch cell drill-down'
-    return NextResponse.json({ error: message }, { status: 500 })
+    return { status: 500, payload: { error: message } }
   }
 }
+
+export const GET = analyticsHandler(
+  { lru, cacheHeaders: CACHE_HEADERS },
+  produceVolumeGridCell,
+)
