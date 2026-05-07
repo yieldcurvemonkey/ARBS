@@ -232,6 +232,8 @@ CREATE INDEX IF NOT EXISTS idx_tape_v2_packages_fomc ON {PACKAGES_TABLE_V2}(fomc
 CREATE INDEX IF NOT EXISTS idx_tape_v2_packages_flow ON {PACKAGES_TABLE_V2}(contributes_to_flow_any, as_of_date);
 CREATE INDEX IF NOT EXISTS idx_tape_v2_packages_violation ON {PACKAGES_TABLE_V2}(state_machine_violation_any);
 CREATE INDEX IF NOT EXISTS idx_tape_v2_packages_metrics_gin ON {PACKAGES_TABLE_V2} USING GIN (package_metrics);
+CREATE INDEX IF NOT EXISTS idx_tape_v2_packages_tape_label_upper
+  ON {PACKAGES_TABLE_V2}(UPPER(COALESCE(tape_label, '')), original_execution_start DESC NULLS LAST);
 
 -- Idempotent migrations for tables that pre-date the v2 columns
 -- introduced after the initial deploy. ADD COLUMN IF NOT EXISTS keeps

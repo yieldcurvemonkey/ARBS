@@ -1,0 +1,21 @@
+# The Vercel project `arbs` builds from SDRUtils/dashboard. Keep deploy uploads
+# scoped to that app so local research data/cache directories are not packaged.
+*
+!SDRUtils/
+SDRUtils/*
+!SDRUtils/dashboard/
+!SDRUtils/dashboard/**
+
+SDRUtils/dashboard/.claude/
+SDRUtils/dashboard/.env
+SDRUtils/dashboard/.env.*
+SDRUtils/dashboard/.next/
+SDRUtils/dashboard/.vercel/
+SDRUtils/dashboard/node_modules/
+SDRUtils/dashboard/*.log
+SDRUtils/dashboard/*.tsbuildinfo
+SDRUtils/dashboard/__tests__/
+SDRUtils/dashboard/*.test.ts
+SDRUtils/dashboard/*.spec.ts
+SDRUtils/dashboard/*.md
+SDRUtils/dashboard/docs/

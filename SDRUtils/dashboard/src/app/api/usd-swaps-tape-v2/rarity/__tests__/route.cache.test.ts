@@ -4,6 +4,7 @@ const queryMock = jest.fn(async () => ({ rows: [] }))
 
 jest.mock('@/lib/db', () => ({
   query: queryMock,
+  analyticsQuery: queryMock,
 }))
 
 function req(qs: string, headers: Record<string, string> = {}): Request {

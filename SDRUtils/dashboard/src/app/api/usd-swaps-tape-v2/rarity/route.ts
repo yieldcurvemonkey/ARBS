@@ -4,7 +4,7 @@
 // the focused trade, and recency signals (last similar print, frequency,
 // bucket rank, all-time records).
 import { NextResponse } from 'next/server'
-import { query } from '@/lib/db'
+import { analyticsQuery as query } from '@/lib/db'
 import {
   distributionStats,
   packageAnalyticsCtes,
@@ -19,6 +19,7 @@ import { ServerLru } from '@/lib/usd-swaps-tape-v2/serverLru'
 import { computeEtag, matchesIfNoneMatch } from '@/lib/usd-swaps-tape-v2/etag'
 import { sampleMatchesSimilarity, type SimilaritySample } from './route.logic'
 import {
+  buildTapeLabelCandidates,
   buildOutrightTapeLabelCandidates,
   isOutrightTapeLabelCandidate,
 } from '../analytics-timeseries/route.logic'
@@ -91,7 +92,10 @@ async function produceRarity(req: Request): Promise<RarityResult> {
     return { status: 400, payload: { error: 'value parameter is required' } }
   }
   const groupBy = (searchParams.get('groupBy') ?? 'tape_label').toLowerCase()
-  const filterPredicate = packageAnalyticsFilterPredicate(groupBy, '$1', LEGS_TABLE)
+  const useCandidates = groupBy === 'tape_label'
+  const filterPredicate = packageAnalyticsFilterPredicate(
+    groupBy, '$1', LEGS_TABLE, { candidatesMode: useCandidates },
+  )
   if (!filterPredicate) {
     return { status: 400, payload: { error: `invalid groupBy: ${groupBy}` } }
   }
@@ -113,6 +117,7 @@ async function produceRarity(req: Request): Promise<RarityResult> {
   const binWidthOverride = searchParams.get('binWidth')
 
   const startDate = new Date(Date.now() - lookback * 86_400_000).toISOString()
+  const queryValue: unknown = useCandidates ? buildTapeLabelCandidates(value) : value
 
   try {
     let samples: SampleRow[]
@@ -163,7 +168,7 @@ async function produceRarity(req: Request): Promise<RarityResult> {
         ORDER BY ts DESC
         LIMIT ${RARITY_SAMPLE_CAP}
       `
-      const { rows } = await query<SampleRow>(sampleSql, [value, startDate])
+      const { rows } = await query<SampleRow>(sampleSql, [queryValue, startDate])
       samples = rows
     }
 
@@ -375,7 +380,7 @@ async function produceRarity(req: Request): Promise<RarityResult> {
          FROM package_summary
          ORDER BY ABS(notional) DESC NULLS LAST LIMIT 1)
       `
-      const { rows } = await query<RecordRow>(recordSql, [value])
+      const { rows } = await query<RecordRow>(recordSql, [queryValue])
       records = rows
     }
     const [highRate, lowRate, largestNotional] = [records[0], records[1], records[2]]

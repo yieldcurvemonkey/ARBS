@@ -4,7 +4,7 @@
 // recent-similar trades used by the Traded Levels tab. Trader-requested
 // "what and when" surface.
 import { NextResponse } from 'next/server'
-import { query } from '@/lib/db'
+import { analyticsQuery as query } from '@/lib/db'
 import {
   packageAnalyticsCtes,
   packageAnalyticsFilterPredicate,
@@ -14,6 +14,7 @@ import {
 import { ServerLru } from '@/lib/usd-swaps-tape-v2/serverLru'
 import { computeEtag, matchesIfNoneMatch } from '@/lib/usd-swaps-tape-v2/etag'
 import {
+  buildTapeLabelCandidates,
   buildOutrightTapeLabelCandidates,
   isOutrightTapeLabelCandidate,
 } from '../analytics-timeseries/route.logic'
@@ -81,10 +82,14 @@ async function produceExtremes(req: Request): Promise<{ status: number; payload:
     return { status: 400, payload: { error: 'value parameter is required' } }
   }
   const groupBy = (searchParams.get('groupBy') ?? 'tape_label').toLowerCase()
-  const filterPredicate = packageAnalyticsFilterPredicate(groupBy, '$1', LEGS_TABLE)
+  const useCandidates = groupBy === 'tape_label'
+  const filterPredicate = packageAnalyticsFilterPredicate(
+    groupBy, '$1', LEGS_TABLE, { candidatesMode: useCandidates },
+  )
   if (!filterPredicate) {
     return { status: 400, payload: { error: `invalid groupBy: ${groupBy}` } }
   }
+  const queryValue: unknown = useCandidates ? buildTapeLabelCandidates(value) : value
   const focusedRateBps = Number(searchParams.get('focusedRate') ?? 'NaN')
   const focusedNotional = Number(searchParams.get('focusedNotional') ?? 'NaN')
   const primaryTol = Number(searchParams.get('primaryTol') ?? '2.0')
@@ -173,7 +178,7 @@ async function produceExtremes(req: Request): Promise<{ status: number; payload:
           branch('30d low rate', '30 days', 'fixed_rate ASC NULLS LAST', 3),
         ].join(' UNION ALL ')}
       `
-      const { rows } = await query<ExtremeDbRow>(sql, [value, d52w, d30d])
+      const { rows } = await query<ExtremeDbRow>(sql, [queryValue, d52w, d30d])
       extremeRows = rows
     }
 
@@ -225,7 +230,7 @@ async function produceExtremes(req: Request): Promise<{ status: number; payload:
         similar = res.rows
       } else {
         const sizeFilter = sizeBand ? `AND ABS(ABS(notional) - $5::float) <= $6::float` : ''
-        const sParams: unknown[] = [value, since90, rateDecimal, tolDecimal]
+        const sParams: unknown[] = [queryValue, since90, rateDecimal, tolDecimal]
         if (sizeBand) sParams.push(focusedNotional, sizeBand)
         const similarSql = `
           WITH ${packageAnalyticsCtes({

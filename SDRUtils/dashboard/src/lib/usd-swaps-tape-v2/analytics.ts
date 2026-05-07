@@ -165,8 +165,12 @@ export function packageAnalyticsFilterPredicate(
   groupBy: string,
   valueParam: string,
   legsTable: string,
+  opts?: { candidatesMode?: boolean },
 ): string | null {
   if (groupBy === 'tape_label') {
+    if (opts?.candidatesMode) {
+      return `UPPER(COALESCE(p.tape_label, '')) = ANY(${valueParam}::text[])`
+    }
     return `(
       p.tape_label = ${valueParam}
       OR ${normalizeAnalyticsTapeLabelSql('p.tape_label')} = ${normalizeAnalyticsTapeLabelSql(valueParam)}

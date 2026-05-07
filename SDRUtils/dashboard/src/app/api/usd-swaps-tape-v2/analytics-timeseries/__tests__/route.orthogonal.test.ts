@@ -35,6 +35,7 @@ const queryMock = jest.fn(async () => ({
 
 jest.unstable_mockModule('@/lib/db', () => ({
   query: queryMock,
+  analyticsQuery: queryMock,
 }))
 
 function req(qs: string): Request {

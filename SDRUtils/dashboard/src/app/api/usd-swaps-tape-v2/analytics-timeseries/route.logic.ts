@@ -1,4 +1,7 @@
-import { normalizeAnalyticsTapeLabel } from '@/lib/usd-swaps-tape-v2/analytics'
+import {
+  normalizeAnalyticsTapeLabel,
+  __analyticsLifecycleFlagTokens as LIFECYCLE_TOKENS,
+} from '@/lib/usd-swaps-tape-v2/analytics'
 
 export function parseBooleanParam(
   searchParams: URLSearchParams,
@@ -62,4 +65,20 @@ export function isOutrightTapeLabelCandidate(value: string): boolean {
     label.includes(' OUTRIGHT ') &&
     !/( CURVE | FLY | MMS | PACKAGE | SPREAD )/.test(label)
   )
+}
+
+export function buildTapeLabelCandidates(value: string): string[] {
+  const candidates = new Set<string>()
+  addSofrOisCompoundVariants(candidates, value)
+  addSofrOisCompoundVariants(candidates, normalizeAnalyticsTapeLabel(value))
+  for (const token of LIFECYCLE_TOKENS) {
+    const withToken = compactUpperLabel(value) + ' ' + token
+    addSofrOisCompoundVariants(candidates, withToken)
+    const normalized = normalizeAnalyticsTapeLabel(value)
+    addSofrOisCompoundVariants(candidates, normalized + ' ' + token)
+  }
+  const raw = compactUpperLabel(value)
+  candidates.add(raw.replace(/\bPHYS\b/g, 'PHY'))
+  candidates.add(raw.replace(/\bPHYS\b/g, 'PHYSICAL'))
+  return [...candidates].filter((c) => c.length > 0)
 }

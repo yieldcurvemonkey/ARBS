@@ -3,7 +3,7 @@
 // platforms, plus daily-summed DV01 for the VOLUME view. Shape is the
 // TimeseriesPointAug contract the analytics dock consumes directly.
 import { NextResponse } from 'next/server'
-import { query } from '@/lib/db'
+import { analyticsQuery as query } from '@/lib/db'
 import {
   packageAnalyticsCtes,
   packageAnalyticsFilterPredicate,
@@ -15,6 +15,7 @@ import { ServerLru } from '@/lib/usd-swaps-tape-v2/serverLru'
 import { computeEtag, matchesIfNoneMatch } from '@/lib/usd-swaps-tape-v2/etag'
 import {
   buildOutrightTapeLabelCandidates,
+  buildTapeLabelCandidates,
   custyNotionalOutlierPredicate,
   isOutrightTapeLabelCandidate,
   parseBooleanParam,
@@ -408,7 +409,10 @@ async function produceAnalyticsTimeseries(
   // markers and dragging the median down. Default ON; client can
   // pass `removeZeroRates=false` to inspect the raw distribution.
   const removeZeroRates = parseBooleanParam(searchParams, 'removeZeroRates', true)
-  const filterPredicate = packageAnalyticsFilterPredicate(groupBy, '$1', LEGS_TABLE)
+  const useCandidates = groupBy === 'tape_label'
+  const filterPredicate = packageAnalyticsFilterPredicate(
+    groupBy, '$1', LEGS_TABLE, { candidatesMode: useCandidates },
+  )
   if (!filterPredicate) {
     return { status: 400, payload: { error: `invalid groupBy: ${groupBy}` } }
   }
@@ -420,6 +424,9 @@ async function produceAnalyticsTimeseries(
 
   const riskAgg = riskAggregateExpression(useGrossDv01)
   const outlierPredicate = custyNotionalOutlierPredicate('b', 't', excludeLargeCusty)
+  const queryValue: unknown = useCandidates
+    ? buildTapeLabelCandidates(value)
+    : value
 
   try {
     if (groupBy === 'tape_label' && isOutrightTapeLabelCandidate(value)) {
@@ -481,7 +488,7 @@ async function produceAnalyticsTimeseries(
       // startDate/endDate params retained for API shape parity; actual
       // window is anchor-derived above.
       void startDate; void endDate
-      const { rows } = await query<IntradayRow>(intradaySql, [value])
+      const { rows } = await query<IntradayRow>(intradaySql, [queryValue])
       // Project raw ticks onto the TimeseriesPointAug shape — one side
       // of the pair is null when the other platform produced the print.
       // DV01 / notional populated per-tick so the DV01 view gets proper
@@ -621,7 +628,7 @@ async function produceAnalyticsTimeseries(
       LIMIT ${DAILY_ROW_CAP}
     `
     const { rows } = await query<DailyRow>(sql, [
-      value,
+      queryValue,
       startDate.toISOString(),
       endDate.toISOString(),
     ])
