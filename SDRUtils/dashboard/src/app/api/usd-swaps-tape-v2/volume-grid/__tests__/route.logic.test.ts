@@ -59,6 +59,14 @@ describe('parseVolumeGridParams', () => {
   it('rejects invalid packageType', () => {
     expect(parseVolumeGridParams(new URLSearchParams('packageType=foo')).ok).toBe(false)
   })
+  it('accepts lookbackDays up to 730 (2y baseline)', () => {
+    const out = parseVolumeGridParams(new URLSearchParams('lookbackDays=730'))
+    expect(out.ok).toBe(true)
+    if (out.ok) expect(out.value.lookbackDays).toBe(730)
+  })
+  it('rejects lookbackDays above 730', () => {
+    expect(parseVolumeGridParams(new URLSearchParams('lookbackDays=731')).ok).toBe(false)
+  })
   it('accepts imm16 + spreadover', () => {
     const out = parseVolumeGridParams(
       new URLSearchParams('forwardSchema=imm16&packageType=spreadover_curve'),

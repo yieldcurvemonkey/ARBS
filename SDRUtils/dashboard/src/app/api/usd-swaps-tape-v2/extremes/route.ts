@@ -3,8 +3,8 @@
 // notional + largest DV01 for the focused bucket, plus a short list of
 // recent-similar trades used by the Traded Levels tab. Trader-requested
 // "what and when" surface.
-import { NextResponse } from 'next/server'
 import { analyticsQuery as query } from '@/lib/db'
+import { analyticsHandler } from '@/lib/usd-swaps-tape-v2/analyticsHandler'
 import {
   packageAnalyticsCtes,
   packageAnalyticsFilterPredicate,
@@ -12,7 +12,6 @@ import {
   safeNum,
 } from '@/lib/usd-swaps-tape-v2/analytics'
 import { ServerLru } from '@/lib/usd-swaps-tape-v2/serverLru'
-import { computeEtag, matchesIfNoneMatch } from '@/lib/usd-swaps-tape-v2/etag'
 import {
   buildTapeLabelCandidates,
   buildOutrightTapeLabelCandidates,
@@ -25,12 +24,6 @@ const lru = new ServerLru<{ payload: unknown; etag: string }>({
   max: LRU_MAX,
   ttlMs: LRU_TTL,
 })
-
-function cacheKey(url: URL): string {
-  const params = new URLSearchParams(url.search)
-  const sorted = [...params.entries()].sort()
-  return JSON.stringify(sorted)
-}
 
 const CACHE_HEADERS = {
   'Cache-Control': 'private, max-age=300, stale-while-revalidate=600',
@@ -273,40 +266,7 @@ async function produceExtremes(req: Request): Promise<{ status: number; payload:
   }
 }
 
-export async function GET(request: Request) {
-  const url = new URL(request.url)
-  const ifNoneMatch = request.headers.get('If-None-Match')
-  const key = cacheKey(url)
-
-  const hit = lru.get(key)
-  if (hit) {
-    if (matchesIfNoneMatch(hit.etag, ifNoneMatch)) {
-      return new Response(null, {
-        status: 304,
-        headers: { ETag: hit.etag, ...CACHE_HEADERS },
-      })
-    }
-    return NextResponse.json(hit.payload, {
-      headers: { ETag: hit.etag, ...CACHE_HEADERS },
-    })
-  }
-
-  const { status, payload } = await produceExtremes(request)
-
-  if (status === 200) {
-    const etag = computeEtag(payload)
-    lru.set(key, { payload, etag })
-    if (matchesIfNoneMatch(etag, ifNoneMatch)) {
-      return new Response(null, {
-        status: 304,
-        headers: { ETag: etag, ...CACHE_HEADERS },
-      })
-    }
-    return NextResponse.json(payload, {
-      status,
-      headers: { ETag: etag, ...CACHE_HEADERS },
-    })
-  }
-
-  return NextResponse.json(payload, { status })
-}
+export const GET = analyticsHandler(
+  { lru, cacheHeaders: CACHE_HEADERS },
+  produceExtremes,
+)

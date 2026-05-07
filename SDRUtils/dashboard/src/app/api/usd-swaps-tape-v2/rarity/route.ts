@@ -3,8 +3,8 @@
 // distribution bins, summary statistics, per-metric percentile rows for
 // the focused trade, and recency signals (last similar print, frequency,
 // bucket rank, all-time records).
-import { NextResponse } from 'next/server'
 import { analyticsQuery as query } from '@/lib/db'
+import { analyticsHandler } from '@/lib/usd-swaps-tape-v2/analyticsHandler'
 import {
   distributionStats,
   packageAnalyticsCtes,
@@ -16,7 +16,6 @@ import {
   safeNum,
 } from '@/lib/usd-swaps-tape-v2/analytics'
 import { ServerLru } from '@/lib/usd-swaps-tape-v2/serverLru'
-import { computeEtag, matchesIfNoneMatch } from '@/lib/usd-swaps-tape-v2/etag'
 import { sampleMatchesSimilarity, type SimilaritySample } from './route.logic'
 import {
   buildTapeLabelCandidates,
@@ -31,11 +30,6 @@ const lru = new ServerLru<{ payload: unknown; etag: string }>({
   ttlMs: LRU_TTL,
 })
 
-function cacheKey(url: URL): string {
-  const params = new URLSearchParams(url.search)
-  const sorted = [...params.entries()].sort()
-  return JSON.stringify(sorted)
-}
 
 const CACHE_HEADERS = {
   'Cache-Control': 'private, max-age=300, stale-while-revalidate=600',
@@ -462,44 +456,8 @@ async function produceRarity(req: Request): Promise<RarityResult> {
   }
 }
 
-export async function GET(request: Request) {
-  const url = new URL(request.url)
-  const ifNoneMatch = request.headers.get('If-None-Match')
-  const key = cacheKey(url)
-
-  // Serve from LRU when possible. Both 200 + 304 paths use the cached
-  // ETag so cross-request If-None-Match works without a second SQL hit.
-  const hit = lru.get(key)
-  if (hit) {
-    if (matchesIfNoneMatch(hit.etag, ifNoneMatch)) {
-      return new Response(null, {
-        status: 304,
-        headers: { ETag: hit.etag, ...CACHE_HEADERS },
-      })
-    }
-    return NextResponse.json(hit.payload, {
-      headers: { ETag: hit.etag, ...CACHE_HEADERS },
-    })
-  }
-
-  const { status, payload } = await produceRarity(request)
-
-  // Only cache successful (2xx) payloads — 4xx/5xx pass through.
-  if (status === 200) {
-    const etag = computeEtag(payload)
-    lru.set(key, { payload, etag })
-    if (matchesIfNoneMatch(etag, ifNoneMatch)) {
-      return new Response(null, {
-        status: 304,
-        headers: { ETag: etag, ...CACHE_HEADERS },
-      })
-    }
-    return NextResponse.json(payload, {
-      status,
-      headers: { ETag: etag, ...CACHE_HEADERS },
-    })
-  }
-
-  return NextResponse.json(payload, { status })
-}
+export const GET = analyticsHandler(
+  { lru, cacheHeaders: CACHE_HEADERS },
+  produceRarity,
+)
 

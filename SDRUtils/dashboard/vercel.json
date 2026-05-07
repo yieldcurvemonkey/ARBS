@@ -14,15 +14,5 @@
       "NODE_OPTIONS": "--max_old_space_size=4096"
     }
   },
-  "headers": [
-    {
-      "source": "/api/(.*)",
-      "headers": [
-        {
-          "key": "Cache-Control",
-          "value": "no-store, max-age=0"
-        }
-      ]
-    }
-  ]
+  "headers": []
 }

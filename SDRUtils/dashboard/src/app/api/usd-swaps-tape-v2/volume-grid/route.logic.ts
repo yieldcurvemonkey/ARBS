@@ -94,8 +94,8 @@ export function parseVolumeGridParams(search: URLSearchParams): ParseResult<Volu
   let lookbackDays = 90
   if (lookbackRaw != null) {
     const n = Number(lookbackRaw)
-    if (!Number.isFinite(n) || n < 1 || n > 365) {
-      return { ok: false, error: 'lookbackDays must be 1..365' }
+    if (!Number.isFinite(n) || n < 1 || n > 730) {
+      return { ok: false, error: 'lookbackDays must be 1..730' }
     }
     lookbackDays = Math.floor(n)
   }
