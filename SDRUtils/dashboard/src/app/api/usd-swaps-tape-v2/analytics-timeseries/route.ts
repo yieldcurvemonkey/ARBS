@@ -49,12 +49,11 @@ void GROUP_BY_COLUMN
 const DAILY_ROW_CAP = 2000
 const INTRADAY_TICK_CAP = 5000
 
-// Per-route in-memory LRU. Bound configurable via ANALYTICS_LRU_MAX env
-// var; 60 s TTL aligns with the client-facing Cache-Control max-age.
-const LRU_MAX = Number(process.env.ANALYTICS_LRU_MAX ?? 512)
+const LRU_MAX = Number(process.env.ANALYTICS_LRU_MAX ?? 2048)
+const LRU_TTL = Number(process.env.ANALYTICS_LRU_TTL ?? 300_000)
 const lru = new ServerLru<{ payload: unknown; etag: string }>({
   max: LRU_MAX,
-  ttlMs: 60_000,
+  ttlMs: LRU_TTL,
 })
 
 function cacheKey(url: URL): string {
@@ -64,7 +63,7 @@ function cacheKey(url: URL): string {
 }
 
 const CACHE_HEADERS = {
-  'Cache-Control': 'private, max-age=60, must-revalidate',
+  'Cache-Control': 'private, max-age=300, stale-while-revalidate=600',
 } as const
 
 type DailyRow = {

@@ -30,7 +30,7 @@ describe('rarity route — LRU + ETag', () => {
       expect(r.status).toBe(200)
       expect(r.headers.get('ETag')).toMatch(/^"[a-f0-9]{40}"$/)
       expect(r.headers.get('Cache-Control')).toBe(
-        'private, max-age=60, must-revalidate',
+        'private, max-age=300, stale-while-revalidate=600',
       )
     },
     60_000,

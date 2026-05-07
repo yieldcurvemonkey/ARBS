@@ -18,13 +18,16 @@ import {
 import { ServerLru } from '@/lib/usd-swaps-tape-v2/serverLru'
 import { computeEtag, matchesIfNoneMatch } from '@/lib/usd-swaps-tape-v2/etag'
 import { sampleMatchesSimilarity, type SimilaritySample } from './route.logic'
+import {
+  buildOutrightTapeLabelCandidates,
+  isOutrightTapeLabelCandidate,
+} from '../analytics-timeseries/route.logic'
 
-// Per-route in-memory LRU. Bound configurable via ANALYTICS_LRU_MAX env
-// var; 60 s TTL aligns with the client-facing Cache-Control max-age.
-const LRU_MAX = Number(process.env.ANALYTICS_LRU_MAX ?? 512)
+const LRU_MAX = Number(process.env.ANALYTICS_LRU_MAX ?? 2048)
+const LRU_TTL = Number(process.env.ANALYTICS_LRU_TTL ?? 300_000)
 const lru = new ServerLru<{ payload: unknown; etag: string }>({
   max: LRU_MAX,
-  ttlMs: 60_000,
+  ttlMs: LRU_TTL,
 })
 
 function cacheKey(url: URL): string {
@@ -34,7 +37,7 @@ function cacheKey(url: URL): string {
 }
 
 const CACHE_HEADERS = {
-  'Cache-Control': 'private, max-age=60, must-revalidate',
+  'Cache-Control': 'private, max-age=300, stale-while-revalidate=600',
 } as const
 
 // Phase 2 cutover: rarity reads from the v2 leg table to pick up the
@@ -112,28 +115,57 @@ async function produceRarity(req: Request): Promise<RarityResult> {
   const startDate = new Date(Date.now() - lookback * 86_400_000).toISOString()
 
   try {
-    // Pull the full sample set for stats + histogram + recency.
-    const sampleSql = `
-      WITH ${packageAnalyticsCtes({
-        packagesTable: PACKAGES_TABLE,
-        legsTable: LEGS_TABLE,
-        filterPredicate,
-        timePredicate: 'COALESCE(p.original_execution_start, p.execution_start) >= $2::timestamptz',
-      })}
-      SELECT
-        ts,
-        fixed_rate,
-        risk,
-        notional,
-        platform,
-        venue,
-        trade_id,
-        package_id
-      FROM package_summary
-      ORDER BY ts DESC
-      LIMIT ${RARITY_SAMPLE_CAP}
-    `
-    const { rows: samples } = await query<SampleRow>(sampleSql, [value, startDate])
+    let samples: SampleRow[]
+
+    // Fast path: outright tape_label queries can skip the expensive
+    // legs JOIN + regex normalizer by querying packages_v2 directly.
+    if (groupBy === 'tape_label' && isOutrightTapeLabelCandidate(value)) {
+      const candidates = buildOutrightTapeLabelCandidates(value)
+      const fastSql = `
+        SELECT
+          COALESCE(p.original_execution_start, p.execution_start) AS ts,
+          p.weighted_fixed_rate::float AS fixed_rate,
+          p.total_risk::float AS risk,
+          COALESCE(ABS(p.total_notional::float), ABS(p.gross_notional::float), 0) AS notional,
+          CASE WHEN UPPER(COALESCE(p.venue, '')) = 'D2D' THEN 'IDB' ELSE 'CUSTY' END AS platform,
+          p.venue,
+          NULL::text AS trade_id,
+          p.package_id
+        FROM ${PACKAGES_TABLE} p
+        WHERE UPPER(COALESCE(p.tape_label, '')) = ANY($1::text[])
+          AND UPPER(COALESCE(p.package_type, '')) = 'OUTRIGHT'
+          AND NOT COALESCE(p.is_unwind, false)
+          AND p.weighted_fixed_rate IS NOT NULL
+          AND COALESCE(p.original_execution_start, p.execution_start) >= $2::timestamptz
+        ORDER BY COALESCE(p.original_execution_start, p.execution_start) DESC
+        LIMIT ${RARITY_SAMPLE_CAP}
+      `
+      const { rows } = await query<SampleRow>(fastSql, [candidates, startDate])
+      samples = rows
+    } else {
+      const sampleSql = `
+        WITH ${packageAnalyticsCtes({
+          packagesTable: PACKAGES_TABLE,
+          legsTable: LEGS_TABLE,
+          filterPredicate,
+          timePredicate: 'COALESCE(p.original_execution_start, p.execution_start) >= $2::timestamptz',
+        })}
+        SELECT
+          ts,
+          fixed_rate,
+          risk,
+          notional,
+          platform,
+          venue,
+          trade_id,
+          package_id
+        FROM package_summary
+        ORDER BY ts DESC
+        LIMIT ${RARITY_SAMPLE_CAP}
+      `
+      const { rows } = await query<SampleRow>(sampleSql, [value, startDate])
+      samples = rows
+    }
 
     const rateBps = samples.map((s) => rateToBps(s.fixed_rate))
     const custyRateBps = samples.filter((s) => s.platform === 'CUSTY').map((s) => rateToBps(s.fixed_rate))
@@ -298,25 +330,54 @@ async function produceRarity(req: Request): Promise<RarityResult> {
     const avgIntervalDays = frequencyCount > 1 ? lookback / frequencyCount : lookback
 
     // All-time records within the bucket (no lookback cutoff).
-    const recordSql = `
-      WITH ${packageAnalyticsCtes({
-        packagesTable: PACKAGES_TABLE,
-        legsTable: LEGS_TABLE,
-        filterPredicate,
-      })}
-      (SELECT fixed_rate, risk, notional, ts, venue, platform
-       FROM package_summary
-       ORDER BY fixed_rate DESC NULLS LAST LIMIT 1)
-      UNION ALL
-      (SELECT fixed_rate, risk, notional, ts, venue, platform
-       FROM package_summary
-       ORDER BY fixed_rate ASC NULLS LAST LIMIT 1)
-      UNION ALL
-      (SELECT fixed_rate, risk, notional, ts, venue, platform
-       FROM package_summary
-       ORDER BY ABS(notional) DESC NULLS LAST LIMIT 1)
-    `
-    const { rows: records } = await query<RecordRow>(recordSql, [value])
+    let records: RecordRow[]
+    if (groupBy === 'tape_label' && isOutrightTapeLabelCandidate(value)) {
+      const candidates = buildOutrightTapeLabelCandidates(value)
+      const fastRecordSql = `
+        WITH base AS (
+          SELECT
+            p.weighted_fixed_rate::float AS fixed_rate,
+            p.total_risk::float AS risk,
+            COALESCE(ABS(p.total_notional::float), ABS(p.gross_notional::float), 0) AS notional,
+            COALESCE(p.original_execution_start, p.execution_start) AS ts,
+            p.venue,
+            CASE WHEN UPPER(COALESCE(p.venue, '')) = 'D2D' THEN 'IDB' ELSE 'CUSTY' END AS platform
+          FROM ${PACKAGES_TABLE} p
+          WHERE UPPER(COALESCE(p.tape_label, '')) = ANY($1::text[])
+            AND UPPER(COALESCE(p.package_type, '')) = 'OUTRIGHT'
+            AND NOT COALESCE(p.is_unwind, false)
+            AND p.weighted_fixed_rate IS NOT NULL
+        )
+        (SELECT fixed_rate, risk, notional, ts, venue, platform FROM base ORDER BY fixed_rate DESC NULLS LAST LIMIT 1)
+        UNION ALL
+        (SELECT fixed_rate, risk, notional, ts, venue, platform FROM base ORDER BY fixed_rate ASC NULLS LAST LIMIT 1)
+        UNION ALL
+        (SELECT fixed_rate, risk, notional, ts, venue, platform FROM base ORDER BY ABS(notional) DESC NULLS LAST LIMIT 1)
+      `
+      const { rows } = await query<RecordRow>(fastRecordSql, [candidates])
+      records = rows
+    } else {
+      const recordSql = `
+        WITH ${packageAnalyticsCtes({
+          packagesTable: PACKAGES_TABLE,
+          legsTable: LEGS_TABLE,
+          filterPredicate,
+        })}
+        (SELECT fixed_rate, risk, notional, ts, venue, platform
+         FROM package_summary
+         ORDER BY fixed_rate DESC NULLS LAST LIMIT 1)
+        UNION ALL
+        (SELECT fixed_rate, risk, notional, ts, venue, platform
+         FROM package_summary
+         ORDER BY fixed_rate ASC NULLS LAST LIMIT 1)
+        UNION ALL
+        (SELECT fixed_rate, risk, notional, ts, venue, platform
+         FROM package_summary
+         ORDER BY ABS(notional) DESC NULLS LAST LIMIT 1)
+      `
+      const { rows } = await query<RecordRow>(recordSql, [value])
+      records = rows
+    }
     const [highRate, lowRate, largestNotional] = [records[0], records[1], records[2]]
 
     const bucketRank = Number.isFinite(focusedNotional)

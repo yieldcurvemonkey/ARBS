@@ -104,16 +104,33 @@ export function useVolumeGrid(args: UseVolumeGridArgs): UseVolumeGridReturn {
     }
   }, [])
 
-  // Fire when any of the URL-shaping params change; stop when the card
-  // is collapsed.
   useEffect(() => {
     if (!url) return
     void runFetch()
-    const id = window.setInterval(() => {
+    let id: number | null = window.setInterval(() => {
       void runFetch()
     }, DEFAULT_REFRESH_INTERVAL_MS)
+
+    const onVisibilityChange = () => {
+      if (document.hidden) {
+        if (id != null) {
+          window.clearInterval(id)
+          id = null
+        }
+      } else {
+        void runFetch()
+        if (id == null) {
+          id = window.setInterval(() => {
+            void runFetch()
+          }, DEFAULT_REFRESH_INTERVAL_MS)
+        }
+      }
+    }
+    document.addEventListener('visibilitychange', onVisibilityChange)
+
     return () => {
-      window.clearInterval(id)
+      if (id != null) window.clearInterval(id)
+      document.removeEventListener('visibilitychange', onVisibilityChange)
     }
   }, [url, runFetch])
 

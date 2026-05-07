@@ -23,7 +23,8 @@ function getPool() {
     globalForDb.__swapPulsePool = new Pool({
       connectionString: resolveConnectionString(),
       max: 10,
-      idleTimeoutMillis: 30_000
+      idleTimeoutMillis: 30_000,
+      statement_timeout: 300_000,
     })
   }
   return globalForDb.__swapPulsePool

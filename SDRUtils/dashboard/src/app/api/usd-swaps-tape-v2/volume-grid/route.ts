@@ -18,14 +18,15 @@ import {
   type RawVolumeGridRow,
 } from './route.logic'
 
-const LRU_MAX = Number(process.env.ANALYTICS_LRU_MAX ?? 512)
+const LRU_MAX = Number(process.env.ANALYTICS_LRU_MAX ?? 2048)
+const LRU_TTL = Number(process.env.ANALYTICS_LRU_TTL ?? 300_000)
 const lru = new ServerLru<{ payload: unknown; etag: string }>({
   max: LRU_MAX,
-  ttlMs: 60_000,
+  ttlMs: LRU_TTL,
 })
 
 const CACHE_HEADERS = {
-  'Cache-Control': 'private, max-age=60, must-revalidate',
+  'Cache-Control': 'private, max-age=300, stale-while-revalidate=600',
 } as const
 
 function cacheKey(url: URL): string {

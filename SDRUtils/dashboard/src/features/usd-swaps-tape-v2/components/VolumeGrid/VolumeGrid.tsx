@@ -17,9 +17,11 @@ export interface VolumeGridProps {
   viewMode: VolumeGridViewMode
   colorMode: VolumeGridColorMode
   onCellClick: (id: { fwd: string; tenor: string }) => void
+  onCellHover?: (id: { fwd: string; tenor: string }) => void
+  onCellLeave?: () => void
 }
 
-export function VolumeGrid({ data, metric, period, viewMode, colorMode, onCellClick }: VolumeGridProps): JSX.Element {
+export function VolumeGrid({ data, metric, period, viewMode, colorMode, onCellClick, onCellHover, onCellLeave }: VolumeGridProps): JSX.Element {
   const cellMap = useMemo(() => {
     const m = new Map<string, Cell>()
     for (const c of data.cells) m.set(`${c.fwd}|${c.tenor}`, c)
@@ -76,6 +78,8 @@ export function VolumeGrid({ data, metric, period, viewMode, colorMode, onCellCl
           forwardAxis={forwardAxis}
           rowTotal={data.totals.rowTotals[f.id]}
           onCellClick={onCellClick}
+          onCellHover={onCellHover}
+          onCellLeave={onCellLeave}
         />
       ))}
       <div
@@ -113,6 +117,8 @@ function RowFragment(props: {
   tenorAxis: VolumeGridResponse['axes']['tenor']
   rowTotal: { current: number; percentile: number | null } | undefined
   onCellClick: VolumeGridProps['onCellClick']
+  onCellHover?: VolumeGridProps['onCellHover']
+  onCellLeave?: VolumeGridProps['onCellLeave']
 }): JSX.Element {
   return (
     <>
@@ -134,7 +140,12 @@ function RowFragment(props: {
             percentile: null,
           } as Cell)
         return (
-          <div key={t.id} data-testid="volume-grid-cell">
+          <div
+            key={t.id}
+            data-testid="volume-grid-cell"
+            onMouseEnter={props.onCellHover ? () => props.onCellHover!({ fwd: props.fwd, tenor: t.id }) : undefined}
+            onMouseLeave={props.onCellLeave}
+          >
             <VolumeGridCell
               cell={cell}
               metric={props.metric}

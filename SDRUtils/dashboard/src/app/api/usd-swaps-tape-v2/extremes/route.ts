@@ -13,13 +13,16 @@ import {
 } from '@/lib/usd-swaps-tape-v2/analytics'
 import { ServerLru } from '@/lib/usd-swaps-tape-v2/serverLru'
 import { computeEtag, matchesIfNoneMatch } from '@/lib/usd-swaps-tape-v2/etag'
+import {
+  buildOutrightTapeLabelCandidates,
+  isOutrightTapeLabelCandidate,
+} from '../analytics-timeseries/route.logic'
 
-// Per-route in-memory LRU. Bound configurable via ANALYTICS_LRU_MAX env
-// var; 60 s TTL aligns with the client-facing Cache-Control max-age.
-const LRU_MAX = Number(process.env.ANALYTICS_LRU_MAX ?? 512)
+const LRU_MAX = Number(process.env.ANALYTICS_LRU_MAX ?? 2048)
+const LRU_TTL = Number(process.env.ANALYTICS_LRU_TTL ?? 300_000)
 const lru = new ServerLru<{ payload: unknown; etag: string }>({
   max: LRU_MAX,
-  ttlMs: 60_000,
+  ttlMs: LRU_TTL,
 })
 
 function cacheKey(url: URL): string {
@@ -29,7 +32,7 @@ function cacheKey(url: URL): string {
 }
 
 const CACHE_HEADERS = {
-  'Cache-Control': 'private, max-age=60, must-revalidate',
+  'Cache-Control': 'private, max-age=300, stale-while-revalidate=600',
 } as const
 
 // Phase 2 cutover: extremes reads from the v2 leg table.
@@ -88,63 +91,91 @@ async function produceExtremes(req: Request): Promise<{ status: number; payload:
   const sizeTol = Number(searchParams.get('sizeTol') ?? '0.25')
 
   try {
-    // Extremes — one SELECT per (scope, extreme type) stitched with UNION ALL.
-    // Each branch picks a single row via ORDER BY + LIMIT 1; the label &
-    // scope columns are literals so the UI gets a stable identity key.
-    //
-    // `since` filter is baked per-branch so 52w/30d narrow the window
-    // before the ORDER BY. Keeping branches terse trades duplication for
-    // readability — worth it for a ~150-line route.
     const now = new Date()
     const d52w = new Date(now.getTime() - 52 * 7 * 86_400_000).toISOString()
     const d30d = new Date(now.getTime() - 30 * 86_400_000).toISOString()
 
-    // Shared template for one extreme branch.
-    const branch = (
-      labelLit: string,
-      scopeLit: string,
-      orderClause: string,
-      sinceParamIdx: number | null,
-    ) => {
-      const sinceFilter = sinceParamIdx
-        ? `AND ts >= $${sinceParamIdx}::timestamptz`
-        : ''
-      return `
-        (SELECT
-           '${labelLit}'::text AS label,
-           '${scopeLit}'::text AS scope,
-           fixed_rate,
-           risk,
-           notional,
-           ts,
-           venue,
-           platform
-         FROM package_summary
-         WHERE fixed_rate IS NOT NULL
-           ${sinceFilter}
-         ORDER BY ${orderClause}
-         LIMIT 1)
-      `
-    }
-    const sql = `
-      WITH ${packageAnalyticsCtes({
-        packagesTable: PACKAGES_TABLE,
-        legsTable: LEGS_TABLE,
-        filterPredicate,
-      })}
-      ${[
-        branch('All-time high rate', 'All-time', 'fixed_rate DESC NULLS LAST', null),
-        branch('All-time low rate', 'All-time', 'fixed_rate ASC NULLS LAST', null),
-        branch('All-time largest notional', 'All-time', 'ABS(notional) DESC NULLS LAST', null),
-        branch('All-time largest DV01', 'All-time', 'ABS(risk) DESC NULLS LAST', null),
-        branch('52w high rate', '52 weeks', 'fixed_rate DESC NULLS LAST', 2),
-        branch('52w low rate', '52 weeks', 'fixed_rate ASC NULLS LAST', 2),
-        branch('30d high rate', '30 days', 'fixed_rate DESC NULLS LAST', 3),
-        branch('30d low rate', '30 days', 'fixed_rate ASC NULLS LAST', 3),
-      ].join(' UNION ALL ')}
-    `
+    let extremeRows: ExtremeDbRow[]
 
-    const { rows: extremeRows } = await query<ExtremeDbRow>(sql, [value, d52w, d30d])
+    if (groupBy === 'tape_label' && isOutrightTapeLabelCandidate(value)) {
+      const candidates = buildOutrightTapeLabelCandidates(value)
+      const fastBranch = (
+        labelLit: string,
+        scopeLit: string,
+        orderClause: string,
+        sinceParamIdx: number | null,
+      ) => {
+        const sinceFilter = sinceParamIdx
+          ? `AND ts >= $${sinceParamIdx}::timestamptz`
+          : ''
+        return `(SELECT '${labelLit}'::text AS label, '${scopeLit}'::text AS scope,
+           fixed_rate, risk, notional, ts, venue, platform
+         FROM base WHERE fixed_rate IS NOT NULL ${sinceFilter}
+         ORDER BY ${orderClause} LIMIT 1)`
+      }
+      const fastSql = `
+        WITH base AS (
+          SELECT
+            p.weighted_fixed_rate::float AS fixed_rate,
+            p.total_risk::float AS risk,
+            COALESCE(ABS(p.total_notional::float), ABS(p.gross_notional::float), 0) AS notional,
+            COALESCE(p.original_execution_start, p.execution_start) AS ts,
+            p.venue,
+            CASE WHEN UPPER(COALESCE(p.venue, '')) = 'D2D' THEN 'IDB' ELSE 'CUSTY' END AS platform
+          FROM ${PACKAGES_TABLE} p
+          WHERE UPPER(COALESCE(p.tape_label, '')) = ANY($1::text[])
+            AND UPPER(COALESCE(p.package_type, '')) = 'OUTRIGHT'
+            AND NOT COALESCE(p.is_unwind, false)
+            AND p.weighted_fixed_rate IS NOT NULL
+        )
+        ${[
+          fastBranch('All-time high rate', 'All-time', 'fixed_rate DESC NULLS LAST', null),
+          fastBranch('All-time low rate', 'All-time', 'fixed_rate ASC NULLS LAST', null),
+          fastBranch('All-time largest notional', 'All-time', 'ABS(notional) DESC NULLS LAST', null),
+          fastBranch('All-time largest DV01', 'All-time', 'ABS(risk) DESC NULLS LAST', null),
+          fastBranch('52w high rate', '52 weeks', 'fixed_rate DESC NULLS LAST', 2),
+          fastBranch('52w low rate', '52 weeks', 'fixed_rate ASC NULLS LAST', 2),
+          fastBranch('30d high rate', '30 days', 'fixed_rate DESC NULLS LAST', 3),
+          fastBranch('30d low rate', '30 days', 'fixed_rate ASC NULLS LAST', 3),
+        ].join(' UNION ALL ')}
+      `
+      const { rows } = await query<ExtremeDbRow>(fastSql, [candidates, d52w, d30d])
+      extremeRows = rows
+    } else {
+      const branch = (
+        labelLit: string,
+        scopeLit: string,
+        orderClause: string,
+        sinceParamIdx: number | null,
+      ) => {
+        const sinceFilter = sinceParamIdx
+          ? `AND ts >= $${sinceParamIdx}::timestamptz`
+          : ''
+        return `(SELECT '${labelLit}'::text AS label, '${scopeLit}'::text AS scope,
+           fixed_rate, risk, notional, ts, venue, platform
+         FROM package_summary WHERE fixed_rate IS NOT NULL ${sinceFilter}
+         ORDER BY ${orderClause} LIMIT 1)`
+      }
+      const sql = `
+        WITH ${packageAnalyticsCtes({
+          packagesTable: PACKAGES_TABLE,
+          legsTable: LEGS_TABLE,
+          filterPredicate,
+        })}
+        ${[
+          branch('All-time high rate', 'All-time', 'fixed_rate DESC NULLS LAST', null),
+          branch('All-time low rate', 'All-time', 'fixed_rate ASC NULLS LAST', null),
+          branch('All-time largest notional', 'All-time', 'ABS(notional) DESC NULLS LAST', null),
+          branch('All-time largest DV01', 'All-time', 'ABS(risk) DESC NULLS LAST', null),
+          branch('52w high rate', '52 weeks', 'fixed_rate DESC NULLS LAST', 2),
+          branch('52w low rate', '52 weeks', 'fixed_rate ASC NULLS LAST', 2),
+          branch('30d high rate', '30 days', 'fixed_rate DESC NULLS LAST', 3),
+          branch('30d low rate', '30 days', 'fixed_rate ASC NULLS LAST', 3),
+        ].join(' UNION ALL ')}
+      `
+      const { rows } = await query<ExtremeDbRow>(sql, [value, d52w, d30d])
+      extremeRows = rows
+    }
 
     const extremes = extremeRows.map((r) => ({
       label: r.label,
@@ -157,45 +188,60 @@ async function produceExtremes(req: Request): Promise<{ status: number; payload:
       platform: r.platform,
     }))
 
-    // Recent similar prints — up to 8 within tolerance, last 90 days.
     let similar: SimilarDbRow[] = []
     if (Number.isFinite(focusedRateBps)) {
       const since90 = new Date(now.getTime() - 90 * 86_400_000).toISOString()
+      const rateDecimal = focusedRateBps / 10_000
+      const tolDecimal = primaryTol / 10_000
       const sizeBand = Number.isFinite(focusedNotional)
         ? focusedNotional * sizeTol
         : null
-      const sizeFilter = sizeBand
-        ? `AND ABS(ABS(notional) - $5::float) <= $6::float`
-        : ''
-      const sParams: unknown[] = [
-        value,
-        since90,
-        focusedRateBps / 10_000, // convert bps back to decimal for SQL comparison
-        primaryTol / 10_000,
-      ]
-      if (sizeBand) sParams.push(focusedNotional, sizeBand)
-      const similarSql = `
-        WITH ${packageAnalyticsCtes({
-          packagesTable: PACKAGES_TABLE,
-          legsTable: LEGS_TABLE,
-          filterPredicate,
-          timePredicate: 'COALESCE(p.original_execution_start, p.execution_start) >= $2::timestamptz',
-        })}
-        SELECT
-          ts,
-          fixed_rate,
-          risk,
-          notional,
-          platform,
-          venue
-        FROM package_summary
-        WHERE ABS(fixed_rate - $3::float) <= $4::float
-          ${sizeFilter}
-        ORDER BY ts DESC
-        LIMIT 8
-      `
-      const res = await query<SimilarDbRow>(similarSql, sParams)
-      similar = res.rows
+
+      if (groupBy === 'tape_label' && isOutrightTapeLabelCandidate(value)) {
+        const candidates = buildOutrightTapeLabelCandidates(value)
+        const sizeFilter = sizeBand ? `AND ABS(ABS(COALESCE(p.total_notional::float, p.gross_notional::float, 0)) - $5::float) <= $6::float` : ''
+        const sParams: unknown[] = [candidates, since90, rateDecimal, tolDecimal]
+        if (sizeBand) sParams.push(focusedNotional, sizeBand)
+        const fastSimilarSql = `
+          SELECT
+            COALESCE(p.original_execution_start, p.execution_start) AS ts,
+            p.weighted_fixed_rate::float AS fixed_rate,
+            p.total_risk::float AS risk,
+            COALESCE(ABS(p.total_notional::float), ABS(p.gross_notional::float), 0) AS notional,
+            CASE WHEN UPPER(COALESCE(p.venue, '')) = 'D2D' THEN 'IDB' ELSE 'CUSTY' END AS platform,
+            p.venue
+          FROM ${PACKAGES_TABLE} p
+          WHERE UPPER(COALESCE(p.tape_label, '')) = ANY($1::text[])
+            AND UPPER(COALESCE(p.package_type, '')) = 'OUTRIGHT'
+            AND NOT COALESCE(p.is_unwind, false)
+            AND p.weighted_fixed_rate IS NOT NULL
+            AND COALESCE(p.original_execution_start, p.execution_start) >= $2::timestamptz
+            AND ABS(p.weighted_fixed_rate::float - $3::float) <= $4::float
+            ${sizeFilter}
+          ORDER BY COALESCE(p.original_execution_start, p.execution_start) DESC
+          LIMIT 8
+        `
+        const res = await query<SimilarDbRow>(fastSimilarSql, sParams)
+        similar = res.rows
+      } else {
+        const sizeFilter = sizeBand ? `AND ABS(ABS(notional) - $5::float) <= $6::float` : ''
+        const sParams: unknown[] = [value, since90, rateDecimal, tolDecimal]
+        if (sizeBand) sParams.push(focusedNotional, sizeBand)
+        const similarSql = `
+          WITH ${packageAnalyticsCtes({
+            packagesTable: PACKAGES_TABLE,
+            legsTable: LEGS_TABLE,
+            filterPredicate,
+            timePredicate: 'COALESCE(p.original_execution_start, p.execution_start) >= $2::timestamptz',
+          })}
+          SELECT ts, fixed_rate, risk, notional, platform, venue
+          FROM package_summary
+          WHERE ABS(fixed_rate - $3::float) <= $4::float ${sizeFilter}
+          ORDER BY ts DESC LIMIT 8
+        `
+        const res = await query<SimilarDbRow>(similarSql, sParams)
+        similar = res.rows
+      }
     }
 
     const recentSimilar = similar.map((s) => {

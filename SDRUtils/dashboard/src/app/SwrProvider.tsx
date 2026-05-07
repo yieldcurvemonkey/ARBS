@@ -56,11 +56,7 @@ export function SwrProvider({ children }: { children: ReactNode }) {
         provider: () => provider as unknown as Cache,
         fetcher: createFetcher(),
         revalidateOnFocus: false,
-        // Match the server LRU TTL + Cache-Control max-age so a row
-        // re-clicked within 60s reads from cache without firing a
-        // revalidate. After the window expires, SWR revalidates and
-        // the SwrFetcher attaches If-None-Match → server replies 304.
-        dedupingInterval: 60000,
+        dedupingInterval: 300_000,
       }}
     >
       {children}

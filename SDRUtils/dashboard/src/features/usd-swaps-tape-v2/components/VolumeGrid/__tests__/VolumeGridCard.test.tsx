@@ -66,9 +66,9 @@ describe('VolumeGridCard — defaults', () => {
     expect(cardSource).toMatch(/const DEFAULT_PERIOD: VolumePeriod = '1w'/)
   })
   it('applies updated defaults before honoring persisted grid state', () => {
-    expect(cardSource).toMatch(/shouldApplyCurrentDefaults\(\) \? DEFAULT_COLLAPSED/)
-    expect(cardSource).toMatch(/shouldApplyCurrentDefaults\(\)[\s\S]*\? DEFAULT_METRIC/)
-    expect(cardSource).toMatch(/shouldApplyCurrentDefaults\(\)[\s\S]*\? DEFAULT_PERIOD/)
+    expect(cardSource).toMatch(/shouldApplyCurrentDefaults\(\)/)
+    expect(cardSource).toMatch(/useState<VolumeMetric>\(DEFAULT_METRIC\)/)
+    expect(cardSource).toMatch(/useState<VolumePeriod>\(DEFAULT_PERIOD\)/)
   })
   it('defaults forward schema to default', () => {
     expect(cardSource).toMatch(/readEnum<ForwardSchemaId>\([^)]*'default'\)/)

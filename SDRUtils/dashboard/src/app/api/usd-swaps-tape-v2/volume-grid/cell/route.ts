@@ -28,12 +28,13 @@ import type {
   VolumeGridCellTimeseriesPoint,
 } from '@/features/usd-swaps-tape-v2/types/volume-grid.types'
 
-const LRU_MAX = Number(process.env.ANALYTICS_LRU_MAX ?? 512)
+const LRU_MAX = Number(process.env.ANALYTICS_LRU_MAX ?? 2048)
+const LRU_TTL = Number(process.env.ANALYTICS_LRU_TTL ?? 300_000)
 const lru = new ServerLru<{ payload: unknown; etag: string }>({
   max: LRU_MAX,
-  ttlMs: 60_000,
+  ttlMs: LRU_TTL,
 })
-const CACHE_HEADERS = { 'Cache-Control': 'private, max-age=60, must-revalidate' } as const
+const CACHE_HEADERS = { 'Cache-Control': 'private, max-age=300, stale-while-revalidate=600' } as const
 
 const cacheKey = (url: URL): string => {
   const sorted = [...new URLSearchParams(url.search).entries()].sort()

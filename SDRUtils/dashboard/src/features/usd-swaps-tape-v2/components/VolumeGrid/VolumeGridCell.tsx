@@ -5,7 +5,7 @@
 //   - idb_custy: a dual-stack bar showing IDB share (cyan) vs CUSTY
 //                share (indigo), still tinted by the cell's percentile
 
-import type { JSX } from 'react'
+import { memo, type JSX } from 'react'
 import { colorForPercentile, foregroundForPercentile } from './colorRamp'
 import type {
   VolumeGridCell as Cell, VolumeGridColorMode, VolumeGridViewMode, VolumeMetric, VolumePeriod,
@@ -55,7 +55,7 @@ function safeShare(part: number, total: number): number {
   return Math.max(0, Math.min(1, s))
 }
 
-export function VolumeGridCell({
+export const VolumeGridCell = memo(function VolumeGridCell({
   cell, metric, period, viewMode, colorMode = 'activity', colorPercentile, forwardAxis, tenorAxis, onClick,
 }: VolumeGridCellProps): JSX.Element {
   const isEmpty = cell.tradeCount === 0
@@ -133,4 +133,4 @@ export function VolumeGridCell({
       )}
     </button>
   )
-}
+})

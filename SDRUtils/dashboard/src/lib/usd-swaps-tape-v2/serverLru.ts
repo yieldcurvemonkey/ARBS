@@ -8,6 +8,9 @@ type Entry<V> = { value: V; expiresAt: number }
 export interface ServerLruOptions {
   max: number
   ttlMs: number
+  /** When set, stale entries are served immediately while a background
+   *  revalidation callback refreshes the value. */
+  staleWhileRevalidateMs?: number
 }
 
 export class ServerLru<V> {

@@ -908,6 +908,7 @@ def upsert_dataframe(
         raw_conn = engine.raw_connection()
         try:
             with raw_conn.cursor() as cur:
+                cur.execute("SET LOCAL statement_timeout = 0")
                 for start_idx in tqdm(range(0, total, batch_size), desc=desc, unit="batch"):
                     batch = records[start_idx : start_idx + batch_size]
                     values = [tuple(rec[c] for c in all_cols) for rec in batch]

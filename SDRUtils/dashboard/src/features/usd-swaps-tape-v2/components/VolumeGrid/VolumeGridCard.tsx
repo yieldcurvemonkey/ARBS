@@ -8,6 +8,7 @@ import { useCallback, useEffect, useState } from 'react'
 import { VolumeGrid } from './VolumeGrid'
 import { VolumeGridCellModal } from './VolumeGridCellModal'
 import { useVolumeGrid } from '../../hooks/useVolumeGrid'
+import { useVolumeGridCellPrefetch } from '../../hooks/useVolumeGridCellPrefetch'
 import type {
   VolumeGridColorMode,
   VolumeGridViewMode,
@@ -113,88 +114,63 @@ export interface VolumeGridCardProps {
 }
 
 export function VolumeGridCard({ onSelectPackage }: VolumeGridCardProps): JSX.Element {
-  const [collapsed, setCollapsed] = useState<boolean>(() =>
-    shouldApplyCurrentDefaults() ? DEFAULT_COLLAPSED : readBool(KEY_COLLAPSED, DEFAULT_COLLAPSED),
-  )
-  const [metric, setMetric] = useState<VolumeMetric>(() =>
-    shouldApplyCurrentDefaults()
-      ? DEFAULT_METRIC
-      : readEnum<VolumeMetric>(KEY_METRIC, ['notional', 'dv01'], DEFAULT_METRIC),
-  )
-  const [period, setPeriod] = useState<VolumePeriod>(() =>
-    shouldApplyCurrentDefaults()
-      ? DEFAULT_PERIOD
-      : readEnum<VolumePeriod>(
-          KEY_PERIOD,
-          ['today', '1h', '24h', '1w', '2w', '3w', '1m', '3m'],
-          DEFAULT_PERIOD,
-        ),
-  )
-  const [lookback, setLookback] = useState<LookbackId>(() =>
-    readEnum<LookbackId>(KEY_LOOKBACK, LOOKBACK_IDS, DEFAULT_LOOKBACK),
-  )
-  const [forwardSchema, setForwardSchema] = useState<ForwardSchemaId>(() =>
-    readEnum<ForwardSchemaId>(KEY_FWD_SCHEMA, FORWARD_SCHEMA_IDS, 'default'),
-  )
-  const [tenorSchema, setTenorSchema] = useState<TenorSchemaId>(() =>
-    readEnum<TenorSchemaId>(KEY_TENOR_SCHEMA, TENOR_SCHEMA_IDS, 'default'),
-  )
-  const [packageType, setPackageType] = useState<PackageTypeGroupId>(() =>
-    readEnum<PackageTypeGroupId>(KEY_PACKAGE_TYPE, PACKAGE_TYPE_GROUP_IDS, 'outright'),
-  )
-  const [viewMode, setViewMode] = useState<VolumeGridViewMode>(() =>
-    readEnum<VolumeGridViewMode>(KEY_VIEW_MODE, VIEW_MODE_IDS, 'volume'),
-  )
-  const [colorMode, setColorMode] = useState<VolumeGridColorMode>(() =>
-    readEnum<VolumeGridColorMode>(KEY_COLOR_MODE, COLOR_MODE_IDS, 'activity'),
-  )
+  const [collapsed, setCollapsed] = useState<boolean>(DEFAULT_COLLAPSED)
+  const [metric, setMetric] = useState<VolumeMetric>(DEFAULT_METRIC)
+  const [period, setPeriod] = useState<VolumePeriod>(DEFAULT_PERIOD)
+  const [lookback, setLookback] = useState<LookbackId>(DEFAULT_LOOKBACK)
+  const [forwardSchema, setForwardSchema] = useState<ForwardSchemaId>('default')
+  const [tenorSchema, setTenorSchema] = useState<TenorSchemaId>('default')
+  const [packageType, setPackageType] = useState<PackageTypeGroupId>('outright')
+  const [viewMode, setViewMode] = useState<VolumeGridViewMode>('volume')
+  const [colorMode, setColorMode] = useState<VolumeGridColorMode>('activity')
   const [selectedCell, setSelectedCell] = useState<{ fwd: string; tenor: string } | null>(null)
 
+  // Hydrate from localStorage after mount so SSR and first client render
+  // produce identical markup (avoids React hydration mismatch). One
+  // batched setState per field — React 18+ batches these into a single
+  // re-render.
+  const [hydrated, setHydrated] = useState(false)
   useEffect(() => {
-    if (typeof window === 'undefined') return
-    window.localStorage.setItem(KEY_COLLAPSED, String(collapsed))
-  }, [collapsed])
-  useEffect(() => {
-    if (typeof window === 'undefined') return
+    if (hydrated) return
+    setHydrated(true)
+    const applyDefaults = shouldApplyCurrentDefaults()
     window.localStorage.setItem(KEY_DEFAULTS_VERSION, DEFAULTS_VERSION)
-  }, [])
+    if (!applyDefaults) {
+      setCollapsed(readBool(KEY_COLLAPSED, DEFAULT_COLLAPSED))
+      setMetric(readEnum<VolumeMetric>(KEY_METRIC, ['notional', 'dv01'], DEFAULT_METRIC))
+      setPeriod(readEnum<VolumePeriod>(KEY_PERIOD, ['today', '1h', '24h', '1w', '2w', '3w', '1m', '3m'], DEFAULT_PERIOD))
+    }
+    setLookback(readEnum<LookbackId>(KEY_LOOKBACK, LOOKBACK_IDS, DEFAULT_LOOKBACK))
+    setForwardSchema(readEnum<ForwardSchemaId>(KEY_FWD_SCHEMA, FORWARD_SCHEMA_IDS, 'default'))
+    setTenorSchema(readEnum<TenorSchemaId>(KEY_TENOR_SCHEMA, TENOR_SCHEMA_IDS, 'default'))
+    setPackageType(readEnum<PackageTypeGroupId>(KEY_PACKAGE_TYPE, PACKAGE_TYPE_GROUP_IDS, 'outright'))
+    setViewMode(readEnum<VolumeGridViewMode>(KEY_VIEW_MODE, VIEW_MODE_IDS, 'volume'))
+    setColorMode(readEnum<VolumeGridColorMode>(KEY_COLOR_MODE, COLOR_MODE_IDS, 'activity'))
+  }, [hydrated])
+
+  // Persist to localStorage on change (skip during initial hydration
+  // to avoid writing defaults back over stored prefs).
   useEffect(() => {
-    if (typeof window === 'undefined') return
+    if (!hydrated) return
+    window.localStorage.setItem(KEY_COLLAPSED, String(collapsed))
     window.localStorage.setItem(KEY_METRIC, metric)
-  }, [metric])
-  useEffect(() => {
-    if (typeof window === 'undefined') return
     window.localStorage.setItem(KEY_PERIOD, period)
-  }, [period])
-  useEffect(() => {
-    if (typeof window === 'undefined') return
     window.localStorage.setItem(KEY_LOOKBACK, lookback)
-  }, [lookback])
-  useEffect(() => {
-    if (typeof window === 'undefined') return
     window.localStorage.setItem(KEY_FWD_SCHEMA, forwardSchema)
-  }, [forwardSchema])
-  useEffect(() => {
-    if (typeof window === 'undefined') return
     window.localStorage.setItem(KEY_TENOR_SCHEMA, tenorSchema)
-  }, [tenorSchema])
-  useEffect(() => {
-    if (typeof window === 'undefined') return
     window.localStorage.setItem(KEY_PACKAGE_TYPE, packageType)
-  }, [packageType])
-  useEffect(() => {
-    if (typeof window === 'undefined') return
     window.localStorage.setItem(KEY_VIEW_MODE, viewMode)
-  }, [viewMode])
-  useEffect(() => {
-    if (typeof window === 'undefined') return
     window.localStorage.setItem(KEY_COLOR_MODE, colorMode)
-  }, [colorMode])
+  }, [hydrated, collapsed, metric, period, lookback, forwardSchema, tenorSchema, packageType, viewMode, colorMode])
 
   const grid = useVolumeGrid({
     metric, period, collapsed,
     lookbackDays: LOOKBACK_DAYS[lookback],
     forwardSchema, tenorSchema, packageType, viewMode,
+  })
+
+  const cellPrefetch = useVolumeGridCellPrefetch({
+    metric, forwardSchema, tenorSchema, packageType,
   })
 
   const onCellClick = useCallback((id: { fwd: string; tenor: string }) => {
@@ -332,6 +308,8 @@ export function VolumeGridCard({ onSelectPackage }: VolumeGridCardProps): JSX.El
               viewMode={viewMode}
               colorMode={colorMode}
               onCellClick={onCellClick}
+              onCellHover={cellPrefetch.onCellHover}
+              onCellLeave={cellPrefetch.onCellLeave}
             />
           ) : (
             <SkeletonGrid />
