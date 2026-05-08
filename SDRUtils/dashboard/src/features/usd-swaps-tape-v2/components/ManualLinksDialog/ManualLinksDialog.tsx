@@ -15,6 +15,7 @@ import type { UsdSwapTapeRow } from '../../types'
 import { useManualLinkForm } from '@/lib/manual-links-ui/hooks/useManualLinkForm'
 import { ManualLinkValidationList } from '@/lib/manual-links-ui/components/ManualLinkValidationList'
 import { ManualLinkMetricsTable } from '@/lib/manual-links-ui/components/ManualLinkMetricsTable'
+import { useIsMobile } from '@/lib/hooks/useIsMobile'
 
 const V2_LINKS_BASE = `${TAPE_V2_API_BASE}/links`
 
@@ -44,6 +45,7 @@ export interface ManualLinksDialogProps {
 }
 
 export function ManualLinksDialog(props: ManualLinksDialogProps): JSX.Element {
+  const isMobile = useIsMobile()
   const [user, setUser] = useSavedUser()
   const [manualPackageId, setManualPackageId] = useState('')
 
@@ -101,7 +103,7 @@ export function ManualLinksDialog(props: ManualLinksDialogProps): JSX.Element {
       visible={props.open}
       onHide={props.onClose}
       header="Link selected trades"
-      style={{ width: 600 }}
+      style={isMobile ? { width: '100%', maxWidth: '100%' } : { width: 600 }}
       modal
       data-testid="usd-swaps-manual-links-dialog"
     >

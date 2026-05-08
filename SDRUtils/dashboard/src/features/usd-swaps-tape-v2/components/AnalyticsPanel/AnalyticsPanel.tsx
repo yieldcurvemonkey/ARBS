@@ -41,6 +41,7 @@ import type {
   TimeseriesState,
 } from './analytics-types'
 import type { UsdSwapTapeRow } from '../../types'
+import { useIsMobile } from '@/lib/hooks/useIsMobile'
 
 export interface AnalyticsPanelProps {
   // Phase A (multi-trade dock): the panel now receives the full loaded
@@ -75,6 +76,7 @@ export function AnalyticsPanel(props: AnalyticsPanelProps): JSX.Element {
   // legacy `focused` prop continues to drive the single-trade tab
   // hooks below; sequence mode wires its own per-trade hooks via
   // the useAnalyticsSequence wrapper (Phase E).
+  const isMobile = useIsMobile()
   const derived = deriveAnalyticsSelection(selected)
   const mode = derived.mode
   const sequence = derived.sequence
@@ -319,17 +321,23 @@ export function AnalyticsPanel(props: AnalyticsPanelProps): JSX.Element {
   return (
     <div
       className="flex min-h-0 flex-col border-t-2 border-indigo-500/40 bg-slate-950"
-      // SSR renders with a viewport-relative height (no window access);
-      // post-mount the state swaps to a pixel value so drag-resize works.
-      style={panelHeight == null ? { height: `${panelHeightVh}vh` } : { height: panelHeight }}
+      style={
+        isMobile
+          ? { height: '50vh' }
+          : panelHeight == null
+            ? { height: `${panelHeightVh}vh` }
+            : { height: panelHeight }
+      }
     >
-      <div
-        onMouseDown={onStartResize}
-        className="group relative h-1 w-full cursor-ns-resize bg-slate-900 hover:bg-indigo-500/30"
-        title="Drag to resize analytics dock"
-      >
-        <div className="absolute left-1/2 top-1/2 h-[2px] w-8 -translate-x-1/2 -translate-y-1/2 rounded-full bg-slate-700 group-hover:bg-indigo-400" />
-      </div>
+      {!isMobile && (
+        <div
+          onMouseDown={onStartResize}
+          className="group relative h-1 w-full cursor-ns-resize bg-slate-900 hover:bg-indigo-500/30"
+          title="Drag to resize analytics dock"
+        >
+          <div className="absolute left-1/2 top-1/2 h-[2px] w-8 -translate-x-1/2 -translate-y-1/2 rounded-full bg-slate-700 group-hover:bg-indigo-400" />
+        </div>
+      )}
 
       <div className="flex items-center gap-2 border-b border-slate-800 bg-slate-900/40 px-3 py-1.5">
         <span className="text-[10.5px] font-mono uppercase tracking-wider text-slate-400">
@@ -367,32 +375,34 @@ export function AnalyticsPanel(props: AnalyticsPanelProps): JSX.Element {
             extremes error
           </span>
         ) : null}
-        <span
-          className="ml-auto flex items-center gap-1 font-mono text-[10px] text-slate-500"
-          data-testid="dock-keyboard-hints"
-        >
-          <kbd
-            className={`rounded border px-1 py-[1px] ${
-              mode === 'sequence'
-                ? 'border-slate-800 text-slate-600 line-through'
-                : 'border-slate-700 text-slate-400'
-            }`}
-            title={
-              mode === 'sequence'
-                ? 'Arrow-key navigation is disabled in sequence mode — clear the selection to re-enable.'
-                : undefined
-            }
-            data-disabled={mode === 'sequence' ? 'true' : 'false'}
+        {!isMobile && (
+          <span
+            className="ml-auto flex items-center gap-1 font-mono text-[10px] text-slate-500"
+            data-testid="dock-keyboard-hints"
           >
-            ↑↓
-          </kbd>
-          <span className={mode === 'sequence' ? 'text-slate-600 line-through' : ''}>
-            switch row
+            <kbd
+              className={`rounded border px-1 py-[1px] ${
+                mode === 'sequence'
+                  ? 'border-slate-800 text-slate-600 line-through'
+                  : 'border-slate-700 text-slate-400'
+              }`}
+              title={
+                mode === 'sequence'
+                  ? 'Arrow-key navigation is disabled in sequence mode — clear the selection to re-enable.'
+                  : undefined
+              }
+              data-disabled={mode === 'sequence' ? 'true' : 'false'}
+            >
+              ↑↓
+            </kbd>
+            <span className={mode === 'sequence' ? 'text-slate-600 line-through' : ''}>
+              switch row
+            </span>
+            <span className="mx-1 text-slate-700">·</span>
+            <kbd className="rounded border border-slate-700 px-1 py-[1px] text-slate-400">Esc</kbd>
+            <span>close</span>
           </span>
-          <span className="mx-1 text-slate-700">·</span>
-          <kbd className="rounded border border-slate-700 px-1 py-[1px] text-slate-400">Esc</kbd>
-          <span>close</span>
-        </span>
+        )}
         <button
           type="button"
           onClick={onClose}

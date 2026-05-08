@@ -20,6 +20,7 @@ import {
   markUsdSwapsOnboardingSeen,
   UsdSwapsOnboardingGuide,
 } from './UsdSwapsOnboardingGuide'
+import { useIsMobile } from '@/lib/hooks/useIsMobile'
 import { groupLinkedRows } from '@/lib/manual-links-ui/grouping'
 import { ManualLinkDetailModal } from '@/lib/manual-links-ui/components/ManualLinkDetailModal'
 import { TAPE_V2_API_BASE } from '../constants'
@@ -70,6 +71,7 @@ export default function UsdSwapsTradeTape(): JSX.Element {
   const [adminPassword, setAdminPassword] = useState('')
   const [savedUser, setSavedUser] = useSavedUser()
   const focus = useFocusedTrade()
+  const isMobile = useIsMobile()
 
   // Volume-grid modal click-through: writes a package_id URL filter so
   // the tape narrows to the clicked package. Mirrors the AnalyticsPanel
@@ -163,7 +165,10 @@ export default function UsdSwapsTradeTape(): JSX.Element {
 
   return (
     <PrimeReactProvider>
-      <div className="usd-swaps-tape-shell flex h-full min-h-0 flex-col bg-slate-950 text-slate-100 pb-12">
+      <div
+        className={`usd-swaps-tape-shell flex h-full min-h-0 flex-col bg-slate-950 text-slate-100 ${isMobile ? 'pb-20' : 'pb-12'}`}
+        data-mobile={isMobile || undefined}
+      >
         <VolumeGridCard onSelectPackage={onSelectPackageFromGrid} />
         <div className="flex flex-1 min-h-0 overflow-hidden">
           <TradeTapeTable
@@ -179,7 +184,7 @@ export default function UsdSwapsTradeTape(): JSX.Element {
             onSelectionChange={selection.onSelectionChange}
             focusedPackageId={focusedPackageId}
             onOpenManualLink={handleOpenManualLink}
-            actionSlot={
+            actionSlot={isMobile ? undefined : (
               <div className="flex items-center gap-2">
                 {selection.count > 0 ? (
                   <button
@@ -213,7 +218,7 @@ export default function UsdSwapsTradeTape(): JSX.Element {
                   {analyticsOpen ? '▼ Hide Analytics' : '▲ Show Analytics'}
                 </button>
               </div>
-            }
+            )}
           />
         </div>
         {analyticsOpen ? (
@@ -406,6 +411,19 @@ export default function UsdSwapsTradeTape(): JSX.Element {
               inset 0 1px 0 rgba(129, 140, 248, 0.5),
               inset 0 -1px 0 rgba(129, 140, 248, 0.5) !important;
           }
+          /* Mobile device overrides — activated by data-mobile attr
+             set via useIsMobile() (UA + viewport < 1024px). */
+          .usd-swaps-tape-shell[data-mobile] {
+            --usd-swaps-tape-scale: 1;
+            zoom: 1;
+            transform: none;
+            width: 100%;
+          }
+          .usd-swaps-tape-shell[data-mobile] [data-testid="volume-grid-card"] button,
+          .usd-swaps-tape-shell[data-mobile] [data-testid="volume-grid-card"] select {
+            min-height: 2.75rem;
+            min-width: 2.75rem;
+          }
         `}</style>
         <ManualLinksDialog
           open={activeModal === 'links'}
@@ -438,6 +456,37 @@ export default function UsdSwapsTradeTape(): JSX.Element {
           open={onboardingOpen}
           onClose={closeOnboarding}
         />
+        {isMobile && (
+          <div className="fixed inset-x-0 bottom-0 z-50 flex items-center justify-around gap-2 border-t border-slate-700 bg-slate-900/95 px-3 py-2 backdrop-blur-sm">
+            {selection.count > 0 && (
+              <button
+                type="button"
+                className="min-h-[44px] flex-1 rounded-lg bg-sky-900/40 px-3 py-2 font-mono text-xs text-sky-200 active:bg-sky-800/60"
+                onClick={() => setActiveModal('links')}
+              >
+                Link {selection.count}
+              </button>
+            )}
+            <button
+              type="button"
+              onClick={openOnboarding}
+              className="min-h-[44px] rounded-lg border border-slate-700 px-4 py-2 font-mono text-xs text-slate-200 active:bg-slate-700"
+            >
+              Help
+            </button>
+            <button
+              type="button"
+              onClick={() => setAnalyticsOpen((v) => !v)}
+              className={`min-h-[44px] flex-1 rounded-lg px-3 py-2 font-mono text-xs ${
+                analyticsOpen
+                  ? 'bg-indigo-500/20 text-indigo-100 ring-1 ring-indigo-400/40'
+                  : 'border border-slate-700 text-slate-200 active:bg-slate-700'
+              }`}
+            >
+              {analyticsOpen ? 'Hide Analytics' : 'Analytics'}
+            </button>
+          </div>
+        )}
       </div>
     </PrimeReactProvider>
   )

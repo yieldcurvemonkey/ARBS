@@ -24,6 +24,7 @@ import {
   type PackageTypeGroupId,
   type TenorSchemaId,
 } from '@/lib/usd-swaps-tape-v2/volumeGridBuckets'
+import { useIsMobile } from '@/lib/hooks/useIsMobile'
 
 const KEY_COLLAPSED = 'usd-tape-v2:volume-grid:collapsed'
 const KEY_METRIC    = 'usd-tape-v2:volume-grid:metric'
@@ -124,6 +125,7 @@ export function VolumeGridCard({ onSelectPackage }: VolumeGridCardProps): JSX.El
   const [viewMode, setViewMode] = useState<VolumeGridViewMode>('volume')
   const [colorMode, setColorMode] = useState<VolumeGridColorMode>('activity')
   const [selectedCell, setSelectedCell] = useState<{ fwd: string; tenor: string } | null>(null)
+  const isMobile = useIsMobile()
 
   // Hydrate from localStorage after mount so SSR and first client render
   // produce identical markup (avoids React hydration mismatch). One
@@ -163,6 +165,10 @@ export function VolumeGridCard({ onSelectPackage }: VolumeGridCardProps): JSX.El
     window.localStorage.setItem(KEY_COLOR_MODE, colorMode)
   }, [hydrated, collapsed, metric, period, lookback, forwardSchema, tenorSchema, packageType, viewMode, colorMode])
 
+  useEffect(() => {
+    if (isMobile) setCollapsed(true)
+  }, [isMobile])
+
   const grid = useVolumeGrid({
     metric, period, collapsed,
     lookbackDays: LOOKBACK_DAYS[lookback],
@@ -186,7 +192,7 @@ export function VolumeGridCard({ onSelectPackage }: VolumeGridCardProps): JSX.El
       data-testid="volume-grid-card"
       className="border-b border-slate-800 bg-slate-900/40 ring-1 ring-slate-800"
     >
-      <header className="flex flex-wrap items-center gap-2 px-3 py-1.5 text-slate-300">
+      <header className={`flex flex-wrap items-center px-3 text-slate-300 ${isMobile ? 'gap-3 py-3' : 'gap-2 py-1.5'}`}>
         <button
           type="button"
           aria-label="Toggle volume grid"

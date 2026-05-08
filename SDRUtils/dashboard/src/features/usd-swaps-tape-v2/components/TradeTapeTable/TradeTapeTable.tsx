@@ -36,6 +36,8 @@ import {
   matchFilterMetaWithRow,
 } from './filter-utils'
 import { computeAnchorAdjustedScrollTop } from './scroll-anchor'
+import { useIsMobile } from '@/lib/hooks/useIsMobile'
+import { MobileTradeCards } from './MobileTradeCards'
 
 // PrimeReact's `VirtualScrollerLazyEvent` types `first` / `last` as
 // `number | VirtualScrollerState`; we only care about the numeric case and
@@ -156,6 +158,14 @@ export function TradeTapeTable(props: TradeTapeTableProps): JSX.Element {
       ),
     [],
   )
+
+  const isMobile = useIsMobile()
+  const metricLabel =
+    metricMode === 'dv01'
+      ? 'DV01'
+      : metricMode === 'pa_dv01'
+        ? 'PA-DV01'
+        : 'Notional'
 
   const effectiveSortField = columnFilters.sortField ?? DEFAULT_SORT_FIELD
   const effectiveSortOrder: 1 | -1 | 0 =
@@ -400,6 +410,63 @@ export function TradeTapeTable(props: TradeTapeTableProps): JSX.Element {
   const handleResetAll = useCallback(() => {
     columnFilters.reset()
   }, [columnFilters])
+
+  if (isMobile) {
+    return (
+      <div
+        ref={tableWrapperRef}
+        className="flex flex-1 flex-col min-h-0 bg-slate-950 text-slate-100"
+        data-testid="trade-tape-table"
+      >
+        <div className="flex items-center gap-2 border-b border-slate-800 bg-slate-950/80 px-3 py-2">
+          <span className="font-mono text-xs text-slate-300">
+            {filtersActive
+              ? `${displayRows.length}/${rows.length}`
+              : `${displayRows.length} rows`}
+            {hasMore ? ' · more' : ''}
+          </span>
+          {filtersActive && (
+            <span className="rounded border border-sky-700/50 bg-sky-900/30 px-1.5 py-0.5 text-[10px] text-sky-200">
+              Filtered
+            </span>
+          )}
+          <div className="flex-1" />
+          {filtersActive && (
+            <button
+              type="button"
+              onClick={handleResetAll}
+              className="min-h-[44px] rounded border border-slate-700 px-3 py-1 font-mono text-xs text-slate-300 active:bg-slate-700"
+            >
+              Reset
+            </button>
+          )}
+          <button
+            type="button"
+            onClick={toggleMetric}
+            className="min-h-[44px] rounded border border-slate-700 px-3 py-1 font-mono text-xs text-slate-300 active:bg-slate-700"
+            title={`Toggle metric (current: ${metricLabel})`}
+          >
+            {metricLabel} ⇅
+          </button>
+          {actionSlot}
+        </div>
+        <MobileTradeCards
+          rows={displayRows}
+          loading={loading}
+          loadingMore={loadingMore}
+          hasMore={hasMore}
+          onLoadMore={requestLoadMore}
+          expandedRows={expandedRows}
+          onToggleRow={onToggleRow}
+          selected={selected}
+          onSelectionChange={onSelectionChange}
+          focusedPackageId={focusedPackageId}
+          onOpenManualLink={onOpenManualLink}
+          metricMode={metricMode}
+        />
+      </div>
+    )
+  }
 
   return (
     <div
