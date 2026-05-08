@@ -15,6 +15,7 @@ import {
   type LucideIcon,
 } from 'lucide-react'
 import { Dialog } from 'primereact/dialog'
+import { useIsMobile } from '@/lib/hooks/useIsMobile'
 
 export const USD_SWAPS_ONBOARDING_STORAGE_KEY =
   'usd-swaps-tape-v2:onboarding-seen:v1'
@@ -88,6 +89,7 @@ export interface UsdSwapsOnboardingGuideProps {
 export function UsdSwapsOnboardingGuide(
   props: UsdSwapsOnboardingGuideProps,
 ): JSX.Element {
+  const isMobile = useIsMobile()
   const [stepIndex, setStepIndex] = useState(0)
 
   useEffect(() => {
@@ -104,7 +106,7 @@ export function UsdSwapsOnboardingGuide(
       visible={props.open}
       onHide={props.onClose}
       header="How to use the USD swaps tape"
-      style={{ width: 560, maxWidth: 'calc(100vw - 2rem)' }}
+      style={isMobile ? { width: '100%', maxWidth: '100%' } : { width: 560, maxWidth: 'calc(100vw - 2rem)' }}
       modal
       draggable={false}
       resizable={false}
