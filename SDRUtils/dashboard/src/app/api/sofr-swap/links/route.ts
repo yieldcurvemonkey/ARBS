@@ -1,4 +1,5 @@
 // ABOUTME: CRUD entry point for manual SOFR swap link records.
+export const dynamic = 'force-dynamic'
 import { NextResponse } from 'next/server'
 import { query } from '@/lib/db'
 import {
