@@ -13,7 +13,7 @@ import {
   type JSX,
   type ReactNode,
 } from 'react'
-import { ChevronDown, ChevronRight, RefreshCw } from 'lucide-react'
+import { AlertTriangle, ChevronDown, ChevronRight, RefreshCw } from 'lucide-react'
 import {
   DataTable,
   type DataTableFilterEvent,
@@ -54,6 +54,9 @@ export interface TradeTapeTableProps {
   loadingMore?: boolean
   onLoadMore?: () => void | Promise<void>
   hasMore?: boolean
+  error?: string | null
+  pollError?: string | null
+  onRetry?: () => void
   expandedRows?: Record<string, boolean>
   /**
    * Full-replacement callback kept for PrimeReact's native `onRowToggle`
@@ -104,6 +107,9 @@ export function TradeTapeTable(props: TradeTapeTableProps): JSX.Element {
     loadingMore,
     onLoadMore,
     hasMore,
+    error,
+    pollError,
+    onRetry,
     expandedRows,
     onRowToggle,
     onToggleRow,
@@ -450,6 +456,31 @@ export function TradeTapeTable(props: TradeTapeTableProps): JSX.Element {
           </button>
           {actionSlot}
         </div>
+        {error && displayRows.length === 0 && (
+          <div className="flex items-center gap-3 border-b border-rose-500/30 bg-rose-950/40 px-4 py-2.5">
+            <AlertTriangle className="h-4 w-4 shrink-0 text-rose-400" />
+            <span className="font-mono text-xs text-rose-200">
+              Failed to load tape: {error}
+            </span>
+            {onRetry && (
+              <button
+                type="button"
+                onClick={onRetry}
+                className="ml-auto rounded border border-rose-500/40 px-2.5 py-1 font-mono text-[11px] text-rose-200 hover:bg-rose-900/40"
+              >
+                Retry
+              </button>
+            )}
+          </div>
+        )}
+        {pollError && displayRows.length > 0 && (
+          <div className="flex items-center gap-2 border-b border-amber-500/20 bg-amber-950/30 px-4 py-1.5">
+            <AlertTriangle className="h-3.5 w-3.5 shrink-0 text-amber-400" />
+            <span className="font-mono text-[10.5px] text-amber-200/80">
+              Live updates paused — data may be stale
+            </span>
+          </div>
+        )}
         <MobileTradeCards
           rows={displayRows}
           loading={loading}
@@ -610,6 +641,35 @@ export function TradeTapeTable(props: TradeTapeTableProps): JSX.Element {
         {actionSlot}
       </div>
 
+      {/* P1-1: error banner when initial fetch fails */}
+      {error && displayRows.length === 0 && (
+        <div className="flex items-center gap-3 border-b border-rose-500/30 bg-rose-950/40 px-4 py-2.5">
+          <AlertTriangle className="h-4 w-4 shrink-0 text-rose-400" />
+          <span className="font-mono text-xs text-rose-200">
+            Failed to load tape: {error}
+          </span>
+          {onRetry && (
+            <button
+              type="button"
+              onClick={onRetry}
+              className="ml-auto rounded border border-rose-500/40 px-2.5 py-1 font-mono text-[11px] text-rose-200 hover:bg-rose-900/40"
+            >
+              Retry now
+            </button>
+          )}
+        </div>
+      )}
+
+      {/* P3-9: staleness warning when poll fails but we have data */}
+      {pollError && displayRows.length > 0 && (
+        <div className="flex items-center gap-2 border-b border-amber-500/20 bg-amber-950/30 px-4 py-1.5">
+          <AlertTriangle className="h-3.5 w-3.5 shrink-0 text-amber-400" />
+          <span className="font-mono text-[10.5px] text-amber-200/80">
+            Live updates paused — data may be stale
+          </span>
+        </div>
+      )}
+
       <DataTable
         value={displayRows}
         dataKey="package_id"
@@ -623,6 +683,39 @@ export function TradeTapeTable(props: TradeTapeTableProps): JSX.Element {
         }
         onRowMouseLeave={() => analyticsPrefetch.onLeave()}
         loading={loading && displayRows.length === 0}
+        emptyMessage={
+          error ? (
+            <div className="flex flex-col items-center gap-2 py-12 text-center">
+              <AlertTriangle className="h-6 w-6 text-rose-400" />
+              <span className="font-mono text-sm text-rose-200">Connection error</span>
+              {onRetry && (
+                <button
+                  type="button"
+                  onClick={onRetry}
+                  className="mt-1 rounded border border-rose-500/40 px-3 py-1.5 font-mono text-xs text-rose-200 hover:bg-rose-900/40"
+                >
+                  Retry
+                </button>
+              )}
+            </div>
+          ) : loading ? (
+            <div className="flex flex-col gap-0">
+              {Array.from({ length: 12 }).map((_, i) => (
+                <div key={i} className="flex items-center gap-3 border-b border-slate-800/50 px-3 py-2">
+                  <div className="h-3 w-6 animate-pulse rounded bg-slate-800" />
+                  <div className="h-3 w-16 animate-pulse rounded bg-slate-800" />
+                  <div className="h-3 w-12 animate-pulse rounded bg-slate-800" />
+                  <div className="h-3 w-10 animate-pulse rounded bg-slate-800" />
+                  <div className="h-3 flex-1 animate-pulse rounded bg-slate-800" />
+                  <div className="h-3 w-14 animate-pulse rounded bg-slate-800" />
+                  <div className="h-3 w-12 animate-pulse rounded bg-slate-800" />
+                </div>
+              ))}
+            </div>
+          ) : (
+            'No available options'
+          )
+        }
         selectionMode={onSelectionChange ? 'multiple' : undefined}
         cellSelection={false}
         metaKeySelection={false}

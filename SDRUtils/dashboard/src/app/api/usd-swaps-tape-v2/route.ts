@@ -28,7 +28,9 @@ export async function GET(req: Request) {
   try {
     const { view, columns } = await resolveDisplayView()
     const { sql, params } = buildTapeQuery(parsed.value, view, columns)
+    const dbStart = performance.now()
     const result = await query<UsdSwapTapeRow>(sql, params)
+    const dbDur = performance.now() - dbStart
     const rows = result.rows.slice(0, parsed.value.limit)
     const hasMore = result.rows.length > parsed.value.limit
     // The pg driver hands back `timestamp with time zone` as a JS Date, so
@@ -52,6 +54,7 @@ export async function GET(req: Request) {
     // tail and incremental polls always hit the DB; column filters are
     // usually trader-specific and short-lived, and would otherwise
     // multiply CDN cache entries without meaningful reuse.)
+    const serializeStart = performance.now()
     const headers: Record<string, string> = {}
     const hasColumnFilters =
       parsed.value.columnFilters &&
@@ -61,6 +64,8 @@ export async function GET(req: Request) {
     if (!skipCache) {
       headers['Cache-Control'] = 'public, s-maxage=15, stale-while-revalidate=60'
     }
+    const serializeDur = performance.now() - serializeStart
+    headers['Server-Timing'] = `db;dur=${dbDur.toFixed(1)}, serialize;dur=${serializeDur.toFixed(1)}, rows;desc="${rows.length} rows"`
     return NextResponse.json(
       { rows, nextCursor, hasMore, latestExecutionStart },
       { headers },

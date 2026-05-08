@@ -177,6 +177,9 @@ export default function UsdSwapsTradeTape(): JSX.Element {
             loadingMore={tape.loadingMore}
             onLoadMore={tape.loadMore}
             hasMore={tape.hasMore}
+            error={tape.initialError}
+            pollError={tape.pollError}
+            onRetry={tape.refetch}
             expandedRows={expansion.expandedRows}
             onRowToggle={expansion.onRowToggle}
             onToggleRow={expansion.toggleOne}

@@ -20,19 +20,24 @@ export default function RootLayout({
         <SwrProvider>
         <div className="min-h-screen bg-slate-950 text-slate-100">
           <header className="border-b border-slate-800 bg-slate-900/70 backdrop-blur">
-            <div className="mx-auto flex max-w-[120rem] items-center justify-between px-4 py-4">
-              <Link href="/" className="text-lg font-semibold tracking-tight">
+            <div className="mx-auto flex max-w-[120rem] flex-wrap items-center justify-between gap-x-4 gap-y-1 px-4 py-3 sm:py-4">
+              <Link href="/" className="hidden text-lg font-semibold tracking-tight min-[400px]:inline">
                 yieldcurvemonkey&apos;s jungle
               </Link>
-              <nav className="flex items-center gap-6 text-sm text-slate-300">
+              <Link href="/" className="text-lg font-semibold tracking-tight min-[400px]:hidden">
+                ycm
+              </Link>
+              <nav className="flex items-center gap-3 text-xs text-slate-300 sm:gap-6 sm:text-sm">
                 <Link href="/usd-swaps" className="hover:text-white">
-                  USD Swaps Tape
+                  Swaps
+                  <span className="hidden sm:inline"> Tape</span>
                 </Link>
                 <Link
                   href="/usd-rates-vol-analytics/vol-tape"
                   className="hover:text-white"
                 >
-                  USD Rates Vol Tape
+                  Vol
+                  <span className="hidden sm:inline"> Tape</span>
                 </Link>
               </nav>
             </div>

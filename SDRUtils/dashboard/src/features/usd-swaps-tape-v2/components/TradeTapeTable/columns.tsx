@@ -369,7 +369,7 @@ export function getColumns(
           </span>
         )
       }}
-      style={{ width: 470 }}
+      style={{ minWidth: 300 }}
     />,
     <Column
       key="metric"

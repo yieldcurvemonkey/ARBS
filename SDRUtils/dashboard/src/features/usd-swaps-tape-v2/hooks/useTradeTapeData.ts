@@ -173,8 +173,20 @@ export function useTradeTapeData(
   const [pollError, setPollError] = useState<string | null>(null)
   const [paginationError, setPaginationError] = useState<string | null>(null)
 
+  // P1-3 fix: Next.js useSearchParams may not change reference on
+  // popstate, so the reset effect's dependency comparison sees no change
+  // and forward navigation leaves the table empty. Increment a counter
+  // on every popstate to force the reset effect to re-fire.
+  const [navKey, setNavKey] = useState(0)
+  useEffect(() => {
+    const handler = () => setNavKey((k) => k + 1)
+    window.addEventListener('popstate', handler)
+    return () => window.removeEventListener('popstate', handler)
+  }, [])
+
   const abortRef = useRef<AbortController | null>(null)
   const fetchInFlight = useRef(false)
+  const recoveryAttemptRef = useRef(0)
 
   const upsertRows = useCallback(
     (incoming: UsdSwapTapeRow[], replace: boolean) => {
@@ -272,17 +284,36 @@ export function useTradeTapeData(
     await fetchTape({ replace: true })
   }, [fetchTape])
 
-  // Reset on limit OR columnFilters change. A new filter payload means
-  // the server-side WHERE shape has changed; existing rows + cursor are
-  // stale, so wipe them and fire a fresh replace fetch.
+  // Reset on limit, columnFilters, or navigation (popstate) change. A
+  // new filter payload means the server-side WHERE shape has changed;
+  // existing rows + cursor are stale, so wipe them and fire a fresh
+  // replace fetch. navKey catches forward/back navigation that doesn't
+  // change the serialised filter string (P1-3 fix).
   useEffect(() => {
     setRows([])
     setNextCursor(null)
     setHasMore(false)
     setLatestExecutionStart(null)
+    setInitialError(null)
+    recoveryAttemptRef.current = 0
     fetchTape({ replace: true })
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [params.limit, params.columnFilters])
+  }, [params.limit, params.columnFilters, navKey])
+
+  // P1-2 fix: when the initial fetch fails, latestExecutionStart stays
+  // null and the polling guard blocks all subsequent ticks. Schedule
+  // retries with exponential backoff (2s → 4s → 8s → … → 30s cap) so
+  // the tape self-heals once the server recovers.
+  useEffect(() => {
+    if (!initialError || latestExecutionStart) return
+    const attempt = recoveryAttemptRef.current
+    const delay = Math.min(2000 * 2 ** attempt, 30_000)
+    recoveryAttemptRef.current = attempt + 1
+    const timeoutId = setTimeout(() => {
+      fetchTape({ replace: true })
+    }, delay)
+    return () => clearTimeout(timeoutId)
+  }, [initialError, latestExecutionStart, fetchTape])
 
   // Polling for new rows via ?since=latestExecutionStart
   useEffect(() => {
