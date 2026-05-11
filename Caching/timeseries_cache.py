@@ -176,8 +176,21 @@ def _read_partition_df(part_dir: Path) -> pd.DataFrame:
     if not parquet_files:
         return pd.DataFrame()
 
-    tables = [pq.read_table(path) for path in parquet_files]
-    table = tables[0] if len(tables) == 1 else pa.concat_tables(tables)
+    # Use ParquetFile to avoid PyArrow's Hive-partition auto-discovery which
+    # conflicts with legacy files that already have an ``asset`` column.
+    tables = [pq.ParquetFile(path).read() for path in parquet_files]
+
+    # Drop stale partition-artifact columns that some legacy files carry.
+    _ARTIFACT_COLS = {"asset", "date"}
+    cleaned: list[pa.Table] = []
+    for t in tables:
+        drop = [c for c in t.column_names if c in _ARTIFACT_COLS]
+        if drop:
+            t = t.drop_columns(drop)
+        cleaned.append(t)
+    tables = cleaned
+
+    table = tables[0] if len(tables) == 1 else pa.concat_tables(tables, promote_options="default")
     df = table.to_pandas()
     if df.empty:
         return pd.DataFrame()
