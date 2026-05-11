@@ -295,6 +295,25 @@ export function extendedLifecyclePillsFor(row: UsdSwapTapeRow): Array<{
 
 const DEFAULT_TAG_TONE = 'bg-zinc-700/50 text-zinc-300'
 
+export function actionClassBadgeFor(row: UsdSwapTapeRow): {
+  className: string
+  label: string
+  title: string
+} | null {
+  const pills = extendedLifecyclePillsFor(row)
+  const classMeta = economicClassBadgeFor(row)
+  const actionLabel = pills.length > 0 ? pills[0].label : null
+  const classLabel = classMeta?.label ?? null
+  if (!actionLabel && !classLabel) return null
+  const combined = [actionLabel, classLabel].filter(Boolean).join('-')
+  return {
+    className: classMeta?.className ?? pills[0]?.className ?? '',
+    label: combined,
+    title: `lifecycle: ${pills.map((p) => p.label).join('+') || '–'} | class: ${classMeta?.title ?? '–'}`,
+  }
+}
+
+
 export function tapeTagBadgesFor(row: UsdSwapTapeRow): Array<{
   key: string
   className: string

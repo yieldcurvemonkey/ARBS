@@ -3,6 +3,7 @@
 import type { JSX } from 'react'
 import type { UsdSwapTapeRow } from '../../types'
 import {
+  actionClassBadgeFor,
   economicClassBadgeFor,
   extendedLifecyclePillsFor,
   flagBadgesFor,
@@ -12,6 +13,7 @@ import {
 } from './RowBadges.helpers'
 
 export {
+  actionClassBadgeFor,
   economicClassBadgeFor,
   extendedLifecyclePillsFor,
   flagBadgesFor,
@@ -56,6 +58,25 @@ export function FlagBadges({ row }: { row: UsdSwapTapeRow }): JSX.Element {
         </span>
       ))}
     </div>
+  )
+}
+
+
+export function ActionClassBadge({
+  row,
+}: {
+  row: UsdSwapTapeRow
+}): JSX.Element {
+  const meta = actionClassBadgeFor(row)
+  if (!meta) return <span className="text-slate-500 text-[12px]">-</span>
+  return (
+    <span
+      className={`inline-flex items-center rounded px-1.5 py-0.5 text-[10px] font-semibold ${meta.className}`}
+      title={meta.title}
+      data-testid="action-class-badge"
+    >
+      {meta.label}
+    </span>
   )
 }
 
