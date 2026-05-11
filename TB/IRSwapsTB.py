@@ -505,35 +505,36 @@ class IRSwapsTB(LayeredCacheMixin, BaseTimeseriesTB):
                 continue
 
             request_points = _sorted_request_points(missing_points)
-            # Force MDP refresh when any request point falls inside the
-            # staleness window so we don't serve stale pricer caches.
-            _needs_refresh = ignore_cache or any(
-                (d.date() if isinstance(d, datetime.datetime) else d) > _stale_cutoff
-                for d in request_points
-                if d != "live" and isinstance(d.date() if isinstance(d, datetime.datetime) else d, datetime.date)
-            )
-            bulk_request = {
+            # Split request points into cached-historical, stale, and live
+            # so we only force-refresh the dates that need it instead of
+            # re-fetching the entire range.
+            def _is_stale_point(d: DateLike) -> bool:
+                if d == "live":
+                    return False
+                dd = d.date() if isinstance(d, datetime.datetime) else d
+                return isinstance(dd, datetime.date) and dd > _stale_cutoff
+
+            hist_points = [d for d in request_points if d != "live" and not _is_stale_point(d)]
+            stale_points = [d for d in request_points if _is_stale_point(d)]
+            has_live = "live" in request_points
+
+            _base_request: dict = {
                 "curve_name": curve_name,
-                "timestamps": request_points,
-                "ignore_cache": _needs_refresh,
                 "n_jobs": n_jobs,
             }
             if ignore_cache_miss:
-                bulk_request["ignore_cache_miss"] = True
+                _base_request["ignore_cache_miss"] = True
+
             built_map: Dict[Union[datetime.date, datetime.datetime], _IRSwapGenericCurve] = {}
-            historical_request_points = [point for point in request_points if point != "live"]
-            if historical_request_points:
-                historical_request = dict(bulk_request)
-                historical_request["timestamps"] = historical_request_points
-                built_map.update(self.mdp.bulk_get_data(historical_request))
-            if "live" in request_points:
-                live_request = {
-                    "curve_name": curve_name,
-                    "timestamps": ["live"],
-                    "ignore_cache": ignore_cache,
-                    "n_jobs": n_jobs,
-                }
-                built_map.update(self.mdp.bulk_get_data(live_request))
+            if hist_points:
+                hist_req = {**_base_request, "timestamps": hist_points, "ignore_cache": ignore_cache}
+                built_map.update(self.mdp.bulk_get_data(hist_req))
+            if stale_points:
+                stale_req = {**_base_request, "timestamps": stale_points, "ignore_cache": True}
+                built_map.update(self.mdp.bulk_get_data(stale_req))
+            if has_live:
+                live_req = {**_base_request, "timestamps": ["live"], "ignore_cache": ignore_cache}
+                built_map.update(self.mdp.bulk_get_data(live_req))
 
             qs = by_curve[curve_name]
             total_tasks = len(missing_points) * len(qs)
