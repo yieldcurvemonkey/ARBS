@@ -80,33 +80,41 @@ def flag_off_market_trades(
     date_col: str = "execution_date",
     threshold_bp: float = 10.0,
 ) -> pd.DataFrame:
-    """Flag trades whose rate deviates from the group+date median.
+    """Flag trades whose rate deviates from the group+date median OR
+    that are seasoned off-market swaps (past effective date + UFRO).
 
-    For each combination of *group_col* and *date_col*, computes the
-    median rate.  Trades where ``|rate - median| > threshold_bp / 10_000``
-    are flagged as off-market.
+    Rate-outlier detection: for each combination of *group_col* and
+    *date_col*, computes the median rate.  Trades where
+    ``|rate - median| > threshold_bp / 10_000`` are flagged.
+
+    Seasoned detection: trades where ``effective_date < execution_date``
+    AND ``is_ufro == True`` are flagged as off-market seasoned swaps
+    (novated/traded at a non-par price with an upfront payment).
 
     Args:
         df: DataFrame with rate, grouping, and date columns.
+            Expects ``is_ufro`` to be set by a prior call to
+            :func:`flag_upfront_payments`.
         rate_col: Column containing the fixed rate.
         group_col: Column to group by (e.g. ``tenor_label``).
         date_col: Column containing execution dates.
         threshold_bp: Deviation threshold in basis points.
 
     Returns:
-        Copy of *df* with added columns ``is_off_market`` (bool) and
-        ``rate_deviation_bp`` (float, signed).
+        Copy of *df* with added columns ``is_off_market`` (bool),
+        ``rate_deviation_bp`` (float, signed), and
+        ``off_market_reason`` (string or NA).
     """
     df = df.copy()
     rate = pd.to_numeric(df.get(rate_col), errors="coerce")
 
-    # Compute per-group, per-date median rate
+    # --- Rate deviation check ---
     group_keys = [date_col, group_col]
-    # Ensure grouping columns exist
     for col in group_keys:
         if col not in df.columns:
             df["is_off_market"] = False
             df["rate_deviation_bp"] = 0.0
+            df["off_market_reason"] = pd.NA
             return df
 
     medians = (
@@ -116,10 +124,24 @@ def flag_off_market_trades(
     )
 
     deviation = rate - medians
-    deviation_bp = deviation * 10_000  # convert from rate to bp
-
+    deviation_bp = deviation * 10_000
     df["rate_deviation_bp"] = deviation_bp
-    df["is_off_market"] = deviation_bp.abs() > threshold_bp
+    rate_outlier = deviation_bp.abs() > threshold_bp
+
+    # --- Seasoned off-market: past effective date + UFRO ---
+    exec_date = pd.to_datetime(df.get(date_col), errors="coerce").dt.normalize()
+    eff_date = pd.to_datetime(df.get("effective_date"), errors="coerce").dt.normalize()
+    is_ufro = df.get("is_ufro", pd.Series(False, index=df.index)).fillna(False).astype(bool)
+    past_effective = exec_date.notna() & eff_date.notna() & (eff_date < exec_date)
+    is_seasoned = past_effective & is_ufro
+
+    df["is_off_market"] = rate_outlier | is_seasoned
+
+    reason = pd.Series(pd.NA, index=df.index, dtype="string")
+    reason.loc[rate_outlier & ~is_seasoned] = "rate_outlier"
+    reason.loc[is_seasoned & ~rate_outlier] = "past_effective_with_ufro"
+    reason.loc[rate_outlier & is_seasoned] = "past_effective_with_ufro,rate_outlier"
+    df["off_market_reason"] = reason
 
     return df
 

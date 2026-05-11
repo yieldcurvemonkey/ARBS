@@ -63,7 +63,7 @@ def _hour_to_session(hour: int) -> str:
 # Result cache versioning
 # ---------------------------------------------------------------------------
 
-TRADE_TAPE_CACHE_VERSION = "v6-canonical"
+TRADE_TAPE_CACHE_VERSION = "v7-offm-confidence"
 DEFAULT_CACHE_DIR = os.path.join(
     os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
     "notebooks", "sdr", "_cache", "trade_tape",
@@ -1266,18 +1266,30 @@ class TradeTape(SDRAnalyzer):
 
             # 7. MAC coupons — show fixed rates of legs
             if row.get("is_mac", False):
-                legs = row.get("package_legs")
-                if legs is not None and not (isinstance(legs, float) and pd.isna(legs)):
-                    try:
-                        leg_ids = [str(x) for x in legs]
-                        leg_indices = [tid_to_idx[lid] for lid in leg_ids if lid in tid_to_idx]
-                        if leg_indices:
-                            rates = df.loc[leg_indices, "fixed_rate"].dropna()
-                            if not rates.empty:
-                                rate_strs = [f"{r*100:.2f}" for r in rates.values]
-                                parts.append(f"({'/'.join(rate_strs)})")
-                    except (TypeError, ValueError, KeyError):
-                        pass
+                if leg_scope:
+                    own_rate = row.get("fixed_rate")
+                    if pd.notna(own_rate):
+                        parts.append(f"({own_rate*100:.2f})")
+                else:
+                    legs = row.get("package_legs")
+                    has_legs = legs is not None and not (isinstance(legs, float) and pd.isna(legs))
+                    resolved = False
+                    if has_legs:
+                        try:
+                            leg_ids = [str(x) for x in legs]
+                            leg_indices = [tid_to_idx[lid] for lid in leg_ids if lid in tid_to_idx]
+                            if leg_indices:
+                                rates = df.loc[leg_indices, "fixed_rate"].dropna()
+                                if not rates.empty:
+                                    rate_strs = [f"{r*100:.2f}" for r in rates.values]
+                                    parts.append(f"({'/'.join(rate_strs)})")
+                                    resolved = True
+                        except (TypeError, ValueError, KeyError):
+                            pass
+                    if not resolved:
+                        own_rate = row.get("fixed_rate")
+                        if pd.notna(own_rate):
+                            parts.append(f"({own_rate*100:.2f})")
 
             # 8. Settlement / delivery type (from ANNA DSB, fallback to cleared)
             delivery = str(row.get("upi_delivery_type", "")).strip().upper()
@@ -1309,6 +1321,40 @@ class TradeTape(SDRAnalyzer):
             df["tape_label_ust_alias"].str.replace(r"\s+", " ", regex=True).str.strip()
         )
 
+        return df
+
+    @staticmethod
+    def _build_normalized_labels(df: pd.DataFrame) -> pd.DataFrame:
+        """Layer 8: build ``normalized_tape_label`` for analytics bucketing.
+
+        Strips lifecycle tokens (UNWIND, TERM, CORR, etc.) so that lifecycle
+        events bucket with their parent instruments. UFRO, BLOCK, and OFFM
+        are intentionally preserved — they describe economics, not lifecycle.
+        """
+        import re
+
+        _LIFECYCLE_TOKENS = [
+            "PARTIAL-UNWIND", "XD-TERM", "NOVA-IN", "NOVA-OUT",
+            "UNWIND", "TERM", "CORR", "MODI", "EXER", "CLRG",
+        ]
+        _TOKEN_PATTERN = re.compile(
+            r"\s?(?:" + "|".join(re.escape(t) for t in _LIFECYCLE_TOKENS) + r")(?=\s|$)",
+            re.IGNORECASE,
+        )
+
+        def _normalize(label: str) -> str:
+            if not label or not isinstance(label, str):
+                return ""
+            s = " ".join(label.upper().split())
+            s = re.sub(r"\bPHYSICAL\b", "PHYS", s)
+            s = re.sub(r"\bPHY\b", "PHYS", s)
+            prev = ""
+            while prev != s:
+                prev = s
+                s = _TOKEN_PATTERN.sub("", s)
+            return " ".join(s.split()).strip()
+
+        df["normalized_tape_label"] = df["tape_label"].map(_normalize)
         return df
 
     # -- public interface --------------------------------------------------
@@ -1359,6 +1405,7 @@ class TradeTape(SDRAnalyzer):
             ("Market context", self._enrich_context),
             ("Clustering", self._enrich_rv),
             ("Tape labels", self._build_enriched_label),
+            ("Normalized labels", self._build_normalized_labels),
         ]
 
         pbar = tqdm(steps, desc="TradeTape", unit="layer")

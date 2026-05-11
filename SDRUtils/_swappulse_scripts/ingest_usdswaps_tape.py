@@ -157,6 +157,9 @@ LEG_COLUMNS: tuple[str, ...] = (
     "package_transaction_spread",
     "package_transaction_price",
     "package_transaction_price_currency",
+    # Phase 7: frontend-to-backend logic port
+    "off_market_reason",
+    "normalized_tape_label",
     "enrichment_metrics",
 )
 
@@ -214,12 +217,26 @@ PACKAGE_COLUMNS: tuple[str, ...] = (
     "cluster_id",
     "cluster_size",
     "tape_label",
+    # Phase 7: frontend-to-backend logic port
+    "is_off_market_any",
+    "confidence_score",
+    "confidence_total",
+    "confidence_tone",
+    "confidence_signals",
+    "summary_rate",
+    "summary_risk",
+    "summary_opa",
+    "is_ccp_switch",
+    "ccp_switch_from",
+    "ccp_switch_to",
+    "package_adjusted_dv01",
+    "normalized_tape_label",
     "package_metrics",
 )
 
 
 JSON_LEG_COLS = {"enrichment_metrics"}
-JSON_PKG_COLS = {"lifecycle_mix", "package_metrics"}
+JSON_PKG_COLS = {"lifecycle_mix", "package_metrics", "confidence_signals"}
 
 
 # ---------------------------------------------------------------------------
@@ -620,6 +637,9 @@ _LEG_TEXT_COLS: tuple[str, ...] = (
     # table; computed by SDRUtils.core.underlier_canonical and
     # materialized by analytics.trade_tape.compute().
     "canonical_underlier_key",
+    # Phase 7
+    "off_market_reason",
+    "normalized_tape_label",
 )
 _LEG_TS_COLS: tuple[str, ...] = (
     "execution_timestamp",
@@ -723,6 +743,8 @@ def build_leg_rows(tape: pd.DataFrame, *, as_of_date: str) -> list[dict]:
             "fomc_proximity", "cluster_id", "xd_status",
             # v2 additions
             "violation_reason", "economic_class", "economic_class_reason",
+            # Phase 7
+            "off_market_reason", "normalized_tape_label",
         ):
             rec[text_col] = _str_or_none(rec.get(text_col))
         rec["execution_timestamp"] = _to_db_value(rec.get("execution_timestamp"))
@@ -805,6 +827,186 @@ def _structural_risk(
         # Fallback: no tenor info, emit max abs (single-leg headline).
         return _num_or_none(risk.abs().max(skipna=True))
     return _num_or_none(risk.sum(skipna=True))
+
+
+# ---------------------------------------------------------------------------
+# Phase 7: frontend-to-backend ported computations
+# ---------------------------------------------------------------------------
+
+_SUPPORTED_CCPS = {"LCH", "CME"}
+
+
+def _compute_ccp_switch(g: pd.DataFrame) -> dict[str, Any]:
+    """Detect CCP switch: 2-leg, opposite-sign, same tenor, different CCP."""
+    result: dict[str, Any] = {
+        "is_ccp_switch": False,
+        "ccp_switch_from": None,
+        "ccp_switch_to": None,
+    }
+    if len(g) != 2:
+        return result
+    ccp_vals = g.get("ccp", pd.Series(dtype="string"))
+    if ccp_vals.isna().any():
+        return result
+    ccps = ccp_vals.astype(str).str.upper().str.strip().values
+    if ccps[0] == ccps[1]:
+        return result
+    if ccps[0] not in _SUPPORTED_CCPS or ccps[1] not in _SUPPORTED_CCPS:
+        return result
+    tenor_y = pd.to_numeric(g.get("tenor_years"), errors="coerce")
+    if tenor_y.isna().any():
+        return result
+    tv = tenor_y.values
+    if abs(tv[0] - tv[1]) > 0.01:
+        return result
+    risk_vals = pd.to_numeric(g.get("risk"), errors="coerce")
+    if risk_vals.isna().any():
+        return result
+    rv = risk_vals.values
+    if (rv[0] > 0) == (rv[1] > 0):
+        return result
+    # Positive risk = closing position = "from" CCP
+    from_idx = 0 if rv[0] > 0 else 1
+    to_idx = 1 - from_idx
+    result["is_ccp_switch"] = True
+    result["ccp_switch_from"] = ccps[from_idx]
+    result["ccp_switch_to"] = ccps[to_idx]
+    return result
+
+
+_SWAP_LEG_COUNT = {"OUTRIGHT": 1, "CURVE": 2, "FLY": 3}
+
+
+def _base_type_of(package_type: str) -> str:
+    """Extract base type from composite types (SPREADOVER_CURVE -> CURVE)."""
+    pt = (package_type or "").upper()
+    if pt.endswith("_FLY"):
+        return "FLY"
+    if pt.endswith("_CURVE"):
+        return "CURVE"
+    if pt in ("SPREADOVER", "MATCHED_MATURITY"):
+        return "OUTRIGHT"
+    return pt
+
+
+def _is_composite_with_hedge(package_type: str) -> bool:
+    pt = (package_type or "").upper()
+    return (
+        pt == "SPREADOVER" or pt == "MATCHED_MATURITY"
+        or pt.startswith("SPREADOVER_") or pt.startswith("MATCHED_MATURITY_")
+    )
+
+
+def _compute_package_adjusted_dv01(
+    risk: pd.Series, package_type: str, n_legs: int
+) -> Optional[float]:
+    """Clarus-convention package-adjusted DV01: sum|risk| / denominator."""
+    abs_risks = risk.abs().dropna()
+    if abs_risks.empty:
+        return None
+    total = float(abs_risks.sum())
+    base = _base_type_of(package_type)
+    if _is_composite_with_hedge(package_type):
+        base_count = _SWAP_LEG_COUNT.get(base, 1)
+        denom = max(base_count + 1, n_legs)
+    elif base in _SWAP_LEG_COUNT:
+        denom = _SWAP_LEG_COUNT[base]
+    else:
+        denom = max(1, n_legs)
+    return _num_or_none(total / denom)
+
+
+def _is_curvey(tt: str) -> bool:
+    return tt == "CURVE" or tt.endswith("_CURVE")
+
+
+def _is_flyey(tt: str) -> bool:
+    return tt == "FLY" or tt.endswith("_FLY")
+
+
+def _compute_leg_summary(
+    g: pd.DataFrame, package_type: str, trade_type: str
+) -> dict[str, Any]:
+    """Desk-convention headline rate/risk/opa for the package."""
+    result: dict[str, Any] = {
+        "summary_rate": None,
+        "summary_risk": None,
+        "summary_opa": None,
+    }
+    tenor_y = pd.to_numeric(g.get("tenor_years"), errors="coerce")
+    fixed = pd.to_numeric(g.get("fixed_rate"), errors="coerce")
+    risk = pd.to_numeric(g.get("risk"), errors="coerce")
+    opa = pd.to_numeric(g.get("other_payment_amount"), errors="coerce")
+
+    kind = f"{package_type or ''} {trade_type or ''}".upper()
+    is_curve = bool(_is_curvey(package_type) or _is_curvey(trade_type))
+    is_fly = bool(_is_flyey(package_type) or _is_flyey(trade_type))
+
+    if not is_curve and not is_fly:
+        if "CURVE" in kind:
+            is_curve = True
+        elif "FLY" in kind:
+            is_fly = True
+
+    # Sort legs by tenor ascending
+    valid = tenor_y.notna()
+    if valid.any():
+        order = tenor_y[valid].sort_values(kind="stable").index
+        idx_list = list(order) + [i for i in g.index if i not in order]
+    else:
+        idx_list = list(g.index)
+
+    if is_curve and len(idx_list) >= 2:
+        front, back = idx_list[0], idx_list[-1]
+        fr, br = fixed.get(front), fixed.get(back)
+        if pd.notna(fr) and pd.notna(br):
+            result["summary_rate"] = _num_or_none(br - fr)
+        result["summary_risk"] = _num_or_none(risk.get(back))
+        fo, bo = opa.get(front), opa.get(back)
+        if pd.notna(fo) and pd.notna(bo):
+            result["summary_opa"] = _num_or_none(bo - fo)
+    elif is_fly and len(idx_list) >= 3:
+        front = idx_list[0]
+        belly = idx_list[len(idx_list) // 2]
+        back = idx_list[-1]
+        fr, mr, br = fixed.get(front), fixed.get(belly), fixed.get(back)
+        if pd.notna(fr) and pd.notna(mr) and pd.notna(br):
+            result["summary_rate"] = _num_or_none(2 * mr - fr - br)
+        result["summary_risk"] = _num_or_none(risk.get(belly))
+        fo, mo, bo = opa.get(front), opa.get(belly), opa.get(back)
+        if pd.notna(fo) and pd.notna(mo) and pd.notna(bo):
+            result["summary_opa"] = _num_or_none(2 * mo - fo - bo)
+    else:
+        # OUTRIGHT or single-leg: pass-through first leg
+        first = idx_list[0] if idx_list else None
+        if first is not None:
+            result["summary_rate"] = _num_or_none(fixed.get(first))
+            result["summary_risk"] = _num_or_none(risk.get(first))
+            result["summary_opa"] = _num_or_none(opa.get(first))
+    return result
+
+
+def _compute_confidence_columns(
+    g: pd.DataFrame, package_type: str
+) -> dict[str, Any]:
+    """Compute package confidence score. Returns columns for the package row."""
+    empty: dict[str, Any] = {
+        "confidence_score": None,
+        "confidence_total": None,
+        "confidence_tone": None,
+        "confidence_signals": None,
+    }
+    try:
+        from SDRUtils.analytics.package_confidence import compute_confidence_for_group
+        result = compute_confidence_for_group(g, package_type)
+        return {
+            "confidence_score": result.get("score"),
+            "confidence_total": result.get("total"),
+            "confidence_tone": result.get("tone"),
+            "confidence_signals": result.get("signals"),
+        }
+    except (ImportError, Exception):
+        return empty
 
 
 def build_package_rows(tape: pd.DataFrame, *, as_of_date: str) -> list[dict]:
@@ -956,6 +1158,19 @@ def build_package_rows(tape: pd.DataFrame, *, as_of_date: str) -> list[dict]:
                 g["cluster_size"].iloc[0] if "cluster_size" in g.columns else None
             ),
             "tape_label": _rep_tape_label(g),
+            # Phase 7: frontend-to-backend logic port
+            "is_off_market_any": _any("is_off_market"),
+            **_compute_ccp_switch(g),
+            "package_adjusted_dv01": _compute_package_adjusted_dv01(
+                risk, package_type, len(g)
+            ),
+            **_compute_leg_summary(g, package_type, trade_type),
+            "normalized_tape_label": _str_or_none(
+                g["normalized_tape_label"].iloc[0]
+                if "normalized_tape_label" in g.columns
+                else None
+            ),
+            **_compute_confidence_columns(g, package_type),
             "package_metrics": {
                 "execution_span_seconds": float(
                     (execution_end - execution_start).total_seconds()
@@ -1232,6 +1447,115 @@ def _finish_run(
 
 
 # ---------------------------------------------------------------------------
+# Phase 7: VWAP daily aggregate
+# ---------------------------------------------------------------------------
+
+_VWAP_TICKER_SPECS: list[dict[str, Any]] = [
+    {"ticker": "USSFCT2", "package_type": "SPREADOVER", "tenor_years": 2, "canonical_key": "USD/SOFR-OIS/COMPOUND"},
+    {"ticker": "USSFCT5", "package_type": "SPREADOVER", "tenor_years": 5, "canonical_key": "USD/SOFR-OIS/COMPOUND"},
+    {"ticker": "USSFCT10", "package_type": "SPREADOVER", "tenor_years": 10, "canonical_key": "USD/SOFR-OIS/COMPOUND"},
+    {"ticker": "USSFCT30", "package_type": "SPREADOVER", "tenor_years": 30, "canonical_key": "USD/SOFR-OIS/COMPOUND"},
+    {"ticker": "USSO5", "package_type": "OUTRIGHT", "tenor_years": 5, "canonical_key": "USD/SOFR-OIS/COMPOUND"},
+    {"ticker": "USSO10", "package_type": "OUTRIGHT", "tenor_years": 10, "canonical_key": "USD/SOFR-OIS/COMPOUND"},
+    {"ticker": "USSO30", "package_type": "OUTRIGHT", "tenor_years": 30, "canonical_key": "USD/SOFR-OIS/COMPOUND"},
+]
+
+
+def _resolve_vwap_ticker(
+    tenor_years: float,
+    canonical_key: str | None,
+    package_type: str | None,
+) -> str | None:
+    """Map a trade to its Bloomberg-style VWAP ticker."""
+    if not canonical_key or not package_type:
+        return None
+    pt = (package_type or "").upper()
+    ck = (canonical_key or "").upper()
+    for spec in _VWAP_TICKER_SPECS:
+        if (spec["canonical_key"].upper() == ck
+                and spec["package_type"] == pt
+                and abs(spec["tenor_years"] - tenor_years) <= 0.5):
+            return spec["ticker"]
+    return None
+
+
+def compute_and_write_vwap(
+    engine: Any,
+    tape: pd.DataFrame,
+    as_of_date: str,
+) -> int:
+    """Compute risk-weighted daily VWAP per ticker and upsert to DB.
+
+    Returns number of ticker rows written.
+    """
+    from SDRUtils._swappulse_scripts._tape_schema_v2 import VWAP_TABLE_V2
+
+    if tape.empty:
+        return 0
+
+    tenor_y = pd.to_numeric(tape.get("tenor_years"), errors="coerce")
+    canonical = tape.get("canonical_underlier_key", pd.Series(dtype="string"))
+    pkg_type = tape.get("package_type", pd.Series(dtype="string"))
+    fixed_rate = pd.to_numeric(tape.get("fixed_rate"), errors="coerce")
+    risk_abs = pd.to_numeric(tape.get("risk"), errors="coerce").abs()
+
+    tape_work = tape.copy()
+    tape_work["_ticker"] = [
+        _resolve_vwap_ticker(
+            float(t) if pd.notna(t) else 0.0,
+            str(c) if pd.notna(c) else None,
+            str(p) if pd.notna(p) else None,
+        )
+        for t, c, p in zip(tenor_y, canonical, pkg_type)
+    ]
+    tape_work["_rate"] = fixed_rate
+    tape_work["_risk_abs"] = risk_abs
+
+    has_ticker = tape_work["_ticker"].notna()
+    has_rate = tape_work["_rate"].notna()
+    subset = tape_work[has_ticker & has_rate]
+    if subset.empty:
+        return 0
+
+    rows_written = 0
+    with engine.begin() as conn:
+        for ticker, grp in subset.groupby("_ticker"):
+            rates = grp["_rate"]
+            risks = grp["_risk_abs"].fillna(0)
+            weight_sum = float(risks.sum())
+            if weight_sum > 0:
+                vwap = float((rates * risks).sum() / weight_sum)
+            else:
+                vwap = float(rates.mean())
+            vwap_bps = round(vwap * 10_000, 2)
+
+            conn.execute(
+                text(f"""
+                    INSERT INTO {VWAP_TABLE_V2}
+                        (as_of_date, ticker, vwap_bps, total_risk, total_notional, trade_count)
+                    VALUES (:d, :t, :v, :r, :n, :c)
+                    ON CONFLICT (as_of_date, ticker) DO UPDATE SET
+                        vwap_bps = EXCLUDED.vwap_bps,
+                        total_risk = EXCLUDED.total_risk,
+                        total_notional = EXCLUDED.total_notional,
+                        trade_count = EXCLUDED.trade_count
+                """),
+                {
+                    "d": as_of_date,
+                    "t": ticker,
+                    "v": vwap_bps,
+                    "r": _num_or_none(risks.sum()),
+                    "n": _num_or_none(
+                        pd.to_numeric(grp.get("notional"), errors="coerce").abs().sum()
+                    ),
+                    "c": len(grp),
+                },
+            )
+            rows_written += 1
+    return rows_written
+
+
+# ---------------------------------------------------------------------------
 # End-to-end entrypoint
 # ---------------------------------------------------------------------------
 
@@ -1308,6 +1632,11 @@ def run_ingest(
                 f"  Cleaned up {orphans_cleaned:,} orphan package row(s) left "
                 f"behind by re-assigned legs."
             )
+        vwap_count = compute_and_write_vwap(
+            engine, tape, as_of_date=start.date().isoformat()
+        )
+        if vwap_count:
+            print(f"  Wrote {vwap_count} VWAP ticker(s).")
         _finish_run(
             engine,
             run_id,
