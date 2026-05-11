@@ -499,6 +499,11 @@ class FixedRateBondsTB(LayeredCacheMixin, BaseTimeseriesTB):
                 mapping._l2_write = False
             try:
                 for row, q, d in new_rows_with_q:
+                    # Never persist today / live — these are transient snapshots
+                    # that must be re-fetched on the next run.
+                    _d_date = d.date() if isinstance(d, datetime.datetime) else d
+                    if d == "live" or _d_date == today:
+                        continue
                     mapping[self._cache_key(d, q)] = row
             finally:
                 if _prev_l2_write is not None:
@@ -507,6 +512,11 @@ class FixedRateBondsTB(LayeredCacheMixin, BaseTimeseriesTB):
         if self._use_ts_cache and new_rows_with_q and not _skip_ts_cache:
             grouped: Dict[str, List[Tuple[DateLike, str, float]]] = defaultdict(list)
             for (dt_like, col, val), q, _d in new_rows_with_q:
+                # Skip live / today rows — they are transient and should
+                # never be persisted to the Parquet timeseries cache.
+                _d_date2 = _d.date() if isinstance(_d, datetime.datetime) else _d
+                if _d == "live" or _d_date2 == today:
+                    continue
                 grouped[self._ts_symbol_for_query(q)].append((dt_like, col, float(val)))
             try:
                 self._computed_ts_store.append_many_rows(rows_by_symbol=grouped)

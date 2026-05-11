@@ -607,7 +607,7 @@ class IRSwapsTB(LayeredCacheMixin, BaseTimeseriesTB):
         if self._use_ts_cache and new_rows_with_q:
             grouped: Dict[str, List[Tuple[DateLike, str, float]]] = defaultdict(list)
             for (dt_like, col, val), q, curve_name, request_ref_point in new_rows_with_q:
-                if request_ref_point == "live":
+                if _is_today(request_ref_point):
                     continue
                 grouped[self._ts_symbol_for_query(curve_name, q)].append((dt_like, col, float(val)))
             if grouped:
