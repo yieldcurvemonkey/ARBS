@@ -1219,48 +1219,15 @@ class TradeTape(SDRAnalyzer):
                 )
                 parts.append("Package" if is_sdr_package else "Outright")
 
-            # 6. Flags
+            # 6. Structural flags (instrument-type descriptors only;
+            # execution tags like UNWIND/UFRO/OFFM live in tape_tags)
             flags: list[str] = []
-            # Matched-maturity swap (CTD-aligned coupon / maturity) without a
-            # resolved invoice ticker — surface as "MMS" so it's filterable.
-            # Invoice swaps themselves render the product label above, so we
-            # don't need to re-tag them here.
             if not invoice_label and str(
                 row.get("special_tenor_type", "")
             ).upper() == "MATCHED_MATURITY":
                 flags.append("MMS")
-            if row.get("is_unwind", False):
-                flags.append("UNWIND")
             if row.get("is_mac", False):
                 flags.append("MAC")
-            if row.get("is_ufro", False):
-                flags.append("UFRO")
-            if row.get("is_block", False):
-                flags.append("BLOCK")
-            _omr = row.get("off_market_reason")
-            if pd.notna(_omr):
-                _omr_s = str(_omr).strip().lower()
-                if _omr_s and _omr_s not in ("rate_outlier",):
-                    flags.append("OFFM")
-            # Lifecycle flags for non-NEWT
-            ltype = str(row.get("lifecycle_type", "")).upper()
-            if ltype in ("TERMINATION", "CORRECTION", "MODIFICATION"):
-                flags.append(ltype[:4])
-            # Cross-day lifecycle flags
-            xd_status = str(row.get("xd_status", "")).upper()
-            if xd_status == "TERMINATED" and ltype != "TERMINATION":
-                flags.append("XD-TERM")
-            if row.get("xd_has_partial_unwind", False):
-                flags.append("PARTIAL-UNWIND")
-            # Event type flags
-            if row.get("is_novation_born", False):
-                flags.append("NOVA-IN")
-            if row.get("is_novation_terminated", False):
-                flags.append("NOVA-OUT")
-            if row.get("is_exercise_born", False):
-                flags.append("EXER")
-            if row.get("is_clearing_termination", False):
-                flags.append("CLRG")
             if flags:
                 parts.append(" ".join(flags))
 
@@ -1302,7 +1269,40 @@ class TradeTape(SDRAnalyzer):
 
             return " ".join(parts)
 
+        def _tags_for_row(row) -> str:
+            """Execution tags for a trade — separated from tape_label."""
+            tags: list[str] = []
+            if row.get("is_unwind", False):
+                tags.append("UNWIND")
+            if row.get("is_ufro", False):
+                tags.append("UFRO")
+            if row.get("is_block", False):
+                tags.append("BLOCK")
+            _omr = row.get("off_market_reason")
+            if pd.notna(_omr):
+                _omr_s = str(_omr).strip().lower()
+                if _omr_s and _omr_s not in ("rate_outlier",):
+                    tags.append("OFFM")
+            ltype = str(row.get("lifecycle_type", "")).upper()
+            if ltype in ("TERMINATION", "CORRECTION", "MODIFICATION"):
+                tags.append(ltype[:4])
+            xd_status = str(row.get("xd_status", "")).upper()
+            if xd_status == "TERMINATED" and ltype != "TERMINATION":
+                tags.append("XD-TERM")
+            if row.get("xd_has_partial_unwind", False):
+                tags.append("PARTIAL-UNWIND")
+            if row.get("is_novation_born", False):
+                tags.append("NOVA-IN")
+            if row.get("is_novation_terminated", False):
+                tags.append("NOVA-OUT")
+            if row.get("is_exercise_born", False):
+                tags.append("EXER")
+            if row.get("is_clearing_termination", False):
+                tags.append("CLRG")
+            return ",".join(tags) if tags else ""
+
         df["tape_label"] = df.apply(_label_for_row, axis=1)
+        df["tape_tags"] = df.apply(_tags_for_row, axis=1)
         df["leg_tape_label"] = df.apply(
             lambda r: _label_for_row(r, leg_scope=True), axis=1
         )

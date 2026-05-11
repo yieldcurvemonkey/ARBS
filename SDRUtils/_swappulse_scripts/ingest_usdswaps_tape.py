@@ -160,6 +160,7 @@ LEG_COLUMNS: tuple[str, ...] = (
     # Phase 7: frontend-to-backend logic port
     "off_market_reason",
     "normalized_tape_label",
+    "tape_tags",
     "enrichment_metrics",
 )
 
@@ -231,6 +232,7 @@ PACKAGE_COLUMNS: tuple[str, ...] = (
     "ccp_switch_to",
     "package_adjusted_dv01",
     "normalized_tape_label",
+    "tape_tags",
     "package_metrics",
 )
 
@@ -640,6 +642,7 @@ _LEG_TEXT_COLS: tuple[str, ...] = (
     # Phase 7
     "off_market_reason",
     "normalized_tape_label",
+    "tape_tags",
 )
 _LEG_TS_COLS: tuple[str, ...] = (
     "execution_timestamp",
@@ -744,7 +747,7 @@ def build_leg_rows(tape: pd.DataFrame, *, as_of_date: str) -> list[dict]:
             # v2 additions
             "violation_reason", "economic_class", "economic_class_reason",
             # Phase 7
-            "off_market_reason", "normalized_tape_label",
+            "off_market_reason", "normalized_tape_label", "tape_tags",
         ):
             rec[text_col] = _str_or_none(rec.get(text_col))
         rec["execution_timestamp"] = _to_db_value(rec.get("execution_timestamp"))
@@ -1158,6 +1161,13 @@ def build_package_rows(tape: pd.DataFrame, *, as_of_date: str) -> list[dict]:
                 g["cluster_size"].iloc[0] if "cluster_size" in g.columns else None
             ),
             "tape_label": _rep_tape_label(g),
+            "tape_tags": _str_or_none(
+                ",".join(sorted({
+                    t
+                    for raw in g["tape_tags"].dropna() if raw
+                    for t in str(raw).split(",") if t
+                })) if "tape_tags" in g.columns and g["tape_tags"].notna().any() else None
+            ),
             # Phase 7: frontend-to-backend logic port
             "is_off_market_any": _any("is_off_market"),
             **_compute_ccp_switch(g),

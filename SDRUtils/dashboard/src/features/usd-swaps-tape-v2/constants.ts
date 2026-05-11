@@ -177,6 +177,22 @@ export const FLAG_CHIP_TONES = {
   P43_OFF: 'bg-zinc-800/60 text-zinc-300',
 } as const
 
+export const TAPE_TAG_TONES: Record<string, string> = {
+  OFFM: 'bg-red-900/50 text-red-200',
+  UNWIND: 'bg-amber-900/40 text-amber-200',
+  UFRO: 'bg-orange-900/40 text-orange-200',
+  BLOCK: 'bg-sky-900/40 text-sky-200',
+  TERM: 'bg-zinc-700/50 text-zinc-300',
+  CORR: 'bg-zinc-700/50 text-zinc-300',
+  MODI: 'bg-zinc-700/50 text-zinc-300',
+  'XD-TERM': 'bg-zinc-700/50 text-zinc-300',
+  'PARTIAL-UNWIND': 'bg-amber-900/40 text-amber-200',
+  'NOVA-IN': 'bg-cyan-900/40 text-cyan-200',
+  'NOVA-OUT': 'bg-cyan-900/40 text-cyan-200',
+  EXER: 'bg-cyan-900/40 text-cyan-200',
+  CLRG: 'bg-zinc-700/50 text-zinc-300',
+}
+
 export const TIMESERIES_METRICS: Array<{ key: TimeseriesMetricKey; label: string }> = [
   { key: 'notional', label: 'Notional' },
   { key: 'risk', label: 'DV01' },

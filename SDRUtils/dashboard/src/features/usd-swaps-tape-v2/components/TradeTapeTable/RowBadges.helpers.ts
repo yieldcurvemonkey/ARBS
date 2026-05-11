@@ -6,6 +6,7 @@ import {
   LIFECYCLE_LABELS,
   LIFECYCLE_ORDER,
   LIFECYCLE_TONES,
+  TAPE_TAG_TONES,
 } from '../../constants'
 import type { EconomicClass, LifecycleType, UsdSwapTapeRow } from '../../types'
 
@@ -289,4 +290,24 @@ export function extendedLifecyclePillsFor(row: UsdSwapTapeRow): Array<{
   if (legs.some((l) => l.state_machine_violation)) push('ERROR')
 
   return [...base, ...extras]
+}
+
+
+const DEFAULT_TAG_TONE = 'bg-zinc-700/50 text-zinc-300'
+
+export function tapeTagBadgesFor(row: UsdSwapTapeRow): Array<{
+  key: string
+  className: string
+  label: string
+}> {
+  const raw = row.tape_tags
+  if (!raw) return []
+  return raw
+    .split(',')
+    .filter(Boolean)
+    .map((tag) => ({
+      key: tag,
+      className: TAPE_TAG_TONES[tag] ?? DEFAULT_TAG_TONE,
+      label: tag,
+    }))
 }

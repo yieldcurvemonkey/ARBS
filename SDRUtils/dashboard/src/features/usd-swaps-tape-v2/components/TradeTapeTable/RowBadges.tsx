@@ -8,6 +8,7 @@ import {
   flagBadgesFor,
   lifecyclePillsFor,
   qualityBadgesFor,
+  tapeTagBadgesFor,
 } from './RowBadges.helpers'
 
 export {
@@ -16,6 +17,7 @@ export {
   flagBadgesFor,
   lifecyclePillsFor,
   qualityBadgesFor,
+  tapeTagBadgesFor,
 } from './RowBadges.helpers'
 
 export function LifecyclePills({ row }: { row: UsdSwapTapeRow }): JSX.Element {
@@ -86,6 +88,24 @@ export function EconomicClassBadge({
  * violation, cap-band, freq-anomaly, schedule truncation, D2-missing
  * etc. Renders nothing when the row is clean (the common case).
  */
+export function TapeTags({ row }: { row: UsdSwapTapeRow }): JSX.Element {
+  const badges = tapeTagBadgesFor(row)
+  if (badges.length === 0) return <span className="text-slate-600 text-[10px]">·</span>
+  return (
+    <div className="flex flex-wrap items-center gap-1" data-testid="tape-tags">
+      {badges.map((b) => (
+        <span
+          key={b.key}
+          className={`px-1 py-0.5 rounded text-[10px] font-semibold ${b.className}`}
+        >
+          {b.label}
+        </span>
+      ))}
+    </div>
+  )
+}
+
+
 export function QualityBadges({ row }: { row: UsdSwapTapeRow }): JSX.Element {
   const badges = qualityBadgesFor(row)
   if (badges.length === 0) return <span className="text-slate-600 text-[10px]">·</span>

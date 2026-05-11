@@ -141,6 +141,7 @@ export type UsdSwapTapeRow = SofrSwapTapeRow & {
   package_adjusted_dv01?: number | null
   execution_session?: string | null
   tape_label?: string | null
+  tape_tags?: string | null
   fomc_meeting_label?: string | null
   is_fomc_dated?: boolean | null
   is_unwind?: boolean | null

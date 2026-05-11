@@ -284,6 +284,7 @@ CREATE INDEX IF NOT EXISTS idx_tape_v2_legs_canonical_orig
 -- Phase 7: frontend-to-backend logic port
 ALTER TABLE {LEGS_TABLE_V2} ADD COLUMN IF NOT EXISTS off_market_reason TEXT;
 ALTER TABLE {LEGS_TABLE_V2} ADD COLUMN IF NOT EXISTS normalized_tape_label TEXT;
+ALTER TABLE {LEGS_TABLE_V2} ADD COLUMN IF NOT EXISTS tape_tags TEXT;
 
 ALTER TABLE {PACKAGES_TABLE_V2} ADD COLUMN IF NOT EXISTS is_off_market_any BOOLEAN;
 ALTER TABLE {PACKAGES_TABLE_V2} ADD COLUMN IF NOT EXISTS confidence_score INTEGER;
@@ -298,6 +299,7 @@ ALTER TABLE {PACKAGES_TABLE_V2} ADD COLUMN IF NOT EXISTS ccp_switch_from TEXT;
 ALTER TABLE {PACKAGES_TABLE_V2} ADD COLUMN IF NOT EXISTS ccp_switch_to TEXT;
 ALTER TABLE {PACKAGES_TABLE_V2} ADD COLUMN IF NOT EXISTS package_adjusted_dv01 NUMERIC;
 ALTER TABLE {PACKAGES_TABLE_V2} ADD COLUMN IF NOT EXISTS normalized_tape_label TEXT;
+ALTER TABLE {PACKAGES_TABLE_V2} ADD COLUMN IF NOT EXISTS tape_tags TEXT;
 
 CREATE INDEX IF NOT EXISTS idx_tape_v2_legs_norm_label_orig
   ON {LEGS_TABLE_V2}(normalized_tape_label, original_execution_timestamp DESC NULLS LAST);
@@ -372,6 +374,7 @@ SELECT
   p.ccp_switch_to,
   p.package_adjusted_dv01,
   p.normalized_tape_label,
+  p.tape_tags,
   p.package_metrics,
   l.legs_json,
   ml.manual_package_id,
