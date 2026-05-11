@@ -49,11 +49,14 @@ def _query_fingerprint(q: "IRSwapQuery") -> str:
         "structure": q.structure.name if getattr(q, "structure", None) else None,
         "value": ([_canonicalize_value(v) for v in q.value] if isinstance(q.value, list) else _canonicalize_value(q.value)),
         "structure_kwargs": _canonicalize_value(q.structure_kwargs or {}),
-        "value_kwargs": _canonicalize_value(q.value_kwargs or {}),
         "name": q.name,
         "risk_weight": q.risk_weight,
         # Note: we purposely DO NOT include q.curve here; it's a separate axis in the key
     }
+    # Only include value_kwargs when non-empty to stay compatible with
+    # fingerprints written before this field existed in the payload.
+    if q.value_kwargs:
+        payload["value_kwargs"] = _canonicalize_value(q.value_kwargs)
     s = json.dumps(payload, sort_keys=True, separators=(",", ":"))
     return hashlib.sha1(s.encode("utf-8")).hexdigest()
 
