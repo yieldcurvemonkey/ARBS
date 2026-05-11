@@ -131,6 +131,10 @@ class FixedRateBondsTB(LayeredCacheMixin, BaseTimeseriesTB):
     _DEFAULT_PRICING_MESSAGE = "PRICING FIXED-RATE BONDS."
     _CACHE_VERSION = "v1"
     _ROW_CACHE_L2_SCAN_SUPPRESS_THRESHOLD = 64
+    # FedInvest yields can lag or be revised for several days after
+    # publication.  Dates within this window are always re-fetched from
+    # the data source rather than served from cache.
+    _STALE_THRESHOLD_DAYS = 5
 
     def __init__(
         self,
@@ -322,6 +326,19 @@ class FixedRateBondsTB(LayeredCacheMixin, BaseTimeseriesTB):
                 cached_rows.extend(rows)
                 cached_row_keys.update((row_d, row_c) for row_d, row_c, _ in rows)
 
+        # Evict recently-cached rows so the source is re-queried.
+        # FedInvest yields can be preliminary or revised for several days.
+        _stale_cutoff = today - datetime.timedelta(days=self._STALE_THRESHOLD_DAYS)
+        if cached_rows and not ignore_cache:
+            def _as_date(d: DateLike) -> datetime.date:
+                if isinstance(d, datetime.datetime):
+                    return d.date()
+                if isinstance(d, datetime.date):
+                    return d
+                return d  # type: ignore[return-value]
+            cached_rows = [(d, c, v) for d, c, v in cached_rows if _as_date(d) <= _stale_cutoff]
+            cached_row_keys = {(d, c) for d, c in cached_row_keys if _as_date(d) <= _stale_cutoff}
+
         qs_per_date: Dict[Union[datetime.date, datetime.datetime], List[FixedRateBondQuery]] = {d: list(flat) for d in ref_points}
         to_price_dates: List[Union[datetime.date, datetime.datetime]] = []
         cache_map = getattr(self, self._cache_attr)
@@ -344,7 +361,8 @@ class FixedRateBondsTB(LayeredCacheMixin, BaseTimeseriesTB):
                 for q in flat:
                     hit_ts = (d, q.col_name()) in cached_row_keys
                     k = self._cache_key(d, q)
-                    hit_row = (k in cache_map) and not (d == today or d == "live") and not bool(ignore_cache)
+                    _d_date = d.date() if isinstance(d, datetime.datetime) else d
+                    hit_row = (k in cache_map) and not (d == today or d == "live" or _d_date > _stale_cutoff) and not bool(ignore_cache)
                     if hit_row and not hit_ts:
                         row = cache_map[k]
                         cached_rows.append(row)
@@ -380,12 +398,19 @@ class FixedRateBondsTB(LayeredCacheMixin, BaseTimeseriesTB):
                 uniq_symbols.append(s)
 
         bulk_workers = int(n_jobs) if (n_jobs and n_jobs > 0) else 8
+        # Force MDP refresh when any to-price date falls inside the
+        # staleness window so we don't return stale pricer-level caches.
+        _needs_refresh = bool(ignore_cache) or any(
+            (d.date() if isinstance(d, datetime.datetime) else d) > _stale_cutoff
+            for d in to_price_dates
+            if d != "live" and isinstance(d.date() if isinstance(d, datetime.datetime) else d, datetime.date)
+        )
         try:
             bulk_map: Dict[DateLike, Dict[str, _FixedRateBondGenericPricer]] = self.mdp.bulk_get_data(
                 timestamps=to_price_dates,
                 cusips=uniq_symbols,
                 show_tqdm=True,
-                force_refresh=bool(ignore_cache),
+                force_refresh=_needs_refresh,
                 max_workers=bulk_workers,
             )
         except Exception as e:

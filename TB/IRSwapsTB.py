@@ -247,6 +247,9 @@ class IRSwapsTB(LayeredCacheMixin, BaseTimeseriesTB):
     _CACHE_ATTR_BASE = "_irswaps_tb_cache"
     _DEFAULT_PRICING_MESSAGE = "PRICING IRSWAPS."
     _CACHE_VERSION = "v2"
+    # EOD swap rates settle quickly, but keep a small window so same-day
+    # partial caches are refreshed on the next run.
+    _STALE_THRESHOLD_DAYS = 2
 
     def __init__(
         self,
@@ -450,6 +453,21 @@ class IRSwapsTB(LayeredCacheMixin, BaseTimeseriesTB):
                     cached_rows.extend(rows)
                     cached_row_keys.update((row_d, row_c) for row_d, row_c, _ in rows)
 
+        # Evict recently-cached rows so the source is re-queried.
+        # EOD swap rates are usually final quickly, but partial same-day
+        # caches should be refreshed on the next run.
+        today = datetime.date.today()
+        _stale_cutoff = today - datetime.timedelta(days=self._STALE_THRESHOLD_DAYS)
+        if cached_rows and not ignore_cache:
+            def _as_date(d: DateLike) -> datetime.date:
+                if isinstance(d, datetime.datetime):
+                    return d.date()
+                if isinstance(d, datetime.date):
+                    return d
+                return d  # type: ignore[return-value]
+            cached_rows = [(d, c, v) for d, c, v in cached_rows if _as_date(d) <= _stale_cutoff]
+            cached_row_keys = {(d, c) for d, c in cached_row_keys if _as_date(d) <= _stale_cutoff}
+
         for curve_name, qs in by_curve.items():
             curve_ref_points = ref_points_by_curve.get(curve_name, [])
             if not curve_ref_points:
@@ -461,6 +479,12 @@ class IRSwapsTB(LayeredCacheMixin, BaseTimeseriesTB):
                         continue
 
                     if _is_today(d):
+                        to_fetch[curve_name].add(d)
+                        continue
+
+                    # Also re-fetch dates within the staleness window
+                    _d_date = d.date() if isinstance(d, datetime.datetime) else d
+                    if _d_date != "live" and isinstance(_d_date, datetime.date) and _d_date > _stale_cutoff:
                         to_fetch[curve_name].add(d)
                         continue
 
@@ -481,10 +505,17 @@ class IRSwapsTB(LayeredCacheMixin, BaseTimeseriesTB):
                 continue
 
             request_points = _sorted_request_points(missing_points)
+            # Force MDP refresh when any request point falls inside the
+            # staleness window so we don't serve stale pricer caches.
+            _needs_refresh = ignore_cache or any(
+                (d.date() if isinstance(d, datetime.datetime) else d) > _stale_cutoff
+                for d in request_points
+                if d != "live" and isinstance(d.date() if isinstance(d, datetime.datetime) else d, datetime.date)
+            )
             bulk_request = {
                 "curve_name": curve_name,
                 "timestamps": request_points,
-                "ignore_cache": ignore_cache,
+                "ignore_cache": _needs_refresh,
                 "n_jobs": n_jobs,
             }
             if ignore_cache_miss:
