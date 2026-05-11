@@ -1237,6 +1237,11 @@ class TradeTape(SDRAnalyzer):
                 flags.append("UFRO")
             if row.get("is_block", False):
                 flags.append("BLOCK")
+            _omr = row.get("off_market_reason")
+            if pd.notna(_omr):
+                _omr_s = str(_omr).strip().lower()
+                if _omr_s and _omr_s not in ("rate_outlier",):
+                    flags.append("OFFM")
             # Lifecycle flags for non-NEWT
             ltype = str(row.get("lifecycle_type", "")).upper()
             if ltype in ("TERMINATION", "CORRECTION", "MODIFICATION"):

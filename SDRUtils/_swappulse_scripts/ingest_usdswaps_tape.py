@@ -369,7 +369,7 @@ def _execute_ddl_bundle(engine: Engine, ddl: str) -> None:
 _schema_ensured: set[str] = set()
 
 
-def ensure_schema(engine: Engine) -> None:
+def ensure_schema(engine: Engine, _max_retries: int = 5) -> None:
     """Create v2 tables / indexes / view if they don't already exist.
 
     Also runs the v1 DDL so the frozen rollback tables remain valid on
@@ -379,16 +379,27 @@ def ensure_schema(engine: Engine) -> None:
 
     Guarded per-engine-URL so DDL (which takes AccessExclusiveLock on
     views) runs at most once per process, avoiding deadlocks during
-    multi-date backfills.
+    multi-date backfills. Retries on deadlock/lock-timeout up to
+    ``_max_retries`` times with exponential backoff.
     """
     key = str(engine.url)
     if key in _schema_ensured:
         return
-    _execute_ddl_bundle(engine, TAPE_SCHEMA_SQL)
-    _execute_ddl_bundle(engine, TAPE_SCHEMA_SQL_V2)
-    # Phase 6 monitoring view
-    _execute_ddl_bundle(engine, MONITORING_SQL_V2)
-    _schema_ensured.add(key)
+    for attempt in range(1, _max_retries + 1):
+        try:
+            _execute_ddl_bundle(engine, TAPE_SCHEMA_SQL)
+            _execute_ddl_bundle(engine, TAPE_SCHEMA_SQL_V2)
+            _execute_ddl_bundle(engine, MONITORING_SQL_V2)
+            _schema_ensured.add(key)
+            return
+        except Exception as exc:
+            msg = str(exc).lower()
+            if ("deadlock" in msg or "lock timeout" in msg) and attempt < _max_retries:
+                wait = 3 ** attempt
+                print(f"ensure_schema: deadlock on attempt {attempt}/{_max_retries}, retrying in {wait}s…")
+                time.sleep(wait)
+            else:
+                raise
 
 
 # ---------------------------------------------------------------------------
