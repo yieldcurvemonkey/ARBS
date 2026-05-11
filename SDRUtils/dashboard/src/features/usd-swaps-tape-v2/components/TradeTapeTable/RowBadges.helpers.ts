@@ -320,13 +320,35 @@ export function tapeTagBadgesFor(row: UsdSwapTapeRow): Array<{
   label: string
 }> {
   const raw = row.tape_tags
-  if (!raw) return []
-  return raw
-    .split(',')
-    .filter(Boolean)
-    .map((tag) => ({
-      key: tag,
-      className: TAPE_TAG_TONES[tag] ?? DEFAULT_TAG_TONE,
-      label: tag,
-    }))
+  const fromTags = raw ? raw.split(',').filter(Boolean) : []
+
+  // Extract execution tags from tape_label for legacy rows where the
+  // pipeline hasn't split them into tape_tags yet.
+  const label =
+    row.tape_label ??
+    ((row.legs_json?.[0] as Record<string, unknown> | undefined)?.tape_label as string | undefined) ??
+    ''
+  const fromLabel: string[] = []
+  if (typeof label === 'string') {
+    const re = /\b(PARTIAL-UNWIND|XD-TERM|NOVA-IN|NOVA-OUT|OFFM|UNWIND|UFRO|BLOCK|TERM|CORR|MODI|EXER|CLRG)\b/g
+    let m: RegExpExecArray | null
+    while ((m = re.exec(label)) !== null) {
+      if (!fromLabel.includes(m[1])) fromLabel.push(m[1])
+    }
+  }
+
+  const seen = new Set<string>()
+  const merged: string[] = []
+  for (const tag of [...fromTags, ...fromLabel]) {
+    if (!seen.has(tag)) {
+      seen.add(tag)
+      merged.push(tag)
+    }
+  }
+  if (merged.length === 0) return []
+  return merged.map((tag) => ({
+    key: tag,
+    className: TAPE_TAG_TONES[tag] ?? DEFAULT_TAG_TONE,
+    label: tag,
+  }))
 }
