@@ -398,24 +398,37 @@ class FixedRateBondsTB(LayeredCacheMixin, BaseTimeseriesTB):
                 uniq_symbols.append(s)
 
         bulk_workers = int(n_jobs) if (n_jobs and n_jobs > 0) else 8
-        # Force MDP refresh when any to-price date falls inside the
-        # staleness window so we don't return stale pricer-level caches.
-        _needs_refresh = bool(ignore_cache) or any(
-            (d.date() if isinstance(d, datetime.datetime) else d) > _stale_cutoff
-            for d in to_price_dates
-            if d != "live" and isinstance(d.date() if isinstance(d, datetime.datetime) else d, datetime.date)
-        )
-        try:
-            bulk_map: Dict[DateLike, Dict[str, _FixedRateBondGenericPricer]] = self.mdp.bulk_get_data(
-                timestamps=to_price_dates,
-                cusips=uniq_symbols,
-                show_tqdm=True,
-                force_refresh=_needs_refresh,
-                max_workers=bulk_workers,
-            )
-        except Exception as e:
-            self._logger.exception(f"bulk_get_data failed. Falling back per-date. Error: {e}")
-            bulk_map = {}
+        # Split to-price dates into cached-historical vs stale so we only
+        # force-refresh recent dates instead of the entire range.
+        def _is_stale_frb(d: DateLike) -> bool:
+            if d == "live":
+                return False
+            dd = d.date() if isinstance(d, datetime.datetime) else d
+            return isinstance(dd, datetime.date) and dd > _stale_cutoff
+
+        hist_dates = [d for d in to_price_dates if d != "live" and not _is_stale_frb(d)]
+        stale_dates = [d for d in to_price_dates if _is_stale_frb(d)]
+        live_dates = [d for d in to_price_dates if d == "live"]
+
+        bulk_map: Dict[DateLike, Dict[str, _FixedRateBondGenericPricer]] = {}
+        for batch_dates, batch_refresh in [
+            (hist_dates, bool(ignore_cache)),
+            (stale_dates, True),
+            (live_dates, bool(ignore_cache)),
+        ]:
+            if not batch_dates:
+                continue
+            try:
+                batch_result = self.mdp.bulk_get_data(
+                    timestamps=batch_dates,
+                    cusips=uniq_symbols,
+                    show_tqdm=True,
+                    force_refresh=batch_refresh,
+                    max_workers=bulk_workers,
+                )
+                bulk_map.update(batch_result)
+            except Exception as e:
+                self._logger.exception(f"bulk_get_data failed for {len(batch_dates)} dates. Error: {e}")
 
         new_rows_with_q: List[Tuple[Tuple[DateLike, str, float], FixedRateBondQuery, datetime.date | datetime.datetime]] = []
         total_tasks = sum(len(qs_per_date[d]) for d in to_price_dates)
