@@ -281,6 +281,32 @@ ALTER TABLE {LEGS_TABLE_V2} ADD COLUMN IF NOT EXISTS canonical_underlier_key TEX
 CREATE INDEX IF NOT EXISTS idx_tape_v2_legs_canonical_orig
   ON {LEGS_TABLE_V2}(canonical_underlier_key, original_execution_timestamp DESC NULLS LAST);
 
+-- Phase 7: frontend-to-backend logic port
+ALTER TABLE {LEGS_TABLE_V2} ADD COLUMN IF NOT EXISTS off_market_reason TEXT;
+ALTER TABLE {LEGS_TABLE_V2} ADD COLUMN IF NOT EXISTS normalized_tape_label TEXT;
+ALTER TABLE {LEGS_TABLE_V2} ADD COLUMN IF NOT EXISTS tape_tags TEXT;
+
+ALTER TABLE {PACKAGES_TABLE_V2} ADD COLUMN IF NOT EXISTS is_off_market_any BOOLEAN;
+ALTER TABLE {PACKAGES_TABLE_V2} ADD COLUMN IF NOT EXISTS confidence_score INTEGER;
+ALTER TABLE {PACKAGES_TABLE_V2} ADD COLUMN IF NOT EXISTS confidence_total INTEGER;
+ALTER TABLE {PACKAGES_TABLE_V2} ADD COLUMN IF NOT EXISTS confidence_tone TEXT;
+ALTER TABLE {PACKAGES_TABLE_V2} ADD COLUMN IF NOT EXISTS confidence_signals JSONB;
+ALTER TABLE {PACKAGES_TABLE_V2} ADD COLUMN IF NOT EXISTS summary_rate NUMERIC;
+ALTER TABLE {PACKAGES_TABLE_V2} ADD COLUMN IF NOT EXISTS summary_risk NUMERIC;
+ALTER TABLE {PACKAGES_TABLE_V2} ADD COLUMN IF NOT EXISTS summary_opa NUMERIC;
+ALTER TABLE {PACKAGES_TABLE_V2} ADD COLUMN IF NOT EXISTS is_ccp_switch BOOLEAN;
+ALTER TABLE {PACKAGES_TABLE_V2} ADD COLUMN IF NOT EXISTS ccp_switch_from TEXT;
+ALTER TABLE {PACKAGES_TABLE_V2} ADD COLUMN IF NOT EXISTS ccp_switch_to TEXT;
+ALTER TABLE {PACKAGES_TABLE_V2} ADD COLUMN IF NOT EXISTS package_adjusted_dv01 NUMERIC;
+ALTER TABLE {PACKAGES_TABLE_V2} ADD COLUMN IF NOT EXISTS normalized_tape_label TEXT;
+ALTER TABLE {PACKAGES_TABLE_V2} ADD COLUMN IF NOT EXISTS tape_tags TEXT;
+
+CREATE INDEX IF NOT EXISTS idx_tape_v2_legs_norm_label_orig
+  ON {LEGS_TABLE_V2}(normalized_tape_label, original_execution_timestamp DESC NULLS LAST);
+CREATE INDEX IF NOT EXISTS idx_tape_v2_packages_norm_label
+  ON {PACKAGES_TABLE_V2}(normalized_tape_label, original_execution_start DESC NULLS LAST);
+
+DROP VIEW IF EXISTS {DISPLAY_VIEW_V2};
 CREATE OR REPLACE VIEW {DISPLAY_VIEW_V2} AS
 SELECT
   p.package_id,
@@ -335,6 +361,20 @@ SELECT
   p.cluster_id,
   p.cluster_size,
   p.tape_label,
+  p.is_off_market_any,
+  p.confidence_score,
+  p.confidence_total,
+  p.confidence_tone,
+  p.confidence_signals,
+  p.summary_rate,
+  p.summary_risk,
+  p.summary_opa,
+  p.is_ccp_switch,
+  p.ccp_switch_from,
+  p.ccp_switch_to,
+  p.package_adjusted_dv01,
+  p.normalized_tape_label,
+  p.tape_tags,
   p.package_metrics,
   l.legs_json,
   ml.manual_package_id,
@@ -352,7 +392,23 @@ LEFT JOIN LATERAL (
 ) l ON TRUE
 LEFT JOIN {MANUAL_LINKS_TABLE} ml
   ON ml.link_id = p.manual_link_id AND ml.is_active = TRUE;
+
+-- Phase 7: swap spread VWAP daily aggregate table
+CREATE TABLE IF NOT EXISTS arbs_usd_swap_vwap_daily_v2 (
+    as_of_date DATE NOT NULL,
+    ticker TEXT NOT NULL,
+    vwap_bps NUMERIC,
+    total_risk NUMERIC,
+    total_notional NUMERIC,
+    trade_count INTEGER NOT NULL DEFAULT 0,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (as_of_date, ticker)
+);
+CREATE INDEX IF NOT EXISTS idx_vwap_v2_ticker
+  ON arbs_usd_swap_vwap_daily_v2(ticker, as_of_date DESC);
 """
+
+VWAP_TABLE_V2 = "arbs_usd_swap_vwap_daily_v2"
 
 
 # Runbook DDL — freezes v1 as the rollback target per §4.11. NOT executed
@@ -379,5 +435,6 @@ __all__ = [
     "RUNS_TABLE_V2",
     "DISPLAY_VIEW_V2",
     "MANUAL_LINKS_TABLE",
+    "VWAP_TABLE_V2",
     "FREEZE_V1_SQL",
 ]

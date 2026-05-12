@@ -21,7 +21,7 @@ import {
 import { computePackageAdjustedDv01 } from '../../utils/packageAdjustedDv01'
 import { detectCcpSwitch } from '../../utils/ccpSwitchDetector'
 import { getFilterDisplayLabel } from './filter-utils'
-import { EconomicClassBadge, LifecyclePills, QualityBadges } from './RowBadges'
+import { ActionClassBadge, QualityBadges, TapeTags } from './RowBadges'
 import { TapeLabelCell } from './TapeLabelCell'
 import {
   packageIndicatorDisplay,
@@ -174,34 +174,18 @@ export function getColumns(
       style={{ width: 102 }}
     />,
     <Column
-      key="action"
-      field="lifecycle_type"
-      filterField="lifecycle_type"
-      filter
-      {...compactFilterMenuProps}
-      header={renderHeader(
-        'Action',
-        summaryFor('lifecycle_type', config.activeFilters),
-      )}
-      body={(row: UsdSwapTapeRow) => <LifecyclePills row={row} />}
-      style={{ width: 88 }}
-    />,
-    // Phase 3 Economic-vs-Admin matrix kind. Dedicated column rather
-    // than a sub-pill in Action so traders can sort/filter on it
-    // (e.g. show ECONOMIC_FLOW only, hide ADMIN/VALU spam).
-    <Column
-      key="class"
+      key="action_class"
       field="economic_class_primary"
       filterField="economic_class_primary"
       filter
       sortable
       {...compactFilterMenuProps}
       header={renderHeader(
-        'Class',
+        'Action',
         summaryFor('economic_class_primary', config.activeFilters),
       )}
-      body={(row: UsdSwapTapeRow) => <EconomicClassBadge row={row} />}
-      style={{ width: 84 }}
+      body={(row: UsdSwapTapeRow) => <ActionClassBadge row={row} />}
+      style={{ width: 96 }}
     />,
     <Column
       key="platform"
@@ -472,6 +456,20 @@ export function getColumns(
         )
       }}
       style={{ width: 118 }}
+    />,
+    <Column
+      key="tape_tags"
+      field="tape_tags"
+      filterField="tape_tags"
+      sortable
+      filter
+      {...compactFilterMenuProps}
+      header={renderHeader(
+        'Tags',
+        summaryFor('tape_tags', config.activeFilters),
+      )}
+      body={(row: UsdSwapTapeRow) => <TapeTags row={row} />}
+      style={{ width: 120 }}
     />,
     // Phase 4-5 quality / compliance flag stack. Renders state-machine
     // violation, cap-band, freq anomaly, schedule truncation, D2-missing,

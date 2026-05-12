@@ -3,19 +3,23 @@
 import type { JSX } from 'react'
 import type { UsdSwapTapeRow } from '../../types'
 import {
+  actionClassBadgeFor,
   economicClassBadgeFor,
   extendedLifecyclePillsFor,
   flagBadgesFor,
   lifecyclePillsFor,
   qualityBadgesFor,
+  tapeTagBadgesFor,
 } from './RowBadges.helpers'
 
 export {
+  actionClassBadgeFor,
   economicClassBadgeFor,
   extendedLifecyclePillsFor,
   flagBadgesFor,
   lifecyclePillsFor,
   qualityBadgesFor,
+  tapeTagBadgesFor,
 } from './RowBadges.helpers'
 
 export function LifecyclePills({ row }: { row: UsdSwapTapeRow }): JSX.Element {
@@ -58,6 +62,25 @@ export function FlagBadges({ row }: { row: UsdSwapTapeRow }): JSX.Element {
 }
 
 
+export function ActionClassBadge({
+  row,
+}: {
+  row: UsdSwapTapeRow
+}): JSX.Element {
+  const meta = actionClassBadgeFor(row)
+  if (!meta) return <span className="text-slate-500 text-[12px]">-</span>
+  return (
+    <span
+      className={`inline-flex items-center rounded px-1.5 py-0.5 text-[10px] font-semibold ${meta.className}`}
+      title={meta.title}
+      data-testid="action-class-badge"
+    >
+      {meta.label}
+    </span>
+  )
+}
+
+
 /**
  * Phase 3 economic-class badge — single inline badge for the new
  * "Class" column. Returns a dash when the row has no class signal.
@@ -86,6 +109,24 @@ export function EconomicClassBadge({
  * violation, cap-band, freq-anomaly, schedule truncation, D2-missing
  * etc. Renders nothing when the row is clean (the common case).
  */
+export function TapeTags({ row }: { row: UsdSwapTapeRow }): JSX.Element {
+  const badges = tapeTagBadgesFor(row)
+  if (badges.length === 0) return <span className="text-slate-600 text-[10px]">·</span>
+  return (
+    <div className="flex flex-wrap items-center gap-1" data-testid="tape-tags">
+      {badges.map((b) => (
+        <span
+          key={b.key}
+          className={`px-1 py-0.5 rounded text-[10px] font-semibold ${b.className}`}
+        >
+          {b.label}
+        </span>
+      ))}
+    </div>
+  )
+}
+
+
 export function QualityBadges({ row }: { row: UsdSwapTapeRow }): JSX.Element {
   const badges = qualityBadgesFor(row)
   if (badges.length === 0) return <span className="text-slate-600 text-[10px]">·</span>

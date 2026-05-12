@@ -15,6 +15,7 @@ import {
 } from '../../constants'
 import type { EconomicClass, UsdSwapTapeLeg, UsdSwapTapeRow } from '../../types'
 import { computeLegSummary } from './LegsSubTable.helpers'
+import { stripExecutionTags } from './TapeLabelCell.helpers'
 import {
   formatDate,
   formatDv01,
@@ -323,7 +324,26 @@ function legBadges(leg: UsdSwapTapeLeg) {
       ),
     )
   }
+  const covered = new Set(badges.map((b) => b.label.toUpperCase()))
+  const SYNONYMS: Record<string, string> = {
+    OFF_MARKET: 'OFF-MKT',
+    BLOCK: 'BLK',
+    CAPPED: 'CAP',
+    OFF_DATE: '~',
+    NON_STANDARD: 'NSTD',
+    STATE_MACHINE_VIOLATION: 'VIOL',
+    VIOLATION: 'VIOL',
+    CAP_BAND_VIOLATION: 'CAP!',
+    FREQUENCY_ANOMALY: 'FREQ',
+    SCHEDULE_TRUNCATED: 'TRUNC',
+    D2_MISSING: 'D2!',
+  }
   for (const value of leg.quality_flags ?? []) {
+    const upper = value.toUpperCase()
+    if (covered.has(upper)) continue
+    const syn = SYNONYMS[upper]
+    if (syn && covered.has(syn)) continue
+    covered.add(upper)
     badges.push(
       flagBadge(
         `quality-${value}`,
@@ -525,7 +545,7 @@ export function LegsSubTable({ row }: { row: UsdSwapTapeRow }): JSX.Element {
                   {execTimestampPair(leg)}
                 </td>
                 <td className="max-w-[360px] px-2 py-1 font-mono text-[11px] text-slate-100">
-                  {leg.leg_tape_label ?? leg.tape_label ?? EMPTY_VALUE}
+                  {stripExecutionTags(leg.leg_tape_label ?? leg.tape_label ?? EMPTY_VALUE)}
                 </td>
                 <td className="whitespace-nowrap px-2 py-1">
                   {formatDate(leg.effective_date)}

@@ -1,11 +1,31 @@
-import { EMPTY_VALUE } from '../../constants'
+import { EMPTY_VALUE, TAPE_TAG_TONES } from '../../constants'
 import type { UsdSwapTapeRow } from '../../types'
+
+const EXECUTION_TAGS = new Set(Object.keys(TAPE_TAG_TONES))
+const EXECUTION_TAG_RE = new RegExp(
+  `\\b(${[...EXECUTION_TAGS].sort((a, b) => b.length - a.length).join('|')})\\b`,
+  'g',
+)
+
+export function stripExecutionTags(label: string): string {
+  return label.replace(EXECUTION_TAG_RE, '').replace(/\s{2,}/g, ' ').trim()
+}
+
+export function extractExecutionTags(label: string): string[] {
+  const tags: string[] = []
+  const re = new RegExp(EXECUTION_TAG_RE.source, 'g')
+  let m: RegExpExecArray | null
+  while ((m = re.exec(label)) !== null) {
+    if (!tags.includes(m[1])) tags.push(m[1])
+  }
+  return tags
+}
 
 export function displayTapeLabel(row: UsdSwapTapeRow): string {
   const labels = [row.tape_label, row.legs_json?.[0]?.tape_label]
   for (const label of labels) {
     if (typeof label === 'string' && label.trim().length > 0) {
-      return label.trim()
+      return stripExecutionTags(label.trim())
     }
   }
   return EMPTY_VALUE

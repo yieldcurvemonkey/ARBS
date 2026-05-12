@@ -63,7 +63,7 @@ def _hour_to_session(hour: int) -> str:
 # Result cache versioning
 # ---------------------------------------------------------------------------
 
-TRADE_TAPE_CACHE_VERSION = "v6-canonical"
+TRADE_TAPE_CACHE_VERSION = "v7-offm-confidence"
 DEFAULT_CACHE_DIR = os.path.join(
     os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
     "notebooks", "sdr", "_cache", "trade_tape",
@@ -1219,60 +1219,44 @@ class TradeTape(SDRAnalyzer):
                 )
                 parts.append("Package" if is_sdr_package else "Outright")
 
-            # 6. Flags
+            # 6. Structural flags (instrument-type descriptors only;
+            # execution tags like UNWIND/UFRO/OFFM live in tape_tags)
             flags: list[str] = []
-            # Matched-maturity swap (CTD-aligned coupon / maturity) without a
-            # resolved invoice ticker — surface as "MMS" so it's filterable.
-            # Invoice swaps themselves render the product label above, so we
-            # don't need to re-tag them here.
             if not invoice_label and str(
                 row.get("special_tenor_type", "")
             ).upper() == "MATCHED_MATURITY":
                 flags.append("MMS")
-            if row.get("is_unwind", False):
-                flags.append("UNWIND")
             if row.get("is_mac", False):
                 flags.append("MAC")
-            if row.get("is_ufro", False):
-                flags.append("UFRO")
-            if row.get("is_block", False):
-                flags.append("BLOCK")
-            # Lifecycle flags for non-NEWT
-            ltype = str(row.get("lifecycle_type", "")).upper()
-            if ltype in ("TERMINATION", "CORRECTION", "MODIFICATION"):
-                flags.append(ltype[:4])
-            # Cross-day lifecycle flags
-            xd_status = str(row.get("xd_status", "")).upper()
-            if xd_status == "TERMINATED" and ltype != "TERMINATION":
-                flags.append("XD-TERM")
-            if row.get("xd_has_partial_unwind", False):
-                flags.append("PARTIAL-UNWIND")
-            # Event type flags
-            if row.get("is_novation_born", False):
-                flags.append("NOVA-IN")
-            if row.get("is_novation_terminated", False):
-                flags.append("NOVA-OUT")
-            if row.get("is_exercise_born", False):
-                flags.append("EXER")
-            if row.get("is_clearing_termination", False):
-                flags.append("CLRG")
             if flags:
                 parts.append(" ".join(flags))
 
             # 7. MAC coupons — show fixed rates of legs
             if row.get("is_mac", False):
-                legs = row.get("package_legs")
-                if legs is not None and not (isinstance(legs, float) and pd.isna(legs)):
-                    try:
-                        leg_ids = [str(x) for x in legs]
-                        leg_indices = [tid_to_idx[lid] for lid in leg_ids if lid in tid_to_idx]
-                        if leg_indices:
-                            rates = df.loc[leg_indices, "fixed_rate"].dropna()
-                            if not rates.empty:
-                                rate_strs = [f"{r*100:.2f}" for r in rates.values]
-                                parts.append(f"({'/'.join(rate_strs)})")
-                    except (TypeError, ValueError, KeyError):
-                        pass
+                if leg_scope:
+                    own_rate = row.get("fixed_rate")
+                    if pd.notna(own_rate):
+                        parts.append(f"({own_rate*100:.2f})")
+                else:
+                    legs = row.get("package_legs")
+                    has_legs = legs is not None and not (isinstance(legs, float) and pd.isna(legs))
+                    resolved = False
+                    if has_legs:
+                        try:
+                            leg_ids = [str(x) for x in legs]
+                            leg_indices = [tid_to_idx[lid] for lid in leg_ids if lid in tid_to_idx]
+                            if leg_indices:
+                                rates = df.loc[leg_indices, "fixed_rate"].dropna()
+                                if not rates.empty:
+                                    rate_strs = [f"{r*100:.2f}" for r in rates.values]
+                                    parts.append(f"({'/'.join(rate_strs)})")
+                                    resolved = True
+                        except (TypeError, ValueError, KeyError):
+                            pass
+                    if not resolved:
+                        own_rate = row.get("fixed_rate")
+                        if pd.notna(own_rate):
+                            parts.append(f"({own_rate*100:.2f})")
 
             # 8. Settlement / delivery type (from ANNA DSB, fallback to cleared)
             delivery = str(row.get("upi_delivery_type", "")).strip().upper()
@@ -1285,7 +1269,40 @@ class TradeTape(SDRAnalyzer):
 
             return " ".join(parts)
 
+        def _tags_for_row(row) -> str:
+            """Execution tags for a trade — separated from tape_label."""
+            tags: list[str] = []
+            if row.get("is_unwind", False):
+                tags.append("UNWIND")
+            if row.get("is_ufro", False):
+                tags.append("UFRO")
+            if row.get("is_block", False):
+                tags.append("BLOCK")
+            _omr = row.get("off_market_reason")
+            if pd.notna(_omr):
+                _omr_s = str(_omr).strip().lower()
+                if _omr_s and _omr_s not in ("rate_outlier",):
+                    tags.append("OFFM")
+            ltype = str(row.get("lifecycle_type", "")).upper()
+            if ltype in ("TERMINATION", "CORRECTION", "MODIFICATION"):
+                tags.append(ltype[:4])
+            xd_status = str(row.get("xd_status", "")).upper()
+            if xd_status == "TERMINATED" and ltype != "TERMINATION":
+                tags.append("XD-TERM")
+            if row.get("xd_has_partial_unwind", False):
+                tags.append("PARTIAL-UNWIND")
+            if row.get("is_novation_born", False):
+                tags.append("NOVA-IN")
+            if row.get("is_novation_terminated", False):
+                tags.append("NOVA-OUT")
+            if row.get("is_exercise_born", False):
+                tags.append("EXER")
+            if row.get("is_clearing_termination", False):
+                tags.append("CLRG")
+            return ",".join(tags) if tags else ""
+
         df["tape_label"] = df.apply(_label_for_row, axis=1)
+        df["tape_tags"] = df.apply(_tags_for_row, axis=1)
         df["leg_tape_label"] = df.apply(
             lambda r: _label_for_row(r, leg_scope=True), axis=1
         )
@@ -1304,6 +1321,40 @@ class TradeTape(SDRAnalyzer):
             df["tape_label_ust_alias"].str.replace(r"\s+", " ", regex=True).str.strip()
         )
 
+        return df
+
+    @staticmethod
+    def _build_normalized_labels(df: pd.DataFrame) -> pd.DataFrame:
+        """Layer 8: build ``normalized_tape_label`` for analytics bucketing.
+
+        Strips lifecycle tokens (UNWIND, TERM, CORR, etc.) so that lifecycle
+        events bucket with their parent instruments. UFRO, BLOCK, and OFFM
+        are intentionally preserved — they describe economics, not lifecycle.
+        """
+        import re
+
+        _LIFECYCLE_TOKENS = [
+            "PARTIAL-UNWIND", "XD-TERM", "NOVA-IN", "NOVA-OUT",
+            "UNWIND", "TERM", "CORR", "MODI", "EXER", "CLRG",
+        ]
+        _TOKEN_PATTERN = re.compile(
+            r"\s?(?:" + "|".join(re.escape(t) for t in _LIFECYCLE_TOKENS) + r")(?=\s|$)",
+            re.IGNORECASE,
+        )
+
+        def _normalize(label: str) -> str:
+            if not label or not isinstance(label, str):
+                return ""
+            s = " ".join(label.upper().split())
+            s = re.sub(r"\bPHYSICAL\b", "PHYS", s)
+            s = re.sub(r"\bPHY\b", "PHYS", s)
+            prev = ""
+            while prev != s:
+                prev = s
+                s = _TOKEN_PATTERN.sub("", s)
+            return " ".join(s.split()).strip()
+
+        df["normalized_tape_label"] = df["tape_label"].map(_normalize)
         return df
 
     # -- public interface --------------------------------------------------
@@ -1354,6 +1405,7 @@ class TradeTape(SDRAnalyzer):
             ("Market context", self._enrich_context),
             ("Clustering", self._enrich_rv),
             ("Tape labels", self._build_enriched_label),
+            ("Normalized labels", self._build_normalized_labels),
         ]
 
         pbar = tqdm(steps, desc="TradeTape", unit="layer")

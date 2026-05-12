@@ -150,8 +150,27 @@ def detect_mms_trades_df(
         ust_force_refresh=ust_force_refresh,
     )
 
-    # Tag matched trades
-    can_tag = out["matched_ust_maturity"].fillna(False).values & outright_mask
+    # --- Forward-start exclusion: MMS is for spot-starting swaps only ---
+    if "is_forward" in out.columns:
+        fwd_years = pd.to_numeric(out.get("forward_start_years"), errors="coerce").fillna(0)
+        spot_start_mask = (~out["is_forward"].fillna(False).astype(bool).values) | (fwd_years.values <= 0.02)
+    else:
+        spot_start_mask = np.ones(len(out), dtype=bool)
+
+    # --- Clean-tenor exclusion: standard benchmark tenors are not MMS ---
+    _STANDARD_TENORS = [1, 2, 3, 4, 5, 7, 10, 15, 20, 25, 30]
+    tenor_y = pd.to_numeric(out.get("tenor_years"), errors="coerce")
+    is_clean_tenor = np.zeros(len(out), dtype=bool)
+    if tenor_y.notna().any():
+        for std in _STANDARD_TENORS:
+            is_clean_tenor |= (tenor_y - std).abs().values <= 0.1
+
+    # Tag matched trades (with forward-start and clean-tenor gates)
+    raw_matched = out["matched_ust_maturity"].fillna(False).values
+    can_tag = raw_matched & outright_mask & spot_start_mask & ~is_clean_tenor
+    excluded = raw_matched & ~can_tag
+    if excluded.any():
+        out.loc[excluded, "matched_ust_maturity"] = False
     if can_tag.any():
         if package_col not in out.columns:
             out[package_col] = "OUTRIGHT"
@@ -256,8 +275,16 @@ def detect_mms_trades_df(
     # LOW if matched + spot + (same MM-DD OR short expiration)
     low_conf = matched & is_spot & (same_mmdd | short_expiration)
 
+    # OTR/first-off-the-run boost: UST issued within 12 months of execution
+    # is likely on-the-run or first-off-the-run → higher confidence
+    ust_issue = pd.to_datetime(out.get("ust_issue_date"), errors="coerce").dt.normalize()
+    is_recent_ust = ust_issue.notna() & exec_ts.notna() & ((exec_ts - ust_issue).dt.days < 365)
+    # Trades matching deeply off-the-run USTs get "medium" instead of "high"
+    off_the_run = matched & ~is_recent_ust & ust_issue.notna()
+
     conf = pd.Series(pd.NA, index=out.index, dtype="string")
     conf.loc[matched] = "high"
+    conf.loc[off_the_run] = "medium"
     conf.loc[low_conf] = "low"
     out["matched_ust_maturity_trade_confidence"] = conf
 

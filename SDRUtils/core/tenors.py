@@ -115,28 +115,41 @@ def _standard_forward_label(years: float, *, is_swaptions: bool = False) -> tupl
     return _format_months_label(total_months), abs(total_months_float - total_months) <= tolerance_months
 
 
-def get_imm_label(effective_date: pd.Timestamp, tolerance_days: int = 0) -> Optional[str]:
+def get_imm_label(effective_date: pd.Timestamp, tolerance_days: int = 1) -> Optional[str]:
     """
-    Get IMM label (e.g., 'IMM_Z2025') for an exact IMM date.
+    Get IMM label for a date on or within ±N business days of an IMM date.
 
     IMM dates are the 3rd Wednesday of March, June, September, December.
+    A tolerance of 1 business day handles T+1 settlement adjustments and
+    business-day convention differences (e.g. effective 6/16 when the IMM
+    date is 6/17).
 
     Args:
         effective_date: The date to check
-        tolerance_days: Deprecated and ignored; IMM matching is exact only.
+        tolerance_days: Max business days away from an IMM date to still
+            match. Uses the US government bond calendar. Default 1.
 
     Returns:
-        IMM label string (e.g., 'IMM_H2025') or None if not an IMM date
+        IMM label string (e.g., 'IMM_H2025') or None if not near an IMM date
     """
     ql_date = to_ql_date(effective_date)
     if ql_date is None:
         return None
 
-    if not ql.IMM.isIMMdate(ql_date):
-        return None
+    if ql.IMM.isIMMdate(ql_date):
+        code = ql.IMM.code(ql_date)
+        return f"IMM_{code[0]}{ql_date.year()}"
 
-    code = ql.IMM.code(ql_date)
-    return f"IMM_{code[0]}{ql_date.year()}"
+    if tolerance_days > 0:
+        cal = ql.UnitedStates(ql.UnitedStates.GovernmentBond)
+        for offset in range(1, tolerance_days + 1):
+            for sign in (1, -1):
+                neighbor = cal.advance(ql_date, sign * offset, ql.Days)
+                if ql.IMM.isIMMdate(neighbor):
+                    code = ql.IMM.code(neighbor)
+                    return f"IMM_{code[0]}{neighbor.year()}"
+
+    return None
 
 
 def get_fomc_label(effective_date: pd.Timestamp) -> Optional[str]:

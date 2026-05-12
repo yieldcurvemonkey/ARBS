@@ -6,6 +6,7 @@ import {
   LIFECYCLE_LABELS,
   LIFECYCLE_ORDER,
   LIFECYCLE_TONES,
+  TAPE_TAG_TONES,
 } from '../../constants'
 import type { EconomicClass, LifecycleType, UsdSwapTapeRow } from '../../types'
 
@@ -289,4 +290,65 @@ export function extendedLifecyclePillsFor(row: UsdSwapTapeRow): Array<{
   if (legs.some((l) => l.state_machine_violation)) push('ERROR')
 
   return [...base, ...extras]
+}
+
+
+const DEFAULT_TAG_TONE = 'bg-zinc-700/50 text-zinc-300'
+
+export function actionClassBadgeFor(row: UsdSwapTapeRow): {
+  className: string
+  label: string
+  title: string
+} | null {
+  const pills = extendedLifecyclePillsFor(row)
+  const classMeta = economicClassBadgeFor(row)
+  const actionLabel = pills.length > 0 ? pills[0].label : null
+  const classLabel = classMeta?.label ?? null
+  if (!actionLabel && !classLabel) return null
+  const combined = [actionLabel, classLabel].filter(Boolean).join('-')
+  return {
+    className: classMeta?.className ?? pills[0]?.className ?? '',
+    label: combined,
+    title: `lifecycle: ${pills.map((p) => p.label).join('+') || '–'} | class: ${classMeta?.title ?? '–'}`,
+  }
+}
+
+
+export function tapeTagBadgesFor(row: UsdSwapTapeRow): Array<{
+  key: string
+  className: string
+  label: string
+}> {
+  const raw = row.tape_tags
+  const fromTags = raw ? raw.split(',').filter(Boolean) : []
+
+  // Extract execution tags from tape_label for legacy rows where the
+  // pipeline hasn't split them into tape_tags yet.
+  const label =
+    row.tape_label ??
+    ((row.legs_json?.[0] as Record<string, unknown> | undefined)?.tape_label as string | undefined) ??
+    ''
+  const fromLabel: string[] = []
+  if (typeof label === 'string') {
+    const re = /\b(PARTIAL-UNWIND|XD-TERM|NOVA-IN|NOVA-OUT|OFFM|UNWIND|UFRO|BLOCK|TERM|CORR|MODI|EXER|CLRG)\b/g
+    let m: RegExpExecArray | null
+    while ((m = re.exec(label)) !== null) {
+      if (!fromLabel.includes(m[1])) fromLabel.push(m[1])
+    }
+  }
+
+  const seen = new Set<string>()
+  const merged: string[] = []
+  for (const tag of [...fromTags, ...fromLabel]) {
+    if (!seen.has(tag)) {
+      seen.add(tag)
+      merged.push(tag)
+    }
+  }
+  if (merged.length === 0) return []
+  return merged.map((tag) => ({
+    key: tag,
+    className: TAPE_TAG_TONES[tag] ?? DEFAULT_TAG_TONE,
+    label: tag,
+  }))
 }
