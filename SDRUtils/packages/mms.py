@@ -157,8 +157,8 @@ def detect_mms_trades_df(
     else:
         spot_start_mask = np.ones(len(out), dtype=bool)
 
-    # --- Clean-tenor exclusion: standard benchmark tenors are not MMS ---
-    _STANDARD_TENORS = [1, 2, 3, 4, 5, 7, 10, 15, 20, 25, 30]
+    # --- Clean-tenor exclusion: standard swap tenors are not MMS ---
+    _STANDARD_TENORS = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 12, 15, 20, 25, 30]
     tenor_y = pd.to_numeric(out.get("tenor_years"), errors="coerce")
     is_clean_tenor = np.zeros(len(out), dtype=bool)
     if tenor_y.notna().any():
