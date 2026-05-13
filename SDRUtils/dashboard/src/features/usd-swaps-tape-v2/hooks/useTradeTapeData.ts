@@ -1,5 +1,5 @@
 // Hook for managing USD swap tape v2 data fetching, polling, and cursor pagination.
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { TAPE_V2_API_BASE, POLL_INTERVAL_MS } from '../constants'
 import type { UsdSwapTapeResponse, UsdSwapTapeRow } from '../types'
 
@@ -28,6 +28,10 @@ export interface UseTradeTapeDataParams {
 export interface UseTradeTapeDataReturn {
   rows: UsdSwapTapeRow[]
   loading: boolean
+  /** True when a replace fetch is in-flight but the hook is serving stale rows
+   *  from the previous fetch. The table should show a subtle indicator so the
+   *  trader knows fresh data is on the way without blanking the grid. */
+  refreshing: boolean
   loadingMore: boolean
   error: string | null
   initialError: string | null
@@ -175,11 +179,18 @@ export function useTradeTapeData(
 
   const abortRef = useRef<AbortController | null>(null)
   const fetchInFlight = useRef(false)
+  const columnFiltersRef = useRef(params.columnFilters)
+  columnFiltersRef.current = params.columnFilters
 
   const upsertRows = useCallback(
     (incoming: UsdSwapTapeRow[], replace: boolean) => {
       if (replace) {
-        setRows(dedupeDuplicatePackages(incoming))
+        setRows((prev) => {
+          if (shouldKeepStaleRows(incoming.length, prev.length, columnFiltersRef.current)) {
+            return prev
+          }
+          return dedupeDuplicatePackages(incoming)
+        })
       } else {
         setRows((prev) => {
           const map = new Map(prev.map((r) => [r.package_id, r]))
@@ -272,11 +283,13 @@ export function useTradeTapeData(
     await fetchTape({ replace: true })
   }, [fetchTape])
 
-  // Reset on limit OR columnFilters change. A new filter payload means
-  // the server-side WHERE shape has changed; existing rows + cursor are
-  // stale, so wipe them and fire a fresh replace fetch.
+  // Reset pagination cursors on limit / columnFilters change and fire a
+  // fresh server-side fetch. Rows are NOT cleared here — the existing
+  // data stays visible (client-side filter in TradeTapeTable narrows it
+  // instantly) until the replacement fetch arrives. This eliminates the
+  // flash-of-empty that caused "No available options" in PrimeReact
+  // filter menus during the brief window between row clear and response.
   useEffect(() => {
-    setRows([])
     setNextCursor(null)
     setHasMore(false)
     setLatestExecutionStart(null)
@@ -295,9 +308,12 @@ export function useTradeTapeData(
     return () => clearInterval(id)
   }, [fetchTape, latestExecutionStart, params.pollingEnabled])
 
+  const refreshing = useMemo(() => loading && rows.length > 0, [loading, rows.length])
+
   return {
     rows,
     loading,
+    refreshing,
     loadingMore,
     error: initialError ?? pollError ?? paginationError,
     initialError,
@@ -312,4 +328,12 @@ export function useTradeTapeData(
   }
 }
 
-export const __internal = { buildQuery, dedupeDuplicatePackages }
+function shouldKeepStaleRows(
+  incomingCount: number,
+  prevCount: number,
+  columnFilters: string | null | undefined,
+): boolean {
+  return incomingCount === 0 && prevCount > 0 && !columnFilters
+}
+
+export const __internal = { buildQuery, dedupeDuplicatePackages, shouldKeepStaleRows }

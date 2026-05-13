@@ -4,6 +4,7 @@ import { __internal } from '../useTradeTapeData'
 
 const buildQuery = __internal.buildQuery
 const dedupeDuplicatePackages = __internal.dedupeDuplicatePackages
+const shouldKeepStaleRows = __internal.shouldKeepStaleRows
 
 describe('useTradeTapeData buildQuery', () => {
   it('always emits a page size so the server caps each fetch predictably', () => {
@@ -223,5 +224,46 @@ describe('dedupeDuplicatePackages', () => {
       }),
     ]
     expect(dedupeDuplicatePackages(rows)).toHaveLength(0)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// shouldKeepStaleRows — prevents the table from blanking during pipeline
+// ingestion cycles when the API momentarily returns 0 rows.
+// ---------------------------------------------------------------------------
+describe('shouldKeepStaleRows', () => {
+  it('keeps stale rows when server returns 0 on an unfiltered fetch', () => {
+    expect(shouldKeepStaleRows(0, 150, null)).toBe(true)
+  })
+
+  it('keeps stale rows when columnFilters is undefined', () => {
+    expect(shouldKeepStaleRows(0, 150, undefined)).toBe(true)
+  })
+
+  it('does NOT keep stale rows when column filters are active (genuine empty filter result)', () => {
+    const cf = JSON.stringify({ tape_label: { value: '99Y', matchMode: 'contains' } })
+    expect(shouldKeepStaleRows(0, 150, cf)).toBe(false)
+  })
+
+  it('does NOT keep stale rows when there is no previous data (fresh mount)', () => {
+    expect(shouldKeepStaleRows(0, 0, null)).toBe(false)
+  })
+
+  it('does NOT keep stale rows when the server returns data (normal replace)', () => {
+    expect(shouldKeepStaleRows(200, 150, null)).toBe(false)
+  })
+
+  it('does NOT keep stale rows when server returns data with filters active', () => {
+    const cf = JSON.stringify({ tape_label: { value: '10Y', matchMode: 'contains' } })
+    expect(shouldKeepStaleRows(42, 150, cf)).toBe(false)
+  })
+
+  it('keeps stale rows when incoming is 0, prev is 1 (edge: single row)', () => {
+    expect(shouldKeepStaleRows(0, 1, null)).toBe(true)
+  })
+
+  it('does NOT keep stale rows when columnFilters is an empty string', () => {
+    // Empty string is falsy — treated the same as null/undefined (no filter active).
+    expect(shouldKeepStaleRows(0, 150, '')).toBe(true)
   })
 })

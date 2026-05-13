@@ -174,6 +174,7 @@ export default function UsdSwapsTradeTape(): JSX.Element {
           <TradeTapeTable
             rows={groupedRows}
             loading={tape.loading}
+            refreshing={tape.refreshing}
             loadingMore={tape.loadingMore}
             onLoadMore={tape.loadMore}
             hasMore={tape.hasMore}

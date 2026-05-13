@@ -51,6 +51,8 @@ type VirtualScrollerLazyLoadEvent = {
 export interface TradeTapeTableProps {
   rows: UsdSwapTapeRow[]
   loading: boolean
+  /** A replace-fetch is in-flight but stale rows are being served. */
+  refreshing?: boolean
   loadingMore?: boolean
   onLoadMore?: () => void | Promise<void>
   hasMore?: boolean
@@ -101,6 +103,7 @@ export function TradeTapeTable(props: TradeTapeTableProps): JSX.Element {
   const {
     rows,
     loading,
+    refreshing,
     loadingMore,
     onLoadMore,
     hasMore,
@@ -430,6 +433,12 @@ export function TradeTapeTable(props: TradeTapeTableProps): JSX.Element {
               Filtered
             </span>
           )}
+          {refreshing && (
+            <span className="inline-flex items-center gap-1 rounded border border-amber-700/50 bg-amber-900/30 px-1.5 py-0.5 text-[10px] text-amber-200">
+              <RefreshCw className="h-2.5 w-2.5 animate-spin" />
+              Refreshing
+            </span>
+          )}
           <div className="flex-1" />
           {filtersActive && (
             <button
@@ -572,6 +581,15 @@ export function TradeTapeTable(props: TradeTapeTableProps): JSX.Element {
           <span className="rounded border border-slate-800 px-1.5 py-[1px]">
             Today
           </span>
+          {refreshing && (
+            <span
+              className="inline-flex items-center gap-1 rounded border border-amber-700/50 bg-amber-900/30 px-1.5 py-[1px] text-amber-200"
+              title="Fetching fresh data from server"
+            >
+              <RefreshCw className="h-2.5 w-2.5 animate-spin" />
+              Refreshing
+            </span>
+          )}
         </div>
         {hasMore ? (
           <button
