@@ -41,6 +41,9 @@ def detect_fly_trades_df(
     tenor_segment_col: str = "tenor_segment",
     time_window_short: int = 30,
     time_window_medium: int = 60,
+    # PTS constraint: legs of the same fly must share the same reported spread
+    require_same_pts: bool = True,
+    pts_col: str = "package_transaction_spread",
 ) -> pd.DataFrame:
     """
     Fast fly detection on the classifications dataframe.
@@ -99,6 +102,8 @@ def detect_fly_trades_df(
             cols.append(rate_index_col)
         if tenor_segment_col in out.columns:
             cols.append(tenor_segment_col)
+        if require_same_pts and pts_col in out.columns:
+            cols.append(pts_col)
 
         cols = list(dict.fromkeys(cols))
 
@@ -143,6 +148,9 @@ def detect_fly_trades_df(
         ridx = cand[rate_index_col].fillna("_UNKNOWN_").astype(str).to_numpy() if _has_ridx else None
         _has_tseg = tenor_segment_col in cand.columns
         tseg = cand[tenor_segment_col].astype("string").to_numpy() if _has_tseg else None
+
+        _has_pts = require_same_pts and pts_col in cand.columns
+        pts = pd.to_numeric(cand[pts_col], errors="coerce").to_numpy(dtype=np.float64) if _has_pts else None
 
         _evict_window = time_window_seconds if tseg is None else max(time_window_short, time_window_medium)
 
@@ -206,6 +214,10 @@ def detect_fly_trades_df(
                 return False
             if clr is not None and clr[i] != clr[j]:
                 return False
+            if pts is not None:
+                pi, pj = pts[i], pts[j]
+                if not (np.isnan(pi) or np.isnan(pj)) and pi != pj:
+                    return False
             return True
 
         for i in range(len(cand)):
