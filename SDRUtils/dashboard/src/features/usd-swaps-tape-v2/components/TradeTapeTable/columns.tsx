@@ -21,7 +21,8 @@ import {
 import { computePackageAdjustedDv01 } from '../../utils/packageAdjustedDv01'
 import { detectCcpSwitch } from '../../utils/ccpSwitchDetector'
 import { getFilterDisplayLabel } from './filter-utils'
-import { ActionClassBadge, QualityBadges, TapeTags } from './RowBadges'
+import { ActionClassBadge, TapeTags } from './RowBadges'
+import { tapeTagBadgesFor, qualityBadgesFor } from './RowBadges.helpers'
 import { TapeLabelCell } from './TapeLabelCell'
 import {
   packageIndicatorDisplay,
@@ -468,25 +469,35 @@ export function getColumns(
         'Tags',
         summaryFor('tape_tags', config.activeFilters),
       )}
-      body={(row: UsdSwapTapeRow) => <TapeTags row={row} />}
-      style={{ width: 120 }}
-    />,
-    // Phase 4-5 quality / compliance flag stack. Renders state-machine
-    // violation, cap-band, freq anomaly, schedule truncation, D2-missing,
-    // clearing-acceptance lag, P45-only signals. Most rows show a single
-    // dot (clean); compliance-relevant rows light up.
-    <Column
-      key="quality"
-      field="state_machine_violation_any"
-      filterField="state_machine_violation_any"
-      filter
-      {...compactFilterMenuProps}
-      header={renderHeader(
-        'Q',
-        summaryFor('state_machine_violation_any', config.activeFilters),
-      )}
-      body={(row: UsdSwapTapeRow) => <QualityBadges row={row} />}
-      style={{ width: 96 }}
+      body={(row: UsdSwapTapeRow) => {
+        const tags = tapeTagBadgesFor(row)
+        const quality = qualityBadgesFor(row)
+        if (tags.length === 0 && quality.length === 0) {
+          return <span className="text-slate-600 text-[10px]">·</span>
+        }
+        return (
+          <div className="flex flex-wrap items-center gap-1" data-testid="tape-tags">
+            {tags.map((b) => (
+              <span
+                key={b.key}
+                className={`px-1 py-0.5 rounded text-[10px] font-semibold ${b.className}`}
+              >
+                {b.label}
+              </span>
+            ))}
+            {quality.map((b) => (
+              <span
+                key={b.key}
+                className={`px-1 py-0.5 rounded text-[10px] font-semibold ${b.className}`}
+                title={b.title}
+              >
+                {b.label}
+              </span>
+            ))}
+          </div>
+        )
+      }}
+      style={{ width: 160 }}
     />,
   )
   return cols
