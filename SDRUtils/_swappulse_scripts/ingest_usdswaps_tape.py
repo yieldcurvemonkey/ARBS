@@ -1206,6 +1206,7 @@ def _upsert(
     json_cols: set[str],
     batch_size: int = 10_000,
     progress_desc: Optional[str] = None,
+    _raw_conn=None,
 ) -> int:
     """Batched INSERT .. ON CONFLICT DO UPDATE.
 
@@ -1216,6 +1217,10 @@ def _upsert(
 
     Falls back to SQLAlchemy ``text()`` + ``executemany``, still batched and
     progress-reported, when psycopg2 is unavailable (e.g. psycopg3-only envs).
+
+    When ``_raw_conn`` is supplied the caller owns the transaction — this
+    function will execute batches on that connection but will NOT commit,
+    rollback, or close it.
     """
     if not rows:
         return 0
@@ -1252,7 +1257,8 @@ def _upsert(
             SET {updates},
                 updated_at = NOW()
         """
-        raw_conn = engine.raw_connection()
+        owns_conn = _raw_conn is None
+        raw_conn = engine.raw_connection() if owns_conn else _raw_conn
         try:
             with raw_conn.cursor() as cur:
                 for start_idx in tqdm(
@@ -1266,12 +1272,15 @@ def _upsert(
                         values,
                         page_size=min(len(values), 2_000),
                     )
-            raw_conn.commit()
+            if owns_conn:
+                raw_conn.commit()
         except Exception:
-            raw_conn.rollback()
+            if owns_conn:
+                raw_conn.rollback()
             raise
         finally:
-            raw_conn.close()
+            if owns_conn:
+                raw_conn.close()
         return total
 
     # Fallback path: SQLAlchemy executemany, but still batched + progress.
@@ -1295,31 +1304,49 @@ def _upsert(
 
 
 def write_tape_rows(engine: Engine, tape: pd.DataFrame, as_of_date: str) -> dict:
-    """Upsert leg + package rows. Returns stats dict."""
+    """Upsert leg + package rows in a single atomic transaction.
+
+    All three write steps (packages, legs, orphan cleanup) share one
+    psycopg2 connection so the COMMIT is a single point-in-time flip.
+    Concurrent readers (the dashboard API) see either all-old or all-new
+    data via MVCC — never the intermediate state that caused the frontend
+    to blank during ingestion.
+    """
     ensure_schema(engine)
     tape = _normalize_package_id(tape)
     package_rows = build_package_rows(tape, as_of_date=as_of_date)
     leg_rows = build_leg_rows(tape, as_of_date=as_of_date)
-    # Packages must be written first (legs FK them).
-    n_pkgs = _upsert(
-        engine,
-        PACKAGES_TABLE,
-        PACKAGE_COLUMNS,
-        package_rows,
-        conflict_col="package_id",
-        json_cols=JSON_PKG_COLS,
-        progress_desc="Writing tape packages",
-    )
-    n_legs = _upsert(
-        engine,
-        LEGS_TABLE,
-        LEG_COLUMNS,
-        leg_rows,
-        conflict_col="trade_id",
-        json_cols=JSON_LEG_COLS,
-        progress_desc="Writing tape legs",
-    )
-    n_orphans = _delete_orphan_packages(engine)
+
+    raw_conn = engine.raw_connection()
+    try:
+        # Packages must be written first (legs FK them).
+        n_pkgs = _upsert(
+            engine,
+            PACKAGES_TABLE,
+            PACKAGE_COLUMNS,
+            package_rows,
+            conflict_col="package_id",
+            json_cols=JSON_PKG_COLS,
+            progress_desc="Writing tape packages",
+            _raw_conn=raw_conn,
+        )
+        n_legs = _upsert(
+            engine,
+            LEGS_TABLE,
+            LEG_COLUMNS,
+            leg_rows,
+            conflict_col="trade_id",
+            json_cols=JSON_LEG_COLS,
+            progress_desc="Writing tape legs",
+            _raw_conn=raw_conn,
+        )
+        n_orphans = _delete_orphan_packages(engine, _raw_conn=raw_conn)
+        raw_conn.commit()
+    except Exception:
+        raw_conn.rollback()
+        raise
+    finally:
+        raw_conn.close()
     return {
         "packages_written": n_pkgs,
         "legs_written": n_legs,
@@ -1327,7 +1354,7 @@ def write_tape_rows(engine: Engine, tape: pd.DataFrame, as_of_date: str) -> dict
     }
 
 
-def _delete_orphan_packages(engine: Engine) -> int:
+def _delete_orphan_packages(engine: Engine, *, _raw_conn=None) -> int:
     """Delete package rows that have no legs pointing at them.
 
     Defensive maintenance step — runs after every ingest. Two ways a
@@ -1350,7 +1377,21 @@ def _delete_orphan_packages(engine: Engine) -> int:
     Orphans don't render an expand chevron in the dashboard (the view's
     ``legs_json`` aggregates to empty), so they're visible noise. Cleaning
     them up post-write keeps the tape tidy.
+
+    When ``_raw_conn`` is supplied the caller owns the transaction.
     """
+    if _raw_conn is not None:
+        with _raw_conn.cursor() as cur:
+            cur.execute(
+                f"""
+                DELETE FROM {PACKAGES_TABLE} p
+                WHERE NOT EXISTS (
+                    SELECT 1 FROM {LEGS_TABLE} l
+                    WHERE l.package_id = p.package_id
+                )
+                """
+            )
+            return cur.rowcount or 0
     with engine.begin() as conn:
         result = conn.execute(
             text(
