@@ -135,7 +135,7 @@ export const TRADE_TYPE_TONES: Record<string, string> = {
 // UNWIND override wins via rowClassName's inactiveLifecycle branch.
 export const TRADE_TYPE_ROW_TONES: Record<string, string> = {
   OUTRIGHT: '!bg-slate-800/30',
-  CURVE: '!bg-blue-900/30',
+  CURVE: '!bg-blue-900/18',
   FLY: '!bg-yellow-900/25',
   STRADDLE: '!bg-teal-900/30',
   STRANGLE: '!bg-fuchsia-900/25',
