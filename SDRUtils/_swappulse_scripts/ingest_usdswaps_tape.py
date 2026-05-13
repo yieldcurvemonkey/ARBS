@@ -388,6 +388,27 @@ def _execute_ddl_bundle(engine: Engine, ddl: str, lock_timeout_ms: int = 3_000) 
 
 _schema_ensured: set[str] = set()
 
+_LATEST_MIGRATION_COLS = [
+    ("arbs_usd_swap_tape_packages_v2", "tape_tags"),
+    ("arbs_usd_swap_tape_legs_v2", "tape_tags"),
+]
+
+
+def _schema_already_current(engine: Engine) -> bool:
+    """Check if the latest migration columns exist, avoiding ACCESS EXCLUSIVE DDL."""
+    try:
+        with engine.connect() as conn:
+            for table, col in _LATEST_MIGRATION_COLS:
+                row = conn.execute(text(
+                    "SELECT 1 FROM information_schema.columns "
+                    "WHERE table_name = :t AND column_name = :c"
+                ), {"t": table, "c": col}).fetchone()
+                if row is None:
+                    return False
+        return True
+    except Exception:
+        return False
+
 
 def ensure_schema(engine: Engine, _max_retries: int = 5) -> None:
     """Create v2 tables / indexes / view if they don't already exist.
@@ -399,11 +420,18 @@ def ensure_schema(engine: Engine, _max_retries: int = 5) -> None:
 
     Guarded per-engine-URL so DDL (which takes AccessExclusiveLock on
     views) runs at most once per process, avoiding deadlocks during
-    multi-date backfills. Retries on deadlock/lock-timeout up to
-    ``_max_retries`` times with exponential backoff.
+    multi-date backfills. Before attempting DDL, checks
+    information_schema for the latest migration columns — if they exist,
+    the schema is already current and we skip DDL entirely, avoiding
+    ACCESS EXCLUSIVE lock contention with concurrent frontend readers.
+    Retries on deadlock/lock-timeout up to ``_max_retries`` times with
+    exponential backoff.
     """
     key = str(engine.url)
     if key in _schema_ensured:
+        return
+    if _schema_already_current(engine):
+        _schema_ensured.add(key)
         return
     for attempt in range(1, _max_retries + 1):
         try:
