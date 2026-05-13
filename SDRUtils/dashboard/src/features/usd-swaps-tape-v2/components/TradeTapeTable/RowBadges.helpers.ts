@@ -337,9 +337,16 @@ export function tapeTagBadgesFor(row: UsdSwapTapeRow): Array<{
     }
   }
 
+  // Derive from boolean flags — these fire even when the label text
+  // doesn't contain the keyword (e.g. UFRO trades where the pipeline
+  // marked is_ufro but didn't append it to the label string).
+  const fromFlags: string[] = []
+  if (row.is_ufro_any) fromFlags.push('UFRO')
+  if (row.is_block_any) fromFlags.push('BLOCK')
+
   const seen = new Set<string>()
   const merged: string[] = []
-  for (const tag of [...fromTags, ...fromLabel]) {
+  for (const tag of [...fromTags, ...fromLabel, ...fromFlags]) {
     if (!seen.has(tag)) {
       seen.add(tag)
       merged.push(tag)
