@@ -43,13 +43,7 @@ export async function analyticsQuery<T extends QueryResultRow = any>(
   params?: Array<unknown>
 ): Promise<QueryResult<T>> {
   const pool = getPool()
-  const client = await pool.connect()
-  try {
-    await client.query('SET LOCAL statement_timeout = 0')
-    return await client.query<T>(text, params)
-  } finally {
-    client.release()
-  }
+  return pool.query<T>(text, params)
 }
 
 export async function withClient<T>(
