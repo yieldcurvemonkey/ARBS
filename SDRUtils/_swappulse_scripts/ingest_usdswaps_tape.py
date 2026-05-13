@@ -369,8 +369,9 @@ def _str_or_none(val: Any) -> Optional[str]:
 # ---------------------------------------------------------------------------
 
 
-def _execute_ddl_bundle(engine: Engine, ddl: str) -> None:
+def _execute_ddl_bundle(engine: Engine, ddl: str, lock_timeout_ms: int = 3_000) -> None:
     with engine.begin() as conn:
+        conn.execute(text(f"SET LOCAL lock_timeout = '{lock_timeout_ms}ms'"))
         buffer: list[str] = []
         for line in ddl.splitlines():
             buffer.append(line)
