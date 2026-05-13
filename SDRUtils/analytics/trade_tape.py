@@ -1167,6 +1167,16 @@ class TradeTape(SDRAnalyzer):
                 if pd.isna(fwd) or str(fwd).lower() == "spot" or fwd_years <= 0.02:
                     parts.append("Spot")
                 else:
+                    # MAC/IMM trades: the effective_date IS the IMM date, so
+                    # the IMM label is more informative than the constant-
+                    # maturity approximation (e.g. "IMM_U2026" not "1M").
+                    stt = str(row.get("special_tenor_type", "")).upper()
+                    if stt in ("MAC", "IMM") and not str(fwd).startswith("IMM_"):
+                        eff = row.get("effective_date")
+                        if pd.notna(eff):
+                            imm = get_imm_label(pd.Timestamp(eff))
+                            if imm:
+                                fwd = imm
                     parts.append(str(fwd))
 
                 # 4. Tenors — leg scope uses the leg's own tenor; package scope
