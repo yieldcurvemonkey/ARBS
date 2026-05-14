@@ -203,6 +203,22 @@ describe('buildVolumeGridSqlTimeOfDay', () => {
     expect(built.sql).toContain('l.platform_identifier AS tenor_bucket')
     expect(built.sql).toContain('l.platform_identifier IS NOT NULL')
   })
+
+  it('emits pkg_family CASE and per-family FILTER columns in current_agg', () => {
+    const built = buildVolumeGridSqlTimeOfDay({
+      metric: 'dv01', forwardSchema: fwd, tenorSchema: tenor,
+      packageType: 'all', bounds,
+    })
+    expect(built.sql).toContain("THEN 'outright'")
+    expect(built.sql).toContain("THEN 'curve'")
+    expect(built.sql).toContain("THEN 'fly'")
+    expect(built.sql).toContain("ELSE 'other'")
+    expect(built.sql).toContain("FILTER (WHERE pkg_family = 'outright')")
+    expect(built.sql).toContain('outright_current')
+    expect(built.sql).toContain('curve_current')
+    expect(built.sql).toContain('fly_current')
+    expect(built.sql).toContain('other_current')
+  })
 })
 
 describe('buildVolumeGridSqlRolling', () => {
@@ -218,6 +234,18 @@ describe('buildVolumeGridSqlRolling', () => {
     expect(built.sql).toContain("date_trunc('week'")
     expect(built.sql).toContain('p.package_type IN ($4)')
     expect(built.params[3]).toBe('OUTRIGHT')
+  })
+
+  it('emits pkg_family FILTER columns in rolling SQL', () => {
+    const built = buildVolumeGridSqlRolling({
+      metric: 'dv01', forwardSchema: fwd, tenorSchema: tenor,
+      packageType: 'all', bounds,
+    })
+    expect(built.sql).toContain("FILTER (WHERE pkg_family = 'outright')")
+    expect(built.sql).toContain('outright_current')
+    expect(built.sql).toContain('curve_current')
+    expect(built.sql).toContain('fly_current')
+    expect(built.sql).toContain('other_current')
   })
 })
 
@@ -338,5 +366,33 @@ describe('shapeVolumeGridResponse', () => {
     // Chronological order maintained for the kept labels
     const kept = ids.filter((x) => ['APR26', 'JUN26', 'DEC27'].includes(x))
     expect(kept).toEqual(['APR26', 'JUN26', 'DEC27'])
+  })
+
+  it('maps pkg_family composition columns to cell fields', () => {
+    const fwd = resolveForwardSchema('default')
+    const tenor = resolveTenorSchema('default')
+    const out = shapeVolumeGridResponse(
+      [
+        {
+          fwd: 'spot', tenor: '5y',
+          current_value: 175, idb_current: 100, custy_current: 75,
+          outright_current: 100, curve_current: 50, fly_current: 25, other_current: 0,
+          trade_count: 10, prior_array: [], p25: 0, p50: 0, p75: 0, pmin: 0, pmax: 0, n: 0,
+          as_of_ts: null,
+        },
+      ],
+      {
+        metric: 'dv01', period: '1w', lookbackDays: 90,
+        forwardSchema: 'default', tenorSchema: 'default', packageType: 'all',
+        viewMode: 'volume',
+      },
+      fwd,
+      tenor,
+    )
+    expect(out.cells.length).toBe(1)
+    expect(out.cells[0].outrightCurrent).toBe(100)
+    expect(out.cells[0].curveCurrent).toBe(50)
+    expect(out.cells[0].flyCurrent).toBe(25)
+    expect(out.cells[0].otherCurrent).toBe(0)
   })
 })

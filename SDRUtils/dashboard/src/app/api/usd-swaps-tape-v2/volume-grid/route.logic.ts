@@ -16,6 +16,7 @@ import {
   buildBucketCaseSql,
   buildFomcBucketsFromLabels,
   buildPackageTypeFilter,
+  buildPkgFamilySql,
   buildVenueBucketsFromIdentifiers,
   FORWARD_SCHEMA_IDS,
   PACKAGE_TYPE_GROUP_IDS,
@@ -360,6 +361,7 @@ export function buildVolumeGridSqlTimeOfDay(ctx: SqlBuildContext): BuiltSql {
         ${fwdBucketExpr} AS fwd_bucket,
         ${tenorBucketExpr} AS tenor_bucket,
         ${PLATFORM_CASE_SQL} AS platform,
+        ${buildPkgFamilySql('p')} AS pkg_family,
         (date_trunc('day', COALESCE(l.original_execution_timestamp, l.execution_timestamp) AT TIME ZONE 'America/New_York'))::date AS day_et,
         EXTRACT(EPOCH FROM (
           (COALESCE(l.original_execution_timestamp, l.execution_timestamp) AT TIME ZONE 'America/New_York')
@@ -404,6 +406,10 @@ export function buildVolumeGridSqlTimeOfDay(ctx: SqlBuildContext): BuiltSql {
         SUM(${metricCol}) AS current_value,
         SUM(${metricCol}) FILTER (WHERE platform = 'IDB')   AS idb_current,
         SUM(${metricCol}) FILTER (WHERE platform = 'CUSTY') AS custy_current,
+        SUM(${metricCol}) FILTER (WHERE pkg_family = 'outright') AS outright_current,
+        SUM(${metricCol}) FILTER (WHERE pkg_family = 'curve')    AS curve_current,
+        SUM(${metricCol}) FILTER (WHERE pkg_family = 'fly')      AS fly_current,
+        SUM(${metricCol}) FILTER (WHERE pkg_family = 'other')    AS other_current,
         COUNT(*)::int AS trade_count,
         MAX(ts) AS last_ts
       FROM bucketed
@@ -416,6 +422,10 @@ export function buildVolumeGridSqlTimeOfDay(ctx: SqlBuildContext): BuiltSql {
       COALESCE(c.current_value, 0)             AS current_value,
       COALESCE(c.idb_current, 0)               AS idb_current,
       COALESCE(c.custy_current, 0)             AS custy_current,
+      COALESCE(c.outright_current, 0)          AS outright_current,
+      COALESCE(c.curve_current, 0)             AS curve_current,
+      COALESCE(c.fly_current, 0)               AS fly_current,
+      COALESCE(c.other_current, 0)             AS other_current,
       COALESCE(c.trade_count, 0)               AS trade_count,
       COALESCE(p.prior_array, ARRAY[]::numeric[]) AS prior_array,
       COALESCE(p.p25, 0)  AS p25,
@@ -455,7 +465,8 @@ export function buildVolumeGridSqlRolling(ctx: SqlBuildContext): BuiltSql {
         ABS(COALESCE(l.risk, 0))     AS gross_dv01,
         ${fwdBucketExpr} AS fwd_bucket,
         ${tenorBucketExpr} AS tenor_bucket,
-        ${PLATFORM_CASE_SQL} AS platform
+        ${PLATFORM_CASE_SQL} AS platform,
+        ${buildPkgFamilySql('p')} AS pkg_family
       FROM arbs_usd_swap_tape_legs_v2 l
       JOIN arbs_usd_swap_tape_packages_v2 p ON p.package_id = l.package_id
       WHERE COALESCE(l.contributes_to_flow, FALSE) = TRUE
@@ -502,6 +513,10 @@ export function buildVolumeGridSqlRolling(ctx: SqlBuildContext): BuiltSql {
         SUM(${metricCol}) AS current_value,
         SUM(${metricCol}) FILTER (WHERE platform = 'IDB')   AS idb_current,
         SUM(${metricCol}) FILTER (WHERE platform = 'CUSTY') AS custy_current,
+        SUM(${metricCol}) FILTER (WHERE pkg_family = 'outright') AS outright_current,
+        SUM(${metricCol}) FILTER (WHERE pkg_family = 'curve')    AS curve_current,
+        SUM(${metricCol}) FILTER (WHERE pkg_family = 'fly')      AS fly_current,
+        SUM(${metricCol}) FILTER (WHERE pkg_family = 'other')    AS other_current,
         COUNT(*)::int AS trade_count,
         MAX(ts) AS last_ts
       FROM windowed
@@ -514,6 +529,10 @@ export function buildVolumeGridSqlRolling(ctx: SqlBuildContext): BuiltSql {
       COALESCE(c.current_value, 0)             AS current_value,
       COALESCE(c.idb_current, 0)               AS idb_current,
       COALESCE(c.custy_current, 0)             AS custy_current,
+      COALESCE(c.outright_current, 0)          AS outright_current,
+      COALESCE(c.curve_current, 0)             AS curve_current,
+      COALESCE(c.fly_current, 0)               AS fly_current,
+      COALESCE(c.other_current, 0)             AS other_current,
       COALESCE(c.trade_count, 0)               AS trade_count,
       COALESCE(p.prior_array, ARRAY[]::numeric[]) AS prior_array,
       COALESCE(p.p25, 0)  AS p25,
@@ -576,6 +595,10 @@ export interface RawVolumeGridRow {
   current_value: number | string
   idb_current: number | string
   custy_current: number | string
+  outright_current: number | string
+  curve_current: number | string
+  fly_current: number | string
+  other_current: number | string
   trade_count: number | string
   prior_array: Array<number | string>
   p25: number | string
@@ -637,6 +660,10 @@ export function shapeVolumeGridResponse(
         current,
         idbCurrent,
         custyCurrent,
+        outrightCurrent: num(r.outright_current),
+        curveCurrent: num(r.curve_current),
+        flyCurrent: num(r.fly_current),
+        otherCurrent: num(r.other_current),
         tradeCount: num(r.trade_count),
         baseline: {
           p25: num(r.p25),

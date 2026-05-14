@@ -135,6 +135,7 @@ function RowFragment(props: {
             fwd: props.fwd,
             tenor: t.id,
             current: 0, idbCurrent: 0, custyCurrent: 0,
+            outrightCurrent: 0, curveCurrent: 0, flyCurrent: 0, otherCurrent: 0,
             tradeCount: 0,
             baseline: { p25: 0, p50: 0, p75: 0, min: 0, max: 0, n: 0 },
             percentile: null,
