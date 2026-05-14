@@ -468,12 +468,12 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument(
         "--interval-seconds",
         type=int,
-        default=int(os.getenv("SWAPPULSE_INGEST_INTERVAL_SECONDS", 120)),
+        default=int(os.getenv("SWAPPULSE_INGEST_INTERVAL_SECONDS", 30)),
     )
     sp.add_argument(
         "--active-interval-seconds",
         type=int,
-        default=int(os.getenv("SWAPPULSE_INGEST_ACTIVE_INTERVAL_SECONDS", 120)),
+        default=int(os.getenv("SWAPPULSE_INGEST_ACTIVE_INTERVAL_SECONDS", 30)),
     )
     sp.add_argument(
         "--inactive-interval-seconds",

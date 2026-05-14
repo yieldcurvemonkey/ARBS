@@ -51,6 +51,8 @@ class StructureType(str, Enum):
     FLY_12M = "fly_12m"
     DFLY_3M = "dfly_3m"
     DFLY_6M = "dfly_6m"
+    CF_3M = "cf_3m"
+    CF_6M = "cf_6m"
 
 
 _STRUCTURE_SPEC: Dict[StructureType, Tuple[str, int]] = {
@@ -65,6 +67,8 @@ _STRUCTURE_SPEC: Dict[StructureType, Tuple[str, int]] = {
     StructureType.FLY_12M: ("fly", 4),
     StructureType.DFLY_3M: ("dfly", 1),
     StructureType.DFLY_6M: ("dfly", 2),
+    StructureType.CF_3M: ("condor", 1),
+    StructureType.CF_6M: ("condor", 2),
 }
 
 STRUCTURE_LABELS: Dict[StructureType, str] = {
@@ -79,6 +83,8 @@ STRUCTURE_LABELS: Dict[StructureType, str] = {
     StructureType.FLY_12M: "12M Fly",
     StructureType.DFLY_3M: "3M DFly",
     StructureType.DFLY_6M: "6M DFly",
+    StructureType.CF_3M: "3M Condor",
+    StructureType.CF_6M: "6M Condor",
 }
 
 
@@ -437,6 +443,10 @@ def _dfly_label(cols: List[str], i: int, gap: int) -> str:
     return f"{_fly_label(cols, i, gap)}|{_fly_label(cols, i + gap, gap)}"
 
 
+def _condor_label(cols: List[str], i: int, gap: int) -> str:
+    return f"{cols[i]}/{cols[i + gap]}/{cols[i + 2 * gap]}/{cols[i + 3 * gap]}"
+
+
 def compute_strip(rates: pd.DataFrame) -> pd.DataFrame:
     return rates.copy()
 
@@ -482,6 +492,23 @@ def compute_dfly_curve(rates: pd.DataFrame, gap: int = 1) -> pd.DataFrame:
     return pd.DataFrame(result, index=rates.index)
 
 
+def compute_condor_curve(rates: pd.DataFrame, gap: int = 1) -> pd.DataFrame:
+    """Condors: condor[i] = (rate[i] - rate[i+gap] - rate[i+2*gap] + rate[i+3*gap]) * 100 bps.
+
+    Weights: [1, -1, -1, 1]. Difference of two non-overlapping calendar spreads.
+    """
+    cols = list(rates.columns)
+    result = {}
+    for i in range(len(cols) - 3 * gap):
+        result[_condor_label(cols, i, gap)] = (
+            rates.iloc[:, i]
+            - rates.iloc[:, i + gap]
+            - rates.iloc[:, i + 2 * gap]
+            + rates.iloc[:, i + 3 * gap]
+        ) * 100
+    return pd.DataFrame(result, index=rates.index)
+
+
 def compute_structure(rates: pd.DataFrame, st: StructureType) -> pd.DataFrame:
     kind, gap = _STRUCTURE_SPEC[st]
     if kind == "strip":
@@ -492,6 +519,8 @@ def compute_structure(rates: pd.DataFrame, st: StructureType) -> pd.DataFrame:
         return compute_fly_curve(rates, gap)
     elif kind == "dfly":
         return compute_dfly_curve(rates, gap)
+    elif kind == "condor":
+        return compute_condor_curve(rates, gap)
     raise ValueError(f"Unknown kind: {kind}")
 
 
