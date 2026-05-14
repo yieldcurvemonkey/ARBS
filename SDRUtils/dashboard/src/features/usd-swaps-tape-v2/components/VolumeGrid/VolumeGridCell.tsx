@@ -12,6 +12,7 @@ import type {
   VolumeGridSchemaAxis,
 } from '../../types/volume-grid.types'
 import { lookupLabel } from './buckets'
+import type { PackageTypeGroupId } from '@/lib/usd-swaps-tape-v2/volumeGridBuckets'
 
 export const fmtCompact = (n: number, _metric: VolumeMetric): string => {
   void _metric
@@ -32,6 +33,7 @@ export interface VolumeGridCellProps {
   colorPercentile?: number | null
   forwardAxis?: VolumeGridSchemaAxis
   tenorAxis?: VolumeGridSchemaAxis
+  packageType?: PackageTypeGroupId
   onClick: (id: { fwd: string; tenor: string }) => void
 }
 
@@ -56,7 +58,7 @@ function safeShare(part: number, total: number): number {
 }
 
 export const VolumeGridCell = memo(function VolumeGridCell({
-  cell, metric, period, viewMode, colorMode = 'activity', colorPercentile, forwardAxis, tenorAxis, onClick,
+  cell, metric, period, viewMode, colorMode = 'activity', colorPercentile, forwardAxis, tenorAxis, packageType, onClick,
 }: VolumeGridCellProps): JSX.Element {
   const isEmpty = cell.tradeCount === 0
   const heatmapPercentile =
@@ -70,6 +72,11 @@ export const VolumeGridCell = memo(function VolumeGridCell({
   const custyShare = safeShare(cell.custyCurrent, cell.current)
   const idbPct = Math.round(idbShare * 100)
   const custyPct = Math.round(custyShare * 100)
+  const showPkgBar = packageType === 'all' && !isEmpty
+  const outrightShare = safeShare(cell.outrightCurrent, cell.current)
+  const curveShare = safeShare(cell.curveCurrent, cell.current)
+  const flyShare = safeShare(cell.flyCurrent, cell.current)
+  const otherShare = safeShare(cell.otherCurrent, cell.current)
   const splitNote = `IDB ${fmtCompact(cell.idbCurrent, metric)} (${idbPct}%) / CUSTY ${fmtCompact(cell.custyCurrent, metric)} (${custyPct}%)`
   const colorLabel =
     colorMode === 'grid'
@@ -106,6 +113,19 @@ export const VolumeGridCell = memo(function VolumeGridCell({
             className="bg-indigo-400/80"
             style={{ width: `${custyShare * 100}%` }}
           />
+        </div>
+      )}
+      {showPkgBar && (
+        <div
+          data-testid="pkg-family-bar"
+          aria-hidden
+          className="pointer-events-none absolute inset-x-0 top-0 flex h-1"
+          title={`Outright: ${fmtCompact(cell.outrightCurrent, metric)} | Curve: ${fmtCompact(cell.curveCurrent, metric)} | Fly: ${fmtCompact(cell.flyCurrent, metric)}${cell.otherCurrent > 0 ? ` | Other: ${fmtCompact(cell.otherCurrent, metric)}` : ''}`}
+        >
+          {outrightShare > 0 && <div className="bg-slate-400/80" style={{ width: `${outrightShare * 100}%` }} />}
+          {curveShare > 0 && <div className="bg-amber-400/80" style={{ width: `${curveShare * 100}%` }} />}
+          {flyShare > 0 && <div className="bg-emerald-400/80" style={{ width: `${flyShare * 100}%` }} />}
+          {otherShare > 0 && <div className="bg-purple-400/80" style={{ width: `${otherShare * 100}%` }} />}
         </div>
       )}
       {isEmpty ? (

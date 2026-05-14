@@ -31,6 +31,10 @@ export interface VolumeGridCell {
   tradeCount: number
   baseline: VolumeGridBaseline
   percentile: number | null
+  outrightCurrent: number
+  curveCurrent: number
+  flyCurrent: number
+  otherCurrent: number
 }
 
 export interface VolumeGridTotalEntry {
@@ -86,6 +90,14 @@ export interface VolumeGridIntradaySeasonality {
   points: VolumeGridIntradaySeasonalityPoint[]
 }
 
+export interface RecentTradeLeg {
+  tenorYears: number
+  forwardStartYears: number
+  notional: number
+  risk: number
+  inCell: boolean
+}
+
 export interface VolumeGridCellRecentTrade {
   package_id: string
   execution_start: string
@@ -96,6 +108,7 @@ export interface VolumeGridCellRecentTrade {
   total_notional: number | null
   venue: string | null
   is_block_any: boolean | null
+  legs: RecentTradeLeg[] | null
 }
 
 export interface VolumeGridCellResponse {

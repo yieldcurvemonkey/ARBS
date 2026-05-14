@@ -309,6 +309,47 @@ describe('buildColumnFilterClause', () => {
     expect(params).toEqual(['curve'])
   })
 
+  // Regression guard for the volume-grid cell-modal click-to-filter
+  // flow. The modal dispatches a `package_id` EQUALS constraint via
+  // the URL when a trade row is clicked; if `package_id` ever drops
+  // out of COLUMN_FILTER_ALLOWLIST_PACKAGE the API silently ignores
+  // the filter and the tape shows every trade instead of just the
+  // clicked package. Both outright (OUTRIGHT-...) and multi-leg
+  // (FLY_..., CURVE_..., MM_...) package_ids flow through here.
+  it('EQUALS on package_id is allowlisted (volume-grid click-to-filter)', () => {
+    const params: unknown[] = []
+    const clause = buildColumnFilterClause(
+      {
+        package_id: {
+          operator: 'and',
+          constraints: [
+            { value: 'FLY_157_3137022904000000301', matchMode: 'equals' },
+          ],
+        },
+      },
+      params,
+    )
+    expect(clause).toMatch(/LOWER\(d\.package_id\) = \$1/)
+    expect(params).toEqual(['fly_157_3137022904000000301'])
+  })
+
+  it('EQUALS on package_id accepts outright package_ids', () => {
+    const params: unknown[] = []
+    const clause = buildColumnFilterClause(
+      {
+        package_id: {
+          operator: 'and',
+          constraints: [
+            { value: 'OUTRIGHT-3137244893000000101', matchMode: 'equals' },
+          ],
+        },
+      },
+      params,
+    )
+    expect(clause).toMatch(/LOWER\(d\.package_id\) = \$1/)
+    expect(params).toEqual(['outright-3137244893000000101'])
+  })
+
   it('NOT_EQUALS on text column uses LOWER(col) <>', () => {
     const params: unknown[] = []
     const clause = buildColumnFilterClause(

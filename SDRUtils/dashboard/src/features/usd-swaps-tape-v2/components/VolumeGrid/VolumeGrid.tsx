@@ -9,6 +9,7 @@ import type {
   VolumeGridCell as Cell, VolumeGridColorMode, VolumeGridResponse, VolumeGridViewMode,
   VolumeMetric, VolumePeriod,
 } from '../../types/volume-grid.types'
+import type { PackageTypeGroupId } from '@/lib/usd-swaps-tape-v2/volumeGridBuckets'
 
 export interface VolumeGridProps {
   data: VolumeGridResponse
@@ -16,12 +17,13 @@ export interface VolumeGridProps {
   period: VolumePeriod
   viewMode: VolumeGridViewMode
   colorMode: VolumeGridColorMode
+  packageType?: PackageTypeGroupId
   onCellClick: (id: { fwd: string; tenor: string }) => void
   onCellHover?: (id: { fwd: string; tenor: string }) => void
   onCellLeave?: () => void
 }
 
-export function VolumeGrid({ data, metric, period, viewMode, colorMode, onCellClick, onCellHover, onCellLeave }: VolumeGridProps): JSX.Element {
+export function VolumeGrid({ data, metric, period, viewMode, colorMode, packageType, onCellClick, onCellHover, onCellLeave }: VolumeGridProps): JSX.Element {
   const cellMap = useMemo(() => {
     const m = new Map<string, Cell>()
     for (const c of data.cells) m.set(`${c.fwd}|${c.tenor}`, c)
@@ -73,6 +75,7 @@ export function VolumeGrid({ data, metric, period, viewMode, colorMode, onCellCl
           period={period}
           viewMode={viewMode}
           colorMode={colorMode}
+          packageType={packageType}
           gridMaxCurrent={gridMaxCurrent}
           tenorAxis={tenorAxis}
           forwardAxis={forwardAxis}
@@ -112,6 +115,7 @@ function RowFragment(props: {
   period: VolumePeriod
   viewMode: VolumeGridViewMode
   colorMode: VolumeGridColorMode
+  packageType?: PackageTypeGroupId
   gridMaxCurrent: number
   forwardAxis: VolumeGridResponse['axes']['forward']
   tenorAxis: VolumeGridResponse['axes']['tenor']
@@ -135,6 +139,7 @@ function RowFragment(props: {
             fwd: props.fwd,
             tenor: t.id,
             current: 0, idbCurrent: 0, custyCurrent: 0,
+            outrightCurrent: 0, curveCurrent: 0, flyCurrent: 0, otherCurrent: 0,
             tradeCount: 0,
             baseline: { p25: 0, p50: 0, p75: 0, min: 0, max: 0, n: 0 },
             percentile: null,
@@ -159,6 +164,7 @@ function RowFragment(props: {
               }
               forwardAxis={props.forwardAxis}
               tenorAxis={props.tenorAxis}
+              packageType={props.packageType}
               onClick={props.onCellClick}
             />
           </div>

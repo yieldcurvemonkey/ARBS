@@ -149,3 +149,30 @@ describe('buildRecentTradesSql', () => {
     expect(sql).toContain('LIMIT $3')
   })
 })
+
+describe('buildRecentTradesSql with legs', () => {
+  it('includes a json_agg legs subquery when inCellPredicateSql is provided', () => {
+    const sql = buildRecentTradesSql({
+      bucketPredicateSql: 'l.tenor_years >= $2 AND l.tenor_years < $3',
+      packageFilterSql: 'TRUE',
+      limitParam: '$4',
+      inCellPredicateSql: 'l2.tenor_years >= $2 AND l2.tenor_years < $3',
+    })
+    expect(sql).toContain('json_agg')
+    expect(sql).toContain('json_build_object')
+    expect(sql).toContain('l2.tenor_years')
+    expect(sql).toContain('l2.forward_start_years')
+    expect(sql).toContain('in_cell')
+    expect(sql).toContain('l2.package_id = p.package_id')
+  })
+
+  it('omits legs subquery when inCellPredicateSql is not provided', () => {
+    const sql = buildRecentTradesSql({
+      bucketPredicateSql: 'l.tenor_years >= $2',
+      packageFilterSql: 'TRUE',
+      limitParam: '$3',
+    })
+    expect(sql).not.toContain('json_agg')
+    expect(sql).not.toContain('l2.')
+  })
+})

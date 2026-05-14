@@ -323,9 +323,25 @@ export function buildRecentTradesSql(opts: {
   bucketPredicateSql: string
   packageFilterSql: string
   schemaExtraFilterSql?: string
-  limitParam: string // e.g. '$8'
+  limitParam: string
+  inCellPredicateSql?: string
 }): string {
   const extraFilter = opts.schemaExtraFilterSql ? `AND ${opts.schemaExtraFilterSql}` : ''
+  const legsSubquery = opts.inCellPredicateSql
+    ? `,
+      (
+        SELECT json_agg(json_build_object(
+          'tenor_years', l2.tenor_years,
+          'forward_start_years', l2.forward_start_years,
+          'notional', ABS(COALESCE(l2.notional, 0)),
+          'risk', ABS(COALESCE(l2.risk, 0)),
+          'in_cell', CASE WHEN (${opts.inCellPredicateSql}) THEN true ELSE false END
+        ) ORDER BY l2.tenor_years)
+        FROM arbs_usd_swap_tape_legs_v2 l2
+        WHERE l2.package_id = p.package_id
+          AND COALESCE(l2.contributes_to_flow, FALSE) = TRUE
+      ) AS legs`
+    : ''
   return `
     WITH eligible_packages AS (
       SELECT DISTINCT l.package_id
@@ -346,7 +362,7 @@ export function buildRecentTradesSql(opts: {
       p.total_risk,
       p.total_notional,
       p.venue,
-      p.is_block_any
+      p.is_block_any${legsSubquery}
     FROM arbs_usd_swap_tape_packages_v2 p
     JOIN eligible_packages e ON e.package_id = p.package_id
     ORDER BY p.execution_start DESC
