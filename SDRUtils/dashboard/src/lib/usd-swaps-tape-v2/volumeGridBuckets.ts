@@ -412,6 +412,15 @@ export function buildPackageTypeFilter(
   }
 }
 
+export function buildPkgFamilySql(alias: string): string {
+  return `CASE
+    WHEN ${alias}.package_type IN ('OUTRIGHT','SPREADOVER','MATCHED_MATURITY') THEN 'outright'
+    WHEN ${alias}.package_type IN ('CURVE','SPREADOVER_CURVE','MATCHED_MATURITY_CURVE') THEN 'curve'
+    WHEN ${alias}.package_type IN ('FLY','SPREADOVER_FLY','MATCHED_MATURITY_FLY') THEN 'fly'
+    ELSE 'other'
+  END`
+}
+
 // ---------------------------------------------------------------------------
 // Year ↔ years-from-now helper for the IMM schema (used by the UI to
 // compute exact bucket ids server-side requests can resolve)
