@@ -229,6 +229,7 @@ const COLUMN_FILTER_ALLOWLIST_PACKAGE = new Set([
   'package_type',
   'package_indicator',
   'other_lvl_reported',
+  'package_id',
 ])
 
 const COLUMN_FILTER_ALLOWLIST_LEG = new Set([

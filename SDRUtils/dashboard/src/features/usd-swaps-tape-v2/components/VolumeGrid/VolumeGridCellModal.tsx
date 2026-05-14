@@ -36,6 +36,10 @@ const fmtCompact = (n: number, _metric: VolumeMetric): string => {
 }
 
 const fmtRate = (r: number | null): string => (r == null ? '-' : `${(r * 100).toFixed(3)}%`)
+const fmtTenor = (y: number): string => {
+  const rounded = Math.round(y)
+  return Math.abs(y - rounded) < 0.1 ? `${rounded}Y` : `${y.toFixed(1)}Y`
+}
 const fmtTime = (ts: string): string =>
   new Date(ts).toLocaleString('en-US', {
     timeZone: 'America/New_York', month: '2-digit', day: '2-digit',
@@ -225,9 +229,21 @@ export function VolumeGridCellModal(props: VolumeGridCellModalProps): JSX.Elemen
                       <Td>{t.total_risk == null ? '-' : fmtCompact(t.total_risk, 'dv01')}</Td>
                       <Td>{t.total_notional == null ? '-' : fmtCompact(t.total_notional, 'notional')}</Td>
                       <Td>
-                        {legs.length > 0
-                          ? `${fmtCompact(props.metric === 'dv01' ? inCellRisk : inCellNotional, props.metric)} / ${fmtCompact(props.metric === 'dv01' ? (t.total_risk ?? 0) : (t.total_notional ?? 0), props.metric)}`
-                          : '-'}
+                        {legs.length > 0 ? (() => {
+                          const inCellVal = props.metric === 'dv01' ? inCellRisk : inCellNotional
+                          const inCellLegs = legs.filter((l) => l.inCell)
+                          const isPartial = isMultiLeg && inCellLegs.length > 1
+                          return (
+                            <>
+                              {fmtCompact(inCellVal, props.metric)}
+                              {isPartial && (
+                                <span className="ml-1 text-[9px] text-slate-500">
+                                  ← {inCellLegs.map((l) => fmtTenor(l.tenorYears)).join(', ')} leg{inCellLegs.length > 1 ? 's' : ''}
+                                </span>
+                              )}
+                            </>
+                          )
+                        })() : '-'}
                       </Td>
                       <Td>{t.venue ?? '-'}</Td>
                       <Td>{t.is_block_any ? 'BLOCK' : ''}</Td>
