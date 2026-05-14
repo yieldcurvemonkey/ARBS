@@ -232,14 +232,14 @@ export function VolumeGridCellModal(props: VolumeGridCellModalProps): JSX.Elemen
                         {legs.length > 0 ? (() => {
                           const inCellVal = props.metric === 'dv01' ? inCellRisk : inCellNotional
                           const inCellLegs = legs.filter((l) => l.inCell)
-                          const isPartial = isMultiLeg && inCellLegs.length > 1
+                          const showBreakdown = isMultiLeg && inCellLegs.length > 1
                           return (
                             <>
                               {fmtCompact(inCellVal, props.metric)}
-                              {isPartial && (
-                                <span className="ml-1 text-[9px] text-slate-500">
-                                  ← {inCellLegs.map((l) => fmtTenor(l.tenorYears)).join(', ')} leg{inCellLegs.length > 1 ? 's' : ''}
-                                </span>
+                              {showBreakdown && (
+                                <div data-testid="cell-leg-breakdown" className="font-mono text-[9px] text-slate-500">
+                                  {inCellLegs.map((l) => `${fmtTenor(l.tenorYears)}:${fmtCompact(props.metric === 'dv01' ? l.risk : l.notional, props.metric)}`).join(' ')}
+                                </div>
                               )}
                             </>
                           )

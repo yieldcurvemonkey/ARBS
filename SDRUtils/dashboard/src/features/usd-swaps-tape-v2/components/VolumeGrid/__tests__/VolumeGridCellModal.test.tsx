@@ -79,6 +79,14 @@ describe('VolumeGridCellModal — leg-annotated recent trades (source contract)'
     expect(src).toContain('data-testid="cell-contribution"')
   })
 
+  it('renders per-leg risk/notional breakdown when 2+ legs share the cell', () => {
+    expect(src).toContain('data-testid="cell-leg-breakdown"')
+    // Breakdown only renders when isMultiLeg && inCellLegs.length > 1
+    expect(src).toMatch(/showBreakdown\s*=\s*isMultiLeg\s*&&\s*inCellLegs\.length\s*>\s*1/)
+    // Per-leg amount must use metric-appropriate field (risk for dv01, notional otherwise)
+    expect(src).toMatch(/props\.metric\s*===\s*'dv01'\s*\?\s*l\.risk\s*:\s*l\.notional/)
+  })
+
   it('renders package type badge', () => {
     expect(src).toContain('data-testid="pkg-type-badge"')
   })
