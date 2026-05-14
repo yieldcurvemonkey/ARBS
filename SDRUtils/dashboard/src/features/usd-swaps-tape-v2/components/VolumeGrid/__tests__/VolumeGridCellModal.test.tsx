@@ -41,6 +41,29 @@ describe('VolumeGridCellModal — click-through + empty states', () => {
     expect(modalSource).toMatch(/onSelectPackage\(t\.package_id\)/)
     expect(modalSource).toMatch(/props\.onClose\(\)/)
   })
+  // Regression guard: leg sub-rows must NOT have an onClick. Multi-leg
+  // packages render as one clickable parent row plus collapsible
+  // display-only leg rows, so the dispatched filter always carries the
+  // parent package_id — never a leg-specific value.
+  it('leg sub-rows are render-only (no onClick handler)', () => {
+    // The leg-row <tr> opens with the data-testid attribute and must
+    // NOT carry an onClick before the closing >.
+    expect(modalSource).toMatch(
+      /<tr key=\{`leg-\$\{i\}`\} data-testid="leg-row"[^>]*>/,
+    )
+    const legTrMatch = modalSource.match(
+      /<tr key=\{`leg-\$\{i\}`\} data-testid="leg-row"[^>]*>/,
+    )
+    expect(legTrMatch).not.toBeNull()
+    expect(legTrMatch![0]).not.toMatch(/onClick/)
+  })
+  // Regression guard: the click handler must dispatch t.package_id
+  // (the parent package id), not a leg-scoped id. The expand chevron's
+  // onClick uses stopPropagation so it never triggers the row click.
+  it('parent row dispatches t.package_id and chevron stops propagation', () => {
+    expect(modalSource).toMatch(/onClick=\{\(\) => \{[\s\S]*?onSelectPackage\(t\.package_id\)/)
+    expect(modalSource).toMatch(/data-testid="leg-expand"[\s\S]*?e\.stopPropagation\(\)/)
+  })
   it('shows empty states', () => {
     expect(modalSource).toMatch(/No trades in this bucket over the selected range/)
     expect(modalSource).toMatch(/No recent trades for this bucket/)
