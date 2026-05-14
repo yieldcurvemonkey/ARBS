@@ -1,0 +1,173 @@
+======================================================================
+LOADING DATA
+======================================================================
+Rate panel: 601 dates x 12 contracts
+Computing PCA residual rates...
+Done.
+Backtest: 508 steps (2024-06-01 -> 2026-05-13)
+
+======================================================================
+GRID SEARCH
+======================================================================
+Grid: 768 configs
+  [25/768] 2391s elapsed, ~71070s ETA
+  [50/768] 3839s elapsed, ~55127s ETA
+  [75/768] 5889s elapsed, ~54414s ETA
+  [100/768] 7458s elapsed, ~49818s ETA
+  [125/768] 9508s elapsed, ~48912s ETA
+  [150/768] 10881s elapsed, ~44830s ETA
+  [175/768] 12590s elapsed, ~42663s ETA
+  [200/768] 13806s elapsed, ~39209s ETA
+  [225/768] 15521s elapsed, ~37457s ETA
+  [250/768] 16816s elapsed, ~34844s ETA
+  [275/768] 18329s elapsed, ~32858s ETA
+  [300/768] 19646s elapsed, ~30647s ETA
+  [325/768] 20926s elapsed, ~28523s ETA
+  [350/768] 22177s elapsed, ~26486s ETA
+  [375/768] 23208s elapsed, ~24322s ETA
+  [400/768] 25012s elapsed, ~23011s ETA
+  [425/768] 27110s elapsed, ~21880s ETA
+  [450/768] 29305s elapsed, ~20709s ETA
+  [475/768] 31247s elapsed, ~19274s ETA
+  [500/768] 33094s elapsed, ~17738s ETA
+  [525/768] 34632s elapsed, ~16030s ETA
+  [550/768] 37160s elapsed, ~14729s ETA
+  [575/768] 38667s elapsed, ~12979s ETA
+  [600/768] 41193s elapsed, ~11534s ETA
+  [625/768] 42976s elapsed, ~9833s ETA
+  [650/768] 45186s elapsed, ~8203s ETA
+  [675/768] 47096s elapsed, ~6489s ETA
+  [700/768] 49334s elapsed, ~4792s ETA
+  [725/768] 50895s elapsed, ~3019s ETA
+  [750/768] 53316s elapsed, ~1280s ETA
+  [768/768] 54241s elapsed, ~0s ETA
+
+Grid done: 768 configs in 54241s (904.0m)
+
+======================================================================
+RESULTS: 768 valid / 768 total  (768 with >=5 closed)
+======================================================================
+
+TOP 20 BY SHARPE:
+  bf_3m+df_3m|zw120|z1.5|Fix_10d|FOMC5+PCA            Sharpe= 1.54  WR=55.7%  MTM=$50,645,530  DD=$-10,408,318  N=176  Hold=10.5d
+  bf_3m+df_3m|zw60|z1.0|Fix_10d|FOMC5                 Sharpe= 1.46  WR=54.4%  MTM=$63,545,449  DD=$-18,264,602  N=239  Hold=10.3d
+  bf_3m+df_3m|zw120|z1.0|Fix_10d|NoFilter             Sharpe= 1.40  WR=51.3%  MTM=$76,918,530  DD=$-20,316,348  N=234  Hold=10.2d
+  bf_3m+df_3m|zw120|z2.5|MR_44d|NoFilter              Sharpe= 1.38  WR=60.0%  MTM=$62,886,326  DD=$-16,046,347  N= 35  Hold=39.4d
+  bf_3m+df_3m|zw120|z2.5|MR_44d|FOMC5                 Sharpe= 1.37  WR=58.3%  MTM=$60,662,893  DD=$-16,046,347  N= 36  Hold=42.3d
+  df_3m|zw40|z1.0|MR+S2_22d|FOMC5+PCA                 Sharpe= 1.37  WR=50.0%  MTM=$10,121,673  DD=$-2,128,992  N=142  Hold=18.6d
+  df_3m|zw120|z1.5|MR_44d|FOMC5+PCA                   Sharpe= 1.27  WR=52.0%  MTM=$11,860,950  DD=$-3,221,141  N= 50  Hold=38.4d
+  bf_6m|zw40|z2.5|MR_44d|NoFilter                     Sharpe= 1.26  WR=70.3%  MTM=$93,126,239  DD=$-26,442,040  N= 37  Hold=35.9d
+  bf_3m+df_3m|zw40|z2.0|MR+S2_22d|FOMC5               Sharpe= 1.24  WR=56.7%  MTM=$65,075,351  DD=$-16,931,776  N= 97  Hold=18.5d
+  bf_3m|zw60|z2.5|Fix_10d|NoFilter                    Sharpe= 1.22  WR=64.0%  MTM=$53,264,960  DD=$-11,774,902  N= 50  Hold=10.4d
+  bf_3m+df_3m|zw120|z2.5|MR_44d|FOMC5+HL              Sharpe= 1.15  WR=59.4%  MTM=$47,339,705  DD=$-16,046,347  N= 32  Hold=42.8d
+  bf_3m+df_3m|zw40|z1.5|MR+S2_22d|FOMC5+PCA           Sharpe= 1.12  WR=51.4%  MTM=$33,523,188  DD=$-13,132,563  N=109  Hold=18.1d
+  bf_3m|zw60|z2.5|MR+S2_22d|NoFilter                  Sharpe= 1.11  WR=56.5%  MTM=$66,662,848  DD=$-18,563,137  N= 46  Hold=18.7d
+  df_3m|zw40|z2.5|MR_44d|FOMC5+PCA                    Sharpe= 1.10  WR=50.0%  MTM=$ 7,629,407  DD=$-1,372,384  N= 60  Hold=33.0d
+  bf_3m+df_3m|zw40|z2.0|MR+S2_22d|FOMC5+HL            Sharpe= 1.10  WR=55.7%  MTM=$53,765,371  DD=$-15,209,305  N= 97  Hold=18.1d
+  df_3m|zw120|z1.0|MR+S2_22d|FOMC5+PCA                Sharpe= 1.07  WR=51.0%  MTM=$ 8,641,284  DD=$-2,213,659  N= 98  Hold=21.9d
+  bf_3m+df_3m|zw120|z2.0|MR_44d|NoFilter              Sharpe= 1.06  WR=56.6%  MTM=$60,291,225  DD=$-20,139,013  N= 53  Hold=35.3d
+  bf_3m+df_3m|zw120|z2.0|MR_44d|FOMC5                 Sharpe= 1.05  WR=54.7%  MTM=$55,815,093  DD=$-17,197,253  N= 53  Hold=37.9d
+  bf_3m|zw60|z2.5|MR_44d|FOMC5+PCA                    Sharpe= 1.04  WR=67.7%  MTM=$48,463,952  DD=$-14,376,963  N= 31  Hold=35.0d
+  bf_6m|zw60|z1.5|MR_44d|FOMC5+PCA                    Sharpe= 1.04  WR=63.0%  MTM=$43,176,070  DD=$-14,962,719  N= 46  Hold=34.9d
+
+TOP 10 BY WIN RATE:
+  bf_6m|zw40|z2.5|MR_44d|NoFilter                     WR=70.3%  Sharpe= 1.26  N= 37
+  bf_3m|zw60|z2.5|MR_44d|FOMC5+PCA                    WR=67.7%  Sharpe= 1.04  N= 31
+  bf_3m|zw120|z1.0|MR_44d|FOMC5+HL                    WR=64.6%  Sharpe= 0.46  N= 48
+  bf_3m|zw60|z2.5|Fix_10d|NoFilter                    WR=64.0%  Sharpe= 1.22  N= 50
+  bf_3m|zw120|z1.0|MR_44d|FOMC5                       WR=64.0%  Sharpe= 0.83  N= 50
+  bf_6m|zw60|z1.5|MR_44d|FOMC5+PCA                    WR=63.0%  Sharpe= 1.04  N= 46
+  bf_6m|zw40|z2.0|Fix_10d|FOMC5+HL                    WR=62.7%  Sharpe= 0.87  N= 75
+  bf_6m|zw40|z2.0|Fix_10d|FOMC5                       WR=62.3%  Sharpe= 0.80  N= 77
+  bf_3m|zw120|z2.5|Fix_10d|FOMC5+PCA                  WR=62.1%  Sharpe=-0.08  N= 29
+  bf_3m|zw120|z1.5|MR+S2_22d|FOMC5+HL                 WR=62.0%  Sharpe= 0.41  N= 71
+
+TOP 10 BY CALMAR:
+  df_3m|zw40|z2.5|MR_44d|FOMC5+PCA                    Calmar= 2.87  Sharpe= 1.10  DD=$-1,372,384
+  bf_3m+df_3m|zw120|z1.5|Fix_10d|FOMC5+PCA            Calmar= 2.51  Sharpe= 1.54  DD=$-10,408,318
+  df_3m|zw40|z1.0|MR+S2_22d|FOMC5+PCA                 Calmar= 2.48  Sharpe= 1.37  DD=$-2,128,992
+  bf_3m|zw60|z2.5|Fix_10d|NoFilter                    Calmar= 2.31  Sharpe= 1.22  DD=$-11,774,902
+  df_3m|zw120|z1.0|MR+S2_22d|FOMC5+PCA                Calmar= 2.02  Sharpe= 1.07  DD=$-2,213,659
+  bf_3m+df_3m|zw120|z2.5|MR_44d|NoFilter              Calmar= 2.00  Sharpe= 1.38  DD=$-16,046,347
+  bf_3m+df_3m|zw40|z2.0|MR+S2_22d|FOMC5               Calmar= 1.99  Sharpe= 1.24  DD=$-16,931,776
+  bf_3m+df_3m|zw120|z1.0|Fix_10d|NoFilter             Calmar= 1.97  Sharpe= 1.40  DD=$-20,316,348
+  df_3m|zw120|z1.5|MR_44d|FOMC5+PCA                   Calmar= 1.94  Sharpe= 1.27  DD=$-3,221,141
+  bf_3m+df_3m|zw120|z2.5|MR_44d|FOMC5                 Calmar= 1.93  Sharpe= 1.37  DD=$-16,046,347
+
+MARGINAL EFFECTS (median Sharpe):
+
+  STRUCTURE:
+    bf_3m+df_3m           median= 0.090  mean= 0.133
+    bf_3m                 median= 0.072  mean= 0.091
+    bf_6m                 median=-0.021  mean=-0.021
+    df_3m                 median=-0.134  mean=-0.103
+
+  ZWINDOW:
+    zw120                 median= 0.048  mean= 0.085
+    zw60                  median= 0.015  mean= 0.031
+    zw20                  median=-0.023  mean=-0.003
+    zw40                  median=-0.032  mean=-0.013
+
+  ZTHRESH:
+    z2.5                  median= 0.117  mean= 0.130
+    z2.0                  median= 0.050  mean= 0.064
+    z1.5                  median=-0.024  mean=-0.019
+    z1.0                  median=-0.141  mean=-0.076
+
+  EXIT:
+    MR_44d                median= 0.067  mean= 0.075
+    Fix_10d               median= 0.018  mean= 0.020
+    MR+S2_22d             median=-0.067  mean=-0.020
+
+  REGIME:
+    FOMC5+PCA             median= 0.214  mean= 0.179
+    NoFilter              median= 0.022  mean= 0.057
+    FOMC5                 median=-0.008  mean=-0.026
+    FOMC5+HL              median=-0.099  mean=-0.111
+
+OVERALL:
+  Positive Sharpe: 50.7%
+  Median Sharpe:   0.007
+  Best Sharpe:     1.545
+  Median WR:       50.0%
+
+BEST CONFIG: bf_3m+df_3m|zw120|z1.5|Fix_10d|FOMC5+PCA
+  Sharpe=1.545  Calmar=2.513  WR=55.7%
+  MTM=$50,645,530  DD=$-10,408,318  N=176
+  Struct PnL: {'bf_3m': 51936379.0, 'df_3m': -1290849.0}
+
+======================================================================
+CURRENT LIVE SIGNALS
+======================================================================
+
+Date: 2026-05-12
+Total signals: 19, passing entry: 7
+
+All signals (|z| desc):
+   df_3m  SFR8/SFR9/SFR10|SFR9/SFR10/SFR11     z= -2.66  lvl=  -8.55bp  dir=  buy_kink  hl=   4.8d *** ENTRY ***
+   bf_3m  SFR4/SFR5/SFR6                       z=  2.49  lvl= -15.80bp  dir= sell_kink  hl=  34.3d *** ENTRY ***
+   df_3m  SFR4/SFR5/SFR6|SFR5/SFR6/SFR7        z=  2.04  lvl=  25.77bp  dir= sell_kink  hl=  40.4d *** ENTRY ***
+   df_3m  SFR6/SFR7/SFR8|SFR7/SFR8/SFR9        z= -2.02  lvl=  17.75bp  dir=  buy_kink  hl=   5.7d *** ENTRY ***
+   df_3m  SFR3/SFR4/SFR5|SFR4/SFR5/SFR6        z= -1.92  lvl= 118.83bp  dir=  buy_kink  hl=  13.1d *** ENTRY ***
+   df_3m  SFR5/SFR6/SFR7|SFR6/SFR7/SFR8        z=  1.84  lvl= -49.93bp  dir= sell_kink  hl=  11.0d *** ENTRY ***
+   bf_3m  SFR8/SFR9/SFR10                      z= -1.69  lvl=   4.30bp  dir=  buy_kink  hl=   8.7d *** ENTRY ***
+   bf_3m  SFR6/SFR7/SFR8                       z= -1.40  lvl=   8.36bp  dir=  buy_kink  hl=  26.1d
+   bf_3m  SFR10/SFR11/SFR12                    z=  1.09  lvl=   3.88bp  dir= sell_kink  hl=   3.7d
+   bf_3m  SFR3/SFR4/SFR5                       z= -0.88  lvl= 103.03bp  dir=  buy_kink  hl=  15.4d
+   bf_3m  SFR5/SFR6/SFR7                       z=  0.68  lvl= -41.57bp  dir= sell_kink  hl=  11.7d
+   bf_3m  SFR1/SFR2/SFR3                       z= -0.65  lvl=  -9.67bp  dir=  buy_kink  hl=   3.2d
+   bf_3m  SFR7/SFR8/SFR9                       z= -0.62  lvl=  -9.40bp  dir=  buy_kink  hl=  14.9d
+   bf_3m  SFR2/SFR3/SFR4                       z= -0.56  lvl= -65.28bp  dir=  buy_kink  hl=  24.9d
+   df_3m  SFR7/SFR8/SFR9|SFR8/SFR9/SFR10       z=  0.44  lvl= -13.70bp  dir= sell_kink  hl=  15.2d
+   df_3m  SFR1/SFR2/SFR3|SFR2/SFR3/SFR4        z=  0.40  lvl=  55.62bp  dir= sell_kink  hl=  16.9d
+   bf_3m  SFR9/SFR10/SFR11                     z=  0.39  lvl=  12.85bp  dir= sell_kink  hl=  17.7d
+   df_3m  SFR2/SFR3/SFR4|SFR3/SFR4/SFR5        z=  0.22  lvl=-168.31bp  dir= sell_kink  hl=  17.9d
+   df_3m  SFR9/SFR10/SFR11|SFR10/SFR11/SFR12   z= -0.06  lvl=   8.97bp  dir=  buy_kink  hl=   6.7d
+
+RAW STRIP (latest):
+  ['SFR1', 'SFR2', 'SFR3', 'SFR4', 'SFR5', 'SFR6', 'SFR7', 'SFR8', 'SFR9', 'SFR10', 'SFR11', 'SFR12']
+  [3.745, 3.76, 3.78, 3.655, 3.71, 3.8, 3.875, 3.885, 3.845, 3.78, 3.745, 3.735]
+
+======================================================================
+DONE
+======================================================================

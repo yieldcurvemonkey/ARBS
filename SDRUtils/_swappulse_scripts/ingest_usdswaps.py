@@ -12,11 +12,13 @@ import json
 import math
 import os
 import time
+import warnings
 from datetime import timedelta
 from typing import Any, Dict, Iterable, Optional
 
 import numpy as np
 import pandas as pd
+import sqlalchemy.exc
 from sqlalchemy import create_engine, text
 from sqlalchemy.engine import Engine
 from tqdm import tqdm
@@ -1097,19 +1099,25 @@ def get_ingestion_cursor_timestamp(engine: Engine) -> Optional[pd.Timestamp]:
 
 def cleanup_orphaned_packages(engine: Engine) -> int:
     """Delete packages that have no legs (orphaned by reclassification)."""
-    with engine.begin() as conn:
-        result = conn.execute(
-            text(
-                f"""
-                DELETE FROM {PACKAGES_TABLE} p
-                WHERE NOT EXISTS (
-                    SELECT 1 FROM {LEGS_TABLE} l
-                    WHERE l.package_id = p.package_id
+    try:
+        with engine.begin() as conn:
+            result = conn.execute(
+                text(
+                    f"""
+                    DELETE FROM {PACKAGES_TABLE} p
+                    WHERE NOT EXISTS (
+                        SELECT 1 FROM {LEGS_TABLE} l
+                        WHERE l.package_id = p.package_id
+                    )
+                """
                 )
-            """
             )
+        return result.rowcount
+    except sqlalchemy.exc.IntegrityError:
+        warnings.warn(
+            "cleanup_orphaned_packages skipped: concurrent writes caused FK conflict; will retry next cycle"
         )
-    return result.rowcount
+        return 0
 
 
 def upsert_transformed_frames(df: pd.DataFrame, engine: Engine) -> tuple[pd.DataFrame, pd.DataFrame, int, int]:
