@@ -313,6 +313,7 @@ export function VolumeGridCard({ onSelectPackage }: VolumeGridCardProps): JSX.El
               period={period}
               viewMode={viewMode}
               colorMode={colorMode}
+              packageType={packageType}
               onCellClick={onCellClick}
               onCellHover={cellPrefetch.onCellHover}
               onCellLeave={cellPrefetch.onCellLeave}

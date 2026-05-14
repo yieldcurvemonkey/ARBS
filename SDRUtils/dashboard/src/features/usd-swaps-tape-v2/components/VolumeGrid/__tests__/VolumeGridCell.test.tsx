@@ -15,6 +15,10 @@ const baseCell: Cell = {
   tradeCount: 12,
   baseline: { p25: 0, p50: 5e8, p75: 1e9, min: 0, max: 2e9, n: 90 },
   percentile: 88,
+  outrightCurrent: 600_000_000,
+  curveCurrent: 400_000_000,
+  flyCurrent: 200_000_000,
+  otherCurrent: 0,
 }
 
 const fwdAxis: VolumeGridSchemaAxis = {
@@ -130,5 +134,54 @@ describe('<VolumeGridCell>', () => {
       />,
     )
     expect(html).toMatch(/—/)
+  })
+})
+
+describe('VolumeGridCell — pkg family stacked bar', () => {
+  it('renders stacked bar when packageType=all and tradeCount > 0', () => {
+    const html = renderToStaticMarkup(
+      <VolumeGridCell
+        cell={baseCell}
+        metric="dv01" period="1w" viewMode="volume" packageType="all"
+        onClick={() => {}}
+      />,
+    )
+    expect(html).toContain('data-testid="pkg-family-bar"')
+  })
+
+  it('does not render stacked bar when packageType is not all', () => {
+    const html = renderToStaticMarkup(
+      <VolumeGridCell
+        cell={baseCell}
+        metric="dv01" period="1w" viewMode="volume" packageType="outright"
+        onClick={() => {}}
+      />,
+    )
+    expect(html).not.toContain('data-testid="pkg-family-bar"')
+  })
+
+  it('does not render stacked bar when tradeCount is 0', () => {
+    const html = renderToStaticMarkup(
+      <VolumeGridCell
+        cell={{ ...baseCell, tradeCount: 0 }}
+        metric="dv01" period="1w" viewMode="volume" packageType="all"
+        onClick={() => {}}
+      />,
+    )
+    expect(html).not.toContain('data-testid="pkg-family-bar"')
+  })
+
+  it('renders correct number of non-zero segments', () => {
+    const html = renderToStaticMarkup(
+      <VolumeGridCell
+        cell={{ ...baseCell, current: 100, outrightCurrent: 50, curveCurrent: 30, flyCurrent: 20, otherCurrent: 0 }}
+        metric="dv01" period="1w" viewMode="volume" packageType="all"
+        onClick={() => {}}
+      />,
+    )
+    expect(html).toContain('bg-slate-400')
+    expect(html).toContain('bg-amber-400')
+    expect(html).toContain('bg-emerald-400')
+    expect(html).not.toContain('bg-purple-400')
   })
 })
