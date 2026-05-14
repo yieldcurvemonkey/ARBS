@@ -46,7 +46,7 @@ const fixture: VolumeGridResponse = {
         { id: '12y_15y', label: '12Y-15Y' },
         { id: '15y_20y', label: '15Y-20Y' },
         { id: '20y_25y', label: '20Y-25Y' },
-        { id: '30y_plus', label: '30Y+' },
+        { id: '30y_plus', label: '25Y-30Y+' },
       ],
     },
   },
@@ -88,7 +88,7 @@ describe('<VolumeGrid>', () => {
       <VolumeGrid data={fixture} metric="notional" period="today" viewMode="volume" colorMode="activity" onCellClick={() => {}} />,
     )
     expect(html).toMatch(/>1M-3M</)
-    expect(html).toMatch(/>30Y\+</)
+    expect(html).toMatch(/>25Y-30Y\+</)
   })
 
   it('can color buckets by cross-sectional grid intensity', () => {

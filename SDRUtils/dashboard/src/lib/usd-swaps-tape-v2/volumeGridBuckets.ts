@@ -89,7 +89,7 @@ const TENOR_DEFAULT: ReadonlyArray<BucketDef> = [
   { id: '12y_15y',  lo: 12.5,   hi: 15.5,   label: '12Y-15Y' },
   { id: '15y_20y',  lo: 15.5,   hi: 19.5,   label: '15Y-20Y' },
   { id: '20y_25y',  lo: 19.5,   hi: 25.5,   label: '20Y-25Y' },
-  { id: '30y_plus', lo: 25.5,   hi: null,   label: '30Y+' },
+  { id: '30y_plus', lo: 25.5,   hi: null,   label: '25Y-30Y+' },
 ] as const
 
 // Legacy tenor schema — original JPM-mirror tenor set.

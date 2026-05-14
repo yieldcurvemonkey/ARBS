@@ -118,7 +118,7 @@ describe('resolveTenorSchema', () => {
     const out = resolveTenorSchema('default')
     expect(out.buckets.map((b) => b.label)).toEqual([
       '1M-3M', '6M-12M', '1Y-18M', '18M-2Y', '2Y', '3Y', '4Y', '5Y',
-      '6Y-7Y', '8Y-9Y', '10Y', '10Y-12Y', '12Y-15Y', '15Y-20Y', '20Y-25Y', '30Y+',
+      '6Y-7Y', '8Y-9Y', '10Y', '10Y-12Y', '12Y-15Y', '15Y-20Y', '20Y-25Y', '25Y-30Y+',
     ])
   })
 })
