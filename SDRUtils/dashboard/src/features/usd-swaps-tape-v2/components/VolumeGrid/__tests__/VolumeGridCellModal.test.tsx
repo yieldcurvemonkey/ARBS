@@ -56,3 +56,34 @@ describe('VolumeGridCellModal intraday seasonality', () => {
     expect(modalSource).toMatch(/dataKey="average"/)
   })
 })
+
+describe('VolumeGridCellModal — leg-annotated recent trades (source contract)', () => {
+  const src = readFileSync(
+    resolve(
+      process.cwd(),
+      'src/features/usd-swaps-tape-v2/components/VolumeGrid/VolumeGridCellModal.tsx',
+    ),
+    'utf8',
+  )
+
+  it('renders expand chevron for multi-leg trades', () => {
+    expect(src).toContain('data-testid="leg-expand"')
+  })
+
+  it('renders leg sub-rows with inCell badge', () => {
+    expect(src).toContain('data-testid="leg-row"')
+    expect(src).toContain('inCell')
+  })
+
+  it('renders cell contribution column', () => {
+    expect(src).toContain('data-testid="cell-contribution"')
+  })
+
+  it('renders package type badge', () => {
+    expect(src).toContain('data-testid="pkg-type-badge"')
+  })
+
+  it('shows "all package types" subtitle when packageType is all', () => {
+    expect(src).toContain('Includes all package types')
+  })
+})

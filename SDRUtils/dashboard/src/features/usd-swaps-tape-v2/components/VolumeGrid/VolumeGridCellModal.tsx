@@ -3,8 +3,8 @@
 // for the clicked grid cell. Row click closes modal and routes the
 // package_id to onSelectPackage (which writes a URL filter).
 
+import { Fragment, useState } from 'react'
 import type { JSX, ReactNode } from 'react'
-import { useState } from 'react'
 import { Dialog } from 'primereact/dialog'
 import {
   Bar, BarChart, CartesianGrid, Line, LineChart, ReferenceLine, ResponsiveContainer,
@@ -42,6 +42,20 @@ const fmtTime = (ts: string): string =>
     hour: '2-digit', minute: '2-digit',
   })
 
+const PKG_BADGE_COLORS: Record<string, string> = {
+  OUTRIGHT: 'bg-slate-500/20 text-slate-300 ring-slate-500/30',
+  SPREADOVER: 'bg-slate-500/20 text-slate-300 ring-slate-500/30',
+  MATCHED_MATURITY: 'bg-slate-500/20 text-slate-300 ring-slate-500/30',
+  CURVE: 'bg-amber-500/20 text-amber-300 ring-amber-500/30',
+  SPREADOVER_CURVE: 'bg-amber-500/20 text-amber-300 ring-amber-500/30',
+  MATCHED_MATURITY_CURVE: 'bg-amber-500/20 text-amber-300 ring-amber-500/30',
+  FLY: 'bg-emerald-500/20 text-emerald-300 ring-emerald-500/30',
+  SPREADOVER_FLY: 'bg-emerald-500/20 text-emerald-300 ring-emerald-500/30',
+  MATCHED_MATURITY_FLY: 'bg-emerald-500/20 text-emerald-300 ring-emerald-500/30',
+}
+const pkgBadgeClass = (pt: string | null): string =>
+  PKG_BADGE_COLORS[pt ?? ''] ?? 'bg-purple-500/20 text-purple-300 ring-purple-500/30'
+
 const fmtMinuteOfDay = (minuteOfDay: number): string => {
   if (!Number.isFinite(minuteOfDay)) return '--:--'
   const clamped = Math.max(0, Math.min(1440, Math.floor(minuteOfDay)))
@@ -72,6 +86,16 @@ export function VolumeGridCellModal(props: VolumeGridCellModalProps): JSX.Elemen
   const onRangeChange = (r: VolumeCellRange) => {
     setRange(r)
     if (typeof window !== 'undefined') window.localStorage.setItem(KEY_RANGE, r)
+  }
+
+  const [expandedPkgs, setExpandedPkgs] = useState<Set<string>>(new Set())
+  const toggleExpand = (pkgId: string) => {
+    setExpandedPkgs((prev) => {
+      const next = new Set(prev)
+      if (next.has(pkgId)) next.delete(pkgId)
+      else next.add(pkgId)
+      return next
+    })
   }
 
   const { data, error, isLoading } = useVolumeGridCell({
@@ -109,6 +133,11 @@ export function VolumeGridCellModal(props: VolumeGridCellModalProps): JSX.Elemen
             </span>
           )}
         </div>
+        {props.packageType === 'all' && (
+          <div className="font-mono text-[9.5px] text-slate-500">
+            Includes all package types (outright, curve, fly, etc.)
+          </div>
+        )}
         <div className="grid min-h-[230px] gap-3 lg:grid-cols-2">
           <div data-testid="volume-grid-cell-chart" className="h-[230px]">
             {data?.timeseries.length ? (
@@ -153,32 +182,78 @@ export function VolumeGridCellModal(props: VolumeGridCellModalProps): JSX.Elemen
           <table className="w-full text-left font-mono text-[11px]">
             <thead className="sticky top-0 bg-slate-900/80 text-[9.5px] uppercase tracking-wider text-slate-500">
               <tr>
-                <Th>Time</Th><Th>Type</Th><Th>Tape</Th><Th>Rate</Th>
-                <Th>Risk</Th><Th>Notional</Th><Th>Venue</Th><Th>Block?</Th>
+                <Th> </Th><Th>Time</Th><Th>Type</Th><Th>Tape</Th><Th>Rate</Th>
+                <Th>Risk</Th><Th>Notional</Th><Th data-testid="cell-contribution">Cell</Th><Th>Venue</Th><Th>Block?</Th>
               </tr>
             </thead>
             <tbody>
-              {data?.recentTrades.length ? data.recentTrades.map((t) => (
-                <tr
-                  key={t.package_id}
-                  className="cursor-pointer border-t border-slate-800/60 hover:bg-indigo-500/10"
-                  onClick={() => {
-                    props.onSelectPackage(t.package_id)
-                    props.onClose()
-                  }}
-                >
-                  <Td>{fmtTime(t.execution_start)}</Td>
-                  <Td>{t.package_type ?? '-'}</Td>
-                  <Td>{t.tape_label ?? '-'}</Td>
-                  <Td>{fmtRate(t.weighted_fixed_rate)}</Td>
-                  <Td>{t.total_risk == null ? '-' : fmtCompact(t.total_risk, 'dv01')}</Td>
-                  <Td>{t.total_notional == null ? '-' : fmtCompact(t.total_notional, 'notional')}</Td>
-                  <Td>{t.venue ?? '-'}</Td>
-                  <Td>{t.is_block_any ? 'BLOCK' : ''}</Td>
-                  <Td className="hidden">{t.package_id}</Td>
-                </tr>
-              )) : (
-                <tr><td className="p-2 text-slate-500" colSpan={8}>No recent trades for this bucket.</td></tr>
+              {data?.recentTrades.length ? data.recentTrades.map((t) => {
+                const legs = t.legs ?? []
+                const isMultiLeg = legs.length > 1
+                const isExpanded = expandedPkgs.has(t.package_id)
+                const inCellRisk = legs.filter((l) => l.inCell).reduce((s, l) => s + l.risk, 0)
+                const inCellNotional = legs.filter((l) => l.inCell).reduce((s, l) => s + l.notional, 0)
+                return (
+                  <Fragment key={t.package_id}>
+                    <tr
+                      className="cursor-pointer border-t border-slate-800/60 hover:bg-indigo-500/10"
+                      onClick={() => {
+                        props.onSelectPackage(t.package_id)
+                        props.onClose()
+                      }}
+                    >
+                      <Td>
+                        {isMultiLeg && (
+                          <button
+                            type="button"
+                            data-testid="leg-expand"
+                            className="text-slate-500 hover:text-slate-300"
+                            onClick={(e) => { e.stopPropagation(); toggleExpand(t.package_id) }}
+                          >
+                            {isExpanded ? '▾' : '▸'}
+                          </button>
+                        )}
+                      </Td>
+                      <Td>{fmtTime(t.execution_start)}</Td>
+                      <Td>
+                        <span data-testid="pkg-type-badge" className={`rounded px-1 py-0.5 text-[9.5px] ring-1 ${pkgBadgeClass(t.package_type)}`}>
+                          {t.package_type ?? '-'}
+                        </span>
+                      </Td>
+                      <Td>{t.tape_label ?? '-'}</Td>
+                      <Td>{fmtRate(t.weighted_fixed_rate)}</Td>
+                      <Td>{t.total_risk == null ? '-' : fmtCompact(t.total_risk, 'dv01')}</Td>
+                      <Td>{t.total_notional == null ? '-' : fmtCompact(t.total_notional, 'notional')}</Td>
+                      <Td>
+                        {legs.length > 0
+                          ? `${fmtCompact(props.metric === 'dv01' ? inCellRisk : inCellNotional, props.metric)} / ${fmtCompact(props.metric === 'dv01' ? (t.total_risk ?? 0) : (t.total_notional ?? 0), props.metric)}`
+                          : '-'}
+                      </Td>
+                      <Td>{t.venue ?? '-'}</Td>
+                      <Td>{t.is_block_any ? 'BLOCK' : ''}</Td>
+                    </tr>
+                    {isMultiLeg && isExpanded && legs.map((leg, i) => (
+                      <tr key={`leg-${i}`} data-testid="leg-row" className="border-t border-slate-800/30 bg-slate-900/40 text-[10px] text-slate-400">
+                        <Td> </Td>
+                        <Td> </Td>
+                        <Td> </Td>
+                        <Td>{`${leg.tenorYears}Y fwd ${leg.forwardStartYears.toFixed(2)}y`}</Td>
+                        <Td> </Td>
+                        <Td>{fmtCompact(leg.risk, 'dv01')}</Td>
+                        <Td>{fmtCompact(leg.notional, 'notional')}</Td>
+                        <Td>
+                          <span className={leg.inCell ? 'text-emerald-400' : 'text-slate-600'}>
+                            {leg.inCell ? '●' : '○'}
+                          </span>
+                        </Td>
+                        <Td> </Td>
+                        <Td> </Td>
+                      </tr>
+                    ))}
+                  </Fragment>
+                )
+              }) : (
+                <tr><td className="p-2 text-slate-500" colSpan={10}>No recent trades for this bucket.</td></tr>
               )}
             </tbody>
           </table>
@@ -293,8 +368,8 @@ function median(values: number[]): number {
   return s.length % 2 ? s[mid] : (s[mid - 1] + s[mid]) / 2
 }
 
-function Th({ children }: { children: ReactNode }): JSX.Element {
-  return <th className="px-2 py-1.5">{children}</th>
+function Th({ children, ...rest }: { children: ReactNode } & Record<string, unknown>): JSX.Element {
+  return <th className="px-2 py-1.5" {...rest}>{children}</th>
 }
 function Td({ children, className }: { children: ReactNode; className?: string }): JSX.Element {
   return <td className={`px-2 py-1.5 ${className ?? ''}`}>{children}</td>
