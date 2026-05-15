@@ -693,12 +693,12 @@ describe('buildColumnFilterClause execution_start range bound', () => {
     expect(params).toEqual([])
   })
 
-  it('takes the FIRST parseable execution_start constraint when multiple are present', () => {
+  it('contiguous dates emit a single range from first to last+1day', () => {
     const params: unknown[] = []
     const clause = buildColumnFilterClause(
       {
         execution_start: {
-          operator: 'and',
+          operator: 'or',
           constraints: [
             { value: 'NEWFLOW', matchMode: 'contains' },
             { value: '04/21', matchMode: 'contains' },
@@ -710,6 +710,48 @@ describe('buildColumnFilterClause execution_start range bound', () => {
       { now: new Date('2026-04-28T15:00:00Z') },
     )
     expect(clause).toMatch(/d\.execution_start >= \(\$1::timestamp/)
+    expect(clause).toMatch(/d\.execution_start <  \(\$2::timestamp/)
+    expect(params).toEqual(['2026-04-21', '2026-04-22'])
+  })
+
+  it('non-contiguous dates emit OR of individual day ranges', () => {
+    const params: unknown[] = []
+    const clause = buildColumnFilterClause(
+      {
+        execution_start: {
+          operator: 'or',
+          constraints: [
+            { value: '04/21', matchMode: 'contains' },
+            { value: '04/25', matchMode: 'contains' },
+          ],
+        },
+      },
+      params,
+      { now: new Date('2026-04-28T15:00:00Z') },
+    )
+    expect(clause).toMatch(/\(d\.execution_start >= \(\$1::timestamp/)
+    expect(clause).toMatch(/ OR /)
+    expect(clause).toMatch(/\$2::timestamp/)
+    expect(params).toEqual(['2026-04-21', '2026-04-25'])
+  })
+
+  it('duplicate dates are deduped to a single day range', () => {
+    const params: unknown[] = []
+    const clause = buildColumnFilterClause(
+      {
+        execution_start: {
+          operator: 'or',
+          constraints: [
+            { value: '04/21', matchMode: 'contains' },
+            { value: '04/21/2026', matchMode: 'contains' },
+          ],
+        },
+      },
+      params,
+      { now: new Date('2026-04-28T15:00:00Z') },
+    )
+    expect(clause).toMatch(/d\.execution_start >= \(\$1::timestamp/)
+    expect(clause).toMatch(/d\.execution_start <  \(\$1::timestamp/)
     expect(params).toEqual(['2026-04-21'])
   })
 })

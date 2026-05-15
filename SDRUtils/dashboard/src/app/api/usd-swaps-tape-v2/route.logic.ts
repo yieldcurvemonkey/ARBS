@@ -436,6 +436,15 @@ export function parseDatePattern(
   return null
 }
 
+function areDatesContiguous(sortedDates: string[]): boolean {
+  for (let i = 1; i < sortedDates.length; i++) {
+    const prev = new Date(sortedDates[i - 1] + 'T00:00:00Z')
+    const curr = new Date(sortedDates[i] + 'T00:00:00Z')
+    if (curr.getTime() - prev.getTime() !== 86_400_000) return false
+  }
+  return true
+}
+
 export function buildColumnFilterClause(
   columnFilters: Record<string, any>,
   params: unknown[],
@@ -444,7 +453,7 @@ export function buildColumnFilterClause(
   if (!columnFilters || typeof columnFilters !== 'object') return null
   const fieldClauses: string[] = []
   let hasAllowlistedClause = false
-  let parsedDateBound: string | null = null
+  const parsedDateBounds: string[] = []
 
   for (const [field, meta] of Object.entries(columnFilters)) {
     if (!meta || typeof meta !== 'object') continue
@@ -455,16 +464,11 @@ export function buildColumnFilterClause(
         : []
     if (constraints.length === 0) continue
 
-    // Special-case execution_start: don't emit a substring clause; instead
-    // capture the first parseable date pattern as the as_of_date bound.
-    // The trader's intent (filter is active) trips the today fallback even
-    // if their text didn't parse to a date.
     if (field === 'execution_start') {
       for (const c of constraints) {
         const parsed = parseDatePattern(c?.value, options.now)
         if (parsed !== null) {
-          parsedDateBound = parsed
-          break
+          parsedDateBounds.push(parsed)
         }
       }
       hasAllowlistedClause = true
@@ -480,16 +484,17 @@ export function buildColumnFilterClause(
     fieldClauses.push(`(${built.join(op)})`)
   }
 
-  // Time bound — emitted whenever any allowlisted clause is active. Snaps
-  // historical lookups to a single NYC trading day instead of the cursor
-  // scan dragging every day backward. Bounded on execution_start so the
-  // existing idx_tape_v2_packages_exec_start (execution_start DESC NULLS
-  // LAST) index can drive the range scan. (The packages table also has an
-  // as_of_date column, but it represents the SDR ingest batch date, not
-  // the trade's NYC trading day.)
   if (hasAllowlistedClause) {
-    if (parsedDateBound !== null) {
-      params.push(parsedDateBound)
+    const uniqueDates = [...new Set(parsedDateBounds)].sort()
+    if (uniqueDates.length === 0) {
+      fieldClauses.push(
+        `d.execution_start >= date_trunc('day', now() AT TIME ZONE 'America/New_York') AT TIME ZONE 'America/New_York'`,
+      )
+      fieldClauses.push(
+        `d.execution_start <  date_trunc('day', now() AT TIME ZONE 'America/New_York') AT TIME ZONE 'America/New_York' + INTERVAL '1 day'`,
+      )
+    } else if (uniqueDates.length === 1) {
+      params.push(uniqueDates[0])
       const p = `$${params.length}`
       fieldClauses.push(
         `d.execution_start >= (${p}::timestamp AT TIME ZONE 'America/New_York')`,
@@ -497,13 +502,24 @@ export function buildColumnFilterClause(
       fieldClauses.push(
         `d.execution_start <  (${p}::timestamp AT TIME ZONE 'America/New_York') + INTERVAL '1 day'`,
       )
+    } else if (areDatesContiguous(uniqueDates)) {
+      params.push(uniqueDates[0])
+      const pMin = `$${params.length}`
+      params.push(uniqueDates[uniqueDates.length - 1])
+      const pMax = `$${params.length}`
+      fieldClauses.push(
+        `d.execution_start >= (${pMin}::timestamp AT TIME ZONE 'America/New_York')`,
+      )
+      fieldClauses.push(
+        `d.execution_start <  (${pMax}::timestamp AT TIME ZONE 'America/New_York') + INTERVAL '1 day'`,
+      )
     } else {
-      fieldClauses.push(
-        `d.execution_start >= date_trunc('day', now() AT TIME ZONE 'America/New_York') AT TIME ZONE 'America/New_York'`,
-      )
-      fieldClauses.push(
-        `d.execution_start <  date_trunc('day', now() AT TIME ZONE 'America/New_York') AT TIME ZONE 'America/New_York' + INTERVAL '1 day'`,
-      )
+      const dayRanges = uniqueDates.map((date) => {
+        params.push(date)
+        const p = `$${params.length}`
+        return `(d.execution_start >= (${p}::timestamp AT TIME ZONE 'America/New_York') AND d.execution_start < (${p}::timestamp AT TIME ZONE 'America/New_York') + INTERVAL '1 day')`
+      })
+      fieldClauses.push(`(${dayRanges.join(' OR ')})`)
     }
   }
 
