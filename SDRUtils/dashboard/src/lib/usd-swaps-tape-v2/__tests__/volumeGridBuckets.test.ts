@@ -4,6 +4,7 @@ import {
   buildBucketPredicate,
   buildFomcBucketsFromLabels,
   buildPackageTypeFilter,
+  buildPkgFamilySql,
   buildVenueBucketsFromIdentifiers,
   computeImmDates,
   PACKAGE_TYPE_GROUPS,
@@ -117,7 +118,7 @@ describe('resolveTenorSchema', () => {
     const out = resolveTenorSchema('default')
     expect(out.buckets.map((b) => b.label)).toEqual([
       '1M-3M', '6M-12M', '1Y-18M', '18M-2Y', '2Y', '3Y', '4Y', '5Y',
-      '6Y-7Y', '8Y-9Y', '10Y', '10Y-12Y', '12Y-15Y', '15Y-20Y', '20Y-25Y', '30Y+',
+      '6Y-7Y', '8Y-9Y', '10Y', '10Y-12Y', '12Y-15Y', '15Y-20Y', '20Y-25Y', '25Y-30Y+',
     ])
   })
 })
@@ -250,5 +251,30 @@ describe('buildPackageTypeFilter', () => {
     const out = buildPackageTypeFilter('outright', 'p', 4)
     expect(out.sql).toBe('p.package_type IN ($4)')
     expect(out.params).toEqual(['OUTRIGHT'])
+  })
+})
+
+describe('buildPackageTypeFilter regression', () => {
+  it('returns TRUE with no params for the all group', () => {
+    const result = buildPackageTypeFilter('all', 'p', 1)
+    expect(result.sql).toBe('TRUE')
+    expect(result.params).toEqual([])
+  })
+})
+
+describe('buildPkgFamilySql', () => {
+  it('returns a CASE expression using the given alias', () => {
+    const sql = buildPkgFamilySql('p')
+    expect(sql).toContain("p.package_type IN ('OUTRIGHT','SPREADOVER','MATCHED_MATURITY')")
+    expect(sql).toContain("THEN 'outright'")
+    expect(sql).toContain("THEN 'curve'")
+    expect(sql).toContain("THEN 'fly'")
+    expect(sql).toContain("ELSE 'other'")
+  })
+
+  it('uses the provided alias for column references', () => {
+    const sql = buildPkgFamilySql('pkg')
+    expect(sql).toContain('pkg.package_type')
+    expect(sql).not.toContain('p.package_type')
   })
 })

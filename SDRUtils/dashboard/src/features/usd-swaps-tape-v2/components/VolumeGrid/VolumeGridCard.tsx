@@ -36,10 +36,10 @@ const KEY_PACKAGE_TYPE = 'usd-tape-v2:volume-grid:package-type'
 const KEY_VIEW_MODE = 'usd-tape-v2:volume-grid:view-mode'
 const KEY_COLOR_MODE = 'usd-tape-v2:volume-grid:color-mode'
 const KEY_DEFAULTS_VERSION = 'usd-tape-v2:volume-grid:defaults-version'
-const DEFAULTS_VERSION = 'open-dv01-1w-v1'
+const DEFAULTS_VERSION = 'all-today-1m-v2'
 const DEFAULT_COLLAPSED = false
 const DEFAULT_METRIC: VolumeMetric = 'dv01'
-const DEFAULT_PERIOD: VolumePeriod = '1w'
+const DEFAULT_PERIOD: VolumePeriod = 'today'
 
 // Lookback (baseline-history length) controls how many prior days /
 // rolling windows the percentile rank is drawn from. Decoupled from
@@ -70,7 +70,7 @@ const LOOKBACK_LABELS: Record<LookbackId, string> = {
   '1y': '1y',
   '2y': '2y',
 }
-const DEFAULT_LOOKBACK: LookbackId = '3m'
+const DEFAULT_LOOKBACK: LookbackId = '1m'
 
 const VIEW_MODE_IDS: ReadonlyArray<VolumeGridViewMode> = ['volume', 'idb_custy']
 const VIEW_MODE_LABELS: Record<VolumeGridViewMode, string> = {
@@ -121,7 +121,7 @@ export function VolumeGridCard({ onSelectPackage }: VolumeGridCardProps): JSX.El
   const [lookback, setLookback] = useState<LookbackId>(DEFAULT_LOOKBACK)
   const [forwardSchema, setForwardSchema] = useState<ForwardSchemaId>('default')
   const [tenorSchema, setTenorSchema] = useState<TenorSchemaId>('default')
-  const [packageType, setPackageType] = useState<PackageTypeGroupId>('outright')
+  const [packageType, setPackageType] = useState<PackageTypeGroupId>('all')
   const [viewMode, setViewMode] = useState<VolumeGridViewMode>('volume')
   const [colorMode, setColorMode] = useState<VolumeGridColorMode>('activity')
   const [selectedCell, setSelectedCell] = useState<{ fwd: string; tenor: string } | null>(null)
@@ -141,11 +141,11 @@ export function VolumeGridCard({ onSelectPackage }: VolumeGridCardProps): JSX.El
       setCollapsed(readBool(KEY_COLLAPSED, DEFAULT_COLLAPSED))
       setMetric(readEnum<VolumeMetric>(KEY_METRIC, ['notional', 'dv01'], DEFAULT_METRIC))
       setPeriod(readEnum<VolumePeriod>(KEY_PERIOD, ['today', '1h', '24h', '1w', '2w', '3w', '1m', '3m'], DEFAULT_PERIOD))
+      setLookback(readEnum<LookbackId>(KEY_LOOKBACK, LOOKBACK_IDS, DEFAULT_LOOKBACK))
+      setPackageType(readEnum<PackageTypeGroupId>(KEY_PACKAGE_TYPE, PACKAGE_TYPE_GROUP_IDS, 'all'))
     }
-    setLookback(readEnum<LookbackId>(KEY_LOOKBACK, LOOKBACK_IDS, DEFAULT_LOOKBACK))
     setForwardSchema(readEnum<ForwardSchemaId>(KEY_FWD_SCHEMA, FORWARD_SCHEMA_IDS, 'default'))
     setTenorSchema(readEnum<TenorSchemaId>(KEY_TENOR_SCHEMA, TENOR_SCHEMA_IDS, 'default'))
-    setPackageType(readEnum<PackageTypeGroupId>(KEY_PACKAGE_TYPE, PACKAGE_TYPE_GROUP_IDS, 'outright'))
     setViewMode(readEnum<VolumeGridViewMode>(KEY_VIEW_MODE, VIEW_MODE_IDS, 'volume'))
     setColorMode(readEnum<VolumeGridColorMode>(KEY_COLOR_MODE, COLOR_MODE_IDS, 'activity'))
   }, [hydrated])
@@ -313,6 +313,7 @@ export function VolumeGridCard({ onSelectPackage }: VolumeGridCardProps): JSX.El
               period={period}
               viewMode={viewMode}
               colorMode={colorMode}
+              packageType={packageType}
               onCellClick={onCellClick}
               onCellHover={cellPrefetch.onCellHover}
               onCellLeave={cellPrefetch.onCellLeave}

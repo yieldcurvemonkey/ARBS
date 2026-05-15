@@ -51,6 +51,7 @@ async function produceVolumeGridCell(request: Request): Promise<{ status: number
   const tenorSchema = resolveTenorSchema(p.tenorSchema)
   const rangeStart = rangeToStartDate(p.range, now)
   const predicate = buildBucketPredicate('l', forwardSchema, tenorSchema, p.fwd, p.tenor, 2)
+  const inCellPredicate = buildBucketPredicate('l2', forwardSchema, tenorSchema, p.fwd, p.tenor, 2)
   const pkgFilter = buildPackageTypeFilter(
     p.packageType, 'p', 2 + predicate.params.length,
   )
@@ -69,6 +70,7 @@ async function produceVolumeGridCell(request: Request): Promise<{ status: number
     packageFilterSql: pkgFilter.sql,
     schemaExtraFilterSql: combinedExtra || undefined,
     limitParam: `$${limitParamIndex}`,
+    inCellPredicateSql: inCellPredicate.sql,
   })
   const intradayPredicate = buildBucketPredicate(
     'l',
@@ -132,6 +134,15 @@ async function produceVolumeGridCell(request: Request): Promise<{ status: number
       total_notional: r.total_notional == null ? null : num(r.total_notional),
       venue: (r.venue as string | null) ?? null,
       is_block_any: (r.is_block_any as boolean | null) ?? null,
+      legs: Array.isArray(r.legs)
+        ? (r.legs as Array<Record<string, unknown>>).map((leg) => ({
+            tenorYears: num(leg.tenor_years),
+            forwardStartYears: num(leg.forward_start_years),
+            notional: num(leg.notional),
+            risk: num(leg.risk),
+            inCell: leg.in_cell === true,
+          }))
+        : null,
     }))
     const payload: VolumeGridCellResponse = {
       fwd: p.fwd,
