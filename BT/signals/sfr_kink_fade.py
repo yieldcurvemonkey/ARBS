@@ -1214,7 +1214,9 @@ def run_backtest(
     if len(mtm) == 0:
         return {"sharpe": 0, "final_mtm": 0, "max_dd": 0, "n_trades": 0,
                 "win_rate": 0, "calmar": 0, "avg_pnl": 0, "hit_rate": 0,
-                "n_closed": 0, "config": config_dict}
+                "n_closed": 0, "daily_pnl": [],
+                "sr_per_period": 0.0, "T_obs": 0, "skew": 0.0, "kurt": 3.0,
+                "config": config_dict}
 
     daily_pnl = mtm.diff().dropna()
     std_d = daily_pnl.std()
@@ -1240,6 +1242,10 @@ def run_backtest(
         st = (cp.get('position_meta') or {}).get('structure_type', 'unknown')
         struct_pnl.setdefault(st, []).append(cp.get('realized_pnl', 0))
 
+    # Per-period stats for downstream Deflated Sharpe gating.
+    from BT.signals.deflated_sharpe import sharpe_stats
+    sr_stats = sharpe_stats(daily_pnl.values)
+
     return {
         "sharpe": round(sharpe, 3),
         "final_mtm": round(float(mtm.iloc[-1]), 0),
@@ -1252,5 +1258,11 @@ def run_backtest(
         "avg_pnl": round(avg_pnl, 0),
         "avg_hold_days": round(avg_hold, 1),
         "struct_pnl": {k: round(sum(v), 0) for k, v in struct_pnl.items()},
+        # Per-period series + moments needed by deflated_sharpe.apply_dsr_gate.
+        "daily_pnl": daily_pnl.values.tolist(),
+        "sr_per_period": sr_stats["sr"],
+        "T_obs": sr_stats["T"],
+        "skew": sr_stats["skew"],
+        "kurt": sr_stats["kurt"],
         "config": config_dict,
     }
