@@ -395,4 +395,209 @@ describe('shapeVolumeGridResponse', () => {
     expect(out.cells[0].flyCurrent).toBe(25)
     expect(out.cells[0].otherCurrent).toBe(0)
   })
+
+  it('produces single-bucket tenor axis when collapseAxis=tenor', () => {
+    const fwd = resolveForwardSchema('default')
+    const tenor = resolveTenorSchema('default')
+    const out = shapeVolumeGridResponse(
+      [
+        {
+          fwd: 'spot', tenor: '_all_',
+          current_value: 100, idb_current: 40, custy_current: 60,
+          outright_current: 100, curve_current: 0, fly_current: 0, other_current: 0,
+          trade_count: 5, prior_array: [], p25: 0, p50: 0, p75: 0, pmin: 0, pmax: 0, n: 0,
+          as_of_ts: null,
+        },
+      ],
+      {
+        metric: 'notional', period: 'today', lookbackDays: 90,
+        forwardSchema: 'default', tenorSchema: 'default', packageType: 'outright',
+        viewMode: 'volume', collapseAxis: 'tenor',
+      },
+      fwd,
+      tenor,
+    )
+    expect(out.axes.tenor.buckets).toEqual([{ id: '_all_', label: 'All' }])
+    expect(out.cells.length).toBe(1)
+    expect(out.cells[0].tenor).toBe('_all_')
+  })
+
+  it('produces single-bucket forward axis when collapseAxis=forward', () => {
+    const fwd = resolveForwardSchema('default')
+    const tenor = resolveTenorSchema('default')
+    const out = shapeVolumeGridResponse(
+      [
+        {
+          fwd: '_all_', tenor: '5y',
+          current_value: 100, idb_current: 40, custy_current: 60,
+          outright_current: 100, curve_current: 0, fly_current: 0, other_current: 0,
+          trade_count: 5, prior_array: [], p25: 0, p50: 0, p75: 0, pmin: 0, pmax: 0, n: 0,
+          as_of_ts: null,
+        },
+      ],
+      {
+        metric: 'notional', period: 'today', lookbackDays: 90,
+        forwardSchema: 'default', tenorSchema: 'default', packageType: 'outright',
+        viewMode: 'volume', collapseAxis: 'forward',
+      },
+      fwd,
+      tenor,
+    )
+    expect(out.axes.forward.buckets).toEqual([{ id: '_all_', label: 'All' }])
+    expect(out.cells.length).toBe(1)
+    expect(out.cells[0].fwd).toBe('_all_')
+  })
+})
+
+describe('parseVolumeGridParams — textFilter & collapseAxis', () => {
+  it('accepts textFilter as passthrough string', () => {
+    const out = parseVolumeGridParams(new URLSearchParams('textFilter=Fed'))
+    expect(out.ok).toBe(true)
+    if (out.ok) expect(out.value.textFilter).toBe('Fed')
+  })
+
+  it('omits textFilter when not provided', () => {
+    const out = parseVolumeGridParams(new URLSearchParams())
+    expect(out.ok).toBe(true)
+    if (out.ok) expect(out.value.textFilter).toBeUndefined()
+  })
+
+  it('accepts collapseAxis=tenor', () => {
+    const out = parseVolumeGridParams(new URLSearchParams('collapseAxis=tenor'))
+    expect(out.ok).toBe(true)
+    if (out.ok) expect(out.value.collapseAxis).toBe('tenor')
+  })
+
+  it('accepts collapseAxis=forward', () => {
+    const out = parseVolumeGridParams(new URLSearchParams('collapseAxis=forward'))
+    expect(out.ok).toBe(true)
+    if (out.ok) expect(out.value.collapseAxis).toBe('forward')
+  })
+
+  it('rejects invalid collapseAxis', () => {
+    const out = parseVolumeGridParams(new URLSearchParams('collapseAxis=bad'))
+    expect(out.ok).toBe(false)
+  })
+
+  it('omits collapseAxis when not provided', () => {
+    const out = parseVolumeGridParams(new URLSearchParams())
+    expect(out.ok).toBe(true)
+    if (out.ok) expect(out.value.collapseAxis).toBeUndefined()
+  })
+})
+
+describe('buildVolumeGridSql — textFilter', () => {
+  it('includes ILIKE clause when textFilter present', () => {
+    const forwardSchema = resolveForwardSchema('default')
+    const tenorSchema = resolveTenorSchema('default')
+    const bounds = computeWindowBounds('today', 30)
+    const { sql, params } = buildVolumeGridSql({
+      metric: 'dv01',
+      forwardSchema,
+      tenorSchema,
+      packageType: 'all',
+      bounds,
+      textFilter: 'Fed',
+    })
+    expect(sql).toContain('ILIKE')
+    expect(params).toContain('Fed')
+  })
+
+  it('omits ILIKE clause when textFilter undefined', () => {
+    const forwardSchema = resolveForwardSchema('default')
+    const tenorSchema = resolveTenorSchema('default')
+    const bounds = computeWindowBounds('today', 30)
+    const { sql } = buildVolumeGridSql({
+      metric: 'dv01',
+      forwardSchema,
+      tenorSchema,
+      packageType: 'all',
+      bounds,
+    })
+    expect(sql).not.toContain('ILIKE')
+  })
+})
+
+describe('buildVolumeGridSql — collapseAxis', () => {
+  it('replaces tenor bucket with constant when collapseAxis=tenor', () => {
+    const forwardSchema = resolveForwardSchema('fomc')
+    const tenorSchema = resolveTenorSchema('default')
+    const bounds = computeWindowBounds('today', 30)
+    const { sql } = buildVolumeGridSql({
+      metric: 'dv01',
+      forwardSchema,
+      tenorSchema,
+      packageType: 'all',
+      bounds,
+      collapseAxis: 'tenor',
+    })
+    expect(sql).toContain("'_all_'")
+  })
+
+  it('replaces forward bucket with constant when collapseAxis=forward', () => {
+    const forwardSchema = resolveForwardSchema('default')
+    const tenorSchema = resolveTenorSchema('default')
+    const bounds = computeWindowBounds('1w', 30)
+    const { sql } = buildVolumeGridSql({
+      metric: 'dv01',
+      forwardSchema,
+      tenorSchema,
+      packageType: 'all',
+      bounds,
+      collapseAxis: 'forward',
+    })
+    expect(sql).toContain("'_all_'")
+  })
+
+  it('uses TRUE for collapsed axis validity predicate (tenor)', () => {
+    const forwardSchema = resolveForwardSchema('default')
+    const tenorSchema = resolveTenorSchema('default')
+    const bounds = computeWindowBounds('today', 30)
+    const { sql } = buildVolumeGridSql({
+      metric: 'dv01',
+      forwardSchema,
+      tenorSchema,
+      packageType: 'all',
+      bounds,
+      collapseAxis: 'tenor',
+    })
+    // When tenor is collapsed, tenor validity predicate should be TRUE
+    // and forward should still have its normal predicate
+    expect(sql).toContain("fwd_bucket <> 'other'")
+    expect(sql).not.toContain("tenor_bucket <> 'other'")
+  })
+
+  it('uses TRUE for collapsed axis validity predicate (forward)', () => {
+    const forwardSchema = resolveForwardSchema('default')
+    const tenorSchema = resolveTenorSchema('default')
+    const bounds = computeWindowBounds('today', 30)
+    const { sql } = buildVolumeGridSql({
+      metric: 'dv01',
+      forwardSchema,
+      tenorSchema,
+      packageType: 'all',
+      bounds,
+      collapseAxis: 'forward',
+    })
+    // When forward is collapsed, forward validity predicate should be TRUE
+    // and tenor should still have its normal predicate
+    expect(sql).toContain("tenor_bucket <> 'other'")
+    expect(sql).not.toContain("fwd_bucket <> 'other'")
+  })
+
+  it('textFilter works with rolling window mode', () => {
+    const forwardSchema = resolveForwardSchema('default')
+    const tenorSchema = resolveTenorSchema('default')
+    const bounds = computeWindowBounds('1w', 30)
+    const { sql, params } = buildVolumeGridSql({
+      metric: 'dv01',
+      forwardSchema,
+      tenorSchema,
+      packageType: 'all',
+      bounds,
+      textFilter: 'FOMC',
+    })
+    expect(sql).toContain('ILIKE')
+    expect(params).toContain('FOMC')
+  })
 })

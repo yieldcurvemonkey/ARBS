@@ -44,6 +44,8 @@ export interface VolumeGridParams {
   tenorSchema: TenorSchemaId
   packageType: PackageTypeGroupId
   viewMode: VolumeGridViewMode
+  textFilter?: string
+  collapseAxis?: 'tenor' | 'forward'
 }
 
 export type ParseResult<T> =
@@ -65,6 +67,7 @@ const VALID_FORWARD_SCHEMAS: ReadonlySet<ForwardSchemaId> = new Set(FORWARD_SCHE
 const VALID_TENOR_SCHEMAS: ReadonlySet<TenorSchemaId> = new Set(TENOR_SCHEMA_IDS)
 const VALID_PACKAGE_GROUPS: ReadonlySet<PackageTypeGroupId> = new Set(PACKAGE_TYPE_GROUP_IDS)
 const VALID_VIEW_MODES: ReadonlySet<VolumeGridViewMode> = new Set(['volume', 'idb_custy'])
+const VALID_COLLAPSE_AXES: ReadonlySet<string> = new Set(['tenor', 'forward'])
 
 export function parseVolumeGridParams(search: URLSearchParams): ParseResult<VolumeGridParams> {
   const metricRaw = (search.get('metric') ?? 'notional').toLowerCase()
@@ -100,6 +103,11 @@ export function parseVolumeGridParams(search: URLSearchParams): ParseResult<Volu
     }
     lookbackDays = Math.floor(n)
   }
+  const textFilter = search.get('textFilter') ?? undefined
+  const collapseAxisRaw = search.get('collapseAxis') ?? undefined
+  if (collapseAxisRaw != null && !VALID_COLLAPSE_AXES.has(collapseAxisRaw)) {
+    return { ok: false, error: `collapseAxis must be one of ${[...VALID_COLLAPSE_AXES].join(', ')}` }
+  }
   return {
     ok: true,
     value: {
@@ -110,6 +118,8 @@ export function parseVolumeGridParams(search: URLSearchParams): ParseResult<Volu
       tenorSchema: tenorSchemaRaw as TenorSchemaId,
       packageType: packageTypeRaw as PackageTypeGroupId,
       viewMode: viewModeRaw as VolumeGridViewMode,
+      textFilter,
+      collapseAxis: collapseAxisRaw as 'tenor' | 'forward' | undefined,
     },
   }
 }
@@ -261,6 +271,8 @@ export interface SqlBuildContext {
   tenorSchema: ResolvedSchema
   packageType: PackageTypeGroupId
   bounds: WindowBounds
+  textFilter?: string
+  collapseAxis?: 'tenor' | 'forward'
 }
 
 export interface BuiltSql {
@@ -339,8 +351,12 @@ function combinedExtraFilter(forwardSchema: ResolvedSchema, tenorSchema: Resolve
  */
 export function buildVolumeGridSqlTimeOfDay(ctx: SqlBuildContext): BuiltSql {
   if (ctx.bounds.kind !== 'time_of_day') throw new Error('expected time_of_day bounds')
-  const fwdBucketExpr = buildForwardBucketSql(ctx.forwardSchema, 'l')
-  const tenorBucketExpr = buildTenorBucketSql(ctx.tenorSchema, 'l')
+  const fwdBucketExpr = ctx.collapseAxis === 'forward'
+    ? `'_all_'`
+    : buildForwardBucketSql(ctx.forwardSchema, 'l')
+  const tenorBucketExpr = ctx.collapseAxis === 'tenor'
+    ? `'_all_'`
+    : buildTenorBucketSql(ctx.tenorSchema, 'l')
   const metricCol = ctx.metric === 'notional' ? 'gross_notional' : 'gross_dv01'
   const pkgFilter = buildPackageTypeFilter(ctx.packageType, 'p', 6)
   const extraFilter = combinedExtraFilter(ctx.forwardSchema, ctx.tenorSchema)
@@ -352,6 +368,13 @@ export function buildVolumeGridSqlTimeOfDay(ctx: SqlBuildContext): BuiltSql {
     ctx.bounds.todSecondsHi,
     ...pkgFilter.params,
   ]
+  // textFilter comes after package type params
+  let textFilterClause = ''
+  if (ctx.textFilter != null) {
+    const textParamIdx = params.length + 1
+    params.push(ctx.textFilter)
+    textFilterClause = `AND (l.tape_label ILIKE '%' || $${textParamIdx}::text || '%' OR p.tape_label ILIKE '%' || $${textParamIdx}::text || '%')`
+  }
   const sql = `
     WITH legs AS (
       SELECT
@@ -374,11 +397,12 @@ export function buildVolumeGridSqlTimeOfDay(ctx: SqlBuildContext): BuiltSql {
         AND COALESCE(l.original_execution_timestamp, l.execution_timestamp) <  $2::timestamptz
         AND ${pkgFilter.sql}
         ${extraFilter}
+        ${textFilterClause}
     ),
     bucketed AS (
       SELECT * FROM legs
-      WHERE ${fwdBucketIsValidSqlPredicate(ctx.forwardSchema)}
-        AND ${tenorBucketIsValidSqlPredicate(ctx.tenorSchema)}
+      WHERE ${ctx.collapseAxis === 'forward' ? 'TRUE' : fwdBucketIsValidSqlPredicate(ctx.forwardSchema)}
+        AND ${ctx.collapseAxis === 'tenor' ? 'TRUE' : tenorBucketIsValidSqlPredicate(ctx.tenorSchema)}
         AND tod_seconds_et >= $4::numeric
         AND tod_seconds_et <= $5::numeric
     ),
@@ -446,8 +470,12 @@ export function buildVolumeGridSqlTimeOfDay(ctx: SqlBuildContext): BuiltSql {
  */
 export function buildVolumeGridSqlRolling(ctx: SqlBuildContext): BuiltSql {
   if (ctx.bounds.kind !== 'rolling') throw new Error('expected rolling bounds')
-  const fwdBucketExpr = buildForwardBucketSql(ctx.forwardSchema, 'l')
-  const tenorBucketExpr = buildTenorBucketSql(ctx.tenorSchema, 'l')
+  const fwdBucketExpr = ctx.collapseAxis === 'forward'
+    ? `'_all_'`
+    : buildForwardBucketSql(ctx.forwardSchema, 'l')
+  const tenorBucketExpr = ctx.collapseAxis === 'tenor'
+    ? `'_all_'`
+    : buildTenorBucketSql(ctx.tenorSchema, 'l')
   const metricCol = ctx.metric === 'notional' ? 'gross_notional' : 'gross_dv01'
   const pkgFilter = buildPackageTypeFilter(ctx.packageType, 'p', 4)
   const extraFilter = combinedExtraFilter(ctx.forwardSchema, ctx.tenorSchema)
@@ -457,6 +485,13 @@ export function buildVolumeGridSqlRolling(ctx: SqlBuildContext): BuiltSql {
     ctx.bounds.currentStart.toISOString(),
     ...pkgFilter.params,
   ]
+  // textFilter comes after package type params
+  let textFilterClause = ''
+  if (ctx.textFilter != null) {
+    const textParamIdx = params.length + 1
+    params.push(ctx.textFilter)
+    textFilterClause = `AND (l.tape_label ILIKE '%' || $${textParamIdx}::text || '%' OR p.tape_label ILIKE '%' || $${textParamIdx}::text || '%')`
+  }
   const sql = `
     WITH legs AS (
       SELECT
@@ -474,11 +509,12 @@ export function buildVolumeGridSqlRolling(ctx: SqlBuildContext): BuiltSql {
         AND COALESCE(l.original_execution_timestamp, l.execution_timestamp) <  $2::timestamptz
         AND ${pkgFilter.sql}
         ${extraFilter}
+        ${textFilterClause}
     ),
     bucketed AS (
       SELECT * FROM legs
-      WHERE ${fwdBucketIsValidSqlPredicate(ctx.forwardSchema)}
-        AND ${tenorBucketIsValidSqlPredicate(ctx.tenorSchema)}
+      WHERE ${ctx.collapseAxis === 'forward' ? 'TRUE' : fwdBucketIsValidSqlPredicate(ctx.forwardSchema)}
+        AND ${ctx.collapseAxis === 'tenor' ? 'TRUE' : tenorBucketIsValidSqlPredicate(ctx.tenorSchema)}
     ),
     windowed AS (
       SELECT *,
@@ -621,28 +657,36 @@ export function shapeVolumeGridResponse(
   forwardSchema: ResolvedSchema,
   tenorSchema: ResolvedSchema,
 ): VolumeGridResponse {
+  // When an axis is collapsed, override with a single-bucket axis.
+  const collapsedForwardBucket = { id: '_all_', label: 'All', lo: null as number | null, hi: null as number | null }
+  const collapsedTenorBucket = { id: '_all_', label: 'All', lo: null as number | null, hi: null as number | null }
+
   // Dynamic-bucket schemas (FOMC for forward, venue for tenor) only know
   // their buckets once the rows come back from SQL — discover them.
   const resolvedForward: ResolvedSchema =
-    forwardSchema.kind === 'fomc_label'
-      ? {
-          ...forwardSchema,
-          buckets: buildFomcBucketsFromLabels(
-            Array.from(new Set(rows.map((r) => r.fwd).filter((s): s is string => !!s))),
-            { now: new Date(), limit: 16 },
-          ),
-        }
-      : forwardSchema
+    params.collapseAxis === 'forward'
+      ? { ...forwardSchema, buckets: [collapsedForwardBucket] }
+      : forwardSchema.kind === 'fomc_label'
+        ? {
+            ...forwardSchema,
+            buckets: buildFomcBucketsFromLabels(
+              Array.from(new Set(rows.map((r) => r.fwd).filter((s): s is string => !!s))),
+              { now: new Date(), limit: 16 },
+            ),
+          }
+        : forwardSchema
 
   const resolvedTenor: ResolvedSchema =
-    tenorSchema.kind === 'venue'
-      ? {
-          ...tenorSchema,
-          buckets: buildVenueBucketsFromIdentifiers(
-            Array.from(new Set(rows.map((r) => r.tenor).filter((s): s is string => !!s))),
-          ),
-        }
-      : tenorSchema
+    params.collapseAxis === 'tenor'
+      ? { ...tenorSchema, buckets: [collapsedTenorBucket] }
+      : tenorSchema.kind === 'venue'
+        ? {
+            ...tenorSchema,
+            buckets: buildVenueBucketsFromIdentifiers(
+              Array.from(new Set(rows.map((r) => r.tenor).filter((s): s is string => !!s))),
+            ),
+          }
+        : tenorSchema
 
   const validFwd = new Set(resolvedForward.buckets.map((b) => b.id))
   const validTenor = new Set(resolvedTenor.buckets.map((b) => b.id))
