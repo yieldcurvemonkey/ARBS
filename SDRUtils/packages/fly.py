@@ -36,6 +36,7 @@ def detect_fly_trades_df(
     # Optional: if you want to prohibit mixing cleared/uncleared etc.
     require_same_cleared_flag: bool = True,
     cleared_col: str = "Cleared",
+    special_tenor_col: str = "special_tenor_type",
     # V2 rate-index and tenor-segment awareness
     rate_index_col: str = "rate_index",
     tenor_segment_col: str = "tenor_segment",
@@ -98,6 +99,8 @@ def detect_fly_trades_df(
             cols.append(platform_col)
         if require_same_cleared_flag and cleared_col in out.columns:
             cols.append(cleared_col)
+        if special_tenor_col in out.columns:
+            cols.append(special_tenor_col)
         if rate_index_col in out.columns:
             cols.append(rate_index_col)
         if tenor_segment_col in out.columns:
@@ -142,6 +145,7 @@ def detect_fly_trades_df(
         upi = cand[upi_col].astype("string").to_numpy() if (require_same_upi and upi_col in cand.columns) else None
         plat = cand[platform_col].astype("string").to_numpy() if (require_same_platform and platform_col in cand.columns) else None
         clr = cand[cleared_col].astype("string").to_numpy() if (require_same_cleared_flag and cleared_col in cand.columns) else None
+        stt = cand[special_tenor_col].fillna("STANDARD").astype(str).to_numpy() if special_tenor_col in cand.columns else None
 
         # V2 rate-index and tenor-segment arrays (None when absent → backward compat)
         _has_ridx = rate_index_col in cand.columns
@@ -194,17 +198,19 @@ def detect_fly_trades_df(
 
         # Fast econ guard between i and j
         def _econ_ok(i: int, j: int) -> bool:
+            both_fomc = stt is not None and stt[i] == "FOMC" and stt[j] == "FOMC"
             if ridx is not None and ridx[i] != ridx[j]:
                 return False
             if ccy is not None and ccy[i] != ccy[j]:
                 return False
-            if eff is not None and eff[i] != eff[j]:
-                return False
+            if not both_fomc:
+                if eff is not None and eff[i] != eff[j]:
+                    return False
+                if fwd_label is not None and fwd_label[i] != fwd_label[j]:
+                    return False
+                if fwd_years is not None and abs(fwd_years[i] - fwd_years[j]) > forward_years_tol:
+                    return False
             if require_same_underlying_tenor and tenor_years[i] != tenor_years[j]:
-                return False
-            if fwd_label is not None and fwd_label[i] != fwd_label[j]:
-                return False
-            if fwd_years is not None and abs(fwd_years[i] - fwd_years[j]) > forward_years_tol:
                 return False
             if und is not None and und[i] != und[j]:
                 return False
@@ -219,6 +225,8 @@ def detect_fly_trades_df(
                 if not (np.isnan(pi) or np.isnan(pj)) and pi != pj:
                     return False
             return True
+
+        _FOMC_BELLY_TOL = 0.50
 
         for i in range(len(cand)):
             if matched[i]:
@@ -236,12 +244,15 @@ def detect_fly_trades_df(
 
             tb = int(ten_bucket[i])
 
+            _is_fomc_i = stt is not None and stt[i] == "FOMC"
+            _db_range = range(-4, 5) if _is_fomc_i else (-1, 0, 1)
+
             wing_candidates: List[int] = []
             for dt in range(-8, 9):
                 if dt == 0:
                     continue
                 tkey = tb + dt
-                for db in (-1, 0, 1):
+                for db in _db_range:
                     wing_candidates.extend(_active_list((tkey, target_b + db)))
 
             if wing_candidates:
@@ -256,9 +267,12 @@ def detect_fly_trades_df(
                     if not _econ_ok(i, j):
                         continue
 
+                    _fomc_pair = _is_fomc_i and stt is not None and stt[j] == "FOMC"
+                    _tol = _FOMC_BELLY_TOL if _fomc_pair else belly_ratio_tolerance
+
                     w = pv01[j]
                     rel = abs(w - target_wing) / max(target_wing, 1e-12)
-                    if rel > belly_ratio_tolerance:
+                    if rel > _tol:
                         continue
 
                     if ten_axis[j] < ten_axis[i]:
@@ -274,12 +288,15 @@ def detect_fly_trades_df(
                 if j >= 0 and k >= 0 and (not matched[j]) and (not matched[k]):
                     # Also enforce econ consistency across the two wings
                     if _econ_ok(j, k) and _econ_ok(i, k) and _econ_ok(i, j):
+                        _all_fomc = stt is not None and stt[j] == "FOMC" and stt[i] == "FOMC" and stt[k] == "FOMC"
+                        _final_tol = _FOMC_BELLY_TOL if _all_fomc else belly_ratio_tolerance
+
                         wing_avg = 0.5 * (pv01[j] + pv01[k])
                         expected_belly = 2.0 * wing_avg
                         belly_rel = abs(belly_pv - expected_belly) / max(expected_belly, 1e-12)
                         wings_rel = abs(pv01[j] - pv01[k]) / max(wing_avg, 1e-12)
 
-                        if belly_rel <= belly_ratio_tolerance and wings_rel <= belly_ratio_tolerance:
+                        if belly_rel <= _final_tol and wings_rel <= _final_tol:
                             pkg_counter += 1
                             legs = [str(trade_ids[j]), str(trade_ids[i]), str(trade_ids[k])]
                             # Globally-unique suffix: smallest leg trade_id.
@@ -315,6 +332,8 @@ def detect_fly_trades_df(
                 continue
             target_wing = belly_pv / 2.0
 
+            _is_fomc_i2 = stt is not None and stt[i] == "FOMC"
+
             best_short = (-1, 1e9)
             best_long = (-1, 1e9)
             for j in range(len(cand)):
@@ -327,8 +346,10 @@ def detect_fly_trades_df(
                 w = pv01[j]
                 if w <= 0:
                     continue
+                _fomc_pair2 = _is_fomc_i2 and stt is not None and stt[j] == "FOMC"
+                _tol2 = _FOMC_BELLY_TOL if _fomc_pair2 else belly_ratio_tolerance
                 rel = abs(w - target_wing) / max(target_wing, 1e-12)
-                if rel > belly_ratio_tolerance:
+                if rel > _tol2:
                     continue
                 if ten_axis[j] < ten_axis[i]:
                     if rel < best_short[1]:
@@ -345,11 +366,14 @@ def detect_fly_trades_df(
             if not (_econ_ok(j_idx, k_idx) and _econ_ok(i, k_idx) and _econ_ok(i, j_idx)):
                 continue
 
+            _all_fomc2 = stt is not None and stt[j_idx] == "FOMC" and stt[i] == "FOMC" and stt[k_idx] == "FOMC"
+            _final_tol2 = _FOMC_BELLY_TOL if _all_fomc2 else belly_ratio_tolerance
+
             wing_avg = 0.5 * (pv01[j_idx] + pv01[k_idx])
             expected_belly = 2.0 * wing_avg
             belly_rel = abs(belly_pv - expected_belly) / max(expected_belly, 1e-12)
             wings_rel = abs(pv01[j_idx] - pv01[k_idx]) / max(wing_avg, 1e-12)
-            if belly_rel > belly_ratio_tolerance or wings_rel > belly_ratio_tolerance:
+            if belly_rel > _final_tol2 or wings_rel > _final_tol2:
                 continue
 
             pkg_counter += 1

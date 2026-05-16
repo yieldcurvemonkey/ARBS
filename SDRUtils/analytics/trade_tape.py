@@ -1124,38 +1124,81 @@ class TradeTape(SDRAnalyzer):
             invoice_ticker_raw = row.get("invoice_swap_ticker")
             invoice_label = invoice_swap_product_label(invoice_ticker_raw)
             fomc_label = str(row.get("fomc_meeting_label", "")).strip()
+            _has_fomc_label = fomc_label and fomc_label.lower() not in ("", "nan", "none")
+            _stt_fomc = str(row.get("special_tenor_type", "")).upper() == "FOMC"
+            _is_fomc_trade = _has_fomc_label or _stt_fomc
+
+            def _fomc_pkg_from_legs():
+                """Look up each leg's fomc_meeting_label, sorted by tenor."""
+                legs = row.get("package_legs")
+                if legs is None or (isinstance(legs, float) and pd.isna(legs)):
+                    return None
+                try:
+                    leg_ids = [str(x) for x in legs]
+                    leg_indices = [tid_to_idx[lid] for lid in leg_ids if lid in tid_to_idx]
+                    if not leg_indices:
+                        return None
+                    leg_data = df.loc[leg_indices, ["fomc_meeting_label", "tenor_years"]].copy()
+                    leg_data = leg_data.sort_values("tenor_years")
+                    labels = [
+                        str(l).strip().upper()
+                        for l in leg_data["fomc_meeting_label"]
+                        if pd.notna(l) and str(l).strip().lower() not in ("", "nan", "none")
+                    ]
+                    if len(labels) >= 2:
+                        return "/".join(labels)
+                except (TypeError, ValueError, KeyError):
+                    pass
+                return None
+
+            def _clean_fomc_tenors(raw: str) -> str:
+                """Convert 'FOMC_20260729/FOMC_20261028' → 'JUL26/OCT26'."""
+                cleaned = []
+                for p in raw.split("/"):
+                    p = p.strip()
+                    short = short_meeting_label(p) if (p.startswith("FOMC_") or p.startswith("IMM_")) else ""
+                    cleaned.append(short if short else p)
+                return "/".join(cleaned)
+
             if invoice_label:
                 parts.append(invoice_label)
-            elif fomc_label and fomc_label.lower() not in ("", "nan", "none"):
-                # FOMC-dated swap: "FOMC APR26" replaces forward + tenor for outrights.
-                parts.append(f"FOMC {fomc_label.upper()}")
-                # For CURVE/FLY packages, still append the leg tenor pair
-                # (e.g. "5Y/30Y") — the FOMC anchor describes the shared start
-                # but the package's tenor structure is what identifies the trade.
-                # In leg scope we fall through to the single-leg tenor below.
+            elif _is_fomc_trade:
                 if (_is_curvey(trade_type) or _is_flyey(trade_type)) and not leg_as_outright:
-                    pkg_tenors = str(row.get("package_tenors", "")).strip()
-                    if pkg_tenors and pkg_tenors.lower() not in ("nan", "none"):
-                        parts.append(pkg_tenors)
-                elif leg_as_outright:
-                    leg_tenor = str(
-                        row.get("tenor_display", row.get("tenor_label", ""))
-                    ).strip()
-                    if leg_tenor and leg_tenor.lower() not in ("nan", "none"):
-                        parts.append(leg_tenor)
-                elif row.get("fomc_label_append_tenor", False):
-                    # Tier 3b — FOMC eff + constant-maturity tenor. Append
-                    # the tenor so tape_label reads "FOMC APR26 10Y".
-                    tenor_display = str(
-                        row.get("tenor_display", row.get("tenor_label", ""))
-                    ).strip()
-                    if (
-                        tenor_display
-                        and tenor_display.lower() not in ("nan", "none")
-                        and not tenor_display.startswith("IMM_")
-                        and not tenor_display.startswith("FOMC_")
-                    ):
-                        parts.append(tenor_display)
+                    leg_labels = _fomc_pkg_from_legs()
+                    if leg_labels:
+                        parts.append(f"FOMC {leg_labels}")
+                    else:
+                        pkg_tenors = str(row.get("package_tenors", "")).strip()
+                        if pkg_tenors and pkg_tenors.lower() not in ("nan", "none"):
+                            parts.append(f"FOMC {_clean_fomc_tenors(pkg_tenors)}")
+                        elif _has_fomc_label:
+                            parts.append(f"FOMC {fomc_label.upper()}")
+                elif _has_fomc_label:
+                    parts.append(f"FOMC {fomc_label.upper()}")
+                    if leg_as_outright:
+                        leg_tenor = str(
+                            row.get("tenor_display", row.get("tenor_label", ""))
+                        ).strip()
+                        if (
+                            leg_tenor
+                            and leg_tenor.lower() not in ("nan", "none")
+                            and not leg_tenor.startswith("FOMC_")
+                            and not leg_tenor.startswith("IMM_")
+                        ):
+                            parts.append(leg_tenor)
+                    elif row.get("fomc_label_append_tenor", False):
+                        # Tier 3b — FOMC eff + constant-maturity tenor. Append
+                        # the tenor so tape_label reads "FOMC APR26 10Y".
+                        tenor_display = str(
+                            row.get("tenor_display", row.get("tenor_label", ""))
+                        ).strip()
+                        if (
+                            tenor_display
+                            and tenor_display.lower() not in ("nan", "none")
+                            and not tenor_display.startswith("IMM_")
+                            and not tenor_display.startswith("FOMC_")
+                        ):
+                            parts.append(tenor_display)
             else:
                 # 3. Forward (normalize T+2 settlement labels to Spot)
                 fwd = row.get("forward_label", "spot")

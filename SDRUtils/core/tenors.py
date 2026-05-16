@@ -180,9 +180,10 @@ def get_fomc_label(effective_date: pd.Timestamp) -> Optional[str]:
 
 def get_special_label(date_ts: pd.Timestamp) -> Optional[str]:
     """
-    Check if a date corresponds to a special label (IMM or FOMC).
+    Check if a date corresponds to a special label (FOMC or IMM).
 
-    IMM is checked first, then FOMC.
+    FOMC is checked first so that FOMC meeting dates that fall within
+    the IMM tolerance window are labeled as FOMC, not IMM.
 
     Args:
         date_ts: The date to check
@@ -190,14 +191,13 @@ def get_special_label(date_ts: pd.Timestamp) -> Optional[str]:
     Returns:
         Special label string or None
     """
-    imm_label = get_imm_label(date_ts)
-    if imm_label:
-        return imm_label
-
-    # Check FOMC
     fomc_label = get_fomc_label(date_ts)
     if fomc_label:
         return fomc_label
+
+    imm_label = get_imm_label(date_ts)
+    if imm_label:
+        return imm_label
 
     return None
 
