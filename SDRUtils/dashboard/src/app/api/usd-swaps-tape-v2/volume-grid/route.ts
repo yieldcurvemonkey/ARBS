@@ -43,6 +43,8 @@ async function produceVolumeGrid(request: Request): Promise<{ status: number; pa
     tenorSchema,
     packageType: parsed.value.packageType,
     bounds,
+    textFilter: parsed.value.textFilter,
+    collapseAxis: parsed.value.collapseAxis,
   })
 
   try {
