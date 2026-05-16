@@ -176,3 +176,72 @@ describe('buildRecentTradesSql with legs', () => {
     expect(sql).not.toContain('l2.')
   })
 })
+
+describe('parseVolumeGridCellParams — optional tenor', () => {
+  it('allows missing tenor when forwardSchema=fomc', () => {
+    const out = parseVolumeGridCellParams(
+      new URLSearchParams('fwd=JUN26&forwardSchema=fomc&metric=dv01'),
+    )
+    expect(out.ok).toBe(true)
+    if (out.ok) expect(out.value.tenor).toBeUndefined()
+  })
+
+  it('requires tenor when forwardSchema is not fomc', () => {
+    const out = parseVolumeGridCellParams(
+      new URLSearchParams('fwd=spot&forwardSchema=default&metric=dv01'),
+    )
+    expect(out.ok).toBe(false)
+    if (!out.ok) expect(out.error).toContain('tenor')
+  })
+
+  it('passes textFilter through', () => {
+    const out = parseVolumeGridCellParams(
+      new URLSearchParams('fwd=JUN26&tenor=2y&forwardSchema=fomc&metric=dv01&textFilter=OIS'),
+    )
+    expect(out.ok).toBe(true)
+    if (out.ok) expect(out.value.textFilter).toBe('OIS')
+  })
+})
+
+describe('buildTimeseriesSql with textFilterSql', () => {
+  it('appends textFilterSql to the WHERE clause when provided', () => {
+    const sql = buildTimeseriesSql({
+      bucketPredicateSql: 'TRUE',
+      packageFilterSql: 'TRUE',
+      textFilterSql: "(l.tape_label ILIKE '%' || $4::text || '%' OR p.tape_label ILIKE '%' || $4::text || '%')",
+    })
+    expect(sql).toContain('tape_label ILIKE')
+  })
+
+  it('omits textFilter clause when not provided', () => {
+    const sql = buildTimeseriesSql({
+      bucketPredicateSql: 'TRUE',
+      packageFilterSql: 'TRUE',
+    })
+    expect(sql).not.toContain('tape_label ILIKE')
+  })
+})
+
+describe('buildRecentTradesSql with textFilterSql', () => {
+  it('appends textFilterSql to the WHERE clause when provided', () => {
+    const sql = buildRecentTradesSql({
+      bucketPredicateSql: 'TRUE',
+      packageFilterSql: 'TRUE',
+      textFilterSql: "(l.tape_label ILIKE '%' || $3::text || '%' OR p.tape_label ILIKE '%' || $3::text || '%')",
+      limitParam: '$4',
+    })
+    expect(sql).toContain('tape_label ILIKE')
+  })
+})
+
+describe('buildIntradaySeasonalitySql with textFilterSql', () => {
+  it('appends textFilterSql to the WHERE clause when provided', () => {
+    const sql = buildIntradaySeasonalitySql({
+      metric: 'dv01',
+      bucketPredicateSql: 'TRUE',
+      packageFilterSql: 'TRUE',
+      textFilterSql: "(l.tape_label ILIKE '%' || $5::text || '%' OR p.tape_label ILIKE '%' || $5::text || '%')",
+    })
+    expect(sql).toContain('tape_label ILIKE')
+  })
+})

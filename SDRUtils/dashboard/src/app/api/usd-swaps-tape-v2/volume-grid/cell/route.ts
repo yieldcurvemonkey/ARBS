@@ -50,62 +50,96 @@ async function produceVolumeGridCell(request: Request): Promise<{ status: number
   const forwardSchema = resolveForwardSchema(p.forwardSchema, now)
   const tenorSchema = resolveTenorSchema(p.tenorSchema)
   const rangeStart = rangeToStartDate(p.range, now)
-  const predicate = buildBucketPredicate('l', forwardSchema, tenorSchema, p.fwd, p.tenor, 2)
-  const inCellPredicate = buildBucketPredicate('l2', forwardSchema, tenorSchema, p.fwd, p.tenor, 2)
+
+  // When tenor is undefined (FOMC collapseAxis=tenor case), build a
+  // forward-only predicate that skips the tenor constraint entirely.
+  let effectivePredicate: { sql: string; params: Array<number | string> }
+  let effectiveInCellPredicate: { sql: string; params: Array<number | string> }
+  if (p.tenor) {
+    effectivePredicate = buildBucketPredicate('l', forwardSchema, tenorSchema, p.fwd, p.tenor, 2)
+    effectiveInCellPredicate = buildBucketPredicate('l2', forwardSchema, tenorSchema, p.fwd, p.tenor, 2)
+  } else {
+    // FOMC no-tenor case: only constrain on the forward bucket (fomc_meeting_label)
+    const pi = 2
+    effectivePredicate = { sql: `l.fomc_meeting_label = $${pi}`, params: [p.fwd] }
+    effectiveInCellPredicate = { sql: `l2.fomc_meeting_label = $${pi}`, params: [p.fwd] }
+  }
+
   const pkgFilter = buildPackageTypeFilter(
-    p.packageType, 'p', 2 + predicate.params.length,
+    p.packageType, 'p', 2 + effectivePredicate.params.length,
   )
+
+  // Build textFilter SQL clause if textFilter is set.
+  let textFilterSql: string | undefined
+  let textFilterParams: string[] = []
+  if (p.textFilter) {
+    const textParamIndex = 2 + effectivePredicate.params.length + pkgFilter.params.length
+    textFilterSql = `(l.tape_label ILIKE '%' || $${textParamIndex}::text || '%' OR p.tape_label ILIKE '%' || $${textParamIndex}::text || '%')`
+    textFilterParams = [p.textFilter]
+  }
 
   const combinedExtra = [forwardSchema.extraFilterSql, tenorSchema.extraFilterSql]
     .filter(Boolean)
     .join(' AND ')
   const tsSql = buildTimeseriesSql({
-    bucketPredicateSql: predicate.sql,
+    bucketPredicateSql: effectivePredicate.sql,
     packageFilterSql: pkgFilter.sql,
     schemaExtraFilterSql: combinedExtra || undefined,
+    textFilterSql,
   })
-  const limitParamIndex = 2 + predicate.params.length + pkgFilter.params.length
+  const limitParamIndex = 2 + effectivePredicate.params.length + pkgFilter.params.length + textFilterParams.length
   const tradesSql = buildRecentTradesSql({
-    bucketPredicateSql: predicate.sql,
+    bucketPredicateSql: effectivePredicate.sql,
     packageFilterSql: pkgFilter.sql,
     schemaExtraFilterSql: combinedExtra || undefined,
+    textFilterSql,
     limitParam: `$${limitParamIndex}`,
-    inCellPredicateSql: inCellPredicate.sql,
+    inCellPredicateSql: effectiveInCellPredicate.sql,
   })
-  const intradayPredicate = buildBucketPredicate(
-    'l',
-    forwardSchema,
-    tenorSchema,
-    p.fwd,
-    p.tenor,
-    4,
-  )
+
+  // Intraday query uses different param offsets (starts at $4)
+  let intradayEffectivePredicate: { sql: string; params: Array<number | string> }
+  if (p.tenor) {
+    intradayEffectivePredicate = buildBucketPredicate('l', forwardSchema, tenorSchema, p.fwd, p.tenor, 4)
+  } else {
+    intradayEffectivePredicate = { sql: `l.fomc_meeting_label = $4`, params: [p.fwd] }
+  }
   const intradayPkgFilter = buildPackageTypeFilter(
     p.packageType,
     'p',
-    4 + intradayPredicate.params.length,
+    4 + intradayEffectivePredicate.params.length,
   )
+  let intradayTextFilterSql: string | undefined
+  let intradayTextFilterParams: string[] = []
+  if (p.textFilter) {
+    const intradayTextParamIndex = 4 + intradayEffectivePredicate.params.length + intradayPkgFilter.params.length
+    intradayTextFilterSql = `(l.tape_label ILIKE '%' || $${intradayTextParamIndex}::text || '%' OR p.tape_label ILIKE '%' || $${intradayTextParamIndex}::text || '%')`
+    intradayTextFilterParams = [p.textFilter]
+  }
   const intradaySql = buildIntradaySeasonalitySql({
     metric: p.metric,
-    bucketPredicateSql: intradayPredicate.sql,
+    bucketPredicateSql: intradayEffectivePredicate.sql,
     packageFilterSql: intradayPkgFilter.sql,
     schemaExtraFilterSql: combinedExtra || undefined,
+    textFilterSql: intradayTextFilterSql,
   })
 
   try {
-    const tsParams = [rangeStart.toISOString(), ...predicate.params, ...pkgFilter.params]
+    const tsParams = [rangeStart.toISOString(), ...effectivePredicate.params, ...pkgFilter.params, ...textFilterParams]
     const tradesParams = [
       rangeStart.toISOString(),
-      ...predicate.params,
+      ...effectivePredicate.params,
       ...pkgFilter.params,
+      ...textFilterParams,
       p.recentLimit,
     ]
     const intradayParams = [
       easternDateKey(now),
       rangeStart.toISOString(),
       INTRADAY_SEASONALITY_BUCKET_MINUTES,
-      ...intradayPredicate.params,
+      ...intradayEffectivePredicate.params,
       ...intradayPkgFilter.params,
+      ...intradayTextFilterParams,
     ]
 
     const [tsResult, tradesResult, intradayResult] = await Promise.all([

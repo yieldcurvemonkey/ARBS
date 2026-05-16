@@ -115,7 +115,7 @@ export interface VolumeGridCellRecentTrade {
 
 export interface VolumeGridCellResponse {
   fwd: string
-  tenor: string
+  tenor?: string
   metric: VolumeMetric
   range: VolumeCellRange
   forwardSchema: ForwardSchemaId
