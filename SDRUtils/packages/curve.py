@@ -38,6 +38,7 @@ def detect_curve_trades_df(
     platform_col: str = "Platform identifier",
     require_same_cleared_flag: bool = True,
     cleared_col: str = "Cleared",
+    special_tenor_col: str = "special_tenor_type",
     # V2 rate-index and tenor-segment awareness
     rate_index_col: str = "rate_index",
     tenor_segment_col: str = "tenor_segment",
@@ -90,6 +91,8 @@ def detect_curve_trades_df(
         cols.append(platform_col)
     if require_same_cleared_flag and cleared_col in out.columns:
         cols.append(cleared_col)
+    if special_tenor_col in out.columns:
+        cols.append(special_tenor_col)
     if rate_index_col in out.columns:
         cols.append(rate_index_col)
     if tenor_segment_col in out.columns:
@@ -121,6 +124,7 @@ def detect_curve_trades_df(
     upi = cand[upi_col].astype("string").to_numpy() if (require_same_upi and upi_col in cand.columns) else None
     plat = cand[platform_col].astype("string").to_numpy() if (require_same_platform and platform_col in cand.columns) else None
     clr = cand[cleared_col].astype("string").to_numpy() if (require_same_cleared_flag and cleared_col in cand.columns) else None
+    stt = cand[special_tenor_col].fillna("STANDARD").astype(str).to_numpy() if special_tenor_col in cand.columns else None
 
     # V2 rate-index and tenor-segment arrays (None when columns absent → backward compat)
     _has_ridx = rate_index_col in cand.columns
@@ -146,18 +150,20 @@ def detect_curve_trades_df(
         dirv = None
 
     def _econ_ok(i: int, j: int) -> bool:
+        both_fomc = stt is not None and stt[i] == "FOMC" and stt[j] == "FOMC"
         if ridx is not None and ridx[i] != ridx[j]:
             return False
         if ccy is not None and ccy[i] != ccy[j]:
             return False
-        if eff is not None and eff[i] != eff[j]:
-            return False
-        if fwd_label is not None and fwd_label[i] != fwd_label[j]:
-            if not (allow_gap_curves and tenor[i] == tenor[j]):
+        if not both_fomc:
+            if eff is not None and eff[i] != eff[j]:
                 return False
-        if fwd_years is not None and abs(fwd_years[i] - fwd_years[j]) > forward_years_tol:
-            if not (allow_gap_curves and tenor[i] == tenor[j]):
-                return False
+            if fwd_label is not None and fwd_label[i] != fwd_label[j]:
+                if not (allow_gap_curves and tenor[i] == tenor[j]):
+                    return False
+            if fwd_years is not None and abs(fwd_years[i] - fwd_years[j]) > forward_years_tol:
+                if not (allow_gap_curves and tenor[i] == tenor[j]):
+                    return False
         if und is not None and und[i] != und[j]:
             return False
         if upi is not None and upi[i] != upi[j]:
@@ -195,6 +201,8 @@ def detect_curve_trades_df(
         while left < len(cand) and (curr_t - tsec[left] > _evict_window):
             left += 1
 
+    _FOMC_PV01_TOL = 0.50
+
     for i in range(len(cand)):
         if matched[i]:
             continue
@@ -205,7 +213,10 @@ def detect_curve_trades_df(
         best_j = -1
         best_rel = 1e9
 
-        for bb in (bi - 1, bi, bi + 1):
+        _is_fomc_i = stt is not None and stt[i] == "FOMC"
+        _bucket_range = range(bi - 4, bi + 5) if _is_fomc_i else (bi - 1, bi, bi + 1)
+
+        for bb in _bucket_range:
             lst = bucket_to_indices.get(bb)
             if not lst:
                 continue
@@ -235,11 +246,14 @@ def detect_curve_trades_df(
                     if si == 0 or sj == 0 or si == sj:
                         continue
 
+                _fomc_pair = _is_fomc_i and stt is not None and stt[j] == "FOMC"
+                _tol = _FOMC_PV01_TOL if _fomc_pair else pv01_tolerance
+
                 avg = 0.5 * (pv01[i] + pv01[j])
                 if avg <= 0:
                     continue
                 rel = abs(pv01[i] - pv01[j]) / avg
-                if rel <= pv01_tolerance and rel < best_rel:
+                if rel <= _tol and rel < best_rel:
                     best_rel = rel
                     best_j = j
 
