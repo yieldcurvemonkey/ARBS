@@ -1,5 +1,5 @@
 import { describe, expect, it } from '@jest/globals'
-import { buildFomcConstantMaturityMap } from '../fomcConstantMaturity'
+import { buildFomcConstantMaturityMap, fomcAliasForLabel } from '../fomcConstantMaturity'
 
 describe('buildFomcConstantMaturityMap', () => {
   it('maps FOMC1 to next upcoming meeting', () => {
@@ -20,10 +20,15 @@ describe('buildFomcConstantMaturityMap', () => {
     expect(map.size).toBe(0)
   })
 
-  it('builds reverse map from absolute to alias', () => {
+  it('fomcAliasForLabel returns alias for known label', () => {
     const now = new Date('2026-05-16T12:00:00Z')
     const map = buildFomcConstantMaturityMap(now)
-    const reverse = new Map([...map.entries()].map(([k, v]) => [v, k]))
-    expect(reverse.get('JUN26')).toBe('FOMC1')
+    expect(fomcAliasForLabel('JUN26', map)).toBe('FOMC1')
+  })
+
+  it('fomcAliasForLabel returns null for unknown label', () => {
+    const now = new Date('2026-05-16T12:00:00Z')
+    const map = buildFomcConstantMaturityMap(now)
+    expect(fomcAliasForLabel('ZZZ99', map)).toBeNull()
   })
 })
