@@ -195,14 +195,42 @@ export function computeWindowBounds(
   switch (period) {
     case 'today': {
       const { dateEt, todSeconds } = timeOfDayInEt(now)
+      // Weekend auto-detection: if today is Saturday or Sunday in ET,
+      // use the previous Friday instead (no trades on weekends).
+      const etDate = new Date(dateEt + 'T12:00:00')
+      const dow = etDate.getUTCDay() // 0=Sun, 6=Sat
+      let effectiveDateEt = dateEt
+      let effectiveTodSecondsHi = todSeconds
+      if (dow === 0) { // Sunday → use Friday
+        const fri = new Date(etDate.getTime() - 2 * 24 * 60 * 60 * 1000)
+        effectiveDateEt = fri.toISOString().slice(0, 10)
+        effectiveTodSecondsHi = 24 * 3600 // full day
+      } else if (dow === 6) { // Saturday → use Friday
+        const fri = new Date(etDate.getTime() - 1 * 24 * 60 * 60 * 1000)
+        effectiveDateEt = fri.toISOString().slice(0, 10)
+        effectiveTodSecondsHi = 24 * 3600 // full day
+      }
       const lookbackStart = new Date(now.getTime() - lookbackDays * ONE_DAY_MS)
       return {
         kind: 'time_of_day', lookbackStart, lookbackEnd,
-        todayDateEt: dateEt, todSecondsLo: 0, todSecondsHi: todSeconds,
+        todayDateEt: effectiveDateEt, todSecondsLo: 0, todSecondsHi: effectiveTodSecondsHi,
       }
     }
     case '1h': {
       const { dateEt, todSeconds } = timeOfDayInEt(now)
+      const etDate = new Date(dateEt + 'T12:00:00')
+      const dow = etDate.getUTCDay()
+      if (dow === 0 || dow === 6) {
+        // Weekend: fall back to full Friday
+        const daysBack = dow === 0 ? 2 : 1
+        const fri = new Date(etDate.getTime() - daysBack * 24 * 60 * 60 * 1000)
+        const effectiveDateEt = fri.toISOString().slice(0, 10)
+        const lookbackStart = new Date(now.getTime() - lookbackDays * ONE_DAY_MS)
+        return {
+          kind: 'time_of_day', lookbackStart, lookbackEnd,
+          todayDateEt: effectiveDateEt, todSecondsLo: 0, todSecondsHi: 24 * 3600,
+        }
+      }
       const lookbackStart = new Date(now.getTime() - lookbackDays * ONE_DAY_MS)
       return {
         kind: 'time_of_day', lookbackStart, lookbackEnd,

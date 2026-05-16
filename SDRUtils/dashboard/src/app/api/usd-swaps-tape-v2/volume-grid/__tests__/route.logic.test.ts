@@ -604,3 +604,67 @@ describe('buildVolumeGridSql — collapseAxis', () => {
     expect(params).toContain('FOMC')
   })
 })
+
+describe('computeWindowBounds — weekend detection', () => {
+  it('today on Saturday uses Friday full day', () => {
+    // 2026-05-16 is a Saturday
+    const sat = new Date('2026-05-16T14:00:00-04:00') // Saturday 2pm ET
+    const bounds = computeWindowBounds('today', 30, sat)
+    expect(bounds.kind).toBe('time_of_day')
+    if (bounds.kind === 'time_of_day') {
+      expect(bounds.todayDateEt).toBe('2026-05-15') // Friday
+      expect(bounds.todSecondsHi).toBe(86400) // full day
+    }
+  })
+
+  it('today on Sunday uses Friday full day', () => {
+    const sun = new Date('2026-05-17T10:00:00-04:00') // Sunday
+    const bounds = computeWindowBounds('today', 30, sun)
+    expect(bounds.kind).toBe('time_of_day')
+    if (bounds.kind === 'time_of_day') {
+      expect(bounds.todayDateEt).toBe('2026-05-15') // Friday
+      expect(bounds.todSecondsHi).toBe(86400)
+    }
+  })
+
+  it('today on weekday uses current day', () => {
+    const wed = new Date('2026-05-13T14:00:00-04:00') // Wednesday
+    const bounds = computeWindowBounds('today', 30, wed)
+    expect(bounds.kind).toBe('time_of_day')
+    if (bounds.kind === 'time_of_day') {
+      expect(bounds.todayDateEt).toBe('2026-05-13')
+      expect(bounds.todSecondsHi).toBeLessThan(86400)
+    }
+  })
+
+  it('1h on Saturday falls back to full Friday', () => {
+    const sat = new Date('2026-05-16T14:00:00-04:00')
+    const bounds = computeWindowBounds('1h', 30, sat)
+    expect(bounds.kind).toBe('time_of_day')
+    if (bounds.kind === 'time_of_day') {
+      expect(bounds.todayDateEt).toBe('2026-05-15')
+      expect(bounds.todSecondsLo).toBe(0)
+      expect(bounds.todSecondsHi).toBe(86400)
+    }
+  })
+
+  it('1h on Sunday falls back to full Friday', () => {
+    const sun = new Date('2026-05-17T10:00:00-04:00')
+    const bounds = computeWindowBounds('1h', 30, sun)
+    expect(bounds.kind).toBe('time_of_day')
+    if (bounds.kind === 'time_of_day') {
+      expect(bounds.todayDateEt).toBe('2026-05-15')
+      expect(bounds.todSecondsHi).toBe(86400)
+    }
+  })
+
+  it('1h on weekday uses normal 1-hour window', () => {
+    const wed = new Date('2026-05-13T14:00:00-04:00')
+    const bounds = computeWindowBounds('1h', 30, wed)
+    expect(bounds.kind).toBe('time_of_day')
+    if (bounds.kind === 'time_of_day') {
+      expect(bounds.todayDateEt).toBe('2026-05-13')
+      expect(bounds.todSecondsHi - bounds.todSecondsLo).toBe(3600)
+    }
+  })
+})

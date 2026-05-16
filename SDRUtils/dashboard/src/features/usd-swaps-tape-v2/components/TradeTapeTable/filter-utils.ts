@@ -146,6 +146,25 @@ export function buildColumnFilterPayload(
   return payload
 }
 
+/**
+ * Parse a display-formatted date "M/D/YYYY" or "M/D/YYYY HH:MM:SS" into a
+ * Date object (midnight UTC on that calendar day). Returns null if unparseable.
+ */
+function parseDateFromDisplay(s: string): Date | null {
+  if (!s) return null
+  // Extract just the date portion (before the space if time is present)
+  const datePart = s.split(' ')[0]
+  const parts = datePart.split('/')
+  if (parts.length < 3) return null
+  const month = parseInt(parts[0], 10)
+  const day = parseInt(parts[1], 10)
+  const year = parseInt(parts[2], 10)
+  if (!Number.isFinite(month) || !Number.isFinite(day) || !Number.isFinite(year)) return null
+  if (month < 1 || month > 12 || day < 1 || day > 31) return null
+  // Use UTC to avoid timezone confusion — all comparisons are date-level
+  return new Date(Date.UTC(year, month - 1, day))
+}
+
 export function matchFilterValue(
   rowValue: any,
   filterValue: any,
@@ -189,6 +208,19 @@ export function matchFilterValue(
       default:
         return false
     }
+  }
+
+  // Date comparison modes — parse both sides as dates, compare chronologically.
+  // The filter value comes in as "M/D/YYYY" or "MM/DD/YYYY" (the display format).
+  // The row value for timestamp fields arrives pre-formatted as "M/D/YYYY HH:MM:SS".
+  const DATE_MODES = new Set<string>(['dateAfter', 'dateBefore'])
+  if (DATE_MODES.has(mode)) {
+    const rowDate = parseDateFromDisplay(String(rowValue))
+    const filterDate = parseDateFromDisplay(String(filterValue))
+    if (rowDate === null || filterDate === null) return false
+    if (mode === 'dateAfter') return rowDate.getTime() >= filterDate.getTime()
+    if (mode === 'dateBefore') return rowDate.getTime() <= filterDate.getTime()
+    return false
   }
 
   const rowString = String(rowValue).toLowerCase()
@@ -346,6 +378,10 @@ function formatMatchModeLabel(mode?: string): string {
       return '>='
     case FilterMatchMode.IN:
       return 'in'
+    case 'dateAfter':
+      return 'after'
+    case 'dateBefore':
+      return 'before'
     default:
       return 'contains'
   }
