@@ -296,9 +296,9 @@ describe('shapeVolumeGridResponse', () => {
     const tenor = resolveTenorSchema('default')
     const out = shapeVolumeGridResponse(
       [
-        { fwd: 'fwd_other', tenor: '5y', current_value: 1, idb_current: 0, custy_current: 1, trade_count: 1, prior_array: [], p25: 0, p50: 0, p75: 0, pmin: 0, pmax: 0, n: 0, as_of_ts: null },
-        { fwd: 'spot', tenor: 'unknown_tenor', current_value: 1, idb_current: 0, custy_current: 1, trade_count: 1, prior_array: [], p25: 0, p50: 0, p75: 0, pmin: 0, pmax: 0, n: 0, as_of_ts: null },
-        { fwd: 'spot', tenor: '5y', current_value: 100, idb_current: 40, custy_current: 60, trade_count: 1, prior_array: [], p25: 0, p50: 0, p75: 0, pmin: 0, pmax: 0, n: 0, as_of_ts: null },
+        { fwd: 'fwd_other', tenor: '5y', current_value: 1, idb_current: 0, custy_current: 1, outright_current: 0, curve_current: 0, fly_current: 0, other_current: 0, trade_count: 1, prior_array: [], p25: 0, p50: 0, p75: 0, pmin: 0, pmax: 0, n: 0, as_of_ts: null },
+        { fwd: 'spot', tenor: 'unknown_tenor', current_value: 1, idb_current: 0, custy_current: 1, outright_current: 0, curve_current: 0, fly_current: 0, other_current: 0, trade_count: 1, prior_array: [], p25: 0, p50: 0, p75: 0, pmin: 0, pmax: 0, n: 0, as_of_ts: null },
+        { fwd: 'spot', tenor: '5y', current_value: 100, idb_current: 40, custy_current: 60, outright_current: 0, curve_current: 0, fly_current: 0, other_current: 0, trade_count: 1, prior_array: [], p25: 0, p50: 0, p75: 0, pmin: 0, pmax: 0, n: 0, as_of_ts: null },
       ],
       {
         metric: 'notional', period: 'today', lookbackDays: 90,
@@ -322,9 +322,9 @@ describe('shapeVolumeGridResponse', () => {
     const venue = resolveTenorSchema('venue')
     const out = shapeVolumeGridResponse(
       [
-        { fwd: 'spot', tenor: 'BBSF', current_value: 1, idb_current: 0, custy_current: 1, trade_count: 1, prior_array: [], p25: 0, p50: 0, p75: 0, pmin: 0, pmax: 0, n: 0, as_of_ts: null },
-        { fwd: 'spot', tenor: 'BGCD', current_value: 1, idb_current: 1, custy_current: 0, trade_count: 1, prior_array: [], p25: 0, p50: 0, p75: 0, pmin: 0, pmax: 0, n: 0, as_of_ts: null },
-        { fwd: 'spot', tenor: 'TWSF', current_value: 1, idb_current: 0, custy_current: 1, trade_count: 1, prior_array: [], p25: 0, p50: 0, p75: 0, pmin: 0, pmax: 0, n: 0, as_of_ts: null },
+        { fwd: 'spot', tenor: 'BBSF', current_value: 1, idb_current: 0, custy_current: 1, outright_current: 0, curve_current: 0, fly_current: 0, other_current: 0, trade_count: 1, prior_array: [], p25: 0, p50: 0, p75: 0, pmin: 0, pmax: 0, n: 0, as_of_ts: null },
+        { fwd: 'spot', tenor: 'BGCD', current_value: 1, idb_current: 1, custy_current: 0, outright_current: 0, curve_current: 0, fly_current: 0, other_current: 0, trade_count: 1, prior_array: [], p25: 0, p50: 0, p75: 0, pmin: 0, pmax: 0, n: 0, as_of_ts: null },
+        { fwd: 'spot', tenor: 'TWSF', current_value: 1, idb_current: 0, custy_current: 1, outright_current: 0, curve_current: 0, fly_current: 0, other_current: 0, trade_count: 1, prior_array: [], p25: 0, p50: 0, p75: 0, pmin: 0, pmax: 0, n: 0, as_of_ts: null },
       ],
       {
         metric: 'notional', period: 'today', lookbackDays: 90,
@@ -341,11 +341,14 @@ describe('shapeVolumeGridResponse', () => {
   it('discovers fomc bucket labels from rows (filters to upcoming, max 16)', () => {
     const fwd = resolveForwardSchema('fomc')
     const tenor = resolveTenorSchema('default')
-    const labels = ['JAN21', 'APR21', 'MAR2026', 'JUN26', 'APR26', 'DEC27']
+    // Use labels far enough in the future to survive the 30-day lookback window.
+    // Historical (JAN21, APR21) and unparseable (MAR2026) should be dropped.
+    const labels = ['JAN21', 'APR21', 'MAR2026', 'SEP26', 'JUL26', 'DEC27']
     const out = shapeVolumeGridResponse(
       labels.map((l) => ({
         fwd: l, tenor: '5y',
         current_value: 1, idb_current: 0, custy_current: 1,
+        outright_current: 0, curve_current: 0, fly_current: 0, other_current: 0,
         trade_count: 1, prior_array: [],
         p25: 0, p50: 0, p75: 0, pmin: 0, pmax: 0, n: 0, as_of_ts: null,
       })),
@@ -364,8 +367,8 @@ describe('shapeVolumeGridResponse', () => {
     expect(ids).not.toContain('MAR2026')
     expect(ids.length).toBeLessThanOrEqual(16)
     // Chronological order maintained for the kept labels
-    const kept = ids.filter((x) => ['APR26', 'JUN26', 'DEC27'].includes(x))
-    expect(kept).toEqual(['APR26', 'JUN26', 'DEC27'])
+    const kept = ids.filter((x) => ['JUL26', 'SEP26', 'DEC27'].includes(x))
+    expect(kept).toEqual(['JUL26', 'SEP26', 'DEC27'])
   })
 
   it('maps pkg_family composition columns to cell fields', () => {
