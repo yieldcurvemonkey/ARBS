@@ -83,12 +83,14 @@ export function VolumeGridCard({ onSelectPackage }: VolumeGridCardProps): JSX.El
     setSelectedCell(cell)
   }, [])
 
-  // Build cell prop for modal from CellId — modal expects { fwd; tenor } | null
+  // Build cell prop for modal from CellId
   const modalCell = selectedCell
     ? selectedCell.kind === 'matrix'
       ? { fwd: selectedCell.fwd, tenor: selectedCell.tenor }
-      : { fwd: selectedCell.fwd, tenor: '__all__' }
+      : { fwd: selectedCell.fwd }
     : null
+
+  const modalForwardSchema = selectedCell?.kind === 'collapsed_tenor' ? 'fomc' as const : 'default' as const
 
   return (
     <section data-testid="volume-grid-card" className="border-b border-slate-800 bg-slate-900/40 ring-1 ring-slate-800">
@@ -144,11 +146,8 @@ export function VolumeGridCard({ onSelectPackage }: VolumeGridCardProps): JSX.El
       <VolumeGridCellModal
         cell={modalCell}
         metric={metric}
-        forwardSchema="default"
-        tenorSchema="default"
-        packageType="all"
-        forwardAxis={undefined}
-        tenorAxis={undefined}
+        forwardSchema={modalForwardSchema}
+        textFilter={textFilter || undefined}
         onClose={() => setSelectedCell(null)}
         onSelectPackage={onSelectPackage}
       />
