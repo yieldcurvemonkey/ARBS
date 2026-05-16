@@ -32,6 +32,8 @@ export interface UseVolumeGridArgs {
   packageType: PackageTypeGroupId
   viewMode: VolumeGridViewMode
   collapsed: boolean
+  textFilter?: string
+  collapseAxis?: 'tenor' | 'forward'
   /** Test seam — defaults to the package-wide `fetch`. */
   fetcher?: typeof fetch
 }
@@ -48,7 +50,7 @@ const DEFAULT_REFRESH_INTERVAL_MS = 30_000
 export function buildVolumeGridUrl(
   args: Pick<
     UseVolumeGridArgs,
-    'metric' | 'period' | 'lookbackDays' | 'forwardSchema' | 'tenorSchema' | 'packageType' | 'viewMode'
+    'metric' | 'period' | 'lookbackDays' | 'forwardSchema' | 'tenorSchema' | 'packageType' | 'viewMode' | 'textFilter' | 'collapseAxis'
   >,
 ): string {
   const q = new URLSearchParams({
@@ -60,6 +62,8 @@ export function buildVolumeGridUrl(
     viewMode: args.viewMode,
   })
   if (args.lookbackDays != null) q.set('lookbackDays', String(args.lookbackDays))
+  if (args.textFilter) q.set('textFilter', args.textFilter)
+  if (args.collapseAxis) q.set('collapseAxis', args.collapseAxis)
   return `${TAPE_V2_API_BASE}/volume-grid?${q}`
 }
 
