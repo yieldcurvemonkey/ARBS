@@ -3,7 +3,7 @@
 // for the clicked grid cell. Row click closes modal and routes the
 // package_id to onSelectPackage (which writes a URL filter).
 
-import { Fragment, useState } from 'react'
+import { Fragment, useEffect, useMemo, useState } from 'react'
 import type { JSX, ReactNode } from 'react'
 import { Dialog } from 'primereact/dialog'
 import {
@@ -70,13 +70,14 @@ const fmtMinuteOfDay = (minuteOfDay: number): string => {
 }
 
 export interface VolumeGridCellModalProps {
-  cell: { fwd: string; tenor: string } | null
+  cell: { fwd: string; tenor?: string } | null
   metric: VolumeMetric
-  forwardSchema: ForwardSchemaId
-  tenorSchema: TenorSchemaId
-  packageType: PackageTypeGroupId
-  forwardAxis: VolumeGridSchemaAxis | undefined
-  tenorAxis: VolumeGridSchemaAxis | undefined
+  forwardSchema?: ForwardSchemaId
+  tenorSchema?: TenorSchemaId
+  packageType?: PackageTypeGroupId
+  forwardAxis?: VolumeGridSchemaAxis
+  tenorAxis?: VolumeGridSchemaAxis
+  textFilter?: string
   onClose: () => void
   onSelectPackage: (packageId: string) => void
 }
@@ -102,17 +103,32 @@ export function VolumeGridCellModal(props: VolumeGridCellModalProps): JSX.Elemen
     })
   }
 
+  const [localTradeFilter, setLocalTradeFilter] = useState('')
+
+  useEffect(() => { setLocalTradeFilter('') }, [props.cell?.fwd, props.cell?.tenor])
+
   const { data, error, isLoading } = useVolumeGridCell({
     cell: props.cell,
     metric: props.metric,
     range,
-    forwardSchema: props.forwardSchema,
-    tenorSchema: props.tenorSchema,
-    packageType: props.packageType,
+    forwardSchema: props.forwardSchema ?? 'default',
+    tenorSchema: props.tenorSchema ?? 'default',
+    packageType: props.packageType ?? 'all',
+    textFilter: props.textFilter,
   })
 
+  const filteredTrades = useMemo(() => {
+    if (!localTradeFilter || !data?.recentTrades) return data?.recentTrades ?? []
+    const lower = localTradeFilter.toLowerCase()
+    return data.recentTrades.filter(
+      (t) => t.tape_label?.toLowerCase().includes(lower),
+    )
+  }, [data?.recentTrades, localTradeFilter])
+
   const headerLabel = props.cell
-    ? `${lookupLabel(props.forwardAxis, props.cell.fwd)} × ${lookupLabel(props.tenorAxis, props.cell.tenor)} — Volume detail`
+    ? props.cell.tenor
+      ? `${lookupLabel(props.forwardAxis, props.cell.fwd)} × ${lookupLabel(props.tenorAxis, props.cell.tenor)} — Volume detail`
+      : `${props.cell.fwd} — Volume detail`
     : 'Volume detail'
 
   return (
@@ -182,6 +198,20 @@ export function VolumeGridCellModal(props: VolumeGridCellModalProps): JSX.Elemen
             metric={props.metric}
           />
         </div>
+        <div className="flex items-center gap-2 pb-1">
+          <input
+            type="text"
+            value={localTradeFilter}
+            onChange={(e) => setLocalTradeFilter(e.target.value)}
+            placeholder="filter trades..."
+            className="w-40 rounded border border-slate-700 bg-slate-900 px-2 py-[1px] font-mono text-[10px] text-slate-200 placeholder:text-slate-600"
+          />
+          {localTradeFilter && (
+            <span className="font-mono text-[9px] text-slate-500">
+              {filteredTrades.length} of {data?.recentTrades?.length ?? 0}
+            </span>
+          )}
+        </div>
         <div className="flex-1 overflow-auto rounded border border-slate-800">
           <table className="w-full text-left font-mono text-[11px]">
             <thead className="sticky top-0 bg-slate-900/80 text-[9.5px] uppercase tracking-wider text-slate-500">
@@ -191,7 +221,7 @@ export function VolumeGridCellModal(props: VolumeGridCellModalProps): JSX.Elemen
               </tr>
             </thead>
             <tbody>
-              {data?.recentTrades.length ? data.recentTrades.map((t) => {
+              {filteredTrades.length ? filteredTrades.map((t) => {
                 const legs = t.legs ?? []
                 const isMultiLeg = legs.length > 1
                 const isExpanded = expandedPkgs.has(t.package_id)
