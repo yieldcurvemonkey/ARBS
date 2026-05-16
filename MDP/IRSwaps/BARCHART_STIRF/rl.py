@@ -1889,22 +1889,37 @@ class BARCHART_STIRF_CURVE(LayeredCacheMixin):
         cfg: Dict[str, Any],
         curves_by_ts: Dict[datetime.datetime, rl.Curve],
     ) -> None:
-        """Persist a bulk trading day once via CurveStore for day-block Supabase sync."""
+        """Persist a bulk trading-day batch without discarding prior batches."""
         if not curves_by_ts:
             return
 
         from Caching.curve_store import CurveSnapshot, CurveStore
 
         cfg_hash = self._curve_cfg_hash(cfg)
-        snapshots = [
+        new_snapshots = [
             CurveSnapshot.from_rl_curve(curve, curve_name=curve_name, cfg=cfg, cfg_hash=cfg_hash)
             for _, curve in sorted(curves_by_ts.items())
         ]
-        if not snapshots:
+        if not new_snapshots:
             return
 
         store = CurveStore.default()
-        store.write_day(curve_name, date, snapshots, overwrite=True)
+        existing_raw_df = store.read_raw_day(curve_name, date)
+        existing_snapshots = [
+            self._curve_store_snapshot_from_raw_row(row, default_curve_name=curve_name)
+            for row in existing_raw_df.to_dict("records")
+        ]
+        merged_snapshots_by_ts = {
+            self._curve_store_norm_timestamp(snapshot.timestamp_utc): snapshot
+            for snapshot in existing_snapshots
+        }
+        for snapshot in new_snapshots:
+            merged_snapshots_by_ts[self._curve_store_norm_timestamp(snapshot.timestamp_utc)] = snapshot
+        merged_snapshots = [
+            merged_snapshots_by_ts[ts]
+            for ts in sorted(merged_snapshots_by_ts)
+        ]
+        store.write_day(curve_name, date, merged_snapshots, overwrite=True)
 
         try:
             from Caching.curve_analytics import (
@@ -1913,6 +1928,10 @@ class BARCHART_STIRF_CURVE(LayeredCacheMixin):
                 compute_analytics_row,
             )
 
+            merged_curves = {}
+            if not existing_raw_df.empty:
+                merged_curves.update(store.reconstruct_curves_batch(existing_raw_df, cfg=cfg, max_workers=4))
+            merged_curves.update(curves_by_ts)
             analytics_tenors = analytics_tenors_for_curve(curve_name)
             analytics_rows = [
                 compute_analytics_row(
@@ -1922,13 +1941,70 @@ class BARCHART_STIRF_CURVE(LayeredCacheMixin):
                     tenors=analytics_tenors,
                     curve_name=curve_name,
                 )
-                for ts, curve in sorted(curves_by_ts.items())
+                for ts, curve in sorted(merged_curves.items())
             ]
             analytics_df = build_analytics_frame(analytics_rows)
             if not analytics_df.empty:
                 store.write_analytics_day(curve_name, date, analytics_df, overwrite=True)
         except Exception:
             pass
+
+    @staticmethod
+    def _curve_store_norm_timestamp(value: datetime.datetime) -> datetime.datetime:
+        ts = pd.Timestamp(value)
+        if ts.tzinfo is None:
+            ts = ts.tz_localize("UTC")
+        else:
+            ts = ts.tz_convert("UTC")
+        return ts.to_pydatetime().replace(microsecond=0)
+
+    @classmethod
+    def _curve_store_snapshot_from_raw_row(
+        cls,
+        row: Dict[str, Any],
+        *,
+        default_curve_name: str,
+    ):
+        from Caching.curve_store import CurveSnapshot
+
+        ts_utc = cls._curve_store_norm_timestamp(row["timestamp_utc"])
+        ts_local = pd.Timestamp(row.get("timestamp_local"))
+        if pd.isna(ts_local):
+            ts_local = pd.Timestamp(ts_utc).tz_convert("America/Chicago")
+        elif ts_local.tzinfo is None:
+            ts_local = ts_local.tz_localize("America/Chicago")
+        else:
+            ts_local = ts_local.tz_convert("America/Chicago")
+
+        node_dates = []
+        for value in list(row.get("node_dates") or []):
+            if isinstance(value, datetime.datetime):
+                node_dates.append(value.date())
+            elif isinstance(value, datetime.date):
+                node_dates.append(value)
+            else:
+                node_dates.append(pd.Timestamp(value).date())
+
+        discount_factors = [float(value) for value in list(row.get("discount_factors") or [])]
+        trading_date = row.get("trading_date")
+        if isinstance(trading_date, datetime.datetime):
+            trading_date = trading_date.date()
+        elif not isinstance(trading_date, datetime.date):
+            trading_date = pd.Timestamp(trading_date).date()
+
+        return CurveSnapshot(
+            timestamp_utc=ts_utc,
+            timestamp_local=ts_local.to_pydatetime().replace(microsecond=0),
+            trading_date=trading_date,
+            session_minute=int(row.get("session_minute") or 0),
+            curve_name=str(row.get("curve_name") or default_curve_name),
+            cfg_hash=str(row.get("cfg_hash") or ""),
+            reference_key=str(row.get("reference_key") or default_curve_name),
+            interpolation=str(row.get("interpolation") or "log_linear"),
+            source_variant=str(row.get("source_variant") or "BARCHART_STIRF"),
+            node_dates=node_dates,
+            discount_factors=discount_factors,
+        )
 
     def _persist_bulk_curves(
         self,

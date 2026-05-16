@@ -92,8 +92,21 @@ def test_curve_store_write_day_persists_one_bulk_day(monkeypatch):
     import Caching.curve_analytics as curve_analytics_module
 
     captured = {}
+    ts1 = datetime.datetime(2026, 3, 10, 14, 0, tzinfo=datetime.timezone.utc)
+    ts2 = datetime.datetime(2026, 3, 10, 15, 0, tzinfo=datetime.timezone.utc)
+
+    class _Snapshot:
+        def __init__(self, timestamp_utc, curve):
+            self.timestamp_utc = timestamp_utc
+            self.curve = curve
 
     class _DummyStore:
+        def read_raw_day(self, curve_name, trading_date):
+            return pd.DataFrame()
+
+        def reconstruct_curves_batch(self, raw_df, cfg, max_workers=4):
+            return {}
+
         def write_day(self, curve_name, trading_date, snapshots, overwrite=False):
             captured["curve_name"] = curve_name
             captured["trading_date"] = trading_date
@@ -109,7 +122,12 @@ def test_curve_store_write_day_persists_one_bulk_day(monkeypatch):
     monkeypatch.setattr(
         curve_store_module.CurveSnapshot,
         "from_rl_curve",
-        classmethod(lambda cls, curve, *, curve_name, cfg, cfg_hash="": (curve_name, cfg_hash, curve)),
+        classmethod(
+            lambda cls, curve, *, curve_name, cfg, cfg_hash="": _Snapshot(
+                ts1 if curve == "curve-a" else ts2,
+                (curve_name, cfg_hash, curve),
+            )
+        ),
     )
     monkeypatch.setattr(
         curve_store_module.CurveStore,
@@ -128,8 +146,8 @@ def test_curve_store_write_day_persists_one_bulk_day(monkeypatch):
     )
 
     curves_by_ts = {
-        datetime.datetime(2026, 3, 10, 14, 0, tzinfo=datetime.timezone.utc): "curve-a",
-        datetime.datetime(2026, 3, 10, 15, 0, tzinfo=datetime.timezone.utc): "curve-b",
+        ts1: "curve-a",
+        ts2: "curve-b",
     }
 
     builder._curve_store_write_day(
@@ -142,7 +160,7 @@ def test_curve_store_write_day_persists_one_bulk_day(monkeypatch):
     assert captured["curve_name"] == "USD-SOFR-1D-Q12STIRT"
     assert captured["trading_date"] == datetime.date(2026, 3, 10)
     assert captured["overwrite"] is True
-    assert captured["snapshots"] == [
+    assert [snapshot.curve for snapshot in captured["snapshots"]] == [
         ("USD-SOFR-1D-Q12STIRT", "cfg123", "curve-a"),
         ("USD-SOFR-1D-Q12STIRT", "cfg123", "curve-b"),
     ]
@@ -150,6 +168,80 @@ def test_curve_store_write_day_persists_one_bulk_day(monkeypatch):
     assert captured["analytics_trading_date"] == datetime.date(2026, 3, 10)
     assert captured["analytics_overwrite"] is True
     assert "par_rate_1Y1Y" in captured["analytics_df"].columns
+
+
+def test_curve_store_write_day_merges_existing_partial_day(monkeypatch):
+    builder = BARCHART_STIRF_CURVE.__new__(BARCHART_STIRF_CURVE)
+    builder._curve_cfg_hash = lambda cfg: "cfg123"
+
+    import Caching.curve_store as curve_store_module
+    import Caching.curve_analytics as curve_analytics_module
+
+    existing_ts = datetime.datetime(2026, 3, 10, 14, 0, tzinfo=datetime.timezone.utc)
+    new_ts = datetime.datetime(2026, 3, 10, 15, 0, tzinfo=datetime.timezone.utc)
+
+    class _Snapshot:
+        def __init__(self, timestamp_utc, label):
+            self.timestamp_utc = timestamp_utc
+            self.label = label
+
+    captured = {}
+
+    class _DummyStore:
+        def read_raw_day(self, curve_name, trading_date):
+            return pd.DataFrame([{"timestamp_utc": existing_ts}])
+
+        def reconstruct_curves_batch(self, raw_df, cfg, max_workers=4):
+            assert list(raw_df["timestamp_utc"]) == [existing_ts]
+            return {existing_ts: "curve-existing"}
+
+        def write_day(self, curve_name, trading_date, snapshots, overwrite=False):
+            captured["snapshots"] = list(snapshots)
+            captured["overwrite"] = overwrite
+
+        def write_analytics_day(self, curve_name, trading_date, df, overwrite=False):
+            captured["analytics_df"] = df.copy()
+            captured["analytics_overwrite"] = overwrite
+
+    monkeypatch.setattr(
+        curve_store_module.CurveSnapshot,
+        "from_rl_curve",
+        classmethod(lambda cls, curve, *, curve_name, cfg, cfg_hash="": _Snapshot(new_ts, "new")),
+    )
+    monkeypatch.setattr(
+        builder,
+        "_curve_store_snapshot_from_raw_row",
+        lambda row, *, default_curve_name: _Snapshot(existing_ts, "existing"),
+    )
+    monkeypatch.setattr(
+        curve_store_module.CurveStore,
+        "default",
+        staticmethod(lambda: _DummyStore()),
+    )
+    monkeypatch.setattr(
+        curve_analytics_module,
+        "compute_analytics_row",
+        lambda curve, *, timestamp_utc, trading_date, session_minute=None, tenors=None, curve_name=None: {
+            "timestamp_utc": pd.Timestamp(timestamp_utc),
+            "trading_date": trading_date,
+            "curve": curve,
+        },
+    )
+
+    builder._curve_store_write_day(
+        "USD-SOFR-1D-Q12STIRT",
+        datetime.date(2026, 3, 10),
+        {"reference_key": "USD-SOFR-1D"},
+        {new_ts: "curve-new"},
+    )
+
+    assert captured["overwrite"] is True
+    assert [(snap.timestamp_utc, snap.label) for snap in captured["snapshots"]] == [
+        (existing_ts, "existing"),
+        (new_ts, "new"),
+    ]
+    assert captured["analytics_overwrite"] is True
+    assert list(captured["analytics_df"]["curve"]) == ["curve-existing", "curve-new"]
 
 
 def test_persist_bulk_curves_uses_curve_store_for_shallow_days_only_once(monkeypatch):
