@@ -80,22 +80,29 @@ class Package:
 
 
 PACKAGES: List[Package] = [
-    # --- outrights ---
-    Package("SFR1_outright",  "IMM_1xIMM_2",   "outright"),
-    Package("SFR3_outright",  "IMM_3xIMM_4",   "outright"),
-    Package("SFR5_outright",  "IMM_5xIMM_6",   "outright"),
-    Package("SFR8_outright",  "IMM_8xIMM_9",   "outright"),
-    Package("SFR12_outright", "IMM_12xIMM_13", "outright"),
+    # --- outrights (all 12 SFR ranks) ---
+    Package("SFR1_outright",  "IMM_1xIMM_2",    "outright"),
+    Package("SFR2_outright",  "IMM_2xIMM_3",    "outright"),
+    Package("SFR3_outright",  "IMM_3xIMM_4",    "outright"),
+    Package("SFR4_outright",  "IMM_4xIMM_5",    "outright"),
+    Package("SFR5_outright",  "IMM_5xIMM_6",    "outright"),
+    Package("SFR6_outright",  "IMM_6xIMM_7",    "outright"),
+    Package("SFR7_outright",  "IMM_7xIMM_8",    "outright"),
+    Package("SFR8_outright",  "IMM_8xIMM_9",    "outright"),
+    Package("SFR9_outright",  "IMM_9xIMM_10",   "outright"),
+    Package("SFR10_outright", "IMM_10xIMM_11",  "outright"),
+    Package("SFR11_outright", "IMM_11xIMM_12",  "outright"),
+    Package("SFR12_outright", "IMM_12xIMM_13",  "outright"),
     # --- calendar spreads (curves) ---
-    Package("SFR1Q5Q_curve", "IMM_1xIMM_2/IMM_5xIMM_6",   "spread"),
-    Package("SFR4Q8Q_curve", "IMM_4xIMM_5/IMM_8xIMM_9",   "spread"),
-    Package("SFR5Q9Q_curve", "IMM_5xIMM_6/IMM_9xIMM_10",  "spread"),
-    Package("SFR8Q12Q_curve","IMM_8xIMM_9/IMM_12xIMM_13", "spread"),
+    Package("SFR1Q5Q_curve",  "IMM_1xIMM_2/IMM_5xIMM_6",    "spread"),
+    Package("SFR4Q8Q_curve",  "IMM_4xIMM_5/IMM_8xIMM_9",    "spread"),
+    Package("SFR5Q9Q_curve",  "IMM_5xIMM_6/IMM_9xIMM_10",   "spread"),
+    Package("SFR8Q12Q_curve", "IMM_8xIMM_9/IMM_12xIMM_13",  "spread"),
     # --- flies (butterflies) ---
-    Package("SFR4_5_6_fly",  "IMM_4xIMM_5/IMM_5xIMM_6/IMM_6xIMM_7",   "fly"),
-    Package("SFR3_5_7_fly",  "IMM_3xIMM_4/IMM_5xIMM_6/IMM_7xIMM_8",   "fly"),
-    Package("SFR5_7_9_fly",  "IMM_5xIMM_6/IMM_7xIMM_8/IMM_9xIMM_10",  "fly"),
-    Package("SFR8_10_12_fly","IMM_8xIMM_9/IMM_10xIMM_11/IMM_12xIMM_13","fly"),
+    Package("SFR4_5_6_fly",   "IMM_4xIMM_5/IMM_5xIMM_6/IMM_6xIMM_7",     "fly"),
+    Package("SFR3_5_7_fly",   "IMM_3xIMM_4/IMM_5xIMM_6/IMM_7xIMM_8",     "fly"),
+    Package("SFR5_7_9_fly",   "IMM_5xIMM_6/IMM_7xIMM_8/IMM_9xIMM_10",    "fly"),
+    Package("SFR8_10_12_fly", "IMM_8xIMM_9/IMM_10xIMM_11/IMM_12xIMM_13", "fly"),
 ]
 
 
@@ -147,6 +154,23 @@ def _expand_window(dates: List[dt.date], window_days: int) -> set:
         for off in range(-window_days, window_days + 1):
             out.add(d + dt.timedelta(days=off))
     return out
+
+
+def _imm_third_wed(year: int, month: int) -> dt.date:
+    d = dt.date(year, month, 1)
+    first_wed = d + dt.timedelta(days=(2 - d.weekday()) % 7)
+    return first_wed + dt.timedelta(days=14)
+
+
+def _imm_dates(start: dt.date, end: dt.date) -> List[dt.date]:
+    """3rd-Wed of Mar/Jun/Sep/Dec within [start, end]."""
+    out: List[dt.date] = []
+    for y in range(start.year - 1, end.year + 2):
+        for m in (3, 6, 9, 12):
+            d = _imm_third_wed(y, m)
+            if start <= d <= end:
+                out.append(d)
+    return sorted(out)
 
 
 # ─────────────────────────── Filter grid ─────────────────────────────────
@@ -323,6 +347,8 @@ def run_grid(
     base_bpv_usd: float = 100_000.0,
     bar_freq: str = "5min",
     min_trades_per_cell: int = 30,
+    drop_safety_window: bool = True,
+    structures: Optional[List[str]] = None,
 ) -> pd.DataFrame:
     out_dir.mkdir(parents=True, exist_ok=True)
 
@@ -339,10 +365,18 @@ def run_grid(
     }
     mdp = IRSwapsMDP(source=cfg_template["mdp_source"])
 
+    # Filter PACKAGES by structure type if requested
+    if structures:
+        active_packages = [p for p in PACKAGES if p.structure in structures]
+    else:
+        active_packages = list(PACKAGES)
+    logger.info("Active packages (%d): %s", len(active_packages),
+                [p.label for p in active_packages])
+
     # Load all rates in ONE TimeseriesBuilder call (much faster than per-pkg)
     cfg_all = AsiaFadeConfig.from_dict({
         **cfg_template,
-        "tenors": [p.tenor for p in PACKAGES],
+        "tenors": [p.tenor for p in active_packages],
         "show_progress": True,
     })
     logger.info("Loading rates for %d packages in one batch...", len(PACKAGES))
@@ -357,15 +391,29 @@ def run_grid(
     fomc        = _fomc_dates()
     nfp         = _nfp_dates(start_d, end_d)
     cpi         = _cpi_dates(start_d, end_d)
+    imm         = _imm_dates(start_d, end_d)
     fomc_window = _expand_window(fomc, 2)
     data_dates  = set(nfp) | set(cpi)
-    logger.info("Calendars: FOMC=%d (±2d window=%d), NFP=%d, CPI=%d",
-                len(fomc), len(fomc_window), len(nfp), len(cpi))
+    logger.info("Calendars: FOMC=%d (±2d window=%d), NFP=%d, CPI=%d, IMM=%d",
+                len(fomc), len(fomc_window), len(nfp), len(cpi), len(imm))
+
+    # ── SAFETY pre-filter (always-on): drop ±1 day around FOMC and IMM.
+    # IMM rolls create artefacts in constant-maturity (Q12STIRT) timeseries:
+    # what was rank-2 yesterday becomes rank-1 today, and intraday samples
+    # interpret the rate discontinuity as a real move.  FOMC ±1 is a
+    # standard real-money blackout.  Apply BEFORE the user-tunable grid so
+    # the same baseline applies to every cell.
+    if drop_safety_window:
+        safety_blackout = _expand_window(fomc, 1) | _expand_window(imm, 1)
+        logger.info("SAFETY filter: dropping %d unique blackout dates (FOMC±1 ∪ IMM±1)",
+                    len(safety_blackout))
+    else:
+        safety_blackout = set()
 
     # Run each package once and tag vol regime
     trades_by_pkg: Dict[str, pd.DataFrame] = {}
     sigma_by_pkg:  Dict[str, float] = {}
-    for pkg in PACKAGES:
+    for pkg in active_packages:
         if pkg.tenor not in all_rates.columns:
             logger.warning("Package %s tenor %s not in rates panel — skipping",
                            pkg.label, pkg.tenor)
@@ -376,10 +424,13 @@ def run_grid(
             logger.warning("  → 0 trades, skipping")
             continue
         trades = tag_vol_regime(trades)
+        n_raw = len(trades)
+        if safety_blackout:
+            trades = trades[~trades["date"].dt.date.isin(safety_blackout)].copy()
         trades_by_pkg[pkg.label] = trades
-        sigma_by_pkg[pkg.label]  = float(trades["abs_signal_move_bp"].mean())
-        logger.info("  → %d trades, σ_pkg = %.3f bp",
-                    len(trades), sigma_by_pkg[pkg.label])
+        sigma_by_pkg[pkg.label]  = float(trades["abs_signal_move_bp"].mean()) if len(trades) else float("nan")
+        logger.info("  → %d trades (raw=%d, dropped %d by safety filter), σ_pkg = %.3f bp",
+                    len(trades), n_raw, n_raw - len(trades), sigma_by_pkg[pkg.label])
 
     # Persist combined trades for re-use
     if trades_by_pkg:
@@ -525,7 +576,14 @@ def main(argv: List[str]) -> int:
                     help="ignore filter cells with fewer trades than this")
     ap.add_argument("--out", type=str,
                     default=str(Path(r"C:\Users\chris\clee\ARBS\BT\results\asia_fade_grid")))
+    ap.add_argument("--no-safety", action="store_true",
+                    help="disable the always-on FOMC±1 ∪ IMM±1 blackout pre-filter")
+    ap.add_argument("--structures", type=str, default="",
+                    help="comma-separated structure types to keep "
+                         "(any of: outright, spread, fly). Empty = all.")
     args = ap.parse_args(argv)
+
+    structures = [s.strip() for s in args.structures.split(",") if s.strip()] or None
 
     out_dir = Path(args.out)
     df = run_grid(
@@ -535,6 +593,8 @@ def main(argv: List[str]) -> int:
         base_bpv_usd=args.base_bpv,
         bar_freq=args.bar_freq,
         min_trades_per_cell=args.min_trades,
+        drop_safety_window=not args.no_safety,
+        structures=structures,
     )
     return 0 if not df.empty else 2
 

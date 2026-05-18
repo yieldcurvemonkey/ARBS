@@ -1,0 +1,111 @@
+==============================================================================================================
+Asia Fade SFR — GRID SEARCH SUMMARY
+Window: 2024-01-01 → 2026-05-14   (619 trading days)
+Curve: USD-SOFR-1D-Q12STIRT   Bar freq: 5min
+Costs: bid-ask 0.5bp RT  + commission $0.5/side
+Cells (after min_trades gate): 1,252   Packages: 13
+
+--- PACKAGE σ (mean abs signal_move_bp, 5pm→10pm) ---
+  SFR5_outright            σ=1.517 bp
+  SFR3_outright            σ=1.416 bp
+  SFR8_outright            σ=1.339 bp
+  SFR1Q5Q_curve            σ=1.337 bp
+  SFR12_outright           σ=1.213 bp
+  SFR1_outright            σ=0.880 bp
+  SFR4Q8Q_curve            σ=0.631 bp
+  SFR5Q9Q_curve            σ=0.565 bp
+  SFR3_5_7_fly             σ=0.513 bp
+  SFR5_7_9_fly             σ=0.403 bp
+  SFR8Q12Q_curve           σ=0.391 bp
+  SFR8_10_12_fly           σ=0.284 bp
+  SFR4_5_6_fly             σ=0.195 bp
+
+--- BEST FILTER COMBO PER PACKAGE (ranked by Sharpe) ---
+       package structure polarity min_size_sigma  vol_keep drop_fomc fomc_window drop_data_days n_trades hit_rate  avg_usd sharpe   total_usd max_dd_usd
+ SFR1_outright  outright momentum            0.0       all         n           0              n      399    75.4%  +42,582  +5.47 +16,990,113   -725,576
+  SFR5_7_9_fly       fly momentum            0.0  drop_low         n           0              Y      248    54.8%  +99,348  +1.75 +24,638,217 -3,584,165
+ SFR3_outright  outright momentum            0.0       all         n           0              Y      372    57.5%  +26,360  +1.44  +9,805,846 -3,488,186
+SFR12_outright  outright momentum            0.0       all         n           0              n      399    54.9%  +29,976  +1.43 +11,960,314 -4,048,533
+ SFR8_outright  outright momentum            0.0       all         n           0              n      399    57.1%  +30,425  +1.39 +12,139,512 -4,237,637
+SFR8Q12Q_curve    spread momentum            1.5 high_only         n           0              n       32    62.5% +194,064  +1.13  +6,210,046 -1,360,125
+SFR8_10_12_fly       fly momentum            0.0       all         Y           2              n      379    52.2%  +48,834  +1.10 +18,507,916 -6,963,995
+ SFR4Q8Q_curve    spread     fade            1.5  drop_low         n           0              Y       36    66.7% +246,610  +1.03  +8,877,950 -2,304,610
+ SFR5Q9Q_curve    spread momentum            0.0       all         Y           2              n      379    53.6%  +43,890  +0.99 +16,634,214 -6,013,072
+  SFR4_5_6_fly       fly     fade            0.0 high_only         n           0              Y      120    54.2%  +77,110  +0.94  +9,253,148 -3,794,507
+ SFR5_outright  outright momentum            0.0       all         n           0              Y      372    57.5%  +20,982  +0.92  +7,805,210 -5,196,674
+  SFR3_5_7_fly       fly     fade            1.0  drop_low         n           0              n      122    52.5%  +87,369  +0.92 +10,659,019 -5,007,804
+ SFR1Q5Q_curve    spread momentum            0.0       all         n           0              Y      370    55.4%  +17,747  +0.61  +6,566,267 -5,497,790
+
+--- TOP 25 BY SHARPE (across all packages × filter combos) ---
+       package structure polarity min_size_sigma  vol_keep drop_fomc fomc_window drop_data_days n_trades hit_rate avg_usd sharpe   total_usd max_dd_usd
+ SFR1_outright  outright momentum            0.0       all         n           0              n      399    75.4% +42,582  +5.47 +16,990,113   -725,576
+ SFR1_outright  outright momentum            0.0       all         n           0              Y      372    75.8% +43,570  +5.36 +16,208,004   -725,576
+ SFR1_outright  outright momentum            0.0       all         Y           2              n      380    74.7% +41,935  +5.17 +15,935,373   -725,576
+ SFR1_outright  outright momentum            0.0       all         Y           2              Y      353    75.1% +42,927  +5.05 +15,153,264   -725,576
+ SFR1_outright  outright momentum            0.0  drop_low         n           0              n      268    73.1% +38,767  +3.65 +10,389,622   -725,576
+ SFR1_outright  outright momentum            0.0  drop_low         n           0              Y      250    73.6% +40,081  +3.61 +10,020,323   -725,576
+ SFR1_outright  outright momentum            0.0  drop_low         Y           2              n      256    72.7% +37,896  +3.44  +9,701,373   -725,576
+ SFR1_outright  outright momentum            0.0  drop_low         Y           2              Y      238    73.1% +39,210  +3.39  +9,332,073   -725,576
+ SFR1_outright  outright momentum            0.0 high_only         n           0              Y      129    74.4% +48,441  +2.96  +6,248,868   -534,697
+ SFR1_outright  outright momentum            0.0 high_only         n           0              n      138    73.9% +46,420  +2.93  +6,405,904   -362,473
+ SFR1_outright  outright momentum            0.0 high_only         Y           2              Y      123    74.0% +47,241  +2.79  +5,810,704   -534,697
+ SFR1_outright  outright momentum            0.0 high_only         Y           2              n      132    73.5% +45,210  +2.76  +5,967,740   -362,473
+ SFR1_outright  outright momentum            0.5       all         n           0              n      174    64.9% +30,867  +2.08  +5,370,809   -760,375
+ SFR1_outright  outright momentum            0.5       all         Y           2              n      169    65.1% +30,607  +2.01  +5,172,625   -760,375
+ SFR1_outright  outright momentum            0.5       all         n           0              Y      165    65.5% +30,647  +1.99  +5,056,754   -865,070
+ SFR1_outright  outright momentum            0.5       all         Y           2              Y      160    65.6% +30,366  +1.91  +4,858,570   -857,389
+  SFR5_7_9_fly       fly momentum            0.0  drop_low         n           0              Y      248    54.8% +99,348  +1.75 +24,638,217 -3,584,165
+  SFR5_7_9_fly       fly momentum            0.0  drop_low         Y           2              Y      237    54.4% +94,518  +1.62 +22,400,793 -3,830,045
+  SFR5_7_9_fly       fly momentum            0.0  drop_low         n           0              n      267    53.9% +83,735  +1.54 +22,357,315 -3,287,033
+ SFR1_outright  outright momentum            0.5  drop_low         n           0              n      126    65.9% +29,349  +1.53  +3,697,957   -725,876
+ SFR1_outright  outright momentum            0.5  drop_low         Y           2              n      123    66.7% +29,667  +1.51  +3,649,090   -725,576
+ SFR3_outright  outright momentum            0.0       all         n           0              Y      372    57.5% +26,360  +1.44  +9,805,846 -3,488,186
+SFR12_outright  outright momentum            0.0       all         n           0              n      399    54.9% +29,976  +1.43 +11,960,314 -4,048,533
+ SFR1_outright  outright momentum            0.5  drop_low         n           0              Y      121    66.1% +28,254  +1.43  +3,418,718   -825,434
+ SFR1_outright  outright momentum            0.5 high_only         Y           2              n       61    68.9% +43,305  +1.42  +2,641,599   -354,872
+
+--- TOP 25 BY TOTAL P&L ---
+       package structure polarity min_size_sigma vol_keep drop_fomc fomc_window drop_data_days n_trades hit_rate avg_usd sharpe   total_usd max_dd_usd
+  SFR5_7_9_fly       fly momentum            0.0 drop_low         n           0              Y      248    54.8% +99,348  +1.75 +24,638,217 -3,584,165
+  SFR5_7_9_fly       fly momentum            0.0 drop_low         Y           2              Y      237    54.4% +94,518  +1.62 +22,400,793 -3,830,045
+  SFR5_7_9_fly       fly momentum            0.0 drop_low         n           0              n      267    53.9% +83,735  +1.54 +22,357,315 -3,287,033
+  SFR5_7_9_fly       fly momentum            0.0      all         n           0              Y      370    54.6% +55,036  +1.20 +20,363,465 -6,132,011
+  SFR5_7_9_fly       fly momentum            0.0 drop_low         Y           2              n      256    53.5% +78,593  +1.41 +20,119,890 -3,532,913
+  SFR5_7_9_fly       fly momentum            0.0      all         n           0              n      397    54.2% +48,031  +1.10 +19,068,480 -6,264,376
+SFR8_10_12_fly       fly momentum            0.0      all         Y           2              n      379    52.2% +48,834  +1.10 +18,507,916 -6,963,995
+  SFR5_7_9_fly       fly momentum            0.0      all         Y           2              Y      352    54.0% +51,488  +1.09 +18,123,654 -6,073,430
+ SFR1_outright  outright momentum            0.0      all         n           0              n      399    75.4% +42,582  +5.47 +16,990,113   -725,576
+  SFR5_7_9_fly       fly momentum            0.0      all         Y           2              n      379    53.6% +44,403  +0.99 +16,828,669 -6,004,118
+ SFR5Q9Q_curve    spread momentum            0.0      all         Y           2              n      379    53.6% +43,890  +0.99 +16,634,214 -6,013,072
+SFR8_10_12_fly       fly momentum            0.0      all         n           0              n      397    51.4% +40,946  +0.96 +16,255,568 -7,992,776
+ SFR1_outright  outright momentum            0.0      all         n           0              Y      372    75.8% +43,570  +5.36 +16,208,004   -725,576
+SFR8_10_12_fly       fly momentum            0.0      all         Y           2              Y      352    51.7% +45,434  +0.97 +15,992,776 -7,435,243
+ SFR1_outright  outright momentum            0.0      all         Y           2              n      380    74.7% +41,935  +5.17 +15,935,373   -725,576
+ SFR1_outright  outright momentum            0.0      all         Y           2              Y      353    75.1% +42,927  +5.05 +15,153,264   -725,576
+ SFR5Q9Q_curve    spread momentum            0.0      all         n           0              n      397    52.9% +34,946  +0.81 +13,873,756 -6,010,692
+SFR8_10_12_fly       fly momentum            0.0      all         n           0              Y      370    50.8% +37,136  +0.83 +13,740,429 -9,191,271
+SFR8_10_12_fly       fly momentum            0.5      all         Y           2              n      240    54.6% +56,546  +1.01 +13,571,065 -7,225,732
+ SFR5Q9Q_curve    spread momentum            0.0      all         Y           2              Y      352    52.8% +35,570  +0.76 +12,520,597 -6,891,930
+ SFR8_outright  outright momentum            0.0      all         n           0              n      399    57.1% +30,425  +1.39 +12,139,512 -4,237,637
+SFR12_outright  outright momentum            0.0      all         n           0              n      399    54.9% +29,976  +1.43 +11,960,314 -4,048,533
+ SFR8_outright  outright momentum            0.0      all         n           0              Y      372    57.3% +31,723  +1.38 +11,800,956 -4,698,599
+  SFR5_7_9_fly       fly momentum            0.5 drop_low         n           0              Y      159    52.8% +73,898  +1.01 +11,749,749 -3,257,758
+ SFR8_outright  outright momentum            0.0      all         Y           2              n      380    57.6% +30,624  +1.36 +11,637,105 -3,900,319
+
+--- HEADLINE RULES (positive Sharpe AND ≥150 trades) ---
+      package structure polarity min_size_sigma vol_keep drop_fomc fomc_window drop_data_days n_trades hit_rate avg_usd sharpe   total_usd max_dd_usd
+SFR1_outright  outright momentum            0.0      all         n           0              n      399    75.4% +42,582  +5.47 +16,990,113   -725,576
+SFR1_outright  outright momentum            0.0      all         n           0              Y      372    75.8% +43,570  +5.36 +16,208,004   -725,576
+SFR1_outright  outright momentum            0.0      all         Y           2              n      380    74.7% +41,935  +5.17 +15,935,373   -725,576
+SFR1_outright  outright momentum            0.0      all         Y           2              Y      353    75.1% +42,927  +5.05 +15,153,264   -725,576
+SFR1_outright  outright momentum            0.0 drop_low         n           0              n      268    73.1% +38,767  +3.65 +10,389,622   -725,576
+SFR1_outright  outright momentum            0.0 drop_low         n           0              Y      250    73.6% +40,081  +3.61 +10,020,323   -725,576
+SFR1_outright  outright momentum            0.0 drop_low         Y           2              n      256    72.7% +37,896  +3.44  +9,701,373   -725,576
+SFR1_outright  outright momentum            0.0 drop_low         Y           2              Y      238    73.1% +39,210  +3.39  +9,332,073   -725,576
+SFR1_outright  outright momentum            0.5      all         n           0              n      174    64.9% +30,867  +2.08  +5,370,809   -760,375
+SFR1_outright  outright momentum            0.5      all         Y           2              n      169    65.1% +30,607  +2.01  +5,172,625   -760,375
+SFR1_outright  outright momentum            0.5      all         n           0              Y      165    65.5% +30,647  +1.99  +5,056,754   -865,070
+SFR1_outright  outright momentum            0.5      all         Y           2              Y      160    65.6% +30,366  +1.91  +4,858,570   -857,389
+ SFR5_7_9_fly       fly momentum            0.0 drop_low         n           0              Y      248    54.8% +99,348  +1.75 +24,638,217 -3,584,165
+ SFR5_7_9_fly       fly momentum            0.0 drop_low         Y           2              Y      237    54.4% +94,518  +1.62 +22,400,793 -3,830,045
+ SFR5_7_9_fly       fly momentum            0.0 drop_low         n           0              n      267    53.9% +83,735  +1.54 +22,357,315 -3,287,033

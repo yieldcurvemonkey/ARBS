@@ -1,0 +1,204 @@
+imports ok
+MMSS=> Sharpe=0.222  MTM=280,649,307  trades=539  hold=30.1d  994s
+[2/13] sm3_sc20 => Sharpe=0.167  MTM=210,707,846  trades=464  hold=34.3d  1185s
+[3/13] sm3_sc30 => Sharpe=0.051  MTM=56,389,597  trades=371  hold=37.8d  1103s
+[4/13] sm3_sc60 => Sharpe=0.093  MTM=91,687,150  trades=239  hold=46.2d  917s
+[5/13] sm5_sc30 => no JSON in output
+  ERR: C:\Users\chris\anaconda3\envs\stir\python.exe: can't open file 'C:\\Users\\chris\\clee\\ARBS\\_fly_worker.py': [Errno 2] No such file or directory
+[6/13] sm5_sc60 => no JSON in output
+  ERR: C:\Users\chris\anaconda3\envs\stir\python.exe: can't open file 'C:\\Users\\chris\\clee\\ARBS\\_fly_worker.py': [Errno 2] No such file or directory
+[7/13] z1.0/0.0 => no JSON in output
+  ERR: C:\Users\chris\anaconda3\envs\stir\python.exe: can't open file 'C:\\Users\\chris\\clee\\ARBS\\_fly_worker.py': [Errno 2] No such file or directory
+[8/13] z1.5/0.0 => no JSON in output
+  ERR: C:\Users\chris\anaconda3\envs\stir\python.exe: can't open file 'C:\\Users\\chris\\clee\\ARBS\\_fly_worker.py': [Errno 2] No such file or directory
+[9/13] z2.0/0.25 => no JSON in output
+  ERR: C:\Users\chris\anaconda3\envs\stir\python.exe: can't open file 'C:\\Users\\chris\\clee\\ARBS\\_fly_worker.py': [Errno 2] No such file or directory
+[10/13] z2.0/0.5 => no JSON in output
+  ERR: C:\Users\chris\anaconda3\envs\stir\python.exe: can't open file 'C:\\Users\\chris\\clee\\ARBS\\_fly_worker.py': [Errno 2] No such file or directory
+[11/13] h20 => no JSON in output
+  ERR: C:\Users\chris\anaconda3\envs\stir\python.exe: can't open file 'C:\\Users\\chris\\clee\\ARBS\\_fly_worker.py': [Errno 2] No such file or directory
+[12/13] h60 => no JSON in output
+  ERR: C:\Users\chris\anaconda3\envs\stir\python.exe: can't open file 'C:\\Users\\chris\\clee\\ARBS\\_fly_worker.py': [Errno 2] No such file or directory
+[13/13] fly_only => no JSON in output
+  ERR: C:\Users\chris\anaconda3\envs\stir\python.exe: can't open file 'C:\\Users\\chris\\clee\\ARBS\\_fly_worker.py': [Errno 2] No such file or directory
+
+Total time: 72min
+
+====================================================================================================
+  RESULTS (sorted by Sharpe)
+====================================================================================================
+   label  sharpe       mtm        mdd  trades   hit  avg_hold  elapsed
+sm2_sc20   0.222 280649307 -530626453     539 0.557      30.1      994
+sm3_sc20   0.167 210707846 -554156074     464 0.534      34.3     1185
+sm3_sc60   0.093  91687150 -235642576     239 0.548      46.2      917
+sm3_sc30   0.051  56389597 -471529762     371 0.504      37.8     1103
+
+====================================================================================================
+  SENSITIVITY
+====================================================================================================
+
+Smoothing HL:
+    sm3_sc30: Sharpe=+0.051
+
+Scoring HL:
+    sm3_sc20: Sharpe=+0.167
+    sm3_sc30: Sharpe=+0.051
+    sm3_sc60: Sharpe=+0.093
+
+Z thresholds:
+re providing contains valid fixings the fault probably lies with Rateslib calendar definitions and should be reported.
+This error can avoided by excluding these fixings using Series.pop().
+"[Timestamp('2025-04-18 00:00:00')] not in index"
+The supplied `fixings` contain more fixings than were expected by the holiday calendar of the `curve`.
+The additional fixing dates are shown in the underlying KeyError message below.
+If the Series you are providing contains valid fixings the fault probably lies with Rateslib calendar definitions and should be reported.
+This error can avoided by excluding these fixings using Series.pop().
+"[Timestamp('2026-04-03 00:00:00')] not in index"
+  => Sharpe=0.051  MTM=56,389,597  trades=371  hold=37.8d  1449s
+[4/13] sm3_sc60 ...
+"Missing FRB pricer for leg cusip='CT2'. available=[]"
+"Missing FRB pricer for leg cusip='CT2'. available=[]"
+"Missing FRB pricer for leg cusip='CT2'. available=[]"
+The supplied `fixings` contain more fixings than were expected by the holiday calendar of the `curve`.
+The additional fixing dates are shown in the underlying KeyError message below.
+If the Series you are providing contains valid fixings the fault probably lies with Rateslib calendar definitions and should be reported.
+This error can avoided by excluding these fixings using Series.pop().
+"[Timestamp('2025-04-18 00:00:00')] not in index"
+The supplied `fixings` contain more fixings than were expected by the holiday calendar of the `curve`.
+The additional fixing dates are shown in the underlying KeyError message below.
+If the Series you are providing contains valid fixings the fault probably lies with Rateslib calendar definitions and should be reported.
+This error can avoided by excluding these fixings using Series.pop().
+"[Timestamp('2026-04-03 00:00:00')] not in index"
+  => Sharpe=0.093  MTM=91,687,150  trades=239  hold=46.2d  913s
+[5/13] sm5_sc30 ...
+The supplied `fixings` contain more fixings than were expected by the holiday calendar of the `curve`.
+The additional fixing dates are shown in the underlying KeyError message below.
+If the Series you are providing contains valid fixings the fault probably lies with Rateslib calendar definitions and should be reported.
+This error can avoided by excluding these fixings using Series.pop().
+"[Timestamp('2025-04-18 00:00:00')] not in index"
+The supplied `fixings` contain more fixings than were expected by the holiday calendar of the `curve`.
+The additional fixing dates are shown in the underlying KeyError message below.
+If the Series you are providing contains valid fixings the fault probably lies with Rateslib calendar definitions and should be reported.
+This error can avoided by excluding these fixings using Series.pop().
+"[Timestamp('2026-02-16 00:00:00'), Timestamp('2026-04-03 00:00:00')] not in index"
+  => Sharpe=-0.105  MTM=-115,426,235  trades=312  hold=42.9d  1073s
+[6/13] sm5_sc60 ...
+"Missing FRB pricer for leg cusip='CT5'. available=[]"
+"Missing FRB pricer for leg cusip='CT5'. available=[]"
+"Missing FRB pricer for leg cusip='CT5'. available=[]"
+The supplied `fixings` contain more fixings than were expected by the holiday calendar of the `curve`.
+The additional fixing dates are shown in the underlying KeyError message below.
+If the Series you are providing contains valid fixings the fault probably lies with Rateslib calendar definitions and should be reported.
+This error can avoided by excluding these fixings using Series.pop().
+"[Timestamp('2025-04-18 00:00:00')] not in index"
+The supplied `fixings` contain more fixings than were expected by the holiday calendar of the `curve`.
+The additional fixing dates are shown in the underlying KeyError message below.
+If the Series you are providing contains valid fixings the fault probably lies with Rateslib calendar definitions and should be reported.
+This error can avoided by excluding these fixings using Series.pop().
+"[Timestamp('2026-04-03 00:00:00')] not in index"
+  => Sharpe=-0.075  MTM=-72,958,616  trades=200  hold=51.4d  786s
+[7/13] z1.0/0.0 ...
+The supplied `fixings` contain more fixings than were expected by the holiday calendar of the `curve`.
+The additional fixing dates are shown in the underlying KeyError message below.
+If the Series you are providing contains valid fixings the fault probably lies with Rateslib calendar definitions and should be reported.
+This error can avoided by excluding these fixings using Series.pop().
+"[Timestamp('2023-04-07 00:00:00')] not in index"
+"Missing FRB pricer for leg cusip='CT3'. available=[]"
+"Missing FRB pricer for leg cusip='CT3'. available=[]"
+"Missing FRB pricer for leg cusip='CT3'. available=[]"
+The supplied `fixings` contain more fixings than were expected by the holiday calendar of the `curve`.
+The additional fixing dates are shown in the underlying KeyError message below.
+If the Series you are providing contains valid fixings the fault probably lies with Rateslib calendar definitions and should be reported.
+This error can avoided by excluding these fixings using Series.pop().
+"[Timestamp('2025-04-18 00:00:00')] not in index"
+The supplied `fixings` contain more fixings than were expected by the holiday calendar of the `curve`.
+The additional fixing dates are shown in the underlying KeyError message below.
+If the Series you are providing contains valid fixings the fault probably lies with Rateslib calendar definitions and should be reported.
+This error can avoided by excluding these fixings using Series.pop().
+"[Timestamp('2026-04-03 00:00:00')] not in index"
+  => Sharpe=0.196  MTM=356,269,924  trades=657  hold=40.0d  2247s
+[8/13] z1.5/0.0 ...
+The supplied `fixings` contain more fixings than were expected by the holiday calendar of the `curve`.
+The additional fixing dates are shown in the underlying KeyError message below.
+If the Series you are providing contains valid fixings the fault probably lies with Rateslib calendar definitions and should be reported.
+This error can avoided by excluding these fixings using Series.pop().
+"[Timestamp('2025-04-18 00:00:00')] not in index"
+The supplied `fixings` contain more fixings than were expected by the holiday calendar of the `curve`.
+The additional fixing dates are shown in the underlying KeyError message below.
+If the Series you are providing contains valid fixings the fault probably lies with Rateslib calendar definitions and should be reported.
+This error can avoided by excluding these fixings using Series.pop().
+"[Timestamp('2026-02-16 00:00:00'), Timestamp('2026-04-03 00:00:00')] not in index"
+  => Sharpe=-0.005  MTM=-6,021,215  trades=370  hold=42.2d  1311s
+[9/13] z2.0/0.25 ...
+The supplied `fixings` contain more fixings than were expected by the holiday calendar of the `curve`.
+The additional fixing dates are shown in the underlying KeyError message below.
+If the Series you are providing contains valid fixings the fault probably lies with Rateslib calendar definitions and should be reported.
+This error can avoided by excluding these fixings using Series.pop().
+"[Timestamp('2025-04-18 00:00:00')] not in index"
+The supplied `fixings` contain more fixings than were expected by the holiday calendar of the `curve`.
+The additional fixing dates are shown in the underlying KeyError message below.
+If the Series you are providing contains valid fixings the fault probably lies with Rateslib calendar definitions and should be reported.
+This error can avoided by excluding these fixings using Series.pop().
+"[Timestamp('2026-04-03 00:00:00')] not in index"
+  => Sharpe=-0.097  MTM=-51,479,569  trades=122  hold=36.4d  391s
+[10/13] z2.0/0.5 ...
+The supplied `fixings` contain more fixings than were expected by the holiday calendar of the `curve`.
+The additional fixing dates are shown in the underlying KeyError message below.
+If the Series you are providing contains valid fixings the fault probably lies with Rateslib calendar definitions and should be reported.
+This error can avoided by excluding these fixings using Series.pop().
+"[Timestamp('2026-04-03 00:00:00')] not in index"
+  => Sharpe=-0.07  MTM=-35,124,096  trades=123  hold=32.9d  353s
+[11/13] h20 ...
+The supplied `fixings` contain more fixings than were expected by the holiday calendar of the `curve`.
+The additional fixing dates are shown in the underlying KeyError message below.
+If the Series you are providing contains valid fixings the fault probably lies with Rateslib calendar definitions and should be reported.
+This error can avoided by excluding these fixings using Series.pop().
+"[Timestamp('2025-04-18 00:00:00')] not in index"
+The supplied `fixings` contain more fixings than were expected by the holiday calendar of the `curve`.
+The additional fixing dates are shown in the underlying KeyError message below.
+If the Series you are providing contains valid fixings the fault probably lies with Rateslib calendar definitions and should be reported.
+This error can avoided by excluding these fixings using Series.pop().
+"[Timestamp('2026-04-03 00:00:00')] not in index"
+  => Sharpe=0.008  MTM=8,137,969  trades=441  hold=25.3d  1044s
+[12/13] h60 ...
+The supplied `fixings` contain more fixings than were expected by the holiday calendar of the `curve`.
+The additional fixing dates are shown in the underlying KeyError message below.
+If the Series you are providing contains valid fixings the fault probably lies with Rateslib calendar definitions and should be reported.
+This error can avoided by excluding these fixings using Series.pop().
+"[Timestamp('2025-04-18 00:00:00')] not in index"
+The supplied `fixings` contain more fixings than were expected by the holiday calendar of the `curve`.
+The additional fixing dates are shown in the underlying KeyError message below.
+If the Series you are providing contains valid fixings the fault probably lies with Rateslib calendar definitions and should be reported.
+This error can avoided by excluding these fixings using Series.pop().
+"[Timestamp('2026-04-03 00:00:00')] not in index"
+  => Sharpe=0.079  MTM=95,144,987  trades=353  hold=42.9d  1008s
+[13/13] fly_only ...
+The supplied `fixings` contain more fixings than were expected by the holiday calendar of the `curve`.
+The additional fixing dates are shown in the underlying KeyError message below.
+If the Series you are providing contains valid fixings the fault probably lies with Rateslib calendar definitions and should be reported.
+This error can avoided by excluding these fixings using Series.pop().
+"[Timestamp('2025-04-18 00:00:00')] not in index"
+The supplied `fixings` contain more fixings than were expected by the holiday calendar of the `curve`.
+The additional fixing dates are shown in the underlying KeyError message below.
+If the Series you are providing contains valid fixings the fault probably lies with Rateslib calendar definitions and should be reported.
+This error can avoided by excluding these fixings using Series.pop().
+"[Timestamp('2026-04-03 00:00:00')] not in index"
+  => Sharpe=0.104  MTM=67,291,758  trades=213  hold=37.7d  640s
+
+Total time: 227min
+
+RESULTS
+    label  sharpe        mtm        mdd  trades   hit  avg_hold  elapsed
+ sm2_sc20   0.222  280649307 -530626453     539 0.557      30.1      850
+ z1.0/0.0   0.196  356269924 -892082995     657 0.546      40.0     2247
+ sm3_sc20   0.167  210707846 -554156074     464 0.534      34.3     1526
+ fly_only   0.104   67291758 -278213351     213 0.521      37.7      640
+ sm3_sc60   0.093   91687150 -235642576     239 0.548      46.2      913
+      h60   0.079   95144987 -530163050     353 0.518      42.9     1008
+ sm3_sc30   0.051   56389597 -471529762     371 0.504      37.8     1449
+      h20   0.008    8137969 -338103029     441 0.519      25.3     1044
+ z1.5/0.0  -0.005   -6021215 -504909311     370 0.481      42.2     1311
+ z2.0/0.5  -0.070  -35124096 -174275816     123 0.455      32.9      353
+ sm5_sc60  -0.075  -72958616 -337021935     200 0.475      51.4      786
+z2.0/0.25  -0.097  -51479569 -194653872     122 0.443      36.4      391
+ sm5_sc30  -0.105 -115426235 -495562181     312 0.429      42.9     1073
