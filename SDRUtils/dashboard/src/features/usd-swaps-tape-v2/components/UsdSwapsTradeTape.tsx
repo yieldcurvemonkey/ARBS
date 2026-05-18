@@ -173,6 +173,7 @@ export default function UsdSwapsTradeTape(): JSX.Element {
         <div className="flex flex-1 min-h-0 overflow-hidden">
           <TradeTapeTable
             rows={groupedRows}
+            columnFilters={orchestratorColumnFilters}
             loading={tape.loading}
             refreshing={tape.refreshing}
             loadingMore={tape.loadingMore}

@@ -25,8 +25,8 @@ import { ROW_ESTIMATE_PX } from '../../constants'
 import {
   DEFAULT_SORT_FIELD,
   DEFAULT_SORT_ORDER,
-  useColumnFilters,
 } from '../../hooks'
+import type { UseColumnFiltersReturn } from '../../hooks'
 import type { UsdSwapTapeRow } from '../../types'
 import { LegsSubTable } from './LegsSubTable'
 import { getColumns, rowClassName, type MetricMode } from './columns'
@@ -79,6 +79,9 @@ export interface TradeTapeTableProps {
    * the dock's "Focused trade" context bar (see Analytics Dock design).
    */
   focusedPackageId?: string | null
+  /** URL-synced column filter + sort state, lifted from the orchestrator so
+   *  only one useColumnFilters() call runs per render tree. */
+  columnFilters: UseColumnFiltersReturn
   /**
    * Optional right-side slot rendered in the filter bar — used by the parent
    * to inject extras like a "Link N selected" action without pushing filter
@@ -114,11 +117,9 @@ export function TradeTapeTable(props: TradeTapeTableProps): JSX.Element {
     onSelectionChange,
     focusedPackageId,
     actionSlot,
+    columnFilters,
     onOpenManualLink,
   } = props
-
-  // URL-backed column filter + sort state.
-  const columnFilters = useColumnFilters()
 
   // Phase 5 (analytics-fetching): debounced prefetch on row hover.
   // 150 ms after a hover the analytics dock's three routes are
@@ -392,23 +393,21 @@ export function TradeTapeTable(props: TradeTapeTableProps): JSX.Element {
     )
   }
 
-  const dataTableRowClassName = (row: UsdSwapTapeRow) =>
-    [
-      'h-9 text-[11px] !text-gray-200 transition-[filter,box-shadow] hover:brightness-110 hover:shadow-[inset_0_0_0_1px_rgba(148,163,184,0.5)]',
-      rowClassName(row),
-      row.manual_link_id || row.manual_package_id ? 'manual-linked-row' : '',
-      selectedIds.has(row.package_id) ? 'selected-share-row' : '',
-      // Mirror the Analytics Dock's "Focused trade" treatment on the
-      // exact row the dock is currently rendering analytics for. The
-      // indigo tint + ring is applied via the focused-trade-row CSS
-      // selector in UsdSwapsTradeTape.tsx so it survives PrimeReact's
-      // own row hover / selection styling.
-      focusedPackageId && row.package_id === focusedPackageId
-        ? 'focused-trade-row'
-        : '',
-    ]
-      .join(' ')
-      .trim()
+  const dataTableRowClassName = useCallback(
+    (row: UsdSwapTapeRow) =>
+      [
+        'h-9 text-[11px] !text-gray-200 transition-[filter,box-shadow] hover:brightness-110 hover:shadow-[inset_0_0_0_1px_rgba(148,163,184,0.5)]',
+        rowClassName(row),
+        row.manual_link_id || row.manual_package_id ? 'manual-linked-row' : '',
+        selectedIds.has(row.package_id) ? 'selected-share-row' : '',
+        focusedPackageId && row.package_id === focusedPackageId
+          ? 'focused-trade-row'
+          : '',
+      ]
+        .join(' ')
+        .trim(),
+    [selectedIds, focusedPackageId],
+  )
 
   const handleResetAll = useCallback(() => {
     columnFilters.reset()

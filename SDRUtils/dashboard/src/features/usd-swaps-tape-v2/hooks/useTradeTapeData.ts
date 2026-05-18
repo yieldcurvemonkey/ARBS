@@ -181,6 +181,10 @@ export function useTradeTapeData(
   const fetchInFlight = useRef(false)
   const columnFiltersRef = useRef(params.columnFilters)
   columnFiltersRef.current = params.columnFilters
+  const limitRef = useRef(params.limit)
+  limitRef.current = params.limit
+  const latestRef = useRef(latestExecutionStart)
+  latestRef.current = latestExecutionStart
 
   const upsertRows = useCallback(
     (incoming: UsdSwapTapeRow[], replace: boolean) => {
@@ -242,7 +246,10 @@ export function useTradeTapeData(
       if (isCursor) setLoadingMore(true)
 
       try {
-        const q = buildQuery(params, options)
+        const q = buildQuery(
+          { limit: limitRef.current, columnFilters: columnFiltersRef.current },
+          options,
+        )
         const res = await fetch(`${TAPE_V2_API_BASE}?${q}`, {
           signal: controller.signal,
         })
@@ -271,7 +278,7 @@ export function useTradeTapeData(
         fetchInFlight.current = false
       }
     },
-    [params, upsertRows],
+    [upsertRows],
   )
 
   const loadMore = useCallback(async () => {
@@ -294,19 +301,30 @@ export function useTradeTapeData(
     setHasMore(false)
     setLatestExecutionStart(null)
     fetchTape({ replace: true })
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [params.limit, params.columnFilters])
+  }, [params.limit, params.columnFilters, fetchTape])
 
-  // Polling for new rows via ?since=latestExecutionStart
+  // Polling for new rows via ?since=latestExecutionStart.
+  // When latestExecutionStart is null (initial fetch failed or returned 0
+  // rows), poll with a full replace-fetch so the tape recovers
+  // automatically instead of staying stuck at 0 rows until page refresh.
+  //
+  // Reads latestExecutionStart from a ref so the interval callback always
+  // sees the freshest cursor without tearing down / restarting the timer
+  // on every poll response (which previously reset the 30s clock to zero
+  // twice per cycle — once for the fetchTape ref change, once for the
+  // latestExecutionStart state change).
   useEffect(() => {
     if (params.pollingEnabled === false) return
     const id = setInterval(() => {
-      if (latestExecutionStart) {
-        fetchTape({ since: latestExecutionStart })
+      const since = latestRef.current
+      if (since) {
+        fetchTape({ since })
+      } else {
+        fetchTape({ replace: true })
       }
     }, POLL_INTERVAL_MS)
     return () => clearInterval(id)
-  }, [fetchTape, latestExecutionStart, params.pollingEnabled])
+  }, [fetchTape, params.pollingEnabled])
 
   const refreshing = useMemo(() => loading && rows.length > 0, [loading, rows.length])
 

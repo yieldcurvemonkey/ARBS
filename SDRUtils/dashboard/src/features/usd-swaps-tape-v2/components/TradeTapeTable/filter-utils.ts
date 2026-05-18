@@ -79,6 +79,17 @@ function normalizeTimestampFilterMeta(filterMeta: any): any {
 export const DEFAULT_TEXT_MATCH_MODE = FilterMatchMode.CONTAINS
 export const DEFAULT_NUMERIC_MATCH_MODE = FilterMatchMode.EQUALS
 
+const NUMERIC_MATCH_MODES: ReadonlySet<string> = new Set([
+  FilterMatchMode.EQUALS,
+  FilterMatchMode.NOT_EQUALS,
+  FilterMatchMode.LESS_THAN,
+  FilterMatchMode.LESS_THAN_OR_EQUAL_TO,
+  FilterMatchMode.GREATER_THAN,
+  FilterMatchMode.GREATER_THAN_OR_EQUAL_TO,
+])
+
+const DATE_MATCH_MODES: ReadonlySet<string> = new Set(['dateAfter', 'dateBefore'])
+
 export type ColumnFilterConstraint = {
   value: any
   matchMode?: string
@@ -183,15 +194,7 @@ export function matchFilterValue(
 
   const rowNumber = parseFilterNumber(rowValue)
   const filterNumber = parseFilterNumber(filterValue)
-  const numericModes = new Set<string>([
-    FilterMatchMode.EQUALS,
-    FilterMatchMode.NOT_EQUALS,
-    FilterMatchMode.LESS_THAN,
-    FilterMatchMode.LESS_THAN_OR_EQUAL_TO,
-    FilterMatchMode.GREATER_THAN,
-    FilterMatchMode.GREATER_THAN_OR_EQUAL_TO,
-  ])
-  if (numericModes.has(mode) && rowNumber !== null && filterNumber !== null) {
+  if (NUMERIC_MATCH_MODES.has(mode) && rowNumber !== null && filterNumber !== null) {
     switch (mode) {
       case FilterMatchMode.EQUALS:
         return rowNumber === filterNumber
@@ -213,8 +216,7 @@ export function matchFilterValue(
   // Date comparison modes — parse both sides as dates, compare chronologically.
   // The filter value comes in as "M/D/YYYY" or "MM/DD/YYYY" (the display format).
   // The row value for timestamp fields arrives pre-formatted as "M/D/YYYY HH:MM:SS".
-  const DATE_MODES = new Set<string>(['dateAfter', 'dateBefore'])
-  if (DATE_MODES.has(mode)) {
+  if (DATE_MATCH_MODES.has(mode)) {
     const rowDate = parseDateFromDisplay(String(rowValue))
     const filterDate = parseDateFromDisplay(String(filterValue))
     if (rowDate === null || filterDate === null) return false

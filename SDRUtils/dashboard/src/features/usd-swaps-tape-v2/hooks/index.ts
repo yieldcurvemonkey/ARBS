@@ -7,6 +7,7 @@ export {
   SORT_FIELD_QUERY_KEY,
   SORT_ORDER_QUERY_KEY,
 } from './useColumnFilters'
+export type { UseColumnFiltersReturn } from './useColumnFilters'
 // useTableControls + SEARCH_QUERY_KEY were the legacy fuzzy-search /
 // sort hook from before the per-column filter cutover; nothing in the
 // app imports them any more. Removed (P1-05) so a future
