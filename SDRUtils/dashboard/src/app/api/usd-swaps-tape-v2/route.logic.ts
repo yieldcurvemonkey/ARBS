@@ -453,8 +453,8 @@ export function buildColumnFilterClause(
 ): string | null {
   if (!columnFilters || typeof columnFilters !== 'object') return null
   const fieldClauses: string[] = []
-  let hasAllowlistedClause = false
   const parsedDateBounds: string[] = []
+  let executionStartInFilter = false
 
   for (const [field, meta] of Object.entries(columnFilters)) {
     if (!meta || typeof meta !== 'object') continue
@@ -466,13 +466,13 @@ export function buildColumnFilterClause(
     if (constraints.length === 0) continue
 
     if (field === 'execution_start') {
+      executionStartInFilter = true
       for (const c of constraints) {
         const parsed = parseDatePattern(c?.value, options.now)
         if (parsed !== null) {
           parsedDateBounds.push(parsed)
         }
       }
-      hasAllowlistedClause = true
       continue
     }
 
@@ -481,11 +481,16 @@ export function buildColumnFilterClause(
       .map((c: any) => buildSingleConstraint(field, c, params))
       .filter((s: string | null): s is string => s !== null)
     if (built.length === 0) continue
-    hasAllowlistedClause = true
     fieldClauses.push(`(${built.join(op)})`)
   }
 
-  if (hasAllowlistedClause) {
+  // Date bounds are only injected when execution_start is explicitly in the
+  // filter map. Previously ANY allowlisted column triggered a today-only
+  // date clamp, which broke cross-day package_id lookups from the volume
+  // grid and tape_label filters spanning multiple dates. Without an
+  // explicit execution_start filter, ORDER BY + LIMIT naturally returns
+  // the most recent matching rows via the execution_start DESC index.
+  if (executionStartInFilter) {
     const uniqueDates = [...new Set(parsedDateBounds)].sort()
     if (uniqueDates.length === 0) {
       fieldClauses.push(

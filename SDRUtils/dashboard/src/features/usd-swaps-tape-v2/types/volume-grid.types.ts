@@ -57,6 +57,8 @@ export interface VolumeGridResponse {
   tenorSchema: TenorSchemaId
   packageType: PackageTypeGroupId
   viewMode: VolumeGridViewMode
+  collapseAxis?: 'tenor' | 'forward'
+  textFilter?: string
   axes: { forward: VolumeGridSchemaAxis; tenor: VolumeGridSchemaAxis }
   cells: VolumeGridCell[]
   totals: {
@@ -113,7 +115,7 @@ export interface VolumeGridCellRecentTrade {
 
 export interface VolumeGridCellResponse {
   fwd: string
-  tenor: string
+  tenor?: string
   metric: VolumeMetric
   range: VolumeCellRange
   forwardSchema: ForwardSchemaId

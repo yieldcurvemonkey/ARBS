@@ -22,13 +22,14 @@ import type {
 
 export interface VolumeGridCellParams {
   fwd: string
-  tenor: string
+  tenor?: string
   metric: VolumeMetric
   range: VolumeCellRange
   recentLimit: number
   forwardSchema: ForwardSchemaId
   tenorSchema: TenorSchemaId
   packageType: PackageTypeGroupId
+  textFilter?: string
 }
 
 export type ParseResult<T> =
@@ -48,10 +49,13 @@ export function parseVolumeGridCellParams(
   now: Date = new Date(),
 ): ParseResult<VolumeGridCellParams> {
   const fwd = search.get('fwd')
-  const tenor = search.get('tenor')
+  const tenor = search.get('tenor') ?? undefined
   if (!fwd) return { ok: false, error: 'fwd is required' }
-  if (!tenor) return { ok: false, error: 'tenor is required' }
   const forwardSchemaRaw = (search.get('forwardSchema') ?? 'default').toLowerCase()
+  if (!tenor && forwardSchemaRaw !== 'fomc') {
+    return { ok: false, error: 'tenor is required when forwardSchema is not fomc' }
+  }
+  const textFilter = search.get('textFilter') ?? undefined
   const tenorSchemaRaw = (search.get('tenorSchema') ?? 'default').toLowerCase()
   const packageTypeRaw = (search.get('packageType') ?? 'outright').toLowerCase()
   if (!VALID_FORWARD_SCHEMAS.has(forwardSchemaRaw as ForwardSchemaId)) {
@@ -74,13 +78,15 @@ export function parseVolumeGridCellParams(
   } else if (!forwardSchema.buckets.some((b) => b.id === fwd)) {
     return { ok: false, error: `unknown fwd: ${fwd} (schema=${forwardSchema.id})` }
   }
-  if (tenorSchema.kind === 'venue') {
-    // Venue MIC codes are 3-5 uppercase alphanumerics in the SDR feed.
-    if (!/^[A-Z0-9]{3,5}$/.test(tenor)) {
-      return { ok: false, error: `tenor must be a venue MIC like 'BBSF' (got ${tenor})` }
+  if (tenor != null) {
+    if (tenorSchema.kind === 'venue') {
+      // Venue MIC codes are 3-5 uppercase alphanumerics in the SDR feed.
+      if (!/^[A-Z0-9]{3,5}$/.test(tenor)) {
+        return { ok: false, error: `tenor must be a venue MIC like 'BBSF' (got ${tenor})` }
+      }
+    } else if (!tenorSchema.buckets.some((b) => b.id === tenor)) {
+      return { ok: false, error: `unknown tenor: ${tenor} (schema=${tenorSchema.id})` }
     }
-  } else if (!tenorSchema.buckets.some((b) => b.id === tenor)) {
-    return { ok: false, error: `unknown tenor: ${tenor} (schema=${tenorSchema.id})` }
   }
   const metric = (search.get('metric') ?? 'notional').toLowerCase() as VolumeMetric
   if (!VALID_METRICS.has(metric)) return { ok: false, error: `unknown metric: ${metric}` }
@@ -106,6 +112,7 @@ export function parseVolumeGridCellParams(
       forwardSchema: forwardSchemaRaw as ForwardSchemaId,
       tenorSchema: tenorSchemaRaw as TenorSchemaId,
       packageType: packageTypeRaw as PackageTypeGroupId,
+      textFilter,
     },
   }
 }
@@ -165,8 +172,10 @@ export function buildTimeseriesSql(opts: {
   bucketPredicateSql: string
   packageFilterSql: string
   schemaExtraFilterSql?: string
+  textFilterSql?: string
 }): string {
   const extraFilter = opts.schemaExtraFilterSql ? `AND ${opts.schemaExtraFilterSql}` : ''
+  const textFilter = opts.textFilterSql ? `AND ${opts.textFilterSql}` : ''
   return `
     WITH legs AS (
       SELECT
@@ -181,6 +190,7 @@ export function buildTimeseriesSql(opts: {
         AND ${opts.bucketPredicateSql}
         AND ${opts.packageFilterSql}
         ${extraFilter}
+        ${textFilter}
     )
     SELECT
       date_trunc('day', ts AT TIME ZONE 'America/New_York')::date AS day,
@@ -200,9 +210,11 @@ export function buildIntradaySeasonalitySql(opts: {
   bucketPredicateSql: string
   packageFilterSql: string
   schemaExtraFilterSql?: string
+  textFilterSql?: string
 }): string {
   const metricCol = opts.metric === 'notional' ? 'notional' : 'dv01'
   const extraFilter = opts.schemaExtraFilterSql ? `AND ${opts.schemaExtraFilterSql}` : ''
+  const textFilter = opts.textFilterSql ? `AND ${opts.textFilterSql}` : ''
   return `
     WITH params AS (
       SELECT
@@ -250,6 +262,7 @@ export function buildIntradaySeasonalitySql(opts: {
         AND ${opts.bucketPredicateSql}
         AND ${opts.packageFilterSql}
         ${extraFilter}
+        ${textFilter}
     ),
     daily_bucket AS (
       SELECT day_et, bucket_index, SUM(${metricCol}) AS bucket_value
@@ -323,10 +336,12 @@ export function buildRecentTradesSql(opts: {
   bucketPredicateSql: string
   packageFilterSql: string
   schemaExtraFilterSql?: string
+  textFilterSql?: string
   limitParam: string
   inCellPredicateSql?: string
 }): string {
   const extraFilter = opts.schemaExtraFilterSql ? `AND ${opts.schemaExtraFilterSql}` : ''
+  const textFilter = opts.textFilterSql ? `AND ${opts.textFilterSql}` : ''
   const legsSubquery = opts.inCellPredicateSql
     ? `,
       (
@@ -352,6 +367,7 @@ export function buildRecentTradesSql(opts: {
         AND ${opts.bucketPredicateSql}
         AND ${opts.packageFilterSql}
         ${extraFilter}
+        ${textFilter}
     )
     SELECT
       p.package_id,

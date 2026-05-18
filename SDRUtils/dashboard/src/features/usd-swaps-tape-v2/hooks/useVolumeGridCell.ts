@@ -12,13 +12,14 @@ import type {
 } from '@/lib/usd-swaps-tape-v2/volumeGridBuckets'
 
 export interface UseVolumeGridCellArgs {
-  cell: { fwd: string; tenor: string } | null
+  cell: { fwd: string; tenor?: string } | null
   metric: VolumeMetric
   range: VolumeCellRange
   forwardSchema: ForwardSchemaId
   tenorSchema: TenorSchemaId
   packageType: PackageTypeGroupId
   recentLimit?: number
+  textFilter?: string
   fetcher?: typeof fetch
 }
 
@@ -32,20 +33,21 @@ export interface UseVolumeGridCellReturn {
 export function buildVolumeGridCellUrl(
   args: Pick<
     UseVolumeGridCellArgs,
-    'cell' | 'metric' | 'range' | 'recentLimit' | 'forwardSchema' | 'tenorSchema' | 'packageType'
+    'cell' | 'metric' | 'range' | 'recentLimit' | 'forwardSchema' | 'tenorSchema' | 'packageType' | 'textFilter'
   >,
 ): string | null {
   if (!args.cell) return null
   const q = new URLSearchParams({
     fwd: args.cell.fwd,
-    tenor: args.cell.tenor,
     metric: args.metric,
     range: args.range,
     forwardSchema: args.forwardSchema,
     tenorSchema: args.tenorSchema,
     packageType: args.packageType,
   })
+  if (args.cell.tenor) q.set('tenor', args.cell.tenor)
   if (args.recentLimit != null) q.set('recentLimit', String(args.recentLimit))
+  if (args.textFilter) q.set('textFilter', args.textFilter)
   return `${TAPE_V2_API_BASE}/volume-grid/cell?${q}`
 }
 

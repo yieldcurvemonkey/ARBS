@@ -87,25 +87,22 @@ export async function resolveDisplayView(): Promise<TapeDisplayView> {
   if (cached && now - cachedAt < CACHE_TTL_MS) {
     return cached
   }
-  const result = await query<{ rel: string | null }>(
-    'SELECT to_regclass($1) AS rel',
-    [DISPLAY_VIEW],
-  )
+  const [result, present] = await Promise.all([
+    query<{ rel: string | null }>(
+      'SELECT to_regclass($1) AS rel',
+      [DISPLAY_VIEW],
+    ),
+    query<{ column_name: string }>(
+      `SELECT column_name FROM information_schema.columns
+       WHERE table_name = $1 AND table_schema = current_schema()`,
+      [DISPLAY_VIEW],
+    ),
+  ])
   if (!result.rows[0]?.rel) {
     throw new Error(
       `tape display view ${DISPLAY_VIEW} not found — run ingest_usdswaps_tape`,
     )
   }
-  // Display view schema evolves via ingest_usdswaps_tape; SELECTing a column
-  // that the live view doesn't expose yet (e.g. a freshly-added field whose
-  // ingest hasn't run here) throws `column d.<x> does not exist` and blanks
-  // the tape. Intersect the intended projection with the view's actual
-  // columns so deploys stay tolerant of lagging ingests.
-  const present = await query<{ column_name: string }>(
-    `SELECT column_name FROM information_schema.columns
-     WHERE table_name = $1`,
-    [DISPLAY_VIEW],
-  )
   const availableColumns = new Set(present.rows.map((r) => r.column_name))
   const projected = COLUMNS.filter((qualified) => {
     const name = qualified.replace(/^d\./, '')

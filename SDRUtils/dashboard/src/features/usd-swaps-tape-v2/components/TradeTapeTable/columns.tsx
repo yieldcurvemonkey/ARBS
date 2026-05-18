@@ -20,6 +20,7 @@ import {
 } from '../../utils/canonicalDisplay'
 import { computePackageAdjustedDv01 } from '../../utils/packageAdjustedDv01'
 import { detectCcpSwitch } from '../../utils/ccpSwitchDetector'
+import { FilterMatchMode } from 'primereact/api'
 import { getFilterDisplayLabel } from './filter-utils'
 import { ActionClassBadge, TapeTags } from './RowBadges'
 import { tapeTagBadgesFor, qualityBadgesFor } from './RowBadges.helpers'
@@ -107,6 +108,17 @@ const compactFilterMenuProps = {
   maxConstraints: 4,
 } as const
 
+// Match mode options for the execution_start (Time) column — includes the
+// standard text modes plus date-level "after" / "before" operators so traders
+// can filter to e.g. "all trades after 05/14/2026".
+const TIME_FILTER_MATCH_MODE_OPTIONS = [
+  { label: 'Contains', value: FilterMatchMode.CONTAINS },
+  { label: 'Equals', value: FilterMatchMode.EQUALS },
+  { label: 'Not equals', value: FilterMatchMode.NOT_EQUALS },
+  { label: 'After (date)', value: 'dateAfter' },
+  { label: 'Before (date)', value: 'dateBefore' },
+] as const
+
 export function getColumns(
   config: ColumnConfig = { selection: true },
 ): JSX.Element[] {
@@ -163,6 +175,7 @@ export function getColumns(
       sortable
       filter
       {...compactFilterMenuProps}
+      filterMatchModeOptions={TIME_FILTER_MATCH_MODE_OPTIONS as any}
       header={renderHeader(
         'Time',
         summaryFor('execution_start', config.activeFilters),
