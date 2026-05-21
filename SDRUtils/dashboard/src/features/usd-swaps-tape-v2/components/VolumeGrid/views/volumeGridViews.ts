@@ -26,7 +26,7 @@ export const VOLUME_GRID_VIEWS: ReadonlyArray<VolumeGridViewDef> = [
   },
   {
     id: 'fly_curve',
-    label: 'Fly Curve',
+    label: 'Fly Strip',
     component: FlyCurveView,
     controls: () => null,
   },

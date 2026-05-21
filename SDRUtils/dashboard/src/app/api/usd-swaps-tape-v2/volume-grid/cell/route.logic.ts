@@ -906,7 +906,7 @@ export function buildStructureRecentTradesSql(opts: {
           'forward_start_years', sm2.forward_start_years,
           'notional', sm2.notional,
           'risk', sm2.risk,
-          'in_cell', true,
+          'in_cell', CASE WHEN sm2.leg_rank = ${riskRank} THEN true ELSE false END,
           'is_risk_leg', CASE WHEN sm2.leg_rank = ${riskRank} THEN true ELSE false END
         ) ORDER BY sm2.tenor_years)
         FROM structure_match sm2

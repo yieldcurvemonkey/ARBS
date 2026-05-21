@@ -18,12 +18,13 @@ export interface VolumeGridProps {
   viewMode: VolumeGridViewMode
   colorMode: VolumeGridColorMode
   packageType?: PackageTypeGroupId
+  uppercaseLabels?: boolean
   onCellClick: (id: { fwd: string; tenor: string }) => void
   onCellHover?: (id: { fwd: string; tenor: string }) => void
   onCellLeave?: () => void
 }
 
-export function VolumeGrid({ data, metric, period, viewMode, colorMode, packageType, onCellClick, onCellHover, onCellLeave }: VolumeGridProps): JSX.Element {
+export function VolumeGrid({ data, metric, period, viewMode, colorMode, packageType, uppercaseLabels = true, onCellClick, onCellHover, onCellLeave }: VolumeGridProps): JSX.Element {
   const cellMap = useMemo(() => {
     const m = new Map<string, Cell>()
     for (const c of data.cells) m.set(`${c.fwd}|${c.tenor}`, c)
@@ -42,6 +43,7 @@ export function VolumeGrid({ data, metric, period, viewMode, colorMode, packageT
   )
   const forwardAxis = data.axes.forward
   const tenorAxis = data.axes.tenor
+  const labelCase = uppercaseLabels ? 'uppercase' : 'normal-case'
   return (
     <div
       className="grid gap-px font-mono text-[10.5px] text-slate-300"
@@ -54,14 +56,14 @@ export function VolumeGrid({ data, metric, period, viewMode, colorMode, packageT
         <div
           key={t.id}
           data-testid="volume-grid-col-label"
-          className="px-1 pb-1 text-center text-[9.5px] uppercase tracking-wider text-slate-500"
+          className={`px-1 pb-1 text-center text-[9.5px] ${labelCase} tracking-wider text-slate-500`}
         >
           {t.label}
         </div>
       ))}
       <div
         data-testid="volume-grid-col-label"
-        className="px-1 pb-1 text-center text-[9.5px] uppercase tracking-wider text-slate-400"
+        className={`px-1 pb-1 text-center text-[9.5px] ${labelCase} tracking-wider text-slate-400`}
       >
         Total
       </div>
