@@ -98,6 +98,7 @@ export interface RecentTradeLeg {
   notional: number
   risk: number
   inCell: boolean
+  isRiskLeg?: boolean
 }
 
 export interface VolumeGridCellRecentTrade {

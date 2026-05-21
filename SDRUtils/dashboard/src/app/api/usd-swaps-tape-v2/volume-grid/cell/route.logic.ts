@@ -7,6 +7,7 @@ import {
   buildPackageTypeFilter,
   FORWARD_SCHEMA_IDS,
   PACKAGE_TYPE_GROUP_IDS,
+  PACKAGE_TYPE_GROUPS,
   resolveForwardSchema,
   resolveTenorSchema,
   TENOR_SCHEMA_IDS,
@@ -15,6 +16,7 @@ import {
   type PackageTypeGroupId,
   type TenorSchemaId,
 } from '@/lib/usd-swaps-tape-v2/volumeGridBuckets'
+import type { StructureType } from '@/features/usd-swaps-tape-v2/types/structure-grid.types'
 import type {
   VolumeCellRange,
   VolumeGridIntradaySeasonality,
@@ -33,6 +35,9 @@ export interface VolumeGridCellParams {
   textFilter?: string
   customForwardBuckets?: BucketDef[]
   customTenorBuckets?: BucketDef[]
+  structureType?: StructureType
+  structureTenors?: number[]
+  structureTolerance?: number
 }
 
 export type ParseResult<T> =
@@ -55,7 +60,43 @@ export function parseVolumeGridCellParams(
   const tenor = search.get('tenor') ?? undefined
   if (!fwd) return { ok: false, error: 'fwd is required' }
   const forwardSchemaRaw = (search.get('forwardSchema') ?? 'default').toLowerCase()
-  if (!tenor && forwardSchemaRaw !== 'fomc') {
+
+  // Structure mode params
+  const structureTypeRaw = search.get('structureType') ?? undefined
+  let structureType: StructureType | undefined
+  let structureTenors: number[] | undefined
+  let structureTolerance: number | undefined
+  if (structureTypeRaw != null) {
+    if (structureTypeRaw !== 'curve' && structureTypeRaw !== 'fly') {
+      return { ok: false, error: 'structureType must be curve or fly' }
+    }
+    structureType = structureTypeRaw as StructureType
+    const tenorsRaw = search.get('structureTenors')
+    if (tenorsRaw == null) {
+      return { ok: false, error: 'structureTenors is required when structureType is set' }
+    }
+    try {
+      const parsed = JSON.parse(tenorsRaw)
+      if (!Array.isArray(parsed) || parsed.length === 0 || !parsed.every((v: unknown) => typeof v === 'number' && Number.isFinite(v))) {
+        return { ok: false, error: 'structureTenors must be a non-empty JSON array of numbers' }
+      }
+      structureTenors = parsed as number[]
+    } catch {
+      return { ok: false, error: 'structureTenors must be valid JSON' }
+    }
+    const toleranceRaw = search.get('structureTolerance')
+    structureTolerance = 0.125
+    if (toleranceRaw != null) {
+      const n = Number(toleranceRaw)
+      if (!Number.isFinite(n) || n <= 0) {
+        return { ok: false, error: 'structureTolerance must be a positive number' }
+      }
+      structureTolerance = n
+    }
+  }
+
+  // tenor is optional when structureType is set or forwardSchema is fomc
+  if (!tenor && !structureType && forwardSchemaRaw !== 'fomc') {
     return { ok: false, error: 'tenor is required when forwardSchema is not fomc' }
   }
   const textFilter = search.get('textFilter') ?? undefined
@@ -154,6 +195,9 @@ export function parseVolumeGridCellParams(
       textFilter,
       customForwardBuckets,
       customTenorBuckets,
+      structureType,
+      structureTenors,
+      structureTolerance,
     },
   }
 }
@@ -488,6 +532,392 @@ export function shapeIntradaySeasonalityResponse(
     asOfMinuteOfDay,
     points,
   }
+}
+
+// ---------------------------------------------------------------------------
+// Structure-mode predicate builders
+// ---------------------------------------------------------------------------
+
+const CURVE_PACKAGE_TYPES: ReadonlyArray<string> = [
+  ...PACKAGE_TYPE_GROUPS.curve,
+  ...PACKAGE_TYPE_GROUPS.spreadover_curve,
+]
+
+const FLY_PACKAGE_TYPES: ReadonlyArray<string> = [
+  ...PACKAGE_TYPE_GROUPS.fly,
+  ...PACKAGE_TYPE_GROUPS.spreadover_fly,
+]
+
+function packageTypesForStructure(type: StructureType): ReadonlyArray<string> {
+  return type === 'curve' ? CURVE_PACKAGE_TYPES : FLY_PACKAGE_TYPES
+}
+
+/**
+ * Risk leg rank: for curves the long (max-tenor) leg, for flies the belly
+ * (rank 2 of 3 sorted by ascending tenor).
+ */
+function riskLegRankExpr(structureType: StructureType): string {
+  return structureType === 'curve' ? 'leg_count' : '2'
+}
+
+export interface StructurePredicate {
+  sql: string
+  params: Array<number | string>
+}
+
+/**
+ * Build a SQL predicate that matches packages whose legs match the given
+ * structure tenor pattern (e.g. [2, 10] with tolerance 0.125). Also constrains
+ * the forward start of the *risk leg* to the requested forward bucket.
+ *
+ * The predicate filters `${legAlias}` rows to only those belonging to
+ * packages matching the structure definition.
+ *
+ * It also requires a `${pkgAlias}` for the package_type filter.
+ *
+ * Returns a subquery-based predicate suitable for use in a WHERE clause.
+ */
+export function buildStructureBucketPredicate(opts: {
+  legAlias: string
+  pkgAlias: string
+  structureType: StructureType
+  tenors: number[]
+  tolerance: number
+  fwdBucketSql: string
+  fwdBucketParams: Array<number | string>
+  startParamIndex: number
+}): StructurePredicate {
+  const { legAlias: a, structureType, tenors, tolerance, startParamIndex } = opts
+  let pi = startParamIndex
+  const params: Array<number | string> = []
+
+  // Build the tenor array literal for the subquery
+  const tenorLiterals = tenors.map((t) => `${t}::numeric`).join(', ')
+  const expectedLegs = tenors.length
+
+  // The subquery checks that the package has exactly the right number of
+  // flow-contributing legs, each matching one of the structure tenors within
+  // tolerance, and returns the package_id of qualifying packages.
+  const structureSubquery = `${a}.package_id IN (
+    SELECT sm.package_id FROM (
+      SELECT l2.package_id,
+        COUNT(*) FILTER (WHERE EXISTS (
+          SELECT 1 FROM unnest(ARRAY[${tenorLiterals}]) AS t(v)
+          WHERE l2.tenor_years BETWEEN t.v - ${tolerance}::numeric AND t.v + ${tolerance}::numeric
+        )) AS matched_legs,
+        COUNT(*) AS total_legs
+      FROM arbs_usd_swap_tape_legs_v2 l2
+      WHERE l2.package_id = ${a}.package_id
+        AND COALESCE(l2.contributes_to_flow, FALSE) = TRUE
+      GROUP BY l2.package_id
+    ) sm
+    WHERE sm.matched_legs = ${expectedLegs} AND sm.total_legs = ${expectedLegs}
+  )`
+
+  // Package type filter for structure
+  const pkgTypes = packageTypesForStructure(structureType)
+  const pkgPlaceholders = pkgTypes.map((_, i) => `$${pi + i}`).join(', ')
+  const pkgFilter = `${opts.pkgAlias}.package_type IN (${pkgPlaceholders})`
+  params.push(...pkgTypes)
+  pi += pkgTypes.length
+
+  // Forward bucket predicate on the risk leg
+  // The fwdBucketSql and fwdBucketParams are already built by the caller
+  // using the forward schema resolution.
+  const fwdParams = opts.fwdBucketParams
+  params.push(...fwdParams)
+
+  const sql = `${structureSubquery} AND ${pkgFilter} AND ${opts.fwdBucketSql}`
+  return { sql, params }
+}
+
+/**
+ * Build the timeseries SQL for structure mode. This uses the structure_match
+ * + risk_leg CTE pattern (from the structure grid endpoint) to only aggregate
+ * the risk leg's metric value.
+ */
+export function buildStructureTimeseriesSql(opts: {
+  structureType: StructureType
+  tenors: number[]
+  tolerance: number
+  fwdPredicateSql: string
+  pkgTypePlaceholders: string
+  textFilterSql?: string
+}): string {
+  const tenorLiterals = opts.tenors.map((t) => `${t}::numeric`).join(', ')
+  const expectedLegs = opts.tenors.length
+  const riskRank = riskLegRankExpr(opts.structureType)
+  const textFilter = opts.textFilterSql ? `AND ${opts.textFilterSql}` : ''
+
+  return `
+    WITH structure_match AS (
+      SELECT p.package_id,
+             COALESCE(l.original_execution_timestamp, l.execution_timestamp) AS ts,
+             ABS(COALESCE(l.notional, 0)) AS notional,
+             ABS(COALESCE(l.risk, 0))     AS dv01,
+             l.venue,
+             l.forward_start_years,
+             ROW_NUMBER() OVER (
+               PARTITION BY p.package_id
+               ORDER BY l.tenor_years ASC
+             ) AS leg_rank,
+             COUNT(*) OVER (
+               PARTITION BY p.package_id
+             ) AS leg_count
+      FROM arbs_usd_swap_tape_legs_v2 l
+      JOIN arbs_usd_swap_tape_packages_v2 p ON p.package_id = l.package_id
+      WHERE COALESCE(l.contributes_to_flow, FALSE) = TRUE
+        AND COALESCE(l.original_execution_timestamp, l.execution_timestamp) >= $1::timestamptz
+        AND p.package_type IN (${opts.pkgTypePlaceholders})
+        AND EXISTS (
+          SELECT 1 FROM unnest(ARRAY[${tenorLiterals}]) AS t(v)
+          WHERE l.tenor_years BETWEEN t.v - ${opts.tolerance}::numeric AND t.v + ${opts.tolerance}::numeric
+        )
+        ${textFilter}
+    ),
+    risk_leg AS (
+      SELECT * FROM structure_match
+      WHERE leg_count = ${expectedLegs}
+        AND leg_rank = ${riskRank}
+        AND ${opts.fwdPredicateSql}
+    )
+    SELECT
+      date_trunc('day', ts AT TIME ZONE 'America/New_York')::date AS day,
+      SUM(notional) AS notional,
+      SUM(dv01)     AS dv01,
+      COUNT(*)::int AS trade_count,
+      COUNT(*) FILTER (WHERE venue = 'D2D')::int AS idb_count,
+      COUNT(*) FILTER (WHERE venue <> 'D2D' OR venue IS NULL)::int AS custy_count
+    FROM risk_leg
+    GROUP BY day
+    ORDER BY day ASC
+  `
+}
+
+/**
+ * Build the intraday seasonality SQL for structure mode.
+ */
+export function buildStructureIntradaySeasonalitySql(opts: {
+  metric: VolumeMetric
+  structureType: StructureType
+  tenors: number[]
+  tolerance: number
+  fwdPredicateSql: string
+  pkgTypePlaceholders: string
+  textFilterSql?: string
+}): string {
+  const metricCol = opts.metric === 'notional' ? 'notional' : 'dv01'
+  const tenorLiterals = opts.tenors.map((t) => `${t}::numeric`).join(', ')
+  const expectedLegs = opts.tenors.length
+  const riskRank = riskLegRankExpr(opts.structureType)
+  const textFilter = opts.textFilterSql ? `AND ${opts.textFilterSql}` : ''
+
+  return `
+    WITH params AS (
+      SELECT
+        $1::date AS current_day,
+        $3::int AS bucket_minutes,
+        (1440 / $3::int)::int AS bucket_count
+    ),
+    buckets AS (
+      SELECT generate_series(0, (SELECT bucket_count - 1 FROM params))::int AS bucket_index
+    ),
+    structure_match AS (
+      SELECT p.package_id,
+             COALESCE(l.original_execution_timestamp, l.execution_timestamp) AS ts,
+             ABS(COALESCE(l.notional, 0)) AS notional,
+             ABS(COALESCE(l.risk, 0))     AS dv01,
+             l.venue,
+             l.forward_start_years,
+             ROW_NUMBER() OVER (
+               PARTITION BY p.package_id
+               ORDER BY l.tenor_years ASC
+             ) AS leg_rank,
+             COUNT(*) OVER (
+               PARTITION BY p.package_id
+             ) AS leg_count
+      FROM arbs_usd_swap_tape_legs_v2 l
+      JOIN arbs_usd_swap_tape_packages_v2 p ON p.package_id = l.package_id
+      WHERE COALESCE(l.contributes_to_flow, FALSE) = TRUE
+        AND COALESCE(l.original_execution_timestamp, l.execution_timestamp) >= $2::timestamptz
+        AND COALESCE(l.original_execution_timestamp, l.execution_timestamp) <
+          (($1::date + INTERVAL '1 day')::timestamp AT TIME ZONE 'America/New_York')
+        AND p.package_type IN (${opts.pkgTypePlaceholders})
+        AND EXISTS (
+          SELECT 1 FROM unnest(ARRAY[${tenorLiterals}]) AS t(v)
+          WHERE l.tenor_years BETWEEN t.v - ${opts.tolerance}::numeric AND t.v + ${opts.tolerance}::numeric
+        )
+        ${textFilter}
+    ),
+    legs AS (
+      SELECT ts, notional, dv01,
+        date_trunc(
+          'day',
+          ts AT TIME ZONE 'America/New_York'
+        )::date AS day_et,
+        LEAST(
+          (SELECT bucket_count - 1 FROM params),
+          GREATEST(
+            0,
+            floor(
+              EXTRACT(EPOCH FROM (
+                (ts AT TIME ZONE 'America/New_York')
+                - date_trunc('day', ts AT TIME ZONE 'America/New_York')
+              )) / ((SELECT bucket_minutes FROM params) * 60)
+            )::int
+          )
+        ) AS bucket_index
+      FROM structure_match
+      WHERE leg_count = ${expectedLegs}
+        AND leg_rank = ${riskRank}
+        AND ${opts.fwdPredicateSql}
+    ),
+    daily_bucket AS (
+      SELECT day_et, bucket_index, SUM(${metricCol}) AS bucket_value
+      FROM legs
+      GROUP BY day_et, bucket_index
+    ),
+    baseline_days AS (
+      SELECT DISTINCT day_et
+      FROM daily_bucket
+      WHERE day_et < (SELECT current_day FROM params)
+    ),
+    baseline_grid AS (
+      SELECT d.day_et, b.bucket_index
+      FROM baseline_days d
+      CROSS JOIN buckets b
+    ),
+    baseline_cumulative AS (
+      SELECT bucket_index, AVG(cumulative_value) AS average_value
+      FROM (
+        SELECT
+          g.day_et,
+          g.bucket_index,
+          SUM(COALESCE(db.bucket_value, 0)) OVER (
+            PARTITION BY g.day_et
+            ORDER BY g.bucket_index
+            ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+          ) AS cumulative_value
+        FROM baseline_grid g
+        LEFT JOIN daily_bucket db
+          ON db.day_et = g.day_et
+         AND db.bucket_index = g.bucket_index
+      ) s
+      GROUP BY bucket_index
+    ),
+    current_grid AS (
+      SELECT (SELECT current_day FROM params) AS day_et, b.bucket_index
+      FROM buckets b
+    ),
+    current_cumulative AS (
+      SELECT
+        g.bucket_index,
+        SUM(COALESCE(db.bucket_value, 0)) OVER (
+          ORDER BY g.bucket_index
+          ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+        ) AS current_value
+      FROM current_grid g
+      LEFT JOIN daily_bucket db
+        ON db.day_et = g.day_et
+       AND db.bucket_index = g.bucket_index
+    ),
+    current_asof AS (
+      SELECT MAX(ts) AS as_of_ts
+      FROM legs
+      WHERE day_et = (SELECT current_day FROM params)
+    )
+    SELECT
+      b.bucket_index,
+      ((b.bucket_index + 1) * (SELECT bucket_minutes FROM params))::int AS minute_of_day,
+      COALESCE(c.current_value, 0) AS current_value,
+      a.average_value,
+      (SELECT COUNT(*) FROM baseline_days)::int AS observed_days,
+      (SELECT as_of_ts FROM current_asof) AS as_of_ts
+    FROM buckets b
+    LEFT JOIN current_cumulative c USING (bucket_index)
+    LEFT JOIN baseline_cumulative a USING (bucket_index)
+    ORDER BY b.bucket_index ASC
+  `
+}
+
+/**
+ * Build the recent trades SQL for structure mode. Includes an `is_risk_leg`
+ * flag in the legs subquery alongside `in_cell`.
+ */
+export function buildStructureRecentTradesSql(opts: {
+  structureType: StructureType
+  tenors: number[]
+  tolerance: number
+  fwdPredicateSql: string
+  pkgTypePlaceholders: string
+  textFilterSql?: string
+  limitParam: string
+}): string {
+  const tenorLiterals = opts.tenors.map((t) => `${t}::numeric`).join(', ')
+  const expectedLegs = opts.tenors.length
+  const riskRank = riskLegRankExpr(opts.structureType)
+  const textFilter = opts.textFilterSql ? `AND ${opts.textFilterSql}` : ''
+
+  return `
+    WITH structure_match AS (
+      SELECT p.package_id,
+             l.tenor_years,
+             l.forward_start_years,
+             ABS(COALESCE(l.notional, 0)) AS notional,
+             ABS(COALESCE(l.risk, 0)) AS risk,
+             ROW_NUMBER() OVER (
+               PARTITION BY p.package_id
+               ORDER BY l.tenor_years ASC
+             ) AS leg_rank,
+             COUNT(*) OVER (
+               PARTITION BY p.package_id
+             ) AS leg_count
+      FROM arbs_usd_swap_tape_legs_v2 l
+      JOIN arbs_usd_swap_tape_packages_v2 p ON p.package_id = l.package_id
+      WHERE COALESCE(l.contributes_to_flow, FALSE) = TRUE
+        AND COALESCE(l.original_execution_timestamp, l.execution_timestamp) >= $1::timestamptz
+        AND p.package_type IN (${opts.pkgTypePlaceholders})
+        AND EXISTS (
+          SELECT 1 FROM unnest(ARRAY[${tenorLiterals}]) AS t(v)
+          WHERE l.tenor_years BETWEEN t.v - ${opts.tolerance}::numeric AND t.v + ${opts.tolerance}::numeric
+        )
+        ${textFilter}
+    ),
+    eligible_packages AS (
+      SELECT DISTINCT sm.package_id
+      FROM structure_match sm
+      WHERE sm.leg_count = ${expectedLegs}
+        AND sm.leg_rank = ${riskRank}
+        AND ${opts.fwdPredicateSql}
+    )
+    SELECT
+      p.package_id,
+      p.execution_start,
+      p.tape_label,
+      p.package_type,
+      p.weighted_fixed_rate,
+      p.total_risk,
+      p.total_notional,
+      p.venue,
+      p.is_block_any,
+      (
+        SELECT json_agg(json_build_object(
+          'tenor_years', sm2.tenor_years,
+          'forward_start_years', sm2.forward_start_years,
+          'notional', sm2.notional,
+          'risk', sm2.risk,
+          'in_cell', true,
+          'is_risk_leg', CASE WHEN sm2.leg_rank = ${riskRank} THEN true ELSE false END
+        ) ORDER BY sm2.tenor_years)
+        FROM structure_match sm2
+        WHERE sm2.package_id = p.package_id
+          AND sm2.leg_count = ${expectedLegs}
+      ) AS legs
+    FROM arbs_usd_swap_tape_packages_v2 p
+    JOIN eligible_packages e ON e.package_id = p.package_id
+    ORDER BY p.execution_start DESC
+    LIMIT ${opts.limitParam}
+  `
 }
 
 export { buildBucketPredicate, buildPackageTypeFilter }
