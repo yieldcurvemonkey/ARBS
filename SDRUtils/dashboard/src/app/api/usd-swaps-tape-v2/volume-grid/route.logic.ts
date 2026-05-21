@@ -16,7 +16,6 @@ import {
   buildBucketCaseSql,
   buildFomcBucketsFromLabels,
   buildPackageTypeFilter,
-  buildPkgFamilySql,
   buildVenueBucketsFromIdentifiers,
   FORWARD_SCHEMA_IDS,
   PACKAGE_TYPE_GROUP_IDS,
@@ -28,6 +27,13 @@ import {
   type ResolvedSchema,
   type TenorSchemaId,
 } from '@/lib/usd-swaps-tape-v2/volumeGridBuckets'
+import {
+  PLATFORM_CASE_SQL,
+  summariseCells,
+  rowToCell,
+  buildPkgFamilySql,
+  type RawVolumeGridRow,
+} from '@/lib/usd-swaps-tape-v2/volumeGridSqlLib'
 import type {
   VolumeGridCell,
   VolumeMetric,
@@ -35,6 +41,8 @@ import type {
   VolumeGridResponse,
   VolumeGridViewMode,
 } from '@/features/usd-swaps-tape-v2/types/volume-grid.types'
+
+export { computePercentile, summariseCells, type RawVolumeGridRow } from '@/lib/usd-swaps-tape-v2/volumeGridSqlLib'
 
 export interface VolumeGridParams {
   metric: VolumeMetric
@@ -308,14 +316,7 @@ export interface BuiltSql {
   params: Array<string | number>
 }
 
-const PLATFORM_CASE_SQL = `
-  CASE
-    WHEN UPPER(COALESCE(l.venue, '')) = 'D2D' THEN 'IDB'
-    WHEN UPPER(COALESCE(l.platform_identifier, '')) IN
-      ('BGCD', 'DWSF', 'IGDL', 'ISWV', 'TPSE', 'TSEF') THEN 'IDB'
-    ELSE 'CUSTY'
-  END
-`
+// PLATFORM_CASE_SQL imported from volumeGridSqlLib
 
 /**
  * Build the fwd-bucket SQL expression for a forward schema. For years-
@@ -618,66 +619,13 @@ export function buildVolumeGridSql(ctx: SqlBuildContext): BuiltSql {
     : buildVolumeGridSqlRolling(ctx)
 }
 
-export function computePercentile(current: number, prior: ReadonlyArray<number>): number | null {
-  if (prior.length === 0) return null
-  let lessOrEqual = 0
-  for (const v of prior) if (v <= current) lessOrEqual += 1
-  return (lessOrEqual / prior.length) * 100
-}
+// computePercentile imported from volumeGridSqlLib
 
-export function summariseCells(
-  cells: ReadonlyArray<VolumeGridCell>,
-): VolumeGridResponse['totals'] {
-  const rowTotals: Record<string, { current: number }> = {}
-  const colTotals: Record<string, { current: number }> = {}
-  let grandCurrent = 0
-  for (const c of cells) {
-    if (!rowTotals[c.fwd]) rowTotals[c.fwd] = { current: 0 }
-    if (!colTotals[c.tenor]) colTotals[c.tenor] = { current: 0 }
-    rowTotals[c.fwd].current += c.current
-    colTotals[c.tenor].current += c.current
-    grandCurrent += c.current
-  }
-  const wrap = (entry: { current: number }) => ({
-    current: entry.current,
-    percentile: null as number | null,
-  })
-  return {
-    rowTotals: Object.fromEntries(
-      Object.entries(rowTotals).map(([k, v]) => [k, wrap(v)]),
-    ),
-    colTotals: Object.fromEntries(
-      Object.entries(colTotals).map(([k, v]) => [k, wrap(v)]),
-    ),
-    grand: { current: grandCurrent, percentile: null },
-  }
-}
+// summariseCells imported from volumeGridSqlLib
 
-export interface RawVolumeGridRow {
-  fwd: string
-  tenor: string
-  current_value: number | string
-  idb_current: number | string
-  custy_current: number | string
-  outright_current: number | string
-  curve_current: number | string
-  fly_current: number | string
-  other_current: number | string
-  trade_count: number | string
-  prior_array: Array<number | string>
-  p25: number | string
-  p50: number | string
-  p75: number | string
-  pmin: number | string
-  pmax: number | string
-  n: number | string
-  as_of_ts: string | Date | null
-}
+// RawVolumeGridRow imported from volumeGridSqlLib
 
-const num = (v: unknown): number => {
-  const n = typeof v === 'number' ? v : Number(v)
-  return Number.isFinite(n) ? n : 0
-}
+// num imported from volumeGridSqlLib
 
 export function shapeVolumeGridResponse(
   rows: ReadonlyArray<RawVolumeGridRow>,
@@ -721,33 +669,7 @@ export function shapeVolumeGridResponse(
 
   const cells: VolumeGridCell[] = rows
     .filter((r) => validFwd.has(r.fwd) && validTenor.has(r.tenor))
-    .map((r) => {
-      const prior = r.prior_array.map(num)
-      const current = num(r.current_value)
-      const idbCurrent = num(r.idb_current)
-      const custyCurrent = num(r.custy_current)
-      return {
-        fwd: r.fwd,
-        tenor: r.tenor,
-        current,
-        idbCurrent,
-        custyCurrent,
-        outrightCurrent: num(r.outright_current),
-        curveCurrent: num(r.curve_current),
-        flyCurrent: num(r.fly_current),
-        otherCurrent: num(r.other_current),
-        tradeCount: num(r.trade_count),
-        baseline: {
-          p25: num(r.p25),
-          p50: num(r.p50),
-          p75: num(r.p75),
-          min: num(r.pmin),
-          max: num(r.pmax),
-          n: num(r.n),
-        },
-        percentile: computePercentile(current, prior),
-      }
-    })
+    .map(rowToCell)
   const totals = summariseCells(cells)
   const asOf = (() => {
     const raw = rows[0]?.as_of_ts
