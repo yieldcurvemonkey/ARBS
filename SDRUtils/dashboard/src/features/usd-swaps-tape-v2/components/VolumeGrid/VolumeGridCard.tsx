@@ -10,7 +10,7 @@ import { VOLUME_GRID_VIEWS } from './views/volumeGridViews'
 import { VolumeGridCellModal } from './VolumeGridCellModal'
 import { TextFilterInput } from './TextFilterInput'
 import { useIsMobile } from '@/lib/hooks/useIsMobile'
-import type { CellId } from '../../types/volume-grid-views.types'
+import type { CellId, CellContext } from '../../types/volume-grid-views.types'
 import type { VolumeMetric, VolumePeriod } from '../../types/volume-grid.types'
 import { ALL_CURVES, ALL_FLIES } from '@/lib/usd-swaps-tape-v2/structureDefs'
 
@@ -42,6 +42,7 @@ export function VolumeGridCard({ onSelectPackage }: VolumeGridCardProps): JSX.El
   const [activeView, setActiveView] = useState('default')
   const [textFilter, setTextFilter] = useState('')
   const [selectedCell, setSelectedCell] = useState<CellId | null>(null)
+  const [cellContext, setCellContext] = useState<CellContext | undefined>(undefined)
   const isMobile = useIsMobile()
 
   // Hydrate from localStorage
@@ -84,8 +85,9 @@ export function VolumeGridCard({ onSelectPackage }: VolumeGridCardProps): JSX.El
     if (isMobile) setCollapsed(true)
   }, [isMobile])
 
-  const onCellClick = useCallback((cell: CellId) => {
+  const onCellClick = useCallback((cell: CellId, context?: CellContext) => {
     setSelectedCell(cell)
+    setCellContext(context)
   }, [])
 
   // Build cell prop for modal from CellId
@@ -155,7 +157,11 @@ export function VolumeGridCard({ onSelectPackage }: VolumeGridCardProps): JSX.El
       <VolumeGridCellModal
         cell={modalCell}
         metric={metric}
-        forwardSchema={modalForwardSchema}
+        forwardSchema={cellContext?.forwardSchema ?? modalForwardSchema}
+        tenorSchema={cellContext?.tenorSchema}
+        packageType={cellContext?.packageType}
+        customForwardBuckets={cellContext?.customForwardBuckets}
+        customTenorBuckets={cellContext?.customTenorBuckets}
         textFilter={textFilter || undefined}
         structureType={selectedCell?.kind === 'structure' ? selectedCell.structureType : undefined}
         structureId={selectedCell?.kind === 'structure' ? selectedCell.structure : undefined}
@@ -169,7 +175,7 @@ export function VolumeGridCard({ onSelectPackage }: VolumeGridCardProps): JSX.El
             ? ALL_STRUCTURES.find(s => s.id === selectedCell.structure)?.tolerance
             : undefined
         }
-        onClose={() => setSelectedCell(null)}
+        onClose={() => { setSelectedCell(null); setCellContext(undefined) }}
         onSelectPackage={onSelectPackage}
       />
     </section>

@@ -50,7 +50,13 @@ export function SpreadoverStripView(props: ViewProps): JSX.Element {
 
   const handleCellClick = useCallback(
     (id: { fwd: string; tenor: string }) => {
-      props.onCellClick({ kind: 'matrix', fwd: id.fwd, tenor: id.tenor })
+      props.onCellClick({ kind: 'matrix', fwd: id.fwd, tenor: id.tenor }, {
+        packageType: 'spreadover',
+        forwardSchema: 'custom',
+        tenorSchema: 'custom',
+        customForwardBuckets: SPOT_FORWARD,
+        customTenorBuckets: SPREADOVER_TENORS,
+      })
     },
     [props.onCellClick],
   )
