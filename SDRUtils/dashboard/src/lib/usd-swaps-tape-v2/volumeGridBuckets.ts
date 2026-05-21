@@ -114,17 +114,22 @@ export function computeStructureDefaultForwardBuckets(now: Date = new Date()): R
     month: 'short',
     year: '2-digit',
   })
+  const ONE_WEEK_Y = 7 / 365.25
   const immBuckets: BucketDef[] = imms.map((imm, i) => {
     const yearsFromNow = (imm.getTime() - now.getTime()) / (365.25 * ONE_DAY_MS)
     return {
       id: `imm_${i + 1}`,
       label: `IMM${i + 1} (${fmt.format(imm).replace(' ', '')})`,
-      lo: Math.max(0, yearsFromNow - 0.125),
+      lo: Math.max(ONE_WEEK_Y, yearsFromNow - 0.125),
       hi: yearsFromNow + 0.125,
     }
   })
+  // Spot upper bound = first IMM bucket's lo so near-expiry IMM trades
+  // don't get captured by spot. Floor at 1 week so truly spot trades
+  // (forward_start_years ≈ 0 or null) always have a bucket.
+  const spotHi = immBuckets.length > 0 ? immBuckets[0].lo! : 0.125
   return [
-    { id: 'spot', label: 'Spot', lo: null, hi: 0.125 },
+    { id: 'spot', label: 'Spot', lo: null, hi: spotHi },
     ...immBuckets,
     { id: '1y', label: '1Y', lo: 0.875, hi: 1.125 },
     { id: '2y', label: '2Y', lo: 1.875, hi: 2.125 },
