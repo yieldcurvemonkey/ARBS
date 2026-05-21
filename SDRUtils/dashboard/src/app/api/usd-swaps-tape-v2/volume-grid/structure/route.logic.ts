@@ -308,8 +308,8 @@ export function buildStructureSqlTimeOfDay(ctx: StructureSqlBuildContext): Built
       VALUES ${structureDefsValues}
     ),
     packages AS (
-      SELECT p.package_id, p.execution_start, p.tape_label, p.venue,
-             p.platform_identifier, p.package_type
+      SELECT p.package_id, p.execution_start, p.tape_label,
+             p.package_type
       FROM arbs_usd_swap_tape_packages_v2 p
       WHERE p.package_type IN (${pkgPlaceholders})
         AND p.execution_start >= $1::timestamptz
@@ -317,7 +317,7 @@ export function buildStructureSqlTimeOfDay(ctx: StructureSqlBuildContext): Built
         ${textFilterClause}
     ),
     structure_match AS (
-      SELECT p.package_id, p.execution_start, p.venue, p.platform_identifier,
+      SELECT p.package_id, p.execution_start, l.venue, l.platform_identifier,
              p.package_type, s.structure_id, s.expected_legs,
              l.tenor_years, ABS(COALESCE(l.risk, 0)) AS risk_val,
              ABS(COALESCE(l.notional, 0)) AS notional_val,
@@ -359,11 +359,11 @@ export function buildStructureSqlTimeOfDay(ctx: StructureSqlBuildContext): Built
           - date_trunc('day', ts AT TIME ZONE 'America/New_York')
         )) AS tod_seconds_et
       FROM risk_leg
-      WHERE ${fwdBucketIsValidSqlPredicate(ctx.forwardSchema)}
     ),
     filtered AS (
       SELECT * FROM bucketed
-      WHERE tod_seconds_et >= $4::numeric
+      WHERE ${fwdBucketIsValidSqlPredicate(ctx.forwardSchema)}
+        AND tod_seconds_et >= $4::numeric
         AND tod_seconds_et <= $5::numeric
     ),
     prior_per_day AS (
@@ -465,8 +465,8 @@ export function buildStructureSqlRolling(ctx: StructureSqlBuildContext): BuiltSq
       VALUES ${structureDefsValues}
     ),
     packages AS (
-      SELECT p.package_id, p.execution_start, p.tape_label, p.venue,
-             p.platform_identifier, p.package_type
+      SELECT p.package_id, p.execution_start, p.tape_label,
+             p.package_type
       FROM arbs_usd_swap_tape_packages_v2 p
       WHERE p.package_type IN (${pkgPlaceholders})
         AND p.execution_start >= $1::timestamptz
@@ -474,7 +474,7 @@ export function buildStructureSqlRolling(ctx: StructureSqlBuildContext): BuiltSq
         ${textFilterClause}
     ),
     structure_match AS (
-      SELECT p.package_id, p.execution_start, p.venue, p.platform_identifier,
+      SELECT p.package_id, p.execution_start, l.venue, l.platform_identifier,
              p.package_type, s.structure_id, s.expected_legs,
              l.tenor_years, ABS(COALESCE(l.risk, 0)) AS risk_val,
              ABS(COALESCE(l.notional, 0)) AS notional_val,
@@ -511,7 +511,6 @@ export function buildStructureSqlRolling(ctx: StructureSqlBuildContext): BuiltSq
         ${PLATFORM_CASE_UNQUALIFIED} AS platform,
         ${PKG_FAMILY_CASE_UNQUALIFIED} AS pkg_family
       FROM risk_leg
-      WHERE ${fwdBucketIsValidSqlPredicate(ctx.forwardSchema)}
     ),
     windowed AS (
       SELECT *,
@@ -521,6 +520,7 @@ export function buildStructureSqlRolling(ctx: StructureSqlBuildContext): BuiltSq
         END AS window_kind,
         ${ctx.bounds.windowIdSql} AS baseline_window_id
       FROM bucketed
+      WHERE ${fwdBucketIsValidSqlPredicate(ctx.forwardSchema)}
     ),
     prior_per_window AS (
       SELECT fwd_bucket, tenor_bucket, baseline_window_id,
