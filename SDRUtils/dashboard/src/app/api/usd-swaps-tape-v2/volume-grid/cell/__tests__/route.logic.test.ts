@@ -4,6 +4,9 @@ import {
   buildIntradaySeasonalitySql,
   buildTimeseriesSql,
   buildRecentTradesSql,
+  buildStructureTimeseriesSql,
+  buildStructureIntradaySeasonalitySql,
+  buildStructureRecentTradesSql,
   easternDateKey,
   rangeToStartDate,
   shapeIntradaySeasonalityResponse,
@@ -241,6 +244,174 @@ describe('buildIntradaySeasonalitySql with textFilterSql', () => {
       bucketPredicateSql: 'TRUE',
       packageFilterSql: 'TRUE',
       textFilterSql: "(l.tape_label ILIKE '%' || $5::text || '%' OR p.tape_label ILIKE '%' || $5::text || '%')",
+    })
+    expect(sql).toContain('tape_label ILIKE')
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Structure mode parsing
+// ---------------------------------------------------------------------------
+
+describe('parseVolumeGridCellParams — structure mode', () => {
+  it('parses valid structure params for a curve', () => {
+    const out = parseVolumeGridCellParams(
+      new URLSearchParams('fwd=spot&structureType=curve&structureTenors=[2,10]&metric=dv01'),
+    )
+    expect(out.ok).toBe(true)
+    if (out.ok) {
+      expect(out.value.structureType).toBe('curve')
+      expect(out.value.structureTenors).toEqual([2, 10])
+      expect(out.value.structureTolerance).toBe(0.125)
+      // tenor is optional when structureType is set
+      expect(out.value.tenor).toBeUndefined()
+    }
+  })
+
+  it('parses valid structure params for a fly', () => {
+    const out = parseVolumeGridCellParams(
+      new URLSearchParams('fwd=spot&structureType=fly&structureTenors=[2,5,10]&structureTolerance=0.25'),
+    )
+    expect(out.ok).toBe(true)
+    if (out.ok) {
+      expect(out.value.structureType).toBe('fly')
+      expect(out.value.structureTenors).toEqual([2, 5, 10])
+      expect(out.value.structureTolerance).toBe(0.25)
+    }
+  })
+
+  it('rejects missing structureTenors when structureType is set', () => {
+    const out = parseVolumeGridCellParams(
+      new URLSearchParams('fwd=spot&structureType=curve'),
+    )
+    expect(out.ok).toBe(false)
+    if (!out.ok) expect(out.error).toContain('structureTenors')
+  })
+
+  it('rejects invalid structureType', () => {
+    const out = parseVolumeGridCellParams(
+      new URLSearchParams('fwd=spot&structureType=spread&structureTenors=[2,10]'),
+    )
+    expect(out.ok).toBe(false)
+    if (!out.ok) expect(out.error).toContain('structureType')
+  })
+
+  it('rejects non-array structureTenors', () => {
+    const out = parseVolumeGridCellParams(
+      new URLSearchParams('fwd=spot&structureType=curve&structureTenors=notjson'),
+    )
+    expect(out.ok).toBe(false)
+    if (!out.ok) expect(out.error).toContain('structureTenors')
+  })
+
+  it('rejects empty structureTenors array', () => {
+    const out = parseVolumeGridCellParams(
+      new URLSearchParams('fwd=spot&structureType=curve&structureTenors=[]'),
+    )
+    expect(out.ok).toBe(false)
+    if (!out.ok) expect(out.error).toContain('structureTenors')
+  })
+
+  it('makes tenor optional when structureType is present', () => {
+    const out = parseVolumeGridCellParams(
+      new URLSearchParams('fwd=spot&structureType=curve&structureTenors=[2,10]'),
+    )
+    expect(out.ok).toBe(true)
+    if (out.ok) expect(out.value.tenor).toBeUndefined()
+  })
+
+  it('still accepts tenor alongside structureType', () => {
+    const out = parseVolumeGridCellParams(
+      new URLSearchParams('fwd=spot&tenor=10y&structureType=curve&structureTenors=[2,10]'),
+    )
+    expect(out.ok).toBe(true)
+    if (out.ok) {
+      expect(out.value.tenor).toBe('10y')
+      expect(out.value.structureType).toBe('curve')
+    }
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Structure mode SQL builders
+// ---------------------------------------------------------------------------
+
+describe('buildStructureTimeseriesSql', () => {
+  it('builds a structure_match + risk_leg CTE query', () => {
+    const sql = buildStructureTimeseriesSql({
+      structureType: 'curve',
+      tenors: [2, 10],
+      tolerance: 0.125,
+      fwdPredicateSql: 'forward_start_years < 0.0192',
+      pkgTypePlaceholders: '$2, $3, $4, $5',
+    })
+    expect(sql).toContain('structure_match')
+    expect(sql).toContain('risk_leg')
+    expect(sql).toContain('ARRAY[2::numeric, 10::numeric]')
+    expect(sql).toContain('leg_count = 2')
+    // For curves, risk leg = max tenor = leg_count
+    expect(sql).toContain('leg_rank = leg_count')
+    expect(sql).toContain('GROUP BY day')
+  })
+
+  it('uses rank 2 for fly structures', () => {
+    const sql = buildStructureTimeseriesSql({
+      structureType: 'fly',
+      tenors: [2, 5, 10],
+      tolerance: 0.125,
+      fwdPredicateSql: 'TRUE',
+      pkgTypePlaceholders: '$2',
+    })
+    expect(sql).toContain('leg_count = 3')
+    expect(sql).toContain('leg_rank = 2')
+  })
+})
+
+describe('buildStructureIntradaySeasonalitySql', () => {
+  it('builds intraday query with structure_match CTE', () => {
+    const sql = buildStructureIntradaySeasonalitySql({
+      metric: 'dv01',
+      structureType: 'curve',
+      tenors: [2, 10],
+      tolerance: 0.125,
+      fwdPredicateSql: 'TRUE',
+      pkgTypePlaceholders: '$4, $5',
+    })
+    expect(sql).toContain('structure_match')
+    expect(sql).toContain('generate_series')
+    expect(sql).toContain('baseline_cumulative')
+    expect(sql).toContain('current_cumulative')
+    expect(sql).toContain('SUM(dv01)')
+  })
+})
+
+describe('buildStructureRecentTradesSql', () => {
+  it('builds recent trades query with structure_match and is_risk_leg', () => {
+    const sql = buildStructureRecentTradesSql({
+      structureType: 'curve',
+      tenors: [2, 10],
+      tolerance: 0.125,
+      fwdPredicateSql: 'sm.forward_start_years < 0.0192',
+      pkgTypePlaceholders: '$2, $3, $4, $5',
+      limitParam: '$6',
+    })
+    expect(sql).toContain('structure_match')
+    expect(sql).toContain('eligible_packages')
+    expect(sql).toContain('is_risk_leg')
+    expect(sql).toContain('json_agg')
+    expect(sql).toContain('LIMIT $6')
+    expect(sql).toContain('ORDER BY p.execution_start DESC')
+  })
+
+  it('includes text filter when provided', () => {
+    const sql = buildStructureRecentTradesSql({
+      structureType: 'fly',
+      tenors: [2, 5, 10],
+      tolerance: 0.125,
+      fwdPredicateSql: 'TRUE',
+      pkgTypePlaceholders: '$2',
+      textFilterSql: "(l.tape_label ILIKE '%' || $3::text || '%')",
+      limitParam: '$4',
     })
     expect(sql).toContain('tape_label ILIKE')
   })

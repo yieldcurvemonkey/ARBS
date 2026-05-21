@@ -1,81 +1,58 @@
-// ABOUTME: Hook for /api/usd-swaps-tape-v2/volume-grid. Polls every
-// 30s when expanded; pauses when collapsed.
-//
-// Implemented as a plain useState/useEffect+setInterval pair rather
-// than a useSWR hook because the volume-grid SWR entries were never
-// committing to the IndexedDB-backed SWR cache provider on prod —
-// the dock dashboard left the heatmap stuck on its skeleton even
-// though the API was returning 200s. The other dock hooks
-// (analytics-timeseries / rarity / extremes) all use array keys via
-// the analyticsCacheKeys helper, which the cache provider stores
-// fine; the URL-string key path was the only one that produced no
-// cache entries. Bypassing SWR entirely sidesteps the integration
-// without forcing a wider refactor of the cache key layer.
+// ABOUTME: Hook for /api/usd-swaps-tape-v2/volume-grid/structure. Same
+// polling pattern as useVolumeGrid — plain useState/setInterval, pauses
+// when collapsed or tab hidden.
 'use client'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { TAPE_V2_API_BASE } from '../constants'
 import type {
-  VolumeGridResponse, VolumeGridViewMode, VolumeMetric, VolumePeriod,
-} from '../types/volume-grid.types'
-import type {
-  BucketDef,
-  ForwardSchemaId,
-  PackageTypeGroupId,
-  TenorSchemaId,
-} from '@/lib/usd-swaps-tape-v2/volumeGridBuckets'
+  StructureDef, StructureType, StructureGridResponse,
+} from '../types/structure-grid.types'
+import type { VolumeMetric, VolumePeriod } from '../types/volume-grid.types'
 
-export interface UseVolumeGridArgs {
+export interface UseStructureGridArgs {
+  structureType: StructureType
+  structures: readonly StructureDef[]
   metric: VolumeMetric
   period: VolumePeriod
   lookbackDays?: number
-  forwardSchema: ForwardSchemaId
-  tenorSchema: TenorSchemaId
-  packageType: PackageTypeGroupId
-  viewMode: VolumeGridViewMode
+  forwardSchema?: string
   collapsed: boolean
   textFilter?: string
-  collapseAxis?: 'tenor' | 'forward'
-  customForwardBuckets?: BucketDef[]
-  customTenorBuckets?: BucketDef[]
   /** Test seam — defaults to the package-wide `fetch`. */
   fetcher?: typeof fetch
 }
 
-export interface UseVolumeGridReturn {
-  data: VolumeGridResponse | undefined
+export interface UseStructureGridReturn {
+  data: StructureGridResponse | undefined
   error: Error | null
   isLoading: boolean
-  refresh: () => Promise<VolumeGridResponse | undefined>
+  refresh: () => Promise<StructureGridResponse | undefined>
 }
 
 const DEFAULT_REFRESH_INTERVAL_MS = 30_000
 
-export function buildVolumeGridUrl(
+export function buildStructureGridUrl(
   args: Pick<
-    UseVolumeGridArgs,
-    'metric' | 'period' | 'lookbackDays' | 'forwardSchema' | 'tenorSchema' | 'packageType' | 'viewMode' | 'textFilter' | 'collapseAxis' | 'customForwardBuckets' | 'customTenorBuckets'
+    UseStructureGridArgs,
+    'structureType' | 'structures' | 'metric' | 'period' | 'lookbackDays' | 'forwardSchema' | 'textFilter'
   >,
 ): string {
   const q = new URLSearchParams({
+    structureType: args.structureType,
+    structures: JSON.stringify(args.structures),
     metric: args.metric,
     period: args.period,
-    forwardSchema: args.forwardSchema,
-    tenorSchema: args.tenorSchema,
-    packageType: args.packageType,
-    viewMode: args.viewMode,
+    forwardSchema: args.forwardSchema ?? 'structure_default',
   })
   if (args.lookbackDays != null) q.set('lookbackDays', String(args.lookbackDays))
   if (args.textFilter) q.set('textFilter', args.textFilter)
-  if (args.collapseAxis) q.set('collapseAxis', args.collapseAxis)
-  if (args.customForwardBuckets) q.set('forwardBuckets', JSON.stringify(args.customForwardBuckets))
-  if (args.customTenorBuckets) q.set('tenorBuckets', JSON.stringify(args.customTenorBuckets))
-  return `${TAPE_V2_API_BASE}/volume-grid?${q}`
+  return `${TAPE_V2_API_BASE}/volume-grid/structure?${q}`
 }
 
-export function useVolumeGrid(args: UseVolumeGridArgs): UseVolumeGridReturn {
+export function useStructureGrid(args: UseStructureGridArgs): UseStructureGridReturn {
   const fetcher = args.fetcher ?? (typeof fetch !== 'undefined' ? fetch : undefined)
-  const url = args.collapsed ? null : buildVolumeGridUrl(args)
-  const [data, setData] = useState<VolumeGridResponse | undefined>(undefined)
+  const url = args.collapsed ? null : buildStructureGridUrl(args)
+  const [data, setData] = useState<StructureGridResponse | undefined>(undefined)
   const [error, setError] = useState<Error | null>(null)
   const [isLoading, setIsLoading] = useState<boolean>(false)
   // Latest URL ref so the polling timer always reads the current
@@ -89,7 +66,7 @@ export function useVolumeGrid(args: UseVolumeGridArgs): UseVolumeGridReturn {
   // payload over the newer one.
   const generationRef = useRef(0)
 
-  const runFetch = useCallback(async (): Promise<VolumeGridResponse | undefined> => {
+  const runFetch = useCallback(async (): Promise<StructureGridResponse | undefined> => {
     const target = urlRef.current
     const f = fetcherRef.current
     if (!target || !f) return undefined
@@ -97,8 +74,8 @@ export function useVolumeGrid(args: UseVolumeGridArgs): UseVolumeGridReturn {
     setIsLoading(true)
     try {
       const res = await f(target)
-      if (!res.ok) throw new Error(`volume-grid fetch failed: ${res.status} ${res.statusText}`)
-      const payload = (await res.json()) as VolumeGridResponse
+      if (!res.ok) throw new Error(`structure-grid fetch failed: ${res.status} ${res.statusText}`)
+      const payload = (await res.json()) as StructureGridResponse
       if (generationRef.current !== gen) return undefined
       setData(payload)
       setError(null)

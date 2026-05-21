@@ -6,11 +6,15 @@
 import type { JSX } from 'react'
 import { useCallback, useEffect, useState } from 'react'
 import { VolumeGridViewSwitcher } from './VolumeGridViewSwitcher'
+import { VOLUME_GRID_VIEWS } from './views/volumeGridViews'
 import { VolumeGridCellModal } from './VolumeGridCellModal'
 import { TextFilterInput } from './TextFilterInput'
 import { useIsMobile } from '@/lib/hooks/useIsMobile'
 import type { CellId } from '../../types/volume-grid-views.types'
 import type { VolumeMetric, VolumePeriod } from '../../types/volume-grid.types'
+import { ALL_CURVES, ALL_FLIES } from '@/lib/usd-swaps-tape-v2/structureDefs'
+
+const ALL_STRUCTURES = [...ALL_CURVES, ...ALL_FLIES]
 
 const KEY_COLLAPSED = 'usd-tape-v2:volume-grid:collapsed'
 const KEY_METRIC = 'usd-tape-v2:volume-grid:metric'
@@ -18,7 +22,7 @@ const KEY_PERIOD = 'usd-tape-v2:volume-grid:period'
 const KEY_LOOKBACK = 'usd-tape-v2:volume-grid:lookback'
 const KEY_VIEW = 'usd-tape-v2:volume-grid:active-view'
 const KEY_DEFAULTS_VERSION = 'usd-tape-v2:volume-grid:defaults-version'
-const DEFAULTS_VERSION = 'all-today-1m-v3'  // bump version to reset to new defaults
+const DEFAULTS_VERSION = 'all-today-1m-v4'  // bump version to reset to new defaults
 
 type LookbackId = '1w' | '2w' | '3w' | '1m' | '3m' | '6m' | '1y' | '2y'
 const LOOKBACK_IDS: ReadonlyArray<LookbackId> = ['1w', '2w', '3w', '1m', '3m', '6m', '1y', '2y']
@@ -61,7 +65,8 @@ export function VolumeGridCard({ onSelectPackage }: VolumeGridCardProps): JSX.El
       const storedLookback = window.localStorage.getItem(KEY_LOOKBACK)
       if ((LOOKBACK_IDS as ReadonlyArray<string>).includes(storedLookback ?? '')) setLookback(storedLookback as LookbackId)
       const storedView = window.localStorage.getItem(KEY_VIEW)
-      if (storedView === 'default' || storedView === 'fomc_strip') setActiveView(storedView)
+      const validViewIds = new Set(VOLUME_GRID_VIEWS.map((v) => v.id))
+      if (storedView && validViewIds.has(storedView)) setActiveView(storedView)
     }
   }, [hydrated])
 
@@ -87,10 +92,14 @@ export function VolumeGridCard({ onSelectPackage }: VolumeGridCardProps): JSX.El
   const modalCell = selectedCell
     ? selectedCell.kind === 'matrix'
       ? { fwd: selectedCell.fwd, tenor: selectedCell.tenor }
-      : { fwd: selectedCell.fwd }
+      : selectedCell.kind === 'collapsed_tenor'
+        ? { fwd: selectedCell.fwd }
+        : { fwd: selectedCell.fwd }  // structure kind: fwd is the forward bucket
     : null
 
-  const modalForwardSchema = selectedCell?.kind === 'collapsed_tenor' ? 'fomc' as const : 'default' as const
+  const modalForwardSchema = selectedCell?.kind === 'collapsed_tenor'
+    ? 'fomc' as const
+    : 'default' as const
 
   return (
     <section data-testid="volume-grid-card" className="border-b border-slate-800 bg-slate-900/40 ring-1 ring-slate-800">
@@ -148,6 +157,18 @@ export function VolumeGridCard({ onSelectPackage }: VolumeGridCardProps): JSX.El
         metric={metric}
         forwardSchema={modalForwardSchema}
         textFilter={textFilter || undefined}
+        structureType={selectedCell?.kind === 'structure' ? selectedCell.structureType : undefined}
+        structureId={selectedCell?.kind === 'structure' ? selectedCell.structure : undefined}
+        structureTenors={
+          selectedCell?.kind === 'structure'
+            ? ALL_STRUCTURES.find(s => s.id === selectedCell.structure)?.tenors as number[] | undefined
+            : undefined
+        }
+        structureTolerance={
+          selectedCell?.kind === 'structure'
+            ? ALL_STRUCTURES.find(s => s.id === selectedCell.structure)?.tolerance
+            : undefined
+        }
         onClose={() => setSelectedCell(null)}
         onSelectPackage={onSelectPackage}
       />

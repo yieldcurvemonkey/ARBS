@@ -20,6 +20,9 @@ export interface UseVolumeGridCellArgs {
   packageType: PackageTypeGroupId
   recentLimit?: number
   textFilter?: string
+  structureType?: 'curve' | 'fly'
+  structureTenors?: number[]
+  structureTolerance?: number
   fetcher?: typeof fetch
 }
 
@@ -33,7 +36,7 @@ export interface UseVolumeGridCellReturn {
 export function buildVolumeGridCellUrl(
   args: Pick<
     UseVolumeGridCellArgs,
-    'cell' | 'metric' | 'range' | 'recentLimit' | 'forwardSchema' | 'tenorSchema' | 'packageType' | 'textFilter'
+    'cell' | 'metric' | 'range' | 'recentLimit' | 'forwardSchema' | 'tenorSchema' | 'packageType' | 'textFilter' | 'structureType' | 'structureTenors' | 'structureTolerance'
   >,
 ): string | null {
   if (!args.cell) return null
@@ -48,6 +51,9 @@ export function buildVolumeGridCellUrl(
   if (args.cell.tenor) q.set('tenor', args.cell.tenor)
   if (args.recentLimit != null) q.set('recentLimit', String(args.recentLimit))
   if (args.textFilter) q.set('textFilter', args.textFilter)
+  if (args.structureType) q.set('structureType', args.structureType)
+  if (args.structureTenors) q.set('structureTenors', JSON.stringify(args.structureTenors))
+  if (args.structureTolerance != null) q.set('structureTolerance', String(args.structureTolerance))
   return `${TAPE_V2_API_BASE}/volume-grid/cell?${q}`
 }
 

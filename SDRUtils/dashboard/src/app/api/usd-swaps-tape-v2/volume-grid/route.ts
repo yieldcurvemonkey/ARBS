@@ -8,6 +8,7 @@ import { analyticsHandler } from '@/lib/usd-swaps-tape-v2/analyticsHandler'
 import {
   resolveForwardSchema,
   resolveTenorSchema,
+  type BucketDef,
 } from '@/lib/usd-swaps-tape-v2/volumeGridBuckets'
 import {
   buildVolumeGridSql,
@@ -36,7 +37,13 @@ async function produceVolumeGrid(request: Request): Promise<{ status: number; pa
   const now = new Date()
   const bounds = computeWindowBounds(parsed.value.period, parsed.value.lookbackDays, now)
   const forwardSchema = resolveForwardSchema(parsed.value.forwardSchema, now)
+  if (parsed.value.customForwardBuckets) {
+    ;(forwardSchema as { buckets: ReadonlyArray<BucketDef> }).buckets = parsed.value.customForwardBuckets
+  }
   const tenorSchema = resolveTenorSchema(parsed.value.tenorSchema)
+  if (parsed.value.customTenorBuckets) {
+    ;(tenorSchema as { buckets: ReadonlyArray<BucketDef> }).buckets = parsed.value.customTenorBuckets
+  }
   const built = buildVolumeGridSql({
     metric: parsed.value.metric,
     forwardSchema,

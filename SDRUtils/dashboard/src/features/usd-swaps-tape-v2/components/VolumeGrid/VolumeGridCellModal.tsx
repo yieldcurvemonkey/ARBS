@@ -78,6 +78,10 @@ export interface VolumeGridCellModalProps {
   forwardAxis?: VolumeGridSchemaAxis
   tenorAxis?: VolumeGridSchemaAxis
   textFilter?: string
+  structureType?: 'curve' | 'fly'
+  structureId?: string
+  structureTenors?: number[]
+  structureTolerance?: number
   onClose: () => void
   onSelectPackage: (packageId: string) => void
 }
@@ -115,6 +119,9 @@ export function VolumeGridCellModal(props: VolumeGridCellModalProps): JSX.Elemen
     tenorSchema: props.tenorSchema ?? 'default',
     packageType: props.packageType ?? 'all',
     textFilter: props.textFilter,
+    structureType: props.structureType,
+    structureTenors: props.structureTenors,
+    structureTolerance: props.structureTolerance,
   })
 
   const filteredTrades = useMemo(() => {
@@ -279,7 +286,10 @@ export function VolumeGridCellModal(props: VolumeGridCellModalProps): JSX.Elemen
                       <Td>{t.is_block_any ? 'BLOCK' : ''}</Td>
                     </tr>
                     {isMultiLeg && isExpanded && legs.map((leg, i) => (
-                      <tr key={`leg-${i}`} data-testid="leg-row" className="border-t border-slate-800/30 bg-slate-900/40 text-[10px] text-slate-400">
+                      <tr key={`leg-${i}`} data-testid="leg-row"
+                        className={`border-t border-slate-800/30 bg-slate-900/40 text-[10px] ${
+                          leg.isRiskLeg ? 'text-amber-300 font-medium' : 'text-slate-400'
+                        }`}>
                         <Td> </Td>
                         <Td> </Td>
                         <Td> </Td>
