@@ -1,7 +1,7 @@
 'use client'
 import type { JSX } from 'react'
 import { VOLUME_GRID_VIEWS } from './views/volumeGridViews'
-import type { CellId } from '../../types/volume-grid-views.types'
+import type { CellId, CellContext } from '../../types/volume-grid-views.types'
 import type { VolumeMetric, VolumePeriod } from '../../types/volume-grid.types'
 
 export interface VolumeGridViewSwitcherProps {
@@ -11,7 +11,7 @@ export interface VolumeGridViewSwitcherProps {
   period: VolumePeriod
   lookbackDays: number
   textFilter: string
-  onCellClick: (cell: CellId) => void
+  onCellClick: (cell: CellId, context?: CellContext) => void
 }
 
 export function VolumeGridViewSwitcher({

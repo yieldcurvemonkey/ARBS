@@ -122,12 +122,16 @@ export function DefaultGridView({
     }
   }, [grid.data, overrides.hidden])
 
-  // Convert cell clicks to CellId format
+  // Convert cell clicks to CellId format with view context
   const handleCellClick = useCallback(
     (id: { fwd: string; tenor: string }) => {
-      onCellClick({ kind: 'matrix', fwd: id.fwd, tenor: id.tenor })
+      onCellClick({ kind: 'matrix', fwd: id.fwd, tenor: id.tenor }, {
+        packageType,
+        forwardSchema,
+        tenorSchema,
+      })
     },
-    [onCellClick],
+    [onCellClick, packageType, forwardSchema, tenorSchema],
   )
 
   // Collect all buckets for the overrides popover

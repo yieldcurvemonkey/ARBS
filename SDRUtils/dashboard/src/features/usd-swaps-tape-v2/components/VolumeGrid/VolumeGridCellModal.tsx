@@ -78,6 +78,8 @@ export interface VolumeGridCellModalProps {
   forwardAxis?: VolumeGridSchemaAxis
   tenorAxis?: VolumeGridSchemaAxis
   textFilter?: string
+  customForwardBuckets?: import('@/lib/usd-swaps-tape-v2/volumeGridBuckets').BucketDef[]
+  customTenorBuckets?: import('@/lib/usd-swaps-tape-v2/volumeGridBuckets').BucketDef[]
   structureType?: 'curve' | 'fly'
   structureId?: string
   structureTenors?: number[]
@@ -119,6 +121,8 @@ export function VolumeGridCellModal(props: VolumeGridCellModalProps): JSX.Elemen
     tenorSchema: props.tenorSchema ?? 'default',
     packageType: props.packageType ?? 'all',
     textFilter: props.textFilter,
+    customForwardBuckets: props.customForwardBuckets,
+    customTenorBuckets: props.customTenorBuckets,
     structureType: props.structureType,
     structureTenors: props.structureTenors,
     structureTolerance: props.structureTolerance,

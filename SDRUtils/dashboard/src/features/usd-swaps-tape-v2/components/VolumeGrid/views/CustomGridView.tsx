@@ -108,12 +108,18 @@ export function CustomGridView({
     packageType: activeSchema?.packageType ?? 'all',
   })
 
-  // Cell click handler
+  // Cell click handler with custom schema context
   const handleCellClick = useCallback(
     (id: { fwd: string; tenor: string }) => {
-      onCellClick({ kind: 'matrix', fwd: id.fwd, tenor: id.tenor })
+      onCellClick({ kind: 'matrix', fwd: id.fwd, tenor: id.tenor }, {
+        packageType: activeSchema?.packageType,
+        forwardSchema: 'custom',
+        tenorSchema: 'custom',
+        customForwardBuckets: activeSchema?.forwardBuckets,
+        customTenorBuckets: activeSchema?.tenorBuckets,
+      })
     },
-    [onCellClick],
+    [onCellClick, activeSchema],
   )
 
   // Modal callbacks

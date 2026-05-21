@@ -9,6 +9,7 @@ import type {
   VolumePeriod,
 } from './volume-grid.types'
 import type {
+  BucketDef,
   ForwardSchemaId,
   PackageTypeGroupId,
   TenorSchemaId,
@@ -28,12 +29,20 @@ export interface BucketOverrides {
 
 export type FomcLabelMode = 'absolute' | 'constant_maturity'
 
+export interface CellContext {
+  packageType?: PackageTypeGroupId
+  forwardSchema?: ForwardSchemaId
+  tenorSchema?: TenorSchemaId
+  customForwardBuckets?: BucketDef[]
+  customTenorBuckets?: BucketDef[]
+}
+
 export interface ViewProps {
   metric: VolumeMetric
   period: VolumePeriod
   lookbackDays: number
   textFilter: string
-  onCellClick: (cell: CellId) => void
+  onCellClick: (cell: CellId, context?: CellContext) => void
 }
 
 export interface ControlsProps {
