@@ -34,11 +34,13 @@ const FORWARD_SCHEMA_LABELS: Record<ForwardSchemaId, string> = {
   legacy: 'Legacy',
   imm16: 'IMM 16',
   fomc: 'FOMC',
+  custom: 'Custom',
 }
 const TENOR_SCHEMA_LABELS: Record<TenorSchemaId, string> = {
   default: 'Default',
   legacy: 'Legacy',
   venue: 'Venue',
+  custom: 'Custom',
 }
 
 const VIEW_MODE_IDS: ReadonlyArray<VolumeGridViewMode> = ['volume', 'idb_custy']

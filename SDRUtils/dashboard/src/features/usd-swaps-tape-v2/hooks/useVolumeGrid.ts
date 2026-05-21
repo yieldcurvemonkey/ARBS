@@ -18,6 +18,7 @@ import type {
   VolumeGridResponse, VolumeGridViewMode, VolumeMetric, VolumePeriod,
 } from '../types/volume-grid.types'
 import type {
+  BucketDef,
   ForwardSchemaId,
   PackageTypeGroupId,
   TenorSchemaId,
@@ -34,6 +35,8 @@ export interface UseVolumeGridArgs {
   collapsed: boolean
   textFilter?: string
   collapseAxis?: 'tenor' | 'forward'
+  customForwardBuckets?: BucketDef[]
+  customTenorBuckets?: BucketDef[]
   /** Test seam — defaults to the package-wide `fetch`. */
   fetcher?: typeof fetch
 }
@@ -50,7 +53,7 @@ const DEFAULT_REFRESH_INTERVAL_MS = 30_000
 export function buildVolumeGridUrl(
   args: Pick<
     UseVolumeGridArgs,
-    'metric' | 'period' | 'lookbackDays' | 'forwardSchema' | 'tenorSchema' | 'packageType' | 'viewMode' | 'textFilter' | 'collapseAxis'
+    'metric' | 'period' | 'lookbackDays' | 'forwardSchema' | 'tenorSchema' | 'packageType' | 'viewMode' | 'textFilter' | 'collapseAxis' | 'customForwardBuckets' | 'customTenorBuckets'
   >,
 ): string {
   const q = new URLSearchParams({
@@ -64,6 +67,8 @@ export function buildVolumeGridUrl(
   if (args.lookbackDays != null) q.set('lookbackDays', String(args.lookbackDays))
   if (args.textFilter) q.set('textFilter', args.textFilter)
   if (args.collapseAxis) q.set('collapseAxis', args.collapseAxis)
+  if (args.customForwardBuckets) q.set('forwardBuckets', JSON.stringify(args.customForwardBuckets))
+  if (args.customTenorBuckets) q.set('tenorBuckets', JSON.stringify(args.customTenorBuckets))
   return `${TAPE_V2_API_BASE}/volume-grid?${q}`
 }
 
