@@ -19,6 +19,7 @@ export type CollapseAxis = 'tenor' | 'forward'
 export type CellId =
   | { kind: 'matrix'; fwd: string; tenor: string }
   | { kind: 'collapsed_tenor'; fwd: string }
+  | { kind: 'structure'; fwd: string; structure: string; structureType: 'curve' | 'fly' }
 
 export interface BucketOverrides {
   hidden: string[]

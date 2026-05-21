@@ -21,9 +21,9 @@ export interface BucketDef {
   readonly hi: number | null
 }
 
-export type ForwardSchemaId = 'default' | 'legacy' | 'imm16' | 'fomc'
+export type ForwardSchemaId = 'default' | 'legacy' | 'imm16' | 'fomc' | 'custom'
 /** Column-axis schemas — tenor-by-years or platform_identifier (venue). */
-export type TenorSchemaId = 'default' | 'legacy' | 'venue'
+export type TenorSchemaId = 'default' | 'legacy' | 'venue' | 'custom'
 
 /**
  * Identifies how a forward schema's buckets are bound in SQL.
@@ -107,17 +107,44 @@ const TENOR_LEGACY: ReadonlyArray<BucketDef> = [
   { id: '50y',    lo: 31.0, hi: null, label: '50y' },
 ] as const
 
+export function computeStructureDefaultForwardBuckets(now: Date = new Date()): ReadonlyArray<BucketDef> {
+  const imms = computeImmDates(now, 4)
+  const fmt = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'UTC',
+    month: 'short',
+    year: '2-digit',
+  })
+  const immBuckets: BucketDef[] = imms.map((imm, i) => {
+    const yearsFromNow = (imm.getTime() - now.getTime()) / (365.25 * ONE_DAY_MS)
+    return {
+      id: `imm_${i + 1}`,
+      label: `IMM${i + 1} (${fmt.format(imm).replace(' ', '')})`,
+      lo: Math.max(0, yearsFromNow - 0.125),
+      hi: yearsFromNow + 0.125,
+    }
+  })
+  return [
+    { id: 'spot', label: 'Spot', lo: null, hi: 0.125 },
+    ...immBuckets,
+    { id: '1y', label: '1Y', lo: 0.875, hi: 1.125 },
+    { id: '2y', label: '2Y', lo: 1.875, hi: 2.125 },
+    { id: '5y', label: '5Y', lo: 4.875, hi: 5.125 },
+  ]
+}
+
 const FORWARD_SCHEMA_LABELS: Record<ForwardSchemaId, string> = {
   default: 'Default',
   legacy: 'Legacy',
   imm16: 'IMM (16q)',
   fomc: 'FOMC',
+  custom: 'Custom',
 }
 
 const TENOR_SCHEMA_LABELS: Record<TenorSchemaId, string> = {
   default: 'Default',
   legacy: 'Legacy',
   venue: 'Venue (MIC)',
+  custom: 'Custom',
 }
 
 /**
@@ -215,6 +242,8 @@ export function resolveForwardSchema(
         // present.
         extraFilterSql: 'l.fomc_meeting_label IS NOT NULL',
       }
+    case 'custom':
+      return { id, label, buckets: [], kind: 'years' }
   }
 }
 
@@ -230,11 +259,13 @@ export function resolveTenorSchema(id: TenorSchemaId): ResolvedSchema {
         kind: 'venue',
         extraFilterSql: 'l.platform_identifier IS NOT NULL',
       }
+    case 'custom':
+      return { id, label, buckets: [], kind: 'tenor_years' }
   }
 }
 
-export const FORWARD_SCHEMA_IDS: ReadonlyArray<ForwardSchemaId> = ['default', 'legacy', 'imm16', 'fomc']
-export const TENOR_SCHEMA_IDS: ReadonlyArray<TenorSchemaId> = ['default', 'legacy', 'venue']
+export const FORWARD_SCHEMA_IDS: ReadonlyArray<ForwardSchemaId> = ['default', 'legacy', 'imm16', 'fomc', 'custom']
+export const TENOR_SCHEMA_IDS: ReadonlyArray<TenorSchemaId> = ['default', 'legacy', 'venue', 'custom']
 
 // Authoritative venue ordering: IDB MICs first, then CUSTY MICs, both in
 // alphabetical order so the column layout stays stable across requests
