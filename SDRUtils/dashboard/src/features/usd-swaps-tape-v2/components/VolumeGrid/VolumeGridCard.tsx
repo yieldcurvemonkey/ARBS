@@ -162,6 +162,7 @@ export function VolumeGridCard({ onSelectPackage }: VolumeGridCardProps): JSX.El
         packageType={cellContext?.packageType}
         customForwardBuckets={cellContext?.customForwardBuckets}
         customTenorBuckets={cellContext?.customTenorBuckets}
+        viewLabel={cellContext?.viewLabel}
         textFilter={textFilter || undefined}
         structureType={selectedCell?.kind === 'structure' ? selectedCell.structureType : undefined}
         structureId={selectedCell?.kind === 'structure' ? selectedCell.structure : undefined}

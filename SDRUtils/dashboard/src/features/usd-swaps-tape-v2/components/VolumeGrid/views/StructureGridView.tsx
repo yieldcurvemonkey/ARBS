@@ -95,8 +95,10 @@ export function StructureGridView({
       onCellClick({
         kind: 'structure',
         fwd: id.fwd,
-        structure: id.tenor, // tenor column = structure id
+        structure: id.tenor,
         structureType,
+      }, {
+        viewLabel: structureType === 'curve' ? 'Curves' : 'Flies',
       })
     },
     [onCellClick, structureType],

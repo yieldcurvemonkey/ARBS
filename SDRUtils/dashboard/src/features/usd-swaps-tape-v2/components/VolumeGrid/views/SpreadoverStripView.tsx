@@ -56,6 +56,7 @@ export function SpreadoverStripView(props: ViewProps): JSX.Element {
         tenorSchema: 'custom',
         customForwardBuckets: SPOT_FORWARD,
         customTenorBuckets: SPREADOVER_TENORS,
+        viewLabel: 'Spreadovers',
       })
     },
     [props.onCellClick],

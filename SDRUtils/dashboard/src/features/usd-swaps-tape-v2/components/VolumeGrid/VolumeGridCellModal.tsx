@@ -80,6 +80,7 @@ export interface VolumeGridCellModalProps {
   textFilter?: string
   customForwardBuckets?: import('@/lib/usd-swaps-tape-v2/volumeGridBuckets').BucketDef[]
   customTenorBuckets?: import('@/lib/usd-swaps-tape-v2/volumeGridBuckets').BucketDef[]
+  viewLabel?: string
   structureType?: 'curve' | 'fly'
   structureId?: string
   structureTenors?: number[]
@@ -136,11 +137,15 @@ export function VolumeGridCellModal(props: VolumeGridCellModalProps): JSX.Elemen
     )
   }, [data?.recentTrades, localTradeFilter])
 
-  const headerLabel = props.cell
-    ? props.cell.tenor
-      ? `${lookupLabel(props.forwardAxis, props.cell.fwd)} × ${lookupLabel(props.tenorAxis, props.cell.tenor)} — Volume detail`
-      : `${props.cell.fwd} — Volume detail`
-    : 'Volume detail'
+  const headerLabel = (() => {
+    if (!props.cell) return 'Volume detail'
+    const fwd = lookupLabel(props.forwardAxis, props.cell.fwd) || props.cell.fwd
+    const tenor = props.structureId
+      ?? (props.cell.tenor ? (lookupLabel(props.tenorAxis, props.cell.tenor) || props.cell.tenor) : undefined)
+    const viewSuffix = props.viewLabel ? ` ${props.viewLabel}` : ''
+    if (tenor) return `${fwd} × ${tenor}${viewSuffix} — Volume detail`
+    return `${fwd}${viewSuffix} — Volume detail`
+  })()
 
   return (
     <Dialog

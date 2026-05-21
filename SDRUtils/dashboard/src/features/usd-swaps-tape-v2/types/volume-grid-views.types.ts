@@ -35,6 +35,7 @@ export interface CellContext {
   tenorSchema?: TenorSchemaId
   customForwardBuckets?: BucketDef[]
   customTenorBuckets?: BucketDef[]
+  viewLabel?: string
 }
 
 export interface ViewProps {
