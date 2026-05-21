@@ -242,11 +242,11 @@ function buildStructureFwdBucketSql(forwardSchema: ResolvedSchema): string {
   if (forwardSchema.kind === 'fomc_label') {
     return `fomc_meeting_label`
   }
-  // Use a pseudo-alias '  ' that we then strip — buildBucketCaseSql
-  // expects an alias prefix.  We pass '' and get `forward_start_years`
-  // references without a dot.
-  return buildBucketCaseSql('', 'forward_start_years', forwardSchema.buckets)
-    .replace(/\.\s*/g, '') // Remove any `.` prefix left from empty alias
+  // buildBucketCaseSql prefixes column refs with `alias.` — pass a
+  // placeholder alias then strip the `__fwd__.` prefix to get bare
+  // column references usable inside the risk_leg CTE.
+  return buildBucketCaseSql('__fwd__', 'forward_start_years', forwardSchema.buckets)
+    .replace(/__fwd__\./g, '')
 }
 
 function fwdBucketIsValidSqlPredicate(forwardSchema: ResolvedSchema): string {
