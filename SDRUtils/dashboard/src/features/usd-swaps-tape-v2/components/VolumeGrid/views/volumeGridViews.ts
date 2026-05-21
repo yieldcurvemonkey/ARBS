@@ -3,6 +3,7 @@ import { DefaultGridView } from './DefaultGridView'
 import { FomcStripView } from './FomcStripView'
 import { CurveStripView } from './CurveStripView'
 import { FlyCurveView } from './FlyCurveView'
+import { SpreadoverStripView } from './SpreadoverStripView'
 import { CustomGridView } from './CustomGridView'
 
 export const VOLUME_GRID_VIEWS: ReadonlyArray<VolumeGridViewDef> = [
@@ -28,6 +29,12 @@ export const VOLUME_GRID_VIEWS: ReadonlyArray<VolumeGridViewDef> = [
     id: 'fly_curve',
     label: 'Fly Strip',
     component: FlyCurveView,
+    controls: () => null,
+  },
+  {
+    id: 'spreadover_strip',
+    label: 'Spreadover Strip',
+    component: SpreadoverStripView,
     controls: () => null,
   },
   {
