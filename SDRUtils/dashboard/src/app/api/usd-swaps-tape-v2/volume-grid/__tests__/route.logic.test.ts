@@ -668,3 +668,52 @@ describe('computeWindowBounds — weekend detection', () => {
     }
   })
 })
+
+describe('parseVolumeGridParams — custom schemas', () => {
+  it('accepts forwardSchema=custom with forwardBuckets JSON', () => {
+    const buckets = JSON.stringify([
+      { id: 'spot', label: 'Spot', lo: null, hi: 0.5 },
+      { id: '6m_plus', label: '6M+', lo: 0.5, hi: null },
+    ])
+    const out = parseVolumeGridParams(
+      new URLSearchParams(`forwardSchema=custom&forwardBuckets=${encodeURIComponent(buckets)}`),
+    )
+    expect(out.ok).toBe(true)
+    if (out.ok) {
+      expect(out.value.forwardSchema).toBe('custom')
+      expect(out.value.customForwardBuckets).toHaveLength(2)
+      expect(out.value.customForwardBuckets![0].id).toBe('spot')
+    }
+  })
+
+  it('rejects forwardSchema=custom without forwardBuckets', () => {
+    const out = parseVolumeGridParams(new URLSearchParams('forwardSchema=custom'))
+    expect(out.ok).toBe(false)
+  })
+
+  it('rejects forwardBuckets with invalid JSON', () => {
+    const out = parseVolumeGridParams(
+      new URLSearchParams('forwardSchema=custom&forwardBuckets=not-json'),
+    )
+    expect(out.ok).toBe(false)
+  })
+
+  it('accepts tenorSchema=custom with tenorBuckets JSON', () => {
+    const buckets = JSON.stringify([
+      { id: '2y_5y', label: '2Y-5Y', lo: 2, hi: 5 },
+    ])
+    const out = parseVolumeGridParams(
+      new URLSearchParams(`tenorSchema=custom&tenorBuckets=${encodeURIComponent(buckets)}`),
+    )
+    expect(out.ok).toBe(true)
+    if (out.ok) {
+      expect(out.value.tenorSchema).toBe('custom')
+      expect(out.value.customTenorBuckets).toHaveLength(1)
+    }
+  })
+
+  it('rejects tenorSchema=custom without tenorBuckets', () => {
+    const out = parseVolumeGridParams(new URLSearchParams('tenorSchema=custom'))
+    expect(out.ok).toBe(false)
+  })
+})

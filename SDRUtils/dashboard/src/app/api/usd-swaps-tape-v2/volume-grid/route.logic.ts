@@ -22,6 +22,7 @@ import {
   resolveForwardSchema,
   resolveTenorSchema,
   TENOR_SCHEMA_IDS,
+  type BucketDef,
   type ForwardSchemaId,
   type PackageTypeGroupId,
   type ResolvedSchema,
@@ -54,6 +55,8 @@ export interface VolumeGridParams {
   viewMode: VolumeGridViewMode
   textFilter?: string
   collapseAxis?: 'tenor' | 'forward'
+  customForwardBuckets?: BucketDef[]
+  customTenorBuckets?: BucketDef[]
 }
 
 export type ParseResult<T> =
@@ -116,6 +119,38 @@ export function parseVolumeGridParams(search: URLSearchParams): ParseResult<Volu
   if (collapseAxisRaw != null && !VALID_COLLAPSE_AXES.has(collapseAxisRaw)) {
     return { ok: false, error: `collapseAxis must be one of ${[...VALID_COLLAPSE_AXES].join(', ')}` }
   }
+
+  // Custom bucket parsing
+  let customForwardBuckets: BucketDef[] | undefined
+  if (forwardSchemaRaw === 'custom') {
+    const raw = search.get('forwardBuckets')
+    if (!raw) return { ok: false, error: 'forwardBuckets JSON is required when forwardSchema=custom' }
+    try {
+      const parsed = JSON.parse(raw)
+      if (!Array.isArray(parsed) || parsed.length === 0) {
+        return { ok: false, error: 'forwardBuckets must be a non-empty JSON array' }
+      }
+      customForwardBuckets = parsed as BucketDef[]
+    } catch {
+      return { ok: false, error: 'forwardBuckets must be valid JSON' }
+    }
+  }
+
+  let customTenorBuckets: BucketDef[] | undefined
+  if (tenorSchemaRaw === 'custom') {
+    const raw = search.get('tenorBuckets')
+    if (!raw) return { ok: false, error: 'tenorBuckets JSON is required when tenorSchema=custom' }
+    try {
+      const parsed = JSON.parse(raw)
+      if (!Array.isArray(parsed) || parsed.length === 0) {
+        return { ok: false, error: 'tenorBuckets must be a non-empty JSON array' }
+      }
+      customTenorBuckets = parsed as BucketDef[]
+    } catch {
+      return { ok: false, error: 'tenorBuckets must be valid JSON' }
+    }
+  }
+
   return {
     ok: true,
     value: {
@@ -128,6 +163,8 @@ export function parseVolumeGridParams(search: URLSearchParams): ParseResult<Volu
       viewMode: viewModeRaw as VolumeGridViewMode,
       textFilter,
       collapseAxis: collapseAxisRaw as 'tenor' | 'forward' | undefined,
+      customForwardBuckets,
+      customTenorBuckets,
     },
   }
 }

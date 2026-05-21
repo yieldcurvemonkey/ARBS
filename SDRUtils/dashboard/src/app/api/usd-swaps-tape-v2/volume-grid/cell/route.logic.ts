@@ -10,6 +10,7 @@ import {
   resolveForwardSchema,
   resolveTenorSchema,
   TENOR_SCHEMA_IDS,
+  type BucketDef,
   type ForwardSchemaId,
   type PackageTypeGroupId,
   type TenorSchemaId,
@@ -30,6 +31,8 @@ export interface VolumeGridCellParams {
   tenorSchema: TenorSchemaId
   packageType: PackageTypeGroupId
   textFilter?: string
+  customForwardBuckets?: BucketDef[]
+  customTenorBuckets?: BucketDef[]
 }
 
 export type ParseResult<T> =
@@ -69,6 +72,42 @@ export function parseVolumeGridCellParams(
   }
   const forwardSchema = resolveForwardSchema(forwardSchemaRaw as ForwardSchemaId, now)
   const tenorSchema = resolveTenorSchema(tenorSchemaRaw as TenorSchemaId)
+
+  // Custom bucket parsing
+  let customForwardBuckets: BucketDef[] | undefined
+  if (forwardSchemaRaw === 'custom') {
+    const raw = search.get('forwardBuckets')
+    if (!raw) return { ok: false, error: 'forwardBuckets JSON is required when forwardSchema=custom' }
+    try {
+      const parsedBuckets = JSON.parse(raw)
+      if (!Array.isArray(parsedBuckets) || parsedBuckets.length === 0) {
+        return { ok: false, error: 'forwardBuckets must be a non-empty JSON array' }
+      }
+      customForwardBuckets = parsedBuckets as BucketDef[]
+      // Override resolved schema's empty buckets so fwd validation below works
+      ;(forwardSchema as { buckets: ReadonlyArray<BucketDef> }).buckets = customForwardBuckets
+    } catch {
+      return { ok: false, error: 'forwardBuckets must be valid JSON' }
+    }
+  }
+
+  let customTenorBuckets: BucketDef[] | undefined
+  if (tenorSchemaRaw === 'custom') {
+    const raw = search.get('tenorBuckets')
+    if (!raw) return { ok: false, error: 'tenorBuckets JSON is required when tenorSchema=custom' }
+    try {
+      const parsedBuckets = JSON.parse(raw)
+      if (!Array.isArray(parsedBuckets) || parsedBuckets.length === 0) {
+        return { ok: false, error: 'tenorBuckets must be a non-empty JSON array' }
+      }
+      customTenorBuckets = parsedBuckets as BucketDef[]
+      // Override resolved schema's empty buckets so tenor validation below works
+      ;(tenorSchema as { buckets: ReadonlyArray<BucketDef> }).buckets = customTenorBuckets
+    } catch {
+      return { ok: false, error: 'tenorBuckets must be valid JSON' }
+    }
+  }
+
   // Years-kind schemas have a fixed bucket list; fomc-label schemas
   // accept any string matching the SDR fomc_meeting_label format.
   if (forwardSchema.kind === 'fomc_label') {
@@ -113,6 +152,8 @@ export function parseVolumeGridCellParams(
       tenorSchema: tenorSchemaRaw as TenorSchemaId,
       packageType: packageTypeRaw as PackageTypeGroupId,
       textFilter,
+      customForwardBuckets,
+      customTenorBuckets,
     },
   }
 }

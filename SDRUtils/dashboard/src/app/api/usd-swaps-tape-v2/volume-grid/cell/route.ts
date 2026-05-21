@@ -9,6 +9,7 @@ import {
   buildPackageTypeFilter,
   resolveForwardSchema,
   resolveTenorSchema,
+  type BucketDef,
 } from '@/lib/usd-swaps-tape-v2/volumeGridBuckets'
 import {
   buildIntradaySeasonalitySql,
@@ -48,7 +49,13 @@ async function produceVolumeGridCell(request: Request): Promise<{ status: number
   const p = parsed.value
 
   const forwardSchema = resolveForwardSchema(p.forwardSchema, now)
+  if (p.customForwardBuckets) {
+    ;(forwardSchema as { buckets: ReadonlyArray<BucketDef> }).buckets = p.customForwardBuckets
+  }
   const tenorSchema = resolveTenorSchema(p.tenorSchema)
+  if (p.customTenorBuckets) {
+    ;(tenorSchema as { buckets: ReadonlyArray<BucketDef> }).buckets = p.customTenorBuckets
+  }
   const rangeStart = rangeToStartDate(p.range, now)
 
   // When tenor is undefined (FOMC collapseAxis=tenor case), build a
