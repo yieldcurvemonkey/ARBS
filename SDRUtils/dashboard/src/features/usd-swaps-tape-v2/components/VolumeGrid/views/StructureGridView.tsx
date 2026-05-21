@@ -130,6 +130,7 @@ export function StructureGridView({
           period={period}
           viewMode={viewMode}
           colorMode={colorMode}
+          uppercaseLabels={false}
           onCellClick={handleCellClick}
         />
       ) : (
