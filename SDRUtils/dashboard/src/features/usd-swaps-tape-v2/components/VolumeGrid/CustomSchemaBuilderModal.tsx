@@ -1,12 +1,11 @@
 'use client'
 // ABOUTME: Chip-based custom schema builder for the volume grid. Users
-// toggle tenor and forward-start chips to build bucket axes; boundaries
-// auto-computed from standard ±tolerance windows. Much faster than the
-// old lo/hi range table for the common "benchmark tenors × forward gaps"
-// use case that rates traders reach for.
+// toggle tenor and forward-start chips to build bucket axes, with an
+// inline input for adding arbitrary custom tenors. Boundaries are
+// auto-computed from standard ±tolerance windows.
 
-import { useCallback, useEffect, useMemo, useState } from 'react'
-import type { JSX } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import type { JSX, KeyboardEvent } from 'react'
 import { Dialog } from 'primereact/dialog'
 import type { BucketDef, PackageTypeGroupId } from '@/lib/usd-swaps-tape-v2/volumeGridBuckets'
 import {
@@ -32,6 +31,7 @@ interface ChipDef {
   id: string
   label: string
   years: number
+  custom?: boolean
 }
 
 const TENOR_CHIPS: ChipDef[] = [
@@ -88,8 +88,27 @@ function chipToBucket(chip: ChipDef, isForward: boolean): BucketDef {
   }
 }
 
-function selectedIdsFromBuckets(buckets: BucketDef[], chips: ChipDef[]): Set<string> {
-  return new Set(buckets.map(b => b.id).filter(id => chips.some(c => c.id === id)))
+function makeCustomChip(years: number, isForward: boolean): ChipDef {
+  const label = years < 1
+    ? `${Math.round(years * 12)}M`
+    : Number.isInteger(years) ? `${years}Y` : `${years}Y`
+  const id = label.toLowerCase()
+  return { id, label, years, custom: true }
+}
+
+function bucketsToChips(buckets: BucketDef[], defaultChips: ChipDef[]): ChipDef[] {
+  const chips: ChipDef[] = []
+  const defaultMap = new Map(defaultChips.map(c => [c.id, c]))
+  for (const b of buckets) {
+    const match = defaultMap.get(b.id)
+    if (match) {
+      chips.push(match)
+    } else {
+      const years = b.lo != null && b.hi != null ? (b.lo + b.hi) / 2 : b.lo ?? b.hi ?? 0
+      chips.push({ id: b.id, label: b.label, years, custom: true })
+    }
+  }
+  return chips
 }
 
 export function CustomSchemaBuilderModal({
@@ -99,6 +118,8 @@ export function CustomSchemaBuilderModal({
   initialSchema,
 }: CustomSchemaBuilderModalProps): JSX.Element {
   const [name, setName] = useState('')
+  const [tenorChips, setTenorChips] = useState<ChipDef[]>(TENOR_CHIPS)
+  const [forwardChips, setForwardChips] = useState<ChipDef[]>(FORWARD_CHIPS)
   const [selectedTenors, setSelectedTenors] = useState<Set<string>>(new Set())
   const [selectedForwards, setSelectedForwards] = useState<Set<string>>(new Set())
   const [packageType, setPackageType] = useState<PackageTypeGroupId>('all')
@@ -108,11 +129,18 @@ export function CustomSchemaBuilderModal({
     if (!open) return
     if (initialSchema) {
       setName(initialSchema.name)
-      setSelectedTenors(selectedIdsFromBuckets(initialSchema.tenorBuckets, TENOR_CHIPS))
-      setSelectedForwards(selectedIdsFromBuckets(initialSchema.forwardBuckets, FORWARD_CHIPS))
+      const tChips = bucketsToChips(initialSchema.tenorBuckets, TENOR_CHIPS)
+      const fChips = bucketsToChips(initialSchema.forwardBuckets, FORWARD_CHIPS)
+      const mergedTenors = mergeChips(TENOR_CHIPS, tChips)
+      const mergedForwards = mergeChips(FORWARD_CHIPS, fChips)
+      setTenorChips(mergedTenors)
+      setForwardChips(mergedForwards)
+      setSelectedTenors(new Set(tChips.map(c => c.id)))
+      setSelectedForwards(new Set(fChips.map(c => c.id)))
       setPackageType(initialSchema.packageType)
     } else {
-      setName('')
+      setTenorChips(TENOR_CHIPS)
+      setForwardChips(FORWARD_CHIPS)
       setSelectedTenors(new Set())
       setSelectedForwards(new Set())
       setPackageType('all')
@@ -127,13 +155,58 @@ export function CustomSchemaBuilderModal({
     setFn(next)
   }, [])
 
+  const addCustomChip = useCallback((
+    chips: ChipDef[],
+    setChips: (c: ChipDef[]) => void,
+    selected: Set<string>,
+    setSelected: (s: Set<string>) => void,
+    years: number,
+    isForward: boolean,
+  ) => {
+    const chip = makeCustomChip(years, isForward)
+    if (chips.some(c => c.id === chip.id)) {
+      const next = new Set(selected)
+      next.add(chip.id)
+      setSelected(next)
+      return
+    }
+    const merged = [...chips, chip].sort((a, b) => a.years - b.years)
+    setChips(merged)
+    const next = new Set(selected)
+    next.add(chip.id)
+    setSelected(next)
+  }, [])
+
+  const removeCustomChip = useCallback((
+    chips: ChipDef[],
+    setChips: (c: ChipDef[]) => void,
+    selected: Set<string>,
+    setSelected: (s: Set<string>) => void,
+    id: string,
+  ) => {
+    setChips(chips.filter(c => c.id !== id))
+    const next = new Set(selected)
+    next.delete(id)
+    setSelected(next)
+  }, [])
+
+  const applyPreset = useCallback((
+    setChips: (c: ChipDef[]) => void,
+    defaultChips: ChipDef[],
+    setSelected: (s: Set<string>) => void,
+    ids: string[],
+  ) => {
+    setChips(defaultChips)
+    setSelected(new Set(ids))
+  }, [])
+
   const tenorBuckets = useMemo(() =>
-    TENOR_CHIPS.filter(c => selectedTenors.has(c.id)).map(c => chipToBucket(c, false)),
-    [selectedTenors],
+    tenorChips.filter(c => selectedTenors.has(c.id)).map(c => chipToBucket(c, false)),
+    [tenorChips, selectedTenors],
   )
   const forwardBuckets = useMemo(() =>
-    FORWARD_CHIPS.filter(c => selectedForwards.has(c.id)).map(c => chipToBucket(c, true)),
-    [selectedForwards],
+    forwardChips.filter(c => selectedForwards.has(c.id)).map(c => chipToBucket(c, true)),
+    [forwardChips, selectedForwards],
   )
 
   const handleApply = useCallback(() => {
@@ -182,20 +255,26 @@ export function CustomSchemaBuilderModal({
 
         <ChipSection
           title="Tenor Axis"
-          chips={TENOR_CHIPS}
+          chips={tenorChips}
           selected={selectedTenors}
           onToggle={(id) => toggleChip(selectedTenors, setSelectedTenors, id)}
+          onAddCustom={(years) => addCustomChip(tenorChips, setTenorChips, selectedTenors, setSelectedTenors, years, false)}
+          onRemoveCustom={(id) => removeCustomChip(tenorChips, setTenorChips, selectedTenors, setSelectedTenors, id)}
           presets={TENOR_PRESETS}
-          onPreset={(ids) => setSelectedTenors(new Set(ids))}
+          onPreset={(ids) => applyPreset(setTenorChips, TENOR_CHIPS, setSelectedTenors, ids)}
+          placeholder="e.g. 8 or 4.5"
         />
 
         <ChipSection
           title="Forward Axis"
-          chips={FORWARD_CHIPS}
+          chips={forwardChips}
           selected={selectedForwards}
           onToggle={(id) => toggleChip(selectedForwards, setSelectedForwards, id)}
+          onAddCustom={(years) => addCustomChip(forwardChips, setForwardChips, selectedForwards, setSelectedForwards, years, true)}
+          onRemoveCustom={(id) => removeCustomChip(forwardChips, setForwardChips, selectedForwards, setSelectedForwards, id)}
           presets={FORWARD_PRESETS}
-          onPreset={(ids) => setSelectedForwards(new Set(ids))}
+          onPreset={(ids) => applyPreset(setForwardChips, FORWARD_CHIPS, setSelectedForwards, ids)}
+          placeholder="e.g. 1.5 or 4"
         />
 
         {errors.length > 0 && (
@@ -209,20 +288,12 @@ export function CustomSchemaBuilderModal({
             {selectedTenors.size} tenors × {selectedForwards.size} forwards = {selectedTenors.size * selectedForwards.size} cells
           </div>
           <div className="flex items-center gap-2">
-            <button
-              type="button"
-              onClick={onClose}
+            <button type="button" onClick={onClose}
               className="rounded border border-slate-700 px-3 py-[3px] font-mono text-[10.5px] text-slate-300 hover:bg-slate-800"
-            >
-              Cancel
-            </button>
-            <button
-              type="button"
-              onClick={handleApply}
+            >Cancel</button>
+            <button type="button" onClick={handleApply}
               className="rounded border border-indigo-500/40 bg-indigo-500/25 px-3 py-[3px] font-mono text-[10.5px] text-indigo-100 hover:bg-indigo-500/35"
-            >
-              Apply
-            </button>
+            >Apply</button>
           </div>
         </div>
       </div>
@@ -230,63 +301,91 @@ export function CustomSchemaBuilderModal({
   )
 }
 
+function mergeChips(defaults: ChipDef[], active: ChipDef[]): ChipDef[] {
+  const seen = new Set(defaults.map(c => c.id))
+  const extras = active.filter(c => !seen.has(c.id))
+  return [...defaults, ...extras].sort((a, b) => a.years - b.years)
+}
+
 function ChipSection({
   title,
   chips,
   selected,
   onToggle,
+  onAddCustom,
+  onRemoveCustom,
   presets,
   onPreset,
+  placeholder,
 }: {
   title: string
   chips: ChipDef[]
   selected: Set<string>
   onToggle: (id: string) => void
+  onAddCustom: (years: number) => void
+  onRemoveCustom: (id: string) => void
   presets: { label: string; ids: string[] }[]
   onPreset: (ids: string[]) => void
+  placeholder: string
 }): JSX.Element {
+  const inputRef = useRef<HTMLInputElement>(null)
+
+  const handleKeyDown = (e: KeyboardEvent<HTMLInputElement>) => {
+    if (e.key !== 'Enter') return
+    const val = Number(inputRef.current?.value)
+    if (!Number.isFinite(val) || val < 0) return
+    onAddCustom(val)
+    if (inputRef.current) inputRef.current.value = ''
+  }
+
   return (
     <div>
       <div className="mb-1.5 flex items-center gap-2">
         <span className="font-mono text-[10px] uppercase tracking-wider text-slate-400">{title}</span>
         <div className="flex items-center gap-1">
           {presets.map((p) => (
-            <button
-              key={p.label}
-              type="button"
-              onClick={() => onPreset(p.ids)}
+            <button key={p.label} type="button" onClick={() => onPreset(p.ids)}
               className="rounded border border-slate-700/60 px-1.5 py-[0px] font-mono text-[9px] text-slate-500 hover:bg-slate-800 hover:text-slate-300"
-            >
-              {p.label}
-            </button>
+            >{p.label}</button>
           ))}
-          <button
-            type="button"
-            onClick={() => onPreset([])}
+          <button type="button" onClick={() => onPreset([])}
             className="rounded border border-slate-700/60 px-1.5 py-[0px] font-mono text-[9px] text-slate-500 hover:bg-slate-800 hover:text-slate-300"
-          >
-            Clear
-          </button>
+          >Clear</button>
         </div>
       </div>
-      <div className="flex flex-wrap gap-1">
+      <div className="flex flex-wrap items-center gap-1">
         {chips.map((chip) => {
           const active = selected.has(chip.id)
           return (
-            <button
-              key={chip.id}
-              type="button"
-              onClick={() => onToggle(chip.id)}
-              className={`rounded border px-2.5 py-[3px] font-mono text-[11px] transition-colors ${
-                active
-                  ? 'border-indigo-400/50 bg-indigo-500/30 text-indigo-100'
-                  : 'border-slate-700 text-slate-400 hover:border-slate-600 hover:text-slate-200'
-              }`}
-            >
-              {chip.label}
-            </button>
+            <div key={chip.id} className="group relative">
+              <button
+                type="button"
+                onClick={() => onToggle(chip.id)}
+                className={`rounded border px-2.5 py-[3px] font-mono text-[11px] transition-colors ${
+                  active
+                    ? 'border-indigo-400/50 bg-indigo-500/30 text-indigo-100'
+                    : 'border-slate-700 text-slate-400 hover:border-slate-600 hover:text-slate-200'
+                }`}
+              >
+                {chip.label}
+              </button>
+              {chip.custom && (
+                <button
+                  type="button"
+                  onClick={(e) => { e.stopPropagation(); onRemoveCustom(chip.id) }}
+                  className="absolute -right-1 -top-1 hidden h-3.5 w-3.5 items-center justify-center rounded-full bg-slate-700 text-[8px] text-slate-300 hover:bg-rose-600 group-hover:flex"
+                >×</button>
+              )}
+            </div>
           )
         })}
+        <input
+          ref={inputRef}
+          type="text"
+          placeholder={placeholder}
+          onKeyDown={handleKeyDown}
+          className="w-20 rounded border border-dashed border-slate-600 bg-transparent px-1.5 py-[3px] font-mono text-[10px] text-slate-300 placeholder:text-slate-600 focus:border-indigo-500/50 focus:outline-none"
+        />
       </div>
     </div>
   )
