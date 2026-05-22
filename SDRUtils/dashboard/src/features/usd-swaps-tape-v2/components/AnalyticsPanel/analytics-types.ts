@@ -20,6 +20,7 @@ export type AnalyticsMetricKey =
   | 'dv01'
   | 'notional'
   | 'spread_to_mid'
+  | 'pts'
 
 export type AnalyticsViewKey = 'INTRADAY' | 'DAILY_CLOSE' | 'DAILY_OHLC' | 'VOLUME'
 
@@ -53,6 +54,7 @@ export type FocusedTrade = {
   execution_session: string | null
   lifecycle_type: string | null
   is_block: boolean
+  pts: number | null
   // Back-reference to the underlying row in case tabs want richer fields.
   source?: UsdSwapTapeRow
 }
@@ -74,6 +76,7 @@ export type TimeseriesPointAug = {
   custyNotional?: number | null
   idbPrints?: number | null
   custyPrints?: number | null
+  pts?: number | null
   // High/Low for OHLC — populated when view === 'DAILY_OHLC'.
   high?: number | null
   low?: number | null
