@@ -123,8 +123,8 @@ export function projectTimeseriesPoint(
   return {
     ...point,
     idxPos: index,
-    idbClose: roundMetric(idb),
-    custyClose: roundMetric(custy),
+    idbClose: metric === 'pts' ? idb : roundMetric(idb),
+    custyClose: metric === 'pts' ? custy : roundMetric(custy),
   }
 }
 

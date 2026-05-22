@@ -266,7 +266,8 @@ export function packageAnalyticsCtes(opts: {
           ) AS notional,
           array_agg(l.fixed_rate::float ORDER BY l.tenor_years ASC NULLS LAST, l.leg_order ASC) AS fixed_rates,
           array_agg(l.risk::float ORDER BY l.tenor_years ASC NULLS LAST, l.leg_order ASC) AS risks,
-          COUNT(*)::int AS legs_count
+          COUNT(*)::int AS legs_count,
+          p.package_transaction_spread::float AS pts
         FROM ${opts.packagesTable} p
         JOIN ${opts.legsTable} l ON l.package_id = p.package_id
         WHERE ${where}
@@ -280,7 +281,8 @@ export function packageAnalyticsCtes(opts: {
           p.total_risk,
           p.weighted_fixed_rate,
           p.total_notional,
-          p.gross_notional
+          p.gross_notional,
+          p.package_transaction_spread
       ),
       package_summary_unfiltered AS (
         SELECT
@@ -293,7 +295,8 @@ export function packageAnalyticsCtes(opts: {
           ${platformCaseSql('r')} AS platform,
           ${rateExpr} AS fixed_rate,
           ${riskExpr} AS risk,
-          r.notional
+          r.notional,
+          r.pts
         FROM package_rollup r
       ),
       package_summary AS (
