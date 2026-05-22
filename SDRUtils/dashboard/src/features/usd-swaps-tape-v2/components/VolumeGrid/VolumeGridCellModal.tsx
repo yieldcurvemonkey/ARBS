@@ -100,6 +100,11 @@ export function VolumeGridCellModal(props: VolumeGridCellModalProps): JSX.Elemen
     if (typeof window !== 'undefined') window.localStorage.setItem(KEY_RANGE, r)
   }
 
+  type ChartMetric = 'notional' | 'dv01' | 'pts'
+  const [chartMetric, setChartMetric] = useState<ChartMetric>(props.metric)
+  useEffect(() => { setChartMetric(props.metric) }, [props.cell?.fwd, props.cell?.tenor, props.metric])
+  const isSpreadover = props.packageType === 'spreadover'
+
   const [expandedPkgs, setExpandedPkgs] = useState<Set<string>>(new Set())
   const toggleExpand = (pkgId: string) => {
     setExpandedPkgs((prev) => {
@@ -158,6 +163,15 @@ export function VolumeGridCellModal(props: VolumeGridCellModalProps): JSX.Elemen
       <div className="flex h-full flex-col gap-3">
         <div className="flex items-center gap-2 text-slate-300">
           <RangeToggle value={range} onChange={onRangeChange} />
+          {isSpreadover && (
+            <div className="flex items-center rounded border border-slate-700 p-[1px]">
+              {(['notional', 'dv01', 'pts'] as const).map((m) => (
+                <button key={m} type="button" onClick={() => setChartMetric(m)}
+                  className={`px-2 py-[1px] font-mono text-[10.5px] ${chartMetric === m ? 'bg-indigo-500/25 text-indigo-100' : 'text-slate-300 hover:bg-slate-800'}`}
+                >{m === 'pts' ? 'PTS (bp)' : m === 'dv01' ? 'DV01' : 'Notional'}</button>
+              ))}
+            </div>
+          )}
           {isLoading && (
             <span className="rounded bg-sky-500/15 px-1.5 py-[1px] font-mono text-[10px] text-sky-200 ring-1 ring-sky-500/30">
               loading…
@@ -182,21 +196,29 @@ export function VolumeGridCellModal(props: VolumeGridCellModalProps): JSX.Elemen
                   <CartesianGrid strokeDasharray="3 3" stroke="rgba(148,163,184,0.2)" />
                   <XAxis dataKey="day" tick={{ fontSize: 10, fill: '#94a3b8' }} />
                   <YAxis tick={{ fontSize: 10, fill: '#94a3b8' }}
-                         tickFormatter={(v) => fmtCompact(Number(v), props.metric)} />
+                         tickFormatter={(v) =>
+                           chartMetric === 'pts'
+                             ? `${(Number(v) * 10000).toFixed(1)}bp`
+                             : fmtCompact(Number(v), props.metric)
+                         } />
                   <Tooltip
                     contentStyle={{ background: '#0f172a', border: '1px solid #1e293b', fontSize: 11 }}
                     formatter={(value: number, name: string) => {
+                      if (chartMetric === 'pts') return [`${(value * 10000).toFixed(2)} bp`, 'PTS VWAP']
                       if (name === 'tradeCount') return [String(value), 'trades']
                       return [fmtCompact(value, props.metric), props.metric]
                     }}
                   />
                   <Bar
-                    dataKey={props.metric === 'notional' ? 'notional' : 'dv01'}
-                    fill="#6366f1"
+                    dataKey={chartMetric === 'pts' ? 'ptsVwap' : chartMetric === 'notional' ? 'notional' : 'dv01'}
+                    fill={chartMetric === 'pts' ? '#f59e0b' : '#6366f1'}
                   />
                   {data.timeseries.length > 1 && (
                     <ReferenceLine
-                      y={median(data.timeseries.map((p) => p[props.metric === 'notional' ? 'notional' : 'dv01']))}
+                      y={median(data.timeseries.map((p) =>
+                        chartMetric === 'pts' ? (p.ptsVwap ?? 0)
+                          : p[chartMetric === 'notional' ? 'notional' : 'dv01']
+                      ))}
                       stroke="#94a3b8"
                       strokeDasharray="4 2"
                     />
