@@ -267,7 +267,8 @@ export function buildTimeseriesSql(opts: {
         COALESCE(l.original_execution_timestamp, l.execution_timestamp) AS ts,
         ABS(COALESCE(l.notional, 0)) AS notional,
         ABS(COALESCE(l.risk, 0))     AS dv01,
-        l.venue
+        l.venue,
+        p.package_transaction_spread AS pts
       FROM arbs_usd_swap_tape_legs_v2 l
       JOIN arbs_usd_swap_tape_packages_v2 p ON p.package_id = l.package_id
       WHERE COALESCE(l.contributes_to_flow, FALSE) = TRUE
@@ -283,7 +284,8 @@ export function buildTimeseriesSql(opts: {
       SUM(dv01)     AS dv01,
       COUNT(*)::int AS trade_count,
       COUNT(*) FILTER (WHERE venue = 'D2D')::int AS idb_count,
-      COUNT(*) FILTER (WHERE venue <> 'D2D' OR venue IS NULL)::int AS custy_count
+      COUNT(*) FILTER (WHERE venue <> 'D2D' OR venue IS NULL)::int AS custy_count,
+      SUM(dv01 * pts) / NULLIF(SUM(dv01) FILTER (WHERE pts IS NOT NULL), 0) AS pts_vwap
     FROM legs
     GROUP BY day
     ORDER BY day ASC
@@ -657,6 +659,7 @@ export function buildStructureTimeseriesSql(opts: {
              ABS(COALESCE(l.risk, 0))     AS dv01,
              l.venue,
              l.forward_start_years,
+             p.package_transaction_spread AS pts,
              ROW_NUMBER() OVER (
                PARTITION BY p.package_id
                ORDER BY l.tenor_years ASC
@@ -687,7 +690,8 @@ export function buildStructureTimeseriesSql(opts: {
       SUM(dv01)     AS dv01,
       COUNT(*)::int AS trade_count,
       COUNT(*) FILTER (WHERE venue = 'D2D')::int AS idb_count,
-      COUNT(*) FILTER (WHERE venue <> 'D2D' OR venue IS NULL)::int AS custy_count
+      COUNT(*) FILTER (WHERE venue <> 'D2D' OR venue IS NULL)::int AS custy_count,
+      SUM(dv01 * pts) / NULLIF(SUM(dv01) FILTER (WHERE pts IS NOT NULL), 0) AS pts_vwap
     FROM risk_leg
     GROUP BY day
     ORDER BY day ASC

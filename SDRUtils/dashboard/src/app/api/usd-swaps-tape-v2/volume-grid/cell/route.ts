@@ -178,6 +178,7 @@ async function produceVolumeGridCell(request: Request): Promise<{ status: number
       tradeCount: num(r.trade_count),
       idbCount: num(r.idb_count),
       custyCount: num(r.custy_count),
+      ptsVwap: r.pts_vwap == null ? null : num(r.pts_vwap),
     }))
     const recentTrades: VolumeGridCellRecentTrade[] = tradesResult.rows.map((r) => ({
       package_id: String(r.package_id),
@@ -380,6 +381,7 @@ async function produceStructureCell(
       tradeCount: num(r.trade_count),
       idbCount: num(r.idb_count),
       custyCount: num(r.custy_count),
+      ptsVwap: r.pts_vwap == null ? null : num(r.pts_vwap),
     }))
     const recentTrades: VolumeGridCellRecentTrade[] = tradesResult.rows.map((r) => ({
       package_id: String(r.package_id),

@@ -75,6 +75,7 @@ export interface VolumeGridCellTimeseriesPoint {
   tradeCount: number
   idbCount: number
   custyCount: number
+  ptsVwap: number | null
 }
 
 export interface VolumeGridIntradaySeasonalityPoint {
