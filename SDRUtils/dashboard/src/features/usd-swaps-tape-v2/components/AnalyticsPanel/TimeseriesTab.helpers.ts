@@ -115,6 +115,9 @@ export function projectTimeseriesPoint(
   } else if (metric === 'notional') {
     idb = point.idbNotional != null ? point.idbNotional / 1e6 : null
     custy = point.custyNotional != null ? point.custyNotional / 1e6 : null
+  } else if (metric === 'pts') {
+    idb = point.pts ?? null
+    custy = point.pts ?? null
   }
 
   return {
@@ -132,6 +135,7 @@ export function focusedTimeseriesValue(
   if (metric === 'fixed_rate') return focused.fixed_rate_bps
   if (metric === 'dv01') return focused.dv01_usd_per_bp
   if (metric === 'notional') return focused.notional_usd / 1e6
+  if (metric === 'pts') return focused.pts ?? 0
   // spread_to_mid: placeholder mid-quote offset; the dock-side formula
   // returns the focused trade's signed deviation, defaulted to a small
   // negative value when no live mid is available.

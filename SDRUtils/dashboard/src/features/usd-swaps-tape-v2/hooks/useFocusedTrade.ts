@@ -113,7 +113,7 @@ export function normalizeFocusedTrade(row: UsdSwapTapeRow | null): FocusedTrade 
     execution_session: row.execution_session ?? null,
     lifecycle_type: legLifecycle,
     is_block: Boolean(row.is_block_any),
-    pts: row.package_transaction_spread != null ? +(row.package_transaction_spread * 10000).toFixed(2) : null,
+    pts: row.package_transaction_spread != null ? +Number(row.package_transaction_spread).toFixed(6) : null,
     source: row,
   }
 }

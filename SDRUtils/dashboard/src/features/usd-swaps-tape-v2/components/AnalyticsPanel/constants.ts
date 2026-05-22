@@ -12,7 +12,7 @@ export const ANALYTICS_METRICS: AnalyticsMetricConfig[] = [
   { key: 'dv01',          label: 'DV01',          unit: 'USD/bp',  accessor: 'dv01_usd_per_bp' },
   { key: 'notional',      label: 'Notional',      unit: 'USD mm',  accessor: 'notional_usd' },
   { key: 'spread_to_mid', label: 'Spread to Mid', unit: 'bps',     accessor: null },
-  { key: 'pts',           label: 'PTS',           unit: 'bps',     accessor: 'pts' },
+  { key: 'pts',           label: 'PTS',           unit: '%',       accessor: 'pts' },
 ]
 
 export const ANALYTICS_VIEWS: Array<{ key: AnalyticsViewKey; label: string }> = [

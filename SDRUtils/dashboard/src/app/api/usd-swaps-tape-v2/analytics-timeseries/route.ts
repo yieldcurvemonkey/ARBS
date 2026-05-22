@@ -267,7 +267,7 @@ async function produceOutrightPackageTimeseries(args: {
       custyNotional: r.platform === 'CUSTY' ? Math.abs(safeNum(r.notional)) : 0,
       idbPrints: r.platform === 'IDB' ? 1 : 0,
       custyPrints: r.platform === 'CUSTY' ? 1 : 0,
-      pts: r.pts != null ? r.pts * 10000 : null,
+      pts: r.pts != null ? r.pts : null,
     }))
     return {
       status: 200,
