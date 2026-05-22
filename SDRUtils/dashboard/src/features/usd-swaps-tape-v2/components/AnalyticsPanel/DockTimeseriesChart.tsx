@@ -377,5 +377,6 @@ function metricLabelFor(metric: AnalyticsMetricKey): string {
     case 'spread_to_mid': return 'Spread to Mid'
     case 'dv01': return 'DV01'
     case 'notional': return 'Notional'
+    case 'pts': return 'PTS'
   }
 }
