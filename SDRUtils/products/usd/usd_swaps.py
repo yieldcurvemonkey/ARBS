@@ -478,6 +478,11 @@ def detect_mac_swaps(package_df: pd.DataFrame) -> pd.DataFrame:
 #: rarely exceed -80 bps in magnitude even on the long end.
 _SPREADOVER_SPREAD_ABS_CEILING: float = 0.01
 
+#: Spreadovers only trade at benchmark tenors. A trade at e.g. 8Y or
+#: 4Y with a spread is not a spreadover — it's a misparse or a
+#: matched-maturity swap. Tolerance ±0.1y around each benchmark.
+_SPREADOVER_VALID_TENORS: tuple[float, ...] = (2, 3, 5, 7, 10, 20, 30)
+
 
 #: Spread magnitude band for SPREADOVER qualification at the per-leg
 #: level. Mirrors the tight gate in ``detect_spreadovers`` — a leg only
@@ -629,6 +634,10 @@ def detect_spreadovers(package_df: pd.DataFrame):
         & (invoice_ticker_col.astype(str).str.strip().str.lower() != "nan")
     )
 
+    tenor_y = pd.to_numeric(copy_df.get("tenor_years"), errors="coerce")
+    is_spreadover_tenor = pd.Series(False, index=copy_df.index)
+    for std_t in _SPREADOVER_VALID_TENORS:
+        is_spreadover_tenor |= (tenor_y - std_t).abs() <= 0.1
     broker_spreadover_mask = (
         (copy_df["package_legs"].isna())
         & (copy_df["package_indicator"] == True)
@@ -637,6 +646,7 @@ def detect_spreadovers(package_df: pd.DataFrame):
         & (spread_num != 0)
         & (spread_num.abs() <= _SPREADOVER_SPREAD_ABS_CEILING)
         & (~has_invoice_ticker)
+        & is_spreadover_tenor
     )
     copy_df["is_spreadover"] = False
     copy_df.loc[broker_spreadover_mask, "is_spreadover"] = True

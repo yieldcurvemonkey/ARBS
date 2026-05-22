@@ -1,5 +1,6 @@
 'use client'
 // ABOUTME: Pure render of the forward x tenor matrix + totals. No fetch.
+// Horizontally scrollable with sticky row labels and total column.
 
 import type { JSX } from 'react'
 import { useMemo } from 'react'
@@ -19,17 +20,24 @@ export interface VolumeGridProps {
   colorMode: VolumeGridColorMode
   packageType?: PackageTypeGroupId
   uppercaseLabels?: boolean
+  hiddenColumns?: Set<string>
   onCellClick: (id: { fwd: string; tenor: string }) => void
   onCellHover?: (id: { fwd: string; tenor: string }) => void
   onCellLeave?: () => void
 }
 
-export function VolumeGrid({ data, metric, period, viewMode, colorMode, packageType, uppercaseLabels = true, onCellClick, onCellHover, onCellLeave }: VolumeGridProps): JSX.Element {
+export function VolumeGrid({ data, metric, period, viewMode, colorMode, packageType, uppercaseLabels = true, hiddenColumns, onCellClick, onCellHover, onCellLeave }: VolumeGridProps): JSX.Element {
   const cellMap = useMemo(() => {
     const m = new Map<string, Cell>()
     for (const c of data.cells) m.set(`${c.fwd}|${c.tenor}`, c)
     return m
   }, [data.cells])
+  const visibleTenors = useMemo(() =>
+    hiddenColumns?.size
+      ? data.axes.tenor.buckets.filter(t => !hiddenColumns.has(t.id))
+      : data.axes.tenor.buckets,
+    [data.axes.tenor.buckets, hiddenColumns],
+  )
   const gridMaxCurrent = useMemo(
     () =>
       data.cells.reduce(
@@ -42,69 +50,82 @@ export function VolumeGrid({ data, metric, period, viewMode, colorMode, packageT
     [data.cells],
   )
   const forwardAxis = data.axes.forward
-  const tenorAxis = data.axes.tenor
   const labelCase = uppercaseLabels ? 'uppercase' : 'normal-case'
+  const colCount = visibleTenors.length
+
   return (
-    <div
-      className="grid gap-px font-mono text-[10.5px] text-slate-300"
-      style={{
-        gridTemplateColumns: `minmax(60px,auto) repeat(${tenorAxis.buckets.length},minmax(58px,1fr)) minmax(64px,auto)`,
-      }}
-    >
-      <div />
-      {tenorAxis.buckets.map((t) => (
+    <div className="overflow-x-auto">
+      <div
+        className="grid gap-px font-mono text-[10.5px] text-slate-300"
+        style={{
+          gridTemplateColumns: `minmax(60px,auto) repeat(${colCount},minmax(58px,1fr)) minmax(64px,auto)`,
+          minWidth: colCount > 12 ? `${60 + colCount * 62 + 64}px` : undefined,
+        }}
+      >
+        {/* Header: empty corner */}
+        <div className="sticky left-0 z-10 bg-slate-900" />
+        {/* Header: tenor labels */}
+        {visibleTenors.map((t) => (
+          <div
+            key={t.id}
+            data-testid="volume-grid-col-label"
+            className={`px-1 pb-1 text-center text-[9.5px] ${labelCase} tracking-wider text-slate-500`}
+          >
+            {t.label}
+          </div>
+        ))}
+        {/* Header: total label */}
         <div
-          key={t.id}
           data-testid="volume-grid-col-label"
-          className={`px-1 pb-1 text-center text-[9.5px] ${labelCase} tracking-wider text-slate-500`}
+          className={`sticky right-0 z-10 bg-slate-900 px-1 pb-1 text-center text-[9.5px] ${labelCase} tracking-wider text-slate-400`}
         >
-          {t.label}
+          Total
         </div>
-      ))}
-      <div
-        data-testid="volume-grid-col-label"
-        className={`px-1 pb-1 text-center text-[9.5px] ${labelCase} tracking-wider text-slate-400`}
-      >
-        Total
-      </div>
-      {forwardAxis.buckets.map((f) => (
-        <RowFragment
-          key={f.id}
-          fwd={f.id}
-          fwdLabelText={f.label}
-          cellMap={cellMap}
-          metric={metric}
-          period={period}
-          viewMode={viewMode}
-          colorMode={colorMode}
-          packageType={packageType}
-          gridMaxCurrent={gridMaxCurrent}
-          tenorAxis={tenorAxis}
-          forwardAxis={forwardAxis}
-          rowTotal={data.totals.rowTotals[f.id]}
-          onCellClick={onCellClick}
-          onCellHover={onCellHover}
-          onCellLeave={onCellLeave}
-        />
-      ))}
-      <div
-        data-testid="volume-grid-row-label"
-        className="flex items-center px-1 text-[9.5px] uppercase tracking-wider text-slate-400"
-      >
-        Total
-      </div>
-      {tenorAxis.buckets.map((t) => (
+
+        {/* Data rows */}
+        {forwardAxis.buckets.map((f) => (
+          <RowFragment
+            key={f.id}
+            fwd={f.id}
+            fwdLabelText={f.label}
+            cellMap={cellMap}
+            metric={metric}
+            period={period}
+            viewMode={viewMode}
+            colorMode={colorMode}
+            packageType={packageType}
+            gridMaxCurrent={gridMaxCurrent}
+            visibleTenors={visibleTenors}
+            forwardAxis={forwardAxis}
+            tenorAxis={data.axes.tenor}
+            rowTotal={data.totals.rowTotals[f.id]}
+            onCellClick={onCellClick}
+            onCellHover={onCellHover}
+            onCellLeave={onCellLeave}
+          />
+        ))}
+
+        {/* Footer: total row */}
+        <div
+          data-testid="volume-grid-row-label"
+          className="sticky left-0 z-10 flex items-center bg-slate-900 px-1 text-[9.5px] uppercase tracking-wider text-slate-400"
+        >
+          Total
+        </div>
+        {visibleTenors.map((t) => (
+          <TotalCell
+            key={t.id}
+            value={data.totals.colTotals[t.id]?.current ?? 0}
+            percentile={data.totals.colTotals[t.id]?.percentile ?? null}
+          />
+        ))}
         <TotalCell
-          key={t.id}
-          value={data.totals.colTotals[t.id]?.current ?? 0}
-          percentile={data.totals.colTotals[t.id]?.percentile ?? null}
+          value={data.totals.grand.current}
+          percentile={data.totals.grand.percentile}
+          emphasized
+          sticky
         />
-      ))}
-      <TotalCell
-        value={data.totals.grand.current}
-        percentile={data.totals.grand.percentile}
-        emphasized
-      />
+      </div>
     </div>
   )
 }
@@ -119,6 +140,7 @@ function RowFragment(props: {
   colorMode: VolumeGridColorMode
   packageType?: PackageTypeGroupId
   gridMaxCurrent: number
+  visibleTenors: ReadonlyArray<{ id: string; label: string }>
   forwardAxis: VolumeGridResponse['axes']['forward']
   tenorAxis: VolumeGridResponse['axes']['tenor']
   rowTotal: { current: number; percentile: number | null } | undefined
@@ -130,11 +152,11 @@ function RowFragment(props: {
     <>
       <div
         data-testid="volume-grid-row-label"
-        className="flex items-center px-1 text-[9.5px] uppercase tracking-wider text-slate-400"
+        className="sticky left-0 z-10 flex items-center bg-slate-900 px-1 text-[9.5px] uppercase tracking-wider text-slate-400"
       >
         {props.fwdLabelText}
       </div>
-      {props.tenorAxis.buckets.map((t) => {
+      {props.visibleTenors.map((t) => {
         const cell =
           props.cellMap.get(`${props.fwd}|${t.id}`) ??
           ({
@@ -175,6 +197,7 @@ function RowFragment(props: {
       <TotalCell
         value={props.rowTotal?.current ?? 0}
         percentile={props.rowTotal?.percentile ?? null}
+        sticky
       />
     </>
   )
@@ -184,6 +207,7 @@ function TotalCell(props: {
   value: number
   percentile: number | null
   emphasized?: boolean
+  sticky?: boolean
 }): JSX.Element {
   const fmt = (() => {
     const abs = Math.abs(props.value)
@@ -195,7 +219,7 @@ function TotalCell(props: {
   return (
     <div
       style={{ backgroundColor: colorForPercentile(props.percentile) }}
-      className={`flex h-12 flex-col items-center justify-center rounded-sm border border-slate-700/60 text-center text-[11px] tabular-nums ${foregroundForPercentile(props.percentile)} ${props.emphasized ? 'font-semibold ring-1 ring-indigo-400/40' : ''}`}
+      className={`flex h-12 flex-col items-center justify-center rounded-sm border border-slate-700/60 text-center text-[11px] tabular-nums ${foregroundForPercentile(props.percentile)} ${props.emphasized ? 'font-semibold ring-1 ring-indigo-400/40' : ''} ${props.sticky ? 'sticky right-0 z-10' : ''}`}
     >
       <span>{fmt}</span>
       {props.percentile != null && <span className="text-[9.5px] text-slate-400">P{Math.round(props.percentile)}</span>}
