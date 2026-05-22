@@ -1,4 +1,4 @@
-export type TimeseriesMetricKey = 'notional' | 'risk' | 'trade_count' | 'fixed_rate'
+export type TimeseriesMetricKey = 'notional' | 'risk' | 'trade_count' | 'fixed_rate' | 'pts'
 
 export type TimeseriesViewKey = 'INTRADAY' | 'DAILY_CLOSE' | 'DAILY_OHLC' | 'VOLUME'
 

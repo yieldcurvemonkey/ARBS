@@ -198,6 +198,7 @@ export const TIMESERIES_METRICS: Array<{ key: TimeseriesMetricKey; label: string
   { key: 'risk', label: 'DV01' },
   { key: 'trade_count', label: 'Trade Count' },
   { key: 'fixed_rate', label: 'Weighted Fixed Rate' },
+  { key: 'pts', label: 'PTS (bp)' },
 ]
 
 export const TIMESERIES_VIEWS: Array<{ key: TimeseriesViewKey; label: string }> = [

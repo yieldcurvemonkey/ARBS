@@ -97,6 +97,7 @@ type IntradayRow = {
   fixed_rate: number | null
   risk: number | null
   notional: number | null
+  pts: number | null
 }
 
 type AnalyticsTimeseriesPayload =
@@ -208,7 +209,8 @@ async function produceOutrightPackageTimeseries(args: {
             ABS(p.gross_notional::float),
             0
           ) AS notional,
-          p.venue
+          p.venue,
+          p.package_transaction_spread::float AS pts
         FROM ${PACKAGES_TABLE} p
         WHERE UPPER(COALESCE(p.tape_label, '')) = ANY($1::text[])
           AND UPPER(COALESCE(p.package_type, '')) = 'OUTRIGHT'
@@ -223,6 +225,7 @@ async function produceOutrightPackageTimeseries(args: {
           fixed_rate,
           risk,
           notional,
+          pts,
           CASE
             WHEN UPPER(COALESCE(r.venue, '')) = 'D2D' THEN 'IDB'
             ELSE 'CUSTY'
@@ -240,7 +243,8 @@ async function produceOutrightPackageTimeseries(args: {
         b.platform,
         b.fixed_rate,
         b.risk,
-        b.notional
+        b.notional,
+        b.pts
       FROM base b
       CROSS JOIN custy_threshold t
       WHERE ${outlierPredicate}
@@ -263,6 +267,7 @@ async function produceOutrightPackageTimeseries(args: {
       custyNotional: r.platform === 'CUSTY' ? Math.abs(safeNum(r.notional)) : 0,
       idbPrints: r.platform === 'IDB' ? 1 : 0,
       custyPrints: r.platform === 'CUSTY' ? 1 : 0,
+      pts: r.pts != null ? r.pts * 10000 : null,
     }))
     return {
       status: 200,
