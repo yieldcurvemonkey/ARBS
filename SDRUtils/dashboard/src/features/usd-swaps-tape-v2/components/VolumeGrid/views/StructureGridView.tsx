@@ -4,7 +4,7 @@
 // forward-start rows x structure columns.
 
 import type { JSX } from 'react'
-import { useCallback, useMemo, useState } from 'react'
+import { useCallback, useMemo, useRef, useState } from 'react'
 import { VolumeGrid } from '../VolumeGrid'
 import { useStructureGrid } from '../../../hooks/useStructureGrid'
 import type {
@@ -53,9 +53,10 @@ export function StructureGridView({
   textFilter,
   onCellClick,
 }: StructureGridViewProps): JSX.Element {
-  // View-specific state
   const [viewMode, setViewMode] = useState<VolumeGridViewMode>('volume')
   const [colorMode, setColorMode] = useState<VolumeGridColorMode>('activity')
+  const [hiddenColumns, setHiddenColumns] = useState<Set<string>>(new Set())
+  const [colPickerOpen, setColPickerOpen] = useState(false)
 
   // Data fetching
   const grid = useStructureGrid({
@@ -124,6 +125,19 @@ export function StructureGridView({
             label: `View: ${VIEW_MODE_LABELS[id]}`,
           }))}
         />
+        <ColumnPicker
+          columns={gridData?.axes.tenor.buckets ?? []}
+          hidden={hiddenColumns}
+          onChange={setHiddenColumns}
+          open={colPickerOpen}
+          onToggle={() => setColPickerOpen(v => !v)}
+        />
+        {hiddenColumns.size > 0 && (
+          <button type="button" onClick={() => setHiddenColumns(new Set())}
+            className="font-mono text-[9px] text-slate-500 hover:text-slate-300">
+            show all ({hiddenColumns.size} hidden)
+          </button>
+        )}
       </div>
       {gridData ? (
         <VolumeGrid
@@ -133,6 +147,7 @@ export function StructureGridView({
           viewMode={viewMode}
           colorMode={colorMode}
           uppercaseLabels={false}
+          hiddenColumns={hiddenColumns}
           onCellClick={handleCellClick}
         />
       ) : (
@@ -193,6 +208,45 @@ function Select(props: {
         </option>
       ))}
     </select>
+  )
+}
+
+function ColumnPicker({ columns, hidden, onChange, open, onToggle }: {
+  columns: ReadonlyArray<{ id: string; label: string }>
+  hidden: Set<string>
+  onChange: (h: Set<string>) => void
+  open: boolean
+  onToggle: () => void
+}): JSX.Element {
+  const ref = useRef<HTMLDivElement>(null)
+  const toggle = (id: string) => {
+    const next = new Set(hidden)
+    if (next.has(id)) next.delete(id); else next.add(id)
+    onChange(next)
+  }
+  return (
+    <div className="relative" ref={ref}>
+      <button type="button" onClick={onToggle}
+        className="rounded border border-slate-700 px-2 py-[1px] font-mono text-[10.5px] text-slate-400 hover:bg-slate-800 hover:text-slate-200">
+        Columns
+      </button>
+      {open && (
+        <div className="absolute left-0 top-full z-30 mt-1 max-h-64 w-48 overflow-y-auto rounded border border-slate-700 bg-slate-900 p-1.5 shadow-xl">
+          <div className="mb-1 flex items-center justify-between">
+            <span className="font-mono text-[9px] uppercase tracking-wider text-slate-500">Show/Hide</span>
+            <button type="button" onClick={() => onChange(new Set())}
+              className="font-mono text-[9px] text-slate-500 hover:text-slate-300">Reset</button>
+          </div>
+          {columns.map(c => (
+            <label key={c.id} className="flex cursor-pointer items-center gap-1.5 rounded px-1 py-[1px] hover:bg-slate-800">
+              <input type="checkbox" checked={!hidden.has(c.id)} onChange={() => toggle(c.id)}
+                className="h-3 w-3 rounded border-slate-600 bg-slate-800 accent-indigo-500" />
+              <span className="font-mono text-[10px] text-slate-300">{c.label}</span>
+            </label>
+          ))}
+        </div>
+      )}
+    </div>
   )
 }
 
