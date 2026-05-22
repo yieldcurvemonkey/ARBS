@@ -89,6 +89,7 @@ type DailyRow = {
   idb_prints: number | null
   custy_prints: number | null
   custy_prints_excl_large: number | null
+  pts_vwap: number | null
 }
 
 type IntradayRow = {
@@ -163,6 +164,7 @@ function mapDailyRowsToPoints(
       custyNotional_excl_large: safeNum(r.custy_notional_excl_large),
       custyPrints_raw: safeNum(r.custy_prints),
       custyPrints_excl_large: safeNum(r.custy_prints_excl_large),
+      pts: r.pts_vwap != null ? r.pts_vwap : null,
     }
   })
 }
@@ -286,7 +288,8 @@ async function produceOutrightPackageTimeseries(args: {
           ABS(p.gross_notional::float),
           0
         ) AS notional,
-        p.venue
+        p.venue,
+        p.package_transaction_spread::float AS pts
       FROM ${PACKAGES_TABLE} p
       WHERE UPPER(COALESCE(p.tape_label, '')) = ANY($1::text[])
         AND UPPER(COALESCE(p.package_type, '')) = 'OUTRIGHT'
@@ -303,6 +306,7 @@ async function produceOutrightPackageTimeseries(args: {
         fixed_rate,
         risk,
         notional,
+        pts,
         CASE
           WHEN UPPER(COALESCE(r.venue, '')) = 'D2D' THEN 'IDB'
           ELSE 'CUSTY'
@@ -346,7 +350,8 @@ async function produceOutrightPackageTimeseries(args: {
         SUM(ABS(notional)) AS daily_notional,
         SUM(ABS(notional)) FILTER (WHERE excl_large_custy) AS daily_notional_excl_large,
         COUNT(*) AS prints,
-        COUNT(*) FILTER (WHERE excl_large_custy) AS prints_excl_large
+        COUNT(*) FILTER (WHERE excl_large_custy) AS prints_excl_large,
+        SUM(ABS(risk) * pts) / NULLIF(SUM(ABS(risk)) FILTER (WHERE pts IS NOT NULL), 0) AS pts_vwap
       FROM classified
       GROUP BY day, platform
     )
@@ -371,7 +376,8 @@ async function produceOutrightPackageTimeseries(args: {
       COALESCE(MAX(daily_notional_excl_large)   FILTER (WHERE platform = 'CUSTY'), 0) AS custy_notional_excl_large,
       COALESCE(MAX(prints)            FILTER (WHERE platform = 'IDB'),   0)           AS idb_prints,
       COALESCE(MAX(prints)            FILTER (WHERE platform = 'CUSTY'), 0)           AS custy_prints,
-      COALESCE(MAX(prints_excl_large) FILTER (WHERE platform = 'CUSTY'), 0)           AS custy_prints_excl_large
+      COALESCE(MAX(prints_excl_large) FILTER (WHERE platform = 'CUSTY'), 0)           AS custy_prints_excl_large,
+      MAX(pts_vwap) AS pts_vwap
     FROM per_day_platform
     GROUP BY day
     ORDER BY day ASC
