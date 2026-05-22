@@ -1,32 +1,37 @@
 'use client'
-// ABOUTME: Fly Curve view — renders butterfly structures (2s5s10s, 5s10s30s,
-// etc.) via the shared StructureGridView. Offers a Standard/All toggle to
-// control which fly definitions are included.
-
 import type { JSX } from 'react'
 import { useState } from 'react'
 import { StructureGridView } from './StructureGridView'
-import { STANDARD_FLIES, ALL_FLIES } from '@/lib/usd-swaps-tape-v2/structureDefs'
+import { ALL_FLIES, BENCHMARK_FLIES, MICRO_FLIES } from '@/lib/usd-swaps-tape-v2/structureDefs'
 import type { ViewProps } from '../../../types/volume-grid-views.types'
+import type { StructureDef } from '../../../types/structure-grid.types'
+
+type FlyFilter = 'all' | 'benchmark' | 'micro'
+const FILTERS: { id: FlyFilter; label: string; defs: readonly StructureDef[] }[] = [
+  { id: 'all',       label: 'All',       defs: ALL_FLIES },
+  { id: 'benchmark', label: 'Benchmark', defs: BENCHMARK_FLIES },
+  { id: 'micro',     label: 'Micro',     defs: MICRO_FLIES },
+]
 
 export function FlyCurveView(props: ViewProps): JSX.Element {
-  const [showAll, setShowAll] = useState(false)
+  const [filter, setFilter] = useState<FlyFilter>('all')
+  const structures = FILTERS.find(f => f.id === filter)!.defs
 
   return (
     <>
       <div className="flex items-center gap-2 px-3 pb-1">
-        <Toggle
-          options={[
-            { id: 'standard', label: 'Standard' },
-            { id: 'all', label: 'All' },
-          ]}
-          value={showAll ? 'all' : 'standard'}
-          onChange={(v) => setShowAll(v === 'all')}
-        />
+        <div className="flex items-center rounded border border-slate-700 p-[1px]">
+          {FILTERS.map(f => (
+            <button key={f.id} type="button" onClick={() => setFilter(f.id)}
+              className={`px-2 py-[1px] font-mono text-[10.5px] ${filter === f.id ? 'bg-indigo-500/25 text-indigo-100' : 'text-slate-300 hover:bg-slate-800'}`}
+            >{f.label}</button>
+          ))}
+        </div>
+        <span className="font-mono text-[9px] text-slate-500">{structures.length} structures</span>
       </div>
       <StructureGridView
         structureType="fly"
-        structures={showAll ? ALL_FLIES : STANDARD_FLIES}
+        structures={structures}
         metric={props.metric}
         period={props.period}
         lookbackDays={props.lookbackDays}
@@ -34,32 +39,5 @@ export function FlyCurveView(props: ViewProps): JSX.Element {
         onCellClick={props.onCellClick}
       />
     </>
-  )
-}
-
-// ─── Local helper ───────────────────────────────────────────────────────────
-
-function Toggle<T extends string>({
-  options,
-  value,
-  onChange,
-}: {
-  options: ReadonlyArray<{ id: T; label: string }>
-  value: T
-  onChange: (v: T) => void
-}): JSX.Element {
-  return (
-    <div className="flex items-center rounded border border-slate-700 p-[1px]">
-      {options.map((o) => (
-        <button
-          key={o.id}
-          type="button"
-          onClick={() => onChange(o.id)}
-          className={`px-2 py-[1px] font-mono text-[10.5px] ${value === o.id ? 'bg-indigo-500/25 text-indigo-100' : 'text-slate-300 hover:bg-slate-800'}`}
-        >
-          {o.label}
-        </button>
-      ))}
-    </div>
   )
 }
