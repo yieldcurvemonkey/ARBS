@@ -75,10 +75,11 @@ def detect_fly_trades_df(
     ) -> pd.DataFrame:
         nonlocal out
 
-        # Only candidates
+        # Only candidates — outrights and spreadovers (spreadover triples → SPREADOVER_FLY)
+        _FLY_ELIGIBLE = {"OUTRIGHT", "SPREADOVER"}
         m = (out[product_col].values == "OIS_SWAP") & (out[pv01_col].fillna(0).values > 0)
         if package_col in out.columns:
-            m &= out[package_col].fillna("OUTRIGHT").values == "OUTRIGHT"
+            m &= np.array([v in _FLY_ELIGIBLE for v in out[package_col].fillna("OUTRIGHT").values])
 
         # columns needed
         cols = [trade_id_col, exec_col, pv01_col, tenor_years_col, ten_axis_col]
@@ -116,6 +117,9 @@ def detect_fly_trades_df(
         cand = out.loc[m, cols].copy()
         if cand.empty:
             return out
+
+        # Track original package_type for spreadover → SPREADOVER_FLY
+        orig_pkg = out.loc[cand.index, package_col].fillna("OUTRIGHT").values if package_col in out.columns else None
 
         cand["_t"] = _ensure_int64_epoch_seconds(cand[exec_col])
         cand.sort_values("_t", inplace=True, kind="mergesort")
@@ -301,11 +305,14 @@ def detect_fly_trades_df(
                             legs = [str(trade_ids[j]), str(trade_ids[i]), str(trade_ids[k])]
                             # Globally-unique suffix: smallest leg trade_id.
                             # Prevents FLY_N collisions across daily detector runs.
-                            pid = f"FLY_{pkg_counter}_{min(legs)}"
+                            ft = "FLY"
+                            if orig_pkg is not None and all(orig_pkg[idx] == "SPREADOVER" for idx in (j, i, k)):
+                                ft = "SPREADOVER_FLY"
+                            pid = f"{ft}_{pkg_counter}_{min(legs)}"
 
                             for idx in (j, i, k):
                                 matched[idx] = True
-                                pkg_type[idx] = "FLY"
+                                pkg_type[idx] = ft
                                 pkg_ids[idx] = pid
                                 pkg_legs[idx] = legs
 
@@ -378,10 +385,13 @@ def detect_fly_trades_df(
 
             pkg_counter += 1
             legs = [str(trade_ids[j_idx]), str(trade_ids[i]), str(trade_ids[k_idx])]
-            pid = f"FLY_{pkg_counter}_{min(legs)}"
+            ft = "FLY"
+            if orig_pkg is not None and all(orig_pkg[idx] == "SPREADOVER" for idx in (j_idx, i, k_idx)):
+                ft = "SPREADOVER_FLY"
+            pid = f"{ft}_{pkg_counter}_{min(legs)}"
             for idx in (j_idx, i, k_idx):
                 matched[idx] = True
-                pkg_type[idx] = "FLY"
+                pkg_type[idx] = ft
                 pkg_ids[idx] = pid
                 pkg_legs[idx] = legs
 

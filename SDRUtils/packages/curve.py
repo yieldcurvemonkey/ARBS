@@ -60,10 +60,11 @@ def detect_curve_trades_df(
 
     out = df.copy()
 
-    # Only candidates
+    # Only candidates — outrights and spreadovers (spreadover pairs → SPREADOVER_CURVE)
+    _CURVE_ELIGIBLE = {"OUTRIGHT", "SPREADOVER"}
     m = (out[product_col].values == "OIS_SWAP") & (out[pv01_col].fillna(0).values > 0)
     if package_col in out.columns:
-        m &= out[package_col].fillna("OUTRIGHT").values == "OUTRIGHT"
+        m &= np.array([v in _CURVE_ELIGIBLE for v in out[package_col].fillna("OUTRIGHT").values])
 
     # Build candidate columns list (only include cols that exist)
     cols = [trade_id_col, exec_col, pv01_col, tenor_col]
@@ -102,9 +103,16 @@ def detect_curve_trades_df(
     if cand.empty:
         return out
 
+    # Track original package_type so spreadover pairs → SPREADOVER_CURVE
+    orig_pkg = out.loc[m, package_col].fillna("OUTRIGHT").values if package_col in out.columns else None
+
     # Sort by exec time
     cand["_t"] = _ensure_int64_epoch_seconds(cand[exec_col])
     cand.sort_values("_t", inplace=True, kind="mergesort")  # stable & fast
+    if orig_pkg is not None:
+        orig_pkg = orig_pkg[cand.index - cand.index[0]] if len(cand) > 0 else orig_pkg
+        # Re-index to match sorted cand order
+        orig_pkg = out.loc[cand.index, package_col].fillna("OUTRIGHT").values
 
     pv01 = cand[pv01_col].to_numpy(dtype=np.float64)
     tsec = cand["_t"].to_numpy(dtype=np.int64)
@@ -268,8 +276,13 @@ def detect_curve_trades_df(
 
             matched[best_j] = True
             matched[i] = True
-            pkg_type[best_j] = "CURVE"
-            pkg_type[i] = "CURVE"
+            # Spreadover pairs become SPREADOVER_CURVE
+            ct = "CURVE"
+            if orig_pkg is not None and orig_pkg[best_j] == "SPREADOVER" and orig_pkg[i] == "SPREADOVER":
+                ct = "SPREADOVER_CURVE"
+                pid = pid.replace("CURVE_", "SPREADOVER_CURVE_", 1)
+            pkg_type[best_j] = ct
+            pkg_type[i] = ct
             pkg_ids[best_j] = pid
             pkg_ids[i] = pid
             pkg_legs[best_j] = legs
