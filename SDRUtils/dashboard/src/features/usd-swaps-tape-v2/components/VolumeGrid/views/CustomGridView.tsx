@@ -17,7 +17,7 @@ import type {
   VolumeMetric,
   VolumePeriod,
 } from '../../../types/volume-grid.types'
-import type { CellId } from '../../../types/volume-grid-views.types'
+import type { CellId, CellContext } from '../../../types/volume-grid-views.types'
 
 // ---- localStorage helpers ---------------------------------------------------
 
@@ -63,7 +63,7 @@ export interface CustomGridViewProps {
   period: VolumePeriod
   lookbackDays: number
   textFilter: string
-  onCellClick: (cell: CellId) => void
+  onCellClick: (cell: CellId, context?: CellContext) => void
 }
 
 // ---- Component --------------------------------------------------------------

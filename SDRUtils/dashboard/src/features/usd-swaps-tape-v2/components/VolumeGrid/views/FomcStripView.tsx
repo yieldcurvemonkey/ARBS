@@ -6,7 +6,7 @@ import { useCallback, useMemo, useState, type JSX } from 'react'
 import { FomcStripCell } from './FomcStripCell'
 import { useVolumeGrid } from '../../../hooks/useVolumeGrid'
 import { buildFomcConstantMaturityMap, fomcAliasForLabel } from '@/lib/usd-swaps-tape-v2/fomcConstantMaturity'
-import type { CellId, FomcLabelMode } from '../../../types/volume-grid-views.types'
+import type { CellId, CellContext, FomcLabelMode } from '../../../types/volume-grid-views.types'
 import type { VolumeGridCell as Cell, VolumeMetric, VolumePeriod } from '../../../types/volume-grid.types'
 
 export interface FomcStripViewProps {
@@ -14,7 +14,7 @@ export interface FomcStripViewProps {
   period: VolumePeriod
   lookbackDays: number
   textFilter: string
-  onCellClick: (cell: CellId) => void
+  onCellClick: (cell: CellId, context?: CellContext) => void
 }
 
 export function FomcStripView({ metric, period, lookbackDays, textFilter, onCellClick }: FomcStripViewProps): JSX.Element {

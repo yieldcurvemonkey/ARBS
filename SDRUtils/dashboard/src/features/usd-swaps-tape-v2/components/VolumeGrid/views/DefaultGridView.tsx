@@ -16,7 +16,7 @@ import type {
   VolumeMetric,
   VolumePeriod,
 } from '../../../types/volume-grid.types'
-import type { BucketOverrides, CellId } from '../../../types/volume-grid-views.types'
+import type { BucketOverrides, CellId, CellContext } from '../../../types/volume-grid-views.types'
 import {
   FORWARD_SCHEMA_IDS,
   PACKAGE_TYPE_GROUP_IDS,
@@ -61,7 +61,7 @@ export interface DefaultGridViewProps {
   period: VolumePeriod
   lookbackDays: number
   textFilter: string
-  onCellClick: (cell: CellId) => void
+  onCellClick: (cell: CellId, context?: CellContext) => void
 }
 
 // ─── Component ───────────────────────────────────────────────────────────────
