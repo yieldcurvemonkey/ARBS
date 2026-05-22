@@ -63,6 +63,7 @@ export function DockTimeseriesChart(props: DockTimeseriesChartProps) {
     const xs = data.map((d) => d.ts)
     const idbY = data.map((d) => d.idbClose ?? null)
     const custyY = data.map((d) => d.custyClose ?? null)
+    const yFmt = metric === 'pts' ? '.6f' : '.2f'
 
     const traces: Array<Record<string, unknown>> = []
 
@@ -86,7 +87,7 @@ export function DockTimeseriesChart(props: DockTimeseriesChartProps) {
         },
         marker: { color: ANALYTICS_COLORS.custy, size: 3.5 },
         hovertemplate:
-          `<b>Custy</b> %{y:.2f} ${unit}<br>%{x|%b %d %Y %H:%M} NY<extra></extra>`,
+          `<b>Custy</b> %{y:${yFmt}} ${unit}<br>%{x|%b %d %Y %H:%M} NY<extra></extra>`,
         connectgaps: false,
       })
     }
@@ -106,7 +107,7 @@ export function DockTimeseriesChart(props: DockTimeseriesChartProps) {
         },
         marker: { color: ANALYTICS_COLORS.idb, size: 3.5 },
         hovertemplate:
-          `<b>IDB</b> %{y:.2f} ${unit}<br>%{x|%b %d %Y %H:%M} NY<extra></extra>`,
+          `<b>IDB</b> %{y:${yFmt}} ${unit}<br>%{x|%b %d %Y %H:%M} NY<extra></extra>`,
         connectgaps: false,
       })
     }

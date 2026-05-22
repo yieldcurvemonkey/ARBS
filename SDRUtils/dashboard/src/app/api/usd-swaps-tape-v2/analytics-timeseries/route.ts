@@ -481,7 +481,8 @@ async function produceAnalyticsTimeseries(
           b.platform,
           b.fixed_rate,
           b.risk,
-          b.notional
+          b.notional,
+          b.pts
         FROM package_summary b
         CROSS JOIN custy_threshold t
         WHERE ${outlierPredicate}
@@ -511,6 +512,7 @@ async function produceAnalyticsTimeseries(
         custyNotional: r.platform === 'CUSTY' ? Math.abs(safeNum(r.notional)) : 0,
         idbPrints: r.platform === 'IDB' ? 1 : 0,
         custyPrints: r.platform === 'CUSTY' ? 1 : 0,
+        pts: r.pts != null ? r.pts : null,
       }))
       return {
         status: 200,
@@ -554,6 +556,7 @@ async function produceAnalyticsTimeseries(
           fixed_rate,
           risk,
           notional,
+          pts,
           platform,
           DATE_TRUNC('day', ts AT TIME ZONE 'America/New_York') AS day
         FROM package_summary
@@ -600,7 +603,8 @@ async function produceAnalyticsTimeseries(
           SUM(ABS(notional)) AS daily_notional,
           SUM(ABS(notional)) FILTER (WHERE excl_large_custy) AS daily_notional_excl_large,
           COUNT(*) AS prints,
-          COUNT(*) FILTER (WHERE excl_large_custy) AS prints_excl_large
+          COUNT(*) FILTER (WHERE excl_large_custy) AS prints_excl_large,
+          SUM(ABS(risk) * pts) / NULLIF(SUM(ABS(risk)) FILTER (WHERE pts IS NOT NULL), 0) AS pts_vwap
         FROM classified
         GROUP BY day, platform
       )
@@ -625,7 +629,8 @@ async function produceAnalyticsTimeseries(
         COALESCE(MAX(daily_notional_excl_large)   FILTER (WHERE platform = 'CUSTY'), 0) AS custy_notional_excl_large,
         COALESCE(MAX(prints)            FILTER (WHERE platform = 'IDB'),   0)           AS idb_prints,
         COALESCE(MAX(prints)            FILTER (WHERE platform = 'CUSTY'), 0)           AS custy_prints,
-        COALESCE(MAX(prints_excl_large) FILTER (WHERE platform = 'CUSTY'), 0)           AS custy_prints_excl_large
+        COALESCE(MAX(prints_excl_large) FILTER (WHERE platform = 'CUSTY'), 0)           AS custy_prints_excl_large,
+        MAX(pts_vwap) AS pts_vwap
       FROM per_day_platform
       GROUP BY day
       ORDER BY day ASC
@@ -685,6 +690,7 @@ async function produceAnalyticsTimeseries(
         custyNotional_excl_large: safeNum(r.custy_notional_excl_large),
         custyPrints_raw: safeNum(r.custy_prints),
         custyPrints_excl_large: safeNum(r.custy_prints_excl_large),
+        pts: r.pts_vwap != null ? r.pts_vwap : null,
       }
     })
     return {

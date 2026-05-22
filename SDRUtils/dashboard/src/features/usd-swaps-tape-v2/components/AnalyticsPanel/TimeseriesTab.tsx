@@ -568,7 +568,7 @@ export function TimeseriesTab(props: TimeseriesTabProps): JSX.Element {
         VOLUME views still render the Recharts ComposedChart below
         because their stacked-bar story is cleaner there.
       */}
-      {data.length > 0 && (effectiveMetric === 'fixed_rate' || effectiveMetric === 'spread_to_mid') && !renderBars ? (
+      {data.length > 0 && (effectiveMetric === 'fixed_rate' || effectiveMetric === 'spread_to_mid' || effectiveMetric === 'pts') && !renderBars ? (
         <div
           className="relative rounded border border-slate-800 bg-slate-950/60 p-2"
           style={{ height: chartHeight }}
@@ -636,7 +636,7 @@ export function TimeseriesTab(props: TimeseriesTabProps): JSX.Element {
           display:
             data.length === 0
               ? 'none'
-              : (effectiveMetric === 'fixed_rate' || effectiveMetric === 'spread_to_mid') && !renderBars
+              : (effectiveMetric === 'fixed_rate' || effectiveMetric === 'spread_to_mid' || effectiveMetric === 'pts') && !renderBars
                 ? 'none'
                 : undefined,
         }}
