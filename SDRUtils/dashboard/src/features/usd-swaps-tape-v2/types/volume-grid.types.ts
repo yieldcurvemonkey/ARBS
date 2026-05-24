@@ -126,4 +126,5 @@ export interface VolumeGridCellResponse {
   timeseries: VolumeGridCellTimeseriesPoint[]
   intradaySeasonality: VolumeGridIntradaySeasonality
   recentTrades: VolumeGridCellRecentTrade[]
+  intradayDate?: string
 }

@@ -156,8 +156,9 @@ async function produceVolumeGridCell(request: Request): Promise<{ status: number
       ...textFilterParams,
       p.recentLimit,
     ]
+    const intradayDateKey = p.intradayDate ?? easternDateKey(now)
     const intradayParams = [
-      easternDateKey(now),
+      intradayDateKey,
       rangeStart.toISOString(),
       INTRADAY_SEASONALITY_BUCKET_MINUTES,
       ...intradayEffectivePredicate.params,
@@ -202,6 +203,7 @@ async function produceVolumeGridCell(request: Request): Promise<{ status: number
           }))
         : null,
     }))
+    const isHistoricalIntraday = !!p.intradayDate && p.intradayDate !== easternDateKey(now)
     const payload: VolumeGridCellResponse = {
       fwd: p.fwd,
       tenor: p.tenor,
@@ -214,8 +216,10 @@ async function produceVolumeGridCell(request: Request): Promise<{ status: number
       intradaySeasonality: shapeIntradaySeasonalityResponse(
         intradayResult.rows,
         INTRADAY_SEASONALITY_BUCKET_MINUTES,
+        isHistoricalIntraday,
       ),
       recentTrades,
+      intradayDate: p.intradayDate,
     }
     return { status: 200, payload }
   } catch (error) {
@@ -354,8 +358,9 @@ async function produceStructureCell(
       ...pkgTypes,
       ...tsTextFilterParams,
     ]
+    const structureIntradayDateKey = p.intradayDate ?? easternDateKey(now)
     const intradayParams: Array<string | number> = [
-      easternDateKey(now),
+      structureIntradayDateKey,
       rangeStart.toISOString(),
       INTRADAY_SEASONALITY_BUCKET_MINUTES,
       ...pkgTypes,
@@ -406,6 +411,7 @@ async function produceStructureCell(
           }))
         : null,
     }))
+    const isStructureHistorical = !!p.intradayDate && p.intradayDate !== easternDateKey(now)
     const payload: VolumeGridCellResponse = {
       fwd: p.fwd,
       tenor: p.tenor,
@@ -418,8 +424,10 @@ async function produceStructureCell(
       intradaySeasonality: shapeIntradaySeasonalityResponse(
         intradayResult.rows,
         INTRADAY_SEASONALITY_BUCKET_MINUTES,
+        isStructureHistorical,
       ),
       recentTrades,
+      intradayDate: p.intradayDate,
     }
     return { status: 200, payload }
   } catch (error) {

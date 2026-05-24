@@ -26,6 +26,7 @@ export interface UseVolumeGridCellArgs {
   structureType?: 'curve' | 'fly'
   structureTenors?: number[]
   structureTolerance?: number
+  intradayDate?: string
   fetcher?: typeof fetch
 }
 
@@ -39,7 +40,7 @@ export interface UseVolumeGridCellReturn {
 export function buildVolumeGridCellUrl(
   args: Pick<
     UseVolumeGridCellArgs,
-    'cell' | 'metric' | 'range' | 'recentLimit' | 'forwardSchema' | 'tenorSchema' | 'packageType' | 'textFilter' | 'customForwardBuckets' | 'customTenorBuckets' | 'structureType' | 'structureTenors' | 'structureTolerance'
+    'cell' | 'metric' | 'range' | 'recentLimit' | 'forwardSchema' | 'tenorSchema' | 'packageType' | 'textFilter' | 'customForwardBuckets' | 'customTenorBuckets' | 'structureType' | 'structureTenors' | 'structureTolerance' | 'intradayDate'
   >,
 ): string | null {
   if (!args.cell) return null
@@ -59,6 +60,7 @@ export function buildVolumeGridCellUrl(
   if (args.structureType) q.set('structureType', args.structureType)
   if (args.structureTenors) q.set('structureTenors', JSON.stringify(args.structureTenors))
   if (args.structureTolerance != null) q.set('structureTolerance', String(args.structureTolerance))
+  if (args.intradayDate) q.set('intradayDate', args.intradayDate)
   return `${TAPE_V2_API_BASE}/volume-grid/cell?${q}`
 }
 

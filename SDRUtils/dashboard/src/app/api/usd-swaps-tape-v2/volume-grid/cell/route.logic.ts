@@ -38,6 +38,7 @@ export interface VolumeGridCellParams {
   structureType?: StructureType
   structureTenors?: number[]
   structureTolerance?: number
+  intradayDate?: string
 }
 
 export type ParseResult<T> =
@@ -198,8 +199,17 @@ export function parseVolumeGridCellParams(
       structureType,
       structureTenors,
       structureTolerance,
+      intradayDate: parseIntradayDate(search.get('intradayDate')),
     },
   }
+}
+
+function parseIntradayDate(raw: string | null): string | undefined {
+  if (!raw) return undefined
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(raw)) return undefined
+  const d = new Date(raw + 'T12:00:00Z')
+  if (Number.isNaN(d.getTime())) return undefined
+  return raw
 }
 
 export function rangeToStartDate(range: VolumeCellRange, now: Date = new Date()): Date {
@@ -490,6 +500,7 @@ const num = (v: unknown): number => {
 export function shapeIntradaySeasonalityResponse(
   rows: ReadonlyArray<RawIntradaySeasonalityRow>,
   bucketMinutes: number = INTRADAY_SEASONALITY_BUCKET_MINUTES,
+  fullDay: boolean = false,
 ): VolumeGridIntradaySeasonality {
   const rawAsOf = rows.find((r) => r.as_of_ts != null)?.as_of_ts ?? null
   const asOfDate =
@@ -521,9 +532,11 @@ export function shapeIntradaySeasonalityResponse(
       minuteOfDay,
       time: formatMinuteLabel(minuteOfDay),
       current:
-        currentBucketEnd == null || minuteOfDay > currentBucketEnd
-          ? null
-          : currentRaw,
+        fullDay
+          ? currentRaw
+          : currentBucketEnd == null || minuteOfDay > currentBucketEnd
+            ? null
+            : currentRaw,
       average: averageRaw,
     }
   })

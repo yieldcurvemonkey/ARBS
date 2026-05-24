@@ -5,12 +5,13 @@
 
 import { Fragment, useEffect, useMemo, useState } from 'react'
 import type { JSX, ReactNode } from 'react'
+import useSWR from 'swr'
 import { Dialog } from 'primereact/dialog'
 import {
   Bar, BarChart, CartesianGrid, Line, LineChart, ReferenceLine, ResponsiveContainer,
   Tooltip, XAxis, YAxis,
 } from 'recharts'
-import { useVolumeGridCell } from '../../hooks/useVolumeGridCell'
+import { useVolumeGridCell, buildVolumeGridCellUrl } from '../../hooks/useVolumeGridCell'
 import { lookupLabel } from './buckets'
 import type {
   VolumeCellRange, VolumeMetric,
@@ -116,23 +117,34 @@ export function VolumeGridCellModal(props: VolumeGridCellModalProps): JSX.Elemen
   }
 
   const [localTradeFilter, setLocalTradeFilter] = useState('')
+  const [intradayDate, setIntradayDate] = useState<string | undefined>(undefined)
 
-  useEffect(() => { setLocalTradeFilter('') }, [props.cell?.fwd, props.cell?.tenor])
+  useEffect(() => { setLocalTradeFilter(''); setIntradayDate(undefined) }, [props.cell?.fwd, props.cell?.tenor])
 
-  const { data, error, isLoading } = useVolumeGridCell({
+  const cellArgs = {
     cell: props.cell,
     metric: props.metric,
     range,
-    forwardSchema: props.forwardSchema ?? 'default',
-    tenorSchema: props.tenorSchema ?? 'default',
-    packageType: props.packageType ?? 'all',
+    forwardSchema: props.forwardSchema ?? 'default' as const,
+    tenorSchema: props.tenorSchema ?? 'default' as const,
+    packageType: props.packageType ?? 'all' as const,
     textFilter: props.textFilter,
     customForwardBuckets: props.customForwardBuckets,
     customTenorBuckets: props.customTenorBuckets,
     structureType: props.structureType,
     structureTenors: props.structureTenors,
     structureTolerance: props.structureTolerance,
-  })
+  }
+  const { data, error, isLoading } = useVolumeGridCell(cellArgs)
+
+  const historicalUrl = intradayDate
+    ? buildVolumeGridCellUrl({ ...cellArgs, intradayDate })
+    : null
+  const { data: historicalData } = useSWR<import('../../types/volume-grid.types').VolumeGridCellResponse>(
+    historicalUrl,
+    (u: string) => fetch(u).then((r) => r.json()),
+    { dedupingInterval: 10_000 },
+  )
 
   const filteredTrades = useMemo(() => {
     if (!localTradeFilter || !data?.recentTrades) return data?.recentTrades ?? []
@@ -233,7 +245,10 @@ export function VolumeGridCellModal(props: VolumeGridCellModalProps): JSX.Elemen
           </div>
           <IntradaySeasonalityChart
             seasonality={data?.intradaySeasonality}
+            historicalSeasonality={historicalData?.intradaySeasonality}
             metric={props.metric}
+            intradayDate={intradayDate}
+            onIntradayDateChange={setIntradayDate}
           />
         </div>
         <div className="flex items-center gap-2 pb-1">
@@ -352,35 +367,78 @@ export function VolumeGridCellModal(props: VolumeGridCellModalProps): JSX.Elemen
 
 function IntradaySeasonalityChart({
   seasonality,
+  historicalSeasonality,
   metric,
+  intradayDate,
+  onIntradayDateChange,
 }: {
   seasonality: VolumeGridIntradaySeasonality | undefined
+  historicalSeasonality?: VolumeGridIntradaySeasonality
   metric: VolumeMetric
+  intradayDate?: string
+  onIntradayDateChange?: (date: string | undefined) => void
 }): JSX.Element {
-  const points = seasonality?.points ?? []
-  const hasSeries = points.some((p) => p.current != null || p.average != null)
+  const isHistorical = !!intradayDate
   const averageLabel = seasonality?.observedDays
     ? `${seasonality.observedDays}d avg`
     : 'avg'
+  const todayStr = new Date().toISOString().slice(0, 10)
+
+  const mergedPoints = useMemo(() => {
+    const todayPts = seasonality?.points ?? []
+    if (!isHistorical || !historicalSeasonality) return todayPts.map((p) => ({ ...p, historical: null as number | null }))
+    const histMap = new Map(historicalSeasonality.points.map((p) => [p.minuteOfDay, p.current]))
+    return todayPts.map((p) => ({ ...p, historical: histMap.get(p.minuteOfDay) ?? null }))
+  }, [seasonality, historicalSeasonality, isHistorical])
+
+  const hasSeries = mergedPoints.some((p) => p.current != null || p.average != null || p.historical != null)
 
   return (
     <div
       data-testid="volume-grid-cell-intraday-seasonality"
-      className="h-[230px] rounded border border-slate-800 bg-slate-950/25 p-2"
+      className={`h-[230px] rounded p-2 ${
+        isHistorical
+          ? 'border-2 border-red-500 bg-slate-950/40'
+          : 'border border-slate-800 bg-slate-950/25'
+      }`}
     >
       <div className="mb-1 flex items-center justify-between gap-2 font-mono text-[10px] text-slate-400">
-        <span className="uppercase tracking-wide text-slate-300">
-          Intraday seasonality
+        <span className="flex items-center gap-2">
+          <span className={`uppercase tracking-wide ${isHistorical ? 'text-red-300' : 'text-slate-300'}`}>
+            {isHistorical ? `Historical overlay — ${intradayDate}` : 'Intraday seasonality'}
+          </span>
+          <input
+            type="date"
+            value={intradayDate ?? ''}
+            max={todayStr}
+            onChange={(e) => onIntradayDateChange?.(e.target.value || undefined)}
+            className="rounded border border-slate-700 bg-slate-900 px-1.5 py-[1px] font-mono text-[10px] text-slate-300 hover:bg-slate-800"
+          />
+          {isHistorical && (
+            <button
+              type="button"
+              onClick={() => onIntradayDateChange?.(undefined)}
+              className="rounded px-1.5 py-[1px] text-[9px] text-red-300 ring-1 ring-red-500/40 hover:bg-red-500/15"
+            >
+              reset
+            </button>
+          )}
         </span>
-        <span>
+        <span className="flex items-center gap-1.5">
           <span className="text-amber-300">current</span>
-          <span className="mx-1 text-slate-600">/</span>
+          {isHistorical && (
+            <>
+              <span className="text-slate-600">/</span>
+              <span className="text-red-400">{intradayDate}</span>
+            </>
+          )}
+          <span className="text-slate-600">/</span>
           <span className="text-amber-100/75">{averageLabel}</span>
         </span>
       </div>
       {hasSeries ? (
-        <ResponsiveContainer width="100%" height="88%">
-          <LineChart data={points} margin={{ top: 8, right: 14, bottom: 8, left: 4 }}>
+        <ResponsiveContainer width="100%" height="85%">
+          <LineChart data={mergedPoints} margin={{ top: 8, right: 14, bottom: 8, left: 4 }}>
             <CartesianGrid
               vertical={false}
               stroke="rgba(148,163,184,0.18)"
@@ -408,7 +466,9 @@ function IntradaySeasonalityChart({
               labelFormatter={(label) => fmtMinuteOfDay(Number(label))}
               formatter={(value: unknown, name: string) => [
                 value == null ? '-' : fmtCompact(Number(value), metric),
-                name === 'current' ? 'current' : averageLabel,
+                name === 'historical' ? intradayDate ?? 'historical'
+                  : name === 'current' ? 'current'
+                  : averageLabel,
               ]}
             />
             {seasonality?.asOfMinuteOfDay != null && (
@@ -437,10 +497,21 @@ function IntradaySeasonalityChart({
               connectNulls={false}
               isAnimationActive={false}
             />
+            {isHistorical && (
+              <Line
+                type="stepAfter"
+                dataKey="historical"
+                stroke="#ef4444"
+                strokeWidth={2}
+                dot={false}
+                connectNulls={false}
+                isAnimationActive={false}
+              />
+            )}
           </LineChart>
         </ResponsiveContainer>
       ) : (
-        <div className="flex h-[88%] items-center justify-center text-sm text-slate-500">
+        <div className="flex h-[85%] items-center justify-center text-sm text-slate-500">
           No intraday seasonality for this bucket.
         </div>
       )}
