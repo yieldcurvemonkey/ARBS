@@ -5,12 +5,19 @@ import { CurveStripView } from './CurveStripView'
 import { FlyCurveView } from './FlyCurveView'
 import { SpreadoverStripView } from './SpreadoverStripView'
 import { CustomGridView } from './CustomGridView'
+import { MarketOverviewView } from './MarketOverviewView'
 
 export const VOLUME_GRID_VIEWS: ReadonlyArray<VolumeGridViewDef> = [
   {
     id: 'default',
     label: 'Grid',
     component: DefaultGridView,
+    controls: () => null,
+  },
+  {
+    id: 'market_overview',
+    label: 'Market Overview',
+    component: MarketOverviewView,
     controls: () => null,
   },
   {
