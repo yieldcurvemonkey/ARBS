@@ -811,6 +811,8 @@ def _concat_dfs(
                 df = df.drop_duplicates(subset=cols, keep="first")
 
         if sort_by and sort_by in df.columns:
+            if sort_by == "Event timestamp":
+                df[sort_by] = pd.to_datetime(df[sort_by], utc=True, errors="coerce")
             df = df.sort_values(by=sort_by, kind="mergesort")
 
         return df.reset_index(drop=True)

@@ -1101,6 +1101,7 @@ def cleanup_orphaned_packages(engine: Engine) -> int:
     """Delete packages that have no legs (orphaned by reclassification)."""
     try:
         with engine.begin() as conn:
+            conn.execute(text("SET LOCAL statement_timeout = '120s'"))
             result = conn.execute(
                 text(
                     f"""
@@ -1113,9 +1114,9 @@ def cleanup_orphaned_packages(engine: Engine) -> int:
                 )
             )
         return result.rowcount
-    except sqlalchemy.exc.IntegrityError:
+    except (sqlalchemy.exc.IntegrityError, sqlalchemy.exc.OperationalError) as exc:
         warnings.warn(
-            "cleanup_orphaned_packages skipped: concurrent writes caused FK conflict; will retry next cycle"
+            f"cleanup_orphaned_packages skipped ({type(exc).__name__}): {exc}; will retry next cycle"
         )
         return 0
 
