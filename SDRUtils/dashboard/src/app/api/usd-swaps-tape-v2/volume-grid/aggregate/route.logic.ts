@@ -672,13 +672,26 @@ interface RawTenorDistRow {
   historical_avg: number | string
 }
 
-const TENOR_LABELS: Record<string, string> = {
-  '1m_3m': '1M-3M', '6m_12m': '6M-12M', '1y_18m': '1Y-18M', '18m_2y': '18M-2Y',
-  '2y': '2Y', '3y': '3Y', '4y': '4Y', '5y': '5Y',
-  '6y_7y': '6Y-7Y', '8y_9y': '8Y-9Y', '10y': '10Y',
-  '10y_12y': '10Y-12Y', '12y_15y': '12Y-15Y', '15y_20y': '15Y-20Y',
-  '20y_25y': '20Y-25Y', '30y_plus': '25Y-30Y+',
-}
+const TENOR_ORDER: ReadonlyArray<{ id: string; label: string }> = [
+  { id: '1m_3m', label: '1M-3M' },
+  { id: '6m_12m', label: '6M-12M' },
+  { id: '1y_18m', label: '1Y-18M' },
+  { id: '18m_2y', label: '18M-2Y' },
+  { id: '2y', label: '2Y' },
+  { id: '3y', label: '3Y' },
+  { id: '4y', label: '4Y' },
+  { id: '5y', label: '5Y' },
+  { id: '6y_7y', label: '6Y-7Y' },
+  { id: '8y_9y', label: '8Y-9Y' },
+  { id: '10y', label: '10Y' },
+  { id: '10y_12y', label: '10Y-12Y' },
+  { id: '12y_15y', label: '12Y-15Y' },
+  { id: '15y_20y', label: '15Y-20Y' },
+  { id: '20y_25y', label: '20Y-25Y' },
+  { id: '30y_plus', label: '25Y-30Y+' },
+]
+const TENOR_LABEL_MAP = Object.fromEntries(TENOR_ORDER.map((t) => [t.id, t.label]))
+const TENOR_INDEX_MAP = Object.fromEntries(TENOR_ORDER.map((t, i) => [t.id, i]))
 
 function makePkgMixEntry(
   id: string,
@@ -746,13 +759,14 @@ export function shapeAggregateResponse(
       const hist = num(r.historical_avg)
       return {
         id: r.tenor,
-        label: TENOR_LABELS[r.tenor] ?? r.tenor,
+        label: TENOR_LABEL_MAP[r.tenor] ?? r.tenor,
         current,
         historicalAvg: hist,
         share: currentTotal > 0 ? (current / currentTotal) * 100 : 0,
         historicalShare: adv > 0 ? (hist / adv) * 100 : 0,
       }
     })
+    .sort((a, b) => (TENOR_INDEX_MAP[a.id] ?? 99) - (TENOR_INDEX_MAP[b.id] ?? 99))
 
   const cOutright = s ? num(s.current_outright) : 0
   const cCurve = s ? num(s.current_curve) : 0

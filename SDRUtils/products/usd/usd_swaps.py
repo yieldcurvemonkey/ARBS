@@ -1170,6 +1170,8 @@ class USD_SwapProduct(USDProductBase):
 
         all_frames = [*cached_frames, *built_frames]
         if not all_frames:
+            if return_raw:
+                return pd.DataFrame(), unfiltered_raw_df
             return pd.DataFrame()
 
         final_df = pd.concat(all_frames, ignore_index=True)

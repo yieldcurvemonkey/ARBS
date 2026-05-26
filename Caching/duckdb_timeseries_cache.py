@@ -144,6 +144,35 @@ class DuckDBTimeseriesCache:
             ).fetchall()
         return [(row[0], row[1], row[2]) for row in result]
 
+    def read_many_symbols(
+        self,
+        symbols: Sequence[str],
+        *,
+        start: datetime.date,
+        end: datetime.date,
+    ) -> Mapping[str, List[Tuple[datetime.date, str, float]]]:
+        """Read rows for multiple symbols in one query. Returns {symbol: [(date, col, val), ...]}."""
+        if not symbols:
+            return {}
+        result_map: dict[str, List[Tuple[datetime.date, str, float]]] = {s: [] for s in symbols}
+        placeholders = ", ".join("?" for _ in symbols)
+        with self._lock:
+            rows = self._conn.execute(
+                f"""
+                SELECT symbol, trading_date, column_name, value
+                FROM computed_timeseries
+                WHERE symbol IN ({placeholders})
+                  AND trading_date BETWEEN ? AND ?
+                ORDER BY symbol, trading_date
+                """,
+                [*symbols, start, end],
+            ).fetchall()
+        for row in rows:
+            sym = row[0]
+            if sym in result_map:
+                result_map[sym].append((row[1], row[2], row[3]))
+        return result_map
+
     def has_symbol(self, symbol: str) -> bool:
         with self._lock:
             result = self._conn.execute(
@@ -151,6 +180,19 @@ class DuckDBTimeseriesCache:
                 [symbol],
             ).fetchone()
         return result is not None
+
+    def has_many_symbols(self, symbols: Sequence[str]) -> Mapping[str, bool]:
+        """Check existence of multiple symbols in one query."""
+        if not symbols:
+            return {}
+        placeholders = ", ".join("?" for _ in symbols)
+        with self._lock:
+            rows = self._conn.execute(
+                f"SELECT DISTINCT symbol FROM computed_timeseries WHERE symbol IN ({placeholders})",
+                list(symbols),
+            ).fetchall()
+        found = {row[0] for row in rows}
+        return {s: (s in found) for s in symbols}
 
     def available_dates(
         self,

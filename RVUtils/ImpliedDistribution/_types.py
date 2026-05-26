@@ -59,6 +59,38 @@ class BreedenLitzenbergerResult:
 
 
 @dataclass(frozen=True)
+class BKMResult:
+    """Output of the Bakshi-Kapadia-Madan model-free moments approach.
+
+    Moments are computed via integration of option prices (smoothing operation),
+    avoiding the noise amplification of Breeden-Litzenberger's differentiation.
+    """
+
+    input: RNDInput
+    # Rate-space moments (R = 100 - P)
+    variance_rate: float
+    std_rate: float
+    skewness_rate: float
+    kurtosis_rate: float
+    excess_kurtosis_rate: float
+    # Raw price-space central moments
+    mu2_price: float
+    mu3_price: float
+    mu4_price: float
+    # Tail diagnostics
+    left_tail_variance_frac: float
+    right_tail_variance_frac: float
+    n_otm_calls: int
+    n_otm_puts: int
+    warnings: Tuple[str, ...] = ()
+
+    @property
+    def mean_rate(self) -> float:
+        """The futures forward rate IS the risk-neutral mean — no estimation needed."""
+        return self.input.forward_rate
+
+
+@dataclass(frozen=True)
 class ScenarioDefinition:
     """A single scenario for the Gaussian mixture approach."""
 
@@ -99,14 +131,17 @@ class ImpliedDistributionSnapshot:
     as_of: datetime.date
     bl_result: Optional[BreedenLitzenbergerResult]
     gm_result: Optional[GaussianMixtureResult]
+    bkm_result: Optional["BKMResult"] = None
 
     def all_warnings(self) -> Tuple[str, ...]:
-        """Return all child warnings prefixed with their source (``bl::`` / ``gm::``)."""
+        """Return all child warnings prefixed with their source (``bl::`` / ``gm::`` / ``bkm::``)."""
         out: List[str] = []
         if self.bl_result is not None:
             out.extend(f"bl::{w}" for w in self.bl_result.warnings)
         if self.gm_result is not None:
             out.extend(f"gm::{w}" for w in self.gm_result.warnings)
+        if self.bkm_result is not None:
+            out.extend(f"bkm::{w}" for w in self.bkm_result.warnings)
         return tuple(out)
 
 

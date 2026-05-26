@@ -37,6 +37,7 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional, Sequence, Tuple, Un
 
 import pandas as pd
 
+from RVUtils.ImpliedDistribution._bkm import extract_bkm_moments
 from RVUtils.ImpliedDistribution._breeden_litzenberger import extract_rnd_breeden_litzenberger
 from RVUtils.ImpliedDistribution._data_prep import smile_to_rnd_input
 from RVUtils.ImpliedDistribution._gaussian_mixture import extract_gaussian_mixture
@@ -147,8 +148,18 @@ class SFRImpliedDistribution:
         scenario_config: Optional[FedScenarioConfig] = None,
         run_bl: bool = True,
         run_gm: bool = True,
+        run_bkm: bool = False,
     ) -> ImpliedDistributionSnapshot:
-        """Extract implied distribution from a single smile snapshot."""
+        """Extract implied distribution from a single smile snapshot.
+
+        Parameters
+        ----------
+        run_bkm : bool
+            If True, also compute Bakshi-Kapadia-Madan model-free moments via
+            integration. These provide variance, skewness, and kurtosis without
+            the noise amplification of BL's differentiation step. Useful for
+            butterfly RV analysis (variance term structure, fragility scoring).
+        """
         config = scenario_config or self.scenario_config
 
         # scenarios_only: skip BL, use only GM scenario weights as the distribution
@@ -169,6 +180,7 @@ class SFRImpliedDistribution:
 
         bl_result = None
         gm_result = None
+        bkm_result = None
 
         if run_bl:
             bl_result = extract_rnd_breeden_litzenberger(
@@ -190,11 +202,15 @@ class SFRImpliedDistribution:
                 initial_std_bps=self.initial_mixture_std_bps,
             )
 
+        if run_bkm:
+            bkm_result = extract_bkm_moments(rnd_input)
+
         return ImpliedDistributionSnapshot(
             symbol=str(smile.symbol),
             as_of=smile.params.as_of,
             bl_result=bl_result,
             gm_result=gm_result,
+            bkm_result=bkm_result,
         )
 
     def extract_timeseries(

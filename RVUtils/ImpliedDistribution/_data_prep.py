@@ -190,6 +190,23 @@ def smile_to_rnd_input(
             vol_prices = bachelier_call_prices_vectorized(strikes, fwd, vols_arr, tte, df)
             call_premiums = np.where(np.isfinite(call_premiums), call_premiums, vol_prices)
 
+        if len(strikes) < 2:
+            import warnings as _w
+
+            _w.warn(
+                f"Raw market filtering left only {len(strikes)} points "
+                f"(need >=2); falling back to SABR vol evaluation at listed strikes.",
+                stacklevel=2,
+            )
+            all_strikes = sorted(set(float(pt.strike_price) for pt in smile.points))
+            strikes = np.array(all_strikes, dtype=float)
+            vols = np.asarray(
+                smile.normal_vol(strikes, strike_space="price", vol_units="price"),
+                dtype=float,
+            )
+            vols = np.maximum(vols, 1e-8)
+            use_sabr_vols = True
+
     if use_sabr_vols:
         # Convert all to call premiums via Bachelier
         call_premiums = bachelier_call_prices_vectorized(strikes, fwd, vols, tte, df)
@@ -234,6 +251,11 @@ def add_ghost_points(
         Spacing between ghost points in price units (bps of price, i.e. 0.01).
         For SFR options 1 strike tick = 0.125 (12.5bp in price).
     """
+    if len(strikes) < 2:
+        raise ValueError(
+            f"add_ghost_points requires at least 2 data points, got {len(strikes)}"
+        )
+
     step = extension_bps / 100.0
 
     # Left ghost points (lower strikes → deep ITM calls, higher premiums)

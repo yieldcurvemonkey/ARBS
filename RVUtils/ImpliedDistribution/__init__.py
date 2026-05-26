@@ -35,6 +35,7 @@ Usage::
 from RVUtils.ImpliedDistribution._strip_utils import STRIP_PRESETS, resolve_strip_symbols
 from RVUtils.ImpliedDistribution._types import (
     AnnotatedResult,
+    BKMResult,
     BreedenLitzenbergerResult,
     FedScenarioConfig,
     FOMCPathState,
@@ -76,6 +77,7 @@ from RVUtils.ImpliedDistribution.plotting import (
 __all__ = [
     "SFRImpliedDistribution",
     "AnnotatedResult",
+    "BKMResult",
     "FedScenarioConfig",
     "FOMCPathState",
     "FOMCPathStateConfig",

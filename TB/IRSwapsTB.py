@@ -40,6 +40,18 @@ _EOD_FREQ_ZONES: Dict[str, str] = {
     "ldn_eod": "Europe/London",
 }
 
+_ROLL_ADJ_VALUES = frozenset({
+    IRSwapValue.ROLL_ADJ_DIFFERENCE,
+    IRSwapValue.ROLL_ADJ_RATIO,
+    IRSwapValue.ROLL_ADJ_CALENDAR_WEIGHT,
+})
+
+_ROLL_ADJ_METHOD_MAP = {
+    IRSwapValue.ROLL_ADJ_DIFFERENCE: "difference",
+    IRSwapValue.ROLL_ADJ_RATIO: "ratio",
+    IRSwapValue.ROLL_ADJ_CALENDAR_WEIGHT: "calendar_weight",
+}
+
 
 def _query_fingerprint(q: "IRSwapQuery") -> str:
     payload = {
@@ -243,6 +255,125 @@ def _normalize_legacy_eod_cached_rows(
     return normalized_rows if used_legacy_alias else rows
 
 
+def _parse_imm_relative_tokens(tenor: str) -> Optional[List[str]]:
+    """Parse a tenor like 'IMM_1xIMM_2' into relative IMM tokens ['IMM_1', 'IMM_2'].
+    Returns None if tenor doesn't use relative IMM ranks."""
+    tenor_upper = (tenor or "").strip().upper()
+    if "XIMM_" not in tenor_upper or not tenor_upper.startswith("IMM_"):
+        return None
+    tokens = [t.strip() for t in tenor_upper.split("X")]
+    for t in tokens:
+        if not t.startswith("IMM_"):
+            return None
+        suffix = t.split("IMM_", 1)[1]
+        if not suffix.isdigit():
+            return None
+    return tokens
+
+
+def _resolve_imm_tenor_date_local(token: str, *, ref_date: datetime.date) -> Optional[datetime.date]:
+    """Resolve a relative IMM token (e.g. 'IMM_1') to a specific date."""
+    from rateslib.scheduling import next_imm
+
+    imm_token = str(token or "").strip().upper()
+    if not imm_token.startswith("IMM_"):
+        return None
+    suffix = imm_token.split("IMM_", 1)[1]
+    if not suffix.isdigit():
+        return None
+    rank = int(suffix)
+    if rank <= 0:
+        return None
+    imm = datetime.datetime.combine(ref_date + datetime.timedelta(days=1), datetime.time())
+    for _ in range(rank):
+        imm = next_imm(imm)
+    return imm.date() if isinstance(imm, datetime.datetime) else imm
+
+
+def _detect_roll_indices(
+    tokens: List[str],
+    ref_dates: List[DateLike],
+) -> List[Tuple[int, Tuple[Optional[datetime.date], ...], Tuple[Optional[datetime.date], ...]]]:
+    """Identify indices where the resolved IMM dates change (roll points).
+    Returns list of (index, old_resolved_dates, new_resolved_dates)."""
+    resolved = []
+    for rd in ref_dates:
+        d = rd.date() if isinstance(rd, datetime.datetime) else rd
+        dates = tuple(_resolve_imm_tenor_date_local(t, ref_date=d) for t in tokens)
+        resolved.append(dates)
+
+    roll_points = []
+    for i in range(1, len(resolved)):
+        if resolved[i] != resolved[i - 1]:
+            if None not in resolved[i] and None not in resolved[i - 1]:
+                roll_points.append((i, resolved[i - 1], resolved[i]))
+    return roll_points
+
+
+def _apply_difference_adjustment(
+    series: pd.Series,
+    roll_gaps: List[Tuple[int, float]],
+) -> pd.Series:
+    """Backward additive (Panama Canal) adjustment.
+    Shifts all pre-roll data by the gap (new - old) so the series is continuous.
+    Latest data matches market; historical data is adjusted."""
+    adjusted = series.values.copy().astype(float)
+    for idx, gap in reversed(roll_gaps):
+        adjusted[:idx] += gap
+    return pd.Series(adjusted, index=series.index, name=series.name)
+
+
+def _apply_ratio_adjustment(
+    series: pd.Series,
+    roll_gaps: List[Tuple[int, float]],
+    raw_values: pd.Series,
+) -> pd.Series:
+    """Backward multiplicative adjustment.
+    Scales all pre-roll data by the ratio of new/old contract at each roll."""
+    adjusted = series.values.copy().astype(float)
+    for idx, _gap in reversed(roll_gaps):
+        old_val = raw_values.iloc[idx - 1] if idx > 0 else None
+        new_val = raw_values.iloc[idx]
+        if old_val is None or old_val == 0.0 or pd.isna(old_val) or pd.isna(new_val):
+            continue
+        ratio = new_val / old_val
+        adjusted[:idx] *= ratio
+    return pd.Series(adjusted, index=series.index, name=series.name)
+
+
+def _apply_calendar_weight_adjustment(
+    raw_series: pd.Series,
+    roll_indices: List[int],
+    old_rates_at_rolls: Dict[int, pd.Series],
+    window: int = 5,
+) -> pd.Series:
+    """Calendar-weighted (perpetual) method.
+    Blends old and new contracts over a roll window."""
+    adjusted = raw_series.values.copy().astype(float)
+    half = window // 2
+
+    for roll_idx in roll_indices:
+        old_rates = old_rates_at_rolls.get(roll_idx)
+        if old_rates is None or old_rates.empty:
+            continue
+
+        blend_start = max(0, roll_idx - half)
+        blend_end = min(len(adjusted), roll_idx + half + 1)
+
+        for i in range(blend_start, blend_end):
+            dt = raw_series.index[i]
+            if dt not in old_rates.index:
+                continue
+            old_val = old_rates.loc[dt]
+            new_val = adjusted[i]
+            if pd.isna(old_val) or pd.isna(new_val):
+                continue
+            progress = (i - blend_start) / max(1, blend_end - blend_start - 1)
+            adjusted[i] = (1.0 - progress) * old_val + progress * new_val
+
+    return pd.Series(adjusted, index=raw_series.index, name=raw_series.name)
+
+
 class IRSwapsTB(LayeredCacheMixin, BaseTimeseriesTB):
     _CACHE_ATTR_BASE = "_irswaps_tb_cache"
     _DEFAULT_PRICING_MESSAGE = "PRICING IRSWAPS."
@@ -346,6 +477,220 @@ class IRSwapsTB(LayeredCacheMixin, BaseTimeseriesTB):
 
         return filtered
 
+    def _get_roll_adjusted_timeseries(
+        self,
+        start: DateLike,
+        end: DateLike,
+        queries: List[IRSwapQuery | List[IRSwapQuery] | IRSwapQueryWrapper],
+        *,
+        n_jobs: Optional[int] = 1,
+        ignore_cache: Optional[bool] = False,
+        ignore_cache_miss: Optional[bool] = False,
+        freq: Optional[str] = None,
+        timestamps: Optional[List[datetime.datetime]] = None,
+        _prefetched_ts_rows_by_symbol: Optional[Mapping[str, Sequence[Tuple[DateLike, str, float]]]] = None,
+    ) -> pd.DataFrame:
+        from dataclasses import replace
+
+        flat = self._flatten_queries(queries)
+        roll_adj_infos: List[Tuple[IRSwapQuery, str]] = []
+        passthrough: List[IRSwapQuery] = []
+
+        for q in flat:
+            if q.value in _ROLL_ADJ_VALUES:
+                method = _ROLL_ADJ_METHOD_MAP[q.value]
+                roll_adj_infos.append((q, method))
+            else:
+                passthrough.append(q)
+
+        ts_kwargs = dict(
+            n_jobs=n_jobs,
+            ignore_cache=ignore_cache,
+            ignore_cache_miss=ignore_cache_miss,
+            freq=freq,
+            timestamps=timestamps,
+            _prefetched_ts_rows_by_symbol=_prefetched_ts_rows_by_symbol,
+        )
+
+        result_frames: List[pd.DataFrame] = []
+
+        if passthrough:
+            pass_df = self.get_timeseries(
+                start=start, end=end, queries=passthrough, **ts_kwargs,
+            )
+            if not pass_df.empty:
+                result_frames.append(pass_df)
+
+        for orig_q, method in roll_adj_infos:
+            adj_col = orig_q.col_name(orig_q.curve)
+
+            rate_q = replace(orig_q, value=IRSwapValue.RATE, name=None, value_kwargs={})
+            rate_df = self.get_timeseries(
+                start=start, end=end, queries=[rate_q], **ts_kwargs,
+            )
+
+            if rate_df.empty or rate_df.shape[1] == 0:
+                continue
+
+            rate_col = rate_df.columns[0]
+            raw_series = rate_df[rate_col].dropna()
+            if raw_series.empty:
+                continue
+
+            tenor = orig_q.tenor
+            tokens = _parse_imm_relative_tokens(tenor)
+            if not tokens:
+                result_frames.append(raw_series.to_frame(adj_col))
+                continue
+
+            ref_dates = list(raw_series.index)
+            roll_points = _detect_roll_indices(tokens, ref_dates)
+
+            if not roll_points:
+                result_frames.append(raw_series.to_frame(adj_col))
+                continue
+
+            if method == "difference":
+                roll_gaps = self._compute_roll_gaps(
+                    roll_points=roll_points,
+                    ref_dates=ref_dates,
+                    raw_series=raw_series,
+                    curve_name=orig_q.curve,
+                    n_jobs=n_jobs,
+                    ignore_cache_miss=ignore_cache_miss,
+                    freq=freq,
+                )
+                adjusted = _apply_difference_adjustment(raw_series, roll_gaps)
+                result_frames.append(adjusted.to_frame(adj_col))
+
+            elif method == "ratio":
+                roll_gaps = self._compute_roll_gaps(
+                    roll_points=roll_points,
+                    ref_dates=ref_dates,
+                    raw_series=raw_series,
+                    curve_name=orig_q.curve,
+                    n_jobs=n_jobs,
+                    ignore_cache_miss=ignore_cache_miss,
+                    freq=freq,
+                )
+                adjusted = _apply_ratio_adjustment(raw_series, roll_gaps, raw_series)
+                result_frames.append(adjusted.to_frame(adj_col))
+
+            elif method == "calendar_weight":
+                window = int((orig_q.value_kwargs or {}).get("roll_window", 5))
+                old_rates_at_rolls = self._compute_old_contract_series_around_rolls(
+                    roll_points=roll_points,
+                    ref_dates=ref_dates,
+                    curve_name=orig_q.curve,
+                    window=window,
+                    n_jobs=n_jobs,
+                    ignore_cache_miss=ignore_cache_miss,
+                    freq=freq,
+                )
+                roll_indices_only = [rp[0] for rp in roll_points]
+                adjusted = _apply_calendar_weight_adjustment(
+                    raw_series, roll_indices_only, old_rates_at_rolls, window
+                )
+                result_frames.append(adjusted.to_frame(adj_col))
+
+        if not result_frames:
+            return pd.DataFrame()
+        return pd.concat(result_frames, axis=1).sort_index()
+
+    def _compute_roll_gaps(
+        self,
+        roll_points: List[Tuple[int, Tuple, Tuple]],
+        ref_dates: List[DateLike],
+        raw_series: pd.Series,
+        curve_name: str,
+        **kwargs,
+    ) -> List[Tuple[int, float]]:
+        """Compute the gap (new_rate - old_rate) at each roll point."""
+        gaps: List[Tuple[int, float]] = []
+
+        for idx, old_dates, new_dates in roll_points:
+            roll_date = ref_dates[idx]
+            new_rate = raw_series.iloc[idx]
+            if pd.isna(new_rate):
+                continue
+
+            old_effective = old_dates[0]
+            old_maturity = old_dates[-1]
+            try:
+                old_q = IRSwapQuery(
+                    curve=curve_name,
+                    effective_date=old_effective,
+                    maturity_date=old_maturity,
+                    value=IRSwapValue.RATE,
+                    structure=IRSwapStructure.OUTRIGHT,
+                    structure_kwargs={"bpv": 1},
+                )
+                old_df = self.get_timeseries(
+                    start=roll_date,
+                    end=roll_date,
+                    queries=[old_q],
+                    n_jobs=kwargs.get("n_jobs", 1),
+                    freq=kwargs.get("freq"),
+                    ignore_cache_miss=kwargs.get("ignore_cache_miss", False),
+                )
+                if old_df.empty:
+                    continue
+                old_rate = float(old_df.iloc[0, 0])
+                gap = float(new_rate) - old_rate
+            except Exception as e:
+                self._logger.debug(f"Roll gap computation failed at {roll_date}: {e}")
+                continue
+
+            gaps.append((idx, gap))
+
+        return gaps
+
+    def _compute_old_contract_series_around_rolls(
+        self,
+        roll_points: List[Tuple[int, Tuple, Tuple]],
+        ref_dates: List[DateLike],
+        curve_name: str,
+        window: int,
+        **kwargs,
+    ) -> Dict[int, pd.Series]:
+        """For calendar-weight method: get old contract rates around each roll window."""
+        old_rates_by_roll: Dict[int, pd.Series] = {}
+        half = window // 2
+
+        for idx, old_dates, _new_dates in roll_points:
+            blend_start = max(0, idx - half)
+            blend_end = min(len(ref_dates), idx + half + 1)
+            window_dates = ref_dates[blend_start:blend_end]
+
+            if not window_dates:
+                continue
+
+            old_effective = old_dates[0]
+            old_maturity = old_dates[-1]
+            try:
+                old_q = IRSwapQuery(
+                    curve=curve_name,
+                    effective_date=old_effective,
+                    maturity_date=old_maturity,
+                    value=IRSwapValue.RATE,
+                    structure=IRSwapStructure.OUTRIGHT,
+                    structure_kwargs={"bpv": 1},
+                )
+                old_df = self.get_timeseries(
+                    start=window_dates[0],
+                    end=window_dates[-1],
+                    queries=[old_q],
+                    n_jobs=kwargs.get("n_jobs", 1),
+                    freq=kwargs.get("freq"),
+                    ignore_cache_miss=kwargs.get("ignore_cache_miss", False),
+                )
+                if not old_df.empty:
+                    old_rates_by_roll[idx] = old_df.iloc[:, 0]
+            except Exception as e:
+                self._logger.debug(f"Calendar-weight old contract failed at roll {idx}: {e}")
+
+        return old_rates_by_roll
+
     def get_timeseries(
         self,
         start: DateLike,
@@ -359,6 +704,20 @@ class IRSwapsTB(LayeredCacheMixin, BaseTimeseriesTB):
         timestamps: Optional[List[datetime.datetime]] = None,
         _prefetched_ts_rows_by_symbol: Optional[Mapping[str, Sequence[Tuple[DateLike, str, float]]]] = None,
     ) -> pd.DataFrame:
+        flat_check = self._flatten_queries(queries)
+        if any(q.value in _ROLL_ADJ_VALUES for q in flat_check):
+            return self._get_roll_adjusted_timeseries(
+                start=start,
+                end=end,
+                queries=queries,
+                n_jobs=n_jobs,
+                ignore_cache=ignore_cache,
+                ignore_cache_miss=ignore_cache_miss,
+                freq=freq,
+                timestamps=timestamps,
+                _prefetched_ts_rows_by_symbol=_prefetched_ts_rows_by_symbol,
+            )
+
         has_timestamps = timestamps is not None and len(timestamps) > 0
         live_eod_mode = end == "live"
         live_output_index: Optional[datetime.datetime] = None
@@ -410,61 +769,103 @@ class IRSwapsTB(LayeredCacheMixin, BaseTimeseriesTB):
         use_mapping_cache = not self._use_ts_cache
         cache_map = getattr(self, self._cache_attr) if use_mapping_cache else None
 
-        if self._use_ts_cache and not ignore_cache:
-            for curve_name, qs in by_curve.items():
-                curve_ref_points = ref_points_by_curve.get(curve_name, [])
-                cacheable_ref_points = [ref_point for ref_point in curve_ref_points if ref_point != "live"]
-                if not cacheable_ref_points:
-                    continue
-                for q in qs:
-                    symbol = self._ts_symbol_for_query(curve_name, q)
-                    prefetched_rows = prefetched_ts_rows_by_symbol.get(symbol)
-                    if prefetched_rows is not None:
-                        rows = list(prefetched_rows)
-                    else:
-                        try:
-                            rows = self._computed_ts_store.read_rows(
-                                symbol=symbol,
-                                reference_points=cacheable_ref_points,
-                                intraday=use_intraday_cache,
-                                skip_current_eod=True,
-                                fallback_column_name=q.col_name(curve_name),
-                                allow_partial=True,
-                                skip_if_symbol_absent=not use_intraday_cache,
-                            )
-                        except Exception as ex:
-                            self._logger.debug(
-                                "Computed TS cache read failed for curve='%s', query='%s': %s",
-                                curve_name,
-                                q,
-                                ex,
-                            )
-                            rows = []
-                    try:
-                        if prefetched_rows is None:
-                            rows = _normalize_legacy_eod_cached_rows(
-                                mdp=self.mdp,
-                                curve_name=curve_name,
-                                query=q,
-                                rows=rows,
-                            )
-                    except Exception:
-                        rows = []
-                    cached_rows.extend(rows)
-                    cached_row_keys.update((row_d, row_c) for row_d, row_c, _ in rows)
-
-        # Evict recently-cached rows so the source is re-queried.
-        # EOD swap rates are usually final quickly, but partial same-day
-        # caches should be refreshed on the next run.
         today = datetime.date.today()
         _stale_cutoff = today - datetime.timedelta(days=self._STALE_THRESHOLD_DAYS)
-        if cached_rows and not ignore_cache:
-            def _as_date(d: DateLike) -> datetime.date:
-                if isinstance(d, datetime.datetime):
-                    return d.date()
-                if isinstance(d, datetime.date):
-                    return d
-                return d  # type: ignore[return-value]
+
+        def _as_date(d: DateLike) -> datetime.date:
+            if isinstance(d, datetime.datetime):
+                return d.date()
+            if isinstance(d, datetime.date):
+                return d
+            return d  # type: ignore[return-value]
+
+        # Determine if the entire request is purely historical (all dates
+        # before the staleness window). When true we can skip stale eviction
+        # and avoid forcing ignore_cache on the MDP.
+        _all_ref_dates = [
+            _as_date(d)
+            for curve_ref_points in ref_points_by_curve.values()
+            for d in curve_ref_points
+            if d != "live" and isinstance(d if not isinstance(d, datetime.datetime) else d.date(), datetime.date)
+        ]
+        _is_purely_historical = bool(_all_ref_dates) and max(_all_ref_dates) <= _stale_cutoff
+
+        if self._use_ts_cache and not ignore_cache:
+            # --- Batch DuckDB read: collect all symbols first, read in one query ---
+            _symbols_by_curve: Dict[str, Dict[str, IRSwapQuery]] = {}
+            _fallback_cols: Dict[str, str] = {}
+            _cacheable_ref_by_curve: Dict[str, list] = {}
+            for curve_name, qs in by_curve.items():
+                curve_ref_points = ref_points_by_curve.get(curve_name, [])
+                cacheable_ref_points = [rp for rp in curve_ref_points if rp != "live"]
+                if not cacheable_ref_points:
+                    continue
+                _cacheable_ref_by_curve[curve_name] = cacheable_ref_points
+                _symbols_by_curve[curve_name] = {}
+                for q in qs:
+                    symbol = self._ts_symbol_for_query(curve_name, q)
+                    _symbols_by_curve[curve_name][symbol] = q
+                    _fallback_cols[symbol] = q.col_name(curve_name)
+
+            for curve_name, sym_q_map in _symbols_by_curve.items():
+                cacheable_ref_points = _cacheable_ref_by_curve[curve_name]
+                # Separate prefetched symbols from those that need a store read
+                need_read_symbols = []
+                for symbol, q in sym_q_map.items():
+                    prefetched = prefetched_ts_rows_by_symbol.get(symbol)
+                    if prefetched is not None:
+                        try:
+                            norm = _normalize_legacy_eod_cached_rows(mdp=self.mdp, curve_name=curve_name, query=q, rows=list(prefetched))
+                        except Exception:
+                            norm = []
+                        cached_rows.extend(norm)
+                        cached_row_keys.update((rd, rc) for rd, rc, _ in norm)
+                    else:
+                        need_read_symbols.append(symbol)
+
+                if need_read_symbols and not use_intraday_cache:
+                    try:
+                        batch_result = self._computed_ts_store.read_many_symbols(
+                            symbols=need_read_symbols,
+                            reference_points=cacheable_ref_points,
+                            intraday=use_intraday_cache,
+                            skip_current_eod=True,
+                            fallback_column_names={s: _fallback_cols.get(s) for s in need_read_symbols},
+                            allow_partial=True,
+                        )
+                    except Exception as ex:
+                        self._logger.debug("Batch TS cache read failed for curve='%s': %s", curve_name, ex)
+                        batch_result = {s: [] for s in need_read_symbols}
+                    for symbol in need_read_symbols:
+                        q = sym_q_map[symbol]
+                        rows = batch_result.get(symbol, [])
+                        try:
+                            rows = _normalize_legacy_eod_cached_rows(mdp=self.mdp, curve_name=curve_name, query=q, rows=rows)
+                        except Exception:
+                            rows = []
+                        cached_rows.extend(rows)
+                        cached_row_keys.update((rd, rc) for rd, rc, _ in rows)
+                elif need_read_symbols:
+                    for symbol in need_read_symbols:
+                        q = sym_q_map[symbol]
+                        try:
+                            rows = self._computed_ts_store.read_rows(
+                                symbol=symbol, reference_points=cacheable_ref_points,
+                                intraday=use_intraday_cache, skip_current_eod=True,
+                                fallback_column_name=q.col_name(curve_name),
+                                allow_partial=True, skip_if_symbol_absent=False,
+                            )
+                        except Exception:
+                            rows = []
+                        try:
+                            rows = _normalize_legacy_eod_cached_rows(mdp=self.mdp, curve_name=curve_name, query=q, rows=rows)
+                        except Exception:
+                            rows = []
+                        cached_rows.extend(rows)
+                        cached_row_keys.update((rd, rc) for rd, rc, _ in rows)
+
+        # Stale eviction: skip entirely for purely historical queries.
+        if not _is_purely_historical and cached_rows and not ignore_cache:
             cached_rows = [(d, c, v) for d, c, v in cached_rows if _as_date(d) <= _stale_cutoff]
             cached_row_keys = {(d, c) for d, c in cached_row_keys if _as_date(d) <= _stale_cutoff}
 
@@ -482,11 +883,11 @@ class IRSwapsTB(LayeredCacheMixin, BaseTimeseriesTB):
                         to_fetch[curve_name].add(d)
                         continue
 
-                    # Also re-fetch dates within the staleness window
-                    _d_date = d.date() if isinstance(d, datetime.datetime) else d
-                    if _d_date != "live" and isinstance(_d_date, datetime.date) and _d_date > _stale_cutoff:
-                        to_fetch[curve_name].add(d)
-                        continue
+                    if not _is_purely_historical:
+                        _d_date = d.date() if isinstance(d, datetime.datetime) else d
+                        if _d_date != "live" and isinstance(_d_date, datetime.date) and _d_date > _stale_cutoff:
+                            to_fetch[curve_name].add(d)
+                            continue
 
                     if use_mapping_cache:
                         k = self._cache_key(d, curve_name, q)
@@ -505,11 +906,9 @@ class IRSwapsTB(LayeredCacheMixin, BaseTimeseriesTB):
                 continue
 
             request_points = _sorted_request_points(missing_points)
-            # Split request points into cached-historical, stale, and live
-            # so we only force-refresh the dates that need it instead of
-            # re-fetching the entire range.
+
             def _is_stale_point(d: DateLike) -> bool:
-                if d == "live":
+                if _is_purely_historical or d == "live":
                     return False
                 dd = d.date() if isinstance(d, datetime.datetime) else d
                 return isinstance(dd, datetime.date) and dd > _stale_cutoff

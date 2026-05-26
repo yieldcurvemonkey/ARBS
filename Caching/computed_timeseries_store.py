@@ -333,6 +333,105 @@ class ComputedTimeseriesStore:
         except Exception:
             return None
 
+    def read_many_symbols(
+        self,
+        *,
+        symbols: Sequence[str],
+        reference_points: Sequence[DateLike],
+        intraday: bool,
+        skip_current_eod: bool = True,
+        fallback_column_names: Mapping[str, str | None] | None = None,
+        allow_partial: bool = False,
+    ) -> Mapping[str, List[Tuple[DateLike, str, float]]]:
+        """Batch-read rows for multiple symbols from DuckDB in a single query.
+
+        Falls back to per-symbol read_rows for symbols not found in DuckDB.
+        """
+        if not symbols or not reference_points:
+            return {s: [] for s in symbols}
+
+        if intraday or self._duckdb_cache is None:
+            result = {}
+            for sym in symbols:
+                fb = (fallback_column_names or {}).get(sym)
+                result[sym] = self.read_rows(
+                    symbol=sym,
+                    reference_points=reference_points,
+                    intraday=intraday,
+                    skip_current_eod=skip_current_eod,
+                    fallback_column_name=fb,
+                    allow_partial=allow_partial,
+                )
+            return result
+
+        start = min(reference_points)
+        end = max(reference_points)
+        start_date = _normalize_eod_key(start)
+        end_date = _normalize_eod_key(end)
+
+        today = datetime.date.today()
+        requested = {
+            _normalize_eod_key(rp)
+            for rp in reference_points
+            if not (skip_current_eod and _normalize_eod_key(rp) == today)
+        }
+
+        batch_rows = self._duckdb_cache.read_many_symbols(
+            list(symbols), start=start_date, end=end_date,
+        )
+
+        result: dict[str, List[Tuple[DateLike, str, float]]] = {}
+        for sym in symbols:
+            duckdb_rows = batch_rows.get(sym, [])
+            if not duckdb_rows:
+                if allow_partial:
+                    l2_rows = self._read_with_l2_prefetch(
+                        symbol=sym,
+                        reference_points=reference_points,
+                        intraday=False,
+                        skip_current_eod=skip_current_eod,
+                        fallback_column_name=(fallback_column_names or {}).get(sym),
+                    )
+                    if l2_rows:
+                        self._backfill_duckdb_from_rows(sym, l2_rows, intraday=False)
+                    result[sym] = l2_rows
+                else:
+                    result[sym] = self._read_with_l2_prefetch(
+                        symbol=sym,
+                        reference_points=reference_points,
+                        intraday=False,
+                        skip_current_eod=skip_current_eod,
+                        fallback_column_name=(fallback_column_names or {}).get(sym),
+                    )
+                continue
+
+            by_date = {row[0]: (row[1], row[2]) for row in duckdb_rows}
+            rows_out: List[Tuple[DateLike, str, float]] = []
+            for ref_point in reference_points:
+                key = _normalize_eod_key(ref_point)
+                if skip_current_eod and key == today:
+                    continue
+                hit = by_date.get(key)
+                if hit is not None:
+                    rows_out.append((ref_point, hit[0], hit[1]))
+
+            covered = {_normalize_eod_key(rp) for rp, _, _ in rows_out}
+            if covered >= requested:
+                result[sym] = rows_out
+            elif allow_partial:
+                result[sym] = rows_out
+            else:
+                l2_rows = self._read_with_l2_prefetch(
+                    symbol=sym,
+                    reference_points=reference_points,
+                    intraday=False,
+                    skip_current_eod=skip_current_eod,
+                    fallback_column_name=(fallback_column_names or {}).get(sym),
+                )
+                result[sym] = l2_rows
+
+        return result
+
     def read_rows(
         self,
         *,

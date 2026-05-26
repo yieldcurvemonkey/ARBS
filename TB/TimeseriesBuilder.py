@@ -1277,6 +1277,8 @@ class TimeseriesBuilder:
         if not ref_points:
             return False
 
+        from TB.IRSwapsTB import _ROLL_ADJ_VALUES
+
         for q in queries:
             if not isinstance(q, IRSwapQuery):
                 return False
@@ -1285,6 +1287,8 @@ class TimeseriesBuilder:
             if str(req.get(time_key, "")).lower() == "live":
                 return False
             if _uses_alias_backed_irs_tenor(q):
+                return False
+            if q.value in _ROLL_ADJ_VALUES:
                 return False
 
         return True
@@ -1685,20 +1689,47 @@ class TimeseriesBuilder:
         rows: List[Tuple[DateLike, str, float]] = []
         covered: set[Tuple[DateLike, int]] = set()
         rows_by_symbol: Dict[str, List[Tuple[DateLike, str, float]]] = {}
-        for idx, q in enumerate(queries):
-            symbol = symbol_builder(requested_curve_name, q)
+
+        sym_by_idx = {idx: symbol_builder(requested_curve_name, q) for idx, q in enumerate(queries)}
+        all_symbols = list(dict.fromkeys(sym_by_idx.values()))
+        fallback_cols = {
+            sym_by_idx[idx]: q.col_name(requested_curve_name)
+            for idx, q in enumerate(queries)
+        }
+
+        use_batch = not intraday and allow_partial and hasattr(computed_store, "read_many_symbols")
+        if use_batch:
             try:
-                q_rows = computed_store.read_rows(
-                    symbol=symbol,
+                batch_result = computed_store.read_many_symbols(
+                    symbols=all_symbols,
                     reference_points=reference_points,
                     intraday=intraday,
                     skip_current_eod=True,
-                    fallback_column_name=q.col_name(requested_curve_name),
+                    fallback_column_names=fallback_cols,
                     allow_partial=allow_partial,
-                    skip_if_symbol_absent=not intraday and allow_partial,
                 )
             except Exception:
-                q_rows = []
+                batch_result = None
+        else:
+            batch_result = None
+
+        for idx, q in enumerate(queries):
+            symbol = sym_by_idx[idx]
+            if batch_result is not None:
+                q_rows = batch_result.get(symbol, [])
+            else:
+                try:
+                    q_rows = computed_store.read_rows(
+                        symbol=symbol,
+                        reference_points=reference_points,
+                        intraday=intraday,
+                        skip_current_eod=True,
+                        fallback_column_name=q.col_name(requested_curve_name),
+                        allow_partial=allow_partial,
+                        skip_if_symbol_absent=not intraday and allow_partial,
+                    )
+                except Exception:
+                    q_rows = []
             q_rows = _normalize_legacy_eris_eod_cached_rows(
                 mdp=getattr(router, "mdp", None),
                 requested_curve_name=requested_curve_name,

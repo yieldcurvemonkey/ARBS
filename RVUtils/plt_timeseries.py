@@ -471,8 +471,12 @@ def make_secondary_axis_plot(*, ylabel_left=None, ylabel_right=None, title=None,
             style_1sig.update(ou_cfg.get("style_1sig", {}))
             style_2sig = dict(linestyle="-.", linewidth=1.20)
             style_2sig.update(ou_cfg.get("style_2sig", {}))
-            color_mean = ou_cfg.get("color_mean", "tab:blue")
-            color_sigma = ou_cfg.get("color_sigma", "tab:red")
+            if state["engine"] == "plotly":
+                color_mean = ou_cfg.get("color_mean", "dodgerblue")
+                color_sigma = ou_cfg.get("color_sigma", "lightcoral")
+            else:
+                color_mean = ou_cfg.get("color_mean", "tab:blue")
+                color_sigma = ou_cfg.get("color_sigma", "tab:red")
 
             if state["engine"] == "matplotlib":
                 ax = ax_or_axis

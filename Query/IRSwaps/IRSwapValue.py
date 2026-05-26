@@ -36,6 +36,10 @@ class IRSwapValue(Enum):
     CVX_ADJ = auto()
     CVX_ADJ_EMPIRICAL = auto()
 
+    ROLL_ADJ_DIFFERENCE = auto()
+    ROLL_ADJ_RATIO = auto()
+    ROLL_ADJ_CALENDAR_WEIGHT = auto()
+
 
 # _swap_structure_sign_mapper = {
 #     IRSwapStructure.OUTRIGHT: lambda rws: [abs(rws[0])],

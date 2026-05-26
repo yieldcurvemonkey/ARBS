@@ -261,7 +261,7 @@ function IntradayPaceChart({ seasonality, metric }: {
   return (
     <div className="rounded border border-slate-800 bg-slate-950/25 p-2">
       <div className="mb-1 flex items-center justify-between font-mono text-[10px] text-slate-400">
-        <span className="uppercase tracking-wide text-slate-300">Intraday Pace</span>
+        <span className="uppercase tracking-wide text-slate-300">Aggregate Intraday Volume (All Tenors)</span>
         <span>
           <span className="text-amber-300">today</span>
           <span className="mx-1 text-slate-600">/</span>

@@ -61,6 +61,14 @@ def extract_rnd_breeden_litzenberger(
     premiums = rnd_input.call_premiums
     df = rnd_input.discount_factor
 
+    if len(strikes) < 2:
+        source_hint = getattr(rnd_input, "strike_source", "unknown")
+        raise ValueError(
+            f"Breeden-Litzenberger requires at least 2 strike points, got {len(strikes)} "
+            f"(source={source_hint!r}). If using raw market data with OI/OTM filtering, "
+            f"try lowering raw_market_open_interest_min or using use_sabr_vols=True."
+        )
+
     # 1. Add ghost points
     ext_strikes, ext_premiums = add_ghost_points(
         strikes,
