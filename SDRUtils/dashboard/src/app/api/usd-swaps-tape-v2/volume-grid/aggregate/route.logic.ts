@@ -22,6 +22,7 @@ import type {
   AggregateDistributionEntry,
   AggregateSummary,
   AggregateVolumeResponse,
+  StructureProjectionEntry,
 } from '@/features/usd-swaps-tape-v2/types/aggregate-volume.types'
 import {
   shapeIntradaySeasonalityResponse,
@@ -624,6 +625,140 @@ function buildTenorDistRollingSql(opts: {
 }
 
 // ---------------------------------------------------------------------------
+// Query 5: Structure breakdown (per-structure projection table)
+// ---------------------------------------------------------------------------
+
+const STRUCTURE_TYPE_CASE = `CASE
+    WHEN p.package_type = 'OUTRIGHT' THEN 'Outright'
+    WHEN p.package_type IN ('SPREADOVER', 'MATCHED_MATURITY') THEN 'Spreadover'
+    WHEN p.package_type = 'CURVE' THEN 'Curve'
+    WHEN p.package_type IN ('SPREADOVER_CURVE', 'MATCHED_MATURITY_CURVE') THEN 'Sprd Curve'
+    WHEN p.package_type = 'FLY' THEN 'Fly'
+    WHEN p.package_type IN ('SPREADOVER_FLY', 'MATCHED_MATURITY_FLY') THEN 'Sprd Fly'
+    ELSE 'Other'
+  END`
+
+const TENOR_LABEL_SINGLE = `CASE
+    WHEN tenor_years < 1 THEN ROUND(tenor_years * 12)::int::text || 'M'
+    ELSE ROUND(tenor_years)::int::text || 'Y'
+  END`
+
+const TENOR_LABEL_MULTI = `CASE
+    WHEN tenor_years < 1 THEN ROUND(tenor_years * 12)::int::text || 'M'
+    ELSE ROUND(tenor_years)::int::text || 's'
+  END`
+
+export function buildStructureBreakdownSql(opts: {
+  metric: VolumeMetric
+  lookbackDays: number
+  packageType: PackageTypeGroupId
+  textFilter?: string
+  now: Date
+}): BuiltSql {
+  const metricCol = opts.metric === 'notional' ? 'gross_notional' : 'gross_dv01'
+  const lookbackStart = new Date(opts.now.getTime() - opts.lookbackDays * ONE_DAY_MS)
+  const { dateEt } = timeOfDayInEt(opts.now)
+  const pkgFilter = buildPackageTypeFilter(opts.packageType, 'p', 4)
+  const params: Array<string | number> = [
+    lookbackStart.toISOString(),
+    opts.now.toISOString(),
+    dateEt,
+    ...pkgFilter.params,
+  ]
+  const textFilterClause = buildTextFilterClause(params, opts.textFilter)
+
+  const sql = `
+    WITH base_legs AS (
+      SELECT
+        l.package_id,
+        COALESCE(l.original_execution_timestamp, l.execution_timestamp) AS ts,
+        ABS(COALESCE(l.notional, 0)) AS gross_notional,
+        ABS(COALESCE(l.risk, 0))     AS gross_dv01,
+        l.tenor_years,
+        l.platform_identifier,
+        l.fixed_rate,
+        p.package_transaction_spread,
+        ${STRUCTURE_TYPE_CASE} AS structure_type,
+        (date_trunc('day', COALESCE(l.original_execution_timestamp, l.execution_timestamp)
+          AT TIME ZONE 'America/New_York'))::date AS day_et
+      FROM arbs_usd_swap_tape_legs_v2 l
+      JOIN arbs_usd_swap_tape_packages_v2 p ON p.package_id = l.package_id
+      WHERE COALESCE(l.contributes_to_flow, FALSE) = TRUE
+        AND COALESCE(l.original_execution_timestamp, l.execution_timestamp) >= $1::timestamptz
+        AND COALESCE(l.original_execution_timestamp, l.execution_timestamp) <  $2::timestamptz
+        AND ${pkgFilter.sql}
+        ${textFilterClause}
+    ),
+    pkg_structure AS (
+      SELECT
+        package_id,
+        structure_type,
+        COUNT(*) AS n_tenors,
+        CASE WHEN COUNT(*) = 1 THEN
+          MAX(${TENOR_LABEL_SINGLE})
+        ELSE
+          STRING_AGG(${TENOR_LABEL_MULTI}, '' ORDER BY tenor_years)
+        END AS tenor_key
+      FROM (
+        SELECT DISTINCT ON (package_id, ROUND(tenor_years::numeric, 0))
+          package_id, structure_type, tenor_years
+        FROM base_legs
+        ORDER BY package_id, ROUND(tenor_years::numeric, 0), tenor_years
+      ) deduped
+      GROUP BY package_id, structure_type
+    ),
+    tagged AS (
+      SELECT
+        bl.*,
+        ps.tenor_key || ' ' || ps.structure_type AS structure_key,
+        CASE WHEN ps.n_tenors = 1 THEN bl.fixed_rate
+             ELSE bl.package_transaction_spread
+        END AS trade_level
+      FROM base_legs bl
+      JOIN pkg_structure ps USING (package_id)
+    ),
+    daily_struct AS (
+      SELECT
+        structure_key,
+        day_et,
+        SUM(${metricCol}) AS volume,
+        COUNT(*)::int AS trade_count,
+        MAX(ts) AS last_ts,
+        (ARRAY_AGG(platform_identifier ORDER BY ts DESC))[1] AS latest_platform,
+        (ARRAY_AGG(trade_level ORDER BY ts DESC))[1] AS last_level
+      FROM tagged
+      GROUP BY structure_key, day_et
+    ),
+    today_stats AS (
+      SELECT * FROM daily_struct WHERE day_et = $3::date
+    ),
+    hist_avgs AS (
+      SELECT
+        structure_key,
+        AVG(volume) FILTER (WHERE day_et >= ($3::date - 7) AND day_et < $3::date) AS adv_1w,
+        AVG(volume) FILTER (WHERE day_et >= ($3::date - 30) AND day_et < $3::date) AS adv_1m
+      FROM daily_struct
+      WHERE day_et < $3::date
+      GROUP BY structure_key
+    )
+    SELECT
+      COALESCE(t.structure_key, h.structure_key) AS structure_key,
+      COALESCE(t.volume, 0) AS today_volume,
+      COALESCE(t.trade_count, 0) AS today_count,
+      t.last_ts AS last_trade_time,
+      t.latest_platform,
+      t.last_level,
+      COALESCE(h.adv_1w, 0) AS adv_1w,
+      COALESCE(h.adv_1m, 0) AS adv_1m
+    FROM today_stats t
+    FULL OUTER JOIN hist_avgs h USING (structure_key)
+    ORDER BY COALESCE(t.volume, 0) + COALESCE(h.adv_1m, 0) DESC
+    LIMIT 100
+  `
+  return { sql, params }
+}
+
+// ---------------------------------------------------------------------------
 // Response shaping
 // ---------------------------------------------------------------------------
 
@@ -672,6 +807,17 @@ interface RawTenorDistRow {
   historical_avg: number | string
 }
 
+interface RawStructureBreakdownRow {
+  structure_key: string
+  today_volume: number | string
+  today_count: number | string
+  last_trade_time: string | Date | null
+  latest_platform: string | null
+  last_level: number | string | null
+  adv_1w: number | string
+  adv_1m: number | string
+}
+
 const TENOR_ORDER: ReadonlyArray<{ id: string; label: string }> = [
   { id: '1m_3m', label: '1M-3M' },
   { id: '6m_12m', label: '6M-12M' },
@@ -713,6 +859,7 @@ export function shapeAggregateResponse(
   summaryRows: ReadonlyArray<RawSummaryRow>,
   intradayRows: ReadonlyArray<RawIntradaySeasonalityRow>,
   tenorDistRows: ReadonlyArray<RawTenorDistRow>,
+  structureRows: ReadonlyArray<RawStructureBreakdownRow>,
   params: AggregateParams,
 ): AggregateVolumeResponse {
   const dailySeries: AggregateDailyPoint[] = dailyRows.map((r) => ({
@@ -795,9 +942,25 @@ export function shapeAggregateResponse(
     custy: makePkgMixEntry('custy', 'CUSTY (D2C)', cCusty, hCusty, currentTotal, totalVenueHist),
   }
 
-  const asOf = dailySeries.length > 0
-    ? new Date().toISOString()
-    : new Date().toISOString()
+  const structureProjection: StructureProjectionEntry[] = structureRows.map((r) => {
+    const lt = r.last_trade_time
+    let lastTradeTime: string | null = null
+    if (lt != null) {
+      lastTradeTime = lt instanceof Date ? lt.toISOString() : String(lt)
+    }
+    return {
+      structureKey: r.structure_key,
+      todayVolume: num(r.today_volume),
+      todayCount: num(r.today_count),
+      lastTradeTime,
+      latestPlatform: r.latest_platform ?? null,
+      lastLevel: r.last_level != null ? num(r.last_level) : null,
+      adv1w: num(r.adv_1w),
+      adv1m: num(r.adv_1m),
+    }
+  })
+
+  const asOf = new Date().toISOString()
 
   return {
     asOf,
@@ -811,5 +974,6 @@ export function shapeAggregateResponse(
     tenorDistribution,
     packageMix,
     venueSplit,
+    structureProjection,
   }
 }

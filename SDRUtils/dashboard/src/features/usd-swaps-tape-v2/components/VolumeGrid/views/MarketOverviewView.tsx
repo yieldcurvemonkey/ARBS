@@ -1,5 +1,5 @@
 'use client'
-import type { JSX } from 'react'
+import { useState, useEffect, useRef, type JSX } from 'react'
 import {
   Bar, BarChart, CartesianGrid, Cell, Line, LineChart, ReferenceLine,
   ResponsiveContainer, Tooltip, XAxis, YAxis,
@@ -12,6 +12,7 @@ import type {
   AggregateDistributionEntry,
   AggregateSummary,
   AggregateVolumeResponse,
+  StructureProjectionEntry,
 } from '../../../types/aggregate-volume.types'
 import type { VolumeGridIntradaySeasonality } from '../../../types/volume-grid.types'
 
@@ -67,7 +68,7 @@ export function MarketOverviewView({ metric, period, lookbackDays, textFilter }:
       {data && (
         <>
           <KpiStrip summary={data.summary} metric={metric} />
-          <VolumeProjectionTable series={data.dailySeries} metric={metric} />
+          <VolumeProjectionTable entries={data.structureProjection} metric={metric} />
           <DailyVolumeChart series={data.dailySeries} metric={metric} adv={data.summary.adv} />
           <div className="grid gap-3 lg:grid-cols-3">
             <CompositionPanel entries={data.packageMix} title="Package Mix" />
@@ -125,25 +126,8 @@ function KpiCard({ label, value, className }: { label: string; value: string; cl
 }
 
 // ---------------------------------------------------------------------------
-// Volume projection table — today vs 1W/1M ADV
+// Volume projection table — per-structure today vs 1W/1M ADV
 // ---------------------------------------------------------------------------
-
-type StructureKey = 'total' | 'outright' | 'curve' | 'fly' | 'other'
-
-const STRUCTURE_ROWS: ReadonlyArray<{ key: StructureKey; label: string; color?: string }> = [
-  { key: 'total', label: 'Total' },
-  { key: 'outright', label: 'Outright', color: STACKED_COLORS.outright },
-  { key: 'curve', label: 'Curve', color: STACKED_COLORS.curve },
-  { key: 'fly', label: 'Fly', color: STACKED_COLORS.fly },
-  { key: 'other', label: 'Other', color: STACKED_COLORS.other },
-]
-
-const ONE_DAY_MS = 24 * 60 * 60 * 1000
-
-function computeAvg(entries: AggregateDailyPoint[], key: StructureKey): number {
-  if (entries.length === 0) return 0
-  return entries.reduce((sum, d) => sum + d[key], 0) / entries.length
-}
 
 function vsRatioColor(r: number | null): string {
   if (r == null) return 'text-slate-500'
@@ -154,99 +138,266 @@ function vsRatioColor(r: number | null): string {
   return 'text-rose-300'
 }
 
-function VolumeProjectionTable({ series, metric }: {
-  series: AggregateDailyPoint[]
+const STRUCTURE_TYPE_COLORS: Record<string, string> = {
+  Outright: '#6366f1',
+  Curve: '#f59e0b',
+  Fly: '#10b981',
+  Spreadover: '#8b5cf6',
+  'Sprd Curve': '#d97706',
+  'Sprd Fly': '#059669',
+  Other: '#64748b',
+}
+
+function structureColor(key: string): string | undefined {
+  for (const [type, color] of Object.entries(STRUCTURE_TYPE_COLORS)) {
+    if (key.endsWith(type)) return color
+  }
+  return undefined
+}
+
+function isOutrightLike(key: string): boolean {
+  return key.endsWith('Outright') || key.endsWith('Spreadover')
+}
+
+function fmtLevel(level: number | null, structureKey: string): string {
+  if (level == null) return '-'
+  if (isOutrightLike(structureKey)) return `${level.toFixed(3)}%`
+  return `${level.toFixed(1)}bp`
+}
+
+function fmtTradeTime(iso: string | null): string {
+  if (!iso) return '-'
+  return new Date(iso).toLocaleTimeString('en-US', {
+    timeZone: 'America/New_York',
+    hour12: false,
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+  })
+}
+
+const COMMON_STRUCTURES: Record<string, string[]> = {
+  Outright: ['1Y', '2Y', '3Y', '4Y', '5Y', '7Y', '10Y', '12Y', '15Y', '20Y', '25Y', '30Y']
+    .map((t) => `${t} Outright`),
+  Curve: ['2s3s', '2s5s', '2s7s', '2s10s', '2s30s', '3s5s', '3s10s', '5s7s', '5s10s', '5s30s', '7s10s', '10s30s']
+    .map((t) => `${t} Curve`),
+  Fly: ['2s3s5s', '2s5s10s', '2s5s30s', '2s10s30s', '3s5s10s', '5s7s10s', '5s10s30s']
+    .map((t) => `${t} Fly`),
+  Spreadover: ['2Y', '5Y', '7Y', '10Y', '30Y']
+    .map((t) => `${t} Spreadover`),
+}
+
+const ALL_COMMON = Object.values(COMMON_STRUCTURES).flat()
+
+const DEFAULT_SELECTED = new Set([
+  '2Y Outright', '3Y Outright', '5Y Outright', '7Y Outright',
+  '10Y Outright', '20Y Outright', '30Y Outright',
+  '2s5s Curve', '2s10s Curve', '2s30s Curve',
+  '5s10s Curve', '5s30s Curve', '10s30s Curve',
+  '2s5s10s Fly', '5s10s30s Fly',
+  '5Y Spreadover', '10Y Spreadover', '30Y Spreadover',
+])
+
+const STORAGE_KEY = 'volume-grid-structure-selection'
+
+function loadSelection(): Set<string> {
+  if (typeof window === 'undefined') return DEFAULT_SELECTED
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY)
+    if (!raw) return DEFAULT_SELECTED
+    const arr = JSON.parse(raw) as string[]
+    return new Set(arr)
+  } catch { return DEFAULT_SELECTED }
+}
+
+function saveSelection(sel: Set<string>): void {
+  localStorage.setItem(STORAGE_KEY, JSON.stringify([...sel]))
+}
+
+function structureGroup(key: string): string {
+  for (const [group] of Object.entries(STRUCTURE_TYPE_COLORS)) {
+    if (key.endsWith(group)) return group
+  }
+  return 'Other'
+}
+
+function StructureSelector({ available, selected, onChange }: {
+  available: string[]
+  selected: Set<string>
+  onChange: (s: Set<string>) => void
+}): JSX.Element {
+  const [open, setOpen] = useState(false)
+  const ref = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    if (!open) return
+    const handler = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false)
+    }
+    document.addEventListener('mousedown', handler)
+    return () => document.removeEventListener('mousedown', handler)
+  }, [open])
+
+  const allKeys = [...new Set([...ALL_COMMON, ...available])].sort((a, b) => {
+    const ga = structureGroup(a), gb = structureGroup(b)
+    if (ga !== gb) return ga.localeCompare(gb)
+    return a.localeCompare(b)
+  })
+
+  const groups = new Map<string, string[]>()
+  for (const k of allKeys) {
+    const g = structureGroup(k)
+    if (!groups.has(g)) groups.set(g, [])
+    groups.get(g)!.push(k)
+  }
+
+  const toggle = (k: string) => {
+    const next = new Set(selected)
+    if (next.has(k)) next.delete(k); else next.add(k)
+    onChange(next)
+  }
+
+  const toggleGroup = (keys: string[]) => {
+    const allOn = keys.every((k) => selected.has(k))
+    const next = new Set(selected)
+    for (const k of keys) { if (allOn) next.delete(k); else next.add(k) }
+    onChange(next)
+  }
+
+  return (
+    <div ref={ref} className="relative">
+      <button
+        type="button"
+        onClick={() => setOpen(!open)}
+        className="rounded border border-slate-700 px-2 py-[2px] font-mono text-[10px] text-slate-300 hover:bg-slate-800"
+      >
+        {selected.size} structures ▾
+      </button>
+      {open && (
+        <div className="absolute left-0 top-full z-50 mt-1 max-h-[420px] w-[260px] overflow-y-auto rounded border border-slate-700 bg-slate-900 p-1.5 shadow-xl">
+          <div className="mb-1.5 flex gap-1">
+            <button type="button" onClick={() => onChange(DEFAULT_SELECTED)}
+              className="rounded bg-slate-800 px-1.5 py-0.5 font-mono text-[9px] text-slate-300 hover:bg-slate-700">
+              Defaults
+            </button>
+            <button type="button" onClick={() => onChange(new Set(allKeys))}
+              className="rounded bg-slate-800 px-1.5 py-0.5 font-mono text-[9px] text-slate-300 hover:bg-slate-700">
+              All
+            </button>
+            <button type="button" onClick={() => onChange(new Set())}
+              className="rounded bg-slate-800 px-1.5 py-0.5 font-mono text-[9px] text-slate-300 hover:bg-slate-700">
+              Clear
+            </button>
+          </div>
+          {[...groups.entries()].map(([group, keys]) => (
+            <div key={group} className="mb-1">
+              <button type="button" onClick={() => toggleGroup(keys)}
+                className="mb-0.5 font-mono text-[9px] font-semibold uppercase tracking-wide text-slate-400 hover:text-slate-200">
+                <span className="mr-1 inline-block h-1.5 w-1.5 rounded-sm"
+                  style={{ backgroundColor: STRUCTURE_TYPE_COLORS[group] ?? '#64748b' }} />
+                {group}
+              </button>
+              <div className="flex flex-wrap gap-x-0.5 gap-y-0.5">
+                {keys.map((k) => {
+                  const on = selected.has(k)
+                  const label = k.replace(` ${group}`, '')
+                  return (
+                    <button key={k} type="button" onClick={() => toggle(k)}
+                      className={`rounded px-1.5 py-[1px] font-mono text-[9px] transition-colors ${
+                        on
+                          ? 'bg-indigo-500/25 text-indigo-200 ring-1 ring-indigo-500/40'
+                          : 'bg-slate-800/60 text-slate-500 hover:text-slate-300'
+                      }`}>
+                      {label}
+                    </button>
+                  )
+                })}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
+function VolumeProjectionTable({ entries, metric }: {
+  entries: StructureProjectionEntry[]
   metric: VolumeMetric
 }): JSX.Element {
-  if (series.length < 2) return <EmptyPanel text="Not enough history for volume projection." />
+  const [selected, setSelected] = useState<Set<string>>(loadSelection)
 
-  const today = series[series.length - 1]
-  const historical = series.slice(0, -1)
+  const handleChange = (s: Set<string>) => {
+    setSelected(s)
+    saveSelection(s)
+  }
 
-  const todayDate = new Date(today.day + 'T12:00:00Z')
-  const weekCutoff = new Date(todayDate.getTime() - 7 * ONE_DAY_MS)
-  const monthCutoff = new Date(todayDate.getTime() - 30 * ONE_DAY_MS)
-
-  const pastWeek = historical.filter(d => new Date(d.day + 'T12:00:00Z') >= weekCutoff)
-  const pastMonth = historical.filter(d => new Date(d.day + 'T12:00:00Z') >= monthCutoff)
-
-  const weekTradeAvg = pastWeek.length > 0
-    ? pastWeek.reduce((s, d) => s + d.tradeCount, 0) / pastWeek.length
-    : 0
-  const monthTradeAvg = pastMonth.length > 0
-    ? pastMonth.reduce((s, d) => s + d.tradeCount, 0) / pastMonth.length
-    : 0
+  const available = entries.map((e) => e.structureKey)
+  const filtered = entries.filter((e) => selected.has(e.structureKey))
 
   return (
     <div data-testid="volume-projection-table" className="rounded border border-slate-800 bg-slate-950/25 p-2">
-      <div className="mb-2 font-mono text-[10px] uppercase tracking-wide text-slate-300">
-        Volume Projection — Today vs Averages
-      </div>
-      <div className="overflow-x-auto">
-        <table className="w-full font-mono text-[10px]">
-          <thead>
-            <tr className="border-b border-slate-700/50 text-slate-400">
-              <th className="py-1.5 pr-3 text-left font-medium">Structure</th>
-              <th className="px-2 py-1.5 text-right font-medium">Today</th>
-              <th className="px-2 py-1.5 text-right font-medium">ADV (1W)</th>
-              <th className="px-2 py-1.5 text-right font-medium">ADV (1M)</th>
-              <th className="px-2 py-1.5 text-right font-medium">vs 1W</th>
-              <th className="px-2 py-1.5 text-right font-medium">vs 1M</th>
-            </tr>
-          </thead>
-          <tbody>
-            {STRUCTURE_ROWS.map(({ key, label, color }) => {
-              const todayVal = today[key]
-              const weekAvg = computeAvg(pastWeek, key)
-              const monthAvg = computeAvg(pastMonth, key)
-              const vsWeek = weekAvg > 0 ? todayVal / weekAvg : null
-              const vsMonth = monthAvg > 0 ? todayVal / monthAvg : null
-              const isTotal = key === 'total'
-
-              return (
-                <tr key={key} className={`border-b border-slate-800/30 ${isTotal ? 'bg-slate-800/20' : ''}`}>
-                  <td className="py-1.5 pr-3 text-slate-300">
-                    <span className="flex items-center gap-1.5">
-                      {color && <span className="inline-block h-2 w-2 rounded-sm" style={{ backgroundColor: color }} />}
-                      <span className={isTotal ? 'font-semibold' : ''}>{label}</span>
-                    </span>
-                  </td>
-                  <td className={`px-2 py-1.5 text-right text-slate-100 ${isTotal ? 'font-semibold' : ''}`}>
-                    {fmtCompact(todayVal)}
-                  </td>
-                  <td className="px-2 py-1.5 text-right text-slate-300">{fmtCompact(weekAvg)}</td>
-                  <td className="px-2 py-1.5 text-right text-slate-300">{fmtCompact(monthAvg)}</td>
-                  <td className={`px-2 py-1.5 text-right font-medium ${vsRatioColor(vsWeek)}`}>
-                    {vsWeek != null ? `${vsWeek.toFixed(2)}x` : '-'}
-                  </td>
-                  <td className={`px-2 py-1.5 text-right font-medium ${vsRatioColor(vsMonth)}`}>
-                    {vsMonth != null ? `${vsMonth.toFixed(2)}x` : '-'}
-                  </td>
-                </tr>
-              )
-            })}
-            <tr className="border-b border-slate-800/30 bg-slate-800/20">
-              <td className="py-1.5 pr-3 font-semibold text-slate-300"># Trades</td>
-              <td className="px-2 py-1.5 text-right font-semibold text-slate-100">{today.tradeCount}</td>
-              <td className="px-2 py-1.5 text-right text-slate-300">{weekTradeAvg.toFixed(0)}</td>
-              <td className="px-2 py-1.5 text-right text-slate-300">{monthTradeAvg.toFixed(0)}</td>
-              <td className={`px-2 py-1.5 text-right font-medium ${vsRatioColor(weekTradeAvg > 0 ? today.tradeCount / weekTradeAvg : null)}`}>
-                {weekTradeAvg > 0 ? `${(today.tradeCount / weekTradeAvg).toFixed(2)}x` : '-'}
-              </td>
-              <td className={`px-2 py-1.5 text-right font-medium ${vsRatioColor(monthTradeAvg > 0 ? today.tradeCount / monthTradeAvg : null)}`}>
-                {monthTradeAvg > 0 ? `${(today.tradeCount / monthTradeAvg).toFixed(2)}x` : '-'}
-              </td>
-            </tr>
-          </tbody>
-        </table>
-      </div>
-      <div className="mt-1.5 flex items-center justify-between font-mono text-[8.5px] text-slate-600">
-        <span>
-          1W = avg daily over {pastWeek.length} trading day{pastWeek.length !== 1 ? 's' : ''}
-          {' · '}1M = avg daily over {pastMonth.length} trading day{pastMonth.length !== 1 ? 's' : ''}
+      <div className="mb-2 flex items-center justify-between">
+        <span className="font-mono text-[10px] uppercase tracking-wide text-slate-300">
+          Structure Activity — Today vs Averages
         </span>
-        <span>{today.day}</span>
+        <StructureSelector available={available} selected={selected} onChange={handleChange} />
       </div>
+      {filtered.length === 0 ? (
+        <div className="flex h-16 items-center justify-center font-mono text-[10px] text-slate-500">
+          No structures selected — click the dropdown to choose.
+        </div>
+      ) : (
+        <div className="overflow-x-auto">
+          <table className="w-full font-mono text-[10px]">
+            <thead>
+              <tr className="border-b border-slate-700/50 text-slate-400">
+                <th className="py-1.5 pr-2 text-left font-medium">Structure</th>
+                <th className="px-1.5 py-1.5 text-right font-medium">Last</th>
+                <th className="px-1.5 py-1.5 text-right font-medium">#</th>
+                <th className="px-1.5 py-1.5 text-right font-medium">Plat</th>
+                <th className="px-1.5 py-1.5 text-right font-medium">Level</th>
+                <th className="px-1.5 py-1.5 text-right font-medium">Today {metric.toUpperCase()}</th>
+                <th className="px-1.5 py-1.5 text-right font-medium">ADV 1W</th>
+                <th className="px-1.5 py-1.5 text-right font-medium">ADV 1M</th>
+                <th className="px-1.5 py-1.5 text-right font-medium">vs 1W</th>
+                <th className="px-1.5 py-1.5 text-right font-medium">vs 1M</th>
+              </tr>
+            </thead>
+            <tbody>
+              {filtered.map((e) => {
+                const vsWeek = e.adv1w > 0 ? e.todayVolume / e.adv1w : null
+                const vsMonth = e.adv1m > 0 ? e.todayVolume / e.adv1m : null
+                const color = structureColor(e.structureKey)
+
+                return (
+                  <tr key={e.structureKey} className="border-b border-slate-800/30 hover:bg-slate-800/20">
+                    <td className="py-1 pr-2 text-slate-200">
+                      <span className="flex items-center gap-1.5">
+                        {color && <span className="inline-block h-2 w-2 rounded-sm" style={{ backgroundColor: color }} />}
+                        <span>{e.structureKey}</span>
+                      </span>
+                    </td>
+                    <td className="px-1.5 py-1 text-right text-slate-400">{fmtTradeTime(e.lastTradeTime)}</td>
+                    <td className="px-1.5 py-1 text-right text-slate-300">{e.todayCount}</td>
+                    <td className="px-1.5 py-1 text-right text-slate-400">{e.latestPlatform ?? '-'}</td>
+                    <td className="px-1.5 py-1 text-right text-sky-300">{fmtLevel(e.lastLevel, e.structureKey)}</td>
+                    <td className="px-1.5 py-1 text-right text-slate-100">{fmtCompact(e.todayVolume)}</td>
+                    <td className="px-1.5 py-1 text-right text-slate-300">{fmtCompact(e.adv1w)}</td>
+                    <td className="px-1.5 py-1 text-right text-slate-300">{fmtCompact(e.adv1m)}</td>
+                    <td className={`px-1.5 py-1 text-right font-medium ${vsRatioColor(vsWeek)}`}>
+                      {vsWeek != null ? `${vsWeek.toFixed(2)}x` : '-'}
+                    </td>
+                    <td className={`px-1.5 py-1 text-right font-medium ${vsRatioColor(vsMonth)}`}>
+                      {vsMonth != null ? `${vsMonth.toFixed(2)}x` : '-'}
+                    </td>
+                  </tr>
+                )
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
     </div>
   )
 }

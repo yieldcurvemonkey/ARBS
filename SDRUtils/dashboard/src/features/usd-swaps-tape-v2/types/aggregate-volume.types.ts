@@ -38,6 +38,17 @@ export interface AggregateDistributionEntry {
   historicalShare: number
 }
 
+export interface StructureProjectionEntry {
+  structureKey: string
+  todayVolume: number
+  todayCount: number
+  lastTradeTime: string | null
+  latestPlatform: string | null
+  lastLevel: number | null
+  adv1w: number
+  adv1m: number
+}
+
 export interface AggregateVolumeResponse {
   asOf: string
   metric: VolumeMetric
@@ -53,4 +64,5 @@ export interface AggregateVolumeResponse {
     idb: AggregateDistributionEntry
     custy: AggregateDistributionEntry
   }
+  structureProjection: StructureProjectionEntry[]
 }

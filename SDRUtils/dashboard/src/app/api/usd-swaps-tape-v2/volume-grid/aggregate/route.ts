@@ -4,6 +4,7 @@ import { analyticsHandler } from '@/lib/usd-swaps-tape-v2/analyticsHandler'
 import {
   buildAggregateIntradaySql,
   buildDailyTimeseriesSql,
+  buildStructureBreakdownSql,
   buildSummarySql,
   buildTenorDistributionSql,
   computeWindowBounds,
@@ -56,13 +57,21 @@ async function produceAggregateVolume(request: Request): Promise<{ status: numbe
     packageType: parsed.value.packageType,
     textFilter: parsed.value.textFilter,
   })
+  const structureSql = buildStructureBreakdownSql({
+    metric: parsed.value.metric,
+    lookbackDays: parsed.value.lookbackDays,
+    packageType: parsed.value.packageType,
+    textFilter: parsed.value.textFilter,
+    now,
+  })
 
   try {
-    const [dailyResult, summaryResult, intradayResult, tenorDistResult] = await Promise.all([
+    const [dailyResult, summaryResult, intradayResult, tenorDistResult, structureResult] = await Promise.all([
       query(dailySql.sql, dailySql.params),
       query(summarySql.sql, summarySql.params),
       query(intradaySql.sql, intradaySql.params),
       query(tenorDistSql.sql, tenorDistSql.params),
+      query(structureSql.sql, structureSql.params),
     ])
 
     const payload = shapeAggregateResponse(
@@ -70,6 +79,7 @@ async function produceAggregateVolume(request: Request): Promise<{ status: numbe
       summaryResult.rows as never[],
       intradayResult.rows as never[],
       tenorDistResult.rows as never[],
+      structureResult.rows as never[],
       parsed.value,
     )
     return { status: 200, payload }
