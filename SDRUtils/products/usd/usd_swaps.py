@@ -1164,9 +1164,8 @@ class USD_SwapProduct(USDProductBase):
 
                 built_frames.append(package_df)
             
-            # todo handle errors
-            except Exception as e: 
-                pass
+            except Exception as e:
+                print(f"  [WARN] Classification failed for {exec_date}: {e}")
 
         all_frames = [*cached_frames, *built_frames]
         if not all_frames:

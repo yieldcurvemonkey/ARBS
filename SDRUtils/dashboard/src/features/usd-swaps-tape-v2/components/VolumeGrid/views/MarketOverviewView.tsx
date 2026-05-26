@@ -67,6 +67,7 @@ export function MarketOverviewView({ metric, period, lookbackDays, textFilter }:
       {data && (
         <>
           <KpiStrip summary={data.summary} metric={metric} />
+          <VolumeProjectionTable series={data.dailySeries} metric={metric} />
           <DailyVolumeChart series={data.dailySeries} metric={metric} adv={data.summary.adv} />
           <div className="grid gap-3 lg:grid-cols-3">
             <CompositionPanel entries={data.packageMix} title="Package Mix" />
@@ -119,6 +120,133 @@ function KpiCard({ label, value, className }: { label: string; value: string; cl
     <div className="rounded border border-slate-700 bg-slate-800/40 px-3 py-1.5">
       <div className="font-mono text-[9px] uppercase tracking-wider text-slate-500">{label}</div>
       <div className={`font-mono text-[14px] font-semibold ${className ?? 'text-slate-100'}`}>{value}</div>
+    </div>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// Volume projection table — today vs 1W/1M ADV
+// ---------------------------------------------------------------------------
+
+type StructureKey = 'total' | 'outright' | 'curve' | 'fly' | 'other'
+
+const STRUCTURE_ROWS: ReadonlyArray<{ key: StructureKey; label: string; color?: string }> = [
+  { key: 'total', label: 'Total' },
+  { key: 'outright', label: 'Outright', color: STACKED_COLORS.outright },
+  { key: 'curve', label: 'Curve', color: STACKED_COLORS.curve },
+  { key: 'fly', label: 'Fly', color: STACKED_COLORS.fly },
+  { key: 'other', label: 'Other', color: STACKED_COLORS.other },
+]
+
+const ONE_DAY_MS = 24 * 60 * 60 * 1000
+
+function computeAvg(entries: AggregateDailyPoint[], key: StructureKey): number {
+  if (entries.length === 0) return 0
+  return entries.reduce((sum, d) => sum + d[key], 0) / entries.length
+}
+
+function vsRatioColor(r: number | null): string {
+  if (r == null) return 'text-slate-500'
+  if (r >= 1.2) return 'text-emerald-300'
+  if (r >= 1.0) return 'text-emerald-400/70'
+  if (r >= 0.8) return 'text-slate-200'
+  if (r >= 0.5) return 'text-amber-300'
+  return 'text-rose-300'
+}
+
+function VolumeProjectionTable({ series, metric }: {
+  series: AggregateDailyPoint[]
+  metric: VolumeMetric
+}): JSX.Element {
+  if (series.length < 2) return <EmptyPanel text="Not enough history for volume projection." />
+
+  const today = series[series.length - 1]
+  const historical = series.slice(0, -1)
+
+  const todayDate = new Date(today.day + 'T12:00:00Z')
+  const weekCutoff = new Date(todayDate.getTime() - 7 * ONE_DAY_MS)
+  const monthCutoff = new Date(todayDate.getTime() - 30 * ONE_DAY_MS)
+
+  const pastWeek = historical.filter(d => new Date(d.day + 'T12:00:00Z') >= weekCutoff)
+  const pastMonth = historical.filter(d => new Date(d.day + 'T12:00:00Z') >= monthCutoff)
+
+  const weekTradeAvg = pastWeek.length > 0
+    ? pastWeek.reduce((s, d) => s + d.tradeCount, 0) / pastWeek.length
+    : 0
+  const monthTradeAvg = pastMonth.length > 0
+    ? pastMonth.reduce((s, d) => s + d.tradeCount, 0) / pastMonth.length
+    : 0
+
+  return (
+    <div data-testid="volume-projection-table" className="rounded border border-slate-800 bg-slate-950/25 p-2">
+      <div className="mb-2 font-mono text-[10px] uppercase tracking-wide text-slate-300">
+        Volume Projection — Today vs Averages
+      </div>
+      <div className="overflow-x-auto">
+        <table className="w-full font-mono text-[10px]">
+          <thead>
+            <tr className="border-b border-slate-700/50 text-slate-400">
+              <th className="py-1.5 pr-3 text-left font-medium">Structure</th>
+              <th className="px-2 py-1.5 text-right font-medium">Today</th>
+              <th className="px-2 py-1.5 text-right font-medium">ADV (1W)</th>
+              <th className="px-2 py-1.5 text-right font-medium">ADV (1M)</th>
+              <th className="px-2 py-1.5 text-right font-medium">vs 1W</th>
+              <th className="px-2 py-1.5 text-right font-medium">vs 1M</th>
+            </tr>
+          </thead>
+          <tbody>
+            {STRUCTURE_ROWS.map(({ key, label, color }) => {
+              const todayVal = today[key]
+              const weekAvg = computeAvg(pastWeek, key)
+              const monthAvg = computeAvg(pastMonth, key)
+              const vsWeek = weekAvg > 0 ? todayVal / weekAvg : null
+              const vsMonth = monthAvg > 0 ? todayVal / monthAvg : null
+              const isTotal = key === 'total'
+
+              return (
+                <tr key={key} className={`border-b border-slate-800/30 ${isTotal ? 'bg-slate-800/20' : ''}`}>
+                  <td className="py-1.5 pr-3 text-slate-300">
+                    <span className="flex items-center gap-1.5">
+                      {color && <span className="inline-block h-2 w-2 rounded-sm" style={{ backgroundColor: color }} />}
+                      <span className={isTotal ? 'font-semibold' : ''}>{label}</span>
+                    </span>
+                  </td>
+                  <td className={`px-2 py-1.5 text-right text-slate-100 ${isTotal ? 'font-semibold' : ''}`}>
+                    {fmtCompact(todayVal)}
+                  </td>
+                  <td className="px-2 py-1.5 text-right text-slate-300">{fmtCompact(weekAvg)}</td>
+                  <td className="px-2 py-1.5 text-right text-slate-300">{fmtCompact(monthAvg)}</td>
+                  <td className={`px-2 py-1.5 text-right font-medium ${vsRatioColor(vsWeek)}`}>
+                    {vsWeek != null ? `${vsWeek.toFixed(2)}x` : '-'}
+                  </td>
+                  <td className={`px-2 py-1.5 text-right font-medium ${vsRatioColor(vsMonth)}`}>
+                    {vsMonth != null ? `${vsMonth.toFixed(2)}x` : '-'}
+                  </td>
+                </tr>
+              )
+            })}
+            <tr className="border-b border-slate-800/30 bg-slate-800/20">
+              <td className="py-1.5 pr-3 font-semibold text-slate-300"># Trades</td>
+              <td className="px-2 py-1.5 text-right font-semibold text-slate-100">{today.tradeCount}</td>
+              <td className="px-2 py-1.5 text-right text-slate-300">{weekTradeAvg.toFixed(0)}</td>
+              <td className="px-2 py-1.5 text-right text-slate-300">{monthTradeAvg.toFixed(0)}</td>
+              <td className={`px-2 py-1.5 text-right font-medium ${vsRatioColor(weekTradeAvg > 0 ? today.tradeCount / weekTradeAvg : null)}`}>
+                {weekTradeAvg > 0 ? `${(today.tradeCount / weekTradeAvg).toFixed(2)}x` : '-'}
+              </td>
+              <td className={`px-2 py-1.5 text-right font-medium ${vsRatioColor(monthTradeAvg > 0 ? today.tradeCount / monthTradeAvg : null)}`}>
+                {monthTradeAvg > 0 ? `${(today.tradeCount / monthTradeAvg).toFixed(2)}x` : '-'}
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+      <div className="mt-1.5 flex items-center justify-between font-mono text-[8.5px] text-slate-600">
+        <span>
+          1W = avg daily over {pastWeek.length} trading day{pastWeek.length !== 1 ? 's' : ''}
+          {' · '}1M = avg daily over {pastMonth.length} trading day{pastMonth.length !== 1 ? 's' : ''}
+        </span>
+        <span>{today.day}</span>
+      </div>
     </div>
   )
 }

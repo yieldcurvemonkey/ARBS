@@ -110,8 +110,6 @@ def detect_curve_trades_df(
     cand["_t"] = _ensure_int64_epoch_seconds(cand[exec_col])
     cand.sort_values("_t", inplace=True, kind="mergesort")  # stable & fast
     if orig_pkg is not None:
-        orig_pkg = orig_pkg[cand.index - cand.index[0]] if len(cand) > 0 else orig_pkg
-        # Re-index to match sorted cand order
         orig_pkg = out.loc[cand.index, package_col].fillna("OUTRIGHT").values
 
     pv01 = cand[pv01_col].to_numpy(dtype=np.float64)
