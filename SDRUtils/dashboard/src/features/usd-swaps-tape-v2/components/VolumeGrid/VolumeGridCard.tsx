@@ -144,15 +144,17 @@ export function VolumeGridCard({ onSelectPackage }: VolumeGridCardProps): JSX.El
         )}
       </header>
       {!collapsed && (
-        <VolumeGridViewSwitcher
-          activeViewId={activeView}
-          onViewChange={setActiveView}
-          metric={metric}
-          period={period}
-          lookbackDays={LOOKBACK_DAYS[lookback]}
-          textFilter={textFilter}
-          onCellClick={onCellClick}
-        />
+        <div className="max-h-[45vh] overflow-y-auto">
+          <VolumeGridViewSwitcher
+            activeViewId={activeView}
+            onViewChange={setActiveView}
+            metric={metric}
+            period={period}
+            lookbackDays={LOOKBACK_DAYS[lookback]}
+            textFilter={textFilter}
+            onCellClick={onCellClick}
+          />
+        </div>
       )}
       <VolumeGridCellModal
         cell={modalCell}

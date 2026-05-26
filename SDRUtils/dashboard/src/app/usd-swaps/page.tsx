@@ -14,7 +14,7 @@ export default function UsdSwapsPage() {
     >
       <div
         className="-mx-4 -mb-10 -mt-6 flex flex-col"
-        style={{ height: 'calc(100vh - 4.25rem + 8rem)' }}
+        style={{ height: 'calc(300vh - 4.25rem)' }}
       >
         <UsdSwapsTradeTape />
       </div>

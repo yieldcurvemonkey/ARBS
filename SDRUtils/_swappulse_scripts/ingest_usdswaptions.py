@@ -22,6 +22,7 @@ from typing import Any, Dict, Iterable, Optional
 import numpy as np
 import pandas as pd
 from sqlalchemy import create_engine, text
+from sqlalchemy.exc import OperationalError
 from sqlalchemy.engine import Engine
 from tqdm import tqdm
 
@@ -597,13 +598,27 @@ def create_db_engine() -> Engine:
     )
 
 
-def ensure_schema(engine: Engine) -> None:
-    """Create tables, indexes, and view if they do not exist."""
-    with engine.begin() as conn:
-        for statement in SCHEMA_SQL.split(";"):
-            stmt = statement.strip()
-            if stmt:
-                conn.execute(text(stmt))
+def ensure_schema(engine: Engine, _max_retries: int = 3) -> None:
+    """Create tables, indexes, and view if they do not exist.
+
+    Uses a pg_advisory_xact_lock to serialize DDL across concurrent
+    service instances and retries on transient deadlocks.
+    """
+    for attempt in range(1, _max_retries + 1):
+        try:
+            with engine.begin() as conn:
+                conn.execute(text("SELECT pg_advisory_xact_lock(8675309)"))
+                for statement in SCHEMA_SQL.split(";"):
+                    stmt = statement.strip()
+                    if stmt:
+                        conn.execute(text(stmt))
+            return
+        except OperationalError as exc:
+            if "deadlock" in str(exc).lower() and attempt < _max_retries:
+                import time as _time
+                _time.sleep(1.0 * attempt)
+                continue
+            raise
 
 
 def _boolify(val: Any) -> Optional[bool]:

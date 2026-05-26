@@ -1229,5 +1229,6 @@ class SDRDataBuilder:
         if out.empty or "Event timestamp" not in out.columns:
             return out
 
+        out["Event timestamp"] = pd.to_datetime(out["Event timestamp"], utc=True, errors="coerce")
         out = out[(out["Event timestamp"] >= start_timestamp.astimezone(pytz.utc)) & (out["Event timestamp"] <= end_timestamp.astimezone(pytz.utc))]
         return out
