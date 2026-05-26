@@ -686,6 +686,7 @@ export function buildStructureBreakdownSql(opts: {
       WHERE COALESCE(l.contributes_to_flow, FALSE) = TRUE
         AND COALESCE(l.original_execution_timestamp, l.execution_timestamp) >= $1::timestamptz
         AND COALESCE(l.original_execution_timestamp, l.execution_timestamp) <  $2::timestamptz
+        AND COALESCE(l.forward_start_years, 0) < 0.0192
         AND ${pkgFilter.sql}
         ${textFilterClause}
     ),
