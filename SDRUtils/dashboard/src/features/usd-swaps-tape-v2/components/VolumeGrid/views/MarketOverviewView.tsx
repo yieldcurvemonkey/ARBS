@@ -161,8 +161,8 @@ function isOutrightLike(key: string): boolean {
 
 function fmtLevel(level: number | null, structureKey: string): string {
   if (level == null) return '-'
-  if (isOutrightLike(structureKey)) return `${level.toFixed(3)}%`
-  return `${level.toFixed(1)}bp`
+  if (isOutrightLike(structureKey)) return `${(level * 100).toFixed(3)}%`
+  return `${(level * 10000).toFixed(1)}bp`
 }
 
 function fmtTradeTime(iso: string | null): string {
