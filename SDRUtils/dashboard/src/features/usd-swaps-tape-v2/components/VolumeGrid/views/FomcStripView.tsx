@@ -81,7 +81,7 @@ export function FomcStripView({ metric, period, lookbackDays, textFilter, onCell
           const cell = cellMap.get(b.id) ?? {
             fwd: b.id, tenor: '_all_', current: 0, idbCurrent: 0, custyCurrent: 0,
             tradeCount: 0, baseline: { p25: 0, p50: 0, p75: 0, min: 0, max: 0, n: 0 },
-            percentile: null, outrightCurrent: 0, curveCurrent: 0, flyCurrent: 0, otherCurrent: 0,
+            percentile: null, outrightCurrent: 0, curveCurrent: 0, flyCurrent: 0, invoiceCurrent: 0, otherCurrent: 0,
           }
           const alias = fomcAliasForLabel(b.id, fomcMap)
           const displayLabel = labelMode === 'constant_maturity' && alias ? alias : b.id

@@ -643,6 +643,22 @@ class TradeTape(SDRAnalyzer):
                 action_prefix == "NEWT"
             )
 
+        # H10: Backdated effective dates override ECONOMIC_FLOW → ECONOMIC_UNWIND.
+        # A NEWT with effective_date significantly before execution is an
+        # unwind of existing risk (the position already started accruing),
+        # not new flow. is_unwind is set in _enrich_classification from
+        # forward_start_years < -0.02 (~7 days backdated). Only override
+        # ECONOMIC_FLOW rows — other event types (VALU, TERM, etc.) have
+        # backdated effective dates by nature and shouldn't be reclassified.
+        if "is_unwind" in df.columns and "economic_class" in df.columns:
+            unwind_flow_mask = (
+                df["is_unwind"].fillna(False).astype(bool)
+                & (df["economic_class"] == "ECONOMIC_FLOW")
+            )
+            if unwind_flow_mask.any():
+                df.loc[unwind_flow_mask, "economic_class"] = "ECONOMIC_UNWIND"
+                df.loc[unwind_flow_mask, "is_new_risk"] = False
+
         return df
 
     def _enrich_phase5_structural(self, df: pd.DataFrame) -> pd.DataFrame:
