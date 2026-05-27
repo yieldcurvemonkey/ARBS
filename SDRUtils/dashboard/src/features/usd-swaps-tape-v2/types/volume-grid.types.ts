@@ -34,6 +34,7 @@ export interface VolumeGridCell {
   outrightCurrent: number
   curveCurrent: number
   flyCurrent: number
+  invoiceCurrent: number
   otherCurrent: number
 }
 

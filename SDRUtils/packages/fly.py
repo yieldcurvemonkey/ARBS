@@ -72,12 +72,14 @@ def detect_fly_trades_df(
         ten_axis_col: str,
         require_same_forward_pass: bool,
         require_same_underlying_tenor: bool,
+        require_same_effective_date_pass: bool = True,
     ) -> pd.DataFrame:
         nonlocal out
 
         # Only candidates — outrights and spreadovers (spreadover triples → SPREADOVER_FLY)
         _FLY_ELIGIBLE = {"OUTRIGHT", "SPREADOVER"}
-        m = (out[product_col].values == "OIS_SWAP") & (out[pv01_col].fillna(0).values > 0)
+        _FLY_PRODUCT_TYPES = {"OIS_SWAP", "BASIS_SWAP"}
+        m = np.array([v in _FLY_PRODUCT_TYPES for v in out[product_col].fillna("").values]) & (out[pv01_col].fillna(0).values > 0)
         if package_col in out.columns:
             m &= np.array([v in _FLY_ELIGIBLE for v in out[package_col].fillna("OUTRIGHT").values])
 
@@ -134,7 +136,7 @@ def detect_fly_trades_df(
         ccy = cand[currency_col].astype("string").to_numpy() if (require_same_currency and currency_col in cand.columns) else None
         eff = (
             pd.to_datetime(cand[effective_date_col], errors="coerce").dt.date.to_numpy()
-            if (require_same_effective_date and effective_date_col in cand.columns)
+            if (require_same_effective_date and require_same_effective_date_pass and effective_date_col in cand.columns)
             else None
         )
 
@@ -424,6 +426,7 @@ def detect_fly_trades_df(
             ten_axis_col=forward_years_col,
             require_same_forward_pass=False,
             require_same_underlying_tenor=True,
+            require_same_effective_date_pass=False,
         )
 
     return out

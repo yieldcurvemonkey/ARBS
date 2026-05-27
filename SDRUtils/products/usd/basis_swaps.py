@@ -54,7 +54,7 @@ def classify_basis_swap_trade(
         execution_timestamp=exec_ts,
         effective_date=eff_date,
         expiration_date=exp_date,
-        product_type="OIS_SWAP",
+        product_type="BASIS_SWAP",
         trade_label=trade_label,
         notional=notional or 0.0,
         notional_currency="USD",

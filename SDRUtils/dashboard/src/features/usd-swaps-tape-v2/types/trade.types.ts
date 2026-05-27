@@ -118,6 +118,10 @@ export type UsdSwapTapeLeg = SofrSwapTapeLeg & {
   other_payment_pexh?: number | null
   frequency_anomaly?: boolean | null
   d2_missing?: boolean | null
+  basis_type?: string | null
+  basis_spread_bps?: number | null
+  leg1_rate_index?: string | null
+  leg2_rate_index?: string | null
 }
 
 export type UsdSwapTapeRow = SofrSwapTapeRow & {

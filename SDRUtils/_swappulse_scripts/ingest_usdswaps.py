@@ -995,6 +995,8 @@ def build_classification_dataframe(
         detect_invoice=True,
         detect_mac=True,
         detect_spreadover=True,
+        detect_basis=True,
+        use_v2_classification=True,
         only_newt=only_newt,
         use_incremental=use_incremental,
     )

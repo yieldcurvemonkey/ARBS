@@ -28,6 +28,7 @@ export interface RawVolumeGridRow {
   outright_current: number | string
   curve_current: number | string
   fly_current: number | string
+  invoice_current: number | string
   other_current: number | string
   trade_count: number | string
   prior_array: Array<number | string>
@@ -97,6 +98,7 @@ export function rowToCell(r: RawVolumeGridRow): VolumeGridCell {
     outrightCurrent: num(r.outright_current),
     curveCurrent: num(r.curve_current),
     flyCurrent: num(r.fly_current),
+    invoiceCurrent: num(r.invoice_current),
     otherCurrent: num(r.other_current),
     tradeCount: num(r.trade_count),
     baseline: {

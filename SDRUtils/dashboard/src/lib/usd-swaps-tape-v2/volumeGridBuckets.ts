@@ -388,6 +388,10 @@ export type PackageTypeGroupId =
   | 'spreadover_curve'  // SPREADOVER_CURVE + MATCHED_MATURITY_CURVE
   | 'fly'
   | 'spreadover_fly'    // SPREADOVER_FLY + MATCHED_MATURITY_FLY
+  | 'invoice'           // INVOICE outright
+  | 'invoice_calendar'  // INVOICE_CALENDAR
+  | 'invoice_switch'    // INVOICE_SWITCH
+  | 'invoice_all'       // All invoice types
   | 'fomc'
   | 'imm'
   | 'all'
@@ -399,6 +403,10 @@ export const PACKAGE_TYPE_GROUPS: Record<PackageTypeGroupId, ReadonlyArray<strin
   spreadover_curve: ['SPREADOVER_CURVE', 'MATCHED_MATURITY_CURVE'],
   fly:              ['FLY'],
   spreadover_fly:   ['SPREADOVER_FLY', 'MATCHED_MATURITY_FLY'],
+  invoice:          ['INVOICE'],
+  invoice_calendar: ['INVOICE_CALENDAR'],
+  invoice_switch:   ['INVOICE_SWITCH'],
+  invoice_all:      ['INVOICE', 'INVOICE_CALENDAR', 'INVOICE_SWITCH'],
   fomc:             ['FOMC'],
   imm:              ['IMM'],
   all:              [],
@@ -411,6 +419,10 @@ export const PACKAGE_TYPE_GROUP_LABELS: Record<PackageTypeGroupId, string> = {
   spreadover_curve: 'Spreadover Curve / MM Curve',
   fly:              'Fly',
   spreadover_fly:   'Spreadover Fly / MM Fly',
+  invoice:          'Invoice Outright',
+  invoice_calendar: 'Invoice Calendar',
+  invoice_switch:   'Invoice Switch',
+  invoice_all:      'All Invoice',
   fomc:             'FOMC',
   imm:              'IMM',
   all:              'All',
@@ -423,6 +435,10 @@ export const PACKAGE_TYPE_GROUP_IDS: ReadonlyArray<PackageTypeGroupId> = [
   'spreadover_curve',
   'fly',
   'spreadover_fly',
+  'invoice',
+  'invoice_calendar',
+  'invoice_switch',
+  'invoice_all',
   'fomc',
   'imm',
   'all',
@@ -453,6 +469,7 @@ export function buildPkgFamilySql(alias: string): string {
     WHEN ${alias}.package_type IN ('OUTRIGHT','SPREADOVER','MATCHED_MATURITY') THEN 'outright'
     WHEN ${alias}.package_type IN ('CURVE','SPREADOVER_CURVE','MATCHED_MATURITY_CURVE') THEN 'curve'
     WHEN ${alias}.package_type IN ('FLY','SPREADOVER_FLY','MATCHED_MATURITY_FLY') THEN 'fly'
+    WHEN ${alias}.package_type IN ('INVOICE','INVOICE_CALENDAR','INVOICE_SWITCH') THEN 'invoice'
     ELSE 'other'
   END`
 }

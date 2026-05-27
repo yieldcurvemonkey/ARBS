@@ -4,6 +4,7 @@ import { FomcStripView } from './FomcStripView'
 import { CurveStripView } from './CurveStripView'
 import { FlyCurveView } from './FlyCurveView'
 import { SpreadoverStripView } from './SpreadoverStripView'
+import { InvoiceStripView } from './InvoiceStripView'
 import { CustomGridView } from './CustomGridView'
 import { MarketOverviewView } from './MarketOverviewView'
 
@@ -42,6 +43,12 @@ export const VOLUME_GRID_VIEWS: ReadonlyArray<VolumeGridViewDef> = [
     id: 'spreadover_strip',
     label: 'Spreadover Strip',
     component: SpreadoverStripView,
+    controls: () => null,
+  },
+  {
+    id: 'invoice_strip',
+    label: 'Invoice Strip',
+    component: InvoiceStripView,
     controls: () => null,
   },
   {

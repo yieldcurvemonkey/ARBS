@@ -1046,11 +1046,13 @@ def _classify_messages_v2(
                 if segment_key == "SHORT":
                     src = kwargs.get("short_curve_source", "BARCHART_STIRF-RL")
                     mdp = IRSwapsMDP(source=src)
+                    cn = kwargs.get("short_curve_name", "USD-SOFR-1D-Q12STIRT")
                 else:
                     src = kwargs.get("medium_curve_source", curve_source)
                     mdp = IRSwapsMDP(source=src)
+                    cn = "USD-SOFR-1D"
                 _curves[segment_key] = mdp.get_pricer(dict(
-                    curve_name="USD-SOFR-1D", timestamp=exec_date,
+                    curve_name=cn, timestamp=exec_date,
                 ))
             except Exception as e:
                 logger.warning(f"Failed to load {segment_key} curve: {e}")
@@ -1078,10 +1080,17 @@ def _classify_messages_v2(
                 curve = _get_curve("MEDIUM")
                 c = classify_usd_swap_trade(row, trade_id=trade_id, curve=curve)
 
-            # Compute PV01 with segment-appropriate curve if not already set
-            if hasattr(c, 'tenor_segment') and c.tenor_segment is not None:
+            # Compute PV01 with segment-appropriate curve if not already set.
+            # Basis swaps use MEDIUM curve (avoids SHORT curve fetch issues;
+            # the PV01 is an approximation for risk sizing, not mark-to-market).
+            is_basis = getattr(c, 'basis_type', None) is not None
+            if is_basis:
+                curve = _get_curve("MEDIUM")
+            elif hasattr(c, 'tenor_segment') and c.tenor_segment is not None:
                 seg = c.tenor_segment.value if hasattr(c.tenor_segment, 'value') else str(c.tenor_segment)
                 curve = _get_curve(seg)
+                if curve is None:
+                    curve = _get_curve("MEDIUM")
             else:
                 curve = _get_curve("MEDIUM")
 
@@ -1149,6 +1158,7 @@ class USD_SwapProduct(USDProductBase):
         detect_invoice=True,
         detect_mac=True,
         detect_spreadover=True,
+        detect_basis=True,
         ignore_cache: bool = False,
         merge_package_legs: bool = False,
         use_v2_classification: bool = False,
@@ -1198,7 +1208,7 @@ class USD_SwapProduct(USDProductBase):
         curve_source = str(kwargs.get("curve_source", "ERIS_EOD_LIVE-RL_BASIC")).replace("/", "_")
         mdp = IRSwapsMDP(source=curve_source)
 
-        cache_flags = f"curve{int(detect_curve)}_fly{int(detect_fly)}_mms{int(detect_mms)}_invoice{int(detect_invoice)}_mac{int(detect_mac)}_spreadover{int(detect_spreadover)}"
+        cache_flags = f"curve{int(detect_curve)}_fly{int(detect_fly)}_mms{int(detect_mms)}_invoice{int(detect_invoice)}_mac{int(detect_mac)}_spreadover{int(detect_spreadover)}_basis{int(detect_basis)}"
         cache_base = Path(cache_path) / "classification_cache" / "usd_swaps" / curve_source / cache_flags
         legacy_cache_base = Path(cache_path) / "classification_cache" / "usd_sofr_swaps" / curve_source / cache_flags
         cache_base.mkdir(parents=True, exist_ok=True)
@@ -1307,6 +1317,10 @@ class USD_SwapProduct(USDProductBase):
                         classifications_df = new_classifications_df
                 if not classifications_df.empty:
                     classifications_df[TRADE_ID] = classifications_df[TRADE_ID].astype("string")
+                    if "execution_timestamp" in classifications_df.columns:
+                        classifications_df["execution_timestamp"] = pd.to_datetime(
+                            classifications_df["execution_timestamp"], errors="coerce", utc=True
+                        )
                     day_df = day_df.copy()
                     day_df[TRADE_ID] = day_df[TRADE_ID].astype("string")
 
@@ -1385,6 +1399,14 @@ class USD_SwapProduct(USDProductBase):
                     package_df = detect_mac_swaps(package_df)
                 if detect_spreadover:
                     package_df = detect_spreadovers(package_df)
+                if detect_basis:
+                    from SDRUtils.packages.basis import detect_basis_packages_df
+                    package_df = detect_basis_packages_df(
+                        package_df,
+                        platform_col="platform_identifier",
+                        cleared_col="cleared",
+                        upi_col="unique_product_identifier",
+                    )
 
                 # Second pass: re-run CURVE + FLY detection on trades already
                 # tagged as MATCHED_MATURITY or SPREADOVER. Pairs/triples

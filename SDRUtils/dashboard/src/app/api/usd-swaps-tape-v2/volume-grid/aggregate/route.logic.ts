@@ -155,6 +155,7 @@ export function buildDailyTimeseriesSql(opts: {
       COALESCE(SUM(${metricCol}) FILTER (WHERE pkg_family = 'outright'), 0) AS outright,
       COALESCE(SUM(${metricCol}) FILTER (WHERE pkg_family = 'curve'), 0) AS curve,
       COALESCE(SUM(${metricCol}) FILTER (WHERE pkg_family = 'fly'), 0) AS fly,
+      COALESCE(SUM(${metricCol}) FILTER (WHERE pkg_family = 'invoice'), 0) AS invoice,
       COALESCE(SUM(${metricCol}) FILTER (WHERE pkg_family = 'other'), 0) AS other_pkg,
       COUNT(*)::int AS trade_count,
       CASE WHEN COUNT(*) > 0 THEN SUM(${metricCol}) / COUNT(*) ELSE 0 END AS avg_trade_size,
@@ -263,7 +264,7 @@ function buildSummaryTimeOfDaySql(opts: {
       c.val AS current_total, c.cnt AS trade_count,
       c.idb AS current_idb, c.custy AS current_custy,
       c.outright AS current_outright, c.curve AS current_curve,
-      c.fly AS current_fly, c.other_pkg AS current_other,
+      c.fly AS current_fly, c.invoice AS current_invoice, c.other_pkg AS current_other,
       c.block_count, c.block_volume, c.weighted_avg_tenor,
       COALESCE((SELECT array_agg(val ORDER BY val) FROM prior_per_day), ARRAY[]::numeric[]) AS prior_totals,
       COALESCE((SELECT array_agg(cnt ORDER BY cnt) FROM prior_per_day), ARRAY[]::int[]) AS prior_trade_counts,
@@ -273,6 +274,7 @@ function buildSummaryTimeOfDaySql(opts: {
       COALESCE((SELECT AVG(outright) FROM prior_per_day), 0) AS hist_outright,
       COALESCE((SELECT AVG(curve) FROM prior_per_day), 0) AS hist_curve,
       COALESCE((SELECT AVG(fly) FROM prior_per_day), 0) AS hist_fly,
+      COALESCE((SELECT AVG(invoice) FROM prior_per_day), 0) AS hist_invoice,
       COALESCE((SELECT AVG(other_pkg) FROM prior_per_day), 0) AS hist_other
     FROM current_agg c
   `
@@ -352,7 +354,7 @@ function buildSummaryRollingSql(opts: {
       c.val AS current_total, c.cnt AS trade_count,
       c.idb AS current_idb, c.custy AS current_custy,
       c.outright AS current_outright, c.curve AS current_curve,
-      c.fly AS current_fly, c.other_pkg AS current_other,
+      c.fly AS current_fly, c.invoice AS current_invoice, c.other_pkg AS current_other,
       c.block_count, c.block_volume, c.weighted_avg_tenor,
       COALESCE((SELECT array_agg(val ORDER BY val) FROM prior_per_window), ARRAY[]::numeric[]) AS prior_totals,
       COALESCE((SELECT array_agg(cnt ORDER BY cnt) FROM prior_per_window), ARRAY[]::int[]) AS prior_trade_counts,
@@ -362,6 +364,7 @@ function buildSummaryRollingSql(opts: {
       COALESCE((SELECT AVG(outright) FROM prior_per_window), 0) AS hist_outright,
       COALESCE((SELECT AVG(curve) FROM prior_per_window), 0) AS hist_curve,
       COALESCE((SELECT AVG(fly) FROM prior_per_window), 0) AS hist_fly,
+      COALESCE((SELECT AVG(invoice) FROM prior_per_window), 0) AS hist_invoice,
       COALESCE((SELECT AVG(other_pkg) FROM prior_per_window), 0) AS hist_other
     FROM current_agg c
   `
@@ -771,6 +774,7 @@ interface RawDailyRow {
   outright: number | string
   curve: number | string
   fly: number | string
+  invoice: number | string
   other_pkg: number | string
   trade_count: number | string
   avg_trade_size: number | string
@@ -787,6 +791,7 @@ interface RawSummaryRow {
   current_outright: number | string
   current_curve: number | string
   current_fly: number | string
+  current_invoice: number | string
   current_other: number | string
   block_count: number | string
   block_volume: number | string
@@ -799,6 +804,7 @@ interface RawSummaryRow {
   hist_outright: number | string
   hist_curve: number | string
   hist_fly: number | string
+  hist_invoice: number | string
   hist_other: number | string
 }
 
@@ -871,6 +877,7 @@ export function shapeAggregateResponse(
     outright: num(r.outright),
     curve: num(r.curve),
     fly: num(r.fly),
+    invoice: num(r.invoice),
     other: num(r.other_pkg),
     tradeCount: num(r.trade_count),
     avgTradeSize: num(r.avg_trade_size),
@@ -919,17 +926,20 @@ export function shapeAggregateResponse(
   const cOutright = s ? num(s.current_outright) : 0
   const cCurve = s ? num(s.current_curve) : 0
   const cFly = s ? num(s.current_fly) : 0
+  const cInvoice = s ? num(s.current_invoice) : 0
   const cOther = s ? num(s.current_other) : 0
   const hOutright = s ? num(s.hist_outright) : 0
   const hCurve = s ? num(s.hist_curve) : 0
   const hFly = s ? num(s.hist_fly) : 0
+  const hInvoice = s ? num(s.hist_invoice) : 0
   const hOther = s ? num(s.hist_other) : 0
-  const totalHist = hOutright + hCurve + hFly + hOther
+  const totalHist = hOutright + hCurve + hFly + hInvoice + hOther
 
   const packageMix: AggregateDistributionEntry[] = [
     makePkgMixEntry('outright', 'Outright', cOutright, hOutright, currentTotal, totalHist),
     makePkgMixEntry('curve', 'Curve', cCurve, hCurve, currentTotal, totalHist),
     makePkgMixEntry('fly', 'Fly', cFly, hFly, currentTotal, totalHist),
+    makePkgMixEntry('invoice', 'Invoice', cInvoice, hInvoice, currentTotal, totalHist),
     makePkgMixEntry('other', 'Other', cOther, hOther, currentTotal, totalHist),
   ]
 

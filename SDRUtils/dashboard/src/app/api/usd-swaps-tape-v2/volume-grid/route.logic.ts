@@ -499,6 +499,7 @@ export function buildVolumeGridSqlTimeOfDay(ctx: SqlBuildContext): BuiltSql {
         SUM(${metricCol}) FILTER (WHERE pkg_family = 'outright') AS outright_current,
         SUM(${metricCol}) FILTER (WHERE pkg_family = 'curve')    AS curve_current,
         SUM(${metricCol}) FILTER (WHERE pkg_family = 'fly')      AS fly_current,
+        SUM(${metricCol}) FILTER (WHERE pkg_family = 'invoice')  AS invoice_current,
         SUM(${metricCol}) FILTER (WHERE pkg_family = 'other')    AS other_current,
         COUNT(*)::int AS trade_count,
         MAX(ts) AS last_ts
@@ -515,6 +516,7 @@ export function buildVolumeGridSqlTimeOfDay(ctx: SqlBuildContext): BuiltSql {
       COALESCE(c.outright_current, 0)          AS outright_current,
       COALESCE(c.curve_current, 0)             AS curve_current,
       COALESCE(c.fly_current, 0)               AS fly_current,
+      COALESCE(c.invoice_current, 0)           AS invoice_current,
       COALESCE(c.other_current, 0)             AS other_current,
       COALESCE(c.trade_count, 0)               AS trade_count,
       COALESCE(p.prior_array, ARRAY[]::numeric[]) AS prior_array,
@@ -618,6 +620,7 @@ export function buildVolumeGridSqlRolling(ctx: SqlBuildContext): BuiltSql {
         SUM(${metricCol}) FILTER (WHERE pkg_family = 'outright') AS outright_current,
         SUM(${metricCol}) FILTER (WHERE pkg_family = 'curve')    AS curve_current,
         SUM(${metricCol}) FILTER (WHERE pkg_family = 'fly')      AS fly_current,
+        SUM(${metricCol}) FILTER (WHERE pkg_family = 'invoice')  AS invoice_current,
         SUM(${metricCol}) FILTER (WHERE pkg_family = 'other')    AS other_current,
         COUNT(*)::int AS trade_count,
         MAX(ts) AS last_ts
@@ -634,6 +637,7 @@ export function buildVolumeGridSqlRolling(ctx: SqlBuildContext): BuiltSql {
       COALESCE(c.outright_current, 0)          AS outright_current,
       COALESCE(c.curve_current, 0)             AS curve_current,
       COALESCE(c.fly_current, 0)               AS fly_current,
+      COALESCE(c.invoice_current, 0)           AS invoice_current,
       COALESCE(c.other_current, 0)             AS other_current,
       COALESCE(c.trade_count, 0)               AS trade_count,
       COALESCE(p.prior_array, ARRAY[]::numeric[]) AS prior_array,

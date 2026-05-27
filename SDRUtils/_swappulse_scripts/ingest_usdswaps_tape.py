@@ -162,6 +162,11 @@ LEG_COLUMNS: tuple[str, ...] = (
     "normalized_tape_label",
     "tape_tags",
     "enrichment_metrics",
+    # Basis swap fields — populated by classify_basis_swap_trade
+    "basis_type",
+    "basis_spread_bps",
+    "leg1_rate_index",
+    "leg2_rate_index",
 )
 
 
@@ -694,6 +699,15 @@ def build_leg_rows(tape: pd.DataFrame, *, as_of_date: str) -> list[dict]:
     if "quality_flags" not in df.columns:
         df["quality_flags"] = df.apply(_quality_flag_list, axis=1)
 
+    # Basis swap: rename spread_bps → basis_spread_bps for schema alignment;
+    # coerce enum values to plain strings for DB storage.
+    if "spread_bps" in df.columns and "basis_spread_bps" not in df.columns:
+        df["basis_spread_bps"] = df["spread_bps"]
+    if "basis_type" in df.columns:
+        df["basis_type"] = df["basis_type"].apply(
+            lambda v: v.value if hasattr(v, "value") else v
+        )
+
     # OPA (feedback round 1): normalize from raw CFTC column names if the
     # classifier/TradeTape hasn't already produced snake_case equivalents.
     if "other_payment_amount" not in df.columns and "Other payment amount" in df.columns:
@@ -777,8 +791,11 @@ def build_leg_rows(tape: pd.DataFrame, *, as_of_date: str) -> list[dict]:
             "violation_reason", "economic_class", "economic_class_reason",
             # Phase 7
             "off_market_reason", "normalized_tape_label", "tape_tags",
+            # Basis swap fields
+            "basis_type", "leg1_rate_index", "leg2_rate_index",
         ):
             rec[text_col] = _str_or_none(rec.get(text_col))
+        rec["basis_spread_bps"] = _num_or_none(rec.get("basis_spread_bps"))
         rec["execution_timestamp"] = _to_db_value(rec.get("execution_timestamp"))
         rec["original_execution_timestamp"] = _to_db_value(
             rec.get("original_execution_timestamp")
@@ -1373,7 +1390,9 @@ def write_tape_rows(engine: Engine, tape: pd.DataFrame, as_of_date: str) -> dict
             progress_desc="Writing tape legs",
             _raw_conn=raw_conn,
         )
-        n_orphans = _delete_orphan_packages(engine, _raw_conn=raw_conn)
+        n_orphans = _delete_orphan_packages(
+            engine, as_of_date=as_of_date, _raw_conn=raw_conn
+        )
         raw_conn.commit()
     except Exception:
         raw_conn.rollback()
@@ -1387,7 +1406,9 @@ def write_tape_rows(engine: Engine, tape: pd.DataFrame, as_of_date: str) -> dict
     }
 
 
-def _delete_orphan_packages(engine: Engine, *, _raw_conn=None) -> int:
+def _delete_orphan_packages(
+    engine: Engine, *, as_of_date: Optional[str] = None, _raw_conn=None
+) -> int:
     """Delete package rows that have no legs pointing at them.
 
     Defensive maintenance step — runs after every ingest. Two ways a
@@ -1411,32 +1432,34 @@ def _delete_orphan_packages(engine: Engine, *, _raw_conn=None) -> int:
     ``legs_json`` aggregates to empty), so they're visible noise. Cleaning
     them up post-write keeps the tape tidy.
 
+    When ``as_of_date`` is supplied the scan is restricted to that date,
+    avoiding a full-table anti-join on every cycle.
+
     When ``_raw_conn`` is supplied the caller owns the transaction.
     """
+    date_clause = ""
+    params: tuple = ()
+    if as_of_date is not None:
+        date_clause = f" AND p.as_of_date = %s"
+        params = (as_of_date,)
+
+    delete_sql = f"""
+        DELETE FROM {PACKAGES_TABLE} p
+        WHERE NOT EXISTS (
+            SELECT 1 FROM {LEGS_TABLE} l
+            WHERE l.package_id = p.package_id
+        ){date_clause}
+    """
+
     if _raw_conn is not None:
         with _raw_conn.cursor() as cur:
-            cur.execute(
-                f"""
-                DELETE FROM {PACKAGES_TABLE} p
-                WHERE NOT EXISTS (
-                    SELECT 1 FROM {LEGS_TABLE} l
-                    WHERE l.package_id = p.package_id
-                )
-                """
-            )
+            cur.execute(delete_sql, params)
             return cur.rowcount or 0
+    # Standalone path uses SQLAlchemy text() — swap %s for :d placeholder.
+    sa_sql = delete_sql.replace("%s", ":d")
+    sa_params = {"d": as_of_date} if as_of_date is not None else {}
     with engine.begin() as conn:
-        result = conn.execute(
-            text(
-                f"""
-                DELETE FROM {PACKAGES_TABLE} p
-                WHERE NOT EXISTS (
-                    SELECT 1 FROM {LEGS_TABLE} l
-                    WHERE l.package_id = p.package_id
-                )
-                """
-            )
-        )
+        result = conn.execute(text(sa_sql), sa_params)
         return int(result.rowcount or 0)
 
 
@@ -1651,6 +1674,7 @@ def run_ingest(
     use_cache: bool = True,
     cache_path: Optional[str] = None,
     pre_classified: Optional[pd.DataFrame] = None,
+    engine: Optional[Engine] = None,
 ) -> int:
     """Full pipeline: load classified df → TradeTape.compute() → write → record run.
 
@@ -1668,6 +1692,9 @@ def run_ingest(
 
     ``pre_classified``: when provided, skip re-classification entirely and use
     this DataFrame directly. Eliminates the double-classify race in service mode.
+
+    ``engine``: when provided, reuse this SQLAlchemy engine instead of creating
+    a new one. Avoids leaking connection pools in long-running service loops.
     """
     from datetime import timedelta
 
@@ -1686,7 +1713,8 @@ def run_ingest(
     )
     end = end_day + timedelta(days=1)
 
-    engine = create_engine(pg_url)
+    if engine is None:
+        engine = create_engine(pg_url)
     ensure_schema(engine)
     run_id = _start_run(engine, as_of_date=start.date().isoformat())
     try:

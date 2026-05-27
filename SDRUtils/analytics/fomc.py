@@ -142,6 +142,8 @@ def classify_rate_index(upi_underlier: str) -> str:
         ``"SOFR"`` if it contains *SOFR*, otherwise ``"OTHER"``.
     """
     s = str(upi_underlier).upper()
+    if " VS " in s:
+        return "BASIS"
     if "FEDERAL FUNDS" in s or "FED FUND" in s:
         return "FED_FUNDS"
     if "SOFR" in s:

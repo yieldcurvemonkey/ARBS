@@ -126,6 +126,8 @@ def _run_tape_for_dates(
     """
     failures = 0
     resolved_pg_url = ingest_usdswaps_tape.resolve_pg_url(pg_url)
+    tape_engine = ingest_usdswaps_tape.create_engine(resolved_pg_url)
+    ingest_usdswaps_tape.ensure_schema(tape_engine)
     for d in dates:
         iso = d.isoformat()
         _banner(f"Tape build: {iso}")
@@ -136,6 +138,7 @@ def _run_tape_for_dates(
                 end_date=iso,
                 use_cache=use_cache,
                 cache_path=cache_path,
+                engine=tape_engine,
             )
         except Exception as exc:
             failures += 1
@@ -278,6 +281,8 @@ def cmd_service(args: argparse.Namespace) -> int:
     ingest_usdswaps.ensure_schema(engine)
 
     resolved_pg_url = ingest_usdswaps_tape.resolve_pg_url(args.pg_url)
+    tape_engine = ingest_usdswaps_tape.create_engine(resolved_pg_url)
+    ingest_usdswaps_tape.ensure_schema(tape_engine)
 
     print("USD swaps pipeline service (classification + tape)")
     print(f"  Cache:                   {cache_path}")
@@ -376,6 +381,7 @@ def cmd_service(args: argparse.Namespace) -> int:
                         use_cache=not args.no_tape_cache,
                         cache_path=cache_path,
                         pre_classified=classified_df,
+                        engine=tape_engine,
                     )
                 except Exception as exc:
                     print(f"Tape cycle {iteration} failed: {exc}")

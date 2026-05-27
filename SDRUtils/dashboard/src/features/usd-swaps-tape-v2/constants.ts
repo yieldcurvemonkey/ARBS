@@ -153,6 +153,10 @@ export const TRADE_TYPE_ROW_TONES: Record<string, string> = {
   MATCHED_MATURITY_CURVE: '!bg-blue-900/15',
   SPREADOVER_FLY: '!bg-yellow-900/10',
   MATCHED_MATURITY_FLY: '!bg-yellow-900/10',
+  BASIS: '!bg-emerald-900/30',
+  BASIS_SWAP: '!bg-emerald-900/30',
+  BASIS_CURVE: '!bg-emerald-900/15',
+  BASIS_FLY: '!bg-emerald-900/10',
 }
 
 export const TRADE_TYPE_DEFAULT_ROW_TONE = '!bg-gray-900/30'

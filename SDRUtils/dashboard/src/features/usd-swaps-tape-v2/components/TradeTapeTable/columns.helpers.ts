@@ -15,12 +15,18 @@ const PACKAGE_BADGE_TONES: Record<string, string> = {
   OUTRIGHT: 'border-slate-600/40 bg-slate-800/60 text-slate-200',
   CURVE: 'border-sky-500/40 bg-sky-900/40 text-sky-200',
   FLY: 'border-indigo-500/40 bg-indigo-900/40 text-indigo-200',
+  BASIS: 'border-emerald-500/40 bg-emerald-900/40 text-emerald-200',
+  BASIS_CURVE: 'border-emerald-500/40 bg-emerald-900/40 text-emerald-200',
+  BASIS_FLY: 'border-emerald-500/40 bg-emerald-900/40 text-emerald-200',
 }
 
 const PACKAGE_LABELS: Record<string, string> = {
   OUTRIGHT: 'Outright',
   CURVE: 'Curve',
   FLY: 'Fly',
+  BASIS: 'Basis',
+  BASIS_CURVE: 'B.Curve',
+  BASIS_FLY: 'B.Fly',
 }
 
 // Left-edge accent borders, kept from the original palette — they're a second
@@ -42,6 +48,10 @@ const TRADE_TYPE_BORDER: Record<string, string> = {
   MATCHED_MATURITY_CURVE: 'border-l-2 border-sky-500/50',
   SPREADOVER_FLY: 'border-l-2 border-indigo-500/50',
   MATCHED_MATURITY_FLY: 'border-l-2 border-indigo-500/50',
+  BASIS: 'border-l-2 border-emerald-500/70',
+  BASIS_SWAP: 'border-l-2 border-emerald-500/70',
+  BASIS_CURVE: 'border-l-2 border-emerald-500/50',
+  BASIS_FLY: 'border-l-2 border-emerald-500/50',
 }
 
 function tradeTypeKey(row: UsdSwapTapeRow): string {

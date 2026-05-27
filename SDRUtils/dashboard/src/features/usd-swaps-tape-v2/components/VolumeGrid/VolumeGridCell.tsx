@@ -76,6 +76,7 @@ export const VolumeGridCell = memo(function VolumeGridCell({
   const outrightShare = safeShare(cell.outrightCurrent, cell.current)
   const curveShare = safeShare(cell.curveCurrent, cell.current)
   const flyShare = safeShare(cell.flyCurrent, cell.current)
+  const invoiceShare = safeShare(cell.invoiceCurrent, cell.current)
   const otherShare = safeShare(cell.otherCurrent, cell.current)
   const splitNote = `IDB ${fmtCompact(cell.idbCurrent, metric)} (${idbPct}%) / CUSTY ${fmtCompact(cell.custyCurrent, metric)} (${custyPct}%)`
   const colorLabel =
@@ -120,11 +121,12 @@ export const VolumeGridCell = memo(function VolumeGridCell({
           data-testid="pkg-family-bar"
           aria-hidden
           className="pointer-events-none absolute inset-x-0 top-0 flex h-1"
-          title={`Outright: ${fmtCompact(cell.outrightCurrent, metric)} | Curve: ${fmtCompact(cell.curveCurrent, metric)} | Fly: ${fmtCompact(cell.flyCurrent, metric)}${cell.otherCurrent > 0 ? ` | Other: ${fmtCompact(cell.otherCurrent, metric)}` : ''}`}
+          title={`Outright: ${fmtCompact(cell.outrightCurrent, metric)} | Curve: ${fmtCompact(cell.curveCurrent, metric)} | Fly: ${fmtCompact(cell.flyCurrent, metric)}${cell.invoiceCurrent > 0 ? ` | Invoice: ${fmtCompact(cell.invoiceCurrent, metric)}` : ''}${cell.otherCurrent > 0 ? ` | Other: ${fmtCompact(cell.otherCurrent, metric)}` : ''}`}
         >
           {outrightShare > 0 && <div className="bg-slate-400/80" style={{ width: `${outrightShare * 100}%` }} />}
           {curveShare > 0 && <div className="bg-amber-400/80" style={{ width: `${curveShare * 100}%` }} />}
           {flyShare > 0 && <div className="bg-emerald-400/80" style={{ width: `${flyShare * 100}%` }} />}
+          {invoiceShare > 0 && <div className="bg-sky-400/80" style={{ width: `${invoiceShare * 100}%` }} />}
           {otherShare > 0 && <div className="bg-purple-400/80" style={{ width: `${otherShare * 100}%` }} />}
         </div>
       )}

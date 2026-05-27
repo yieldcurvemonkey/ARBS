@@ -9,6 +9,7 @@ export interface AggregateDailyPoint {
   outright: number
   curve: number
   fly: number
+  invoice: number
   other: number
   tradeCount: number
   avgTradeSize: number

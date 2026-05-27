@@ -20,6 +20,7 @@ const STACKED_COLORS = {
   outright: '#6366f1',
   curve: '#f59e0b',
   fly: '#10b981',
+  invoice: '#38bdf8',
   other: '#64748b',
 } as const
 
@@ -440,6 +441,7 @@ function DailyVolumeChart({ series, metric, adv }: {
           <Bar dataKey="outright" stackId="pkg" fill={STACKED_COLORS.outright} isAnimationActive={false} />
           <Bar dataKey="curve" stackId="pkg" fill={STACKED_COLORS.curve} isAnimationActive={false} />
           <Bar dataKey="fly" stackId="pkg" fill={STACKED_COLORS.fly} isAnimationActive={false} />
+          <Bar dataKey="invoice" stackId="pkg" fill={STACKED_COLORS.invoice} isAnimationActive={false} />
           <Bar dataKey="other" stackId="pkg" fill={STACKED_COLORS.other} isAnimationActive={false} />
           {adv > 0 && (
             <ReferenceLine y={adv} stroke="#94a3b8" strokeDasharray="4 2" label={{ value: 'ADV', position: 'right', fontSize: 9, fill: '#94a3b8' }} />

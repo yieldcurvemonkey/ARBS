@@ -21,7 +21,12 @@ SOFR_FISN_VALUES = [
     "NA/Swap Fxd Flt USD",
 ]
 
-USD_SWAP_FISN_VALUES = list(SOFR_FISN_VALUES)
+BASIS_SWAP_FISN_VALUES = [
+    "NA/Swap Flt Flt USD",
+    "NA/Swap Flt Flt OIS USD",
+]
+
+USD_SWAP_FISN_VALUES = list(SOFR_FISN_VALUES) + list(BASIS_SWAP_FISN_VALUES)
 
 
 def _series(df: pd.DataFrame, column: str, default: str = "") -> pd.Series:

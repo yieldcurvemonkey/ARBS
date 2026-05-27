@@ -48,7 +48,7 @@ const LIFECYCLE_VALUES = new Set([
 const VENUE_VALUES = new Set(['D2D', 'D2C'])
 const CCP_VALUES = new Set(['LCH', 'CME'])
 const SESSION_VALUES = new Set(['Asia', 'London', 'NY_AM', 'NY_PM', 'Late'])
-const RATE_INDEX_VALUES = new Set(['SOFR', 'FED_FUNDS', 'OTHER'])
+const RATE_INDEX_VALUES = new Set(['SOFR', 'FED_FUNDS', 'BASIS', 'OTHER'])
 
 function parseLimit(raw: string | null): number {
   const n = Number(raw ?? DEFAULT_LIMIT)
