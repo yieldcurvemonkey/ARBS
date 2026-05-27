@@ -1035,11 +1035,8 @@ def _classify_messages_v2(
     **kwargs,
 ):
     """
-    V2 classification: routes trades through SOFR/FF/basis classifiers
-    with segment-appropriate DV01 curves.
-
-    Short-end (<=3Y): BARCHART_STIRF-RL
-    Medium-term (>3Y): ERIS_EOD_LIVE-RL_BASIC
+    V2 classification: routes trades through SOFR/FF/basis classifiers.
+    All segments use the MEDIUM curve (ERIS_EOD_LIVE-RL_BASIC) for PV01.
     """
     import logging
 
@@ -1058,14 +1055,9 @@ def _classify_messages_v2(
     def _get_curve(segment_key: str):
         if segment_key not in _curves:
             try:
-                if segment_key == "SHORT":
-                    src = kwargs.get("short_curve_source", "BARCHART_STIRF-RL")
-                    mdp = IRSwapsMDP(source=src)
-                    cn = kwargs.get("short_curve_name", "USD-SOFR-1D-Q12STIRT")
-                else:
-                    src = kwargs.get("medium_curve_source", curve_source)
-                    mdp = IRSwapsMDP(source=src)
-                    cn = "USD-SOFR-1D"
+                src = kwargs.get("medium_curve_source", curve_source)
+                mdp = IRSwapsMDP(source=src)
+                cn = "USD-SOFR-1D"
                 _curves[segment_key] = mdp.get_pricer(dict(
                     curve_name=cn, timestamp=exec_date,
                 ))
@@ -1095,19 +1087,7 @@ def _classify_messages_v2(
                 curve = _get_curve("MEDIUM")
                 c = classify_usd_swap_trade(row, trade_id=trade_id, curve=curve)
 
-            # Compute PV01 with segment-appropriate curve if not already set.
-            # Basis swaps use MEDIUM curve (avoids SHORT curve fetch issues;
-            # the PV01 is an approximation for risk sizing, not mark-to-market).
-            is_basis = getattr(c, 'basis_type', None) is not None
-            if is_basis:
-                curve = _get_curve("MEDIUM")
-            elif hasattr(c, 'tenor_segment') and c.tenor_segment is not None:
-                seg = c.tenor_segment.value if hasattr(c.tenor_segment, 'value') else str(c.tenor_segment)
-                curve = _get_curve(seg)
-                if curve is None:
-                    curve = _get_curve("MEDIUM")
-            else:
-                curve = _get_curve("MEDIUM")
+            curve = _get_curve("MEDIUM")
 
             if curve is not None and c.estimated_pv01 is None:
                 try:
