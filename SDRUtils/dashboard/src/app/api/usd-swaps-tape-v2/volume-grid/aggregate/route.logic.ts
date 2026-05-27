@@ -240,6 +240,7 @@ function buildSummaryTimeOfDaySql(opts: {
         COALESCE(SUM(${metricCol}) FILTER (WHERE pkg_family = 'outright'), 0) AS outright,
         COALESCE(SUM(${metricCol}) FILTER (WHERE pkg_family = 'curve'), 0) AS curve,
         COALESCE(SUM(${metricCol}) FILTER (WHERE pkg_family = 'fly'), 0) AS fly,
+        COALESCE(SUM(${metricCol}) FILTER (WHERE pkg_family = 'invoice'), 0) AS invoice,
         COALESCE(SUM(${metricCol}) FILTER (WHERE pkg_family = 'other'), 0) AS other_pkg
       FROM filtered WHERE day_et < $3::date GROUP BY day_et
     ),
@@ -251,6 +252,7 @@ function buildSummaryTimeOfDaySql(opts: {
         COALESCE(SUM(${metricCol}) FILTER (WHERE pkg_family = 'outright'), 0) AS outright,
         COALESCE(SUM(${metricCol}) FILTER (WHERE pkg_family = 'curve'), 0) AS curve,
         COALESCE(SUM(${metricCol}) FILTER (WHERE pkg_family = 'fly'), 0) AS fly,
+        COALESCE(SUM(${metricCol}) FILTER (WHERE pkg_family = 'invoice'), 0) AS invoice,
         COALESCE(SUM(${metricCol}) FILTER (WHERE pkg_family = 'other'), 0) AS other_pkg,
         COUNT(*) FILTER (WHERE is_block_any = TRUE)::int AS block_count,
         COALESCE(SUM(${metricCol}) FILTER (WHERE is_block_any = TRUE), 0) AS block_volume,
@@ -330,6 +332,7 @@ function buildSummaryRollingSql(opts: {
         COALESCE(SUM(${metricCol}) FILTER (WHERE pkg_family = 'outright'), 0) AS outright,
         COALESCE(SUM(${metricCol}) FILTER (WHERE pkg_family = 'curve'), 0) AS curve,
         COALESCE(SUM(${metricCol}) FILTER (WHERE pkg_family = 'fly'), 0) AS fly,
+        COALESCE(SUM(${metricCol}) FILTER (WHERE pkg_family = 'invoice'), 0) AS invoice,
         COALESCE(SUM(${metricCol}) FILTER (WHERE pkg_family = 'other'), 0) AS other_pkg
       FROM windowed WHERE window_kind = 'baseline' GROUP BY window_id
     ),
@@ -341,6 +344,7 @@ function buildSummaryRollingSql(opts: {
         COALESCE(SUM(${metricCol}) FILTER (WHERE pkg_family = 'outright'), 0) AS outright,
         COALESCE(SUM(${metricCol}) FILTER (WHERE pkg_family = 'curve'), 0) AS curve,
         COALESCE(SUM(${metricCol}) FILTER (WHERE pkg_family = 'fly'), 0) AS fly,
+        COALESCE(SUM(${metricCol}) FILTER (WHERE pkg_family = 'invoice'), 0) AS invoice,
         COALESCE(SUM(${metricCol}) FILTER (WHERE pkg_family = 'other'), 0) AS other_pkg,
         COUNT(*) FILTER (WHERE is_block_any = TRUE)::int AS block_count,
         COALESCE(SUM(${metricCol}) FILTER (WHERE is_block_any = TRUE), 0) AS block_volume,

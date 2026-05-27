@@ -749,6 +749,9 @@ class FixedRateBondsMDP(MarketDataProvider[_GenericPricable], LayeredCacheMixin)
                     mapping = {get_isin_from_cusip(c, "US")[2:]: c for c in alias_to_fetch.values()}
                     wide = wsj.ust_intraday_timeseries(mapping, show_tqdm=show_tqdm)
 
+                    if wide.empty:
+                        return out
+
                     est = pytz.timezone("America/New_York")
                     t_3pm = est.localize(datetime.datetime(timestamp.year, timestamp.month, timestamp.day, 15, 0, 0)).astimezone(pytz.UTC)
                     idx = wide.index
@@ -848,18 +851,22 @@ class FixedRateBondsMDP(MarketDataProvider[_GenericPricable], LayeredCacheMixin)
                     val_to_return="close",
                 )
                 for original, cusip in alias_to_cusip_to_fetch.items():
+                    if tv_df.empty or cusip not in tv_df.columns:
+                        continue
                     series = tv_df[cusip].dropna()
                     if series.empty:
-                        raise KeyError(f"No TradingView data for {cusip} on {as_of_date}")
+                        continue
 
                     if is_live_request:
                         ts = series.index[-1]
                         price = float(series.iloc[-1])
+                    elif not isinstance(series.index, pd.DatetimeIndex):
+                        continue
                     else:
                         idx = series.index
                         day_rows = series[idx.date == as_of_date]
                         if day_rows.empty:
-                            raise KeyError(f"No TradingView snapshot for {cusip} on {as_of_date}")
+                            continue
                         ts = day_rows.index[-1]
                         price = float(day_rows.iloc[-1])
 

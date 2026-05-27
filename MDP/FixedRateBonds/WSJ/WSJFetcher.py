@@ -452,8 +452,11 @@ class WSJFetcher(BaseFetcher):
 
         dict_df = {}
         for symbol, df in dfs:
-            if df is not None:
+            if df is not None and not df.empty and "Timestamp" in df.columns:
                 dict_df[wsj_ticker_keys[symbol]] = df
+
+        if not dict_df:
+            return pd.DataFrame()
 
         merge_dfs_on_column = lambda dfs_dict, on_column: reduce(lambda left, right: pd.merge(left, right, on=on_column, how="outer"), dfs_dict.values())
         df = merge_dfs_on_column(dict_df, "Timestamp").reset_index(drop=True).set_index("Timestamp")

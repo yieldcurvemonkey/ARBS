@@ -215,8 +215,11 @@ def fetch_cusip_prices_eod_timeseries_parallel(
     for cusip in tqdm.tqdm(cusips, desc="FETCHING CUSIPS..."):
         results.append(fetch_cusip_prices_eod_timeseries(cusip=cusip, start=start, end=end))
 
-    df = pd.concat(results, axis=1) if results else pd.DataFrame()
+    non_empty = [r for r in results if not r.empty]
+    df = pd.concat(non_empty, axis=1) if non_empty else pd.DataFrame()
     if not df.empty:
         df = df.sort_index()
 
+    if df.empty or not isinstance(df.index, pd.DatetimeIndex):
+        return df
     return df[(df.index.date >= start) & (df.index.date <= end)]

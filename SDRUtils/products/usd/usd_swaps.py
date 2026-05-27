@@ -257,6 +257,8 @@ def _build_invoice_swap_lookup(
 
     # Batch all contracts into ONE get_pricer call so the shared FixedRateBondsMDP
     # instance inside get_pricer reuses disk-cached CUSIPs across overlapping baskets.
+    # If the batch fails (one bad contract poisons the whole call), fall back to
+    # per-contract calls so working contracts still get pricers.
     all_contracts = [contract for _, contract in contract_root_pairs]
     contract_to_root = {contract: root for root, contract in contract_root_pairs}
     all_pricers: dict = {}
@@ -276,7 +278,20 @@ def _build_invoice_swap_lookup(
             )
             all_pricers.update(batch)
         except Exception:
-            pass
+            for sym in remaining:
+                try:
+                    single = ustf_mdp.get_pricer(
+                        request={
+                            "symbols": [sym],
+                            "timestamp": as_of,
+                            "usts_mdp_source": usts_src,
+                            "include_basket": True,
+                            "show_tqdm": False,
+                        }
+                    )
+                    all_pricers.update(single)
+                except Exception:
+                    pass
 
     for root, contract in contract_root_pairs:
         pricer = all_pricers.get(contract)
