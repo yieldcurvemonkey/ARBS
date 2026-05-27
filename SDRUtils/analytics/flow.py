@@ -43,7 +43,7 @@ def assign_trade_type(row: pd.Series) -> str:
         ``IMM``, ``FOMC``, ``MATCHED_MATURITY``, or ``INVOICE_SWAP``.
     """
     pkg = str(row.get("package_type", "")).upper()
-    if pkg in ("CURVE", "FLY", "INVOICE", "SPREADOVER"):
+    if pkg in ("CURVE", "FLY", "INVOICE", "SPREADOVER", "INVOICE_CALENDAR", "INVOICE_SWITCH"):
         return pkg
     # Composite package types from detect_sub_package_curve_fly (e.g.
     # "SPREADOVER_CURVE", "MATCHED_MATURITY_FLY") are passed through so

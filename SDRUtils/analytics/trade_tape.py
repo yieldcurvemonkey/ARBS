@@ -63,7 +63,7 @@ def _hour_to_session(hour: int) -> str:
 # Result cache versioning
 # ---------------------------------------------------------------------------
 
-TRADE_TAPE_CACHE_VERSION = "v7-offm-confidence"
+TRADE_TAPE_CACHE_VERSION = "v8-invoice-packages"
 DEFAULT_CACHE_DIR = os.path.join(
     os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
     "notebooks", "sdr", "_cache", "trade_tape",
@@ -1161,7 +1161,76 @@ class TradeTape(SDRAnalyzer):
                 return "/".join(cleaned)
 
             if invoice_label:
-                parts.append(invoice_label)
+                # Multi-leg invoice packages: combine both legs' tenors + tickers
+                # so the package-scope label reads e.g. "5Y/10Y TREASURY INVOICE FYD/TYA".
+                if (
+                    not leg_scope
+                    and trade_type in ("INVOICE_SWITCH", "INVOICE_CALENDAR")
+                ):
+                    legs = row.get("package_legs")
+                    _combined = False
+                    if legs is not None and not (isinstance(legs, float) and pd.isna(legs)):
+                        try:
+                            leg_ids = [str(x) for x in legs]
+                            leg_indices = [tid_to_idx[lid] for lid in leg_ids if lid in tid_to_idx]
+                            if len(leg_indices) >= 2:
+                                _leg_cols = ["invoice_swap_ticker", "tenor_years"]
+                                if "invoice_swap_contract" in df.columns:
+                                    _leg_cols.append("invoice_swap_contract")
+                                leg_data = df.loc[leg_indices, _leg_cols].copy()
+                                leg_data = leg_data.sort_values("tenor_years")
+                                tickers = [
+                                    str(t).strip().upper()
+                                    for t in leg_data["invoice_swap_ticker"]
+                                    if pd.notna(t) and str(t).strip().lower() not in ("", "nan", "none")
+                                ]
+                                if len(tickers) >= 2:
+                                    from Query.IRSwaps._CME_INVOICE_SWAP_TICKERS import (
+                                        _CME_INVOICE_SWAP_TICKERS as _INV_SPECS,
+                                        _INVOICE_SWAP_PRODUCT_NAMES as _INV_NAMES,
+                                    )
+                                    tenor_parts = []
+                                    for t in tickers:
+                                        spec = _INV_SPECS.get(t, {})
+                                        pname = _INV_NAMES.get(spec.get("root", ""), "")
+                                        tenor_parts.append(pname.replace("TREASURY INVOICE", "").strip() or t)
+
+                                    # Calendar spreads: append contract month to
+                                    # each ticker (e.g. "TYA-M2026/TYA-U2026").
+                                    if (
+                                        trade_type == "INVOICE_CALENDAR"
+                                        and "invoice_swap_contract" in leg_data.columns
+                                    ):
+                                        contracts = [
+                                            str(c).strip().upper()
+                                            for c in leg_data["invoice_swap_contract"]
+                                            if pd.notna(c) and str(c).strip().lower() not in ("", "nan", "none")
+                                        ]
+                                        if len(contracts) == len(tickers):
+                                            ticker_labels = []
+                                            for tkr, con in zip(tickers, contracts):
+                                                spec = _INV_SPECS.get(tkr, {})
+                                                root = spec.get("root", "")
+                                                mc = con[len(root):] if con.startswith(root) else con
+                                                if len(mc) >= 2 and mc[-2:].isdigit():
+                                                    mc = mc[:-2] + "20" + mc[-2:]
+                                                ticker_labels.append(f"{tkr}-{mc}")
+                                            combined_tickers = "/".join(ticker_labels)
+                                        else:
+                                            combined_tickers = "/".join(tickers)
+                                    else:
+                                        combined_tickers = "/".join(tickers)
+
+                                    parts.append(
+                                        f"{'/'.join(tenor_parts)} TREASURY INVOICE {combined_tickers}"
+                                    )
+                                    _combined = True
+                        except (TypeError, ValueError, KeyError):
+                            pass
+                    if not _combined:
+                        parts.append(invoice_label)
+                else:
+                    parts.append(invoice_label)
             elif _is_fomc_trade:
                 if (_is_curvey(trade_type) or _is_flyey(trade_type)) and not leg_as_outright:
                     leg_labels = _fomc_pkg_from_legs()
@@ -1257,10 +1326,11 @@ class TradeTape(SDRAnalyzer):
             elif trade_type == "SPREADOVER":
                 parts.append("Spreadover")
             elif trade_type == "INVOICE":
-                # Invoice swap: structure is "Outright" (SDR sees the IRS leg
-                # alone). The INVOICE package type is surfaced via the PKG
-                # column / package_type field, not the label text.
                 parts.append("Outright")
+            elif trade_type == "INVOICE_CALENDAR":
+                parts.append("Calendar")
+            elif trade_type == "INVOICE_SWITCH":
+                parts.append("Switch")
             else:
                 # Trade is a package leg per SDR reporting (Package indicator=True)
                 # but no peer leg was paired by our detectors (curve/fly/MMS). Labelling

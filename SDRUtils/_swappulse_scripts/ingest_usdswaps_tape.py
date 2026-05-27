@@ -848,7 +848,7 @@ def _structural_risk(
     # Composite package types (e.g. "SPREADOVER_CURVE", "MATCHED_MATURITY_FLY")
     # from detect_sub_package_curve_fly follow the same headline convention
     # as their base CURVE / FLY — match by suffix.
-    if tt == "CURVE" or tt.endswith("_CURVE"):
+    if tt == "CURVE" or tt.endswith("_CURVE") or tt in ("INVOICE_SWITCH", "INVOICE_CALENDAR"):
         return _num_or_none(risk.abs().max(skipna=True))
     if tt == "FLY" or tt.endswith("_FLY"):
         valid_mask = risk.notna() & tenor_years.notna()
@@ -971,7 +971,11 @@ def _compute_leg_summary(
     opa = pd.to_numeric(g.get("other_payment_amount"), errors="coerce")
 
     kind = f"{package_type or ''} {trade_type or ''}".upper()
-    is_curve = bool(_is_curvey(package_type) or _is_curvey(trade_type))
+    _invoice_multi = {"INVOICE_SWITCH", "INVOICE_CALENDAR"}
+    is_curve = bool(
+        _is_curvey(package_type) or _is_curvey(trade_type)
+        or package_type in _invoice_multi or trade_type in _invoice_multi
+    )
     is_fly = bool(_is_flyey(package_type) or _is_flyey(trade_type))
 
     if not is_curve and not is_fly:
@@ -1646,6 +1650,7 @@ def run_ingest(
     end_date: Optional[str] = None,
     use_cache: bool = True,
     cache_path: Optional[str] = None,
+    pre_classified: Optional[pd.DataFrame] = None,
 ) -> int:
     """Full pipeline: load classified df → TradeTape.compute() → write → record run.
 
@@ -1660,6 +1665,9 @@ def run_ingest(
     otherwise the tape stage reads stale pre-fix classifications while the
     classification stage writes fresh parquet elsewhere. Defaults to the shared
     resolver so both stages land on the same directory by default.
+
+    ``pre_classified``: when provided, skip re-classification entirely and use
+    this DataFrame directly. Eliminates the double-classify race in service mode.
     """
     from datetime import timedelta
 
@@ -1682,27 +1690,30 @@ def run_ingest(
     ensure_schema(engine)
     run_id = _start_run(engine, as_of_date=start.date().isoformat())
     try:
-        # load_usd_swaps(return_raw=True) can fail inside grab_sdr_trades
-        # when the upstream SDR builder returns an empty frame for the day.
-        # raw_df is optional for TradeTape (only used for cross-day lifecycle),
-        # so fall back to classified-only on raw-fetch failure.
-        try:
-            classified, raw_df = load_usd_swaps(
-                start=start, end=end, cache_path=resolved_cache_path, return_raw=True
-            )
-        except Exception as raw_err:
-            import warnings
-
-            warnings.warn(
-                f"load_usd_swaps raw fetch failed ({raw_err}); "
-                "continuing with classified-only",
-            )
-            classified = load_usd_swaps(
-                start=start, end=end, cache_path=resolved_cache_path, return_raw=False
-            )
+        if pre_classified is not None:
+            classified = pre_classified
             raw_df = None
+        else:
+            # load_usd_swaps(return_raw=True) can fail inside grab_sdr_trades
+            # when the upstream SDR builder returns an empty frame for the day.
+            # raw_df is optional for TradeTape (only used for cross-day lifecycle),
+            # so fall back to classified-only on raw-fetch failure.
+            try:
+                classified, raw_df = load_usd_swaps(
+                    start=start, end=end, cache_path=resolved_cache_path, return_raw=True
+                )
+            except Exception as raw_err:
+                import warnings
+
+                warnings.warn(
+                    f"load_usd_swaps raw fetch failed ({raw_err}); "
+                    "continuing with classified-only",
+                )
+                classified = load_usd_swaps(
+                    start=start, end=end, cache_path=resolved_cache_path, return_raw=False
+                )
+                raw_df = None
         cache_hit = False
-        # Heuristic: if cache file is already on disk, TradeTape will hit it.
         tape = TradeTape(df=classified, raw_df=raw_df).compute(use_cache=use_cache)
         tape = attach_manual_links(engine, tape)
         stats = write_tape_rows(engine, tape, as_of_date=start.date().isoformat())

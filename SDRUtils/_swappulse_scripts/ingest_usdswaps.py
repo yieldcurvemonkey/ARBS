@@ -973,6 +973,7 @@ def build_classification_dataframe(
     cache_path: str,
     ignore_cache: bool = False,
     only_newt: bool = True,
+    use_incremental: bool = False,
 ) -> pd.DataFrame:
     """
     Build the USD swap classification DataFrame at leg grain.
@@ -995,6 +996,7 @@ def build_classification_dataframe(
         detect_mac=True,
         detect_spreadover=True,
         only_newt=only_newt,
+        use_incremental=use_incremental,
     )
     return df
 
@@ -1294,7 +1296,10 @@ def ingest_incremental_once(
     force_fetch_end_of_day: bool = False,
     force_fetch_full_market_day: bool = False,
     market_timezone: str = "America/New_York",
-) -> None:
+    use_incremental: bool = False,
+    prev_trade_count: int = 0,
+    skip_classification_upsert: bool = False,
+) -> Optional[pd.DataFrame]:
     if initial_lookback_minutes < 0:
         raise ValueError(f"initial_lookback_minutes must be >= 0, got {initial_lookback_minutes}")
     if overlap_seconds < 0:
@@ -1343,6 +1348,7 @@ def ingest_incremental_once(
         cache_path=cache_path,
         ignore_cache=ignore_cache,
         only_newt=only_newt,
+        use_incremental=use_incremental,
     )
 
     if raw_df.empty:
@@ -1356,9 +1362,25 @@ def ingest_incremental_once(
                 packages_written=0,
                 legs_written=0,
             )
-        return
+        return None
 
     print(f"Found {len(raw_df)} trades in range")
+
+    if prev_trade_count > 0 and len(raw_df) == prev_trade_count:
+        print(f"  Trade count unchanged ({prev_trade_count}); skipping transform+upsert.")
+        record_ingestion_run(
+            engine, start=start, end=end,
+            rows_raw=len(raw_df), packages_written=0, legs_written=0,
+        )
+        return raw_df
+
+    if skip_classification_upsert:
+        print(f"  Deferring classification upsert (tape gets pre_classified directly).")
+        record_ingestion_run(
+            engine, start=start, end=end,
+            rows_raw=len(raw_df), packages_written=0, legs_written=0,
+        )
+        return raw_df
 
     if dry_run:
         print("Dry run enabled; skipping database writes.")
@@ -1366,7 +1388,7 @@ def ingest_incremental_once(
         packages_df = build_packages_dataframe(cleaned)
         legs_df = build_legs_dataframe(cleaned)
         print_summary(raw_df, packages_df, legs_df, 0, 0)
-        return
+        return raw_df
 
     packages_df, legs_df, packages_written, legs_written = upsert_transformed_frames(raw_df, engine)
     record_ingestion_run(
@@ -1384,6 +1406,7 @@ def ingest_incremental_once(
             print(f"Cleaned up {orphans_deleted} orphaned packages")
 
     print_summary(raw_df, packages_df, legs_df, packages_written, legs_written)
+    return raw_df
 
 
 def main_incremental(

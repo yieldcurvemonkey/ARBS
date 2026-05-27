@@ -168,6 +168,16 @@ def classify_usd_swap_trade(
     )
 
 
+_INVOICE_LOOKUP_CACHE: dict[datetime.date, pd.DataFrame] = {}
+_TRADE_CLASSIFICATION_CACHE: dict[str, dict] = {}
+
+
+def clear_service_caches() -> None:
+    """Clear in-process caches. Called on hourly full reclassification."""
+    _INVOICE_LOOKUP_CACHE.clear()
+    _TRADE_CLASSIFICATION_CACHE.clear()
+
+
 def detect_invoice_swaps(
     package_df: pd.DataFrame,
     execution_col: str = "execution_timestamp",
@@ -222,43 +232,60 @@ def _build_invoice_swap_lookup(
     show_tqdm: bool = True,
 ) -> pd.DataFrame:
     """Build a unique lookup table: (delivery_date, ctd_maturity) -> invoice ticker."""
-    from definitions.USTFutures import front_month
+    cache_key = as_of if isinstance(as_of, datetime.date) else pd.Timestamp(as_of).date()
+    if cache_key in _INVOICE_LOOKUP_CACHE:
+        print(f"  [CACHE HIT] Invoice swap lookup for {cache_key}")
+        return _INVOICE_LOOKUP_CACHE[cache_key]
+
+    from definitions.USTFutures import back_months, front_month
     from MDP.USTFutures.USTFuturesMDP import USTFuturesMDP
 
     ustf_mdp = USTFuturesMDP(source="BARCHART_USTF-RL")
     roots = sorted({spec["root"] for spec in _CME_INVOICE_SWAP_TICKERS.values()})
     invoice_specs = []
-    iterator = tqdm(roots, desc="FETCHING DELIVERY BASKETS...") if show_tqdm else roots
-    for root in iterator:
-        contract = front_month(as_of, root)
 
-        # One pricer fetch covers both needs: the (start, end) delivery window
-        # AND the CTD basket. Previously this function called
-        # ``get_delivery_basket`` AND ``get_pricer(include_basket=True)``, which
-        # hydrates the cash-bond basket twice per root (each call rebuilds
-        # ``FixedRateBondsMDP.get_data`` for ~20-30 CUSIPs even on a cache hit).
-        pricer = None
-        for usts_src in ("USTS_FEDINVEST_WSJ_LIVE-RL", "USTS_TRADINGVIEW_LIVE-RL"):
-            try:
-                pricer = ustf_mdp.get_pricer(
-                    request={
-                        "symbols": [contract],
-                        "timestamp": as_of,
-                        "usts_mdp_source": usts_src,
-                        "include_basket": True,
-                    }
-                )[contract]
-                break
-            except Exception:
-                continue
+    contract_root_pairs: list[tuple[str, str]] = []
+    for root in roots:
+        fm = front_month(as_of, root)
+        contract_root_pairs.append((root, fm))
+        try:
+            bm_list = back_months(as_of, root, count=1)
+            if bm_list:
+                contract_root_pairs.append((root, bm_list[0]))
+        except Exception:
+            pass
+
+    # Batch all contracts into ONE get_pricer call so the shared FixedRateBondsMDP
+    # instance inside get_pricer reuses disk-cached CUSIPs across overlapping baskets.
+    all_contracts = [contract for _, contract in contract_root_pairs]
+    contract_to_root = {contract: root for root, contract in contract_root_pairs}
+    all_pricers: dict = {}
+    for usts_src in ("USTS_FEDINVEST_WSJ_LIVE-RL", "USTS_TRADINGVIEW_LIVE-RL"):
+        remaining = [c for c in all_contracts if c not in all_pricers]
+        if not remaining:
+            break
+        try:
+            batch = ustf_mdp.get_pricer(
+                request={
+                    "symbols": remaining,
+                    "timestamp": as_of,
+                    "usts_mdp_source": usts_src,
+                    "include_basket": True,
+                    "show_tqdm": show_tqdm,
+                }
+            )
+            all_pricers.update(batch)
+        except Exception:
+            pass
+
+    for root, contract in contract_root_pairs:
+        pricer = all_pricers.get(contract)
         if pricer is None:
             continue
 
         try:
             delivery_start, delivery_end = pricer.delivery_dates()
         except Exception:
-            # Older pricer backends without delivery_dates — skip rather than
-            # fall back to a second round-trip. Upgrade the backend if needed.
             continue
 
         for indicator in "ABCDEF":
@@ -269,7 +296,6 @@ def _build_invoice_swap_lookup(
             try:
                 ctd_pricer = pricer.ctd(indicator)
             except Exception:
-                # Invoice enrichment is best-effort and must never break ingestion.
                 continue
             if ctd_pricer is None:
                 continue
@@ -278,15 +304,23 @@ def _build_invoice_swap_lookup(
                     "invoice_swap_delivery_date": delivery_date,
                     "invoice_swap_ctd_maturity": ctd_pricer.maturity_date(),
                     "invoice_swap_ticker": ticker,
+                    "invoice_swap_contract": contract,
+                    "invoice_swap_root": root,
                 }
             )
 
     if not invoice_specs:
-        return pd.DataFrame(columns=["invoice_swap_delivery_date", "invoice_swap_ctd_maturity", "invoice_swap_ticker"])
+        empty = pd.DataFrame(columns=[
+            "invoice_swap_delivery_date", "invoice_swap_ctd_maturity",
+            "invoice_swap_ticker", "invoice_swap_contract", "invoice_swap_root",
+        ])
+        _INVOICE_LOOKUP_CACHE[cache_key] = empty
+        return empty
 
     lookup = pd.DataFrame(invoice_specs).drop_duplicates(subset=["invoice_swap_delivery_date", "invoice_swap_ctd_maturity"], keep="first")
     lookup["invoice_swap_delivery_date"] = pd.to_datetime(lookup["invoice_swap_delivery_date"])
     lookup["invoice_swap_ctd_maturity"] = pd.to_datetime(lookup["invoice_swap_ctd_maturity"])
+    _INVOICE_LOOKUP_CACHE[cache_key] = lookup
     return lookup
 
 
@@ -336,9 +370,39 @@ def _apply_invoice_swap_lookup(
     maturity_norm_col = f"__{maturity_col}_norm"
     out[maturity_norm_col] = out[maturity_col].dt.normalize()
 
-    df_invoice_subset = lookup[["invoice_swap_delivery_date", "invoice_swap_ctd_maturity", "invoice_swap_ticker"]].rename(
-        columns={"invoice_swap_ticker": "__invoice_swap_ticker_new"}
+    rename_map = {"invoice_swap_ticker": "__invoice_swap_ticker_new"}
+    subset_cols = ["invoice_swap_delivery_date", "invoice_swap_ctd_maturity", "invoice_swap_ticker"]
+    if "invoice_swap_contract" in lookup.columns:
+        subset_cols.append("invoice_swap_contract")
+        rename_map["invoice_swap_contract"] = "__invoice_swap_contract_new"
+    if "invoice_swap_root" in lookup.columns:
+        subset_cols.append("invoice_swap_root")
+        rename_map["invoice_swap_root"] = "__invoice_swap_root_new"
+
+    # Expand lookup with ±1 day tolerance on both delivery date and CTD
+    # maturity.  SDR effective dates can lag the exact CBOT delivery date
+    # by a day (T+1 settlement, weekend adjustment, etc.).  The lookup is
+    # small (~72 rows) so the 9x expansion is negligible.
+    _one_day = pd.Timedelta(days=1)
+    expanded_rows: list[dict] = []
+    for _, row in lookup[subset_cols].iterrows():
+        base = row.to_dict()
+        for d_off in (-1, 0, 1):
+            for m_off in (-1, 0, 1):
+                r = base.copy()
+                r["invoice_swap_delivery_date"] = row["invoice_swap_delivery_date"] + d_off * _one_day
+                r["invoice_swap_ctd_maturity"] = row["invoice_swap_ctd_maturity"] + m_off * _one_day
+                r["_offset_days"] = abs(d_off) + abs(m_off)
+                expanded_rows.append(r)
+    expanded = pd.DataFrame(expanded_rows)
+    expanded = expanded.sort_values("_offset_days", kind="mergesort")
+    expanded = expanded.drop_duplicates(
+        subset=["invoice_swap_delivery_date", "invoice_swap_ctd_maturity"],
+        keep="first",
     )
+    expanded = expanded.drop(columns=["_offset_days"])
+
+    df_invoice_subset = expanded.rename(columns=rename_map)
     df_merged = out.merge(
         df_invoice_subset,
         left_on=[effective_col, maturity_norm_col],
@@ -350,6 +414,16 @@ def _apply_invoice_swap_lookup(
 
     # Write ticker on every merge hit — the spec match itself is the signal.
     df_merged.loc[hit_mask, output_col] = df_merged.loc[hit_mask, "__invoice_swap_ticker_new"]
+
+    # Propagate contract symbol and root for downstream package detection.
+    if "__invoice_swap_contract_new" in df_merged.columns:
+        if "invoice_swap_contract" not in df_merged.columns:
+            df_merged["invoice_swap_contract"] = None
+        df_merged.loc[hit_mask, "invoice_swap_contract"] = df_merged.loc[hit_mask, "__invoice_swap_contract_new"]
+    if "__invoice_swap_root_new" in df_merged.columns:
+        if "invoice_swap_root" not in df_merged.columns:
+            df_merged["invoice_swap_root"] = None
+        df_merged.loc[hit_mask, "invoice_swap_root"] = df_merged.loc[hit_mask, "__invoice_swap_root_new"]
 
     # Promote matched-maturity confidence + flag to HIGH / True on ticker hit.
     if hit_mask.any():
@@ -370,10 +444,18 @@ def _apply_invoice_swap_lookup(
         if "trade_type" not in df_merged.columns:
             df_merged["trade_type"] = "OUTRIGHT"
         df_merged.loc[hit_mask, "trade_type"] = "INVOICE"
+        # Clear stale package assignments from prior detectors (curve/fly)
+        # so detect_invoice_packages can re-pair these trades.
+        if "package_id" in df_merged.columns:
+            df_merged.loc[hit_mask, "package_id"] = None
+        if "package_legs" in df_merged.columns:
+            df_merged.loc[hit_mask, "package_legs"] = None
 
     cols_to_drop = [
         maturity_norm_col,
         "__invoice_swap_ticker_new",
+        "__invoice_swap_contract_new",
+        "__invoice_swap_root_new",
         "invoice_swap_delivery_date",
         "invoice_swap_ctd_maturity",
         "invoice_swap_delivery_date_y",
@@ -666,6 +748,135 @@ def detect_spreadovers(package_df: pd.DataFrame):
     return copy_df
 
 
+def detect_invoice_packages(
+    package_df: pd.DataFrame,
+    *,
+    time_window_seconds: int = 120,
+    pv01_tolerance: float = 0.20,
+) -> pd.DataFrame:
+    """Detect INVOICE_CALENDAR and INVOICE_SWITCH multi-leg packages.
+
+    Runs after detect_invoice_swaps has tagged individual trades.
+
+    INVOICE_CALENDAR: same futures root, different contract months (roll trade).
+    INVOICE_SWITCH: different futures roots, same contract month (tenor switch).
+
+    Per CME spec, calendar spreads roll invoice exposure in a given tenor from
+    one contract month to the next; switch spreads combine invoice exposure
+    across Treasury curve points within the same contract month.
+    """
+    out = package_df.copy()
+
+    if "invoice_swap_root" not in out.columns or "invoice_swap_contract" not in out.columns:
+        return out
+
+    is_invoice = out.get("package_type", pd.Series(dtype=str)).astype(str).str.upper() == "INVOICE"
+    not_paired = out.get("package_legs", pd.Series(dtype=object)).isna()
+    pv01_vals = pd.to_numeric(out.get("estimated_pv01"), errors="coerce").fillna(0)
+    has_pv01 = pv01_vals > 0
+
+    cand_mask = is_invoice & not_paired & has_pv01
+    if cand_mask.sum() < 2:
+        return out
+
+    cand = out.loc[cand_mask].copy()
+    cand["_ts"] = pd.to_datetime(cand["execution_timestamp"], errors="coerce", utc=True)
+    cand = cand.sort_values("_ts", kind="mergesort")
+
+    def _contract_month(root, contract):
+        c, r = str(contract).upper(), str(root).upper()
+        return c[len(r):] if c.startswith(r) else c
+
+    cand["_contract_month"] = [
+        _contract_month(r, c)
+        for r, c in zip(cand["invoice_swap_root"], cand["invoice_swap_contract"])
+    ]
+
+    indices = cand.index.tolist()
+    n = len(indices)
+    matched: set = set()
+    td_window = pd.Timedelta(seconds=time_window_seconds)
+
+    if "package_id" not in out.columns:
+        out["package_id"] = None
+    if "package_legs" not in out.columns:
+        out["package_legs"] = None
+
+    pkg_counter = 0
+
+    for ii in range(n):
+        idx_i = indices[ii]
+        if idx_i in matched:
+            continue
+
+        ts_i = cand.at[idx_i, "_ts"]
+        pv01_i = float(pv01_vals.at[idx_i])
+        root_i = str(cand.at[idx_i, "invoice_swap_root"])
+        contract_i = str(cand.at[idx_i, "invoice_swap_contract"])
+        month_i = cand.at[idx_i, "_contract_month"]
+        plat_i = str(cand.at[idx_i, "platform_identifier"]) if "platform_identifier" in cand.columns else ""
+        clr_i = str(cand.at[idx_i, "cleared"]) if "cleared" in cand.columns else ""
+        tid_i = str(cand.at[idx_i, "trade_id"])
+
+        best_j = None
+        best_type: Optional[str] = None
+        best_rel = 1e9
+
+        for jj in range(ii + 1, n):
+            idx_j = indices[jj]
+            if idx_j in matched:
+                continue
+
+            ts_j = cand.at[idx_j, "_ts"]
+            if (ts_j - ts_i) > td_window:
+                break
+
+            if "platform_identifier" in cand.columns and plat_i != str(cand.at[idx_j, "platform_identifier"]):
+                continue
+            if "cleared" in cand.columns and clr_i != str(cand.at[idx_j, "cleared"]):
+                continue
+
+            pv01_j = float(pv01_vals.at[idx_j])
+            avg = 0.5 * (pv01_i + pv01_j)
+            if avg <= 0:
+                continue
+            rel = abs(pv01_i - pv01_j) / avg
+            if rel > pv01_tolerance:
+                continue
+
+            root_j = str(cand.at[idx_j, "invoice_swap_root"])
+            contract_j = str(cand.at[idx_j, "invoice_swap_contract"])
+            month_j = cand.at[idx_j, "_contract_month"]
+
+            pkg_type: Optional[str] = None
+            if root_i == root_j and contract_i != contract_j:
+                pkg_type = "INVOICE_CALENDAR"
+            elif root_i != root_j and month_i == month_j:
+                pkg_type = "INVOICE_SWITCH"
+
+            if pkg_type is not None and rel < best_rel:
+                best_j = idx_j
+                best_type = pkg_type
+                best_rel = rel
+
+        if best_j is not None and best_type is not None:
+            matched.add(idx_i)
+            matched.add(best_j)
+            pkg_counter += 1
+            tid_j = str(cand.at[best_j, "trade_id"])
+            legs = sorted([tid_i, tid_j])
+            pid = f"{best_type}_{pkg_counter}_{min(legs)}"
+
+            for idx in (idx_i, best_j):
+                out.at[idx, "package_type"] = best_type
+                out.at[idx, "package_id"] = pid
+                out.at[idx, "package_legs"] = legs
+                if "trade_type" in out.columns:
+                    out.at[idx, "trade_type"] = best_type
+
+    return out
+
+
 def _coerce_numeric_like(series: pd.Series) -> pd.Series:
     if pd.api.types.is_numeric_dtype(series):
         return pd.to_numeric(series, errors="coerce")
@@ -781,11 +992,15 @@ def _prepare_cache_dataframe_for_arrow(df: pd.DataFrame) -> pd.DataFrame:
         "fixed_rate",
         "estimated_pv01",
         "package_transaction_spread",
+        "package_transaction_price",
         "other_payment_amount",
     ]
     for col in numeric_columns:
         if col in out.columns:
             out[col] = _coerce_numeric_like(out[col])
+    for col in ("invoice_swap_contract", "invoice_swap_root"):
+        if col in out.columns:
+            out[col] = out[col].where(out[col].notna(), other=None).astype("object")
     return out
 
 
@@ -938,6 +1153,7 @@ class USD_SwapProduct(USDProductBase):
         merge_package_legs: bool = False,
         use_v2_classification: bool = False,
         return_raw: bool = False,
+        use_incremental: bool = False,
         **kwargs: Any,
     ):
         sdr = SDRDataBuilder(cache_path=cache_path, show_tqdm=True)
@@ -1046,16 +1262,49 @@ class USD_SwapProduct(USDProductBase):
 
                 day_df = raw_sdr_trades_df[raw_sdr_trades_df["_execution_date"] == exec_date]
 
-                if use_v2_classification:
-                    classifications = _classify_messages_v2(
-                        day_df, exec_date=exec_date, curve_source=curve_source, **kwargs,
-                    )
+                # --- Incremental classification: reuse cached per-trade results ---
+                all_trade_ids = set(day_df[TRADE_ID].astype(str))
+                cached_ids = all_trade_ids & set(_TRADE_CLASSIFICATION_CACHE.keys()) if use_incremental else set()
+                new_ids = all_trade_ids - cached_ids
+
+                if use_incremental and not new_ids:
+                    classifications_df = pd.DataFrame([
+                        _TRADE_CLASSIFICATION_CACHE[tid]
+                        for tid in day_df[TRADE_ID].astype(str)
+                        if tid in _TRADE_CLASSIFICATION_CACHE
+                    ])
+                    print(f"  Incremental: {len(cached_ids)} cached, 0 new trades for {exec_date}")
                 else:
-                    classifications = self.classify_messages(
-                        day_df,
-                        curve=mdp.get_pricer(dict(curve_name="USD-SOFR-1D", timestamp=exec_date)),
-                    )
-                classifications_df = classifications_to_dataframe(classifications)
+                    if use_incremental and cached_ids:
+                        classify_df = day_df[day_df[TRADE_ID].astype(str).isin(new_ids)]
+                        print(f"  Incremental: {len(cached_ids)} cached, {len(new_ids)} new trades for {exec_date}")
+                    else:
+                        classify_df = day_df
+
+                    if use_v2_classification:
+                        classifications = _classify_messages_v2(
+                            classify_df, exec_date=exec_date, curve_source=curve_source, **kwargs,
+                        )
+                    else:
+                        classifications = self.classify_messages(
+                            classify_df,
+                            curve=mdp.get_pricer(dict(curve_name="USD-SOFR-1D", timestamp=exec_date)),
+                        )
+                    new_classifications_df = classifications_to_dataframe(classifications)
+
+                    if not new_classifications_df.empty:
+                        for _, row in new_classifications_df.iterrows():
+                            _TRADE_CLASSIFICATION_CACHE[str(row["trade_id"])] = row.to_dict()
+
+                    if use_incremental and cached_ids:
+                        cached_rows = [
+                            _TRADE_CLASSIFICATION_CACHE[tid]
+                            for tid in day_df[TRADE_ID].astype(str)
+                            if tid in _TRADE_CLASSIFICATION_CACHE
+                        ]
+                        classifications_df = pd.DataFrame(cached_rows) if cached_rows else new_classifications_df
+                    else:
+                        classifications_df = new_classifications_df
                 if not classifications_df.empty:
                     classifications_df[TRADE_ID] = classifications_df[TRADE_ID].astype("string")
                     day_df = day_df.copy()
@@ -1131,6 +1380,7 @@ class USD_SwapProduct(USDProductBase):
                     package_df = detect_mms_trades_df(package_df)
                 if detect_invoice:
                     package_df = detect_invoice_swaps(package_df)
+                    package_df = detect_invoice_packages(package_df)
                 if detect_mac:
                     package_df = detect_mac_swaps(package_df)
                 if detect_spreadover:
@@ -1191,6 +1441,7 @@ __all__ = [
     "new_usd_swap_trades",
     "is_usd_swap",
     "detect_invoice_swaps",
+    "detect_invoice_packages",
     "detect_mac_swaps",
     "detect_spreadovers",
     "_is_round_notional",

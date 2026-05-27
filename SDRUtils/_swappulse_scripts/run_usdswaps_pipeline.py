@@ -248,6 +248,10 @@ def cmd_incremental(args: argparse.Namespace) -> int:
 # ---------------------------------------------------------------------------
 
 
+_FULL_RECLASSIFY_INTERVAL = 3600  # seconds between full reclassifications
+_CLEANUP_INTERVAL = 3600  # seconds between orphan cleanup runs
+
+
 def cmd_service(args: argparse.Namespace) -> int:
     # Reuse ingest_usdswaps' private window helpers to stay consistent.
     parse_hhmm = ingest_usdswaps._parse_hhmm_to_minutes
@@ -284,6 +288,9 @@ def cmd_service(args: argparse.Namespace) -> int:
     print(f"  Initial lookback (min):  {args.initial_lookback_minutes}")
     print(f"  Overlap (sec):           {args.overlap_seconds}")
     print(f"  Tape refresh per cycle:  {not args.skip_tape}")
+    print(f"  Incremental mode:        enabled")
+    print(f"  Full reclassify interval: {_FULL_RECLASSIFY_INTERVAL}s")
+    print(f"  Cleanup interval:        {_CLEANUP_INTERVAL}s")
     if args.smart_intervals:
         print("  Smart intervals:         enabled")
         print(f"  Active interval (sec):   {args.active_interval_seconds}")
@@ -298,6 +305,12 @@ def cmd_service(args: argparse.Namespace) -> int:
     if args.max_iterations:
         print(f"  Max iterations:          {args.max_iterations}")
 
+    # Service state for incremental optimization
+    last_full_reclassify: float = 0.0  # monotonic time of last full reclassify
+    last_cleanup: float = 0.0  # monotonic time of last orphan cleanup
+    prev_classified_df: Optional[pd.DataFrame] = None
+    prev_trade_count: int = 0
+
     iteration = 0
     while True:
         iteration += 1
@@ -305,19 +318,36 @@ def cmd_service(args: argparse.Namespace) -> int:
         cycle_mono = time.monotonic()
         _banner(f"Service cycle {iteration} @ {cycle_wall.isoformat()}")
 
+        # Determine if this cycle should do a full reclassification
+        since_full = cycle_mono - last_full_reclassify
+        do_full = (iteration == 1) or (since_full >= _FULL_RECLASSIFY_INTERVAL)
+        do_cleanup = (iteration == 1) or ((cycle_mono - last_cleanup) >= _CLEANUP_INTERVAL)
+
+        if do_full:
+            from SDRUtils.products.usd.usd_swaps import clear_service_caches
+            clear_service_caches()
+            print(f"  [FULL] Clearing caches, full reclassification")
+            last_full_reclassify = cycle_mono
+
+        use_incremental = not do_full and (prev_classified_df is not None)
+
+        classified_df = None
         try:
-            ingest_usdswaps.ingest_incremental_once(
+            classified_df = ingest_usdswaps.ingest_incremental_once(
                 engine,
                 cache_path=cache_path,
-                ignore_cache=args.ignore_cache,
+                ignore_cache=args.ignore_cache if do_full else False,
                 only_newt=args.only_newt,
                 dry_run=args.dry_run,
-                cleanup_orphans=not args.no_cleanup_orphans,
+                cleanup_orphans=do_cleanup,
                 initial_lookback_minutes=args.initial_lookback_minutes,
                 overlap_seconds=args.overlap_seconds,
                 force_fetch_end_of_day=True,
                 force_fetch_full_market_day=True,
                 market_timezone=args.market_timezone,
+                use_incremental=use_incremental,
+                prev_trade_count=0 if do_full else prev_trade_count,
+                skip_classification_upsert=not do_full,
             )
         except Exception as exc:
             print(f"Classification cycle {iteration} failed: {exc}")
@@ -325,21 +355,35 @@ def cmd_service(args: argparse.Namespace) -> int:
             if args.stop_on_error:
                 raise
 
+        if do_cleanup:
+            last_cleanup = cycle_mono
+
+        new_trade_count = len(classified_df) if classified_df is not None else 0
+        has_new_trades = (classified_df is not None) and (new_trade_count != prev_trade_count)
+
+        if classified_df is not None:
+            prev_classified_df = classified_df
+            prev_trade_count = new_trade_count
+
         if not args.dry_run and not args.skip_tape:
-            today = _today_utc()
-            try:
-                ingest_usdswaps_tape.run_ingest(
-                    pg_url=resolved_pg_url,
-                    start_date=today.isoformat(),
-                    end_date=today.isoformat(),
-                    use_cache=not args.no_tape_cache,
-                    cache_path=cache_path,
-                )
-            except Exception as exc:
-                print(f"Tape cycle {iteration} failed: {exc}")
-                traceback.print_exc()
-                if args.stop_on_error:
-                    raise
+            if classified_df is not None and (has_new_trades or do_full):
+                today = _today_utc()
+                try:
+                    ingest_usdswaps_tape.run_ingest(
+                        pg_url=resolved_pg_url,
+                        start_date=today.isoformat(),
+                        end_date=today.isoformat(),
+                        use_cache=not args.no_tape_cache,
+                        cache_path=cache_path,
+                        pre_classified=classified_df,
+                    )
+                except Exception as exc:
+                    print(f"Tape cycle {iteration} failed: {exc}")
+                    traceback.print_exc()
+                    if args.stop_on_error:
+                        raise
+            elif not has_new_trades and not do_full:
+                print("  No new trades since last cycle; skipping tape rebuild.")
 
         if args.max_iterations is not None and iteration >= args.max_iterations:
             print("Reached max iterations; exiting service loop.")

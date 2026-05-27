@@ -693,6 +693,10 @@ class USTFuturesMDP(MarketDataProvider[InstrumentLike], LayeredCacheMixin):
         core_ts_dt = None if (use_live or not self._core_source_enabled(self.source)) else self._canonical_core_timestamp(timestamp)
         resolved_symbols = [self._resolve_contract_symbol(sym, ts_dt) for sym in symbols]
 
+        _shared_usts_mdp = None
+        if include_basket:
+            _shared_usts_mdp = FixedRateBondsMDP(source=usts_mdp_source)
+
         with self:
             out: Dict[str, InstrumentLike] = {}
             missing: List[str] = []
@@ -706,6 +710,7 @@ class USTFuturesMDP(MarketDataProvider[InstrumentLike], LayeredCacheMixin):
                             basket_data = self.get_delivery_basket(
                                 as_of=as_of_date,
                                 symbol=sym,
+                                usts_mdp=_shared_usts_mdp,
                                 usts_mdp_source=usts_mdp_source,
                                 source=basket_source,
                             )
@@ -742,6 +747,7 @@ class USTFuturesMDP(MarketDataProvider[InstrumentLike], LayeredCacheMixin):
                         basket_data = self.get_delivery_basket(
                             as_of=as_of_date,
                             symbol=sym,
+                            usts_mdp=_shared_usts_mdp,
                             usts_mdp_source=usts_mdp_source,
                             source=basket_source,
                         )
@@ -800,6 +806,7 @@ class USTFuturesMDP(MarketDataProvider[InstrumentLike], LayeredCacheMixin):
                         basket_data = self.get_delivery_basket(
                             as_of=as_of_date,
                             symbol=sym,
+                            usts_mdp=_shared_usts_mdp,
                             usts_mdp_source=usts_mdp_source,
                             source=basket_source,
                         )

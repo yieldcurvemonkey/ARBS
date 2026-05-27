@@ -75,6 +75,7 @@ export function MarketOverviewView({ metric, period, lookbackDays, textFilter }:
             <VenueSplitPanel idb={data.venueSplit.idb} custy={data.venueSplit.custy} />
             <IntradayPaceChart seasonality={data.intradayCurve} metric={metric} />
           </div>
+          <IntradayBarChart seasonality={data.intradayCurve} metric={metric} />
           <TenorDistributionChart entries={data.tenorDistribution} metric={metric} />
         </>
       )}
@@ -526,7 +527,147 @@ function VenueSplitPanel({ idb, custy }: {
 }
 
 // ---------------------------------------------------------------------------
-// Intraday pace chart
+// Intraday bar chart — bucketed DV01 bars with seasonality overlay
+// ---------------------------------------------------------------------------
+
+const BUCKET_OPTIONS = [
+  { value: 1, label: '1m' },
+  { value: 5, label: '5m' },
+  { value: 10, label: '10m' },
+  { value: 15, label: '15m' },
+  { value: 30, label: '30m' },
+  { value: 60, label: '60m' },
+] as const
+
+function deriveIntradayBars(
+  points: VolumeGridIntradaySeasonality['points'],
+  bucketMinutes: number,
+): Array<{ minuteOfDay: number; current: number; average: number }> {
+  if (points.length < 2) return []
+
+  const increments = points.map((p, i) => ({
+    minuteOfDay: p.minuteOfDay,
+    current: i === 0 ? (p.current ?? 0) : Math.max(0, (p.current ?? 0) - (points[i - 1].current ?? 0)),
+    average: i === 0 ? (p.average ?? 0) : Math.max(0, (p.average ?? 0) - (points[i - 1].average ?? 0)),
+  }))
+
+  const bars: Array<{ minuteOfDay: number; current: number; average: number }> = []
+  for (let start = 0; start < 1440; start += bucketMinutes) {
+    const end = start + bucketMinutes
+    const inBucket = increments.filter((p) => p.minuteOfDay >= start && p.minuteOfDay < end)
+    const currentSum = inBucket.reduce((s, p) => s + p.current, 0)
+    const averageSum = inBucket.reduce((s, p) => s + p.average, 0)
+    if (currentSum > 0 || averageSum > 0) {
+      bars.push({ minuteOfDay: start, current: currentSum, average: averageSum })
+    }
+  }
+  return bars
+}
+
+function IntradayBarChart({ seasonality, metric }: {
+  seasonality: VolumeGridIntradaySeasonality
+  metric: VolumeMetric
+}): JSX.Element {
+  const [bucketSize, setBucketSize] = useState(15)
+  const [showSeasonality, setShowSeasonality] = useState(true)
+
+  const points = seasonality?.points ?? []
+  const bars = deriveIntradayBars(points, bucketSize)
+  const avgLabel = seasonality?.observedDays ? `${seasonality.observedDays}d avg` : 'avg'
+
+  if (bars.length === 0) {
+    return <EmptyPanel text="No intraday data." />
+  }
+
+  const avgPerBucket = bars.length > 0
+    ? bars.reduce((s, b) => s + b.average, 0) / bars.filter((b) => b.average > 0).length
+    : 0
+
+  return (
+    <div className="rounded border border-slate-800 bg-slate-950/25 p-2">
+      <div className="mb-1 flex items-center justify-between font-mono text-[10px] text-slate-400">
+        <span className="uppercase tracking-wide text-slate-300">
+          Intraday {metric.toUpperCase()} — {bucketSize}m Buckets
+        </span>
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            onClick={() => setShowSeasonality((v) => !v)}
+            className={`rounded px-1.5 py-[1px] text-[9px] transition-colors ${
+              showSeasonality
+                ? 'bg-amber-500/20 text-amber-200 ring-1 ring-amber-500/30'
+                : 'bg-slate-800 text-slate-500 hover:text-slate-300'
+            }`}
+          >
+            {avgLabel}
+          </button>
+          <div className="flex rounded border border-slate-700 p-[1px]">
+            {BUCKET_OPTIONS.map((opt) => (
+              <button
+                key={opt.value}
+                type="button"
+                onClick={() => setBucketSize(opt.value)}
+                className={`px-1.5 py-[1px] text-[9px] ${
+                  bucketSize === opt.value
+                    ? 'rounded bg-slate-700 text-slate-100'
+                    : 'text-slate-400 hover:text-slate-200'
+                }`}
+              >
+                {opt.label}
+              </button>
+            ))}
+          </div>
+        </div>
+      </div>
+      <ResponsiveContainer width="100%" height={200}>
+        <BarChart data={bars} margin={{ top: 4, right: 8, bottom: 4, left: 4 }}>
+          <CartesianGrid strokeDasharray="3 3" stroke="rgba(148,163,184,0.12)" vertical={false} />
+          <XAxis
+            dataKey="minuteOfDay"
+            type="number"
+            domain={[360, 1080]}
+            ticks={[360, 480, 600, 720, 840, 960, 1080]}
+            tickFormatter={(v) => fmtMinuteOfDay(Number(v))}
+            tick={{ fontSize: 9, fill: '#94a3b8' }}
+            axisLine={{ stroke: '#334155' }}
+          />
+          <YAxis
+            tick={{ fontSize: 9, fill: '#94a3b8' }}
+            tickFormatter={(v) => fmtCompact(Number(v))}
+            axisLine={{ stroke: '#334155' }}
+            width={48}
+          />
+          <Tooltip
+            contentStyle={{ background: '#0f172a', border: '1px solid #1e293b', fontSize: 11 }}
+            labelFormatter={(v) => `${fmtMinuteOfDay(Number(v))} – ${fmtMinuteOfDay(Number(v) + bucketSize)}`}
+            formatter={(value: number, name: string) => [
+              fmtCompact(value),
+              name === 'current' ? 'today' : avgLabel,
+            ]}
+          />
+          <Bar dataKey="current" fill="#6366f1" isAnimationActive={false} />
+          {showSeasonality && (
+            <Bar dataKey="average" fill="rgba(251,191,36,0.3)" isAnimationActive={false} />
+          )}
+          {showSeasonality && avgPerBucket > 0 && (
+            <ReferenceLine
+              y={avgPerBucket}
+              stroke="#fbbf24"
+              strokeDasharray="4 2"
+              label={{ value: `avg ${fmtCompact(avgPerBucket)}`, position: 'right', fontSize: 9, fill: '#fbbf24' }}
+            />
+          )}
+          {seasonality?.asOfMinuteOfDay != null && (
+            <ReferenceLine x={seasonality.asOfMinuteOfDay} stroke="#ef4444" strokeDasharray="4 3" />
+          )}
+        </BarChart>
+      </ResponsiveContainer>
+    </div>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// Intraday pace chart (cumulative — legacy)
 // ---------------------------------------------------------------------------
 
 function IntradayPaceChart({ seasonality, metric }: {
