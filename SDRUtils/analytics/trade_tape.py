@@ -1333,20 +1333,35 @@ class TradeTape(SDRAnalyzer):
                     parts.append(tenors)
 
             # 5. Structure
+            # Invoice trades detected via invoice_swap_ticker take priority
+            # over generic CURVE/FLY labels — a 2-leg invoice trade with
+            # different roots is a Switch, not a CURVE.
             if leg_as_outright:
                 parts.append("Outright")
-            elif _is_curvey(trade_type):
-                parts.append("CURVE")
-            elif _is_flyey(trade_type):
-                parts.append("FLY")
-            elif trade_type == "SPREADOVER":
-                parts.append("Spreadover")
             elif trade_type == "INVOICE":
                 parts.append("Outright")
             elif trade_type == "INVOICE_CALENDAR":
                 parts.append("Calendar")
             elif trade_type == "INVOICE_SWITCH":
                 parts.append("Switch")
+            elif invoice_label and (_is_curvey(trade_type) or _is_flyey(trade_type)):
+                legs = row.get("package_legs")
+                _n_legs = 0
+                if legs is not None and not (isinstance(legs, float) and pd.isna(legs)):
+                    try:
+                        _n_legs = len([str(x) for x in legs])
+                    except (TypeError, ValueError):
+                        pass
+                if _n_legs >= 2:
+                    parts.append("Switch")
+                else:
+                    parts.append("Outright")
+            elif _is_curvey(trade_type):
+                parts.append("CURVE")
+            elif _is_flyey(trade_type):
+                parts.append("FLY")
+            elif trade_type == "SPREADOVER":
+                parts.append("Spreadover")
             else:
                 # Trade is a package leg per SDR reporting (Package indicator=True)
                 # but no peer leg was paired by our detectors (curve/fly/MMS). Labelling
@@ -1428,8 +1443,12 @@ class TradeTape(SDRAnalyzer):
             xd_status = str(row.get("xd_status", "")).upper()
             if xd_status == "TERMINATED" and ltype != "TERMINATION":
                 tags.append("XD-TERM")
-            if row.get("xd_has_partial_unwind", False):
+            if row.get("xd_has_partial_unwind", False) or row.get("lc_has_partial_unwind", False):
                 tags.append("PARTIAL-UNWIND")
+            if row.get("lc_has_past_effective", False):
+                tags.append("PAST-EFF")
+            if row.get("lc_is_off_market_seasoned", False):
+                tags.append("OFF-MKT")
             if row.get("is_novation_born", False):
                 tags.append("NOVA-IN")
             if row.get("is_novation_terminated", False):

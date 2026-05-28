@@ -195,7 +195,7 @@ export function packageAnalyticsFilterPredicate(
   return null
 }
 
-function packageKindSql(alias: string, kind: 'CURVE' | 'FLY'): string {
+function packageKindSql(alias: string, kind: 'CURVE' | 'FLY' | 'SPREADOVER'): string {
   return `(
     UPPER(CONCAT_WS(' ', ${alias}.package_type, ${alias}.tape_label))
       ~ '(^|[^A-Z0-9])${kind}([^A-Z0-9]|$)'
@@ -218,6 +218,8 @@ export function packageSummaryFixedRateSql(alias: string): string {
       2 * ${alias}.fixed_rates[${mid}] - ${alias}.fixed_rates[1] - ${alias}.fixed_rates[${last}]
     WHEN ${packageKindSql(alias, 'CURVE')} AND COALESCE(${alias}.legs_count, 0) >= 2 THEN
       ${alias}.fixed_rates[${last}] - ${alias}.fixed_rates[1]
+    WHEN ${packageKindSql(alias, 'SPREADOVER')} AND COALESCE(${alias}.legs_count, 0) >= 2 THEN
+      ${alias}.fixed_rates[${last}] - ${alias}.fixed_rates[1]
     ELSE COALESCE(${alias}.weighted_fixed_rate, ${alias}.fixed_rates[1])
   END`
 }
@@ -229,6 +231,8 @@ export function packageSummaryRiskSql(alias: string): string {
     WHEN ${packageKindSql(alias, 'FLY')} AND COALESCE(${alias}.legs_count, 0) >= 3 THEN
       ${alias}.risks[${mid}]
     WHEN ${packageKindSql(alias, 'CURVE')} AND COALESCE(${alias}.legs_count, 0) >= 2 THEN
+      ${alias}.risks[${last}]
+    WHEN ${packageKindSql(alias, 'SPREADOVER')} AND COALESCE(${alias}.legs_count, 0) >= 2 THEN
       ${alias}.risks[${last}]
     ELSE COALESCE(${alias}.total_risk, ${alias}.risks[1])
   END`

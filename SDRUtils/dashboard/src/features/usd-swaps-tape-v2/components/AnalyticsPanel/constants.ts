@@ -62,7 +62,7 @@ export const ZONE_BORDER: Record<RarityZone, string> = {
 }
 
 // Dock chrome defaults.
-export const DOCK_DEFAULT_VH = 62
+export const DOCK_DEFAULT_VH = 45
 export const DOCK_MIN_PX = 220
 // Viewport - this much reserved for table above the dock.
 export const DOCK_MAX_RESERVE_PX = 160

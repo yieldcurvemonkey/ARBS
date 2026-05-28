@@ -80,6 +80,10 @@ export type UsdSwapTapeLeg = SofrSwapTapeLeg & {
   xd_status?: string | null
   xd_is_terminated?: boolean | null
   xd_has_partial_unwind?: boolean | null
+  xd_was_partially_terminated?: boolean | null
+  xd_has_past_effective?: boolean | null
+  xd_is_off_market_seasoned?: boolean | null
+  xd_days_seasoned?: number | null
   xd_notional_pct_remaining?: number | null
   quality_flags?: string[] | null
   // Phase 1: timestamp split + notional source. ``original_execution_timestamp``
@@ -95,6 +99,13 @@ export type UsdSwapTapeLeg = SofrSwapTapeLeg & {
   lc_was_amended?: boolean | null
   lc_was_null_filled?: boolean | null
   lc_was_scheduled_amortization?: boolean | null
+  lc_was_partially_terminated?: boolean | null
+  lc_has_partial_unwind?: boolean | null
+  lc_inception_notional?: number | null
+  lc_current_notional?: number | null
+  lc_has_past_effective?: boolean | null
+  lc_is_off_market_seasoned?: boolean | null
+  lc_days_seasoned?: number | null
   lc_has_economics_change?: boolean | null
   state_machine_violation?: boolean | null
   violation_reason?: string | null

@@ -239,6 +239,11 @@ def _build_invoice_swap_lookup(
 
     from definitions.USTFutures import back_months, front_month
     from MDP.USTFutures.USTFuturesMDP import USTFuturesMDP
+    from MDP.USTFutures.treasury_conversion_factors import (
+        build_delivery_basket_frame,
+        delivery_calendar_window,
+        resolve_delivery_contract,
+    )
 
     ustf_mdp = USTFuturesMDP(source="BARCHART_USTF-RL")
     roots = sorted({spec["root"] for spec in _CME_INVOICE_SWAP_TICKERS.values()})
@@ -323,6 +328,33 @@ def _build_invoice_swap_lookup(
                     "invoice_swap_root": root,
                 }
             )
+
+        # Full-basket expansion: invoice swaps can reference ANY
+        # deliverable bond, not just the top-3 CTD candidates.
+        # Use build_delivery_basket_frame (reference-data-only, no
+        # price fetch needed) to get the complete eligible basket.
+        ctd_mats = {s["invoice_swap_ctd_maturity"] for s in invoice_specs if s["invoice_swap_contract"] == contract}
+        first_ticker = _INDICATOR_TO_TICKER.get(root, {}).get("D")
+        last_ticker = _INDICATOR_TO_TICKER.get(root, {}).get("A")
+        try:
+            basket_df = build_delivery_basket_frame(as_of=as_of, symbol=contract)
+            for mat in basket_df["maturity_date"].unique():
+                if mat in ctd_mats:
+                    continue
+                for delivery_date, ticker in ((delivery_end, last_ticker), (delivery_start, first_ticker)):
+                    if ticker is None:
+                        continue
+                    invoice_specs.append(
+                        {
+                            "invoice_swap_delivery_date": delivery_date,
+                            "invoice_swap_ctd_maturity": mat,
+                            "invoice_swap_ticker": ticker,
+                            "invoice_swap_contract": contract,
+                            "invoice_swap_root": root,
+                        }
+                    )
+        except Exception:
+            pass
 
     if not invoice_specs:
         empty = pd.DataFrame(columns=[
@@ -426,6 +458,22 @@ def _apply_invoice_swap_lookup(
     )
 
     hit_mask = df_merged["__invoice_swap_ticker_new"].notna()
+
+    # End-of-month edge case: a spot-starting swap with a clean benchmark
+    # tenor (e.g., eff=5/31/2026, mat=5/31/2031 = 5Y) can coincide with a
+    # CTD maturity purely by calendar accident.  Suppress the invoice label
+    # for these trades — the benchmark tenor match is more informative.
+    _BENCHMARK_YEARS = {1, 2, 3, 4, 5, 7, 10, 15, 20, 25, 30}
+    if hit_mask.any() and "tenor_years" in df_merged.columns and "forward_start_years" in df_merged.columns:
+        fwd_yrs = pd.to_numeric(df_merged["forward_start_years"], errors="coerce").fillna(0.0)
+        tenor_yrs = pd.to_numeric(df_merged["tenor_years"], errors="coerce")
+        is_spot = fwd_yrs <= 0.02
+        is_benchmark = tenor_yrs.apply(
+            lambda t: (not pd.isna(t)) and (round(t) in _BENCHMARK_YEARS) and (abs(t - round(t)) < 0.05)
+        )
+        suppress = hit_mask & is_spot & is_benchmark
+        if suppress.any():
+            hit_mask = hit_mask & ~suppress
 
     # Write ticker on every merge hit — the spec match itself is the signal.
     df_merged.loc[hit_mask, output_col] = df_merged.loc[hit_mask, "__invoice_swap_ticker_new"]
@@ -1381,15 +1429,15 @@ class USD_SwapProduct(USDProductBase):
                     cleared_col="cleared",
                     upi_col="unique_product_identifier",
                 )
+                if detect_invoice:
+                    package_df = detect_invoice_swaps(package_df)
+                    package_df = detect_invoice_packages(package_df)
                 if detect_fly:
                     package_df = detect_fly_trades_df(package_df, **_snake_detector_cols)
                 if detect_curve:
                     package_df = detect_curve_trades_df(package_df, **_snake_detector_cols)
                 if detect_mms:
                     package_df = detect_mms_trades_df(package_df)
-                if detect_invoice:
-                    package_df = detect_invoice_swaps(package_df)
-                    package_df = detect_invoice_packages(package_df)
                 if detect_mac:
                     package_df = detect_mac_swaps(package_df)
                 if detect_spreadover:

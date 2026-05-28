@@ -114,6 +114,12 @@ export function formatRateRange(
   return `${formatRate(min)} – ${formatRate(max)}`
 }
 
+function formatSpreadBps(n: number): string {
+  const bps = Number(n)
+  if (Number.isNaN(bps)) return EMPTY_VALUE
+  return `${bps.toFixed(1)}bp`
+}
+
 /**
  * Render the "Reported LvL" cell value.
  *
@@ -122,6 +128,11 @@ export function formatRateRange(
  *
  *   CURVE  ->  "3.622% / 3.827%"
  *   FLY    ->  "3.622% / 3.800% / 4.100%"
+ *
+ * For BASIS swap types, the raw SDR "Spread-Leg 1" / "Spread-Leg 2"
+ * fields (stored as ``basis_spread_bps`` per leg) are displayed instead
+ * of fixed_rate, since the spread is the economically meaningful level
+ * for basis trades.
  *
  * For every other trade type (OUTRIGHT / INVOICE / SPREADOVER / MAC / …)
  * the cell falls back to the package-level weighted_fixed_rate.
@@ -137,6 +148,28 @@ export function formatReportedLvl(row: UsdSwapTapeRow): string {
   // so ``row.trade_type`` is typically undefined on the main tape. Prefer
   // ``package_type`` and fall back to ``trade_type`` only as a backstop.
   const kind = String(row.package_type ?? row.trade_type ?? '').toUpperCase()
+
+  const isBasis =
+    kind === 'BASIS' ||
+    kind === 'BASIS_SWAP' ||
+    kind === 'BASIS_CURVE' ||
+    kind === 'BASIS_FLY' ||
+    kind === 'BASIS_HEDGE'
+  if (isBasis) {
+    const legs = row.legs_json ?? []
+    const sorted = [...legs].sort((a, b) => {
+      const at = typeof a?.tenor_years === 'number' ? a.tenor_years : Number.POSITIVE_INFINITY
+      const bt = typeof b?.tenor_years === 'number' ? b.tenor_years : Number.POSITIVE_INFINITY
+      return at - bt
+    })
+    const spreads = sorted
+      .map((l) => l?.basis_spread_bps)
+      .filter((s): s is number => !isNullish(s as number | null | undefined))
+    if (spreads.length >= 1) {
+      return spreads.map((s) => formatSpreadBps(s)).join(' / ')
+    }
+  }
+
   // Composite types from the sub-package detector (e.g. SPREADOVER_CURVE,
   // MATCHED_MATURITY_FLY) are still CURVE / FLY structures — render
   // per-leg rates the same way as the base types.

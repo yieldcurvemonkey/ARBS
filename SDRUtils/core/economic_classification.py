@@ -167,6 +167,7 @@ MATRIX: Mapping[Tuple[str, Optional[str]], EconomicClassification] = {
 
     ("TERM", "TRAD"): _unwind("[Example 3] — bilateral termination", full=True),
     ("TERM", "ETRM"): _unwind("[Example 3]; [#31 fn] — early termination", full=True),
+    ("TERM", "PTRM"): _unwind("[Appendix F Ex 16] — partial termination", full=False),
     ("TERM", "NOVA"): _admin("[Example 4] — old-RC leg of novation"),
     ("TERM", "CLRG"): _admin("[Example 6]; §43.3(a)(5) — α pre-clear leg"),
     ("TERM", "CLAL"): _admin("[Appendix F] — clearing allocation unwind", on_p43=False),

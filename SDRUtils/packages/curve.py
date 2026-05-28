@@ -136,7 +136,7 @@ def detect_curve_trades_df(
     _has_ridx = rate_index_col in cand.columns
     ridx = cand[rate_index_col].fillna("_UNKNOWN_").astype(str).to_numpy() if _has_ridx else None
     _has_tseg = tenor_segment_col in cand.columns
-    tseg = cand[tenor_segment_col].astype("string").to_numpy() if _has_tseg else None
+    tseg = cand[tenor_segment_col].fillna("_UNKNOWN_").astype(str).to_numpy() if _has_tseg else None
 
     # Eviction uses conservative (widest) window when V2 present
     _evict_window = time_window_seconds if tseg is None else max(time_window_short, time_window_medium)

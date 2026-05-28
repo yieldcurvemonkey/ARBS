@@ -54,6 +54,13 @@ class TestMatrixRows:
     def test_TERM_ETRM(self):
         assert classify_event("TERM", "ETRM", None).kind == EconomicKind.ECONOMIC_UNWIND
 
+    def test_TERM_PTRM_partial_unwind(self):
+        c = classify_event("TERM", "PTRM", None)
+        assert c.kind == EconomicKind.ECONOMIC_UNWIND
+        assert c.contributes_to_flow is True
+        assert c.contributes_to_pnl is True
+        assert c.contributes_to_pnl_as_delta is True
+
     def test_TERM_NOVA(self):
         assert classify_event("TERM", "NOVA", None).kind == EconomicKind.ADMINISTRATIVE
 

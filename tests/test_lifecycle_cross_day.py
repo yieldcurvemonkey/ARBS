@@ -6,6 +6,7 @@ from SDRUtils.core.lifecycle import ResolvedTrade
 from SDRUtils.core.lifecycle_v2 import (
     LifecycleEvent,
     LifecycleSummary,
+    build_summary,
     flatten_cross_day_summary,
 )
 
@@ -147,6 +148,51 @@ class TestFlattenCrossDaySummary:
 
         assert flat["xd_was_corrected"] is True
         assert flat["xd_correction_lag_seconds"] == 82800
+
+    def test_ptrm_cross_day_partial_unwind(self):
+        """TERM+PTRM across days: trade stays active, partial unwind flagged."""
+        chain = [
+            LifecycleEvent(
+                action_type="NEWT", event_type="TRAD", amendment_indicator=None,
+                event_timestamp=datetime(2026, 3, 9, 14, 0, 0),
+                execution_timestamp=datetime(2026, 3, 9, 14, 0, 0),
+                dissemination_id="id_0", original_dissemination_id=None,
+                file_date=date(2026, 3, 9),
+            ),
+            LifecycleEvent(
+                action_type="TERM", event_type="PTRM", amendment_indicator=None,
+                event_timestamp=datetime(2026, 3, 10, 14, 0, 0),
+                execution_timestamp=datetime(2026, 3, 9, 14, 0, 0),
+                dissemination_id="id_1", original_dissemination_id="id_0",
+                file_date=date(2026, 3, 10),
+            ),
+        ]
+        summary = build_summary(chain)
+        assert summary.was_partially_terminated is True
+        assert summary.is_terminated is False
+
+        resolved = self._make_resolved(
+            status="ACTIVE", inception_notional=100_000_000, current_notional=50_000_000,
+        )
+        flat = flatten_cross_day_summary(summary, resolved)
+        assert flat["xd_status"] == "PARTIAL_UNWIND"
+        assert flat["xd_has_partial_unwind"] is True
+        assert flat["xd_was_partially_terminated"] is True
+        assert flat["xd_is_terminated"] is False
+
+    def test_xd_seasoned_trade_flags(self):
+        """Cross-day seasoned trade detection."""
+        summary = self._make_summary(n_events=1)
+        resolved = self._make_resolved()
+        flat = flatten_cross_day_summary(
+            summary, resolved,
+            effective_date=date(2026, 1, 1),
+            execution_date=date(2026, 3, 9),
+            is_ufro=True,
+        )
+        assert flat["xd_has_past_effective"] is True
+        assert flat["xd_is_off_market_seasoned"] is True
+        assert flat["xd_days_seasoned"] == 67
 
 
 import pandas as pd

@@ -152,6 +152,13 @@ CREATE TABLE IF NOT EXISTS {LEGS_TABLE_V2} (
     lc_was_amended BOOLEAN,
     lc_was_null_filled BOOLEAN,
     lc_was_scheduled_amortization BOOLEAN,
+    lc_was_partially_terminated BOOLEAN,
+    lc_has_partial_unwind BOOLEAN,
+    lc_inception_notional NUMERIC,
+    lc_current_notional NUMERIC,
+    lc_has_past_effective BOOLEAN,
+    lc_is_off_market_seasoned BOOLEAN,
+    lc_days_seasoned INTEGER,
     lc_has_economics_change BOOLEAN,
     state_machine_violation BOOLEAN,
     violation_reason TEXT,
@@ -185,6 +192,10 @@ CREATE TABLE IF NOT EXISTS {LEGS_TABLE_V2} (
     xd_notional_pct_remaining NUMERIC,
     xd_is_terminated BOOLEAN,
     xd_has_partial_unwind BOOLEAN,
+    xd_was_partially_terminated BOOLEAN,
+    xd_has_past_effective BOOLEAN,
+    xd_is_off_market_seasoned BOOLEAN,
+    xd_days_seasoned INTEGER,
     -- Phase 5 structural columns
     schedule_truncated BOOLEAN,
     schedule_row_count INTEGER,
@@ -305,6 +316,19 @@ ALTER TABLE {LEGS_TABLE_V2} ADD COLUMN IF NOT EXISTS basis_type TEXT;
 ALTER TABLE {LEGS_TABLE_V2} ADD COLUMN IF NOT EXISTS basis_spread_bps NUMERIC;
 ALTER TABLE {LEGS_TABLE_V2} ADD COLUMN IF NOT EXISTS leg1_rate_index TEXT;
 ALTER TABLE {LEGS_TABLE_V2} ADD COLUMN IF NOT EXISTS leg2_rate_index TEXT;
+
+-- Phase 7: lifecycle partial-unwind + seasoned-trade columns
+ALTER TABLE {LEGS_TABLE_V2} ADD COLUMN IF NOT EXISTS lc_was_partially_terminated BOOLEAN;
+ALTER TABLE {LEGS_TABLE_V2} ADD COLUMN IF NOT EXISTS lc_has_partial_unwind BOOLEAN;
+ALTER TABLE {LEGS_TABLE_V2} ADD COLUMN IF NOT EXISTS lc_inception_notional NUMERIC;
+ALTER TABLE {LEGS_TABLE_V2} ADD COLUMN IF NOT EXISTS lc_current_notional NUMERIC;
+ALTER TABLE {LEGS_TABLE_V2} ADD COLUMN IF NOT EXISTS lc_has_past_effective BOOLEAN;
+ALTER TABLE {LEGS_TABLE_V2} ADD COLUMN IF NOT EXISTS lc_is_off_market_seasoned BOOLEAN;
+ALTER TABLE {LEGS_TABLE_V2} ADD COLUMN IF NOT EXISTS lc_days_seasoned INTEGER;
+ALTER TABLE {LEGS_TABLE_V2} ADD COLUMN IF NOT EXISTS xd_was_partially_terminated BOOLEAN;
+ALTER TABLE {LEGS_TABLE_V2} ADD COLUMN IF NOT EXISTS xd_has_past_effective BOOLEAN;
+ALTER TABLE {LEGS_TABLE_V2} ADD COLUMN IF NOT EXISTS xd_is_off_market_seasoned BOOLEAN;
+ALTER TABLE {LEGS_TABLE_V2} ADD COLUMN IF NOT EXISTS xd_days_seasoned INTEGER;
 
 CREATE INDEX IF NOT EXISTS idx_tape_v2_legs_norm_label_orig
   ON {LEGS_TABLE_V2}(normalized_tape_label, original_execution_timestamp DESC NULLS LAST);

@@ -69,6 +69,157 @@ class TestValidateTransition:
         assert validate_transition("ACTIVE", "MODI", True) is None
         assert validate_transition("ACTIVE", "MODI", False) is None
 
+    def test_term_on_terminated_flags(self):
+        assert validate_transition("TERMINATED", "TERM", None) == "TERM_ON_TERMINATED"
+
+    def test_eror_on_errored_flags(self):
+        assert validate_transition("ERRORED", "EROR", None) == "EROR_ON_ERRORED"
+
+    def test_revi_on_non_errored_flags(self):
+        assert validate_transition("ACTIVE", "REVI", None) == "REVI_ON_NON_ERRORED"
+
+    def test_revi_on_errored_legal(self):
+        assert validate_transition("ERRORED", "REVI", None) is None
+
+
+class TestBuildSummary_PTRM:
+    """TERM+PTRM partial termination: trade stays active."""
+
+    def test_ptrm_sets_partially_terminated(self):
+        chain = [
+            _evt("NEWT", event_type="TRAD", dissem="D0"),
+            _evt("TERM", event_type="PTRM", dissem="D1"),
+        ]
+        summary = build_summary(chain)
+        assert summary.was_partially_terminated is True
+        assert summary.is_terminated is False
+
+    def test_full_term_does_not_set_partially_terminated(self):
+        chain = [
+            _evt("NEWT", event_type="TRAD", dissem="D0"),
+            _evt("TERM", event_type="ETRM", dissem="D1"),
+        ]
+        summary = build_summary(chain)
+        assert summary.was_partially_terminated is False
+        assert summary.is_terminated is True
+
+    def test_ptrm_flatten_lc(self):
+        chain = [
+            _evt("NEWT", event_type="TRAD", dissem="D0"),
+            _evt("TERM", event_type="PTRM", dissem="D1"),
+        ]
+        summary = build_summary(chain)
+        flat = flatten_lifecycle_summary(summary, _StubResolved("ACTIVE"))
+        assert flat["lc_was_partially_terminated"] is True
+        assert flat["lc_status"] == "ACTIVE"
+
+
+class TestBuildSummary_MODINotionalReduction:
+    """MODI+Amendment=True with notional reduction → was_partially_terminated."""
+
+    def test_modi_notional_decrease_flags_partial(self):
+        chain = [
+            _evt("NEWT", event_type="TRAD", dissem="D0",
+                 changed={"Notional amount-Leg 1": "100000000"}),
+            _evt("MODI", event_type="TRAD", amendment=True, dissem="D1",
+                 changed={"Notional amount-Leg 1": "50000000"}),
+        ]
+        summary = build_summary(chain)
+        assert summary.was_partially_terminated is True
+        assert summary.was_economically_modified is True
+
+    def test_modi_notional_same_no_partial(self):
+        chain = [
+            _evt("NEWT", event_type="TRAD", dissem="D0",
+                 changed={"Notional amount-Leg 1": "100000000"}),
+            _evt("MODI", event_type="TRAD", amendment=True, dissem="D1",
+                 changed={"Notional amount-Leg 1": "100000000"}),
+        ]
+        summary = build_summary(chain)
+        assert summary.was_partially_terminated is False
+
+    def test_modi_rate_only_no_partial(self):
+        chain = [
+            _evt("NEWT", event_type="TRAD", dissem="D0",
+                 changed={"Notional amount-Leg 1": "100000000"}),
+            _evt("MODI", event_type="TRAD", amendment=True, dissem="D1",
+                 changed={"Fixed rate-Leg 1": "0.035"}),
+        ]
+        summary = build_summary(chain)
+        assert summary.was_partially_terminated is False
+
+
+class TestFlattenSingleDayPartialUnwind:
+    """Single-day partial unwind detection via inception vs current notional."""
+
+    def test_notional_decrease_detected(self):
+        chain = [_evt("NEWT")]
+        summary = build_summary(chain)
+
+        class _R:
+            status = "ACTIVE"
+            inception_state = {"Notional amount-Leg 1": 100_000_000}
+            current_state = {"Notional amount-Leg 1": 50_000_000}
+
+        flat = flatten_lifecycle_summary(summary, _R())
+        assert flat["lc_has_partial_unwind"] is True
+        assert flat["lc_inception_notional"] == 100_000_000
+        assert flat["lc_current_notional"] == 50_000_000
+
+    def test_no_change_not_flagged(self):
+        chain = [_evt("NEWT")]
+        summary = build_summary(chain)
+
+        class _R:
+            status = "ACTIVE"
+            inception_state = {"Notional amount-Leg 1": 100_000_000}
+            current_state = {"Notional amount-Leg 1": 100_000_000}
+
+        flat = flatten_lifecycle_summary(summary, _R())
+        assert flat["lc_has_partial_unwind"] is False
+
+
+class TestFlattenSeasonedTrade:
+    """Seasoned / off-market trade flag tests."""
+
+    def test_past_effective_flagged(self):
+        from datetime import date
+        chain = [_evt("NEWT")]
+        summary = build_summary(chain)
+        flat = flatten_lifecycle_summary(
+            summary, _StubResolved(),
+            effective_date=date(2026, 1, 15),
+            execution_date=date(2026, 3, 9),
+        )
+        assert flat["lc_has_past_effective"] is True
+        assert flat["lc_days_seasoned"] == 53
+        assert flat["lc_is_off_market_seasoned"] is False
+
+    def test_past_effective_with_ufro(self):
+        from datetime import date
+        chain = [_evt("NEWT")]
+        summary = build_summary(chain)
+        flat = flatten_lifecycle_summary(
+            summary, _StubResolved(),
+            effective_date=date(2026, 1, 15),
+            execution_date=date(2026, 3, 9),
+            is_ufro=True,
+        )
+        assert flat["lc_has_past_effective"] is True
+        assert flat["lc_is_off_market_seasoned"] is True
+
+    def test_future_effective_not_flagged(self):
+        from datetime import date
+        chain = [_evt("NEWT")]
+        summary = build_summary(chain)
+        flat = flatten_lifecycle_summary(
+            summary, _StubResolved(),
+            effective_date=date(2026, 3, 15),
+            execution_date=date(2026, 3, 9),
+        )
+        assert flat["lc_has_past_effective"] is False
+        assert flat["lc_days_seasoned"] == 0
+
 
 class TestBuildSummary_VALUSeparation:
     """B7: VALU/MARU do NOT inflate lc_n_events."""

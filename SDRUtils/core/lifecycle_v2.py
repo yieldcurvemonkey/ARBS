@@ -40,6 +40,7 @@ class LifecycleSummary:
     was_economically_modified: bool = False
     was_null_filled: bool = False
     was_scheduled_amortization: bool = False
+    was_partially_terminated: bool = False
     was_errored: bool = False
     was_revived: bool = False
     is_terminated: bool = False
@@ -71,6 +72,12 @@ def validate_transition(
         return "MODI_ON_ERRORED_WITHOUT_REVI"
     if prev_status == "TERMINATED" and action == "MODI":
         return "MODI_ON_TERMINATED"
+    if prev_status == "TERMINATED" and action == "TERM":
+        return "TERM_ON_TERMINATED"
+    if prev_status == "ERRORED" and action == "EROR":
+        return "EROR_ON_ERRORED"
+    if prev_status != "ERRORED" and action == "REVI":
+        return "REVI_ON_NON_ERRORED"
     if action == "MODI" and amendment is None:
         return "MODI_AMENDMENT_NONE"
     return None
@@ -95,6 +102,7 @@ def build_summary(chain: list[LifecycleEvent]) -> LifecycleSummary:
     newt_file_date = None
     terminated = False
     errored = False
+    last_notional: Optional[float] = None
 
     for evt in chain:
         if evt.action_type in VALUATION_ACTIONS:
@@ -120,6 +128,12 @@ def build_summary(chain: list[LifecycleEvent]) -> LifecycleSummary:
             newt_event = evt
             newt_file_date = evt.file_date
             summary.original_execution_timestamp = evt.execution_timestamp
+            raw_n = evt.changed_economics.get("Notional amount-Leg 1") if evt.changed_economics else None
+            if raw_n is not None:
+                try:
+                    last_notional = float(str(raw_n).replace(",", ""))
+                except (TypeError, ValueError):
+                    pass
 
         elif evt.action_type == "CORR":
             summary.was_corrected = True
@@ -129,6 +143,14 @@ def build_summary(chain: list[LifecycleEvent]) -> LifecycleSummary:
                 summary.was_scheduled_amortization = True
             elif evt.amendment_indicator is True:
                 summary.was_economically_modified = True
+                raw_n = evt.changed_economics.get("Notional amount-Leg 1") if evt.changed_economics else None
+                if raw_n is not None and last_notional is not None:
+                    try:
+                        new_notional = float(str(raw_n).replace(",", ""))
+                        if new_notional < last_notional:
+                            summary.was_partially_terminated = True
+                    except (TypeError, ValueError):
+                        pass
             else:
                 summary.was_null_filled = True
 
@@ -137,7 +159,10 @@ def build_summary(chain: list[LifecycleEvent]) -> LifecycleSummary:
             errored = True
 
         elif evt.action_type == "TERM":
-            terminated = True
+            if evt.event_type == "PTRM":
+                summary.was_partially_terminated = True
+            else:
+                terminated = True
 
         elif evt.action_type == "REVI":
             summary.was_revived = True
@@ -149,6 +174,12 @@ def build_summary(chain: list[LifecycleEvent]) -> LifecycleSummary:
                 summary.fields_changed.add(field_name)
                 if field_name in ECONOMICS_FIELDS:
                     summary.economics_changed = True
+            raw_n = evt.changed_economics.get("Notional amount-Leg 1")
+            if raw_n is not None:
+                try:
+                    last_notional = float(str(raw_n).replace(",", ""))
+                except (TypeError, ValueError):
+                    pass
 
         if newt_file_date is not None and evt.file_date > newt_file_date:
             summary.arrived_in_later_file = True
@@ -174,6 +205,10 @@ def build_summary(chain: list[LifecycleEvent]) -> LifecycleSummary:
 def flatten_lifecycle_summary(
     summary: LifecycleSummary,
     resolved: Any,
+    *,
+    effective_date: Optional[date] = None,
+    execution_date: Optional[date] = None,
+    is_ufro: bool = False,
 ) -> Dict[str, Any]:
     """Flatten LifecycleSummary + ResolvedTrade status into a dict of lc_* columns.
 
@@ -198,6 +233,24 @@ def flatten_lifecycle_summary(
         e for e in summary.chain if getattr(e, "action_type", None) in VALUATION_ACTIONS
     ]
 
+    import math
+
+    inception_notional = _safe_notional(getattr(resolved, "inception_state", None))
+    current_notional = _safe_notional(getattr(resolved, "current_state", None))
+    has_partial_unwind = (
+        not math.isnan(inception_notional)
+        and not math.isnan(current_notional)
+        and inception_notional > 0
+        and current_notional < inception_notional
+    )
+
+    has_past_effective = (
+        effective_date is not None
+        and execution_date is not None
+        and effective_date < execution_date
+    )
+    days_seasoned = (execution_date - effective_date).days if has_past_effective else 0
+
     return {
         "lc_n_events": len(econ_chain),
         "lc_n_events_economic": len(econ_chain),
@@ -207,8 +260,15 @@ def flatten_lifecycle_summary(
         "lc_was_amended": summary.was_economically_modified,
         "lc_was_null_filled": summary.was_null_filled,
         "lc_was_scheduled_amortization": summary.was_scheduled_amortization,
+        "lc_was_partially_terminated": summary.was_partially_terminated,
         "lc_was_revived": summary.was_revived,
         "lc_has_economics_change": summary.economics_changed,
+        "lc_has_partial_unwind": has_partial_unwind,
+        "lc_inception_notional": inception_notional,
+        "lc_current_notional": current_notional,
+        "lc_has_past_effective": has_past_effective,
+        "lc_is_off_market_seasoned": has_past_effective and is_ufro,
+        "lc_days_seasoned": days_seasoned,
         "lc_correction_crossed_day": summary.arrived_in_later_file,
         "lc_correction_lag_seconds": summary.correction_lag_seconds,
         "lc_fields_changed": fields_str,
@@ -271,6 +331,10 @@ def _safe_notional(state: Optional[Dict[str, Any]]) -> float:
 def flatten_cross_day_summary(
     summary: LifecycleSummary,
     resolved: Any,
+    *,
+    effective_date: Optional[date] = None,
+    execution_date: Optional[date] = None,
+    is_ufro: bool = False,
 ) -> Dict[str, Any]:
     """Flatten LifecycleSummary + ResolvedTrade into xd_* columns for cross-day resolution.
 
@@ -317,6 +381,13 @@ def flatten_cross_day_summary(
         e for e in summary.chain if getattr(e, "action_type", None) in VALUATION_ACTIONS
     ]
 
+    has_past_effective = (
+        effective_date is not None
+        and execution_date is not None
+        and effective_date < execution_date
+    )
+    days_seasoned = (execution_date - effective_date).days if has_past_effective else 0
+
     return {
         "xd_n_events": len(econ_chain),
         "xd_n_events_economic": len(econ_chain),
@@ -327,9 +398,13 @@ def flatten_cross_day_summary(
         "xd_notional_pct_remaining": pct_remaining,
         "xd_is_terminated": summary.is_terminated,
         "xd_has_partial_unwind": has_partial_unwind,
+        "xd_was_partially_terminated": summary.was_partially_terminated,
         "xd_was_corrected": summary.was_corrected,
         "xd_was_amended": summary.was_economically_modified,
         "xd_was_scheduled_amortization": summary.was_scheduled_amortization,
+        "xd_has_past_effective": has_past_effective,
+        "xd_is_off_market_seasoned": has_past_effective and is_ufro,
+        "xd_days_seasoned": days_seasoned,
         "xd_fields_changed": fields_str,
         "xd_correction_lag_seconds": summary.correction_lag_seconds,
         "xd_n_days_spanned": n_days,

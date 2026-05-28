@@ -330,7 +330,7 @@ export function tapeTagBadgesFor(row: UsdSwapTapeRow): Array<{
     ''
   const fromLabel: string[] = []
   if (typeof label === 'string') {
-    const re = /\b(PARTIAL-UNWIND|XD-TERM|NOVA-IN|NOVA-OUT|OFFM|UNWIND|UFRO|BLOCK|TERM|CORR|MODI|EXER|CLRG)\b/g
+    const re = /\b(PARTIAL-UNWIND|XD-TERM|NOVA-IN|NOVA-OUT|OFFM|OFF-MKT|PAST-EFF|UNWIND|UFRO|BLOCK|TERM|CORR|MODI|EXER|CLRG)\b/g
     let m: RegExpExecArray | null
     while ((m = re.exec(label)) !== null) {
       if (!fromLabel.includes(m[1])) fromLabel.push(m[1])

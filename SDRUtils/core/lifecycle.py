@@ -221,7 +221,10 @@ def replay_lifecycle(
         elif action == "TERM":
             state = _update_state(state, row_data, overwrite=False)
             if state:
-                state["Active"] = False
+                event_type = row_data.get("Event type")
+                is_ptrm = isinstance(event_type, str) and event_type.strip().upper() == "PTRM"
+                if not is_ptrm:
+                    state["Active"] = False
 
         elif action == "EROR":
             # Error action invalidates the trade entirely
@@ -340,7 +343,10 @@ def replay_lifecycle_full(
         elif action == "TERM":
             state = _update_state(state, row_data, overwrite=False)
             if state:
-                state["Active"] = False
+                event_type = row_data.get("Event type")
+                is_ptrm = isinstance(event_type, str) and event_type.strip().upper() == "PTRM"
+                if not is_ptrm:
+                    state["Active"] = False
 
         elif action == "EROR":
             resolved.status = "ERRORED"
@@ -688,8 +694,33 @@ def resolve_lifecycle_for_day(
         # Bridge to V2 summary
         summary = build_lifecycle_summary_from_resolved(resolved, file_dates_map)
 
+        # Extract effective/execution dates for seasoned-trade detection
+        _eff_date = None
+        _exec_date = None
+        _is_ufro = False
+        if resolved.inception_state:
+            _eff_raw = resolved.inception_state.get("Effective Date")
+            _exec_raw = resolved.inception_state.get("Execution Timestamp")
+            if _eff_raw is not None:
+                try:
+                    _eff_date = pd.to_datetime(_eff_raw).date()
+                except Exception:
+                    pass
+            if _exec_raw is not None:
+                try:
+                    _exec_date = pd.to_datetime(_exec_raw).date()
+                except Exception:
+                    pass
+            _pmt_type = str(resolved.inception_state.get("Other payment type", "") or "")
+            _is_ufro = "UFRO" in _pmt_type.upper()
+
         # Flatten to lc_* columns
-        flat = flatten_lifecycle_summary(summary, resolved)
+        flat = flatten_lifecycle_summary(
+            summary, resolved,
+            effective_date=_eff_date,
+            execution_date=_exec_date,
+            is_ufro=_is_ufro,
+        )
         flat[dissemination_col] = newt_dissem_id
         records.append(flat)
 
@@ -825,8 +856,33 @@ def resolve_lifecycle_cross_day(
         # Bridge to summary
         summary = build_lifecycle_summary_from_resolved(resolved, file_dates_map)
 
+        # Extract effective/execution dates for seasoned-trade detection
+        _eff_date = None
+        _exec_date = None
+        _is_ufro = False
+        if resolved.inception_state:
+            _eff_raw = resolved.inception_state.get("Effective Date")
+            _exec_raw = resolved.inception_state.get("Execution Timestamp")
+            if _eff_raw is not None:
+                try:
+                    _eff_date = pd.to_datetime(_eff_raw).date()
+                except Exception:
+                    pass
+            if _exec_raw is not None:
+                try:
+                    _exec_date = pd.to_datetime(_exec_raw).date()
+                except Exception:
+                    pass
+            _pmt_type = str(resolved.inception_state.get("Other payment type", "") or "")
+            _is_ufro = "UFRO" in _pmt_type.upper()
+
         # Flatten to xd_* columns
-        flat = flatten_cross_day_summary(summary, resolved)
+        flat = flatten_cross_day_summary(
+            summary, resolved,
+            effective_date=_eff_date,
+            execution_date=_exec_date,
+            is_ufro=_is_ufro,
+        )
         flat[dissemination_col] = newt_dissem_id
         records.append(flat)
 

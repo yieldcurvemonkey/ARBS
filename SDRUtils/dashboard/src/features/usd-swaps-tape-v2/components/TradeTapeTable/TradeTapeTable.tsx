@@ -21,6 +21,8 @@ import {
   type DataTableSortEvent,
 } from 'primereact/datatable'
 import { useState } from 'react'
+import { FilterMatchMode, FilterOperator } from 'primereact/api'
+import { Filter } from 'lucide-react'
 import { ROW_ESTIMATE_PX } from '../../constants'
 import {
   DEFAULT_SORT_FIELD,
@@ -413,6 +415,41 @@ export function TradeTapeTable(props: TradeTapeTableProps): JSX.Element {
     columnFilters.reset()
   }, [columnFilters])
 
+  const [mobileFiltersOpen, setMobileFiltersOpen] = useState(false)
+  const [mobileFilterLabel, setMobileFilterLabel] = useState('')
+  const [mobileFilterPkg, setMobileFilterPkg] = useState('')
+  const [mobileFilterClass, setMobileFilterClass] = useState('')
+
+  const applyMobileFilter = useCallback(() => {
+    const next: Record<string, unknown> = {}
+    if (mobileFilterLabel.trim()) {
+      next.tape_label = {
+        operator: FilterOperator.AND,
+        constraints: [{ value: mobileFilterLabel.trim(), matchMode: FilterMatchMode.CONTAINS }],
+      }
+    }
+    if (mobileFilterPkg) {
+      next.package_type = {
+        operator: FilterOperator.AND,
+        constraints: [{ value: mobileFilterPkg, matchMode: FilterMatchMode.EQUALS }],
+      }
+    }
+    if (mobileFilterClass) {
+      next.economic_class_primary = {
+        operator: FilterOperator.AND,
+        constraints: [{ value: mobileFilterClass, matchMode: FilterMatchMode.EQUALS }],
+      }
+    }
+    columnFilters.setFilters(next as DataTableFilterMeta)
+  }, [mobileFilterLabel, mobileFilterPkg, mobileFilterClass, columnFilters])
+
+  const clearMobileFilters = useCallback(() => {
+    setMobileFilterLabel('')
+    setMobileFilterPkg('')
+    setMobileFilterClass('')
+    columnFilters.reset()
+  }, [columnFilters])
+
   if (isMobile) {
     return (
       <div
@@ -439,10 +476,22 @@ export function TradeTapeTable(props: TradeTapeTableProps): JSX.Element {
             </span>
           )}
           <div className="flex-1" />
+          <button
+            type="button"
+            onClick={() => setMobileFiltersOpen((v) => !v)}
+            className={`min-h-[44px] inline-flex items-center gap-1.5 rounded border px-3 py-1 font-mono text-xs active:bg-slate-700 ${
+              mobileFiltersOpen || filtersActive
+                ? 'border-sky-600/50 bg-sky-900/30 text-sky-200'
+                : 'border-slate-700 text-slate-300'
+            }`}
+          >
+            <Filter className="h-3.5 w-3.5" />
+            Filter
+          </button>
           {filtersActive && (
             <button
               type="button"
-              onClick={handleResetAll}
+              onClick={() => { clearMobileFilters(); setMobileFiltersOpen(false) }}
               className="min-h-[44px] rounded border border-slate-700 px-3 py-1 font-mono text-xs text-slate-300 active:bg-slate-700"
             >
               Reset
@@ -458,6 +507,61 @@ export function TradeTapeTable(props: TradeTapeTableProps): JSX.Element {
           </button>
           {actionSlot}
         </div>
+        {mobileFiltersOpen && (
+          <div className="flex flex-col gap-2 border-b border-slate-800 bg-slate-900/60 px-3 py-2.5">
+            <div className="flex flex-col gap-1">
+              <label className="font-mono text-[10px] uppercase tracking-wider text-slate-500">Tape Label</label>
+              <input
+                type="text"
+                placeholder="Search tape label…"
+                value={mobileFilterLabel}
+                onChange={(e) => setMobileFilterLabel(e.target.value)}
+                onKeyDown={(e) => { if (e.key === 'Enter') applyMobileFilter() }}
+                className="min-h-[44px] rounded border border-slate-700 bg-slate-950 px-3 py-2 font-mono text-xs text-slate-100 placeholder-slate-600 focus:border-sky-600 focus:outline-none"
+              />
+            </div>
+            <div className="flex gap-2">
+              <div className="flex flex-1 flex-col gap-1">
+                <label className="font-mono text-[10px] uppercase tracking-wider text-slate-500">Package</label>
+                <select
+                  value={mobileFilterPkg}
+                  onChange={(e) => setMobileFilterPkg(e.target.value)}
+                  className="min-h-[44px] rounded border border-slate-700 bg-slate-950 px-2 py-2 font-mono text-xs text-slate-100 focus:border-sky-600 focus:outline-none"
+                >
+                  <option value="">All</option>
+                  <option value="OUTRIGHT">Outright</option>
+                  <option value="CURVE">Curve</option>
+                  <option value="FLY">Fly</option>
+                  <option value="SPREADOVER">Spreadover</option>
+                  <option value="MATCHED_MATURITY">MMS</option>
+                  <option value="BASIS">Basis</option>
+                </select>
+              </div>
+              <div className="flex flex-1 flex-col gap-1">
+                <label className="font-mono text-[10px] uppercase tracking-wider text-slate-500">Class</label>
+                <select
+                  value={mobileFilterClass}
+                  onChange={(e) => setMobileFilterClass(e.target.value)}
+                  className="min-h-[44px] rounded border border-slate-700 bg-slate-950 px-2 py-2 font-mono text-xs text-slate-100 focus:border-sky-600 focus:outline-none"
+                >
+                  <option value="">All</option>
+                  <option value="ECONOMIC_FLOW">Flow</option>
+                  <option value="ECONOMIC_UNWIND">Unwind</option>
+                  <option value="ECONOMIC_AMENDMENT">Amendment</option>
+                  <option value="ADMINISTRATIVE">Admin</option>
+                  <option value="VALUATION">Valuation</option>
+                </select>
+              </div>
+            </div>
+            <button
+              type="button"
+              onClick={applyMobileFilter}
+              className="min-h-[44px] rounded bg-sky-700 px-4 py-2 font-mono text-xs font-semibold text-white active:bg-sky-600"
+            >
+              Apply Filters
+            </button>
+          </div>
+        )}
         <MobileTradeCards
           rows={displayRows}
           loading={loading}

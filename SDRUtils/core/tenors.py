@@ -291,9 +291,10 @@ def forward_to_label(years: float, effective_date: Optional[pd.Timestamp] = None
     """
     Convert forward start in years to label.
 
-    Standard constant-maturity labels take precedence. Exact special-date
-    labels (IMM/FOMC) are only used as a fallback for non-benchmark forwards,
-    and never override spot.
+    IMM/FOMC labels take priority over relative labels (e.g. "3W") so
+    that a 3-week forward landing on an IMM date renders as "IMM_M2026"
+    rather than the ambiguous "3W".  Spot (T+2 settlement) is never
+    overridden.
 
     Args:
         years: Forward start in year fractions
@@ -303,7 +304,7 @@ def forward_to_label(years: float, effective_date: Optional[pd.Timestamp] = None
         Forward label string (e.g., 'spot', '1Y', 'IMM_U2025')
     """
     standard_label, matched_benchmark = _standard_forward_label(years, is_swaptions=is_swaptions)
-    if matched_benchmark or standard_label == "spot":
+    if standard_label == "spot":
         return standard_label
 
     if effective_date is not None:

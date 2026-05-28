@@ -195,6 +195,8 @@ export const TAPE_TAG_TONES: Record<string, string> = {
   'NOVA-OUT': 'bg-cyan-900/40 text-cyan-200',
   EXER: 'bg-cyan-900/40 text-cyan-200',
   CLRG: 'bg-zinc-700/50 text-zinc-300',
+  'PAST-EFF': 'bg-violet-900/40 text-violet-200',
+  'OFF-MKT': 'bg-red-900/50 text-red-200',
 }
 
 export const TIMESERIES_METRICS: Array<{ key: TimeseriesMetricKey; label: string }> = [

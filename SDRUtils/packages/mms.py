@@ -151,9 +151,18 @@ def detect_mms_trades_df(
     )
 
     # --- Forward-start exclusion: MMS is for spot-starting swaps only ---
+    # Also exclude significantly back-dated trades: unwinds are SDR-reported
+    # with the original trade's effective date, producing large negative
+    # forward_start_years.  The old OR logic let them through because
+    # ~is_forward is True for back-dated trades (they are not *forward* either).
+    # Threshold: -0.10 yr ≈ 5 weeks; genuine delayed reporting stays inside.
+    _BACKDATE_FLOOR = -0.10
     if "is_forward" in out.columns:
         fwd_years = pd.to_numeric(out.get("forward_start_years"), errors="coerce").fillna(0)
-        spot_start_mask = (~out["is_forward"].fillna(False).astype(bool).values) | (fwd_years.values <= 0.02)
+        spot_start_mask = (
+            (~out["is_forward"].fillna(False).astype(bool).values)
+            & (fwd_years.values >= _BACKDATE_FLOOR)
+        )
     else:
         spot_start_mask = np.ones(len(out), dtype=bool)
 

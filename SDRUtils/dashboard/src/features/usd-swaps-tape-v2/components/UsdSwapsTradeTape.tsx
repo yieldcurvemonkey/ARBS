@@ -224,16 +224,18 @@ export default function UsdSwapsTradeTape(): JSX.Element {
           />
         </div>
         {analyticsOpen ? (
-          <AnalyticsPanel
-            rows={tape.rows}
-            selected={selection.selected}
-            focused={focus.focused}
-            onClose={() => setAnalyticsOpen(false)}
-            onClearFocused={() => {
-              focus.clear()
-              selection.clear()
-            }}
-          />
+          <div className="fixed inset-x-0 bottom-0 z-40 shadow-2xl shadow-black/50">
+            <AnalyticsPanel
+              rows={tape.rows}
+              selected={selection.selected}
+              focused={focus.focused}
+              onClose={() => setAnalyticsOpen(false)}
+              onClearFocused={() => {
+                focus.clear()
+                selection.clear()
+              }}
+            />
+          </div>
         ) : null}
         <style jsx global>{`
           .usd-swaps-tape-shell {
