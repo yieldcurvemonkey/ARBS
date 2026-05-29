@@ -26,8 +26,12 @@ import pytz
 NYC_tz = pytz.timezone("America/New_York")
 
 # ─── Config ───────────────────────────────────────────────────────────────────
-AS_OF = datetime.date(2026, 5, 22)
+AS_OF = datetime.date(2026, 5, 27)
 CURVE = "USD-SOFR-1D-Q12STIRT"
+
+# Butterfly spacings: 1 = 3mo (consecutive contracts), 2 = 6mo gap fly
+# A 6mo gap fly has legs 2 quarters apart, e.g. M6-Z6-M7 (+1 M6, -2 Z6, +1 M7).
+SPACINGS = {1: "3mo", 2: "6mo"}
 
 IMM_TENORS = [
     "IMM_1xIMM_2", "IMM_2xIMM_3", "IMM_3xIMM_4", "IMM_4xIMM_5",
@@ -69,41 +73,48 @@ for t in IMM_TENORS:
 print(f"\nStrip ({len(contracts)} contracts): {' '.join(contracts)}")
 print(f"Rate range: {min(rates):.3f}% - {max(rates):.3f}%\n")
 
-# Calendar spreads (bps, price space: near − deferred)
+# Calendar spreads (bps, price space: near − deferred) — consecutive (3mo)
 cal_spreads = {}
 for i in range(len(contracts) - 1):
     name = f"SP {contracts[i]}-{contracts[i+1]}"
     val = (prices[i] - prices[i+1]) * 10000
     cal_spreads[name] = val
 
-# 3-month butterflies
+# Butterflies for each spacing: spacing=1 → 3mo fly, spacing=2 → 6mo gap fly.
+# Legs are i, i+spacing, i+2*spacing. Spreads span `spacing` quarters each.
 butterflies = []
-for i in range(len(contracts) - 2):
-    near, mid, far = contracts[i], contracts[i+1], contracts[i+2]
-    bf_val = (prices[i] - 2 * prices[i+1] + prices[i+2]) * 10000
-    sp_near = cal_spreads[f"SP {near}-{mid}"]
-    sp_far = cal_spreads[f"SP {mid}-{far}"]
-    butterflies.append({
-        "name": f"BF {near}-{mid}-{far}",
-        "near": near, "mid": mid, "far": far,
-        "near_symbol": IMM_CODE_TO_SFR[near],
-        "mid_symbol": IMM_CODE_TO_SFR[mid],
-        "far_symbol": IMM_CODE_TO_SFR[far],
-        "bf_bps": bf_val,
-        "sp_near_bps": sp_near,
-        "sp_far_bps": sp_far,
-        "near_rate": rates[i],
-        "mid_rate": rates[i+1],
-        "far_rate": rates[i+2],
-    })
+for spacing, gap_label in SPACINGS.items():
+    for i in range(len(contracts) - 2 * spacing):
+        ni, mi, fi = i, i + spacing, i + 2 * spacing
+        near, mid, far = contracts[ni], contracts[mi], contracts[fi]
+        bf_val = (prices[ni] - 2 * prices[mi] + prices[fi]) * 10000
+        sp_near = (prices[ni] - prices[mi]) * 10000
+        sp_far = (prices[mi] - prices[fi]) * 10000
+        butterflies.append({
+            "name": f"BF {near}-{mid}-{far}",
+            "gap": gap_label,
+            "spacing": spacing,
+            "near": near, "mid": mid, "far": far,
+            "near_symbol": IMM_CODE_TO_SFR[near],
+            "mid_symbol": IMM_CODE_TO_SFR[mid],
+            "far_symbol": IMM_CODE_TO_SFR[far],
+            "bf_bps": bf_val,
+            "sp_near_bps": sp_near,
+            "sp_far_bps": sp_far,
+            "near_rate": rates[ni],
+            "mid_rate": rates[mi],
+            "far_rate": rates[fi],
+        })
 
 print("Calendar Spreads (bps):")
 for k, v in cal_spreads.items():
     print(f"  {k}: {v:+.2f}")
 
-print(f"\n3-Month Butterflies (bps):")
-for bf in butterflies:
-    print(f"  {bf['name']}: {bf['bf_bps']:+.2f}")
+for spacing, gap_label in SPACINGS.items():
+    print(f"\n{gap_label.upper()} Butterflies (bps):")
+    for bf in butterflies:
+        if bf["spacing"] == spacing:
+            print(f"  {bf['name']}: {bf['bf_bps']:+.2f}")
 
 # ─── Step 2: FOMC meeting overlay ───��────────────────────────────────────────
 fomc_dates_raw = get_fomc_meetings_list(as_of=AS_OF, n_plus_years=2)
@@ -140,10 +151,16 @@ for bf in butterflies:
     near_start, near_end = imm_to_approx_dates(bf["near"])
     mid_start, mid_end = imm_to_approx_dates(bf["mid"])
     far_start, far_end = imm_to_approx_dates(bf["far"])
+    # Per-leg accrual-quarter meetings (used for asymmetry detection)
     bf["fomc_near"] = count_fomc_in_window(near_start, near_end, fomc_dates)
     bf["fomc_mid"] = count_fomc_in_window(mid_start, mid_end, fomc_dates)
     bf["fomc_far"] = count_fomc_in_window(far_start, far_end, fomc_dates)
     bf["fomc_total"] = bf["fomc_near"] + bf["fomc_mid"] + bf["fomc_far"]
+    # Gap-window meetings: for gap flies the curvature is driven by meetings
+    # BETWEEN the legs. near_gap = meetings from near-leg start to mid-leg start;
+    # far_gap = mid-leg start to far-leg start. For 3mo flies these ~= per-leg.
+    bf["fomc_near_gap"] = count_fomc_in_window(near_start, mid_start, fomc_dates)
+    bf["fomc_far_gap"] = count_fomc_in_window(mid_start, far_start, fomc_dates)
 
 # ─── Step 3: Fetch SABR smiles and compute BKM + BL moments ──────────────────
 print("\n" + "-" * 76)
@@ -390,6 +407,7 @@ rows = []
 for bf in butterflies:
     row = {
         "Butterfly": bf["name"],
+        "Gap": bf["gap"],
         "Level (bps)": bf["bf_bps"],
         "Prob Δ (pp)": bf["bf_bps"] / 25.0 * 100 if bf["bf_bps"] else 0,
         "Std Near": bf.get("std_near"),
@@ -408,10 +426,14 @@ for bf in butterflies:
 
 df = pd.DataFrame(rows)
 
-# Print detailed results
-print(f"\n{'Butterfly':<16} {'Level':>6} {'Prob':>5} {'Std_N':>5} {'Std_M':>5} {'Std_F':>5} {'StdExc':>6} {'AdjExc':>6} {'VarSig':>6} {'AdjSig':>6} {'K/W':>5} {'Frag':>5} {'FOMC':>7}")
-print("-" * 120)
+# Print detailed results, grouped by gap
+print(f"\n{'Butterfly':<16} {'Gap':>4} {'Level':>6} {'Prob':>5} {'Std_N':>5} {'Std_M':>5} {'Std_F':>5} {'StdExc':>6} {'AdjExc':>6} {'VarSig':>6} {'AdjSig':>6} {'K/W':>5} {'Frag':>5} {'FOMC':>7}")
+print("-" * 124)
+prev_gap = None
 for _, r in df.iterrows():
+    if r["Gap"] != prev_gap:
+        print(f"  --- {r['Gap']} gap flies ---")
+        prev_gap = r["Gap"]
     std_n = f"{r['Std Near']:.0f}" if r['Std Near'] is not None else "-"
     std_m = f"{r['Std Mid']:.0f}" if r['Std Mid'] is not None else "-"
     std_f = f"{r['Std Far']:.0f}" if r['Std Far'] is not None else "-"
@@ -421,7 +443,7 @@ for _, r in df.iterrows():
     adj_sig = f"{r['Adj Signal']:+.2f}" if r.get('Adj Signal') is not None else "-"
     kw = f"{r['Kink/Width']:.3f}" if r['Kink/Width'] is not None else "-"
     frag = f"{r['Fragility']:.3f}" if r['Fragility'] is not None else "-"
-    print(f"{r['Butterfly']:<16} {r['Level (bps)']:+6.1f} {r['Prob Δ (pp)']:+5.0f} {std_n:>5} {std_m:>5} {std_f:>5} {std_exc:>6} {adj_exc:>6} {var_sig:>6} {adj_sig:>6} {kw:>5} {frag:>5} {r['FOMC (N/M/F)']:>7}")
+    print(f"{r['Butterfly']:<16} {r['Gap']:>4} {r['Level (bps)']:+6.1f} {r['Prob Δ (pp)']:+5.0f} {std_n:>5} {std_m:>5} {std_f:>5} {std_exc:>6} {adj_exc:>6} {var_sig:>6} {adj_sig:>6} {kw:>5} {frag:>5} {r['FOMC (N/M/F)']:>7}")
 
 # ─── Interpretation ──────────────────────────────────────────────────────────
 print("\n" + "=" * 76)
@@ -506,13 +528,18 @@ for bf in butterflies:
     elif frag is not None and frag < 0.15:
         signals.append(f"L3 LOW fragility ({frag:.3f}) -> full size OK")
 
-    # FOMC
-    fomc_asym = abs(bf.get("fomc_near", 0) - bf.get("fomc_far", 0))
+    # FOMC — for gap flies, the gap-window meetings (between legs) matter most
+    near_gap_m = bf.get("fomc_near_gap", 0)
+    far_gap_m = bf.get("fomc_far_gap", 0)
+    fomc_asym = abs(near_gap_m - far_gap_m)
     if fomc_asym >= 1:
-        signals.append(f"FOMC: asymmetric ({bf['fomc_near']}/{bf['fomc_mid']}/{bf['fomc_far']})")
+        signals.append(
+            f"FOMC: asymmetric meetings between legs "
+            f"({near_gap_m} in near-gap vs {far_gap_m} in far-gap) -> structural curvature justified"
+        )
 
     if signals or caveats:
-        print(f"\n  {bf['name']} ({bf['bf_bps']:+.2f} bps):")
+        print(f"\n  {bf['name']} [{bf['gap']}] ({bf['bf_bps']:+.2f} bps):")
         for s in signals:
             print(f"    + {s}")
         for c in caveats:

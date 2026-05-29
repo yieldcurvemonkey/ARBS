@@ -152,15 +152,23 @@ def get_imm_label(effective_date: pd.Timestamp, tolerance_days: int = 1) -> Opti
     return None
 
 
-def get_fomc_label(effective_date: pd.Timestamp) -> Optional[str]:
+def get_fomc_label(effective_date: pd.Timestamp, tolerance_days: int = 1) -> Optional[str]:
     """
-    Get FOMC meeting label if the date is a FOMC meeting date.
+    Get FOMC meeting label for a date on or within ±N business days of a meeting.
+
+    A tolerance of 1 business day handles the meeting-day vs decision-day and
+    T+1 settlement conventions (e.g. a swap effective 9/15 when the meeting
+    decision date is 9/16). Mirrors ``get_imm_label``. The returned label always
+    identifies the MEETING date, not the (possibly offset) input date. Pass
+    ``tolerance_days=0`` for exact matching.
 
     Args:
         effective_date: The date to check
+        tolerance_days: Max business days away from a meeting date to still
+            match. Uses the US government bond calendar. Default 1.
 
     Returns:
-        FOMC label string (e.g., 'FOMC_20250115') or None if not a FOMC date
+        FOMC label string (e.g., 'FOMC_20250115') or None if not near a meeting
     """
     ts = to_naive_timestamp(effective_date)
     if pd.isna(ts):
@@ -175,6 +183,19 @@ def get_fomc_label(effective_date: pd.Timestamp) -> Optional[str]:
 
     if ts.date() in fomc_dates:
         return f"FOMC_{ts.strftime('%Y%m%d')}"
+
+    if tolerance_days > 0:
+        ql_date = to_ql_date(ts)
+        if ql_date is not None:
+            cal = ql.UnitedStates(ql.UnitedStates.GovernmentBond)
+            for offset in range(1, tolerance_days + 1):
+                for sign in (1, -1):
+                    neighbor = cal.advance(ql_date, sign * offset, ql.Days)
+                    nd = pd.Timestamp(
+                        neighbor.year(), neighbor.month(), neighbor.dayOfMonth()
+                    ).date()
+                    if nd in fomc_dates:
+                        return f"FOMC_{nd.strftime('%Y%m%d')}"
     return None
 
 

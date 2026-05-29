@@ -5,7 +5,7 @@ from typing import Optional
 import pandas as pd
 
 from SDRUtils.core.dates import calculate_tenor_years, to_naive_timestamp
-from SDRUtils.core.tenors import tenor_to_label, forward_to_label, build_trade_label
+from SDRUtils.core.tenors import tenor_to_label, forward_to_label, build_trade_label, classify_intrinsic_special_tenor
 from SDRUtils.core.parsing import parse_notional, to_float
 from SDRUtils.products.usd.linear_base import (
     LinearProductType,
@@ -41,6 +41,17 @@ def classify_sofr_ois_trade(
     is_forward = forward_years > 0.1
     trade_label = build_trade_label(forward_label, tenor_label, is_forward)
 
+    # Intrinsic special-tenor (IMM / FOMC) classification — maturity-aware, so a
+    # FOMC-to-FOMC swap is tagged FOMC while an IMM-roll into a constant maturity
+    # is tagged IMM. Mirrors the V1 classify_usd_swap_trade path.
+    special_tenor_type, special_tenor_confidence, special_tenor_tags = classify_intrinsic_special_tenor(
+        effective_date=eff_date,
+        expiration_date=exp_date,
+        tenor_label=tenor_label,
+        forward_label=forward_label,
+        is_forward=is_forward,
+    )
+
     rate_index = upi_class.rate_index or RateIndex.SOFR
 
     return USDLinearClassification(
@@ -63,4 +74,7 @@ def classify_sofr_ois_trade(
         rate_index=rate_index,
         linear_product_type=LinearProductType.OIS,
         tenor_segment=tenor_segment,
+        special_tenor_type=special_tenor_type,
+        special_tenor_confidence=special_tenor_confidence,
+        special_tenor_tags=special_tenor_tags,
     )

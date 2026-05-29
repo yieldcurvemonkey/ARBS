@@ -163,7 +163,11 @@ def detect_curve_trades_df(
             return False
         if not both_fomc:
             if eff is not None and eff[i] != eff[j]:
-                return False
+                # Forward gap curves (same tail tenor, different forward start)
+                # have different effective dates by construction — allow them,
+                # mirroring the forward-label/forward-years gap exceptions below.
+                if not (allow_gap_curves and tenor[i] == tenor[j]):
+                    return False
             if fwd_label is not None and fwd_label[i] != fwd_label[j]:
                 if not (allow_gap_curves and tenor[i] == tenor[j]):
                     return False

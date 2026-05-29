@@ -914,6 +914,26 @@ class TradeTape(SDRAnalyzer):
                         )
                     )
 
+                    # ±1 calendar-day tolerance for the schedule-date match: SDR
+                    # effective/maturity dates for FOMC swaps can sit one day off
+                    # the published meeting date (meeting-day vs decision-day /
+                    # settlement convention). Exact matches always win.
+                    def _expand_tol(base):
+                        out = dict(base)
+                        for _d, _lbl in base.items():
+                            for _off in (1, -1):
+                                _nd = (pd.Timestamp(_d) + pd.Timedelta(days=_off)).date()
+                                out.setdefault(_nd, _lbl)
+                        return out
+
+                    eff_to_label_tol = _expand_tol(eff_to_label)
+                    mat_to_label_tol = _expand_tol(mat_to_label)
+                    # Meeting order (schedule is effective-date sorted) for a
+                    # date-noise-tolerant consecutiveness test.
+                    _label_pos = {
+                        lbl: i for i, lbl in enumerate(schedule["meeting_label"].tolist())
+                    }
+
                     def _assign_meeting(row):
                         """Return ``(label, append_tenor)`` for a single row.
 
@@ -930,16 +950,18 @@ class TradeTape(SDRAnalyzer):
                             return ("", False)
                         eff_date = eff.date()
                         mat_date = mat.date()
-                        eff_lbl_raw = eff_to_label.get(eff_date)
+                        eff_lbl_raw = eff_to_label_tol.get(eff_date)
                         # Prefer the meeting that STARTS at mat (eff_to_label)
                         # so endpoint-to-endpoint labels like "APR26 DEC26"
                         # resolve cleanly. Fall back to mat_to_label for
                         # completeness.
-                        mat_lbl_raw = eff_to_label.get(mat_date) or mat_to_label.get(mat_date)
+                        mat_lbl_raw = eff_to_label_tol.get(mat_date) or mat_to_label_tol.get(mat_date)
 
-                        # Tier 1 — consecutive FOMC meetings.
-                        if eff_lbl_raw and mat_lbl_raw and consecutive_meeting_pair(
-                            eff, mat, schedule
+                        # Tier 1 — consecutive FOMC meetings (by meeting order so
+                        # ±1-day date noise on the endpoints still resolves).
+                        if eff_lbl_raw and mat_lbl_raw and (
+                            _label_pos.get(mat_lbl_raw, -99)
+                            == _label_pos.get(eff_lbl_raw, -1) + 1
                         ):
                             return (short_meeting_label(eff_lbl_raw), False)
 
@@ -976,7 +998,7 @@ class TradeTape(SDRAnalyzer):
                         ts = pd.to_datetime(d, errors="coerce")
                         if pd.isna(ts):
                             return False
-                        return eff_to_label.get(ts.date()) is not None
+                        return eff_to_label_tol.get(ts.date()) is not None
 
                     candidate_mask = df["effective_date"].map(_eff_hits) | fomc_mask
 
