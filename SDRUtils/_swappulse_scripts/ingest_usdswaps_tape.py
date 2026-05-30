@@ -486,11 +486,28 @@ def _normalize_package_id(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
+def _gap_aware_sort_key(group: pd.DataFrame) -> list[str]:
+    """Choose sort columns: tenor_years for normal packages, forward_start_years
+    for gap structures (all legs within ~0.05y of each other in tenor)."""
+    tenor_y = pd.to_numeric(group.get("tenor_years"), errors="coerce")
+    if tenor_y.notna().any() and (tenor_y.max() - tenor_y.min()) > 0.05:
+        return ["tenor_years", "trade_id"]
+    fwd_y = pd.to_numeric(group.get("forward_start_years"), errors="coerce")
+    if fwd_y.notna().any() and (fwd_y.max() - fwd_y.min()) > 0.05:
+        return ["forward_start_years", "trade_id"]
+    return ["execution_timestamp", "trade_id"]
+
+
 def _leg_order_series(df: pd.DataFrame) -> pd.Series:
-    """Assign stable 0-based leg_order within each package, ordered by (ts, trade_id)."""
+    """Assign stable 0-based leg_order within each package.
+
+    Normal packages sort by tenor (5Y < 10Y < 30Y). Gap structures (same tail
+    tenor, different forwards) sort by forward_start_years so M2027 < M2028 < M2029.
+    """
     out = pd.Series(0, index=df.index, dtype="int64")
     for _, group in df.groupby("package_id", sort=False):
-        ordered = group.sort_values(["execution_timestamp", "trade_id"]).index
+        sort_cols = _gap_aware_sort_key(group)
+        ordered = group.sort_values(sort_cols).index
         for rank, idx in enumerate(ordered):
             out.at[idx] = rank
     return out
@@ -839,41 +856,38 @@ def build_leg_rows(tape: pd.DataFrame, *, as_of_date: str) -> list[dict]:
 
 
 def _structural_risk(
-    risk: pd.Series, tenor_years: pd.Series, trade_type: str
+    risk: pd.Series,
+    tenor_years: pd.Series,
+    trade_type: str,
+    forward_start_years: pd.Series | None = None,
 ) -> Optional[float]:
     """Street-convention package DV01 for the front-of-tape RISK cell.
 
-    CURVE and FLY legs carry opposite signs by construction (pay one side,
-    receive the other), so a signed sum cancels out and is meaningless.
-    Convention matches how the desk headlines each structure:
-
-    * CURVE — single-leg headline: ``max(|leg_dv01|)``. A 5Y/30Y curve
-      with legs +25k / +24k reports as 25k (the larger-DV01 leg, which
-      is what the desk quotes as the "size"). Do NOT sum the legs.
-    * FLY — belly DV01 only (absolute value). A 50k belly + two 25k wings
-      reports as 50k. Wings are auto-implied as belly/2, so surfacing the
-      belly alone is the least ambiguous headline. Belly = middle-tenor
-      leg after sorting by ``tenor_years``.
-    * Anything else (OUTRIGHT / MATCHED_MATURITY / INVOICE / SPREADOVER /
-      MAC / …) — signed sum, preserving direction.
+    * CURVE — ``max(|leg_dv01|)`` (the larger-DV01 leg).
+    * FLY — belly DV01 only (absolute value). Belly = middle leg after
+      gap-aware sort (``tenor_years`` for normal flies, ``forward_start_years``
+      for gap flies where all legs share the same tail tenor).
+    * Anything else — signed sum.
 
     Returns None if no leg has a non-null risk.
     """
     if not risk.notna().any():
         return None
     tt = (trade_type or "").upper()
-    # Composite package types (e.g. "SPREADOVER_CURVE", "MATCHED_MATURITY_FLY")
-    # from detect_sub_package_curve_fly follow the same headline convention
-    # as their base CURVE / FLY — match by suffix.
     if tt == "CURVE" or tt.endswith("_CURVE") or tt in ("INVOICE_SWITCH", "INVOICE_CALENDAR"):
         return _num_or_none(risk.abs().max(skipna=True))
     if tt == "FLY" or tt.endswith("_FLY"):
         valid_mask = risk.notna() & tenor_years.notna()
         if valid_mask.any():
-            ordered = tenor_years[valid_mask].sort_values(kind="stable")
+            ty = tenor_years[valid_mask]
+            # Gap fly: all same tail → sort by forward_start_years
+            if (ty.max() - ty.min()) <= 0.05 and forward_start_years is not None:
+                fwd = forward_start_years.reindex(ty.index)
+                if fwd.notna().any():
+                    ty = fwd[fwd.notna()]
+            ordered = ty.sort_values(kind="stable")
             belly_idx = ordered.index[len(ordered) // 2]
             return _num_or_none(abs(risk.loc[belly_idx]))
-        # Fallback: no tenor info, emit max abs (single-leg headline).
         return _num_or_none(risk.abs().max(skipna=True))
     return _num_or_none(risk.sum(skipna=True))
 
@@ -1001,10 +1015,17 @@ def _compute_leg_summary(
         elif "FLY" in kind:
             is_fly = True
 
-    # Sort legs by tenor ascending
+    # Gap-aware sort: tenor_years for normal packages, forward_start_years
+    # for gap structures where all legs share the same tail tenor.
+    fwd_y = pd.to_numeric(g.get("forward_start_years"), errors="coerce")
     valid = tenor_y.notna()
     if valid.any():
-        order = tenor_y[valid].sort_values(kind="stable").index
+        ty_range = tenor_y[valid].max() - tenor_y[valid].min()
+        if ty_range <= 0.05 and fwd_y.notna().any() and (fwd_y.max() - fwd_y.min()) > 0.05:
+            sort_axis = fwd_y
+        else:
+            sort_axis = tenor_y
+        order = sort_axis[sort_axis.notna()].sort_values(kind="stable").index
         idx_list = list(order) + [i for i in g.index if i not in order]
     else:
         idx_list = list(g.index)
@@ -1122,7 +1143,8 @@ def build_package_rows(tape: pd.DataFrame, *, as_of_date: str) -> list[dict]:
 
         package_type = _consistent_str(g, "package_type") or "OUTRIGHT"
         trade_type = _consistent_str(g, "trade_type") or package_type
-        structural_risk = _structural_risk(risk, tenor_years_series, trade_type)
+        fwd_years_series = pd.to_numeric(g.get("forward_start_years"), errors="coerce")
+        structural_risk = _structural_risk(risk, tenor_years_series, trade_type, forward_start_years=fwd_years_series)
 
         rec: dict[str, Any] = {
             "package_id": str(package_id),

@@ -216,8 +216,14 @@ def detect_fly_trades_df(
                     return False
                 if fwd_years is not None and abs(fwd_years[i] - fwd_years[j]) > forward_years_tol:
                     return False
-            if require_same_underlying_tenor and tenor_years[i] != tenor_years[j]:
-                return False
+            # "Same underlying tenor" with day-count/leap-year tolerance
+            # (~7 days): a 1Y tail spanning Feb 29 is 1.0027y, not 1.0, so exact
+            # equality would split forward gap flies (same tail, different
+            # forward) into outrights. Genuinely different tails differ by >> tol.
+            if require_same_underlying_tenor:
+                _ti, _tj = tenor_years[i], tenor_years[j]
+                if np.isnan(_ti) or np.isnan(_tj) or abs(_ti - _tj) > 0.02:
+                    return False
             if und is not None and und[i] != und[j]:
                 return False
             if upi is not None and upi[i] != upi[j]:
