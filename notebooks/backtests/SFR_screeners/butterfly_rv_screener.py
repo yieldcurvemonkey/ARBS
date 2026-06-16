@@ -29,9 +29,10 @@ NYC_tz = pytz.timezone("America/New_York")
 AS_OF = datetime.date(2026, 5, 27)
 CURVE = "USD-SOFR-1D-Q12STIRT"
 
-# Butterfly spacings: 1 = 3mo (consecutive contracts), 2 = 6mo gap fly
+# Butterfly spacings: legs are `spacing` quarters apart.
+# 1 = 3mo (consecutive), 2 = 6mo, 3 = 9mo, 4 = 12mo gap fly.
 # A 6mo gap fly has legs 2 quarters apart, e.g. M6-Z6-M7 (+1 M6, -2 Z6, +1 M7).
-SPACINGS = {1: "3mo", 2: "6mo"}
+SPACINGS = {1: "3mo", 2: "6mo", 3: "9mo", 4: "12mo"}
 
 IMM_TENORS = [
     "IMM_1xIMM_2", "IMM_2xIMM_3", "IMM_3xIMM_4", "IMM_4xIMM_5",

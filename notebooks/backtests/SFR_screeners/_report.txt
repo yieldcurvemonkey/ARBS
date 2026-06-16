@@ -1,0 +1,76 @@
+C:\Users\chris\clee\ARBS\notebooks\backtests\SFR_screeners\kink_fade_backtest.py:358: FutureWarning: Downcasting object dtype arrays on .fillna, .ffill, .bfill is deprecated and will change in a future version. Call result.infer_objects(copy=False) instead. To opt-in to the future behavior, set `pd.set_option('future.no_silent_downcasting', True)`
+  ("+excl_near_dead", dict(mask=~panel["near_dead"].fillna(False))),
+Panel: 7000 rows, 250 dates (2025-05-22..2026-05-22), 44 flies
+Options coverage: 2420 rows / 87 dates (2025-05-22..2025-09-25)
+
+========================================================================================
+1. IS THE FLY MEAN-REVERTING?  within-gap xs-IC( bf_level , Δfly )  (want NEG)
+========================================================================================
+  h= 5d: IC=-0.135 (t=-3.72, n_dates=245, hit=40%)
+  h=21d: IC=-0.271 (t=-8.31, n_dates=229, hit=32%)
+  h=63d: IC=-0.658 (t=-30.26, n_dates=187, hit=3%)
+
+========================================================================================
+2. NAIVE LONG-SHORT FADE (rank bf within gap, gap-neutral)  — the baseline
+========================================================================================
+  h= 5d: IR=+1.32 (nonover Sh=+1.26) mean=+1.23bps hit=61% maxDD=-87.3 n=245
+  h=21d: IR=+1.35 (nonover Sh=+1.97) mean=+6.82bps hit=69% maxDD=-117.8 n=229
+  h=63d: IR=+15.44 (nonover Sh=+9.09) mean=+19.41bps hit=97% maxDD=-2.8 n=187
+
+========================================================================================
+3. OPTIONS SIGNALS — within-gap xs-IC vs Δfly  (fade wants NEG; sign as-is)
+========================================================================================
+  adj_signal (var_signal_adj)   : h5=+0.050(t+1.0) h21=-0.026(t-0.7) h63=+0.015(t+0.3) 
+  adj_excess  (std_excess_adj)  : h5=+0.116(t+2.0) h21=+0.079(t+1.6) h63=+0.220(t+5.2) 
+  raw var_signal                : h5=+0.030(t+0.6) h21=-0.028(t-0.8) h63=-0.035(t-0.8) 
+  skew_excess (mid-wings)       : h5=+0.081(t+1.5) h21=+0.110(t+2.4) h63=+0.047(t+1.2) 
+  skew_mid                      : h5=-0.163(t-2.6) h21=-0.165(t-2.6) h63=-0.556(t-16.4) 
+
+========================================================================================
+4. ★ ADDITIVITY — does options info beat the fly LEVEL?  (Fama-MacBeth, honest)
+   per-date xs regression dfly_z ~ bf_z + signal_z (within gap); t = NW(lag=h)
+   across dates. options adds iff t_signal stays large with right (NEG) sign.
+========================================================================================
+  adj_signal      : h5: β=+0.009 t=+0.1 (bf t=-2.8) | h21: β=-0.065 t=-0.8 (bf t=-2.6) | h63: β=+0.031 t=+0.4 (bf t=-12.6) | 
+  adj_excess      : h5: β=+0.082 t=+0.8 (bf t=-2.3) | h21: β=-0.080 t=-0.7 (bf t=-5.6) | h63: β=+0.005 t=+0.1 (bf t=-15.1) | 
+  raw var_signal  : h5: β=-0.010 t=-0.1 (bf t=-2.9) | h21: β=-0.017 t=-0.2 (bf t=-2.2) | h63: β=+0.028 t=+0.3 (bf t=-13.3) | 
+  skew_excess     : h5: β=+0.091 t=+1.0 (bf t=-2.4) | h21: β=+0.091 t=+1.2 (bf t=-3.6) | h63: β=-0.011 t=-0.4 (bf t=-30.1) | 
+  GAP-FLIES ONLY (6/9/12mo — where the convexity link lives; 3mo excluded):
+    adj_signal    : h5: β=+0.013 t=+0.1 | h21: β=+0.020 t=+0.2 | h63: β=-0.007 t=-0.1 | 
+    adj_excess    : h5: β=+0.098 t=+0.7 | h21: β=-0.219 t=-1.3 | h63: β=-0.152 t=-2.7 | 
+  (reference — pooled OLS, t inflated by pseudo-replication, for contrast:)
+    pooled h= 5d: β_adj=-0.085 (t=-4.3, inflated)  β_bf=-0.193
+    pooled h=21d: β_adj=-0.147 (t=-7.5, inflated)  β_bf=-0.319
+    pooled h=63d: β_adj=-0.059 (t=-3.2, inflated)  β_bf=-0.548
+
+  entanglement: ρ(adj_signal, bf)=+0.01, ρ(adj_signal, |bf|)=-0.04  (adj_signal = std_excess_adj/|bf|)
+
+========================================================================================
+5. BUCKETED predictive power of adj_signal  (pooled-ρ; fade wants NEG)
+========================================================================================
+  by GAP:
+     3mo: h5=-0.007(n860) h21=+0.006(n832) h63=+0.098(n781) 
+     6mo: h5=-0.033(n686) h21=-0.131(n658) h63=-0.126(n607) 
+     9mo: h5=-0.046(n512) h21=-0.312(n484) h63=-0.348(n433) 
+    12mo: h5=-0.067(n338) h21=-0.434(n310) h63=-0.305(n259) 
+  by FOMC gap-window symmetry:
+     symmetric: h5=-0.034(n252) h21=+0.007(n252) h63=-0.169(n252) 
+    asymmetric: h5=-0.029(n2144) h21=-0.147(n2032) h63=-0.075(n1828) 
+
+========================================================================================
+6. OPTIONS LONG-SHORT FADE (adj_signal, within gap)  vs naive  + gate ablation
+========================================================================================
+  naive_bf   h= 5d: IR=+1.32 (nonover +1.26) mean=+1.23bps hit=61% n=245
+  naive_bf   h=21d: IR=+1.35 (nonover +1.97) mean=+6.82bps hit=69% n=229
+  naive_bf   h=63d: IR=+15.44 (nonover +9.09) mean=+19.41bps hit=97% n=187
+  adj_signal h= 5d: IR=-0.03 (nonover -1.41) mean=-0.01bps hit=47% n=87
+  adj_signal h=21d: IR=+0.56 (nonover +0.91) mean=+0.51bps hit=59% n=87
+  adj_signal h=63d: IR=-0.01 (nonover +nan) mean=-0.02bps hit=51% n=87
+
+  Gate ablation (adj_signal, h=21, within gap):
+                 raw: IR=+0.56 mean=+0.51bps hit=59% n=87
+        +frag_weight: IR=+0.56 mean=+0.51bps hit=59% n=87
+     +excl_near_dead: IR=-0.09 mean=-0.06bps hit=53% n=87
+        +min_fly_1bp: IR=+0.18 mean=+0.17bps hit=56% n=87
+     +symmetric_FOMC: insufficient
+        +cost_0.75bp: IR=-1.07 mean=-0.99bps hit=41% n=87

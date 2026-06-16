@@ -6,6 +6,7 @@ import threading
 import time
 import warnings
 from collections import deque
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import date, datetime, timedelta
 from functools import reduce
 from io import StringIO
@@ -120,6 +121,7 @@ class BarchartFetcher(BaseFetcher):
     _SESSION_TOKEN_TTL_SECONDS = 60
     _SESSION_TOKEN_POOL_SIZE = 3
     _SESSION_TOKEN_FORCE_REFRESH_COOLDOWN_SECONDS = 5
+    _TOKEN_WARM_MAX_WORKERS = 16
     _SHARED_SESSION_TOKEN_CACHE: Dict[str, Dict[str, object]] = {}
     _SHARED_SESSION_TOKEN_CACHE_LOCK = threading.RLock()
     _STIR_ROOT_CODE_RE = re.compile(
@@ -160,6 +162,7 @@ class BarchartFetcher(BaseFetcher):
         session_token_pool_size: Optional[int] = None,
         session_token_scope: Optional[str] = None,
         session_token_force_refresh_cooldown_seconds: Optional[int] = None,
+        proxy_auth_retries: int = 1,
     ):
         super().__init__(
             global_timeout=global_timeout,
@@ -180,25 +183,17 @@ class BarchartFetcher(BaseFetcher):
         self._session_token_pool_size = max(1, pool_size)
         self._session_token_scope = session_token_scope
         self._session_token_force_refresh_cooldown_seconds = max(0, force_refresh_cooldown)
+        # Default SOCKS5-auth retry budget for this fetcher. The single-proxy path keeps the
+        # heal-and-retry default (1 -> one 60s wait); fan-out workers set 0 so a flaky proxy
+        # raises instantly and is evicted/requeued instead of stalling a whole shard for 60s.
+        self._proxy_auth_retries = max(0, int(proxy_auth_retries))
         self._last_history_status_by_symbol: Dict[str, Dict[str, object]] = {}
-
-        # Reuse one session for token fetches to avoid creating a new SOCKS pool per call.
-        self._token_session_lock = threading.RLock()
-        self._token_http_session = requests.Session()
-        adapter_pool_size = max(4, self._session_token_pool_size * 2)
-        adapter = HTTPAdapter(pool_connections=adapter_pool_size, pool_maxsize=adapter_pool_size)
-        self._token_http_session.mount("http://", adapter)
-        self._token_http_session.mount("https://", adapter)
-        session_proxies = {k: v for k, v in (self._proxies or {}).items() if v}
-        if session_proxies:
-            self._token_http_session.proxies.update(session_proxies)
+        # Token fetches use a fresh, self-closing session per call (_make_token_http_session)
+        # so the pool warm can run them concurrently; there is no long-lived session to hold.
 
     def close(self) -> None:
-        with self._token_session_lock:
-            try:
-                self._token_http_session.close()
-            except Exception:
-                pass
+        # Per-call token sessions close themselves; nothing long-lived to release.
+        return None
 
     def get_history_statuses(self) -> Dict[str, Dict[str, object]]:
         return dict(self._last_history_status_by_symbol)
@@ -284,9 +279,11 @@ class BarchartFetcher(BaseFetcher):
         dummy_symbol: Optional[str] = "BTC",
         force_refresh: bool = False,
         log_context: str = "Barchart session token fetch",
-        max_proxy_auth_retries: int = 1,
+        max_proxy_auth_retries: Optional[int] = None,
     ) -> Tuple[str, str]:
         retries = 0
+        if max_proxy_auth_retries is None:
+            max_proxy_auth_retries = self._proxy_auth_retries
         max_retries = max(0, int(max_proxy_auth_retries))
         while True:
             try:
@@ -307,9 +304,11 @@ class BarchartFetcher(BaseFetcher):
         dummy_symbol: Optional[str] = "BTC",
         force_refresh: bool = False,
         log_context: str = "Barchart session token fetch",
-        max_proxy_auth_retries: int = 1,
+        max_proxy_auth_retries: Optional[int] = None,
     ) -> Tuple[str, str]:
         retries = 0
+        if max_proxy_auth_retries is None:
+            max_proxy_auth_retries = self._proxy_auth_retries
         max_retries = max(0, int(max_proxy_auth_retries))
         while True:
             try:
@@ -397,13 +396,112 @@ class BarchartFetcher(BaseFetcher):
                 entry["last_forced_refresh_at"] = now
             return self._apply_session_token(token_pair)
 
+    def _get_new_session_token_with_proxy_retry(
+        self,
+        dummy_symbol: Optional[str] = "BTC",
+        max_proxy_auth_retries: Optional[int] = None,
+    ) -> Tuple[str, str]:
+        """Raw token fetch with the same SOCKS5-auth retry behavior as the cached path."""
+        retries = 0
+        if max_proxy_auth_retries is None:
+            max_proxy_auth_retries = self._proxy_auth_retries
+        max_retries = max(0, int(max_proxy_auth_retries))
+        while True:
+            try:
+                return self._get_new_session_token(dummy_symbol=dummy_symbol)
+            except Exception as exc:
+                if retries >= max_retries or not self._is_socks5_auth_error(exc):
+                    raise
+                retries += 1
+                time.sleep(self._proxy_auth_retry_sleep_seconds())
+
     def _get_shared_session_token_pool(
         self,
         pool_size: int,
         dummy_symbol: Optional[str] = "BTC",
     ) -> List[Tuple[str, str]]:
+        """Warm/return a rotation of ``pool_size`` shared session tokens.
+
+        Cold/expired slots are fetched concurrently with network I/O happening *outside*
+        the shared cache lock. This preserves the sequential contract -- exactly the
+        invalid slots in the rotation get a fresh token, ``rr_index`` advances by
+        ``pool_size``, and the last token in the rotation becomes the instance's current
+        token -- while collapsing N serial round-trips into one parallel batch.
+        """
         size = max(1, int(pool_size))
-        return [self._get_shared_session_token_with_proxy_retry(dummy_symbol=dummy_symbol, force_refresh=False) for _ in range(size)]
+        cache_key = self._session_cache_key()
+
+        # Phase 1 (locked): plan the rotation; find the distinct invalid slots to warm.
+        with self._SHARED_SESSION_TOKEN_CACHE_LOCK:
+            entry = self._get_or_create_cache_entry_unlocked(cache_key)
+            tokens = entry["tokens"]  # type: ignore[index]
+            slot_count = max(1, len(tokens))
+            start_idx = int(entry.get("rr_index", 0)) % slot_count
+            now = time.time()
+            rotation = [(start_idx + i) % slot_count for i in range(size)]
+            need_indices: List[int] = []
+            seen: set = set()
+            for idx in rotation:
+                if idx in seen:
+                    continue
+                seen.add(idx)
+                if not self._token_slot_is_valid(slot=tokens[idx], now=now):
+                    need_indices.append(idx)
+            entry["rr_index"] = (start_idx + size) % slot_count
+            entry["updated_at"] = now
+
+        # Phase 2 (unlocked): fetch the needed tokens concurrently (no lock held).
+        fetched: Dict[int, Tuple[str, str]] = {}
+        if len(need_indices) == 1:
+            fetched[need_indices[0]] = self._get_new_session_token_with_proxy_retry(dummy_symbol=dummy_symbol)
+        elif need_indices:
+            max_workers = max(1, min(len(need_indices), int(self._TOKEN_WARM_MAX_WORKERS)))
+            with ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="bc-tokwarm") as executor:
+                future_to_idx = {
+                    executor.submit(self._get_new_session_token_with_proxy_retry, dummy_symbol): idx
+                    for idx in need_indices
+                }
+                for future in as_completed(future_to_idx):
+                    fetched[future_to_idx[future]] = future.result()
+
+        # Phase 3 (locked): install fetched tokens and build the rotation result.
+        with self._SHARED_SESSION_TOKEN_CACHE_LOCK:
+            entry = self._get_or_create_cache_entry_unlocked(cache_key)
+            tokens = entry["tokens"]  # type: ignore[index]
+            slot_count = max(1, len(tokens))
+            now = time.time()
+            expires_at = now + float(self._session_token_ttl_seconds)
+            for idx, token_pair in fetched.items():
+                if idx >= len(tokens):
+                    continue
+                slot = tokens[idx]
+                # Another thread may have filled it meanwhile; only fill if still invalid.
+                if not self._token_slot_is_valid(slot=slot, now=now):
+                    slot["token_pair"] = token_pair
+                    slot["expires_at"] = expires_at
+            result: List[Tuple[str, str]] = []
+            for idx in rotation:
+                slot = tokens[idx % slot_count]
+                token_pair = slot.get("token_pair")
+                if isinstance(token_pair, tuple) and len(token_pair) == 2:
+                    result.append(self._apply_session_token(token_pair))
+            return result
+
+    def _make_token_http_session(self) -> requests.Session:
+        """Build a short-lived requests.Session (own connection pool) for one token fetch.
+
+        Each token fetch uses its own session so the pool warm can issue many fetches
+        concurrently without serializing on a shared session lock or racing on a shared
+        cookie jar. The proxy config is mirrored from the instance.
+        """
+        session = requests.Session()
+        adapter = HTTPAdapter(pool_connections=2, pool_maxsize=2)
+        session.mount("http://", adapter)
+        session.mount("https://", adapter)
+        session_proxies = {k: v for k, v in (self._proxies or {}).items() if v}
+        if session_proxies:
+            session.proxies.update(session_proxies)
+        return session
 
     def _get_new_session_token(self, dummy_symbol: Optional[str] = "BTC") -> Tuple[str, str]:
         """
@@ -420,13 +518,16 @@ class BarchartFetcher(BaseFetcher):
             "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/132.0.0.0 Safari/537.36",
             "Connection": "close",
         }
-        with self._token_session_lock:
-            self._token_http_session.cookies.clear()
-            interactive_chart_res = self._token_http_session.get(
+        # Fresh session per call: no shared lock, so concurrent pool warming is truly parallel.
+        session = self._make_token_http_session()
+        try:
+            interactive_chart_res = session.get(
                 interactive_chart_url,
                 headers=interactive_chart_headers,
                 timeout=self._global_timeout,
             )
+        finally:
+            session.close()
         interactive_chart_res.raise_for_status()
 
         laravel_token = self._normalize_cookie_token(interactive_chart_res.cookies.get("laravel_token"))
@@ -715,6 +816,47 @@ class BarchartFetcher(BaseFetcher):
                 return symbol, None, uid
             return symbol, None
 
+    @staticmethod
+    def _format_eod_boundary(value: Optional[datetime | date | str]) -> Optional[str]:
+        """Format a date boundary as YYYYMMDD for the queryeod ``start``/``end`` params."""
+        if value is None:
+            return None
+        if isinstance(value, (datetime, date)):
+            return value.strftime("%Y%m%d")
+        ts = pd.to_datetime(value, errors="coerce")
+        if pd.isna(ts):
+            return None
+        return ts.strftime("%Y%m%d")
+
+    def _build_eod_url(
+        self,
+        symbol: str,
+        *,
+        start: Optional[datetime | date | str] = None,
+        end: Optional[datetime | date | str] = None,
+        server_side_dates: bool = False,
+    ) -> str:
+        """Build the queryeod URL.
+
+        By default no date bounds are sent (the endpoint returns full history, which is
+        what the per-symbol frame cache wants so one fetch serves every window). When
+        ``server_side_dates`` is set, ``&start=&end=`` shrink the payload server-side --
+        used for cheap incremental tail refreshes of an already-cached symbol.
+        """
+        url = (
+            f"https://www.barchart.com/proxies/timeseries/historical/queryeod.ashx?"
+            f"symbol={quote(symbol)}&data=daily&maxrecords={self._BARCHART_MAX_RECORD}"
+            f"&volume=contract&order=asc"
+        )
+        if server_side_dates:
+            start_str = self._format_eod_boundary(start)
+            end_str = self._format_eod_boundary(end)
+            if start_str:
+                url += f"&start={start_str}"
+            if end_str:
+                url += f"&end={end_str}"
+        return url
+
     async def _fetch_eod_timeseries(
         self,
         client: httpx.AsyncClient,
@@ -728,6 +870,7 @@ class BarchartFetcher(BaseFetcher):
         uid: Optional[str | int] = None,
         session_token: Optional[Tuple[str, str]] = None,
         rate_limiter: Optional[AsyncRateLimiter] = None,
+        server_side_dates: bool = False,
     ) -> Tuple[str, pd.DataFrame] | Tuple[str, pd.DataFrame, str]:
         token = session_token
         saw_429 = False
@@ -740,10 +883,11 @@ class BarchartFetcher(BaseFetcher):
                     log_context="Barchart EOD token fetch",
                 )
 
-            url = (
-                f"https://www.barchart.com/proxies/timeseries/historical/queryeod.ashx?"
-                f"symbol={quote(symbol)}&data=daily&maxrecords={self._BARCHART_MAX_RECORD}"
-                f"&volume=contract&order=asc"
+            url = self._build_eod_url(
+                symbol,
+                start=start_date,
+                end=end_date,
+                server_side_dates=server_side_dates,
             )
 
             def _build_headers(token_pair: Tuple[str, str]) -> Dict[str, str]:
@@ -953,10 +1097,21 @@ class BarchartFetcher(BaseFetcher):
         one_df: Optional[bool] = False,
         show_tqdm: Optional[bool] = True,
         merge_val_col: Optional[Literal["Open", "High", "Low", "Close", "Volume", "Open Interest"]] = "Close",
+        eod_server_side_dates: bool = False,
+        eod_max_retries: Optional[int] = None,
+        eod_backoff_factor: Optional[float] = None,
     ):
         barchart_symbols = [self._normalize_barchart_symbol(s) for s in barchart_symbols]
         effective_max_concurrent = max(1, int(max_concurrent_tasks or 1))
         effective_max_keepalive = max(1, int(max_keepalive_connections or effective_max_concurrent))
+        # Optional per-call overrides for the EOD retry budget. Fan-out workers pass small
+        # values so a degraded proxy fails fast and its batch is re-stolen by a healthy worker
+        # instead of grinding through the full 5-attempt exponential backoff.
+        eod_retry_kwargs: Dict[str, object] = {}
+        if eod_max_retries is not None:
+            eod_retry_kwargs["max_retries"] = int(eod_max_retries)
+        if eod_backoff_factor is not None:
+            eod_retry_kwargs["backoff_factor"] = float(eod_backoff_factor)
 
         async def build_eod_tasks(
             client: httpx.AsyncClient,
@@ -975,6 +1130,8 @@ class BarchartFetcher(BaseFetcher):
                     end_date=end_date,
                     set_dt_index=not one_df,
                     rate_limiter=rate_limiter,
+                    server_side_dates=eod_server_side_dates,
+                    **eod_retry_kwargs,
                 )
                 for symbol in barchart_symbols
             ]

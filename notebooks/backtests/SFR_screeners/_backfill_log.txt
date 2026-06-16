@@ -1,0 +1,1008 @@
+2026-06-01 09:46:18,670 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQM27|10000C
+2026-06-01 09:46:18,685 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQM27|10025C
+2026-06-01 09:46:36,084 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQU27|10000C
+2026-06-01 09:46:36,084 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQU27|10050C
+2026-06-01 09:46:36,093 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQU27|10025C
+2026-06-01 09:47:32,325 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQZ27|9362P
+2026-06-01 09:47:32,333 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQZ27|9387P
+2026-06-01 09:47:42,278 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQZ27|9862C
+2026-06-01 09:47:43,256 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQZ27|9912C
+2026-06-01 09:47:43,259 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQZ27|9887C
+2026-06-01 09:47:44,265 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQZ27|9937C
+2026-06-01 09:47:44,377 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQZ27|9962C
+2026-06-01 09:47:48,264 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQH28|9362P
+2026-06-01 09:47:48,275 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQH28|9387P
+2026-06-01 09:48:41,340 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQH28|9887C
+2026-06-01 09:48:41,973 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQH28|9912C
+2026-06-01 09:48:42,010 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQH28|9862C
+2026-06-01 09:48:43,310 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQH28|9937C
+2026-06-01 09:48:43,314 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQH28|9962C
+2026-06-01 09:48:47,924 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQM28|9387P
+2026-06-01 09:48:47,935 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQM28|9362P
+2026-06-01 09:48:58,855 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQM28|9887C
+2026-06-01 09:48:58,856 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQM28|9862C
+2026-06-01 09:48:59,845 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQM28|9912C
+2026-06-01 09:48:59,852 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQM28|9962C
+2026-06-01 09:49:00,850 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQM28|9937C
+2026-06-01 09:49:03,848 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQU28|10075C
+2026-06-01 09:49:03,853 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQU28|10025C
+2026-06-01 09:49:03,856 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQU28|10050C
+2026-06-01 09:49:03,858 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQU28|10000C
+2026-06-01 09:50:03,487 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQZ28|10050C
+2026-06-01 09:50:03,498 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQZ28|10075C
+2026-06-01 09:50:03,515 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQZ28|10000C
+2026-06-01 09:50:03,525 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQZ28|10025C
+2026-06-01 09:50:20,175 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQH29|10075C
+2026-06-01 09:50:20,178 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQH29|10050C
+2026-06-01 09:50:20,181 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQH29|10025C
+2026-06-01 09:50:20,189 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQH29|10000C
+2026-06-01 09:53:45,640 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQM27|10025C
+2026-06-01 09:53:45,645 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQM27|10050C
+2026-06-01 09:53:45,651 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQM27|10000C
+2026-06-01 09:53:48,673 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQU27|9887C
+2026-06-01 09:53:48,676 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQU27|9912C
+2026-06-01 09:53:48,677 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQU27|9387P
+2026-06-01 09:53:48,921 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQU27|9362P
+2026-06-01 09:53:49,422 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQU27|9937C
+2026-06-01 09:53:49,423 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQU27|9962C
+2026-06-01 09:53:52,233 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQZ27|9387P
+2026-06-01 09:53:52,242 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQZ27|9362P
+2026-06-01 09:53:52,245 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQZ27|9862C
+2026-06-01 09:53:53,016 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQZ27|9937C
+2026-06-01 09:53:53,019 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQZ27|9887C
+2026-06-01 09:53:53,030 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQZ27|9912C
+2026-06-01 09:53:54,043 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQZ27|9962C
+2026-06-01 09:53:56,850 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQH28|9362P
+2026-06-01 09:53:56,852 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQH28|9387P
+2026-06-01 09:53:56,867 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQH28|9862C
+2026-06-01 09:53:57,613 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQH28|9937C
+2026-06-01 09:53:57,616 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQH28|9912C
+2026-06-01 09:53:57,623 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQH28|9887C
+2026-06-01 09:53:58,610 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQH28|9962C
+2026-06-01 09:54:01,547 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQM28|9387P
+2026-06-01 09:54:01,563 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQM28|9362P
+2026-06-01 09:54:01,590 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQM28|9862C
+2026-06-01 09:54:02,317 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQM28|9887C
+2026-06-01 09:54:02,317 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQM28|9912C
+2026-06-01 09:54:02,326 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQM28|9937C
+2026-06-01 09:54:02,347 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQM28|9962C
+2026-06-01 09:54:05,423 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQU28|9387P
+2026-06-01 09:54:05,427 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQU28|9362P
+2026-06-01 09:54:05,443 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQU28|9887C
+2026-06-01 09:54:05,446 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQU28|9862C
+2026-06-01 09:54:06,197 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQU28|9912C
+2026-06-01 09:54:06,204 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQU28|9937C
+2026-06-01 09:54:06,207 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQU28|9962C
+2026-06-01 09:54:08,915 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQZ28|10025C
+2026-06-01 09:54:08,917 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQZ28|10075C
+2026-06-01 09:54:08,922 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQZ28|10050C
+2026-06-01 09:54:08,932 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQZ28|10000C
+2026-06-01 09:54:11,819 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQH29|10025C
+2026-06-01 09:54:11,821 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQH29|10000C
+2026-06-01 09:54:11,825 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQH29|10075C
+2026-06-01 09:54:11,828 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQH29|10050C
+2026-06-01 09:54:12,647 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQH29|10100C
+2026-06-01 09:54:25,496 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQM27|10025C
+2026-06-01 09:54:25,508 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQM27|10000C
+2026-06-01 09:54:28,478 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQU27|9362P
+2026-06-01 09:54:28,480 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQU27|9912C
+2026-06-01 09:54:28,500 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQU27|9387P
+2026-06-01 09:55:09,730 - BarchartFetcher - ERROR - Barchart EOD - Max retries exceeded for SQU27|9937C: 404 Client Error: Not Found for url: https://www.barchart.com/futures/quotes/SQU27%7C9937C/interactive-chart
+2026-06-01 09:55:10,605 - BarchartFetcher - ERROR - Barchart EOD - Max retries exceeded for SQU27|9962C: 404 Client Error: Not Found for url: https://www.barchart.com/futures/quotes/SQU27%7C9962C/interactive-chart
+2026-06-01 09:55:11,513 - BarchartFetcher - ERROR - Barchart EOD - Max retries exceeded for SQU27|9887C: 404 Client Error: Not Found for url: https://www.barchart.com/futures/quotes/SQU27%7C9887C/interactive-chart
+2026-06-01 09:55:16,824 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQZ27|9387P
+2026-06-01 09:55:16,827 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQZ27|9362P
+2026-06-01 09:55:16,846 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQZ27|9862C
+2026-06-01 09:55:16,846 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQZ27|9887C
+2026-06-01 09:55:17,505 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQZ27|9962C
+2026-06-01 09:55:17,507 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQZ27|9912C
+2026-06-01 09:55:17,515 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQZ27|9937C
+2026-06-01 09:55:21,161 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQH28|9862C
+2026-06-01 09:55:21,178 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQH28|9887C
+2026-06-01 09:55:21,186 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQH28|9362P
+2026-06-01 09:55:21,200 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQH28|9387P
+2026-06-01 09:55:21,831 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQH28|9912C
+2026-06-01 09:55:21,841 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQH28|9962C
+2026-06-01 09:55:21,849 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQH28|9937C
+2026-06-01 09:55:25,508 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQM28|9362P
+2026-06-01 09:55:25,519 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQM28|9387P
+2026-06-01 09:55:25,519 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQM28|9887C
+2026-06-01 09:55:25,541 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQM28|9862C
+2026-06-01 09:55:26,184 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQM28|9937C
+2026-06-01 09:55:26,190 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQM28|9962C
+2026-06-01 09:55:26,194 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQM28|9912C
+2026-06-01 09:55:29,706 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQU28|10000C
+2026-06-01 09:55:29,716 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQU28|10050C
+2026-06-01 09:55:29,723 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQU28|10025C
+2026-06-01 09:55:29,724 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQU28|10075C
+2026-06-01 09:55:33,291 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQZ28|10025C
+2026-06-01 09:55:33,318 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQZ28|10075C
+2026-06-01 09:55:33,321 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQZ28|10050C
+2026-06-01 09:55:33,351 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQZ28|10000C
+2026-06-01 09:55:36,767 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQH29|10000C
+2026-06-01 09:55:36,780 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQH29|10075C
+2026-06-01 09:55:36,781 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQH29|10025C
+2026-06-01 09:55:36,857 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQH29|10050C
+2026-06-01 09:55:49,031 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQM27|10000C
+2026-06-01 09:55:49,086 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQM27|10025C
+2026-06-01 09:55:52,780 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQU27|10050C
+2026-06-01 09:55:52,782 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQU27|10000C
+2026-06-01 09:55:52,796 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQU27|10025C
+2026-06-01 09:55:55,946 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQZ27|9887C
+2026-06-01 09:55:55,950 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQZ27|9862C
+2026-06-01 09:55:55,950 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQZ27|9387P
+2026-06-01 09:55:55,978 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQZ27|9362P
+2026-06-01 09:55:56,622 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQZ27|9962C
+2026-06-01 09:55:56,630 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQZ27|9912C
+2026-06-01 09:55:56,630 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQZ27|9937C
+2026-06-01 09:55:59,758 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQH28|9887C
+2026-06-01 09:55:59,768 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQH28|9862C
+2026-06-01 09:55:59,784 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQH28|9362P
+2026-06-01 09:55:59,833 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQH28|9387P
+2026-06-01 09:56:00,437 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQH28|9937C
+2026-06-01 09:56:00,446 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQH28|9962C
+2026-06-01 09:56:00,456 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQH28|9912C
+2026-06-01 09:56:03,615 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQM28|9862C
+2026-06-01 09:56:03,633 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQM28|9887C
+2026-06-01 09:56:03,651 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQM28|9362P
+2026-06-01 09:56:03,664 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQM28|9387P
+2026-06-01 09:56:04,299 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQM28|9937C
+2026-06-01 09:56:04,301 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQM28|9912C
+2026-06-01 09:56:04,307 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQM28|9962C
+2026-06-01 09:56:07,504 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQU28|10050C
+2026-06-01 09:56:07,535 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQU28|10075C
+2026-06-01 09:56:07,536 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQU28|10000C
+2026-06-01 09:56:07,541 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQU28|10025C
+2026-06-01 09:56:10,659 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQZ28|10075C
+2026-06-01 09:56:10,666 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQZ28|10000C
+2026-06-01 09:56:10,696 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQZ28|10025C
+2026-06-01 09:56:10,699 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQZ28|10050C
+2026-06-01 09:58:40,637 - BarchartFetcher - ERROR - Barchart EOD - Max retries exceeded for SQH29|10075C: 404 Client Error: Not Found for url: https://www.barchart.com/futures/quotes/SQH29%7C10075C/interactive-chart
+2026-06-01 09:58:41,428 - BarchartFetcher - ERROR - Barchart EOD - Max retries exceeded for SQH29|10025C: 404 Client Error: Not Found for url: https://www.barchart.com/futures/quotes/SQH29%7C10025C/interactive-chart
+2026-06-01 09:58:42,318 - BarchartFetcher - ERROR - Barchart EOD - Max retries exceeded for SQH29|10000C: 404 Client Error: Not Found for url: https://www.barchart.com/futures/quotes/SQH29%7C10000C/interactive-chart
+2026-06-01 09:58:43,260 - BarchartFetcher - ERROR - Barchart EOD - Max retries exceeded for SQH29|10050C: 404 Client Error: Not Found for url: https://www.barchart.com/futures/quotes/SQH29%7C10050C/interactive-chart
+2026-06-01 09:58:58,931 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQM27|9362P
+2026-06-01 09:58:58,933 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQM27|9912C
+2026-06-01 09:58:58,941 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQM27|9387P
+2026-06-01 09:58:58,944 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQM27|9887C
+2026-06-01 09:58:59,698 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQM27|9962C
+2026-06-01 09:58:59,704 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQM27|9937C
+2026-06-01 09:59:02,665 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQU27|9887C
+2026-06-01 09:59:02,671 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQU27|9362P
+2026-06-01 09:59:02,681 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQU27|9387P
+2026-06-01 09:59:03,449 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQU27|9962C
+2026-06-01 09:59:03,449 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQU27|9912C
+2026-06-01 09:59:03,451 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQU27|9937C
+2026-06-01 09:59:06,756 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQZ27|9862C
+2026-06-01 09:59:06,762 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQZ27|9387P
+2026-06-01 09:59:06,769 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQZ27|9887C
+2026-06-01 09:59:06,769 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQZ27|9362P
+2026-06-01 09:59:07,532 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQZ27|9962C
+2026-06-01 09:59:07,537 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQZ27|9937C
+2026-06-01 09:59:07,553 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQZ27|9912C
+2026-06-01 09:59:10,781 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQH28|9862C
+2026-06-01 09:59:10,781 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQH28|9362P
+2026-06-01 09:59:10,791 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQH28|9387P
+2026-06-01 09:59:10,791 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQH28|9887C
+2026-06-01 09:59:11,566 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQH28|9912C
+2026-06-01 09:59:11,577 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQH28|9937C
+2026-06-01 09:59:11,615 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQH28|9962C
+2026-06-01 09:59:14,582 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQM28|9887C
+2026-06-01 09:59:14,588 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQM28|9862C
+2026-06-01 09:59:14,592 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQM28|9387P
+2026-06-01 09:59:14,597 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQM28|9362P
+2026-06-01 09:59:15,371 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQM28|9912C
+2026-06-01 09:59:15,440 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQM28|9937C
+2026-06-01 09:59:15,440 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQM28|9962C
+2026-06-01 09:59:18,449 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQU28|9887C
+2026-06-01 09:59:18,452 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQU28|9862C
+2026-06-01 09:59:18,457 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQU28|9362P
+2026-06-01 09:59:18,470 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQU28|9387P
+2026-06-01 09:59:19,230 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQU28|9962C
+2026-06-01 09:59:19,240 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQU28|9912C
+2026-06-01 09:59:19,241 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQU28|9937C
+2026-06-01 09:59:22,103 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQZ28|9362P
+2026-06-01 09:59:22,117 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQZ28|9887C
+2026-06-01 09:59:22,127 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQZ28|9862C
+2026-06-01 09:59:22,133 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQZ28|9387P
+2026-06-01 09:59:22,881 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQZ28|9937C
+2026-06-01 09:59:22,882 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQZ28|9962C
+2026-06-01 09:59:22,889 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQZ28|9912C
+2026-06-01 09:59:25,709 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQH29|10025C
+2026-06-01 09:59:25,715 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQH29|10075C
+2026-06-01 09:59:25,717 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQH29|10050C
+2026-06-01 09:59:25,723 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQH29|10000C
+2026-06-01 09:59:26,502 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQH29|10100C
+2026-06-01 10:00:13,852 - BarchartFetcher - ERROR - Barchart EOD - Max retries exceeded for SQM27|9962C: 404 Client Error: Not Found for url: https://www.barchart.com/futures/quotes/SQM27%7C9962C/interactive-chart
+2026-06-01 10:00:14,630 - BarchartFetcher - ERROR - Barchart EOD - Max retries exceeded for SQM27|9937C: 404 Client Error: Not Found for url: https://www.barchart.com/futures/quotes/SQM27%7C9937C/interactive-chart
+2026-06-01 10:00:15,341 - BarchartFetcher - ERROR - Barchart EOD - Max retries exceeded for SQM27|9887C: 404 Client Error: Not Found for url: https://www.barchart.com/futures/quotes/SQM27%7C9887C/interactive-chart
+2026-06-01 10:00:16,024 - BarchartFetcher - ERROR - Barchart EOD - Max retries exceeded for SQM27|9387P: 404 Client Error: Not Found for url: https://www.barchart.com/futures/quotes/SQM27%7C9387P/interactive-chart
+2026-06-01 10:00:16,861 - BarchartFetcher - ERROR - Barchart EOD - Max retries exceeded for SQM27|9362P: 404 Client Error: Not Found for url: https://www.barchart.com/futures/quotes/SQM27%7C9362P/interactive-chart
+2026-06-01 10:00:18,423 - BarchartFetcher - ERROR - Barchart EOD - Max retries exceeded for SQM27|9912C: 404 Client Error: Not Found for url: https://www.barchart.com/futures/quotes/SQM27%7C9912C/interactive-chart
+2026-06-01 10:00:23,780 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQU27|9912C
+2026-06-01 10:00:23,781 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQU27|9362P
+2026-06-01 10:00:23,786 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQU27|9887C
+2026-06-01 10:00:23,791 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQU27|9387P
+2026-06-01 10:00:24,430 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQU27|9962C
+2026-06-01 10:00:24,431 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQU27|9937C
+2026-06-01 10:00:28,031 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQZ27|9362P
+2026-06-01 10:00:28,036 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQZ27|9387P
+2026-06-01 10:00:28,038 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQZ27|9887C
+2026-06-01 10:00:28,038 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQZ27|9862C
+2026-06-01 10:00:28,670 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQZ27|9937C
+2026-06-01 10:00:28,676 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQZ27|9912C
+2026-06-01 10:00:28,684 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQZ27|9962C
+2026-06-01 10:00:32,813 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQH28|9362P
+2026-06-01 10:00:32,815 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQH28|9887C
+2026-06-01 10:00:32,818 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQH28|9862C
+2026-06-01 10:00:32,819 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQH28|9387P
+2026-06-01 10:00:33,465 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQH28|9962C
+2026-06-01 10:00:33,468 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQH28|9937C
+2026-06-01 10:00:33,543 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQH28|9912C
+2026-06-01 10:00:37,251 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQM28|9362P
+2026-06-01 10:00:37,261 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQM28|9887C
+2026-06-01 10:00:37,264 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQM28|9862C
+2026-06-01 10:00:37,270 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQM28|9387P
+2026-06-01 10:00:37,902 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQM28|9937C
+2026-06-01 10:00:37,904 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQM28|9912C
+2026-06-01 10:00:37,917 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQM28|9962C
+2026-06-01 10:00:41,481 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQU28|9387P
+2026-06-01 10:00:41,481 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQU28|9862C
+2026-06-01 10:00:41,481 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQU28|9362P
+2026-06-01 10:00:41,485 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQU28|9887C
+2026-06-01 10:00:42,125 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQU28|9962C
+2026-06-01 10:00:42,128 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQU28|9912C
+2026-06-01 10:00:42,137 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQU28|9937C
+2026-06-01 10:00:45,982 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQZ28|10075C
+2026-06-01 10:00:45,984 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQZ28|10050C
+2026-06-01 10:00:45,989 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQZ28|10000C
+2026-06-01 10:00:45,990 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQZ28|10025C
+2026-06-01 10:00:49,860 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQH29|10025C
+2026-06-01 10:00:49,869 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQH29|10000C
+2026-06-01 10:00:49,871 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQH29|10050C
+2026-06-01 10:00:49,875 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQH29|10075C
+2026-06-01 10:00:50,459 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQH29|10100C
+2026-06-01 10:01:02,831 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQM27|10025C
+2026-06-01 10:01:02,835 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQM27|10000C
+2026-06-01 10:01:06,524 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQU27|10050C
+2026-06-01 10:01:06,534 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQU27|10025C
+2026-06-01 10:01:06,544 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQU27|10000C
+2026-06-01 10:01:10,089 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQZ27|9862C
+2026-06-01 10:01:10,090 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQZ27|9362P
+2026-06-01 10:01:10,092 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQZ27|9387P
+2026-06-01 10:01:10,097 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQZ27|9887C
+2026-06-01 10:01:10,725 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQZ27|9912C
+2026-06-01 10:01:10,734 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQZ27|9937C
+2026-06-01 10:01:10,740 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQZ27|9962C
+2026-06-01 10:01:14,103 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQH28|9862C
+2026-06-01 10:01:14,108 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQH28|9362P
+2026-06-01 10:01:14,108 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQH28|9887C
+2026-06-01 10:01:14,112 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQH28|9387P
+2026-06-01 10:01:14,749 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQH28|9937C
+2026-06-01 10:01:24,305 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQH28|9962C
+2026-06-01 10:01:24,309 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQH28|9912C
+2026-06-01 10:01:27,462 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQM28|9862C
+2026-06-01 10:01:27,467 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQM28|9387P
+2026-06-01 10:01:27,472 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQM28|9887C
+2026-06-01 10:01:27,476 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQM28|9362P
+2026-06-01 10:01:28,325 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQM28|9912C
+2026-06-01 10:01:28,326 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQM28|9937C
+2026-06-01 10:01:28,333 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQM28|9962C
+2026-06-01 10:01:30,682 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQU28|10025C
+2026-06-01 10:01:30,690 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQU28|10050C
+2026-06-01 10:01:30,698 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQU28|10000C
+2026-06-01 10:01:30,722 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQU28|10075C
+2026-06-01 10:01:33,117 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQZ28|10050C
+2026-06-01 10:01:33,118 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQZ28|10000C
+2026-06-01 10:01:33,126 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQZ28|10025C
+2026-06-01 10:01:33,133 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQZ28|10075C
+2026-06-01 10:01:35,352 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQH29|10050C
+2026-06-01 10:01:35,352 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQH29|10000C
+2026-06-01 10:01:35,357 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQH29|10025C
+2026-06-01 10:01:35,367 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQH29|10075C
+2026-06-01 10:01:45,255 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQM27|10025C
+2026-06-01 10:01:45,277 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQM27|10000C
+2026-06-01 10:01:47,737 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQU27|10050C
+2026-06-01 10:01:47,740 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQU27|10025C
+2026-06-01 10:01:47,748 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQU27|10000C
+2026-06-01 10:01:50,400 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQZ27|9887C
+2026-06-01 10:01:50,401 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQZ27|9387P
+2026-06-01 10:01:50,415 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQZ27|9362P
+2026-06-01 10:01:50,420 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQZ27|9862C
+2026-06-01 10:01:51,268 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQZ27|9962C
+2026-06-01 10:01:51,270 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQZ27|9937C
+2026-06-01 10:01:51,321 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQZ27|9912C
+2026-06-01 10:01:54,626 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQH28|9387P
+2026-06-01 10:01:54,631 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQH28|9887C
+2026-06-01 10:01:54,633 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQH28|9362P
+2026-06-01 10:01:54,633 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQH28|9862C
+2026-06-01 10:01:55,501 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQH28|9912C
+2026-06-01 10:01:55,502 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQH28|9937C
+2026-06-01 10:01:55,524 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQH28|9962C
+2026-06-01 10:01:58,550 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQM28|10000C
+2026-06-01 10:01:58,558 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQM28|10025C
+2026-06-01 10:01:58,560 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQM28|10075C
+2026-06-01 10:01:58,565 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQM28|10050C
+2026-06-01 10:02:02,515 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQU28|10075C
+2026-06-01 10:02:02,520 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQU28|10050C
+2026-06-01 10:02:02,521 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQU28|10025C
+2026-06-01 10:02:02,532 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQU28|10000C
+2026-06-01 10:02:05,027 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQZ28|10000C
+2026-06-01 10:02:05,032 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQZ28|10050C
+2026-06-01 10:02:05,048 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQZ28|10025C
+2026-06-01 10:02:08,953 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQH29|10025C
+2026-06-01 10:02:08,957 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQH29|10075C
+2026-06-01 10:02:08,968 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQH29|10050C
+2026-06-01 10:02:08,968 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQH29|10000C
+2026-06-01 10:02:21,032 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQM27|9887C
+2026-06-01 10:02:21,034 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQM27|9387P
+2026-06-01 10:02:21,065 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQM27|9337P
+2026-06-01 10:02:51,655 - BarchartFetcher - ERROR - Barchart EOD - Max retries exceeded for SQM27|9937C: 404 Client Error: Not Found for url: https://www.barchart.com/futures/quotes/SQM27%7C9937C/interactive-chart
+2026-06-01 10:02:52,514 - BarchartFetcher - ERROR - Barchart EOD - Max retries exceeded for SQM27|9912C: 404 Client Error: Not Found for url: https://www.barchart.com/futures/quotes/SQM27%7C9912C/interactive-chart
+2026-06-01 10:02:52,952 - BarchartFetcher - ERROR - Barchart EOD - Max retries exceeded for SQM27|9362P: 404 Client Error: Not Found for url: https://www.barchart.com/futures/quotes/SQM27%7C9362P/interactive-chart
+2026-06-01 10:02:56,287 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQU27|10000C
+2026-06-01 10:02:56,291 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQU27|10025C
+2026-06-01 10:02:59,929 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQZ27|10075C
+2026-06-01 10:02:59,929 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQZ27|10025C
+2026-06-01 10:02:59,930 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQZ27|10050C
+2026-06-01 10:02:59,938 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQZ27|10000C
+2026-06-01 10:03:03,651 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQH28|10025C
+2026-06-01 10:03:03,655 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQH28|10050C
+2026-06-01 10:03:03,681 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQH28|10000C
+2026-06-01 10:03:03,686 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQH28|10075C
+2026-06-01 10:03:06,919 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQM28|10000C
+2026-06-01 10:03:06,924 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQM28|10050C
+2026-06-01 10:03:06,930 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQM28|10025C
+2026-06-01 10:03:06,938 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQM28|10075C
+2026-06-01 10:03:09,452 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQU28|10025C
+2026-06-01 10:03:09,454 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQU28|10000C
+2026-06-01 10:03:09,456 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQU28|10050C
+2026-06-01 10:03:13,020 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQZ28|10000C
+2026-06-01 10:03:13,024 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQZ28|10050C
+2026-06-01 10:03:13,028 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQZ28|10025C
+2026-06-01 10:03:15,448 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQH29|9362P
+2026-06-01 10:03:15,454 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQH29|9412P
+2026-06-01 10:03:15,454 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQH29|9387P
+2026-06-01 10:03:15,456 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQH29|9337P
+2026-06-01 10:03:16,311 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQH29|9937C
+2026-06-01 10:03:16,312 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQH29|9837C
+2026-06-01 10:03:16,319 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQH29|9437P
+2026-06-01 10:03:16,361 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQH29|9912C
+2026-06-01 10:03:17,321 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQH29|9887C
+2026-06-01 10:03:17,328 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQH29|9862C
+2026-06-01 10:03:29,621 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQM27|10000C
+2026-06-01 10:03:29,630 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQM27|10025C
+2026-06-01 10:03:32,019 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQU27|10000C
+2026-06-01 10:03:32,022 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQU27|10050C
+2026-06-01 10:03:32,022 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQU27|10025C
+2026-06-01 10:03:34,347 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQZ27|10050C
+2026-06-01 10:03:34,353 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQZ27|10025C
+2026-06-01 10:03:34,374 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQZ27|10000C
+2026-06-01 10:03:34,393 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQZ27|10075C
+2026-06-01 10:03:36,578 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQH28|9887C
+2026-06-01 10:03:36,584 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQH28|9862C
+2026-06-01 10:03:36,594 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQH28|9362P
+2026-06-01 10:03:36,611 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQH28|9387P
+2026-06-01 10:03:37,446 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQH28|9912C
+2026-06-01 10:03:37,448 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQH28|9937C
+2026-06-01 10:03:37,448 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQH28|9962C
+2026-06-01 10:03:39,924 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQM28|10025C
+2026-06-01 10:03:39,926 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQM28|10075C
+2026-06-01 10:03:39,936 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQM28|10000C
+2026-06-01 10:03:39,937 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQM28|10050C
+2026-06-01 10:03:42,646 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQU28|10025C
+2026-06-01 10:03:42,648 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQU28|10050C
+2026-06-01 10:03:42,652 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQU28|10075C
+2026-06-01 10:03:42,656 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQU28|10000C
+2026-06-01 10:03:45,388 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQZ28|10000C
+2026-06-01 10:03:45,392 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQZ28|10025C
+2026-06-01 10:03:45,393 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQZ28|10050C
+2026-06-01 10:03:47,938 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQH29|10050C
+2026-06-01 10:03:47,945 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQH29|10075C
+2026-06-01 10:03:47,948 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQH29|10025C
+2026-06-01 10:03:47,949 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQH29|10000C
+2026-06-01 10:04:03,042 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQH29|9412P
+2026-06-01 10:04:03,043 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQH29|9337P
+2026-06-01 10:04:03,045 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQH29|9387P
+2026-06-01 10:04:03,061 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQH29|9362P
+2026-06-01 10:04:03,908 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQH29|9837C
+2026-06-01 10:04:03,921 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQH29|9912C
+2026-06-01 10:04:03,922 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQH29|9887C
+2026-06-01 10:04:03,924 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQH29|9937C
+2026-06-01 10:04:04,921 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQH29|9862C
+2026-06-01 10:04:04,925 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQH29|9437P
+2026-06-01 10:04:27,579 - BarchartFetcher - ERROR - Failed to fetch option quotes from Barchart for SQU27: Invalid username/password
+2026-06-01 10:05:30,890 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQU27|10050C
+2026-06-01 10:05:30,908 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQU27|10025C
+2026-06-01 10:05:30,911 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQU27|10000C
+2026-06-01 10:05:30,953 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQU27|10075C
+2026-06-01 10:05:31,893 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQU27|10100C
+2026-06-01 10:05:42,444 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQZ27|9387P
+2026-06-01 10:05:42,449 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQZ27|9337P
+2026-06-01 10:05:42,455 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQZ27|9362P
+2026-06-01 10:05:43,321 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQZ27|9937C
+2026-06-01 10:05:43,323 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQZ27|9912C
+2026-06-01 10:05:43,331 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQZ27|9862C
+2026-06-01 10:05:44,308 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQZ27|9887C
+2026-06-01 10:05:46,762 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQH28|9337P
+2026-06-01 10:05:46,765 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQH28|9387P
+2026-06-01 10:05:46,772 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQH28|9362P
+2026-06-01 10:05:47,627 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQH28|9912C
+2026-06-01 10:05:47,630 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQH28|9862C
+2026-06-01 10:05:47,641 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQH28|9937C
+2026-06-01 10:05:47,647 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQH28|9887C
+2026-06-01 10:05:49,997 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQM28|9387P
+2026-06-01 10:05:50,008 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQM28|9362P
+2026-06-01 10:05:50,023 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQM28|9337P
+2026-06-01 10:05:50,812 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQM28|9862C
+2026-06-01 10:05:50,813 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQM28|9887C
+2026-06-01 10:05:50,829 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQM28|9912C
+2026-06-01 10:05:50,835 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQM28|9937C
+2026-06-01 10:05:53,555 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQU28|9362P
+2026-06-01 10:05:53,556 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQU28|9862C
+2026-06-01 10:05:53,563 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQU28|9337P
+2026-06-01 10:05:53,570 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQU28|9387P
+2026-06-01 10:05:54,430 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQU28|9937C
+2026-06-01 10:05:54,438 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQU28|9887C
+2026-06-01 10:05:54,462 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQU28|9912C
+2026-06-01 10:05:56,932 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQZ28|9362P
+2026-06-01 10:05:56,933 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQZ28|9387P
+2026-06-01 10:05:56,959 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQZ28|9337P
+2026-06-01 10:05:57,807 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQZ28|9887C
+2026-06-01 10:05:57,825 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQZ28|9912C
+2026-06-01 10:05:57,827 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQZ28|9862C
+2026-06-01 10:05:57,831 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQZ28|9937C
+2026-06-01 10:06:00,266 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQH29|9337P
+2026-06-01 10:06:00,267 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQH29|9387P
+2026-06-01 10:06:00,274 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQH29|9362P
+2026-06-01 10:06:00,298 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQH29|9412P
+2026-06-01 10:06:01,127 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQH29|9862C
+2026-06-01 10:06:01,136 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQH29|9887C
+2026-06-01 10:06:01,139 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQH29|9437P
+2026-06-01 10:06:02,146 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQH29|9912C
+2026-06-01 10:06:02,153 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQH29|9837C
+2026-06-01 10:06:02,154 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQH29|9937C
+2026-06-01 10:06:12,540 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQM27|10000C
+2026-06-01 10:06:14,947 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQU27|9887C
+2026-06-01 10:06:14,947 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQU27|9337P
+2026-06-01 10:06:14,956 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQU27|9387P
+2026-06-01 10:06:14,958 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQU27|9362P
+2026-06-01 10:07:06,517 - BarchartFetcher - ERROR - Barchart EOD - Max retries exceeded for SQU27|9912C: 404 Client Error: Not Found for url: https://www.barchart.com/futures/quotes/SQU27%7C9912C/interactive-chart
+2026-06-01 10:07:08,338 - BarchartFetcher - ERROR - Barchart EOD - Max retries exceeded for SQU27|9937C: 404 Client Error: Not Found for url: https://www.barchart.com/futures/quotes/SQU27%7C9937C/interactive-chart
+2026-06-01 10:07:11,805 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQZ27|9862C
+2026-06-01 10:07:11,809 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQZ27|9387P
+2026-06-01 10:07:11,811 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQZ27|9362P
+2026-06-01 10:07:11,812 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQZ27|9337P
+2026-06-01 10:07:12,675 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQZ27|9912C
+2026-06-01 10:07:12,680 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQZ27|9887C
+2026-06-01 10:07:12,685 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQZ27|9937C
+2026-06-01 10:07:15,133 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQH28|9337P
+2026-06-01 10:07:15,134 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQH28|9862C
+2026-06-01 10:07:15,136 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQH28|9387P
+2026-06-01 10:07:15,145 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQH28|9362P
+2026-06-01 10:07:15,993 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQH28|9937C
+2026-06-01 10:07:15,993 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQH28|9912C
+2026-06-01 10:07:16,001 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQH28|9887C
+2026-06-01 10:07:18,372 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQM28|9362P
+2026-06-01 10:07:18,374 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQM28|9387P
+2026-06-01 10:07:18,374 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQM28|9337P
+2026-06-01 10:07:18,375 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQM28|9862C
+2026-06-01 10:07:19,244 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQM28|9912C
+2026-06-01 10:07:19,255 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQM28|9937C
+2026-06-01 10:07:19,257 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQM28|9887C
+2026-06-01 10:07:21,664 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQU28|9387P
+2026-06-01 10:07:21,667 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQU28|9862C
+2026-06-01 10:07:21,669 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQU28|9337P
+2026-06-01 10:07:21,670 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQU28|9362P
+2026-06-01 10:07:22,528 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQU28|9912C
+2026-06-01 10:07:22,529 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQU28|9887C
+2026-06-01 10:07:22,534 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQU28|9937C
+2026-06-01 10:07:24,799 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQZ28|9362P
+2026-06-01 10:07:24,800 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQZ28|9337P
+2026-06-01 10:07:24,802 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQZ28|9862C
+2026-06-01 10:07:24,813 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQZ28|9387P
+2026-06-01 10:07:25,662 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQZ28|9912C
+2026-06-01 10:07:25,663 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQZ28|9887C
+2026-06-01 10:07:25,668 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQZ28|9937C
+2026-06-01 10:07:27,952 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQH29|9337P
+2026-06-01 10:07:27,955 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQH29|9387P
+2026-06-01 10:07:27,959 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQH29|9362P
+2026-06-01 10:07:27,968 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQH29|9412P
+2026-06-01 10:07:28,821 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQH29|9912C
+2026-06-01 10:07:28,823 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQH29|9437P
+2026-06-01 10:07:28,824 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQH29|9887C
+2026-06-01 10:07:28,829 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQH29|9837C
+2026-06-01 10:07:29,834 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQH29|9862C
+2026-06-01 10:07:29,846 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQH29|9937C
+2026-06-01 10:09:50,029 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQM27|10000C
+2026-06-01 10:10:48,345 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQU27|9337P
+2026-06-01 10:10:48,346 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQU27|9362P
+2026-06-01 10:10:49,246 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQU27|9387P
+2026-06-01 10:11:00,321 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQU27|9887C
+2026-06-01 10:11:00,385 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQU27|9912C
+2026-06-01 10:11:00,427 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQU27|9937C
+2026-06-01 10:11:03,325 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQZ27|9337P
+2026-06-01 10:11:03,403 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQZ27|9362P
+2026-06-01 10:11:51,382 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQZ27|9387P
+2026-06-01 10:11:55,441 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQZ27|9887C
+2026-06-01 10:11:56,437 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQZ27|9937C
+2026-06-01 10:11:56,437 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQZ27|9862C
+2026-06-01 10:11:57,457 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQZ27|9912C
+2026-06-01 10:12:03,419 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQH28|9362P
+2026-06-01 10:12:03,446 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQH28|9337P
+2026-06-01 10:12:04,070 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQH28|9387P
+2026-06-01 10:12:14,145 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQH28|9912C
+2026-06-01 10:12:14,149 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQH28|9887C
+2026-06-01 10:12:14,196 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQH28|9862C
+2026-06-01 10:12:15,274 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQH28|9937C
+2026-06-01 10:12:20,042 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQM28|9362P
+2026-06-01 10:12:20,084 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQM28|9337P
+2026-06-01 10:12:20,771 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQM28|9387P
+2026-06-01 10:13:27,652 - BarchartFetcher - ERROR - Barchart EOD - Max retries exceeded for SQM28|9412P: 403 Client Error: Forbidden for url: https://www.barchart.com/futures/quotes/SQM28%7C9412P/interactive-chart
+2026-06-01 10:13:28,081 - BarchartFetcher - ERROR - 403 Client Error: Forbidden for url: https://www.barchart.com/futures/quotes/SQM28%7C9500P/interactive-chart
+2026-06-01 10:13:28,494 - BarchartFetcher - ERROR - 403 Client Error: Forbidden for url: https://www.barchart.com/futures/quotes/SQM28%7C9512P/interactive-chart
+2026-06-01 10:13:28,939 - BarchartFetcher - ERROR - Barchart EOD - Max retries exceeded for SQM28|9400P: 403 Client Error: Forbidden for url: https://www.barchart.com/futures/quotes/SQM28%7C9400P/interactive-chart
+2026-06-01 10:13:29,359 - BarchartFetcher - ERROR - 403 Client Error: Forbidden for url: https://www.barchart.com/futures/quotes/SQM28%7C9525P/interactive-chart
+2026-06-01 10:13:29,766 - BarchartFetcher - ERROR - 403 Client Error: Forbidden for url: https://www.barchart.com/futures/quotes/SQM28%7C9537P/interactive-chart
+2026-06-01 10:13:30,199 - BarchartFetcher - ERROR - Barchart EOD - Max retries exceeded for SQM28|9437P: 403 Client Error: Forbidden for url: https://www.barchart.com/futures/quotes/SQM28%7C9437P/interactive-chart
+2026-06-01 10:13:30,629 - BarchartFetcher - ERROR - 403 Client Error: Forbidden for url: https://www.barchart.com/futures/quotes/SQM28%7C9550P/interactive-chart
+2026-06-01 10:13:31,101 - BarchartFetcher - ERROR - 403 Client Error: Forbidden for url: https://www.barchart.com/futures/quotes/SQM28%7C9562P/interactive-chart
+2026-06-01 10:13:31,508 - BarchartFetcher - ERROR - 403 Client Error: Forbidden for url: https://www.barchart.com/futures/quotes/SQM28%7C9575P/interactive-chart
+2026-06-01 10:13:31,938 - BarchartFetcher - ERROR - Barchart EOD - Max retries exceeded for SQM28|9487P: 403 Client Error: Forbidden for url: https://www.barchart.com/futures/quotes/SQM28%7C9487P/interactive-chart
+2026-06-01 10:13:32,362 - BarchartFetcher - ERROR - Barchart EOD - Max retries exceeded for SQM28|9462P: 403 Client Error: Forbidden for url: https://www.barchart.com/futures/quotes/SQM28%7C9462P/interactive-chart
+2026-06-01 10:13:32,788 - BarchartFetcher - ERROR - 403 Client Error: Forbidden for url: https://www.barchart.com/futures/quotes/SQM28%7C9587P/interactive-chart
+2026-06-01 10:13:33,203 - BarchartFetcher - ERROR - 403 Client Error: Forbidden for url: https://www.barchart.com/futures/quotes/SQM28%7C9600P/interactive-chart
+2026-06-01 10:13:33,712 - BarchartFetcher - ERROR - 403 Client Error: Forbidden for url: https://www.barchart.com/futures/quotes/SQM28%7C9612P/interactive-chart
+2026-06-01 10:13:34,124 - BarchartFetcher - ERROR - 403 Client Error: Forbidden for url: https://www.barchart.com/futures/quotes/SQM28%7C9625P/interactive-chart
+2026-06-01 10:13:34,572 - BarchartFetcher - ERROR - 403 Client Error: Forbidden for url: https://www.barchart.com/futures/quotes/SQM28%7C9637C/interactive-chart
+2026-06-01 10:13:35,020 - BarchartFetcher - ERROR - Barchart EOD - Max retries exceeded for SQM28|9475P: 403 Client Error: Forbidden for url: https://www.barchart.com/futures/quotes/SQM28%7C9475P/interactive-chart
+2026-06-01 10:13:35,427 - BarchartFetcher - ERROR - 403 Client Error: Forbidden for url: https://www.barchart.com/futures/quotes/SQM28%7C9637P/interactive-chart
+2026-06-01 10:13:35,833 - BarchartFetcher - ERROR - 403 Client Error: Forbidden for url: https://www.barchart.com/futures/quotes/SQM28%7C9650C/interactive-chart
+2026-06-01 10:13:36,293 - BarchartFetcher - ERROR - 403 Client Error: Forbidden for url: https://www.barchart.com/futures/quotes/SQM28%7C9650P/interactive-chart
+2026-06-01 10:13:36,699 - BarchartFetcher - ERROR - 403 Client Error: Forbidden for url: https://www.barchart.com/futures/quotes/SQM28%7C9662C/interactive-chart
+2026-06-01 10:13:37,112 - BarchartFetcher - ERROR - 403 Client Error: Forbidden for url: https://www.barchart.com/futures/quotes/SQM28%7C9662P/interactive-chart
+2026-06-01 10:13:37,572 - BarchartFetcher - ERROR - 403 Client Error: Forbidden for url: https://www.barchart.com/futures/quotes/SQM28%7C9675C/interactive-chart
+2026-06-01 10:13:37,980 - BarchartFetcher - ERROR - 403 Client Error: Forbidden for url: https://www.barchart.com/futures/quotes/SQM28%7C9687C/interactive-chart
+2026-06-01 10:13:38,399 - BarchartFetcher - ERROR - 403 Client Error: Forbidden for url: https://www.barchart.com/futures/quotes/SQM28%7C9700C/interactive-chart
+2026-06-01 10:13:38,820 - BarchartFetcher - ERROR - 403 Client Error: Forbidden for url: https://www.barchart.com/futures/quotes/SQM28%7C9712C/interactive-chart
+2026-06-01 10:13:39,265 - BarchartFetcher - ERROR - 403 Client Error: Forbidden for url: https://www.barchart.com/futures/quotes/SQM28%7C9725C/interactive-chart
+2026-06-01 10:13:39,726 - BarchartFetcher - ERROR - 403 Client Error: Forbidden for url: https://www.barchart.com/futures/quotes/SQM28%7C9737C/interactive-chart
+2026-06-01 10:13:40,184 - BarchartFetcher - ERROR - 403 Client Error: Forbidden for url: https://www.barchart.com/futures/quotes/SQM28%7C9750C/interactive-chart
+2026-06-01 10:13:40,603 - BarchartFetcher - ERROR - 403 Client Error: Forbidden for url: https://www.barchart.com/futures/quotes/SQM28%7C9762C/interactive-chart
+2026-06-01 10:13:41,031 - BarchartFetcher - ERROR - 403 Client Error: Forbidden for url: https://www.barchart.com/futures/quotes/SQM28%7C9775C/interactive-chart
+2026-06-01 10:13:41,460 - BarchartFetcher - ERROR - 403 Client Error: Forbidden for url: https://www.barchart.com/futures/quotes/SQM28%7C9787C/interactive-chart
+2026-06-01 10:13:41,934 - BarchartFetcher - ERROR - 403 Client Error: Forbidden for url: https://www.barchart.com/futures/quotes/SQM28%7C9800C/interactive-chart
+2026-06-01 10:13:42,396 - BarchartFetcher - ERROR - 403 Client Error: Forbidden for url: https://www.barchart.com/futures/quotes/SQM28%7C9812C/interactive-chart
+2026-06-01 10:13:42,845 - BarchartFetcher - ERROR - 403 Client Error: Forbidden for url: https://www.barchart.com/futures/quotes/SQM28%7C9825C/interactive-chart
+2026-06-01 10:13:43,257 - BarchartFetcher - ERROR - 403 Client Error: Forbidden for url: https://www.barchart.com/futures/quotes/SQM28%7C9837C/interactive-chart
+2026-06-01 10:13:43,691 - BarchartFetcher - ERROR - 403 Client Error: Forbidden for url: https://www.barchart.com/futures/quotes/SQM28%7C9850C/interactive-chart
+2026-06-01 10:13:44,097 - BarchartFetcher - ERROR - 403 Client Error: Forbidden for url: https://www.barchart.com/futures/quotes/SQM28%7C9862C/interactive-chart
+2026-06-01 10:13:44,546 - BarchartFetcher - ERROR - 403 Client Error: Forbidden for url: https://www.barchart.com/futures/quotes/SQM28%7C9875C/interactive-chart
+2026-06-01 10:13:44,958 - BarchartFetcher - ERROR - 403 Client Error: Forbidden for url: https://www.barchart.com/futures/quotes/SQM28%7C9887C/interactive-chart
+2026-06-01 10:13:45,427 - BarchartFetcher - ERROR - 403 Client Error: Forbidden for url: https://www.barchart.com/futures/quotes/SQM28%7C9900C/interactive-chart
+2026-06-01 10:13:45,855 - BarchartFetcher - ERROR - 403 Client Error: Forbidden for url: https://www.barchart.com/futures/quotes/SQM28%7C9912C/interactive-chart
+2026-06-01 10:13:46,267 - BarchartFetcher - ERROR - 403 Client Error: Forbidden for url: https://www.barchart.com/futures/quotes/SQM28%7C9925C/interactive-chart
+2026-06-01 10:13:46,681 - BarchartFetcher - ERROR - 403 Client Error: Forbidden for url: https://www.barchart.com/futures/quotes/SQM28%7C9937C/interactive-chart
+2026-06-01 10:13:47,133 - BarchartFetcher - ERROR - 403 Client Error: Forbidden for url: https://www.barchart.com/futures/quotes/SQM28%7C9950C/interactive-chart
+2026-06-01 10:13:49,077 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQM28|9387P
+2026-06-01 10:13:56,944 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQM28|9887C
+2026-06-01 10:13:56,973 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQM28|9862C
+2026-06-01 10:13:59,941 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQU28|9362P
+2026-06-01 10:13:59,943 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQU28|9337P
+2026-06-01 10:14:00,700 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQU28|9387P
+2026-06-01 10:14:53,549 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQU28|9862C
+2026-06-01 10:14:54,548 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQU28|9887C
+2026-06-01 10:14:54,681 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQU28|9912C
+2026-06-01 10:14:55,570 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQU28|9937C
+2026-06-01 10:15:01,743 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQZ28|9362P
+2026-06-01 10:15:01,779 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQZ28|9337P
+2026-06-01 10:15:02,486 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQZ28|9387P
+2026-06-01 10:15:51,897 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQZ28|9862C
+2026-06-01 10:15:52,935 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQZ28|9887C
+2026-06-01 10:15:52,944 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQZ28|9912C
+2026-06-01 10:15:53,984 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQZ28|9937C
+2026-06-01 10:15:58,278 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQH29|9337P
+2026-06-01 10:15:58,283 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQH29|9362P
+2026-06-01 10:15:59,069 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQH29|9387P
+2026-06-01 10:15:59,080 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQH29|9437P
+2026-06-01 10:15:59,087 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQH29|9412P
+2026-06-01 10:16:50,353 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQH29|9862C
+2026-06-01 10:16:51,389 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQH29|9837C
+2026-06-01 10:16:52,379 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQH29|9887C
+2026-06-01 10:16:52,390 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQH29|9937C
+2026-06-01 10:16:52,396 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQH29|9912C
+2026-06-01 10:17:09,944 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQM27|9362P
+2026-06-01 10:17:09,947 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQM27|9312P
+2026-06-01 10:17:09,948 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQM27|9337P
+2026-06-01 10:17:09,953 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQM27|9387P
+2026-06-01 10:17:10,579 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQM27|9912C
+2026-06-01 10:17:10,594 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQM27|9887C
+2026-06-01 10:17:17,511 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQZ27|10025C
+2026-06-01 10:17:17,514 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQZ27|10000C
+2026-06-01 10:17:21,575 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQH28|9362P
+2026-06-01 10:17:21,584 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQH28|9337P
+2026-06-01 10:17:21,657 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQH28|9387P
+2026-06-01 10:17:22,210 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQH28|9887C
+2026-06-01 10:17:22,213 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQH28|9862C
+2026-06-01 10:17:22,220 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQH28|9912C
+2026-06-01 10:17:22,222 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQH28|9937C
+2026-06-01 10:17:25,821 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQM28|9337P
+2026-06-01 10:17:25,823 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQM28|9362P
+2026-06-01 10:17:25,843 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQM28|9387P
+2026-06-01 10:17:27,467 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQM28|9862C
+2026-06-01 10:17:27,481 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQM28|9887C
+2026-06-01 10:17:28,483 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQM28|9912C
+2026-06-01 10:17:28,673 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQM28|9937C
+2026-06-01 10:17:33,010 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQU28|9362P
+2026-06-01 10:17:33,012 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQU28|9337P
+2026-06-01 10:17:33,023 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQU28|9387P
+2026-06-01 10:17:33,650 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQU28|9937C
+2026-06-01 10:17:33,655 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQU28|9912C
+2026-06-01 10:17:33,663 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQU28|9862C
+2026-06-01 10:17:34,655 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQU28|9887C
+2026-06-01 10:17:38,151 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQZ28|9387P
+2026-06-01 10:17:38,162 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQZ28|9337P
+2026-06-01 10:17:38,163 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQZ28|9362P
+2026-06-01 10:17:38,802 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQZ28|9912C
+2026-06-01 10:17:38,804 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQZ28|9862C
+2026-06-01 10:17:38,809 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQZ28|9937C
+2026-06-01 10:17:39,827 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQZ28|9887C
+2026-06-01 10:17:43,346 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQH29|10050C
+2026-06-01 10:17:43,347 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQH29|10025C
+2026-06-01 10:17:43,347 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQH29|10000C
+2026-06-01 10:18:03,591 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQM27|9312P
+2026-06-01 10:18:03,599 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQM27|9362P
+2026-06-01 10:18:03,601 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQM27|9337P
+2026-06-01 10:18:03,605 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQM27|9387P
+2026-06-01 10:18:04,459 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQM27|9912C
+2026-06-01 10:18:04,460 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQM27|9887C
+2026-06-01 10:18:09,231 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQZ27|9362P
+2026-06-01 10:18:09,236 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQZ27|9387P
+2026-06-01 10:18:09,261 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQZ27|9337P
+2026-06-01 10:18:10,109 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQZ27|9887C
+2026-06-01 10:18:10,110 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQZ27|9937C
+2026-06-01 10:18:10,113 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQZ27|9862C
+2026-06-01 10:18:10,125 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQZ27|9912C
+2026-06-01 10:18:12,458 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQH28|9362P
+2026-06-01 10:18:12,469 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQH28|9387P
+2026-06-01 10:18:12,474 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQH28|9337P
+2026-06-01 10:18:13,323 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQH28|9912C
+2026-06-01 10:18:13,324 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQH28|9937C
+2026-06-01 10:18:13,324 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQH28|9887C
+2026-06-01 10:18:13,325 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQH28|9862C
+2026-06-01 10:18:15,517 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQM28|9337P
+2026-06-01 10:18:15,526 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQM28|9362P
+2026-06-01 10:18:15,529 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQM28|9862C
+2026-06-01 10:18:15,530 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQM28|9387P
+2026-06-01 10:18:16,382 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQM28|9937C
+2026-06-01 10:18:16,384 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQM28|9887C
+2026-06-01 10:18:16,392 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQM28|9912C
+2026-06-01 10:18:19,056 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQU28|9362P
+2026-06-01 10:18:19,069 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQU28|9337P
+2026-06-01 10:18:19,085 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQU28|9387P
+2026-06-01 10:18:19,913 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQU28|9862C
+2026-06-01 10:18:19,916 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQU28|9887C
+2026-06-01 10:18:19,916 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQU28|9937C
+2026-06-01 10:18:19,921 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQU28|9912C
+2026-06-01 10:18:22,237 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQZ28|9387P
+2026-06-01 10:18:22,241 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQZ28|9862C
+2026-06-01 10:18:22,248 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQZ28|9337P
+2026-06-01 10:18:22,261 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQZ28|9362P
+2026-06-01 10:18:23,087 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQZ28|9937C
+2026-06-01 10:18:23,088 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQZ28|9912C
+2026-06-01 10:18:23,091 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQZ28|9887C
+2026-06-01 10:18:25,354 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQH29|10025C
+2026-06-01 10:18:25,363 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQH29|10050C
+2026-06-01 10:18:25,380 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQH29|10000C
+2026-06-01 10:18:34,671 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQM27|10000C
+2026-06-01 10:18:37,102 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQU27|9362P
+2026-06-01 10:18:37,108 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQU27|9337P
+2026-06-01 10:18:37,113 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQU27|9887C
+2026-06-01 10:18:37,118 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQU27|9387P
+2026-06-01 10:18:37,981 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQU27|9912C
+2026-06-01 10:18:37,982 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQU27|9937C
+2026-06-01 10:18:40,213 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQZ27|9362P
+2026-06-01 10:18:40,248 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQZ27|9862C
+2026-06-01 10:18:40,252 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQZ27|9337P
+2026-06-01 10:18:40,255 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQZ27|9387P
+2026-06-01 10:19:04,313 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQZ27|9912C
+2026-06-01 10:19:04,321 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQZ27|9937C
+2026-06-01 10:19:04,348 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQZ27|9887C
+2026-06-01 10:19:09,569 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQH28|9387P
+2026-06-01 10:19:09,570 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQH28|9337P
+2026-06-01 10:19:09,570 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQH28|9362P
+2026-06-01 10:19:09,570 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQH28|9862C
+2026-06-01 10:19:10,240 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQH28|9937C
+2026-06-01 10:19:10,240 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQH28|9912C
+2026-06-01 10:19:10,245 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQH28|9887C
+2026-06-01 10:19:13,792 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQM28|9387P
+2026-06-01 10:19:13,829 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQM28|9337P
+2026-06-01 10:19:13,830 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQM28|9362P
+2026-06-01 10:19:14,581 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQM28|9912C
+2026-06-01 10:19:14,625 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQM28|9862C
+2026-06-01 10:19:14,626 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQM28|9887C
+2026-06-01 10:19:15,479 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQM28|9937C
+2026-06-01 10:19:18,834 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQU28|9387P
+2026-06-01 10:19:18,835 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQU28|9862C
+2026-06-01 10:19:18,837 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQU28|9362P
+2026-06-01 10:19:18,838 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQU28|9337P
+2026-06-01 10:19:19,477 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQU28|9912C
+2026-06-01 10:19:19,480 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQU28|9937C
+2026-06-01 10:19:19,481 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQU28|9887C
+2026-06-01 10:19:23,100 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQZ28|9362P
+2026-06-01 10:19:23,105 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQZ28|9862C
+2026-06-01 10:19:23,150 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQZ28|9337P
+2026-06-01 10:19:23,181 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQZ28|9387P
+2026-06-01 10:19:23,779 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQZ28|9887C
+2026-06-01 10:19:23,782 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQZ28|9912C
+2026-06-01 10:19:23,798 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQZ28|9937C
+2026-06-01 10:19:27,090 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQH29|9362P
+2026-06-01 10:19:27,095 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQH29|9387P
+2026-06-01 10:19:27,121 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQH29|9337P
+2026-06-01 10:19:27,122 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQH29|9412P
+2026-06-01 10:19:27,774 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQH29|9437P
+2026-06-01 10:19:27,774 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQH29|9837C
+2026-06-01 10:19:27,777 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQH29|9862C
+2026-06-01 10:19:27,785 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQH29|9887C
+2026-06-01 10:19:28,784 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQH29|9937C
+2026-06-01 10:19:28,798 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQH29|9912C
+2026-06-01 10:22:05,000 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQU27|10000C
+2026-06-01 10:22:08,149 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQZ27|9362P
+2026-06-01 10:22:08,150 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQZ27|9337P
+2026-06-01 10:22:08,152 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQZ27|9387P
+2026-06-01 10:22:08,921 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQZ27|9937C
+2026-06-01 10:22:08,922 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQZ27|9862C
+2026-06-01 10:22:08,925 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQZ27|9912C
+2026-06-01 10:22:09,932 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQZ27|9887C
+2026-06-01 10:22:12,803 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQH28|9337P
+2026-06-01 10:22:12,819 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQH28|9362P
+2026-06-01 10:22:12,820 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQH28|9387P
+2026-06-01 10:22:13,588 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQH28|9887C
+2026-06-01 10:22:13,590 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQH28|9937C
+2026-06-01 10:22:13,590 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQH28|9862C
+2026-06-01 10:22:13,594 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQH28|9912C
+2026-06-01 10:22:16,592 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQM28|9362P
+2026-06-01 10:22:16,593 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQM28|9337P
+2026-06-01 10:22:16,602 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQM28|9387P
+2026-06-01 10:22:17,355 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQM28|9862C
+2026-06-01 10:22:17,363 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQM28|9937C
+2026-06-01 10:22:17,363 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQM28|9912C
+2026-06-01 10:22:17,373 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQM28|9887C
+2026-06-01 10:22:20,211 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQU28|9387P
+2026-06-01 10:22:20,220 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQU28|9362P
+2026-06-01 10:22:20,220 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQU28|9337P
+2026-06-01 10:22:20,240 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQU28|9862C
+2026-06-01 10:22:21,009 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQU28|9912C
+2026-06-01 10:22:21,017 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQU28|9937C
+2026-06-01 10:22:21,028 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQU28|9887C
+2026-06-01 10:22:23,857 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQZ28|9387P
+2026-06-01 10:22:23,860 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQZ28|9362P
+2026-06-01 10:22:23,860 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQZ28|9337P
+2026-06-01 10:22:24,615 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQZ28|9912C
+2026-06-01 10:22:24,615 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQZ28|9862C
+2026-06-01 10:22:24,621 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQZ28|9887C
+2026-06-01 10:22:24,679 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQZ28|9937C
+2026-06-01 10:22:27,912 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQH29|9337P
+2026-06-01 10:22:27,921 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQH29|9387P
+2026-06-01 10:22:27,990 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQH29|9362P
+2026-06-01 10:22:28,125 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQH29|9412P
+2026-06-01 10:22:28,669 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQH29|9837C
+2026-06-01 10:22:28,677 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQH29|9862C
+2026-06-01 10:22:28,678 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQH29|9437P
+2026-06-01 10:22:29,696 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQH29|9937C
+2026-06-01 10:22:29,697 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQH29|9887C
+2026-06-01 10:22:29,704 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQH29|9912C
+2026-06-01 10:22:40,408 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQM27|10000C
+2026-06-01 10:22:44,114 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQU27|10000C
+2026-06-01 10:22:46,711 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQZ27|9337P
+2026-06-01 10:22:46,719 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQZ27|9362P
+2026-06-01 10:22:46,720 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQZ27|9387P
+2026-06-01 10:22:46,741 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQZ27|9862C
+2026-06-01 10:22:47,486 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQZ27|9887C
+2026-06-01 10:22:47,487 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQZ27|9912C
+2026-06-01 10:22:47,495 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQZ27|9937C
+2026-06-01 10:22:50,165 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQH28|9862C
+2026-06-01 10:22:50,177 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQH28|9387P
+2026-06-01 10:22:50,185 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQH28|9362P
+2026-06-01 10:22:50,399 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQH28|9337P
+2026-06-01 10:22:50,935 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQH28|9912C
+2026-06-01 10:22:50,936 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQH28|9937C
+2026-06-01 10:22:50,936 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQH28|9887C
+2026-06-01 10:22:54,165 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQM28|9862C
+2026-06-01 10:22:54,211 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQM28|9387P
+2026-06-01 10:22:54,216 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQM28|9362P
+2026-06-01 10:22:54,221 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQM28|9337P
+2026-06-01 10:22:54,948 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQM28|9887C
+2026-06-01 10:22:54,975 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQM28|9937C
+2026-06-01 10:22:54,983 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQM28|9912C
+2026-06-01 10:22:57,809 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQU28|9862C
+2026-06-01 10:22:59,282 - BarchartFetcher - ERROR - 404 Client Error: Not Found for url: https://www.barchart.com/futures/quotes/SQU28%7C9937C/interactive-chart
+2026-06-01 10:22:59,284 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQU28|9337P
+2026-06-01 10:22:59,285 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQU28|9362P
+2026-06-01 10:22:59,285 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQU28|9387P
+2026-06-01 10:22:59,382 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQU28|9887C
+2026-06-01 10:22:59,397 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQU28|9912C
+2026-06-01 10:23:04,235 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQZ28|9362P
+2026-06-01 10:23:04,236 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQZ28|9862C
+2026-06-01 10:23:04,236 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQZ28|9387P
+2026-06-01 10:23:04,237 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQZ28|9337P
+2026-06-01 10:23:04,863 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQZ28|9912C
+2026-06-01 10:23:04,864 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQZ28|9937C
+2026-06-01 10:23:04,867 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQZ28|9887C
+2026-06-01 10:23:08,955 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQH29|9337P
+2026-06-01 10:23:08,958 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQH29|9412P
+2026-06-01 10:23:08,972 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQH29|9387P
+2026-06-01 10:23:08,992 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQH29|9362P
+2026-06-01 10:23:09,584 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQH29|9837C
+2026-06-01 10:23:09,584 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQH29|9937C
+2026-06-01 10:23:09,586 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQH29|9437P
+2026-06-01 10:23:09,592 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQH29|9912C
+2026-06-01 10:23:10,588 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQH29|9887C
+2026-06-01 10:23:10,594 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQH29|9862C
+2026-06-01 10:23:29,296 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQZ27|10025C
+2026-06-01 10:23:29,297 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQZ27|10000C
+2026-06-01 10:23:32,592 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQH28|9337P
+2026-06-01 10:23:32,599 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQH28|9387P
+2026-06-01 10:23:32,602 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQH28|9862C
+2026-06-01 10:23:32,604 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQH28|9362P
+2026-06-01 10:23:33,240 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQH28|9937C
+2026-06-01 10:23:33,243 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQH28|9887C
+2026-06-01 10:23:33,246 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQH28|9912C
+2026-06-01 10:23:36,586 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQM28|9337P
+2026-06-01 10:23:36,590 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQM28|9387P
+2026-06-01 10:23:36,591 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQM28|9362P
+2026-06-01 10:23:36,591 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQM28|9862C
+2026-06-01 10:23:37,228 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQM28|9937C
+2026-06-01 10:23:37,241 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQM28|9887C
+2026-06-01 10:23:37,255 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQM28|9912C
+2026-06-01 10:23:40,482 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQU28|9862C
+2026-06-01 10:23:40,490 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQU28|9337P
+2026-06-01 10:23:40,493 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQU28|9362P
+2026-06-01 10:23:40,501 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQU28|9387P
+2026-06-01 10:23:41,118 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQU28|9912C
+2026-06-01 10:23:41,122 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQU28|9887C
+2026-06-01 10:23:41,129 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQU28|9937C
+2026-06-01 10:23:44,523 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQZ28|10000C
+2026-06-01 10:23:44,529 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQZ28|10025C
+2026-06-01 10:23:48,524 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQH29|10000C
+2026-06-01 10:23:48,527 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQH29|10050C
+2026-06-01 10:23:48,532 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQH29|10025C
+2026-06-01 10:26:07,137 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQM27|9312P
+2026-06-01 10:26:07,142 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQM27|9337P
+2026-06-01 10:26:08,002 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQM27|9387P
+2026-06-01 10:26:08,006 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQM27|9362P
+2026-06-01 10:27:00,188 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQM27|9887C
+2026-06-01 10:27:01,201 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQM27|9912C
+2026-06-01 10:27:04,879 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQU27|9337P
+2026-06-01 10:27:04,880 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQU27|9312P
+2026-06-01 10:27:05,748 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQU27|9387P
+2026-06-01 10:27:06,757 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQU27|9362P
+2026-06-01 10:27:15,824 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQU27|9887C
+2026-06-01 10:27:16,834 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQU27|9912C
+2026-06-01 10:27:19,499 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQZ27|10000C
+2026-06-01 10:28:15,409 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQH28|10025C
+2026-06-01 10:28:15,436 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQH28|10000C
+2026-06-01 10:28:29,814 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQM28|10000C
+2026-06-01 10:28:29,818 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQM28|10025C
+2026-06-01 10:28:32,681 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQU28|10000C
+2026-06-01 10:29:15,302 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQU28|10025C
+2026-06-01 10:29:18,084 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQZ28|10000C
+2026-06-01 10:29:20,067 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQH29|10025C
+2026-06-01 10:29:20,067 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQH29|10000C
+2026-06-01 10:29:28,586 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQM27|9362P
+2026-06-01 10:29:28,587 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQM27|9337P
+2026-06-01 10:29:28,589 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQM27|9312P
+2026-06-01 10:29:28,592 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQM27|9387P
+2026-06-01 10:29:29,532 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQM27|9912C
+2026-06-01 10:29:29,535 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQM27|9887C
+2026-06-01 10:29:31,800 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQU27|9337P
+2026-06-01 10:29:31,804 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQU27|9312P
+2026-06-01 10:29:31,807 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQU27|9387P
+2026-06-01 10:29:31,816 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQU27|9362P
+2026-06-01 10:29:32,750 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQU27|9912C
+2026-06-01 10:29:32,750 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQU27|9887C
+2026-06-01 10:29:34,641 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQZ27|10000C
+2026-06-01 10:29:36,450 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQH28|10000C
+2026-06-01 10:29:38,496 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQM28|10000C
+2026-06-01 10:29:38,499 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQM28|10025C
+2026-06-01 10:30:23,090 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQU28|10000C
+2026-06-01 10:30:37,930 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQZ28|10000C
+2026-06-01 10:30:41,365 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQH29|10025C
+2026-06-01 10:30:41,369 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQH29|10000C
+2026-06-01 10:30:52,825 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQM27|9337P
+2026-06-01 10:30:52,829 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQM27|9387P
+2026-06-01 10:30:52,830 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQM27|9362P
+2026-06-01 10:30:52,833 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQM27|9312P
+2026-06-01 10:30:53,478 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQM27|9912C
+2026-06-01 10:30:53,482 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQM27|9887C
+2026-06-01 10:30:56,828 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQU27|9387P
+2026-06-01 10:30:56,841 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQU27|9312P
+2026-06-01 10:30:56,848 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQU27|9362P
+2026-06-01 10:30:56,861 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQU27|9337P
+2026-06-01 10:30:57,486 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQU27|9887C
+2026-06-01 10:30:57,490 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQU27|9912C
+2026-06-01 10:31:00,824 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQZ27|10000C
+2026-06-01 10:31:04,130 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQH28|10000C
+2026-06-01 10:31:07,523 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQM28|10000C
+2026-06-01 10:31:07,524 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQM28|10025C
+2026-06-01 10:31:10,650 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQU28|10000C
+2026-06-01 10:31:13,798 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQZ28|10000C
+2026-06-01 10:34:10,264 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQH29|10025C
+2026-06-01 10:34:10,265 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQH29|10000C
+2026-06-01 10:35:26,785 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQH28|9362P
+2026-06-01 10:35:26,791 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQH28|9337P
+2026-06-01 10:35:26,806 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQH28|9312P
+2026-06-01 10:35:27,468 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQH28|9387P
+2026-06-01 10:35:27,469 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQH28|9887C
+2026-06-01 10:35:27,472 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQH28|9862C
+2026-06-01 10:35:28,481 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQH28|9912C
+2026-06-01 10:35:31,933 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQM28|9362P
+2026-06-01 10:35:31,965 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQM28|9312P
+2026-06-01 10:35:32,051 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQM28|9337P
+2026-06-01 10:35:32,617 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQM28|9387P
+2026-06-01 10:35:33,611 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQM28|9862C
+2026-06-01 10:35:34,747 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQM28|9887C
+2026-06-01 10:35:34,761 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQM28|9912C
+2026-06-01 10:35:39,685 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQU28|9362P
+2026-06-01 10:35:39,690 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQU28|9312P
+2026-06-01 10:35:39,723 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQU28|9337P
+2026-06-01 10:35:40,366 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQU28|9387P
+2026-06-01 10:35:40,381 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQU28|9862C
+2026-06-01 10:35:41,366 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQU28|9887C
+2026-06-01 10:35:41,372 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQU28|9912C
+2026-06-01 10:35:44,718 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQZ28|9337P
+2026-06-01 10:35:44,723 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQZ28|9362P
+2026-06-01 10:35:44,732 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQZ28|9312P
+2026-06-01 10:35:45,369 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQZ28|9887C
+2026-06-01 10:35:45,369 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQZ28|9862C
+2026-06-01 10:35:45,378 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQZ28|9387P
+2026-06-01 10:35:46,373 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQZ28|9912C
+2026-06-01 10:35:49,499 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQH29|10000C
+============================================================================
+SOFR BUTTERFLY RV BACKFILL (all spacings, sqrt-T, FOMC) | 2026-04-11 -> 2026-05-22
+Business days: 30 | output: C:\Users\chris\clee\ARBS\notebooks\backtests\SFR_screeners\butterfly_rv_backfill.parquet
+============================================================================
+  [1/30] 2026-04-13: 28 flies, 28 w/BKM, 304.5s (0.2 dates/min)
+  [2/30] 2026-04-14: 28 flies, 28 w/BKM, 178.5s (0.2 dates/min)
+  [3/30] 2026-04-15: 28 flies, 28 w/BKM, 84.2s (0.3 dates/min)
+    ...checkpoint: parquet now 6244 rows
+  [4/30] 2026-04-16: 28 flies, 28 w/BKM, 186.4s (0.3 dates/min)
+  [5/30] 2026-04-17: 28 flies, 28 w/BKM, 43.3s (0.4 dates/min)
+  [6/30] 2026-04-20: 28 flies, 28 w/BKM, 83.8s (0.4 dates/min)
+    ...checkpoint: parquet now 6328 rows
+  [7/30] 2026-04-21: 28 flies, 28 w/BKM, 44.9s (0.5 dates/min)
+  [8/30] 2026-04-22: 28 flies, 28 w/BKM, 33.6s (0.5 dates/min)
+  [9/30] 2026-04-23: 28 flies, 28 w/BKM, 68.9s (0.5 dates/min)
+    ...checkpoint: parquet now 6412 rows
+  [10/30] 2026-04-24: 28 flies, 28 w/BKM, 30.3s (0.6 dates/min)
+  [11/30] 2026-04-27: 28 flies, 28 w/BKM, 16.5s (0.6 dates/min)
+  [12/30] 2026-04-28: 28 flies, 28 w/BKM, 11.7s (0.7 dates/min)
+    ...checkpoint: parquet now 6496 rows
+  [13/30] 2026-04-29: 28 flies, 28 w/BKM, 105.4s (0.7 dates/min)
+  [14/30] 2026-04-30: 28 flies, 28 w/BKM, 87.7s (0.7 dates/min)
+  [15/30] 2026-05-01: 28 flies, 28 w/BKM, 562.9s (0.5 dates/min)
+    ...checkpoint: parquet now 6580 rows
+  [16/30] 2026-05-04: 28 flies, 28 w/BKM, 52.5s (0.5 dates/min)
+  [17/30] 2026-05-05: 28 flies, 28 w/BKM, 40.2s (0.5 dates/min)
+  [18/30] 2026-05-06: 28 flies, 28 w/BKM, 63.4s (0.5 dates/min)
+    ...checkpoint: parquet now 6664 rows
+  [19/30] 2026-05-07: 28 flies, 28 w/BKM, 180.8s (0.5 dates/min)
+  [20/30] 2026-05-08: 28 flies, 28 w/BKM, 40.9s (0.5 dates/min)
+  [21/30] 2026-05-11: 28 flies, 28 w/BKM, 37.8s (0.6 dates/min)
+    ...checkpoint: parquet now 6748 rows
+  [22/30] 2026-05-12: 28 flies, 28 w/BKM, 331.6s (0.5 dates/min)
+  [23/30] 2026-05-13: 28 flies, 28 w/BKM, 81.2s (0.5 dates/min)
+  [24/30] 2026-05-14: 28 flies, 28 w/BKM, 221.0s (0.5 dates/min)
+    ...checkpoint: parquet now 6832 rows
+  [25/30] 2026-05-15: 28 flies, 28 w/BKM, 87.0s (0.5 dates/min)
+2026-06-01 10:36:02,354 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQZ28|9387P
+2026-06-01 10:36:02,430 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQZ28|9862C
+2026-06-01 10:36:02,482 - BarchartFetcher - ERROR - Barchart EOD - Empty data error: No columns to parse from file for symbol SQZ28|9362P
+  [26/30] 2026-05-18: 28 flies, 28 w/BKM, 4.6s (0.5 dates/min)
+  [27/30] 2026-05-19: 28 flies, 28 w/BKM, 3.0s (0.5 dates/min)
+    ...checkpoint: parquet now 6916 rows
+  [28/30] 2026-05-20: 28 flies, 28 w/BKM, 0.2s (0.6 dates/min)
+  [29/30] 2026-05-21: 28 flies, 28 w/BKM, 4.8s (0.6 dates/min)
+  [30/30] 2026-05-22: 28 flies, 28 w/BKM, 1.7s (0.6 dates/min)
+    ...checkpoint: parquet now 7000 rows
+Total time: 2994s

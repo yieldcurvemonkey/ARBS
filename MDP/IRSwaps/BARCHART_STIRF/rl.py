@@ -1896,10 +1896,25 @@ class BARCHART_STIRF_CURVE(LayeredCacheMixin):
         from Caching.curve_store import CurveSnapshot, CurveStore
 
         cfg_hash = self._curve_cfg_hash(cfg)
-        new_snapshots = [
-            CurveSnapshot.from_rl_curve(curve, curve_name=curve_name, cfg=cfg, cfg_hash=cfg_hash)
-            for _, curve in sorted(curves_by_ts.items())
-        ]
+        curves_by_ts_with_context: Dict[datetime.datetime, rl.Curve] = {}
+        new_snapshots = []
+        for ts, curve in sorted(curves_by_ts.items()):
+            ts_utc = self._curve_store_norm_timestamp(ts)
+            curve_with_context = self._attach_curve_context(
+                curve,
+                curve_name=curve_name,
+                timestamp=ts_utc,
+                cfg=cfg,
+            )
+            curves_by_ts_with_context[ts_utc] = curve_with_context
+            new_snapshots.append(
+                CurveSnapshot.from_rl_curve(
+                    curve_with_context,
+                    curve_name=curve_name,
+                    cfg=cfg,
+                    cfg_hash=cfg_hash,
+                )
+            )
         if not new_snapshots:
             return
 
@@ -1931,7 +1946,7 @@ class BARCHART_STIRF_CURVE(LayeredCacheMixin):
             merged_curves = {}
             if not existing_raw_df.empty:
                 merged_curves.update(store.reconstruct_curves_batch(existing_raw_df, cfg=cfg, max_workers=4))
-            merged_curves.update(curves_by_ts)
+            merged_curves.update(curves_by_ts_with_context)
             analytics_tenors = analytics_tenors_for_curve(curve_name)
             analytics_rows = [
                 compute_analytics_row(
@@ -1977,7 +1992,7 @@ class BARCHART_STIRF_CURVE(LayeredCacheMixin):
             ts_local = ts_local.tz_convert("America/Chicago")
 
         node_dates = []
-        for value in list(row.get("node_dates") or []):
+        for value in cls._curve_store_row_sequence(row.get("node_dates")):
             if isinstance(value, datetime.datetime):
                 node_dates.append(value.date())
             elif isinstance(value, datetime.date):
@@ -1985,7 +2000,10 @@ class BARCHART_STIRF_CURVE(LayeredCacheMixin):
             else:
                 node_dates.append(pd.Timestamp(value).date())
 
-        discount_factors = [float(value) for value in list(row.get("discount_factors") or [])]
+        discount_factors = [
+            float(value)
+            for value in cls._curve_store_row_sequence(row.get("discount_factors"))
+        ]
         trading_date = row.get("trading_date")
         if isinstance(trading_date, datetime.datetime):
             trading_date = trading_date.date()
@@ -2005,6 +2023,29 @@ class BARCHART_STIRF_CURVE(LayeredCacheMixin):
             node_dates=node_dates,
             discount_factors=discount_factors,
         )
+
+    @staticmethod
+    def _curve_store_row_sequence(value: Any) -> List[Any]:
+        if value is None:
+            return []
+        if isinstance(value, (str, bytes)):
+            return [value]
+        try:
+            is_missing = pd.isna(value)
+            if isinstance(is_missing, bool) and is_missing:
+                return []
+        except (TypeError, ValueError):
+            pass
+        if hasattr(value, "tolist"):
+            value = value.tolist()
+            if value is None:
+                return []
+        if isinstance(value, (list, tuple, set)):
+            return list(value)
+        try:
+            return list(value)
+        except TypeError:
+            return [value]
 
     def _persist_bulk_curves(
         self,
@@ -2032,7 +2073,12 @@ class BARCHART_STIRF_CURVE(LayeredCacheMixin):
             try:
                 self._curve_store_write_day(curve_name, dt, cfg, day_curves)
             except Exception:
-                pass
+                logging.getLogger(__name__).exception(
+                    "BARCHART STIRF CurveStore write failed for %s/%s (%s curves)",
+                    curve_name,
+                    dt,
+                    len(day_curves),
+                )
 
             if len(day_curves) > 10:
                 try:

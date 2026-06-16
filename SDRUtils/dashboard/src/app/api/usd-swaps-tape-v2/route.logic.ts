@@ -615,11 +615,18 @@ export function buildTapeQuery(
 
   const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : ''
 
+  // NULLS LAST is load-bearing: idx_tape_v2_packages_exec_start is declared
+  // (execution_start DESC NULLS LAST), and Postgres matches ORDER BY pathkeys
+  // syntactically — plain DESC (= NULLS FIRST) matches neither scan direction
+  // of that index, forcing a seq-scan + external sort of every package row
+  // (~29s on prod, past the client's 15s abort) instead of an index scan
+  // (~60ms). execution_start is NOT NULL so the orderings return identical
+  // rows.
   const sql = `
     SELECT ${columns}
     FROM ${displayView} d
     ${whereSql}
-    ORDER BY d.execution_start DESC
+    ORDER BY d.execution_start DESC NULLS LAST
     LIMIT ${limitParam}
   `
   return { sql, params }

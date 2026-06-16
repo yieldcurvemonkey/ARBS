@@ -64,3 +64,34 @@ def test_fetch_futures_options_timeseries_normalizes_history_frames(monkeypatch)
     assert df.index.name == "date"
     assert df.loc[pd.Timestamp("2026-03-04"), "symbol"] == "SQZ27|9700C"
     assert df.loc[pd.Timestamp("2026-03-04"), "openinterest"] == 27916
+
+
+def test_build_eod_url_date_bounds():
+    fetcher = BarchartFetcher(debug_verbose=False)
+
+    # Default: full history, no server-side date bounds (cache-friendly).
+    default_url = fetcher._build_eod_url("SQM26")
+    assert "queryeod.ashx" in default_url
+    assert "symbol=SQM26" in default_url
+    assert "data=daily" in default_url
+    assert "&start=" not in default_url
+    assert "&end=" not in default_url
+
+    # Opt-in: server-side YYYYMMDD bounds shrink the payload for tail refreshes.
+    bounded = fetcher._build_eod_url(
+        "SQM26",
+        start=datetime.datetime(2025, 1, 1),
+        end=datetime.date(2025, 2, 1),
+        server_side_dates=True,
+    )
+    assert "&start=20250101" in bounded
+    assert "&end=20250201" in bounded
+
+    # String boundaries are coerced; missing/invalid boundaries are omitted, not errored.
+    from_str = fetcher._build_eod_url("SQM26", start="2025-03-15", server_side_dates=True)
+    assert "&start=20250315" in from_str
+    assert "&end=" not in from_str
+
+    assert fetcher._format_eod_boundary(None) is None
+    assert fetcher._format_eod_boundary("not-a-date") is None
+    assert fetcher._format_eod_boundary(datetime.date(2026, 5, 30)) == "20260530"

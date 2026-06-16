@@ -1,0 +1,303 @@
+============================================================================
+SOFR BUTTERFLY RV SCREENER | as_of = 2026-05-27
+============================================================================
+
+Strip (12 contracts): M6 U6 Z6 H7 M7 U7 Z7 H8 M8 U8 Z8 H9
+Rate range: 3.667% - 3.940%
+
+Calendar Spreads (bps):
+  SP M6-U6: +8.75
+  SP U6-Z6: +9.50
+  SP Z6-H7: +7.50
+  SP H7-M7: +1.50
+  SP M7-U7: -3.50
+  SP U7-Z7: -4.50
+  SP Z7-H8: -3.00
+  SP H8-M8: -0.50
+  SP M8-U8: +0.00
+  SP U8-Z8: +1.50
+  SP Z8-H9: +1.75
+
+3MO Butterflies (bps):
+  BF M6-U6-Z6: -0.75
+  BF U6-Z6-H7: +2.00
+  BF Z6-H7-M7: +6.00
+  BF H7-M7-U7: +5.00
+  BF M7-U7-Z7: +1.00
+  BF U7-Z7-H8: -1.50
+  BF Z7-H8-M8: -2.50
+  BF H8-M8-U8: -0.50
+  BF M8-U8-Z8: -1.50
+  BF U8-Z8-H9: -0.25
+
+6MO Butterflies (bps):
+  BF M6-Z6-M7: +9.25
+  BF U6-H7-U7: +19.00
+  BF Z6-M7-Z7: +17.00
+  BF H7-U7-H8: +5.50
+  BF M7-Z7-M8: -4.50
+  BF U7-H8-U8: -7.00
+  BF Z7-M8-Z8: -5.00
+  BF H8-U8-H9: -3.75
+
+9MO Butterflies (bps):
+  BF M6-H7-Z7: +32.25
+  BF U6-M7-H8: +29.50
+  BF Z6-U7-M8: +13.50
+  BF H7-Z7-U8: -3.00
+  BF M7-H8-Z8: -12.00
+  BF U7-M8-H9: -11.25
+
+12MO Butterflies (bps):
+  BF M6-M7-M8: +38.75
+  BF U6-U7-U8: +23.00
+  BF Z6-Z7-Z8: +3.00
+  BF H7-H8-H9: -12.25
+
+----------------------------------------------------------------------------
+Fetching SABR smiles and computing BKM/BL moments...
+----------------------------------------------------------------------------
+  SFRH27: fwd=3.9200% BKM_std=100.5bps BL_std=88.5bps skew=+0.894 TTE=294d n_pts=20
+  SFRH28: fwd=3.8300% BKM_std=159.0bps BL_std=141.6bps skew=+1.176 TTE=658d n_pts=20
+  SFRH29: fwd=3.8500% BKM_std=193.5bps BL_std=169.9bps skew=+1.353 TTE=1029d n_pts=20
+  SFRM26: fwd=3.6700% BKM_std=9.4bps BL_std=12.8bps skew=-9.989 TTE=21d n_pts=20
+  SFRM27: fwd=3.9350% BKM_std=122.4bps BL_std=112.3bps skew=+1.051 TTE=385d n_pts=20
+  SFRM28: fwd=3.8200% BKM_std=169.2bps BL_std=150.2bps skew=+1.281 TTE=756d n_pts=20
+  SFRU26: fwd=3.7500% BKM_std=39.5bps BL_std=30.3bps skew=-0.966 TTE=112d n_pts=20
+  SFRU27: fwd=3.9050% BKM_std=136.9bps BL_std=121.4bps skew=+1.211 TTE=476d n_pts=20
+  SFRU28: fwd=3.8250% BKM_std=177.9bps BL_std=157.0bps skew=+1.355 TTE=847d n_pts=20
+  SFRZ26: fwd=3.8450% BKM_std=72.2bps BL_std=61.7bps skew=+0.643 TTE=203d n_pts=20
+  SFRZ27: fwd=3.8600% BKM_std=150.2bps BL_std=132.5bps skew=+1.277 TTE=567d n_pts=20
+  SFRZ28: fwd=3.8350% BKM_std=185.7bps BL_std=163.7bps skew=+1.397 TTE=938d n_pts=20
+
+============================================================================
+LAYER 1: VARIANCE CONSISTENCY (BKM model-free moments)
+============================================================================
+
+============================================================================
+LAYER 2: PROBABILITY SPACE (kink sharpness vs distributional width)
+============================================================================
+
+============================================================================
+LAYER 3: FRAGILITY (tail sensitivity of weakest leg)
+============================================================================
+
+============================================================================
+COMPOSITE SCREENER RESULTS
+============================================================================
+
+Butterfly         Gap  Level  Prob Std_N Std_M Std_F StdExc AdjExc VarSig AdjSig   K/W  Frag    FOMC
+----------------------------------------------------------------------------------------------------------------------------
+  --- 3mo gap flies ---
+BF M6-U6-Z6       3mo   -0.7    -3     9    40    72   -1.3   +1.8  -1.72  +2.42 0.019 0.137   2/3/1
+BF U6-Z6-H7       3mo   +2.0    +8    40    72   101   +2.2   +3.8  +1.08  +1.91 0.028 0.087   3/1/3
+BF Z6-H7-M7       3mo   +6.0   +24    72   101   122   +3.3   +3.6  +0.54  +0.61 0.060 0.043   1/3/1
+BF H7-M7-U7       3mo   +5.0   +20   101   122   137   +3.6   +3.3  +0.72  +0.65 0.041 0.058   3/1/3
+BF M7-U7-Z7       3mo   +1.0    +4   122   137   150   +0.7   +0.1  +0.66  +0.10 0.007 0.053   1/3/1
+BF U7-Z7-H8       3mo   -1.5    -6   137   150   159   +2.2   +1.7  +1.48  +1.11 0.010 0.118   3/1/2
+BF Z7-H8-M8       3mo   -2.5   -10   150   159   169   -0.7   -0.9  -0.27  -0.35 0.016 0.022   1/2/2
+BF H8-M8-U8       3mo   -0.5    -2   159   169   178   +0.7   -0.0  +1.48  -0.03 0.003 0.118   2/2/3
+BF M8-U8-Z8       3mo   -1.5    -6   169   178   186   +0.5   +0.1  +0.30  +0.09 0.008 0.024   2/3/0
+BF U8-Z8-H9       3mo   -0.2    -1   178   186   194   +0.0   -0.3  +0.00  -0.56 0.001 0.000   3/0/0
+  --- 6mo gap flies ---
+BF M6-Z6-M7       6mo   +9.3   +37     9    72   122   +6.3  +13.1  +0.68  +1.42 0.128 0.054   2/1/1
+BF U6-H7-U7       6mo  +19.0   +76    40   101   137  +12.3  +14.7  +0.65  +0.77 0.189 0.052   3/3/3
+BF Z6-M7-Z7       6mo  +17.0   +68    72   122   150  +11.2  +10.8  +0.66  +0.63 0.139 0.053   1/1/1
+BF H7-U7-H8       6mo   +5.5   +22   101   137   159   +7.2   +5.3  +1.30  +0.97 0.040 0.104   3/3/2
+BF M7-Z7-M8       6mo   -4.5   -18   122   150   169   +4.4   +2.7  +0.98  +0.59 0.030 0.078   1/1/2
+BF U7-H8-U8       6mo   -7.0   -28   137   159   178   +1.6   +0.1  +0.23  +0.01 0.044 0.018   3/2/3
+BF Z7-M8-Z8       6mo   -5.0   -20   150   169   186   +1.3   -0.8  +0.25  -0.16 0.030 0.020   1/2/0
+BF H8-U8-H9       6mo   -3.7   -15   159   178   194   +1.7   -0.0  +0.44  -0.01 0.021 0.035   2/3/0
+  --- 9mo gap flies ---
+BF M6-H7-Z7       9mo  +32.3  +129     9   101   150  +20.7  +28.8  +0.64  +0.89 0.321 0.051   2/3/1
+BF U6-M7-H8       9mo  +29.5  +118    40   122   159  +23.1  +24.9  +0.78  +0.84 0.241 0.063   3/1/2
+BF Z6-U7-M8       9mo  +13.5   +54    72   137   169  +16.2  +14.7  +1.20  +1.09 0.099 0.096   1/3/2
+BF H7-Z7-U8       9mo   -3.0   -12   101   150   178  +11.0   +7.6  +3.65  +2.54 0.020 0.292   3/1/3
+BF M7-H8-Z8       9mo  -12.0   -48   122   159   186   +5.0   +1.2  +0.41  +0.10 0.075 0.033   1/2/0
+BF U7-M8-H9       9mo  -11.3   -45   137   169   194   +4.0   +0.0  +0.35  +0.00 0.066 0.028   3/2/0
+  --- 12mo gap flies ---
+BF M6-M7-M8      12mo  +38.8  +155     9   122   169  +33.0  +42.2  +0.85  +1.09 0.317 0.068   2/1/2
+BF U6-U7-U8      12mo  +23.0   +92    40   137   178  +28.2  +29.7  +1.23  +1.29 0.168 0.098   3/3/3
+BF Z6-Z7-Z8      12mo   +3.0   +12    72   150   186  +21.2  +17.8  +7.07  +5.92 0.020 0.566   1/1/0
+BF H7-H8-H9      12mo  -12.2   -49   101   159   194  +12.0   +6.4  +0.98  +0.53 0.077 0.078   3/2/0
+
+============================================================================
+SIGNAL INTERPRETATION
+============================================================================
+
+Column guide:
+  Level (bps)  : Futures butterfly value in price-space basis points
+  Prob Δ (pp)  : Change in implied probability of 25bp move (percentage points)
+  Std N/M/F    : BKM-implied std dev (bps) at near/mid/far legs
+  Std Excess   : Mid std minus linear interpolation of wings (bps)
+                 Positive = mid has MORE uncertainty than neighbors
+                 Negative = mid has LESS uncertainty than neighbors
+  Var Signal   : Variance excess normalized by fly level
+                 Large positive → fly should be CHEAPER (sell signal)
+                 Large negative → fly should be RICHER (buy signal)
+  K/W          : Kink-to-width ratio (fly level / mid std)
+                 High = market has strong timing conviction
+                 Low = kink is small relative to uncertainty
+  Fragility    : Sensitivity of fly to 1% tail mass shift / fly level
+                 >0.5 = HIGH fragility → size down
+                 <0.2 = LOW fragility → conviction sizing OK
+  Weakest      : Which leg has the widest distribution (drives fragility)
+  FOMC (N/M/F) : # of FOMC meetings in near/mid/far quarters
+                 Asymmetric FOMC loading justifies structural curvature
+
+============================================================================
+ACTIONABLE SIGNALS
+============================================================================
+
+============================================================================
+ACTIONABLE SIGNALS
+============================================================================
+
+  BF M6-U6-Z6 [3mo] (-0.75 bps):
+    + L3 LOW fragility (0.137) -> full size OK
+    + FOMC: asymmetric meetings between legs (2 in near-gap vs 3 in far-gap) -> structural curvature justified
+    ~ L1 SUPPRESSED: near leg dead (std=9bps)
+
+  BF U6-Z6-H7 [3mo] (+2.00 bps):
+    + L1 Variance: RICH (sell) (adj_excess=+3.8bps, adj_signal=+1.91)
+    + L2 Weak kink vs uncertainty (K/W=0.028)
+    + L3 LOW fragility (0.087) -> full size OK
+    + FOMC: asymmetric meetings between legs (3 in near-gap vs 1 in far-gap) -> structural curvature justified
+
+  BF Z6-H7-M7 [3mo] (+6.00 bps):
+    + L1 Variance: RICH (sell) (adj_excess=+3.6bps, adj_signal=+0.61)
+    + L3 LOW fragility (0.043) -> full size OK
+    + FOMC: asymmetric meetings between legs (1 in near-gap vs 3 in far-gap) -> structural curvature justified
+
+  BF H7-M7-U7 [3mo] (+5.00 bps):
+    + L1 Variance: RICH (sell) (adj_excess=+3.3bps, adj_signal=+0.65)
+    + L3 LOW fragility (0.058) -> full size OK
+    + FOMC: asymmetric meetings between legs (3 in near-gap vs 1 in far-gap) -> structural curvature justified
+
+  BF M7-U7-Z7 [3mo] (+1.00 bps):
+    + L2 Weak kink vs uncertainty (K/W=0.007)
+    + L3 LOW fragility (0.053) -> full size OK
+    + FOMC: asymmetric meetings between legs (1 in near-gap vs 3 in far-gap) -> structural curvature justified
+    ~ L1 raw signal (+0.66) absorbed by sqrt(T) correction -> adj_signal=+0.10. Not actionable.
+
+  BF U7-Z7-H8 [3mo] (-1.50 bps):
+    + L1 Variance: RICH (sell) (adj_excess=+1.7bps, adj_signal=+1.11)
+    + L2 Weak kink vs uncertainty (K/W=0.010)
+    + L3 LOW fragility (0.118) -> full size OK
+    + FOMC: asymmetric meetings between legs (3 in near-gap vs 1 in far-gap) -> structural curvature justified
+
+  BF Z7-H8-M8 [3mo] (-2.50 bps):
+    + L1 Variance: CHEAP (buy) (adj_excess=-0.9bps, adj_signal=-0.35)
+    + L2 Weak kink vs uncertainty (K/W=0.016)
+    + L3 LOW fragility (0.022) -> full size OK
+    + FOMC: asymmetric meetings between legs (1 in near-gap vs 2 in far-gap) -> structural curvature justified
+
+  BF H8-M8-U8 [3mo] (-0.50 bps):
+    + L3 LOW fragility (0.118) -> full size OK
+    ~ L1 raw signal (+1.48) absorbed by sqrt(T) correction -> adj_signal=-0.03. Not actionable.
+
+  BF M8-U8-Z8 [3mo] (-1.50 bps):
+    + L2 Weak kink vs uncertainty (K/W=0.008)
+    + L3 LOW fragility (0.024) -> full size OK
+    + FOMC: asymmetric meetings between legs (2 in near-gap vs 3 in far-gap) -> structural curvature justified
+    ~ L1 raw signal (+0.30) absorbed by sqrt(T) correction -> adj_signal=+0.09. Not actionable.
+
+  BF U8-Z8-H9 [3mo] (-0.25 bps):
+    + L1 Variance: CHEAP (buy) (adj_excess=-0.3bps, adj_signal=-0.56)
+    + L3 LOW fragility (0.000) -> full size OK
+    + FOMC: asymmetric meetings between legs (3 in near-gap vs 0 in far-gap) -> structural curvature justified
+
+  BF M6-Z6-M7 [6mo] (+9.25 bps):
+    + L3 LOW fragility (0.054) -> full size OK
+    + FOMC: asymmetric meetings between legs (5 in near-gap vs 4 in far-gap) -> structural curvature justified
+    ~ L1 SUPPRESSED: near leg dead (std=9bps)
+
+  BF U6-H7-U7 [6mo] (+19.00 bps):
+    + L1 Variance: RICH (sell) (adj_excess=+14.7bps, adj_signal=+0.77)
+    + L2 High timing conviction (K/W=0.189)
+    + L3 LOW fragility (0.052) -> full size OK
+
+  BF Z6-M7-Z7 [6mo] (+17.00 bps):
+    + L1 Variance: RICH (sell) (adj_excess=+10.8bps, adj_signal=+0.63)
+    + L3 LOW fragility (0.053) -> full size OK
+
+  BF H7-U7-H8 [6mo] (+5.50 bps):
+    + L1 Variance: RICH (sell) (adj_excess=+5.3bps, adj_signal=+0.97)
+    + L3 LOW fragility (0.104) -> full size OK
+
+  BF M7-Z7-M8 [6mo] (-4.50 bps):
+    + L1 Variance: RICH (sell) (adj_excess=+2.7bps, adj_signal=+0.59)
+    + L2 Weak kink vs uncertainty (K/W=0.030)
+    + L3 LOW fragility (0.078) -> full size OK
+    + FOMC: asymmetric meetings between legs (4 in near-gap vs 3 in far-gap) -> structural curvature justified
+
+  BF U7-H8-U8 [6mo] (-7.00 bps):
+    + L3 LOW fragility (0.018) -> full size OK
+
+  BF Z7-M8-Z8 [6mo] (-5.00 bps):
+    + L2 Weak kink vs uncertainty (K/W=0.030)
+    + L3 LOW fragility (0.020) -> full size OK
+    + FOMC: asymmetric meetings between legs (3 in near-gap vs 5 in far-gap) -> structural curvature justified
+
+  BF H8-U8-H9 [6mo] (-3.75 bps):
+    + L2 Weak kink vs uncertainty (K/W=0.021)
+    + L3 LOW fragility (0.035) -> full size OK
+    + FOMC: asymmetric meetings between legs (4 in near-gap vs 3 in far-gap) -> structural curvature justified
+    ~ L1 raw signal (+0.44) absorbed by sqrt(T) correction -> adj_signal=-0.01. Not actionable.
+
+  BF M6-H7-Z7 [9mo] (+32.25 bps):
+    + L2 High timing conviction (K/W=0.321)
+    + L3 LOW fragility (0.051) -> full size OK
+    + FOMC: asymmetric meetings between legs (6 in near-gap vs 7 in far-gap) -> structural curvature justified
+    ~ L1 SUPPRESSED: near leg dead (std=9bps)
+
+  BF U6-M7-H8 [9mo] (+29.50 bps):
+    + L1 Variance: RICH (sell) (adj_excess=+24.9bps, adj_signal=+0.84)
+    + L2 High timing conviction (K/W=0.241)
+    + L3 LOW fragility (0.063) -> full size OK
+    + FOMC: asymmetric meetings between legs (7 in near-gap vs 5 in far-gap) -> structural curvature justified
+
+  BF Z6-U7-M8 [9mo] (+13.50 bps):
+    + L1 Variance: RICH (sell) (adj_excess=+14.7bps, adj_signal=+1.09)
+    + L3 LOW fragility (0.096) -> full size OK
+    + FOMC: asymmetric meetings between legs (5 in near-gap vs 6 in far-gap) -> structural curvature justified
+
+  BF H7-Z7-U8 [9mo] (-3.00 bps):
+    + L1 Variance: RICH (sell) (adj_excess=+7.6bps, adj_signal=+2.54)
+    + L2 Weak kink vs uncertainty (K/W=0.020)
+    + FOMC: asymmetric meetings between legs (7 in near-gap vs 5 in far-gap) -> structural curvature justified
+
+  BF M7-H8-Z8 [9mo] (-12.00 bps):
+    + L3 LOW fragility (0.033) -> full size OK
+    + FOMC: asymmetric meetings between legs (5 in near-gap vs 7 in far-gap) -> structural curvature justified
+    ~ L1 raw signal (+0.41) absorbed by sqrt(T) correction -> adj_signal=+0.10. Not actionable.
+
+  BF U7-M8-H9 [9mo] (-11.25 bps):
+    + L3 LOW fragility (0.028) -> full size OK
+    + FOMC: asymmetric meetings between legs (6 in near-gap vs 5 in far-gap) -> structural curvature justified
+    ~ L1 raw signal (+0.35) absorbed by sqrt(T) correction -> adj_signal=+0.00. Not actionable.
+
+  BF M6-M7-M8 [12mo] (+38.75 bps):
+    + L2 High timing conviction (K/W=0.317)
+    + L3 LOW fragility (0.068) -> full size OK
+    + FOMC: asymmetric meetings between legs (9 in near-gap vs 7 in far-gap) -> structural curvature justified
+    ~ L1 SUPPRESSED: near leg dead (std=9bps)
+
+  BF U6-U7-U8 [12mo] (+23.00 bps):
+    + L1 Variance: RICH (sell) (adj_excess=+29.7bps, adj_signal=+1.29)
+    + L2 High timing conviction (K/W=0.168)
+    + L3 LOW fragility (0.098) -> full size OK
+
+  BF Z6-Z7-Z8 [12mo] (+3.00 bps):
+    + L1 Variance: RICH (sell) (adj_excess=+17.8bps, adj_signal=+5.92)
+    + L2 Weak kink vs uncertainty (K/W=0.020)
+    + L3 HIGH fragility (0.566) -> size down
+
+  BF H7-H8-H9 [12mo] (-12.25 bps):
+    + L1 Variance: RICH (sell) (adj_excess=+6.4bps, adj_signal=+0.53)
+    + L3 LOW fragility (0.078) -> full size OK
+    + FOMC: asymmetric meetings between legs (8 in near-gap vs 7 in far-gap) -> structural curvature justified
+
+============================================================================
+DONE
+============================================================================

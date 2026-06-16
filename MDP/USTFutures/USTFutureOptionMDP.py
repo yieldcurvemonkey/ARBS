@@ -7,6 +7,7 @@ import json
 import logging
 import math
 import os
+import queue
 import random
 import re
 import threading
@@ -1563,6 +1564,7 @@ def _asof_index_position(index: pd.Index, target: pd.Timestamp) -> Optional[int]
 
 class USTFutureOptionMDP(MarketDataProvider[InstrumentLike], LayeredCacheMixin):
     _UST_OPTION_CACHE = "_ust_option_pricer_cache"
+    _RAW_EOD_CACHE_STEM = "USTFutureOptionRawEOD_Cache"
     _BARCHART_STATE: Dict[str, Any] = {}
     _CURVE_STATE: Dict[str, Any] = {}
     _QS_STATE: Dict[str, Any] = {}
@@ -1591,6 +1593,9 @@ class USTFutureOptionMDP(MarketDataProvider[InstrumentLike], LayeredCacheMixin):
         # Historical fetch windows are fixed to one month on either side of the request range.
         self._barchart_prefetch_months = 1
 
+        # Generous candidate list; runtime preflight + health-scoring pick the live/healthy
+        # ones per call. socks-us2x/4x are the newer nordvpn.com-scheme endpoints validated
+        # alongside the nordhold cities (NordVPN's working US SOCKS pool is small + flaky).
         default_hosts = [
             "atlanta.us.socks.nordhold.net",
             "chicago.us.socks.nordhold.net",
@@ -1600,6 +1605,8 @@ class USTFutureOptionMDP(MarketDataProvider[InstrumentLike], LayeredCacheMixin):
             "phoenix.us.socks.nordhold.net",
             "san-francisco.us.socks.nordhold.net",
             "us.socks.nordhold.net",
+            "socks-us29.nordvpn.com",
+            "socks-us40.nordvpn.com",
             None,
         ]
         self._barchart_proxy_hosts: List[Optional[str]] = list(kwargs.get("barchart_proxy_hosts", default_hosts))
@@ -1608,6 +1615,30 @@ class USTFutureOptionMDP(MarketDataProvider[InstrumentLike], LayeredCacheMixin):
         random.shuffle(self._barchart_proxy_hosts)
         self._barchart_proxy_ttl: int = int(kwargs.get("barchart_proxy_ttl", 60))
         self._barchart_session_token_pool_size_cap: int = max(1, int(kwargs.get("barchart_session_token_pool_size_cap", 24)))
+
+        # Raw per-symbol EOD frame cache (mirrors STIRFutureOptionMDP): full-history frames
+        # keyed by barchart symbol, sliced locally per window. Historical windows are immutable
+        # cache hits; windows reaching today are TTL-gated. L0 in-proc dict + L1 local diskcache
+        # (no Supabase L2 -- EOD frames must not hit remote prod KV).
+        self._raw_eod_cache_enabled: bool = bool(kwargs.get("raw_eod_cache", True))
+        self._raw_eod_ttl_seconds: int = max(0, int(kwargs.get("raw_eod_ttl_seconds", 900)))
+        self._raw_eod_mem: Dict[str, Dict[str, Any]] = {}
+        self._raw_eod_lock = threading.RLock()
+        self._raw_eod_disk_cache: Any = None
+
+        # Multi-proxy work-stealing fan-out (opt-in, off by default).
+        _fanout_env = os.getenv("USTFO_BARCHART_FANOUT", "").strip().lower()
+        self._barchart_fanout_enabled: bool = bool(
+            kwargs.get("barchart_fanout", _fanout_env in {"1", "true", "yes", "on"})
+        )
+        self._barchart_fanout_max_shards: int = max(1, int(kwargs.get("barchart_fanout_max_shards", 6)))
+        self._barchart_fanout_min_symbols_per_shard: int = max(1, int(kwargs.get("barchart_fanout_min_symbols_per_shard", 8)))
+        self._barchart_fanout_batch_size: int = max(1, int(kwargs.get("barchart_fanout_batch_size", 16)))
+        self._barchart_fanout_max_batch_attempts: int = max(1, int(kwargs.get("barchart_fanout_max_batch_attempts", 2)))
+        self._barchart_fanout_evict_after: int = max(1, int(kwargs.get("barchart_fanout_evict_after", 2)))
+        self._barchart_fanout_eod_max_retries: int = max(1, int(kwargs.get("barchart_fanout_eod_max_retries", 2)))
+        self._barchart_fanout_eod_backoff: float = max(0.0, float(kwargs.get("barchart_fanout_eod_backoff", 0.5)))
+        self._barchart_fanout_proxy_cooldown: int = max(0, int(kwargs.get("barchart_fanout_proxy_cooldown", 300)))
 
         if not USTFutureOptionMDP._BARCHART_STATE:
             USTFutureOptionMDP._BARCHART_STATE = {
@@ -4131,20 +4162,18 @@ class USTFutureOptionMDP(MarketDataProvider[InstrumentLike], LayeredCacheMixin):
             log_level=logging.ERROR,
         )
 
-    def _fetch_barchart_eod_series(
+    def _run_eod_fetch_single(
         self,
-        *,
         symbols: List[str],
-        start: datetime.date,
-        end: datetime.date,
+        start_dt: datetime.datetime,
+        end_dt: datetime.datetime,
         show_tqdm: bool,
-        max_concurrent_tasks: Optional[int] = None,
-        max_keepalive_connections: Optional[int] = None,
+        mc: int,
+        mk: int,
     ) -> Dict[str, pd.DataFrame]:
-        start_dt = datetime.datetime.combine(start, datetime.time(0, 0))
-        end_dt = datetime.datetime.combine(end, datetime.time(23, 59))
-        mc = int(max_concurrent_tasks or min(max(len(symbols), 1), 32))
-        mk = int(max_keepalive_connections or min(max(len(symbols), 1), 32))
+        """Single-proxy EOD fetch of RAW (un-normalized) frames."""
+        if not symbols:
+            return {}
         bcf = self._get_barchart_fetcher(required_concurrency=mc)
         try:
             out = bcf.barchart_timeseries_api(
@@ -4162,12 +4191,348 @@ class USTFutureOptionMDP(MarketDataProvider[InstrumentLike], LayeredCacheMixin):
                 bcf.close()
             except Exception:
                 pass
-        if not isinstance(out, dict):
+        return out if isinstance(out, dict) else {}
+
+    def _build_barchart_fetcher_for_host(
+        self,
+        proxies: Optional[dict],
+        host: Optional[str],
+        required_concurrency: Optional[int],
+        *,
+        proxy_auth_retries: int = 1,
+        warm: bool = True,
+    ) -> BarchartFetcher:
+        """Build a fetcher bound to one specific proxy host (own per-host token scope).
+
+        ``proxy_auth_retries=0`` makes a flaky proxy raise instantly instead of sleeping
+        60s; ``warm=True`` propagates a token-warm failure so a dead proxy is dropped.
+        """
+        desired_pool_size = self._bounded_session_token_pool_size(required_concurrency)
+        scope_host = host if host is not None else "direct"
+        bcf = BarchartFetcher(
+            proxies=proxies,
+            debug_verbose=False,
+            error_verbose=True,
+            session_token_ttl_seconds=max(1, int(self._barchart_proxy_ttl)),
+            session_token_pool_size=desired_pool_size,
+            session_token_scope=f"{self.__class__.__name__}:{scope_host}",
+            proxy_auth_retries=proxy_auth_retries,
+        )
+        if warm:
+            bcf._fetch_session_tokens(dummy_symbol="BTC")
+        return bcf
+
+    def _record_fanout_proxy_failure(self, host: Optional[str]) -> None:
+        """Demote a proxy a worker had to evict (passes preflight but fails data requests)."""
+        if host is None:
+            return
+        S = USTFutureOptionMDP._BARCHART_STATE
+        now = time.time()
+        with S["lock"]:
+            health = S.get("proxy_health")
+            if not isinstance(health, dict):
+                health = {}
+                S["proxy_health"] = health
+            health[host] = now
+            cached = S.get("fanout")
+            if isinstance(cached, list):
+                S["fanout"] = [(p, h) for (p, h) in cached if h != host]
+
+    def _choose_fanout_proxies(self, k: int) -> List[Tuple[Optional[dict], Optional[str]]]:
+        """Up to k distinct preflighted-live (proxies, host) pairs (TTL-cached). Hosts a worker
+        recently evicted are skipped for ``_barchart_fanout_proxy_cooldown`` s unless that
+        leaves too few candidates."""
+        S = USTFutureOptionMDP._BARCHART_STATE
+        now = time.time()
+        with S["lock"]:
+            cached = S.get("fanout")
+            chosen_at = float(S.get("fanout_chosen_at", 0.0) or 0.0)
+            if cached and (now - chosen_at) < float(S["ttl"]):
+                return list(cached)[:k]
+            health = dict(S.get("proxy_health") or {})
+
+        if not self._socksio_enabled:
+            return [(None, None)]
+
+        all_hosts = [h for h in self._barchart_proxy_hosts if h is not None]
+        cooldown = float(self._barchart_fanout_proxy_cooldown)
+        healthy = [h for h in all_hosts if (now - float(health.get(h, 0.0) or 0.0)) >= cooldown]
+        candidate_hosts = healthy if len(healthy) >= 2 else all_hosts
+
+        def _try(host: str) -> Optional[Tuple[dict, str]]:
+            try:
+                proxies = _build_socks5h(host)
+            except Exception:
+                return None
+            return (proxies, host) if _preflight_proxy(proxies) else None
+
+        live: List[Tuple[Optional[dict], Optional[str]]] = []
+        if candidate_hosts:
+            with ThreadPoolExecutor(max_workers=min(len(candidate_hosts), 12), thread_name_prefix="ustfo-preflight") as ex:
+                for res in ex.map(_try, candidate_hosts):
+                    if res is not None:
+                        live.append(res)
+        if not live:
+            live = [(None, None)]
+
+        with S["lock"]:
+            S["fanout"] = list(live)
+            S["fanout_chosen_at"] = time.time()
+        return live[:k]
+
+    def _fanout_should_engage(self, n_symbols: int) -> bool:
+        if not self._barchart_fanout_enabled or not self._socksio_enabled:
+            return False
+        min_per = max(1, int(self._barchart_fanout_min_symbols_per_shard))
+        return n_symbols >= 2 * min_per
+
+    def _run_eod_fetch(
+        self,
+        symbols: List[str],
+        start_dt: datetime.datetime,
+        end_dt: datetime.datetime,
+        show_tqdm: bool,
+        mc: int,
+        mk: int,
+    ) -> Dict[str, pd.DataFrame]:
+        """RAW EOD-fetch chokepoint: hardened work-stealing fan-out when enabled+worthwhile,
+        else single-proxy. The raw-frame cache routes here."""
+        if not symbols:
             return {}
-        return {
-            str(symbol): _normalize_barchart_quote_frame(str(symbol), df)
-            for symbol, df in out.items()
-        }
+        symbols = list(symbols)
+        if not self._fanout_should_engage(len(symbols)):
+            return self._run_eod_fetch_single(symbols, start_dt, end_dt, show_tqdm, mc, mk)
+        return self._run_eod_fetch_fanout(symbols, start_dt, end_dt, mc, mk)
+
+    def _run_eod_fetch_fanout(
+        self,
+        symbols: List[str],
+        start_dt: datetime.datetime,
+        end_dt: datetime.datetime,
+        mc: int,
+        mk: int,
+    ) -> Dict[str, pd.DataFrame]:
+        """Work-stealing fan-out (see STIRFutureOptionMDP): shared batch queue drained by
+        per-proxy workers; flaky proxies fail fast + self-evict + their work re-steals; a
+        completeness backstop recovers any symbol still without data via the single path."""
+        n = len(symbols)
+        min_per = max(1, int(self._barchart_fanout_min_symbols_per_shard))
+        desired = min(max(1, int(self._barchart_fanout_max_shards)), max(1, n // min_per))
+        proxies = [(p, h) for (p, h) in self._choose_fanout_proxies(desired) if h is not None]
+        if len(proxies) < 2:
+            return self._run_eod_fetch_single(symbols, start_dt, end_dt, False, mc, mk)
+
+        batch_size = max(1, int(self._barchart_fanout_batch_size))
+        max_attempts = max(1, int(self._barchart_fanout_max_batch_attempts))
+        evict_after = max(1, int(self._barchart_fanout_evict_after))
+        log = logging.getLogger(self.__class__.__name__)
+
+        work: "queue.Queue" = queue.Queue()
+        for i in range(0, n, batch_size):
+            work.put((symbols[i:i + batch_size], 0))
+
+        results: Dict[str, pd.DataFrame] = {}
+        results_lock = threading.Lock()
+
+        def _worker(worker_proxies: Optional[dict], worker_host: Optional[str]) -> None:
+            try:
+                fetcher = self._build_barchart_fetcher_for_host(
+                    worker_proxies, worker_host, mc, proxy_auth_retries=0, warm=True
+                )
+            except Exception as exc:
+                log.warning("Barchart fan-out worker %s did not start: %s", worker_host, exc)
+                return
+            consecutive_failures = 0
+            try:
+                while True:
+                    try:
+                        batch, attempt = work.get_nowait()
+                    except queue.Empty:
+                        break
+                    got_data = False
+                    try:
+                        out = fetcher.barchart_timeseries_api(
+                            barchart_symbols=batch,
+                            start_date=start_dt,
+                            end_date=end_dt,
+                            interval=None,
+                            one_df=False,
+                            show_tqdm=False,
+                            max_concurrent_tasks=max(1, min(mc, len(batch))),
+                            max_keepalive_connections=mk,
+                            eod_max_retries=self._barchart_fanout_eod_max_retries,
+                            eod_backoff_factor=self._barchart_fanout_eod_backoff,
+                        )
+                        if isinstance(out, dict) and any(v is not None for v in out.values()):
+                            with results_lock:
+                                results.update(out)
+                            got_data = True
+                    except Exception as exc:
+                        log.debug("Barchart fan-out batch error on %s: %s", worker_host, exc)
+
+                    if got_data:
+                        consecutive_failures = 0
+                        continue
+                    consecutive_failures += 1
+                    if attempt + 1 < max_attempts:
+                        work.put((batch, attempt + 1))  # let a healthier worker retry
+                    # else: drop -- the missing-symbol sweep below recovers it
+                    if consecutive_failures >= evict_after:
+                        log.warning("Barchart fan-out evicting flaky proxy %s", worker_host)
+                        self._record_fanout_proxy_failure(worker_host)
+                        break
+            finally:
+                try:
+                    fetcher.close()
+                except Exception:
+                    pass
+
+        threads = [
+            threading.Thread(target=_worker, args=(p, h), name=f"ustfo-fanout-{h}", daemon=True)
+            for (p, h) in proxies
+        ]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+        # Completeness backstop: any symbol still without data (failed/dropped/unqueued batch,
+        # or a transient None inside a successful batch) is recovered on the single-proxy path.
+        with results_lock:
+            have_data = {k for k, v in results.items() if v is not None}
+        missing = [s for s in symbols if BarchartFetcher._normalize_barchart_symbol(s) not in have_data]
+        if missing:
+            log.info("Barchart fan-out: recovering %d symbol(s) via reliable single-proxy path", len(missing))
+            fallback = self._run_eod_fetch_single(missing, start_dt, end_dt, False, mc, mk)
+            with results_lock:
+                results.update(fallback)
+        return results
+
+    # ---- raw per-symbol EOD frame cache -------------------------------------
+
+    def _raw_eod_disk(self) -> Any:
+        cache = self._raw_eod_disk_cache
+        if cache is None:
+            with self._raw_eod_lock:
+                if self._raw_eod_disk_cache is None:
+                    path = LayeredCacheMixin.default_cache_path(self._RAW_EOD_CACHE_STEM)
+                    # Inherited DiskCacheMixin classmethod -> raw FanoutCache (no Supabase L2).
+                    self._raw_eod_disk_cache = LayeredCacheMixin._acquire_cache(path)
+                cache = self._raw_eod_disk_cache
+        return cache
+
+    @staticmethod
+    def _raw_eod_disk_key(symbol: str) -> str:
+        return f"rawEOD::v1::{symbol}"
+
+    def _raw_eod_cache_get(self, symbol: str) -> Optional[Dict[str, Any]]:
+        with self._raw_eod_lock:
+            ent = self._raw_eod_mem.get(symbol)
+        if ent is not None:
+            return ent
+        try:
+            ent = self._raw_eod_disk().get(self._raw_eod_disk_key(symbol))
+        except Exception:
+            ent = None
+        if isinstance(ent, dict):
+            with self._raw_eod_lock:
+                self._raw_eod_mem[symbol] = ent
+            return ent
+        return None
+
+    def _raw_eod_cache_put(self, symbol: str, frame: Optional[pd.DataFrame], fetched_at: float) -> None:
+        max_date = min_date = None
+        if frame is not None and len(frame) and isinstance(frame.index, pd.DatetimeIndex):
+            max_date = pd.Timestamp(frame.index.max()).date()
+            min_date = pd.Timestamp(frame.index.min()).date()
+        ent = {"frame": frame, "fetched_at": float(fetched_at), "min_date": min_date, "max_date": max_date}
+        with self._raw_eod_lock:
+            self._raw_eod_mem[symbol] = ent
+        try:
+            self._raw_eod_disk()[self._raw_eod_disk_key(symbol)] = ent
+        except Exception:
+            pass
+
+    def _raw_eod_cache_covers(self, ent: Dict[str, Any], start: datetime.date, end: datetime.date) -> bool:
+        fetched_at = float(ent.get("fetched_at", 0.0) or 0.0)
+        if fetched_at <= 0.0:
+            return False
+        fetched_date = datetime.datetime.fromtimestamp(fetched_at, tz=_NY_TZ).date()
+        if end < fetched_date:  # window fully historical relative to the fetch -> immutable hit
+            return True
+        return (time.time() - fetched_at) < float(self._raw_eod_ttl_seconds)  # else TTL-gated
+
+    @staticmethod
+    def _slice_eod_frame(
+        frame: Optional[pd.DataFrame],
+        start: datetime.date,
+        end: datetime.date,
+    ) -> Optional[pd.DataFrame]:
+        if frame is None:
+            return None
+        if frame.empty or not isinstance(frame.index, pd.DatetimeIndex):
+            return frame
+        lo = pd.Timestamp(datetime.datetime.combine(start, datetime.time(0, 0)))
+        hi = pd.Timestamp(datetime.datetime.combine(end, datetime.time(23, 59)))
+        return frame[(frame.index >= lo) & (frame.index <= hi)]
+
+    def _fetch_barchart_eod_series(
+        self,
+        *,
+        symbols: List[str],
+        start: datetime.date,
+        end: datetime.date,
+        show_tqdm: bool,
+        max_concurrent_tasks: Optional[int] = None,
+        max_keepalive_connections: Optional[int] = None,
+        force_refresh: bool = False,
+    ) -> Dict[str, pd.DataFrame]:
+        if not symbols:
+            return {}
+        mc = int(max_concurrent_tasks or min(max(len(symbols), 1), 32))
+        mk = int(max_keepalive_connections or min(max(len(symbols), 1), 32))
+
+        if not self._raw_eod_cache_enabled:
+            start_dt = datetime.datetime.combine(start, datetime.time(0, 0))
+            end_dt = datetime.datetime.combine(end, datetime.time(23, 59))
+            raw = self._run_eod_fetch(list(symbols), start_dt, end_dt, show_tqdm, mc, mk)
+            return {str(s): _normalize_barchart_quote_frame(str(s), df) for s, df in raw.items()}
+
+        # Normalize to the keys barchart_timeseries_api emits, de-duped, order-preserved.
+        norm: List[str] = []
+        seen: set = set()
+        for s in symbols:
+            nkey = BarchartFetcher._normalize_barchart_symbol(s)
+            if nkey not in seen:
+                seen.add(nkey)
+                norm.append(nkey)
+
+        result: Dict[str, pd.DataFrame] = {}
+        to_fetch: List[str] = []
+        for nkey in norm:
+            ent = None if force_refresh else self._raw_eod_cache_get(nkey)
+            if ent is not None and self._raw_eod_cache_covers(ent, start, end):
+                result[nkey] = _normalize_barchart_quote_frame(nkey, self._slice_eod_frame(ent.get("frame"), start, end))
+            else:
+                to_fetch.append(nkey)
+
+        if to_fetch:
+            # Fetch full history once (wide window -> kept by the client-side filter), cache the
+            # RAW frame, then slice + normalize locally. Subsequent windows hit the cache.
+            today = datetime.date.today()
+            wide_start = datetime.datetime(1990, 1, 1)
+            wide_end = datetime.datetime(today.year + 1, 12, 31, 23, 59)
+            fetched_full = self._run_eod_fetch(to_fetch, wide_start, wide_end, show_tqdm, mc, mk)
+            now = time.time()
+            for nkey in to_fetch:
+                if nkey not in fetched_full:
+                    continue
+                frame = fetched_full.get(nkey)
+                if frame is not None:
+                    self._raw_eod_cache_put(nkey, frame, now)
+                result[nkey] = _normalize_barchart_quote_frame(nkey, self._slice_eod_frame(frame, start, end))
+
+        return result
 
     def _fetch_barchart_intraday_prices(
         self,
@@ -4313,6 +4678,7 @@ class USTFutureOptionMDP(MarketDataProvider[InstrumentLike], LayeredCacheMixin):
             start=window_start,
             end=window_end,
             show_tqdm=show_tqdm,
+            force_refresh=force_refresh,
         )
 
         built = self._build_pricers_from_eod_window(

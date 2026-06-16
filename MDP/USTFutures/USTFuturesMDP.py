@@ -869,17 +869,32 @@ class USTFuturesMDP(MarketDataProvider[InstrumentLike], LayeredCacheMixin):
         with self:
             cached = self._threadsafe_basket_cache_get(cache_key)
 
+        if cached is not None and "issue_dates" not in cached:
+            cached = None
         if cached is None or ignore_cache:
             root, contract_imm_date, tcf_period = resolve_delivery_contract(symbol, as_of)
             basket_df = build_delivery_basket_frame(as_of=as_of, symbol=symbol, force_refresh=bool(ignore_cache))
             if basket_df.empty:
                 raise ValueError(f"No CME TCF deliverables found for {symbol} at period {tcf_period}.")
 
+            # Exclude WI (when-issued) bonds whose issue_date is after as_of —
+            # FedInvest has no price for them yet, causing noisy fetch failures.
+            if "issue_date" in basket_df.columns:
+                issued = basket_df["issue_date"].apply(
+                    lambda d: d <= as_of if isinstance(d, datetime.date) else True
+                )
+                basket_df = basket_df[issued].reset_index(drop=True)
+
             delivery_start, delivery_end = delivery_business_window(contract_imm_date)
             spec = get_contract_spec(root)
             contract_coupon = float(basket_df["futures_coupon"].iloc[0]) if "futures_coupon" in basket_df.columns else 6.0
 
             # preserve row-order to keep conversion factors aligned with basket_pricers
+            issue_dates = (
+                basket_df["issue_date"].apply(lambda d: d.isoformat() if isinstance(d, datetime.date) else str(d)).tolist()
+                if "issue_date" in basket_df.columns
+                else [None] * len(basket_df)
+            )
             cached = {
                 "schema": 1,
                 "source": source,
@@ -890,6 +905,7 @@ class USTFuturesMDP(MarketDataProvider[InstrumentLike], LayeredCacheMixin):
                 "delivery": (delivery_start.isoformat(), delivery_end.isoformat()),
                 "cusips": basket_df["cusip"].tolist(),
                 "conversion_factors": [float(x) for x in basket_df["invoice_conversion_factor"].tolist()],
+                "issue_dates": issue_dates,
                 "contract_coupon": float(contract_coupon),
                 "calc_mode": spec.calc_mode,
                 "contract_imm_date": contract_imm_date,
@@ -902,11 +918,29 @@ class USTFuturesMDP(MarketDataProvider[InstrumentLike], LayeredCacheMixin):
         close_2pm = pytz.timezone("America/Chicago").localize(datetime.datetime(as_of.year, as_of.month, as_of.day, 14, 0))
 
         cusips: List[str] = list(cached["cusips"])
-        cash_pricers = usts_mdp.get_data({"cusips": list(set(cusips)), "timestamp": close_2pm})
+        cfs_cached: List[float] = list(cached["conversion_factors"])
+        issue_dates_raw: List[Any] = cached.get("issue_dates") or [None] * len(cusips)
+
+        # Skip WI bonds whose issue_date > as_of — FedInvest has no price yet.
+        # Handles both fresh caches (filtered at build) and stale caches (unfiltered).
+        eligible_cusips: List[str] = []
+        eligible_cfs: List[float] = []
+        for c, cf, isd_raw in zip(cusips, cfs_cached, issue_dates_raw):
+            if isd_raw is not None:
+                try:
+                    isd = datetime.date.fromisoformat(str(isd_raw)[:10])
+                    if isd > as_of:
+                        continue
+                except (ValueError, TypeError):
+                    pass
+            eligible_cusips.append(c)
+            eligible_cfs.append(cf)
+
+        cash_pricers = usts_mdp.get_data({"cusips": list(set(eligible_cusips)), "timestamp": close_2pm})
 
         basket_pricers: List[Any] = []
         conversion_factors: List[float] = []
-        for cusip, cf in zip(cusips, cached["conversion_factors"]):
+        for cusip, cf in zip(eligible_cusips, eligible_cfs):
             pr = cash_pricers.get(cusip)
             if pr is None:
                 continue

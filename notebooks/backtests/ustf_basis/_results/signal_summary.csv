@@ -1,0 +1,9 @@
+strategy,tenor,days,total_pnl,position_changes,closed_trades
+bnoc_rv,TY,497,2655513.3774438854,34,17
+bnoc_rv,US,497,13028200.488579063,114,58
+bnoc_rv,FV,497,1411801.9659822108,68,34
+bnoc_rv,TU,497,1221275.4836255983,44,23
+ctd_switch,TY,497,618433.216739349,26,13
+ctd_switch,US,497,657766.3354300393,12,6
+ctd_switch,FV,497,0.0,0,0
+ctd_switch,TU,497,-757334.6734359176,28,14

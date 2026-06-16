@@ -95,6 +95,16 @@ describe('buildTapeQuery', () => {
     expect(sql).toMatch(/ORDER BY d\.execution_start DESC/)
   })
 
+  it('orders DESC NULLS LAST so idx_tape_v2_packages_exec_start serves the sort', () => {
+    // ORDER BY x DESC defaults to NULLS FIRST, which matches neither scan
+    // direction of the (execution_start DESC NULLS LAST) index — Postgres
+    // then seq-scans + disk-sorts all 1.3M package rows (~29s measured)
+    // instead of an index scan (~60ms). The column is NOT NULL so the two
+    // orderings are semantically identical.
+    const { sql } = buildTapeQuery(paramsOf(''), VIEW, COLUMNS)
+    expect(sql).toMatch(/ORDER BY d\.execution_start DESC NULLS LAST/)
+  })
+
   it('adds the clean-tape WHERE fragment when clean=true', () => {
     const { sql } = buildTapeQuery(paramsOf('clean=true'), VIEW, COLUMNS)
     expect(sql).toMatch(/NOT d\.is_unwind/)
@@ -615,7 +625,11 @@ describe('buildColumnFilterClause execution_start range bound', () => {
   // covers the range scan. We assert the SQL fragment shape; the actual
   // boundary math is delegated to Postgres.
 
-  it('emits today range bound when other filters are present and execution_start is unset', () => {
+  it('does NOT clamp to today when execution_start is absent from the filter map', () => {
+    // Date bounds are only injected when execution_start is explicitly
+    // filtered — an implicit today-clamp broke cross-day package_id lookups
+    // from the volume grid (see comment above the executionStartInFilter
+    // branch in route.logic.ts).
     const params: unknown[] = []
     const clause = buildColumnFilterClause(
       {
@@ -627,10 +641,25 @@ describe('buildColumnFilterClause execution_start range bound', () => {
       params,
     )
     expect(clause).toMatch(/d\.tape_label ILIKE \$1/)
+    expect(clause).not.toMatch(/d\.execution_start/)
+    expect(params).toEqual(['%10Y%'])
+  })
+
+  it('emits today range bound when execution_start filter is present but unparseable', () => {
+    const params: unknown[] = []
+    const clause = buildColumnFilterClause(
+      {
+        execution_start: {
+          operator: 'and',
+          constraints: [{ value: 'not-a-date', matchMode: 'contains' }],
+        },
+      },
+      params,
+    )
     expect(clause).toMatch(/d\.execution_start >=/)
     expect(clause).toMatch(/d\.execution_start </)
     expect(clause).toMatch(/America\/New_York/)
-    expect(params).toEqual(['%10Y%'])
+    expect(params).toEqual([])
   })
 
   it('emits parsed-date range bound when execution_start carries a date pattern', () => {

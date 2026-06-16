@@ -11,7 +11,7 @@ EXPIRY_LABELS: list[str] = [
     "5y",
     "7y",
     "10y",
-    "15y",
+    # "15y",
     "20y",
 ]
 TAIL_LABELS: list[str] = ["1y", "2y", "5y", "10y", "20y", "30y"]

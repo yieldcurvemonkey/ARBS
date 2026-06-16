@@ -231,10 +231,19 @@ CREATE INDEX IF NOT EXISTS idx_tape_v2_packages_date ON {PACKAGES_TABLE_V2}(as_o
 CREATE INDEX IF NOT EXISTS idx_tape_v2_packages_orig_date ON {PACKAGES_TABLE_V2}(as_of_date, original_execution_start DESC);
 -- Pagination scan: the main tape route does
 -- ``WHERE d.execution_start < $cursor ORDER BY d.execution_start DESC
--- LIMIT 201`` with no as_of_date filter, so the composite index above
--- can't lead. A single-column DESC NULLS LAST index turns cursor pages
--- into a fast btree range scan instead of a seq-scan on the packages
--- table.
+-- NULLS LAST LIMIT 201`` with no as_of_date filter, so the composite
+-- index above can't lead. A single-column DESC NULLS LAST index turns
+-- cursor pages into a fast btree range scan instead of a seq-scan on
+-- the packages table.
+--
+-- NB: the route's ORDER BY MUST spell out ``DESC NULLS LAST``. Postgres
+-- matches ORDER BY pathkeys to index ordering syntactically (NOT NULL is
+-- not consulted), and plain ``DESC`` means NULLS FIRST — which matches
+-- neither scan direction of this index. With plain DESC the planner falls
+-- back to a parallel seq-scan + external-merge sort of the full packages
+-- table (~29s at 1.3M rows) and the dashboard's initial tape fetch blows
+-- through the client's 15s abort timeout. See
+-- dashboard/src/app/api/usd-swaps-tape-v2/route.logic.ts (buildTapeQuery).
 CREATE INDEX IF NOT EXISTS idx_tape_v2_packages_exec_start
   ON {PACKAGES_TABLE_V2}(execution_start DESC NULLS LAST);
 CREATE INDEX IF NOT EXISTS idx_tape_v2_packages_type ON {PACKAGES_TABLE_V2}(package_type, as_of_date);

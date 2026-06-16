@@ -244,6 +244,98 @@ def test_curve_store_write_day_merges_existing_partial_day(monkeypatch):
     assert list(captured["analytics_df"]["curve"]) == ["curve-existing", "curve-new"]
 
 
+def test_curve_store_write_day_attaches_timestamp_context_from_bulk_key(monkeypatch):
+    builder = BARCHART_STIRF_CURVE.__new__(BARCHART_STIRF_CURVE)
+    builder._curve_cfg_hash = lambda cfg: "cfg123"
+
+    import Caching.curve_store as curve_store_module
+    import Caching.curve_analytics as curve_analytics_module
+
+    ts = datetime.datetime(2026, 3, 10, 15, 0, tzinfo=datetime.timezone.utc)
+    captured = {}
+
+    class _Snapshot:
+        def __init__(self, timestamp_utc):
+            self.timestamp_utc = timestamp_utc
+
+    class _DummyStore:
+        def read_raw_day(self, curve_name, trading_date):
+            return pd.DataFrame()
+
+        def reconstruct_curves_batch(self, raw_df, cfg, max_workers=4):
+            return {}
+
+        def write_day(self, curve_name, trading_date, snapshots, overwrite=False):
+            captured["snapshots"] = list(snapshots)
+
+        def write_analytics_day(self, curve_name, trading_date, df, overwrite=False):
+            captured["analytics_df"] = df.copy()
+
+    def _from_rl_curve(cls, curve, *, curve_name, cfg, cfg_hash=""):
+        assert getattr(curve, "timestamp_utc", None) == ts
+        assert getattr(curve, "curve_name", None) == "USD-SOFR-1D-Q12STIRT"
+        return _Snapshot(ts)
+
+    monkeypatch.setattr(
+        curve_store_module.CurveSnapshot,
+        "from_rl_curve",
+        classmethod(_from_rl_curve),
+    )
+    monkeypatch.setattr(
+        curve_store_module.CurveStore,
+        "default",
+        staticmethod(lambda: _DummyStore()),
+    )
+    monkeypatch.setattr(
+        curve_analytics_module,
+        "compute_analytics_row",
+        lambda curve, *, timestamp_utc, trading_date, session_minute=None, tenors=None, curve_name=None: {
+            "timestamp_utc": pd.Timestamp(timestamp_utc),
+            "trading_date": trading_date,
+            "curve_name": getattr(curve, "curve_name", None),
+        },
+    )
+
+    curve_without_context = types.SimpleNamespace()
+
+    builder._curve_store_write_day(
+        "USD-SOFR-1D-Q12STIRT",
+        datetime.date(2026, 3, 10),
+        {"reference_key": "USD-SOFR-1D"},
+        {ts: curve_without_context},
+    )
+
+    assert [snapshot.timestamp_utc for snapshot in captured["snapshots"]] == [ts]
+    assert list(captured["analytics_df"]["curve_name"]) == ["USD-SOFR-1D-Q12STIRT"]
+
+
+def test_curve_store_snapshot_from_raw_row_accepts_array_payloads():
+    builder = BARCHART_STIRF_CURVE.__new__(BARCHART_STIRF_CURVE)
+    ts = datetime.datetime(2026, 3, 10, 15, 0, tzinfo=datetime.timezone.utc)
+    node_date = datetime.date(2026, 3, 11)
+
+    snapshot = builder._curve_store_snapshot_from_raw_row(
+        {
+            "timestamp_utc": ts,
+            "timestamp_local": pd.Timestamp(ts).tz_convert("America/Chicago"),
+            "trading_date": datetime.date(2026, 3, 10),
+            "session_minute": 480,
+            "curve_name": "USD-SOFR-1D-Q12STIRT",
+            "cfg_hash": "cfg123",
+            "reference_key": "USD-SOFR-1D",
+            "interpolation": "log_linear",
+            "source_variant": "BARCHART_STIRF",
+            "node_dates": pd.Series([node_date]).to_numpy(),
+            "discount_factors": pd.Series([0.99]).to_numpy(),
+        },
+        default_curve_name="USD-SOFR-1D-Q12STIRT",
+    )
+
+    assert snapshot.timestamp_utc == ts
+    assert snapshot.node_dates == [node_date]
+    assert snapshot.discount_factors == [0.99]
+
+
 def test_persist_bulk_curves_uses_curve_store_for_shallow_days_only_once(monkeypatch):
     builder = BARCHART_STIRF_CURVE.__new__(BARCHART_STIRF_CURVE)
 
