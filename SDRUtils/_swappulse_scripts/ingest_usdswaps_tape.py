@@ -1800,6 +1800,73 @@ def run_ingest(
         raise
 
 
+def run_ingest_incremental(
+    engine: Engine,
+    classified_df: pd.DataFrame,
+    prev_enriched: pd.DataFrame,
+    new_trade_ids: set[str],
+    as_of_date: str,
+    raw_df: pd.DataFrame | None = None,
+) -> tuple[pd.DataFrame, dict]:
+    """Incremental tape pipeline: enrich only new rows, merge, write, VWAP.
+
+    Returns ``(enriched_tape, stats_dict)`` so the service loop can carry
+    forward the enriched tape for the next cycle.
+    """
+    import time as _time
+
+    from SDRUtils.analytics.trade_tape import TradeTape
+
+    ensure_schema(engine)
+    run_id = _start_run(engine, as_of_date=as_of_date)
+    t0 = _time.monotonic()
+    try:
+        tape_obj = TradeTape(df=classified_df, raw_df=raw_df)
+        enriched = tape_obj.compute_incremental(prev_enriched, new_trade_ids)
+        enriched = attach_manual_links(engine, enriched)
+
+        t_write = _time.monotonic()
+        stats = write_tape_rows(engine, enriched, as_of_date=as_of_date)
+        t_write_done = _time.monotonic()
+
+        orphans_cleaned = int(stats.get("orphan_packages_deleted") or 0)
+        if orphans_cleaned:
+            print(
+                f"  Cleaned up {orphans_cleaned:,} orphan package row(s)."
+            )
+
+        vwap_count = compute_and_write_vwap(engine, enriched, as_of_date=as_of_date)
+        if vwap_count:
+            print(f"  Wrote {vwap_count} VWAP ticker(s).")
+
+        elapsed = _time.monotonic() - t0
+        print(
+            f"  [TIMING] Tape incremental total: {elapsed:.1f}s "
+            f"(write: {t_write_done - t_write:.1f}s)"
+        )
+
+        _finish_run(
+            engine,
+            run_id,
+            status="success",
+            rows_in=int(len(classified_df)),
+            rows_out=int(stats["legs_written"]),
+            cache_hit=False,
+        )
+        return enriched, stats
+    except Exception as e:
+        _finish_run(
+            engine,
+            run_id,
+            status="error",
+            rows_in=0,
+            rows_out=0,
+            cache_hit=False,
+            error_text=str(e),
+        )
+        raise
+
+
 def resolve_pg_url(explicit: str | None = None) -> str:
     """Resolve a Postgres URL using the same lookup ladder as ingest_usdswaps.
 

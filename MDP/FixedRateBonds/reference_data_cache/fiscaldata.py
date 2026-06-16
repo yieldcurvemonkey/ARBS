@@ -1,10 +1,16 @@
 import datetime
+import logging
 import math
+import time
 from typing import Iterable, List, Literal, Union
 
 import pandas as pd
 import QuantLib as ql
 import requests
+
+_logger = logging.getLogger(__name__)
+_TIMEOUT = 30
+_MAX_RETRIES = 3
 
 
 def _as_term_strings(otrs: Iterable[Union[int, str]]) -> List[str]:
@@ -58,8 +64,18 @@ def _fetch_auctions_raw_fiscaldata(as_of: Union[datetime.date, Literal["all"]], 
         params = f"filter={f_dates},{f_terms},{f_tips},{f_type}&sort=-record_date&page[size]=9999"
 
     url = base + params
-    resp = requests.get(url)
-    resp.raise_for_status()
+    for attempt in range(_MAX_RETRIES):
+        try:
+            resp = requests.get(url, timeout=_TIMEOUT)
+            resp.raise_for_status()
+            break
+        except (requests.ConnectionError, requests.Timeout) as e:
+            if attempt < _MAX_RETRIES - 1:
+                wait = 2 ** attempt
+                _logger.warning(f"fiscaldata.treasury.gov attempt {attempt+1} failed ({e.__class__.__name__}), retrying in {wait}s")
+                time.sleep(wait)
+            else:
+                raise
     data = resp.json().get("data", [])
 
     if not data:
@@ -145,7 +161,7 @@ def _fetch_fiscaldata(
         to_fetch: ql.Date = ql.NullCalendar().endOfMonth(ql_date - ql.Period("1m"))
         fetch_date = datetime.date(to_fetch.year(), to_fetch.month(), to_fetch.dayOfMonth())
         mspd_table3_url = f"https://api.fiscaldata.treasury.gov/services/api/fiscal_service/v1/debt/mspd/mspd_table_3_market?filter=record_date:eq:{fetch_date.strftime('%Y-%m-%d')}&page[size]=10000"
-        mspd_table3_df = pd.DataFrame(requests.get(mspd_table3_url).json()["data"])
+        mspd_table3_df = pd.DataFrame(requests.get(mspd_table3_url, timeout=_TIMEOUT).json()["data"])
         mspd_table3_df = mspd_table3_df[mspd_table3_df["security_class1_desc"].isin(["Notes", "Bonds"])]
         to_numeric = ["issued_amt", "outstanding_amt"]
         for n in to_numeric:
@@ -163,7 +179,7 @@ def _fetch_fiscaldata(
         fetch_date = datetime.date(to_fetch.year(), to_fetch.month(), to_fetch.dayOfMonth())
         mspd_table5_url = f"https://api.fiscaldata.treasury.gov/services/api/fiscal_service/v1/debt/mspd/mspd_table_5?filter=record_date:eq:{fetch_date.strftime('%Y-%m-%d')}&page[size]=10000"
         print(mspd_table5_url)
-        mspd_table5_df = pd.DataFrame(requests.get(mspd_table5_url).json()["data"])
+        mspd_table5_df = pd.DataFrame(requests.get(mspd_table5_url, timeout=_TIMEOUT).json()["data"])
         mspd_table5_df = mspd_table5_df[mspd_table5_df["security_class1_desc"].isin(["Treasury Bonds", "Treasury Notes"])]
         to_numeric = ["outstanding_amt", "portion_unstripped_amt", "portion_stripped_amt", "reconstituted_amt"]
         for n in to_numeric:
@@ -175,14 +191,14 @@ def _fetch_fiscaldata(
         df = pd.merge(left=df, right=mspd_table5_df, on="cusip", how="outer")
 
     if append_soma_holdings:
-        valid_soma_holding_dates_reponse = requests.get("https://markets.newyorkfed.org/api/soma/asofdates/list.json").json()
+        valid_soma_holding_dates_reponse = requests.get("https://markets.newyorkfed.org/api/soma/asofdates/list.json", timeout=_TIMEOUT).json()
         valid_soma_dates_dt = [datetime.datetime.strptime(dt_string, "%Y-%m-%d").date() for dt_string in valid_soma_holding_dates_reponse["soma"]["asOfDates"]]
         valid_closest_date = min(
             (valid_date for valid_date in valid_soma_dates_dt if valid_date <= fetch_as_of),
             key=lambda valid_date: abs(fetch_as_of - valid_date),
         )
         soma_url = f'https://markets.newyorkfed.org/api/soma/tsy/get/asof/{valid_closest_date.strftime("%Y-%m-%d")}.json'
-        soma_df = pd.DataFrame(requests.get(soma_url).json()["soma"]["holdings"])
+        soma_df = pd.DataFrame(requests.get(soma_url, timeout=_TIMEOUT).json()["soma"]["holdings"])
         soma_df = soma_df[soma_df["securityType"] == "NotesBonds"]
         to_numeric = ["parValue", "percentOutstanding"]
         for n in to_numeric:

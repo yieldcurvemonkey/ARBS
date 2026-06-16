@@ -200,6 +200,7 @@ class FixedRateBondQuery(BaseQuery):
                 return False
 
         def _resolve_on_the_run_token(token: str, as_of: datetime.date) -> str:
+            from MDP.FixedRateBonds.FixedRateBondsMDP import _filter_and_rank_ref_df
             from MDP.FixedRateBonds.reference_data_cache.ust_reference_data import update_reference_data
 
             m_ct = re.match(r"^CT(\d+)$", token, re.IGNORECASE)
@@ -233,11 +234,9 @@ class FixedRateBondQuery(BaseQuery):
                 return token
 
             ref_df = update_reference_data(source="fiscaldata", force_refresh=False)
-            ref_df = ref_df[(ref_df["issue_date"] <= as_of) & (ref_df["maturity_date"] >= as_of)].copy()
+            ref_df = _filter_and_rank_ref_df(ref_df, as_of)
             if ref_df.empty:
                 raise KeyError(f"No UST reference data available for {as_of.isoformat()}")
-
-            ref_df["rank"] = ref_df.groupby("oi")["issue_date"].rank(method="first", ascending=False).astype(int) - 1
 
             if m_ct:
                 rank, tenor = 0, int(m_ct.group(1))

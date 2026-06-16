@@ -59,7 +59,7 @@ export async function GET(req: Request) {
     const skipCache =
       !!parsed.value.cursor || !!parsed.value.since || !!hasColumnFilters
     if (!skipCache) {
-      headers['Cache-Control'] = 'public, s-maxage=15, stale-while-revalidate=60'
+      headers['Cache-Control'] = 'public, s-maxage=5, stale-while-revalidate=10'
     }
     return NextResponse.json(
       { rows, nextCursor, hasMore, latestExecutionStart },

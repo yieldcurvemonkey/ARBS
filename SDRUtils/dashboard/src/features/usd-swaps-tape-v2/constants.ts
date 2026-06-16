@@ -7,7 +7,7 @@ import type {
   TimeseriesViewKey,
 } from './types'
 
-export const POLL_INTERVAL_MS = 30_000
+export const POLL_INTERVAL_MS = 10_000
 export const ROW_ESTIMATE_PX = 40
 export const EMPTY_VALUE = '—'
 

@@ -425,6 +425,21 @@ def _alias_to_cusip(alias: str, ref_table: pd.DataFrame) -> Optional[str]:
     return unique_cusips[0]
 
 
+def _filter_and_rank_ref_df(
+    ref_df: pd.DataFrame,
+    as_of: datetime.date,
+) -> pd.DataFrame:
+    """Filter reference data to bonds active on *as_of* and rank by recency.
+
+    Bonds issued on *as_of* are excluded so the on-the-run alias (CT10, etc.)
+    still points to the previous issue on the auction settlement date.  This
+    avoids the 1-day pricing anomaly caused by auction concession.
+    """
+    out = ref_df[(ref_df["issue_date"] < as_of) & (ref_df["maturity_date"] >= as_of)].copy()
+    out["rank"] = out.groupby("oi")["issue_date"].rank(method="first", ascending=False).astype(int) - 1
+    return out
+
+
 class FixedRateBondsMDP(MarketDataProvider[_GenericPricable], LayeredCacheMixin):
 
     _FRB_PRICER_CACHE = "_frb_pricer_cache"
@@ -684,8 +699,7 @@ class FixedRateBondsMDP(MarketDataProvider[_GenericPricable], LayeredCacheMixin)
                 source="fiscaldata",
                 force_refresh=force_refresh,
             )
-            ref_df = ref_df[(ref_df["issue_date"] <= as_of_ref) & (ref_df["maturity_date"] >= as_of_ref)].copy()
-            ref_df["rank"] = ref_df.groupby("oi")["issue_date"].rank(method="first", ascending=False).astype(int) - 1
+            ref_df = _filter_and_rank_ref_df(ref_df, as_of_ref)
             alias_to_cusip, meta_by_cusip = self._resolve_aliases_bulk(clean_cusips, timestamp, ref_df=ref_df)
 
             out: Dict[str, _FixedRateBondGenericPricer] = {}
@@ -898,8 +912,7 @@ class FixedRateBondsMDP(MarketDataProvider[_GenericPricable], LayeredCacheMixin)
             force_refresh = bool(kwargs.get("force_refresh", False))
             as_of_ref = datetime.date.today() if timestamp == "live" else timestamp.date()
             ref_df = update_reference_data(source="fiscaldata", force_refresh=force_refresh)
-            ref_df = ref_df[(ref_df["issue_date"] <= as_of_ref) & (ref_df["maturity_date"] >= as_of_ref)].copy()
-            ref_df["rank"] = ref_df.groupby("oi")["issue_date"].rank(method="first", ascending=False).astype(int) - 1
+            ref_df = _filter_and_rank_ref_df(ref_df, as_of_ref)
             alias_to_cusip, meta_by_cusip = self._resolve_aliases_bulk(clean_cusips, timestamp, ref_df=ref_df)
 
             out: Dict[str, _FixedRateBondGenericPricer] = {}
@@ -1009,8 +1022,7 @@ class FixedRateBondsMDP(MarketDataProvider[_GenericPricable], LayeredCacheMixin)
 
             ref_df = update_reference_data(source="fiscaldata", force_refresh=kwargs.get("force_refresh", False))
             as_of_ref = datetime.date.today() if timestamp == "live" else timestamp
-            ref_df = ref_df[(ref_df["issue_date"] <= as_of_ref) & (ref_df["maturity_date"] >= as_of_ref)]
-            ref_df["rank"] = ref_df.groupby("oi")["issue_date"].rank(method="first", ascending=False).astype(int) - 1
+            ref_df = _filter_and_rank_ref_df(ref_df, as_of_ref)
 
             original_cusip_alias = cusip
             match_ct = re.match(r"^CT(\d+)$", cusip, re.IGNORECASE)
@@ -1143,8 +1155,7 @@ class FixedRateBondsMDP(MarketDataProvider[_GenericPricable], LayeredCacheMixin)
                 as_of_ref = as_of_ref.date()
             # ref_df = update_reference_data(source="treasurydirect", source_kwargs={"as_of": as_of_ref}, force_refresh=kwargs.get("force_refresh", False))
             ref_df = update_reference_data(source="fiscaldata", force_refresh=kwargs.get("force_refresh", False))
-            ref_df = ref_df[(ref_df["issue_date"] <= as_of_ref) & (ref_df["maturity_date"] >= as_of_ref)]
-            ref_df["rank"] = ref_df.groupby("oi")["issue_date"].rank(method="first", ascending=False).astype(int) - 1
+            ref_df = _filter_and_rank_ref_df(ref_df, as_of_ref)
 
             original_cusip_alias = cusip
             match_ct = re.match(r"^CT(\d+)$", cusip, re.IGNORECASE)
@@ -1355,8 +1366,7 @@ class FixedRateBondsMDP(MarketDataProvider[_GenericPricable], LayeredCacheMixin)
                 raise TypeError("timestamp must be 'live', datetime.date, or datetime.datetime")
 
             ref_df = update_reference_data(source="fiscaldata", force_refresh=kwargs.get("force_refresh", False))
-            ref_df = ref_df[(ref_df["issue_date"] <= as_of_date) & (ref_df["maturity_date"] >= as_of_date)]
-            ref_df["rank"] = ref_df.groupby("oi")["issue_date"].rank(method="first", ascending=False).astype(int) - 1
+            ref_df = _filter_and_rank_ref_df(ref_df, as_of_date)
 
             original_cusip_alias = cusip
             m_ct = re.match(r"^CT(\d+)$", cusip, re.IGNORECASE)
@@ -1669,8 +1679,7 @@ class FixedRateBondsMDP(MarketDataProvider[_GenericPricable], LayeredCacheMixin)
         ref_ts = intraday_timestamps[0]
         as_of_ref = ref_ts.date()
         ref_df = update_reference_data(source="fiscaldata", force_refresh=force_refresh)
-        ref_df = ref_df[(ref_df["issue_date"] <= as_of_ref) & (ref_df["maturity_date"] >= as_of_ref)].copy()
-        ref_df["rank"] = ref_df.groupby("oi")["issue_date"].rank(method="first", ascending=False).astype(int) - 1
+        ref_df = _filter_and_rank_ref_df(ref_df, as_of_ref)
 
         alias_to_cusip, meta_by_cusip = self._resolve_aliases_bulk(symbols, ref_ts, ref_df=ref_df)
         unique_cusips = list(dict.fromkeys(alias_to_cusip.values()))
@@ -1823,8 +1832,7 @@ class FixedRateBondsMDP(MarketDataProvider[_GenericPricable], LayeredCacheMixin)
 
                 as_of_ref = _as_of_ref(ts)
                 ref_df = update_reference_data(source="fiscaldata", force_refresh=force_refresh)
-                ref_df = ref_df[(ref_df["issue_date"] <= as_of_ref) & (ref_df["maturity_date"] >= as_of_ref)].copy()
-                ref_df["rank"] = ref_df.groupby("oi")["issue_date"].rank(method="first", ascending=False).astype(int) - 1
+                ref_df = _filter_and_rank_ref_df(ref_df, as_of_ref)
 
                 alias_to_cusip, meta_by_cusip = self._resolve_aliases_bulk(symbols, ts, ref_df=ref_df)
 
@@ -2164,8 +2172,7 @@ class FixedRateBondsMDP(MarketDataProvider[_GenericPricable], LayeredCacheMixin)
                 ref_ts0 = timestamps[0]
                 as_of_ref = _as_of_ref(ref_ts0)
                 ref_df = update_reference_data(source="fiscaldata", force_refresh=force_refresh)
-                ref_df = ref_df[(ref_df["issue_date"] <= as_of_ref) & (ref_df["maturity_date"] >= as_of_ref)].copy()
-                ref_df["rank"] = ref_df.groupby("oi")["issue_date"].rank(method="first", ascending=False).astype(int) - 1
+                ref_df = _filter_and_rank_ref_df(ref_df, as_of_ref)
                 alias_to_cusip, meta_by_cusip = self._resolve_aliases_bulk(base_cusips, ref_ts0, ref_df=ref_df)
 
                 self._ensure_pricer_cache()

@@ -5,7 +5,7 @@ import re
 from dataclasses import replace
 from typing import Any, Dict, List, Tuple, TYPE_CHECKING
 
-from MDP.FixedRateBonds.FixedRateBondsMDP import _alias_to_cusip
+from MDP.FixedRateBonds.FixedRateBondsMDP import _alias_to_cusip, _filter_and_rank_ref_df
 from MDP.FixedRateBonds.reference_data_cache.ust_reference_data import update_reference_data
 from Query.Base.product_adapter import ProductAdapter, register_product
 from Query.IRSwaps._IRSwapGenericCurve import _IRSwapGenericCurve
@@ -46,11 +46,7 @@ def _resolve_cusip_or_alias(
       - Alias: CTN / O... / Ox.. / MMYY[-OI]
     """
     ref = update_reference_data(source="fiscaldata", force_refresh=False)
-    # Keep currently outstanding around 'as_of'
-    ref = ref[(ref["issue_date"] <= as_of) & (ref["maturity_date"] >= as_of)].copy()
-
-    # Rank newest by OI bucket to support CT / O / OO / OOO selection
-    ref["rank"] = ref.groupby("oi")["issue_date"].rank(method="first", ascending=False).astype(int) - 1
+    ref = _filter_and_rank_ref_df(ref, as_of)
 
     tok = token.strip().upper()
 

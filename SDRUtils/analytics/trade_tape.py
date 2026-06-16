@@ -1599,6 +1599,103 @@ class TradeTape(SDRAnalyzer):
             self._save_cache(df, cache_dir)
         return df
 
+    def compute_incremental(
+        self,
+        prev_enriched: pd.DataFrame,
+        new_trade_ids: set[str],
+    ) -> pd.DataFrame:
+        """Incremental enrichment: expensive per-row steps on new rows only.
+
+        Carries forward previously enriched rows for trade_ids still present,
+        runs the full per-row enrichment pipeline only on *new_trade_ids*,
+        then merges and re-runs the cheap global steps (packages, context,
+        clustering, labels) on the combined result.
+
+        Falls back to full ``compute()`` when prev_enriched is empty or
+        new_trade_ids covers the entire DataFrame.
+        """
+        import time as _time
+
+        from tqdm.auto import tqdm
+
+        df = self._df.copy()
+        if df.empty:
+            self._result = df
+            return df
+
+        if (
+            not new_trade_ids
+            or prev_enriched is None
+            or prev_enriched.empty
+            or len(new_trade_ids) >= len(df)
+        ):
+            return self.compute(use_cache=False)
+
+        t0 = _time.monotonic()
+
+        current_ids = set(df["trade_id"].astype(str))
+        carried_ids = current_ids - new_trade_ids
+
+        new_mask = df["trade_id"].astype(str).isin(new_trade_ids)
+        new_df = df[new_mask].copy()
+
+        prev_carried_mask = prev_enriched["trade_id"].astype(str).isin(carried_ids)
+        carried_df = prev_enriched[prev_carried_mask].copy()
+
+        if new_df.empty:
+            self._result = carried_df
+            return carried_df
+
+        per_row_steps = [
+            ("Prerequisites", self._ensure_prerequisites),
+            ("Classification", self._enrich_classification),
+            ("UPI reference", self._enrich_upi_reference),
+            ("Off-date detection", self._detect_off_date),
+            ("Lifecycle", self._enrich_lifecycle),
+            ("Cross-day lifecycle", self._enrich_cross_day_lifecycle),
+            ("Event type", self._enrich_event_type),
+            ("Economic class", self._enrich_economic_class),
+            ("Exec timestamps", self._enrich_exec_timestamps),
+            ("Phase 5 structural", self._enrich_phase5_structural),
+            ("Quality flags", self._enrich_quality),
+        ]
+
+        pbar = tqdm(
+            per_row_steps,
+            desc=f"TradeTape (Δ{len(new_df)} new)",
+            unit="layer",
+        )
+        for name, fn in pbar:
+            pbar.set_postfix_str(name)
+            new_df = fn(new_df)
+        pbar.close()
+
+        merged = pd.concat([carried_df, new_df], ignore_index=True)
+
+        global_steps = [
+            ("Packages", self._enrich_packages),
+            ("Market context", self._enrich_context),
+            ("Clustering", self._enrich_rv),
+            ("Tape labels", self._build_enriched_label),
+            ("Normalized labels", self._build_normalized_labels),
+        ]
+
+        pbar = tqdm(global_steps, desc="TradeTape (global)", unit="layer")
+        for name, fn in pbar:
+            pbar.set_postfix_str(name)
+            merged = fn(merged)
+        pbar.close()
+
+        elapsed = _time.monotonic() - t0
+        print(
+            f"  TradeTape incremental: {len(new_df)} new + "
+            f"{len(carried_df)} carried = {len(merged)} total "
+            f"({elapsed:.1f}s)"
+        )
+
+        self._result = merged
+        return merged
+
     @classmethod
     def clear_cache(cls, cache_dir: str | None = None) -> int:
         """Delete all cached tape files. Returns count of files removed."""

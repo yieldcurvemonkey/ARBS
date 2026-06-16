@@ -316,6 +316,14 @@ def cmd_service(args: argparse.Namespace) -> int:
     prev_classified_df: Optional[pd.DataFrame] = None
     prev_trade_count: int = 0
 
+    # Incremental tape state — carry forward enriched tape across cycles
+    prev_enriched_tape: Optional[pd.DataFrame] = None
+    prev_trade_ids: set = set()
+
+    # Skip-no-new-slices: track DTCC intraday slice IDs
+    prev_slice_ids: set = set()
+    _dtcc_fetcher = None  # lazy-init below
+
     iteration = 0
     while True:
         iteration += 1
@@ -328,16 +336,82 @@ def cmd_service(args: argparse.Namespace) -> int:
         do_full = (iteration == 1) or (since_full >= _FULL_RECLASSIFY_INTERVAL)
         do_cleanup = (iteration == 1) or ((cycle_mono - last_cleanup) >= _CLEANUP_INTERVAL)
 
+        # --- Skip-no-new-slices check ---
+        # Before running the expensive pipeline, check if DTCC has published
+        # new intraday slices since the last cycle. If not, skip entirely.
+        if not do_full and prev_classified_df is not None:
+            try:
+                if _dtcc_fetcher is None:
+                    from SDRUtils.data.builder import DTCCFetcher
+                    _dtcc_fetcher = DTCCFetcher()
+                t_slice = time.monotonic()
+                current_slice_ids = set(
+                    _dtcc_fetcher._get_dtcc_intraday_slide_ids(
+                        agency="CFTC", asset_class="RATES",
+                    )
+                )
+                slice_check_ms = (time.monotonic() - t_slice) * 1000
+                new_slices = current_slice_ids - prev_slice_ids
+                if not new_slices:
+                    elapsed = time.monotonic() - cycle_mono
+                    print(
+                        f"  No new DTCC slices "
+                        f"({len(current_slice_ids)} seen, "
+                        f"check: {slice_check_ms:.0f}ms); "
+                        f"skipping cycle."
+                    )
+                    # Jump directly to sleep
+                    if args.max_iterations is not None and iteration >= args.max_iterations:
+                        print("Reached max iterations; exiting service loop.")
+                        break
+                    if args.smart_intervals:
+                        local_now = pd.Timestamp.now(tz="UTC").tz_convert(
+                            args.market_timezone
+                        )
+                        active = is_active(
+                            local_now=local_now,
+                            active_start_minutes=active_start_minutes,
+                            active_end_minutes=active_end_minutes,
+                            weekdays_only=args.weekdays_only,
+                        )
+                        interval = (
+                            args.active_interval_seconds
+                            if active
+                            else args.inactive_interval_seconds
+                        )
+                        label = "active market hours" if active else "off-hours"
+                    else:
+                        interval = args.interval_seconds
+                        label = "fixed interval"
+                    sleep_seconds = max(0.0, interval - elapsed)
+                    print(
+                        f"Sleeping {sleep_seconds:.1f}s "
+                        f"({label}, interval={interval}s)."
+                    )
+                    time.sleep(sleep_seconds)
+                    continue
+                prev_slice_ids = current_slice_ids
+                print(
+                    f"  {len(new_slices)} new DTCC slice(s) detected "
+                    f"(check: {slice_check_ms:.0f}ms)."
+                )
+            except Exception as exc:
+                print(f"  Slice check failed ({exc}); running full cycle.")
+
         if do_full:
             from SDRUtils.products.usd.usd_swaps import clear_service_caches
             clear_service_caches()
             print(f"  [FULL] Clearing caches, full reclassification")
             last_full_reclassify = cycle_mono
+            prev_enriched_tape = None
+            prev_trade_ids = set()
+            prev_slice_ids = set()
 
         use_incremental = not do_full and (prev_classified_df is not None)
 
         classified_df = None
         try:
+            t_classify = time.monotonic()
             classified_df = ingest_usdswaps.ingest_incremental_once(
                 engine,
                 cache_path=cache_path,
@@ -354,6 +428,11 @@ def cmd_service(args: argparse.Namespace) -> int:
                 prev_trade_count=0 if do_full else prev_trade_count,
                 skip_classification_upsert=not do_full,
             )
+            t_classify_done = time.monotonic()
+            print(
+                f"  [TIMING] Classification: "
+                f"{t_classify_done - t_classify:.1f}s"
+            )
         except Exception as exc:
             print(f"Classification cycle {iteration} failed: {exc}")
             traceback.print_exc()
@@ -364,7 +443,27 @@ def cmd_service(args: argparse.Namespace) -> int:
             last_cleanup = cycle_mono
 
         new_trade_count = len(classified_df) if classified_df is not None else 0
-        has_new_trades = (classified_df is not None) and (new_trade_count != prev_trade_count)
+        has_new_trades = (classified_df is not None) and (
+            new_trade_count != prev_trade_count
+        )
+
+        # Compute new trade_ids for incremental tape.
+        # Delta is computed against prev_enriched_tape (not prev_trade_ids)
+        # so that trades from a failed tape cycle are re-enriched next time.
+        current_trade_ids: set = set()
+        new_trade_ids_delta: set = set()
+        if classified_df is not None and "trade_id" in classified_df.columns:
+            current_trade_ids = set(classified_df["trade_id"].astype(str))
+            if (
+                prev_enriched_tape is not None
+                and "trade_id" in prev_enriched_tape.columns
+            ):
+                enriched_ids = set(
+                    prev_enriched_tape["trade_id"].astype(str)
+                )
+                new_trade_ids_delta = current_trade_ids - enriched_ids
+            else:
+                new_trade_ids_delta = current_trade_ids
 
         if classified_df is not None:
             prev_classified_df = classified_df
@@ -374,14 +473,51 @@ def cmd_service(args: argparse.Namespace) -> int:
             if classified_df is not None and (has_new_trades or do_full):
                 today = _today_utc()
                 try:
-                    ingest_usdswaps_tape.run_ingest(
-                        pg_url=resolved_pg_url,
-                        start_date=today.isoformat(),
-                        end_date=today.isoformat(),
-                        use_cache=not args.no_tape_cache,
-                        cache_path=cache_path,
-                        pre_classified=classified_df,
-                        engine=tape_engine,
+                    t_tape = time.monotonic()
+                    can_incremental = (
+                        not do_full
+                        and prev_enriched_tape is not None
+                        and new_trade_ids_delta
+                        and len(new_trade_ids_delta) < len(classified_df)
+                    )
+
+                    if can_incremental:
+                        print(
+                            f"  Incremental tape: "
+                            f"{len(new_trade_ids_delta)} new trade(s) "
+                            f"/ {len(classified_df)} total"
+                        )
+                        enriched, _stats = (
+                            ingest_usdswaps_tape.run_ingest_incremental(
+                                engine=tape_engine,
+                                classified_df=classified_df,
+                                prev_enriched=prev_enriched_tape,
+                                new_trade_ids=new_trade_ids_delta,
+                                as_of_date=today.isoformat(),
+                            )
+                        )
+                        prev_enriched_tape = enriched
+                    else:
+                        # Full path: pass prev_enriched=None so
+                        # compute_incremental falls back to full
+                        # compute(). Returns enriched tape for carry-
+                        # forward — no double computation.
+                        print("  Full tape rebuild")
+                        enriched, _stats = (
+                            ingest_usdswaps_tape.run_ingest_incremental(
+                                engine=tape_engine,
+                                classified_df=classified_df,
+                                prev_enriched=None,
+                                new_trade_ids=current_trade_ids,
+                                as_of_date=today.isoformat(),
+                            )
+                        )
+                        prev_enriched_tape = enriched
+
+                    t_tape_done = time.monotonic()
+                    print(
+                        f"  [TIMING] Tape stage: "
+                        f"{t_tape_done - t_tape:.1f}s"
                     )
                 except Exception as exc:
                     print(f"Tape cycle {iteration} failed: {exc}")
@@ -389,7 +525,14 @@ def cmd_service(args: argparse.Namespace) -> int:
                     if args.stop_on_error:
                         raise
             elif not has_new_trades and not do_full:
-                print("  No new trades since last cycle; skipping tape rebuild.")
+                print(
+                    "  No new trades since last cycle; "
+                    "skipping tape rebuild."
+                )
+
+        # Update trade_id state for next cycle
+        if current_trade_ids:
+            prev_trade_ids = current_trade_ids
 
         if args.max_iterations is not None and iteration >= args.max_iterations:
             print("Reached max iterations; exiting service loop.")
@@ -411,7 +554,10 @@ def cmd_service(args: argparse.Namespace) -> int:
 
         elapsed = time.monotonic() - cycle_mono
         sleep_seconds = max(0.0, interval - elapsed)
-        print(f"Sleeping {sleep_seconds:.1f}s ({label}, interval={interval}s).")
+        print(
+            f"Sleeping {sleep_seconds:.1f}s ({label}, interval={interval}s). "
+            f"Cycle total: {elapsed:.1f}s."
+        )
         time.sleep(sleep_seconds)
 
     return 0

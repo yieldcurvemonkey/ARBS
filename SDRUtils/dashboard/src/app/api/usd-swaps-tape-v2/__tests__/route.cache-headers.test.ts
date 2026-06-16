@@ -16,7 +16,7 @@ describe('GET /api/usd-swaps-tape-v2 cache-control', () => {
     const res = await GET(
       new Request('http://x/api/usd-swaps-tape-v2?limit=5'),
     )
-    expect(res.headers.get('Cache-Control')).toContain('s-maxage=15')
+    expect(res.headers.get('Cache-Control')).toContain('s-maxage=5')
   })
 
   it('skips cache header when columnFilters is non-empty', async () => {
@@ -61,6 +61,6 @@ describe('GET /api/usd-swaps-tape-v2 cache-control', () => {
     const res = await GET(
       new Request(`http://x/api/usd-swaps-tape-v2?limit=5&columnFilters=${cf}`),
     )
-    expect(res.headers.get('Cache-Control')).toContain('s-maxage=15')
+    expect(res.headers.get('Cache-Control')).toContain('s-maxage=5')
   })
 })
