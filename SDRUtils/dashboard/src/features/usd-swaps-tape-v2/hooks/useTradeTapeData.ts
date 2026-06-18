@@ -1,6 +1,6 @@
 // Hook for managing USD swap tape v2 data fetching, polling, and cursor pagination.
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { TAPE_V2_API_BASE, POLL_INTERVAL_MS } from '../constants'
+import { TAPE_V2_API_BASE, SIGNAL_POLL_MS, FALLBACK_POLL_MS } from '../constants'
 import type { UsdSwapTapeResponse, UsdSwapTapeRow } from '../types'
 
 export interface UseTradeTapeDataParams {
@@ -303,27 +303,44 @@ export function useTradeTapeData(
     fetchTape({ replace: true })
   }, [params.limit, params.columnFilters, fetchTape])
 
-  // Polling for new rows via ?since=latestExecutionStart.
-  // When latestExecutionStart is null (initial fetch failed or returned 0
-  // rows), poll with a full replace-fetch so the tape recovers
-  // automatically instead of staying stuck at 0 rows until page refresh.
-  //
-  // Reads latestExecutionStart from a ref so the interval callback always
-  // sees the freshest cursor without tearing down / restarting the timer
-  // on every poll response (which previously reset the 30s clock to zero
-  // twice per cycle — once for the fetchTape ref change, once for the
-  // latestExecutionStart state change).
+  // Signal-driven polling: check the lightweight signal endpoint every 3s.
+  // Only fetches full tape data when the pipeline writes new data (signal
+  // table's updated_at changes). Fallback full poll every 60s as safety net.
+  const lastSignalRef = useRef<string | null>(null)
+
   useEffect(() => {
     if (params.pollingEnabled === false) return
-    const id = setInterval(() => {
+
+    const doFetch = () => {
       const since = latestRef.current
       if (since) {
         fetchTape({ since })
       } else {
         fetchTape({ replace: true })
       }
-    }, POLL_INTERVAL_MS)
-    return () => clearInterval(id)
+    }
+
+    const signalId = setInterval(async () => {
+      try {
+        const res = await fetch(`${TAPE_V2_API_BASE}/signal`)
+        if (!res.ok) return
+        const data = await res.json()
+        const updatedAt = data?.updated_at
+        if (updatedAt && updatedAt !== lastSignalRef.current) {
+          lastSignalRef.current = updatedAt
+          doFetch()
+        }
+      } catch {
+        // Non-critical — fallback poll handles recovery
+      }
+    }, SIGNAL_POLL_MS)
+
+    const fallbackId = setInterval(doFetch, FALLBACK_POLL_MS)
+
+    return () => {
+      clearInterval(signalId)
+      clearInterval(fallbackId)
+    }
   }, [fetchTape, params.pollingEnabled])
 
   const refreshing = useMemo(() => loading && rows.length > 0, [loading, rows.length])

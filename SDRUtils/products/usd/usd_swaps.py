@@ -170,12 +170,82 @@ def classify_usd_swap_trade(
 
 _INVOICE_LOOKUP_CACHE: dict[datetime.date, pd.DataFrame] = {}
 _TRADE_CLASSIFICATION_CACHE: dict[str, dict] = {}
+_PACKAGED_DAY_CACHE: dict[str, pd.DataFrame] = {}
+_LIFECYCLE_DAY_CACHE: dict[str, tuple[int, pd.DataFrame]] = {}
 
 
 def clear_service_caches() -> None:
     """Clear in-process caches. Called on hourly full reclassification."""
     _INVOICE_LOOKUP_CACHE.clear()
     _TRADE_CLASSIFICATION_CACHE.clear()
+    _PACKAGED_DAY_CACHE.clear()
+    _LIFECYCLE_DAY_CACHE.clear()
+
+
+_SERVICE_CACHE_DIR_NAME = "service_caches"
+
+
+def save_service_caches(cache_dir: str) -> None:
+    """Persist in-process caches to disk for warm-start optimization.
+
+    Atomic writes (tmp + rename) prevent corruption from mid-write crashes.
+    Lifecycle cache excluded — keyed on event count, stales across restarts.
+    """
+    import pickle
+    from pathlib import Path
+
+    cache_path = Path(cache_dir) / _SERVICE_CACHE_DIR_NAME
+    cache_path.mkdir(parents=True, exist_ok=True)
+
+    for filename, data in (
+        ("trade_classification.pkl", _TRADE_CLASSIFICATION_CACHE),
+        ("packaged_day.pkl", _PACKAGED_DAY_CACHE),
+    ):
+        if not data:
+            continue
+        fp = cache_path / filename
+        tmp = fp.with_suffix(".pkl.tmp")
+        try:
+            with open(tmp, "wb") as f:
+                pickle.dump(dict(data), f, protocol=pickle.HIGHEST_PROTOCOL)
+            tmp.replace(fp)
+        except Exception as e:
+            print(f"  [WARM] Failed to save {filename}: {e}")
+            try:
+                tmp.unlink(missing_ok=True)
+            except Exception:
+                pass
+
+
+def load_service_caches(cache_dir: str) -> bool:
+    """Load persisted caches from a prior process run.
+
+    Returns True if any cache was successfully loaded (warm start).
+    """
+    import pickle
+    from pathlib import Path
+
+    cache_path = Path(cache_dir) / _SERVICE_CACHE_DIR_NAME
+    if not cache_path.exists():
+        return False
+
+    loaded = False
+    for filename, target in (
+        ("trade_classification.pkl", _TRADE_CLASSIFICATION_CACHE),
+        ("packaged_day.pkl", _PACKAGED_DAY_CACHE),
+    ):
+        fp = cache_path / filename
+        if not fp.exists():
+            continue
+        try:
+            with open(fp, "rb") as f:
+                data = pickle.load(f)
+            target.update(data)
+            loaded = True
+            print(f"  [WARM] Loaded {len(data)} entries from {filename}")
+        except Exception as e:
+            print(f"  [WARM] Failed to load {filename}: {e}")
+    return loaded
 
 
 def detect_invoice_swaps(
@@ -666,66 +736,111 @@ def detect_sub_package_curve_fly(
     if "package_type" not in out.columns:
         return out
 
-    # Only CURVE / FLY packages are candidates. Composite types ("..._CURVE",
-    # "..._FLY") are NOT re-upgraded; they're idempotent.
+    # Only CURVE / FLY packages are candidates for Phase 1 upgrade.
+    # Composite types ("..._CURVE", "..._FLY") are NOT re-upgraded.
     base = out["package_type"].astype(str).str.upper()
     curvey_mask = (base == "CURVE") | (base == "FLY")
-    if not bool(curvey_mask.any()):
-        return out
-
     has_pkg_id = "package_id" in out.columns
-    if not has_pkg_id:
-        return out
 
-    # Evaluate once, vectorised, whether each leg is MMS / SPREADOVER eligible.
-    leg_mms = (
-        out["matched_ust_maturity"].astype(str).str.lower().isin({"true", "t", "1"})
-        if "matched_ust_maturity" in out.columns
-        else pd.Series(False, index=out.index)
-    )
+    _skip_phase1 = not bool(curvey_mask.any()) or not has_pkg_id
 
-    spread_num = pd.to_numeric(
-        out.get("package_transaction_spread"), errors="coerce"
-    )
-    pkg_ind = out.get("package_indicator")
-    if pkg_ind is None:
-        pkg_ind = pd.Series(False, index=out.index)
-    pkg_ind_bool = pkg_ind.astype(str).str.lower().isin({"true", "t", "1"})
-    fwd = out.get("forward_label")
-    if fwd is None:
-        fwd_spot = pd.Series(True, index=out.index)
-    else:
-        fwd_spot = fwd.astype(str).str.lower().eq("spot")
+    # Walk each CURVE / FLY package_id group (Phase 1).
+    if not _skip_phase1:
+        leg_mms = (
+            out["matched_ust_maturity"].astype(str).str.lower().isin({"true", "t", "1"})
+            if "matched_ust_maturity" in out.columns
+            else pd.Series(False, index=out.index)
+        )
 
-    leg_spreadover = (
-        pkg_ind_bool
-        & spread_num.notna()
-        & (spread_num != 0)
-        & (spread_num.abs() <= _SPREADOVER_LEG_SPREAD_CEILING)
-        & fwd_spot
-    )
-
-    # Walk each CURVE / FLY package_id group.
-    for pkg_id, group_idx in out.loc[curvey_mask].groupby("package_id").groups.items():
-        if pkg_id is None or (isinstance(pkg_id, float) and pd.isna(pkg_id)):
-            continue
-        idx = list(group_idx)
-        if not idx:
-            continue
-        base_type = str(out.loc[idx[0], "package_type"]).upper()
-        all_mms = bool(leg_mms.loc[idx].all())
-        all_spreadover = bool(leg_spreadover.loc[idx].all())
-
-        if all_spreadover:
-            new_type = f"SPREADOVER_{base_type}"
-        elif all_mms:
-            new_type = f"MATCHED_MATURITY_{base_type}"
+        spread_num = pd.to_numeric(
+            out.get("package_transaction_spread"), errors="coerce"
+        )
+        pkg_ind = out.get("package_indicator")
+        if pkg_ind is None:
+            pkg_ind = pd.Series(False, index=out.index)
+        pkg_ind_bool = pkg_ind.astype(str).str.lower().isin({"true", "t", "1"})
+        fwd = out.get("forward_label")
+        if fwd is None:
+            fwd_spot = pd.Series(True, index=out.index)
         else:
-            continue
+            fwd_spot = fwd.astype(str).str.lower().eq("spot")
 
-        out.loc[idx, "package_type"] = new_type
-        if "trade_type" in out.columns:
-            out.loc[idx, "trade_type"] = new_type
+        leg_spreadover = (
+            pkg_ind_bool
+            & spread_num.notna()
+            & (spread_num != 0)
+            & (spread_num.abs() <= _SPREADOVER_LEG_SPREAD_CEILING)
+            & fwd_spot
+        )
+
+    if not _skip_phase1:
+        for pkg_id, group_idx in out.loc[curvey_mask].groupby("package_id").groups.items():
+            if pkg_id is None or (isinstance(pkg_id, float) and pd.isna(pkg_id)):
+                continue
+            idx = list(group_idx)
+            if not idx:
+                continue
+            base_type = str(out.loc[idx[0], "package_type"]).upper()
+            all_mms = bool(leg_mms.loc[idx].all())
+            all_spreadover = bool(leg_spreadover.loc[idx].all())
+
+            if all_spreadover:
+                new_type = f"SPREADOVER_{base_type}"
+            elif all_mms:
+                new_type = f"MATCHED_MATURITY_{base_type}"
+            else:
+                continue
+
+            out.loc[idx, "package_type"] = new_type
+            if "trade_type" in out.columns:
+                out.loc[idx, "trade_type"] = new_type
+
+    # --- Phase 2: pair un-paired SPREADOVER trades into SPREADOVER_CURVE/FLY ---
+    # Trades tagged SPREADOVER by detect_spreadovers() but not yet paired
+    # by any detector (package_legs is NaN). Group by (PTS, exec timestamp
+    # rounded to 2min, platform) — matching PTS is the strongest signal
+    # that two spreadovers are legs of the same package.
+    _so_base = out["package_type"].astype(str).str.upper()
+    _so_mask = (
+        (_so_base == "SPREADOVER")
+        & (out.get("package_legs", pd.Series(dtype="object")).isna())
+    )
+    if _so_mask.any():
+        _so = out.loc[_so_mask].copy()
+        _so_spread = pd.to_numeric(
+            _so.get("package_transaction_spread"), errors="coerce"
+        )
+        _so_ts = pd.to_datetime(_so.get("execution_timestamp"), errors="coerce", utc=True)
+        _so_ts_bin = _so_ts.dt.floor("2min")
+        _so_plat = _so.get("platform_identifier", pd.Series("", index=_so.index)).fillna("")
+        _so["_grp"] = (
+            _so_spread.round(8).astype(str)
+            + "|" + _so_ts_bin.astype(str)
+            + "|" + _so_plat.astype(str)
+        )
+        _paired = 0
+        for _gk, _gidx in _so.groupby("_grp").groups.items():
+            _gidx = list(_gidx)
+            if len(_gidx) < 2:
+                continue
+            _g = out.loc[_gidx].sort_values("tenor_years")
+            _tids = _g["trade_id"].astype(str).tolist()
+            _pkg_id = f"SOCRV_{_tids[0]}"
+            if len(_gidx) == 2:
+                _new_type = "SPREADOVER_CURVE"
+            elif len(_gidx) == 3:
+                _new_type = "SPREADOVER_FLY"
+            else:
+                _new_type = "SPREADOVER_CURVE"
+            out.loc[_gidx, "package_type"] = _new_type
+            out.loc[_gidx, "package_id"] = _pkg_id
+            for _ix in _gidx:
+                out.at[_ix, "package_legs"] = _tids
+            if "trade_type" in out.columns:
+                out.loc[_gidx, "trade_type"] = _new_type
+            _paired += len(_gidx)
+        if _paired:
+            print(f"    [DETECT] Paired {_paired} SPREADOVER trades into composite packages")
 
     return out
 
@@ -1367,13 +1482,127 @@ class USD_SwapProduct(USDProductBase):
                     day_df = day_df.copy()
                     day_df[TRADE_ID] = day_df[TRADE_ID].astype("string")
 
-                # --- Lifecycle V2 resolution ---
-                # Pass full day's raw data (all action types) through lifecycle resolver.
-                # Only NEWT-bearing UTI groups produce output; result is indexed by
-                # NEWT dissemination ID for merge onto classified rows.
-                from SDRUtils.core.lifecycle import resolve_lifecycle_for_day
+                # --- Incremental fast-path: skip lifecycle + package detection ---
+                # When no new NEWT/TRAD classifications were produced (only
+                # lifecycle events arrived) and we have a cached packaged
+                # result, reuse it directly. The per-trade classification
+                # cache already has updated lifecycle columns from the
+                # hourly full reclassify; the expensive O(n²) package
+                # detection doesn't need to re-run.
+                import time as _time
 
-                lifecycle_df = resolve_lifecycle_for_day(day_df)
+                _day_cache_key = str(exec_date)
+                _ncdf = locals().get("new_classifications_df")
+                _have_new_classifications = (
+                    _ncdf is not None and not _ncdf.empty
+                )
+                if (
+                    use_incremental
+                    and not _have_new_classifications
+                    and _day_cache_key in _PACKAGED_DAY_CACHE
+                ):
+                    package_df = _PACKAGED_DAY_CACHE[_day_cache_key]
+                    print(
+                        f"    [FAST] Reusing cached packaged result "
+                        f"({len(package_df)} trades, no new NEWT/TRAD)"
+                    )
+                    package_df = _prepare_cache_dataframe_for_arrow(package_df)
+
+                    count = len(day_df)
+                    date_dir = cache_base / f"{exec_date.year:04d}" / f"{exec_date.month:02d}" / f"{exec_date}"
+                    date_dir.mkdir(parents=True, exist_ok=True)
+                    cache_fp = date_dir / f"{count}.parquet"
+                    tmp_fp = cache_fp.with_suffix(".parquet.tmp")
+                    table = pa.Table.from_pandas(package_df, preserve_index=False)
+                    pq.write_table(table, tmp_fp, compression="zstd")
+                    tmp_fp.replace(cache_fp)
+
+                    built_frames.append(package_df)
+                    continue
+
+                # --- Lifecycle V2 resolution (incremental) ---
+                from SDRUtils.core.lifecycle import (
+                    group_by_uti,
+                    resolve_lifecycle_for_day,
+                )
+
+                _t_lc = _time.monotonic()
+                _lc_key = str(exec_date)
+                _lc_n_events = len(day_df)
+                _lc_cached = _LIFECYCLE_DAY_CACHE.get(_lc_key)
+                if (
+                    use_incremental
+                    and _lc_cached is not None
+                    and _lc_cached[0] == _lc_n_events
+                ):
+                    lifecycle_df = _lc_cached[1]
+                    print(
+                        f"    [TIMING] Lifecycle resolution (cached): "
+                        f"{_time.monotonic() - _t_lc:.3f}s "
+                        f"({_lc_n_events} events, unchanged)"
+                    )
+                elif (
+                    use_incremental
+                    and _lc_cached is not None
+                    and _lc_cached[0] < _lc_n_events
+                ):
+                    _old_n, _old_lc = _lc_cached
+                    _old_dissem_ids = set(_old_lc.index.astype(str))
+                    _all_dissem = day_df[
+                        "Dissemination Identifier"
+                    ].astype(str)
+                    _new_dissem = set(_all_dissem) - _old_dissem_ids
+                    if not _new_dissem:
+                        lifecycle_df = resolve_lifecycle_for_day(day_df)
+                    else:
+                        _uti_groups = group_by_uti(day_df)
+                        _affected_utis = {
+                            uti
+                            for uti, grp in _uti_groups.items()
+                            if grp[
+                                "Dissemination Identifier"
+                            ].astype(str).isin(_new_dissem).any()
+                        }
+                        _affected_dissem_ids = set()
+                        for uti in _affected_utis:
+                            _affected_dissem_ids.update(
+                                _uti_groups[uti][
+                                    "Dissemination Identifier"
+                                ].astype(str)
+                            )
+                        _affected_df = day_df[
+                            _all_dissem.isin(_affected_dissem_ids)
+                        ]
+                        _new_lc = resolve_lifecycle_for_day(
+                            _affected_df
+                        )
+                        _kept = _old_lc[
+                            ~_old_lc.index.astype(str).isin(
+                                set(_new_lc.index.astype(str))
+                            )
+                        ]
+                        lifecycle_df = pd.concat(
+                            [_kept, _new_lc]
+                        )
+                    _LIFECYCLE_DAY_CACHE[_lc_key] = (
+                        _lc_n_events,
+                        lifecycle_df,
+                    )
+                    _n_affected = _lc_n_events - _old_n
+                    print(
+                        f"    [TIMING] Lifecycle resolution "
+                        f"(incremental): "
+                        f"{_time.monotonic() - _t_lc:.1f}s "
+                        f"({_n_affected} new / {_lc_n_events} total)"
+                    )
+                else:
+                    lifecycle_df = resolve_lifecycle_for_day(day_df)
+                    _LIFECYCLE_DAY_CACHE[_lc_key] = (_lc_n_events, lifecycle_df)
+                    print(
+                        f"    [TIMING] Lifecycle resolution: "
+                        f"{_time.monotonic() - _t_lc:.1f}s "
+                        f"({_lc_n_events} events)"
+                    )
                 if not lifecycle_df.empty and not classifications_df.empty:
                     lifecycle_df.index = lifecycle_df.index.astype("string")
                     classifications_df = classifications_df.merge(
@@ -1413,59 +1642,108 @@ class USD_SwapProduct(USDProductBase):
                 package_df = package_df.drop(columns=[TRADE_ID])
                 package_df.columns = [re.sub(r"(?<!^)(?=[A-Z])", "_", col.lower()).lower().replace(" ", "_") for col in package_df.columns]
 
-                # Detectors default to raw-SDR column names ("UPI Underlier
-                # Name", "Platform identifier", "Cleared", "Unique Product
-                # Identifier"). After the snake_case rename above those
-                # columns no longer exist, which silently disables the
-                # platform / underlier / cleared / UPI economic guards.
-                # Bug observed in production: a 10Y + 20Y pair at the same
-                # execution timestamp on platform TWSF was left unpaired
-                # because the 20Y got bundled with a 30Y on platform BBSF
-                # from ~56s earlier — the platform guard had been off.
-                # Pass the correct snake_case names so the guards fire.
                 _snake_detector_cols = dict(
                     underlier_col="upi_underlier_name",
                     platform_col="platform_identifier",
                     cleared_col="cleared",
                     upi_col="unique_product_identifier",
                 )
-                if detect_invoice:
-                    package_df = detect_invoice_swaps(package_df)
-                    package_df = detect_invoice_packages(package_df)
-                if detect_fly:
-                    package_df = detect_fly_trades_df(package_df, **_snake_detector_cols)
-                if detect_curve:
-                    package_df = detect_curve_trades_df(package_df, **_snake_detector_cols)
-                if detect_mms:
-                    package_df = detect_mms_trades_df(package_df)
-                if detect_mac:
-                    package_df = detect_mac_swaps(package_df)
-                if detect_spreadover:
-                    package_df = detect_spreadovers(package_df)
-                if detect_basis:
-                    from SDRUtils.packages.basis import detect_basis_packages_df
-                    package_df = detect_basis_packages_df(
-                        package_df,
-                        platform_col="platform_identifier",
-                        cleared_col="cleared",
-                        upi_col="unique_product_identifier",
+
+                def _run_all_detectors(df):
+                    if detect_invoice:
+                        df = detect_invoice_swaps(df)
+                        df = detect_invoice_packages(df)
+                    if detect_fly:
+                        df = detect_fly_trades_df(df, **_snake_detector_cols)
+                    if detect_curve:
+                        df = detect_curve_trades_df(df, **_snake_detector_cols)
+                    if detect_mms:
+                        df = detect_mms_trades_df(df)
+                    if detect_mac:
+                        df = detect_mac_swaps(df)
+                    if detect_spreadover:
+                        df = detect_spreadovers(df)
+                    if detect_basis:
+                        from SDRUtils.packages.basis import detect_basis_packages_df
+                        df = detect_basis_packages_df(
+                            df,
+                            platform_col="platform_identifier",
+                            cleared_col="cleared",
+                            upi_col="unique_product_identifier",
+                        )
+                    if detect_curve or detect_fly:
+                        df = detect_sub_package_curve_fly(
+                            df, detector_kwargs=_snake_detector_cols
+                        )
+                    return df
+
+                _t_pkg = _time.monotonic()
+
+                # --- Neighborhood-scoped detection ---
+                # On incremental cycles, run detectors only on trades
+                # within ±10 min of new trades. Carry forward cached
+                # detection results for everything else.
+                _NEIGHBORHOOD_MINUTES = 10
+                _cached_pkg = _PACKAGED_DAY_CACHE.get(_day_cache_key)
+                if (
+                    use_incremental
+                    and _have_new_classifications
+                    and _cached_pkg is not None
+                    and not _cached_pkg.empty
+                ):
+                    _new_tids = set(
+                        new_classifications_df["trade_id"].astype(str)
+                    )
+                    _exec_ts = pd.to_datetime(
+                        package_df["execution_timestamp"], utc=True
+                    )
+                    _new_mask = package_df["trade_id"].astype(str).isin(
+                        _new_tids
+                    )
+                    if _new_mask.any():
+                        _new_ts = _exec_ts[_new_mask]
+                        _win_lo = _new_ts.min() - pd.Timedelta(
+                            minutes=_NEIGHBORHOOD_MINUTES
+                        )
+                        _win_hi = _new_ts.max() + pd.Timedelta(
+                            minutes=_NEIGHBORHOOD_MINUTES
+                        )
+                        _hood_mask = (_exec_ts >= _win_lo) & (
+                            _exec_ts <= _win_hi
+                        )
+                    else:
+                        _hood_mask = pd.Series(True, index=package_df.index)
+
+                    _hood_df = package_df[_hood_mask].copy()
+                    _n_hood = len(_hood_df)
+
+                    _hood_df = _run_all_detectors(_hood_df)
+
+                    # Outside neighborhood: take from cached result
+                    _hood_tids = set(_hood_df["trade_id"].astype(str))
+                    _outside = _cached_pkg[
+                        ~_cached_pkg["trade_id"].astype(str).isin(
+                            _hood_tids
+                        )
+                    ].copy()
+                    package_df = pd.concat(
+                        [_outside, _hood_df], ignore_index=True
+                    )
+                    print(
+                        f"    [TIMING] Package detection (neighborhood): "
+                        f"{_time.monotonic() - _t_pkg:.1f}s "
+                        f"({_n_hood} hood / {len(package_df)} total)"
+                    )
+                else:
+                    package_df = _run_all_detectors(package_df)
+                    print(
+                        f"    [TIMING] Package detection (full): "
+                        f"{_time.monotonic() - _t_pkg:.1f}s "
+                        f"({len(package_df)} trades)"
                     )
 
-                # Second pass: re-run CURVE + FLY detection on trades already
-                # tagged as MATCHED_MATURITY or SPREADOVER. Pairs/triples
-                # that form a spread-curve or spread-fly get composite
-                # package types (e.g. SPREADOVER_CURVE, MATCHED_MATURITY_FLY).
-                # Uses the same detector logic, so economic guards fire the
-                # same way.
-                if detect_curve or detect_fly:
-                    package_df = detect_sub_package_curve_fly(
-                        package_df, detector_kwargs=_snake_detector_cols
-                    )
-
-                # Final rollup: resolve unified special_tenor fields from all detectors
                 package_df = _resolve_special_tenor_priority(package_df)
 
-                # Normalize mixed object/string numerics before parquet serialization.
                 package_df = _prepare_cache_dataframe_for_arrow(package_df)
 
                 count = len(day_df)
@@ -1478,7 +1756,8 @@ class USD_SwapProduct(USDProductBase):
                 tmp_fp.replace(cache_fp)
 
                 built_frames.append(package_df)
-            
+                _PACKAGED_DAY_CACHE[_day_cache_key] = package_df
+
             except Exception as e:
                 print(f"  [WARN] Classification failed for {exec_date}: {e}")
 

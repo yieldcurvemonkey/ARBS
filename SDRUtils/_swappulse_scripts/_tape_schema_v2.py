@@ -448,6 +448,33 @@ CREATE INDEX IF NOT EXISTS idx_vwap_v2_ticker
 
 VWAP_TABLE_V2 = "arbs_usd_swap_vwap_daily_v2"
 
+SIGNAL_TABLE_V2 = "arbs_usd_swap_tape_signal_v2"
+
+SIGNAL_TABLE_DDL = f"""
+CREATE TABLE IF NOT EXISTS {SIGNAL_TABLE_V2} (
+    id INTEGER PRIMARY KEY DEFAULT 1 CHECK (id = 1),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    as_of_date DATE,
+    packages_written INTEGER DEFAULT 0,
+    legs_written INTEGER DEFAULT 0,
+    cycle_ms INTEGER DEFAULT 0
+);
+INSERT INTO {SIGNAL_TABLE_V2} (id) VALUES (1) ON CONFLICT DO NOTHING;
+"""
+
+SIGNAL_REALTIME_DDL = f"""
+DO $$
+BEGIN
+  IF EXISTS (
+    SELECT 1 FROM pg_publication WHERE pubname = 'supabase_realtime'
+  ) THEN
+    ALTER PUBLICATION supabase_realtime ADD TABLE {SIGNAL_TABLE_V2};
+  END IF;
+EXCEPTION WHEN duplicate_object THEN
+  NULL;
+END $$;
+"""
+
 
 # Runbook DDL — freezes v1 as the rollback target per §4.11. NOT executed
 # automatically by ensure_schema; run manually in a change window after
@@ -474,5 +501,8 @@ __all__ = [
     "DISPLAY_VIEW_V2",
     "MANUAL_LINKS_TABLE",
     "VWAP_TABLE_V2",
+    "SIGNAL_TABLE_V2",
+    "SIGNAL_TABLE_DDL",
+    "SIGNAL_REALTIME_DDL",
     "FREEZE_V1_SQL",
 ]

@@ -78,6 +78,130 @@ def _banner(title: str) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Service-loop state persistence (warm start)
+# ---------------------------------------------------------------------------
+
+_DTCC_POLL_INTERVAL = 5.0
+
+
+def _save_service_state(
+    cache_path: str,
+    *,
+    prev_enriched_tape: Optional[pd.DataFrame],
+    prev_slice_ids: set,
+    prev_trade_count: int,
+) -> None:
+    """Persist service loop state for warm restart."""
+    import pickle
+    from pathlib import Path
+
+    state_dir = Path(cache_path) / "service_caches"
+    state_dir.mkdir(parents=True, exist_ok=True)
+
+    if prev_enriched_tape is not None and not prev_enriched_tape.empty:
+        tape_fp = state_dir / "prev_enriched_tape.parquet"
+        tmp = tape_fp.with_suffix(".parquet.tmp")
+        try:
+            prev_enriched_tape.to_parquet(
+                tmp, engine="pyarrow", compression="zstd",
+            )
+            tmp.replace(tape_fp)
+        except Exception as e:
+            print(f"  [WARM] Failed to save enriched tape: {e}")
+            try:
+                tmp.unlink(missing_ok=True)
+            except Exception:
+                pass
+
+    state = {
+        "prev_slice_ids": prev_slice_ids,
+        "prev_trade_count": prev_trade_count,
+    }
+    state_fp = state_dir / "service_state.pkl"
+    tmp = state_fp.with_suffix(".pkl.tmp")
+    try:
+        with open(tmp, "wb") as f:
+            pickle.dump(state, f, protocol=pickle.HIGHEST_PROTOCOL)
+        tmp.replace(state_fp)
+    except Exception as e:
+        print(f"  [WARM] Failed to save service state: {e}")
+        try:
+            tmp.unlink(missing_ok=True)
+        except Exception:
+            pass
+
+
+def _load_service_state(cache_path: str) -> dict:
+    """Load persisted service loop state. Returns dict with available keys."""
+    import pickle
+    from pathlib import Path
+
+    state_dir = Path(cache_path) / "service_caches"
+    result: dict = {}
+
+    tape_fp = state_dir / "prev_enriched_tape.parquet"
+    if tape_fp.exists():
+        try:
+            result["prev_enriched_tape"] = pd.read_parquet(
+                tape_fp, engine="pyarrow",
+            )
+            print(
+                f"  [WARM] Loaded enriched tape "
+                f"({len(result['prev_enriched_tape'])} rows)"
+            )
+        except Exception as e:
+            print(f"  [WARM] Failed to load enriched tape: {e}")
+
+    state_fp = state_dir / "service_state.pkl"
+    if state_fp.exists():
+        try:
+            with open(state_fp, "rb") as f:
+                state = pickle.load(f)
+            result.update(state)
+            print(
+                f"  [WARM] Loaded service state "
+                f"(trade_count={state.get('prev_trade_count', '?')})"
+            )
+        except Exception as e:
+            print(f"  [WARM] Failed to load service state: {e}")
+
+    return result
+
+
+def _interruptible_sleep(
+    total_seconds: float,
+    dtcc_fetcher,
+    prev_slice_ids: set,
+) -> bool:
+    """Sleep in chunks, polling DTCC for new slices between chunks.
+
+    Returns True if new slices detected (caller should start next cycle).
+    Does NOT consume the new slices — the main cycle's check handles that.
+    """
+    remaining = total_seconds
+    while remaining > 0:
+        chunk = min(_DTCC_POLL_INTERVAL, remaining)
+        time.sleep(chunk)
+        remaining -= chunk
+        if remaining <= 0:
+            break
+        try:
+            current_ids = set(
+                dtcc_fetcher._get_dtcc_intraday_slide_ids(
+                    agency="CFTC", asset_class="RATES",
+                )
+            )
+            if current_ids - prev_slice_ids:
+                print(
+                    f"  [WAKE] New DTCC slice(s) detected during sleep"
+                )
+                return True
+        except Exception:
+            pass
+    return False
+
+
+# ---------------------------------------------------------------------------
 # Stage runners
 # ---------------------------------------------------------------------------
 
@@ -324,6 +448,41 @@ def cmd_service(args: argparse.Namespace) -> int:
     prev_slice_ids: set = set()
     _dtcc_fetcher = None  # lazy-init below
 
+    # --- Warm start: load persisted caches from previous process ---
+    from SDRUtils.products.usd.usd_swaps import (
+        load_service_caches,
+        save_service_caches,
+        _PACKAGED_DAY_CACHE,
+    )
+
+    caches_warm = load_service_caches(cache_path)
+    warm_state = _load_service_state(cache_path)
+    if caches_warm or warm_state:
+        print("  [WARM START] Loaded persisted state from previous run")
+        if "prev_enriched_tape" in warm_state:
+            prev_enriched_tape = warm_state["prev_enriched_tape"]
+            if (
+                prev_enriched_tape is not None
+                and "trade_id" in prev_enriched_tape.columns
+            ):
+                prev_trade_ids = set(
+                    prev_enriched_tape["trade_id"].astype(str)
+                )
+        if "prev_slice_ids" in warm_state:
+            prev_slice_ids = warm_state["prev_slice_ids"]
+        if "prev_trade_count" in warm_state:
+            prev_trade_count = warm_state["prev_trade_count"]
+        if caches_warm:
+            today_key = str(_today_utc())
+            if today_key in _PACKAGED_DAY_CACHE:
+                prev_classified_df = _PACKAGED_DAY_CACHE[today_key]
+                prev_trade_count = len(prev_classified_df)
+                last_full_reclassify = time.monotonic()
+                print(
+                    f"  [WARM] Skipping cold-start full reclassify "
+                    f"({prev_trade_count} cached trades for {today_key})"
+                )
+
     iteration = 0
     while True:
         iteration += 1
@@ -331,9 +490,14 @@ def cmd_service(args: argparse.Namespace) -> int:
         cycle_mono = time.monotonic()
         _banner(f"Service cycle {iteration} @ {cycle_wall.isoformat()}")
 
-        # Determine if this cycle should do a full reclassification
+        # Determine if this cycle should do a full reclassification.
+        # When warm start loaded caches, last_full_reclassify was set to
+        # ~now so iteration==1 skips the cold-start full reclassify.
         since_full = cycle_mono - last_full_reclassify
-        do_full = (iteration == 1) or (since_full >= _FULL_RECLASSIFY_INTERVAL)
+        do_full = (
+            (iteration == 1 and last_full_reclassify == 0.0)
+            or (since_full >= _FULL_RECLASSIFY_INTERVAL)
+        )
         do_cleanup = (iteration == 1) or ((cycle_mono - last_cleanup) >= _CLEANUP_INTERVAL)
 
         # --- Skip-no-new-slices check ---
@@ -388,7 +552,17 @@ def cmd_service(args: argparse.Namespace) -> int:
                         f"Sleeping {sleep_seconds:.1f}s "
                         f"({label}, interval={interval}s)."
                     )
-                    time.sleep(sleep_seconds)
+                    if (
+                        _dtcc_fetcher is not None
+                        and sleep_seconds > _DTCC_POLL_INTERVAL
+                    ):
+                        woke = _interruptible_sleep(
+                            sleep_seconds, _dtcc_fetcher, prev_slice_ids,
+                        )
+                        if woke:
+                            print("  Starting next cycle (new data)")
+                    else:
+                        time.sleep(sleep_seconds)
                     continue
                 prev_slice_ids = current_slice_ids
                 print(
@@ -534,6 +708,18 @@ def cmd_service(args: argparse.Namespace) -> int:
         if current_trade_ids:
             prev_trade_ids = current_trade_ids
 
+        # --- Persist caches + state for warm restart ---
+        try:
+            save_service_caches(cache_path)
+            _save_service_state(
+                cache_path,
+                prev_enriched_tape=prev_enriched_tape,
+                prev_slice_ids=prev_slice_ids,
+                prev_trade_count=prev_trade_count,
+            )
+        except Exception as e:
+            print(f"  [WARM] Cache save failed: {e}")
+
         if args.max_iterations is not None and iteration >= args.max_iterations:
             print("Reached max iterations; exiting service loop.")
             break
@@ -558,7 +744,17 @@ def cmd_service(args: argparse.Namespace) -> int:
             f"Sleeping {sleep_seconds:.1f}s ({label}, interval={interval}s). "
             f"Cycle total: {elapsed:.1f}s."
         )
-        time.sleep(sleep_seconds)
+        if (
+            _dtcc_fetcher is not None
+            and sleep_seconds > _DTCC_POLL_INTERVAL
+        ):
+            woke = _interruptible_sleep(
+                sleep_seconds, _dtcc_fetcher, prev_slice_ids,
+            )
+            if woke:
+                print("  Starting next cycle (new data)")
+        else:
+            time.sleep(sleep_seconds)
 
     return 0
 
@@ -664,12 +860,12 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument(
         "--interval-seconds",
         type=int,
-        default=int(os.getenv("SWAPPULSE_INGEST_INTERVAL_SECONDS", 30)),
+        default=int(os.getenv("SWAPPULSE_INGEST_INTERVAL_SECONDS", 10)),
     )
     sp.add_argument(
         "--active-interval-seconds",
         type=int,
-        default=int(os.getenv("SWAPPULSE_INGEST_ACTIVE_INTERVAL_SECONDS", 30)),
+        default=int(os.getenv("SWAPPULSE_INGEST_ACTIVE_INTERVAL_SECONDS", 10)),
     )
     sp.add_argument(
         "--inactive-interval-seconds",

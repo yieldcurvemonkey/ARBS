@@ -8,6 +8,8 @@ import type {
 } from './types'
 
 export const POLL_INTERVAL_MS = 10_000
+export const SIGNAL_POLL_MS = 3_000
+export const FALLBACK_POLL_MS = 60_000
 export const ROW_ESTIMATE_PX = 40
 export const EMPTY_VALUE = '—'
 

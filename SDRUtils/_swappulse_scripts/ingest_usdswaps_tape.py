@@ -34,6 +34,9 @@ from ._tape_schema_v2 import (
     MANUAL_LINKS_TABLE,
     PACKAGES_TABLE_V2 as PACKAGES_TABLE,
     RUNS_TABLE_V2 as RUNS_TABLE,
+    SIGNAL_REALTIME_DDL,
+    SIGNAL_TABLE_DDL,
+    SIGNAL_TABLE_V2,
     TAPE_SCHEMA_SQL_V2,
 )
 from .ingest_usdswaps import get_db_connection_string as _legacy_conn_string
@@ -1421,11 +1424,84 @@ def write_tape_rows(engine: Engine, tape: pd.DataFrame, as_of_date: str) -> dict
         raise
     finally:
         raw_conn.close()
-    return {
+    stats = {
         "packages_written": n_pkgs,
         "legs_written": n_legs,
         "orphan_packages_deleted": n_orphans,
     }
+    _signal_tape_update(engine, as_of_date=as_of_date, stats=stats)
+    return stats
+
+
+_signal_ensured = False
+
+
+def _ensure_signal_table(engine: Engine) -> None:
+    """Create signal table if missing. Lightweight — no view locks."""
+    global _signal_ensured
+    if _signal_ensured:
+        return
+    try:
+        with engine.connect() as conn:
+            row = conn.execute(text(
+                "SELECT 1 FROM information_schema.tables "
+                "WHERE table_name = :t AND table_schema = 'public'"
+            ), {"t": SIGNAL_TABLE_V2}).fetchone()
+            if row is not None:
+                _signal_ensured = True
+                return
+        _execute_ddl_bundle(engine, SIGNAL_TABLE_DDL)
+        try:
+            _execute_ddl_bundle(engine, SIGNAL_REALTIME_DDL)
+        except Exception:
+            pass
+        _signal_ensured = True
+    except Exception as e:
+        print(f"  [SIGNAL] Signal table setup failed (non-fatal): {e}")
+
+
+def _signal_tape_update(
+    engine: Engine,
+    *,
+    as_of_date: str,
+    stats: dict,
+    cycle_ms: int = 0,
+) -> None:
+    """Update signal table + pg_notify for Supabase Realtime push.
+
+    Non-critical — failures are logged and swallowed.
+    """
+    _ensure_signal_table(engine)
+    try:
+        payload = json.dumps({
+            "d": as_of_date,
+            "p": stats.get("packages_written", 0),
+            "l": stats.get("legs_written", 0),
+        })
+        with engine.begin() as conn:
+            conn.execute(
+                text(f"""
+                    UPDATE {SIGNAL_TABLE_V2}
+                    SET updated_at = NOW(),
+                        as_of_date = :d,
+                        packages_written = :p,
+                        legs_written = :l,
+                        cycle_ms = :ms
+                    WHERE id = 1
+                """),
+                {
+                    "d": as_of_date,
+                    "p": stats.get("packages_written", 0),
+                    "l": stats.get("legs_written", 0),
+                    "ms": cycle_ms,
+                },
+            )
+            conn.execute(
+                text("SELECT pg_notify('tape_updates', :payload)"),
+                {"payload": payload},
+            )
+    except Exception as e:
+        print(f"  [SIGNAL] Realtime notify failed (non-fatal): {e}")
 
 
 def _delete_orphan_packages(
@@ -1812,6 +1888,11 @@ def run_ingest_incremental(
 
     Returns ``(enriched_tape, stats_dict)`` so the service loop can carry
     forward the enriched tape for the next cycle.
+
+    When ``prev_enriched`` is provided and ``new_trade_ids`` is a small
+    delta, only the packages that *contain* a new trade are built and
+    upserted — skipping the expensive build_package_rows aggregation on
+    the full tape.
     """
     import time as _time
 
@@ -1826,7 +1907,42 @@ def run_ingest_incremental(
         enriched = attach_manual_links(engine, enriched)
 
         t_write = _time.monotonic()
-        stats = write_tape_rows(engine, enriched, as_of_date=as_of_date)
+
+        # Delta write: only build + upsert packages/legs that contain
+        # new trade_ids. Avoids the O(n) build_package_rows aggregation
+        # on 3000+ packages when only a handful changed.
+        _do_delta = (
+            prev_enriched is not None
+            and not prev_enriched.empty
+            and new_trade_ids
+            and len(new_trade_ids) < len(enriched)
+        )
+        if _do_delta and "trade_id" in enriched.columns:
+            _new_mask = enriched["trade_id"].astype(str).isin(new_trade_ids)
+            if "package_id" in enriched.columns:
+                _affected_pkg_ids = set(
+                    enriched.loc[_new_mask, "package_id"].dropna().astype(str)
+                )
+                _pkg_mask = enriched["package_id"].astype(str).isin(
+                    _affected_pkg_ids
+                )
+                delta_tape = enriched[_new_mask | _pkg_mask].copy()
+            else:
+                delta_tape = enriched[_new_mask].copy()
+            print(
+                f"  Delta write: {len(delta_tape)} rows "
+                f"({len(new_trade_ids)} new trades, "
+                f"{len(_affected_pkg_ids) if 'package_id' in enriched.columns else '?'} packages) "
+                f"/ {len(enriched)} total"
+            )
+            stats = write_tape_rows(
+                engine, delta_tape, as_of_date=as_of_date
+            )
+        else:
+            stats = write_tape_rows(
+                engine, enriched, as_of_date=as_of_date
+            )
+
         t_write_done = _time.monotonic()
 
         orphans_cleaned = int(stats.get("orphan_packages_deleted") or 0)
@@ -1835,7 +1951,9 @@ def run_ingest_incremental(
                 f"  Cleaned up {orphans_cleaned:,} orphan package row(s)."
             )
 
-        vwap_count = compute_and_write_vwap(engine, enriched, as_of_date=as_of_date)
+        vwap_count = compute_and_write_vwap(
+            engine, enriched, as_of_date=as_of_date
+        )
         if vwap_count:
             print(f"  Wrote {vwap_count} VWAP ticker(s).")
 
