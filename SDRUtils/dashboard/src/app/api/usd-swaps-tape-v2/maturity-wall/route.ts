@@ -9,11 +9,11 @@ export async function GET(req: Request) {
   const bin = url.searchParams.get('bin') ?? 'quarter'
 
   const dateTrunc = bin === 'month' ? 'month' : 'quarter'
-  // Cap per-leg notional at 500B — the P43 notional cap schedule tops
-  // out ~250B; anything beyond that is a data quality artifact (corrupt
-  // SDR feed values like 1e17 that blow up the chart Y-axis).
+  // Cap per-leg values — the P43 cap schedule tops out ~250B notional;
+  // DV01 above 50M/bp on a single leg is implausible. Corrupt SDR feed
+  // values (1e17) blow up the chart Y-axis without this guard.
   const valueExpr = metric === 'dv01'
-    ? 'SUM(ABS(risk::float))'
+    ? 'SUM(LEAST(ABS(risk::float), 5e7))'
     : 'SUM(LEAST(ABS(notional::float), 5e11))'
 
   const sql = `
