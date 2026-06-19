@@ -1,6 +1,7 @@
 import type { VolumeGridViewDef } from '../../../types/volume-grid-views.types'
 import { AnalyticsDashboardView } from './AnalyticsDashboardView'
 import { DefaultGridView } from './DefaultGridView'
+import { FlowMomentumView } from './FlowMomentumView'
 import { FomcStripView } from './FomcStripView'
 import { CurveStripView } from './CurveStripView'
 import { FlyCurveView } from './FlyCurveView'
@@ -56,6 +57,12 @@ export const VOLUME_GRID_VIEWS: ReadonlyArray<VolumeGridViewDef> = [
     id: 'custom',
     label: 'Custom',
     component: CustomGridView,
+    controls: () => null,
+  },
+  {
+    id: 'flow_momentum',
+    label: 'Flow Momentum',
+    component: FlowMomentumView,
     controls: () => null,
   },
   {
