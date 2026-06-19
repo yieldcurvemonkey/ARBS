@@ -1,4 +1,5 @@
 import type { VolumeGridViewDef } from '../../../types/volume-grid-views.types'
+import { AnalyticsDashboardView } from './AnalyticsDashboardView'
 import { DefaultGridView } from './DefaultGridView'
 import { FomcStripView } from './FomcStripView'
 import { CurveStripView } from './CurveStripView'
@@ -55,6 +56,12 @@ export const VOLUME_GRID_VIEWS: ReadonlyArray<VolumeGridViewDef> = [
     id: 'custom',
     label: 'Custom',
     component: CustomGridView,
+    controls: () => null,
+  },
+  {
+    id: 'analytics',
+    label: 'Analytics',
+    component: AnalyticsDashboardView,
     controls: () => null,
   },
 ]

@@ -9,20 +9,10 @@
 import type { JSX } from 'react'
 import { useEffect, useState } from 'react'
 import type { UsdSwapTapeRow } from '../../types'
-import { BlockHeatmapCard } from './BlockHeatmapCard'
-import { CcpMarketShareCard } from './CcpMarketShareCard'
 import { CcpSwitchCard } from './CcpSwitchCard'
-import { CompressionCyclesCard } from './CompressionCyclesCard'
-import { ForwardCalendarCard } from './ForwardCalendarCard'
-import { IntradayVwapCard } from './IntradayVwapCard'
-import { MaturityWallCard } from './MaturityWallCard'
-import { NetNewRiskCard } from './NetNewRiskCard'
-import { NovationVelocityCard } from './NovationVelocityCard'
-import { PackageMixCard } from './PackageMixCard'
 import { RfrAdoptionCard } from './RfrAdoptionCard'
 import { SwapSpreadVwapCard } from './SwapSpreadVwapCard'
 import { UnderlierMixCard } from './UnderlierMixCard'
-import { VenueShiftCard } from './VenueShiftCard'
 
 const STORAGE_KEY = 'cards-drawer-expanded'
 
@@ -66,7 +56,7 @@ export function CardsDrawer({ rows }: CardsDrawerProps): JSX.Element {
         {expanded ? '▼ Hide analytics cards' : '▶ Show analytics cards'}
       </button>
       {expanded ? (
-        <div className="grid max-h-[50vh] grid-cols-1 gap-4 overflow-y-auto p-4 lg:grid-cols-2">
+        <div className="grid grid-cols-1 gap-4 p-4 lg:grid-cols-2">
           <div data-testid="underlier-mix-card">
             <UnderlierMixCard rows={rows} />
           </div>
@@ -78,36 +68,6 @@ export function CardsDrawer({ rows }: CardsDrawerProps): JSX.Element {
           </div>
           <div data-testid="ccp-switch-card">
             <CcpSwitchCard rows={rows} />
-          </div>
-          <div data-testid="net-new-risk-card">
-            <NetNewRiskCard />
-          </div>
-          <div data-testid="block-heatmap-card">
-            <BlockHeatmapCard />
-          </div>
-          <div data-testid="compression-cycles-card">
-            <CompressionCyclesCard />
-          </div>
-          <div data-testid="package-mix-card">
-            <PackageMixCard />
-          </div>
-          <div data-testid="ccp-market-share-card">
-            <CcpMarketShareCard />
-          </div>
-          <div data-testid="forward-calendar-card">
-            <ForwardCalendarCard />
-          </div>
-          <div data-testid="venue-shift-card">
-            <VenueShiftCard />
-          </div>
-          <div data-testid="intraday-vwap-card">
-            <IntradayVwapCard />
-          </div>
-          <div data-testid="novation-velocity-card">
-            <NovationVelocityCard />
-          </div>
-          <div data-testid="maturity-wall-card">
-            <MaturityWallCard />
           </div>
         </div>
       ) : null}
