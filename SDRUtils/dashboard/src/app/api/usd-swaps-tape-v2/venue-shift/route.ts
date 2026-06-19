@@ -5,31 +5,7 @@ const LEGS_TABLE = 'arbs_usd_swap_tape_legs_v2'
 
 export async function GET(req: Request) {
   const url = new URL(req.url)
-  const date = url.searchParams.get('date') ?? new Date().toISOString().slice(0, 10)
-
-  const shareSql = `
-    WITH ranked AS (
-      SELECT
-        COALESCE(platform_identifier, 'UNKNOWN') AS platform,
-        tenor_label,
-        SUM(ABS(risk::float)) AS dv01,
-        COUNT(*) AS trade_count,
-        ROW_NUMBER() OVER (PARTITION BY tenor_label ORDER BY SUM(ABS(risk::float)) DESC) AS rn
-      FROM ${LEGS_TABLE}
-      WHERE contributes_to_flow = TRUE
-        AND as_of_date = $1::date
-        AND tenor_label IS NOT NULL
-      GROUP BY 1, 2
-    )
-    SELECT
-      CASE WHEN rn <= 5 THEN platform ELSE 'OTHER' END AS platform,
-      tenor_label,
-      SUM(dv01) AS dv01,
-      SUM(trade_count) AS trade_count
-    FROM ranked
-    GROUP BY 1, 2
-    ORDER BY 2, dv01 DESC
-  `
+  const days = parseInt(url.searchParams.get('days') ?? '30', 10)
 
   const dailySql = `
     WITH ranked_global AS (
@@ -39,33 +15,28 @@ export async function GET(req: Request) {
         ROW_NUMBER() OVER (ORDER BY SUM(ABS(risk::float)) DESC) AS rn
       FROM ${LEGS_TABLE}
       WHERE contributes_to_flow = TRUE
-        AND as_of_date >= ($1::date - INTERVAL '30 days')
-        AND as_of_date <= $1::date
+        AND as_of_date >= (CURRENT_DATE - INTERVAL '${Math.min(days, 90)} days')
       GROUP BY 1
     ),
     top_platforms AS (
       SELECT platform FROM ranked_global WHERE rn <= 5
     )
     SELECT
-      as_of_date AS day,
-      CASE WHEN tp.platform IS NOT NULL THEN l.platform_identifier ELSE 'OTHER' END AS platform,
+      l.as_of_date AS day,
+      CASE WHEN tp.platform IS NOT NULL THEN COALESCE(l.platform_identifier, 'UNKNOWN') ELSE 'OTHER' END AS platform,
       SUM(ABS(l.risk::float)) AS dv01
     FROM ${LEGS_TABLE} l
     LEFT JOIN top_platforms tp ON COALESCE(l.platform_identifier, 'UNKNOWN') = tp.platform
     WHERE l.contributes_to_flow = TRUE
-      AND l.as_of_date >= ($1::date - INTERVAL '30 days')
-      AND l.as_of_date <= $1::date
+      AND l.as_of_date >= (CURRENT_DATE - INTERVAL '${Math.min(days, 90)} days')
     GROUP BY 1, 2
     ORDER BY 1 ASC, 2
   `
 
   try {
-    const [shareRes, dailyRes] = await Promise.all([
-      query(shareSql, [date]),
-      query(dailySql, [date]),
-    ])
+    const { rows } = await query(dailySql)
     return NextResponse.json(
-      { share: shareRes.rows, daily: dailyRes.rows, date },
+      { daily: rows, days },
       { headers: { 'Cache-Control': 'private, max-age=120, stale-while-revalidate=300' } },
     )
   } catch (error: any) {

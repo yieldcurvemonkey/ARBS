@@ -14,89 +14,72 @@ import {
 } from 'recharts'
 import { ANALYTICS_COLORS } from './analytics-format'
 
-type TodayRow = { hour_et: number; novation_count: number; total_dv01: number }
-type HistRow = { hour_et: number; avg_count: number; avg_dv01: number }
+type Row = { day: string; novation_count: number; total_dv01: number }
+
+function formatDv01(v: number | null | undefined): string {
+  if (v == null || !Number.isFinite(v)) return '—'
+  if (Math.abs(v) >= 1e6) return `${(v / 1e6).toFixed(1)}M`
+  if (Math.abs(v) >= 1e3) return `${(v / 1e3).toFixed(0)}K`
+  return v.toFixed(0)
+}
 
 export function NovationVelocityCard(): JSX.Element {
-  const [today, setToday] = useState<TodayRow[]>([])
-  const [hist, setHist] = useState<HistRow[]>([])
+  const [rows, setRows] = useState<Row[]>([])
   const [loading, setLoading] = useState(true)
 
   const fetchData = useCallback(async () => {
     try {
-      const res = await fetch('/api/usd-swaps-tape-v2/novation-velocity')
+      const res = await fetch('/api/usd-swaps-tape-v2/novation-velocity?days=30')
       if (!res.ok) return
       const json = await res.json()
-      setToday(json.today ?? [])
-      setHist(json.historical ?? [])
+      setRows(json.rows ?? [])
     } catch { /* ignore */ }
     finally { setLoading(false) }
   }, [])
 
   useEffect(() => { fetchData() }, [fetchData])
 
-  const { chartData, alerts } = useMemo(() => {
-    const histMap = new Map<number, number>()
-    for (const r of hist) histMap.set(r.hour_et, r.avg_count)
+  const chartData = useMemo(() => {
+    const totalCount = rows.reduce((s, r) => s + (Number(r.novation_count) || 0), 0)
+    const avg = rows.length > 0 ? totalCount / rows.length : 0
+    return rows.map(r => ({
+      day: r.day.slice(0, 10),
+      count: Number(r.novation_count) || 0,
+      avg: Math.round(avg),
+    }))
+  }, [rows])
 
-    const hours = new Set<number>()
-    for (const r of today) hours.add(r.hour_et)
-    for (const r of hist) hours.add(r.hour_et)
-
-    const sorted = [...hours].sort((a, b) => a - b)
-    const alertHours: number[] = []
-
-    const cd = sorted.map(h => {
-      const todayRow = today.find(r => r.hour_et === h)
-      const avgCount = Number(histMap.get(h)) || 0
-      const count = Number(todayRow?.novation_count) || 0
-      if (count > avgCount * 2 && count > 0) alertHours.push(h)
-      return {
-        hour: `${String(h).padStart(2, '0')}:00`,
-        count,
-        avg: Math.round(avgCount * 10) / 10,
-      }
-    })
-
-    return { chartData: cd, alerts: alertHours }
-  }, [today, hist])
-
-  const totalToday = today.reduce((s, r) => s + (r.novation_count ?? 0), 0)
+  const totalCount = rows.reduce((s, r) => s + (Number(r.novation_count) || 0), 0)
+  const avgDaily = rows.length > 0 ? totalCount / rows.length : 0
 
   return (
     <div className="flex flex-col gap-2 rounded border border-slate-800 bg-slate-950/60 p-2 font-mono text-[11px] text-slate-300">
       <div className="flex items-baseline justify-between">
-        <span className="text-[10px] uppercase tracking-wider text-slate-500">Novation velocity</span>
-        {alerts.length > 0 && (
-          <span className="rounded bg-amber-500/20 px-1.5 py-0.5 text-[9.5px] text-amber-200 ring-1 ring-amber-500/30">
-            {alerts.length}h &gt;2× avg
-          </span>
-        )}
+        <span className="text-[10px] uppercase tracking-wider text-slate-500">Novation velocity (30d)</span>
+        <span className="text-[10px] text-slate-500">{rows.length} days</span>
       </div>
       <div className="flex items-baseline gap-3">
         <span className="text-[20px] font-semibold tracking-tight text-amber-200">
-          {loading ? '…' : totalToday}
+          {loading ? '…' : Math.round(avgDaily)}
         </span>
-        <span className="text-[10px] text-slate-500">novations today</span>
+        <span className="text-[10px] text-slate-500">avg daily novations</span>
       </div>
 
       {!loading && chartData.length > 0 && (
         <ResponsiveContainer width="100%" height={140}>
           <ComposedChart data={chartData} margin={{ top: 4, right: 4, bottom: 0, left: -10 }}>
             <CartesianGrid strokeDasharray="3 3" stroke={ANALYTICS_COLORS.slate800} />
-            <XAxis dataKey="hour" tick={{ fill: ANALYTICS_COLORS.slate400, fontSize: 9 }} />
+            <XAxis dataKey="day" tick={{ fill: ANALYTICS_COLORS.slate400, fontSize: 9 }} tickFormatter={v => v.slice(5)} />
             <YAxis tick={{ fill: ANALYTICS_COLORS.slate400, fontSize: 9 }} />
-            <Tooltip
-              contentStyle={{ backgroundColor: '#0f172a', border: '1px solid #334155', fontSize: 10, fontFamily: 'monospace' }}
-            />
-            <Bar dataKey="count" fill="#f59e0b" fillOpacity={0.6} name="Today" />
-            <Line type="monotone" dataKey="avg" stroke="#e879f9" strokeWidth={1.5} dot={false} strokeDasharray="4 2" name="20d Avg" />
+            <Tooltip contentStyle={{ backgroundColor: '#0f172a', border: '1px solid #334155', fontSize: 10, fontFamily: 'monospace' }} />
+            <Bar dataKey="count" fill="#f59e0b" fillOpacity={0.6} name="Novations" />
+            <Line type="monotone" dataKey="avg" stroke="#e879f9" strokeWidth={1.5} dot={false} strokeDasharray="4 2" name="30d Avg" />
           </ComposedChart>
         </ResponsiveContainer>
       )}
 
       {!loading && chartData.length === 0 && (
-        <div className="py-2 text-center text-[10px] text-slate-500">No novation data for today.</div>
+        <div className="py-2 text-center text-[10px] text-slate-500">No novation data in window.</div>
       )}
     </div>
   )

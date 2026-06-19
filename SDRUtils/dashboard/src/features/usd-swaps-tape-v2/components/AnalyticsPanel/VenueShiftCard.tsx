@@ -12,7 +12,6 @@ import {
 } from 'recharts'
 import { ANALYTICS_COLORS } from './analytics-format'
 
-type ShareRow = { platform: string; tenor_label: string; dv01: number; trade_count: number }
 type DailyRow = { day: string; platform: string; dv01: number }
 
 const VENUE_COLORS = [
@@ -27,16 +26,14 @@ function formatDv01(v: number | null | undefined): string {
 }
 
 export function VenueShiftCard(): JSX.Element {
-  const [share, setShare] = useState<ShareRow[]>([])
   const [daily, setDaily] = useState<DailyRow[]>([])
   const [loading, setLoading] = useState(true)
 
   const fetchData = useCallback(async () => {
     try {
-      const res = await fetch('/api/usd-swaps-tape-v2/venue-shift')
+      const res = await fetch('/api/usd-swaps-tape-v2/venue-shift?days=30')
       if (!res.ok) return
       const json = await res.json()
-      setShare(json.share ?? [])
       setDaily(json.daily ?? [])
     } catch { /* ignore */ }
     finally { setLoading(false) }
@@ -46,9 +43,9 @@ export function VenueShiftCard(): JSX.Element {
 
   const platforms = useMemo(() => {
     const m: Record<string, number> = {}
-    for (const r of share) m[r.platform] = (m[r.platform] ?? 0) + (r.dv01 ?? 0)
+    for (const r of daily) m[r.platform] = (m[r.platform] ?? 0) + (r.dv01 ?? 0)
     return Object.entries(m).sort((a, b) => b[1] - a[1]).map(([p]) => p)
-  }, [share])
+  }, [daily])
 
   const platformColorMap = useMemo(() => {
     const m: Record<string, string> = {}
@@ -56,20 +53,21 @@ export function VenueShiftCard(): JSX.Element {
     return m
   }, [platforms])
 
-  const tenorChart = useMemo(() => {
-    const tenorMap = new Map<string, Record<string, string | number>>()
-    for (const r of share) {
-      const existing = tenorMap.get(r.tenor_label) ?? { tenor: r.tenor_label }
-      existing[r.platform] = r.dv01 ?? 0
-      tenorMap.set(r.tenor_label, existing)
+  const chartData = useMemo(() => {
+    const dayMap = new Map<string, Record<string, string | number>>()
+    for (const r of daily) {
+      const d = r.day.slice(0, 10)
+      const existing = dayMap.get(d) ?? { day: d }
+      existing[r.platform] = (Number(existing[r.platform]) || 0) + (r.dv01 ?? 0)
+      dayMap.set(d, existing)
     }
-    return [...tenorMap.values()]
-  }, [share])
+    return [...dayMap.values()].sort((a, b) => String(a.day).localeCompare(String(b.day)))
+  }, [daily])
 
   return (
     <div className="flex flex-col gap-2 rounded border border-slate-800 bg-slate-950/60 p-2 font-mono text-[11px] text-slate-300">
       <div className="flex items-baseline justify-between">
-        <span className="text-[10px] uppercase tracking-wider text-slate-500">Execution venue shift</span>
+        <span className="text-[10px] uppercase tracking-wider text-slate-500">Venue market share (30d)</span>
       </div>
       <div className="flex flex-wrap gap-2">
         {platforms.slice(0, 6).map(p => (
@@ -80,26 +78,21 @@ export function VenueShiftCard(): JSX.Element {
         ))}
       </div>
 
-      {!loading && tenorChart.length > 0 && (
+      {!loading && chartData.length > 0 ? (
         <ResponsiveContainer width="100%" height={140}>
-          <BarChart data={tenorChart} margin={{ top: 4, right: 4, bottom: 0, left: -10 }}>
+          <BarChart data={chartData} margin={{ top: 4, right: 4, bottom: 0, left: -10 }}>
             <CartesianGrid strokeDasharray="3 3" stroke={ANALYTICS_COLORS.slate800} />
-            <XAxis dataKey="tenor" tick={{ fill: ANALYTICS_COLORS.slate400, fontSize: 9 }} />
+            <XAxis dataKey="day" tick={{ fill: ANALYTICS_COLORS.slate400, fontSize: 9 }} tickFormatter={v => v.slice(5)} />
             <YAxis tick={{ fill: ANALYTICS_COLORS.slate400, fontSize: 9 }} tickFormatter={v => formatDv01(v)} />
-            <Tooltip
-              contentStyle={{ backgroundColor: '#0f172a', border: '1px solid #334155', fontSize: 10, fontFamily: 'monospace' }}
-              formatter={(v: number) => formatDv01(v)}
-            />
+            <Tooltip contentStyle={{ backgroundColor: '#0f172a', border: '1px solid #334155', fontSize: 10, fontFamily: 'monospace' }} formatter={(v: number) => formatDv01(v)} />
             {platforms.map(p => (
               <Bar key={p} dataKey={p} stackId="venue" fill={platformColorMap[p]} />
             ))}
           </BarChart>
         </ResponsiveContainer>
-      )}
-
-      {!loading && share.length === 0 && (
-        <div className="py-2 text-center text-[10px] text-slate-500">No venue data for today.</div>
-      )}
+      ) : !loading ? (
+        <div className="py-2 text-center text-[10px] text-slate-500">No venue data in window.</div>
+      ) : null}
     </div>
   )
 }

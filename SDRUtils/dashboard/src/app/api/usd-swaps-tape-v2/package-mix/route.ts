@@ -5,40 +5,26 @@ const PACKAGES_TABLE = 'arbs_usd_swap_tape_packages_v2'
 
 export async function GET(req: Request) {
   const url = new URL(req.url)
-  const date = url.searchParams.get('date') ?? new Date().toISOString().slice(0, 10)
+  const days = parseInt(url.searchParams.get('days') ?? '30', 10)
 
-  const mixSql = `
+  const dailySql = `
     SELECT
+      as_of_date AS day,
       COALESCE(UPPER(package_type), 'UNKNOWN') AS package_type,
-      SUM(ABS(total_risk::float)) AS total_dv01,
+      SUM(ABS(total_risk::float)) AS dv01,
       COUNT(*) AS trade_count
     FROM ${PACKAGES_TABLE}
     WHERE contributes_to_flow_any = TRUE
-      AND as_of_date = $1::date
-    GROUP BY 1
-    ORDER BY total_dv01 DESC
-  `
-
-  const hourlySql = `
-    SELECT
-      date_trunc('hour', COALESCE(original_execution_start, execution_start) AT TIME ZONE 'America/New_York') AS hour,
-      COALESCE(UPPER(package_type), 'UNKNOWN') AS package_type,
-      SUM(ABS(total_risk::float)) AS dv01
-    FROM ${PACKAGES_TABLE}
-    WHERE contributes_to_flow_any = TRUE
-      AND as_of_date = $1::date
+      AND as_of_date >= (CURRENT_DATE - INTERVAL '${Math.min(days, 90)} days')
     GROUP BY 1, 2
     ORDER BY 1 ASC, 2
   `
 
   try {
-    const [mixRes, hourlyRes] = await Promise.all([
-      query(mixSql, [date]),
-      query(hourlySql, [date]),
-    ])
+    const { rows } = await query(dailySql)
     return NextResponse.json(
-      { mix: mixRes.rows, hourly: hourlyRes.rows, date },
-      { headers: { 'Cache-Control': 'private, max-age=60, stale-while-revalidate=120' } },
+      { rows, days },
+      { headers: { 'Cache-Control': 'private, max-age=120, stale-while-revalidate=300' } },
     )
   } catch (error: any) {
     return NextResponse.json({ error: error?.message ?? 'failed' }, { status: 500 })

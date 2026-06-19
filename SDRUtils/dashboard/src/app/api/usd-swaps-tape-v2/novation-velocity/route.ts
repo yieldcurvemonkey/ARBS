@@ -5,41 +5,25 @@ const PACKAGES_TABLE = 'arbs_usd_swap_tape_packages_v2'
 
 export async function GET(req: Request) {
   const url = new URL(req.url)
-  const date = url.searchParams.get('date') ?? new Date().toISOString().slice(0, 10)
+  const days = parseInt(url.searchParams.get('days') ?? '30', 10)
 
-  const todaySql = `
+  const sql = `
     SELECT
-      EXTRACT(HOUR FROM COALESCE(original_execution_start, execution_start) AT TIME ZONE 'America/New_York')::int AS hour_et,
+      as_of_date AS day,
       COUNT(*) AS novation_count,
       SUM(ABS(total_risk::float)) AS total_dv01
     FROM ${PACKAGES_TABLE}
     WHERE is_novation_any = TRUE
-      AND as_of_date = $1::date
+      AND as_of_date >= (CURRENT_DATE - INTERVAL '${Math.min(days, 90)} days')
     GROUP BY 1
-    ORDER BY 1
-  `
-
-  const histSql = `
-    SELECT
-      EXTRACT(HOUR FROM COALESCE(original_execution_start, execution_start) AT TIME ZONE 'America/New_York')::int AS hour_et,
-      COUNT(*)::float / NULLIF(COUNT(DISTINCT as_of_date), 0) AS avg_count,
-      SUM(ABS(total_risk::float)) / NULLIF(COUNT(DISTINCT as_of_date), 0) AS avg_dv01
-    FROM ${PACKAGES_TABLE}
-    WHERE is_novation_any = TRUE
-      AND as_of_date >= ($1::date - INTERVAL '20 days')
-      AND as_of_date < $1::date
-    GROUP BY 1
-    ORDER BY 1
+    ORDER BY 1 ASC
   `
 
   try {
-    const [todayRes, histRes] = await Promise.all([
-      query(todaySql, [date]),
-      query(histSql, [date]),
-    ])
+    const { rows } = await query(sql)
     return NextResponse.json(
-      { today: todayRes.rows, historical: histRes.rows, date },
-      { headers: { 'Cache-Control': 'private, max-age=30, stale-while-revalidate=60' } },
+      { rows, days },
+      { headers: { 'Cache-Control': 'private, max-age=120, stale-while-revalidate=300' } },
     )
   } catch (error: any) {
     return NextResponse.json({ error: error?.message ?? 'failed' }, { status: 500 })

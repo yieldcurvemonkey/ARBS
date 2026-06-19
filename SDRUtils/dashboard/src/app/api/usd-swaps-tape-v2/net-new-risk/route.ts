@@ -5,29 +5,28 @@ const LEGS_TABLE = 'arbs_usd_swap_tape_legs_v2'
 
 export async function GET(req: Request) {
   const url = new URL(req.url)
-  const date = url.searchParams.get('date') ?? new Date().toISOString().slice(0, 10)
+  const days = parseInt(url.searchParams.get('days') ?? '30', 10)
 
   const sql = `
     SELECT
-      date_trunc('hour', execution_timestamp AT TIME ZONE 'America/New_York') AS hour,
+      as_of_date AS day,
       tenor_label,
-      SUM(risk::float) AS net_risk,
-      SUM(ABS(risk::float)) AS gross_risk,
+      SUM(ABS(risk::float)) AS dv01,
       COUNT(*) AS trade_count
     FROM ${LEGS_TABLE}
     WHERE contributes_to_flow = TRUE
-      AND as_of_date = $1::date
+      AND as_of_date >= (CURRENT_DATE - INTERVAL '${Math.min(days, 90)} days')
       AND tenor_label IS NOT NULL
       AND risk IS NOT NULL
     GROUP BY 1, 2
-    ORDER BY 1 ASC, 2 ASC
+    ORDER BY 1 ASC, 2
   `
 
   try {
-    const { rows } = await query(sql, [date])
+    const { rows } = await query(sql)
     return NextResponse.json(
-      { rows, date },
-      { headers: { 'Cache-Control': 'private, max-age=60, stale-while-revalidate=120' } },
+      { rows, days },
+      { headers: { 'Cache-Control': 'private, max-age=120, stale-while-revalidate=300' } },
     )
   } catch (error: any) {
     return NextResponse.json({ error: error?.message ?? 'failed' }, { status: 500 })
