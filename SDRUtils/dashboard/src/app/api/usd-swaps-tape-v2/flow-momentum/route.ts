@@ -39,10 +39,7 @@ export async function GET(req: Request) {
     SELECT
       ${fwdCase} AS fwd,
       ${tenorCase} AS tenor,
-      SUM(l.risk::float) AS net_dv01,
-      SUM(ABS(l.risk::float)) AS gross_dv01,
-      SUM(CASE WHEN l.risk::float > 0 THEN 1 ELSE 0 END) AS pay_count,
-      SUM(CASE WHEN l.risk::float < 0 THEN 1 ELSE 0 END) AS rcv_count,
+      SUM(ABS(l.risk::float)) AS dv01,
       COUNT(*) AS trade_count
     FROM ${LEGS_TABLE} l
     WHERE l.contributes_to_flow = TRUE
@@ -59,7 +56,7 @@ export async function GET(req: Request) {
         l.as_of_date,
         ${fwdCase} AS fwd,
         ${tenorCase} AS tenor,
-        SUM(l.risk::float) AS daily_net
+        SUM(ABS(l.risk::float)) AS daily_dv01
       FROM ${LEGS_TABLE} l
       WHERE l.contributes_to_flow = TRUE
         AND l.risk IS NOT NULL
@@ -71,8 +68,8 @@ export async function GET(req: Request) {
     SELECT
       fwd,
       tenor,
-      AVG(daily_net) AS avg_net,
-      STDDEV_POP(daily_net) AS std_net,
+      AVG(daily_dv01) AS avg_dv01,
+      STDDEV_POP(daily_dv01) AS std_dv01,
       COUNT(DISTINCT as_of_date) AS n_days
     FROM daily
     GROUP BY fwd, tenor
@@ -84,11 +81,11 @@ export async function GET(req: Request) {
       query(histSql, [date]),
     ])
 
-    const histMap = new Map<string, { avg_net: number; std_net: number; n_days: number }>()
+    const histMap = new Map<string, { avg_dv01: number; std_dv01: number; n_days: number }>()
     for (const r of histRes.rows) {
       histMap.set(`${r.fwd}|${r.tenor}`, {
-        avg_net: Number(r.avg_net) || 0,
-        std_net: Number(r.std_net) || 0,
+        avg_dv01: Number(r.avg_dv01) || 0,
+        std_dv01: Number(r.std_dv01) || 0,
         n_days: Number(r.n_days) || 0,
       })
     }
@@ -96,22 +93,18 @@ export async function GET(req: Request) {
     const cells = todayRes.rows.map((r: any) => {
       const key = `${r.fwd}|${r.tenor}`
       const hist = histMap.get(key)
-      const net = Number(r.net_dv01) || 0
-      const avg = hist?.avg_net ?? 0
-      const std = hist?.std_net ?? 0
-      const z = std > 0 ? (net - avg) / std : 0
+      const dv01 = Number(r.dv01) || 0
+      const avg = hist?.avg_dv01 ?? 0
+      const std = hist?.std_dv01 ?? 0
+      const z = std > 0 ? (dv01 - avg) / std : 0
       return {
         fwd: r.fwd,
         tenor: r.tenor,
-        net_dv01: net,
-        gross_dv01: Number(r.gross_dv01) || 0,
-        pay_count: Number(r.pay_count) || 0,
-        rcv_count: Number(r.rcv_count) || 0,
+        dv01,
         trade_count: Number(r.trade_count) || 0,
         hist_avg: avg,
         hist_std: std,
         z_score: Math.round(z * 100) / 100,
-        dominant_side: net > 0 ? 'PAY' : net < 0 ? 'RCV' : 'NEUTRAL',
       }
     })
 

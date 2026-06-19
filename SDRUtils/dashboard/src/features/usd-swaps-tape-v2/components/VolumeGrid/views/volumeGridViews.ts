@@ -61,7 +61,7 @@ export const VOLUME_GRID_VIEWS: ReadonlyArray<VolumeGridViewDef> = [
   },
   {
     id: 'flow_momentum',
-    label: 'Flow Momentum',
+    label: 'Flow Activity',
     component: FlowMomentumView,
     controls: () => null,
   },
