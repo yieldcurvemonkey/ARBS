@@ -9,7 +9,7 @@ import statsmodels.api as sm
 from scipy import stats
 from scipy.odr import ODR, Model, RealData
 
-from RVUtils.mean_reversion import simulate_mean_reversion_ou
+from RVUtils.mean_reversion import simulate_mean_reversion_ou, calibrate_ou
 
 
 def make_linear_regression_builder(
@@ -1284,3 +1284,106 @@ def make_linear_regression_builder(
         )
 
     return add_indep_var, fit, plot_actual_vs_predicted, plot_residuals_vs_predicted, plot_residuals_timeseries, get_data
+
+
+# ============================================================================
+# Data-agnostic RV regression utilities (module-level; backward-compatible —
+# they do NOT change make_linear_regression_builder's returned tuple).
+# ============================================================================
+
+def rolling_beta_stability(
+    y: pd.Series,
+    drivers: Union[pd.Series, pd.DataFrame],
+    *,
+    window_beta: int = 126,
+    window_vol: int = 63,
+    window_z: int = 126,
+) -> pd.DataFrame:
+    """Beta-stability "Traffic Light" index (JPM EUR RV framework).
+
+    Rolling-OLS betas of `y` on `drivers` (with intercept), the rolling vol of
+    each beta, the z-score of that vol, and TLI = sqrt(sum_i Z(sigma_beta_i)^2).
+    High TLI (~>=3) flags unstable hedge ratios -> gate RV trades off.
+
+    Returns a DataFrame with beta_<col>, z_std_<col>, and a 'TLI' column.
+    """
+    if isinstance(drivers, pd.Series):
+        drivers = drivers.to_frame(name=drivers.name or "x")
+    data = pd.concat([y.rename("_y_"), drivers], axis=1).dropna()
+    cols = [c for c in data.columns if c != "_y_"]
+    yv = data["_y_"].values
+    Xmat = np.column_stack([np.ones(len(data)), data[cols].values])
+
+    betas = pd.DataFrame(index=data.index, columns=cols, dtype=float)
+    wb = int(window_beta)
+    for end in range(wb - 1, len(data)):
+        sl = slice(end - wb + 1, end + 1)
+        try:
+            b = np.linalg.lstsq(Xmat[sl], yv[sl], rcond=None)[0]
+            betas.iloc[end, :] = b[1:]
+        except Exception:
+            continue
+
+    bstd = betas.rolling(int(window_vol)).std(ddof=1)
+    zr = bstd.rolling(int(window_z))
+    zstd = (bstd - zr.mean()) / zr.std(ddof=1)
+    tli = np.sqrt((zstd ** 2).sum(axis=1, min_count=1))
+    tli.name = "TLI"
+    return pd.concat([betas.add_prefix("beta_"), zstd.add_prefix("z_std_"), tli], axis=1)
+
+
+def residual_diagnostics(residual: pd.Series, *, adf_reg: str = "c") -> dict:
+    """Stationarity/mean-reversion diagnostics for a regression residual.
+
+    Returns {half_life, adf_stat, adf_pvalue}. half_life via OU calibration.
+    """
+    from statsmodels.tsa.stattools import adfuller
+
+    r = pd.Series(residual).dropna()
+    hl = calibrate_ou(r)["half_life"]
+    try:
+        adf = adfuller(r.values, regression=adf_reg, autolag="AIC")
+        adf_stat, adf_p = float(adf[0]), float(adf[1])
+    except Exception:
+        adf_stat, adf_p = np.nan, np.nan
+    return {"half_life": hl, "adf_stat": adf_stat, "adf_pvalue": adf_p}
+
+
+def level_curve_neutral_fly(
+    fly: pd.Series,
+    level: pd.Series,
+    slope: pd.Series,
+    *,
+    window: Optional[int] = None,
+) -> dict:
+    """Regression-based level/curve-neutral fly residual.
+
+    Regress `fly` on [level, slope] (full-sample if window is None, else rolling
+    one-step-ahead). The residual is the directionally-neutral RV signal.
+    Returns {residual, zscore, betas}. (Companion to pca_rv.directionality.)
+    """
+    data = pd.concat([fly.rename("fly"), level.rename("level"), slope.rename("slope")], axis=1).dropna()
+    yv = data["fly"].values
+    X = np.column_stack([np.ones(len(data)), data["level"].values, data["slope"].values])
+
+    if window is None:
+        b = np.linalg.lstsq(X, yv, rcond=None)[0]
+        residual = pd.Series(yv - X @ b, index=data.index, name="neutral_residual")
+        betas = pd.Series(b[1:], index=["level", "slope"])
+        zw = 126
+    else:
+        w = int(window)
+        residual = pd.Series(index=data.index, dtype=float, name="neutral_residual")
+        betas_df = pd.DataFrame(index=data.index, columns=["level", "slope"], dtype=float)
+        for end in range(w - 1, len(data)):
+            sl = slice(end - w + 1, end + 1)
+            b = np.linalg.lstsq(X[sl], yv[sl], rcond=None)[0]
+            residual.iloc[end] = yv[end] - X[end] @ b
+            betas_df.iloc[end, :] = b[1:]
+        betas = betas_df
+        zw = w
+
+    zr = residual.rolling(zw)
+    z = (residual - zr.mean()) / zr.std(ddof=1)
+    z.name = "neutral_residual_z"
+    return {"residual": residual.dropna(), "zscore": z, "betas": betas}
