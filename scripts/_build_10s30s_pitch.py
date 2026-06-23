@@ -144,6 +144,48 @@ cells = [
              'by_month.index = ["jan","feb","mar","apr","may","jun","jul","aug","sep","oct","nov","dec"]\n'
              'print("Avg month-over-month change in 10s30s by calendar month (bp; negative = flattening):")\n'
              'by_month.round(1)'),
+    ("md", "## 7) Getting to POSITIVE carry: forward-starting & PCA-weighted structures\n"
+           "Spot flattener bleeds ~1.7bp/q. Two levers keep 10s30s exposure while flipping/cutting carry: **(a) forward-start** (roll down the forward 10s30s term structure) and **(b) PCA PC1-neutral weighting** (strip the level leg that drags carry). Forward curves use constant end-maturities (10y/30y buckets, S-forward) so they stay within the 30y data."),
+    ("code", 'from RVUtils.carry_roll import roll_down, carry as carry_fn\n'
+             'def fwd_flat(S, a, b):\n'
+             '    return curve_yrs.apply(lambda r: forward_rate(r, S, b - S) - forward_rate(r, S, a - S), axis=1) * bp\n'
+             'def beta1030(sp):\n'
+             '    rd = pd.concat([sp.rename("sp"), s10s30.rename("x")], axis=1).dropna()\n'
+             '    aiv, fiv, _, _, _, _ = make_linear_regression_builder(df=rd, y_col="sp", on_diff=True); aiv("x")\n'
+             '    return float(fiv(model="OLS").params["x"])\n'
+             'rows = []\n'
+             'for a, b, lab in [(10,30,"10s30s"),(10,20,"10s20s"),(7,30,"7s30s"),(5,30,"5s30s")]:\n'
+             '    for S in [0.0, 0.5, 1.0, 2.0]:\n'
+             '        sp = fwd_flat(S, a, b); spm = fwd_flat(max(S-0.25, 0.0), a, b)\n'
+             '        z = (sp.iloc[-1] - sp.rolling(252).mean().iloc[-1]) / sp.rolling(252).std().iloc[-1]\n'
+             '        rows.append({"struct": f"{S:g}y fwd {lab}", "level_bp": round(sp.iloc[-1],1), "carry_roll_3m": round(float(sp.iloc[-1]-spm.iloc[-1]),2), "beta_to_10s30s": round(beta1030(sp),2), "z252": round(float(z),2)})\n'
+             'print("Forward flatteners (constant end-maturity); carry_roll_3m > 0 = POSITIVE carry:")\n'
+             'pd.DataFrame(rows).sort_values("carry_roll_3m", ascending=False).round(2)'),
+    ("code", 'bpx = make_pca_rv_builder(curve_yrs, on="changes", n_factors=3, sort_by_tenor=False); bpx[0]()\n'
+             'curvew = bpx[4]\n'
+             'def flat_cr_w(legs_w, h=0.25):\n'
+             '    last = curve_yrs.iloc[-1]\n'
+             '    return sum(w * (roll_down(last, t, h) + carry_fn(last, t, h)) for t, w in legs_w) * bp\n'
+             'def fwd_flat_w(S, short, long, ws, wl):\n'
+             '    return curve_yrs.apply(lambda r: wl*forward_rate(r, S, long-S) + ws*forward_rate(r, S, short-S), axis=1) * bp\n'
+             'res = []\n'
+             'for short, long, lab in [(10,30,"10s30s"),(5,30,"5s30s")]:\n'
+             '    w = curvew(short, long, neutralize=("PC1",)); ws, wl = w[short], w[long]\n'
+             '    sp = (wl*curve_yrs[long] + ws*curve_yrs[short]) * bp\n'
+             '    res.append({"struct": f"{lab} PC1-neutral (spot)", "weights": f"{wl:.2f}:{ws:.2f}", "carry_roll_3m": round(flat_cr_w([(long,wl),(short,ws)]),2), "beta_to_10s30s": round(beta1030(sp),2)})\n'
+             '    spf = fwd_flat_w(1.0, short, long, ws, wl); spfm = fwd_flat_w(0.75, short, long, ws, wl)\n'
+             '    res.append({"struct": f"{lab} PC1-neutral (1y fwd)", "weights": f"{wl:.2f}:{ws:.2f}", "carry_roll_3m": round(float(spf.iloc[-1]-spfm.iloc[-1]),2), "beta_to_10s30s": round(beta1030(spf),2)})\n'
+             'print("PC1-neutral (level-neutral) cuts the drag; forward-start flips it positive:")\n'
+             'pd.DataFrame(res).round(2)'),
+    ("code", 'rec = fwd_flat(1.0, 5, 30)\n'
+             'cr_rec = float(rec.iloc[-1] - fwd_flat(0.75, 5, 30).iloc[-1]); b_rec = beta1030(rec)\n'
+             'print(f"RECOMMENDATION: 1y-fwd 5s30s flattener | carry+roll +{cr_rec:.2f}bp/q (POSITIVE) | beta {b_rec:.2f} to 10s30s | size ~{1/b_rec:.2f}x DV01 to match 10s30s risk")\n'
+             'zrec = (rec - rec.rolling(252).mean()) / rec.rolling(252).std()\n'
+             'plot, fig, ax, ax2, legend = make_secondary_axis_plot(engine="matplotlib", title="1y-fwd 5s30s flattener (bp) + own-history z  (positive-carry 10s30s proxy)")\n'
+             'plot(rec.rename("1y fwd 5s30s (bp)"), which="left", indicators=[{"kind": "last"}])\n'
+             'plot(zrec.rename("z252"), which="right", indicators=[{"kind": "zbands", "entry": 1.5, "stop": 3}, {"kind": "last"}])\n'
+             'legend(show_date=True, loc="upper left"); plt.show()'),
+    ("md", "**Recommended positive-carry expression: 1y-forward 5s30s flattener** (constant 5y/30y maturities, 1y forward) — **+~0.7 bp/q** carry+roll vs **−1.7 bp/q** spot 10s30s, **beta ~1.7 to 10s30s** (size to ~0.6× DV01 to match 10s30s risk). It carries because the forward 5s30s spread rolls down an upward-in-start term structure, and 5s30s captures more belly→long roll than 10s30s. **For a level-clean version**, apply **PC1-neutral weights** (≈ 1 : −0.68) to strip the directional leg. Caveats: 5s30s re-adds the 5y **belly** (not the 2y front-end — still consistent with the front-end pass) and runs ~1.7× the 10s30s beta (size down); the forward carry is the static-curve term-structure slide and decays if the curve re-steepens."),
     ("md", "## Takeaways for the desk\n"
            "- **Front end = no trade, and lead with it.** Guidance gone, statement shortest in decades, 2026 median dot up to 3.8%, ~half the Committee penciling hikes, FedWatch ~60% Oct hike, SFR fly directional. No edge → don't force it. That selectivity is *why* the one trade I do pitch is credible.\n"
            "- **The trade = 10s30s flattener as a valuation+regime convergence trade**, not a carry trade. On JPM's named drivers (1y1y / 5y5y-BE / Fed-BS/%GDP, FRED-sourced) the model fits R² ~0.9 and screens 10s30s rich (residual in §1), corroborating the direction of JPM's ~14bp screen. Carry is ~1.7bp/q against — cheap relative to the convergence. (Summer-carry rationale dropped.)\n"
