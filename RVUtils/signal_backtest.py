@@ -85,18 +85,28 @@ def make_signal_backtest_builder(
 
     # ── forecast ────────────────────────────────────────────────────────────
 
-    def forecast(scale: float = 10.0, cap: float = 20.0) -> pd.Series:
-        """Carver-style forecast.
+    def forecast(scale: float = 10.0, cap: float = 20.0, reversion: bool = False, window=None) -> pd.Series:
+        """Carver-style forecast = clip(scale * signal / mean(|signal|), -cap, +cap).
 
-        forecast_t = clip(scale * signal_t / mean(|signal|), -cap, +cap)
+        Sign convention: by default the forecast is MOMENTUM-signed (positive
+        forecast => long the structure, same sign as `signal`). For a
+        mean-reversion RV signal pass ``reversion=True`` to flip the sign so a
+        cheap/low spread maps to a positive/long forecast, matching the
+        ``zscore_signal`` convention used elsewhere in this module.
 
-        The divisor ``mean(|signal|)`` is computed over the full sample
-        (static scalar).  See module docstring for justification.
+        ``window=None`` uses the full-sample ``mean(|signal|)`` (the static Carver
+        scalar; mildly forward-looking in *magnitude* only). Pass an int
+        ``window`` for a causal trailing ``mean(|signal|)`` with no look-ahead.
         """
-        mean_abs = float(signal.abs().mean())
-        if mean_abs == 0.0:
-            return pd.Series(0.0, index=signal.index, name="forecast")
-        raw = scale * signal / mean_abs
+        if window is None:
+            mean_abs = float(signal.abs().mean())
+            denom = mean_abs if mean_abs != 0.0 else np.nan
+            raw = scale * signal / denom
+        else:
+            ma = signal.abs().rolling(int(window), min_periods=max(2, int(window) // 2)).mean()
+            raw = scale * signal / ma.replace(0.0, np.nan)
+        if reversion:
+            raw = -raw
         out = raw.clip(-cap, cap)
         out.name = "forecast"
         return out
@@ -157,12 +167,14 @@ def make_signal_backtest_builder(
         idm: float = 1.0,
         cap_idm: float = 2.5,
         signal_pos: pd.Series | None = None,
+        reversion: bool = False,
+        forecast_window=None,
     ) -> pd.Series:
         """Size a position from the signal.
 
         method="binary"
             Sign-based position from ``zscore_signal()`` (or ``signal_pos``
-            if provided).
+            if provided) -- already mean-reversion-signed.
 
         method="vol_target"  (Carver)
             (forecast / 10) * (target_vol / realized_vol) * min(idm, cap_idm)
@@ -170,6 +182,10 @@ def make_signal_backtest_builder(
 
         method="inverse_vol"
             sign(forecast) * (target_vol / realized_vol) * min(idm, cap_idm)
+
+        ``reversion``/``forecast_window`` are forwarded to ``forecast()`` for the
+        vol_target/inverse_vol methods (which inherit the forecast's sign sense:
+        momentum unless ``reversion=True``).
         """
         eff_idm = min(float(idm), float(cap_idm))
 
@@ -183,10 +199,10 @@ def make_signal_backtest_builder(
         rvol = rvol.replace(0.0, np.nan)
 
         if method == "vol_target":
-            fc = forecast(scale=10.0, cap=20.0)
+            fc = forecast(scale=10.0, cap=20.0, reversion=reversion, window=forecast_window)
             raw = (fc / 10.0) * (target_vol / rvol) * eff_idm
         elif method == "inverse_vol":
-            fc = forecast(scale=10.0, cap=20.0)
+            fc = forecast(scale=10.0, cap=20.0, reversion=reversion, window=forecast_window)
             raw = np.sign(fc) * (target_vol / rvol) * eff_idm
         else:
             raise ValueError(f"Unknown method: {method!r}. Use 'binary', 'vol_target', or 'inverse_vol'.")

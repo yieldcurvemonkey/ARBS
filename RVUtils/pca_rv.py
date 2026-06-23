@@ -179,10 +179,15 @@ def make_pca_rv_builder(
             wmap = dict(weights)
             s = sum(wmap[c] * state["df"][c] for c in structure)
         s = s.dropna()
-        if method in ("pca", "minvar"):
+        if method == "pca":
             D = state["scores"][list(drivers)]
-        else:  # "regression" on explicit driver columns
+        elif method == "regression":
             D = state["df"][list(drivers)]
+        else:
+            raise ValueError(
+                "method must be 'pca' or 'regression'. For minimum-variance / "
+                "PC-neutral construction weights use fly_weights()/curve_weights()."
+            )
         common = s.index.intersection(D.dropna().index)
         s2 = s.loc[common]
         D2 = D.loc[common]
@@ -193,6 +198,9 @@ def make_pca_rv_builder(
 
     # ---------- risk buckets ----------
     def risk_buckets(dv01_ladder) -> pd.Series:
+        """PC exposures f = V^T r of a DV01 ladder. Assumes the default cov-PCA
+        (matrix='cov'); for a corr-PCA model the loadings are in standardized
+        space and exposures would need rescaling by the per-column scales."""
         model = _require()
         r = pd.Series(dv01_ladder).reindex(model.columns).fillna(0.0)
         f = model.loadings.T.values @ r.values  # (K_pc,)

@@ -139,6 +139,8 @@ def forward_rate(
     """
     if compounding != "annual":
         raise ValueError(f"Unsupported compounding: {compounding!r}. Only 'annual' is implemented.")
+    if tenor <= 0:
+        raise ValueError(f"forward_rate requires tenor > 0 (got {tenor}).")
 
     s_end = _interp(curve_row, start + tenor)
     s_start = _interp(curve_row, start)
@@ -193,6 +195,8 @@ def carry(
     float
         Carry in the same units as the input yields.
     """
+    if tenor - horizon <= 0:
+        raise ValueError(f"carry requires tenor > horizon (tenor={tenor}, horizon={horizon}).")
     fwd = forward_rate(curve_row, start=horizon, tenor=tenor - horizon, pct=pct)
     spot = _interp(curve_row, tenor)
     return float(fwd - spot)

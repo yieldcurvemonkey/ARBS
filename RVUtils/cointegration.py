@@ -154,7 +154,7 @@ def engle_granger(
     sp = spread(y_a, x_a, beta=beta, alpha=alpha)
     sp.name = "spread"
 
-    adf_result = adfuller(sp.dropna().values, regression=trend)
+    adf_result = adfuller(sp.dropna().values, regression=trend, autolag="AIC")
     adf_stat = float(adf_result[0])
     pvalue = float(adf_result[1])
 

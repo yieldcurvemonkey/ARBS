@@ -267,12 +267,12 @@ def make_curve_fit_builder(
             wts = df[w_col].to_numpy(dtype=float) if w_col and w_col in df.columns else None
             fitted = _fit_one(f, mats, ylds, wts, l)
             resid = ylds - fitted
-            for i, row in df.iterrows():
+            for pos_i, (i, row) in enumerate(df.iterrows()):
                 rec = {
                     m_col: row[m_col],
                     y_col: row[y_col],
-                    "fitted": fitted[list(df.index).index(i)],
-                    "residual": resid[list(df.index).index(i)],
+                    "fitted": fitted[pos_i],
+                    "residual": resid[pos_i],
                 }
                 if id_c and id_c in df.columns:
                     rec["id"] = row[id_c]
