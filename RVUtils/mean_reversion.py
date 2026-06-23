@@ -81,3 +81,97 @@ def simulate_mean_reversion_ou(df: pd.DataFrame, steps: Optional[int] = 252) -> 
     ).set_index("date")
 
     return forecast_df, get_first_passage_time(start_value, mean, sigma_squared, lambda_param)
+
+
+# ============================================================================
+# OU calibration / analytics (data-agnostic; used across the RV toolkit)
+# ============================================================================
+
+def calibrate_ou(series: pd.Series, *, dt: float = 1.0, demean: bool = False) -> dict:
+    """Calibrate an Ornstein-Uhlenbeck process dx = kappa(mu - x)dt + sigma dW
+    to a single series via the discrete AR(1) analogue x_t = a + phi*x_{t-1} + e.
+
+    Returns dict {mu, kappa, sigma, phi, intercept, half_life}; values are NaN
+    when the series is too short or not mean-reverting (phi outside (0,1)).
+    """
+    y = pd.Series(series).dropna().astype(float)
+    nan = {"mu": np.nan, "kappa": np.nan, "sigma": np.nan, "phi": np.nan, "intercept": np.nan, "half_life": np.nan}
+    if len(y) < 5:
+        return nan
+    if demean:
+        y = y - y.mean()
+    y0 = y.shift(1).dropna()
+    y1 = y.loc[y0.index]
+    X = np.column_stack([np.ones(len(y0)), y0.values])
+    try:
+        a, b = np.linalg.lstsq(X, y1.values, rcond=None)[0]
+    except Exception:
+        return nan
+    phi = float(b)
+    if not (0.0 < phi < 1.0) or not np.isfinite(phi):
+        return {"mu": np.nan, "kappa": np.nan, "sigma": np.nan, "phi": phi, "intercept": float(a), "half_life": np.nan}
+    kappa = -np.log(phi) / float(dt)
+    mu = a / (1.0 - phi)
+    eps = y1.values - (a + b * y0.values)
+    s2 = float(np.var(eps, ddof=1))
+    sigma = float(np.sqrt(max(0.0, s2 * (2.0 * kappa) / (1.0 - phi**2))))
+    half_life = float(np.log(2.0) / kappa)
+    return {"mu": float(mu), "kappa": float(kappa), "sigma": sigma, "phi": phi, "intercept": float(a), "half_life": half_life}
+
+
+def ou_conditional(x0: float, params: dict, horizon: float) -> dict:
+    """Conditional moments of OU at `horizon` given current value x0.
+
+    mean = mu + (x0-mu) e^{-kappa h};  var = sigma^2/(2 kappa) (1 - e^{-2 kappa h}).
+    """
+    kappa = params.get("kappa", np.nan)
+    mu = params.get("mu", np.nan)
+    sigma = params.get("sigma", np.nan)
+    if not (np.isfinite(kappa) and kappa > 0 and np.isfinite(mu) and np.isfinite(sigma)):
+        return {"mean": np.nan, "var": np.nan, "std": np.nan}
+    h = float(horizon)
+    mean = mu + (x0 - mu) * np.exp(-kappa * h)
+    var = (sigma**2) / (2.0 * kappa) * (1.0 - np.exp(-2.0 * kappa * h))
+    var = max(0.0, float(var))
+    return {"mean": float(mean), "var": var, "std": float(np.sqrt(var))}
+
+
+def ou_ex_ante_sharpe(x0: float, params: dict, horizon: float, *, annualize: bool = True, periods: int = 252) -> float:
+    """Ex-ante Sharpe ratio of the mean-reversion move over `horizon`.
+
+    SR = (E[x_{t+h}] - x0) / std(x_{t+h}); optionally annualised by sqrt(periods/horizon).
+    Note (Huggins-Schaller): annualised SR declines with horizon for OU.
+    """
+    cond = ou_conditional(x0, params, horizon)
+    if not np.isfinite(cond["std"]) or cond["std"] <= 0:
+        return np.nan
+    sr = (cond["mean"] - x0) / cond["std"]
+    if annualize:
+        sr *= np.sqrt(float(periods) / float(horizon))
+    return float(sr)
+
+
+def first_passage_time(x0: float, target: float, params: dict, *, sims: int = 2000, steps: int = 252, dt: float = 1.0) -> float:
+    """Monte-Carlo expected first-passage time (in steps) from x0 to `target`
+    under the calibrated OU. Paths that never reach target contribute `steps`.
+    Seed numpy (np.random.seed) before calling for reproducibility.
+    """
+    kappa = params.get("kappa", np.nan)
+    mu = params.get("mu", np.nan)
+    sigma = params.get("sigma", np.nan)
+    if not (np.isfinite(kappa) and kappa > 0 and np.isfinite(sigma) and sigma >= 0 and np.isfinite(mu)):
+        return np.nan
+    phi = np.exp(-kappa * dt)
+    s_step = sigma * np.sqrt(max(0.0, (1.0 - np.exp(-2.0 * kappa * dt)) / (2.0 * kappa)))
+    x = np.full(int(sims), float(x0))
+    hit = np.full(int(sims), float(steps))
+    done = np.zeros(int(sims), dtype=bool)
+    up = x0 <= target
+    for t in range(1, int(steps) + 1):
+        x = mu + phi * (x - mu) + s_step * np.random.standard_normal(int(sims))
+        newly = (~done) & ((x >= target) if up else (x <= target))
+        hit[newly] = t
+        done |= newly
+        if done.all():
+            break
+    return float(np.mean(hit))
