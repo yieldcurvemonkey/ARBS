@@ -54,6 +54,13 @@ class CurvePCAModel:
     mean: pd.Series
     loadings: pd.DataFrame
     eigenvalues: pd.Series
+    scales: Optional[pd.Series] = None  # per-column std for corr-PCA; None => ones (cov-PCA)
+
+    # ---------- internal ----------
+    def _scales_vec(self) -> pd.Series:
+        if self.scales is None:
+            return pd.Series(1.0, index=self.columns)
+        return self.scales.reindex(self.columns).fillna(1.0)
 
     # ---------- transforms ----------
 
@@ -68,8 +75,8 @@ class CurvePCAModel:
         Returns: Series of PC exposures (PC1, PC2, ...).
         """
         x = x.reindex(self.columns)
-        x_centered = x - self.mean
-        scores = x_centered.values @ self.loadings.values  # (K,) = (1xK)@(KxK)
+        x_std = (x - self.mean) / self._scales_vec()
+        scores = x_std.values @ self.loadings.values  # (K,) = (1xK)@(KxK)
         return pd.Series(scores, index=self.loadings.columns, name="pc_scores")
 
     def inverse_transform(self, scores: pd.Series) -> pd.Series:
@@ -77,7 +84,7 @@ class CurvePCAModel:
         Reconstruct approximate curve from PC scores.
         """
         scores = scores.reindex(self.loadings.columns)
-        x_rec = scores.values @ self.loadings.values.T + self.mean.values
+        x_rec = (scores.values @ self.loadings.values.T) * self._scales_vec().values + self.mean.values
         return pd.Series(x_rec, index=self.columns, name="reconstructed")
 
     # ---------- PCA-norm ----------
@@ -113,12 +120,38 @@ class CurvePCAModel:
                 raise ValueError(f"weights must have length {K}, got {w.shape[0]}")
         return float(np.sqrt(np.sum(w * scores**2)))
 
+    # ---------- reconstruction / residual ----------
+
+    def reconstruct(self, x: pd.Series, k: Optional[int] = None) -> pd.Series:
+        """k-factor reconstruction of a snapshot x (same space the model was fit on)."""
+        K = self.loadings.shape[1]
+        k = K if k is None else int(min(max(k, 1), K))
+        A = self.loadings.values[:, :k]  # (K x k)
+        sc = self._scales_vec().values
+        xv = x.reindex(self.columns).values
+        x_std = (xv - self.mean.values) / sc
+        proj = A @ (A.T @ x_std)
+        x_rec = proj * sc + self.mean.values
+        return pd.Series(x_rec, index=self.columns, name="reconstructed")
+
+    def residual(self, x: pd.Series, k: Optional[int] = None) -> pd.Series:
+        """x - reconstruct(x, k); >0 => actual above PCA fair value (cheap for yields)."""
+        xv = x.reindex(self.columns)
+        return xv - self.reconstruct(x, k=k)
+
+    def explained_variance(self) -> pd.Series:
+        ev = self.eigenvalues / self.eigenvalues.sum()
+        ev.name = "explained_variance_ratio"
+        return ev
+
 
 def fit_curve_pca_from_timeseries(
     df: pd.DataFrame,
     *,
     use_changes: bool = True,
     sort_by_tenor: bool = True,
+    matrix: str = "cov",
+    pin_signs: bool = False,
 ) -> tuple[CurvePCAModel, pd.DataFrame]:
     """
     Build a PCA model from your IRSwapsTB.get_timeseries DataFrame.
@@ -158,34 +191,41 @@ def fit_curve_pca_from_timeseries(
     else:
         X = df_ord.sort_index().dropna(how="any")
 
-    # --- 3) Demean (covariance PCA, no standardization) ---
+    # --- 3) Demean (and standardize if matrix='corr') ---
     mean_vec = X.mean(axis=0)
-    X_centered = X - mean_vec
+    if matrix == "corr":
+        scales = X.std(axis=0, ddof=1).replace(0, np.nan).fillna(1.0)
+    elif matrix == "cov":
+        scales = pd.Series(1.0, index=X.columns)
+    else:
+        raise ValueError("matrix must be 'cov' or 'corr'")
+    X_std = (X - mean_vec) / scales
 
     # --- 4) Covariance and eigen-decomposition ---
-    # Covariance matrix (K x K)
-    # Note: sample covariance = (X^T X) / (T-1)
-    X_mat = X_centered.values  # T x K
+    X_mat = X_std.values  # T x K
     T_obs, K = X_mat.shape
-
     cov = (X_mat.T @ X_mat) / (T_obs - 1)  # K x K
 
-    # Eigen-decomposition (symmetric -> eigh), ascending eigenvalues
+    # Eigen-decomposition (symmetric -> eigh), then sort descending
     evals, evecs = np.linalg.eigh(cov)
-
-    # Sort descending by eigenvalue
     idx = np.argsort(evals)[::-1]
     evals = evals[idx]
     evecs = evecs[:, idx]  # columns = PCs
 
-    pc_names = [f"PC{i+1}" for i in range(K)]
+    # Pin eigenvector signs so the largest-abs loading is positive (deterministic).
+    if pin_signs:
+        for j in range(evecs.shape[1]):
+            colj = evecs[:, j]
+            if colj[np.argmax(np.abs(colj))] < 0:
+                evecs[:, j] = -colj
 
+    pc_names = [f"PC{i+1}" for i in range(K)]
     loadings = pd.DataFrame(evecs, index=cols, columns=pc_names)
     eigenvalues = pd.Series(evals, index=pc_names, name="eigenvalue")
 
     # --- 5) PC scores for each date ---
     scores = X_mat @ evecs  # T x K
-    scores_df = pd.DataFrame(scores, index=X_centered.index, columns=pc_names)
+    scores_df = pd.DataFrame(scores, index=X_std.index, columns=pc_names)
 
     # --- 6) Wrap in model object ---
     model = CurvePCAModel(
@@ -193,6 +233,7 @@ def fit_curve_pca_from_timeseries(
         mean=mean_vec,
         loadings=loadings,
         eigenvalues=eigenvalues,
+        scales=scales,
     )
 
     return model, scores_df
