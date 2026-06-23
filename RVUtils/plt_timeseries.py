@@ -317,6 +317,9 @@ def make_secondary_axis_plot(*, ylabel_left=None, ylabel_right=None, title=None,
         roll = s.rolling(int(window))
         return (s - roll.mean()) / roll.std(ddof=1)
 
+    def _percentile(s, window=252):
+        return s.rolling(int(window)).rank(pct=True)
+
     def _hurst_exponent(s, max_lag=100):
         x = s.dropna().values
         if x.size < 20:
@@ -945,6 +948,66 @@ def make_secondary_axis_plot(*, ylabel_left=None, ylabel_right=None, title=None,
                         state["indicator_lines"].append(len(fig.data) - 1)
                         _remember_line_plotly(len(fig.data) - 1, lbl, y)
 
+                elif kind == "percentile":
+                    y = _percentile(s_proc, ind.get("window", 252))
+                    lbl = ind.get("label", f"Pctl({ind.get('window',252)})")
+                    if hide:
+                        _handle_series_hide(y, lbl)
+                        continue
+                    if state["engine"] == "matplotlib":
+                        (h,) = ax_ind.plot(y.index, y.values, color=style_color or _next_color(), label=lbl, **style)
+                        state["indicator_lines"].append(h)
+                        _remember_line_mpl(h, lbl, y)
+                    else:
+                        fig.add_trace(go.Scatter(x=y.index, y=y.values, name=lbl, mode="lines", line=dict(color=style_color or _next_color()), yaxis=ax_ind))
+                        state["indicator_lines"].append(len(fig.data) - 1)
+                        _remember_line_plotly(len(fig.data) - 1, lbl, y)
+
+                elif kind in ("fair_value", "residual"):
+                    fv = ind.get("series")
+                    if fv is None:
+                        continue
+                    fv = pd.Series(fv).dropna()
+                    lbl = ind.get("label", "Fair value" if kind == "fair_value" else "Residual")
+                    if hide:
+                        _handle_series_hide(fv, lbl)
+                        continue
+                    fv_style = dict(style)
+                    fv_style.setdefault("linestyle", "--")
+                    if state["engine"] == "matplotlib":
+                        ax_obj = target if kind == "fair_value" else ax_ind
+                        (h,) = ax_obj.plot(fv.index, fv.values, color=style_color or _next_color(), label=lbl, **fv_style)
+                        state["indicator_lines"].append(h)
+                        _remember_line_mpl(h, lbl, fv)
+                    else:
+                        yx = target if kind == "fair_value" else ax_ind
+                        dash = {"--": "dash", ":": "dot", "-.": "dashdot", "-": "solid"}.get(fv_style.get("linestyle", "--"), "dash")
+                        fig.add_trace(go.Scatter(x=fv.index, y=fv.values, name=lbl, mode="lines", line=dict(color=style_color or _next_color(), dash=dash), yaxis=yx))
+                        state["indicator_lines"].append(len(fig.data) - 1)
+                        _remember_line_plotly(len(fig.data) - 1, lbl, fv)
+
+                elif kind == "zbands":
+                    s_valid2 = s_proc.dropna()
+                    if len(s_valid2) == 0:
+                        continue
+                    mu = float(s_valid2.mean())
+                    sd = float(s_valid2.std(ddof=1))
+                    entry = float(ind.get("entry", 2.0))
+                    stop = float(ind.get("stop", 3.0))
+                    levels = {
+                        f"+{entry:g}σ": mu + entry * sd,
+                        f"-{entry:g}σ": mu - entry * sd,
+                        f"+{stop:g}σ": mu + stop * sd,
+                        f"-{stop:g}σ": mu - stop * sd,
+                    }
+                    if ind.get("center", True):
+                        levels["mean"] = mu
+                    for lbl_b, val in levels.items():
+                        if hide:
+                            _handle_scalar_hide(val, lbl_b)
+                            continue
+                        _add_hline(val, lbl_b, ax_ind if state["engine"] == "matplotlib" else None, {"linestyle": ":"})
+
                 elif kind == "last":
                     include_date = bool(ind.get("show_date", False))
                     date_only = bool(ind.get("show_date_only", False))
@@ -1279,6 +1342,7 @@ def make_secondary_axis_plot(*, ylabel_left=None, ylabel_right=None, title=None,
         "boll": _boll,
         "vol": _roll_vol,
         "z": _z,
+        "percentile": _percentile,
         "hurst": _hurst_exponent,
         "hurst_roll": _hurst_roll,
         "half_life": _ar1_halflife,
