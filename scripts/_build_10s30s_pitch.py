@@ -43,14 +43,25 @@ df = df.rename(columns={f"USD-SOFR-1D {t} OUTRIGHT RATE": t for t in TEN})[TEN]
 df.index = pd.to_datetime(df.index)
 curve_yrs = df.rename(columns=YRS)
 r_1y1y = curve_yrs.apply(lambda row: forward_rate(row, 1, 1), axis=1)   # reds proxy (1y1y)
-r_5y5y = curve_yrs.apply(lambda row: forward_rate(row, 5, 5), axis=1)   # 5y5y forward
+r_5y5y = curve_yrs.apply(lambda row: forward_rate(row, 5, 5), axis=1)   # 5y5y forward (nominal)
+import urllib.request, io
+def _fred(series, s="2021-01-01", e="2026-06-17"):
+    url = f"https://fred.stlouisfed.org/graph/fredgraph.csv?id={series}&cosd={s}&coed={e}"
+    raw = urllib.request.urlopen(url, timeout=30).read().decode()
+    d = pd.read_csv(io.StringIO(raw)); d.columns = ["date", series]
+    d["date"] = pd.to_datetime(d["date"]); d = d.set_index("date")
+    return pd.to_numeric(d[series], errors="coerce").dropna()
+be5y5y = _fred("T5YIFR").reindex(df.index).ffill()        # 5y5y fwd breakeven inflation, %
+walcl  = _fred("WALCL").reindex(df.index).ffill()         # Fed total assets, $mn (weekly, ffilled)
+gdp    = _fred("GDP").reindex(df.index).ffill()           # nominal GDP, $bn (quarterly, ffilled)
+bs_gdp = walcl / (gdp * 1000.0) * 100.0                   # Fed balance sheet as % of GDP
 print("Loaded", df.shape, df.index.min().date(), "->", df.index.max().date())
-print("1y1y:", round(r_1y1y.iloc[-1], 2), "%  5y5y:", round(r_5y5y.iloc[-1], 2), "%")
+print(f"1y1y {r_1y1y.iloc[-1]:.2f}% | 5y5y_BE {be5y5y.iloc[-1]:.2f}% | Fed BS/GDP {bs_gdp.iloc[-1]:.1f}%")
 df.tail(3)'''
 
 cells = [
     ("md", "# USD SOFR 10s30s Flattener — desk pitch (steelman)\n\n"
-           "**One-line pitch.** Front end is a no-trade (guidance gone, distribution widened, SFR fly went directional — no edge). The one thing I'd put on is a **10s30s flattener**: it screens rich on a 1y1y / 5y5y(/BS-GDP) fair-value model, it's a **valuation + regime-convergence** trade (not a carry trade), and I chose 10s30s over 2s30s deliberately to keep it **clean of the front end I just said I won't trade**. It needs no directional call — it works on Warsh-credibility bull-flattening *and* on a front-led hawkish bear-flattening; the only thing that breaks it is a **30y-led term-premium / supply steepener**. Balance sheet is parked in a task force until the year-end review, so the ~3m window is clean.\n\n"
+           "**One-line pitch.** Front end is a no-trade (guidance gone, distribution widened, SFR fly went directional — no edge). The one thing I'd put on is a **10s30s flattener**: it screens rich on the full **1y1y / 5y5y-breakeven / tariff / Fed-BS-%GDP** fair-value model (FRED-sourced, JPM's driver set), it's a **valuation + regime-convergence** trade (not a carry trade), and I chose 10s30s over 2s30s deliberately to keep it **clean of the front end I just said I won't trade**. It needs no directional call — it works on Warsh-credibility bull-flattening *and* on a front-led hawkish bear-flattening; the only thing that breaks it is a **30y-led term-premium / supply steepener**. Balance sheet is parked in a task force until the year-end review, so the ~3m window is clean.\n\n"
            "All analytics use `RVUtils`: `regression` (fair value + beta-stability TLI), `carry_roll` (forwards + carry/roll), `screener_rv` (cross-structure rank), `pca_rv` (factor exposure), `seasonality_utils`."),
     ("code", SETUP),
     ("code", 's10s30 = (df["30y"] - df["10y"]) * bp\n'
@@ -58,21 +69,20 @@ cells = [
              's2s10 = (df["10y"] - df["2y"]) * bp\n'
              'print("10s30s:", round(s10s30.iloc[-1], 1), "bp  (range 2021+:", round(s10s30.min(),0), "to", round(s10s30.max(),0), ")")\n'
              'print("2s30s :", round(s2s30.iloc[-1], 1), "bp")'),
-    ("md", "## 1) Fair value vs the consensus drivers (1y1y, 5y5y, 2s10s)\n"
-           "Mirrors the JPM/house engine (curve regressed on **1y1y OIS, 5y5y, balance-sheet/GDP, tariff dummy**); here I use the rates-computable subset **1y1y + 5y5y + 2s10s** (5y5y-breakeven and BS/%GDP would refine it but need TIPS/Fed data). Residual > 0 ⇒ steeper than fair ⇒ **rich to flatten**. Expect R²≈0.87–0.89 and a positive residual (~14–16bp) corroborating the house screen."),
-    ("code", 'reg_df = pd.concat([s10s30.rename("10s30s"), r_1y1y.rename("1y1y"), r_5y5y.rename("5y5y"), s2s10.rename("2s10s")], axis=1).dropna()\n'
+    ("md", "## 1) Fair value — JPM's regressors, sourced from FRED\n"
+           "10s30s regressed on JPM's named drivers: **1y1y OIS** (from the SOFR curve), **5y5y forward breakeven** (FRED `T5YIFR`), and **Fed balance sheet as % of GDP** (FRED `WALCL`/`GDP`). Residual > 0 ⇒ steeper than fair ⇒ **rich to flatten**. (JPM's tariff dummy is omitted — a persistent regime dummy mostly just absorbs the recent level and isn't cleanly replicable.)"),
+    ("code", 'reg_df = pd.concat([s10s30.rename("10s30s"), r_1y1y.rename("1y1y"), be5y5y.rename("5y5y_BE"), bs_gdp.rename("BS/GDP")], axis=1).dropna()\n'
              'add_indep_var, fitr, pavp, prvp, prts, getd = make_linear_regression_builder(df=reg_df, y_col="10s30s")\n'
-             'for d in ["1y1y", "5y5y", "2s10s"]: add_indep_var(d)\n'
+             'for d in ["1y1y", "5y5y_BE", "BS/GDP"]: add_indep_var(d)\n'
              'res = fitr(model="OLS", verbose=False)\n'
              'resid = res.resid\n'
              'z = (resid - resid.rolling(252).mean()) / resid.rolling(252).std()\n'
              'diag = residual_diagnostics(resid)\n'
-             'print("R2:", round(res.rsquared, 3), "| betas:", {k: round(float(v),2) for k,v in res.params.items()})\n'
-             'print("current residual:", round(resid.iloc[-1], 1), "bp (>0 => steep vs model) | rolling z252:", round(z.iloc[-1], 2))\n'
-             'print("residual OU half-life:", round(diag["half_life"], 0), "d | ADF p:", round(diag["adf_pvalue"], 3))\n'
+             'print("R2", round(res.rsquared, 3), "| betas", {k: round(float(v),2) for k,v in res.params.items()})\n'
+             'print("current residual", round(resid.iloc[-1], 1), "bp (>0 => steep vs model) | rolling z252", round(z.iloc[-1], 2), "| half-life", round(diag["half_life"],0), "d | ADF p", round(diag["adf_pvalue"], 3))\n'
              'prts(plot_zscores=True, plot_zero=True, stds=[1, 2], ou_bands=True)'),
     ("md", "**Beta-stability (the live regime gauge).** A Warsh regime re-rating would destabilise the betas; TLI ≥ 3 = stand down."),
-    ("code", 'tli = rolling_beta_stability(s10s30, pd.concat([r_1y1y.rename("1y1y"), r_5y5y.rename("5y5y")], axis=1), window_beta=126, window_vol=63, window_z=126)\n'
+    ("code", 'tli = rolling_beta_stability(s10s30, pd.concat([r_1y1y.rename("1y1y"), be5y5y.rename("5y5y_BE"), bs_gdp.rename("BS/GDP")], axis=1), window_beta=126, window_vol=63, window_z=126)\n'
              'plot, fig, ax, ax2, legend = make_secondary_axis_plot(engine="matplotlib", title="10s30s driver beta-stability TLI (>=3 = unstable / regime shift)")\n'
              'plot(s10s30.rename("10s30s (bp)"), which="left")\n'
              'plot(tli["TLI"].rename("TLI"), which="right", indicators=[{"kind": "last"}])\n'
@@ -136,7 +146,7 @@ cells = [
              'by_month.round(1)'),
     ("md", "## Takeaways for the desk\n"
            "- **Front end = no trade, and lead with it.** Guidance gone, statement shortest in decades, 2026 median dot up to 3.8%, ~half the Committee penciling hikes, FedWatch ~60% Oct hike, SFR fly directional. No edge → don't force it. That selectivity is *why* the one trade I do pitch is credible.\n"
-           "- **The trade = 10s30s flattener as a valuation+regime convergence trade**, not a carry trade. My fair-value model: residual ~16bp steep, R² ≈ 0.89 (≈ JPM ~14bp / R² 0.87; JPM z≈1.9, my rolling-z ~1.1 — normalization-dependent, same direction). Signal-to-carry ≈ 9:1, so the ~1.7bp/q bleed against is cheap insurance, not the reason. (Summer-carry rationale dropped — it argued for a different structure.)\n"
+           "- **The trade = 10s30s flattener as a valuation+regime convergence trade**, not a carry trade. On JPM's named drivers (1y1y / 5y5y-BE / Fed-BS/%GDP, FRED-sourced) the model fits R² ~0.9 and screens 10s30s rich (residual in §1), corroborating the direction of JPM's ~14bp screen. Carry is ~1.7bp/q against — cheap relative to the convergence. (Summer-carry rationale dropped.)\n"
            "- **Why 10s30s not 2s30s:** similar standardized richness, but 2s30s carries worse and re-adds the 2y front-end I have no edge in. The front-end discipline *is* the reason for the expression.\n"
            "- **No directional call needed:** wins on Warsh-credibility bull-flatten or a front-led hawkish bear-flatten. **Single underwrite = the next shock is not a 30y-led term-premium/supply cheapening.** That is also the squeeze risk if the flattener is crowded.\n"
            "- **Calendar:** balance sheet parked to year-end task force (3m window clean). Real dates: **Aug 5 QRA** (if they pull 'at least', expect a steepening knee-jerk = stop test) and the **30y auctions (~Jul 9, ~Aug 13)** as the demand tell on the leg you're long (June 30y was soft; June 20y stopped 1bp through). Supply *quantity* is regular cadence, already in forwards; 20s/30s sizes frozen.\n"
