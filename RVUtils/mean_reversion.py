@@ -248,3 +248,58 @@ def optimal_ou_thresholds(
         except ValueError:
             a_star = max(c / 2.0 + 0.5, 1.0)
         return (float(a_star), float(-a_star))
+
+
+# ============================================================================
+# OU S-score (Avellaneda-Lee, spec D)
+# ============================================================================
+
+def ou_sscore(series: pd.Series, window: int = None, demean: bool = False) -> pd.Series:
+    """Avellaneda-Lee S-score: s = (X - mu) / sigma_eq.
+
+    sigma_eq = sigma / sqrt(2*kappa) is the equilibrium standard deviation.
+    Full-sample if window is None; rolling if window is set.
+    """
+    y = pd.Series(series).dropna().astype(float)
+    out = pd.Series(np.nan, index=y.index, dtype=float, name="sscore")
+
+    if window is None:
+        params = calibrate_ou(y, demean=demean)
+        mu = params["mu"]
+        kappa = params["kappa"]
+        sigma = params["sigma"]
+        if np.isfinite(kappa) and kappa > 0 and np.isfinite(sigma) and sigma > 0:
+            sigma_eq = sigma / np.sqrt(2.0 * kappa)
+            out = (y - mu) / sigma_eq
+            out.name = "sscore"
+        return out
+
+    w = int(window)
+    for t in range(w, len(y) + 1):
+        chunk = y.iloc[t - w : t]
+        params = calibrate_ou(chunk, demean=demean)
+        mu = params["mu"]
+        kappa = params["kappa"]
+        sigma = params["sigma"]
+        if np.isfinite(kappa) and kappa > 0 and np.isfinite(sigma) and sigma > 0:
+            sigma_eq = sigma / np.sqrt(2.0 * kappa)
+            out.iloc[t - 1] = (y.iloc[t - 1] - mu) / sigma_eq
+    return out
+
+
+# ============================================================================
+# ADF gate (spec E)
+# ============================================================================
+
+def adf_gate(series: pd.Series, pval: float = 0.10, regression: str = "c") -> bool:
+    """ADF stationarity gate: True if ADF p-value < pval (series is stationary)."""
+    from statsmodels.tsa.stattools import adfuller
+
+    y = pd.Series(series).dropna().astype(float)
+    if len(y) < 10:
+        return False
+    try:
+        result = adfuller(y.values, regression=regression, autolag="AIC")
+        return bool(result[1] < pval)
+    except Exception:
+        return False

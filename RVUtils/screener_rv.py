@@ -36,6 +36,10 @@ def make_rv_screener(
     min_abs_z: float = 1.0,
     min_abs_carry_to_vol: float = 0.0,
     trading_days: int = 252,
+    adf_filter: bool = False,
+    cost_z: float = 0.0,
+    lambda_carry: float = 0.0,
+    rolldown_df: Optional[pd.DataFrame] = None,
 ):
     """Build a cross-structure RV screener over a panel of structure timeseries.
 
@@ -73,12 +77,25 @@ def make_rv_screener(
             carry = np.nan
         carry_to_vol = float(carry / vol) if (np.isfinite(carry) and np.isfinite(vol) and vol != 0) else np.nan
 
-        composite = _composite(z, carry_to_vol, percentile, hl)
+        rolldown_sigma = 0.0
+        if rolldown_df is not None and col in rolldown_df.columns:
+            rd = rolldown_df[col].dropna()
+            if len(rd) > 0 and np.isfinite(vol) and vol > 0:
+                rolldown_sigma = float(rd.iloc[-1]) / vol
+
+        if adf_filter:
+            from RVUtils.mean_reversion import adf_gate as _adf_gate
+            adf_pass = _adf_gate(s.tail(int(halflife_window)))
+        else:
+            adf_pass = True
+
+        composite = _composite(z, carry_to_vol, percentile, hl, rolldown_sigma)
         direction = "SELL" if (np.isfinite(z) and z > 0) else "BUY" if (np.isfinite(z) and z < 0) else "FLAT"
         filters = {
             "z_pass": (abs(z) >= min_abs_z) if np.isfinite(z) else False,
             "ctv_pass": (abs(carry_to_vol) >= min_abs_carry_to_vol) if np.isfinite(carry_to_vol) else (min_abs_carry_to_vol <= 0),
             "hl_pass": (0 < hl <= max_halflife) if np.isfinite(hl) else False,
+            "adf_pass": adf_pass,
         }
         actionable = bool(all(filters.values()))
 
@@ -92,16 +109,16 @@ def make_rv_screener(
             "carry": carry,
             "carry_to_vol": carry_to_vol,
             "half_life": hl,
+            "adf_pass": adf_pass,
             "composite": composite,
             "direction": direction,
             "actionable": actionable,
         }
 
-    def _composite(z, carry_to_vol, percentile, hl) -> float:
+    def _composite(z, carry_to_vol, percentile, hl, rolldown_sigma=0.0) -> float:
         if not np.isfinite(z):
             return np.nan
         z_capped = np.clip(z, -4, 4) / 4.0
-        # carry-to-vol aligned so that positive reinforces fading the z-dislocation
         if np.isfinite(carry_to_vol):
             rar_norm = np.clip(carry_to_vol * (-np.sign(z)), -3, 3) / 3.0
         else:
@@ -120,6 +137,11 @@ def make_rv_screener(
             + W["percentile"] * max(pctl_norm, 0.0)
             + W["half_life"] * max(hl_norm, 0.0)
         )
+        if cost_z > 0:
+            mag = max(mag - cost_z, 0.0)
+        if lambda_carry > 0 and np.isfinite(rolldown_sigma) and rolldown_sigma != 0:
+            direction = -np.sign(z)
+            mag = mag + lambda_carry * direction * rolldown_sigma
         return float(mag * np.sign(z))
 
     def build() -> pd.DataFrame:
