@@ -220,3 +220,94 @@ def make_pca_rv_builder(
     fit.state = state
     return (fit, fair_value, residual, fly_weights, curve_weights,
             directionality, risk_buckets, factor_corr_check, get_model)
+
+
+# ============================================================================
+# Rolling PCA residual + eigenvector continuity (v2, spec A)
+# ============================================================================
+
+def align_eigenvectors(V_new: np.ndarray, V_prev: np.ndarray, threshold: float = 0.0) -> np.ndarray:
+    """Flip sign of each column of V_new where cos(v_new, v_prev) < threshold.
+
+    Ensures eigenvector continuity across rolling windows where the sign is
+    arbitrary from the eigen-decomposition.
+    """
+    V = V_new.copy()
+    for j in range(V.shape[1]):
+        dot = float(V[:, j] @ V_prev[:, j])
+        norm_new = float(np.linalg.norm(V[:, j]))
+        norm_prev = float(np.linalg.norm(V_prev[:, j]))
+        denom = norm_new * norm_prev
+        cos_sim = dot / denom if denom > 0 else 0.0
+        if cos_sim < threshold:
+            V[:, j] = -V[:, j]
+    return V
+
+
+def rolling_residual(
+    df: pd.DataFrame,
+    structure,
+    weights=None,
+    window: int = 261,
+    k: int = 3,
+    sign_align: bool = True,
+    on: str = "levels",
+    matrix: str = "cov",
+) -> pd.Series:
+    """Rolling PCA residual: D_t = S_t - Ŝ_t using trailing-window PCA.
+
+    Re-fits PCA every step on df.iloc[t-window:t], reconstructs the structure
+    with k factors, and takes the difference. Eigenvectors are sign-aligned
+    across windows when sign_align=True.
+
+    Returns a Series in input units (same as df columns).
+    """
+    from RVUtils.df_based_pca_risk_model import fit_curve_pca_from_timeseries, CurvePCAModel
+
+    data = df.sort_index().dropna(how="any")
+    cols = list(data.columns)
+    n = len(data)
+    window = int(window)
+    k = int(min(k, len(cols)))
+
+    if isinstance(structure, str):
+        legs, wmap = [structure], {structure: 1.0}
+    else:
+        legs = list(structure)
+        if weights is None:
+            raise ValueError("Provide weights for a multi-leg structure.")
+        wmap = dict(weights)
+
+    residuals = pd.Series(index=data.index, dtype=float, name="rolling_residual")
+    prev_loadings = None
+
+    for t in range(window, n + 1):
+        window_df = data.iloc[t - window : t]
+
+        model, _ = fit_curve_pca_from_timeseries(
+            window_df,
+            use_changes=(on == "changes"),
+            sort_by_tenor=False,
+            matrix=matrix,
+            pin_signs=True,
+        )
+
+        if sign_align and prev_loadings is not None:
+            V_new = model.loadings.values
+            V_aligned = align_eigenvectors(V_new, prev_loadings, threshold=0.0)
+            model = CurvePCAModel(
+                columns=model.columns,
+                mean=model.mean,
+                loadings=pd.DataFrame(V_aligned, index=model.loadings.index, columns=model.loadings.columns),
+                eigenvalues=model.eigenvalues,
+                scales=model.scales,
+            )
+        prev_loadings = model.loadings.values.copy()
+
+        row = data.iloc[t - 1]
+        rec = model.reconstruct(row, k=k)
+        actual_s = sum(wmap[c] * row[c] for c in legs)
+        fitted_s = sum(wmap[c] * rec[c] for c in legs)
+        residuals.iloc[t - 1] = actual_s - fitted_s
+
+    return residuals.dropna()
