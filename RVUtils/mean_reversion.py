@@ -175,3 +175,76 @@ def first_passage_time(x0: float, target: float, params: dict, *, sims: int = 20
         if done.all():
             break
     return float(np.mean(hit))
+
+
+# ============================================================================
+# Optimal OU entry/exit bands (Zeng-Lee 2014, spec B)
+# ============================================================================
+
+def optimal_ou_thresholds(
+    kappa: float,
+    sigma: float,
+    cost: float,
+    case: str = "symmetric",
+    n_terms: int = 50,
+) -> tuple:
+    """Optimal OU entry/exit thresholds maximizing expected P&L per unit time.
+
+    For the standardized OU (sigma_eq = sigma / sqrt(2*kappa)), expected passage
+    times use the truncated series. Returns (a_star, b_star) in sigma_eq units.
+    """
+    from scipy.optimize import brentq
+    from scipy.special import gamma as gammafn
+    import math
+
+    if case not in ("symmetric", "long_only"):
+        raise ValueError("case must be 'symmetric' or 'long_only'")
+
+    c = float(cost)
+    sqrt2 = np.sqrt(2.0)
+
+    def _series_sum(a_val):
+        total = 0.0
+        sa = sqrt2 * a_val
+        for n in range(n_terms):
+            m = 2 * n + 1
+            term = sa ** m / (math.factorial(m) * gammafn(m / 2.0))
+            total += term
+            if abs(term) < 1e-15:
+                break
+        return total
+
+    def _series_sum_deriv(a_val):
+        total = 0.0
+        sa = sqrt2 * a_val
+        for n in range(n_terms):
+            m = 2 * n
+            term = sa ** m / (math.factorial(m) * gammafn((m + 1) / 2.0))
+            total += term
+            if abs(term) < 1e-15:
+                break
+        return sqrt2 * total
+
+    if case == "long_only":
+        def foc(a_val):
+            S = _series_sum(a_val)
+            Sp = _series_sum_deriv(a_val)
+            return 0.5 * S - (a_val - c) * (sqrt2 / 2.0) * Sp
+
+        try:
+            a_star = brentq(foc, max(c + 0.01, 0.01), 20.0)
+        except ValueError:
+            a_star = max(c + 0.5, 1.0)
+        return (float(a_star), 0.0)
+
+    else:
+        def foc(a_val):
+            S = _series_sum(a_val)
+            Sp = _series_sum_deriv(a_val)
+            return 0.5 * S - (a_val - c / 2.0) * (sqrt2 / 2.0) * Sp
+
+        try:
+            a_star = brentq(foc, max(c / 2.0 + 0.01, 0.01), 20.0)
+        except ValueError:
+            a_star = max(c / 2.0 + 0.5, 1.0)
+        return (float(a_star), float(-a_star))
