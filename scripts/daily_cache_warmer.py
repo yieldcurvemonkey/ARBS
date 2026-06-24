@@ -243,6 +243,21 @@ def warm_stirf_cme_session(start, end):
     return f"STIRF backfill: {len(bdates)} days x {len(curves)} curves"
 
 
+def warm_stirfo_eod(start, end):
+    """Job 6: SFR options EOD — option snapshots + SABR smiles.
+
+    Warms option_snapshot (delta-addressed, 20 symbols/contract) and
+    sabr_smile (SABR beta=0.5 calibration) for the first 12 SFR quarterly
+    contracts on each business day in the range.
+    """
+    from scripts.eod_stirfo_service import run_backfill
+
+    all_stats = run_backfill(start, end, n_contracts=12)
+    total_snap = sum(s["snapshot_ok"] for s in all_stats)
+    total_smile = sum(s["smile_ok"] for s in all_stats)
+    return f"STIRFO EOD: {len(all_stats)} days, {total_snap} snapshots, {total_smile} smiles"
+
+
 def warm_ustf_invoice_caches(start, end):
     """Job 5: UST futures delivery basket + pricer caches.
 
@@ -308,6 +323,7 @@ JOBS = [
     ("FRB FedInvest EOD", warm_frb_fedinvest_eod),
     ("STIRF CME Session", warm_stirf_cme_session),
     ("UST Futures Invoice Caches", warm_ustf_invoice_caches),
+    ("STIRFO SFR Options EOD", warm_stirfo_eod),
 ]
 
 

@@ -75,7 +75,7 @@ class DiskCacheMixin:
                 cache = diskcache.FanoutCache(
                     directory=directory,
                     shards=8,
-                    size_limit=2**32,  # 4 GB
+                    size_limit=2**33,  # 8 GB
                     eviction_policy="least-recently-used",
                 )
                 cls._CACHE_REGISTRY[directory] = cache

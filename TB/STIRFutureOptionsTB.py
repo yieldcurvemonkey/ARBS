@@ -207,7 +207,10 @@ class STIRFutureOptionsTB(BaseTimeseriesTB):
                     req["use_ql_calculator"] = True 
                     if ignore_cache:
                         req["force_refresh"] = True
-                    result_by_ref_group[(rp, group_key)] = self.mdp.get_pricer(req)
+                    try:
+                        result_by_ref_group[(rp, group_key)] = self.mdp.get_pricer(req)
+                    except Exception:
+                        pass
 
         return {
             "result_by_ref_group": result_by_ref_group,

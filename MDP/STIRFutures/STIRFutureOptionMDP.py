@@ -2531,6 +2531,89 @@ class STIRFutureOptionMDP(MarketDataProvider[InstrumentLike], LayeredCacheMixin)
     def _pricer_volume(cls, pricer: QLSTIRFutureOptionPricer) -> Optional[float]:
         return cls._pricer_meta_number(pricer, ("Volume", "volume"))
 
+    def _resolve_delta_from_sabr_cache(
+        self,
+        *,
+        contract: str,
+        as_of: datetime.date,
+        target_delta: float,
+        right: str,
+        forward: float,
+    ) -> Optional[QLSTIRFutureOptionPricer]:
+        """Resolve a delta-addressed option from a cached SABR smile.
+
+        Returns a synthetic QLSTIRFutureOptionPricer if a calibrated SABR
+        smile is available in the cache for this contract/date, or None to
+        fall through to the chain-fetching path.
+        """
+        try:
+            smile = None
+            # Try the get_data sabr_smile cache first (keyed by contract + as_of)
+            smile_key = self._build_get_data_cache_key("sabr_smile", {
+                "endpoint": "sabr_smile",
+                "symbol": contract,
+                "as_of": as_of,
+            })
+            if smile_key:
+                cached = self._threadsafe_cache_get(smile_key)
+                hit = self._deserialize_get_data_result(cached)
+                if hit is not None:
+                    smiles = hit.get("sabr_smile") or []
+                    smile = smiles[0] if smiles else None
+            if smile is None:
+                return None
+
+            p = smile.params
+            if p.time_to_expiry <= 0.0:
+                return None
+
+            atm_vol = _sabr_normal_vol(
+                strike=p.forward_price, forward=p.forward_price,
+                time_to_expiry=p.time_to_expiry,
+                alpha=p.alpha, beta=p.beta, rho=p.rho, nu=p.nu,
+            )
+            strike = _normal_delta_to_strike(
+                delta_abs=target_delta / 100.0,
+                vol_normal=atm_vol,
+                forward=p.forward_price,
+                time_to_expiry=p.time_to_expiry,
+                right=right,
+            )
+            vol_at_strike = _sabr_normal_vol(
+                strike=strike, forward=p.forward_price,
+                time_to_expiry=p.time_to_expiry,
+                alpha=p.alpha, beta=p.beta, rho=p.rho, nu=p.nu,
+            )
+            if not math.isfinite(vol_at_strike) or vol_at_strike <= 0.0:
+                return None
+
+            price = _bachelier_price(right, strike, p.forward_price, vol_at_strike, p.time_to_expiry, 1.0)
+            delta_val, gamma_val, vega_val, theta_val = _shared_bachelier_greeks_fd(
+                right=right, strike=strike, forward=p.forward_price,
+                vol_normal=vol_at_strike, tte=p.time_to_expiry, discount=1.0,
+            )
+
+            underlying = _option_contract_to_underlying_contract(contract)
+            strike4 = _format_strike4(strike, contract=contract)
+            symbol = f"{contract}|{strike4}{right}"
+            quote_ts = _NY_TZ.localize(datetime.datetime.combine(as_of, datetime.time(17, 0)))
+
+            return QLSTIRFutureOptionPricer(
+                symbol=symbol, right=right,
+                underlying_symbol=underlying,
+                strike=strike, quote_timestamp=quote_ts,
+                expiry_date=p.expiry_date,
+                market_price=price, model_price=price,
+                iv_normal=vol_at_strike,
+                delta=delta_val, gamma=gamma_val,
+                vega=vega_val, theta=theta_val,
+                forward=p.forward_price, discount=1.0,
+                meta_data={"source": "SABR_CACHE", "sabr_alpha": p.alpha,
+                           "sabr_rho": p.rho, "sabr_nu": p.nu},
+            )
+        except Exception:
+            return None
+
     def _build_sabr_smile_jpm_leg_specs(
         self,
         *,
@@ -4255,6 +4338,10 @@ class STIRFutureOptionMDP(MarketDataProvider[InstrumentLike], LayeredCacheMixin)
             else:
                 as_of_for_symbols = _as_date(ts)
                 cache_req["timestamp"] = as_of_for_symbols
+            for _drop in ("bulk_timeseries", "use_ql_calculator", "window_start",
+                          "window_end", "endpoint", "window_minutes",
+                          "delta_candidate_half_width", "delta_vendor_candidate_half_width"):
+                cache_req.pop(_drop, None)
 
         if ep == "option_timeseries":
             if "start" in cache_req:
@@ -6455,6 +6542,42 @@ class STIRFutureOptionMDP(MarketDataProvider[InstrumentLike], LayeredCacheMixin)
                     show_tqdm=show_tqdm,
                 )
 
+            # SABR fast-path: resolve delta specs from cached SABR smiles
+            # before falling through to the expensive chain-fetching path.
+            resolved_delta_sabr: "OrderedDict[str, str]" = OrderedDict()
+            if delta_specs:
+                sabr_resolved_raws: List[str] = []
+                for raw, spec in delta_specs.items():
+                    right = str(spec.get("right", "")).upper()
+                    target_delta = _to_float(spec.get("delta"))
+                    if right not in {"C", "P"} or target_delta is None:
+                        continue
+                    contract = str(spec["contract"])
+                    underlying_contract = _option_contract_to_underlying_contract(contract)
+                    underlying_bcontract = _contract_to_barchart_contract(underlying_contract)
+                    fut_df = underlying_data.get(underlying_bcontract)
+                    if fut_df is None or fut_df.empty:
+                        continue
+                    target_ts_local = pd.Timestamp(_NY_TZ.localize(datetime.datetime.combine(target_date, datetime.time(17, 0))))
+                    pos = _asof_index_position(fut_df.index, target_ts_local)
+                    if pos is None:
+                        continue
+                    forward = _extract_row_price(fut_df.iloc[pos].to_dict(), price_mode=price_mode)
+                    if forward is None or forward <= 0.0:
+                        continue
+                    pr = self._resolve_delta_from_sabr_cache(
+                        contract=contract, as_of=target_date,
+                        target_delta=float(target_delta), right=right,
+                        forward=float(forward),
+                    )
+                    if pr is not None:
+                        resolved_leg = pr.symbol()
+                        resolved_delta_sabr[raw] = resolved_leg
+                        cp_pricers[resolved_leg] = pr
+                        sabr_resolved_raws.append(raw)
+                for raw in sabr_resolved_raws:
+                    del delta_specs[raw]
+
             delta_meta: "OrderedDict[str, Dict[str, Any]]" = OrderedDict()
             delta_candidate_symbols: "OrderedDict[str, List[str]]" = OrderedDict()
 
@@ -6799,7 +6922,9 @@ class STIRFutureOptionMDP(MarketDataProvider[InstrumentLike], LayeredCacheMixin)
 
             requested = OrderedDict()
             for raw in requested_specs.keys():
-                if raw in resolved_non_delta:
+                if raw in resolved_delta_sabr:
+                    requested[raw] = resolved_delta_sabr[raw]
+                elif raw in resolved_non_delta:
                     requested[raw] = resolved_non_delta[raw]
                 elif raw in resolved_delta:
                     requested[raw] = resolved_delta[raw]
