@@ -311,3 +311,26 @@ def rolling_residual(
         residuals.iloc[t - 1] = actual_s - fitted_s
 
     return residuals.dropna()
+
+
+# ============================================================================
+# Eigenportfolio returns (spec F)
+# ============================================================================
+
+def eigenportfolio_returns(
+    loadings: pd.DataFrame,
+    asset_returns: pd.DataFrame,
+    asset_vols: pd.Series,
+) -> pd.DataFrame:
+    """Eigenportfolio (factor-mimicking portfolio) return series.
+
+    F_j(t) = sum_i (v_{ji} / sigma_i) * R_i(t)
+    where v_{ji} is the loading of asset i on PC j, sigma_i is asset i's vol.
+    """
+    assets = loadings.index
+    pcs = loadings.columns
+    R = asset_returns[assets].values
+    V = asset_vols.reindex(assets).values
+    W = loadings.values / V[:, None]
+    F = R @ W
+    return pd.DataFrame(F, index=asset_returns.index, columns=pcs)
