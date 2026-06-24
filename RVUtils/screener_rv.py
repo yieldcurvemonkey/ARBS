@@ -177,3 +177,100 @@ def make_rv_screener(
 
     build.state = state
     return (build, rank, to_dataframe, rv_dislocation_index, get_data)
+
+
+# ============================================================================
+# Catching the Butterfly pipeline — capstone screener (spec J)
+# ============================================================================
+
+def make_pca_fly_rv_screener(
+    df: pd.DataFrame,
+    structures: dict,
+    weights_map: dict,
+    *,
+    window: int = 261,
+    k: int = 3,
+    carry_df: Optional[pd.DataFrame] = None,
+    rolldown_df: Optional[pd.DataFrame] = None,
+    cost_z: float = 0.0,
+    lambda_carry: float = 0.5,
+    adf_pval: float = 0.10,
+    **screener_kw,
+) -> pd.DataFrame:
+    """Catching the Butterfly pipeline: rolling PCA residual -> ADF gate ->
+    OU calibration -> cost-aware composite screen.
+
+    structures: dict mapping name -> tuple of leg column names.
+    weights_map: dict mapping name -> {leg: weight} dict.
+    Returns a ranked DataFrame of structures with RV metrics.
+    """
+    from RVUtils.pca_rv import rolling_residual
+    from RVUtils.mean_reversion import calibrate_ou, adf_gate
+
+    rows = []
+    for name, legs in structures.items():
+        wmap = weights_map[name]
+        try:
+            resid = rolling_residual(df, list(legs), weights=wmap, window=window, k=k)
+        except Exception:
+            continue
+        if resid.notna().sum() < 20:
+            continue
+
+        adf_pass = adf_gate(resid, pval=adf_pval)
+        ou = calibrate_ou(resid)
+        hl = ou["half_life"]
+
+        roll_z = resid.rolling(65)
+        z_ser = (resid - roll_z.mean()) / roll_z.std(ddof=1)
+        z = float(z_ser.iloc[-1]) if z_ser.notna().sum() > 0 else np.nan
+
+        vol = float(resid.diff().rolling(20).std(ddof=1).iloc[-1] * np.sqrt(252)) if len(resid) > 20 else np.nan
+
+        carry_val = np.nan
+        if carry_df is not None and name in carry_df.columns:
+            cs = carry_df[name].dropna()
+            carry_val = float(cs.iloc[-1]) if len(cs) else np.nan
+
+        rolldown_sigma = 0.0
+        if rolldown_df is not None and name in rolldown_df.columns:
+            rd = rolldown_df[name].dropna()
+            if len(rd) > 0 and np.isfinite(vol) and vol > 0:
+                rolldown_sigma = float(rd.iloc[-1]) / vol
+
+        pctl = resid.rolling(65).rank(pct=True)
+        percentile = float(pctl.iloc[-1]) if pctl.notna().sum() > 0 else np.nan
+
+        composite = np.nan
+        if np.isfinite(z):
+            z_capped = np.clip(z, -4, 4) / 4.0
+            mag = 0.40 * abs(z_capped)
+            if np.isfinite(hl) and hl > 0:
+                mag += 0.20 * max(np.clip(1.0 - hl / 90.0, -1, 1), 0.0)
+            if cost_z > 0:
+                mag = max(mag - cost_z, 0.0)
+            if lambda_carry > 0 and np.isfinite(rolldown_sigma) and rolldown_sigma != 0:
+                direction = -np.sign(z)
+                mag += lambda_carry * direction * rolldown_sigma
+            composite = float(mag * np.sign(z))
+
+        direction = "SELL" if (np.isfinite(z) and z > 0) else "BUY" if (np.isfinite(z) and z < 0) else "FLAT"
+
+        rows.append({
+            "structure": name,
+            "level": float(resid.iloc[-1]),
+            "zscore": z,
+            "percentile": percentile,
+            "vol": vol,
+            "half_life": hl,
+            "adf_pass": adf_pass,
+            "carry": carry_val,
+            "composite": composite,
+            "direction": direction,
+        })
+
+    result = pd.DataFrame(rows)
+    if len(result):
+        result = result.set_index("structure")
+        result = result.reindex(result["composite"].abs().sort_values(ascending=False, na_position="last").index)
+    return result
