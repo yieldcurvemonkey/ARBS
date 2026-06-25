@@ -1405,7 +1405,11 @@ def ols_segment(
     """
     results = []
     for start, end in periods:
-        mask = (y.index >= pd.Timestamp(start)) & (y.index <= pd.Timestamp(end))
+        s, e = pd.Timestamp(start), pd.Timestamp(end)
+        idx = y.index
+        if not isinstance(idx, pd.DatetimeIndex):
+            idx = pd.DatetimeIndex(idx)
+        mask = (idx >= s) & (idx <= e)
         yp = y.loc[mask].dropna()
         Xp = X.loc[yp.index].dropna()
         common = yp.index.intersection(Xp.index)
