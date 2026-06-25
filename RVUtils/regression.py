@@ -1387,3 +1387,39 @@ def level_curve_neutral_fly(
     z = (residual - zr.mean()) / zr.std(ddof=1)
     z.name = "neutral_residual_z"
     return {"residual": residual.dropna(), "zscore": z, "betas": betas}
+
+
+# ============================================================================
+# Sub-period OLS segmentation (spec I)
+# ============================================================================
+
+def ols_segment(
+    y: pd.Series,
+    X: pd.DataFrame,
+    periods: list,
+) -> list:
+    """Per-period OLS coefficients + adj-R² for beta stability across regimes.
+
+    periods: list of (start, end) tuples (inclusive). Each period is fit independently.
+    Returns list of dicts with {period, betas (Series), intercept, adj_r2, nobs}.
+    """
+    results = []
+    for start, end in periods:
+        mask = (y.index >= pd.Timestamp(start)) & (y.index <= pd.Timestamp(end))
+        yp = y.loc[mask].dropna()
+        Xp = X.loc[yp.index].dropna()
+        common = yp.index.intersection(Xp.index)
+        yp, Xp = yp.loc[common], Xp.loc[common]
+
+        Xc = sm.add_constant(Xp)
+        res = sm.OLS(yp, Xc).fit()
+
+        betas = res.params.drop("const", errors="ignore")
+        results.append({
+            "period": (start, end),
+            "betas": betas,
+            "intercept": float(res.params.get("const", 0.0)),
+            "adj_r2": float(res.rsquared_adj),
+            "nobs": int(res.nobs),
+        })
+    return results

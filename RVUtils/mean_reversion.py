@@ -175,3 +175,131 @@ def first_passage_time(x0: float, target: float, params: dict, *, sims: int = 20
         if done.all():
             break
     return float(np.mean(hit))
+
+
+# ============================================================================
+# Optimal OU entry/exit bands (Zeng-Lee 2014, spec B)
+# ============================================================================
+
+def optimal_ou_thresholds(
+    kappa: float,
+    sigma: float,
+    cost: float,
+    case: str = "symmetric",
+    n_terms: int = 50,
+) -> tuple:
+    """Optimal OU entry/exit thresholds maximizing expected P&L per unit time.
+
+    For the standardized OU (sigma_eq = sigma / sqrt(2*kappa)), expected passage
+    times use the truncated series. Returns (a_star, b_star) in sigma_eq units.
+    """
+    from scipy.optimize import brentq
+    from scipy.special import gamma as gammafn
+    import math
+
+    if case not in ("symmetric", "long_only"):
+        raise ValueError("case must be 'symmetric' or 'long_only'")
+
+    c = float(cost)
+    sqrt2 = np.sqrt(2.0)
+
+    def _series_sum(a_val):
+        total = 0.0
+        sa = sqrt2 * a_val
+        for n in range(n_terms):
+            m = 2 * n + 1
+            term = sa ** m / (math.factorial(m) * gammafn(m / 2.0))
+            total += term
+            if abs(term) < 1e-15:
+                break
+        return total
+
+    def _series_sum_deriv(a_val):
+        total = 0.0
+        sa = sqrt2 * a_val
+        for n in range(n_terms):
+            m = 2 * n
+            term = sa ** m / (math.factorial(m) * gammafn((m + 1) / 2.0))
+            total += term
+            if abs(term) < 1e-15:
+                break
+        return sqrt2 * total
+
+    if case == "long_only":
+        def foc(a_val):
+            S = _series_sum(a_val)
+            Sp = _series_sum_deriv(a_val)
+            return 0.5 * S - (a_val - c) * (sqrt2 / 2.0) * Sp
+
+        try:
+            a_star = brentq(foc, max(c + 0.01, 0.01), 20.0)
+        except ValueError:
+            a_star = max(c + 0.5, 1.0)
+        return (float(a_star), 0.0)
+
+    else:
+        def foc(a_val):
+            S = _series_sum(a_val)
+            Sp = _series_sum_deriv(a_val)
+            return 0.5 * S - (a_val - c / 2.0) * (sqrt2 / 2.0) * Sp
+
+        try:
+            a_star = brentq(foc, max(c / 2.0 + 0.01, 0.01), 20.0)
+        except ValueError:
+            a_star = max(c / 2.0 + 0.5, 1.0)
+        return (float(a_star), float(-a_star))
+
+
+# ============================================================================
+# OU S-score (Avellaneda-Lee, spec D)
+# ============================================================================
+
+def ou_sscore(series: pd.Series, window: int = None, demean: bool = False) -> pd.Series:
+    """Avellaneda-Lee S-score: s = (X - mu) / sigma_eq.
+
+    sigma_eq = sigma / sqrt(2*kappa) is the equilibrium standard deviation.
+    Full-sample if window is None; rolling if window is set.
+    """
+    y = pd.Series(series).dropna().astype(float)
+    out = pd.Series(np.nan, index=y.index, dtype=float, name="sscore")
+
+    if window is None:
+        params = calibrate_ou(y, demean=demean)
+        mu = params["mu"]
+        kappa = params["kappa"]
+        sigma = params["sigma"]
+        if np.isfinite(kappa) and kappa > 0 and np.isfinite(sigma) and sigma > 0:
+            sigma_eq = sigma / np.sqrt(2.0 * kappa)
+            out = (y - mu) / sigma_eq
+            out.name = "sscore"
+        return out
+
+    w = int(window)
+    for t in range(w, len(y) + 1):
+        chunk = y.iloc[t - w : t]
+        params = calibrate_ou(chunk, demean=demean)
+        mu = params["mu"]
+        kappa = params["kappa"]
+        sigma = params["sigma"]
+        if np.isfinite(kappa) and kappa > 0 and np.isfinite(sigma) and sigma > 0:
+            sigma_eq = sigma / np.sqrt(2.0 * kappa)
+            out.iloc[t - 1] = (y.iloc[t - 1] - mu) / sigma_eq
+    return out
+
+
+# ============================================================================
+# ADF gate (spec E)
+# ============================================================================
+
+def adf_gate(series: pd.Series, pval: float = 0.10, regression: str = "c") -> bool:
+    """ADF stationarity gate: True if ADF p-value < pval (series is stationary)."""
+    from statsmodels.tsa.stattools import adfuller
+
+    y = pd.Series(series).dropna().astype(float)
+    if len(y) < 10:
+        return False
+    try:
+        result = adfuller(y.values, regression=regression, autolag="AIC")
+        return bool(result[1] < pval)
+    except Exception:
+        return False
