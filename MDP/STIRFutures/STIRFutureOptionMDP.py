@@ -6542,8 +6542,10 @@ class STIRFutureOptionMDP(MarketDataProvider[InstrumentLike], LayeredCacheMixin)
                     show_tqdm=show_tqdm,
                 )
 
-            # SABR fast-path: resolve delta specs from cached SABR smiles
-            # before falling through to the expensive chain-fetching path.
+            # SABR fast-path: resolve delta specs from cached SABR smiles.
+            # Unresolved delta specs are dropped (NaN) unless force_refresh
+            # is set, which explicitly requests a Barchart chain fetch.
+            force_refresh = bool(request.get("force_refresh", False))
             resolved_delta_sabr: "OrderedDict[str, str]" = OrderedDict()
             if delta_specs:
                 sabr_resolved_raws: List[str] = []
@@ -6577,6 +6579,8 @@ class STIRFutureOptionMDP(MarketDataProvider[InstrumentLike], LayeredCacheMixin)
                         sabr_resolved_raws.append(raw)
                 for raw in sabr_resolved_raws:
                     del delta_specs[raw]
+                if not force_refresh:
+                    delta_specs.clear()
 
             delta_meta: "OrderedDict[str, Dict[str, Any]]" = OrderedDict()
             delta_candidate_symbols: "OrderedDict[str, List[str]]" = OrderedDict()
