@@ -244,12 +244,33 @@ duplicate trade_ids within a group.
   **85 passed, 0 failed** after all audit fixes (43 PTP-module tests — 31
   shipped + 12 audit-added — plus the full existing detector regression
   set).
-- **Full `tests/` suite:** not a usable gate today. `pytest tests/ -x`
-  dies at *collection* on 7 orphaned test files importing deleted modules
-  (below), and with those ignored the remaining suite ran past 70 minutes
-  of CPU during the audit without completing (long/network-bound tests).
-  Cleaning up the orphans and marking the slow tests is recommended
-  follow-up, unrelated to this feature.
+- **Full `tests/` suite** (7 orphaned files ignored): **2,285 passed,
+  111 failed, 23 skipped in 1h32m.** Every failure was triaged as
+  pre-existing — none reproduce against code the feature or the audit
+  fixes touch, and each failing cluster git-blames to changes weeks
+  older than the feature:
+  - `test_swaption_packages` (34), `test_stir_future_option_mdp_barchart`
+    (14), barchart/MDP/cache mocks (~20) — unrelated subsystems.
+  - `test_spreadover_tight_gate` (12), `test_spreadover_package_type`
+    (4), `test_mms_imm_to_imm_exclusion` (4) — synthetic fixtures hit
+    `'numpy.float64' object has no attribute 'abs'` inside
+    `detect_spreadovers` (line last changed 2026-05-22; tests date to
+    April). The live path works — the June-25 backfill paired 58
+    SPREADOVER trades on real data.
+  - `test_event_type_enrichment` / `test_lifecycle_cross_day` label
+    assertions — stale since the 2026-05-11 tape_tags refactor moved
+    execution flags out of `tape_label`.
+  - `test_ingest_usdswaps_tape_writepath` (1) — same scalar-vs-Series
+    fixture problem in `_gap_aware_sort_key` (line from 2026-05-30
+    "dump" commit), not in the PTP aggregation added by the feature.
+  - `test_trade_quality` (2) — `flag_off_market_trades` assumes an
+    `effective_date` column the fixture lacks (2026-05-11 commit).
+
+  Also: `pytest tests/ -x` dies at *collection* on 7 orphaned test files
+  importing deleted modules (below), and the suite takes 1.5h wall —
+  cleaning up the orphans, fixing the ~25 stale-fixture failures, and
+  marking slow tests is recommended follow-up, unrelated to this
+  feature.
 - **Pre-existing, unrelated to this feature** (verified via `git log` that
   all predate the audited range):
   - 7 test files fail at *collection* on imports of deleted modules
