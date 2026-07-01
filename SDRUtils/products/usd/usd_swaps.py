@@ -1650,6 +1650,16 @@ class USD_SwapProduct(USDProductBase):
                 )
 
                 def _run_all_detectors(df):
+                    from SDRUtils.packages.ptp_grouper import group_by_ptp, classify_ptp_groups
+                    from SDRUtils.packages.opa_sign_solver import solve_all_opa_signs
+
+                    ptp_df, non_ptp_df = group_by_ptp(df, time_tolerance_seconds=5)
+
+                    if not ptp_df.empty:
+                        ptp_df = classify_ptp_groups(ptp_df)
+
+                    df = non_ptp_df
+
                     if detect_invoice:
                         df = detect_invoice_swaps(df)
                         df = detect_invoice_packages(df)
@@ -1675,6 +1685,9 @@ class USD_SwapProduct(USDProductBase):
                         df = detect_sub_package_curve_fly(
                             df, detector_kwargs=_snake_detector_cols
                         )
+
+                    df = pd.concat([ptp_df, df], ignore_index=True)
+                    df = solve_all_opa_signs(df)
                     return df
 
                 _t_pkg = _time.monotonic()
