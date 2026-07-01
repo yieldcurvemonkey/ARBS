@@ -38,6 +38,8 @@ export function buildInitialFilters(): DataTableFilterMeta {
     total_notional: numeric(),
     weighted_fixed_rate: numeric(),
     other_lvl_reported: text(),
+    dealer_spread_bps: numeric(),
+    opa_sign_confidence: text(),
   } as DataTableFilterMeta
 }
 

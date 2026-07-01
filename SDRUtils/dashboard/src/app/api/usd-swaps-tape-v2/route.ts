@@ -31,6 +31,23 @@ export async function GET(req: Request) {
     const result = await query<UsdSwapTapeRow>(sql, params)
     const rows = result.rows.slice(0, parsed.value.limit)
     const hasMore = result.rows.length > parsed.value.limit
+    // pg returns NUMERIC as strings; the PTP/OPA columns are consumed as
+    // numbers (client-side sort on dealer_spread_bps sorts lexicographically
+    // otherwise). Coerce here so the runtime matches UsdSwapTapeRow.
+    for (const r of rows as Array<Record<string, unknown>>) {
+      for (const k of [
+        'ptp_group_size',
+        'opa_signed_net',
+        'opa_ptp_residual',
+        'dealer_spread_est',
+        'dealer_spread_bps',
+      ]) {
+        if (r[k] != null) {
+          const n = Number(r[k])
+          r[k] = Number.isFinite(n) ? n : null
+        }
+      }
+    }
     // The pg driver hands back `timestamp with time zone` as a JS Date, so
     // naive `String(date)` yields the JS toString form
     // (e.g. "Thu Apr 09 2026 16:08:23 GMT-0400 (Eastern Daylight Time)"),

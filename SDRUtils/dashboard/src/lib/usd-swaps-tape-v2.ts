@@ -62,6 +62,17 @@ const COLUMNS = [
   'd.cluster_id',
   'd.cluster_size',
   'd.tape_label',
+  // PTP package-detection / OPA sign-solver columns. resolveDisplayView
+  // intersects this list with the live view's columns, so these only
+  // project once the schema migration has run.
+  'd.ptp_group_id',
+  'd.ptp_group_size',
+  'd.opa_signed_net',
+  'd.opa_ptp_residual',
+  'd.opa_sign_confidence',
+  'd.dealer_spread_est',
+  'd.dealer_spread_bps',
+  'd.ptp_sub_structures',
   'd.package_metrics',
   'd.legs_json',
   'd.manual_package_id',

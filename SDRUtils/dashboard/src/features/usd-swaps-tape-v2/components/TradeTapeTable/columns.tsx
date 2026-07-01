@@ -43,6 +43,14 @@ const CONFIDENCE_COLORS: Record<string, string> = {
   UNRESOLVED: 'bg-zinc-500/20 text-zinc-400',
 }
 
+// pg returns NUMERIC columns as strings; coerce like the format helpers do
+// instead of trusting the row type's `number | null`.
+function spreadBpsDisplay(v: number | string | null | undefined): string | null {
+  if (v == null) return null
+  const n = Number(v)
+  return Number.isFinite(n) ? `${n.toFixed(2)}bp` : null
+}
+
 // Phase 4 (Clarus design-doc §3.1 / §5.1): `pa_dv01` is the
 // package-adjusted DV01 — Σ|risk| / leg-count denominator. Toggling
 // rotates dv01 → pa_dv01 → notional → dv01 so traders can sanity-check
@@ -481,9 +489,9 @@ export function getColumns(
                 >
                   {row.opa_sign_confidence}
                 </span>
-                {row.dealer_spread_bps != null && (
+                {spreadBpsDisplay(row.dealer_spread_bps) != null && (
                   <span className="text-zinc-500">
-                    {row.dealer_spread_bps.toFixed(2)}bp
+                    {spreadBpsDisplay(row.dealer_spread_bps)}
                   </span>
                 )}
               </div>
@@ -547,14 +555,38 @@ export function getColumns(
         summaryFor('dealer_spread_bps', config.activeFilters),
       )}
       body={(row: UsdSwapTapeRow) => {
-        const v = row.dealer_spread_bps
+        const label = spreadBpsDisplay(row.dealer_spread_bps)
         return (
           <span className="block text-right font-mono text-[12px] text-slate-300">
-            {v != null ? `${v.toFixed(2)}bp` : EMPTY_VALUE}
+            {label ?? EMPTY_VALUE}
           </span>
         )
       }}
       style={{ width: 82 }}
+    />,
+    <Column
+      key="opa_conf"
+      field="opa_sign_confidence"
+      filterField="opa_sign_confidence"
+      sortable
+      filter
+      {...compactFilterMenuProps}
+      header={renderHeader(
+        'OPA Conf',
+        summaryFor('opa_sign_confidence', config.activeFilters),
+      )}
+      body={(row: UsdSwapTapeRow) =>
+        row.opa_sign_confidence ? (
+          <span
+            className={`px-1.5 py-0.5 rounded text-[10px] font-semibold ${CONFIDENCE_COLORS[row.opa_sign_confidence] ?? 'bg-zinc-500/20 text-zinc-400'}`}
+          >
+            {row.opa_sign_confidence}
+          </span>
+        ) : (
+          <span className="text-slate-600 text-[10px]">·</span>
+        )
+      }
+      style={{ width: 84 }}
     />,
   )
   return cols
