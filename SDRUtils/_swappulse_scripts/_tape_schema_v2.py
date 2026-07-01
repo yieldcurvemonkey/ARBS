@@ -321,10 +321,27 @@ ALTER TABLE {PACKAGES_TABLE_V2} ADD COLUMN IF NOT EXISTS package_adjusted_dv01 N
 ALTER TABLE {PACKAGES_TABLE_V2} ADD COLUMN IF NOT EXISTS normalized_tape_label TEXT;
 ALTER TABLE {PACKAGES_TABLE_V2} ADD COLUMN IF NOT EXISTS tape_tags TEXT;
 
+-- PTP/OPA package-level columns (package-detection enhancement)
+ALTER TABLE {PACKAGES_TABLE_V2} ADD COLUMN IF NOT EXISTS ptp_group_id TEXT;
+ALTER TABLE {PACKAGES_TABLE_V2} ADD COLUMN IF NOT EXISTS ptp_group_size INTEGER;
+ALTER TABLE {PACKAGES_TABLE_V2} ADD COLUMN IF NOT EXISTS opa_signed_net NUMERIC;
+ALTER TABLE {PACKAGES_TABLE_V2} ADD COLUMN IF NOT EXISTS opa_ptp_residual NUMERIC;
+ALTER TABLE {PACKAGES_TABLE_V2} ADD COLUMN IF NOT EXISTS opa_sign_confidence TEXT;
+ALTER TABLE {PACKAGES_TABLE_V2} ADD COLUMN IF NOT EXISTS opa_constrained_net NUMERIC;
+ALTER TABLE {PACKAGES_TABLE_V2} ADD COLUMN IF NOT EXISTS opa_constrained_residual NUMERIC;
+ALTER TABLE {PACKAGES_TABLE_V2} ADD COLUMN IF NOT EXISTS dealer_spread_est NUMERIC;
+ALTER TABLE {PACKAGES_TABLE_V2} ADD COLUMN IF NOT EXISTS dealer_spread_bps NUMERIC;
+ALTER TABLE {PACKAGES_TABLE_V2} ADD COLUMN IF NOT EXISTS ptp_sub_structures JSONB;
+
 ALTER TABLE {LEGS_TABLE_V2} ADD COLUMN IF NOT EXISTS basis_type TEXT;
 ALTER TABLE {LEGS_TABLE_V2} ADD COLUMN IF NOT EXISTS basis_spread_bps NUMERIC;
 ALTER TABLE {LEGS_TABLE_V2} ADD COLUMN IF NOT EXISTS leg1_rate_index TEXT;
 ALTER TABLE {LEGS_TABLE_V2} ADD COLUMN IF NOT EXISTS leg2_rate_index TEXT;
+
+-- PTP/OPA per-leg columns (package-detection enhancement)
+ALTER TABLE {LEGS_TABLE_V2} ADD COLUMN IF NOT EXISTS ptp_group_id TEXT;
+ALTER TABLE {LEGS_TABLE_V2} ADD COLUMN IF NOT EXISTS opa_sign SMALLINT;
+ALTER TABLE {LEGS_TABLE_V2} ADD COLUMN IF NOT EXISTS opa_signed_amount NUMERIC;
 
 -- Phase 7: lifecycle partial-unwind + seasoned-trade columns
 ALTER TABLE {LEGS_TABLE_V2} ADD COLUMN IF NOT EXISTS lc_was_partially_terminated BOOLEAN;
@@ -413,6 +430,14 @@ SELECT
   p.package_adjusted_dv01,
   p.normalized_tape_label,
   p.tape_tags,
+  p.ptp_group_id,
+  p.ptp_group_size,
+  p.opa_signed_net,
+  p.opa_ptp_residual,
+  p.opa_sign_confidence,
+  p.dealer_spread_est,
+  p.dealer_spread_bps,
+  p.ptp_sub_structures,
   p.package_metrics,
   l.legs_json,
   ml.manual_package_id,

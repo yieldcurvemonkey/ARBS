@@ -170,6 +170,10 @@ LEG_COLUMNS: tuple[str, ...] = (
     "basis_spread_bps",
     "leg1_rate_index",
     "leg2_rate_index",
+    # PTP/OPA per-leg columns — package-detection enhancement
+    "ptp_group_id",
+    "opa_sign",
+    "opa_signed_amount",
 )
 
 
@@ -241,12 +245,23 @@ PACKAGE_COLUMNS: tuple[str, ...] = (
     "package_adjusted_dv01",
     "normalized_tape_label",
     "tape_tags",
+    # PTP/OPA package-level columns — package-detection enhancement
+    "ptp_group_id",
+    "ptp_group_size",
+    "opa_signed_net",
+    "opa_ptp_residual",
+    "opa_sign_confidence",
+    "opa_constrained_net",
+    "opa_constrained_residual",
+    "dealer_spread_est",
+    "dealer_spread_bps",
+    "ptp_sub_structures",
     "package_metrics",
 )
 
 
 JSON_LEG_COLS = {"enrichment_metrics"}
-JSON_PKG_COLS = {"lifecycle_mix", "package_metrics", "confidence_signals"}
+JSON_PKG_COLS = {"lifecycle_mix", "package_metrics", "confidence_signals", "ptp_sub_structures"}
 
 
 # ---------------------------------------------------------------------------
@@ -397,8 +412,8 @@ def _execute_ddl_bundle(engine: Engine, ddl: str, lock_timeout_ms: int = 3_000) 
 _schema_ensured: set[str] = set()
 
 _LATEST_MIGRATION_COLS = [
-    ("arbs_usd_swap_tape_packages_v2", "tape_tags"),
-    ("arbs_usd_swap_tape_legs_v2", "tape_tags"),
+    ("arbs_usd_swap_tape_packages_v2", "ptp_sub_structures"),
+    ("arbs_usd_swap_tape_legs_v2", "opa_signed_amount"),
 ]
 
 
@@ -813,9 +828,14 @@ def build_leg_rows(tape: pd.DataFrame, *, as_of_date: str) -> list[dict]:
             "off_market_reason", "normalized_tape_label", "tape_tags",
             # Basis swap fields
             "basis_type", "leg1_rate_index", "leg2_rate_index",
+            # PTP/OPA
+            "ptp_group_id",
         ):
             rec[text_col] = _str_or_none(rec.get(text_col))
         rec["basis_spread_bps"] = _num_or_none(rec.get("basis_spread_bps"))
+        # PTP/OPA per-leg coercions
+        rec["opa_sign"] = _int_or_none(rec.get("opa_sign"))
+        rec["opa_signed_amount"] = _num_or_none(rec.get("opa_signed_amount"))
         rec["execution_timestamp"] = _to_db_value(rec.get("execution_timestamp"))
         rec["original_execution_timestamp"] = _to_db_value(
             rec.get("original_execution_timestamp")
@@ -1256,6 +1276,38 @@ def build_package_rows(tape: pd.DataFrame, *, as_of_date: str) -> list[dict]:
                 else None
             ),
             **_compute_confidence_columns(g, package_type),
+            # PTP/OPA package-level aggregations (identical across legs in a group)
+            "ptp_group_id": _str_or_none(
+                g["ptp_group_id"].iloc[0] if "ptp_group_id" in g.columns else None
+            ),
+            "ptp_group_size": _int_or_none(
+                g["ptp_group_size"].iloc[0] if "ptp_group_size" in g.columns else None
+            ),
+            "opa_signed_net": _num_or_none(
+                g["opa_signed_net"].iloc[0] if "opa_signed_net" in g.columns else None
+            ),
+            "opa_ptp_residual": _num_or_none(
+                g["opa_ptp_residual"].iloc[0] if "opa_ptp_residual" in g.columns else None
+            ),
+            "opa_sign_confidence": _str_or_none(
+                g["opa_sign_confidence"].iloc[0] if "opa_sign_confidence" in g.columns else None
+            ),
+            "opa_constrained_net": _num_or_none(
+                g["opa_constrained_net"].iloc[0] if "opa_constrained_net" in g.columns else None
+            ),
+            "opa_constrained_residual": _num_or_none(
+                g["opa_constrained_residual"].iloc[0] if "opa_constrained_residual" in g.columns else None
+            ),
+            "dealer_spread_est": _num_or_none(
+                g["dealer_spread_est"].iloc[0] if "dealer_spread_est" in g.columns else None
+            ),
+            "dealer_spread_bps": _num_or_none(
+                g["dealer_spread_bps"].iloc[0] if "dealer_spread_bps" in g.columns else None
+            ),
+            "ptp_sub_structures": (
+                _to_jsonable(g["ptp_sub_structures"].iloc[0])
+                if "ptp_sub_structures" in g.columns else None
+            ),
             "package_metrics": {
                 "execution_span_seconds": float(
                     (execution_end - execution_start).total_seconds()
