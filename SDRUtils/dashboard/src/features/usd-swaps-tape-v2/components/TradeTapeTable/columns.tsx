@@ -44,11 +44,14 @@ const CONFIDENCE_COLORS: Record<string, string> = {
 }
 
 // pg returns NUMERIC columns as strings; coerce like the format helpers do
-// instead of trusting the row type's `number | null`.
+// instead of trusting the row type's `number | null`. True-bp values can be
+// tiny (a near-exact tieout is ~0.0003bp) — show 4 decimals below 0.01bp.
 function spreadBpsDisplay(v: number | string | null | undefined): string | null {
   if (v == null) return null
   const n = Number(v)
-  return Number.isFinite(n) ? `${n.toFixed(2)}bp` : null
+  if (!Number.isFinite(n)) return null
+  const digits = Math.abs(n) >= 0.01 ? 2 : 4
+  return `${n.toFixed(digits)}bp`
 }
 
 // Phase 4 (Clarus design-doc §3.1 / §5.1): `pa_dv01` is the

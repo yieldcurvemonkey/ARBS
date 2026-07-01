@@ -206,3 +206,24 @@ class TestSolveOpaSigns:
         elapsed = time.perf_counter() - t0
         assert len(result["signs"]) == 20
         assert elapsed < 1.0, f"N=20 brute force took {elapsed:.2f}s"
+
+    def test_dealer_spread_bps_is_true_basis_points(self):
+        """residual($) / total_dv01($/bp) is already bp — no ×100.
+        Audit finding: shipped value was bp×100 (a % of DV01)."""
+        import pandas as pd
+
+        from SDRUtils.packages.opa_sign_solver import solve_all_opa_signs
+
+        df = pd.DataFrame({
+            "trade_id": ["A", "B"],
+            "ptp_group_id": ["G", "G"],
+            "other_payment_amount": [600.0, 500.0],
+            "package_transaction_price": [90.0, 90.0],
+            "package_transaction_price_notation": [1.0, 1.0],
+            "fixed_rate": [0.04, 0.04],
+            "tenor_years": [2.0, 10.0],
+            "estimated_pv01": [40.0, 60.0],
+        })
+        out = solve_all_opa_signs(df)
+        # best net = ±100, residual = 10; total_dv01 = 100 → 0.1 bp
+        assert abs(out["dealer_spread_bps"].iloc[0] - 0.1) < 1e-9

@@ -317,8 +317,11 @@ def solve_all_opa_signs(
             out.at[ix, "opa_signed_amount"] = result["signs"][i] * opas[i]
 
         total_dv01 = numeric_like(grp[pv01_col]).fillna(0).sum() if pv01_col in grp.columns else 0.0
+        # residual is $, total_dv01 is $/bp — the ratio is already basis
+        # points. The spec's original ×100 made this a % of DV01 while
+        # labeling it bp (2026-07-01 audit finding, PM decided: true bp).
         spread_bps = (
-            (result["residual"] / total_dv01 * 100)
+            (result["residual"] / total_dv01)
             if total_dv01 > 0 else None
         )
 
