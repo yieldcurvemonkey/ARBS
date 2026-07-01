@@ -389,6 +389,17 @@ function formatMatchModeLabel(mode?: string): string {
   }
 }
 
+// OPA sign-confidence filter definition — surfaced in the filter overlay
+// and consumed by the SQL pushdown allowlist in route.logic.ts.
+export const OPA_CONFIDENCE_FILTER = {
+  id: 'opa_sign_confidence',
+  label: 'OPA Confidence',
+  options: ['EXACT', 'TIGHT', 'LOOSE', 'UNRESOLVED'] as const,
+  type: 'multiSelect' as const,
+} as const
+
+export type OpaConfidence = typeof OPA_CONFIDENCE_FILTER.options[number]
+
 export function getFilterDisplayLabel(filterMeta: any): string {
   if (!filterMeta) return ''
   const constraints: ColumnFilterConstraint[] = Array.isArray(

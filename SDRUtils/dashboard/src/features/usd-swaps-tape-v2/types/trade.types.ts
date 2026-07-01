@@ -133,6 +133,9 @@ export type UsdSwapTapeLeg = SofrSwapTapeLeg & {
   basis_spread_bps?: number | null
   leg1_rate_index?: string | null
   leg2_rate_index?: string | null
+  // PTP package-detection sign assignments (per-leg).
+  opa_sign?: number | null        // +1 or -1
+  opa_signed_amount?: number | null
 }
 
 export type UsdSwapTapeRow = SofrSwapTapeRow & {
@@ -186,6 +189,15 @@ export type UsdSwapTapeRow = SofrSwapTapeRow & {
   contributes_to_pnl_any?: boolean | null
   on_p43_any?: boolean | null
   state_machine_violation_any?: boolean | null
+  // PTP package-detection columns (Tasks 1-5 additions to display view).
+  ptp_group_id?: string | null
+  ptp_group_size?: number | null
+  opa_signed_net?: number | null
+  opa_ptp_residual?: number | null
+  opa_sign_confidence?: 'EXACT' | 'TIGHT' | 'LOOSE' | 'UNRESOLVED' | string | null
+  dealer_spread_est?: number | null
+  dealer_spread_bps?: number | null
+  ptp_sub_structures?: Array<{ type: string; legs: string[]; belly_dv01?: number }> | null
   legs_json: UsdSwapTapeLeg[]
 }
 

@@ -563,13 +563,24 @@ export function LegsSubTable({ row }: { row: UsdSwapTapeRow }): JSX.Element {
                   {formatRate(leg.fixed_rate ?? null)}
                 </td>
                 <td className="whitespace-nowrap px-2 py-1 text-right font-mono">
-                  {leg.other_payment_amount != null
-                    ? `${formatNotional(leg.other_payment_amount, { compact: true })}${
-                        leg.other_payment_currency && leg.other_payment_currency !== 'USD'
-                          ? ` ${leg.other_payment_currency}`
-                          : ''
-                      }`
-                    : EMPTY_VALUE}
+                  {(() => {
+                    const sign = leg.opa_sign
+                    const opa = leg.other_payment_amount
+                    const ccy = leg.other_payment_currency
+                    const ccySuffix = ccy && ccy !== 'USD' ? ` ${ccy}` : ''
+                    if (sign != null && opa != null) {
+                      const color = sign > 0 ? 'text-emerald-400' : 'text-red-400'
+                      const prefix = sign > 0 ? '+' : '−'
+                      return (
+                        <span className={color}>
+                          {prefix}{formatNotional(Math.abs(sign * opa), { compact: true })}{ccySuffix}
+                        </span>
+                      )
+                    }
+                    return opa != null
+                      ? `${formatNotional(opa, { compact: true })}${ccySuffix}`
+                      : EMPTY_VALUE
+                  })()}
                 </td>
                 <td className="whitespace-nowrap px-2 py-1 text-right font-mono">
                   {(() => {

@@ -35,6 +35,14 @@ import { isManualPackage } from '@/lib/manual-links-ui/predicates'
 
 export { rowClassName } from './columns.helpers'
 
+// OPA sign-confidence badge color map — mirrors the Python enum EXACT > TIGHT > LOOSE > UNRESOLVED.
+const CONFIDENCE_COLORS: Record<string, string> = {
+  EXACT: 'bg-emerald-500/20 text-emerald-400',
+  TIGHT: 'bg-emerald-500/10 text-emerald-300',
+  LOOSE: 'bg-amber-500/20 text-amber-400',
+  UNRESOLVED: 'bg-zinc-500/20 text-zinc-400',
+}
+
 // Phase 4 (Clarus design-doc §3.1 / §5.1): `pa_dv01` is the
 // package-adjusted DV01 — Σ|risk| / leg-count denominator. Toggling
 // rotates dv01 → pa_dv01 → notional → dv01 so traders can sanity-check
@@ -466,6 +474,20 @@ export function getColumns(
             <span>{lines.opaLine}</span>
             <span>{lines.ptpLine}</span>
             <span>{lines.ptsLine}</span>
+            {row.opa_sign_confidence && (
+              <div className="mt-0.5 flex items-center gap-1 font-normal normal-case text-xs">
+                <span
+                  className={`px-1.5 py-0.5 rounded ${CONFIDENCE_COLORS[row.opa_sign_confidence] ?? 'bg-zinc-500/20 text-zinc-400'}`}
+                >
+                  {row.opa_sign_confidence}
+                </span>
+                {row.dealer_spread_bps != null && (
+                  <span className="text-zinc-500">
+                    {row.dealer_spread_bps.toFixed(2)}bp
+                  </span>
+                )}
+              </div>
+            )}
           </div>
         )
       }}
@@ -511,6 +533,28 @@ export function getColumns(
         )
       }}
       style={{ width: 160 }}
+    />,
+    <Column
+      key="dealer_spread"
+      field="dealer_spread_bps"
+      filterField="dealer_spread_bps"
+      sortable
+      filter
+      dataType="numeric"
+      {...compactFilterMenuProps}
+      header={renderHeader(
+        'Spread (bp)',
+        summaryFor('dealer_spread_bps', config.activeFilters),
+      )}
+      body={(row: UsdSwapTapeRow) => {
+        const v = row.dealer_spread_bps
+        return (
+          <span className="block text-right font-mono text-[12px] text-slate-300">
+            {v != null ? `${v.toFixed(2)}bp` : EMPTY_VALUE}
+          </span>
+        )
+      }}
+      style={{ width: 82 }}
     />,
   )
   return cols
