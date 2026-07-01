@@ -3,7 +3,7 @@
 import pandas as pd
 import pytest
 
-from SDRUtils.packages.ptp_grouper import group_by_ptp
+from SDRUtils.packages.ptp_grouper import classify_ptp_groups, group_by_ptp
 
 
 def _make_legs(overrides_list: list[dict]) -> pd.DataFrame:
@@ -130,3 +130,89 @@ class TestGroupByPtp:
         assert len(ptp_df) == 12
         assert ptp_df["ptp_group_id"].nunique() == 1
         assert ptp_df["ptp_group_size"].iloc[0] == 12
+
+
+def _grouped_legs(overrides_list, ptp_group_id="PTP_T000"):
+    """Build a PTP-grouped test DataFrame."""
+    df = _make_legs(overrides_list)
+    df["ptp_group_id"] = ptp_group_id
+    df["ptp_group_size"] = len(df)
+    return df
+
+
+class TestClassifyPtpGroups:
+    def test_two_leg_curve(self):
+        df = _grouped_legs([
+            {"tenor_years": 2.0, "estimated_pv01": 10000.0},
+            {"tenor_years": 10.0, "estimated_pv01": 10000.0},
+        ])
+        out = classify_ptp_groups(df)
+        assert (out["package_type"] == "CURVE").all()
+        assert out["package_id"].iloc[0] == "PTP_T000"
+        assert len(out["package_legs"].iloc[0]) == 2
+
+    def test_three_leg_fly(self):
+        df = _grouped_legs([
+            {"tenor_years": 2.0, "estimated_pv01": 5000.0},
+            {"tenor_years": 5.0, "estimated_pv01": 10000.0},
+            {"tenor_years": 10.0, "estimated_pv01": 5000.0},
+        ])
+        out = classify_ptp_groups(df)
+        assert (out["package_type"] == "FLY").all()
+
+    def test_three_leg_unbalanced_is_pkg3(self):
+        df = _grouped_legs([
+            {"tenor_years": 2.0, "estimated_pv01": 5000.0},
+            {"tenor_years": 5.0, "estimated_pv01": 5000.0},
+            {"tenor_years": 10.0, "estimated_pv01": 5000.0},
+        ])
+        out = classify_ptp_groups(df)
+        assert (out["package_type"] == "PKG-3").all()
+
+    def test_eight_leg_ladder_is_pkg8(self):
+        tenors = [2, 3, 5, 7, 10, 15, 20, 30]
+        df = _grouped_legs([
+            {"tenor_years": float(t), "estimated_pv01": 1000.0 * t}
+            for t in tenors
+        ])
+        out = classify_ptp_groups(df)
+        assert (out["package_type"] == "PKG-8").all()
+        assert out["package_id"].iloc[0] == "PTP_T000"
+        assert len(out["package_legs"].iloc[0]) == 8
+        assert out["ptp_sub_structures"].iloc[0] == []
+
+    def test_twelve_leg_multi_fly_has_sub_annotations(self):
+        legs = []
+        for risk_scale in [1.0, 1.8]:
+            for rate_offset in [0.0, 0.001]:
+                legs.extend([
+                    {"tenor_years": 2.0, "estimated_pv01": 5000 * risk_scale,
+                     "fixed_rate": 0.0397 + rate_offset},
+                    {"tenor_years": 5.0, "estimated_pv01": 10000 * risk_scale,
+                     "fixed_rate": 0.0387 + rate_offset},
+                    {"tenor_years": 10.0, "estimated_pv01": 5000 * risk_scale,
+                     "fixed_rate": 0.0398 + rate_offset},
+                ])
+        df = _grouped_legs(legs)
+        out = classify_ptp_groups(df)
+        assert (out["package_type"] == "PKG-12").all()
+        subs = out["ptp_sub_structures"].iloc[0]
+        assert isinstance(subs, list)
+        assert len(subs) == 4
+        assert all(s["type"] == "FLY" for s in subs)
+
+    def test_multiple_groups_classified_independently(self):
+        g1 = _grouped_legs([
+            {"tenor_years": 2.0, "estimated_pv01": 5000.0},
+            {"tenor_years": 5.0, "estimated_pv01": 10000.0},
+            {"tenor_years": 10.0, "estimated_pv01": 5000.0},
+        ], ptp_group_id="PTP_A")
+        g2 = _grouped_legs([
+            {"tenor_years": 2.0, "estimated_pv01": 1000.0, "package_transaction_price": 50000},
+            {"tenor_years": 30.0, "estimated_pv01": 1000.0, "package_transaction_price": 50000},
+        ], ptp_group_id="PTP_B")
+        df = pd.concat([g1, g2], ignore_index=True)
+        out = classify_ptp_groups(df)
+        types = out.groupby("ptp_group_id")["package_type"].first()
+        assert types["PTP_A"] == "FLY"
+        assert types["PTP_B"] == "CURVE"
