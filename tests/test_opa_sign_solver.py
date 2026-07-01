@@ -87,3 +87,122 @@ class TestSolveOpaSigns:
         result = solve_opa_signs(opas, ptp_value=ptp)
         assert result["signs"] is not None
         assert len(result["signs"]) == 26
+
+    def test_solve_all_handles_raw_string_columns(self):
+        """Live-path regression: OPA / PTP arrive as raw DTCC strings with
+        thousands separators at detection time."""
+        import pandas as pd
+
+        from SDRUtils.packages.opa_sign_solver import solve_all_opa_signs
+
+        df = pd.DataFrame({
+            "trade_id": ["A", "B"],
+            "ptp_group_id": ["G", "G"],
+            "other_payment_amount": ["1,600", "1,500"],
+            "package_transaction_price": ["88,100", "88,100"],
+            "package_transaction_price_notation": [1.0, 1.0],
+            "fixed_rate": [0.04, 0.04],
+            "tenor_years": [2.0, 10.0],
+            "estimated_pv01": [1000.0, 1000.0],
+        })
+        out = solve_all_opa_signs(df)
+        # net = ±3,100 best vs PTP 88,100 -> residual 85,000 -> UNRESOLVED,
+        # but the parse must produce real numbers, not NaN->0 everywhere.
+        assert out["opa_signed_amount"].abs().sum() == 3100.0
+        assert out["opa_ptp_residual"].iloc[0] == 85000.0
+
+    def test_non_monetary_ptp_notation_is_unresolved(self):
+        """Price-notation PTPs (notation != 1) must not produce fake
+        EXACT tieouts — the dollar solve is meaningless there."""
+        import pandas as pd
+
+        from SDRUtils.packages.opa_sign_solver import solve_all_opa_signs
+
+        df = pd.DataFrame({
+            "trade_id": ["A", "B"],
+            "ptp_group_id": ["G", "G"],
+            "other_payment_amount": [None, None],
+            "package_transaction_price": ["9.9999999999", "9.9999999999"],
+            "package_transaction_price_notation": [3.0, 3.0],
+            "fixed_rate": [0.04, 0.04],
+            "tenor_years": [2.0, 10.0],
+            "estimated_pv01": [1000.0, 1000.0],
+        })
+        out = solve_all_opa_signs(df)
+        assert (out["opa_sign_confidence"] == "UNRESOLVED").all()
+        assert out["opa_sign"].isna().all()
+
+    def test_vectorized_brute_matches_reference(self):
+        """Audit-added: chunked-numpy brute force must be exact — compare
+        residual/net against a naive python enumeration on random inputs."""
+        import random
+
+        from SDRUtils.packages.opa_sign_solver import _solve_brute
+
+        def _reference(opa, ptp):
+            best = (float("inf"), float("inf"), 0, 0.0)
+            for mask in range(1 << len(opa)):
+                net = sum(v if (mask >> i) & 1 else -v for i, v in enumerate(opa))
+                residual = min(abs(net - ptp), abs(net + ptp))
+                direct = abs(net - ptp)
+                if residual < best[0] - 1e-9 or (
+                    abs(residual - best[0]) <= 1e-9 and direct < best[1]
+                ):
+                    best = (residual, direct, mask, net)
+            return best
+
+        random.seed(7)
+        for n in (1, 2, 5, 9, 12):
+            opas = [random.uniform(100, 1_000_000) for _ in range(n)]
+            ptp = random.uniform(1_000, 500_000)
+            signs, net, residual = _solve_brute(opas, ptp)
+            ref_residual, _, _, ref_net = _reference(opas, ptp)
+            assert abs(residual - ref_residual) < 1e-6
+            assert abs(net - ref_net) < 1e-6
+            assert abs(sum(s * v for s, v in zip(signs, opas)) - net) < 1e-6
+
+    def test_mitm_matches_full_sweep(self):
+        """Audit-added: for N>16 the solver uses meet-in-the-middle; it must
+        agree exactly with a full vectorized 2^N sweep, including the
+        complement-direction tiebreak (prefer net closer to +PTP)."""
+        import numpy as np
+
+        from SDRUtils.packages.opa_sign_solver import _select_best, _solve_brute
+
+        def full_sweep(opa, ptp):
+            n = len(opa)
+            arr = np.asarray(opa, dtype=np.float64)
+            masks = np.arange(1 << n, dtype=np.uint32)
+            plus = np.zeros(masks.shape[0], dtype=np.float64)
+            for i in range(n):
+                plus += arr[i] * ((masks >> np.uint32(i)) & np.uint32(1))
+            nets = 2.0 * plus - float(arr.sum())
+            direct = np.abs(nets - ptp)
+            residual = np.minimum(direct, np.abs(nets + ptp))
+            tol = 1e-9 + 1e-13 * (float(np.abs(arr).sum()) + abs(ptp))
+            return _select_best(residual, direct, masks, nets, tol)
+
+        rng = np.random.default_rng(11)
+        for _ in range(30):
+            n = int(rng.integers(17, 21))
+            opas = rng.uniform(1e2, 1e6, n).tolist()
+            ptp = float(rng.uniform(1e3, 5e5))
+            signs, net, residual = _solve_brute(opas, ptp)
+            ref_res, _, _, ref_net = full_sweep(opas, ptp)
+            assert abs(residual - ref_res) < 1e-6
+            assert abs(net - ref_net) < 1e-6
+
+    def test_brute_force_n20_fast(self):
+        """Audit-added: N=20 exact solve must complete well under a second
+        (pure-python loop took ~1.7s; vectorized target < 0.5s)."""
+        import time
+
+        import numpy as np
+
+        rng = np.random.default_rng(0)
+        opas = rng.uniform(1e3, 1e6, 20).tolist()
+        t0 = time.perf_counter()
+        result = solve_opa_signs(opas, ptp_value=88_100.0)
+        elapsed = time.perf_counter() - t0
+        assert len(result["signs"]) == 20
+        assert elapsed < 1.0, f"N=20 brute force took {elapsed:.2f}s"

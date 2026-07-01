@@ -11,6 +11,32 @@ import numpy as np
 import pandas as pd
 
 
+def numeric_like(series: pd.Series) -> pd.Series:
+    """Tolerant numeric coercion for raw SDR string columns.
+
+    At detection time ``Package transaction price`` / ``Other payment
+    amount`` arrive as raw DTCC strings — thousands separators
+    (``'88,100'``), dollar signs, parenthesised negatives, blanks.
+    Plain ``pd.to_numeric(errors="coerce")`` turns every comma-formatted
+    value into NaN, which silently disqualified all USD-amount packages
+    >= $1,000 from PTP grouping. Mirrors ``_coerce_numeric_like`` in
+    ``usd_swaps.py``.
+    """
+    if pd.api.types.is_numeric_dtype(series):
+        return pd.to_numeric(series, errors="coerce")
+    normalized = (
+        series.astype("string")
+        .str.strip()
+        .str.replace(",", "", regex=False)
+        .str.replace("$", "", regex=False)
+        .str.replace(r"^\((.*)\)$", r"-\1", regex=True)
+    )
+    normalized = normalized.where(
+        ~normalized.isin(["", "None", "none", "nan", "NaN"]), other=pd.NA
+    )
+    return pd.to_numeric(normalized, errors="coerce")
+
+
 def group_by_ptp(
     df: pd.DataFrame,
     *,
@@ -30,48 +56,57 @@ def group_by_ptp(
     if df.empty:
         empty = df.copy()
         empty["ptp_group_id"] = None
-        empty["ptp_group_size"] = 0
+        empty["ptp_group_size"] = None
         return empty.iloc[:0], empty.iloc[:0]
 
-    ptp_vals = pd.to_numeric(df.get(ptp_col), errors="coerce")
+    ptp_vals = numeric_like(df.get(ptp_col, pd.Series(index=df.index, dtype=object)))
     pkg_ind = df.get(pkg_ind_col)
     if pkg_ind is None:
         pkg_ind = pd.Series(False, index=df.index)
-    pkg_ind_bool = pkg_ind.astype(str).str.lower().isin({"true", "t", "1", "yes"})
+    # "1.0" covers boolean columns that arrive as float dtype (NaN-padded).
+    pkg_ind_bool = pkg_ind.astype(str).str.lower().isin({"true", "t", "1", "1.0", "yes"})
 
-    candidate_mask = pkg_ind_bool & ptp_vals.notna() & (ptp_vals > 0)
+    if exec_col in df.columns:
+        ts_all = pd.to_datetime(df[exec_col], errors="coerce", utc=True)
+    else:
+        ts_all = pd.Series(pd.NaT, index=df.index)
+
+    # NaT timestamps can't satisfy a time-window constraint — their int64
+    # epoch is the NaT sentinel, which would cluster all NaT rows together.
+    candidate_mask = (
+        pkg_ind_bool & ptp_vals.notna() & (ptp_vals > 0) & ts_all.notna()
+    )
     if not candidate_mask.any():
         out = df.copy()
         out["ptp_group_id"] = None
-        out["ptp_group_size"] = 0
+        out["ptp_group_size"] = None
         return out.iloc[:0], out
 
     candidates = df.loc[candidate_mask].copy()
     remainder = df.loc[~candidate_mask].copy()
 
-    ts = pd.to_datetime(candidates[exec_col], errors="coerce", utc=True)
-    candidates["_ts_epoch"] = ts.astype("int64") // 10**9
-    candidates = candidates.sort_values("_ts_epoch", kind="mergesort")
+    candidates["_ts_epoch"] = ts_all.loc[candidate_mask].astype("int64") // 10**9
 
+    ptp_key = ptp_vals.loc[candidate_mask].astype(str)
+    upi = candidates[upi_col].fillna("_NONE_").astype(str) if upi_col in candidates.columns else "_NONE_"
+    plat = candidates[platform_col].fillna("_NONE_").astype(str) if platform_col in candidates.columns else "_NONE_"
+    candidates["_match_key"] = ptp_key + "|" + upi + "|" + plat
+
+    # Time-cluster within each (PTP, UPI, platform) partition. Clustering
+    # globally would let an unrelated trade sitting between two legs of the
+    # same key bridge them into one group even when they are further than
+    # the tolerance apart.
+    candidates = candidates.sort_values(["_match_key", "_ts_epoch"], kind="mergesort")
+
+    key_arr = candidates["_match_key"].values
     epoch = candidates["_ts_epoch"].values
     cluster_ids = np.zeros(len(candidates), dtype=np.int64)
     cid = 0
     for i in range(1, len(candidates)):
-        if epoch[i] - epoch[i - 1] > time_tolerance_seconds:
+        if key_arr[i] != key_arr[i - 1] or epoch[i] - epoch[i - 1] > time_tolerance_seconds:
             cid += 1
         cluster_ids[i] = cid
-    candidates["_time_cluster"] = cluster_ids
-
-    ptp_rounded = pd.to_numeric(candidates[ptp_col], errors="coerce")
-    upi = candidates[upi_col].fillna("_NONE_").astype(str) if upi_col in candidates.columns else "_NONE_"
-    plat = candidates[platform_col].fillna("_NONE_").astype(str) if platform_col in candidates.columns else "_NONE_"
-
-    candidates["_group_key"] = (
-        candidates["_time_cluster"].astype(str) + "|"
-        + ptp_rounded.astype(str) + "|"
-        + upi + "|"
-        + plat
-    )
+    candidates["_group_key"] = cluster_ids
 
     group_sizes = candidates.groupby("_group_key")[trade_id_col].transform("count")
     in_group = group_sizes >= 2
@@ -83,15 +118,15 @@ def group_by_ptp(
         remainder["ptp_group_id"] = None
         remainder["ptp_group_size"] = None
         grouped["ptp_group_id"] = None
-        grouped["ptp_group_size"] = 0
+        grouped["ptp_group_size"] = None
         return grouped, remainder
 
     min_tid = grouped.groupby("_group_key")[trade_id_col].transform("min")
     grouped["ptp_group_id"] = "PTP_" + min_tid.astype(str)
     grouped["ptp_group_size"] = grouped.groupby("ptp_group_id")[trade_id_col].transform("count").astype(int)
 
-    grouped.drop(columns=["_ts_epoch", "_time_cluster", "_group_key"], inplace=True)
-    ungrouped.drop(columns=["_ts_epoch", "_time_cluster", "_group_key"], inplace=True, errors="ignore")
+    grouped.drop(columns=["_ts_epoch", "_match_key", "_group_key"], inplace=True)
+    ungrouped.drop(columns=["_ts_epoch", "_match_key", "_group_key"], inplace=True, errors="ignore")
     remainder = pd.concat([remainder, ungrouped], ignore_index=True)
     remainder["ptp_group_id"] = None
     remainder["ptp_group_size"] = None
@@ -120,8 +155,8 @@ def _detect_sub_flies(
     Returns list of sub-structure annotations. Non-greedy: only
     reports sub-flies if ALL legs are consumed by complete triplets.
     """
-    tenors = pd.to_numeric(group_df[tenor_years_col], errors="coerce")
-    pv01 = pd.to_numeric(group_df[pv01_col], errors="coerce").fillna(0)
+    tenors = numeric_like(group_df[tenor_years_col])
+    pv01 = numeric_like(group_df[pv01_col]).fillna(0)
     tids = group_df[trade_id_col].astype(str)
 
     distinct_tenors = sorted(tenors.dropna().unique())
@@ -175,25 +210,28 @@ def _classify_single_group(
 ) -> tuple[str, list[dict]]:
     """Classify one PTP group. Returns (package_type, sub_structures)."""
     n = len(group_df)
-    pv01 = pd.to_numeric(group_df[pv01_col], errors="coerce").fillna(0).values
+    pv01 = numeric_like(group_df[pv01_col]).fillna(0).values
+    tenor_num = numeric_like(group_df[tenor_years_col])
+    n_distinct_tenors = tenor_num.round(1).dropna().nunique()
 
     if n == 2:
-        if _is_dv01_balanced(list(pv01), tolerance=belly_tol):
+        # CURVE requires two different tenors; a balanced same-tenor pair
+        # is a switch/roll, not a curve trade.
+        if n_distinct_tenors == 2 and _is_dv01_balanced(list(pv01), tolerance=belly_tol):
             return "CURVE", []
         return "PKG-2", []
 
     if n == 3:
-        sorted_idx = pd.to_numeric(
-            group_df[tenor_years_col], errors="coerce"
-        ).fillna(0).argsort()
-        sorted_pv01 = pv01[sorted_idx]
-        wing_avg = (sorted_pv01[0] + sorted_pv01[2]) / 2.0
-        expected_belly = 2.0 * wing_avg
-        if wing_avg > 0:
-            belly_rel = abs(sorted_pv01[1] - expected_belly) / max(expected_belly, 1e-12)
-            wings_rel = abs(sorted_pv01[0] - sorted_pv01[2]) / max(wing_avg, 1e-12)
-            if belly_rel <= belly_tol and wings_rel <= belly_tol:
-                return "FLY", []
+        if n_distinct_tenors == 3:
+            sorted_idx = tenor_num.fillna(0).argsort()
+            sorted_pv01 = pv01[sorted_idx]
+            wing_avg = (sorted_pv01[0] + sorted_pv01[2]) / 2.0
+            expected_belly = 2.0 * wing_avg
+            if wing_avg > 0:
+                belly_rel = abs(sorted_pv01[1] - expected_belly) / max(expected_belly, 1e-12)
+                wings_rel = abs(sorted_pv01[0] - sorted_pv01[2]) / max(wing_avg, 1e-12)
+                if belly_rel <= belly_tol and wings_rel <= belly_tol:
+                    return "FLY", []
         return "PKG-3", []
 
     sub_flies = _detect_sub_flies(

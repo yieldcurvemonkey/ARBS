@@ -10,7 +10,10 @@ from __future__ import annotations
 import math
 from typing import Optional
 
+import numpy as np
 import pandas as pd
+
+from SDRUtils.packages.ptp_grouper import numeric_like
 
 
 _TIER_THRESHOLDS = [
@@ -27,25 +30,103 @@ def confidence_tier(residual: float) -> str:
     return "UNRESOLVED"
 
 
+# Above this leg count, exact enumeration switches from a vectorized
+# full 2^N sweep to meet-in-the-middle (2 x 2^(N/2) half-enumerations +
+# binary search). Both are exact; MITM turns the N=24 worst case from
+# ~3s of full sweep into single-digit milliseconds.
+_MITM_MIN_N = 16
+
+
+def _half_nets(vals: np.ndarray) -> np.ndarray:
+    """Nets of all +/-1 assignments over ``vals``; index = mask (bit i set = +1)."""
+    nets = np.array([-vals.sum()], dtype=np.float64)
+    for v in vals:
+        nets = np.concatenate([nets, nets + 2.0 * v])
+    return nets
+
+
+def _select_best(
+    residual: np.ndarray,
+    direct: np.ndarray,
+    masks: np.ndarray,
+    nets: np.ndarray,
+    tol: float,
+) -> tuple[float, float, int, float]:
+    """Pick by (min residual, then min net-to-+ptp distance, then lowest mask).
+
+    ``tol`` must scale with the input magnitudes: a sign vector and its
+    complement have *mathematically equal* residuals, but float summation
+    noise on $1M-scale OPAs is ~1e-8 — far above a fixed 1e-9 window — so
+    a too-tight window lets rounding luck, not the +PTP preference, decide
+    which direction of the package wins.
+    """
+    r_min = float(residual.min())
+    cand = np.flatnonzero(residual <= r_min + tol)
+    d = direct[cand]
+    d_min = float(d.min())
+    cand = cand[d <= d_min + tol]
+    local = cand[np.argmin(masks[cand])]
+    return (
+        float(residual[local]),
+        float(direct[local]),
+        int(masks[local]),
+        float(nets[local]),
+    )
+
+
 def _solve_brute(opa: list[float], ptp: float) -> tuple[list[int], float, float]:
+    """Exact 2^N enumeration.
+
+    Selection order: minimal residual; among residuals tied within 1e-9,
+    prefer the net closer to +ptp; then the lowest mask (bit i set = +1
+    on leg i). The original pure-python loop was ~1.7s at N=20 and ~27s
+    at N=24, which stalled the live service loop.
+    """
     n = len(opa)
-    best_mask = 0
-    best_residual = float("inf")
-    best_direct_dist = float("inf")  # tiebreaker: prefer net closer to +ptp
-    best_net = 0.0
-    for mask in range(1 << n):
-        net = 0.0
+    opa_arr = np.asarray(opa, dtype=np.float64)
+    tie_tol = 1e-9 + 1e-13 * (float(np.abs(opa_arr).sum()) + abs(ptp))
+
+    if n <= _MITM_MIN_N:
+        # Full vectorized sweep — cheap up to 2^16 masks.
+        masks = np.arange(1 << n, dtype=np.uint32)
+        plus = np.zeros(masks.shape[0], dtype=np.float64)
         for i in range(n):
-            net += opa[i] if (mask & (1 << i)) else -opa[i]
-        residual = min(abs(net - ptp), abs(net + ptp))
-        direct_dist = abs(net - ptp)
-        if residual < best_residual or (
-            abs(residual - best_residual) < 1e-9 and direct_dist < best_direct_dist
-        ):
-            best_residual = residual
-            best_direct_dist = direct_dist
-            best_mask = mask
-            best_net = net
+            plus += opa_arr[i] * ((masks >> np.uint32(i)) & np.uint32(1))
+        nets = 2.0 * plus - float(opa_arr.sum())
+        direct = np.abs(nets - ptp)
+        residual = np.minimum(direct, np.abs(nets + ptp))
+        best_residual, _, best_mask, best_net = _select_best(
+            residual, direct, masks, nets, tie_tol,
+        )
+    else:
+        # Meet-in-the-middle: any optimal (a, b) pair has netsA[a] adjacent
+        # to (target - netsB[b]) in the sorted half-A nets, so scanning the
+        # two sorted neighbors per b per target covers every optimum.
+        h = n // 2
+        nets_a = _half_nets(opa_arr[:h])
+        nets_b = _half_nets(opa_arr[h:])
+        order_a = np.argsort(nets_a, kind="stable")
+        sorted_a = nets_a[order_a]
+        masks_b = np.arange(nets_b.shape[0], dtype=np.int64)
+
+        cand_masks = []
+        cand_nets = []
+        for target in (ptp, -ptp):
+            want = target - nets_b
+            pos = np.searchsorted(sorted_a, want)
+            for off in (-1, 0):
+                idx = np.clip(pos + off, 0, sorted_a.shape[0] - 1)
+                a_mask = order_a[idx]
+                cand_masks.append(a_mask | (masks_b << h))
+                cand_nets.append(sorted_a[idx] + nets_b)
+        masks = np.concatenate(cand_masks)
+        nets = np.concatenate(cand_nets)
+        direct = np.abs(nets - ptp)
+        residual = np.minimum(direct, np.abs(nets + ptp))
+        best_residual, _, best_mask, best_net = _select_best(
+            residual, direct, masks, nets, tie_tol,
+        )
+
     signs = [1 if (best_mask & (1 << i)) else -1 for i in range(n)]
     return signs, best_net, best_residual
 
@@ -177,6 +258,7 @@ def solve_all_opa_signs(
     ptp_group_col: str = "ptp_group_id",
     opa_col: str = "other_payment_amount",
     ptp_col: str = "package_transaction_price",
+    ptp_notation_col: str = "package_transaction_price_notation",
     rate_col: str = "fixed_rate",
     tenor_col: str = "tenor_years",
     pv01_col: str = "estimated_pv01",
@@ -187,6 +269,12 @@ def solve_all_opa_signs(
     Adds per-group columns: opa_signed_net, opa_ptp_residual,
     opa_sign_confidence, opa_constrained_net, opa_constrained_residual,
     dealer_spread_est, dealer_spread_bps.
+
+    The Sigma(signed OPA) = PTP tieout only makes sense when the PTP is a
+    monetary amount (Part 43 price notation 1). Price/decimal-notation
+    PTPs (e.g. ``9.9999999999`` with notation 3) still group upstream,
+    but solving against them would produce fake EXACT confidences, so
+    those groups are reported UNRESOLVED with no per-leg signs.
     """
     out = df.copy()
     for col in ["opa_sign", "opa_signed_amount", "opa_signed_net",
@@ -202,12 +290,21 @@ def solve_all_opa_signs(
         if pd.isna(gid):
             continue
 
-        opas = pd.to_numeric(grp[opa_col], errors="coerce").fillna(0).tolist()
-        ptp_vals = pd.to_numeric(grp[ptp_col], errors="coerce")
+        opas = numeric_like(grp[opa_col]).fillna(0).tolist() if opa_col in grp.columns else [0.0] * len(grp)
+        ptp_vals = numeric_like(grp[ptp_col]) if ptp_col in grp.columns else pd.Series(dtype=float)
         ptp_val = ptp_vals.dropna().iloc[0] if ptp_vals.notna().any() else 0.0
 
-        rates = pd.to_numeric(grp[rate_col], errors="coerce").fillna(0).tolist()
-        tenors = pd.to_numeric(grp[tenor_col], errors="coerce").fillna(0).tolist()
+        if ptp_notation_col in grp.columns:
+            notation = numeric_like(grp[ptp_notation_col])
+            notation_val = notation.dropna().iloc[0] if notation.notna().any() else None
+            if notation_val is not None and int(notation_val) != 1:
+                # Non-monetary PTP: no meaningful dollar tieout.
+                mask = out[ptp_group_col] == gid
+                out.loc[mask, "opa_sign_confidence"] = "UNRESOLVED"
+                continue
+
+        rates = numeric_like(grp[rate_col]).fillna(0).tolist() if rate_col in grp.columns else [0.0] * len(grp)
+        tenors = numeric_like(grp[tenor_col]).fillna(0).tolist() if tenor_col in grp.columns else [0.0] * len(grp)
         rt_groups = _rate_tenor_group_index(rates, tenors)
 
         result = solve_opa_signs(opas, ptp_val, rate_tenor_groups=rt_groups)
@@ -219,7 +316,7 @@ def solve_all_opa_signs(
             out.at[ix, "opa_sign"] = result["signs"][i]
             out.at[ix, "opa_signed_amount"] = result["signs"][i] * opas[i]
 
-        total_dv01 = pd.to_numeric(grp[pv01_col], errors="coerce").fillna(0).sum()
+        total_dv01 = numeric_like(grp[pv01_col]).fillna(0).sum() if pv01_col in grp.columns else 0.0
         spread_bps = (
             (result["residual"] / total_dv01 * 100)
             if total_dv01 > 0 else None

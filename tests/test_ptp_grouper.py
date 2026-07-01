@@ -132,6 +132,69 @@ class TestGroupByPtp:
         assert ptp_df["ptp_group_size"].iloc[0] == 12
 
 
+class TestGroupByPtpEdgeCases:
+    """Audit-added regressions: NaT timestamps, dtype variants, window bridging."""
+
+    def test_nat_execution_timestamp_stays_in_global_pool(self):
+        df = _make_legs([
+            {"tenor_years": 2.0, "execution_timestamp": pd.NaT},
+            {"tenor_years": 10.0, "execution_timestamp": pd.NaT},
+        ])
+        ptp_df, non_ptp_df = group_by_ptp(df)
+        assert len(ptp_df) == 0
+        assert len(non_ptp_df) == 2
+
+    def test_float_package_indicator_still_groups(self):
+        """package_indicator arriving as float 1.0 (NaN-padded bool col)."""
+        df = _make_legs([{"tenor_years": 2.0}, {"tenor_years": 10.0}])
+        df["package_indicator"] = pd.Series([1.0, 1.0])
+        ptp_df, non_ptp_df = group_by_ptp(df)
+        assert len(ptp_df) == 2
+
+    def test_non_candidate_remainder_group_size_is_none(self):
+        df = _make_legs([
+            {"package_indicator": False},
+            {"package_indicator": False},
+        ])
+        _, non_ptp_df = group_by_ptp(df)
+        assert non_ptp_df["ptp_group_size"].isna().all()
+
+    def test_raw_string_ptp_with_thousands_separator_groups(self):
+        """Live-path regression: at detection time PTP arrives as a raw
+        DTCC string like '88,100'. pd.to_numeric alone coerces that to
+        NaN, which silently dropped every USD-amount package >= $1,000
+        from PTP grouping (found in the 2026-07-01 audit)."""
+        df = _make_legs([
+            {"tenor_years": 2.0}, {"tenor_years": 5.0}, {"tenor_years": 10.0},
+        ])
+        df["package_transaction_price"] = pd.Series(["88,100", "88,100", "88,100"])
+        ptp_df, non_ptp_df = group_by_ptp(df)
+        assert len(ptp_df) == 3
+        assert ptp_df["ptp_group_id"].nunique() == 1
+
+    def test_unrelated_trade_cannot_bridge_time_window(self):
+        """Same-PTP legs 8s apart must not merge just because an unrelated
+        different-PTP trade sits between them."""
+        t0 = pd.Timestamp("2026-06-25 14:30:00", tz="UTC")
+        df = _make_legs([
+            {"execution_timestamp": t0, "package_transaction_price": 88100.0},
+            {"execution_timestamp": t0 + pd.Timedelta(seconds=4),
+             "package_transaction_price": 55555.0},
+            {"execution_timestamp": t0 + pd.Timedelta(seconds=8),
+             "package_transaction_price": 88100.0},
+            {"execution_timestamp": t0 + pd.Timedelta(seconds=4),
+             "package_transaction_price": 55555.0},
+        ])
+        ptp_df, non_ptp_df = group_by_ptp(df, time_tolerance_seconds=5)
+        # The two 55555 legs at the same second group; the 88100 legs are
+        # 8s apart with nothing of their own key in between -> global pool.
+        grouped_ptps = set(
+            pd.to_numeric(ptp_df["package_transaction_price"]).unique()
+        )
+        assert grouped_ptps == {55555.0}
+        assert len(non_ptp_df) == 2
+
+
 def _grouped_legs(overrides_list, ptp_group_id="PTP_T000"):
     """Build a PTP-grouped test DataFrame."""
     df = _make_legs(overrides_list)
@@ -200,6 +263,25 @@ class TestClassifyPtpGroups:
         assert isinstance(subs, list)
         assert len(subs) == 4
         assert all(s["type"] == "FLY" for s in subs)
+
+    def test_two_leg_same_tenor_is_pkg2_not_curve(self):
+        """CURVE requires two different tenors (spec) — a balanced
+        same-tenor pair is a switch/roll."""
+        df = _grouped_legs([
+            {"tenor_years": 5.0, "estimated_pv01": 10000.0},
+            {"tenor_years": 5.0, "estimated_pv01": 10000.0},
+        ])
+        out = classify_ptp_groups(df)
+        assert (out["package_type"] == "PKG-2").all()
+
+    def test_three_leg_same_tenor_is_pkg3_not_fly(self):
+        df = _grouped_legs([
+            {"tenor_years": 5.0, "estimated_pv01": 5000.0},
+            {"tenor_years": 5.0, "estimated_pv01": 10000.0},
+            {"tenor_years": 5.0, "estimated_pv01": 5000.0},
+        ])
+        out = classify_ptp_groups(df)
+        assert (out["package_type"] == "PKG-3").all()
 
     def test_multiple_groups_classified_independently(self):
         g1 = _grouped_legs([
