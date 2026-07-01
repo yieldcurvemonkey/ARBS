@@ -81,7 +81,7 @@ def group_by_ptp(
     if grouped.empty:
         remainder = pd.concat([remainder, ungrouped], ignore_index=True)
         remainder["ptp_group_id"] = None
-        remainder["ptp_group_size"] = 0
+        remainder["ptp_group_size"] = None
         grouped["ptp_group_id"] = None
         grouped["ptp_group_size"] = 0
         return grouped, remainder
@@ -94,7 +94,7 @@ def group_by_ptp(
     ungrouped.drop(columns=["_ts_epoch", "_time_cluster", "_group_key"], inplace=True, errors="ignore")
     remainder = pd.concat([remainder, ungrouped], ignore_index=True)
     remainder["ptp_group_id"] = None
-    remainder["ptp_group_size"] = 0
+    remainder["ptp_group_size"] = None
 
     return grouped, remainder
 
