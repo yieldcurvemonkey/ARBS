@@ -65,8 +65,11 @@ def test_non_sofr_symbol_skips_fixings_fetch(monkeypatch):
     assert "fixings" not in pr.meta()
 
 
-def test_fixings_fetch_failure_is_fail_open(monkeypatch):
-    # Production removed the try/except around fixings fetch — errors now propagate.
+def test_fixings_fetch_failure_raises(monkeypatch):
+    # Production has been fail-closed since commit 4f4c5792 ("dump", 2026-02-18): the try/except
+    # around _fetch_fixings was written as commented-out code from day one (# try: / # except:).
+    # The original test name "fail_open" was a misnomer — production never suppressed errors.
+    # 375961f6 updated the assertion to match; this rename completes that fix. (Task 14 review, 2026-07-02)
     def fake_fetch_fixings(*args, **kwargs):
         raise RuntimeError("boom")
 

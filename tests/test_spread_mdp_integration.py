@@ -9,7 +9,23 @@ from MDP.Spreads.SpreadPricer import SpreadPricer
 
 
 class TestSpreadMDPIntegration:
-    @pytest.mark.skip(reason="needs owner triage — IRSwapSpreadsMDP now requires proper IRS/FRB MDPs; frb_mdp.get_pricer must return dict but MockMDP returns scalar (Task 14, 2026-07-02)")
+    @pytest.mark.skip(
+        reason=(
+            "IRSwapSpreadsMDP and SpreadQuery are semantically incompatible — "
+            "IRSwapSpreadsMDP.get_pricer() returns IRSwapSpreadPricer (swap_curve + bond_pricer), "
+            "but SpreadQuery/SpreadProductAdapter requires pricer_or_curve.pricer_a/.pricer_b "
+            "(SpreadPricer API). "
+            "Tried: (1) a dict-returning FRB mock {cusip: MockPricer} fixes RuntimeError at "
+            "IRSwapSpreadsMDP.get_pricer:801 but isinstance(pricer, SpreadPricer) still fails "
+            "because IRSwapSpreadsMDP returns IRSwapSpreadPricer. "
+            "(2) These products are fundamentally different: IRSwapSpreadsMDP is an "
+            "ASW/spreadover (IRS-vs-bond) MDP; SpreadQuery is for two-curve basis spreads "
+            "(use IRBasisSwapsMDP or SpreadMDP instead). "
+            "Fix requires either rewriting test to use SpreadMDP/IRBasisSwapsMDP (changes test "
+            "intent) or making IRSwapSpreadPricer a SpreadPricer subclass (production change). "
+            "Owner triage required. Task 14 review fix, 2026-07-02."
+        )
+    )
     def test_full_flow_irswap_spread(self):
         """End-to-end: IRSwapSpreadsMDP -> SpreadQuery -> resolve_package -> build_value_map -> apply"""
         from MDP.IRSwapSpreads.IRSwapSpreadsMDP import IRSwapSpreadsMDP
@@ -95,7 +111,16 @@ class TestSpreadMDPIntegration:
         cvx = val_map.apply(SpreadValue.CVX_ADJ_EMPIRICAL)
         assert isinstance(cvx, float)
 
-    @pytest.mark.skip(reason="needs owner triage — IRSwapSpreadsMDP now requires proper IRS/FRB MDPs; frb_mdp.get_pricer must return dict but MockMDP returns scalar (Task 14, 2026-07-02)")
+    @pytest.mark.skip(
+        reason=(
+            "Same as test_full_flow_irswap_spread: IRSwapSpreadsMDP returns IRSwapSpreadPricer "
+            "(not SpreadPricer), which is incompatible with SpreadQuery/SpreadProductAdapter that "
+            "requires pricer_or_curve.pricer_a/.pricer_b. "
+            "A dict-returning FRB mock fixes the RuntimeError but the isinstance(pricer, SpreadPricer) "
+            "assertion still fails. "
+            "Owner triage required. Task 14 review fix, 2026-07-02."
+        )
+    )
     def test_curve_structure_spread(self):
         """Test 2Y/10Y spread-of-spread (CURVE structure)."""
         from MDP.IRSwapSpreads.IRSwapSpreadsMDP import IRSwapSpreadsMDP

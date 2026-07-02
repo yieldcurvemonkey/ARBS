@@ -1,5 +1,5 @@
 from __future__ import annotations
-from typing import Any, Callable, Dict, Tuple, Union
+from typing import Any, Callable, Dict, Tuple
 
 from MDP.MarketDataProvider import MarketDataProvider
 from MDP.Spreads.SpreadPricer import SpreadPricer
