@@ -578,17 +578,31 @@ export function getColumns(
         'OPA Conf',
         summaryFor('opa_sign_confidence', config.activeFilters),
       )}
-      body={(row: UsdSwapTapeRow) =>
-        row.opa_sign_confidence ? (
-          <span
-            className={`px-1.5 py-0.5 rounded text-[10px] font-semibold ${CONFIDENCE_COLORS[row.opa_sign_confidence] ?? 'bg-zinc-500/20 text-zinc-400'}`}
-          >
-            {row.opa_sign_confidence}
+      body={(row: UsdSwapTapeRow) => {
+        const px =
+          row.ptp_price_notation != null && Number(row.ptp_price_notation) !== 1
+        if (!row.opa_sign_confidence && !px)
+          return <span className="text-slate-600 text-[10px]">·</span>
+        return (
+          <span className="inline-flex items-center gap-1">
+            {row.opa_sign_confidence && (
+              <span
+                className={`px-1.5 py-0.5 rounded text-[10px] font-semibold ${CONFIDENCE_COLORS[row.opa_sign_confidence] ?? 'bg-zinc-500/20 text-zinc-400'}`}
+              >
+                {row.opa_sign_confidence}
+              </span>
+            )}
+            {px && (
+              <span
+                className="px-1 py-0.5 rounded text-[10px] font-semibold bg-zinc-500/20 text-zinc-400"
+                title="Package transaction price is a decimal price (Part 43 notation != 1) — no dollar OPA tieout"
+              >
+                PX
+              </span>
+            )}
           </span>
-        ) : (
-          <span className="text-slate-600 text-[10px]">·</span>
         )
-      }
+      }}
       style={{ width: 84 }}
     />,
   )

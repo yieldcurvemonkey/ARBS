@@ -280,7 +280,8 @@ def solve_all_opa_signs(
     for col in ["opa_sign", "opa_signed_amount", "opa_signed_net",
                 "opa_ptp_residual", "opa_sign_confidence",
                 "opa_constrained_net", "opa_constrained_residual",
-                "dealer_spread_est", "dealer_spread_bps"]:
+                "dealer_spread_est", "dealer_spread_bps",
+                "ptp_price_notation"]:
         out[col] = None
 
     if ptp_group_col not in out.columns:
@@ -294,14 +295,17 @@ def solve_all_opa_signs(
         ptp_vals = numeric_like(grp[ptp_col]) if ptp_col in grp.columns else pd.Series(dtype=float)
         ptp_val = ptp_vals.dropna().iloc[0] if ptp_vals.notna().any() else 0.0
 
+        notation_val = None
         if ptp_notation_col in grp.columns:
             notation = numeric_like(grp[ptp_notation_col])
-            notation_val = notation.dropna().iloc[0] if notation.notna().any() else None
-            if notation_val is not None and int(notation_val) != 1:
-                # Non-monetary PTP: no meaningful dollar tieout.
-                mask = out[ptp_group_col] == gid
-                out.loc[mask, "opa_sign_confidence"] = "UNRESOLVED"
-                continue
+            if notation.notna().any():
+                notation_val = int(notation.dropna().iloc[0])
+        mask = out[ptp_group_col] == gid
+        out.loc[mask, "ptp_price_notation"] = notation_val
+        if notation_val is not None and notation_val != 1:
+            # Non-monetary PTP: no meaningful dollar tieout.
+            out.loc[mask, "opa_sign_confidence"] = "UNRESOLVED"
+            continue
 
         rates = numeric_like(grp[rate_col]).fillna(0).tolist() if rate_col in grp.columns else [0.0] * len(grp)
         tenors = numeric_like(grp[tenor_col]).fillna(0).tolist() if tenor_col in grp.columns else [0.0] * len(grp)
@@ -309,7 +313,6 @@ def solve_all_opa_signs(
 
         result = solve_opa_signs(opas, ptp_val, rate_tenor_groups=rt_groups)
 
-        mask = out[ptp_group_col] == gid
         idx_list = out.loc[mask].index.tolist()
 
         for i, ix in enumerate(idx_list):

@@ -332,6 +332,7 @@ ALTER TABLE {PACKAGES_TABLE_V2} ADD COLUMN IF NOT EXISTS opa_constrained_residua
 ALTER TABLE {PACKAGES_TABLE_V2} ADD COLUMN IF NOT EXISTS dealer_spread_est NUMERIC;
 ALTER TABLE {PACKAGES_TABLE_V2} ADD COLUMN IF NOT EXISTS dealer_spread_bps NUMERIC;
 ALTER TABLE {PACKAGES_TABLE_V2} ADD COLUMN IF NOT EXISTS ptp_sub_structures JSONB;
+ALTER TABLE {PACKAGES_TABLE_V2} ADD COLUMN IF NOT EXISTS ptp_price_notation SMALLINT;
 
 ALTER TABLE {LEGS_TABLE_V2} ADD COLUMN IF NOT EXISTS basis_type TEXT;
 ALTER TABLE {LEGS_TABLE_V2} ADD COLUMN IF NOT EXISTS basis_spread_bps NUMERIC;
@@ -432,6 +433,7 @@ SELECT
   p.tape_tags,
   p.ptp_group_id,
   p.ptp_group_size,
+  p.ptp_price_notation,
   p.opa_signed_net,
   p.opa_ptp_residual,
   p.opa_sign_confidence,

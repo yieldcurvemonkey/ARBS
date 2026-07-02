@@ -248,6 +248,7 @@ PACKAGE_COLUMNS: tuple[str, ...] = (
     # PTP/OPA package-level columns — package-detection enhancement
     "ptp_group_id",
     "ptp_group_size",
+    "ptp_price_notation",
     "opa_signed_net",
     "opa_ptp_residual",
     "opa_sign_confidence",
@@ -412,7 +413,7 @@ def _execute_ddl_bundle(engine: Engine, ddl: str, lock_timeout_ms: int = 3_000) 
 _schema_ensured: set[str] = set()
 
 _LATEST_MIGRATION_COLS = [
-    ("arbs_usd_swap_tape_packages_v2", "ptp_sub_structures"),
+    ("arbs_usd_swap_tape_packages_v2", "ptp_price_notation"),
     ("arbs_usd_swap_tape_legs_v2", "opa_signed_amount"),
 ]
 
@@ -1282,6 +1283,9 @@ def build_package_rows(tape: pd.DataFrame, *, as_of_date: str) -> list[dict]:
             ),
             "ptp_group_size": _int_or_none(
                 g["ptp_group_size"].iloc[0] if "ptp_group_size" in g.columns else None
+            ),
+            "ptp_price_notation": _int_or_none(
+                g["ptp_price_notation"].iloc[0] if "ptp_price_notation" in g.columns else None
             ),
             "opa_signed_net": _num_or_none(
                 g["opa_signed_net"].iloc[0] if "opa_signed_net" in g.columns else None

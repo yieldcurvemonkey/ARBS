@@ -207,6 +207,26 @@ class TestSolveOpaSigns:
         assert len(result["signs"]) == 20
         assert elapsed < 1.0, f"N=20 brute force took {elapsed:.2f}s"
 
+    def test_ptp_price_notation_persisted_per_group(self):
+        import pandas as pd
+
+        from SDRUtils.packages.opa_sign_solver import solve_all_opa_signs
+
+        df = pd.DataFrame({
+            "trade_id": ["A", "B", "C"],
+            "ptp_group_id": ["G", "G", None],
+            "other_payment_amount": [None, None, None],
+            "package_transaction_price": ["9.9999999999", "9.9999999999", None],
+            "package_transaction_price_notation": [3.0, 3.0, None],
+            "fixed_rate": [0.04, 0.04, 0.04],
+            "tenor_years": [2.0, 10.0, 5.0],
+            "estimated_pv01": [100.0, 100.0, 100.0],
+        })
+        out = solve_all_opa_signs(df)
+        grp = out[out["ptp_group_id"] == "G"]
+        assert (grp["ptp_price_notation"] == 3).all()
+        assert out[out["ptp_group_id"].isna()]["ptp_price_notation"].isna().all()
+
     def test_dealer_spread_bps_is_true_basis_points(self):
         """residual($) / total_dv01($/bp) is already bp — no ×100.
         Audit finding: shipped value was bp×100 (a % of DV01)."""

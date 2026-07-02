@@ -192,6 +192,7 @@ export type UsdSwapTapeRow = SofrSwapTapeRow & {
   // PTP package-detection columns (Tasks 1-5 additions to display view).
   ptp_group_id?: string | null
   ptp_group_size?: number | null
+  ptp_price_notation?: number | null
   opa_signed_net?: number | null
   opa_ptp_residual?: number | null
   opa_sign_confidence?: 'EXACT' | 'TIGHT' | 'LOOSE' | 'UNRESOLVED' | string | null
