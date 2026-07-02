@@ -4,6 +4,10 @@ import { Pool, types, type PoolClient, type QueryResult, type QueryResultRow } f
 // consumer in this app treats them as numbers (formatters wrap Number(),
 // the tape table sorts on them — audit 2026-07-01 found lexicographic
 // spread sorting). Values are money/risk quantities well inside 2^53.
+// Hazard: parseInt silently corrupts integers >2^53 (Number.MAX_SAFE_INTEGER).
+// Today no tape column carries such values — dissemination-style ids live in
+// TEXT trade_id — but any future BIGINT id column would need a safe-integer
+// guard (e.g. BigInt or a checked parseInt with a MAX_SAFE_INTEGER assertion).
 types.setTypeParser(1700, (v: string) => (v === null ? null : parseFloat(v)))
 types.setTypeParser(20, (v: string) => (v === null ? null : parseInt(v, 10)))
 

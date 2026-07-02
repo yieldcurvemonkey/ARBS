@@ -33,6 +33,7 @@ def _reset_pandas_copy_on_write():
     """
     pd.options.mode.copy_on_write = False
     yield
+    # no teardown — the next test's setup performs the reset
 
 
 @pytest.fixture

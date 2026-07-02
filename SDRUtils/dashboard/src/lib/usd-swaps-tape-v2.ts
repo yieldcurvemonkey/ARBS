@@ -26,9 +26,9 @@ export const EXCLUDED_VIEW_COLUMNS = new Set<string>([
   'is_ccp_switch',          // CCP switch flag — not surfaced in UI
   'ccp_switch_from',        // CCP switch detail — not surfaced in UI
   'ccp_switch_to',          // CCP switch detail — not surfaced in UI
-  'package_adjusted_dv01',  // derived risk metric — not surfaced in UI
+  'package_adjusted_dv01',  // excluded: payload unchanged; client recomputes a fallback via computePackageAdjustedDv01() (columns.tsx ~406, underlierMix.ts ~46); un-excluding is a deliberate future decision
   'normalized_tape_label',  // internal label normalization — not surfaced in UI
-  'tape_tags',              // internal tagging — not surfaced in UI
+  'tape_tags',              // excluded: payload unchanged; UI reads tape_label regex + bool flags as fallback (RowBadges.helpers.ts ~322); un-excluding is a deliberate future decision (needs Chrome + jest verification)
 ])
 
 /** Test-only pure helper. */
