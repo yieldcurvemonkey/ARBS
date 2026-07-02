@@ -3,6 +3,8 @@ import pytest
 
 from RVUtils.SFRConvexScreener import SFRConvexScreenerConfig, build_snapshot
 
+pytestmark = pytest.mark.slow
+
 
 @pytest.mark.integration
 def test_build_snapshot_smoke():

@@ -4,6 +4,8 @@ import pandas as pd
 import pytest
 from datetime import date
 
+pytestmark = pytest.mark.slow
+
 from SDRUtils.core.lifecycle import (
     replay_lifecycle_full,
     build_lifecycle_summary_from_resolved,

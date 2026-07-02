@@ -23,6 +23,8 @@ import datetime
 import pandas as pd
 import pytest
 
+pytestmark = pytest.mark.slow
+
 from MDP.IRSwaps.IRSwapsMDP import IRSwapsMDP
 from MDP.FixedRateBonds.FixedRateBondsMDP import FixedRateBondsMDP
 from MDP.STIRFutures.STIRFutureMDP import STIRFutureMDP

@@ -4,6 +4,8 @@ from unittest.mock import patch
 import pandas as pd
 import pytest
 
+pytestmark = [pytest.mark.slow, pytest.mark.network]
+
 from RVUtils.SFRConvexScreener import SFRConvexScreenerConfig
 from RVUtils.SFRConvexScreener._market_data import (
     SFRMarketData,
