@@ -298,3 +298,36 @@ class TestClassifyPtpGroups:
         types = out.groupby("ptp_group_id")["package_type"].first()
         assert types["PTP_A"] == "FLY"
         assert types["PTP_B"] == "CURVE"
+
+    def test_sub_flies_use_rounded_tenor_buckets(self):
+        """Raw tenors 2.01/2.04 bucket to the same 2.0 — the distinct-tenor
+        check must agree with the bucketing (audit observation)."""
+        legs = [
+            {"tenor_years": 2.01, "estimated_pv01": 5000.0, "trade_id": "T000"},
+            {"tenor_years": 5.0, "estimated_pv01": 10000.0, "trade_id": "T001"},
+            {"tenor_years": 10.0, "estimated_pv01": 5000.0, "trade_id": "T002"},
+            {"tenor_years": 2.04, "estimated_pv01": 5000.0, "trade_id": "T003"},
+            {"tenor_years": 5.0, "estimated_pv01": 10000.0, "trade_id": "T004"},
+            {"tenor_years": 10.0, "estimated_pv01": 5000.0, "trade_id": "T005"},
+        ]
+        df = _grouped_legs(legs)
+        out = classify_ptp_groups(df)
+        subs = out["ptp_sub_structures"].iloc[0]
+        assert len(subs) == 2  # was [] because raw-distinct saw 4 tenors
+
+    def test_sub_fly_pairing_keeps_rates_together(self):
+        """Two equal-DV01 sub-flies at different rates must not cross-pair
+        legs in the annotation."""
+        legs = []
+        for rate in (0.040, 0.041):
+            legs.extend([
+                {"tenor_years": 2.0, "estimated_pv01": 5000.0, "fixed_rate": rate},
+                {"tenor_years": 5.0, "estimated_pv01": 10000.0, "fixed_rate": rate},
+                {"tenor_years": 10.0, "estimated_pv01": 5000.0, "fixed_rate": rate},
+            ])
+        df = _grouped_legs(legs)
+        rates = dict(zip(df["trade_id"], df["fixed_rate"]))
+        out = classify_ptp_groups(df)
+        for sub in out["ptp_sub_structures"].iloc[0]:
+            leg_rates = {round(rates[tid], 6) for tid in sub["legs"]}
+            assert len(leg_rates) == 1, f"cross-paired rates: {sub}"

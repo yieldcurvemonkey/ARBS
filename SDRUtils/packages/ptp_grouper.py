@@ -149,6 +149,7 @@ def _detect_sub_flies(
     tenor_years_col: str = "tenor_years",
     trade_id_col: str = "trade_id",
     belly_tol: float = 0.15,
+    rate_col: str = "fixed_rate",
 ) -> list[dict]:
     """Detect DV01-balanced fly triplets within a large group.
 
@@ -158,15 +159,16 @@ def _detect_sub_flies(
     tenors = numeric_like(group_df[tenor_years_col])
     pv01 = numeric_like(group_df[pv01_col]).fillna(0)
     tids = group_df[trade_id_col].astype(str)
+    rates = numeric_like(group_df[rate_col]) if rate_col in group_df.columns else pd.Series(0.0, index=group_df.index)
 
-    distinct_tenors = sorted(tenors.dropna().unique())
+    distinct_tenors = sorted(tenors.round(1).dropna().unique())
     if len(distinct_tenors) != 3:
         return []
 
     by_tenor = {}
-    for idx, (t, p, tid) in enumerate(zip(tenors, pv01, tids)):
+    for idx, (t, p, tid, r) in enumerate(zip(tenors, pv01, tids, rates)):
         bucket = round(t, 1)
-        by_tenor.setdefault(bucket, []).append({"pv01": p, "tid": tid})
+        by_tenor.setdefault(bucket, []).append({"pv01": p, "tid": tid, "rate": r})
 
     tenor_keys = sorted(by_tenor.keys())
     if len(tenor_keys) != 3:
@@ -179,9 +181,9 @@ def _detect_sub_flies(
     if not (len(short_legs) == len(belly_legs) == len(long_legs)):
         return []
 
-    short_sorted = sorted(short_legs, key=lambda x: x["pv01"])
-    belly_sorted = sorted(belly_legs, key=lambda x: x["pv01"])
-    long_sorted = sorted(long_legs, key=lambda x: x["pv01"])
+    short_sorted = sorted(short_legs, key=lambda x: (x["pv01"], x["rate"]))
+    belly_sorted = sorted(belly_legs, key=lambda x: (x["pv01"], x["rate"]))
+    long_sorted = sorted(long_legs, key=lambda x: (x["pv01"], x["rate"]))
 
     subs = []
     for s, b, l in zip(short_sorted, belly_sorted, long_sorted):
@@ -207,6 +209,7 @@ def _classify_single_group(
     tenor_years_col: str = "tenor_years",
     trade_id_col: str = "trade_id",
     belly_tol: float = 0.15,
+    rate_col: str = "fixed_rate",
 ) -> tuple[str, list[dict]]:
     """Classify one PTP group. Returns (package_type, sub_structures)."""
     n = len(group_df)
@@ -236,7 +239,7 @@ def _classify_single_group(
 
     sub_flies = _detect_sub_flies(
         group_df, pv01_col=pv01_col, tenor_years_col=tenor_years_col,
-        trade_id_col=trade_id_col, belly_tol=belly_tol,
+        trade_id_col=trade_id_col, belly_tol=belly_tol, rate_col=rate_col,
     )
     return f"PKG-{n}", sub_flies
 
