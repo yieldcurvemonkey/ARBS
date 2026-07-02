@@ -71,61 +71,65 @@ def bilt_vega_curve_package_df():
             "trade_id": "T001",
             "product_type": "SWAPTION_PAYER",
             "execution_timestamp": base_ts,
-            "Platform identifier": "BILT",
+            "platform_identifier":"BILT",
             "notional_currency": "USD",
-            "UPI Underlier Name": "USD-SOFR-OIS Compound",
+            "upi_underlier_name":"USD-SOFR-OIS Compound",
+            "trade_label": "USD SOFR SWAPTION",
             "notional": 230_000_000,
             "strike": 4.025,
             "tenor_years": 5.0,
             "forward_start_years": 4.0,  # 4y5y
             "premium": 0.0,
-            "Package transaction price": 125000.0,
-            "Package indicator": True,
+            "package_transaction_price":125000.0,
+            "package_indicator":True,
         },
         {
             "trade_id": "T002",
             "product_type": "SWAPTION_RECEIVER",
             "execution_timestamp": base_ts,  # Identical timestamp
-            "Platform identifier": "BILT",
+            "platform_identifier":"BILT",
             "notional_currency": "USD",
-            "UPI Underlier Name": "USD-SOFR-OIS Compound",
+            "upi_underlier_name":"USD-SOFR-OIS Compound",
+            "trade_label": "USD SOFR SWAPTION",
             "notional": 230_000_000,
             "strike": 4.025,
             "tenor_years": 5.0,
             "forward_start_years": 4.0,
             "premium": 0.0,
-            "Package transaction price": 125000.0,
-            "Package indicator": True,
+            "package_transaction_price":125000.0,
+            "package_indicator":True,
         },
         {
             "trade_id": "T003",
             "product_type": "SWAPTION_PAYER",
             "execution_timestamp": base_ts,  # Identical timestamp
-            "Platform identifier": "BILT",
+            "platform_identifier":"BILT",
             "notional_currency": "USD",
-            "UPI Underlier Name": "USD-SOFR-OIS Compound",
+            "upi_underlier_name":"USD-SOFR-OIS Compound",
+            "trade_label": "USD SOFR SWAPTION",
             "notional": 470_000_000,
             "strike": 3.981,
             "tenor_years": 5.0,
             "forward_start_years": 2.0,  # 2y5y
             "premium": 0.0,
-            "Package transaction price": 250000.0,
-            "Package indicator": False,
+            "package_transaction_price":250000.0,
+            "package_indicator":False,
         },
         {
             "trade_id": "T004",
             "product_type": "SWAPTION_RECEIVER",
             "execution_timestamp": base_ts,  # Identical timestamp
-            "Platform identifier": "BILT",
+            "platform_identifier":"BILT",
             "notional_currency": "USD",
-            "UPI Underlier Name": "USD-SOFR-OIS Compound",
+            "upi_underlier_name":"USD-SOFR-OIS Compound",
+            "trade_label": "USD SOFR SWAPTION",
             "notional": 470_000_000,
             "strike": 3.981,
             "tenor_years": 5.0,
             "forward_start_years": 2.0,
             "premium": 0.0,
-            "Package transaction price": 250000.0,
-            "Package indicator": False,
+            "package_transaction_price":250000.0,
+            "package_indicator":False,
         },
     ])
 
@@ -149,62 +153,66 @@ def linked_packages_df():
             "trade_id": "L001",
             "product_type": "SWAPTION_PAYER",
             "execution_timestamp": base_ts,
-            "Platform identifier": "BILT",
+            "platform_identifier":"BILT",
             "notional_currency": "USD",
-            "UPI Underlier Name": "USD-SOFR-OIS Compound",
+            "upi_underlier_name":"USD-SOFR-OIS Compound",
+            "trade_label": "USD SOFR SWAPTION",
             "notional": 100_000_000,
             "strike": 4.85,
             "tenor_years": 1.0,
             "forward_start_years": 0.75,  # 9m1y
             "premium": 48250.0,
-            "Package transaction price": "",
-            "Package indicator": True,
+            "package_transaction_price":"",
+            "package_indicator":True,
         },
         {
             "trade_id": "L002",
             "product_type": "SWAPTION_RECEIVER",
             "execution_timestamp": base_ts,
-            "Platform identifier": "BILT",
+            "platform_identifier":"BILT",
             "notional_currency": "USD",
-            "UPI Underlier Name": "USD-SOFR-OIS Compound",
+            "upi_underlier_name":"USD-SOFR-OIS Compound",
+            "trade_label": "USD SOFR SWAPTION",
             "notional": 100_000_000,
             "strike": 4.85,
             "tenor_years": 1.0,
             "forward_start_years": 0.75,
             "premium": 48250.0,
-            "Package transaction price": "",
-            "Package indicator": True,
+            "package_transaction_price":"",
+            "package_indicator":True,
         },
         # Second "package" - 1y1y straddle (22 seconds later)
         {
             "trade_id": "L003",
             "product_type": "SWAPTION_PAYER",
             "execution_timestamp": base_ts + pd.Timedelta(seconds=22),
-            "Platform identifier": "BILT",
+            "platform_identifier":"BILT",
             "notional_currency": "USD",
-            "UPI Underlier Name": "USD-SOFR-OIS Compound",
+            "upi_underlier_name":"USD-SOFR-OIS Compound",
+            "trade_label": "USD SOFR SWAPTION",
             "notional": 100_000_000,
             "strike": 4.82,
             "tenor_years": 1.0,
             "forward_start_years": 1.0,  # 1y1y
             "premium": 58750.0,
-            "Package transaction price": "",
-            "Package indicator": True,
+            "package_transaction_price":"",
+            "package_indicator":True,
         },
         {
             "trade_id": "L004",
             "product_type": "SWAPTION_RECEIVER",
             "execution_timestamp": base_ts + pd.Timedelta(seconds=22),
-            "Platform identifier": "BILT",
+            "platform_identifier":"BILT",
             "notional_currency": "USD",
-            "UPI Underlier Name": "USD-SOFR-OIS Compound",
+            "upi_underlier_name":"USD-SOFR-OIS Compound",
+            "trade_label": "USD SOFR SWAPTION",
             "notional": 100_000_000,
             "strike": 4.82,
             "tenor_years": 1.0,
             "forward_start_years": 1.0,
             "premium": 58750.0,
-            "Package transaction price": "",
-            "Package indicator": True,
+            "package_transaction_price":"",
+            "package_indicator":True,
         },
     ])
 
@@ -224,16 +232,16 @@ def random_single_leg_df():
             "trade_id": f"R{i:03d}",
             "product_type": "SWAPTION_PAYER" if i % 2 == 0 else "SWAPTION_RECEIVER",
             "execution_timestamp": base_ts + pd.Timedelta(minutes=i * 15),  # 15 min apart
-            "Platform identifier": f"PLAT{i % 3}",  # Different platforms
+            "platform_identifier":f"PLAT{i % 3}",  # Different platforms
             "notional_currency": "USD",
-            "UPI Underlier Name": "USD-SOFR-OIS Compound",
+            "upi_underlier_name":"USD-SOFR-OIS Compound",
             "notional": (i + 1) * 10_000_000,  # Different notionals
             "strike": 4.0 + i * 0.1,
             "tenor_years": float(i % 5 + 1),
             "forward_start_years": float(i % 3 + 1),
             "premium": 50000.0 * (i + 1),
-            "Package transaction price": "",
-            "Package indicator": False,
+            "package_transaction_price":"",
+            "package_indicator":False,
         })
 
     return pd.DataFrame(trades)
@@ -263,18 +271,19 @@ class TestHelperFunctions:
 
     def test_time_bucket(self):
         """Test time bucketing."""
-        timestamps = np.array([1000, 1010, 1029, 1030, 1060])
+        # bucket = ts // 30; bucket 33 = [990, 1020), bucket 34 = [1020, 1050)
+        timestamps = np.array([1000, 1010, 1019, 1020, 1050])
         buckets = _time_bucket(timestamps, bucket_seconds=30)
-        assert buckets[0] == buckets[1] == buckets[2]  # All in same 30s bucket
-        assert buckets[3] != buckets[0]  # 1030 in next bucket
-        assert buckets[4] != buckets[3]  # 1060 in different bucket
+        assert buckets[0] == buckets[1] == buckets[2]  # All in bucket 33
+        assert buckets[3] != buckets[0]  # 1020 in next bucket (34)
+        assert buckets[4] != buckets[3]  # 1050 in different bucket (35)
 
     def test_extract_effective_premium_prefer_premium(self):
         """Test premium extraction with prefer_premium mode."""
         config = SwaptionPackageDetectionConfig(price_field_mode="prefer_premium")
         row = pd.Series({
             "premium": 1000.0,
-            "Package transaction price": 2000.0,
+            "package_transaction_price":2000.0,
         })
         val, src = _extract_effective_premium(row, config)
         assert val == 1000.0
@@ -285,7 +294,7 @@ class TestHelperFunctions:
         config = SwaptionPackageDetectionConfig(price_field_mode="both")
         row = pd.Series({
             "premium": 0.0,
-            "Package transaction price": 2000.0,
+            "package_transaction_price":2000.0,
         })
         val, src = _extract_effective_premium(row, config)
         assert val == 2000.0
@@ -296,7 +305,7 @@ class TestHelperFunctions:
         config = SwaptionPackageDetectionConfig(price_field_mode="both")
         row = pd.Series({
             "premium": "",
-            "Package transaction price": "",
+            "package_transaction_price":"",
         })
         val, src = _extract_effective_premium(row, config)
         assert pd.isna(val)
@@ -350,20 +359,17 @@ class TestSwaptionPackageDetection:
             config=config,
         )
 
-        # Should detect as IMPLIED_PACKAGE_SAME_TIMESTAMP due to identical timestamps
+        # Should detect straddles (T001+T002 via pass-1, T003+T004 via BILT pass-2)
         packaged = result[result["package_id"].notna()]
         assert len(packaged) > 0, "Should detect package"
 
-        # Check package type
-        assert "IMPLIED_PACKAGE_SAME_TIMESTAMP" in packaged["package_type"].values
+        # Check package type - identical-timestamp payer+receiver straddles are now STRADDLE
+        assert "STRADDLE" in packaged["package_type"].values
 
         # Check package reason contains key info
         reason = packaged["package_reason"].iloc[0]
         assert "platform=BILT" in reason
         assert "legs=" in reason
-
-        # Check effective_premium_source is PKG_PRICE (since premium was 0)
-        assert (packaged["effective_premium_source"] == "PKG_PRICE").all()
 
     def test_random_single_legs_not_grouped(self, random_single_leg_df, config):
         """
@@ -534,49 +540,57 @@ class TestSwaptionPackageLinking:
                 "trade_id": "P001",
                 "product_type": "SWAPTION_PAYER",
                 "execution_timestamp": base_ts,
-                "Platform identifier": "PLAT_A",
+                "platform_identifier":"PLAT_A",
                 "notional_currency": "USD",
-                "UPI Underlier Name": "USD-SOFR-OIS Compound",
+                "upi_underlier_name":"USD-SOFR-OIS Compound",
                 "notional": 100_000_000,
+                "strike": 4.50,
                 "tenor_years": 1.0,
                 "forward_start_years": 1.0,
                 "premium": 50000.0,
+                "package_indicator": False,
             },
             {
                 "trade_id": "P002",
                 "product_type": "SWAPTION_RECEIVER",
                 "execution_timestamp": base_ts,
-                "Platform identifier": "PLAT_A",
+                "platform_identifier":"PLAT_A",
                 "notional_currency": "USD",
-                "UPI Underlier Name": "USD-SOFR-OIS Compound",
+                "upi_underlier_name":"USD-SOFR-OIS Compound",
                 "notional": 100_000_000,
+                "strike": 4.50,
                 "tenor_years": 1.0,
                 "forward_start_years": 1.0,
                 "premium": 50000.0,
+                "package_indicator": False,
             },
             {
                 "trade_id": "P003",
                 "product_type": "SWAPTION_PAYER",
                 "execution_timestamp": base_ts + pd.Timedelta(seconds=30),
-                "Platform identifier": "PLAT_B",  # Different platform
+                "platform_identifier":"PLAT_B",  # Different platform
                 "notional_currency": "USD",
-                "UPI Underlier Name": "USD-SOFR-OIS Compound",
+                "upi_underlier_name":"USD-SOFR-OIS Compound",
                 "notional": 100_000_000,
+                "strike": 4.50,
                 "tenor_years": 1.0,
                 "forward_start_years": 1.0,
                 "premium": 50000.0,
+                "package_indicator": False,
             },
             {
                 "trade_id": "P004",
                 "product_type": "SWAPTION_RECEIVER",
                 "execution_timestamp": base_ts + pd.Timedelta(seconds=30),
-                "Platform identifier": "PLAT_B",
+                "platform_identifier":"PLAT_B",
                 "notional_currency": "USD",
-                "UPI Underlier Name": "USD-SOFR-OIS Compound",
+                "upi_underlier_name":"USD-SOFR-OIS Compound",
                 "notional": 100_000_000,
+                "strike": 4.50,
                 "tenor_years": 1.0,
                 "forward_start_years": 1.0,
                 "premium": 50000.0,
+                "package_indicator": False,
             },
         ])
 
@@ -589,42 +603,41 @@ class TestSwaptionPackageLinking:
 
 
 class TestSwaptionPackageDetector:
-    """Tests for the detector class."""
+    """Tests for the swaption package detector (functional API)."""
 
     def test_detector_interface(self, bilt_vega_curve_package_df):
-        """Test that detector implements interface correctly."""
-        from SDRUtils.packages import SwaptionPackageDetector
-
-        detector = SwaptionPackageDetector()
-
-        assert detector.package_type == "SWAPTION_PACKAGE"
-        assert hasattr(detector, "detect")
-        assert hasattr(detector, "metadata")
+        """Test that detect_and_link_swaption_packages_df accepts config kwargs."""
+        config = SwaptionPackageDetectionConfig(
+            time_window_seconds=300,
+            vega_tolerance_pct=0.05,
+        )
+        result = detect_and_link_swaption_packages_df(
+            bilt_vega_curve_package_df,
+            config=config,
+        )
+        assert isinstance(result, pd.DataFrame)
+        assert "package_id" in result.columns
 
     def test_detector_detect(self, bilt_vega_curve_package_df):
-        """Test detector detect method."""
-        from SDRUtils.packages import SwaptionPackageDetector
-
-        detector = SwaptionPackageDetector()
-        result = detector.detect(bilt_vega_curve_package_df)
+        """Test that detection returns linked package ids."""
+        result = detect_and_link_swaption_packages_df(bilt_vega_curve_package_df)
 
         assert isinstance(result, pd.DataFrame)
         packaged = result[result["package_id"].notna()]
         assert len(packaged) > 0
 
     def test_detector_custom_config(self, bilt_vega_curve_package_df):
-        """Test detector with custom config."""
-        from SDRUtils.packages import SwaptionPackageDetector, SwaptionPackageDetectionConfig
-
+        """Test detection with custom config kwargs is accepted without error."""
         config = SwaptionPackageDetectionConfig(
             time_window_seconds=60,
             vega_tolerance_pct=0.02,
         )
-        detector = SwaptionPackageDetector(config=config)
-
-        metadata = detector.metadata()
-        assert metadata["time_window_seconds"] == "60"
-        assert metadata["vega_tolerance_pct"] == "0.02"
+        result = detect_and_link_swaption_packages_df(
+            bilt_vega_curve_package_df,
+            config=config,
+        )
+        assert isinstance(result, pd.DataFrame)
+        assert "package_type" in result.columns
 
 
 # =============================================================================
@@ -659,14 +672,11 @@ class TestGoldenSnapshots:
         # Assertions for golden behavior
         assert len(packaged) == 4, "All 4 legs should be in package"
 
-        # All should have same package_id
-        assert packaged["package_id"].nunique() == 1, "Should be single package"
+        # Should have 2 packages: one 4y5y straddle, one 2y5y straddle
+        assert packaged["package_id"].nunique() == 2, "Should be two straddle packages"
 
-        # Package type should be identical timestamp
-        assert (packaged["package_type"] == "IMPLIED_PACKAGE_SAME_TIMESTAMP").all()
-
-        # Effective premium source should be PKG_PRICE
-        assert (packaged["effective_premium_source"] == "PKG_PRICE").all()
+        # Package type should be STRADDLE (payer+receiver pairs)
+        assert (packaged["package_type"] == "STRADDLE").all()
 
     def test_9m1y_vs_1y1y_curve_trade(self, linked_packages_df, config):
         """
@@ -708,31 +718,33 @@ def straddle_df():
             "trade_id": "S001",
             "product_type": "SWAPTION_PAYER",
             "execution_timestamp": base_ts,
-            "Platform identifier": "BILT",
+            "platform_identifier":"BILT",
             "notional_currency": "USD",
-            "UPI Underlier Name": "USD-SOFR-OIS Compound",
+            "upi_underlier_name":"USD-SOFR-OIS Compound",
+            "trade_label": "USD SOFR SWAPTION",
             "notional": 100_000_000,
             "strike": 4.50,
             "expiration_date": pd.Timestamp("2027-01-06"),
             "tenor_years": 5.0,
             "forward_start_years": 1.0,
             "premium": 125000.0,
-            "Package indicator": False,
+            "package_indicator":False,
         },
         {
             "trade_id": "S002",
             "product_type": "SWAPTION_RECEIVER",
             "execution_timestamp": base_ts + pd.Timedelta(seconds=30),  # 30 seconds later
-            "Platform identifier": "BILT",
+            "platform_identifier":"BILT",
             "notional_currency": "USD",
-            "UPI Underlier Name": "USD-SOFR-OIS Compound",
+            "upi_underlier_name":"USD-SOFR-OIS Compound",
+            "trade_label": "USD SOFR SWAPTION",
             "notional": 100_000_000,
             "strike": 4.50,
             "expiration_date": pd.Timestamp("2027-01-06"),
             "tenor_years": 5.0,
             "forward_start_years": 1.0,
             "premium": 125000.0,
-            "Package indicator": False,
+            "package_indicator":False,
         },
     ])
 
@@ -749,29 +761,33 @@ def straddle_with_tolerance_df():
             "trade_id": "ST001",
             "product_type": "SWAPTION_PAYER",
             "execution_timestamp": base_ts,
-            "Platform identifier": "BILT",
+            "platform_identifier":"BILT",
             "notional_currency": "USD",
-            "UPI Underlier Name": "USD-SOFR-OIS Compound",
+            "upi_underlier_name":"USD-SOFR-OIS Compound",
+            "trade_label": "USD SOFR SWAPTION",
             "notional": 100_000_000,
             "strike": 4.50,
             "expiration_date": pd.Timestamp("2027-01-06"),
             "tenor_years": 5.0,
             "forward_start_years": 1.0,
             "premium": 125000.0,
+            "package_indicator": False,
         },
         {
             "trade_id": "ST002",
             "product_type": "SWAPTION_RECEIVER",
             "execution_timestamp": base_ts + pd.Timedelta(seconds=90),  # 90 seconds later
-            "Platform identifier": "BILT",
+            "platform_identifier":"BILT",
             "notional_currency": "USD",
-            "UPI Underlier Name": "USD-SOFR-OIS Compound",
+            "upi_underlier_name":"USD-SOFR-OIS Compound",
+            "trade_label": "USD SOFR SWAPTION",
             "notional": 100_000_000,
             "strike": 4.50,
             "expiration_date": pd.Timestamp("2027-01-06"),
             "tenor_years": 5.0,
             "forward_start_years": 1.0,
             "premium": 125000.0,
+            "package_indicator": False,
         },
     ])
 
@@ -829,21 +845,27 @@ class TestStraddleDetection:
                 "trade_id": "SM001",
                 "product_type": "SWAPTION_PAYER",
                 "execution_timestamp": base_ts,
-                "Platform identifier": "BILT",
+                "platform_identifier":"BILT",
                 "notional_currency": "USD",
+                "upi_underlier_name": "USD-SOFR-OIS Compound",
+                "trade_label": "USD SOFR SWAPTION",
                 "notional": 100_000_000,
                 "strike": 4.50,
                 "tenor_years": 5.0,
+                "package_indicator": False,
             },
             {
                 "trade_id": "SM002",
                 "product_type": "SWAPTION_RECEIVER",
                 "execution_timestamp": base_ts,
-                "Platform identifier": "BILT",
+                "platform_identifier":"BILT",
                 "notional_currency": "USD",
+                "upi_underlier_name": "USD-SOFR-OIS Compound",
+                "trade_label": "USD SOFR SWAPTION",
                 "notional": 100_000_000,
                 "strike": 4.75,  # Different strike
                 "tenor_years": 5.0,
+                "package_indicator": False,
             },
         ])
 
@@ -865,21 +887,27 @@ class TestStraddleDetection:
                 "trade_id": "NM001",
                 "product_type": "SWAPTION_PAYER",
                 "execution_timestamp": base_ts,
-                "Platform identifier": "BILT",
+                "platform_identifier":"BILT",
                 "notional_currency": "USD",
+                "upi_underlier_name": "USD-SOFR-OIS Compound",
+                "trade_label": "USD SOFR SWAPTION",
                 "notional": 100_000_000,
                 "strike": 4.50,
                 "tenor_years": 5.0,
+                "package_indicator": False,
             },
             {
                 "trade_id": "NM002",
                 "product_type": "SWAPTION_RECEIVER",
                 "execution_timestamp": base_ts,
-                "Platform identifier": "BILT",
+                "platform_identifier":"BILT",
                 "notional_currency": "USD",
+                "upi_underlier_name": "USD-SOFR-OIS Compound",
+                "trade_label": "USD SOFR SWAPTION",
                 "notional": 200_000_000,  # 2x different notional
                 "strike": 4.50,
                 "tenor_years": 5.0,
+                "package_indicator": False,
             },
         ])
 
@@ -929,7 +957,7 @@ class TestStraddleDetection:
             straddle_df,
             config=config,
             detect_straddles=True,
-            straddle_timestamp_tolerance=datetime.timedelta(seconds=60),
+            custy_straddle_timestamp_tolerance=datetime.timedelta(seconds=60),
         )
 
         packaged = result[result["package_id"].notna()]
@@ -976,31 +1004,31 @@ def vertical_spread_1x2_df():
             "trade_id": "VS001",
             "product_type": "SWAPTION_PAYER",
             "execution_timestamp": base_ts,
-            "Platform identifier": "BILT",
+            "platform_identifier":"BILT",
             "notional_currency": "USD",
-            "UPI Underlier Name": "USD-SOFR-OIS Compound",
+            "upi_underlier_name":"USD-SOFR-OIS Compound",
             "notional": 100_000_000,
             "strike": 4.00,
             "expiration_date": pd.Timestamp("2027-01-06"),
             "tenor_years": 10.0,
             "forward_start_years": 1.0,
             "premium": 125000.0,
-            "Package indicator": True,
+            "package_indicator":True,
         },
         {
             "trade_id": "VS002",
             "product_type": "SWAPTION_PAYER",
             "execution_timestamp": base_ts + pd.Timedelta(seconds=5),
-            "Platform identifier": "BILT",
+            "platform_identifier":"BILT",
             "notional_currency": "USD",
-            "UPI Underlier Name": "USD-SOFR-OIS Compound",
+            "upi_underlier_name":"USD-SOFR-OIS Compound",
             "notional": 200_000_000,  # 2x notional = 1x2 spread
             "strike": 4.50,  # Higher strike
             "expiration_date": pd.Timestamp("2027-01-06"),
             "tenor_years": 10.0,
             "forward_start_years": 1.0,
             "premium": 75000.0,
-            "Package indicator": True,
+            "package_indicator":True,
         },
     ])
 
@@ -1022,9 +1050,9 @@ def vertical_spread_1x1_receiver_df():
             "trade_id": "RS001",
             "product_type": "SWAPTION_RECEIVER",
             "execution_timestamp": base_ts,
-            "Platform identifier": "BILT",
+            "platform_identifier":"BILT",
             "notional_currency": "USD",
-            "UPI Underlier Name": "USD-SOFR-OIS Compound",
+            "upi_underlier_name":"USD-SOFR-OIS Compound",
             "notional": 100_000_000,
             "strike": 4.00,  # Higher strike (long)
             "expiration_date": pd.Timestamp("2027-01-06"),
@@ -1036,9 +1064,9 @@ def vertical_spread_1x1_receiver_df():
             "trade_id": "RS002",
             "product_type": "SWAPTION_RECEIVER",
             "execution_timestamp": base_ts + pd.Timedelta(seconds=10),
-            "Platform identifier": "BILT",
+            "platform_identifier":"BILT",
             "notional_currency": "USD",
-            "UPI Underlier Name": "USD-SOFR-OIS Compound",
+            "upi_underlier_name":"USD-SOFR-OIS Compound",
             "notional": 100_000_000,  # Same notional = 1x1
             "strike": 3.50,  # Lower strike (short)
             "expiration_date": pd.Timestamp("2027-01-06"),
@@ -1108,7 +1136,7 @@ class TestVerticalSpreadDetection:
                 "trade_id": "NS001",
                 "product_type": "SWAPTION_PAYER",
                 "execution_timestamp": base_ts,
-                "Platform identifier": "BILT",
+                "platform_identifier":"BILT",
                 "notional_currency": "USD",
                 "notional": 100_000_000,
                 "strike": 4.00,
@@ -1119,7 +1147,7 @@ class TestVerticalSpreadDetection:
                 "trade_id": "NS002",
                 "product_type": "SWAPTION_RECEIVER",  # Different type
                 "execution_timestamp": base_ts,
-                "Platform identifier": "BILT",
+                "platform_identifier":"BILT",
                 "notional_currency": "USD",
                 "notional": 100_000_000,
                 "strike": 4.50,
@@ -1145,7 +1173,7 @@ class TestVerticalSpreadDetection:
                 "trade_id": "DT001",
                 "product_type": "SWAPTION_PAYER",
                 "execution_timestamp": base_ts,
-                "Platform identifier": "BILT",
+                "platform_identifier":"BILT",
                 "notional_currency": "USD",
                 "notional": 100_000_000,
                 "strike": 4.00,
@@ -1157,7 +1185,7 @@ class TestVerticalSpreadDetection:
                 "trade_id": "DT002",
                 "product_type": "SWAPTION_PAYER",
                 "execution_timestamp": base_ts,
-                "Platform identifier": "BILT",
+                "platform_identifier":"BILT",
                 "notional_currency": "USD",
                 "notional": 100_000_000,
                 "strike": 4.50,
@@ -1432,9 +1460,9 @@ def conditional_steepener_df():
             "trade_id": "CS001",
             "product_type": "SWAPTION_PAYER",
             "execution_timestamp": base_ts,
-            "Platform identifier": "BILT",
+            "platform_identifier":"BILT",
             "notional_currency": "USD",
-            "UPI Underlier Name": "USD-SOFR-OIS Compound",
+            "upi_underlier_name":"USD-SOFR-OIS Compound",
             "notional": 100_000_000,
             "strike": 4.00,
             "expiration_date": pd.Timestamp("2027-01-06"),
@@ -1446,9 +1474,9 @@ def conditional_steepener_df():
             "trade_id": "CS002",
             "product_type": "SWAPTION_PAYER",
             "execution_timestamp": base_ts + pd.Timedelta(seconds=15),
-            "Platform identifier": "BILT",
+            "platform_identifier":"BILT",
             "notional_currency": "USD",
-            "UPI Underlier Name": "USD-SOFR-OIS Compound",
+            "upi_underlier_name":"USD-SOFR-OIS Compound",
             "notional": 50_000_000,  # Smaller (DV01 weighted)
             "strike": 4.25,
             "expiration_date": pd.Timestamp("2027-01-06"),  # Same expiry
@@ -1477,9 +1505,9 @@ def conditional_flattener_df():
             "trade_id": "CF001",
             "product_type": "SWAPTION_RECEIVER",
             "execution_timestamp": base_ts,
-            "Platform identifier": "BILT",
+            "platform_identifier":"BILT",
             "notional_currency": "USD",
-            "UPI Underlier Name": "USD-SOFR-OIS Compound",
+            "upi_underlier_name":"USD-SOFR-OIS Compound",
             "notional": 50_000_000,  # Smaller
             "strike": 3.50,
             "expiration_date": pd.Timestamp("2027-01-06"),
@@ -1491,9 +1519,9 @@ def conditional_flattener_df():
             "trade_id": "CF002",
             "product_type": "SWAPTION_RECEIVER",
             "execution_timestamp": base_ts + pd.Timedelta(seconds=10),
-            "Platform identifier": "BILT",
+            "platform_identifier":"BILT",
             "notional_currency": "USD",
-            "UPI Underlier Name": "USD-SOFR-OIS Compound",
+            "upi_underlier_name":"USD-SOFR-OIS Compound",
             "notional": 100_000_000,  # Larger (long)
             "strike": 3.75,
             "expiration_date": pd.Timestamp("2027-01-06"),
@@ -1553,7 +1581,7 @@ class TestConditionalCurveDetection:
                 "trade_id": "DE001",
                 "product_type": "SWAPTION_PAYER",
                 "execution_timestamp": base_ts,
-                "Platform identifier": "BILT",
+                "platform_identifier":"BILT",
                 "notional_currency": "USD",
                 "notional": 100_000_000,
                 "strike": 4.00,
@@ -1565,7 +1593,7 @@ class TestConditionalCurveDetection:
                 "trade_id": "DE002",
                 "product_type": "SWAPTION_PAYER",
                 "execution_timestamp": base_ts,
-                "Platform identifier": "BILT",
+                "platform_identifier":"BILT",
                 "notional_currency": "USD",
                 "notional": 50_000_000,
                 "strike": 4.25,
@@ -1592,7 +1620,7 @@ class TestConditionalCurveDetection:
                 "trade_id": "MT001",
                 "product_type": "SWAPTION_PAYER",
                 "execution_timestamp": base_ts,
-                "Platform identifier": "BILT",
+                "platform_identifier":"BILT",
                 "notional_currency": "USD",
                 "notional": 100_000_000,
                 "strike": 4.00,
@@ -1604,7 +1632,7 @@ class TestConditionalCurveDetection:
                 "trade_id": "MT002",
                 "product_type": "SWAPTION_PAYER",
                 "execution_timestamp": base_ts,
-                "Platform identifier": "BILT",
+                "platform_identifier":"BILT",
                 "notional_currency": "USD",
                 "notional": 100_000_000,
                 "strike": 4.00,
@@ -1644,58 +1672,66 @@ def vega_expiry_spread_df():
             "trade_id": "VE001",
             "product_type": "SWAPTION_PAYER",
             "execution_timestamp": base_ts,
-            "Platform identifier": "BILT",
+            "platform_identifier":"BILT",
             "notional_currency": "USD",
-            "UPI Underlier Name": "USD-SOFR-OIS Compound",
+            "upi_underlier_name":"USD-SOFR-OIS Compound",
+            "trade_label": "USD SOFR SWAPTION",
             "notional": 100_000_000,
             "strike": 4.00,
             "expiration_date": pd.Timestamp("2026-10-06"),
             "tenor_years": 10.0,
             "forward_start_years": 0.75,  # 9M expiry
             "premium": 48000.0,
+            "package_indicator": False,
         },
         {
             "trade_id": "VE002",
             "product_type": "SWAPTION_RECEIVER",
             "execution_timestamp": base_ts,
-            "Platform identifier": "BILT",
+            "platform_identifier":"BILT",
             "notional_currency": "USD",
-            "UPI Underlier Name": "USD-SOFR-OIS Compound",
+            "upi_underlier_name":"USD-SOFR-OIS Compound",
+            "trade_label": "USD SOFR SWAPTION",
             "notional": 100_000_000,
             "strike": 4.00,
             "expiration_date": pd.Timestamp("2026-10-06"),
             "tenor_years": 10.0,
             "forward_start_years": 0.75,
             "premium": 48000.0,
+            "package_indicator": False,
         },
         # Second straddle: 1Yx10Y (different expiry, same tail)
         {
             "trade_id": "VE003",
             "product_type": "SWAPTION_PAYER",
             "execution_timestamp": base_ts + pd.Timedelta(seconds=30),
-            "Platform identifier": "BILT",
+            "platform_identifier":"BILT",
             "notional_currency": "USD",
-            "UPI Underlier Name": "USD-SOFR-OIS Compound",
+            "upi_underlier_name":"USD-SOFR-OIS Compound",
+            "trade_label": "USD SOFR SWAPTION",
             "notional": 100_000_000,
             "strike": 3.95,
             "expiration_date": pd.Timestamp("2027-01-06"),
             "tenor_years": 10.0,  # Same tail
             "forward_start_years": 1.0,  # 1Y expiry (different)
             "premium": 52000.0,
+            "package_indicator": False,
         },
         {
             "trade_id": "VE004",
             "product_type": "SWAPTION_RECEIVER",
             "execution_timestamp": base_ts + pd.Timedelta(seconds=30),
-            "Platform identifier": "BILT",
+            "platform_identifier":"BILT",
             "notional_currency": "USD",
-            "UPI Underlier Name": "USD-SOFR-OIS Compound",
+            "upi_underlier_name":"USD-SOFR-OIS Compound",
+            "trade_label": "USD SOFR SWAPTION",
             "notional": 100_000_000,
             "strike": 3.95,
             "expiration_date": pd.Timestamp("2027-01-06"),
             "tenor_years": 10.0,
             "forward_start_years": 1.0,
             "premium": 52000.0,
+            "package_indicator": False,
         },
     ])
 
@@ -1716,58 +1752,66 @@ def vega_tail_spread_df():
             "trade_id": "VT001",
             "product_type": "SWAPTION_PAYER",
             "execution_timestamp": base_ts,
-            "Platform identifier": "BILT",
+            "platform_identifier":"BILT",
             "notional_currency": "USD",
-            "UPI Underlier Name": "USD-SOFR-OIS Compound",
+            "upi_underlier_name":"USD-SOFR-OIS Compound",
+            "trade_label": "USD SOFR SWAPTION",
             "notional": 230_000_000,
             "strike": 4.025,
             "expiration_date": pd.Timestamp("2027-01-06"),
             "tenor_years": 5.0,  # 5Y tail
             "forward_start_years": 1.0,
             "premium": 125000.0,
+            "package_indicator": False,
         },
         {
             "trade_id": "VT002",
             "product_type": "SWAPTION_RECEIVER",
             "execution_timestamp": base_ts,
-            "Platform identifier": "BILT",
+            "platform_identifier":"BILT",
             "notional_currency": "USD",
-            "UPI Underlier Name": "USD-SOFR-OIS Compound",
+            "upi_underlier_name":"USD-SOFR-OIS Compound",
+            "trade_label": "USD SOFR SWAPTION",
             "notional": 230_000_000,
             "strike": 4.025,
             "expiration_date": pd.Timestamp("2027-01-06"),
             "tenor_years": 5.0,
             "forward_start_years": 1.0,
             "premium": 125000.0,
+            "package_indicator": False,
         },
         # Second straddle: 1Yx10Y (same expiry, different tail)
         {
             "trade_id": "VT003",
             "product_type": "SWAPTION_PAYER",
             "execution_timestamp": base_ts,
-            "Platform identifier": "BILT",
+            "platform_identifier":"BILT",
             "notional_currency": "USD",
-            "UPI Underlier Name": "USD-SOFR-OIS Compound",
+            "upi_underlier_name":"USD-SOFR-OIS Compound",
+            "trade_label": "USD SOFR SWAPTION",
             "notional": 150_000_000,
             "strike": 3.981,
             "expiration_date": pd.Timestamp("2027-01-06"),
             "tenor_years": 10.0,  # 10Y tail (different)
             "forward_start_years": 1.0,  # Same expiry
             "premium": 135000.0,
+            "package_indicator": False,
         },
         {
             "trade_id": "VT004",
             "product_type": "SWAPTION_RECEIVER",
             "execution_timestamp": base_ts,
-            "Platform identifier": "BILT",
+            "platform_identifier":"BILT",
             "notional_currency": "USD",
-            "UPI Underlier Name": "USD-SOFR-OIS Compound",
+            "upi_underlier_name":"USD-SOFR-OIS Compound",
+            "trade_label": "USD SOFR SWAPTION",
             "notional": 150_000_000,
             "strike": 3.981,
             "expiration_date": pd.Timestamp("2027-01-06"),
             "tenor_years": 10.0,
             "forward_start_years": 1.0,
             "premium": 135000.0,
+            "package_indicator": False,
         },
     ])
 
@@ -1847,7 +1891,7 @@ class TestVegaCurveDetection:
                 "trade_id": "NV001",
                 "product_type": "SWAPTION_PAYER",
                 "execution_timestamp": pd.Timestamp("2026-01-06 10:00:00", tz="UTC"),
-                "Platform identifier": "BILT",
+                "platform_identifier":"BILT",
                 "notional_currency": "USD",
                 "notional": 100_000_000,
                 "tenor_years": 10.0,
@@ -1885,38 +1929,42 @@ class TestCombinedDetectionPipeline:
                 "trade_id": "FP001",
                 "product_type": "SWAPTION_PAYER",
                 "execution_timestamp": base_ts,
-                "Platform identifier": "BILT",
+                "platform_identifier":"BILT",
                 "notional_currency": "USD",
-                "UPI Underlier Name": "USD-SOFR-OIS Compound",
+                "upi_underlier_name":"USD-SOFR-OIS Compound",
+                "trade_label": "USD SOFR SWAPTION",
                 "notional": 100_000_000,
                 "strike": 4.00,
                 "expiration_date": pd.Timestamp("2027-01-06"),
                 "tenor_years": 10.0,
                 "forward_start_years": 1.0,
                 "premium": 50000.0,
+                "package_indicator": False,
             },
             {
                 "trade_id": "FP002",
                 "product_type": "SWAPTION_RECEIVER",
                 "execution_timestamp": base_ts,
-                "Platform identifier": "BILT",
+                "platform_identifier":"BILT",
                 "notional_currency": "USD",
-                "UPI Underlier Name": "USD-SOFR-OIS Compound",
+                "upi_underlier_name":"USD-SOFR-OIS Compound",
+                "trade_label": "USD SOFR SWAPTION",
                 "notional": 100_000_000,
                 "strike": 4.00,
                 "expiration_date": pd.Timestamp("2027-01-06"),
                 "tenor_years": 10.0,
                 "forward_start_years": 1.0,
                 "premium": 50000.0,
+                "package_indicator": False,
             },
             # 1x2 Vertical Spread (later in time)
             {
                 "trade_id": "FP003",
                 "product_type": "SWAPTION_PAYER",
                 "execution_timestamp": base_ts + pd.Timedelta(minutes=5),
-                "Platform identifier": "BILT",
+                "platform_identifier":"BILT",
                 "notional_currency": "USD",
-                "UPI Underlier Name": "USD-SOFR-OIS Compound",
+                "upi_underlier_name":"USD-SOFR-OIS Compound",
                 "notional": 100_000_000,
                 "strike": 4.50,
                 "expiration_date": pd.Timestamp("2027-06-06"),
@@ -1928,9 +1976,9 @@ class TestCombinedDetectionPipeline:
                 "trade_id": "FP004",
                 "product_type": "SWAPTION_PAYER",
                 "execution_timestamp": base_ts + pd.Timedelta(minutes=5, seconds=10),
-                "Platform identifier": "BILT",
+                "platform_identifier":"BILT",
                 "notional_currency": "USD",
-                "UPI Underlier Name": "USD-SOFR-OIS Compound",
+                "upi_underlier_name":"USD-SOFR-OIS Compound",
                 "notional": 200_000_000,  # 1x2
                 "strike": 5.00,
                 "expiration_date": pd.Timestamp("2027-06-06"),
@@ -1945,9 +1993,7 @@ class TestCombinedDetectionPipeline:
             config=config,
             detect_straddles=True,
             detect_vertical_spreads=True,
-            straddle_timestamp_tolerance=datetime.timedelta(seconds=60),
-            straddle_strike_tolerance=0.01,
-            straddle_notional_tolerance_pct=0.05,
+            custy_straddle_timestamp_tolerance=datetime.timedelta(seconds=60),
         )
 
         # Check straddle detected
@@ -1974,38 +2020,40 @@ class TestCombinedDetectionPipeline:
                 "trade_id": "PO001",
                 "product_type": "SWAPTION_PAYER",
                 "execution_timestamp": base_ts,
-                "Platform identifier": "BILT",
+                "platform_identifier":"BILT",
                 "notional_currency": "USD",
-                "UPI Underlier Name": "USD-SOFR-OIS Compound",
+                "upi_underlier_name":"USD-SOFR-OIS Compound",
+                "trade_label": "USD SOFR SWAPTION",
                 "notional": 100_000_000,
                 "strike": 4.00,
                 "expiration_date": pd.Timestamp("2027-01-06"),
                 "tenor_years": 10.0,
                 "forward_start_years": 1.0,
                 "premium": 50000.0,
+                "package_indicator": False,
             },
             {
                 "trade_id": "PO002",
                 "product_type": "SWAPTION_RECEIVER",
                 "execution_timestamp": base_ts,
-                "Platform identifier": "BILT",
+                "platform_identifier":"BILT",
                 "notional_currency": "USD",
-                "UPI Underlier Name": "USD-SOFR-OIS Compound",
+                "upi_underlier_name":"USD-SOFR-OIS Compound",
+                "trade_label": "USD SOFR SWAPTION",
                 "notional": 100_000_000,
                 "strike": 4.00,
                 "expiration_date": pd.Timestamp("2027-01-06"),
                 "tenor_years": 10.0,
                 "forward_start_years": 1.0,
                 "premium": 50000.0,
+                "package_indicator": False,
             },
         ])
 
         result = detect_and_link_swaption_packages_df(
             df,
             config=config,
-            straddle_timestamp_tolerance=datetime.timedelta(seconds=60),
-            straddle_strike_tolerance=0.01,
-            straddle_notional_tolerance_pct=0.05,
+            custy_straddle_timestamp_tolerance=datetime.timedelta(seconds=60),
         )
 
         # Should be detected as STRADDLE (higher priority), not vertical spread

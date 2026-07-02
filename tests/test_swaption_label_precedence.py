@@ -54,8 +54,10 @@ def _build_desc(monkeypatch, *, ref_df: pd.DataFrame, trade_overrides: dict | No
 
 def test_get_imm_label_requires_exact_date():
     assert get_imm_label(pd.Timestamp("2026-06-17")) == "IMM_M2026"
-    assert get_imm_label(pd.Timestamp("2026-06-16")) is None
-    assert get_imm_label(pd.Timestamp("2026-06-16"), tolerance_days=7) is None
+    # tolerance_days=1 is now the default; use 0 to require exact match
+    assert get_imm_label(pd.Timestamp("2026-06-16"), tolerance_days=0) is None
+    # within 7-day tolerance, June 16 matches IMM June 17
+    assert get_imm_label(pd.Timestamp("2026-06-16"), tolerance_days=7) == "IMM_M2026"
     assert get_special_label(pd.Timestamp("2027-06-11")) is None
 
 
