@@ -8,81 +8,35 @@ export const DISPLAY_VIEW = TAPE_DISPLAY_VIEW
 export const PACKAGES_TABLE = 'arbs_usd_swap_tape_packages_v2'
 export const LEGS_TABLE = 'arbs_usd_swap_tape_legs_v2'
 
-const COLUMNS = [
-  'd.package_id',
-  'd.manual_link_id',
-  'd.as_of_date',
-  'd.execution_start',
-  'd.execution_end',
-  'd.original_execution_start',
-  'd.clearing_accepted_start',
-  'd.package_structure',
-  'd.package_type',
-  'd.package_indicator',
-  'd.package_tenors',
-  'd.n_package_legs',
-  'd.legs_count',
-  'd.total_notional',
-  'd.gross_notional',
-  'd.total_risk',
-  'd.gross_risk',
-  'd.weighted_fixed_rate',
-  'd.min_fixed_rate',
-  'd.max_fixed_rate',
-  'd.has_spread',
-  'd.package_transaction_spread',
-  'd.package_transaction_price',
-  'd.package_transaction_price_currency',
-  'd.rate_index_clean',
-  'd.venue',
-  'd.ccp',
-  'd.execution_session',
-  'd.is_new_risk',
-  'd.is_unwind',
-  'd.is_compression_any',
-  'd.is_ufro_any',
-  'd.is_block_any',
-  'd.is_capped_any',
-  'd.is_off_date_any',
-  'd.is_termination_any',
-  'd.is_novation_any',
-  'd.is_reset_optimization_any',
-  'd.is_clearing_termination_any',
-  'd.is_correction_any',
-  'd.lifecycle_mix',
-  // Phase 3/4 economic-class rollups
-  'd.economic_class_primary',
-  'd.contributes_to_flow_any',
-  'd.contributes_to_volume_any',
-  'd.contributes_to_pnl_any',
-  'd.on_p43_any',
-  'd.state_machine_violation_any',
-  'd.is_fomc_dated',
-  'd.fomc_meeting_label',
-  'd.cluster_id',
-  'd.cluster_size',
-  'd.tape_label',
-  // PTP package-detection / OPA sign-solver columns. resolveDisplayView
-  // intersects this list with the live view's columns, so these only
-  // project once the schema migration has run.
-  'd.ptp_group_id',
-  'd.ptp_group_size',
-  'd.opa_signed_net',
-  'd.opa_ptp_residual',
-  'd.opa_sign_confidence',
-  'd.dealer_spread_est',
-  'd.dealer_spread_bps',
-  'd.ptp_sub_structures',
-  'd.package_metrics',
-  'd.legs_json',
-  'd.manual_package_id',
-  'd.user_comment',
-  'd.link_reason',
-  'd.tags',
-  'd.link_metrics',
-  'd.link_created_by',
-  'd.link_created_at',
-]
+// Audit C1 prevention: the old hard-coded COLUMNS allowlist silently
+// dropped every new view column (the whole PTP feature shipped invisible).
+// Project ALL view columns except explicit exclusions, so the failure mode
+// of forgetting registration becomes harmless over-inclusion. Excluded
+// columns are ones the client derives itself or never reads.
+export const EXCLUDED_VIEW_COLUMNS = new Set<string>([
+  // seed from Step 1's live diff — keep this comment-annotated:
+  'is_off_market_any',      // client-side derived signal
+  'confidence_score',       // internal scoring — not surfaced in UI
+  'confidence_total',       // internal scoring — not surfaced in UI
+  'confidence_tone',        // internal scoring — not surfaced in UI
+  'confidence_signals',     // internal scoring — not surfaced in UI
+  'summary_rate',           // pre-computed summary — not surfaced in UI
+  'summary_risk',           // pre-computed summary — not surfaced in UI
+  'summary_opa',            // pre-computed summary — not surfaced in UI
+  'is_ccp_switch',          // CCP switch flag — not surfaced in UI
+  'ccp_switch_from',        // CCP switch detail — not surfaced in UI
+  'ccp_switch_to',          // CCP switch detail — not surfaced in UI
+  'package_adjusted_dv01',  // derived risk metric — not surfaced in UI
+  'normalized_tape_label',  // internal label normalization — not surfaced in UI
+  'tape_tags',              // internal tagging — not surfaced in UI
+])
+
+/** Test-only pure helper. */
+export function __projectColumns(viewColumns: string[]): string[] {
+  return viewColumns
+    .filter((c) => !EXCLUDED_VIEW_COLUMNS.has(c))
+    .map((c) => `d.${c}`)
+}
 
 export type TapeDisplayView = {
   view: string
@@ -114,11 +68,7 @@ export async function resolveDisplayView(): Promise<TapeDisplayView> {
       `tape display view ${DISPLAY_VIEW} not found — run ingest_usdswaps_tape`,
     )
   }
-  const availableColumns = new Set(present.rows.map((r) => r.column_name))
-  const projected = COLUMNS.filter((qualified) => {
-    const name = qualified.replace(/^d\./, '')
-    return availableColumns.has(name)
-  })
+  const projected = __projectColumns(present.rows.map((r) => r.column_name))
   cached = { view: DISPLAY_VIEW, columns: projected.join(', ') }
   cachedAt = now
   return cached
