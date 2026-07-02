@@ -50,10 +50,9 @@ SR3 − ZQ = [realized-to-date fixings]           (booked, never modeled)
 | Tests | pytest markers, fixture parquet + `pytest.approx` tolerance bands | **new** `tests/serff/` |
 | Package shape | `BT/flow_alpha/` subpackage precedent | **new** `BT/serff/` |
 
-### Surfaced conflict — engine choice (per amendment instruction)
+### Engine choice — both paths built
 
-`QueryDrivenBacktest` (the "full" engine) resolves STIR futures pricers per timestamp via MDP; those pricers hang off swap-curve snapshots (`BARCHART_STIRF-RL`) whose history does not reliably extend to 2018, and the residual ledger needs marks at **actual exchange settles**, not curve-implied prices. The repo's second sanctioned convention — panel-driven runners marking at cached EOD settles (`sfr_cal_spread_rv`, `vectorized_backtest`, `risk_premia_pairs`) — marks exactly at settles and is what this build uses. For futures (linear payoff, daily variation margin) panel marks × contract multipliers are exact, not approximate.
-**Option B (not built):** a `SERFFLedgerQuery` + `PositionHandler` wrapping the same panel, so positions flow through `QueryDrivenBacktest`/tearsheet. Additive later; the position ledger produced here carries the per-leg detail a handler would need.
+The panel-driven runner (`BT/serff/backtest.py`) computes signals, walk-forward fits, exact source attribution, and marks at cached EOD settles — the repo's `sfr_cal_spread_rv`/`vectorized_backtest` convention. **Option B is also implemented** (`BT/serff/engine_backtest.py`, added on user instruction): the same ledger-driven trades replay through `QueryDrivenBacktest` with `STIRFutureMDP(source="BARCHART_STIRF-RL")`, i.e. positions are `STIRFutureQuery` OUTRIGHT legs and every mark is an **actual Barchart print resolved by the MDP** — no swap-curve derivation anywhere (the `-RL` suffix denotes the rateslib pricer backend, not curve pricing; specs `usd_stir`/$25 and `usd_stir1`/$41.67 carry the multipliers). Notes discovered wiring it: (1) direction must be positive `contracts` + `risk_weights=[±1]` — negative contracts double-encode the sign into both PV01 and weights and flip MTM; (2) the query layer requires integer contracts, so fractional stub hedges are expressed via a `unit_scale` structure multiplier (default 30) with per-trade rounding error reported; (3) the MDP pricer diskcache is pre-warmed from the settle panel using the exact request-key format, so replays are offline. Engine MTM cross-checks the panel runner's P&L (comparison artifact in `analysis_outputs/serff`).
 
 ## 4. Data contract
 
