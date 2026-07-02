@@ -101,3 +101,15 @@ distribution. Grafana dashboards alert on drift.
   with `parse_notation_scalar` per [#64] Strike price notation.
 - Don't drop `_v1` tables without the Phase 6 sign-off checklist
   complete.
+- Don't parse raw SDR numerics (`Package transaction price`, `Other
+  payment amount`, …) with bare `pd.to_numeric` — they arrive as strings
+  with thousands separators and `;` multi-values. Use `numeric_like`
+  ([`SDRUtils/packages/ptp_grouper.py`](packages/ptp_grouper.py)) or
+  `_coerce_numeric_like`.
+- Don't call `df.get(col)` and treat the result as a Series — pandas
+  returns `None` for missing columns. Always pass a Series default:
+  `df.get(col, pd.Series(index=df.index, dtype=...))`.
+- Don't change detector *output* (columns or values) without bumping the
+  detection cache version (see `DETECTION_CACHE_VERSION` in
+  [`SDRUtils/products/usd/usd_swaps.py`](products/usd/usd_swaps.py)) AND
+  `TRADE_TAPE_CACHE_VERSION`.
