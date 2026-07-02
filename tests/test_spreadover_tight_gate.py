@@ -30,6 +30,7 @@ def _mk(**overrides):
         "other_payment_type": None,
         "package_type": "OUTRIGHT",
         "invoice_swap_ticker": None,
+        "tenor_years": 10.0,
     }
     row.update(overrides)
     return pd.DataFrame([row])

@@ -22,6 +22,7 @@ def row_template():
         "other_payment_type": None,
         "package_type": "OUTRIGHT",
         "invoice_swap_ticker": None,
+        "tenor_years": 5.0,
     }
 
 

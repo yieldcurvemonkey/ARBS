@@ -906,9 +906,7 @@ def detect_spreadovers(package_df: pd.DataFrame):
         copy_df.get("tenor_years", pd.Series([None] * len(copy_df), index=copy_df.index)),
         errors="coerce",
     )
-    # Missing tenor_years (NaN) passes through: real pipeline always has the
-    # column; synthetic fixtures that omit it should not be blocked.
-    is_spreadover_tenor = tenor_y.isna()
+    is_spreadover_tenor = pd.Series(False, index=copy_df.index)
     for std_t in _SPREADOVER_VALID_TENORS:
         is_spreadover_tenor |= (tenor_y - std_t).abs() <= 0.1
     package_legs_col = copy_df.get(
