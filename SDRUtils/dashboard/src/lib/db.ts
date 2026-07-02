@@ -1,4 +1,11 @@
-import { Pool, type PoolClient, type QueryResult, type QueryResultRow } from 'pg'
+import { Pool, types, type PoolClient, type QueryResult, type QueryResultRow } from 'pg'
+
+// pg returns NUMERIC (1700) and BIGINT (20) as strings by default. Every
+// consumer in this app treats them as numbers (formatters wrap Number(),
+// the tape table sorts on them — audit 2026-07-01 found lexicographic
+// spread sorting). Values are money/risk quantities well inside 2^53.
+types.setTypeParser(1700, (v: string) => (v === null ? null : parseFloat(v)))
+types.setTypeParser(20, (v: string) => (v === null ? null : parseInt(v, 10)))
 
 type DbPoolHolder = {
   __swapPulsePool?: Pool
