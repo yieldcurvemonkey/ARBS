@@ -1,5 +1,5 @@
 from __future__ import annotations
-from typing import Any, Callable, Dict, Tuple
+from typing import Any, Callable, Dict, Tuple, Union
 
 from MDP.MarketDataProvider import MarketDataProvider
 from MDP.Spreads.SpreadPricer import SpreadPricer
@@ -41,3 +41,12 @@ class SpreadMDP(MarketDataProvider):
                 "request": request,
             },
         )
+
+    def bulk_get_data(self, request: Any) -> Dict:
+        """Iterate over timestamps and call get_pricer for each, compatible with IRSwapsTB."""
+        timestamps = request.get("timestamps", [])
+        base_req = {k: v for k, v in request.items() if k != "timestamps"}
+        result: Dict[Any, SpreadPricer] = {}
+        for ts in timestamps:
+            result[ts] = self.get_pricer({**base_req, "timestamp": ts})
+        return result

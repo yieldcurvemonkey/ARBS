@@ -18,3 +18,12 @@ class SpreadPricer:
     @property
     def meta_data(self) -> Dict[str, Any]:
         return self._meta_data
+
+    def id(self) -> str:
+        """Return curve identifier; required by IRSwapsTB._build_row_for_query."""
+        req = self._meta_data.get("request", {})
+        return (
+            self._meta_data.get("curve_name")
+            or req.get("curve_name")
+            or getattr(self.pricer_a, "id", lambda: "spread")()
+        )

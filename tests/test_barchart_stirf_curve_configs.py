@@ -57,14 +57,14 @@ def test_curve_configs_cover_central_banks_added_from_calendar_file():
     node_keys = {cfg.get("node_reference_key", cfg["reference_key"]) for cfg in cfgs.values()}
     assert required_cb_keys.issubset(node_keys)
 
-    assert "EUR-ESTR-ICE-Q12xM12" in cfgs
-    assert "CAD-CORRA-Q8" in cfgs
-    assert "GBP-SONIA-Q12" in cfgs
-    assert "JPY-TONA-JPX-Q12" in cfgs
-    assert "JPY-TONA-TFX-Q12" in cfgs
-    assert "CHF-SARON-Q12" in cfgs
-    assert "EUR-EURIBOR-ICE-Q12" in cfgs
-    assert "EUR-EURIBOR-EUREX-Q12" in cfgs
+    assert "EUR-ESTR-LONDON-Q12STIRT" in cfgs
+    assert "CAD-CORRA-Q8STIRT" in cfgs
+    assert "GBP-SONIA-Q12STIRT" in cfgs
+    assert "JPY-TONA-JPX-Q12STIRT" in cfgs
+    assert "JPY-TONA-TFX-Q12STIRT" in cfgs
+    assert "CHF-SARON-Q12STIRT" in cfgs
+    assert "EUR-EURIBOR-ICE-Q12STIRT" in cfgs
+    assert "EUR-EURIBOR-EUREX-Q12STIRT" in cfgs
 
 
 def test_rateslib_calendar_keys_exist_for_added_curves():

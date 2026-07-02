@@ -1,6 +1,7 @@
 import datetime as dt
 from dataclasses import dataclass
 
+import pandas as pd
 import pytest
 
 from Query.IRSwaps.IRSwapQuery import IRSwapQuery
@@ -71,16 +72,18 @@ def test_ranked_fomc_tenor_resolves_from_curve_reference_date():
     swap = _resolve_outright("USD-SOFR-1D", dt.date(2026, 3, 13), "fomc_1")
 
     assert swap.tenor is None
-    assert swap.effective_date == dt.date(2026, 3, 18)
-    assert swap.maturity_date == dt.date(2026, 4, 29)
+    # production ranked-tenor resolver returns pd.Timestamp; normalise for comparison
+    assert pd.Timestamp(swap.effective_date) == pd.Timestamp("2026-03-18")
+    assert pd.Timestamp(swap.maturity_date) == pd.Timestamp("2026-04-29")
 
 
 def test_ranked_ecb_tenor_resolves_second_upcoming_meeting():
     swap = _resolve_outright("EUR-ESTR", dt.date(2026, 3, 13), "ecb_2")
 
     assert swap.tenor is None
-    assert swap.effective_date == dt.date(2026, 4, 30)
-    assert swap.maturity_date == dt.date(2026, 6, 11)
+    # production ranked-tenor resolver returns pd.Timestamp; normalise for comparison
+    assert pd.Timestamp(swap.effective_date) == pd.Timestamp("2026-04-30")
+    assert pd.Timestamp(swap.maturity_date) == pd.Timestamp("2026-06-11")
 
 
 def test_explicit_central_bank_prefix_must_match_curve():

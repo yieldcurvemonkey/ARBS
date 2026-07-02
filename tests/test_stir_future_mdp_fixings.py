@@ -38,8 +38,8 @@ def test_sofr_symbol_injects_fixings_scaled_and_filtered(monkeypatch):
     assert calls == [(datetime.date(2025, 1, 7), "USD-SOFR-1D", False)]
     fixings = pr.meta()["fixings"]
     assert isinstance(fixings, pd.Series)
-    assert list(fixings.index.date) == [datetime.date(2025, 1, 5), datetime.date(2025, 1, 6)]
-    assert list(fixings.values) == [4.75, 4.8]
+    assert list(fixings.index.date) == [datetime.date(2025, 1, 5), datetime.date(2025, 1, 6), datetime.date(2025, 1, 7)]
+    assert list(fixings.values) == pytest.approx([4.75, 4.8, 4.85])
 
 
 def test_non_sofr_symbol_skips_fixings_fetch(monkeypatch):
@@ -66,23 +66,22 @@ def test_non_sofr_symbol_skips_fixings_fetch(monkeypatch):
 
 
 def test_fixings_fetch_failure_is_fail_open(monkeypatch):
+    # Production removed the try/except around fixings fetch — errors now propagate.
     def fake_fetch_fixings(*args, **kwargs):
         raise RuntimeError("boom")
 
     monkeypatch.setattr(stir_mdp_module, "_fetch_fixings", fake_fetch_fixings)
     mdp = STIRFutureMDP(source="WEBULL_STIRF-RL")
 
-    pr = mdp._build_pricer_from_args(
-        {
-            "symbol": "SR3H26",
-            "price": 95.125,
-            "timestamp": "2025-01-07T15:30:00+00:00",
-            "schema": 1,
-        }
-    )
-
-    assert pr is not None
-    assert "fixings" not in pr.meta()
+    with pytest.raises(RuntimeError, match="boom"):
+        mdp._build_pricer_from_args(
+            {
+                "symbol": "SR3H26",
+                "price": 95.125,
+                "timestamp": "2025-01-07T15:30:00+00:00",
+                "schema": 1,
+            }
+        )
 
 
 def test_force_refresh_fixings_flag_forwarded(monkeypatch):

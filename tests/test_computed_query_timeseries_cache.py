@@ -217,6 +217,9 @@ def test_computed_timeseries_store_skips_redundant_per_day_remote_probe_for_abse
             self.prefetch_calls.append((symbol, start, end))
             return []
 
+        def pull_days_batch(self, symbol, trading_dates):
+            return []
+
         def pull_day(self, symbol, trading_date):
             self.pull_calls.append((symbol, trading_date))
             return False

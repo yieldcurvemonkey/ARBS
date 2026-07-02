@@ -1,6 +1,7 @@
 import datetime as dt
 import pickle
 from concurrent.futures import Future
+from types import SimpleNamespace
 
 import pandas as pd
 import pytest
@@ -82,7 +83,7 @@ def test_bulk_bundle_write_uses_cme_trading_date(monkeypatch):
 
         return _single_fetch, _bulk_fetch
 
-    def _build_curve_from_pricers(*, curve_name, timestamp, cfg, pricers):
+    def _build_curve_from_pricers(*, curve_name, timestamp, cfg, pricers, initial_nodes=None, solver_tolerances=None):
         return _make_curve(timestamp), object()
 
     def _attach_curve_context(curve, *, curve_name, timestamp, cfg):
@@ -221,16 +222,27 @@ def test_process_mode_uses_process_executor_and_parent_bundle_write(monkeypatch)
     executor_uses = []
     individual_puts = []
 
+    pricer_counter = [0]
+
     def _resolve_fetchers_for_request(*, cfg, is_live_request):
         def _single_fetch(request):
             raise AssertionError("single fetch should not be used in bulk path")
 
         def _bulk_fetch(request):
             bulk_fetch_requests.append(dict(request))
-            return {
-                ts: {"SFRCM1": [object()]}
-                for ts in request["timestamps"]
-            }
+            result = {}
+            for ts in request["timestamps"]:
+                pricer_counter[0] += 1
+                pricer = SimpleNamespace(
+                    _rl_stirf_id=f"SFRCM1-{pricer_counter[0]}",
+                    _price=96.0 - pricer_counter[0] * 0.01,
+                    _rate=None,
+                    _contracts=1,
+                    _effective_date=dt.date(2026, 3, 15),
+                    _maturity_date=dt.date(2026, 6, 15),
+                )
+                result[ts] = {"SFRCM1": [pricer]}
+            return result
 
         return _single_fetch, _bulk_fetch
 
@@ -258,7 +270,7 @@ def test_process_mode_uses_process_executor_and_parent_bundle_write(monkeypatch)
     monkeypatch.setattr(
         barchart_rl_module,
         "_build_curve_from_pricers_core",
-        lambda curve_name, timestamp, cfg, pricers: (_make_curve(timestamp), object()),
+        lambda curve_name, timestamp, cfg, pricers, initial_nodes=None, solver_tolerances=None: (_make_curve(timestamp), object()),
     )
     monkeypatch.setattr(barchart_rl_module, "_validate_spawn_process_pool_environment", lambda: None)
     monkeypatch.setattr(
@@ -317,16 +329,26 @@ def test_process_and_thread_modes_return_equivalent_curves(monkeypatch):
         for minute in range(3)
     ]
     executor_uses = []
+    pricer_counter_2 = [0]
 
     def _resolve_fetchers_for_request(*, cfg, is_live_request):
         def _single_fetch(request):
             raise AssertionError("single fetch should not be used in bulk path")
 
         def _bulk_fetch(request):
-            return {
-                ts: {"SFRCM1": [object()]}
-                for ts in request["timestamps"]
-            }
+            result = {}
+            for ts in request["timestamps"]:
+                pricer_counter_2[0] += 1
+                pricer = SimpleNamespace(
+                    _rl_stirf_id=f"SFRCM1-{pricer_counter_2[0]}",
+                    _price=96.0 - pricer_counter_2[0] * 0.01,
+                    _rate=None,
+                    _contracts=1,
+                    _effective_date=dt.date(2026, 3, 15),
+                    _maturity_date=dt.date(2026, 6, 15),
+                )
+                result[ts] = {"SFRCM1": [pricer]}
+            return result
 
         return _single_fetch, _bulk_fetch
 
@@ -343,12 +365,13 @@ def test_process_and_thread_modes_return_equivalent_curves(monkeypatch):
         lambda curve_name, timestamps, cfg: ({}, list(timestamps)),
     )
     monkeypatch.setattr(builder, "_curve_cache_put", lambda *args, **kwargs: None)
+    monkeypatch.setattr(builder, "_curve_cache_put_local", lambda *args, **kwargs: None)
     monkeypatch.setattr(builder, "_curve_cache_daily_bundle_get", lambda *args, **kwargs: None)
     monkeypatch.setattr(builder, "_curve_cache_daily_bundle_put", lambda *args, **kwargs: None)
     monkeypatch.setattr(
         barchart_rl_module,
         "_build_curve_from_pricers_core",
-        lambda curve_name, timestamp, cfg, pricers: (_make_curve(timestamp), object()),
+        lambda curve_name, timestamp, cfg, pricers, initial_nodes=None, solver_tolerances=None: (_make_curve(timestamp), object()),
     )
     monkeypatch.setattr(barchart_rl_module, "_validate_spawn_process_pool_environment", lambda: None)
     monkeypatch.setattr(

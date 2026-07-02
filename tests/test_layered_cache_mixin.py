@@ -246,6 +246,9 @@ class TestLayeredDictProxyL2Fallback:
         c = _make_consumer(tmp_path, l2_enabled=True, l2_write=True)
 
         class FullQueue:
+            def full(self):
+                return True
+
             def put_nowait(self, item):
                 raise queue.Full
 
@@ -253,10 +256,10 @@ class TestLayeredDictProxyL2Fallback:
                 raise queue.Full
 
         with patch.object(type(c.my_cache), "_ensure_l2_write_workers", return_value=FullQueue()):
-            with patch("Caching.layered_cache_mixin.logger.warning") as mock_warning:
+            with patch("Caching.layered_cache_mixin.logger.debug") as mock_debug:
                 c.my_cache._l2_set_async("cache-key-1", "key1", "value1")
 
-        mock_warning.assert_called_once()
+        mock_debug.assert_called_once()
 
     def test_serialization_happens_before_enqueue(self, tmp_path, monkeypatch):
         """Payload is pre-serialized to bytes before hitting the queue."""
@@ -301,6 +304,9 @@ class TestLayeredDictProxyL2Fallback:
         put_calls = []
 
         class TrackingQueue:
+            def full(self):
+                return False
+
             def put(self, item, timeout=None):
                 put_calls.append(("put", timeout))
             def put_nowait(self, item):
@@ -329,6 +335,9 @@ class TestLayeredDictProxyL2Fallback:
         put_calls = []
 
         class TrackingQueue:
+            def full(self):
+                return False
+
             def put(self, item, timeout=None):
                 put_calls.append(("put", timeout))
             def put_nowait(self, item):
@@ -366,6 +375,9 @@ class TestLayeredDictProxyL2Fallback:
 
         # Full queue -> dropped
         class FullQueue:
+            def full(self):
+                return True
+
             def put(self, item, timeout=None):
                 raise queue.Full
             def put_nowait(self, item):

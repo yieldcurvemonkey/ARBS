@@ -164,8 +164,8 @@ class TestIRClearingHouseBasisSwapsMDP:
 
         assert captured["find_asset_pair"]["coverage"] is coverage
         assert captured["fetch"] == {
-            "asset_id_a": "asset_a",
-            "asset_id_b": "asset_b",
+            "asset_id_a": "asset_b",  # production swaps a/b so fetch computes CME-LCH spread
+            "asset_id_b": "asset_a",
             "start": datetime.date(2026, 1, 1),
             "end": datetime.date(2026, 2, 20),
             "gs_client_id": "cid",

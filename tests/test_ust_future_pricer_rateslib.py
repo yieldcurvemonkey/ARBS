@@ -181,7 +181,7 @@ def test_ust_get_pricer_defaults_bond_source_when_basket_requested(monkeypatch):
     monkeypatch.setattr(mdp, "_threadsafe_cache_get", lambda key: {"timestamp": "2026-03-04T20:00:00+00:00", "price": 112.0, "schema": 1})
     monkeypatch.setattr(mdp, "_threadsafe_cache_put", lambda key, value: None)
 
-    def _fake_delivery_basket(*, as_of, symbol, usts_mdp_source, source):
+    def _fake_delivery_basket(*, as_of, symbol, usts_mdp_source, source, usts_mdp=None):
         seen["usts_mdp_source"] = usts_mdp_source
         seen["basket_source"] = source
         return {

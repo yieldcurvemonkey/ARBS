@@ -140,7 +140,7 @@ def test_ust_mdp_fetch(monkeypatch):
         return df
 
     monkeypatch.setattr(mdp, "_fetch_barchart_timeseries", _mock_fetch)
-    pricers = mdp.get_pricer({"symbols": ["TYZ4", "FVZ4"], "timestamp": datetime.date(2025, 1, 6)})
+    pricers = mdp.get_pricer({"symbols": ["TYZ4", "FVZ4"], "timestamp": datetime.date(2025, 1, 6), "include_basket": False})
 
     assert "TYZ4" in pricers
     assert "FVZ4" in pricers
@@ -164,7 +164,7 @@ def test_ust_backtest_run():
         structure=USTFutureStructure.OUTRIGHT,
         value=USTFutureValue.PRICE,
         tenor="10Y",
-        contract="Z4",
+        contract="Z24",
         structure_kwargs={"contracts": 1},
     )
 

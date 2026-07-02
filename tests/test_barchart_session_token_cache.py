@@ -22,8 +22,8 @@ def test_shared_session_token_cache_reused_across_instances(monkeypatch):
 
     monkeypatch.setattr(BarchartFetcher, "_get_new_session_token", _fake_new_token)
 
-    fetcher_a = BarchartFetcher(proxies=_proxy("atlanta.us.socks.nordhold.net"), session_token_ttl_seconds=60)
-    fetcher_b = BarchartFetcher(proxies=_proxy("chicago.us.socks.nordhold.net"), session_token_ttl_seconds=60)
+    fetcher_a = BarchartFetcher(proxies=_proxy("atlanta.us.socks.nordhold.net"), session_token_ttl_seconds=60, session_token_scope="shared")
+    fetcher_b = BarchartFetcher(proxies=_proxy("chicago.us.socks.nordhold.net"), session_token_ttl_seconds=60, session_token_scope="shared")
 
     fetcher_a._fetch_session_tokens(dummy_symbol="BTC")
     fetcher_b._fetch_session_tokens(dummy_symbol="ETH")
