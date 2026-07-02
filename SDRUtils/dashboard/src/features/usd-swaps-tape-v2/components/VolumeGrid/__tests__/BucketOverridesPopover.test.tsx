@@ -21,7 +21,7 @@ describe('BucketOverridesPopover', () => {
         onChange={jest.fn()}
       />,
     )
-    expect(screen.getByLabelText('Customize buckets')).toBeInTheDocument()
+    ;(expect(screen.getByLabelText('Customize buckets')) as any).toBeInTheDocument()
   })
 
   it('toggles popover open on click', () => {
@@ -33,8 +33,8 @@ describe('BucketOverridesPopover', () => {
       />,
     )
     fireEvent.click(screen.getByLabelText('Customize buckets'))
-    expect(screen.getByText('Spot')).toBeInTheDocument()
-    expect(screen.getByText('1W-3M')).toBeInTheDocument()
+    ;(expect(screen.getByText('Spot')) as any).toBeInTheDocument()
+    ;(expect(screen.getByText('1W-3M')) as any).toBeInTheDocument()
   })
 
   it('unchecking a bucket adds to hidden', () => {

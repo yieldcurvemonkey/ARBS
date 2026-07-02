@@ -18,6 +18,7 @@ const baseCell: Cell = {
   outrightCurrent: 600_000_000,
   curveCurrent: 400_000_000,
   flyCurrent: 200_000_000,
+  invoiceCurrent: 0,
   otherCurrent: 0,
 }
 

@@ -23,6 +23,7 @@ function focused(overrides: Partial<FocusedTrade> = {}): FocusedTrade {
     weighted_fixed_rate: 0.038,
     dv01_usd_per_bp: 25_000,
     notional_usd: 50_000_000,
+    pts: null,
     side: 'PAY',
     platform: 'CUSTY',
     venue: 'BBSF',

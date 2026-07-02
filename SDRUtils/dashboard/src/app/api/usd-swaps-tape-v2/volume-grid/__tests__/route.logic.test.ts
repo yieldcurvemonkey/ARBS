@@ -296,9 +296,9 @@ describe('shapeVolumeGridResponse', () => {
     const tenor = resolveTenorSchema('default')
     const out = shapeVolumeGridResponse(
       [
-        { fwd: 'fwd_other', tenor: '5y', current_value: 1, idb_current: 0, custy_current: 1, outright_current: 0, curve_current: 0, fly_current: 0, other_current: 0, trade_count: 1, prior_array: [], p25: 0, p50: 0, p75: 0, pmin: 0, pmax: 0, n: 0, as_of_ts: null },
-        { fwd: 'spot', tenor: 'unknown_tenor', current_value: 1, idb_current: 0, custy_current: 1, outright_current: 0, curve_current: 0, fly_current: 0, other_current: 0, trade_count: 1, prior_array: [], p25: 0, p50: 0, p75: 0, pmin: 0, pmax: 0, n: 0, as_of_ts: null },
-        { fwd: 'spot', tenor: '5y', current_value: 100, idb_current: 40, custy_current: 60, outright_current: 0, curve_current: 0, fly_current: 0, other_current: 0, trade_count: 1, prior_array: [], p25: 0, p50: 0, p75: 0, pmin: 0, pmax: 0, n: 0, as_of_ts: null },
+        { fwd: 'fwd_other', tenor: '5y', current_value: 1, idb_current: 0, custy_current: 1, outright_current: 0, curve_current: 0, fly_current: 0, invoice_current: 0, other_current: 0, trade_count: 1, prior_array: [], p25: 0, p50: 0, p75: 0, pmin: 0, pmax: 0, n: 0, as_of_ts: null },
+        { fwd: 'spot', tenor: 'unknown_tenor', current_value: 1, idb_current: 0, custy_current: 1, outright_current: 0, curve_current: 0, fly_current: 0, invoice_current: 0, other_current: 0, trade_count: 1, prior_array: [], p25: 0, p50: 0, p75: 0, pmin: 0, pmax: 0, n: 0, as_of_ts: null },
+        { fwd: 'spot', tenor: '5y', current_value: 100, idb_current: 40, custy_current: 60, outright_current: 0, curve_current: 0, fly_current: 0, invoice_current: 0, other_current: 0, trade_count: 1, prior_array: [], p25: 0, p50: 0, p75: 0, pmin: 0, pmax: 0, n: 0, as_of_ts: null },
       ],
       {
         metric: 'notional', period: 'today', lookbackDays: 90,
@@ -322,9 +322,9 @@ describe('shapeVolumeGridResponse', () => {
     const venue = resolveTenorSchema('venue')
     const out = shapeVolumeGridResponse(
       [
-        { fwd: 'spot', tenor: 'BBSF', current_value: 1, idb_current: 0, custy_current: 1, outright_current: 0, curve_current: 0, fly_current: 0, other_current: 0, trade_count: 1, prior_array: [], p25: 0, p50: 0, p75: 0, pmin: 0, pmax: 0, n: 0, as_of_ts: null },
-        { fwd: 'spot', tenor: 'BGCD', current_value: 1, idb_current: 1, custy_current: 0, outright_current: 0, curve_current: 0, fly_current: 0, other_current: 0, trade_count: 1, prior_array: [], p25: 0, p50: 0, p75: 0, pmin: 0, pmax: 0, n: 0, as_of_ts: null },
-        { fwd: 'spot', tenor: 'TWSF', current_value: 1, idb_current: 0, custy_current: 1, outright_current: 0, curve_current: 0, fly_current: 0, other_current: 0, trade_count: 1, prior_array: [], p25: 0, p50: 0, p75: 0, pmin: 0, pmax: 0, n: 0, as_of_ts: null },
+        { fwd: 'spot', tenor: 'BBSF', current_value: 1, idb_current: 0, custy_current: 1, outright_current: 0, curve_current: 0, fly_current: 0, invoice_current: 0, other_current: 0, trade_count: 1, prior_array: [], p25: 0, p50: 0, p75: 0, pmin: 0, pmax: 0, n: 0, as_of_ts: null },
+        { fwd: 'spot', tenor: 'BGCD', current_value: 1, idb_current: 1, custy_current: 0, outright_current: 0, curve_current: 0, fly_current: 0, invoice_current: 0, other_current: 0, trade_count: 1, prior_array: [], p25: 0, p50: 0, p75: 0, pmin: 0, pmax: 0, n: 0, as_of_ts: null },
+        { fwd: 'spot', tenor: 'TWSF', current_value: 1, idb_current: 0, custy_current: 1, outright_current: 0, curve_current: 0, fly_current: 0, invoice_current: 0, other_current: 0, trade_count: 1, prior_array: [], p25: 0, p50: 0, p75: 0, pmin: 0, pmax: 0, n: 0, as_of_ts: null },
       ],
       {
         metric: 'notional', period: 'today', lookbackDays: 90,
@@ -348,7 +348,7 @@ describe('shapeVolumeGridResponse', () => {
       labels.map((l) => ({
         fwd: l, tenor: '5y',
         current_value: 1, idb_current: 0, custy_current: 1,
-        outright_current: 0, curve_current: 0, fly_current: 0, other_current: 0,
+        outright_current: 0, curve_current: 0, fly_current: 0, invoice_current: 0, other_current: 0,
         trade_count: 1, prior_array: [],
         p25: 0, p50: 0, p75: 0, pmin: 0, pmax: 0, n: 0, as_of_ts: null,
       })),
@@ -379,7 +379,7 @@ describe('shapeVolumeGridResponse', () => {
         {
           fwd: 'spot', tenor: '5y',
           current_value: 175, idb_current: 100, custy_current: 75,
-          outright_current: 100, curve_current: 50, fly_current: 25, other_current: 0,
+          outright_current: 100, curve_current: 50, fly_current: 25, invoice_current: 0, other_current: 0,
           trade_count: 10, prior_array: [], p25: 0, p50: 0, p75: 0, pmin: 0, pmax: 0, n: 0,
           as_of_ts: null,
         },
@@ -407,7 +407,7 @@ describe('shapeVolumeGridResponse', () => {
         {
           fwd: 'spot', tenor: '_all_',
           current_value: 100, idb_current: 40, custy_current: 60,
-          outright_current: 100, curve_current: 0, fly_current: 0, other_current: 0,
+          outright_current: 100, curve_current: 0, fly_current: 0, invoice_current: 0, other_current: 0,
           trade_count: 5, prior_array: [], p25: 0, p50: 0, p75: 0, pmin: 0, pmax: 0, n: 0,
           as_of_ts: null,
         },
@@ -433,7 +433,7 @@ describe('shapeVolumeGridResponse', () => {
         {
           fwd: '_all_', tenor: '5y',
           current_value: 100, idb_current: 40, custy_current: 60,
-          outright_current: 100, curve_current: 0, fly_current: 0, other_current: 0,
+          outright_current: 100, curve_current: 0, fly_current: 0, invoice_current: 0, other_current: 0,
           trade_count: 5, prior_array: [], p25: 0, p50: 0, p75: 0, pmin: 0, pmax: 0, n: 0,
           as_of_ts: null,
         },

@@ -2,8 +2,12 @@ import { describe, expect, it, beforeEach, afterEach, jest } from '@jest/globals
 import { ServerLru } from '../serverLru'
 
 describe('ServerLru', () => {
-  beforeEach(() => jest.useFakeTimers())
-  afterEach(() => jest.useRealTimers())
+  beforeEach(() => {
+    jest.useFakeTimers()
+  })
+  afterEach(() => {
+    jest.useRealTimers()
+  })
 
   it('hits within TTL', () => {
     const lru = new ServerLru<string>({ max: 4, ttlMs: 60_000 })

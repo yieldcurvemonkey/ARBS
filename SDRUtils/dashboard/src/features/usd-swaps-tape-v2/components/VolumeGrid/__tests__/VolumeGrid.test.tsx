@@ -51,7 +51,7 @@ const fixture: VolumeGridResponse = {
     },
   },
   cells: [
-    { fwd: 'spot', tenor: '5y', current: 1e9, idbCurrent: 4e8, custyCurrent: 6e8, tradeCount: 5,
+    { fwd: 'spot', tenor: '5y', current: 1e9, idbCurrent: 4e8, custyCurrent: 6e8, outrightCurrent: 1e9, curveCurrent: 0, flyCurrent: 0, invoiceCurrent: 0, otherCurrent: 0, tradeCount: 5,
       baseline: { p25: 1e8, p50: 5e8, p75: 9e8, min: 0, max: 1.2e9, n: 90 },
       percentile: 88 },
   ],

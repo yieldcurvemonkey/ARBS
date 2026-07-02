@@ -17,6 +17,7 @@ const baseFocused: FocusedTrade = {
   weighted_fixed_rate: null,
   dv01_usd_per_bp: 100_000,
   notional_usd: 50_000_000,
+  pts: null,
   side: 'PAY',
   platform: 'CUSTY',
   venue: 'TRADITION',

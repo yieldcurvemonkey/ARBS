@@ -419,7 +419,7 @@ describe('shapeStructureGridResponse', () => {
         {
           fwd: 'spot', tenor: '2s10s',
           current_value: 100, idb_current: 40, custy_current: 60,
-          outright_current: 0, curve_current: 100, fly_current: 0, other_current: 0,
+          outright_current: 0, curve_current: 100, fly_current: 0, invoice_current: 0, other_current: 0,
           trade_count: 5, prior_array: [80, 90, 110],
           p25: 80, p50: 90, p75: 110, pmin: 80, pmax: 110, n: 3,
           as_of_ts: '2026-05-05T14:00:00Z',
@@ -428,7 +428,7 @@ describe('shapeStructureGridResponse', () => {
         {
           fwd: 'spot', tenor: 'unknown_structure',
           current_value: 50, idb_current: 0, custy_current: 50,
-          outright_current: 0, curve_current: 0, fly_current: 0, other_current: 0,
+          outright_current: 0, curve_current: 0, fly_current: 0, invoice_current: 0, other_current: 0,
           trade_count: 1, prior_array: [],
           p25: 0, p50: 0, p75: 0, pmin: 0, pmax: 0, n: 0,
           as_of_ts: null,
@@ -467,14 +467,14 @@ describe('shapeStructureGridResponse', () => {
         {
           fwd: 'spot', tenor: '2s10s',
           current_value: 100, idb_current: 40, custy_current: 60,
-          outright_current: 0, curve_current: 100, fly_current: 0, other_current: 0,
+          outright_current: 0, curve_current: 100, fly_current: 0, invoice_current: 0, other_current: 0,
           trade_count: 5, prior_array: [], p25: 0, p50: 0, p75: 0, pmin: 0, pmax: 0, n: 0,
           as_of_ts: null,
         },
         {
           fwd: 'spot', tenor: '5s30s',
           current_value: 50, idb_current: 20, custy_current: 30,
-          outright_current: 0, curve_current: 50, fly_current: 0, other_current: 0,
+          outright_current: 0, curve_current: 50, fly_current: 0, invoice_current: 0, other_current: 0,
           trade_count: 2, prior_array: [], p25: 0, p50: 0, p75: 0, pmin: 0, pmax: 0, n: 0,
           as_of_ts: null,
         },

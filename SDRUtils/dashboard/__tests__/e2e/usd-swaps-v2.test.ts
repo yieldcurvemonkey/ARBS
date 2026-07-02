@@ -8,6 +8,8 @@
 import { describe, expect, it } from '@jest/globals'
 import puppeteer from 'puppeteer'
 
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
+
 const BASE_URL = process.env.E2E_BASE_URL
 const describeIfUrl = BASE_URL ? describe : describe.skip
 
@@ -39,7 +41,7 @@ describeIfUrl('USD swap tape v2 — golden paths', () => {
       const toggle = await page.$('button[aria-pressed][aria-label="Clean tape"]')
       if (toggle) {
         await toggle.click()
-        await page.waitForTimeout(500)
+        await sleep(500)
         const currentUrl = page.url()
         expect(currentUrl).toContain('clean=true')
       }
@@ -63,7 +65,7 @@ describeIfUrl('USD swap tape v2 — golden paths', () => {
       const fomcCard = await page.$('button[aria-label^="fomc"]')
       if (fomcCard) {
         await fomcCard.click()
-        await page.waitForTimeout(300)
+        await sleep(300)
         expect(page.url()).toContain('fomcMeeting=')
       }
     } finally {
