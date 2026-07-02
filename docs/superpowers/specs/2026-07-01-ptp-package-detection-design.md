@@ -65,7 +65,7 @@ Raw classified legs
 |-------|-----------|
 | `execution_timestamp` | Within ±`time_tolerance_seconds` (sort-and-merge, not rounding); legs with NaT (unparseable) timestamp are excluded from candidates and flow to the global pool |
 | `package_transaction_price` | Exact match, must be finite and > 0; parsed via `numeric_like` — comma/dollar/parenthesised-negative tolerant (plain `pd.to_numeric` turns `'88,100'` into NaN, silently dropping all USD-amount packages ≥ $1,000) |
-| `package_indicator` | Must be `True` |
+| `package_indicator` | Must be truthy — real SDR data delivers `True`, `1`, `"1"`, or the float-string `"1.0"` (NaN-padded bool columns); the grouper's truthy set is `{"true","t","1","1.0","yes"}` |
 | `Unique Product Identifier` | Exact match |
 | `Platform identifier` | Exact match |
 
@@ -88,7 +88,7 @@ the global pool for existing detector handling.
 | Column | Type | Description |
 |--------|------|-------------|
 | `ptp_group_id` | str | `"PTP_{min_trade_id}"` — unique per group |
-| `ptp_group_size` | int | Leg count in the PTP group |
+| `ptp_group_size` | int | Leg count in the PTP group; None for non-PTP legs |
 
 Legs not matching any PTP group get `ptp_group_id = None` and flow to existing
 global detectors unchanged.
@@ -108,6 +108,8 @@ must fit the pattern, no carving into sub-structures:
 | 3 | **3 distinct tenor buckets** (rounded to 0.1Y), belly ≈ 2× wings (±15%) | FLY |
 | N ≥ 4, all form K flies | K × (belly ≈ 2× wings), same tenors | PKG-N (sub-fly annotations) |
 | N ≥ 4, otherwise | Any other pattern | PKG-N |
+
+Sub-fly detection prechecks that the group has exactly 3 DISTINCT tenor buckets after rounding to 0.1Y (matching the bucketing itself — raw-value distinctness would wrongly reject e.g. {2.01, 2.04, 5, 10}); legs within each tenor bucket are then paired across buckets by ascending `(pv01, fixed_rate)` so equal-DV01 sub-flies at different rates never cross-pair.
 
 **PKG-N is the default.** FLY/CURVE only when the _entire_ group matches that
 single pattern. No partial matching.
