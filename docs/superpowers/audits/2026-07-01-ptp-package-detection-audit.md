@@ -524,7 +524,7 @@ Every finding above has been closed. The remediation ran as a 19-task
 subagent-driven plan
 (`docs/superpowers/plans/2026-07-01-ptp-audit-findings-remediation.md`),
 one fresh implementer + one reviewer per task, commits
-`e2d9567b..FINAL_SHA` on `main`.
+`802b758a..2c6501bc` on `main`.
 
 ### Phase A — semantic and product fixes (Tasks 1–11)
 
@@ -533,8 +533,8 @@ one fresh implementer + one reviewer per task, commits
   re-backfill: fly PKG-12 residual $216.29 → 0.000269 bp (TIGHT);
   MAC package PKG-8 residual $10,999 → 0.201153 bp (LOOSE). Dashboard
   renders 2 decimals at ≥0.01 bp, 4 below.
-- **`ptp_price_notation` persisted end-to-end** (SMALLINT on legs +
-  packages + display view). Notation ≠ 1 groups stay grouped but their
+- **`ptp_price_notation` persisted end-to-end** (SMALLINT on the
+  packages table + display view). Notation ≠ 1 groups stay grouped but their
   OPA tieout is gated UNRESOLVED and the dashboard shows a "PX" chip
   (owner decision: keep + tag, don't drop). Post-backfill split:
   2026-06-25 → 178 monetary / 24 price-notation groups; 2026-07-01 →
