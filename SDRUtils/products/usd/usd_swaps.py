@@ -1079,6 +1079,49 @@ def _is_round_notional(notional: float, threshold: float = 5_000_000) -> bool:
     return (notional % threshold) == 0
 
 
+def _expand_hood_for_ptp_keys(
+    df: pd.DataFrame,
+    hood_mask: pd.Series,
+    *,
+    tolerance_seconds: int = 5,
+) -> pd.Series:
+    """Widen a neighborhood mask so PTP groups are never split.
+
+    Incremental cycles re-detect only trades near new prints; a PTP group
+    straddling the window edge would otherwise be re-grouped from a subset
+    of its legs while the cached remainder keeps the old package_id. Any
+    out-of-window PTP candidate sharing the exact (PTP, UPI, platform) key
+    with an in-window candidate, within the group time tolerance of the
+    window, is pulled in.
+    """
+    from SDRUtils.packages.ptp_grouper import numeric_like
+
+    ptp = numeric_like(df.get("package_transaction_price",
+                              pd.Series(index=df.index, dtype=object)))
+    ind = (
+        df.get("package_indicator", pd.Series(False, index=df.index))
+        .astype(str).str.lower().isin({"true", "t", "1", "1.0", "yes"})
+    )
+    ts = pd.to_datetime(
+        df.get("execution_timestamp", pd.Series(pd.NaT, index=df.index)),
+        errors="coerce", utc=True,
+    )
+    cand = ind & ptp.notna() & (ptp > 0) & ts.notna()
+    hood_cand = hood_mask & cand
+    if not hood_cand.any():
+        return hood_mask
+
+    upi = df.get("unique_product_identifier", pd.Series("", index=df.index)).astype(str)
+    plat = df.get("platform_identifier", pd.Series("", index=df.index)).astype(str)
+    key = ptp.astype(str) + "|" + upi + "|" + plat
+
+    in_keys = set(key[hood_cand])
+    lo = ts[hood_cand].min() - pd.Timedelta(seconds=tolerance_seconds)
+    hi = ts[hood_cand].max() + pd.Timedelta(seconds=tolerance_seconds)
+    pulled = cand & key.isin(in_keys) & ts.between(lo, hi)
+    return hood_mask | pulled
+
+
 def _resolve_special_tenor_priority(df: pd.DataFrame) -> pd.DataFrame:
     """
     After all detectors have run, resolve unified special_tenor fields.
@@ -1733,6 +1776,9 @@ class USD_SwapProduct(USDProductBase):
                     else:
                         _hood_mask = pd.Series(True, index=package_df.index)
 
+                    _hood_mask = _expand_hood_for_ptp_keys(
+                        package_df, _hood_mask, tolerance_seconds=5
+                    )
                     _hood_df = package_df[_hood_mask].copy()
                     _n_hood = len(_hood_df)
 

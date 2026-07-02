@@ -67,3 +67,31 @@ def test_ptp_legs_get_classified_non_ptp_stay_outright():
     assert len(non_ptp_rows) == 1
     assert non_ptp_rows["package_type"].iloc[0] == "OUTRIGHT"
     assert non_ptp_rows["opa_sign"].iloc[0] is None
+
+
+def test_hood_expansion_pulls_in_straddling_ptp_legs():
+    """A PTP group straddling the neighborhood boundary must be re-detected
+    as a whole, not split between hood and cache (audit observation)."""
+    import pandas as pd
+
+    from SDRUtils.products.usd.usd_swaps import _expand_hood_for_ptp_keys
+
+    t0 = pd.Timestamp("2026-06-25 14:30:59", tz="UTC")
+    df = pd.DataFrame([
+        # in-hood leg of the group
+        {"trade_id": "P1", "execution_timestamp": t0,
+         "package_transaction_price": "88,100", "package_indicator": True,
+         "unique_product_identifier": "UPI_A", "platform_identifier": "BBSF"},
+        # out-of-hood mate, 2s later, same key
+        {"trade_id": "P2", "execution_timestamp": t0 + pd.Timedelta(seconds=2),
+         "package_transaction_price": "88,100", "package_indicator": True,
+         "unique_product_identifier": "UPI_A", "platform_identifier": "BBSF"},
+        # unrelated out-of-hood trade
+        {"trade_id": "O1", "execution_timestamp": t0 + pd.Timedelta(seconds=2),
+         "package_transaction_price": None, "package_indicator": False,
+         "unique_product_identifier": "UPI_A", "platform_identifier": "BBSF"},
+    ])
+    hood = pd.Series([True, False, False], index=df.index)
+    out = _expand_hood_for_ptp_keys(df, hood, tolerance_seconds=5)
+    assert bool(out.iloc[0]) and bool(out.iloc[1])
+    assert not bool(out.iloc[2])
