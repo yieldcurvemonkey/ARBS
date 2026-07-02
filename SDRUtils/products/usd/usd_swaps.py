@@ -184,6 +184,12 @@ def clear_service_caches() -> None:
 
 _SERVICE_CACHE_DIR_NAME = "service_caches"
 
+# Bump on ANY change to detector output (new columns, changed values).
+# Keys both the classification parquet day-cache directory and the
+# packaged-day warm-start pickle, so stale-schema frames can never be
+# served after a deploy (2026-07-01 audit, finding C4).
+DETECTION_CACHE_VERSION = "ptp2"
+
 
 def save_service_caches(cache_dir: str) -> None:
     """Persist in-process caches to disk for warm-start optimization.
@@ -199,9 +205,9 @@ def save_service_caches(cache_dir: str) -> None:
 
     for filename, data in (
         ("trade_classification.pkl", _TRADE_CLASSIFICATION_CACHE),
-        # _ptp1 suffix: packaged-day frames cached before the PTP/OPA
-        # detector change have a different schema; renaming orphans them.
-        ("packaged_day_ptp1.pkl", _PACKAGED_DAY_CACHE),
+        # DETECTION_CACHE_VERSION suffix: packaged-day frames cached before a detector
+        # output change have a different schema; renaming orphans them.
+        (f"packaged_day_{DETECTION_CACHE_VERSION}.pkl", _PACKAGED_DAY_CACHE),
     ):
         if not data:
             continue
@@ -234,7 +240,7 @@ def load_service_caches(cache_dir: str) -> bool:
     loaded = False
     for filename, target in (
         ("trade_classification.pkl", _TRADE_CLASSIFICATION_CACHE),
-        ("packaged_day_ptp1.pkl", _PACKAGED_DAY_CACHE),
+        (f"packaged_day_{DETECTION_CACHE_VERSION}.pkl", _PACKAGED_DAY_CACHE),
     ):
         fp = cache_path / filename
         if not fp.exists():
@@ -1411,11 +1417,11 @@ class USD_SwapProduct(USDProductBase):
         curve_source = str(kwargs.get("curve_source", "ERIS_EOD_LIVE-RL_BASIC")).replace("/", "_")
         mdp = IRSwapsMDP(source=curve_source)
 
-        # _ptp1: PTP pre-grouper + OPA sign solver added to _run_all_detectors.
+        # DETECTION_CACHE_VERSION: PTP pre-grouper + OPA sign solver added to _run_all_detectors.
         # Cached day frames from before that change lack ptp_group_id /
         # opa_* columns and carry different package assignments, so they
-        # must miss. Bump the suffix on any future detector-output change.
-        cache_flags = f"curve{int(detect_curve)}_fly{int(detect_fly)}_mms{int(detect_mms)}_invoice{int(detect_invoice)}_mac{int(detect_mac)}_spreadover{int(detect_spreadover)}_basis{int(detect_basis)}_ptp1"
+        # must miss. Bump the version on any future detector-output change.
+        cache_flags = f"curve{int(detect_curve)}_fly{int(detect_fly)}_mms{int(detect_mms)}_invoice{int(detect_invoice)}_mac{int(detect_mac)}_spreadover{int(detect_spreadover)}_basis{int(detect_basis)}_{DETECTION_CACHE_VERSION}"
         cache_base = Path(cache_path) / "classification_cache" / "usd_swaps" / curve_source / cache_flags
         legacy_cache_base = Path(cache_path) / "classification_cache" / "usd_sofr_swaps" / curve_source / cache_flags
         cache_base.mkdir(parents=True, exist_ok=True)
