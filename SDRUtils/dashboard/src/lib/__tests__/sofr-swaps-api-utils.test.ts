@@ -7,9 +7,12 @@ import {
 
 describe('sofr-swaps-api-utils', () => {
   it('parses strict forward x tenor keys', () => {
+    // parseSeriesKey now also derives numeric year values alongside the labels
     expect(parseSeriesKey('3Mx10Y')).toEqual({
       forwardLabel: '3M',
+      forwardYears: 0.25,
       tenorLabel: '10Y',
+      tenorYears: 10,
       isValid: true
     })
     expect(parseSeriesKey('bad-key').isValid).toBe(false)

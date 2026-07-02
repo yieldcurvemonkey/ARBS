@@ -6,13 +6,16 @@ import {
 } from '../TapeLabelCell.helpers'
 
 describe('displayTapeLabel', () => {
-  it('returns the raw package tape label from the row when present', () => {
+  it('returns the raw package tape label from the row when present (execution tags stripped)', () => {
+    // Commit 439bbe09 moved UFRO to tape_tags; displayTapeLabel now calls
+    // stripExecutionTags() which removes TAPE_TAG_TONES keys (UFRO) but leaves
+    // non-tag tokens like PHYS in place.
     expect(
       displayTapeLabel({
         tape_label: 'USD-SOFR-COMPOUND 1D Constant 5Y11M 1Y Outright UFRO PHYS',
         legs_json: [{ tape_label: 'ignored leg label' }],
       } as any),
-    ).toBe('USD-SOFR-COMPOUND 1D Constant 5Y11M 1Y Outright UFRO PHYS')
+    ).toBe('USD-SOFR-COMPOUND 1D Constant 5Y11M 1Y Outright PHYS')
   })
 
   it('falls back to the first leg tape label when the row-level label is empty', () => {

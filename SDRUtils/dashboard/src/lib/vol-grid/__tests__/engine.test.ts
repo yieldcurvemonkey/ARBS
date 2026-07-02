@@ -24,15 +24,18 @@ describe('vol grid engine', () => {
     expect(interpolated).toBeCloseTo(100 * (1 - expectedWeight) + 130 * expectedWeight)
   })
 
-  test('interpolateGridValue extrapolates beyond the max expiry instead of clamping to 10Y', () => {
+  test('interpolateGridValue extrapolates beyond the max expiry instead of clamping to 20Y', () => {
+    // CORE_EXPIRY_POINTS was extended (10Y→15Y→20Y); 20Y is now a direct core
+    // node so we must test beyond it (30Y). Lower = 15Y, upper = 20Y.
+    // ratio = log(30/15)/log(20/15) ≈ 2.409; expected ≈ 89.6
     const gridData = {
-      '5y_1y': 80,
-      '10y_1y': 84
+      '15y_1y': 80,
+      '20y_1y': 84
     }
 
-    const interpolated = interpolateGridValue(gridData, '20Y', '1Y')
+    const interpolated = interpolateGridValue(gridData, '30Y', '1Y')
 
-    expect(interpolated).toBeCloseTo(88)
+    expect(interpolated).toBeCloseTo(89.6, 0)  // log-extrapolated, not clamped
     expect(interpolated).not.toBeCloseTo(84)
   })
 

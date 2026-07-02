@@ -17,16 +17,20 @@ describe('VolumeGridCard — localStorage keys', () => {
     expect(cardSource).toMatch(/'usd-tape-v2:volume-grid:metric'/)
     expect(cardSource).toMatch(/'usd-tape-v2:volume-grid:period'/)
   })
-  it('uses keys for forward + tenor schema and package-type state', () => {
-    expect(cardSource).toMatch(/'usd-tape-v2:volume-grid:forward-schema'/)
-    expect(cardSource).toMatch(/'usd-tape-v2:volume-grid:tenor-schema'/)
-    expect(cardSource).toMatch(/'usd-tape-v2:volume-grid:package-type'/)
+  it('uses keys for lookback baseline and active-view state', () => {
+    // Refactor: forward-schema/tenor-schema/package-type/view-mode moved into
+    // per-view state managed by VolumeGridViewSwitcher; card now owns
+    // lookback (baseline window) and active-view (which view tab is open).
+    expect(cardSource).toMatch(/'usd-tape-v2:volume-grid:lookback'/)
+    expect(cardSource).toMatch(/'usd-tape-v2:volume-grid:active-view'/)
   })
-  it('uses key for view-mode state', () => {
-    expect(cardSource).toMatch(/'usd-tape-v2:volume-grid:view-mode'/)
+  it('delegates view rendering to VolumeGridViewSwitcher', () => {
+    // Color-mode, forward-schema, tenor-schema, package-type state moved
+    // into per-view components; VolumeGridCard is now a thin shell.
+    expect(cardSource).toMatch(/VolumeGridViewSwitcher/)
   })
-  it('uses key for color-mode state', () => {
-    expect(cardSource).toMatch(/'usd-tape-v2:volume-grid:color-mode'/)
+  it('uses VolumeGridCellModal for cell drilldown', () => {
+    expect(cardSource).toMatch(/VolumeGridCellModal/)
   })
   it('uses a version key for default-state migrations', () => {
     expect(cardSource).toMatch(/'usd-tape-v2:volume-grid:defaults-version'/)
@@ -48,68 +52,79 @@ describe('VolumeGridCard — toggles', () => {
     expect(cardSource).toMatch(/id: '1m'/)
     expect(cardSource).toMatch(/id: '3m'/)
   })
-  it('exposes Activity/Grid color mode options', () => {
-    expect(cardSource).toMatch(/COLOR_MODE_LABELS/)
-    expect(cardSource).toMatch(/activity:\s*'Activity'/)
-    expect(cardSource).toMatch(/grid:\s*'Grid'/)
+  it('exposes baseline lookback options (1w–2y)', () => {
+    // Color-mode moved into individual views. The card now owns a lookback
+    // "baseline" toggle with 8 options spanning 1w → 2y.
+    expect(cardSource).toMatch(/LOOKBACK_IDS/)
+    expect(cardSource).toMatch(/'1w'/)
+    expect(cardSource).toMatch(/'1m'/)
+    expect(cardSource).toMatch(/'2y'/)
   })
 })
 
 describe('VolumeGridCard — defaults', () => {
   it('starts open', () => {
-    expect(cardSource).toMatch(/const DEFAULT_COLLAPSED = false/)
+    // DEFAULT_COLLAPSED constant replaced by inline useState(false)
+    expect(cardSource).toMatch(/useState\(false\)/)
   })
   it('defaults metric to dv01', () => {
-    expect(cardSource).toMatch(/const DEFAULT_METRIC: VolumeMetric = 'dv01'/)
+    // DEFAULT_METRIC constant replaced by inline useState<VolumeMetric>('dv01')
+    expect(cardSource).toMatch(/useState<VolumeMetric>\('dv01'\)/)
   })
-  it('defaults period to 1w', () => {
-    expect(cardSource).toMatch(/const DEFAULT_PERIOD: VolumePeriod = '1w'/)
+  it('defaults period to today', () => {
+    // Default period changed from '1w' → 'today' in the view-switcher refactor.
+    // DEFAULT_PERIOD constant replaced by inline useState<VolumePeriod>('today').
+    expect(cardSource).toMatch(/useState<VolumePeriod>\('today'\)/)
   })
   it('applies updated defaults before honoring persisted grid state', () => {
-    expect(cardSource).toMatch(/shouldApplyCurrentDefaults\(\)/)
-    expect(cardSource).toMatch(/useState<VolumeMetric>\(DEFAULT_METRIC\)/)
-    expect(cardSource).toMatch(/useState<VolumePeriod>\(DEFAULT_PERIOD\)/)
+    // shouldApplyCurrentDefaults() helper replaced by inline shouldApplyDefaults variable
+    expect(cardSource).toMatch(/shouldApplyDefaults/)
+    expect(cardSource).toMatch(/useState<VolumeMetric>\('dv01'\)/)
+    expect(cardSource).toMatch(/useState<VolumePeriod>\('today'\)/)
   })
-  it('defaults forward schema to default', () => {
-    expect(cardSource).toMatch(/readEnum<ForwardSchemaId>\([^)]*'default'\)/)
-  })
-  it('defaults tenor schema to default', () => {
-    expect(cardSource).toMatch(/readEnum<TenorSchemaId>\([^)]*'default'\)/)
-  })
-  it('defaults package-type to outright', () => {
-    expect(cardSource).toMatch(/readEnum<PackageTypeGroupId>\([^)]*'outright'\)/)
+  it('defaults lookback to 1m', () => {
+    // Forward/tenor/package-type per-view state moved to VolumeGridViewSwitcher.
+    // Card now owns lookback with a default of '1m' (≈30 days baseline).
+    expect(cardSource).toMatch(/useState<LookbackId>\('1m'\)/)
   })
 })
 
-describe('VolumeGridCard — wires schema args into useVolumeGrid', () => {
-  it('passes forwardSchema, tenorSchema, packageType to the hook', () => {
-    expect(cardSource).toMatch(/useVolumeGrid\(\{[\s\S]*forwardSchema[\s\S]*tenorSchema[\s\S]*packageType[\s\S]*\}\)/)
+describe('VolumeGridCard — wires state into VolumeGridViewSwitcher', () => {
+  it('passes metric, period, lookbackDays to VolumeGridViewSwitcher', () => {
+    // useVolumeGrid() replaced by VolumeGridViewSwitcher which accepts
+    // metric/period/lookbackDays as props and owns per-view state internally.
+    expect(cardSource).toMatch(/metric=\{metric\}/)
+    expect(cardSource).toMatch(/period=\{period\}/)
+    expect(cardSource).toMatch(/lookbackDays=/)
   })
 })
 
-describe('VolumeGridCard — exposes axis dropdowns', () => {
-  it('renders a Package type select', () => {
-    expect(cardSource).toMatch(/aria-label="Package type"/)
+describe('VolumeGridCard — controls', () => {
+  // Axis dropdowns (Package type, Forward schema, Tenor schema, View mode)
+  // moved into VolumeGridViewSwitcher per-view; VolumeGridCard now owns
+  // the shared top-bar controls: window toggle, baseline lookback, and text filter.
+  it('renders the lookback (baseline) toggle with LOOKBACK_DAYS mapping', () => {
+    expect(cardSource).toMatch(/LOOKBACK_DAYS/)
+    expect(cardSource).toMatch(/lookbackDays=\{LOOKBACK_DAYS\[lookback\]\}/)
   })
-  it('renders a Forward schema select', () => {
-    expect(cardSource).toMatch(/aria-label="Forward schema"/)
+  it('renders a TextFilterInput for tape-label filtering', () => {
+    expect(cardSource).toMatch(/TextFilterInput/)
+    expect(cardSource).toMatch(/textFilter/)
   })
-  it('renders a Tenor schema select', () => {
-    expect(cardSource).toMatch(/aria-label="Tenor schema"/)
+  it('renders the window period toggle with today through 3m', () => {
+    // The period toggle is shared and lives in VolumeGridCard, not individual views.
+    expect(cardSource).toMatch(/id: 'today'/)
+    expect(cardSource).toMatch(/id: '3m'/)
   })
-  it('renders a View mode select', () => {
-    expect(cardSource).toMatch(/aria-label="View mode"/)
-  })
-  it('passes colorMode to VolumeGrid', () => {
-    expect(cardSource).toMatch(/colorMode=\{colorMode\}/)
+  it('threads textFilter into VolumeGridViewSwitcher and VolumeGridCellModal', () => {
+    expect(cardSource).toMatch(/textFilter=\{textFilter/)
   })
 })
 
 describe('VolumeGridCard — refresh + toggle aria labels', () => {
-  it('renders an aria-labeled refresh button', () => {
-    expect(cardSource).toMatch(/aria-label="Refresh"/)
-  })
   it('renders an aria-labeled toggle button', () => {
+    // Refresh button was removed in the view-switcher refactor (per-view refresh
+    // is handled inside each view component). Toggle button remains on the card.
     expect(cardSource).toMatch(/aria-label="Toggle volume grid"/)
   })
 })

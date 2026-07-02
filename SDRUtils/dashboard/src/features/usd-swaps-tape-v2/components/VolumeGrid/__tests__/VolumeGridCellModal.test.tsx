@@ -23,7 +23,12 @@ describe('VolumeGridCellModal — Dialog wiring', () => {
 
 describe('VolumeGridCellModal — schemas threaded', () => {
   it('forwards forwardSchema/tenorSchema/packageType to useVolumeGridCell', () => {
-    expect(modalSource).toMatch(/useVolumeGridCell\(\{[\s\S]*forwardSchema:\s*props\.forwardSchema[\s\S]*tenorSchema:\s*props\.tenorSchema[\s\S]*packageType:\s*props\.packageType[\s\S]*\}\)/)
+    // Props are threaded through cellArgs with null-safe defaults before being
+    // passed to useVolumeGridCell(cellArgs). Test each prop key independently.
+    expect(modalSource).toMatch(/forwardSchema:\s*props\.forwardSchema/)
+    expect(modalSource).toMatch(/tenorSchema:\s*props\.tenorSchema/)
+    expect(modalSource).toMatch(/packageType:\s*props\.packageType/)
+    expect(modalSource).toMatch(/useVolumeGridCell\(cellArgs\)/)
   })
 })
 

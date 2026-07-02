@@ -2,7 +2,7 @@ import { describe, expect, it, jest } from '@jest/globals'
 
 const queryMock = jest.fn(async () => ({ rows: [] }))
 
-jest.mock('@/lib/db', () => ({
+jest.unstable_mockModule('@/lib/db', () => ({
   query: queryMock,
   analyticsQuery: queryMock,
 }))

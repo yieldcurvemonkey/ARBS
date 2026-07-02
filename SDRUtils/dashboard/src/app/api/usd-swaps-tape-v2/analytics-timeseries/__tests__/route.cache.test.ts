@@ -4,6 +4,7 @@ const queryMock = jest.fn(async () => ({ rows: [] }))
 
 jest.unstable_mockModule('@/lib/db', () => ({
   query: queryMock,
+  analyticsQuery: queryMock,
 }))
 
 function req(qs: string, headers: Record<string, string> = {}): Request {

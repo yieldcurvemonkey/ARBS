@@ -140,7 +140,7 @@ describe('rowClassName — trade_type tint (Bloomberg muted palette)', () => {
 
   it('uses CURVE tint + border for CURVE trade_type', () => {
     const cls = rowClassName({ ...base, trade_type: 'CURVE' } as any)
-    expect(cls).toContain('!bg-blue-900/30')
+    expect(cls).toContain('!bg-blue-900/50')
     expect(cls).toMatch(/border-sky/)
   })
 
@@ -171,7 +171,7 @@ describe('rowClassName — trade_type tint (Bloomberg muted palette)', () => {
 
   it('falls back to package_type when trade_type missing', () => {
     const cls = rowClassName({ ...base, package_type: 'CURVE' } as any)
-    expect(cls).toContain('!bg-blue-900/30')
+    expect(cls).toContain('!bg-blue-900/50')
     expect(cls).toMatch(/border-sky/)
   })
 
