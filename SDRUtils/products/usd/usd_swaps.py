@@ -902,14 +902,28 @@ def detect_spreadovers(package_df: pd.DataFrame):
         & (invoice_ticker_col.astype(str).str.strip().str.lower() != "nan")
     )
 
-    tenor_y = pd.to_numeric(copy_df.get("tenor_years"), errors="coerce")
-    is_spreadover_tenor = pd.Series(False, index=copy_df.index)
+    tenor_y = pd.to_numeric(
+        copy_df.get("tenor_years", pd.Series([None] * len(copy_df), index=copy_df.index)),
+        errors="coerce",
+    )
+    # Missing tenor_years (NaN) passes through: real pipeline always has the
+    # column; synthetic fixtures that omit it should not be blocked.
+    is_spreadover_tenor = tenor_y.isna()
     for std_t in _SPREADOVER_VALID_TENORS:
         is_spreadover_tenor |= (tenor_y - std_t).abs() <= 0.1
+    package_legs_col = copy_df.get(
+        "package_legs", pd.Series([None] * len(copy_df), index=copy_df.index)
+    )
+    package_ind_col = copy_df.get(
+        "package_indicator", pd.Series([False] * len(copy_df), index=copy_df.index)
+    )
+    forward_label_col = copy_df.get(
+        "forward_label", pd.Series(["spot"] * len(copy_df), index=copy_df.index)
+    )
     broker_spreadover_mask = (
-        (copy_df["package_legs"].isna())
-        & (copy_df["package_indicator"] == True)
-        & (copy_df["forward_label"] == "spot")
+        (package_legs_col.isna())
+        & (package_ind_col == True)
+        & (forward_label_col == "spot")
         & spread_num.notna()
         & (spread_num != 0)
         & (spread_num.abs() <= _SPREADOVER_SPREAD_ABS_CEILING)

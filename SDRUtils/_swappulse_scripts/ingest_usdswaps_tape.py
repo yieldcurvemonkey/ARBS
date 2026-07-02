@@ -508,10 +508,16 @@ def _normalize_package_id(df: pd.DataFrame) -> pd.DataFrame:
 def _gap_aware_sort_key(group: pd.DataFrame) -> list[str]:
     """Choose sort columns: tenor_years for normal packages, forward_start_years
     for gap structures (all legs within ~0.05y of each other in tenor)."""
-    tenor_y = pd.to_numeric(group.get("tenor_years"), errors="coerce")
+    tenor_y = pd.to_numeric(
+        group.get("tenor_years", pd.Series(index=group.index, dtype="float64")),
+        errors="coerce",
+    )
     if tenor_y.notna().any() and (tenor_y.max() - tenor_y.min()) > 0.05:
         return ["tenor_years", "trade_id"]
-    fwd_y = pd.to_numeric(group.get("forward_start_years"), errors="coerce")
+    fwd_y = pd.to_numeric(
+        group.get("forward_start_years", pd.Series(index=group.index, dtype="float64")),
+        errors="coerce",
+    )
     if fwd_y.notna().any() and (fwd_y.max() - fwd_y.min()) > 0.05:
         return ["forward_start_years", "trade_id"]
     return ["execution_timestamp", "trade_id"]
@@ -1020,10 +1026,22 @@ def _compute_leg_summary(
         "summary_risk": None,
         "summary_opa": None,
     }
-    tenor_y = pd.to_numeric(g.get("tenor_years"), errors="coerce")
-    fixed = pd.to_numeric(g.get("fixed_rate"), errors="coerce")
-    risk = pd.to_numeric(g.get("risk"), errors="coerce")
-    opa = pd.to_numeric(g.get("other_payment_amount"), errors="coerce")
+    tenor_y = pd.to_numeric(
+        g.get("tenor_years", pd.Series(index=g.index, dtype="float64")),
+        errors="coerce",
+    )
+    fixed = pd.to_numeric(
+        g.get("fixed_rate", pd.Series(index=g.index, dtype="float64")),
+        errors="coerce",
+    )
+    risk = pd.to_numeric(
+        g.get("risk", pd.Series(index=g.index, dtype="float64")),
+        errors="coerce",
+    )
+    opa = pd.to_numeric(
+        g.get("other_payment_amount", pd.Series(index=g.index, dtype="float64")),
+        errors="coerce",
+    )
 
     kind = f"{package_type or ''} {trade_type or ''}".upper()
     _invoice_multi = {"INVOICE_SWITCH", "INVOICE_CALENDAR"}
@@ -1041,7 +1059,10 @@ def _compute_leg_summary(
 
     # Gap-aware sort: tenor_years for normal packages, forward_start_years
     # for gap structures where all legs share the same tail tenor.
-    fwd_y = pd.to_numeric(g.get("forward_start_years"), errors="coerce")
+    fwd_y = pd.to_numeric(
+        g.get("forward_start_years", pd.Series(index=g.index, dtype="float64")),
+        errors="coerce",
+    )
     valid = tenor_y.notna()
     if valid.any():
         ty_range = tenor_y[valid].max() - tenor_y[valid].min()

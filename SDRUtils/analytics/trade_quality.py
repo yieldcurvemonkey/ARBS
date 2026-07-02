@@ -129,8 +129,12 @@ def flag_off_market_trades(
     rate_outlier = deviation_bp.abs() > threshold_bp
 
     # --- Seasoned off-market: past effective date + UFRO ---
-    exec_date = pd.to_datetime(df.get(date_col), errors="coerce").dt.normalize()
-    eff_date = pd.to_datetime(df.get("effective_date"), errors="coerce").dt.normalize()
+    exec_date = pd.to_datetime(
+        df.get(date_col, pd.Series(pd.NaT, index=df.index)), errors="coerce"
+    ).dt.normalize()
+    eff_date = pd.to_datetime(
+        df.get("effective_date", pd.Series(pd.NaT, index=df.index)), errors="coerce"
+    ).dt.normalize()
     is_ufro = df.get("is_ufro", pd.Series(False, index=df.index)).fillna(False).astype(bool)
     past_effective = exec_date.notna() & eff_date.notna() & (eff_date < exec_date)
     is_seasoned = past_effective & is_ufro
