@@ -9,6 +9,8 @@ import pytest
 
 from MDP.USTFutures.USTFuturesMDP import USTFuturesMDP
 
+pytestmark = [pytest.mark.slow, pytest.mark.network]
+
 SYMBOL = "TYZ25"
 ASOF = datetime.date(2025, 11, 14)
 

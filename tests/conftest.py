@@ -10,9 +10,29 @@ Provides:
 
 import datetime
 import os
+import pandas as pd
 import pytest
 from typing import Any, Dict, List, Tuple
 from dataclasses import dataclass
+
+
+@pytest.fixture(autouse=True)
+def _reset_pandas_copy_on_write():
+    """Force pd.options.mode.copy_on_write = False before every test.
+
+    pandas_ta (imported transitively by BT.signals modules) sets
+    copy_on_write = True at module scope in pandas_ta/core.py.  That
+    happens during pytest collection — before any fixture runs — so
+    saving-and-restoring the "original" value is ineffective (original
+    is already True by the time the first fixture fires).
+
+    Resetting unconditionally to False before each test ensures that
+    mms.py:332 ``m &= ...`` never hits a read-only numpy buffer, and
+    the BT tests themselves do not depend on CoW being True at the time
+    their test bodies execute.
+    """
+    pd.options.mode.copy_on_write = False
+    yield
 
 
 @pytest.fixture
