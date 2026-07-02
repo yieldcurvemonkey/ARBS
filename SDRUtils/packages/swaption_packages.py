@@ -579,14 +579,6 @@ def _run_straddle_phase(
     """
     out = df
 
-    # Compute effective platform filters respecting config allow/blocklist
-    _custy_platforms = ["XXXX", "XSEF", "XOFF", "BILT"]
-    pass2_platforms = list(_custy_platforms)
-    if config.platform_allowlist is not None:
-        pass2_platforms = [p for p in pass2_platforms if p in config.platform_allowlist]
-    if config.platform_blocklist is not None:
-        pass2_platforms = [p for p in pass2_platforms if p not in config.platform_blocklist]
-
     # Dealers + custy package reported straddles
     out = detect_straddles_packages(
         out,
@@ -609,8 +601,6 @@ def _run_straddle_phase(
         require_same_currency=config.require_same_currency,
         require_same_underlier=config.require_same_underlier,
         must_be_reported_as_package=True,
-        platforms_filter=config.platform_allowlist,
-        platform_blocklist=config.platform_blocklist,
     )
 
     # Custy straddle legs reported separately
@@ -636,7 +626,7 @@ def _run_straddle_phase(
         require_same_underlier=config.require_same_underlier,
         must_be_reported_as_package=False,
         add_leg_premiums=True,
-        platforms_filter=pass2_platforms,
+        platforms_filter=["XXXX", "XSEF", "XOFF", "BILT"],
     )
 
     # Price straddles if pricer is available
@@ -1456,31 +1446,6 @@ def detect_and_link_swaption_packages_df(
             outright_offset_tolerance_bps=outright_offset_tolerance_bps,
             outright_platforms_filter=outright_platforms_filter,
         )
-
-    # Post-filter: remove packages with fewer legs than config.min_legs
-    if config.min_legs > 2:
-        packaged_mask = out["package_id"].notna()
-        small_pkg_mask = packaged_mask & (out["package_legs_count"] < config.min_legs)
-        if small_pkg_mask.any():
-            small_pkg_ids = out.loc[small_pkg_mask, "package_id"].dropna().unique()
-            remove_mask = out["package_id"].isin(small_pkg_ids)
-            pkg_cols = [c for c in ["package_id", "package_type", "package_legs",
-                                     "package_confidence", "package_reason", "package_legs_count"]
-                        if c in out.columns]
-            out.loc[remove_mask, pkg_cols] = None
-
-    # Phase 7: Link related packages by time and vega proximity
-    out = link_packages(
-        out,
-        time_window_link_seconds=config.time_window_link_seconds,
-        vega_tolerance_pct=config.vega_tolerance_pct,
-        package_col=package_col,
-        exec_col=config.exec_col,
-        platform_col=config.platform_col,
-        currency_col=config.currency_col,
-        require_same_platform=config.require_same_platform,
-        require_same_currency=config.require_same_currency,
-    )
 
     return out
 

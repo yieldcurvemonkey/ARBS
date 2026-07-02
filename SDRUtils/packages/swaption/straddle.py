@@ -52,7 +52,6 @@ def detect_straddles_packages(
     # Additional options
     must_be_reported_as_package: bool = True,
     platforms_filter: list = None,
-    platform_blocklist: list = None,
     add_leg_premiums: bool = False,
 ) -> pd.DataFrame:
     """
@@ -115,8 +114,6 @@ def detect_straddles_packages(
     candidate_mask = is_swaption & ~is_straddle & not_packaged
     if platforms_filter is not None:
         candidate_mask &= out["platform_identifier"].isin(platforms_filter)
-    if platform_blocklist is not None:
-        candidate_mask &= ~out["platform_identifier"].isin(platform_blocklist)
 
     is_payer = out[product_col].astype(str).str.contains("PAYER|CALL", case=False, na=False)
     is_receiver = out[product_col].astype(str).str.contains("RECEIVER|PUT", case=False, na=False)
