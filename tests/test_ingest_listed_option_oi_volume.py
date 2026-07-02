@@ -700,7 +700,8 @@ def test_resolve_once_ingest_window_expands_for_underlying_prefetch():
         underlying_contracts=["SFRZ27"],
     )
 
-    assert start_date == dt.date(2025, 3, 12)
+    # ONCE_UNDERLYING_PREFETCH_LOOKBACK_DAYS = 720 (≈2 yr), not 365; 2026-03-12 - 720d = 2024-03-22
+    assert start_date == as_of - dt.timedelta(days=ingest_module.ONCE_UNDERLYING_PREFETCH_LOOKBACK_DAYS)
     assert end_date == as_of
 
 
@@ -735,12 +736,14 @@ def test_main_once_prefetches_one_year_for_underlying_filter(monkeypatch):
         )
     )
 
+    # ONCE_UNDERLYING_PREFETCH_LOOKBACK_DAYS = 720 (≈2 yr); 2026-03-12 - 720d = 2024-03-22
+    expected_start = dt.date(2026, 3, 12) - dt.timedelta(days=ingest_module.ONCE_UNDERLYING_PREFETCH_LOOKBACK_DAYS)
     assert calls == [
         ("ensure_schema", engine),
-        ("run_ingest_window", dt.date(2025, 3, 12), dt.date(2026, 3, 12), ["SFRZ27"]),
+        ("run_ingest_window", expected_start, dt.date(2026, 3, 12), ["SFRZ27"]),
     ]
     assert any(
-        "requested_as_of=2026-03-12 window=2025-03-12..2026-03-12" in message
+        f"requested_as_of=2026-03-12 window={expected_start.isoformat()}..2026-03-12" in message
         for _level, message in messages
     )
 

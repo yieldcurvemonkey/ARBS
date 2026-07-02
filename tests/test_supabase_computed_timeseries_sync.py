@@ -86,9 +86,10 @@ class _FakeEngine:
 
 
 class _ImmediateThread:
-    def __init__(self, *, target, daemon=False):
+    def __init__(self, *, target, daemon=False, name=None):
         self._target = target
         self._daemon = daemon
+        self._name = name
 
     def start(self):
         self._target()

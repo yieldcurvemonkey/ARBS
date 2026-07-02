@@ -144,7 +144,7 @@ def test_complete_surface_grid_upgrades_legacy_rows_for_new_expiries():
     for node_key, node_value in legacy_grid.items():
         assert completed[node_key] == node_value
     assert np.isfinite(completed["7y_10y"])
-    assert np.isfinite(completed["15y_10y"])
+    # "15y" was deliberately removed from EXPIRY_LABELS in commit e944c2d8 ("new strats")
     assert np.isfinite(completed["20y_10y"])
 
 
@@ -207,6 +207,7 @@ def test_ensure_history_and_model_force_refresh_fetches_full_window(monkeypatch)
 def test_build_live_grid_anchors_direct_long_end_nodes(monkeypatch):
     model = _make_dummy_model(live_grid.SURFACE_NODE_KEYS)
     eod_grid = _make_flat_grid(80.0)
+    # "15y" was removed from EXPIRY_LABELS in commit e944c2d8 ("new strats"); use "7Y" instead.
     observations = [
         _make_direct_observation(
             package_id="pkg-10",
@@ -216,8 +217,8 @@ def test_build_live_grid_anchors_direct_long_end_nodes(monkeypatch):
             execution_timestamp=dt.datetime(2026, 3, 6, 18, 20, 0, tzinfo=dt.timezone.utc),
         ),
         _make_direct_observation(
-            package_id="pkg-15",
-            expiry_label="15Y",
+            package_id="pkg-7",
+            expiry_label="7Y",
             tenor_label="10Y",
             observed_bpvol=77.0,
             execution_timestamp=dt.datetime(2026, 3, 6, 18, 10, 0, tzinfo=dt.timezone.utc),
@@ -252,23 +253,23 @@ def test_build_live_grid_anchors_direct_long_end_nodes(monkeypatch):
     )
 
     assert update.live_grid["10y_10y"] == 79.0
-    assert update.live_grid["15y_10y"] == 77.0
+    assert update.live_grid["7y_10y"] == 77.0
     assert update.live_grid["20y_10y"] == 75.0
-    assert update.delta_grid["15y_10y"] == -3.0
+    assert update.delta_grid["7y_10y"] == -3.0
     assert update.delta_grid["20y_10y"] == -5.0
-    assert update.live_grid["15y_1y"] != update.live_grid["10y_1y"]
-    assert update.live_grid["20y_1y"] != update.live_grid["15y_1y"]
-    assert update.live_grid["15y_1y"] < 80.0
+    assert update.live_grid["7y_1y"] != update.live_grid["10y_1y"]
+    assert update.live_grid["20y_1y"] != update.live_grid["7y_1y"]
+    assert update.live_grid["7y_1y"] < 80.0
     assert update.live_grid["20y_1y"] < 80.0
-    assert node_metadata["15y_10y"]["source"] == "direct_observation"
+    assert node_metadata["7y_10y"]["source"] == "direct_observation"
     assert node_metadata["20y_10y"]["source"] == "direct_observation"
-    assert node_metadata["15y_10y"]["last_observation"]["tradeLabel"] == "15Yx10Y"
+    assert node_metadata["7y_10y"]["last_observation"]["tradeLabel"] == "7Yx10Y"
     assert node_metadata["20y_10y"]["last_observation"]["tradeLabel"] == "20Yx10Y"
-    assert node_metadata["15y_1y"]["source"] == "propagated"
+    assert node_metadata["7y_1y"]["source"] == "propagated"
     assert node_metadata["20y_1y"]["source"] == "propagated"
-    assert node_metadata["15y_1y"]["last_propagated_from"] is not None
+    assert node_metadata["7y_1y"]["last_propagated_from"] is not None
     assert node_metadata["20y_1y"]["last_propagated_from"] is not None
-    assert node_metadata["15y_1y"]["propagation_factor"] > 0
+    assert node_metadata["7y_1y"]["propagation_factor"] > 0
     assert node_metadata["20y_1y"]["propagation_factor"] > 0
     assert last_observation_ts == dt.datetime(2026, 3, 6, 18, 20, 0, tzinfo=dt.timezone.utc)
 
@@ -277,6 +278,7 @@ def test_build_live_grid_spillover_nodes_remain_propagated(monkeypatch):
     model = _make_dummy_model(live_grid.SURFACE_NODE_KEYS)
     eod_grid = _make_flat_grid(80.0)
     observations = [
+        # "15y" was removed from EXPIRY_LABELS in commit e944c2d8; spillover uses "20y" instead.
         _make_direct_observation(
             package_id="pkg-10",
             expiry_label="10Y",
@@ -285,7 +287,7 @@ def test_build_live_grid_spillover_nodes_remain_propagated(monkeypatch):
             core_node_key="10y_10y",
             grid_weights={
                 "10y_10y": 0.995,
-                "15y_10y": 0.005,
+                "20y_10y": 0.005,
             },
         ),
     ]
@@ -311,11 +313,11 @@ def test_build_live_grid_spillover_nodes_remain_propagated(monkeypatch):
     )
 
     assert update.live_grid["10y_10y"] == 79.0
-    assert update.live_grid["15y_10y"] < 80.0
+    assert update.live_grid["20y_10y"] < 80.0
     assert node_metadata["10y_10y"]["source"] == "direct_observation"
-    assert node_metadata["15y_10y"]["source"] == "propagated"
-    assert node_metadata["15y_10y"]["direct_observation_count"] == 0
-    assert node_metadata["15y_10y"]["last_propagated_from"] == "10y_10y"
+    assert node_metadata["20y_10y"]["source"] == "propagated"
+    assert node_metadata["20y_10y"]["direct_observation_count"] == 0
+    assert node_metadata["20y_10y"]["last_propagated_from"] == "10y_10y"
 
 
 def test_build_straddle_observations_infers_broken_idb_straddles():
