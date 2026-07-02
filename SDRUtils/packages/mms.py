@@ -329,7 +329,9 @@ def _match_swaps_to_ust_by_maturity(
     # Identify candidate swaps
     m = out[product_col].isin(list(product_values)).values
     if require_usd and currency_col in out.columns:
-        m &= out[currency_col].astype("string").values == usd_value
+        # Under pandas copy-on-write, .values from isin() is a read-only view,
+        # so in-place &= is illegal; allocate a new array instead.
+        m = m & (out[currency_col].astype("string").values == usd_value)
 
     if not m.any():
         out["matched_ust_maturity"] = False

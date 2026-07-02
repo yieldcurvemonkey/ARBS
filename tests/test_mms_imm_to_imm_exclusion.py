@@ -148,3 +148,26 @@ def test_spot_forward_label_is_still_eligible_for_mms(fake_ust_ref):
     ])
     out = _match_swaps_to_ust_by_maturity(df)
     assert bool(out.loc[0, "matched_ust_maturity"]) is True
+
+
+def test_mms_detector_survives_pandas_copy_on_write(fake_ust_ref):
+    """Under pandas copy-on-write, .values from isin() yields a read-only view;
+    the old in-place ``m &= ...`` on line 332 raised
+    ValueError: assignment destination is read-only.
+    This regression test confirms the fix (``m = m & (...)``) holds when CoW
+    is active.  The autouse conftest fixture resets CoW to False before every
+    test, so we set it back to True here explicitly and restore in finally."""
+    pd.options.mode.copy_on_write = True
+    try:
+        df = pd.DataFrame([
+            _trade(
+                trade_id="SPOT_MAT_IMM_COW",
+                effective_date=_NON_IMM_EFF,
+                expiration_date=_IMM_MAT,
+                forward_label="spot",
+            )
+        ])
+        out = _match_swaps_to_ust_by_maturity(df)
+        assert bool(out.loc[0, "matched_ust_maturity"]) is True
+    finally:
+        pd.options.mode.copy_on_write = False
