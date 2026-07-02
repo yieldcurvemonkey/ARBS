@@ -650,12 +650,12 @@ class TestBuildEnrichedLabelCrossDay:
     def test_terminated_label_has_xd_term_flag(self):
         tape = TradeTape(self._make_tape_df(xd_status="TERMINATED"))
         df = tape._build_enriched_label(self._make_tape_df(xd_status="TERMINATED"))
-        assert "XD-TERM" in df.iloc[0]["tape_label"]
+        assert "XD-TERM" in str(df.iloc[0]["tape_tags"])
 
     def test_partial_unwind_label_has_flag(self):
         tape = TradeTape(self._make_tape_df(xd_status="PARTIAL_UNWIND", xd_has_partial_unwind=True))
         df = tape._build_enriched_label(self._make_tape_df(xd_status="PARTIAL_UNWIND", xd_has_partial_unwind=True))
-        assert "PARTIAL-UNWIND" in df.iloc[0]["tape_label"]
+        assert "PARTIAL-UNWIND" in str(df.iloc[0]["tape_tags"])
 
     def test_active_no_xd_flag(self):
         tape = TradeTape(self._make_tape_df())

@@ -293,22 +293,22 @@ class TestEventTypeLabelIntegration:
     def test_nova_in_label(self):
         tape = TradeTape(self._make_tape_df("NEWT-NOVA", "NOVA"))
         df = tape._build_enriched_label(self._make_tape_df("NEWT-NOVA", "NOVA"))
-        assert "NOVA-IN" in df.iloc[0]["tape_label"]
+        assert "NOVA-IN" in str(df.iloc[0]["tape_tags"])
 
     def test_nova_out_label(self):
         tape = TradeTape(self._make_tape_df("TERM-NOVA", "NOVA"))
         df = tape._build_enriched_label(self._make_tape_df("TERM-NOVA", "NOVA"))
-        assert "NOVA-OUT" in df.iloc[0]["tape_label"]
+        assert "NOVA-OUT" in str(df.iloc[0]["tape_tags"])
 
     def test_exer_label(self):
         tape = TradeTape(self._make_tape_df("NEWT-EXER", "EXER"))
         df = tape._build_enriched_label(self._make_tape_df("NEWT-EXER", "EXER"))
-        assert "EXER" in df.iloc[0]["tape_label"]
+        assert "EXER" in str(df.iloc[0]["tape_tags"])
 
     def test_clrg_label(self):
         tape = TradeTape(self._make_tape_df("TERM-CLRG", "CLRG"))
         df = tape._build_enriched_label(self._make_tape_df("TERM-CLRG", "CLRG"))
-        assert "CLRG" in df.iloc[0]["tape_label"]
+        assert "CLRG" in str(df.iloc[0]["tape_tags"])
 
 
 class TestCleanTapeEventType:
