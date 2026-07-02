@@ -247,3 +247,28 @@ class TestSolveOpaSigns:
         out = solve_all_opa_signs(df)
         # best net = ±100, residual = 10; total_dv01 = 100 → 0.1 bp
         assert abs(out["dealer_spread_bps"].iloc[0] - 0.1) < 1e-9
+
+    def test_null_opa_leg_gets_null_sign(self):
+        """A leg with no OPA has no pay/receive direction — the solver
+        internally treats it as 0 but must not persist a sign for it."""
+        import pandas as pd
+
+        from SDRUtils.packages.opa_sign_solver import solve_all_opa_signs
+
+        df = pd.DataFrame({
+            "trade_id": ["A", "B", "C"],
+            "ptp_group_id": ["G", "G", "G"],
+            "other_payment_amount": [600.0, 500.0, None],
+            "package_transaction_price": [100.0, 100.0, 100.0],
+            "package_transaction_price_notation": [1.0, 1.0, 1.0],
+            "fixed_rate": [0.04, 0.041, 0.042],
+            "tenor_years": [2.0, 5.0, 10.0],
+            "estimated_pv01": [100.0, 100.0, 100.0],
+        })
+        out = solve_all_opa_signs(df)
+        c = out[out["trade_id"] == "C"].iloc[0]
+        assert pd.isna(c["opa_sign"]) and pd.isna(c["opa_signed_amount"])
+        ab = out[out["trade_id"].isin(["A", "B"])]
+        assert ab["opa_sign"].notna().all()
+        # group summary still populated for all legs
+        assert out["opa_ptp_residual"].notna().all()

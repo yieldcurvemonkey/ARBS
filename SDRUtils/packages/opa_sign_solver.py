@@ -291,7 +291,9 @@ def solve_all_opa_signs(
         if pd.isna(gid):
             continue
 
-        opas = numeric_like(grp[opa_col]).fillna(0).tolist() if opa_col in grp.columns else [0.0] * len(grp)
+        opa_raw = numeric_like(grp[opa_col]) if opa_col in grp.columns else pd.Series(index=grp.index, dtype=float)
+        opas = opa_raw.fillna(0).tolist()
+        opa_is_null = opa_raw.isna().tolist()
         ptp_vals = numeric_like(grp[ptp_col]) if ptp_col in grp.columns else pd.Series(dtype=float)
         ptp_val = ptp_vals.dropna().iloc[0] if ptp_vals.notna().any() else 0.0
 
@@ -316,6 +318,8 @@ def solve_all_opa_signs(
         idx_list = out.loc[mask].index.tolist()
 
         for i, ix in enumerate(idx_list):
+            if opa_is_null[i]:
+                continue  # no OPA — a sign has no economic meaning
             out.at[ix, "opa_sign"] = result["signs"][i]
             out.at[ix, "opa_signed_amount"] = result["signs"][i] * opas[i]
 
