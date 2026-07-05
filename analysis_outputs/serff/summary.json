@@ -1,0 +1,9 @@
+{
+  "total_pnl": "-2045.053089516115",
+  "sharpe": "-0.5517961320711281",
+  "monthly_mean": "-31.953954523689298",
+  "monthly_mean_ci95_block_bootstrap": "(-91.24001313980474, 9.528484304745103)",
+  "n_trades": "36",
+  "bucket_totals": "{'realized_basis': 608.3869953550316, 'realized_turn': -87.66857447040923, 'policy': -2338.897750873232, 'spread_reprice': 2994.6305660396606, 'residual': 1.0457368269205905e-06, 'costs': -3221.5043266129032}",
+  "turn_events": "{'n_month_ends': 63, 'realized_hit_rate': 0.2698412698412698, 'mean_model_p': 0.162668397126608, 'hit_rate_wilson95': (np.float64(0.17583701687980413), np.float64(0.39030143582031074)), 'brier': 0.1534430039639178}"
+}
