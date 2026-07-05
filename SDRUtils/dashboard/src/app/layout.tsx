@@ -32,7 +32,31 @@ export default function RootLayout({
                   href="/usd-rates-vol-analytics/vol-tape"
                   className="hover:text-white"
                 >
-                  USD Rates Vol Tape
+                  Vol Tape
+                </Link>
+                <Link
+                  href="/usd-rates-vol-analytics/atmf-vol-grid"
+                  className="hover:text-white"
+                >
+                  Live ATMF Vol Grid
+                </Link>
+                <Link
+                  href="/usd-rates-vol-analytics/atmf-grid-volatility-surface"
+                  className="hover:text-white"
+                >
+                  Vol Surface
+                </Link>
+                <Link
+                  href="/usd-rates-vol-analytics/listed-vs-otc-ustf"
+                  className="hover:text-white"
+                >
+                  Listed vs OTC
+                </Link>
+                <Link
+                  href="/usd-rates-vol-analytics/open-interest-and-volume-dashboard"
+                  className="hover:text-white"
+                >
+                  OI &amp; Volume
                 </Link>
               </nav>
             </div>
