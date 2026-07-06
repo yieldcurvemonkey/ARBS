@@ -432,3 +432,215 @@ def test_fixedratebonds_build_row_fast_paths_simple_ytm_queries(monkeypatch):
     )
 
     assert row == (datetime.date(2025, 1, 6), q.col_name(), 4.125)
+
+
+def test_fixedratebonds_tb_assembles_curve_ytm_from_cached_legs(monkeypatch, tmp_path):
+    """When individual outright leg YTMs are cached, a CURVE YTM composite
+    should be assembled arithmetically (back - front) without calling MDP."""
+    import TB.FixedRateBondsTB as frb_tb_module
+
+    source = f"TEST_FRB_LEG_CURVE_{uuid.uuid4().hex}"
+    mdp = _FakeFixedRateBondsMDP(source=source)
+    tb = FixedRateBondsTB(mdp, show_tqdm=False, ts_base_dir=str(tmp_path))
+
+    d1 = datetime.date(2024, 6, 3)
+    d2 = datetime.date(2024, 6, 4)
+
+    q_ct5 = FixedRateBondQuery(cusip="CT5", value=FixedRateBondValue.YTM)
+    q_ct30 = FixedRateBondQuery(cusip="CT30", value=FixedRateBondValue.YTM)
+
+    sym_ct5 = tb._ts_symbol_for_query(q_ct5)
+    sym_ct30 = tb._ts_symbol_for_query(q_ct30)
+
+    tb._computed_ts_store.append_many_rows(rows_by_symbol={
+        sym_ct5: [
+            (d1, q_ct5.col_name(), 4.25),
+            (d2, q_ct5.col_name(), 4.30),
+        ],
+        sym_ct30: [
+            (d1, q_ct30.col_name(), 4.75),
+            (d2, q_ct30.col_name(), 4.80),
+        ],
+    })
+
+    q_curve = FixedRateBondQuery(cusip="CT5/CT30", value=FixedRateBondValue.YTM)
+
+    monkeypatch.setattr(
+        frb_tb_module,
+        "_build_row_for_query",
+        lambda pr_map, q, ref_dt, date_col: (_ for _ in ()).throw(
+            AssertionError("_build_row_for_query should not be called — legs are cached")
+        ),
+    )
+
+    out = tb.get_timeseries(start=d1, end=d2, queries=[q_curve], n_jobs=1)
+
+    assert mdp.bulk_calls == 0, "MDP should not have been called"
+    assert list(out.index) == [d1, d2]
+    col = q_curve.col_name()
+    assert abs(out.loc[d1, col] - 0.50) < 1e-10  # 4.75 - 4.25
+    assert abs(out.loc[d2, col] - 0.50) < 1e-10  # 4.80 - 4.30
+
+
+def test_fixedratebonds_tb_assembles_fly_ytm_from_cached_legs(monkeypatch, tmp_path):
+    """FLY YTM = 2*belly - front - back, assembled from cached outright legs."""
+    import TB.FixedRateBondsTB as frb_tb_module
+
+    source = f"TEST_FRB_LEG_FLY_{uuid.uuid4().hex}"
+    mdp = _FakeFixedRateBondsMDP(source=source)
+    tb = FixedRateBondsTB(mdp, show_tqdm=False, ts_base_dir=str(tmp_path))
+
+    d1 = datetime.date(2024, 6, 3)
+
+    q_ct5 = FixedRateBondQuery(cusip="CT5", value=FixedRateBondValue.YTM)
+    q_ct7 = FixedRateBondQuery(cusip="CT7", value=FixedRateBondValue.YTM)
+    q_ct30 = FixedRateBondQuery(cusip="CT30", value=FixedRateBondValue.YTM)
+
+    tb._computed_ts_store.append_many_rows(rows_by_symbol={
+        tb._ts_symbol_for_query(q_ct5): [(d1, q_ct5.col_name(), 4.25)],
+        tb._ts_symbol_for_query(q_ct7): [(d1, q_ct7.col_name(), 4.40)],
+        tb._ts_symbol_for_query(q_ct30): [(d1, q_ct30.col_name(), 4.75)],
+    })
+
+    q_fly = FixedRateBondQuery(cusip="CT5/CT7/CT30", value=FixedRateBondValue.YTM)
+
+    monkeypatch.setattr(
+        frb_tb_module,
+        "_build_row_for_query",
+        lambda pr_map, q, ref_dt, date_col: (_ for _ in ()).throw(
+            AssertionError("_build_row_for_query should not be called — legs are cached")
+        ),
+    )
+
+    out = tb.get_timeseries(start=d1, end=d1, queries=[q_fly], n_jobs=1)
+
+    assert mdp.bulk_calls == 0
+    col = q_fly.col_name()
+    expected = 2 * 4.40 - 4.25 - 4.75  # -0.20
+    assert abs(out.loc[d1, col] - expected) < 1e-10
+
+
+def test_fixedratebonds_tb_leg_assembly_partial_coverage_falls_through(monkeypatch, tmp_path):
+    """When only some legs are cached, uncovered dates fall through to MDP pricing."""
+    import TB.FixedRateBondsTB as frb_tb_module
+
+    source = f"TEST_FRB_LEG_PARTIAL_{uuid.uuid4().hex}"
+    mdp = _FakeFixedRateBondsMDP(source=source)
+    tb = FixedRateBondsTB(mdp, show_tqdm=False, ts_base_dir=str(tmp_path))
+
+    d1 = datetime.date(2024, 6, 3)
+    d2 = datetime.date(2024, 6, 4)
+
+    q_ct5 = FixedRateBondQuery(cusip="CT5", value=FixedRateBondValue.YTM)
+    q_ct30 = FixedRateBondQuery(cusip="CT30", value=FixedRateBondValue.YTM)
+
+    # Only cache CT5 for d1 and d2, but CT30 only for d1
+    tb._computed_ts_store.append_many_rows(rows_by_symbol={
+        tb._ts_symbol_for_query(q_ct5): [
+            (d1, q_ct5.col_name(), 4.25),
+            (d2, q_ct5.col_name(), 4.30),
+        ],
+        tb._ts_symbol_for_query(q_ct30): [
+            (d1, q_ct30.col_name(), 4.75),
+        ],
+    })
+
+    q_curve = FixedRateBondQuery(cusip="CT5/CT30", value=FixedRateBondValue.YTM)
+
+    monkeypatch.setattr(
+        frb_tb_module,
+        "_build_row_for_query",
+        lambda pr_map, q, ref_dt, date_col: (ref_dt, q.col_name(), 0.55),
+    )
+
+    out = tb.get_timeseries(start=d1, end=d2, queries=[q_curve], n_jobs=1)
+
+    # d1 assembled from legs, d2 falls through to MDP
+    assert mdp.bulk_calls == 1
+    col = q_curve.col_name()
+    assert abs(out.loc[d1, col] - 0.50) < 1e-10  # assembled: 4.75 - 4.25
+    assert abs(out.loc[d2, col] - 0.55) < 1e-10  # from _build_row_for_query mock
+
+
+def test_fixedratebonds_tb_leg_assembly_skips_custom_risk_weights(monkeypatch, tmp_path):
+    """Composites with custom structure_kwargs bypass leg assembly."""
+    import TB.FixedRateBondsTB as frb_tb_module
+
+    source = f"TEST_FRB_LEG_CUSTOM_{uuid.uuid4().hex}"
+    mdp = _FakeFixedRateBondsMDP(source=source)
+    tb = FixedRateBondsTB(mdp, show_tqdm=False, ts_base_dir=str(tmp_path))
+
+    d1 = datetime.date(2024, 6, 3)
+
+    q_ct5 = FixedRateBondQuery(cusip="CT5", value=FixedRateBondValue.YTM)
+    q_ct30 = FixedRateBondQuery(cusip="CT30", value=FixedRateBondValue.YTM)
+
+    tb._computed_ts_store.append_many_rows(rows_by_symbol={
+        tb._ts_symbol_for_query(q_ct5): [(d1, q_ct5.col_name(), 4.25)],
+        tb._ts_symbol_for_query(q_ct30): [(d1, q_ct30.col_name(), 4.75)],
+    })
+
+    # Custom risk_weights — should NOT use leg assembly
+    q_custom = FixedRateBondQuery(
+        cusip="CT5/CT30",
+        value=FixedRateBondValue.YTM,
+        structure_kwargs={"risk_weights": [0.5, 0.5]},
+    )
+
+    build_row_called = []
+    monkeypatch.setattr(
+        frb_tb_module,
+        "_build_row_for_query",
+        lambda pr_map, q, ref_dt, date_col: (
+            build_row_called.append(True) or (ref_dt, q.col_name(), 0.99)
+        ),
+    )
+
+    out = tb.get_timeseries(start=d1, end=d1, queries=[q_custom], n_jobs=1)
+
+    assert mdp.bulk_calls == 1, "MDP should be called — custom risk_weights"
+    assert len(build_row_called) == 1
+
+
+def test_fixedratebonds_tb_skips_composite_when_leg_pricer_missing(monkeypatch, tmp_path):
+    """When a leg pricer is missing from bulk_get_data (data gap), the composite
+    date should be silently skipped rather than crashing with a KeyError on
+    resolved CUSIPs."""
+    import TB.FixedRateBondsTB as frb_tb_module
+    from Query.FixedRateBonds.FixedRateBondStructure import FixedRateBondStructure
+
+    source = f"TEST_FRB_MISSING_LEG_{uuid.uuid4().hex}"
+
+    class _PartialMDP(_FakeFixedRateBondsMDP):
+        def bulk_get_data(self, timestamps, cusips, **kw):
+            self.bulk_calls += 1
+            self.bulk_timestamps.append(list(timestamps))
+            result = {}
+            for ts in timestamps:
+                pricers = {}
+                for c in cusips:
+                    if c == "CT7":
+                        continue  # simulate FedInvest data gap for CT7
+                    pricers[c] = _YTMPricer(4.0)
+                result[ts] = pricers
+            return result
+
+    mdp = _PartialMDP(source=source)
+    tb = FixedRateBondsTB(mdp, show_tqdm=False, use_ts_cache=False, ts_base_dir=str(tmp_path))
+
+    d1 = datetime.date(2024, 6, 3)
+    q_fly = FixedRateBondQuery(cusip="CT5/CT7/CT30", value=FixedRateBondValue.YTM)
+
+    build_row_called = []
+    monkeypatch.setattr(
+        frb_tb_module,
+        "_build_row_for_query",
+        lambda pr_map, q, ref_dt, date_col: (
+            build_row_called.append(True) or (ref_dt, q.col_name(), -0.10)
+        ),
+    )
+
+    out = tb.get_timeseries(start=d1, end=d1, queries=[q_fly], n_jobs=1)
+
+    assert len(build_row_called) == 0, "_build_row_for_query should not be called when a leg is missing"
+    assert out.empty or q_fly.col_name() not in out.columns or out[q_fly.col_name()].isna().all()
