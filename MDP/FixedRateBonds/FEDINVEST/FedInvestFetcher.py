@@ -307,20 +307,24 @@ class FedInvestDataFetcher(BaseFetcher, LayeredCacheMixin):
             if refresh_cache:
                 dates_to_fetch = dates
             else:
-                dates_to_fetch = [dt for dt in dates if date_keys[dt] not in cache]
+                dates_to_fetch = []
+                for dt in dates:
+                    cached = cache.get(date_keys[dt])
+                    if cached is None or (isinstance(cached, pd.DataFrame) and cached.empty):
+                        dates_to_fetch.append(dt)
 
             if not dates_to_fetch:
                 return {dt: cache[date_keys[dt]] for dt in dates}
 
             fetched_dict = dict(asyncio.run(run_fetch_all(dates=dates_to_fetch)))
             for dt, df in fetched_dict.items():
-                cache[pd.Timestamp(dt.date())] = df
-            if fetched_dict:
-                pass  # auto-committed (DiskCache)
+                if isinstance(df, pd.DataFrame) and not df.empty:
+                    cache[pd.Timestamp(dt.date())] = df
 
             out: Dict[datetime, pd.DataFrame] = {}
             for dt in dates:
-                out[dt] = cache[date_keys[dt]]
+                key = date_keys[dt]
+                out[dt] = cache.get(key, pd.DataFrame())
             return out
         finally:
             self.close_cache()
