@@ -84,6 +84,15 @@ def _clone_risk_weights(rws):
     return copy.deepcopy(rws)
 
 
+def _split_components(txt: str) -> List[str]:
+    s = (txt or "").strip()
+    if ("x" in s) and ("Ox" not in s):
+        return [p for p in s.split("x") if p]
+    if ("/" in s) and (not re.match(r"^\d{2}\d{2}/\d{1,2}$", s)):
+        return [p for p in s.split("/") if p]
+    return [s] if s else []
+
+
 def _build_row_for_query(
     pricer_for_cusip: Dict[str, _FixedRateBondGenericPricer],
     q: FixedRateBondQuery,
@@ -339,6 +348,89 @@ class FixedRateBondsTB(LayeredCacheMixin, BaseTimeseriesTB):
             cached_rows = [(d, c, v) for d, c, v in cached_rows if _as_date(d) <= _stale_cutoff]
             cached_row_keys = {(d, c) for d, c in cached_row_keys if _as_date(d) <= _stale_cutoff}
 
+        # --- Leg-level cache reuse for YTM composites ---
+        # CURVE [-1, 1]: back - front.  FLY [-1, 2, -1]: 2*belly - front - back.
+        # Only for default structure_kwargs (no custom risk_weights/notionals).
+        if self._use_ts_cache and not ignore_cache and not _skip_ts_cache:
+            _composite_weights = {
+                (FixedRateBondStructure.CURVE, 2): [-1.0, 1.0],
+                (FixedRateBondStructure.FLY, 3): [-1.0, 2.0, -1.0],
+            }
+            for q in flat:
+                struct = getattr(q, "structure", None)
+                if struct not in (FixedRateBondStructure.CURVE, FixedRateBondStructure.FLY):
+                    continue
+                if getattr(q, "value", None) != FixedRateBondValue.YTM:
+                    continue
+                skw = dict(getattr(q, "structure_kwargs", {}) or {})
+                if any(
+                    skw.get(k) is not None
+                    for k in ("risk_weights", "front_notional", "belly_notional", "back_notional", "notional", "bpv")
+                ):
+                    continue
+
+                parts = _split_components(str(q.cusip))
+                weights = _composite_weights.get((struct, len(parts)))
+                if weights is None:
+                    continue
+
+                col = q.col_name()
+                uncovered_dates = [
+                    d for d in ref_points
+                    if (d, col) not in cached_row_keys
+                    and d != "live"
+                    and d != today
+                    and (
+                        not isinstance(d, (datetime.date, datetime.datetime))
+                        or (d.date() if isinstance(d, datetime.datetime) else d) <= _stale_cutoff
+                    )
+                ]
+                if not uncovered_dates:
+                    continue
+
+                leg_date_vals: List[Dict[DateLike, float]] = []
+                all_legs_found = True
+                for part in parts:
+                    leg_q = FixedRateBondQuery(
+                        cusip=part,
+                        value=FixedRateBondValue.YTM,
+                        structure=FixedRateBondStructure.OUTRIGHT,
+                    )
+                    leg_symbol = self._ts_symbol_for_query(leg_q)
+                    try:
+                        leg_rows = self._computed_ts_store.read_rows(
+                            symbol=leg_symbol,
+                            reference_points=uncovered_dates,
+                            intraday=is_intraday,
+                            skip_current_eod=True,
+                            fallback_column_name=leg_q.col_name(),
+                            allow_partial=True,
+                        )
+                        leg_rows = self._filter_rows_for_source(leg_rows)
+                    except Exception:
+                        all_legs_found = False
+                        break
+                    leg_date_vals.append({row_d: row_v for row_d, _, row_v in leg_rows})
+
+                if not all_legs_found:
+                    continue
+
+                assembled_count = 0
+                for d in uncovered_dates:
+                    vals = [ldv.get(d) for ldv in leg_date_vals]
+                    if any(v is None for v in vals):
+                        continue
+                    composite_val = sum(w * v for w, v in zip(weights, vals))
+                    cached_rows.append((d, col, float(composite_val)))
+                    cached_row_keys.add((d, col))
+                    assembled_count += 1
+
+                if assembled_count:
+                    self._logger.debug(
+                        "[leg-cache] Assembled %d dates for %s from cached legs %s",
+                        assembled_count, col, parts,
+                    )
+
         qs_per_date: Dict[Union[datetime.date, datetime.datetime], List[FixedRateBondQuery]] = {d: list(flat) for d in ref_points}
         to_price_dates: List[Union[datetime.date, datetime.datetime]] = []
         cache_map = getattr(self, self._cache_attr)
@@ -377,14 +469,6 @@ class FixedRateBondsTB(LayeredCacheMixin, BaseTimeseriesTB):
 
         if not to_price_dates and cached_rows:
             return self._rows_to_frame(cached_rows)
-
-        def _split_components(txt: str) -> List[str]:
-            s = (txt or "").strip()
-            if ("x" in s) and ("Ox" not in s):
-                return [p for p in s.split("x") if p]
-            if ("/" in s) and (not re.match(r"^\d{2}\d{2}/\d{1,2}$", s)):
-                return [p for p in s.split("/") if p]
-            return [s] if s else []
 
         needed_symbols: List[str] = []
         for q in flat:
@@ -460,7 +544,7 @@ class FixedRateBondsTB(LayeredCacheMixin, BaseTimeseriesTB):
                             self._logger.warning(f"On-demand pricer fetch failed for date={d}, parts={missing}: {ex}")
 
                 pr_map = {k: pr_map_all[k] for k in parts if k in pr_map_all}
-                if not pr_map:
+                if len(pr_map) < len(parts):
                     return None
                 return (d, q, pr_map)
 
