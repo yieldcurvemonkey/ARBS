@@ -1,6 +1,7 @@
 import { describe, expect, it } from '@jest/globals'
 import { EMPTY_VALUE } from '../../../constants'
 import {
+  collapseTenors,
   displayTapeLabel,
   parseTapeLabelSegments,
 } from '../TapeLabelCell.helpers'
@@ -29,6 +30,63 @@ describe('displayTapeLabel', () => {
 
   it('returns the empty marker when no tape label is available', () => {
     expect(displayTapeLabel({ legs_json: [] } as any)).toBe(EMPTY_VALUE)
+  })
+})
+
+describe('collapseTenors', () => {
+  it('collapses 5+ repeated tenors into PKG-N', () => {
+    const tenors = Array(78).fill('20Y').join('/')
+    const label = `USD-SOFR-COMPOUND 1D Constant Spot ${tenors} Package PHYS`
+    expect(collapseTenors(label, 78)).toBe(
+      'USD-SOFR-COMPOUND 1D Constant Spot PKG-78 PHYS',
+    )
+  })
+
+  it('collapses approximate tenors (~17Y)', () => {
+    const tenors = Array(34).fill('~17Y').join('/')
+    const label = `USD-SOFR-OIS Compound 1D Constant BSD ${tenors} Package PHYS`
+    expect(collapseTenors(label, 34)).toBe(
+      'USD-SOFR-OIS Compound 1D Constant BSD PKG-34 PHYS',
+    )
+  })
+
+  it('leaves short tenor sequences untouched', () => {
+    const label = 'USD-SOFR-COMPOUND 1D Constant Spot 5Y/10Y CURVE PHYS'
+    expect(collapseTenors(label, 2)).toBe(label)
+  })
+
+  it('leaves fly tenor sequences untouched', () => {
+    const label = 'USD-SOFR-COMPOUND 1D Constant Spot 2Y/5Y/30Y FLY PHYS'
+    expect(collapseTenors(label, 3)).toBe(label)
+  })
+
+  it('falls back to counting slashes when nLegs is null', () => {
+    const tenors = Array(10).fill('5Y').join('/')
+    const label = `USD-SOFR 1D Constant Spot ${tenors} Package PHYS`
+    expect(collapseTenors(label, null)).toBe(
+      'USD-SOFR 1D Constant Spot PKG-10 PHYS',
+    )
+  })
+
+  it('handles mixed tenors in a large package', () => {
+    const tenors = '5Y/5Y/7Y/7Y/10Y/10Y/20Y/20Y/30Y/30Y'
+    const label = `USD-SOFR-COMPOUND 1D Constant Spot ${tenors} Package PHYS`
+    expect(collapseTenors(label, 10)).toBe(
+      'USD-SOFR-COMPOUND 1D Constant Spot PKG-10 PHYS',
+    )
+  })
+})
+
+describe('displayTapeLabel', () => {
+  it('collapses large package tenor repetitions', () => {
+    const tenors = Array(78).fill('20Y').join('/')
+    expect(
+      displayTapeLabel({
+        tape_label: `USD-SOFR-COMPOUND 1D Constant Spot ${tenors} Package PHYS`,
+        n_package_legs: 78,
+        legs_json: [],
+      } as any),
+    ).toBe('USD-SOFR-COMPOUND 1D Constant Spot PKG-78 PHYS')
   })
 })
 
@@ -119,6 +177,12 @@ describe('parseTapeLabelSegments', () => {
     const tenors = segs.filter((s) => s.isTenor).map((s) => s.text)
     expect(tenors).toContain('IMM_H2027')
     expect(tenors).toContain('10Y')
+  })
+
+  it('bolds the collapsed PKG-N token', () => {
+    const segs = parseTapeLabelSegments('USD-SOFR-COMPOUND 1D Constant Spot PKG-78 PHYS')
+    const tenors = segs.filter((s) => s.isTenor).map((s) => s.text)
+    expect(tenors).toContain('PKG-78')
   })
 
   it('returns the empty marker untouched', () => {

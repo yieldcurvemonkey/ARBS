@@ -21,11 +21,27 @@ export function extractExecutionTags(label: string): string[] {
   return tags
 }
 
+export function collapseTenors(
+  label: string,
+  nLegs: number | null | undefined,
+): string {
+  // 5+ slash-separated tenor tokens: 20Y/20Y/..., ~17Y/~17Y/...
+  const re =
+    /[~-]?\d+(?:\.\d+)?[YMW](?:\d+[YMW])?(?:\/[~-]?\d+(?:\.\d+)?[YMW](?:\d+[YMW])?){4,}/g
+  const collapsed = label.replace(re, (match) => {
+    const count = nLegs ?? match.split('/').length
+    return `PKG-${count}`
+  })
+  // Drop redundant "Package" trade-type word right after PKG-N
+  return collapsed.replace(/PKG-(\d+)\s+Package\b/g, 'PKG-$1')
+}
+
 export function displayTapeLabel(row: UsdSwapTapeRow): string {
   const labels = [row.tape_label, row.legs_json?.[0]?.tape_label]
   for (const label of labels) {
     if (typeof label === 'string' && label.trim().length > 0) {
-      return stripExecutionTags(label.trim())
+      const stripped = stripExecutionTags(label.trim())
+      return collapseTenors(stripped, row.n_package_legs)
     }
   }
   return EMPTY_VALUE
@@ -42,7 +58,7 @@ export function displayTapeLabel(row: UsdSwapTapeRow): string {
 //   - Outright tenor: "5Y", "18M", "5Y11M", "1.5Y"
 //   - Curve / fly package tenors: "5Y/10Y", "2Y/5Y/30Y"
 const TENOR_SEGMENT_RE =
-  /(FOMC\s+[A-Z]{3,4}\d{2})|(\bIMM_[A-Z]\d{4}\b)|(\bSpot\b)|(\b\d+D\b(?!\s+Constant))|(\b\d+(?:\.\d+)?[YMW](?:\d+[YMW])?(?:\/\d+(?:\.\d+)?[YMW](?:\d+[YMW])?)*)/g
+  /(PKG-\d+)|(FOMC\s+[A-Z]{3,4}\d{2})|(\bIMM_[A-Z]\d{4}\b)|(\bSpot\b)|(\b\d+D\b(?!\s+Constant))|(\b\d+(?:\.\d+)?[YMW](?:\d+[YMW])?(?:\/\d+(?:\.\d+)?[YMW](?:\d+[YMW])?)*)/g
 
 export interface TapeLabelSegment {
   text: string
