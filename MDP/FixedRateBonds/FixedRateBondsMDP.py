@@ -1320,7 +1320,7 @@ class FixedRateBondsMDP(MarketDataProvider[_GenericPricable], LayeredCacheMixin)
                         meta_data=meta_data,
                     )
 
-            wsj_buffer = ql.UnitedStates(ql.UnitedStates.GovernmentBond).advance(ql.Date.todaysDate(), ql.Period("-5D"))
+            wsj_buffer = ql.UnitedStates(ql.UnitedStates.GovernmentBond).advance(ql.Date.todaysDate(), ql.Period("-3D"))
             if ql.Date(timestamp.day, timestamp.month, timestamp.year) > wsj_buffer:
                 self._ensure_pricer_cache()
                 cache = getattr(self, self._FRB_PRICER_CACHE)

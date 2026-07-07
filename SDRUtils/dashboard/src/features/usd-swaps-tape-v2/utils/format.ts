@@ -324,6 +324,7 @@ export function formatOtherLvl(input: {
   legPtp?: Array<number | null | undefined>
   legPts?: Array<number | null | undefined>
 }): { opaLine: string; ptpLine: string; ptsLine: string } {
+  const MAX_INLINE_LEGS = 3
   const opaParts: string[] = []
   input.legOpa.forEach((v, i) => {
     if (v === null || v === undefined || Number.isNaN(v)) return
@@ -331,7 +332,14 @@ export function formatOtherLvl(input: {
     const formatted = formatSignedCompact(Number(v))
     opaParts.push(ccy && ccy !== 'USD' ? `${formatted} ${ccy}` : formatted)
   })
-  const opaLine = opaParts.length ? `OPA: ${opaParts.join(' / ')}` : `OPA: ${EMPTY_VALUE}`
+  let opaLine: string
+  if (opaParts.length === 0) {
+    opaLine = `OPA: ${EMPTY_VALUE}`
+  } else if (opaParts.length <= MAX_INLINE_LEGS) {
+    opaLine = `OPA: ${opaParts.join(' / ')}`
+  } else {
+    opaLine = `OPA: ${opaParts.slice(0, MAX_INLINE_LEGS).join(' / ')} ...`
+  }
 
   // PTP line — prefer per-leg array when supplied + at least one non-null.
   const legPtpNonNull = (input.legPtp ?? []).filter(

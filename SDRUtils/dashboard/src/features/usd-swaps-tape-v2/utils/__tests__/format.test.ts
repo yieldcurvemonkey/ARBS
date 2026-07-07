@@ -281,6 +281,22 @@ describe('formatOtherLvl', () => {
     })
     expect(result.ptsLine).toBe('PTS: -0.004')
   })
+  it('truncates OPA to 3 legs with "..." for larger packages', () => {
+    const result = formatOtherLvl({
+      legOpa: [13900, 16000, 21400, 8100],
+      ptp: 58400,
+    })
+    expect(result.opaLine).toBe('OPA: 13.9k / 16.0k / 21.4k ...')
+  })
+
+  it('shows all 3 OPA values without "..." for exactly 3 legs', () => {
+    const result = formatOtherLvl({
+      legOpa: [13900, 16000, 21400],
+      ptp: 51300,
+    })
+    expect(result.opaLine).toBe('OPA: 13.9k / 16.0k / 21.4k')
+  })
+
   it('appends currency suffix only on non-USD values', () => {
     const result = formatOtherLvl({
       legOpa: [15627.6],

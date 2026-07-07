@@ -12,10 +12,15 @@
 //             summary.risk = belly_leg.risk
 //             summary.opa  = (belly_opa - front_opa) - (back_opa - belly_opa)
 //                          = 2*belly_opa - front_opa - back_opa
+//   PACKAGE:  summary.opa  = Σ(opa_sign_i × opa_i) with signs chosen
+//                            so the signed sum ≈ PTP (subset-sum opt).
+//             summary.risk = Σ|risk_i| across all legs.
+//             summary.rate = DV01-weighted average rate.
 //
 // PTP / PTS are package-level (same value on every leg row) so the
 // summary just passes through the package-level value.
 import type { UsdSwapTapeLeg, UsdSwapTapeRow } from '../../types'
+import { solveOpaSigns } from '../../utils/opaSignSolver'
 
 export interface LegSummary {
   rate: number | null
@@ -103,7 +108,12 @@ export function computeLegSummary(row: UsdSwapTapeRow): LegSummary {
     }
   }
 
-  // OUTRIGHT / other: pass-through the single leg.
+  // PACKAGE (multi-leg, not CURVE/FLY): signed OPA aggregation.
+  if (legs.length > 1) {
+    return computePackageSummary(row, legs, ptp, pts)
+  }
+
+  // OUTRIGHT: pass-through the single leg.
   const one = legs[0]
   return {
     rate: toNum(one.fixed_rate),
@@ -112,4 +122,68 @@ export function computeLegSummary(row: UsdSwapTapeRow): LegSummary {
     ptp,
     pts,
   }
+}
+
+
+function computePackageSummary(
+  row: UsdSwapTapeRow,
+  legs: UsdSwapTapeLeg[],
+  ptp: number | null,
+  pts: number | null,
+): LegSummary {
+  // --- OPA: 3-tier fallback ---
+  // 1. Row-level pre-computed opa_signed_net (fastest, authoritative).
+  // 2. Per-leg opa_sign × opa — sum the backend's sign assignments.
+  // 3. Client-side subset-sum solver against PTP (fallback for old data).
+  let opa: number | null = toNum(row.opa_signed_net)
+
+  if (opa === null) {
+    const hasAnySigns = legs.some((l) => l.opa_sign != null)
+    if (hasAnySigns) {
+      opa = 0
+      for (const l of legs) {
+        const amount = toNum(l.other_payment_amount)
+        if (amount === null) continue
+        const sign = l.opa_sign ?? 1
+        opa += sign * amount
+      }
+    } else if (ptp !== null) {
+      const opaValues = legs
+        .map((l) => toNum(l.other_payment_amount))
+        .filter((v): v is number => v !== null)
+      if (opaValues.length > 0) {
+        const result = solveOpaSigns(opaValues, ptp)
+        opa = result.net
+      }
+    }
+  }
+
+  // --- Risk: sum of absolute DV01 across legs ---
+  let risk: number | null = null
+  let riskSum = 0
+  let hasRisk = false
+  for (const l of legs) {
+    const r = toNum(l.risk)
+    if (r !== null) {
+      riskSum += Math.abs(r)
+      hasRisk = true
+    }
+  }
+  if (hasRisk) risk = riskSum
+
+  // --- Rate: DV01-weighted average ---
+  let rate: number | null = null
+  let weightedRateSum = 0
+  let totalWeight = 0
+  for (const l of legs) {
+    const r = toNum(l.fixed_rate)
+    const w = toNum(l.risk)
+    if (r !== null && w !== null && w !== 0) {
+      weightedRateSum += r * Math.abs(w)
+      totalWeight += Math.abs(w)
+    }
+  }
+  if (totalWeight > 0) rate = weightedRateSum / totalWeight
+
+  return { rate, risk, opa, ptp, pts }
 }
