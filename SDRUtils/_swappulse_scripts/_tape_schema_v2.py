@@ -522,21 +522,48 @@ SELECT
   p.ptp_sub_structures,
   p.package_metrics,
   l.legs_json,
-  ml.manual_package_id,
   ml.user_comment,
   ml.link_reason,
   ml.tags,
   ml.link_metrics,
   ml.created_by AS link_created_by,
-  ml.created_at AS link_created_at
+  ml.created_at AS link_created_at,
+  l.override_map,
+  COALESCE(l.manual_package_id, ml.manual_package_id) AS manual_package_id,
+  l.override_type,
+  n.has_notes,
+  n.notes_count
 FROM {PACKAGES_TABLE_V2} p
 LEFT JOIN LATERAL (
-    SELECT jsonb_agg(to_jsonb(l) ORDER BY l.leg_order) AS legs_json
+    SELECT
+      jsonb_agg(to_jsonb(l) ORDER BY l.leg_order) AS legs_json,
+      jsonb_object_agg(l.trade_id, m.override_id)
+        FILTER (WHERE m.override_id IS NOT NULL) AS override_map,
+      max(m.manual_package_id) AS manual_package_id,
+      max(m.override_type) AS override_type
     FROM {LEGS_TABLE_V2} l
+    LEFT JOIN {OVERRIDE_MEMBERS_TABLE_V2} m
+      ON m.trade_id = l.trade_id AND m.is_active
     WHERE l.package_id = p.package_id
 ) l ON TRUE
 LEFT JOIN {MANUAL_LINKS_TABLE} ml
-  ON ml.link_id = p.manual_link_id AND ml.is_active = TRUE;
+  ON ml.link_id = p.manual_link_id AND ml.is_active = TRUE
+LEFT JOIN LATERAL (
+    SELECT
+      count(*) > 0 AS has_notes,
+      count(*)::int AS notes_count
+    FROM {NOTES_TABLE_V2} nt
+    WHERE nt.is_active
+      AND (
+        (nt.target_type = 'PACKAGE'
+           AND nt.target_id IN (p.package_id, l.manual_package_id, ml.manual_package_id))
+        OR (nt.target_type = 'TRADE'
+           AND nt.target_id IN (
+             SELECT lg.trade_id FROM {LEGS_TABLE_V2} lg
+             WHERE lg.package_id = p.package_id
+           ))
+      )
+) n ON TRUE;
 
 -- Phase 7: swap spread VWAP daily aggregate table
 CREATE TABLE IF NOT EXISTS arbs_usd_swap_vwap_daily_v2 (
