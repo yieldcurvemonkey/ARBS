@@ -1,5 +1,10 @@
 export type NoteTargetType = 'TRADE' | 'PACKAGE'
 
+export interface NoteTarget {
+  target_type: NoteTargetType
+  target_id: string
+}
+
 export interface TapeNote {
   note_id: string
   target_type: NoteTargetType
