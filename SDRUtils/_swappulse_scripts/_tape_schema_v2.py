@@ -23,6 +23,10 @@ LEGS_TABLE_V2 = "arbs_usd_swap_tape_legs_v2"
 RUNS_TABLE_V2 = "arbs_usd_swap_tape_ingestion_runs_v2"
 DISPLAY_VIEW_V2 = "arbs_usd_swap_tape_display_v2"
 MANUAL_LINKS_TABLE = "arbs_usd_swap_manual_links_v2"
+OVERRIDES_TABLE_V2 = "arbs_usd_swap_tape_overrides_v2"
+OVERRIDE_MEMBERS_TABLE_V2 = "arbs_usd_swap_tape_override_members_v2"
+OVERRIDE_HISTORY_TABLE_V2 = "arbs_usd_swap_tape_override_history_v2"
+NOTES_TABLE_V2 = "arbs_usd_swap_tape_notes_v2"
 
 
 TAPE_SCHEMA_SQL_V2 = f"""
@@ -362,6 +366,82 @@ CREATE INDEX IF NOT EXISTS idx_tape_v2_legs_norm_label_orig
 CREATE INDEX IF NOT EXISTS idx_tape_v2_packages_norm_label
   ON {PACKAGES_TABLE_V2}(normalized_tape_label, original_execution_start DESC NULLS LAST);
 
+-- =====================================================================
+-- Manual regrouping + trader notes (2026-07-08). Dashboard-owned tables;
+-- the ingest pipeline NEVER writes them. Overrides re-cluster tape rows
+-- (GROUP/SPLIT/DETACH); the member table is index-probed by the display
+-- view; history is an append-only audit trail; notes attach free text to
+-- a TRADE or a PACKAGE. All DDL idempotent (IF NOT EXISTS) so
+-- ensure_schema() can re-run safely. These tables MUST be declared before
+-- the CREATE VIEW below, which references the member + notes tables.
+-- =====================================================================
+CREATE TABLE IF NOT EXISTS {OVERRIDES_TABLE_V2} (
+    override_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    override_type TEXT NOT NULL
+      CHECK (override_type IN ('GROUP','SPLIT','DETACH')),
+    manual_package_id TEXT,
+    trade_ids TEXT[] NOT NULL,
+    created_by TEXT NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_by TEXT,
+    updated_at TIMESTAMPTZ,
+    reason TEXT,
+    tags TEXT[],
+    metrics JSONB NOT NULL DEFAULT '{{}}'::jsonb,
+    is_active BOOLEAN NOT NULL DEFAULT TRUE,
+    superseded_by UUID REFERENCES {OVERRIDES_TABLE_V2}(override_id),
+    CONSTRAINT chk_tape_v2_override_group_min_trades
+      CHECK (override_type <> 'GROUP' OR array_length(trade_ids, 1) >= 2)
+);
+
+CREATE INDEX IF NOT EXISTS idx_tape_v2_overrides_trade_ids_gin
+  ON {OVERRIDES_TABLE_V2} USING GIN (trade_ids);
+CREATE INDEX IF NOT EXISTS idx_tape_v2_overrides_active
+  ON {OVERRIDES_TABLE_V2} (is_active) WHERE is_active;
+CREATE INDEX IF NOT EXISTS idx_tape_v2_overrides_manual_pkg
+  ON {OVERRIDES_TABLE_V2} (manual_package_id);
+CREATE INDEX IF NOT EXISTS idx_tape_v2_overrides_created_at
+  ON {OVERRIDES_TABLE_V2} (created_at);
+
+CREATE TABLE IF NOT EXISTS {OVERRIDE_MEMBERS_TABLE_V2} (
+    trade_id TEXT NOT NULL,
+    override_id UUID NOT NULL REFERENCES {OVERRIDES_TABLE_V2}(override_id),
+    override_type TEXT NOT NULL,
+    manual_package_id TEXT,
+    is_active BOOLEAN NOT NULL DEFAULT TRUE
+);
+
+-- Backstop invariant: at most one ACTIVE override per trade. The partial
+-- UNIQUE index is ALSO the btree the display view index-probes on
+-- (m.trade_id = l.trade_id AND m.is_active) — no separate probe index needed.
+CREATE UNIQUE INDEX IF NOT EXISTS uq_tape_v2_override_members_active_trade
+  ON {OVERRIDE_MEMBERS_TABLE_V2} (trade_id) WHERE is_active;
+
+CREATE TABLE IF NOT EXISTS {OVERRIDE_HISTORY_TABLE_V2} (
+    history_id BIGSERIAL PRIMARY KEY,
+    override_id UUID NOT NULL REFERENCES {OVERRIDES_TABLE_V2}(override_id),
+    action TEXT NOT NULL
+      CHECK (action IN ('CREATED','UPDATED','DEACTIVATED','SUPERSEDED')),
+    changed_by TEXT NOT NULL,
+    changed_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    change_details JSONB,
+    previous_state JSONB
+);
+
+CREATE TABLE IF NOT EXISTS {NOTES_TABLE_V2} (
+    note_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    target_type TEXT NOT NULL CHECK (target_type IN ('TRADE','PACKAGE')),
+    target_id TEXT NOT NULL,
+    author TEXT NOT NULL,
+    body TEXT NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ,
+    is_active BOOLEAN NOT NULL DEFAULT TRUE
+);
+
+CREATE INDEX IF NOT EXISTS idx_tape_v2_notes_target_active
+  ON {NOTES_TABLE_V2} (target_type, target_id) WHERE is_active;
+
 DROP VIEW IF EXISTS {DISPLAY_VIEW_V2};
 CREATE OR REPLACE VIEW {DISPLAY_VIEW_V2} AS
 SELECT
@@ -527,6 +607,10 @@ __all__ = [
     "RUNS_TABLE_V2",
     "DISPLAY_VIEW_V2",
     "MANUAL_LINKS_TABLE",
+    "OVERRIDES_TABLE_V2",
+    "OVERRIDE_MEMBERS_TABLE_V2",
+    "OVERRIDE_HISTORY_TABLE_V2",
+    "NOTES_TABLE_V2",
     "VWAP_TABLE_V2",
     "SIGNAL_TABLE_V2",
     "SIGNAL_TABLE_DDL",

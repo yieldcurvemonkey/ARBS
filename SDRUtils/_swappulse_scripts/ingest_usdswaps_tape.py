@@ -415,6 +415,7 @@ _schema_ensured: set[str] = set()
 _LATEST_MIGRATION_COLS = [
     ("arbs_usd_swap_tape_packages_v2", "ptp_price_notation"),
     ("arbs_usd_swap_tape_legs_v2", "opa_signed_amount"),
+    ("arbs_usd_swap_tape_overrides_v2", "override_id"),
 ]
 
 
