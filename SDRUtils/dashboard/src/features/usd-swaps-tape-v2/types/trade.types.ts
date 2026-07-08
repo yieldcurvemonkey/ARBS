@@ -1,4 +1,5 @@
 import type { SofrSwapTapeLeg, SofrSwapTapeRow } from '@/features/sofr-swaps-tape/types'
+import type { OverrideType } from './override.types'
 
 export type LifecycleType =
   | 'NEW_RISK'
@@ -199,6 +200,14 @@ export type UsdSwapTapeRow = SofrSwapTapeRow & {
   dealer_spread_est?: number | null
   dealer_spread_bps?: number | null
   ptp_sub_structures?: Array<{ type: string; legs: string[]; belly_dv01?: number }> | null
+  // Manual regrouping + notes (v2 override resolution, appended by the
+  // display view). `manual_package_id` already rides on the base
+  // SofrSwapTapeRow. `override_map` is sparse: trade_id -> override_id
+  // for the subset of legs that carry an active override.
+  override_map?: Record<string, string> | null
+  override_type?: OverrideType | null
+  has_notes?: boolean
+  notes_count?: number
   legs_json: UsdSwapTapeLeg[]
 }
 
