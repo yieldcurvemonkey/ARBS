@@ -50,3 +50,5 @@ export type {
   UseVolumeGridCellArgs,
   UseVolumeGridCellReturn,
 } from './useVolumeGridCell'
+export { useTradeSelection } from './useTradeSelection'
+export type { UseTradeSelectionReturn } from './useTradeSelection'
