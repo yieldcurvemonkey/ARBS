@@ -174,10 +174,17 @@ def detect_mms_trades_df(
         for std in _STANDARD_TENORS:
             is_clean_tenor |= (tenor_y - std).abs().values <= 0.1
 
-    # Tag matched trades (with forward-start and clean-tenor gates)
+    # Tag matched trades. The MMS-ness gates (spot-start + clean-tenor) are
+    # coincidence guards that apply to EVERY candidate leg, packaged or not:
+    # a clean-tenor spot swap landing on a UST is an optical Spreadover, not
+    # matched-maturity. outright_mask gates ONLY the package-identity rewrite
+    # below, so a genuine broken-tenor match inside a CURVE/FLY/PKG-N keeps
+    # matched_ust_maturity=True for the package rollup instead of being wiped
+    # merely for being packaged.
     raw_matched = out["matched_ust_maturity"].fillna(False).values
-    can_tag = raw_matched & outright_mask & spot_start_mask & ~is_clean_tenor
-    excluded = raw_matched & ~can_tag
+    is_mms_leg = raw_matched & spot_start_mask & ~is_clean_tenor
+    can_tag = is_mms_leg & outright_mask
+    excluded = raw_matched & ~is_mms_leg
     if excluded.any():
         out.loc[excluded, "matched_ust_maturity"] = False
     if can_tag.any():
