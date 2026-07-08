@@ -31,8 +31,11 @@ def test_new_package_columns_in_tuple():
 
 def test_new_package_columns_in_ddl_and_view():
     sql = schema.TAPE_SCHEMA_SQL_V2
+    pkg = schema.PACKAGES_TABLE_V2
+    # Table-qualified so special_tenor_type / tape_label_ust_alias (which share
+    # names with the legs_v2 columns) can't be satisfied by the leg ALTER lines.
     for c in _NEW_PKG:
-        assert f"ADD COLUMN IF NOT EXISTS {c}" in sql, c
+        assert f"ALTER TABLE {pkg} ADD COLUMN IF NOT EXISTS {c}" in sql, c
     # package columns must be hand-listed in the display view SELECT
     for c in _NEW_PKG:
         assert f"p.{c}" in sql, c
