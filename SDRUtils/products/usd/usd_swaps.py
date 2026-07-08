@@ -188,7 +188,7 @@ _SERVICE_CACHE_DIR_NAME = "service_caches"
 # Keys both the classification parquet day-cache directory and the
 # packaged-day warm-start pickle, so stale-schema frames can never be
 # served after a deploy (2026-07-01 audit, finding C4).
-DETECTION_CACHE_VERSION = "ptp2"
+DETECTION_CACHE_VERSION = "ptp3-mms-pkg"
 
 
 def save_service_caches(cache_dir: str) -> None:
@@ -850,6 +850,41 @@ def detect_sub_package_curve_fly(
         if _paired:
             print(f"    [DETECT] Paired {_paired} SPREADOVER trades into composite packages")
 
+    return out
+
+
+def _rollup_matched_maturity_packages(df: pd.DataFrame) -> pd.DataFrame:
+    """Full-scope, idempotent package-level matched-maturity rollup.
+
+    Runs post-concat over the whole (PTP + non-PTP) frame. For every
+    package_id whose legs are ALL matched_ust_maturity, promote a base
+    CURVE/FLY to MATCHED_MATURITY_CURVE/_FLY. PKG-N keeps its type (the
+    package-level MMS signal surfaces via per-leg special_tenor_type at
+    ingest). Already-composite / SPREADOVER_* / INVOICE* / BASIS_* packages
+    are skipped so SPREADOVER-wins and INVOICE-wins precedence hold. Idempotent:
+    a no-op over anything detect_sub_package_curve_fly already promoted.
+    """
+    if df.empty or "package_id" not in df.columns or "package_type" not in df.columns:
+        return df
+    out = df.copy()
+    if "matched_ust_maturity" not in out.columns:
+        return out
+    leg_mms = out["matched_ust_maturity"].astype(str).str.lower().isin({"true", "t", "1"})
+    base = out["package_type"].astype(str).str.upper()
+    promotable = base.isin({"CURVE", "FLY"}) & out["package_id"].notna()
+    if not promotable.any():
+        return out
+    for pkg_id, group_idx in out.loc[promotable].groupby("package_id").groups.items():
+        idx = list(group_idx)
+        if len(idx) < 2:
+            continue
+        if not bool(leg_mms.loc[idx].all()):
+            continue
+        base_type = str(out.loc[idx[0], "package_type"]).upper()
+        new_type = f"MATCHED_MATURITY_{base_type}"
+        out.loc[idx, "package_type"] = new_type
+        if "trade_type" in out.columns:
+            out.loc[idx, "trade_type"] = new_type
     return out
 
 
@@ -1724,6 +1759,7 @@ class USD_SwapProduct(USDProductBase):
 
                     if not ptp_df.empty:
                         ptp_df = classify_ptp_groups(ptp_df)
+                        ptp_df = detect_mms_trades_df(ptp_df)
 
                     df = non_ptp_df
 
@@ -1754,6 +1790,7 @@ class USD_SwapProduct(USDProductBase):
                         )
 
                     df = pd.concat([ptp_df, df], ignore_index=True)
+                    df = _rollup_matched_maturity_packages(df)
                     df = solve_all_opa_signs(df)
                     return df
 
@@ -1873,4 +1910,5 @@ __all__ = [
     "detect_spreadovers",
     "_is_round_notional",
     "_resolve_special_tenor_priority",
+    "_rollup_matched_maturity_packages",
 ]

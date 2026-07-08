@@ -145,3 +145,42 @@ def test_zero_spread_does_not_count_as_spreadover():
     df = _curve_pair(package_indicator=True, package_transaction_spread=0.0)
     out = detect_sub_package_curve_fly(df)
     assert set(out["package_type"].tolist()) == {"CURVE"}
+
+
+from SDRUtils.products.usd.usd_swaps import _rollup_matched_maturity_packages
+
+
+def _ptp_curve(*, matched_ust_maturity: bool, package_type: str = "CURVE",
+               package_id: str = "PTP_1") -> pd.DataFrame:
+    """A PTP-grouped CURVE (bypasses detect_sub_package_curve_fly today)."""
+    return pd.DataFrame([
+        {"trade_id": "L1", "tenor_years": 9.86, "package_type": package_type,
+         "package_id": package_id, "matched_ust_maturity": matched_ust_maturity},
+        {"trade_id": "L2", "tenor_years": 19.87, "package_type": package_type,
+         "package_id": package_id, "matched_ust_maturity": matched_ust_maturity},
+    ])
+
+
+def test_rollup_promotes_ptp_all_mms_curve():
+    out = _rollup_matched_maturity_packages(_ptp_curve(matched_ust_maturity=True))
+    assert set(out["package_type"].tolist()) == {"MATCHED_MATURITY_CURVE"}
+
+
+def test_rollup_leaves_pkg_n_type_unchanged():
+    df = _ptp_curve(matched_ust_maturity=True, package_type="PKG-3", package_id="PTP_2")
+    out = _rollup_matched_maturity_packages(df)
+    assert set(out["package_type"].tolist()) == {"PKG-3"}
+
+
+def test_rollup_partial_stays_base():
+    df = _ptp_curve(matched_ust_maturity=False)
+    df.loc[0, "matched_ust_maturity"] = True
+    out = _rollup_matched_maturity_packages(df)
+    assert set(out["package_type"].tolist()) == {"CURVE"}
+
+
+def test_rollup_skips_spreadover_and_invoice():
+    for ptype in ("SPREADOVER_CURVE", "INVOICE_SWITCH", "MATCHED_MATURITY_CURVE"):
+        df = _ptp_curve(matched_ust_maturity=True, package_type=ptype, package_id=f"P_{ptype}")
+        out = _rollup_matched_maturity_packages(df)
+        assert set(out["package_type"].tolist()) == {ptype}
