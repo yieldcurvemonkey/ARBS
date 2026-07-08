@@ -30,6 +30,7 @@ import {
 } from '../../hooks'
 import type { UseColumnFiltersReturn } from '../../hooks'
 import type { UsdSwapTapeRow } from '../../types'
+import type { DisplayRow } from '../../utils/applyOverrides'
 import { LegsSubTable } from './LegsSubTable'
 import { getColumns, rowClassName, type MetricMode } from './columns'
 import { useAnalyticsPrefetch } from '../../hooks/useAnalyticsPrefetch'
@@ -396,8 +397,9 @@ export function TradeTapeTable(props: TradeTapeTableProps): JSX.Element {
   }
 
   const dataTableRowClassName = useCallback(
-    (row: UsdSwapTapeRow) =>
-      [
+    (row: UsdSwapTapeRow) => {
+      const kind = (row as DisplayRow).__rowKind
+      return [
         'h-9 text-[11px] !text-gray-200 transition-[filter,box-shadow] hover:brightness-110 hover:shadow-[inset_0_0_0_1px_rgba(148,163,184,0.5)]',
         rowClassName(row),
         row.manual_link_id || row.manual_package_id ? 'manual-linked-row' : '',
@@ -405,9 +407,11 @@ export function TradeTapeTable(props: TradeTapeTableProps): JSX.Element {
         focusedPackageId && row.package_id === focusedPackageId
           ? 'focused-trade-row'
           : '',
+        kind === 'split-leg' ? 'split-leg-row' : kind === 'detached' ? 'detached-row' : '',
       ]
         .join(' ')
-        .trim(),
+        .trim()
+    },
     [selectedIds, focusedPackageId],
   )
 
@@ -605,6 +609,18 @@ export function TradeTapeTable(props: TradeTapeTableProps): JSX.Element {
           > tr.manual-linked-row
           > td {
           background-color: rgba(245, 158, 11, 0.18) !important;
+        }
+        .usd-swaps-tape-table .p-datatable-tbody > tr.split-leg-row > td {
+          background-color: rgba(56, 189, 248, 0.06) !important;
+        }
+        .usd-swaps-tape-table .p-datatable-tbody > tr.split-leg-row > td:first-child {
+          box-shadow: inset 2px 0 0 rgba(56, 189, 248, 0.65) !important;
+        }
+        .usd-swaps-tape-table .p-datatable-tbody > tr.detached-row > td {
+          background-color: rgba(248, 113, 113, 0.06) !important;
+        }
+        .usd-swaps-tape-table .p-datatable-tbody > tr.detached-row > td:first-child {
+          box-shadow: inset 2px 0 0 rgba(248, 113, 113, 0.75) !important;
         }
         .usd-swaps-tape-table
           .p-datatable-tbody
