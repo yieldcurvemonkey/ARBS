@@ -63,7 +63,7 @@ def _hour_to_session(hour: int) -> str:
 # Result cache versioning
 # ---------------------------------------------------------------------------
 
-TRADE_TAPE_CACHE_VERSION = "v10-ptp-truebp-notation"
+TRADE_TAPE_CACHE_VERSION = "v11-ust-alias-pkg"
 DEFAULT_CACHE_DIR = os.path.join(
     os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
     "notebooks", "sdr", "_cache", "trade_tape",
@@ -1373,7 +1373,14 @@ class TradeTape(SDRAnalyzer):
                     str(row.get("special_tenor_type", "")).upper() == "MATCHED_MATURITY"
                     or bool(row.get("matched_ust_maturity", False))
                 ):
-                    alias = _ust_maturity_alias(row)
+                    if leg_as_outright:
+                        # Single expanded leg -> its own maturity alias.
+                        alias = _ust_maturity_alias(row)
+                    else:
+                        # Package scope -> collapsed multi-leg alias ("0236" or
+                        # "0536/0546"); fall back to the single-row date.
+                        pkg_alias = str(row.get("package_ust_aliases", "") or "").strip()
+                        alias = pkg_alias if pkg_alias else _ust_maturity_alias(row)
                     if alias:
                         tenors = alias
                 if tenors and tenors.lower() not in ("nan", "none"):
@@ -1517,6 +1524,10 @@ class TradeTape(SDRAnalyzer):
         df["tape_label_ust_alias"] = df.apply(
             lambda r: _label_for_row(r, use_ust_alias=True), axis=1
         )
+        # Per-leg secondary label: expanded sub-table leg with the MMYY alias.
+        df["leg_tape_label_ust_alias"] = df.apply(
+            lambda r: _label_for_row(r, leg_scope=True, use_ust_alias=True), axis=1
+        )
         # Clean double spaces
         df["tape_label"] = df["tape_label"].str.replace(r"\s+", " ", regex=True).str.strip()
         df["leg_tape_label"] = (
@@ -1524,6 +1535,9 @@ class TradeTape(SDRAnalyzer):
         )
         df["tape_label_ust_alias"] = (
             df["tape_label_ust_alias"].str.replace(r"\s+", " ", regex=True).str.strip()
+        )
+        df["leg_tape_label_ust_alias"] = (
+            df["leg_tape_label_ust_alias"].str.replace(r"\s+", " ", regex=True).str.strip()
         )
 
         return df

@@ -39,3 +39,36 @@ def test_package_ust_aliases_case_b_joins_distinct():
     tape = TradeTape(df=df, raw_df=None)
     out = tape._enrich_packages(df.copy())
     assert set(out["package_ust_aliases"].tolist()) == {"0536/0546"}
+
+
+def _enrich_and_label(rows):
+    df = pd.DataFrame(rows)
+    tape = TradeTape(df=df, raw_df=None)
+    out = tape._enrich_packages(df.copy())
+    out = tape._build_enriched_label(out)
+    return out
+
+
+def test_pkg_alias_label_shows_alias_and_mms():
+    rows = _pkg_legs("PKG-2", "P2", [("L1", 9.86, "2036-02-15"), ("L2", 9.86, "2036-02-15")])
+    out = _enrich_and_label(rows)
+    alt = out.loc[0, "tape_label_ust_alias"]
+    assert "0236" in alt
+    assert "MMS" in alt
+    assert "PHYS" in alt
+
+
+def test_curve_alias_label_joins_maturities():
+    rows = _pkg_legs("CURVE", "C1", [("L1", 9.86, "2036-05-15"), ("L2", 19.87, "2046-05-15")])
+    out = _enrich_and_label(rows)
+    alt = out.loc[0, "tape_label_ust_alias"]
+    assert "0536/0546" in alt
+    assert "CURVE" in alt and "MMS" in alt
+
+
+def test_leg_tape_label_ust_alias_present_per_leg():
+    rows = _pkg_legs("CURVE", "C1", [("L1", 9.86, "2036-05-15"), ("L2", 19.87, "2046-05-15")])
+    out = _enrich_and_label(rows)
+    assert "leg_tape_label_ust_alias" in out.columns
+    assert "0536" in out.loc[0, "leg_tape_label_ust_alias"]
+    assert "0546" in out.loc[1, "leg_tape_label_ust_alias"]
