@@ -265,6 +265,10 @@ PACKAGE_COLUMNS: tuple[str, ...] = (
     "dealer_spread_bps",
     "ptp_sub_structures",
     "package_metrics",
+    # Matched-UST-maturity / special-tenor enrichment (package)
+    "special_tenor_type",
+    "tape_label_ust_alias",
+    "is_matched_maturity_all",
 )
 
 
@@ -599,6 +603,16 @@ def _rep_tape_label(group: pd.DataFrame) -> str | None:
     if not non_null:
         return None
     # Longest label tends to be the most descriptive
+    return max(non_null, key=len)
+
+
+def _rep_tape_label_ust_alias(group: pd.DataFrame) -> str | None:
+    labels = group.get("tape_label_ust_alias")
+    if labels is None:
+        return None
+    non_null = [l for l in (_str_or_none(x) for x in labels) if l]
+    if not non_null:
+        return None
     return max(non_null, key=len)
 
 
@@ -1199,6 +1213,15 @@ def build_package_rows(tape: pd.DataFrame, *, as_of_date: str) -> list[dict]:
             normalized = g[flag].map(_bool_or_none)
             return bool(normalized.eq(True).any())
 
+        def _all(flag: str) -> bool | None:
+            if flag not in g.columns:
+                return None
+            normalized = g[flag].map(_bool_or_none)
+            non_null = normalized.dropna()
+            if non_null.empty:
+                return None
+            return bool(non_null.eq(True).all())
+
         package_type = _consistent_str(g, "package_type") or "OUTRIGHT"
         trade_type = _consistent_str(g, "trade_type") or package_type
         fwd_years_series = pd.to_numeric(g.get("forward_start_years"), errors="coerce")
@@ -1291,6 +1314,9 @@ def build_package_rows(tape: pd.DataFrame, *, as_of_date: str) -> list[dict]:
                 g["cluster_size"].iloc[0] if "cluster_size" in g.columns else None
             ),
             "tape_label": _rep_tape_label(g),
+            "special_tenor_type": _consistent_str(g, "special_tenor_type"),
+            "tape_label_ust_alias": _rep_tape_label_ust_alias(g),
+            "is_matched_maturity_all": _all("matched_ust_maturity"),
             "tape_tags": _str_or_none(
                 ",".join(sorted({
                     t

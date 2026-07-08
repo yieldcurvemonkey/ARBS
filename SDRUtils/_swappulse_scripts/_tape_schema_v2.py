@@ -83,6 +83,9 @@ CREATE TABLE IF NOT EXISTS {PACKAGES_TABLE_V2} (
     cluster_id TEXT,
     cluster_size INTEGER,
     tape_label TEXT,
+    special_tenor_type TEXT,
+    tape_label_ust_alias TEXT,
+    is_matched_maturity_all BOOLEAN,
     package_metrics JSONB NOT NULL DEFAULT '{{}}'::jsonb,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
@@ -358,6 +361,11 @@ ALTER TABLE {LEGS_TABLE_V2} ADD COLUMN IF NOT EXISTS tape_label_ust_alias TEXT;
 ALTER TABLE {LEGS_TABLE_V2} ADD COLUMN IF NOT EXISTS leg_tape_label_ust_alias TEXT;
 ALTER TABLE {LEGS_TABLE_V2} ADD COLUMN IF NOT EXISTS matched_ust_maturity_trade_confidence TEXT;
 
+-- Matched-UST-maturity / special-tenor enrichment (package)
+ALTER TABLE {PACKAGES_TABLE_V2} ADD COLUMN IF NOT EXISTS special_tenor_type TEXT;
+ALTER TABLE {PACKAGES_TABLE_V2} ADD COLUMN IF NOT EXISTS tape_label_ust_alias TEXT;
+ALTER TABLE {PACKAGES_TABLE_V2} ADD COLUMN IF NOT EXISTS is_matched_maturity_all BOOLEAN;
+
 -- Phase 7: lifecycle partial-unwind + seasoned-trade columns
 ALTER TABLE {LEGS_TABLE_V2} ADD COLUMN IF NOT EXISTS lc_was_partially_terminated BOOLEAN;
 ALTER TABLE {LEGS_TABLE_V2} ADD COLUMN IF NOT EXISTS lc_has_partial_unwind BOOLEAN;
@@ -431,6 +439,9 @@ SELECT
   p.cluster_id,
   p.cluster_size,
   p.tape_label,
+  p.special_tenor_type,
+  p.tape_label_ust_alias,
+  p.is_matched_maturity_all,
   p.is_off_market_any,
   p.confidence_score,
   p.confidence_total,
