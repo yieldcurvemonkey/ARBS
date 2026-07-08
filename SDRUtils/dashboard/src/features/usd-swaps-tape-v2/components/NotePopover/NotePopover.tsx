@@ -61,6 +61,7 @@ export function NotePopover({
       .catch((e) => setError(String((e as Error)?.message ?? e)))
 
   const canSave = author.trim().length > 0 && body.trim().length > 0 && !busy
+  const canMutate = author.trim().length > 0
 
   const onSave = async () => {
     if (!canSave) return
@@ -84,6 +85,10 @@ export function NotePopover({
   }
 
   const onDelete = async (noteId: string) => {
+    if (!author.trim()) {
+      setError('Author is required.')
+      return
+    }
     setBusy(true)
     try {
       await deactivateNote(noteId, { author: author.trim() })
@@ -97,6 +102,10 @@ export function NotePopover({
   }
 
   const onEdit = async (noteId: string, next: string) => {
+    if (!author.trim()) {
+      setError('Author is required.')
+      return
+    }
     setBusy(true)
     try {
       await updateNote(noteId, { body: next, author: author.trim() })
@@ -143,7 +152,7 @@ export function NotePopover({
                   <span>{n.author}</span>
                   <span>{new Date(n.created_at).toISOString().slice(0, 16).replace('T', ' ')}</span>
                 </div>
-                <NoteRow note={n} onEdit={onEdit} onDelete={onDelete} disabled={busy} />
+                <NoteRow note={n} onEdit={onEdit} onDelete={onDelete} disabled={busy} canMutate={canMutate} />
               </li>
             ))
           )}
@@ -194,11 +203,13 @@ function NoteRow({
   onEdit,
   onDelete,
   disabled,
+  canMutate,
 }: {
   note: TapeNote
   onEdit: (id: string, next: string) => void
   onDelete: (id: string) => void
   disabled: boolean
+  canMutate: boolean
 }): JSX.Element {
   const [editing, setEditing] = useState(false)
   const [draft, setDraft] = useState(note.body)
@@ -219,7 +230,7 @@ function NoteRow({
           <button
             type="button"
             className="text-[10px] text-sky-300 disabled:opacity-50"
-            disabled={disabled || !draft.trim()}
+            disabled={disabled || !draft.trim() || !canMutate}
             onClick={() => {
               onEdit(note.note_id, draft.trim())
               setEditing(false)
@@ -241,7 +252,7 @@ function NoteRow({
         <button
           type="button"
           className="text-[10px] text-rose-400 hover:text-rose-200"
-          disabled={disabled}
+          disabled={disabled || !canMutate}
           onClick={() => onDelete(note.note_id)}
         >
           delete
