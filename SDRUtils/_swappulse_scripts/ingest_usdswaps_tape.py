@@ -174,6 +174,13 @@ LEG_COLUMNS: tuple[str, ...] = (
     "ptp_group_id",
     "opa_sign",
     "opa_signed_amount",
+    # Matched-UST-maturity / special-tenor enrichment
+    "matched_ust_maturity",
+    "special_tenor_type",
+    "ust_cusip",
+    "tape_label_ust_alias",
+    "leg_tape_label_ust_alias",
+    "matched_ust_maturity_trade_confidence",
 )
 
 
@@ -817,6 +824,8 @@ def build_leg_rows(tape: pd.DataFrame, *, as_of_date: str) -> list[dict]:
             # Phase 5 bool columns
             "schedule_truncated", "cap_band_violation",
             "frequency_anomaly", "d2_missing",
+            # matched-UST-maturity enrichment
+            "matched_ust_maturity",
         ):
             rec[bool_col] = _bool_or_none(rec.get(bool_col))
         for text_col in (
@@ -837,6 +846,10 @@ def build_leg_rows(tape: pd.DataFrame, *, as_of_date: str) -> list[dict]:
             "basis_type", "leg1_rate_index", "leg2_rate_index",
             # PTP/OPA
             "ptp_group_id",
+            # matched-UST-maturity enrichment
+            "special_tenor_type", "ust_cusip",
+            "tape_label_ust_alias", "leg_tape_label_ust_alias",
+            "matched_ust_maturity_trade_confidence",
         ):
             rec[text_col] = _str_or_none(rec.get(text_col))
         rec["basis_spread_bps"] = _num_or_none(rec.get("basis_spread_bps"))
