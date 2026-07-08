@@ -52,3 +52,5 @@ export type {
 } from './useVolumeGridCell'
 export { useTradeSelection } from './useTradeSelection'
 export type { UseTradeSelectionReturn } from './useTradeSelection'
+export { useSelectionContext, deriveSelectionContext } from './useSelectionContext'
+export type { SelectionContext } from './useSelectionContext'
