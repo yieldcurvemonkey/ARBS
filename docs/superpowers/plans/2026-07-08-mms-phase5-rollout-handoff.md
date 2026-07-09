@@ -62,6 +62,48 @@ On the deployed tape, confirm:
   sub-table (and mobile cards).
 - Non-MMS rows are unchanged; regrouping (GROUP/SPLIT/DETACH) + notes still work.
 
+## ⚠️ Findings from the 2026-07-08 live attempt (READ THIS)
+
+A single-day backfill was attempted against prod and **`ensure_schema` deadlocked**;
+no MMS columns were applied. Root causes:
+
+1. **#333's prod migration is a hard prerequisite.** `ensure_schema`'s
+   `_schema_already_current()` guard keys off `_LATEST_MIGRATION_COLS`, which
+   includes `overrides_v2.override_id` and `display_v2.override_map` (from #333).
+   Those don't exist on prod (the #333 migration is deploy-gated and not yet
+   applied), so `ensure_schema` tries to apply the **entire #333 + MMS migration
+   in one bundle** — including a **DROP/CREATE of the display view** — every run.
+2. **Live-traffic lock contention.** The prod tape tables are served by live
+   dashboard/analytics queries (~50s each, holding `AccessShareLock`).
+   `_execute_ddl_bundle` uses a 3s `lock_timeout`, so the `ACCESS EXCLUSIVE` DDL
+   (esp. the view rebuild) can never win → deadlock+rollback after retries.
+3. **Code fix applied (commit `7672f732`):** `_LATEST_MIGRATION_COLS` now
+   registers the MMS markers, so once the migration does run it correctly
+   detects the MMS columns as pending (previously it would have *skipped* the
+   MMS DDL once the #333 markers existed).
+4. The sanity backfill did re-upsert 2026-07-06 with the new detection (a few
+   `MATCHED_MATURITY_CURVE` package_types persisted; alias columns did **not**,
+   since they don't exist yet). Harmless — the full backfill below rewrites it
+   consistently.
+
+### Safe procedure (run in a maintenance / low-traffic window)
+1. **Quiesce writers/heavy readers**: pause the live `run_usdswaps_pipeline`
+   service and avoid heavy dashboard/analytics load so the view DROP/CREATE can
+   grab its lock. (Optionally raise `_execute_ddl_bundle`'s `lock_timeout`.)
+2. **Apply the migration** (this includes #333's tables + view AND the MMS
+   columns) — either run `ensure_schema` directly, or the single-day backfill
+   which calls it:
+   ```bash
+   export DATABASE_URL='…prod…'
+   conda run -n stir python -c "from sqlalchemy import create_engine; import os; \
+     from SDRUtils._swappulse_scripts import ingest_usdswaps_tape as t; \
+     t.ensure_schema(create_engine(os.environ['DATABASE_URL']))"
+   ```
+   Confirm no deadlock and that `special_tenor_type`, `tape_label_ust_alias`,
+   `is_matched_maturity_all` now exist on the tape tables + display view.
+3. Set `TAPE_OVERRIDE_PASSWORD` (per #333).
+4. **Then** the single-day + full backfill (§2/§3 above) will persist MMS data.
+
 ## Rollback
 - Data: re-run `backfill` for the range from an earlier `DETECTION_CACHE_VERSION`
   checkout, or restore from the DB's PITR/backup.
