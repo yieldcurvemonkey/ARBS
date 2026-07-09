@@ -591,7 +591,12 @@ export function LegsSubTable({
                   {execTimestampPair(leg)}
                 </td>
                 <td className="max-w-[360px] px-2 py-1 font-mono text-[11px] text-slate-100">
-                  {stripExecutionTags(leg.leg_tape_label ?? leg.tape_label ?? EMPTY_VALUE)}
+                  {stripExecutionTags(
+                    leg.leg_tape_label_ust_alias ??
+                      leg.leg_tape_label ??
+                      leg.tape_label ??
+                      EMPTY_VALUE,
+                  )}
                 </td>
                 <td className="whitespace-nowrap px-2 py-1">
                   {formatDate(leg.effective_date)}

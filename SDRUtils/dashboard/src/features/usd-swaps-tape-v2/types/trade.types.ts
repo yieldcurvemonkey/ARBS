@@ -46,6 +46,10 @@ export type UsdSwapTapeLeg = SofrSwapTapeLeg & {
   // remains the package-level structure label ("5Y/10Y CURVE"). Undefined on
   // older rows ingested before the column was added.
   leg_tape_label?: string | null
+  // Matched-maturity (MMS) per-leg enrichment.
+  special_tenor_type?: string | null
+  tape_label_ust_alias?: string | null
+  leg_tape_label_ust_alias?: string | null
   trade_type?: string | null
   tenor_display?: string | null
   venue?: string | null
@@ -160,6 +164,11 @@ export type UsdSwapTapeRow = SofrSwapTapeRow & {
   package_adjusted_dv01?: number | null
   execution_session?: string | null
   tape_label?: string | null
+  // Matched-maturity (MMS) package-level enrichment.
+  special_tenor_type?: string | null
+  tape_label_ust_alias?: string | null
+  is_matched_maturity_all?: boolean | null
+  matched_ust_maturity?: boolean | null
   tape_tags?: string | null
   fomc_meeting_label?: string | null
   is_fomc_dated?: boolean | null

@@ -37,7 +37,15 @@ export function collapseTenors(
 }
 
 export function displayTapeLabel(row: UsdSwapTapeRow): string {
-  const labels = [row.tape_label, row.legs_json?.[0]?.tape_label]
+  // Prefer the UST-alias label ("…Spot 0536/0546 CURVE MMS PHYS") when present.
+  // Non-MMS rows have tape_label_ust_alias == tape_label, so this is a no-op for
+  // them; rows ingested before the column existed fall through to tape_label.
+  const labels = [
+    row.tape_label_ust_alias,
+    row.tape_label,
+    row.legs_json?.[0]?.tape_label_ust_alias,
+    row.legs_json?.[0]?.tape_label,
+  ]
   for (const label of labels) {
     if (typeof label === 'string' && label.trim().length > 0) {
       const stripped = stripExecutionTags(label.trim())
@@ -57,8 +65,11 @@ export function displayTapeLabel(row: UsdSwapTapeRow): string {
 //     skips it while still catching true forward-start days)
 //   - Outright tenor: "5Y", "18M", "5Y11M", "1.5Y"
 //   - Curve / fly package tenors: "5Y/10Y", "2Y/5Y/30Y"
+//   - MMS UST-maturity alias (numeric MMYY): "0236", "0536/0546" (placed after
+//     the FOMC/IMM anchors so those win; 4-digit MMYY does not collide with any
+//     other token in these labels)
 const TENOR_SEGMENT_RE =
-  /(PKG-\d+)|(FOMC\s+[A-Z]{3,4}\d{2})|(\bIMM_[A-Z]\d{4}\b)|(\bSpot\b)|(\b\d+D\b(?!\s+Constant))|(\b\d+(?:\.\d+)?[YMW](?:\d+[YMW])?(?:\/\d+(?:\.\d+)?[YMW](?:\d+[YMW])?)*)/g
+  /(PKG-\d+)|(FOMC\s+[A-Z]{3,4}\d{2})|(\bIMM_[A-Z]\d{4}\b)|(\bSpot\b)|(\b\d+D\b(?!\s+Constant))|(\b\d{2}\d{2}(?:\/\d{2}\d{2})*\b)|(\b\d+(?:\.\d+)?[YMW](?:\d+[YMW])?(?:\/\d+(?:\.\d+)?[YMW](?:\d+[YMW])?)*)/g
 
 export interface TapeLabelSegment {
   text: string
