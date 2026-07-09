@@ -428,6 +428,11 @@ _LATEST_MIGRATION_COLS = [
     ("arbs_usd_swap_tape_legs_v2", "opa_signed_amount"),
     ("arbs_usd_swap_tape_overrides_v2", "override_id"),
     ("arbs_usd_swap_tape_display_v2", "override_map"),
+    # Matched-maturity (MMS) migration markers — without these, ensure_schema's
+    # _schema_already_current() short-circuit would skip the MMS ADD COLUMNs once
+    # the #333 markers exist, leaving the MMS columns unmigrated.
+    ("arbs_usd_swap_tape_packages_v2", "is_matched_maturity_all"),
+    ("arbs_usd_swap_tape_legs_v2", "matched_ust_maturity"),
 ]
 
 
