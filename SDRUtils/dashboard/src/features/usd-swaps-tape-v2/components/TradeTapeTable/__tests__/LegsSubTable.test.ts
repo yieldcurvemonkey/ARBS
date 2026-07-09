@@ -24,15 +24,16 @@ describe('LegsSubTable', () => {
     expect(legsSubTableSource).not.toContain(
       'leg.tenor_display ?? leg.tenor_label ?? EMPTY_VALUE',
     )
-    // 14 baseline columns + Phase 3 Class + Phase 1 Exec Ts = 16
-    expect((legsSubTableSource.match(/<th /g) ?? []).length).toBe(16)
+    // 14 baseline columns + Phase 3 Class + Phase 1 Exec Ts + Task 16
+    // leading checkbox column = 17
+    expect((legsSubTableSource.match(/<th /g) ?? []).length).toBe(17)
   })
 
   it('uses the reduced empty-state colspan after the column additions', () => {
     // P3-06: colSpan now references the LEG_COL_COUNT constant so a
     // future column add can't drift the empty-state width.
     expect(legsSubTableSource).toContain('colSpan={LEG_COL_COUNT}')
-    expect(legsSubTableSource).toMatch(/const LEG_COL_COUNT = 16/)
+    expect(legsSubTableSource).toMatch(/const LEG_COL_COUNT = 17/)
   })
 
   it('surfaces the Phase 3 Class column for the matrix kind', () => {

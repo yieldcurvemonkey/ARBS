@@ -1,9 +1,9 @@
 // ABOUTME: Source-string contract test pinning that
 // `UsdSwapsTradeTape` plumbs the new multi-trade dock props
 // (`rows`, `selected`) into `<AnalyticsPanel>` alongside the legacy
-// `focused` prop. The orchestrator already exposes `tape.rows` and
-// `selection.selected`; this test guards against future refactors
-// that drop the wiring.
+// `focused` prop. The orchestrator exposes `tape.rows` and derives
+// `selectedRows` from the leg-level `useTradeSelection`; this test guards
+// against future refactors that drop the wiring.
 import { describe, expect, it } from '@jest/globals'
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
@@ -38,8 +38,8 @@ describe('UsdSwapsTradeTape — AnalyticsPanel passthrough', () => {
     expect(block).toMatch(/rows=\{\s*tape\.rows\s*\}/)
   })
 
-  it('passes selected={selection.selected} into AnalyticsPanel', () => {
-    expect(block).toMatch(/selected=\{\s*selection\.selected\s*\}/)
+  it('passes selected={selectedRows} into AnalyticsPanel', () => {
+    expect(block).toMatch(/selected=\{\s*selectedRows\s*\}/)
   })
 
   it('still passes focused={focus.focused} (single-mode preserved)', () => {
