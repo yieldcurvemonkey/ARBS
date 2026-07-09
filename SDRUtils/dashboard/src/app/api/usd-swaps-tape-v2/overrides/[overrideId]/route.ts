@@ -28,6 +28,18 @@ type PatchPayload = {
 }
 type DeletePayload = { reason?: unknown; user?: unknown; admin_password?: unknown }
 
+// Thrown when the parent-row UPDATE's active-guard (WHERE ... AND
+// is_active = TRUE) matches zero rows -- i.e. a concurrent DELETE
+// deactivated the override between the pre-txn existence check and the
+// in-txn UPDATE. Caught by PATCH's outer catch to answer 409 instead of
+// the generic 500, without resurrecting the row.
+class OverrideNotActiveError extends Error {
+  constructor() {
+    super('Override is not active.')
+    this.name = 'OverrideNotActiveError'
+  }
+}
+
 export async function GET(
   _request: Request,
   context: { params: Promise<{ overrideId: string }> },
@@ -49,7 +61,7 @@ export async function GET(
       [overrideId],
     )
     const history = await query(
-      `SELECT history_id, action, changed_by, changed_at, change_details, previous_state
+      `SELECT history_id, override_id, action, changed_by, changed_at, change_details, previous_state
        FROM ${OVERRIDE_HISTORY_TABLE}
        WHERE override_id = $1
        ORDER BY changed_at DESC`,
@@ -142,13 +154,18 @@ export async function PATCH(
         )
         // Any other active override now overlapping the new set is superseded.
         await supersedeOverlappingOverrides(client, nextTradeIds, overrideId, user)
-        await client.query(
+        const updateResult = await client.query(
           `UPDATE ${OVERRIDES_TABLE}
            SET trade_ids = $1, reason = $2, tags = $3, metrics = $4,
                is_active = TRUE, updated_by = $5, updated_at = NOW()
-           WHERE override_id = $6`,
+           WHERE override_id = $6 AND is_active = TRUE`,
           [nextTradeIds, nextReason, nextTags, metrics, user, overrideId],
         )
+        if (updateResult.rowCount === 0) {
+          // Row was active at the pre-txn read but a concurrent DELETE
+          // deactivated it before this UPDATE landed. Do not resurrect it.
+          throw new OverrideNotActiveError()
+        }
         await insertMemberRows(client, overrideId, overrideType, manualPackageId, nextTradeIds)
         await client.query(
           `INSERT INTO ${OVERRIDE_HISTORY_TABLE}
@@ -171,6 +188,9 @@ export async function PATCH(
       metrics,
     })
   } catch (error: any) {
+    if (error instanceof OverrideNotActiveError) {
+      return NextResponse.json({ error: error.message }, { status: 409 })
+    }
     console.error('tape override PATCH error', error)
     return NextResponse.json(
       { error: error?.message || 'Failed to update override' },
