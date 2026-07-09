@@ -546,21 +546,6 @@ export function getColumns(
             <span>{lines.opaLine}</span>
             <span>{lines.ptpLine}</span>
             <span>{lines.ptsLine}</span>
-            {row.opa_sign_confidence &&
-              row.opa_sign_confidence !== 'LOOSE' && (
-              <div className="mt-0.5 flex items-center gap-1 font-normal normal-case text-xs">
-                <span
-                  className={`px-1.5 py-0.5 rounded ${CONFIDENCE_COLORS[row.opa_sign_confidence] ?? 'bg-zinc-500/20 text-zinc-400'}`}
-                >
-                  {row.opa_sign_confidence}
-                </span>
-                {spreadBpsDisplay(row.dealer_spread_bps) != null && (
-                  <span className="text-zinc-500">
-                    {spreadBpsDisplay(row.dealer_spread_bps)}
-                  </span>
-                )}
-              </div>
-            )}
           </div>
         )
       }}

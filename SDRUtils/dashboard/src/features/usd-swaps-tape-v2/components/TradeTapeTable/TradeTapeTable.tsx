@@ -324,10 +324,16 @@ export function TradeTapeTable(props: TradeTapeTableProps): JSX.Element {
   // while scrollTop stays constant — a different row appears under the
   // cursor. Pure adjustment helper lives in ./scroll-anchor.ts.
   const prevDisplayRowsRef = useRef<UsdSwapTapeRow[] | null>(null)
+  // Track whether the user is actively scrolling — suppress anchor
+  // adjustments during scroll to avoid fighting the user's input.
+  const userScrollingRef = useRef(false)
+  const scrollTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+
   useLayoutEffect(() => {
     const prev = prevDisplayRowsRef.current
     prevDisplayRowsRef.current = displayRows
     if (!prev || prev === displayRows) return
+    if (userScrollingRef.current) return
     const sc = tableWrapperRef.current?.querySelector<HTMLElement>(
       '.p-virtualscroller',
     )
@@ -338,7 +344,11 @@ export function TradeTapeTable(props: TradeTapeTableProps): JSX.Element {
       oldScrollTop: sc.scrollTop,
       rowHeight: ROW_ESTIMATE_PX,
     })
-    if (next !== null) sc.scrollTop = next
+    if (next !== null) {
+      requestAnimationFrame(() => {
+        sc.scrollTop = next
+      })
+    }
   }, [displayRows])
   useEffect(() => {
     const root = tableWrapperRef.current
@@ -349,19 +359,33 @@ export function TradeTapeTable(props: TradeTapeTableProps): JSX.Element {
       ROW_ESTIMATE_PX * 10,
       Math.round(scroller.clientHeight * 1.5),
     )
+    let rafPending = false
     const onScroll = () => {
-      if (!hasMore || loadingMore) return
-      const remaining =
-        scroller.scrollHeight - (scroller.scrollTop + scroller.clientHeight)
-      if (remaining <= NEAR_BOTTOM_PX) {
-        void requestLoadMore()
-      }
+      // Mark user as scrolling; clear after 150ms of inactivity so
+      // poll-merge anchor adjustments don't fire mid-scroll.
+      userScrollingRef.current = true
+      if (scrollTimeoutRef.current) clearTimeout(scrollTimeoutRef.current)
+      scrollTimeoutRef.current = setTimeout(() => {
+        userScrollingRef.current = false
+      }, 150)
+
+      if (rafPending) return
+      rafPending = true
+      requestAnimationFrame(() => {
+        rafPending = false
+        if (!hasMore || loadingMore) return
+        const remaining =
+          scroller.scrollHeight - (scroller.scrollTop + scroller.clientHeight)
+        if (remaining <= NEAR_BOTTOM_PX) {
+          void requestLoadMore()
+        }
+      })
     }
     scroller.addEventListener('scroll', onScroll, { passive: true })
-    // Prime once after mount in case the user starts already near the tail.
     onScroll()
     return () => {
       scroller.removeEventListener('scroll', onScroll)
+      if (scrollTimeoutRef.current) clearTimeout(scrollTimeoutRef.current)
     }
   }, [hasMore, loadingMore, requestLoadMore, displayRows.length])
 

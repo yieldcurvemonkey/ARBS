@@ -166,7 +166,7 @@ export const TRADE_TYPE_DEFAULT_ROW_TONE = '!bg-gray-900/30'
 export const FLAG_CHIP_TONES = {
   BLK: 'bg-orange-900/40 text-orange-200',
   UFRO: 'bg-orange-900/40 text-orange-200',
-  OFF_MKT: 'bg-yellow-900/40 text-yellow-200',
+  OFF_MKT: 'bg-rose-600/30 text-rose-100 ring-1 ring-rose-500/50',
   CAPPED: 'bg-rose-900/40 text-rose-200',
   OFF_DATE: 'bg-yellow-900/40 text-yellow-200',
   NSTD: 'bg-purple-900/40 text-purple-200',
@@ -197,8 +197,8 @@ export const TAPE_TAG_TONES: Record<string, string> = {
   'NOVA-OUT': 'bg-cyan-900/40 text-cyan-200',
   EXER: 'bg-cyan-900/40 text-cyan-200',
   CLRG: 'bg-zinc-700/50 text-zinc-300',
-  'PAST-EFF': 'bg-violet-900/40 text-violet-200',
-  'OFF-MKT': 'bg-red-900/50 text-red-200',
+  'PAST-EFF': 'bg-amber-500/25 text-amber-200 ring-1 ring-amber-500/40',
+  'OFF-MKT': 'bg-rose-600/30 text-rose-100 ring-1 ring-rose-500/50',
 }
 
 export const TIMESERIES_METRICS: Array<{ key: TimeseriesMetricKey; label: string }> = [

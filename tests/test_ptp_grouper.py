@@ -247,9 +247,10 @@ class TestClassifyPtpGroups:
         assert len(out["package_legs"].iloc[0]) == 8
         assert out["ptp_sub_structures"].iloc[0] == []
 
-    def test_twelve_leg_multi_fly_decomposed_into_four_flies(self):
-        """When 12 legs form 4 balanced fly triplets the decomposition
-        algorithm splits them into 4 separate FLY packages."""
+    def test_twelve_leg_multi_fly_stays_unified_pkg12(self):
+        """When 12 legs form 4 balanced fly triplets the group stays
+        unified as PKG-12 with sub-structures recording the detected
+        flies (decomposition no longer splits into separate packages)."""
         legs = []
         for risk_scale in [1.0, 1.8]:
             for rate_offset in [0.0, 0.001]:
@@ -263,10 +264,12 @@ class TestClassifyPtpGroups:
                 ])
         df = _grouped_legs(legs)
         out = classify_ptp_groups(df)
-        assert (out["package_type"] == "FLY").all()
-        assert out["package_id"].nunique() == 4
-        for _, sub_grp in out.groupby("package_id"):
-            assert len(sub_grp) == 3
+        assert (out["package_type"] == "PKG-12").all()
+        assert out["package_id"].nunique() == 1
+        assert len(out["package_legs"].iloc[0]) == 12
+        subs = out["ptp_sub_structures"].iloc[0]
+        assert isinstance(subs, list) and len(subs) == 4
+        assert all(s["type"] == "FLY" for s in subs)
 
     def test_two_leg_same_tenor_is_pkg2_not_curve(self):
         """CURVE requires two different tenors (spec) — a balanced
@@ -303,9 +306,10 @@ class TestClassifyPtpGroups:
         assert types["PTP_A"] == "FLY"
         assert types["PTP_B"] == "CURVE"
 
-    def test_sub_flies_decomposed_with_rounded_tenors(self):
+    def test_sub_flies_detected_with_rounded_tenors(self):
         """Raw tenors 2.01/2.04 bucket to the same 2.0 — the decomposition
-        algorithm must round before matching (audit observation)."""
+        algorithm must round before matching. Sub-structures are recorded
+        but the group stays unified as PKG-6."""
         legs = [
             {"tenor_years": 2.01, "estimated_pv01": 5000.0, "trade_id": "T000"},
             {"tenor_years": 5.0, "estimated_pv01": 10000.0, "trade_id": "T001"},
@@ -316,8 +320,11 @@ class TestClassifyPtpGroups:
         ]
         df = _grouped_legs(legs)
         out = classify_ptp_groups(df)
-        assert (out["package_type"] == "FLY").all()
-        assert out["package_id"].nunique() == 2
+        assert (out["package_type"] == "PKG-6").all()
+        assert out["package_id"].nunique() == 1
+        subs = out["ptp_sub_structures"].iloc[0]
+        assert isinstance(subs, list) and len(subs) == 2
+        assert all(s["type"] == "FLY" for s in subs)
 
     def test_sub_fly_pairing_keeps_rates_together(self):
         """Two equal-DV01 sub-flies at different rates must not cross-pair

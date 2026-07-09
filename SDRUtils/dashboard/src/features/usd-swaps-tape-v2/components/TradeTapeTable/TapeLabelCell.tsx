@@ -12,7 +12,12 @@ export { displayTapeLabel } from './TapeLabelCell.helpers'
 
 function pkgLegsLines(row: UsdSwapTapeRow): string[] | null {
   const kind = String(row.package_type ?? '').toUpperCase()
-  if (!kind.startsWith('PKG-')) return null
+  const isMultiLeg =
+    kind.startsWith('PKG-') ||
+    kind === 'CURVE' || kind === 'FLY' ||
+    kind.startsWith('MATCHED_MATURITY') ||
+    kind.endsWith('_CURVE') || kind.endsWith('_FLY')
+  if (!isMultiLeg) return null
   const legs: UsdSwapTapeLeg[] = row.legs_json ?? []
   if (legs.length < 2) return null
   const sorted = [...legs].sort((a, b) => {
@@ -21,7 +26,11 @@ function pkgLegsLines(row: UsdSwapTapeRow): string[] | null {
     return at - bt
   })
   const lines = sorted
-    .map((l) => stripExecutionTags(l.leg_tape_label ?? l.tape_label ?? '').trim())
+    .map((l) =>
+      stripExecutionTags(
+        l.leg_tape_label_ust_alias ?? l.leg_tape_label ?? l.tape_label ?? '',
+      ).trim(),
+    )
     .filter(Boolean)
   return lines.length >= 2 ? lines : null
 }

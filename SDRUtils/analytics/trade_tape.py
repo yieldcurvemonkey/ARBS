@@ -1175,9 +1175,14 @@ class TradeTape(SDRAnalyzer):
             def _is_flyey(tt: str) -> bool:
                 return tt == "FLY" or tt.endswith("_FLY")
 
-            # Render a CURVE/FLY leg as a single-leg outright when leg_scope=True
-            # so the expanded sub-table shows "5Y Outright" / "10Y Outright".
-            leg_as_outright = leg_scope and (_is_curvey(trade_type) or _is_flyey(trade_type))
+            def _is_pkg_n(tt: str) -> bool:
+                return tt.startswith("PKG-") and tt[4:].isdigit()
+
+            # Render a CURVE/FLY/PKG-N leg as a single-leg outright when
+            # leg_scope=True so the expanded sub-table shows "5Y Outright".
+            leg_as_outright = leg_scope and (
+                _is_curvey(trade_type) or _is_flyey(trade_type) or _is_pkg_n(trade_type)
+            )
 
             # 3+4. Forward + Tenor (FOMC-dated + invoice-swap get special handling)
             # Invoice-swap trades render the CME product name + ticker in
@@ -1332,59 +1337,66 @@ class TradeTape(SDRAnalyzer):
                         ):
                             parts.append(tenor_display)
             else:
-                # 3. Forward (normalize T+2 settlement labels to Spot)
-                fwd = row.get("forward_label", "spot")
-                fwd_years = row.get("forward_start_years", 0.0)
-                try:
-                    fwd_years = float(fwd_years) if pd.notna(fwd_years) else 0.0
-                except (ValueError, TypeError):
-                    fwd_years = 0.0
-                if pd.isna(fwd) or str(fwd).lower() == "spot" or fwd_years <= 0.02:
-                    parts.append("Spot")
-                else:
-                    # MAC/IMM trades: the effective_date IS the IMM date, so
-                    # the IMM label is more informative than the constant-
-                    # maturity approximation (e.g. "IMM_U2026" not "1M").
-                    stt = str(row.get("special_tenor_type", "")).upper()
-                    if stt in ("MAC", "IMM") and not str(fwd).startswith("IMM_"):
-                        eff = row.get("effective_date")
-                        if pd.notna(eff):
-                            imm = get_imm_label(pd.Timestamp(eff))
-                            if imm:
-                                fwd = imm
-                    parts.append(str(fwd))
+                # Package-scope PKG-N: skip forward + raw tenors entirely;
+                # the structure token (PKG-3, PKG-6, …) is appended in step 5.
+                # Leg-scope PKG-N is handled by leg_as_outright (own tenor +
+                # "Outright").
+                _pkg_n_package_scope = _is_pkg_n(trade_type) and not leg_scope
 
-                # 4. Tenors — leg scope uses the leg's own tenor; package scope
-                # uses the combined package_tenors (e.g. "5Y/10Y").
-                if leg_as_outright:
-                    tenors = str(row.get("tenor_display", row.get("tenor_label", "")))
-                else:
-                    tenors = str(
-                        row.get(
-                            "package_tenors",
-                            row.get("tenor_display", row.get("tenor_label", "")),
-                        )
-                    )
-                # Secondary UST alias for MATCHED_MATURITY trades — replace
-                # the raw tenor ("9Y10M") with the "MMYY" UST-maturity
-                # shorthand ("0236" == Feb 2036), matching the alias scheme
-                # in Query/FixedRateBonds/FixedRateBondQuery.py.
-                if use_ust_alias and (
-                    str(row.get("special_tenor_type", "")).upper() == "MATCHED_MATURITY"
-                    or bool(row.get("matched_ust_maturity", False))
-                ):
-                    if leg_as_outright:
-                        # Single expanded leg -> its own maturity alias.
-                        alias = _ust_maturity_alias(row)
+                if not _pkg_n_package_scope:
+                    # 3. Forward (normalize T+2 settlement labels to Spot)
+                    fwd = row.get("forward_label", "spot")
+                    fwd_years = row.get("forward_start_years", 0.0)
+                    try:
+                        fwd_years = float(fwd_years) if pd.notna(fwd_years) else 0.0
+                    except (ValueError, TypeError):
+                        fwd_years = 0.0
+                    if pd.isna(fwd) or str(fwd).lower() == "spot" or fwd_years <= 0.02:
+                        parts.append("Spot")
                     else:
-                        # Package scope -> collapsed multi-leg alias ("0236" or
-                        # "0536/0546"); fall back to the single-row date.
-                        pkg_alias = str(row.get("package_ust_aliases", "") or "").strip()
-                        alias = pkg_alias if pkg_alias else _ust_maturity_alias(row)
-                    if alias:
-                        tenors = alias
-                if tenors and tenors.lower() not in ("nan", "none"):
-                    parts.append(tenors)
+                        # MAC/IMM trades: the effective_date IS the IMM date, so
+                        # the IMM label is more informative than the constant-
+                        # maturity approximation (e.g. "IMM_U2026" not "1M").
+                        stt = str(row.get("special_tenor_type", "")).upper()
+                        if stt in ("MAC", "IMM") and not str(fwd).startswith("IMM_"):
+                            eff = row.get("effective_date")
+                            if pd.notna(eff):
+                                imm = get_imm_label(pd.Timestamp(eff))
+                                if imm:
+                                    fwd = imm
+                        parts.append(str(fwd))
+
+                    # 4. Tenors — leg scope uses the leg's own tenor; package scope
+                    # uses the combined package_tenors (e.g. "5Y/10Y").
+                    if leg_as_outright:
+                        tenors = str(row.get("tenor_display", row.get("tenor_label", "")))
+                    else:
+                        tenors = str(
+                            row.get(
+                                "package_tenors",
+                                row.get("tenor_display", row.get("tenor_label", "")),
+                            )
+                        )
+                    # Secondary UST alias for MATCHED_MATURITY trades — replace
+                    # the raw tenor ("9Y10M") with the "MMYY" UST-maturity
+                    # shorthand ("0236" == Feb 2036), matching the alias scheme
+                    # in Query/FixedRateBonds/FixedRateBondQuery.py.
+                    if use_ust_alias and (
+                        str(row.get("special_tenor_type", "")).upper() == "MATCHED_MATURITY"
+                        or bool(row.get("matched_ust_maturity", False))
+                    ):
+                        if leg_as_outright:
+                            # Single expanded leg -> its own maturity alias.
+                            alias = _ust_maturity_alias(row)
+                        else:
+                            # Package scope -> collapsed multi-leg alias ("0236" or
+                            # "0536/0546"); fall back to the single-row date.
+                            pkg_alias = str(row.get("package_ust_aliases", "") or "").strip()
+                            alias = pkg_alias if pkg_alias else _ust_maturity_alias(row)
+                        if alias:
+                            tenors = alias
+                    if tenors and tenors.lower() not in ("nan", "none"):
+                        parts.append(tenors)
 
             # 5. Structure
             # Invoice trades detected via invoice_swap_ticker take priority
@@ -1392,6 +1404,8 @@ class TradeTape(SDRAnalyzer):
             # different roots is a Switch, not a CURVE.
             if leg_as_outright:
                 parts.append("Outright")
+            elif _is_pkg_n(trade_type) and not leg_scope:
+                parts.append(trade_type)
             elif trade_type == "INVOICE":
                 parts.append("Outright")
             elif trade_type == "INVOICE_CALENDAR":

@@ -343,6 +343,13 @@ export function tapeTagBadgesFor(row: UsdSwapTapeRow): Array<{
   const fromFlags: string[] = []
   if (row.is_ufro_any) fromFlags.push('UFRO')
   if (row.is_block_any) fromFlags.push('BLOCK')
+  const legs = (row.legs_json ?? []) as Array<Record<string, unknown>>
+  if (legs.some((l) => l.is_off_market || l.lc_is_off_market_seasoned || l.xd_is_off_market_seasoned)) {
+    fromFlags.push('OFF-MKT')
+  }
+  if (legs.some((l) => l.lc_has_past_effective || l.xd_has_past_effective)) {
+    fromFlags.push('PAST-EFF')
+  }
 
   const seen = new Set<string>()
   const merged: string[] = []

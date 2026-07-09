@@ -227,7 +227,10 @@ export function formatDate(ts: string | null | undefined): string {
   if (!ts) return EMPTY_VALUE
   const d = new Date(ts)
   if (Number.isNaN(d.getTime())) return EMPTY_VALUE
-  return d.toLocaleDateString('en-US')
+  // SDR date fields (Effective Date, Expiration Date) are date-only strings
+  // ("2026-09-30"). new Date() parses these as UTC midnight; toLocaleDateString
+  // without timeZone:'UTC' shifts them back 1 day in US timezones.
+  return d.toLocaleDateString('en-US', { timeZone: 'UTC' })
 }
 
 // All tape timestamps are rendered in the NYC trading-desk timezone, regardless
