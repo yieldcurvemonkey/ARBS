@@ -34,19 +34,19 @@ describe('displayTapeLabel', () => {
 })
 
 describe('collapseTenors', () => {
-  it('collapses 5+ repeated tenors into PKG-N', () => {
+  it('collapses 5+ repeated tenors into PKG-N and strips Spot forward', () => {
     const tenors = Array(78).fill('20Y').join('/')
     const label = `USD-SOFR-COMPOUND 1D Constant Spot ${tenors} Package PHYS`
     expect(collapseTenors(label, 78)).toBe(
-      'USD-SOFR-COMPOUND 1D Constant Spot PKG-78 PHYS',
+      'USD-SOFR-COMPOUND 1D Constant PKG-78 PHYS',
     )
   })
 
-  it('collapses approximate tenors (~17Y)', () => {
+  it('collapses approximate tenors (~17Y) and strips BSD forward', () => {
     const tenors = Array(34).fill('~17Y').join('/')
     const label = `USD-SOFR-OIS Compound 1D Constant BSD ${tenors} Package PHYS`
     expect(collapseTenors(label, 34)).toBe(
-      'USD-SOFR-OIS Compound 1D Constant BSD PKG-34 PHYS',
+      'USD-SOFR-OIS Compound 1D Constant PKG-34 PHYS',
     )
   })
 
@@ -60,17 +60,31 @@ describe('collapseTenors', () => {
     expect(collapseTenors(label, 3)).toBe(label)
   })
 
-  it('collapses 3-tenor PKG followed by Package', () => {
+  it('collapses 3-tenor PKG followed by Package and strips forward', () => {
     const label = 'USD-SOFR-COMPOUND 1D Constant Spot 21M/2Y/2Y Package PHYS'
     expect(collapseTenors(label, 3)).toBe(
-      'USD-SOFR-COMPOUND 1D Constant Spot PKG-3 PHYS',
+      'USD-SOFR-COMPOUND 1D Constant PKG-3 PHYS',
     )
   })
 
-  it('collapses 2-tenor PKG followed by Package', () => {
+  it('collapses 2-tenor PKG followed by Package and strips forward', () => {
     const label = 'USD-SOFR-OIS Compound 1D Constant Spot 3Y/3Y Package PHYS'
     expect(collapseTenors(label, 2)).toBe(
-      'USD-SOFR-OIS Compound 1D Constant Spot PKG-2 PHYS',
+      'USD-SOFR-OIS Compound 1D Constant PKG-2 PHYS',
+    )
+  })
+
+  it('strips IMM forward before PKG-N', () => {
+    const label = 'USD-SOFR-OIS Compound 1D Constant IMM_U2036 10Y/10Y Package PHYS'
+    expect(collapseTenors(label, 2)).toBe(
+      'USD-SOFR-OIS Compound 1D Constant PKG-2 PHYS',
+    )
+  })
+
+  it('strips tenor-based forward (6M) before PKG-N', () => {
+    const label = 'USD-SOFR-OIS Compound 1D Constant 6M 1Y/5Y/30Y Package PHYS'
+    expect(collapseTenors(label, 3)).toBe(
+      'USD-SOFR-OIS Compound 1D Constant PKG-3 PHYS',
     )
   })
 
@@ -83,7 +97,7 @@ describe('collapseTenors', () => {
     const tenors = Array(10).fill('5Y').join('/')
     const label = `USD-SOFR 1D Constant Spot ${tenors} Package PHYS`
     expect(collapseTenors(label, null)).toBe(
-      'USD-SOFR 1D Constant Spot PKG-10 PHYS',
+      'USD-SOFR 1D Constant PKG-10 PHYS',
     )
   })
 
@@ -91,7 +105,7 @@ describe('collapseTenors', () => {
     const tenors = '5Y/5Y/7Y/7Y/10Y/10Y/20Y/20Y/30Y/30Y'
     const label = `USD-SOFR-COMPOUND 1D Constant Spot ${tenors} Package PHYS`
     expect(collapseTenors(label, 10)).toBe(
-      'USD-SOFR-COMPOUND 1D Constant Spot PKG-10 PHYS',
+      'USD-SOFR-COMPOUND 1D Constant PKG-10 PHYS',
     )
   })
 })
@@ -105,7 +119,7 @@ describe('displayTapeLabel', () => {
         n_package_legs: 78,
         legs_json: [],
       } as any),
-    ).toBe('USD-SOFR-COMPOUND 1D Constant Spot PKG-78 PHYS')
+    ).toBe('USD-SOFR-COMPOUND 1D Constant PKG-78 PHYS')
   })
 })
 

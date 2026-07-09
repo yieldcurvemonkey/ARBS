@@ -42,7 +42,16 @@ export function collapseTenors(
     return `PKG-${count}`
   })
   // Drop redundant "Package" trade-type word right after PKG-N
-  return collapsed.replace(/PKG-(\d+)\s+Package\b/g, 'PKG-$1')
+  collapsed = collapsed.replace(/PKG-(\d+)\s+Package\b/g, 'PKG-$1')
+  // Strip forward labels (Spot, tenor-based, IMM, FOMC, BSD) that precede
+  // PKG-N — at the package scope the forward is meaningless since legs may
+  // have different forwards. Handles existing DB data; new pipeline output
+  // already omits the forward for PKG-N.
+  collapsed = collapsed.replace(
+    /\b(?:Spot|BSD|[~-]?\d+(?:\.\d+)?[DMYW](?:\d+[DMYW])?|IMM_\w+|FOMC\s+[A-Z]{3,4}\d{2})\s+(?=PKG-\d+\b)/g,
+    '',
+  )
+  return collapsed
 }
 
 /**
