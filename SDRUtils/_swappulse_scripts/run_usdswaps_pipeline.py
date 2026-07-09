@@ -373,6 +373,38 @@ def cmd_incremental(args: argparse.Namespace) -> int:
 
 
 # ---------------------------------------------------------------------------
+# Subcommand: migrate
+# ---------------------------------------------------------------------------
+
+
+def cmd_migrate(args: argparse.Namespace) -> int:
+    """Run schema migration only — no classification, no tape rebuild."""
+    _banner("Schema migration (ensure_schema only)")
+    lock_ms = args.lock_timeout
+    print(f"  Lock timeout: {lock_ms}ms")
+    print(f"  Dry run:      {args.dry_run}")
+
+    if args.dry_run:
+        print("Dry run — skipping migration.")
+        return 0
+
+    resolved_pg_url = ingest_usdswaps_tape.resolve_pg_url(args.pg_url)
+    tape_engine = ingest_usdswaps_tape.create_engine(resolved_pg_url)
+
+    already_current = ingest_usdswaps_tape._schema_already_current(tape_engine)
+    if already_current:
+        print("Schema is already current — all migration columns present.")
+        return 0
+
+    print("Schema needs migration — applying DDL…")
+    ingest_usdswaps_tape.ensure_schema(
+        tape_engine, lock_timeout_ms=lock_ms,
+    )
+    print("Migration complete.")
+    return 0
+
+
+# ---------------------------------------------------------------------------
 # Subcommand: service
 # ---------------------------------------------------------------------------
 
@@ -940,6 +972,20 @@ def build_parser() -> argparse.ArgumentParser:
     )
     _add_common_flags(sp)
     sp.set_defaults(func=cmd_service)
+
+    # migrate
+    mp = subparsers.add_parser(
+        "migrate",
+        help="Run schema migration only (ensure_schema). No classification or tape rebuild.",
+    )
+    mp.add_argument(
+        "--lock-timeout",
+        type=int,
+        default=90_000,
+        help="DDL lock_timeout in milliseconds (default: 90000 for migrations).",
+    )
+    _add_common_flags(mp)
+    mp.set_defaults(func=cmd_migrate)
 
     return parser
 
