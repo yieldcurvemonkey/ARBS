@@ -43,3 +43,16 @@ export function normalizeSimpleAdminPassword(value: unknown): string | null {
 export function isValidSimpleAdminPassword(value: unknown): boolean {
   return normalizeSimpleAdminPassword(value) === SIMPLE_ADMIN_PASSWORD
 }
+
+export const TAPE_WRITE_AUTH_ERROR = 'Invalid override password.'
+
+// Env-based tape-write gate. No hardcoded default: an unset or blank
+// TAPE_OVERRIDE_PASSWORD locks every override endpoint until an operator
+// provisions the secret. Compares the trimmed request value against the
+// configured secret.
+export function isValidTapeWritePassword(value: unknown): boolean {
+  const expected = process.env.TAPE_OVERRIDE_PASSWORD
+  if (typeof expected !== 'string' || expected.trim() === '') return false
+  if (typeof value !== 'string') return false
+  return value.trim() === expected.trim()
+}

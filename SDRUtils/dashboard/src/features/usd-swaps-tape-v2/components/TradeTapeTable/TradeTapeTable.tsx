@@ -30,6 +30,8 @@ import {
 } from '../../hooks'
 import type { UseColumnFiltersReturn } from '../../hooks'
 import type { UsdSwapTapeRow } from '../../types'
+import type { NoteTarget } from '../../types/note.types'
+import type { DisplayRow } from '../../utils/applyOverrides'
 import { LegsSubTable } from './LegsSubTable'
 import { getColumns, rowClassName, type MetricMode } from './columns'
 import { useAnalyticsPrefetch } from '../../hooks/useAnalyticsPrefetch'
@@ -51,7 +53,7 @@ type VirtualScrollerLazyLoadEvent = {
 }
 
 export interface TradeTapeTableProps {
-  rows: UsdSwapTapeRow[]
+  rows: DisplayRow[]
   loading: boolean
   /** A replace-fetch is in-flight but stale rows are being served. */
   refreshing?: boolean
@@ -72,8 +74,20 @@ export interface TradeTapeTableProps {
    * A" bug caused by stale-closure reads of `expandedRows` prop.
    */
   onToggleRow?: (packageId: string) => void
-  selected?: UsdSwapTapeRow[]
-  onSelectionChange?: (e: { value: UsdSwapTapeRow[] }) => void
+  /** Flattened leg-level selection driving the regroup action bar. */
+  selectedTradeIds?: Set<string>
+  /** Package-keyed selection (packageId → selected leg trade ids). */
+  selectedByPackage?: Map<string, string[]>
+  /** Toggle an entire package's legs. `legTradeIds` is the package's FULL
+   *  leg-trade-id list (never a subset) so the hook's all-selected check
+   *  clears the whole package. */
+  onTogglePackage?: (packageId: string, legTradeIds: string[]) => void
+  /** Toggle a single leg's trade id within its package. */
+  onToggleTrade?: (tradeId: string, packageId: string) => void
+  /** Open the note popover for a TRADE- or PACKAGE-scoped target. */
+  onOpenNote?: (target: NoteTarget) => void
+  /** Open the override detail / management surface for an override id. */
+  onOpenOverride?: (overrideId: string) => void
   onOpenTimeseries?: (row: UsdSwapTapeRow) => void
   /**
    * Package ID currently focused in the analytics dock. Tape highlights
@@ -115,8 +129,11 @@ export function TradeTapeTable(props: TradeTapeTableProps): JSX.Element {
     expandedRows,
     onRowToggle,
     onToggleRow,
-    selected,
-    onSelectionChange,
+    selectedTradeIds,
+    onTogglePackage,
+    onToggleTrade,
+    onOpenNote,
+    onOpenOverride,
     focusedPackageId,
     actionSlot,
     columnFilters,
@@ -348,12 +365,41 @@ export function TradeTapeTable(props: TradeTapeTableProps): JSX.Element {
     }
   }, [hasMore, loadingMore, requestLoadMore, displayRows.length])
 
-  // Memoize so the row className builder doesn't re-create the Set on
-  // every poll tick + every keystroke in a filter input. With 200+ rows
-  // the unmemoised version was visibly janky during the 30s tape poll.
-  const selectedIds = useMemo(
-    () => new Set((selected ?? []).map((row) => row.package_id)),
-    [selected],
+  // Row-identity key. applyOverrides stamps a `__syntheticKey` on every
+  // display row; SPLIT rows share a `package_id` so package_id is NOT unique
+  // as a table key. Expansion + dataKey must key off the synthetic key.
+  const rowKeyOf = (row: UsdSwapTapeRow) =>
+    (row as DisplayRow).__syntheticKey ?? row.package_id
+
+  // Tri-state package checkbox that drives leg-level `useTradeSelection`.
+  // `legIds` is the package's FULL leg-trade-id list — passed complete (never
+  // a subset) so the hook's all-selected check can clear the whole package.
+  const packageSelectBody = useCallback(
+    (row: UsdSwapTapeRow) => {
+      const legIds = ((row.legs_json ?? [])
+        .map((l) => l.trade_id)
+        .filter(Boolean)) as string[]
+      const sel = legIds.filter((id) => selectedTradeIds?.has(id)).length
+      const checked = legIds.length > 0 && sel === legIds.length
+      const indeterminate = sel > 0 && sel < legIds.length
+      return (
+        <input
+          type="checkbox"
+          aria-label={`select package ${row.package_id}`}
+          checked={checked}
+          ref={(el) => {
+            if (el) el.indeterminate = indeterminate
+          }}
+          disabled={legIds.length === 0 || !onTogglePackage}
+          onChange={(e) => {
+            e.stopPropagation()
+            onTogglePackage?.(row.package_id, legIds)
+          }}
+          onClick={(e) => e.stopPropagation()}
+        />
+      )
+    },
+    [selectedTradeIds, onTogglePackage],
   )
 
   const toggleRowExpansion = (row: UsdSwapTapeRow) => {
@@ -362,20 +408,21 @@ export function TradeTapeTable(props: TradeTapeTableProps): JSX.Element {
     // state. Falls back to the legacy full-replacement `onRowToggle` prop
     // only if the parent did not wire up `onToggleRow`.
     if (onToggleRow) {
-      onToggleRow(row.package_id)
+      onToggleRow(rowKeyOf(row))
       return
     }
     if (!onRowToggle) return
     const next = { ...(expandedRows ?? {}) }
-    if (next[row.package_id]) delete next[row.package_id]
-    else next[row.package_id] = true
+    const key = rowKeyOf(row)
+    if (next[key]) delete next[key]
+    else next[key] = true
     onRowToggle({ data: next })
   }
 
   const expanderBody = (row: UsdSwapTapeRow) => {
     const canExpand = (row.legs_json ?? []).length > 0
     if (!canExpand) return <span className="inline-flex h-6 w-6" />
-    const isExpanded = !!expandedRows?.[row.package_id]
+    const isExpanded = !!expandedRows?.[rowKeyOf(row)]
     return (
       <button
         type="button"
@@ -396,19 +443,25 @@ export function TradeTapeTable(props: TradeTapeTableProps): JSX.Element {
   }
 
   const dataTableRowClassName = useCallback(
-    (row: UsdSwapTapeRow) =>
-      [
+    (row: UsdSwapTapeRow) => {
+      const kind = (row as DisplayRow).__rowKind
+      const anyLegSelected = (row.legs_json ?? []).some(
+        (l) => l.trade_id && selectedTradeIds?.has(l.trade_id),
+      )
+      return [
         'h-9 text-[11px] !text-gray-200 transition-[filter,box-shadow] hover:brightness-110 hover:shadow-[inset_0_0_0_1px_rgba(148,163,184,0.5)]',
         rowClassName(row),
         row.manual_link_id || row.manual_package_id ? 'manual-linked-row' : '',
-        selectedIds.has(row.package_id) ? 'selected-share-row' : '',
+        anyLegSelected ? 'selected-share-row' : '',
         focusedPackageId && row.package_id === focusedPackageId
           ? 'focused-trade-row'
           : '',
+        kind === 'split-leg' ? 'split-leg-row' : kind === 'detached' ? 'detached-row' : '',
       ]
         .join(' ')
-        .trim(),
-    [selectedIds, focusedPackageId],
+        .trim()
+    },
+    [selectedTradeIds, focusedPackageId],
   )
 
   const handleResetAll = useCallback(() => {
@@ -562,6 +615,9 @@ export function TradeTapeTable(props: TradeTapeTableProps): JSX.Element {
             </button>
           </div>
         )}
+        {/* Mobile leg-level selection is deferred (desktop is the target
+            surface); the card grid renders read-only here without the legacy
+            package-level checkbox wiring. */}
         <MobileTradeCards
           rows={displayRows}
           loading={loading}
@@ -570,8 +626,6 @@ export function TradeTapeTable(props: TradeTapeTableProps): JSX.Element {
           onLoadMore={requestLoadMore}
           expandedRows={expandedRows}
           onToggleRow={onToggleRow}
-          selected={selected}
-          onSelectionChange={onSelectionChange}
           focusedPackageId={focusedPackageId}
           onOpenManualLink={onOpenManualLink}
           metricMode={metricMode}
@@ -605,6 +659,18 @@ export function TradeTapeTable(props: TradeTapeTableProps): JSX.Element {
           > tr.manual-linked-row
           > td {
           background-color: rgba(245, 158, 11, 0.18) !important;
+        }
+        .usd-swaps-tape-table .p-datatable-tbody > tr.split-leg-row > td {
+          background-color: rgba(56, 189, 248, 0.06) !important;
+        }
+        .usd-swaps-tape-table .p-datatable-tbody > tr.split-leg-row > td:first-child {
+          box-shadow: inset 2px 0 0 rgba(56, 189, 248, 0.65) !important;
+        }
+        .usd-swaps-tape-table .p-datatable-tbody > tr.detached-row > td {
+          background-color: rgba(248, 113, 113, 0.06) !important;
+        }
+        .usd-swaps-tape-table .p-datatable-tbody > tr.detached-row > td:first-child {
+          box-shadow: inset 2px 0 0 rgba(248, 113, 113, 0.75) !important;
         }
         .usd-swaps-tape-table
           .p-datatable-tbody
@@ -733,7 +799,7 @@ export function TradeTapeTable(props: TradeTapeTableProps): JSX.Element {
 
       <DataTable
         value={displayRows}
-        dataKey="package_id"
+        dataKey="__syntheticKey"
         size="small"
         scrollable
         scrollHeight="flex"
@@ -744,15 +810,15 @@ export function TradeTapeTable(props: TradeTapeTableProps): JSX.Element {
         }
         onRowMouseLeave={() => analyticsPrefetch.onLeave()}
         loading={loading && displayRows.length === 0}
-        selectionMode={onSelectionChange ? 'multiple' : undefined}
-        cellSelection={false}
-        metaKeySelection={false}
-        selection={selected as any}
-        onSelectionChange={onSelectionChange as any}
         expandedRows={expandedRows as any}
         rowExpansionTemplate={(row: UsdSwapTapeRow) => (
           <div className="-mx-2 -my-1 px-0 py-0">
-            <LegsSubTable row={row} />
+            <LegsSubTable
+              row={row}
+              selectedTradeIds={selectedTradeIds}
+              onToggleTrade={onToggleTrade}
+              onOpenNote={onOpenNote}
+            />
           </div>
         )}
         filters={columnFilters.filters as DataTableFilterMeta}
@@ -805,12 +871,15 @@ export function TradeTapeTable(props: TradeTapeTableProps): JSX.Element {
         }
       >
         {getColumns({
-          selection: !!onSelectionChange,
+          selection: !!onTogglePackage,
+          selectionBody: packageSelectBody,
           expanderBody,
           metricMode,
           onToggleMetric: toggleMetric,
           activeFilters: columnFilters.filters as DataTableFilterMeta,
           onOpenManualLink,
+          onOpenNote,
+          onOpenOverride,
         })}
       </DataTable>
       {loadingMore ? (

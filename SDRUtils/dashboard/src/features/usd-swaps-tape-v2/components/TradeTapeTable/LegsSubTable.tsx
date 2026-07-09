@@ -2,11 +2,12 @@
 // ABOUTME: Expanded package detail panel - per-leg breakdown only.
 import type { JSX } from 'react'
 import { useState } from 'react'
+import { StickyNote } from 'lucide-react'
 
 // Centralised column count for the leg sub-table. Bump in lock-step
 // with the <th> list below so the empty-state colspan + the summary
 // row's trailing pad columns stay correct when a column is added.
-const LEG_COL_COUNT = 16
+const LEG_COL_COUNT = 17
 import {
   ECONOMIC_CLASS_LABELS,
   ECONOMIC_CLASS_TONES,
@@ -14,6 +15,7 @@ import {
   PACKAGE_CONFIDENCE_TONES,
 } from '../../constants'
 import type { EconomicClass, UsdSwapTapeLeg, UsdSwapTapeRow } from '../../types'
+import type { NoteTarget } from '../../types/note.types'
 import { computeLegSummary } from './LegsSubTable.helpers'
 import { stripExecutionTags } from './TapeLabelCell.helpers'
 import {
@@ -445,7 +447,17 @@ function PackageConfidencePanel({ row }: { row: UsdSwapTapeRow }): JSX.Element {
   )
 }
 
-export function LegsSubTable({ row }: { row: UsdSwapTapeRow }): JSX.Element {
+export function LegsSubTable({
+  row,
+  selectedTradeIds,
+  onToggleTrade,
+  onOpenNote,
+}: {
+  row: UsdSwapTapeRow
+  selectedTradeIds?: Set<string>
+  onToggleTrade?: (tradeId: string, packageId: string) => void
+  onOpenNote?: (target: NoteTarget) => void
+}): JSX.Element {
   // Desk convention: render tenor-ascending so front legs (short duration)
   // appear above back legs (long duration). legs_json order from the
   // display view isn't guaranteed — sort defensively.
@@ -512,6 +524,7 @@ export function LegsSubTable({ row }: { row: UsdSwapTapeRow }): JSX.Element {
               className="text-[10px] uppercase tracking-wide text-slate-400"
               data-leg-table-header
             >
+              <th className="px-2 py-1 text-left w-6"></th>
               <th className="px-2 py-1 text-left">#</th>
               <th className="px-2 py-1 text-left">Trade ID</th>
               {/* Phase 3: per-leg matrix kind */}
@@ -538,8 +551,41 @@ export function LegsSubTable({ row }: { row: UsdSwapTapeRow }): JSX.Element {
                 key={leg.trade_id ?? `${row.package_id}-${index}`}
                 className="border-t border-slate-800/90 text-slate-200"
               >
+                <td className="whitespace-nowrap px-2 py-1">
+                  <input
+                    type="checkbox"
+                    aria-label={`select leg ${leg.trade_id ?? index}`}
+                    disabled={!leg.trade_id || !onToggleTrade}
+                    checked={!!leg.trade_id && !!selectedTradeIds?.has(leg.trade_id)}
+                    onChange={(e) => {
+                      e.stopPropagation()
+                      if (leg.trade_id) onToggleTrade?.(leg.trade_id, row.package_id)
+                    }}
+                    onClick={(e) => e.stopPropagation()}
+                  />
+                </td>
                 <td className="whitespace-nowrap px-2 py-1">{index + 1}</td>
-                <td className="whitespace-nowrap px-2 py-1">{tradeIdBody(leg)}</td>
+                <td className="whitespace-nowrap px-2 py-1">
+                  <span className="inline-flex items-center gap-1">
+                    {tradeIdBody(leg)}
+                    {leg.trade_id && onOpenNote ? (
+                      <button
+                        type="button"
+                        aria-label={`notes for leg ${leg.trade_id}`}
+                        title={row.has_notes ? 'View / add notes' : 'Add note'}
+                        className={`inline-flex items-center rounded p-0.5 ${
+                          row.has_notes ? 'text-amber-300' : 'text-slate-500 hover:text-slate-300'
+                        }`}
+                        onClick={(e) => {
+                          e.stopPropagation()
+                          onOpenNote({ target_type: 'TRADE', target_id: leg.trade_id! })
+                        }}
+                      >
+                        <StickyNote className="h-3 w-3" />
+                      </button>
+                    ) : null}
+                  </span>
+                </td>
                 <td className="whitespace-nowrap px-2 py-1">{classBadge(leg)}</td>
                 <td className="whitespace-nowrap px-2 py-1">
                   {execTimestampPair(leg)}
@@ -616,6 +662,7 @@ export function LegsSubTable({ row }: { row: UsdSwapTapeRow }): JSX.Element {
                 className="border-t-2 border-slate-600 bg-slate-900/80 font-semibold text-slate-100"
                 data-testid={`legs-subtable-summary-${row.package_id}`}
               >
+                <td className="px-2 py-1" />
                 <td className="whitespace-nowrap px-2 py-1 text-slate-400">Σ</td>
                 <td className="px-2 py-1" />
                 <td className="px-2 py-1" />

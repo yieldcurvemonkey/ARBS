@@ -3,8 +3,9 @@
 import type { JSX } from 'react'
 import { Column } from 'primereact/column'
 import type { DataTableFilterMeta } from 'primereact/datatable'
+import { StickyNote } from 'lucide-react'
 import { EMPTY_VALUE, PACKAGE_CONFIDENCE_TONES } from '../../constants'
-import type { UsdSwapTapeRow } from '../../types'
+import type { NoteTarget, UsdSwapTapeRow } from '../../types'
 import {
   formatDv01,
   formatExecutionWindow,
@@ -32,6 +33,7 @@ import {
 } from './columns.helpers'
 import { ManualLinkBadge } from '@/lib/manual-links-ui/components/ManualLinkBadge'
 import { isManualPackage } from '@/lib/manual-links-ui/predicates'
+import { OverrideBadge } from './OverrideBadge'
 
 export { rowClassName } from './columns.helpers'
 
@@ -62,6 +64,13 @@ export type MetricMode = 'dv01' | 'pa_dv01' | 'notional'
 
 type ColumnConfig = {
   selection: boolean
+  /**
+   * Custom body for the leading select column. When supplied, the select
+   * column renders this instead of PrimeReact's built-in
+   * `selectionMode="multiple"` checkbox — used by the tape to render the
+   * tri-state package checkbox that drives leg-level `useTradeSelection`.
+   */
+  selectionBody?: (row: UsdSwapTapeRow) => JSX.Element
   expanderBody?: (row: UsdSwapTapeRow) => JSX.Element
   metricMode?: MetricMode
   onToggleMetric?: () => void
@@ -78,6 +87,20 @@ type ColumnConfig = {
    * ManualLinkDetailModal in response.
    */
   onOpenManualLink?: (linkId: string) => void
+  /**
+   * Optional click handler for the OverrideBadge in the Pkg column (manual
+   * GROUP/SPLIT/DETACH override rows). Receives the row's first
+   * override_map value (an override_id). Caller opens the override detail
+   * view / audit panel. Wired in Task 19.
+   */
+  onOpenOverride?: (overrideId: string) => void
+  /**
+   * Optional click handler for the per-package note affordance in the Pkg
+   * column. Receives a PACKAGE-scoped NoteTarget so the caller can open the
+   * notes panel/modal for the row's manual package (or raw package_id when
+   * no manual regrouping is active). Wired in Task 19.
+   */
+  onOpenNote?: (target: NoteTarget) => void
 }
 
 function renderHeader(label: string, summary?: string | null): JSX.Element {
@@ -144,7 +167,16 @@ export function getColumns(
   const cols: JSX.Element[] = []
   if (config.selection) {
     cols.push(
-      <Column key="select" selectionMode="multiple" headerStyle={{ width: 30 }} />,
+      config.selectionBody ? (
+        <Column
+          key="select"
+          body={config.selectionBody as any}
+          headerStyle={{ width: 30 }}
+          style={{ width: 30 }}
+        />
+      ) : (
+        <Column key="select" selectionMode="multiple" headerStyle={{ width: 30 }} />
+      ),
     )
   }
   if (config.expanderBody) {
@@ -288,6 +320,10 @@ export function getColumns(
         const manualLinkId = row.manual_link_id || row.manual_package_id || null
         const sourceLabel =
           row.package_source?.toUpperCase?.() === 'HYBRID' ? 'Hybrid' : 'Manual'
+        const firstOverrideId = row.override_map
+          ? Object.values(row.override_map)[0] ?? null
+          : null
+        const hasNotes = !!row.has_notes || (row.notes_count ?? 0) > 0
         return (
           <div className="flex items-center gap-1">
             <span
@@ -316,7 +352,7 @@ export function getColumns(
                 CCP↔
               </span>
             ) : null}
-            {isManualPackage(row) && manualLinkId ? (
+            {!row.override_type && isManualPackage(row) && manualLinkId ? (
               <ManualLinkBadge
                 linkId={manualLinkId}
                 manualPackageId={row.manual_package_id}
@@ -329,6 +365,32 @@ export function getColumns(
                     : undefined
                 }
               />
+            ) : null}
+            {row.override_type ? (
+              <OverrideBadge
+                overrideType={row.override_type}
+                manualPackageId={row.manual_package_id}
+                overrideId={firstOverrideId}
+                onClick={config.onOpenOverride}
+              />
+            ) : null}
+            {hasNotes && config.onOpenNote ? (
+              <button
+                type="button"
+                aria-label={`notes for package ${row.package_id}`}
+                title="View / add package notes"
+                data-testid={`pkg-note-${row.package_id}`}
+                className="inline-flex items-center rounded p-0.5 text-amber-300 hover:text-amber-200"
+                onClick={(e) => {
+                  e.stopPropagation()
+                  config.onOpenNote?.({
+                    target_type: 'PACKAGE',
+                    target_id: row.manual_package_id ?? row.package_id,
+                  })
+                }}
+              >
+                <StickyNote className="h-3 w-3" />
+              </button>
             ) : null}
           </div>
         )
