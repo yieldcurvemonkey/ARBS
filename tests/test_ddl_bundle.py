@@ -50,6 +50,27 @@ def test_multiline_create_view_grouped():
     assert len(groups) == 1 and len(groups[0]) == 2
 
 
+def test_comment_line_ending_in_semicolon_is_dropped():
+    # The v2 schema has a comment line that ends in ';' (#333). It must not be
+    # emitted as a statement (psycopg2: "can't execute an empty query").
+    ddl = "-- Manual regrouping + notes. Dashboard-owned tables;\nCREATE TABLE t (a INT);\n"
+    stmts = _split_ddl_statements(ddl)
+    assert len(stmts) == 1
+    assert stmts[0].startswith("CREATE TABLE t")
+
+
+def test_no_blank_statements_in_real_schemas():
+    from SDRUtils._swappulse_scripts._tape_schema_v2 import (
+        TAPE_SCHEMA_SQL_V2, MONITORING_SQL_V2,
+    )
+    for bundle in (TAPE_SCHEMA_SQL_V2, MONITORING_SQL_V2):
+        for s in _split_ddl_statements(bundle):
+            assert any(
+                ln.strip() and not ln.strip().startswith("--")
+                for ln in s.splitlines()
+            ), f"blank/comment-only statement emitted: {s[:60]!r}"
+
+
 def test_real_tape_schema_view_stays_atomic():
     # The real v2 schema's display-view DROP+CREATE must land in one group.
     from SDRUtils._swappulse_scripts._tape_schema_v2 import TAPE_SCHEMA_SQL_V2

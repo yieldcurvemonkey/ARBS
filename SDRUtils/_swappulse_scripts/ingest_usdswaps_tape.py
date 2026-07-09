@@ -404,20 +404,33 @@ def _str_or_none(val: Any) -> Optional[str]:
 # ---------------------------------------------------------------------------
 
 
+def _is_blank_sql(sql: str) -> bool:
+    """True if the chunk has no executable SQL — only blank lines and ``--`` line
+    comments. Such a chunk arises when a comment line itself ends in ``;`` (the
+    v2 schema has one), and psycopg2 rejects it with 'can't execute an empty
+    query', so it must be skipped rather than sent to the server."""
+    for line in sql.splitlines():
+        s = line.strip()
+        if s and not s.startswith("--"):
+            return False
+    return True
+
+
 def _split_ddl_statements(ddl: str) -> list[str]:
-    """Split a DDL bundle into individual statements on ``;``-terminated lines
-    (mirrors the original line-buffered splitter)."""
+    """Split a DDL bundle into individual executable statements on
+    ``;``-terminated lines (mirrors the original line-buffered splitter), dropping
+    comment-only chunks."""
     stmts: list[str] = []
     buffer: list[str] = []
     for line in ddl.splitlines():
         buffer.append(line)
         if line.strip().endswith(";"):
             sql = "\n".join(buffer).strip()
-            if sql:
+            if sql and not _is_blank_sql(sql):
                 stmts.append(sql)
             buffer = []
     tail = "\n".join(buffer).strip()
-    if tail:
+    if tail and not _is_blank_sql(tail):
         stmts.append(tail)
     return stmts
 
