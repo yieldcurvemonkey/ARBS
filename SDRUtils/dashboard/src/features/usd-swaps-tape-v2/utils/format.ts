@@ -177,7 +177,9 @@ export function formatReportedLvl(row: UsdSwapTapeRow): string {
     kind === 'CURVE' ||
     kind === 'FLY' ||
     kind.endsWith('_CURVE') ||
-    kind.endsWith('_FLY')
+    kind.endsWith('_FLY') ||
+    kind === 'INVOICE_SWITCH' ||
+    kind === 'INVOICE_CALENDAR'
   if (isMultiLeg) {
     const legs = row.legs_json ?? []
     // Desk convention: render tenor-ascending so the CURVE reads
@@ -349,7 +351,12 @@ export function formatOtherLvl(input: {
   if (legPtpNonNull.length >= 1) {
     const ccySuffix =
       input.ptpCurrency && input.ptpCurrency !== 'USD' ? ` ${input.ptpCurrency}` : ''
-    const parts = legPtpNonNull.map((v) => formatSignedCompact(Number(v)))
+    const allLegPtpIdentical =
+      legPtpNonNull.length > 1 &&
+      legPtpNonNull.every((v) => v === legPtpNonNull[0])
+    const parts = allLegPtpIdentical
+      ? [formatSignedCompact(Number(legPtpNonNull[0]))]
+      : legPtpNonNull.map((v) => formatSignedCompact(Number(v)))
     ptpLine = `PTP: ${parts.join(' / ')}${ccySuffix}`
   } else if (input.ptp === null || input.ptp === undefined || Number.isNaN(input.ptp)) {
     ptpLine = `PTP: ${EMPTY_VALUE}`

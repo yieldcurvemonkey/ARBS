@@ -1,9 +1,15 @@
 # SDRUtils/packages/ptp_grouper.py
 """PTP-based package pre-grouper and structure classifier.
 
-Groups SDR legs sharing the same (exec_ts, PTP, UPI, platform,
+Groups SDR legs sharing the same (exec_ts, PTP, platform,
 package_indicator=True) into PTP super-packages before DV01-based
-detectors run. Prevents split-package and mis-classification errors.
+detectors run.  UPI is intentionally excluded from the grouping key
+because multi-tenor / multi-forward packages have different UPIs per
+leg yet belong to the same package.
+
+Large groups (>3 legs) are decomposed into balanced fly/curve
+sub-packages when possible, preventing over-grouping when multiple
+distinct packages share the same PTP at the same execution time.
 """
 from __future__ import annotations
 
@@ -74,7 +80,7 @@ def group_by_ptp(
     # NaT timestamps can't satisfy a time-window constraint — their int64
     # epoch is the NaT sentinel, which would cluster all NaT rows together.
     candidate_mask = (
-        pkg_ind_bool & ptp_vals.notna() & (ptp_vals > 0) & ts_all.notna()
+        pkg_ind_bool & ptp_vals.notna() & (ptp_vals != 0) & ts_all.notna()
     )
     if not candidate_mask.any():
         out = df.copy()
@@ -88,11 +94,10 @@ def group_by_ptp(
     candidates["_ts_epoch"] = ts_all.loc[candidate_mask].astype("int64") // 10**9
 
     ptp_key = ptp_vals.loc[candidate_mask].astype(str)
-    upi = candidates[upi_col].fillna("_NONE_").astype(str) if upi_col in candidates.columns else "_NONE_"
     plat = candidates[platform_col].fillna("_NONE_").astype(str) if platform_col in candidates.columns else "_NONE_"
-    candidates["_match_key"] = ptp_key + "|" + upi + "|" + plat
+    candidates["_match_key"] = ptp_key + "|" + plat
 
-    # Time-cluster within each (PTP, UPI, platform) partition. Clustering
+    # Time-cluster within each (PTP, platform) partition.  Clustering
     # globally would let an unrelated trade sitting between two legs of the
     # same key bridge them into one group even when they are further than
     # the tolerance apart.
@@ -203,6 +208,120 @@ def _detect_sub_flies(
     return subs
 
 
+def _try_decompose(
+    group_df: pd.DataFrame,
+    pv01_col: str = "estimated_pv01",
+    tenor_years_col: str = "tenor_years",
+    trade_id_col: str = "trade_id",
+    belly_tol: float = 0.15,
+) -> list[dict] | None:
+    """Decompose a large PTP group into balanced fly/curve sub-packages.
+
+    Returns a list of sub-package dicts if ALL legs are consumed,
+    else ``None``.  Each dict: ``{"type", "indices", "trade_ids"}``.
+
+    This prevents over-grouping when multiple distinct packages
+    (e.g. two separate flies) share the same PTP at the same timestamp.
+    """
+    pv01_s = numeric_like(group_df[pv01_col]).fillna(0)
+    tenor_s = numeric_like(group_df[tenor_years_col])
+    tid_s = group_df[trade_id_col].astype(str)
+
+    legs = []
+    for pos, (idx, pv, tn, tid) in enumerate(
+        zip(group_df.index, pv01_s, tenor_s, tid_s)
+    ):
+        legs.append({
+            "pos": pos,
+            "idx": idx,
+            "pv01": float(pv) if pd.notna(pv) else 0.0,
+            "tenor": round(float(tn), 1) if pd.notna(tn) else float("nan"),
+            "tid": tid,
+        })
+
+    used: set[int] = set()
+    sub_pkgs: list[dict] = []
+
+    # Phase 1: greedy fly detection (belly-first by descending PV01)
+    for belly in sorted(legs, key=lambda x: -x["pv01"]):
+        if belly["pos"] in used or belly["pv01"] <= 0:
+            continue
+        target_wing = belly["pv01"] / 2.0
+
+        best_short: dict | None = None
+        best_short_rel = float("inf")
+        best_long: dict | None = None
+        best_long_rel = float("inf")
+
+        for wing in legs:
+            if wing["pos"] in used or wing["pos"] == belly["pos"]:
+                continue
+            if np.isnan(wing["tenor"]) or np.isnan(belly["tenor"]):
+                continue
+            if wing["tenor"] == belly["tenor"]:
+                continue
+            rel = abs(wing["pv01"] - target_wing) / max(target_wing, 1e-12)
+            if rel > belly_tol:
+                continue
+            if wing["tenor"] < belly["tenor"] and rel < best_short_rel:
+                best_short, best_short_rel = wing, rel
+            elif wing["tenor"] > belly["tenor"] and rel < best_long_rel:
+                best_long, best_long_rel = wing, rel
+
+        if best_short is not None and best_long is not None:
+            wing_avg = (best_short["pv01"] + best_long["pv01"]) / 2.0
+            expected_belly = 2.0 * wing_avg
+            if wing_avg > 0:
+                b_rel = abs(belly["pv01"] - expected_belly) / max(expected_belly, 1e-12)
+                w_rel = abs(best_short["pv01"] - best_long["pv01"]) / max(wing_avg, 1e-12)
+                if b_rel <= belly_tol and w_rel <= belly_tol:
+                    used.update({best_short["pos"], belly["pos"], best_long["pos"]})
+                    sub_pkgs.append({
+                        "type": "FLY",
+                        "indices": [best_short["idx"], belly["idx"], best_long["idx"]],
+                        "trade_ids": [best_short["tid"], belly["tid"], best_long["tid"]],
+                    })
+
+    # Phase 2: greedy curve detection from remaining legs
+    remaining = sorted(
+        [l for l in legs if l["pos"] not in used],
+        key=lambda x: x["tenor"],
+    )
+    paired: set[int] = set()
+    for i, a in enumerate(remaining):
+        if i in paired:
+            continue
+        best_j: int | None = None
+        best_rel = float("inf")
+        for j in range(i + 1, len(remaining)):
+            if j in paired:
+                continue
+            b = remaining[j]
+            if np.isnan(a["tenor"]) or np.isnan(b["tenor"]):
+                continue
+            if a["tenor"] == b["tenor"]:
+                continue
+            avg = (a["pv01"] + b["pv01"]) / 2.0
+            if avg <= 0:
+                continue
+            rel = abs(a["pv01"] - b["pv01"]) / avg
+            if rel <= belly_tol and rel < best_rel:
+                best_j, best_rel = j, rel
+        if best_j is not None:
+            b = remaining[best_j]
+            paired.update({i, best_j})
+            used.update({a["pos"], b["pos"]})
+            sub_pkgs.append({
+                "type": "CURVE",
+                "indices": [a["idx"], b["idx"]],
+                "trade_ids": [a["tid"], b["tid"]],
+            })
+
+    if len(used) == len(legs) and len(sub_pkgs) >= 2:
+        return sub_pkgs
+    return None
+
+
 def _classify_single_group(
     group_df: pd.DataFrame,
     pv01_col: str = "estimated_pv01",
@@ -218,8 +337,6 @@ def _classify_single_group(
     n_distinct_tenors = tenor_num.round(1).dropna().nunique()
 
     if n == 2:
-        # CURVE requires two different tenors; a balanced same-tenor pair
-        # is a switch/roll, not a curve trade.
         if n_distinct_tenors == 2 and _is_dv01_balanced(list(pv01), tolerance=belly_tol):
             return "CURVE", []
         return "PKG-2", []
@@ -274,6 +391,28 @@ def classify_ptp_groups(
             grp, pv01_col=pv01_col, tenor_years_col=tenor_years_col,
             trade_id_col=trade_id_col, belly_tol=belly_ratio_tolerance,
         )
+
+        # For large groups that aren't already FLY/CURVE, try to
+        # decompose into balanced fly/curve sub-packages.  This
+        # prevents over-grouping when multiple distinct packages
+        # share the same PTP + timestamp (e.g. two separate flies).
+        if len(grp) > 3 and pkg_type.startswith("PKG-"):
+            decomposed = _try_decompose(
+                grp, pv01_col=pv01_col, tenor_years_col=tenor_years_col,
+                trade_id_col=trade_id_col, belly_tol=belly_ratio_tolerance,
+            )
+            if decomposed is not None:
+                for i, sub in enumerate(decomposed):
+                    sub_mask = out.index.isin(sub["indices"])
+                    sub_id = f"{gid}_sub{i}"
+                    sub_tids = sorted(sub["trade_ids"])
+                    out.loc[sub_mask, "package_type"] = sub["type"]
+                    out.loc[sub_mask, "package_id"] = sub_id
+                    for idx in out.index[sub_mask]:
+                        out.at[idx, "package_legs"] = sub_tids
+                        out.at[idx, "ptp_sub_structures"] = []
+                continue
+
         mask = out["ptp_group_id"] == gid
         out.loc[mask, "package_type"] = pkg_type
         out.loc[mask, "package_id"] = gid

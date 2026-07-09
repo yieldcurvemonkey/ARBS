@@ -221,7 +221,7 @@ def _risk_balance_signal(
     label: str,
     tol: dict[str, float],
 ) -> dict:
-    """Pass when |sum(risk_i * w_i)| / max(|risk_i * w_i|) <= riskBalanceRel."""
+    """Pass when all legs have similar absolute DV01 (risk) values."""
     rel_tol = tol["risk_balance_rel"]
     risks = [_leg_number_or(l, "risk") for l in legs]
     if any(r is None for r in risks):
@@ -230,10 +230,16 @@ def _risk_balance_signal(
             "passed": False,
             "detail": "leg risk missing",
         }
-    weighted = [r * w for r, w in zip(risks, weights)]  # type: ignore[operator]
-    s = sum(weighted)
-    denom = max(*(abs(v) for v in weighted), 1e-9)
-    rel = abs(s) / denom
+    abs_risks = [abs(r) for r in risks]  # type: ignore[arg-type]
+    avg = sum(abs_risks) / len(abs_risks)
+    if avg <= 0:
+        return {
+            "name": "risk_balance",
+            "passed": False,
+            "detail": "zero risk",
+        }
+    max_delta = max(abs(r - avg) for r in abs_risks)
+    rel = max_delta / avg
     return {
         "name": "risk_balance",
         "passed": rel <= rel_tol,

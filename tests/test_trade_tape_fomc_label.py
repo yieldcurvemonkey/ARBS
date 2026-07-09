@@ -81,7 +81,8 @@ def test_tier2_imm_quarterly_constant_tenor(base_row):
     assert "FOMC" not in label
 
 
-def test_tier3_fomc_eff_constant_tenor(base_row):
+def test_tier3_fomc_eff_constant_tenor_uses_imm_fallback(base_row):
+    """Non-consecutive FOMC trades fall through to IMM forward labeling."""
     row = dict(base_row)
     row.update({
         "effective_date": pd.Timestamp("2026-04-29"),  # Apr26 FOMC, not IMM-Q
@@ -90,13 +91,11 @@ def test_tier3_fomc_eff_constant_tenor(base_row):
         "special_tenor_type": "FOMC",
     })
     out = _compute([row])
-    assert out.loc[0, "fomc_meeting_label"] == "APR26"
-    label = out.loc[0, "tape_label"]
-    assert "FOMC APR26" in label
-    assert "10Y" in label
+    assert out.loc[0, "fomc_meeting_label"] == ""
 
 
-def test_tier3_fomc_to_fomc_nonconsecutive(base_row):
+def test_tier3_fomc_to_fomc_nonconsecutive_uses_imm_fallback(base_row):
+    """Non-consecutive FOMC-to-FOMC trades should NOT get FOMC labels."""
     row = dict(base_row)
     row.update({
         "effective_date": pd.Timestamp("2026-04-29"),
@@ -107,5 +106,5 @@ def test_tier3_fomc_to_fomc_nonconsecutive(base_row):
         "special_tenor_type": "FOMC",
     })
     out = _compute([row])
-    assert out.loc[0, "fomc_meeting_label"] == "APR26 DEC26"
-    assert "FOMC APR26 DEC26" in out.loc[0, "tape_label"]
+    assert out.loc[0, "fomc_meeting_label"] == ""
+    assert "FOMC APR26 DEC26" not in out.loc[0, "tape_label"]

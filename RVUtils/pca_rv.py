@@ -18,6 +18,7 @@ BofA 2s4s7s, ING/JPM cross-market notes (see spec appendix).
 from __future__ import annotations
 
 import warnings
+from itertools import combinations
 from types import SimpleNamespace
 from typing import Optional, Sequence
 
@@ -334,3 +335,350 @@ def eigenportfolio_returns(
     W = loadings.values / V[:, None]
     F = R @ W
     return pd.DataFrame(F, index=asset_returns.index, columns=pcs)
+
+
+# ============================================================================
+# PCA Screener (CS "PCA Unleashed", JPM "RV on EUR swap yield curve",
+# ING "Deconstructing the EUR yield curve", SSB "Principles of PCA")
+# ============================================================================
+
+
+def _build_and_fit(df, *, on, matrix, n_factors):
+    """Shared helper: build + fit a PCA builder, return the unpacked tuple."""
+    (fit, fair_value, residual, fly_weights_fn, curve_weights_fn,
+     directionality, risk_buckets, factor_corr_check, get_model) = \
+        make_pca_rv_builder(df, on=on, matrix=matrix, n_factors=n_factors)
+    fit()
+    return SimpleNamespace(
+        fit=fit, fair_value=fair_value, residual=residual,
+        fly_weights=fly_weights_fn, curve_weights=curve_weights_fn,
+        directionality=directionality, risk_buckets=risk_buckets,
+        factor_corr_check=factor_corr_check, get_model=get_model,
+        state=fit.state,
+    )
+
+
+def screen_residuals(
+    df: pd.DataFrame,
+    *,
+    on: str = "levels",
+    matrix: str = "cov",
+    n_factors: int = 3,
+    zscore_window: int = 60,
+    pctl_window: int = 252,
+) -> pd.DataFrame:
+    """Per-tenor PCA residual snapshot with z-scores and historical markers.
+
+    Returns DataFrame indexed by column name with: actual, fitted, residual,
+    zscore, percentile, residual_1d, residual_1w, residual_1m.
+    Positive residual => actual above PCA fair value (cheap for yields).
+    """
+    b = _build_and_fit(df, on=on, matrix=matrix, n_factors=n_factors)
+    fv = b.fair_value()
+    actual = b.state["df"][b.state["cols"]].reindex(fv.index)
+    resid_df = (actual - fv).dropna(how="all")
+
+    n = len(resid_df)
+    rows = []
+    for col in resid_df.columns:
+        s = resid_df[col].dropna()
+        if len(s) < 2:
+            continue
+        z_series = s.rolling(zscore_window).apply(
+            lambda x: (x.iloc[-1] - x.mean()) / x.std(ddof=1) if x.std(ddof=1) > 0 else 0.0,
+            raw=False,
+        )
+        p_series = s.rolling(pctl_window).rank(pct=True)
+
+        last_idx = s.index[-1]
+        row = {
+            "tenor": col,
+            "actual": float(actual[col].loc[last_idx]) if last_idx in actual.index else np.nan,
+            "fitted": float(fv[col].loc[last_idx]) if last_idx in fv.index else np.nan,
+            "residual": float(s.iloc[-1]),
+            "zscore": float(z_series.iloc[-1]) if len(z_series) >= zscore_window else np.nan,
+            "percentile": float(p_series.iloc[-1]) if len(p_series) >= pctl_window else np.nan,
+        }
+        for label, offset in [("residual_1d", 1), ("residual_1w", 5), ("residual_1m", 21)]:
+            row[label] = float(s.iloc[-(offset + 1)]) if len(s) > offset else np.nan
+        rows.append(row)
+
+    out = pd.DataFrame(rows)
+    if not out.empty:
+        out = out.set_index("tenor")
+    return out
+
+
+def screen_flies(
+    df: pd.DataFrame,
+    *,
+    combos: Optional[Sequence] = None,
+    on: str = "levels",
+    matrix: str = "cov",
+    n_factors: int = 3,
+    zscore_window: int = 60,
+    pctl_window: int = 252,
+    min_zscore: float = 0.0,
+    top_n: int = 20,
+) -> pd.DataFrame:
+    """Scan 3-leg fly combinations for PC1/PC2-neutral dislocation.
+
+    Returns DataFrame ranked by |zscore| with: short, body, long,
+    w_short, w_long, spread, residual, zscore, percentile, mean, std.
+    """
+    b = _build_and_fit(df, on=on, matrix=matrix, n_factors=n_factors)
+    cols = b.state["cols"]
+    actual = b.state["df"][cols]
+
+    if combos is None:
+        combos = list(combinations(cols, 3))
+
+    rows = []
+    for combo in combos:
+        short, body, long = combo[0], combo[1], combo[2]
+        if not all(c in cols for c in (short, body, long)):
+            continue
+        try:
+            with warnings.catch_warnings(record=True) as caught:
+                warnings.simplefilter("always")
+                w = b.fly_weights(short, body, long)
+                if any("ill-conditioned" in str(cw.message) for cw in caught):
+                    continue
+        except Exception:
+            continue
+
+        w_s, w_l = w[short], w[long]
+        if abs(w_s) > 20 or abs(w_l) > 20:
+            continue
+
+        spread = w_s * actual[short] + 1.0 * actual[body] + w_l * actual[long]
+        spread = spread.dropna()
+        if len(spread) < zscore_window:
+            continue
+
+        roll = spread.rolling(zscore_window)
+        z_series = (spread - roll.mean()) / roll.std(ddof=1)
+        p_series = spread.rolling(pctl_window).rank(pct=True)
+
+        cur_z = float(z_series.iloc[-1])
+        if abs(cur_z) < min_zscore:
+            continue
+
+        rows.append({
+            "short": short, "body": body, "long": long,
+            "w_short": w_s, "w_long": w_l,
+            "spread": float(spread.iloc[-1]),
+            "residual": float(spread.iloc[-1] - roll.mean().iloc[-1]),
+            "zscore": cur_z,
+            "percentile": float(p_series.iloc[-1]) if len(p_series) >= pctl_window else np.nan,
+            "mean": float(roll.mean().iloc[-1]),
+            "std": float(roll.std(ddof=1).iloc[-1]),
+        })
+
+    out = pd.DataFrame(rows)
+    if out.empty:
+        return out
+    out["abs_zscore"] = out["zscore"].abs()
+    out = out.sort_values("abs_zscore", ascending=False).drop(columns="abs_zscore").head(top_n)
+    return out.reset_index(drop=True)
+
+
+def screen_curves(
+    df: pd.DataFrame,
+    *,
+    combos: Optional[Sequence] = None,
+    on: str = "levels",
+    matrix: str = "cov",
+    n_factors: int = 3,
+    zscore_window: int = 60,
+    pctl_window: int = 252,
+    min_zscore: float = 0.0,
+    top_n: int = 20,
+) -> pd.DataFrame:
+    """Scan 2-leg curve trades for PC1-neutral dislocation.
+
+    Returns DataFrame ranked by |zscore| with: short, long, w_short,
+    spread, residual, zscore, percentile, mean, std.
+    """
+    b = _build_and_fit(df, on=on, matrix=matrix, n_factors=n_factors)
+    cols = b.state["cols"]
+    actual = b.state["df"][cols]
+
+    if combos is None:
+        combos = list(combinations(cols, 2))
+
+    rows = []
+    for short, long in combos:
+        if short not in cols or long not in cols:
+            continue
+        try:
+            w = b.curve_weights(short, long)
+        except (ValueError, np.linalg.LinAlgError):
+            continue
+
+        w_s = w[short]
+        if abs(w_s) > 20:
+            continue
+
+        spread = w_s * actual[short] + 1.0 * actual[long]
+        spread = spread.dropna()
+        if len(spread) < zscore_window:
+            continue
+
+        roll = spread.rolling(zscore_window)
+        z_series = (spread - roll.mean()) / roll.std(ddof=1)
+        p_series = spread.rolling(pctl_window).rank(pct=True)
+
+        cur_z = float(z_series.iloc[-1])
+        if abs(cur_z) < min_zscore:
+            continue
+
+        rows.append({
+            "short": short, "long": long,
+            "w_short": w_s,
+            "spread": float(spread.iloc[-1]),
+            "residual": float(spread.iloc[-1] - roll.mean().iloc[-1]),
+            "zscore": cur_z,
+            "percentile": float(p_series.iloc[-1]) if len(p_series) >= pctl_window else np.nan,
+            "mean": float(roll.mean().iloc[-1]),
+            "std": float(roll.std(ddof=1).iloc[-1]),
+        })
+
+    out = pd.DataFrame(rows)
+    if out.empty:
+        return out
+    out["abs_zscore"] = out["zscore"].abs()
+    out = out.sort_values("abs_zscore", ascending=False).drop(columns="abs_zscore").head(top_n)
+    return out.reset_index(drop=True)
+
+
+def _default_fly_combos(cols):
+    """Standard flies: body strictly between short and long, all at least 1 apart."""
+    n = len(cols)
+    out = []
+    for i in range(n):
+        for j in range(i + 2, n):
+            for k in range(j + 2, n):
+                out.append((cols[i], cols[j], cols[k]))
+    return out
+
+
+def rv_opportunity_index(
+    df: pd.DataFrame,
+    *,
+    fly_combos: Optional[Sequence] = None,
+    on: str = "levels",
+    matrix: str = "cov",
+    n_factors: int = 3,
+    zscore_window: int = 126,
+    smoothing: int = 10,
+) -> pd.Series:
+    """JPM-style RV opportunity index: smoothed sum of squared z-scores
+    across PCA-neutral flies. Higher values => more dislocation on the curve.
+    """
+    b = _build_and_fit(df, on=on, matrix=matrix, n_factors=n_factors)
+    cols = b.state["cols"]
+    actual = b.state["df"][cols]
+
+    if fly_combos is None:
+        fly_combos = _default_fly_combos(cols)
+
+    spread_list = []
+    for combo in fly_combos:
+        short, body, long = combo
+        if not all(c in cols for c in (short, body, long)):
+            continue
+        try:
+            with warnings.catch_warnings(record=True) as caught:
+                warnings.simplefilter("always")
+                w = b.fly_weights(short, body, long)
+                if any("ill-conditioned" in str(cw.message) for cw in caught):
+                    continue
+        except Exception:
+            continue
+        w_s, w_l = w[short], w[long]
+        if abs(w_s) > 20 or abs(w_l) > 20:
+            continue
+        spread = w_s * actual[short] + 1.0 * actual[body] + w_l * actual[long]
+        spread_list.append(spread)
+
+    if not spread_list:
+        return pd.Series(dtype=float, name="rv_opportunity_index")
+
+    z_sq_sum = None
+    for s in spread_list:
+        s = s.dropna()
+        roll = s.rolling(zscore_window)
+        z = (s - roll.mean()) / roll.std(ddof=1)
+        z_sq = z ** 2
+        if z_sq_sum is None:
+            z_sq_sum = z_sq
+        else:
+            z_sq_sum = z_sq_sum.add(z_sq, fill_value=0.0)
+
+    idx = z_sq_sum.dropna().rolling(smoothing).mean()
+    idx.name = "rv_opportunity_index"
+    return idx.dropna()
+
+
+def beta_stability(
+    df: pd.DataFrame,
+    body: str,
+    short_wing: str,
+    long_wing: str,
+    *,
+    regression_window: int = 126,
+    vol_window: int = 63,
+    zscore_window: int = 126,
+) -> pd.DataFrame:
+    """JPM-style traffic light indicator for a specific fly.
+
+    Tracks rolling regression beta stability of the 50:50 fly vs body yield
+    and wing curve. Returns DataFrame with: fly, beta_body, beta_wing,
+    beta_body_vol, beta_wing_vol, traffic_light.
+
+    traffic_light > 3 => "red" (regime instability, avoid systematic RV)
+    traffic_light < 2 => "green" (stable betas, RV trading attractive)
+    """
+    data = df[[short_wing, body, long_wing]].dropna()
+    fly = 2 * data[body] - data[short_wing] - data[long_wing]
+    body_yield = data[body]
+    wing_curve = data[long_wing] - data[short_wing]
+
+    n = len(data)
+    rw = int(regression_window)
+    beta_b = pd.Series(index=data.index, dtype=float)
+    beta_w = pd.Series(index=data.index, dtype=float)
+
+    for t in range(rw, n):
+        window_slice = slice(t - rw, t)
+        y = fly.iloc[window_slice].values
+        X = np.column_stack([
+            np.ones(rw),
+            body_yield.iloc[window_slice].values,
+            wing_curve.iloc[window_slice].values,
+        ])
+        try:
+            coeffs = np.linalg.lstsq(X, y, rcond=None)[0]
+        except np.linalg.LinAlgError:
+            continue
+        beta_b.iloc[t] = coeffs[1]
+        beta_w.iloc[t] = coeffs[2]
+
+    beta_b_vol = beta_b.rolling(vol_window).std(ddof=1)
+    beta_w_vol = beta_w.rolling(vol_window).std(ddof=1)
+
+    zw = int(zscore_window)
+    z_b = (beta_b_vol - beta_b_vol.rolling(zw).mean()) / beta_b_vol.rolling(zw).std(ddof=1)
+    z_w = (beta_w_vol - beta_w_vol.rolling(zw).mean()) / beta_w_vol.rolling(zw).std(ddof=1)
+
+    traffic = np.sqrt(z_b.fillna(0.0) ** 2 + z_w.fillna(0.0) ** 2)
+
+    return pd.DataFrame({
+        "fly": fly,
+        "beta_body": beta_b,
+        "beta_wing": beta_w,
+        "beta_body_vol": beta_b_vol,
+        "beta_wing_vol": beta_w_vol,
+        "traffic_light": traffic,
+    })

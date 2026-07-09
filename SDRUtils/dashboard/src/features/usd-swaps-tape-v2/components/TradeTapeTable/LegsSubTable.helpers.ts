@@ -57,7 +57,7 @@ export function computeLegSummary(row: UsdSwapTapeRow): LegSummary {
   ]
     .map((v) => String(v ?? '').toUpperCase())
     .join(' ')
-  const isCurve = /(^|[^A-Z0-9])CURVE([^A-Z0-9]|$)/.test(kindContext)
+  const isCurve = /(^|[^A-Z0-9])(CURVE|SWITCH)([^A-Z0-9]|$)/.test(kindContext)
   const isFly = /(^|[^A-Z0-9])FLY([^A-Z0-9]|$)/.test(kindContext)
   const ptp = toNum(row.package_transaction_price)
   const pts = toNum(row.package_transaction_spread)

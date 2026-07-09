@@ -110,10 +110,10 @@ function legNumberOr(leg: UsdSwapTapeLeg, key: keyof UsdSwapTapeLeg): number | n
   return typeof v === 'number' && Number.isFinite(v) ? v : null
 }
 
-/** Pass when |sum(risks)| / max(|risks|) <= riskBalanceRel. */
+/** Pass when all legs have similar absolute DV01 (risk) values. */
 function riskBalanceSignal(
   legs: UsdSwapTapeLeg[],
-  weights: number[],
+  _weights: number[],
   label: string,
   tol: Tolerances,
 ): ConfidenceSignal {
@@ -127,10 +127,18 @@ function riskBalanceSignal(
       detail: 'leg risk missing',
     }
   }
-  const weighted = risks.map((r, i) => (r as number) * weights[i])
-  const sum = weighted.reduce((a, b) => a + b, 0)
-  const denom = Math.max(...weighted.map((v) => Math.abs(v)), 1e-9)
-  const rel = Math.abs(sum) / denom
+  const absRisks = risks.map((r) => Math.abs(r as number))
+  const avg = absRisks.reduce((a, b) => a + b, 0) / absRisks.length
+  if (avg <= 0) {
+    return {
+      name: 'risk_balance',
+      label,
+      passed: false,
+      detail: 'zero risk',
+    }
+  }
+  const maxDelta = Math.max(...absRisks.map((r) => Math.abs(r - avg)))
+  const rel = maxDelta / avg
   return {
     name: 'risk_balance',
     label,

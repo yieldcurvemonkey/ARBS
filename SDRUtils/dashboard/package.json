@@ -16,6 +16,7 @@
     "test:e2e": "node --experimental-vm-modules node_modules/jest/bin/jest.js --testPathPatterns=__tests__/e2e"
   },
   "dependencies": {
+    "@babel/runtime": "^8.0.0",
     "@headlessui/react": "^2.2.4",
     "@tanstack/react-virtual": "^3.13.11",
     "@types/d3": "^7.4.3",

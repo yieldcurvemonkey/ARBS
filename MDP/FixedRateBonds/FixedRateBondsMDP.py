@@ -1051,7 +1051,7 @@ class FixedRateBondsMDP(MarketDataProvider[_GenericPricable], LayeredCacheMixin)
                 end=end_ny,
                 show_tqdm=bool(kwargs.get("show_tqdm", True)),
             )
-            print(wide)
+            # print(wide)
             for original, cusip in alias_to_cusip_to_fetch.items():
                 for curr_ts, ytm in wide[cusip].items():
                     cache_key = f"{curr_ts.isoformat()}-{cusip}-{self.source.upper()}"

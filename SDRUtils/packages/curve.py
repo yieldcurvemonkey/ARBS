@@ -44,6 +44,8 @@ def detect_curve_trades_df(
     tenor_segment_col: str = "tenor_segment",
     time_window_short: int = 30,
     time_window_medium: int = 60,
+    reject_non_standard_term: bool = True,
+    non_standard_term_col: str = "is_non_standard_term",
 ) -> pd.DataFrame:
     """
     Fast curve detection on the classifications dataframe.
@@ -131,6 +133,12 @@ def detect_curve_trades_df(
     plat = cand[platform_col].astype("string").to_numpy() if (require_same_platform and platform_col in cand.columns) else None
     clr = cand[cleared_col].astype("string").to_numpy() if (require_same_cleared_flag and cleared_col in cand.columns) else None
     stt = cand[special_tenor_col].fillna("STANDARD").astype(str).to_numpy() if special_tenor_col in cand.columns else None
+    nst: np.ndarray | None = None
+    if reject_non_standard_term:
+        if non_standard_term_col in cand.columns:
+            nst = cand[non_standard_term_col].fillna(False).astype(bool).to_numpy()
+        else:
+            nst = np.array([str(t).startswith("~") for t in tenor], dtype=bool)
 
     # V2 rate-index and tenor-segment arrays (None when columns absent → backward compat)
     _has_ridx = rate_index_col in cand.columns
@@ -156,6 +164,8 @@ def detect_curve_trades_df(
         dirv = None
 
     def _econ_ok(i: int, j: int) -> bool:
+        if nst is not None and (nst[i] or nst[j]):
+            return False
         both_fomc = stt is not None and stt[i] == "FOMC" and stt[j] == "FOMC"
         if ridx is not None and ridx[i] != ridx[j]:
             return False
