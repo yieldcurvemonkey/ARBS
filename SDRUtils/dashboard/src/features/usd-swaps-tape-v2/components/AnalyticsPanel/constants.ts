@@ -4,6 +4,7 @@ import type {
   AnalyticsMetricConfig,
   AnalyticsRangeKey,
   AnalyticsViewKey,
+  MmsState,
   RarityZone,
 } from './analytics-types'
 
@@ -112,3 +113,9 @@ export const LEVELS_DEFAULT_STATE = {
 // on incompatible shape changes so old payloads parse cleanly to the
 // default state instead of crashing the dock.
 export const RARITY_PREFS_STORAGE_KEY = 'usd-swaps-tape-v2/rarity-prefs/v2'
+
+export const MMS_DEFAULT_STATE: MmsState = {
+  window: '30d',
+  volumeMetric: 'count',
+  distributionMetric: 'count',
+}
