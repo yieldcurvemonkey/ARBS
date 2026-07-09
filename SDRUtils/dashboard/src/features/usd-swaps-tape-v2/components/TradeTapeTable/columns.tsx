@@ -439,7 +439,6 @@ export function getColumns(
             : `Canonical: ${canonicalKey} (${label})`
         return (
           <span
-            title={tooltip}
             data-canonical-key={canonicalKey}
             data-testid={`canonical-${row.package_id ?? 'row'}`}
             className="inline-block"
@@ -547,7 +546,8 @@ export function getColumns(
             <span>{lines.opaLine}</span>
             <span>{lines.ptpLine}</span>
             <span>{lines.ptsLine}</span>
-            {row.opa_sign_confidence && (
+            {row.opa_sign_confidence &&
+              row.opa_sign_confidence !== 'LOOSE' && (
               <div className="mt-0.5 flex items-center gap-1 font-normal normal-case text-xs">
                 <span
                   className={`px-1.5 py-0.5 rounded ${CONFIDENCE_COLORS[row.opa_sign_confidence] ?? 'bg-zinc-500/20 text-zinc-400'}`}
@@ -607,66 +607,7 @@ export function getColumns(
       }}
       style={{ width: 160 }}
     />,
-    <Column
-      key="dealer_spread"
-      field="dealer_spread_bps"
-      filterField="dealer_spread_bps"
-      sortable
-      filter
-      dataType="numeric"
-      {...compactFilterMenuProps}
-      header={renderHeader(
-        'Spread (bp)',
-        summaryFor('dealer_spread_bps', config.activeFilters),
-      )}
-      body={(row: UsdSwapTapeRow) => {
-        const label = spreadBpsDisplay(row.dealer_spread_bps)
-        return (
-          <span className="block text-right font-mono text-[12px] text-slate-300">
-            {label ?? EMPTY_VALUE}
-          </span>
-        )
-      }}
-      style={{ width: 82 }}
-    />,
-    <Column
-      key="opa_conf"
-      field="opa_sign_confidence"
-      filterField="opa_sign_confidence"
-      sortable
-      filter
-      {...compactFilterMenuProps}
-      header={renderHeader(
-        'OPA Conf',
-        summaryFor('opa_sign_confidence', config.activeFilters),
-      )}
-      body={(row: UsdSwapTapeRow) => {
-        const px =
-          row.ptp_price_notation != null && Number(row.ptp_price_notation) !== 1
-        if (!row.opa_sign_confidence && !px)
-          return <span className="text-slate-600 text-[10px]">·</span>
-        return (
-          <span className="inline-flex items-center gap-1">
-            {row.opa_sign_confidence && (
-              <span
-                className={`px-1.5 py-0.5 rounded text-[10px] font-semibold ${CONFIDENCE_COLORS[row.opa_sign_confidence] ?? 'bg-zinc-500/20 text-zinc-400'}`}
-              >
-                {row.opa_sign_confidence}
-              </span>
-            )}
-            {px && (
-              <span
-                className="px-1 py-0.5 rounded text-[10px] font-semibold bg-zinc-500/20 text-zinc-400"
-                title="Package transaction price is a decimal price (Part 43 notation != 1) — no dollar OPA tieout"
-              >
-                PX
-              </span>
-            )}
-          </span>
-        )
-      }}
-      style={{ width: 84 }}
-    />,
+    /* Bug 8: 'Spread (bp)' and 'OPA Conf' columns removed */
   )
   return cols
 }
