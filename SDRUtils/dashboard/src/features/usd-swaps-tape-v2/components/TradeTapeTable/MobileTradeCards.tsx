@@ -13,12 +13,19 @@ import {
 import { EMPTY_VALUE } from '../../constants'
 import { computePackageConfidence } from '../../utils/packageConfidence'
 import { computePackageAdjustedDv01 } from '../../utils/packageAdjustedDv01'
+import type { DisplayRow } from '../../utils/applyOverrides'
 import {
   packageTypeBadgeClassName,
   packageTypeDisplayLabel,
 } from './columns.helpers'
 import { LifecyclePills, EconomicClassBadge } from './RowBadges'
 import type { MetricMode } from './columns'
+
+// Row-identity key. applyOverrides can emit multiple display rows sharing one
+// package_id (SPLIT explosion, DETACH remnant+legs), so package_id alone is
+// not a safe React key or expand/collapse identity here. Mirrors the
+// `rowKeyOf` helper in TradeTapeTable.tsx -- keep them in sync.
+const rowKeyOf = (row: UsdSwapTapeRow) => (row as DisplayRow).__syntheticKey ?? row.package_id
 
 export interface MobileTradeCardsProps {
   rows: UsdSwapTapeRow[]
@@ -106,12 +113,12 @@ export function MobileTradeCards(props: MobileTradeCardsProps): JSX.Element {
     <div className="flex-1 space-y-2 overflow-auto px-2 pb-4 pt-2">
       {rows.map((row) => (
         <TradeCard
-          key={row.package_id}
+          key={rowKeyOf(row)}
           row={row}
-          isExpanded={!!expandedRows?.[row.package_id]}
+          isExpanded={!!expandedRows?.[rowKeyOf(row)]}
           isSelected={selectedIds.has(row.package_id)}
           isFocused={focusedPackageId === row.package_id}
-          onToggleExpand={() => onToggleRow?.(row.package_id)}
+          onToggleExpand={() => onToggleRow?.(rowKeyOf(row))}
           onToggleSelect={() => toggleSelection(row)}
           onOpenManualLink={onOpenManualLink}
           metricMode={metricMode}
