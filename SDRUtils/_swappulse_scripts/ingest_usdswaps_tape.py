@@ -404,21 +404,87 @@ def _str_or_none(val: Any) -> Optional[str]:
 # ---------------------------------------------------------------------------
 
 
-def _execute_ddl_bundle(engine: Engine, ddl: str, lock_timeout_ms: int = 3_000) -> None:
-    with engine.begin() as conn:
-        conn.execute(text(f"SET LOCAL lock_timeout = '{lock_timeout_ms}ms'"))
-        buffer: list[str] = []
-        for line in ddl.splitlines():
-            buffer.append(line)
-            stripped = line.strip()
-            if stripped.endswith(";"):
-                sql = "\n".join(buffer).strip()
-                if sql:
-                    conn.execute(text(sql))
-                buffer = []
-        tail = "\n".join(buffer).strip()
-        if tail:
-            conn.execute(text(tail))
+def _split_ddl_statements(ddl: str) -> list[str]:
+    """Split a DDL bundle into individual statements on ``;``-terminated lines
+    (mirrors the original line-buffered splitter)."""
+    stmts: list[str] = []
+    buffer: list[str] = []
+    for line in ddl.splitlines():
+        buffer.append(line)
+        if line.strip().endswith(";"):
+            sql = "\n".join(buffer).strip()
+            if sql:
+                stmts.append(sql)
+            buffer = []
+    tail = "\n".join(buffer).strip()
+    if tail:
+        stmts.append(tail)
+    return stmts
+
+
+def _is_view_statement(sql: str) -> bool:
+    head = sql.lstrip().upper()
+    return (
+        head.startswith("DROP VIEW")
+        or head.startswith("CREATE VIEW")
+        or head.startswith("CREATE OR REPLACE VIEW")
+        or head.startswith("DROP MATERIALIZED VIEW")
+        or head.startswith("CREATE MATERIALIZED VIEW")
+    )
+
+
+def _group_ddl_statements(stmts: list[str]) -> list[list[str]]:
+    """Group consecutive view DROP/CREATE statements so a view rebuild runs in a
+    single transaction — there must be no window where the view is dropped but
+    not yet recreated (the frontend reads it). Every other statement runs on its
+    own so each holds ACCESS EXCLUSIVE for the shortest possible time."""
+    groups: list[list[str]] = []
+    i, n = 0, len(stmts)
+    while i < n:
+        if _is_view_statement(stmts[i]):
+            grp: list[str] = []
+            while i < n and _is_view_statement(stmts[i]):
+                grp.append(stmts[i])
+                i += 1
+            groups.append(grp)
+        else:
+            groups.append([stmts[i]])
+            i += 1
+    return groups
+
+
+def _execute_ddl_bundle(
+    engine: Engine, ddl: str, lock_timeout_ms: int = 5_000, _max_attempts: int = 10
+) -> None:
+    """Apply a DDL bundle statement-by-statement, each in its own short
+    transaction with a bounded ``lock_timeout`` and retry-with-backoff.
+
+    The tape tables are served by long-running (~50s) frontend analytical
+    queries holding ``AccessShareLock``. Running the whole bundle in one
+    transaction forced a single window in which every ``ACCESS EXCLUSIVE`` lock
+    (tables + view) had to be free simultaneously, which deadlocked under live
+    traffic. Executing each statement independently keeps every lock window tiny
+    (fail fast on lock_timeout, then retry into a gap), while a view DROP/CREATE
+    stays atomic within its group so the view is never observably missing."""
+    for group in _group_ddl_statements(_split_ddl_statements(ddl)):
+        for attempt in range(1, _max_attempts + 1):
+            try:
+                with engine.begin() as conn:
+                    conn.execute(text(f"SET LOCAL lock_timeout = '{lock_timeout_ms}ms'"))
+                    for sql in group:
+                        conn.execute(text(sql))
+                break
+            except Exception as exc:
+                msg = str(exc).lower()
+                if ("deadlock" in msg or "lock timeout" in msg) and attempt < _max_attempts:
+                    wait = min(1.5 ** attempt, 15.0)
+                    print(
+                        f"_execute_ddl_bundle: lock contention (attempt "
+                        f"{attempt}/{_max_attempts}), retrying in {wait:.1f}s…"
+                    )
+                    time.sleep(wait)
+                else:
+                    raise
 
 
 _schema_ensured: set[str] = set()
