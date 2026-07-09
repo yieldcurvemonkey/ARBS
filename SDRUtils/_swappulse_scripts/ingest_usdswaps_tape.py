@@ -554,7 +554,9 @@ def _schema_already_current(engine: Engine) -> bool:
         return False
 
 
-def ensure_schema(engine: Engine, _max_retries: int = 5) -> None:
+def ensure_schema(
+    engine: Engine, _max_retries: int = 5, lock_timeout_ms: int = 5_000
+) -> None:
     """Create v2 tables / indexes / view if they don't already exist.
 
     Also runs the v1 DDL so the frozen rollback tables remain valid on
@@ -579,9 +581,9 @@ def ensure_schema(engine: Engine, _max_retries: int = 5) -> None:
         return
     for attempt in range(1, _max_retries + 1):
         try:
-            _execute_ddl_bundle(engine, TAPE_SCHEMA_SQL)
-            _execute_ddl_bundle(engine, TAPE_SCHEMA_SQL_V2)
-            _execute_ddl_bundle(engine, MONITORING_SQL_V2)
+            _execute_ddl_bundle(engine, TAPE_SCHEMA_SQL, lock_timeout_ms=lock_timeout_ms)
+            _execute_ddl_bundle(engine, TAPE_SCHEMA_SQL_V2, lock_timeout_ms=lock_timeout_ms)
+            _execute_ddl_bundle(engine, MONITORING_SQL_V2, lock_timeout_ms=lock_timeout_ms)
             _schema_ensured.add(key)
             return
         except Exception as exc:

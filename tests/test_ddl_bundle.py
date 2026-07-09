@@ -96,3 +96,27 @@ def test_real_tape_schema_view_stays_atomic():
         assert all(_is_view_statement(s) for s in g)
         assert any(s.lstrip().upper().startswith("DROP VIEW") for s in g)
         assert any("VIEW" in s.upper() and "AS" in s.upper() for s in g)
+
+
+from unittest.mock import patch, MagicMock
+from SDRUtils._swappulse_scripts.ingest_usdswaps_tape import ensure_schema
+
+
+def test_ensure_schema_forwards_lock_timeout():
+    """ensure_schema passes lock_timeout_ms to _execute_ddl_bundle."""
+    mock_engine = MagicMock()
+    mock_engine.url = "postgresql://test/test"
+    with patch(
+        "SDRUtils._swappulse_scripts.ingest_usdswaps_tape._schema_already_current",
+        return_value=False,
+    ), patch(
+        "SDRUtils._swappulse_scripts.ingest_usdswaps_tape._execute_ddl_bundle"
+    ) as mock_ddl, patch(
+        "SDRUtils._swappulse_scripts.ingest_usdswaps_tape._schema_ensured",
+        set(),
+    ):
+        ensure_schema(mock_engine, lock_timeout_ms=90_000)
+        for call in mock_ddl.call_args_list:
+            assert call.kwargs.get("lock_timeout_ms") == 90_000 or \
+                   (len(call.args) >= 3 and call.args[2] == 90_000), \
+                f"lock_timeout_ms not forwarded: {call}"

@@ -240,6 +240,7 @@ def _run_tape_for_dates(
     use_cache: bool,
     stop_on_error: bool,
     cache_path: Optional[str] = None,
+    lock_timeout_ms: int = 5_000,
 ) -> int:
     """Run the enriched tape build one day at a time.
 
@@ -251,7 +252,7 @@ def _run_tape_for_dates(
     failures = 0
     resolved_pg_url = ingest_usdswaps_tape.resolve_pg_url(pg_url)
     tape_engine = ingest_usdswaps_tape.create_engine(resolved_pg_url)
-    ingest_usdswaps_tape.ensure_schema(tape_engine)
+    ingest_usdswaps_tape.ensure_schema(tape_engine, lock_timeout_ms=lock_timeout_ms)
     for d in dates:
         iso = d.isoformat()
         _banner(f"Tape build: {iso}")
@@ -331,6 +332,7 @@ def cmd_backfill(args: argparse.Namespace) -> int:
         use_cache=not args.no_tape_cache,
         stop_on_error=not args.continue_on_error,
         cache_path=args.cache_path,
+        lock_timeout_ms=args.lock_timeout,
     )
     return 1 if failures else 0
 
@@ -824,6 +826,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="Do not stop the multi-day loop when one day's tape build fails.",
     )
     _add_common_flags(bp)
+    bp.add_argument(
+        "--lock-timeout",
+        type=int,
+        default=5_000,
+        help="DDL lock_timeout in milliseconds (default: 5000).",
+    )
     bp.set_defaults(func=cmd_backfill)
 
     # incremental
