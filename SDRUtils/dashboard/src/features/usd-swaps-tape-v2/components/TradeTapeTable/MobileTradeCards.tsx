@@ -307,7 +307,10 @@ function TradeCard({
               >
                 <div className="font-mono text-xs text-slate-200">
                   {String(
-                    leg.leg_tape_label ?? leg.tape_label ?? `Leg ${i + 1}`,
+                    leg.leg_tape_label_ust_alias ??
+                      leg.leg_tape_label ??
+                      leg.tape_label ??
+                      `Leg ${i + 1}`,
                   )}
                 </div>
                 <div className="mt-1 flex flex-wrap gap-x-3 gap-y-0.5 font-mono text-[11px] text-slate-400">

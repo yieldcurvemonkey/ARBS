@@ -174,6 +174,13 @@ LEG_COLUMNS: tuple[str, ...] = (
     "ptp_group_id",
     "opa_sign",
     "opa_signed_amount",
+    # Matched-UST-maturity / special-tenor enrichment
+    "matched_ust_maturity",
+    "special_tenor_type",
+    "ust_cusip",
+    "tape_label_ust_alias",
+    "leg_tape_label_ust_alias",
+    "matched_ust_maturity_trade_confidence",
 )
 
 
@@ -258,6 +265,10 @@ PACKAGE_COLUMNS: tuple[str, ...] = (
     "dealer_spread_bps",
     "ptp_sub_structures",
     "package_metrics",
+    # Matched-UST-maturity / special-tenor enrichment (package)
+    "special_tenor_type",
+    "tape_label_ust_alias",
+    "is_matched_maturity_all",
 )
 
 
@@ -597,6 +608,16 @@ def _rep_tape_label(group: pd.DataFrame) -> str | None:
     return max(non_null, key=len)
 
 
+def _rep_tape_label_ust_alias(group: pd.DataFrame) -> str | None:
+    labels = group.get("tape_label_ust_alias")
+    if labels is None:
+        return None
+    non_null = [l for l in (_str_or_none(x) for x in labels) if l]
+    if not non_null:
+        return None
+    return max(non_null, key=len)
+
+
 def _consistent_str(group: pd.DataFrame, col: str) -> str | None:
     if col not in group.columns:
         return None
@@ -819,6 +840,8 @@ def build_leg_rows(tape: pd.DataFrame, *, as_of_date: str) -> list[dict]:
             # Phase 5 bool columns
             "schedule_truncated", "cap_band_violation",
             "frequency_anomaly", "d2_missing",
+            # matched-UST-maturity enrichment
+            "matched_ust_maturity",
         ):
             rec[bool_col] = _bool_or_none(rec.get(bool_col))
         for text_col in (
@@ -839,6 +862,10 @@ def build_leg_rows(tape: pd.DataFrame, *, as_of_date: str) -> list[dict]:
             "basis_type", "leg1_rate_index", "leg2_rate_index",
             # PTP/OPA
             "ptp_group_id",
+            # matched-UST-maturity enrichment
+            "special_tenor_type", "ust_cusip",
+            "tape_label_ust_alias", "leg_tape_label_ust_alias",
+            "matched_ust_maturity_trade_confidence",
         ):
             rec[text_col] = _str_or_none(rec.get(text_col))
         rec["basis_spread_bps"] = _num_or_none(rec.get("basis_spread_bps"))
@@ -1188,6 +1215,15 @@ def build_package_rows(tape: pd.DataFrame, *, as_of_date: str) -> list[dict]:
             normalized = g[flag].map(_bool_or_none)
             return bool(normalized.eq(True).any())
 
+        def _all(flag: str) -> bool | None:
+            if flag not in g.columns:
+                return None
+            normalized = g[flag].map(_bool_or_none)
+            non_null = normalized.dropna()
+            if non_null.empty:
+                return None
+            return bool(non_null.eq(True).all())
+
         package_type = _consistent_str(g, "package_type") or "OUTRIGHT"
         trade_type = _consistent_str(g, "trade_type") or package_type
         fwd_years_series = pd.to_numeric(g.get("forward_start_years"), errors="coerce")
@@ -1280,6 +1316,9 @@ def build_package_rows(tape: pd.DataFrame, *, as_of_date: str) -> list[dict]:
                 g["cluster_size"].iloc[0] if "cluster_size" in g.columns else None
             ),
             "tape_label": _rep_tape_label(g),
+            "special_tenor_type": _consistent_str(g, "special_tenor_type"),
+            "tape_label_ust_alias": _rep_tape_label_ust_alias(g),
+            "is_matched_maturity_all": _all("matched_ust_maturity"),
             "tape_tags": _str_or_none(
                 ",".join(sorted({
                     t

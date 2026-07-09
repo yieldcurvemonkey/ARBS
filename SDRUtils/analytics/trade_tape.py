@@ -63,7 +63,7 @@ def _hour_to_session(hour: int) -> str:
 # Result cache versioning
 # ---------------------------------------------------------------------------
 
-TRADE_TAPE_CACHE_VERSION = "v10-ptp-truebp-notation"
+TRADE_TAPE_CACHE_VERSION = "v11-ust-alias-pkg"
 DEFAULT_CACHE_DIR = os.path.join(
     os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
     "notebooks", "sdr", "_cache", "trade_tape",
@@ -760,6 +760,7 @@ class TradeTape(SDRAnalyzer):
         df["n_package_legs"] = 1
         tenor_src = "tenor_display" if "tenor_display" in df.columns else "tenor_label"
         df["package_tenors"] = df[tenor_src].astype(str)
+        df["package_ust_aliases"] = ""
         df["package_structure"] = ""
 
         # Resolve package legs from package_legs array (batched assignment).
@@ -780,6 +781,17 @@ class TradeTape(SDRAnalyzer):
             legs_arr = df[legs_col].to_numpy()
             is_pkg_arr = df["is_package"].to_numpy()
             df_indices = df.index.to_numpy()
+
+            # Per-leg UST-maturity MMYY alias (e.g. "0236") for matched-maturity
+            # package labels; "" when expiration_date missing/unparseable.
+            if "expiration_date" in df.columns:
+                _exp_dt = pd.to_datetime(df["expiration_date"], errors="coerce")
+                mmyy_arr = np.array(
+                    [f"{d.month:02d}{d.year % 100:02d}" if pd.notna(d) else "" for d in _exp_dt],
+                    dtype=object,
+                )
+            else:
+                mmyy_arr = np.full(len(df), "", dtype=object)
 
             pkg_positions = np.where(is_pkg_arr)[0]
 
@@ -835,6 +847,7 @@ class TradeTape(SDRAnalyzer):
             valid_indices: list = []
             n_legs_arr: list[int] = []
             tenors_arr: list[str] = []
+            ust_aliases_arr: list[str] = []
 
             for pos in pkg_positions:
                 legs = legs_arr[pos]
@@ -855,13 +868,25 @@ class TradeTape(SDRAnalyzer):
                 sort_order = np.argsort(tenor_years_arr[leg_pos_arr], kind="stable")
                 sorted_tenors = tenor_src_arr[leg_pos_arr[sort_order]]
 
+                # Collapse-if-identical MMYY UST alias across legs (tenor-sorted):
+                # same bond -> "0236"; different bonds -> "0236/0246".
+                leg_aliases = [a for a in mmyy_arr[leg_pos_arr[sort_order]] if a]
+                if not leg_aliases:
+                    pkg_alias_str = ""
+                elif len(set(leg_aliases)) == 1:
+                    pkg_alias_str = leg_aliases[0]
+                else:
+                    pkg_alias_str = "/".join(leg_aliases)
+
                 valid_indices.append(df_indices[pos])
                 n_legs_arr.append(len(leg_positions))
                 tenors_arr.append("/".join(sorted_tenors))
+                ust_aliases_arr.append(pkg_alias_str)
 
             if valid_indices:
                 df.loc[valid_indices, "n_package_legs"] = n_legs_arr
                 df.loc[valid_indices, "package_tenors"] = tenors_arr
+                df.loc[valid_indices, "package_ust_aliases"] = ust_aliases_arr
 
         # Build package_structure from tenors + trade_type
         pkg_mask = df["is_package"]
@@ -1348,7 +1373,14 @@ class TradeTape(SDRAnalyzer):
                     str(row.get("special_tenor_type", "")).upper() == "MATCHED_MATURITY"
                     or bool(row.get("matched_ust_maturity", False))
                 ):
-                    alias = _ust_maturity_alias(row)
+                    if leg_as_outright:
+                        # Single expanded leg -> its own maturity alias.
+                        alias = _ust_maturity_alias(row)
+                    else:
+                        # Package scope -> collapsed multi-leg alias ("0236" or
+                        # "0536/0546"); fall back to the single-row date.
+                        pkg_alias = str(row.get("package_ust_aliases", "") or "").strip()
+                        alias = pkg_alias if pkg_alias else _ust_maturity_alias(row)
                     if alias:
                         tenors = alias
                 if tenors and tenors.lower() not in ("nan", "none"):
@@ -1492,6 +1524,10 @@ class TradeTape(SDRAnalyzer):
         df["tape_label_ust_alias"] = df.apply(
             lambda r: _label_for_row(r, use_ust_alias=True), axis=1
         )
+        # Per-leg secondary label: expanded sub-table leg with the MMYY alias.
+        df["leg_tape_label_ust_alias"] = df.apply(
+            lambda r: _label_for_row(r, leg_scope=True, use_ust_alias=True), axis=1
+        )
         # Clean double spaces
         df["tape_label"] = df["tape_label"].str.replace(r"\s+", " ", regex=True).str.strip()
         df["leg_tape_label"] = (
@@ -1499,6 +1535,9 @@ class TradeTape(SDRAnalyzer):
         )
         df["tape_label_ust_alias"] = (
             df["tape_label_ust_alias"].str.replace(r"\s+", " ", regex=True).str.strip()
+        )
+        df["leg_tape_label_ust_alias"] = (
+            df["leg_tape_label_ust_alias"].str.replace(r"\s+", " ", regex=True).str.strip()
         )
 
         return df

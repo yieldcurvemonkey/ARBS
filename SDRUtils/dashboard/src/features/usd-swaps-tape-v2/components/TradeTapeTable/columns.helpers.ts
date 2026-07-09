@@ -18,6 +18,9 @@ const PACKAGE_BADGE_TONES: Record<string, string> = {
   BASIS: 'border-emerald-500/40 bg-emerald-900/40 text-emerald-200',
   BASIS_CURVE: 'border-emerald-500/40 bg-emerald-900/40 text-emerald-200',
   BASIS_FLY: 'border-emerald-500/40 bg-emerald-900/40 text-emerald-200',
+  MATCHED_MATURITY: 'border-teal-500/40 bg-teal-900/40 text-teal-200',
+  MATCHED_MATURITY_CURVE: 'border-sky-500/40 bg-sky-900/40 text-sky-200',
+  MATCHED_MATURITY_FLY: 'border-indigo-500/40 bg-indigo-900/40 text-indigo-200',
 }
 
 const PACKAGE_LABELS: Record<string, string> = {
@@ -27,6 +30,9 @@ const PACKAGE_LABELS: Record<string, string> = {
   BASIS: 'Basis',
   BASIS_CURVE: 'B.Curve',
   BASIS_FLY: 'B.Fly',
+  MATCHED_MATURITY: 'MMS',
+  MATCHED_MATURITY_CURVE: 'MMS Curve',
+  MATCHED_MATURITY_FLY: 'MMS Fly',
 }
 
 // Left-edge accent borders, kept from the original palette — they're a second

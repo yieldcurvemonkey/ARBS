@@ -87,6 +87,9 @@ CREATE TABLE IF NOT EXISTS {PACKAGES_TABLE_V2} (
     cluster_id TEXT,
     cluster_size INTEGER,
     tape_label TEXT,
+    special_tenor_type TEXT,
+    tape_label_ust_alias TEXT,
+    is_matched_maturity_all BOOLEAN,
     package_metrics JSONB NOT NULL DEFAULT '{{}}'::jsonb,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
@@ -127,6 +130,12 @@ CREATE TABLE IF NOT EXISTS {LEGS_TABLE_V2} (
     cleared TEXT,
     tape_label TEXT,
     leg_tape_label TEXT,
+    matched_ust_maturity BOOLEAN,
+    special_tenor_type TEXT,
+    ust_cusip TEXT,
+    tape_label_ust_alias TEXT,
+    leg_tape_label_ust_alias TEXT,
+    matched_ust_maturity_trade_confidence TEXT,
     -- Per-leg package economics. SPREADOVER_CURVE / MATCHED_MATURITY_FLY
     -- composites carry distinct per-leg PTS / PTP values; the package-level
     -- p.package_transaction_spread is only correct for true single-spread
@@ -348,6 +357,19 @@ ALTER TABLE {LEGS_TABLE_V2} ADD COLUMN IF NOT EXISTS ptp_group_id TEXT;
 ALTER TABLE {LEGS_TABLE_V2} ADD COLUMN IF NOT EXISTS opa_sign SMALLINT;
 ALTER TABLE {LEGS_TABLE_V2} ADD COLUMN IF NOT EXISTS opa_signed_amount NUMERIC;
 
+-- Matched-UST-maturity / special-tenor enrichment (leg)
+ALTER TABLE {LEGS_TABLE_V2} ADD COLUMN IF NOT EXISTS matched_ust_maturity BOOLEAN;
+ALTER TABLE {LEGS_TABLE_V2} ADD COLUMN IF NOT EXISTS special_tenor_type TEXT;
+ALTER TABLE {LEGS_TABLE_V2} ADD COLUMN IF NOT EXISTS ust_cusip TEXT;
+ALTER TABLE {LEGS_TABLE_V2} ADD COLUMN IF NOT EXISTS tape_label_ust_alias TEXT;
+ALTER TABLE {LEGS_TABLE_V2} ADD COLUMN IF NOT EXISTS leg_tape_label_ust_alias TEXT;
+ALTER TABLE {LEGS_TABLE_V2} ADD COLUMN IF NOT EXISTS matched_ust_maturity_trade_confidence TEXT;
+
+-- Matched-UST-maturity / special-tenor enrichment (package)
+ALTER TABLE {PACKAGES_TABLE_V2} ADD COLUMN IF NOT EXISTS special_tenor_type TEXT;
+ALTER TABLE {PACKAGES_TABLE_V2} ADD COLUMN IF NOT EXISTS tape_label_ust_alias TEXT;
+ALTER TABLE {PACKAGES_TABLE_V2} ADD COLUMN IF NOT EXISTS is_matched_maturity_all BOOLEAN;
+
 -- Phase 7: lifecycle partial-unwind + seasoned-trade columns
 ALTER TABLE {LEGS_TABLE_V2} ADD COLUMN IF NOT EXISTS lc_was_partially_terminated BOOLEAN;
 ALTER TABLE {LEGS_TABLE_V2} ADD COLUMN IF NOT EXISTS lc_has_partial_unwind BOOLEAN;
@@ -497,6 +519,9 @@ SELECT
   p.cluster_id,
   p.cluster_size,
   p.tape_label,
+  p.special_tenor_type,
+  p.tape_label_ust_alias,
+  p.is_matched_maturity_all,
   p.is_off_market_any,
   p.confidence_score,
   p.confidence_total,
