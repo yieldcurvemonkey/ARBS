@@ -1,8 +1,10 @@
-// ABOUTME: Source-level pin that UsdSwapsTradeTape applies the shared
-// groupLinkedRows transform to its row pipeline before passing rows to
-// the TradeTapeTable. The actual ordering semantics are unit-tested in
-// lib/manual-links-ui/__tests__/grouping.test.ts; here we just confirm
-// the import and the applied call.
+// ABOUTME: Source-level pin that UsdSwapsTradeTape resolves view-time
+// structural overrides (applyOverrides — which itself clusters via the shared
+// groupLinkedRows transform) before passing rows to the TradeTapeTable. The
+// override + grouping semantics are unit-tested in
+// utils/__tests__/applyOverrides.test.ts and
+// lib/manual-links-ui/__tests__/grouping.test.ts; here we just confirm the
+// import and the applied call.
 import { describe, expect, it } from '@jest/globals';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
@@ -15,21 +17,22 @@ const source = readFileSync(
   'utf8',
 );
 
-describe('UsdSwapsTradeTape — manual-link grouping', () => {
-  it('imports groupLinkedRows from the shared module', () => {
+describe('UsdSwapsTradeTape — override / grouping row pipeline', () => {
+  it('imports applyOverrides from the feature utils module', () => {
     expect(source).toMatch(
-      /import\s+\{[^}]*groupLinkedRows[^}]*\}\s+from\s+['"]@\/lib\/manual-links-ui[^'"]*['"]/,
+      /import\s+\{[^}]*applyOverrides[^}]*\}\s+from\s+['"]\.\.\/utils\/applyOverrides['"]/,
     );
   });
 
-  it('applies groupLinkedRows to the row stream feeding TradeTapeTable', () => {
-    expect(source).toMatch(/groupLinkedRows\([^)]+\)/);
+  it('applies applyOverrides to the row stream feeding TradeTapeTable', () => {
+    expect(source).toMatch(/applyOverrides\(tape\.rows\)/);
   });
 
-  it('passes the grouped rows (not raw tape.rows) into TradeTapeTable', () => {
+  it('passes the resolved display rows (not raw tape.rows) into TradeTapeTable', () => {
     // The component renders `<TradeTapeTable rows={...} ...>`. Match
     // the rows= JSX prop and ensure it isn't bare `tape.rows` (which
-    // would mean grouping wasn't applied to the rendered stream).
+    // would mean the override/grouping transform wasn't applied to the
+    // rendered stream).
     expect(source).toMatch(/<TradeTapeTable\b[\s\S]{0,200}rows=\{(?!tape\.rows\s*\})/);
   });
 });

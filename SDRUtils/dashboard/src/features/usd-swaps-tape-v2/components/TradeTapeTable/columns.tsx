@@ -64,6 +64,13 @@ export type MetricMode = 'dv01' | 'pa_dv01' | 'notional'
 
 type ColumnConfig = {
   selection: boolean
+  /**
+   * Custom body for the leading select column. When supplied, the select
+   * column renders this instead of PrimeReact's built-in
+   * `selectionMode="multiple"` checkbox — used by the tape to render the
+   * tri-state package checkbox that drives leg-level `useTradeSelection`.
+   */
+  selectionBody?: (row: UsdSwapTapeRow) => JSX.Element
   expanderBody?: (row: UsdSwapTapeRow) => JSX.Element
   metricMode?: MetricMode
   onToggleMetric?: () => void
@@ -160,7 +167,16 @@ export function getColumns(
   const cols: JSX.Element[] = []
   if (config.selection) {
     cols.push(
-      <Column key="select" selectionMode="multiple" headerStyle={{ width: 30 }} />,
+      config.selectionBody ? (
+        <Column
+          key="select"
+          body={config.selectionBody as any}
+          headerStyle={{ width: 30 }}
+          style={{ width: 30 }}
+        />
+      ) : (
+        <Column key="select" selectionMode="multiple" headerStyle={{ width: 30 }} />
+      ),
     )
   }
   if (config.expanderBody) {
