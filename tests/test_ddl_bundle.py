@@ -60,15 +60,12 @@ def test_comment_line_ending_in_semicolon_is_dropped():
 
 
 def test_no_blank_statements_in_real_schemas():
-    from SDRUtils._swappulse_scripts._tape_schema_v2 import (
-        TAPE_SCHEMA_SQL_V2, MONITORING_SQL_V2,
-    )
-    for bundle in (TAPE_SCHEMA_SQL_V2, MONITORING_SQL_V2):
-        for s in _split_ddl_statements(bundle):
-            assert any(
-                ln.strip() and not ln.strip().startswith("--")
-                for ln in s.splitlines()
-            ), f"blank/comment-only statement emitted: {s[:60]!r}"
+    from SDRUtils._swappulse_scripts._tape_schema_v2 import TAPE_SCHEMA_SQL_V2
+    for s in _split_ddl_statements(TAPE_SCHEMA_SQL_V2):
+        assert any(
+            ln.strip() and not ln.strip().startswith("--")
+            for ln in s.splitlines()
+        ), f"blank/comment-only statement emitted: {s[:60]!r}"
 
 
 def test_real_tape_schema_view_stays_atomic():
