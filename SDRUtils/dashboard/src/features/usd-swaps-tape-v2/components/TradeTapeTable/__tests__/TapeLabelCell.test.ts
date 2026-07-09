@@ -215,3 +215,40 @@ describe('parseTapeLabelSegments', () => {
     expect(segs.map((s) => s.text).join('')).toBe(label)
   })
 })
+
+describe('pkgLegsLines gate', () => {
+  // pkgLegsLines is not exported — test via the component or export it.
+  // For now, test via displayTapeLabel + collapseAlias which are exported.
+})
+
+describe('collapseAlias', () => {
+  it('leaves short aliases unchanged', () => {
+    const label = displayTapeLabel({
+      tape_label_ust_alias: 'USD-SOFR Spot 0536/0546 CURVE MMS PHYS',
+      tape_label: 'USD-SOFR Spot 10Y/20Y CURVE MMS PHYS',
+      n_package_legs: 2,
+    } as any)
+    expect(label).toContain('0536/0546')
+  })
+
+  it('collapses aliases with >4 segments', () => {
+    const longAlias = '0330/0530/0730/0930/1130/0131/0331'
+    const label = displayTapeLabel({
+      tape_label_ust_alias: `USD-SOFR Spot ${longAlias} PKG-7 MMS PHYS`,
+      tape_label: 'USD-SOFR Spot 3Y/5Y/7Y/9Y/11Y/13Y/15Y PKG-7 MMS PHYS',
+      n_package_legs: 7,
+    } as any)
+    expect(label).toContain('0330/0530/0730')
+    expect(label).toContain('…+4')
+    expect(label).not.toContain('1130')
+  })
+
+  it('does not collapse exactly 4 segments', () => {
+    const label = displayTapeLabel({
+      tape_label_ust_alias: 'USD-SOFR Spot 0236/0536/0746/1046 PKG-4 MMS PHYS',
+      tape_label: 'fallback',
+      n_package_legs: 4,
+    } as any)
+    expect(label).toContain('0236/0536/0746/1046')
+  })
+})

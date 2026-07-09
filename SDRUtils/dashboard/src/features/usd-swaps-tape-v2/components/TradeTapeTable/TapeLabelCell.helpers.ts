@@ -45,6 +45,19 @@ export function collapseTenors(
   return collapsed.replace(/PKG-(\d+)\s+Package\b/g, 'PKG-$1')
 }
 
+/**
+ * Truncate a slash-joined MMYY alias when it has more than `max` segments.
+ * "0330/0530/0730/0930/1130" → "0330/0530/0730/…+2"
+ */
+function collapseAlias(label: string, max = 4): string {
+  // Match a run of slash-separated 4-digit tokens (MMYY aliases).
+  return label.replace(/\b(\d{4}(?:\/\d{4}){4,})\b/g, (match) => {
+    const parts = match.split('/')
+    if (parts.length <= max) return match
+    return parts.slice(0, max - 1).join('/') + `/…+${parts.length - (max - 1)}`
+  })
+}
+
 export function displayTapeLabel(row: UsdSwapTapeRow): string {
   // Prefer the UST-alias label ("…Spot 0536/0546 CURVE MMS PHYS") when present.
   // Non-MMS rows have tape_label_ust_alias == tape_label, so this is a no-op for
@@ -58,7 +71,7 @@ export function displayTapeLabel(row: UsdSwapTapeRow): string {
   for (const label of labels) {
     if (typeof label === 'string' && label.trim().length > 0) {
       const stripped = stripExecutionTags(label.trim())
-      return collapseTenors(stripped, row.n_package_legs)
+      return collapseAlias(collapseTenors(stripped, row.n_package_legs))
     }
   }
   return EMPTY_VALUE
