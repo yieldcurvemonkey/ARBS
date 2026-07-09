@@ -392,26 +392,22 @@ def classify_ptp_groups(
             trade_id_col=trade_id_col, belly_tol=belly_ratio_tolerance,
         )
 
-        # For large groups that aren't already FLY/CURVE, try to
-        # decompose into balanced fly/curve sub-packages.  This
-        # prevents over-grouping when multiple distinct packages
-        # share the same PTP + timestamp (e.g. two separate flies).
+        # For large groups that aren't already FLY/CURVE, detect
+        # balanced sub-structures (flies/curves) and record them in
+        # ptp_sub_structures for display, but keep the group unified
+        # as a single PKG-N. Previous behaviour decomposed them into
+        # separate package_ids — that split the SDR-reported package
+        # into fragments and lost the single-execution context.
         if len(grp) > 3 and pkg_type.startswith("PKG-"):
             decomposed = _try_decompose(
                 grp, pv01_col=pv01_col, tenor_years_col=tenor_years_col,
                 trade_id_col=trade_id_col, belly_tol=belly_ratio_tolerance,
             )
             if decomposed is not None:
-                for i, sub in enumerate(decomposed):
-                    sub_mask = out.index.isin(sub["indices"])
-                    sub_id = f"{gid}_sub{i}"
-                    sub_tids = sorted(sub["trade_ids"])
-                    out.loc[sub_mask, "package_type"] = sub["type"]
-                    out.loc[sub_mask, "package_id"] = sub_id
-                    for idx in out.index[sub_mask]:
-                        out.at[idx, "package_legs"] = sub_tids
-                        out.at[idx, "ptp_sub_structures"] = []
-                continue
+                sub_structs = [
+                    {"type": sub["type"], "legs": sub["trade_ids"]}
+                    for sub in decomposed
+                ]
 
         mask = out["ptp_group_id"] == gid
         out.loc[mask, "package_type"] = pkg_type

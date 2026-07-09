@@ -21,7 +21,11 @@ function pkgLegsLines(row: UsdSwapTapeRow): string[] | null {
     return at - bt
   })
   const lines = sorted
-    .map((l) => stripExecutionTags(l.leg_tape_label ?? l.tape_label ?? '').trim())
+    .map((l) =>
+      stripExecutionTags(
+        l.leg_tape_label_ust_alias ?? l.leg_tape_label ?? l.tape_label ?? '',
+      ).trim(),
+    )
     .filter(Boolean)
   return lines.length >= 2 ? lines : null
 }

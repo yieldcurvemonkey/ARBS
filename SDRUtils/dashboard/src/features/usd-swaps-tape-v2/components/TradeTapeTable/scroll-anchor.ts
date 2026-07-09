@@ -20,7 +20,7 @@ export interface ComputeAnchorParams<R extends RowLike> {
  * @returns the new scrollTop to use after the rows array changed, or
  *   null if no adjustment is needed (user at top, no anchor available,
  *   anchor row no longer present in newRows, anchor index out of range,
- *   or position unchanged).
+ *   position unchanged, or pagination-only append).
  */
 export function computeAnchorAdjustedScrollTop<R extends RowLike>(
   p: ComputeAnchorParams<R>,
@@ -35,6 +35,22 @@ export function computeAnchorAdjustedScrollTop<R extends RowLike>(
   const anchor = oldRows[oldAnchorIdx]
   const anchorId = anchor?.package_id
   if (!anchorId) return null
+
+  // Fast path: if the rows around the anchor haven't changed identity,
+  // this was a pagination append (rows added at the end) or a no-op
+  // merge. Skip adjustment to avoid jitter.
+  const checkStart = Math.max(0, oldAnchorIdx - 2)
+  const checkEnd = Math.min(oldRows.length, oldAnchorIdx + 3)
+  if (newRows.length >= oldRows.length) {
+    let stable = true
+    for (let i = checkStart; i < checkEnd; i++) {
+      if (oldRows[i]?.package_id !== newRows[i]?.package_id) {
+        stable = false
+        break
+      }
+    }
+    if (stable) return null
+  }
 
   const newAnchorIdx = newRows.findIndex((r) => r.package_id === anchorId)
   if (newAnchorIdx < 0) return null

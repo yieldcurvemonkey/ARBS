@@ -60,6 +60,25 @@ describe('collapseTenors', () => {
     expect(collapseTenors(label, 3)).toBe(label)
   })
 
+  it('collapses 3-tenor PKG followed by Package', () => {
+    const label = 'USD-SOFR-COMPOUND 1D Constant Spot 21M/2Y/2Y Package PHYS'
+    expect(collapseTenors(label, 3)).toBe(
+      'USD-SOFR-COMPOUND 1D Constant Spot PKG-3 PHYS',
+    )
+  })
+
+  it('collapses 2-tenor PKG followed by Package', () => {
+    const label = 'USD-SOFR-OIS Compound 1D Constant Spot 3Y/3Y Package PHYS'
+    expect(collapseTenors(label, 2)).toBe(
+      'USD-SOFR-OIS Compound 1D Constant Spot PKG-2 PHYS',
+    )
+  })
+
+  it('does not collapse 2-tenor CURVE (no Package suffix)', () => {
+    const label = 'USD-SOFR-OIS Compound 1D Constant Spot 3Y/5Y CURVE PHYS'
+    expect(collapseTenors(label, 2)).toBe(label)
+  })
+
   it('falls back to counting slashes when nLegs is null', () => {
     const tenors = Array(10).fill('5Y').join('/')
     const label = `USD-SOFR 1D Constant Spot ${tenors} Package PHYS`
