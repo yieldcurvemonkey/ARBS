@@ -446,11 +446,26 @@ def _is_view_statement(sql: str) -> bool:
     )
 
 
+_ALTER_TABLE_RE = re.compile(r"^\s*ALTER\s+TABLE\s+(?:IF\s+EXISTS\s+)?(\S+)", re.IGNORECASE)
+
+
+def _alter_target(sql: str) -> str | None:
+    """Table name for an ``ALTER TABLE <t> ...`` statement, else None."""
+    m = _ALTER_TABLE_RE.match(sql)
+    return m.group(1) if m else None
+
+
 def _group_ddl_statements(stmts: list[str]) -> list[list[str]]:
-    """Group consecutive view DROP/CREATE statements so a view rebuild runs in a
-    single transaction — there must be no window where the view is dropped but
-    not yet recreated (the frontend reads it). Every other statement runs on its
-    own so each holds ACCESS EXCLUSIVE for the shortest possible time."""
+    """Group statements into transaction units that minimise ACCESS EXCLUSIVE
+    lock churn on live tables:
+
+    * consecutive view DROP/CREATE statements → one group (the view must never be
+      observably missing while the frontend reads it);
+    * a run of consecutive ``ALTER TABLE <same table>`` statements → one group, so
+      a block of ``ADD COLUMN``s acquires the table's ACCESS EXCLUSIVE lock once
+      (one reader-drain) instead of once per column;
+    * everything else → its own group (shortest possible lock hold).
+    """
     groups: list[list[str]] = []
     i, n = 0, len(stmts)
     while i < n:
@@ -460,9 +475,17 @@ def _group_ddl_statements(stmts: list[str]) -> list[list[str]]:
                 grp.append(stmts[i])
                 i += 1
             groups.append(grp)
-        else:
-            groups.append([stmts[i]])
-            i += 1
+            continue
+        tgt = _alter_target(stmts[i])
+        if tgt is not None:
+            grp = []
+            while i < n and _alter_target(stmts[i]) == tgt:
+                grp.append(stmts[i])
+                i += 1
+            groups.append(grp)
+            continue
+        groups.append([stmts[i]])
+        i += 1
     return groups
 
 

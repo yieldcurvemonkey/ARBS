@@ -37,11 +37,28 @@ def test_view_drop_create_grouped_atomically():
     assert "CREATE OR REPLACE VIEW" in groups[1][1]
 
 
-def test_non_view_statements_run_individually():
+def test_consecutive_same_table_alters_are_batched():
+    # One ACCESS EXCLUSIVE acquisition for a block of ADD COLUMNs on one table.
     ddl = "ALTER TABLE t ADD COLUMN a INT;\nALTER TABLE t ADD COLUMN b INT;\n"
     groups = _group_ddl_statements(_split_ddl_statements(ddl))
-    assert len(groups) == 2
-    assert all(len(g) == 1 for g in groups)
+    assert len(groups) == 1
+    assert len(groups[0]) == 2
+
+
+def test_alters_on_different_tables_stay_separate():
+    ddl = "ALTER TABLE t ADD COLUMN a INT;\nALTER TABLE u ADD COLUMN b INT;\n"
+    groups = _group_ddl_statements(_split_ddl_statements(ddl))
+    assert [len(g) for g in groups] == [1, 1]
+
+
+def test_index_between_alters_breaks_the_batch():
+    ddl = (
+        "ALTER TABLE t ADD COLUMN a INT;\n"
+        "CREATE INDEX i ON t(a);\n"
+        "ALTER TABLE t ADD COLUMN b INT;\n"
+    )
+    groups = _group_ddl_statements(_split_ddl_statements(ddl))
+    assert [len(g) for g in groups] == [1, 1, 1]
 
 
 def test_multiline_create_view_grouped():
