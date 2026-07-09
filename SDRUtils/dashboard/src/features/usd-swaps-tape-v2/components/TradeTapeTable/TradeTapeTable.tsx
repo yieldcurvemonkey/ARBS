@@ -174,6 +174,24 @@ export function TradeTapeTable(props: TradeTapeTableProps): JSX.Element {
   // Cycles dv01 → pa_dv01 → notional → dv01. Phase 4 introduces the
   // package-adjusted DV01 (Clarus design-doc §3.1) so traders can swap
   // to the broker-fee-equivalent metric without a separate column.
+  const toggleMmsFilter = useCallback(() => {
+    const current = columnFilters.filters as DataTableFilterMeta
+    const f = current?.package_type
+    const isActive = f && 'value' in f && typeof f.value === 'string' && f.value.includes('MATCHED_MATURITY')
+    if (isActive) {
+      const { package_type: _, ...rest } = current
+      columnFilters.setFilters(rest as DataTableFilterMeta)
+    } else {
+      columnFilters.setFilters({
+        ...current,
+        package_type: {
+          operator: FilterOperator.AND,
+          constraints: [{ value: 'MATCHED_MATURITY', matchMode: FilterMatchMode.CONTAINS }],
+        },
+      } as DataTableFilterMeta)
+    }
+  }, [columnFilters])
+
   const toggleMetric = useCallback(
     () =>
       setMetricMode((m) =>
@@ -904,6 +922,7 @@ export function TradeTapeTable(props: TradeTapeTableProps): JSX.Element {
           onOpenManualLink,
           onOpenNote,
           onOpenOverride,
+          onToggleMmsFilter: toggleMmsFilter,
         })}
       </DataTable>
       {loadingMore ? (
