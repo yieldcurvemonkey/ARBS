@@ -193,12 +193,13 @@ function legBadges(leg: UsdSwapTapeLeg) {
     )
   }
   if (leg.lc_has_past_effective) {
+    const days = leg.lc_days_seasoned ?? 0
     badges.push(
       flagBadge(
         'past-eff',
-        'PAST-EFF',
-        'bg-amber-900/40 text-amber-200',
-        `effective date before execution date (seasoned ${leg.lc_days_seasoned ?? '?'}d)`,
+        `${days}d SEASONED`,
+        'bg-amber-800/60 text-amber-100',
+        `effective date is ${days} days before execution — swap was already live when reported`,
       ),
     )
   }
