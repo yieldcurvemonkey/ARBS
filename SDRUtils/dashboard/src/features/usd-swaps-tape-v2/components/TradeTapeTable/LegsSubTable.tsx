@@ -186,8 +186,8 @@ function legBadges(leg: UsdSwapTapeLeg) {
     badges.push(
       flagBadge(
         'off-market',
-        'OFF-MKT',
-        'bg-yellow-900/40 text-yellow-200',
+        'OFFM',
+        'bg-red-900/50 text-red-200',
         'off-market trade',
       ),
     )
@@ -339,7 +339,7 @@ function legBadges(leg: UsdSwapTapeLeg) {
   }
   const covered = new Set(badges.map((b) => b.label.toUpperCase()))
   const SYNONYMS: Record<string, string> = {
-    OFF_MARKET: 'OFF-MKT',
+    OFF_MARKET: 'OFFM',
     BLOCK: 'BLK',
     CAPPED: 'CAP',
     OFF_DATE: '~',

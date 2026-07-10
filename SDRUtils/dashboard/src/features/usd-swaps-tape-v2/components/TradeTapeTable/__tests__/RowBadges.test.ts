@@ -300,4 +300,19 @@ describe('tapeTagBadgesFor', () => {
     )
     expect(badges.map((b) => b.key)).toEqual(expect.arrayContaining(['UFRO', 'BLOCK']))
   })
+
+  it('normalizes PAST-EFF to OLD', () => {
+    const badges = tapeTagBadgesFor(
+      row({ tape_tags: 'PAST-EFF' }),
+    )
+    expect(badges.map((b) => b.key)).toContain('OLD')
+    expect(badges.map((b) => b.key)).not.toContain('PAST-EFF')
+  })
+
+  it('derives OLD from leg past-effective flags', () => {
+    const badges = tapeTagBadgesFor(
+      row({ legs_json: [{ lc_has_past_effective: true }] }),
+    )
+    expect(badges.map((b) => b.key)).toContain('OLD')
+  })
 })
