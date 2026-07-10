@@ -63,7 +63,7 @@ def _hour_to_session(hour: int) -> str:
 # Result cache versioning
 # ---------------------------------------------------------------------------
 
-TRADE_TAPE_CACHE_VERSION = "v12-leg-label-all-pkg"
+TRADE_TAPE_CACHE_VERSION = "v13-offm-old-tag-normalize"
 DEFAULT_CACHE_DIR = os.path.join(
     os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
     "notebooks", "sdr", "_cache", "trade_tape",
@@ -1526,9 +1526,9 @@ class TradeTape(SDRAnalyzer):
             if row.get("xd_has_partial_unwind", False) or row.get("lc_has_partial_unwind", False):
                 tags.append("PARTIAL-UNWIND")
             if row.get("lc_has_past_effective", False):
-                tags.append("PAST-EFF")
+                tags.append("OLD")
             if row.get("lc_is_off_market_seasoned", False):
-                tags.append("OFF-MKT")
+                tags.append("OFFM")
             if row.get("is_novation_born", False):
                 tags.append("NOVA-IN")
             if row.get("is_novation_terminated", False):

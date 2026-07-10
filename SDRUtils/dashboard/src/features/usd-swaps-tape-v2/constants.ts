@@ -205,6 +205,7 @@ export const TAPE_TAG_TONES: Record<string, string> = {
   'NOVA-OUT': 'bg-cyan-900/40 text-cyan-200',
   EXER: 'bg-cyan-900/40 text-cyan-200',
   CLRG: 'bg-zinc-700/50 text-zinc-300',
+  OLD: 'bg-amber-500/25 text-amber-200 ring-1 ring-amber-500/40',
   'PAST-EFF': 'bg-amber-500/25 text-amber-200 ring-1 ring-amber-500/40',
 }
 

@@ -297,6 +297,7 @@ const DEFAULT_TAG_TONE = 'bg-zinc-700/50 text-zinc-300'
 
 const TAG_ALIASES: Record<string, string> = {
   'OFF-MKT': 'OFFM',
+  'PAST-EFF': 'OLD',
 }
 
 export function actionClassBadgeFor(row: UsdSwapTapeRow): {
@@ -334,7 +335,7 @@ export function tapeTagBadgesFor(row: UsdSwapTapeRow): Array<{
     ''
   const fromLabel: string[] = []
   if (typeof label === 'string') {
-    const re = /\b(PARTIAL-UNWIND|XD-TERM|NOVA-IN|NOVA-OUT|OFFM|OFF-MKT|PAST-EFF|UNWIND|UFRO|BLOCK|TERM|CORR|MODI|EXER|CLRG)\b/g
+    const re = /\b(PARTIAL-UNWIND|XD-TERM|NOVA-IN|NOVA-OUT|OFFM|OFF-MKT|OLD|PAST-EFF|UNWIND|UFRO|BLOCK|TERM|CORR|MODI|EXER|CLRG)\b/g
     let m: RegExpExecArray | null
     while ((m = re.exec(label)) !== null) {
       if (!fromLabel.includes(m[1])) fromLabel.push(m[1])
@@ -349,10 +350,10 @@ export function tapeTagBadgesFor(row: UsdSwapTapeRow): Array<{
   if (row.is_block_any) fromFlags.push('BLOCK')
   const legs = (row.legs_json ?? []) as Array<Record<string, unknown>>
   if (legs.some((l) => l.is_off_market || l.lc_is_off_market_seasoned || l.xd_is_off_market_seasoned)) {
-    fromFlags.push('OFF-MKT')
+    fromFlags.push('OFFM')
   }
   if (legs.some((l) => l.lc_has_past_effective || l.xd_has_past_effective)) {
-    fromFlags.push('PAST-EFF')
+    fromFlags.push('OLD')
   }
 
   const seen = new Set<string>()
