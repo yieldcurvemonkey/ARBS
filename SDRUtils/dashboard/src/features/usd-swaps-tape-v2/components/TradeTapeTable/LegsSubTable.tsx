@@ -192,6 +192,16 @@ function legBadges(leg: UsdSwapTapeLeg) {
       ),
     )
   }
+  if (leg.lc_has_past_effective) {
+    badges.push(
+      flagBadge(
+        'past-eff',
+        'PAST-EFF',
+        'bg-amber-900/40 text-amber-200',
+        `effective date before execution date (seasoned ${leg.lc_days_seasoned ?? '?'}d)`,
+      ),
+    )
+  }
   if (leg.is_block) {
     badges.push(
       flagBadge('block', 'BLK', 'bg-orange-900/40 text-orange-200', 'block trade'),
