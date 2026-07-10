@@ -352,7 +352,12 @@ export function tapeTagBadgesFor(row: UsdSwapTapeRow): Array<{
   if (legs.some((l) => l.is_off_market || l.lc_is_off_market_seasoned || l.xd_is_off_market_seasoned)) {
     fromFlags.push('OFFM')
   }
-  if (legs.some((l) => l.lc_has_past_effective || l.xd_has_past_effective)) {
+  if (legs.some((l) => {
+    if (l.lc_has_past_effective || l.xd_has_past_effective) return true
+    const eff = l.effective_date as string | undefined
+    const exec = (l.execution_timestamp ?? l.original_execution_timestamp) as string | undefined
+    return eff && exec && new Date(eff).getTime() < new Date(exec).getTime()
+  })) {
     fromFlags.push('OLD')
   }
 

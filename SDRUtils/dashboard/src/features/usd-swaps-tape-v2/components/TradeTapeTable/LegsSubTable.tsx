@@ -192,16 +192,23 @@ function legBadges(leg: UsdSwapTapeLeg) {
       ),
     )
   }
-  if (leg.lc_has_past_effective) {
-    const days = leg.lc_days_seasoned ?? 0
-    badges.push(
-      flagBadge(
-        'past-eff',
-        `${days}d OLD`,
-        'bg-amber-800/60 text-amber-100',
-        `effective date is ${days} days before execution — swap was already live when reported`,
-      ),
-    )
+  {
+    let days = leg.lc_has_past_effective ? (leg.lc_days_seasoned ?? 0) : 0
+    if (!leg.lc_has_past_effective && leg.effective_date && leg.execution_timestamp) {
+      const effMs = new Date(leg.effective_date).getTime()
+      const execMs = new Date(leg.execution_timestamp).getTime()
+      if (effMs < execMs) days = Math.round((execMs - effMs) / 86_400_000)
+    }
+    if (days > 0) {
+      badges.push(
+        flagBadge(
+          'past-eff',
+          `${days}d OLD`,
+          'bg-amber-800/60 text-amber-100',
+          `effective date is ${days} days before execution — swap was already live when reported`,
+        ),
+      )
+    }
   }
   if (leg.is_block) {
     badges.push(
