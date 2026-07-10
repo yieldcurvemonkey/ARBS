@@ -128,6 +128,49 @@ def test_curve_legs_still_get_outright_labels():
     assert "Outright" in out.loc[1, "leg_tape_label"]
 
 
+def test_fomc_curve_leg_labels_omit_redundant_tenor():
+    """FOMC CURVE legs: meeting label is the tenor — don't append '1M'/'2M'."""
+    tids = ["L1", "L2"]
+    rows = []
+    for tid, ten, td, fomc in [
+        ("L1", 0.33, "1M", "OCT26"),
+        ("L2", 0.17, "2M", "JUL26"),
+    ]:
+        rows.append({
+            "trade_id": tid,
+            "tenor_years": ten,
+            "tenor_display": td,
+            "tenor_label": td,
+            "forward_label": "spot",
+            "forward_start_years": 0.0,
+            "package_type": "CURVE",
+            "package_id": "FC1",
+            "package_legs": tids,
+            "package_indicator": True,
+            "is_package": True,
+            "product_type": "OIS_SWAP",
+            "trade_type": "CURVE",
+            "upi_underlier_name": "USD-Federal Funds-OIS Compound",
+            "upi_reset_freq": "1D",
+            "upi_notional_schedule": "Constant",
+            "upi_delivery_type": "PHYS",
+            "cleared": "Y",
+            "fomc_meeting_label": fomc,
+            "special_tenor_type": "FOMC",
+        })
+    out = _enrich_and_label(rows)
+
+    leg0 = out.loc[0, "leg_tape_label"]
+    assert "FOMC OCT26" in leg0
+    assert "Outright" in leg0
+    assert "1M" not in leg0
+
+    leg1 = out.loc[1, "leg_tape_label"]
+    assert "FOMC JUL26" in leg1
+    assert "Outright" in leg1
+    assert "2M" not in leg1
+
+
 def test_outright_non_package_label_unchanged():
     """Outright (non-package) trades: leg_tape_label == tape_label."""
     rows = [{

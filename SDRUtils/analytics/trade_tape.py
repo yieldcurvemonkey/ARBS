@@ -1322,7 +1322,9 @@ class TradeTape(SDRAnalyzer):
                             parts.append(f"FOMC {fomc_label.upper()}")
                 elif _has_fomc_label:
                     parts.append(f"FOMC {fomc_label.upper()}")
-                    if leg_as_outright:
+                    if leg_as_outright and not (
+                        _is_curvey(trade_type) or _is_flyey(trade_type)
+                    ):
                         leg_tenor = str(
                             row.get("tenor_display", row.get("tenor_label", ""))
                         ).strip()
