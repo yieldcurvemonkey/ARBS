@@ -63,7 +63,7 @@ def _hour_to_session(hour: int) -> str:
 # Result cache versioning
 # ---------------------------------------------------------------------------
 
-TRADE_TAPE_CACHE_VERSION = "v11-ust-alias-pkg"
+TRADE_TAPE_CACHE_VERSION = "v12-leg-label-all-pkg"
 DEFAULT_CACHE_DIR = os.path.join(
     os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
     "notebooks", "sdr", "_cache", "trade_tape",
@@ -1178,10 +1178,20 @@ class TradeTape(SDRAnalyzer):
             def _is_pkg_n(tt: str) -> bool:
                 return tt.startswith("PKG-") and tt[4:].isdigit()
 
-            # Render a CURVE/FLY/PKG-N leg as a single-leg outright when
-            # leg_scope=True so the expanded sub-table shows "5Y Outright".
+            # Render a package leg as a single-leg outright when leg_scope=True
+            # so the expanded sub-table shows "5Y Outright" / "10Y Outright".
+            _is_pkg_indicator = (row.get("package_indicator") is True) or (
+                str(row.get("package_indicator", "")).strip().lower()
+                in ("true", "1")
+            )
             leg_as_outright = leg_scope and (
-                _is_curvey(trade_type) or _is_flyey(trade_type) or _is_pkg_n(trade_type)
+                _is_curvey(trade_type)
+                or _is_flyey(trade_type)
+                or (
+                    _is_pkg_indicator
+                    and trade_type
+                    not in ("INVOICE", "INVOICE_CALENDAR", "INVOICE_SWITCH")
+                )
             )
 
             # 3+4. Forward + Tenor (FOMC-dated + invoice-swap get special handling)
