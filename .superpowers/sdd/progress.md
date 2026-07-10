@@ -100,3 +100,19 @@ Env notes: db-marked tests SKIP here (no PG_TEST_URL/DATABASE_URL set) — real 
 - [ ] Task 20e: apply A (PATCH is_active guard) + B (history override_id) → re-review → push → PR.
 - [x] Task 20e fix A+B (commit 7871247d, controller-verified): Fix A = PATCH parent UPDATE `WHERE ... AND is_active = TRUE` + rowCount0→OverrideNotActiveError→409+ROLLBACK (thrown in try; no resurrect). Fix B = override_id added to GET history SELECT (type now honest). Only route.ts + its test touched; no WIP/columns/manual-links-ui. override tests 63/1, full 1434/8/0, tsc 0. FEATURE COMPLETE. Pushing + PR next.
 - [x] Task 20e DONE: pushed feat/usd-swaps-tape-manual-regrouping; **PR #333 created** (https://github.com/yieldcurvemonkey/ARBS/pull/333). Restored user WIP: 4-file stash popped clean; columns.tsx stash popped CLEAN (0 conflict markers, 3-way merged w/ committed Task17/19). My 2 stashes dropped; user's pre-existing stashes untouched. **PLAN EXECUTION COMPLETE: 20/20 tasks + final whole-branch review (READY-WITH-FOLLOWUPS) + A/B fix. HEAD 7871247d.**
+
+## MMS Extension — Ops, UX, Analytics, Research (2026-07-09)
+Plan: docs/superpowers/plans/2026-07-09-mms-extension.md
+Branch: main (or feature branch TBD)
+Base: f571ef9f
+
+- [x] Task 1: --lock-timeout CLI (commit fd5dc0f3, controller-verified: test green, changes match plan exactly)
+- [x] Task 2: migrate subcommand (commit 2eb9bcc6, controller-implemented, --help verified)
+- [x] Task 3: tooltip gate + alias collapse (commit 28027dab, review clean; 31/31 TapeLabelCell tests, 1446/0 full suite, tsc 0. Minor: pkgLegsLines no RTL test — pre-existing gap)
+- [x] Task 5: MMS analytics utility (commit 63ee2d37, 8/8 new tests, 1454/0 full suite, tsc 0. Brief bug fixed: leg.total_risk→leg.risk, leg.notional_amount→leg.notional)
+- [x] Task 6: MMS tab registration (commit e927e4a8, tsc 0, 1454/0, chrome-MCP live verified. Tabs guard removed so MMS renders without focused trade; MmsTab body outside baseTrade guard)
+- [x] Task 7: MMS tab component (commit 66a05e7e, 6/6 new tests, 1460/0 full suite, tsc 0. MmsWindow ytd→YTD mapping added. Recharts visual = browser-only)
+- [x] Task 4: MMS filter chip (commit aafa2f2f, controller-implemented, tsc 0, 1460/0 jest)
+- [x] Task 8: detection research (commit 7a44cddd, script + doc. IMM both_imm over-excludes ~292 genuine; near-clean 391 promotions; T-bill 71.5%/note 28.5% no blanket gate)
+- [x] Task 9: verification (fast gate 2427/3 pre-existing fail, npm build green, tsc 0, jest 1460/0)
+PLAN EXECUTION COMPLETE: 9/9 tasks. Commits fd5dc0f3..7a44cddd.
