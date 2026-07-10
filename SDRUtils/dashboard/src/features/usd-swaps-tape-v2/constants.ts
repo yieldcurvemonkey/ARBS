@@ -10,7 +10,15 @@ import type {
 export const POLL_INTERVAL_MS = 10_000
 export const SIGNAL_POLL_MS = 3_000
 export const FALLBACK_POLL_MS = 60_000
-export const ROW_ESTIMATE_PX = 40
+// Fixed row height (CSS px) fed to the VirtualScroller's `itemSize`, the
+// poll-merge scroll-anchor, and the near-bottom load-more thresholds. MUST
+// match the real rendered tr height or virtual scrolling drifts and jumps:
+// PrimeReact positions the recycled window at `index * itemSize`, so an
+// under-estimate makes rows creep out from under the cursor as you scroll.
+// Measured at 55px for the standard 3-line row (the multi-line Other-Lvl
+// OPA/PTP/PTS cell sets the floor); ~6% of rows with wrapped labels run to
+// ~77px and are absorbed by the overscan buffer.
+export const ROW_ESTIMATE_PX = 55
 export const EMPTY_VALUE = '—'
 
 export const TAPE_V2_API_BASE = '/api/usd-swaps-tape-v2'
@@ -198,7 +206,6 @@ export const TAPE_TAG_TONES: Record<string, string> = {
   EXER: 'bg-cyan-900/40 text-cyan-200',
   CLRG: 'bg-zinc-700/50 text-zinc-300',
   'PAST-EFF': 'bg-amber-500/25 text-amber-200 ring-1 ring-amber-500/40',
-  'OFF-MKT': 'bg-rose-600/30 text-rose-100 ring-1 ring-rose-500/50',
 }
 
 export const TIMESERIES_METRICS: Array<{ key: TimeseriesMetricKey; label: string }> = [
