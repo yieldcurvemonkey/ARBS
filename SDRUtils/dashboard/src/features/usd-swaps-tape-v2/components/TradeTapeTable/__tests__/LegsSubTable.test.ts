@@ -50,12 +50,9 @@ describe('LegsSubTable', () => {
     expect(legsSubTableSource).toContain('leg.cleared')
   })
 
-  it('prefers the MMS UST-alias, then leg_tape_label, then tape_label for the per-leg description', () => {
-    // MMS per-leg alias (leg_tape_label_ust_alias) takes precedence so matched-
-    // maturity legs show their MMYY; falls back to the outright leg label chain.
-    expect(legsSubTableSource).toContain('leg.leg_tape_label_ust_alias')
-    expect(legsSubTableSource).toContain('leg.leg_tape_label')
-    expect(legsSubTableSource).toContain('leg.tape_label')
+  it('uses perLegLabel helper for per-leg tape label (handles fallback + derivation)', () => {
+    expect(legsSubTableSource).toContain('perLegLabel(leg)')
+    expect(legsSubTableSource).toContain("import { perLegLabel")
   })
 
   it('renders a Package Transaction Price header strip guarded on PTP not-null', () => {

@@ -17,7 +17,7 @@ import {
 import type { EconomicClass, UsdSwapTapeLeg, UsdSwapTapeRow } from '../../types'
 import type { NoteTarget } from '../../types/note.types'
 import { computeLegSummary } from './LegsSubTable.helpers'
-import { stripExecutionTags } from './TapeLabelCell.helpers'
+import { perLegLabel, stripExecutionTags } from './TapeLabelCell.helpers'
 import {
   formatDate,
   formatDv01,
@@ -602,12 +602,7 @@ export function LegsSubTable({
                   {execTimestampPair(leg)}
                 </td>
                 <td className="max-w-[360px] px-2 py-1 font-mono text-[11px] text-slate-100">
-                  {stripExecutionTags(
-                    leg.leg_tape_label_ust_alias ??
-                      leg.leg_tape_label ??
-                      leg.tape_label ??
-                      EMPTY_VALUE,
-                  )}
+                  {perLegLabel(leg)}
                 </td>
                 <td className="whitespace-nowrap px-2 py-1">
                   {formatDate(leg.effective_date)}
