@@ -7,6 +7,7 @@ import {
   flagBadgesFor,
   lifecyclePillsFor,
   qualityBadgesFor,
+  tapeTagBadgesFor,
 } from '../RowBadges.helpers'
 
 const rowBadgesSource = readFileSync(
@@ -271,5 +272,32 @@ describe('extendedLifecyclePillsFor (Phase 2 MODI sub-states)', () => {
     expect(types).toContain('AMENDMENT')
     // No duplicates
     expect(new Set(types).size).toBe(types.length)
+  })
+})
+
+
+describe('tapeTagBadgesFor', () => {
+  it('deduplicates OFF-MKT to OFFM', () => {
+    const badges = tapeTagBadgesFor(
+      row({ tape_tags: 'OFFM', tape_label: 'USD-SOFR OFF-MKT Spot 3Y' }),
+    )
+    const keys = badges.map((b) => b.key)
+    expect(keys.filter((k) => k === 'OFFM')).toHaveLength(1)
+    expect(keys).not.toContain('OFF-MKT')
+  })
+
+  it('normalizes standalone OFF-MKT to OFFM', () => {
+    const badges = tapeTagBadgesFor(
+      row({ tape_label: 'USD-SOFR OFF-MKT Spot 3Y' }),
+    )
+    expect(badges.map((b) => b.key)).toContain('OFFM')
+    expect(badges.map((b) => b.key)).not.toContain('OFF-MKT')
+  })
+
+  it('derives UFRO and BLOCK from boolean flags', () => {
+    const badges = tapeTagBadgesFor(
+      row({ is_ufro_any: true, is_block_any: true }),
+    )
+    expect(badges.map((b) => b.key)).toEqual(expect.arrayContaining(['UFRO', 'BLOCK']))
   })
 })

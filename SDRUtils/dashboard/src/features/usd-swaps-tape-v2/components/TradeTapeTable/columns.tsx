@@ -498,7 +498,7 @@ export function getColumns(
           </span>
         )
       }}
-      style={{ width: 96 }}
+      style={{ width: 76 }}
     />,
     <Column
       key="rate"
@@ -516,7 +516,7 @@ export function getColumns(
           {formatReportedLvl(row)}
         </span>
       )}
-      style={{ width: 72 }}
+      style={{ width: 64 }}
     />,
     <Column
       key="other_lvl"
@@ -614,7 +614,7 @@ export function getColumns(
           </div>
         )
       }}
-      style={{ width: 160 }}
+      style={{ width: 220 }}
     />,
     /* Bug 8: 'Spread (bp)' and 'OPA Conf' columns removed */
   )

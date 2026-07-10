@@ -295,6 +295,10 @@ export function extendedLifecyclePillsFor(row: UsdSwapTapeRow): Array<{
 
 const DEFAULT_TAG_TONE = 'bg-zinc-700/50 text-zinc-300'
 
+const TAG_ALIASES: Record<string, string> = {
+  'OFF-MKT': 'OFFM',
+}
+
 export function actionClassBadgeFor(row: UsdSwapTapeRow): {
   className: string
   label: string
@@ -353,7 +357,8 @@ export function tapeTagBadgesFor(row: UsdSwapTapeRow): Array<{
 
   const seen = new Set<string>()
   const merged: string[] = []
-  for (const tag of [...fromTags, ...fromLabel, ...fromFlags]) {
+  for (const raw of [...fromTags, ...fromLabel, ...fromFlags]) {
+    const tag = TAG_ALIASES[raw] ?? raw
     if (!seen.has(tag)) {
       seen.add(tag)
       merged.push(tag)
