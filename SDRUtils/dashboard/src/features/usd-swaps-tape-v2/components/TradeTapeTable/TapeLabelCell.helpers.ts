@@ -1,5 +1,5 @@
 import { EMPTY_VALUE, TAPE_TAG_TONES } from '../../constants'
-import type { UsdSwapTapeRow } from '../../types'
+import type { UsdSwapTapeLeg, UsdSwapTapeRow } from '../../types'
 
 const EXECUTION_TAGS = new Set(Object.keys(TAPE_TAG_TONES))
 const EXECUTION_TAG_RE = new RegExp(
@@ -84,6 +84,21 @@ export function displayTapeLabel(row: UsdSwapTapeRow): string {
     }
   }
   return EMPTY_VALUE
+}
+
+const MULTI_TENOR_RE =
+  /\b[~-]?\d+(?:\.\d+)?[YMW](?:\d+[YMW])?(?:\/[~-]?\d+(?:\.\d+)?[YMW](?:\d+[YMW])?)+/g
+
+export function perLegLabel(leg: UsdSwapTapeLeg): string {
+  const stored = leg.leg_tape_label_ust_alias ?? leg.leg_tape_label
+  if (stored && stored !== leg.tape_label) return stripExecutionTags(stored)
+
+  const base = leg.tape_label
+  if (!base || !leg.tenor_display) return stripExecutionTags(base ?? EMPTY_VALUE)
+
+  let derived = base.replace(MULTI_TENOR_RE, leg.tenor_display)
+  derived = derived.replace(/\bPackage\b/g, 'Outright')
+  return stripExecutionTags(derived)
 }
 
 // Match the forward / tenor / anchor segments so TapeLabelCell can bold them:

@@ -5,8 +5,11 @@ import type { JSX } from 'react'
 import { useCallback, useState } from 'react'
 import { createPortal } from 'react-dom'
 import type { UsdSwapTapeLeg, UsdSwapTapeRow } from '../../types'
-import { displayTapeLabel, parseTapeLabelSegments } from './TapeLabelCell.helpers'
-import { stripExecutionTags } from './TapeLabelCell.helpers'
+import {
+  displayTapeLabel,
+  parseTapeLabelSegments,
+  perLegLabel,
+} from './TapeLabelCell.helpers'
 
 export { displayTapeLabel } from './TapeLabelCell.helpers'
 
@@ -26,11 +29,7 @@ function pkgLegsLines(row: UsdSwapTapeRow): string[] | null {
     return at - bt
   })
   const lines = sorted
-    .map((l) =>
-      stripExecutionTags(
-        l.leg_tape_label_ust_alias ?? l.leg_tape_label ?? l.tape_label ?? '',
-      ).trim(),
-    )
+    .map((l) => perLegLabel(l).trim())
     .filter(Boolean)
   return lines.length >= 2 ? lines : null
 }
