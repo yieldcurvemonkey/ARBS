@@ -18,8 +18,8 @@ export default function RootLayout({
     <html lang="en">
       <body className="antialiased">
         <SwrProvider>
-        <div className="min-h-screen bg-slate-950 text-slate-100">
-          <header className="border-b border-slate-800 bg-slate-900/70 backdrop-blur">
+        <div className="h-screen flex flex-col bg-slate-950 text-slate-100 overflow-hidden">
+          <header className="shrink-0 border-b border-slate-800 bg-slate-900/70 backdrop-blur">
             <div className="mx-auto flex max-w-[120rem] items-center justify-between px-4 py-4">
               <Link href="/" className="text-lg font-semibold tracking-tight">
                 yieldcurvemonkey&apos;s jungle
@@ -61,7 +61,7 @@ export default function RootLayout({
               </nav>
             </div>
           </header>
-          <main className="mx-auto max-w-[120rem] px-4 py-6">
+          <main className="flex-1 min-h-0 mx-auto w-full max-w-[120rem] px-4 py-6 overflow-auto">
             {children}
           </main>
         </div>
