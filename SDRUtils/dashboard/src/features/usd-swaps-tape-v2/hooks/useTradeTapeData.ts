@@ -52,7 +52,9 @@ export interface UseTradeTapeDataReturn {
 // Initial fetch loads a larger batch so traders see a deep tape on first paint,
 // then VirtualScroller lazy-loads subsequent pages at the same size as the
 // swaption tape.
-const DEFAULT_PAGE_LIMIT = 200
+const DEFAULT_PAGE_LIMIT = 500
+const PREFETCH_DELAY_MS = 150
+const MAX_PREFETCH_ROWS = 10_000
 
 function buildQuery(params: UseTradeTapeDataParams, options?: {
   cursor?: string
@@ -178,7 +180,9 @@ export function useTradeTapeData(
   const [paginationError, setPaginationError] = useState<string | null>(null)
 
   const abortRef = useRef<AbortController | null>(null)
+  const cursorAbortRef = useRef<AbortController | null>(null)
   const fetchInFlight = useRef(false)
+  const cursorInFlight = useRef(false)
   const columnFiltersRef = useRef(params.columnFilters)
   columnFiltersRef.current = params.columnFilters
   const limitRef = useRef(params.limit)
@@ -228,20 +232,25 @@ export function useTradeTapeData(
       since?: string
       replace?: boolean
     }) => {
-      if (fetchInFlight.current) return
-      fetchInFlight.current = true
-      abortRef.current?.abort()
-      const controller = new AbortController()
-      abortRef.current = controller
-      // 15s safety timeout — without this a hung network keeps
-      // fetchInFlight stuck true and the 30s poll silently swallows
-      // every subsequent tick. Once the timeout fires, the AbortError
-      // is treated as a normal abort below and the in-flight latch
-      // resets, so polling resumes on the next interval.
-      const timeoutId = setTimeout(() => controller.abort(), 15_000)
-
       const isCursor = !!options?.cursor
       const isPoll = !!options?.since
+
+      // Cursor pagination uses its own in-flight guard so the 3-second
+      // signal poll can never silently swallow a scroll-triggered load.
+      if (isCursor) {
+        if (cursorInFlight.current) return
+        cursorInFlight.current = true
+      } else {
+        if (fetchInFlight.current) return
+        fetchInFlight.current = true
+      }
+
+      const targetAbortRef = isCursor ? cursorAbortRef : abortRef
+      targetAbortRef.current?.abort()
+      const controller = new AbortController()
+      targetAbortRef.current = controller
+      const timeoutId = setTimeout(() => controller.abort(), 15_000)
+
       if (!isCursor && !isPoll) setLoading(true)
       if (isCursor) setLoadingMore(true)
 
@@ -275,7 +284,8 @@ export function useTradeTapeData(
         clearTimeout(timeoutId)
         setLoading(false)
         setLoadingMore(false)
-        fetchInFlight.current = false
+        if (isCursor) cursorInFlight.current = false
+        else fetchInFlight.current = false
       }
     },
     [upsertRows],
@@ -342,6 +352,21 @@ export function useTradeTapeData(
       clearInterval(fallbackId)
     }
   }, [fetchTape, params.pollingEnabled])
+
+  // Auto-prefetch: after each page arrives, chain-load the next one in the
+  // background so the table always has data ahead of the scroll position.
+  // For a typical day's tape (500–3000 rows) this fills the entire dataset
+  // within a few seconds of page load — the user never hits the edge.
+  useEffect(() => {
+    if (!hasMore || !nextCursor) return
+    if (loading || loadingMore) return
+    if (rows.length >= MAX_PREFETCH_ROWS) return
+
+    const id = setTimeout(() => {
+      void fetchTape({ cursor: nextCursor })
+    }, PREFETCH_DELAY_MS)
+    return () => clearTimeout(id)
+  }, [hasMore, nextCursor, rows.length, loading, loadingMore, fetchTape])
 
   const refreshing = useMemo(() => loading && rows.length > 0, [loading, rows.length])
 

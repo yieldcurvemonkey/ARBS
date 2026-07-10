@@ -12,7 +12,7 @@ describe('useTradeTapeData buildQuery', () => {
     // Default page size is intentionally larger than the swaption tape so
     // traders see a deep tape on first paint; VirtualScroller still chains
     // additional pages at the same size as the server scrolls further back.
-    expect(q.get('limit')).toBe('200')
+    expect(q.get('limit')).toBe('500')
   })
 
   it('honours a caller-supplied limit override', () => {

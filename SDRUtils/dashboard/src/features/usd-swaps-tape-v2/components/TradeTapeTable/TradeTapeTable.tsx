@@ -116,7 +116,7 @@ export interface TradeTapeTableProps {
 // past the currently-loaded row count. Matches the swaption tape's lazy-load
 // pattern so the scroller keeps asking for more until the server reports
 // `hasMore=false`.
-const LAZY_LOAD_PAGE_SIZE = 50
+const LAZY_LOAD_PAGE_SIZE = 500
 
 export function TradeTapeTable(props: TradeTapeTableProps): JSX.Element {
   const {
@@ -374,8 +374,8 @@ export function TradeTapeTable(props: TradeTapeTableProps): JSX.Element {
     const scroller = root.querySelector<HTMLElement>('.p-virtualscroller')
     if (!scroller) return
     const NEAR_BOTTOM_PX = Math.max(
-      ROW_ESTIMATE_PX * 10,
-      Math.round(scroller.clientHeight * 1.5),
+      ROW_ESTIMATE_PX * 30,
+      Math.round(scroller.clientHeight * 3),
     )
     let rafPending = false
     const onScroll = () => {
