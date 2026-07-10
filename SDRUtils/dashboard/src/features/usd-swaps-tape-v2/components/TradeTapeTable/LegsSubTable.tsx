@@ -197,7 +197,7 @@ function legBadges(leg: UsdSwapTapeLeg) {
     badges.push(
       flagBadge(
         'past-eff',
-        `${days}d SEASONED`,
+        `${days}d OLD`,
         'bg-amber-800/60 text-amber-100',
         `effective date is ${days} days before execution — swap was already live when reported`,
       ),
