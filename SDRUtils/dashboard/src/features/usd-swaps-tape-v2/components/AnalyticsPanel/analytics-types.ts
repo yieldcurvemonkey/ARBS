@@ -7,7 +7,7 @@ import type { UsdSwapTapeRow } from '../../types'
 // without a circular import.
 export type AnalyticsMode = 'empty' | 'single' | 'sequence'
 
-export type AnalyticsTab = 'timeseries' | 'rarity' | 'levels' | 'sequence'
+export type AnalyticsTab = 'timeseries' | 'rarity' | 'levels' | 'sequence' | 'mms'
 
 // Phase 4 contract: matches the groupBy whitelist documented on every
 // /api/usd-swaps-tape-v2 analytics route. `canonical` routes through
@@ -251,4 +251,16 @@ export type RarityState = {
   settingsOpen: boolean
   primaryTol: number
   sizeTol: number
+}
+
+// UI state for the MMS tab (matched-maturity swap / UST asset-swap
+// analytics). See design doc 2026-07-09-mms-extension-design.md §3d.
+export type MmsWindow = 'today' | '7d' | '30d' | '90d' | 'ytd'
+export type MmsVolumeMetric = 'count' | 'dv01'
+export type MmsDistributionMetric = 'count' | 'dv01' | 'notional'
+
+export type MmsState = {
+  window: MmsWindow
+  volumeMetric: MmsVolumeMetric
+  distributionMetric: MmsDistributionMetric
 }

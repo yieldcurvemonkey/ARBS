@@ -3,7 +3,7 @@
 // tape table and hosts the Timeseries / Trade Rarity / Traded Levels tabs
 // for a focused trade.
 import type { JSX } from 'react'
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { FilterMatchMode, FilterOperator } from 'primereact/api'
 import { usePathname, useRouter, useSearchParams } from 'next/navigation'
 import {
@@ -16,6 +16,7 @@ import {
 import { COLUMN_FILTER_QUERY_KEY } from '../../hooks/useColumnFilters'
 import { CardsDrawer } from './CardsDrawer'
 import { FocusedTradeBar } from './FocusedTradeBar'
+import { MmsTab } from './MmsTab'
 import { SequenceBar } from './SequenceBar'
 import { SequenceTab } from './SequenceTab'
 import { computeSequenceAggregate } from './sequence-aggregate'
@@ -28,6 +29,7 @@ import {
   DOCK_MAX_RESERVE_PX,
   DOCK_MIN_PX,
   LEVELS_DEFAULT_STATE,
+  MMS_DEFAULT_STATE,
   RARITY_DEFAULT_STATE,
   RARITY_PREFS_STORAGE_KEY,
   TIMESERIES_DEFAULT_STATE,
@@ -37,10 +39,12 @@ import type {
   AnalyticsTab,
   FocusedTrade,
   LevelsState,
+  MmsState,
   RarityState,
   TimeseriesState,
 } from './analytics-types'
 import type { UsdSwapTapeRow } from '../../types'
+import { computeMmsSummary } from '../../utils/mmsAnalytics'
 import { useIsMobile } from '@/lib/hooks/useIsMobile'
 
 export interface AnalyticsPanelProps {
@@ -81,6 +85,10 @@ export function AnalyticsPanel(props: AnalyticsPanelProps): JSX.Element {
   const mode = derived.mode
   const sequence = derived.sequence
 
+  // MMS tab — badge count + tab body both read off the full loaded
+  // row set (not gated on a focused trade), same pattern as CardsDrawer.
+  const mmsSummary = useMemo(() => computeMmsSummary(rows), [rows])
+
   // The base tab hooks (single-trade Timeseries / Rarity / Levels)
   // need a non-null `focused` to fire fetches. In sequence mode we
   // anchor on the first sequence entry so the chart base series is
@@ -92,6 +100,7 @@ export function AnalyticsPanel(props: AnalyticsPanelProps): JSX.Element {
   const [activeTab, setActiveTab] = useState<AnalyticsTab>('timeseries')
   const [tsState, setTsState] = useState<TimeseriesState>(TIMESERIES_DEFAULT_STATE)
   const [levelsState, setLevelsState] = useState<LevelsState>(LEVELS_DEFAULT_STATE)
+  const [mmsState, setMmsState] = useState<MmsState>(MMS_DEFAULT_STATE)
   // Rarity prefs persist to localStorage so the trader doesn't have to
   // reconfigure the basis / similarity thresholds on every dock open.
   // Read synchronously on first render — a hydrate-in-effect pattern
@@ -446,8 +455,13 @@ export function AnalyticsPanel(props: AnalyticsPanelProps): JSX.Element {
           base series renders against a real bucket (subsequent
           trades layer in via the multi-overlay reference lines).
           The `Sequence` tab only appears in sequence mode.
+
+          MMS tab workstream — the strip itself is no longer gated on
+          focused/sequence: the MMS tab aggregates over the full loaded
+          `rows` set (like CardsDrawer) so it must stay reachable even
+          when mode === 'empty' (nothing focused/selected). Only the
+          `Sequence` entry keeps its mode-scoped visibility below.
         */}
-        {(focused != null || sequence != null) ? (
         <Tabs<AnalyticsTab>
           active={activeTab}
           onChange={setActiveTab}
@@ -464,12 +478,12 @@ export function AnalyticsPanel(props: AnalyticsPanelProps): JSX.Element {
               badge: rarity.stats.count > 0 ? `P${Math.round(rarityPrimaryPercentile)}` : '…',
             },
             { key: 'levels', label: 'Traded Levels', icon: '◈', badge: String(extremes.extremes.length) },
+            { key: 'mms', label: 'MMS', icon: '⬡', badge: String(mmsSummary.mmsCount) },
             ...(mode === 'sequence' && sequence
               ? ([{ key: 'sequence' as const, label: 'Sequence', icon: '⇉', badge: String(sequence.length) }])
               : []),
           ]}
         />
-        ) : null}
 
         {baseTrade == null ? null : (
         <div className="mt-0.5">
@@ -540,6 +554,22 @@ export function AnalyticsPanel(props: AnalyticsPanelProps): JSX.Element {
           ) : null}
         </div>
         )}
+
+        {/*
+          MMS tab renders OUTSIDE the baseTrade guard above — it
+          aggregates over the full loaded `rows` set (like CardsDrawer)
+          rather than a focused trade, so it must stay usable even when
+          nothing is selected (mode === 'empty', baseTrade == null).
+        */}
+        {activeTab === 'mms' ? (
+          <div className="mt-0.5">
+            <MmsTab
+              rows={rows}
+              state={mmsState}
+              setState={setMmsState}
+            />
+          </div>
+        ) : null}
       </div>
 
       {/*

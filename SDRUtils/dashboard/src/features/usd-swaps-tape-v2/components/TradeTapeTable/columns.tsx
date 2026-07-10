@@ -101,6 +101,14 @@ type ColumnConfig = {
    * no manual regrouping is active). Wired in Task 19.
    */
   onOpenNote?: (target: NoteTarget) => void
+  onToggleMmsFilter?: () => void
+}
+
+function isMmsFilterActive(filters?: DataTableFilterMeta): boolean {
+  if (!filters) return false
+  const f = filters.package_type
+  if (!f || !('value' in f)) return false
+  return typeof f.value === 'string' && f.value.includes('MATCHED_MATURITY')
 }
 
 function renderHeader(label: string, summary?: string | null): JSX.Element {
@@ -305,10 +313,26 @@ export function getColumns(
       filterField="package_type"
       filter
       {...compactFilterMenuProps}
-      header={renderHeader(
-        'Pkg',
-        summaryFor('package_type', config.activeFilters),
-      )}
+      header={
+        <div className="flex items-center gap-1">
+          {renderHeader('Pkg', summaryFor('package_type', config.activeFilters))}
+          <button
+            type="button"
+            className={`ml-0.5 rounded px-1 py-0.5 text-[9px] font-semibold leading-none transition-colors ${
+              isMmsFilterActive(config.activeFilters)
+                ? 'bg-teal-500/60 text-teal-100 ring-1 ring-teal-400/50'
+                : 'bg-slate-700/50 text-slate-400 hover:bg-teal-900/40 hover:text-teal-300'
+            }`}
+            onClick={(e) => {
+              e.stopPropagation()
+              config.onToggleMmsFilter?.()
+            }}
+            title="Toggle MMS filter"
+          >
+            MMS
+          </button>
+        </div>
+      }
       body={(row: UsdSwapTapeRow) => {
         const conf = computePackageConfidence(row)
         const displayedType = conf.inferredType ?? row.package_type
