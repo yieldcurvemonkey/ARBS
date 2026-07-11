@@ -83,6 +83,9 @@ def _build_maturity_to_ust_map(
             "issue_date",
             "original_security_term",
             "interest_rate",
+            # treasurydirect column names
+            "cpn",
+            "label",
         ]
         if c in ref.columns
     ]
@@ -97,6 +100,10 @@ def _build_maturity_to_ust_map(
             "issue_date": "ust_issue_date",
             "original_security_term": "ust_original_security_term",
             "interest_rate": "ust_coupon",
+            # treasurydirect source: cpn = coupon (decimal percent),
+            # label = human bond name ("T 0 1/8 Jul 26")
+            "cpn": "ust_coupon",
+            "label": "ust_label",
         }
     )
     return best
@@ -167,12 +174,35 @@ def detect_mms_trades_df(
         spot_start_mask = np.ones(len(out), dtype=bool)
 
     # --- Clean-tenor exclusion: standard swap tenors are not MMS ---
+    # Date-based: a tenor only counts as "clean" when the maturity sits
+    # within a business-day roll (<= 7 calendar days) of the standard
+    # anniversary of the effective date. The previous ±0.1y year-fraction
+    # test wrongly excluded genuinely broken-date UST matches — e.g.
+    # eff 7/8/2026 → mat 6/15/2029 reads 2.94y ≈ "3Y" by fraction but is
+    # 23 days off the true 3Y anniversary, i.e. a matched-maturity swap.
     _STANDARD_TENORS = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30]
+    _CLEAN_ANNIVERSARY_DAYS = 7
     tenor_y = pd.to_numeric(out.get("tenor_years"), errors="coerce")
+    _eff_dt = pd.to_datetime(out.get("effective_date"), errors="coerce")
+    _mat_dt = pd.to_datetime(out.get(swap_maturity_col), errors="coerce")
     is_clean_tenor = np.zeros(len(out), dtype=bool)
     if tenor_y.notna().any():
+        _has_dates = (_eff_dt.notna() & _mat_dt.notna()).values
         for std in _STANDARD_TENORS:
-            is_clean_tenor |= (tenor_y - std).abs().values <= 0.1
+            near_std = ((tenor_y - std).abs().values <= 0.2) & tenor_y.notna().values
+            if not near_std.any():
+                continue
+            probe = near_std & _has_dates
+            if probe.any():
+                anniv = _eff_dt[probe] + pd.DateOffset(years=std)
+                diff_days = (_mat_dt[probe] - anniv).abs().dt.days.values
+                clean_here = np.zeros(len(out), dtype=bool)
+                clean_here[np.flatnonzero(probe)] = diff_days <= _CLEAN_ANNIVERSARY_DAYS
+                is_clean_tenor |= clean_here
+            # Rows without parseable dates keep the legacy fraction gate.
+            frac_only = near_std & ~_has_dates
+            if frac_only.any():
+                is_clean_tenor |= frac_only & ((tenor_y - std).abs().values <= 0.1)
 
     # Tag matched trades. The MMS-ness gates (spot-start + clean-tenor) are
     # coincidence guards that apply to EVERY candidate leg, packaged or not:

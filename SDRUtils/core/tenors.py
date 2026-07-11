@@ -86,6 +86,13 @@ def _standard_tenor_label(
         months = int(round(years * 12))
         return f"{months}M", False
 
+    # 1-2Y off-benchmark tenors keep month resolution: a 14.2-month swap
+    # reads "~14M", not a misleading "~1Y".
+    if years < 2:
+        months = int(round(years * 12))
+        if months % 12 != 0:
+            return f"~{months}M", False
+
     return f"{int(round(years))}Y", False
 
 
@@ -149,6 +156,18 @@ def get_imm_label(effective_date: pd.Timestamp, tolerance_days: int = 1) -> Opti
                     code = ql.IMM.code(neighbor)
                     return f"IMM_{code[0]}{neighbor.year()}"
 
+    # Holiday-rolled IMM dates: when the mathematical 3rd Wednesday is a
+    # holiday (June 19 = Juneteenth in some years), traded effective dates
+    # roll to the next business day. The business-day neighbor search above
+    # steps OVER the holiday, so probe the month's 3rd Wednesday directly
+    # and compare its Following-adjusted date to the input.
+    third_wed = ql.Date.nthWeekday(3, ql.Wednesday, ql_date.month(), ql_date.year())
+    if ql.IMM.isIMMdate(third_wed):
+        cal = ql.UnitedStates(ql.UnitedStates.GovernmentBond)
+        if cal.adjust(third_wed, ql.Following) == ql_date:
+            code = ql.IMM.code(third_wed)
+            return f"IMM_{code[0]}{third_wed.year()}"
+
     return None
 
 
@@ -197,6 +216,51 @@ def get_fomc_label(effective_date: pd.Timestamp, tolerance_days: int = 1) -> Opt
                     if nd in fomc_dates:
                         return f"FOMC_{nd.strftime('%Y%m%d')}"
     return None
+
+
+_FOMC_MEETING_DATES_CACHE: Optional[list] = None
+
+
+def _fomc_meeting_dates_sorted() -> list:
+    """Sorted list of FOMC meeting dates from the central-bank calendar."""
+    global _FOMC_MEETING_DATES_CACHE
+    if _FOMC_MEETING_DATES_CACHE is None:
+        try:
+            from Query.IRSwaps._CENTRAL_BANK_DATES import _CENTRAL_BANK_DATES
+
+            _FOMC_MEETING_DATES_CACHE = sorted(
+                {m[0] for m in _CENTRAL_BANK_DATES["USD-FEDFUNDS"].values()}
+            )
+        except Exception:
+            _FOMC_MEETING_DATES_CACHE = []
+    return _FOMC_MEETING_DATES_CACHE
+
+
+def is_consecutive_fomc_pair(
+    effective_date: Optional[pd.Timestamp],
+    expiration_date: Optional[pd.Timestamp],
+) -> bool:
+    """True iff effective and expiration land on CONSECUTIVE FOMC meetings.
+
+    This is the defining property of an FOMC-dated swap: the accrual period
+    spans exactly one meeting-to-meeting window. Both endpoints tolerate the
+    ±1-business-day noise handled by :func:`get_fomc_label`.
+    """
+    if effective_date is None or expiration_date is None:
+        return False
+    eff_lbl = get_fomc_label(effective_date)
+    mat_lbl = get_fomc_label(expiration_date)
+    if not eff_lbl or not mat_lbl:
+        return False
+    dates = _fomc_meeting_dates_sorted()
+    if not dates:
+        return False
+    try:
+        eff_d = pd.Timestamp(eff_lbl[5:]).date()
+        mat_d = pd.Timestamp(mat_lbl[5:]).date()
+        return dates.index(mat_d) == dates.index(eff_d) + 1
+    except (ValueError, TypeError):
+        return False
 
 
 def get_special_label(date_ts: pd.Timestamp) -> Optional[str]:
@@ -279,6 +343,9 @@ def tenor_from_dates(
     if years_part == 0 and months_part == 0:
         if days_part == 2 and not is_swaptions:
             return "spot"
+        # Whole weeks read as weeks: a 7-day swap is "1W", not "7D".
+        if 7 <= days_part <= 28 and days_part % 7 == 0:
+            return f"{days_part // 7}W"
         return f"{days_part}D"
 
     if years_part == 0 and days_part == 0:
@@ -372,23 +439,22 @@ def detect_special_tenor(
     expiration_date: Optional[pd.Timestamp],
     is_forward: bool,
 ) -> tuple[str, str, list[str]]:
-    """Classify special tenor with strict 3-tier priority.
+    """Classify special tenor with strict tier priority.
 
     Priority (highest first):
-      1. Both ``effective_date`` AND ``expiration_date`` land on FOMC
-         meeting dates  => FOMC (tags=["FOMC"]).
+      1. ``effective_date`` and ``expiration_date`` land on CONSECUTIVE
+         FOMC meeting dates  => FOMC (tags=["FOMC"]). An FOMC-dated swap
+         is *defined* by spanning exactly one meeting-to-meeting window —
+         non-consecutive meeting endpoints do NOT qualify.
       2. ``effective_date`` is a quarterly IMM date (H/M/U/Z) and the
          maturity side is a constant-maturity tenor (no IMM_/FOMC_
          prefix on ``tenor_label``)  => IMM (tags=["IMM"]).
-      3. ``effective_date`` is an FOMC meeting date and the maturity
-         side is either constant tenor OR another FOMC meeting date
-         (non-consecutive — tier 1 already handled consecutive)
-         => FOMC (tags=["FOMC"]).
-      else => STANDARD.
+      else => STANDARD (with legacy label/maturity-date fallbacks below).
 
     This supersedes the legacy FOMC > IMM tag-priority rule. IMM and FOMC
     dates coincide on quarterly meetings; the old rule flipped quarterly
-    IMM trades to FOMC erroneously.
+    IMM trades to FOMC erroneously, and the old tier 3 tagged any swap
+    merely *starting* on a meeting date as FOMC.
 
     Returns:
         ``(special_tenor_type, special_tenor_confidence, special_tenor_tags)``
@@ -402,17 +468,17 @@ def detect_special_tenor(
         tenor_label.startswith("IMM_") or tenor_label.startswith("FOMC_")
     )
 
-    # Tier 1 — FOMC-to-FOMC (both dates are meetings).
-    if eff_is_fomc and mat_is_fomc:
+    # Tier 1 — consecutive FOMC meeting endpoints only.
+    if eff_is_fomc and mat_is_fomc and is_consecutive_fomc_pair(
+        effective_date, expiration_date
+    ):
         return "FOMC", "high", ["FOMC"]
 
-    # Tier 2 — quarterly IMM eff + constant-tenor mat.
+    # Tier 2 — quarterly IMM eff + constant-tenor mat. Runs before any FOMC
+    # fallback so an IMM-effective swap whose maturity happens to sit near a
+    # meeting date labels as IMM ("IMM_U2026 6M"), not FOMC.
     if eff_is_imm_q and tenor_is_constant:
         return "IMM", "high", ["IMM"]
-
-    # Tier 3 — FOMC eff with non-consecutive FOMC mat or constant-tenor mat.
-    if eff_is_fomc and (tenor_is_constant or mat_is_fomc):
-        return "FOMC", "high", ["FOMC"]
 
     # Label-based fallback (matches legacy behaviour for edge cases where
     # tenor_to_label already baked in IMM_/FOMC_ but dates don't resolve).
@@ -426,13 +492,13 @@ def detect_special_tenor(
     if tenor_label.startswith("FOMC_") or forward_label.startswith("FOMC_"):
         return "FOMC", "medium", ["FOMC"]
 
-    # Date-only fallback: if only expiration is on IMM/FOMC calendar (non-forward
+    # Date-only fallback: if only expiration is on the IMM calendar (non-forward
     # spot trade maturing on a special date), preserve legacy tagging so the tag
-    # pipeline downstream can still reason about it.
+    # pipeline downstream can still reason about it. The equivalent FOMC-maturity
+    # fallback was removed: a spot swap that merely MATURES near a meeting date
+    # (e.g. a spot 11M) is not an FOMC-dated instrument.
     if mat_is_imm:
         return "IMM", "high", ["IMM"]
-    if mat_is_fomc:
-        return "FOMC", "high", ["FOMC"]
 
     return "STANDARD", "high", []
 

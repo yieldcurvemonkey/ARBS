@@ -30,14 +30,19 @@ def classify_fed_funds_ois_trade(
     eff_date = to_naive_timestamp(row.get("Effective Date"))
     exp_date = to_naive_timestamp(row.get("Expiration Date"))
     notional, is_capped = parse_notional(row.get("Notional amount-Leg 1"))
+    # Some reporters put the fixed rate on Leg 2 (leg order is not
+    # normalized in the raw feed) — fall back when Leg 1 is empty/NaN.
     fixed_rate = to_float(row.get("Fixed rate-Leg 1"))
+    if fixed_rate is None or pd.isna(fixed_rate):
+        fixed_rate = to_float(row.get("Fixed rate-Leg 2"))
 
     tenor_years = calculate_tenor_years(eff_date, exp_date)
     tenor_segment = TenorSegment.from_years(tenor_years)
     tenor_label = tenor_to_label(tenor_years)
     # T+2 can span up to 6 calendar days (Friday + holiday Monday)
     forward_years = calculate_tenor_years(exec_ts, eff_date) if eff_date > exec_ts + pd.Timedelta(days=6) else 0.0
-    forward_label = forward_to_label(forward_years)
+    # effective_date enables IMM/FOMC forward labels ("IMM_U2030", not "4Y2M")
+    forward_label = forward_to_label(forward_years, effective_date=eff_date)
     is_forward = forward_years > 0.1
     trade_label = build_trade_label(forward_label, tenor_label, is_forward)
 

@@ -54,11 +54,25 @@ def test_broken_tenor_packaged_leg_keeps_matched_flag(fake_ust):
 
 
 def test_clean_tenor_packaged_leg_is_still_wiped(fake_ust):
-    # 3Y leg @ 2.94y is within 0.1 of clean tenor 3 -> coincidence guard wipes it,
-    # even though 2029-06-15 exactly ties a UST coupon.
-    df = pd.DataFrame([_leg("B", 2.94, pd.Timestamp("2029-06-15"), "CURVE")])
+    # A GENUINELY clean 3Y (maturity on the exact anniversary of the
+    # effective date) that coincidentally ties a UST coupon -> the
+    # coincidence guard wipes it. The guard is date-based now: only a
+    # maturity within a business-day roll of the standard anniversary
+    # counts as clean.
+    row = _leg("B", 3.0, pd.Timestamp("2029-06-15"), "CURVE")
+    row["effective_date"] = pd.Timestamp("2026-06-15")
+    df = pd.DataFrame([row])
     out = detect_mms_trades_df(df)
     assert bool(out.loc[0, "matched_ust_maturity"]) is False
+
+
+def test_broken_date_near_standard_tenor_stays_matched(fake_ust):
+    # 2.94y with maturity 23 days off the 3Y anniversary of 2026-07-08 —
+    # a real matched-maturity swap (bug 7), not a clean 3Y; the old
+    # ±0.1y year-fraction guard wrongly wiped these.
+    df = pd.DataFrame([_leg("B2", 2.94, pd.Timestamp("2029-06-15"), "CURVE")])
+    out = detect_mms_trades_df(df)
+    assert bool(out.loc[0, "matched_ust_maturity"]) is True
 
 
 def test_outright_broken_tenor_still_tagged(fake_ust):

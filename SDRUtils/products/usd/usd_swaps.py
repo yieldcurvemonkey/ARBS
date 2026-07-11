@@ -127,7 +127,11 @@ def classify_usd_swap_trade(
     # basis swaps out of this path — if that gating changes, revisit this
     # fallback.
     notional, is_notional_capped = parse_notional(row.get("Notional amount-Leg 1", row.get("Notional amount-Leg 2", 0)))
-    fixed_rate = row.get("Fixed rate-Leg 1", row.get("Fixed rate-Leg 2"))
+    # Series.get only falls back when the KEY is absent — a present-but-NaN
+    # Leg-1 rate must also fall through to Leg 2.
+    fixed_rate = row.get("Fixed rate-Leg 1")
+    if pd.isna(fixed_rate):
+        fixed_rate = row.get("Fixed rate-Leg 2")
     # Keep the existing SOFR curve approximation for all USD swap underliers.
     pv01 = float("nan")
     if curve is not None and pd.notna(effective_date) and pd.notna(expiration_date):
@@ -188,7 +192,7 @@ _SERVICE_CACHE_DIR_NAME = "service_caches"
 # Keys both the classification parquet day-cache directory and the
 # packaged-day warm-start pickle, so stale-schema frames can never be
 # served after a deploy (2026-07-01 audit, finding C4).
-DETECTION_CACHE_VERSION = "ptp3-mms-pkg"
+DETECTION_CACHE_VERSION = "ptp5-fomc-gap-resid-immfwd"
 
 
 def save_service_caches(cache_dir: str) -> None:
@@ -831,6 +835,16 @@ def detect_sub_package_curve_fly(
             _gidx = list(_gidx)
             if len(_gidx) < 2:
                 continue
+            # A spreadover curve/fly needs DISTINCT benchmark tenors. Two
+            # (or three) same-tenor spreadovers at the same spread are
+            # separate asset-swap prints, not legs of one structure —
+            # pairing them produced bogus "30Y/30Y CURVE" / "10Y/10Y/10Y
+            # FLY" rows on the tape.
+            _tenor_buckets = pd.to_numeric(
+                out.loc[_gidx, "tenor_years"], errors="coerce"
+            ).round(1)
+            if _tenor_buckets.nunique(dropna=True) < len(_gidx):
+                continue
             _g = out.loc[_gidx].sort_values("tenor_years")
             _tids = _g["trade_id"].astype(str).tolist()
             _pkg_id = f"SOCRV_{_tids[0]}"
@@ -850,6 +864,80 @@ def detect_sub_package_curve_fly(
         if _paired:
             print(f"    [DETECT] Paired {_paired} SPREADOVER trades into composite packages")
 
+    return out
+
+
+def group_residual_package_trades(df: pd.DataFrame) -> pd.DataFrame:
+    """Group co-executed SDR-package legs that no detector paired.
+
+    SDR packages whose ``Package transaction price`` is unusable (missing,
+    zero, or non-monetary notation) never reach the PTP grouper, and legs
+    that fail the curve/fly DV01 shape tests are left behind as single-leg
+    "Package" rows. When several such legs share the same execution second,
+    platform, and UPI, they were executed as one package — group them into
+    PKG-N so the tape shows one structure instead of N orphan rows.
+
+    Spreadover and invoice legs are excluded: same-tenor spreadovers are
+    intentionally separate prints, and invoice swaps have their own pairing.
+    """
+    if df.empty or "package_type" not in df.columns or "trade_id" not in df.columns:
+        return df
+    out = df.copy()
+
+    pkg_ind = out.get("package_indicator")
+    if pkg_ind is None:
+        return out
+    pkg_ind_bool = pkg_ind.astype(str).str.lower().isin({"true", "t", "1", "1.0", "yes"})
+
+    base_type = out["package_type"].fillna("OUTRIGHT").astype(str).str.upper()
+    legs_col = out.get("package_legs", pd.Series(index=out.index, dtype="object"))
+    unpaired = legs_col.apply(
+        lambda v: v is None
+        or (isinstance(v, float) and pd.isna(v))
+        or (isinstance(v, (list, tuple)) and len(v) <= 1)
+    )
+
+    invoice_col = out.get("invoice_swap_ticker", pd.Series(index=out.index, dtype="object"))
+    no_invoice = invoice_col.isna() | (
+        invoice_col.astype(str).str.strip().str.lower().isin({"", "nan", "none"})
+    )
+
+    ts = pd.to_datetime(out.get("execution_timestamp"), errors="coerce", utc=True)
+
+    eligible = (
+        pkg_ind_bool
+        & unpaired
+        & base_type.isin({"OUTRIGHT", "MATCHED_MATURITY"})
+        & no_invoice
+        & ts.notna()
+    )
+    if not eligible.any():
+        return out
+
+    plat = out.get("platform_identifier", pd.Series("", index=out.index)).fillna("_NONE_").astype(str)
+    upi = out.get("unique_product_identifier", pd.Series("", index=out.index)).fillna("_NONE_").astype(str)
+    grp_key = (
+        ts.dt.floor("s").astype(str) + "|" + plat + "|" + upi
+    )[eligible]
+
+    if "package_id" not in out.columns:
+        out["package_id"] = None
+    if "package_legs" not in out.columns:
+        out["package_legs"] = None
+
+    n_grouped = 0
+    for _key, gidx in grp_key.groupby(grp_key).groups.items():
+        gidx = list(gidx)
+        if len(gidx) < 2:
+            continue
+        tids = sorted(out.loc[gidx, "trade_id"].astype(str).tolist())
+        out.loc[gidx, "package_type"] = f"PKG-{len(gidx)}"
+        out.loc[gidx, "package_id"] = f"TSPKG_{tids[0]}"
+        for ix in gidx:
+            out.at[ix, "package_legs"] = tids
+        n_grouped += len(gidx)
+    if n_grouped:
+        print(f"    [DETECT] Grouped {n_grouped} residual package legs by timestamp")
     return out
 
 
@@ -1788,6 +1876,10 @@ class USD_SwapProduct(USDProductBase):
                         df = detect_sub_package_curve_fly(
                             df, detector_kwargs=_snake_detector_cols
                         )
+                    # Residual pass: co-executed package legs that every
+                    # detector above declined (no usable PTP, no DV01 shape)
+                    # still group into PKG-N on (second, platform, UPI).
+                    df = group_residual_package_trades(df)
 
                     df = pd.concat([ptp_df, df], ignore_index=True)
                     df = _rollup_matched_maturity_packages(df)
@@ -1908,6 +2000,7 @@ __all__ = [
     "detect_invoice_packages",
     "detect_mac_swaps",
     "detect_spreadovers",
+    "group_residual_package_trades",
     "_is_round_notional",
     "_resolve_special_tenor_priority",
     "_rollup_matched_maturity_packages",

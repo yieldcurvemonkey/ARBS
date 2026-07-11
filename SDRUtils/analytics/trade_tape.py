@@ -11,6 +11,7 @@ from __future__ import annotations
 import hashlib
 import os
 import pickle
+import re
 from typing import Any, Dict, List
 
 import numpy as np
@@ -63,7 +64,55 @@ def _hour_to_session(hour: int) -> str:
 # Result cache versioning
 # ---------------------------------------------------------------------------
 
-TRADE_TAPE_CACHE_VERSION = "v13-offm-old-tag-normalize"
+TRADE_TAPE_CACHE_VERSION = "v14-fomc-gap-labels"
+
+# Clean single-unit spot tenor ("1M", "2M", "5Y", "1W", "6D"). Used to let a
+# standard tenor win over the UST MMYY alias in tape labels.
+_CLEAN_TENOR_RE = re.compile(r"(\d+)([DWMY])")
+
+
+def _is_clean_simple_tenor(row: pd.Series) -> bool:
+    """True when the row's tenor is a genuinely clean standard period.
+
+    "Clean" requires the simple label ("2M", "5Y") AND date confirmation:
+    the maturity must sit within a business-day roll of the standard
+    anniversary. A fallback-rounded "10Y" that is really 9Y7M (off-date /
+    "~" display, or a maturity weeks off the anniversary) is NOT clean.
+    """
+    tl = str(row.get("tenor_label", "")).strip()
+    m = _CLEAN_TENOR_RE.fullmatch(tl)
+    if not m:
+        return False
+    if bool(row.get("is_off_date", False)):
+        return False
+    disp = str(row.get("tenor_display", "") or "")
+    if disp.startswith("~"):
+        return False
+    eff = pd.to_datetime(row.get("effective_date"), errors="coerce")
+    mat = pd.to_datetime(row.get("expiration_date"), errors="coerce")
+    if pd.isna(eff) or pd.isna(mat):
+        # Cleanliness must be affirmatively confirmed by dates — for a
+        # matched-maturity row the MMYY alias is the informative default.
+        return False
+    n, unit = int(m.group(1)), m.group(2)
+    if unit == "Y":
+        anniv = eff + pd.DateOffset(years=n)
+    elif unit == "M":
+        anniv = eff + pd.DateOffset(months=n)
+    elif unit == "W":
+        anniv = eff + pd.DateOffset(weeks=n)
+    else:
+        anniv = eff + pd.DateOffset(days=n)
+    return abs((mat - anniv).days) <= 7
+
+
+def _pretty_forward(fwd: str) -> str:
+    """Render special forward tokens for the tape: 'FOMC_20261028' -> 'FOMC OCT26'."""
+    if fwd.startswith("FOMC_"):
+        short = short_meeting_label(fwd)
+        if short:
+            return f"FOMC {short}"
+    return fwd
 DEFAULT_CACHE_DIR = os.path.join(
     os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
     "notebooks", "sdr", "_cache", "trade_tape",
@@ -600,6 +649,19 @@ class TradeTape(SDRAnalyzer):
         else:
             df["is_non_standard_term"] = False
 
+        # Non-compounded SOFR swaps (underlier "USD-SOFR" without an
+        # OIS/COMPOUND qualifier) are non-standard instruments regardless of
+        # the reporter's NSTD indicator.
+        if "upi_underlier_name" in df.columns:
+            _und = df["upi_underlier_name"].astype(str).str.upper()
+            _plain_sofr = (
+                _und.str.startswith("USD-SOFR")
+                & ~_und.str.contains("COMPOUND", regex=False)
+                & ~_und.str.contains("OIS", regex=False)
+                & ~_und.str.contains(" VS ", regex=False)
+            )
+            df["is_non_standard_term"] = df["is_non_standard_term"] | _plain_sofr
+
         # Novation chain matching
         if df["is_novation"].any():
             df = _match_novation_pairs(df)
@@ -962,12 +1024,13 @@ class TradeTape(SDRAnalyzer):
                     def _assign_meeting(row):
                         """Return ``(label, append_tenor)`` for a single row.
 
-                        * Tier 1 consecutive -> ``("APR26", False)``
-                        * Tier 3a non-consecutive FOMC/FOMC -> ``("APR26 DEC26", False)``
-                        * Tier 3b FOMC + constant tenor -> ``("APR26", True)``
-                        * Tier 2 (quarterly IMM + constant-tenor mat) -> ``("", False)``
-                          so the downstream forward+tenor branch prints
-                          ``"IMM_Z2026 10Y"``.
+                        Only consecutive-meeting swaps carry an FOMC label
+                        (``("APR26", False)``): an FOMC-dated swap is DEFINED
+                        by effective and maturity landing on consecutive FOMC
+                        meetings — the label is shorthand for that period.
+                        Everything else returns ``("", False)`` so the
+                        downstream forward+tenor branch prints the standard
+                        representation (e.g. ``"IMM_U2026 1Y"``).
                         """
                         eff = pd.to_datetime(row.get("effective_date"), errors="coerce")
                         mat = pd.to_datetime(row.get("expiration_date"), errors="coerce")
@@ -977,42 +1040,17 @@ class TradeTape(SDRAnalyzer):
                         mat_date = mat.date()
                         eff_lbl_raw = eff_to_label_tol.get(eff_date)
                         # Prefer the meeting that STARTS at mat (eff_to_label)
-                        # so endpoint-to-endpoint labels like "APR26 DEC26"
-                        # resolve cleanly. Fall back to mat_to_label for
-                        # completeness.
+                        # so meeting-to-meeting endpoints resolve cleanly.
+                        # Fall back to mat_to_label for completeness.
                         mat_lbl_raw = eff_to_label_tol.get(mat_date) or mat_to_label_tol.get(mat_date)
 
-                        # Tier 1 — consecutive FOMC meetings (by meeting order so
+                        # Consecutive FOMC meetings (by meeting order so
                         # ±1-day date noise on the endpoints still resolves).
                         if eff_lbl_raw and mat_lbl_raw and (
                             _label_pos.get(mat_lbl_raw, -99)
                             == _label_pos.get(eff_lbl_raw, -1) + 1
                         ):
                             return (short_meeting_label(eff_lbl_raw), False)
-
-                        # Tier 2 — quarterly IMM eff + constant-tenor mat.
-                        if get_imm_label(eff) is not None and not mat_lbl_raw:
-                            tenor_label = str(row.get("tenor_label", ""))
-                            if not (
-                                tenor_label.startswith("IMM_")
-                                or tenor_label.startswith("FOMC_")
-                            ):
-                                return ("", False)
-
-                        # Tier 3a — FOMC eff + FOMC mat but non-consecutive.
-                        if eff_lbl_raw and mat_lbl_raw:
-                            return (
-                                short_meeting_label(eff_lbl_raw)
-                                + " "
-                                + short_meeting_label(mat_lbl_raw),
-                                False,
-                            )
-
-                        # Tier 3b — FOMC eff + constant-tenor mat. Flag that
-                        # the label builder should append the tenor display
-                        # so the final tape_label reads "FOMC APR26 10Y".
-                        if eff_lbl_raw:
-                            return (short_meeting_label(eff_lbl_raw), True)
 
                         return ("", False)
 
@@ -1140,6 +1178,61 @@ class TradeTape(SDRAnalyzer):
                 return ""
             return f"{int(exp.month):02d}{int(exp.year) % 100:02d}"
 
+        def _gap_package_parts(row: pd.Series):
+            """Gap-package label parts.
+
+            For packages whose legs share the same tail tenor but start at
+            distinct forwards (forward gap flies/curves), return
+            ``("IMM_U2030/IMM_U2032/IMM_U2034", "2Y")`` — the joined leg
+            forwards in forward order plus the common tenor. ``None`` when
+            the package is not a gap structure.
+            """
+            legs = row.get("package_legs")
+            if legs is None or (isinstance(legs, float) and pd.isna(legs)):
+                return None
+            try:
+                leg_ids = [str(x) for x in legs]
+                leg_indices = [tid_to_idx[lid] for lid in leg_ids if lid in tid_to_idx]
+            except (TypeError, ValueError):
+                return None
+            if len(leg_indices) < 2:
+                return None
+            needed = ["tenor_years", "forward_start_years", "forward_label"]
+            if not all(c in df.columns for c in needed):
+                return None
+            tenor_src = "tenor_display" if "tenor_display" in df.columns else "tenor_label"
+            extra = [tenor_src] + (["effective_date"] if "effective_date" in df.columns else [])
+            leg_data = df.loc[leg_indices, needed + extra].copy()
+            ty = pd.to_numeric(leg_data["tenor_years"], errors="coerce")
+            fy = pd.to_numeric(leg_data["forward_start_years"], errors="coerce")
+            if ty.isna().any() or fy.isna().any():
+                return None
+            if (ty.max() - ty.min()) > 0.05 or (fy.max() - fy.min()) <= 0.05:
+                return None
+            leg_data = leg_data.assign(_fy=fy).sort_values("_fy")
+            fwd_tokens: list[str] = []
+            for _idx, lrow in leg_data.iterrows():
+                s = str(lrow["forward_label"]).strip()
+                if not s or s.lower() in ("nan", "none"):
+                    return None
+                if s.lower() == "spot":
+                    fwd_tokens.append("Spot")
+                    continue
+                # Prefer the IMM anchor when the leg starts on an IMM date but
+                # the stored forward label is a relative bucket ("4Y11M") —
+                # covers rows classified before forward labels were date-aware.
+                if not s.startswith(("IMM_", "FOMC")) and "effective_date" in leg_data.columns:
+                    _eff = lrow.get("effective_date")
+                    if pd.notna(_eff):
+                        _imm = get_imm_label(pd.Timestamp(_eff))
+                        if _imm:
+                            s = _imm
+                fwd_tokens.append(_pretty_forward(s))
+            tenor_token = str(leg_data[tenor_src].iloc[0]).strip()
+            if tenor_token.lower() in ("nan", "none"):
+                tenor_token = ""
+            return "/".join(fwd_tokens), tenor_token
+
         def _label_for_row(
             row: pd.Series,
             *,
@@ -1156,6 +1249,11 @@ class TradeTape(SDRAnalyzer):
             # 2. Reset frequency + notional schedule (from ANNA DSB UPI)
             reset = str(row.get("upi_reset_freq", "")).strip()
             schedule = str(row.get("upi_notional_schedule", "")).strip()
+            # OIS resets are daily by definition; ANNA DSB carries the rate
+            # TERM (6W/7W for meeting-dated UPIs) in the reset field, which
+            # rendered nonsense like "OIS Compound 7W Constant".
+            if str(row.get("product_type", "")).upper() == "OIS_SWAP" and reset and reset != "1D":
+                reset = "1D"
             if reset or schedule:
                 parts.append(f"{reset} {schedule}".strip())
             else:
@@ -1207,7 +1305,13 @@ class TradeTape(SDRAnalyzer):
             _is_fomc_trade = _has_fomc_label or _stt_fomc
 
             def _fomc_pkg_from_legs():
-                """Look up each leg's fomc_meeting_label, sorted by tenor."""
+                """Look up each leg's fomc_meeting_label, in period order.
+
+                Sorted by effective date — NOT tenor. FOMC curve legs are
+                meeting-to-meeting periods of slightly different lengths, so
+                a tenor sort scrambles the chronological order ("SEP26/JUL26"
+                instead of "JUL26/SEP26").
+                """
                 legs = row.get("package_legs")
                 if legs is None or (isinstance(legs, float) and pd.isna(legs)):
                     return None
@@ -1216,8 +1320,17 @@ class TradeTape(SDRAnalyzer):
                     leg_indices = [tid_to_idx[lid] for lid in leg_ids if lid in tid_to_idx]
                     if not leg_indices:
                         return None
-                    leg_data = df.loc[leg_indices, ["fomc_meeting_label", "tenor_years"]].copy()
-                    leg_data = leg_data.sort_values("tenor_years")
+                    _cols = ["fomc_meeting_label", "tenor_years"]
+                    if "effective_date" in df.columns:
+                        _cols.append("effective_date")
+                    leg_data = df.loc[leg_indices, _cols].copy()
+                    if "effective_date" in leg_data.columns:
+                        leg_data["_eff_sort"] = pd.to_datetime(
+                            leg_data["effective_date"], errors="coerce"
+                        )
+                        leg_data = leg_data.sort_values(["_eff_sort", "tenor_years"])
+                    else:
+                        leg_data = leg_data.sort_values("tenor_years")
                     labels = [
                         str(l).strip().upper()
                         for l in leg_data["fomc_meeting_label"]
@@ -1309,106 +1422,106 @@ class TradeTape(SDRAnalyzer):
                         parts.append(invoice_label)
                 else:
                     parts.append(invoice_label)
-            elif _is_fomc_trade:
-                if (_is_curvey(trade_type) or _is_flyey(trade_type)) and not leg_as_outright:
-                    leg_labels = _fomc_pkg_from_legs()
-                    if leg_labels:
-                        parts.append(f"FOMC {leg_labels}")
-                    else:
-                        pkg_tenors = str(row.get("package_tenors", "")).strip()
-                        if pkg_tenors and pkg_tenors.lower() not in ("nan", "none"):
-                            parts.append(f"FOMC {_clean_fomc_tenors(pkg_tenors)}")
-                        elif _has_fomc_label:
-                            parts.append(f"FOMC {fomc_label.upper()}")
-                elif _has_fomc_label:
-                    parts.append(f"FOMC {fomc_label.upper()}")
-                    if leg_as_outright and not (
-                        _is_curvey(trade_type) or _is_flyey(trade_type)
-                    ):
-                        leg_tenor = str(
-                            row.get("tenor_display", row.get("tenor_label", ""))
-                        ).strip()
-                        if (
-                            leg_tenor
-                            and leg_tenor.lower() not in ("nan", "none")
-                            and not leg_tenor.startswith("FOMC_")
-                            and not leg_tenor.startswith("IMM_")
-                        ):
-                            parts.append(leg_tenor)
-                    elif row.get("fomc_label_append_tenor", False):
-                        # Tier 3b — FOMC eff + constant-maturity tenor. Append
-                        # the tenor so tape_label reads "FOMC APR26 10Y".
-                        tenor_display = str(
-                            row.get("tenor_display", row.get("tenor_label", ""))
-                        ).strip()
-                        if (
-                            tenor_display
-                            and tenor_display.lower() not in ("nan", "none")
-                            and not tenor_display.startswith("IMM_")
-                            and not tenor_display.startswith("FOMC_")
-                        ):
-                            parts.append(tenor_display)
             else:
+                _fomc_rendered = False
+                if _is_fomc_trade:
+                    if (_is_curvey(trade_type) or _is_flyey(trade_type)) and not leg_as_outright:
+                        leg_labels = _fomc_pkg_from_legs()
+                        if leg_labels:
+                            parts.append(f"FOMC {leg_labels}")
+                            _fomc_rendered = True
+                        else:
+                            pkg_tenors = str(row.get("package_tenors", "")).strip()
+                            if pkg_tenors and pkg_tenors.lower() not in ("nan", "none") and "FOMC" in pkg_tenors.upper():
+                                parts.append(f"FOMC {_clean_fomc_tenors(pkg_tenors)}")
+                                _fomc_rendered = True
+                            elif _has_fomc_label:
+                                parts.append(f"FOMC {fomc_label.upper()}")
+                                _fomc_rendered = True
+                    elif _has_fomc_label:
+                        # Consecutive-meeting FOMC swap: the meeting label IS
+                        # the complete period description — no tenor suffix.
+                        parts.append(f"FOMC {fomc_label.upper()}")
+                        _fomc_rendered = True
+
                 # Package-scope PKG-N: skip forward + raw tenors entirely;
                 # the structure token (PKG-3, PKG-6, …) is appended in step 5.
                 # Leg-scope PKG-N is handled by leg_as_outright (own tenor +
                 # "Outright").
                 _pkg_n_package_scope = _is_pkg_n(trade_type) and not leg_scope
 
-                if not _pkg_n_package_scope:
-                    # 3. Forward (normalize T+2 settlement labels to Spot)
-                    fwd = row.get("forward_label", "spot")
-                    fwd_years = row.get("forward_start_years", 0.0)
-                    try:
-                        fwd_years = float(fwd_years) if pd.notna(fwd_years) else 0.0
-                    except (ValueError, TypeError):
-                        fwd_years = 0.0
-                    if pd.isna(fwd) or str(fwd).lower() == "spot" or fwd_years <= 0.02:
-                        parts.append("Spot")
-                    else:
-                        # MAC/IMM trades: the effective_date IS the IMM date, so
-                        # the IMM label is more informative than the constant-
-                        # maturity approximation (e.g. "IMM_U2026" not "1M").
-                        stt = str(row.get("special_tenor_type", "")).upper()
-                        if stt in ("MAC", "IMM") and not str(fwd).startswith("IMM_"):
-                            eff = row.get("effective_date")
-                            if pd.notna(eff):
-                                imm = get_imm_label(pd.Timestamp(eff))
-                                if imm:
-                                    fwd = imm
-                        parts.append(str(fwd))
-
-                    # 4. Tenors — leg scope uses the leg's own tenor; package scope
-                    # uses the combined package_tenors (e.g. "5Y/10Y").
-                    if leg_as_outright:
-                        tenors = str(row.get("tenor_display", row.get("tenor_label", "")))
-                    else:
-                        tenors = str(
-                            row.get(
-                                "package_tenors",
-                                row.get("tenor_display", row.get("tenor_label", "")),
-                            )
-                        )
-                    # Secondary UST alias for MATCHED_MATURITY trades — replace
-                    # the raw tenor ("9Y10M") with the "MMYY" UST-maturity
-                    # shorthand ("0236" == Feb 2036), matching the alias scheme
-                    # in Query/FixedRateBonds/FixedRateBondQuery.py.
-                    if use_ust_alias and (
-                        str(row.get("special_tenor_type", "")).upper() == "MATCHED_MATURITY"
-                        or bool(row.get("matched_ust_maturity", False))
+                if not _fomc_rendered and not _pkg_n_package_scope:
+                    # Gap packages (same tail tenor, distinct forwards — e.g.
+                    # IMM_U2030/U2032/U2034 2Y fly) render as the joined leg
+                    # forwards plus the common tenor, with no leading "Spot".
+                    _gap = None
+                    if not leg_as_outright and (
+                        _is_curvey(trade_type) or _is_flyey(trade_type)
                     ):
-                        if leg_as_outright:
-                            # Single expanded leg -> its own maturity alias.
-                            alias = _ust_maturity_alias(row)
+                        _gap = _gap_package_parts(row)
+                    if _gap is not None:
+                        parts.append(_gap[0])
+                        if _gap[1]:
+                            parts.append(_gap[1])
+                    else:
+                        # 3. Forward (normalize T+2 settlement labels to Spot)
+                        fwd = row.get("forward_label", "spot")
+                        fwd_years = row.get("forward_start_years", 0.0)
+                        try:
+                            fwd_years = float(fwd_years) if pd.notna(fwd_years) else 0.0
+                        except (ValueError, TypeError):
+                            fwd_years = 0.0
+                        if pd.isna(fwd) or str(fwd).lower() == "spot" or fwd_years <= 0.02:
+                            parts.append("Spot")
                         else:
-                            # Package scope -> collapsed multi-leg alias ("0236" or
-                            # "0536/0546"); fall back to the single-row date.
-                            pkg_alias = str(row.get("package_ust_aliases", "") or "").strip()
-                            alias = pkg_alias if pkg_alias else _ust_maturity_alias(row)
-                        if alias:
-                            tenors = alias
-                    if tenors and tenors.lower() not in ("nan", "none"):
-                        parts.append(tenors)
+                            # MAC/IMM trades: the effective_date IS the IMM date, so
+                            # the IMM label is more informative than the constant-
+                            # maturity approximation (e.g. "IMM_U2026" not "1M").
+                            stt = str(row.get("special_tenor_type", "")).upper()
+                            if stt in ("MAC", "IMM") and not str(fwd).startswith("IMM_"):
+                                eff = row.get("effective_date")
+                                if pd.notna(eff):
+                                    imm = get_imm_label(pd.Timestamp(eff))
+                                    if imm:
+                                        fwd = imm
+                            parts.append(_pretty_forward(str(fwd)))
+
+                        # 4. Tenors — leg scope uses the leg's own tenor; package scope
+                        # uses the combined package_tenors (e.g. "5Y/10Y").
+                        if leg_as_outright:
+                            tenors = str(row.get("tenor_display", row.get("tenor_label", "")))
+                        else:
+                            tenors = str(
+                                row.get(
+                                    "package_tenors",
+                                    row.get("tenor_display", row.get("tenor_label", "")),
+                                )
+                            )
+                        # Secondary UST alias for MATCHED_MATURITY trades — replace
+                        # the raw tenor ("9Y10M") with the "MMYY" UST-maturity
+                        # shorthand ("0236" == Feb 2036), matching the alias scheme
+                        # in Query/FixedRateBonds/FixedRateBondQuery.py. Clean spot
+                        # tenors take priority: a swap that happens to mature on a
+                        # UST date but IS a standard 1M/2M/5Y keeps its tenor.
+                        _clean_spot_tenor = _is_clean_simple_tenor(row)
+                        if use_ust_alias and not _clean_spot_tenor and (
+                            str(row.get("special_tenor_type", "")).upper() == "MATCHED_MATURITY"
+                            or bool(row.get("matched_ust_maturity", False))
+                        ):
+                            if leg_as_outright:
+                                # Single expanded leg -> its own maturity alias.
+                                alias = _ust_maturity_alias(row)
+                            else:
+                                # Package scope -> collapsed multi-leg alias ("0236" or
+                                # "0536/0546"); fall back to the single-row date.
+                                pkg_alias = str(row.get("package_ust_aliases", "") or "").strip()
+                                alias = pkg_alias if pkg_alias else _ust_maturity_alias(row)
+                            if alias:
+                                tenors = alias
+                        if tenors and "FOMC_" in tenors:
+                            tenors = _clean_fomc_tenors(tenors)
+                        if tenors and tenors.lower() not in ("nan", "none"):
+                            parts.append(tenors)
 
             # 5. Structure
             # Invoice trades detected via invoice_swap_ticker take priority
@@ -1442,16 +1555,25 @@ class TradeTape(SDRAnalyzer):
                 parts.append("FLY")
             elif trade_type == "SPREADOVER":
                 parts.append("Spreadover")
+            elif str(row.get("product_type", "")).upper() == "BASIS_SWAP" or (
+                pd.notna(row.get("basis_type"))
+                and str(row.get("basis_type")).strip().lower() not in ("", "nan", "none")
+            ):
+                # Float-vs-float basis swaps are explicitly labelled so the
+                # tape distinguishes them from fixed-float outrights.
+                parts.append("Basis-Outright")
             else:
                 # Trade is a package leg per SDR reporting (Package indicator=True)
                 # but no peer leg was paired by our detectors (curve/fly/MMS). Labelling
                 # this as "Outright" misrepresents the execution structure — prefer
                 # "Package" so downstream consumers can see it was part of a bundle.
+                # Leg scope always renders "Outright": a leg row is a single
+                # outright instrument regardless of packaging.
                 pkg_ind = row.get("package_indicator")
                 is_sdr_package = (pkg_ind is True) or (
                     str(pkg_ind).strip().lower() in ("true", "1")
                 )
-                parts.append("Package" if is_sdr_package else "Outright")
+                parts.append("Package" if (is_sdr_package and not leg_scope) else "Outright")
 
             # 6. Structural flags (instrument-type descriptors only;
             # execution tags like UNWIND/UFRO/OFFM live in tape_tags)

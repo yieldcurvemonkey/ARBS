@@ -134,12 +134,10 @@ class TestIntrinsicSpecialTenor:
         assert typ == "FOMC"
         assert "FOMC" in tags
 
-    def test_tier1_fomc_to_fomc_wins(self):
-        """Both eff and mat on FOMC meetings -> tier 1 fires, returns FOMC.
-
-        3-tier priority (tier 1 = FOMC-to-FOMC on meeting dates) supersedes
-        the old 'FOMC > IMM when both tags present' rule: when both sides
-        land on FOMC meetings, the label is unambiguously FOMC."""
+    def test_nonconsecutive_fomc_to_fomc_is_not_fomc(self):
+        """Jan 2025 -> Jun 2025 meetings are NOT consecutive (Mar + May sit
+        between), so the swap is not FOMC-dated. The IMM_ tenor label keeps
+        it IMM-tagged via the label fallback."""
         typ, conf, tags = classify_intrinsic_special_tenor(
             effective_date=pd.Timestamp("2025-01-29"),
             expiration_date=pd.Timestamp("2025-06-18"),
@@ -147,8 +145,8 @@ class TestIntrinsicSpecialTenor:
             forward_label="FOMC_20250129",
             is_forward=True,
         )
-        assert typ == "FOMC"
-        assert tags == ["FOMC"]
+        assert typ == "IMM"
+        assert "IMM" in tags
 
     def test_labels_checked_not_just_dates(self):
         """Even if date doesn't match QL IMM, label prefix is enough."""

@@ -178,6 +178,12 @@ LEG_COLUMNS: tuple[str, ...] = (
     "matched_ust_maturity",
     "special_tenor_type",
     "ust_cusip",
+    # Bond reference for MMS legs (from treasurydirect via packages/mms.py):
+    # coupon, original-issue term ("10-Year"), issue date, display label.
+    "ust_coupon",
+    "ust_oi",
+    "ust_label",
+    "ust_issue_date",
     "tape_label_ust_alias",
     "leg_tape_label_ust_alias",
     "matched_ust_maturity_trade_confidence",
@@ -535,6 +541,8 @@ _LATEST_MIGRATION_COLS = [
     # the #333 markers exist, leaving the MMS columns unmigrated.
     ("arbs_usd_swap_tape_packages_v2", "is_matched_maturity_all"),
     ("arbs_usd_swap_tape_legs_v2", "matched_ust_maturity"),
+    # MMS bond-reference migration marker (CUSIP details in expanded row)
+    ("arbs_usd_swap_tape_legs_v2", "ust_coupon"),
 ]
 
 
@@ -629,7 +637,14 @@ def _normalize_package_id(df: pd.DataFrame) -> pd.DataFrame:
 
 def _gap_aware_sort_key(group: pd.DataFrame) -> list[str]:
     """Choose sort columns: tenor_years for normal packages, forward_start_years
-    for gap structures (all legs within ~0.05y of each other in tenor)."""
+    for gap structures (all legs within ~0.05y of each other in tenor), and
+    effective_date for FOMC-dated packages (meeting periods have slightly
+    different lengths, so a tenor sort scrambles chronological order)."""
+    fomc = group.get("fomc_meeting_label")
+    if fomc is not None and len(group) > 1 and "effective_date" in group.columns:
+        labelled = fomc.fillna("").astype(str).str.strip()
+        if (labelled != "").all():
+            return ["effective_date", "trade_id"]
     tenor_y = pd.to_numeric(
         group.get("tenor_years", pd.Series(index=group.index, dtype="float64")),
         errors="coerce",
@@ -973,10 +988,13 @@ def build_leg_rows(tape: pd.DataFrame, *, as_of_date: str) -> list[dict]:
             "ptp_group_id",
             # matched-UST-maturity enrichment
             "special_tenor_type", "ust_cusip",
+            "ust_oi", "ust_label",
             "tape_label_ust_alias", "leg_tape_label_ust_alias",
             "matched_ust_maturity_trade_confidence",
         ):
             rec[text_col] = _str_or_none(rec.get(text_col))
+        rec["ust_coupon"] = _num_or_none(rec.get("ust_coupon"))
+        rec["ust_issue_date"] = _to_db_value(rec.get("ust_issue_date"))
         rec["basis_spread_bps"] = _num_or_none(rec.get("basis_spread_bps"))
         # PTP/OPA per-leg coercions
         rec["opa_sign"] = _int_or_none(rec.get("opa_sign"))
@@ -1155,6 +1173,32 @@ def _is_flyey(tt: str) -> bool:
     return tt == "FLY" or tt.endswith("_FLY")
 
 
+def _signed_opa_net(g: pd.DataFrame, opa: pd.Series) -> Optional[float]:
+    """Net signed other-payment amount for a package.
+
+    Uses the OPA-sign-solver outputs: per-leg ``opa_sign`` when present,
+    else the pre-computed package-level ``opa_signed_net``. The signed net
+    is what ties out with the reported package transaction price — spread-
+    style formulas (back−front, 2·belly−wings) were wrong for OPAs.
+    """
+    sign = pd.to_numeric(
+        g.get("opa_sign", pd.Series(index=g.index, dtype="float64")),
+        errors="coerce",
+    )
+    mask = opa.notna() & sign.notna()
+    if mask.any():
+        return _num_or_none((opa[mask] * sign[mask]).sum())
+    net = g.get("opa_signed_net")
+    if net is not None:
+        vals = pd.to_numeric(net, errors="coerce").dropna()
+        if not vals.empty:
+            return _num_or_none(vals.iloc[0])
+    non_null = opa.dropna()
+    if len(non_null) == 1:
+        return _num_or_none(non_null.iloc[0])
+    return None
+
+
 def _compute_leg_summary(
     g: pd.DataFrame, package_type: str, trade_type: str
 ) -> dict[str, Any]:
@@ -1164,10 +1208,6 @@ def _compute_leg_summary(
         "summary_risk": None,
         "summary_opa": None,
     }
-    tenor_y = pd.to_numeric(
-        g.get("tenor_years", pd.Series(index=g.index, dtype="float64")),
-        errors="coerce",
-    )
     fixed = pd.to_numeric(
         g.get("fixed_rate", pd.Series(index=g.index, dtype="float64")),
         errors="coerce",
@@ -1195,23 +1235,9 @@ def _compute_leg_summary(
         elif "FLY" in kind:
             is_fly = True
 
-    # Gap-aware sort: tenor_years for normal packages, forward_start_years
-    # for gap structures where all legs share the same tail tenor.
-    fwd_y = pd.to_numeric(
-        g.get("forward_start_years", pd.Series(index=g.index, dtype="float64")),
-        errors="coerce",
-    )
-    valid = tenor_y.notna()
-    if valid.any():
-        ty_range = tenor_y[valid].max() - tenor_y[valid].min()
-        if ty_range <= 0.05 and fwd_y.notna().any() and (fwd_y.max() - fwd_y.min()) > 0.05:
-            sort_axis = fwd_y
-        else:
-            sort_axis = tenor_y
-        order = sort_axis[sort_axis.notna()].sort_values(kind="stable").index
-        idx_list = list(order) + [i for i in g.index if i not in order]
-    else:
-        idx_list = list(g.index)
+    # Structure-aware leg ordering shared with leg_order (tenor for normal
+    # packages, forward for gap structures, effective date for FOMC).
+    idx_list = list(g.sort_values(_gap_aware_sort_key(g)).index)
 
     if is_curve and len(idx_list) >= 2:
         front, back = idx_list[0], idx_list[-1]
@@ -1219,9 +1245,7 @@ def _compute_leg_summary(
         if pd.notna(fr) and pd.notna(br):
             result["summary_rate"] = _num_or_none(br - fr)
         result["summary_risk"] = _num_or_none(risk.get(back))
-        fo, bo = opa.get(front), opa.get(back)
-        if pd.notna(fo) and pd.notna(bo):
-            result["summary_opa"] = _num_or_none(bo - fo)
+        result["summary_opa"] = _signed_opa_net(g, opa)
     elif is_fly and len(idx_list) >= 3:
         front = idx_list[0]
         belly = idx_list[len(idx_list) // 2]
@@ -1230,9 +1254,19 @@ def _compute_leg_summary(
         if pd.notna(fr) and pd.notna(mr) and pd.notna(br):
             result["summary_rate"] = _num_or_none(2 * mr - fr - br)
         result["summary_risk"] = _num_or_none(risk.get(belly))
-        fo, mo, bo = opa.get(front), opa.get(belly), opa.get(back)
-        if pd.notna(fo) and pd.notna(mo) and pd.notna(bo):
-            result["summary_opa"] = _num_or_none(2 * mo - fo - bo)
+        result["summary_opa"] = _signed_opa_net(g, opa)
+    elif len(idx_list) > 1:
+        # Generic multi-leg package: signed-net OPA, gross risk, DV01-
+        # weighted rate.
+        abs_risk = risk.abs()
+        if abs_risk.notna().any():
+            result["summary_risk"] = _num_or_none(abs_risk.sum(skipna=True))
+        w = abs_risk.where(fixed.notna())
+        if w.notna().any() and float(w.sum(skipna=True)) > 0:
+            result["summary_rate"] = _num_or_none(
+                (fixed * w).sum(skipna=True) / float(w.sum(skipna=True))
+            )
+        result["summary_opa"] = _signed_opa_net(g, opa)
     else:
         # OUTRIGHT or single-leg: pass-through first leg
         first = idx_list[0] if idx_list else None
