@@ -1,6 +1,6 @@
 // Number / time / tenor formatters for the USD swap tape v2 UI.
 import { EMPTY_VALUE } from '../constants'
-import type { UsdSwapTapeRow } from '../types'
+import type { UsdSwapTapeLeg, UsdSwapTapeRow } from '../types'
 import { sortLegsForDisplay } from './legSort'
 
 const COMPACT_UNITS: [number, string][] = [
@@ -150,7 +150,10 @@ export function formatReportedLvl(row: UsdSwapTapeRow): string {
   // ``package_type`` and fall back to ``trade_type`` only as a backstop.
   const kind = String(row.package_type ?? row.trade_type ?? '').toUpperCase()
 
-  const legsAll = row.legs_json ?? []
+  // Typed as UsdSwapTapeLeg[] so the USD-specific per-leg fields
+  // (basis_type / basis_spread_bps / ust_*) resolve — row.legs_json widens to
+  // the base SofrSwapTapeLeg in .some() callbacks otherwise.
+  const legsAll: UsdSwapTapeLeg[] = row.legs_json ?? []
   // Basis swaps are detected per-leg (basis_type / basis_spread_bps) — the
   // package_type is often plain OUTRIGHT for a single basis print, so the
   // per-leg fields are the authoritative signal for the spread render.
@@ -163,7 +166,7 @@ export function formatReportedLvl(row: UsdSwapTapeRow): string {
     legsAll.some(
       (l) =>
         l?.basis_type != null ||
-        !isNullish(l?.basis_spread_bps as number | null | undefined),
+        !isNullish(l?.basis_spread_bps),
     )
   if (isBasis) {
     const spreads = sortLegsForDisplay(legsAll)
