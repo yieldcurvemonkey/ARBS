@@ -192,7 +192,7 @@ _SERVICE_CACHE_DIR_NAME = "service_caches"
 # Keys both the classification parquet day-cache directory and the
 # packaged-day warm-start pickle, so stale-schema frames can never be
 # served after a deploy (2026-07-01 audit, finding C4).
-DETECTION_CACHE_VERSION = "ptp5-fomc-gap-resid-immfwd"
+DETECTION_CACHE_VERSION = "ptp6-resid-plausibility-guard"
 
 
 def save_service_caches(cache_dir: str) -> None:
@@ -867,6 +867,47 @@ def detect_sub_package_curve_fly(
     return out
 
 
+# Residual-group plausibility guard. UPI is tenor-agnostic for OIS, so the
+# (second, platform, UPI) key alone merges unrelated same-second flow. Only
+# accept a group as one package when it looks like a structure rather than
+# coincidental co-execution or a block-split.
+_RESID_MAX_TENOR_SPAN_Y = 8.0
+_RESID_DV01_DOMINANCE_TOL = 0.25
+
+
+def _residual_group_is_plausible(
+    tenor_years: list, dv01s: list
+) -> bool:
+    """True when a co-executed residual group plausibly IS one package.
+
+    Guards against the (second, platform, UPI)-key over-grouping:
+
+    * **Duplicate tenor** among legs → a block-split (e.g. 30Y/30Y/30Y), not
+      a multi-leg structure. Reject.
+    * **Wide tenor span** (> ~8y) is only accepted when the legs are
+      **DV01-balanced** — no single leg's |DV01| dominates the rest, i.e. the
+      package is roughly hedge-able. A lopsided wide group (one dominant leg
+      + unrelated tails) is coincidental flow. Reject.
+    * Narrow-span groups with distinct tenors (adjacent-benchmark curves the
+      shape detectors missed) are accepted.
+    """
+    tys = [float(t) for t in tenor_years if t is not None and not pd.isna(t)]
+    if len(tys) < 2:
+        return False
+    rounded = [round(t, 1) for t in tys]
+    if len(set(rounded)) < len(rounded):
+        return False  # duplicate tenor -> block-split, not a structure
+    if (max(tys) - min(tys)) <= _RESID_MAX_TENOR_SPAN_Y:
+        return True
+    # Wide span: require DV01 balance (largest leg offset-able by the rest).
+    rs = [abs(float(r)) for r in dv01s if r is not None and not pd.isna(r)]
+    if len(rs) < 2:
+        return False  # no DV01 evidence for a wide span -> don't group
+    mx = max(rs)
+    rest = sum(rs) - mx
+    return mx <= rest * (1.0 + _RESID_DV01_DOMINANCE_TOL)
+
+
 def group_residual_package_trades(df: pd.DataFrame) -> pd.DataFrame:
     """Group co-executed SDR-package legs that no detector paired.
 
@@ -874,11 +915,15 @@ def group_residual_package_trades(df: pd.DataFrame) -> pd.DataFrame:
     zero, or non-monetary notation) never reach the PTP grouper, and legs
     that fail the curve/fly DV01 shape tests are left behind as single-leg
     "Package" rows. When several such legs share the same execution second,
-    platform, and UPI, they were executed as one package — group them into
-    PKG-N so the tape shows one structure instead of N orphan rows.
+    platform, and UPI AND form a plausible structure
+    (:func:`_residual_group_is_plausible`), they were executed as one package
+    — group them into PKG-N so the tape shows one structure instead of N
+    orphan rows.
 
     Spreadover and invoice legs are excluded: same-tenor spreadovers are
     intentionally separate prints, and invoice swaps have their own pairing.
+    Block-splits (duplicate tenor) and lopsided wide-span groups are left as
+    separate rows — the co-execution key is too coarse to call them packages.
     """
     if df.empty or "package_type" not in df.columns or "trade_id" not in df.columns:
         return df
@@ -925,10 +970,20 @@ def group_residual_package_trades(df: pd.DataFrame) -> pd.DataFrame:
     if "package_legs" not in out.columns:
         out["package_legs"] = None
 
+    _dv01_col = "estimated_pv01" if "estimated_pv01" in out.columns else "risk"
     n_grouped = 0
+    n_skipped = 0
     for _key, gidx in grp_key.groupby(grp_key).groups.items():
         gidx = list(gidx)
         if len(gidx) < 2:
+            continue
+        _tys = pd.to_numeric(out.loc[gidx, "tenor_years"], errors="coerce").tolist()
+        _dv = (
+            pd.to_numeric(out.loc[gidx, _dv01_col], errors="coerce").tolist()
+            if _dv01_col in out.columns else [None] * len(gidx)
+        )
+        if not _residual_group_is_plausible(_tys, _dv):
+            n_skipped += len(gidx)
             continue
         tids = sorted(out.loc[gidx, "trade_id"].astype(str).tolist())
         out.loc[gidx, "package_type"] = f"PKG-{len(gidx)}"
@@ -936,8 +991,11 @@ def group_residual_package_trades(df: pd.DataFrame) -> pd.DataFrame:
         for ix in gidx:
             out.at[ix, "package_legs"] = tids
         n_grouped += len(gidx)
-    if n_grouped:
-        print(f"    [DETECT] Grouped {n_grouped} residual package legs by timestamp")
+    if n_grouped or n_skipped:
+        print(
+            f"    [DETECT] Grouped {n_grouped} residual package legs by "
+            f"timestamp ({n_skipped} left ungrouped by plausibility guard)"
+        )
     return out
 
 

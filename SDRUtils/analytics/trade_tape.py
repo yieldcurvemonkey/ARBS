@@ -64,7 +64,7 @@ def _hour_to_session(hour: int) -> str:
 # Result cache versioning
 # ---------------------------------------------------------------------------
 
-TRADE_TAPE_CACHE_VERSION = "v14-fomc-gap-labels"
+TRADE_TAPE_CACHE_VERSION = "v15-resid-plausibility-guard"
 
 # Clean single-unit spot tenor ("1M", "2M", "5Y", "1W", "6D"). Used to let a
 # standard tenor win over the UST MMYY alias in tape labels.
