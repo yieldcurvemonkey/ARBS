@@ -141,6 +141,18 @@ export type UsdSwapTapeLeg = SofrSwapTapeLeg & {
   // PTP package-detection sign assignments (per-leg).
   opa_sign?: number | null        // +1 or -1
   opa_signed_amount?: number | null
+  // Structure-aware display order assigned by the ingest pipeline (0-based
+  // within the package): tenor for normal packages, forward-start for gap
+  // structures, effective date for FOMC-dated packages.
+  leg_order?: number | null
+  // Matched-maturity (MMS) bond reference from treasurydirect: coupon,
+  // original-issue term ("10-Year"), issue date, display label.
+  matched_ust_maturity?: boolean | null
+  ust_cusip?: string | null
+  ust_coupon?: number | null
+  ust_oi?: string | null
+  ust_label?: string | null
+  ust_issue_date?: string | null
 }
 
 export type UsdSwapTapeRow = SofrSwapTapeRow & {

@@ -329,28 +329,49 @@ def _classify_single_group(
     trade_id_col: str = "trade_id",
     belly_tol: float = 0.15,
     rate_col: str = "fixed_rate",
+    forward_years_col: str = "forward_start_years",
 ) -> tuple[str, list[dict]]:
-    """Classify one PTP group. Returns (package_type, sub_structures)."""
+    """Classify one PTP group. Returns (package_type, sub_structures).
+
+    Gap-aware: when the legs share the same tail tenor but have distinct
+    forward starts (IMM_U2030/U2032/U2034 2Y gap flies, consecutive-meeting
+    FOMC curves), the forward-start axis replaces the tenor axis for the
+    curve/fly shape tests. Without this, same-tail packages collapsed to
+    one "distinct tenor" and fell through to generic PKG-N.
+    """
     n = len(group_df)
     pv01 = numeric_like(group_df[pv01_col]).fillna(0).values
     tenor_num = numeric_like(group_df[tenor_years_col])
     n_distinct_tenors = tenor_num.round(1).dropna().nunique()
 
+    axis = tenor_num
+    n_distinct_axis = n_distinct_tenors
+    used_fwd_axis = False
+    if n_distinct_tenors < n and forward_years_col in group_df.columns:
+        fwd_num = numeric_like(group_df[forward_years_col])
+        if fwd_num.round(1).dropna().nunique() == n:
+            axis = fwd_num
+            n_distinct_axis = n
+            used_fwd_axis = True
+
     if n == 2:
-        if n_distinct_tenors == 2 and _is_dv01_balanced(list(pv01), tolerance=belly_tol):
+        if n_distinct_axis == 2 and _is_dv01_balanced(list(pv01), tolerance=belly_tol):
             return "CURVE", []
         return "PKG-2", []
 
     if n == 3:
-        if n_distinct_tenors == 3:
-            sorted_idx = tenor_num.fillna(0).argsort()
+        if n_distinct_axis == 3:
+            sorted_idx = axis.fillna(0).argsort()
             sorted_pv01 = pv01[sorted_idx]
             wing_avg = (sorted_pv01[0] + sorted_pv01[2]) / 2.0
             expected_belly = 2.0 * wing_avg
             if wing_avg > 0:
                 belly_rel = abs(sorted_pv01[1] - expected_belly) / max(expected_belly, 1e-12)
                 wings_rel = abs(sorted_pv01[0] - sorted_pv01[2]) / max(wing_avg, 1e-12)
-                if belly_rel <= belly_tol and wings_rel <= belly_tol:
+                # Gap flies trade with belly DV01 = wing sum but often
+                # asymmetric wings (broken-wing gap flies) — only the
+                # belly-balance test applies on the forward axis.
+                if belly_rel <= belly_tol and (used_fwd_axis or wings_rel <= belly_tol):
                     return "FLY", []
         return "PKG-3", []
 

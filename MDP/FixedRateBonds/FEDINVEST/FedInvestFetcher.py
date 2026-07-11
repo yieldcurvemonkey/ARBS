@@ -309,7 +309,10 @@ class FedInvestDataFetcher(BaseFetcher, LayeredCacheMixin):
             else:
                 dates_to_fetch = []
                 for dt in dates:
-                    cached = cache.get(date_keys[dt])
+                    key = date_keys[dt]
+                    # Membership + item access — diskcache-style stores make
+                    # .get()/keys() enumeration expensive or unavailable.
+                    cached = cache[key] if key in cache else None
                     if cached is None or (isinstance(cached, pd.DataFrame) and cached.empty):
                         dates_to_fetch.append(dt)
 
@@ -324,7 +327,7 @@ class FedInvestDataFetcher(BaseFetcher, LayeredCacheMixin):
             out: Dict[datetime, pd.DataFrame] = {}
             for dt in dates:
                 key = date_keys[dt]
-                out[dt] = cache.get(key, pd.DataFrame())
+                out[dt] = cache[key] if key in cache else pd.DataFrame()
             return out
         finally:
             self.close_cache()

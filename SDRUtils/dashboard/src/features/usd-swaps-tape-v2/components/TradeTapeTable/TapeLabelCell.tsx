@@ -10,25 +10,16 @@ import {
   parseTapeLabelSegments,
   perLegLabel,
 } from './TapeLabelCell.helpers'
+import { sortLegsForDisplay } from '../../utils/legSort'
 
 export { displayTapeLabel } from './TapeLabelCell.helpers'
 
 function pkgLegsLines(row: UsdSwapTapeRow): string[] | null {
-  const kind = String(row.package_type ?? '').toUpperCase()
-  const isMultiLeg =
-    kind.startsWith('PKG-') ||
-    kind === 'CURVE' || kind === 'FLY' ||
-    kind.startsWith('MATCHED_MATURITY') ||
-    kind.endsWith('_CURVE') || kind.endsWith('_FLY')
-  if (!isMultiLeg) return null
+  // Any multi-leg row gets the leg-preview tooltip — including INVOICE
+  // switches/calendars and generic PKG-N groups, not just CURVE/FLY.
   const legs: UsdSwapTapeLeg[] = row.legs_json ?? []
   if (legs.length < 2) return null
-  const sorted = [...legs].sort((a, b) => {
-    const at = typeof a?.tenor_years === 'number' ? a.tenor_years : Infinity
-    const bt = typeof b?.tenor_years === 'number' ? b.tenor_years : Infinity
-    return at - bt
-  })
-  const lines = sorted
+  const lines = sortLegsForDisplay(legs)
     .map((l) => perLegLabel(l).trim())
     .filter(Boolean)
   return lines.length >= 2 ? lines : null

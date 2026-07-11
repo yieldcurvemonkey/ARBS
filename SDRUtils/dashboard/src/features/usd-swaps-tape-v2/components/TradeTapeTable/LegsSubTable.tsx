@@ -17,6 +17,7 @@ import {
 import type { EconomicClass, UsdSwapTapeLeg, UsdSwapTapeRow } from '../../types'
 import type { NoteTarget } from '../../types/note.types'
 import { computeLegSummary } from './LegsSubTable.helpers'
+import { sortLegsForDisplay } from '../../utils/legSort'
 import { perLegLabel, stripExecutionTags } from './TapeLabelCell.helpers'
 import {
   formatDate,
@@ -476,16 +477,11 @@ export function LegsSubTable({
   onToggleTrade?: (tradeId: string, packageId: string) => void
   onOpenNote?: (target: NoteTarget) => void
 }): JSX.Element {
-  // Desk convention: render tenor-ascending so front legs (short duration)
-  // appear above back legs (long duration). legs_json order from the
-  // display view isn't guaranteed — sort defensively.
-  const legs = [
-    ...((row.legs_json ?? []) as UsdSwapTapeLeg[]),
-  ].sort((a, b) => {
-    const at = typeof a?.tenor_years === 'number' ? a.tenor_years : Number.POSITIVE_INFINITY
-    const bt = typeof b?.tenor_years === 'number' ? b.tenor_years : Number.POSITIVE_INFINITY
-    return at - bt
-  })
+  // Desk convention: structure-aware ordering (front legs above back legs).
+  // Uses the backend's leg_order — tenor for normal packages, forward for
+  // gap structures, effective date for FOMC curves — with a tenor-ascending
+  // fallback for rows that pre-date leg_order.
+  const legs = sortLegsForDisplay((row.legs_json ?? []) as UsdSwapTapeLeg[])
 
   // PTP / PTS values live at the package level; repeat them on each leg
   // row so the expanded table reads standalone without forcing the user
@@ -559,7 +555,7 @@ export function LegsSubTable({
               <th className="px-2 py-1 text-right">PTP</th>
               <th className="px-2 py-1 text-right">PTS</th>
               <th className="px-2 py-1 text-left">Cleared</th>
-              <th className="px-2 py-1 text-left">Flags</th>
+              <th className="px-2 py-1 text-left">Tags</th>
               <th className="px-2 py-1 text-left">X-Day</th>
             </tr>
           </thead>
@@ -610,6 +606,22 @@ export function LegsSubTable({
                 </td>
                 <td className="max-w-[360px] px-2 py-1 font-mono text-[11px] text-slate-100">
                   {perLegLabel(leg)}
+                  {leg.matched_ust_maturity && leg.ust_cusip ? (
+                    <div
+                      className="mt-0.5 text-[10px] text-teal-300/90"
+                      data-testid={`leg-ust-ref-${leg.trade_id}`}
+                    >
+                      UST {leg.ust_cusip}
+                      {leg.ust_coupon != null
+                        ? ` · ${Number(leg.ust_coupon)}%`
+                        : ''}
+                      {leg.ust_oi ? ` · ${leg.ust_oi}` : ''}
+                      {leg.ust_issue_date
+                        ? ` · iss ${formatDate(leg.ust_issue_date)}`
+                        : ''}
+                      {leg.ust_label ? ` · ${leg.ust_label}` : ''}
+                    </div>
+                  ) : null}
                 </td>
                 <td className="whitespace-nowrap px-2 py-1">
                   {formatDate(leg.effective_date)}
@@ -726,6 +738,14 @@ export function LegsSubTable({
           data-testid={`legs-subtable-other-payment-${row.package_id}`}
         >
           <span className="font-semibold text-slate-300">Other Payment:</span>
+          {row.package_transaction_price != null ? (
+            <span>
+              PTP{' '}
+              <span className="font-mono text-[12px] text-emerald-200">
+                {formatNotional(row.package_transaction_price, { compact: true })}
+              </span>
+            </span>
+          ) : null}
           <span>
             UFRO{' '}
             <span className="font-mono text-[12px] text-slate-100">

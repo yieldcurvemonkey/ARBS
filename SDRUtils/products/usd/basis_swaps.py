@@ -35,7 +35,8 @@ def classify_basis_swap_trade(
     tenor_label = tenor_to_label(tenor_years)
     # T+2 can span up to 6 calendar days (Friday + holiday Monday)
     forward_years = calculate_tenor_years(exec_ts, eff_date) if eff_date > exec_ts + pd.Timedelta(days=6) else 0.0
-    forward_label = forward_to_label(forward_years)
+    # effective_date enables IMM/FOMC forward labels ("IMM_U2030", not "4Y2M")
+    forward_label = forward_to_label(forward_years, effective_date=eff_date)
     is_forward = forward_years > 0.1
     trade_label = build_trade_label(forward_label, tenor_label, is_forward)
 

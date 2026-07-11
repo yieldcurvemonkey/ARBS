@@ -84,12 +84,11 @@ describe('LegsSubTable', () => {
     expect(legsSubTableSource).toContain('row.package_transaction_spread')
   })
 
-  it('sorts legs by tenor ascending so the front leg renders first', () => {
-    // Defensive sort — legs_json ordering from the view is not guaranteed.
-    expect(legsSubTableSource).toContain('.sort(')
-    expect(legsSubTableSource).toContain('tenor_years')
-    // The sort comparator must produce ASC order (a - b, not b - a).
-    expect(legsSubTableSource).toMatch(/return\s+at\s*-\s*bt/)
+  it('sorts legs with the shared structure-aware comparator', () => {
+    // Structure-aware sort (leg_order with tenor-ASC fallback) — legs_json
+    // ordering from the view is not guaranteed, and raw tenor sorting
+    // scrambles FOMC curves / gap flies.
+    expect(legsSubTableSource).toContain('sortLegsForDisplay(')
   })
 
   it('# column shows the post-sort row index, not the stale pre-sort leg_order', () => {

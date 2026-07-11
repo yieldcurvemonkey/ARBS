@@ -370,10 +370,36 @@ export function tapeTagBadgesFor(row: UsdSwapTapeRow): Array<{
       merged.push(tag)
     }
   }
-  if (merged.length === 0) return []
-  return merged.map((tag) => ({
+  const badges = merged.map((tag) => ({
     key: tag,
     className: TAPE_TAG_TONES[tag] ?? DEFAULT_TAG_TONE,
     label: tag,
   }))
+
+  // Per-leg instrument flags surfaced on the main row so the expanded
+  // view's tag set (NSTD, CAP, ~ off-date) is visible without expanding.
+  // These keys are deliberately NOT in TAPE_TAG_TONES — that map doubles
+  // as the label-stripping vocabulary and must not match label text.
+  if (legs.some((l) => l.is_non_standard_term)) {
+    badges.push({
+      key: 'NSTD',
+      className: FLAG_CHIP_TONES.NSTD ?? DEFAULT_TAG_TONE,
+      label: 'NSTD',
+    })
+  }
+  if (row.is_capped_any || legs.some((l) => l.is_capped)) {
+    badges.push({
+      key: 'CAP',
+      className: FLAG_CHIP_TONES.CAPPED ?? DEFAULT_TAG_TONE,
+      label: 'CAP',
+    })
+  }
+  if (row.is_off_date_any || legs.some((l) => l.is_off_date)) {
+    badges.push({
+      key: 'OFF_DATE',
+      className: FLAG_CHIP_TONES.OFF_DATE ?? DEFAULT_TAG_TONE,
+      label: '~',
+    })
+  }
+  return badges
 }
