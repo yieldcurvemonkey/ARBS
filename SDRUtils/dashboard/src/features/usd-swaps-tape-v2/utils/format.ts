@@ -1,6 +1,6 @@
 // Number / time / tenor formatters for the USD swap tape v2 UI.
 import { EMPTY_VALUE } from '../constants'
-import type { UsdSwapTapeRow } from '../types'
+import type { UsdSwapTapeLeg, UsdSwapTapeRow } from '../types'
 import { sortLegsForDisplay } from './legSort'
 
 const COMPACT_UNITS: [number, string][] = [
@@ -150,7 +150,7 @@ export function formatReportedLvl(row: UsdSwapTapeRow): string {
   // ``package_type`` and fall back to ``trade_type`` only as a backstop.
   const kind = String(row.package_type ?? row.trade_type ?? '').toUpperCase()
 
-  const legsAll = row.legs_json ?? []
+  const legsAll: UsdSwapTapeLeg[] = row.legs_json ?? []
   // Basis swaps are detected per-leg (basis_type / basis_spread_bps) — the
   // package_type is often plain OUTRIGHT for a single basis print, so the
   // per-leg fields are the authoritative signal for the spread render.
