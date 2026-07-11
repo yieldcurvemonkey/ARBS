@@ -18,7 +18,10 @@ from SDRUtils._swappulse_scripts.ingest_usdswaps_tape import (
     _leg_order_series,
     TapeRiskValidationError,
 )
-from SDRUtils.products.usd.usd_swaps import group_residual_package_trades
+from SDRUtils.products.usd.usd_swaps import (
+    _residual_group_is_plausible,
+    group_residual_package_trades,
+)
 
 
 def _base_leg(**over):
@@ -347,13 +350,19 @@ def _residual_row(tid, **over):
         "platform_identifier": "TWSF",
         "unique_product_identifier": "UPI123",
         "invoice_swap_ticker": None,
+        "tenor_years": 5.0,
+        "estimated_pv01": 50000.0,
     }
     row.update(over)
     return row
 
 
 def test_residual_grouper_groups_cotimestamped_package_legs():
-    df = pd.DataFrame([_residual_row("t1"), _residual_row("t2")])
+    # Distinct, adjacent tenors (a 5s10s curve the shape detectors missed).
+    df = pd.DataFrame([
+        _residual_row("t1", tenor_years=5.0),
+        _residual_row("t2", tenor_years=10.0),
+    ])
     out = group_residual_package_trades(df)
     assert set(out["package_type"]) == {"PKG-2"}
     assert out["package_id"].nunique() == 1
@@ -379,6 +388,47 @@ def test_residual_grouper_respects_timestamp_and_platform():
     ])
     out = group_residual_package_trades(df)
     assert (out["package_type"] == "OUTRIGHT").all()
+
+
+def test_residual_grouper_skips_block_split_duplicate_tenor():
+    # Three same-tenor clips at one instant are a block-split, not a
+    # multi-leg structure — leave them ungrouped.
+    df = pd.DataFrame([
+        _residual_row("t1", tenor_years=30.0),
+        _residual_row("t2", tenor_years=30.02),
+        _residual_row("t3", tenor_years=29.98),
+    ])
+    out = group_residual_package_trades(df)
+    assert (out["package_type"] == "OUTRIGHT").all()
+
+
+def test_residual_grouper_skips_lopsided_wide_span():
+    # 2Y + 30Y with one DV01 dominating -> coincidental flow, not a hedged
+    # package (28y span, no offset).
+    df = pd.DataFrame([
+        _residual_row("t1", tenor_years=2.0, estimated_pv01=20000.0),
+        _residual_row("t2", tenor_years=30.0, estimated_pv01=400000.0),
+    ])
+    out = group_residual_package_trades(df)
+    assert (out["package_type"] == "OUTRIGHT").all()
+
+
+def test_residual_grouper_keeps_balanced_wide_span():
+    # A real 2s30s steepener (offsetting DV01) still groups despite the span.
+    df = pd.DataFrame([
+        _residual_row("t1", tenor_years=2.0, estimated_pv01=90000.0),
+        _residual_row("t2", tenor_years=30.0, estimated_pv01=95000.0),
+    ])
+    out = group_residual_package_trades(df)
+    assert set(out["package_type"]) == {"PKG-2"}
+
+
+def test_residual_plausibility_unit():
+    assert _residual_group_is_plausible([5.0, 10.0], [5e4, 5e4]) is True
+    assert _residual_group_is_plausible([30.0, 30.0, 30.0], [1, 1, 1]) is False
+    assert _residual_group_is_plausible([2.0, 30.0], [2e4, 4e5]) is False
+    assert _residual_group_is_plausible([2.0, 30.0], [9e4, 9.5e4]) is True
+    assert _residual_group_is_plausible([2.0, 30.0], [None, None]) is False
 
 
 # ---------------------------------------------------------------------------
