@@ -280,6 +280,28 @@ def test_bug1_four_separate_spreadovers_end_to_end():
     assert out["package_id"].isna().all()
 
 
+def test_pts_grouped_spreadover_pair_keeps_composite_label():
+    """Two spreadover legs stamped with ONE shared PTS are one package —
+    the PTS grouper claims them before the curve detector runs. The
+    grouped frame must still receive the Phase-1 composite upgrade
+    (CURVE -> SPREADOVER_CURVE), matching the detector-paired path."""
+    from SDRUtils.products.usd.usd_swaps import detect_sub_package_curve_fly
+
+    ts = pd.Timestamp("2026-07-06 15:04:36", tz="UTC")
+    df = pd.DataFrame([
+        {**_pts_leg("A", ts, 5.0, 45000.0, -0.0025, platform="ISWV"),
+         "forward_label": "spot"},
+        {**_pts_leg("B", ts, 10.0, 44800.0, -0.0025, platform="ISWV"),
+         "forward_label": "spot"},
+    ])
+    grouped, remainder = group_by_ptp(df, time_tolerance_seconds=5)
+    assert len(grouped) == 2 and len(remainder) == 0
+    classified = classify_ptp_groups(grouped)
+    assert (classified["package_type"] == "CURVE").all()
+    upgraded = detect_sub_package_curve_fly(classified)
+    assert (upgraded["package_type"] == "SPREADOVER_CURVE").all()
+
+
 def test_bug2_pkg3_end_to_end():
     ts = pd.Timestamp("2026-07-06 14:06:19", tz="UTC")
     df = pd.DataFrame([

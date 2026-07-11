@@ -192,7 +192,7 @@ _SERVICE_CACHE_DIR_NAME = "service_caches"
 # Keys both the classification parquet day-cache directory and the
 # packaged-day warm-start pickle, so stale-schema frames can never be
 # served after a deploy (2026-07-01 audit, finding C4).
-DETECTION_CACHE_VERSION = "ptp7-pts-groups-curve-neutrality"
+DETECTION_CACHE_VERSION = "ptp8-pts-groups-composite-labels"
 
 
 def save_service_caches(cache_dir: str) -> None:
@@ -1920,6 +1920,17 @@ class USD_SwapProduct(USDProductBase):
                     if not ptp_df.empty:
                         ptp_df = classify_ptp_groups(ptp_df)
                         ptp_df = detect_mms_trades_df(ptp_df)
+                        # Composite labels for grouped curves/flies: a
+                        # CURVE/FLY whose legs all carry broker spreads (or
+                        # all sit on UST coupons) upgrades to SPREADOVER_* /
+                        # MATCHED_MATURITY_*, matching the detector-paired
+                        # path below. Without this, spread-keyed groups that
+                        # the curve/fly detectors used to pair (and Phase 1
+                        # then upgraded) would lose their composite label.
+                        if detect_curve or detect_fly:
+                            ptp_df = detect_sub_package_curve_fly(
+                                ptp_df, detector_kwargs=_snake_detector_cols
+                            )
 
                     df = non_ptp_df
 
