@@ -1639,6 +1639,47 @@ def _upsert(
     return total
 
 
+class TapeRiskValidationError(RuntimeError):
+    """Raised when a day's tape legs are almost entirely missing ``risk``.
+
+    A total curve/pricer fetch failure makes ``estimated_pv01`` all-NaN, so
+    ``TradeTape._ensure_prerequisites`` derives ``risk = |pv01|`` as all-NaN.
+    Writing that silently clobbers a previously-good day with empty risk —
+    the 2026-07-06 incident, where the run still reported ``success`` while
+    nulling risk on 4,347/4,347 legs.
+    """
+
+
+# A healthy day has ~0% null risk; >95% null on a non-trivial number of
+# legs is the unambiguous signature of a failed curve build, not a real
+# low-risk session. (``risk == 0`` legs are fine and are NOT counted as null.)
+_RISK_GUARD_MIN_LEGS = 50
+_RISK_GUARD_MAX_NULL_FRACTION = 0.95
+
+
+def _assert_risk_populated(leg_rows: list[dict], as_of_date: str) -> None:
+    """Abort the write when a day's legs are ~entirely missing ``risk``.
+
+    Prevents a transient ERIS curve/pricer outage from clobbering a
+    previously-good prod day with all-NULL risk. Fires only on the
+    pathological >95%-null signature so genuine (rare) low-risk sessions
+    and small incremental batches are unaffected.
+    """
+    n = len(leg_rows)
+    if n < _RISK_GUARD_MIN_LEGS:
+        return
+    n_null = sum(1 for r in leg_rows if r.get("risk") is None)
+    frac = n_null / n
+    if frac > _RISK_GUARD_MAX_NULL_FRACTION:
+        raise TapeRiskValidationError(
+            f"{as_of_date}: {n_null}/{n} tape legs ({frac:.0%}) have NULL "
+            f"risk — refusing to overwrite prod with empty risk. This is "
+            f"almost always a failed ERIS curve/pricer fetch (all-NaN "
+            f"estimated_pv01); re-run the backfill once the curve is "
+            f"available."
+        )
+
+
 def write_tape_rows(engine: Engine, tape: pd.DataFrame, as_of_date: str) -> dict:
     """Upsert leg + package rows in a single atomic transaction.
 
@@ -1652,6 +1693,10 @@ def write_tape_rows(engine: Engine, tape: pd.DataFrame, as_of_date: str) -> dict
     tape = _normalize_package_id(tape)
     package_rows = build_package_rows(tape, as_of_date=as_of_date)
     leg_rows = build_leg_rows(tape, as_of_date=as_of_date)
+    # Guardrail: never publish a day whose risk is ~entirely null (failed
+    # curve build) — that would silently overwrite good prod data. Raise
+    # BEFORE opening the write transaction so nothing is clobbered.
+    _assert_risk_populated(leg_rows, as_of_date)
 
     raw_conn = engine.raw_connection()
     try:

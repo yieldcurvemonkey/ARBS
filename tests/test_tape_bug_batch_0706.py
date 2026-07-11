@@ -13,8 +13,10 @@ from SDRUtils.analytics.trade_tape import TradeTape
 from SDRUtils.core.tenors import _standard_tenor_label, get_imm_label
 from SDRUtils.packages.ptp_grouper import _classify_single_group
 from SDRUtils._swappulse_scripts.ingest_usdswaps_tape import (
+    _assert_risk_populated,
     _compute_leg_summary,
     _leg_order_series,
+    TapeRiskValidationError,
 )
 from SDRUtils.products.usd.usd_swaps import group_residual_package_trades
 
@@ -442,3 +444,39 @@ def test_fomc_package_leg_order_follows_effective_date():
     order = _leg_order_series(df)
     assert order[df["trade_id"] == "earlier"].iloc[0] == 0
     assert order[df["trade_id"] == "later"].iloc[0] == 1
+
+
+# ---------------------------------------------------------------------------
+# Null-risk publish guardrail (2026-07-06 curve-failure incident)
+# ---------------------------------------------------------------------------
+
+
+def _risk_leg_rows(n, *, null_frac):
+    n_null = int(round(n * null_frac))
+    return [
+        {"trade_id": str(i), "risk": (None if i < n_null else 30000.0)}
+        for i in range(n)
+    ]
+
+
+def test_risk_guard_aborts_on_all_null_risk():
+    # A failed curve build -> all-NULL risk. Publishing would clobber prod.
+    with pytest.raises(TapeRiskValidationError):
+        _assert_risk_populated(_risk_leg_rows(200, null_frac=1.0), "2026-07-06")
+
+
+def test_risk_guard_allows_healthy_day():
+    # 0% null risk -> no raise (zero-risk legs would be fine too; they are
+    # not null).
+    _assert_risk_populated(_risk_leg_rows(200, null_frac=0.0), "2026-07-06")
+
+
+def test_risk_guard_ignores_small_batches():
+    # Small incremental batches (< min legs) never trip the guard even if
+    # fully null — avoids false alarms on tiny service cycles.
+    _assert_risk_populated(_risk_leg_rows(10, null_frac=1.0), "2026-07-06")
+
+
+def test_risk_guard_allows_partial_null():
+    # Some null risk but below the pathological threshold still writes.
+    _assert_risk_populated(_risk_leg_rows(200, null_frac=0.5), "2026-07-06")
