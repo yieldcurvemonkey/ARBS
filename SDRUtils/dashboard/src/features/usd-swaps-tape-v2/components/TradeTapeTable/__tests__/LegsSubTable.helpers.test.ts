@@ -51,25 +51,28 @@ describe('computeLegSummary — OUTRIGHT', () => {
 })
 
 describe('computeLegSummary — CURVE', () => {
-  it('rate = back - front, risk = back leg risk, opa = back - front', () => {
+  it('rate = back - front, risk = back leg risk, opa = signed net', () => {
     const front = leg({
       tenor_years: 5,
       fixed_rate: 0.03605,
       risk: 25_100,
       other_payment_amount: 108_000,
+      opa_sign: -1,
     })
     const back = leg({
       tenor_years: 10,
       fixed_rate: 0.03849,
       risk: 24_900,
       other_payment_amount: 127_000,
+      opa_sign: 1,
     })
     const summary = computeLegSummary(row('CURVE', [front, back], {
       package_transaction_spread: 0.00244,
     }))
     expect(summary.rate).toBeCloseTo(0.03849 - 0.03605, 6)  // = 0.00244
     expect(summary.risk).toBe(24_900)
-    expect(summary.opa).toBe(127_000 - 108_000)              // = 19_000
+    // Signed net (ties out with the reported PTP), NOT back - front.
+    expect(summary.opa).toBe(-108_000 + 127_000)             // = 19_000
     expect(summary.pts).toBeCloseTo(0.00244, 6)
   })
 
@@ -89,26 +92,30 @@ describe('computeLegSummary — FLY', () => {
       fixed_rate: 0.03605,
       risk: 25_000,
       other_payment_amount: 108_000,
+      opa_sign: -1,
     })
     const belly = leg({
       tenor_years: 10,
       fixed_rate: 0.03849,
       risk: 50_000,
       other_payment_amount: 127_000,
+      opa_sign: 1,
     })
     const back = leg({
       tenor_years: 30,
       fixed_rate: 0.04132,
       risk: 25_000,
       other_payment_amount: 2_700,
+      opa_sign: -1,
     })
     const summary = computeLegSummary(row('FLY', [front, belly, back]))
     // 2 * 0.03849 - 0.03605 - 0.04132 = -0.00039
     expect(summary.rate).toBeCloseTo(-0.00039, 6)
     // Belly leg risk
     expect(summary.risk).toBe(50_000)
-    // 2 * 127 - 108 - 2.7 = 143.3 k
-    expect(summary.opa).toBeCloseTo(143_300, 2)
+    // Signed net: -108k + 127k - 2.7k. OPAs are settlement amounts that
+    // tie out with the reported PTP — fly-weighting does not apply.
+    expect(summary.opa).toBeCloseTo(16_300, 2)
   })
 
   it('handles unsorted FLY legs', () => {

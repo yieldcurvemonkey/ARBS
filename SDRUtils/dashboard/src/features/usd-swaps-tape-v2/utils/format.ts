@@ -1,6 +1,7 @@
 // Number / time / tenor formatters for the USD swap tape v2 UI.
 import { EMPTY_VALUE } from '../constants'
 import type { UsdSwapTapeRow } from '../types'
+import { sortLegsForDisplay } from './legSort'
 
 const COMPACT_UNITS: [number, string][] = [
   [1e9, 'B'],
@@ -149,20 +150,23 @@ export function formatReportedLvl(row: UsdSwapTapeRow): string {
   // ``package_type`` and fall back to ``trade_type`` only as a backstop.
   const kind = String(row.package_type ?? row.trade_type ?? '').toUpperCase()
 
+  const legsAll = row.legs_json ?? []
+  // Basis swaps are detected per-leg (basis_type / basis_spread_bps) — the
+  // package_type is often plain OUTRIGHT for a single basis print, so the
+  // per-leg fields are the authoritative signal for the spread render.
   const isBasis =
     kind === 'BASIS' ||
     kind === 'BASIS_SWAP' ||
     kind === 'BASIS_CURVE' ||
     kind === 'BASIS_FLY' ||
-    kind === 'BASIS_HEDGE'
+    kind === 'BASIS_HEDGE' ||
+    legsAll.some(
+      (l) =>
+        l?.basis_type != null ||
+        !isNullish(l?.basis_spread_bps as number | null | undefined),
+    )
   if (isBasis) {
-    const legs = row.legs_json ?? []
-    const sorted = [...legs].sort((a, b) => {
-      const at = typeof a?.tenor_years === 'number' ? a.tenor_years : Number.POSITIVE_INFINITY
-      const bt = typeof b?.tenor_years === 'number' ? b.tenor_years : Number.POSITIVE_INFINITY
-      return at - bt
-    })
-    const spreads = sorted
+    const spreads = sortLegsForDisplay(legsAll)
       .map((l) => l?.basis_spread_bps)
       .filter((s): s is number => !isNullish(s as number | null | undefined))
     if (spreads.length >= 1) {
@@ -182,14 +186,10 @@ export function formatReportedLvl(row: UsdSwapTapeRow): string {
     kind === 'INVOICE_CALENDAR'
   if (isMultiLeg) {
     const legs = row.legs_json ?? []
-    // Desk convention: render tenor-ascending so the CURVE reads
+    // Desk convention: render front-to-back so the CURVE reads
     // "front / back" and FLY reads "short wing / belly / long wing".
-    // Input ``legs_json`` ordering is not guaranteed — sort defensively.
-    const sorted = [...legs].sort((a, b) => {
-      const at = typeof a?.tenor_years === 'number' ? a.tenor_years : Number.POSITIVE_INFINITY
-      const bt = typeof b?.tenor_years === 'number' ? b.tenor_years : Number.POSITIVE_INFINITY
-      return at - bt
-    })
+    // Structure-aware ordering (leg_order) with tenor fallback.
+    const sorted = sortLegsForDisplay(legs)
     const legRates = sorted
       .map((l) => l?.fixed_rate)
       .filter((r): r is number => !isNullish(r as number | null | undefined))

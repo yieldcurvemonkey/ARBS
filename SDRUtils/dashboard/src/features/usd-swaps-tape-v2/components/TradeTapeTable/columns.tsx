@@ -20,6 +20,7 @@ import {
   canonicalSourceVariants,
 } from '../../utils/canonicalDisplay'
 import { computePackageAdjustedDv01 } from '../../utils/packageAdjustedDv01'
+import { sortLegsForDisplay } from '../../utils/legSort'
 import { detectCcpSwitch } from '../../utils/ccpSwitchDetector'
 import { FilterMatchMode } from 'primereact/api'
 import { getFilterDisplayLabel } from './filter-utils'
@@ -529,13 +530,10 @@ export function getColumns(
         summaryFor('other_lvl_reported', config.activeFilters),
       )}
       body={(row: UsdSwapTapeRow) => {
-        // Sort legs tenor-ASC so per-leg OPA / PTP / PTS render front-to-back
-        // (front leg / belly / back leg), matching the Reported LvL column.
-        const legs = [...(row.legs_json ?? [])].sort((a, b) => {
-          const at = typeof a?.tenor_years === 'number' ? a.tenor_years : Number.POSITIVE_INFINITY
-          const bt = typeof b?.tenor_years === 'number' ? b.tenor_years : Number.POSITIVE_INFINITY
-          return at - bt
-        })
+        // Structure-aware ordering so per-leg OPA / PTP / PTS render
+        // front-to-back (front leg / belly / back leg), matching the
+        // Reported LvL column and the expanded legs table.
+        const legs = sortLegsForDisplay(row.legs_json ?? [])
         // For composite CURVE / FLY (SPREADOVER_CURVE, MATCHED_MATURITY_FLY…)
         // each leg carries its own broker-reported PTP / PTS. The backend
         // persists per-leg values when present; render them when at least
@@ -554,7 +552,14 @@ export function getColumns(
           ? legs.map((l) => (l as any).package_transaction_spread ?? null)
           : undefined
         const lines = formatOtherLvl({
-          legOpa: legs.map((l) => l.other_payment_amount ?? null),
+          // Signed per-leg OPA when the sign solver resolved it, so the
+          // line reads "-406k / 542k / 102k" consistently with the
+          // expanded leg table and ties visually to the PTP.
+          legOpa: legs.map((l) =>
+            l.other_payment_amount != null && l.opa_sign != null
+              ? l.opa_sign * l.other_payment_amount
+              : l.other_payment_amount ?? null,
+          ),
           opaCurrency: legs.map((l) => l.other_payment_currency ?? null),
           ptp: row.package_transaction_price ?? null,
           ptpCurrency: row.package_transaction_price_currency ?? null,
