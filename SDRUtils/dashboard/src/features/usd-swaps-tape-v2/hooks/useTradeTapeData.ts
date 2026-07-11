@@ -256,8 +256,17 @@ export function useTradeTapeData(
         if (!res.ok) throw new Error(`Fetch failed: ${res.statusText}`)
         const data: UsdSwapTapeResponse = await res.json()
         upsertRows(data.rows, options?.replace ?? false)
-        setNextCursor(data.nextCursor)
-        setHasMore(data.hasMore)
+        // Only initial/replace and cursor (loadMore) fetches own the
+        // pagination state. A `since` poll fetches the NEWEST slice
+        // (execution_start > since); its nextCursor/hasMore describe that
+        // slice, not the old end of the tape. Applying them here wiped the
+        // "load older" cursor — a poll that returned few/zero new rows set
+        // hasMore=false + nextCursor=null, so every scroll-to-load-more
+        // early-returned and infinite scroll silently died.
+        if (!isPoll) {
+          setNextCursor(data.nextCursor)
+          setHasMore(data.hasMore)
+        }
         if (data.latestExecutionStart) {
           setLatestExecutionStart(data.latestExecutionStart)
         }
