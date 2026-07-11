@@ -32,7 +32,8 @@ def _mk_pair(upi_a: str, upi_b: str) -> pd.DataFrame:
             "execution_timestamp": base + pd.Timedelta(seconds=15),
             "product_type": "OIS_SWAP",
             "package_type": "OUTRIGHT",
-            "estimated_pv01": 46_000.0,
+            # Within both curve DV01 gates (10% relative, $500 absolute)
+            "estimated_pv01": 45_300.0,
             "tenor_label": "10Y",
             "notional_currency": "USD",
             "effective_date": pd.Timestamp("2026-04-17"),

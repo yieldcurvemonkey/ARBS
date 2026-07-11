@@ -192,7 +192,7 @@ _SERVICE_CACHE_DIR_NAME = "service_caches"
 # Keys both the classification parquet day-cache directory and the
 # packaged-day warm-start pickle, so stale-schema frames can never be
 # served after a deploy (2026-07-01 audit, finding C4).
-DETECTION_CACHE_VERSION = "ptp6-resid-plausibility-guard"
+DETECTION_CACHE_VERSION = "ptp7-pts-groups-curve-neutrality"
 
 
 def save_service_caches(cache_dir: str) -> None:
@@ -1284,19 +1284,31 @@ def _expand_hood_for_ptp_keys(
     *,
     tolerance_seconds: int = 5,
 ) -> pd.Series:
-    """Widen a neighborhood mask so PTP groups are never split.
+    """Widen a neighborhood mask so PTP/PTS groups are never split.
 
-    Incremental cycles re-detect only trades near new prints; a PTP group
-    straddling the window edge would otherwise be re-grouped from a subset
-    of its legs while the cached remainder keeps the old package_id. Any
-    out-of-window PTP candidate sharing the exact (PTP, UPI, platform) key
-    with an in-window candidate, within the group time tolerance of the
-    window, is pulled in.
+    Incremental cycles re-detect only trades near new prints; a package
+    group straddling the window edge would otherwise be re-grouped from a
+    subset of its legs while the cached remainder keeps the old package_id.
+    Any out-of-window candidate sharing the exact grouping key with an
+    in-window candidate, within the group time tolerance of the window, is
+    pulled in.
+
+    The key mirrors ``group_by_ptp`` exactly: package price (any non-zero
+    sign) when usable, else sentinel-masked package spread, plus platform.
+    UPI is NOT part of the key — the grouper deliberately excludes it
+    because multi-tenor/multi-forward packages carry different UPIs per
+    leg, so keying the hood on UPI would split exactly those groups.
     """
+    from SDRUtils.core.parsing import mask_sentinels
     from SDRUtils.packages.ptp_grouper import numeric_like
 
     ptp = numeric_like(df.get("package_transaction_price",
                               pd.Series(index=df.index, dtype=object)))
+    pts = mask_sentinels(
+        numeric_like(df.get("package_transaction_spread",
+                            pd.Series(index=df.index, dtype=object))),
+        "spread_decimal",
+    )
     ind = (
         df.get("package_indicator", pd.Series(False, index=df.index))
         .astype(str).str.lower().isin({"true", "t", "1", "1.0", "yes"})
@@ -1305,14 +1317,16 @@ def _expand_hood_for_ptp_keys(
         df.get("execution_timestamp", pd.Series(pd.NaT, index=df.index)),
         errors="coerce", utc=True,
     )
-    cand = ind & ptp.notna() & (ptp > 0) & ts.notna()
+    ptp_usable = ptp.notna() & (ptp != 0)
+    pts_usable = pts.notna() & (pts != 0)
+    cand = ind & (ptp_usable | pts_usable) & ts.notna()
     hood_cand = hood_mask & cand
     if not hood_cand.any():
         return hood_mask
 
-    upi = df.get("unique_product_identifier", pd.Series("", index=df.index)).astype(str)
     plat = df.get("platform_identifier", pd.Series("", index=df.index)).astype(str)
-    key = ptp.astype(str) + "|" + upi + "|" + plat
+    val_key = ("P:" + ptp.astype(str)).where(ptp_usable.to_numpy(), "S:" + pts.astype(str))
+    key = val_key + "|" + plat
 
     in_keys = set(key[hood_cand])
     lo = ts[hood_cand].min() - pd.Timedelta(seconds=tolerance_seconds)
