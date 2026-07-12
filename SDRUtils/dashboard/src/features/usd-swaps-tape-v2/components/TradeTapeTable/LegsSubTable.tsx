@@ -13,10 +13,12 @@ import {
   ECONOMIC_CLASS_TONES,
   EMPTY_VALUE,
   PACKAGE_CONFIDENCE_TONES,
+  RISK_HIGHLIGHT_ABS,
 } from '../../constants'
 import type { EconomicClass, UsdSwapTapeLeg, UsdSwapTapeRow } from '../../types'
 import type { NoteTarget } from '../../types/note.types'
 import { computeLegSummary } from './LegsSubTable.helpers'
+import { derivedSpreadBp, ptsInBp, formatBp } from '../../utils/ptsScale'
 import { sortLegsForDisplay } from '../../utils/legSort'
 import { perLegLabel, stripExecutionTags } from './TapeLabelCell.helpers'
 import {
@@ -512,6 +514,11 @@ export function LegsSubTable({
         }`
       : EMPTY_VALUE
   const summaryPtsText = summary.pts != null ? String(summary.pts) : EMPTY_VALUE
+  // Enhancement 1b: render the calculated rate spread and the PTS in bps in the
+  // summary row (scale inferred by tying the PTS to the derived spread). Per-leg
+  // raw PTS stays untouched in the leg rows above.
+  const summaryDerivedBp = derivedSpreadBp(row, summary.rate)
+  const summaryPtsBp = ptsInBp(summary.pts, summaryDerivedBp)
 
   return (
     <div
@@ -632,7 +639,13 @@ export function LegsSubTable({
                 <td className="whitespace-nowrap px-2 py-1 text-right font-mono">
                   {formatNotional(leg.notional ?? null, { compact: true })}
                 </td>
-                <td className="whitespace-nowrap px-2 py-1 text-right font-mono">
+                <td
+                  className={`whitespace-nowrap px-2 py-1 text-right font-mono${
+                    Math.abs(leg.risk ?? 0) >= RISK_HIGHLIGHT_ABS
+                      ? ' font-bold text-amber-300'
+                      : ''
+                  }`}
+                >
                   {formatDv01(leg.risk ?? null)}
                 </td>
                 <td className="whitespace-nowrap px-2 py-1 text-right font-mono">
@@ -703,11 +716,19 @@ export function LegsSubTable({
                 <td className="px-2 py-1" />
                 <td className="px-2 py-1" />
                 <td className="px-2 py-1" />
-                <td className="whitespace-nowrap px-2 py-1 text-right font-mono">
+                <td
+                  className={`whitespace-nowrap px-2 py-1 text-right font-mono${
+                    Math.abs(summary.risk ?? 0) >= RISK_HIGHLIGHT_ABS
+                      ? ' font-bold text-amber-300'
+                      : ''
+                  }`}
+                >
                   {formatDv01(summary.risk)}
                 </td>
                 <td className="whitespace-nowrap px-2 py-1 text-right font-mono">
-                  {formatRate(summary.rate, { precision: 5 })}
+                  {summaryDerivedBp !== null
+                    ? formatBp(summaryDerivedBp)
+                    : formatRate(summary.rate, { precision: 5 })}
                 </td>
                 <td className="whitespace-nowrap px-2 py-1 text-right font-mono">
                   {summaryOpaText}
@@ -716,7 +737,7 @@ export function LegsSubTable({
                   {summaryPtpText}
                 </td>
                 <td className="whitespace-nowrap px-2 py-1 text-right font-mono">
-                  {summaryPtsText}
+                  {summaryPtsBp !== null ? formatBp(summaryPtsBp) : summaryPtsText}
                 </td>
                 <td className="px-2 py-1" />
                 <td className="px-2 py-1" />

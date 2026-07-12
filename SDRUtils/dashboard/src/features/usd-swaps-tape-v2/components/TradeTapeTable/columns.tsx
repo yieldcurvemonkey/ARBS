@@ -4,7 +4,7 @@ import type { JSX } from 'react'
 import { Column } from 'primereact/column'
 import type { DataTableFilterMeta } from 'primereact/datatable'
 import { StickyNote } from 'lucide-react'
-import { EMPTY_VALUE, PACKAGE_CONFIDENCE_TONES } from '../../constants'
+import { EMPTY_VALUE, PACKAGE_CONFIDENCE_TONES, RISK_HIGHLIGHT_ABS } from '../../constants'
 import type { NoteTarget, UsdSwapTapeRow } from '../../types'
 import {
   formatDv01,
@@ -20,6 +20,8 @@ import {
   canonicalSourceVariants,
 } from '../../utils/canonicalDisplay'
 import { computePackageAdjustedDv01 } from '../../utils/packageAdjustedDv01'
+import { computeLegSummary } from './LegsSubTable.helpers'
+import { derivedSpreadBp, ptsInBp, formatBp } from '../../utils/ptsScale'
 import { sortLegsForDisplay } from '../../utils/legSort'
 import { detectCcpSwitch } from '../../utils/ccpSwitchDetector'
 import { FilterMatchMode } from 'primereact/api'
@@ -493,8 +495,17 @@ export function getColumns(
                   { signNegativeOnly: true },
                 )
               : formatNotional(row.total_notional ?? null, { compact: true })
+        // Highlight large risk prints (|Risk| >= 200k, DV01 mode only) so the
+        // desk's biggest tickets jump off the tape.
+        const bigRisk =
+          mode === 'dv01' &&
+          Math.abs(row.total_risk ?? 0) >= RISK_HIGHLIGHT_ABS
         return (
-          <span className="block text-right font-mono text-[14px] font-bold tracking-tight text-slate-50">
+          <span
+            className={`block text-right font-mono text-[14px] font-bold tracking-tight ${
+              bigRisk ? 'text-amber-300' : 'text-slate-50'
+            }`}
+          >
             {display}
           </span>
         )
@@ -551,6 +562,15 @@ export function getColumns(
         const legPts = isMultiLeg
           ? legs.map((l) => (l as any).package_transaction_spread ?? null)
           : undefined
+        // Enhancement 1b: render the package PTS in bps in the Other Lvl cell
+        // (scale inferred by tying it to the derived rate spread). Per-leg raw
+        // PTS stays in the expanded legs table.
+        const _summary = computeLegSummary(row)
+        const _dBp = derivedSpreadBp(row, _summary.rate)
+        const _ptsBp = ptsInBp(
+          row.package_transaction_spread ?? _summary.pts,
+          _dBp,
+        )
         const lines = formatOtherLvl({
           // Signed per-leg OPA when the sign solver resolved it, so the
           // line reads "-406k / 542k / 102k" consistently with the
@@ -574,7 +594,7 @@ export function getColumns(
           >
             <span>{lines.opaLine}</span>
             <span>{lines.ptpLine}</span>
-            <span>{lines.ptsLine}</span>
+            <span>{_ptsBp !== null ? `PTS: ${formatBp(_ptsBp)}` : lines.ptsLine}</span>
           </div>
         )
       }}
