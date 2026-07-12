@@ -207,6 +207,7 @@ export const TAPE_TAG_TONES: Record<string, string> = {
   CLRG: 'bg-zinc-700/50 text-zinc-300',
   OLD: 'bg-amber-500/25 text-amber-200 ring-1 ring-amber-500/40',
   'PAST-EFF': 'bg-amber-500/25 text-amber-200 ring-1 ring-amber-500/40',
+  LEVERED: 'bg-indigo-900/40 text-indigo-200 ring-1 ring-indigo-400/40',
 }
 
 export const TIMESERIES_METRICS: Array<{ key: TimeseriesMetricKey; label: string }> = [

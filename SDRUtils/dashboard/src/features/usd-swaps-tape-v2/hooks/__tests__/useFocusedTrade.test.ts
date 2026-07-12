@@ -74,7 +74,7 @@ describe('normalizeFocusedTrade', () => {
     expect(focused?.notional_usd).toBe(540_000_000)
   })
 
-  it('uses the inferred base package type for analytics trade_type', () => {
+  it('uses the stored package_type for analytics trade_type (inferredType override removed)', () => {
     const focused = normalizeFocusedTrade(
       row({
         package_type: 'SPREADOVER_FLY',
@@ -106,7 +106,11 @@ describe('normalizeFocusedTrade', () => {
       }),
     )
 
-    expect(focused?.trade_type).toBe('FLY')
+    // Override removed: confidence.inferredType is always null now, so
+    // trade_type falls through to row.package_type verbatim — this row
+    // used to downgrade to 'FLY' via the uniform-per-leg-PTS heuristic;
+    // it now trusts the stored SPREADOVER_FLY tag.
+    expect(focused?.trade_type).toBe('SPREADOVER_FLY')
   })
 })
 
