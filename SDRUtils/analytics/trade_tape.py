@@ -1202,6 +1202,8 @@ class TradeTape(SDRAnalyzer):
                 return None
             tenor_src = "tenor_display" if "tenor_display" in df.columns else "tenor_label"
             extra = [tenor_src] + (["effective_date"] if "effective_date" in df.columns else [])
+            if "fomc_meeting_label" in df.columns:
+                extra.append("fomc_meeting_label")
             leg_data = df.loc[leg_indices, needed + extra].copy()
             ty = pd.to_numeric(leg_data["tenor_years"], errors="coerce")
             fy = pd.to_numeric(leg_data["forward_start_years"], errors="coerce")
@@ -1218,10 +1220,17 @@ class TradeTape(SDRAnalyzer):
                 if s.lower() == "spot":
                     fwd_tokens.append("Spot")
                     continue
-                # Prefer the IMM anchor when the leg starts on an IMM date but
-                # the stored forward label is a relative bucket ("4Y11M") —
-                # covers rows classified before forward labels were date-aware.
-                if not s.startswith(("IMM_", "FOMC")) and "effective_date" in leg_data.columns:
+                # FOMC notation is only valid for a genuine consecutive-meeting
+                # swap (its own fomc_meeting_label is populated). A standard
+                # tenor that merely STARTS on an IMM date coinciding with a FOMC
+                # meeting gets a spurious "FOMC_YYYYMMDD" forward label upstream;
+                # re-derive the IMM anchor from the effective date so the package
+                # label matches the per-leg label ("IMM_U2026", not "FOMC SEP26").
+                _leg_fomc = str(lrow.get("fomc_meeting_label", "")).strip()
+                _is_consec_fomc = _leg_fomc and _leg_fomc.lower() not in ("nan", "none")
+                if "effective_date" in leg_data.columns and not s.startswith("IMM_") and (
+                    not s.startswith("FOMC") or not _is_consec_fomc
+                ):
                     _eff = lrow.get("effective_date")
                     if pd.notna(_eff):
                         _imm = get_imm_label(pd.Timestamp(_eff))
@@ -1290,6 +1299,23 @@ class TradeTape(SDRAnalyzer):
                     and trade_type
                     not in ("INVOICE", "INVOICE_CALENDAR", "INVOICE_SWITCH")
                 )
+            )
+
+            # PKG-N is carried on package_type (assign_trade_type does not emit
+            # it). A LARGE package (>=4 legs) can't sensibly list every tenor, so
+            # it renders a compact "PKG-N" structure with no forward/tenor/FOMC
+            # prefix; small (2-3 leg) packages keep their tenor detail.
+            _pkg_type_up = str(row.get("package_type", "")).upper()
+            try:
+                _n_pkg_legs = int(row.get("n_package_legs") or 0)
+            except (TypeError, ValueError):
+                _n_pkg_legs = 0
+            if not _n_pkg_legs:
+                _pl = row.get("package_legs")
+                if isinstance(_pl, (list, tuple)):
+                    _n_pkg_legs = len(_pl)
+            _render_as_pkg_n = (
+                (not leg_scope) and _is_pkg_n(_pkg_type_up) and _n_pkg_legs >= 4
             )
 
             # 3+4. Forward + Tenor (FOMC-dated + invoice-swap get special handling)
@@ -1424,7 +1450,7 @@ class TradeTape(SDRAnalyzer):
                     parts.append(invoice_label)
             else:
                 _fomc_rendered = False
-                if _is_fomc_trade:
+                if _is_fomc_trade and not _render_as_pkg_n:
                     if (_is_curvey(trade_type) or _is_flyey(trade_type)) and not leg_as_outright:
                         leg_labels = _fomc_pkg_from_legs()
                         if leg_labels:
@@ -1445,10 +1471,10 @@ class TradeTape(SDRAnalyzer):
                         _fomc_rendered = True
 
                 # Package-scope PKG-N: skip forward + raw tenors entirely;
-                # the structure token (PKG-3, PKG-6, …) is appended in step 5.
+                # the structure token (PKG-4, PKG-16, …) is appended in step 5.
                 # Leg-scope PKG-N is handled by leg_as_outright (own tenor +
                 # "Outright").
-                _pkg_n_package_scope = _is_pkg_n(trade_type) and not leg_scope
+                _pkg_n_package_scope = _render_as_pkg_n
 
                 if not _fomc_rendered and not _pkg_n_package_scope:
                     # Gap packages (same tail tenor, distinct forwards — e.g.
@@ -1529,8 +1555,8 @@ class TradeTape(SDRAnalyzer):
             # different roots is a Switch, not a CURVE.
             if leg_as_outright:
                 parts.append("Outright")
-            elif _is_pkg_n(trade_type) and not leg_scope:
-                parts.append(trade_type)
+            elif _render_as_pkg_n:
+                parts.append(_pkg_type_up)
             elif trade_type == "INVOICE":
                 parts.append("Outright")
             elif trade_type == "INVOICE_CALENDAR":
