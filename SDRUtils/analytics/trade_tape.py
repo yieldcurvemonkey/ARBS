@@ -64,7 +64,7 @@ def _hour_to_session(hour: int) -> str:
 # Result cache versioning
 # ---------------------------------------------------------------------------
 
-TRADE_TAPE_CACHE_VERSION = "v17-curve-fly-tieout-fomc-0712"
+TRADE_TAPE_CACHE_VERSION = "v18-levered-spreadover-curve"
 
 # Clean single-unit spot tenor ("1M", "2M", "5Y", "1W", "6D"). Used to let a
 # standard tenor win over the UST MMYY alias in tape labels.
@@ -1685,6 +1685,16 @@ class TradeTape(SDRAnalyzer):
                 tags.append("EXER")
             if row.get("is_clearing_termination", False):
                 tags.append("CLRG")
+            _fwd_y = row.get("forward_start_years")
+            _ten_y = row.get("tenor_years")
+            try:
+                if (
+                    pd.notna(_fwd_y) and pd.notna(_ten_y)
+                    and float(_fwd_y) - float(_ten_y) > 0.05
+                ):
+                    tags.append("LEVERED")
+            except (TypeError, ValueError):
+                pass
             return ",".join(tags) if tags else ""
 
         df["tape_label"] = df.apply(_label_for_row, axis=1)
