@@ -3,6 +3,7 @@ from typing import Dict, List, Optional, Tuple
 import numpy as np
 import pandas as pd
 
+from SDRUtils.core.pts_scale import pts_ties_to_spread
 from SDRUtils.core.utils import _ensure_int64_epoch_seconds, _pv01_bucket
 from SDRUtils.packages.base import PackageDetector
 
@@ -50,6 +51,12 @@ def detect_curve_trades_df(
     pts_col: str = "package_transaction_spread",
     reject_non_standard_term: bool = True,
     non_standard_term_col: str = "is_non_standard_term",
+    # Strict same-second gate for unflagged legs: a pair where either leg is
+    # NOT package_indicator=True must share the exact execution second (no
+    # window) — coincidental co-execution 30-60s apart is not a curve.
+    require_same_second_if_unflagged: bool = True,
+    pkg_ind_col: str = "package_indicator",
+    rate_col: str = "fixed_rate",
 ) -> pd.DataFrame:
     """
     Fast curve detection on the classifications dataframe.
@@ -115,6 +122,10 @@ def detect_curve_trades_df(
         cols.append(tenor_segment_col)
     if require_same_pts and pts_col in out.columns:
         cols.append(pts_col)
+    if require_same_second_if_unflagged and pkg_ind_col in out.columns:
+        cols.append(pkg_ind_col)
+    if rate_col in out.columns:
+        cols.append(rate_col)
 
     cols = list(dict.fromkeys(cols))
 
@@ -175,6 +186,19 @@ def detect_curve_trades_df(
         ).to_numpy(dtype=np.float64)
     else:
         pts = None
+
+    # pkg-indicator (for the strict same-second gate on unflagged legs) and
+    # fixed rates (for the affirmative PTS tie-out abs-DV01 override).
+    if require_same_second_if_unflagged and pkg_ind_col in cand.columns:
+        pkg_flag = cand[pkg_ind_col].astype(str).str.lower().isin(
+            {"true", "t", "1", "1.0", "yes"}
+        ).to_numpy()
+    else:
+        pkg_flag = None
+    rate_arr = (
+        pd.to_numeric(cand[rate_col], errors="coerce").to_numpy(dtype=np.float64)
+        if rate_col in cand.columns else None
+    )
 
     # Eviction uses conservative (widest) window when V2 present
     _evict_window = time_window_seconds if tseg is None else max(time_window_short, time_window_medium)
@@ -285,6 +309,14 @@ def detect_curve_trades_df(
                     continue
                 if tsec[i] - tsec[j] > _effective_window(i, j):
                     continue
+                # Strict same-second gate: an unflagged leg (package_indicator
+                # not True) only pairs when both legs share the exact second.
+                if (
+                    pkg_flag is not None
+                    and (not pkg_flag[i] or not pkg_flag[j])
+                    and tsec[i] != tsec[j]
+                ):
+                    continue
 
                 # economic guards (fast array comparisons)
                 if not _econ_ok(i, j):
@@ -306,10 +338,20 @@ def detect_curve_trades_df(
                 avg = 0.5 * (pv01[i] + pv01[j])
                 if avg <= 0:
                     continue
+                # Affirmative PTS tie-out (reported package spread matches the
+                # legs' fixed-rate spread at a clean scale) is stronger evidence
+                # of a curve than the flat abs-DV01 gap, so it overrides the
+                # $500 abs gate (relative tolerance below still applies).
+                _pts_ties = (
+                    pts is not None and rate_arr is not None
+                    and not (np.isnan(pts[i]) or np.isnan(pts[j]))
+                    and pts_ties_to_spread(rate_arr[i], rate_arr[j], pts[i])
+                )
                 if (
                     not _fomc_pair
                     and pv01_abs_tolerance is not None
                     and abs(pv01[i] - pv01[j]) > pv01_abs_tolerance
+                    and not _pts_ties
                 ):
                     continue
                 rel = abs(pv01[i] - pv01[j]) / avg
