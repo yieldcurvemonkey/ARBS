@@ -61,3 +61,16 @@ def test_curve_stays_plain_when_level_missing():
     ])
     out = detect_spreadover_curves_df(df)
     assert (out.loc[out["package_id"] == "P1", "package_type"] == "CURVE").all()
+
+
+def test_distinct_leg_spreads_still_upgrade_in_phase1_path():
+    # This case (distinct per-leg spreads) is handled by Phase-1, NOT the
+    # differential detector — assert the differential detector leaves it alone
+    # so the two paths don't double-fire.
+    df = pd.DataFrame([
+        _curve_leg("C1", "P1", 10.0, -0.004239),
+        _curve_leg("C2", "P1", 30.0, -0.007475),
+    ])
+    # no standalone levels -> differential detector no-ops
+    out = detect_spreadover_curves_df(df)
+    assert (out.loc[out["package_id"] == "P1", "package_type"] == "CURVE").all()

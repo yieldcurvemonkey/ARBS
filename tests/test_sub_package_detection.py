@@ -24,9 +24,18 @@ def _curve_pair(
     *,
     matched_ust_maturity: bool = False,
     package_indicator: bool = False,
-    package_transaction_spread: float | None = None,
+    package_transaction_spread: float | tuple[float, float] | None = None,
 ) -> pd.DataFrame:
-    """Two legs already paired as a CURVE by a prior detector run."""
+    """Two legs already paired as a CURVE by a prior detector run.
+
+    ``package_transaction_spread`` may be a single scalar (broadcast to both
+    legs, i.e. a uniform/broadcast package spread) or a (front, back) tuple
+    for DISTINCT per-leg spreads -- the genuine Phase-1 spreadover-curve case.
+    """
+    if isinstance(package_transaction_spread, tuple):
+        spread_front, spread_back = package_transaction_spread
+    else:
+        spread_front = spread_back = package_transaction_spread
     return pd.DataFrame([
         {
             "trade_id": "T10Y",
@@ -36,7 +45,7 @@ def _curve_pair(
             "package_legs": ["T10Y", "T20Y"],
             "matched_ust_maturity": matched_ust_maturity,
             "package_indicator": package_indicator,
-            "package_transaction_spread": package_transaction_spread,
+            "package_transaction_spread": spread_front,
             "forward_label": "spot",
         },
         {
@@ -47,7 +56,7 @@ def _curve_pair(
             "package_legs": ["T10Y", "T20Y"],
             "matched_ust_maturity": matched_ust_maturity,
             "package_indicator": package_indicator,
-            "package_transaction_spread": package_transaction_spread,
+            "package_transaction_spread": spread_back,
             "forward_label": "spot",
         },
     ])
@@ -88,7 +97,15 @@ def test_fly_all_mms_legs_upgrades_to_MATCHED_MATURITY_FLY():
 
 
 def test_curve_all_spreadover_legs_upgrades_to_SPREADOVER_CURVE():
-    df = _curve_pair(package_indicator=True, package_transaction_spread=-0.004)
+    # DISTINCT per-leg spreads -- the genuine Phase-1 case. A uniform/shared
+    # spread across legs is a broadcast package spread, not distinct
+    # standalone spreadover levels, and is left to detect_spreadover_curves_df
+    # (the differential detector) instead -- see
+    # test_uniform_leg_spread_does_not_upgrade_in_phase1 below.
+    df = _curve_pair(
+        package_indicator=True,
+        package_transaction_spread=(-0.004239, -0.007475),
+    )
     out = detect_sub_package_curve_fly(df)
     assert set(out["package_type"].tolist()) == {"SPREADOVER_CURVE"}
 
@@ -96,13 +113,25 @@ def test_curve_all_spreadover_legs_upgrades_to_SPREADOVER_CURVE():
 def test_spreadover_takes_precedence_over_mms_when_both_apply():
     # A spread-curve where each leg also matches a UST coupon — the
     # SPREADOVER tag is more specific, so prefer SPREADOVER_CURVE.
+    # DISTINCT per-leg spreads -- the genuine Phase-1 case (see above).
     df = _curve_pair(
         matched_ust_maturity=True,
         package_indicator=True,
-        package_transaction_spread=-0.004,
+        package_transaction_spread=(-0.004239, -0.007475),
     )
     out = detect_sub_package_curve_fly(df)
     assert set(out["package_type"].tolist()) == {"SPREADOVER_CURVE"}
+
+
+def test_uniform_leg_spread_does_not_upgrade_in_phase1():
+    # A UNIFORM (shared) per-leg spread is a broadcast package spread, not
+    # distinct individual spreadover levels -- Phase-1 leaves it as a plain
+    # CURVE. Confirming it as SPREADOVER_CURVE is the differential
+    # detector's job (detect_spreadover_curves_df), which requires standalone
+    # SPREADOVER prints to tie the package PTS out to a differential.
+    df = _curve_pair(package_indicator=True, package_transaction_spread=-0.004)
+    out = detect_sub_package_curve_fly(df)
+    assert set(out["package_type"].tolist()) == {"CURVE"}
 
 
 def test_plain_curve_without_mms_or_spreadover_stays_CURVE():

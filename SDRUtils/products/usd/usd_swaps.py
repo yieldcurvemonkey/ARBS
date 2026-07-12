@@ -192,7 +192,7 @@ _SERVICE_CACHE_DIR_NAME = "service_caches"
 # Keys both the classification parquet day-cache directory and the
 # packaged-day warm-start pickle, so stale-schema frames can never be
 # served after a deploy (2026-07-01 audit, finding C4).
-DETECTION_CACHE_VERSION = "ptp10-curve-fly-tieout-0712"
+DETECTION_CACHE_VERSION = "ptp11-spreadover-curve-diff"
 
 
 def save_service_caches(cache_dir: str) -> None:
@@ -805,7 +805,17 @@ def detect_sub_package_curve_fly(
             all_mms = bool(leg_mms.loc[idx].all())
             all_spreadover = bool(leg_spreadover.loc[idx].all())
 
-            if all_spreadover:
+            # Uniform per-leg spread = a broadcast package spread, not distinct
+            # individual spreadover levels. Only DISTINCT per-leg spreads are an
+            # unambiguous spreadover structure here; the uniform / no-spread case
+            # is confirmed separately by detect_spreadover_curves_df (differential
+            # vs standalone spreadover levels).
+            _leg_spreads = pd.to_numeric(
+                out.loc[idx, "package_transaction_spread"], errors="coerce"
+            ).round(10)
+            _distinct_spreads = _leg_spreads.nunique(dropna=True) >= 2
+
+            if all_spreadover and _distinct_spreads:
                 new_type = f"SPREADOVER_{base_type}"
             elif all_mms:
                 new_type = f"MATCHED_MATURITY_{base_type}"
@@ -1944,6 +1954,10 @@ class USD_SwapProduct(USDProductBase):
                             ptp_df = detect_sub_package_curve_fly(
                                 ptp_df, detector_kwargs=_snake_detector_cols
                             )
+                            from SDRUtils.packages.spreadover_curve import (
+                                detect_spreadover_curves_df,
+                            )
+                            ptp_df = detect_spreadover_curves_df(ptp_df)
 
                     df = non_ptp_df
 
@@ -1972,6 +1986,10 @@ class USD_SwapProduct(USDProductBase):
                         df = detect_sub_package_curve_fly(
                             df, detector_kwargs=_snake_detector_cols
                         )
+                        from SDRUtils.packages.spreadover_curve import (
+                            detect_spreadover_curves_df,
+                        )
+                        df = detect_spreadover_curves_df(df)
                     # Residual pass: co-executed package legs that every
                     # detector above declined (no usable PTP, no DV01 shape)
                     # still group into PKG-N on (second, platform, UPI).
