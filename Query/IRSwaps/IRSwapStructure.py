@@ -80,7 +80,11 @@ class IRSwapStructureFunctionMap(BaseStructureFunctionMap[IRSwapStructure, _IRSw
                     if ref_is_date:
                         return imm.date()
                     return imm
-                return get_imm(code=d.split("IMM_")[-1])
+                code = d.split("IMM_")[-1]
+                # normalize 4-digit year to 2-digit: "H2027" → "H27"
+                if len(code) == 5 and code[0].isalpha() and code[1:].isdigit():
+                    code = code[0] + code[3:]
+                return get_imm(code=code)
 
             current_curve: _IRSwapGenericCurve = self.common_kwargs["curve"]
             d = current_curve.calendar_advance(ref_date, d)
