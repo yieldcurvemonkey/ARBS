@@ -1944,10 +1944,6 @@ class USD_SwapProduct(USDProductBase):
                             ptp_df = detect_sub_package_curve_fly(
                                 ptp_df, detector_kwargs=_snake_detector_cols
                             )
-                            from SDRUtils.packages.spreadover_curve import (
-                                detect_spreadover_curves_df,
-                            )
-                            ptp_df = detect_spreadover_curves_df(ptp_df)
 
                     df = non_ptp_df
 
@@ -1976,16 +1972,20 @@ class USD_SwapProduct(USDProductBase):
                         df = detect_sub_package_curve_fly(
                             df, detector_kwargs=_snake_detector_cols
                         )
-                        from SDRUtils.packages.spreadover_curve import (
-                            detect_spreadover_curves_df,
-                        )
-                        df = detect_spreadover_curves_df(df)
                     # Residual pass: co-executed package legs that every
                     # detector above declined (no usable PTP, no DV01 shape)
                     # still group into PKG-N on (second, platform, UPI).
                     df = group_residual_package_trades(df)
 
                     df = pd.concat([ptp_df, df], ignore_index=True)
+                    # Spreadover-curve differential runs on the COMBINED frame:
+                    # standalone SPREADOVER reference prints (the level source)
+                    # land in the non-PTP remainder while grouped curve/fly
+                    # candidates sit in ptp_df, so both are only together here.
+                    from SDRUtils.packages.spreadover_curve import (
+                        detect_spreadover_curves_df,
+                    )
+                    df = detect_spreadover_curves_df(df)
                     df = _rollup_matched_maturity_packages(df)
                     df = solve_all_opa_signs(df)
                     return df
