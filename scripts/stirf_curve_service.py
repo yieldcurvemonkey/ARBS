@@ -103,6 +103,9 @@ _STIRT_IMM_HORIZON_COUNT = 13
 _STIRT_DEFAULT_RELATIVE_IMM_TENORS = tuple(
     f"IMM_{idx}xIMM_{idx + 1}" for idx in range(1, 13)
 )
+_MIXED_STIRT_SPOT_TENORS = tuple(f"{m}M" for m in range(1, 19))
+_MIXED_STIRT_FORWARD_TENORS = ("1Y", "1Y1Y", "2Y1Y")
+_MIXED_STIRT_FOMC_COUNT = 12
 _FORWARD_START_TENORS = _STIRT_FORWARD_START_TENORS
 _GENERIC_CB_FORWARD_START_TENORS = (
     "1Y1Y",
@@ -1215,6 +1218,11 @@ def _is_stirt_curve(curve_name: str) -> bool:
     return "STIRT" in str(curve_name or "").upper()
 
 
+def _is_mixed_stirt_curve(curve_name: str) -> bool:
+    upper = str(curve_name or "").upper()
+    return "STIRT" in upper and "XM" in upper
+
+
 def _as_date(value: Any) -> dt.date:
     if isinstance(value, dt.datetime):
         return value.date()
@@ -1327,6 +1335,12 @@ def _default_tenors_for_curve(curve_name: str, *, anchor_date: dt.date | None = 
         anchor_date = dt.date.today()
 
     base = list(_BASE_OUTRIGHT_TENORS)
+    if _is_mixed_stirt_curve(curve_name):
+        tenors = list(_STIRT_DEFAULT_RELATIVE_IMM_TENORS)
+        tenors.extend(f"fomc_{rank}" for rank in range(1, _MIXED_STIRT_FOMC_COUNT + 1))
+        tenors.extend(_MIXED_STIRT_SPOT_TENORS)
+        tenors.extend(_MIXED_STIRT_FORWARD_TENORS)
+        return _dedupe_preserve_order(tenors)
     if _is_stirt_curve(curve_name):
         return list(_STIRT_DEFAULT_RELATIVE_IMM_TENORS)
 
