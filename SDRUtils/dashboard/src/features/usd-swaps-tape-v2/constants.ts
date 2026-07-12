@@ -290,6 +290,12 @@ export const PACKAGE_CONFIDENCE_TOLERANCES = {
   riskBalanceRel: 0.10,
 }
 
+/**
+ * Absolute |Risk| (package DV01) at/above which the Risk column value is
+ * highlighted so the desk's largest tickets stand out. Tunable.
+ */
+export const RISK_HIGHLIGHT_ABS = 200_000
+
 export const PACKAGE_CONFIDENCE_TONES = {
   /** All signals passed. */
   high: 'bg-emerald-900/40 text-emerald-200 ring-1 ring-emerald-400/40',

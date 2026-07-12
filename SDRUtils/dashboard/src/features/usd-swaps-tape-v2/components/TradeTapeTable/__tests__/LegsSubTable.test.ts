@@ -189,7 +189,7 @@ describe('LegsSubTable confidence strip', () => {
     expect(html).toContain('Show Package Confidence Details')
   })
 
-  it('renders the summary derived rate with extra precision', () => {
+  it('renders the summary derived rate in bps with extra precision (Enh 1b)', () => {
     const html = renderToStaticMarkup(
       LegsSubTable({
         row: {
@@ -205,6 +205,8 @@ describe('LegsSubTable confidence strip', () => {
         } as any,
       }),
     )
-    expect(html).toContain('0.00125%')
+    // Enhancement 1b: the calculated fly spread renders in bps (0.0000125
+    // decimal -> 0.125bps) rather than the old "0.00125%".
+    expect(html).toContain('0.125bps')
   })
 })

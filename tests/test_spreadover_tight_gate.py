@@ -62,6 +62,22 @@ def test_exactly_at_ceiling_fires():
     assert bool(out.loc[0, "is_spreadover"]) is True
 
 
+def test_percent_scaled_spreadover_fires():
+    """-0.422 is -42.2 bps reported in percent scale (a data-scale error, not a
+    valid decimal). Distinct from a mis-scaled decimal like 0.015 (=150 bps)."""
+    for pct in (-0.422, 0.30, -0.75, 1.0):
+        out = detect_spreadovers(_mk(package_transaction_spread=pct))
+        assert bool(out.loc[0, "is_spreadover"]) is True, f"{pct} should fire"
+        assert out.loc[0, "package_type"] == "SPREADOVER"
+
+
+def test_ambiguous_mid_scale_does_not_fire():
+    """(0.01, 0.10) is a mis-scaled decimal (e.g. 0.015 = 150 bps) -> reject."""
+    for bad in (0.015, 0.05, 0.099):
+        out = detect_spreadovers(_mk(package_transaction_spread=bad))
+        assert bool(out.loc[0, "is_spreadover"]) is False, f"{bad} should not fire"
+
+
 def test_tiny_nonzero_spread_still_fires():
     """0.5 bps is small but can be a legit short-dated spreadover."""
     out = detect_spreadovers(_mk(package_transaction_spread=0.00005))

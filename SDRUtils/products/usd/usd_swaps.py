@@ -192,7 +192,7 @@ _SERVICE_CACHE_DIR_NAME = "service_caches"
 # Keys both the classification parquet day-cache directory and the
 # packaged-day warm-start pickle, so stale-schema frames can never be
 # served after a deploy (2026-07-01 audit, finding C4).
-DETECTION_CACHE_VERSION = "ptp9-pts-sentinel-mask"
+DETECTION_CACHE_VERSION = "ptp10-curve-fly-tieout-0712"
 
 
 def save_service_caches(cache_dir: str) -> None:
@@ -705,6 +705,15 @@ def detect_mac_swaps(package_df: pd.DataFrame) -> pd.DataFrame:
 #: rarely exceed -80 bps in magnitude even on the long end.
 _SPREADOVER_SPREAD_ABS_CEILING: float = 0.01
 
+#: Percent-scale band. Some venues mis-report the spread in PERCENT rather than
+#: decimal (e.g. ``-0.422`` meaning ``-42.2 bps`` instead of ``-0.00422``). A
+#: magnitude clearly outside the decimal band but within ``[0.10, 1.0]`` (=10-100
+#: bps once ÷100) is a percent-scaled spreadover. The gap ``(0.01, 0.10)`` is
+#: left rejected — a value there (e.g. ``0.015`` = 150 bps decimal) reads as a
+#: mis-scaled decimal, not a plausible spread on either interpretation.
+_SPREADOVER_PERCENT_LO: float = 0.10
+_SPREADOVER_PERCENT_HI: float = 1.0
+
 #: Spreadovers only trade at benchmark tenors. A trade at e.g. 8Y or
 #: 4Y with a spread is not a spreadover — it's a misparse or a
 #: matched-maturity swap. Tolerance ±0.1y around each benchmark.
@@ -1099,13 +1108,17 @@ def detect_spreadovers(package_df: pd.DataFrame):
     forward_label_col = copy_df.get(
         "forward_label", pd.Series(["spot"] * len(copy_df), index=copy_df.index)
     )
+    _abs_spread = spread_num.abs()
+    _in_spread_band = (_abs_spread <= _SPREADOVER_SPREAD_ABS_CEILING) | (
+        (_abs_spread >= _SPREADOVER_PERCENT_LO) & (_abs_spread <= _SPREADOVER_PERCENT_HI)
+    )
     broker_spreadover_mask = (
         (package_legs_col.isna())
         & (package_ind_col == True)
         & (forward_label_col == "spot")
         & spread_num.notna()
         & (spread_num != 0)
-        & (spread_num.abs() <= _SPREADOVER_SPREAD_ABS_CEILING)
+        & _in_spread_band
         & (~has_invoice_ticker)
         & is_spreadover_tenor
     )

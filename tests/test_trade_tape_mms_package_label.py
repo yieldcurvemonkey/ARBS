@@ -50,11 +50,17 @@ def _enrich_and_label(rows):
 
 
 def test_pkg_alias_label_shows_pkg_n_and_mms():
-    """PKG-N package-scope label skips forward+tenors (incl. alias), shows PKG-N."""
-    rows = _pkg_legs("PKG-2", "P2", [("L1", 9.86, "2036-02-15"), ("L2", 9.86, "2036-02-15")])
+    """Large (>=4 leg) PKG-N package-scope label skips forward+tenors (incl.
+    alias) and shows the compact PKG-N token; small packages keep tenor detail.
+    """
+    rows = _pkg_legs(
+        "PKG-4", "P4",
+        [("L1", 9.86, "2036-02-15"), ("L2", 9.86, "2036-02-15"),
+         ("L3", 9.86, "2036-02-15"), ("L4", 9.86, "2036-02-15")],
+    )
     out = _enrich_and_label(rows)
     alt = out.loc[0, "tape_label_ust_alias"]
-    assert "PKG-2" in alt
+    assert "PKG-4" in alt
     assert "MMS" in alt
     assert "PHYS" in alt
     # Per-leg alias still shows the MMYY

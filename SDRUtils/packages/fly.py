@@ -47,6 +47,12 @@ def detect_fly_trades_df(
     pts_col: str = "package_transaction_spread",
     reject_non_standard_term: bool = True,
     non_standard_term_col: str = "is_non_standard_term",
+    # A fly is a strong, SDR-flagged structure: all legs must carry
+    # package_indicator=True and share the EXACT execution second. Legs 30-60s
+    # apart or unflagged are coincidental co-execution, not a fly. Gated on the
+    # column being present so legacy frames without it keep the sliding window.
+    require_pkg_indicator: bool = True,
+    pkg_ind_col: str = "package_indicator",
 ) -> pd.DataFrame:
     """
     Fast fly detection on the classifications dataframe.
@@ -84,6 +90,14 @@ def detect_fly_trades_df(
         m = np.array([v in _FLY_PRODUCT_TYPES for v in out[product_col].fillna("").values]) & (out[pv01_col].fillna(0).values > 0)
         if package_col in out.columns:
             m &= np.array([v in _FLY_ELIGIBLE for v in out[package_col].fillna("OUTRIGHT").values])
+        # A fly requires the SDR package flag on every leg (when the column is
+        # present) — an unflagged triple is coincidental co-execution.
+        _pkg_flag_present = require_pkg_indicator and pkg_ind_col in out.columns
+        if _pkg_flag_present:
+            _pk = out[pkg_ind_col].astype(str).str.lower().isin(
+                {"true", "t", "1", "1.0", "yes"}
+            ).values
+            m &= _pk
 
         # columns needed
         cols = [trade_id_col, exec_col, pv01_col, tenor_years_col, ten_axis_col]
@@ -213,6 +227,11 @@ def detect_fly_trades_df(
 
         # Fast econ guard between i and j
         def _econ_ok(i: int, j: int) -> bool:
+            # Exact same-second: a fly's legs execute simultaneously. Only
+            # enforced when the package flag is present (production) so legacy
+            # frames without it keep the sliding-window behavior.
+            if _pkg_flag_present and tsec[i] != tsec[j]:
+                return False
             if nst is not None and (nst[i] or nst[j]):
                 return False
             both_fomc = stt is not None and stt[i] == "FOMC" and stt[j] == "FOMC"

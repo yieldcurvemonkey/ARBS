@@ -26,6 +26,7 @@ import numpy as np
 import pandas as pd
 
 from SDRUtils.core.parsing import mask_sentinels
+from SDRUtils.core.pts_scale import pts_ties_to_spread
 
 
 def numeric_like(series: pd.Series) -> pd.Series:
@@ -198,6 +199,47 @@ def _is_dv01_balanced(values: list[float], tolerance: float = 0.15) -> bool:
     if avg <= 0:
         return False
     return all(abs(v - avg) / avg <= tolerance for v in values)
+
+
+def _is_clean_tenor(t: object) -> bool:
+    """True when a tenor sits near a whole-year (or whole-month, sub-year)
+    anniversary — i.e. a benchmark-ish point, not a broken/off-date term.
+
+    A genuine 2-leg curve trades two clean points; a near-same broken tenor
+    pair (e.g. 4.70Y "~5Y" vs 5.0Y) is a duration overlay / roll -> PKG-2,
+    even when its trivially small rate spread happens to tie the reported PTS.
+    Detection runs before ``is_off_date`` is computed, so this is derived
+    directly from ``tenor_years``.
+    """
+    try:
+        tv = float(t)
+    except (TypeError, ValueError):
+        return False
+    if not np.isfinite(tv) or tv <= 0:
+        return False
+    if tv >= 1.0:
+        return abs(tv - round(tv)) <= 0.06  # within ~3 weeks of a whole year
+    m = tv * 12.0
+    return abs(m - round(m)) <= 0.6  # within ~18 days of a whole month
+
+
+def _forward_compatible(fwd0: object, fwd1: object, t0: object, t1: object,
+                        used_fwd_axis: bool) -> bool:
+    """True when two legs share a curve-compatible forward structure: same
+    forward start, OR a forward gap on the same tail tenor (the fwd axis was
+    used to distinguish them). Two legs with different forward starts AND
+    different tails (e.g. 1Y2Y vs 10Y20Y) are a package of forwards, not a
+    curve."""
+    if used_fwd_axis:
+        return True
+    try:
+        if pd.notna(fwd0) and pd.notna(fwd1) and abs(float(fwd0) - float(fwd1)) <= 0.05:
+            return True
+        if pd.notna(t0) and pd.notna(t1) and abs(float(t0) - float(t1)) <= 0.05:
+            return True
+    except (TypeError, ValueError):
+        return False
+    return False
 
 
 def _detect_sub_flies(
@@ -382,6 +424,7 @@ def _classify_single_group(
     belly_tol: float = 0.15,
     rate_col: str = "fixed_rate",
     forward_years_col: str = "forward_start_years",
+    pts_col: str = "package_transaction_spread",
     curve_abs_tol: float | None = 500.0,
 ) -> tuple[str, list[dict]]:
     """Classify one PTP group. Returns (package_type, sub_structures).
@@ -400,21 +443,44 @@ def _classify_single_group(
     axis = tenor_num
     n_distinct_axis = n_distinct_tenors
     used_fwd_axis = False
-    if n_distinct_tenors < n and forward_years_col in group_df.columns:
-        fwd_num = numeric_like(group_df[forward_years_col])
+    fwd_num = (
+        numeric_like(group_df[forward_years_col])
+        if forward_years_col in group_df.columns else None
+    )
+    if n_distinct_tenors < n and fwd_num is not None:
         if fwd_num.round(1).dropna().nunique() == n:
             axis = fwd_num
             n_distinct_axis = n
             used_fwd_axis = True
 
     if n == 2:
-        # The CURVE label asserts DV01 neutrality — legs must tie both in
-        # relative terms and within the absolute USD tolerance. Wider gaps
-        # stay grouped (the SDR stamp is authoritative) but label as PKG-2.
-        if (
-            n_distinct_axis == 2
-            and _is_dv01_balanced(list(pv01), tolerance=belly_tol)
-            and (curve_abs_tol is None or abs(pv01[0] - pv01[1]) <= curve_abs_tol)
+        # A CURVE asserts DV01 neutrality (relative) across two clean,
+        # distinct points. The discriminator vs a duration-overlay PKG-2 is
+        # whether the reported package spread TIES OUT to the legs' fixed-rate
+        # spread (affirmative evidence that overrides the flat abs-DV01 gate),
+        # or — absent a tie — a tight standard curve shape.
+        if not (n_distinct_axis == 2 and _is_dv01_balanced(list(pv01), tolerance=belly_tol)):
+            return "PKG-2", []
+        t0, t1 = tenor_num.iloc[0], tenor_num.iloc[1]
+        if not (_is_clean_tenor(t0) and _is_clean_tenor(t1)):
+            return "PKG-2", []  # broken/off-date tenor pair -> duration overlay
+
+        rate_s = numeric_like(group_df[rate_col]) if rate_col in group_df.columns else None
+        pts_s = numeric_like(group_df[pts_col]) if pts_col in group_df.columns else None
+        pkg_pts = (
+            pts_s.dropna().iloc[0]
+            if pts_s is not None and pts_s.notna().any() else None
+        )
+        r0 = rate_s.iloc[0] if rate_s is not None else None
+        r1 = rate_s.iloc[1] if rate_s is not None else None
+        # Affirmative PTS tie-out overrides forward structure + abs-DV01 gap.
+        if pkg_pts is not None and pts_ties_to_spread(r0, r1, pkg_pts):
+            return "CURVE", []
+        # Legacy standard-shape curve: compatible forward start + tight abs DV01.
+        fwd0 = fwd_num.iloc[0] if fwd_num is not None else 0.0
+        fwd1 = fwd_num.iloc[1] if fwd_num is not None else 0.0
+        if _forward_compatible(fwd0, fwd1, t0, t1, used_fwd_axis) and (
+            curve_abs_tol is None or abs(pv01[0] - pv01[1]) <= curve_abs_tol
         ):
             return "CURVE", []
         return "PKG-2", []
