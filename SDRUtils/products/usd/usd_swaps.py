@@ -805,17 +805,7 @@ def detect_sub_package_curve_fly(
             all_mms = bool(leg_mms.loc[idx].all())
             all_spreadover = bool(leg_spreadover.loc[idx].all())
 
-            # Uniform per-leg spread = a broadcast package spread, not distinct
-            # individual spreadover levels. Only DISTINCT per-leg spreads are an
-            # unambiguous spreadover structure here; the uniform / no-spread case
-            # is confirmed separately by detect_spreadover_curves_df (differential
-            # vs standalone spreadover levels).
-            _leg_spreads = pd.to_numeric(
-                out.loc[idx, "package_transaction_spread"], errors="coerce"
-            ).round(10)
-            _distinct_spreads = _leg_spreads.nunique(dropna=True) >= 2
-
-            if all_spreadover and _distinct_spreads:
+            if all_spreadover:
                 new_type = f"SPREADOVER_{base_type}"
             elif all_mms:
                 new_type = f"MATCHED_MATURITY_{base_type}"
