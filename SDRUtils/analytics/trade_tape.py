@@ -1576,9 +1576,11 @@ class TradeTape(SDRAnalyzer):
                 else:
                     parts.append("Outright")
             elif _is_curvey(trade_type):
-                parts.append("CURVE")
+                _tt = trade_type.upper()
+                parts.append(_tt if _tt.endswith("_CURVE") else "CURVE")
             elif _is_flyey(trade_type):
-                parts.append("FLY")
+                _tt = trade_type.upper()
+                parts.append(_tt if _tt.endswith("_FLY") else "FLY")
             elif trade_type == "SPREADOVER":
                 parts.append("Spreadover")
             elif str(row.get("product_type", "")).upper() == "BASIS_SWAP" or (
