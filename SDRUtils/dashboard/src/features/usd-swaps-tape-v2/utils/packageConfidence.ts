@@ -25,15 +25,17 @@ export type PackageConfidence = {
   /** Normalized package_type used for scoring (uppercased, NaN -> OUTRIGHT). */
   resolvedType: string
   /**
-   * Heuristic override of the resolvedType when the per-leg PTS profile
-   * looks identical to the package PTS — strong evidence the trade is
-   * actually the base type rather than the SPREADOVER_* variant the
-   * upstream classifier tagged it with. Null when no override fires.
-   * Currently fires for SPREADOVER_FLY → FLY and SPREADOVER_CURVE →
-   * CURVE.
+   * Deprecated: previously held a heuristic override of resolvedType
+   * (SPREADOVER_FLY → FLY, SPREADOVER_CURVE → CURVE) when the per-leg
+   * PTS profile looked identical to the package PTS. The override has
+   * been removed — the Python detector now authoritatively tags genuine
+   * spreadover-curves, so the badge should always trust the stored
+   * package_type. Always null; kept on the type so downstream call
+   * sites' `inferredType ?? package_type` fallbacks keep working
+   * without a signature change.
    */
   inferredType: string | null
-  /** Free-text reason the inferredType override fired (or null). */
+  /** Always null now that the inferredType override has been removed. */
   inferredTypeReason: string | null
 }
 
@@ -349,81 +351,6 @@ function perLegPtsSignal(legs: UsdSwapTapeLeg[]): ConfidenceSignal {
   }
 }
 
-function legPts(leg: UsdSwapTapeLeg): number | null {
-  const v = (leg as { package_transaction_spread?: unknown }).package_transaction_spread
-  if (v == null) return null
-  const n = Number(v)
-  return Number.isFinite(n) ? n : null
-}
-
-/**
- * Decide whether a SPREADOVER_FLY / SPREADOVER_CURVE row is mislabeled
- * and should display as the base type. Triggers when:
- *
- *   1. Every leg has a per-leg PTS populated.
- *   2. Every per-leg PTS equals the package PTS — directly within
- *      `ptsMatchBp`, OR up to a clean order-of-magnitude scale factor
- *      (handles decimal-vs-percent-vs-bps unit confusion in the SDR
- *      feed). When a non-1× factor is needed, the same factor must
- *      apply to every leg.
- *
- * Rationale: a real SPREADOVER package has a UST hedge leg whose
- * implied spread is computed off a different leg's PTS, so per-leg
- * PTS values diverge. When all per-leg PTSes collapse to the package
- * PTS (modulo a unit mismatch), the upstream classifier almost
- * certainly fired the SPREADOVER_* heuristic on noise — it's a
- * base-type FLY / CURVE.
- */
-function inferBaseTypeOverride(
-  resolvedType: string,
-  row: UsdSwapTapeRow,
-  tol: Tolerances,
-): { type: string; reason: string } | null {
-  if (resolvedType !== 'SPREADOVER_FLY' && resolvedType !== 'SPREADOVER_CURVE') {
-    return null
-  }
-  const legs = (row.legs_json ?? []) as UsdSwapTapeLeg[]
-  if (legs.length < 2) return null
-  const pkgPts = row.package_transaction_spread
-  if (pkgPts == null) return null
-  const pkgPtsNum = Number(pkgPts)
-  if (!Number.isFinite(pkgPtsNum)) return null
-  const perLeg: number[] = []
-  for (const leg of legs) {
-    const v = legPts(leg)
-    if (v == null) return null
-    perLeg.push(v)
-  }
-
-  // Match every leg against the package PTS using the same scale-
-  // aware logic as ptsMatchSignal. findScaleMatch returns the best
-  // (smallest-residual) factor per leg; the override fires only when
-  // every leg lands on the SAME factor. Heterogeneous factors aren't
-  // a unit mismatch — they're random divergence and should NOT fire.
-  const matches = perLeg.map((v) => findScaleMatch(v, pkgPtsNum, tol.ptsMatchBp))
-  if (matches.some((m) => m === null)) return null
-  const factor = matches[0]!.factor
-  if (!matches.every((m) => m!.factor === factor)) return null
-
-  const baseType = resolvedType === 'SPREADOVER_FLY' ? 'FLY' : 'CURVE'
-  const pkgFmt = formatBp(pkgPtsNum)
-  const legFmts = perLeg.map((v) => formatBp(v))
-  const legSummary = legFmts.every((s) => s === legFmts[0])
-    ? legFmts[0]
-    : `[${legFmts.join(', ')}]`
-
-  if (factor === 1) {
-    return {
-      type: baseType,
-      reason: `every per-leg PTS = ${legSummary} matches package PTS = ${pkgFmt} (within ±${tol.ptsMatchBp}bp); SPREADOVER_${baseType} hedge leg expected to differ`,
-    }
-  }
-  return {
-    type: baseType,
-    reason: `every per-leg PTS = ${legSummary} matches package PTS = ${pkgFmt} at ${factor}× scale (likely decimal/percent/bps unit mismatch in the SDR feed); SPREADOVER_${baseType} hedge leg expected to differ`,
-  }
-}
-
 function perLegMatchedMaturitySignal(legs: UsdSwapTapeLeg[]): ConfidenceSignal {
   // Each leg should have its own maturity (no specific equality required —
   // signal flags missing maturities, which would invalidate the matched-
@@ -664,25 +591,13 @@ export function computePackageConfidence(
   const score = signals.filter((s) => s.passed).length
   const total = signals.length
   const tone = pickTone(score, total, isInfo)
-  const override = inferBaseTypeOverride(resolvedType, row, tol)
-  if (override) {
-    signals = [
-      ...signals,
-      {
-        name: 'inferred_base_type',
-        label: `Inferred type: ${override.type}`,
-        passed: true,
-        detail: override.reason,
-      },
-    ]
-  }
   return {
     score,
     total,
     tone,
     signals,
     resolvedType,
-    inferredType: override?.type ?? null,
-    inferredTypeReason: override?.reason ?? null,
+    inferredType: null,
+    inferredTypeReason: null,
   }
 }

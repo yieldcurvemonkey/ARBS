@@ -397,11 +397,11 @@ describe('computePackageConfidence — sub-bp PTS detail rendering', () => {
   })
 })
 
-describe('computePackageConfidence — inferredType override (SPREADOVER → base)', () => {
+describe('computePackageConfidence — inferredType always null (override removed)', () => {
   const flyLeg = (overrides: Partial<UsdSwapTapeLeg>): UsdSwapTapeLeg =>
     curveLeg({ ...overrides })
 
-  it('SPREADOVER_FLY collapses to FLY when every per-leg PTS = package PTS', () => {
+  it('does NOT downgrade SPREADOVER_FLY to FLY (override removed)', () => {
     const result = computePackageConfidence(
       baseRow({
         package_type: 'SPREADOVER_FLY',
@@ -424,33 +424,25 @@ describe('computePackageConfidence — inferredType override (SPREADOVER → bas
         ],
       }),
     )
-    expect(result.inferredType).toBe('FLY')
-    expect(result.inferredTypeReason).toContain('per-leg PTS')
+    expect(result.inferredType).toBeNull()
+    expect(result.inferredTypeReason).toBeNull()
     expect(
-      result.signals.find((s) => s.name === 'inferred_base_type')?.passed,
-    ).toBe(true)
+      result.signals.find((s) => s.name === 'inferred_base_type'),
+    ).toBeUndefined()
   })
 
-  it('SPREADOVER_CURVE collapses to CURVE when every per-leg PTS = package PTS', () => {
-    const result = computePackageConfidence(
-      baseRow({
-        package_type: 'SPREADOVER_CURVE',
-        package_indicator: true,
-        n_package_legs: 2,
-        package_transaction_spread: 0.5,
-        legs_json: [
-          {
-            ...flyLeg({ tenor_years: 5, risk: -5_000, fixed_rate: 3.5 }),
-            package_transaction_spread: 0.5,
-          } as any,
-          {
-            ...flyLeg({ tenor_years: 10, risk: 5_000, fixed_rate: 4.0 }),
-            package_transaction_spread: 0.5,
-          } as any,
-        ],
-      }),
-    )
-    expect(result.inferredType).toBe('CURVE')
+  it('does NOT downgrade SPREADOVER_CURVE to CURVE (override removed)', () => {
+    const row = {
+      package_type: 'SPREADOVER_CURVE', package_indicator: true, n_package_legs: 2,
+      package_transaction_spread: -0.00325,
+      legs_json: [
+        { tenor_years: 10, risk: 40000, fixed_rate: 0.04139, package_transaction_spread: -0.00325 },
+        { tenor_years: 30, risk: 40000, fixed_rate: 0.04313, package_transaction_spread: -0.00325 },
+      ],
+    } as any
+    const conf = computePackageConfidence(row)
+    expect(conf.inferredType).toBeNull()
+    expect(conf.signals.find((s) => s.name === 'inferred_base_type')).toBeUndefined()
   })
 
   it('does NOT trigger when per-leg PTS values diverge from package PTS', () => {
@@ -518,10 +510,11 @@ describe('computePackageConfidence — inferredType override (SPREADOVER → bas
     expect(result.inferredType).toBeNull()
   })
 
-  it('triggers when every per-leg PTS matches package PTS at a clean 100× scale (decimal/percent unit mismatch)', () => {
+  it('does NOT downgrade even when every per-leg PTS matches package PTS at a clean 100× scale (override removed)', () => {
     // Package PTS recorded in one unit (e.g. bps form, 0.00125),
     // per-leg PTS recorded in another (e.g. decimal, 0.0000125) —
-    // they're the same underlying value, just unit-misencoded.
+    // same underlying value, just unit-misencoded. Previously this
+    // clean-scale match fired the downgrade; now it never does.
     const result = computePackageConfidence(
       baseRow({
         package_type: 'SPREADOVER_FLY',
@@ -544,12 +537,11 @@ describe('computePackageConfidence — inferredType override (SPREADOVER → bas
         ],
       }),
     )
-    expect(result.inferredType).toBe('FLY')
-    expect(result.inferredTypeReason).toMatch(/0\.01× scale/)
-    expect(result.inferredTypeReason).toMatch(/unit mismatch/)
+    expect(result.inferredType).toBeNull()
+    expect(result.inferredTypeReason).toBeNull()
   })
 
-  it('triggers SPREADOVER_CURVE → CURVE at a 10000× scale (decimal ↔ bps)', () => {
+  it('does NOT downgrade SPREADOVER_CURVE at a 10000× scale match either (override removed)', () => {
     const result = computePackageConfidence(
       baseRow({
         package_type: 'SPREADOVER_CURVE',
@@ -569,8 +561,8 @@ describe('computePackageConfidence — inferredType override (SPREADOVER → bas
         ],
       }),
     )
-    expect(result.inferredType).toBe('CURVE')
-    expect(result.inferredTypeReason).toMatch(/× scale/)
+    expect(result.inferredType).toBeNull()
+    expect(result.inferredTypeReason).toBeNull()
   })
 
   it('does NOT trigger when per-leg PTS scale factors are inconsistent across legs', () => {
