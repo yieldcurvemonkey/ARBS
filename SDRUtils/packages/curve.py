@@ -12,6 +12,7 @@ def detect_curve_trades_df(
     *,
     time_window_seconds: int = 60,
     pv01_tolerance: float = 0.10,
+    pv01_abs_tolerance: Optional[float] = 500.0,
     require_different_tenor: bool = True,
     require_opposite_direction: bool = False,
     direction_col: Optional[str] = None,
@@ -44,6 +45,9 @@ def detect_curve_trades_df(
     tenor_segment_col: str = "tenor_segment",
     time_window_short: int = 30,
     time_window_medium: int = 60,
+    # PTS constraint: legs of the same curve must share the same reported spread
+    require_same_pts: bool = True,
+    pts_col: str = "package_transaction_spread",
     reject_non_standard_term: bool = True,
     non_standard_term_col: str = "is_non_standard_term",
 ) -> pd.DataFrame:
@@ -56,6 +60,15 @@ def detect_curve_trades_df(
       - same effective date (default True)
       - same forward bucket (default True; via forward_label else forward_start_years tol)
       - optional same underlier / platform / cleared flag
+      - same package transaction spread (default True, mirrors the fly
+        detector): a leg stamped with its own PTS is priced against its own
+        package (e.g. a spreadover's swap spread) — two legs only tie into
+        one curve when their spreads match; NaN on either side passes.
+
+    DV01 neutrality is two-sided for non-FOMC pairs: relative mismatch within
+    ``pv01_tolerance`` AND absolute mismatch within ``pv01_abs_tolerance``
+    (USD; ``None`` disables). FOMC-dated pairs keep the wide relative-only
+    tolerance — meeting-date switches trade risk-weighted, not DV01-flat.
     """
     if df.empty:
         return df
@@ -100,6 +113,10 @@ def detect_curve_trades_df(
         cols.append(rate_index_col)
     if tenor_segment_col in out.columns:
         cols.append(tenor_segment_col)
+    if require_same_pts and pts_col in out.columns:
+        cols.append(pts_col)
+
+    cols = list(dict.fromkeys(cols))
 
     cand = out.loc[m, cols].copy()
     if cand.empty:
@@ -145,6 +162,19 @@ def detect_curve_trades_df(
     ridx = cand[rate_index_col].fillna("_UNKNOWN_").astype(str).to_numpy() if _has_ridx else None
     _has_tseg = tenor_segment_col in cand.columns
     tseg = cand[tenor_segment_col].fillna("_UNKNOWN_").astype(str).to_numpy() if _has_tseg else None
+
+    # Sentinel-masked to mirror group_by_ptp: the 9.9999999999 "unknown"
+    # stamp must behave as NaN (never veto a pair, never count as a match).
+    _has_pts = require_same_pts and pts_col in cand.columns
+    if _has_pts:
+        from SDRUtils.core.parsing import mask_sentinels
+        from SDRUtils.packages.ptp_grouper import numeric_like
+
+        pts = mask_sentinels(
+            numeric_like(cand[pts_col]), "spread_decimal"
+        ).to_numpy(dtype=np.float64)
+    else:
+        pts = None
 
     # Eviction uses conservative (widest) window when V2 present
     _evict_window = time_window_seconds if tseg is None else max(time_window_short, time_window_medium)
@@ -192,6 +222,10 @@ def detect_curve_trades_df(
             return False
         if clr is not None and clr[i] != clr[j]:
             return False
+        if pts is not None:
+            pi, pj = pts[i], pts[j]
+            if not (np.isnan(pi) or np.isnan(pj)) and pi != pj:
+                return False
         return True
 
     def _forward_diff(i: int, j: int) -> bool:
@@ -271,6 +305,12 @@ def detect_curve_trades_df(
 
                 avg = 0.5 * (pv01[i] + pv01[j])
                 if avg <= 0:
+                    continue
+                if (
+                    not _fomc_pair
+                    and pv01_abs_tolerance is not None
+                    and abs(pv01[i] - pv01[j]) > pv01_abs_tolerance
+                ):
                     continue
                 rel = abs(pv01[i] - pv01[j]) / avg
                 if rel <= _tol and rel < best_rel:

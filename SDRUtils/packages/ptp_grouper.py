@@ -7,6 +7,15 @@ detectors run.  UPI is intentionally excluded from the grouping key
 because multi-tenor / multi-forward packages have different UPIs per
 leg yet belong to the same package.
 
+Legs whose ``Package transaction price`` is unusable fall back to the
+``Package transaction spread`` (PTS) as the grouping key — DTCC stamps
+the package-level spread on every leg of spread-priced packages, so an
+identical PTS at the same instant is the same fingerprint the price
+path already trusts. Spread-keyed clusters additionally require a
+second economic axis (>=2 distinct tenors or forward starts): an
+identical PTS on the SAME tenor is just the prevailing market spread
+level on two separate asset-swap prints, not a package.
+
 Large groups (>3 legs) are decomposed into balanced fly/curve
 sub-packages when possible, preventing over-grouping when multiple
 distinct packages share the same PTP at the same execution time.
@@ -15,6 +24,8 @@ from __future__ import annotations
 
 import numpy as np
 import pandas as pd
+
+from SDRUtils.core.parsing import mask_sentinels
 
 
 def numeric_like(series: pd.Series) -> pd.Series:
@@ -49,15 +60,24 @@ def group_by_ptp(
     time_tolerance_seconds: int = 5,
     exec_col: str = "execution_timestamp",
     ptp_col: str = "package_transaction_price",
+    pts_col: str = "package_transaction_spread",
     pkg_ind_col: str = "package_indicator",
     upi_col: str = "unique_product_identifier",
     platform_col: str = "platform_identifier",
     trade_id_col: str = "trade_id",
+    tenor_years_col: str = "tenor_years",
+    forward_years_col: str = "forward_start_years",
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
-    """Partition legs into PTP groups and non-PTP remainder.
+    """Partition legs into PTP/PTS groups and non-package remainder.
 
-    Returns (ptp_groups_df, non_ptp_df).  PTP groups have
-    ``ptp_group_id`` and ``ptp_group_size`` columns added.
+    Returns (ptp_groups_df, non_ptp_df).  Groups have ``ptp_group_id``
+    (``PTP_<min_tid>`` price-keyed, ``PTS_<min_tid>`` spread-keyed) and
+    ``ptp_group_size`` columns added.
+
+    A leg keys on its package price when usable, else on its package
+    spread (sentinel-masked). Spread-keyed clusters must span >=2
+    distinct tenor buckets or forward starts; same-axis clusters are
+    returned in the remainder as separate prints.
     """
     if df.empty:
         empty = df.copy()
@@ -66,6 +86,10 @@ def group_by_ptp(
         return empty.iloc[:0], empty.iloc[:0]
 
     ptp_vals = numeric_like(df.get(ptp_col, pd.Series(index=df.index, dtype=object)))
+    pts_vals = mask_sentinels(
+        numeric_like(df.get(pts_col, pd.Series(index=df.index, dtype=object))),
+        "spread_decimal",
+    )
     pkg_ind = df.get(pkg_ind_col)
     if pkg_ind is None:
         pkg_ind = pd.Series(False, index=df.index)
@@ -77,11 +101,12 @@ def group_by_ptp(
     else:
         ts_all = pd.Series(pd.NaT, index=df.index)
 
+    ptp_usable = ptp_vals.notna() & (ptp_vals != 0)
+    pts_usable = pts_vals.notna() & (pts_vals != 0)
+
     # NaT timestamps can't satisfy a time-window constraint — their int64
     # epoch is the NaT sentinel, which would cluster all NaT rows together.
-    candidate_mask = (
-        pkg_ind_bool & ptp_vals.notna() & (ptp_vals != 0) & ts_all.notna()
-    )
+    candidate_mask = pkg_ind_bool & (ptp_usable | pts_usable) & ts_all.notna()
     if not candidate_mask.any():
         out = df.copy()
         out["ptp_group_id"] = None
@@ -93,9 +118,15 @@ def group_by_ptp(
 
     candidates["_ts_epoch"] = ts_all.loc[candidate_mask].astype("int64") // 10**9
 
-    ptp_key = ptp_vals.loc[candidate_mask].astype(str)
+    # Price key wins when both stamps are usable; "P:"/"S:" prefixes keep a
+    # price value from ever colliding with an equal spread value.
+    use_ptp = ptp_usable.loc[candidate_mask]
+    ptp_key = "P:" + ptp_vals.loc[candidate_mask].astype(str)
+    pts_key = "S:" + pts_vals.loc[candidate_mask].astype(str)
+    val_key = ptp_key.where(use_ptp.to_numpy(), pts_key)
     plat = candidates[platform_col].fillna("_NONE_").astype(str) if platform_col in candidates.columns else "_NONE_"
-    candidates["_match_key"] = ptp_key + "|" + plat
+    candidates["_match_key"] = val_key + "|" + plat
+    candidates["_from_pts"] = ~use_ptp.to_numpy()
 
     # Time-cluster within each (PTP, platform) partition.  Clustering
     # globally would let an unrelated trade sitting between two legs of the
@@ -114,24 +145,45 @@ def group_by_ptp(
     candidates["_group_key"] = cluster_ids
 
     group_sizes = candidates.groupby("_group_key")[trade_id_col].transform("count")
-    in_group = group_sizes >= 2
+
+    # Spread-keyed clusters need a second economic axis: an identical PTS on
+    # the SAME tenor at the same instant is the prevailing market spread
+    # level on separate asset-swap prints, not a package fingerprint.
+    tenor_b = numeric_like(
+        candidates.get(tenor_years_col, pd.Series(index=candidates.index, dtype=object))
+    ).round(1)
+    fwd_b = numeric_like(
+        candidates.get(forward_years_col, pd.Series(index=candidates.index, dtype=object))
+    ).round(1)
+    grp_keys = candidates["_group_key"]
+    multi_axis = (
+        (tenor_b.groupby(grp_keys).transform("nunique") >= 2)
+        | (fwd_b.groupby(grp_keys).transform("nunique") >= 2)
+    )
+
+    in_group = (group_sizes >= 2) & (~candidates["_from_pts"] | multi_axis)
     grouped = candidates.loc[in_group].copy()
     ungrouped = candidates.loc[~in_group].copy()
 
+    _HELPER_COLS = ["_ts_epoch", "_match_key", "_group_key", "_from_pts"]
+
     if grouped.empty:
+        ungrouped.drop(columns=_HELPER_COLS, inplace=True, errors="ignore")
         remainder = pd.concat([remainder, ungrouped], ignore_index=True)
         remainder["ptp_group_id"] = None
         remainder["ptp_group_size"] = None
+        grouped.drop(columns=_HELPER_COLS, inplace=True, errors="ignore")
         grouped["ptp_group_id"] = None
         grouped["ptp_group_size"] = None
         return grouped, remainder
 
     min_tid = grouped.groupby("_group_key")[trade_id_col].transform("min")
-    grouped["ptp_group_id"] = "PTP_" + min_tid.astype(str)
+    prefix = grouped["_from_pts"].map({True: "PTS_", False: "PTP_"})
+    grouped["ptp_group_id"] = prefix + min_tid.astype(str)
     grouped["ptp_group_size"] = grouped.groupby("ptp_group_id")[trade_id_col].transform("count").astype(int)
 
-    grouped.drop(columns=["_ts_epoch", "_match_key", "_group_key"], inplace=True)
-    ungrouped.drop(columns=["_ts_epoch", "_match_key", "_group_key"], inplace=True, errors="ignore")
+    grouped.drop(columns=_HELPER_COLS, inplace=True)
+    ungrouped.drop(columns=_HELPER_COLS, inplace=True, errors="ignore")
     remainder = pd.concat([remainder, ungrouped], ignore_index=True)
     remainder["ptp_group_id"] = None
     remainder["ptp_group_size"] = None
@@ -330,6 +382,7 @@ def _classify_single_group(
     belly_tol: float = 0.15,
     rate_col: str = "fixed_rate",
     forward_years_col: str = "forward_start_years",
+    curve_abs_tol: float | None = 500.0,
 ) -> tuple[str, list[dict]]:
     """Classify one PTP group. Returns (package_type, sub_structures).
 
@@ -355,7 +408,14 @@ def _classify_single_group(
             used_fwd_axis = True
 
     if n == 2:
-        if n_distinct_axis == 2 and _is_dv01_balanced(list(pv01), tolerance=belly_tol):
+        # The CURVE label asserts DV01 neutrality — legs must tie both in
+        # relative terms and within the absolute USD tolerance. Wider gaps
+        # stay grouped (the SDR stamp is authoritative) but label as PKG-2.
+        if (
+            n_distinct_axis == 2
+            and _is_dv01_balanced(list(pv01), tolerance=belly_tol)
+            and (curve_abs_tol is None or abs(pv01[0] - pv01[1]) <= curve_abs_tol)
+        ):
             return "CURVE", []
         return "PKG-2", []
 
@@ -389,6 +449,7 @@ def classify_ptp_groups(
     tenor_years_col: str = "tenor_years",
     trade_id_col: str = "trade_id",
     belly_ratio_tolerance: float = 0.15,
+    curve_abs_tolerance: float | None = 500.0,
 ) -> pd.DataFrame:
     """Classify each PTP group holistically. Sets package_type,
     package_id, package_legs, and ptp_sub_structures."""
@@ -411,6 +472,7 @@ def classify_ptp_groups(
         pkg_type, sub_structs = _classify_single_group(
             grp, pv01_col=pv01_col, tenor_years_col=tenor_years_col,
             trade_id_col=trade_id_col, belly_tol=belly_ratio_tolerance,
+            curve_abs_tol=curve_abs_tolerance,
         )
 
         # For large groups that aren't already FLY/CURVE, detect
