@@ -162,7 +162,26 @@ def group_by_ptp(
         | (fwd_b.groupby(grp_keys).transform("nunique") >= 2)
     )
 
-    in_group = (group_sizes >= 2) & (~candidates["_from_pts"] | multi_axis)
+    # The same-tenor rejection above is really about SPREADOVERS: a
+    # benchmark-tenor, spot, NEGATIVE spread is the prevailing swap-vs-UST level,
+    # and two at the same tenor/instant are separate asset-swap prints. A
+    # same-tenor spread-keyed PAIR that is NOT spreadover-like (e.g. a 15Y
+    # switch — non-benchmark tenor, or a positive outright package spread) is a
+    # genuine PKG-2 and may group without a second axis. Restricted to pairs so
+    # larger same-tenor clusters (block-splits) stay rejected.
+    _BENCH = (2.0, 3.0, 5.0, 7.0, 10.0, 20.0, 30.0)
+    _cand_pts = pts_vals.loc[candidates.index]
+    _near_bench = tenor_b.map(
+        lambda t: any(abs(float(t) - b) <= 0.1 for b in _BENCH) if pd.notna(t) else False
+    )
+    _spot = fwd_b.fillna(0.0).abs() <= 0.02
+    _so_like = _near_bench & _spot & (_cand_pts < 0)
+    _all_so_like = _so_like.groupby(grp_keys).transform("all")
+    _same_tenor_pkg2 = (~_all_so_like) & (group_sizes == 2)
+
+    in_group = (group_sizes >= 2) & (
+        ~candidates["_from_pts"] | multi_axis | _same_tenor_pkg2
+    )
     grouped = candidates.loc[in_group].copy()
     ungrouped = candidates.loc[~in_group].copy()
 
