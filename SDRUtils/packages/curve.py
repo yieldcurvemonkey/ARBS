@@ -163,8 +163,18 @@ def detect_curve_trades_df(
     _has_tseg = tenor_segment_col in cand.columns
     tseg = cand[tenor_segment_col].fillna("_UNKNOWN_").astype(str).to_numpy() if _has_tseg else None
 
+    # Sentinel-masked to mirror group_by_ptp: the 9.9999999999 "unknown"
+    # stamp must behave as NaN (never veto a pair, never count as a match).
     _has_pts = require_same_pts and pts_col in cand.columns
-    pts = pd.to_numeric(cand[pts_col], errors="coerce").to_numpy(dtype=np.float64) if _has_pts else None
+    if _has_pts:
+        from SDRUtils.core.parsing import mask_sentinels
+        from SDRUtils.packages.ptp_grouper import numeric_like
+
+        pts = mask_sentinels(
+            numeric_like(cand[pts_col]), "spread_decimal"
+        ).to_numpy(dtype=np.float64)
+    else:
+        pts = None
 
     # Eviction uses conservative (widest) window when V2 present
     _evict_window = time_window_seconds if tseg is None else max(time_window_short, time_window_medium)

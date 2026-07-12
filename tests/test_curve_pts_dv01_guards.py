@@ -73,6 +73,30 @@ class TestCurvePtsTieOut:
         out = detect_curve_trades_df(df, **_SNAKE)
         assert out["package_type"].astype(str).str.contains("CURVE").all()
 
+    def test_sentinel_pts_never_vetoes_pairing(self):
+        """9.9999999999 means 'unknown' (Tech Spec Appendix G) — it must
+        behave as NaN in the gate, not as a real spread that mismatches."""
+        df = pd.DataFrame([
+            _curve_leg("A", "2026-07-06 15:04:36Z", "5Y", 5.0, 45000.0,
+                       pts=SPREAD_DECIMAL_SENTINEL),
+            _curve_leg("B", "2026-07-06 15:04:40Z", "30Y", 30.0, 45000.0,
+                       pts=-0.0002),
+        ])
+        out = detect_curve_trades_df(df, **_SNAKE)
+        assert out["package_type"].astype(str).str.contains("CURVE").all()
+
+    def test_sentinel_pts_on_both_legs_passes_as_unknown(self):
+        """sentinel == sentinel is NaN-vs-NaN, not affirmative evidence —
+        the pair still pairs, on the DV01/econ guards alone."""
+        df = pd.DataFrame([
+            _curve_leg("A", "2026-07-06 15:04:36Z", "5Y", 5.0, 45000.0,
+                       pts=SPREAD_DECIMAL_SENTINEL),
+            _curve_leg("B", "2026-07-06 15:04:40Z", "30Y", 30.0, 45000.0,
+                       pts=SPREAD_DECIMAL_SENTINEL),
+        ])
+        out = detect_curve_trades_df(df, **_SNAKE)
+        assert out["package_type"].astype(str).str.contains("CURVE").all()
+
 
 class TestCurveAbsDv01Tolerance:
     def test_3k_dv01_gap_blocks_curve(self):
@@ -189,6 +213,20 @@ class TestPtsGrouping:
         df = pd.DataFrame([
             _pts_leg("A", ts, 2.0, 5000.0, SPREAD_DECIMAL_SENTINEL),
             _pts_leg("B", ts, 10.0, 5000.0, SPREAD_DECIMAL_SENTINEL),
+        ])
+        grouped, remainder = group_by_ptp(df, time_tolerance_seconds=5)
+        assert len(grouped) == 0
+        assert len(remainder) == 2
+
+    def test_distinct_pts_distinct_tenors_do_not_merge(self):
+        """The spread VALUE is the fingerprint. Two packages with
+        different spreads must not merge even across tenors in the same
+        window — only the tenor-axis guard rescuing this would mean the
+        key itself stopped discriminating."""
+        ts = pd.Timestamp("2026-07-06 15:04:36", tz="UTC")
+        df = pd.DataFrame([
+            _pts_leg("A", ts, 5.0, 45000.0, -0.002925, platform="ISWV"),
+            _pts_leg("B", ts, 30.0, 42000.0, -0.0074625, platform="ISWV"),
         ])
         grouped, remainder = group_by_ptp(df, time_tolerance_seconds=5)
         assert len(grouped) == 0
