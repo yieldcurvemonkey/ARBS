@@ -1096,7 +1096,7 @@ class BARCHART_STIRF_CURVE(LayeredCacheMixin):
                 "max_tenor_from_timestamp_months": 24,
                 "rl_irs_spec": "usd_irs_lt_2y",
             },
-            "USD-SOFR-1D-Q12xM12STIRT": {
+            "USD-SOFR-1D-Q12xM12STIRT": { # fomc swap curve for sofr 
                 "fetch_pricers_func": self.stirf_mdp.get_data,
                 "fetch_pricers_bulk_func": self.stirf_mdp.get_bulk_data,
                 "instruments": [
