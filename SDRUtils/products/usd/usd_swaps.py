@@ -192,7 +192,7 @@ _SERVICE_CACHE_DIR_NAME = "service_caches"
 # Keys both the classification parquet day-cache directory and the
 # packaged-day warm-start pickle, so stale-schema frames can never be
 # served after a deploy (2026-07-01 audit, finding C4).
-DETECTION_CACHE_VERSION = "ptp10-curve-fly-tieout-0712"
+DETECTION_CACHE_VERSION = "ptp13-spreadover-neg-pts-sametenor-pkg2"
 
 
 def save_service_caches(cache_dir: str) -> None:
@@ -789,10 +789,44 @@ def detect_sub_package_curve_fly(
         leg_spreadover = (
             pkg_ind_bool
             & spread_num.notna()
-            & (spread_num != 0)
+            # A spreadover leg is quoted as a NEGATIVE swap-vs-UST spread.
+            & (spread_num < 0)
             & (spread_num.abs() <= _SPREADOVER_LEG_SPREAD_CEILING)
             & fwd_spot
         )
+
+        _p1_rate = pd.to_numeric(out.get("fixed_rate"), errors="coerce") if "fixed_rate" in out.columns else None
+        _p1_tenor = pd.to_numeric(out.get("tenor_years"), errors="coerce") if "tenor_years" in out.columns else None
+
+        def _pts_is_own_rate_spread(_idx: list, _base: str) -> bool:
+            """A curve/fly whose UNIFORM per-leg spread ties out to its OWN
+            fixed-rate spread is a plain rate curve/fly — the reported PTS is the
+            curve level itself (e.g. a 2s5s whose PTS = r5-r2), NOT a swap-vs-UST
+            spreadover. Distinct per-leg spreads are genuine individual
+            spreadover levels; equal-rate (degenerate) legs can't be the rate
+            spread, so both fall through as genuine spreadover structures."""
+            from SDRUtils.core.pts_scale import fixed_rate_spread_to_bp, pts_ties_to_value
+
+            _sp = spread_num.loc[_idx].dropna()
+            if _sp.round(10).nunique() >= 2:
+                return False  # distinct per-leg levels -> genuine spreadover
+            if _sp.empty or _p1_rate is None or _p1_tenor is None:
+                return False
+            _r = _p1_rate.loc[_idx]
+            _t = _p1_tenor.loc[_idx]
+            if _r.isna().any() or _t.isna().any():
+                return False
+            _order = _t.to_numpy().argsort()
+            _rv = _r.to_numpy()[_order]
+            if _base == "CURVE" and len(_rv) == 2:
+                _derived = fixed_rate_spread_to_bp(float(_rv[1] - _rv[0]), list(_rv))
+            elif _base == "FLY" and len(_rv) == 3:
+                _derived = fixed_rate_spread_to_bp(float(2 * _rv[1] - _rv[0] - _rv[2]), list(_rv))
+            else:
+                return False
+            if abs(_derived) <= 1e-9:
+                return False  # equal rates -> PTS can't be the (zero) rate spread
+            return pts_ties_to_value(_derived, float(_sp.iloc[0]))
 
     if not _skip_phase1:
         for pkg_id, group_idx in out.loc[curvey_mask].groupby("package_id").groups.items():
@@ -804,6 +838,11 @@ def detect_sub_package_curve_fly(
             base_type = str(out.loc[idx[0], "package_type"]).upper()
             all_mms = bool(leg_mms.loc[idx].all())
             all_spreadover = bool(leg_spreadover.loc[idx].all())
+            # A plain rate curve/fly whose PTS is its own rate spread is NOT a
+            # spreadover structure — don't upgrade it (bugs 1/3/14/16: PTS ties
+            # the fixed-rate spread => CURVE, not SPREADOVER_CURVE).
+            if all_spreadover and _pts_is_own_rate_spread(idx, base_type):
+                all_spreadover = False
 
             if all_spreadover:
                 new_type = f"SPREADOVER_{base_type}"
@@ -1117,7 +1156,10 @@ def detect_spreadovers(package_df: pd.DataFrame):
         & (package_ind_col == True)
         & (forward_label_col == "spot")
         & spread_num.notna()
-        & (spread_num != 0)
+        # A swap-vs-UST spreadover is quoted as a NEGATIVE spread (swaps trade
+        # through Treasuries); a positive PTS is an outright's package spread,
+        # not a spreadover.
+        & (spread_num < 0)
         & _in_spread_band
         & (~has_invoice_ticker)
         & is_spreadover_tenor
@@ -1978,6 +2020,14 @@ class USD_SwapProduct(USDProductBase):
                     df = group_residual_package_trades(df)
 
                     df = pd.concat([ptp_df, df], ignore_index=True)
+                    # Spreadover-curve differential runs on the COMBINED frame:
+                    # standalone SPREADOVER reference prints (the level source)
+                    # land in the non-PTP remainder while grouped curve/fly
+                    # candidates sit in ptp_df, so both are only together here.
+                    from SDRUtils.packages.spreadover_curve import (
+                        detect_spreadover_curves_df,
+                    )
+                    df = detect_spreadover_curves_df(df)
                     df = _rollup_matched_maturity_packages(df)
                     df = solve_all_opa_signs(df)
                     return df
