@@ -496,10 +496,15 @@ def _classify_single_group(
         if pkg_pts is not None and pts_ties_to_spread(r0, r1, pkg_pts):
             return "CURVE", []
         # Legacy standard-shape curve: compatible forward start + tight abs DV01.
+        # The abs-DV01 gate scales with trade size: max(curve_abs_tol, 5% of
+        # avg DV01) so large-notional balanced curves aren't rejected by a
+        # flat $500 threshold that was calibrated for small trades.
         fwd0 = fwd_num.iloc[0] if fwd_num is not None else 0.0
         fwd1 = fwd_num.iloc[1] if fwd_num is not None else 0.0
+        _avg_pv01 = (abs(pv01[0]) + abs(pv01[1])) / 2.0
+        _effective_tol = max(curve_abs_tol, _avg_pv01 * 0.05) if curve_abs_tol is not None else None
         if _forward_compatible(fwd0, fwd1, t0, t1, used_fwd_axis) and (
-            curve_abs_tol is None or abs(pv01[0] - pv01[1]) <= curve_abs_tol
+            _effective_tol is None or abs(pv01[0] - pv01[1]) <= _effective_tol
         ):
             return "CURVE", []
         return "PKG-2", []
