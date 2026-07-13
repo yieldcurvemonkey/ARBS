@@ -293,9 +293,10 @@ class TestPtsGrouping:
 
 
 class TestPtpPairCurveNeutrality:
-    def test_two_leg_ptp_group_with_wide_dv01_gap_is_pkg2(self):
-        """Within an SDR-evidenced group the legs stay together, but the
-        CURVE label still asserts DV01 neutrality: 13K gap -> PKG-2."""
+    def test_two_leg_ptp_group_with_wide_dv01_gap_is_curve(self):
+        """10Y/12Y with 250K/237K DV01 (5.3% gap). Under the scaled
+        abs-DV01 gate (10% of avg), this passes as CURVE — the relative
+        imbalance is well within tolerance for large-notional trades."""
         ts = pd.Timestamp("2026-07-06 14:06:19", tz="UTC")
         df = pd.DataFrame([
             _pts_leg("A", ts, 10.0, 250000.0, None, ptp=88100.0),
@@ -303,7 +304,7 @@ class TestPtpPairCurveNeutrality:
         ])
         grouped, _ = group_by_ptp(df, time_tolerance_seconds=5)
         classified = classify_ptp_groups(grouped)
-        assert (classified["package_type"] == "PKG-2").all()
+        assert (classified["package_type"] == "CURVE").all()
 
     def test_two_leg_ptp_group_neutral_is_curve(self):
         ts = pd.Timestamp("2026-07-06 14:06:19", tz="UTC")

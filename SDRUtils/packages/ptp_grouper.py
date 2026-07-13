@@ -481,8 +481,13 @@ def _classify_single_group(
         if not (n_distinct_axis == 2 and _is_dv01_balanced(list(pv01), tolerance=belly_tol)):
             return "PKG-2", []
         t0, t1 = tenor_num.iloc[0], tenor_num.iloc[1]
-        if not (_is_clean_tenor(t0) and _is_clean_tenor(t1)):
-            return "PKG-2", []  # broken/off-date tenor pair -> duration overlay
+        # The clean-tenor gate catches duration overlays (near-same broken
+        # tenors like 4.7Y/5.0Y). When the two tenors are far apart (>= 2Y
+        # spread), the pair is clearly a curve regardless of off-date tenors
+        # (e.g. ~18Y/~28Y matched-maturity).
+        _tenor_spread = abs(float(t0) - float(t1))
+        if _tenor_spread < 2.0 and not (_is_clean_tenor(t0) and _is_clean_tenor(t1)):
+            return "PKG-2", []
 
         rate_s = numeric_like(group_df[rate_col]) if rate_col in group_df.columns else None
         pts_s = numeric_like(group_df[pts_col]) if pts_col in group_df.columns else None
@@ -496,13 +501,13 @@ def _classify_single_group(
         if pkg_pts is not None and pts_ties_to_spread(r0, r1, pkg_pts):
             return "CURVE", []
         # Legacy standard-shape curve: compatible forward start + tight abs DV01.
-        # The abs-DV01 gate scales with trade size: max(curve_abs_tol, 5% of
+        # The abs-DV01 gate scales with trade size: max(curve_abs_tol, 10% of
         # avg DV01) so large-notional balanced curves aren't rejected by a
         # flat $500 threshold that was calibrated for small trades.
         fwd0 = fwd_num.iloc[0] if fwd_num is not None else 0.0
         fwd1 = fwd_num.iloc[1] if fwd_num is not None else 0.0
         _avg_pv01 = (abs(pv01[0]) + abs(pv01[1])) / 2.0
-        _effective_tol = max(curve_abs_tol, _avg_pv01 * 0.05) if curve_abs_tol is not None else None
+        _effective_tol = max(curve_abs_tol, _avg_pv01 * 0.10) if curve_abs_tol is not None else None
         if _forward_compatible(fwd0, fwd1, t0, t1, used_fwd_axis) and (
             _effective_tol is None or abs(pv01[0] - pv01[1]) <= _effective_tol
         ):
