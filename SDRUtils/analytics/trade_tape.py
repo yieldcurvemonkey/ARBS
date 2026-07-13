@@ -64,7 +64,7 @@ def _hour_to_session(hour: int) -> str:
 # Result cache versioning
 # ---------------------------------------------------------------------------
 
-TRADE_TAPE_CACHE_VERSION = "v19-spreadover-neg-pts-sametenor-pkg2"
+TRADE_TAPE_CACHE_VERSION = "v20-pkgn-label-fix-pts-decompose"
 
 # Clean single-unit spot tenor ("1M", "2M", "5Y", "1W", "6D"). Used to let a
 # standard tenor win over the UST MMYY alias in tape labels.
@@ -1302,21 +1302,12 @@ class TradeTape(SDRAnalyzer):
             )
 
             # PKG-N is carried on package_type (assign_trade_type does not emit
-            # it). A LARGE package (>=4 legs) can't sensibly list every tenor, so
-            # it renders a compact "PKG-N" structure with no forward/tenor/FOMC
-            # prefix; small (2-3 leg) packages keep their tenor detail.
+            # it). PKG-N packages render a compact "PKG-N" structure with no
+            # forward/tenor/FOMC prefix — listing individual tenors on a
+            # residual bundle produces misleading labels (e.g. a PKG-2 whose
+            # legs are spreadovers would read "10Y/30Y Spreadover").
             _pkg_type_up = str(row.get("package_type", "")).upper()
-            try:
-                _n_pkg_legs = int(row.get("n_package_legs") or 0)
-            except (TypeError, ValueError):
-                _n_pkg_legs = 0
-            if not _n_pkg_legs:
-                _pl = row.get("package_legs")
-                if isinstance(_pl, (list, tuple)):
-                    _n_pkg_legs = len(_pl)
-            _render_as_pkg_n = (
-                (not leg_scope) and _is_pkg_n(_pkg_type_up) and _n_pkg_legs >= 4
-            )
+            _render_as_pkg_n = (not leg_scope) and _is_pkg_n(_pkg_type_up)
 
             # 3+4. Forward + Tenor (FOMC-dated + invoice-swap get special handling)
             # Invoice-swap trades render the CME product name + ticker in

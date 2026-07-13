@@ -50,6 +50,12 @@ def assign_trade_type(row: pd.Series) -> str:
     # downstream stages can branch on the suffix (``.endswith("CURVE")``).
     if pkg.endswith("_CURVE") or pkg.endswith("_FLY"):
         return pkg
+    # PKG-N packages are residual multi-leg bundles — their per-leg
+    # is_spreadover flag must NOT override the package-level type,
+    # otherwise the label builder renders a nonsensical "Spreadover"
+    # structure on a generic package.
+    if pkg.startswith("PKG-") and pkg[4:].isdigit():
+        return "OUTRIGHT"
     if row.get("is_spreadover", False):
         return "SPREADOVER"
     st = str(row.get("special_tenor_type", "STANDARD")).upper()
