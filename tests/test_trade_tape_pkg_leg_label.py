@@ -51,10 +51,11 @@ def test_pkg3_leg_tape_labels_show_individual_tenors():
     ])
     out = _enrich_and_label(rows)
 
-    # Package-level label: combined tenors + "Package"
+    # Package-level label: compact PKG-N format (no individual tenors)
     for i in range(3):
         pkg_label = out.loc[i, "tape_label"]
-        assert "21M/2Y/2Y" in pkg_label or "Package" in pkg_label
+        assert "PKG-3" in pkg_label
+        assert "21M/2Y/2Y" not in pkg_label
 
     # Leg-level labels: individual tenor + "Outright"
     leg0 = out.loc[0, "leg_tape_label"]

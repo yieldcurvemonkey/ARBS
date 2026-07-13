@@ -566,22 +566,46 @@ def classify_ptp_groups(
         # as a single PKG-N. Previous behaviour decomposed them into
         # separate package_ids — that split the SDR-reported package
         # into fragments and lost the single-execution context.
+        #
+        # Exception: PTS-keyed (spread-keyed) groups with duplicate
+        # tenors are NOT true single packages — the shared PTS is the
+        # prevailing market spread, not a package fingerprint. When
+        # _try_decompose finds valid sub-curves/flies, SPLIT them into
+        # separate packages so downstream detectors can upgrade each
+        # one (e.g. to SPREADOVER_CURVE).
+        _split_pts_group = False
         if len(grp) > 3 and pkg_type.startswith("PKG-"):
             decomposed = _try_decompose(
                 grp, pv01_col=pv01_col, tenor_years_col=tenor_years_col,
                 trade_id_col=trade_id_col, belly_tol=belly_ratio_tolerance,
             )
             if decomposed is not None:
-                sub_structs = [
-                    {"type": sub["type"], "legs": sub["trade_ids"]}
-                    for sub in decomposed
-                ]
+                _is_pts_keyed = isinstance(gid, str) and gid.startswith("PTS_")
+                _tenor_b = numeric_like(grp[tenor_years_col]).round(1)
+                _has_dup_tenors = _tenor_b.nunique(dropna=True) < len(grp)
+                if _is_pts_keyed and _has_dup_tenors:
+                    _split_pts_group = True
+                    for sub in decomposed:
+                        sub_idx = sub["indices"]
+                        sub_tids = sorted(sub["trade_ids"])
+                        sub_pkg_id = f"{sub['type']}_{sub_tids[0]}"
+                        out.loc[sub_idx, "package_type"] = sub["type"]
+                        out.loc[sub_idx, "package_id"] = sub_pkg_id
+                        for ix in sub_idx:
+                            out.at[ix, "package_legs"] = sub_tids
+                            out.at[ix, "ptp_sub_structures"] = None
+                else:
+                    sub_structs = [
+                        {"type": sub["type"], "legs": sub["trade_ids"]}
+                        for sub in decomposed
+                    ]
 
-        mask = out["ptp_group_id"] == gid
-        out.loc[mask, "package_type"] = pkg_type
-        out.loc[mask, "package_id"] = gid
-        for idx in out.index[mask]:
-            out.at[idx, "package_legs"] = all_tids
-            out.at[idx, "ptp_sub_structures"] = sub_structs
+        if not _split_pts_group:
+            mask = out["ptp_group_id"] == gid
+            out.loc[mask, "package_type"] = pkg_type
+            out.loc[mask, "package_id"] = gid
+            for idx in out.index[mask]:
+                out.at[idx, "package_legs"] = all_tids
+                out.at[idx, "ptp_sub_structures"] = sub_structs
 
     return out
