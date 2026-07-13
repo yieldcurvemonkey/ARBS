@@ -467,6 +467,8 @@ def cmd_service(args: argparse.Namespace) -> int:
         print(f"  Fixed interval (sec):    {args.interval_seconds}")
     if args.max_iterations:
         print(f"  Max iterations:          {args.max_iterations}")
+    if args.force_reclassify:
+        print("  Force reclassify:        ON (first cycle will reclassify all trades)")
 
     # Service state for incremental optimization
     last_full_reclassify: float = 0.0  # monotonic time of last full reclassify
@@ -506,7 +508,7 @@ def cmd_service(args: argparse.Namespace) -> int:
             prev_slice_ids = warm_state["prev_slice_ids"]
         if "prev_trade_count" in warm_state:
             prev_trade_count = warm_state["prev_trade_count"]
-        if caches_warm:
+        if caches_warm and not args.force_reclassify:
             today_key = str(_today_utc())
             if today_key in _PACKAGED_DAY_CACHE:
                 prev_classified_df = _PACKAGED_DAY_CACHE[today_key]
@@ -516,6 +518,13 @@ def cmd_service(args: argparse.Namespace) -> int:
                     f"  [WARM] Skipping cold-start full reclassify "
                     f"({prev_trade_count} cached trades for {today_key})"
                 )
+        if args.force_reclassify:
+            last_full_reclassify = 0.0
+            prev_classified_df = None
+            prev_trade_count = 0
+            prev_enriched_tape = None
+            prev_trade_ids = set()
+            print("  [FORCE] Discarding warm-start caches; full reclassify on cycle 1")
 
     iteration = 0
     while True:
@@ -623,7 +632,7 @@ def cmd_service(args: argparse.Namespace) -> int:
             classified_df = ingest_usdswaps.ingest_incremental_once(
                 engine,
                 cache_path=cache_path,
-                ignore_cache=args.ignore_cache if do_full else False,
+                ignore_cache=(args.ignore_cache or args.force_reclassify) if do_full else False,
                 only_newt=args.only_newt,
                 dry_run=args.dry_run,
                 cleanup_orphans=do_cleanup,
@@ -964,6 +973,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--stop-on-error",
         action="store_true",
         help="Exit on the first failed cycle rather than logging and continuing.",
+    )
+    sp.add_argument(
+        "--force-reclassify",
+        action="store_true",
+        help="Force full reclassification of every trade on the first cycle, ignoring warm-start caches.",
     )
     sp.add_argument(
         "--no-tape-cache",

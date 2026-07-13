@@ -1534,8 +1534,9 @@ def _classify_messages_v2(
                 src = kwargs.get("medium_curve_source", curve_source)
                 mdp = IRSwapsMDP(source=src)
                 cn = "USD-SOFR-1D"
+                ts = "live" if exec_date == datetime.date.today() else exec_date
                 _curves[segment_key] = mdp.get_pricer(dict(
-                    curve_name=cn, timestamp=exec_date,
+                    curve_name=cn, timestamp=ts,
                 ))
             except Exception as e:
                 logger.warning(f"Failed to load {segment_key} curve: {e}")
@@ -1771,9 +1772,10 @@ class USD_SwapProduct(USDProductBase):
                             classify_df, exec_date=exec_date, curve_source=curve_source, **kwargs,
                         )
                     else:
+                        _ts = "live" if exec_date == datetime.date.today() else exec_date
                         classifications = self.classify_messages(
                             classify_df,
-                            curve=mdp.get_pricer(dict(curve_name="USD-SOFR-1D", timestamp=exec_date)),
+                            curve=mdp.get_pricer(dict(curve_name="USD-SOFR-1D", timestamp=_ts)),
                         )
                     new_classifications_df = classifications_to_dataframe(classifications)
 
