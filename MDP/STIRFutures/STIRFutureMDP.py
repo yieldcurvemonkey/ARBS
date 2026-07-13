@@ -2,6 +2,7 @@ import asyncio
 import datetime
 import importlib.util
 import itertools
+import logging
 import os
 import random
 import re
@@ -1150,6 +1151,23 @@ class STIRFutureMDP(MarketDataProvider[InstrumentLike], LayeredCacheMixin):
                 from MDP.IRSwaps.BARCHART_STIRF.rl import BARCHART_STIRF_CURVE
                 session_key = BARCHART_STIRF_CURVE._cme_session_open_chi(ts_dt).isoformat()
                 self._session_dfs[session_key] = price_df
+        elif floor_req_to_minute:
+            # All symbols were cache-hit but session DF not populated yet.
+            # Re-fetch from Barchart (typically fast, uses HTTP cache/proxy) to
+            # populate the in-memory session DF for downstream bulk fast-path.
+            from MDP.IRSwaps.BARCHART_STIRF.rl import BARCHART_STIRF_CURVE
+            session_key = BARCHART_STIRF_CURVE._cme_session_open_chi(ts_dt).isoformat()
+            if session_key not in self._session_dfs:
+                all_tickers = sorted({t for tickers in alias_map.values() for t in tickers})
+                try:
+                    refetch_df = self._fetch_barchart_timeseries(
+                        all_tickers, ts_dt, show_tqdm=False,
+                        interval=1, full_day_intraday=True,
+                    )
+                    if refetch_df is not None and not refetch_df.empty:
+                        self._session_dfs[session_key] = refetch_df.ffill().bfill()
+                except Exception:
+                    pass
 
             # Persist all slices for future reuse
             if not use_live:
@@ -1340,16 +1358,23 @@ class STIRFutureMDP(MarketDataProvider[InstrumentLike], LayeredCacheMixin):
             # Fast-path: build pricers directly from primed session DataFrames.
             if primed_session_data:
                 remaining_jobs: List[Tuple[DateLike, List[str]]] = []
+                bulk_results = self._build_pricers_from_primed_df_bulk(
+                    jobs=jobs,
+                    primed_session_data=primed_session_data,
+                )
                 for ts, syms in jobs:
-                    pricer_result = self._build_pricers_from_primed_df(
-                        symbols=syms,
-                        timestamp=ts,
-                        primed_session_data=primed_session_data,
-                    )
+                    pricer_result = bulk_results.get(id(ts)) or bulk_results.get(ts)
                     if pricer_result is not None:
                         results.append((ts, pricer_result))
                     else:
                         remaining_jobs.append((ts, syms))
+                _primed_hits = len(results)
+                _primed_misses = len(remaining_jobs)
+                if _primed_hits or _primed_misses:
+                    logging.getLogger(__name__).info(
+                        "Primed-DF fast path: %s/%s timestamps hit, %s fell through to slow path",
+                        _primed_hits, _primed_hits + _primed_misses, _primed_misses,
+                    )
                 jobs = remaining_jobs
 
             if not jobs:
@@ -1392,6 +1417,180 @@ class STIRFutureMDP(MarketDataProvider[InstrumentLike], LayeredCacheMixin):
                 if res:
                     out[ts].update(res)
             return dict(out)
+
+    def _build_pricers_from_primed_df_bulk(
+        self,
+        *,
+        jobs: List[Tuple[DateLike, List[str]]],
+        primed_session_data: Dict[str, pd.DataFrame],
+    ) -> Dict[Any, Dict[str, List[InstrumentLike]]]:
+        """Vectorized pricer construction: precompute symbol metadata once, build all timestamps."""
+        from MDP.IRSwaps.BARCHART_STIRF.rl import BARCHART_STIRF_CURVE
+
+        if not jobs:
+            return {}
+
+        # Group jobs by session key — typically all share one session for a single-day backfill.
+        session_groups: Dict[str, List[Tuple[DateLike, List[str]]]] = defaultdict(list)
+        for ts, syms in jobs:
+            ts_dt = _as_datetime(ts)
+            session_key = BARCHART_STIRF_CURVE._cme_session_open_chi(ts_dt).isoformat()
+            session_groups[session_key].append((ts, syms))
+
+        out: Dict[Any, Dict[str, List[InstrumentLike]]] = {}
+
+        for session_key, session_jobs in session_groups.items():
+            price_df = primed_session_data.get(session_key)
+            if price_df is None or price_df.empty:
+                continue
+
+            # Resolve aliases ONCE per session (same symbols for all timestamps).
+            first_ts, first_syms = session_jobs[0]
+            alias_map = _resolve_aliases_bulk(first_syms, first_ts)
+            if not alias_map:
+                continue
+
+            # Precompute symbol metadata ONCE: dates, curve, fixings.
+            first_ts_dt = _as_datetime(first_ts)
+            ref_date = self._reference_date_from_timestamp(
+                pd.Timestamp(first_ts_dt).isoformat()
+            )
+
+            symbol_meta: Dict[str, Dict[str, Any]] = {}
+            fixings_memo: Dict[Tuple[str, datetime.date], pd.Series] = {}
+
+            all_tickers = set()
+            for _alias, tickers in alias_map.items():
+                is_spread = _is_serff_spread_alias(_alias)
+                if is_spread:
+                    legs = _serff_spread_legs(_alias)
+                    if legs:
+                        all_tickers.update(legs)
+                else:
+                    all_tickers.update(tickers)
+
+            for t in all_tickers:
+                if t not in price_df.columns:
+                    continue
+                curve_name = _curve_from_symbol(t)
+                _, temp_stir = _stir_future_from_symbol(t, 99.0)
+                effective_date, maturity_date = _extract_stir_effective_termination(temp_stir)
+
+                meta_base: Dict[str, Any] = {"symbol": t, "schema": 1}
+                if curve_name == "USD-SOFR-1D":
+                    memo_key = (curve_name, ref_date)
+                    sofr_fixings = fixings_memo.get(memo_key)
+                    if sofr_fixings is None:
+                        sofr_fixings = _fetch_fixings(
+                            as_of_date=ref_date,
+                            curve_name=curve_name,
+                            force_refresh=self.force_refresh_fixings,
+                        ).sort_index()
+                        sofr_fixings = sofr_fixings[sofr_fixings.index.date <= ref_date] * 100
+                        fixings_memo[memo_key] = sofr_fixings
+                    meta_base["fixings"] = sofr_fixings
+
+                symbol_meta[t] = {
+                    "curve": curve_name,
+                    "effective_date": effective_date,
+                    "maturity_date": maturity_date,
+                    "meta_base": meta_base,
+                }
+
+            # Pre-align all timestamps to DF index positions.
+            ts_dts = [_as_datetime(ts) for ts, _ in session_jobs]
+            ts_objs = []
+            for ts_dt in ts_dts:
+                ts_obj = pd.Timestamp(ts_dt)
+                if price_df.index.tz is not None:
+                    ts_obj = ts_obj.tz_convert(price_df.index.tz) if ts_obj.tzinfo else ts_obj.tz_localize(price_df.index.tz)
+                elif ts_obj.tzinfo is not None:
+                    ts_obj = ts_obj.tz_localize(None)
+                ts_objs.append(ts_obj)
+
+            positions = price_df.index.get_indexer(ts_objs, method="nearest")
+
+            _logger = logging.getLogger(__name__)
+            _logger.info(
+                "Bulk pricer build: %s timestamps, %s unique symbols, precomputed metadata once",
+                len(session_jobs), len(symbol_meta),
+            )
+
+            # Build pricers for all timestamps using precomputed metadata.
+            for idx, ((ts, syms), pos) in enumerate(zip(session_jobs, positions)):
+                if pos == -1:
+                    continue
+
+                row_ts = price_df.index[pos]
+                row_ts_iso = pd.Timestamp(row_ts).isoformat()
+
+                result: Dict[str, List[InstrumentLike]] = {}
+                spread_legs: Dict[str, Dict[str, InstrumentLike]] = defaultdict(dict)
+
+                for alias, tickers in alias_map.items():
+                    is_spread = _is_serff_spread_alias(alias)
+                    if not is_spread:
+                        insts: List[InstrumentLike] = []
+                        for t in tickers:
+                            sm = symbol_meta.get(t)
+                            if sm is None:
+                                continue
+                            px = price_df.at[row_ts, t]
+                            if pd.isna(px):
+                                continue
+                            px_f = float(px)
+                            meta = dict(sm["meta_base"])
+                            meta["price"] = px_f
+                            meta["timestamp"] = row_ts_iso
+                            insts.append(RLSTIRFuturePricer(
+                                rl_stirf_id=t,
+                                reference_date=ref_date,
+                                effective_date=sm["effective_date"],
+                                maturity_date=sm["maturity_date"],
+                                curve=sm["curve"],
+                                price=px_f,
+                                rate=100.0 - px_f,
+                                contracts=1,
+                                notional=1_000_000,
+                                meta_data=meta,
+                            ))
+                        if insts:
+                            result[alias] = insts
+                    else:
+                        legs = _serff_spread_legs(alias)
+                        if legs is None:
+                            continue
+                        sr1_leg, zq_leg = legs
+                        for t in [sr1_leg, zq_leg]:
+                            sm = symbol_meta.get(t)
+                            if sm is None:
+                                continue
+                            px = price_df.at[row_ts, t]
+                            if pd.isna(px):
+                                continue
+                            px_f = float(px)
+                            meta = dict(sm["meta_base"])
+                            meta["price"] = px_f
+                            meta["timestamp"] = row_ts_iso
+                            spread_legs[alias][t] = RLSTIRFuturePricer(
+                                rl_stirf_id=t,
+                                reference_date=ref_date,
+                                effective_date=sm["effective_date"],
+                                maturity_date=sm["maturity_date"],
+                                curve=sm["curve"],
+                                price=px_f,
+                                rate=100.0 - px_f,
+                                contracts=1,
+                                notional=1_000_000,
+                                meta_data=meta,
+                            )
+                        if len(spread_legs[alias]) == 2:
+                            result[alias] = [spread_legs[alias][sr1_leg], spread_legs[alias][zq_leg]]
+
+                if result:
+                    out[ts] = result
+
+        return out
 
     def _build_pricers_from_primed_df(
         self,

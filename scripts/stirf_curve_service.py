@@ -35,6 +35,20 @@ from zoneinfo import ZoneInfo
 import QuantLib as ql
 import pandas as pd
 
+# Force line-buffered stderr/stdout so logs appear immediately under conda run.
+if not os.environ.get("PYTHONUNBUFFERED"):
+    os.environ["PYTHONUNBUFFERED"] = "1"
+if hasattr(sys.stderr, "reconfigure"):
+    try:
+        sys.stderr.reconfigure(line_buffering=True)
+    except Exception:
+        pass
+if hasattr(sys.stdout, "reconfigure"):
+    try:
+        sys.stdout.reconfigure(line_buffering=True)
+    except Exception:
+        pass
+
 REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
@@ -61,7 +75,7 @@ DEFAULT_SESSION_START = "07:00"
 DEFAULT_SESSION_END = "17:00"
 DEFAULT_FREQ = "1min"
 DEFAULT_N_JOBS = 16
-DEFAULT_CALIBRATION_EXECUTOR = "process"
+DEFAULT_CALIBRATION_EXECUTOR = "thread"
 DEFAULT_LOG_DIR = REPO_ROOT / "notebooks" / "logs"
 DEFAULT_CME_SESSION_OPEN = dt.time(17, 0)
 DEFAULT_CME_SESSION_CLOSE = dt.time(16, 0)
@@ -280,11 +294,11 @@ def _default_perf_log_path() -> Path:
 
 def _configure_logging(*, verbose: bool) -> logging.Logger:
     level = logging.DEBUG if verbose else logging.INFO
-    logging.basicConfig(
-        level=level,
-        format="%(asctime)s %(levelname)s %(message)s",
-        datefmt="%Y-%m-%d %H:%M:%S",
-    )
+    handler = logging.StreamHandler(sys.stderr)
+    handler.setLevel(level)
+    handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(message)s", datefmt="%Y-%m-%d %H:%M:%S"))
+    logging.root.addHandler(handler)
+    logging.root.setLevel(level)
     return logging.getLogger("stirf_curve_calibration")
 
 
@@ -1723,6 +1737,14 @@ def _run_live_service_window(
     curve_ready = 0
     curve_status = "skipped"
     if not skip_curve_warm and curve_timestamps:
+        logger.info(
+            "Warming %s raw curves for %s [%s] (executor=%s, n_jobs=%s)...",
+            len(curve_timestamps),
+            curve_name,
+            label,
+            calibration_executor,
+            n_jobs,
+        )
         curve_ready, curve_failed_timestamps = _safe_warm_raw_curves(
             mdp,
             curve_name=curve_name,
@@ -2182,6 +2204,13 @@ def _run_backfill_mode(args: argparse.Namespace, logger: logging.Logger) -> int:
                     curve_name=_resolve_curve_store_name(mdp, curve_name),
                     timestamps=timestamps,
                 )
+                logger.info(
+                    "Starting window %s for %s: total_timestamps=%s missing_curve_timestamps=%s",
+                    trade_date.isoformat(),
+                    curve_name,
+                    len(timestamps),
+                    len(curve_timestamps),
+                )
                 summary = _run_live_service_window(
                     curve_name=curve_name,
                     curve_timestamps=curve_timestamps,
@@ -2417,4 +2446,12 @@ def main(argv: Sequence[str] | None = None) -> int:
 
 
 if __name__ == "__main__":
+    # Detect conda run without --no-capture-output (output appears buffered until exit).
+    if os.environ.get("CONDA_PREFIX") and not sys.stderr.isatty():
+        print(
+            "NOTE: Running under conda with piped output. "
+            "Use 'conda run --no-capture-output -n stir ...' for live progress.",
+            file=sys.stderr,
+            flush=True,
+        )
     raise SystemExit(main())

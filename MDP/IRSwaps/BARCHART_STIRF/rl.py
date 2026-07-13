@@ -1768,7 +1768,7 @@ class BARCHART_STIRF_CURVE(LayeredCacheMixin):
         timestamps: List[datetime.datetime],
         cfg: Dict[str, Any],
     ) -> Tuple[Dict[datetime.datetime, Any], List[datetime.datetime]]:
-        """Bulk cache lookup with in-memory LRU + parallel disk reads.
+        """Bulk cache lookup with in-memory LRU + batched L1/L2 reads.
 
         Returns (hits_dict, misses_list).
         """
@@ -1798,14 +1798,16 @@ class BARCHART_STIRF_CURVE(LayeredCacheMixin):
         if not disk_needed:
             return hits, []
 
-        # Phase 2: parallel disk reads for cache misses.
+        # Phase 2: L1 diskcache reads (bypass L2 per-key to avoid N round-trips).
         mapping = self._curve_cache_mapping()
-        misses: List[datetime.datetime] = []
+        l1_raw = mapping.raw if hasattr(mapping, "raw") else mapping
+        l2_needed: List[Tuple[str, datetime.datetime]] = []
 
-        def _read_one(item: Tuple[str, datetime.datetime]) -> Tuple[str, datetime.datetime, Any]:
+        def _read_l1(item: Tuple[str, datetime.datetime]) -> Tuple[str, datetime.datetime, Any]:
             key, ts = item
-            payload = mapping.get(key)
-            if payload is None:
+            try:
+                payload = l1_raw[key]
+            except (KeyError, Exception):
                 return key, ts, None
             try:
                 if isinstance(payload, str):
@@ -1822,21 +1824,59 @@ class BARCHART_STIRF_CURVE(LayeredCacheMixin):
 
         n_workers = min(len(disk_needed), 8)
         if n_workers <= 1:
-            results = [_read_one(item) for item in disk_needed]
+            l1_results = [_read_l1(item) for item in disk_needed]
         else:
             with ThreadPoolExecutor(max_workers=n_workers, thread_name_prefix="curve-cache-read") as pool:
-                results = list(pool.map(_read_one, disk_needed))
+                l1_results = list(pool.map(_read_l1, disk_needed))
 
-        with self._CURVE_MEM_CACHE_LOCK:
-            for key, ts, curve in results:
-                if curve is not None:
+        for key, ts, curve in l1_results:
+            if curve is not None:
+                with self._CURVE_MEM_CACHE_LOCK:
                     if len(mem) >= self._CURVE_MEM_CACHE_MAXSIZE:
                         for k in list(islice(mem, self._CURVE_MEM_CACHE_MAXSIZE // 10)):
                             del mem[k]
                     mem[key] = curve
-                    hits[ts] = self._attach_curve_context(curve, curve_name=curve_name, timestamp=ts, cfg=cfg)
+                hits[ts] = self._attach_curve_context(curve, curve_name=curve_name, timestamp=ts, cfg=cfg)
+            else:
+                l2_needed.append((key, ts))
+
+        if not l2_needed:
+            return hits, []
+
+        # Phase 3: batched L2 (Supabase) read for all L1 misses.
+        misses: List[datetime.datetime] = []
+        if hasattr(mapping, "bulk_get"):
+            l2_keys = [key for key, _ in l2_needed]
+            ts_by_key = {key: ts for key, ts in l2_needed}
+            l2_hits, l2_miss_keys = mapping.bulk_get(l2_keys)
+            for key in l2_keys:
+                ts = ts_by_key[key]
+                payload = l2_hits.get(key)
+                if payload is not None:
+                    try:
+                        if isinstance(payload, str):
+                            curve_json = payload
+                        elif isinstance(payload, dict):
+                            curve_json = payload.get("curve_json")
+                        else:
+                            misses.append(ts)
+                            continue
+                        if not curve_json:
+                            misses.append(ts)
+                            continue
+                        curve = rl.from_json(curve_json)
+                        with self._CURVE_MEM_CACHE_LOCK:
+                            if len(mem) >= self._CURVE_MEM_CACHE_MAXSIZE:
+                                for k in list(islice(mem, self._CURVE_MEM_CACHE_MAXSIZE // 10)):
+                                    del mem[k]
+                            mem[key] = curve
+                        hits[ts] = self._attach_curve_context(curve, curve_name=curve_name, timestamp=ts, cfg=cfg)
+                    except Exception:
+                        misses.append(ts)
                 else:
                     misses.append(ts)
+        else:
+            misses = [ts for _, ts in l2_needed]
 
         return hits, misses
 
@@ -2584,10 +2624,11 @@ class BARCHART_STIRF_CURVE(LayeredCacheMixin):
         cfg: Dict[str, Any],
         solver_tolerances: Optional[Dict[str, float]] = None,
         curve_only: bool = True,
+        initial_nodes: Optional[Dict] = None,
     ) -> Dict[datetime.datetime, Any]:
         """Calibrate a chronological chunk with warm-starting from previous curve's nodes."""
         results: Dict[datetime.datetime, Any] = {}
-        prior_nodes: Optional[Dict] = None
+        prior_nodes: Optional[Dict] = initial_nodes
         for ts, ts_pricers in chunk:
             with _suppress_solver_output():
                 curve_obj, solver_obj = self._build_curve_from_pricers(
@@ -2742,6 +2783,10 @@ class BARCHART_STIRF_CURVE(LayeredCacheMixin):
                         primed_dfs[session_key] = cached_df
 
             # Phase 2: fetch STIR pricers for all requested timestamps (prefer cache).
+            logging.getLogger(__name__).info(
+                "Phase 2: fetching STIR pricers for %s pending timestamps (%s sessions primed)",
+                len(pending_timestamps), len(primed_dfs),
+            )
             pricers_by_ts: Dict[datetime.datetime, Dict[str, List[RLSTIRFuturePricer]]] = {}
             fetch_pricers_bulk_func = None
             live_modes = {bool(live_by_timestamp.get(ts, False)) for ts in pending_timestamps}
@@ -2856,29 +2901,87 @@ class BARCHART_STIRF_CURVE(LayeredCacheMixin):
                     fresh_curves[ts] = curve_obj
                     out[ts] = val
             else:
-                # Multi-worker: partition into chronological chunks, warm-start within each.
-                chunks = _split_chronological(calibration_jobs, cal_workers)
-                with ThreadPoolExecutor(max_workers=cal_workers, thread_name_prefix="stir-curve-calib") as pool:
-                    futures = {
-                        pool.submit(
-                            self._calibrate_chunk,
-                            chunk=chunk,
-                            curve_name=curve_name,
-                            cfg=cfg,
-                            solver_tolerances=bulk_solver_tolerances,
-                            curve_only=curve_only,
-                        ): idx
-                        for idx, chunk in enumerate(chunks)
-                    }
-                    completed = as_completed(futures)
-                    if tqdm_mod is not None:
-                        completed = tqdm_mod.tqdm(completed, total=len(futures), desc=f"CALIBRATING {curve_name}")
-                    for fut in completed:
-                        chunk_results = fut.result()
-                        for ts, val in chunk_results.items():
-                            curve_obj = val if curve_only else val[0]
-                            fresh_curves[ts] = curve_obj
-                            out[ts] = val
+                # Multi-worker: solve first timestamp as seed, then fan out with warm-start.
+                _calib_logger = logging.getLogger(__name__)
+
+                # Try to find a warm-start seed from cached curves (prior day's last curve or mem cache).
+                seed_nodes: Optional[Dict] = None
+                sorted_jobs = sorted(calibration_jobs, key=lambda x: x[0])
+                first_ts = sorted_jobs[0][0]
+                seed_curve = self._CURVE_MEM_CACHE.get(
+                    self._curve_cache_key(curve_name, first_ts, cfg)
+                )
+                if seed_curve is None:
+                    for cached_key in reversed(list(self._CURVE_MEM_CACHE.keys())):
+                        if curve_name in str(cached_key):
+                            candidate = self._CURVE_MEM_CACHE.get(cached_key)
+                            if candidate is not None:
+                                seed_curve = candidate
+                                break
+                if seed_curve is not None:
+                    try:
+                        seed_nodes = _extract_nodes(seed_curve)
+                        _calib_logger.info(
+                            "Using cached curve as warm-start seed for %s (%s nodes)",
+                            curve_name, len(seed_nodes),
+                        )
+                    except Exception:
+                        seed_nodes = None
+
+                if seed_nodes is None and len(sorted_jobs) > 1:
+                    # No cached seed — solve first timestamp cold, use as seed for the rest.
+                    _calib_logger.info(
+                        "Cold-start: calibrating seed curve for %s at %s...",
+                        curve_name, sorted_jobs[0][0].isoformat(),
+                    )
+                    seed_result = self._calibrate_chunk(
+                        chunk=[sorted_jobs[0]],
+                        curve_name=curve_name,
+                        cfg=cfg,
+                        solver_tolerances=bulk_solver_tolerances,
+                        curve_only=curve_only,
+                    )
+                    for ts, val in seed_result.items():
+                        curve_obj = val if curve_only else val[0]
+                        fresh_curves[ts] = curve_obj
+                        out[ts] = val
+                        seed_nodes = _extract_nodes(curve_obj)
+                    sorted_jobs = sorted_jobs[1:]
+                    _calib_logger.info(
+                        "Seed curve calibrated. Distributing %s remaining jobs across %s workers with warm-start.",
+                        len(sorted_jobs), cal_workers,
+                    )
+
+                chunks = _split_chronological(sorted_jobs, cal_workers) if sorted_jobs else []
+                if chunks:
+                    with ThreadPoolExecutor(max_workers=cal_workers, thread_name_prefix="stir-curve-calib") as pool:
+                        futures = {
+                            pool.submit(
+                                self._calibrate_chunk,
+                                chunk=chunk,
+                                curve_name=curve_name,
+                                cfg=cfg,
+                                solver_tolerances=bulk_solver_tolerances,
+                                curve_only=curve_only,
+                                initial_nodes=seed_nodes,
+                            ): idx
+                            for idx, chunk in enumerate(chunks)
+                        }
+                        completed = as_completed(futures)
+                        if tqdm_mod is not None:
+                            completed = tqdm_mod.tqdm(completed, total=len(futures), desc=f"CALIBRATING {curve_name}")
+                        chunks_done = 0
+                        for fut in completed:
+                            chunk_results = fut.result()
+                            chunks_done += 1
+                            for ts, val in chunk_results.items():
+                                curve_obj = val if curve_only else val[0]
+                                fresh_curves[ts] = curve_obj
+                                out[ts] = val
+                            _calib_logger.info(
+                                "Calibration progress %s: chunks %s/%s, curves %s/%s",
+                                curve_name, chunks_done, len(futures), len(fresh_curves), len(calibration_jobs),
+                            )
 
             coalesced_duplicates = 0
             for canonical_ts, duplicate_timestamps in duplicate_timestamps_by_canonical.items():

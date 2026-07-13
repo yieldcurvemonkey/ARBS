@@ -195,6 +195,84 @@ class LayeredDictProxy(MutableMapping):
             logger.warning("L2 get failed for %s/%s", self._ns, cache_key[:12], exc_info=True)
             return None
 
+    def _l2_bulk_get(self, cache_keys: list[str]) -> dict[str, Any]:
+        """Batch fetch from Supabase KV table. Returns {cache_key: row}."""
+        if not cache_keys:
+            return {}
+        try:
+            from Caching.supabase_schema import ensure_schema
+            from Caching.supabase_engine import get_engine
+            from sqlalchemy import text
+
+            if not ensure_schema():
+                return {}
+            engine = get_engine()
+            if engine is None:
+                return {}
+
+            results: dict[str, Any] = {}
+            batch_size = 500
+            for offset in range(0, len(cache_keys), batch_size):
+                batch = cache_keys[offset:offset + batch_size]
+                placeholders = ", ".join(f":k{i}" for i in range(len(batch)))
+                params: dict[str, Any] = {"ns": self._ns}
+                for i, key in enumerate(batch):
+                    params[f"k{i}"] = key
+                with engine.begin() as conn:
+                    rows = conn.execute(
+                        text(f"""
+                            SELECT cache_key, payload, serializer
+                            FROM arbs_kv_cache_v1
+                            WHERE cache_ns = :ns AND cache_key IN ({placeholders})
+                        """),
+                        params,
+                    ).fetchall()
+                for row in rows:
+                    results[row[0]] = row
+            return results
+        except Exception:
+            logger.warning("L2 bulk get failed for %s (%s keys)", self._ns, len(cache_keys), exc_info=True)
+            return {}
+
+    def bulk_get(self, keys: list[Any]) -> tuple[dict[Any, Any], list[Any]]:
+        """Bulk lookup: returns (hits, misses). Uses batched L2 for efficiency."""
+        hits: dict[Any, Any] = {}
+        l1_misses: list[tuple[Any, str]] = []
+
+        for key in keys:
+            try:
+                value = self._l1[key]
+                cache_key = self._hash_key(key)
+                if not self._is_stale(cache_key):
+                    hits[key] = value
+                    continue
+                l1_misses.append((key, cache_key))
+            except KeyError:
+                cache_key = self._hash_key(key)
+                l1_misses.append((key, cache_key))
+
+        if not l1_misses or not self._l2_read:
+            return hits, [key for key, _ in l1_misses]
+
+        cache_key_to_original = {ck: key for key, ck in l1_misses}
+        l2_results = self._l2_bulk_get([ck for _, ck in l1_misses])
+
+        misses: list[Any] = []
+        for key, cache_key in l1_misses:
+            row = l2_results.get(cache_key)
+            if row is not None:
+                try:
+                    value = self._deserialize(row[1], row[2])
+                    self._l1[key] = value
+                    self._timestamps[cache_key] = time.time()
+                    hits[key] = value
+                    continue
+                except Exception:
+                    pass
+            misses.append(key)
+
+        return hits, misses
+
     @classmethod
     def _ensure_l2_write_workers(cls) -> queue.Queue[tuple[str, str, str, bytes, str]]:
         work_queue = cls._L2_WRITE_QUEUE
