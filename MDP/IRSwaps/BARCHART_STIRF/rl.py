@@ -2630,19 +2630,22 @@ class BARCHART_STIRF_CURVE(LayeredCacheMixin):
         results: Dict[datetime.datetime, Any] = {}
         prior_nodes: Optional[Dict] = initial_nodes
         for ts, ts_pricers in chunk:
-            with _suppress_solver_output():
-                curve_obj, solver_obj = self._build_curve_from_pricers(
-                    curve_name=curve_name,
-                    timestamp=ts,
-                    cfg=cfg,
-                    pricers=ts_pricers,
-                    initial_nodes=prior_nodes,
-                    solver_tolerances=solver_tolerances,
-                )
-            prior_nodes = _extract_nodes(curve_obj)
-            curve_obj = self._attach_curve_context(curve_obj, curve_name=curve_name, timestamp=ts, cfg=cfg)
-            self._mem_cache_put(self._curve_cache_key(curve_name, ts, cfg), curve_obj)
-            results[ts] = curve_obj if curve_only else (curve_obj, solver_obj)
+            try:
+                with _suppress_solver_output():
+                    curve_obj, solver_obj = self._build_curve_from_pricers(
+                        curve_name=curve_name,
+                        timestamp=ts,
+                        cfg=cfg,
+                        pricers=ts_pricers,
+                        initial_nodes=prior_nodes,
+                        solver_tolerances=solver_tolerances,
+                    )
+                prior_nodes = _extract_nodes(curve_obj)
+                curve_obj = self._attach_curve_context(curve_obj, curve_name=curve_name, timestamp=ts, cfg=cfg)
+                self._mem_cache_put(self._curve_cache_key(curve_name, ts, cfg), curve_obj)
+                results[ts] = curve_obj if curve_only else (curve_obj, solver_obj)
+            except Exception:
+                pass
         return results
 
     def build_curve(
