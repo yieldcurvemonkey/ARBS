@@ -64,7 +64,7 @@ def _hour_to_session(hour: int) -> str:
 # Result cache versioning
 # ---------------------------------------------------------------------------
 
-TRADE_TAPE_CACHE_VERSION = "v20-pkgn-label-fix-pts-decompose"
+TRADE_TAPE_CACHE_VERSION = "v21-curve-abs-tol-scaling"
 
 # Clean single-unit spot tenor ("1M", "2M", "5Y", "1W", "6D"). Used to let a
 # standard tenor win over the UST MMYY alias in tape labels.
