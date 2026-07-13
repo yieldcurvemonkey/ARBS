@@ -128,7 +128,7 @@ def write_direction_rows(conn, rows):
         f"ON CONFLICT (unit_key) DO UPDATE SET "
         + ", ".join(f"{c} = EXCLUDED.{c}" for c in cols if c != "unit_key")
     )
-    values = [tuple(r.get(c) for c in cols) for r in rows]
+    values = [tuple(_sanitize(r.get(c)) for c in cols) for r in rows]
     with conn.cursor() as cur:
         _execute_values(cur, sql, values)
     conn.commit()
@@ -143,6 +143,22 @@ TICK_COLUMNS = [
 ]
 
 
+def _sanitize(val):
+    if val is None:
+        return None
+    if isinstance(val, float) and val != val:
+        return None
+    try:
+        import numpy as np
+        if isinstance(val, (np.floating, np.bool_)):
+            return None if np.isnan(val) else val.item()
+        if isinstance(val, np.integer):
+            return val.item()
+    except (TypeError, ValueError):
+        pass
+    return val
+
+
 def write_tick_rows(conn, stats_df):
     if stats_df is None or stats_df.empty:
         return
@@ -150,7 +166,7 @@ def write_tick_rows(conn, stats_df):
     for c in TICK_COLUMNS:
         if c not in df:
             df[c] = None
-    df = df[TICK_COLUMNS].where(pd.notna(df[TICK_COLUMNS]), None)
+    df = df[TICK_COLUMNS]
     sql = (
         f"INSERT INTO {TICK_TABLE} ({', '.join(TICK_COLUMNS)}) VALUES %s "
         f"ON CONFLICT (tenor_bucket, structure_type, dv01_bucket, as_of_date) "
@@ -159,8 +175,9 @@ def write_tick_rows(conn, stats_df):
                     if c not in ("tenor_bucket", "structure_type",
                                  "dv01_bucket", "as_of_date"))
     )
+    rows = [tuple(_sanitize(v) for v in r) for r in df.itertuples(index=False)]
     with conn.cursor() as cur:
-        _execute_values(cur, sql, [tuple(r) for r in df.itertuples(index=False)])
+        _execute_values(cur, sql, rows)
     conn.commit()
 
 
@@ -219,16 +236,21 @@ def _build_lookups(stats):
     med = {}
     if stats is not None and len(stats):
         for _, r in stats.iterrows():
-            med[(r["tenor_bucket"], r["structure_type"], r["dv01_bucket"])] = r
+            med[(r["tenor_bucket"], r["structure_type"], r["dv01_bucket"])] = r.to_dict()
 
     def tick_lookup(bucket, kind, dv01_bucket):
-        r = med.get((bucket, kind, dv01_bucket)) or med.get((bucket, kind, "ALL"))
+        r = med.get((bucket, kind, dv01_bucket))
+        if r is None:
+            r = med.get((bucket, kind, "ALL"))
         if r is None:
             return None
+        ftb = r.get("futures_min_tick_bps")
+        if ftb is None or (isinstance(ftb, float) and ftb != ftb):
+            ftb = 0.25
         return TickStats(
             median_tick_bps=r.get("median_tick_bps"),
             disp_jns=r.get("disp_jns"),
-            futures_tick_bps=float(r.get("futures_min_tick_bps") or 0.25),
+            futures_tick_bps=float(ftb),
         )
     return tick_lookup
 
