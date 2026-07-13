@@ -192,7 +192,7 @@ _SERVICE_CACHE_DIR_NAME = "service_caches"
 # Keys both the classification parquet day-cache directory and the
 # packaged-day warm-start pickle, so stale-schema frames can never be
 # served after a deploy (2026-07-01 audit, finding C4).
-DETECTION_CACHE_VERSION = "ptp12-spreadover-vs-rate-curve"
+DETECTION_CACHE_VERSION = "ptp13-spreadover-neg-pts-sametenor-pkg2"
 
 
 def save_service_caches(cache_dir: str) -> None:
@@ -789,7 +789,8 @@ def detect_sub_package_curve_fly(
         leg_spreadover = (
             pkg_ind_bool
             & spread_num.notna()
-            & (spread_num != 0)
+            # A spreadover leg is quoted as a NEGATIVE swap-vs-UST spread.
+            & (spread_num < 0)
             & (spread_num.abs() <= _SPREADOVER_LEG_SPREAD_CEILING)
             & fwd_spot
         )
@@ -1155,7 +1156,10 @@ def detect_spreadovers(package_df: pd.DataFrame):
         & (package_ind_col == True)
         & (forward_label_col == "spot")
         & spread_num.notna()
-        & (spread_num != 0)
+        # A swap-vs-UST spreadover is quoted as a NEGATIVE spread (swaps trade
+        # through Treasuries); a positive PTS is an outright's package spread,
+        # not a spreadover.
+        & (spread_num < 0)
         & _in_spread_band
         & (~has_invoice_ticker)
         & is_spreadover_tenor

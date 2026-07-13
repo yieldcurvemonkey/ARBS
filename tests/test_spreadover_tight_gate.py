@@ -57,15 +57,24 @@ def test_huge_spread_does_not_fire():
 
 
 def test_exactly_at_ceiling_fires():
-    """Spread at the 100 bps boundary is still a plausible spreadover."""
-    out = detect_spreadovers(_mk(package_transaction_spread=0.01))
+    """Spread at the -100 bps boundary is still a plausible spreadover."""
+    out = detect_spreadovers(_mk(package_transaction_spread=-0.01))
     assert bool(out.loc[0, "is_spreadover"]) is True
+
+
+def test_positive_pts_does_not_fire():
+    """A swap-vs-UST spreadover is quoted as a NEGATIVE spread. A positive PTS
+    (e.g. +1.4 bps on a Spot-10Y print) is not a spreadover."""
+    for pos in (0.00014, 0.004437, 0.30):
+        out = detect_spreadovers(_mk(package_transaction_spread=pos))
+        assert bool(out.loc[0, "is_spreadover"]) is False, f"{pos} should not fire"
+        assert out.loc[0, "package_type"] != "SPREADOVER"
 
 
 def test_percent_scaled_spreadover_fires():
     """-0.422 is -42.2 bps reported in percent scale (a data-scale error, not a
     valid decimal). Distinct from a mis-scaled decimal like 0.015 (=150 bps)."""
-    for pct in (-0.422, 0.30, -0.75, 1.0):
+    for pct in (-0.422, -0.30, -0.75, -1.0):
         out = detect_spreadovers(_mk(package_transaction_spread=pct))
         assert bool(out.loc[0, "is_spreadover"]) is True, f"{pct} should fire"
         assert out.loc[0, "package_type"] == "SPREADOVER"
@@ -79,8 +88,8 @@ def test_ambiguous_mid_scale_does_not_fire():
 
 
 def test_tiny_nonzero_spread_still_fires():
-    """0.5 bps is small but can be a legit short-dated spreadover."""
-    out = detect_spreadovers(_mk(package_transaction_spread=0.00005))
+    """-0.5 bps is small but can be a legit short-dated spreadover."""
+    out = detect_spreadovers(_mk(package_transaction_spread=-0.00005))
     assert bool(out.loc[0, "is_spreadover"]) is True
 
 

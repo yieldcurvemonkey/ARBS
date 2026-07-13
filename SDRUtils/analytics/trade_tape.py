@@ -64,7 +64,7 @@ def _hour_to_session(hour: int) -> str:
 # Result cache versioning
 # ---------------------------------------------------------------------------
 
-TRADE_TAPE_CACHE_VERSION = "v18-levered-spreadover-curve"
+TRADE_TAPE_CACHE_VERSION = "v19-spreadover-neg-pts-sametenor-pkg2"
 
 # Clean single-unit spot tenor ("1M", "2M", "5Y", "1W", "6D"). Used to let a
 # standard tenor win over the UST MMYY alias in tape labels.

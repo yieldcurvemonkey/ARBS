@@ -170,10 +170,11 @@ class TestPtsGrouping:
         assert (classified["package_type"] == "PKG-3").all()
         assert classified["package_legs"].iloc[0] == ["T10", "T12", "T15"]
 
-    def test_same_tenor_same_pts_not_grouped(self):
-        """Screenshot-1's two 5Y prints share the market spread level at
-        the same second. Same tenor = separate asset-swap prints, never
-        one package (mirrors the SOCRV same-tenor guard)."""
+    def test_same_tenor_same_pts_spreadover_not_grouped(self):
+        """Screenshot-1's two 5Y prints share the prevailing swap-vs-UST
+        spreadover level (a benchmark tenor, spot, NEGATIVE spread) at the
+        same second. That is two separate asset-swap prints, never one
+        package (mirrors the SOCRV same-tenor guard)."""
         ts = pd.Timestamp("2026-07-06 15:04:36", tz="UTC")
         df = pd.DataFrame([
             _pts_leg("A", ts, 5.0, 45000.0, -0.002925, platform="ISWV"),
@@ -182,6 +183,51 @@ class TestPtsGrouping:
         grouped, remainder = group_by_ptp(df, time_tolerance_seconds=5)
         assert len(grouped) == 0
         assert len(remainder) == 2
+
+    def test_same_tenor_nonspreadover_pair_forms_pkg2(self):
+        """A same-tenor pair that is NOT a spreadover — a non-benchmark
+        tenor (15Y) with a small POSITIVE package spread, same second, same
+        platform — is a genuine switch/roll and groups as PKG-2 (imgs #5/#6:
+        two 15Y prints at +1.4bp PTS were shown as separate outrights)."""
+        ts = pd.Timestamp("2026-07-06 15:04:36", tz="UTC")
+        df = pd.DataFrame([
+            _pts_leg("A", ts, 15.0, 250000.0, 0.00014),
+            _pts_leg("B", ts, 15.0, 250000.0, 0.00014),
+        ])
+        grouped, remainder = group_by_ptp(df, time_tolerance_seconds=5)
+        assert len(grouped) == 2 and len(remainder) == 0
+        assert grouped["ptp_group_id"].nunique() == 1
+        classified = classify_ptp_groups(grouped)
+        # Same tenor => no second economic axis => PKG-2, never CURVE.
+        assert (classified["package_type"] == "PKG-2").all()
+
+    def test_same_tenor_benchmark_positive_pts_forms_pkg2(self):
+        """Even at a benchmark tenor (10Y), a POSITIVE package spread is not a
+        spreadover (spreadovers are quoted negative), so a same-second pair is
+        a genuine PKG-2, not two separate prints."""
+        ts = pd.Timestamp("2026-07-06 15:04:36", tz="UTC")
+        df = pd.DataFrame([
+            _pts_leg("A", ts, 10.0, 250000.0, 0.00013),
+            _pts_leg("B", ts, 10.0, 250000.0, 0.00013),
+        ])
+        grouped, remainder = group_by_ptp(df, time_tolerance_seconds=5)
+        assert len(grouped) == 2 and len(remainder) == 0
+        classified = classify_ptp_groups(grouped)
+        assert (classified["package_type"] == "PKG-2").all()
+
+    def test_three_same_tenor_spreadover_still_block_split(self):
+        """Three same-tenor spreadover prints (benchmark 5Y, negative PTS) stay
+        separate — the same-tenor PKG-2 relaxation is restricted to PAIRS so a
+        larger benchmark cluster is not coalesced into one package."""
+        ts = pd.Timestamp("2026-07-06 15:04:36", tz="UTC")
+        df = pd.DataFrame([
+            _pts_leg("A", ts, 5.0, 45000.0, -0.002925, platform="ISWV"),
+            _pts_leg("B", ts, 5.0, 45000.0, -0.002925, platform="ISWV"),
+            _pts_leg("C", ts, 5.0, 45000.0, -0.002925, platform="ISWV"),
+        ])
+        grouped, remainder = group_by_ptp(df, time_tolerance_seconds=5)
+        assert len(grouped) == 0
+        assert len(remainder) == 3
 
     def test_same_tail_distinct_forwards_grouped(self):
         """Forward-axis packages (gap curves, FOMC switches) share the
