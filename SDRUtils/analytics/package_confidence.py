@@ -564,75 +564,6 @@ def _fly_signals(
 
 
 # ---------------------------------------------------------------------------
-# inferBaseTypeOverride
-# ---------------------------------------------------------------------------
-
-def _leg_pts(leg: dict) -> float | None:
-    """Get per-leg PTS as a finite float, or None."""
-    v = leg.get("package_transaction_spread")
-    return _num_or_none(v)
-
-
-def _infer_base_type_override(
-    resolved_type: str,
-    legs: list[dict],
-    package_transaction_spread: float | None,
-    tol: dict[str, float],
-) -> dict[str, str] | None:
-    """For SPREADOVER_FLY / SPREADOVER_CURVE: if all per-leg PTS values match
-    the package PTS at the same scale factor, override to the base type."""
-    if resolved_type not in ("SPREADOVER_FLY", "SPREADOVER_CURVE"):
-        return None
-    if len(legs) < 2:
-        return None
-    pkg_pts = _num_or_none(package_transaction_spread)
-    if pkg_pts is None:
-        return None
-
-    per_leg: list[float] = []
-    for leg in legs:
-        v = _leg_pts(leg)
-        if v is None:
-            return None
-        per_leg.append(v)
-
-    matches = [_find_scale_match(v, pkg_pts, tol["pts_match_bp"]) for v in per_leg]
-    if any(m is None for m in matches):
-        return None
-    factor = matches[0]["factor"]  # type: ignore[index]
-    if not all(m["factor"] == factor for m in matches):  # type: ignore[index]
-        return None
-
-    base_type = "FLY" if resolved_type == "SPREADOVER_FLY" else "CURVE"
-    pkg_fmt = _format_bp(pkg_pts)
-    leg_fmts = [_format_bp(v) for v in per_leg]
-    leg_summary = (
-        leg_fmts[0]
-        if all(s == leg_fmts[0] for s in leg_fmts)
-        else f"[{', '.join(leg_fmts)}]"
-    )
-
-    if factor == 1:
-        return {
-            "type": base_type,
-            "reason": (
-                f"every per-leg PTS = {leg_summary} matches package PTS = "
-                f"{pkg_fmt} (within ±{tol['pts_match_bp']}bp); "
-                f"SPREADOVER_{base_type} hedge leg expected to differ"
-            ),
-        }
-    return {
-        "type": base_type,
-        "reason": (
-            f"every per-leg PTS = {leg_summary} matches package PTS = "
-            f"{pkg_fmt} at {factor}× scale (likely decimal/percent/bps "
-            f"unit mismatch in the SDR feed); SPREADOVER_{base_type} "
-            f"hedge leg expected to differ"
-        ),
-    }
-
-
-# ---------------------------------------------------------------------------
 # Main entry point
 # ---------------------------------------------------------------------------
 
@@ -724,26 +655,14 @@ def compute_package_confidence(
     total = len(signals)
     tone = _pick_tone(score, total, is_info)
 
-    override = _infer_base_type_override(
-        resolved_type, legs, package_transaction_spread, tol,
-    )
-    if override is not None:
-        signals = signals + [
-            {
-                "name": "inferred_base_type",
-                "passed": True,
-                "detail": override["reason"],
-            },
-        ]
-
     return {
         "score": score,
         "total": total,
         "tone": tone,
         "signals": signals,
         "resolved_type": resolved_type,
-        "inferred_type": override["type"] if override else None,
-        "inferred_type_reason": override["reason"] if override else None,
+        "inferred_type": None,
+        "inferred_type_reason": None,
     }
 
 

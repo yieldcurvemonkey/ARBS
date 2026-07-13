@@ -120,3 +120,22 @@ def pts_ties_to_value(
         return True
     scale = find_scale_match(a, b, bp_tol)
     return scale is not None and scale["factor"] != 1
+
+
+def spread_to_bp(value: object) -> Optional[float]:
+    """Normalize a single reported spreadover value to basis points via a
+    magnitude band (no counter-leg to tie against). Mirrors the accept-bands in
+    ``detect_spreadovers``: decimal (|v|<=0.01 -> x10000) or percent
+    (0.10<=|v|<=1.0 -> x100). The ambiguous middle (0.01, 0.10) and clearly
+    erroneous magnitudes (>1.0) return None."""
+    if not _finite(value):
+        return None
+    v = float(value)
+    a = abs(v)
+    if a == 0:
+        return 0.0
+    if a <= 0.01:
+        return v * 10_000.0
+    if 0.10 <= a <= 1.0:
+        return v * 100.0
+    return None

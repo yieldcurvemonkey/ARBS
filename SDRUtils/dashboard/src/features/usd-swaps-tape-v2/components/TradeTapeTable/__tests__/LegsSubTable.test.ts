@@ -144,7 +144,7 @@ describe('LegsSubTable confidence strip', () => {
     expect(html).not.toContain('Risk balance')
   })
 
-  it('does NOT surface the inferred-type override badge when the panel is collapsed (default)', () => {
+  it('never surfaces an inferred-type override badge (override removed) — chip shows the raw package_type', () => {
     const html = renderToStaticMarkup(
       LegsSubTable({
         row: {
@@ -179,13 +179,14 @@ describe('LegsSubTable confidence strip', () => {
         } as any,
       }),
     )
-    // Override is gated behind the "Show Package Confidence Details"
-    // toggle — collapsed default markup should NOT carry the inferred
-    // chip / banner. Toggle button is still visible so the user can
-    // open it.
+    // The inferBaseTypeOverride heuristic has been removed: even for a
+    // uniform-per-leg-PTS SPREADOVER_FLY row (which used to trigger the
+    // FLY downgrade), inferredType is always null now, so neither the
+    // inferred banner nor a downgraded chip label ever renders — the
+    // header chip trusts the stored package_type verbatim.
     expect(html).not.toContain('data-testid="confidence-inferred-P-OVR"')
     expect(html).not.toContain('Inferred type:')
-    expect(html).toContain('(FLY)')
+    expect(html).toContain('(SPREADOVER_FLY)')
     expect(html).toContain('Show Package Confidence Details')
   })
 
