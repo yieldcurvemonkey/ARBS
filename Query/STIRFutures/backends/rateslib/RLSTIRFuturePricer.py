@@ -243,6 +243,85 @@ class RLSTIRFuturePricer(_STIRFutureGenericPricer):
 
         return self.build_stirf()
 
+    _MONTHLY_ROOTS = {"SR1", "ZQ", "IJ", "JU"}
+    _CME_TO_BBG = {
+        "SR3": "SFR",
+        "SR1": "SER",
+        "ZQ": "FF",
+    }
+
+    def root(self) -> str:
+        import re
+        m = re.match(r"^([A-Z0-9]+?)[FGHJKMNQUVXZ]\d{2}$", self._rl_stirf_id)
+        return m.group(1) if m else self._rl_stirf_id[:-3]
+
+    def bbg_root(self) -> str:
+        return self._CME_TO_BBG.get(self.root(), self.root())
+
+    def bbg_id(self) -> str:
+        import re
+        m = re.match(r"^([A-Z0-9]+?)([FGHJKMNQUVXZ]\d{2})$", self._rl_stirf_id)
+        if m:
+            return f"{self.bbg_root()}{m.group(2)}"
+        return self._rl_stirf_id
+
+    def curve_key(self) -> str:
+        return self._curve
+
+    def is_monthly(self) -> bool:
+        return self.root() in self._MONTHLY_ROOTS
+
+    def rl_spec(self, curve_key: Optional[str] = None) -> str:
+        ck = curve_key or self._curve
+        is_ser = self.root() in {"SR1", "SER", "SL"}
+        spec_key = "ReferenceRate3" if is_ser else "ReferenceRate2"
+        return RATESLIB_CURVE_DEFINITIONS[ck].get(
+            spec_key, RATESLIB_CURVE_DEFINITIONS[ck]["ReferenceRate"]
+        )
+
+    def build_for_solver(
+        self,
+        rl_curve,
+        curve_key: Optional[str] = None,
+        fallback_fixings: Optional[pd.Series] = None,
+    ) -> rl.STIRFuture:
+        """Build an rl.STIRFuture bound to an external curve (e.g. a risk curve).
+
+        The rateslib spec is always resolved from the instrument's own curve
+        (self._curve), not from curve_key — the spec encodes the contract
+        structure (monthly vs quarterly) which doesn't change when the
+        instrument is mapped to a different risk curve.
+        """
+        spec = self.rl_spec()
+        kwargs = dict(
+            effective=self._to_rl_dt(self.effective_date()),
+            termination=self._to_rl_dt(self.maturity_date()),
+            spec=spec,
+            price=float(self._price),
+            contracts=1,
+            curves=rl_curve,
+        )
+        meta = self._meta_data if isinstance(self._meta_data, dict) else {}
+        fixings = meta.get("fixings")
+        if fixings is None:
+            fixings = fallback_fixings
+        if fixings is not None and isinstance(fixings, pd.Series) and not fixings.empty:
+            cal = rl.get_calendar(rl.defaults.spec[spec].get("calendar", "nyc"))
+            mask = pd.Series(
+                [cal.is_bus_day(d.to_pydatetime() if hasattr(d, "to_pydatetime") else d) for d in fixings.index],
+                index=fixings.index,
+            )
+            fixings = fixings[mask]
+            if not fixings.empty:
+                for fixings_key in ("leg2_rate_fixings", "leg2_fixings"):
+                    try:
+                        return rl.STIRFuture(**kwargs, **{fixings_key: fixings})
+                    except TypeError:
+                        continue
+                    except (ValueError, KeyError):
+                        break
+        return rl.STIRFuture(**kwargs)
+
     def build_pricable(self, /, **kwargs: Any) -> Any:
         # Generic entry point
         return self.build_stirf(

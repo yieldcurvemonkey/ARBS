@@ -300,6 +300,63 @@ class STIRFutureQuery(BaseQuery):
 
         return req
 
+    def resolve_query(
+        self,
+        ref_dt: Any,
+        pricer_or_curve: Any = None,
+    ) -> "STIRFutureQuery":
+        """Normalise IMM tenors and SERFF aliases into concrete dates/symbols."""
+        import copy
+
+        q = copy.deepcopy(self)
+        skw = dict(q.structure_kwargs or {})
+        symbol = skw.get("symbol") or q.symbol or q.tenor or ""
+
+        if not isinstance(symbol, str) or not symbol:
+            return q
+
+        # --- IMM tenor resolution: "IMM_1xIMM_2" → effective/maturity ---
+        if "IMM_" in symbol.upper():
+            from Query.Base.imm_resolution import resolve_imm_tenor, resolve_imm_token
+
+            ref_date: Any = None
+            if pricer_or_curve is not None and hasattr(pricer_or_curve, "reference_date"):
+                ref_date = pricer_or_curve.reference_date()
+            elif isinstance(ref_dt, datetime.datetime):
+                ref_date = ref_dt.date()
+            elif isinstance(ref_dt, datetime.date):
+                ref_date = ref_dt
+            else:
+                return q
+
+            if "x" in symbol.lower():
+                eff, mat = resolve_imm_tenor(symbol, ref_date)
+                if isinstance(eff, datetime.datetime):
+                    eff = eff.date()
+                if isinstance(mat, datetime.datetime):
+                    mat = mat.date()
+                skw["effective_date"] = eff
+                skw["maturity_date"] = mat
+                skw.pop("symbol", None)
+            else:
+                eff = resolve_imm_token(symbol, ref_date)
+                if isinstance(eff, datetime.datetime):
+                    eff = eff.date()
+                next_tok = f"IMM_{int(symbol.upper().split('IMM_')[1]) + 1}"
+                mat = resolve_imm_token(next_tok, ref_date)
+                if isinstance(mat, datetime.datetime):
+                    mat = mat.date()
+                skw["effective_date"] = eff
+                skw["maturity_date"] = mat
+                skw.pop("symbol", None)
+
+            try:
+                return replace(q, structure_kwargs=skw, symbol=None, tenor=None)
+            except TypeError:
+                return replace(q, structure_kwargs=skw, symbol=None, tenor=None, structure_id=q.structure)
+
+        return q
+
     def default_mtm_value_id(self):
         # return STIRFutureValue.NPV
         return STIRFutureValue.PRICE

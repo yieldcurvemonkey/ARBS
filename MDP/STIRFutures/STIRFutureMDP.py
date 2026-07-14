@@ -600,22 +600,23 @@ class STIRFutureMDP(MarketDataProvider[InstrumentLike], LayeredCacheMixin):
         effective_date, maturity_date = _extract_stir_effective_termination(temp_stir)
 
         meta = dict(args)
-        if curve_name == "USD-SOFR-1D":
+        if curve_name in ("USD-SOFR-1D", "USD-FEDFUNDS"):
             memo = fixings_memo if fixings_memo is not None else {}
             memo_key = (curve_name, ref_date)
-            # try:
-            sofr_fixings = memo.get(memo_key)
-            if sofr_fixings is None:
-                sofr_fixings = _fetch_fixings(
-                    as_of_date=ref_date,
-                    curve_name=curve_name,
-                    force_refresh=self.force_refresh_fixings,
-                ).sort_index()
-                sofr_fixings = sofr_fixings[sofr_fixings.index.date <= ref_date] * 100
-                memo[memo_key] = sofr_fixings
-            meta["fixings"] = sofr_fixings
-            # except Exception:
-            #     pass
+            fixings_val = memo.get(memo_key)
+            if fixings_val is None:
+                try:
+                    fixings_val = _fetch_fixings(
+                        as_of_date=ref_date,
+                        curve_name=curve_name,
+                        force_refresh=self.force_refresh_fixings,
+                    ).sort_index()
+                    fixings_val = fixings_val[fixings_val.index.date <= ref_date] * 100
+                    memo[memo_key] = fixings_val
+                except Exception:
+                    fixings_val = None
+            if fixings_val is not None:
+                meta["fixings"] = fixings_val
 
         return RLSTIRFuturePricer(
             rl_stirf_id=sym,
@@ -1277,6 +1278,23 @@ class STIRFutureMDP(MarketDataProvider[InstrumentLike], LayeredCacheMixin):
         return result
 
     # ----------------------------- public API --------------------------------
+    def fetch_pricers_flat(
+        self,
+        symbols: Sequence[str],
+        timestamp: DateLike,
+        **kwargs: Any,
+    ) -> "OrderedDict[str, _STIRFutureGenericPricer]":
+        """Fetch pricers and flatten to {pricer.id(): pricer}."""
+        raw = self.get_data({"symbols": list(symbols), "timestamp": timestamp, **kwargs})
+        out: "OrderedDict[str, _STIRFutureGenericPricer]" = OrderedDict()
+        for _key, val in raw.items():
+            if isinstance(val, list):
+                for v in val:
+                    out[v.id()] = v
+            else:
+                out[val.id()] = val
+        return out
+
     def get_pricer(self, request: Dict[str, Any]) -> Dict[str, List[InstrumentLike]]:
         return self.get_data(request)
 
