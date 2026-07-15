@@ -1166,7 +1166,21 @@ class STIRFutureMDP(MarketDataProvider[InstrumentLike], LayeredCacheMixin):
                         interval=1, full_day_intraday=True,
                     )
                     if refetch_df is not None and not refetch_df.empty:
-                        self._session_dfs[session_key] = refetch_df.ffill().bfill()
+                        refetch_df = refetch_df.ffill().bfill()
+                        self._session_dfs[session_key] = refetch_df
+                        # Persist refetched data to per-symbol cache for future runs.
+                        if not use_live:
+                            for t in refetch_df.columns:
+                                series = refetch_df[t].dropna()
+                                for curr_ts, px in series.items():
+                                    curr_ts_iso = _cache_ts_iso(curr_ts, floor_minute=True)
+                                    args = {
+                                        "symbol": t,
+                                        "price": float(px),
+                                        "timestamp": curr_ts_iso,
+                                        "schema": 1,
+                                    }
+                                    self._threadsafe_cache_put(f"{curr_ts_iso}-{t}-{src}", args)
                 except Exception:
                     pass
 
@@ -1533,6 +1547,23 @@ class STIRFutureMDP(MarketDataProvider[InstrumentLike], LayeredCacheMixin):
                 "Bulk pricer build: %s timestamps, %s unique symbols, precomputed metadata once",
                 len(session_jobs), len(symbol_meta),
             )
+
+            # Persist session DF prices to per-symbol diskcache so the sequential
+            # fallback path and future runs find cache hits.
+            src = self.source.upper()
+            _persisted = 0
+            for t in symbol_meta:
+                if t not in price_df.columns:
+                    continue
+                series = price_df[t].dropna()
+                for row_ts_val, px in series.items():
+                    ts_iso = pd.Timestamp(row_ts_val).isoformat()
+                    cache_key = f"{ts_iso}-{t}-{src}"
+                    args = {"symbol": t, "price": float(px), "timestamp": ts_iso, "schema": 1}
+                    self._threadsafe_cache_put(cache_key, args)
+                    _persisted += 1
+            if _persisted:
+                _logger.info("Persisted %s pricer entries to diskcache for %s symbols", _persisted, len(symbol_meta))
 
             # Build pricers for all timestamps using precomputed metadata.
             for idx, ((ts, syms), pos) in enumerate(zip(session_jobs, positions)):
