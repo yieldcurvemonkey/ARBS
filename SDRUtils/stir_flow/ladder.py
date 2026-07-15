@@ -1,4 +1,14 @@
-"""Layer 1: project classified prints onto delta risk ladders (ladder spec section 4)."""
+"""Layer 1: project classified prints onto delta risk ladders (ladder spec section 4).
+
+Labeling (audit follow-up, Task A2): output is a model-labelled D2C flow
+proxy, not dealer inventory. Direction is inferred from price vs. curve mid
+(or NPV vs. reported upfront for off-market prints); it is not observed
+counterparty identity or a confirmed dealer position, and it is uncertified
+against external truth labels (desk tickets). Venue is a platform heuristic
+upstream of this module -- see SDRUtils.stir_flow.trade_selection.venue_status
+and SDRUtils.stir_flow.config.D2C_PLATFORM_WHITELIST for the whitelist that
+must gate any *signed research* use of this ladder.
+"""
 from __future__ import annotations
 
 import dataclasses

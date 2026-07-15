@@ -102,3 +102,31 @@ def test_bucket_keys():
     assert lc.meeting_bucket_key(datetime.date(2026, 10, 28)) == "2026-10-28"
     assert lc.meeting_bucket_key(pd.Timestamp("2026-10-28")) == "2026-10-28"
     assert lc.contract_month_key(datetime.date(2026, 10, 1)) == "2026-10"
+
+
+def test_venue_status():
+    from SDRUtils.stir_flow.trade_selection import venue_status
+    assert venue_status("TWSF") == "D2C_WHITELISTED"
+    assert venue_status("BGCD") == "D2D"
+    assert venue_status("TREU") == "VENUE_UNKNOWN"
+    assert venue_status(None) == "VENUE_UNKNOWN"
+    assert venue_status("") == "VENUE_UNKNOWN"
+
+
+def test_venue_status_full_whitelist_and_normalization():
+    from SDRUtils.stir_flow.trade_selection import venue_status
+    # All three whitelisted platforms, not just TWSF.
+    assert venue_status("BBSF") == "D2C_WHITELISTED"
+    assert venue_status("BILT") == "D2C_WHITELISTED"
+    # All six D2D/IDB codes remain D2D, not just BGCD.
+    for code in ("BGCD", "DWSF", "IGDL", "ISWV", "TPSE", "TSEF"):
+        assert venue_status(code) == "D2D"
+    # pid normalization: lowercase + surrounding whitespace.
+    assert venue_status("twsf") == "D2C_WHITELISTED"
+    assert venue_status("  TWSF  ") == "D2C_WHITELISTED"
+    assert venue_status("bgcd") == "D2D"
+    # Platforms with real volume (BMTF/BGC MTF) that aren't yet validated
+    # stay VENUE_UNKNOWN -- conservative-until-proven-D2C per Task A2.
+    assert venue_status("BMTF") == "VENUE_UNKNOWN"
+    # NaN (as opposed to None) must also route through pd.notna's False branch.
+    assert venue_status(float("nan")) == "VENUE_UNKNOWN"

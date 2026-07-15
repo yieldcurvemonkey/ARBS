@@ -73,6 +73,25 @@ def is_excluded_unit(legs: pd.DataFrame) -> str | None:
     return None
 
 
+def venue_status(platform_identifier: str) -> str:
+    """Return 'D2C_WHITELISTED', 'D2D', or 'VENUE_UNKNOWN'.
+
+    NOT called from ``is_excluded_unit`` -- venue is not a classification/
+    projection-time exclusion. Units keep flowing through classification and
+    the ladder regardless of venue_status; this is a read-time filter for
+    the *signed research* aggregation (audit follow-up, Task A2), which must
+    be whitelist-based rather than relying on the D2C-by-default heuristic
+    in ``SDRUtils.analytics.flow.classify_venue``.
+    """
+    from SDRUtils.analytics.filters import D2D_PLATFORMS
+    pid = str(platform_identifier).upper().strip() if pd.notna(platform_identifier) else ""
+    if pid in D2D_PLATFORMS:
+        return "D2D"
+    if pid in config.D2C_PLATFORM_WHITELIST:
+        return "D2C_WHITELISTED"
+    return "VENUE_UNKNOWN"
+
+
 def resolve_upfront(pkg_ptp, leg_ufros) -> tuple:
     ufro_sum = float(sum(u for u in leg_ufros if u)) if leg_ufros is not None else 0.0
     ptp_usd = None
