@@ -43,6 +43,12 @@ def test_expected_weighting_and_suspect_exclusion():
     assert lad_unw["2026-07-29"] == pytest.approx(100.0)
 
 
+def test_nan_p_flip_treated_as_full_weight():
+    df = pd.DataFrame([_print(unit="A", dv=100.0, p_flip=np.nan)])
+    lad = ladder_at(df, TS0, half_lives=HL)
+    assert lad["2026-07-29"] == pytest.approx(100.0)
+
+
 def test_unwind_netting_zeroes_from_unwind_visibility():
     df = pd.DataFrame([_print(unit="T1", dv=100.0)])
     unw = pd.DataFrame([dict(unit_key="T1",
