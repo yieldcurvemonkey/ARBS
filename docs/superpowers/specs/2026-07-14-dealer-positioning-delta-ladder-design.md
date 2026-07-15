@@ -47,6 +47,8 @@ Pricing happens exactly twice per position — once at projection, once per reva
 
 All rows of `arbs_stir_direction_v1` with `dealer_direction IN ('PAID', 'RECEIVED')` — every classified sub-3Y D2C print: FOMC, IMM, spot, forward, outrights, curves, flies. The solver projection maps any structure onto the same buckets; a 6M spot swap moves the same meeting forwards a meeting-dated swap does. No structure filter beyond what the classifier already applied.
 
+**Venue whitelist (audit revision 2026-07-15).** The tape's `venue` is a heuristic: `classify_venue` labels six known IDB platform codes D2D and EVERYTHING ELSE — including missing/unknown platform IDs — D2C (`SDRUtils/analytics/flow.py:113`, `D2D_PLATFORMS` in `filters.py`). "D2C" is therefore a model label, not observed counterparty identity. The signed universe must use a **validated D2C platform whitelist** (derived empirically from distinct `platform_identifier` counts, validated against the SEF registry); unknown/missing platforms route to `VENUE_UNKNOWN` and are excluded from signed aggregation. All outputs are labelled "model-labelled D2C flow proxy," never "dealer inventory," until external truth labels exist (Section 9, gate G0).
+
 ### 3b. Unwind events
 
 Tape rows with `economic_class = 'ECONOMIC_UNWIND'` whose lifecycle lineage (prior UTI / Original Dissemination Identifier chain, `xd_*` columns) resolves to an already-projected print. Used for netting (Section 6). Generic opposite-direction new prints are NOT treated as unwinds — they are new flow and offset naturally in the signed sum; netting them would double-count the dealer's own hedge when it prints D2C.
@@ -163,10 +165,10 @@ POC facts (07/10): `curve_suspect_trade` concentration sits exactly on the bucke
 
 Positioning backtests die of lookahead; these rules are load-bearing:
 
-1. **Visibility timestamp per print.** The ladder at ts includes only prints publicly knowable by ts:
+1. **Visibility timestamp per print (audit revision 2026-07-15).** The ladder at ts includes only prints publicly knowable by ts:
    - `visibility_ts = dissemination timestamp` from the raw SDR feed if the loader carries it (**verify at implementation** — DTCC disseminates it; whether the tape persists it must be checked, else it must be added or approximated);
-   - fallback rule: `execution_ts + 15min` when `is_block`, `execution_ts + 1min` otherwise (ASATP dissemination).
-   A block's flow must never appear in the ladder before the market could have seen the print.
+   - fallback: the **legal delay class per 17 CFR Part 43 Appendix C**, derived from (platform-facility, cleared, block/cap flags) — NOT a two-bucket block rule: on-facility non-block `+1min` (ASATP); SEF/DCM block `+15min`; cleared large-notional off-facility `+15min`; uncleared dealer off-facility `+30min`; other/uncleared non-dealer `+60min`; indeterminate fields → the most conservative applicable class (`+60min`).
+   A print must never appear in the ladder before the market could legally have seen it.
 2. **Decision curve at decision time.** Signal evaluation and entry pricing use the curve at decision ts. Only MTM and stops use later curves.
 3. **Walk-forward calibration.** EWMA half-lives, kink locations, z-score thresholds, trigger parameters: fit on trailing windows only (reuse `BT/serff/walkforward.py` conventions). The final ~6 weeks of the backfill are a temporal holdout untouched until final validation.
 4. **Live-parity mode.** Production classification runs at a 15-minute delay; the backtester supports flooring ALL visibility at `execution_ts + 15min` as a conservative live-parity mode. Both modes reported side by side.
@@ -174,6 +176,19 @@ Positioning backtests die of lookahead; these rules are load-bearing:
 ---
 
 ## 9. Phase 4 — Levels and empirical gamma (research layer, `BT/dealer_ladder/`)
+
+### 9-0. Gate ordering (audit revision 2026-07-15 — supersedes any study order below)
+
+Per the external feasibility audit (`docs/superpowers/audits/2026-07-15-sdr-dealer-positioning-feasibility-audit.md`), Phase 4 runs as ordered gates; price-prediction tests run LAST and only on what survives:
+
+- **G0 Labels/provenance:** venue whitelist derivation (Section 3a); direction accuracy is UNCERTIFIED without external truth labels — the cheapest source is the desk's own tickets matched to their SDR prints (user action). Until then every result carries attenuation sensitivity (signed exposure scales by 2a−1; report a ∈ {0.6, 0.7, 0.8}) and the "model-labelled flow proxy" label. Off-market (NPV-vs-upfront) prints are a separately reported stratum — the rule imposes non-negative dealer edge by construction and cannot self-validate.
+- **G1 Arrival integrity:** dissemination-timestamp probe of the raw feed; replay on actual arrival times where available, else legal delay classes (Section 8); all-+15min parity variant.
+- **G2 Mechanism ordering (FIRST study, before any price test):** does the signed ladder *precede* measurable aggressive futures flow? Proxy signed aggressive flow from minutely Barchart futures volume + tick-direction. No flow-leads-flow evidence ⇒ the forced-hedge channel is unsupported and any price result is relabelled basis/flow continuation.
+- **G3 Circularity battery:** matched-basis horse race (basis level/sign×DV01/|basis|, curve level/slope/curvature, recent returns, realized vol, liquidity, time-of-day, roll, FOMC indicators); independent fair value from the `SDR_INTRADAY-RL` swap-print-derived curves (futures-independent); leave-one-contract-out; residualized flow.
+- **G4 Price prediction, pre-registered:** ONE locked primary spec (horizon, bucket space, strata, arrival convention, cost model, exposure rule) with raw t ≥ 3; the secondary variant grid judged by day-blocked bootstrap max-t / Romano-Wolf family-wise p < 0.05; a trial ledger including manual searches; the 6-week lockout's burn rule decided in advance.
+- **G5 Economics:** costs use CME's actual tick structure — SR3 0.25bp/$6.25 applies only near expiry, deferred quarterlies trade 0.5bp/$12.50 (the `BT/serff/config.py` `tick_front`/`tick_back` split); capacity from historical depth, not daily volume.
+
+Passing every gate supports a paper-traded pilot, not production.
 
 ### 9a. Candidate levels
 
@@ -186,7 +201,7 @@ Event study over historical prints: post-`visibility_ts` drift of the mapped fut
 
 ### 9c. The go/no-go event study
 
-Episodes where rate approached a candidate level with |ladder z-score| above threshold: forward returns at 5/15/30/60min, split by ladder-sign agreement, block share, proximity, conditioning on liquidity regime (Amihud from the tick table). Net of costs using `SerffTradeConfig` conventions (SR3 tick 0.25bp = $6.25, ZQ/SR1 0.5bp = $20.84, DV01 $25.0/$41.67 per contract). **If drift does not survive costs, Phase 5 does not ship** — the deliverable becomes the ladder observable plus a written negative result.
+Episodes where rate approached a candidate level with |ladder z-score| above threshold: forward returns at 5/15/30/60min, split by ladder-sign agreement, block share, proximity, conditioning on liquidity regime (Amihud from the tick table). Net of costs using `SerffTradeConfig` conventions with the front/back tick split (SR3: 0.25bp/$6.25 near expiry only, 0.5bp/$12.50 deferred; ZQ/SR1: 0.5bp/$20.84; DV01 $25.0/$41.67 per contract) — an 8-leg deferred SR3 strip carries ~0.45-0.5bp round-trip quoted spread in DV01 terms before slippage. **If drift does not survive costs, Phase 5 does not ship** — the deliverable becomes the ladder observable plus a written negative result.
 
 ## 10. Phase 5 — Trigger / sizing / stops (trading layer)
 
