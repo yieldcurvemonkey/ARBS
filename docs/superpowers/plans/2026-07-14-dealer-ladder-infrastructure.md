@@ -1751,10 +1751,45 @@ git commit -m "docs(ladder): 6-month backfill + snapshot verification results"
 
 ---
 
+### Task 10: Autonomous research run — does the signal predict STIR price action?
+
+**Research question (verbatim, this is the deliverable's title):** *Does the dealer positioning ladder have predictive power forecasting mid-frequency (minutely / hourly / daily) price action in the US STIR complex?*
+
+This task is a research phase, not TDD feature work: the implementer has full freedom on methodology details, but the checklist below is the minimum bar and the honesty requirements are non-negotiable. Prerequisite: Task 9 data (whatever window actually backfilled — if intraday curve history limits the window below 6 months, run on what exists and document it).
+
+**Files:**
+- Create: `BT/dealer_ladder/` package — `config.py` (dataclass config incl. cost model copied from `BT/serff/config.py` conventions: SR3 tick 0.25bp/$6.25, ZQ/SR1 0.5bp/$20.84, DV01 $25.0/$41.67 per contract), `data.py` (load ladder prints / marks / futures rate history), `signals.py` (ladder-state variants → signal panels), `study.py` (IC, event study, placebos, statistics)
+- Create: `notebooks/backtests/dealer_ladder_signal_research.ipynb` — executed presentation layer importing `BT.dealer_ladder` (repo convention: heavy lifting in modules, notebook renders)
+- Create: `docs/superpowers/plans/2026-07-15-dealer-ladder-predictive-power-findings.md` — the findings report
+- Test: `tests/test_dealer_ladder_study.py` — pure-logic tests (IC math on synthetic panels, placebo machinery, no-lookahead audit helpers)
+
+- [ ] **Step 1: Targets.** Forward changes of bucket-mapped instruments from repo data infra (`STIRFutureMDP` / BARCHART_STIRF intraday curves; see `notebooks/timeseries/intraday_stirf.ipynb` for access patterns): per-contract SFR/FF futures rates and meeting-implied rates, at horizons 5m, 15m, 30m, 1h, 4h, 1d. Build a decision-time grid (e.g. every 5 minutes over trading hours) with rates sampled AT grid time and forward returns strictly after it.
+
+- [ ] **Step 2: Signal variants** (all computed via `ladder_state.ladder_at` at grid times — read-time transforms, no repricing): per-bucket ladder z-scores (meeting + futures spaces, z vs trailing 10d distribution), aggregate front-end imbalance, residual (EWMA) vs gross book P&L deltas, level-proximity-conditioned variants (structural 25bp grid from `SDRUtils/analytics/fomc.py`). Half-life grid: {30, 90, 240, 1440} minutes. Weighting: expected vs unweighted.
+
+- [ ] **Step 3: Tests of predictive power.**
+  (a) Information coefficient: rank-corr(signal_t, fwd_return_{t→t+h}) per bucket × horizon × variant, as a time series;
+  (b) event study on |z| ≥ 2 episodes (deduplicated/non-overlapping): mean forward drift in −ladder direction with block-bootstrap CIs;
+  (c) a simple threshold rule net of costs (cross the spread at entry+exit, cost model from config) — bps per trade and per $DV01;
+  (d) conditioning splits: block share, proximity-to-level, Amihud liquidity regime (from `arbs_stir_tick_size_v1`), FOMC proximity.
+
+- [ ] **Step 4: Statistical honesty (non-negotiable).** Overlapping-horizon inference via HAC (Newey-West) or block bootstrap — never iid t-stats on overlapping returns. In-sample = all but the final 6 weeks; final 6 weeks = one-shot OOS, touched once, reported separately. Multiplicity: report the FULL grid of results (every variant × bucket × horizon), apply Benjamini-Hochberg or explicitly deflate the best cell; never headline the max statistic without the correction. Effect sizes in bps with CIs, not just p-values.
+
+- [ ] **Step 5: No-lookahead audit (must all pass before believing any result).**
+  (a) visibility audit: assert every signal value at grid time t uses only prints with `visibility_timestamp <= t`;
+  (b) live-parity variant: repeat headline tests with all visibility floored at `execution_ts + 15min`;
+  (c) placebo 1: shift signals +1 grid step forward (future signal on past return) — predictive power must vanish;
+  (d) placebo 2: shuffle dealer-direction signs within each day — predictive power must vanish.
+
+- [ ] **Step 6: Findings report + notebook.** The report answers the research question with one of three verdicts per the spec 9c kill-switch: (i) predictive power survives OOS and costs → proceed to Phase 5 planning; (ii) statistical signal exists but dies net of costs → document where/why, park Phase 5; (iii) no robust signal → negative result, ladder remains a positioning observable. **A negative result is a fully successful deliverable — the goal is truth, not a positive result.** Include: methodology, full result grids, OOS table, placebo/parity outcomes, limitations (window length, curve_suspect exclusions, classifier accuracy floor), recommended next steps. Execute the notebook end-to-end so figures render.
+
+- [ ] **Step 7: Commit + ship.** Commit modules, tests, executed notebook, findings doc. Send the findings doc and notebook to the user as files with a proactive summary.
+
+---
+
 ## Deferred (per spec gating — NOT in this plan)
 
-- `BT/dealer_ladder/` Phase-4 research harness (decay calibration, kinks + structural grid, go/no-go event study) — separate plan once ladder data exists.
-- Phase 5 trigger/sizing/stops — gated on Phase 4's verdict.
+- Phase 5 trigger/sizing/stops — gated on Task 10's verdict.
 - Dissemination-timestamp wiring if the Task 5 probe finds the column in raw-but-not-tape (follow-up tape change).
 - Dashboard / live 15-min ladder service.
 
