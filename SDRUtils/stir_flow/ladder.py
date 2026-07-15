@@ -13,10 +13,18 @@ N_MEETINGS = 12
 N_SFR = 12
 N_BASIS_MONTHS = 12
 MEETING_TENORS = [f"fomc_{i}" for i in range(1, N_MEETINGS + 1)]
-# Sign flip: rateslib delta is dNPV per +1bp instrument-rate bump; a received-fixed
-# (long futures-equivalent) book LOSES on higher rates, so persisted convention
-# (+ = dealer long futures-equiv) requires one flip. Golden test is the arbiter.
-RL_DELTA_TO_FUTURES_EQ = -1.0
+# Sign flip per solver type: rateslib delta sign convention differs between
+# IRS-based solvers (MEETING) and STIRFuture-based solvers (FUTURES).
+# IRS solver: payer swap → raw delta POSITIVE → need ×-1 for "PAID = negative"
+# STIR solver: payer swap → raw delta NEGATIVE → need ×+1 for "PAID = negative"
+# Golden tests are the arbiter per space.
+_RL_SIGN_BY_SPACE = {
+    "MEETING": -1.0,
+    "FUTURES": +1.0,
+    "SERFF_BASIS_SOFR": +1.0,
+    "SERFF_BASIS_SPREAD": +1.0,
+}
+RL_DELTA_TO_FUTURES_EQ = -1.0  # legacy alias; per-space dict is authoritative
 
 
 @dataclasses.dataclass
@@ -172,8 +180,9 @@ def project_unit(unit, direction_row, risk_models, pricer, curve_name, snap_ts):
         deltas = _project_onto_model(pkgs, model)
         for key, val in deltas.items():
             space, bucket = key if isinstance(key, tuple) else (model.space, key)
+            sign = _RL_SIGN_BY_SPACE.get(space, RL_DELTA_TO_FUTURES_EQ)
             rows.append(dict(meta, bucket_space=space, bucket_key=bucket,
-                             delta_dv01=RL_DELTA_TO_FUTURES_EQ * float(val)
+                             delta_dv01=sign * float(val)
                              if model.curve_handle is not None else float(val)))
 
     # ENTRY mark: dealer-signed NPV at the projection snapshot

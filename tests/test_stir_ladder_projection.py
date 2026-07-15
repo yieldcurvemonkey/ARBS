@@ -184,3 +184,7 @@ def test_project_unit_golden_sign_and_magnitude():
     assert abs(abs(total) - 50001) < 2500          # ~ structure DV01
     assert abs(meeting.get("2026-07-29", 0.0)) > 0.9 * abs(total)  # concentrated in JUL26
     assert abs(entry["npv_usd"] - 22554.95) < 250
+    # FUTURES space must also be negative for PAID (same trade, different decomposition)
+    futures = {r["bucket_key"]: r["delta_dv01"] for r in rows if r["bucket_space"] == "FUTURES"}
+    fut_total = sum(futures.values())
+    assert fut_total < 0, f"PAID FUTURES must be negative, got {fut_total}"
