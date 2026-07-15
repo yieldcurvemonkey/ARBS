@@ -59,7 +59,7 @@ def book_snapshot(units_by_key, direction_rows, prints, unwinds, pricer, ts, *,
                   half_lives=None, weighting="expected", include_suspect=False,
                   entry_marks=None) -> BookSnapshot:
     half_lives = half_lives or conv.PROVISIONAL_HALF_LIVES_MIN
-    mts = snap_mtm(ts) if not isinstance(ts, pd.Timestamp) or ts.tzinfo else ts
+    mts = snap_mtm(ts)
     ladders = {
         space: ladder_state.ladder_at(prints, ts, space=space, half_lives=half_lives,
                                       weighting=weighting, include_suspect=include_suspect,
@@ -81,7 +81,8 @@ def book_snapshot(units_by_key, direction_rows, prints, unwinds, pricer, ts, *,
         entry = (entry_marks or {}).get(key, 0.0)
         recs.append(dict(unit_key=key, npv_usd=npv, entry_npv_usd=entry,
                          pnl_usd=npv - entry, weight=row["weight"]))
-    per_unit = pd.DataFrame(recs)
+    cols = ["unit_key", "npv_usd", "entry_npv_usd", "pnl_usd", "weight"]
+    per_unit = pd.DataFrame(recs, columns=cols) if recs else pd.DataFrame(columns=cols)
     gross = float(per_unit["pnl_usd"].sum()) if len(per_unit) else 0.0
     residual = float((per_unit["pnl_usd"] * per_unit["weight"]).sum()) if len(per_unit) else 0.0
     return BookSnapshot(ts=ts, ladders=ladders, per_unit=per_unit,

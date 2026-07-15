@@ -86,6 +86,35 @@ def test_book_snapshot_gross_and_residual():
     assert snap.ladders["MEETING"]["2026-07-29"] == pytest.approx(-25_000.0)
 
 
+def test_eod_mark_rows_basic():
+    class FakeUnit:
+        kind = "OUTRIGHT"
+        def __init__(self):
+            self.legs = pd.DataFrame([
+                dict(effective_date=datetime.date(2026, 7, 29),
+                     expiration_date=datetime.date(2026, 9, 16),
+                     notional=1e9, fixed_rate=0.037),
+            ])
+
+    class FakePricer:
+        def price_leg(self, curve_name, ts, eff, mat, notional, fixed_rate=None):
+            from SDRUtils.stir_flow.pricing import LegPricing
+            return LegPricing(3.71, 15_000.0, 50_000.0)
+
+    units = {"T1": FakeUnit()}
+    directions = {"T1": dict(unit_key="T1", classification_method="RATE_VS_MID",
+                             dealer_direction="PAID", rate_index_clean="FED_FUNDS")}
+    entry_marks = {"T1": 10_000.0}
+    rows = book.eod_mark_rows(units, directions, entry_marks, FakePricer(),
+                               datetime.date(2026, 7, 10), ["T1"])
+    assert len(rows) == 1
+    r = rows[0]
+    assert r["mark_kind"] == "EOD"
+    assert r["npv_usd"] == pytest.approx(15_000.0)  # PAID: +npv_pay
+    assert r["pnl_since_entry_usd"] == pytest.approx(5_000.0)  # 15K - 10K
+    assert r["mark_ts"].hour == 17  # 5pm ET
+
+
 @pytest.mark.network
 @pytest.mark.slow
 def test_reval_golden_ff_jul26_at_entry_snapshot():
