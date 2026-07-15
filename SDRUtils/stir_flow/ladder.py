@@ -89,23 +89,23 @@ def build_risk_models(curve_name, curve_handle, ts, stirf_mdp, include_basis: bo
     models.append(RiskModel("MEETING", m_curve, m_solver, meeting_map))
 
     # FUTURES space: SFRCM1..12; bucket = absolute contract id (solver labels ARE ids)
-    sfr_queries = [STIRFutureQuery(symbol=f"SFRCM{i}") for i in range(1, N_SFR + 1)]
-    f_curve, f_solver = build_delta_risk_ladder(
-        sfr_queries, curve_handle, stirf_mdp_handle=stirf_mdp, timestamp=ts
-    )
-    fut_map = {label: label for label in f_solver.instrument_labels}
-    models.append(RiskModel("FUTURES", f_curve, f_solver, fut_map))
+    try:
+        sfr_queries = [STIRFutureQuery(symbol=f"SFRCM{i}") for i in range(1, N_SFR + 1)]
+        f_curve, f_solver = build_delta_risk_ladder(
+            sfr_queries, curve_handle, stirf_mdp_handle=stirf_mdp, timestamp=ts
+        )
+        fut_map = {label: label for label in f_solver.instrument_labels}
+        models.append(RiskModel("FUTURES", f_curve, f_solver, fut_map))
+    except Exception:
+        pass  # SFR data unavailable at this timestamp; MEETING-only projection
 
     # SERFF basis split (FED_FUNDS prints only)
     if include_basis:
+      try:
         b_curve, b_solver, _stir_solver = build_basis_risk_ladder(
             [str(i) for i in range(1, N_BASIS_MONTHS + 1)],
             curve_handle, stirf_mdp_handle=stirf_mdp, timestamp=ts,
         )
-        # b_solver.instrument_labels are all "cvx_<SER bbg_id>" (the OIS/basis leg);
-        # the matching pure-SOFR labels live one level down in the STIR pre-solver.
-        # Bucket key = contract month, resolved from the SER pricers' effective dates
-        # (bbg_id alone doesn't carry month info reliably) rather than the raw label.
         ser_pricers = stirf_mdp.fetch_pricers_flat(
             [f"SERCM{i}" for i in range(1, N_BASIS_MONTHS + 1)], ts
         )
@@ -114,6 +114,8 @@ def build_risk_models(curve_name, curve_handle, ts, stirf_mdp, include_basis: bo
             for p in ser_pricers.values()
         }
         models.append(RiskModel("SERFF_BASIS", b_curve, b_solver, basis_map))
+      except Exception:
+          pass  # SER data unavailable; skip SERFF_BASIS
 
     return models
 
