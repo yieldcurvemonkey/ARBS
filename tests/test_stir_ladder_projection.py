@@ -62,3 +62,5 @@ def test_build_risk_models_golden():
     assert meeting.label_to_bucket["fomc_1"] == "2026-07-29"
     futures = next(m for m in models if m.space == "FUTURES")
     assert len(futures.label_to_bucket) == 12
+    serff = next(m for m in models if m.space == "SERFF_BASIS")
+    assert len(serff.label_to_bucket) >= 10  # ~12 SER months
