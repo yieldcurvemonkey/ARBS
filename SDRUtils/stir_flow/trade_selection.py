@@ -17,7 +17,7 @@ _LEG_COLS = """
     l.effective_date, l.expiration_date,
     l.notional, l.risk, l.fixed_rate,
     l.other_payment_ufro, l.is_capped, l.is_block, l.is_off_date,
-    l.leg_tape_label, l.execution_session,
+    l.leg_tape_label, l.execution_session, l.platform_identifier, l.cleared,
     p.package_structure, p.n_package_legs,
     p.package_transaction_price AS pkg_ptp,
     p.package_transaction_spread AS pkg_pts
