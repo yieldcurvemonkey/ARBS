@@ -28,7 +28,12 @@ class RiskModel:
 
 
 def extract_bucket_deltas(delta_df, label_to_bucket, *, basis_prefix=None) -> dict:
+    # Case-insensitive match: rateslib/IRSwapQuery tenor normalization uppercases
+    # instrument labels (e.g. requested "fomc_1" -> solver label "FOMC_1"), so
+    # label_to_bucket keys built from the pre-normalization request token would
+    # never match delta_df's post-normalization labels on a case-sensitive lookup.
     out: dict = {}
+    lookup = {str(k).upper(): v for k, v in label_to_bucket.items()}
     for idx, row in delta_df.iterrows():
         label = idx[-1] if isinstance(idx, tuple) else idx
         if basis_prefix is not None:
@@ -37,9 +42,10 @@ def extract_bucket_deltas(delta_df, label_to_bucket, *, basis_prefix=None) -> di
             label = str(label)[len(basis_prefix):]
         elif str(label).startswith("cvx_"):
             continue
-        if label not in label_to_bucket:
+        key = str(label).upper()
+        if key not in lookup:
             continue
-        bucket = label_to_bucket[label]
+        bucket = lookup[key]
         out[bucket] = out.get(bucket, 0.0) + float(row.iloc[0])
     return out
 
@@ -92,3 +98,96 @@ def build_risk_models(curve_name, curve_handle, ts, stirf_mdp, include_basis: bo
         models.append(RiskModel("SERFF_BASIS", b_curve, b_solver, basis_map))
 
     return models
+
+
+LADDER_COLUMNS = [
+    "unit_key", "bucket_space", "bucket_key", "delta_dv01", "as_of_date",
+    "execution_timestamp", "visibility_timestamp", "p_flip",
+    "direction_confidence", "curve_suspect_trade", "is_block", "dv01",
+]
+
+
+def dealer_signed_packages(unit, direction_row, curve_handle, snap_ts):
+    """Build the dealer's position as rl instruments on the given curve handle.
+
+    Rateslib positive notional = pay fixed. Dealer sign +1 (received) -> rl
+    notional negative. Returns list of rl instruments (one per leg).
+    """
+    from Query.IRSwaps.IRSwapQuery import IRSwapQuery
+
+    from SDRUtils.stir_flow.ladder_conventions import dealer_leg_signs
+
+    signs = dealer_leg_signs(
+        unit.kind, direction_row["classification_method"],
+        direction_row["dealer_direction"], len(unit.legs),
+    )
+    pkgs = []
+    for (_, leg), sign in zip(unit.legs.iterrows(), signs):
+        rl_notional = -sign * float(leg["notional"])   # +1 received -> negative (receiver)
+        q = IRSwapQuery(
+            curve=curve_handle._meta_data.get("requested_curve_name"),
+            effective_date=pd.Timestamp(leg["effective_date"]).date(),
+            maturity_date=pd.Timestamp(leg["expiration_date"]).date(),
+            structure_kwargs={"notional": rl_notional, "fixed_rate": float(leg["fixed_rate"])},
+        ).resolve_query(snap_ts, pricer_or_curve=curve_handle)
+        pkg, _ = q.resolve_package(pricer_or_curve=curve_handle)
+        pkgs.extend(pkg)
+    return pkgs
+
+
+def _project_onto_model(pkgs, model: RiskModel) -> dict:
+    import rateslib as rl
+    delta_df = rl.Portfolio(pkgs).delta(solver=model.solver)
+    if model.space == "SERFF_BASIS":
+        pure = extract_bucket_deltas(delta_df, model.label_to_bucket)
+        basis = extract_bucket_deltas(delta_df, model.label_to_bucket, basis_prefix="cvx_")
+        out = {("SERFF_BASIS_SOFR", k): v for k, v in pure.items()}
+        out.update({("SERFF_BASIS_SPREAD", k): v for k, v in basis.items()})
+        return out
+    return extract_bucket_deltas(delta_df, model.label_to_bucket)
+
+
+def project_unit(unit, direction_row, risk_models, pricer, curve_name, snap_ts):
+    from SDRUtils.stir_flow import ladder_conventions as _conv
+
+    first = unit.legs.iloc[0]
+    vis = _conv.visibility_timestamp(first["execution_timestamp"], bool(first.get("is_block")))
+    meta = dict(
+        unit_key=direction_row["unit_key"],
+        as_of_date=first["as_of_date"],
+        execution_timestamp=first["execution_timestamp"],
+        visibility_timestamp=vis,
+        p_flip=direction_row.get("p_flip"),
+        direction_confidence=direction_row.get("direction_confidence"),
+        curve_suspect_trade=bool(direction_row.get("curve_suspect_trade")),
+        is_block=bool(first.get("is_block")),
+        dv01=direction_row.get("structure_dv01"),
+    )
+
+    rows = []
+    for model in risk_models:
+        pkgs = None
+        if model.curve_handle is not None:
+            pkgs = dealer_signed_packages(unit, direction_row, model.curve_handle, snap_ts)
+        deltas = _project_onto_model(pkgs, model)
+        for key, val in deltas.items():
+            space, bucket = key if isinstance(key, tuple) else (model.space, key)
+            rows.append(dict(meta, bucket_space=space, bucket_key=bucket,
+                             delta_dv01=RL_DELTA_TO_FUTURES_EQ * float(val)
+                             if model.curve_handle is not None else float(val)))
+
+    # ENTRY mark: dealer-signed NPV at the projection snapshot
+    signs = _conv.dealer_leg_signs(
+        unit.kind, direction_row["classification_method"],
+        direction_row["dealer_direction"], len(unit.legs),
+    )
+    npv = 0.0
+    for (_, leg), sign in zip(unit.legs.iterrows(), signs):
+        lp = pricer.price_leg(curve_name, snap_ts, leg["effective_date"],
+                              leg["expiration_date"], notional=float(leg["notional"]),
+                              fixed_rate=float(leg["fixed_rate"]))
+        npv += -sign * lp.npv_pay          # received (+1) -> value = -npv_pay
+    entry = dict(unit_key=direction_row["unit_key"], mark_ts=snap_ts,
+                 mark_kind="ENTRY", npv_usd=npv, pnl_since_entry_usd=0.0,
+                 curve_name=curve_name)
+    return rows, entry
