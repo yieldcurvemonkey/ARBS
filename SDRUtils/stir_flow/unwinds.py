@@ -24,8 +24,13 @@ def _match_unwinds_frame(unwind_rows: pd.DataFrame, classified: set, *, lineage_
         return _EMPTY.copy()
     return pd.DataFrame({
         "unit_key": hits[lineage_col].values,
+        # No on_facility/cleared/is_capped data available at this call site
+        # (unwind rows only carry is_block) -> always resolves INDETERMINATE
+        # (+60min) under the Part 43 Appendix C classes. That's the honest,
+        # conservative answer given what's known here -- see
+        # ladder_conventions.visibility_class.
         "unwind_visibility_ts": [
-            conv.visibility_timestamp(ts, bool(b))
+            conv.visibility_timestamp(ts, is_block=bool(b))
             for ts, b in zip(hits["execution_timestamp"], hits["is_block"].fillna(False))
         ],
     })

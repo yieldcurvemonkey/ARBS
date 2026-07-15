@@ -4,10 +4,70 @@ import pytest
 from SDRUtils.stir_flow import ladder_conventions as lc
 
 
-def test_visibility_rule():
+def test_visibility_rule_on_facility_non_block():
     ts = pd.Timestamp("2026-07-10 19:41:45+00:00")
-    assert lc.visibility_timestamp(ts, is_block=False) == ts + pd.Timedelta(minutes=1)
-    assert lc.visibility_timestamp(ts, is_block=True) == ts + pd.Timedelta(minutes=15)
+    assert lc.visibility_timestamp(
+        ts, is_block=False, cleared=None, on_facility=True, is_capped=False,
+    ) == ts + pd.Timedelta(minutes=1)
+
+
+def test_visibility_rule_sef_block():
+    ts = pd.Timestamp("2026-07-10 19:41:45+00:00")
+    assert lc.visibility_timestamp(
+        ts, is_block=True, cleared=None, on_facility=True, is_capped=False,
+    ) == ts + pd.Timedelta(minutes=15)
+
+
+def test_visibility_rule_cleared_off_facility_capped():
+    ts = pd.Timestamp("2026-07-10 19:41:45+00:00")
+    assert lc.visibility_timestamp(
+        ts, is_block=False, cleared=True, on_facility=False, is_capped=True,
+    ) == ts + pd.Timedelta(minutes=15)
+
+
+def test_visibility_rule_uncleared_off_facility():
+    ts = pd.Timestamp("2026-07-10 19:41:45+00:00")
+    assert lc.visibility_timestamp(
+        ts, is_block=False, cleared=False, on_facility=False, is_capped=False,
+    ) == ts + pd.Timedelta(minutes=30)
+
+
+def test_visibility_rule_indeterminate_missing_field():
+    ts = pd.Timestamp("2026-07-10 19:41:45+00:00")
+    # on_facility missing (None) -> can't classify -> conservative fallback,
+    # regardless of the other three fields being fully determined.
+    assert lc.visibility_timestamp(
+        ts, is_block=False, cleared=True, on_facility=None, is_capped=True,
+    ) == ts + pd.Timedelta(minutes=60)
+
+
+def test_visibility_rule_backward_compat_old_signature():
+    # Pre-audit call pattern: only is_block passed positionally-as-keyword,
+    # same as the old two-bucket API. on_facility/cleared default to None
+    # (indeterminate) -> +60min for BOTH block and non-block, which is more
+    # conservative than the old +15min/+1min rule the audit invalidated —
+    # acceptable per the audit. The call must not raise despite is_block now
+    # being keyword-only.
+    ts = pd.Timestamp("2026-07-10 19:41:45+00:00")
+    assert lc.visibility_timestamp(ts, is_block=False) == ts + pd.Timedelta(minutes=60)
+    assert lc.visibility_timestamp(ts, is_block=True) == ts + pd.Timedelta(minutes=60)
+
+
+def test_visibility_class_all_branches():
+    assert lc.visibility_class(is_block=False, cleared=None, on_facility=True,
+                               is_capped=False) == "ON_FACILITY_NON_BLOCK"
+    assert lc.visibility_class(is_block=True, cleared=None, on_facility=True,
+                               is_capped=False) == "SEF_BLOCK"
+    assert lc.visibility_class(is_block=False, cleared=True, on_facility=False,
+                               is_capped=True) == "CLEARED_OFF_FACILITY_CAPPED"
+    assert lc.visibility_class(is_block=False, cleared=False, on_facility=False,
+                               is_capped=False) == "UNCLEARED_OFF_FACILITY"
+    assert lc.visibility_class(is_block=False, cleared=None, on_facility=None,
+                               is_capped=False) == "INDETERMINATE"
+    # Unenumerated combination (off-facility, cleared, but not capped) also
+    # falls back to indeterminate -- there's no dedicated class for it.
+    assert lc.visibility_class(is_block=False, cleared=True, on_facility=False,
+                               is_capped=False) == "INDETERMINATE"
 
 
 def test_dealer_leg_signs_outright():

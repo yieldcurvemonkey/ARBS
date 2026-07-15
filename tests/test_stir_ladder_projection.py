@@ -92,6 +92,11 @@ def _unit():
         effective_date=datetime.date(2026, 7, 29),
         expiration_date=datetime.date(2026, 9, 16),
         notional=3.7e9, fixed_rate=0.03713, is_block=False, risk=50001.0,
+        # on-facility SEF code: makes visibility_class resolve definitely
+        # (ON_FACILITY_NON_BLOCK / SEF_BLOCK depending on is_block) instead
+        # of falling back to INDETERMINATE, matching this fixture's original
+        # pre-audit +1min/+15min expectations exactly.
+        platform_identifier="TWSF",
     )])
     return Unit("4137861837000000101", "OUTRIGHT", legs, None, True)
 

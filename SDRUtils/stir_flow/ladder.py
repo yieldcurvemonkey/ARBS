@@ -159,7 +159,14 @@ def project_unit(unit, direction_row, risk_models, pricer, curve_name, snap_ts):
     from SDRUtils.stir_flow import ladder_conventions as _conv
 
     first = unit.legs.iloc[0]
-    vis = _conv.visibility_timestamp(first["execution_timestamp"], bool(first.get("is_block")))
+    vis = _conv.visibility_timestamp(
+        first["execution_timestamp"],
+        is_block=bool(first.get("is_block")),
+        cleared=(first.get("cleared") == "I") if pd.notna(first.get("cleared")) else None,
+        on_facility=str(first.get("platform_identifier", "")).upper().strip() in _conv.SEF_PLATFORM_CODES
+        if pd.notna(first.get("platform_identifier")) else None,
+        is_capped=bool(first.get("is_capped")),
+    )
     meta = dict(
         unit_key=direction_row["unit_key"],
         as_of_date=first["as_of_date"],
