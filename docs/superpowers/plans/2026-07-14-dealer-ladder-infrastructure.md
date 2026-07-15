@@ -2,6 +2,12 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
+> **⚠ AUDIT REVISIONS 2026-07-15:** An external feasibility audit
+> (`docs/superpowers/audits/2026-07-15-sdr-dealer-positioning-feasibility-audit.md`) forced
+> changes. Infrastructure Tasks 1–9 are UNCHANGED except as noted in the **Audit follow-up
+> tasks A1–A2** section (apply as follow-up commits if the original tasks are already done).
+> **Task 10 is fully rewritten below — do NOT execute any earlier version of Task 10.**
+
 **Goal:** Build Layers 1–3 of the dealer positioning delta ladder — per-print projection onto meeting/futures/SERFF-basis buckets, synthetic dealer book MTM with arbitrary intraday snapshots, and the pure-query ladder-state layer — plus the 6-month backfill.
 
 **Spec:** `docs/superpowers/specs/2026-07-14-dealer-positioning-delta-ladder-design.md` (approved — authority on rules). Classifier spec/plan for upstream conventions: `docs/superpowers/specs/2026-07-12-stir-dealer-direction-classifier-design.md`.
@@ -23,7 +29,7 @@
 - Curves: SOFR → `USD-SOFR-1D-Q12xM12STIRT`, FED_FUNDS → `USD-OIS-Q12xM12STIRT-SERFFX-MIX23`, source `BARCHART_STIRF-RL` (reuse `stir_flow/config.CURVE_FOR`).
 - **Persisted sign convention:** `delta_dv01 > 0` ⟺ dealer long futures-equivalent ⟺ dealer RECEIVED fixed. Anticipated dealer hedge flow = −ladder.
 - **Absolute bucket keys only** (meeting date ISO / contract symbol / contract month) — never CM ranks; rank views are read-time.
-- Visibility rule v1: `execution_ts + 15min` if `is_block` else `execution_ts + 1min`. (Dissemination-timestamp column investigation is Task 5 Step 1; if found, wiring it is a follow-up, not this plan.)
+- Visibility rule (AUDIT-REVISED, see Task A1): dissemination timestamp when the raw feed carries it; else the legal delay class per 17 CFR Part 43 Appendix C derived from (platform-facility, cleared, block/cap): on-facility non-block +1min; SEF block +15min; cleared large-notional off-facility +15min; uncleared dealer off-facility +30min; other/indeterminate +60min. The original two-bucket (+1/+15) rule is superseded.
 - Provisional EWMA half-lives until Phase 4 calibrates: default 90min, block 240min.
 - Branch `feat/stir-dealer-ladder`; create a worktree via superpowers:using-git-worktrees at a SHORT sibling path (`../ARBS-ladder`).
 
@@ -1751,11 +1757,52 @@ git commit -m "docs(ladder): 6-month backfill + snapshot verification results"
 
 ---
 
-### Task 10: Autonomous research run — does the signal predict STIR price action?
+### Task A1 (audit follow-up): Legal-delay visibility classes + backfix
 
-**Research question (verbatim, this is the deliverable's title):** *Does the dealer positioning ladder have predictive power forecasting mid-frequency (minutely / hourly / daily) price action in the US STIR complex?*
+**Context:** the audit invalidated the two-bucket visibility rule — Part 43 Appendix C delay classes are richer, and off-facility/uncleared prints were undercounted. If Task 1/4 are already implemented, apply this as a follow-up commit; recomputing visibility needs NO re-pricing (it derives from tape columns).
 
-This task is a research phase, not TDD feature work: the implementer has full freedom on methodology details, but the checklist below is the minimum bar and the honesty requirements are non-negotiable. Prerequisite: Task 9 data (whatever window actually backfilled — if intraday curve history limits the window below 6 months, run on what exists and document it).
+**Files:** Modify `SDRUtils/stir_flow/ladder_conventions.py` + `tests/test_stir_ladder_conventions.py`; one-off backfix script for persisted rows.
+
+- [ ] Replace `visibility_timestamp(execution_ts, is_block)` with `visibility_timestamp(execution_ts, *, is_block, cleared, on_facility, is_capped)`:
+  on-facility non-block → +1min; SEF/DCM block → +15min; cleared large-notional off-facility (`is_capped` and cleared, off-facility) → +15min; uncleared dealer off-facility → +30min; any indeterminate/missing field → +60min (most conservative). `on_facility` = platform_identifier is a known SEF/DCM code (reuse/extend the platform table from Task A2). Tests: one case per class + the conservative fallback.
+- [ ] Thread the extra tape columns (`cleared`, `platform_identifier`, `is_capped`) through projection (`project_unit` meta) — they are already selected in `ELIGIBLE_LEGS_SQL`/`ALL_PKG_LEGS_SQL` or trivially added.
+- [ ] Backfix persisted `arbs_stir_ladder_prints_v1.visibility_timestamp` with a one-off UPDATE joining the tape columns (no re-pricing). Verify: `SELECT count(*) WHERE visibility_timestamp < execution_timestamp + interval '1 minute'` → 0, and spot-check one print per class.
+- [ ] Also probe the raw SDR loader for a true dissemination timestamp (was Task 5 Step 1); if present, prefer it and document coverage.
+
+### Task A2 (audit follow-up): D2C platform whitelist + skew diagnostic
+
+**Context (verified):** `SDRUtils/analytics/flow.py:113` labels D2D only for six IDB codes and D2C for EVERYTHING else including missing/unknown platform IDs. "D2C" is a heuristic, not party identity. The signed universe must be whitelist-based.
+
+**Files:** Modify `SDRUtils/stir_flow/config.py`, `SDRUtils/stir_flow/trade_selection.py`, tests; diagnostic script.
+
+- [ ] Derive the whitelist empirically: query distinct `platform_identifier` × count × venue from the tape over the backfilled window; validate the top platforms against the public SEF registry; add `D2C_PLATFORM_WHITELIST` to `config.py` (expect TWSF/Tradeweb, BILT/Bloomberg-style codes to dominate). Document the derivation in the results note.
+- [ ] Eligibility change in `trade_selection`: units whose platform is NOT in the whitelist and NOT a known IDB get exclusion reason `VENUE_UNKNOWN` (kept in tables if already classified, but excluded from signed research aggregation via a read-time filter in `BT/dealer_ladder/data.py`).
+- [ ] Skew diagnostic: recompute the PAID/RECEIVED split (a) whitelisted vs unknown-platform strata, (b) curve-clean vs curve-suspect, (c) on-market vs off-market — the audit's test for whether 67/33 is real flow or mid bias. Include in the findings doc.
+- [ ] Adopt the audit's labeling everywhere user-facing: "model-labelled D2C flow proxy," never "dealer inventory."
+
+---
+
+### Task 10 (REWRITTEN per audit 2026-07-15): Gate-ordered research run
+
+**Research question (deliverable's title):** *Does the dealer positioning ladder have predictive power forecasting mid-frequency (minutely / hourly / daily) price action in the US STIR complex?*
+
+**Structure: ordered gates G0→G5.** Price-prediction tests run LAST and only on strata that survive the earlier gates. A gate failure is a reportable result, not a blocker to route around — the findings doc reports every gate's outcome. Prerequisite: Task 9 data + A1/A2 applied. Full audit rationale: `docs/superpowers/audits/2026-07-15-sdr-dealer-positioning-feasibility-audit.md`.
+
+**Files:** `BT/dealer_ladder/` package (`config.py` — cost model MUST use the `BT/serff/config.py` front/back tick split: SR3 0.25bp/$6.25 near expiry ONLY, 0.5bp/$12.50 deferred; ZQ/SR1 0.5bp/$20.84; DV01 $25/$41.67), `data.py` (whitelist-filtered loaders), `signals.py`, `study.py`; executed notebook `notebooks/backtests/dealer_ladder_signal_research.ipynb`; findings doc `docs/superpowers/plans/2026-07-15-dealer-ladder-predictive-power-findings.md`; pure-logic tests `tests/test_dealer_ladder_study.py`.
+
+- [ ] **G0 — Labels & provenance.** Run the A2 whitelist + skew diagnostics. Direction accuracy is UNCERTIFIED without external truth labels (desk's own tickets — flag as user action; do not block on it). Consequences carried through every later gate: (a) all results reported with attenuation sensitivity — signed exposure scales by (2a−1); report a ∈ {0.6, 0.7, 0.8}; (b) off-market (NPV_VS_UPFRONT) prints are a SEPARATE stratum with full reversal/omission sensitivity (the rule imposes non-negative dealer edge by construction and cannot self-validate); (c) TICK_RULE prints excluded from the primary universe.
+
+- [ ] **G1 — Arrival integrity.** Replay features strictly on A1 visibility timestamps (dissemination ts where found, legal classes otherwise). All-+15min parity variant. Automated audit test: no feature at decision time t uses any print with visibility > t.
+
+- [ ] **G2 — Mechanism ordering (FIRST study, before ANY price test).** Does a signed ladder innovation *precede* measurable aggressive futures flow in the mapped contracts? Proxy signed aggressive flow: minutely Barchart futures volume signed by tick direction. Event study on large ladder innovations → subsequent signed-flow response at +5/15/30/60min, with matched controls (time-of-day, volatility). **If no flow-leads-flow evidence: the forced-hedge channel is unsupported; everything downstream is relabelled "flow/basis continuation" — report and continue.**
+
+- [ ] **G3 — Circularity battery.** (a) Matched-basis horse race: candidate ladder signal vs controls — swap-futures basis level, sign(basis)×DV01, |basis|, curve level/slope/curvature, trailing returns, realized vol, liquidity (Amihud from `arbs_stir_tick_size_v1`), time-of-day, roll, FOMC dummies; (b) independent fair value: rebuild spread-to-mid on `SDR_INTRADAY-RL` curves (swap-print-derived, futures-independent) for a subsample and check sign stability; (c) leave-one-contract-out projections; (d) residualized flow (ladder orthogonalized to basis) as the tested signal. If the effect lives in the basis controls, say so — different thesis.
+
+- [ ] **G4 — Pre-registered price prediction.** ONE locked primary spec, written in the findings doc BEFORE running: MEETING-space ladder z-score (90min half-life, expected weighting, whitelisted + curve-clean + on-market strata), 1-hour horizon, actual-arrival replay, conservative cost model, fixed exposure rule; pass = raw t ≥ 3. Secondary grid (horizons 5m/15m/30m/1h/4h/1d × spaces × half-lives {30,90,240,1440} × weightings): day-blocked bootstrap max-t / Romano-Wolf family-wise p < 0.05, preserving cross-contract correlation. Keep a trial ledger (every variant tried, including discarded ones). Final 6 weeks = one-shot lockout, touched once; decide and write down IN ADVANCE that a failed lockout burns the configuration. Placebos: sign-shuffle within day, +1-grid-step shift, unrelated contracts. Honest power accounting: independent epochs ≈ sample-minutes / integration-window (~70-190 epochs for 240/90-min half-lives over ~125d), not minute bars.
+
+- [ ] **G5 — Economics & capacity.** Net alpha with front/back ticks (an 8-leg deferred SR3 strip ≈ 0.45-0.5bp round-trip quoted spread in DV01 terms before slippage), fees, and a depth-based capacity curve (participation × per-leg executable lots), not daily-volume extrapolation. Report the lower confidence bound on net alpha at stated size.
+
+- [ ] **Findings + ship.** The findings doc leads with per-gate outcomes and one of: (i) mechanism supported AND priced-edge survives OOS + costs → Phase 5 planning; (ii) price effect exists but mechanism unsupported or costs kill it → relabel (basis/flow continuation) and park; (iii) no robust effect → negative result; ladder remains a model-labelled flow observable. **A rigorously established negative is a fully successful deliverable.** Execute the notebook end-to-end; commit modules, tests, notebook, findings; send findings doc + notebook to the user with a proactive summary (verdict first).
 
 **Files:**
 - Create: `BT/dealer_ladder/` package — `config.py` (dataclass config incl. cost model copied from `BT/serff/config.py` conventions: SR3 tick 0.25bp/$6.25, ZQ/SR1 0.5bp/$20.84, DV01 $25.0/$41.67 per contract), `data.py` (load ladder prints / marks / futures rate history), `signals.py` (ladder-state variants → signal panels), `study.py` (IC, event study, placebos, statistics)
@@ -1763,27 +1810,7 @@ This task is a research phase, not TDD feature work: the implementer has full fr
 - Create: `docs/superpowers/plans/2026-07-15-dealer-ladder-predictive-power-findings.md` — the findings report
 - Test: `tests/test_dealer_ladder_study.py` — pure-logic tests (IC math on synthetic panels, placebo machinery, no-lookahead audit helpers)
 
-- [ ] **Step 1: Targets.** Forward changes of bucket-mapped instruments from repo data infra (`STIRFutureMDP` / BARCHART_STIRF intraday curves; see `notebooks/timeseries/intraday_stirf.ipynb` for access patterns): per-contract SFR/FF futures rates and meeting-implied rates, at horizons 5m, 15m, 30m, 1h, 4h, 1d. Build a decision-time grid (e.g. every 5 minutes over trading hours) with rates sampled AT grid time and forward returns strictly after it.
-
-- [ ] **Step 2: Signal variants** (all computed via `ladder_state.ladder_at` at grid times — read-time transforms, no repricing): per-bucket ladder z-scores (meeting + futures spaces, z vs trailing 10d distribution), aggregate front-end imbalance, residual (EWMA) vs gross book P&L deltas, level-proximity-conditioned variants (structural 25bp grid from `SDRUtils/analytics/fomc.py`). Half-life grid: {30, 90, 240, 1440} minutes. Weighting: expected vs unweighted.
-
-- [ ] **Step 3: Tests of predictive power.**
-  (a) Information coefficient: rank-corr(signal_t, fwd_return_{t→t+h}) per bucket × horizon × variant, as a time series;
-  (b) event study on |z| ≥ 2 episodes (deduplicated/non-overlapping): mean forward drift in −ladder direction with block-bootstrap CIs;
-  (c) a simple threshold rule net of costs (cross the spread at entry+exit, cost model from config) — bps per trade and per $DV01;
-  (d) conditioning splits: block share, proximity-to-level, Amihud liquidity regime (from `arbs_stir_tick_size_v1`), FOMC proximity.
-
-- [ ] **Step 4: Statistical honesty (non-negotiable).** Overlapping-horizon inference via HAC (Newey-West) or block bootstrap — never iid t-stats on overlapping returns. In-sample = all but the final 6 weeks; final 6 weeks = one-shot OOS, touched once, reported separately. Multiplicity: report the FULL grid of results (every variant × bucket × horizon), apply Benjamini-Hochberg or explicitly deflate the best cell; never headline the max statistic without the correction. Effect sizes in bps with CIs, not just p-values.
-
-- [ ] **Step 5: No-lookahead audit (must all pass before believing any result).**
-  (a) visibility audit: assert every signal value at grid time t uses only prints with `visibility_timestamp <= t`;
-  (b) live-parity variant: repeat headline tests with all visibility floored at `execution_ts + 15min`;
-  (c) placebo 1: shift signals +1 grid step forward (future signal on past return) — predictive power must vanish;
-  (d) placebo 2: shuffle dealer-direction signs within each day — predictive power must vanish.
-
-- [ ] **Step 6: Findings report + notebook.** The report answers the research question with one of three verdicts per the spec 9c kill-switch: (i) predictive power survives OOS and costs → proceed to Phase 5 planning; (ii) statistical signal exists but dies net of costs → document where/why, park Phase 5; (iii) no robust signal → negative result, ladder remains a positioning observable. **A negative result is a fully successful deliverable — the goal is truth, not a positive result.** Include: methodology, full result grids, OOS table, placebo/parity outcomes, limitations (window length, curve_suspect exclusions, classifier accuracy floor), recommended next steps. Execute the notebook end-to-end so figures render.
-
-- [ ] **Step 7: Commit + ship.** Commit modules, tests, executed notebook, findings doc. Send the findings doc and notebook to the user as files with a proactive summary.
+Signal-construction details retained from the original design (now subordinate to the gates): targets from `STIRFutureMDP` / BARCHART_STIRF intraday data (access patterns in `notebooks/timeseries/intraday_stirf.ipynb`) on a 5-minute decision grid with strictly-forward returns; signal variants via `ladder_state.ladder_at` (per-bucket z vs trailing 10d, aggregate imbalance, residual/gross book-P&L deltas, level-proximity conditioning from `SDRUtils/analytics/fomc.py`); IC time series, non-overlapping event studies with block-bootstrap CIs, threshold rule net of costs, conditioning splits (block share, level proximity, Amihud regime, FOMC proximity). All of it runs inside the G0-G5 gate structure above.
 
 ---
 
