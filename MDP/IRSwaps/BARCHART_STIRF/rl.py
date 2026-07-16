@@ -499,6 +499,34 @@ def _process_curve_calibration_job(
     return timestamp, curve_obj
 
 
+def _process_calibrate_chunk(
+    chunk: List[Tuple[datetime.datetime, Dict[str, List["RLSTIRFuturePricer"]]]],
+    curve_name: str,
+    cfg: Dict[str, Any],
+    solver_tolerances: Optional[Dict[str, float]] = None,
+    initial_nodes: Optional[Dict] = None,
+) -> Dict[datetime.datetime, rl.Curve]:
+    """Calibrate a chronological chunk with warm-starting in a child process."""
+    results: Dict[datetime.datetime, rl.Curve] = {}
+    prior_nodes = initial_nodes
+    for ts, ts_pricers in chunk:
+        try:
+            with _suppress_solver_output():
+                curve_obj, _ = _build_curve_from_pricers_core(
+                    curve_name=curve_name,
+                    timestamp=ts,
+                    cfg=cfg,
+                    pricers=ts_pricers,
+                    initial_nodes=prior_nodes,
+                    solver_tolerances=solver_tolerances,
+                )
+            prior_nodes = _extract_nodes(curve_obj)
+            results[ts] = curve_obj
+        except Exception:
+            pass
+    return results
+
+
 def _extract_nodes(curve: rl.Curve) -> Dict[pd.Timestamp, float]:
     """Extract calibrated node values from a solved rateslib Curve."""
     raw = curve.nodes._nodes if hasattr(curve.nodes, "_nodes") else dict(curve.nodes)
@@ -2850,7 +2878,7 @@ class BARCHART_STIRF_CURVE(LayeredCacheMixin):
 
             _emit_calibration_status(
                 curve_name=curve_name,
-                executor_mode="thread-warmstart",
+                executor_mode="process-warmstart" if calibration_executor == "process" else "thread-warmstart",
                 workers=cal_workers,
                 jobs=len(calibration_jobs),
                 show_tqdm=show_tqdm,
@@ -2858,7 +2886,9 @@ class BARCHART_STIRF_CURVE(LayeredCacheMixin):
             )
 
             if calibration_executor == "process":
-                # Process pool: no warm-start possible (kept as escape hatch).
+                # Process pool with chunked warm-start: split jobs into
+                # chronological chunks, each chunk runs a sequential warm-start
+                # chain in its own OS process for true GIL-free parallelism.
                 reduced_cfg = _reduced_calibration_cfg(cfg)
                 _validate_spawn_process_pool_environment()
                 pool_kwargs: Dict[str, Any] = {
@@ -2867,29 +2897,82 @@ class BARCHART_STIRF_CURVE(LayeredCacheMixin):
                 }
                 if max_tasks_per_child is not None:
                     pool_kwargs["max_tasks_per_child"] = int(max_tasks_per_child)
-                with ProcessPoolExecutor(**pool_kwargs) as pool:
-                    futures = {
-                        pool.submit(
-                            _process_curve_calibration_job,
-                            curve_name,
-                            ts,
-                            reduced_cfg,
-                            ts_pricers,
-                            None,  # no warm-start
-                            bulk_solver_tolerances,
-                        ): ts
-                        for ts, ts_pricers in calibration_jobs
-                    }
-                    completed = as_completed(futures)
-                    if tqdm_mod is not None:
-                        completed = tqdm_mod.tqdm(completed, total=len(futures), desc=f"CALIBRATING {curve_name}")
-                    for fut in completed:
-                        ts = futures[fut]
-                        _, curve_obj = fut.result()
-                        curve_obj = self._attach_curve_context(curve_obj, curve_name=curve_name, timestamp=ts, cfg=cfg)
-                        self._mem_cache_put(self._curve_cache_key(curve_name, ts, cfg), curve_obj)
-                        fresh_curves[ts] = curve_obj
-                        out[ts] = curve_obj if curve_only else (curve_obj, None)
+
+                _calib_logger = logging.getLogger(__name__)
+                sorted_jobs = sorted(calibration_jobs, key=lambda x: x[0])
+
+                # Calibrate seed curve in parent process (avoids serialization
+                # round-trip for the seed and gives children warm-start nodes).
+                seed_nodes: Optional[Dict] = None
+                first_ts = sorted_jobs[0][0]
+                seed_curve = self._CURVE_MEM_CACHE.get(
+                    self._curve_cache_key(curve_name, first_ts, cfg)
+                )
+                if seed_curve is None:
+                    for cached_key in reversed(list(self._CURVE_MEM_CACHE.keys())):
+                        if curve_name in str(cached_key):
+                            candidate = self._CURVE_MEM_CACHE.get(cached_key)
+                            if candidate is not None:
+                                seed_curve = candidate
+                                break
+                if seed_curve is not None:
+                    try:
+                        seed_nodes = _extract_nodes(seed_curve)
+                        _calib_logger.info(
+                            "Process pool: using cached curve as warm-start seed for %s (%s nodes)",
+                            curve_name, len(seed_nodes),
+                        )
+                    except Exception:
+                        seed_nodes = None
+
+                if seed_nodes is None and len(sorted_jobs) > 1:
+                    _calib_logger.info(
+                        "Process pool: cold-start seed calibration for %s at %s...",
+                        curve_name, sorted_jobs[0][0].isoformat(),
+                    )
+                    seed_result = self._calibrate_chunk(
+                        chunk=[sorted_jobs[0]],
+                        curve_name=curve_name,
+                        cfg=cfg,
+                        solver_tolerances=bulk_solver_tolerances,
+                        curve_only=True,
+                    )
+                    for ts, val in seed_result.items():
+                        fresh_curves[ts] = val
+                        out[ts] = val if curve_only else (val, None)
+                        seed_nodes = _extract_nodes(val)
+                    sorted_jobs = sorted_jobs[1:]
+
+                chunks = _split_chronological(sorted_jobs, cal_workers) if sorted_jobs else []
+                if chunks:
+                    with ProcessPoolExecutor(**pool_kwargs) as pool:
+                        futures = {
+                            pool.submit(
+                                _process_calibrate_chunk,
+                                chunk,
+                                curve_name,
+                                reduced_cfg,
+                                bulk_solver_tolerances,
+                                seed_nodes,
+                            ): idx
+                            for idx, chunk in enumerate(chunks)
+                        }
+                        completed = as_completed(futures)
+                        if tqdm_mod is not None:
+                            completed = tqdm_mod.tqdm(completed, total=len(futures), desc=f"CALIBRATING {curve_name}")
+                        chunks_done = 0
+                        for fut in completed:
+                            chunk_results = fut.result()
+                            chunks_done += 1
+                            for ts, curve_obj in chunk_results.items():
+                                curve_obj = self._attach_curve_context(curve_obj, curve_name=curve_name, timestamp=ts, cfg=cfg)
+                                self._mem_cache_put(self._curve_cache_key(curve_name, ts, cfg), curve_obj)
+                                fresh_curves[ts] = curve_obj
+                                out[ts] = curve_obj if curve_only else (curve_obj, None)
+                            _calib_logger.info(
+                                "Process pool calibration progress %s: chunks %s/%s, curves %s/%s",
+                                curve_name, chunks_done, len(futures), len(fresh_curves), len(calibration_jobs),
+                            )
             elif cal_workers == 1:
                 # Single worker: sequential warm-start chain.
                 chunk_results = self._calibrate_chunk(
