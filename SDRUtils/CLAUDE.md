@@ -57,11 +57,30 @@ Produced by [`SDRUtils/core/lifecycle_v2.py`](core/lifecycle_v2.py).
 
 ### Timestamps
 
-- `original_execution_timestamp` — event-study anchor. For β/γ
-  NEWT-CLRG rows this is the alpha's original execution time.
-- `clearing_accepted_timestamp` — NULL except on β/γ clearing rows.
-- **Rule**: FOMC proximity, novation-pair matching, and intraday
-  curve snapshots bucket on `original_execution_timestamp`.
+Three CFTC Part 43/45 timestamps are first-class + persisted per row
+(2026-07-17 exec-vs-event integration; design in
+[`docs/superpowers/specs/2026-07-17-sdr-execution-vs-event-timestamp-integration-design.md`](../docs/superpowers/specs/2026-07-17-sdr-execution-vs-event-timestamp-integration-design.md)).
+
+- `execution_timestamp` (#96) — economic trade time; immutable per UTI.
+- `event_timestamp` (#30) — reported-event time; invariant `>= execution`.
+  Read at classify time (swaps: real Execution Timestamp; swaptions/capfloors
+  de-conflated — fall back to Event when Execution is missing, flagged).
+- `original_execution_timestamp` — the chain's first-NEWT execution
+  (within-chain lineage via `lc_original_execution_timestamp`), else the row's
+  own execution. `original_execution_source` ∈ `newt|lineage|fallback`.
+- `report_lag_seconds` = event − execution (≥0) — the "execution vs event"
+  delta. `alpha_lag_seconds` = execution − original (≥0).
+- `clearing_accepted_timestamp` — NULL except on β/γ NEWT-CLRG rows.
+- Package rollups: `event_start`/`event_end`, `max/median_report_lag_seconds`,
+  `late_report` (a leg lag over `config.LATE_REPORT_THRESHOLD_SECONDS`).
+- **Rule**: FOMC proximity, novation-pair matching, and intraday curve
+  snapshots bucket on `original_execution_timestamp` (execution fallback).
+  `event_timestamp` + the deltas are transparency columns — NEVER bucket
+  economic volume/DV01 on event time by default.
+- **Cache**: changing this timestamp family's output bumps BOTH
+  `TRADE_TAPE_CACHE_VERSION` and `DETECTION_CACHE_VERSION`. `event_timestamp`
+  is NOT backfillable from the tape — historical coverage needs re-ingest
+  (runbook: `docs/superpowers/plans/2026-07-17-sdr-timestamp-backfill-runbook.md`).
 
 ## Database cutover (Phase 4)
 

@@ -194,7 +194,7 @@ _SERVICE_CACHE_DIR_NAME = "service_caches"
 # Keys both the classification parquet day-cache directory and the
 # packaged-day warm-start pickle, so stale-schema frames can never be
 # served after a deploy (2026-07-01 audit, finding C4).
-DETECTION_CACHE_VERSION = "ptp15-curve-abs-tol-scaling"
+DETECTION_CACHE_VERSION = "ptp16-exec-vs-event-timestamps"
 
 
 def save_service_caches(cache_dir: str) -> None:
