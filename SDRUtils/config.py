@@ -14,6 +14,19 @@ import QuantLib as ql
 
 TRADE_ID = "Dissemination Identifier"
 
+# --- Execution-vs-Event timestamp integration tuning (2026-07-17 spec) ---
+# A leg whose report lag (event_timestamp - execution_timestamp) exceeds this
+# is flagged `late_report`: post-priced / block prints and backfilled
+# amendments (audit B3: 15min-24 business hours). Tune against real lag
+# distributions; 900s (15min) is the block-trade public-tape delay boundary.
+LATE_REPORT_THRESHOLD_SECONDS: int = 900
+
+# Analytics may trust alpha_lag-based signals for a day only when the share of
+# beta/gamma (NEWT-CLRG/NOVA) rows resolved via public lineage clears this gate;
+# below it, alpha_lag is treated as unreliable for that day. Note the anchor
+# itself (COALESCE(original_execution, execution)) is safe at any coverage.
+ALPHA_JOIN_COVERAGE_GATE: float = 0.95
+
 
 @dataclass(frozen=True)
 class CurrencyConventions:
@@ -177,6 +190,19 @@ class SDRColumnConfig:
     # Core columns
     trade_id: str = "trade_id"
     execution_timestamp: str = "execution_timestamp"
+    # CFTC Part 43/45 Event timestamp (#30): when the reported lifecycle
+    # event occurred; >= execution_timestamp. First-class per the
+    # execution-vs-event timestamp integration (2026-07-17 spec).
+    event_timestamp: str = "event_timestamp"
+    # Alpha's original execution (lineage-resolved); <= execution_timestamp.
+    original_execution_timestamp: str = "original_execution_timestamp"
+    # Precomputed deltas (NUMERIC seconds).
+    report_lag_seconds: str = "report_lag_seconds"          # event - execution >= 0
+    alpha_lag_seconds: str = "alpha_lag_seconds"            # execution - original_execution >= 0
+    # Provenance of original_execution_timestamp: 'newt' | 'lineage' | 'fallback'.
+    original_execution_source: str = "original_execution_source"
+    # Forward-compat regime granularity: 'second' (CFTC) | 'day' (EMIR Event date).
+    event_timestamp_granularity: str = "event_timestamp_granularity"
     effective_date: str = "effective_date"
     expiration_date: str = "expiration_date"
 
@@ -205,6 +231,7 @@ class SDRColumnConfig:
 
     # Raw SDR columns
     raw_execution_timestamp: str = "Execution Timestamp"
+    raw_event_timestamp: str = "Event timestamp"
     raw_effective_date: str = "Effective Date"
     raw_expiration_date: str = "Expiration Date"
     raw_notional: str = "Notional amount-Leg 1"

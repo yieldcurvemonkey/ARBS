@@ -74,6 +74,7 @@ def classify_usd_swap_trade(
     """
     # Extract dates
     execution_ts = pd.to_datetime(row.get("Execution Timestamp"))
+    event_ts = pd.to_datetime(row.get("Event timestamp"))
     effective_date = pd.to_datetime(row.get("Effective Date"))
     expiration_date = pd.to_datetime(row.get("Expiration Date"))
 
@@ -151,6 +152,7 @@ def classify_usd_swap_trade(
         event_action=f"{row.get('Action type')}-{row.get('Event type')}",
         trade_id=trade_id,
         execution_timestamp=execution_ts,
+        event_timestamp=event_ts,
         effective_date=effective_date,
         expiration_date=expiration_date,
         product_type=product_type,
@@ -1797,6 +1799,13 @@ class USD_SwapProduct(USDProductBase):
                     if "execution_timestamp" in classifications_df.columns:
                         classifications_df["execution_timestamp"] = pd.to_datetime(
                             classifications_df["execution_timestamp"], errors="coerce", utc=True
+                        )
+                    # Event timestamp (#30) rides alongside execution (#96);
+                    # normalize any per-classifier naive/aware mix to UTC so
+                    # downstream report_lag = event - execution is well-defined.
+                    if "event_timestamp" in classifications_df.columns:
+                        classifications_df["event_timestamp"] = pd.to_datetime(
+                            classifications_df["event_timestamp"], errors="coerce", utc=True
                         )
                     day_df = day_df.copy()
                     day_df[TRADE_ID] = day_df[TRADE_ID].astype("string")

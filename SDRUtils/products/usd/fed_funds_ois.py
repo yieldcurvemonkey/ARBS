@@ -27,6 +27,7 @@ def classify_fed_funds_ois_trade(
     )
 
     exec_ts = to_naive_timestamp(row.get("Execution Timestamp"))
+    event_ts = pd.to_datetime(row.get("Event timestamp"))
     eff_date = to_naive_timestamp(row.get("Effective Date"))
     exp_date = to_naive_timestamp(row.get("Expiration Date"))
     notional, is_capped = parse_notional(row.get("Notional amount-Leg 1"))
@@ -62,6 +63,7 @@ def classify_fed_funds_ois_trade(
         event_action=row.get("Action type", "NEWT"),
         trade_id=trade_id,
         execution_timestamp=exec_ts,
+        event_timestamp=event_ts,
         effective_date=eff_date,
         expiration_date=exp_date,
         product_type="OIS_SWAP",
