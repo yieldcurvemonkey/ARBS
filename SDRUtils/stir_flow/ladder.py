@@ -21,6 +21,7 @@ from SDRUtils.stir_flow import ladder_conventions as conv
 
 N_MEETINGS = 12
 N_SFR = 12
+N_FF = 12
 N_BASIS_MONTHS = 12
 MEETING_TENORS = [f"fomc_{i}" for i in range(1, N_MEETINGS + 1)]
 # Sign flip per solver type: rateslib delta sign convention differs between
@@ -31,6 +32,7 @@ MEETING_TENORS = [f"fomc_{i}" for i in range(1, N_MEETINGS + 1)]
 _RL_SIGN_BY_SPACE = {
     "MEETING": -1.0,
     "FUTURES": +1.0,
+    "FED_FUNDS": +1.0,
     "SERFF_BASIS_SOFR": +1.0,
     "SERFF_BASIS_SPREAD": +1.0,
 }
@@ -98,6 +100,17 @@ def build_risk_models(curve_name, curve_handle, ts, stirf_mdp, include_basis: bo
         models.append(RiskModel("FUTURES", f_curve, f_solver, fut_map))
     except Exception:
         pass  # SFR data unavailable at this timestamp; MEETING-only projection
+
+    # FED_FUNDS space: FFCM1..N; bucket = absolute FF contract id
+    try:
+        ff_queries = [STIRFutureQuery(symbol=f"FFCM{i}") for i in range(1, N_FF + 1)]
+        ff_curve, ff_solver = build_delta_risk_ladder(
+            ff_queries, curve_handle, stirf_mdp_handle=stirf_mdp, timestamp=ts
+        )
+        ff_map = {label: label for label in ff_solver.instrument_labels}
+        models.append(RiskModel("FED_FUNDS", ff_curve, ff_solver, ff_map))
+    except Exception:
+        pass  # FF data unavailable at this timestamp
 
     # SERFF basis split (FED_FUNDS prints only)
     if include_basis:
