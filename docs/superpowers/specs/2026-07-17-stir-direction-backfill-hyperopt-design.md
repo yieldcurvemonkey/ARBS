@@ -150,3 +150,35 @@ the current lazy path unchanged.
   `--warm-jobs`/`--day-jobs`/`--no-warm` flags + calibrate-once), `SDRUtils/stir_flow/
   pricing.py` (pull dedupe / warm-cache hook).
 - New tests under `tests/`.
+
+## 13. Results (implemented 2026-07-17)
+
+**Shipped & verified bit-identical** (branch `feat/stir-direction-backfill-opt`):
+
+- **Phase 1 — parallel curve warmer** (`SDRUtils/stir_flow/curve_warm.py`, wired into
+  `run_classification`, `--warm-jobs`/`--no-warm`). Single-day, fresh process, warm
+  diskcache: **lazy 137.1 s → warm@8 29.1 s (4.7×), warm@16 26.3 s (5.2×)**. Cold-cache
+  gains are larger (cold baseline was 269 s, 77% I/O). Bit-identical verified 3 ways vs a
+  693-row golden for 2026-07-02: warm-vs-lazy on identical units = 0 diffs; full-day warm
+  vs golden = 0 diffs; determinism re-run = 0 diffs.
+- **Phase 3 — day-level process pool** (`SDRUtils/_swappulse_scripts/backfill_stir_direction_range.py`).
+  Real `ProcessPoolExecutor` smoke test (Windows spawn): 2 days in parallel (691 + 693
+  units) in **51.5 s** vs ~274 s sequential-lazy (~5.3×), no pickling/spawn errors,
+  calibration computed once. Orchestration logic unit-tested with a mock executor.
+- **Determinism fix** (`SDRUtils/stir_flow/trade_selection.py`) — a *pre-existing* bug the
+  bit-identical harness surfaced: package legs were ordered by `expiration_date` alone, so
+  tied maturities left leg order undefined → flaky `structure_dv01`/`dealer_charge_bps`/
+  `tenor_query` for 10/693 units. Fixed with a total sort `(expiration, effective,
+  trade_id)`; reloads now reproduce identical units (0/693 differ). `dealer_direction`
+  was never affected.
+
+**Phase 2 (persist to local CurveStore)** — spike **PROVED bit-identical** (solve → `write_day`
+→ reconstruct = 0 ULP on rate, pv01, all nodes, a 109-pt DF grid through the mixed-spline
+zone, and 1Y/2Y/3Y swaps). **Deferred**: zero benefit for a *fresh* full-history backfill
+(each day's minutes are distinct); it only speeds re-runs. Ready to implement via
+`builder._curve_store_write_day(resolved, trading_date, cfg, {rl_ts: handle})`.
+
+**Phase 4 (direct pricing path)** — not implemented (analytics are only ~6%; low ROI).
+
+**Test status:** all 33 stir_flow/backfill/curve_warm/range tests pass; full fast gate
+2634 passed, 43 skipped, 2 pre-existing unrelated failures (`test_stir_future_mdp_fixings.py`).
