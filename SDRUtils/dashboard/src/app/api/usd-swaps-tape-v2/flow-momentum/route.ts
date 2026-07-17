@@ -30,7 +30,7 @@ export async function GET(req: Request) {
   const isMultiDay = window === '5d'
 
   const timePredicate = windowHours != null
-    ? `AND l.execution_timestamp >= (NOW() - INTERVAL '${windowHours} hours')`
+    ? `AND COALESCE(l.original_execution_timestamp, l.execution_timestamp) >= (NOW() - INTERVAL '${windowHours} hours')`
     : isMultiDay
       ? `AND l.as_of_date >= ($1::date - INTERVAL '4 days') AND l.as_of_date <= $1::date`
       : `AND l.as_of_date = $1::date`

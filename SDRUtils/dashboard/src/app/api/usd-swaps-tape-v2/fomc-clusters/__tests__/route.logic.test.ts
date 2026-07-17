@@ -15,4 +15,9 @@ describe('FOMC_CLUSTERS_SQL', () => {
   it('parameterizes the as-of date', () => {
     expect(FOMC_CLUSTERS_SQL).toContain('l.as_of_date = $1::date')
   })
+
+  it('reads the live v2 leg table (not the frozen v1)', () => {
+    expect(FOMC_CLUSTERS_SQL).toContain('arbs_usd_swap_tape_legs_v2')
+    expect(FOMC_CLUSTERS_SQL).not.toContain('legs_v1')
+  })
 })

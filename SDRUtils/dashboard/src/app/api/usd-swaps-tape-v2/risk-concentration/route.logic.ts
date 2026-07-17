@@ -24,7 +24,7 @@ export function buildRiskConcentrationSql(
            COUNT(*)::int AS trade_count,
            SUM(l.risk)::float AS total_dv01,
            SUM(l.notional)::float AS total_notional
-    FROM arbs_usd_swap_tape_legs_v1 l
+    FROM arbs_usd_swap_tape_legs_v2 l
     WHERE l.as_of_date = $1::date
     ${whereClean}
       AND ${expr} IS NOT NULL

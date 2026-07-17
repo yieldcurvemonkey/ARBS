@@ -17,7 +17,9 @@ export type UnrecognisedRow = {
   floating_rate_index: string | null
   canonical_underlier_key: string | null
   notional: number | null
-  execution_timestamp: string | null
+  // Coalesced original-execution anchor (was misleadingly named
+  // execution_timestamp on the wire; 2026-07-17 anchor unification).
+  anchor_ts: string | null
 }
 
 export type UnrecognisedAggregate = {
@@ -39,7 +41,7 @@ export function aggregateUnrecognisedUnderliers(
     if (!isUnrecognisedCanonicalKey(row.canonical_underlier_key)) continue
     const raw = row.floating_rate_index
     if (!raw) continue
-    const ts = row.execution_timestamp ? Date.parse(row.execution_timestamp) : NaN
+    const ts = row.anchor_ts ? Date.parse(row.anchor_ts) : NaN
     const tsMs = Number.isFinite(ts) ? ts : 0
     const notional = Math.abs(Number(row.notional ?? 0))
     const existing = map.get(raw) ?? {
