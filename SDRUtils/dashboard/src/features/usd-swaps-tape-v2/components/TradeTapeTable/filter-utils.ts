@@ -13,6 +13,8 @@ const TIMESTAMP_FILTER_FIELDS: ReadonlySet<string> = new Set([
   'execution_end',
   'original_execution_start',
   'clearing_accepted_start',
+  'event_start',
+  'event_end',
 ])
 
 // NYC desk timezone — every tape timestamp is rendered against this

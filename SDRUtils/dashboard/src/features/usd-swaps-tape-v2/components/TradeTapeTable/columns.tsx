@@ -9,6 +9,7 @@ import type { NoteTarget, UsdSwapTapeRow } from '../../types'
 import {
   formatDv01,
   formatExecutionWindow,
+  formatTimestampDelta,
   formatNotional,
   formatOtherLvl,
   formatRate,
@@ -248,6 +249,42 @@ export function getColumns(
         </span>
       )}
       style={{ width: 102 }}
+    />,
+    <Column
+      key="event_time"
+      field="event_start"
+      filterField="event_start"
+      sortable
+      filter
+      {...compactFilterMenuProps}
+      filterMatchModeOptions={TIME_FILTER_MATCH_MODE_OPTIONS as any}
+      header={renderHeader(
+        'Event',
+        summaryFor('event_start', config.activeFilters),
+      )}
+      body={(row: UsdSwapTapeRow) => {
+        // Report/dissemination lag: Event timestamp (#30) − Execution (#96).
+        const delta = formatTimestampDelta(row.execution_start, row.event_start)
+        const muted = delta === 'live' || delta === '0s' || delta === 'unknown'
+        return (
+          <span className="whitespace-nowrap font-mono text-[12px] text-slate-200">
+            {formatExecutionWindow(row.event_start, row.event_end)}
+            <span
+              className={`ml-1 rounded px-1 text-[10px] ${
+                row.late_report
+                  ? 'bg-amber-900/60 text-amber-300'
+                  : muted
+                    ? 'bg-slate-700/60 text-slate-400'
+                    : 'bg-slate-700/60 text-sky-300'
+              }`}
+              title={`Report lag (Event − Execution): ${delta}`}
+            >
+              {delta}
+            </span>
+          </span>
+        )
+      }}
+      style={{ width: 118 }}
     />,
     <Column
       key="action_class"
