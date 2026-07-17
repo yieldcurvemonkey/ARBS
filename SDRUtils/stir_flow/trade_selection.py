@@ -23,6 +23,12 @@ _LEG_COLS = """
     p.package_transaction_spread AS pkg_pts
 """
 
+# ORDER BY clauses are a TOTAL order: expiration_date alone is not unique within
+# a package (e.g. a calendar spread with two legs sharing a maturity), and a
+# partial order lets Postgres return tied rows in arbitrary physical order that
+# varies per query -> non-deterministic leg ordering -> non-deterministic FLY
+# belly / iloc[0]/iloc[-1] -> flaky structure_dv01, dealer_charge_bps,
+# tenor_query. The (effective_date, trade_id) tiebreakers make it reproducible.
 ELIGIBLE_LEGS_SQL = f"""
 SELECT {_LEG_COLS}
 FROM arbs_usd_swap_tape_legs_v2 l
@@ -33,7 +39,7 @@ WHERE l.as_of_date BETWEEN %(start)s AND %(end)s
   AND l.venue = 'D2C'
   AND l.rate_index_clean IN ('SOFR', 'FED_FUNDS')
   AND l.fixed_rate IS NOT NULL
-ORDER BY l.execution_timestamp
+ORDER BY l.execution_timestamp, l.trade_id
 """
 
 ALL_PKG_LEGS_SQL = f"""
@@ -41,7 +47,7 @@ SELECT {_LEG_COLS}
 FROM arbs_usd_swap_tape_legs_v2 l
 LEFT JOIN arbs_usd_swap_tape_packages_v2 p USING (package_id)
 WHERE l.package_id = ANY(%(package_ids)s)
-ORDER BY l.package_id, l.expiration_date
+ORDER BY l.package_id, l.expiration_date, l.effective_date, l.trade_id
 """
 
 
@@ -49,7 +55,7 @@ ORDER BY l.package_id, l.expiration_date
 class Unit:
     unit_key: str
     kind: str                    # OUTRIGHT | CURVE | FLY | PKG
-    legs: pd.DataFrame           # all legs, sorted by expiration_date
+    legs: pd.DataFrame           # all legs, total-ordered (exp, eff, trade_id)
     package_id: str | None
     is_off_market: bool
 
@@ -131,7 +137,9 @@ def build_units(eligible: pd.DataFrame, all_legs: pd.DataFrame) -> list:
                 continue
             seen.add(pkg_id)
             legs = all_legs[all_legs["package_id"] == pkg_id].copy()
-            legs = legs.sort_values("expiration_date").reset_index(drop=True)
+            legs = legs.sort_values(
+                ["expiration_date", "effective_date", "trade_id"]
+            ).reset_index(drop=True)          # total order: ties broken deterministically
             upfront, _, _ = resolve_upfront(
                 legs.iloc[0].get("pkg_ptp"),
                 list(legs["other_payment_ufro"].fillna(0.0)),
