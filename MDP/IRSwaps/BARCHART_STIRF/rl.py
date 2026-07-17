@@ -107,6 +107,23 @@ def _as_node_ts(d: datetime.date, *, base_ts: pd.Timestamp) -> pd.Timestamp:
     return rl.dt(dt.year, dt.month, dt.day)
 
 
+def _roll_to_prev_business_day(d: datetime.date, *, calendar: str) -> datetime.date:
+    """Roll a date back to the last business day on or before it.
+
+    The curve's first node is its RFR valuation anchor. rateslib needs continuous fixing
+    coverage from the last realized SOFR fixing into the curve; a weekend/holiday anchor
+    sits *after* the last fixing, so the front SR1 future fails with "Curve begins after
+    the start of a FloatPeriod". Rolling the anchor back to the last business day restores
+    continuity. Business-day timestamps are returned unchanged.
+    """
+    try:
+        cal = rl.get_calendar(calendar)
+        rolled = cal.roll(rl.dt(d.year, d.month, d.day), modifier="P", settlement=False)
+        return datetime.date(rolled.year, rolled.month, rolled.day)
+    except Exception:
+        return d
+
+
 def _cm_instruments(prefix: str, count: int = 12) -> List[str]:
     return [f"{prefix}CM{i}" for i in range(1, count + 1)]
 
@@ -157,8 +174,15 @@ def _build_stirf_nodes(
     # de-dupe + sort
     node_dates = sorted(set(node_dates))
 
+    # Anchor the first node (the curve's RFR valuation date) to the last business day on
+    # or before the snapshot date. Weekend/holiday snapshots would otherwise anchor after
+    # the last SOFR fixing and fail to price the front SR1 future. All other node dates are
+    # strictly after base_date, so the rolled anchor stays the unique earliest node.
+    cal_name = RATESLIB_CURVE_DEFINITIONS.get(reference_key, {}).get("Calendar")
+    anchor_date = _roll_to_prev_business_day(base_date, calendar=cal_name) if cal_name else base_date
+
     # build nodes dict (values are placeholders / initial guesses)
-    nodes: Dict[pd.Timestamp, float] = {_as_node_ts(base_date, base_ts=base_ts): 1.0}
+    nodes: Dict[pd.Timestamp, float] = {_as_node_ts(anchor_date, base_ts=base_ts): 1.0}
     for d in node_dates:
         key = _as_node_ts(d, base_ts=base_ts)
         nodes[key] = initial_nodes.get(key, 1.0) if initial_nodes else 1.0
