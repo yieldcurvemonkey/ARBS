@@ -117,6 +117,13 @@ class BarchartFetcher(BaseFetcher):
     _current_laravel_token: str = None
     _current_xsrf_token: str = None
     _BARCHART_MAX_RECORD = 5_000
+    # Barchart's origin advertises `x-ratelimit-limit: 60` per rolling ~60s window on the
+    # intraday queryminutes endpoint and returns `retry-after: ~45` once remaining hits 0.
+    # The intraday fan-out (up to 37 symbols x pagination) must share ONE per-minute budget
+    # or it structurally overruns the quota; stay just under 60 to leave headroom for the
+    # token warm, which draws on the same origin.
+    _BARCHART_INTRADAY_RATE_LIMIT_MAX_CALLS = 55
+    _BARCHART_INTRADAY_RATE_LIMIT_PERIOD_SECONDS = 60.0
     _SOCKS5_AUTH_RETRY_SLEEP_SECONDS = 60
     _SESSION_TOKEN_TTL_SECONDS = 60
     _SESSION_TOKEN_POOL_SIZE = 3
@@ -610,6 +617,7 @@ class BarchartFetcher(BaseFetcher):
         backoff_factor: Optional[int] = 1,
         uid: Optional[str | int] = None,
         session_token: Optional[Tuple[str, str]] = None,
+        rate_limiter: Optional[AsyncRateLimiter] = None,
     ) -> Tuple[str, pd.DataFrame] | Tuple[str, pd.DataFrame, str]:
 
         token = session_token
@@ -665,19 +673,51 @@ class BarchartFetcher(BaseFetcher):
             last_status_code: Optional[int] = None
             while retries < max_retries:
                 try:
-                    if retries > 0:
-                        # First retry rotates to the next token; later retries can force-refresh.
-                        should_force_refresh = retries >= 2
-                        if last_status_code in (401, 403):
-                            should_force_refresh = True
+                    # A 429 is a rate-limit signal, not an auth failure: reuse the SAME
+                    # token across the backoff (minting/force-refreshing a token spends
+                    # another request from the same per-minute budget and deepens the
+                    # storm). For other retryable failures (proxy/network hiccups) keep the
+                    # original recovery: rotate to the next pooled token, and only pay for a
+                    # fresh network token fetch when the failure was an actual auth rejection.
+                    if retries > 0 and last_status_code != 429:
                         token = await self._get_shared_session_token_with_proxy_retry_async(
                             dummy_symbol=symbol,
-                            force_refresh=should_force_refresh,
+                            force_refresh=last_status_code in (401, 403),
                             log_context="Barchart Intraday token refresh",
                         )
                         headers = build_headers(token=token)
 
+                    if rate_limiter is not None:
+                        await rate_limiter.acquire()
+
                     resp = await client.get(url, headers=headers)
+
+                    # Honor Barchart's published quota: on 429 it returns Retry-After
+                    # (and x-ratelimit-reset). Sleep for exactly that long rather than
+                    # retrying straight back into the still-exhausted window on a 1/2/4s
+                    # backoff -- which is what turned 36 URLs into a 2000x request storm.
+                    if resp.status_code == 429:
+                        last_status_code = 429
+                        retries += 1
+                        if retries >= max_retries:
+                            self._logger.warning(
+                                f"Barchart Intraday - rate limited for {symbol}; giving up after {retries} attempt(s)."
+                            )
+                            return None
+                        sleep_for = self._history_retry_sleep_seconds(
+                            retries,
+                            backoff_factor=float(backoff_factor or 0.0),
+                            retry_after=resp.headers.get("Retry-After"),
+                        )
+                        self._logger.warning(
+                            f"Barchart Intraday - 429 for {symbol} "
+                            f"(limit={resp.headers.get('x-ratelimit-limit')}, "
+                            f"remaining={resp.headers.get('x-ratelimit-remaining')}). "
+                            f"Sleeping {sleep_for:.1f}s (attempt {retries}/{max_retries})."
+                        )
+                        await asyncio.sleep(sleep_for)
+                        continue
+
                     resp.raise_for_status()
                     last_status_code = None
                     if not resp.content:
@@ -1144,6 +1184,7 @@ class BarchartFetcher(BaseFetcher):
             barchart_symbols: List[str],
             start_date: datetime,
             end_date: datetime,
+            rate_limiter: Optional[AsyncRateLimiter],
             interval: Optional[Literal[1, 5, 10, 15, 30, 60, 120, 240]] = None,
         ):
             semaphore = asyncio.Semaphore(effective_max_concurrent)
@@ -1156,6 +1197,7 @@ class BarchartFetcher(BaseFetcher):
                     start_date=start_date,
                     end_date=end_date,
                     set_dt_index=not one_df,
+                    rate_limiter=rate_limiter,
                 )
                 for symbol in barchart_symbols
             ]
@@ -1190,11 +1232,20 @@ class BarchartFetcher(BaseFetcher):
                 http2=True,
             ) as client:
                 if interval:
+                    # The intraday endpoint is quota'd per rolling minute, not per second,
+                    # and the whole fan-out shares that one origin budget. A single
+                    # minute-windowed limiter here is what keeps 37 concurrent symbols +
+                    # backward pagination under Barchart's published ~60/min ceiling.
+                    intraday_rate_limiter = AsyncRateLimiter(
+                        max_calls=self._BARCHART_INTRADAY_RATE_LIMIT_MAX_CALLS,
+                        period=self._BARCHART_INTRADAY_RATE_LIMIT_PERIOD_SECONDS,
+                    )
                     all_data = await build_intraday_tasks(
                         client=client,
                         barchart_symbols=barchart_symbols,
                         start_date=start_date,
                         end_date=end_date,
+                        rate_limiter=intraday_rate_limiter,
                         interval=interval,
                     )
                 else:
