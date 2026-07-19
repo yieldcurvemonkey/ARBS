@@ -21,10 +21,13 @@ from SDRUtils._swappulse_scripts._stir_flow_schema_v1 import (
 from SDRUtils._swappulse_scripts.ingest_usdswaps_tape import resolve_pg_url
 from SDRUtils.stir_flow import config, tick_size
 from SDRUtils.stir_flow.classifier import classify_unit
+from SDRUtils.stir_flow.curve_warm import (
+    enumerate_curve_demand, unit_curve_and_snap, warm_pricer,
+)
 from SDRUtils.stir_flow.confidence import (
     TickStats, apply_tick_rule, score_off_market, score_on_market,
 )
-from SDRUtils.stir_flow.pricing import CurvePricer, snap_timestamp
+from SDRUtils.stir_flow.pricing import CurvePricer
 from SDRUtils.stir_flow.trade_selection import (
     ALL_PKG_LEGS_SQL, ELIGIBLE_LEGS_SQL, build_units, is_excluded_unit,
 )
@@ -44,9 +47,7 @@ EMPTY_DIRECTION_ROW = {c: None for c in DIRECTION_COLUMNS}
 
 def _unit_meta(unit):
     first = unit.legs.iloc[0]
-    curve_name = config.CURVE_FOR[first["rate_index_clean"]]
-    snap = snap_timestamp(first.get("original_execution_timestamp"),
-                          first["execution_timestamp"])
+    curve_name, snap = unit_curve_and_snap(unit)   # single source of truth
     bucket = tick_size.tenor_bucket_for(first)
     total_dv01 = float(unit.legs["risk"].abs().sum())
     return first, curve_name, snap, bucket, total_dv01
@@ -272,7 +273,8 @@ def _build_prev_rate_lookup(prints):
     return prev_rate_lookup
 
 
-def run_classification(conn, classify_date, stats, limit=0, dry_run=False):
+def run_classification(conn, classify_date, stats, limit=0, dry_run=False,
+                       warm_jobs=8, warm=True):
     eligible, all_legs = _load_frames(conn, classify_date, classify_date)
     units, skipped = [], []
     for u in build_units(eligible, all_legs):
@@ -281,7 +283,16 @@ def run_classification(conn, classify_date, stats, limit=0, dry_run=False):
     if limit:
         units = units[:limit]
     prints = _onmarket_prints(eligible)
-    rows = classify_units(units, CurvePricer(),
+    pricer = CurvePricer()
+    if warm and units:
+        # Decouple curve acquisition: build every needed (curve, minute) snapshot
+        # concurrently up front so classify_units prices against a warm handle
+        # cache instead of building curves lazily one leg at a time.
+        demand = enumerate_curve_demand(units)
+        wr = warm_pricer(pricer, demand, max_workers=warm_jobs)
+        print(f"warmed curves: built={wr['built']} reused={wr['reused']} "
+              f"failed={wr['failed']} (demand={len(demand)})")
+    rows = classify_units(units, pricer,
                           _build_lookups(stats), _build_prev_rate_lookup(prints))
     print(f"classified {len(rows)} units; skipped {len(skipped)} "
           f"({pd.Series([r for _, r in skipped]).value_counts().to_dict() if skipped else {}})")
@@ -299,6 +310,10 @@ def main() -> int:
     ap.add_argument("--calib-mode", choices=["ticks-only", "full"], default="ticks-only")
     ap.add_argument("--limit", type=int, default=0)
     ap.add_argument("--dry-run", action="store_true")
+    ap.add_argument("--warm-jobs", type=int, default=8,
+                    help="thread pool size for concurrent curve warming")
+    ap.add_argument("--no-warm", action="store_true",
+                    help="disable curve pre-warming (legacy lazy per-leg path)")
     args = ap.parse_args()
 
     conn = psycopg2.connect(resolve_pg_url(args.pg_url))
@@ -308,7 +323,8 @@ def main() -> int:
         write_tick_rows(conn, stats)
     print(f"tick stats rows: {len(stats)}")
     rows = run_classification(conn, args.classify_date, stats,
-                              limit=args.limit, dry_run=args.dry_run)
+                              limit=args.limit, dry_run=args.dry_run,
+                              warm_jobs=args.warm_jobs, warm=not args.no_warm)
     summary = pd.DataFrame(rows)["dealer_direction"].value_counts().to_dict()
     print(f"direction summary: {json.dumps(summary)}")
     conn.close()
