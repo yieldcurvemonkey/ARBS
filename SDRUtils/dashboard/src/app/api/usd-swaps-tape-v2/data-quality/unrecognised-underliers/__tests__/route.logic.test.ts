@@ -33,26 +33,26 @@ describe('aggregateUnrecognisedUnderliers', () => {
       floating_rate_index: 'USD-NEW-FANCY-RATE',
       canonical_underlier_key: 'UNKNOWN',
       notional: 100_000_000,
-      execution_timestamp: '2026-05-04T10:00:00Z',
+      anchor_ts: '2026-05-04T10:00:00Z',
     },
     {
       floating_rate_index: 'USD-NEW-FANCY-RATE',
       canonical_underlier_key: 'UNKNOWN',
       notional: 50_000_000,
-      execution_timestamp: '2026-05-04T15:30:00Z',
+      anchor_ts: '2026-05-04T15:30:00Z',
     },
     {
       // Recognised — should be filtered out
       floating_rate_index: 'USD-SOFR-OIS Compound 1D',
       canonical_underlier_key: 'USD/SOFR-OIS/COMPOUND',
       notional: 200_000_000,
-      execution_timestamp: '2026-05-04T11:00:00Z',
+      anchor_ts: '2026-05-04T11:00:00Z',
     },
     {
       floating_rate_index: 'USD-WEIRD-VARIANT',
       canonical_underlier_key: null,
       notional: 25_000_000,
-      execution_timestamp: '2026-05-03T22:00:00Z',
+      anchor_ts: '2026-05-03T22:00:00Z',
     },
   ]
 
@@ -86,7 +86,7 @@ describe('aggregateUnrecognisedUnderliers', () => {
         floating_rate_index: 'USD-SOFR',
         canonical_underlier_key: 'USD/SOFR-OIS/COMPOUND',
         notional: 1_000,
-        execution_timestamp: '2026-05-04T10:00:00Z',
+        anchor_ts: '2026-05-04T10:00:00Z',
       },
     ]
     expect(aggregateUnrecognisedUnderliers(recognised)).toEqual([])

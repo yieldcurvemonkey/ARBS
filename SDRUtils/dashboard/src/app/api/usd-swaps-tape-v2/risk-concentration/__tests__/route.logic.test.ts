@@ -16,6 +16,12 @@ describe('buildRiskConcentrationSql', () => {
     expect(sql).toContain('NOT l.is_ufro')
   })
 
+  it('reads the live v2 leg table (not the frozen v1)', () => {
+    const sql = buildRiskConcentrationSql('tape_label', false)
+    expect(sql).toContain('arbs_usd_swap_tape_legs_v2')
+    expect(sql).not.toContain('legs_v1')
+  })
+
   it('exports every documented groupBy column', () => {
     expect(Object.keys(GROUPABLE)).toEqual(
       expect.arrayContaining([
