@@ -78,6 +78,20 @@ class TradeClassification:
     # Estimated PV01 (per 1bp)
     estimated_pv01: Optional[float] = field(default=None, kw_only=True)
 
+    # --- Execution-vs-Event timestamp integration (2026-07-17 spec) ---
+    # CFTC Part 43/45 Event timestamp (#30): when the reported event occurred;
+    # invariant event_timestamp >= execution_timestamp. Read at classify time.
+    event_timestamp: Optional[pd.Timestamp] = field(default=None, kw_only=True)
+    # Alpha's original execution (lineage-resolved in enrichment); <= execution.
+    original_execution_timestamp: Optional[pd.Timestamp] = field(default=None, kw_only=True)
+    # Precomputed deltas (seconds); populated in enrichment (trade_tape).
+    report_lag_seconds: Optional[float] = field(default=None, kw_only=True)
+    alpha_lag_seconds: Optional[float] = field(default=None, kw_only=True)
+    # Provenance of original_execution_timestamp: 'newt' | 'lineage' | 'fallback'.
+    # Also set to 'fallback' at classify time when a product falls back from a
+    # missing Execution Timestamp to the Event timestamp (swaptions/capfloors).
+    original_execution_source: Optional[str] = field(default=None, kw_only=True)
+
     # TODO support more packages
     # Package info
     package_type: Optional[Literal["CURVE", "FLY", "STRADDLE", "STRANGLE", "OUTRIGHT"]] = field(default=None, kw_only=True)

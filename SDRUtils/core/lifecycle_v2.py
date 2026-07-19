@@ -271,6 +271,14 @@ def flatten_lifecycle_summary(
         "lc_days_seasoned": days_seasoned,
         "lc_correction_crossed_day": summary.arrived_in_later_file,
         "lc_correction_lag_seconds": summary.correction_lag_seconds,
+        # Execution-vs-event timestamp integration (2026-07-17 spec): the
+        # chain's first-NEWT execution is the within-chain original-execution
+        # anchor; the latest event time is the last update. Both were computed
+        # in build_summary but previously dropped here — surface them so the
+        # tape enrichment can set a real original_execution_timestamp instead
+        # of copying execution_timestamp.
+        "lc_original_execution_timestamp": summary.original_execution_timestamp,
+        "lc_latest_update_timestamp": summary.latest_update_timestamp,
         "lc_fields_changed": fields_str,
         "state_machine_violation": bool(violations),
         "violation_reason": violation_reason,

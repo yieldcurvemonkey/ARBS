@@ -64,7 +64,12 @@ def _hour_to_session(hour: int) -> str:
 # Result cache versioning
 # ---------------------------------------------------------------------------
 
-TRADE_TAPE_CACHE_VERSION = "v21-curve-abs-tol-scaling"
+TRADE_TAPE_CACHE_VERSION = "v22-exec-vs-event-timestamps"
+
+# Clock-skew tolerance for the event >= execution invariant (#30 >= #96):
+# negative report lags within this many seconds are treated as skew and
+# clamped to 0; beyond it the row is flagged report_lag_invariant_violation.
+_REPORT_LAG_TOLERANCE_SECONDS = 5.0
 
 # Clean single-unit spot tenor ("1M", "2M", "5Y", "1W", "6D"). Used to let a
 # standard tenor win over the UST MMYY alias in tape labels.
@@ -223,7 +228,9 @@ def _match_novation_pairs(df: pd.DataFrame) -> pd.DataFrame:
     match_seq = 0
 
     for t_idx, t_row in term_nova.iterrows():
-        t_ts = pd.to_datetime(t_row.get("execution_timestamp"))
+        t_ts = pd.to_datetime(
+            t_row.get("original_execution_timestamp", t_row.get("execution_timestamp"))
+        )
         t_tenor = t_row.get("tenor_years", 0)
         t_underlier = str(t_row.get("upi_underlier_name", ""))
         t_trade_id = str(t_row.get("trade_id", "")) if trade_id_col else ""
@@ -250,7 +257,9 @@ def _match_novation_pairs(df: pd.DataFrame) -> pd.DataFrame:
 
             # Timestamp proximity (relaxed: 300s to accommodate clearing
             # acceptance lag for centrally-cleared novations).
-            n_ts = pd.to_datetime(n_row.get("execution_timestamp"))
+            n_ts = pd.to_datetime(
+                n_row.get("original_execution_timestamp", n_row.get("execution_timestamp"))
+            )
             try:
                 delta = abs((t_ts - n_ts).total_seconds())
             except (TypeError, AttributeError):
@@ -746,31 +755,76 @@ class TradeTape(SDRAnalyzer):
         return df
 
     def _enrich_exec_timestamps(self, df: pd.DataFrame) -> pd.DataFrame:
-        """Layer 2e: split execution timestamps (H1).
+        """Layer 2e: execution vs event timestamps + deltas (2026-07-17 spec).
 
-        ``original_execution_timestamp`` is the event-study anchor: the
-        time the trade was first struck. For β/γ clearing rows (which
-        inherit the alpha's terms) this is the alpha's execution_timestamp,
-        not the clearing-acceptance timestamp.
-        ``clearing_accepted_timestamp`` is the raw execution_timestamp on
-        β/γ NEWT-CLRG rows; NULL everywhere else.
+        Materializes the three-timestamp contract per row:
+        - ``execution_timestamp`` (#96): economic trade time (immutable/UTI).
+        - ``event_timestamp`` (#30): reported-event time; ``>= execution``.
+        - ``original_execution_timestamp``: the chain's first-NEWT execution
+          (within-chain lineage from ``lc_original_execution_timestamp``),
+          falling back to this row's execution. Cross-UTI clearing/novation
+          alpha coverage is measured/upgraded by the reconciliation report
+          (``SDRUtils.analytics.alpha_join``), not this hot path.
 
-        This lets FOMC-proximity, novation-pair matching, and intraday
-        curve snapshots bucket on the correct timing anchor.
+        and the two precomputed deltas:
+        - ``report_lag_seconds`` = event - execution (>= 0): report/dissem lag.
+        - ``alpha_lag_seconds``  = execution - original (>= 0): clearing lag.
+
+        ``clearing_accepted_timestamp`` is this row's execution on β/γ
+        NEWT-CLRG rows; NULL everywhere else. Runs before Event type so the
+        anchor exists for novation matching and market-context bucketing.
         """
         exec_ts = df.get("execution_timestamp")
         if exec_ts is None:
             return df
+        exec_ts = pd.to_datetime(exec_ts, utc=True, errors="coerce")
+        df["execution_timestamp"] = exec_ts
 
-        df["original_execution_timestamp"] = exec_ts
-        df["clearing_accepted_timestamp"] = pd.NaT
+        # --- Event timestamp (#30) + report lag (event - execution >= 0) ---
+        event_ts = df.get("event_timestamp")
+        if event_ts is not None:
+            event_ts = pd.to_datetime(event_ts, utc=True, errors="coerce")
+            df["event_timestamp"] = event_ts
+            lag = (event_ts - exec_ts).dt.total_seconds()
+            df["report_lag_invariant_violation"] = (
+                lag < -_REPORT_LAG_TOLERANCE_SECONDS
+            ).fillna(False)
+            df["report_lag_seconds"] = lag.clip(lower=0)
+        else:
+            df["event_timestamp"] = pd.NaT
+            df["report_lag_seconds"] = np.nan
+            df["report_lag_invariant_violation"] = False
 
-        # β/γ NEWT-CLRG rows: clearing-accept timestamp = this row's
-        # execution_timestamp; original anchor = alpha's (we don't have
-        # the alpha at this enrichment layer, so we emit the clearing
-        # timestamp and leave original_execution_timestamp equal to the
-        # current exec for now; Phase 4 downstream aggregator joins in
-        # the alpha link).
+        # --- Original-execution anchor (best-effort within-chain lineage) ---
+        # Each row starts as its own origin; upgrade to the lifecycle chain's
+        # first-NEWT execution where that is strictly earlier (amendment /
+        # continuation chains sharing a UTI). A classify-time 'fallback' flag
+        # (swaptions/capfloors missing Execution Timestamp) is preserved.
+        original = exec_ts.copy()
+        if "original_execution_source" in df.columns:
+            source = df["original_execution_source"].astype("object")
+            source = source.where(source.notna(), None)
+        else:
+            source = pd.Series([None] * len(df), index=df.index, dtype="object")
+
+        lc_anchor = df.get("lc_original_execution_timestamp")
+        if lc_anchor is not None:
+            lc_anchor = pd.to_datetime(lc_anchor, utc=True, errors="coerce")
+            take = lc_anchor.notna() & exec_ts.notna() & (lc_anchor < exec_ts)
+            original = original.mask(take, lc_anchor)
+            source = source.mask(take & source.isna(), "lineage")
+
+        source = source.where(source.notna(), "newt")
+        df["original_execution_timestamp"] = original
+        df["original_execution_source"] = source
+        df["alpha_lag_seconds"] = (
+            (exec_ts - original).dt.total_seconds().clip(lower=0).fillna(0.0)
+        )
+
+        # --- Clearing-accept timestamp on β/γ NEWT-CLRG rows ---
+        df["clearing_accepted_timestamp"] = pd.Series(
+            pd.NaT, index=df.index, dtype="datetime64[ns, UTC]"
+        )
         if "event_action" in df.columns:
             ea = df["event_action"].astype(str).str.upper()
             clrg_mask = ea == "NEWT-CLRG"
@@ -970,10 +1024,19 @@ class TradeTape(SDRAnalyzer):
 
     def _enrich_context(self, df: pd.DataFrame) -> pd.DataFrame:
         """Layer 5: event windows, FOMC meeting label/proximity, session."""
+        # CLAUDE.md contract: FOMC proximity + event windows bucket on the
+        # original-execution anchor (falls back to execution when absent).
+        # original_execution_timestamp is populated in _enrich_exec_timestamps,
+        # which now runs before this step.
+        anchor = (
+            "original_execution_timestamp"
+            if "original_execution_timestamp" in df.columns
+            else "execution_timestamp"
+        )
         # Event classifications (FOMC, month-end, quarter-end)
         df = add_event_classifications(
             df,
-            date_col="execution_timestamp",
+            date_col=anchor,
             include_me=True,
             include_qe=True,
             include_fomc=True,
@@ -1093,7 +1156,7 @@ class TradeTape(SDRAnalyzer):
                         df.loc[labelled, "fomc_proximity"] = df[labelled].apply(
                             lambda r: classify_meeting_proximity(
                                 pd.Series({
-                                    "execution_timestamp": r["execution_timestamp"],
+                                    "execution_timestamp": r[anchor],
                                     "meeting_eff": meeting_eff_map.get(
                                         r["fomc_meeting_label"]
                                     ),
@@ -1122,10 +1185,17 @@ class TradeTape(SDRAnalyzer):
 
     def _enrich_rv(self, df: pd.DataFrame) -> pd.DataFrame:
         """Layer 6: temporal clusters, daily VWAP, rate vs VWAP."""
+        # CLAUDE.md contract: intraday clustering buckets on the
+        # original-execution anchor (falls back to execution when absent).
+        anchor = (
+            "original_execution_timestamp"
+            if "original_execution_timestamp" in df.columns
+            else "execution_timestamp"
+        )
         # Trade clustering
         clustered = trade_clustering(
             df,
-            ts_col="execution_timestamp",
+            ts_col=anchor,
             gap_seconds=self._cluster_gap_seconds,
         )
         df["cluster_id"] = clustered["cluster_id"].values
@@ -1792,9 +1862,12 @@ class TradeTape(SDRAnalyzer):
             ("Off-date detection", self._detect_off_date),
             ("Lifecycle", self._enrich_lifecycle),
             ("Cross-day lifecycle", self._enrich_cross_day_lifecycle),
+            # Exec-timestamps runs BEFORE Event type so the original-execution
+            # anchor exists when _match_novation_pairs (inside Event type) and
+            # the market-context/clustering steps bucket on it (2026-07-17 spec).
+            ("Exec timestamps", self._enrich_exec_timestamps),
             ("Event type", self._enrich_event_type),
             ("Economic class", self._enrich_economic_class),
-            ("Exec timestamps", self._enrich_exec_timestamps),
             ("Phase 5 structural", self._enrich_phase5_structural),
             ("Quality flags", self._enrich_quality),
             ("Packages", self._enrich_packages),
@@ -1869,9 +1942,12 @@ class TradeTape(SDRAnalyzer):
             ("Off-date detection", self._detect_off_date),
             ("Lifecycle", self._enrich_lifecycle),
             ("Cross-day lifecycle", self._enrich_cross_day_lifecycle),
+            # Exec-timestamps runs BEFORE Event type so the original-execution
+            # anchor exists when _match_novation_pairs (inside Event type) and
+            # the market-context/clustering steps bucket on it (2026-07-17 spec).
+            ("Exec timestamps", self._enrich_exec_timestamps),
             ("Event type", self._enrich_event_type),
             ("Economic class", self._enrich_economic_class),
-            ("Exec timestamps", self._enrich_exec_timestamps),
             ("Phase 5 structural", self._enrich_phase5_structural),
             ("Quality flags", self._enrich_quality),
         ]

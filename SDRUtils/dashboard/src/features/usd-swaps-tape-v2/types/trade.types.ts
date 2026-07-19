@@ -96,6 +96,15 @@ export type UsdSwapTapeLeg = SofrSwapTapeLeg & {
   // ``clearing_accepted_timestamp`` is non-null only on β/γ NEWT-CLRG legs.
   original_execution_timestamp?: string | null
   clearing_accepted_timestamp?: string | null
+  // Execution-vs-Event timestamp integration (2026-07-17): Event timestamp
+  // (#30) + precomputed report/alpha lag deltas + alpha-join provenance. Null
+  // on tape rows ingested before the cutover (not backfillable from the tape).
+  event_timestamp?: string | null
+  report_lag_seconds?: number | null
+  alpha_lag_seconds?: number | null
+  original_execution_source?: 'newt' | 'lineage' | 'fallback' | string | null
+  event_timestamp_granularity?: 'second' | 'day' | string | null
+  report_lag_invariant_violation?: boolean | null
   notional_source?: 'p43_capped' | 'p43_uncapped' | 'p45' | string | null
   is_notional_capped?: boolean | null
   // Phase 2: dual-chain lifecycle + state-machine validator.
@@ -205,6 +214,14 @@ export type UsdSwapTapeRow = SofrSwapTapeRow & {
   // contributes; False otherwise. Null when ingest hasn't backfilled yet.
   original_execution_start?: string | null
   clearing_accepted_start?: string | null
+  // Execution-vs-Event timestamp package rollups (2026-07-17). event_start/end
+  // = min/max leg event_timestamp; max/median_report_lag_seconds summarize the
+  // report lag; late_report flags a package with a leg lag over the threshold.
+  event_start?: string | null
+  event_end?: string | null
+  max_report_lag_seconds?: number | null
+  median_report_lag_seconds?: number | null
+  late_report?: boolean | null
   economic_class_primary?: string | null
   contributes_to_flow_any?: boolean | null
   contributes_to_volume_any?: boolean | null

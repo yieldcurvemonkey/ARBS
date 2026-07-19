@@ -26,18 +26,26 @@ import {
   formatDv01,
   formatNotional,
   formatRate,
+  formatTimestampDelta,
 } from '../../utils/format'
 import { computePackageConfidence } from '../../utils/packageConfidence'
 
+// Reconciled to the NYC desk timezone to match the main tape (this cell
+// previously rendered UTC 'Z', inconsistent with formatExecutionWindow).
+const LEG_TS_TZ = 'America/New_York'
 function formatTime(value: string | null | undefined): string {
   if (!value) return EMPTY_VALUE
-  try {
-    const d = new Date(value)
-    if (Number.isNaN(d.getTime())) return EMPTY_VALUE
-    return d.toISOString().replace('T', ' ').slice(0, 19) + 'Z'
-  } catch {
-    return EMPTY_VALUE
-  }
+  const d = new Date(value)
+  if (Number.isNaN(d.getTime())) return EMPTY_VALUE
+  return `${d.toLocaleDateString('en-US', {
+    timeZone: LEG_TS_TZ,
+  })} ${d.toLocaleTimeString('en-US', {
+    timeZone: LEG_TS_TZ,
+    hour12: false,
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+  })}`
 }
 
 function classBadge(leg: UsdSwapTapeLeg) {
@@ -62,26 +70,41 @@ function execTimestampPair(leg: UsdSwapTapeLeg) {
   const orig = leg.original_execution_timestamp ?? leg.execution_timestamp
   const accepted = leg.clearing_accepted_timestamp
   const origText = formatTime(orig)
-  if (!accepted) {
+  // Execution-vs-Event timestamp integration (2026-07-17): show the Event
+  // timestamp (#30) with its report lag (Event − Execution) beneath the
+  // execution anchor. teal = clearing-accept; sky = event / report lag.
+  const eventText = leg.event_timestamp ? formatTime(leg.event_timestamp) : null
+  const delta = formatTimestampDelta(leg.execution_timestamp, leg.event_timestamp)
+  if (!accepted && !eventText) {
     return (
       <span
         className="font-mono text-[11px] text-slate-200"
-        title="original execution timestamp"
+        title="original execution timestamp (#96)"
       >
         {origText}
       </span>
     )
   }
-  const acceptedText = formatTime(accepted)
   return (
     <div
       className="flex flex-col leading-tight"
-      title="β/γ clearing leg: original alpha exec on top, clearing-accept below"
+      title="execution/original (#96) on top; clearing-accept (teal); event/report-lag (sky)"
     >
       <span className="font-mono text-[11px] text-slate-200">{origText}</span>
-      <span className="font-mono text-[10px] text-teal-300/80">
-        ↳ {acceptedText}
-      </span>
+      {accepted ? (
+        <span className="font-mono text-[10px] text-teal-300/80">
+          ↳ {formatTime(accepted)}
+        </span>
+      ) : null}
+      {eventText ? (
+        <span
+          className="font-mono text-[10px] text-sky-300/80"
+          title={`Event timestamp (#30); report lag ${delta}`}
+        >
+          ⌁ {eventText}{' '}
+          <span className="text-slate-400">({delta})</span>
+        </span>
+      ) : null}
     </div>
   )
 }
@@ -551,7 +574,7 @@ export function LegsSubTable({
               {/* Phase 3: per-leg matrix kind */}
               <th className="px-2 py-1 text-left">Class</th>
               {/* Phase 1: original execution timestamp + clearing-accept */}
-              <th className="px-2 py-1 text-left">Exec Ts</th>
+              <th className="px-2 py-1 text-left">Exec / Event</th>
               <th className="px-2 py-1 text-left">Tape Label</th>
               <th className="px-2 py-1 text-left">Effective</th>
               <th className="px-2 py-1 text-left">Maturity</th>

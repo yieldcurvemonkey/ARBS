@@ -387,6 +387,31 @@ ALTER TABLE {LEGS_TABLE_V2} ADD COLUMN IF NOT EXISTS xd_has_past_effective BOOLE
 ALTER TABLE {LEGS_TABLE_V2} ADD COLUMN IF NOT EXISTS xd_is_off_market_seasoned BOOLEAN;
 ALTER TABLE {LEGS_TABLE_V2} ADD COLUMN IF NOT EXISTS xd_days_seasoned INTEGER;
 
+-- Execution-vs-Event timestamp integration (2026-07-17 spec). event_timestamp
+-- (#30) + the two precomputed deltas + alpha-join provenance + EMIR granularity
+-- guard. Nullable / no default so the ADD COLUMN is a fast metadata-only change
+-- on the ~1.3M-row table; historical rows stay NULL until re-ingest (the raw
+-- Event timestamp is not reconstructable from the tape).
+ALTER TABLE {LEGS_TABLE_V2} ADD COLUMN IF NOT EXISTS event_timestamp TIMESTAMPTZ;
+ALTER TABLE {LEGS_TABLE_V2} ADD COLUMN IF NOT EXISTS report_lag_seconds NUMERIC;
+ALTER TABLE {LEGS_TABLE_V2} ADD COLUMN IF NOT EXISTS alpha_lag_seconds NUMERIC;
+ALTER TABLE {LEGS_TABLE_V2} ADD COLUMN IF NOT EXISTS original_execution_source TEXT;
+ALTER TABLE {LEGS_TABLE_V2} ADD COLUMN IF NOT EXISTS event_timestamp_granularity TEXT;
+ALTER TABLE {LEGS_TABLE_V2} ADD COLUMN IF NOT EXISTS report_lag_invariant_violation BOOLEAN;
+
+ALTER TABLE {PACKAGES_TABLE_V2} ADD COLUMN IF NOT EXISTS event_start TIMESTAMPTZ;
+ALTER TABLE {PACKAGES_TABLE_V2} ADD COLUMN IF NOT EXISTS event_end TIMESTAMPTZ;
+ALTER TABLE {PACKAGES_TABLE_V2} ADD COLUMN IF NOT EXISTS max_report_lag_seconds NUMERIC;
+ALTER TABLE {PACKAGES_TABLE_V2} ADD COLUMN IF NOT EXISTS median_report_lag_seconds NUMERIC;
+ALTER TABLE {PACKAGES_TABLE_V2} ADD COLUMN IF NOT EXISTS late_report BOOLEAN;
+
+CREATE INDEX IF NOT EXISTS idx_tape_v2_legs_event
+  ON {LEGS_TABLE_V2}(event_timestamp);
+CREATE INDEX IF NOT EXISTS idx_tape_v2_legs_report_lag
+  ON {LEGS_TABLE_V2}(report_lag_seconds);
+CREATE INDEX IF NOT EXISTS idx_tape_v2_packages_event_start
+  ON {PACKAGES_TABLE_V2}(as_of_date, event_start DESC NULLS LAST);
+
 CREATE INDEX IF NOT EXISTS idx_tape_v2_legs_norm_label_orig
   ON {LEGS_TABLE_V2}(normalized_tape_label, original_execution_timestamp DESC NULLS LAST);
 CREATE INDEX IF NOT EXISTS idx_tape_v2_packages_norm_label
@@ -478,6 +503,11 @@ SELECT
   p.execution_end,
   p.original_execution_start,
   p.clearing_accepted_start,
+  p.event_start,
+  p.event_end,
+  p.max_report_lag_seconds,
+  p.median_report_lag_seconds,
+  p.late_report,
   p.package_structure,
   p.package_type,
   p.package_indicator,

@@ -269,6 +269,40 @@ export function formatExecutionWindow(
   return `${startStr} / ${endStr}`
 }
 
+// Execution-vs-Event timestamp integration (2026-07-17): the report /
+// dissemination lag (Event timestamp #30 − Execution timestamp #96, ≥ 0). This
+// separates fresh executions from lifecycle churn / late block prints.
+//   - 'unknown'  when the execution timestamp is absent (cannot anchor)
+//   - 'live'     when the event timestamp is absent (not yet disseminated,
+//                or a pre-cutover row that never captured it)
+//   - '0s'       a same-second report
+//   - '+3d 04:12' / '+04:12:30' / '+3m 20s' / '+43s' otherwise (compact,
+//     largest-unit-first). A negative sign appears only on a data-quality
+//     invariant breach (event before execution beyond clock-skew tolerance).
+export function formatTimestampDelta(
+  execIso: string | null | undefined,
+  eventIso: string | null | undefined,
+): string {
+  if (!execIso) return 'unknown'
+  if (!eventIso) return 'live'
+  const exec = new Date(execIso).getTime()
+  const event = new Date(eventIso).getTime()
+  if (Number.isNaN(exec) || Number.isNaN(event)) return 'unknown'
+  let sec = Math.round((event - exec) / 1000)
+  if (sec === 0) return '0s'
+  const sign = sec < 0 ? '-' : '+'
+  sec = Math.abs(sec)
+  const days = Math.floor(sec / 86400)
+  const hrs = Math.floor((sec % 86400) / 3600)
+  const mins = Math.floor((sec % 3600) / 60)
+  const s = sec % 60
+  const pad = (n: number) => String(n).padStart(2, '0')
+  if (days > 0) return `${sign}${days}d ${pad(hrs)}:${pad(mins)}`
+  if (hrs > 0) return `${sign}${pad(hrs)}:${pad(mins)}:${pad(s)}`
+  if (mins > 0) return `${sign}${mins}m ${pad(s)}s`
+  return `${sign}${s}s`
+}
+
 export function formatClusterSuffix(size: number | null | undefined): string {
   if (isNullish(size)) return ''
   if (size < 2) return ''

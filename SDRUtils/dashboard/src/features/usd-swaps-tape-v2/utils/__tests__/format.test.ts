@@ -13,6 +13,7 @@ import {
   formatReportedLvl,
   formatTenor,
   formatTime,
+  formatTimestampDelta,
 } from '../format'
 
 describe('formatNotional', () => {
@@ -501,5 +502,47 @@ describe('formatReportedLvl', () => {
       weighted_fixed_rate: null,
     } as UsdSwapTapeRow
     expect(formatReportedLvl(row)).toBe(EMPTY_VALUE)
+  })
+})
+
+describe('formatTimestampDelta (Execution-vs-Event report lag)', () => {
+  const exec = '2026-03-09T14:00:00Z'
+
+  it('returns "unknown" when the execution timestamp is missing', () => {
+    expect(formatTimestampDelta(null, exec)).toBe('unknown')
+    expect(formatTimestampDelta(undefined, exec)).toBe('unknown')
+  })
+
+  it('returns "live" when the event timestamp is missing (not yet disseminated)', () => {
+    expect(formatTimestampDelta(exec, null)).toBe('live')
+    expect(formatTimestampDelta(exec, undefined)).toBe('live')
+  })
+
+  it('returns "unknown" on unparseable input', () => {
+    expect(formatTimestampDelta('nope', 'nope')).toBe('unknown')
+  })
+
+  it('returns "0s" for a same-second report (fresh NEWT)', () => {
+    expect(formatTimestampDelta(exec, exec)).toBe('0s')
+  })
+
+  it('formats sub-minute lag', () => {
+    expect(formatTimestampDelta(exec, '2026-03-09T14:00:43Z')).toBe('+43s')
+  })
+
+  it('formats minute+second lag', () => {
+    expect(formatTimestampDelta(exec, '2026-03-09T14:03:20Z')).toBe('+3m 20s')
+  })
+
+  it('formats hour lag as HH:MM:SS', () => {
+    expect(formatTimestampDelta(exec, '2026-03-09T18:12:30Z')).toBe('+04:12:30')
+  })
+
+  it('formats multi-day lag as +Nd HH:MM (late amendment)', () => {
+    expect(formatTimestampDelta(exec, '2026-03-12T18:12:00Z')).toBe('+3d 04:12')
+  })
+
+  it('shows a negative sign on an invariant breach (event before execution)', () => {
+    expect(formatTimestampDelta(exec, '2026-03-09T13:59:01Z')).toBe('-59s')
   })
 })
