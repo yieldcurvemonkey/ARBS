@@ -387,15 +387,19 @@ def run_warm(args: argparse.Namespace, logger: logging.Logger) -> int:
     tasks = [(d, str(work_dir / f"{d.isoformat()}.parquet"), params) for d in pending]
 
     progress = Progress(total_days=len(tasks))
-    logger.info("building %d days with %d workers (max_tasks_per_child=%d)...",
-                len(tasks), args.n_jobs, args.max_tasks_per_child)
+    logger.info("building %d days with %d workers (max_tasks_per_child=%s)...",
+                len(tasks), args.n_jobs, args.max_tasks_per_child or "off")
 
     heartbeat_every = max(1, len(tasks) // 200)
+    # max_tasks_per_child is OFF by default: worker memory is flat (~230 MB), and a
+    # synchronized recycle wave (all workers hitting the limit at once) can deadlock
+    # the pool on Windows spawn. Only recycle if the user explicitly opts in.
+    mtpc = args.max_tasks_per_child or None
     with ProcessPoolExecutor(
         max_workers=args.n_jobs,
         initializer=_init_worker,
         initargs=(base_dir,),
-        max_tasks_per_child=args.max_tasks_per_child,
+        max_tasks_per_child=mtpc,
     ) as pool:
         futures = {pool.submit(_warm_one_day, t): t[0] for t in tasks}
         for fut in as_completed(futures):
@@ -473,7 +477,8 @@ def _build_parser() -> argparse.ArgumentParser:
     w.add_argument("--end-date", default=None, help="YYYY-MM-DD inclusive.")
     w.add_argument("--limit-days", type=int, default=None, help="Debug: build only the first N selected days.")
     w.add_argument("--n-jobs", type=int, default=default_jobs)
-    w.add_argument("--max-tasks-per-child", type=int, default=25)
+    w.add_argument("--max-tasks-per-child", type=int, default=None,
+                   help="Recycle workers after N tasks (default off; a synchronized recycle wave can deadlock the pool).")
     w.add_argument("--interpolation", default=DEFAULT_INTERPOLATION)
     w.add_argument("--force", action="store_true", help="Rebuild days already present in the store.")
     w.add_argument("--force-extract", action="store_true", help="Re-extract day files even if present.")
