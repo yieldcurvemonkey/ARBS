@@ -2161,10 +2161,14 @@ class BARCHART_STIRF_CURVE(LayeredCacheMixin):
         for ts, curve_obj in fresh_curves.items():
             fresh_curves_by_day.setdefault(self._trading_date_for_timestamp(ts), {})[ts] = curve_obj
 
+        persist_failures = 0
         for dt, day_curves in curves_to_store_by_day.items():
+            persist_ok = True
             try:
                 self._curve_store_write_day(curve_name, dt, cfg, day_curves)
             except Exception:
+                persist_ok = False
+                persist_failures += 1
                 logging.getLogger(__name__).exception(
                     "BARCHART STIRF CurveStore write failed for %s/%s (%s curves)",
                     curve_name,
@@ -2173,14 +2177,24 @@ class BARCHART_STIRF_CURVE(LayeredCacheMixin):
                 )
 
             if len(day_curves) > 10:
-                try:
-                    self._curve_cache_daily_bundle_put(curve_name, dt, cfg, day_curves)
-                except Exception:
-                    pass
+                if persist_ok:
+                    try:
+                        self._curve_cache_daily_bundle_put(curve_name, dt, cfg, day_curves)
+                    except Exception:
+                        pass
                 continue
 
-            for ts, curve_obj in fresh_curves_by_day.get(dt, {}).items():
-                self._curve_cache_put_local(curve_name, ts, cfg, curve_obj)
+            if persist_ok:
+                for ts, curve_obj in fresh_curves_by_day.get(dt, {}).items():
+                    self._curve_cache_put_local(curve_name, ts, cfg, curve_obj)
+
+        if persist_failures:
+            logging.getLogger(__name__).warning(
+                "BARCHART STIRF CurveStore persist completed with %s/%s day(s) failed for %s",
+                persist_failures,
+                len(curves_to_store_by_day),
+                curve_name,
+            )
 
     @staticmethod
     def _pricer_symbol(pricer: "RLSTIRFuturePricer") -> str:
@@ -2795,6 +2809,34 @@ class BARCHART_STIRF_CURVE(LayeredCacheMixin):
                 pending_timestamps = list(unique_timestamps)
 
             if not pending_timestamps:
+                # All timestamps resolved from cache.  Verify the CurveStore
+                # actually has the data on disk — a prior run may have cached
+                # successfully but failed to persist (poison-cache scenario).
+                from Caching.curve_store import CurveStore
+                store = CurveStore.default()
+                unpersisted_dates = [
+                    d for d in by_date
+                    if not store.has_day(curve_name, d)
+                ]
+                if unpersisted_dates:
+                    logging.getLogger(__name__).warning(
+                        "BARCHART STIRF CurveStore missing %s day(s) on disk for %s despite cache hit: %s — re-persisting from cache",
+                        len(unpersisted_dates),
+                        curve_name,
+                        [d.isoformat() for d in sorted(unpersisted_dates)],
+                    )
+                    unpersisted_set = set(unpersisted_dates)
+                    unpersisted_out = {
+                        ts: val for ts, val in out.items()
+                        if self._trading_date_for_timestamp(ts) in unpersisted_set
+                    }
+                    self._persist_bulk_curves(
+                        curve_name=curve_name,
+                        cfg=cfg,
+                        out=unpersisted_out,
+                        fresh_curves={},
+                        curve_only=curve_only,
+                    )
                 return out
 
             tqdm_mod = None
