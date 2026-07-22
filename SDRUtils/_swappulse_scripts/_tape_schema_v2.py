@@ -503,11 +503,6 @@ SELECT
   p.execution_end,
   p.original_execution_start,
   p.clearing_accepted_start,
-  p.event_start,
-  p.event_end,
-  p.max_report_lag_seconds,
-  p.median_report_lag_seconds,
-  p.late_report,
   p.package_structure,
   p.package_type,
   p.package_indicator,
@@ -591,7 +586,17 @@ SELECT
   COALESCE(l.manual_package_id, ml.manual_package_id) AS manual_package_id,
   l.override_type,
   n.has_notes,
-  n.notes_count
+  n.notes_count,
+  -- Execution-vs-Event rollups MUST be appended at the END of this SELECT.
+  -- CREATE OR REPLACE VIEW can only ADD columns to the end of the list; an
+  -- insertion mid-list makes Postgres fail with
+  --   "cannot change name of view column ... to ..."
+  -- against the already-deployed view. Keep new columns here.
+  p.event_start,
+  p.event_end,
+  p.max_report_lag_seconds,
+  p.median_report_lag_seconds,
+  p.late_report
 FROM {PACKAGES_TABLE_V2} p
 LEFT JOIN LATERAL (
     SELECT
