@@ -40,8 +40,10 @@ import os
 os.environ.setdefault("ARBS_SUPABASE_ENABLED", "0")
 
 import argparse
+import contextlib
 import datetime
 import gc
+import io
 import logging
 import sys
 import time
@@ -263,7 +265,11 @@ def _warm_one_day(task: tuple) -> DayStat:
     date, par_path, params = task
     t0 = time.time()
     try:
-        snapshots, stat = _build_day_snapshots(date, par_path, params)
+        # rateslib prints a "SUCCESS: func_tol reached ..." line per solve; with
+        # ~1M solves across many workers that both bloats the log and serializes
+        # on the shared stdout. Swallow it — workers communicate via the return value.
+        with contextlib.redirect_stdout(io.StringIO()):
+            snapshots, stat = _build_day_snapshots(date, par_path, params)
         if snapshots:
             snapshots.sort(key=lambda s: s.timestamp_utc)
             _WORKER["store"].write_day(ASSET_NAME, date, snapshots, overwrite=True)
