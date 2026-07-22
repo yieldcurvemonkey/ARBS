@@ -34,6 +34,7 @@ class IRSwapsMDP(MarketDataProvider[_GenericPricable]):
         "fetchers": {},
         "lock": threading.RLock(),
     }
+    _CITIVELO_STORE_ASSET: str = "USD-SOFR-1D-CITIVELO"
     _GSQUANT_IGNORED_DATES_BY_CURVE: Dict[str, frozenset[datetime.date]] = {
         "USD-OIS": frozenset(
             datetime.date.fromisoformat(date_str)
@@ -131,6 +132,89 @@ class IRSwapsMDP(MarketDataProvider[_GenericPricable]):
                 fetcher = CitiVelocityIntradayFetcher(workbook_path, curve_id=curve_id)
                 S["fetchers"][key] = fetcher
             return fetcher
+
+    def _load_citivelo_curve_store_point(
+        self,
+        *,
+        requested_curve_name: str,
+        timestamp: Union[datetime.datetime, datetime.date, pd.Timestamp, Literal["live"]],
+        method: str = "nearest",
+    ) -> Optional["_IRSwapGenericCurve"]:
+        """Serve a CitiVelo curve from the CurveStore (local parquet / Supabase L2).
+
+        Reconstructs the stored snapshot nearest ``timestamp`` from the ET
+        calendar-date partition of the ``USD-SOFR-1D-CITIVELO`` asset — no
+        workbook parsing. ``timestamp="live"`` uses the latest partition/row.
+        Returns ``None`` when the store has no data for that day (the caller
+        decides whether to fall back to the workbook).
+        """
+        import pytz
+        from pathlib import Path
+
+        from Query.IRSwaps.backends.rateslib.RLIRSwapCurve import RLIRSwapCurve
+
+        ASSET = self._CITIVELO_STORE_ASSET
+        NYC = pytz.timezone("America/New_York")
+        store = self._get_curve_store()
+
+        if timestamp == "live":
+            asset_dir = Path(store._base_dir) / "raw" / f"asset={ASSET}"
+            parts = sorted(asset_dir.glob("date=*")) if asset_dir.exists() else []
+            if not parts:
+                return None
+            et_date = datetime.date.fromisoformat(parts[-1].name.split("=", 1)[1])
+            target_utc = None
+        else:
+            ts = pd.Timestamp(timestamp)
+            if ts.tzinfo is None:
+                ts = ts.tz_localize(NYC)  # naive assumed ET (workbook source tz)
+            et_date = ts.tz_convert(NYC).date()
+            target_utc = ts.tz_convert("UTC")
+
+        if not store.has_day(ASSET, et_date):
+            return None
+        raw = store.read_raw_day(ASSET, et_date)
+        if raw is None or getattr(raw, "empty", True):
+            return None
+
+        tvec = pd.to_datetime(raw["timestamp_utc"], utc=True).reset_index(drop=True)
+        if target_utc is None:
+            pos = len(tvec) - 1
+        elif method == "exact":
+            hits = tvec.index[tvec == target_utc]
+            if len(hits) == 0:
+                return None
+            pos = int(hits[0])
+        elif method == "asof":
+            le = tvec[tvec <= target_utc]
+            if le.empty:
+                return None
+            pos = int(le.idxmax())
+        else:  # nearest
+            pos = int((tvec - target_utc).abs().values.argmin())
+
+        row = raw.iloc[[pos]]
+        curves = store.reconstruct_curves_batch(row, cfg=None, max_workers=1)
+        if not curves:
+            return None
+        rl_curve_handle = next(iter(curves.values()))
+
+        snap_et = tvec.iloc[pos].tz_convert(NYC)
+        ref = snap_et.date()
+        ts_out = snap_et.tz_localize(None).to_pydatetime()  # naive ET (matches workbook path)
+
+        sofr_fixings = _fetch_fixings(
+            as_of_date=ref, curve_name=requested_curve_name, force_refresh=self.force_refresh_fixings
+        ).sort_index()
+        sofr_fixings = sofr_fixings[sofr_fixings.index.date < ref] * 100
+
+        curve_id = f"{self.source.upper()}-{requested_curve_name}-{ts_out}"
+        return RLIRSwapCurve(
+            rl_curve_id=requested_curve_name,
+            rl_curve_handle=rl_curve_handle,
+            fixings=sofr_fixings,
+            meta_data={"timestamp": ts_out, "id": curve_id, "source": "curve_store"},
+        )
 
     def _curve_store_source_family(self) -> Optional[str]:
         source = str(self.source).upper()
@@ -2089,14 +2173,32 @@ class IRSwapsMDP(MarketDataProvider[_GenericPricable]):
             )
 
         elif self.source.upper() in ["CITIVELO", "CITI_VELO", "CITIVELOCITY"]:
+            assert curve_name == "USD-SOFR-1D", "SOFR!"
+
+            method = kwargs.get("method", "nearest")
+
+            # DEFAULT: serve the pre-warmed curve from the CurveStore (local parquet
+            # backed by Supabase L2). Never parse the 365 MB workbook unless the
+            # caller explicitly opts in via workbook_path / force_workbook.
+            use_workbook = bool(kwargs.get("force_workbook", False)) or ("workbook_path" in kwargs)
+            if not use_workbook:
+                store_curve = self._load_citivelo_curve_store_point(
+                    requested_curve_name=curve_name, timestamp=timestamp, method=method
+                )
+                if store_curve is not None:
+                    return store_curve
+                if not kwargs.get("fallback_workbook", False):
+                    raise RuntimeError(
+                        f"CitiVelo CurveStore (asset {self._CITIVELO_STORE_ASSET}) has no data for "
+                        f"timestamp={timestamp!r}. Warm/sync it (scripts/citivelo_curve_service.py), or pass "
+                        f"force_workbook=True / fallback_workbook=True to build from the Citi Velocity workbook."
+                    )
+
+            # Opt-in workbook build (explicit workbook_path/force_workbook, or fallback on store miss).
             from MDP.IRSwaps.CITI_VELOCITY_INTRADAY import DEFAULT_DB_PATH
             from Query.IRSwaps.backends.rateslib.RLIRSwapCurve import RLIRSwapCurve
 
-            assert curve_name == "USD-SOFR-1D", "SOFR!"
-
-            # Citi Velocity CVTSHIST intraday par snapshots -> solved rateslib curve.
             workbook_path = kwargs.get("workbook_path", DEFAULT_DB_PATH)
-            method = kwargs.get("method", "nearest")
             build_kwargs = {
                 k: kwargs[k]
                 for k in ("spline_start_tenor", "interpolation", "min_tenors", "spot_lag")
