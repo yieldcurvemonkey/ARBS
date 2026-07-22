@@ -226,9 +226,9 @@ def warm_stirf_cme_session(start, end):
     curves = [
         "USD-SOFR-1D-Q12STIRT",
         "USD-SOFR-1D-Q16STIRT",
-        "CAD-CORRA-Q8STIRT",
-        "USD-SOFR-1D-Q12xM12STIRT",
+        # "CAD-CORRA-Q8STIRT",
         "USD-OIS-Q12xM12STIRT-SERFFX-MIX23",
+        # "USD-SOFR-1D-Q12xM12STIRT",
     ]
     python_exe = sys.executable
     script = os.path.join(REPO_ROOT, "scripts", "stirf_curve_service.py")
