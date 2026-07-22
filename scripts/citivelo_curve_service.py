@@ -460,6 +460,51 @@ def run_status(args: argparse.Namespace, logger: logging.Logger) -> int:
     return 0
 
 
+def run_sync(args: argparse.Namespace, logger: logging.Logger) -> int:
+    """Push the local CitiVelo CurveStore partitions to Supabase (STIRT mechanism).
+
+    Reuses ``backfill_local_curve_store_to_supabase`` — the same per-day
+    ``SupabaseCurveSync.push_day`` path the BARCHART_STIRF curves use — scoped to
+    the ``USD-SOFR-1D-CITIVELO`` asset. Idempotent: days already present remotely
+    are skipped unless ``--rewrite``.
+    """
+    # Enable Supabase for THIS command (warm forces it off). Set before importing Caching.
+    os.environ["ARBS_SUPABASE_ENABLED"] = "1"
+    from Caching.supabase_engine import SUPABASE_ENABLED, get_database_url
+
+    if not SUPABASE_ENABLED:
+        logger.error("Supabase is not enabled (no DATABASE_URL / ARBS_SUPABASE_ENABLED). Cannot sync.")
+        return 2
+
+    import re as _re
+    target = _re.sub(r"//[^@]+@", "//<redacted>@", get_database_url() or "")
+    logger.info("Supabase sync: asset=%s target=%s rewrite=%s batch_size=%d",
+                ASSET_NAME, target, args.rewrite, args.batch_size)
+
+    from scripts.stirf_curve_service import backfill_local_curve_store_to_supabase
+
+    start = datetime.date.fromisoformat(args.start_date) if args.start_date else datetime.date(2000, 1, 1)
+    end = datetime.date.fromisoformat(args.end_date) if args.end_date else datetime.date(2100, 1, 1)
+    perf_log = Path(args.perf_log) if args.perf_log else (_default_work_dir().parent / "citivelo_sync_perf.jsonl")
+    perf_log.parent.mkdir(parents=True, exist_ok=True)
+
+    summary = backfill_local_curve_store_to_supabase(
+        curve_name=ASSET_NAME,
+        start_date=start,
+        end_date=end,
+        batch_size=args.batch_size,
+        rewrite_existing=args.rewrite,
+        logger=logger,
+        perf_log_path=perf_log,
+    )
+    logger.info(
+        "sync DONE: local_days=%s remote_before=%s queued=%s pushed=%s failed=%s status=%s",
+        summary.get("local_days"), summary.get("remote_days_before"), summary.get("queued_days"),
+        summary.get("pushed_days"), summary.get("failed_days"), summary.get("status"),
+    )
+    return 0 if summary.get("failed_days", 0) == 0 and summary.get("status") != "error" else 1
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # CLI
 # ─────────────────────────────────────────────────────────────────────────────
@@ -490,6 +535,14 @@ def _build_parser() -> argparse.ArgumentParser:
     s.add_argument("--base-dir", default=None)
     s.add_argument("--verbose", action="store_true")
 
+    y = sub.add_parser("sync", help="Push local CitiVelo CurveStore partitions to Supabase (STIRT mechanism).")
+    y.add_argument("--start-date", default=None, help="YYYY-MM-DD inclusive (default: all).")
+    y.add_argument("--end-date", default=None, help="YYYY-MM-DD inclusive (default: all).")
+    y.add_argument("--batch-size", type=int, default=25, help="Trading days per backfill batch.")
+    y.add_argument("--rewrite", action="store_true", help="Re-push days already present in Supabase.")
+    y.add_argument("--perf-log", default=None, help="JSONL perf-event log path.")
+    y.add_argument("--verbose", action="store_true")
+
     return p
 
 
@@ -504,6 +557,8 @@ def main(argv: Optional[list[str]] = None) -> int:
         return run_warm(args, LOGGER)
     if args.command == "status":
         return run_status(args, LOGGER)
+    if args.command == "sync":
+        return run_sync(args, LOGGER)
     return 1
 
 
