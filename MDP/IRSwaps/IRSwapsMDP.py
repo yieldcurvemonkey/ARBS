@@ -30,6 +30,10 @@ class IRSwapsMDP(MarketDataProvider[_GenericPricable]):
         "store": None,
         "lock": threading.Lock(),
     }
+    _CITIVELO_STATE: Dict[str, Any] = {
+        "fetchers": {},
+        "lock": threading.RLock(),
+    }
     _GSQUANT_IGNORED_DATES_BY_CURVE: Dict[str, frozenset[datetime.date]] = {
         "USD-OIS": frozenset(
             datetime.date.fromisoformat(date_str)
@@ -109,6 +113,24 @@ class IRSwapsMDP(MarketDataProvider[_GenericPricable]):
             if S["builder"] is None:
                 S["builder"] = BARCHART_STIRF_CURVE()
             return S["builder"]
+
+    def _get_citivelo_fetcher(self, *, workbook_path: str, curve_id: str = "USD-SOFR-1D") -> Any:
+        """Lazily build + cache a CitiVelocityIntradayFetcher per (workbook, curve).
+
+        The fetcher parses the workbook once and memoizes built curves internally,
+        so reusing it across get_pricer / bulk_get_data calls avoids re-reading the
+        ~1-2s xlsx on every request (mirrors the BARCHART_STIRF builder cache).
+        """
+        S = IRSwapsMDP._CITIVELO_STATE
+        key = (str(workbook_path), str(curve_id))
+        with S["lock"]:
+            fetcher = S["fetchers"].get(key)
+            if fetcher is None:
+                from MDP.IRSwaps.CITI_VELOCITY_INTRADAY import CitiVelocityIntradayFetcher
+
+                fetcher = CitiVelocityIntradayFetcher(workbook_path, curve_id=curve_id)
+                S["fetchers"][key] = fetcher
+            return fetcher
 
     def _curve_store_source_family(self) -> Optional[str]:
         source = str(self.source).upper()
@@ -2065,6 +2087,35 @@ class IRSwapsMDP(MarketDataProvider[_GenericPricable]):
                 rl_curve_handle=rl_curve_handle,
                 builder=builder,
             )
+
+        elif self.source.upper() in ["CITIVELO", "CITI_VELO", "CITIVELOCITY"]:
+            from MDP.IRSwaps.CITI_VELOCITY_INTRADAY import DEFAULT_DB_PATH
+            from Query.IRSwaps.backends.rateslib.RLIRSwapCurve import RLIRSwapCurve
+
+            assert curve_name == "USD-SOFR-1D", "SOFR!"
+
+            # Citi Velocity CVTSHIST intraday par snapshots -> solved rateslib curve.
+            workbook_path = kwargs.get("workbook_path", DEFAULT_DB_PATH)
+            method = kwargs.get("method", "nearest")
+            build_kwargs = {
+                k: kwargs[k]
+                for k in ("spline_start_tenor", "interpolation", "min_tenors", "spot_lag")
+                if k in kwargs
+            }
+
+            fetcher = self._get_citivelo_fetcher(workbook_path=workbook_path, curve_id=curve_name)
+            when = None if timestamp == "live" else timestamp  # 'live' -> latest snapshot in the workbook
+            rlc = fetcher.build_curve(when, method=method, **build_kwargs)
+
+            ts = rlc.timestamp
+            rl_curve_handle = rlc.rl_pricing_curve
+
+            ref = ts.date() if hasattr(ts, "date") else datetime.date.today()
+            sofr_fixings = _fetch_fixings(as_of_date=ref, curve_name=curve_name, force_refresh=self.force_refresh_fixings).sort_index()
+            sofr_fixings: pd.Series = sofr_fixings[sofr_fixings.index.date < ref] * 100
+
+            curve_id = f"{self.source.upper()}-{curve_name}-{ts}"
+            return RLIRSwapCurve(rl_curve_id=curve_name, rl_curve_handle=rl_curve_handle, fixings=sofr_fixings, meta_data={"timestamp": ts, "id": curve_id})
 
         else:
             raise NotImplementedError(f"Curve Build '{self.source}' does not exist")
