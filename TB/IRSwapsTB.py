@@ -255,6 +255,21 @@ def _normalize_legacy_eod_cached_rows(
     return normalized_rows if used_legacy_alias else rows
 
 
+def _decompose_rate_into_outright_legs(q: IRSwapQuery) -> Optional[List[Tuple[float, str]]]:
+    if q.value != IRSwapValue.RATE:
+        return None
+    tenor_text = str(getattr(q, "tenor", "") or "").strip()
+    if not tenor_text:
+        return None
+    slash_ct = tenor_text.count("/")
+    tokens = [t.strip() for t in tenor_text.split("/") if t.strip()]
+    if slash_ct == 1 and len(tokens) == 2:
+        return [(-1.0, tokens[0]), (1.0, tokens[1])]
+    if slash_ct == 2 and len(tokens) == 3:
+        return [(-1.0, tokens[0]), (2.0, tokens[1]), (-1.0, tokens[2])]
+    return None
+
+
 def _parse_imm_relative_tokens(tenor: str) -> Optional[List[str]]:
     """Parse a tenor like 'IMM_1xIMM_2' into relative IMM tokens ['IMM_1', 'IMM_2'].
     Returns None if tenor doesn't use relative IMM ranks."""
@@ -868,6 +883,82 @@ class IRSwapsTB(LayeredCacheMixin, BaseTimeseriesTB):
         if not _is_purely_historical and cached_rows and not ignore_cache:
             cached_rows = [(d, c, v) for d, c, v in cached_rows if _as_date(d) <= _stale_cutoff]
             cached_row_keys = {(d, c) for d, c in cached_row_keys if _as_date(d) <= _stale_cutoff}
+
+        # --- Synthesize multi-leg RATE queries from cached outright legs ---
+        if self._use_ts_cache and not ignore_cache:
+            for curve_name, qs in by_curve.items():
+                curve_ref_points = ref_points_by_curve.get(curve_name, [])
+                cacheable_ref_points = [rp for rp in curve_ref_points if rp != "live"]
+                if not cacheable_ref_points:
+                    continue
+
+                decomposable: list = []
+                for q in qs:
+                    col = q.col_name(curve_name)
+                    missing = [
+                        d for d in cacheable_ref_points
+                        if (d, col) not in cached_row_keys
+                        and not _is_today(d)
+                        and (_is_purely_historical or _as_date(d) <= _stale_cutoff)
+                    ]
+                    if not missing:
+                        continue
+                    components = _decompose_rate_into_outright_legs(q)
+                    if components is None:
+                        continue
+                    decomposable.append((q, col, missing, components))
+
+                if not decomposable:
+                    continue
+
+                tenor_to_symbol: Dict[str, str] = {}
+                leg_queries: Dict[str, IRSwapQuery] = {}
+                for _q, _col, _missing, components in decomposable:
+                    for _w, tenor in components:
+                        if tenor not in tenor_to_symbol:
+                            leg_q = IRSwapQuery(curve=curve_name, tenor=tenor, value=IRSwapValue.RATE)
+                            sym = self._ts_symbol_for_query(curve_name, leg_q)
+                            tenor_to_symbol[tenor] = sym
+                            leg_queries[sym] = leg_q
+
+                all_missing = sorted(set(d for _, _, m, _ in decomposable for d in m))
+                try:
+                    leg_batch = self._computed_ts_store.read_many_symbols(
+                        symbols=list(leg_queries.keys()),
+                        reference_points=all_missing,
+                        intraday=use_intraday_cache,
+                        skip_current_eod=True,
+                        fallback_column_names={s: leg_queries[s].col_name(curve_name) for s in leg_queries},
+                        allow_partial=True,
+                    )
+                except Exception:
+                    leg_batch = {}
+
+                leg_values: Dict[str, Dict] = {}
+                for sym, leg_q in leg_queries.items():
+                    rows = leg_batch.get(sym, [])
+                    try:
+                        rows = _normalize_legacy_eod_cached_rows(mdp=self.mdp, curve_name=curve_name, query=leg_q, rows=rows)
+                    except Exception:
+                        pass
+                    leg_values[sym] = {dt: float(val) for dt, _c, val in rows}
+
+                synthesized = 0
+                for q, col, missing, components in decomposable:
+                    for d in missing:
+                        vals = []
+                        for weight, tenor in components:
+                            dv = leg_values.get(tenor_to_symbol[tenor], {}).get(d)
+                            if dv is None:
+                                break
+                            vals.append(weight * abs(dv))
+                        else:
+                            spread = sum(vals) * 100.0
+                            cached_rows.append((d, col, spread))
+                            cached_row_keys.add((d, col))
+                            synthesized += 1
+                if synthesized:
+                    self._logger.debug("Synthesized %d spread values from cached outright legs for %s", synthesized, curve_name)
 
         for curve_name, qs in by_curve.items():
             curve_ref_points = ref_points_by_curve.get(curve_name, [])
