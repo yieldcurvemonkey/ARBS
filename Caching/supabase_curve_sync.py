@@ -338,6 +338,10 @@ class SupabaseCurveSync:
         """Most recent stored snapshot for curve_name (for timestamp='live')."""
         if self._engine is None:
             return None
+        from Caching.supabase_schema import ensure_schema
+
+        if not ensure_schema(self._engine):
+            return None
         with self._engine.begin() as conn:
             row = conn.execute(
                 text(f"""
@@ -350,10 +354,16 @@ class SupabaseCurveSync:
         return self._snapshot_row_to_dict(row) if row is not None else None
 
     def pull_snapshot_asof(
-        self, curve_name: str, ts_utc, method: str = "asof"
+        self, curve_name: str, ts_utc: datetime.datetime, method: str = "asof"
     ) -> Optional[dict]:
         """As-of / nearest / exact lookup keyed on (curve_name, timestamp_utc)."""
+        if method not in ("asof", "nearest", "exact"):
+            raise ValueError(f"unknown method {method!r}; expected asof|nearest|exact")
         if self._engine is None:
+            return None
+        from Caching.supabase_schema import ensure_schema
+
+        if not ensure_schema(self._engine):
             return None
         with self._engine.begin() as conn:
             if method == "exact":
@@ -390,9 +400,15 @@ class SupabaseCurveSync:
         candidates = [self._snapshot_row_to_dict(r) for r in (before, after) if r is not None]
         return _pick_nearest(ts_utc, candidates)
 
-    def latest_snapshot_ts(self, curve_name: str, trading_date):
+    def latest_snapshot_ts(
+        self, curve_name: str, trading_date: datetime.date
+    ) -> Optional[datetime.datetime]:
         """High-water-mark timestamp_utc for (curve_name, trading_date); None if none."""
         if self._engine is None:
+            return None
+        from Caching.supabase_schema import ensure_schema
+
+        if not ensure_schema(self._engine):
             return None
         with self._engine.begin() as conn:
             row = conn.execute(

@@ -97,7 +97,6 @@ def test_pull_snapshot_asof_roundtrip():
     if sync._engine is None:
         pytest.skip("no Supabase engine configured")
 
-    base = _make_snap()
     snaps = []
     for minute in (30, 31, 33):
         s = _make_snap()
@@ -123,3 +122,12 @@ def test_pull_snapshot_asof_roundtrip():
     finally:
         with sync._engine.begin() as conn:
             conn.execute(text("DELETE FROM arbs_curve_snapshots_v1 WHERE curve_name = :cn"), {"cn": TEST_ASSET})
+
+
+def test_pull_snapshot_asof_rejects_bad_method():
+    import datetime, pytest as _pytest
+    from Caching.supabase_curve_sync import SupabaseCurveSync
+    sync = SupabaseCurveSync(base_dir=".", engine=None)
+    with _pytest.raises(ValueError):
+        sync.pull_snapshot_asof("X", datetime.datetime(2026, 7, 23, tzinfo=datetime.timezone.utc), "bogus")
+    assert sync.pull_latest_snapshot("X") is None  # None-engine guard path
