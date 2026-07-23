@@ -20,6 +20,7 @@ import argparse
 import contextlib
 import datetime
 import logging
+import sys
 import tempfile
 import time
 from logging.handlers import RotatingFileHandler
@@ -112,6 +113,29 @@ class SingleInstanceLock:
         self._fd = None
 
     def _pid_alive(self, pid: int) -> bool:
+        if pid <= 0:
+            return False
+        try:
+            import psutil
+            return psutil.pid_exists(pid)
+        except Exception:
+            pass
+        if sys.platform == "win32":
+            import ctypes
+            PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+            STILL_ACTIVE = 259
+            k32 = ctypes.windll.kernel32
+            handle = k32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, int(pid))
+            if not handle:
+                # ERROR_INVALID_PARAMETER(87)=no such pid -> dead; anything else -> assume alive
+                return k32.GetLastError() != 87
+            try:
+                code = ctypes.c_ulong()
+                if not k32.GetExitCodeProcess(handle, ctypes.byref(code)):
+                    return True  # ambiguous -> assume alive
+                return code.value == STILL_ACTIVE
+            finally:
+                k32.CloseHandle(handle)
         try:
             os.kill(pid, 0)
         except (OSError, ProcessLookupError):
@@ -157,10 +181,16 @@ def poll_once(mdp):
     return mdp.get_pricer({"curve_name": CURVE_NAME, "timestamp": "live"})  # fresh dict each call
 
 
+def _write_snapshot(sync, curve, vendor_ts) -> None:
+    snap = build_snapshot(curve, vendor_ts)
+    ok = sync.upsert_snapshot_row(snap, ASSET_NAME)
+    if not ok:
+        raise RuntimeError("upsert_snapshot_row returned False (engine unavailable or schema-ensure failed)")
+
+
 def _default_writer(curve, vendor_ts):
     from Caching.supabase_curve_sync import SupabaseCurveSync
-    snap = build_snapshot(curve, vendor_ts)
-    SupabaseCurveSync.from_defaults().upsert_snapshot_row(snap, ASSET_NAME)
+    _write_snapshot(SupabaseCurveSync.from_defaults(), curve, vendor_ts)
 
 
 def run_service(
@@ -173,9 +203,9 @@ def run_service(
     poll_seconds: int = 60,
     start_min: int = SESSION_START_MIN,
     end_min: int = SESSION_END_MIN,
+    last_ts=None,
 ) -> dict:
     counters = {"wrote": 0, "skipped": 0, "errors": 0, "polls": 0}
-    last_ts = None
     while True:
         now_et = now_fn()
         if stop_fn(now_et):
@@ -186,7 +216,8 @@ def run_service(
             try:
                 curve = poll_fn()
                 vendor_ts = curve.meta().get("timestamp")
-                ref_date = curve.reference_date().date() if curve.reference_date() is not None else now_et.date()
+                rd = curve.reference_date()
+                ref_date = rd.date() if rd is not None else now_et.date()
                 ok, reason = should_persist(vendor_ts, now_et, ref_date, last_ts)
                 if ok:
                     writer_fn(curve, vendor_ts)
@@ -248,6 +279,9 @@ def main(argv: Optional[list] = None) -> int:
         logger.error("another instance holds the lock; exiting")
         return 3
     try:
+        from Caching.supabase_curve_sync import SupabaseCurveSync
+        sync = SupabaseCurveSync.from_defaults()
+
         mdp = _build_mdp()
         if args.once:
             now_et = datetime.datetime.now(_ET)
@@ -256,7 +290,7 @@ def main(argv: Optional[list] = None) -> int:
                 logger.warning("--once outside session/holiday; polling anyway for smoke")
             curve = poll_once(mdp)
             vendor_ts = curve.meta().get("timestamp")
-            _default_writer(curve, vendor_ts)
+            _write_snapshot(sync, curve, vendor_ts)
             logger.info("--once wrote snapshot ts=%s", vendor_ts)
             return 0
 
@@ -265,14 +299,17 @@ def main(argv: Optional[list] = None) -> int:
         def stop_fn(now_et):
             return (now_et.hour * 60 + now_et.minute) >= stop_min
 
+        initial_last_ts = sync.latest_snapshot_ts(ASSET_NAME, datetime.datetime.now(_ET).date())
+
         counters = run_service(
             poll_fn=lambda: poll_once(mdp),
             now_fn=lambda: datetime.datetime.now(_ET),
-            writer_fn=_default_writer,
+            writer_fn=lambda curve, ts: _write_snapshot(sync, curve, ts),
             stop_fn=stop_fn,
             poll_seconds=args.poll_seconds,
             start_min=_parse_hm(args.session_start),
             end_min=_parse_hm(args.session_end),
+            last_ts=initial_last_ts,
         )
         logger.info("session done: %s", counters)
         return 0

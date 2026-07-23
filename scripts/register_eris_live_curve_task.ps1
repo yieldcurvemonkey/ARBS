@@ -18,7 +18,7 @@ $settings = New-ScheduledTaskSettingsSet `
     -MultipleInstances IgnoreNew `
     -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 1) `
     -StartWhenAvailable `
-    -ExecutionTimeLimit (New-TimeSpan -Hours 12) `
+    -ExecutionTimeLimit (New-TimeSpan -Hours 18) `
     -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries
 
 if ($WhatIf) {

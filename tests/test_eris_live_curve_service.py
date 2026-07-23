@@ -79,6 +79,16 @@ def test_single_instance_lock(tmp_path, monkeypatch):
     b.release()
 
 
+def test_single_instance_lock_reclaims_dead_pid(tmp_path, monkeypatch):
+    monkeypatch.setattr(svc.tempfile, "gettempdir", lambda: str(tmp_path))
+    # plant a lock file owned by a PID that is not alive
+    lock = svc.SingleInstanceLock("eris-dead")
+    (tmp_path / "arbs_eris_live_curve").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "arbs_eris_live_curve" / "eris-dead.lock").write_text("2147483646")  # implausible/dead PID
+    assert lock.acquire() is True  # reclaimed from dead PID
+    lock.release()
+
+
 def test_run_service_dedups_and_gates(monkeypatch):
     calls = {"writes": []}
 
