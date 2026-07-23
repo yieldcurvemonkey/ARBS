@@ -149,3 +149,131 @@ class SingleInstanceLock:
             self._fd = None
         with contextlib.suppress(FileNotFoundError):
             self._path.unlink()
+
+
+def _build_mdp():
+    from MDP.IRSwaps.IRSwapsMDP import IRSwapsMDP
+    return IRSwapsMDP(source=SOURCE_STRING, error_verbose=True)
+
+
+def poll_once(mdp):
+    """One live poll. Returns the RLIRSwapCurve; raises on failure."""
+    return mdp.get_pricer({"curve_name": CURVE_NAME, "timestamp": "live"})  # fresh dict each call
+
+
+def _default_writer(curve, vendor_ts):
+    from Caching.supabase_curve_sync import SupabaseCurveSync
+    snap = build_snapshot(curve, vendor_ts)
+    SupabaseCurveSync.from_defaults().upsert_snapshot_row(snap, ASSET_NAME)
+
+
+def run_service(
+    *,
+    poll_fn,
+    now_fn,
+    writer_fn,
+    sleep_fn=time.sleep,
+    stop_fn,
+    poll_seconds: int = 60,
+    start_min: int = SESSION_START_MIN,
+    end_min: int = SESSION_END_MIN,
+) -> dict:
+    counters = {"wrote": 0, "skipped": 0, "errors": 0, "polls": 0}
+    last_ts = None
+    while True:
+        now_et = now_fn()
+        if stop_fn(now_et):
+            break
+        t0 = time.monotonic()
+        if is_business_day(now_et.date()) and in_session(now_et, start_min=start_min, end_min=end_min):
+            counters["polls"] += 1
+            try:
+                curve = poll_fn()
+                vendor_ts = curve.meta().get("timestamp")
+                ref_date = curve.reference_date().date() if curve.reference_date() is not None else now_et.date()
+                ok, reason = should_persist(vendor_ts, now_et, ref_date, last_ts)
+                if ok:
+                    writer_fn(curve, vendor_ts)
+                    last_ts = vendor_ts
+                    counters["wrote"] += 1
+                    logger.info("wrote snapshot ts=%s nodes<-curve", vendor_ts)
+                else:
+                    counters["skipped"] += 1
+                    logger.info("skip: %s", reason)
+            except ValueError as exc:  # non-business-day guard OR empty-fetch unpack
+                counters["skipped"] += 1
+                logger.warning("skip poll (ValueError): %s", exc)
+            except Exception:  # network/fixings/parse — isolate the cycle
+                counters["errors"] += 1
+                logger.exception("poll failed; continuing")
+        sleep_fn(max(0.0, poll_seconds - (time.monotonic() - t0)))
+    return counters
+
+
+def _configure_logging(log_dir: str) -> None:
+    Path(log_dir).mkdir(parents=True, exist_ok=True)
+    handler = RotatingFileHandler(Path(log_dir) / "eris_live_curve_service.log",
+                                  maxBytes=10 * 1024 * 1024, backupCount=7)
+    handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(message)s"))
+    logging.getLogger("eris_live_curve_service").addHandler(handler)
+    logging.getLogger("eris_live_curve_service").addHandler(logging.StreamHandler())
+    logging.getLogger("eris_live_curve_service").setLevel(logging.INFO)
+
+
+def _parse_hm(s: str) -> int:
+    hh, mm = s.split(":")
+    return int(hh) * 60 + int(mm)
+
+
+def main(argv: Optional[list] = None) -> int:
+    parser = argparse.ArgumentParser(description="ERIS live intraday curve snapshot service")
+    sub = parser.add_subparsers(dest="cmd", required=True)
+    run = sub.add_parser("run")
+    run.add_argument("--once", action="store_true", help="single poll then exit")
+    run.add_argument("--poll-seconds", type=int, default=60)
+    run.add_argument("--session-start", default="08:00")
+    run.add_argument("--session-end", default="17:00")
+    run.add_argument("--stop-at", default="17:15")
+    run.add_argument("--log-dir", default=str(Path("logs") / "eris_live_curve_service"))
+    args = parser.parse_args(argv)
+
+    _configure_logging(args.log_dir)
+    lock = SingleInstanceLock("eris-live-curve")
+    if not lock.acquire():
+        logger.error("another instance holds the lock; exiting")
+        return 3
+    try:
+        mdp = _build_mdp()
+        if args.once:
+            now_et = datetime.datetime.now(_ET)
+            if not (is_business_day(now_et.date()) and in_session(
+                now_et, start_min=_parse_hm(args.session_start), end_min=_parse_hm(args.session_end))):
+                logger.warning("--once outside session/holiday; polling anyway for smoke")
+            curve = poll_once(mdp)
+            vendor_ts = curve.meta().get("timestamp")
+            _default_writer(curve, vendor_ts)
+            logger.info("--once wrote snapshot ts=%s", vendor_ts)
+            return 0
+
+        stop_min = _parse_hm(args.stop_at)
+
+        def stop_fn(now_et):
+            return (now_et.hour * 60 + now_et.minute) >= stop_min
+
+        counters = run_service(
+            poll_fn=lambda: poll_once(mdp),
+            now_fn=lambda: datetime.datetime.now(_ET),
+            writer_fn=_default_writer,
+            stop_fn=stop_fn,
+            poll_seconds=args.poll_seconds,
+            start_min=_parse_hm(args.session_start),
+            end_min=_parse_hm(args.session_end),
+        )
+        logger.info("session done: %s", counters)
+        return 0
+    finally:
+        lock.release()
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

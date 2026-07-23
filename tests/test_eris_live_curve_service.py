@@ -76,3 +76,49 @@ def test_single_instance_lock(tmp_path, monkeypatch):
     a.release()
     assert b.acquire() is True      # reclaimed after release
     b.release()
+
+
+def test_run_service_dedups_and_gates(monkeypatch):
+    import datetime
+    calls = {"writes": []}
+
+    ticks = [
+        _et(2026, 7, 23, 8, 0),   # in session -> write (first, fresh stamp)
+        _et(2026, 7, 23, 8, 1),   # in session, same vendor stamp -> skip
+        _et(2026, 7, 23, 17, 30), # past stop -> loop ends
+    ]
+    stamps = [
+        _et(2026, 7, 23, 7, 59, 40),
+        _et(2026, 7, 23, 7, 59, 40),  # unchanged
+    ]
+    now_iter = iter(ticks)
+    stamp_iter = iter(stamps)
+
+    class FakeCurve:
+        def __init__(self, ts):
+            self._ts = ts
+        def meta(self):
+            return {"timestamp": self._ts}
+        def reference_date(self):
+            return None
+
+    def now_fn():
+        return next(now_iter)
+
+    def poll_fn():
+        return FakeCurve(next(stamp_iter))
+
+    def writer_fn(curve, vendor_ts):
+        calls["writes"].append(vendor_ts)
+
+    def stop_fn(now_et):
+        return now_et.hour >= 17  # stop after session
+
+    # bypass the ref_date==today freshness leg for this synthetic clock:
+    monkeypatch.setattr(svc, "should_persist",
+                        lambda vt, now, ref, last, **k: (last != vt and (now - vt.astimezone(now.tzinfo)).total_seconds() <= 90, "unchanged" if last == vt else "ok"))
+
+    counters = svc.run_service(poll_fn=poll_fn, now_fn=now_fn, writer_fn=writer_fn,
+                               sleep_fn=lambda s: None, stop_fn=stop_fn, poll_seconds=0)
+    assert len(calls["writes"]) == 1
+    assert counters["wrote"] == 1 and counters["skipped"] == 1
