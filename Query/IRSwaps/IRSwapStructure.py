@@ -327,6 +327,8 @@ class IRSwapStructureFunctionMap(BaseStructureFunctionMap[IRSwapStructure, _IRSw
         try:
 
             def _normalize_leg(s: str) -> str:
+                if s.upper().startswith("IMM_"):
+                    return s
                 # grab tenor tokens like 3M, 6m, 1Y, 2y (case-insensitive)
                 parts = re.findall(r"\d+\s*[dwmy]", s, flags=re.I)
                 parts = [p.upper().replace(" ", "") for p in parts]
