@@ -35,6 +35,7 @@ class IRSwapsMDP(MarketDataProvider[_GenericPricable]):
         "lock": threading.RLock(),
     }
     _CITIVELO_STORE_ASSET: str = "USD-SOFR-1D-CITIVELO"
+    _ERIS_LIVE_STORE_ASSET: str = "USD-SOFR-1D-ERISLIVE"
     _GSQUANT_IGNORED_DATES_BY_CURVE: Dict[str, frozenset[datetime.date]] = {
         "USD-OIS": frozenset(
             datetime.date.fromisoformat(date_str)
@@ -214,6 +215,62 @@ class IRSwapsMDP(MarketDataProvider[_GenericPricable]):
             rl_curve_handle=rl_curve_handle,
             fixings=sofr_fixings,
             meta_data={"timestamp": ts_out, "id": curve_id, "source": "curve_store"},
+        )
+
+    def _load_eris_live_intraday_point(
+        self,
+        *,
+        requested_curve_name: str,
+        timestamp: Union[datetime.datetime, datetime.date, pd.Timestamp, Literal["live"]],
+        method: str = "asof",
+    ) -> Optional["_IRSwapGenericCurve"]:
+        """Serve a stored ERIS-live intraday curve from arbs_curve_snapshots_v1.
+
+        Reads one row by indexed as-of SQL (no whole-day materialization),
+        reconstructs the rl.Curve, and wraps it as an RLIRSwapCurve.
+        Returns None when the store has no matching row.
+        """
+        import pytz
+
+        from Caching.curve_store import CurveStore
+        from Caching.supabase_curve_sync import SupabaseCurveSync
+        from Query.IRSwaps.backends.rateslib.RLIRSwapCurve import RLIRSwapCurve
+
+        assert requested_curve_name == "USD-SOFR-1D", "ERIS live intraday is USD-SOFR-1D only"
+        ASSET = self._ERIS_LIVE_STORE_ASSET
+        NYC = pytz.timezone("America/New_York")
+        sync = SupabaseCurveSync.from_defaults()
+
+        if timestamp == "live":
+            row = sync.pull_latest_snapshot(ASSET)
+        else:
+            ts = pd.Timestamp(timestamp)
+            if ts.tzinfo is None:
+                ts = ts.tz_localize(NYC)  # naive assumed ET
+            row = sync.pull_snapshot_asof(ASSET, ts.tz_convert("UTC").to_pydatetime(), method)
+        if row is None:
+            return None
+
+        rl_curve_handle = CurveStore.reconstruct_curve(row, cfg=None)
+
+        snap_utc = pd.Timestamp(row["timestamp_utc"])
+        if snap_utc.tzinfo is None:
+            snap_utc = snap_utc.tz_localize("UTC")
+        snap_et = snap_utc.tz_convert(NYC)
+        ref = snap_et.date()
+        ts_out = snap_et.to_pydatetime()
+
+        sofr_fixings = _fetch_fixings(
+            as_of_date=ref, curve_name=requested_curve_name, force_refresh=self.force_refresh_fixings
+        ).sort_index()
+        sofr_fixings = sofr_fixings[sofr_fixings.index.date < ref] * 100
+
+        curve_id = f"{self.source.upper()}-{requested_curve_name}-{ts_out}"
+        return RLIRSwapCurve(
+            rl_curve_id=requested_curve_name,
+            rl_curve_handle=rl_curve_handle,
+            fixings=sofr_fixings,
+            meta_data={"timestamp": ts_out, "id": curve_id, "source": "eris_live_intraday"},
         )
 
     def _curve_store_source_family(self) -> Optional[str]:
@@ -2218,6 +2275,19 @@ class IRSwapsMDP(MarketDataProvider[_GenericPricable]):
 
             curve_id = f"{self.source.upper()}-{curve_name}-{ts}"
             return RLIRSwapCurve(rl_curve_id=curve_name, rl_curve_handle=rl_curve_handle, fixings=sofr_fixings, meta_data={"timestamp": ts, "id": curve_id})
+
+        elif self.source.upper() in ["ERIS_LIVE_INTRADAY", "ERIS_LIVE-INTRADAY"]:
+            assert curve_name == "USD-SOFR-1D", "SOFR!"
+            method = kwargs.get("method", "asof")
+            store_curve = self._load_eris_live_intraday_point(
+                requested_curve_name=curve_name, timestamp=timestamp, method=method
+            )
+            if store_curve is not None:
+                return store_curve
+            raise RuntimeError(
+                f"ERIS live intraday store (asset {self._ERIS_LIVE_STORE_ASSET}) has no data for "
+                f"timestamp={timestamp!r}. Run the poller (scripts/eris_live_curve_service.py)."
+            )
 
         else:
             raise NotImplementedError(f"Curve Build '{self.source}' does not exist")
