@@ -38,6 +38,23 @@ def _to_python_date(value: object) -> datetime.date:
     return datetime.date.fromisoformat(str(value))
 
 
+def _snapshot_insert_params(snap, curve_name: str) -> dict:
+    """Bound-param dict for a single untagged arbs_curve_snapshots_v1 upsert."""
+    return {
+        "curve_name": curve_name,
+        "timestamp_utc": snap.timestamp_utc,
+        "trading_date": snap.trading_date,
+        "session_minute": int(snap.session_minute),
+        "tags": [],  # untagged; TEXT[] NOT NULL DEFAULT '{}' accepts an empty list
+        "cfg_hash": str(snap.cfg_hash),
+        "reference_key": str(snap.reference_key),
+        "interpolation": str(snap.interpolation),
+        "source_variant": str(snap.source_variant),
+        "node_dates": [_to_python_date(d) for d in snap.node_dates],
+        "discount_factors": [float(v) for v in snap.discount_factors],
+    }
+
+
 class SupabaseCurveSync:
     """Sync CurveStore Parquet files with Supabase curve tables."""
 
@@ -249,6 +266,44 @@ class SupabaseCurveSync:
                     "discount_factors": discount_factors,
                 },
             )
+
+    def upsert_snapshot_row(self, snap, curve_name: str) -> bool:
+        """UPSERT one untagged curve snapshot into arbs_curve_snapshots_v1.
+
+        Unlike push_day (whole-day BYTEA blob), this writes a single indexed
+        row keyed (curve_name, timestamp_utc). Idempotent. Returns False when
+        no engine is configured.
+        """
+        if self._engine is None:
+            return False
+        from Caching.supabase_schema import ensure_schema
+
+        if not ensure_schema(self._engine):
+            return False
+
+        with self._engine.begin() as conn:
+            conn.execute(
+                text(f"""
+                    INSERT INTO {CURVE_SNAPSHOTS_TABLE}
+                        (curve_name, timestamp_utc, trading_date, session_minute,
+                         tags, cfg_hash, reference_key, interpolation, source_variant,
+                         node_dates, discount_factors)
+                    VALUES
+                        (:curve_name, :timestamp_utc, :trading_date, :session_minute,
+                         :tags, :cfg_hash, :reference_key, :interpolation, :source_variant,
+                         :node_dates, :discount_factors)
+                    ON CONFLICT (curve_name, timestamp_utc) DO UPDATE SET
+                        trading_date = EXCLUDED.trading_date,
+                        session_minute = EXCLUDED.session_minute,
+                        reference_key = EXCLUDED.reference_key,
+                        interpolation = EXCLUDED.interpolation,
+                        source_variant = EXCLUDED.source_variant,
+                        node_dates = EXCLUDED.node_dates,
+                        discount_factors = EXCLUDED.discount_factors
+                """),
+                _snapshot_insert_params(snap, curve_name),
+            )
+        return True
 
     def pull_day(
         self, curve_name: str, trading_date: datetime.date
