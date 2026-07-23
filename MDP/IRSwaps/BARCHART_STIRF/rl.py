@@ -1796,7 +1796,10 @@ class BARCHART_STIRF_CURVE(LayeredCacheMixin):
         """Persist a single curve to the local diskcache only, bypassing L2 writes."""
         key = self._curve_cache_key(curve_name, timestamp, cfg)
         mapping = self._curve_cache_mapping()
-        l1_mapping = mapping.raw if hasattr(mapping, "raw") else mapping
+        try:
+            l1_mapping = mapping.raw
+        except (AttributeError, AssertionError):
+            l1_mapping = mapping
         ts_utc = timestamp.astimezone(pytz.utc).replace(microsecond=0)
         l1_mapping[key] = {
             "schema": self._CURVE_CACHE_SCHEMA,
@@ -1852,7 +1855,10 @@ class BARCHART_STIRF_CURVE(LayeredCacheMixin):
 
         # Phase 2: L1 diskcache reads (bypass L2 per-key to avoid N round-trips).
         mapping = self._curve_cache_mapping()
-        l1_raw = mapping.raw if hasattr(mapping, "raw") else mapping
+        try:
+            l1_raw = mapping.raw
+        except (AttributeError, AssertionError):
+            l1_raw = mapping
         l2_needed: List[Tuple[str, datetime.datetime]] = []
 
         def _read_l1(item: Tuple[str, datetime.datetime]) -> Tuple[str, datetime.datetime, Any]:
@@ -1897,7 +1903,12 @@ class BARCHART_STIRF_CURVE(LayeredCacheMixin):
 
         # Phase 3: batched L2 (Supabase) read for all L1 misses.
         misses: List[datetime.datetime] = []
-        if hasattr(mapping, "bulk_get"):
+        _has_bulk_get = False
+        try:
+            _has_bulk_get = hasattr(mapping, "bulk_get")
+        except (AssertionError, Exception):
+            pass
+        if _has_bulk_get:
             l2_keys = [key for key, _ in l2_needed]
             ts_by_key = {key: ts for key, ts in l2_needed}
             l2_hits, l2_miss_keys = mapping.bulk_get(l2_keys)
@@ -1949,7 +1960,10 @@ class BARCHART_STIRF_CURVE(LayeredCacheMixin):
         """Store node values for an entire day into a single local bundle entry."""
         key = self._curve_cache_daily_bundle_key(curve_name, date, cfg)
         mapping = self._curve_cache_daily_bundle_mapping()
-        l1_mapping = mapping.raw if hasattr(mapping, "raw") else mapping
+        try:
+            l1_mapping = mapping.raw
+        except (AttributeError, AssertionError):
+            l1_mapping = mapping
 
         # Extract nodes from all curves. Nodes keys are pd.Timestamp (dt) or rl.dt.
         # We store them as a nested dict: {ts_iso: {node_ts_iso: value}}
