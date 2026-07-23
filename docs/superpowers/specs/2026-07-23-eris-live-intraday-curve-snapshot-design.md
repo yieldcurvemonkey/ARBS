@@ -2,7 +2,7 @@
 
 **Date**: 2026-07-23
 **Owner**: @yieldcurvemonkey
-**Status**: Draft for review
+**Status**: Implemented
 **Companion**: `2026-07-23-eris-live-intraday-curve-snapshot-implementation.md` (to be written by the writing-plans step)
 **Related**: CitiVelo intraday curve pipeline (PRs #358→#359→#360, `scripts/citivelo_curve_service.py`) — the closest existing precedent for intraday-granular curve handles persisted to Supabase; this design clones its shape with a different read/write target.
 
