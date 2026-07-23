@@ -16,10 +16,6 @@ import os
 
 os.environ.setdefault("ARBS_SUPABASE_ENABLED", "1")  # engine ON for our writes
 
-from Caching.layered_cache_mixin import LayeredCacheMixin
-
-LayeredCacheMixin.L2_WRITE = False  # kill the fetcher's dead ~820KB/poll KV write
-
 import argparse
 import contextlib
 import datetime
@@ -212,12 +208,14 @@ def run_service(
 
 def _configure_logging(log_dir: str) -> None:
     Path(log_dir).mkdir(parents=True, exist_ok=True)
-    handler = RotatingFileHandler(Path(log_dir) / "eris_live_curve_service.log",
-                                  maxBytes=10 * 1024 * 1024, backupCount=7)
-    handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(message)s"))
-    logging.getLogger("eris_live_curve_service").addHandler(handler)
-    logging.getLogger("eris_live_curve_service").addHandler(logging.StreamHandler())
-    logging.getLogger("eris_live_curve_service").setLevel(logging.INFO)
+    logger = logging.getLogger("eris_live_curve_service")
+    if not logger.handlers:
+        handler = RotatingFileHandler(Path(log_dir) / "eris_live_curve_service.log",
+                                      maxBytes=10 * 1024 * 1024, backupCount=7)
+        handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(message)s"))
+        logger.addHandler(handler)
+        logger.addHandler(logging.StreamHandler())
+        logger.setLevel(logging.INFO)
 
 
 def _parse_hm(s: str) -> int:
@@ -238,6 +236,13 @@ def main(argv: Optional[list] = None) -> int:
     args = parser.parse_args(argv)
 
     _configure_logging(args.log_dir)
+
+    # Suppress the ERIS fetcher's dead per-poll L2 KV write. Done here (not at
+    # import) so importing this module for its helpers/CLI does not mutate the
+    # shared LayeredCacheMixin.L2_WRITE class attribute for the whole process.
+    from Caching.layered_cache_mixin import LayeredCacheMixin
+    LayeredCacheMixin.L2_WRITE = False
+
     lock = SingleInstanceLock("eris-live-curve")
     if not lock.acquire():
         logger.error("another instance holds the lock; exiting")

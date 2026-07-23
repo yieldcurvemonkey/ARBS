@@ -23,6 +23,7 @@ def test_is_business_day():
     assert svc.is_business_day(datetime.date(2026, 7, 23)) is True     # Thursday
     assert svc.is_business_day(datetime.date(2026, 7, 25)) is False    # Saturday
     assert svc.is_business_day(datetime.date(2026, 7, 4)) is False     # Independence Day (observed context)
+    assert svc.is_business_day(datetime.date(2026, 1, 1)) is False     # New Year's Day (Thursday, genuine holiday)
 
 
 def test_should_persist_dedup_and_freshness():
@@ -79,7 +80,6 @@ def test_single_instance_lock(tmp_path, monkeypatch):
 
 
 def test_run_service_dedups_and_gates(monkeypatch):
-    import datetime
     calls = {"writes": []}
 
     ticks = [
