@@ -115,7 +115,9 @@ def test_eris_live_intraday_bulk_reads_seeded_rows():
         s_raw = sh.nodes._nodes if hasattr(sh.nodes, "_nodes") else dict(sh.nodes)
         bh = out[ts1].handle()
         b_raw = bh.nodes._nodes if hasattr(bh.nodes, "_nodes") else dict(bh.nodes)
-        assert sorted(float(v) for v in s_raw.values()) == sorted(float(v) for v in b_raw.values())
+        # compare node keys AND values (not just sorted values) so a date-mapping
+        # bug can't slip through
+        assert {str(k): float(v) for k, v in s_raw.items()} == {str(k): float(v) for k, v in b_raw.items()}
     finally:
         with sync._engine.begin() as conn:
             conn.execute(

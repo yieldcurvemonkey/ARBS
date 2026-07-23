@@ -223,7 +223,7 @@ class IRSwapsMDP(MarketDataProvider[_GenericPricable]):
         requested_curve_name: str,
         timestamp: Union[datetime.datetime, datetime.date, pd.Timestamp, Literal["live"]],
         method: str = "asof",
-        sync: Optional[Any] = None,
+        sync: Optional["SupabaseCurveSync"] = None,
     ) -> Optional["_IRSwapGenericCurve"]:
         """Serve a stored ERIS-live intraday curve from arbs_curve_snapshots_v1.
 
@@ -2996,6 +2996,7 @@ class IRSwapsMDP(MarketDataProvider[_GenericPricable]):
             return out
 
         elif self.source.upper() in ["ERIS_LIVE_INTRADAY", "ERIS_LIVE-INTRADAY"]:
+            assert curve_name == "USD-SOFR-1D", "SOFR!"  # fail fast, matching the single-point path
             # Dedicated intraday bulk path: one shared SupabaseCurveSync + one
             # indexed as-of read per requested timestamp, keyed by the original
             # timestamp. Partial results — a timestamp with no stored snapshot is
