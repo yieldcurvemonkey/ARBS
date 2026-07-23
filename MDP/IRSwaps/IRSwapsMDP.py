@@ -223,12 +223,14 @@ class IRSwapsMDP(MarketDataProvider[_GenericPricable]):
         requested_curve_name: str,
         timestamp: Union[datetime.datetime, datetime.date, pd.Timestamp, Literal["live"]],
         method: str = "asof",
+        sync: Optional[Any] = None,
     ) -> Optional["_IRSwapGenericCurve"]:
         """Serve a stored ERIS-live intraday curve from arbs_curve_snapshots_v1.
 
         Reads one row by indexed as-of SQL (no whole-day materialization),
         reconstructs the rl.Curve, and wraps it as an RLIRSwapCurve.
-        Returns None when the store has no matching row.
+        Returns None when the store has no matching row. Pass ``sync`` to reuse
+        a single ``SupabaseCurveSync`` across a bulk read (see ``bulk_get_data``).
         """
         import pytz
 
@@ -239,7 +241,8 @@ class IRSwapsMDP(MarketDataProvider[_GenericPricable]):
         assert requested_curve_name == "USD-SOFR-1D", "ERIS live intraday is USD-SOFR-1D only"
         ASSET = self._ERIS_LIVE_STORE_ASSET
         NYC = pytz.timezone("America/New_York")
-        sync = SupabaseCurveSync.from_defaults()
+        if sync is None:
+            sync = SupabaseCurveSync.from_defaults()
 
         if timestamp == "live":
             row = sync.pull_latest_snapshot(ASSET)
@@ -2990,6 +2993,29 @@ class IRSwapsMDP(MarketDataProvider[_GenericPricable]):
                     )
                 except Exception:
                     continue
+            return out
+
+        elif self.source.upper() in ["ERIS_LIVE_INTRADAY", "ERIS_LIVE-INTRADAY"]:
+            # Dedicated intraday bulk path: one shared SupabaseCurveSync + one
+            # indexed as-of read per requested timestamp, keyed by the original
+            # timestamp. Partial results — a timestamp with no stored snapshot is
+            # omitted (mirroring the SDR_INTRADAY branches) rather than raising.
+            from Caching.supabase_curve_sync import SupabaseCurveSync
+
+            method = str(request.get("method", "asof"))
+            sync = SupabaseCurveSync.from_defaults()
+            for t in timestamps:
+                try:
+                    curve = self._load_eris_live_intraday_point(
+                        requested_curve_name=curve_name,
+                        timestamp=t,
+                        method=method,
+                        sync=sync,
+                    )
+                except Exception:
+                    continue
+                if curve is not None:
+                    out[t] = curve
             return out
 
         # ------- default / not implemented -------
