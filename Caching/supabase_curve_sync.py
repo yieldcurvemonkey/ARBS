@@ -55,6 +55,17 @@ def _snapshot_insert_params(snap, curve_name: str) -> dict:
     }
 
 
+def _pick_nearest(target_utc, rows: list) -> Optional[dict]:
+    """Row with minimum absolute time distance to target_utc (None if empty)."""
+    best = None
+    best_delta = None
+    for r in rows:
+        delta = abs((r["timestamp_utc"] - target_utc).total_seconds())
+        if best_delta is None or delta < best_delta:
+            best, best_delta = r, delta
+    return best
+
+
 class SupabaseCurveSync:
     """Sync CurveStore Parquet files with Supabase curve tables."""
 
@@ -304,6 +315,94 @@ class SupabaseCurveSync:
                 _snapshot_insert_params(snap, curve_name),
             )
         return True
+
+    _SNAPSHOT_COLS = (
+        "curve_name, timestamp_utc, trading_date, session_minute, "
+        "reference_key, interpolation, source_variant, node_dates, discount_factors"
+    )
+
+    def _snapshot_row_to_dict(self, row) -> dict:
+        return {
+            "curve_name": row.curve_name,
+            "timestamp_utc": row.timestamp_utc,
+            "trading_date": row.trading_date,
+            "session_minute": row.session_minute,
+            "reference_key": row.reference_key,
+            "interpolation": row.interpolation,
+            "source_variant": row.source_variant,
+            "node_dates": list(row.node_dates),
+            "discount_factors": [float(v) for v in row.discount_factors],
+        }
+
+    def pull_latest_snapshot(self, curve_name: str) -> Optional[dict]:
+        """Most recent stored snapshot for curve_name (for timestamp='live')."""
+        if self._engine is None:
+            return None
+        with self._engine.begin() as conn:
+            row = conn.execute(
+                text(f"""
+                    SELECT {self._SNAPSHOT_COLS} FROM {CURVE_SNAPSHOTS_TABLE}
+                    WHERE curve_name = :cn
+                    ORDER BY timestamp_utc DESC LIMIT 1
+                """),
+                {"cn": curve_name},
+            ).fetchone()
+        return self._snapshot_row_to_dict(row) if row is not None else None
+
+    def pull_snapshot_asof(
+        self, curve_name: str, ts_utc, method: str = "asof"
+    ) -> Optional[dict]:
+        """As-of / nearest / exact lookup keyed on (curve_name, timestamp_utc)."""
+        if self._engine is None:
+            return None
+        with self._engine.begin() as conn:
+            if method == "exact":
+                row = conn.execute(
+                    text(f"""
+                        SELECT {self._SNAPSHOT_COLS} FROM {CURVE_SNAPSHOTS_TABLE}
+                        WHERE curve_name = :cn AND timestamp_utc = :ts LIMIT 1
+                    """),
+                    {"cn": curve_name, "ts": ts_utc},
+                ).fetchone()
+                return self._snapshot_row_to_dict(row) if row is not None else None
+
+            before = conn.execute(
+                text(f"""
+                    SELECT {self._SNAPSHOT_COLS} FROM {CURVE_SNAPSHOTS_TABLE}
+                    WHERE curve_name = :cn AND timestamp_utc <= :ts
+                    ORDER BY timestamp_utc DESC LIMIT 1
+                """),
+                {"cn": curve_name, "ts": ts_utc},
+            ).fetchone()
+            if method == "asof":
+                return self._snapshot_row_to_dict(before) if before is not None else None
+
+            # nearest: also consider the first row strictly after ts
+            after = conn.execute(
+                text(f"""
+                    SELECT {self._SNAPSHOT_COLS} FROM {CURVE_SNAPSHOTS_TABLE}
+                    WHERE curve_name = :cn AND timestamp_utc > :ts
+                    ORDER BY timestamp_utc ASC LIMIT 1
+                """),
+                {"cn": curve_name, "ts": ts_utc},
+            ).fetchone()
+
+        candidates = [self._snapshot_row_to_dict(r) for r in (before, after) if r is not None]
+        return _pick_nearest(ts_utc, candidates)
+
+    def latest_snapshot_ts(self, curve_name: str, trading_date):
+        """High-water-mark timestamp_utc for (curve_name, trading_date); None if none."""
+        if self._engine is None:
+            return None
+        with self._engine.begin() as conn:
+            row = conn.execute(
+                text(f"""
+                    SELECT max(timestamp_utc) AS ts FROM {CURVE_SNAPSHOTS_TABLE}
+                    WHERE curve_name = :cn AND trading_date = :td
+                """),
+                {"cn": curve_name, "td": trading_date},
+            ).fetchone()
+        return row.ts if row is not None else None
 
     def pull_day(
         self, curve_name: str, trading_date: datetime.date

@@ -69,3 +69,57 @@ def test_upsert_snapshot_row_roundtrip():
                 text("DELETE FROM arbs_curve_snapshots_v1 WHERE curve_name = :cn"),
                 {"cn": TEST_ASSET},
             )
+
+
+def test_pick_nearest():
+    import datetime
+    from Caching.supabase_curve_sync import _pick_nearest
+
+    utc = datetime.timezone.utc
+    rows = [
+        {"timestamp_utc": datetime.datetime(2026, 7, 23, 14, 30, tzinfo=utc), "id": "a"},
+        {"timestamp_utc": datetime.datetime(2026, 7, 23, 14, 33, tzinfo=utc), "id": "b"},
+    ]
+    target = datetime.datetime(2026, 7, 23, 14, 31, 10, tzinfo=utc)
+    assert _pick_nearest(target, rows)["id"] == "a"
+    assert _pick_nearest(target, [])  is None
+
+
+@pytest.mark.db
+def test_pull_snapshot_asof_roundtrip():
+    import datetime
+    from sqlalchemy import text
+    from Caching.supabase_curve_sync import SupabaseCurveSync
+
+    TEST_ASSET = "USD-SOFR-1D-ERISLIVE-TEST"
+    utc = datetime.timezone.utc
+    sync = SupabaseCurveSync.from_defaults()
+    if sync._engine is None:
+        pytest.skip("no Supabase engine configured")
+
+    base = _make_snap()
+    snaps = []
+    for minute in (30, 31, 33):
+        s = _make_snap()
+        s.timestamp_utc = datetime.datetime(2026, 7, 23, 14, minute, tzinfo=utc)
+        s.session_minute = 14 * 60 + minute
+        snaps.append(s)
+    try:
+        for s in snaps:
+            sync.upsert_snapshot_row(s, TEST_ASSET)
+
+        # asof 14:32 -> the 14:31 row
+        r = sync.pull_snapshot_asof(TEST_ASSET, datetime.datetime(2026, 7, 23, 14, 32, tzinfo=utc), "asof")
+        assert r["timestamp_utc"] == datetime.datetime(2026, 7, 23, 14, 31, tzinfo=utc)
+        # nearest 14:32:10 -> the 14:33 row is 50s away, 14:31 is 70s away -> 14:33
+        r = sync.pull_snapshot_asof(TEST_ASSET, datetime.datetime(2026, 7, 23, 14, 32, 10, tzinfo=utc), "nearest")
+        assert r["timestamp_utc"] == datetime.datetime(2026, 7, 23, 14, 33, tzinfo=utc)
+        # exact miss
+        assert sync.pull_snapshot_asof(TEST_ASSET, datetime.datetime(2026, 7, 23, 14, 32, tzinfo=utc), "exact") is None
+        # latest
+        assert sync.pull_latest_snapshot(TEST_ASSET)["timestamp_utc"] == datetime.datetime(2026, 7, 23, 14, 33, tzinfo=utc)
+        # high-water-mark
+        assert sync.latest_snapshot_ts(TEST_ASSET, datetime.date(2026, 7, 23)) == datetime.datetime(2026, 7, 23, 14, 33, tzinfo=utc)
+    finally:
+        with sync._engine.begin() as conn:
+            conn.execute(text("DELETE FROM arbs_curve_snapshots_v1 WHERE curve_name = :cn"), {"cn": TEST_ASSET})
