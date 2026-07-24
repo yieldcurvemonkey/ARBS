@@ -131,3 +131,15 @@ def test_pull_snapshot_asof_rejects_bad_method():
     with _pytest.raises(ValueError):
         sync.pull_snapshot_asof("X", datetime.datetime(2026, 7, 23, tzinfo=datetime.timezone.utc), "bogus")
     assert sync.pull_latest_snapshot("X") is None  # None-engine guard path
+
+
+def test_pull_snapshots_range_no_engine():
+    import datetime
+    from Caching.supabase_curve_sync import SupabaseCurveSync
+    sync = SupabaseCurveSync(base_dir=".", engine=None)
+    df = sync.pull_snapshots_range(
+        "X",
+        datetime.datetime(2026, 7, 23, tzinfo=datetime.timezone.utc),
+        datetime.datetime(2026, 7, 24, tzinfo=datetime.timezone.utc),
+    )
+    assert df.empty  # None-engine guard -> empty DataFrame

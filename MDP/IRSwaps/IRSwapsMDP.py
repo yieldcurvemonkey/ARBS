@@ -2997,26 +2997,178 @@ class IRSwapsMDP(MarketDataProvider[_GenericPricable]):
 
         elif self.source.upper() in ["ERIS_LIVE_INTRADAY", "ERIS_LIVE-INTRADAY"]:
             assert curve_name == "USD-SOFR-1D", "SOFR!"  # fail fast, matching the single-point path
-            # Dedicated intraday bulk path: one shared SupabaseCurveSync + one
-            # indexed as-of read per requested timestamp, keyed by the original
-            # timestamp. Partial results — a timestamp with no stored snapshot is
-            # omitted (mirroring the SDR_INTRADAY branches) rather than raising.
+            # Large-scale intraday batch path (port of the BARCHART_STIRF Tier-0
+            # optimization): ONE range read + ONE parallel reconstruct pass +
+            # request->snapshot dedup fan-out, replacing N indexed as-of queries +
+            # N reconstructs + N fixings fetches. Value-identical to N calls of
+            # _load_eris_live_intraday_point.
+            from Caching.curve_store import CurveStore
             from Caching.supabase_curve_sync import SupabaseCurveSync
+            from Query.IRSwaps.backends.rateslib.RLIRSwapCurve import RLIRSwapCurve
 
+            ASSET = self._ERIS_LIVE_STORE_ASSET
+            NYC = pytz.timezone("America/New_York")
             method = str(request.get("method", "asof"))
             sync = SupabaseCurveSync.from_defaults()
-            for t in timestamps:
+
+            # nearest/exact: keep the proven per-timestamp semantics exactly
+            # (this IS the pre-optimization branch body, unchanged). asof is the
+            # batched fast path below.
+            if method != "asof":
+                for t in timestamps:
+                    try:
+                        curve = self._load_eris_live_intraday_point(
+                            requested_curve_name=curve_name,
+                            timestamp=t,
+                            method=method,
+                            sync=sync,
+                        )
+                    except Exception:
+                        continue
+                    if curve is not None:
+                        out[t] = curve
+                return out
+
+            # ======================= method == "asof" =======================
+            # Per-ref-date SOFR fixings memo (identical values to the single-point
+            # slice, just fetched once per distinct ref date instead of per snapshot).
+            fixings_by_ref: Dict[datetime.date, pd.Series] = {}
+
+            def _fixings_for_ref(ref: datetime.date) -> pd.Series:
+                cached = fixings_by_ref.get(ref)
+                if cached is None:
+                    s = _fetch_fixings(
+                        as_of_date=ref,
+                        curve_name=curve_name,
+                        force_refresh=self.force_refresh_fixings,
+                    ).sort_index()
+                    cached = s[s.index.date < ref] * 100
+                    fixings_by_ref[ref] = cached
+                return cached
+
+            def _wrap(row: dict, rl_curve_handle: Any) -> "RLIRSwapCurve":
+                # Byte-identical wrapping to _load_eris_live_intraday_point.
+                snap_utc = pd.Timestamp(row["timestamp_utc"])
+                if snap_utc.tzinfo is None:
+                    snap_utc = snap_utc.tz_localize("UTC")
+                snap_et = snap_utc.tz_convert(NYC)
+                ref = snap_et.date()
+                ts_out = snap_et.to_pydatetime()
+                curve_id = f"{self.source.upper()}-{curve_name}-{ts_out}"
+                return RLIRSwapCurve(
+                    rl_curve_id=curve_name,
+                    rl_curve_handle=rl_curve_handle,
+                    fixings=_fixings_for_ref(ref),
+                    meta_data={"timestamp": ts_out, "id": curve_id, "source": "eris_live_intraday"},
+                )
+
+            def _target_utc(t) -> pd.Timestamp:
+                ts = pd.Timestamp(t)
+                if ts.tzinfo is None:
+                    ts = ts.tz_localize(NYC)  # naive assumed ET
+                return ts.tz_convert("UTC")
+
+            live_targets = [t for t in timestamps if isinstance(t, str) and t == "live"]
+            dt_targets = [t for t in timestamps if not (isinstance(t, str) and t == "live")]
+
+            # ---- (a) 'live' -> latest snapshot (shared across any 'live' targets)
+            if live_targets:
                 try:
-                    curve = self._load_eris_live_intraday_point(
-                        requested_curve_name=curve_name,
-                        timestamp=t,
-                        method=method,
-                        sync=sync,
-                    )
+                    live_row = sync.pull_latest_snapshot(ASSET)
+                    if live_row is not None:
+                        live_wrapper = _wrap(live_row, CurveStore.reconstruct_curve(live_row, cfg=None))
+                        for t in live_targets:
+                            out[t] = live_wrapper
                 except Exception:
-                    continue
-                if curve is not None:
-                    out[t] = curve
+                    logging.getLogger(__name__).debug(
+                        "ERIS live-intraday bulk: 'live' snapshot failed", exc_info=True
+                    )
+
+            # ---- (b) as-of batch for datetime/date targets
+            if dt_targets:
+                try:
+                    target_utcs = [_target_utc(t) for t in dt_targets]
+                    min_target = min(target_utcs)
+                    max_target = max(target_utcs)
+
+                    # Exact as-of row for the EARLIEST target -> provably-sufficient
+                    # lower bound so every backward match sits inside the fetched window.
+                    floor_row = sync.pull_snapshot_asof(ASSET, min_target.to_pydatetime(), "asof")
+                    if floor_row is not None:
+                        lo = pd.Timestamp(floor_row["timestamp_utc"])
+                        lo = lo.tz_localize("UTC") if lo.tzinfo is None else lo.tz_convert("UTC")
+                    else:
+                        lo = min_target  # nothing at/before earliest target -> those omitted
+
+                    snaps_df = sync.pull_snapshots_range(
+                        ASSET, lo.to_pydatetime(), max_target.to_pydatetime()
+                    )
+
+                    if not snaps_df.empty:
+                        snaps_df = snaps_df.copy()
+                        snaps_df["timestamp_utc"] = pd.to_datetime(snaps_df["timestamp_utc"], utc=True)
+                        snaps_df = snaps_df.sort_values("timestamp_utc").reset_index(drop=True)
+
+                        # Positional index keeps original request objects out of the
+                        # DataFrame (a column would coerce date/datetime -> Timestamp).
+                        targets_df = pd.DataFrame(
+                            {"i": range(len(dt_targets)),
+                             "target_utc": pd.to_datetime(target_utcs, utc=True)}
+                        ).sort_values("target_utc").reset_index(drop=True)
+
+                        merged = pd.merge_asof(
+                            targets_df,
+                            snaps_df[["timestamp_utc"]],
+                            left_on="target_utc",
+                            right_on="timestamp_utc",
+                            direction="backward",  # == pull_snapshot_asof(method="asof")
+                        )
+
+                        matched_ts = merged["timestamp_utc"].dropna().unique()
+                        if len(matched_ts):
+                            distinct_df = snaps_df[snaps_df["timestamp_utc"].isin(matched_ts)].copy()
+                            curves_by_ts = CurveStore.reconstruct_curves_batch(
+                                distinct_df,
+                                cfg=None,  # ERIS: no mixed_interpolation
+                                max_workers=self._resolve_curve_store_history_workers(
+                                    n_jobs, task_count=len(distinct_df)
+                                ),
+                            )
+                            # One wrapper per distinct snapshot, shared across every
+                            # target that mapped to it (meta is a function of the
+                            # snapshot, not the request) -> value-identical to per-target.
+                            wrapper_by_key: Dict[pd.Timestamp, "RLIRSwapCurve"] = {}
+                            for ts_val, rl_curve_handle in curves_by_ts.items():
+                                key = pd.Timestamp(ts_val).tz_convert("UTC")
+                                wrapper_by_key[key] = _wrap({"timestamp_utc": ts_val}, rl_curve_handle)
+
+                            for _, mrow in merged.iterrows():
+                                snap_ts = mrow["timestamp_utc"]
+                                if pd.isna(snap_ts):
+                                    continue  # target before earliest snapshot -> omitted
+                                wrapper = wrapper_by_key.get(pd.Timestamp(snap_ts).tz_convert("UTC"))
+                                if wrapper is not None:
+                                    out[dt_targets[int(mrow["i"])]] = wrapper
+                except Exception:
+                    logging.getLogger(__name__).debug(
+                        "ERIS live-intraday bulk as-of batch failed; salvaging via single-point",
+                        exc_info=True,
+                    )
+                    # Best-effort accelerator: on any batch failure, fill remaining
+                    # targets one-by-one so results never regress vs the old branch.
+                    for t in dt_targets:
+                        if t in out:
+                            continue
+                        try:
+                            curve = self._load_eris_live_intraday_point(
+                                requested_curve_name=curve_name,
+                                timestamp=t, method="asof", sync=sync,
+                            )
+                        except Exception:
+                            continue
+                        if curve is not None:
+                            out[t] = curve
+
             return out
 
         # ------- default / not implemented -------

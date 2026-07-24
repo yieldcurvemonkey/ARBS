@@ -127,3 +127,64 @@ def test_eris_live_intraday_bulk_reads_seeded_rows():
                 ),
                 {"cn": ASSET, "t1": ts1, "t2": ts2},
             )
+
+
+@pytest.mark.db
+def test_eris_live_intraday_bulk_asof_between_snapshots():
+    # Batch as-of path: a target strictly BETWEEN two snapshots must resolve to
+    # the EARLIER one (merge_asof backward == single-point as-of). Seed two
+    # snapshots with DISTINCT discount factors so the resolved snapshot is
+    # identifiable by the reconstructed DFs.
+    from sqlalchemy import text
+    from Caching.curve_store import CurveSnapshot
+    from Caching.supabase_curve_sync import SupabaseCurveSync
+    from MDP.IRSwaps.IRSwapsMDP import IRSwapsMDP
+
+    ASSET = IRSwapsMDP._ERIS_LIVE_STORE_ASSET
+    utc = datetime.timezone.utc
+    ts1 = datetime.datetime(2000, 1, 3, 20, 0, tzinfo=utc)
+    ts2 = datetime.datetime(2000, 1, 3, 20, 10, tzinfo=utc)
+    between = datetime.datetime(2000, 1, 3, 20, 5, tzinfo=utc)  # -> ts1 (earlier)
+
+    def _snap(ts, dfs):
+        return CurveSnapshot(
+            timestamp_utc=ts, timestamp_local=ts,
+            trading_date=datetime.date(2000, 1, 3),
+            session_minute=ts.hour * 60 + ts.minute,
+            curve_name=ASSET, cfg_hash="", reference_key="USD-SOFR-1D",
+            interpolation="log_linear", source_variant="ERIS_RL_BASIC_NOJUMPS",
+            node_dates=[datetime.date(2000, 1, 4), datetime.date(2001, 1, 4)],
+            discount_factors=dfs,
+        )
+
+    sync = SupabaseCurveSync.from_defaults()
+    if sync._engine is None:
+        pytest.skip("no Supabase engine configured")
+    try:
+        sync.upsert_snapshot_row(_snap(ts1, [0.9999, 0.95]), ASSET)     # earlier
+        sync.upsert_snapshot_row(_snap(ts2, [0.9990, 0.90]), ASSET)     # later (distinct DFs)
+
+        mdp = IRSwapsMDP(source="eris_live_intraday")
+        out = mdp.bulk_get_data(
+            {"curve_name": "USD-SOFR-1D", "timestamps": [between, ts2], "method": "asof"}
+        )
+        assert set(out.keys()) == {between, ts2}
+
+        def _dfs(curve):
+            h = curve.handle()
+            raw = h.nodes._nodes if hasattr(h.nodes, "_nodes") else dict(h.nodes)
+            return sorted(round(float(v), 6) for v in raw.values())
+
+        # between -> ts1's DFs (earlier snapshot); ts2 exact -> ts2's DFs
+        assert _dfs(out[between]) == sorted([0.9999, 0.95])
+        assert _dfs(out[ts2]) == sorted([0.9990, 0.90])
+
+        # batch == single-point on the between target
+        single = mdp.get_pricer({"curve_name": "USD-SOFR-1D", "timestamp": between, "method": "asof"})
+        assert _dfs(single) == _dfs(out[between])
+    finally:
+        with sync._engine.begin() as conn:
+            conn.execute(
+                text("DELETE FROM arbs_curve_snapshots_v1 WHERE curve_name = :cn AND timestamp_utc IN (:t1, :t2)"),
+                {"cn": ASSET, "t1": ts1, "t2": ts2},
+            )

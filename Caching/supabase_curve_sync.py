@@ -400,6 +400,36 @@ class SupabaseCurveSync:
         candidates = [self._snapshot_row_to_dict(r) for r in (before, after) if r is not None]
         return _pick_nearest(ts_utc, candidates)
 
+    def pull_snapshots_range(self, curve_name: str, start_utc, end_utc):
+        """Batch read: every snapshot for curve_name with timestamp_utc in
+        [start_utc, end_utc] (inclusive), ascending, as a pandas DataFrame.
+
+        One PK-index range scan (PRIMARY KEY (curve_name, timestamp_utc)). The
+        returned columns are exactly what CurveStore.reconstruct_curves_batch
+        consumes (node_dates, discount_factors, reference_key, interpolation,
+        timestamp_utc, curve_name). Empty DataFrame when no engine / no schema /
+        no rows. start_utc/end_utc must be tz-aware UTC datetimes.
+        """
+        import pandas as pd
+
+        if self._engine is None:
+            return pd.DataFrame()
+        from Caching.supabase_schema import ensure_schema
+
+        if not ensure_schema(self._engine):
+            return pd.DataFrame()
+        with self._engine.begin() as conn:
+            rows = conn.execute(
+                text(f"""
+                    SELECT {self._SNAPSHOT_COLS} FROM {CURVE_SNAPSHOTS_TABLE}
+                    WHERE curve_name = :cn
+                      AND timestamp_utc BETWEEN :lo AND :hi
+                    ORDER BY timestamp_utc ASC
+                """),
+                {"cn": curve_name, "lo": start_utc, "hi": end_utc},
+            ).fetchall()
+        return pd.DataFrame([self._snapshot_row_to_dict(r) for r in rows])
+
     def latest_snapshot_ts(
         self, curve_name: str, trading_date: datetime.date
     ) -> Optional[datetime.datetime]:
