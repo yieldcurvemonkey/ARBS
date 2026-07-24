@@ -194,3 +194,37 @@ def test_run_service_continuous_full_day_window():
     )
     assert counters["wrote"] == 1 and counters["skipped"] == 1
     assert len(writes) == 1
+
+
+def test_run_service_threads_max_lag_seconds():
+    # A vendor stamp 100s old is stale at the default 90s but fresh at 150s;
+    # run_service must forward max_lag_seconds to should_persist.
+    def _run(max_lag):
+        writes = []
+        ticks = iter([_et(2026, 7, 23, 22, 0), _et(2026, 7, 23, 22, 1)])
+        n = {"i": 0}
+
+        class FakeCurve:
+            def meta(self):
+                return {"timestamp": _et(2026, 7, 23, 21, 58, 20)}  # 100s before 22:00
+            def reference_date(self):
+                return _et(2026, 7, 24, 0, 0)  # next-business-day roll -> accepted by ref gate
+
+        def stop_fn(_now):
+            n["i"] += 1
+            return n["i"] >= 2  # one poll then stop
+
+        return svc.run_service(
+            poll_fn=lambda: FakeCurve(),
+            now_fn=lambda: next(ticks),
+            writer_fn=lambda c, ts: writes.append(ts),
+            sleep_fn=lambda s: None,
+            stop_fn=stop_fn,
+            poll_seconds=0,
+            start_min=0,
+            end_min=24 * 60,
+            max_lag_seconds=max_lag,
+        )
+
+    assert _run(90)["skipped"] == 1   # 100s old > 90s -> stale skip
+    assert _run(150)["wrote"] == 1    # 100s old <= 150s -> written

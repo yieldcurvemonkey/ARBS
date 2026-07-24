@@ -218,6 +218,7 @@ def run_service(
     start_min: int = SESSION_START_MIN,
     end_min: int = SESSION_END_MIN,
     last_ts=None,
+    max_lag_seconds: int = 90,
 ) -> dict:
     counters = {"wrote": 0, "skipped": 0, "errors": 0, "polls": 0}
     cycle = 0
@@ -236,7 +237,7 @@ def run_service(
                 vendor_ts = curve.meta().get("timestamp")
                 rd = curve.reference_date()
                 ref_date = rd.date() if rd is not None else now_et.date()
-                ok, reason = should_persist(vendor_ts, now_et, ref_date, last_ts)
+                ok, reason = should_persist(vendor_ts, now_et, ref_date, last_ts, max_lag_seconds=max_lag_seconds)
                 if ok:
                     writer_fn(curve, vendor_ts)
                     last_ts = vendor_ts
@@ -292,6 +293,13 @@ def main(argv: Optional[list] = None) -> int:
         type=float,
         default=0.0,
         help="continuous mode only: 0 = run until stopped; >0 = self-exit after N hours",
+    )
+    run.add_argument(
+        "--max-lag-seconds",
+        type=int,
+        default=90,
+        help="skip a curve whose vendor timestamp is older than this (freshness guard); "
+             "raise it (e.g. 180) to capture more of the slower overnight republish cadence",
     )
     run.add_argument("--log-dir", default=str(Path("logs") / "eris_live_curve_service"))
     args = parser.parse_args(argv)
@@ -357,6 +365,7 @@ def main(argv: Optional[list] = None) -> int:
             start_min=start_min,
             end_min=end_min,
             last_ts=initial_last_ts,
+            max_lag_seconds=args.max_lag_seconds,
         )
         logger.info("service done: %s", counters)
         return 0

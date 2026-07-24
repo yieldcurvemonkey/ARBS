@@ -16,5 +16,5 @@ $outLog = Join-Path $logDir ('wrapper_{0}.log' -f (Get-Date -Format 'yyyyMMddHHm
 # dedup (ERIS publishes ~23/5 following CME hours). The daemon's own
 # RotatingFileHandler (eris_live_curve_service.log) is the primary log; $outLog
 # captures raw stdout/stderr for this process instance.
-& python scripts/eris_live_curve_service.py run --continuous --poll-seconds 60 *> $outLog
+& python scripts/eris_live_curve_service.py run --continuous --poll-seconds 60 --max-lag-seconds 180 *> $outLog
 exit $LASTEXITCODE
