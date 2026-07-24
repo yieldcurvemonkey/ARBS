@@ -41,8 +41,14 @@ def test_should_persist_dedup_and_freshness():
     # naive stamp -> skip
     ok, reason = svc.should_persist(datetime.datetime(2026, 7, 23, 14, 30), now, datetime.date(2026, 7, 23), last_ts=None)
     assert ok is False and "tz" in reason
-    # ref_date not today -> skip
-    ok, reason = svc.should_persist(fresh_ts, now, datetime.date(2026, 7, 22), last_ts=None)
+    # reference_date rolled to the next business day (evening/overnight) -> accepted
+    ok, _ = svc.should_persist(fresh_ts, now, datetime.date(2026, 7, 24), last_ts=None)
+    assert ok is True
+    # reference_date wildly off (stale/wrong file) -> skip
+    ok, reason = svc.should_persist(fresh_ts, now, datetime.date(2020, 1, 1), last_ts=None)
+    assert ok is False and "reference_date" in reason
+    # reference_date missing -> skip
+    ok, reason = svc.should_persist(fresh_ts, now, None, last_ts=None)
     assert ok is False and "reference_date" in reason
 
 
@@ -132,3 +138,42 @@ def test_run_service_dedups_and_gates(monkeypatch):
                                sleep_fn=lambda s: None, stop_fn=stop_fn, poll_seconds=0)
     assert len(calls["writes"]) == 1
     assert counters["wrote"] == 1 and counters["skipped"] == 1
+
+
+def test_run_service_continuous_full_day_window():
+    # continuous mode: a full-day window (start=0,end=1440) must NOT gate out an
+    # evening/overnight poll, and the relaxed reference-date gate must accept a
+    # curve whose reference has rolled to the next business day. Uses the REAL
+    # should_persist (no monkeypatch) to exercise the relaxed gate.
+    writes = []
+    ticks = [
+        _et(2026, 7, 23, 22, 0),   # Thursday 10pm ET (business day, evening session)
+        _et(2026, 7, 23, 22, 1),   # same vendor stamp -> dedup skip
+        _et(2026, 7, 23, 22, 2),   # stop
+    ]
+    now_iter = iter(ticks)
+
+    class FakeCurve:
+        def meta(self):
+            return {"timestamp": _et(2026, 7, 23, 21, 59, 45)}  # fresh, unchanged across polls
+        def reference_date(self):
+            return _et(2026, 7, 24, 0, 0)  # rolled to next business day (tz-aware; .date() works)
+
+    n = {"i": 0}
+
+    def stop_fn(now_et):
+        n["i"] += 1
+        return n["i"] >= 3
+
+    counters = svc.run_service(
+        poll_fn=lambda: FakeCurve(),
+        now_fn=lambda: next(now_iter),
+        writer_fn=lambda c, ts: writes.append(ts),
+        sleep_fn=lambda s: None,
+        stop_fn=stop_fn,
+        poll_seconds=0,
+        start_min=0,
+        end_min=24 * 60,
+    )
+    assert counters["wrote"] == 1 and counters["skipped"] == 1
+    assert len(writes) == 1

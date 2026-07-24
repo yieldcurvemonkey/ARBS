@@ -10,24 +10,33 @@ $action = New-ScheduledTaskAction -Execute 'powershell.exe' `
     -Argument ('-NoProfile -ExecutionPolicy Bypass -File "{0}"' -f $wrapper) `
     -WorkingDirectory $repo
 
-# Two triggers: daily just before the session, and at startup (reboot recovery).
-$daily   = New-ScheduledTaskTrigger -Daily -At 6:55am
-$startup = New-ScheduledTaskTrigger -AtStartup
+# Continuous (~23/5) daemon: it runs around the clock and self-gates to US
+# business days + freshness, so we just need to keep ONE instance alive.
+#   - AtStartup / AtLogOn: start on boot / login.
+#   - A repeating trigger every 10 min (long duration) is relaunch insurance:
+#     with MultipleInstances=IgnoreNew it is a no-op while running, and starts a
+#     fresh instance within <=10 min if the process ever died and the fast
+#     restart-on-failure window was exhausted.
+$startup   = New-ScheduledTaskTrigger -AtStartup
+$logon     = New-ScheduledTaskTrigger -AtLogOn
+$repeating = New-ScheduledTaskTrigger -Once -At (Get-Date) `
+    -RepetitionInterval (New-TimeSpan -Minutes 10) `
+    -RepetitionDuration (New-TimeSpan -Days 3650)
 
 $settings = New-ScheduledTaskSettingsSet `
     -MultipleInstances IgnoreNew `
-    -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 1) `
+    -RestartCount 5 -RestartInterval (New-TimeSpan -Minutes 1) `
     -StartWhenAvailable `
-    -ExecutionTimeLimit (New-TimeSpan -Hours 18) `
+    -ExecutionTimeLimit (New-TimeSpan -Days 3650) `
     -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries
 
 if ($WhatIf) {
-    Write-Host "WhatIf: would register '$TaskName' -> $wrapper (Daily 06:55 + AtStartup)"
+    Write-Host "WhatIf: would register '$TaskName' -> $wrapper (AtStartup + AtLogOn + repeat/10min, continuous)"
     return
 }
 
 Register-ScheduledTask -TaskName $TaskName -Action $action `
-    -Trigger @($daily, $startup) -Settings $settings `
-    -Description 'Polls live ERIS SOFR curve every minute during the US session and persists snapshots to Supabase.' `
+    -Trigger @($startup, $logon, $repeating) -Settings $settings `
+    -Description 'Continuously polls the live ERIS SOFR curve (~23/5 CME hours, business-day gated) and persists per-minute snapshots to Supabase (asset USD-SOFR-1D-ERISLIVE).' `
     -Force
-Write-Host "Registered scheduled task '$TaskName'."
+Write-Host "Registered scheduled task '$TaskName' (continuous)."

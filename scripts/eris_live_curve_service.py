@@ -19,6 +19,7 @@ os.environ.setdefault("ARBS_SUPABASE_ENABLED", "1")  # engine ON for our writes
 import argparse
 import contextlib
 import datetime
+import gc
 import logging
 import sys
 import tempfile
@@ -68,8 +69,15 @@ def should_persist(
     lag = (now_et - vendor_ts.astimezone(now_et.tzinfo)).total_seconds()
     if lag > max_lag_seconds:
         return False, f"stale: vendor timestamp {lag:.0f}s old (> {max_lag_seconds}s)"
-    if ref_date != now_et.date():
-        return False, f"reference_date {ref_date} != today {now_et.date()}"
+    # The ERIS EOD-live curve legitimately rolls its reference (first-node) date to
+    # the NEXT business day during the evening/overnight session, so an exact
+    # "== today" check would reject the entire overnight session. The vendor_ts
+    # recency check above is the real staleness signal; here we only reject a
+    # reference date that is wildly off (e.g. a stale/wrong 200-OK file).
+    if ref_date is None:
+        return False, "reference_date missing"
+    if abs((ref_date - now_et.date()).days) > 7:
+        return False, f"reference_date {ref_date} far from today {now_et.date()} (stale/wrong file?)"
     return True, "ok"
 
 
@@ -173,7 +181,10 @@ class SingleInstanceLock:
 
 def _build_mdp():
     from MDP.IRSwaps.IRSwapsMDP import IRSwapsMDP
-    return IRSwapsMDP(source=SOURCE_STRING, error_verbose=True)
+    # error_verbose left off: BaseFetcher._setup_logger uses a broken "%Y..."
+    # message format that raises while formatting fetch-error records. The
+    # daemon's own per-cycle logging (below) captures each poll outcome instead.
+    return IRSwapsMDP(source=SOURCE_STRING)
 
 
 def poll_once(mdp):
@@ -206,10 +217,14 @@ def run_service(
     last_ts=None,
 ) -> dict:
     counters = {"wrote": 0, "skipped": 0, "errors": 0, "polls": 0}
+    cycle = 0
     while True:
         now_et = now_fn()
         if stop_fn(now_et):
             break
+        cycle += 1
+        if cycle % 120 == 0:  # light hygiene for a long-lived (24/5) process
+            gc.collect()
         t0 = time.monotonic()
         if is_business_day(now_et.date()) and in_session(now_et, start_min=start_min, end_min=end_min):
             counters["polls"] += 1
@@ -263,6 +278,18 @@ def main(argv: Optional[list] = None) -> int:
     run.add_argument("--session-start", default="08:00")
     run.add_argument("--session-end", default="17:00")
     run.add_argument("--stop-at", default="17:15")
+    run.add_argument(
+        "--continuous",
+        action="store_true",
+        help="run around the clock on business days (ERIS publishes ~23/5 CME hours); "
+             "ignores --session-start/--session-end/--stop-at",
+    )
+    run.add_argument(
+        "--max-runtime-hours",
+        type=float,
+        default=0.0,
+        help="continuous mode only: 0 = run until stopped; >0 = self-exit after N hours",
+    )
     run.add_argument("--log-dir", default=str(Path("logs") / "eris_live_curve_service"))
     args = parser.parse_args(argv)
 
@@ -294,10 +321,27 @@ def main(argv: Optional[list] = None) -> int:
             logger.info("--once wrote snapshot ts=%s", vendor_ts)
             return 0
 
-        stop_min = _parse_hm(args.stop_at)
+        if args.continuous:
+            # Full-day window (is_business_day still gates weekends/holidays);
+            # ERIS publishes ~around the clock on trading days.
+            start_min, end_min = 0, 24 * 60
+            run_start = time.monotonic()
+            max_runtime_s = max(0.0, args.max_runtime_hours) * 3600.0
 
-        def stop_fn(now_et):
-            return (now_et.hour * 60 + now_et.minute) >= stop_min
+            def stop_fn(now_et):
+                return max_runtime_s > 0 and (time.monotonic() - run_start) >= max_runtime_s
+
+            logger.info(
+                "continuous mode: business-day-gated, poll=%ss, max_runtime=%s",
+                args.poll_seconds,
+                f"{args.max_runtime_hours}h" if max_runtime_s > 0 else "unbounded",
+            )
+        else:
+            start_min, end_min = _parse_hm(args.session_start), _parse_hm(args.session_end)
+            stop_min = _parse_hm(args.stop_at)
+
+            def stop_fn(now_et):
+                return (now_et.hour * 60 + now_et.minute) >= stop_min
 
         initial_last_ts = sync.latest_snapshot_ts(ASSET_NAME, datetime.datetime.now(_ET).date())
 
@@ -307,11 +351,11 @@ def main(argv: Optional[list] = None) -> int:
             writer_fn=lambda curve, ts: _write_snapshot(sync, curve, ts),
             stop_fn=stop_fn,
             poll_seconds=args.poll_seconds,
-            start_min=_parse_hm(args.session_start),
-            end_min=_parse_hm(args.session_end),
+            start_min=start_min,
+            end_min=end_min,
             last_ts=initial_last_ts,
         )
-        logger.info("session done: %s", counters)
+        logger.info("service done: %s", counters)
         return 0
     finally:
         lock.release()
