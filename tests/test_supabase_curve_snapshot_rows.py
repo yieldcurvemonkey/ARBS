@@ -143,3 +143,10 @@ def test_pull_snapshots_range_no_engine():
         datetime.datetime(2026, 7, 24, tzinfo=datetime.timezone.utc),
     )
     assert df.empty  # None-engine guard -> empty DataFrame
+
+
+def test_pull_snapshots_day_no_engine():
+    import datetime
+    from Caching.supabase_curve_sync import SupabaseCurveSync
+    sync = SupabaseCurveSync(base_dir=".", engine=None)
+    assert sync.pull_snapshots_day("X", datetime.date(2026, 7, 23)).empty

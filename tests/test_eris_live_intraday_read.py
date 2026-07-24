@@ -188,3 +188,97 @@ def test_eris_live_intraday_bulk_asof_between_snapshots():
                 text("DELETE FROM arbs_curve_snapshots_v1 WHERE curve_name = :cn AND timestamp_utc IN (:t1, :t2)"),
                 {"cn": ASSET, "t1": ts1, "t2": ts2},
             )
+
+
+def test_eris_local_l1_enabled_env(monkeypatch):
+    from MDP.IRSwaps.IRSwapsMDP import IRSwapsMDP
+    monkeypatch.delenv("ARBS_ERIS_LOCAL_CURVE_L1", raising=False)
+    assert IRSwapsMDP._eris_local_l1_enabled() is True   # default on
+    monkeypatch.setenv("ARBS_ERIS_LOCAL_CURVE_L1", "0")
+    assert IRSwapsMDP._eris_local_l1_enabled() is False
+    monkeypatch.setenv("ARBS_ERIS_LOCAL_CURVE_L1", "1")
+    assert IRSwapsMDP._eris_local_l1_enabled() is True
+
+
+@pytest.mark.db
+def test_eris_live_intraday_bulk_l1_settled_day(monkeypatch):
+    # Read-only local Parquet L1 for a SETTLED day: first read materializes the
+    # local partition (local-only, no L2 blob), a second read serves from local
+    # with ZERO remote day-pulls, and both are value-identical to the remote path.
+    import shutil
+    from sqlalchemy import text
+    from Caching.curve_store import CurveSnapshot
+    from Caching.supabase_curve_sync import SupabaseCurveSync, CURVE_INTRADAY_BLOCKS_TABLE
+    from MDP.IRSwaps.IRSwapsMDP import IRSwapsMDP
+
+    ASSET = IRSwapsMDP._ERIS_LIVE_STORE_ASSET
+    utc = datetime.timezone.utc
+    SETTLED = datetime.date(2000, 1, 4)  # far-past -> settled (< today)
+    t1 = datetime.datetime(2000, 1, 4, 20, 0, tzinfo=utc)
+    t2 = datetime.datetime(2000, 1, 4, 20, 5, tzinfo=utc)
+    between = datetime.datetime(2000, 1, 4, 20, 3, tzinfo=utc)  # -> t1 (earlier)
+
+    def _snap(ts, dfs):
+        return CurveSnapshot(
+            timestamp_utc=ts, timestamp_local=ts, trading_date=SETTLED,
+            session_minute=ts.hour * 60 + ts.minute, curve_name=ASSET, cfg_hash="",
+            reference_key="USD-SOFR-1D", interpolation="log_linear",
+            source_variant="ERIS_RL_BASIC_NOJUMPS",
+            node_dates=[datetime.date(2000, 1, 5), datetime.date(2001, 1, 4)],
+            discount_factors=dfs,
+        )
+
+    sync = SupabaseCurveSync.from_defaults()
+    if sync._engine is None:
+        pytest.skip("no Supabase engine configured")
+    store = IRSwapsMDP._get_curve_store()
+    part = store._raw_dir / f"asset={ASSET}" / f"date={SETTLED.isoformat()}"
+    if part.exists():
+        shutil.rmtree(part)
+    mdp = IRSwapsMDP(source="eris_live_intraday")
+
+    def _dfs(cv):
+        h = cv.handle()
+        raw = h.nodes._nodes if hasattr(h.nodes, "_nodes") else dict(h.nodes)
+        return sorted(round(float(v), 6) for v in raw.values())
+
+    orig_day = SupabaseCurveSync.pull_snapshots_day
+    try:
+        sync.upsert_snapshot_row(_snap(t1, [0.9999, 0.95]), ASSET)
+        sync.upsert_snapshot_row(_snap(t2, [0.9990, 0.90]), ASSET)
+        req = {"curve_name": "USD-SOFR-1D", "timestamps": [t1, between, t2], "method": "asof"}
+
+        monkeypatch.setenv("ARBS_ERIS_LOCAL_CURVE_L1", "0")
+        ref = mdp.bulk_get_data(dict(req))
+
+        monkeypatch.setenv("ARBS_ERIS_LOCAL_CURVE_L1", "1")
+        l1a = mdp.bulk_get_data(dict(req))
+        assert part.exists()  # first L1 read materialized the local partition
+
+        def _boom(self, cn, td):
+            raise AssertionError("remote pull_snapshots_day called on an L1 hit")
+
+        SupabaseCurveSync.pull_snapshots_day = _boom
+        l1b = mdp.bulk_get_data(dict(req))  # must serve from local; no remote day-pull
+        SupabaseCurveSync.pull_snapshots_day = orig_day
+
+        assert set(ref) == set(l1a) == set(l1b) == {t1, between, t2}
+        for k in (t1, between, t2):
+            assert _dfs(ref[k]) == _dfs(l1a[k]) == _dfs(l1b[k])
+        assert _dfs(l1a[between]) == sorted([0.9999, 0.95])  # between -> earlier snapshot
+
+        with sync._engine.begin() as conn:
+            n_blob = conn.execute(
+                text(f"SELECT count(*) FROM {CURVE_INTRADAY_BLOCKS_TABLE} WHERE curve_name=:cn AND trading_date=:td"),
+                {"cn": ASSET, "td": SETTLED},
+            ).scalar()
+        assert n_blob == 0  # push_l2=False -> no whole-day blob written
+    finally:
+        SupabaseCurveSync.pull_snapshots_day = orig_day
+        if part.exists():
+            shutil.rmtree(part)
+        with sync._engine.begin() as conn:
+            conn.execute(
+                text("DELETE FROM arbs_curve_snapshots_v1 WHERE curve_name=:cn AND timestamp_utc IN (:t1, :t2)"),
+                {"cn": ASSET, "t1": t1, "t2": t2},
+            )

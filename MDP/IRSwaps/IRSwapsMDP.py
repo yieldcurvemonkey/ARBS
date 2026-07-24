@@ -276,6 +276,58 @@ class IRSwapsMDP(MarketDataProvider[_GenericPricable]):
             meta_data={"timestamp": ts_out, "id": curve_id, "source": "eris_live_intraday"},
         )
 
+    @staticmethod
+    def _eris_local_l1_enabled() -> bool:
+        """Whether to use the read-only local Parquet L1 cache for
+        eris_live_intraday settled-day curve reads (default on)."""
+        return os.environ.get("ARBS_ERIS_LOCAL_CURVE_L1", "1").strip().lower() not in (
+            "0", "false", "no", "off", ""
+        )
+
+    def _ensure_eris_day_local(self, store, sync, asset, trading_date, today_et):
+        """Snapshot rows for one SETTLED ET trading_date, served from (and
+        populated once, on first touch) a read-only local Parquet L1 mirroring the
+        BARCHART_STIRF curve cache. Returns empty for today/future (still
+        appending) so the caller does a remote windowed read instead. The L1
+        materialize is local-only (push_l2=False) — no whole-day blob re-push."""
+        import pandas as pd
+        import pytz
+
+        if store.has_day(asset, trading_date):
+            # local hit — partition exists, so read_raw_day won't hit the blob fallback
+            return store.read_raw_day(asset, trading_date)
+        if trading_date >= today_et:
+            return pd.DataFrame()  # incomplete day -> caller reads remote
+        df = sync.pull_snapshots_day(asset, trading_date)
+        if df is None or df.empty:
+            return pd.DataFrame()
+
+        from Caching.curve_store import CurveSnapshot
+
+        _CHI = pytz.timezone("America/Chicago")
+        snaps = []
+        for _, r in df.iterrows():
+            ts_utc = pd.Timestamp(r["timestamp_utc"])
+            ts_utc = ts_utc.tz_localize("UTC") if ts_utc.tzinfo is None else ts_utc.tz_convert("UTC")
+            snaps.append(
+                CurveSnapshot(
+                    timestamp_utc=ts_utc.to_pydatetime(),
+                    timestamp_local=ts_utc.tz_convert(_CHI).to_pydatetime(),
+                    trading_date=trading_date,
+                    session_minute=int(r["session_minute"]),
+                    curve_name=asset,
+                    cfg_hash="",
+                    reference_key=str(r["reference_key"]),
+                    interpolation=str(r["interpolation"]),
+                    source_variant=str(r["source_variant"]),
+                    node_dates=list(r["node_dates"]),
+                    discount_factors=[float(v) for v in r["discount_factors"]],
+                )
+            )
+        snaps.sort(key=lambda s: s.timestamp_utc)
+        store.write_day(asset, trading_date, snaps, overwrite=True, push_l2=False)
+        return store.read_raw_day(asset, trading_date)
+
     def _curve_store_source_family(self) -> Optional[str]:
         source = str(self.source).upper()
         if source in {"BARCHART_STIRF-RL", "BARCHART_STIRF_RL"}:
@@ -3100,9 +3152,51 @@ class IRSwapsMDP(MarketDataProvider[_GenericPricable]):
                     else:
                         lo = min_target  # nothing at/before earliest target -> those omitted
 
-                    snaps_df = sync.pull_snapshots_range(
-                        ASSET, lo.to_pydatetime(), max_target.to_pydatetime()
-                    )
+                    if self._eris_local_l1_enabled():
+                        # L1: settled ET trading-days served from local Parquet
+                        # (materialized once on first touch); today from a remote
+                        # window clamped to [lo, max_target] so the live edge is
+                        # not over-fetched.
+                        store = self._get_curve_store()
+                        today_et = datetime.datetime.now(NYC).date()
+                        floor_td = (
+                            floor_row["trading_date"] if floor_row is not None
+                            else pd.Timestamp(min_target).tz_convert(NYC).date()
+                        )
+                        max_td = pd.Timestamp(max_target).tz_convert(NYC).date()
+                        # keep curve_name so reconstruct_curve sets curve.curve_name to
+                        # the store asset key (parity with the non-L1 / single-point paths)
+                        _cols = ["timestamp_utc", "curve_name", "node_dates",
+                                 "discount_factors", "reference_key", "interpolation"]
+                        frames = []
+                        d = floor_td
+                        last_settled = min(max_td, today_et - datetime.timedelta(days=1))
+                        while d <= last_settled:
+                            fr = self._ensure_eris_day_local(store, sync, ASSET, d, today_et)
+                            if fr is not None and not fr.empty:
+                                frames.append(fr[_cols])
+                            d += datetime.timedelta(days=1)
+                        if max_td >= today_et:
+                            today_lo = max(
+                                lo,
+                                pd.Timestamp(NYC.localize(
+                                    datetime.datetime.combine(today_et, datetime.time())
+                                ).astimezone(pytz.UTC)),
+                            )
+                            if today_lo <= max_target:
+                                fr = sync.pull_snapshots_range(
+                                    ASSET, today_lo.to_pydatetime(), max_target.to_pydatetime()
+                                )
+                                if fr is not None and not fr.empty:
+                                    frames.append(fr[_cols])
+                        snaps_df = (
+                            pd.concat(frames, ignore_index=True)
+                            if frames else pd.DataFrame(columns=_cols)
+                        )
+                    else:
+                        snaps_df = sync.pull_snapshots_range(
+                            ASSET, lo.to_pydatetime(), max_target.to_pydatetime()
+                        )
 
                     if not snaps_df.empty:
                         snaps_df = snaps_df.copy()

@@ -430,6 +430,33 @@ class SupabaseCurveSync:
             ).fetchall()
         return pd.DataFrame([self._snapshot_row_to_dict(r) for r in rows])
 
+    def pull_snapshots_day(self, curve_name: str, trading_date):
+        """All snapshots for (curve_name, trading_date) — the complete ET trading
+        day — ascending, as a pandas DataFrame (idx_snapshots_date scan).
+
+        A settled trading_date is immutable for a forward-only feed, so its whole
+        day can be materialized once into a local Parquet L1. Empty DataFrame when
+        no engine / no schema / no rows.
+        """
+        import pandas as pd
+
+        if self._engine is None:
+            return pd.DataFrame()
+        from Caching.supabase_schema import ensure_schema
+
+        if not ensure_schema(self._engine):
+            return pd.DataFrame()
+        with self._engine.begin() as conn:
+            rows = conn.execute(
+                text(f"""
+                    SELECT {self._SNAPSHOT_COLS} FROM {CURVE_SNAPSHOTS_TABLE}
+                    WHERE curve_name = :cn AND trading_date = :td
+                    ORDER BY timestamp_utc ASC
+                """),
+                {"cn": curve_name, "td": trading_date},
+            ).fetchall()
+        return pd.DataFrame([self._snapshot_row_to_dict(r) for r in rows])
+
     def latest_snapshot_ts(
         self, curve_name: str, trading_date: datetime.date
     ) -> Optional[datetime.datetime]:

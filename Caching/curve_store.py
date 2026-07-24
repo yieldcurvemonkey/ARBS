@@ -492,11 +492,14 @@ class CurveStore:
         snapshots: Sequence[CurveSnapshot],
         *,
         overwrite: bool = False,
+        push_l2: bool = True,
     ) -> Optional[dict]:
         """Atomic write of all snapshots for one (curve_name, trading_date).
 
         Content-addressed: skips write if SHA256 matches existing file.
-        Returns file metadata dict, or None if skipped.
+        Returns file metadata dict, or None if skipped. Set ``push_l2=False`` for
+        a purely-local write (e.g. materializing a read-only L1 cache from rows
+        that already live in Supabase, without re-pushing a whole-day blob).
         """
         if not snapshots:
             return None
@@ -512,7 +515,7 @@ class CurveStore:
         meta = _atomic_content_write(part_dir, pbytes, overwrite=overwrite)
 
         # L2: background push to Supabase
-        sync = _get_curve_sync(self._base_dir)
+        sync = _get_curve_sync(self._base_dir) if push_l2 else None
         if sync is not None:
             self._enqueue_bg_push(
                 sync,
