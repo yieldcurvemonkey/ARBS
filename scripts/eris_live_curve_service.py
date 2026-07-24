@@ -181,9 +181,12 @@ class SingleInstanceLock:
 
 def _build_mdp():
     from MDP.IRSwaps.IRSwapsMDP import IRSwapsMDP
-    # error_verbose left off: BaseFetcher._setup_logger uses a broken "%Y..."
-    # message format that raises while formatting fetch-error records. The
-    # daemon's own per-cycle logging (below) captures each poll outcome instead.
+    # error_verbose left off: this fetcher's BaseFetcher._setup_logger bakes a
+    # "%Y-%m-%d %H:%M:%S" into the message format (should be datefmt), so every
+    # fetch-error record spams a "--- Logging error ---" traceback to stderr
+    # (logging catches it, so it doesn't crash — just noise, amplified by the
+    # fetcher's retry loop). The daemon's own per-cycle logging (below) captures
+    # each poll outcome; total-fetch-failure still surfaces as a caught ValueError.
     return IRSwapsMDP(source=SOURCE_STRING)
 
 
@@ -222,10 +225,10 @@ def run_service(
         now_et = now_fn()
         if stop_fn(now_et):
             break
+        t0 = time.monotonic()  # capture before gc/poll so the sleep stays drift-free
         cycle += 1
         if cycle % 120 == 0:  # light hygiene for a long-lived (24/5) process
             gc.collect()
-        t0 = time.monotonic()
         if is_business_day(now_et.date()) and in_session(now_et, start_min=start_min, end_min=end_min):
             counters["polls"] += 1
             try:

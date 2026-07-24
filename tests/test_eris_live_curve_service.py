@@ -52,6 +52,23 @@ def test_should_persist_dedup_and_freshness():
     assert ok is False and "reference_date" in reason
 
 
+def test_should_persist_reference_date_bounds():
+    # the crux of the relaxed gate: accept the legitimate rolls, reject a wildly-off file
+    now = _et(2026, 7, 24, 14, 31)          # Friday
+    fresh_ts = _et(2026, 7, 24, 14, 30, 30)
+    # Fri -> Mon (+3 calendar days) roll over a weekend -> accepted
+    ok, _ = svc.should_persist(fresh_ts, now, datetime.date(2026, 7, 27), last_ts=None)
+    assert ok is True
+    # exactly 7 days (either direction) -> accepted (boundary)
+    ok, _ = svc.should_persist(fresh_ts, now, datetime.date(2026, 7, 31), last_ts=None)
+    assert ok is True
+    ok, _ = svc.should_persist(fresh_ts, now, datetime.date(2026, 7, 17), last_ts=None)
+    assert ok is True
+    # 8 days out -> rejected (just past the bound)
+    ok, reason = svc.should_persist(fresh_ts, now, datetime.date(2026, 8, 1), last_ts=None)
+    assert ok is False and "reference_date" in reason
+
+
 def test_build_snapshot_from_rl_curve():
     import rateslib as rl
     from Query.IRSwaps.backends.rateslib.RLIRSwapCurve import RLIRSwapCurve
