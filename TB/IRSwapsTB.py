@@ -140,6 +140,12 @@ def _build_rows_for_chunk(
         try:
             row = _build_row_for_query(curve, q, pricing_ref_point, date_col)
             rows.append((row, q, request_ref_point))
+        except NotImplementedError:
+            # An unsupported value type is a programming error, not a data gap:
+            # swallowing it returned an empty DataFrame with no message and no
+            # exception, so asking for DV01 looked like "no data" (see
+            # RLIRSwapCurve.dv01/gamma).
+            raise
         except Exception as e:
             errors.append((q, pricing_ref_point, request_ref_point, e))
     return rows, errors
@@ -1115,6 +1121,8 @@ class IRSwapsTB(LayeredCacheMixin, BaseTimeseriesTB):
                             try:
                                 row = _build_row_for_query(curve, q, pricing_ref_point, self._date_col)
                                 new_rows_with_q.append((row, q, curve_name, request_ref_point))
+                            except NotImplementedError:
+                                raise  # unsupported value type -> surface it, don't return an empty frame
                             except Exception as e:
                                 self._logger.exception(
                                     f"Pricing failed for curve='{curve_name}', date='{request_ref_point}', query='{q}'. Error: {e}"
