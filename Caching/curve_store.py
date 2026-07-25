@@ -147,6 +147,29 @@ class CurveSnapshot:
     source_variant: str = field(default="", kw_only=True)
     node_dates: list[datetime.date]  # sorted
     discount_factors: list[float]  # parallel to node_dates
+    # Log-cubic spline knot sequence (rl.Curve's `t`) and endpoint conditions.
+    # Without these a spline-calibrated curve reconstructs as plain log-linear:
+    # the stored node DFs are the SPLINE's solution and are not a valid
+    # log-linear curve for the same market, so the reconstruction reprices its
+    # own calibration instruments wrong. None for non-spline curves.
+    spline_knots: Optional[list[datetime.date]] = field(default=None, kw_only=True)
+    spline_endpoints: Optional[str] = field(default=None, kw_only=True)  # "left,right"
+
+    @staticmethod
+    def _extract_spline(curve: Any) -> tuple[Optional[list], Optional[str]]:
+        """Recover (knots, endpoints) from a live rl.Curve, or (None, None)."""
+        spline = getattr(getattr(curve, "_interpolator", None), "spline", None)
+        if spline is None:
+            return None, None
+        knots = getattr(spline, "t", None)
+        if not knots:
+            return None, None
+        endpoints = getattr(spline, "endpoints", None)
+        if isinstance(endpoints, (tuple, list)):
+            endpoints = ",".join(str(e) for e in endpoints)
+        elif endpoints is not None:
+            endpoints = str(endpoints)
+        return [_to_date(k) for k in knots], endpoints
 
     # ── Factories ──
 
@@ -232,6 +255,7 @@ class CurveSnapshot:
 
         reference_key = cfg.get("reference_key", "")
         interpolation = cfg.get("interpolation", "log_linear")
+        spline_knots, spline_endpoints = cls._extract_spline(curve)
 
         return cls(
             timestamp_utc=ts_utc,
@@ -245,6 +269,8 @@ class CurveSnapshot:
             source_variant="BARCHART_STIRF",
             node_dates=node_dates,
             discount_factors=discount_factors,
+            spline_knots=spline_knots,
+            spline_endpoints=spline_endpoints,
         )
 
     @classmethod
@@ -852,6 +878,29 @@ class CurveStore:
             "interpolation": interpolation,
         }
 
+        # Log-cubic spline: restore the knot sequence the curve was calibrated
+        # under. The stored node DFs are the SPLINE's solution, so rebuilding
+        # them as plain log-linear does not reprice the curve's own calibration
+        # instruments (measured -0.18 bp at 30Y, +4.9 bp at 40Y on GSQUANT
+        # USD-OIS, and up to +7.4 bp on ERIS EOD).
+        spline_knots = row.get("spline_knots")
+        try:
+            has_spline = spline_knots is not None and len(spline_knots) > 0
+        except TypeError:  # NaN / scalar null from a column-padded frame
+            has_spline = False
+        if has_spline:
+            kwargs["t"] = [
+                rl.dt(d.year, d.month, d.day)
+                for d in (_to_date(k) for k in spline_knots)
+            ]
+            endpoints = row.get("spline_endpoints")
+            if endpoints:
+                parts = [p.strip() for p in str(endpoints).split(",") if p.strip()]
+                if len(parts) == 2:
+                    kwargs["endpoints"] = tuple(parts)
+                elif len(parts) == 1:
+                    kwargs["endpoints"] = parts[0]
+
         # Handle mixed interpolation if cfg provided
         if cfg and cfg.get("mixed_interpolation"):
             from MDP.IRSwaps.BARCHART_STIRF.rl import BARCHART_STIRF_CURVE
@@ -1093,6 +1142,11 @@ _RAW_SCHEMA = pa.schema(
         pa.field("source_variant", pa.dictionary(pa.int8(), pa.utf8())),
         pa.field("node_dates", pa.list_(pa.date32())),
         pa.field("discount_factors", pa.list_(pa.float64())),
+        # Nullable; absent in partitions written before spline support, which
+        # _ensure_raw_table_columns backfills as null -> reconstructs log-linear
+        # exactly as those rows always did.
+        pa.field("spline_knots", pa.list_(pa.date32())),
+        pa.field("spline_endpoints", pa.utf8()),
     ]
 )
 
@@ -1172,6 +1226,8 @@ def _snapshots_to_arrow_table(snapshots: Sequence[CurveSnapshot]) -> pa.Table:
     svar = []
     ndates = []
     dfs = []
+    sknots = []
+    sends = []
 
     for s in snapshots:
         ts_utc.append(s.timestamp_utc)
@@ -1186,6 +1242,8 @@ def _snapshots_to_arrow_table(snapshots: Sequence[CurveSnapshot]) -> pa.Table:
         svar.append(s.source_variant)
         ndates.append(s.node_dates)
         dfs.append(s.discount_factors)
+        sknots.append(getattr(s, "spline_knots", None))
+        sends.append(getattr(s, "spline_endpoints", None))
 
     arrays = [
         pa.array(ts_utc, type=pa.timestamp("us", tz="UTC")),
@@ -1199,6 +1257,8 @@ def _snapshots_to_arrow_table(snapshots: Sequence[CurveSnapshot]) -> pa.Table:
         pa.array(svar).dictionary_encode(),
         pa.array(ndates, type=pa.list_(pa.date32())),
         pa.array(dfs, type=pa.list_(pa.float64())),
+        pa.array(sknots, type=pa.list_(pa.date32())),
+        pa.array(sends, type=pa.utf8()),
     ]
 
     return pa.table(

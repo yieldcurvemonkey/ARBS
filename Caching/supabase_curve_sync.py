@@ -52,6 +52,12 @@ def _snapshot_insert_params(snap, curve_name: str) -> dict:
         "source_variant": str(snap.source_variant),
         "node_dates": [_to_python_date(d) for d in snap.node_dates],
         "discount_factors": [float(v) for v in snap.discount_factors],
+        "spline_knots": (
+            [_to_python_date(d) for d in snap.spline_knots]
+            if getattr(snap, "spline_knots", None)
+            else None
+        ),
+        "spline_endpoints": getattr(snap, "spline_endpoints", None),
     }
 
 
@@ -298,11 +304,11 @@ class SupabaseCurveSync:
                     INSERT INTO {CURVE_SNAPSHOTS_TABLE}
                         (curve_name, timestamp_utc, trading_date, session_minute,
                          tags, cfg_hash, reference_key, interpolation, source_variant,
-                         node_dates, discount_factors)
+                         node_dates, discount_factors, spline_knots, spline_endpoints)
                     VALUES
                         (:curve_name, :timestamp_utc, :trading_date, :session_minute,
                          :tags, :cfg_hash, :reference_key, :interpolation, :source_variant,
-                         :node_dates, :discount_factors)
+                         :node_dates, :discount_factors, :spline_knots, :spline_endpoints)
                     ON CONFLICT (curve_name, timestamp_utc) DO UPDATE SET
                         trading_date = EXCLUDED.trading_date,
                         session_minute = EXCLUDED.session_minute,
@@ -310,7 +316,9 @@ class SupabaseCurveSync:
                         interpolation = EXCLUDED.interpolation,
                         source_variant = EXCLUDED.source_variant,
                         node_dates = EXCLUDED.node_dates,
-                        discount_factors = EXCLUDED.discount_factors
+                        discount_factors = EXCLUDED.discount_factors,
+                        spline_knots = EXCLUDED.spline_knots,
+                        spline_endpoints = EXCLUDED.spline_endpoints
                 """),
                 _snapshot_insert_params(snap, curve_name),
             )
@@ -318,7 +326,8 @@ class SupabaseCurveSync:
 
     _SNAPSHOT_COLS = (
         "curve_name, timestamp_utc, trading_date, session_minute, "
-        "reference_key, interpolation, source_variant, node_dates, discount_factors"
+        "reference_key, interpolation, source_variant, node_dates, discount_factors, "
+        "spline_knots, spline_endpoints"
     )
 
     def _snapshot_row_to_dict(self, row) -> dict:
@@ -332,6 +341,8 @@ class SupabaseCurveSync:
             "source_variant": row.source_variant,
             "node_dates": list(row.node_dates),
             "discount_factors": [float(v) for v in row.discount_factors],
+            "spline_knots": list(row.spline_knots) if getattr(row, "spline_knots", None) else None,
+            "spline_endpoints": getattr(row, "spline_endpoints", None),
         }
 
     def pull_latest_snapshot(self, curve_name: str) -> Optional[dict]:

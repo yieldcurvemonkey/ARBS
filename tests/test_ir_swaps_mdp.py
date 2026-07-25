@@ -1014,12 +1014,16 @@ def test_promote_eris_curve_store_day_writes_missing_raw_and_analytics(monkeypat
         request_timestamp=dt.date(2026, 1, 2),
     )
 
+    # -RL_BASIC writes to its OWN asset key, not the shared USD-SOFR-1D one that
+    # holds the -NOJUMPS daily frame.
+    expected_asset = mdp._eris_curve_store_asset("USD-SOFR-1D")
+    assert expected_asset != "USD-SOFR-1D"
     assert len(raw_calls) == 1
-    assert raw_calls[0][0] == "USD-SOFR-1D"
+    assert raw_calls[0][0] == expected_asset
     assert raw_calls[0][1] == dt.date(2026, 1, 2)
     assert raw_calls[0][2][0].source_variant == "ERIS_RL_BASIC"
     assert len(analytics_calls) == 1
-    assert analytics_calls[0][0] == "USD-SOFR-1D"
+    assert analytics_calls[0][0] == expected_asset
     assert analytics_calls[0][1] == dt.date(2026, 1, 2)
     assert "par_rate_10Y" in analytics_calls[0][2].columns
 
@@ -1577,3 +1581,23 @@ def test_gsquant_rl_bulk_get_data_uses_batch_cache_and_shared_fixings(monkeypatc
     assert out[d1].meta()["pricing_location"] == "NYC"
     assert out[d1].meta()["reference_curve_name"] == "USD-OIS"
     assert out[d2].meta()["id"] == "curve-cache-id-2"
+
+
+
+def test_eris_eod_variants_use_separate_curve_store_assets():
+    """The two ERIS EOD sources must not share one CurveStore asset key.
+
+    What lives under USD-SOFR-1D is the raw ~18.3k-node daily discount frame --
+    the -NOJUMPS curve. -RL_BASIC prices off a 25-node log-cubic spline built
+    from it, so a shared key silently turned -RL_BASIC into -NOJUMPS whenever the
+    day was cached (identical rates on every tenor, so any RV spread between the
+    two sources was exactly zero) and let them diverge by up to ~7.4 bp at the
+    long end when it was not.
+    """
+    nojumps = IRSwapsMDP(source="ERIS_EOD_LIVE-RL_BASIC-NOJUMPS")
+    basic = IRSwapsMDP(source="ERIS_EOD_LIVE-RL_BASIC")
+
+    # -NOJUMPS keeps the original key so its stored history stays live
+    assert nojumps._eris_curve_store_asset("USD-SOFR-1D") == "USD-SOFR-1D"
+    assert basic._eris_curve_store_asset("USD-SOFR-1D") != "USD-SOFR-1D"
+    assert basic._eris_curve_store_asset("USD-SOFR-1D").startswith("USD-SOFR-1D")

@@ -287,6 +287,18 @@ class IRSwapsMDP(MarketDataProvider[_GenericPricable]):
         )
 
     @staticmethod
+    def _curve_interpolation_name(rl_curve_handle: Any) -> str:
+        """The curve's actual local interpolation scheme.
+
+        `rl.Curve` exposes no public `.interpolation`, so the previous
+        `getattr(curve, "interpolation", "log_linear")` could never succeed and
+        always wrote the default. It happens to be correct for every builder
+        feeding this path today, but it is a safety net that never fires.
+        """
+        local = getattr(getattr(rl_curve_handle, "_interpolator", None), "local", None)
+        return str(local) if local else "log_linear"
+
+    @staticmethod
     def _curve_reference_date(rl_curve_handle: Any) -> Optional[datetime.date]:
         """First node of a reconstructed rl.Curve = the curve's reference date."""
         try:
@@ -841,6 +853,26 @@ class IRSwapsMDP(MarketDataProvider[_GenericPricable]):
             },
         )
 
+    def _eris_curve_store_asset(self, requested_curve_name: str) -> str:
+        """CurveStore asset key for the ERIS EOD family.
+
+        The two variants used to share one key (USD-SOFR-1D). What lives there is
+        the raw ~18.3k-node daily discount frame -- which IS the -NOJUMPS curve.
+        -RL_BASIC prices off a 25-node log-cubic spline built from it, so the
+        shared key silently turned -RL_BASIC into -NOJUMPS whenever the day was
+        cached: identical rates on every tenor (any RV spread between the two
+        sources was then exactly zero), diverging by up to ~7.4 bp at the long
+        end when it was not cached. Which answer you got depended on cache state,
+        so history was not reproducible across machines.
+
+        -NOJUMPS keeps the original key so its 1,568 stored days stay live;
+        -RL_BASIC gets its own, initially empty, and re-warms with its actual
+        spline curve (whose knot vector CurveSnapshot now preserves).
+        """
+        if self._curve_store_source_family() == "eris_eod_rl_basic":
+            return f"{requested_curve_name}-RLBASIC"
+        return requested_curve_name
+
     def _eris_curve_store_source_variant(self) -> str:
         family = self._curve_store_source_family()
         if family == "eris_eod_rl_basic_nojumps":
@@ -873,9 +905,10 @@ class IRSwapsMDP(MarketDataProvider[_GenericPricable]):
         if trading_date is None:
             return
 
-        need_raw = not bool(getattr(store, "has_day")(requested_curve_name, trading_date))
+        asset = self._eris_curve_store_asset(requested_curve_name)
+        need_raw = not bool(getattr(store, "has_day")(asset, trading_date))
         has_analytics = getattr(store, "has_analytics_day", None)
-        need_analytics = not bool(has_analytics(requested_curve_name, trading_date)) if callable(has_analytics) else True
+        need_analytics = not bool(has_analytics(asset, trading_date)) if callable(has_analytics) else True
         if not need_raw and not need_analytics:
             return
 
@@ -912,20 +945,27 @@ class IRSwapsMDP(MarketDataProvider[_GenericPricable]):
                 for d in node_dates_sorted
             ]
             discount_factors = [float(raw_nodes[d]) for d in node_dates_sorted]
+            spline_knots, spline_endpoints = CurveSnapshot._extract_spline(rl_curve_handle)
             snapshot = CurveSnapshot(
                 timestamp_utc=ts_utc,
                 timestamp_local=ts_chi,
                 trading_date=trading_date,
                 session_minute=int((ts_chi - ts_chi.replace(hour=6, minute=0, second=0, microsecond=0)).total_seconds() // 60),
                 curve_name=requested_curve_name,
+                # reference_key must be a key of RATESLIB_CURVE_DEFINITIONS --
+                # reconstruct_curve looks the conventions up by it and silently
+                # falls back to act360/nyc/mf on a miss. The curve's own `id` is
+                # not such a key.
+                reference_key=requested_curve_name,
                 cfg_hash="",
-                reference_key=str(getattr(rl_curve_handle, "id", "") or requested_curve_name),
-                interpolation=str(getattr(rl_curve_handle, "interpolation", "log_linear") or "log_linear"),
+                interpolation=self._curve_interpolation_name(rl_curve_handle),
                 source_variant=self._eris_curve_store_source_variant(),
                 node_dates=node_dates,
                 discount_factors=discount_factors,
+                spline_knots=spline_knots,
+                spline_endpoints=spline_endpoints,
             )
-            store.write_day(requested_curve_name, trading_date, [snapshot])
+            store.write_day(asset, trading_date, [snapshot])
 
         if need_analytics:
             from Caching.curve_analytics import build_analytics_frame, compute_analytics_row
@@ -940,7 +980,7 @@ class IRSwapsMDP(MarketDataProvider[_GenericPricable]):
                 ]
             )
             if not analytics_df.empty:
-                store.write_analytics_day(requested_curve_name, trading_date, analytics_df)
+                store.write_analytics_day(asset, trading_date, analytics_df)
 
     def _promote_gsquant_curve_store_day(
         self,
@@ -1008,6 +1048,7 @@ class IRSwapsMDP(MarketDataProvider[_GenericPricable]):
                 for d in node_dates_sorted
             ]
             discount_factors = [float(raw_nodes[d]) for d in node_dates_sorted]
+            spline_knots, spline_endpoints = CurveSnapshot._extract_spline(rl_curve_handle)
             snapshot = CurveSnapshot(
                 timestamp_utc=ts_utc,
                 timestamp_local=ts_chi,
@@ -1016,10 +1057,12 @@ class IRSwapsMDP(MarketDataProvider[_GenericPricable]):
                 curve_name=requested_curve_name,
                 cfg_hash="",
                 reference_key=self._resolve_gsquant_reference_curve_name(requested_curve_name),
-                interpolation=str(getattr(rl_curve_handle, "interpolation", "log_linear") or "log_linear"),
+                interpolation=self._curve_interpolation_name(rl_curve_handle),
                 source_variant=self._gsquant_curve_store_source_variant(),
                 node_dates=node_dates,
                 discount_factors=discount_factors,
+                spline_knots=spline_knots,
+                spline_endpoints=spline_endpoints,
             )
             store.write_day(requested_curve_name, trading_date, [snapshot])
 
@@ -1275,17 +1318,18 @@ class IRSwapsMDP(MarketDataProvider[_GenericPricable]):
             return {}
 
         store = self._get_curve_store()
+        asset = self._eris_curve_store_asset(requested_curve_name)
         raw_df = pd.DataFrame()
         if hasattr(store, "read_raw_nodes"):
             try:
                 raw_df = store.read_raw_nodes(
-                    requested_curve_name,
+                    asset,
                     start=unique_dates[0],
                     end=unique_dates[-1],
                 )
             except TypeError:
                 raw_df = store.read_raw_nodes(
-                    requested_curve_name,
+                    asset,
                     start=unique_dates[0],
                     end=unique_dates[-1],
                 )
