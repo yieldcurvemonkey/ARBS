@@ -113,7 +113,11 @@ def test_computed_timeseries_store_wait_for_background_pushes_joins_pending_task
     monkeypatch.setattr(cts_module, "_get_computed_ts_sync", lambda base_dir: _FakeSync())
 
     store = ComputedTimeseriesStore(base_dir=tmp_path, use_duckdb=False)
-    ts = datetime.datetime(2025, 1, 6, 14, 0, tzinfo=datetime.timezone.utc)
+    # EOD row: both L2 pushes (whole-day blob + row-level value) apply. An
+    # intraday row deliberately skips the row-level push -- that table is keyed
+    # (symbol, trading_date) and would collapse a day onto one minute; see
+    # test_intraday_rows_do_not_touch_date_keyed_tiers.
+    ts = datetime.date(2025, 1, 6)
 
     store.append_rows(
         symbol="IRS::WAIT_TEST",
@@ -129,6 +133,67 @@ def test_computed_timeseries_store_wait_for_background_pushes_joins_pending_task
     assert waited == 2
     assert store.wait_for_background_pushes(timeout=0.0) == 0
     assert sorted(kind for kind, _ in push_calls) == ["day", "rows"]
+
+
+def test_intraday_rows_do_not_touch_date_keyed_tiers(monkeypatch, tmp_path):
+    """An intraday build must not overwrite the EOD value of the same symbol.
+
+    The DuckDB table and the row-level L2 table are keyed (symbol, trading_date).
+    Writing intraday points into them collapsed a whole day onto one arbitrary
+    minute, which the next daily-frequency read then served as that day's value.
+    """
+    import Caching.computed_timeseries_store as cts_module
+
+    push_kinds: list[str] = []
+
+    class _FakeSync:
+        def push_day(self, symbol, trading_date):
+            push_kinds.append("day")
+
+        def push_rows(self, symbol, rows):
+            push_kinds.append("rows")
+
+    monkeypatch.setattr(cts_module, "_get_computed_ts_sync", lambda base_dir: _FakeSync())
+
+    store = ComputedTimeseriesStore(base_dir=tmp_path)
+    sym = "IRS::INTRADAY_GUARD"
+    col = "USD-SOFR-1D 5Y OUTRIGHT RATE"
+    day = datetime.date(2025, 1, 6)
+
+    store.append_rows(symbol=sym, rows=[(day, col, 4.000)])          # EOD
+    store.wait_for_background_pushes(timeout=2.0)
+    push_kinds.clear()
+
+    store.append_rows(                                                # intraday
+        symbol=sym,
+        rows=[
+            (datetime.datetime(2025, 1, 6, h, m, tzinfo=datetime.timezone.utc), col, v)
+            for (h, m), v in [((14, 30), 4.100), ((20, 59), 4.190)]
+        ],
+    )
+    store.wait_for_background_pushes(timeout=2.0)
+
+    # the EOD slot is untouched
+    eod = store.read_rows(
+        symbol=sym, reference_points=[day], intraday=False, skip_current_eod=False,
+        fallback_column_name=col, allow_partial=True,
+    )
+    assert eod and eod[0][2] == 4.000
+
+    # the row-level L2 push is skipped; the whole-day blob still goes
+    assert "rows" not in push_kinds
+    assert "day" in push_kinds
+
+    # and the intraday points themselves round-trip at full resolution
+    got = store.read_rows(
+        symbol=sym,
+        reference_points=[
+            datetime.datetime(2025, 1, 6, 14, 30, tzinfo=datetime.timezone.utc),
+            datetime.datetime(2025, 1, 6, 20, 59, tzinfo=datetime.timezone.utc),
+        ],
+        intraday=True, skip_current_eod=False, fallback_column_name=col, allow_partial=True,
+    )
+    assert [round(v, 6) for _d, _c, v in got] == [4.100, 4.190]
 
 
 def test_computed_timeseries_store_roundtrip_preserves_intraday_column_names(tmp_path):

@@ -762,6 +762,24 @@ class IRSwapsTB(LayeredCacheMixin, BaseTimeseriesTB):
             is_intraday = (not has_timestamps) and isinstance(start, datetime.datetime) and isinstance(end, datetime.datetime) and (freq is not None)
             if is_intraday:
                 assert start.tzinfo is not None, "Must pass in timezone-aware datetime.datetime"
+            if has_timestamps:
+                # Same contract as the start/end+freq form above. A naive intraday
+                # timestamp is read as ET by IRSwapsMDP but keyed as UTC by the
+                # computed-timeseries store, so the two disagree by the UTC offset:
+                # naive 14:30 is priced as 14:30 ET yet shares a cache key with
+                # tz-aware 14:30 UTC (= 10:30 ET), four hours away. Rather than
+                # pick a winner and silently serve one instant's value for the
+                # other, refuse the ambiguity.
+                _naive = [
+                    t for t in timestamps
+                    if isinstance(t, datetime.datetime) and t.tzinfo is None
+                ]
+                if _naive:
+                    raise ValueError(
+                        "IRSwapsTB.get_timeseries(timestamps=...) requires timezone-aware "
+                        f"datetimes; got {len(_naive)} naive value(s), e.g. {_naive[0]!r}. "
+                        "Localize them (e.g. pytz.timezone('America/New_York').localize(ts))."
+                    )
             eff_freq = (freq or "1T") if is_intraday else freq
             ref_points = self._build_reference_points(start=start, end=end, freq=eff_freq, timestamps=timestamps)
             use_intraday_cache = has_timestamps or is_intraday
@@ -1103,7 +1121,9 @@ class IRSwapsTB(LayeredCacheMixin, BaseTimeseriesTB):
                 grouped[self._ts_symbol_for_query(curve_name, q)].append((dt_like, col, float(val)))
             if grouped:
                 try:
-                    self._computed_ts_store.append_many_rows(rows_by_symbol=grouped)
+                    self._computed_ts_store.append_many_rows(
+                        rows_by_symbol=grouped, intraday=use_intraday_cache
+                    )
                 except Exception as ex:
                     self._logger.warning(f"[TS cache] bulk append failed: {ex}")
 
