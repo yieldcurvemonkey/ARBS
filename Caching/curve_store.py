@@ -56,7 +56,12 @@ logger = _logging.getLogger(__name__)
 
 DEFAULT_COMPRESSION = "zstd"
 _CHI = pytz.timezone("America/Chicago")
+_NYC = pytz.timezone("America/New_York")
 _UTC = pytz.UTC
+
+# reference_keys already reported as unknown, so the warning fires once per key
+# rather than once per reconstructed curve.
+_WARNED_REFERENCE_KEYS: set[str] = set()
 
 # Session reference: CME STIR futures regular hours 06:00-17:00 CT
 _SESSION_OPEN_HOUR = 6
@@ -88,7 +93,23 @@ def _normalize_timestamp_utc_values(
 
 
 def _trading_dates_for_timestamps_utc(timestamps_utc: Sequence[datetime.datetime]) -> list[datetime.date]:
-    return sorted({_compute_trading_date(ts.astimezone(_CHI)) for ts in timestamps_utc})
+    """Candidate partition dates for a set of instants.
+
+    Assets do not agree on what `trading_date` means: the CME-derived feeds use
+    a 17:00-CT roll (_compute_trading_date), while the ERIS live daemon and
+    citivelo partition on the plain ET calendar date. Keying only on the CME rule
+    silently returned ZERO rows for data that was physically on disk -- every
+    evening snapshot of an ET-partitioned asset sits in the PREVIOUS day's
+    partition under that rule.
+    Return both candidates. Partitions are cheap to skip and the caller filters
+    to the exact timestamps afterwards (_filter_df_to_timestamps_utc), so a
+    superset costs a little IO and is correct under either convention.
+    """
+    dates: set[datetime.date] = set()
+    for ts in timestamps_utc:
+        dates.add(_compute_trading_date(ts.astimezone(_CHI)))  # CME 17:00-CT roll
+        dates.add(ts.astimezone(_NYC).date())                  # ET calendar date
+    return sorted(dates)
 
 
 def _filter_df_to_timestamps_utc(df: pd.DataFrame, timestamps_utc: Sequence[datetime.datetime]) -> pd.DataFrame:
@@ -867,8 +888,19 @@ class CurveStore:
             d = _to_date(d)
             nodes[rl.dt(d.year, d.month, d.day)] = float(v)
 
-        # Curve construction kwargs
+        # Curve construction kwargs.
+        # An unknown reference_key silently produced an act360/nyc/mf curve,
+        # which is right for USD but quietly wrong for anything else (act365f/tro
+        # conventions differ by 3-4 bp). Warn once per key so a bad writer is
+        # visible instead of being absorbed.
         curve_def = RATESLIB_CURVE_DEFINITIONS.get(reference_key, {})
+        if not curve_def and reference_key not in _WARNED_REFERENCE_KEYS:
+            _WARNED_REFERENCE_KEYS.add(reference_key)
+            logger.warning(
+                "Stored reference_key %r is not in RATESLIB_CURVE_DEFINITIONS; "
+                "falling back to act360/nyc/mf. Conventions for this curve may be wrong.",
+                reference_key,
+            )
         kwargs: Dict[str, Any] = {
             "nodes": nodes,
             "id": reference_key,
