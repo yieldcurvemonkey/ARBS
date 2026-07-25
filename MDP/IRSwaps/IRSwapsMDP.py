@@ -4,6 +4,7 @@ import io
 import os
 import sys
 import threading
+import time
 import logging
 import re
 from typing import Any, Dict, Iterable, List, Literal, Optional, Sequence, Union
@@ -16,6 +17,12 @@ from MDP.IRSwaps.fixings_cache.fixings_cache import _fetch_fixings
 from MDP.MarketDataProvider import MarketDataProvider
 from Query.Base._GenericPricable import _GenericPricable
 from Query.IRSwaps._IRSwapGenericCurve import _IRSwapGenericCurve
+
+from pandas.tseries.holiday import USFederalHolidayCalendar as _USFedCal
+from pandas.tseries.offsets import CustomBusinessDay as _CBD
+
+# SOFR for date D publishes on the next US business day (~08:00 ET).
+_FIXING_PUBLISH_OFFSET = _CBD(calendar=_USFedCal())
 
 
 class IRSwapsMDP(MarketDataProvider[_GenericPricable]):
@@ -201,13 +208,14 @@ class IRSwapsMDP(MarketDataProvider[_GenericPricable]):
         rl_curve_handle = next(iter(curves.values()))
 
         snap_et = tvec.iloc[pos].tz_convert(NYC)
-        ref = snap_et.date()
         ts_out = snap_et.tz_localize(None).to_pydatetime()  # naive ET (matches workbook path)
 
-        sofr_fixings = _fetch_fixings(
-            as_of_date=ref, curve_name=requested_curve_name, force_refresh=self.force_refresh_fixings
-        ).sort_index()
-        sofr_fixings = sofr_fixings[sofr_fixings.index.date < ref] * 100
+        # Curve reference date, not the snapshot's ET calendar date — same rule as
+        # the ERIS live path (see _asof_fixings).
+        ref = self._curve_reference_date(rl_curve_handle) or snap_et.date()
+        sofr_fixings = self._asof_fixings(
+            curve_name=requested_curve_name, reference_date=ref, as_of_instant=snap_et,
+        )
 
         curve_id = f"{self.source.upper()}-{requested_curve_name}-{ts_out}"
         return RLIRSwapCurve(
@@ -260,13 +268,15 @@ class IRSwapsMDP(MarketDataProvider[_GenericPricable]):
         if snap_utc.tzinfo is None:
             snap_utc = snap_utc.tz_localize("UTC")
         snap_et = snap_utc.tz_convert(NYC)
-        ref = snap_et.date()
         ts_out = snap_et.to_pydatetime()
 
-        sofr_fixings = _fetch_fixings(
-            as_of_date=ref, curve_name=requested_curve_name, force_refresh=self.force_refresh_fixings
-        ).sort_index()
-        sofr_fixings = sofr_fixings[sofr_fixings.index.date < ref] * 100
+        # Key the fixings off the CURVE's reference date, not the snapshot's ET
+        # calendar date -- the ERIS feed rolls its first node to the next business
+        # day every evening, and the two disagree for the whole overnight session.
+        ref = self._curve_reference_date(rl_curve_handle) or snap_et.date()
+        sofr_fixings = self._asof_fixings(
+            curve_name=requested_curve_name, reference_date=ref, as_of_instant=snap_et,
+        )
 
         curve_id = f"{self.source.upper()}-{requested_curve_name}-{ts_out}"
         return RLIRSwapCurve(
@@ -277,6 +287,83 @@ class IRSwapsMDP(MarketDataProvider[_GenericPricable]):
         )
 
     @staticmethod
+    def _curve_reference_date(rl_curve_handle: Any) -> Optional[datetime.date]:
+        """First node of a reconstructed rl.Curve = the curve's reference date."""
+        try:
+            nodes = rl_curve_handle.nodes
+            raw = nodes._nodes if hasattr(nodes, "_nodes") else dict(nodes)
+            first = min(raw.keys())
+        except Exception:
+            return None
+        return first.date() if hasattr(first, "date") else first
+
+    def _asof_fixings(
+        self,
+        *,
+        curve_name: str,
+        reference_date: datetime.date,
+        as_of_instant: Optional[datetime.datetime] = None,
+    ) -> pd.Series:
+        """SOFR fixings for a curve whose reference (first-node) date is
+        ``reference_date``, as knowable at ``as_of_instant``.
+
+        Two things this gets right that slicing on the snapshot's ET wall-clock
+        date did not:
+
+        * The set is keyed on the CURVE's reference date, not on the snapshot's
+          calendar date. The ERIS feed rolls its reference date to the next
+          business day during the evening session, so the two differ every night;
+          slicing on the snapshot date dropped the fixing rateslib needs for any
+          already-accruing float period and made every seasoned swap raise.
+        * Fixings are truncated to what had actually PUBLISHED at
+          ``as_of_instant`` (SOFR for date D lands ~08:00 ET on D+1). Anything
+          still unpublished but required by the curve is filled forward from the
+          last published value rather than back-filled from the future, which is
+          what a point-in-time replay is entitled to see. Persistence is a very
+          good nowcast here -- substituting the prior day's fixing moves a
+          seasoned 5Y by ~0.0012 bp.
+        """
+        from MDP.IRSwaps.fixings_cache.fixings_cache import _SOFR_PUBLISH_TIME_ET
+
+        series = _fetch_fixings(
+            as_of_date=reference_date,
+            curve_name=curve_name,
+            force_refresh=self.force_refresh_fixings,
+        ).sort_index()
+        series = series[series.index.date < reference_date] * 100
+
+        if as_of_instant is None or series.empty:
+            return series
+
+        instant = pd.Timestamp(as_of_instant)
+        if instant.tzinfo is None:
+            instant = instant.tz_localize(pytz.timezone("America/New_York"))
+        instant_et = instant.tz_convert(pytz.timezone("America/New_York"))
+
+        # A fixing for date D is published ~08:00 ET on the next business day, so
+        # it is knowable at `instant` only once that publication moment has passed.
+        published = series[
+            [
+                pd.Timestamp(
+                    datetime.datetime.combine(
+                        (pd.Timestamp(d) + _FIXING_PUBLISH_OFFSET).date(),
+                        _SOFR_PUBLISH_TIME_ET,
+                    )
+                ).tz_localize(pytz.timezone("America/New_York")) <= instant_et
+                for d in series.index.date
+            ]
+        ]
+        if published.empty or len(published) == len(series):
+            return published if not published.empty else series
+
+        # Carry the last published fixing forward over the unpublished tail the
+        # curve still needs, so the float leg can compound instead of raising.
+        last = float(published.iloc[-1])
+        nowcast = series.copy()
+        nowcast.iloc[len(published):] = last
+        return nowcast
+
+    @staticmethod
     def _eris_local_l1_enabled() -> bool:
         """Whether to use the read-only local Parquet L1 cache for
         eris_live_intraday settled-day curve reads (default on)."""
@@ -284,12 +371,55 @@ class IRSwapsMDP(MarketDataProvider[_GenericPricable]):
             "0", "false", "no", "off", ""
         )
 
-    # Per-process memo for the L1 day cache, keyed (asset, trading_date):
-    #   True  -> local partition revalidated against Supabase this process
+    # Per-process memo for the L1 day cache, keyed (asset, trading_date) ->
+    # (state, checked_at_monotonic):
+    #   True  -> local partition revalidated against Supabase
     #   False -> Supabase has no rows for this day (weekend/holiday/pre-history)
     # The False entries are the negative cache: without them every empty day
     # costs a full remote round trip on every call, forever.
-    _ERIS_L1_DAY_STATE: Dict[tuple, bool] = {}
+    # Entries expire so a long-lived process still picks up a repaired or
+    # back-filled settled day, instead of trusting its first answer until restart.
+    _ERIS_L1_DAY_STATE: Dict[tuple, tuple] = {}
+
+    @staticmethod
+    def _eris_l1_revalidate_seconds() -> float:
+        try:
+            return max(0.0, float(os.environ.get("ARBS_ERIS_L1_REVALIDATE_SECONDS", "300")))
+        except ValueError:
+            return 300.0
+
+    @classmethod
+    def _eris_l1_memo(cls, key: tuple) -> Optional[bool]:
+        entry = cls._ERIS_L1_DAY_STATE.get(key)
+        if entry is None:
+            return None
+        state, checked_at = entry
+        ttl = cls._eris_l1_revalidate_seconds()
+        if ttl <= 0 or (time.monotonic() - checked_at) > ttl:
+            cls._ERIS_L1_DAY_STATE.pop(key, None)
+            return None
+        return state
+
+    @classmethod
+    def _eris_l1_memo_set(cls, key: tuple, state: bool) -> None:
+        cls._ERIS_L1_DAY_STATE[key] = (state, time.monotonic())
+
+    @staticmethod
+    def _partition_written_at(store, asset, trading_date) -> Optional[pd.Timestamp]:
+        """When the local raw partition for (asset, trading_date) was last written."""
+        from Caching.curve_store import _sanitize
+
+        part = (
+            store._raw_dir
+            / f"asset={_sanitize(asset)}" / f"date={trading_date.isoformat()}"
+        )
+        try:
+            mtimes = [f.stat().st_mtime for f in part.glob("*.parquet")]
+        except OSError:
+            return None
+        if not mtimes:
+            return None
+        return pd.Timestamp(max(mtimes), unit="s", tz="UTC")
 
     def _ensure_eris_day_local(self, store, sync, asset, trading_date, today_et):
         """Snapshot rows for one SETTLED ET trading_date, served from (and
@@ -310,7 +440,7 @@ class IRSwapsMDP(MarketDataProvider[_GenericPricable]):
         import pytz
 
         memo_key = (str(asset), trading_date)
-        memo = self._ERIS_L1_DAY_STATE.get(memo_key)
+        memo = self._eris_l1_memo(memo_key)
         if memo is False:
             return pd.DataFrame()  # known-empty day, no remote round trip
         if memo is True and store.has_day(asset, trading_date):
@@ -318,19 +448,35 @@ class IRSwapsMDP(MarketDataProvider[_GenericPricable]):
 
         if store.has_day(asset, trading_date):
             local = store.read_raw_day(asset, trading_date)
-            remote_n = sync.count_snapshots_day(asset, trading_date)
-            if remote_n is None or remote_n == len(local):
-                self._ERIS_L1_DAY_STATE[memo_key] = True
+            fp = sync.day_fingerprint(asset, trading_date)
+            if fp is None:
+                self._eris_l1_memo_set(memo_key, True)
+                return local  # offline / no schema -> local is all we have
+            remote_n, newest = fp
+            written_at = self._partition_written_at(store, asset, trading_date)
+            stale_reason = None
+            if remote_n != len(local):
+                stale_reason = f"row count local={len(local)} remote={remote_n}"
+            elif newest is not None and written_at is not None:
+                newest_ts = pd.Timestamp(newest)
+                if newest_ts.tzinfo is None:
+                    newest_ts = newest_ts.tz_localize("UTC")
+                if newest_ts > written_at:
+                    # A repair that rewrites existing timestamps keeps the count
+                    # identical, so the count check alone would pass it through.
+                    stale_reason = f"rows written {newest_ts} after partition {written_at}"
+            if stale_reason is None:
+                self._eris_l1_memo_set(memo_key, True)
                 return local
             logging.getLogger(__name__).info(
-                "ERIS L1 partition for %s/%s is stale (local %d rows, Supabase %d) — rematerializing",
-                asset, trading_date, len(local), remote_n,
+                "ERIS L1 partition for %s/%s is stale (%s) — rematerializing",
+                asset, trading_date, stale_reason,
             )
         if trading_date >= today_et:
             return pd.DataFrame()  # incomplete day -> caller reads remote
         df = sync.pull_snapshots_day(asset, trading_date)
         if df is None or df.empty:
-            self._ERIS_L1_DAY_STATE[memo_key] = False
+            self._eris_l1_memo_set(memo_key, False)
             return pd.DataFrame()
 
         from Caching.curve_store import CurveSnapshot
@@ -357,7 +503,7 @@ class IRSwapsMDP(MarketDataProvider[_GenericPricable]):
             )
         snaps.sort(key=lambda s: s.timestamp_utc)
         store.write_day(asset, trading_date, snaps, overwrite=True, push_l2=False)
-        self._ERIS_L1_DAY_STATE[memo_key] = True
+        self._eris_l1_memo_set(memo_key, True)
         return store.read_raw_day(asset, trading_date)
 
     def _curve_store_source_family(self) -> Optional[str]:
@@ -3107,35 +3253,39 @@ class IRSwapsMDP(MarketDataProvider[_GenericPricable]):
                 return out
 
             # ======================= method == "asof" =======================
-            # Per-ref-date SOFR fixings memo (identical values to the single-point
-            # slice, just fetched once per distinct ref date instead of per snapshot).
-            fixings_by_ref: Dict[datetime.date, pd.Series] = {}
+            # Per-(ref-date, publication-state) SOFR fixings memo — identical values
+            # to the single-point path, fetched once per distinct key rather than per
+            # snapshot. The key carries the as-of instant's publication boundary
+            # because two snapshots sharing a curve reference date can still straddle
+            # the ~08:00 ET SOFR publication (see _asof_fixings).
+            fixings_by_ref: Dict[tuple, pd.Series] = {}
 
-            def _fixings_for_ref(ref: datetime.date) -> pd.Series:
-                cached = fixings_by_ref.get(ref)
+            def _fixings_for_ref(ref: datetime.date, as_of: pd.Timestamp) -> pd.Series:
+                pub_key = (as_of.date(), as_of.hour >= 8)
+                key = (ref, pub_key)
+                cached = fixings_by_ref.get(key)
                 if cached is None:
-                    s = _fetch_fixings(
-                        as_of_date=ref,
-                        curve_name=curve_name,
-                        force_refresh=self.force_refresh_fixings,
-                    ).sort_index()
-                    cached = s[s.index.date < ref] * 100
-                    fixings_by_ref[ref] = cached
+                    cached = self._asof_fixings(
+                        curve_name=curve_name, reference_date=ref, as_of_instant=as_of,
+                    )
+                    fixings_by_ref[key] = cached
                 return cached
 
             def _wrap(row: dict, rl_curve_handle: Any) -> "RLIRSwapCurve":
-                # Byte-identical wrapping to _load_eris_live_intraday_point.
+                # Value-identical wrapping to _load_eris_live_intraday_point.
                 snap_utc = pd.Timestamp(row["timestamp_utc"])
                 if snap_utc.tzinfo is None:
                     snap_utc = snap_utc.tz_localize("UTC")
                 snap_et = snap_utc.tz_convert(NYC)
-                ref = snap_et.date()
                 ts_out = snap_et.to_pydatetime()
+                # Curve reference date, not the snapshot's ET calendar date — see
+                # _asof_fixings. These differ for the whole overnight session.
+                ref = self._curve_reference_date(rl_curve_handle) or snap_et.date()
                 curve_id = f"{self.source.upper()}-{curve_name}-{ts_out}"
                 return RLIRSwapCurve(
                     rl_curve_id=curve_name,
                     rl_curve_handle=rl_curve_handle,
-                    fixings=_fixings_for_ref(ref),
+                    fixings=_fixings_for_ref(ref, snap_et),
                     meta_data={"timestamp": ts_out, "id": curve_id, "source": "eris_live_intraday"},
                 )
 

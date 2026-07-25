@@ -457,15 +457,18 @@ class SupabaseCurveSync:
             ).fetchall()
         return pd.DataFrame([self._snapshot_row_to_dict(r) for r in rows])
 
-    def count_snapshots_day(
+    def day_fingerprint(
         self, curve_name: str, trading_date: datetime.date
-    ) -> Optional[int]:
-        """Row count for (curve_name, trading_date) — one indexed COUNT.
+    ) -> Optional[tuple]:
+        """``(row_count, max_created_at)`` for (curve_name, trading_date).
 
-        Used to revalidate a locally-materialized L1 day without pulling it:
-        a settled day is only immutable for a strictly forward-only feed, and
-        anything that back-fills or repairs a settled day would otherwise stay
-        invisible forever. Returns None when there is no engine / no schema.
+        One indexed aggregate. Used to revalidate a locally-materialized L1 day
+        without pulling it: a settled day is only immutable for a strictly
+        forward-only feed, and anything that back-fills or repairs one would
+        otherwise stay invisible forever. The row count alone is not enough —
+        a repair that rewrites existing timestamps leaves it unchanged — so the
+        newest ``created_at`` is returned too and compared against the local
+        partition's write time. Returns None when there is no engine / no schema.
         """
         if self._engine is None:
             return None
@@ -476,12 +479,13 @@ class SupabaseCurveSync:
         with self._engine.begin() as conn:
             row = conn.execute(
                 text(f"""
-                    SELECT count(*) AS n FROM {CURVE_SNAPSHOTS_TABLE}
+                    SELECT count(*) AS n, max(created_at) AS newest
+                    FROM {CURVE_SNAPSHOTS_TABLE}
                     WHERE curve_name = :cn AND trading_date = :td
                 """),
                 {"cn": curve_name, "td": trading_date},
             ).fetchone()
-        return int(row.n) if row is not None else None
+        return (int(row.n), row.newest) if row is not None else None
 
     def latest_snapshot_ts(
         self, curve_name: str, trading_date: datetime.date
