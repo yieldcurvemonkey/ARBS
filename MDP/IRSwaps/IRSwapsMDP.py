@@ -2822,16 +2822,17 @@ class IRSwapsMDP(MarketDataProvider[_GenericPricable]):
                                 parquet_df = _pd.concat(day_dfs, ignore_index=True)
 
                         if not parquet_df.empty:
-                            # Index by timestamp_utc for fast lookup (normalize to second precision)
+                            # Index by timestamp_utc for fast lookup (normalize to second precision).
+                            # NB: must CONVERT to UTC, never relabel — read_raw_nodes returns a
+                            # session-tz column for multi-date reads (DuckDB) and a UTC one for
+                            # single-date reads (PyArrow short-circuit), so a `.replace(tzinfo=UTC)`
+                            # here shifted every multi-date key by the local UTC offset and missed
+                            # 100% of the time.
                             parquet_ts_set = set()
                             if "timestamp_utc" in parquet_df.columns:
                                 for ts_val in parquet_df["timestamp_utc"]:
-                                    if hasattr(ts_val, "to_pydatetime"):
-                                        parquet_ts_set.add(ts_val.to_pydatetime().replace(tzinfo=pytz.UTC, microsecond=0))
-                                    elif isinstance(ts_val, datetime.datetime):
-                                        parquet_ts_set.add(ts_val.replace(microsecond=0) if ts_val.tzinfo else pytz.UTC.localize(ts_val.replace(microsecond=0)))
-                                    else:
-                                        parquet_ts_set.add(ts_val)
+                                    key = self._curve_store_timestamp_key(ts_val)
+                                    parquet_ts_set.add(key if key is not None else ts_val)
 
                             # Check coverage: do we have ALL requested timestamps?
                             rl_ts_utc = set()
@@ -2850,17 +2851,9 @@ class IRSwapsMDP(MarketDataProvider[_GenericPricable]):
                                 cfg = builder._STIRF_CURVE_CONFIGS[resolved_curve_name]
                                 parquet_ts_keys = parquet_df["timestamp_utc"].map(
                                     lambda ts_val: (
-                                        ts_val.to_pydatetime().replace(tzinfo=pytz.UTC, microsecond=0)
-                                        if hasattr(ts_val, "to_pydatetime")
-                                        else (
-                                            ts_val.astimezone(pytz.UTC).replace(microsecond=0)
-                                            if isinstance(ts_val, datetime.datetime) and ts_val.tzinfo is not None
-                                            else (
-                                                pytz.UTC.localize(ts_val.replace(microsecond=0))
-                                                if isinstance(ts_val, datetime.datetime)
-                                                else ts_val
-                                            )
-                                        )
+                                        self._curve_store_timestamp_key(ts_val)
+                                        if self._curve_store_timestamp_key(ts_val) is not None
+                                        else ts_val
                                     )
                                 )
                                 parquet_df = parquet_df.loc[parquet_ts_keys.isin(rl_ts_utc)].copy()
