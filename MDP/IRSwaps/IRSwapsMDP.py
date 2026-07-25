@@ -172,6 +172,17 @@ class IRSwapsMDP(MarketDataProvider[_GenericPricable]):
                 return None
             et_date = datetime.date.fromisoformat(parts[-1].name.split("=", 1)[1])
             target_utc = None
+        elif isinstance(timestamp, datetime.date) and not isinstance(timestamp, datetime.datetime):
+            # A bare date means "that day's close". It used to become naive
+            # midnight ET, and since the search never leaves the ET-date
+            # partition, `nearest` then returned the day's FIRST row -- 01:00 ET,
+            # ~15 h before the close. Measured over the last 95 stored partitions
+            # (first row is 01:00 ET on 95/95): 5Y mean |error| 3.55 bp, p90 7.30
+            # bp, max 12.05 bp; 2Y max 23.12 bp. Resolve to the last snapshot of
+            # the day instead, which is robust to the feed's variable end time
+            # (it stops at 11:58 ET on some days, ~16:00 on others).
+            et_date = timestamp
+            target_utc = None
         else:
             ts = pd.Timestamp(timestamp)
             if ts.tzinfo is None:
@@ -179,13 +190,18 @@ class IRSwapsMDP(MarketDataProvider[_GenericPricable]):
             et_date = ts.tz_convert(NYC).date()
             target_utc = ts.tz_convert("UTC")
 
-        if not store.has_day(ASSET, et_date):
-            return None
-        raw = store.read_raw_day(ASSET, et_date)
-        if raw is None or getattr(raw, "empty", True):
+        def _load_day(day: datetime.date):
+            if not store.has_day(ASSET, day):
+                return None, None
+            frame = store.read_raw_day(ASSET, day)
+            if frame is None or getattr(frame, "empty", True):
+                return None, None
+            return frame, pd.to_datetime(frame["timestamp_utc"], utc=True).reset_index(drop=True)
+
+        raw, tvec = _load_day(et_date)
+        if raw is None:
             return None
 
-        tvec = pd.to_datetime(raw["timestamp_utc"], utc=True).reset_index(drop=True)
         if target_utc is None:
             pos = len(tvec) - 1
         elif method == "exact":
@@ -196,10 +212,34 @@ class IRSwapsMDP(MarketDataProvider[_GenericPricable]):
         elif method == "asof":
             le = tvec[tvec <= target_utc]
             if le.empty:
-                return None
-            pos = int(le.idxmax())
+                # The feed's first row of the day is ~01:00 ET, so a backward
+                # search for e.g. 00:30 ET finds nothing INSIDE the ET-date
+                # partition. That is a partition boundary, not a data gap --
+                # walk back to the most recent earlier day rather than failing
+                # (or, as "nearest" used to, jumping FORWARD to 01:00 ET).
+                probe = et_date
+                for _ in range(7):
+                    probe -= datetime.timedelta(days=1)
+                    prev_raw, prev_tvec = _load_day(probe)
+                    if prev_raw is None:
+                        continue
+                    prev_le = prev_tvec[prev_tvec <= target_utc]
+                    if prev_le.empty:
+                        continue
+                    raw, tvec = prev_raw, prev_tvec
+                    pos = int(prev_le.idxmax())
+                    break
+                else:
+                    return None
+            else:
+                pos = int(le.idxmax())
         else:  # nearest
             pos = int((tvec - target_utc).abs().values.argmin())
+
+        if target_utc is not None:
+            self._assert_snapshot_fresh(
+                source="citivelo", requested=timestamp, snapshot_utc=tvec.iloc[pos],
+            )
 
         row = raw.iloc[[pos]]
         curves = store.reconstruct_curves_batch(row, cfg=None, max_workers=1)
@@ -262,11 +302,15 @@ class IRSwapsMDP(MarketDataProvider[_GenericPricable]):
         if row is None:
             return None
 
-        rl_curve_handle = CurveStore.reconstruct_curve(row, cfg=None)
-
         snap_utc = pd.Timestamp(row["timestamp_utc"])
         if snap_utc.tzinfo is None:
             snap_utc = snap_utc.tz_localize("UTC")
+        if timestamp != "live":
+            self._assert_snapshot_fresh(
+                source="eris_live_intraday", requested=timestamp, snapshot_utc=snap_utc,
+            )
+
+        rl_curve_handle = CurveStore.reconstruct_curve(row, cfg=None)
         snap_et = snap_utc.tz_convert(NYC)
         ts_out = snap_et.to_pydatetime()
 
@@ -285,6 +329,54 @@ class IRSwapsMDP(MarketDataProvider[_GenericPricable]):
             fixings=sofr_fixings,
             meta_data={"timestamp": ts_out, "id": curve_id, "source": "eris_live_intraday"},
         )
+
+    @staticmethod
+    def _max_snapshot_staleness() -> Optional[datetime.timedelta]:
+        """How far an as-of/nearest match may sit behind the requested instant.
+
+        ``method="asof"`` is an unbounded backward search, so a request past the
+        end of the data silently returned the last snapshot with no warning, no
+        NaN and no exception -- a target 365 days later still resolved to it
+        (lag 8755 h), and on citivelo a request 11 h after the feed stopped was
+        reported as 0 bp of movement. Default 12 h, which comfortably spans the
+        real overnight gaps in these feeds. Set ARBS_MAX_CURVE_STALENESS_HOURS=0
+        to restore the old unbounded behaviour.
+        """
+        raw = os.environ.get("ARBS_MAX_CURVE_STALENESS_HOURS", "12").strip()
+        try:
+            hours = float(raw)
+        except ValueError:
+            hours = 12.0
+        if hours <= 0:
+            return None
+        return datetime.timedelta(hours=hours)
+
+    @classmethod
+    def _assert_snapshot_fresh(
+        cls,
+        *,
+        source: str,
+        requested: Any,
+        snapshot_utc: Any,
+    ) -> None:
+        limit = cls._max_snapshot_staleness()
+        if limit is None or requested is None or snapshot_utc is None:
+            return
+        req = pd.Timestamp(requested)
+        if req.tzinfo is None:
+            req = req.tz_localize(pytz.timezone("America/New_York"))
+        snap = pd.Timestamp(snapshot_utc)
+        if snap.tzinfo is None:
+            snap = snap.tz_localize("UTC")
+        lag = req.tz_convert("UTC") - snap.tz_convert("UTC")
+        if lag > limit:
+            raise RuntimeError(
+                f"{source}: nearest snapshot at or before {req} is {snap} — "
+                f"{lag.total_seconds() / 3600:.1f}h stale (limit "
+                f"{limit.total_seconds() / 3600:.0f}h). The feed has no data for "
+                f"that instant; set ARBS_MAX_CURVE_STALENESS_HOURS to change or "
+                f"disable this bound."
+            )
 
     @staticmethod
     def _curve_interpolation_name(rl_curve_handle: Any) -> str:
@@ -2509,7 +2601,11 @@ class IRSwapsMDP(MarketDataProvider[_GenericPricable]):
         elif self.source.upper() in ["CITIVELO", "CITI_VELO", "CITIVELOCITY"]:
             assert curve_name == "USD-SOFR-1D", "SOFR!"
 
-            method = kwargs.get("method", "nearest")
+            # "asof" (backward-only), matching every other intraday source.
+            # "nearest" is direction-unbounded, so an intraday request could be
+            # answered with a snapshot from the FUTURE -- measured up to 55 min
+            # ahead for 00:05-00:55 ET requests against the 01:00 ET first row.
+            method = kwargs.get("method", "asof")
 
             # DEFAULT: serve the pre-warmed curve from the CurveStore (local parquet
             # backed by Supabase L2). Never parse the 365 MB workbook unless the
@@ -3473,8 +3569,21 @@ class IRSwapsMDP(MarketDataProvider[_GenericPricable]):
                                 if pd.isna(snap_ts):
                                     continue  # target before earliest snapshot -> omitted
                                 wrapper = wrapper_by_key.get(pd.Timestamp(snap_ts).tz_convert("UTC"))
-                                if wrapper is not None:
-                                    out[dt_targets[int(mrow["i"])]] = wrapper
+                                if wrapper is None:
+                                    continue
+                                target = dt_targets[int(mrow["i"])]
+                                try:
+                                    # Same staleness bound as the single-point
+                                    # path, so batch and single agree on which
+                                    # targets have no usable data.
+                                    self._assert_snapshot_fresh(
+                                        source="eris_live_intraday",
+                                        requested=target,
+                                        snapshot_utc=snap_ts,
+                                    )
+                                except RuntimeError:
+                                    continue
+                                out[target] = wrapper
                 except Exception:
                     logging.getLogger(__name__).debug(
                         "ERIS live-intraday bulk as-of batch failed; salvaging via single-point",
