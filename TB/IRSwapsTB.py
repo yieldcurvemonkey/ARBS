@@ -912,6 +912,23 @@ class IRSwapsTB(LayeredCacheMixin, BaseTimeseriesTB):
 
                 decomposable: list = []
                 for q in qs:
+                    # The shortcut below rebuilds each leg as a bare
+                    # IRSwapQuery(curve, tenor, value=RATE) and combines them with
+                    # the DEFAULT weights from _decompose_rate_into_outright_legs.
+                    # That silently discards any caller-supplied weighting, so a
+                    # warm cache returned a differently-weighted -- or sign-flipped
+                    # -- spread under an identical column name (bpv=-10000 gave
+                    # +17.16 bp where the direct path gives -17.16 bp;
+                    # risk_weights=[1,0.5] was out by ~203 bp). Price those directly.
+                    _skw = dict(getattr(q, "structure_kwargs", {}) or {})
+                    if getattr(q, "risk_weight", None) is not None or any(
+                        _skw.get(k) is not None
+                        for k in (
+                            "risk_weights", "bpv", "notional",
+                            "front_notional", "belly_notional", "back_notional",
+                        )
+                    ):
+                        continue
                     col = q.col_name(curve_name)
                     missing = [
                         d for d in cacheable_ref_points
