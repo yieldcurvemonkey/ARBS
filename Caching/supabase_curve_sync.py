@@ -457,6 +457,32 @@ class SupabaseCurveSync:
             ).fetchall()
         return pd.DataFrame([self._snapshot_row_to_dict(r) for r in rows])
 
+    def count_snapshots_day(
+        self, curve_name: str, trading_date: datetime.date
+    ) -> Optional[int]:
+        """Row count for (curve_name, trading_date) — one indexed COUNT.
+
+        Used to revalidate a locally-materialized L1 day without pulling it:
+        a settled day is only immutable for a strictly forward-only feed, and
+        anything that back-fills or repairs a settled day would otherwise stay
+        invisible forever. Returns None when there is no engine / no schema.
+        """
+        if self._engine is None:
+            return None
+        from Caching.supabase_schema import ensure_schema
+
+        if not ensure_schema(self._engine):
+            return None
+        with self._engine.begin() as conn:
+            row = conn.execute(
+                text(f"""
+                    SELECT count(*) AS n FROM {CURVE_SNAPSHOTS_TABLE}
+                    WHERE curve_name = :cn AND trading_date = :td
+                """),
+                {"cn": curve_name, "td": trading_date},
+            ).fetchone()
+        return int(row.n) if row is not None else None
+
     def latest_snapshot_ts(
         self, curve_name: str, trading_date: datetime.date
     ) -> Optional[datetime.datetime]:

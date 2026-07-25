@@ -284,22 +284,53 @@ class IRSwapsMDP(MarketDataProvider[_GenericPricable]):
             "0", "false", "no", "off", ""
         )
 
+    # Per-process memo for the L1 day cache, keyed (asset, trading_date):
+    #   True  -> local partition revalidated against Supabase this process
+    #   False -> Supabase has no rows for this day (weekend/holiday/pre-history)
+    # The False entries are the negative cache: without them every empty day
+    # costs a full remote round trip on every call, forever.
+    _ERIS_L1_DAY_STATE: Dict[tuple, bool] = {}
+
     def _ensure_eris_day_local(self, store, sync, asset, trading_date, today_et):
         """Snapshot rows for one SETTLED ET trading_date, served from (and
         populated once, on first touch) a read-only local Parquet L1 mirroring the
         BARCHART_STIRF curve cache. Returns empty for today/future (still
         appending) so the caller does a remote windowed read instead. The L1
-        materialize is local-only (push_l2=False) — no whole-day blob re-push."""
+        materialize is local-only (push_l2=False) — no whole-day blob re-push.
+
+        A materialized partition is revalidated once per process against a single
+        indexed COUNT. `store.has_day` is a bare filesystem check with no TTL, so
+        without this any row that lands for a settled trading_date after the
+        partition was written is invisible forever and as-of then silently matches
+        an older snapshot. The observed trigger is not operator action: the feed's
+        insert lag runs to ~176 s against a 180 s tolerance, so the last rows of a
+        day can land after the ET rollover that makes it eligible for materializing.
+        """
         import pandas as pd
         import pytz
 
-        if store.has_day(asset, trading_date):
-            # local hit — partition exists, so read_raw_day won't hit the blob fallback
+        memo_key = (str(asset), trading_date)
+        memo = self._ERIS_L1_DAY_STATE.get(memo_key)
+        if memo is False:
+            return pd.DataFrame()  # known-empty day, no remote round trip
+        if memo is True and store.has_day(asset, trading_date):
             return store.read_raw_day(asset, trading_date)
+
+        if store.has_day(asset, trading_date):
+            local = store.read_raw_day(asset, trading_date)
+            remote_n = sync.count_snapshots_day(asset, trading_date)
+            if remote_n is None or remote_n == len(local):
+                self._ERIS_L1_DAY_STATE[memo_key] = True
+                return local
+            logging.getLogger(__name__).info(
+                "ERIS L1 partition for %s/%s is stale (local %d rows, Supabase %d) — rematerializing",
+                asset, trading_date, len(local), remote_n,
+            )
         if trading_date >= today_et:
             return pd.DataFrame()  # incomplete day -> caller reads remote
         df = sync.pull_snapshots_day(asset, trading_date)
         if df is None or df.empty:
+            self._ERIS_L1_DAY_STATE[memo_key] = False
             return pd.DataFrame()
 
         from Caching.curve_store import CurveSnapshot
@@ -326,6 +357,7 @@ class IRSwapsMDP(MarketDataProvider[_GenericPricable]):
             )
         snaps.sort(key=lambda s: s.timestamp_utc)
         store.write_day(asset, trading_date, snaps, overwrite=True, push_l2=False)
+        self._ERIS_L1_DAY_STATE[memo_key] = True
         return store.read_raw_day(asset, trading_date)
 
     def _curve_store_source_family(self) -> Optional[str]:
@@ -3193,14 +3225,27 @@ class IRSwapsMDP(MarketDataProvider[_GenericPricable]):
 
                     if not snaps_df.empty:
                         snaps_df = snaps_df.copy()
-                        snaps_df["timestamp_utc"] = pd.to_datetime(snaps_df["timestamp_utc"], utc=True)
+                        # merge_asof requires IDENTICAL key dtypes, and the two row
+                        # sources disagree on resolution: read_raw_day (local Parquet
+                        # L1) yields datetime64[us, UTC] because _RAW_SCHEMA declares
+                        # microseconds, while pull_snapshots_range yields
+                        # datetime64[ns, UTC]. pd.to_datetime preserves the existing
+                        # unit, so a settled-day-only request produced a us frame and
+                        # raised MergeError against the ns targets — silently dropping
+                        # the whole batch into the per-target salvage loop. Pin both
+                        # sides to ns.
+                        snaps_df["timestamp_utc"] = (
+                            pd.to_datetime(snaps_df["timestamp_utc"], utc=True)
+                            .astype("datetime64[ns, UTC]")
+                        )
                         snaps_df = snaps_df.sort_values("timestamp_utc").reset_index(drop=True)
 
                         # Positional index keeps original request objects out of the
                         # DataFrame (a column would coerce date/datetime -> Timestamp).
                         targets_df = pd.DataFrame(
                             {"i": range(len(dt_targets)),
-                             "target_utc": pd.to_datetime(target_utcs, utc=True)}
+                             "target_utc": pd.to_datetime(target_utcs, utc=True)
+                                             .astype("datetime64[ns, UTC]")}
                         ).sort_values("target_utc").reset_index(drop=True)
 
                         merged = pd.merge_asof(
