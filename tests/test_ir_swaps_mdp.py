@@ -155,14 +155,19 @@ class _FakeGridCurve:
 
 def test_bulk_get_data_falls_back_one_by_one_for_eris_ql(monkeypatch):
     mdp = IRSwapsMDP(source="ERIS_EOD_LIVE-QL_BASIC")
-    d1 = dt.date(2026, 2, 13)
-    d2 = dt.date(2026, 2, 16)
+    d1 = dt.date(2026, 2, 13)  # Fri
+    # Both must be real business days: bulk_get_data now applies the same
+    # calendar validation as the single-point path, so a genuine holiday
+    # (2026-02-16 is Presidents' Day) is dropped BEFORE the fallback loop and
+    # would never reach get_data. This test is about the per-point fallback
+    # tolerating a pricing failure, not about calendar handling.
+    d2 = dt.date(2026, 2, 17)  # Tue
     seen = []
 
     def _stub_get_data(request):
         seen.append((request["curve_name"], request["timestamp"], request.get("ignore_cache")))
         if request["timestamp"] == d2:
-            raise AssertionError("synthetic holiday failure")
+            raise AssertionError("synthetic pricing failure")
         return {"curve": request["timestamp"]}
 
     monkeypatch.setattr(mdp, "get_data", _stub_get_data)
@@ -1601,3 +1606,39 @@ def test_eris_eod_variants_use_separate_curve_store_assets():
     assert nojumps._eris_curve_store_asset("USD-SOFR-1D") == "USD-SOFR-1D"
     assert basic._eris_curve_store_asset("USD-SOFR-1D") != "USD-SOFR-1D"
     assert basic._eris_curve_store_asset("USD-SOFR-1D").startswith("USD-SOFR-1D")
+
+
+def test_bulk_get_data_applies_calendar_validation_like_single_point(monkeypatch):
+    """Weekend/holiday points must be dropped by the BULK path too.
+
+    _validate_curve_request_timestamp was only reached via _get_curve, and every
+    source with a dedicated bulk branch bypassed it -- while TB only ever calls
+    bulk_get_data. Those points were priced off the previous session's anchor, so
+    the index label and the curve's reference_date disagreed by a business day
+    (+1.691 bp measured on the 2026-07-03 Jul-4 holiday), for a request the
+    single-point path refuses outright.
+    """
+    mdp = IRSwapsMDP(source="ERIS_EOD_LIVE-QL_BASIC")
+    good = dt.date(2026, 2, 13)      # Fri
+    holiday = dt.date(2026, 2, 16)   # Presidents' Day
+    saturday = dt.date(2026, 2, 14)
+
+    seen = []
+
+    def _stub_get_data(request):
+        seen.append(request["timestamp"])
+        return {"curve": request["timestamp"]}
+
+    monkeypatch.setattr(mdp, "get_data", _stub_get_data)
+
+    out = mdp.bulk_get_data(
+        {"curve_name": "USD-SOFR-1D", "timestamps": [good, holiday, saturday]}
+    )
+
+    assert seen == [good]
+    assert set(out) == {good}
+
+    # ... and the single-point path refuses the same dates
+    for bad in (holiday, saturday):
+        with pytest.raises(Exception):
+            mdp._validate_curve_request_timestamp(curve_name="USD-SOFR-1D", timestamp=bad)

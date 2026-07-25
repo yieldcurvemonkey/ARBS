@@ -1078,17 +1078,31 @@ class IRSwapsTB(LayeredCacheMixin, BaseTimeseriesTB):
                 leave=False,
             ) as pbar:
                 tasks: List[Tuple[DateLike, IRSwapQuery, _IRSwapGenericCurve, object]] = []
+                _no_curve: List[DateLike] = []
                 for d in request_points:
                     curve = built_map.get(d)
                     if curve is None and d == datetime.date.today():
                         curve = built_map.get("live")
                     if curve is None:
-                        self._logger.warning(f"No curve returned for curve='{curve_name}' on date='{d}'.")
+                        # Points with no curve are dropped, so the returned frame
+                        # is simply SHORTER -- there is no NaN marking the hole.
+                        # One line per point buries that in a long series, so
+                        # summarize below as well.
+                        _no_curve.append(d)
+                        self._logger.debug(f"No curve returned for curve='{curve_name}' on date='{d}'.")
                         pbar.update(len(qs))
                         continue
                     pricing_ref_point: DateLike = live_output_index if (d == "live" and live_output_index is not None) else d
                     for q in qs:
                         tasks.append((pricing_ref_point, q, curve, d))
+
+                if _no_curve:
+                    self._logger.warning(
+                        "%s: no curve for %d of %d requested point(s) on '%s' — those rows are "
+                        "ABSENT from the result, not NaN (first=%s, last=%s).",
+                        self.mdp.source, len(_no_curve), len(request_points), curve_name,
+                        _no_curve[0], _no_curve[-1],
+                    )
 
                 if tasks:
                     if (n_jobs or 1) > 1:

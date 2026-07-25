@@ -2701,6 +2701,34 @@ class IRSwapsMDP(MarketDataProvider[_GenericPricable]):
             reference_points=timestamps,
         )
 
+        # Apply the SAME calendar validation the single-point path applies.
+        # _validate_curve_request_timestamp was reached only via _get_curve, and
+        # every source with a dedicated branch below bypasses it -- while TB only
+        # ever calls bulk_get_data. Weekend and market-holiday points were
+        # therefore admitted and priced off the previous session's anchor, so the
+        # index label and the curve's own reference_date disagreed by a business
+        # day (measured +1.691 bp on the 2026-07-03 Jul-4 holiday and +1.672 bp
+        # on a Sat/Sun off a Friday anchor) -- for the identical single-point
+        # request, get_pricer raises.
+        # Invalid points are DROPPED rather than raised so one bad date cannot
+        # fail an otherwise good batch; the batch and single paths then agree
+        # that those points have no data.
+        _validated: List[Union[datetime.date, datetime.datetime, Literal["live"]]] = []
+        for t in timestamps:
+            if t == "live":
+                _validated.append(t)
+                continue
+            try:
+                self._validate_curve_request_timestamp(curve_name=curve_name, timestamp=t)
+            except Exception as exc:
+                logging.getLogger(__name__).warning(
+                    "Dropping %s point %s for curve '%s': %s",
+                    self.source, t, curve_name, exc,
+                )
+                continue
+            _validated.append(t)
+        timestamps = _validated
+
         if not timestamps:
             raise ValueError("Request 'timestamps' resolved to an empty collection.")
 
