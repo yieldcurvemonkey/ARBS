@@ -55,6 +55,7 @@ class ContractMarginal:
     pre_normalization_mass: float = 1.0
     ghost_mass_fraction: float = 0.0
     warnings: Tuple[str, ...] = ()
+    option_expiry: Optional[datetime.date] = None
 
     def __post_init__(self) -> None:
         grid = np.asarray(self.grid_rate, dtype=float)
@@ -89,6 +90,7 @@ class ContractMarginal:
             pre_normalization_mass=float(getattr(bl, "pre_normalization_mass", 1.0) or 1.0),
             ghost_mass_fraction=float(getattr(bl, "ghost_mass_fraction", 0.0) or 0.0),
             warnings=tuple(getattr(bl, "warnings", ()) or ()),
+            option_expiry=getattr(bl.input, "expiry_date", None),
         )
 
     # -- distribution surface -------------------------------------------------
@@ -206,6 +208,13 @@ class FlySnapshot:
 
     def to_row(self) -> Dict[str, object]:
         c = self.comonotone
+        mm = [(m.mean - m.median) * 100 for m in self.legs]
+        skew_g = self.fly_mean_bp - self.fly_median_path_bp
+        contribs = {
+            self.legs[0].symbol: -mm[0],
+            self.legs[1].symbol: 2 * mm[1],
+            self.legs[2].symbol: -mm[2],
+        }
         return {
             "label": self.fly.label,
             "as_of": self.as_of,
@@ -228,4 +237,10 @@ class FlySnapshot:
             "tail_slope_lower": c.tail_slope_lower,
             "quality_ok": self.quality_ok,
             "n_flags": len(self.quality_flags),
+            "mm_front_bp": mm[0],
+            "mm_belly_bp": mm[1],
+            "mm_back_bp": mm[2],
+            "skew_g_bp": skew_g,
+            "fit_residual_bp": self.fly_bp - self.fly_mean_bp,
+            "dominant_leg": max(contribs, key=lambda s: abs(contribs[s])),
         }

@@ -10,6 +10,14 @@ from RVUtils.FlyVsVol._types import (
     FlyVsVolConfig,
     PathDistribution,
 )
+from RVUtils.FlyVsVol.convergence import (
+    ConvergencePackage,
+    SkewAttribution,
+    WingLeg,
+    WingQuote,
+    convergence_package,
+    skew_attribution,
+)
 from RVUtils.FlyVsVol.coupling import (
     comonotone_grid,
     gaussian_copula_sample,
@@ -30,6 +38,12 @@ __all__ = [
     "FlySnapshot",
     "FlyVsVolConfig",
     "PathDistribution",
+    "ConvergencePackage",
+    "SkewAttribution",
+    "WingLeg",
+    "WingQuote",
+    "convergence_package",
+    "skew_attribution",
     "comonotone_grid",
     "gaussian_copula_sample",
     "historical_corr",

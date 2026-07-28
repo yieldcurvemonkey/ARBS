@@ -31,7 +31,8 @@ from RVUtils.FlyVsVol import (
 )
 from RVUtils.ImpliedDistribution import SFRImpliedDistribution, resolve_strip_symbols
 
-ZSCORE_COLS = ["fly_bp", "tail_rent_bp", "heuristic_gap", "phi_iqr_bp", "prob_delta"]
+ZSCORE_COLS = ["fly_bp", "tail_rent_bp", "skew_g_bp", "heuristic_gap", "phi_iqr_bp",
+               "prob_delta"]
 
 
 def parse_args(argv=None):
@@ -150,13 +151,14 @@ def main(argv=None):
 
     with pd.option_context("display.width", 250, "display.max_columns", 60):
         core = ["fly_bp", "spread1_bp", "spread2_bp", "fly_median_path_bp",
-                "tail_rent_bp", "heuristic_prob", "prob_delta", "heuristic_gap",
+                "tail_rent_bp", "skew_g_bp", "fit_residual_bp", "dominant_leg",
+                "heuristic_prob", "prob_delta", "heuristic_gap",
                 "p_dn_zero", "p_dn_pos", "phi_iqr_bp", "tail_slope_upper",
                 "quality_ok"]
         print("\n=== fly-vs-vol monitor", as_of, "===", flush=True)
         print(monitor[core].round(3).to_string(), flush=True)
-        zshow = [c for c in ("fly_bp_z", "tail_rent_bp_z", "heuristic_gap_z",
-                             "prob_delta_z", "phi_iqr_bp_z")
+        zshow = [c for c in ("fly_bp_z", "tail_rent_bp_z", "skew_g_bp_z",
+                             "heuristic_gap_z", "prob_delta_z", "phi_iqr_bp_z")
                  if c in monitor.columns]
         print("\n=== rolling z-scores (window "
               f"{config.zscore_window}) ===", flush=True)

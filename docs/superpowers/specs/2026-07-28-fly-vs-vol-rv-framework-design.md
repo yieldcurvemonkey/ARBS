@@ -83,6 +83,22 @@ screener has a single data dependency. The linear `IRSwapsMDP(BARCHART_STIRF-RL)
 (`tenor="IMM_U26xIMM_Z26/IMM_Z26xIMM_H27/IMM_H27xIMM_M27"`, `FLY RATE`) is a cross-check in
 the notebook, not a screener dependency.
 
+## Trade-construction layer (`convergence.py`)
+
+The framework's basis object is **G = tail_rent = skew_G + fit_residual**, with
+`skew_G = −mm_front + 2·mm_belly − mm_back` (`mm = mean − median` per leg). G converges to
+zero mechanically as each leg's option expiry collapses its RND (the "delivery schedule"),
+and mean-reverts in MTM — but nothing arbitrages it: the basis *is* the risk premium.
+`skew_attribution(snapshot)` gives the exact per-leg decomposition (attribution columns
+also land in the daily history so z-triggers name the leg). `convergence_package(snapshot,
+wing_quotes, ...)` builds the expression: hike-side wings in the −1/+2/−1 pattern (or the
+dominant leg only), strikes at a target tail percentile, futures delta-hedge ratios per leg,
+net premium, and the skew retirement schedule. For long-G: sell front/back wings, buy belly.
+The futures hedge — not an outright fly — is the linear leg; daily rehedging removes
+first-order exposure to which meeting moves. An outright fly held to settlement is a path
+trade, not the RV expression (demonstrated by FOMC scenario analysis: ±$600k across
+realistic paths on a 500-lot fly + wing package).
+
 ## Quality gates
 
 Per leg, from BL diagnostics: `|forward_residual_bp| ≤ 2.5`, `pre_normalization_mass ≤ 1.02`,
