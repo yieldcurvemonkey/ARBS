@@ -5184,10 +5184,19 @@ class STIRFutureOptionMDP(MarketDataProvider[InstrumentLike], LayeredCacheMixin)
         # from a narrow frame answers every later window from a slice that silently
         # returns nothing -- which is how a stray SQZ30 entry holding one bar from
         # 2026-02-27 came to report that it "covered" 2026-01-02..03 and yield zero rows.
-        # Entries without the flag (written before it existed) are treated as misses and
-        # refetched once, which self-heals any such poisoning.
+        #
+        # Entries written before the flag existed cannot prove they are full history, but
+        # discarding them all would refetch the entire cache from Barchart. Accept a
+        # legacy entry when its stored history actually begins on or before the requested
+        # start: that is what a wide fetch produces, and it is exactly what a narrow
+        # poisoned frame fails. Only the start side is checked -- prefetch windows
+        # deliberately run a month past the last available bar, so requiring max_date >=
+        # end would refetch on every call. A legacy entry that fails this is refetched
+        # once and comes back flagged, so the check self-heals.
         if not bool(ent.get("full_history", False)):
-            return False
+            min_date = ent.get("min_date")
+            if not isinstance(min_date, datetime.date) or min_date > start:
+                return False
         fetched_date = datetime.datetime.fromtimestamp(fetched_at, tz=_NY_TZ).date()
         # Window ends strictly before the day we fetched -> historical & immutable: the
         # full-history snapshot we stored already contains everything this window can have.

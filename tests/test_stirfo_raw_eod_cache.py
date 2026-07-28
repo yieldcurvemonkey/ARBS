@@ -106,10 +106,38 @@ def test_raw_eod_cache_does_not_claim_coverage_for_a_narrow_frame():
     leaving option_timeseries with no underlying and an empty result."""
     mdp = _mdp()
     now = time.time()
-    narrow = {"fetched_at": now - 5 * 86400}  # no full_history flag
-    assert mdp._raw_eod_cache_covers(narrow, datetime.date(2024, 1, 1), datetime.date(2024, 2, 1)) is False
-    assert mdp._raw_eod_cache_covers({**narrow, "full_history": False},
+    # The real poisoned shape: one bar, dated after the requested window starts.
+    poisoned = {"fetched_at": now - 5 * 86400, "min_date": datetime.date(2026, 2, 27),
+                "max_date": datetime.date(2026, 2, 27)}
+    assert mdp._raw_eod_cache_covers(poisoned, datetime.date(2026, 1, 2), datetime.date(2026, 1, 3)) is False
+    # An entry carrying no date bounds at all cannot prove anything either.
+    assert mdp._raw_eod_cache_covers({"fetched_at": now - 5 * 86400},
                                      datetime.date(2024, 1, 1), datetime.date(2024, 2, 1)) is False
+
+
+def test_raw_eod_cache_keeps_legacy_full_history_entries():
+    """Entries written before the full_history flag existed must not all be discarded -
+    there are thousands of them and refetching every one would hammer Barchart. A legacy
+    entry whose stored history begins on or before the requested start is what a wide
+    fetch produces, so it is honoured."""
+    mdp = _mdp()
+    now = time.time()
+    legacy = {
+        "fetched_at": now - 5 * 86400,
+        "min_date": datetime.date(2021, 1, 4),
+        "max_date": datetime.date(2026, 7, 24),
+    }
+    assert mdp._raw_eod_cache_covers(legacy, datetime.date(2024, 1, 1), datetime.date(2024, 2, 1)) is True
+    # Prefetch windows run a month past the last available bar. Reaching beyond the fetch
+    # day still requires a fresh fetch (the current bar is still settling), but the legacy
+    # date check must not be what rejects it -- a fresh legacy entry is honoured.
+    fresh_legacy = {**legacy, "fetched_at": time.time() - 60}
+    assert mdp._raw_eod_cache_covers(
+        fresh_legacy, datetime.date(2026, 6, 24), datetime.date(2026, 8, 24)
+    ) is True
+    # A flagged entry is trusted without the date check.
+    flagged = {"fetched_at": now - 5 * 86400, "full_history": True}
+    assert mdp._raw_eod_cache_covers(flagged, datetime.date(2024, 1, 1), datetime.date(2024, 2, 1)) is True
 
 
 def test_raw_eod_cache_put_records_full_history_only_when_told():
