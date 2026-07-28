@@ -8,10 +8,17 @@ The key insight: any payoff g(S_T) can be spanned by bonds + forwards + options
 (Carr-Madan spanning formula). Setting g to (S-F)^n gives model-free central
 moments without ever estimating a density.
 
-For SOFR futures options (daily-margined, df ≈ 1, Bachelier-style level moves):
-    μ₂ = 2[∫₀ᶠ P(K)dK + ∫_F^∞ C(K)dK]
-    μ₃ = -6∫₀ᶠ (F-K)P(K)dK + 6∫_F^∞ (K-F)C(K)dK
-    μ₄ = 12∫₀ᶠ (F-K)²P(K)dK + 12∫_F^∞ (K-F)²C(K)dK
+CME SR3/SOFR options are PREMIUM-PAID-UP-FRONT (equity-style), so quoted
+premiums are discounted expectations: C_obs(K) = df * E[(F_T-K)^+]. The
+spanning integrals need the UNDISCOUNTED values, hence the 1/df factor
+(equivalently e^{rT}). With Bachelier-style level moves in price space:
+    μ₂ = (2/df)[∫₀ᶠ P(K)dK + ∫_F^∞ C(K)dK]
+    μ₃ = (1/df)[-6∫₀ᶠ (F-K)P(K)dK + 6∫_F^∞ (K-F)C(K)dK]
+    μ₄ = (1/df)[12∫₀ᶠ (F-K)²P(K)dK + 12∫_F^∞ (K-F)²C(K)dK]
+
+Omitting 1/df scales variance by df, skewness by df^(-1/2) and kurtosis by
+1/df — an exactly-Gaussian RND would otherwise report excess kurtosis
+3(e^{rT}-1) (+0.12 at T=1, r=4%).
 
 Reference:
     Bakshi, Kapadia, Madan (2003) "Stock Return Characteristics, Skew Laws,
@@ -69,6 +76,14 @@ def extract_bkm_moments(
 
     warnings: List[str] = []
 
+    # BKM/Carr-Madan spanning needs UNDISCOUNTED option values. Observed
+    # premiums are paid up front (C_obs = df * E[(F_T-K)^+]), so divide by df.
+    if math.isfinite(df) and df > 0.0:
+        inv_df = 1.0 / df
+    else:
+        inv_df = 1.0
+        warnings.append(f"non-positive/non-finite discount factor {df!r}; treating as 1.0")
+
     if len(K_calls) < 2:
         warnings.append("fewer than 2 OTM calls; right tail integration unreliable")
     if len(K_puts) < 2:
@@ -78,19 +93,19 @@ def extract_bkm_moments(
     # μ₂ = 2[∫₀ᶠ P(K)dK + ∫_F^∞ C(K)dK]
     int_puts = trapezoid(P_puts, K_puts) if len(K_puts) > 1 else 0.0
     int_calls = trapezoid(C_calls, K_calls) if len(K_calls) > 1 else 0.0
-    mu2_price = 2.0 * (int_puts + int_calls)
+    mu2_price = 2.0 * inv_df * (int_puts + int_calls)
 
     # --- Third central moment (skewness direction in price space) ---
     # μ₃ = -6∫₀ᶠ (F-K)P(K)dK + 6∫_F^∞ (K-F)C(K)dK
     int_puts_3 = trapezoid((F - K_puts) * P_puts, K_puts) if len(K_puts) > 1 else 0.0
     int_calls_3 = trapezoid((K_calls - F) * C_calls, K_calls) if len(K_calls) > 1 else 0.0
-    mu3_price = -6.0 * int_puts_3 + 6.0 * int_calls_3
+    mu3_price = inv_df * (-6.0 * int_puts_3 + 6.0 * int_calls_3)
 
     # --- Fourth central moment (kurtosis in price space) ---
     # μ₄ = 12∫₀ᶠ (F-K)²P(K)dK + 12∫_F^∞ (K-F)²C(K)dK
     int_puts_4 = trapezoid((F - K_puts) ** 2 * P_puts, K_puts) if len(K_puts) > 1 else 0.0
     int_calls_4 = trapezoid((K_calls - F) ** 2 * C_calls, K_calls) if len(K_calls) > 1 else 0.0
-    mu4_price = 12.0 * int_puts_4 + 12.0 * int_calls_4
+    mu4_price = inv_df * (12.0 * int_puts_4 + 12.0 * int_calls_4)
 
     # --- Convert to standardized moments ---
     std_price = math.sqrt(max(mu2_price, 1e-12))
@@ -112,8 +127,13 @@ def extract_bkm_moments(
     kurtosis_rate = kurtosis_price
     excess_kurtosis_rate = kurtosis_rate - 3.0
 
-    # Tail mass diagnostics: what fraction of the total variance comes from
-    # each side (asymmetry in the tails)
+    # Tail mass diagnostics: what fraction of the total variance comes from each side.
+    #
+    # These are PRICE-space wings and the names say so. The put integral spans K <= F,
+    # which in rate space is R >= forward_rate - the HIGH-rate / hawkish wing. Reading
+    # `left_tail_variance_frac` as "the left tail of the rate distribution" inverts it,
+    # and it sits next to `skewness_rate`, which IS mirrored into rate space at :123.
+    # BKMResult exposes hawkish_/dovish_ aliases for rate-space consumers.
     total_var_contribution = int_puts + int_calls
     if total_var_contribution > 1e-12:
         left_tail_frac = int_puts / total_var_contribution

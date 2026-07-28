@@ -7,7 +7,6 @@ Weights are solved by fitting to observed option prices across strikes.
 Reference: JPM Interest Rate Derivatives, various reports (2023-2026).
 """
 
-import math
 from typing import List, Sequence
 
 import numpy as np
@@ -36,14 +35,22 @@ def _mixture_call_prices(
     Each scenario j has mean rate mu_j → forward price F_j = 100 - mu_j.
     The normal vol in price space equals the vol in rate space (since
     price = 100 - rate, the transformation is a sign flip with unit Jacobian).
+
+    ``stds_rate`` is a **terminal** standard deviation in rate percent, not an
+    annualised vol - the same convention as ``ScenarioDefinition.std_rate`` and
+    ``initial_std_bps``, and the convention the composite density is exported under.
+    This kernel used to multiply by ``sqrt(tte)`` while the export did not, so the
+    plotted/exported mixture was wider than the calibrated one by exactly 1/sqrt(T):
+    +32% at T=0.25, -6% at T=2, and exact only at T=1. The fitted weights are
+    unaffected (it was a reparametrisation of a free variable) but
+    ``fitted_std_rates`` and ``composite_density`` were not.
     """
     prices = np.zeros(len(strikes))
-    sqrt_t = math.sqrt(max(tte, 1e-12))
     for j in range(len(weights)):
         fwd_j = 100.0 - means_rate[j]
-        vol_j = stds_rate[j]
-        d = (fwd_j - strikes) / (vol_j * sqrt_t)
-        component = discount * (vol_j * sqrt_t * norm.pdf(d) + (fwd_j - strikes) * norm.cdf(d))
+        sd_j = stds_rate[j]
+        d = (fwd_j - strikes) / sd_j
+        component = discount * (sd_j * norm.pdf(d) + (fwd_j - strikes) * norm.cdf(d))
         prices += weights[j] * component
     return prices
 
