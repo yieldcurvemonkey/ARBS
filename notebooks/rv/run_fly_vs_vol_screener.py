@@ -29,6 +29,7 @@ from RVUtils.FlyVsVol import (
     run_fly_screener,
     screener_table,
 )
+from RVUtils.FlyVsVol.pairs import build_pair_history
 from RVUtils.ImpliedDistribution import SFRImpliedDistribution, resolve_strip_symbols
 
 ZSCORE_COLS = ["fly_bp", "tail_rent_bp", "skew_g_bp", "heuristic_gap", "phi_iqr_bp",
@@ -136,6 +137,26 @@ def main(argv=None):
     history.to_parquet(hist_path, index=False)
     fwd_panel.rename_axis("as_of").to_parquet(args.out_dir / "forwards.parquet")
 
+    # per-contract panel + curve-mode (pairs) screener
+    contracts = pd.DataFrame([
+        {
+            "as_of": d, "symbol": sym,
+            "forward_rate": m.forward_rate, "mean_rate": m.mean,
+            "median_rate": m.median, "mm_bp": (m.mean - m.median) * 100,
+            "fwd_resid_bp": m.forward_residual_bp,
+            "pre_norm_mass": m.pre_normalization_mass,
+            "ghost_frac": m.ghost_mass_fraction,
+        }
+        for d, per in by_date.items() for sym, m in per.items()
+    ]).sort_values(["symbol", "as_of"])
+    contracts.to_parquet(args.out_dir / "contracts.parquet", index=False)
+    pair_hist = build_pair_history(contracts)
+    pair_hist = history_zscores(
+        pair_hist, ["pair_rent_bp", "pair_rent_skew_bp"],
+        window=config.zscore_window, min_periods=config.zscore_min_periods,
+    )
+    pair_hist.to_parquet(args.out_dir / "pairs_history.parquet", index=False)
+
     monitor = screener_table(ref_snaps)
     zcols = [f"{c}_z" for c in ZSCORE_COLS] + [f"{c}_z_full" for c in ZSCORE_COLS]
     ref_hist = history[history["as_of"] == as_of].set_index("label")
@@ -170,6 +191,16 @@ def main(argv=None):
             print(f"\nquality flags {s.fly.label}:", flush=True)
             for f in s.quality_flags:
                 print(f"  - {f}", flush=True)
+
+    latest_pairs = pair_hist[pair_hist["as_of"] == as_of].set_index("label")
+    if not latest_pairs.empty:
+        with pd.option_context("display.width", 250):
+            print(f"\n=== curve-mode (pairs) monitor {as_of} ===", flush=True)
+            pcols = ["spread_bp", "median_spread_bp", "pair_rent_bp",
+                     "pair_rent_skew_bp", "pair_fit_bp", "quality_ok",
+                     "pair_rent_bp_z", "pair_rent_skew_bp_z"]
+            print(latest_pairs[[c for c in pcols if c in latest_pairs.columns]]
+                  .round(2).to_string(), flush=True)
 
     print(f"\nwrote {hist_path} and {csv_path}", flush=True)
     return 0
