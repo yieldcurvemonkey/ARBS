@@ -56,7 +56,12 @@ logger = _logging.getLogger(__name__)
 
 DEFAULT_COMPRESSION = "zstd"
 _CHI = pytz.timezone("America/Chicago")
+_NYC = pytz.timezone("America/New_York")
 _UTC = pytz.UTC
+
+# reference_keys already reported as unknown, so the warning fires once per key
+# rather than once per reconstructed curve.
+_WARNED_REFERENCE_KEYS: set[str] = set()
 
 # Session reference: CME STIR futures regular hours 06:00-17:00 CT
 _SESSION_OPEN_HOUR = 6
@@ -88,7 +93,23 @@ def _normalize_timestamp_utc_values(
 
 
 def _trading_dates_for_timestamps_utc(timestamps_utc: Sequence[datetime.datetime]) -> list[datetime.date]:
-    return sorted({_compute_trading_date(ts.astimezone(_CHI)) for ts in timestamps_utc})
+    """Candidate partition dates for a set of instants.
+
+    Assets do not agree on what `trading_date` means: the CME-derived feeds use
+    a 17:00-CT roll (_compute_trading_date), while the ERIS live daemon and
+    citivelo partition on the plain ET calendar date. Keying only on the CME rule
+    silently returned ZERO rows for data that was physically on disk -- every
+    evening snapshot of an ET-partitioned asset sits in the PREVIOUS day's
+    partition under that rule.
+    Return both candidates. Partitions are cheap to skip and the caller filters
+    to the exact timestamps afterwards (_filter_df_to_timestamps_utc), so a
+    superset costs a little IO and is correct under either convention.
+    """
+    dates: set[datetime.date] = set()
+    for ts in timestamps_utc:
+        dates.add(_compute_trading_date(ts.astimezone(_CHI)))  # CME 17:00-CT roll
+        dates.add(ts.astimezone(_NYC).date())                  # ET calendar date
+    return sorted(dates)
 
 
 def _filter_df_to_timestamps_utc(df: pd.DataFrame, timestamps_utc: Sequence[datetime.datetime]) -> pd.DataFrame:
@@ -147,6 +168,29 @@ class CurveSnapshot:
     source_variant: str = field(default="", kw_only=True)
     node_dates: list[datetime.date]  # sorted
     discount_factors: list[float]  # parallel to node_dates
+    # Log-cubic spline knot sequence (rl.Curve's `t`) and endpoint conditions.
+    # Without these a spline-calibrated curve reconstructs as plain log-linear:
+    # the stored node DFs are the SPLINE's solution and are not a valid
+    # log-linear curve for the same market, so the reconstruction reprices its
+    # own calibration instruments wrong. None for non-spline curves.
+    spline_knots: Optional[list[datetime.date]] = field(default=None, kw_only=True)
+    spline_endpoints: Optional[str] = field(default=None, kw_only=True)  # "left,right"
+
+    @staticmethod
+    def _extract_spline(curve: Any) -> tuple[Optional[list], Optional[str]]:
+        """Recover (knots, endpoints) from a live rl.Curve, or (None, None)."""
+        spline = getattr(getattr(curve, "_interpolator", None), "spline", None)
+        if spline is None:
+            return None, None
+        knots = getattr(spline, "t", None)
+        if not knots:
+            return None, None
+        endpoints = getattr(spline, "endpoints", None)
+        if isinstance(endpoints, (tuple, list)):
+            endpoints = ",".join(str(e) for e in endpoints)
+        elif endpoints is not None:
+            endpoints = str(endpoints)
+        return [_to_date(k) for k in knots], endpoints
 
     # ── Factories ──
 
@@ -232,6 +276,7 @@ class CurveSnapshot:
 
         reference_key = cfg.get("reference_key", "")
         interpolation = cfg.get("interpolation", "log_linear")
+        spline_knots, spline_endpoints = cls._extract_spline(curve)
 
         return cls(
             timestamp_utc=ts_utc,
@@ -245,6 +290,8 @@ class CurveSnapshot:
             source_variant="BARCHART_STIRF",
             node_dates=node_dates,
             discount_factors=discount_factors,
+            spline_knots=spline_knots,
+            spline_endpoints=spline_endpoints,
         )
 
     @classmethod
@@ -841,8 +888,19 @@ class CurveStore:
             d = _to_date(d)
             nodes[rl.dt(d.year, d.month, d.day)] = float(v)
 
-        # Curve construction kwargs
+        # Curve construction kwargs.
+        # An unknown reference_key silently produced an act360/nyc/mf curve,
+        # which is right for USD but quietly wrong for anything else (act365f/tro
+        # conventions differ by 3-4 bp). Warn once per key so a bad writer is
+        # visible instead of being absorbed.
         curve_def = RATESLIB_CURVE_DEFINITIONS.get(reference_key, {})
+        if not curve_def and reference_key not in _WARNED_REFERENCE_KEYS:
+            _WARNED_REFERENCE_KEYS.add(reference_key)
+            logger.warning(
+                "Stored reference_key %r is not in RATESLIB_CURVE_DEFINITIONS; "
+                "falling back to act360/nyc/mf. Conventions for this curve may be wrong.",
+                reference_key,
+            )
         kwargs: Dict[str, Any] = {
             "nodes": nodes,
             "id": reference_key,
@@ -851,6 +909,29 @@ class CurveStore:
             "modifier": curve_def.get("BusinessConvention", "mf"),
             "interpolation": interpolation,
         }
+
+        # Log-cubic spline: restore the knot sequence the curve was calibrated
+        # under. The stored node DFs are the SPLINE's solution, so rebuilding
+        # them as plain log-linear does not reprice the curve's own calibration
+        # instruments (measured -0.18 bp at 30Y, +4.9 bp at 40Y on GSQUANT
+        # USD-OIS, and up to +7.4 bp on ERIS EOD).
+        spline_knots = row.get("spline_knots")
+        try:
+            has_spline = spline_knots is not None and len(spline_knots) > 0
+        except TypeError:  # NaN / scalar null from a column-padded frame
+            has_spline = False
+        if has_spline:
+            kwargs["t"] = [
+                rl.dt(d.year, d.month, d.day)
+                for d in (_to_date(k) for k in spline_knots)
+            ]
+            endpoints = row.get("spline_endpoints")
+            if endpoints:
+                parts = [p.strip() for p in str(endpoints).split(",") if p.strip()]
+                if len(parts) == 2:
+                    kwargs["endpoints"] = tuple(parts)
+                elif len(parts) == 1:
+                    kwargs["endpoints"] = parts[0]
 
         # Handle mixed interpolation if cfg provided
         if cfg and cfg.get("mixed_interpolation"):
@@ -1093,6 +1174,11 @@ _RAW_SCHEMA = pa.schema(
         pa.field("source_variant", pa.dictionary(pa.int8(), pa.utf8())),
         pa.field("node_dates", pa.list_(pa.date32())),
         pa.field("discount_factors", pa.list_(pa.float64())),
+        # Nullable; absent in partitions written before spline support, which
+        # _ensure_raw_table_columns backfills as null -> reconstructs log-linear
+        # exactly as those rows always did.
+        pa.field("spline_knots", pa.list_(pa.date32())),
+        pa.field("spline_endpoints", pa.utf8()),
     ]
 )
 
@@ -1172,6 +1258,8 @@ def _snapshots_to_arrow_table(snapshots: Sequence[CurveSnapshot]) -> pa.Table:
     svar = []
     ndates = []
     dfs = []
+    sknots = []
+    sends = []
 
     for s in snapshots:
         ts_utc.append(s.timestamp_utc)
@@ -1186,6 +1274,8 @@ def _snapshots_to_arrow_table(snapshots: Sequence[CurveSnapshot]) -> pa.Table:
         svar.append(s.source_variant)
         ndates.append(s.node_dates)
         dfs.append(s.discount_factors)
+        sknots.append(getattr(s, "spline_knots", None))
+        sends.append(getattr(s, "spline_endpoints", None))
 
     arrays = [
         pa.array(ts_utc, type=pa.timestamp("us", tz="UTC")),
@@ -1199,6 +1289,8 @@ def _snapshots_to_arrow_table(snapshots: Sequence[CurveSnapshot]) -> pa.Table:
         pa.array(svar).dictionary_encode(),
         pa.array(ndates, type=pa.list_(pa.date32())),
         pa.array(dfs, type=pa.list_(pa.float64())),
+        pa.array(sknots, type=pa.list_(pa.date32())),
+        pa.array(sends, type=pa.utf8()),
     ]
 
     return pa.table(

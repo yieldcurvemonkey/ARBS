@@ -52,6 +52,12 @@ def _snapshot_insert_params(snap, curve_name: str) -> dict:
         "source_variant": str(snap.source_variant),
         "node_dates": [_to_python_date(d) for d in snap.node_dates],
         "discount_factors": [float(v) for v in snap.discount_factors],
+        "spline_knots": (
+            [_to_python_date(d) for d in snap.spline_knots]
+            if getattr(snap, "spline_knots", None)
+            else None
+        ),
+        "spline_endpoints": getattr(snap, "spline_endpoints", None),
     }
 
 
@@ -298,11 +304,11 @@ class SupabaseCurveSync:
                     INSERT INTO {CURVE_SNAPSHOTS_TABLE}
                         (curve_name, timestamp_utc, trading_date, session_minute,
                          tags, cfg_hash, reference_key, interpolation, source_variant,
-                         node_dates, discount_factors)
+                         node_dates, discount_factors, spline_knots, spline_endpoints)
                     VALUES
                         (:curve_name, :timestamp_utc, :trading_date, :session_minute,
                          :tags, :cfg_hash, :reference_key, :interpolation, :source_variant,
-                         :node_dates, :discount_factors)
+                         :node_dates, :discount_factors, :spline_knots, :spline_endpoints)
                     ON CONFLICT (curve_name, timestamp_utc) DO UPDATE SET
                         trading_date = EXCLUDED.trading_date,
                         session_minute = EXCLUDED.session_minute,
@@ -310,7 +316,9 @@ class SupabaseCurveSync:
                         interpolation = EXCLUDED.interpolation,
                         source_variant = EXCLUDED.source_variant,
                         node_dates = EXCLUDED.node_dates,
-                        discount_factors = EXCLUDED.discount_factors
+                        discount_factors = EXCLUDED.discount_factors,
+                        spline_knots = EXCLUDED.spline_knots,
+                        spline_endpoints = EXCLUDED.spline_endpoints
                 """),
                 _snapshot_insert_params(snap, curve_name),
             )
@@ -318,7 +326,8 @@ class SupabaseCurveSync:
 
     _SNAPSHOT_COLS = (
         "curve_name, timestamp_utc, trading_date, session_minute, "
-        "reference_key, interpolation, source_variant, node_dates, discount_factors"
+        "reference_key, interpolation, source_variant, node_dates, discount_factors, "
+        "spline_knots, spline_endpoints"
     )
 
     def _snapshot_row_to_dict(self, row) -> dict:
@@ -332,6 +341,8 @@ class SupabaseCurveSync:
             "source_variant": row.source_variant,
             "node_dates": list(row.node_dates),
             "discount_factors": [float(v) for v in row.discount_factors],
+            "spline_knots": list(row.spline_knots) if getattr(row, "spline_knots", None) else None,
+            "spline_endpoints": getattr(row, "spline_endpoints", None),
         }
 
     def pull_latest_snapshot(self, curve_name: str) -> Optional[dict]:
@@ -456,6 +467,36 @@ class SupabaseCurveSync:
                 {"cn": curve_name, "td": trading_date},
             ).fetchall()
         return pd.DataFrame([self._snapshot_row_to_dict(r) for r in rows])
+
+    def day_fingerprint(
+        self, curve_name: str, trading_date: datetime.date
+    ) -> Optional[tuple]:
+        """``(row_count, max_created_at)`` for (curve_name, trading_date).
+
+        One indexed aggregate. Used to revalidate a locally-materialized L1 day
+        without pulling it: a settled day is only immutable for a strictly
+        forward-only feed, and anything that back-fills or repairs one would
+        otherwise stay invisible forever. The row count alone is not enough —
+        a repair that rewrites existing timestamps leaves it unchanged — so the
+        newest ``created_at`` is returned too and compared against the local
+        partition's write time. Returns None when there is no engine / no schema.
+        """
+        if self._engine is None:
+            return None
+        from Caching.supabase_schema import ensure_schema
+
+        if not ensure_schema(self._engine):
+            return None
+        with self._engine.begin() as conn:
+            row = conn.execute(
+                text(f"""
+                    SELECT count(*) AS n, max(created_at) AS newest
+                    FROM {CURVE_SNAPSHOTS_TABLE}
+                    WHERE curve_name = :cn AND trading_date = :td
+                """),
+                {"cn": curve_name, "td": trading_date},
+            ).fetchone()
+        return (int(row.n), row.newest) if row is not None else None
 
     def latest_snapshot_ts(
         self, curve_name: str, trading_date: datetime.date

@@ -605,16 +605,18 @@ class STIRFutureMDP(MarketDataProvider[InstrumentLike], LayeredCacheMixin):
             memo_key = (curve_name, ref_date)
             fixings_val = memo.get(memo_key)
             if fixings_val is None:
-                try:
-                    fixings_val = _fetch_fixings(
-                        as_of_date=ref_date,
-                        curve_name=curve_name,
-                        force_refresh=self.force_refresh_fixings,
-                    ).sort_index()
-                    fixings_val = fixings_val[fixings_val.index.date <= ref_date] * 100
-                    memo[memo_key] = fixings_val
-                except Exception:
-                    fixings_val = None
+                # Fail CLOSED. Swallowing the error here priced the contract with
+                # no fixings at all, which for an already-accruing STIR future is
+                # a silently wrong number rather than a missing one -- the same
+                # failure mode as substituting a stale fixing. If the fixings are
+                # unavailable, that is worth an exception.
+                fixings_val = _fetch_fixings(
+                    as_of_date=ref_date,
+                    curve_name=curve_name,
+                    force_refresh=self.force_refresh_fixings,
+                ).sort_index()
+                fixings_val = fixings_val[fixings_val.index.date <= ref_date] * 100
+                memo[memo_key] = fixings_val
             if fixings_val is not None:
                 meta["fixings"] = fixings_val
 

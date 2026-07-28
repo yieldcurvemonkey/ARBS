@@ -42,7 +42,36 @@ def test_sofr_symbol_injects_fixings_scaled_and_filtered(monkeypatch):
     assert list(fixings.values) == pytest.approx([4.75, 4.8, 4.85])
 
 
-def test_non_sofr_symbol_skips_fixings_fetch(monkeypatch):
+def test_fed_funds_symbol_also_fetches_fixings(monkeypatch):
+    """ZQ is Fed Funds, whose accrual needs FF fixings just as SR3 needs SOFR.
+
+    This test used to assert ZQ SKIPPED the fetch, which stopped being true when
+    USD-FEDFUNDS was added alongside USD-SOFR-1D in _build_pricer_from_args.
+    """
+    calls = []
+
+    def fake_fetch_fixings(as_of_date, curve_name, force_refresh=False):
+        calls.append((as_of_date, curve_name, force_refresh))
+        return _sample_fixings_series()
+
+    monkeypatch.setattr(stir_mdp_module, "_fetch_fixings", fake_fetch_fixings)
+    mdp = STIRFutureMDP(source="WEBULL_STIRF-RL")
+
+    pr = mdp._build_pricer_from_args(
+        {
+            "symbol": "ZQH26",
+            "price": 95.125,
+            "timestamp": "2025-01-07T15:30:00+00:00",
+            "schema": 1,
+        }
+    )
+
+    assert calls == [(datetime.date(2025, 1, 7), "USD-FEDFUNDS", False)]
+    assert "fixings" in pr.meta()
+
+
+def test_non_usd_symbol_skips_fixings_fetch(monkeypatch):
+    """Only the two USD RFR curves carry a fixings series."""
     called = {"n": 0}
 
     def fake_fetch_fixings(*args, **kwargs):
@@ -54,7 +83,7 @@ def test_non_sofr_symbol_skips_fixings_fetch(monkeypatch):
 
     pr = mdp._build_pricer_from_args(
         {
-            "symbol": "ZQH26",
+            "symbol": "RGH26",  # CAD-CORRA
             "price": 95.125,
             "timestamp": "2025-01-07T15:30:00+00:00",
             "schema": 1,

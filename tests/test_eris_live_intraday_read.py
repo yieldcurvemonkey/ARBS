@@ -160,6 +160,23 @@ def test_eris_live_intraday_bulk_asof_between_snapshots():
     sync = SupabaseCurveSync.from_defaults()
     if sync._engine is None:
         pytest.skip("no Supabase engine configured")
+
+    # This synthetic trading_date is settled, so the read path materializes it into
+    # the local Parquet L1. That partition is test-owned state: leaving it behind
+    # makes the NEXT run assert against a previous run's discount factors. Start
+    # clean and tear it down again below.
+    from Caching.curve_store import CurveStore, _sanitize
+    from MDP.IRSwaps.IRSwapsMDP import IRSwapsMDP as _MDP
+
+    _store = CurveStore.default()
+    _part = _store._raw_dir / f"asset={_sanitize(ASSET)}" / f"date={ts1.date().isoformat()}"
+
+    def _drop_local_partition():
+        import shutil
+        shutil.rmtree(_part, ignore_errors=True)
+        _MDP._ERIS_L1_DAY_STATE.pop((str(ASSET), ts1.date()), None)
+
+    _drop_local_partition()
     try:
         sync.upsert_snapshot_row(_snap(ts1, [0.9999, 0.95]), ASSET)     # earlier
         sync.upsert_snapshot_row(_snap(ts2, [0.9990, 0.90]), ASSET)     # later (distinct DFs)
@@ -188,6 +205,7 @@ def test_eris_live_intraday_bulk_asof_between_snapshots():
                 text("DELETE FROM arbs_curve_snapshots_v1 WHERE curve_name = :cn AND timestamp_utc IN (:t1, :t2)"),
                 {"cn": ASSET, "t1": ts1, "t2": ts2},
             )
+        _drop_local_partition()
 
 
 def test_eris_local_l1_enabled_env(monkeypatch):

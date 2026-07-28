@@ -17,6 +17,17 @@ CREATE TABLE IF NOT EXISTS arbs_curve_snapshots_v1 (
     PRIMARY KEY (curve_name, timestamp_utc)
 );
 
+-- Log-cubic spline knot sequence (rl.Curve's `t`) and endpoint conditions.
+-- Nullable: absent for plain log-linear curves, and for rows written before
+-- spline support, which reconstruct log-linear exactly as they always did.
+-- Without these a spline-calibrated curve rebuilds as plain log-linear, and the
+-- stored node DFs are the spline's solution rather than a valid log-linear
+-- curve for the same market.
+ALTER TABLE arbs_curve_snapshots_v1
+    ADD COLUMN IF NOT EXISTS spline_knots DATE[];
+ALTER TABLE arbs_curve_snapshots_v1
+    ADD COLUMN IF NOT EXISTS spline_endpoints VARCHAR;
+
 CREATE INDEX IF NOT EXISTS idx_snapshots_tags
     ON arbs_curve_snapshots_v1 USING GIN (tags);
 CREATE INDEX IF NOT EXISTS idx_snapshots_date

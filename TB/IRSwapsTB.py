@@ -140,6 +140,12 @@ def _build_rows_for_chunk(
         try:
             row = _build_row_for_query(curve, q, pricing_ref_point, date_col)
             rows.append((row, q, request_ref_point))
+        except NotImplementedError:
+            # An unsupported value type is a programming error, not a data gap:
+            # swallowing it returned an empty DataFrame with no message and no
+            # exception, so asking for DV01 looked like "no data" (see
+            # RLIRSwapCurve.dv01/gamma).
+            raise
         except Exception as e:
             errors.append((q, pricing_ref_point, request_ref_point, e))
     return rows, errors
@@ -762,6 +768,24 @@ class IRSwapsTB(LayeredCacheMixin, BaseTimeseriesTB):
             is_intraday = (not has_timestamps) and isinstance(start, datetime.datetime) and isinstance(end, datetime.datetime) and (freq is not None)
             if is_intraday:
                 assert start.tzinfo is not None, "Must pass in timezone-aware datetime.datetime"
+            if has_timestamps:
+                # Same contract as the start/end+freq form above. A naive intraday
+                # timestamp is read as ET by IRSwapsMDP but keyed as UTC by the
+                # computed-timeseries store, so the two disagree by the UTC offset:
+                # naive 14:30 is priced as 14:30 ET yet shares a cache key with
+                # tz-aware 14:30 UTC (= 10:30 ET), four hours away. Rather than
+                # pick a winner and silently serve one instant's value for the
+                # other, refuse the ambiguity.
+                _naive = [
+                    t for t in timestamps
+                    if isinstance(t, datetime.datetime) and t.tzinfo is None
+                ]
+                if _naive:
+                    raise ValueError(
+                        "IRSwapsTB.get_timeseries(timestamps=...) requires timezone-aware "
+                        f"datetimes; got {len(_naive)} naive value(s), e.g. {_naive[0]!r}. "
+                        "Localize them (e.g. pytz.timezone('America/New_York').localize(ts))."
+                    )
             eff_freq = (freq or "1T") if is_intraday else freq
             ref_points = self._build_reference_points(start=start, end=end, freq=eff_freq, timestamps=timestamps)
             use_intraday_cache = has_timestamps or is_intraday
@@ -894,6 +918,23 @@ class IRSwapsTB(LayeredCacheMixin, BaseTimeseriesTB):
 
                 decomposable: list = []
                 for q in qs:
+                    # The shortcut below rebuilds each leg as a bare
+                    # IRSwapQuery(curve, tenor, value=RATE) and combines them with
+                    # the DEFAULT weights from _decompose_rate_into_outright_legs.
+                    # That silently discards any caller-supplied weighting, so a
+                    # warm cache returned a differently-weighted -- or sign-flipped
+                    # -- spread under an identical column name (bpv=-10000 gave
+                    # +17.16 bp where the direct path gives -17.16 bp;
+                    # risk_weights=[1,0.5] was out by ~203 bp). Price those directly.
+                    _skw = dict(getattr(q, "structure_kwargs", {}) or {})
+                    if getattr(q, "risk_weight", None) is not None or any(
+                        _skw.get(k) is not None
+                        for k in (
+                            "risk_weights", "bpv", "notional",
+                            "front_notional", "belly_notional", "back_notional",
+                        )
+                    ):
+                        continue
                     col = q.col_name(curve_name)
                     missing = [
                         d for d in cacheable_ref_points
@@ -1037,17 +1078,31 @@ class IRSwapsTB(LayeredCacheMixin, BaseTimeseriesTB):
                 leave=False,
             ) as pbar:
                 tasks: List[Tuple[DateLike, IRSwapQuery, _IRSwapGenericCurve, object]] = []
+                _no_curve: List[DateLike] = []
                 for d in request_points:
                     curve = built_map.get(d)
                     if curve is None and d == datetime.date.today():
                         curve = built_map.get("live")
                     if curve is None:
-                        self._logger.warning(f"No curve returned for curve='{curve_name}' on date='{d}'.")
+                        # Points with no curve are dropped, so the returned frame
+                        # is simply SHORTER -- there is no NaN marking the hole.
+                        # One line per point buries that in a long series, so
+                        # summarize below as well.
+                        _no_curve.append(d)
+                        self._logger.debug(f"No curve returned for curve='{curve_name}' on date='{d}'.")
                         pbar.update(len(qs))
                         continue
                     pricing_ref_point: DateLike = live_output_index if (d == "live" and live_output_index is not None) else d
                     for q in qs:
                         tasks.append((pricing_ref_point, q, curve, d))
+
+                if _no_curve:
+                    self._logger.warning(
+                        "%s: no curve for %d of %d requested point(s) on '%s' — those rows are "
+                        "ABSENT from the result, not NaN (first=%s, last=%s).",
+                        self.mdp.source, len(_no_curve), len(request_points), curve_name,
+                        _no_curve[0], _no_curve[-1],
+                    )
 
                 if tasks:
                     if (n_jobs or 1) > 1:
@@ -1080,6 +1135,8 @@ class IRSwapsTB(LayeredCacheMixin, BaseTimeseriesTB):
                             try:
                                 row = _build_row_for_query(curve, q, pricing_ref_point, self._date_col)
                                 new_rows_with_q.append((row, q, curve_name, request_ref_point))
+                            except NotImplementedError:
+                                raise  # unsupported value type -> surface it, don't return an empty frame
                             except Exception as e:
                                 self._logger.exception(
                                     f"Pricing failed for curve='{curve_name}', date='{request_ref_point}', query='{q}'. Error: {e}"
@@ -1103,7 +1160,9 @@ class IRSwapsTB(LayeredCacheMixin, BaseTimeseriesTB):
                 grouped[self._ts_symbol_for_query(curve_name, q)].append((dt_like, col, float(val)))
             if grouped:
                 try:
-                    self._computed_ts_store.append_many_rows(rows_by_symbol=grouped)
+                    self._computed_ts_store.append_many_rows(
+                        rows_by_symbol=grouped, intraday=use_intraday_cache
+                    )
                 except Exception as ex:
                     self._logger.warning(f"[TS cache] bulk append failed: {ex}")
 
