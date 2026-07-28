@@ -111,7 +111,8 @@ class ContractMarginal:
         total = c[-1]
         if total <= 0:
             return float("nan")
-        return float((g[-1] * c[-1] - np.trapz(c, g)) / total)
+        trapezoid = getattr(np, "trapezoid", np.trapz)
+        return float((g[-1] * c[-1] - trapezoid(c, g)) / total)
 
     @property
     def median(self) -> float:
