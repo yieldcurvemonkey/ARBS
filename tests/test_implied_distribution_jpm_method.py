@@ -169,8 +169,9 @@ def test_bl_smoothing_param_is_literal_by_default():
     seen = {}
 
     class FakeSpline:
-        def __init__(self, x, y, *, k, s):
+        def __init__(self, x, y, *, k, s, w=None):
             seen["s"] = s
+            seen["w"] = w
 
         def __call__(self, x, nu=0):
             arr = np.asarray(x, dtype=float)
@@ -201,8 +202,9 @@ def test_bl_can_opt_into_legacy_n_scaled_smoothing():
     seen = {}
 
     class FakeSpline:
-        def __init__(self, x, y, *, k, s):
+        def __init__(self, x, y, *, k, s, w=None):
             seen["s"] = s
+            seen["w"] = w
             seen["n"] = len(x)
 
         def __call__(self, x, nu=0):
