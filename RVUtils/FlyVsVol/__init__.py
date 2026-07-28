@@ -38,7 +38,26 @@ from RVUtils.FlyVsVol.screener import (
     series_half_life,
 )
 
+from RVUtils.FlyVsVol.view_overlay import (
+    Expression,
+    ExpressionResult,
+    FuturesLeg,
+    MeetingView,
+    OptionLeg,
+    encode_view,
+    price_expressions,
+    view_vs_market_bins,
+)
+
 __all__ = [
+    "Expression",
+    "ExpressionResult",
+    "FuturesLeg",
+    "MeetingView",
+    "OptionLeg",
+    "encode_view",
+    "price_expressions",
+    "view_vs_market_bins",
     "FLY_WEIGHTS",
     "ContractMarginal",
     "FlyDefinition",
