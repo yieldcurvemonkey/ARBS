@@ -251,7 +251,13 @@ _FUTURE_RE = re.compile(rf"^(?P<root>{_ROOT_TOKEN_PATTERN})(?P<code>[FGHJKMNQUVX
 _CM_RE = re.compile(rf"^(?P<root>{_ROOT_TOKEN_PATTERN})?CM(?P<rank>\d+)$", re.IGNORECASE)
 
 _DEFAULT_CURVE_NAME = "USD-SOFR-1D-Q12xM12STIRT"
-_SABR_SMILE_LISTED_OFFSET_CAP_BPS = 250.0
+# CME Rulebook 460A01.E.1: the Exchange lists 25-point exercise prices from 5.50 IMM
+# Index points above to 5.50 below the at-the-money strike (12.5- and 6.25-point listings
+# cover +/-1.50 under E.2/E.3). This cap used to be 250bp, so strike_offsets_bps="listed"
+# silently truncated the chain at less than half its listed width while the jpm_method
+# path used the full grid - and the discarded strikes are exactly the wings the density
+# tails are built from.
+_SABR_SMILE_LISTED_OFFSET_CAP_BPS = 550.0
 # A smile must be a snapshot of one trading session.  EOD windows are prefetched +/- a
 # calendar month around the request, so without this bound a leg whose chain stopped
 # printing weeks ago is silently carried forward into an as-of it never traded on.
@@ -1714,6 +1720,25 @@ _contract_expiry_date = _shared_sofr_option_contracts._contract_expiry_date
 sofr_option_last_trade_date = _shared_sofr_option_contracts.sofr_option_last_trade_date
 _front_sfr_option_contracts = _shared_sofr_option_contracts._front_sfr_option_contracts
 
+
+def _sofr_option_expiry_date(contract: str, contract_code: str) -> datetime.date:
+    """Expiry used to price a SOFR option leg.
+
+    An option expires when trading in it terminates - the Friday preceding the third
+    Wednesday of the contract month (CME Rulebook 460A01.J.1). The third Wednesday itself
+    is the start of the underlying future's Reference Quarter (460A01.D.1), five days
+    later, and using it overstates time-to-expiry by those five days: ~1-2% on the normal
+    vol at multi-month tenors, and badly more in the final fortnight (on the last session
+    it prices 1 day of risk as 6).
+
+    Falls back to the third Wednesday for roots the termination rule does not cover
+    (weekly mid-curves, non-SOFR roots), preserving the previous behaviour there.
+    """
+    resolved = sofr_option_last_trade_date(contract)
+    if resolved is not None:
+        return resolved
+    return _contract_expiry_date(contract_code)
+
 class STIRFutureOptionMDP(MarketDataProvider[InstrumentLike], LayeredCacheMixin):
     _STIR_OPTION_CACHE = "_stir_option_pricer_cache"
     _RAW_EOD_CACHE_STEM = "STIRFutureOptionRawEOD_Cache"
@@ -1921,7 +1946,7 @@ class STIRFutureOptionMDP(MarketDataProvider[InstrumentLike], LayeredCacheMixin)
     ) -> str:
         payload = {
             "schema": 1,
-            "cache_version": "stirfo_barchart_pricer_window_v2",
+            "cache_version": "stirfo_barchart_pricer_window_v3",
             "source": str(self.source).upper(),
             "symbols": sorted({str(s).upper() for s in leg_symbols}),
             "window_start": window_start.isoformat(),
@@ -2386,7 +2411,7 @@ class STIRFutureOptionMDP(MarketDataProvider[InstrumentLike], LayeredCacheMixin)
             return None
         payload = {
             "schema": 1,
-            "cache_version": "stirfo_sabr_smile_common_v3",
+            "cache_version": "stirfo_sabr_smile_common_v4",
             "source": str(self.source).upper(),
             "as_of": as_of.isoformat(),
             "curve_name": str(curve_name),
@@ -4542,7 +4567,11 @@ class STIRFutureOptionMDP(MarketDataProvider[InstrumentLike], LayeredCacheMixin)
 
         payload = {
             "schema": 1,
-            "cache_version": "stirfo_get_data_v9",
+            # v10: option expiry moved from the third Wednesday to the termination Friday
+            # (Rulebook 460A01.J.1), which changes time-to-expiry and therefore every
+            # cached pricer, implied vol and SABR calibration. v9 entries are not
+            # comparable and must not be served alongside v10 ones.
+            "cache_version": "stirfo_get_data_v10",
             "source": str(self.source).upper(),
             "endpoint": ep,
             "request": self._cache_primitive(cache_req),
@@ -5119,12 +5148,27 @@ class STIRFutureOptionMDP(MarketDataProvider[InstrumentLike], LayeredCacheMixin)
             return ent
         return None
 
-    def _raw_eod_cache_put(self, symbol: str, frame: Optional[pd.DataFrame], fetched_at: float) -> None:
+    def _raw_eod_cache_put(
+        self,
+        symbol: str,
+        frame: Optional[pd.DataFrame],
+        fetched_at: float,
+        *,
+        full_history: bool = False,
+    ) -> None:
         max_date = min_date = None
         if frame is not None and len(frame) and isinstance(frame.index, pd.DatetimeIndex):
             max_date = pd.Timestamp(frame.index.max()).date()
             min_date = pd.Timestamp(frame.index.min()).date()
-        ent = {"frame": frame, "fetched_at": float(fetched_at), "min_date": min_date, "max_date": max_date}
+        ent = {
+            "frame": frame,
+            "fetched_at": float(fetched_at),
+            "min_date": min_date,
+            "max_date": max_date,
+            # Only a wide-window fetch produces a frame that can answer an arbitrary
+            # later window from local slicing. See _raw_eod_cache_covers.
+            "full_history": bool(full_history),
+        }
         with self._raw_eod_lock:
             self._raw_eod_mem[symbol] = ent
         try:
@@ -5135,6 +5179,14 @@ class STIRFutureOptionMDP(MarketDataProvider[InstrumentLike], LayeredCacheMixin)
     def _raw_eod_cache_covers(self, ent: Dict[str, Any], start: datetime.date, end: datetime.date) -> bool:
         fetched_at = float(ent.get("fetched_at", 0.0) or 0.0)
         if fetched_at <= 0.0:
+            return False
+        # The reasoning below is only valid for a full-history snapshot. An entry written
+        # from a narrow frame answers every later window from a slice that silently
+        # returns nothing -- which is how a stray SQZ30 entry holding one bar from
+        # 2026-02-27 came to report that it "covered" 2026-01-02..03 and yield zero rows.
+        # Entries without the flag (written before it existed) are treated as misses and
+        # refetched once, which self-heals any such poisoning.
+        if not bool(ent.get("full_history", False)):
             return False
         fetched_date = datetime.datetime.fromtimestamp(fetched_at, tz=_NY_TZ).date()
         # Window ends strictly before the day we fetched -> historical & immutable: the
@@ -5215,7 +5267,7 @@ class STIRFutureOptionMDP(MarketDataProvider[InstrumentLike], LayeredCacheMixin)
                     continue
                 frame = fetched_full.get(n)
                 if frame is not None:
-                    self._raw_eod_cache_put(n, frame, now)
+                    self._raw_eod_cache_put(n, frame, now, full_history=True)
                 result[n] = self._slice_eod_frame(frame, start, end)
 
         return result
@@ -5754,7 +5806,7 @@ class STIRFutureOptionMDP(MarketDataProvider[InstrumentLike], LayeredCacheMixin)
 
         strike = _strike_from_symbol(canonical_symbol)
         contract_code = _contract_code_from_symbol(canonical_symbol)
-        expiry = _contract_expiry_date(contract_code)
+        expiry = _sofr_option_expiry_date(_canonical_contract(canonical_symbol), contract_code)
         tte = _time_to_expiry(valuation_ts.astimezone(_NY_TZ).date(), expiry)
 
         market_price = _extract_row_price(row, price_mode=price_mode)
@@ -7373,7 +7425,7 @@ class STIRFutureOptionMDP(MarketDataProvider[InstrumentLike], LayeredCacheMixin)
                         code2 = m_code.group("code") if m_code else ""
                     if not code2:
                         continue
-                    expiry = _contract_expiry_date(code2)
+                    expiry = _sofr_option_expiry_date(globex_symbol, code2)
                 tte = _time_to_expiry(quote_day, expiry)
                 discount, curve_error = self._discount_factor(
                     valuation_ts=quote_dt,
@@ -7732,7 +7784,9 @@ class STIRFutureOptionMDP(MarketDataProvider[InstrumentLike], LayeredCacheMixin)
             if cache_key and not force_refresh:
                 cached = self._threadsafe_cache_get(cache_key)
                 hit = self._deserialize_get_data_result(cached)
-                if hit is not None:
+                # `if hit` rather than `is not None`: an empty entry written before the
+                # guard below existed must not keep short-circuiting the rebuild.
+                if hit:
                     return hit
 
             if endpoint == "option_snapshot":
@@ -7749,7 +7803,11 @@ class STIRFutureOptionMDP(MarketDataProvider[InstrumentLike], LayeredCacheMixin)
             else:
                 raise NotImplementedError(f"Unsupported endpoint: {endpoint}")
 
-            if cache_key:
+            # Never persist an empty result. An empty payload is indistinguishable from a
+            # legitimate answer on read, so caching one turns a single transient failure -
+            # a Barchart hiccup, a curve build that did not come up, a poisoned upstream
+            # cache entry - into a permanent "no data" that only force_refresh can clear.
+            if cache_key and out:
                 self._threadsafe_cache_put(cache_key, self._serialize_get_data_result(endpoint, out))
             if endpoint == "sabr_smile" and common_key and (force_refresh or self._threadsafe_cache_get(common_key) is None):
                 self._store_sabr_smile_common_cache(common_key=common_key, smile=smile)

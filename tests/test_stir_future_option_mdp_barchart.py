@@ -241,10 +241,12 @@ def test_build_sabr_smile_result_barchart_listed_caps_historical_eod_fetch_count
     assert result == "ok"
     assert common_key is None
     assert seen["fetch_symbols"][0] == [bc_contract]
-    assert len(seen["fetch_symbols"][1]) == 59  # production expanded listed strike range by 2
-    assert len([sym for sym in seen["fetch_symbols"][1] if "|" in sym]) == 58
+    # 82 option legs + the underlying contract. The ladder spans the full listed range
+    # of +/-5.50 IMM Index points (CME Rulebook 460A01.E.1), not the old 250bp cap.
+    assert len(seen["fetch_symbols"][1]) == 83
+    assert len([sym for sym in seen["fetch_symbols"][1] if "|" in sym]) == 82
     assert set(sym for sym in seen["fetch_symbols"][1] if "|" not in sym) == {bc_contract}
-    assert len(seen["leg_symbols"]) == 58
+    assert len(seen["leg_symbols"]) == 82
 
 
 def test_option_timeseries_underlying_alignment_and_straddle_synthesis(monkeypatch):

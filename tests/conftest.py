@@ -16,6 +16,30 @@ from typing import Any, Dict, List, Tuple
 from dataclasses import dataclass
 
 
+@pytest.fixture(autouse=True, scope="session")
+def _isolate_stirfo_raw_eod_cache(tmp_path_factory):
+    """Keep the STIR option raw-EOD disk cache out of the developer's real cache.
+
+    ``STIRFutureOptionMDP`` memoises full-history Barchart frames in a diskcache under
+    ``LayeredCacheMixin.default_cache_path``. Tests that monkeypatch the fetcher return
+    small synthetic frames, and those were being written straight into that shared cache
+    — so a test run could leave e.g. a one-bar ``SQZ30`` entry behind that a later *real*
+    query would slice to zero rows. Point the cache at a per-session temp dir instead.
+    """
+    from MDP.STIRFutures.STIRFutureOptionMDP import STIRFutureOptionMDP
+
+    path = tmp_path_factory.mktemp("stirfo_raw_eod_cache")
+    # _RAW_EOD_CACHE_STEM is a class attribute read through self, and the diskcache handle
+    # itself is per-instance, so overriding the stem is enough to redirect every MDP built
+    # during the session.
+    original_stem = STIRFutureOptionMDP._RAW_EOD_CACHE_STEM
+    STIRFutureOptionMDP._RAW_EOD_CACHE_STEM = f"pytest_{original_stem}_{path.name}"
+    try:
+        yield
+    finally:
+        STIRFutureOptionMDP._RAW_EOD_CACHE_STEM = original_stem
+
+
 @pytest.fixture(autouse=True)
 def _reset_pandas_copy_on_write():
     """Force pd.options.mode.copy_on_write = False before every test.

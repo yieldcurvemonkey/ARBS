@@ -84,18 +84,41 @@ def test_raw_eod_cache_covers_freshness():
     today = datetime.date.today()
 
     # Fetched 5 days ago; purely-historical window -> covered (data is immutable).
-    old = {"fetched_at": now - 5 * 86400}
+    old = {"fetched_at": now - 5 * 86400, "full_history": True}
     assert mdp._raw_eod_cache_covers(old, datetime.date(2024, 1, 1), datetime.date(2024, 2, 1)) is True
 
     # Window reaching today but fetched 5 days ago -> stale -> NOT covered.
     assert mdp._raw_eod_cache_covers(old, today - datetime.timedelta(days=30), today) is False
 
     # Window reaching today, fetched 1 min ago -> fresh -> covered.
-    fresh = {"fetched_at": now - 60}
+    fresh = {"fetched_at": now - 60, "full_history": True}
     assert mdp._raw_eod_cache_covers(fresh, today - datetime.timedelta(days=30), today) is True
 
     # No fetch timestamp -> never covered.
     assert mdp._raw_eod_cache_covers({}, datetime.date(2024, 1, 1), datetime.date(2024, 2, 1)) is False
+
+
+def test_raw_eod_cache_does_not_claim_coverage_for_a_narrow_frame():
+    """The "historical windows are immutable" shortcut is only sound for the wide-window
+    snapshot the fetcher stores. An entry written from a narrow frame answers every later
+    window from a slice that silently returns nothing - which is how a stray one-bar
+    SQZ30 entry came to report that it covered a January window and yield zero rows,
+    leaving option_timeseries with no underlying and an empty result."""
+    mdp = _mdp()
+    now = time.time()
+    narrow = {"fetched_at": now - 5 * 86400}  # no full_history flag
+    assert mdp._raw_eod_cache_covers(narrow, datetime.date(2024, 1, 1), datetime.date(2024, 2, 1)) is False
+    assert mdp._raw_eod_cache_covers({**narrow, "full_history": False},
+                                     datetime.date(2024, 1, 1), datetime.date(2024, 2, 1)) is False
+
+
+def test_raw_eod_cache_put_records_full_history_only_when_told():
+    mdp = _mdp()
+    frame = _full_history_frame()
+    mdp._raw_eod_cache_put("SQM26", frame, time.time())
+    assert mdp._raw_eod_cache_get("SQM26")["full_history"] is False
+    mdp._raw_eod_cache_put("SQU26", frame, time.time(), full_history=True)
+    assert mdp._raw_eod_cache_get("SQU26")["full_history"] is True
 
 
 def test_raw_eod_cache_disk_persists_across_instances():
