@@ -84,18 +84,69 @@ def test_raw_eod_cache_covers_freshness():
     today = datetime.date.today()
 
     # Fetched 5 days ago; purely-historical window -> covered (data is immutable).
-    old = {"fetched_at": now - 5 * 86400}
+    old = {"fetched_at": now - 5 * 86400, "full_history": True}
     assert mdp._raw_eod_cache_covers(old, datetime.date(2024, 1, 1), datetime.date(2024, 2, 1)) is True
 
     # Window reaching today but fetched 5 days ago -> stale -> NOT covered.
     assert mdp._raw_eod_cache_covers(old, today - datetime.timedelta(days=30), today) is False
 
     # Window reaching today, fetched 1 min ago -> fresh -> covered.
-    fresh = {"fetched_at": now - 60}
+    fresh = {"fetched_at": now - 60, "full_history": True}
     assert mdp._raw_eod_cache_covers(fresh, today - datetime.timedelta(days=30), today) is True
 
     # No fetch timestamp -> never covered.
     assert mdp._raw_eod_cache_covers({}, datetime.date(2024, 1, 1), datetime.date(2024, 2, 1)) is False
+
+
+def test_raw_eod_cache_does_not_claim_coverage_for_a_narrow_frame():
+    """The "historical windows are immutable" shortcut is only sound for the wide-window
+    snapshot the fetcher stores. An entry written from a narrow frame answers every later
+    window from a slice that silently returns nothing - which is how a stray one-bar
+    SQZ30 entry came to report that it covered a January window and yield zero rows,
+    leaving option_timeseries with no underlying and an empty result."""
+    mdp = _mdp()
+    now = time.time()
+    # The real poisoned shape: one bar, dated after the requested window starts.
+    poisoned = {"fetched_at": now - 5 * 86400, "min_date": datetime.date(2026, 2, 27),
+                "max_date": datetime.date(2026, 2, 27)}
+    assert mdp._raw_eod_cache_covers(poisoned, datetime.date(2026, 1, 2), datetime.date(2026, 1, 3)) is False
+    # An entry carrying no date bounds at all cannot prove anything either.
+    assert mdp._raw_eod_cache_covers({"fetched_at": now - 5 * 86400},
+                                     datetime.date(2024, 1, 1), datetime.date(2024, 2, 1)) is False
+
+
+def test_raw_eod_cache_keeps_legacy_full_history_entries():
+    """Entries written before the full_history flag existed must not all be discarded -
+    there are thousands of them and refetching every one would hammer Barchart. A legacy
+    entry whose stored history begins on or before the requested start is what a wide
+    fetch produces, so it is honoured."""
+    mdp = _mdp()
+    now = time.time()
+    legacy = {
+        "fetched_at": now - 5 * 86400,
+        "min_date": datetime.date(2021, 1, 4),
+        "max_date": datetime.date(2026, 7, 24),
+    }
+    assert mdp._raw_eod_cache_covers(legacy, datetime.date(2024, 1, 1), datetime.date(2024, 2, 1)) is True
+    # Prefetch windows run a month past the last available bar. Reaching beyond the fetch
+    # day still requires a fresh fetch (the current bar is still settling), but the legacy
+    # date check must not be what rejects it -- a fresh legacy entry is honoured.
+    fresh_legacy = {**legacy, "fetched_at": time.time() - 60}
+    assert mdp._raw_eod_cache_covers(
+        fresh_legacy, datetime.date(2026, 6, 24), datetime.date(2026, 8, 24)
+    ) is True
+    # A flagged entry is trusted without the date check.
+    flagged = {"fetched_at": now - 5 * 86400, "full_history": True}
+    assert mdp._raw_eod_cache_covers(flagged, datetime.date(2024, 1, 1), datetime.date(2024, 2, 1)) is True
+
+
+def test_raw_eod_cache_put_records_full_history_only_when_told():
+    mdp = _mdp()
+    frame = _full_history_frame()
+    mdp._raw_eod_cache_put("SQM26", frame, time.time())
+    assert mdp._raw_eod_cache_get("SQM26")["full_history"] is False
+    mdp._raw_eod_cache_put("SQU26", frame, time.time(), full_history=True)
+    assert mdp._raw_eod_cache_get("SQU26")["full_history"] is True
 
 
 def test_raw_eod_cache_disk_persists_across_instances():

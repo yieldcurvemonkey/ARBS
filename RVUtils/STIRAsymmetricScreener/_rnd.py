@@ -487,9 +487,19 @@ def extract_per_expiry_rnd(
     density = np.asarray(bl.rnd_density, dtype=float)
     cdf = np.asarray(bl.rnd_cumulative, dtype=float)
 
-    # Mass conservation
-    pre_norm_mass = float(trapezoid(density, grid_rate))
-    if pre_norm_mass < 0.95 or pre_norm_mass > 1.05:
+    # Mass conservation.
+    #
+    # This used to integrate `bl.rnd_density`, which the extractor has already rescaled
+    # to unit mass, so it measured 1.0 to machine precision and the guard could never
+    # fire. The meaningful quantity is the mass BEFORE that rescale, now reported
+    # directly. The check is one-sided on purpose: a value below 1 is legitimate for a
+    # truncated smile, where the integral equals P(Kmin < S_T < Kmax) rather than 1.
+    # Only an excess can be a real defect - it means the post-clip fitted call curve is
+    # carrying more than unit mass, i.e. butterfly arbitrage survived the fit.
+    pre_norm_mass = float(getattr(bl, "pre_normalization_mass", float("nan")))
+    if not math.isfinite(pre_norm_mass):
+        pre_norm_mass = float(trapezoid(density, grid_rate))
+    if pre_norm_mass > 1.05:
         warnings.append(f"mass_violation:{pre_norm_mass:.3f}")
 
     # Negative-density check.
@@ -573,7 +583,9 @@ def extract_per_expiry_rnd(
     stability_flag = STABILITY_STABLE
     if has_negative:
         stability_flag = STABILITY_NEGATIVE_DENSITY
-    elif pre_norm_mass < 0.95 or pre_norm_mass > 1.05:
+    elif pre_norm_mass > 1.05:
+        # One-sided, matching the guard above: sub-unit mass is expected on a truncated
+        # smile and must not flip prob_source to sabr_fallback.
         stability_flag = STABILITY_MASS_VIOLATION
     elif smoothing_delta > config.rnd_smoothing_sensitivity_pp_threshold:
         stability_flag = STABILITY_UNSTABLE_SMOOTHING
