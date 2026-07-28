@@ -10,6 +10,18 @@ from RVUtils.FlyVsVol._types import (
     FlyVsVolConfig,
     PathDistribution,
 )
+from RVUtils.FlyVsVol.coupling import (
+    comonotone_grid,
+    gaussian_copula_sample,
+    historical_corr,
+)
+from RVUtils.FlyVsVol.metrics import build_fly_snapshot, path_metrics
+from RVUtils.FlyVsVol.screener import (
+    adjacent_triples,
+    history_zscores,
+    run_fly_screener,
+    screener_table,
+)
 
 __all__ = [
     "FLY_WEIGHTS",
@@ -18,4 +30,13 @@ __all__ = [
     "FlySnapshot",
     "FlyVsVolConfig",
     "PathDistribution",
+    "comonotone_grid",
+    "gaussian_copula_sample",
+    "historical_corr",
+    "build_fly_snapshot",
+    "path_metrics",
+    "adjacent_triples",
+    "history_zscores",
+    "run_fly_screener",
+    "screener_table",
 ]
