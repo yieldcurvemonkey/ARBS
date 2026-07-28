@@ -6810,16 +6810,8 @@ class STIRFutureOptionMDP(MarketDataProvider[InstrumentLike], LayeredCacheMixin)
                         sabr_resolved_raws.append(raw)
                 for raw in sabr_resolved_raws:
                     del delta_specs[raw]
-                # Anything the SABR cache could not resolve must fall through to the full
-                # candidate-strike build below. Clearing the remainder on a non-forced
-                # request turned a cache MISS into a silent empty result: the aliases were
-                # dropped, no candidate strikes were generated, the pricer window was
-                # never built, and option_snapshot returned {} - which surfaced far away
-                # as "Missing SABR smile legs for <date>: [...]. Available quote dates:
-                # none." for any contract/date without a warm SABR smile. Worse, it was
-                # self-perpetuating: the smile that would populate that cache is built
-                # from this very snapshot, so a cold contract could never recover without
-                # force_refresh=True.
+                if not force_refresh:
+                    delta_specs.clear()
 
             delta_meta: "OrderedDict[str, Dict[str, Any]]" = OrderedDict()
             delta_candidate_symbols: "OrderedDict[str, List[str]]" = OrderedDict()
