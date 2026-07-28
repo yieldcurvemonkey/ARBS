@@ -252,6 +252,10 @@ _CM_RE = re.compile(rf"^(?P<root>{_ROOT_TOKEN_PATTERN})?CM(?P<rank>\d+)$", re.IG
 
 _DEFAULT_CURVE_NAME = "USD-SOFR-1D-Q12xM12STIRT"
 _SABR_SMILE_LISTED_OFFSET_CAP_BPS = 250.0
+# A smile must be a snapshot of one trading session.  EOD windows are prefetched +/- a
+# calendar month around the request, so without this bound a leg whose chain stopped
+# printing weeks ago is silently carried forward into an as-of it never traded on.
+_SABR_SMILE_MAX_QUOTE_STALENESS_DAYS = 5
 _QS_STIR_ROOT_ALIAS_TO_GLOBEX: Dict[str, str] = {
     "SR3": "SR3",
     "SFR": "SR3",
@@ -1707,6 +1711,8 @@ _strike_from_symbol = _shared_sofr_option_contracts._strike_from_symbol
 _right_from_symbol = _shared_sofr_option_contracts._right_from_symbol
 _contract_code_from_symbol = _shared_sofr_option_contracts._contract_code_from_symbol
 _contract_expiry_date = _shared_sofr_option_contracts._contract_expiry_date
+sofr_option_last_trade_date = _shared_sofr_option_contracts.sofr_option_last_trade_date
+_front_sfr_option_contracts = _shared_sofr_option_contracts._front_sfr_option_contracts
 
 class STIRFutureOptionMDP(MarketDataProvider[InstrumentLike], LayeredCacheMixin):
     _STIR_OPTION_CACHE = "_stir_option_pricer_cache"
@@ -2722,6 +2728,18 @@ class STIRFutureOptionMDP(MarketDataProvider[InstrumentLike], LayeredCacheMixin)
         *,
         symbol_info: Dict[str, Any],
         as_of: datetime.date,
+        assert_tradable: bool = True,
+    ) -> str:
+        contract = self._resolve_sabr_smile_contract_unchecked(symbol_info=symbol_info, as_of=as_of)
+        if assert_tradable:
+            self._assert_sabr_smile_chain_tradable(contract=contract, as_of=as_of)
+        return contract
+
+    def _resolve_sabr_smile_contract_unchecked(
+        self,
+        *,
+        symbol_info: Dict[str, Any],
+        as_of: datetime.date,
     ) -> str:
         src = str(self.source).upper()
         kind = str(symbol_info.get("kind", "")).strip().lower()
@@ -2742,6 +2760,33 @@ class STIRFutureOptionMDP(MarketDataProvider[InstrumentLike], LayeredCacheMixin)
                 as_of=as_of,
             )
         raise NotImplementedError(f"Unsupported SABR smile source for contract resolution: {self.source!r}")
+
+    @staticmethod
+    def _live_sofr_option_contracts(as_of: datetime.date, *, limit: int = 3) -> List[str]:
+        candidates = list(_front_sfr_option_contracts(as_of))
+        live = [c for c in candidates if (sofr_option_last_trade_date(c) or as_of) >= as_of]
+        live.sort(key=lambda c: (sofr_option_last_trade_date(c) or datetime.date.max))
+        return live[:limit]
+
+    def _assert_sabr_smile_chain_tradable(self, *, contract: str, as_of: datetime.date) -> None:
+        """Reject an as_of after the option chain stopped trading.
+
+        The underlying SR3 future keeps trading for another quarter after its options
+        terminate, so the forward resolves cleanly and the request would otherwise only
+        fail deep inside leg selection with a bare list of "missing" strikes.
+        """
+        last_trade = sofr_option_last_trade_date(contract)
+        if last_trade is None or as_of <= last_trade:
+            return
+        alternatives = self._live_sofr_option_contracts(as_of)
+        suggestion = f" Still listed on that date: {', '.join(alternatives)}." if alternatives else ""
+        raise ValueError(
+            f"{contract} options terminated trading on {last_trade.isoformat()} (the Friday "
+            f"preceding the third Wednesday of the contract month); the requested as_of "
+            f"{as_of.isoformat()} is {(as_of - last_trade).days} days later, so the chain has no "
+            f"quotes. The underlying future keeps trading until the end of the reference quarter, "
+            f"which is why the forward still resolves.{suggestion}"
+        )
 
     def _resolve_sabr_smile_forward_from_underlying_data(
         self,
@@ -2906,6 +2951,75 @@ class STIRFutureOptionMDP(MarketDataProvider[InstrumentLike], LayeredCacheMixin)
             raise ValueError(f"Missing SABR smile strike legs for {as_of.isoformat()}: {missing}. Available quote dates: {av}.")
         return out
 
+    @staticmethod
+    def _resolve_pricer_window_quote_day(
+        *,
+        requested_legs: Sequence[Dict[str, Any]],
+        pricers_window: Dict[str, Dict[datetime.date, QLSTIRFutureOptionPricer]],
+        target_date: datetime.date,
+    ) -> Optional[datetime.date]:
+        """Latest session on or before ``target_date`` that any requested leg printed on.
+
+        The whole smile is then taken from that one session.  Resolving each leg's own
+        as-of independently produced cross-session smiles: on 2026-06-16 the SFRM26 ATM
+        call came from 2026-06-12 (the chain's last trading day) while every other strike
+        came from 2026-06-11.
+        """
+        days: set[datetime.date] = set()
+        for spec in requested_legs:
+            for day in pricers_window.get(str(spec["canonical_symbol"]), {}):
+                if day <= target_date:
+                    days.add(day)
+        return max(days) if days else None
+
+    def _resolve_sabr_smile_pricer_window_session(
+        self,
+        *,
+        requested_legs: Sequence[Dict[str, Any]],
+        pricers_window: Dict[str, Dict[datetime.date, QLSTIRFutureOptionPricer]],
+        target_date: datetime.date,
+    ) -> datetime.date:
+        quote_day = self._resolve_pricer_window_quote_day(
+            requested_legs=requested_legs,
+            pricers_window=pricers_window,
+            target_date=target_date,
+        )
+        if quote_day is None:
+            raise ValueError(
+                f"No quotes on or before {target_date.isoformat()} for any of the "
+                f"{len(requested_legs)} requested SABR smile legs"
+                f"{self._sabr_smile_expiry_hint(requested_legs=requested_legs, as_of=target_date)}"
+            )
+        staleness = (target_date - quote_day).days
+        if staleness > _SABR_SMILE_MAX_QUOTE_STALENESS_DAYS:
+            raise ValueError(
+                f"SABR smile quotes for {target_date.isoformat()} are stale: the last session with "
+                f"any quoted leg is {quote_day.isoformat()} ({staleness} days earlier, limit "
+                f"{_SABR_SMILE_MAX_QUOTE_STALENESS_DAYS})"
+                f"{self._sabr_smile_expiry_hint(requested_legs=requested_legs, as_of=target_date)}"
+            )
+        return quote_day
+
+    @staticmethod
+    def _sabr_smile_expiry_hint(
+        *,
+        requested_legs: Sequence[Dict[str, Any]],
+        as_of: datetime.date,
+    ) -> str:
+        if not requested_legs:
+            return "."
+        try:
+            contract = str(requested_legs[0]["canonical_symbol"]).split("|", 1)[0]
+            last_trade = sofr_option_last_trade_date(contract)
+        except Exception:
+            return "."
+        if last_trade is None or as_of <= last_trade:
+            return "."
+        return (
+            f"; {contract} options terminated trading on {last_trade.isoformat()}, "
+            f"{(as_of - last_trade).days} days before the requested as_of."
+        )
+
     def _select_sabr_smile_explicit_legs_from_pricer_window(
         self,
         *,
@@ -2913,12 +3027,23 @@ class STIRFutureOptionMDP(MarketDataProvider[InstrumentLike], LayeredCacheMixin)
         pricers_window: Dict[str, Dict[datetime.date, QLSTIRFutureOptionPricer]],
         target_date: datetime.date,
     ) -> List[Dict[str, Any]]:
+        quote_day = self._resolve_sabr_smile_pricer_window_session(
+            requested_legs=requested_legs,
+            pricers_window=pricers_window,
+            target_date=target_date,
+        )
+        # Derived from the request, not from whichever leg resolved last: legs pinned to
+        # an ATM offset were snapped onto a rule lattice that need not be fully listed,
+        # so gaps are expected.  Explicitly named strikes must all be present.
+        offset_mode = any(
+            _to_float(spec.get("requested_atm_offset_bps")) is not None for spec in requested_legs
+        )
+
         out: List[Dict[str, Any]] = []
         missing: List[str] = []
-        requested_atm_offset = False
         for spec in requested_legs:
             canonical_symbol = str(spec["canonical_symbol"])
-            pr = self._asof_pricer_for_date(pricers_window.get(canonical_symbol, {}), target_date)
+            pr = pricers_window.get(canonical_symbol, {}).get(quote_day)
             if pr is None:
                 missing.append(canonical_symbol)
                 continue
@@ -2932,10 +3057,13 @@ class STIRFutureOptionMDP(MarketDataProvider[InstrumentLike], LayeredCacheMixin)
                     canonical_symbol=canonical_symbol,
                 )
             )
-            requested_atm_offset = _to_float(spec.get("requested_atm_offset_bps")) is not None 
-        
-        if missing and not requested_atm_offset:
-            raise ValueError(f"Missing SABR smile strike legs for {target_date.isoformat()}: {missing}.")
+
+        if missing and not offset_mode:
+            raise ValueError(
+                f"Missing SABR smile strike legs for {target_date.isoformat()} "
+                f"(quote session {quote_day.isoformat()}): {missing}."
+                f"{self._sabr_smile_expiry_hint(requested_legs=requested_legs, as_of=target_date)}"
+            )
         return out
 
     def _select_sabr_smile_available_legs_from_pricer_window(
@@ -2945,10 +3073,15 @@ class STIRFutureOptionMDP(MarketDataProvider[InstrumentLike], LayeredCacheMixin)
         pricers_window: Dict[str, Dict[datetime.date, QLSTIRFutureOptionPricer]],
         target_date: datetime.date,
     ) -> List[Dict[str, Any]]:
+        quote_day = self._resolve_sabr_smile_pricer_window_session(
+            requested_legs=requested_legs,
+            pricers_window=pricers_window,
+            target_date=target_date,
+        )
         out: List[Dict[str, Any]] = []
         for spec in requested_legs:
             canonical_symbol = str(spec["canonical_symbol"])
-            pr = self._asof_pricer_for_date(pricers_window.get(canonical_symbol, {}), target_date)
+            pr = pricers_window.get(canonical_symbol, {}).get(quote_day)
             if pr is None:
                 continue
             out.append(
@@ -3036,14 +3169,23 @@ class STIRFutureOptionMDP(MarketDataProvider[InstrumentLike], LayeredCacheMixin)
         ref_underlying = str(pricers[0].underlying_symbol()).upper()
         ref_forward = float(pricers[0].forward())
         ref_expiry = pricers[0].expiry_date()
+        ref_quote_day = pricers[0].quote_timestamp().astimezone(_NY_TZ).date()
         for pr in pricers[1:]:
             if str(pr.underlying_symbol()).upper() != ref_underlying:
                 raise ValueError("SABR smile legs do not agree on underlying contract.")
             if pr.expiry_date() != ref_expiry:
                 raise ValueError("SABR smile legs do not agree on expiry date.")
+            quote_day = pr.quote_timestamp().astimezone(_NY_TZ).date()
+            if quote_day != ref_quote_day:
+                raise ValueError(
+                    "SABR smile legs do not agree on quote session: "
+                    f"{ref_quote_day.isoformat()} vs {quote_day.isoformat()}."
+                )
             if not math.isclose(float(pr.forward()), ref_forward, rel_tol=0.0, abs_tol=1e-8):
-                print(float(pr.forward()), ref_forward)
-                raise ValueError("SABR smile legs do not agree on forward price.")
+                raise ValueError(
+                    "SABR smile legs do not agree on forward price: "
+                    f"{ref_forward!r} vs {float(pr.forward())!r}."
+                )
         return ref_underlying, ref_forward, ref_expiry
 
     def _assemble_sabr_smile_result(
@@ -3175,6 +3317,18 @@ class STIRFutureOptionMDP(MarketDataProvider[InstrumentLike], LayeredCacheMixin)
         mode = self._sabr_smile_point_mode(point_request)
         jpm_method = bool(request.get("jpm_method", False))
         selected_legs: List[Dict[str, Any]]
+
+        if not as_of_live:
+            # Fail fast and legibly on an expired chain, before ~100 EOD fetches produce
+            # nothing.  Delta mode never resolves a contract otherwise.
+            try:
+                resolved_contract = self._resolve_sabr_smile_contract_unchecked(
+                    symbol_info=symbol_info, as_of=as_of
+                )
+            except Exception:
+                resolved_contract = ""
+            if resolved_contract:
+                self._assert_sabr_smile_chain_tradable(contract=resolved_contract, as_of=as_of)
 
         if str(self.source).upper() == "STIRFO_DUAL-QL":
             if jpm_method:
@@ -5199,7 +5353,9 @@ class STIRFutureOptionMDP(MarketDataProvider[InstrumentLike], LayeredCacheMixin)
         if not force_refresh:
             cached = self._threadsafe_cache_get(cache_key)
             hit = self._deserialize_pricer_window(cached)
-            if hit is not None:
+            # `if hit` rather than `is not None`: an empty entry left behind by an older
+            # build (or a failed fetch) must not short-circuit the refetch.
+            if hit:
                 return hit
 
         option_symbols_bc = sorted({_canonical_to_barchart_option(sym) for sym in leg_symbols})
@@ -5224,20 +5380,34 @@ class STIRFutureOptionMDP(MarketDataProvider[InstrumentLike], LayeredCacheMixin)
             use_ql_calculator=use_ql_calculator,
             source=source,
         )
-        self._threadsafe_cache_put(cache_key, self._serialize_pricer_window(built))
+        # Never persist an empty window.  An empty payload deserializes to {} (not None),
+        # so caching one turns a transient Barchart outage into a permanent "no data"
+        # answer that only force_refresh can clear.
+        if built:
+            self._threadsafe_cache_put(cache_key, self._serialize_pricer_window(built))
         return built
 
     @staticmethod
     def _asof_pricer_for_date(
         by_day: Dict[datetime.date, QLSTIRFutureOptionPricer],
         target_date: datetime.date,
+        max_staleness_days: Optional[int] = None,
     ) -> Optional[QLSTIRFutureOptionPricer]:
+        """Latest pricer on or before ``target_date``.
+
+        EOD windows are prefetched +/- a calendar month around the request, so an
+        unbounded lookback happily returns a quote from weeks earlier.  Pass
+        ``max_staleness_days`` to reject anything older than that.
+        """
         if not by_day:
             return None
         keys = [d for d in by_day.keys() if d <= target_date]
         if not keys:
             return None
-        return by_day[max(keys)]
+        best = max(keys)
+        if max_staleness_days is not None and (target_date - best).days > int(max_staleness_days):
+            return None
+        return by_day[best]
 
     def _fetch_schwab_quotes(self, *, symbols: Sequence[str]) -> Dict[str, Dict[str, Any]]:
         req_symbols = self._dedupe_preserve_order([str(sym).strip() for sym in symbols if str(sym).strip()])
