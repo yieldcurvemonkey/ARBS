@@ -7778,6 +7778,34 @@ class STIRFutureOptionMDP(MarketDataProvider[InstrumentLike], LayeredCacheMixin)
             raise ValueError("sabr_smile returned no calibrated smile.")
         return self._normalize_stir_sabr_smile_convention(smiles[0])
 
+    @staticmethod
+    def _is_empty_get_data_result(out: Any) -> bool:
+        """True when a get_data payload carries no actual data.
+
+        Checking the container alone is not enough. ``option_snapshot`` returns
+        ``{symbol: [pricer, ...]}``, so a failed build produces ``{sym: [], ...}`` - a
+        dict that is perfectly truthy and twenty keys wide while containing nothing. That
+        is the shape that got cached and then replayed forever, surfacing as
+        "Missing SABR smile legs ... Available quote dates: none" on every later call.
+        """
+        if out is None:
+            return True
+        try:
+            if len(out) == 0:
+                return True
+        except TypeError:
+            return False
+        if isinstance(out, dict):
+            for value in out.values():
+                try:
+                    if len(value) > 0:
+                        return False
+                except TypeError:
+                    # Not sized (a scalar, an object) - treat as real content.
+                    return False
+            return True
+        return False
+
     def get_pricer(self, request: Dict[str, Any]):
         return self.get_data(request)
 
@@ -7793,9 +7821,10 @@ class STIRFutureOptionMDP(MarketDataProvider[InstrumentLike], LayeredCacheMixin)
             if cache_key and not force_refresh:
                 cached = self._threadsafe_cache_get(cache_key)
                 hit = self._deserialize_get_data_result(cached)
-                # `if hit` rather than `is not None`: an empty entry written before the
-                # guard below existed must not keep short-circuiting the rebuild.
-                if hit:
+                # A content-level emptiness test, not just `if hit`: an entry written
+                # before the guard below existed - or one shaped {symbol: []} - must not
+                # keep short-circuiting the rebuild.
+                if hit is not None and not self._is_empty_get_data_result(hit):
                     return hit
 
             if endpoint == "option_snapshot":
@@ -7816,7 +7845,7 @@ class STIRFutureOptionMDP(MarketDataProvider[InstrumentLike], LayeredCacheMixin)
             # legitimate answer on read, so caching one turns a single transient failure -
             # a Barchart hiccup, a curve build that did not come up, a poisoned upstream
             # cache entry - into a permanent "no data" that only force_refresh can clear.
-            if cache_key and out:
+            if cache_key and not self._is_empty_get_data_result(out):
                 self._threadsafe_cache_put(cache_key, self._serialize_get_data_result(endpoint, out))
             if endpoint == "sabr_smile" and common_key and (force_refresh or self._threadsafe_cache_get(common_key) is None):
                 self._store_sabr_smile_common_cache(common_key=common_key, smile=smile)
