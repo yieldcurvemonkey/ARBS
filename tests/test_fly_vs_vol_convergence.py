@@ -185,3 +185,25 @@ def test_to_row_has_attribution_columns(skewed_snapshot):
     assert row["skew_g_bp"] == pytest.approx(
         skewed_snapshot.fly_mean_bp - skewed_snapshot.fly_median_path_bp, abs=1e-9
     )
+
+
+def test_package_disaster_buyback(skewed_snapshot):
+    quotes = wing_quotes_for(skewed_snapshot, prem=5.0)
+    pkg = convergence_package(skewed_snapshot, quotes, scale_lots=100,
+                              mode="curvature", target_percentile=85.0,
+                              disaster_percentile=99.0, disaster_ratio=0.5)
+    sells = [l for l in pkg.legs if l.side == "sell"]
+    buys = [l for l in pkg.legs if l.side == "buy"]
+    # 2 sold wings (front/back) + belly buy + 2 disaster buybacks
+    assert len(sells) == 2 and len(buys) == 3
+    disasters = [l for l in buys if l.lots == 50]
+    assert len(disasters) == 2
+    for d in disasters:
+        m = next(x for x in skewed_snapshot.legs if x.symbol == d.quote.symbol)
+        sold = next(l for l in sells if l.quote.symbol == d.quote.symbol)
+        assert d.quote.strike_rate > sold.quote.strike_rate  # further out
+        assert d.hedge_futures_lots > 0  # long put hedged by buying futures
+    # premium: buybacks reduce the net vs no-disaster version
+    base = convergence_package(skewed_snapshot, quotes, scale_lots=100,
+                               mode="curvature", target_percentile=85.0)
+    assert pkg.net_premium_bp_lots < base.net_premium_bp_lots

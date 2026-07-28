@@ -10,6 +10,12 @@ from RVUtils.FlyVsVol._types import (
     FlyVsVolConfig,
     PathDistribution,
 )
+from RVUtils.FlyVsVol.baselines import (
+    conditional_tree,
+    independent_move_table,
+    mantissa_probs,
+    solve_meeting_month,
+)
 from RVUtils.FlyVsVol.convergence import (
     ConvergencePackage,
     SkewAttribution,
@@ -29,6 +35,7 @@ from RVUtils.FlyVsVol.screener import (
     history_zscores,
     run_fly_screener,
     screener_table,
+    series_half_life,
 )
 
 __all__ = [
@@ -53,4 +60,9 @@ __all__ = [
     "history_zscores",
     "run_fly_screener",
     "screener_table",
+    "series_half_life",
+    "conditional_tree",
+    "independent_move_table",
+    "mantissa_probs",
+    "solve_meeting_month",
 ]

@@ -100,3 +100,18 @@ def test_history_zscores_grouped():
     zb = out[out["label"] == "B-C-D"]["fly_bp_z"].dropna()
     # grouped z-scores: each label centred on its own history
     assert za.abs().max() < 5 and zb.abs().max() < 5
+
+
+def test_series_half_life_ou():
+    from RVUtils.FlyVsVol.screener import series_half_life
+    rng = np.random.default_rng(4)
+    rho = 0.94  # half-life ~ 11.2 obs
+    x = np.zeros(3000)
+    for i in range(1, 3000):
+        x[i] = rho * x[i - 1] + rng.normal()
+    hl = series_half_life(pd.Series(x))
+    assert 8 < hl < 15
+    # random walk -> non-reverting
+    rw = pd.Series(np.cumsum(rng.normal(size=2000)))
+    assert not np.isfinite(series_half_life(rw)) or series_half_life(rw) > 1000
+    assert np.isnan(series_half_life(pd.Series([1.0, 2.0])))

@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import datetime
 import logging
+import math
 from typing import List, Mapping, Optional, Sequence
 
 import numpy as np
@@ -18,7 +19,8 @@ from RVUtils.FlyVsVol.metrics import build_fly_snapshot
 
 logger = logging.getLogger(__name__)
 
-__all__ = ["adjacent_triples", "run_fly_screener", "screener_table", "history_zscores"]
+__all__ = ["adjacent_triples", "run_fly_screener", "screener_table", "history_zscores",
+           "series_half_life"]
 
 
 def adjacent_triples(symbols: Sequence[str]) -> List[FlyDefinition]:
@@ -104,3 +106,24 @@ def history_zscores(
         fstd = grp.transform(lambda s: s.std(ddof=0)).where(lambda s: s > 1e-12)
         out[f"{col}_z_full"] = (out[col] - fmean) / fstd
     return out
+
+
+def series_half_life(s: pd.Series) -> float:
+    """AR(1) mean-reversion half-life in observations (inf if non-reverting).
+
+    Fits ds_t = a + b*s_{t-1}; half-life = -ln 2 / ln(1 + b). Used to set the
+    holding period of the convergence trades from the measured tail_rent /
+    divergence series (per-label, so pass one triple's series at a time).
+    """
+    x = s.dropna().to_numpy(dtype=float)
+    if x.size < 10:
+        return float("nan")
+    lag, diff = x[:-1], np.diff(x)
+    var = np.var(lag)
+    if var <= 1e-18:
+        return float("inf")
+    b = np.cov(lag, diff, ddof=0)[0, 1] / var
+    rho = 1.0 + b
+    if not (0.0 < rho < 1.0):
+        return float("inf")
+    return float(-math.log(2.0) / math.log(rho))

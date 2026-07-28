@@ -122,6 +122,8 @@ def convergence_package(
     target_percentile: float = 90.0,
     mode: str = "curvature",
     wing_right: str = "P",
+    disaster_percentile: Optional[float] = None,
+    disaster_ratio: float = 0.5,
 ) -> ConvergencePackage:
     """Build the delta-hedged wing package that is long (or short) the gap G.
 
@@ -134,6 +136,10 @@ def convergence_package(
     chosen nearest each leg's ``target_percentile`` rate. Hedge lots assume
     ``delta_abs`` percent per lot; selling a price-put leaves positive price
     delta, hedged by selling futures (negative ``hedge_futures_lots``).
+
+    ``disaster_percentile`` (e.g. 97.5): for every *sold* wing, buy back
+    ``disaster_ratio`` x lots at the further strike — sell the meat, own the
+    disaster — so the package is short tail *richness*, not short blowout.
     """
     att = skew_attribution(snapshot)
     current_g = snapshot.tail_rent_bp
@@ -179,6 +185,24 @@ def convergence_package(
             )
         )
         net_premium += (1 if side == "sell" else -1) * lots * quote.premium_bp
+        if side == "sell" and disaster_percentile is not None and disaster_ratio > 0:
+            d_quote = _pick_quote(
+                wing_quotes.get(m.symbol, ()), m.percentile(disaster_percentile),
+                wing_right,
+            )
+            d_lots = int(round(lots * disaster_ratio))
+            if d_lots > 0 and d_quote.strike_rate != quote.strike_rate:
+                d_delta = -d_lots * d_quote.delta_abs / 100.0  # long put -> negative
+                legs.append(
+                    WingLeg(
+                        side="buy",
+                        quote=d_quote,
+                        lots=d_lots,
+                        premium_bp_total=d_lots * d_quote.premium_bp,
+                        hedge_futures_lots=-d_delta,
+                    )
+                )
+                net_premium -= d_lots * d_quote.premium_bp
 
     contrib_by_symbol = {
         snapshot.legs[0].symbol: att.contrib_front_bp,

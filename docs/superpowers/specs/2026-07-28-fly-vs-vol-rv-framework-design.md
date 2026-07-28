@@ -99,6 +99,34 @@ first-order exposure to which meeting moves. An outright fly held to settlement 
 trade, not the RV expression (demonstrated by FOMC scenario analysis: ±$600k across
 realistic paths on a 500-lot fly + wing package).
 
+## Independence baseline (`baselines.py`) and taxonomy
+
+FedWatch-style null as the third Tier-3 pole: per-meeting two-point lattice marginals
+(`mantissa_probs` of curve-implied meeting jumps — the minimum-variance model consistent with
+the curve means) coupled **independently** (`independent_move_table`, day-weighted over the
+reference quarters exactly as in settlement). Independence and comonotonicity bracket the
+couplings; where the option-implied tables sit between them is *priced* coupling, and
+tail_rent is the fly-level price of everything the null throws away (tails, >25bp surprises,
+intermeeting risk, coupling). Meeting jumps come from the FOMC-dated forwards on the same
+futures-calibrated SOFR curve (`fomc_*` tenors on USD-SOFR-1D-Q12STIRT) — never raw ZQ
+FedWatch output: the ZQ/SR3 wedge (SOFR–EFFR basis, monthly-average vs quarterly windowing)
+stays quarantined in `SR3ZQDistributionScreener`. The ZQ monthly bootstrap
+(`solve_meeting_month`, `conditional_tree`) exists for the CME Sep-2022 test fixture
+(10/90, 81.4/18.6, cumulative 8.14/75.14/16.71 — reproduced in
+`tests/test_fly_vs_vol_baselines.py`).
+
+Taxonomy: the book trades two bases — the **skew basis** (tail_rent z, expressed as
+delta-hedged wings with the disaster buyback: `disaster_percentile`/`disaster_ratio` in
+`convergence_package`, sell the meat / own the disaster) and the **coupling basis**
+(comonotone vs option-implied joint, expressed in option calendars / mid-curves). The
+heuristic-vs-prob_delta gap and E[phi|j] tables are *diagnostics* for sizing and triple
+selection, not tradeable objects. Holding periods come from `series_half_life` of the basis
+series in `history.parquet`; measured half-lives are currently sub-1-day (daily BL fit noise
+dominates), so entry signals should use multi-day averages, and packages unwind or roll
+before the front option expiry (the package changes character when a marginal degenerates).
+Deferred to v2: meeting-aware N_k (needs the SERFF meeting-dated curve wired as the jump
+source) and the null through daily history.
+
 ## Quality gates
 
 Per leg, from BL diagnostics: `|forward_residual_bp| ≤ 2.5`, `pre_normalization_mass ≤ 1.02`,
