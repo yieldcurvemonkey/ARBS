@@ -177,6 +177,10 @@ class SFRImpliedDistribution:
         raw_market_otm_only: bool = True,
         min_strikes: int = 6,
         allow_sabr_fallback: bool = True,
+        fit_space: str = "price",
+        vol_smoothing_param: Optional[float] = None,
+        anchor_wings: bool = False,
+        ghost_anchor_weight: float = 100.0,
         rate_floor: Optional[float] = 0.0,
         optimize_mixture_stds: bool = True,
         initial_mixture_std_bps: float = 30.0,
@@ -197,6 +201,10 @@ class SFRImpliedDistribution:
         self.raw_market_otm_only = raw_market_otm_only
         self.min_strikes = min_strikes
         self.allow_sabr_fallback = allow_sabr_fallback
+        self.fit_space = fit_space
+        self.vol_smoothing_param = vol_smoothing_param
+        self.anchor_wings = anchor_wings
+        self.ghost_anchor_weight = ghost_anchor_weight
         # BL density truncation, distinct from sabr_rate_floor (which bounds the SABR
         # extrapolation grid). They were previously the same knob, so raising the SABR
         # grid floor silently truncated the observed-premium density too.
@@ -263,6 +271,10 @@ class SFRImpliedDistribution:
                     else config.bin_width_bps
                 ),
                 rate_floor=self.rate_floor,
+                fit_space=self.fit_space,
+                vol_smoothing_param=self.vol_smoothing_param,
+                anchor_wings=self.anchor_wings,
+                ghost_anchor_weight=self.ghost_anchor_weight,
             )
 
         if run_gm and config is not None:
