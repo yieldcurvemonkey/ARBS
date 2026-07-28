@@ -5155,6 +5155,7 @@ class STIRFutureOptionMDP(MarketDataProvider[InstrumentLike], LayeredCacheMixin)
         fetched_at: float,
         *,
         full_history: bool = False,
+        no_data: bool = False,
     ) -> None:
         max_date = min_date = None
         if frame is not None and len(frame) and isinstance(frame.index, pd.DatetimeIndex):
@@ -5168,6 +5169,13 @@ class STIRFutureOptionMDP(MarketDataProvider[InstrumentLike], LayeredCacheMixin)
             # Only a wide-window fetch produces a frame that can answer an arbitrary
             # later window from local slicing. See _raw_eod_cache_covers.
             "full_history": bool(full_history),
+            # A recorded attempt that came back with nothing. CME lists exercise prices
+            # out to +/-5.50 IMM Index points (Rulebook 460A01.E.1) but the vendor only
+            # carries strikes that actually printed, so a full listed ladder asks for
+            # dozens of symbols that will never return anything - and, being absent from
+            # the fetch result, they were never recorded and so were re-requested on
+            # every single call.
+            "no_data": bool(no_data),
         }
         with self._raw_eod_lock:
             self._raw_eod_mem[symbol] = ent
@@ -5198,6 +5206,17 @@ class STIRFutureOptionMDP(MarketDataProvider[InstrumentLike], LayeredCacheMixin)
             if not isinstance(min_date, datetime.date) or min_date > start:
                 return False
         fetched_date = datetime.datetime.fromtimestamp(fetched_at, tz=_NY_TZ).date()
+
+        if ent.get("no_data"):
+            # A recorded miss: on `fetched_date` the vendor had nothing for this symbol
+            # across all of history. That answers any window whose data could only have
+            # appeared on or before that attempt - i.e. up to min(end, today), since a
+            # window running into the future can at best be satisfied through today.
+            # Re-checked once per day, so a strike that starts printing is picked up on
+            # the next session rather than on every call.
+            horizon = min(end, datetime.date.today())
+            return fetched_date >= horizon
+
         # Window ends strictly before the day we fetched -> historical & immutable: the
         # full-history snapshot we stored already contains everything this window can have.
         if end < fetched_date:
@@ -5254,12 +5273,24 @@ class STIRFutureOptionMDP(MarketDataProvider[InstrumentLike], LayeredCacheMixin)
 
         result: Dict[str, pd.DataFrame] = {}
         to_fetch: List[str] = []
+        skipped_no_data = 0
         for n in norm:
             ent = None if force_refresh else self._raw_eod_cache_get(n)
             if ent is not None and self._raw_eod_cache_covers(ent, start, end):
+                if ent.get("no_data"):
+                    # A recorded miss. Leave it out of `result` entirely so downstream
+                    # sees exactly what it saw before: absent, not an empty frame.
+                    skipped_no_data += 1
+                    continue
                 result[n] = self._slice_eod_frame(ent.get("frame"), start, end)
             else:
                 to_fetch.append(n)
+
+        if skipped_no_data:
+            logging.getLogger(self.__class__.__name__).debug(
+                "raw EOD: skipped %d symbol(s) already known to have no vendor data "
+                "for %s..%s", skipped_no_data, start, end,
+            )
 
         if to_fetch:
             # Fetch full history once (wide window -> client-side filter keeps it all), cache
@@ -5269,15 +5300,32 @@ class STIRFutureOptionMDP(MarketDataProvider[InstrumentLike], LayeredCacheMixin)
             wide_end = datetime.datetime(today.year + 1, 12, 31, 23, 59)
             fetched_full = self._run_eod_fetch(to_fetch, wide_start, wide_end, show_tqdm, mc, mk, mr)
             now = time.time()
+
+            # Distinguish "the vendor has nothing for this symbol" from "the fetch
+            # failed". A batch that returns nothing at all is the signature of an
+            # outage, a proxy failure or a rate-limit wall - recording misses from
+            # that would bake a transient failure into the cache, which is the exact
+            # hazard the empty-result guards elsewhere exist to prevent. Only record
+            # misses when at least one symbol in the batch did come back.
+            batch_produced_data = any(
+                frame is not None and not frame.empty for frame in fetched_full.values()
+            )
+
             for n in to_fetch:
-                # Mirror the raw passthrough: only surface symbols the fetch returned
-                # (downstream uses dict.get(), so absent == None either way).
-                if n not in fetched_full:
-                    continue
                 frame = fetched_full.get(n)
-                if frame is not None:
+                if frame is not None and not frame.empty:
                     self._raw_eod_cache_put(n, frame, now, full_history=True)
-                result[n] = self._slice_eod_frame(frame, start, end)
+                    result[n] = self._slice_eod_frame(frame, start, end)
+                    continue
+
+                # No usable data for this symbol on this attempt.
+                if batch_produced_data:
+                    self._raw_eod_cache_put(n, None, now, full_history=True, no_data=True)
+                if n in fetched_full:
+                    # Mirror the previous passthrough exactly: a symbol the fetch
+                    # returned (even as None/empty) still surfaces; one it omitted stays
+                    # absent, since downstream uses dict.get() either way.
+                    result[n] = self._slice_eod_frame(frame, start, end)
 
         return result
 
