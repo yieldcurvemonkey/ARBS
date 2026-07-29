@@ -112,8 +112,15 @@ class MarkBook:
         self._opt = (q.set_index(["symbol", "right", "strike_price", "as_of"])
                      ["premium_bp"].sort_index())
         if "delta_abs" in q.columns:
-            signed = np.where(q["right"].to_numpy() == "C",
-                              q["delta_abs"].to_numpy(), -q["delta_abs"].to_numpy())
+            # The vendor quotes delta_abs in PERCENT (an ATM SR3 option prints
+            # ~46, not ~0.46). Hedging on the raw field oversizes every futures
+            # leg by 100x, so the scale is detected once and normalised to a
+            # decimal here rather than trusted downstream.
+            raw = q["delta_abs"].to_numpy(dtype=float)
+            finite = raw[np.isfinite(raw)]
+            self.delta_scale = 100.0 if (finite.size and
+                                         np.nanpercentile(np.abs(finite), 99) > 1.5) else 1.0
+            signed = np.where(q["right"].to_numpy() == "C", raw, -raw) / self.delta_scale
             self._delta = pd.Series(
                 signed,
                 index=pd.MultiIndex.from_frame(
@@ -121,6 +128,7 @@ class MarkBook:
             ).sort_index()
         else:
             self._delta = None
+            self.delta_scale = 1.0
         c = contracts.copy()
         c["as_of"] = pd.to_datetime(c["as_of"])
         self._fut = ((100.0 - c.set_index(["symbol", "as_of"])["forward_rate"]) * 100.0

@@ -142,17 +142,24 @@ def verdict(
     *, net_bp_at_taker: float, net_bp_at_maker: float, dsr_prob: float,
     median_net_bp: float, n_trades: int,
 ) -> str:
-    """DEAD / MARGINAL-maker-only / ALIVE, applied uniformly across frameworks.
+    """The uniform verdict, applied identically to every framework.
 
-    ALIVE needs all of: positive at taker costs, DSR probability above 0.5
+    ``ALIVE`` needs all of: positive at taker costs, DSR probability above 0.5
     (the selected config beats the expected best-of-N under the null), a
     non-negative median config (the edge is not one lucky corner), and enough
     trades to say anything.
+
+    A row that is profitable at taker costs but fails the DSR or median test is
+    ``SELECTION-ARTIFACT``, not "maker-only" — its problem is the search, not
+    the spread. ``MARGINAL-maker-only`` is reserved for the genuinely
+    cost-limited case: a real edge at zero cost that the round trip eats.
     """
     if n_trades < 10:
         return "DEAD (too few trades)"
-    if net_bp_at_taker > 0 and dsr_prob > 0.5 and median_net_bp >= 0:
-        return "ALIVE"
+    if net_bp_at_taker > 0:
+        if dsr_prob > 0.5 and median_net_bp >= 0:
+            return "ALIVE"
+        return "SELECTION-ARTIFACT"
     if net_bp_at_maker > 0:
         return "MARGINAL-maker-only"
     return "DEAD"

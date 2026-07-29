@@ -278,7 +278,11 @@ def cost_block(res) -> pd.DataFrame:
 
 
 # ---------------------------------------------------------------------------
-def sign_test(grid: pd.DataFrame, metric: str = "total_net_bp") -> pd.DataFrame:
+SIGN_CSV = DATA_DIR / "sign_tests.csv"
+
+
+def sign_test(grid: pd.DataFrame, metric: str = "total_net_bp", *,
+              framework: str = "", write: bool = True) -> pd.DataFrame:
     """Fade vs momentum across the whole sweep — the house rule, never assumed."""
     if "direction" not in grid.columns:
         return pd.DataFrame()
@@ -289,6 +293,17 @@ def sign_test(grid: pd.DataFrame, metric: str = "total_net_bp") -> pd.DataFrame:
            .round(3))
     print("\nSIGN TEST (both directions, whole sweep)")
     print(out.to_string())
+    if write and framework:
+        row = out.reset_index()
+        row.insert(0, "framework", framework)
+        winner = out["median_net_bp"].idxmax()
+        row["winning_sign"] = winner
+        SIGN_CSV.parent.mkdir(parents=True, exist_ok=True)
+        if SIGN_CSV.exists():
+            old = pd.read_csv(SIGN_CSV)
+            old = old[old["framework"] != framework]
+            row = pd.concat([old, row], ignore_index=True)
+        row.to_csv(SIGN_CSV, index=False)
     return out
 
 
@@ -312,7 +327,7 @@ def run_framework(
     print(f"\n=== {name} — grid ===")
     best = grid_block(grid, params)
     stability_block(grid, best, params)
-    sign_test(grid)
+    sign_test(grid, framework=name)
 
     cfg = config_from_row(base, best, params)
     res = run_backtest(cfg, signals=signals, book=book, builder=builder)

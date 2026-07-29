@@ -550,6 +550,9 @@ def test_verdict_taxonomy():
                    median_net_bp=1.0, n_trades=50) == "ALIVE"
     assert verdict(net_bp_at_taker=-1.0, net_bp_at_maker=4.0, dsr_prob=0.9,
                    median_net_bp=1.0, n_trades=50) == "MARGINAL-maker-only"
+    # profitable at taker but the search does not survive deflation
+    assert verdict(net_bp_at_taker=5.0, net_bp_at_maker=9.0, dsr_prob=0.2,
+                   median_net_bp=1.0, n_trades=50) == "SELECTION-ARTIFACT"
     assert verdict(net_bp_at_taker=-5.0, net_bp_at_maker=-1.0, dsr_prob=0.1,
                    median_net_bp=-2.0, n_trades=50) == "DEAD"
     assert "too few" in verdict(net_bp_at_taker=5.0, net_bp_at_maker=5.0,
@@ -559,7 +562,7 @@ def test_verdict_taxonomy():
 def test_verdict_requires_a_positive_median_config():
     """A lucky corner with a negative median sweep is never ALIVE."""
     assert verdict(net_bp_at_taker=5.0, net_bp_at_maker=9.0, dsr_prob=0.9,
-                   median_net_bp=-3.0, n_trades=50) == "MARGINAL-maker-only"
+                   median_net_bp=-3.0, n_trades=50) == "SELECTION-ARTIFACT"
 
 
 # ---------------------------------------------------------------------------
@@ -682,3 +685,49 @@ def test_null_prob_ge_is_monotone_decreasing_in_the_strike():
     probs = [null_prob_ge(off, p, 400.0, k) for k in ks]
     assert probs == sorted(probs, reverse=True)
     assert probs[0] == pytest.approx(1.0)
+
+
+# ---------------------------------------------------------------------------
+# delta scale (the vendor quotes delta in percent, not as a decimal)
+# ---------------------------------------------------------------------------
+def test_markbook_normalises_percent_deltas_to_decimals():
+    """An ATM SR3 option prints delta_abs ~46; hedging on that oversizes 100x."""
+    c = _contracts()
+    q = _quotes(c)
+    q["delta_abs"] = 46.0                       # vendor scale
+    book = MarkBook(q, c)
+    assert book.delta_scale == pytest.approx(100.0)
+    leg = Leg("option", "SFRH27", 1.0, "C", float(q["strike_price"].iloc[0]))
+    s = book.delta_series(leg)
+    assert float(s.iloc[0]) == pytest.approx(0.46)
+
+
+def test_markbook_leaves_decimal_deltas_alone():
+    c = _contracts()
+    q = _quotes(c)
+    q["delta_abs"] = 0.46
+    book = MarkBook(q, c)
+    assert book.delta_scale == pytest.approx(1.0)
+    leg = Leg("option", "SFRH27", 1.0, "C", float(q["strike_price"].iloc[0]))
+    assert float(book.delta_series(leg).iloc[0]) == pytest.approx(0.46)
+
+
+def test_put_delta_is_negative_in_price_space():
+    c = _contracts()
+    q = _quotes(c)
+    book = MarkBook(q, c)
+    k = float(q["strike_price"].iloc[0])
+    assert float(book.delta_series(Leg("option", "SFRH27", 1.0, "P", k)).iloc[0]) < 0
+    assert float(book.delta_series(Leg("option", "SFRH27", 1.0, "C", k)).iloc[0]) > 0
+
+
+def test_hedge_size_is_sane_for_a_percent_scaled_panel():
+    """The hedge for one ATM option must be well under one futures contract."""
+    from RVUtils.SFRRVLab import hedge_each_contract
+    c = _contracts()
+    q = _quotes(c)
+    q["delta_abs"] = 46.0
+    book = MarkBook(q, c)
+    st = Structure((Leg("option", "SFRH27", 1.0, "C", float(q["strike_price"].iloc[0])),))
+    hedged = hedge_each_contract(book, st, DATES[0])
+    assert hedged.n_future_legs == pytest.approx(0.46)

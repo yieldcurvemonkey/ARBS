@@ -27,16 +27,18 @@ def split_cells(src: str) -> List[dict]:
         text = "\n".join(buf).strip("\n")
         if not text.strip():
             return
+        cid = f"c{len(cells):03d}"
         if kind == "markdown":
             body = "\n".join(
                 l[2:] if l.startswith("# ") else ("" if l.strip() == "#" else l)
                 for l in text.splitlines()
             )
-            cells.append({"cell_type": "markdown", "metadata": {},
+            cells.append({"cell_type": "markdown", "id": cid, "metadata": {},
                           "source": body.splitlines(keepends=True)})
         else:
-            cells.append({"cell_type": "code", "metadata": {}, "execution_count": None,
-                          "outputs": [], "source": text.splitlines(keepends=True)})
+            cells.append({"cell_type": "code", "id": cid, "metadata": {},
+                          "execution_count": None, "outputs": [],
+                          "source": text.splitlines(keepends=True)})
 
     for line in src.splitlines():
         if line.startswith("# %%"):
