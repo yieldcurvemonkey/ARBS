@@ -208,9 +208,12 @@ def run_backtest(
                 held = i - exec_i
                 mark_now = path[i - exec_i] - path[0]     # observable at bar i
                 if config.exit_style == "z0":
-                    exit_sig = np.isfinite(z[i]) and (z[i] * (-pos) <= 0) \
-                        if config.direction == "fade" else \
-                        (np.isfinite(z[i]) and (z[i] * pos <= 0))
+                    # Exit when the signal that opened the trade has decayed
+                    # through zero, whichever side was taken. entry_sign is 0 for
+                    # an unconditional entry (no z-score to decay), in which case
+                    # this can never fire and the holding cap closes the trade.
+                    exit_sig = (entry_sign != 0 and np.isfinite(z[i])
+                                and z[i] * entry_sign <= 0)
                 elif config.exit_style == "half":
                     exit_sig = np.isfinite(z[i]) and abs(z[i]) <= 0.5
                 else:
