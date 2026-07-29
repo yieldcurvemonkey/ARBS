@@ -21,7 +21,8 @@ import numpy as np
 import pandas as pd
 
 __all__ = [
-    "load_panels", "parity_residuals", "attach_parity_flag", "pick_listed_strike",
+    "load_panels", "parity_residuals", "attach_parity_flag",
+    "complete_by_parity", "pick_listed_strike",
     "atm_premium_panel", "realized_vol_bp", "constant_maturity_slots",
     "vertical_digital", "digital_panel", "FOMC_DATES", "meetings_between",
     "add_event_distance",
@@ -92,6 +93,61 @@ def attach_parity_flag(
     out = quotes.merge(res, on=["as_of", "symbol", "strike_price"], how="left")
     out["parity_ok"] = out["parity_bp"].isna() | (out["parity_bp"].abs() <= tol_bp)
     return out
+
+
+def complete_by_parity(
+    quotes: pd.DataFrame, contracts: pd.DataFrame
+) -> pd.DataFrame:
+    """Add the missing side of every one-sided strike via put-call parity.
+
+    The vendor panel carries **OTM options only**, so a strike that crosses the
+    money simply stops printing. A position held through that crossing would
+    otherwise be marked on a forward-filled premium — which freezes the P&L of
+    the leg that is moving the most, exactly when it matters.
+
+    Parity fixes it exactly: ``C(K) = P(K) + (F - K)`` in bp of price. On this
+    panel the measured residual is at most a quarter-tick, so the reconstructed
+    side is as good as a print. Reconstructed rows carry ``synthetic=True``;
+    delta is mirrored (``delta_call = 1 - delta_put`` in absolute terms) and
+    open interest is set to 0 so liquidity screens never mistake a synthesised
+    quote for a traded one.
+    """
+    q = quotes.copy()
+    if "synthetic" not in q.columns:
+        q["synthetic"] = False
+    fwd = contracts.set_index(["as_of", "symbol"])["forward_price"]
+    rows = []
+    for (ts, sym, k), grp in q.groupby(["as_of", "symbol", "strike_price"],
+                                       sort=False):
+        present = set(grp["right"])
+        missing = {"C", "P"} - present
+        if len(missing) != 1:
+            continue
+        f = fwd.get((ts, sym))
+        if f is None or not np.isfinite(f):
+            continue
+        src = grp.iloc[0]
+        want = missing.pop()
+        intrinsic = (float(f) - float(k)) * 100.0
+        prem = (float(src["premium_bp"]) + intrinsic if want == "C"
+                else float(src["premium_bp"]) - intrinsic)
+        if not np.isfinite(prem) or prem < 0:
+            continue
+        d_abs = src.get("delta_abs", np.nan)
+        scale = 100.0 if np.isfinite(d_abs) and abs(d_abs) > 1.5 else 1.0
+        rows.append({
+            "as_of": ts, "symbol": sym, "right": want, "strike_price": float(k),
+            "strike_rate": 100.0 - float(k), "premium_bp": prem,
+            "iv_bp": src.get("iv_bp", np.nan),
+            "delta_abs": (scale - float(d_abs)) if np.isfinite(d_abs) else np.nan,
+            "atm_offset_bps": src.get("atm_offset_bps", np.nan),
+            "oi": 0.0, "volume": 0.0, "synthetic": True,
+        })
+    if not rows:
+        return q
+    add = pd.DataFrame(rows)
+    return pd.concat([q, add[[c for c in q.columns if c in add.columns]]],
+                     ignore_index=True)
 
 
 def pick_listed_strike(

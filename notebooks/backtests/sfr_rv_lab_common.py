@@ -27,6 +27,7 @@ from RVUtils.SFRRVLab import (  # noqa: E402
     LabConfig,
     MarkBook,
     attach_parity_flag,
+    complete_by_parity,
     grid_search,
     load_panels,
     run_backtest,
@@ -50,10 +51,22 @@ MAX_PRE_NORM_MASS = 1.02
 
 
 # ---------------------------------------------------------------------------
-def load_lab(data_dir: Path = DATA_DIR, *, parity_tol_bp: float = 2.0) -> Dict[str, object]:
-    """Panels + MarkBook + per-(as_of, symbol) quality gate, loaded once."""
+def load_lab(data_dir: Path = DATA_DIR, *, parity_tol_bp: float = 2.0,
+             complete_parity: bool = True) -> Dict[str, object]:
+    """Panels + MarkBook + per-(as_of, symbol) quality gate, loaded once.
+
+    ``complete_parity`` reconstructs the missing side of one-sided strikes so a
+    position held through the money is still marked on a real price rather than
+    a frozen one (the vendor panel carries OTM options only).
+    """
     p = load_panels(data_dir)
     quotes, contracts = p["quotes"], p["contracts"]
+    n_raw = len(quotes)
+    if complete_parity:
+        quotes = complete_by_parity(quotes, contracts)
+        n_syn = int(quotes.get("synthetic", pd.Series(dtype=bool)).sum())
+        print(f"parity completion: {n_raw} listed quotes + {n_syn} reconstructed "
+              f"({n_syn / max(n_raw, 1):.1%}) so ITM legs stay marked")
     quotes = attach_parity_flag(quotes, contracts, tol_bp=parity_tol_bp)
     gate = contracts[["as_of", "symbol"]].copy()
     resid_ok = contracts["fwd_resid_bp"].abs() <= MAX_ABS_FWD_RESID_BP

@@ -846,3 +846,53 @@ def test_z0_exit_cannot_fire_on_an_unconditional_entry():
     res = run_backtest(cfg, signals=sig, book=book, builder=_builder)
     assert len(res.trades) > 0
     assert set(res.trades["exit_reason"]) <= {"max_hold", "eod"}
+
+
+# ---------------------------------------------------------------------------
+# parity completion (the panel carries OTM options only)
+# ---------------------------------------------------------------------------
+def test_complete_by_parity_reconstructs_the_missing_side():
+    from RVUtils.SFRRVLab import complete_by_parity
+    c = _contracts(n=1)
+    row = c.iloc[0]
+    q = pd.DataFrame([{
+        "as_of": row["as_of"], "symbol": row["symbol"], "right": "P",
+        "strike_price": 95.5, "strike_rate": 4.5, "premium_bp": 12.0,
+        "iv_bp": 60.0, "delta_abs": 30.0, "atm_offset_bps": 0.0,
+        "oi": 100.0, "volume": 1.0,
+    }])
+    out = complete_by_parity(q, c)
+    assert len(out) == 2
+    call = out[out["right"] == "C"].iloc[0]
+    # C = P + (F - K) in bp of price; F = 96.0, K = 95.5 -> +50bp
+    assert call["premium_bp"] == pytest.approx(12.0 + 50.0)
+    assert bool(call["synthetic"]) is True
+    assert call["oi"] == 0.0                       # never counts as liquidity
+    assert call["delta_abs"] == pytest.approx(70.0)  # mirrored on the same scale
+
+
+def test_complete_by_parity_leaves_two_sided_strikes_alone():
+    from RVUtils.SFRRVLab import complete_by_parity
+    c = _contracts()
+    q = _quotes(c)
+    out = complete_by_parity(q, c)
+    assert len(out) == len(q)
+    assert not out["synthetic"].any()
+
+
+def test_parity_completion_removes_the_stale_mark_on_an_itm_leg():
+    """A leg that crosses the money must keep marking, not freeze."""
+    from RVUtils.SFRRVLab import complete_by_parity
+    c = _contracts()
+    q = _quotes(c)
+    k = 96.25
+    # drop the puts at 96.25 after day 4 (they would go ITM as the rate rises)
+    drop = ((q["right"] == "P") & (q["strike_price"] == k)
+            & (q["as_of"] > DATES[4]) & (q["symbol"] == "SFRH27"))
+    thin = q[~drop]
+    st = Structure((Leg("option", "SFRH27", 1.0, "P", k),))
+    _m, stale_raw = mark_structure(MarkBook(thin, c), st, DATES)
+    _m2, stale_fix = mark_structure(MarkBook(complete_by_parity(thin, c), c),
+                                    st, DATES)
+    assert stale_raw > 0.0
+    assert stale_fix == pytest.approx(0.0)
