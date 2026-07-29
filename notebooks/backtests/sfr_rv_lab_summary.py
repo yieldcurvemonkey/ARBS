@@ -111,8 +111,16 @@ print(league.groupby("class")["verdict"].value_counts().to_string())
 # %%
 alive = tbl[tbl["verdict"] == "ALIVE"]
 marginal = tbl[tbl["verdict"] == "MARGINAL-maker-only"]
-print(f"ALIVE: {len(alive)}   MARGINAL-maker-only: {len(marginal)}   "
-      f"DEAD: {len(tbl) - len(alive) - len(marginal)}")
+artifact = tbl[tbl["verdict"] == "SELECTION-ARTIFACT"]
+dead = tbl[tbl["verdict"].str.startswith("DEAD")]
+print(f"ALIVE: {len(alive)}   SELECTION-ARTIFACT: {len(artifact)}   "
+      f"MARGINAL-maker-only: {len(marginal)}   DEAD: {len(dead)}")
+if len(artifact):
+    print("\nProfitable at taker costs but failing deflation or the median "
+          "config — i.e. the search, not the spread, is the problem:")
+    print(artifact[["framework", "variant", "net_bp_taker", "dsr_prob",
+                    "grid_median_net_bp", "n_trades"]]
+          .round(3).to_string(index=False))
 if len(alive):
     print("\nSurvivors at taker costs:")
     print(alive[["framework", "variant", "net_bp_taker", "net_usd_taker",

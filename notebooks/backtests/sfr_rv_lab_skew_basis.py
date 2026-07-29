@@ -38,6 +38,7 @@ CONFIG = dict(
 CONFIG
 
 # %%
+import dataclasses
 import sys
 from pathlib import Path
 
@@ -98,7 +99,6 @@ mm = c.set_index(["as_of", "symbol"])["mm_bp"]
 model_rows = []
 for key, sub in basis.groupby("key"):
     f, b = key.split("-")
-    idx = pd.MultiIndex.from_product([sub["as_of"], [f]])
     mf = mm.reindex(pd.MultiIndex.from_arrays([sub["as_of"], [f] * len(sub)]))
     mb = mm.reindex(pd.MultiIndex.from_arrays([sub["as_of"], [b] * len(sub)]))
     m = sub.copy()
@@ -251,6 +251,43 @@ if not res_ev.daily_bp.empty:
     plt.show()
 
 # %% [markdown]
+# ## Delta-hedged variant
+#
+# The 4-leg risk-reversal spread is not delta-neutral: the two contracts' wings
+# do not cancel. Killing each contract's delta daily on its own future isolates
+# the skew content from the residual direction, exactly as in the digital
+# calendar. If the edge disappears here, it was direction.
+
+# %%
+BASE_HEDGED = dataclasses.replace(BASE, delta_hedge="daily", future_leg_bp=0.25)
+grid_h = grid_search(
+    {"direction": list(CONFIG["directions"]), "ma": list(CONFIG["mas"]),
+     "zscore_window": list(CONFIG["zscore_windows"]),
+     "entry_min_zscore": list(CONFIG["entry_zs"]),
+     "exit_style": list(CONFIG["exits"])},
+    signals=basis, book=lab["book"], builder=builder, base=BASE_HEDGED,
+    show_progress=True)
+PARAMS_H = ["direction", "ma", "zscore_window", "entry_min_zscore", "exit_style"]
+best_h = grid_block(grid_h, PARAMS_H)
+res_h = run_backtest(config_from_row(BASE_HEDGED, best_h, PARAMS_H),
+                     signals=basis, book=lab["book"], builder=builder)
+_ = header_block("Skew basis — delta-hedged", res_h, grid=grid_h)
+if not res_h.daily_bp.empty:
+    fig = three_panel_equity(res_h, "Skew basis (delta-hedged)")
+    plt.show()
+
+# %%
+print("\nUNHEDGED vs DELTA-HEDGED — is the edge skew or direction?")
+print(pd.DataFrame([
+    {"variant": "unhedged", "median_net_bp": grid["total_net_bp"].median(),
+     "best_net_bp": grid["total_net_bp"].max(),
+     "pct_positive": float((grid["total_net_bp"] > 0).mean())},
+    {"variant": "delta-hedged", "median_net_bp": grid_h["total_net_bp"].median(),
+     "best_net_bp": grid_h["total_net_bp"].max(),
+     "pct_positive": float((grid_h["total_net_bp"] > 0).mean())},
+]).round(2).to_string(index=False))
+
+# %% [markdown]
 # ## League rows
 #
 # Two rows per framework: the best honest config and the *median* config of the
@@ -269,3 +306,5 @@ league_row("1. Skew basis (RR spread)", "median-config", res_med, grid=grid,
            cls="A/B", note="median of the sweep, not selected")
 league_row("1. Skew basis (RR spread)", "fomc-window", res_ev, grid=grid_ev,
            cls="A/B", note="entries limited to 7 business days pre-FOMC")
+league_row("1b. Skew basis (delta-hedged)", "best-config", res_h, grid=grid_h,
+           cls="A/B", note="each contract's delta re-hedged daily — skew only")
