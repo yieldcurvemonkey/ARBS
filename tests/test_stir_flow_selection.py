@@ -81,3 +81,24 @@ def test_build_units_groups_outright_and_package():
     assert pkg.kind == "CURVE" and len(pkg.legs) == 2 and pkg.is_off_market
     # legs sorted by expiration
     assert list(pkg.legs["trade_id"]) == ["C1", "C2"]
+
+
+def test_build_units_deterministic_leg_order_on_tied_expiration():
+    # Two legs share an expiration but differ in effective_date/trade_id.
+    # Whatever physical order the DB returns, build_units must impose the same
+    # total order (else FLY belly / iloc picks flake run-to-run).
+    eligible = pd.DataFrame([
+        _leg(trade_id="A", package_id="PTP_X", n_package_legs=2,
+             package_structure="curve", pkg_ptp=-40000.0),
+    ])
+    leg_a = _leg(trade_id="A", package_id="PTP_X", n_package_legs=2,
+                 effective_date=datetime.date(2026, 7, 29),
+                 expiration_date=datetime.date(2026, 9, 16), pkg_ptp=-40000.0)
+    leg_b = _leg(trade_id="B", package_id="PTP_X", n_package_legs=2,
+                 effective_date=datetime.date(2026, 8, 12),
+                 expiration_date=datetime.date(2026, 9, 16), pkg_ptp=-40000.0)
+    fwd = sel.build_units(eligible, pd.DataFrame([leg_a, leg_b]))
+    rev = sel.build_units(eligible, pd.DataFrame([leg_b, leg_a]))  # reversed input
+    o1 = list({u.unit_key: u for u in fwd}["PTP_X"].legs["trade_id"])
+    o2 = list({u.unit_key: u for u in rev}["PTP_X"].legs["trade_id"])
+    assert o1 == o2 == ["A", "B"]   # tie broken by effective_date (07-29 < 08-12)
