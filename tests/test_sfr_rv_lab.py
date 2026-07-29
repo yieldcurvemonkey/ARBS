@@ -896,3 +896,24 @@ def test_parity_completion_removes_the_stale_mark_on_an_itm_leg():
                                     st, DATES)
     assert stale_raw > 0.0
     assert stale_fix == pytest.approx(0.0)
+
+
+def test_pnl_is_unchanged_by_bounding_the_mark_window():
+    """The path is built over the holding cap only; P&L must not move."""
+    dates, book = _linear_book(n=120)
+    sig = pd.DataFrame({"key": "K", "as_of": dates,
+                        "signal": np.where(np.arange(len(dates)) % 17 == 0,
+                                           8.0, 0.0)})
+    base = dict(ma=1, zscore_window=20, zscore_min_periods=10,
+                entry_min_zscore=1.5, direction="momentum", exit_style="t5",
+                round_trip_cost_bp=0.0, lag=1)
+    short_cap = run_backtest(LabConfig(exit_max_holding_days=10, **base),
+                             signals=sig, book=book, builder=_builder)
+    long_cap = run_backtest(LabConfig(exit_max_holding_days=60, **base),
+                            signals=sig, book=book, builder=_builder)
+    # the t5 exit fires well inside both caps, so the trades must be identical
+    assert len(short_cap.trades) == len(long_cap.trades) > 0
+    assert short_cap.trades["gross_bp"].to_numpy() == pytest.approx(
+        long_cap.trades["gross_bp"].to_numpy())
+    assert short_cap.metrics["total_net_bp"] == pytest.approx(
+        long_cap.metrics["total_net_bp"])

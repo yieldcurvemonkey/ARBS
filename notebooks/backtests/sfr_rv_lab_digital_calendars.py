@@ -93,7 +93,7 @@ check = []
 for front, back in PAIRS:
     dates = sorted({t for (t, s) in by_day if s == front}
                    & {t for (t, s) in by_day if s == back})
-    for ts in dates[::10]:                      # every 10th day keeps this cheap
+    for ts in dates[::25]:                # sampling keeps this diagnostic cheap
         gf, gb = by_day[(ts, front)], by_day[(ts, back)]
         ladder = np.sort(np.unique(np.concatenate([
             gf["strike_rate"].to_numpy(), gb["strike_rate"].to_numpy()])))

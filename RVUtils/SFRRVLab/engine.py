@@ -178,12 +178,18 @@ def run_backtest(
                         n_skipped += 1
                         i += 1
                         continue
+                    # A trade can never be marked past its holding cap, so the
+                    # path is built over that window only. Walking to the end of
+                    # the sample for a five-day trade was the dominant cost of a
+                    # sweep (and the daily hedge loop is per-date Python).
+                    span = dates[j:j + config.exit_max_holding_days
+                                 + config.lag + 2]
                     if config.delta_hedge == "daily":
                         marks, stale, cost_cum = hedged_path(
-                            book, st, dates[j:], rehedge_band=config.rehedge_band,
+                            book, st, span, rehedge_band=config.rehedge_band,
                             future_cost_bp=config.future_leg_bp)
                     else:
-                        marks, stale = mark_structure(book, st, dates[j:])
+                        marks, stale = mark_structure(book, st, span)
                         cost_cum = np.zeros(len(marks))
                     if not np.isfinite(marks).all():
                         n_skipped += 1
@@ -234,7 +240,8 @@ def run_backtest(
                     # sample) is known at entry, so it is filled on the bar
                     # itself; only a *signal-driven* exit costs a lag day.
                     deterministic = reason in ("time", "max_hold", "eod")
-                    j1 = min(i if deterministic else i + config.lag, n - 1)
+                    j1 = min(i if deterministic else i + config.lag, n - 1,
+                             exec_i + len(path) - 1)
                     gross = float(path[j1 - exec_i] - path[0])
                     for k in range(exec_i + 1, j1 + 1):
                         daily[dates[k]] = daily.get(dates[k], 0.0) + float(
