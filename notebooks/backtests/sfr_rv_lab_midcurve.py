@@ -49,7 +49,11 @@ CONFIG = dict(
     contracts_per_leg=100,
     cost_bp=4.0,              # 4 option legs at ~1bp/leg taker, wider than SR3
     mas=(1, 5, 10),
-    zscore_windows=(60, 120),
+    # Mid-curve histories are short (70-112 overlapping days per pair), so the
+    # z-score warm-up is shortened accordingly and stated rather than left at the
+    # quarterly default, which would consume the whole sample.
+    zscore_windows=(40, 60),
+    zscore_min_periods=25,
     entry_zs=(1.0, 1.5, 2.0),
     exits=("t5", "t10", "z0"),
     directions=("fade", "momentum"),
@@ -74,8 +78,8 @@ import matplotlib.pyplot as plt
 
 from sfr_rv_lab_common import DATA_DIR, LabConfig, load_lab, run_framework
 from RVUtils.SFRRVLab import (
-    Leg, MarkBook, Structure, add_event_distance, load_panels,
-    pick_listed_strike, vertical_digital,
+    Leg, MarkBook, Structure, add_event_distance, complete_by_parity,
+    load_panels, pick_listed_strike, vertical_digital,
 )
 from RVUtils.SFRRVLab.signals import digital_legs
 from MDP.STIRFutures._sofr_option_contracts import (
@@ -136,6 +140,11 @@ q_sr, c_sr = lab["quotes"], lab["contracts"]
 # the mid-curve directory; pairing therefore runs off the COMBINED symbol set,
 # not the front-8 panel alone.
 if q_mc is not None and len(q_mc):
+    # the mid-curve panel is OTM-only as well, and with ~7 strikes a day an
+    # ATM straddle is often unfindable until the missing side is reconstructed
+    n_mc_raw = len(q_mc)
+    q_mc = complete_by_parity(q_mc, c_mc)
+    print(f"mid-curve parity completion: {n_mc_raw} -> {len(q_mc)} quotes")
     all_quotes = pd.concat([q_sr, q_mc], ignore_index=True)
     all_contracts = pd.concat([c_sr, c_mc], ignore_index=True)
 else:
@@ -159,6 +168,8 @@ if q_mc is not None and len(q_mc):
             und = _option_contract_to_underlying_contract(s)
         except Exception:
             continue
+        if und == s:
+            continue        # a quarterly is its own underlying — not a pair
         if und in have:
             n_days = len(set(t for (t, sym) in QDAY if sym == s)
                          & set(t for (t, sym) in QDAY if sym == und))
@@ -167,6 +178,41 @@ if q_mc is not None and len(q_mc):
         else:
             print(f"  SKIP {s}: underlying {und} not in either panel")
 print(f"mid-curve / quarterly pairs on a shared underlying: {pairs}")
+
+# %% [markdown]
+# ### Where are the mid-curve strikes, relative to the money?
+#
+# This is the diagnostic that decides whether any ATM-based framework is even
+# possible. It is measured, not assumed.
+
+# %%
+cov_rows = []
+for mcs, und in pairs:
+    dates = sorted(set(t for (t, s) in QDAY if s == mcs)
+                   & set(t for (t, s) in QDAY if s == und))
+    for ts in dates:
+        gm = QDAY[(ts, mcs)]
+        f = FWD.get((ts, und))
+        if f is None or not np.isfinite(f) or gm.empty:
+            continue
+        d = (gm["strike_rate"] - float(f)).abs()
+        cov_rows.append({"pair": f"{mcs}|{und}", "as_of": ts,
+                         "n_strikes": gm["strike_price"].nunique(),
+                         "nearest_bp": float(d.min()) * 100.0,
+                         "widest_bp": float(d.max()) * 100.0})
+scov = pd.DataFrame(cov_rows)
+if len(scov):
+    print(scov.groupby("pair")[["n_strikes", "nearest_bp", "widest_bp"]]
+          .describe().round(1).to_string())
+    for thr in (12.5, 25, 50, 100):
+        share = (scov["nearest_bp"] <= thr).mean()
+        print(f"  days with a mid-curve strike within {thr:>5.1f}bp of the "
+              f"forward: {share:.1%}")
+    print("\nIf the nearest listed mid-curve strike is routinely hundreds of bp "
+          "from the money, an ATM straddle cannot be constructed at all and the "
+          "forward-vol framework is DATA-BLOCKED rather than unprofitable. The "
+          "frameworks below therefore use the strike closest to the forward that "
+          "actually EXISTS in both chains, and report its moneyness.")
 
 # %% [markdown]
 # ## 9a — listed forward vol (mid-curve vs quarterly, same underlying)
@@ -187,10 +233,19 @@ for mcs, und in pairs:
         f = FWD.get((ts, und))
         if f is None or not np.isfinite(f) or gm.empty or gq.empty:
             continue
-        am_c = pick_listed_strike(gm, "C", float(f), tol=CONFIG["strike_tol"])
-        am_p = pick_listed_strike(gm, "P", float(f), tol=CONFIG["strike_tol"])
-        aq_c = pick_listed_strike(gq, "C", float(f), tol=CONFIG["strike_tol"])
-        aq_p = pick_listed_strike(gq, "P", float(f), tol=CONFIG["strike_tol"])
+        # the strike closest to the forward that exists in BOTH chains (the
+        # mid-curve ladder rarely reaches the money — see the coverage cell)
+        common = (set(np.round(gm["strike_price"], 4))
+                  & set(np.round(gq["strike_price"], 4)))
+        if not common:
+            continue
+        k = min(common, key=lambda x: abs((100.0 - x) - float(f)))
+        moneyness_bp = ((100.0 - k) - float(f)) * 100.0
+        def _leg(g, right, kk):
+            sel = g[(np.isclose(g["strike_price"], kk)) & (g["right"] == right)]
+            return None if sel.empty else sel.iloc[0]
+        am_c, am_p = _leg(gm, "C", k), _leg(gm, "P", k)
+        aq_c, aq_p = _leg(gq, "C", k), _leg(gq, "P", k)
         if any(x is None for x in (am_c, am_p, aq_c, aq_p)):
             continue
         iv_m = float(np.nanmean([am_c["iv_bp"], am_p["iv_bp"]]))
@@ -200,7 +255,7 @@ for mcs, und in pairs:
         rows.append({
             "as_of": ts, "key": f"{mcs}|{und}", "mc": mcs, "qtr": und,
             "iv_mc_bp": iv_m, "iv_qtr_bp": iv_q, "iv_spread_bp": iv_q - iv_m,
-            "tte_mc": t_m, "tte_qtr": t_q,
+            "tte_mc": t_m, "tte_qtr": t_q, "moneyness_bp": moneyness_bp,
             "fwd_vol_bp": float(np.sqrt(fwd_var / max(t_q - t_m, 1e-6)))
             if fwd_var > 0 else np.nan,
             "k_mc_c": float(am_c["strike_price"]), "k_mc_p": float(am_p["strike_price"]),
@@ -256,14 +311,15 @@ def builder_fwdvol(key, exec_date, direction):
 
 BASE = LabConfig(lag=1, round_trip_cost_bp=CONFIG["cost_bp"],
                  contracts_per_leg=CONFIG["contracts_per_leg"],
-                 delta_hedge="daily", future_leg_bp=0.25)
+                 delta_hedge="daily", future_leg_bp=0.25,
+                 zscore_min_periods=CONFIG["zscore_min_periods"])
 GRID = {"direction": list(CONFIG["directions"]), "ma": list(CONFIG["mas"]),
         "zscore_window": list(CONFIG["zscore_windows"]),
         "entry_min_zscore": list(CONFIG["entry_zs"]),
         "exit_style": list(CONFIG["exits"])}
 PARAMS = ["direction", "ma", "zscore_window", "entry_min_zscore", "exit_style"]
 
-if len(fv) > 60:
+if len(fv) > 40:
     sig_fv = fv.copy()
     sig_fv["signal"] = sig_fv["iv_spread_bp"]
     out_fv = run_framework(
@@ -297,8 +353,17 @@ for mcs, und in pairs:
         fp = FWD_PX.get((ts, und))
         if f is None or not np.isfinite(f) or gm.empty or gq.empty:
             continue
-        for o in (-0.25, 0.0, 0.25):
-            k = float(f) + o
+        # strikes drawn from the MID-CURVE's own ladder (nearest the forward and
+        # its two neighbours) rather than forward +/- a fixed offset, which the
+        # sparse mid-curve chain usually cannot supply
+        ladder = np.sort(gm["strike_rate"].unique())
+        if ladder.size < 3:
+            continue
+        c_idx = int(np.abs(ladder - float(f)).argmin())
+        picks = [ladder[i] for i in (c_idx - 1, c_idx, c_idx + 1)
+                 if 0 <= i < ladder.size]
+        for o, k in zip((-1, 0, 1), picks):
+            k = float(k)
             dm = vertical_digital(gm, k, tol=CONFIG["digital_tol"],
                                   forward_price=float(fp))
             dq = vertical_digital(gq, k, tol=CONFIG["digital_tol"],
@@ -309,7 +374,9 @@ for mcs, und in pairs:
                 continue
             rows.append({
                 "as_of": ts, "key": f"{mcs}|{und}@{o:+.2f}", "mc": mcs, "qtr": und,
-                "offset": o, "p_mc": dm["prob"], "p_qtr": dq["prob"],
+                "offset": o, "strike_rate": k,
+                "moneyness_bp": (k - float(f)) * 100.0,
+                "p_mc": dm["prob"], "p_qtr": dq["prob"],
                 "signal": dq["prob"] - dm["prob"],
                 "mc_lo": dm["k_lo"], "mc_hi": dm["k_hi"], "mc_r": dm["right"],
                 "q_lo": dq["k_lo"], "q_hi": dq["k_hi"], "q_r": dq["right"],
@@ -341,7 +408,7 @@ def builder_coupling(key, exec_date, direction):
         label=f"coupdig {key}")
 
 
-if len(cd) > 60:
+if len(cd) > 40:
     out_cd = run_framework(
         "9b. Mid-curve coupling digitals", signals=cd, book=book,
         builder=builder_coupling, base=BASE, grid_spec=GRID, params=PARAMS,
@@ -370,11 +437,13 @@ for mcs, und in pairs:
             continue
         legs = {}
         ok = True
+        ladder = np.sort(gm["strike_rate"].unique())
+        if ladder.size < 3:
+            continue
+        hi_r, lo_r = float(ladder[-1]), float(ladder[0])   # widest available pair
         for tag, g in (("mc", gm), ("q", gq)):
-            hk = pick_listed_strike(g, "P", float(f) + CONFIG["wing_offset"],
-                                    tol=CONFIG["strike_tol"])
-            ct = pick_listed_strike(g, "C", float(f) - CONFIG["wing_offset"],
-                                    tol=CONFIG["strike_tol"])
+            hk = pick_listed_strike(g, "P", hi_r, tol=0.02)
+            ct = pick_listed_strike(g, "C", lo_r, tol=0.02)
             if hk is None or ct is None:
                 ok = False
                 break
@@ -411,7 +480,7 @@ def builder_skewts(key, exec_date, direction):
     ), label=f"mcskewTS {key}")
 
 
-if len(sk) > 60:
+if len(sk) > 40:
     out_sk = run_framework(
         "9c. Mid-curve skew term structure", signals=sk, book=book,
         builder=builder_skewts, base=BASE, grid_spec=GRID, params=PARAMS,
