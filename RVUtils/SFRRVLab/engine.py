@@ -68,7 +68,6 @@ class LabConfig:
     entry_rule: str = "zscore"              # 'zscore' | 'always'
     delta_hedge: str = "none"               # 'none' | 'daily'
     rehedge_band: float = 0.0               # delta drift tolerated before re-hedging
-    max_concurrent_per_key: int = 1
     keys: Optional[Sequence[str]] = None
 
     def label(self) -> str:
@@ -152,6 +151,7 @@ def run_backtest(
         n = len(sub)
 
         pos, sig_i, exec_i, path, cost, stale = 0, None, None, None, 0.0, 0.0
+        entry_sign = 0
         i = 0
         while i < n:
             if pos == 0:
@@ -201,6 +201,7 @@ def run_backtest(
                     path = d * marks - cost_cum
                     path[0] = path[0] + cost_cum[0]
                     pos, sig_i, exec_i = d, i, j
+                    entry_sign = (int(np.sign(z[i])) if np.isfinite(z[i]) else 0)
                     struct_label = st.label
                     pkg_contracts = package_contracts(st)
             else:

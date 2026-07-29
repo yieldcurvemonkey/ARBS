@@ -814,3 +814,35 @@ def test_hedge_costs_are_charged_to_both_sides():
     # and it is exactly -2 x the hedge cost embedded in each leg
     assert lo.trades["gross_bp"].to_numpy() + sh.trades["gross_bp"].to_numpy() == \
         pytest.approx(np.full(len(lo.trades), total / len(lo.trades)))
+
+
+def test_hedged_path_never_back_fills_a_delta_it_could_not_have_seen(panel):
+    """A leading gap must produce no hedge, not a delta borrowed from the future."""
+    from RVUtils.SFRRVLab import hedged_path
+    c, q = panel
+    k = float(q[q["symbol"] == "SFRH27"]["strike_price"].iloc[0])
+    mask = ((q["symbol"] == "SFRH27") & (q["strike_price"] == k)
+            & (q["right"] == "C") & (q["as_of"] <= DATES[2]))
+    q2 = q[~mask]
+    book = MarkBook(q2, c)
+    st = Structure((Leg("option", "SFRH27", 1.0, "C", k),))
+    value, _s, _c = hedged_path(book, st, DATES, rehedge_band=0.0,
+                                future_cost_bp=0.0)
+    opt, _ = mark_structure(book, st, DATES)
+    hedge = (value - opt)
+    # no delta observed before DATES[3] -> hedge P&L is flat over the gap
+    assert hedge[1] == pytest.approx(hedge[0])
+    assert hedge[2] == pytest.approx(hedge[0])
+
+
+def test_z0_exit_cannot_fire_on_an_unconditional_entry():
+    """'always' entries have no z-score to decay; the holding cap must close them."""
+    dates, book = _linear_book(n=60)
+    sig = pd.DataFrame({"key": "K", "as_of": dates, "signal": 1.0})
+    cfg = LabConfig(entry_rule="always", direction="fade", exit_style="z0",
+                    entry_every=10, lag=1, round_trip_cost_bp=0.0,
+                    exit_max_holding_days=7, zscore_min_periods=5, ma=1,
+                    zscore_window=10)
+    res = run_backtest(cfg, signals=sig, book=book, builder=_builder)
+    assert len(res.trades) > 0
+    assert set(res.trades["exit_reason"]) <= {"max_hold", "eod"}

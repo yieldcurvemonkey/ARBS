@@ -314,7 +314,9 @@ def hedged_path(
         d = book.delta_series(leg)
         if d is None or d.empty:
             continue
-        v = d.reindex(idx).ffill().bfill().fillna(0.0).to_numpy(dtype=float)
+        # forward-fill ONLY: back-filling a leading gap would pull a delta the
+        # hedger could not have seen backwards in time
+        v = d.reindex(idx).ffill().fillna(0.0).to_numpy(dtype=float)
         delta[leg.symbol] += leg.weight * v
     # any futures already in the structure offset the hedge requirement
     for leg in fut_legs:
@@ -327,9 +329,9 @@ def hedged_path(
         f = book.series(Leg("future", sym))
         if f is None or f.empty:
             continue
-        fp = f.reindex(idx).ffill().bfill().to_numpy(dtype=float)
+        fp = f.reindex(idx).ffill().to_numpy(dtype=float)
         if not np.isfinite(fp).all():
-            continue
+            continue        # no futures mark at entry -> no hedge, never a guess
         held = np.zeros(len(idx))
         cur = 0.0
         for t in range(len(idx)):
