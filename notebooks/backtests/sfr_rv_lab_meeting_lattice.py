@@ -164,6 +164,13 @@ if len(lat):
           "null? If the null is near-degenerate at a strike, the 'gap' signal is "
           "just the listed digital wearing a different name:")
     print(lat.groupby("offset_bp")[["p_listed", "p_null"]].std().round(4).to_string())
+    from sfr_rv_lab_common import DATA_DIR as _DD
+    (lat.groupby("offset_bp")
+     .agg(mean_listed=("p_listed", "mean"), mean_null=("p_null", "mean"),
+          mean_gap=("signal", "mean"), sd_gap=("signal", "std"),
+          sd_listed=("p_listed", "std"), sd_null=("p_null", "std"),
+          n=("signal", "size"))
+     .round(4).to_csv(_DD / "lattice_gap.csv"))
     fig, axes = plt.subplots(1, 2, figsize=(13, 4))
     for o, sub in lat.groupby("offset_bp"):
         s = sub.groupby("as_of")["signal"].mean()

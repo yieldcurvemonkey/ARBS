@@ -292,9 +292,7 @@ if not res_b.daily_bp.empty:
     three_panel_equity(res_b, "Unconditional short-gamma program "
                               f"({best_bench['side']}, {best_bench['hold']})")
     plt.show()
-print("
-TRADE LOG")
+print("\nTRADE LOG")
 print(res_b.trades.sort_values("entry").head(30).to_string(index=False))
-print("
-COST CURVE — the benchmark's sensitivity to execution")
+print("\nCOST CURVE — the benchmark's sensitivity to execution")
 cost_block(res_b)

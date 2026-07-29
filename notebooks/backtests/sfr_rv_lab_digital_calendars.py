@@ -126,6 +126,8 @@ if not check.empty:
           f"{check['integral_bp'].corr(check['futures_spread_bp']):.4f}")
     print("The residual gap is the mass outside the quoted strike ladder "
           "(truncation), not tradeable slack.")
+    from sfr_rv_lab_common import DATA_DIR as _DD
+    check.to_csv(_DD / "level_constraint_check.csv", index=False)
 
 # %%
 if not check.empty:

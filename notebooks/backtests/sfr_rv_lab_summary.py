@@ -52,6 +52,43 @@ league = pd.read_csv(LEAGUE_CSV)
 print(f"{len(league)} rows from {league['framework'].nunique()} frameworks")
 
 # %% [markdown]
+# ## Structural findings — what the data says can never be a trade
+#
+# These are not strategy results; they are the constraints every framework in
+# the lab had to be built around, measured on the real panel.
+
+# %%
+from RVUtils.SFRRVLab import load_panels, parity_residuals   # noqa: E402
+
+_p = load_panels(DATA_DIR)
+if "quotes" in _p and "contracts" in _p:
+    par = parity_residuals(_p["quotes"], _p["contracts"])["parity_bp"].abs()
+    print(f"1. PUT-CALL PARITY holds to a quarter-tick: {len(par)} two-sided "
+          f"strike-days, median |C - P - (F - K)| = {par.median():.3f}bp, "
+          f"max {par.max():.3f}bp.")
+    print("   => each surface's risk-neutral MEAN is pinned to its own futures "
+          "settle. There is no mean-level RV and no conversion/reversal basis.")
+
+_lc = DATA_DIR / "level_constraint_check.csv"
+if _lc.exists():
+    lc = pd.read_csv(_lc)
+    print(f"\n2. The DIGITAL-CALENDAR LEVEL is pinned by the linear market: "
+          f"corr(int listed digital calendar dK, futures calendar spread) = "
+          f"{lc['integral_bp'].corr(lc['futures_spread_bp']):.3f} "
+          f"over {len(lc)} checks; median |gap| "
+          f"{lc['gap_bp'].abs().median():.2f}bp (strike-ladder truncation).")
+    print("   => only the SHAPE of that profile across strikes is free.")
+
+_lg = DATA_DIR / "lattice_gap.csv"
+if _lg.exists():
+    lg = pd.read_csv(_lg)
+    print("\n3. OPTIONS PRICE FAR MORE TAIL than the curve-only FedWatch "
+          "lattice:")
+    print(lg.round(3).to_string(index=False))
+    print("   => the gap is large and persistent (a premium), and where the "
+          "null is near-degenerate the 'gap' signal is just the listed digital.")
+
+# %% [markdown]
 # ## The table, sorted honestly
 
 # %%
