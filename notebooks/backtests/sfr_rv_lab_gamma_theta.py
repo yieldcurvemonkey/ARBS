@@ -174,24 +174,16 @@ PARAMS = ["direction", "ma", "zscore_window", "entry_min_zscore", "exit_style"]
 # horizon. No signal at all. This is the number every rule below must beat.
 
 # %%
-def _always(direction: int, hold: str = "t20", every: int = 5) -> pd.DataFrame:
-    s = sig_vrp.copy()
-    s["signal"] = 1.0 if direction < 0 else -1.0     # constant -> |z| is undefined
-    return s
-
-
 bench_rows = []
 for hold in ("t5", "t10", "t20"):
     for d in ("short", "long"):
-        s = sig_vrp.copy()
-        # a constant signal has no z-score, so drive entries off a trivially
-        # always-true rule: alternate the signal so |z| is large every bar
-        s["signal"] = np.tile([1.0, -1.0], len(s))[:len(s)]
+        # entry_rule='always' holds ONE side unconditionally. Driving a
+        # "benchmark" off a z-score instead would flip the side from bar to bar,
+        # which is not a program at all.
         cfg = dataclasses.replace(
-            BASE, ma=1, zscore_window=20, zscore_min_periods=10,
-            entry_min_zscore=0.5, exit_style=hold, entry_every=5,
+            BASE, entry_rule="always", exit_style=hold, entry_every=5,
             direction="fade" if d == "short" else "momentum")
-        r = run_backtest(cfg, signals=s, book=lab["book"], builder=builder)
+        r = run_backtest(cfg, signals=sig_vrp, book=lab["book"], builder=builder)
         bench_rows.append({"side": d, "hold": hold, **{
             k: r.metrics[k] for k in ("n_trades", "hit_rate", "avg_net_bp",
                                       "total_net_bp", "total_net_usd", "sharpe",
@@ -238,12 +230,9 @@ print(pd.DataFrame(band_rows).round(3).to_string(index=False))
 # systematic vol literature; here it is rebuilt from this sample's own P&L.
 
 # %%
-short_cfg = dataclasses.replace(BASE, ma=1, zscore_window=20,
-                                zscore_min_periods=10, entry_min_zscore=0.5,
-                                exit_style="t20", entry_every=5, direction="fade")
-s_alt = sig_vrp.copy()
-s_alt["signal"] = np.tile([1.0, -1.0], len(s_alt))[:len(s_alt)]
-short_res = run_backtest(short_cfg, signals=s_alt, book=lab["book"],
+short_cfg = dataclasses.replace(BASE, entry_rule="always", exit_style="t20",
+                                entry_every=5, direction="fade")
+short_res = run_backtest(short_cfg, signals=sig_vrp, book=lab["book"],
                          builder=builder)
 short_daily = short_res.daily_bp.reindex(
     pd.DatetimeIndex(sorted(sig_vrp["as_of"].unique()))).fillna(0.0)
@@ -279,13 +268,33 @@ out_xs = run_framework(
 # ## Benchmark row for the league table
 
 # %%
+# The benchmark has NO fitted parameters — the only search is over 6 published
+# variants (2 sides x 3 holds), so that is the honest n_trials for its DSR.
+for _, row in bench.sort_values("total_net_bp", ascending=False).iterrows():
+    cfg_b = dataclasses.replace(
+        BASE, entry_rule="always", exit_style=row["hold"], entry_every=5,
+        direction="fade" if row["side"] == "short" else "momentum")
+    res_b = run_backtest(cfg_b, signals=sig_vrp, book=lab["book"], builder=builder)
+    header_block(f"3d. Unconditional gamma — {row['side']} {row['hold']}",
+                 res_b, grid=bench)
+    league_row("3d. Unconditional gamma (benchmark)",
+               f"{row['side']}-{row['hold']}", res_b, grid=bench, cls="C",
+               note="NO signal and no fitted parameter — the number every vol "
+                    "rule must beat")
+
+# %%
 best_bench = bench.sort_values("total_net_bp", ascending=False).iloc[0]
 cfg_b = dataclasses.replace(
-    BASE, ma=1, zscore_window=20, zscore_min_periods=10, entry_min_zscore=0.5,
-    exit_style=best_bench["hold"], entry_every=5,
+    BASE, entry_rule="always", exit_style=best_bench["hold"], entry_every=5,
     direction="fade" if best_bench["side"] == "short" else "momentum")
-res_b = run_backtest(cfg_b, signals=s_alt, book=lab["book"], builder=builder)
-header_block("3d. Unconditional gamma program", res_b, grid=None)
-league_row("3d. Unconditional gamma (benchmark)", best_bench["side"], res_b,
-           grid=None, cls="C",
-           note="no signal — the number every vol rule must beat")
+res_b = run_backtest(cfg_b, signals=sig_vrp, book=lab["book"], builder=builder)
+if not res_b.daily_bp.empty:
+    three_panel_equity(res_b, "Unconditional short-gamma program "
+                              f"({best_bench['side']}, {best_bench['hold']})")
+    plt.show()
+print("
+TRADE LOG")
+print(res_b.trades.sort_values("entry").head(30).to_string(index=False))
+print("
+COST CURVE — the benchmark's sensitivity to execution")
+cost_block(res_b)

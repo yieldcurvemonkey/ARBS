@@ -204,10 +204,10 @@ for off in CONFIG["entry_offsets"]:
         for d in ("fade", "momentum"):
             s = sig.copy()
             s["eligible"] = s["days_to_fomc"] == off
-            # a constant signal has no z; alternate it so |z| always clears 0
-            s["signal"] = np.tile([1.0, -1.0], len(s))[:len(s)]
+            # the calendar IS the signal: enter unconditionally on the eligible
+            # bar and hold one side, rather than letting a z-score pick the side
             cfg = dataclasses.replace(BASE, exit_style=f"t{hold}",
-                                      entry_min_zscore=0.5, direction=d)
+                                      entry_rule="always", direction=d)
             r = run_backtest(cfg, signals=s, book=lab["book"], builder=builder_rr)
             rows.append({"entry_day": off, "hold": hold,
                          "side": "short RR" if d == "fade" else "long RR",
@@ -225,9 +225,8 @@ print(f"\nmedian total_net_bp across all {len(ev_grid)} calendar variants: "
 best = ev_grid.sort_values("total_net_bp", ascending=False).iloc[0]
 s = sig.copy()
 s["eligible"] = s["days_to_fomc"] == best["entry_day"]
-s["signal"] = np.tile([1.0, -1.0], len(s))[:len(s)]
 cfg = dataclasses.replace(BASE, exit_style=f"t{int(best['hold'])}",
-                          entry_min_zscore=0.5,
+                          entry_rule="always",
                           direction="fade" if best["side"] == "short RR" else "momentum")
 res = run_backtest(cfg, signals=s, book=lab["book"], builder=builder_rr)
 header_block("7. FOMC calendar rule (best variant)", res, grid=ev_grid.rename(
@@ -242,10 +241,9 @@ med = ev_grid.iloc[(ev_grid["total_net_bp"]
                     - ev_grid["total_net_bp"].median()).abs().argmin()]
 s2 = sig.copy()
 s2["eligible"] = s2["days_to_fomc"] == med["entry_day"]
-s2["signal"] = np.tile([1.0, -1.0], len(s2))[:len(s2)]
 res_med = run_backtest(
     dataclasses.replace(BASE, exit_style=f"t{int(med['hold'])}",
-                        entry_min_zscore=0.5,
+                        entry_rule="always",
                         direction="fade" if med["side"] == "short RR" else "momentum"),
     signals=s2, book=lab["book"], builder=builder_rr)
 league_row("7. FOMC event rule (RR around meetings)", "median-variant", res_med,

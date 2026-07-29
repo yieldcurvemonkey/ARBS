@@ -65,6 +65,7 @@ class LabConfig:
     quality_gate: bool = True
     contracts_per_leg: int = 100
     entry_every: int = 1                    # 1 = daily, 5 = weekly rebalance
+    entry_rule: str = "zscore"              # 'zscore' | 'always'
     delta_hedge: str = "none"               # 'none' | 'daily'
     rehedge_band: float = 0.0               # delta drift tolerated before re-hedging
     max_concurrent_per_key: int = 1
@@ -74,6 +75,7 @@ class LabConfig:
         return (f"{self.direction}|ma{self.ma}|w{self.zscore_window}"
                 f"|z{self.entry_min_zscore}|{self.exit_style}|lag{self.lag}"
                 f"|every{self.entry_every}"
+                + ("|always" if self.entry_rule == "always" else "")
                 + ("|dh" if self.delta_hedge == "daily" else ""))
 
 
@@ -154,24 +156,35 @@ def run_backtest(
         while i < n:
             if pos == 0:
                 can_enter = (i % config.entry_every == 0) and elig[i]
-                if (can_enter and np.isfinite(z[i])
-                        and abs(z[i]) >= config.entry_min_zscore
-                        and (gate[i] or not config.quality_gate)
-                        and i + config.lag < n - 1):
+                if config.entry_rule == "always":
+                    # Unconditional program: no signal, one fixed side. Needed
+                    # for the benchmarks every rule must beat and for pure
+                    # calendar rules, where a z-score would flip the side every
+                    # bar instead of holding it.
+                    triggered = can_enter and (gate[i] or not config.quality_gate)
+                else:
+                    triggered = (can_enter and np.isfinite(z[i])
+                                 and abs(z[i]) >= config.entry_min_zscore
+                                 and (gate[i] or not config.quality_gate))
+                if triggered and i + config.lag < n - 1:
                     j = i + config.lag
-                    d = int(np.sign(z[i]))
-                    d = -d if config.direction == "fade" else d
+                    if config.entry_rule == "always":
+                        d = 1 if config.direction == "momentum" else -1
+                    else:
+                        d = int(np.sign(z[i]))
+                        d = -d if config.direction == "fade" else d
                     st = builder(key, dates[j], d)
                     if st is None:
                         n_skipped += 1
                         i += 1
                         continue
                     if config.delta_hedge == "daily":
-                        marks, stale, _hc = hedged_path(
+                        marks, stale, cost_cum = hedged_path(
                             book, st, dates[j:], rehedge_band=config.rehedge_band,
                             future_cost_bp=config.future_leg_bp)
                     else:
                         marks, stale = mark_structure(book, st, dates[j:])
+                        cost_cum = np.zeros(len(marks))
                     if not np.isfinite(marks).all():
                         n_skipped += 1
                         i += 1
@@ -180,7 +193,14 @@ def run_backtest(
                             else round_trip_cost_bp(
                                 st, option_leg_bp=config.option_leg_bp,
                                 future_leg_bp=config.future_leg_bp))
-                    pos, sig_i, exec_i, path = d, i, j, d * marks
+                    # Direction applies to the package value; re-hedge costs are
+                    # a drag on BOTH sides and are subtracted after the flip.
+                    # The baseline excludes the entry hedge cost so that it is
+                    # charged to the trade rather than cancelling in the
+                    # difference path[t] - path[0].
+                    path = d * marks - cost_cum
+                    path[0] = path[0] + cost_cum[0]
+                    pos, sig_i, exec_i = d, i, j
                     struct_label = st.label
                     pkg_contracts = package_contracts(st)
             else:
@@ -220,7 +240,8 @@ def run_backtest(
                         "key": key, "dir": pos, "structure": struct_label,
                         "signal_date": dates[sig_i], "entry": dates[exec_i],
                         "exit": dates[j1], "days": j1 - exec_i,
-                        "z_in": round(float(z[sig_i]), 3),
+                        "z_in": (round(float(z[sig_i]), 3)
+                                 if np.isfinite(z[sig_i]) else float("nan")),
                         "gross_bp": round(gross, 4),
                         "cost_bp": round(cost, 4),
                         "net_bp": round(gross - cost, 4),

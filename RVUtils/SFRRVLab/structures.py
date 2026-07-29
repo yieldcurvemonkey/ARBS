@@ -270,16 +270,40 @@ def hedged_path(
     This walks the path instead, holding ``-delta_t`` of each contract's own
     future over ``[t, t+1]`` — the delta observed at ``t``, never at ``t+1``.
 
-    Returns ``(value, stale_frac, hedge_cost_total_bp)`` where ``value`` is the
-    option package's mark plus cumulative hedge P&L minus cumulative re-hedge
-    costs, so ``value[t] - value[0]`` is the trade's P&L in bp.
+    Returns ``(value, stale_frac, cost_cum)``. ``value`` is the option package's
+    mark plus cumulative hedge P&L and **excludes** re-hedge costs; ``cost_cum``
+    is the cumulative re-hedge cost in bp.
+
+    The split matters. A short position's P&L is ``-(value[t] - value[0])``, so
+    a cost folded into ``value`` would be *credited* to the short instead of
+    charged to it — which shows up as long and short both looking gross
+    profitable, an impossibility. The caller must apply the direction to
+    ``value`` and subtract ``cost_cum`` regardless of direction.
+
+    The path depends only on (legs, start date, band, cost) — not on the exit
+    rule — so it is memoised on the book. A grid sweep re-enters the same
+    structure on the same date across dozens of configs and would otherwise
+    walk the same hedge loop every time.
     """
     idx = pd.DatetimeIndex(dates)
+    cache = getattr(book, "_path_cache", None)
+    if cache is None:
+        cache = {}
+        book._path_cache = cache
+    ck = (tuple(l.key + (l.weight,) for l in structure.legs),
+          idx[0].value if len(idx) else 0, len(idx),
+          float(rehedge_band), float(future_cost_bp))
+    hit = cache.get(ck)
+    if hit is not None:
+        return hit
     opt_legs = tuple(l for l in structure.legs if l.kind == "option")
     fut_legs = tuple(l for l in structure.legs if l.kind == "future")
     if not opt_legs:
         marks, stale = mark_structure(book, structure, idx)
-        return marks, stale, 0.0
+        out = (marks, stale, np.zeros(len(idx)))
+        if len(cache) < 200_000:
+            cache[ck] = out
+        return out
     base = Structure(opt_legs + fut_legs, label=structure.label)
     marks, stale = mark_structure(book, base, idx)
 
@@ -316,8 +340,11 @@ def hedged_path(
             held[t] = cur
         hedge_pnl[1:] += held[:-1] * np.diff(fp)
 
-    value = marks + np.cumsum(hedge_pnl) - np.cumsum(hedge_cost)
-    return value, stale, float(hedge_cost.sum())
+    value = marks + np.cumsum(hedge_pnl)
+    out = (value, stale, np.cumsum(hedge_cost))
+    if len(cache) < 200_000:
+        cache[ck] = out
+    return out
 
 
 def package_contracts(structure: Structure) -> float:

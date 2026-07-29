@@ -36,7 +36,13 @@
 # %%
 CONFIG = dict(
     mc_dir="../data/sfr_rv_lab_mc",
-    min_oi=500,               # mid-curve chains are thin — a real floor
+    # MEASURED, not assumed: of 1,603 mid-curve quotes in this feed only 31
+    # (1.9%) carry open interest of 500 or more, and the median OI is ZERO. A
+    # 500-lot floor leaves a single usable day. The floor is therefore set to 0
+    # so the frameworks can be *measured* at all — but that means these marks are
+    # settle prices with no demonstrated liquidity behind them, and every
+    # mid-curve verdict below is capped accordingly. See the coverage cell.
+    min_oi=0,
     wing_offset=0.25,
     strike_tol=0.13,
     digital_tol=0.10,
@@ -99,14 +105,21 @@ if q_mc is not None and len(q_mc):
                          for s in cov.index]
     cov["last_trade"] = [sofr_option_last_trade_date(s) for s in cov.index]
     print(cov.to_string())
-    liq = q_mc[q_mc["oi"] >= CONFIG["min_oi"]]
-    print(f"\nquotes with OI >= {CONFIG['min_oi']}: {len(liq)} "
-          f"({len(liq) / len(q_mc):.1%} of all mid-curve quotes)")
-    print("usable days per series (>= 6 strikes over the OI floor):")
-    usable = (liq.groupby(["symbol", "as_of"]).size()
-              .rename("n").reset_index())
-    usable = usable[usable["n"] >= 6]
-    print(usable.groupby("symbol")["as_of"].nunique().to_string())
+    print(f"\nOPEN INTEREST — the number that caps every verdict below:")
+    print(q_mc.groupby("symbol")["oi"].describe().round(1).to_string())
+    for floor in (0, 100, 500):
+        liq = q_mc[q_mc["oi"] >= floor]
+        usable = liq.groupby(["symbol", "as_of"]).size().rename("n").reset_index()
+        usable = usable[usable["n"] >= 6]
+        print(f"  OI >= {floor:>4}: {len(liq):>5} quotes "
+              f"({len(liq) / len(q_mc):5.1%}), "
+              f"{usable['as_of'].nunique():>4} usable days "
+              f"across {usable['symbol'].nunique()} series")
+    print("\nMid-curve OI in this feed is effectively zero, so the marks below "
+          "are settle prices with no demonstrated liquidity behind them. The "
+          "frameworks are measured at OI >= 0 to see whether the SIGNAL exists "
+          "at all; no mid-curve row can be graded better than "
+          "MARGINAL-maker-only on this evidence, regardless of its P&L.")
 else:
     print("no mid-curve data — the rest of this notebook is skipped")
 
@@ -117,31 +130,43 @@ else:
 lab = load_lab(DATA_DIR)
 q_sr, c_sr = lab["quotes"], lab["contracts"]
 
+# One MarkBook over BOTH panels so a package can hold legs from each. The
+# underlying of a mid-curve is often a *deep* quarterly that never enters the
+# front-8 rolling strip (2QZ26 -> SFRZ28), so those quarterlies are fetched into
+# the mid-curve directory; pairing therefore runs off the COMBINED symbol set,
+# not the front-8 panel alone.
 if q_mc is not None and len(q_mc):
-    pairs = []
+    all_quotes = pd.concat([q_sr, q_mc], ignore_index=True)
+    all_contracts = pd.concat([c_sr, c_mc], ignore_index=True)
+else:
+    all_quotes, all_contracts = q_sr, c_sr
+all_quotes = all_quotes.drop_duplicates(
+    ["as_of", "symbol", "right", "strike_price"], keep="last")
+all_contracts = all_contracts.drop_duplicates(["as_of", "symbol"], keep="last")
+
+book = MarkBook(all_quotes, all_contracts)
+QDAY = {k: v for k, v in all_quotes.groupby(["as_of", "symbol"], sort=False)}
+FWD = all_contracts.set_index(["as_of", "symbol"])["forward_rate"]
+FWD_PX = all_contracts.set_index(["as_of", "symbol"])["forward_price"]
+TTE = all_contracts.set_index(["as_of", "symbol"])["tte"]
+have = set(all_contracts["symbol"])
+print(f"combined book: {len(all_quotes)} quotes, {len(have)} symbols")
+
+pairs = []
+if q_mc is not None and len(q_mc):
     for s in sorted(c_mc["symbol"].unique()):
         try:
             und = _option_contract_to_underlying_contract(s)
         except Exception:
             continue
-        if und in set(c_sr["symbol"]):
+        if und in have:
+            n_days = len(set(t for (t, sym) in QDAY if sym == s)
+                         & set(t for (t, sym) in QDAY if sym == und))
             pairs.append((s, und))
-    print(f"mid-curve / quarterly pairs on a shared underlying: {pairs}")
-else:
-    pairs = []
-
-# %%
-# one MarkBook over BOTH panels so a package can hold legs from each
-if pairs:
-    all_quotes = pd.concat([q_sr, q_mc], ignore_index=True)
-    all_contracts = pd.concat([c_sr, c_mc], ignore_index=True)
-    book = MarkBook(all_quotes, all_contracts)
-    QDAY = {k: v for k, v in all_quotes.groupby(["as_of", "symbol"], sort=False)}
-    FWD = all_contracts.set_index(["as_of", "symbol"])["forward_rate"]
-    FWD_PX = all_contracts.set_index(["as_of", "symbol"])["forward_price"]
-    TTE = all_contracts.set_index(["as_of", "symbol"])["tte"]
-    print(f"combined book: {len(all_quotes)} quotes, "
-          f"{all_contracts['symbol'].nunique()} symbols")
+            print(f"  pair {s} -> {und}: {n_days} overlapping days")
+        else:
+            print(f"  SKIP {s}: underlying {und} not in either panel")
+print(f"mid-curve / quarterly pairs on a shared underlying: {pairs}")
 
 # %% [markdown]
 # ## 9a — listed forward vol (mid-curve vs quarterly, same underlying)

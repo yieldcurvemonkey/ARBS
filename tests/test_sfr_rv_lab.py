@@ -577,6 +577,7 @@ def test_hedged_path_earns_yesterdays_hedge_each_day(panel):
     st = Structure((Leg("option", "SFRH27", 1.0, "C", k),))
     value, _stale, cost = hedged_path(book, st, DATES, rehedge_band=1e9,
                                       future_cost_bp=0.0)
+    cost = float(np.asarray(cost).sum())
     opt, _ = mark_structure(book, st, DATES)
     hedge_pnl = (value - opt) - (value[0] - opt[0])
     assert hedge_pnl[1] == pytest.approx(0.5)
@@ -594,7 +595,9 @@ def test_hedged_path_charges_every_rehedge(panel):
                                      future_cost_bp=1.0)
     _v, _s, cost_wide = hedged_path(book, st, DATES, rehedge_band=1e9,
                                     future_cost_bp=1.0)
-    assert cost_tight >= cost_wide > 0.0     # entry hedge is always paid for
+    # cost is returned as a cumulative array so the engine can charge it to both
+    # directions rather than crediting it to shorts
+    assert float(cost_tight[-1]) >= float(cost_wide[-1]) > 0.0
 
 
 def test_hedged_path_beats_a_static_hedge_on_a_moving_market(panel):
@@ -731,3 +734,83 @@ def test_hedge_size_is_sane_for_a_percent_scaled_panel():
     st = Structure((Leg("option", "SFRH27", 1.0, "C", float(q["strike_price"].iloc[0])),))
     hedged = hedge_each_contract(book, st, DATES[0])
     assert hedged.n_future_legs == pytest.approx(0.46)
+
+
+# ---------------------------------------------------------------------------
+# unconditional entry rule (benchmarks and calendar rules)
+# ---------------------------------------------------------------------------
+def test_entry_rule_always_holds_one_side():
+    """A z-score-driven 'benchmark' flips sides every bar; 'always' must not."""
+    dates, book = _linear_book(n=60)
+    sig = pd.DataFrame({"key": "K", "as_of": dates,
+                        "signal": np.tile([1.0, -1.0], 30)})
+    cfg = LabConfig(entry_rule="always", direction="fade", exit_style="t5",
+                    entry_every=5, lag=1, round_trip_cost_bp=0.0,
+                    zscore_min_periods=5, ma=1, zscore_window=10)
+    res = run_backtest(cfg, signals=sig, book=book, builder=_builder)
+    assert len(res.trades) > 3
+    assert set(res.trades["dir"]) == {-1}          # short, every time
+    assert "always" in cfg.label()
+
+    long_cfg = dataclasses_replace(cfg, direction="momentum")
+    res_long = run_backtest(long_cfg, signals=sig, book=book, builder=_builder)
+    assert set(res_long.trades["dir"]) == {1}
+    # on a +1bp/day path a short loses exactly what the long makes
+    assert res.trades["gross_bp"].sum() == pytest.approx(
+        -res_long.trades["gross_bp"].sum())
+
+
+def test_zscore_rule_on_an_alternating_signal_flips_sides():
+    """Documents the trap the 'always' rule exists to avoid."""
+    dates, book = _linear_book(n=60)
+    sig = pd.DataFrame({"key": "K", "as_of": dates,
+                        "signal": np.tile([1.0, -1.0], 30)})
+    cfg = LabConfig(entry_rule="zscore", direction="fade", exit_style="t1",
+                    entry_every=1, lag=1, round_trip_cost_bp=0.0,
+                    entry_min_zscore=0.5, zscore_min_periods=5, ma=1,
+                    zscore_window=10)
+    res = run_backtest(cfg, signals=sig, book=book, builder=_builder)
+    assert len(set(res.trades["dir"])) == 2        # both sides — not a benchmark
+
+
+def dataclasses_replace(cfg, **kw):
+    import dataclasses as _d
+    return _d.replace(cfg, **kw)
+
+
+def test_hedged_path_is_memoised_per_book(panel):
+    """A grid re-enters the same structure on the same date dozens of times."""
+    from RVUtils.SFRRVLab import hedged_path
+    c, q = panel
+    book = MarkBook(q, c)
+    k = float(q[q["symbol"] == "SFRH27"]["strike_price"].iloc[0])
+    st = Structure((Leg("option", "SFRH27", 1.0, "C", k),))
+    a = hedged_path(book, st, DATES, rehedge_band=0.0, future_cost_bp=0.25)
+    b = hedged_path(book, st, DATES, rehedge_band=0.0, future_cost_bp=0.25)
+    assert a[0] is b[0]                       # same array object -> cache hit
+    # a different band must NOT reuse the cached path
+    d = hedged_path(book, st, DATES, rehedge_band=0.5, future_cost_bp=0.25)
+    assert d[0] is not a[0]
+
+
+def test_hedge_costs_are_charged_to_both_sides():
+    """Long and short of the same hedged package cannot both be gross positive.
+
+    Their gross P&L must sum to exactly minus twice the re-hedge cost.
+    """
+    dates, book = _linear_book(n=60)
+    sig = pd.DataFrame({"key": "K", "as_of": dates,
+                        "signal": np.tile([1.0, -1.0], 30)})
+    base = dict(entry_rule="always", exit_style="t10", entry_every=20, lag=1,
+                round_trip_cost_bp=0.0, delta_hedge="daily", future_leg_bp=1.0,
+                zscore_min_periods=5, ma=1, zscore_window=10)
+    lo = run_backtest(LabConfig(direction="momentum", **base), signals=sig,
+                      book=book, builder=_builder)
+    sh = run_backtest(LabConfig(direction="fade", **base), signals=sig,
+                      book=book, builder=_builder)
+    assert len(lo.trades) == len(sh.trades) > 0
+    total = lo.trades["gross_bp"].sum() + sh.trades["gross_bp"].sum()
+    assert total < 0                       # both sides pay, neither is credited
+    # and it is exactly -2 x the hedge cost embedded in each leg
+    assert lo.trades["gross_bp"].to_numpy() + sh.trades["gross_bp"].to_numpy() == \
+        pytest.approx(np.full(len(lo.trades), total / len(lo.trades)))

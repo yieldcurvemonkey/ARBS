@@ -328,23 +328,45 @@ print(grid_atm.groupby("direction")
            best_net_bp=("total_net_bp", "max"),
            median_trades=("n_trades", "median")).round(3).to_string())
 
+# %% [markdown]
+# ### The headline is the DELTA-HEDGED variant
+#
+# The unhedged and futures-only rows follow it as diagnostics, because only the
+# hedged package is an options-vs-futures statement.
+
+# %%
+cfg_hdg = config_from_row(BASE_HEDGED, best_hdg, PARAMS)
+res_hdg = run_backtest(cfg_hdg, signals=sig_atm, book=lab["book"],
+                       builder=builder_atm)
+_ = header_block("Digital calendar, DELTA-HEDGED — best config", res_hdg,
+                 grid=grid_hdg,
+                 note="both contracts' option deltas re-hedged daily on their "
+                      "own futures")
+if not res_hdg.daily_bp.empty:
+    fig = three_panel_equity(res_hdg, "Digital calendar (delta-hedged)")
+    plt.show()
+
 # %%
 cfg_atm = config_from_row(BASE, best_atm, PARAMS)
 res_atm = run_backtest(cfg_atm, signals=sig_atm, book=lab["book"],
                        builder=builder_atm)
-_ = header_block("Digital calendar at ATM — best config", res_atm, grid=grid_atm)
-if not res_atm.daily_bp.empty:
-    fig = three_panel_equity(res_atm, "Digital calendar (ATM strike)")
-    plt.show()
+_ = header_block("Digital calendar, UNHEDGED — diagnostic only", res_atm,
+                 grid=grid_atm,
+                 note="carries the futures calendar spread; NOT an "
+                      "options-vs-futures result")
+res_fut = run_backtest(config_from_row(BASE, best_fut, PARAMS), signals=sig_atm,
+                       book=lab["book"], builder=builder_futures_only)
+_ = header_block("Futures calendar spread — same signal, no options", res_fut,
+                 grid=grid_fut)
 
 # %%
-print("EXIT COMPARISON")
-print(exit_comparison(cfg_atm, signals=sig_atm, book=lab["book"],
+print("EXIT COMPARISON (hedged)")
+print(exit_comparison(cfg_hdg, signals=sig_atm, book=lab["book"],
                       builder=builder_atm).to_string(index=False))
-print("\nMARKS x LAG")
-print(marks_x_lag_panel(cfg_atm, signals=sig_atm, book=lab["book"],
+print("\nMARKS x LAG (hedged)")
+print(marks_x_lag_panel(cfg_hdg, signals=sig_atm, book=lab["book"],
                         builder=builder_atm).to_string(index=False))
-_ = cost_block(res_atm)
+_ = cost_block(res_hdg)
 
 # %%
 if not res_hdg.trades.empty:
@@ -374,15 +396,21 @@ _ = cost_block(res_fly)
 # ## League rows
 
 # %%
-med_atm = median_row(grid_atm)
-res_med = run_backtest(config_from_row(BASE, med_atm, PARAMS), signals=sig_atm,
-                       book=lab["book"], builder=builder_atm)
-_ = header_block("Digital calendar — median config", res_med, grid=grid_atm)
+med_hdg = median_row(grid_hdg)
+res_med = run_backtest(config_from_row(BASE_HEDGED, med_hdg, PARAMS),
+                       signals=sig_atm, book=lab["book"], builder=builder_atm)
+_ = header_block("Digital calendar hedged — median config", res_med, grid=grid_hdg)
 
 # %%
-league_row("2. Digital calendar (same-strike)", "best-config", res_atm,
-           grid=grid_atm, cls="B", note="4 option legs, 1 unit of P(>=K)")
-league_row("2. Digital calendar (same-strike)", "median-config", res_med,
-           grid=grid_atm, cls="B", note="median of the sweep, not selected")
-league_row("2. Digital calendar (shape fly)", "best-config", res_fly,
+league_row("2. Digital calendar (delta-hedged)", "best-config", res_hdg,
+           grid=grid_hdg, cls="B", note="4 option legs + daily futures hedge")
+league_row("2. Digital calendar (delta-hedged)", "median-config", res_med,
+           grid=grid_hdg, cls="B", note="median of the sweep, not selected")
+league_row("2. Digital calendar (UNHEDGED)", "diagnostic", res_atm,
+           grid=grid_atm, cls="B",
+           note="DIAGNOSTIC: carries the futures calendar spread, not RV")
+league_row("2b. Futures calendar spread", "same-signal-benchmark", res_fut,
+           grid=grid_fut, cls="linear",
+           note="the benchmark the options must beat to mean anything")
+league_row("2c. Digital-calendar shape fly", "best-config", res_fly,
            grid=grid_fly, cls="B", note="12 option legs — cost-dominated")
