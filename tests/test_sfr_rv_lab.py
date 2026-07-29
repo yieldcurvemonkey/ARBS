@@ -5,6 +5,7 @@ listed panel whose premiums are exact linear/affine functions of the strike, so
 digitals, parity residuals, package marks, hedge P&L and the backtest's lag and
 cost accounting all have closed-form expected values.
 """
+import dataclasses
 import datetime
 
 import numpy as np
@@ -752,7 +753,7 @@ def test_entry_rule_always_holds_one_side():
     assert set(res.trades["dir"]) == {-1}          # short, every time
     assert "always" in cfg.label()
 
-    long_cfg = dataclasses_replace(cfg, direction="momentum")
+    long_cfg = dataclasses.replace(cfg, direction="momentum")
     res_long = run_backtest(long_cfg, signals=sig, book=book, builder=_builder)
     assert set(res_long.trades["dir"]) == {1}
     # on a +1bp/day path a short loses exactly what the long makes
@@ -772,10 +773,6 @@ def test_zscore_rule_on_an_alternating_signal_flips_sides():
     res = run_backtest(cfg, signals=sig, book=book, builder=_builder)
     assert len(set(res.trades["dir"])) == 2        # both sides — not a benchmark
 
-
-def dataclasses_replace(cfg, **kw):
-    import dataclasses as _d
-    return _d.replace(cfg, **kw)
 
 
 def test_hedged_path_is_memoised_per_book(panel):
