@@ -37,9 +37,10 @@ and a maximum of 0.25bp. The settlement process enforces it. Two consequences:
 
 For a non-negative rate, `E[f] = ∫ P(f ≥ K) dK`, so
 `∫ [P_back(≥K) − P_front(≥K)] dK` is exactly the futures calendar spread.
-Measured on real data across pair-days: **correlation 0.97** between the
-integrated listed digital-calendar profile and the futures calendar spread, with
-the residual explained by strike-ladder truncation.
+Measured on real data across 147 pair-day checks: **correlation 0.9955** between
+the integrated listed digital-calendar profile and the futures calendar spread,
+median absolute gap 0.50bp — the residual being mass outside the quoted strike
+ladder (median span 4.5% of rate), not tradeable slack.
 
 So a digital calendar at a single strike is not a free object at the level — only
 the **shape across strikes** is. This is why the framework trades the strike
@@ -52,14 +53,21 @@ Solving per-meeting jumps from the futures strip with the exact day-weight matri
 and coupling FedWatch two-point lattices independently gives a curve-only
 `P(rate ≥ K)`. Against the listed vertical:
 
-| strike | listed `P(≥K)` | lattice null | gap |
-|---|---|---|---|
-| forward − 25bp | 0.65 | 0.96 | **−0.31** |
-| forward | 0.51 | 0.60 | −0.09 |
-| forward + 25bp | 0.36 | 0.04 | **+0.32** |
+| strike | listed `P(≥K)` | lattice null | gap | n |
+|---|---|---|---|---|
+| forward − 25bp | 0.687 | 0.856 | **−0.169** | 3,698 |
+| forward | 0.540 | 0.541 | **−0.0002** | 3,673 |
+| forward + 25bp | 0.360 | 0.148 | **+0.213** | 3,739 |
 
-The gap is enormous and persistent (sd ≈ 0.07 at the wings). That is the price of
-everything the null discards — tails, non-25bp outcomes, intermeeting risk,
+Two things to read here. First, **the at-the-money gap is exactly zero** — an
+independent confirmation that the curve-only null and the listed surface share
+the same mean, because both are pinned to the same futures settle. That is result
+(1) arriving by a completely different route.
+
+Second, the *tails* diverge hugely and persistently: the options price ~21
+percentage points more probability above forward+25bp and ~17pp less below
+forward−25bp than a two-point lattice coupled independently. That is the price of
+everything the null discards — fat tails, non-25bp outcomes, intermeeting risk,
 coupling. It is a **risk premium, not an arbitrage**, and where the null is
 near-degenerate the "gap" signal is simply the listed digital under another name.
 
@@ -77,6 +85,13 @@ quarter starts accruing, front-contract implied vol decays for a purely
 mechanical reason. Any vol-level ranking that ignores this finds enormous fake
 alpha in the front contract; the notebook gates on time-to-expiry and shows the
 decay directly.
+
+The sharpest demonstration is the unconditional short-gamma benchmark. On a
+partial panel holding only far-dated contracts it printed +347bp net of taker
+costs at Sharpe 2.3 with an 84% hit rate. Adding the front contracts — the ones
+with actual gamma — turned it into **−242bp at taker, Sharpe −0.73** over 152
+trades. The apparent variance premium was an artifact of selling optionality on
+contracts too far out to have any.
 
 ## Mid-curve extension: data-blocked, not disproven
 
@@ -146,7 +161,12 @@ them, 0–1% of its configs are net positive.
 3. **Intraday.** Every basis here has a sub-1-day half-life in the prior work's
    measurement. Daily EOD may simply be the wrong frequency for the shape bases,
    and the repo already has intraday SOFR curve infrastructure.
-4. **The unconditional short-gamma program, properly stress-tested.** It is the
-   only thing in the lab that clears taker costs, and it has no fitted parameter
-   — which makes it the one result worth attacking with regime splits, tail
-   analysis and a longer sample rather than another grid.
+4. **The sample-composition lesson, applied to whatever comes next.** On a
+   partial panel containing only far-dated contracts, the unconditional
+   short-gamma program looked like the one survivor: +347bp net of taker costs,
+   Sharpe 2.3, 84% hit rate. Completing the strip with the front contracts
+   reversed it to **−242bp at taker, Sharpe −0.73** over 152 trades. Short gamma
+   made money precisely where there was no gamma to be short of, and lost it
+   where there was. Any future result on this panel should be re-run against the
+   full maturity cross-section before it is believed — the composition of the
+   sample was worth more than any parameter in the grid.
