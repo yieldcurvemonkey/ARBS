@@ -15,10 +15,54 @@ charged per completed trade, swept over a grid, sign-tested in both directions,
 and graded by a uniform verdict that charges the search through a deflated
 Sharpe.
 
-The headline is in the league-table notebook. What follows are the results that
-do not depend on any strategy choice — the constraints, the bugs, and the
-coverage limits — because those are the parts that stay true regardless of how
-the grids come out.
+## The league table in one line
+
+**Nothing is ALIVE.** 47 rows across 20 framework variants: 0 ALIVE,
+5 SELECTION-ARTIFACT, 21 MARGINAL-maker-only, 21 DEAD. The median deflated-Sharpe
+probability across the whole table is **0.0000** against a 0.5 threshold, and
+**0 of 47 rows has a positive median config**. Every positive number in the table
+is the best corner of a sweep whose middle is negative.
+
+| framework (best config) | n | net bp @taker | Sharpe | DSR p | grid median | verdict |
+|---|---:|---:|---:|---:|---:|---|
+| 2c. Digital-calendar shape fly | 168 | +326.0 | 0.62 | 0.015 | −435.5 | SELECTION-ARTIFACT |
+| 6a. Fly vs belly straddle | 61 | +290.8 | 0.39 | 0.050 | −228.3 | SELECTION-ARTIFACT |
+| 9a. Mid-curve forward vol | 6 | +271.9 | 4.98 | 0.031 | −18.1 | DEAD (too few trades) |
+| 9c. Mid-curve skew term structure | 8 | +116.9 | 2.63 | 0.001 | −28.3 | DEAD (too few trades) |
+| 3. Gamma/theta (IV−RV) | 47 | +64.6 | 0.46 | 0.015 | −201.4 | SELECTION-ARTIFACT |
+| 1. Skew basis (RR spread) | 20 | +29.5 | 0.68 | 0.000 | −181.0 | SELECTION-ARTIFACT |
+| 4c. Strangle (wing level) | 100 | +26.4 | 0.11 | 0.000 | −368.9 | SELECTION-ARTIFACT |
+| 3b. Vol-return momentum | 28 | −31.9 | −0.29 | 0.024 | −266.8 | MARGINAL-maker-only |
+| 3c. Cross-sectional vol carry | 40 | −46.8 | −0.64 | 0.000 | −277.1 | MARGINAL-maker-only |
+| 4a. Wing harvest (naked, hedged) | 52 | −92.3 | −1.62 | 0.000 | −345.0 | MARGINAL-maker-only |
+| 2. Digital calendar (delta-hedged) | 70 | −114.8 | −0.68 | 0.000 | −549.0 | MARGINAL-maker-only |
+| 4b. Wing vertical (disaster buyback) | 51 | −120.8 | −4.67 | 0.000 | −303.5 | MARGINAL-maker-only |
+| 6b. Vol butterfly (smile curvature) | 81 | −201.6 | −5.31 | 0.000 | −441.1 | MARGINAL-maker-only |
+| 6c. Skew term structure (vol space) | 113 | −291.0 | −6.47 | 0.000 | −757.0 | DEAD |
+| 5. Meeting lattice (vs FedWatch null) | 174 | −380.5 | −1.38 | 0.000 | −751.6 | MARGINAL-maker-only |
+| 1b. Skew basis (delta-hedged) | 9 | −22.2 | −4.60 | 0.000 | −279.1 | DEAD (too few trades) |
+| 7. FOMC event rule | 7 | −12.5 | −3.12 | 0.000 | −281.5 | DEAD (too few trades) |
+| 9b. Mid-curve coupling digitals | 1 | −1.6 | −2.70 | 0.001 | −8.8 | DEAD (too few trades) |
+
+Dollars assume **100 packages** with the package's own contract count printed in
+each notebook's header (a 4-leg risk reversal is 4 contracts; a digital scaled to
+one unit of probability is 24–32). At $25/contract/bp, the top row's +326bp is
++$815k on that sizing — and it is still a selection artifact.
+
+Two diagnostics deserve their own mention because they are the reason to
+disbelieve the top rows:
+
+- **Framework 2 is the cleanest kill in the lab.** Across 108 configs, the
+  unhedged options, the futures-only benchmark on the same signal, and the
+  daily-delta-hedged options were **all 0% net-positive**. The options do not
+  beat their own futures shadow, and hedging the deltas does not rescue them.
+- **Framework 1's edge was direction, not skew.** The unhedged risk-reversal
+  spread's best config makes +29.5bp; killing both contracts' deltas daily takes
+  it to −22.2bp.
+
+What follows are the results that do not depend on any strategy choice — the
+constraints, the bugs, and the coverage limits — because those are the parts that
+stay true regardless of how the grids come out.
 
 ## Structural results (measured, not assumed)
 
