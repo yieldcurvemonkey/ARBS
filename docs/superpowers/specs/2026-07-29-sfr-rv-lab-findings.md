@@ -151,14 +151,37 @@ correct too (`0QZ26|9450P` → price 94.50 against a 95.87 forward).
 
 What blocks the mid-curve frameworks is the **chains themselves**:
 
-- **Moneyness.** A listed mid-curve strike sits within 50bp of the forward on
-  **0.5%** of pair-days, and within 100bp on **1.1%**. An ATM straddle cannot be
-  constructed on 99% of days, so listed forward vol is not observable.
-- **Open interest.** Median OI is **zero**; only 6.3% of mid-curve quotes carry
-  500 lots or more. The marks are settle prices with no demonstrated liquidity.
+- **The feed has no near-the-money mid-curve legs at all.** Requesting the ATM
+  and +/-25/+/-50bp legs explicitly by strike on `0QZ26` for 2026-07-24 raises
+  *"No quotes on or before 2026-07-24 for any of the 6 requested SABR smile
+  legs"*, while the identically-shaped request on the quarterly `SFRZ27` returns
+  all six with 2,000-10,000 lots of open interest each. Naming the strikes
+  bypasses the grid logic, so this is vendor coverage, not a construction bug.
+- **What does come back is a far-OTM put tail with almost no calls.** `0QZ26`
+  has **0 calls in 776 quotes** over 101 days, `0QU26` 0 of 6, `2QZ26` 26 of 821.
+  The ladder spans rate 7.00-9.00% against a 3.2-4.1% forward — a median of
+  350-430bp out — and **brackets the forward on 0.5% of days** (0.0% for `0QZ26`).
+  On the same date and the same forward (3.44%) the quarterly `SFRZ27` returns 20
+  calls spanning 0.25-3.50 and 29 puts spanning 3.50-9.00, meeting at the money.
+- **Open interest.** Median OI is **zero** on all three mid-curve symbols; only
+  **1.9%** of mid-curve quotes (31 of 1,603) carry 500 lots or more. (An earlier
+  draft of this document said 6.3%; that figure was computed over the whole
+  mid-curve *directory*, which also holds the 34,721 quarterly quotes fetched
+  there for pairing, and so overstated mid-curve liquidity.)
+
+This is upstream of the repo in three checkable ways: the smile's `points` equals
+its `priced` points in every fetch (nothing is dropped for a missing price); the
+failure reproduces with the strikes named explicitly; and symbol resolution is
+correct (`0QZ26|9450P` decodes to price 94.50 against a 95.87 forward).
 - **History.** Useful overlap with a quarterly on the same underlying is 70 days
   (`0QZ26`/`SFRZ27`) and 112 days (`2QZ26`/`SFRZ28`). The 0Q cycles before Z26
   have essentially no history in this feed (`0QU26`: one day, six quotes).
+
+Each framework fails for a specific, mechanical reason: **forward vol** needs an
+ATM straddle and therefore a call, and there are none; **coupling digitals** need
+a vertical bracketing a common strike on both chains, and the mid-curve ladder
+sits ~350bp from where the quarterly's is dense; **skew term structure** needs
+both wings and only one exists.
 
 The three frameworks were rebuilt to use strikes that exist — matched-strike
 straddles, digitals drawn from the mid-curve's own ladder, widest-available wing
