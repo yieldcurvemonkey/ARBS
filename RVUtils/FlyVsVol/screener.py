@@ -111,19 +111,22 @@ def history_zscores(
 def series_half_life(s: pd.Series) -> float:
     """AR(1) mean-reversion half-life in observations (inf if non-reverting).
 
-    Fits ds_t = a + b*s_{t-1}; half-life = -ln 2 / ln(1 + b). Used to set the
-    holding period of the convergence trades from the measured tail_rent /
-    divergence series (per-label, so pass one triple's series at a time).
+    Used to set the holding period of the convergence trades from the measured
+    tail_rent / divergence series (per-label, so pass one triple's series at a
+    time).
+
+    Delegates to :func:`RVUtils.mean_reversion.half_life` (the canonical AR(1)
+    fit) and keeps this module's ``inf``-for-non-reverting sentinel, which the
+    convergence code branches on. The local fit it replaces regressed the
+    change on the lag and took ``-ln2/ln(1+b)``, which is the same estimator
+    written differently.
     """
-    x = s.dropna().to_numpy(dtype=float)
+    from RVUtils.mean_reversion import half_life as _hl
+
+    x = s.dropna()
     if x.size < 10:
         return float("nan")
-    lag, diff = x[:-1], np.diff(x)
-    var = np.var(lag)
-    if var <= 1e-18:
+    if float(np.var(x.to_numpy(dtype=float)[:-1])) <= 1e-18:
         return float("inf")
-    b = np.cov(lag, diff, ddof=0)[0, 1] / var
-    rho = 1.0 + b
-    if not (0.0 < rho < 1.0):
-        return float("inf")
-    return float(-math.log(2.0) / math.log(rho))
+    hl = _hl(x)
+    return float(hl) if np.isfinite(hl) else float("inf")
