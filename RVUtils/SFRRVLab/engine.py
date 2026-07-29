@@ -35,7 +35,9 @@ from RVUtils.SFRRVLab.structures import (
     DOLLARS_PER_BP,
     MarkBook,
     Structure,
+    hedged_path,
     mark_structure,
+    package_contracts,
     round_trip_cost_bp,
 )
 
@@ -63,13 +65,16 @@ class LabConfig:
     quality_gate: bool = True
     contracts_per_leg: int = 100
     entry_every: int = 1                    # 1 = daily, 5 = weekly rebalance
+    delta_hedge: str = "none"               # 'none' | 'daily'
+    rehedge_band: float = 0.0               # delta drift tolerated before re-hedging
     max_concurrent_per_key: int = 1
     keys: Optional[Sequence[str]] = None
 
     def label(self) -> str:
         return (f"{self.direction}|ma{self.ma}|w{self.zscore_window}"
                 f"|z{self.entry_min_zscore}|{self.exit_style}|lag{self.lag}"
-                f"|every{self.entry_every}")
+                f"|every{self.entry_every}"
+                + ("|dh" if self.delta_hedge == "daily" else ""))
 
 
 @dataclasses.dataclass
@@ -161,7 +166,12 @@ def run_backtest(
                         n_skipped += 1
                         i += 1
                         continue
-                    marks, stale = mark_structure(book, st, dates[j:])
+                    if config.delta_hedge == "daily":
+                        marks, stale, _hc = hedged_path(
+                            book, st, dates[j:], rehedge_band=config.rehedge_band,
+                            future_cost_bp=config.future_leg_bp)
+                    else:
+                        marks, stale = mark_structure(book, st, dates[j:])
                     if not np.isfinite(marks).all():
                         n_skipped += 1
                         i += 1
@@ -172,6 +182,7 @@ def run_backtest(
                                 future_leg_bp=config.future_leg_bp))
                     pos, sig_i, exec_i, path = d, i, j, d * marks
                     struct_label = st.label
+                    pkg_contracts = package_contracts(st)
             else:
                 held = i - exec_i
                 mark_now = path[i - exec_i] - path[0]     # observable at bar i
@@ -216,6 +227,7 @@ def run_backtest(
                         "net_usd": round((gross - cost) * DOLLARS_PER_BP
                                          * config.contracts_per_leg, 2),
                         "stale_frac": round(float(stale), 3),
+                        "pkg_contracts": round(float(pkg_contracts), 2),
                         "exit_reason": reason,
                     })
                     pos, sig_i, exec_i, path = 0, None, None, None
@@ -259,6 +271,8 @@ def compute_metrics(
                    if len(g) > 2 and g.std(ddof=1) > 0 else np.nan),
         "n_days": int(len(daily)),
         "avg_stale": float(trades["stale_frac"].mean()),
+        "pkg_contracts": (float(trades["pkg_contracts"].median())
+                          if "pkg_contracts" in trades.columns else np.nan),
     }
 
 

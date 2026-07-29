@@ -560,3 +560,125 @@ def test_verdict_requires_a_positive_median_config():
     """A lucky corner with a negative median sweep is never ALIVE."""
     assert verdict(net_bp_at_taker=5.0, net_bp_at_maker=9.0, dsr_prob=0.9,
                    median_net_bp=-3.0, n_trades=50) == "MARGINAL-maker-only"
+
+
+# ---------------------------------------------------------------------------
+# daily delta hedging
+# ---------------------------------------------------------------------------
+def test_hedged_path_earns_yesterdays_hedge_each_day(panel):
+    """Constant +0.5 delta, price falling 1bp/day => hedge earns +0.5bp/day."""
+    from RVUtils.SFRRVLab import hedged_path
+    c, q = panel
+    book = MarkBook(q, c)
+    k = float(q[q["symbol"] == "SFRH27"]["strike_price"].iloc[0])
+    st = Structure((Leg("option", "SFRH27", 1.0, "C", k),))
+    value, _stale, cost = hedged_path(book, st, DATES, rehedge_band=1e9,
+                                      future_cost_bp=0.0)
+    opt, _ = mark_structure(book, st, DATES)
+    hedge_pnl = (value - opt) - (value[0] - opt[0])
+    assert hedge_pnl[1] == pytest.approx(0.5)
+    assert hedge_pnl[-1] == pytest.approx(0.5 * (len(DATES) - 1))
+    assert cost == pytest.approx(0.0)
+
+
+def test_hedged_path_charges_every_rehedge(panel):
+    from RVUtils.SFRRVLab import hedged_path
+    c, q = panel
+    book = MarkBook(q, c)
+    k = float(q[q["symbol"] == "SFRH27"]["strike_price"].iloc[0])
+    st = Structure((Leg("option", "SFRH27", 1.0, "C", k),))
+    _v, _s, cost_tight = hedged_path(book, st, DATES, rehedge_band=0.0,
+                                     future_cost_bp=1.0)
+    _v, _s, cost_wide = hedged_path(book, st, DATES, rehedge_band=1e9,
+                                    future_cost_bp=1.0)
+    assert cost_tight >= cost_wide > 0.0     # entry hedge is always paid for
+
+
+def test_hedged_path_beats_a_static_hedge_on_a_moving_market(panel):
+    """A static hedge stops matching; the daily one keeps the delta at zero."""
+    from RVUtils.SFRRVLab import hedge_each_contract, hedged_path
+    c, q = panel
+    book = MarkBook(q, c)
+    k = float(q[q["symbol"] == "SFRH27"]["strike_price"].iloc[0])
+    st = Structure((Leg("option", "SFRH27", 1.0, "C", k),))
+    static = hedge_each_contract(book, st, DATES[0])
+    assert static.n_future_legs == pytest.approx(0.5)
+    dyn, _s, _c = hedged_path(book, st, DATES, rehedge_band=0.0,
+                              future_cost_bp=0.0)
+    stat_marks, _ = mark_structure(book, static, DATES)
+    # deltas are constant in this fixture, so the two must agree exactly
+    assert (dyn - dyn[0])[-1] == pytest.approx((stat_marks - stat_marks[0])[-1])
+
+
+def test_engine_daily_hedge_changes_the_pnl_path():
+    dates, book = _linear_book()
+    sig = pd.DataFrame({"key": "K", "as_of": dates,
+                        "signal": np.where(np.arange(len(dates)) == 20, 10.0, 0.0)})
+    base = dict(ma=1, zscore_window=10, zscore_min_periods=5, entry_min_zscore=2.0,
+                direction="momentum", exit_style="t5", round_trip_cost_bp=0.0,
+                exit_max_holding_days=50)
+    plain = run_backtest(LabConfig(delta_hedge="none", **base), signals=sig,
+                         book=book, builder=_builder)
+    hedged = run_backtest(LabConfig(delta_hedge="daily", future_leg_bp=0.0, **base),
+                          signals=sig, book=book, builder=_builder)
+    assert "dh" in hedged.config.label()
+    # the futures leg is flat in this fixture, so the hedge adds no P&L
+    assert hedged.trades["gross_bp"].iloc[0] == pytest.approx(
+        plain.trades["gross_bp"].iloc[0])
+
+
+# ---------------------------------------------------------------------------
+# meeting lattice (FedWatch-style curve-only null)
+# ---------------------------------------------------------------------------
+def test_day_weight_matrix_is_the_post_meeting_share_of_the_quarter():
+    from RVUtils.SFRRVLab.lattice import day_weight_matrix
+    q = (datetime.date(2026, 3, 18), datetime.date(2026, 6, 17))   # 91 days
+    # a meeting before the quarter starts affects the whole of it
+    w_before = day_weight_matrix([q], [datetime.date(2026, 1, 28)])
+    assert w_before[0, 0] == pytest.approx(1.0)
+    # a meeting after it ends affects none of it
+    w_after = day_weight_matrix([q], [datetime.date(2026, 7, 29)])
+    assert w_after[0, 0] == pytest.approx(0.0)
+    # a meeting inside it is fractional, and effective the day after
+    w_in = day_weight_matrix([q], [datetime.date(2026, 4, 29)])
+    days_after = (q[1] - datetime.date(2026, 4, 30)).days
+    assert w_in[0, 0] == pytest.approx(days_after / (q[1] - q[0]).days)
+
+
+def test_solve_meeting_jumps_recovers_planted_jumps():
+    """Given a weight matrix and known jumps, the solve must invert them."""
+    from RVUtils.SFRRVLab.lattice import solve_meeting_jumps
+    rng = np.random.default_rng(3)
+    W = np.array([[1.0, 0.6, 0.0], [1.0, 1.0, 0.4], [1.0, 1.0, 1.0]])
+    truth = np.array([25.0, -12.5, 40.0])
+    base = 400.0
+    fwd = base + W @ truth
+    got = solve_meeting_jumps(fwd, W, base, ridge=1e-9)
+    assert np.allclose(got, truth, atol=1e-6)
+
+
+def test_meeting_null_is_a_normalised_distribution_with_the_right_mean():
+    """Independent lattice: E[offset] must equal sum_m w_m * jump_m."""
+    from RVUtils.SFRRVLab.lattice import meeting_null_distribution
+    jumps = [25.0, -12.5, 7.0]
+    weights = [1.0, 0.5, 0.25]
+    off, p = meeting_null_distribution(jumps, weights, merge_bp=0.05)
+    assert p.sum() == pytest.approx(1.0)
+    expected = sum(j * w for j, w in zip(jumps, weights))
+    assert float((off * p).sum()) == pytest.approx(expected, abs=0.1)
+
+
+def test_meeting_null_ignores_meetings_with_no_weight():
+    from RVUtils.SFRRVLab.lattice import meeting_null_distribution
+    a = meeting_null_distribution([25.0, 25.0], [1.0, 0.0], merge_bp=0.05)
+    b = meeting_null_distribution([25.0], [1.0], merge_bp=0.05)
+    assert np.allclose(a[0], b[0]) and np.allclose(a[1], b[1])
+
+
+def test_null_prob_ge_is_monotone_decreasing_in_the_strike():
+    from RVUtils.SFRRVLab.lattice import meeting_null_distribution, null_prob_ge
+    off, p = meeting_null_distribution([25.0, 25.0], [1.0, 0.5], merge_bp=0.05)
+    ks = [380.0, 400.0, 420.0, 440.0]
+    probs = [null_prob_ge(off, p, 400.0, k) for k in ks]
+    assert probs == sorted(probs, reverse=True)
+    assert probs[0] == pytest.approx(1.0)

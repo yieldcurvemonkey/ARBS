@@ -97,6 +97,10 @@ def header_block(name: str, res, *, grid: Optional[pd.DataFrame] = None,
     if note:
         print(f"  {note}")
     print("=" * 92)
+    if np.isfinite(m.get("pkg_contracts", np.nan)):
+        print(f"  1 package = {m['pkg_contracts']:.0f} contracts "
+              f"-> position = {m['pkg_contracts'] * res.config.contracts_per_leg:,.0f} "
+              f"contracts across all legs")
     print(f"  trades {m['n_trades']:>5d}   skipped {m.get('n_skipped', 0):>4d}   "
           f"hit {m['hit_rate']:.0%}   avg {m['avg_net_bp']:+.3f}bp   "
           f"avg hold {m['avg_hold_days']:.1f}d   stale {m.get('avg_stale', float('nan')):.1%}")
@@ -274,6 +278,82 @@ def cost_block(res) -> pd.DataFrame:
 
 
 # ---------------------------------------------------------------------------
+def sign_test(grid: pd.DataFrame, metric: str = "total_net_bp") -> pd.DataFrame:
+    """Fade vs momentum across the whole sweep — the house rule, never assumed."""
+    if "direction" not in grid.columns:
+        return pd.DataFrame()
+    out = (grid.groupby("direction")
+           .agg(n_configs=(metric, "size"), median_net_bp=(metric, "median"),
+                pct_positive=(metric, lambda s: (s > 0).mean()),
+                best_net_bp=(metric, "max"), median_trades=("n_trades", "median"))
+           .round(3))
+    print("\nSIGN TEST (both directions, whole sweep)")
+    print(out.to_string())
+    return out
+
+
+def run_framework(
+    name: str, *, signals, book, builder, base: LabConfig,
+    grid_spec: Dict[str, Sequence], params: Sequence[str], cls: str,
+    note: str = "", model_signals=None, plot: bool = True,
+    league: bool = True, show_trades: int = 30,
+) -> Dict[str, object]:
+    """The standard framework sequence, identical for every notebook.
+
+    grid + distribution + stability + sign test, then the best config's header,
+    equity, trade log and honesty panels (exit comparison, marks x lag, cost
+    curve, gate sensitivity), then the median config, then the league rows.
+    Returning the pieces lets a notebook add framework-specific analysis after.
+    """
+    import matplotlib.pyplot as plt
+
+    grid = grid_search(grid_spec, signals=signals, book=book, builder=builder,
+                       base=base, show_progress=True)
+    print(f"\n=== {name} — grid ===")
+    best = grid_block(grid, params)
+    stability_block(grid, best, params)
+    sign_test(grid)
+
+    cfg = config_from_row(base, best, params)
+    res = run_backtest(cfg, signals=signals, book=book, builder=builder)
+    print()
+    header_block(f"{name} — best config", res, grid=grid, note=note)
+    if plot and not res.daily_bp.empty:
+        three_panel_equity(res, name)
+        plt.show()
+    if show_trades and not res.trades.empty:
+        print("\nTRADE LOG (first rows)")
+        print(res.trades.sort_values("entry").head(show_trades).to_string(index=False))
+
+    print("\nEXIT COMPARISON")
+    print(exit_comparison(cfg, signals=signals, book=book,
+                          builder=builder).to_string(index=False))
+    print("\nMARKS x LAG")
+    mxl = marks_x_lag_panel(cfg, signals=signals, book=book, builder=builder,
+                            model_signals=model_signals)
+    print(mxl.to_string(index=False))
+    if "lag_inflation" in mxl.attrs:
+        print(f"same-bar (lag 0) gross inflation: {mxl.attrs['lag_inflation']:.1%}")
+    cost_block(res)
+    if "gate_bl" in getattr(signals, "columns", []):
+        print("\nGATE SENSITIVITY")
+        print(gate_sensitivity(cfg, signals=signals, book=book,
+                               builder=builder).to_string(index=False))
+
+    med = median_row(grid)
+    res_med = run_backtest(config_from_row(base, med, params), signals=signals,
+                           book=book, builder=builder)
+    print()
+    header_block(f"{name} — median config (not selected)", res_med, grid=grid)
+
+    if league:
+        league_row(name, "best-config", res, grid=grid, cls=cls, note=note)
+        league_row(name, "median-config", res_med, grid=grid, cls=cls,
+                   note="median of the sweep, not selected")
+    return {"grid": grid, "best": best, "config": cfg, "result": res,
+            "median_result": res_med}
+
+
 def league_row(framework: str, variant: str, res, *, grid: Optional[pd.DataFrame],
                cls: str, note: str = "", write: bool = True) -> Dict[str, object]:
     """Build (and append) one league-table row with the uniform verdict."""

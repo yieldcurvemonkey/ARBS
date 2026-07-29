@@ -40,8 +40,10 @@ from RVUtils.SFRRVLab.panels import (
 )
 from RVUtils.SFRRVLab.signals import (
     adjacent_pairs,
+    contract_pairs,
     delta_hedged_pnl,
     digital_calendar_panel,
+    digital_legs,
     pair_rr_basis,
     quarterly_sort_key,
     risk_reversal_panel,
@@ -63,7 +65,10 @@ from RVUtils.SFRRVLab.structures import (
     Leg,
     MarkBook,
     Structure,
+    hedge_each_contract,
+    hedged_path,
     mark_structure,
+    package_contracts,
     round_trip_cost_bp,
     structure_delta,
 )
@@ -72,8 +77,9 @@ __all__ = [
     "COST_SCENARIOS", "DOLLARS_PER_BP", "FOMC_DATES",
     "LabConfig", "LabResult", "Leg", "MarkBook", "Structure",
     "add_event_distance", "adjacent_pairs", "atm_premium_panel",
-    "attach_parity_flag", "constant_maturity_slots", "cost_curve",
-    "deflated_for_grid", "delta_hedged_pnl", "digital_calendar_panel",
+    "attach_parity_flag", "constant_maturity_slots", "contract_pairs",
+    "cost_curve", "deflated_for_grid", "delta_hedged_pnl",
+    "digital_calendar_panel", "digital_legs",
     "digital_panel", "grid_distribution", "grid_search", "load_panels",
     "mark_structure", "neighbourhood_stability", "nonoverlapping_sharpe",
     "nw_tstat", "pair_rr_basis", "parity_residuals", "pick_listed_strike",

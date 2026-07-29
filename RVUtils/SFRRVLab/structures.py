@@ -27,7 +27,10 @@ from typing import Dict, Iterable, Optional, Sequence, Tuple
 import numpy as np
 import pandas as pd
 
-__all__ = ["Leg", "Structure", "MarkBook", "mark_structure", "structure_delta"]
+__all__ = ["Leg", "Structure", "MarkBook", "mark_structure", "structure_delta",
+           "hedge_each_contract", "hedged_path", "package_contracts",
+           "round_trip_cost_bp",
+           "DOLLARS_PER_BP"]
 
 #: dollars per basis point of SR3 price, per contract
 DOLLARS_PER_BP = 25.0
@@ -207,6 +210,111 @@ def structure_delta(
         if np.isfinite(v):
             d += leg.weight * float(v)
     return d
+
+
+def hedge_each_contract(
+    book: MarkBook, structure: Structure, date: pd.Timestamp,
+    *, min_abs_delta: float = 1e-6,
+) -> Structure:
+    """Neutralise every contract's option delta with that contract's own future.
+
+    A package spanning two expiries needs two hedges, not one: hedging the net
+    delta with a single future leaves the position long one contract and short
+    the other, which is a curve trade. Hedging per contract removes first-order
+    exposure to each contract's level and leaves only the cross-contract shape —
+    the object a class-B framework claims to trade.
+
+    Options whose listed delta is missing contribute nothing to the hedge (the
+    caller gets a smaller hedge, never a fabricated one).
+    """
+    ts = pd.Timestamp(date)
+    per: Dict[str, float] = {}
+    for leg in structure.legs:
+        if leg.kind != "option":
+            continue
+        s = book.delta_series(leg)
+        if s is None or s.empty:
+            continue
+        r = s.reindex(s.index.union([ts])).sort_index().ffill()
+        v = r.get(ts, np.nan)
+        if np.isfinite(v):
+            per[leg.symbol] = per.get(leg.symbol, 0.0) + leg.weight * float(v)
+    extra = tuple(Leg("future", sym, weight=-d) for sym, d in per.items()
+                  if abs(d) > min_abs_delta)
+    if not extra:
+        return structure
+    return Structure(structure.legs + extra, label=structure.label + " +dhedge")
+
+
+def hedged_path(
+    book: MarkBook,
+    structure: Structure,
+    dates: Sequence[pd.Timestamp],
+    *,
+    rehedge_band: float = 0.0,
+    future_cost_bp: float = 0.25,
+) -> Tuple[np.ndarray, float, float]:
+    """Value path of ``structure`` with each contract's delta re-hedged DAILY.
+
+    A static hedge is worthless on a high-gamma package (a tight vertical scaled
+    to one unit of probability has enormous gamma): the hedge set at entry stops
+    matching within a day and what is left is a large outright futures position.
+    This walks the path instead, holding ``-delta_t`` of each contract's own
+    future over ``[t, t+1]`` — the delta observed at ``t``, never at ``t+1``.
+
+    Returns ``(value, stale_frac, hedge_cost_total_bp)`` where ``value`` is the
+    option package's mark plus cumulative hedge P&L minus cumulative re-hedge
+    costs, so ``value[t] - value[0]`` is the trade's P&L in bp.
+    """
+    idx = pd.DatetimeIndex(dates)
+    opt_legs = tuple(l for l in structure.legs if l.kind == "option")
+    fut_legs = tuple(l for l in structure.legs if l.kind == "future")
+    if not opt_legs:
+        marks, stale = mark_structure(book, structure, idx)
+        return marks, stale, 0.0
+    base = Structure(opt_legs + fut_legs, label=structure.label)
+    marks, stale = mark_structure(book, base, idx)
+
+    # net option delta and futures price path, per contract
+    symbols = sorted({l.symbol for l in opt_legs})
+    delta = {s: np.zeros(len(idx)) for s in symbols}
+    for leg in opt_legs:
+        d = book.delta_series(leg)
+        if d is None or d.empty:
+            continue
+        v = d.reindex(idx).ffill().bfill().fillna(0.0).to_numpy(dtype=float)
+        delta[leg.symbol] += leg.weight * v
+    # any futures already in the structure offset the hedge requirement
+    for leg in fut_legs:
+        if leg.symbol in delta:
+            delta[leg.symbol] += leg.weight
+
+    hedge_pnl = np.zeros(len(idx))
+    hedge_cost = np.zeros(len(idx))
+    for sym in symbols:
+        f = book.series(Leg("future", sym))
+        if f is None or f.empty:
+            continue
+        fp = f.reindex(idx).ffill().bfill().to_numpy(dtype=float)
+        if not np.isfinite(fp).all():
+            continue
+        held = np.zeros(len(idx))
+        cur = 0.0
+        for t in range(len(idx)):
+            target = -delta[sym][t]
+            if t == 0 or abs(target - cur) > rehedge_band:
+                hedge_cost[t] += abs(target - cur) * future_cost_bp
+                cur = target
+            held[t] = cur
+        hedge_pnl[1:] += held[:-1] * np.diff(fp)
+
+    value = marks + np.cumsum(hedge_pnl) - np.cumsum(hedge_cost)
+    return value, stale, float(hedge_cost.sum())
+
+
+def package_contracts(structure: Structure) -> float:
+    """Total contracts traded in one package (sum of |weight| over all legs)."""
+    return float(sum(abs(l.weight) for l in structure.legs))
 
 
 def round_trip_cost_bp(
