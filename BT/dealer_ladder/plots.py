@@ -64,6 +64,48 @@ def use_style():
     })
 
 
+def _state(value):
+    """``True``, ``False`` or ``None`` for undecided, from whatever a CSV round trip left.
+
+    Load-bearing, and the reason this is a named function with tests: a verdict of
+    ``pass=None`` -- a gate that was NOT REACHED -- comes back from ``read_csv`` as
+    ``float("nan")``, and **NaN is truthy in Python**. The obvious ``"PASS" if p else
+    "FAIL"`` therefore painted an unreached gate green, which is the single worst thing
+    this figure could do: report an ungated result as a passing one. Booleans also
+    survive CSV as the strings "True"/"False" whenever the column holds a NaN, so those
+    are handled too.
+    """
+    if value is None:
+        return None
+    if isinstance(value, str):
+        s = value.strip().lower()
+        if s in ("true", "1", "pass", "yes"):
+            return True
+        if s in ("false", "0", "fail", "no"):
+            return False
+        return None                      # "", "none", "nan", anything unrecognised
+    try:
+        if value != value:               # NaN
+            return None
+    except Exception:
+        return None
+    return bool(value)
+
+
+def _labels(df, label):
+    """The label column, or the INDEX when it has been consumed as one.
+
+    These frames arrive from CSVs read with ``index_col=0``, so whether the label is a
+    column or the index depends on how the writer treated the index -- and a KeyError
+    here kills a whole figure in the deliverable notebook. Falling back is right because
+    there is exactly one candidate: if the named column is absent, the labels are the
+    index by construction.
+    """
+    if label in df.columns:
+        return df[label]
+    return df.index.to_series()
+
+
 def _finish(ax, title, xlabel=None, ylabel=None, note=None):
     ax.set_title(title, loc="left", pad=10)
     if xlabel:
@@ -87,24 +129,46 @@ def verdict_strip(verdicts, ax=None):
     import matplotlib.pyplot as plt
 
     if ax is None:
-        _, ax = plt.subplots(figsize=(8.2, 0.52 * max(len(verdicts), 1) + 0.9))
+        _, ax = plt.subplots(figsize=(9.0, 0.52 * max(len(verdicts), 1) + 0.9))
     labels, words, colors = [], [], []
     for v in verdicts:
         labels.append(str(v.get("gate", "?")))
-        p = v.get("pass")
-        word = "N/A" if p is None else ("PASS" if p else "FAIL")
-        words.append(word)
-        colors.append(STATUS["good"] if p else
-                      (MUTED if p is None else STATUS["critical"]))
+        state = _state(v.get("pass"))
+        words.append({True: "PASS", False: "FAIL"}.get(state, "N/A"))
+        colors.append({True: STATUS["good"], False: STATUS["critical"]}
+                      .get(state, MUTED))
     y = np.arange(len(labels))[::-1]
     ax.barh(y, [1] * len(labels), height=0.55, color=colors, alpha=0.16,
             edgecolor="none")
-    for yy, lab, word, col, v in zip(y, labels, words, colors, verdicts):
-        ax.text(0.012, yy, lab, va="center", ha="left", fontsize=9.5,
-                color=INK, fontweight="600")
-        ax.text(0.115, yy, word, va="center", ha="left", fontsize=9,
-                color=col, fontweight="700")
-        ax.text(0.20, yy, str(v.get("headline", ""))[:118], va="center",
+    # The STATE goes first because it is fixed width (PASS/FAIL/N/A), so no gate name
+    # can overprint it, and the HEADLINE column is then MEASURED rather than guessed.
+    #
+    # Both of those are corrections. Name-first with the state right-aligned at a fixed
+    # offset put "G4-primary(in-sample)" straight through its own FAIL; moving the state
+    # first fixed that and immediately pushed the same collision one column over, onto
+    # the headline. Every "fix" in between was another guess at text width in data
+    # coordinates, which cannot work: the widest label is not known until it is laid out.
+    # Truncating the name instead would have been worse -- the suffix is what
+    # distinguishes the in-sample run from the one-shot LOCKOUT, which is the single most
+    # important distinction on this figure.
+    fig = ax.figure
+    label_texts = []
+    for yy, lab, word, col in zip(y, labels, words, colors):
+        ax.text(0.014, yy, word, va="center", ha="left", fontsize=9, color=col,
+                fontweight="700")
+        label_texts.append(ax.text(0.075, yy, lab, va="center", ha="left",
+                                   fontsize=9.0, color=INK, fontweight="600"))
+    head_x = 0.335
+    try:
+        fig.canvas.draw()
+        rend = fig.canvas.get_renderer()
+        right_px = max(tx.get_window_extent(renderer=rend).x1 for tx in label_texts)
+        measured = ax.transAxes.inverted().transform((right_px, 0.0))[0]
+        head_x = min(max(head_x, measured + 0.022), 0.72)
+    except Exception:
+        pass                    # a backend without a renderer falls back to the default
+    for yy, v in zip(y, verdicts):
+        ax.text(head_x, yy, str(v.get("headline", ""))[:98], va="center",
                 ha="left", fontsize=8, color=INK_2)
     ax.set_xlim(0, 1)
     ax.set_ylim(-0.7, len(labels) - 0.3)
@@ -172,8 +236,9 @@ def league_dotplot(league, ax=None, top=18, value="mean", lo="lo", hi="hi",
                linewidth=1.2)
     ax.axvline(0.0, color=INK_2, linewidth=1.0, zorder=2)
     ax.set_yticks(y)
-    ax.set_yticklabels([str(s)[:46] for s in df[label]], fontsize=7.5)
-    for yy, v, name in zip(y, df[value], df[label]):
+    names = _labels(df, label)
+    ax.set_yticklabels([str(s)[:46] for s in names], fontsize=7.5)
+    for yy, v, name in zip(y, df[value], names):
         if name in highlight:
             ax.annotate(f"  {v:+.3f}", xy=(v, yy), fontsize=8, va="center",
                         color=INK, fontweight="700")
@@ -194,7 +259,8 @@ def placebo_panel(placebos, ax=None, value="mean", label="placebo"):
     df = placebos.dropna(subset=[value]).copy()
     if ax is None:
         _, ax = plt.subplots(figsize=(8.0, 0.42 * max(len(df), 1) + 1.5))
-    ref_mask = df[label].astype(str).str.startswith("none")
+    names = _labels(df, label)
+    ref_mask = names.astype(str).str.startswith("none")
     ref = float(df.loc[ref_mask, value].iloc[0]) if ref_mask.any() else np.nan
     y = np.arange(len(df))[::-1]
     colors = [SERIES[0] if m else SERIES[1] for m in ref_mask]
@@ -205,7 +271,7 @@ def placebo_panel(placebos, ax=None, value="mean", label="placebo"):
                    zorder=0)
     ax.axvline(0.0, color=INK_2, linewidth=1.0, zorder=1)
     ax.set_yticks(y)
-    ax.set_yticklabels([str(s)[:52] for s in df[label]], fontsize=8)
+    ax.set_yticklabels([str(s)[:52] for s in names], fontsize=8)
     for yy, v in zip(y, df[value]):
         ax.annotate(f" {v:+.3f}", xy=(v, yy), fontsize=8, va="center",
                     color=INK_2)
