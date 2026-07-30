@@ -42,6 +42,7 @@ from SDRUtils._swappulse_scripts._stir_ladder_schema_v1 import (
 from SDRUtils._swappulse_scripts._stir_flow_schema_v1 import DIRECTION_TABLE
 from SDRUtils._swappulse_scripts.ingest_usdswaps_tape import resolve_pg_url
 from SDRUtils.stir_flow import book, config, curve_warm, ladder_state, unwinds
+from SDRUtils.stir_flow.daylog import day_log
 from SDRUtils.stir_flow.ladder import LADDER_COLUMNS, build_risk_models, project_unit
 from SDRUtils.stir_flow.ladder_conventions import PROVISIONAL_HALF_LIVES_MIN
 from SDRUtils.stir_flow.pricing import CurvePricer, snap_timestamp
@@ -263,44 +264,53 @@ def _marks_for_day(conn, mark_date, pricer, dry_run=False) -> int:
 
 # ----------------------------- range drivers --------------------------------
 def _project_one_day(job):
-    date_iso, warm_jobs, dry_run, rewrite, pg_url = job
-    conn = psycopg2.connect(pg_url or resolve_pg_url())
-    try:
-        res = run_project_phase(conn, date_iso, date_iso, dry_run=dry_run,
-                                warm_jobs=warm_jobs, rewrite=rewrite)
-        return {"date": date_iso, "error": None, **res}
-    except Exception as exc:  # isolate a bad day; keep the range going
-        return {"date": date_iso, "projected": 0, "eligible": 0, "errors": {},
-                "error": repr(exc)}
-    finally:
-        conn.close()
+    date_iso, warm_jobs, dry_run, rewrite, pg_url, log_dir = job
+    with day_log(log_dir, f"project-{date_iso}"):
+        conn = psycopg2.connect(pg_url or resolve_pg_url())
+        try:
+            res = run_project_phase(conn, date_iso, date_iso, dry_run=dry_run,
+                                    warm_jobs=warm_jobs, rewrite=rewrite)
+            return {"date": date_iso, "error": None, **res}
+        except Exception as exc:  # isolate a bad day; keep the range going
+            import traceback
+            traceback.print_exc()
+            return {"date": date_iso, "projected": 0, "eligible": 0, "errors": {},
+                    "error": repr(exc)}
+        finally:
+            conn.close()
 
 
 def _marks_one_day(job):
-    date_iso, dry_run, rewrite, pg_url = job
-    conn = psycopg2.connect(pg_url or resolve_pg_url())
-    try:
-        if rewrite and not dry_run:
-            delete_eod_marks(conn, date_iso, date_iso)
-        n = _marks_for_day(conn, pd.Timestamp(date_iso).date(), CurvePricer(),
-                           dry_run=dry_run)
-        return {"date": date_iso, "marks": n, "error": None}
-    except Exception as exc:
-        return {"date": date_iso, "marks": 0, "error": repr(exc)}
-    finally:
-        conn.close()
+    date_iso, dry_run, rewrite, pg_url, log_dir = job
+    with day_log(log_dir, f"marks-{date_iso}"):
+        conn = psycopg2.connect(pg_url or resolve_pg_url())
+        try:
+            if rewrite and not dry_run:
+                delete_eod_marks(conn, date_iso, date_iso)
+            n = _marks_for_day(conn, pd.Timestamp(date_iso).date(), CurvePricer(),
+                               dry_run=dry_run)
+            return {"date": date_iso, "marks": n, "error": None}
+        except Exception as exc:
+            import traceback
+            traceback.print_exc()
+            return {"date": date_iso, "marks": 0, "error": repr(exc)}
+        finally:
+            conn.close()
 
 
 def run_range(phase, start, end, *, day_jobs=3, warm_jobs=4, dry_run=False,
-              rewrite=False, pg_url=None, executor_factory=None, business_days=True):
+              rewrite=False, pg_url=None, executor_factory=None, business_days=True,
+              log_dir=None):
     """Fan a phase out across independent days in a process pool."""
     url = pg_url or resolve_pg_url()
     freq = "B" if business_days else "D"
     dates = [d.date().isoformat() for d in pd.date_range(start, end, freq=freq)]
     if phase == "project":
-        worker, jobs = _project_one_day, [(d, warm_jobs, dry_run, rewrite, url) for d in dates]
+        worker = _project_one_day
+        jobs = [(d, warm_jobs, dry_run, rewrite, url, log_dir) for d in dates]
     elif phase == "marks":
-        worker, jobs = _marks_one_day, [(d, dry_run, rewrite, url) for d in dates]
+        worker = _marks_one_day
+        jobs = [(d, dry_run, rewrite, url, log_dir) for d in dates]
     else:
         raise ValueError(f"range driver supports project|marks, not {phase!r}")
 
@@ -369,6 +379,8 @@ def main() -> int:
     ap.add_argument("--day-jobs", type=int, default=0,
                     help=">0 fans days out across a process pool (project|marks)")
     ap.add_argument("--pg-url", default=None)
+    ap.add_argument("--log-dir", default=None,
+                    help="write one log file per day per phase (range mode)")
     args = ap.parse_args()
 
     if args.phase in ("project", "marks") and not (args.start and args.end):
@@ -383,7 +395,8 @@ def main() -> int:
         conn.close()
         results = run_range(args.phase, args.start, args.end, day_jobs=args.day_jobs,
                             warm_jobs=args.warm_jobs, dry_run=args.dry_run,
-                            rewrite=args.rewrite, pg_url=args.pg_url)
+                            rewrite=args.rewrite, pg_url=args.pg_url,
+                            log_dir=args.log_dir)
         n_err = sum(1 for r in results if r["error"])
         print(f"\nrange done: {len(results)} days, {n_err} day-errors")
         return 1 if n_err else 0

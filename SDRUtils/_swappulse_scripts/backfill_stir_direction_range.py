@@ -26,6 +26,7 @@ from SDRUtils._swappulse_scripts.backfill_stir_direction import (
     run_calibration, run_classification, write_tick_rows,
 )
 from SDRUtils._swappulse_scripts.ingest_usdswaps_tape import resolve_pg_url
+from SDRUtils.stir_flow.daylog import day_log
 
 
 def _classify_one_day(job):
@@ -34,20 +35,23 @@ def _classify_one_day(job):
     ``job`` = (date_iso, stats_records, warm_jobs, dry_run, pg_url).
     Returns a small summary dict (never the full rows -> cheap to pickle back).
     """
-    date_iso, stats_records, warm_jobs, dry_run, pg_url = job
+    date_iso, stats_records, warm_jobs, dry_run, pg_url, log_dir = job
     stats = pd.DataFrame(stats_records) if stats_records else pd.DataFrame()
-    conn = psycopg2.connect(pg_url or resolve_pg_url())
-    try:
-        rows = run_classification(conn, date_iso, stats, dry_run=dry_run,
-                                  warm_jobs=warm_jobs)
-        summary = {}
-        if rows:
-            summary = pd.DataFrame(rows)["dealer_direction"].value_counts().to_dict()
-        return {"date": date_iso, "n": len(rows), "summary": summary, "error": None}
-    except Exception as exc:  # isolate a bad day; keep the rest of the range going
-        return {"date": date_iso, "n": 0, "summary": {}, "error": repr(exc)}
-    finally:
-        conn.close()
+    with day_log(log_dir, f"classify-{date_iso}"):
+        conn = psycopg2.connect(pg_url or resolve_pg_url())
+        try:
+            rows = run_classification(conn, date_iso, stats, dry_run=dry_run,
+                                      warm_jobs=warm_jobs)
+            summary = {}
+            if rows:
+                summary = pd.DataFrame(rows)["dealer_direction"].value_counts().to_dict()
+            return {"date": date_iso, "n": len(rows), "summary": summary, "error": None}
+        except Exception as exc:  # isolate a bad day; keep the rest of the range going
+            import traceback
+            traceback.print_exc()
+            return {"date": date_iso, "n": 0, "summary": {}, "error": repr(exc)}
+        finally:
+            conn.close()
 
 
 def _dates(start, end):
@@ -56,7 +60,7 @@ def _dates(start, end):
 
 def run_range(start, end, *, day_jobs=3, warm_jobs=4, calib_start=None,
               calib_end=None, calib_mode="ticks-only", dry_run=False,
-              pg_url=None, executor_factory=None):
+              pg_url=None, executor_factory=None, log_dir=None):
     """Classify every date in [start, end] across a process pool.
 
     ``executor_factory`` lets tests inject a serial/mock executor; production
@@ -73,7 +77,7 @@ def run_range(start, end, *, day_jobs=3, warm_jobs=4, calib_start=None,
     conn.close()
     stats_records = stats.to_dict("records") if len(stats) else []
 
-    jobs = [(d, stats_records, warm_jobs, dry_run, url) for d in dates]
+    jobs = [(d, stats_records, warm_jobs, dry_run, url, log_dir) for d in dates]
     results = []
     if executor_factory is None:
         executor_factory = lambda: ProcessPoolExecutor(max_workers=day_jobs)
@@ -98,11 +102,13 @@ def main() -> int:
     ap.add_argument("--calib-end")
     ap.add_argument("--calib-mode", choices=["ticks-only", "full"], default="ticks-only")
     ap.add_argument("--dry-run", action="store_true")
+    ap.add_argument("--log-dir", default=None,
+                    help="write one log file per classified day")
     args = ap.parse_args()
     results = run_range(
         args.start, args.end, day_jobs=args.day_jobs, warm_jobs=args.warm_jobs,
         calib_start=args.calib_start, calib_end=args.calib_end,
-        calib_mode=args.calib_mode, dry_run=args.dry_run,
+        calib_mode=args.calib_mode, dry_run=args.dry_run, log_dir=args.log_dir,
     )
     n_err = sum(1 for r in results if r["error"])
     total = sum(r["n"] for r in results)
