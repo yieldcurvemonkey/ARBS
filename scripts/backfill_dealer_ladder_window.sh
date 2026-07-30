@@ -14,11 +14,21 @@
 #
 # CONCURRENCY
 # -----------
-# day_jobs is deliberately 2, not the module default of 3. Barchart's intraday
-# origin allows ~55 requests per rolling minute and the rate limiter is scoped per
-# fetch call, not per process, so concurrency multiplies straight through it. Each
-# curve-day now costs ~60 requests via the bulk warm path (it was ~28,700), and
-# 2 day-workers x 2 curves x ~60 keeps the sustained rate under the ceiling.
+# The phases have different bottlenecks, so they get different fan-outs.
+# CLASSIFY is vendor-bound: Barchart's intraday origin allows ~55 requests per
+# rolling minute and its limiter is scoped per fetch call, not per process, so
+# concurrency multiplies straight through it. Each curve-day now costs ~60 requests
+# via the bulk warm path (it was ~28,700), and 2 day-workers x 2 curves keeps the
+# sustained rate under the ceiling. PROJECT touches no vendor once the CurveStore is
+# warm -- profiled at 0.84 s per snapshot, essentially all rateslib instrument
+# construction and solving -- so it fans out wider.
+#
+# SERFF_BASIS is deliberately NOT projected (no --with-basis). Profiled per
+# snapshot: MEETING 0.11 s, FUTURES 0.24 s, FED_FUNDS 0.49 s, SERFF_BASIS 13.81 s
+# -- 94% of the cost, because it is the one space still needing ~60 vendor pricer
+# fetches per snapshot. Including it means 74-109 min per day instead of 4-8. The
+# plan makes SERFF_BASIS conditioning-only and bars it from being a test target,
+# and BT/dealer_ladder/controls.basis_bp is a better conditioner anyway.
 #
 # RESUMABILITY
 # ------------
@@ -31,7 +41,9 @@ set -uo pipefail
 PY="${PY:-C:/Users/chris/anaconda3/envs/stir/python.exe}"
 REPO="${REPO:-C:/Users/chris/clee/ARBS-ladder}"
 LOG_DIR="${LOG_DIR:-$REPO/notebooks/logs/dealer_ladder_backfill}"
-DAY_JOBS="${DAY_JOBS:-2}"
+DAY_JOBS="${DAY_JOBS:-2}"                    # classify: vendor-bound
+PROJECT_DAY_JOBS="${PROJECT_DAY_JOBS:-4}"    # project: pure CPU once warm
+MARKS_DAY_JOBS="${MARKS_DAY_JOBS:-3}"
 WARM_JOBS="${WARM_JOBS:-8}"
 PHASES="${PHASES:-classify project marks}"
 
@@ -76,7 +88,7 @@ for chunk in "${CHUNKS[@]}"; do
     echo "-- project $CS..$CE"
     "$PY" -u -m SDRUtils._swappulse_scripts.backfill_stir_ladder \
       --phase project --start "$CS" --end "$CE" \
-      --day-jobs "$DAY_JOBS" --warm-jobs "$WARM_JOBS" \
+      --day-jobs "$PROJECT_DAY_JOBS" --warm-jobs "$WARM_JOBS" \
       --log-dir "$LOG_DIR" --rewrite \
       > "$LOG_DIR/chunk-project-$tag.log" 2>&1
     rc=$?
@@ -88,7 +100,7 @@ for chunk in "${CHUNKS[@]}"; do
     echo "-- marks $CS..$CE"
     "$PY" -u -m SDRUtils._swappulse_scripts.backfill_stir_ladder \
       --phase marks --start "$CS" --end "$CE" \
-      --day-jobs "$DAY_JOBS" --log-dir "$LOG_DIR" --rewrite \
+      --day-jobs "$MARKS_DAY_JOBS" --log-dir "$LOG_DIR" --rewrite \
       > "$LOG_DIR/chunk-marks-$tag.log" 2>&1
     rc=$?
     echo "   marks rc=$rc  $(date '+%H:%M:%S')"
