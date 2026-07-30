@@ -128,3 +128,37 @@ def test_the_zq_cross_check_is_actually_run():
                   encoding="utf-8").read()
     assert 'run_g2(ctx, space="FED_FUNDS")' in runner
     assert 'run_g3(ctx, space="FED_FUNDS")' in runner
+
+
+# ============== two orchestration paths must not drift apart
+RUNNER_SRC = open(os.path.join(REPO, "scripts", "run_dealer_ladder_gates.py"),
+                  encoding="utf-8").read()
+
+
+def _stages_in_run_all() -> set:
+    block = GATES_SRC[GATES_SRC.index("def run_all("):]
+    return set(re.findall(r"(?<![\w.])(run_[a-z_0-9]+)\s*\(", block)) - {"run_all"}
+
+
+def _stages_in_runner() -> set:
+    return set(re.findall(r"gates\.(run_[a-z_0-9]+)\s*\(", RUNNER_SRC))
+
+
+def test_run_all_and_the_runner_script_call_the_same_stages():
+    """`gates.run_all` is a programmatic entry point that NOTHING currently calls -- not a
+    test, not a script, not the notebook -- while `scripts/run_dealer_ladder_gates.py` is
+    what actually produced the results. Two orchestration paths, one exercised, are a
+    standing invitation to drift: a stage added to the runner and forgotten in run_all
+    means a later caller silently gets a different set of gates than the report was built
+    from. They are pinned equal here rather than kept equal by attention."""
+    a, b = _stages_in_run_all(), _stages_in_runner()
+    assert a == b, (f"only in run_all: {sorted(a - b)}; "
+                    f"only in the runner: {sorted(b - a)}")
+
+
+def test_both_paths_include_every_gate_and_the_cross_check():
+    stages = _stages_in_runner()
+    for required in ("run_g0", "run_g1", "run_g2", "run_g3", "run_primary", "run_g5",
+                     "run_cross_check_comparison", "run_placebos", "run_label_free",
+                     "run_conditioning", "run_staleness_sensitivity", "run_grid"):
+        assert required in stages, required

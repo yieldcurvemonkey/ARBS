@@ -1267,6 +1267,15 @@ def run_all(ctx, conn=None, *, run_lockout=False, label_limit=0,
     ``run_lockout`` is OFF by default and must be turned on deliberately: the
     lockout is evaluated once, the claim is recorded in ``LOCKOUT_USED.json``, and a
     later run under a different specification is refused by ``lockout.claim``.
+
+    NOT the canonical path. ``scripts/run_dealer_ladder_gates.py`` is what produced the
+    reported results, and it adds per-stage timing and error isolation this does not: a
+    stage that raises here loses every later stage, whereas the runner records the failure
+    as an N/A verdict and continues. This exists as a programmatic entry point, and
+    ``tests/test_dealer_ladder_artifact_names.py`` pins the two to call the SAME set of
+    stages -- because two orchestration paths, only one of which is ever exercised, are a
+    standing invitation to drift, and a later caller would then silently get a different
+    set of gates than the report was built from.
     """
     ledger_sink = study.TrialLedger()
     res = {"g0": run_g0(ctx, conn, label_limit=label_limit)}
