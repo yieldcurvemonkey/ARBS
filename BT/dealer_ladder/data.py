@@ -81,6 +81,16 @@ SELECT p.unit_key, p.bucket_space, p.bucket_key, p.delta_dv01, p.as_of_date,
 FROM {LADDER_PRINTS_TABLE} p
 JOIN {DIRECTION_TABLE} d USING (unit_key)
 WHERE p.as_of_date BETWEEN %(start)s AND %(end)s
+-- A total order, not a convenience. Postgres guarantees no row order without ORDER BY, so
+-- two runs over identical data can return identical ROWS in a different SEQUENCE. Most of
+-- the study does not care -- panels are built by reindexing on timestamps -- but anything
+-- that consumes a seeded RNG positionally does: `placebo_sign_shuffle` permutes signs
+-- within each session and iterates `pd.unique(day)`, so a different row order spends the
+-- same seed differently and the placebo returns a different number. Measured 2026-07-30:
+-- the sign-shuffle arm moved from -0.4476 (n=1636) to -0.4644 (n=1631) between two runs of
+-- the same config, while the other five arms reproduced bit-identically because they are
+-- order-independent transforms. The three keys below are jointly unique.
+ORDER BY p.visibility_timestamp, p.unit_key, p.bucket_key
 """
 
 _OUTRIGHT_PLATFORM_SQL = """

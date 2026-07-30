@@ -455,9 +455,26 @@ def placebo_sign_shuffle(prints: pd.DataFrame, seed=0) -> pd.DataFrame:
         out["visibility_timestamp"]).dt.date
     vals = out["delta_dv01"].astype(float).to_numpy()
     signs = np.sign(vals)
-    for d in pd.unique(day):
-        m = (day == d).to_numpy()
-        signs[m] = rng.permutation(signs[m])
+
+    # Both loops below are ordered explicitly, because a seeded RNG consumed POSITIONALLY is
+    # only reproducible if the positions are. Iterating `pd.unique(day)` spends the seed in
+    # whatever order the rows happened to arrive, and permuting `signs[m]` in frame order
+    # lands those draws on whichever prints happened to sit there. Two runs over identical
+    # data then disagree: measured 2026-07-30, this arm moved -0.4476 (n=1636) to -0.4644
+    # (n=1631) between runs of the same config while every other placebo -- all
+    # order-independent transforms -- reproduced bit-identically.
+    #
+    # `data._PRINTS_SQL` now carries a total ORDER BY, which fixes the usual path. This is
+    # the second line of defence: a caller that re-orders, filters or concatenates the frame
+    # must not silently change what the placebo means.
+    key = (out["unit_key"].astype(str) + "|" + out["bucket_key"].astype(str)).to_numpy()
+    for d in sorted(pd.unique(day)):
+        idx = np.flatnonzero((day == d).to_numpy())
+        if idx.size < 2:
+            continue
+        stable = idx[np.argsort(key[idx], kind="stable")]
+        signs[stable] = rng.permutation(signs[stable])
+
     out["delta_dv01"] = np.abs(vals) * signs
     return out
 
