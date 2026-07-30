@@ -340,7 +340,55 @@ SR3, 0.25 bp FF), and a print a normal half-spread from mid scores `p_flip ≈ 0
 ≈ 0.95. The `expected`-vs-`unweighted` arm of the secondary grid therefore measures the
 **calibration**, not the signal, and must not be presented as a robustness result.
 
-### 8.4 Scope reductions taken deliberately
+**Since confirmed by measurement, and it is worse than inert.** That paragraph was an inference
+from the code path; G0 now measures the consequence directly on 750 compared units. Mean `p_flip`
+is **0.041** — the same order as the 0.023 predicted above — against an observed flip rate of
+**0.416**. Prints the model calls essentially certain (`p_flip` ≈ 2×10⁻¹¹) disagree with an
+independent mid **36%** of the time. Rank order is weakly right (Spearman **+0.129**), so the
+failure is in LEVEL rather than ordering, and that distinction decides what the quantity can be
+used for: it can rank prints, it cannot correct them.
+
+The resulting weight separates prints that agree (0.927) from prints that flip (0.907) by **0.02**
+against a mean of 0.919. So `expected` and `unweighted` are not two treatments of classification
+uncertainty — they are the same trade scaled by ~0.92, and **a grid row differing only in
+`weighting` is a duplicate, not a robustness check**. (`p_flip` may of course be modelling a
+different event, the classifier's rule misfiring rather than our mid being on the wrong side of an
+independent one. The defensible claim is the narrow one: it is not calibrated against
+independent-mid disagreement, which is the dominant label-error channel that can be measured.)
+
+### 8.4 The pre-registered rule is 80% one-sided
+
+The spec triggers on `|z| >= 1` but signs the position from the ladder **level**, because the
+hypothesis is about the level: a dealer long futures-equivalent must sell, so a positive ladder
+predicts a rate rise. With 84% of prints PAID and PAID meaning *negative* `delta_dv01`, that has a
+consequence worth measuring rather than assuming.
+
+Measured on the signed universe over Jan+Feb — 33 sessions, 3,168 decision minutes, 12 SR3
+buckets, 32,256 finite cells:
+
+- **94.6%** of all (minute, bucket) cells carry a **negative** ladder level;
+- **25.0%** of cells trigger at `|z| >= 1.0`;
+- **80.2% of triggers have level < 0**, so four trades in five take the short-rates side;
+- `sign(level) != sign(z)` on **20.0%** of triggers, and entirely one-directional —
+  `level < 0, z > 0` occurs 1,610 times and `level > 0, z < 0` occurs **zero** times, because a
+  positive level is rare enough to always sit far above the (negative) trailing mean.
+
+The imbalance rises steeply with maturity: SFRH26 54.1%, SFRM26 66.5%, SFRU26 82.2%, SFRZ27 93.2%,
+**SFRZ28 97.3%**. The front of the strip is near-balanced; the back is a constant short-rates bet.
+
+**What this does to the reading of G4.** A rule that is four-fifths one-sided earns much of its
+return from the window's rate drift, and neither the mean nor the t distinguishes that from a
+forecast. Day-blocked clustering handles the dependence correctly — the effective sample is
+sessions, not trades — but it does not answer the attribution question. So every primary result is
+reported with `share_long` beside it and against a **constant-position benchmark** that re-prices
+the identical entries, exits and costs at +1 and −1. **If the rule does not beat the better
+constant, the ladder is contributing nothing beyond direction**, whatever its t.
+
+None of this changes the pre-registration: level-signing is what the hypothesis states, and the
+threshold and horizon stay locked. The benchmark is a diagnostic set beside the test, and it
+rescues nothing — if G4 passes only because rates fell over the window, the benchmark says so.
+
+### 8.5 Scope reductions taken deliberately
 
 - **`SERFF_BASIS` is not projected.** Measured at 13.81 s of the 14.6 s per-snapshot risk-model
   cost — 94% — because it is the one space still needing ~60 vendor pricer fetches per snapshot.
@@ -354,7 +402,7 @@ SR3, 0.25 bp FF), and a print a normal half-spread from mid scores `p_flip ≈ 0
   in the secondary grid, and is barred from ever being a test *target* — it has no traded
   instrument, so such a test would be circular by construction.
 
-### 8.5 Power
+### 8.6 Power
 
 Independent observations are set by the signal's integration window, not the number of minute
 bars: ≈150 independent score epochs in-sample at a 90-minute half-life, ≈56 at 240. At that scale
