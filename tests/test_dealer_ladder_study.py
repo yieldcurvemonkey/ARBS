@@ -48,12 +48,15 @@ def test_align_long_no_overlap():
 
 # ------------------------------------------------------------- G2 lead-lag
 def test_hy_lead_lag_detects_a_planted_lead():
-    """Y is a delayed echo of X; the estimator must report a POSITIVE lls."""
+    """Y is a delayed echo of X; the estimator must report a POSITIVE lls.
+
+    BOTH sides are LEVELS: hy_corr differences them itself.
+    """
     idx = _grid(days=2, minutes=1, per_day=300)
     rng = np.random.default_rng(0)
     x = pd.Series(rng.normal(size=len(idx)), index=idx).cumsum()
     y = x.shift(10).bfill()                              # X leads Y by 10 minutes
-    ll = study.hy_lead_lag_by_day(pd.DataFrame({"A": x.diff()}),
+    ll = study.hy_lead_lag_by_day(pd.DataFrame({"A": x}),
                                   pd.DataFrame({"A": y}),
                                   lags=(-30.0, -10.0, 0.0, 10.0, 30.0))
     assert len(ll) == 2
@@ -62,10 +65,32 @@ def test_hy_lead_lag_detects_a_planted_lead():
     assert (ll["peak_lag_min"] > 0).all(), ll
 
 
+def test_hy_on_synchronous_levels_is_the_increment_correlation():
+    """Pins the LEVELS contract concretely.
+
+    With identical observation times, the Hayashi-Yoshida estimator reduces to the
+    ordinary correlation of the INCREMENTS -- which is why the caller hands it the
+    ladder LEVEL and the CUMULATIVE flow, and why handing it already-differenced
+    series would estimate a different object (the covariance of second differences).
+    """
+    from BT.dealer_ladder import hy
+
+    rng = np.random.default_rng(5)
+    idx = _grid(days=1, minutes=1, per_day=250)
+    dx = rng.normal(size=len(idx))
+    dy = 0.7 * dx + 0.7 * rng.normal(size=len(idx))
+    x = pd.Series(dx, index=idx).cumsum()
+    y = pd.Series(dy, index=idx).cumsum()
+
+    hy_rho = hy.hy_corr(x.index, x.to_numpy(), y.index, y.to_numpy())
+    inc_rho = float(np.corrcoef(np.diff(x.to_numpy()), np.diff(y.to_numpy()))[0, 1])
+    assert hy_rho == pytest.approx(inc_rho, abs=0.02), (hy_rho, inc_rho)
+
+
 def test_hy_lead_lag_reports_no_lead_on_independent_series():
     idx = _grid(days=3, minutes=1, per_day=200)
     rng = np.random.default_rng(1)
-    x = pd.DataFrame({"A": rng.normal(size=len(idx))}, index=idx)
+    x = pd.DataFrame({"A": rng.normal(size=len(idx)).cumsum()}, index=idx)
     y = pd.DataFrame({"A": rng.normal(size=len(idx)).cumsum()}, index=idx)
     summ = study.summarise_lead_lag(study.hy_lead_lag_by_day(x, y))
     assert abs(summ["t"]) < 3.0, summ

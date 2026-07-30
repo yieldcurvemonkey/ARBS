@@ -255,3 +255,48 @@ def test_attenuate_matches_the_2a_minus_1_rule(a, factor):
 
 def test_attenuate_at_chance_accuracy_erases_the_edge():
     assert stats.attenuate(5.0, 0.5) == pytest.approx(0.0)
+
+
+# ------------------------------------ vectorised cluster t (the stepdown's hot path)
+def test_cluster_t_matrix_matches_the_scalar_estimator_column_by_column():
+    """The vectorised form is only usable if it is the SAME estimator."""
+    rng = np.random.default_rng(0)
+    n, k, nb = 400, 7, 25
+    blocks = rng.integers(0, nb, size=n)
+    x = rng.normal(size=(n, k)) + rng.normal(size=nb)[blocks][:, None]
+    vec = stats._cluster_t_matrix(x, blocks)
+    for j in range(k):
+        scalar = stats.cluster_mean_t(x[:, j], blocks)["t"]
+        assert vec[j] == pytest.approx(scalar, rel=1e-12, abs=1e-12), j
+
+
+def test_cluster_t_matrix_handles_per_column_nans():
+    rng = np.random.default_rng(1)
+    blocks = np.repeat(np.arange(20), 5)
+    x = rng.normal(size=(100, 3))
+    x[:40, 1] = np.nan                      # column 1 has far fewer observations
+    vec = stats._cluster_t_matrix(x, blocks)
+    for j in range(3):
+        scalar = stats.cluster_mean_t(x[:, j], blocks)["t"]
+        assert vec[j] == pytest.approx(scalar, rel=1e-10, abs=1e-10), j
+
+
+def test_cluster_t_matrix_needs_two_blocks():
+    x = np.random.default_rng(2).normal(size=(10, 2))
+    assert np.isnan(stats._cluster_t_matrix(x, np.zeros(10, dtype=int))).all()
+
+
+def test_cluster_t_matrix_accepts_a_1d_column():
+    x = np.random.default_rng(3).normal(size=50)
+    blocks = np.repeat(np.arange(10), 5)
+    out = stats._cluster_t_matrix(x, blocks)
+    assert out.shape == (1,)
+    assert out[0] == pytest.approx(stats.cluster_mean_t(x, blocks)["t"])
+
+
+def test_cluster_t_matrix_all_nan_column_is_nan_not_a_crash():
+    blocks = np.repeat(np.arange(10), 5)
+    x = np.column_stack([np.random.default_rng(4).normal(size=50),
+                         np.full(50, np.nan)])
+    out = stats._cluster_t_matrix(x, blocks)
+    assert np.isfinite(out[0]) and np.isnan(out[1])

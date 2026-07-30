@@ -301,15 +301,19 @@ def run_g1(ctx, *, space=None, sample_grid=200) -> dict:
 def run_g2(ctx, *, space=None) -> dict:
     """Does a signed ladder innovation PRECEDE measurable signed futures flow?"""
     space = space or ctx.config.signal.space
+    level = ctx.signal[space]["level"]
     inc = ctx.signal[space]["increment"]
-    closes = ctx.rates_bp.get(space, pd.DataFrame())
+    rates = ctx.rates_bp.get(space, pd.DataFrame())
     vols = ctx.volumes.get(space, pd.DataFrame())
     out = {}
-    if inc.empty or closes.empty or vols.empty:
+    if level.empty or rates.empty or vols.empty:
         return {"verdict": _verdict("G2", None, "no data")}
 
-    flow = data.signed_volume(-closes, vols)   # price direction = -rate direction
-    ll = study.hy_lead_lag_by_day(inc, flow)
+    # sign volume by PRICE direction: price moves opposite to rate, hence -rates
+    flow = data.signed_volume(-rates, vols)
+    # hy_corr differences its inputs, so the LADDER LEVEL and the CUMULATIVE flow
+    # are what produce increment-vs-signed-volume inside. See hy_lead_lag_by_day.
+    ll = study.hy_lead_lag_by_day(level, flow.cumsum())
     out["lead_lag"] = ll
     _write(ctx, f"g2_lead_lag_{space}", ll)
     out["lead_lag_summary"] = pd.DataFrame([study.summarise_lead_lag(ll)])

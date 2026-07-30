@@ -111,6 +111,51 @@ def day_blocked_ci(values, blocks, *, n_boot=2000, alpha=0.05, seed=0) -> dict:
 # --------------------------------------------------------------------------
 # Romano-Wolf stepdown
 # --------------------------------------------------------------------------
+def _cluster_t_matrix(x, blocks) -> np.ndarray:
+    """Day-clustered t for EVERY column of ``x`` at once.
+
+    Same estimator as ``cluster_mean_t`` — verified equal by test — but vectorised
+    across columns. The stepdown needs one of these per bootstrap draw per column,
+    which at a few hundred variants and a couple of thousand draws is over half a
+    million calls; done column-by-column in Python that is the whole runtime of the
+    gate.
+
+    NaNs are handled per column: a column's own finite mask sets its own n.
+    """
+    x = np.asarray(x, dtype=float)
+    b = np.asarray(blocks)
+    if x.ndim == 1:
+        x = x[:, None]
+    codes, _uniq = pd.factorize(b, sort=True)
+    n_blocks = codes.max() + 1 if codes.size else 0
+    if n_blocks < 2:
+        return np.full(x.shape[1], np.nan)
+
+    ok = np.isfinite(x)
+    n = ok.sum(axis=0).astype(float)
+    total = np.where(ok, x, 0.0).sum(axis=0)
+    with np.errstate(invalid="ignore", divide="ignore"):
+        mean = total / n
+    dev = np.where(ok, x - mean[None, :], 0.0)
+
+    sums = np.zeros((n_blocks, x.shape[1]), dtype=float)
+    np.add.at(sums, codes, dev)
+    # The small-sample correction must use each column's OWN block count. A column
+    # with NaNs can be missing whole blocks, and using the panel-wide count there
+    # silently changes its SE -- measured as a 2% t discrepancy against the scalar
+    # estimator before this was per-column.
+    counts = np.zeros((n_blocks, x.shape[1]), dtype=float)
+    np.add.at(counts, codes, ok.astype(float))
+    g = (counts > 0).sum(axis=0).astype(float)
+    with np.errstate(invalid="ignore", divide="ignore"):
+        scale = np.where(g > 1, g / (g - 1.0), np.nan)
+        var = scale * (sums ** 2).sum(axis=0) / (n ** 2)
+        se = np.sqrt(np.where(var > 0, var, np.nan))
+        t = mean / se
+    t[(n < 2) | (g < 2)] = np.nan
+    return t
+
+
 def romano_wolf(panel: pd.DataFrame, blocks, *, n_boot=2000, seed=0,
                 two_sided=True) -> pd.DataFrame:
     """Family-wise adjusted p-values over the columns of ``panel``.
@@ -149,11 +194,8 @@ def romano_wolf(panel: pd.DataFrame, blocks, *, n_boot=2000, seed=0,
     t_star = np.full((n_boot, len(cols)), np.nan, dtype=float)
     for i in range(n_boot):
         idx = resample_blocks(b, rng)
-        sub, subb = vals[idx], b[idx]
-        for j in range(len(cols)):
-            # recentre on the observed mean -> a null distribution
-            r = cluster_mean_t(sub[:, j] - means[j], subb)
-            t_star[i, j] = r["t"]
+        # recentre on the observed mean -> a null distribution, all columns at once
+        t_star[i, :] = _cluster_t_matrix(vals[idx] - means[None, :], b[idx])
 
     absobs = np.abs(t_obs) if two_sided else t_obs
     absstar = np.abs(t_star) if two_sided else t_star

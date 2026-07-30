@@ -57,9 +57,18 @@ def hy_lead_lag_by_day(x_panel: pd.DataFrame, y_panel: pd.DataFrame, *,
                        lags=hy.DEFAULT_LAGS_MINUTES) -> pd.DataFrame:
     """Per (session, bucket) Hayashi-Yoshida lead-lag of X against Y.
 
-    X is the ladder INCREMENT series, Y the futures series. Positive LLS means X
-    leads Y — see ``hy``'s sign convention, which was pinned numerically rather
-    than argued.
+    **PASS LEVELS, NOT INCREMENTS.** ``hy.hy_corr`` differences both inputs itself
+    (``dx = np.diff(xv)``), because the Hayashi-Yoshida estimator is defined on
+    increments living on the intervals between observations. So the research plan's
+    requirement that the ladder enter as INCREMENTS and never as EWMA levels is
+    satisfied by handing it the LEVEL: the differencing happens inside. Handing it
+    an already-differenced series would silently compute second differences and the
+    statistic would measure nothing meaningful. Likewise the futures side must be a
+    CUMULATIVE signed-volume series so that its internal difference is the per-bar
+    signed volume.
+
+    X is the ladder, Y the futures side. Positive LLS means X leads Y — see ``hy``'s
+    sign convention, which was pinned numerically rather than argued.
 
     Returns one row per (day, bucket) with the LLS, the peak lag, and the signed
     correlation AT that peak. Reporting both matters: LLS measures TIMING and is
