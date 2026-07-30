@@ -289,6 +289,25 @@ accuracy is bounded above by **79.6%** and the signed exposure retains at most *
 rather than foresight — the grid was fixed before this was measured — but it means the grid does
 not move, which is the only thing that matters now that the lockout rule is in force.
 
+**And the mechanism meant to absorb this uncertainty does not work.** The ladder's `expected`
+weighting is `1 − 2·p_flip`, so a print believed likely to be mislabelled is carried smaller. That
+is only an improvement on `unweighted` if `p_flip` tracks disagreement, and it does not. On the 750
+compared units carrying one, **mean `p_flip` = 0.041 against an observed flip rate of 0.416** — off
+by a factor of ten — and prints the model calls essentially certain (`p_flip` ≈ 2×10⁻¹¹) disagree
+with an independent mid **36%** of the time. Rank order is weakly right (Spearman +0.129), so the
+failure is in LEVEL rather than ordering, which decides what the quantity can be used for: it can
+rank prints, it cannot correct them.
+
+The practical consequence is for reading the secondary grid. `expected` applies a mean weight of
+0.919 and separates prints that agree (0.927) from prints that flip (0.907) by **0.02**. It is a
+near-uniform 8% haircut. So `expected` and `unweighted` are not two competing treatments of
+classification uncertainty — they are the same trade scaled by ~0.92, and **neither addresses the
+35–41% disagreement**. A grid row that differs only in `weighting` should be read as a duplicate,
+not as a robustness check. (`p_flip` may of course be modelling a different event — the classifier's
+rule misfiring rather than our mid being on the wrong side of an independent one. The defensible
+claim is the narrow one: it is not calibrated against independent-mid disagreement, which is the
+dominant label-error channel that can be measured at all.)
+
 **Read the a = 0.8 row as UNREACHABLE, not as a scenario.** The measured disagreement puts accuracy
 at *most* **0.796** on the curve-clean stratum, so that row sits marginally *above* what the data
 admits and must not be read as an optimistic-but-plausible case. The honest centre of the grid is a = 0.6–0.7.
