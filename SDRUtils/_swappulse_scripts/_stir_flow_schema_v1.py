@@ -73,6 +73,11 @@ CREATE TABLE IF NOT EXISTS {TICK_TABLE} (
     PRIMARY KEY (tenor_bucket, structure_type, dv01_bucket, as_of_date)
 )""",
     f"CREATE INDEX IF NOT EXISTS idx_stir_tick_asof ON {TICK_TABLE} (as_of_date)",
+    # code_vintage (added 2026-07-29): the git revision that classified the row.
+    # 07/02, 07/09-13 and 07/14 were each written by a different revision, which
+    # is why 07/14 came out at 974 units against ~560-690 on comparable days.
+    f"ALTER TABLE {DIRECTION_TABLE} ADD COLUMN IF NOT EXISTS code_vintage TEXT",
+    f"CREATE INDEX IF NOT EXISTS idx_stir_dir_vintage ON {DIRECTION_TABLE} (code_vintage)",
 ]
 
 

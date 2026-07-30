@@ -36,6 +36,12 @@ CREATE TABLE IF NOT EXISTS {BOOK_MARKS_TABLE} (
 )""",
     f"CREATE INDEX IF NOT EXISTS idx_book_marks_ts ON {BOOK_MARKS_TABLE} (mark_ts)",
     f"CREATE INDEX IF NOT EXISTS idx_book_marks_kind ON {BOOK_MARKS_TABLE} (mark_kind, mark_ts)",
+    # code_vintage (added 2026-07-29): the git revision that wrote the row.
+    # These tables are upserted in place, so without it a table silently becomes
+    # a mixture of code vintages -- see SDRUtils.stir_flow.vintage.
+    f"ALTER TABLE {LADDER_PRINTS_TABLE} ADD COLUMN IF NOT EXISTS code_vintage TEXT",
+    f"ALTER TABLE {BOOK_MARKS_TABLE} ADD COLUMN IF NOT EXISTS code_vintage TEXT",
+    f"CREATE INDEX IF NOT EXISTS idx_ladder_prints_vintage ON {LADDER_PRINTS_TABLE} (code_vintage)",
 ]
 
 

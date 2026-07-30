@@ -19,6 +19,7 @@ import pandas as pd
 
 from SDRUtils.stir_flow import config
 from SDRUtils.stir_flow import ladder_conventions as conv
+from SDRUtils.stir_flow import vintage as _vintage
 
 N_MEETINGS = 12
 N_SFR = 12
@@ -222,6 +223,7 @@ LADDER_COLUMNS = [
     "unit_key", "bucket_space", "bucket_key", "delta_dv01", "as_of_date",
     "execution_timestamp", "visibility_timestamp", "p_flip",
     "direction_confidence", "curve_suspect_trade", "is_block", "dv01",
+    "code_vintage",
 ]
 
 
@@ -287,6 +289,7 @@ def project_unit(unit, direction_row, risk_models, pricer, curve_name, snap_ts):
         curve_suspect_trade=bool(direction_row.get("curve_suspect_trade")),
         is_block=bool(first.get("is_block")),
         dv01=direction_row.get("structure_dv01"),
+        code_vintage=_vintage.code_vintage(),
     )
 
     rows = []
@@ -314,5 +317,5 @@ def project_unit(unit, direction_row, risk_models, pricer, curve_name, snap_ts):
         npv += -sign * lp.npv_pay          # received (+1) -> value = -npv_pay
     entry = dict(unit_key=direction_row["unit_key"], mark_ts=snap_ts,
                  mark_kind="ENTRY", npv_usd=npv, pnl_since_entry_usd=0.0,
-                 curve_name=curve_name)
+                 curve_name=curve_name, code_vintage=_vintage.code_vintage())
     return rows, entry

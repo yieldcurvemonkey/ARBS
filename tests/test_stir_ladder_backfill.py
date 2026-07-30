@@ -93,3 +93,137 @@ def test_write_mark_rows_upsert_sql():
     )])
     assert "ON CONFLICT (unit_key, mark_ts) DO UPDATE" in captured["sql"]
     assert captured["n"] == 1
+
+
+# --------------------------- code vintage stamping ---------------------------
+def test_code_vintage_is_a_short_sha_or_unknown():
+    from SDRUtils.stir_flow.vintage import UNKNOWN_VINTAGE, code_vintage
+
+    v = code_vintage()
+    assert isinstance(v, str) and v
+    if v == UNKNOWN_VINTAGE:
+        return
+    sha = v[:-len("+dirty")] if v.endswith("+dirty") else v
+    assert len(sha) == 12 and all(c in "0123456789abcdef" for c in sha), v
+
+
+def test_code_vintage_is_resolved_once():
+    """Cached: a per-row subprocess call would dominate a 6-month backfill."""
+    from SDRUtils.stir_flow.vintage import code_vintage
+
+    assert code_vintage() is code_vintage()
+
+
+def test_ladder_schema_adds_code_vintage_idempotently():
+    from SDRUtils._swappulse_scripts import _stir_ladder_schema_v1 as schema
+
+    ddl = "\n".join(schema.DDL_STATEMENTS)
+    for table in (schema.LADDER_PRINTS_TABLE, schema.BOOK_MARKS_TABLE):
+        assert f"ALTER TABLE {table} ADD COLUMN IF NOT EXISTS code_vintage TEXT" in ddl
+
+
+def test_direction_schema_adds_code_vintage_idempotently():
+    from SDRUtils._swappulse_scripts import _stir_flow_schema_v1 as schema
+
+    ddl = "\n".join(schema.DDL_STATEMENTS)
+    assert (f"ALTER TABLE {schema.DIRECTION_TABLE} "
+            "ADD COLUMN IF NOT EXISTS code_vintage TEXT") in ddl
+
+
+def test_written_columns_carry_code_vintage():
+    from SDRUtils._swappulse_scripts import backfill_stir_ladder as bf
+    from SDRUtils._swappulse_scripts import backfill_stir_direction as bd
+    from SDRUtils.stir_flow.ladder import LADDER_COLUMNS
+
+    assert "code_vintage" in LADDER_COLUMNS
+    assert "code_vintage" in bf.MARK_COLUMNS
+    assert "code_vintage" in bd.DIRECTION_COLUMNS
+
+
+# ------------------------------ rewrite deletes ------------------------------
+class _RecordingCursor:
+    def __init__(self, log):
+        self.log = log
+        self.rowcount = 7
+
+    def execute(self, sql, params=None):
+        self.log.append((" ".join(sql.split()), params))
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *a):
+        return False
+
+
+class _RecordingConn:
+    def __init__(self):
+        self.log = []
+        self.commits = 0
+
+    def cursor(self):
+        return _RecordingCursor(self.log)
+
+    def commit(self):
+        self.commits += 1
+
+
+def test_delete_projections_clears_rows_and_entry_marks_only():
+    """ENTRY marks must go too: their PK includes mark_ts, so a re-snap would
+    otherwise leave the old mark behind as a phantom entry price."""
+    from SDRUtils._swappulse_scripts import backfill_stir_ladder as bf
+
+    conn = _RecordingConn()
+    n_rows, n_marks = bf.delete_projections(conn, "2026-07-01", "2026-07-31")
+    sqls = [s for s, _p in conn.log]
+    assert len(sqls) == 2
+    assert "mark_kind = 'ENTRY'" in sqls[0] and f"DELETE FROM {bf.BOOK_MARKS_TABLE}" in sqls[0]
+    assert "EOD" not in sqls[0]
+    assert f"DELETE FROM {bf.LADDER_PRINTS_TABLE}" in sqls[1]
+    assert n_rows == 7 and n_marks == 7 and conn.commits == 1
+
+
+def test_delete_eod_marks_is_scoped_to_eod_and_et_dates():
+    from SDRUtils._swappulse_scripts import backfill_stir_ladder as bf
+
+    conn = _RecordingConn()
+    assert bf.delete_eod_marks(conn, "2026-07-01", "2026-07-31") == 7
+    sql, params = conn.log[0]
+    assert "mark_kind = 'EOD'" in sql
+    assert "America/New_York" in sql
+    assert params == {"s": "2026-07-01", "e": "2026-07-31"}
+
+
+# ------------------------------ range driver ---------------------------------
+def test_run_range_dispatches_business_days_and_isolates_errors(monkeypatch):
+    from concurrent.futures import ThreadPoolExecutor
+
+    from SDRUtils._swappulse_scripts import backfill_stir_ladder as bf
+
+    seen = []
+
+    def fake_worker(job):
+        date_iso = job[0]
+        seen.append(date_iso)
+        if date_iso == "2026-07-02":
+            return {"date": date_iso, "projected": 0, "eligible": 0, "errors": {},
+                    "error": "boom"}
+        return {"date": date_iso, "projected": 5, "eligible": 5, "errors": {}, "error": None}
+
+    monkeypatch.setattr(bf, "_project_one_day", fake_worker)
+    res = bf.run_range("project", "2026-07-01", "2026-07-06", day_jobs=2,
+                       pg_url="dummy",
+                       executor_factory=lambda: ThreadPoolExecutor(max_workers=2))
+    # 07/04 Sat and 07/05 Sun are skipped by the business-day grid
+    assert sorted(seen) == ["2026-07-01", "2026-07-02", "2026-07-03", "2026-07-06"]
+    assert [r["date"] for r in res] == sorted(seen)          # results come back ordered
+    assert sum(1 for r in res if r["error"]) == 1            # bad day isolated
+
+
+def test_run_range_rejects_snapshot_phase():
+    import pytest
+
+    from SDRUtils._swappulse_scripts import backfill_stir_ladder as bf
+
+    with pytest.raises(ValueError, match=r"project\|marks"):
+        bf.run_range("snapshot", "2026-07-01", "2026-07-01")

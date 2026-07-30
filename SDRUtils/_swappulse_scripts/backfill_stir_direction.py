@@ -28,6 +28,7 @@ from SDRUtils.stir_flow.confidence import (
     TickStats, apply_tick_rule, score_off_market, score_on_market,
 )
 from SDRUtils.stir_flow.pricing import CurvePricer
+from SDRUtils.stir_flow.vintage import code_vintage
 from SDRUtils.stir_flow.trade_selection import (
     ALL_PKG_LEGS_SQL, ELIGIBLE_LEGS_SQL, build_units, is_excluded_unit,
 )
@@ -41,6 +42,7 @@ DIRECTION_COLUMNS = [
     "dealer_bought", "direction_confidence", "p_flip", "dealer_charge",
     "dealer_charge_bps", "structure_dv01", "notional", "dv01", "tenor_query",
     "tenor_bucket", "dv01_bucket", "curve_suspect_trade", "quality_flags",
+    "code_vintage",
 ]
 EMPTY_DIRECTION_ROW = {c: None for c in DIRECTION_COLUMNS}
 
@@ -77,6 +79,7 @@ def classify_units(units, pricer, tick_lookup, prev_rate_lookup):
             dv01_bucket=config.assign_dv01_bucket(total_dv01),
             tenor_query=f"{first['effective_date']}->{unit.legs.iloc[-1]['expiration_date']}",
             quality_flags=[],
+            code_vintage=code_vintage(),
         )
         try:
             pricings = []

@@ -11,6 +11,7 @@ import pytz
 from SDRUtils.stir_flow import config
 from SDRUtils.stir_flow import ladder_conventions as conv
 from SDRUtils.stir_flow import ladder_state
+from SDRUtils.stir_flow import vintage
 
 NY = pytz.timezone("America/New_York")
 
@@ -103,5 +104,6 @@ def eod_mark_rows(units_by_key, direction_rows, entry_marks, pricer, mark_date,
         npv = reval_unit(unit.legs, signs, pricer, curve_name, mark_ts)
         entry = (entry_marks or {}).get(key, 0.0)
         rows.append(dict(unit_key=key, mark_ts=mark_ts, mark_kind="EOD", npv_usd=npv,
-                         pnl_since_entry_usd=npv - entry, curve_name=curve_name))
+                         pnl_since_entry_usd=npv - entry, curve_name=curve_name,
+                         code_vintage=vintage.code_vintage()))
     return rows
