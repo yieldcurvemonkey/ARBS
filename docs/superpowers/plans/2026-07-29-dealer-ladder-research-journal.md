@@ -650,3 +650,42 @@ proof our label is wrong — neither curve is truth, and the accuracy ceiling as
 error on disagreements. Coverage misses (12.9%) are dominated by `STALE_INDEPENDENT_CURVE`, whose
 source runs Monday 00:01 to Friday 11:59, so hours 0 and 23 ET are almost uncovered and the
 comparison is not uniform across the session. **To be re-run on the full window as the real G0.**
+
+#### February replicates it, and sharpens the skew reading (2026-07-30 03:20)
+
+Run on February the moment its classify chunk finished. **Provisional**: the projection phase was
+still running, so `arbs_stir_ladder_prints_v1` covered only 15 of the month's sessions when this
+ran, and it must be re-run on the complete month.
+
+| | January | February (partial) |
+|---|---|---|
+| sessions / on-market signed units | 14 / 5,026 | 15 / 4,718 |
+| sampled → compared (coverage) | 560 → 488 (87.1%) | 600 → 524 (87.3%) |
+| **flip rate** | **33.4%** | **40.3%** |
+| PAID share, our mid | 86.7% | 81.7% |
+| **PAID share, independent mid** | **60.7%** | **48.7%** |
+| mean mid offset (bp) | −0.469 | −0.499 |
+| median offset (bp) | −0.278 | −0.320 |
+| share \|offset\| > 0.25bp | 63.9% | 67.2% |
+| **mechanism agreement** | **98.4%** | **96.9%** |
+| **false negatives** | **0** | **0** |
+
+Three things this replication settles.
+
+**The mid offset is a stable property of our curve, not a January accident.** Mean −0.47 then
+−0.50 bp, median −0.28 then −0.32, with our curve above Citi's both months. Two thirds of prints
+have a curve gap wider than the quarter-basis-point edge the direction rule is trying to read.
+
+**On February data the PAID skew is essentially ALL artefact.** The independent mid gives
+**48.7% PAID — a coin flip**. In January it left 60.7%, so some skew survived there; in February
+none does. Whatever "dealers are overwhelmingly paying" is measuring, it is not something both
+curves see.
+
+**The mechanism holds out of sample.** `|offset| > |distance to mid|` again predicts the observed
+flip with **zero false negatives** in every stratum, and again agreement is weakest in the tightest
+`|s2m|` quintile (87.6%) and exactly 100% in the widest. Every flip is the curve gap.
+
+**And `direction_confidence` is worse than uninformative.** January: HIGH 33.7%, MEDIUM 44.7%,
+LOW 30.3%. February: HIGH **49.0%**, MEDIUM 61.7%, LOW **24.7%** — the HIGH tier flips *twice as
+often* as the LOW tier. Whatever the confidence label ranks, it is not agreement with an
+independent mid, and it must not be used to select a cleaner stratum for this failure.

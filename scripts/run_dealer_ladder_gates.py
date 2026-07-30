@@ -52,6 +52,9 @@ def main() -> int:
     ap.add_argument("--force-lockout", action="store_true",
                     help="re-register against an ALREADY-BURNED holdout. Only with a "
                          "documented reason: the override is stamped into the ledger.")
+    ap.add_argument("--bars-cache", default=None,
+                    help="memoise the settled-window minute-bar pull here, "
+                         "so a re-run costs nothing at the vendor")
     ap.add_argument("--skip-grid", action="store_true",
                     help="skip the secondary family (the slowest stage)")
     args = ap.parse_args()
@@ -70,7 +73,7 @@ def main() -> int:
     conn = data.connect()
     t0 = time.time()
     ctx = gates.load_context(conn, conf, results_dir=args.results_dir,
-                            show_progress=True)
+                             show_progress=True, bars_cache=args.bars_cache)
     print(f"context loaded in {time.time() - t0:.0f}s: "
           f"{ctx.prints['unit_key'].nunique()} signed units, "
           f"{len(ctx.grid)} decisions")

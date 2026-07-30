@@ -24,6 +24,8 @@ leg when maturities tie.
 """
 from __future__ import annotations
 
+import os
+
 import numpy as np
 import pandas as pd
 
@@ -34,6 +36,8 @@ from SDRUtils._swappulse_scripts._stir_ladder_schema_v1 import (
 from SDRUtils.stir_flow.trade_selection import venue_status
 
 from BT.dealer_ladder import config as cfg
+
+NY = "America/New_York"
 
 
 def connect(pg_url=None):
@@ -296,8 +300,33 @@ def cme_to_bucket(cme_symbol: str) -> str:
     return s
 
 
+BARS_CACHE_ENV = "DEALER_LADDER_BARS_CACHE"
+
+
+def _bars_cache_key(symbols, start, end, fields) -> str:
+    import hashlib
+    blob = "|".join([",".join(sorted(map(str, symbols))),
+                     pd.Timestamp(start).isoformat(),
+                     pd.Timestamp(end).isoformat(),
+                     ",".join(sorted(fields))])
+    return hashlib.sha256(blob.encode("utf-8")).hexdigest()[:16]
+
+
+def _bars_window_is_settled(end) -> bool:
+    """Only a window that ENDED before today is safe to cache.
+
+    Bars for a session still in progress keep arriving, so caching them would freeze a
+    partial day and every later run would silently read the truncated version. Past
+    sessions are immutable, which is the whole reason a cache is safe here at all.
+    """
+    end_et = pd.Timestamp(end)
+    end_et = (end_et.tz_convert(NY) if end_et.tzinfo is not None
+              else end_et.tz_localize(NY))
+    return end_et.date() < pd.Timestamp.now(tz=NY).date()
+
+
 def load_futures_minutes(symbols, start, end, *, fields=("Close", "Volume"),
-                         show_tqdm=False) -> dict:
+                         show_tqdm=False, cache_dir=None) -> dict:
     """Minute bars per contract over [start, end]. Returns {field: wide DataFrame}.
 
     ``start``/``end`` MUST be tz-aware — the fetcher raises on naive bounds, and
@@ -315,6 +344,26 @@ def load_futures_minutes(symbols, start, end, *, fields=("Close", "Volume"),
 
     if pd.Timestamp(start).tzinfo is None or pd.Timestamp(end).tzinfo is None:
         raise ValueError("start/end must be tz-aware (the Barchart fetcher requires it)")
+
+    # A whole-window minute pull is the single largest vendor cost in the gate run, and
+    # the gates are re-run: after a fix, to re-render, to add a stage. Historical bars
+    # are immutable, so caching them makes a re-run free -- but ONLY once the window has
+    # ended, because a session still in progress keeps arriving and would be frozen
+    # half-written.
+    cache_dir = cache_dir or os.environ.get(BARS_CACHE_ENV)
+    cache_path = None
+    if cache_dir and _bars_window_is_settled(end):
+        os.makedirs(cache_dir, exist_ok=True)
+        cache_path = os.path.join(
+            cache_dir, f"bars_{_bars_cache_key(symbols, start, end, fields)}.pkl")
+        if os.path.exists(cache_path):
+            try:
+                cached = pd.read_pickle(cache_path)
+                if isinstance(cached, dict) and set(fields) <= set(cached):
+                    return {f: cached[f] for f in fields}
+            except Exception:
+                pass            # a damaged cache must cost a refetch, never a wrong answer
+
     mdp = STIRFutureMDP(source="BARCHART_STIRF-RL")
     fetcher = mdp._get_barchart_fetcher(required_concurrency=8)
     per_symbol = fetcher.barchart_timeseries_api(
@@ -335,6 +384,13 @@ def load_futures_minutes(symbols, start, end, *, fields=("Close", "Volume"),
     for f in fields:
         cols = out[f]
         result[f] = (pd.DataFrame(cols).sort_index() if cols else pd.DataFrame())
+    # An EMPTY result is never cached: it is usually a transient vendor failure, and
+    # freezing it would turn one bad call into a permanently empty study.
+    if cache_path and any(len(v) for v in result.values()):
+        try:
+            pd.to_pickle(result, cache_path)
+        except Exception:
+            pass
     return result
 
 

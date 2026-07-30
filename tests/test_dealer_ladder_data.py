@@ -222,3 +222,109 @@ def test_exclusion_ladder_skips_disabled_gates_without_dropping_rows():
     by = lad.set_index("step")
     assert by.loc["curve-clean only", "removed"] == 0
     assert by.loc["whitelisted D2C venue only", "removed"] == 0
+
+
+
+def _fake_stirf_module(monkeypatch, fetch):
+    """Stand in for MDP.STIRFutures.STIRFutureMDP.
+
+    It must export the SYMBOL HELPERS too: `_to_barchart` imports `_normalize_symbol`
+    and `_to_barchart_symbol` from the same module, so a fake that only supplies the
+    MDP class breaks the call it is meant to intercept.
+    """
+    import sys
+    import types
+
+    class _Fetcher:
+        barchart_timeseries_api = staticmethod(fetch)
+
+    class _MDP:
+        def _get_barchart_fetcher(self, **kw):
+            return _Fetcher()
+
+    mod = types.ModuleType("MDP.STIRFutures.STIRFutureMDP")
+    mod.STIRFutureMDP = lambda **kw: _MDP()
+    mod._normalize_symbol = lambda s: s
+    mod._to_barchart_symbol = lambda s: s
+    mod._from_barchart_symbol = lambda s: s
+    monkeypatch.setitem(sys.modules, "MDP.STIRFutures.STIRFutureMDP", mod)
+    return mod
+
+
+# ---------------------------------------------------- the settled-window bars cache
+def test_the_cache_key_is_order_stable_and_window_sensitive():
+    k = D._bars_cache_key
+    assert k(["a", "b"], "2026-01-01", "2026-02-01", ("Close",)) == \
+        k(["b", "a"], "2026-01-01", "2026-02-01", ("Close",))
+    assert k(["a"], "2026-01-01", "2026-02-01", ("Close",)) != \
+        k(["a"], "2026-01-01", "2026-03-01", ("Close",))
+    assert k(["a"], "2026-01-01", "2026-02-01", ("Close",)) != \
+        k(["a"], "2026-01-01", "2026-02-01", ("Close", "Volume"))
+
+
+def test_only_a_window_that_has_ENDED_may_be_cached():
+    """A session still in progress keeps receiving bars, so caching it would freeze a
+    partial day and every later run would silently read the truncated version."""
+    assert D._bars_window_is_settled(
+        pd.Timestamp.now(tz=NY) - pd.Timedelta(days=2))
+    assert not D._bars_window_is_settled(pd.Timestamp.now(tz=NY))
+    assert not D._bars_window_is_settled(
+        pd.Timestamp.now(tz=NY) + pd.Timedelta(days=1))
+
+
+def test_a_settled_window_is_served_from_cache_without_refetching(tmp_path, monkeypatch):
+    calls = []
+    frame = pd.DataFrame({"Close": [96.0, 96.1], "Volume": [10.0, 12.0]},
+                         index=pd.date_range("2026-03-02 09:00", periods=2, freq="1min",
+                                             tz=NY))
+
+    def _fake_fetch(**kw):
+        calls.append(kw)
+        return {"SFRU26": frame}
+
+    _fake_stirf_module(monkeypatch, _fake_fetch)
+
+    lo = pd.Timestamp("2026-03-02 00:00", tz=NY)
+    hi = pd.Timestamp("2026-03-02 23:59", tz=NY)
+    a = D.load_futures_minutes(["SFRU26"], lo, hi, cache_dir=str(tmp_path))
+    b = D.load_futures_minutes(["SFRU26"], lo, hi, cache_dir=str(tmp_path))
+    assert len(calls) == 1, "the second call must be served from disk"
+    assert set(a) == set(b) == {"Close", "Volume"}
+    pd.testing.assert_frame_equal(a["Close"], b["Close"])
+
+
+def test_an_unsettled_window_is_never_cached(tmp_path, monkeypatch):
+    calls = []
+
+    def _fake_fetch(**kw):
+        calls.append(kw)
+        return {"SFRU26": pd.DataFrame(
+            {"Close": [96.0]}, index=[pd.Timestamp.now(tz=NY)])}
+
+    _fake_stirf_module(monkeypatch, _fake_fetch)
+
+    now = pd.Timestamp.now(tz=NY)
+    for _ in range(2):
+        D.load_futures_minutes(["SFRU26"], now - pd.Timedelta(hours=2), now,
+                               fields=("Close",), cache_dir=str(tmp_path))
+    assert len(calls) == 2, "a live session must be refetched every time"
+    assert not list(tmp_path.glob("bars_*.pkl"))
+
+
+def test_an_empty_result_is_never_cached(tmp_path, monkeypatch):
+    """Usually a transient vendor failure. Freezing it would turn one bad call into a
+    permanently empty study."""
+    calls = []
+
+    def _fake_fetch(**kw):
+        calls.append(kw)
+        return {}
+
+    _fake_stirf_module(monkeypatch, _fake_fetch)
+
+    lo = pd.Timestamp("2026-03-02 00:00", tz=NY)
+    hi = pd.Timestamp("2026-03-02 23:59", tz=NY)
+    for _ in range(2):
+        D.load_futures_minutes(["SFRU26"], lo, hi, cache_dir=str(tmp_path))
+    assert len(calls) == 2
+    assert not list(tmp_path.glob("bars_*.pkl"))

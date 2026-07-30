@@ -96,7 +96,8 @@ def window_contract_calendar(window, spaces=("FUTURES", "FED_FUNDS"), count=6) -
 
 def load_context(conn, config=None, *, window=None, results_dir=None,
                  spaces=("FUTURES", "FED_FUNDS"), show_progress=True,
-                 with_independent=True, independent_source="citivelo") -> GateContext:
+                 with_independent=True, independent_source="citivelo",
+                 bars_cache=None) -> GateContext:
     """Assemble the study's inputs. The only step that touches DB or vendor."""
     config = config or cfg.LadderStudyConfig()
     window = window or (config.window.start, config.window.end)
@@ -126,7 +127,10 @@ def load_context(conn, config=None, *, window=None, results_dir=None,
             continue
         lo = pd.Timestamp(grid.min()).floor("D")
         hi = pd.Timestamp(grid.max()).ceil("D")
-        bars = data.load_futures_minutes(buckets, lo, hi, show_tqdm=show_progress)
+        # Cached when the window has ENDED, so re-running the gates -- after a
+        # fix, to re-render, to add a stage -- costs nothing at the vendor.
+        bars = data.load_futures_minutes(buckets, lo, hi, show_tqdm=show_progress,
+                                         cache_dir=bars_cache)
         closes, stale = data.to_minute_grid(bars.get("Close", pd.DataFrame()))
         vols, _ = data.to_minute_grid(bars.get("Volume", pd.DataFrame()),
                                       ffill_limit_min=0)
