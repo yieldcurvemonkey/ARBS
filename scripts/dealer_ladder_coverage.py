@@ -31,6 +31,7 @@ import datetime
 import os
 import sys
 
+import numpy as np
 import pandas as pd
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -137,19 +138,30 @@ def build(conn, start, end) -> dict:
     cov = days.merge(direction, on="day", how="left") \
               .merge(ladder, on="day", how="left") \
               .merge(marks, on="day", how="left")
+    # A query that returned NO rows contributes no COLUMNS either, so every later
+    # reference to e.g. `null_delta` would raise instead of reporting zero -- and an
+    # empty window is exactly when this report is most needed.
+    expected = ["classified", "paid", "received", "unknown", "curve_suspect",
+                "n_methods", "projected_units", "ladder_rows", "n_spaces",
+                "futures_rows", "ff_rows", "meeting_rows", "serff_rows",
+                "null_p_flip", "null_delta", "marked_units", "entry_marked_units",
+                "eod_marked_units", "marks", "null_npv"]
+    for col in expected:
+        if col not in cov.columns:
+            cov[col] = 0
     counts = [c for c in cov.columns if c != "day"]
     cov[counts] = cov[counts].fillna(0).astype("int64")
 
     cov["unknown_pct"] = (100.0 * cov["unknown"]
-                          / cov["classified"].replace(0, pd.NA)).astype(float)
+                          / cov["classified"].replace(0, np.nan)).astype(float)
     cov["projected_pct"] = (100.0 * cov["projected_units"]
-                            / cov["classified"].replace(0, pd.NA)).astype(float)
+                            / cov["classified"].replace(0, np.nan)).astype(float)
     # marked_units now comes from a per-UNIT join against the units projected that
     # day, so this ratio cannot exceed 100% the way the mark-date version did
     cov["marked_pct"] = (100.0 * cov["marked_units"]
-                         / cov["projected_units"].replace(0, pd.NA)).astype(float)
+                         / cov["projected_units"].replace(0, np.nan)).astype(float)
     cov["eod_marked_pct"] = (100.0 * cov["eod_marked_units"]
-                             / cov["projected_units"].replace(0, pd.NA)).astype(float)
+                             / cov["projected_units"].replace(0, np.nan)).astype(float)
     if not (cov["marked_units"] <= cov["projected_units"]).all():
         raise AssertionError(
             "per-unit marks coverage exceeds the units projected, which means this "
@@ -161,7 +173,7 @@ def build(conn, start, end) -> dict:
                                  "join is not over the same unit set")
         cov = cov.drop(columns=["projected_units_j"])
     cov["paid_pct"] = (100.0 * cov["paid"]
-                       / (cov["paid"] + cov["received"]).replace(0, pd.NA)).astype(float)
+                       / (cov["paid"] + cov["received"]).replace(0, np.nan)).astype(float)
 
     vint_parts = [_read(conn, VINTAGE_SQL.format(table=tbl), params)
                   for tbl in ("arbs_stir_direction_v1", "arbs_stir_ladder_prints_v1")
