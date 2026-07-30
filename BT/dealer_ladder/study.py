@@ -142,7 +142,14 @@ def flow_response_event_study(increments: pd.DataFrame, signed_flow: pd.DataFram
         for ts, size in events.items():
             direction = np.sign(size)
             for h in horizons_min:
-                window = flow.loc[ts:ts + pd.Timedelta(minutes=h)]
+                # STRICTLY forward. A label-inclusive slice from ts would include the
+                # bar labelled ts, whose sign comes from the price change INTO ts and
+                # whose volume is the minute ending at ts -- both predate the
+                # innovation. G2 exists to establish ordering, so a window reaching
+                # backward cannot support it, and that is exactly the direction of
+                # contamination that manufactures a spurious lead.
+                window = flow.loc[ts + pd.Timedelta(microseconds=1):
+                                  ts + pd.Timedelta(minutes=h)]
                 if window.empty:
                     continue
                 rows.append({
@@ -173,12 +180,20 @@ def horse_race(long_frame: pd.DataFrame, *, signal_col="signal", target_col="tar
     df = long_frame.dropna(subset=[signal_col, target_col]).copy()
     if df.empty:
         return pd.DataFrame(columns=["spec", "term", "coef", "se", "t", "n"])
-    blocks = blocks_of(df)
+    # BOTH specs are fitted on the SAME complete-case rows. Otherwise "signal only"
+    # gets every row while "signal + controls" silently drops rows where any control
+    # is NaN, and the two t-statistics are then not comparable: a coefficient
+    # unchanged in magnitude but fitted on 60% of the rows loses ~1.3x of its t, so
+    # G3 would report "does not survive" from sample shrinkage alone. Structural NaN
+    # is real here -- a deferred contract's minute coverage is far below the front
+    # six's, and an expired contract's column is NaN for the tail of the window.
+    all_terms = [c for c in [signal_col, *controls] if c in df.columns]
+    common = df.dropna(subset=all_terms)
     out = []
     for spec, terms in (("signal only", [signal_col]),
                         ("signal + controls", [signal_col, *controls])):
         terms = [t for t in terms if t in df.columns]
-        sub = df.dropna(subset=terms)
+        sub = common
         if sub.empty or len(terms) == 0:
             continue
         b = stats.day_codes(sub["ts"])
@@ -243,7 +258,7 @@ def residualise(long_frame: pd.DataFrame, signal_col="signal", controls=()) -> p
 # --------------------------------------------------------------------------
 def trade_ledger(z_panel: pd.DataFrame, rate_bp: pd.DataFrame, *, horizon_min,
                  threshold, cost_bp_by_bucket, predicted_sign=+1,
-                 stale_min=None, max_stale_min=None) -> pd.DataFrame:
+                 stale_min=None, max_stale_min=None, direction_panel=None) -> pd.DataFrame:
     """Non-overlapping trades from a |z| >= threshold rule. One row per trade.
 
     Rules, all pre-registered:
@@ -252,10 +267,21 @@ def trade_ledger(z_panel: pd.DataFrame, rate_bp: pd.DataFrame, *, horizon_min,
         not inflated by mechanical serial correlation;
       - exit is exactly ``horizon_min`` later, and a trade whose exit price is
         unavailable is dropped rather than closed at a stale or invented price;
-      - ``position`` is in RATE space: +1 profits when the rate rises. With
-        ``predicted_sign=+1``, a positive ladder z takes position +1, because a
-        dealer long futures-equivalent must SELL futures, pushing price down and
-        rate up.
+      - ``position`` is in RATE space: +1 profits when the rate rises.
+
+    TRIGGER AND DIRECTION ARE SEPARATE, and that separation matters. The locked spec
+    triggers on ``|z| >= threshold`` but predicts the sign of the rate change from the
+    LADDER LEVEL: a dealer long futures-equivalent (positive ladder) must SELL futures,
+    pushing price down and rate up. ``z`` is the level minus its TRAILING MEAN, and
+    that mean is systematically negative because 68-82% of prints are PAID and PAID
+    means negative delta_dv01 -- so ``sign(z)`` and ``sign(level)`` disagree over the
+    whole region ``mu < level < 0``, measured at ~35% of triggers on a realistically
+    skewed bucket. Using ``sign(z)`` would take the position OPPOSITE the hypothesis on
+    a third of trades and could report a genuine effect as negative.
+
+    Pass ``direction_panel`` (the ladder LEVEL) to sign from it; the fallback to
+    ``sign(z)`` exists only for callers with no level to hand, and the returned frame
+    always records both so the disagreement can never be silent.
     """
     rows = []
     cols = [c for c in z_panel.columns if c in rate_bp.columns]
@@ -275,14 +301,45 @@ def trade_ledger(z_panel: pd.DataFrame, rate_bp: pd.DataFrame, *, horizon_min,
             entry, exit_ = r.loc[ts], r.loc[exit_ts]
             if not (np.isfinite(entry) and np.isfinite(exit_)):
                 continue
-            if max_stale_min is not None and stale_min is not None:
-                s = stale_min[bucket].get(ts, np.nan)
-                if np.isfinite(s) and s > max_stale_min:
+            if max_stale_min is not None and stale_min is not None \
+                    and bucket in stale_min.columns:
+                s_in = stale_min[bucket].get(ts, np.nan)
+                s_out = stale_min[bucket].get(exit_ts, np.nan)
+                # BOTH ends: a fresh entry against a 25-minute-stale exit measures a
+                # 35-minute move and calls it a 60-minute one, and the reverse pairing
+                # measures 85. Either way the realised holding period stops being the
+                # pre-registered horizon.
+                if ((np.isfinite(s_in) and s_in > max_stale_min)
+                        or (np.isfinite(s_out) and s_out > max_stale_min)):
                     continue
-            pos = int(predicted_sign * np.sign(zv))
+            level = np.nan
+            if direction_panel is not None and bucket in direction_panel.columns:
+                try:
+                    level = float(direction_panel.at[ts, bucket])
+                except Exception:
+                    level = np.nan
+            basis = level if np.isfinite(level) else zv
+            if not np.isfinite(basis) or basis == 0.0:
+                continue
+            pos = int(predicted_sign * np.sign(basis))
             gross = pos * float(exit_ - entry)
+            stale_entry = stale_exit = np.nan
+            if stale_min is not None and bucket in stale_min.columns:
+                try:
+                    stale_entry = float(stale_min.at[ts, bucket])
+                except Exception:
+                    stale_entry = np.nan
+                try:
+                    stale_exit = float(stale_min.at[exit_ts, bucket])
+                except Exception:
+                    stale_exit = np.nan
             rows.append({
                 "ts": ts, "exit_ts": exit_ts, "bucket": bucket, "z": float(zv),
+                "ladder_level": level, "signed_from": ("level" if np.isfinite(level)
+                                                       else "zscore"),
+                "sign_disagrees": bool(np.isfinite(level)
+                                       and np.sign(level) != np.sign(zv)),
+                "entry_stale_min": stale_entry, "exit_stale_min": stale_exit,
                 "position": pos, "entry_bp": float(entry), "exit_bp": float(exit_),
                 "gross_bp": gross, "cost_bp": cost, "net_bp": gross - cost,
             })
@@ -380,13 +437,28 @@ def placebo_rotate_buckets(panel: pd.DataFrame, shift=1) -> pd.DataFrame:
 
 
 def pre_arrival_target(rate_bp: pd.DataFrame, horizon_min: int) -> pd.DataFrame:
-    """The horizon BEFORE the decision instant — must show nothing if there is no leak.
+    """The realised CHANGE over the horizon BEFORE the decision instant.
 
-    If it shows MORE than the forward window, the ladder is tracking information
-    the market already had, which is anticipation, not a post-disclosure edge.
+    Returns a CHANGE, not a level. Do NOT hand this to ``trade_ledger``, which treats
+    its target as a LEVEL panel and differences it itself -- doing so computes
+    ``r(t+h) - 2r(t) + r(t-h)``, a second difference, which is the forward statistic
+    MINUS the backward one and inverts the placebo's reading in both directions. Use
+    ``pre_arrival_level_panel`` for the ledger path; this form is for direct
+    inspection.
     """
     return rate_bp - rate_bp.shift(freq=pd.Timedelta(minutes=horizon_min)).reindex(
         rate_bp.index)
+
+
+def pre_arrival_level_panel(rate_bp: pd.DataFrame, horizon_min: int) -> pd.DataFrame:
+    """A LEVEL panel whose ledger exit-minus-entry is the PRE-arrival change.
+
+    ``trade_ledger`` computes ``target[t + h] - target[t]``. Feeding it the rate panel
+    shifted FORWARD by h makes that ``r(t) - r(t - h)`` -- the backward window -- while
+    keeping the ledger's arithmetic untouched. This is the placebo whose entire job is
+    to detect look-ahead, so it has to measure the thing it claims to.
+    """
+    return rate_bp.shift(freq=pd.Timedelta(minutes=horizon_min)).reindex(rate_bp.index)
 
 
 # --------------------------------------------------------------------------

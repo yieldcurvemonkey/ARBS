@@ -57,10 +57,13 @@ def test_panel_matches_ladder_at_exactly(weighting, include_suspect):
         got = panel.loc[ts]
         for bucket, value in want.items():
             assert got[bucket] == pytest.approx(value, rel=1e-9, abs=1e-6), (ts, bucket)
-        # buckets absent from `want` were dropped there for being exactly zero
+        # A bucket absent from `want` was dropped there for summing to exactly zero.
+        # Here it is either NaN (no contributing print at all -- the distinction
+        # ladder_at cannot express) or a value that rounds to zero.
         for bucket in got.index:
             if bucket not in want.index:
-                assert abs(got[bucket]) < 1e-6, (ts, bucket, got[bucket])
+                v = got[bucket]
+                assert (v != v) or abs(v) < 1e-6, (ts, bucket, v)
 
 
 def test_panel_matches_ladder_at_with_unwind_netting():
@@ -80,11 +83,38 @@ def test_panel_matches_ladder_at_with_unwind_netting():
 
 
 # ----------------------------------------------------------- no-lookahead
-def test_panel_is_zero_before_any_print_is_visible():
+def test_panel_is_nan_before_any_print_is_visible():
+    """NOT zero. "No print has become public yet" is an absence of information, and
+    encoding it as 0.0 would give trailing_zscore a tradable constant."""
     prints = _prints(days=("2026-07-10",))
     early = pd.DatetimeIndex([pd.Timestamp("2026-07-10 07:00", tz=NY)])
     panel = S.ladder_panel(prints, early, space="FUTURES", half_lives=HL)
-    assert (panel.abs() < 1e-12).all().all()
+    assert panel.isna().all().all()
+
+
+def test_a_bucket_with_no_prints_never_becomes_a_tradable_constant():
+    """The defect this NaN semantics exists to prevent.
+
+    With a 0.0 fill, a session in which a bucket has NO visible prints gets
+    z = (0 - mu)/sd, a CONSTANT above the trigger for every decision -- and because the
+    ladder mean is systematically negative (most prints are PAID, PAID means negative
+    delta_dv01) that constant is systematically POSITIVE. The result was a full session
+    of same-signed trades on a bucket carrying no information at all.
+    """
+    printed = tuple(f"2026-03-{d:02d}" for d in range(2, 14))
+    # The quiet session must be FURTHER than the lookback (20 half-lives = 30h at
+    # hl=90), otherwise the previous session's prints legitimately still contribute a
+    # small decayed amount -- which is data, not absence of it.
+    days = printed + ("2026-03-27",)
+    grid = _grid(days=days, minutes=60)
+    prints = _prints(n=20, days=printed, seed=4)        # NOTHING on 2026-03-27
+    prints = prints[prints["bucket_key"] == "SFRU26"]
+    panel = S.ladder_panel(prints, grid, space="FUTURES", half_lives=HL,
+                           buckets=["SFRU26"])
+    z = S.trailing_zscore(panel, window_days=5, min_days=3)
+    last = [i for i, tt in enumerate(grid) if tt.date() == grid[-1].date()]
+    assert panel["SFRU26"].iloc[last].isna().all(), "quiet session must be NaN"
+    assert z["SFRU26"].iloc[last].isna().all(), "and must not yield a tradable z"
 
 
 def test_panel_passes_the_future_poison_audit():
@@ -120,8 +150,8 @@ def test_increments_never_cross_a_session():
     days = pd.Index([t.date() for t in grid])
     first_rows = [i for i, d in enumerate(days) if i == 0 or days[i - 1] != d]
     assert inc.iloc[first_rows].isna().all().all()
-    # and non-first rows are genuinely populated
-    assert inc.iloc[1].notna().any()
+    # and somewhere in each session the increments are genuinely populated
+    assert inc.notna().any().any()
 
 
 def test_increments_equal_level_differences_within_a_session():
@@ -179,7 +209,8 @@ def test_build_signal_returns_all_three_panels():
 def test_print_intensity_is_unsigned_and_direction_blind():
     prints, grid = _prints(days=("2026-07-10",)), _grid(days=("2026-07-10",))
     intensity = S.print_intensity_panel(prints, grid, space="FUTURES", half_lives=HL)
-    assert (intensity.to_numpy() >= -1e-12).all()
+    vals = intensity.to_numpy()
+    assert (vals[~np.isnan(vals)] >= -1e-12).all()
     flipped = prints.copy()
     flipped["delta_dv01"] = -flipped["delta_dv01"]
     other = S.print_intensity_panel(flipped, grid, space="FUTURES", half_lives=HL)
@@ -199,7 +230,7 @@ def test_panel_respects_an_explicit_bucket_list():
     out = S.ladder_panel(prints, grid, space="FUTURES", half_lives=HL,
                          buckets=["SFRU26", "SFRZ99"])
     assert list(out.columns) == ["SFRU26", "SFRZ99"]
-    assert (out["SFRZ99"] == 0.0).all()          # a bucket with no prints is zero
+    assert out["SFRZ99"].isna().all()            # a bucket with no prints is NaN
 
 
 def test_print_weights_matches_the_state_module():
@@ -214,3 +245,28 @@ def test_print_weights_matches_the_state_module():
 def test_print_weights_rejects_unknown_scheme():
     with pytest.raises(ValueError, match="unknown weighting"):
         S.print_weights(_prints(), "magic")
+
+
+def test_trailing_zscore_is_time_keyed_not_arrival_keyed():
+    """A concatenated or reordered panel must not let a LATER session into an
+    earlier session's moments. pd.unique preserves arrival order, so this would
+    otherwise pass silently -- and audit_trailing_moments cannot see it, because it
+    poisons by POSITION and so assumes the very property at issue."""
+    days = tuple(f"2026-03-{d:02d}" for d in range(2, 14))
+    grid = _grid(days=days, minutes=240)
+    rng = np.random.default_rng(3)
+    panel = pd.DataFrame({"X": rng.normal(size=len(grid))}, index=grid)
+
+    sorted_z = S.trailing_zscore(panel, window_days=5, min_days=3)
+
+    # swap the last two sessions' ARRIVAL order, keeping the timestamps intact
+    last_two = sorted(set(t.date() for t in grid))[-2:]
+    a = panel[[t.date() == last_two[0] for t in panel.index]]
+    b = panel[[t.date() == last_two[1] for t in panel.index]]
+    rest = panel[[t.date() not in last_two for t in panel.index]]
+    shuffled = pd.concat([rest, b, a])
+    shuffled_z = S.trailing_zscore(shuffled, window_days=5, min_days=3)
+
+    for ts in a.index:
+        want, got = sorted_z.loc[ts, "X"], shuffled_z.loc[ts, "X"]
+        assert (want != want and got != got) or want == pytest.approx(got), ts

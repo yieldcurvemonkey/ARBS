@@ -136,19 +136,49 @@ def signed_basis_dv01(basis: pd.DataFrame, ladder_level: pd.DataFrame) -> pd.Dat
     return np.sign(basis.loc[idx, cols]) * ladder_level.loc[idx, cols].abs()
 
 
-def curve_shape(rates_bp: pd.DataFrame, *, front=0, belly=None, back=-1) -> pd.DataFrame:
+def curve_shape(rates_bp: pd.DataFrame, *, front_rank=None) -> pd.DataFrame:
     """Level / slope / curvature of the futures strip itself, per minute.
 
-    Uses the strip rather than the swap curve so the controls live in the same
-    space as the target and need no extra curve reads.
+    Uses the strip rather than the swap curve so the controls live in the same space
+    as the target and need no extra curve reads.
+
+    Shape points are chosen PER MINUTE from the front-rank panel, not by column
+    position. Positional picks over a window-union panel select whichever contract
+    happens to sit first, middle and last in the column list -- which over a six-month
+    window means the front pick is a contract that EXPIRES mid-window (NaN for the
+    tail) and the back pick is the most deferred, whose minute coverage is far below
+    the front six's. Both make slope and curvature structurally NaN for long stretches,
+    and every such row then drops out of the controlled regression.
+
+    Falls back to positional picks when no rank panel is supplied.
     """
     cols = list(rates_bp.columns)
     if len(cols) < 3:
         return pd.DataFrame(index=rates_bp.index)
-    belly = belly if belly is not None else len(cols) // 2
-    f, m, b = rates_bp[cols[front]], rates_bp[cols[belly]], rates_bp[cols[back]]
+
+    if front_rank is None or not len(front_rank):
+        belly = len(cols) // 2
+        f, m, b = rates_bp[cols[0]], rates_bp[cols[belly]], rates_bp[cols[-1]]
+        level = rates_bp.mean(axis=1)
+    else:
+        rank = front_rank.reindex(index=rates_bp.index, columns=cols)
+        n = int(np.nanmax(rank.to_numpy())) if np.isfinite(
+            np.nanmax(rank.to_numpy())) else 0
+        if n < 3:
+            belly = len(cols) // 2
+            f, m, b = rates_bp[cols[0]], rates_bp[cols[belly]], rates_bp[cols[-1]]
+            level = rates_bp.mean(axis=1)
+        else:
+            mid = (n + 1) // 2
+
+            def at_rank(k):
+                pick = rank.eq(float(k))
+                return rates_bp.where(pick).mean(axis=1)
+
+            f, m, b = at_rank(1), at_rank(mid), at_rank(n)
+            level = rates_bp.where(rank.notna()).mean(axis=1)
     return pd.DataFrame({
-        "level_bp": rates_bp.mean(axis=1),
+        "level_bp": level,
         "slope_bp": b - f,
         "curvature_bp": 2.0 * m - f - b,
     }, index=rates_bp.index)
@@ -345,10 +375,10 @@ def funding_regime_series(grid):
 
 def build_control_panels(*, rates_bp, volumes, implied_bp, ladder_level,
                          contracts, grid, independent_implied_bp=None,
-                         block_share=None) -> dict:
+                         block_share=None, front_rank=None) -> dict:
     """Every per-(minute, bucket) control, as a dict of panels ready for ``align_long``."""
     b = basis_bp(implied_bp, rates_bp)
-    shape = curve_shape(rates_bp)
+    shape = curve_shape(rates_bp, front_rank=front_rank)
     tod = time_of_day_min(grid)
     fomc = days_to_next_fomc(grid)
     panels = {

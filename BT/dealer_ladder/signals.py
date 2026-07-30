@@ -99,6 +99,15 @@ def ladder_panel(prints: pd.DataFrame, grid, *, space="FUTURES", half_lives=None
     grid_days = _session_dates(grid)
     bucket_pos = {b: i for i, b in enumerate(out.columns)}
     values = out.to_numpy()
+    # A (minute, bucket) cell with NO contributing print is NOT a zero ladder -- it is
+    # an absence of information. Encoding it as 0.0 makes trailing_zscore return the
+    # constant z = -mu/sd for the whole session, and because the ladder mean is
+    # systematically negative (68-82% of prints are PAID, and PAID means negative
+    # delta_dv01) that constant is systematically POSITIVE and above the trigger. The
+    # result is a full session of same-signed trades on a bucket with no ladder
+    # information at all, entering the primary ledger at full weight. So track
+    # contribution and NaN the rest.
+    seen = np.zeros(values.shape, dtype=bool)
 
     for day in pd.unique(grid_days):
         sel = grid_days == day
@@ -139,7 +148,9 @@ def ladder_panel(prints: pd.DataFrame, grid, *, space="FUTURES", half_lives=None
         signed = w * contrib[None, :]
         rows = np.flatnonzero(sel)
         np.add.at(values, (rows[:, None], cols[None, :]), signed)
+        np.logical_or.at(seen, (rows[:, None], cols[None, :]), age >= 0.0)
 
+    values = np.where(seen, values, np.nan)
     return pd.DataFrame(values, index=grid, columns=out.columns)
 
 
@@ -154,6 +165,10 @@ def ladder_increments(panel: pd.DataFrame) -> pd.DataFrame:
     Never differences across a session boundary: an overnight change is not an
     intraday innovation.
     """
+    if not panel.index.is_monotonic_increasing:
+        # differencing is positional, so an unsorted index would difference against
+        # whatever row happens to precede rather than against the previous decision
+        panel = panel.sort_index()
     diff = panel.diff()
     days = _session_dates(panel.index)
     first_of_day = np.r_[True, days[1:] != days[:-1]]
@@ -174,7 +189,12 @@ def trailing_zscore(panel: pd.DataFrame, window_days=10, min_days=5) -> pd.DataF
     if panel.empty:
         return panel.copy()
     days = pd.Index(_session_dates(panel.index))
-    uniq = list(pd.unique(days))
+    # SORTED, not order-of-appearance. `pd.unique` preserves arrival order, which
+    # would make "appears earlier in the frame" stand in for "is earlier in time" --
+    # so a concatenated or reordered panel could put a LATER session into an earlier
+    # session's trailing moments. audit_trailing_moments cannot catch that, because it
+    # poisons by position and therefore assumes the very property at issue.
+    uniq = sorted(pd.unique(days))
     out = pd.DataFrame(np.nan, index=panel.index, columns=panel.columns, dtype=float)
     for i, day in enumerate(uniq):
         hist_days = uniq[max(0, i - window_days):i]

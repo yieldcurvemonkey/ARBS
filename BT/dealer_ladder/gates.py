@@ -186,6 +186,24 @@ def _space_of(bucket_key: str) -> str:
     return "FED_FUNDS" if str(bucket_key).startswith("FF") else "FUTURES"
 
 
+def _mask_to_front(built: dict, ctx, space: str) -> dict:
+    """Restrict a freshly-built signal to that session's front-N basket.
+
+    ``load_context`` applies this once, but every caller that REBUILDS a signal must
+    re-apply it or it silently trades the window UNION instead of the pre-registered
+    basket -- 8 SR3 contracts rather than 6, including ranks 7 and 8 at the window
+    start and an expired contract at the end. That would make the max-t variant, the
+    family-wise correction and the placebo reference row all describe a wider universe
+    than the protocol declares.
+    """
+    mask = ctx.front_rank.get(space)
+    if mask is None or not len(mask):
+        return built
+    ok = mask.notna()
+    return {k: (v.where(ok.reindex_like(v)) if hasattr(v, "where") else v)
+            for k, v in built.items()}
+
+
 def warm_decision_grid(pricer, curve_name, grid, *, warm_jobs=8, verbose=True) -> dict:
     """Warm every DECISION-grid minute for ``curve_name``, one bulk call per session.
 
@@ -351,12 +369,26 @@ def run_g1(ctx, *, space=None, sample_grid=200) -> dict:
     if sample_grid and len(grid) > sample_grid:
         grid = pd.DatetimeIndex(sorted(rng.choice(grid, size=sample_grid, replace=False)))
 
+    # The builder MUST see the whole session, not a one-element grid. ladder_panel
+    # windows its per-session print chunk on `hi = gts.max()`, so a one-element grid
+    # sets hi == ts and drops every not-yet-visible print BEFORE the decay matrix is
+    # built -- meaning the poison audit would never evaluate the `age >= 0` gate that
+    # is the actual no-lookahead mechanism. Demonstrated: with that gate deliberately
+    # removed, the one-element wiring still reported PASS while the session-grid
+    # builder inflated a 09:30 value 11x from a print that only became public at 14:05.
+    by_session = {}
+    for ts in ctx.grid:
+        et = pd.Timestamp(ts).tz_convert("America/New_York")
+        by_session.setdefault(et.date(), []).append(ts)
+
     def build(p, ts):
-        return signals.ladder_panel(p, pd.DatetimeIndex([ts]), space=space,
+        day = pd.Timestamp(ts).tz_convert("America/New_York").date()
+        session = pd.DatetimeIndex(by_session.get(day, [ts]))
+        return signals.ladder_panel(p, session, space=space,
                                     half_lives=sig_cfg.half_lives,
                                     weighting=sig_cfg.weighting,
                                     include_suspect=sig_cfg.include_suspect,
-                                    buckets=buckets).iloc[0]
+                                    buckets=buckets).loc[ts]
 
     level = ctx.signal[space]["level"]
     verdicts = audit.run_g1_battery(
@@ -375,8 +407,14 @@ def run_g1(ctx, *, space=None, sample_grid=200) -> dict:
 # --------------------------------------------------------------------------
 # G2 — mechanism ordering (before any price test)
 # --------------------------------------------------------------------------
-def run_g2(ctx, *, space=None) -> dict:
-    """Does a signed ladder innovation PRECEDE measurable signed futures flow?"""
+def run_g2(ctx, *, space=None, in_sample=True) -> dict:
+    """Does a signed ladder innovation PRECEDE measurable signed futures flow?
+
+    Restricted to the IN-SAMPLE segment by default. G2 and G3 are development gates
+    whose outcome can prompt a re-spec of the universe or the control set, so running
+    them over the whole window would consume the one-shot lockout before it is fired
+    and leave the burn rule protecting nothing.
+    """
     space = space or ctx.config.signal.space
     level = ctx.signal[space]["level"]
     inc = ctx.signal[space]["increment"]
@@ -385,6 +423,15 @@ def run_g2(ctx, *, space=None) -> dict:
     out = {}
     if level.empty or rates.empty or vols.empty:
         return {"verdict": _verdict("G2", None, "no data")}
+    lo, hi = (ctx.config.window.in_sample() if in_sample
+              else ctx.config.window.lockout())
+    keep = _date_mask(rates.index, lo, hi)
+    rates = rates[keep]
+    vols = vols.reindex(rates.index)
+    level = level.reindex(rates.index)
+    inc = inc.reindex(rates.index)
+    if rates.empty:
+        return {"verdict": _verdict("G2", None, "no in-sample data")}
 
     # sign volume by PRICE direction: price moves opposite to rate, hence -rates
     flow = data.signed_volume(-rates, vols)
@@ -410,37 +457,86 @@ def run_g2(ctx, *, space=None) -> dict:
         _write(ctx, f"g2_flow_response_{space}", out["flow_response"])
 
     summ = out["lead_lag_summary"].iloc[0]
-    lead = bool(np.isfinite(summ["t"]) and summ["t"] >= 3.0 and summ["mean"] > 0)
+    timing = bool(np.isfinite(summ["t"]) and summ["t"] >= 3.0 and summ["mean"] > 0)
+
+    # LLS is built from SQUARED correlations, so it is DIRECTION-BLIND: a large
+    # positive LLS says the ladder leads, not which way. Under the hedging mechanism a
+    # positive ladder increment means the dealer SELLS, so the signed-volume
+    # correlation at the peak lag must be NEGATIVE. Certifying the channel on timing
+    # alone would pass a lead in the ANTI-hedging direction -- i.e. would label a
+    # refutation of the mechanism as support for it.
+    rho = stats.cluster_mean_t(ll["peak_rho"].to_numpy(), ll["day"].to_numpy())
+    out["peak_rho_summary"] = pd.DataFrame([{**rho, "stars": stats.stars(rho["t"])}])
+    _write(ctx, f"g2_peak_rho_summary_{space}", out["peak_rho_summary"])
+    direction_ok = bool(np.isfinite(rho["mean"]) and rho["mean"] < 0)
+
+    flow_ok = None
+    if "flow_response" in out and len(out["flow_response"]):
+        fr = out["flow_response"]
+        flow_ok = bool((fr["mean"] < 0).all())
+
+    lead = bool(timing and direction_ok and (flow_ok is not False))
+    if timing and not direction_ok:
+        why = (" — the ladder LEADS but in the WRONG DIRECTION "
+               f"(mean peak rho {rho['mean']:+.3f}, hedging requires negative): this "
+               "REFUTES the forced-hedge channel rather than supporting it")
+    elif not timing:
+        why = (" — no timing lead; forced-hedge channel UNSUPPORTED, so any price "
+               "result must be relabelled flow/basis continuation")
+    elif flow_ok is False:
+        why = (" — timing and rho agree but the signed-flow response does not match "
+               "expected_sign = -1")
+    else:
+        why = ""
     out["verdict"] = _verdict(
         "G2", lead,
-        f"ladder-leads-flow LLS mean={summ['mean']:.4g} t={summ['t']:.2f}"
-        f"{summ['stars']} over {int(summ['n_blocks'])} sessions"
-        + ("" if lead else " — forced-hedge channel UNSUPPORTED; any price result "
-                           "must be relabelled flow/basis continuation"))
+        f"LLS mean={summ['mean']:.4g} t={summ['t']:.2f}{summ['stars']}, "
+        f"mean peak rho={rho['mean']:+.3f} (hedging needs < 0), "
+        f"{int(summ['n_blocks'])} sessions" + why,
+        timing_lead=timing, direction_ok=direction_ok, flow_sign_ok=flow_ok)
     return out
 
 
 # --------------------------------------------------------------------------
 # G3 — circularity battery
 # --------------------------------------------------------------------------
-def run_g3(ctx, *, space=None, horizon_min=None) -> dict:
-    """Does the ladder survive the basis, curve shape, momentum, vol and liquidity?"""
+def run_g3(ctx, *, space=None, horizon_min=None, in_sample=True) -> dict:
+    """Does the ladder survive the basis, curve shape, momentum, vol and liquidity?
+
+    IN-SAMPLE by default, for the same reason as G2: a G3 failure is exactly the kind
+    of verdict that prompts re-specifying the controls, and doing that with lockout
+    data in the sample destroys the holdout.
+    """
     space = space or ctx.config.signal.space
     horizon_min = horizon_min or ctx.config.primary.horizon_min
-    rates = ctx.rates_bp.get(space, pd.DataFrame())
-    if rates.empty:
+    rates_all = ctx.rates_bp.get(space, pd.DataFrame())
+    if rates_all.empty:
         return {"verdict": _verdict("G3", None, "no target data")}
 
-    target = data.forward_rate_change_bp(rates, horizon_min)
-    z = ctx.signal[space]["z"]
+    # Difference on the FULL panel then restrict, so a horizon straddling the segment
+    # boundary is computed from real prices rather than truncated to NaN.
+    target_all = data.forward_rate_change_bp(rates_all, horizon_min)
+    lo, hi = (ctx.config.window.in_sample() if in_sample
+              else ctx.config.window.lockout())
+    keep = _date_mask(rates_all.index, lo, hi)
+    rates = rates_all[keep]
+    target = target_all.reindex(rates.index)
+    if rates.empty:
+        return {"verdict": _verdict("G3", None, "no in-sample data")}
+    z = ctx.signal[space]["z"].reindex(rates.index)
+    def _r(frame):
+        return (frame.reindex(rates.index) if frame is not None and len(frame)
+                else frame)
+
     panels = controls.build_control_panels(
-        rates_bp=rates, volumes=ctx.volumes.get(space, pd.DataFrame()),
-        implied_bp=ctx.implied_bp.get(space, pd.DataFrame()),
-        ladder_level=ctx.signal[space]["level"],
+        rates_bp=rates, volumes=_r(ctx.volumes.get(space, pd.DataFrame())),
+        implied_bp=_r(ctx.implied_bp.get(space, pd.DataFrame())),
+        ladder_level=_r(ctx.signal[space]["level"]),
         contracts=[c for c in ctx.contracts if _space_of(c[0]) == space],
-        grid=ctx.grid,
-        independent_implied_bp=ctx.indep_implied_bp.get(space),
-        block_share=ctx.block_share.get(space))
+        grid=rates.index,
+        independent_implied_bp=_r(ctx.indep_implied_bp.get(space)),
+        block_share=_r(ctx.block_share.get(space)),
+        front_rank=_r(ctx.front_rank.get(space)))
     long = study.align_long(z, target, extra=panels)
     out = {"long": long}
     if long.empty:
@@ -478,8 +574,14 @@ def run_g3(ctx, *, space=None, horizon_min=None) -> dict:
     both = race[(race["spec"] == "signal + controls") & (race["term"] == "signal")]
     t_alone = float(alone["t"].iloc[0]) if len(alone) else np.nan
     t_both = float(both["t"].iloc[0]) if len(both) else np.nan
+    coef_both = float(both["coef"].iloc[0]) if len(both) else np.nan
+    # The hypothesis has a DIRECTION: a positive ladder predicts the rate RISES, so a
+    # positive coefficient. abs(t) alone would report an effect in the OPPOSITE
+    # direction as a pass, i.e. a negative result dressed as a positive one.
+    right_sign = bool(np.isfinite(coef_both)
+                      and np.sign(coef_both) == np.sign(ctx.config.primary.predicted_sign))
     survives = bool(np.isfinite(t_both) and abs(t_both) >= 2.0
-                    and np.sign(t_both) == np.sign(t_alone))
+                    and np.sign(t_both) == np.sign(t_alone) and right_sign)
     t_indep = np.nan
     if "horse_race_independent" in out:
         row = out["horse_race_independent"]
@@ -487,13 +589,20 @@ def run_g3(ctx, *, space=None, horizon_min=None) -> dict:
         t_indep = float(row["t"].iloc[0]) if len(row) else np.nan
         survives = survives and bool(np.isfinite(t_indep) and abs(t_indep) >= 2.0
                                      and np.sign(t_indep) == np.sign(t_alone))
+    if survives:
+        why = ""
+    elif np.isfinite(coef_both) and not right_sign:
+        why = (f" — coefficient is {coef_both:+.4g}, the OPPOSITE direction to the "
+               "pre-registered hypothesis: this is a negative result, not a pass")
+    else:
+        why = (" — effect does not survive; relabel as basis/RV, not a "
+               "dealer-inventory mechanism")
     out["verdict"] = _verdict(
         "G3", survives,
-        f"signal t alone={t_alone:.2f}, vs our controls={t_both:.2f}, "
-        f"vs independent basis={t_indep:.2f}"
-        + ("" if survives else " — effect does not survive; relabel as basis/RV, "
-                               "not a dealer-inventory mechanism"),
-        controls_used=ctrl, independent_controls=indep)
+        f"signal t alone={t_alone:.2f}, vs our controls={t_both:.2f} "
+        f"(coef {coef_both:+.4g}), vs independent basis={t_indep:.2f}" + why,
+        controls_used=ctrl, independent_controls=indep,
+        sign_matches_hypothesis=right_sign)
     return out
 
 
@@ -566,7 +675,8 @@ def run_conditioning(ctx, primary: dict, *, space=None, n_bins=3) -> dict:
         contracts=[c for c in ctx.contracts if _space_of(c[0]) == space],
         grid=ctx.grid,
         independent_implied_bp=ctx.indep_implied_bp.get(space),
-        block_share=ctx.block_share.get(space))
+        block_share=ctx.block_share.get(space),
+        front_rank=ctx.front_rank.get(space))
 
     rows = []
     names = [n for n in (controls.CONDITIONING_PANELS + controls.CONDITIONING_SERIES)
@@ -637,9 +747,16 @@ def run_primary(ctx, *, in_sample=True) -> dict:
 
     roots, near = _root_and_expiry(ctx, space)
     costs = study.cost_bp_map(list(rates_w.columns), ctx.config.cost, near, roots)
+    level = ctx.signal[space]["level"].reindex(rates_w.index) \
+        if space in ctx.signal else None
     ledger = study.trade_ledger(
         z, rates_w, horizon_min=p.horizon_min, threshold=p.z_threshold,
         cost_bp_by_bucket=costs, predicted_sign=p.predicted_sign,
+        direction_panel=level,
+        # The pre-registration did NOT specify a staleness cap, so the primary runs
+        # without one and the sensitivity is reported separately by
+        # run_staleness_sensitivity. Staleness is recorded per trade either way, so
+        # the realised-holding-period issue is visible rather than invisible.
         stale_min=ctx.stale_min.get(space), max_stale_min=None)
     res = study.evaluate_trades(ledger, n_boot=ctx.config.stats.n_boot,
                                seed=ctx.config.stats.seed)
@@ -670,10 +787,22 @@ def run_grid(ctx, ledger_sink=None, *, in_sample=True) -> dict:
     g, p = ctx.config.grid, ctx.config.primary
     lo, hi = (ctx.config.window.in_sample() if in_sample
               else ctx.config.window.lockout())
-    per_variant, rows = {}, []
+    per_variant, rows, skipped = {}, [], []
+    def _skip(sig_space, target_space, hl, weighting, reason):
+        for horizon in g.horizons_min:
+            skipped.append({
+                "variant": f"{sig_space}->{target_space}|hl{int(hl)}"
+                           f"|{weighting}|h{horizon}",
+                "reason": reason})
+
     for target_space in g.target_spaces:
         rates = ctx.rates_bp.get(target_space, pd.DataFrame())
         if rates.empty:
+            for sig_space in g.spaces:
+                for hl in g.half_lives_min:
+                    for weighting in g.weightings:
+                        _skip(sig_space, target_space, hl, weighting,
+                              f"no futures rate panel for target space {target_space}")
             continue
         mask = _date_mask(rates.index, lo, hi)
         rates_w = rates[mask]
@@ -681,6 +810,15 @@ def run_grid(ctx, ledger_sink=None, *, in_sample=True) -> dict:
         costs = study.cost_bp_map(list(rates_w.columns), ctx.config.cost, near, roots)
         for sig_space in g.spaces:
             if sig_space not in ctx.signal:
+                # The largest silent-skip class by far: MEETING is declared in the
+                # grid but is never built (it is model-internal bookkeeping, so it is
+                # not a legal test target and load_context does not construct it).
+                # 192 of 288 declared variants vanished here, and the reader saw 96
+                # rows with nothing to say the rest were untested rather than weak.
+                for hl in g.half_lives_min:
+                    for weighting in g.weightings:
+                        _skip(sig_space, target_space, hl, weighting,
+                              f"signal space {sig_space} not built for this window")
                 continue
             for hl in g.half_lives_min:
                 for weighting in g.weightings:
@@ -692,9 +830,19 @@ def run_grid(ctx, ledger_sink=None, *, in_sample=True) -> dict:
                     built = signals.build_signal(
                         ctx.prints, ctx.grid, sig_cfg,
                         buckets=list(rates.columns) if sig_space == target_space else None)
+                    if sig_space == target_space:
+                        built = _mask_to_front(built, ctx, sig_space)
                     zz = built["z"].reindex(rates_w.index)
+                    lvl = built["level"].reindex(rates_w.index)
                     common = [c for c in zz.columns if c in rates_w.columns]
                     if not common:
+                        # A declared variant that cannot run must be RECORDED, not
+                        # silently dropped: cross-space pairs have disjoint bucket
+                        # namespaces (SFR vs FF) so a FUTURES ladder can never join a
+                        # ZQ rate panel, and a reader must see that
+                        # those variants were skipped rather than tested and found weak.
+                        _skip(sig_space, target_space, hl, weighting,
+                              "no shared bucket keys between signal and target space")
                         continue
                     for horizon in g.horizons_min:
                         label = (f"{sig_space}->{target_space}|hl{int(hl)}"
@@ -702,7 +850,8 @@ def run_grid(ctx, ledger_sink=None, *, in_sample=True) -> dict:
                         led = study.trade_ledger(
                             zz[common], rates_w[common], horizon_min=horizon,
                             threshold=p.z_threshold, cost_bp_by_bucket=costs,
-                            predicted_sign=p.predicted_sign)
+                            predicted_sign=p.predicted_sign,
+                            direction_panel=lvl[common])
                         r = study.evaluate_trades(led, n_boot=200,
                                                   seed=ctx.config.stats.seed)
                         rows.append({"variant": label, **r})
@@ -714,7 +863,11 @@ def run_grid(ctx, ledger_sink=None, *, in_sample=True) -> dict:
                                 "half_life": hl, "weighting": weighting,
                                 "horizon": horizon}, {"mean": r["mean"], "t": r["t"]})
     league = pd.DataFrame(rows)
-    out = {"league": league}
+    out = {"league": league, "skipped": pd.DataFrame(skipped)}
+    if skipped:
+        _write(ctx, "g4_skipped_variants", out["skipped"])
+        print(f"  grid: {len(rows)} variants ran, {len(skipped)} declared variants "
+              f"could not run (see g4_skipped_variants.csv)")
     if not league.empty:
         _write(ctx, "g4_league", league)
         out["best_and_median"] = _best_and_median(league)
@@ -775,14 +928,19 @@ def run_placebos(ctx, *, space=None) -> dict:
     buckets = list(rates.columns)
 
     def evaluate(prints, target=None, rotate=False):
-        built = signals.build_signal(prints, ctx.grid, sig_cfg, buckets=buckets)
+        built = _mask_to_front(
+            signals.build_signal(prints, ctx.grid, sig_cfg, buckets=buckets),
+            ctx, space)
         z = built["z"].reindex(rates_w.index)
+        lvl = built["level"].reindex(rates_w.index)
         if rotate:
             z = study.placebo_rotate_buckets(z)
+            lvl = study.placebo_rotate_buckets(lvl)
         tgt = rates_w if target is None else target.reindex(rates_w.index)
         led = study.trade_ledger(z, tgt, horizon_min=p.horizon_min,
                                  threshold=p.z_threshold, cost_bp_by_bucket=costs,
-                                 predicted_sign=p.predicted_sign)
+                                 predicted_sign=p.predicted_sign,
+                                 direction_panel=lvl)
         return study.evaluate_trades(led, n_boot=300, seed=ctx.config.stats.seed)
 
     prints = ctx.prints
@@ -803,7 +961,8 @@ def run_placebos(ctx, *, space=None) -> dict:
          **evaluate(prints, rotate=True)},
         {"placebo": "pre-arrival window",
          "expect": "~0; a result means leakage or anticipation",
-         **evaluate(prints, target=study.pre_arrival_target(rates, p.horizon_min))},
+         **evaluate(prints,
+                    target=study.pre_arrival_level_panel(rates, p.horizon_min))},
     ]
     frame = pd.DataFrame(rows)
     _write(ctx, "g4_placebos", frame)
