@@ -308,3 +308,63 @@ def test_flip_mechanism_needs_both_mids():
 def test_flip_mechanism_on_an_empty_recon():
     assert labels.flip_mechanism_table(pd.DataFrame(
         columns=["flipped", "our_s2m_bps", "ind_s2m_bps"])).empty
+
+
+# ------------------------------------------------------- p_flip calibration
+def _pf_recon(p_flip, flipped):
+    return pd.DataFrame({
+        "unit_key": [f"u{i}" for i in range(len(p_flip))],
+        "p_flip": p_flip, "flipped": flipped,
+        "our_s2m_bps": 0.5, "ind_s2m_bps": 0.2,
+        "snap_ts": pd.Timestamp("2026-01-13 10:00", tz="America/New_York"),
+    })
+
+
+def test_a_perfectly_calibrated_p_flip_shows_no_gap():
+    rng = np.random.default_rng(0)
+    p = rng.uniform(0.0, 0.6, size=2000)
+    flipped = (rng.uniform(size=2000) < p).astype(float)
+    tab = labels.pflip_calibration_table(_pf_recon(p, flipped))
+    row = tab[tab["stratum"] == "ALL"].iloc[0]
+    assert abs(row["calibration_gap"]) < 0.03, row["calibration_gap"]
+    assert row["spearman_rank"] > 0.3
+    assert row["mean_weight_agreeing"] > row["mean_weight_flipped"]
+
+
+def test_a_p_flip_that_is_too_small_shows_a_large_positive_gap():
+    """The measured case: mean p_flip 0.041 against a 0.416 observed flip rate. Rank can
+    still be fine while the LEVEL is off by an order of magnitude, and the distinction
+    decides what the weighting can be used for."""
+    rng = np.random.default_rng(1)
+    p = rng.uniform(0.0, 0.05, size=1000)
+    flipped = (rng.uniform(size=1000) < 0.4).astype(float)
+    tab = labels.pflip_calibration_table(_pf_recon(p, flipped))
+    row = tab[tab["stratum"] == "ALL"].iloc[0]
+    assert row["calibration_gap"] > 0.3
+    assert row["mean_weight"] > 0.9, "a tiny p_flip means a near-uniform weight"
+
+
+def test_the_weighting_barely_separates_when_p_flip_is_uninformative():
+    rng = np.random.default_rng(2)
+    p = rng.uniform(0.0, 0.05, size=1000)          # unrelated to the outcome
+    flipped = (rng.uniform(size=1000) < 0.4).astype(float)
+    tab = labels.pflip_calibration_table(_pf_recon(p, flipped))
+    row = tab[tab["stratum"] == "ALL"].iloc[0]
+    assert abs(row["mean_weight_agreeing"] - row["mean_weight_flipped"]) < 0.02
+
+
+def test_calibration_reports_quintiles_and_the_overall_row():
+    rng = np.random.default_rng(3)
+    p = rng.uniform(0.0, 0.4, size=500)
+    tab = labels.pflip_calibration_table(
+        _pf_recon(p, (rng.uniform(size=500) < p).astype(float)))
+    assert tab["stratum"].iloc[0] == "ALL"
+    assert (tab["stratum"].str.startswith("p_flip")).sum() == 5
+
+
+def test_calibration_returns_empty_without_p_flip():
+    """Silently computing over an absent column would be worse than no table."""
+    r = _pf_recon([0.1] * 5, [0.0] * 5).drop(columns=["p_flip"])
+    assert labels.pflip_calibration_table(r).empty
+    allnan = _pf_recon([np.nan] * 5, [0.0] * 5)
+    assert labels.pflip_calibration_table(allnan).empty

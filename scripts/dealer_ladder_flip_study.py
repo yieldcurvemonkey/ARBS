@@ -94,7 +94,7 @@ def main(argv=None) -> int:
     for name in ("flip_by_confidence", "flip_by_curve_bucket", "flip_by_hour",
                  "flip_by_trade_type", "skew_vs_independent",
                  "skew_vs_independent_by_hour", "mid_offset_bps",
-                 "flip_mechanism"):
+                 "flip_mechanism", "pflip_calibration"):
         tab = res.get(name)
         if isinstance(tab, pd.DataFrame) and not tab.empty:
             print(f"\n== {name}")

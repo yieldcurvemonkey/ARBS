@@ -819,3 +819,40 @@ against LOW's 29.8% at almost the same median distance. Spearman(tier rank, flip
 i.e. the *higher* the stated confidence the *more* likely the independent mid disagrees. So the tier
 cannot be used to select a cleaner stratum for this failure, and the temptation to do so — it is the
 obvious move — has to be resisted explicitly.
+
+#### `p_flip` is miscalibrated by an order of magnitude (2026-07-30 03:55)
+
+The ladder's `expected` weighting is `1 − 2·p_flip`. Since the confidence *tier* turned out to be
+mildly anti-informative and `p_flip` comes from the same model, the weighting was measured against
+the independent mid rather than assumed. 750 of the 1,155 compared units carry a `p_flip` (64.9%).
+
+**Mean `p_flip` = 0.041. Observed flip rate on the same rows = 0.416.** Off by a factor of ten.
+
+| p_flip quintile | n | mean p_flip | observed flip rate | gap |
+|---|---|---|---|---|
+| ≈ 0 (2.5e−11) | 150 | 0.0000000000 | **0.360** | +0.360 |
+| 5.4e−05 | 150 | 0.0000542 | 0.327 | +0.327 |
+| 0.0026 | 150 | 0.0026 | 0.407 | +0.404 |
+| 0.025 | 150 | 0.0255 | 0.513 | +0.488 |
+| 0.175 | 150 | 0.1755 | 0.473 | +0.298 |
+
+**Prints the model calls essentially certain — `p_flip` ≈ 2×10⁻¹¹ — disagree with an independent
+mid 36% of the time.** Rank order is weakly right (Spearman +0.129), so `p_flip` does carry a
+little signal; the failure is entirely in LEVEL, and the distinction decides what the weighting can
+be used for. A quantity that orders error correctly but is ten times too small can rank prints; it
+cannot correct them.
+
+**So the `expected` weighting does almost nothing.** Mean weight 0.919, and it separates the prints
+that actually agree (0.927) from the ones that flip (0.907) by **0.02**. It is a near-uniform 8%
+haircut, not a correction for label error. That matters for reading the secondary grid: `expected`
+and `unweighted` are not two hypotheses about how to handle classification uncertainty, they are
+the same trade scaled by ~0.92, and neither addresses the 35–41% disagreement.
+
+A caveat that must travel with this: `p_flip` may be modelling a different event — the chance the
+classifier's own rule misfires given its inputs, rather than the chance our mid is on the wrong side
+of an independent one. Those are different quantities. The honest statement is that `p_flip` is not
+calibrated against independent-mid disagreement, and since that is the dominant label-error channel
+we can actually measure, the weighting cannot be relied on to correct for it.
+
+Now a permanent artifact (`g0_pflip_calibration`), computed every G0 run, reporting rank and level
+separately so the two failure modes cannot be conflated.

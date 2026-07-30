@@ -49,6 +49,8 @@ SECTIONS = [
      "G0 — PAID/RECEIVED skew by execution hour", False, None, None, 30),
     ("g0_flip_mechanism",
      "G0 — is a flip explained by the curve gap alone?", False, None, None, None),
+    ("g0_pflip_calibration",
+     "G0 — is p_flip calibrated against an independent mid?", False, None, None, None),
     ("g0_implied_accuracy", "G0 — implied bounds on direction accuracy", False,
      None, None, None),
 

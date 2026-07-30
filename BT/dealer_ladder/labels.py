@@ -390,6 +390,74 @@ def flip_mechanism_table(recon: pd.DataFrame) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
+def pflip_calibration_table(recon: pd.DataFrame) -> pd.DataFrame:
+    """Is ``p_flip`` calibrated against an independent mid?
+
+    The ladder's ``expected`` weighting is ``1 - 2*p_flip``: a print believed likely to
+    be mislabelled is carried smaller, one believed certain at full size. That is only
+    an improvement on ``unweighted`` if ``p_flip`` tracks disagreement — so it is
+    measured rather than assumed, especially since the confidence TIER it shares a model
+    with turned out to be mildly anti-informative.
+
+    Reports rank agreement and LEVEL calibration separately, because they fail
+    differently and the distinction decides what the weighting can be used for. A
+    ``p_flip`` that ranks correctly but is ten times too small still cannot correct the
+    error; it can only order it.
+
+    Measured on Jan+Feb 2026: mean ``p_flip`` 0.041 against an observed 0.416 flip rate
+    on the same rows, and prints the model calls essentially certain (``p_flip`` ~ 2e-11)
+    disagreeing with an independent mid 36% of the time. So the ``expected`` weighting
+    applies a near-uniform ~0.92 and separates agreeing from flipped prints by 0.02 —
+    it is not, in practice, a correction for label error at all.
+
+    ``recon`` needs ``flipped`` and ``p_flip``; without the latter this returns empty
+    rather than guessing, because a calibration table computed over a column that is
+    silently absent is worse than no table.
+    """
+    if "p_flip" not in recon.columns:
+        return pd.DataFrame()
+    df = recon[recon["flipped"].notna()].copy()
+    df["p_flip"] = pd.to_numeric(df["p_flip"], errors="coerce")
+    df = df[df["p_flip"].notna()]
+    if df.empty:
+        return pd.DataFrame()
+
+    weight = (1.0 - 2.0 * df["p_flip"]).clip(lower=0.0)
+    agree = 1.0 - df["flipped"]
+    rows = [{
+        "stratum": "ALL",
+        "n": len(df),
+        "mean_p_flip": float(df["p_flip"].mean()),
+        "observed_flip": float(df["flipped"].mean()),
+        "calibration_gap": float(df["flipped"].mean() - df["p_flip"].mean()),
+        "spearman_rank": float(df["p_flip"].corr(df["flipped"], method="spearman")),
+        "mean_weight": float(weight.mean()),
+        "mean_weight_agreeing": float(weight[agree == 1].mean()) if (agree == 1).any()
+        else float("nan"),
+        "mean_weight_flipped": float(weight[agree == 0].mean()) if (agree == 0).any()
+        else float("nan"),
+    }]
+    try:
+        q = pd.qcut(df["p_flip"], 5, duplicates="drop")
+    except (ValueError, IndexError):
+        q = None
+    if q is not None:
+        for interval, grp in df.groupby(q, observed=True):
+            w = (1.0 - 2.0 * grp["p_flip"]).clip(lower=0.0)
+            rows.append({
+                "stratum": f"p_flip {interval}",
+                "n": len(grp),
+                "mean_p_flip": float(grp["p_flip"].mean()),
+                "observed_flip": float(grp["flipped"].mean()),
+                "calibration_gap": float(grp["flipped"].mean() - grp["p_flip"].mean()),
+                "spearman_rank": float("nan"),
+                "mean_weight": float(w.mean()),
+                "mean_weight_agreeing": float("nan"),
+                "mean_weight_flipped": float("nan"),
+            })
+    return pd.DataFrame(rows)
+
+
 def flip_study(units, direction_rows, *, source="citivelo", limit=0, per_day=40,
                seed=0, strata=None) -> dict:
     """The whole independent-mid comparison, as tables. No DB or vendor of its own.
@@ -409,7 +477,7 @@ def flip_study(units, direction_rows, *, source="citivelo", limit=0, per_day=40,
     if recon.empty:
         return out
     if strata is not None and len(strata):
-        keep = [c for c in ("unit_key", "curve_bucket", "venue_bucket")
+        keep = [c for c in ("unit_key", "curve_bucket", "venue_bucket", "p_flip")
                 if c in strata.columns]
         if "unit_key" in keep and len(keep) > 1:
             recon = recon.merge(strata[keep], on="unit_key", how="left")
@@ -425,6 +493,7 @@ def flip_study(units, direction_rows, *, source="citivelo", limit=0, per_day=40,
     out["skew_vs_independent"] = direction_skew_table(recon)
     out["skew_vs_independent_by_hour"] = direction_skew_table(by_hour, ("hour",))
     out["flip_mechanism"] = flip_mechanism_table(recon)
+    out["pflip_calibration"] = pflip_calibration_table(recon)
     if "curve_bucket" in recon.columns:
         out["flip_by_curve_bucket"] = flip_rate_table(recon, ("curve_bucket",))
         out["mid_offset_bps"] = mid_offset_table(recon)

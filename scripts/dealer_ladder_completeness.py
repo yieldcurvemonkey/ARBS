@@ -42,6 +42,7 @@ STAGES = {
     "G0 direction-skew adjudication": ["g0_skew_vs_independent"],
     "G0 direction skew by hour": ["g0_skew_vs_independent_by_hour"],
     "G0 flip mechanism (curve gap vs distance to mid)": ["g0_flip_mechanism"],
+    "G0 p_flip calibration": ["g0_pflip_calibration"],
     "G0 implied accuracy bounds": ["g0_implied_accuracy"],
     "G1 arrival integrity": ["g1_audits"],
     "G2 lead-lag, SR3": ["g2_lead_lag_summary_FUTURES"],
