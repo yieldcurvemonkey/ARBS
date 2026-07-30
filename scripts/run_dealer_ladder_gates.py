@@ -105,7 +105,7 @@ def main() -> int:
     stage("G0", lambda: gates.run_g0(ctx, conn, label_limit=args.label_limit,
                                      label_per_day=args.label_per_day))
     stage("G1", lambda: gates.run_g1(ctx))
-    stage("G2", lambda: gates.run_g2(ctx))
+    g2_sr3 = stage("G2", lambda: gates.run_g2(ctx))
     stage("G3", lambda: gates.run_g3(ctx))
     # The ZQ cross-check. Not a second bite at the primary -- MEETING and FED_FUNDS are
     # never test targets for the locked spec -- but the comparison the mechanism turns
@@ -113,8 +113,10 @@ def main() -> int:
     # specifically reads as meeting-targeted. Both stages already take `space=` and
     # write per-space artifacts; the runner simply never asked.
     if not args.skip_cross_check:
-        stage("G2-ZQ", lambda: gates.run_g2(ctx, space="FED_FUNDS"))
+        g2_zq = stage("G2-ZQ", lambda: gates.run_g2(ctx, space="FED_FUNDS"))
         stage("G3-ZQ", lambda: gates.run_g3(ctx, space="FED_FUNDS"))
+        stage("G2-cross-check", lambda: gates.run_cross_check_comparison(
+            ctx, {"FUTURES": g2_sr3, "FED_FUNDS": g2_zq}))
     primary = stage("G4-primary", lambda: gates.run_primary(ctx, in_sample=True))
     if primary.get("result") is not None and len(primary["result"]):
         sink.record("PRIMARY (in-sample)",

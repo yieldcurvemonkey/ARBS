@@ -448,3 +448,47 @@ def test_every_placebo_row_reports_its_position_balance(monkeypatch):
     assert "share_long" in plac.columns
     assert plac["share_long"].notna().sum() >= 5
     assert ((plac["share_long"].dropna() >= 0) & (plac["share_long"].dropna() <= 1)).all()
+
+
+# ============ the SR3-vs-ZQ reading must be assembled in code, not left to a reader
+def _g2_stub(lls_t, rho_mean, leads):
+    return {"lead_lag_summary": pd.DataFrame([{"mean": 1.0, "t": lls_t}]),
+            "peak_rho_summary": pd.DataFrame([{"mean": rho_mean, "t": -4.0}]),
+            "verdict": {"timing_lead": leads, "direction_ok": leads}}
+
+
+@pytest.mark.parametrize("sr3_leads, zq_leads, expect", [
+    (True, False, "LIQUIDITY-ROUTED"),
+    (False, True, "MEETING-TARGETED"),
+    (True, True, "undiscriminating"),
+    (False, False, "no mechanism evidence"),
+])
+def test_cross_check_states_the_reading(monkeypatch, sr3_leads, zq_leads, expect):
+    """The brief makes this the comparison the mechanism turns on. Leaving a reader to
+    hold two tables side by side and infer the label is exactly where a preferred
+    reading gets chosen, so the interpretation is attached in code."""
+    _no_write(monkeypatch)
+    ctx = _context(effect=0.4, seed=80)
+    out = gates.run_cross_check_comparison(ctx, {
+        "FUTURES": _g2_stub(5.0, -0.3, sr3_leads),
+        "FED_FUNDS": _g2_stub(5.0, -0.3, zq_leads)})
+    assert expect in out["verdict"]["headline"]
+    assert len(out["comparison"]) == 2
+    assert set(out["comparison"]["root"]) == {"SR3", "ZQ"}
+
+
+def test_cross_check_on_no_g2_result(monkeypatch):
+    _no_write(monkeypatch)
+    out = gates.run_cross_check_comparison(_context(effect=0.4, seed=81), {})
+    assert out["comparison"].empty
+    assert out["verdict"]["pass"] is None
+
+
+def test_g2_timing_threshold_comes_from_the_locked_config():
+    """A literal here would sit OUTSIDE the configuration fingerprint the lockout ledger
+    records, so it could be moved after seeing the holdout without the burn rule
+    noticing."""
+    import inspect
+    src = inspect.getsource(gates.run_g2)
+    assert "ctx.config.primary.t_pass" in src
+    assert ">= 3.0" not in src

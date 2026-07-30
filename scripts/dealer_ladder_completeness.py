@@ -49,6 +49,7 @@ STAGES = {
     "G2 lead-lag, ZQ cross-check": ["g2_lead_lag_summary_FED_FUNDS"],
     "G2 signed peak correlation, SR3": ["g2_peak_rho_summary_FUTURES"],
     "G2 signed peak correlation, ZQ": ["g2_peak_rho_summary_FED_FUNDS"],
+    "G2 SR3-vs-ZQ cross-check comparison": ["g2_cross_check"],
     "G3 horse race, ZQ cross-check": ["g3_horse_race_FED_FUNDS"],
     "G2 flow-response event study, SR3": ["g2_flow_response_FUTURES"],
     "G2 flow-response event study, ZQ": ["g2_flow_response_FED_FUNDS"],

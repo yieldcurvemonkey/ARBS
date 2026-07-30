@@ -76,6 +76,9 @@ SECTIONS = [
     ("g2_flow_events_FED_FUNDS", "G2 — flow-response events, ZQ", False,
      None, None, 40),
 
+    ("g2_cross_check",
+     "G2 — SR3 vs ZQ: which contract does the ladder lead?", False, None, None, None),
+
     ("g3_horse_race_FUTURES", "G3 — horse race against our own basis", True,
      None, None, None),
     ("g3_horse_race_independent_FUTURES",

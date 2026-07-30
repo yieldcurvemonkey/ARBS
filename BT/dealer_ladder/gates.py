@@ -421,7 +421,11 @@ def run_g2(ctx, *, space=None, in_sample=True) -> dict:
         _write(ctx, f"g2_flow_response_{space}", out["flow_response"])
 
     summ = out["lead_lag_summary"].iloc[0]
-    timing = bool(np.isfinite(summ["t"]) and summ["t"] >= 3.0 and summ["mean"] > 0)
+    # t_pass comes from the locked PrimarySpec, not a literal. A threshold hard-coded
+    # here would sit OUTSIDE the configuration fingerprint the lockout ledger records,
+    # so it could be moved after seeing the holdout without the burn rule noticing.
+    t_pass = ctx.config.primary.t_pass
+    timing = bool(np.isfinite(summ["t"]) and summ["t"] >= t_pass and summ["mean"] > 0)
 
     # LLS is built from SQUARED correlations, so it is DIRECTION-BLIND: a large
     # positive LLS says the ladder leads, not which way. Under the hedging mechanism a
@@ -463,6 +467,72 @@ def run_g2(ctx, *, space=None, in_sample=True) -> dict:
 
 # --------------------------------------------------------------------------
 # G3 — circularity battery
+def run_cross_check_comparison(ctx, g2_by_space: dict) -> dict:
+    """SR3 versus ZQ, with the interpretation attached rather than left to the reader.
+
+    The brief makes this the comparison the MECHANISM turns on, and the two readings
+    point at different desks:
+
+      * leads SR3 but **not** ZQ  -> liquidity-routed hedging. The dealer hedges where
+        depth is, which is the SOFR strip, regardless of where the risk actually sits.
+      * leads ZQ **specifically**  -> meeting-targeted. The exposure is about policy
+        dates and is hedged in the contract that isolates them.
+      * leads both                -> undiscriminating; consistent with either, so the
+        comparison contributes nothing and should not be quoted as if it did.
+      * leads neither             -> no mechanism evidence at all.
+
+    Assembling this in code matters because the alternative is a reader holding two
+    tables side by side and inferring the label, which is exactly where a preferred
+    reading gets chosen. ``g2_by_space`` maps space -> the dict ``run_g2`` returned.
+    """
+    rows = []
+    for space, res in g2_by_space.items():
+        if not isinstance(res, dict):
+            continue
+        summ = res.get("lead_lag_summary")
+        rho = res.get("peak_rho_summary")
+        v = res.get("verdict") or {}
+        if summ is None or not len(summ):
+            continue
+        s = summ.iloc[0]
+        r = rho.iloc[0] if rho is not None and len(rho) else {}
+        rows.append({
+            "space": space,
+            "root": "SR3" if space == "FUTURES" else "ZQ",
+            "lls_mean": s.get("mean"), "lls_t": s.get("t"),
+            "peak_rho_mean": r.get("mean"), "peak_rho_t": r.get("t"),
+            "timing_lead": v.get("timing_lead"),
+            "direction_ok": v.get("direction_ok"),
+            "leads": bool(v.get("timing_lead") and v.get("direction_ok")),
+        })
+    frame = pd.DataFrame(rows)
+    if frame.empty:
+        return {"comparison": frame,
+                "verdict": _verdict("G2-cross-check", None, "no G2 result for either space")}
+
+    def _leads(root):
+        sub = frame[frame["root"] == root]
+        return bool(sub["leads"].iloc[0]) if len(sub) else None
+
+    sr3, zq = _leads("SR3"), _leads("ZQ")
+    if sr3 and not zq:
+        reading = ("leads SR3 but not ZQ -> LIQUIDITY-ROUTED hedging: the hedge goes "
+                   "where depth is, not where the risk sits")
+    elif zq and not sr3:
+        reading = ("leads ZQ specifically -> MEETING-TARGETED: the exposure is about "
+                   "policy dates and is hedged in the contract that isolates them")
+    elif sr3 and zq:
+        reading = ("leads BOTH -> undiscriminating, consistent with either mechanism, "
+                   "so this comparison contributes nothing and must not be quoted as "
+                   "if it did")
+    else:
+        reading = "leads NEITHER -> no mechanism evidence from the ordering test"
+    frame["reading"] = reading
+    _write(ctx, "g2_cross_check", frame)
+    return {"comparison": frame,
+            "verdict": _verdict("G2-cross-check", None, reading)}
+
+
 # --------------------------------------------------------------------------
 def run_g3(ctx, *, space=None, horizon_min=None, in_sample=True) -> dict:
     """Does the ladder survive the basis, curve shape, momentum, vol and liquidity?
@@ -1172,6 +1242,10 @@ def run_all(ctx, conn=None, *, run_lockout=False, label_limit=0,
     res["g1"] = run_g1(ctx)
     res["g2"] = run_g2(ctx)
     res["g3"] = run_g3(ctx)
+    res["g2_zq"] = run_g2(ctx, space="FED_FUNDS")
+    res["g3_zq"] = run_g3(ctx, space="FED_FUNDS")
+    res["cross_check"] = run_cross_check_comparison(
+        ctx, {"FUTURES": res["g2"], "FED_FUNDS": res["g2_zq"]})
     res["primary_is"] = run_primary(ctx, in_sample=True)
     ledger_sink.record("PRIMARY (in-sample)",
                        {"horizon": ctx.config.primary.horizon_min,
