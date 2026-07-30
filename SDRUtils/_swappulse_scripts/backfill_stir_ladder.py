@@ -146,7 +146,30 @@ def write_mark_rows(conn, rows):
 
 
 def run_project_phase(conn, start, end, limit=0, dry_run=False, warm_jobs=8,
-                      warm=True, rewrite=False) -> dict:
+                      warm=True, rewrite=False, with_basis=False) -> dict:
+    """Project classified prints onto the ladder for [start, end].
+
+    ``with_basis`` is OFF by default and that is a measured decision, not laziness.
+    Profiled per snapshot on 2026-07-13 (curves already warm):
+
+        MEETING        0.11 s
+        FUTURES        0.24 s
+        FED_FUNDS      0.49 s
+        SERFF_BASIS   13.81 s     <- 94% of the total
+
+    SERFF_BASIS is expensive because ``build_basis_risk_ladder`` needs ~60 vendor
+    pricer fetches per snapshot (SER and FF strips, twice, plus a third pass to
+    build the month map) where every other space is now curve-implied. At 304-445
+    snapshots a day that is 74-109 minutes per day against 4-6 minutes without it,
+    so including it would have made a 138-day backfill infeasible.
+
+    Nothing is lost that the research needs. The plan designates SERFF_BASIS
+    conditioning-only and explicitly bars it from ever being a test target, and
+    ``BT/dealer_ladder/controls.basis_bp`` supplies a strictly better basis
+    conditioner: curve-implied contract rate minus the futures market rate, per
+    contract, on the 5-minute DECISION grid, which is where conditioning is
+    consumed -- rather than at scattered print times.
+    """
     from MDP.IRSwaps.IRSwapsMDP import IRSwapsMDP
     from MDP.STIRFutures.STIRFutureMDP import STIRFutureMDP
 
@@ -194,7 +217,8 @@ def run_project_phase(conn, start, end, limit=0, dry_run=False, warm_jobs=8,
                 h = pricer.handle(curve_name, snap)
                 cache[key] = build_risk_models(
                     curve_name, h, snap, stirf,
-                    include_basis=(drow["rate_index_clean"] == "FED_FUNDS"))
+                    include_basis=(with_basis
+                                   and drow["rate_index_clean"] == "FED_FUNDS"))
             rows, entry = project_unit(u, drow.to_dict(), cache[key], pricer, curve_name, snap)
             ladder_rows.extend(rows)
             mark_rows.append(entry)
@@ -264,12 +288,13 @@ def _marks_for_day(conn, mark_date, pricer, dry_run=False) -> int:
 
 # ----------------------------- range drivers --------------------------------
 def _project_one_day(job):
-    date_iso, warm_jobs, dry_run, rewrite, pg_url, log_dir = job
+    date_iso, warm_jobs, dry_run, rewrite, pg_url, log_dir, with_basis = job
     with day_log(log_dir, f"project-{date_iso}"):
         conn = psycopg2.connect(pg_url or resolve_pg_url())
         try:
             res = run_project_phase(conn, date_iso, date_iso, dry_run=dry_run,
-                                    warm_jobs=warm_jobs, rewrite=rewrite)
+                                    warm_jobs=warm_jobs, rewrite=rewrite,
+                                    with_basis=with_basis)
             return {"date": date_iso, "error": None, **res}
         except Exception as exc:  # isolate a bad day; keep the range going
             import traceback
@@ -300,14 +325,15 @@ def _marks_one_day(job):
 
 def run_range(phase, start, end, *, day_jobs=3, warm_jobs=4, dry_run=False,
               rewrite=False, pg_url=None, executor_factory=None, business_days=True,
-              log_dir=None):
+              log_dir=None, with_basis=False):
     """Fan a phase out across independent days in a process pool."""
     url = pg_url or resolve_pg_url()
     freq = "B" if business_days else "D"
     dates = [d.date().isoformat() for d in pd.date_range(start, end, freq=freq)]
     if phase == "project":
         worker = _project_one_day
-        jobs = [(d, warm_jobs, dry_run, rewrite, url, log_dir) for d in dates]
+        jobs = [(d, warm_jobs, dry_run, rewrite, url, log_dir, with_basis)
+                for d in dates]
     elif phase == "marks":
         worker = _marks_one_day
         jobs = [(d, dry_run, rewrite, url, log_dir) for d in dates]
@@ -381,6 +407,10 @@ def main() -> int:
     ap.add_argument("--pg-url", default=None)
     ap.add_argument("--log-dir", default=None,
                     help="write one log file per day per phase (range mode)")
+    ap.add_argument("--with-basis", action="store_true",
+                    help="also project the SERFF_BASIS space (94%% of projection "
+                         "cost; conditioning-only, and controls.basis_bp is a "
+                         "better conditioner -- see run_project_phase)")
     args = ap.parse_args()
 
     if args.phase in ("project", "marks") and not (args.start and args.end):
@@ -396,7 +426,7 @@ def main() -> int:
         results = run_range(args.phase, args.start, args.end, day_jobs=args.day_jobs,
                             warm_jobs=args.warm_jobs, dry_run=args.dry_run,
                             rewrite=args.rewrite, pg_url=args.pg_url,
-                            log_dir=args.log_dir)
+                            log_dir=args.log_dir, with_basis=args.with_basis)
         n_err = sum(1 for r in results if r["error"])
         print(f"\nrange done: {len(results)} days, {n_err} day-errors")
         return 1 if n_err else 0
@@ -406,7 +436,7 @@ def main() -> int:
     if args.phase == "project":
         run_project_phase(conn, args.start, args.end, args.limit, args.dry_run,
                           warm_jobs=args.warm_jobs, warm=not args.no_warm,
-                          rewrite=args.rewrite)
+                          rewrite=args.rewrite, with_basis=args.with_basis)
     elif args.phase == "marks":
         run_marks_phase(conn, args.start, args.end, args.dry_run, rewrite=args.rewrite)
     else:

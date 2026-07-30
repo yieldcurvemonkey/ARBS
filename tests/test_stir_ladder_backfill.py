@@ -310,9 +310,10 @@ def test_run_range_dispatches_business_days_and_isolates_errors(monkeypatch):
 
     from SDRUtils._swappulse_scripts import backfill_stir_ladder as bf
 
-    seen = []
+    seen, jobs = [], []
 
     def fake_worker(job):
+        jobs.append(job)
         date_iso = job[0]
         seen.append(date_iso)
         if date_iso == "2026-07-02":
@@ -322,8 +323,13 @@ def test_run_range_dispatches_business_days_and_isolates_errors(monkeypatch):
 
     monkeypatch.setattr(bf, "_project_one_day", fake_worker)
     res = bf.run_range("project", "2026-07-01", "2026-07-06", day_jobs=2,
-                       pg_url="dummy",
+                       pg_url="dummy", with_basis=True,
                        executor_factory=lambda: ThreadPoolExecutor(max_workers=2))
+    # The job tuple is unpacked positionally inside a pool worker, so an arity or
+    # ordering mismatch surfaces only as a TypeError in a subprocess -- exactly
+    # where it is invisible. Pin it here instead.
+    assert all(len(j) == 7 for j in jobs)
+    assert all(j[-1] is True for j in jobs), "with_basis must reach the worker"
     # 07/04 Sat and 07/05 Sun are skipped by the business-day grid
     assert sorted(seen) == ["2026-07-01", "2026-07-02", "2026-07-03", "2026-07-06"]
     assert [r["date"] for r in res] == sorted(seen)          # results come back ordered
