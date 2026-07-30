@@ -1203,7 +1203,7 @@ is what cost May.
 |---|---|---|---|---|
 | 1 | finish June + July chunks | already running (PID 110568) | ~3h | monitor silent; each chunk logs `range done` with non-zero units |
 | 2 | decision-grid curve warm | fires automatically (PID 110760, chained on July's marks) | ~62 min | `done in ...` with `failed: 0`; 276 session-curves |
-| 3 | close the two holes | `bash scripts/dealer_ladder_remediate.sh` | ~130 min | its own `coverage --strict` exits 0 |
+| 3 | close whatever is missing | `python scripts/dealer_ladder_remediate.py` (dry-run first) | ~150 min | its own `coverage --strict` exits 0 |
 | 4 | the real gate run | `python scripts/run_dealer_ladder_gates.py --bars-cache <dir>` (**no** `--lockout`) | ~2h | `verdicts.csv` written; `render_findings_tables.py --check` exits 0 |
 | 5 | read G0–G3 and G4-in-sample | against §7, which was written before any number existed | — | every gate's outcome recorded, pass or fail |
 | 6 | the one-shot lockout | same runner **with** `--lockout` | ~10 min | `LOCKOUT_USED.json` written once; a second spec is refused by construction |
@@ -1223,3 +1223,30 @@ recorded the in-sample verdicts, so the lockout cannot inform them.
 **If step 4 shows the primary with n = 0 trades**, check the z-score warmup before suspecting a bug:
 `min_days = 5`, so the first five sessions of any window produce no signal by design. That symptom
 already cost one investigation.
+
+### 2026-06-09 — the timeout finally landed on a TRADING day (08:30)
+
+June's classify finished `30 days, 14124 units, 1 day-errors`. The one failure was **2026-06-09, a
+Tuesday**, lost to the same tape-query `DatabaseError` statement timeout that had previously only hit
+weekend days. So the risk flagged when March failed — *"the residual risk is a timeout landing on a
+trading day"* — has now materialised, and the reasoning that made March harmless does not apply.
+
+June's vintage purge was also skipped for the same reason (`1 day-errors in window`), exactly as
+March's was.
+
+**This is what made the hardcoded remediation script wrong, twenty minutes after I wrote it.** It
+named May and April's EOD marks, because those were the gaps I knew about. The set of gaps had
+already moved. Rewritten to **discover** them: `scripts/dealer_ladder_remediate.py` asks the database
+which trading sessions are incomplete, distinguishes the three kinds by which phase they need, and
+uses the same query as its acceptance test.
+
+Its dry run against the live database is also a demonstration that it reads reality rather than a
+plan — 138 trading sessions, 83 incomplete: April's 22 days needing marks only, all 20 of May needing
+classify, 2026-06-09 needing classify, and June/July showing project/marks because the orchestrator
+has not reached them yet. That last group is precisely why the script **refuses to run while the
+orchestrator is alive**: a month not yet attempted is indistinguishable from a month that failed, so
+running early would "remediate" work that was never tried, while its `--rewrite` phases fought the
+orchestrator for the same rows.
+
+**Pending remediation is now a query, not a list.** Re-running the script is safe and idempotent
+because it re-derives the gaps each time. The checklist earlier in this journal is superseded by it.
