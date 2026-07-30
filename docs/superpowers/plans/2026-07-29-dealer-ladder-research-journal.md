@@ -1192,3 +1192,34 @@ fix came from running the filter against a log I already knew the answer for. A 
 distinguish states, and until it has been shown a known-bad and a known-good input it is an
 assumption, not a check. The Monitor guidance puts it as *"if this crashed right now, would my filter
 emit anything?"* — and here the honest answer was no, twice.
+
+### Runbook for everything still outstanding (08:10)
+
+Written down as an ordered sequence with a gate at each step, so the remaining work is executable
+rather than reconstructed. Everything is **serial**: running two things at once against this database
+is what cost May.
+
+| # | step | how | ~time | gate before moving on |
+|---|---|---|---|---|
+| 1 | finish June + July chunks | already running (PID 110568) | ~3h | monitor silent; each chunk logs `range done` with non-zero units |
+| 2 | decision-grid curve warm | fires automatically (PID 110760, chained on July's marks) | ~62 min | `done in ...` with `failed: 0`; 276 session-curves |
+| 3 | close the two holes | `bash scripts/dealer_ladder_remediate.sh` | ~130 min | its own `coverage --strict` exits 0 |
+| 4 | the real gate run | `python scripts/run_dealer_ladder_gates.py --bars-cache <dir>` (**no** `--lockout`) | ~2h | `verdicts.csv` written; `render_findings_tables.py --check` exits 0 |
+| 5 | read G0–G3 and G4-in-sample | against §7, which was written before any number existed | — | every gate's outcome recorded, pass or fail |
+| 6 | the one-shot lockout | same runner **with** `--lockout` | ~10 min | `LOCKOUT_USED.json` written once; a second spec is refused by construction |
+| 7 | execute the notebook | `nbconvert --execute` against the real results dir | ~2 min | 0 errors, figures rendered |
+| 8 | assemble the findings | `render_findings_tables.py --inject` + `dealer_ladder_completeness.py --inject` | ~2 min | no UNEXPLAINED gap without a written reason |
+| 9 | verdict + push | per spec 9c: (i) mechanism and edge survive, (ii) effect but no mechanism, (iii) no robust effect | — | journal current, everything pushed |
+
+**Order of steps 2 and 3 matters and is deliberate.** The warm pass touches only CURVES, which are
+independent of whether May's ladder rows exist — so warming all 138 sessions first and filling May's
+data afterwards costs nothing and needs no re-warm. Both steps compete for the same Barchart quota,
+so they do not overlap.
+
+**Step 6 is the only irreversible one.** By the burn rule the holdout is evaluated once; the ledger
+makes a second specification impossible rather than merely discouraged. It runs only after step 5 has
+recorded the in-sample verdicts, so the lockout cannot inform them.
+
+**If step 4 shows the primary with n = 0 trades**, check the z-score warmup before suspecting a bug:
+`min_days = 5`, so the first five sessions of any window produce no signal by design. That symptom
+already cost one investigation.
