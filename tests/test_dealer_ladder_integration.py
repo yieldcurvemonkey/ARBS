@@ -226,7 +226,9 @@ def test_lockout_segment_is_disjoint_from_in_sample(monkeypatch):
     _no_write(monkeypatch)
     ctx = _context(effect=0.9, seed=17)
     a = gates.run_primary(ctx, in_sample=True)["ledger"]
-    b = gates.run_primary(ctx, in_sample=False)["ledger"]
+    # claim_lockout=False: this asserts a property of the SPLIT, so it must not consume
+    # the one permitted holdout evaluation (see test_dealer_ladder_lockout.py)
+    b = gates.run_primary(ctx, in_sample=False, claim_lockout=False)["ledger"]
     assert len(a) and len(b)
     assert not set(a["ts"]) & set(b["ts"])
     assert max(a["ts"]) < min(b["ts"])

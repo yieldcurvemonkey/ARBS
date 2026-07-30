@@ -161,3 +161,12 @@ def test_dates_in_the_config_survive_the_fingerprint(tmp_path):
     moved = _conf(window=dataclasses.replace(
         cfg.WindowConfig(), lockout_start=pd.Timestamp("2026-06-17").date()))
     assert lockout.config_fingerprint(moved) != a
+
+
+def test_the_holdout_cannot_be_evaluated_with_nowhere_to_record_it():
+    """Silently proceeding would be strictly worse than the promise this replaces:
+    an unrecorded evaluation, with no way to tell later that it happened."""
+    with pytest.raises(ValueError, match="claim_lockout=False"):
+        lockout.claim(_conf(), "", timestamp="t0")
+    with pytest.raises(ValueError):
+        lockout.claim(_conf(), None, timestamp="t0")

@@ -102,6 +102,13 @@ def claim(config, results_dir: str, *, note="", timestamp=None,
     deliberate, documented re-registration is possible, and which stamps the record so
     the override is never invisible.
     """
+    if not results_dir:
+        # Refuse rather than skip. Silently proceeding with nowhere to record would be
+        # strictly worse than the promise this replaces: an unrecorded evaluation of
+        # the holdout, with no way to tell later that it happened.
+        raise ValueError(
+            "the holdout cannot be evaluated without a results_dir to record the "
+            "claim in; pass claim_lockout=False for a deliberate dry run")
     fp = config_fingerprint(config)
     prior = read_ledger(results_dir)
     if prior is not None and prior.get("spec_fingerprint") != fp and not force:
