@@ -244,7 +244,9 @@ individually have failed, and its per-unit venue label is an anchor-leg approxim
       recursion failures across 07/09–07/14 were a code-vintage artefact. Re-classification is
       folded into Phase B rather than run twice (see D7).
 - [x] A.5 Task 9 verification — **clean** (see the table below)
-- [ ] A.6 Fast gate + network goldens → PR body → merge
+- [x] A.6 **PR #354 MERGED** 2026-07-30 04:50 UTC. Fast gate **3258 passed / 42 skipped**
+      (3060 before this work, +198 tests); 7 ladder network goldens green; PR body rewritten
+      around the four defects and their measured fixes.
 
 **Task 9 verification, run on a fully rebuilt cold day (2026-03-10, 599 units):**
 
@@ -263,6 +265,51 @@ individually have failed, and its per-unit venue label is an anchor-leg approxim
 - [~] B.2/B.3 Full-window backfill running via `scripts/backfill_dealer_ladder_window.sh`
       (classify → project → marks, monthly chunks, trailing calibration, per-day logs)
 - [ ] B.4 Coverage table
+
+**Phase B live progress:** January chunk classified 20 days in ~31 min (~1.6 min/day at
+`day_jobs=2`), every day fully bulk-warmed (`built=0 failed=0`), UNKNOWN ≤ 0.4%/day, weekends
+and the MLK holiday correctly empty. PAID share runs **74–82%** in January against ~68–72% in
+July — the skew is not stationary, which G0 has to report.
+
+**D9 — the front-six basket must ROLL.** Caught by running `load_context` on real data. "Front
+six" is a RANK statement, but the ladder keys buckets on ABSOLUTE contracts (deliberately —
+rank-keyed vectors would smear across roll dates). Over the window the contracts behind that rank
+change: 2026-01-12 → SFRH26..SFRM27, 2026-06-18 → SFRU26..SFRZ27. Freezing at the window start
+spends the last weeks trading an expired contract the ladder never emits; freezing at the window
+end looks ahead. Fixed with `window_contract_union` (fetch the union: 8 SR3 + 12 ZQ) plus
+`front_rank_panel` (recompute per session) masking the **signal**, so an out-of-basket contract
+simply produces no decision.
+
+**D10 — a stale independent curve is NO COVERAGE, not a flip.** The citivelo reader defaults to
+`method="asof"`, so a minute it does not cover returns its LAST snapshot rather than failing — a
+14:00 Friday request resolved against an 11:59 curve. Scoring that as an independent mid would
+book pure data absence as a classification flip, in the one gate whose job is to bound
+classification error. Now staleness-checked with a 5-minute cap.
+
+---
+
+## Preliminary G0 signal (1-day smoke, 2026-03-10 — NOT the final number)
+
+Run on 25 sampled SOFR prints with the independent Citi mid. Recorded because the pattern is
+strong and directional, and because it is the first evidence bearing on the audit's top kill risk.
+
+- **Flip rate 48%** (12 of 25) — close to a coin flip.
+- The mechanism is visible in the rows: our `spread_to_mid_bps` is consistently negative and
+  large (−0.09 to −1.31 bp, driving PAID), while the independent `ind_s2m_bps` is small and often
+  positive (+0.02 to +0.35). That implies **our curve's mid sits ~0.4 bp ABOVE the Citi swap
+  curve**, which is exactly what the direct 2Y comparison showed independently (ours 3.379985%
+  vs citivelo 3.376310%, +0.37 bp).
+- Against a typical on-market spread-to-mid of roughly half a 0.5 bp tick, **a systematic
+  ~0.4 bp mid offset is larger than the signal the direction rule reads**. A positive offset
+  makes trades look like they printed below mid → dealer PAID, which is a candidate explanation
+  for the entire 70–82% PAID skew.
+- Sampled prints fell in the 02:16–03:59 ET overnight window (first 25 by execution time), where
+  liquidity is thinnest. The full study must cover the whole session and stratify by time of day
+  before this is a finding rather than a lead.
+- Exclusion ladder on that day: 599 projected → 345 (on-market methods) → 276 (curve-clean,
+  −69) → **243 signed** (whitelist, −33) = 41% of classified units. `p_flip` coverage in the
+  signed universe is **93%**, much better than the 42% the raw table suggested — the missing-p_flip
+  classes are precisely the ones the universe already excludes.
 
 ### Phase C — signal research (G0–G5)
 
