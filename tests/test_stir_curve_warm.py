@@ -98,3 +98,122 @@ def test_warm_reraises_when_configured():
     with pytest.raises(RuntimeError):
         warm_pricer(p, {("bad", pd.Timestamp("2026-07-02T13:04:00Z"))},
                     max_workers=1, on_error="raise")
+
+
+# --------------------------------------------------------------------------
+# bulk seeding: one vendor round trip per curve-day instead of ~479
+# --------------------------------------------------------------------------
+class _BulkMDP:
+    """Fake MDP recording how it was asked for curves."""
+
+    def __init__(self, *, bulk_returns=None, bulk_raises=False):
+        self.bulk_calls = []
+        self.single_calls = []
+        self._bulk_returns = bulk_returns
+        self._bulk_raises = bulk_raises
+
+    def bulk_get_data(self, request):
+        # mirror the real signature's destructive pops so a caller that reuses a
+        # dict across curves would be caught here
+        curve_name = request.pop("curve_name")
+        timestamps = request.pop("timestamps")
+        self.bulk_calls.append((curve_name, list(timestamps)))
+        if self._bulk_raises:
+            raise RuntimeError("bulk unavailable")
+        if self._bulk_returns is None:
+            return {ts: f"bulk::{curve_name}::{ts}" for ts in timestamps}
+        return self._bulk_returns(curve_name, timestamps)
+
+    def _get_curve(self, curve_name=None, timestamp=None):
+        self.single_calls.append((curve_name, timestamp))
+        return f"single::{curve_name}::{timestamp}"
+
+
+class _P:
+    def __init__(self, mdp):
+        self._mdp = mdp
+        self._handles = {}
+
+
+def _demand(n=5, curve="USD-SOFR-1D-Q12xM12STIRT"):
+    base = pd.Timestamp("2026-07-10 09:00", tz="America/New_York")
+    return {(curve, base + pd.Timedelta(minutes=i)) for i in range(n)}
+
+
+def test_bulk_warm_makes_one_call_per_curve_not_per_minute():
+    """The whole point: ~479 vendor round trips per curve-day become one."""
+    mdp = _BulkMDP()
+    p = _P(mdp)
+    demand = _demand(5) | _demand(4, curve="USD-OIS-Q12xM12STIRT-SERFFX-MIX23")
+    res = warm_pricer(p, demand, max_workers=4)
+    assert len(mdp.bulk_calls) == 2                 # one per curve
+    assert mdp.single_calls == []                   # nothing fell through
+    assert res["bulk_seeded"] == 9 and res["built"] == 0 and res["failed"] == 0
+    assert len(p._handles) == 9
+    assert all(str(v).startswith("bulk::") for v in p._handles.values())
+
+
+def test_bulk_warm_falls_back_per_minute_for_whatever_bulk_missed():
+    base = pd.Timestamp("2026-07-10 09:00", tz="America/New_York")
+    covered = {base, base + pd.Timedelta(minutes=1)}
+
+    def partial(curve_name, timestamps):
+        return {ts: f"bulk::{curve_name}::{ts}" for ts in timestamps if ts in covered}
+
+    mdp = _BulkMDP(bulk_returns=partial)
+    p = _P(mdp)
+    res = warm_pricer(p, _demand(5), max_workers=2)
+    assert res["bulk_seeded"] == 2
+    assert res["built"] == 3                        # the residual three
+    assert len(mdp.single_calls) == 3
+    assert len(p._handles) == 5
+
+
+def test_bulk_failure_is_survivable():
+    """A bulk problem may cost time; it must never cost correctness."""
+    mdp = _BulkMDP(bulk_raises=True)
+    p = _P(mdp)
+    res = warm_pricer(p, _demand(4), max_workers=2)
+    assert res["bulk_seeded"] == 0 and res["built"] == 4 and res["failed"] == 0
+    assert len(p._handles) == 4
+
+
+def test_bulk_can_be_disabled():
+    mdp = _BulkMDP()
+    p = _P(mdp)
+    res = warm_pricer(p, _demand(3), max_workers=2, bulk=False)
+    assert mdp.bulk_calls == [] and res["built"] == 3
+
+
+def test_bulk_matches_on_timestamp_value_not_object_identity():
+    """The batch path may key by an equal-but-different timestamp type."""
+    def as_naive_utc(curve_name, timestamps):
+        return {pd.Timestamp(ts).tz_convert("UTC"): f"bulk::{curve_name}::{ts}"
+                for ts in timestamps}
+
+    mdp = _BulkMDP(bulk_returns=as_naive_utc)
+    p = _P(mdp)
+    res = warm_pricer(p, _demand(3), max_workers=2)
+    assert res["bulk_seeded"] == 3 and res["built"] == 0
+
+
+def test_already_warm_handles_are_never_refetched():
+    mdp = _BulkMDP()
+    p = _P(mdp)
+    demand = _demand(3)
+    for key in demand:
+        p._handles[key] = "preexisting"
+    res = warm_pricer(p, demand, max_workers=2)
+    assert res == {"built": 0, "reused": 3, "failed": 0, "bulk_seeded": 0}
+    assert mdp.bulk_calls == [] and mdp.single_calls == []
+
+
+def test_bulk_seeds_only_missing_keys():
+    mdp = _BulkMDP()
+    p = _P(mdp)
+    demand = sorted(_demand(4))
+    p._handles[demand[0]] = "preexisting"
+    res = warm_pricer(p, set(demand), max_workers=2)
+    assert res["reused"] == 1 and res["bulk_seeded"] == 3
+    assert p._handles[demand[0]] == "preexisting"     # not overwritten
+    assert len(mdp.bulk_calls[0][1]) == 3             # only the missing three asked for
