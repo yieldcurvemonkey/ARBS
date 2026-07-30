@@ -92,6 +92,96 @@ stands. One caveat for G0/G3: the Citi workbook's sheets run Mon 00:01 → Fri 1
 **Friday-afternoon prints have no independent mid** (2026-01-30 and 2026-05-15 both fell back to
 11:59). Friday PM is therefore an explicit hole in the pseudo-label study, not a silent one.
 
+---
+
+## Data-surface constraints found by recon (2026-07-29) — all load-bearing
+
+These change what the study can claim, so they are recorded before the study runs.
+
+**C1 — `venue_status()` is dead code in production.** Its only caller anywhere is
+`scripts/diagnose_d2c_venue_skew.py:110`. Nothing in the classifier, projection or ladder path
+applies the whitelist, so both tables contain `VENUE_UNKNOWN` units and the research loader must
+filter at read time. The only enforced gate is `l.venue = 'D2C'`, which means merely "platform is
+not one of the 6 IDB codes" — a NULL platform passes. `VENUE_UNKNOWN` is ~9.6% of the already-D2C
+universe, and **the whitelist does not fix the PAID skew**: the cleanest stratum
+(`D2C_WHITELISTED × curve-clean × on-market`) still came out ~72% PAID against ~72.3% overall.
+So the skew is not a venue artefact, and G0 has to look elsewhere.
+
+**C2 — `p_flip` is missing for a large minority, and stored as NaN rather than NULL.**
+`score_on_market` returns `p_flip=None` in both gate branches (`|dev| > 3S` curve-suspect, and
+`|dev| < 0.5·(S/2)` ambiguous→TICK_RULE), so only 1799/4239 classified units carry one, and
+`arbs_stir_ladder_prints_v1` holds numeric `'NaN'` in 16740/33948 rows. `ladder_state._weight`
+does `(1 − 2·p_flip).fillna(1.0)`, so those prints silently weight 1.0 — the intended fallback,
+but it means any SQL `avg()` over the column returns NaN, and the share must be reported.
+Both excluded classes are already outside the primary universe, so the primary should be
+mostly-populated — **to be verified and reported, not assumed.**
+
+**C3 — the `expected` weighting is close to inert under the current calibration.**
+`disp_jns` is NULL on 100% of `arbs_stir_tick_size_v1` (7558 rows) because ticks-only calibration
+feeds `s2m_bps = NaN`, so `curve_suspect` is false everywhere in that table and `sigma_mid`
+always collapses to its fallback `futures_tick_bps / 2` = 0.125bp (SR3) / 0.25bp (FF). A print a
+normal half-spread from mid then scores z≈2, `p_flip ≈ 0.023`, weight ≈ 0.95. So the
+`expected`-vs-`unweighted` arm of the secondary grid should show almost nothing, and that is a
+property of the calibration, not evidence about the signal. Report it; do not present it as a
+robustness result. (Per-print `curve_suspect_trade` on the *direction* table is unaffected — it
+comes from the `|dev| > 3S` branch, not from the tick table's `curve_suspect`.)
+
+**C4 — ladder netting is a documented no-op.** No lineage column
+(`original_dissemination_identifier` / `prior_uti` / `prior_usi`) exists on the tape, so
+`extract_unwind_events` returns an empty frame. Positions therefore decay out via the EWMA
+cutoff only; genuine lifecycle terminations are invisible. Also, `extract_unwind_events` passes
+only `is_block`, so any unwind it did find would be stamped INDETERMINATE (+60min).
+
+**C5 — `visibility_timestamp` is a modelled legal-delay estimate, not observed tape time.**
+There is no `dissemination_timestamp` column anywhere in `arbs_usd_swap_tape_legs_v2` (re-probed
+twice). Worse, the `is_capped` field feeding the `CLEARED_OFF_FACILITY_CAPPED` branch is a
+**notional**-cap marker, not a Part 43 capped-price/dissemination flag — a semantic mismatch, so
+the delay cannot be cited as strictly regulatory. And `visibility_class` compares with
+`is True`/`is False`, so numpy/pandas booleans silently fall through to INDETERMINATE (+60min):
+any new caller must coerce with `bool()`.
+
+**C6 — no 25bp structural grid or level-proximity implementation exists.** It is spec prose only.
+`classify_meeting_proximity` measures meeting *count* distance, not distance in rate space. G4's
+level-proximity conditioning therefore has to be built, from the decision-time curve — and
+**`SDRUtils/analytics/fomc.py` cannot be used for it**: its whole pricing path is anchored on
+`date.today()` (expired meetings skipped, schedule trimmed to today−90d, fixings defaulted to
+today), so it is not point-in-time safe. The safe path is
+`resolve_central_bank_tenor(..., as_of=d)` against a curve snapshot at *d*, which is what
+`ladder.py` already does for `fomc_1..12`.
+
+**C7 — statistics: reuse vs build.** Already present and reused: `BT/signals/deflated_sharpe.py`
+(deflated Sharpe, expected max Sharpe under the null, DSR gate) and `RVUtils/SFRRVLab/stats.py`
+(`nw_tstat`, `cost_curve`, `nonoverlapping_sharpe`, `grid_distribution`, `deflated_for_grid`,
+`neighbourhood_stability`, `verdict`). Absent everywhere and therefore written:
+Romano-Wolf / max-t, any reusable day-blocked bootstrap, rank IC. (mlfinlab's bootstrap functions
+are `pass` stubs returning `None`.)
+
+**C8 — costs: reuse `RVUtils/MeanRev/contracts.py`.** Per-CONTRACT bp-native model
+(`SR3_DV01_USD=25.0`, `SR3_TICK_BP=0.5`, `SR3_HALF_SPREAD_BP=0.25`, `package_cost_bp`), which
+documents that the older per-LEG charge understates a fly (true round trip 2.0bp, not 1.5bp).
+A single SR3 outright round trip = 0.5bp, matching the locked cost model.
+`BT/serff/config.py` supplies the front/back tick split and `point_value`.
+
+**C9 — league-table convention to adopt:** `notebooks/backtests/sfr_fly_meanrev_common.py` writes
+**two** rows per framework — *best-config* and *median-config*. The median row is the
+anti-selection control, and this study needs it.
+
+**C10 — conditioning series that already exist** (no need to build): `BT/serff/data.build_panel`
+(daily SOFR−EFFR bp, H.4.1 reserves/RRP/TGA, five named funding regimes, turn dummies),
+`RVUtils/general.realized_bpvol`, `BT/signals/sfr_kink_fade.compute_vol_regime_ts` (rolling vol
+percentile), `sfr_fly_triggers.compute_regime_filters` + `days_to_next_fomc`, and per-print
+`execution_session` / `fomc_proximity` on the tape. Dead end: the CurveStore analytics panels
+nominally holding `par_rate_FOMC_1..7` are 100% NaN in every value column for all 8 assets.
+
+**C11 — join hazards.** For OUTRIGHT units `unit_key == trade_id` but the leg still carries a
+non-NULL `package_id` (the FK is NOT NULL, singles get a synthetic package), so
+`COALESCE(package_id, trade_id)` is the WRONG way to rebuild `unit_key` — branch on
+`direction.package_id IS NULL`. `dv01` means different things in the two tables (direction =
+gross Σ|leg risk|; ladder = `structure_dv01`). Tape `risk` is signed and pre-rounded to \$100 —
+always `.abs()`. Anchor leg = earliest `(expiration_date, effective_date, trade_id)`, three keys.
+`ALL_PKG_LEGS_SQL` applies no eligibility filter, so a package unit can contain legs that would
+individually have failed, and its per-unit venue label is an anchor-leg approximation.
+
 ## Phase log
 
 ### Phase A — PR #354 cleanup
