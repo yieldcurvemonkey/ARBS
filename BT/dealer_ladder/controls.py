@@ -27,8 +27,26 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
+NY = "America/New_York"
 
-def curve_implied_contract_rates(pricer, curve_name, grid, contracts) -> pd.DataFrame:
+
+def _stamp_lag_min(handle, ts):
+    """Minutes from the curve's OWN stamp to ``ts``. Negative ⟹ the curve is from
+    the FUTURE relative to the decision minute. NaT stamp ⟹ NaN (unverifiable)."""
+    try:
+        meta = handle.meta() if hasattr(handle, "meta") else {}
+        ct = pd.Timestamp(meta.get("timestamp"))
+    except Exception:
+        return np.nan
+    if pd.isna(ct):
+        return np.nan
+    ct = (ct.tz_localize(NY) if ct.tzinfo is None else ct.tz_convert(NY))
+    return (pd.Timestamp(ts).tz_convert(NY) - ct).total_seconds() / 60.0
+
+
+def curve_implied_contract_rates(pricer, curve_name, grid, contracts, *,
+                                 require_point_in_time=True,
+                                 tolerance_min=0.0) -> pd.DataFrame:
     """Curve-implied rate (bp) per contract per decision minute.
 
     ``contracts`` is ``[(bucket_key, effective_datetime, maturity_datetime, is_ser)]``
@@ -38,8 +56,22 @@ def curve_implied_contract_rates(pricer, curve_name, grid, contracts) -> pd.Data
     A minute whose curve is unavailable yields NaN for that whole row rather than a
     stale carry-forward: a control silently filled with yesterday's curve would
     make the horse race look cleaner than it is.
+
+    POINT-IN-TIME IS VERIFIED, NOT ASSUMED. The decision curve is calibrated from
+    Barchart bars selected with ``method="nearest"`` and then ``ffill().bfill()``, so
+    a request for a minute the vendor did not cover can legitimately resolve against
+    a bar from AFTER it. Nothing about the ladder audits touches this path, because
+    the leak is in the CONTROLS, not the signal — and a control carrying future
+    information invalidates the horse race in either direction: it can absorb
+    variance the signal should have explained, or manufacture a basis reversal that
+    looks like the signal was really trading curve-fit error. So each row is checked
+    against the handle's own stamp and dropped when that stamp is later than the
+    decision minute. The drop and unverifiable counts are attached to ``.attrs`` and
+    reported by G3; a row whose stamp cannot be read at all is KEPT and counted,
+    because dropping every unverifiable row would silently empty the control panel
+    on any pricer that does not expose ``meta()``.
     """
-    rows = {}
+    rows, dropped, unknown = {}, 0, 0
     for ts in pd.DatetimeIndex(grid):
         try:
             handle = pricer.handle(curve_name, ts)
@@ -47,6 +79,14 @@ def curve_implied_contract_rates(pricer, curve_name, grid, contracts) -> pd.Data
         except Exception:
             rows[ts] = {b: np.nan for b, *_ in contracts}
             continue
+        if require_point_in_time:
+            lag = _stamp_lag_min(handle, ts)
+            if pd.isna(lag):
+                unknown += 1
+            elif lag < -abs(tolerance_min):
+                dropped += 1
+                rows[ts] = {b: np.nan for b, *_ in contracts}
+                continue
         fixings = handle.index()
         ref = pd.Timestamp(handle.reference_date())
         vals = {}
@@ -66,7 +106,17 @@ def curve_implied_contract_rates(pricer, curve_name, grid, contracts) -> pd.Data
             except Exception:
                 vals[bucket] = np.nan
         rows[ts] = vals
-    return pd.DataFrame(rows).T.sort_index()
+    out = pd.DataFrame(rows).T.sort_index()
+    n = max(len(rows), 1)
+    out.attrs["future_curve_rows_dropped"] = dropped
+    out.attrs["unverifiable_stamp_rows"] = unknown
+    out.attrs["future_curve_drop_rate"] = dropped / n
+    out.attrs["unverifiable_stamp_rate"] = unknown / n
+    if dropped:
+        print(f"  point-in-time: dropped {dropped}/{n} "
+              f"({dropped / n:.1%}) decision minutes whose {curve_name} curve was "
+              f"stamped AFTER the decision")
+    return out
 
 
 def basis_bp(implied_bp: pd.DataFrame, market_bp: pd.DataFrame) -> pd.DataFrame:
@@ -100,8 +150,10 @@ def independent_implied_contract_rates(grid, contracts, *, source="citivelo",
     # blank out minutes the independent source did not actually cover
     stale = _independent_staleness_min(pricer, curve_name, grid)
     if stale is not None:
+        attrs = dict(out.attrs)
         mask = stale.abs() <= 5.0
         out = out.where(mask.reindex(out.index).to_numpy()[:, None])
+        out.attrs.update(attrs)          # .where does not reliably carry attrs
     return out
 
 
@@ -110,16 +162,7 @@ def _independent_staleness_min(pricer, curve_name, grid):
     vals = []
     for ts in pd.DatetimeIndex(grid):
         try:
-            handle = pricer.handle(curve_name, ts)
-            meta = handle.meta() if hasattr(handle, "meta") else {}
-            ct = pd.Timestamp(meta.get("timestamp"))
-            if pd.isna(ct):
-                vals.append(np.nan)
-                continue
-            ct = (ct.tz_localize("America/New_York") if ct.tzinfo is None
-                  else ct.tz_convert("America/New_York"))
-            vals.append((pd.Timestamp(ts).tz_convert("America/New_York") - ct)
-                        .total_seconds() / 60.0)
+            vals.append(_stamp_lag_min(pricer.handle(curve_name, ts), ts))
         except Exception:
             vals.append(np.nan)
     return pd.Series(vals, index=pd.DatetimeIndex(grid))

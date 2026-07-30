@@ -539,6 +539,24 @@ def run_g3(ctx, *, space=None, horizon_min=None, in_sample=True) -> dict:
         front_rank=_r(ctx.front_rank.get(space)))
     long = study.align_long(z, target, extra=panels)
     out = {"long": long}
+
+    # The controls are built from curves, and a curve that reads a futures bar from
+    # after the decision minute would invalidate this race in either direction. The
+    # builders verify their own stamps; surface what they dropped so a reader can see
+    # whether the surviving control panel is thin.
+    pit = {}
+    for label, frame in (("decision_curve", ctx.implied_bp.get(space)),
+                         ("independent_curve", ctx.indep_implied_bp.get(space))):
+        a = getattr(frame, "attrs", {}) if frame is not None else {}
+        if "future_curve_rows_dropped" in a:
+            pit[label] = {
+                "rows_dropped_future_stamp": a["future_curve_rows_dropped"],
+                "drop_rate": a["future_curve_drop_rate"],
+                "rows_unverifiable_stamp": a["unverifiable_stamp_rows"],
+                "unverifiable_rate": a["unverifiable_stamp_rate"]}
+    if pit:
+        out["point_in_time"] = pd.DataFrame(pit).T.rename_axis("curve").reset_index()
+        _write(ctx, f"g3_point_in_time_{space}", out["point_in_time"])
     if long.empty:
         return {**out, "verdict": _verdict("G3", None, "no aligned observations")}
 
@@ -743,8 +761,6 @@ def run_primary(ctx, *, in_sample=True) -> dict:
     mask = _date_mask(rates.index, lo, hi)
     rates_w = rates[mask]
     z = ctx.signal[space]["z"].reindex(rates_w.index)
-    target_rates = data.forward_rate_change_bp(rates, p.horizon_min)  # noqa: F841
-
     roots, near = _root_and_expiry(ctx, space)
     costs = study.cost_bp_map(list(rates_w.columns), ctx.config.cost, near, roots)
     level = ctx.signal[space]["level"].reindex(rates_w.index) \
@@ -773,6 +789,70 @@ def run_primary(ctx, *, in_sample=True) -> dict:
             f"n={res['n']} trades over {res['n_blocks']} sessions "
             f"(pass needs mean>0 and t>={p.t_pass})"),
     }
+
+
+def run_staleness_sensitivity(ctx, *, caps=(None, 30, 15, 10, 5, 2, 0),
+                              in_sample=True) -> dict:
+    """The primary spec re-run under progressively tighter staleness caps.
+
+    Not a gate and not a robustness knob to pick from -- the pre-registration fixed
+    no cap, so the primary runs uncapped and this table exists to say how much of
+    that number is measured against CARRIED-FORWARD prices rather than fresh ones.
+
+    It matters because the target is built on a per-session minute grid with a capped
+    forward-fill: SR3 deferred contracts and ZQ trade in bursts, so a nominal 60-minute
+    horizon can be a 35-minute price move with 25 minutes of flat carry at one end.
+    That biases the measured move toward zero (attenuation, not false positives), so a
+    result that STRENGTHENS as the cap tightens is evidence the effect is real and was
+    being diluted; one that vanishes was living in the carry.
+
+    A cap of 0 requires a bar stamped at the decision minute itself at BOTH ends, which
+    on this data keeps only the front contracts in the busiest hours -- so a small n
+    there is coverage, not a failure.
+    """
+    p = ctx.config.primary
+    space = p.target_space
+    rates = ctx.rates_bp.get(space, pd.DataFrame())
+    if rates.empty:
+        return {"table": pd.DataFrame()}
+    lo, hi = (ctx.config.window.in_sample() if in_sample
+              else ctx.config.window.lockout())
+    rates_w = rates[_date_mask(rates.index, lo, hi)]
+    z = ctx.signal[space]["z"].reindex(rates_w.index)
+    level = (ctx.signal[space]["level"].reindex(rates_w.index)
+             if space in ctx.signal else None)
+    roots, near = _root_and_expiry(ctx, space)
+    costs = study.cost_bp_map(list(rates_w.columns), ctx.config.cost, near, roots)
+    stale = ctx.stale_min.get(space)
+
+    rows = []
+    for cap in caps:
+        led = study.trade_ledger(
+            z, rates_w, horizon_min=p.horizon_min, threshold=p.z_threshold,
+            cost_bp_by_bucket=costs, predicted_sign=p.predicted_sign,
+            direction_panel=level, stale_min=stale, max_stale_min=cap)
+        r = study.evaluate_trades(led, n_boot=ctx.config.stats.n_boot,
+                                  seed=ctx.config.stats.seed)
+        realised = np.nan
+        if not led.empty and "entry_stale_min" in led.columns:
+            # how much of the nominal horizon was actually carry, at the worse end
+            worst = led[["entry_stale_min", "exit_stale_min"]].max(axis=1)
+            realised = float(np.nanmean(
+                np.clip(p.horizon_min - worst.to_numpy(), 0, p.horizon_min)))
+        rows.append({
+            "max_stale_min": ("none" if cap is None else cap),
+            "n_trades": r["n"], "n_sessions": r["n_blocks"],
+            "gross_bp": (float(led["gross_bp"].mean()) if not led.empty else np.nan),
+            "net_bp": r["mean"], "t": r["t"],
+            "stars": r["stars"],
+            "mean_realised_horizon_min": realised,
+            "share_of_uncapped_trades": np.nan})
+    table = pd.DataFrame(rows)
+    if not table.empty and table["n_trades"].iloc[0]:
+        table["share_of_uncapped_trades"] = (table["n_trades"]
+                                            / table["n_trades"].iloc[0])
+    _write(ctx, "g4_staleness_sensitivity", table)
+    return {"table": table}
 
 
 def _date_mask(index, lo, hi):
@@ -1014,6 +1094,7 @@ def run_all(ctx, conn=None, *, run_lockout=False, label_limit=0) -> dict:
                         "threshold": ctx.config.primary.z_threshold},
                        {"mean": float(res["primary_is"]["result"]["mean"].iloc[0]),
                         "t": float(res["primary_is"]["result"]["t"].iloc[0])})
+    res["staleness"] = run_staleness_sensitivity(ctx)
     res["placebos"] = run_placebos(ctx)
     res["label_free"] = run_label_free(ctx)
     res["conditioning"] = run_conditioning(ctx, res["primary_is"])

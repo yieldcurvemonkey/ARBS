@@ -320,3 +320,142 @@ def test_flow_response_excludes_the_event_bar():
     assert len(ev) == 1
     # the -777 bar at the event instant must NOT be in the window
     assert ev["flow_signed_by_innovation"].iloc[0] == pytest.approx(1.0)
+
+
+# ============== the control curve must prove it is point-in-time, not be trusted
+class _FakeStirf:
+    def __init__(self, rate_pct):
+        self._r = rate_pct
+
+    def rate(self, curves=None):
+        return complex(self._r, 0.0)
+
+
+class _FakeHandle:
+    """Minimal stand-in for the pricer handle: enough surface for the builder."""
+    def __init__(self, ts, stamp, rate_pct=4.0):
+        self._ts, self._stamp, self._rate = ts, stamp, rate_pct
+
+    def handle(self):
+        return object()
+
+    def index(self):
+        return pd.Series(dtype=float)
+
+    def reference_date(self):
+        return pd.Timestamp(self._ts).tz_localize(None).normalize()
+
+    def meta(self):
+        return {"timestamp": self._stamp}
+
+    def build_stirf(self, **kw):
+        return _FakeStirf(self._rate)
+
+
+class _FakePricer:
+    def __init__(self, stamp_of):
+        self.stamp_of = stamp_of
+
+    def handle(self, curve_name, ts):
+        return _FakeHandle(ts, self.stamp_of(ts))
+
+
+CONTRACTS = [("SFRU26", datetime.datetime(2026, 9, 16),
+              datetime.datetime(2026, 12, 16), False)]
+
+
+def test_a_curve_stamped_AFTER_the_decision_minute_is_dropped():
+    """The decision curve is calibrated from Barchart bars selected with
+    method="nearest" then ffill().bfill(), so an uncovered minute can resolve against
+    a LATER bar. No ladder audit touches this: the leak is in the CONTROLS, and a
+    control carrying future information invalidates the horse race either by
+    absorbing variance the signal should have explained or by manufacturing a basis
+    reversal that looks like the signal was trading curve-fit error."""
+    grid = pd.date_range("2026-03-02 09:00", periods=6, freq="15min", tz=NY)
+    # every other minute resolves against a curve stamped 20 minutes in the FUTURE
+    def stamp(ts):
+        i = list(grid).index(ts)
+        return (ts + pd.Timedelta(minutes=20)) if i % 2 else ts
+    out = controls.curve_implied_contract_rates(
+        _FakePricer(stamp), "USD-SOFR-1D", grid, CONTRACTS)
+    assert out["SFRU26"].isna().sum() == 3
+    assert out.attrs["future_curve_rows_dropped"] == 3
+    assert out.attrs["future_curve_drop_rate"] == pytest.approx(0.5)
+    # and the point-in-time rows survive with a real number
+    assert out["SFRU26"].notna().sum() == 3
+
+
+def test_a_stale_but_past_curve_is_KEPT():
+    """Only FUTURE stamps are a leak. A curve from 30 minutes ago is a data-quality
+    question, handled by the staleness reporting -- dropping it here would confuse
+    the two and quietly shrink the control panel."""
+    grid = pd.date_range("2026-03-02 09:00", periods=4, freq="15min", tz=NY)
+    out = controls.curve_implied_contract_rates(
+        _FakePricer(lambda ts: ts - pd.Timedelta(minutes=30)), "USD-SOFR-1D",
+        grid, CONTRACTS)
+    assert out["SFRU26"].notna().all()
+    assert out.attrs["future_curve_rows_dropped"] == 0
+
+
+def test_an_unreadable_stamp_is_counted_not_dropped():
+    """Dropping every unverifiable row would empty the control panel on any pricer
+    that does not expose meta(), which is a silent scope cut, not a safety measure.
+    So it is kept and counted, and G3 prints the rate."""
+    grid = pd.date_range("2026-03-02 09:00", periods=4, freq="15min", tz=NY)
+    out = controls.curve_implied_contract_rates(
+        _FakePricer(lambda ts: None), "USD-SOFR-1D", grid, CONTRACTS)
+    assert out["SFRU26"].notna().all()
+    assert out.attrs["unverifiable_stamp_rows"] == 4
+    assert out.attrs["unverifiable_stamp_rate"] == pytest.approx(1.0)
+    assert out.attrs["future_curve_rows_dropped"] == 0
+
+
+def test_the_guard_can_be_switched_off_deliberately():
+    grid = pd.date_range("2026-03-02 09:00", periods=4, freq="15min", tz=NY)
+    out = controls.curve_implied_contract_rates(
+        _FakePricer(lambda ts: ts + pd.Timedelta(minutes=20)), "USD-SOFR-1D",
+        grid, CONTRACTS, require_point_in_time=False)
+    assert out["SFRU26"].notna().all()
+    assert out.attrs["future_curve_rows_dropped"] == 0
+
+
+def test_g3_reports_the_point_in_time_drop_rate(monkeypatch):
+    _no_write(monkeypatch)
+    ctx = _context(effect=0.6, seed=40)
+    ctx.implied_bp["FUTURES"].attrs.update({
+        "future_curve_rows_dropped": 7, "future_curve_drop_rate": 0.05,
+        "unverifiable_stamp_rows": 0, "unverifiable_stamp_rate": 0.0})
+    out = gates.run_g3(ctx)
+    tab = out["point_in_time"]
+    row = tab[tab["curve"] == "decision_curve"].iloc[0]
+    assert row["rows_dropped_future_stamp"] == 7
+    assert row["drop_rate"] == pytest.approx(0.05)
+
+
+# ======================== staleness sensitivity must be reported, not assumed away
+def test_staleness_sensitivity_tightens_monotonically(monkeypatch):
+    """The target rides a capped forward-fill, so a nominal 60-minute horizon can be a
+    35-minute move with 25 minutes of flat carry. The primary spec fixed no cap, so
+    the honest move is to publish the sensitivity rather than pick a cap."""
+    _no_write(monkeypatch)
+    ctx = _context(effect=0.7, seed=41)
+    stale = pd.DataFrame(
+        {b: np.tile([0.0, 4.0, 12.0, 25.0], len(ctx.grid) // 4 + 1)[:len(ctx.grid)]
+         for b in BUCKETS}, index=ctx.grid)
+    ctx = dataclasses.replace(ctx, stale_min={"FUTURES": stale})
+    tab = gates.run_staleness_sensitivity(ctx)["table"]
+    assert list(tab["max_stale_min"])[:2] == ["none", 30]
+    n = tab["n_trades"].to_numpy()
+    assert (np.diff(n) <= 0).all(), f"tighter caps must not admit more trades: {n}"
+    assert tab["share_of_uncapped_trades"].iloc[0] == pytest.approx(1.0)
+    # the realised horizon must never exceed the nominal one
+    assert (tab["mean_realised_horizon_min"].dropna()
+            <= ctx.config.primary.horizon_min + 1e-9).all()
+
+
+def test_staleness_table_reports_gross_and_net_separately(monkeypatch):
+    _no_write(monkeypatch)
+    tab = gates.run_staleness_sensitivity(_context(effect=0.7, seed=42))["table"]
+    row = tab.iloc[0]
+    assert np.isfinite(row["gross_bp"]) and np.isfinite(row["net_bp"])
+    assert row["gross_bp"] >= row["net_bp"] - 1e-9, "net must carry the cost"
