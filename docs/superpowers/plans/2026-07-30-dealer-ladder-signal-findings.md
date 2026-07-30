@@ -457,6 +457,22 @@ zero and is, if anything, *more* negative on the cleaned data. G3's SR3 univaria
 
 So the defects cost sample size and cost nothing else. **The verdict stands on the cleaned data.**
 
+**The secondary grid agrees as well**, which the gate table alone would not show — a headline can
+be robust while the tail is not, and a handful of variants flipping sign is exactly how a data
+defect would surface in a 96-variant family.
+
+| | pre-registered | robustness |
+|---|---|---|
+| variants run | 96 | 96 (all in common) |
+| mean bp: min / median / max | −0.8842 / −0.5135 / −0.3750 | −0.8229 / −0.5109 / −0.3406 |
+| **positive variants** | **0** | **0** |
+| clear FWER < 0.05 | 83 | 82 |
+| **positive AND surviving FWER** | **0** | **0** |
+
+**Zero sign flips between the arms**, a rank correlation of **0.917**, and a mean per-variant
+change of +0.0098 bp. Not one of 96 variants is profitable in either arm, before or after the
+family-wise correction.
+
 **One stage was lost and it is reported rather than quietly dropped.** G0 failed in the robustness
 arm with `psycopg2.errors.QueryCanceled: canceling statement due to statement timeout`. The cause
 was not the study: the tape ingest ran `ALTER TABLE arbs_usd_swap_tape_packages_v2 ADD COLUMN`,
