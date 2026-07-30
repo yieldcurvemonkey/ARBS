@@ -1209,7 +1209,15 @@ def run_placebos(ctx, *, space=None, primary=None) -> dict:
                                  threshold=p.z_threshold, cost_bp_by_bucket=costs,
                                  predicted_sign=p.predicted_sign,
                                  direction_panel=lvl)
-        return study.evaluate_trades(led, n_boot=300, seed=ctx.config.stats.seed)
+        out = study.evaluate_trades(led, n_boot=300, seed=ctx.config.stats.seed)
+        # Also GROSS. Each arm pays the same ~0.5bp round trip, so net-of-cost lands every
+        # placebo near -0.5 regardless of what the manipulation did, and the suite stops
+        # discriminating. Gross is where a destroyed signal is visibly destroyed.
+        g = study.evaluate_trades(led, value="gross_bp", n_boot=300,
+                                  seed=ctx.config.stats.seed)
+        out.update({"gross_mean": g["mean"], "gross_t": g["t"],
+                    "gross_stars": g["stars"], "gross_hit_rate": g["hit_rate"]})
+        return out
 
     prints = ctx.prints
     reference = None
@@ -1218,9 +1226,17 @@ def run_placebos(ctx, *, space=None, primary=None) -> dict:
         if res is not None and len(res):
             reference = {k: v for k, v in res.iloc[0].to_dict().items()
                          if k != "segment"}
+    # gross for the reference: the primary result carries net only, so this one field is
+    # recomputed here. It is cross-checkable against g5_net_table's gross row, which is
+    # derived independently from the primary's own ledger.
+    ref_gross = {}
+    if reference is not None:
+        local = evaluate(prints)
+        ref_gross = {k: local[k] for k in
+                     ("gross_mean", "gross_t", "gross_stars", "gross_hit_rate")}
     rows = [
         {"placebo": "none (reference)", "expect": "the effect, if any",
-         **(reference if reference is not None else evaluate(prints))},
+         **(dict(reference, **ref_gross) if reference is not None else evaluate(prints))},
         {"placebo": "sign shuffle within session",
          "expect": "destroyed; survival means intensity not direction",
          **evaluate(study.placebo_sign_shuffle(prints, ctx.config.stats.seed))},
