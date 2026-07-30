@@ -279,3 +279,49 @@ def test_conditioning_verdict_reports_the_skipped_count(monkeypatch):
     ctx = _context(effect=0.7, seed=64)
     out = gates.run_conditioning(ctx, gates.run_primary(ctx, in_sample=True))
     assert "could not be split" in out["verdict"]["headline"]
+
+
+# ============ capacity must not count volume traded before the position existed
+def test_capacity_window_is_strictly_after_entry():
+    """The volume panel is right-closed, so the bar stamped at the entry minute covers
+    the interval ENDING there -- traded before the position existed. Counting it inflates
+    a 60-minute window by one bar in twelve, ~8% of the headline capacity number, in the
+    optimistic direction."""
+    idx = pd.date_range("2026-03-02 09:00", periods=13, freq="5min", tz=NY)
+    vols = pd.DataFrame({"A": [1000.0] + [100.0] * 12}, index=idx)
+    led = pd.DataFrame([{"ts": idx[0], "exit_ts": idx[12], "bucket": "A",
+                         "net_bp": 0.0}])
+    cap = study.capacity_curve(led, vols, participation=(1.0,),
+                               dv01_per_contract=1.0)
+    # 12 bars of 100 after entry; the 1000 at the entry stamp must NOT be counted
+    assert cap["median_dv01_per_trade"].iloc[0] == pytest.approx(1200.0)
+
+
+def test_capacity_counts_trades_it_could_not_price():
+    """A median over a silently reduced subset is not the statistic it claims to be."""
+    idx = pd.date_range("2026-03-02 09:00", periods=13, freq="5min", tz=NY)
+    vols = pd.DataFrame({"A": 100.0}, index=idx)
+    led = pd.DataFrame([
+        {"ts": idx[0], "exit_ts": idx[12], "bucket": "A", "net_bp": 0.0},
+        {"ts": idx[0], "exit_ts": idx[12], "bucket": "MISSING", "net_bp": 0.0},
+    ])
+    cap = study.capacity_curve(led, vols, participation=(0.1,))
+    assert cap["n_trades_priced"].iloc[0] == 1
+    assert cap["n_trades_dropped"].iloc[0] == 1
+
+
+def test_capacity_on_a_ledger_no_bucket_of_which_can_be_priced():
+    idx = pd.date_range("2026-03-02 09:00", periods=5, freq="5min", tz=NY)
+    vols = pd.DataFrame({"A": 100.0}, index=idx)
+    led = pd.DataFrame([{"ts": idx[0], "exit_ts": idx[4], "bucket": "Z",
+                         "net_bp": 0.0}])
+    assert study.capacity_curve(led, vols).empty
+
+
+def test_capacity_says_what_it_is_measuring():
+    idx = pd.date_range("2026-03-02 09:00", periods=5, freq="5min", tz=NY)
+    vols = pd.DataFrame({"A": 100.0}, index=idx)
+    led = pd.DataFrame([{"ts": idx[0], "exit_ts": idx[4], "bucket": "A",
+                         "net_bp": 0.0}])
+    basis = study.capacity_curve(led, vols)["basis"].iloc[0]
+    assert "NOT measured depth" in basis and "(entry, exit]" in basis

@@ -473,26 +473,44 @@ def capacity_curve(ledger: pd.DataFrame, volumes: pd.DataFrame, *,
     SENSITIVITY, not a capacity claim: it answers "if you could take p of traded
     volume in the minutes you traded, how much DV01 is that", which is an upper
     bound on what depth would allow. Labelled as such in the output.
+
+    The holding window is ``(entry, exit]`` — STRICTLY after entry. The volume panel is
+    right-closed, so the bar stamped at the entry minute covers the interval *ending*
+    there and was therefore traded before the position existed. Including it, as the
+    first version did, inflates a 60-minute holding window by one bar in twelve: ~8% of
+    the headline capacity number, in the optimistic direction.
+
+    Trades whose bucket is missing from the volume panel are COUNTED and reported rather
+    than dropped, because a median taken over a silently reduced subset is not the
+    statistic it claims to be.
     """
-    rows = []
+    cols = ["participation", "median_dv01_per_trade", "total_dv01",
+            "n_trades_priced", "n_trades_dropped", "basis"]
     if ledger.empty or volumes.empty:
-        return pd.DataFrame(columns=["participation", "median_dv01_per_trade",
-                                     "total_dv01", "basis"])
-    per_trade = []
+        return pd.DataFrame(columns=cols)
+    per_trade, dropped = [], 0
     for _, tr in ledger.iterrows():
         v = volumes.get(tr["bucket"])
         if v is None:
+            dropped += 1
             continue
-        window = v.loc[tr["ts"]:tr["exit_ts"]]
+        idx = pd.DatetimeIndex(v.index)
+        window = v[(idx > tr["ts"]) & (idx <= tr["exit_ts"])]
         per_trade.append(float(window.sum()) if len(window) else 0.0)
     per_trade = np.asarray(per_trade, dtype=float)
+    if per_trade.size == 0:
+        return pd.DataFrame(columns=cols)
+
+    rows = []
     for p in participation:
         lots = per_trade * p
         rows.append({
             "participation": p,
             "median_dv01_per_trade": float(np.nanmedian(lots) * dv01_per_contract),
             "total_dv01": float(np.nansum(lots) * dv01_per_contract),
-            "basis": "traded-volume sensitivity, NOT measured depth",
+            "n_trades_priced": int(per_trade.size),
+            "n_trades_dropped": int(dropped),
+            "basis": "traded-volume sensitivity over (entry, exit], NOT measured depth",
         })
     return pd.DataFrame(rows)
 
