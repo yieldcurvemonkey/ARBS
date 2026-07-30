@@ -101,6 +101,22 @@ DECLARED_AUDITS = (
 )
 
 
+
+def _escape_pipes(df):
+    """Escape `|` in string cells before rendering a markdown table.
+
+    Variant names are pipe-delimited (`FUTURES->FUTURES|hl30|expected|h5`), and tabulate does
+    not escape them, so GFM splits one cell into four and the row renders against the wrong
+    column count. Backticks do not help -- GFM splits the row on `|` before parsing inline
+    code -- so the cell content itself has to carry `\\|`.
+    """
+    out = df.copy()
+    for col in out.columns:
+        if out[col].dtype == object:
+            out[col] = out[col].map(
+                lambda v: v.replace("|", "\\|") if isinstance(v, str) else v)
+    return out
+
 def _load(results_dir, name):
     path = os.path.join(results_dir, f"{name}.csv")
     if not os.path.exists(path):
@@ -238,7 +254,7 @@ def render(res, results_dir, title=True) -> str:
                   "the runner at the moment it skipped something. Everything here needs "
                   "a reason written into the findings doc by hand, or the omission is "
                   "not accounted for.", "",
-                  unexplained[["kind", "item", "detail"]].to_markdown(index=False), ""]
+                  _escape_pipes(unexplained[["kind", "item", "detail"]]).to_markdown(index=False), ""]
     else:
         lines += ["### Not run, and NOT explained", "",
                   "_None — every gap carries a machine-recorded reason._", ""]
@@ -248,13 +264,13 @@ def render(res, results_dir, title=True) -> str:
         by_reason = (explained.groupby("reason").size()
                      .rename("items").to_frame().reset_index())
         lines += ["### Not run, with a recorded reason", "",
-                  by_reason.to_markdown(index=False), "",
+                  _escape_pipes(by_reason).to_markdown(index=False), "",
                   "<details><summary>every item</summary>", "",
-                  explained[["kind", "item", "reason"]].to_markdown(index=False),
+                  _escape_pipes(explained[["kind", "item", "reason"]]).to_markdown(index=False),
                   "", "</details>", ""]
 
     lines += ["### Ran", "",
-              inv[inv["ran"]][["kind", "item", "detail"]].to_markdown(index=False), ""]
+              _escape_pipes(inv[inv["ran"]][["kind", "item", "detail"]]).to_markdown(index=False), ""]
     lines.append(f"_Audited against `{results_dir}`._")
     return "\n".join(lines)
 

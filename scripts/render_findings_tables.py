@@ -134,6 +134,22 @@ FLOAT_COLS_4DP = {"mean", "mean_bp", "net_bp", "gross_bp", "t", "se", "lo", "hi"
                   "coef", "peak_rho", "lls"}
 
 
+
+def _escape_pipes(df):
+    """Escape `|` in string cells before rendering a markdown table.
+
+    Variant names are pipe-delimited (`FUTURES->FUTURES|hl30|expected|h5`), and tabulate does
+    not escape them, so GFM splits one cell into four and the row renders against the wrong
+    column count. Backticks do not help -- GFM splits the row on `|` before parsing inline
+    code -- so the cell content itself has to carry `\\|`.
+    """
+    out = df.copy()
+    for col in out.columns:
+        if out[col].dtype == object:
+            out[col] = out[col].map(
+                lambda v: v.replace("|", "\\|") if isinstance(v, str) else v)
+    return out
+
 def _fmt(df: pd.DataFrame) -> pd.DataFrame:
     """Round floats to a readable width without hiding a number's magnitude."""
     out = df.copy()
@@ -184,7 +200,7 @@ def render(results_dir: str) -> tuple[str, list[str]]:
         if cap is not None and len(df) > cap:
             truncated = len(df) - cap
             df = df.head(cap)
-        lines.append(_fmt(df).to_markdown(index=False))
+        lines.append(_escape_pipes(_fmt(df)).to_markdown(index=False))
         lines.append("")
         prov = f"_Source: `{name}.csv` ({len(df)} rows"
         if truncated:

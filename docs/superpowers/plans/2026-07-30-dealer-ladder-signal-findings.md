@@ -77,7 +77,7 @@ convention, one cost model, one exposure rule, one threshold.
 | **Target** | change in the **implied rate** (bp) of the *same* SR3 contract over the next **60 minutes** |
 | **Basket** | SR3 front 6 contracts |
 | **Direction of the hypothesis** | `delta_dv01 > 0` ⟺ dealer long futures-equivalent ⟺ dealer must **sell** futures to hedge ⟹ predicted **rate rises**. So the predicted sign of Δrate is `+sign(ladder)`. |
-| **Trigger** | `|z| ≥ 1.0` |
+| **Trigger** | `abs(z) ≥ 1.0` |
 | **Exposure** | fixed: 1 unit of contract DV01 per triggered (contract, time); a new trigger while that contract's position is open is **ignored** (non-overlapping per contract) |
 | **Costs** | conservative round trip per §5: SR3 0.5 bp / \$12.50 deferred, 0.25 bp / \$6.25 only within the final four months before last trading day |
 | **Primary statistic** | mean **net** P&L per trade in bp |
@@ -903,201 +903,201 @@ A reason is only accepted from `g4_skipped_variants.csv`, written by the runner 
 
 <details><summary>every item</summary>
 
-| kind               | item                                       | reason                                                |
-|:-------------------|:-------------------------------------------|:------------------------------------------------------|
-| grid variant       | FED_FUNDS->FUTURES|hl30|expected|h5        | no shared bucket keys between signal and target space |
-| grid variant       | FED_FUNDS->FUTURES|hl30|expected|h15       | no shared bucket keys between signal and target space |
-| grid variant       | FED_FUNDS->FUTURES|hl30|expected|h30       | no shared bucket keys between signal and target space |
-| grid variant       | FED_FUNDS->FUTURES|hl30|expected|h60       | no shared bucket keys between signal and target space |
-| grid variant       | FED_FUNDS->FUTURES|hl30|expected|h240      | no shared bucket keys between signal and target space |
-| grid variant       | FED_FUNDS->FUTURES|hl30|expected|h1440     | no shared bucket keys between signal and target space |
-| grid variant       | FED_FUNDS->FUTURES|hl30|unweighted|h5      | no shared bucket keys between signal and target space |
-| grid variant       | FED_FUNDS->FUTURES|hl30|unweighted|h15     | no shared bucket keys between signal and target space |
-| grid variant       | FED_FUNDS->FUTURES|hl30|unweighted|h30     | no shared bucket keys between signal and target space |
-| grid variant       | FED_FUNDS->FUTURES|hl30|unweighted|h60     | no shared bucket keys between signal and target space |
-| grid variant       | FED_FUNDS->FUTURES|hl30|unweighted|h240    | no shared bucket keys between signal and target space |
-| grid variant       | FED_FUNDS->FUTURES|hl30|unweighted|h1440   | no shared bucket keys between signal and target space |
-| grid variant       | FED_FUNDS->FUTURES|hl90|expected|h5        | no shared bucket keys between signal and target space |
-| grid variant       | FED_FUNDS->FUTURES|hl90|expected|h15       | no shared bucket keys between signal and target space |
-| grid variant       | FED_FUNDS->FUTURES|hl90|expected|h30       | no shared bucket keys between signal and target space |
-| grid variant       | FED_FUNDS->FUTURES|hl90|expected|h60       | no shared bucket keys between signal and target space |
-| grid variant       | FED_FUNDS->FUTURES|hl90|expected|h240      | no shared bucket keys between signal and target space |
-| grid variant       | FED_FUNDS->FUTURES|hl90|expected|h1440     | no shared bucket keys between signal and target space |
-| grid variant       | FED_FUNDS->FUTURES|hl90|unweighted|h5      | no shared bucket keys between signal and target space |
-| grid variant       | FED_FUNDS->FUTURES|hl90|unweighted|h15     | no shared bucket keys between signal and target space |
-| grid variant       | FED_FUNDS->FUTURES|hl90|unweighted|h30     | no shared bucket keys between signal and target space |
-| grid variant       | FED_FUNDS->FUTURES|hl90|unweighted|h60     | no shared bucket keys between signal and target space |
-| grid variant       | FED_FUNDS->FUTURES|hl90|unweighted|h240    | no shared bucket keys between signal and target space |
-| grid variant       | FED_FUNDS->FUTURES|hl90|unweighted|h1440   | no shared bucket keys between signal and target space |
-| grid variant       | FED_FUNDS->FUTURES|hl240|expected|h5       | no shared bucket keys between signal and target space |
-| grid variant       | FED_FUNDS->FUTURES|hl240|expected|h15      | no shared bucket keys between signal and target space |
-| grid variant       | FED_FUNDS->FUTURES|hl240|expected|h30      | no shared bucket keys between signal and target space |
-| grid variant       | FED_FUNDS->FUTURES|hl240|expected|h60      | no shared bucket keys between signal and target space |
-| grid variant       | FED_FUNDS->FUTURES|hl240|expected|h240     | no shared bucket keys between signal and target space |
-| grid variant       | FED_FUNDS->FUTURES|hl240|expected|h1440    | no shared bucket keys between signal and target space |
-| grid variant       | FED_FUNDS->FUTURES|hl240|unweighted|h5     | no shared bucket keys between signal and target space |
-| grid variant       | FED_FUNDS->FUTURES|hl240|unweighted|h15    | no shared bucket keys between signal and target space |
-| grid variant       | FED_FUNDS->FUTURES|hl240|unweighted|h30    | no shared bucket keys between signal and target space |
-| grid variant       | FED_FUNDS->FUTURES|hl240|unweighted|h60    | no shared bucket keys between signal and target space |
-| grid variant       | FED_FUNDS->FUTURES|hl240|unweighted|h240   | no shared bucket keys between signal and target space |
-| grid variant       | FED_FUNDS->FUTURES|hl240|unweighted|h1440  | no shared bucket keys between signal and target space |
-| grid variant       | FED_FUNDS->FUTURES|hl1440|expected|h5      | no shared bucket keys between signal and target space |
-| grid variant       | FED_FUNDS->FUTURES|hl1440|expected|h15     | no shared bucket keys between signal and target space |
-| grid variant       | FED_FUNDS->FUTURES|hl1440|expected|h30     | no shared bucket keys between signal and target space |
-| grid variant       | FED_FUNDS->FUTURES|hl1440|expected|h60     | no shared bucket keys between signal and target space |
-| grid variant       | FED_FUNDS->FUTURES|hl1440|expected|h240    | no shared bucket keys between signal and target space |
-| grid variant       | FED_FUNDS->FUTURES|hl1440|expected|h1440   | no shared bucket keys between signal and target space |
-| grid variant       | FED_FUNDS->FUTURES|hl1440|unweighted|h5    | no shared bucket keys between signal and target space |
-| grid variant       | FED_FUNDS->FUTURES|hl1440|unweighted|h15   | no shared bucket keys between signal and target space |
-| grid variant       | FED_FUNDS->FUTURES|hl1440|unweighted|h30   | no shared bucket keys between signal and target space |
-| grid variant       | FED_FUNDS->FUTURES|hl1440|unweighted|h60   | no shared bucket keys between signal and target space |
-| grid variant       | FED_FUNDS->FUTURES|hl1440|unweighted|h240  | no shared bucket keys between signal and target space |
-| grid variant       | FED_FUNDS->FUTURES|hl1440|unweighted|h1440 | no shared bucket keys between signal and target space |
-| grid variant       | MEETING->FUTURES|hl30|expected|h5          | signal space MEETING not built for this window        |
-| grid variant       | MEETING->FUTURES|hl30|expected|h15         | signal space MEETING not built for this window        |
-| grid variant       | MEETING->FUTURES|hl30|expected|h30         | signal space MEETING not built for this window        |
-| grid variant       | MEETING->FUTURES|hl30|expected|h60         | signal space MEETING not built for this window        |
-| grid variant       | MEETING->FUTURES|hl30|expected|h240        | signal space MEETING not built for this window        |
-| grid variant       | MEETING->FUTURES|hl30|expected|h1440       | signal space MEETING not built for this window        |
-| grid variant       | MEETING->FUTURES|hl30|unweighted|h5        | signal space MEETING not built for this window        |
-| grid variant       | MEETING->FUTURES|hl30|unweighted|h15       | signal space MEETING not built for this window        |
-| grid variant       | MEETING->FUTURES|hl30|unweighted|h30       | signal space MEETING not built for this window        |
-| grid variant       | MEETING->FUTURES|hl30|unweighted|h60       | signal space MEETING not built for this window        |
-| grid variant       | MEETING->FUTURES|hl30|unweighted|h240      | signal space MEETING not built for this window        |
-| grid variant       | MEETING->FUTURES|hl30|unweighted|h1440     | signal space MEETING not built for this window        |
-| grid variant       | MEETING->FUTURES|hl90|expected|h5          | signal space MEETING not built for this window        |
-| grid variant       | MEETING->FUTURES|hl90|expected|h15         | signal space MEETING not built for this window        |
-| grid variant       | MEETING->FUTURES|hl90|expected|h30         | signal space MEETING not built for this window        |
-| grid variant       | MEETING->FUTURES|hl90|expected|h60         | signal space MEETING not built for this window        |
-| grid variant       | MEETING->FUTURES|hl90|expected|h240        | signal space MEETING not built for this window        |
-| grid variant       | MEETING->FUTURES|hl90|expected|h1440       | signal space MEETING not built for this window        |
-| grid variant       | MEETING->FUTURES|hl90|unweighted|h5        | signal space MEETING not built for this window        |
-| grid variant       | MEETING->FUTURES|hl90|unweighted|h15       | signal space MEETING not built for this window        |
-| grid variant       | MEETING->FUTURES|hl90|unweighted|h30       | signal space MEETING not built for this window        |
-| grid variant       | MEETING->FUTURES|hl90|unweighted|h60       | signal space MEETING not built for this window        |
-| grid variant       | MEETING->FUTURES|hl90|unweighted|h240      | signal space MEETING not built for this window        |
-| grid variant       | MEETING->FUTURES|hl90|unweighted|h1440     | signal space MEETING not built for this window        |
-| grid variant       | MEETING->FUTURES|hl240|expected|h5         | signal space MEETING not built for this window        |
-| grid variant       | MEETING->FUTURES|hl240|expected|h15        | signal space MEETING not built for this window        |
-| grid variant       | MEETING->FUTURES|hl240|expected|h30        | signal space MEETING not built for this window        |
-| grid variant       | MEETING->FUTURES|hl240|expected|h60        | signal space MEETING not built for this window        |
-| grid variant       | MEETING->FUTURES|hl240|expected|h240       | signal space MEETING not built for this window        |
-| grid variant       | MEETING->FUTURES|hl240|expected|h1440      | signal space MEETING not built for this window        |
-| grid variant       | MEETING->FUTURES|hl240|unweighted|h5       | signal space MEETING not built for this window        |
-| grid variant       | MEETING->FUTURES|hl240|unweighted|h15      | signal space MEETING not built for this window        |
-| grid variant       | MEETING->FUTURES|hl240|unweighted|h30      | signal space MEETING not built for this window        |
-| grid variant       | MEETING->FUTURES|hl240|unweighted|h60      | signal space MEETING not built for this window        |
-| grid variant       | MEETING->FUTURES|hl240|unweighted|h240     | signal space MEETING not built for this window        |
-| grid variant       | MEETING->FUTURES|hl240|unweighted|h1440    | signal space MEETING not built for this window        |
-| grid variant       | MEETING->FUTURES|hl1440|expected|h5        | signal space MEETING not built for this window        |
-| grid variant       | MEETING->FUTURES|hl1440|expected|h15       | signal space MEETING not built for this window        |
-| grid variant       | MEETING->FUTURES|hl1440|expected|h30       | signal space MEETING not built for this window        |
-| grid variant       | MEETING->FUTURES|hl1440|expected|h60       | signal space MEETING not built for this window        |
-| grid variant       | MEETING->FUTURES|hl1440|expected|h240      | signal space MEETING not built for this window        |
-| grid variant       | MEETING->FUTURES|hl1440|expected|h1440     | signal space MEETING not built for this window        |
-| grid variant       | MEETING->FUTURES|hl1440|unweighted|h5      | signal space MEETING not built for this window        |
-| grid variant       | MEETING->FUTURES|hl1440|unweighted|h15     | signal space MEETING not built for this window        |
-| grid variant       | MEETING->FUTURES|hl1440|unweighted|h30     | signal space MEETING not built for this window        |
-| grid variant       | MEETING->FUTURES|hl1440|unweighted|h60     | signal space MEETING not built for this window        |
-| grid variant       | MEETING->FUTURES|hl1440|unweighted|h240    | signal space MEETING not built for this window        |
-| grid variant       | MEETING->FUTURES|hl1440|unweighted|h1440   | signal space MEETING not built for this window        |
-| grid variant       | FUTURES->FED_FUNDS|hl30|expected|h5        | no shared bucket keys between signal and target space |
-| grid variant       | FUTURES->FED_FUNDS|hl30|expected|h15       | no shared bucket keys between signal and target space |
-| grid variant       | FUTURES->FED_FUNDS|hl30|expected|h30       | no shared bucket keys between signal and target space |
-| grid variant       | FUTURES->FED_FUNDS|hl30|expected|h60       | no shared bucket keys between signal and target space |
-| grid variant       | FUTURES->FED_FUNDS|hl30|expected|h240      | no shared bucket keys between signal and target space |
-| grid variant       | FUTURES->FED_FUNDS|hl30|expected|h1440     | no shared bucket keys between signal and target space |
-| grid variant       | FUTURES->FED_FUNDS|hl30|unweighted|h5      | no shared bucket keys between signal and target space |
-| grid variant       | FUTURES->FED_FUNDS|hl30|unweighted|h15     | no shared bucket keys between signal and target space |
-| grid variant       | FUTURES->FED_FUNDS|hl30|unweighted|h30     | no shared bucket keys between signal and target space |
-| grid variant       | FUTURES->FED_FUNDS|hl30|unweighted|h60     | no shared bucket keys between signal and target space |
-| grid variant       | FUTURES->FED_FUNDS|hl30|unweighted|h240    | no shared bucket keys between signal and target space |
-| grid variant       | FUTURES->FED_FUNDS|hl30|unweighted|h1440   | no shared bucket keys between signal and target space |
-| grid variant       | FUTURES->FED_FUNDS|hl90|expected|h5        | no shared bucket keys between signal and target space |
-| grid variant       | FUTURES->FED_FUNDS|hl90|expected|h15       | no shared bucket keys between signal and target space |
-| grid variant       | FUTURES->FED_FUNDS|hl90|expected|h30       | no shared bucket keys between signal and target space |
-| grid variant       | FUTURES->FED_FUNDS|hl90|expected|h60       | no shared bucket keys between signal and target space |
-| grid variant       | FUTURES->FED_FUNDS|hl90|expected|h240      | no shared bucket keys between signal and target space |
-| grid variant       | FUTURES->FED_FUNDS|hl90|expected|h1440     | no shared bucket keys between signal and target space |
-| grid variant       | FUTURES->FED_FUNDS|hl90|unweighted|h5      | no shared bucket keys between signal and target space |
-| grid variant       | FUTURES->FED_FUNDS|hl90|unweighted|h15     | no shared bucket keys between signal and target space |
-| grid variant       | FUTURES->FED_FUNDS|hl90|unweighted|h30     | no shared bucket keys between signal and target space |
-| grid variant       | FUTURES->FED_FUNDS|hl90|unweighted|h60     | no shared bucket keys between signal and target space |
-| grid variant       | FUTURES->FED_FUNDS|hl90|unweighted|h240    | no shared bucket keys between signal and target space |
-| grid variant       | FUTURES->FED_FUNDS|hl90|unweighted|h1440   | no shared bucket keys between signal and target space |
-| grid variant       | FUTURES->FED_FUNDS|hl240|expected|h5       | no shared bucket keys between signal and target space |
-| grid variant       | FUTURES->FED_FUNDS|hl240|expected|h15      | no shared bucket keys between signal and target space |
-| grid variant       | FUTURES->FED_FUNDS|hl240|expected|h30      | no shared bucket keys between signal and target space |
-| grid variant       | FUTURES->FED_FUNDS|hl240|expected|h60      | no shared bucket keys between signal and target space |
-| grid variant       | FUTURES->FED_FUNDS|hl240|expected|h240     | no shared bucket keys between signal and target space |
-| grid variant       | FUTURES->FED_FUNDS|hl240|expected|h1440    | no shared bucket keys between signal and target space |
-| grid variant       | FUTURES->FED_FUNDS|hl240|unweighted|h5     | no shared bucket keys between signal and target space |
-| grid variant       | FUTURES->FED_FUNDS|hl240|unweighted|h15    | no shared bucket keys between signal and target space |
-| grid variant       | FUTURES->FED_FUNDS|hl240|unweighted|h30    | no shared bucket keys between signal and target space |
-| grid variant       | FUTURES->FED_FUNDS|hl240|unweighted|h60    | no shared bucket keys between signal and target space |
-| grid variant       | FUTURES->FED_FUNDS|hl240|unweighted|h240   | no shared bucket keys between signal and target space |
-| grid variant       | FUTURES->FED_FUNDS|hl240|unweighted|h1440  | no shared bucket keys between signal and target space |
-| grid variant       | FUTURES->FED_FUNDS|hl1440|expected|h5      | no shared bucket keys between signal and target space |
-| grid variant       | FUTURES->FED_FUNDS|hl1440|expected|h15     | no shared bucket keys between signal and target space |
-| grid variant       | FUTURES->FED_FUNDS|hl1440|expected|h30     | no shared bucket keys between signal and target space |
-| grid variant       | FUTURES->FED_FUNDS|hl1440|expected|h60     | no shared bucket keys between signal and target space |
-| grid variant       | FUTURES->FED_FUNDS|hl1440|expected|h240    | no shared bucket keys between signal and target space |
-| grid variant       | FUTURES->FED_FUNDS|hl1440|expected|h1440   | no shared bucket keys between signal and target space |
-| grid variant       | FUTURES->FED_FUNDS|hl1440|unweighted|h5    | no shared bucket keys between signal and target space |
-| grid variant       | FUTURES->FED_FUNDS|hl1440|unweighted|h15   | no shared bucket keys between signal and target space |
-| grid variant       | FUTURES->FED_FUNDS|hl1440|unweighted|h30   | no shared bucket keys between signal and target space |
-| grid variant       | FUTURES->FED_FUNDS|hl1440|unweighted|h60   | no shared bucket keys between signal and target space |
-| grid variant       | FUTURES->FED_FUNDS|hl1440|unweighted|h240  | no shared bucket keys between signal and target space |
-| grid variant       | FUTURES->FED_FUNDS|hl1440|unweighted|h1440 | no shared bucket keys between signal and target space |
-| grid variant       | MEETING->FED_FUNDS|hl30|expected|h5        | signal space MEETING not built for this window        |
-| grid variant       | MEETING->FED_FUNDS|hl30|expected|h15       | signal space MEETING not built for this window        |
-| grid variant       | MEETING->FED_FUNDS|hl30|expected|h30       | signal space MEETING not built for this window        |
-| grid variant       | MEETING->FED_FUNDS|hl30|expected|h60       | signal space MEETING not built for this window        |
-| grid variant       | MEETING->FED_FUNDS|hl30|expected|h240      | signal space MEETING not built for this window        |
-| grid variant       | MEETING->FED_FUNDS|hl30|expected|h1440     | signal space MEETING not built for this window        |
-| grid variant       | MEETING->FED_FUNDS|hl30|unweighted|h5      | signal space MEETING not built for this window        |
-| grid variant       | MEETING->FED_FUNDS|hl30|unweighted|h15     | signal space MEETING not built for this window        |
-| grid variant       | MEETING->FED_FUNDS|hl30|unweighted|h30     | signal space MEETING not built for this window        |
-| grid variant       | MEETING->FED_FUNDS|hl30|unweighted|h60     | signal space MEETING not built for this window        |
-| grid variant       | MEETING->FED_FUNDS|hl30|unweighted|h240    | signal space MEETING not built for this window        |
-| grid variant       | MEETING->FED_FUNDS|hl30|unweighted|h1440   | signal space MEETING not built for this window        |
-| grid variant       | MEETING->FED_FUNDS|hl90|expected|h5        | signal space MEETING not built for this window        |
-| grid variant       | MEETING->FED_FUNDS|hl90|expected|h15       | signal space MEETING not built for this window        |
-| grid variant       | MEETING->FED_FUNDS|hl90|expected|h30       | signal space MEETING not built for this window        |
-| grid variant       | MEETING->FED_FUNDS|hl90|expected|h60       | signal space MEETING not built for this window        |
-| grid variant       | MEETING->FED_FUNDS|hl90|expected|h240      | signal space MEETING not built for this window        |
-| grid variant       | MEETING->FED_FUNDS|hl90|expected|h1440     | signal space MEETING not built for this window        |
-| grid variant       | MEETING->FED_FUNDS|hl90|unweighted|h5      | signal space MEETING not built for this window        |
-| grid variant       | MEETING->FED_FUNDS|hl90|unweighted|h15     | signal space MEETING not built for this window        |
-| grid variant       | MEETING->FED_FUNDS|hl90|unweighted|h30     | signal space MEETING not built for this window        |
-| grid variant       | MEETING->FED_FUNDS|hl90|unweighted|h60     | signal space MEETING not built for this window        |
-| grid variant       | MEETING->FED_FUNDS|hl90|unweighted|h240    | signal space MEETING not built for this window        |
-| grid variant       | MEETING->FED_FUNDS|hl90|unweighted|h1440   | signal space MEETING not built for this window        |
-| grid variant       | MEETING->FED_FUNDS|hl240|expected|h5       | signal space MEETING not built for this window        |
-| grid variant       | MEETING->FED_FUNDS|hl240|expected|h15      | signal space MEETING not built for this window        |
-| grid variant       | MEETING->FED_FUNDS|hl240|expected|h30      | signal space MEETING not built for this window        |
-| grid variant       | MEETING->FED_FUNDS|hl240|expected|h60      | signal space MEETING not built for this window        |
-| grid variant       | MEETING->FED_FUNDS|hl240|expected|h240     | signal space MEETING not built for this window        |
-| grid variant       | MEETING->FED_FUNDS|hl240|expected|h1440    | signal space MEETING not built for this window        |
-| grid variant       | MEETING->FED_FUNDS|hl240|unweighted|h5     | signal space MEETING not built for this window        |
-| grid variant       | MEETING->FED_FUNDS|hl240|unweighted|h15    | signal space MEETING not built for this window        |
-| grid variant       | MEETING->FED_FUNDS|hl240|unweighted|h30    | signal space MEETING not built for this window        |
-| grid variant       | MEETING->FED_FUNDS|hl240|unweighted|h60    | signal space MEETING not built for this window        |
-| grid variant       | MEETING->FED_FUNDS|hl240|unweighted|h240   | signal space MEETING not built for this window        |
-| grid variant       | MEETING->FED_FUNDS|hl240|unweighted|h1440  | signal space MEETING not built for this window        |
-| grid variant       | MEETING->FED_FUNDS|hl1440|expected|h5      | signal space MEETING not built for this window        |
-| grid variant       | MEETING->FED_FUNDS|hl1440|expected|h15     | signal space MEETING not built for this window        |
-| grid variant       | MEETING->FED_FUNDS|hl1440|expected|h30     | signal space MEETING not built for this window        |
-| grid variant       | MEETING->FED_FUNDS|hl1440|expected|h60     | signal space MEETING not built for this window        |
-| grid variant       | MEETING->FED_FUNDS|hl1440|expected|h240    | signal space MEETING not built for this window        |
-| grid variant       | MEETING->FED_FUNDS|hl1440|expected|h1440   | signal space MEETING not built for this window        |
-| grid variant       | MEETING->FED_FUNDS|hl1440|unweighted|h5    | signal space MEETING not built for this window        |
-| grid variant       | MEETING->FED_FUNDS|hl1440|unweighted|h15   | signal space MEETING not built for this window        |
-| grid variant       | MEETING->FED_FUNDS|hl1440|unweighted|h30   | signal space MEETING not built for this window        |
-| grid variant       | MEETING->FED_FUNDS|hl1440|unweighted|h60   | signal space MEETING not built for this window        |
-| grid variant       | MEETING->FED_FUNDS|hl1440|unweighted|h240  | signal space MEETING not built for this window        |
-| grid variant       | MEETING->FED_FUNDS|hl1440|unweighted|h1440 | signal space MEETING not built for this window        |
-| conditioning split | sofr_effr_bp                               | panel not built for this space                        |
+| kind               | item                                          | reason                                                |
+|:-------------------|:----------------------------------------------|:------------------------------------------------------|
+| grid variant       | FED_FUNDS->FUTURES\|hl30\|expected\|h5        | no shared bucket keys between signal and target space |
+| grid variant       | FED_FUNDS->FUTURES\|hl30\|expected\|h15       | no shared bucket keys between signal and target space |
+| grid variant       | FED_FUNDS->FUTURES\|hl30\|expected\|h30       | no shared bucket keys between signal and target space |
+| grid variant       | FED_FUNDS->FUTURES\|hl30\|expected\|h60       | no shared bucket keys between signal and target space |
+| grid variant       | FED_FUNDS->FUTURES\|hl30\|expected\|h240      | no shared bucket keys between signal and target space |
+| grid variant       | FED_FUNDS->FUTURES\|hl30\|expected\|h1440     | no shared bucket keys between signal and target space |
+| grid variant       | FED_FUNDS->FUTURES\|hl30\|unweighted\|h5      | no shared bucket keys between signal and target space |
+| grid variant       | FED_FUNDS->FUTURES\|hl30\|unweighted\|h15     | no shared bucket keys between signal and target space |
+| grid variant       | FED_FUNDS->FUTURES\|hl30\|unweighted\|h30     | no shared bucket keys between signal and target space |
+| grid variant       | FED_FUNDS->FUTURES\|hl30\|unweighted\|h60     | no shared bucket keys between signal and target space |
+| grid variant       | FED_FUNDS->FUTURES\|hl30\|unweighted\|h240    | no shared bucket keys between signal and target space |
+| grid variant       | FED_FUNDS->FUTURES\|hl30\|unweighted\|h1440   | no shared bucket keys between signal and target space |
+| grid variant       | FED_FUNDS->FUTURES\|hl90\|expected\|h5        | no shared bucket keys between signal and target space |
+| grid variant       | FED_FUNDS->FUTURES\|hl90\|expected\|h15       | no shared bucket keys between signal and target space |
+| grid variant       | FED_FUNDS->FUTURES\|hl90\|expected\|h30       | no shared bucket keys between signal and target space |
+| grid variant       | FED_FUNDS->FUTURES\|hl90\|expected\|h60       | no shared bucket keys between signal and target space |
+| grid variant       | FED_FUNDS->FUTURES\|hl90\|expected\|h240      | no shared bucket keys between signal and target space |
+| grid variant       | FED_FUNDS->FUTURES\|hl90\|expected\|h1440     | no shared bucket keys between signal and target space |
+| grid variant       | FED_FUNDS->FUTURES\|hl90\|unweighted\|h5      | no shared bucket keys between signal and target space |
+| grid variant       | FED_FUNDS->FUTURES\|hl90\|unweighted\|h15     | no shared bucket keys between signal and target space |
+| grid variant       | FED_FUNDS->FUTURES\|hl90\|unweighted\|h30     | no shared bucket keys between signal and target space |
+| grid variant       | FED_FUNDS->FUTURES\|hl90\|unweighted\|h60     | no shared bucket keys between signal and target space |
+| grid variant       | FED_FUNDS->FUTURES\|hl90\|unweighted\|h240    | no shared bucket keys between signal and target space |
+| grid variant       | FED_FUNDS->FUTURES\|hl90\|unweighted\|h1440   | no shared bucket keys between signal and target space |
+| grid variant       | FED_FUNDS->FUTURES\|hl240\|expected\|h5       | no shared bucket keys between signal and target space |
+| grid variant       | FED_FUNDS->FUTURES\|hl240\|expected\|h15      | no shared bucket keys between signal and target space |
+| grid variant       | FED_FUNDS->FUTURES\|hl240\|expected\|h30      | no shared bucket keys between signal and target space |
+| grid variant       | FED_FUNDS->FUTURES\|hl240\|expected\|h60      | no shared bucket keys between signal and target space |
+| grid variant       | FED_FUNDS->FUTURES\|hl240\|expected\|h240     | no shared bucket keys between signal and target space |
+| grid variant       | FED_FUNDS->FUTURES\|hl240\|expected\|h1440    | no shared bucket keys between signal and target space |
+| grid variant       | FED_FUNDS->FUTURES\|hl240\|unweighted\|h5     | no shared bucket keys between signal and target space |
+| grid variant       | FED_FUNDS->FUTURES\|hl240\|unweighted\|h15    | no shared bucket keys between signal and target space |
+| grid variant       | FED_FUNDS->FUTURES\|hl240\|unweighted\|h30    | no shared bucket keys between signal and target space |
+| grid variant       | FED_FUNDS->FUTURES\|hl240\|unweighted\|h60    | no shared bucket keys between signal and target space |
+| grid variant       | FED_FUNDS->FUTURES\|hl240\|unweighted\|h240   | no shared bucket keys between signal and target space |
+| grid variant       | FED_FUNDS->FUTURES\|hl240\|unweighted\|h1440  | no shared bucket keys between signal and target space |
+| grid variant       | FED_FUNDS->FUTURES\|hl1440\|expected\|h5      | no shared bucket keys between signal and target space |
+| grid variant       | FED_FUNDS->FUTURES\|hl1440\|expected\|h15     | no shared bucket keys between signal and target space |
+| grid variant       | FED_FUNDS->FUTURES\|hl1440\|expected\|h30     | no shared bucket keys between signal and target space |
+| grid variant       | FED_FUNDS->FUTURES\|hl1440\|expected\|h60     | no shared bucket keys between signal and target space |
+| grid variant       | FED_FUNDS->FUTURES\|hl1440\|expected\|h240    | no shared bucket keys between signal and target space |
+| grid variant       | FED_FUNDS->FUTURES\|hl1440\|expected\|h1440   | no shared bucket keys between signal and target space |
+| grid variant       | FED_FUNDS->FUTURES\|hl1440\|unweighted\|h5    | no shared bucket keys between signal and target space |
+| grid variant       | FED_FUNDS->FUTURES\|hl1440\|unweighted\|h15   | no shared bucket keys between signal and target space |
+| grid variant       | FED_FUNDS->FUTURES\|hl1440\|unweighted\|h30   | no shared bucket keys between signal and target space |
+| grid variant       | FED_FUNDS->FUTURES\|hl1440\|unweighted\|h60   | no shared bucket keys between signal and target space |
+| grid variant       | FED_FUNDS->FUTURES\|hl1440\|unweighted\|h240  | no shared bucket keys between signal and target space |
+| grid variant       | FED_FUNDS->FUTURES\|hl1440\|unweighted\|h1440 | no shared bucket keys between signal and target space |
+| grid variant       | MEETING->FUTURES\|hl30\|expected\|h5          | signal space MEETING not built for this window        |
+| grid variant       | MEETING->FUTURES\|hl30\|expected\|h15         | signal space MEETING not built for this window        |
+| grid variant       | MEETING->FUTURES\|hl30\|expected\|h30         | signal space MEETING not built for this window        |
+| grid variant       | MEETING->FUTURES\|hl30\|expected\|h60         | signal space MEETING not built for this window        |
+| grid variant       | MEETING->FUTURES\|hl30\|expected\|h240        | signal space MEETING not built for this window        |
+| grid variant       | MEETING->FUTURES\|hl30\|expected\|h1440       | signal space MEETING not built for this window        |
+| grid variant       | MEETING->FUTURES\|hl30\|unweighted\|h5        | signal space MEETING not built for this window        |
+| grid variant       | MEETING->FUTURES\|hl30\|unweighted\|h15       | signal space MEETING not built for this window        |
+| grid variant       | MEETING->FUTURES\|hl30\|unweighted\|h30       | signal space MEETING not built for this window        |
+| grid variant       | MEETING->FUTURES\|hl30\|unweighted\|h60       | signal space MEETING not built for this window        |
+| grid variant       | MEETING->FUTURES\|hl30\|unweighted\|h240      | signal space MEETING not built for this window        |
+| grid variant       | MEETING->FUTURES\|hl30\|unweighted\|h1440     | signal space MEETING not built for this window        |
+| grid variant       | MEETING->FUTURES\|hl90\|expected\|h5          | signal space MEETING not built for this window        |
+| grid variant       | MEETING->FUTURES\|hl90\|expected\|h15         | signal space MEETING not built for this window        |
+| grid variant       | MEETING->FUTURES\|hl90\|expected\|h30         | signal space MEETING not built for this window        |
+| grid variant       | MEETING->FUTURES\|hl90\|expected\|h60         | signal space MEETING not built for this window        |
+| grid variant       | MEETING->FUTURES\|hl90\|expected\|h240        | signal space MEETING not built for this window        |
+| grid variant       | MEETING->FUTURES\|hl90\|expected\|h1440       | signal space MEETING not built for this window        |
+| grid variant       | MEETING->FUTURES\|hl90\|unweighted\|h5        | signal space MEETING not built for this window        |
+| grid variant       | MEETING->FUTURES\|hl90\|unweighted\|h15       | signal space MEETING not built for this window        |
+| grid variant       | MEETING->FUTURES\|hl90\|unweighted\|h30       | signal space MEETING not built for this window        |
+| grid variant       | MEETING->FUTURES\|hl90\|unweighted\|h60       | signal space MEETING not built for this window        |
+| grid variant       | MEETING->FUTURES\|hl90\|unweighted\|h240      | signal space MEETING not built for this window        |
+| grid variant       | MEETING->FUTURES\|hl90\|unweighted\|h1440     | signal space MEETING not built for this window        |
+| grid variant       | MEETING->FUTURES\|hl240\|expected\|h5         | signal space MEETING not built for this window        |
+| grid variant       | MEETING->FUTURES\|hl240\|expected\|h15        | signal space MEETING not built for this window        |
+| grid variant       | MEETING->FUTURES\|hl240\|expected\|h30        | signal space MEETING not built for this window        |
+| grid variant       | MEETING->FUTURES\|hl240\|expected\|h60        | signal space MEETING not built for this window        |
+| grid variant       | MEETING->FUTURES\|hl240\|expected\|h240       | signal space MEETING not built for this window        |
+| grid variant       | MEETING->FUTURES\|hl240\|expected\|h1440      | signal space MEETING not built for this window        |
+| grid variant       | MEETING->FUTURES\|hl240\|unweighted\|h5       | signal space MEETING not built for this window        |
+| grid variant       | MEETING->FUTURES\|hl240\|unweighted\|h15      | signal space MEETING not built for this window        |
+| grid variant       | MEETING->FUTURES\|hl240\|unweighted\|h30      | signal space MEETING not built for this window        |
+| grid variant       | MEETING->FUTURES\|hl240\|unweighted\|h60      | signal space MEETING not built for this window        |
+| grid variant       | MEETING->FUTURES\|hl240\|unweighted\|h240     | signal space MEETING not built for this window        |
+| grid variant       | MEETING->FUTURES\|hl240\|unweighted\|h1440    | signal space MEETING not built for this window        |
+| grid variant       | MEETING->FUTURES\|hl1440\|expected\|h5        | signal space MEETING not built for this window        |
+| grid variant       | MEETING->FUTURES\|hl1440\|expected\|h15       | signal space MEETING not built for this window        |
+| grid variant       | MEETING->FUTURES\|hl1440\|expected\|h30       | signal space MEETING not built for this window        |
+| grid variant       | MEETING->FUTURES\|hl1440\|expected\|h60       | signal space MEETING not built for this window        |
+| grid variant       | MEETING->FUTURES\|hl1440\|expected\|h240      | signal space MEETING not built for this window        |
+| grid variant       | MEETING->FUTURES\|hl1440\|expected\|h1440     | signal space MEETING not built for this window        |
+| grid variant       | MEETING->FUTURES\|hl1440\|unweighted\|h5      | signal space MEETING not built for this window        |
+| grid variant       | MEETING->FUTURES\|hl1440\|unweighted\|h15     | signal space MEETING not built for this window        |
+| grid variant       | MEETING->FUTURES\|hl1440\|unweighted\|h30     | signal space MEETING not built for this window        |
+| grid variant       | MEETING->FUTURES\|hl1440\|unweighted\|h60     | signal space MEETING not built for this window        |
+| grid variant       | MEETING->FUTURES\|hl1440\|unweighted\|h240    | signal space MEETING not built for this window        |
+| grid variant       | MEETING->FUTURES\|hl1440\|unweighted\|h1440   | signal space MEETING not built for this window        |
+| grid variant       | FUTURES->FED_FUNDS\|hl30\|expected\|h5        | no shared bucket keys between signal and target space |
+| grid variant       | FUTURES->FED_FUNDS\|hl30\|expected\|h15       | no shared bucket keys between signal and target space |
+| grid variant       | FUTURES->FED_FUNDS\|hl30\|expected\|h30       | no shared bucket keys between signal and target space |
+| grid variant       | FUTURES->FED_FUNDS\|hl30\|expected\|h60       | no shared bucket keys between signal and target space |
+| grid variant       | FUTURES->FED_FUNDS\|hl30\|expected\|h240      | no shared bucket keys between signal and target space |
+| grid variant       | FUTURES->FED_FUNDS\|hl30\|expected\|h1440     | no shared bucket keys between signal and target space |
+| grid variant       | FUTURES->FED_FUNDS\|hl30\|unweighted\|h5      | no shared bucket keys between signal and target space |
+| grid variant       | FUTURES->FED_FUNDS\|hl30\|unweighted\|h15     | no shared bucket keys between signal and target space |
+| grid variant       | FUTURES->FED_FUNDS\|hl30\|unweighted\|h30     | no shared bucket keys between signal and target space |
+| grid variant       | FUTURES->FED_FUNDS\|hl30\|unweighted\|h60     | no shared bucket keys between signal and target space |
+| grid variant       | FUTURES->FED_FUNDS\|hl30\|unweighted\|h240    | no shared bucket keys between signal and target space |
+| grid variant       | FUTURES->FED_FUNDS\|hl30\|unweighted\|h1440   | no shared bucket keys between signal and target space |
+| grid variant       | FUTURES->FED_FUNDS\|hl90\|expected\|h5        | no shared bucket keys between signal and target space |
+| grid variant       | FUTURES->FED_FUNDS\|hl90\|expected\|h15       | no shared bucket keys between signal and target space |
+| grid variant       | FUTURES->FED_FUNDS\|hl90\|expected\|h30       | no shared bucket keys between signal and target space |
+| grid variant       | FUTURES->FED_FUNDS\|hl90\|expected\|h60       | no shared bucket keys between signal and target space |
+| grid variant       | FUTURES->FED_FUNDS\|hl90\|expected\|h240      | no shared bucket keys between signal and target space |
+| grid variant       | FUTURES->FED_FUNDS\|hl90\|expected\|h1440     | no shared bucket keys between signal and target space |
+| grid variant       | FUTURES->FED_FUNDS\|hl90\|unweighted\|h5      | no shared bucket keys between signal and target space |
+| grid variant       | FUTURES->FED_FUNDS\|hl90\|unweighted\|h15     | no shared bucket keys between signal and target space |
+| grid variant       | FUTURES->FED_FUNDS\|hl90\|unweighted\|h30     | no shared bucket keys between signal and target space |
+| grid variant       | FUTURES->FED_FUNDS\|hl90\|unweighted\|h60     | no shared bucket keys between signal and target space |
+| grid variant       | FUTURES->FED_FUNDS\|hl90\|unweighted\|h240    | no shared bucket keys between signal and target space |
+| grid variant       | FUTURES->FED_FUNDS\|hl90\|unweighted\|h1440   | no shared bucket keys between signal and target space |
+| grid variant       | FUTURES->FED_FUNDS\|hl240\|expected\|h5       | no shared bucket keys between signal and target space |
+| grid variant       | FUTURES->FED_FUNDS\|hl240\|expected\|h15      | no shared bucket keys between signal and target space |
+| grid variant       | FUTURES->FED_FUNDS\|hl240\|expected\|h30      | no shared bucket keys between signal and target space |
+| grid variant       | FUTURES->FED_FUNDS\|hl240\|expected\|h60      | no shared bucket keys between signal and target space |
+| grid variant       | FUTURES->FED_FUNDS\|hl240\|expected\|h240     | no shared bucket keys between signal and target space |
+| grid variant       | FUTURES->FED_FUNDS\|hl240\|expected\|h1440    | no shared bucket keys between signal and target space |
+| grid variant       | FUTURES->FED_FUNDS\|hl240\|unweighted\|h5     | no shared bucket keys between signal and target space |
+| grid variant       | FUTURES->FED_FUNDS\|hl240\|unweighted\|h15    | no shared bucket keys between signal and target space |
+| grid variant       | FUTURES->FED_FUNDS\|hl240\|unweighted\|h30    | no shared bucket keys between signal and target space |
+| grid variant       | FUTURES->FED_FUNDS\|hl240\|unweighted\|h60    | no shared bucket keys between signal and target space |
+| grid variant       | FUTURES->FED_FUNDS\|hl240\|unweighted\|h240   | no shared bucket keys between signal and target space |
+| grid variant       | FUTURES->FED_FUNDS\|hl240\|unweighted\|h1440  | no shared bucket keys between signal and target space |
+| grid variant       | FUTURES->FED_FUNDS\|hl1440\|expected\|h5      | no shared bucket keys between signal and target space |
+| grid variant       | FUTURES->FED_FUNDS\|hl1440\|expected\|h15     | no shared bucket keys between signal and target space |
+| grid variant       | FUTURES->FED_FUNDS\|hl1440\|expected\|h30     | no shared bucket keys between signal and target space |
+| grid variant       | FUTURES->FED_FUNDS\|hl1440\|expected\|h60     | no shared bucket keys between signal and target space |
+| grid variant       | FUTURES->FED_FUNDS\|hl1440\|expected\|h240    | no shared bucket keys between signal and target space |
+| grid variant       | FUTURES->FED_FUNDS\|hl1440\|expected\|h1440   | no shared bucket keys between signal and target space |
+| grid variant       | FUTURES->FED_FUNDS\|hl1440\|unweighted\|h5    | no shared bucket keys between signal and target space |
+| grid variant       | FUTURES->FED_FUNDS\|hl1440\|unweighted\|h15   | no shared bucket keys between signal and target space |
+| grid variant       | FUTURES->FED_FUNDS\|hl1440\|unweighted\|h30   | no shared bucket keys between signal and target space |
+| grid variant       | FUTURES->FED_FUNDS\|hl1440\|unweighted\|h60   | no shared bucket keys between signal and target space |
+| grid variant       | FUTURES->FED_FUNDS\|hl1440\|unweighted\|h240  | no shared bucket keys between signal and target space |
+| grid variant       | FUTURES->FED_FUNDS\|hl1440\|unweighted\|h1440 | no shared bucket keys between signal and target space |
+| grid variant       | MEETING->FED_FUNDS\|hl30\|expected\|h5        | signal space MEETING not built for this window        |
+| grid variant       | MEETING->FED_FUNDS\|hl30\|expected\|h15       | signal space MEETING not built for this window        |
+| grid variant       | MEETING->FED_FUNDS\|hl30\|expected\|h30       | signal space MEETING not built for this window        |
+| grid variant       | MEETING->FED_FUNDS\|hl30\|expected\|h60       | signal space MEETING not built for this window        |
+| grid variant       | MEETING->FED_FUNDS\|hl30\|expected\|h240      | signal space MEETING not built for this window        |
+| grid variant       | MEETING->FED_FUNDS\|hl30\|expected\|h1440     | signal space MEETING not built for this window        |
+| grid variant       | MEETING->FED_FUNDS\|hl30\|unweighted\|h5      | signal space MEETING not built for this window        |
+| grid variant       | MEETING->FED_FUNDS\|hl30\|unweighted\|h15     | signal space MEETING not built for this window        |
+| grid variant       | MEETING->FED_FUNDS\|hl30\|unweighted\|h30     | signal space MEETING not built for this window        |
+| grid variant       | MEETING->FED_FUNDS\|hl30\|unweighted\|h60     | signal space MEETING not built for this window        |
+| grid variant       | MEETING->FED_FUNDS\|hl30\|unweighted\|h240    | signal space MEETING not built for this window        |
+| grid variant       | MEETING->FED_FUNDS\|hl30\|unweighted\|h1440   | signal space MEETING not built for this window        |
+| grid variant       | MEETING->FED_FUNDS\|hl90\|expected\|h5        | signal space MEETING not built for this window        |
+| grid variant       | MEETING->FED_FUNDS\|hl90\|expected\|h15       | signal space MEETING not built for this window        |
+| grid variant       | MEETING->FED_FUNDS\|hl90\|expected\|h30       | signal space MEETING not built for this window        |
+| grid variant       | MEETING->FED_FUNDS\|hl90\|expected\|h60       | signal space MEETING not built for this window        |
+| grid variant       | MEETING->FED_FUNDS\|hl90\|expected\|h240      | signal space MEETING not built for this window        |
+| grid variant       | MEETING->FED_FUNDS\|hl90\|expected\|h1440     | signal space MEETING not built for this window        |
+| grid variant       | MEETING->FED_FUNDS\|hl90\|unweighted\|h5      | signal space MEETING not built for this window        |
+| grid variant       | MEETING->FED_FUNDS\|hl90\|unweighted\|h15     | signal space MEETING not built for this window        |
+| grid variant       | MEETING->FED_FUNDS\|hl90\|unweighted\|h30     | signal space MEETING not built for this window        |
+| grid variant       | MEETING->FED_FUNDS\|hl90\|unweighted\|h60     | signal space MEETING not built for this window        |
+| grid variant       | MEETING->FED_FUNDS\|hl90\|unweighted\|h240    | signal space MEETING not built for this window        |
+| grid variant       | MEETING->FED_FUNDS\|hl90\|unweighted\|h1440   | signal space MEETING not built for this window        |
+| grid variant       | MEETING->FED_FUNDS\|hl240\|expected\|h5       | signal space MEETING not built for this window        |
+| grid variant       | MEETING->FED_FUNDS\|hl240\|expected\|h15      | signal space MEETING not built for this window        |
+| grid variant       | MEETING->FED_FUNDS\|hl240\|expected\|h30      | signal space MEETING not built for this window        |
+| grid variant       | MEETING->FED_FUNDS\|hl240\|expected\|h60      | signal space MEETING not built for this window        |
+| grid variant       | MEETING->FED_FUNDS\|hl240\|expected\|h240     | signal space MEETING not built for this window        |
+| grid variant       | MEETING->FED_FUNDS\|hl240\|expected\|h1440    | signal space MEETING not built for this window        |
+| grid variant       | MEETING->FED_FUNDS\|hl240\|unweighted\|h5     | signal space MEETING not built for this window        |
+| grid variant       | MEETING->FED_FUNDS\|hl240\|unweighted\|h15    | signal space MEETING not built for this window        |
+| grid variant       | MEETING->FED_FUNDS\|hl240\|unweighted\|h30    | signal space MEETING not built for this window        |
+| grid variant       | MEETING->FED_FUNDS\|hl240\|unweighted\|h60    | signal space MEETING not built for this window        |
+| grid variant       | MEETING->FED_FUNDS\|hl240\|unweighted\|h240   | signal space MEETING not built for this window        |
+| grid variant       | MEETING->FED_FUNDS\|hl240\|unweighted\|h1440  | signal space MEETING not built for this window        |
+| grid variant       | MEETING->FED_FUNDS\|hl1440\|expected\|h5      | signal space MEETING not built for this window        |
+| grid variant       | MEETING->FED_FUNDS\|hl1440\|expected\|h15     | signal space MEETING not built for this window        |
+| grid variant       | MEETING->FED_FUNDS\|hl1440\|expected\|h30     | signal space MEETING not built for this window        |
+| grid variant       | MEETING->FED_FUNDS\|hl1440\|expected\|h60     | signal space MEETING not built for this window        |
+| grid variant       | MEETING->FED_FUNDS\|hl1440\|expected\|h240    | signal space MEETING not built for this window        |
+| grid variant       | MEETING->FED_FUNDS\|hl1440\|expected\|h1440   | signal space MEETING not built for this window        |
+| grid variant       | MEETING->FED_FUNDS\|hl1440\|unweighted\|h5    | signal space MEETING not built for this window        |
+| grid variant       | MEETING->FED_FUNDS\|hl1440\|unweighted\|h15   | signal space MEETING not built for this window        |
+| grid variant       | MEETING->FED_FUNDS\|hl1440\|unweighted\|h30   | signal space MEETING not built for this window        |
+| grid variant       | MEETING->FED_FUNDS\|hl1440\|unweighted\|h60   | signal space MEETING not built for this window        |
+| grid variant       | MEETING->FED_FUNDS\|hl1440\|unweighted\|h240  | signal space MEETING not built for this window        |
+| grid variant       | MEETING->FED_FUNDS\|hl1440\|unweighted\|h1440 | signal space MEETING not built for this window        |
+| conditioning split | sofr_effr_bp                                  | panel not built for this space                        |
 
 </details>
 
@@ -1380,14 +1380,14 @@ _Source: `g0_skew_vs_independent_by_hour.csv` (23 rows)._
 
 ### G0 — is a flip explained by the curve gap alone?
 
-| stratum                  |    n |   flip_rate |   predicted_rate |   agreement |   true_positive |   false_positive |   false_negative |   true_negative |   median_abs_s2m_bps |   median_offset_bps |
-|:-------------------------|-----:|------------:|-----------------:|------------:|----------------:|-----------------:|-----------------:|----------------:|---------------------:|--------------------:|
-| ALL                      | 4723 |       0.369 |            0.403 |       0.965 |            1741 |              163 |                0 |            2819 |                0.637 |              -0.356 |
-| |s2m| (-0.001, 0.221]    |  945 |       0.422 |            0.549 |       0.873 |             399 |              120 |                0 |             426 |                0.129 |              -0.046 |
-| |s2m| (0.221, 0.435]     |  944 |       0.411 |            0.442 |       0.969 |             388 |               29 |                0 |             527 |                0.318 |              -0.242 |
-| |s2m| (0.435, 1.016]     |  945 |       0.363 |            0.377 |       0.986 |             343 |               13 |                0 |             589 |                0.637 |              -0.458 |
-| |s2m| (1.016, 5.762]     |  944 |       0.305 |            0.306 |       0.999 |             288 |                1 |                0 |             655 |                1.532 |              -1.106 |
-| |s2m| (5.762, 39597.669] |  945 |       0.342 |            0.342 |       1     |             323 |                0 |                0 |             622 |               12.958 |              -7.782 |
+| stratum                    |    n |   flip_rate |   predicted_rate |   agreement |   true_positive |   false_positive |   false_negative |   true_negative |   median_abs_s2m_bps |   median_offset_bps |
+|:---------------------------|-----:|------------:|-----------------:|------------:|----------------:|-----------------:|-----------------:|----------------:|---------------------:|--------------------:|
+| ALL                        | 4723 |       0.369 |            0.403 |       0.965 |            1741 |              163 |                0 |            2819 |                0.637 |              -0.356 |
+| \|s2m\| (-0.001, 0.221]    |  945 |       0.422 |            0.549 |       0.873 |             399 |              120 |                0 |             426 |                0.129 |              -0.046 |
+| \|s2m\| (0.221, 0.435]     |  944 |       0.411 |            0.442 |       0.969 |             388 |               29 |                0 |             527 |                0.318 |              -0.242 |
+| \|s2m\| (0.435, 1.016]     |  945 |       0.363 |            0.377 |       0.986 |             343 |               13 |                0 |             589 |                0.637 |              -0.458 |
+| \|s2m\| (1.016, 5.762]     |  944 |       0.305 |            0.306 |       0.999 |             288 |                1 |                0 |             655 |                1.532 |              -1.106 |
+| \|s2m\| (5.762, 39597.669] |  945 |       0.342 |            0.342 |       1     |             323 |                0 |                0 |             622 |               12.958 |              -7.782 |
 
 _Source: `g0_flip_mechanism.csv` (6 rows)._
 
@@ -1931,113 +1931,113 @@ _Source: `g4_staleness_sensitivity.csv` (7 rows)._
 
 ### G4 — best vs median configuration
 
-| role          | variant                                |    mean |     se |        t |    n |   n_blocks |      lo |      hi |   n_boot | stars   |   hit_rate |   share_long |   share_agreeing |   p_sign |
-|:--------------|:---------------------------------------|--------:|-------:|---------:|-----:|-----------:|--------:|--------:|---------:|:--------|-----------:|-------------:|-----------------:|---------:|
-| best-config   | FUTURES->FUTURES|hl1440|expected|h1440 | -0.6102 | 0.5535 |  -1.1024 |  304 |         74 | -1.6386 |  0.5388 |      200 | nan     |      0.457 |        0.062 |            0.527 |    0.728 |
-| median-config | FUTURES->FUTURES|hl30|expected|h15     | -0.4822 | 0.0184 | -26.1631 | 4586 |         99 | -0.5232 | -0.4472 |      200 | ***     |      0.159 |        0.344 |            0.949 |    0     |
+| role          | variant                                   |    mean |     se |        t |    n |   n_blocks |      lo |      hi |   n_boot | stars   |   hit_rate |   share_long |   share_agreeing |   p_sign |
+|:--------------|:------------------------------------------|--------:|-------:|---------:|-----:|-----------:|--------:|--------:|---------:|:--------|-----------:|-------------:|-----------------:|---------:|
+| best-config   | FUTURES->FUTURES\|hl1440\|expected\|h1440 | -0.6102 | 0.5535 |  -1.1024 |  304 |         74 | -1.6386 |  0.5388 |      200 | nan     |      0.457 |        0.062 |            0.527 |    0.728 |
+| median-config | FUTURES->FUTURES\|hl30\|expected\|h15     | -0.4822 | 0.0184 | -26.1631 | 4586 |         99 | -0.5232 | -0.4472 |      200 | ***     |      0.159 |        0.344 |            0.949 |    0     |
 
 _Source: `g4_best_and_median.csv` (2 rows)._
 
 ### G4 — the full secondary grid
 
-| variant                                      |    mean |     se |         t |     n |   n_blocks |      lo |      hi |   n_boot | stars   |   hit_rate |   share_long |   share_agreeing |   p_sign |
-|:---------------------------------------------|--------:|-------:|----------:|------:|-----------:|--------:|--------:|---------:|:--------|-----------:|-------------:|-----------------:|---------:|
-| FUTURES->FUTURES|hl1440|expected|h1440       | -0.6102 | 0.5535 |   -1.1024 |   304 |         74 | -1.6386 |  0.5388 |      200 | nan     |      0.457 |        0.062 |            0.527 |    0.728 |
-| FUTURES->FUTURES|hl30|expected|h1440         | -0.4267 | 0.3741 |   -1.1406 |   375 |         78 | -1.2357 |  0.284  |      200 | nan     |      0.416 |        0.381 |            0.551 |    0.428 |
-| FUTURES->FUTURES|hl1440|unweighted|h1440     | -0.6908 | 0.5509 |   -1.2538 |   304 |         76 | -1.6521 |  0.3134 |      200 | nan     |      0.461 |        0.069 |            0.5   |    1     |
-| FUTURES->FUTURES|hl30|unweighted|h1440       | -0.5187 | 0.3986 |   -1.3012 |   375 |         78 | -1.302  |  0.2276 |      200 | nan     |      0.427 |        0.363 |            0.564 |    0.308 |
-| FUTURES->FUTURES|hl90|unweighted|h1440       | -0.6925 | 0.3533 |   -1.9603 |   361 |         78 | -1.3577 | -0.0005 |      200 | *       |      0.407 |        0.291 |            0.59  |    0.141 |
-| FUTURES->FUTURES|hl240|expected|h240         | -0.5219 | 0.2517 |   -2.0736 |   376 |         95 | -1.0369 | -0.1498 |      200 | *       |      0.37  |        0.205 |            0.642 |    0.007 |
-| FUTURES->FUTURES|hl240|expected|h1440        | -0.8842 | 0.3751 |   -2.357  |   341 |         77 | -1.6717 | -0.2978 |      200 | *       |      0.411 |        0.194 |            0.597 |    0.11  |
-| FUTURES->FUTURES|hl240|unweighted|h1440      | -0.8576 | 0.3604 |   -2.3796 |   344 |         77 | -1.6314 | -0.3312 |      200 | *       |      0.404 |        0.203 |            0.597 |    0.11  |
-| FUTURES->FUTURES|hl1440|expected|h240        | -0.6911 | 0.2835 |   -2.4381 |   310 |         85 | -1.218  | -0.1984 |      200 | *       |      0.297 |        0.071 |            0.635 |    0.017 |
-| FUTURES->FUTURES|hl90|expected|h1440         | -0.8242 | 0.3365 |   -2.4497 |   357 |         77 | -1.5294 | -0.2569 |      200 | *       |      0.403 |        0.263 |            0.584 |    0.171 |
-| FUTURES->FUTURES|hl1440|unweighted|h240      | -0.7761 | 0.2809 |   -2.7632 |   307 |         88 | -1.2555 | -0.2977 |      200 | **      |      0.287 |        0.068 |            0.659 |    0.004 |
-| FUTURES->FUTURES|hl30|expected|h240          | -0.5423 | 0.1943 |   -2.7902 |   420 |         95 | -0.9189 | -0.2398 |      200 | **      |      0.34  |        0.429 |            0.716 |    0     |
-| FUTURES->FUTURES|hl240|unweighted|h240       | -0.6784 | 0.2327 |   -2.9159 |   384 |         95 | -1.1465 | -0.3058 |      200 | **      |      0.339 |        0.211 |            0.695 |    0     |
-| FUTURES->FUTURES|hl90|expected|h240          | -0.6213 | 0.2122 |   -2.9282 |   404 |         95 | -1.0452 | -0.172  |      200 | **      |      0.354 |        0.334 |            0.684 |    0     |
-| FUTURES->FUTURES|hl90|unweighted|h240        | -0.6714 | 0.2127 |   -3.156  |   407 |         97 | -1.0434 | -0.3028 |      200 | ***     |      0.339 |        0.329 |            0.67  |    0.001 |
-| FUTURES->FUTURES|hl30|unweighted|h240        | -0.6367 | 0.1748 |   -3.6431 |   426 |         97 | -1.012  | -0.3131 |      200 | ***     |      0.326 |        0.418 |            0.711 |    0     |
-| FED_FUNDS->FED_FUNDS|hl30|expected|h1440     | -0.3845 | 0.0979 |   -3.9259 |   342 |         76 | -0.5835 | -0.1778 |      200 | ***     |      0.251 |        0.401 |            0.776 |    0     |
-| FED_FUNDS->FED_FUNDS|hl1440|expected|h1440   | -0.4256 | 0.1029 |   -4.1376 |   309 |         77 | -0.6075 | -0.2152 |      200 | ***     |      0.223 |        0.243 |            0.753 |    0     |
-| FED_FUNDS->FED_FUNDS|hl240|unweighted|h1440  | -0.4633 | 0.1117 |   -4.1483 |   320 |         78 | -0.6667 | -0.1918 |      200 | ***     |      0.228 |        0.359 |            0.795 |    0     |
-| FED_FUNDS->FED_FUNDS|hl1440|unweighted|h1440 | -0.4478 | 0.1043 |   -4.294  |   316 |         78 | -0.6315 | -0.2404 |      200 | ***     |      0.218 |        0.247 |            0.769 |    0     |
-| FED_FUNDS->FED_FUNDS|hl30|unweighted|h1440   | -0.375  | 0.0831 |   -4.5152 |   342 |         77 | -0.5308 | -0.1808 |      200 | ***     |      0.254 |        0.418 |            0.805 |    0     |
-| FED_FUNDS->FED_FUNDS|hl240|expected|h1440    | -0.5376 | 0.0955 |   -5.6309 |   319 |         75 | -0.7017 | -0.3532 |      200 | ***     |      0.21  |        0.345 |            0.813 |    0     |
-| FED_FUNDS->FED_FUNDS|hl90|unweighted|h1440   | -0.5582 | 0.0986 |   -5.6624 |   331 |         77 | -0.7493 | -0.3606 |      200 | ***     |      0.218 |        0.411 |            0.818 |    0     |
-| FED_FUNDS->FED_FUNDS|hl90|expected|h1440     | -0.5575 | 0.0945 |   -5.8982 |   326 |         76 | -0.7579 | -0.3707 |      200 | ***     |      0.212 |        0.387 |            0.803 |    0     |
-| FUTURES->FUTURES|hl30|expected|h60           | -0.5046 | 0.0694 |   -7.2678 |  1520 |         99 | -0.6509 | -0.3695 |      200 | ***     |      0.243 |        0.363 |            0.879 |    0     |
-| FED_FUNDS->FED_FUNDS|hl1440|expected|h240    | -0.5737 | 0.0755 |   -7.5973 |   329 |         96 | -0.723  | -0.4196 |      200 | ***     |      0.143 |        0.24  |            0.927 |    0     |
-| FED_FUNDS->FED_FUNDS|hl1440|unweighted|h240  | -0.5727 | 0.0753 |   -7.6063 |   330 |         94 | -0.7189 | -0.4049 |      200 | ***     |      0.155 |        0.264 |            0.904 |    0     |
-| FED_FUNDS->FED_FUNDS|hl90|unweighted|h240    | -0.5853 | 0.066  |   -8.8662 |   378 |         97 | -0.7352 | -0.4663 |      200 | ***     |      0.161 |        0.458 |            0.907 |    0     |
-| FUTURES->FUTURES|hl240|expected|h60          | -0.5262 | 0.0592 |   -8.8885 |  1601 |         98 | -0.6656 | -0.4226 |      200 | ***     |      0.245 |        0.204 |            0.837 |    0     |
-| FED_FUNDS->FED_FUNDS|hl30|unweighted|h240    | -0.5504 | 0.0612 |   -8.989  |   392 |         95 | -0.6782 | -0.4347 |      200 | ***     |      0.145 |        0.48  |            0.905 |    0     |
-| FUTURES->FUTURES|hl1440|expected|h60         | -0.5758 | 0.0622 |   -9.2567 |  1663 |         94 | -0.7025 | -0.4534 |      200 | ***     |      0.229 |        0.075 |            0.904 |    0     |
-| FED_FUNDS->FED_FUNDS|hl30|expected|h240      | -0.5573 | 0.0601 |   -9.2763 |   384 |         95 | -0.6827 | -0.4443 |      200 | ***     |      0.159 |        0.479 |            0.884 |    0     |
-| FED_FUNDS->FED_FUNDS|hl90|expected|h240      | -0.5879 | 0.0628 |   -9.3566 |   367 |         95 | -0.7142 | -0.4748 |      200 | ***     |      0.144 |        0.439 |            0.905 |    0     |
-| FUTURES->FUTURES|hl90|expected|h60           | -0.5458 | 0.0578 |   -9.4433 |  1639 |         99 | -0.681  | -0.4412 |      200 | ***     |      0.236 |        0.277 |            0.899 |    0     |
-| FUTURES->FUTURES|hl30|unweighted|h60         | -0.5517 | 0.0578 |   -9.5458 |  1534 |         99 | -0.6856 | -0.4346 |      200 | ***     |      0.241 |        0.375 |            0.889 |    0     |
-| FED_FUNDS->FED_FUNDS|hl240|expected|h240     | -0.6409 | 0.0647 |   -9.9013 |   330 |         94 | -0.7751 | -0.5221 |      200 | ***     |      0.121 |        0.385 |            0.936 |    0     |
-| FED_FUNDS->FED_FUNDS|hl240|unweighted|h240   | -0.6224 | 0.0628 |   -9.9077 |   341 |         96 | -0.7736 | -0.4828 |      200 | ***     |      0.147 |        0.402 |            0.927 |    0     |
-| FUTURES->FUTURES|hl240|unweighted|h60        | -0.561  | 0.056  |  -10.0211 |  1639 |         98 | -0.6853 | -0.4611 |      200 | ***     |      0.242 |        0.214 |            0.857 |    0     |
-| FUTURES->FUTURES|hl1440|unweighted|h60       | -0.5822 | 0.0556 |  -10.4751 |  1649 |         96 | -0.6638 | -0.4878 |      200 | ***     |      0.228 |        0.083 |            0.875 |    0     |
-| FUTURES->FUTURES|hl90|unweighted|h60         | -0.6108 | 0.0565 |  -10.8085 |  1656 |         99 | -0.7344 | -0.5127 |      200 | ***     |      0.229 |        0.29  |            0.909 |    0     |
-| FUTURES->FUTURES|hl30|unweighted|h30         | -0.4621 | 0.0365 |  -12.6495 |  2601 |         99 | -0.5429 | -0.3846 |      200 | ***     |      0.21  |        0.359 |            0.899 |    0     |
-| FUTURES->FUTURES|hl30|expected|h30           | -0.4722 | 0.0372 |  -12.7    |  2591 |         99 | -0.558  | -0.4023 |      200 | ***     |      0.202 |        0.352 |            0.899 |    0     |
-| FUTURES->FUTURES|hl90|expected|h30           | -0.5318 | 0.0305 |  -17.4516 |  2991 |         99 | -0.5916 | -0.4769 |      200 | ***     |      0.202 |        0.28  |            0.96  |    0     |
-| FUTURES->FUTURES|hl90|unweighted|h30         | -0.5403 | 0.0283 |  -19.0741 |  3024 |         99 | -0.5998 | -0.4966 |      200 | ***     |      0.203 |        0.289 |            0.97  |    0     |
-| FUTURES->FUTURES|hl240|expected|h30          | -0.5179 | 0.0271 |  -19.0833 |  3101 |         98 | -0.5809 | -0.4738 |      200 | ***     |      0.199 |        0.21  |            0.939 |    0     |
-| FUTURES->FUTURES|hl1440|expected|h30         | -0.5341 | 0.0276 |  -19.3579 |  3412 |         95 | -0.5783 | -0.4841 |      200 | ***     |      0.194 |        0.077 |            0.968 |    0     |
-| FUTURES->FUTURES|hl240|unweighted|h30        | -0.5218 | 0.0263 |  -19.8236 |  3147 |         98 | -0.5807 | -0.4778 |      200 | ***     |      0.194 |        0.222 |            0.939 |    0     |
-| FUTURES->FUTURES|hl1440|unweighted|h30       | -0.5352 | 0.0259 |  -20.6923 |  3385 |         97 | -0.5772 | -0.4835 |      200 | ***     |      0.192 |        0.086 |            0.969 |    0     |
-| FUTURES->FUTURES|hl30|expected|h15           | -0.4822 | 0.0184 |  -26.1631 |  4586 |         99 | -0.5232 | -0.4472 |      200 | ***     |      0.159 |        0.344 |            0.949 |    0     |
-| FUTURES->FUTURES|hl30|unweighted|h15         | -0.4811 | 0.0169 |  -28.5058 |  4612 |         99 | -0.5209 | -0.4483 |      200 | ***     |      0.157 |        0.353 |            0.96  |    0     |
-| FED_FUNDS->FED_FUNDS|hl240|expected|h60      | -0.5261 | 0.018  |  -29.1859 |  1419 |         98 | -0.5609 | -0.4954 |      200 | ***     |      0.071 |        0.361 |            1     |    0     |
-| FED_FUNDS->FED_FUNDS|hl90|expected|h60       | -0.5309 | 0.0176 |  -30.1952 |  1349 |         98 | -0.5627 | -0.5019 |      200 | ***     |      0.07  |        0.409 |            0.99  |    0     |
-| FED_FUNDS->FED_FUNDS|hl30|expected|h60       | -0.517  | 0.0171 |  -30.2625 |  1236 |         99 | -0.551  | -0.4816 |      200 | ***     |      0.078 |        0.428 |            0.99  |    0     |
-| FED_FUNDS->FED_FUNDS|hl240|unweighted|h60    | -0.5306 | 0.0173 |  -30.6413 |  1489 |         99 | -0.5676 | -0.4979 |      200 | ***     |      0.083 |        0.376 |            1     |    0     |
-| FED_FUNDS->FED_FUNDS|hl90|unweighted|h60     | -0.514  | 0.0166 |  -31.0549 |  1391 |         99 | -0.5506 | -0.4817 |      200 | ***     |      0.083 |        0.422 |            0.99  |    0     |
-| FED_FUNDS->FED_FUNDS|hl30|unweighted|h60     | -0.5076 | 0.016  |  -31.6612 |  1256 |         99 | -0.5387 | -0.4762 |      200 | ***     |      0.084 |        0.439 |            0.98  |    0     |
-| FUTURES->FUTURES|hl90|expected|h15           | -0.5135 | 0.0155 |  -33.0672 |  5602 |         99 | -0.5442 | -0.4856 |      200 | ***     |      0.156 |        0.28  |            0.99  |    0     |
-| FED_FUNDS->FED_FUNDS|hl1440|expected|h60     | -0.5055 | 0.015  |  -33.7945 |  1768 |         98 | -0.5364 | -0.4768 |      200 | ***     |      0.097 |        0.258 |            0.98  |    0     |
-| FUTURES->FUTURES|hl90|unweighted|h15         | -0.5119 | 0.0146 |  -35.1709 |  5670 |         99 | -0.5435 | -0.4876 |      200 | ***     |      0.153 |        0.29  |            0.99  |    0     |
-| FED_FUNDS->FED_FUNDS|hl1440|unweighted|h60   | -0.5135 | 0.0142 |  -36.1346 |  1760 |         97 | -0.5429 | -0.4872 |      200 | ***     |      0.093 |        0.273 |            0.979 |    0     |
-| FUTURES->FUTURES|hl240|expected|h15          | -0.5103 | 0.0137 |  -37.3333 |  6021 |         98 | -0.5401 | -0.4877 |      200 | ***     |      0.149 |        0.212 |            1     |    0     |
-| FUTURES->FUTURES|hl240|unweighted|h15        | -0.5047 | 0.0133 |  -38.0066 |  6093 |         98 | -0.5351 | -0.4849 |      200 | ***     |      0.152 |        0.224 |            1     |    0     |
-| FUTURES->FUTURES|hl1440|expected|h15         | -0.5139 | 0.0131 |  -39.31   |  6876 |         95 | -0.5363 | -0.488  |      200 | ***     |      0.154 |        0.079 |            0.968 |    0     |
-| FUTURES->FUTURES|hl1440|unweighted|h15       | -0.5135 | 0.0124 |  -41.5112 |  6807 |         97 | -0.534  | -0.4893 |      200 | ***     |      0.152 |        0.088 |            0.979 |    0     |
-| FED_FUNDS->FED_FUNDS|hl30|expected|h30       | -0.505  | 0.0109 |  -46.4769 |  2053 |         99 | -0.5282 | -0.4852 |      200 | ***     |      0.07  |        0.429 |            1     |    0     |
-| FED_FUNDS->FED_FUNDS|hl30|unweighted|h30     | -0.4995 | 0.0105 |  -47.5167 |  2068 |         99 | -0.5234 | -0.4772 |      200 | ***     |      0.078 |        0.439 |            1     |    0     |
-| FED_FUNDS->FED_FUNDS|hl90|unweighted|h30     | -0.5064 | 0.0099 |  -51.1986 |  2498 |         99 | -0.5253 | -0.4874 |      200 | ***     |      0.067 |        0.422 |            1     |    0     |
-| FED_FUNDS->FED_FUNDS|hl90|expected|h30       | -0.5135 | 0.0095 |  -54.1611 |  2427 |         98 | -0.531  | -0.4969 |      200 | ***     |      0.06  |        0.414 |            1     |    0     |
-| FED_FUNDS->FED_FUNDS|hl240|unweighted|h30    | -0.5113 | 0.0085 |  -60.2981 |  2818 |         99 | -0.5289 | -0.4941 |      200 | ***     |      0.061 |        0.379 |            1     |    0     |
-| FED_FUNDS->FED_FUNDS|hl240|expected|h30      | -0.5125 | 0.0081 |  -63.5282 |  2678 |         98 | -0.5281 | -0.4975 |      200 | ***     |      0.058 |        0.37  |            1     |    0     |
-| FED_FUNDS->FED_FUNDS|hl1440|unweighted|h30   | -0.5026 | 0.0074 |  -67.6514 |  3492 |         98 | -0.5161 | -0.4889 |      200 | ***     |      0.071 |        0.276 |            1     |    0     |
-| FED_FUNDS->FED_FUNDS|hl1440|expected|h30     | -0.5032 | 0.0074 |  -68.2774 |  3528 |         98 | -0.5206 | -0.489  |      200 | ***     |      0.07  |        0.26  |            1     |    0     |
-| FUTURES->FUTURES|hl30|unweighted|h5          | -0.4953 | 0.0066 |  -74.743  | 12518 |         99 | -0.5092 | -0.4828 |      200 | ***     |      0.105 |        0.349 |            1     |    0     |
-| FUTURES->FUTURES|hl30|expected|h5            | -0.4973 | 0.0065 |  -76.8428 | 12411 |         99 | -0.5111 | -0.4853 |      200 | ***     |      0.104 |        0.341 |            1     |    0     |
-| FED_FUNDS->FED_FUNDS|hl30|expected|h15       | -0.5012 | 0.0061 |  -81.6607 |  3600 |         99 | -0.5135 | -0.4894 |      200 | ***     |      0.044 |        0.428 |            1     |    0     |
-| FED_FUNDS->FED_FUNDS|hl30|unweighted|h15     | -0.4988 | 0.0059 |  -84.0354 |  3671 |         99 | -0.5119 | -0.4858 |      200 | ***     |      0.048 |        0.438 |            1     |    0     |
-| FUTURES->FUTURES|hl90|expected|h5            | -0.5021 | 0.0053 |  -94.6446 | 15936 |         99 | -0.513  | -0.4927 |      200 | ***     |      0.103 |        0.282 |            1     |    0     |
-| FED_FUNDS->FED_FUNDS|hl90|unweighted|h15     | -0.503  | 0.0051 |  -99.2702 |  4657 |         99 | -0.5119 | -0.4924 |      200 | ***     |      0.046 |        0.427 |            1     |    0     |
-| FUTURES->FUTURES|hl90|unweighted|h5          | -0.5011 | 0.005  |  -99.4173 | 16140 |         99 | -0.5118 | -0.4929 |      200 | ***     |      0.103 |        0.293 |            0.99  |    0     |
-| FED_FUNDS->FED_FUNDS|hl90|expected|h15       | -0.5052 | 0.005  | -100.668  |  4525 |         98 | -0.5142 | -0.4951 |      200 | ***     |      0.041 |        0.418 |            1     |    0     |
-| FUTURES->FUTURES|hl240|expected|h5           | -0.5029 | 0.0046 | -110.495  | 17633 |         98 | -0.5144 | -0.4958 |      200 | ***     |      0.099 |        0.216 |            1     |    0     |
-| FED_FUNDS->FED_FUNDS|hl240|expected|h15      | -0.5049 | 0.0046 | -110.514  |  5167 |         98 | -0.5135 | -0.4955 |      200 | ***     |      0.041 |        0.371 |            1     |    0     |
-| FUTURES->FUTURES|hl240|unweighted|h5         | -0.5008 | 0.0045 | -111.634  | 17823 |         98 | -0.5115 | -0.4937 |      200 | ***     |      0.099 |        0.227 |            0.99  |    0     |
-| FED_FUNDS->FED_FUNDS|hl240|unweighted|h15    | -0.5028 | 0.0045 | -111.708  |  5405 |         99 | -0.512  | -0.4936 |      200 | ***     |      0.044 |        0.381 |            1     |    0     |
-| FUTURES->FUTURES|hl1440|expected|h5          | -0.5048 | 0.0041 | -122.615  | 20712 |         95 | -0.5116 | -0.4971 |      200 | ***     |      0.096 |        0.08  |            1     |    0     |
-| FUTURES->FUTURES|hl1440|unweighted|h5        | -0.5038 | 0.0041 | -123.647  | 20482 |         97 | -0.5106 | -0.4957 |      200 | ***     |      0.096 |        0.088 |            1     |    0     |
-| FED_FUNDS->FED_FUNDS|hl1440|expected|h15     | -0.5005 | 0.0038 | -131.391  |  6995 |         98 | -0.509  | -0.4927 |      200 | ***     |      0.048 |        0.265 |            1     |    0     |
-| FED_FUNDS->FED_FUNDS|hl1440|unweighted|h15   | -0.5    | 0.0038 | -132.294  |  6934 |         98 | -0.5069 | -0.4924 |      200 | ***     |      0.048 |        0.278 |            1     |    0     |
-| FED_FUNDS->FED_FUNDS|hl30|expected|h5        | -0.5004 | 0.0023 | -218.867  |  9661 |         99 | -0.5051 | -0.4958 |      200 | ***     |      0.024 |        0.43  |            1     |    0     |
-| FED_FUNDS->FED_FUNDS|hl30|unweighted|h5      | -0.4994 | 0.0021 | -234.76   |  9911 |         99 | -0.5041 | -0.4947 |      200 | ***     |      0.025 |        0.437 |            1     |    0     |
-| FED_FUNDS->FED_FUNDS|hl90|expected|h5        | -0.5014 | 0.0018 | -272.988  | 12943 |         98 | -0.5046 | -0.4975 |      200 | ***     |      0.021 |        0.421 |            1     |    0     |
-| FED_FUNDS->FED_FUNDS|hl90|unweighted|h5      | -0.5009 | 0.0018 | -273.46   | 13349 |         99 | -0.5041 | -0.4971 |      200 | ***     |      0.023 |        0.431 |            1     |    0     |
-| FED_FUNDS->FED_FUNDS|hl240|expected|h5       | -0.501  | 0.0015 | -323.838  | 15202 |         98 | -0.5039 | -0.4981 |      200 | ***     |      0.02  |        0.372 |            1     |    0     |
-| FED_FUNDS->FED_FUNDS|hl240|unweighted|h5     | -0.5005 | 0.0015 | -325.099  | 15886 |         99 | -0.5035 | -0.4973 |      200 | ***     |      0.021 |        0.383 |            1     |    0     |
-| FED_FUNDS->FED_FUNDS|hl1440|expected|h5      | -0.4999 | 0.0012 | -405.24   | 20936 |         98 | -0.5026 | -0.4975 |      200 | ***     |      0.024 |        0.266 |            1     |    0     |
-| FED_FUNDS->FED_FUNDS|hl1440|unweighted|h5    | -0.4999 | 0.0012 | -421.007  | 20811 |         98 | -0.5021 | -0.4976 |      200 | ***     |      0.024 |        0.28  |            1     |    0     |
+| variant                                         |    mean |     se |         t |     n |   n_blocks |      lo |      hi |   n_boot | stars   |   hit_rate |   share_long |   share_agreeing |   p_sign |
+|:------------------------------------------------|--------:|-------:|----------:|------:|-----------:|--------:|--------:|---------:|:--------|-----------:|-------------:|-----------------:|---------:|
+| FUTURES->FUTURES\|hl1440\|expected\|h1440       | -0.6102 | 0.5535 |   -1.1024 |   304 |         74 | -1.6386 |  0.5388 |      200 | nan     |      0.457 |        0.062 |            0.527 |    0.728 |
+| FUTURES->FUTURES\|hl30\|expected\|h1440         | -0.4267 | 0.3741 |   -1.1406 |   375 |         78 | -1.2357 |  0.284  |      200 | nan     |      0.416 |        0.381 |            0.551 |    0.428 |
+| FUTURES->FUTURES\|hl1440\|unweighted\|h1440     | -0.6908 | 0.5509 |   -1.2538 |   304 |         76 | -1.6521 |  0.3134 |      200 | nan     |      0.461 |        0.069 |            0.5   |    1     |
+| FUTURES->FUTURES\|hl30\|unweighted\|h1440       | -0.5187 | 0.3986 |   -1.3012 |   375 |         78 | -1.302  |  0.2276 |      200 | nan     |      0.427 |        0.363 |            0.564 |    0.308 |
+| FUTURES->FUTURES\|hl90\|unweighted\|h1440       | -0.6925 | 0.3533 |   -1.9603 |   361 |         78 | -1.3577 | -0.0005 |      200 | *       |      0.407 |        0.291 |            0.59  |    0.141 |
+| FUTURES->FUTURES\|hl240\|expected\|h240         | -0.5219 | 0.2517 |   -2.0736 |   376 |         95 | -1.0369 | -0.1498 |      200 | *       |      0.37  |        0.205 |            0.642 |    0.007 |
+| FUTURES->FUTURES\|hl240\|expected\|h1440        | -0.8842 | 0.3751 |   -2.357  |   341 |         77 | -1.6717 | -0.2978 |      200 | *       |      0.411 |        0.194 |            0.597 |    0.11  |
+| FUTURES->FUTURES\|hl240\|unweighted\|h1440      | -0.8576 | 0.3604 |   -2.3796 |   344 |         77 | -1.6314 | -0.3312 |      200 | *       |      0.404 |        0.203 |            0.597 |    0.11  |
+| FUTURES->FUTURES\|hl1440\|expected\|h240        | -0.6911 | 0.2835 |   -2.4381 |   310 |         85 | -1.218  | -0.1984 |      200 | *       |      0.297 |        0.071 |            0.635 |    0.017 |
+| FUTURES->FUTURES\|hl90\|expected\|h1440         | -0.8242 | 0.3365 |   -2.4497 |   357 |         77 | -1.5294 | -0.2569 |      200 | *       |      0.403 |        0.263 |            0.584 |    0.171 |
+| FUTURES->FUTURES\|hl1440\|unweighted\|h240      | -0.7761 | 0.2809 |   -2.7632 |   307 |         88 | -1.2555 | -0.2977 |      200 | **      |      0.287 |        0.068 |            0.659 |    0.004 |
+| FUTURES->FUTURES\|hl30\|expected\|h240          | -0.5423 | 0.1943 |   -2.7902 |   420 |         95 | -0.9189 | -0.2398 |      200 | **      |      0.34  |        0.429 |            0.716 |    0     |
+| FUTURES->FUTURES\|hl240\|unweighted\|h240       | -0.6784 | 0.2327 |   -2.9159 |   384 |         95 | -1.1465 | -0.3058 |      200 | **      |      0.339 |        0.211 |            0.695 |    0     |
+| FUTURES->FUTURES\|hl90\|expected\|h240          | -0.6213 | 0.2122 |   -2.9282 |   404 |         95 | -1.0452 | -0.172  |      200 | **      |      0.354 |        0.334 |            0.684 |    0     |
+| FUTURES->FUTURES\|hl90\|unweighted\|h240        | -0.6714 | 0.2127 |   -3.156  |   407 |         97 | -1.0434 | -0.3028 |      200 | ***     |      0.339 |        0.329 |            0.67  |    0.001 |
+| FUTURES->FUTURES\|hl30\|unweighted\|h240        | -0.6367 | 0.1748 |   -3.6431 |   426 |         97 | -1.012  | -0.3131 |      200 | ***     |      0.326 |        0.418 |            0.711 |    0     |
+| FED_FUNDS->FED_FUNDS\|hl30\|expected\|h1440     | -0.3845 | 0.0979 |   -3.9259 |   342 |         76 | -0.5835 | -0.1778 |      200 | ***     |      0.251 |        0.401 |            0.776 |    0     |
+| FED_FUNDS->FED_FUNDS\|hl1440\|expected\|h1440   | -0.4256 | 0.1029 |   -4.1376 |   309 |         77 | -0.6075 | -0.2152 |      200 | ***     |      0.223 |        0.243 |            0.753 |    0     |
+| FED_FUNDS->FED_FUNDS\|hl240\|unweighted\|h1440  | -0.4633 | 0.1117 |   -4.1483 |   320 |         78 | -0.6667 | -0.1918 |      200 | ***     |      0.228 |        0.359 |            0.795 |    0     |
+| FED_FUNDS->FED_FUNDS\|hl1440\|unweighted\|h1440 | -0.4478 | 0.1043 |   -4.294  |   316 |         78 | -0.6315 | -0.2404 |      200 | ***     |      0.218 |        0.247 |            0.769 |    0     |
+| FED_FUNDS->FED_FUNDS\|hl30\|unweighted\|h1440   | -0.375  | 0.0831 |   -4.5152 |   342 |         77 | -0.5308 | -0.1808 |      200 | ***     |      0.254 |        0.418 |            0.805 |    0     |
+| FED_FUNDS->FED_FUNDS\|hl240\|expected\|h1440    | -0.5376 | 0.0955 |   -5.6309 |   319 |         75 | -0.7017 | -0.3532 |      200 | ***     |      0.21  |        0.345 |            0.813 |    0     |
+| FED_FUNDS->FED_FUNDS\|hl90\|unweighted\|h1440   | -0.5582 | 0.0986 |   -5.6624 |   331 |         77 | -0.7493 | -0.3606 |      200 | ***     |      0.218 |        0.411 |            0.818 |    0     |
+| FED_FUNDS->FED_FUNDS\|hl90\|expected\|h1440     | -0.5575 | 0.0945 |   -5.8982 |   326 |         76 | -0.7579 | -0.3707 |      200 | ***     |      0.212 |        0.387 |            0.803 |    0     |
+| FUTURES->FUTURES\|hl30\|expected\|h60           | -0.5046 | 0.0694 |   -7.2678 |  1520 |         99 | -0.6509 | -0.3695 |      200 | ***     |      0.243 |        0.363 |            0.879 |    0     |
+| FED_FUNDS->FED_FUNDS\|hl1440\|expected\|h240    | -0.5737 | 0.0755 |   -7.5973 |   329 |         96 | -0.723  | -0.4196 |      200 | ***     |      0.143 |        0.24  |            0.927 |    0     |
+| FED_FUNDS->FED_FUNDS\|hl1440\|unweighted\|h240  | -0.5727 | 0.0753 |   -7.6063 |   330 |         94 | -0.7189 | -0.4049 |      200 | ***     |      0.155 |        0.264 |            0.904 |    0     |
+| FED_FUNDS->FED_FUNDS\|hl90\|unweighted\|h240    | -0.5853 | 0.066  |   -8.8662 |   378 |         97 | -0.7352 | -0.4663 |      200 | ***     |      0.161 |        0.458 |            0.907 |    0     |
+| FUTURES->FUTURES\|hl240\|expected\|h60          | -0.5262 | 0.0592 |   -8.8885 |  1601 |         98 | -0.6656 | -0.4226 |      200 | ***     |      0.245 |        0.204 |            0.837 |    0     |
+| FED_FUNDS->FED_FUNDS\|hl30\|unweighted\|h240    | -0.5504 | 0.0612 |   -8.989  |   392 |         95 | -0.6782 | -0.4347 |      200 | ***     |      0.145 |        0.48  |            0.905 |    0     |
+| FUTURES->FUTURES\|hl1440\|expected\|h60         | -0.5758 | 0.0622 |   -9.2567 |  1663 |         94 | -0.7025 | -0.4534 |      200 | ***     |      0.229 |        0.075 |            0.904 |    0     |
+| FED_FUNDS->FED_FUNDS\|hl30\|expected\|h240      | -0.5573 | 0.0601 |   -9.2763 |   384 |         95 | -0.6827 | -0.4443 |      200 | ***     |      0.159 |        0.479 |            0.884 |    0     |
+| FED_FUNDS->FED_FUNDS\|hl90\|expected\|h240      | -0.5879 | 0.0628 |   -9.3566 |   367 |         95 | -0.7142 | -0.4748 |      200 | ***     |      0.144 |        0.439 |            0.905 |    0     |
+| FUTURES->FUTURES\|hl90\|expected\|h60           | -0.5458 | 0.0578 |   -9.4433 |  1639 |         99 | -0.681  | -0.4412 |      200 | ***     |      0.236 |        0.277 |            0.899 |    0     |
+| FUTURES->FUTURES\|hl30\|unweighted\|h60         | -0.5517 | 0.0578 |   -9.5458 |  1534 |         99 | -0.6856 | -0.4346 |      200 | ***     |      0.241 |        0.375 |            0.889 |    0     |
+| FED_FUNDS->FED_FUNDS\|hl240\|expected\|h240     | -0.6409 | 0.0647 |   -9.9013 |   330 |         94 | -0.7751 | -0.5221 |      200 | ***     |      0.121 |        0.385 |            0.936 |    0     |
+| FED_FUNDS->FED_FUNDS\|hl240\|unweighted\|h240   | -0.6224 | 0.0628 |   -9.9077 |   341 |         96 | -0.7736 | -0.4828 |      200 | ***     |      0.147 |        0.402 |            0.927 |    0     |
+| FUTURES->FUTURES\|hl240\|unweighted\|h60        | -0.561  | 0.056  |  -10.0211 |  1639 |         98 | -0.6853 | -0.4611 |      200 | ***     |      0.242 |        0.214 |            0.857 |    0     |
+| FUTURES->FUTURES\|hl1440\|unweighted\|h60       | -0.5822 | 0.0556 |  -10.4751 |  1649 |         96 | -0.6638 | -0.4878 |      200 | ***     |      0.228 |        0.083 |            0.875 |    0     |
+| FUTURES->FUTURES\|hl90\|unweighted\|h60         | -0.6108 | 0.0565 |  -10.8085 |  1656 |         99 | -0.7344 | -0.5127 |      200 | ***     |      0.229 |        0.29  |            0.909 |    0     |
+| FUTURES->FUTURES\|hl30\|unweighted\|h30         | -0.4621 | 0.0365 |  -12.6495 |  2601 |         99 | -0.5429 | -0.3846 |      200 | ***     |      0.21  |        0.359 |            0.899 |    0     |
+| FUTURES->FUTURES\|hl30\|expected\|h30           | -0.4722 | 0.0372 |  -12.7    |  2591 |         99 | -0.558  | -0.4023 |      200 | ***     |      0.202 |        0.352 |            0.899 |    0     |
+| FUTURES->FUTURES\|hl90\|expected\|h30           | -0.5318 | 0.0305 |  -17.4516 |  2991 |         99 | -0.5916 | -0.4769 |      200 | ***     |      0.202 |        0.28  |            0.96  |    0     |
+| FUTURES->FUTURES\|hl90\|unweighted\|h30         | -0.5403 | 0.0283 |  -19.0741 |  3024 |         99 | -0.5998 | -0.4966 |      200 | ***     |      0.203 |        0.289 |            0.97  |    0     |
+| FUTURES->FUTURES\|hl240\|expected\|h30          | -0.5179 | 0.0271 |  -19.0833 |  3101 |         98 | -0.5809 | -0.4738 |      200 | ***     |      0.199 |        0.21  |            0.939 |    0     |
+| FUTURES->FUTURES\|hl1440\|expected\|h30         | -0.5341 | 0.0276 |  -19.3579 |  3412 |         95 | -0.5783 | -0.4841 |      200 | ***     |      0.194 |        0.077 |            0.968 |    0     |
+| FUTURES->FUTURES\|hl240\|unweighted\|h30        | -0.5218 | 0.0263 |  -19.8236 |  3147 |         98 | -0.5807 | -0.4778 |      200 | ***     |      0.194 |        0.222 |            0.939 |    0     |
+| FUTURES->FUTURES\|hl1440\|unweighted\|h30       | -0.5352 | 0.0259 |  -20.6923 |  3385 |         97 | -0.5772 | -0.4835 |      200 | ***     |      0.192 |        0.086 |            0.969 |    0     |
+| FUTURES->FUTURES\|hl30\|expected\|h15           | -0.4822 | 0.0184 |  -26.1631 |  4586 |         99 | -0.5232 | -0.4472 |      200 | ***     |      0.159 |        0.344 |            0.949 |    0     |
+| FUTURES->FUTURES\|hl30\|unweighted\|h15         | -0.4811 | 0.0169 |  -28.5058 |  4612 |         99 | -0.5209 | -0.4483 |      200 | ***     |      0.157 |        0.353 |            0.96  |    0     |
+| FED_FUNDS->FED_FUNDS\|hl240\|expected\|h60      | -0.5261 | 0.018  |  -29.1859 |  1419 |         98 | -0.5609 | -0.4954 |      200 | ***     |      0.071 |        0.361 |            1     |    0     |
+| FED_FUNDS->FED_FUNDS\|hl90\|expected\|h60       | -0.5309 | 0.0176 |  -30.1952 |  1349 |         98 | -0.5627 | -0.5019 |      200 | ***     |      0.07  |        0.409 |            0.99  |    0     |
+| FED_FUNDS->FED_FUNDS\|hl30\|expected\|h60       | -0.517  | 0.0171 |  -30.2625 |  1236 |         99 | -0.551  | -0.4816 |      200 | ***     |      0.078 |        0.428 |            0.99  |    0     |
+| FED_FUNDS->FED_FUNDS\|hl240\|unweighted\|h60    | -0.5306 | 0.0173 |  -30.6413 |  1489 |         99 | -0.5676 | -0.4979 |      200 | ***     |      0.083 |        0.376 |            1     |    0     |
+| FED_FUNDS->FED_FUNDS\|hl90\|unweighted\|h60     | -0.514  | 0.0166 |  -31.0549 |  1391 |         99 | -0.5506 | -0.4817 |      200 | ***     |      0.083 |        0.422 |            0.99  |    0     |
+| FED_FUNDS->FED_FUNDS\|hl30\|unweighted\|h60     | -0.5076 | 0.016  |  -31.6612 |  1256 |         99 | -0.5387 | -0.4762 |      200 | ***     |      0.084 |        0.439 |            0.98  |    0     |
+| FUTURES->FUTURES\|hl90\|expected\|h15           | -0.5135 | 0.0155 |  -33.0672 |  5602 |         99 | -0.5442 | -0.4856 |      200 | ***     |      0.156 |        0.28  |            0.99  |    0     |
+| FED_FUNDS->FED_FUNDS\|hl1440\|expected\|h60     | -0.5055 | 0.015  |  -33.7945 |  1768 |         98 | -0.5364 | -0.4768 |      200 | ***     |      0.097 |        0.258 |            0.98  |    0     |
+| FUTURES->FUTURES\|hl90\|unweighted\|h15         | -0.5119 | 0.0146 |  -35.1709 |  5670 |         99 | -0.5435 | -0.4876 |      200 | ***     |      0.153 |        0.29  |            0.99  |    0     |
+| FED_FUNDS->FED_FUNDS\|hl1440\|unweighted\|h60   | -0.5135 | 0.0142 |  -36.1346 |  1760 |         97 | -0.5429 | -0.4872 |      200 | ***     |      0.093 |        0.273 |            0.979 |    0     |
+| FUTURES->FUTURES\|hl240\|expected\|h15          | -0.5103 | 0.0137 |  -37.3333 |  6021 |         98 | -0.5401 | -0.4877 |      200 | ***     |      0.149 |        0.212 |            1     |    0     |
+| FUTURES->FUTURES\|hl240\|unweighted\|h15        | -0.5047 | 0.0133 |  -38.0066 |  6093 |         98 | -0.5351 | -0.4849 |      200 | ***     |      0.152 |        0.224 |            1     |    0     |
+| FUTURES->FUTURES\|hl1440\|expected\|h15         | -0.5139 | 0.0131 |  -39.31   |  6876 |         95 | -0.5363 | -0.488  |      200 | ***     |      0.154 |        0.079 |            0.968 |    0     |
+| FUTURES->FUTURES\|hl1440\|unweighted\|h15       | -0.5135 | 0.0124 |  -41.5112 |  6807 |         97 | -0.534  | -0.4893 |      200 | ***     |      0.152 |        0.088 |            0.979 |    0     |
+| FED_FUNDS->FED_FUNDS\|hl30\|expected\|h30       | -0.505  | 0.0109 |  -46.4769 |  2053 |         99 | -0.5282 | -0.4852 |      200 | ***     |      0.07  |        0.429 |            1     |    0     |
+| FED_FUNDS->FED_FUNDS\|hl30\|unweighted\|h30     | -0.4995 | 0.0105 |  -47.5167 |  2068 |         99 | -0.5234 | -0.4772 |      200 | ***     |      0.078 |        0.439 |            1     |    0     |
+| FED_FUNDS->FED_FUNDS\|hl90\|unweighted\|h30     | -0.5064 | 0.0099 |  -51.1986 |  2498 |         99 | -0.5253 | -0.4874 |      200 | ***     |      0.067 |        0.422 |            1     |    0     |
+| FED_FUNDS->FED_FUNDS\|hl90\|expected\|h30       | -0.5135 | 0.0095 |  -54.1611 |  2427 |         98 | -0.531  | -0.4969 |      200 | ***     |      0.06  |        0.414 |            1     |    0     |
+| FED_FUNDS->FED_FUNDS\|hl240\|unweighted\|h30    | -0.5113 | 0.0085 |  -60.2981 |  2818 |         99 | -0.5289 | -0.4941 |      200 | ***     |      0.061 |        0.379 |            1     |    0     |
+| FED_FUNDS->FED_FUNDS\|hl240\|expected\|h30      | -0.5125 | 0.0081 |  -63.5282 |  2678 |         98 | -0.5281 | -0.4975 |      200 | ***     |      0.058 |        0.37  |            1     |    0     |
+| FED_FUNDS->FED_FUNDS\|hl1440\|unweighted\|h30   | -0.5026 | 0.0074 |  -67.6514 |  3492 |         98 | -0.5161 | -0.4889 |      200 | ***     |      0.071 |        0.276 |            1     |    0     |
+| FED_FUNDS->FED_FUNDS\|hl1440\|expected\|h30     | -0.5032 | 0.0074 |  -68.2774 |  3528 |         98 | -0.5206 | -0.489  |      200 | ***     |      0.07  |        0.26  |            1     |    0     |
+| FUTURES->FUTURES\|hl30\|unweighted\|h5          | -0.4953 | 0.0066 |  -74.743  | 12518 |         99 | -0.5092 | -0.4828 |      200 | ***     |      0.105 |        0.349 |            1     |    0     |
+| FUTURES->FUTURES\|hl30\|expected\|h5            | -0.4973 | 0.0065 |  -76.8428 | 12411 |         99 | -0.5111 | -0.4853 |      200 | ***     |      0.104 |        0.341 |            1     |    0     |
+| FED_FUNDS->FED_FUNDS\|hl30\|expected\|h15       | -0.5012 | 0.0061 |  -81.6607 |  3600 |         99 | -0.5135 | -0.4894 |      200 | ***     |      0.044 |        0.428 |            1     |    0     |
+| FED_FUNDS->FED_FUNDS\|hl30\|unweighted\|h15     | -0.4988 | 0.0059 |  -84.0354 |  3671 |         99 | -0.5119 | -0.4858 |      200 | ***     |      0.048 |        0.438 |            1     |    0     |
+| FUTURES->FUTURES\|hl90\|expected\|h5            | -0.5021 | 0.0053 |  -94.6446 | 15936 |         99 | -0.513  | -0.4927 |      200 | ***     |      0.103 |        0.282 |            1     |    0     |
+| FED_FUNDS->FED_FUNDS\|hl90\|unweighted\|h15     | -0.503  | 0.0051 |  -99.2702 |  4657 |         99 | -0.5119 | -0.4924 |      200 | ***     |      0.046 |        0.427 |            1     |    0     |
+| FUTURES->FUTURES\|hl90\|unweighted\|h5          | -0.5011 | 0.005  |  -99.4173 | 16140 |         99 | -0.5118 | -0.4929 |      200 | ***     |      0.103 |        0.293 |            0.99  |    0     |
+| FED_FUNDS->FED_FUNDS\|hl90\|expected\|h15       | -0.5052 | 0.005  | -100.668  |  4525 |         98 | -0.5142 | -0.4951 |      200 | ***     |      0.041 |        0.418 |            1     |    0     |
+| FUTURES->FUTURES\|hl240\|expected\|h5           | -0.5029 | 0.0046 | -110.495  | 17633 |         98 | -0.5144 | -0.4958 |      200 | ***     |      0.099 |        0.216 |            1     |    0     |
+| FED_FUNDS->FED_FUNDS\|hl240\|expected\|h15      | -0.5049 | 0.0046 | -110.514  |  5167 |         98 | -0.5135 | -0.4955 |      200 | ***     |      0.041 |        0.371 |            1     |    0     |
+| FUTURES->FUTURES\|hl240\|unweighted\|h5         | -0.5008 | 0.0045 | -111.634  | 17823 |         98 | -0.5115 | -0.4937 |      200 | ***     |      0.099 |        0.227 |            0.99  |    0     |
+| FED_FUNDS->FED_FUNDS\|hl240\|unweighted\|h15    | -0.5028 | 0.0045 | -111.708  |  5405 |         99 | -0.512  | -0.4936 |      200 | ***     |      0.044 |        0.381 |            1     |    0     |
+| FUTURES->FUTURES\|hl1440\|expected\|h5          | -0.5048 | 0.0041 | -122.615  | 20712 |         95 | -0.5116 | -0.4971 |      200 | ***     |      0.096 |        0.08  |            1     |    0     |
+| FUTURES->FUTURES\|hl1440\|unweighted\|h5        | -0.5038 | 0.0041 | -123.647  | 20482 |         97 | -0.5106 | -0.4957 |      200 | ***     |      0.096 |        0.088 |            1     |    0     |
+| FED_FUNDS->FED_FUNDS\|hl1440\|expected\|h15     | -0.5005 | 0.0038 | -131.391  |  6995 |         98 | -0.509  | -0.4927 |      200 | ***     |      0.048 |        0.265 |            1     |    0     |
+| FED_FUNDS->FED_FUNDS\|hl1440\|unweighted\|h15   | -0.5    | 0.0038 | -132.294  |  6934 |         98 | -0.5069 | -0.4924 |      200 | ***     |      0.048 |        0.278 |            1     |    0     |
+| FED_FUNDS->FED_FUNDS\|hl30\|expected\|h5        | -0.5004 | 0.0023 | -218.867  |  9661 |         99 | -0.5051 | -0.4958 |      200 | ***     |      0.024 |        0.43  |            1     |    0     |
+| FED_FUNDS->FED_FUNDS\|hl30\|unweighted\|h5      | -0.4994 | 0.0021 | -234.76   |  9911 |         99 | -0.5041 | -0.4947 |      200 | ***     |      0.025 |        0.437 |            1     |    0     |
+| FED_FUNDS->FED_FUNDS\|hl90\|expected\|h5        | -0.5014 | 0.0018 | -272.988  | 12943 |         98 | -0.5046 | -0.4975 |      200 | ***     |      0.021 |        0.421 |            1     |    0     |
+| FED_FUNDS->FED_FUNDS\|hl90\|unweighted\|h5      | -0.5009 | 0.0018 | -273.46   | 13349 |         99 | -0.5041 | -0.4971 |      200 | ***     |      0.023 |        0.431 |            1     |    0     |
+| FED_FUNDS->FED_FUNDS\|hl240\|expected\|h5       | -0.501  | 0.0015 | -323.838  | 15202 |         98 | -0.5039 | -0.4981 |      200 | ***     |      0.02  |        0.372 |            1     |    0     |
+| FED_FUNDS->FED_FUNDS\|hl240\|unweighted\|h5     | -0.5005 | 0.0015 | -325.099  | 15886 |         99 | -0.5035 | -0.4973 |      200 | ***     |      0.021 |        0.383 |            1     |    0     |
+| FED_FUNDS->FED_FUNDS\|hl1440\|expected\|h5      | -0.4999 | 0.0012 | -405.24   | 20936 |         98 | -0.5026 | -0.4975 |      200 | ***     |      0.024 |        0.266 |            1     |    0     |
+| FED_FUNDS->FED_FUNDS\|hl1440\|unweighted\|h5    | -0.4999 | 0.0012 | -421.007  | 20811 |         98 | -0.5021 | -0.4976 |      200 | ***     |      0.024 |        0.28  |            1     |    0     |
 
 _Source: `g4_league.csv` (96 rows)._
 
@@ -2110,48 +2110,48 @@ _Source: `g4_romano_wolf.csv` (60 rows shown, 36 more in the CSV — truncated f
 
 ### G4 — declared variants that could NOT run
 
-| variant                                   | reason                                                |
-|:------------------------------------------|:------------------------------------------------------|
-| FED_FUNDS->FUTURES|hl30|expected|h5       | no shared bucket keys between signal and target space |
-| FED_FUNDS->FUTURES|hl30|expected|h15      | no shared bucket keys between signal and target space |
-| FED_FUNDS->FUTURES|hl30|expected|h30      | no shared bucket keys between signal and target space |
-| FED_FUNDS->FUTURES|hl30|expected|h60      | no shared bucket keys between signal and target space |
-| FED_FUNDS->FUTURES|hl30|expected|h240     | no shared bucket keys between signal and target space |
-| FED_FUNDS->FUTURES|hl30|expected|h1440    | no shared bucket keys between signal and target space |
-| FED_FUNDS->FUTURES|hl30|unweighted|h5     | no shared bucket keys between signal and target space |
-| FED_FUNDS->FUTURES|hl30|unweighted|h15    | no shared bucket keys between signal and target space |
-| FED_FUNDS->FUTURES|hl30|unweighted|h30    | no shared bucket keys between signal and target space |
-| FED_FUNDS->FUTURES|hl30|unweighted|h60    | no shared bucket keys between signal and target space |
-| FED_FUNDS->FUTURES|hl30|unweighted|h240   | no shared bucket keys between signal and target space |
-| FED_FUNDS->FUTURES|hl30|unweighted|h1440  | no shared bucket keys between signal and target space |
-| FED_FUNDS->FUTURES|hl90|expected|h5       | no shared bucket keys between signal and target space |
-| FED_FUNDS->FUTURES|hl90|expected|h15      | no shared bucket keys between signal and target space |
-| FED_FUNDS->FUTURES|hl90|expected|h30      | no shared bucket keys between signal and target space |
-| FED_FUNDS->FUTURES|hl90|expected|h60      | no shared bucket keys between signal and target space |
-| FED_FUNDS->FUTURES|hl90|expected|h240     | no shared bucket keys between signal and target space |
-| FED_FUNDS->FUTURES|hl90|expected|h1440    | no shared bucket keys between signal and target space |
-| FED_FUNDS->FUTURES|hl90|unweighted|h5     | no shared bucket keys between signal and target space |
-| FED_FUNDS->FUTURES|hl90|unweighted|h15    | no shared bucket keys between signal and target space |
-| FED_FUNDS->FUTURES|hl90|unweighted|h30    | no shared bucket keys between signal and target space |
-| FED_FUNDS->FUTURES|hl90|unweighted|h60    | no shared bucket keys between signal and target space |
-| FED_FUNDS->FUTURES|hl90|unweighted|h240   | no shared bucket keys between signal and target space |
-| FED_FUNDS->FUTURES|hl90|unweighted|h1440  | no shared bucket keys between signal and target space |
-| FED_FUNDS->FUTURES|hl240|expected|h5      | no shared bucket keys between signal and target space |
-| FED_FUNDS->FUTURES|hl240|expected|h15     | no shared bucket keys between signal and target space |
-| FED_FUNDS->FUTURES|hl240|expected|h30     | no shared bucket keys between signal and target space |
-| FED_FUNDS->FUTURES|hl240|expected|h60     | no shared bucket keys between signal and target space |
-| FED_FUNDS->FUTURES|hl240|expected|h240    | no shared bucket keys between signal and target space |
-| FED_FUNDS->FUTURES|hl240|expected|h1440   | no shared bucket keys between signal and target space |
-| FED_FUNDS->FUTURES|hl240|unweighted|h5    | no shared bucket keys between signal and target space |
-| FED_FUNDS->FUTURES|hl240|unweighted|h15   | no shared bucket keys between signal and target space |
-| FED_FUNDS->FUTURES|hl240|unweighted|h30   | no shared bucket keys between signal and target space |
-| FED_FUNDS->FUTURES|hl240|unweighted|h60   | no shared bucket keys between signal and target space |
-| FED_FUNDS->FUTURES|hl240|unweighted|h240  | no shared bucket keys between signal and target space |
-| FED_FUNDS->FUTURES|hl240|unweighted|h1440 | no shared bucket keys between signal and target space |
-| FED_FUNDS->FUTURES|hl1440|expected|h5     | no shared bucket keys between signal and target space |
-| FED_FUNDS->FUTURES|hl1440|expected|h15    | no shared bucket keys between signal and target space |
-| FED_FUNDS->FUTURES|hl1440|expected|h30    | no shared bucket keys between signal and target space |
-| FED_FUNDS->FUTURES|hl1440|expected|h60    | no shared bucket keys between signal and target space |
+| variant                                      | reason                                                |
+|:---------------------------------------------|:------------------------------------------------------|
+| FED_FUNDS->FUTURES\|hl30\|expected\|h5       | no shared bucket keys between signal and target space |
+| FED_FUNDS->FUTURES\|hl30\|expected\|h15      | no shared bucket keys between signal and target space |
+| FED_FUNDS->FUTURES\|hl30\|expected\|h30      | no shared bucket keys between signal and target space |
+| FED_FUNDS->FUTURES\|hl30\|expected\|h60      | no shared bucket keys between signal and target space |
+| FED_FUNDS->FUTURES\|hl30\|expected\|h240     | no shared bucket keys between signal and target space |
+| FED_FUNDS->FUTURES\|hl30\|expected\|h1440    | no shared bucket keys between signal and target space |
+| FED_FUNDS->FUTURES\|hl30\|unweighted\|h5     | no shared bucket keys between signal and target space |
+| FED_FUNDS->FUTURES\|hl30\|unweighted\|h15    | no shared bucket keys between signal and target space |
+| FED_FUNDS->FUTURES\|hl30\|unweighted\|h30    | no shared bucket keys between signal and target space |
+| FED_FUNDS->FUTURES\|hl30\|unweighted\|h60    | no shared bucket keys between signal and target space |
+| FED_FUNDS->FUTURES\|hl30\|unweighted\|h240   | no shared bucket keys between signal and target space |
+| FED_FUNDS->FUTURES\|hl30\|unweighted\|h1440  | no shared bucket keys between signal and target space |
+| FED_FUNDS->FUTURES\|hl90\|expected\|h5       | no shared bucket keys between signal and target space |
+| FED_FUNDS->FUTURES\|hl90\|expected\|h15      | no shared bucket keys between signal and target space |
+| FED_FUNDS->FUTURES\|hl90\|expected\|h30      | no shared bucket keys between signal and target space |
+| FED_FUNDS->FUTURES\|hl90\|expected\|h60      | no shared bucket keys between signal and target space |
+| FED_FUNDS->FUTURES\|hl90\|expected\|h240     | no shared bucket keys between signal and target space |
+| FED_FUNDS->FUTURES\|hl90\|expected\|h1440    | no shared bucket keys between signal and target space |
+| FED_FUNDS->FUTURES\|hl90\|unweighted\|h5     | no shared bucket keys between signal and target space |
+| FED_FUNDS->FUTURES\|hl90\|unweighted\|h15    | no shared bucket keys between signal and target space |
+| FED_FUNDS->FUTURES\|hl90\|unweighted\|h30    | no shared bucket keys between signal and target space |
+| FED_FUNDS->FUTURES\|hl90\|unweighted\|h60    | no shared bucket keys between signal and target space |
+| FED_FUNDS->FUTURES\|hl90\|unweighted\|h240   | no shared bucket keys between signal and target space |
+| FED_FUNDS->FUTURES\|hl90\|unweighted\|h1440  | no shared bucket keys between signal and target space |
+| FED_FUNDS->FUTURES\|hl240\|expected\|h5      | no shared bucket keys between signal and target space |
+| FED_FUNDS->FUTURES\|hl240\|expected\|h15     | no shared bucket keys between signal and target space |
+| FED_FUNDS->FUTURES\|hl240\|expected\|h30     | no shared bucket keys between signal and target space |
+| FED_FUNDS->FUTURES\|hl240\|expected\|h60     | no shared bucket keys between signal and target space |
+| FED_FUNDS->FUTURES\|hl240\|expected\|h240    | no shared bucket keys between signal and target space |
+| FED_FUNDS->FUTURES\|hl240\|expected\|h1440   | no shared bucket keys between signal and target space |
+| FED_FUNDS->FUTURES\|hl240\|unweighted\|h5    | no shared bucket keys between signal and target space |
+| FED_FUNDS->FUTURES\|hl240\|unweighted\|h15   | no shared bucket keys between signal and target space |
+| FED_FUNDS->FUTURES\|hl240\|unweighted\|h30   | no shared bucket keys between signal and target space |
+| FED_FUNDS->FUTURES\|hl240\|unweighted\|h60   | no shared bucket keys between signal and target space |
+| FED_FUNDS->FUTURES\|hl240\|unweighted\|h240  | no shared bucket keys between signal and target space |
+| FED_FUNDS->FUTURES\|hl240\|unweighted\|h1440 | no shared bucket keys between signal and target space |
+| FED_FUNDS->FUTURES\|hl1440\|expected\|h5     | no shared bucket keys between signal and target space |
+| FED_FUNDS->FUTURES\|hl1440\|expected\|h15    | no shared bucket keys between signal and target space |
+| FED_FUNDS->FUTURES\|hl1440\|expected\|h30    | no shared bucket keys between signal and target space |
+| FED_FUNDS->FUTURES\|hl1440\|expected\|h60    | no shared bucket keys between signal and target space |
 
 _Source: `g4_skipped_variants.csv` (40 rows shown, 152 more in the CSV — truncated for length only)._
 
@@ -2234,106 +2234,106 @@ _Source: `g5_capacity.csv` (3 rows)._
 
 ### Trial ledger — every configuration evaluated, in order
 
-|   trial | label                                        |   cfg_horizon |   cfg_threshold |   res_mean |    res_t | note   | cfg_signal   | cfg_signal_space   | cfg_target   |   cfg_half_life | cfg_weighting   |
-|--------:|:---------------------------------------------|--------------:|----------------:|-----------:|---------:|:-------|:-------------|:-------------------|:-------------|----------------:|:----------------|
-|       1 | PRIMARY (in-sample)                          |            60 |               1 |     -0.546 |   -9.443 |        | nan          | nan                | nan          |                 | nan             |
-|       2 | LABEL-FREE (unsigned intensity, FUTURES)     |            60 |               1 |     -0.64  |   -9.034 |        | intensity    | nan                | nan          |                 | nan             |
-|       3 | FUTURES->FUTURES|hl30|expected|h5            |             5 |                 |     -0.497 |  -76.843 |        | nan          | FUTURES            | FUTURES      |              30 | expected        |
-|       4 | FUTURES->FUTURES|hl30|expected|h15           |            15 |                 |     -0.482 |  -26.163 |        | nan          | FUTURES            | FUTURES      |              30 | expected        |
-|       5 | FUTURES->FUTURES|hl30|expected|h30           |            30 |                 |     -0.472 |  -12.7   |        | nan          | FUTURES            | FUTURES      |              30 | expected        |
-|       6 | FUTURES->FUTURES|hl30|expected|h60           |            60 |                 |     -0.505 |   -7.268 |        | nan          | FUTURES            | FUTURES      |              30 | expected        |
-|       7 | FUTURES->FUTURES|hl30|expected|h240          |           240 |                 |     -0.542 |   -2.79  |        | nan          | FUTURES            | FUTURES      |              30 | expected        |
-|       8 | FUTURES->FUTURES|hl30|expected|h1440         |          1440 |                 |     -0.427 |   -1.141 |        | nan          | FUTURES            | FUTURES      |              30 | expected        |
-|       9 | FUTURES->FUTURES|hl30|unweighted|h5          |             5 |                 |     -0.495 |  -74.743 |        | nan          | FUTURES            | FUTURES      |              30 | unweighted      |
-|      10 | FUTURES->FUTURES|hl30|unweighted|h15         |            15 |                 |     -0.481 |  -28.506 |        | nan          | FUTURES            | FUTURES      |              30 | unweighted      |
-|      11 | FUTURES->FUTURES|hl30|unweighted|h30         |            30 |                 |     -0.462 |  -12.649 |        | nan          | FUTURES            | FUTURES      |              30 | unweighted      |
-|      12 | FUTURES->FUTURES|hl30|unweighted|h60         |            60 |                 |     -0.552 |   -9.546 |        | nan          | FUTURES            | FUTURES      |              30 | unweighted      |
-|      13 | FUTURES->FUTURES|hl30|unweighted|h240        |           240 |                 |     -0.637 |   -3.643 |        | nan          | FUTURES            | FUTURES      |              30 | unweighted      |
-|      14 | FUTURES->FUTURES|hl30|unweighted|h1440       |          1440 |                 |     -0.519 |   -1.301 |        | nan          | FUTURES            | FUTURES      |              30 | unweighted      |
-|      15 | FUTURES->FUTURES|hl90|expected|h5            |             5 |                 |     -0.502 |  -94.645 |        | nan          | FUTURES            | FUTURES      |              90 | expected        |
-|      16 | FUTURES->FUTURES|hl90|expected|h15           |            15 |                 |     -0.514 |  -33.067 |        | nan          | FUTURES            | FUTURES      |              90 | expected        |
-|      17 | FUTURES->FUTURES|hl90|expected|h30           |            30 |                 |     -0.532 |  -17.452 |        | nan          | FUTURES            | FUTURES      |              90 | expected        |
-|      18 | FUTURES->FUTURES|hl90|expected|h60           |            60 |                 |     -0.546 |   -9.443 |        | nan          | FUTURES            | FUTURES      |              90 | expected        |
-|      19 | FUTURES->FUTURES|hl90|expected|h240          |           240 |                 |     -0.621 |   -2.928 |        | nan          | FUTURES            | FUTURES      |              90 | expected        |
-|      20 | FUTURES->FUTURES|hl90|expected|h1440         |          1440 |                 |     -0.824 |   -2.45  |        | nan          | FUTURES            | FUTURES      |              90 | expected        |
-|      21 | FUTURES->FUTURES|hl90|unweighted|h5          |             5 |                 |     -0.501 |  -99.417 |        | nan          | FUTURES            | FUTURES      |              90 | unweighted      |
-|      22 | FUTURES->FUTURES|hl90|unweighted|h15         |            15 |                 |     -0.512 |  -35.171 |        | nan          | FUTURES            | FUTURES      |              90 | unweighted      |
-|      23 | FUTURES->FUTURES|hl90|unweighted|h30         |            30 |                 |     -0.54  |  -19.074 |        | nan          | FUTURES            | FUTURES      |              90 | unweighted      |
-|      24 | FUTURES->FUTURES|hl90|unweighted|h60         |            60 |                 |     -0.611 |  -10.809 |        | nan          | FUTURES            | FUTURES      |              90 | unweighted      |
-|      25 | FUTURES->FUTURES|hl90|unweighted|h240        |           240 |                 |     -0.671 |   -3.156 |        | nan          | FUTURES            | FUTURES      |              90 | unweighted      |
-|      26 | FUTURES->FUTURES|hl90|unweighted|h1440       |          1440 |                 |     -0.693 |   -1.96  |        | nan          | FUTURES            | FUTURES      |              90 | unweighted      |
-|      27 | FUTURES->FUTURES|hl240|expected|h5           |             5 |                 |     -0.503 | -110.495 |        | nan          | FUTURES            | FUTURES      |             240 | expected        |
-|      28 | FUTURES->FUTURES|hl240|expected|h15          |            15 |                 |     -0.51  |  -37.333 |        | nan          | FUTURES            | FUTURES      |             240 | expected        |
-|      29 | FUTURES->FUTURES|hl240|expected|h30          |            30 |                 |     -0.518 |  -19.083 |        | nan          | FUTURES            | FUTURES      |             240 | expected        |
-|      30 | FUTURES->FUTURES|hl240|expected|h60          |            60 |                 |     -0.526 |   -8.889 |        | nan          | FUTURES            | FUTURES      |             240 | expected        |
-|      31 | FUTURES->FUTURES|hl240|expected|h240         |           240 |                 |     -0.522 |   -2.074 |        | nan          | FUTURES            | FUTURES      |             240 | expected        |
-|      32 | FUTURES->FUTURES|hl240|expected|h1440        |          1440 |                 |     -0.884 |   -2.357 |        | nan          | FUTURES            | FUTURES      |             240 | expected        |
-|      33 | FUTURES->FUTURES|hl240|unweighted|h5         |             5 |                 |     -0.501 | -111.634 |        | nan          | FUTURES            | FUTURES      |             240 | unweighted      |
-|      34 | FUTURES->FUTURES|hl240|unweighted|h15        |            15 |                 |     -0.505 |  -38.007 |        | nan          | FUTURES            | FUTURES      |             240 | unweighted      |
-|      35 | FUTURES->FUTURES|hl240|unweighted|h30        |            30 |                 |     -0.522 |  -19.824 |        | nan          | FUTURES            | FUTURES      |             240 | unweighted      |
-|      36 | FUTURES->FUTURES|hl240|unweighted|h60        |            60 |                 |     -0.561 |  -10.021 |        | nan          | FUTURES            | FUTURES      |             240 | unweighted      |
-|      37 | FUTURES->FUTURES|hl240|unweighted|h240       |           240 |                 |     -0.678 |   -2.916 |        | nan          | FUTURES            | FUTURES      |             240 | unweighted      |
-|      38 | FUTURES->FUTURES|hl240|unweighted|h1440      |          1440 |                 |     -0.858 |   -2.38  |        | nan          | FUTURES            | FUTURES      |             240 | unweighted      |
-|      39 | FUTURES->FUTURES|hl1440|expected|h5          |             5 |                 |     -0.505 | -122.615 |        | nan          | FUTURES            | FUTURES      |            1440 | expected        |
-|      40 | FUTURES->FUTURES|hl1440|expected|h15         |            15 |                 |     -0.514 |  -39.31  |        | nan          | FUTURES            | FUTURES      |            1440 | expected        |
-|      41 | FUTURES->FUTURES|hl1440|expected|h30         |            30 |                 |     -0.534 |  -19.358 |        | nan          | FUTURES            | FUTURES      |            1440 | expected        |
-|      42 | FUTURES->FUTURES|hl1440|expected|h60         |            60 |                 |     -0.576 |   -9.257 |        | nan          | FUTURES            | FUTURES      |            1440 | expected        |
-|      43 | FUTURES->FUTURES|hl1440|expected|h240        |           240 |                 |     -0.691 |   -2.438 |        | nan          | FUTURES            | FUTURES      |            1440 | expected        |
-|      44 | FUTURES->FUTURES|hl1440|expected|h1440       |          1440 |                 |     -0.61  |   -1.102 |        | nan          | FUTURES            | FUTURES      |            1440 | expected        |
-|      45 | FUTURES->FUTURES|hl1440|unweighted|h5        |             5 |                 |     -0.504 | -123.647 |        | nan          | FUTURES            | FUTURES      |            1440 | unweighted      |
-|      46 | FUTURES->FUTURES|hl1440|unweighted|h15       |            15 |                 |     -0.514 |  -41.511 |        | nan          | FUTURES            | FUTURES      |            1440 | unweighted      |
-|      47 | FUTURES->FUTURES|hl1440|unweighted|h30       |            30 |                 |     -0.535 |  -20.692 |        | nan          | FUTURES            | FUTURES      |            1440 | unweighted      |
-|      48 | FUTURES->FUTURES|hl1440|unweighted|h60       |            60 |                 |     -0.582 |  -10.475 |        | nan          | FUTURES            | FUTURES      |            1440 | unweighted      |
-|      49 | FUTURES->FUTURES|hl1440|unweighted|h240      |           240 |                 |     -0.776 |   -2.763 |        | nan          | FUTURES            | FUTURES      |            1440 | unweighted      |
-|      50 | FUTURES->FUTURES|hl1440|unweighted|h1440     |          1440 |                 |     -0.691 |   -1.254 |        | nan          | FUTURES            | FUTURES      |            1440 | unweighted      |
-|      51 | FED_FUNDS->FED_FUNDS|hl30|expected|h5        |             5 |                 |     -0.5   | -218.866 |        | nan          | FED_FUNDS          | FED_FUNDS    |              30 | expected        |
-|      52 | FED_FUNDS->FED_FUNDS|hl30|expected|h15       |            15 |                 |     -0.501 |  -81.661 |        | nan          | FED_FUNDS          | FED_FUNDS    |              30 | expected        |
-|      53 | FED_FUNDS->FED_FUNDS|hl30|expected|h30       |            30 |                 |     -0.505 |  -46.477 |        | nan          | FED_FUNDS          | FED_FUNDS    |              30 | expected        |
-|      54 | FED_FUNDS->FED_FUNDS|hl30|expected|h60       |            60 |                 |     -0.517 |  -30.262 |        | nan          | FED_FUNDS          | FED_FUNDS    |              30 | expected        |
-|      55 | FED_FUNDS->FED_FUNDS|hl30|expected|h240      |           240 |                 |     -0.557 |   -9.276 |        | nan          | FED_FUNDS          | FED_FUNDS    |              30 | expected        |
-|      56 | FED_FUNDS->FED_FUNDS|hl30|expected|h1440     |          1440 |                 |     -0.385 |   -3.926 |        | nan          | FED_FUNDS          | FED_FUNDS    |              30 | expected        |
-|      57 | FED_FUNDS->FED_FUNDS|hl30|unweighted|h5      |             5 |                 |     -0.499 | -234.76  |        | nan          | FED_FUNDS          | FED_FUNDS    |              30 | unweighted      |
-|      58 | FED_FUNDS->FED_FUNDS|hl30|unweighted|h15     |            15 |                 |     -0.499 |  -84.035 |        | nan          | FED_FUNDS          | FED_FUNDS    |              30 | unweighted      |
-|      59 | FED_FUNDS->FED_FUNDS|hl30|unweighted|h30     |            30 |                 |     -0.5   |  -47.517 |        | nan          | FED_FUNDS          | FED_FUNDS    |              30 | unweighted      |
-|      60 | FED_FUNDS->FED_FUNDS|hl30|unweighted|h60     |            60 |                 |     -0.508 |  -31.661 |        | nan          | FED_FUNDS          | FED_FUNDS    |              30 | unweighted      |
-|      61 | FED_FUNDS->FED_FUNDS|hl30|unweighted|h240    |           240 |                 |     -0.55  |   -8.989 |        | nan          | FED_FUNDS          | FED_FUNDS    |              30 | unweighted      |
-|      62 | FED_FUNDS->FED_FUNDS|hl30|unweighted|h1440   |          1440 |                 |     -0.375 |   -4.515 |        | nan          | FED_FUNDS          | FED_FUNDS    |              30 | unweighted      |
-|      63 | FED_FUNDS->FED_FUNDS|hl90|expected|h5        |             5 |                 |     -0.501 | -272.988 |        | nan          | FED_FUNDS          | FED_FUNDS    |              90 | expected        |
-|      64 | FED_FUNDS->FED_FUNDS|hl90|expected|h15       |            15 |                 |     -0.505 | -100.668 |        | nan          | FED_FUNDS          | FED_FUNDS    |              90 | expected        |
-|      65 | FED_FUNDS->FED_FUNDS|hl90|expected|h30       |            30 |                 |     -0.513 |  -54.161 |        | nan          | FED_FUNDS          | FED_FUNDS    |              90 | expected        |
-|      66 | FED_FUNDS->FED_FUNDS|hl90|expected|h60       |            60 |                 |     -0.531 |  -30.195 |        | nan          | FED_FUNDS          | FED_FUNDS    |              90 | expected        |
-|      67 | FED_FUNDS->FED_FUNDS|hl90|expected|h240      |           240 |                 |     -0.588 |   -9.357 |        | nan          | FED_FUNDS          | FED_FUNDS    |              90 | expected        |
-|      68 | FED_FUNDS->FED_FUNDS|hl90|expected|h1440     |          1440 |                 |     -0.558 |   -5.898 |        | nan          | FED_FUNDS          | FED_FUNDS    |              90 | expected        |
-|      69 | FED_FUNDS->FED_FUNDS|hl90|unweighted|h5      |             5 |                 |     -0.501 | -273.46  |        | nan          | FED_FUNDS          | FED_FUNDS    |              90 | unweighted      |
-|      70 | FED_FUNDS->FED_FUNDS|hl90|unweighted|h15     |            15 |                 |     -0.503 |  -99.27  |        | nan          | FED_FUNDS          | FED_FUNDS    |              90 | unweighted      |
-|      71 | FED_FUNDS->FED_FUNDS|hl90|unweighted|h30     |            30 |                 |     -0.506 |  -51.199 |        | nan          | FED_FUNDS          | FED_FUNDS    |              90 | unweighted      |
-|      72 | FED_FUNDS->FED_FUNDS|hl90|unweighted|h60     |            60 |                 |     -0.514 |  -31.055 |        | nan          | FED_FUNDS          | FED_FUNDS    |              90 | unweighted      |
-|      73 | FED_FUNDS->FED_FUNDS|hl90|unweighted|h240    |           240 |                 |     -0.585 |   -8.866 |        | nan          | FED_FUNDS          | FED_FUNDS    |              90 | unweighted      |
-|      74 | FED_FUNDS->FED_FUNDS|hl90|unweighted|h1440   |          1440 |                 |     -0.558 |   -5.662 |        | nan          | FED_FUNDS          | FED_FUNDS    |              90 | unweighted      |
-|      75 | FED_FUNDS->FED_FUNDS|hl240|expected|h5       |             5 |                 |     -0.501 | -323.838 |        | nan          | FED_FUNDS          | FED_FUNDS    |             240 | expected        |
-|      76 | FED_FUNDS->FED_FUNDS|hl240|expected|h15      |            15 |                 |     -0.505 | -110.514 |        | nan          | FED_FUNDS          | FED_FUNDS    |             240 | expected        |
-|      77 | FED_FUNDS->FED_FUNDS|hl240|expected|h30      |            30 |                 |     -0.513 |  -63.528 |        | nan          | FED_FUNDS          | FED_FUNDS    |             240 | expected        |
-|      78 | FED_FUNDS->FED_FUNDS|hl240|expected|h60      |            60 |                 |     -0.526 |  -29.186 |        | nan          | FED_FUNDS          | FED_FUNDS    |             240 | expected        |
-|      79 | FED_FUNDS->FED_FUNDS|hl240|expected|h240     |           240 |                 |     -0.641 |   -9.901 |        | nan          | FED_FUNDS          | FED_FUNDS    |             240 | expected        |
-|      80 | FED_FUNDS->FED_FUNDS|hl240|expected|h1440    |          1440 |                 |     -0.538 |   -5.631 |        | nan          | FED_FUNDS          | FED_FUNDS    |             240 | expected        |
-|      81 | FED_FUNDS->FED_FUNDS|hl240|unweighted|h5     |             5 |                 |     -0.501 | -325.099 |        | nan          | FED_FUNDS          | FED_FUNDS    |             240 | unweighted      |
-|      82 | FED_FUNDS->FED_FUNDS|hl240|unweighted|h15    |            15 |                 |     -0.503 | -111.708 |        | nan          | FED_FUNDS          | FED_FUNDS    |             240 | unweighted      |
-|      83 | FED_FUNDS->FED_FUNDS|hl240|unweighted|h30    |            30 |                 |     -0.511 |  -60.298 |        | nan          | FED_FUNDS          | FED_FUNDS    |             240 | unweighted      |
-|      84 | FED_FUNDS->FED_FUNDS|hl240|unweighted|h60    |            60 |                 |     -0.531 |  -30.641 |        | nan          | FED_FUNDS          | FED_FUNDS    |             240 | unweighted      |
-|      85 | FED_FUNDS->FED_FUNDS|hl240|unweighted|h240   |           240 |                 |     -0.622 |   -9.908 |        | nan          | FED_FUNDS          | FED_FUNDS    |             240 | unweighted      |
-|      86 | FED_FUNDS->FED_FUNDS|hl240|unweighted|h1440  |          1440 |                 |     -0.463 |   -4.148 |        | nan          | FED_FUNDS          | FED_FUNDS    |             240 | unweighted      |
-|      87 | FED_FUNDS->FED_FUNDS|hl1440|expected|h5      |             5 |                 |     -0.5   | -405.24  |        | nan          | FED_FUNDS          | FED_FUNDS    |            1440 | expected        |
-|      88 | FED_FUNDS->FED_FUNDS|hl1440|expected|h15     |            15 |                 |     -0.5   | -131.391 |        | nan          | FED_FUNDS          | FED_FUNDS    |            1440 | expected        |
-|      89 | FED_FUNDS->FED_FUNDS|hl1440|expected|h30     |            30 |                 |     -0.503 |  -68.277 |        | nan          | FED_FUNDS          | FED_FUNDS    |            1440 | expected        |
-|      90 | FED_FUNDS->FED_FUNDS|hl1440|expected|h60     |            60 |                 |     -0.506 |  -33.795 |        | nan          | FED_FUNDS          | FED_FUNDS    |            1440 | expected        |
-|      91 | FED_FUNDS->FED_FUNDS|hl1440|expected|h240    |           240 |                 |     -0.574 |   -7.597 |        | nan          | FED_FUNDS          | FED_FUNDS    |            1440 | expected        |
-|      92 | FED_FUNDS->FED_FUNDS|hl1440|expected|h1440   |          1440 |                 |     -0.426 |   -4.138 |        | nan          | FED_FUNDS          | FED_FUNDS    |            1440 | expected        |
-|      93 | FED_FUNDS->FED_FUNDS|hl1440|unweighted|h5    |             5 |                 |     -0.5   | -421.007 |        | nan          | FED_FUNDS          | FED_FUNDS    |            1440 | unweighted      |
-|      94 | FED_FUNDS->FED_FUNDS|hl1440|unweighted|h15   |            15 |                 |     -0.5   | -132.294 |        | nan          | FED_FUNDS          | FED_FUNDS    |            1440 | unweighted      |
-|      95 | FED_FUNDS->FED_FUNDS|hl1440|unweighted|h30   |            30 |                 |     -0.503 |  -67.651 |        | nan          | FED_FUNDS          | FED_FUNDS    |            1440 | unweighted      |
-|      96 | FED_FUNDS->FED_FUNDS|hl1440|unweighted|h60   |            60 |                 |     -0.513 |  -36.135 |        | nan          | FED_FUNDS          | FED_FUNDS    |            1440 | unweighted      |
-|      97 | FED_FUNDS->FED_FUNDS|hl1440|unweighted|h240  |           240 |                 |     -0.573 |   -7.606 |        | nan          | FED_FUNDS          | FED_FUNDS    |            1440 | unweighted      |
-|      98 | FED_FUNDS->FED_FUNDS|hl1440|unweighted|h1440 |          1440 |                 |     -0.448 |   -4.294 |        | nan          | FED_FUNDS          | FED_FUNDS    |            1440 | unweighted      |
+|   trial | label                                           |   cfg_horizon |   cfg_threshold |   res_mean |    res_t | note   | cfg_signal   | cfg_signal_space   | cfg_target   |   cfg_half_life | cfg_weighting   |
+|--------:|:------------------------------------------------|--------------:|----------------:|-----------:|---------:|:-------|:-------------|:-------------------|:-------------|----------------:|:----------------|
+|       1 | PRIMARY (in-sample)                             |            60 |               1 |     -0.546 |   -9.443 |        | nan          | nan                | nan          |                 | nan             |
+|       2 | LABEL-FREE (unsigned intensity, FUTURES)        |            60 |               1 |     -0.64  |   -9.034 |        | intensity    | nan                | nan          |                 | nan             |
+|       3 | FUTURES->FUTURES\|hl30\|expected\|h5            |             5 |                 |     -0.497 |  -76.843 |        | nan          | FUTURES            | FUTURES      |              30 | expected        |
+|       4 | FUTURES->FUTURES\|hl30\|expected\|h15           |            15 |                 |     -0.482 |  -26.163 |        | nan          | FUTURES            | FUTURES      |              30 | expected        |
+|       5 | FUTURES->FUTURES\|hl30\|expected\|h30           |            30 |                 |     -0.472 |  -12.7   |        | nan          | FUTURES            | FUTURES      |              30 | expected        |
+|       6 | FUTURES->FUTURES\|hl30\|expected\|h60           |            60 |                 |     -0.505 |   -7.268 |        | nan          | FUTURES            | FUTURES      |              30 | expected        |
+|       7 | FUTURES->FUTURES\|hl30\|expected\|h240          |           240 |                 |     -0.542 |   -2.79  |        | nan          | FUTURES            | FUTURES      |              30 | expected        |
+|       8 | FUTURES->FUTURES\|hl30\|expected\|h1440         |          1440 |                 |     -0.427 |   -1.141 |        | nan          | FUTURES            | FUTURES      |              30 | expected        |
+|       9 | FUTURES->FUTURES\|hl30\|unweighted\|h5          |             5 |                 |     -0.495 |  -74.743 |        | nan          | FUTURES            | FUTURES      |              30 | unweighted      |
+|      10 | FUTURES->FUTURES\|hl30\|unweighted\|h15         |            15 |                 |     -0.481 |  -28.506 |        | nan          | FUTURES            | FUTURES      |              30 | unweighted      |
+|      11 | FUTURES->FUTURES\|hl30\|unweighted\|h30         |            30 |                 |     -0.462 |  -12.649 |        | nan          | FUTURES            | FUTURES      |              30 | unweighted      |
+|      12 | FUTURES->FUTURES\|hl30\|unweighted\|h60         |            60 |                 |     -0.552 |   -9.546 |        | nan          | FUTURES            | FUTURES      |              30 | unweighted      |
+|      13 | FUTURES->FUTURES\|hl30\|unweighted\|h240        |           240 |                 |     -0.637 |   -3.643 |        | nan          | FUTURES            | FUTURES      |              30 | unweighted      |
+|      14 | FUTURES->FUTURES\|hl30\|unweighted\|h1440       |          1440 |                 |     -0.519 |   -1.301 |        | nan          | FUTURES            | FUTURES      |              30 | unweighted      |
+|      15 | FUTURES->FUTURES\|hl90\|expected\|h5            |             5 |                 |     -0.502 |  -94.645 |        | nan          | FUTURES            | FUTURES      |              90 | expected        |
+|      16 | FUTURES->FUTURES\|hl90\|expected\|h15           |            15 |                 |     -0.514 |  -33.067 |        | nan          | FUTURES            | FUTURES      |              90 | expected        |
+|      17 | FUTURES->FUTURES\|hl90\|expected\|h30           |            30 |                 |     -0.532 |  -17.452 |        | nan          | FUTURES            | FUTURES      |              90 | expected        |
+|      18 | FUTURES->FUTURES\|hl90\|expected\|h60           |            60 |                 |     -0.546 |   -9.443 |        | nan          | FUTURES            | FUTURES      |              90 | expected        |
+|      19 | FUTURES->FUTURES\|hl90\|expected\|h240          |           240 |                 |     -0.621 |   -2.928 |        | nan          | FUTURES            | FUTURES      |              90 | expected        |
+|      20 | FUTURES->FUTURES\|hl90\|expected\|h1440         |          1440 |                 |     -0.824 |   -2.45  |        | nan          | FUTURES            | FUTURES      |              90 | expected        |
+|      21 | FUTURES->FUTURES\|hl90\|unweighted\|h5          |             5 |                 |     -0.501 |  -99.417 |        | nan          | FUTURES            | FUTURES      |              90 | unweighted      |
+|      22 | FUTURES->FUTURES\|hl90\|unweighted\|h15         |            15 |                 |     -0.512 |  -35.171 |        | nan          | FUTURES            | FUTURES      |              90 | unweighted      |
+|      23 | FUTURES->FUTURES\|hl90\|unweighted\|h30         |            30 |                 |     -0.54  |  -19.074 |        | nan          | FUTURES            | FUTURES      |              90 | unweighted      |
+|      24 | FUTURES->FUTURES\|hl90\|unweighted\|h60         |            60 |                 |     -0.611 |  -10.809 |        | nan          | FUTURES            | FUTURES      |              90 | unweighted      |
+|      25 | FUTURES->FUTURES\|hl90\|unweighted\|h240        |           240 |                 |     -0.671 |   -3.156 |        | nan          | FUTURES            | FUTURES      |              90 | unweighted      |
+|      26 | FUTURES->FUTURES\|hl90\|unweighted\|h1440       |          1440 |                 |     -0.693 |   -1.96  |        | nan          | FUTURES            | FUTURES      |              90 | unweighted      |
+|      27 | FUTURES->FUTURES\|hl240\|expected\|h5           |             5 |                 |     -0.503 | -110.495 |        | nan          | FUTURES            | FUTURES      |             240 | expected        |
+|      28 | FUTURES->FUTURES\|hl240\|expected\|h15          |            15 |                 |     -0.51  |  -37.333 |        | nan          | FUTURES            | FUTURES      |             240 | expected        |
+|      29 | FUTURES->FUTURES\|hl240\|expected\|h30          |            30 |                 |     -0.518 |  -19.083 |        | nan          | FUTURES            | FUTURES      |             240 | expected        |
+|      30 | FUTURES->FUTURES\|hl240\|expected\|h60          |            60 |                 |     -0.526 |   -8.889 |        | nan          | FUTURES            | FUTURES      |             240 | expected        |
+|      31 | FUTURES->FUTURES\|hl240\|expected\|h240         |           240 |                 |     -0.522 |   -2.074 |        | nan          | FUTURES            | FUTURES      |             240 | expected        |
+|      32 | FUTURES->FUTURES\|hl240\|expected\|h1440        |          1440 |                 |     -0.884 |   -2.357 |        | nan          | FUTURES            | FUTURES      |             240 | expected        |
+|      33 | FUTURES->FUTURES\|hl240\|unweighted\|h5         |             5 |                 |     -0.501 | -111.634 |        | nan          | FUTURES            | FUTURES      |             240 | unweighted      |
+|      34 | FUTURES->FUTURES\|hl240\|unweighted\|h15        |            15 |                 |     -0.505 |  -38.007 |        | nan          | FUTURES            | FUTURES      |             240 | unweighted      |
+|      35 | FUTURES->FUTURES\|hl240\|unweighted\|h30        |            30 |                 |     -0.522 |  -19.824 |        | nan          | FUTURES            | FUTURES      |             240 | unweighted      |
+|      36 | FUTURES->FUTURES\|hl240\|unweighted\|h60        |            60 |                 |     -0.561 |  -10.021 |        | nan          | FUTURES            | FUTURES      |             240 | unweighted      |
+|      37 | FUTURES->FUTURES\|hl240\|unweighted\|h240       |           240 |                 |     -0.678 |   -2.916 |        | nan          | FUTURES            | FUTURES      |             240 | unweighted      |
+|      38 | FUTURES->FUTURES\|hl240\|unweighted\|h1440      |          1440 |                 |     -0.858 |   -2.38  |        | nan          | FUTURES            | FUTURES      |             240 | unweighted      |
+|      39 | FUTURES->FUTURES\|hl1440\|expected\|h5          |             5 |                 |     -0.505 | -122.615 |        | nan          | FUTURES            | FUTURES      |            1440 | expected        |
+|      40 | FUTURES->FUTURES\|hl1440\|expected\|h15         |            15 |                 |     -0.514 |  -39.31  |        | nan          | FUTURES            | FUTURES      |            1440 | expected        |
+|      41 | FUTURES->FUTURES\|hl1440\|expected\|h30         |            30 |                 |     -0.534 |  -19.358 |        | nan          | FUTURES            | FUTURES      |            1440 | expected        |
+|      42 | FUTURES->FUTURES\|hl1440\|expected\|h60         |            60 |                 |     -0.576 |   -9.257 |        | nan          | FUTURES            | FUTURES      |            1440 | expected        |
+|      43 | FUTURES->FUTURES\|hl1440\|expected\|h240        |           240 |                 |     -0.691 |   -2.438 |        | nan          | FUTURES            | FUTURES      |            1440 | expected        |
+|      44 | FUTURES->FUTURES\|hl1440\|expected\|h1440       |          1440 |                 |     -0.61  |   -1.102 |        | nan          | FUTURES            | FUTURES      |            1440 | expected        |
+|      45 | FUTURES->FUTURES\|hl1440\|unweighted\|h5        |             5 |                 |     -0.504 | -123.647 |        | nan          | FUTURES            | FUTURES      |            1440 | unweighted      |
+|      46 | FUTURES->FUTURES\|hl1440\|unweighted\|h15       |            15 |                 |     -0.514 |  -41.511 |        | nan          | FUTURES            | FUTURES      |            1440 | unweighted      |
+|      47 | FUTURES->FUTURES\|hl1440\|unweighted\|h30       |            30 |                 |     -0.535 |  -20.692 |        | nan          | FUTURES            | FUTURES      |            1440 | unweighted      |
+|      48 | FUTURES->FUTURES\|hl1440\|unweighted\|h60       |            60 |                 |     -0.582 |  -10.475 |        | nan          | FUTURES            | FUTURES      |            1440 | unweighted      |
+|      49 | FUTURES->FUTURES\|hl1440\|unweighted\|h240      |           240 |                 |     -0.776 |   -2.763 |        | nan          | FUTURES            | FUTURES      |            1440 | unweighted      |
+|      50 | FUTURES->FUTURES\|hl1440\|unweighted\|h1440     |          1440 |                 |     -0.691 |   -1.254 |        | nan          | FUTURES            | FUTURES      |            1440 | unweighted      |
+|      51 | FED_FUNDS->FED_FUNDS\|hl30\|expected\|h5        |             5 |                 |     -0.5   | -218.866 |        | nan          | FED_FUNDS          | FED_FUNDS    |              30 | expected        |
+|      52 | FED_FUNDS->FED_FUNDS\|hl30\|expected\|h15       |            15 |                 |     -0.501 |  -81.661 |        | nan          | FED_FUNDS          | FED_FUNDS    |              30 | expected        |
+|      53 | FED_FUNDS->FED_FUNDS\|hl30\|expected\|h30       |            30 |                 |     -0.505 |  -46.477 |        | nan          | FED_FUNDS          | FED_FUNDS    |              30 | expected        |
+|      54 | FED_FUNDS->FED_FUNDS\|hl30\|expected\|h60       |            60 |                 |     -0.517 |  -30.262 |        | nan          | FED_FUNDS          | FED_FUNDS    |              30 | expected        |
+|      55 | FED_FUNDS->FED_FUNDS\|hl30\|expected\|h240      |           240 |                 |     -0.557 |   -9.276 |        | nan          | FED_FUNDS          | FED_FUNDS    |              30 | expected        |
+|      56 | FED_FUNDS->FED_FUNDS\|hl30\|expected\|h1440     |          1440 |                 |     -0.385 |   -3.926 |        | nan          | FED_FUNDS          | FED_FUNDS    |              30 | expected        |
+|      57 | FED_FUNDS->FED_FUNDS\|hl30\|unweighted\|h5      |             5 |                 |     -0.499 | -234.76  |        | nan          | FED_FUNDS          | FED_FUNDS    |              30 | unweighted      |
+|      58 | FED_FUNDS->FED_FUNDS\|hl30\|unweighted\|h15     |            15 |                 |     -0.499 |  -84.035 |        | nan          | FED_FUNDS          | FED_FUNDS    |              30 | unweighted      |
+|      59 | FED_FUNDS->FED_FUNDS\|hl30\|unweighted\|h30     |            30 |                 |     -0.5   |  -47.517 |        | nan          | FED_FUNDS          | FED_FUNDS    |              30 | unweighted      |
+|      60 | FED_FUNDS->FED_FUNDS\|hl30\|unweighted\|h60     |            60 |                 |     -0.508 |  -31.661 |        | nan          | FED_FUNDS          | FED_FUNDS    |              30 | unweighted      |
+|      61 | FED_FUNDS->FED_FUNDS\|hl30\|unweighted\|h240    |           240 |                 |     -0.55  |   -8.989 |        | nan          | FED_FUNDS          | FED_FUNDS    |              30 | unweighted      |
+|      62 | FED_FUNDS->FED_FUNDS\|hl30\|unweighted\|h1440   |          1440 |                 |     -0.375 |   -4.515 |        | nan          | FED_FUNDS          | FED_FUNDS    |              30 | unweighted      |
+|      63 | FED_FUNDS->FED_FUNDS\|hl90\|expected\|h5        |             5 |                 |     -0.501 | -272.988 |        | nan          | FED_FUNDS          | FED_FUNDS    |              90 | expected        |
+|      64 | FED_FUNDS->FED_FUNDS\|hl90\|expected\|h15       |            15 |                 |     -0.505 | -100.668 |        | nan          | FED_FUNDS          | FED_FUNDS    |              90 | expected        |
+|      65 | FED_FUNDS->FED_FUNDS\|hl90\|expected\|h30       |            30 |                 |     -0.513 |  -54.161 |        | nan          | FED_FUNDS          | FED_FUNDS    |              90 | expected        |
+|      66 | FED_FUNDS->FED_FUNDS\|hl90\|expected\|h60       |            60 |                 |     -0.531 |  -30.195 |        | nan          | FED_FUNDS          | FED_FUNDS    |              90 | expected        |
+|      67 | FED_FUNDS->FED_FUNDS\|hl90\|expected\|h240      |           240 |                 |     -0.588 |   -9.357 |        | nan          | FED_FUNDS          | FED_FUNDS    |              90 | expected        |
+|      68 | FED_FUNDS->FED_FUNDS\|hl90\|expected\|h1440     |          1440 |                 |     -0.558 |   -5.898 |        | nan          | FED_FUNDS          | FED_FUNDS    |              90 | expected        |
+|      69 | FED_FUNDS->FED_FUNDS\|hl90\|unweighted\|h5      |             5 |                 |     -0.501 | -273.46  |        | nan          | FED_FUNDS          | FED_FUNDS    |              90 | unweighted      |
+|      70 | FED_FUNDS->FED_FUNDS\|hl90\|unweighted\|h15     |            15 |                 |     -0.503 |  -99.27  |        | nan          | FED_FUNDS          | FED_FUNDS    |              90 | unweighted      |
+|      71 | FED_FUNDS->FED_FUNDS\|hl90\|unweighted\|h30     |            30 |                 |     -0.506 |  -51.199 |        | nan          | FED_FUNDS          | FED_FUNDS    |              90 | unweighted      |
+|      72 | FED_FUNDS->FED_FUNDS\|hl90\|unweighted\|h60     |            60 |                 |     -0.514 |  -31.055 |        | nan          | FED_FUNDS          | FED_FUNDS    |              90 | unweighted      |
+|      73 | FED_FUNDS->FED_FUNDS\|hl90\|unweighted\|h240    |           240 |                 |     -0.585 |   -8.866 |        | nan          | FED_FUNDS          | FED_FUNDS    |              90 | unweighted      |
+|      74 | FED_FUNDS->FED_FUNDS\|hl90\|unweighted\|h1440   |          1440 |                 |     -0.558 |   -5.662 |        | nan          | FED_FUNDS          | FED_FUNDS    |              90 | unweighted      |
+|      75 | FED_FUNDS->FED_FUNDS\|hl240\|expected\|h5       |             5 |                 |     -0.501 | -323.838 |        | nan          | FED_FUNDS          | FED_FUNDS    |             240 | expected        |
+|      76 | FED_FUNDS->FED_FUNDS\|hl240\|expected\|h15      |            15 |                 |     -0.505 | -110.514 |        | nan          | FED_FUNDS          | FED_FUNDS    |             240 | expected        |
+|      77 | FED_FUNDS->FED_FUNDS\|hl240\|expected\|h30      |            30 |                 |     -0.513 |  -63.528 |        | nan          | FED_FUNDS          | FED_FUNDS    |             240 | expected        |
+|      78 | FED_FUNDS->FED_FUNDS\|hl240\|expected\|h60      |            60 |                 |     -0.526 |  -29.186 |        | nan          | FED_FUNDS          | FED_FUNDS    |             240 | expected        |
+|      79 | FED_FUNDS->FED_FUNDS\|hl240\|expected\|h240     |           240 |                 |     -0.641 |   -9.901 |        | nan          | FED_FUNDS          | FED_FUNDS    |             240 | expected        |
+|      80 | FED_FUNDS->FED_FUNDS\|hl240\|expected\|h1440    |          1440 |                 |     -0.538 |   -5.631 |        | nan          | FED_FUNDS          | FED_FUNDS    |             240 | expected        |
+|      81 | FED_FUNDS->FED_FUNDS\|hl240\|unweighted\|h5     |             5 |                 |     -0.501 | -325.099 |        | nan          | FED_FUNDS          | FED_FUNDS    |             240 | unweighted      |
+|      82 | FED_FUNDS->FED_FUNDS\|hl240\|unweighted\|h15    |            15 |                 |     -0.503 | -111.708 |        | nan          | FED_FUNDS          | FED_FUNDS    |             240 | unweighted      |
+|      83 | FED_FUNDS->FED_FUNDS\|hl240\|unweighted\|h30    |            30 |                 |     -0.511 |  -60.298 |        | nan          | FED_FUNDS          | FED_FUNDS    |             240 | unweighted      |
+|      84 | FED_FUNDS->FED_FUNDS\|hl240\|unweighted\|h60    |            60 |                 |     -0.531 |  -30.641 |        | nan          | FED_FUNDS          | FED_FUNDS    |             240 | unweighted      |
+|      85 | FED_FUNDS->FED_FUNDS\|hl240\|unweighted\|h240   |           240 |                 |     -0.622 |   -9.908 |        | nan          | FED_FUNDS          | FED_FUNDS    |             240 | unweighted      |
+|      86 | FED_FUNDS->FED_FUNDS\|hl240\|unweighted\|h1440  |          1440 |                 |     -0.463 |   -4.148 |        | nan          | FED_FUNDS          | FED_FUNDS    |             240 | unweighted      |
+|      87 | FED_FUNDS->FED_FUNDS\|hl1440\|expected\|h5      |             5 |                 |     -0.5   | -405.24  |        | nan          | FED_FUNDS          | FED_FUNDS    |            1440 | expected        |
+|      88 | FED_FUNDS->FED_FUNDS\|hl1440\|expected\|h15     |            15 |                 |     -0.5   | -131.391 |        | nan          | FED_FUNDS          | FED_FUNDS    |            1440 | expected        |
+|      89 | FED_FUNDS->FED_FUNDS\|hl1440\|expected\|h30     |            30 |                 |     -0.503 |  -68.277 |        | nan          | FED_FUNDS          | FED_FUNDS    |            1440 | expected        |
+|      90 | FED_FUNDS->FED_FUNDS\|hl1440\|expected\|h60     |            60 |                 |     -0.506 |  -33.795 |        | nan          | FED_FUNDS          | FED_FUNDS    |            1440 | expected        |
+|      91 | FED_FUNDS->FED_FUNDS\|hl1440\|expected\|h240    |           240 |                 |     -0.574 |   -7.597 |        | nan          | FED_FUNDS          | FED_FUNDS    |            1440 | expected        |
+|      92 | FED_FUNDS->FED_FUNDS\|hl1440\|expected\|h1440   |          1440 |                 |     -0.426 |   -4.138 |        | nan          | FED_FUNDS          | FED_FUNDS    |            1440 | expected        |
+|      93 | FED_FUNDS->FED_FUNDS\|hl1440\|unweighted\|h5    |             5 |                 |     -0.5   | -421.007 |        | nan          | FED_FUNDS          | FED_FUNDS    |            1440 | unweighted      |
+|      94 | FED_FUNDS->FED_FUNDS\|hl1440\|unweighted\|h15   |            15 |                 |     -0.5   | -132.294 |        | nan          | FED_FUNDS          | FED_FUNDS    |            1440 | unweighted      |
+|      95 | FED_FUNDS->FED_FUNDS\|hl1440\|unweighted\|h30   |            30 |                 |     -0.503 |  -67.651 |        | nan          | FED_FUNDS          | FED_FUNDS    |            1440 | unweighted      |
+|      96 | FED_FUNDS->FED_FUNDS\|hl1440\|unweighted\|h60   |            60 |                 |     -0.513 |  -36.135 |        | nan          | FED_FUNDS          | FED_FUNDS    |            1440 | unweighted      |
+|      97 | FED_FUNDS->FED_FUNDS\|hl1440\|unweighted\|h240  |           240 |                 |     -0.573 |   -7.606 |        | nan          | FED_FUNDS          | FED_FUNDS    |            1440 | unweighted      |
+|      98 | FED_FUNDS->FED_FUNDS\|hl1440\|unweighted\|h1440 |          1440 |                 |     -0.448 |   -4.294 |        | nan          | FED_FUNDS          | FED_FUNDS    |            1440 | unweighted      |
 
 _Source: `trial_ledger.csv` (98 rows)._
 
