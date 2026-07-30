@@ -17,14 +17,23 @@ The independent mids available:
                         warmed days. Swap-quote derived, so genuinely independent
                         of the futures strip. **Coverage hole: the source workbook's
                         sheets run Mon 00:01 -> Fri 11:59, so Friday afternoons have
-                        no mid.** Those prints are reported as NO COVERAGE — never
-                        as agreement.
+                        no mid — and the reader does NOT fail there, it returns the
+                        last available snapshot.** A 14:00 Friday request was
+                        measured resolving successfully against an 11:59 curve. Every
+                        comparison is therefore staleness-checked and a stale curve
+                        counts as NO COVERAGE, never as agreement or as a flip.
 ``eris_live_intraday``  ERIS live SOFR snapshots. A second independent source, but
                         only a couple of days exist, so it is a spot check.
 
 Both are USD **SOFR** curves. FED_FUNDS prints therefore have NO independent mid
 here, and the flip study covers the SOFR universe only — a limitation of the study,
 not a property of the FF prints.
+
+Scale of the thing being measured, measured: on 2026-03-10 a 2Y swap priced 0.09 to
+0.37 bp apart on the two curves. Typical on-market spread-to-mid is around half a
+0.5 bp tick, so **curve disagreement is the same order as the signal the direction
+call is reading**. That is the audit's point restated with numbers, and it is why
+this gate exists.
 
 The flip rate is a LOWER bound on disagreement-driven error and not an accuracy:
 both curves can be wrong together, and a flip does not say which one was right.
@@ -63,13 +72,38 @@ def independent_pricer(source="citivelo") -> CurvePricer:
     return CurvePricer(mdp=IRSwapsMDP(source=source))
 
 
-def reclassify_one(unit, direction_row, pricer, curve_name) -> dict:
+MAX_CURVE_STALENESS_MIN = 5.0
+
+
+def _curve_timestamp(handle):
+    """The independent curve's OWN timestamp, or NaT.
+
+    Load-bearing: the citivelo reader defaults to ``method="asof"``, so a request
+    for a minute the source does not cover returns the LAST AVAILABLE snapshot
+    rather than failing. Measured directly — a 14:00 Friday request resolved
+    successfully against an 11:59 curve, because the source workbook's sheets run
+    Mon 00:01 to Fri 11:59. Treating that as "an independent mid at 14:00" would
+    compare a trade to a mid from two hours earlier and score the difference as a
+    classification flip, which is exactly the wrong conclusion.
+    """
+    try:
+        meta = handle.meta() if hasattr(handle, "meta") else {}
+        return pd.Timestamp(meta.get("timestamp"))
+    except Exception:
+        return pd.NaT
+
+
+def reclassify_one(unit, direction_row, pricer, curve_name,
+                   max_staleness_min=MAX_CURVE_STALENESS_MIN) -> dict:
     """Re-run the classifier on ``unit`` against ``curve_name``. Never raises.
 
     Returns a row carrying the independent direction and its spread-to-mid, or a
     ``reason`` when the independent curve could not price the unit — a missing mid
     must be visible as missing, because silently dropping it would bias the flip
     rate toward whichever days the independent source happens to cover.
+
+    A curve whose own timestamp is more than ``max_staleness_min`` behind the
+    decision minute is treated as NO COVERAGE, not as a comparison.
     """
     first = unit.legs.iloc[0]
     snap = snap_timestamp(first.get("original_execution_timestamp"),
@@ -88,10 +122,25 @@ def reclassify_one(unit, direction_row, pricer, curve_name) -> dict:
         "ind_direction": None,
         "ind_method": None,
         "ind_s2m_bps": np.nan,
+        "ind_curve_ts": pd.NaT,
+        "ind_staleness_min": np.nan,
         "coverage_ok": False,
         "reason": None,
     }
     try:
+        handle = pricer.handle(curve_name, snap)
+        curve_ts = _curve_timestamp(handle)
+        out["ind_curve_ts"] = curve_ts
+        if pd.notna(curve_ts):
+            ct = curve_ts.tz_localize("America/New_York") if curve_ts.tzinfo is None \
+                else curve_ts.tz_convert("America/New_York")
+            stale = (pd.Timestamp(snap).tz_convert("America/New_York") - ct)
+            out["ind_staleness_min"] = stale.total_seconds() / 60.0
+            if abs(out["ind_staleness_min"]) > max_staleness_min:
+                out["reason"] = (f"STALE_INDEPENDENT_CURVE "
+                                 f"({out['ind_staleness_min']:.0f}min)")
+                return out
+
         pricings = []
         for _, leg in unit.legs.iterrows():
             fixed = float(leg["fixed_rate"]) if unit.is_off_market else None
@@ -111,7 +160,7 @@ def reclassify_one(unit, direction_row, pricer, curve_name) -> dict:
 
 
 def reclassify_units(units_by_key, direction_rows, *, source="citivelo",
-                     limit=0) -> pd.DataFrame:
+                     limit=0, max_staleness_min=MAX_CURVE_STALENESS_MIN) -> pd.DataFrame:
     """Re-classify every unit that the independent source could cover.
 
     ``direction_rows`` is an iterable of dicts from ``arbs_stir_direction_v1``.
@@ -127,7 +176,8 @@ def reclassify_units(units_by_key, direction_rows, *, source="citivelo",
             continue
         if drow.get("rate_index_clean") != "SOFR":
             continue                      # no independent FF curve exists here
-        rows.append(reclassify_one(unit, drow, pricer, curve_name))
+        rows.append(reclassify_one(unit, drow, pricer, curve_name,
+                                   max_staleness_min=max_staleness_min))
         n += 1
         if limit and n >= limit:
             break
