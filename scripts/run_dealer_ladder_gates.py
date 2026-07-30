@@ -104,6 +104,14 @@ def main() -> int:
     sink = study.TrialLedger()
     stage("G0", lambda: gates.run_g0(ctx, conn, label_limit=args.label_limit,
                                      label_per_day=args.label_per_day))
+    # Nothing after G0 needs the database -- every later stage works on the panels already
+    # in ctx -- so the connection is released here rather than held for the remaining
+    # couple of hours. It autocommits now, so it is no longer holding table locks, but an
+    # idle connection still occupies a slot in a shared pgbouncer pool, and the reason this
+    # study noticed at all is that its own long-lived connection stalled the production
+    # backfill for 35 minutes.
+    conn.close()
+    conn = None
     stage("G1", lambda: gates.run_g1(ctx))
     g2_sr3 = stage("G2", lambda: gates.run_g2(ctx))
     stage("G3", lambda: gates.run_g3(ctx))
@@ -154,7 +162,8 @@ def main() -> int:
         word = "N/A " if p is None else ("PASS" if p else "FAIL")
         print(f"  {word}  {v['gate']:<22s} {v['headline']}")
     print("=" * 78)
-    conn.close()
+    if conn is not None:
+        conn.close()
     return 0
 
 

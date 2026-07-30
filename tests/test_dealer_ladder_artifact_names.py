@@ -162,3 +162,16 @@ def test_both_paths_include_every_gate_and_the_cross_check():
                      "run_cross_check_comparison", "run_placebos", "run_label_free",
                      "run_conditioning", "run_staleness_sensitivity", "run_grid"):
         assert required in stages, required
+
+
+def test_the_runner_releases_its_db_connection_after_g0():
+    """Nothing after G0 needs the database -- every later stage works on panels already in
+    ctx -- so a connection held for the remaining hours is pure occupancy in a shared
+    pgbouncer pool. This study noticed because its own long-lived connection stalled the
+    production backfill for 35 minutes."""
+    src = RUNNER_SRC
+    g0 = src.index('stage("G0"')
+    primary = src.index('stage("G4-primary"')
+    between = src[g0:primary]
+    assert "conn.close()" in between, "the connection must be released right after G0"
+    assert "conn = None" in between
