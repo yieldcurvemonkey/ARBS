@@ -175,3 +175,39 @@ def test_the_runner_releases_its_db_connection_after_g0():
     between = src[g0:primary]
     assert "conn.close()" in between, "the connection must be released right after G0"
     assert "conn = None" in between
+
+
+# ============== the notebook is a deliverable: it must not silently omit an artifact
+def _notebook_mentions() -> set:
+    import io
+    import json
+    p = os.path.join(REPO, "notebooks", "backtests",
+                     "dealer_ladder_signal_research.ipynb")
+    nb = json.load(io.open(p, encoding="utf-8"))
+    src = "\n".join("".join(c["source"]) for c in nb["cells"]
+                    if c["cell_type"] == "code")
+    return set(re.findall(r"[\"']([A-Za-z0-9_]+)[\"']", src))
+
+
+# Raw per-event and per-(day, bucket) frames run to thousands of rows. Their SUMMARIES are
+# rendered; the full frames belong in the generated tables of the findings doc, not in a
+# notebook. Listed explicitly so the omission is a decision rather than an oversight.
+NOTEBOOK_EXEMPT = {"g2_flow_events_FUTURES", "g2_flow_events_FED_FUNDS",
+                   "g2_lead_lag_FED_FUNDS"}
+
+
+def test_the_notebook_renders_every_declared_artifact():
+    """Audited once by hand and found seventeen missing -- including the entire ZQ
+    cross-check, which the brief makes the comparison the mechanism turns on, and the
+    constant-position benchmark that section 7 says must be read BEFORE the t-statistic.
+    A deliverable that silently omits its own headline comparison is worse than one that
+    reports it badly."""
+    missing = declared_by_renderer() - _notebook_mentions() - NOTEBOOK_EXEMPT
+    assert not missing, f"declared but absent from the notebook: {sorted(missing)}"
+
+
+def test_the_notebook_exemptions_are_all_real_artifacts():
+    """An exemption for a name nothing writes would silently grow into a way of hiding
+    real omissions."""
+    unknown = NOTEBOOK_EXEMPT - declared_by_renderer()
+    assert not unknown, f"exempted but not declared anywhere: {sorted(unknown)}"
