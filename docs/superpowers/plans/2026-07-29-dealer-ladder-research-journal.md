@@ -1501,9 +1501,12 @@ from zero. Everything else follows.
 
 The trap in this dataset is `t = -9.44***` on the primary, which is **not evidence of anything**:
 subtract a near-constant 0.5bp round trip from a zero-mean quantity across 1,639 trades and that
-is the t you get. Same for the whole Romano-Wolf table -- 96 variants all within a whisker of
-−0.50, |t| from 79 to 311, standard errors down to 0.0016. Those t-statistics measure the cost
-constant. Read carelessly they are a spectacular finding in the wrong direction.
+is the t you get. Same for the whole Romano-Wolf table: across 96 variants the median is
+−0.5035, 67 of 96 sit within ±0.05bp of −0.50, se falls to 0.0016, |t| reaches 311 (median 18),
+83 of 96 clear FWER<0.05, and **not one is positive**. Those t-statistics measure the cost
+constant. (I first wrote "|t| from 79 to 311" here, having read the range off the head of a
+table sorted descending -- the true minimum is 0.89. Corrected against the artifact by
+`scripts/verify_findings_numbers.py`, which now checks every quoted figure.) Read carelessly they are a spectacular finding in the wrong direction.
 
 G2 failed informatively: LLS is **negative in both spaces** (−4.769 SR3, −19.88 ZQ), so futures
 move *before* the ladder innovation. By the time a print is public the move has happened. G3 gives

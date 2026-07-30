@@ -16,9 +16,10 @@
 >
 > **Do not quote the `t = −9.44***` on the primary as a result.** It is what arithmetic produces
 > when a near-constant 0.5 bp round-trip cost is subtracted from a zero-mean quantity across
-> 1,639 trades. The same applies to the entire Romano-Wolf table — 96 variants, all within a
-> whisker of −0.50, |t| from 79 to 311. **Those t-statistics measure the cost constant, not a
-> prediction.**
+> 1,639 trades. The same applies to the entire Romano-Wolf table: **not one of its 96 variants is
+> positive**, the median is −0.5035, 67 of 96 sit within ±0.05 bp of −0.50, and 83 of 96 clear
+> FWER < 0.05 with |t| reaching 311 on standard errors as small as 0.0016. **Those t-statistics
+> measure the cost constant, not a prediction.**
 >
 > The mechanism is unsupported and the ordering runs the wrong way: lead-lag is **negative in
 > both spaces** (−4.769 SR3, −19.88 ZQ), so futures move *before* the ladder innovation. G3's
@@ -334,10 +335,11 @@ is statistically indistinguishable from zero. Everything else follows from that.
 
 **The `t = −9.44***` on the primary is not evidence of anything.** It is what you get when a
 near-constant 0.5 bp round-trip cost is subtracted from a zero-mean quantity and the difference is
-tested against zero across 1,639 trades. The same arithmetic produces the Romano-Wolf table, where
-every one of the 96 variants lands within a whisker of −0.50 with |t| between 79 and 311 and
-standard errors as small as 0.0016 — those t-statistics measure the *cost constant*, not a
-prediction. Read as a signal result they would be a spectacular finding in the wrong direction;
+tested against zero across 1,639 trades. The same arithmetic produces the Romano-Wolf table: across its 96
+variants the mean runs −0.757 to −0.289 with a median of **−0.5035**, 67 of 96 sit within
+±0.05 bp of −0.50, standard errors fall as low as **0.0016**, |t| reaches **311** (median 18),
+and 83 of 96 clear FWER < 0.05. **Not one of the 96 is positive.** Those t-statistics measure
+the *cost constant* being estimated precisely, not an edge. Read as a signal result they would be a spectacular finding in the wrong direction;
 read correctly they say the strategy reliably pays the spread and reliably earns nothing.
 
 **The placebos only became legible once reported gross.** Net-of-cost, all six arms sit between
