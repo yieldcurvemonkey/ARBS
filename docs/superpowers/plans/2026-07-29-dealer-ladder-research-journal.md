@@ -313,6 +313,42 @@ strong and directional, and because it is the first evidence bearing on the audi
 
 ### Phase C — signal research (G0–G5)
 
+**Code complete and de-risked before the data landed** (2026-07-30 01:10). 233 research tests
+green. What was built, and the defects that building it surfaced:
+
+| module | what it is | defect it exposed while being written |
+|---|---|---|
+| `audit.py` | G1 no-lookahead by differential **poison**, not assertion | — (half its tests use deliberately leaky builders) |
+| `stats.py` | day-blocked cluster inference, Romano-Wolf stepdown, rank IC | small-sample correction must be **per column**: a NaN column can be missing whole blocks, measured as a 2% t discrepancy |
+| `signals.py` | fast panel builder, pinned to **exact** agreement with `ladder_at` | tz-aware `.to_numpy()` yields object dtype and will not broadcast against timedelta64 |
+| `data.py` | loaders + target construction | vendor `one_df=True` returned an EMPTY frame for the whole ZQ strip; sparse bars resolved only **8%** of ZQ 60-min horizons before the minute-grid fix |
+| `labels.py` | G0 independent-mid flip study | the citivelo reader's `asof` silently returns its last snapshot — a 14:00 Friday request resolved against an 11:59 curve |
+| `controls.py` | G3 controls + the independent basis | no 25bp-grid implementation existed anywhere; `days_to_next_fomc` returns a 999 sentinel a regression would read as "very far away" |
+| `study.py` | G2–G5 machinery | **G2 was passing increments to an estimator that differences its own inputs** — a wrong estimand, not a lost signal |
+| `gates.py` | the G0→G5 runner | the front-six basket was frozen at the window start, so the last weeks would have traded an expired contract |
+| `plots.py`, notebook, `scripts/run_dealer_ladder_gates.py` | render layer | — |
+
+**D11 — the G2 estimand bug is the one worth remembering.** `hy_corr` differences BOTH inputs
+itself, because Hayashi-Yoshida is defined on increments living on the intervals between
+observations. Passing the already-differenced ladder increments computed the covariance of
+*second* differences. It did not crash, and it did not stop a planted lead being detected — a
+"does it still find the plant?" test passes either way. The fix is to pass the ladder **level**
+and the **cumulative** signed volume, so the required increments are formed inside. Both the
+docstring and a test now pin it via the property that with synchronous observations HY reduces to
+the ordinary correlation of increments.
+
+**D12 — three protocol items closed after a gap review against the mission text:**
+1. *Independent fair value in G3*, not only G0 — a second horse race adding a basis built from
+   the Citi swap-quote curve. Run separately from the first because the two bases are highly
+   collinear; folding them together would inflate both SEs and confound "survives our basis" with
+   "survives an independent one". G3 now requires survival of **both**.
+2. *The label-free cell*, now actually wired: the identical rule driven by unsigned print
+   intensity. If both it and the signed ladder work, the direction model is carrying nothing.
+3. *Conditioning splits* by block share, 25bp level proximity, realised vol, Amihud, SOFR−EFFR
+   funding spread, days to FOMC and time of day — terciles, because at ~150 independent epochs an
+   interaction term is not identified and the audit asks to **segment**, not merely control.
+
+
 - [ ] C.0 Pre-registration written before any G4 run
 - [ ] C.1 G0 labels/provenance + Citi-mid pseudo-label flip study
 - [ ] C.2 G1 arrival integrity
