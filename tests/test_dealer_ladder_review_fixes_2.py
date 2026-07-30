@@ -325,3 +325,32 @@ def test_capacity_says_what_it_is_measuring():
                          "net_bp": 0.0}])
     basis = study.capacity_curve(led, vols)["basis"].iloc[0]
     assert "NOT measured depth" in basis and "(entry, exit]" in basis
+
+
+# ============== a survival claim over a rank-deficient design is not worth making
+def test_horse_race_flags_a_rank_deficient_design():
+    """pinv silently absorbs collinearity and returns standard errors that mean very
+    little. This is plausible rather than hypothetical here: basis_bp and abs_basis_bp
+    coincide whenever the basis rarely changes sign."""
+    idx = pd.date_range("2026-03-02 08:00", periods=300, freq="30min", tz=NY)
+    rng = np.random.default_rng(9)
+    sig = rng.normal(size=len(idx))
+    basis = np.abs(rng.normal(size=len(idx)))       # never negative
+    frame = pd.DataFrame({"ts": idx, "bucket": "A", "signal": sig,
+                          "basis_bp": basis, "abs_basis_bp": np.abs(basis),
+                          "target": sig + rng.normal(scale=0.5, size=len(idx))})
+    out = study.horse_race(frame, controls=["basis_bp", "abs_basis_bp"])
+    ctl = out[out["spec"] == "signal + controls"]
+    assert ctl["rank_deficient"].all()
+    assert (ctl["design_rank"] < ctl["design_cols"]).all()
+
+
+def test_horse_race_reports_a_healthy_design_as_full_rank():
+    idx = pd.date_range("2026-03-02 08:00", periods=300, freq="30min", tz=NY)
+    rng = np.random.default_rng(10)
+    sig, ctl_v = rng.normal(size=len(idx)), rng.normal(size=len(idx))
+    frame = pd.DataFrame({"ts": idx, "bucket": "A", "signal": sig, "ctl": ctl_v,
+                          "target": sig + rng.normal(scale=0.5, size=len(idx))})
+    out = study.horse_race(frame, controls=["ctl"])
+    assert not out["rank_deficient"].any()
+    assert (out["design_cond"] < 100).all()

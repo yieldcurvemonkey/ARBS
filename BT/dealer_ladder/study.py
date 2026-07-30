@@ -176,6 +176,12 @@ def horse_race(long_frame: pd.DataFrame, *, signal_col="signal", target_col="tar
 
     Deliberately linear and small. A flexible learner here would make the
     "does it survive controls" question unanswerable.
+
+    Every row carries ``design_rank``, ``design_cols``, ``design_cond`` and
+    ``rank_deficient``. A survival claim made over a rank-deficient design is not worth
+    making, and the collinearity that would cause it is plausible here rather than
+    hypothetical: ``basis_bp`` and ``abs_basis_bp`` coincide whenever the basis rarely
+    changes sign, and the independent-basis pair has the same structure.
     """
     df = long_frame.dropna(subset=[signal_col, target_col]).copy()
     if df.empty:
@@ -201,6 +207,15 @@ def horse_race(long_frame: pd.DataFrame, *, signal_col="signal", target_col="tar
         y = sub[target_col].to_numpy(float)
         beta, *_ = np.linalg.lstsq(X, y, rcond=None)
         resid = y - X @ beta
+        # Rank and conditioning are REPORTED, not assumed. `pinv` below silently
+        # absorbs a rank-deficient design and returns a minimum-norm solution with
+        # standard errors that mean very little -- and this control block is exactly
+        # where that can happen, since basis_bp and abs_basis_bp are near-collinear
+        # whenever the basis rarely changes sign, as are the independent-basis pair.
+        # "The signal survives the controls" is not a claim worth making over a design
+        # whose rank is lower than its column count.
+        rank = int(np.linalg.matrix_rank(X))
+        cond = float(np.linalg.cond(X)) if X.shape[1] else float("nan")
         # cluster-robust sandwich, clustering on day
         XtX_inv = np.linalg.pinv(X.T @ X)
         meat = np.zeros((X.shape[1], X.shape[1]))
@@ -216,7 +231,10 @@ def horse_race(long_frame: pd.DataFrame, *, signal_col="signal", target_col="tar
             t = beta[i] / se[i] if se[i] > 0 else np.nan
             out.append({"spec": spec, "term": name, "coef": float(beta[i]),
                         "se": float(se[i]), "t": float(t) if t == t else np.nan,
-                        "n": int(len(sub)), "n_blocks": int(ng)})
+                        "n": int(len(sub)), "n_blocks": int(ng),
+                        "design_rank": rank, "design_cols": int(X.shape[1]),
+                        "design_cond": cond,
+                        "rank_deficient": bool(rank < X.shape[1])})
     return pd.DataFrame(out)
 
 
