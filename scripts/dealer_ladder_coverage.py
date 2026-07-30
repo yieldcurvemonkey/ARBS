@@ -99,6 +99,22 @@ WHERE as_of_date BETWEEN %(start)s AND %(end)s
 GROUP BY 2 ORDER BY 3 DESC
 """
 
+# The vintages of rows the STUDY can actually reach. `_PRINTS_SQL` inner-joins the ladder to
+# the direction table, so a direction row with no ladder row is invisible to every gate --
+# and 147 such rows exist, left from before the code_vintage column, which July's purge can
+# never remove because that purge is skipped whenever any day errored and 2026-07-03 is a
+# market holiday that errors every time. Counting them would fail --strict for a benign
+# reason, and a gate that fails for benign reasons is a gate that gets relaxed.
+STUDY_VINTAGE_SQL = """
+SELECT coalesce(l.code_vintage, '(null)') AS ladder_vintage,
+       coalesce(d.code_vintage, '(null)') AS direction_vintage,
+       count(*) AS rows
+FROM arbs_stir_ladder_prints_v1 l
+JOIN arbs_stir_direction_v1 d USING (unit_key)
+WHERE l.as_of_date BETWEEN %(start)s AND %(end)s
+GROUP BY 1, 2 ORDER BY 3 DESC
+"""
+
 
 def _connect():
     """The study's own connector, so this reads exactly the DB the gates read."""
@@ -181,7 +197,8 @@ def build(conn, start, end) -> dict:
     vint = (pd.concat(vint_parts, ignore_index=True) if vint_parts
             else pd.DataFrame(columns=["tbl", "code_vintage", "rows"]))
 
-    return {"coverage": cov, "vintages": vint}
+    study_vint = _read(conn, STUDY_VINTAGE_SQL, params)
+    return {"coverage": cov, "vintages": vint, "study_vintages": study_vint}
 
 
 def _has_column(conn, table, column) -> bool:
@@ -218,16 +235,20 @@ def problems(res: dict) -> list[str]:
         worst = cov.loc[hi.idxmax()]
         out.append(f"{int((hi > 5.0).sum())} sessions above 5% UNKNOWN "
                    f"(worst {pd.Timestamp(worst['day']).date()} at {worst['unknown_pct']:.1f}%)")
-    if len(vint):
-        for tbl, grp in vint.groupby("tbl"):
-            if len(grp) > 1:
-                out.append(f"{tbl} holds {len(grp)} DIFFERENT code vintages: "
-                           + ", ".join(f"{r.code_vintage}({r.rows})"
-                                       for r in grp.itertuples()))
-            if (grp["code_vintage"] == "(null)").any():
-                n = int(grp.loc[grp["code_vintage"] == "(null)", "rows"].iloc[0])
-                out.append(f"{tbl} has {n} rows with a NULL code_vintage (written "
-                           f"before the column existed)")
+    # --strict keys on the STUDY-VISIBLE rows. A vintage that appears only in rows no gate
+    # can reach is reported below as context, not as a failure.
+    sv = res.get("study_vintages")
+    if sv is not None and len(sv):
+        pairs = {(r.ladder_vintage, r.direction_vintage) for r in sv.itertuples()}
+        if len(pairs) > 1:
+            out.append("the STUDY-VISIBLE rows span "
+                       + f"{len(pairs)} (ladder, direction) vintage pairs: "
+                       + ", ".join(f"{a}/{b}" for a, b in sorted(pairs)))
+        nulls = sv[(sv["ladder_vintage"] == "(null)")
+                   | (sv["direction_vintage"] == "(null)")]
+        if len(nulls):
+            out.append(f"{int(nulls['rows'].sum())} STUDY-VISIBLE rows have a NULL "
+                       f"code_vintage")
     return out
 
 
@@ -278,8 +299,19 @@ def render(res: dict, start, end) -> str:
                      "single code vintage.")
     lines.append("")
 
+    sv = res.get("study_vintages")
+    if sv is not None and len(sv):
+        lines += ["## Code vintages, STUDY-VISIBLE rows only", "",
+                  "Rows reachable through the ladder-to-direction join, which is what every "
+                  "gate reads. `--strict` keys on this table.", "",
+                  sv.to_markdown(index=False), ""]
     if len(vint):
-        lines += ["## Code vintages", "", vint.to_markdown(index=False), ""]
+        lines += ["## Code vintages, every row in each table", "",
+                  "Includes rows no gate can reach \u2014 notably direction rows with no ladder "
+                  "row, which predate the `code_vintage` column and which July's purge can "
+                  "never remove, because that purge is skipped whenever any day errored and "
+                  "2026-07-03 is a market holiday that errors every time.", "",
+                  vint.to_markdown(index=False), ""]
 
     lines += ["## Per-session", "", show.to_markdown(index=False), ""]
     return "\n".join(lines)
