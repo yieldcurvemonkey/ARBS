@@ -1441,3 +1441,90 @@ completeness critic never ran. The findings above are therefore *auditor claims 
 personally*, not claims that survived independent refutation — except the VINTAGE_SOURCES one, which
 did, and which its verifier correctly downgraded to "could-mislead" after establishing that only one
 logging-only commit touched those modules inside the stamped window and no session straddles it.
+
+## THE AUDIT FINDINGS, RESOLVED (17:45)
+
+I verified all seven `blocks-the-study` findings myself rather than trusting the auditors, whose
+verify phase had died. **Three are real, two are downgraded, and two were my own bad queries.**
+
+| # | claim | verdict |
+|---|---|---|
+| 1 | mid displaced 6-9bp from 05-07 | **REAL**, but per-SESSION not a regime |
+| 2 | 07-21 package grouping collapses | **REAL**, 7 sessions, all in lockout |
+| 3/7 | 07-24 US cash session missing | **REAL**, and it is missing from the TAPE |
+| 5 | 01-28 MIX23 EOD marks fabricate PnL | **not applicable** to this study |
+| 6 | 07-29 8 units orphaned by renumbering | **downgraded**, chronic and flat |
+
+**Finding 5 cannot reach any number here.** The study's data path reads exactly four tables --
+`arbs_stir_direction_v1`, `arbs_stir_ladder_prints_v1`, `arbs_stir_tick_size_v1`,
+`arbs_usd_swap_tape_legs_v2`. `arbs_stir_book_marks_v1` appears only in the coverage and
+remediation *scripts*. Real bug, adjacent system, not a blocker.
+
+**Finding 6 is chronic, not a break.** Orphan rate by month: 10.4, 12.2, 10.2, 10.4, 10.6, 13.1,
+9.1%. The tape's `trade_id` churns through lifecycle events. Stable across the window, so it
+cannot bias the in-sample/lockout comparison. Documented, not fixed.
+
+**Finding 1 is per-session, which is much better news than a regime change.** July daily: 07-15
+−4.78, 07-17 −8.35, 07-21 −12.56 (63-79% suspect) interleaved with 07-16 −0.40, 07-22 −0.42,
+07-23 −0.47 (18-30%). The monthly median hid three badly displaced sessions. Being per-session it
+can be *filtered* rather than forcing a window truncation.
+
+**My first two queries against findings 2 and 6 were wrong**, and I record it because the pattern
+keeps repeating. I measured legs-per-unit on the direction table and got `max_legs = 1` for every
+day of every month -- which looked like a refutation and was actually proof I had the wrong table:
+the direction table is unit-level by construction. Finding 2 lives in the tape, where the same
+measurement gives max legs 90/73/109/55/28/30 through 07-20 and then **3,4,3,3,3,3,3** with
+`pkg_gt4` going 36-64/day to exactly **0**. It reaches the study as the OUTRIGHT share jumping
+85-89% to 92-97% and the PKG share falling to precisely zero.
+
+### The response: a session-quality gate, not a truncated window
+
+`BT/dealer_ladder/session_quality.py`. Three detectors (TRUNCATED / PKG_BROKEN / MID_DISPLACED),
+defined from the window's own distribution, applied to every session, **never reading the date**.
+
+The D3 threshold is the part worth defending. The sessions are cleanly bimodal -- 126 clean
+(median 0.349 bp, max **1.913**) against 12 displaced (median 5.283, min **2.092**) -- so 2.0 sits
+in genuinely empty space and the cut is insensitive to placement within the gap. That is a
+measured threshold, not a round number chosen for looking reasonable.
+
+Cost: in-sample 104 -> 99 sessions (95.2%), lockout 34 -> 21 (61.8%). The damage concentrates in
+the holdout because the *defects* do. Off by default so the pre-registered spec runs unchanged.
+
+Writing the module also corrected my own scratchpad scan: it had flagged 2026-04-03 as a dead
+feed when it is Good Friday, a scheduled early close. The module exempts known early closes and
+keeps 99 in-sample sessions rather than 98.
+
+## THE GATE RUN: VERDICT (iii) (17:50)
+
+Comprehensive negative result. **G5 gross = −0.0458 bp/trade at t = −0.79** -- indistinguishable
+from zero. Everything else follows.
+
+The trap in this dataset is `t = -9.44***` on the primary, which is **not evidence of anything**:
+subtract a near-constant 0.5bp round trip from a zero-mean quantity across 1,639 trades and that
+is the t you get. Same for the whole Romano-Wolf table -- 96 variants all within a whisker of
+−0.50, |t| from 79 to 311, standard errors down to 0.0016. Those t-statistics measure the cost
+constant. Read carelessly they are a spectacular finding in the wrong direction.
+
+G2 failed informatively: LLS is **negative in both spaces** (−4.769 SR3, −19.88 ZQ), so futures
+move *before* the ladder innovation. By the time a print is public the move has happened. G3 gives
+a univariate t of **0.14** -- there is no correlation even to relabel, so this is (iii) and not
+(ii). The label-free cell returns the cost too, so the null is not an artifact of the uncertified
+direction labels.
+
+**Sixth checking tool that was itself the bug.** The placebo suite evaluates net-of-cost, so all
+six arms landed between −0.448 and −0.546 and every one read as "survives" -- including the two
+whose pre-written expectation was "~0". That was the 0.5bp cost swamping a comparison whose whole
+job is discrimination. On gross the six span −0.046 to +0.052: **every arm is zero**. Fixed to
+report both; the numbers in the report are flagged as derived because the fix postdates this run's
+code load, and are being re-measured.
+
+**The lockout was NOT opened.** In §8.7 I committed, before seeing any G4 number, to opening it
+once despite the confound. The protocol never reached it: a holdout confirms an in-sample pass and
+the primary failed. I have recorded plainly that this call came *after* seeing the failure, with
+two reasons that do not depend on the answer -- nothing to confirm, and the holdout is confounded
+anyway -- plus one to preserve it: unburned, it is a real asset for a future study on repaired
+data. `LOCKOUT_USED.json` does not exist.
+
+Running now: the same gates with `--session-quality`, to answer whether the audit's defects drove
+the result. Expectation stated in advance -- **they did not**, because a zero with 5 of 104
+in-sample sessions removed is still a zero.
