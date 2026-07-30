@@ -34,7 +34,26 @@ feed supports, and produce two deliverables a desk can act on:
 * h=63 numbers in the prior work are overlap artifacts (naive IR +15.44 on ~4 independent
   windows). Discount anything at that horizon that is not reported non-overlapping.
 
-## Sign conventions (one place, checked against the code)
+## Sign conventions (one place, checked against the code AND reconciled on real trades)
+
+The desk writes a butterfly `1/-2/1` with **negative = paid** (makes money when that leg's
+rate rises). The engine stores rate-exposure weights with **positive = paid**. Same trade,
+opposite notation:
+
+| desk notation | internal `w` | futures action | position | profits when |
+|---|---:|---|---|---|
+| front `+1` | `−1` | **BUY** 1 front | received | front rate falls |
+| belly `−2` | `+2` | **SELL** 2 belly | **paid** | belly rate rises |
+| back `+1` | `−1` | **BUY** 1 back | received | back rate falls |
+
+`LONG` the spread in the engine (`d = +1`) means **paid the belly against the wings**, and
+profits when the belly *cheapens* relative to them. Reconciled against raw settles on a real
+holding period (`U26-Z26-H27`, 2026-06-02 → 2026-07-29: belly rate +30.5bp vs front +24.0 and
+back +30.0, spread +2.0bp → +9.0bp): P&L from the spread arithmetic and P&L computed
+leg-by-leg from settle changes both give **+$175.00 per package**, agreeing to 1e-10
+(`notebooks/rv/_audit_sign_conventions.py`).
+
+
 
 | Object | Definition | Units |
 |---|---|---|
