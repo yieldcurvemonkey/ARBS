@@ -9,7 +9,8 @@ the control lists, the conditioning splits, the placebo set, the audit battery, 
 gate stages) and diffed against what the results directory actually contains. Anything
 declared but absent is reported, and anything absent WITHOUT a recorded reason is
 flagged **UNEXPLAINED** — which is the whole point. A reason is only accepted from
-``g4_skipped_variants.csv``, written by the runner at the moment it skipped something,
+``g4_skipped_variants.csv`` or ``g4_conditioning_skipped.csv``, both written by the
+runner at the moment it skipped something,
 not supplied afterwards.
 
     conda run -n stir python scripts/dealer_ladder_completeness.py \
@@ -91,9 +92,12 @@ DECLARED_PLACEBOS = (
     "pre-arrival window",
 )
 
+# `poison_not_yet_visible` is deliberately NOT here. It is the helper that corrupts prints to
+# build the poisoned input for `audit_future_poison` (audit.py:94) -- it emits no verdict, so
+# listing it as an audit reported a permanent missing check for a test that runs every time
+# under the name `future_poison`.
 DECLARED_AUDITS = (
-    "visibility_delays", "not_yet_visible_poison", "future_poison",
-    "trailing_moments",
+    "visibility_delays", "future_poison", "trailing_moments",
 )
 
 
@@ -171,10 +175,19 @@ def audit(results_dir, config) -> dict:
         for col in ("split", "conditioner", "panel"):
             if col in cond.columns:
                 cused |= set(cond[col].astype(str))
+    # The runner records WHY a conditioner was skipped, in its own file. Reading only
+    # g4_skipped_variants meant a reason this tool had itself written was invisible to it and
+    # the conditioner was reported UNEXPLAINED.
+    cskip = _load(results_dir, "g4_conditioning_skipped")
+    cond_reasons = {}
+    if cskip is not None and "conditioner" in cskip.columns and "reason" in cskip.columns:
+        cond_reasons = dict(zip(cskip["conditioner"].astype(str),
+                                cskip["reason"].astype(str)))
     for c in controls.CONDITIONING_PANELS + controls.CONDITIONING_SERIES:
         if not any(c in s for s in cused):
             rows.append({"kind": "conditioning split", "item": c, "ran": False,
-                         "detail": "declared, no stratum reported", "reason": ""})
+                         "detail": "declared, no stratum reported",
+                         "reason": cond_reasons.get(c, "")})
 
     # ---- placebos
     plac = _load(results_dir, "g4_placebos")
