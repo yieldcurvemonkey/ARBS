@@ -184,7 +184,75 @@ _pending_
 
 ---
 
-## 8. Completeness pass
+## 8. Limitations, stated before the results
 
-_pending — closes with an explicit list of which modality, stratum, or diagnostic was not run, and
-why._
+Every item here was established by measurement during construction, not inferred afterwards, and
+each one bounds what the verdict can say. They are listed now so they cannot be mistaken for
+excuses added after seeing a number.
+
+### 8.1 The direction label is uncertified, and curve disagreement is the same size as the signal
+
+No truth labels exist — no desk tickets or confirmations were available — so **no accuracy number
+is claimed anywhere**. The G0 pseudo-label study is the substitute: the *identical* classifier
+re-run against an independent Citi Velocity intraday SOFR mid, so a flip isolates curve
+disagreement rather than a difference of rule.
+
+The scale of the problem, measured: on 2026-03-10 a 2Y swap priced **0.09–0.37 bp apart** on the
+two curves, and our curve sat systematically **above** Citi's. Typical on-market spread-to-mid is
+roughly half a 0.5 bp tick. So a systematic mid offset of that size is **larger than the quantity
+the direction rule reads**, and a positive offset mechanically makes trades look like they printed
+below mid, i.e. dealer PAID. That is the audit's first kill risk, and it is live.
+
+Every signed result therefore carries the `(2a − 1)` attenuation grid, and G0's flip rate is
+reported as what it is: a **lower bound on disagreement-driven error, not an accuracy**. Both
+curves can be wrong together, and a flip does not say which one was right.
+
+### 8.2 Structural limits of the data
+
+| limit | consequence |
+|---|---|
+| **No dissemination timestamp exists** anywhere in the tape (re-probed). `visibility_timestamp` is a *modelled* Part 43 legal-delay estimate on top of `execution_timestamp`. | Arrival integrity is verified against the model, not against observed public-tape time. The all-+15min live-parity variant is the hedge. |
+| The `is_capped` field feeding the `CLEARED_OFF_FACILITY_CAPPED` delay branch is a **notional**-cap marker, not a Part 43 capped-price flag. | The delay for that class cannot be cited as strictly regulatory. |
+| **No trade-level data.** The only sub-bar feed is quote updates; there are no trade prints. | G2's "signed aggressive flow" is a **bar-direction** proxy, not Lee-Ready. ~39% of SR3 bars close unchanged and contribute zero signed volume, biasing the measured lead-lag toward zero — conservative, but a genuine weakening of the mechanism test. |
+| **Ladder netting is a no-op.** No lineage column (`original_dissemination_identifier` / `prior_uti` / `prior_usi`) exists, so `extract_unwind_events` returns empty. | Positions decay out via the EWMA cutoff only; genuine lifecycle terminations are invisible. |
+| Contracts do not print every minute — 409–493 of 639 for the SR3 front six, **99–197 for ZQ**. | Horizons are evaluated against the last KNOWN price on a forward-filled grid under a staleness cap. 60-minute coverage is 90% (SR3) and 85% (ZQ); staleness is retained and reportable rather than hidden. |
+| Both independent mids are **SOFR** curves. | FED_FUNDS prints have **no** independent cross-check at all. The flip study covers the SOFR universe only. |
+| The Citi source runs Mon 00:01 → Fri 11:59 and its reader **silently returns its last snapshot** past that. | Staleness-checked; a stale curve counts as no coverage. Friday afternoons are largely uncovered. |
+| No historical depth or top-of-book data. | G5's capacity is a traded-**volume** sensitivity, labelled as such in its own output. It is an upper bound on what depth would allow, never a capacity claim. |
+
+### 8.3 The `expected` weighting is close to inert
+
+`disp_jns` is NULL on 100% of `arbs_stir_tick_size_v1` because ticks-only calibration feeds
+`s2m_bps = NaN`. So `sigma_mid` always collapses to its fallback `futures_tick_bps / 2` (0.125 bp
+SR3, 0.25 bp FF), and a print a normal half-spread from mid scores `p_flip ≈ 0.023`, weight
+≈ 0.95. The `expected`-vs-`unweighted` arm of the secondary grid therefore measures the
+**calibration**, not the signal, and must not be presented as a robustness result.
+
+### 8.4 Scope reductions taken deliberately
+
+- **`SERFF_BASIS` is not projected.** Measured at 13.81 s of the 14.6 s per-snapshot risk-model
+  cost — 94% — because it is the one space still needing ~60 vendor pricer fetches per snapshot.
+  Including it meant 74–109 min/day against 4–8, i.e. an infeasible backfill. The plan designates
+  it conditioning-only and bars it from being a test target, and `controls.basis_bp` (curve-implied
+  contract rate minus futures market rate, per contract, on the **decision** grid) is a better
+  conditioner than a basis DV01 split at scattered print times.
+- **The primary signal space is `FUTURES`, not `MEETING`** as the plan's Task 10 draft named it.
+  The later bench ordering makes SR3-in-`FUTURES` the primary bench, and using it aligns signal and
+  target contract-by-contract instead of inventing a meeting→contract mapping. `MEETING` remains
+  in the secondary grid, and is barred from ever being a test *target* — it has no traded
+  instrument, so such a test would be circular by construction.
+
+### 8.5 Power
+
+Independent observations are set by the signal's integration window, not the number of minute
+bars: ≈150 independent score epochs in-sample at a 90-minute half-life, ≈56 at 240. At that scale
+the 80%-power minimum detectable standardised effect is ≈0.25 for a single test. **This study can
+decisively reject a large, obvious effect. It cannot establish that a small one is durable,
+causal, or capacity-bearing**, and no claim of that kind will be made from it.
+
+---
+
+## 9. Completeness pass
+
+_pending — closes with an explicit list of which modality, stratum, or diagnostic was NOT run, and
+why, so the gaps are enumerated rather than left to be noticed._
