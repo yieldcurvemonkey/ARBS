@@ -40,13 +40,30 @@ from BT.dealer_ladder import config as cfg
 NY = "America/New_York"
 
 
-def connect(pg_url=None):
-    """Read-only psycopg2 connection to the tape/flow DB."""
+def connect(pg_url=None, autocommit=True):
+    """Read-only psycopg2 connection to the tape/flow DB. AUTOCOMMIT by default.
+
+    Autocommit is load-bearing, not tidiness. psycopg2 opens a transaction on the first
+    statement and holds it until commit or rollback, so a read-only connection that just
+    ran a SELECT sits `idle in transaction` holding an `AccessShareLock` on every table it
+    touched -- for as long as the process lives. This study's runner keeps one connection
+    open for a multi-hour run.
+
+    That is not a theoretical cost. Measured on 2026-07-30: a research connection sat idle
+    in transaction for 35 minutes holding read locks on `arbs_stir_ladder_prints_v1`,
+    which blocked the production backfill's
+    `ALTER TABLE ... ADD COLUMN IF NOT EXISTS code_vintage` from taking its
+    AccessExclusiveLock. The DDL waited out the server's 2-minute `statement_timeout` and
+    killed the phase -- twice, in two different chunks -- before the cause was found. A
+    read-only consumer of a shared production database must not be able to do that.
+    """
     import psycopg2
 
     from SDRUtils._swappulse_scripts.ingest_usdswaps_tape import resolve_pg_url
 
-    return psycopg2.connect(pg_url or resolve_pg_url())
+    conn = psycopg2.connect(pg_url or resolve_pg_url())
+    conn.autocommit = bool(autocommit)
+    return conn
 
 
 # --------------------------------------------------------------------------

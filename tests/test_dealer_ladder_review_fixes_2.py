@@ -566,3 +566,30 @@ def test_independent_implied_masks_stale_minutes_without_a_shape_error(monkeypat
     # the two 99-minute-stale rows are blanked, the other four survive
     assert out.notna().all(axis=1).sum() == 4
     assert out.isna().all(axis=1).sum() == 2
+
+
+# ===== a read-only research connection must not be able to block a production backfill
+def test_connect_autocommits_by_default(monkeypatch):
+    """psycopg2 opens a transaction on the first statement and holds it until commit, so
+    a read-only connection that ran one SELECT sits idle-in-transaction holding
+    AccessShareLocks for the life of the process. Measured cost on 2026-07-30: 35 minutes
+    of held read locks blocked the backfill's ALTER TABLE from taking its
+    AccessExclusiveLock, and the DDL died on the server's 2-minute statement_timeout --
+    killing two chunk phases before the cause was found."""
+    made = {}
+
+    class _Conn:
+        autocommit = False
+
+    import sys
+    import types
+    fake = types.ModuleType("psycopg2")
+    fake.connect = lambda *a, **k: made.setdefault("c", _Conn())
+    monkeypatch.setitem(sys.modules, "psycopg2", fake)
+    tape = types.ModuleType("SDRUtils._swappulse_scripts.ingest_usdswaps_tape")
+    tape.resolve_pg_url = lambda *a, **k: "postgresql://x/y"
+    monkeypatch.setitem(sys.modules,
+                        "SDRUtils._swappulse_scripts.ingest_usdswaps_tape", tape)
+
+    assert data.connect().autocommit is True
+    assert data.connect(autocommit=False).autocommit is False

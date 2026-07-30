@@ -1099,3 +1099,64 @@ stale. A one-line robustness fix would cost a full re-classification of the wind
 - [ ] re-run April 2026 EOD marks at vintage `468474ca6f84`
 - [ ] `coverage --strict` over 2026-01-12 → 2026-07-29 and re-run any trading session it flags
 - [ ] deferred to next cycle: tolerant `ensure_schema` + `IRSwapsMDP.py` into `VINTAGE_SOURCES`
+
+### My own read-only connection blocked the production backfill (07:55)
+
+Two chunk phases died on `ensure_schema` DDL timeouts within ten minutes of each other, so instead of
+guessing I asked the server. `pg_stat_activity` and `pg_locks` gave the answer immediately:
+
+```
+pid 1234908  idle in transaction  xact_age 00:35:51   AccessShareLock  arbs_stir_ladder_prints_v1
+pid 1238422  active  wait Lock/relation  00:00:50     AccessExclusiveLock  NOT GRANTED
+             ALTER TABLE arbs_stir_ladder_prints_v1 ADD COLUMN IF NOT EXISTS code_vintage TEXT
+```
+
+**PID 1234908 was my end-to-end smoke test.** `data.connect()` did not set autocommit, so psycopg2
+opened a transaction on the first `SELECT` and held it — with `AccessShareLock` on every table
+touched — for the life of the process, and the runner keeps one connection open for the whole run.
+That read lock blocked the backfill's `ALTER TABLE` from taking its `AccessExclusiveLock`, the DDL
+waited out the server's 2-minute `statement_timeout`, and the phase died. Twice.
+
+Killed the smoke; the 35-minute session vanished and ungranted locks went to zero immediately.
+`BT/dealer_ladder/data.py` is **not** in `VINTAGE_SOURCES`, so unlike the `ensure_schema` issue this
+one was safe to fix mid-run: `connect()` now autocommits. A read-only consumer of a shared
+production database must not be able to stall a writer, and the fix is one line — the cost was
+entirely in not having thought about it.
+
+**The lesson is about the diagnosis, not the bug.** The visible symptom was a DDL timeout inside the
+backfill, which points at the backfill, the schema, and the remote instance — three plausible
+suspects, none of them the cause. Nothing in the failing process's own logs could have identified a
+lock held by a different process. Asking the database what was blocking took one query and ended it.
+
+### The dataset has two holes, and they read as SUCCESS (07:56)
+
+| month | direction rows | days | ladder rows | ENTRY marks | EOD marks |
+|---|---|---|---|---|---|
+| 2026-01 | 7,632 | 14 | 274,248 | 7,618 | 2,100 |
+| 2026-02 | 10,397 | 19 | 373,392 | 10,372 | 3,054 |
+| 2026-03 | 15,421 | 22 | 553,932 | 15,454 | 4,706 |
+| 2026-04 | 10,016 | 22 | 359,388 | 9,916 | **0** |
+| **2026-05** | **absent** | — | **absent** | — | — |
+| 2026-06 | running | | | | |
+| 2026-07 | 4,239 | 6 | 33,948 | 1,219 | 0 (chunk not yet run) |
+
+**April lost only its EOD marks.** ENTRY marks are written by the *projection* phase, which
+succeeded; only the marks phase died. So the gap is narrower than the `rc=1` suggested.
+
+**May is entirely absent, and this is the part worth dwelling on.** Its classify failed, and then
+`project rc=0` and `marks rc=0` — in thirteen seconds — because there was nothing to project or
+mark. **An empty month exits zero.** Both my progress monitor and my failure monitor read that as
+success: one echoes the script's `rc`, and the other greps chunk logs for day-errors and exception
+lines, of which an empty run has none. This is exactly the silence-is-not-success failure, one level
+up from where I had been guarding against it.
+
+The only check that catches it is the one that enumerates sessions from the **trading calendar** and
+demands each be populated — `dealer_ladder_coverage.py --strict`. That is now the gate before any
+gate: the dataset is not complete until it exits zero over the full window.
+
+**Pending remediation, updated:**
+
+- [ ] **May 2026: the whole chunk** (classify → project → marks) at vintage `468474ca6f84`
+- [ ] **April 2026: EOD marks only** (ENTRY marks are already correct)
+- [ ] `coverage --strict` over 2026-01-12 → 2026-07-29; re-run every session it flags
+- [ ] deferred to next cycle: tolerant `ensure_schema`, `IRSwapsMDP.py` into `VINTAGE_SOURCES`
