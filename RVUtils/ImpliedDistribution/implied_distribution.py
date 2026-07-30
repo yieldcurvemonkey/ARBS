@@ -73,12 +73,66 @@ class SFRImpliedDistribution:
     Pass ``use_sabr_vols=True`` and ``sabr_extrapolation=True`` for the
     older ARBS SABR-resampled smooth-tail hybrid.
 
+    Check these before trusting a result
+    ------------------------------------
+    ``BreedenLitzenbergerResult`` reports three diagnostics that between them catch most
+    ways this pipeline goes wrong. They are cheap and they are not advisory:
+
+    * ``forward_residual_bp`` - the mean of the recovered density minus ``100 - F``.
+      Under Q the SR3 future is a martingale, so this must be ~0. Anything beyond a
+      couple of bp means the fit or the wings are wrong.
+    * ``pre_normalization_mass`` - the integral of ``d2C/dK2 / DF`` before the unit-mass
+      rescale. Below 1 is fine (it is ``P(Kmin < S_T < Kmax)`` for a truncated smile);
+      above 1 means butterfly arbitrage survived into the fitted call curve.
+    * ``ghost_mass_fraction`` - probability supported only by the synthetic wings.
+      ``std_rate``/``skewness``/``kurtosis`` and the extreme percentiles are
+      extrapolation artefacts to the extent this is large.
+
+    Plus ``warnings``, which now carries shape violations, wing construction, strike-set
+    attrition and any fallback that silently changed the method.
+
+    Deviations from best practice that are deliberate
+    -------------------------------------------------
+    These reproduce the JPM appendix faithfully. They are not bugs, but they bound what
+    the output can support.
+
+    * **The spline is fitted in price space.** Shimko and Bliss-Panigirtzoglou both argue
+      for fitting implied vol instead: the curvature operator scales quote noise by
+      ``1/dK^2``, so at the CME fine spacing (``dK = 0.125``) and settlement tick
+      (``0.0025``) a single mis-marked strike perturbs the second difference by
+      ``2*tick/dK^2 = 0.32`` against a typical peak density near 0.6. Day-over-day
+      changes in "probability of a cut" on an illiquid contract are dominated by quote
+      noise, not by repricing.
+    * **``smoothing_param`` is an absolute residual budget, not a scale-free one.**
+      SciPy's ``s`` bounds the total sum of squared residuals in the units of the fitted
+      values. Premiums here are IMM Index points and CME settles all SOFR options on a
+      0.0025 tick (Rulebook 460A01.C), which makes the literal 1e-4 roughly a half-tick
+      budget on a ~70-point ladder - principled, but *not* comparable across contracts,
+      because premium curvature scales with ``vol*sqrt(T)`` and with the strike count.
+      Note also that a value which looks tiny against the price fit can still wreck the
+      second derivative: on noiseless input 1e-4 inflates the recovered standard
+      deviation ~2.7x, while on real tick-quantised quotes it is doing necessary work.
+    * **``spline_order=4`` is a SciPy quartic.** The appendix's "4th-order" is ambiguous;
+      cubic is the more common BL choice and makes ``d2C/dK2`` piecewise-linear and
+      continuous. Unresolved convention call, not a coding error.
+    * **The 25bp bins are SR3 settlement-rate bins, not Fed target probabilities.** An
+      SR3 contract settles on compounded daily SOFR over the reference quarter beginning
+      at option expiry, whose support is not on a 25bp lattice: a state that is certainly
+      "one 25bp cut this quarter" lands mid-bin and splits across two bins according to
+      *when* in the quarter the cut falls. Layer on the SOFR-EFFR basis and the lattice
+      is shifted off the target grid it appears to represent. ``_joint_states`` does the
+      day-weighted version properly; the single-contract path does not.
+
     Caveats and known limitations
     -----------------------------
-    * **Bachelier European pricing only.** SR3 options are American on the
-      future, but for short-dated instruments the early-exercise premium is
-      small and ignored here. Avoid relying on this module for options with
-      less than ~10 business days to expiry.
+    * **Bachelier European pricing only.** SR3 options are American (Rulebook 460A02.A:
+      exercisable on any business day the option trades), but observed premiums obey
+      put-call parity closely and the early-exercise premium is small for short-dated
+      instruments, so they are treated as European. Note the OTM/parity partition means
+      a call-derived and a put-derived premium never coexist at the same strike, so no
+      parity residual is ever formed and a parity-inconsistent snapshot passes silently.
+      Avoid relying on this module for options with less than ~10 business days to
+      expiry; those now raise a warning.
     * **Wing extrapolation uses linear "ghost" anchor points** at the ends of
       the strike grid - not SVI or rational interpolation. If callers opt into
       SABR resampling, tails are also sensitive to the SABR beta/rho/nu
@@ -121,6 +175,13 @@ class SFRImpliedDistribution:
         sabr_n_strikes: int = 200,
         raw_market_open_interest_min: Optional[float] = 100.0,
         raw_market_otm_only: bool = True,
+        min_strikes: int = 6,
+        allow_sabr_fallback: bool = True,
+        fit_space: str = "price",
+        vol_smoothing_param: Optional[float] = None,
+        anchor_wings: bool = False,
+        ghost_anchor_weight: float = 100.0,
+        rate_floor: Optional[float] = 0.0,
         optimize_mixture_stds: bool = True,
         initial_mixture_std_bps: float = 30.0,
     ):
@@ -138,6 +199,16 @@ class SFRImpliedDistribution:
         self.sabr_n_strikes = sabr_n_strikes
         self.raw_market_open_interest_min = raw_market_open_interest_min
         self.raw_market_otm_only = raw_market_otm_only
+        self.min_strikes = min_strikes
+        self.allow_sabr_fallback = allow_sabr_fallback
+        self.fit_space = fit_space
+        self.vol_smoothing_param = vol_smoothing_param
+        self.anchor_wings = anchor_wings
+        self.ghost_anchor_weight = ghost_anchor_weight
+        # BL density truncation, distinct from sabr_rate_floor (which bounds the SABR
+        # extrapolation grid). They were previously the same knob, so raising the SABR
+        # grid floor silently truncated the observed-premium density too.
+        self.rate_floor = rate_floor
         self.optimize_mixture_stds = optimize_mixture_stds
         self.initial_mixture_std_bps = initial_mixture_std_bps
 
@@ -176,6 +247,8 @@ class SFRImpliedDistribution:
             sabr_n_strikes=self.sabr_n_strikes,
             raw_market_open_interest_min=self.raw_market_open_interest_min,
             raw_market_otm_only=self.raw_market_otm_only,
+            min_strikes=self.min_strikes,
+            allow_sabr_fallback=self.allow_sabr_fallback,
         )
 
         bl_result = None
@@ -190,8 +263,18 @@ class SFRImpliedDistribution:
                 spline_order=self.spline_order,
                 n_ghost_points=self.n_ghost_points,
                 ghost_extension_bps=self.ghost_extension_bps,
-                bin_width_bps=self.bin_width_bps,
-                rate_floor=self.sabr_rate_floor,
+                # FedScenarioConfig.bin_width_bps documents itself as controlling the BL
+                # bins, so honour it when a config is supplied.
+                bin_width_bps=float(
+                    self.bin_width_bps
+                    if getattr(config, "bin_width_bps", None) is None
+                    else config.bin_width_bps
+                ),
+                rate_floor=self.rate_floor,
+                fit_space=self.fit_space,
+                vol_smoothing_param=self.vol_smoothing_param,
+                anchor_wings=self.anchor_wings,
+                ghost_anchor_weight=self.ghost_anchor_weight,
             )
 
         if run_gm and config is not None:
@@ -403,6 +486,8 @@ class SFRImpliedDistribution:
                 sabr_n_strikes=self.sabr_n_strikes,
                 raw_market_open_interest_min=self.raw_market_open_interest_min,
                 raw_market_otm_only=self.raw_market_otm_only,
+                min_strikes=self.min_strikes,
+                allow_sabr_fallback=self.allow_sabr_fallback,
             )
             if run_bl or run_legacy_gm:
                 try:

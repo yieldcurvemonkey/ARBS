@@ -13,7 +13,10 @@ export async function GET(req: Request) {
   const sql = `
     WITH flow_trades AS (
       SELECT
-        execution_timestamp,
+        -- Unified to the coalesced original-execution anchor (2026-07-17), so
+        -- intraday buckets agree with volume-grid / analytics-timeseries. Aliased
+        -- back to execution_timestamp so the bucketing CTE below is unchanged.
+        COALESCE(original_execution_timestamp, execution_timestamp) AS execution_timestamp,
         fixed_rate::float AS fixed_rate,
         ABS(risk::float) AS abs_risk,
         tenor_label
@@ -57,7 +60,7 @@ export async function GET(req: Request) {
 
   const printsSql = `
     SELECT
-      execution_timestamp AS ts,
+      COALESCE(original_execution_timestamp, execution_timestamp) AS ts,
       fixed_rate::float AS fixed_rate,
       ABS(risk::float) AS abs_risk
     FROM ${LEGS_TABLE}
@@ -67,7 +70,7 @@ export async function GET(req: Request) {
       AND fixed_rate IS NOT NULL AND fixed_rate <> 0
       AND risk IS NOT NULL
       AND (lifecycle_type IN ('NEW_RISK') OR lifecycle_type IS NULL)
-    ORDER BY execution_timestamp ASC
+    ORDER BY ts ASC
   `
 
   try {

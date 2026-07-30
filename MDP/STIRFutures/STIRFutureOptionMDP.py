@@ -251,7 +251,17 @@ _FUTURE_RE = re.compile(rf"^(?P<root>{_ROOT_TOKEN_PATTERN})(?P<code>[FGHJKMNQUVX
 _CM_RE = re.compile(rf"^(?P<root>{_ROOT_TOKEN_PATTERN})?CM(?P<rank>\d+)$", re.IGNORECASE)
 
 _DEFAULT_CURVE_NAME = "USD-SOFR-1D-Q12xM12STIRT"
-_SABR_SMILE_LISTED_OFFSET_CAP_BPS = 250.0
+# CME Rulebook 460A01.E.1: the Exchange lists 25-point exercise prices from 5.50 IMM
+# Index points above to 5.50 below the at-the-money strike (12.5- and 6.25-point listings
+# cover +/-1.50 under E.2/E.3). This cap used to be 250bp, so strike_offsets_bps="listed"
+# silently truncated the chain at less than half its listed width while the jpm_method
+# path used the full grid - and the discarded strikes are exactly the wings the density
+# tails are built from.
+_SABR_SMILE_LISTED_OFFSET_CAP_BPS = 550.0
+# A smile must be a snapshot of one trading session.  EOD windows are prefetched +/- a
+# calendar month around the request, so without this bound a leg whose chain stopped
+# printing weeks ago is silently carried forward into an as-of it never traded on.
+_SABR_SMILE_MAX_QUOTE_STALENESS_DAYS = 5
 _QS_STIR_ROOT_ALIAS_TO_GLOBEX: Dict[str, str] = {
     "SR3": "SR3",
     "SFR": "SR3",
@@ -1707,6 +1717,27 @@ _strike_from_symbol = _shared_sofr_option_contracts._strike_from_symbol
 _right_from_symbol = _shared_sofr_option_contracts._right_from_symbol
 _contract_code_from_symbol = _shared_sofr_option_contracts._contract_code_from_symbol
 _contract_expiry_date = _shared_sofr_option_contracts._contract_expiry_date
+sofr_option_last_trade_date = _shared_sofr_option_contracts.sofr_option_last_trade_date
+_front_sfr_option_contracts = _shared_sofr_option_contracts._front_sfr_option_contracts
+
+
+def _sofr_option_expiry_date(contract: str, contract_code: str) -> datetime.date:
+    """Expiry used to price a SOFR option leg.
+
+    An option expires when trading in it terminates - the Friday preceding the third
+    Wednesday of the contract month (CME Rulebook 460A01.J.1). The third Wednesday itself
+    is the start of the underlying future's Reference Quarter (460A01.D.1), five days
+    later, and using it overstates time-to-expiry by those five days: ~1-2% on the normal
+    vol at multi-month tenors, and badly more in the final fortnight (on the last session
+    it prices 1 day of risk as 6).
+
+    Falls back to the third Wednesday for roots the termination rule does not cover
+    (weekly mid-curves, non-SOFR roots), preserving the previous behaviour there.
+    """
+    resolved = sofr_option_last_trade_date(contract)
+    if resolved is not None:
+        return resolved
+    return _contract_expiry_date(contract_code)
 
 class STIRFutureOptionMDP(MarketDataProvider[InstrumentLike], LayeredCacheMixin):
     _STIR_OPTION_CACHE = "_stir_option_pricer_cache"
@@ -1915,7 +1946,7 @@ class STIRFutureOptionMDP(MarketDataProvider[InstrumentLike], LayeredCacheMixin)
     ) -> str:
         payload = {
             "schema": 1,
-            "cache_version": "stirfo_barchart_pricer_window_v2",
+            "cache_version": "stirfo_barchart_pricer_window_v3",
             "source": str(self.source).upper(),
             "symbols": sorted({str(s).upper() for s in leg_symbols}),
             "window_start": window_start.isoformat(),
@@ -2380,7 +2411,7 @@ class STIRFutureOptionMDP(MarketDataProvider[InstrumentLike], LayeredCacheMixin)
             return None
         payload = {
             "schema": 1,
-            "cache_version": "stirfo_sabr_smile_common_v3",
+            "cache_version": "stirfo_sabr_smile_common_v4",
             "source": str(self.source).upper(),
             "as_of": as_of.isoformat(),
             "curve_name": str(curve_name),
@@ -2722,6 +2753,18 @@ class STIRFutureOptionMDP(MarketDataProvider[InstrumentLike], LayeredCacheMixin)
         *,
         symbol_info: Dict[str, Any],
         as_of: datetime.date,
+        assert_tradable: bool = True,
+    ) -> str:
+        contract = self._resolve_sabr_smile_contract_unchecked(symbol_info=symbol_info, as_of=as_of)
+        if assert_tradable:
+            self._assert_sabr_smile_chain_tradable(contract=contract, as_of=as_of)
+        return contract
+
+    def _resolve_sabr_smile_contract_unchecked(
+        self,
+        *,
+        symbol_info: Dict[str, Any],
+        as_of: datetime.date,
     ) -> str:
         src = str(self.source).upper()
         kind = str(symbol_info.get("kind", "")).strip().lower()
@@ -2742,6 +2785,33 @@ class STIRFutureOptionMDP(MarketDataProvider[InstrumentLike], LayeredCacheMixin)
                 as_of=as_of,
             )
         raise NotImplementedError(f"Unsupported SABR smile source for contract resolution: {self.source!r}")
+
+    @staticmethod
+    def _live_sofr_option_contracts(as_of: datetime.date, *, limit: int = 3) -> List[str]:
+        candidates = list(_front_sfr_option_contracts(as_of))
+        live = [c for c in candidates if (sofr_option_last_trade_date(c) or as_of) >= as_of]
+        live.sort(key=lambda c: (sofr_option_last_trade_date(c) or datetime.date.max))
+        return live[:limit]
+
+    def _assert_sabr_smile_chain_tradable(self, *, contract: str, as_of: datetime.date) -> None:
+        """Reject an as_of after the option chain stopped trading.
+
+        The underlying SR3 future keeps trading for another quarter after its options
+        terminate, so the forward resolves cleanly and the request would otherwise only
+        fail deep inside leg selection with a bare list of "missing" strikes.
+        """
+        last_trade = sofr_option_last_trade_date(contract)
+        if last_trade is None or as_of <= last_trade:
+            return
+        alternatives = self._live_sofr_option_contracts(as_of)
+        suggestion = f" Still listed on that date: {', '.join(alternatives)}." if alternatives else ""
+        raise ValueError(
+            f"{contract} options terminated trading on {last_trade.isoformat()} (the Friday "
+            f"preceding the third Wednesday of the contract month); the requested as_of "
+            f"{as_of.isoformat()} is {(as_of - last_trade).days} days later, so the chain has no "
+            f"quotes. The underlying future keeps trading until the end of the reference quarter, "
+            f"which is why the forward still resolves.{suggestion}"
+        )
 
     def _resolve_sabr_smile_forward_from_underlying_data(
         self,
@@ -2906,6 +2976,75 @@ class STIRFutureOptionMDP(MarketDataProvider[InstrumentLike], LayeredCacheMixin)
             raise ValueError(f"Missing SABR smile strike legs for {as_of.isoformat()}: {missing}. Available quote dates: {av}.")
         return out
 
+    @staticmethod
+    def _resolve_pricer_window_quote_day(
+        *,
+        requested_legs: Sequence[Dict[str, Any]],
+        pricers_window: Dict[str, Dict[datetime.date, QLSTIRFutureOptionPricer]],
+        target_date: datetime.date,
+    ) -> Optional[datetime.date]:
+        """Latest session on or before ``target_date`` that any requested leg printed on.
+
+        The whole smile is then taken from that one session.  Resolving each leg's own
+        as-of independently produced cross-session smiles: on 2026-06-16 the SFRM26 ATM
+        call came from 2026-06-12 (the chain's last trading day) while every other strike
+        came from 2026-06-11.
+        """
+        days: set[datetime.date] = set()
+        for spec in requested_legs:
+            for day in pricers_window.get(str(spec["canonical_symbol"]), {}):
+                if day <= target_date:
+                    days.add(day)
+        return max(days) if days else None
+
+    def _resolve_sabr_smile_pricer_window_session(
+        self,
+        *,
+        requested_legs: Sequence[Dict[str, Any]],
+        pricers_window: Dict[str, Dict[datetime.date, QLSTIRFutureOptionPricer]],
+        target_date: datetime.date,
+    ) -> datetime.date:
+        quote_day = self._resolve_pricer_window_quote_day(
+            requested_legs=requested_legs,
+            pricers_window=pricers_window,
+            target_date=target_date,
+        )
+        if quote_day is None:
+            raise ValueError(
+                f"No quotes on or before {target_date.isoformat()} for any of the "
+                f"{len(requested_legs)} requested SABR smile legs"
+                f"{self._sabr_smile_expiry_hint(requested_legs=requested_legs, as_of=target_date)}"
+            )
+        staleness = (target_date - quote_day).days
+        if staleness > _SABR_SMILE_MAX_QUOTE_STALENESS_DAYS:
+            raise ValueError(
+                f"SABR smile quotes for {target_date.isoformat()} are stale: the last session with "
+                f"any quoted leg is {quote_day.isoformat()} ({staleness} days earlier, limit "
+                f"{_SABR_SMILE_MAX_QUOTE_STALENESS_DAYS})"
+                f"{self._sabr_smile_expiry_hint(requested_legs=requested_legs, as_of=target_date)}"
+            )
+        return quote_day
+
+    @staticmethod
+    def _sabr_smile_expiry_hint(
+        *,
+        requested_legs: Sequence[Dict[str, Any]],
+        as_of: datetime.date,
+    ) -> str:
+        if not requested_legs:
+            return "."
+        try:
+            contract = str(requested_legs[0]["canonical_symbol"]).split("|", 1)[0]
+            last_trade = sofr_option_last_trade_date(contract)
+        except Exception:
+            return "."
+        if last_trade is None or as_of <= last_trade:
+            return "."
+        return (
+            f"; {contract} options terminated trading on {last_trade.isoformat()}, "
+            f"{(as_of - last_trade).days} days before the requested as_of."
+        )
+
     def _select_sabr_smile_explicit_legs_from_pricer_window(
         self,
         *,
@@ -2913,12 +3052,23 @@ class STIRFutureOptionMDP(MarketDataProvider[InstrumentLike], LayeredCacheMixin)
         pricers_window: Dict[str, Dict[datetime.date, QLSTIRFutureOptionPricer]],
         target_date: datetime.date,
     ) -> List[Dict[str, Any]]:
+        quote_day = self._resolve_sabr_smile_pricer_window_session(
+            requested_legs=requested_legs,
+            pricers_window=pricers_window,
+            target_date=target_date,
+        )
+        # Derived from the request, not from whichever leg resolved last: legs pinned to
+        # an ATM offset were snapped onto a rule lattice that need not be fully listed,
+        # so gaps are expected.  Explicitly named strikes must all be present.
+        offset_mode = any(
+            _to_float(spec.get("requested_atm_offset_bps")) is not None for spec in requested_legs
+        )
+
         out: List[Dict[str, Any]] = []
         missing: List[str] = []
-        requested_atm_offset = False
         for spec in requested_legs:
             canonical_symbol = str(spec["canonical_symbol"])
-            pr = self._asof_pricer_for_date(pricers_window.get(canonical_symbol, {}), target_date)
+            pr = pricers_window.get(canonical_symbol, {}).get(quote_day)
             if pr is None:
                 missing.append(canonical_symbol)
                 continue
@@ -2932,10 +3082,13 @@ class STIRFutureOptionMDP(MarketDataProvider[InstrumentLike], LayeredCacheMixin)
                     canonical_symbol=canonical_symbol,
                 )
             )
-            requested_atm_offset = _to_float(spec.get("requested_atm_offset_bps")) is not None 
-        
-        if missing and not requested_atm_offset:
-            raise ValueError(f"Missing SABR smile strike legs for {target_date.isoformat()}: {missing}.")
+
+        if missing and not offset_mode:
+            raise ValueError(
+                f"Missing SABR smile strike legs for {target_date.isoformat()} "
+                f"(quote session {quote_day.isoformat()}): {missing}."
+                f"{self._sabr_smile_expiry_hint(requested_legs=requested_legs, as_of=target_date)}"
+            )
         return out
 
     def _select_sabr_smile_available_legs_from_pricer_window(
@@ -2945,10 +3098,15 @@ class STIRFutureOptionMDP(MarketDataProvider[InstrumentLike], LayeredCacheMixin)
         pricers_window: Dict[str, Dict[datetime.date, QLSTIRFutureOptionPricer]],
         target_date: datetime.date,
     ) -> List[Dict[str, Any]]:
+        quote_day = self._resolve_sabr_smile_pricer_window_session(
+            requested_legs=requested_legs,
+            pricers_window=pricers_window,
+            target_date=target_date,
+        )
         out: List[Dict[str, Any]] = []
         for spec in requested_legs:
             canonical_symbol = str(spec["canonical_symbol"])
-            pr = self._asof_pricer_for_date(pricers_window.get(canonical_symbol, {}), target_date)
+            pr = pricers_window.get(canonical_symbol, {}).get(quote_day)
             if pr is None:
                 continue
             out.append(
@@ -3036,14 +3194,23 @@ class STIRFutureOptionMDP(MarketDataProvider[InstrumentLike], LayeredCacheMixin)
         ref_underlying = str(pricers[0].underlying_symbol()).upper()
         ref_forward = float(pricers[0].forward())
         ref_expiry = pricers[0].expiry_date()
+        ref_quote_day = pricers[0].quote_timestamp().astimezone(_NY_TZ).date()
         for pr in pricers[1:]:
             if str(pr.underlying_symbol()).upper() != ref_underlying:
                 raise ValueError("SABR smile legs do not agree on underlying contract.")
             if pr.expiry_date() != ref_expiry:
                 raise ValueError("SABR smile legs do not agree on expiry date.")
+            quote_day = pr.quote_timestamp().astimezone(_NY_TZ).date()
+            if quote_day != ref_quote_day:
+                raise ValueError(
+                    "SABR smile legs do not agree on quote session: "
+                    f"{ref_quote_day.isoformat()} vs {quote_day.isoformat()}."
+                )
             if not math.isclose(float(pr.forward()), ref_forward, rel_tol=0.0, abs_tol=1e-8):
-                print(float(pr.forward()), ref_forward)
-                raise ValueError("SABR smile legs do not agree on forward price.")
+                raise ValueError(
+                    "SABR smile legs do not agree on forward price: "
+                    f"{ref_forward!r} vs {float(pr.forward())!r}."
+                )
         return ref_underlying, ref_forward, ref_expiry
 
     def _assemble_sabr_smile_result(
@@ -3175,6 +3342,18 @@ class STIRFutureOptionMDP(MarketDataProvider[InstrumentLike], LayeredCacheMixin)
         mode = self._sabr_smile_point_mode(point_request)
         jpm_method = bool(request.get("jpm_method", False))
         selected_legs: List[Dict[str, Any]]
+
+        if not as_of_live:
+            # Fail fast and legibly on an expired chain, before ~100 EOD fetches produce
+            # nothing.  Delta mode never resolves a contract otherwise.
+            try:
+                resolved_contract = self._resolve_sabr_smile_contract_unchecked(
+                    symbol_info=symbol_info, as_of=as_of
+                )
+            except Exception:
+                resolved_contract = ""
+            if resolved_contract:
+                self._assert_sabr_smile_chain_tradable(contract=resolved_contract, as_of=as_of)
 
         if str(self.source).upper() == "STIRFO_DUAL-QL":
             if jpm_method:
@@ -4388,7 +4567,11 @@ class STIRFutureOptionMDP(MarketDataProvider[InstrumentLike], LayeredCacheMixin)
 
         payload = {
             "schema": 1,
-            "cache_version": "stirfo_get_data_v9",
+            # v10: option expiry moved from the third Wednesday to the termination Friday
+            # (Rulebook 460A01.J.1), which changes time-to-expiry and therefore every
+            # cached pricer, implied vol and SABR calibration. v9 entries are not
+            # comparable and must not be served alongside v10 ones.
+            "cache_version": "stirfo_get_data_v10",
             "source": str(self.source).upper(),
             "endpoint": ep,
             "request": self._cache_primitive(cache_req),
@@ -4965,12 +5148,35 @@ class STIRFutureOptionMDP(MarketDataProvider[InstrumentLike], LayeredCacheMixin)
             return ent
         return None
 
-    def _raw_eod_cache_put(self, symbol: str, frame: Optional[pd.DataFrame], fetched_at: float) -> None:
+    def _raw_eod_cache_put(
+        self,
+        symbol: str,
+        frame: Optional[pd.DataFrame],
+        fetched_at: float,
+        *,
+        full_history: bool = False,
+        no_data: bool = False,
+    ) -> None:
         max_date = min_date = None
         if frame is not None and len(frame) and isinstance(frame.index, pd.DatetimeIndex):
             max_date = pd.Timestamp(frame.index.max()).date()
             min_date = pd.Timestamp(frame.index.min()).date()
-        ent = {"frame": frame, "fetched_at": float(fetched_at), "min_date": min_date, "max_date": max_date}
+        ent = {
+            "frame": frame,
+            "fetched_at": float(fetched_at),
+            "min_date": min_date,
+            "max_date": max_date,
+            # Only a wide-window fetch produces a frame that can answer an arbitrary
+            # later window from local slicing. See _raw_eod_cache_covers.
+            "full_history": bool(full_history),
+            # A recorded attempt that came back with nothing. CME lists exercise prices
+            # out to +/-5.50 IMM Index points (Rulebook 460A01.E.1) but the vendor only
+            # carries strikes that actually printed, so a full listed ladder asks for
+            # dozens of symbols that will never return anything - and, being absent from
+            # the fetch result, they were never recorded and so were re-requested on
+            # every single call.
+            "no_data": bool(no_data),
+        }
         with self._raw_eod_lock:
             self._raw_eod_mem[symbol] = ent
         try:
@@ -4982,7 +5188,35 @@ class STIRFutureOptionMDP(MarketDataProvider[InstrumentLike], LayeredCacheMixin)
         fetched_at = float(ent.get("fetched_at", 0.0) or 0.0)
         if fetched_at <= 0.0:
             return False
+        # The reasoning below is only valid for a full-history snapshot. An entry written
+        # from a narrow frame answers every later window from a slice that silently
+        # returns nothing -- which is how a stray SQZ30 entry holding one bar from
+        # 2026-02-27 came to report that it "covered" 2026-01-02..03 and yield zero rows.
+        #
+        # Entries written before the flag existed cannot prove they are full history, but
+        # discarding them all would refetch the entire cache from Barchart. Accept a
+        # legacy entry when its stored history actually begins on or before the requested
+        # start: that is what a wide fetch produces, and it is exactly what a narrow
+        # poisoned frame fails. Only the start side is checked -- prefetch windows
+        # deliberately run a month past the last available bar, so requiring max_date >=
+        # end would refetch on every call. A legacy entry that fails this is refetched
+        # once and comes back flagged, so the check self-heals.
+        if not bool(ent.get("full_history", False)):
+            min_date = ent.get("min_date")
+            if not isinstance(min_date, datetime.date) or min_date > start:
+                return False
         fetched_date = datetime.datetime.fromtimestamp(fetched_at, tz=_NY_TZ).date()
+
+        if ent.get("no_data"):
+            # A recorded miss: on `fetched_date` the vendor had nothing for this symbol
+            # across all of history. That answers any window whose data could only have
+            # appeared on or before that attempt - i.e. up to min(end, today), since a
+            # window running into the future can at best be satisfied through today.
+            # Re-checked once per day, so a strike that starts printing is picked up on
+            # the next session rather than on every call.
+            horizon = min(end, datetime.date.today())
+            return fetched_date >= horizon
+
         # Window ends strictly before the day we fetched -> historical & immutable: the
         # full-history snapshot we stored already contains everything this window can have.
         if end < fetched_date:
@@ -5039,12 +5273,24 @@ class STIRFutureOptionMDP(MarketDataProvider[InstrumentLike], LayeredCacheMixin)
 
         result: Dict[str, pd.DataFrame] = {}
         to_fetch: List[str] = []
+        skipped_no_data = 0
         for n in norm:
             ent = None if force_refresh else self._raw_eod_cache_get(n)
             if ent is not None and self._raw_eod_cache_covers(ent, start, end):
+                if ent.get("no_data"):
+                    # A recorded miss. Leave it out of `result` entirely so downstream
+                    # sees exactly what it saw before: absent, not an empty frame.
+                    skipped_no_data += 1
+                    continue
                 result[n] = self._slice_eod_frame(ent.get("frame"), start, end)
             else:
                 to_fetch.append(n)
+
+        if skipped_no_data:
+            logging.getLogger(self.__class__.__name__).debug(
+                "raw EOD: skipped %d symbol(s) already known to have no vendor data "
+                "for %s..%s", skipped_no_data, start, end,
+            )
 
         if to_fetch:
             # Fetch full history once (wide window -> client-side filter keeps it all), cache
@@ -5054,15 +5300,32 @@ class STIRFutureOptionMDP(MarketDataProvider[InstrumentLike], LayeredCacheMixin)
             wide_end = datetime.datetime(today.year + 1, 12, 31, 23, 59)
             fetched_full = self._run_eod_fetch(to_fetch, wide_start, wide_end, show_tqdm, mc, mk, mr)
             now = time.time()
+
+            # Distinguish "the vendor has nothing for this symbol" from "the fetch
+            # failed". A batch that returns nothing at all is the signature of an
+            # outage, a proxy failure or a rate-limit wall - recording misses from
+            # that would bake a transient failure into the cache, which is the exact
+            # hazard the empty-result guards elsewhere exist to prevent. Only record
+            # misses when at least one symbol in the batch did come back.
+            batch_produced_data = any(
+                frame is not None and not frame.empty for frame in fetched_full.values()
+            )
+
             for n in to_fetch:
-                # Mirror the raw passthrough: only surface symbols the fetch returned
-                # (downstream uses dict.get(), so absent == None either way).
-                if n not in fetched_full:
-                    continue
                 frame = fetched_full.get(n)
-                if frame is not None:
-                    self._raw_eod_cache_put(n, frame, now)
-                result[n] = self._slice_eod_frame(frame, start, end)
+                if frame is not None and not frame.empty:
+                    self._raw_eod_cache_put(n, frame, now, full_history=True)
+                    result[n] = self._slice_eod_frame(frame, start, end)
+                    continue
+
+                # No usable data for this symbol on this attempt.
+                if batch_produced_data:
+                    self._raw_eod_cache_put(n, None, now, full_history=True, no_data=True)
+                if n in fetched_full:
+                    # Mirror the previous passthrough exactly: a symbol the fetch
+                    # returned (even as None/empty) still surfaces; one it omitted stays
+                    # absent, since downstream uses dict.get() either way.
+                    result[n] = self._slice_eod_frame(frame, start, end)
 
         return result
 
@@ -5199,7 +5462,9 @@ class STIRFutureOptionMDP(MarketDataProvider[InstrumentLike], LayeredCacheMixin)
         if not force_refresh:
             cached = self._threadsafe_cache_get(cache_key)
             hit = self._deserialize_pricer_window(cached)
-            if hit is not None:
+            # `if hit` rather than `is not None`: an empty entry left behind by an older
+            # build (or a failed fetch) must not short-circuit the refetch.
+            if hit:
                 return hit
 
         option_symbols_bc = sorted({_canonical_to_barchart_option(sym) for sym in leg_symbols})
@@ -5224,20 +5489,34 @@ class STIRFutureOptionMDP(MarketDataProvider[InstrumentLike], LayeredCacheMixin)
             use_ql_calculator=use_ql_calculator,
             source=source,
         )
-        self._threadsafe_cache_put(cache_key, self._serialize_pricer_window(built))
+        # Never persist an empty window.  An empty payload deserializes to {} (not None),
+        # so caching one turns a transient Barchart outage into a permanent "no data"
+        # answer that only force_refresh can clear.
+        if built:
+            self._threadsafe_cache_put(cache_key, self._serialize_pricer_window(built))
         return built
 
     @staticmethod
     def _asof_pricer_for_date(
         by_day: Dict[datetime.date, QLSTIRFutureOptionPricer],
         target_date: datetime.date,
+        max_staleness_days: Optional[int] = None,
     ) -> Optional[QLSTIRFutureOptionPricer]:
+        """Latest pricer on or before ``target_date``.
+
+        EOD windows are prefetched +/- a calendar month around the request, so an
+        unbounded lookback happily returns a quote from weeks earlier.  Pass
+        ``max_staleness_days`` to reject anything older than that.
+        """
         if not by_day:
             return None
         keys = [d for d in by_day.keys() if d <= target_date]
         if not keys:
             return None
-        return by_day[max(keys)]
+        best = max(keys)
+        if max_staleness_days is not None and (target_date - best).days > int(max_staleness_days):
+            return None
+        return by_day[best]
 
     def _fetch_schwab_quotes(self, *, symbols: Sequence[str]) -> Dict[str, Dict[str, Any]]:
         req_symbols = self._dedupe_preserve_order([str(sym).strip() for sym in symbols if str(sym).strip()])
@@ -5584,7 +5863,7 @@ class STIRFutureOptionMDP(MarketDataProvider[InstrumentLike], LayeredCacheMixin)
 
         strike = _strike_from_symbol(canonical_symbol)
         contract_code = _contract_code_from_symbol(canonical_symbol)
-        expiry = _contract_expiry_date(contract_code)
+        expiry = _sofr_option_expiry_date(_canonical_contract(canonical_symbol), contract_code)
         tte = _time_to_expiry(valuation_ts.astimezone(_NY_TZ).date(), expiry)
 
         market_price = _extract_row_price(row, price_mode=price_mode)
@@ -6579,8 +6858,16 @@ class STIRFutureOptionMDP(MarketDataProvider[InstrumentLike], LayeredCacheMixin)
                         sabr_resolved_raws.append(raw)
                 for raw in sabr_resolved_raws:
                     del delta_specs[raw]
-                if not force_refresh:
-                    delta_specs.clear()
+                # Anything the SABR cache could not resolve must fall through to the full
+                # candidate-strike build below. Clearing the remainder on a non-forced
+                # request turned a cache MISS into a silent empty result: the aliases were
+                # dropped, no candidate strikes were generated, the pricer window was
+                # never built, and option_snapshot returned {} - which surfaced far away
+                # as "Missing SABR smile legs for <date>: [...]. Available quote dates:
+                # none." for any contract/date without a warm SABR smile. Worse, it was
+                # self-perpetuating: the smile that would populate that cache is built
+                # from this very snapshot, so a cold contract could never recover without
+                # force_refresh=True.
 
             delta_meta: "OrderedDict[str, Dict[str, Any]]" = OrderedDict()
             delta_candidate_symbols: "OrderedDict[str, List[str]]" = OrderedDict()
@@ -7203,7 +7490,7 @@ class STIRFutureOptionMDP(MarketDataProvider[InstrumentLike], LayeredCacheMixin)
                         code2 = m_code.group("code") if m_code else ""
                     if not code2:
                         continue
-                    expiry = _contract_expiry_date(code2)
+                    expiry = _sofr_option_expiry_date(globex_symbol, code2)
                 tte = _time_to_expiry(quote_day, expiry)
                 discount, curve_error = self._discount_factor(
                     valuation_ts=quote_dt,
@@ -7547,6 +7834,34 @@ class STIRFutureOptionMDP(MarketDataProvider[InstrumentLike], LayeredCacheMixin)
             raise ValueError("sabr_smile returned no calibrated smile.")
         return self._normalize_stir_sabr_smile_convention(smiles[0])
 
+    @staticmethod
+    def _is_empty_get_data_result(out: Any) -> bool:
+        """True when a get_data payload carries no actual data.
+
+        Checking the container alone is not enough. ``option_snapshot`` returns
+        ``{symbol: [pricer, ...]}``, so a failed build produces ``{sym: [], ...}`` - a
+        dict that is perfectly truthy and twenty keys wide while containing nothing. That
+        is the shape that got cached and then replayed forever, surfacing as
+        "Missing SABR smile legs ... Available quote dates: none" on every later call.
+        """
+        if out is None:
+            return True
+        try:
+            if len(out) == 0:
+                return True
+        except TypeError:
+            return False
+        if isinstance(out, dict):
+            for value in out.values():
+                try:
+                    if len(value) > 0:
+                        return False
+                except TypeError:
+                    # Not sized (a scalar, an object) - treat as real content.
+                    return False
+            return True
+        return False
+
     def get_pricer(self, request: Dict[str, Any]):
         return self.get_data(request)
 
@@ -7562,7 +7877,10 @@ class STIRFutureOptionMDP(MarketDataProvider[InstrumentLike], LayeredCacheMixin)
             if cache_key and not force_refresh:
                 cached = self._threadsafe_cache_get(cache_key)
                 hit = self._deserialize_get_data_result(cached)
-                if hit is not None:
+                # A content-level emptiness test, not just `if hit`: an entry written
+                # before the guard below existed - or one shaped {symbol: []} - must not
+                # keep short-circuiting the rebuild.
+                if hit is not None and not self._is_empty_get_data_result(hit):
                     return hit
 
             if endpoint == "option_snapshot":
@@ -7579,7 +7897,11 @@ class STIRFutureOptionMDP(MarketDataProvider[InstrumentLike], LayeredCacheMixin)
             else:
                 raise NotImplementedError(f"Unsupported endpoint: {endpoint}")
 
-            if cache_key:
+            # Never persist an empty result. An empty payload is indistinguishable from a
+            # legitimate answer on read, so caching one turns a single transient failure -
+            # a Barchart hiccup, a curve build that did not come up, a poisoned upstream
+            # cache entry - into a permanent "no data" that only force_refresh can clear.
+            if cache_key and not self._is_empty_get_data_result(out):
                 self._threadsafe_cache_put(cache_key, self._serialize_get_data_result(endpoint, out))
             if endpoint == "sabr_smile" and common_key and (force_refresh or self._threadsafe_cache_get(common_key) is None):
                 self._store_sabr_smile_common_cache(common_key=common_key, smile=smile)

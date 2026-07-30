@@ -20,6 +20,11 @@ class RNDInput:
     strikes_price: np.ndarray
     call_premiums: np.ndarray
     strike_source: str
+    warnings: Tuple[str, ...] = ()
+    """Diagnostics raised while assembling the inputs (filtering attrition, a fallback
+    that changed method, a one-sided strike set). Extractors seed their own ``warnings``
+    from this so the caller sees them via ``ImpliedDistributionSnapshot.all_warnings()``
+    rather than only as a transient ``warnings.warn`` that fires once per process."""
 
     def __repr__(self) -> str:
         return (
@@ -52,10 +57,44 @@ class BreedenLitzenbergerResult:
     n_ghost_points: int
     spline_residual: float
     warnings: Tuple[str, ...] = ()
+    # Diagnostics. Defaults keep positional/partial construction working for callers
+    # (and tests) written before these existed.
+    pre_normalization_mass: float = float("nan")
+    """``integral d2C/dK2 / DF`` over the fitted grid, *before* the unit-mass rescale.
+
+    Legitimately below 1 for a truncated smile (it equals ``P(Kmin < S_T < Kmax)``), but a
+    value above 1 means the post-clip density carries more than unit mass, which can only
+    come from butterfly arbitrage in the fitted call curve.
+    """
+    forward_residual_bp: float = float("nan")
+    """``mean_rate - input.forward_rate`` in bp. Must be ~0: under Q the SR3 future is a
+    martingale, so the mean of the recovered density has to reproduce ``100 - F``."""
+    ghost_mass_fraction: float = float("nan")
+    """Fraction of the density lying outside the observed strike range, i.e. supported
+    entirely by the synthetic ghost wings. ``std_rate``/``skewness``/``kurtosis`` and the
+    extreme percentiles are extrapolation artefacts to the extent this is large."""
 
     def percentile(self, p: float) -> float:
-        """Return the rate at the p-th percentile (0-100), linearly interpolated."""
-        return float(np.interp(p / 100.0, self.rnd_cumulative, self.strike_grid_rate))
+        """Return the rate at the p-th percentile (0-100), linearly interpolated.
+
+        The zero-clip in the extractor leaves flat stretches in the CDF where the density
+        is exactly zero. Interpolating naively over tied abscissae is undefined, so each
+        flat run collapses to its lower edge - ``Q(p) = inf{x : F(x) >= p}`` - which makes
+        the result monotone in ``p`` and pins ``percentile(0)`` to the first grid point.
+        On a strictly increasing CDF this is identical to plain interpolation.
+        """
+        cdf = np.asarray(self.rnd_cumulative, dtype=float)
+        grid = np.asarray(self.strike_grid_rate, dtype=float)
+        if cdf.size == 0 or grid.size == 0:
+            return float("nan")
+        if cdf.size == 1:
+            return float(grid[0])
+        keep = np.ones(cdf.size, dtype=bool)
+        keep[1:] = np.diff(cdf) > 0.0
+        xs, ys = cdf[keep], grid[keep]
+        if xs.size < 2:
+            return float(ys[0])
+        return float(np.interp(p / 100.0, xs, ys))
 
 
 @dataclass(frozen=True)
@@ -77,12 +116,29 @@ class BKMResult:
     mu2_price: float
     mu3_price: float
     mu4_price: float
-    # Tail diagnostics
+    # Tail diagnostics. NOTE: these are PRICE-space wings, unlike skewness_rate above,
+    # which is mirrored into rate space. The put wing (K <= F) is the low-price wing,
+    # and low price == HIGH rate, so `left_tail_variance_frac` describes the hawkish
+    # side of the rate distribution. Use the aliases below in rate space.
     left_tail_variance_frac: float
+    """Share of variance from the put wing, K <= F. In rate space this is the
+    HIGH-rate (hawkish) tail. See :attr:`hawkish_tail_variance_frac`."""
     right_tail_variance_frac: float
+    """Share of variance from the call wing, K >= F. In rate space this is the
+    LOW-rate (dovish) tail. See :attr:`dovish_tail_variance_frac`."""
     n_otm_calls: int
     n_otm_puts: int
     warnings: Tuple[str, ...] = ()
+
+    @property
+    def hawkish_tail_variance_frac(self) -> float:
+        """Share of variance in the high-rate tail (price-space put wing)."""
+        return self.left_tail_variance_frac
+
+    @property
+    def dovish_tail_variance_frac(self) -> float:
+        """Share of variance in the low-rate tail (price-space call wing)."""
+        return self.right_tail_variance_frac
 
     @property
     def mean_rate(self) -> float:
@@ -469,8 +525,12 @@ class FedScenarioConfig:
     ----------
     scenarios : list of ScenarioDefinition
         The scenario definitions (mean rates and optional fixed std devs).
-    bin_width_bps : float
-        Width of rate bins for BL scenario probabilities.
+    bin_width_bps : float, optional
+        Width of rate bins for BL scenario probabilities. ``None`` (the default) defers
+        to ``SFRImpliedDistribution.bin_width_bps``. This field was previously read
+        nowhere at all, so setting it was a silent no-op; it is honoured now, and
+        defaulting it to ``None`` keeps the constructor kwarg authoritative unless the
+        config explicitly overrides it.
     scenarios_only : bool
         When True, the distribution is represented solely by the GM scenario
         weights (which sum to 1.0).  BL extraction is skipped, eliminating
@@ -478,7 +538,7 @@ class FedScenarioConfig:
     """
 
     scenarios: List[ScenarioDefinition]
-    bin_width_bps: float = 25.0
+    bin_width_bps: Optional[float] = None
     scenarios_only: bool = False
 
     @staticmethod

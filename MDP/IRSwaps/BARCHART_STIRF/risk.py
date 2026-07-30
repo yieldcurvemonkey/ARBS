@@ -65,9 +65,7 @@ def build_delta_risk_ladder(
                 eff, mat = skw["effective_date"], skw["maturity_date"]
                 stirf_on_dense = curve_handle.build_stirf(effective_date=eff, maturity_date=mat)
                 risk_rates.append(stirf_on_dense.rate(curves=_dense_curve).real)
-                eff_dt = rl.dt(eff.year, eff.month, eff.day)
                 mat_dt = rl.dt(mat.year, mat.month, mat.day)
-                _risk_pillar_nodes[eff_dt] = float(_dense_curve[eff_dt])
                 _risk_pillar_nodes[mat_dt] = float(_dense_curve[mat_dt])
                 label = f"STIRF {eff}x{mat}"
                 instrument_labels.append(label)
@@ -78,9 +76,7 @@ def build_delta_risk_ladder(
 
             for pricer_label, p in pricers.items():
                 risk_rates.append(float(p._rate))
-                eff_dt = rl.dt(p._effective_date.year, p._effective_date.month, p._effective_date.day)
                 mat_dt = rl.dt(p._maturity_date.year, p._maturity_date.month, p._maturity_date.day)
-                _risk_pillar_nodes[eff_dt] = float(_dense_curve[eff_dt])
                 _risk_pillar_nodes[mat_dt] = float(_dense_curve[mat_dt])
                 instrument_labels.append(p.bbg_id())
                 _builders.append(("STIRF_PRICER", p))
@@ -166,9 +162,7 @@ def build_basis_risk_ladder(
     stir_rates, stir_labels = [], []
 
     for p in ser_list:
-        eff_dt = rl.dt(p._effective_date.year, p._effective_date.month, p._effective_date.day)
         mat_dt = rl.dt(p._maturity_date.year, p._maturity_date.month, p._maturity_date.day)
-        stir_nodes[eff_dt] = float(_dense_curve[eff_dt])
         stir_nodes[mat_dt] = float(_dense_curve[mat_dt])
         stir_rates.append(float(p._rate))
         stir_labels.append(p.bbg_id())

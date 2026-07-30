@@ -236,7 +236,12 @@ def test_sabr_smile_offset_request_normalization_uses_absolute_unique_bps():
     }
 
 
-def test_sabr_smile_listed_auto_full_ladder_caps_to_250bps():
+def test_sabr_smile_listed_auto_full_ladder_spans_the_listed_range():
+    """CME Rulebook 460A01.E.1 lists 25-point exercise prices from 5.50 IMM Index points
+    above to 5.50 below the at-the-money strike (12.5/6.25-point listings cover +/-1.50
+    under E.2/E.3). "listed" must mean the listed chain: this used to stop at 250bp,
+    truncating the wings the density tails are built from, while the jpm_method path
+    already used the full grid."""
     mdp = STIRFutureOptionMDP(source="STIRFO_DUAL-QL")
 
     legs = mdp._build_sabr_smile_offset_leg_specs(
@@ -247,9 +252,12 @@ def test_sabr_smile_listed_auto_full_ladder_caps_to_250bps():
         auto_full_ladder=True,
     )
 
-    assert len(legs) == 58
+    assert len(legs) == 82
     abs_offsets = sorted({round(abs(float(leg["requested_atm_offset_bps"])), 8) for leg in legs})
-    assert abs_offsets[-1] == pytest.approx(250.0)
+    assert abs_offsets[-1] == pytest.approx(550.0)
+    # fine lattice inside +/-1.50, coarse 25-point lattice beyond it
+    assert 12.5 in abs_offsets
+    assert 275.0 in abs_offsets
     assert 225.0 in abs_offsets
     assert 250.0 in abs_offsets
 

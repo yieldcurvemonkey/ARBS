@@ -113,7 +113,8 @@ class IRSwapStructureFunctionMap(BaseStructureFunctionMap[IRSwapStructure, _IRSw
             imm_date, mat_date = tenor.split("x")
             ref_date = current_curve.reference_date()
             effective_date = self._to_dt(imm_date, ref_date)
-            maturity_date = self._to_dt(mat_date, ref_date)
+            mat_ref = ref_date if mat_date.upper().startswith("IMM_") else effective_date
+            maturity_date = self._to_dt(mat_date, mat_ref)
             fwd, tenor = None, None
         else:
             if isinstance(tenor, str):
@@ -326,6 +327,8 @@ class IRSwapStructureFunctionMap(BaseStructureFunctionMap[IRSwapStructure, _IRSw
         try:
 
             def _normalize_leg(s: str) -> str:
+                if s.upper().startswith("IMM_"):
+                    return s
                 # grab tenor tokens like 3M, 6m, 1Y, 2y (case-insensitive)
                 parts = re.findall(r"\d+\s*[dwmy]", s, flags=re.I)
                 parts = [p.upper().replace(" ", "") for p in parts]

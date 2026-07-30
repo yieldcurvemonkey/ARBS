@@ -54,6 +54,12 @@ LEG_COLUMNS: tuple[str, ...] = (
     "execution_timestamp",
     "original_execution_timestamp",
     "clearing_accepted_timestamp",
+    "event_timestamp",
+    "report_lag_seconds",
+    "alpha_lag_seconds",
+    "original_execution_source",
+    "event_timestamp_granularity",
+    "report_lag_invariant_violation",
     "execution_session",
     "execution_hour_et",
     "tenor_years",
@@ -198,6 +204,11 @@ PACKAGE_COLUMNS: tuple[str, ...] = (
     "execution_end",
     "original_execution_start",
     "clearing_accepted_start",
+    "event_start",
+    "event_end",
+    "max_report_lag_seconds",
+    "median_report_lag_seconds",
+    "late_report",
     "package_structure",
     "package_type",
     "package_indicator",
@@ -543,6 +554,11 @@ _LATEST_MIGRATION_COLS = [
     ("arbs_usd_swap_tape_legs_v2", "matched_ust_maturity"),
     # MMS bond-reference migration marker (CUSIP details in expanded row)
     ("arbs_usd_swap_tape_legs_v2", "ust_coupon"),
+    # Execution-vs-event timestamp integration (2026-07-17) migration markers.
+    # Without these, _schema_already_current() would skip the new ADD COLUMNs
+    # on a DB that only has the MMS markers.
+    ("arbs_usd_swap_tape_legs_v2", "event_timestamp"),
+    ("arbs_usd_swap_tape_packages_v2", "event_start"),
 ]
 
 
@@ -869,6 +885,7 @@ _LEG_TEXT_COLS: tuple[str, ...] = (
 )
 _LEG_TS_COLS: tuple[str, ...] = (
     "execution_timestamp",
+    "event_timestamp",
     "effective_date",
     "expiration_date",
 )
@@ -1005,6 +1022,21 @@ def build_leg_rows(tape: pd.DataFrame, *, as_of_date: str) -> list[dict]:
         )
         rec["clearing_accepted_timestamp"] = _to_db_value(
             rec.get("clearing_accepted_timestamp")
+        )
+        # Execution-vs-event timestamp integration (2026-07-17 spec).
+        rec["event_timestamp"] = _to_db_value(rec.get("event_timestamp"))
+        rec["report_lag_seconds"] = _num_or_none(rec.get("report_lag_seconds"))
+        rec["alpha_lag_seconds"] = _num_or_none(rec.get("alpha_lag_seconds"))
+        rec["original_execution_source"] = _str_or_none(
+            rec.get("original_execution_source")
+        )
+        # Forward-compat EMIR guard: the CFTC/DTCC feed is second-precision;
+        # default to 'second' when an event timestamp is present.
+        rec["event_timestamp_granularity"] = _str_or_none(
+            rec.get("event_timestamp_granularity")
+        ) or ("second" if rec.get("event_timestamp") is not None else None)
+        rec["report_lag_invariant_violation"] = _bool_or_none(
+            rec.get("report_lag_invariant_violation")
         )
         rec["effective_date"] = _to_db_value(rec.get("effective_date"))
         rec["expiration_date"] = _to_db_value(rec.get("expiration_date"))
@@ -1336,6 +1368,22 @@ def build_package_rows(tape: pd.DataFrame, *, as_of_date: str) -> list[dict]:
         execution_start = g["execution_timestamp"].min()
         execution_end = g["execution_timestamp"].max()
 
+        # Execution-vs-event timestamp rollups (2026-07-17 spec).
+        from SDRUtils.config import LATE_REPORT_THRESHOLD_SECONDS
+        _event_ts = g.get("event_timestamp")
+        event_start = _event_ts.min() if _event_ts is not None else None
+        event_end = _event_ts.max() if _event_ts is not None else None
+        _report_lag = pd.to_numeric(
+            g.get("report_lag_seconds", pd.Series(dtype=float)), errors="coerce"
+        )
+        _has_lag = bool(_report_lag.notna().any())
+        max_report_lag = float(_report_lag.max()) if _has_lag else None
+        median_report_lag = float(_report_lag.median()) if _has_lag else None
+        late_report = bool(
+            max_report_lag is not None
+            and max_report_lag > LATE_REPORT_THRESHOLD_SECONDS
+        )
+
         weighted_fixed_rate = None
         denom = float(abs_notional.sum(skipna=True)) if abs_notional.notna().any() else 0.0
         if denom > 0:
@@ -1390,6 +1438,11 @@ def build_package_rows(tape: pd.DataFrame, *, as_of_date: str) -> list[dict]:
                 g["clearing_accepted_timestamp"].min(skipna=True)
                 if "clearing_accepted_timestamp" in g.columns else None
             ),
+            "event_start": _to_db_value(event_start),
+            "event_end": _to_db_value(event_end),
+            "max_report_lag_seconds": max_report_lag,
+            "median_report_lag_seconds": median_report_lag,
+            "late_report": late_report,
             "package_structure": _package_structure_label(g),
             "package_type": package_type,
             "package_indicator": _any("package_indicator"),

@@ -7,6 +7,7 @@ import type { UsdSwapTapeRow } from '../../types'
 import {
   formatDv01,
   formatExecutionWindow,
+  formatTimestampDelta,
   formatNotional,
   formatRate,
 } from '../../utils/format'
@@ -218,6 +219,18 @@ function TradeCard({
         <span className="shrink-0 font-mono text-xs text-slate-300">
           {formatExecutionWindow(row.execution_start, row.execution_end)}
         </span>
+        {row.event_start ? (
+          <span
+            className={`shrink-0 rounded px-1 font-mono text-[10px] ${
+              row.late_report
+                ? 'bg-amber-900/60 text-amber-300'
+                : 'bg-slate-700/60 text-sky-300'
+            }`}
+            title={`Event ${formatExecutionWindow(row.event_start, row.event_end)} · report lag (Event − Execution) ${formatTimestampDelta(row.execution_start, row.event_start)}`}
+          >
+            {formatTimestampDelta(row.execution_start, row.event_start)}
+          </span>
+        ) : null}
         <span className="inline-flex shrink-0 items-center gap-1 font-mono text-xs">
           <span
             className="inline-block h-1.5 w-1.5 rounded-full"

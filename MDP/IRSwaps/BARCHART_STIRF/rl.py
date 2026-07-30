@@ -107,6 +107,23 @@ def _as_node_ts(d: datetime.date, *, base_ts: pd.Timestamp) -> pd.Timestamp:
     return rl.dt(dt.year, dt.month, dt.day)
 
 
+def _roll_to_prev_business_day(d: datetime.date, *, calendar: str) -> datetime.date:
+    """Roll a date back to the last business day on or before it.
+
+    The curve's first node is its RFR valuation anchor. rateslib needs continuous fixing
+    coverage from the last realized SOFR fixing into the curve; a weekend/holiday anchor
+    sits *after* the last fixing, so the front SR1 future fails with "Curve begins after
+    the start of a FloatPeriod". Rolling the anchor back to the last business day restores
+    continuity. Business-day timestamps are returned unchanged.
+    """
+    try:
+        cal = rl.get_calendar(calendar)
+        rolled = cal.roll(rl.dt(d.year, d.month, d.day), modifier="P", settlement=False)
+        return datetime.date(rolled.year, rolled.month, rolled.day)
+    except Exception:
+        return d
+
+
 def _cm_instruments(prefix: str, count: int = 12) -> List[str]:
     return [f"{prefix}CM{i}" for i in range(1, count + 1)]
 
@@ -157,8 +174,15 @@ def _build_stirf_nodes(
     # de-dupe + sort
     node_dates = sorted(set(node_dates))
 
+    # Anchor the first node (the curve's RFR valuation date) to the last business day on
+    # or before the snapshot date. Weekend/holiday snapshots would otherwise anchor after
+    # the last SOFR fixing and fail to price the front SR1 future. All other node dates are
+    # strictly after base_date, so the rolled anchor stays the unique earliest node.
+    cal_name = RATESLIB_CURVE_DEFINITIONS.get(reference_key, {}).get("Calendar")
+    anchor_date = _roll_to_prev_business_day(base_date, calendar=cal_name) if cal_name else base_date
+
     # build nodes dict (values are placeholders / initial guesses)
-    nodes: Dict[pd.Timestamp, float] = {_as_node_ts(base_date, base_ts=base_ts): 1.0}
+    nodes: Dict[pd.Timestamp, float] = {_as_node_ts(anchor_date, base_ts=base_ts): 1.0}
     for d in node_dates:
         key = _as_node_ts(d, base_ts=base_ts)
         nodes[key] = initial_nodes.get(key, 1.0) if initial_nodes else 1.0
@@ -497,6 +521,34 @@ def _process_curve_calibration_job(
             solver_tolerances=solver_tolerances,
         )
     return timestamp, curve_obj
+
+
+def _process_calibrate_chunk(
+    chunk: List[Tuple[datetime.datetime, Dict[str, List["RLSTIRFuturePricer"]]]],
+    curve_name: str,
+    cfg: Dict[str, Any],
+    solver_tolerances: Optional[Dict[str, float]] = None,
+    initial_nodes: Optional[Dict] = None,
+) -> Dict[datetime.datetime, rl.Curve]:
+    """Calibrate a chronological chunk with warm-starting in a child process."""
+    results: Dict[datetime.datetime, rl.Curve] = {}
+    prior_nodes = initial_nodes
+    for ts, ts_pricers in chunk:
+        try:
+            with _suppress_solver_output():
+                curve_obj, _ = _build_curve_from_pricers_core(
+                    curve_name=curve_name,
+                    timestamp=ts,
+                    cfg=cfg,
+                    pricers=ts_pricers,
+                    initial_nodes=prior_nodes,
+                    solver_tolerances=solver_tolerances,
+                )
+            prior_nodes = _extract_nodes(curve_obj)
+            results[ts] = curve_obj
+        except Exception:
+            pass
+    return results
 
 
 def _extract_nodes(curve: rl.Curve) -> Dict[pd.Timestamp, float]:
@@ -1744,7 +1796,10 @@ class BARCHART_STIRF_CURVE(LayeredCacheMixin):
         """Persist a single curve to the local diskcache only, bypassing L2 writes."""
         key = self._curve_cache_key(curve_name, timestamp, cfg)
         mapping = self._curve_cache_mapping()
-        l1_mapping = mapping.raw if hasattr(mapping, "raw") else mapping
+        try:
+            l1_mapping = mapping.raw
+        except (AttributeError, AssertionError):
+            l1_mapping = mapping
         ts_utc = timestamp.astimezone(pytz.utc).replace(microsecond=0)
         l1_mapping[key] = {
             "schema": self._CURVE_CACHE_SCHEMA,
@@ -1800,7 +1855,10 @@ class BARCHART_STIRF_CURVE(LayeredCacheMixin):
 
         # Phase 2: L1 diskcache reads (bypass L2 per-key to avoid N round-trips).
         mapping = self._curve_cache_mapping()
-        l1_raw = mapping.raw if hasattr(mapping, "raw") else mapping
+        try:
+            l1_raw = mapping.raw
+        except (AttributeError, AssertionError):
+            l1_raw = mapping
         l2_needed: List[Tuple[str, datetime.datetime]] = []
 
         def _read_l1(item: Tuple[str, datetime.datetime]) -> Tuple[str, datetime.datetime, Any]:
@@ -1845,7 +1903,12 @@ class BARCHART_STIRF_CURVE(LayeredCacheMixin):
 
         # Phase 3: batched L2 (Supabase) read for all L1 misses.
         misses: List[datetime.datetime] = []
-        if hasattr(mapping, "bulk_get"):
+        _has_bulk_get = False
+        try:
+            _has_bulk_get = hasattr(mapping, "bulk_get")
+        except (AssertionError, Exception):
+            pass
+        if _has_bulk_get:
             l2_keys = [key for key, _ in l2_needed]
             ts_by_key = {key: ts for key, ts in l2_needed}
             l2_hits, l2_miss_keys = mapping.bulk_get(l2_keys)
@@ -1897,7 +1960,10 @@ class BARCHART_STIRF_CURVE(LayeredCacheMixin):
         """Store node values for an entire day into a single local bundle entry."""
         key = self._curve_cache_daily_bundle_key(curve_name, date, cfg)
         mapping = self._curve_cache_daily_bundle_mapping()
-        l1_mapping = mapping.raw if hasattr(mapping, "raw") else mapping
+        try:
+            l1_mapping = mapping.raw
+        except (AttributeError, AssertionError):
+            l1_mapping = mapping
 
         # Extract nodes from all curves. Nodes keys are pd.Timestamp (dt) or rl.dt.
         # We store them as a nested dict: {ts_iso: {node_ts_iso: value}}
@@ -2109,10 +2175,14 @@ class BARCHART_STIRF_CURVE(LayeredCacheMixin):
         for ts, curve_obj in fresh_curves.items():
             fresh_curves_by_day.setdefault(self._trading_date_for_timestamp(ts), {})[ts] = curve_obj
 
+        persist_failures = 0
         for dt, day_curves in curves_to_store_by_day.items():
+            persist_ok = True
             try:
                 self._curve_store_write_day(curve_name, dt, cfg, day_curves)
             except Exception:
+                persist_ok = False
+                persist_failures += 1
                 logging.getLogger(__name__).exception(
                     "BARCHART STIRF CurveStore write failed for %s/%s (%s curves)",
                     curve_name,
@@ -2121,14 +2191,24 @@ class BARCHART_STIRF_CURVE(LayeredCacheMixin):
                 )
 
             if len(day_curves) > 10:
-                try:
-                    self._curve_cache_daily_bundle_put(curve_name, dt, cfg, day_curves)
-                except Exception:
-                    pass
+                if persist_ok:
+                    try:
+                        self._curve_cache_daily_bundle_put(curve_name, dt, cfg, day_curves)
+                    except Exception:
+                        pass
                 continue
 
-            for ts, curve_obj in fresh_curves_by_day.get(dt, {}).items():
-                self._curve_cache_put_local(curve_name, ts, cfg, curve_obj)
+            if persist_ok:
+                for ts, curve_obj in fresh_curves_by_day.get(dt, {}).items():
+                    self._curve_cache_put_local(curve_name, ts, cfg, curve_obj)
+
+        if persist_failures:
+            logging.getLogger(__name__).warning(
+                "BARCHART STIRF CurveStore persist completed with %s/%s day(s) failed for %s",
+                persist_failures,
+                len(curves_to_store_by_day),
+                curve_name,
+            )
 
     @staticmethod
     def _pricer_symbol(pricer: "RLSTIRFuturePricer") -> str:
@@ -2743,6 +2823,34 @@ class BARCHART_STIRF_CURVE(LayeredCacheMixin):
                 pending_timestamps = list(unique_timestamps)
 
             if not pending_timestamps:
+                # All timestamps resolved from cache.  Verify the CurveStore
+                # actually has the data on disk — a prior run may have cached
+                # successfully but failed to persist (poison-cache scenario).
+                from Caching.curve_store import CurveStore
+                store = CurveStore.default()
+                unpersisted_dates = [
+                    d for d in by_date
+                    if not store.has_day(curve_name, d)
+                ]
+                if unpersisted_dates:
+                    logging.getLogger(__name__).warning(
+                        "BARCHART STIRF CurveStore missing %s day(s) on disk for %s despite cache hit: %s — re-persisting from cache",
+                        len(unpersisted_dates),
+                        curve_name,
+                        [d.isoformat() for d in sorted(unpersisted_dates)],
+                    )
+                    unpersisted_set = set(unpersisted_dates)
+                    unpersisted_out = {
+                        ts: val for ts, val in out.items()
+                        if self._trading_date_for_timestamp(ts) in unpersisted_set
+                    }
+                    self._persist_bulk_curves(
+                        curve_name=curve_name,
+                        cfg=cfg,
+                        out=unpersisted_out,
+                        fresh_curves={},
+                        curve_only=curve_only,
+                    )
                 return out
 
             tqdm_mod = None
@@ -2850,7 +2958,7 @@ class BARCHART_STIRF_CURVE(LayeredCacheMixin):
 
             _emit_calibration_status(
                 curve_name=curve_name,
-                executor_mode="thread-warmstart",
+                executor_mode="process-warmstart" if calibration_executor == "process" else "thread-warmstart",
                 workers=cal_workers,
                 jobs=len(calibration_jobs),
                 show_tqdm=show_tqdm,
@@ -2858,7 +2966,9 @@ class BARCHART_STIRF_CURVE(LayeredCacheMixin):
             )
 
             if calibration_executor == "process":
-                # Process pool: no warm-start possible (kept as escape hatch).
+                # Process pool with chunked warm-start: split jobs into
+                # chronological chunks, each chunk runs a sequential warm-start
+                # chain in its own OS process for true GIL-free parallelism.
                 reduced_cfg = _reduced_calibration_cfg(cfg)
                 _validate_spawn_process_pool_environment()
                 pool_kwargs: Dict[str, Any] = {
@@ -2867,29 +2977,82 @@ class BARCHART_STIRF_CURVE(LayeredCacheMixin):
                 }
                 if max_tasks_per_child is not None:
                     pool_kwargs["max_tasks_per_child"] = int(max_tasks_per_child)
-                with ProcessPoolExecutor(**pool_kwargs) as pool:
-                    futures = {
-                        pool.submit(
-                            _process_curve_calibration_job,
-                            curve_name,
-                            ts,
-                            reduced_cfg,
-                            ts_pricers,
-                            None,  # no warm-start
-                            bulk_solver_tolerances,
-                        ): ts
-                        for ts, ts_pricers in calibration_jobs
-                    }
-                    completed = as_completed(futures)
-                    if tqdm_mod is not None:
-                        completed = tqdm_mod.tqdm(completed, total=len(futures), desc=f"CALIBRATING {curve_name}")
-                    for fut in completed:
-                        ts = futures[fut]
-                        _, curve_obj = fut.result()
-                        curve_obj = self._attach_curve_context(curve_obj, curve_name=curve_name, timestamp=ts, cfg=cfg)
-                        self._mem_cache_put(self._curve_cache_key(curve_name, ts, cfg), curve_obj)
-                        fresh_curves[ts] = curve_obj
-                        out[ts] = curve_obj if curve_only else (curve_obj, None)
+
+                _calib_logger = logging.getLogger(__name__)
+                sorted_jobs = sorted(calibration_jobs, key=lambda x: x[0])
+
+                # Calibrate seed curve in parent process (avoids serialization
+                # round-trip for the seed and gives children warm-start nodes).
+                seed_nodes: Optional[Dict] = None
+                first_ts = sorted_jobs[0][0]
+                seed_curve = self._CURVE_MEM_CACHE.get(
+                    self._curve_cache_key(curve_name, first_ts, cfg)
+                )
+                if seed_curve is None:
+                    for cached_key in reversed(list(self._CURVE_MEM_CACHE.keys())):
+                        if curve_name in str(cached_key):
+                            candidate = self._CURVE_MEM_CACHE.get(cached_key)
+                            if candidate is not None:
+                                seed_curve = candidate
+                                break
+                if seed_curve is not None:
+                    try:
+                        seed_nodes = _extract_nodes(seed_curve)
+                        _calib_logger.info(
+                            "Process pool: using cached curve as warm-start seed for %s (%s nodes)",
+                            curve_name, len(seed_nodes),
+                        )
+                    except Exception:
+                        seed_nodes = None
+
+                if seed_nodes is None and len(sorted_jobs) > 1:
+                    _calib_logger.info(
+                        "Process pool: cold-start seed calibration for %s at %s...",
+                        curve_name, sorted_jobs[0][0].isoformat(),
+                    )
+                    seed_result = self._calibrate_chunk(
+                        chunk=[sorted_jobs[0]],
+                        curve_name=curve_name,
+                        cfg=cfg,
+                        solver_tolerances=bulk_solver_tolerances,
+                        curve_only=True,
+                    )
+                    for ts, val in seed_result.items():
+                        fresh_curves[ts] = val
+                        out[ts] = val if curve_only else (val, None)
+                        seed_nodes = _extract_nodes(val)
+                    sorted_jobs = sorted_jobs[1:]
+
+                chunks = _split_chronological(sorted_jobs, cal_workers) if sorted_jobs else []
+                if chunks:
+                    with ProcessPoolExecutor(**pool_kwargs) as pool:
+                        futures = {
+                            pool.submit(
+                                _process_calibrate_chunk,
+                                chunk,
+                                curve_name,
+                                reduced_cfg,
+                                bulk_solver_tolerances,
+                                seed_nodes,
+                            ): idx
+                            for idx, chunk in enumerate(chunks)
+                        }
+                        completed = as_completed(futures)
+                        if tqdm_mod is not None:
+                            completed = tqdm_mod.tqdm(completed, total=len(futures), desc=f"CALIBRATING {curve_name}")
+                        chunks_done = 0
+                        for fut in completed:
+                            chunk_results = fut.result()
+                            chunks_done += 1
+                            for ts, curve_obj in chunk_results.items():
+                                curve_obj = self._attach_curve_context(curve_obj, curve_name=curve_name, timestamp=ts, cfg=cfg)
+                                self._mem_cache_put(self._curve_cache_key(curve_name, ts, cfg), curve_obj)
+                                fresh_curves[ts] = curve_obj
+                                out[ts] = curve_obj if curve_only else (curve_obj, None)
+                            _calib_logger.info(
+                                "Process pool calibration progress %s: chunks %s/%s, curves %s/%s",
+                                curve_name, chunks_done, len(futures), len(fresh_curves), len(calibration_jobs),
+                            )
             elif cal_workers == 1:
                 # Single worker: sequential warm-start chain.
                 chunk_results = self._calibrate_chunk(

@@ -258,7 +258,7 @@ BOOL_COLUMNS: tuple[str, ...] = (
     "matched_ust_maturity",
 )
 
-TIMESTAMP_COLUMNS: tuple[str, ...] = ("execution_timestamp",)
+TIMESTAMP_COLUMNS: tuple[str, ...] = ("execution_timestamp", "event_timestamp")
 DATE_COLUMNS: tuple[str, ...] = (
     "effective_date",
     "expiration_date",
@@ -299,6 +299,7 @@ LEG_UPSERT_UPDATE_COLUMNS: tuple[str, ...] = (
     "leg_order",
     "event_action",
     "execution_timestamp",
+    "event_timestamp",
     "effective_date",
     "expiration_date",
     "underlying_expiration_date",
@@ -448,6 +449,12 @@ ALTER TABLE {LEGS_TABLE}
     ADD COLUMN IF NOT EXISTS matched_ust_maturity BOOLEAN;
 ALTER TABLE {LEGS_TABLE}
     ADD COLUMN IF NOT EXISTS invoice_swap_ticker TEXT;
+-- Execution-vs-Event timestamp integration (2026-07-17): additively persist
+-- the CFTC Event timestamp (#30) at leg grain, alongside the real Execution
+-- timestamp (#96). Nullable / no default so the ADD COLUMN is a fast
+-- metadata-only change and re-runs stay idempotent.
+ALTER TABLE {LEGS_TABLE}
+    ADD COLUMN IF NOT EXISTS event_timestamp TIMESTAMPTZ;
 
 CREATE INDEX IF NOT EXISTS idx_swaption_packages_type_date ON {PACKAGES_TABLE}(package_type, as_of_date);
 CREATE INDEX IF NOT EXISTS idx_swaption_packages_exec ON {PACKAGES_TABLE}(execution_start);
@@ -987,6 +994,7 @@ def build_legs_dataframe(df: pd.DataFrame) -> pd.DataFrame:
                 "leg_order": idx,
                 "event_action": row.get("event_action"),
                 "execution_timestamp": row.get("execution_timestamp"),
+                "event_timestamp": row.get("event_timestamp"),
                 "effective_date": row.get("effective_date"),
                 "expiration_date": row.get("expiration_date"),
                 "underlying_expiration_date": row.get("underlying_expiration_date"),

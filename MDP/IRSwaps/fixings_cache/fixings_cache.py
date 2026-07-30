@@ -5,13 +5,32 @@ import os
 from zoneinfo import ZoneInfo
 
 import pandas as pd
-from pandas.tseries.holiday import USFederalHolidayCalendar
+from pandas.tseries.holiday import GoodFriday, USFederalHolidayCalendar
 from pandas.tseries.offsets import CustomBusinessDay
 
 from MDP.IRSwaps.CME_NY_EOD_LIVE.ql_basic.FixingsFetcher import FixingsFetcher
 
 
-_PUBLISH_CAL = USFederalHolidayCalendar()
+class _SOFRPublishCalendar(USFederalHolidayCalendar):
+    """US government securities market calendar, for SOFR publication dates.
+
+    SOFR is published on US government securities market business days, which
+    follow SIFMA -- and SIFMA closes on Good Friday, which
+    USFederalHolidayCalendar does not know about. Without this rule the
+    "expected latest fixing" for the first business day after every Good Friday
+    lands on a day SOFR never publishes, so the cache-accept gate, the
+    cache-write gate and the cached_fallback re-check all fail forever: every
+    _fetch_fixings call for such an as_of date did a full NY Fed HTTP pull
+    (14-17x slower, ~150s and 992 remote hits for a single-day intraday replay)
+    and never persisted anything. Affects one weekday per year, in perpetuity:
+    2018-04-02, 2018-12-06, 2019-04-22, 2020-04-13, 2021-04-05, 2022-04-18,
+    2023-04-10, 2024-04-01, 2025-04-21, 2026-04-06, 2027-03-29, ...
+    """
+
+    rules = USFederalHolidayCalendar.rules + [GoodFriday]
+
+
+_PUBLISH_CAL = _SOFRPublishCalendar()
 _CBD = CustomBusinessDay(calendar=_PUBLISH_CAL)
 _KEEP_LAST_N_DATED_DIRS = 3  # retain recent caches for fallback
 _NY_TZ = ZoneInfo("America/New_York")

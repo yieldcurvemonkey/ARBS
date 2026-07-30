@@ -9,7 +9,7 @@ export async function GET(req: Request) {
 
   const sql = `
     SELECT
-      EXTRACT(HOUR FROM execution_timestamp AT TIME ZONE 'America/New_York')::int AS hour_et,
+      EXTRACT(HOUR FROM COALESCE(original_execution_timestamp, execution_timestamp) AT TIME ZONE 'America/New_York')::int AS hour_et,
       tenor_label,
       SUM(ABS(risk::float)) / NULLIF(COUNT(DISTINCT as_of_date), 0) AS avg_block_dv01,
       COUNT(*)::float / NULLIF(COUNT(DISTINCT as_of_date), 0) AS avg_trade_count,

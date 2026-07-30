@@ -745,6 +745,56 @@ def quarterly_contract_expiry_date(contract: str) -> datetime.date:
     return _contract_expiry_date(m.group("code"))
 
 
+# CME Rulebook 460A01.J.1 covers Quarterly Standard, Serial Standard, Quarterly Mid-Curve
+# and Serial Mid-Curve options.  Weekly Mid-Curves fall under 460A01.J.2 (any Friday not
+# already a standard/serial termination date), which is not a function of the contract
+# code alone, so they are excluded and reported as "unknown" rather than guessed at.
+_PRE_IMM_FRIDAY_OPTION_ROOTS = (_SFR_UNDERLYING_ROOTS | {"SFR"}) - _MIDCURVE_WEEKLY_ROOTS
+
+# SR3 settles on compounded SOFR, which the NY Fed does not publish on US government
+# securities market holidays, so the SIFMA/government-bond calendar - not NYSE - is what
+# "scheduled Exchange holiday" resolves to for these products.  Validated against Barchart
+# last-quote dates on the only cases where the two calendars disagree:
+#   2022-04-15 Good Friday      -> 2022-04-14  (rolled;     SQJ22 last bar 2022-04-14)
+#   2022-11-11 Veterans Day     -> 2022-11-10  (rolled;     SQX22 last bar 2022-11-10)
+#   2023-11-10 Veterans observed-> 2023-11-10  (not rolled; SQX23 last bar 2023-11-10)
+_US_GOVT_CALENDAR = ql.UnitedStates(ql.UnitedStates.GovernmentBond)
+
+
+def sofr_option_last_trade_date(contract: str) -> Optional[datetime.date]:
+    """Last trading day of a CME SOFR-style option contract.
+
+    CME Rulebook 460A01.J.1: "Trading in any Quarterly Standard Option, Serial Standard
+    Option, Quarterly Mid-Curve Option, or Serial Mid-Curve Option shall terminate at the
+    close of trading on the Friday preceding the third Wednesday of the month in which
+    such option expires.  If such Friday is a scheduled Exchange holiday, then trading
+    shall terminate on the immediately preceding Business Day."
+
+    The rule's final clause - trading extends when the underlying futures market does not
+    open on the scheduled termination day - is not modelled here; it fires only on an
+    unscheduled market closure, which no calendar can predict.
+
+    Note this is *not* ``_contract_expiry_date`` (the third Wednesday itself), which is the
+    start of the underlying's Reference Quarter (460A01.D.1), five days later.
+
+    Returns ``None`` when the rule does not apply to the root (weekly mid-curves,
+    non-SOFR roots, unparseable tokens) so callers can skip the check rather than
+    reject on a guess.
+    """
+    token = (contract or "").strip().upper()
+    m = _FUTURE_RE.fullmatch(token)
+    if m is None:
+        return None
+    root = _ROOT_ALIAS_MAP[m.group("root").upper()]
+    if root not in _PRE_IMM_FRIDAY_OPTION_ROOTS:
+        return None
+
+    third_wednesday = _contract_expiry_date(m.group("code"))
+    friday = third_wednesday - datetime.timedelta(days=5)
+    adjusted = _US_GOVT_CALENDAR.adjust(ql.Date(friday.day, friday.month, friday.year), ql.Preceding)
+    return datetime.date(adjusted.year(), adjusted.month(), adjusted.dayOfMonth())
+
+
 def next_quarterly_contract(contract: str) -> str:
     token = (contract or "").strip().upper()
     m = _FUTURE_RE.fullmatch(token)
@@ -815,4 +865,5 @@ __all__ = [
     "quarterly_contract_expiry_date",
     "quarterly_reference_window",
     "resolve_quarterly_contracts",
+    "sofr_option_last_trade_date",
 ]

@@ -67,10 +67,12 @@ class RLIRSwapCurve(_IRSwapGenericCurve):
         return max(irswap.leg1.cashflows()["Acc End"])
 
     def fixed_rate(self, irswap: rl.IRS):
-        return float(irswap.fixed_rate)
+        # Wrapper contract is DECIMAL (matches fair_rate here and
+        # QLIRSwapCurve.fixed_rate); rl.IRS itself carries percent.
+        return float(irswap.fixed_rate) / 100.0
 
     def notional(self, irswap: rl.IRS):
-        return irswap.__dict__["kwargs"]["notional"] 
+        return irswap.__dict__["kwargs"]["notional"]
 
     def fair_rate(self, irswap: rl.IRS):
         return irswap.rate(curves=self._rl_curve_handle).real / 100
@@ -81,7 +83,7 @@ class RLIRSwapCurve(_IRSwapGenericCurve):
             rl.IRS(
                 effective=self.effective_date(irswap),
                 termination=self.maturity_date(irswap),
-                fixed_rate=irswap.fixed_rate * 100,
+                fixed_rate=irswap.fixed_rate,  # already percent, rateslib's own unit
                 curves=self._rl_curve_handle,
                 spec=curve_def["ReferenceRate"],
                 notional=self.notional(irswap),
@@ -95,15 +97,26 @@ class RLIRSwapCurve(_IRSwapGenericCurve):
         return irswap.analytic_delta(curve=self._rl_curve_handle).real
 
     def dv01(self, irswap: rl.IRS):
-        # return irswap.delta(solver=self._rl_curve_solver_handle)
-        raise NotImplementedError("rateslib not implemented")
+        # A true DV01 is a full re-solve of the calibrating instruments, which
+        # needs the rl.Solver this backend does not carry. PV01 (analytic_delta)
+        # is available and is what every shipped consumer uses.
+        raise NotImplementedError(
+            "IRSwapValue.DV01 is not available on the rateslib backend (needs a "
+            "calibrated rl.Solver, which this curve does not carry). Use "
+            "IRSwapValue.PV01, or a QuantLib-backed source."
+        )
 
     def gamma(self, irswap: rl.IRS):
-        # return irswap.gamma(solver=self._rl_curve_solver_handle)
-        raise NotImplementedError("rateslib not implemented")
+        raise NotImplementedError(
+            "IRSwapValue.GAMMA_01 is not available on the rateslib backend (needs "
+            "a calibrated rl.Solver). Use a QuantLib-backed source."
+        )
 
     def dollar_carry(self, irswap: rl.IRS, horizon: str):
-        raise NotImplementedError("rateslib not implemented")
+        raise NotImplementedError(
+            "dollar_carry is not implemented on the rateslib backend; use "
+            "IRSwapValue.CARRY_BPS_RUNNING (which is) or a QuantLib-backed source."
+        )
 
     def carry_bps_running(self, irswap: rl.IRS, horizon: str):
         curve_def = self._curve_definition()
@@ -181,7 +194,15 @@ class RLIRSwapCurve(_IRSwapGenericCurve):
             termination=tenor or rl.dt(maturity_date.year, maturity_date.month, maturity_date.day),
             spec=curve_def["ReferenceRate"],
             curves=self._rl_curve_handle,
-            fixed_rate=fixed_rate,
+            # `fixed_rate` arrives as a DECIMAL (that is this wrapper's contract,
+            # and what fair_rate/fixed_rate return); rl.IRS wants PERCENT. The
+            # conversion was missing, so the returned swap was struck 100x too
+            # low in rateslib's own units -- a par 5Y came back as 0.0414%
+            # instead of 4.1448%, worth ~$184k per $1mm the moment anyone called
+            # .npv()/.cashflows()/.delta() on it directly or handed it to a
+            # Solver. Only this wrapper's own npv() compensated, so no shipped
+            # number was wrong, but every object handed out was.
+            fixed_rate=float(fixed_rate) * 100.0,
             notional=notional,
             leg2_fixings=self._fixings,
         )

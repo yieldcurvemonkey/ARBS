@@ -826,19 +826,45 @@ class ComputedTimeseriesStore:
             ordered[_normalize_intraday_key(ref_point)] = (str(column_name), float(value))
         return [(ts, col, val) for ts, (col, val) in ordered.items()]
 
+    @staticmethod
+    def _rows_are_intraday(normalized_rows: Sequence[Tuple[pd.Timestamp, str, float]]) -> bool:
+        """True when any row carries a time-of-day component.
+
+        EOD rows normalize to midnight, so a non-midnight stamp means these are
+        intraday points and must NOT be written to the date-keyed tiers.
+        """
+        return any(
+            (ts.hour or ts.minute or ts.second or ts.microsecond or ts.nanosecond)
+            for ts, _col, _val in normalized_rows
+        )
+
     def append_rows(
         self,
         *,
         symbol: str,
         rows: Iterable[Tuple[DateLike, str, float]],
+        intraday: Optional[bool] = None,
     ) -> None:
-        self.append_many_rows(rows_by_symbol={symbol: rows})
+        self.append_many_rows(rows_by_symbol={symbol: rows}, intraday=intraday)
 
     def append_many_rows(
         self,
         *,
         rows_by_symbol: Mapping[str, Iterable[Tuple[DateLike, str, float]]],
+        intraday: Optional[bool] = None,
     ) -> None:
+        """Persist computed rows.
+
+        ``intraday`` selects which tiers are written; ``None`` auto-detects from
+        the timestamps. The Parquet layer always stores full resolution. The
+        DuckDB table and the row-level L2 table are keyed ``(symbol, date)`` and
+        are EOD-only: writing intraday points into them collapses a whole day
+        onto one arbitrary minute (last write wins, and with n_jobs>1 *which*
+        minute is nondeterministic) and then serves that value to the next
+        daily-frequency read of the same symbol. The reader already refuses to
+        read those tiers for intraday (see ``_read_from_duckdb``); this is the
+        matching guard on the writer, which never had one.
+        """
         normalized_by_symbol = {
             symbol: self._normalize_symbol_rows(rows)
             for symbol, rows in rows_by_symbol.items()
@@ -867,12 +893,26 @@ class ComputedTimeseriesStore:
             ).sort_index()
             frame_items.append((symbol, df, None))
 
+            # The whole-day Parquet blob keeps full resolution and is the tier the
+            # intraday reader actually uses, so it is pushed either way.
+            trading_dates_by_symbol[symbol] = [ts.date() for ts, _col, _val in normalized_rows]
+
+            symbol_intraday = (
+                self._rows_are_intraday(normalized_rows) if intraday is None else bool(intraday)
+            )
+            if symbol_intraday:
+                # The two date-keyed VALUE tiers are EOD-only; see the docstring.
+                logger.debug(
+                    "Skipping date-keyed value tiers for %d intraday row(s) of %s",
+                    len(normalized_rows), symbol,
+                )
+                continue
+
             duckdb_rows = [
                 (_normalize_eod_key(ts.to_pydatetime()), str(col), float(val))
                 for ts, col, val in normalized_rows
             ]
             duckdb_rows_by_symbol[symbol] = duckdb_rows
-            trading_dates_by_symbol[symbol] = [ts.date() for ts, _col, _val in normalized_rows]
             l2_rows_by_symbol[symbol] = [
                 (ts.to_pydatetime(), col, val)
                 for ts, col, val in normalized_rows

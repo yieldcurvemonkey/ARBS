@@ -140,6 +140,12 @@ def _build_rows_for_chunk(
         try:
             row = _build_row_for_query(curve, q, pricing_ref_point, date_col)
             rows.append((row, q, request_ref_point))
+        except NotImplementedError:
+            # An unsupported value type is a programming error, not a data gap:
+            # swallowing it returned an empty DataFrame with no message and no
+            # exception, so asking for DV01 looked like "no data" (see
+            # RLIRSwapCurve.dv01/gamma).
+            raise
         except Exception as e:
             errors.append((q, pricing_ref_point, request_ref_point, e))
     return rows, errors
@@ -253,6 +259,21 @@ def _normalize_legacy_eod_cached_rows(
         else:
             normalized_rows.append((ref_point, column_text, float(value)))
     return normalized_rows if used_legacy_alias else rows
+
+
+def _decompose_rate_into_outright_legs(q: IRSwapQuery) -> Optional[List[Tuple[float, str]]]:
+    if q.value != IRSwapValue.RATE:
+        return None
+    tenor_text = str(getattr(q, "tenor", "") or "").strip()
+    if not tenor_text:
+        return None
+    slash_ct = tenor_text.count("/")
+    tokens = [t.strip() for t in tenor_text.split("/") if t.strip()]
+    if slash_ct == 1 and len(tokens) == 2:
+        return [(-1.0, tokens[0]), (1.0, tokens[1])]
+    if slash_ct == 2 and len(tokens) == 3:
+        return [(-1.0, tokens[0]), (2.0, tokens[1]), (-1.0, tokens[2])]
+    return None
 
 
 def _parse_imm_relative_tokens(tenor: str) -> Optional[List[str]]:
@@ -747,6 +768,24 @@ class IRSwapsTB(LayeredCacheMixin, BaseTimeseriesTB):
             is_intraday = (not has_timestamps) and isinstance(start, datetime.datetime) and isinstance(end, datetime.datetime) and (freq is not None)
             if is_intraday:
                 assert start.tzinfo is not None, "Must pass in timezone-aware datetime.datetime"
+            if has_timestamps:
+                # Same contract as the start/end+freq form above. A naive intraday
+                # timestamp is read as ET by IRSwapsMDP but keyed as UTC by the
+                # computed-timeseries store, so the two disagree by the UTC offset:
+                # naive 14:30 is priced as 14:30 ET yet shares a cache key with
+                # tz-aware 14:30 UTC (= 10:30 ET), four hours away. Rather than
+                # pick a winner and silently serve one instant's value for the
+                # other, refuse the ambiguity.
+                _naive = [
+                    t for t in timestamps
+                    if isinstance(t, datetime.datetime) and t.tzinfo is None
+                ]
+                if _naive:
+                    raise ValueError(
+                        "IRSwapsTB.get_timeseries(timestamps=...) requires timezone-aware "
+                        f"datetimes; got {len(_naive)} naive value(s), e.g. {_naive[0]!r}. "
+                        "Localize them (e.g. pytz.timezone('America/New_York').localize(ts))."
+                    )
             eff_freq = (freq or "1T") if is_intraday else freq
             ref_points = self._build_reference_points(start=start, end=end, freq=eff_freq, timestamps=timestamps)
             use_intraday_cache = has_timestamps or is_intraday
@@ -869,6 +908,99 @@ class IRSwapsTB(LayeredCacheMixin, BaseTimeseriesTB):
             cached_rows = [(d, c, v) for d, c, v in cached_rows if _as_date(d) <= _stale_cutoff]
             cached_row_keys = {(d, c) for d, c in cached_row_keys if _as_date(d) <= _stale_cutoff}
 
+        # --- Synthesize multi-leg RATE queries from cached outright legs ---
+        if self._use_ts_cache and not ignore_cache:
+            for curve_name, qs in by_curve.items():
+                curve_ref_points = ref_points_by_curve.get(curve_name, [])
+                cacheable_ref_points = [rp for rp in curve_ref_points if rp != "live"]
+                if not cacheable_ref_points:
+                    continue
+
+                decomposable: list = []
+                for q in qs:
+                    # The shortcut below rebuilds each leg as a bare
+                    # IRSwapQuery(curve, tenor, value=RATE) and combines them with
+                    # the DEFAULT weights from _decompose_rate_into_outright_legs.
+                    # That silently discards any caller-supplied weighting, so a
+                    # warm cache returned a differently-weighted -- or sign-flipped
+                    # -- spread under an identical column name (bpv=-10000 gave
+                    # +17.16 bp where the direct path gives -17.16 bp;
+                    # risk_weights=[1,0.5] was out by ~203 bp). Price those directly.
+                    _skw = dict(getattr(q, "structure_kwargs", {}) or {})
+                    if getattr(q, "risk_weight", None) is not None or any(
+                        _skw.get(k) is not None
+                        for k in (
+                            "risk_weights", "bpv", "notional",
+                            "front_notional", "belly_notional", "back_notional",
+                        )
+                    ):
+                        continue
+                    col = q.col_name(curve_name)
+                    missing = [
+                        d for d in cacheable_ref_points
+                        if (d, col) not in cached_row_keys
+                        and not _is_today(d)
+                        and (_is_purely_historical or _as_date(d) <= _stale_cutoff)
+                    ]
+                    if not missing:
+                        continue
+                    components = _decompose_rate_into_outright_legs(q)
+                    if components is None:
+                        continue
+                    decomposable.append((q, col, missing, components))
+
+                if not decomposable:
+                    continue
+
+                tenor_to_symbol: Dict[str, str] = {}
+                leg_queries: Dict[str, IRSwapQuery] = {}
+                for _q, _col, _missing, components in decomposable:
+                    for _w, tenor in components:
+                        if tenor not in tenor_to_symbol:
+                            leg_q = IRSwapQuery(curve=curve_name, tenor=tenor, value=IRSwapValue.RATE)
+                            sym = self._ts_symbol_for_query(curve_name, leg_q)
+                            tenor_to_symbol[tenor] = sym
+                            leg_queries[sym] = leg_q
+
+                all_missing = sorted(set(d for _, _, m, _ in decomposable for d in m))
+                try:
+                    leg_batch = self._computed_ts_store.read_many_symbols(
+                        symbols=list(leg_queries.keys()),
+                        reference_points=all_missing,
+                        intraday=use_intraday_cache,
+                        skip_current_eod=True,
+                        fallback_column_names={s: leg_queries[s].col_name(curve_name) for s in leg_queries},
+                        allow_partial=True,
+                    )
+                except Exception:
+                    leg_batch = {}
+
+                leg_values: Dict[str, Dict] = {}
+                for sym, leg_q in leg_queries.items():
+                    rows = leg_batch.get(sym, [])
+                    try:
+                        rows = _normalize_legacy_eod_cached_rows(mdp=self.mdp, curve_name=curve_name, query=leg_q, rows=rows)
+                    except Exception:
+                        pass
+                    leg_values[sym] = {dt: float(val) for dt, _c, val in rows}
+
+                synthesized = 0
+                for q, col, missing, components in decomposable:
+                    for d in missing:
+                        vals = []
+                        for weight, tenor in components:
+                            dv = leg_values.get(tenor_to_symbol[tenor], {}).get(d)
+                            if dv is None:
+                                break
+                            vals.append(weight * abs(dv))
+                        else:
+                            spread = sum(vals) * 100.0
+                            cached_rows.append((d, col, spread))
+                            cached_row_keys.add((d, col))
+                            synthesized += 1
+                if synthesized:
+                    self._logger.debug("Synthesized %d spread values from cached outright legs for %s", synthesized, curve_name)
+
         for curve_name, qs in by_curve.items():
             curve_ref_points = ref_points_by_curve.get(curve_name, [])
             if not curve_ref_points:
@@ -946,17 +1078,31 @@ class IRSwapsTB(LayeredCacheMixin, BaseTimeseriesTB):
                 leave=False,
             ) as pbar:
                 tasks: List[Tuple[DateLike, IRSwapQuery, _IRSwapGenericCurve, object]] = []
+                _no_curve: List[DateLike] = []
                 for d in request_points:
                     curve = built_map.get(d)
                     if curve is None and d == datetime.date.today():
                         curve = built_map.get("live")
                     if curve is None:
-                        self._logger.warning(f"No curve returned for curve='{curve_name}' on date='{d}'.")
+                        # Points with no curve are dropped, so the returned frame
+                        # is simply SHORTER -- there is no NaN marking the hole.
+                        # One line per point buries that in a long series, so
+                        # summarize below as well.
+                        _no_curve.append(d)
+                        self._logger.debug(f"No curve returned for curve='{curve_name}' on date='{d}'.")
                         pbar.update(len(qs))
                         continue
                     pricing_ref_point: DateLike = live_output_index if (d == "live" and live_output_index is not None) else d
                     for q in qs:
                         tasks.append((pricing_ref_point, q, curve, d))
+
+                if _no_curve:
+                    self._logger.warning(
+                        "%s: no curve for %d of %d requested point(s) on '%s' — those rows are "
+                        "ABSENT from the result, not NaN (first=%s, last=%s).",
+                        self.mdp.source, len(_no_curve), len(request_points), curve_name,
+                        _no_curve[0], _no_curve[-1],
+                    )
 
                 if tasks:
                     if (n_jobs or 1) > 1:
@@ -989,6 +1135,8 @@ class IRSwapsTB(LayeredCacheMixin, BaseTimeseriesTB):
                             try:
                                 row = _build_row_for_query(curve, q, pricing_ref_point, self._date_col)
                                 new_rows_with_q.append((row, q, curve_name, request_ref_point))
+                            except NotImplementedError:
+                                raise  # unsupported value type -> surface it, don't return an empty frame
                             except Exception as e:
                                 self._logger.exception(
                                     f"Pricing failed for curve='{curve_name}', date='{request_ref_point}', query='{q}'. Error: {e}"
@@ -1012,7 +1160,9 @@ class IRSwapsTB(LayeredCacheMixin, BaseTimeseriesTB):
                 grouped[self._ts_symbol_for_query(curve_name, q)].append((dt_like, col, float(val)))
             if grouped:
                 try:
-                    self._computed_ts_store.append_many_rows(rows_by_symbol=grouped)
+                    self._computed_ts_store.append_many_rows(
+                        rows_by_symbol=grouped, intraday=use_intraday_cache
+                    )
                 except Exception as ex:
                     self._logger.warning(f"[TS cache] bulk append failed: {ex}")
 

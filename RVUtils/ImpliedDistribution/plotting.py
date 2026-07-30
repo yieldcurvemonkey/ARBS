@@ -31,6 +31,31 @@ _COLORS = [
 ]
 
 
+# Rows of the distribution-summary delta table whose sign carries an
+# easing/tightening direction (rate levels, not dispersion or shape).
+_RATE_LEVEL_METRICS = frozenset({"Forward Rate", "Mean Rate", "5th Pctl", "95th Pctl"})
+
+
+def _bin_width_pct(bl: Optional[BreedenLitzenbergerResult]) -> float:
+    """Actual scenario-bin width in rate percent, read off the result's bin edges."""
+    if bl is None:
+        return 0.25
+    edges = np.asarray(bl.bin_edges_rate, dtype=float)
+    if edges.size >= 2:
+        return float(edges[1] - edges[0])
+    return 0.25
+
+
+def _bin_width_label(*bls: Optional[BreedenLitzenbergerResult]) -> str:
+    """Human label for the bin width, e.g. ``"25bp"`` — never hardcode 25."""
+    widths = {round(_bin_width_pct(bl) * 100.0, 3) for bl in bls if bl is not None}
+    if not widths:
+        return ""
+    if len(widths) > 1:
+        return "/".join(f"{w:g}bp" for w in sorted(widths))
+    return f"{widths.pop():g}bp"
+
+
 def plot_rnd_density(
     bl: BreedenLitzenbergerResult,
     *,
@@ -79,16 +104,22 @@ def plot_scenario_probabilities(
         _, ax = plt.subplots(figsize=(12, 5))
 
     mask = bl.bin_probabilities >= min_prob
-    labels = [bl.bin_labels[i] for i in range(len(bl.bin_labels)) if mask[i]]
-    probs = bl.bin_probabilities[mask]
+    idx = np.flatnonzero(mask)
+    labels = [bl.bin_labels[i] for i in idx]
+    probs = bl.bin_probabilities[idx]
+    # Bars must sit at their true rate midpoint: filtering by ``min_prob`` can drop
+    # interior bins (clipped/near-zero density between modes), and a categorical
+    # 0..n-1 x-axis would render the survivors as if they were contiguous.
+    centers = np.array([float(l) for l in labels], dtype=float)
 
-    colors = ["steelblue" if float(l) <= bl.input.forward_rate else "coral" for l in labels]
-    ax.bar(range(len(labels)), probs * 100, color=colors, edgecolor="white", linewidth=0.5)
-    ax.set_xticks(range(len(labels)))
+    width_pct = _bin_width_pct(bl)
+    colors = ["steelblue" if c <= bl.input.forward_rate else "coral" for c in centers]
+    ax.bar(centers, probs * 100, width=width_pct * 0.9, color=colors, edgecolor="white", linewidth=0.5)
+    ax.set_xticks(centers)
     ax.set_xticklabels(labels, rotation=45, fontsize=7)
     ax.set_ylabel("Probability (%)")
     ax.set_xlabel("Rate bin midpoint (%)")
-    ax.set_title(title or f"Scenario Probabilities (25bp bins) — {bl.input.symbol} as of {bl.input.as_of}")
+    ax.set_title(title or f"Scenario Probabilities ({_bin_width_label(bl)} bins) — {bl.input.symbol} as of {bl.input.as_of}")
     ax.grid(True, axis="y", alpha=0.3)
     return ax
 
@@ -384,7 +415,8 @@ def plot_distribution_change(
             ax.set_xticks(x)
             ax.set_xticklabels(labels_f, rotation=45, fontsize=7)
             ax.legend(fontsize=8)
-        ax.set_title("Probability Mass by Rate Bin (25bp)")
+        _w = _bin_width_label(bl1, bl2)
+        ax.set_title(f"Probability Mass by Rate Bin ({_w})" if _w else "Probability Mass by Rate Bin")
         ax.set_xlabel("Rate bin midpoint (%)")
     elif gm1 is not None and gm2 is not None:
         # scenarios_only fallback: grouped bars of GM scenario weights
@@ -403,7 +435,7 @@ def plot_distribution_change(
         ax.set_xlabel("Scenario")
     else:
         ax.text(0.5, 0.5, "Not computed", ha="center", va="center", transform=ax.transAxes)
-        ax.set_title("Probability Mass by Rate Bin (25bp)")
+        ax.set_title("Probability Mass by Rate Bin")
         ax.set_xlabel("Rate bin midpoint (%)")
     ax.set_ylabel("Probability (%)")
     ax.grid(True, axis="y", alpha=0.3)
@@ -470,14 +502,19 @@ def plot_distribution_change(
         table.auto_set_font_size(False)
         table.set_fontsize(9)
         table.scale(1, 1.4)
-        # Color delta column
+        # Color delta column. House rule (see plot_strip_distribution_change and
+        # _plot_strip_summary_table): higher rate = hawkish = red, lower rate =
+        # easing = green. Only rate-LEVEL metrics carry that direction; dispersion
+        # and shape stats (std/skew/kurtosis) are left uncoloured.
         for i in range(len(rows)):
+            if rows[i][0] not in _RATE_LEVEL_METRICS:
+                continue
             cell = table[i + 1, 3]
             val_str = rows[i][3]
             if val_str.startswith("+"):
-                cell.set_text_props(color="green", fontweight="bold")
-            elif val_str.startswith("-"):
                 cell.set_text_props(color="red", fontweight="bold")
+            elif val_str.startswith("-"):
+                cell.set_text_props(color="green", fontweight="bold")
         ax.set_title("Distribution Summary", fontsize=11, pad=10)
 
     # Scenario weight table on the right
@@ -533,7 +570,11 @@ def plot_snapshot_dashboard(
 
     if snapshot.bl_result is not None:
         plot_rnd_density(snapshot.bl_result, ax=axes[0, 0], title="Risk-Neutral Density (BL)")
-        plot_scenario_probabilities(snapshot.bl_result, ax=axes[1, 0], title="Scenario Probabilities (25bp bins)")
+        plot_scenario_probabilities(
+            snapshot.bl_result,
+            ax=axes[1, 0],
+            title=f"Scenario Probabilities ({_bin_width_label(snapshot.bl_result)} bins)",
+        )
     elif scenarios_only:
         # Fall back to GM composite density
         plot_gaussian_mixture(snapshot.gm_result, ax=axes[0, 0], title="Risk-Neutral Density (GM)")
@@ -550,7 +591,26 @@ def plot_snapshot_dashboard(
         for ax in [axes[0, 1], axes[1, 1]]:
             ax.text(0.5, 0.5, "GM not computed", ha="center", va="center", transform=ax.transAxes)
 
-    fig.tight_layout(rect=[0, 0, 1, 0.96])
+    # Surface fit diagnostics: a non-converged GM or a clipped/truncated BL density
+    # would otherwise be plotted as if it were clean.
+    notes = list(snapshot.all_warnings())
+    if snapshot.gm_result is not None and not snapshot.gm_result.optimization_success:
+        notes.insert(0, "gm::optimization did not converge")
+    if notes:
+        shown = notes[:4]
+        extra = f"  (+{len(notes) - len(shown)} more)" if len(notes) > len(shown) else ""
+        fig.text(
+            0.01,
+            0.005,
+            "⚠ " + "  |  ".join(shown) + extra,
+            fontsize=7,
+            color="#b22222",
+            ha="left",
+            va="bottom",
+        )
+        fig.tight_layout(rect=[0, 0.03, 1, 0.96])
+    else:
+        fig.tight_layout(rect=[0, 0, 1, 0.96])
     return fig
 
 

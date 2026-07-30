@@ -67,12 +67,63 @@ def test_smile_to_rnd_input_uses_observed_otm_prices_and_oi_filter():
         use_sabr_vols=False,
         raw_market_open_interest_min=100.0,
         raw_market_otm_only=True,
+        # This fixture is deliberately tiny to exercise the OTM/OI filter itself; opt out
+        # of the strike-adequacy gate, which is covered separately below.
+        min_strikes=2,
     )
 
     assert rnd.strike_source == "market_jpm"
     assert rnd.strikes_price.tolist() == [96.0, 97.0]
     # OTM put converted to an equivalent call premium: P + F - K.
     assert rnd.call_premiums.tolist() == pytest.approx([0.55, 0.07])
+
+
+def _tiny_otm_smile():
+    return _smile(
+        [
+            _point("SFRZ26|9600P", "P", 96.0, 0.05, 150.0),
+            _point("SFRZ26|9700C", "C", 97.0, 0.07, 175.0),
+        ]
+    )
+
+
+def test_degraded_strike_set_falls_back_loudly_not_silently():
+    """A strike set thinned below the >=6 OTM-leg standard the MDP applies on its
+    jpm_method branch must not quietly become a SABR *model* density labelled as
+    observed-premium market data."""
+    rnd = smile_to_rnd_input(
+        _tiny_otm_smile(),
+        use_sabr_vols=False,
+        raw_market_open_interest_min=100.0,
+        raw_market_otm_only=True,
+    )
+    assert rnd.strike_source == "sabr_smile"
+    assert any("fell back to SABR" in w for w in rnd.warnings), rnd.warnings
+    assert any("MODEL density" in w for w in rnd.warnings), rnd.warnings
+
+
+def test_degraded_strike_set_can_be_made_fatal():
+    with pytest.raises(ValueError, match="raw market filtering left only"):
+        smile_to_rnd_input(
+            _tiny_otm_smile(),
+            use_sabr_vols=False,
+            raw_market_open_interest_min=100.0,
+            raw_market_otm_only=True,
+            allow_sabr_fallback=False,
+        )
+
+
+def test_prep_warnings_reach_the_caller_through_the_bl_result():
+    """The fallback used to be a transient warnings.warn that fires once per process, so
+    a timeseries loop surfaced it for at most one date."""
+    rnd = smile_to_rnd_input(
+        _tiny_otm_smile(),
+        use_sabr_vols=False,
+        raw_market_open_interest_min=100.0,
+        raw_market_otm_only=True,
+    )
+    bl = extract_rnd_breeden_litzenberger(rnd)
+    assert any("fell back to SABR" in w for w in bl.warnings), bl.warnings
 
 
 def test_sfr_implied_distribution_defaults_to_raw_jpm_bl_native_bins():
@@ -118,8 +169,9 @@ def test_bl_smoothing_param_is_literal_by_default():
     seen = {}
 
     class FakeSpline:
-        def __init__(self, x, y, *, k, s):
+        def __init__(self, x, y, *, k, s, w=None):
             seen["s"] = s
+            seen["w"] = w
 
         def __call__(self, x, nu=0):
             arr = np.asarray(x, dtype=float)
@@ -150,8 +202,9 @@ def test_bl_can_opt_into_legacy_n_scaled_smoothing():
     seen = {}
 
     class FakeSpline:
-        def __init__(self, x, y, *, k, s):
+        def __init__(self, x, y, *, k, s, w=None):
             seen["s"] = s
+            seen["w"] = w
             seen["n"] = len(x)
 
         def __call__(self, x, nu=0):

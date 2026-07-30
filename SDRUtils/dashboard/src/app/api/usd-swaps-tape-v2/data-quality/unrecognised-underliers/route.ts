@@ -30,7 +30,7 @@ export async function GET(req: Request) {
         l.floating_rate_index AS floating_rate_index,
         l.canonical_underlier_key AS canonical_underlier_key,
         l.notional::float AS notional,
-        COALESCE(l.original_execution_timestamp, l.execution_timestamp)::text AS execution_timestamp
+        COALESCE(l.original_execution_timestamp, l.execution_timestamp)::text AS anchor_ts
       FROM ${LEGS_TABLE} l
       WHERE COALESCE(l.original_execution_timestamp, l.execution_timestamp) >= $1::timestamptz
     `

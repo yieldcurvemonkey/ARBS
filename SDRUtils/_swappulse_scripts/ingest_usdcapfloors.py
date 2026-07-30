@@ -141,6 +141,12 @@ CREATE TABLE IF NOT EXISTS {RUNS_TABLE} (
     notes TEXT
 );
 
+-- Execution-vs-Event timestamp integration (2026-07-17): additively persist
+-- the CFTC Event timestamp (#30) at leg grain, alongside the real Execution
+-- timestamp (#96). Idempotent + nullable / no default so the ADD COLUMN is a
+-- fast metadata-only change and re-runs stay safe.
+ALTER TABLE {LEGS_TABLE} ADD COLUMN IF NOT EXISTS event_timestamp TIMESTAMPTZ;
+
 CREATE INDEX IF NOT EXISTS idx_capfloor_packages_type_date ON {PACKAGES_TABLE}(package_type, as_of_date);
 CREATE INDEX IF NOT EXISTS idx_capfloor_packages_exec ON {PACKAGES_TABLE}(execution_start);
 CREATE INDEX IF NOT EXISTS idx_capfloor_legs_package ON {LEGS_TABLE}(package_id);
@@ -284,6 +290,7 @@ def build_legs_dataframe(df: pd.DataFrame) -> pd.DataFrame:
                     "leg_order": idx,
                     "event_action": row.get("event_action"),
                     "execution_timestamp": row.get("execution_timestamp"),
+                    "event_timestamp": row.get("event_timestamp"),
                     "effective_date": row.get("effective_date"),
                     "expiration_date": row.get("expiration_date"),
                     "underlying_expiration_date": row.get("underlying_expiration_date"),

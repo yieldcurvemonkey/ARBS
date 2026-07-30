@@ -99,12 +99,18 @@ class TestBusinessDates:
         assert len(dates) == 0
 
 
+@pytest.mark.network
 class TestWarmAndCache:
     """Integration tests that exercise the real MDP and cache path.
 
     These hit Barchart for data and write to the real diskcache. They are
     intentionally scoped to a single date and 2 contracts to keep runtime
     manageable while verifying the full end-to-end flow.
+
+    Marked ``network`` because that is what they do. They were previously unmarked and
+    so ran inside the "not network" fast gate, where they passed only because a warm
+    local get_data cache answered before anything reached Barchart - they would fail on
+    any clean machine, and did fail the moment the cache version was bumped.
     """
 
     @pytest.fixture(scope="class")

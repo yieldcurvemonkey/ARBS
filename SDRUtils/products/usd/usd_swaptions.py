@@ -306,7 +306,18 @@ class USD_Swaptions(USDProductBase):
         return swaption_trades_df
 
     def classify_trade(self, row: pd.Series, trade_id: int, **kwargs: Any) -> SwaptionTradeClassification:
-        execution_ts = pd.to_datetime(row.get("Event timestamp"))
+        # De-conflate execution vs event (2026-07-17 spec): historically this
+        # product stored the Event timestamp (#30) into execution_timestamp.
+        # Keep the true Execution Timestamp (#96) where present; fall back to
+        # Event (flagged) when absent so behaviour degrades to the prior
+        # semantics. Day partitioning (build_classification_dataframe) stays on
+        # Event timestamp intentionally to avoid partition churn.
+        execution_ts = pd.to_datetime(row.get("Execution Timestamp"))
+        event_ts = pd.to_datetime(row.get("Event timestamp"))
+        original_execution_source = None
+        if pd.isna(execution_ts):
+            execution_ts = event_ts
+            original_execution_source = "fallback"
         effective_date = pd.to_datetime(row.get("Effective Date"))
         expiration_date = pd.to_datetime(row.get("Expiration Date"))
         underlying_expiration_date = pd.to_datetime(row.get("Maturity date of the underlier"))
@@ -352,6 +363,8 @@ class USD_Swaptions(USDProductBase):
             event_action=event_action,
             trade_id=trade_id,
             execution_timestamp=execution_ts,
+            event_timestamp=event_ts,
+            original_execution_source=original_execution_source,
             effective_date=effective_date,
             expiration_date=expiration_date,
             underlying_expiration_date=underlying_expiration_date,
