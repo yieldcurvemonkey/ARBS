@@ -1299,3 +1299,33 @@ calibration would have given the repaired day a different `p_flip` from its neig
 
 **Remediation running** (discovered, not hardcoded): classify May 05-01..05-29 and 06-09 alone;
 project the same; marks for April, May, 06-09 and 07-24. Its own `coverage --strict` is the gate.
+
+### The guard that aborted the run its own fix enabled (13:10)
+
+Three versions of "is a conflicting writer running", the first two wrong for the same underlying
+reason: **any process whose command line merely MENTIONS the target matches it.**
+
+1. Matched the window-script name with no process-name filter — so the PowerShell process running
+   the query matched *itself*, and the guard could never pass.
+2. Added `Name -eq 'bash.exe'`. Then the shell **launching** this script matched, because the git
+   commit message in that same command line quoted the string while describing bug (1). The guard
+   aborted the very run that its own fix had enabled.
+
+The second is the instructive one. It is not a typo or an oversight; it is the predictable
+consequence of using a substring of a command line as a proxy for "a process is doing X". A shell
+that *talks about* the backfill is not a backfill, and no amount of care in writing the pattern fixes
+that — the pattern was correct, the instrument was wrong.
+
+Version three matches the python processes that actually **write rows** (the backfill modules,
+matched on the `-m` invocation). Those are unambiguous, and they are the thing that would genuinely
+conflict. It is safe against self-match because it runs once at startup, before this script spawns
+any phase of its own. Verified both ways: aborts while writers are alive, passes once they are gone.
+
+Relaunched with a deliberately minimal command line, and the commit describing the fix was made in a
+**separate** shell invocation so its text could not contaminate the launcher's command line — which
+is a slightly absurd sentence to have to write, and exactly the point.
+
+**Running tally of checking tools that were themselves the bug today: five.** The awk exception
+filter (matched the wrong line), the emptiness test (tested presence not quantity), the notebook
+audit regex (could not match uppercase), and this guard twice. Every one was found by running the
+check against an input whose answer I already knew. None would have been found by reading it.
