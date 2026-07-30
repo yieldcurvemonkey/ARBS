@@ -268,6 +268,59 @@ def warm_decision_grid(pricer, curve_name, grid, *, warm_jobs=8, verbose=True) -
 # --------------------------------------------------------------------------
 # G0 — labels and provenance
 # --------------------------------------------------------------------------
+def _load_units_chunked(conn, start, end, *, months=1):
+    """`_load_units` over the window, but one month at a time.
+
+    The single-shot version scans six months of `arbs_usd_swap_tape_legs_v2` joined to
+    `arbs_usd_swap_tape_packages_v2` in one statement, which holds an AccessShare lock on both
+    for ~100 s. When the tape ingest runs a schema migration -- `ALTER TABLE
+    arbs_usd_swap_tape_packages_v2 ADD COLUMN` needs AccessExclusive -- the two collide, and the
+    one that dies is this read, with `statement timeout`. It killed G0 on the 2026-07-30
+    robustness run.
+
+    Twelve short reads each sit far inside the timeout and release between migrations. Raising
+    `statement_timeout` instead would be the wrong trade: it lengthens the window in which a prod
+    migration is blocked by research work.
+
+    Chunking is safe here because a unit never straddles a month. `ALL_PKG_LEGS_SQL` fetches a
+    package's legs by `package_id` rather than by date, so a package discovered in one chunk is
+    still assembled complete; a package found in two chunks yields the same `unit_key` from the
+    same legs, and merging the dicts is idempotent.
+
+    The chunk boundaries are NOT part of the vintage: this lives in the read-side study package,
+    not in `VINTAGE_SOURCES`, so the stamped dataset is untouched.
+    """
+    from SDRUtils._swappulse_scripts.backfill_stir_ladder import _load_units
+
+    edges = pd.date_range(pd.Timestamp(start), pd.Timestamp(end) + pd.offsets.Day(1),
+                          freq=pd.DateOffset(months=months)).tolist()
+    if not edges or edges[-1] <= pd.Timestamp(end):
+        edges.append(pd.Timestamp(end) + pd.offsets.Day(1))
+
+    units, failed = {}, []
+    for lo, hi in zip(edges, edges[1:]):
+        a = max(pd.Timestamp(lo), pd.Timestamp(start)).date()
+        b = min(pd.Timestamp(hi) - pd.offsets.Day(1), pd.Timestamp(end)).date()
+        if a > b:
+            continue
+        try:
+            units.update(_load_units(conn, a, b))
+        except Exception as exc:
+            # One month lost to a timeout is a thinner label study, not a dead gate. Record
+            # it so a partial G0 can never be mistaken for a complete one.
+            failed.append((str(a), str(b), f"{type(exc).__name__}: {exc}"))
+            try:
+                conn.rollback()
+            except Exception:
+                pass
+    if failed:
+        print(f"  G0 unit load: {len(failed)} of {len(edges) - 1} chunks FAILED "
+              f"-- the label study is partial")
+        for a, b, why in failed:
+            print(f"    {a}..{b}: {why[:110]}")
+    return units
+
+
 def run_g0(ctx, conn=None, *, independent_source="citivelo", label_limit=0,
            label_per_day=40) -> dict:
     """Provenance: who is in the universe, and does an independent mid agree?
@@ -308,9 +361,7 @@ def run_g0(ctx, conn=None, *, independent_source="citivelo", label_limit=0,
     # whether the curve-suspect gate is catching the right prints, and restricting to
     # curve-clean would throw exactly that comparison away.
     if conn is not None:
-        from SDRUtils._swappulse_scripts.backfill_stir_ladder import _load_units
-
-        units = _load_units(conn, ctx.window[0], ctx.window[1])
+        units = _load_units_chunked(conn, ctx.window[0], ctx.window[1])
         pool = ctx.prints_all[
             ctx.prints_all["classification_method"].isin(cfg.ON_MARKET_METHODS)
             & ctx.prints_all["dealer_direction"].isin(("PAID", "RECEIVED"))

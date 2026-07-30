@@ -1,0 +1,37 @@
+gate,pass,headline,timing_lead,direction_ok,flow_sign_ok,controls_used,independent_controls,sign_matches_hypothesis
+G0,,"stage error: Execution failed on sql '
+SELECT 
+    l.trade_id, l.package_id, l.as_of_date,
+    l.execution_timestamp, l.original_execution_timestamp,
+    l.trade_type, l.rate_index_clean, l.venue,
+    l.special_tenor_type, l.fomc_meeting_label,
+    l.tenor_label, l.forward_label, l.forward_start_years,
+    l.effective_date, l.expiration_date,
+    l.notional, l.risk, l.fixed_rate,
+    l.other_payment_ufro, l.is_capped, l.is_block, l.is_off_date,
+    l.leg_tape_label, l.execution_session, l.platform_identifier, l.cleared,
+    p.package_structure, p.n_package_legs,
+    p.package_transaction_price AS pkg_ptp,
+    p.package_transaction_spread AS pkg_pts
+
+FROM arbs_usd_swap_tape_legs_v2 l
+LEFT JOIN arbs_usd_swap_tape_packages_v2 p USING (package_id)
+WHERE l.as_of_date BETWEEN %(start)s AND %(end)s
+  AND l.economic_class = 'ECONOMIC_FLOW'
+  AND l.contributes_to_flow = true
+  AND l.venue = 'D2C'
+  AND l.rate_index_clean IN ('SOFR', 'FED_FUNDS')
+  AND l.fixed_rate IS NOT NULL
+ORDER BY l.execution_timestamp, l.trade_id
+': canceling statement due to statement timeout
+",,,,,,
+G1,True,"all arrival audits pass, poison audit exercised on 303144 future prints",,,,,,
+G2,False,"LLS mean=-4.969 t=-2.43*, mean peak rho=-0.033 (hedging needs < 0), 99 sessions — no timing lead; forced-hedge channel UNSUPPORTED, so any price result must be relabelled flow/basis continuation",False,True,False,,,
+G3,False,"signal t alone=-0.04, vs our controls=0.41 (coef +0.01161), vs independent basis=0.78 — effect does not survive; relabel as basis/RV, not a dealer-inventory mechanism",,,,"['basis_bp', 'abs_basis_bp', 'signed_basis_dv01', 'level_bp', 'slope_bp', 'curvature_bp', 'trailing_60m_bp', 'realized_vol_bp', 'amihud', 'tod_min', 'days_to_expiry', 'days_to_fomc']","['indep_basis_bp', 'abs_indep_basis_bp']",True
+G2,False,"LLS mean=-20.22 t=-1.72., mean peak rho=-0.006 (hedging needs < 0), 99 sessions — no timing lead; forced-hedge channel UNSUPPORTED, so any price result must be relabelled flow/basis continuation",False,True,False,,,
+G3,False,"signal t alone=-1.62, vs our controls=-1.30 (coef -0.0128), vs independent basis=nan — coefficient is -0.0128, the OPPOSITE direction to the pre-registered hypothesis: this is a negative result, not a pass",,,,"['basis_bp', 'abs_basis_bp', 'signed_basis_dv01', 'level_bp', 'slope_bp', 'curvature_bp', 'trailing_60m_bp', 'realized_vol_bp', 'amihud', 'tod_min', 'days_to_expiry', 'days_to_fomc']",[],False
+G2-cross-check,,leads NEITHER -> no mechanism evidence from the ordering test,,,,,,
+G4-primary(in-sample),False,"net -0.5599bp/trade, t=-9.43***, n=1565 trades over 94 sessions, 28% long-rates (pass needs mean>0 and t>=3.0)",,,,,,
+label-free,,"unsigned intensity: net -0.6564bp, t=-9.06***, n=1768",,,,,,
+conditioning,,6/6 conditioners sign-consistent across terciles (1 of 7 could not be split),,,,,,
+G5,False,gross -0.0599 - cost 0.5000 = net -0.5599bp/trade; at accuracy a=0.60 -> (2a-1)*gross - cost = -0.5120bp,,,,,,

@@ -428,6 +428,47 @@ better-specified study on repaired data. Spending it here to produce an uninterp
 about a hypothesis that already failed would destroy that for nothing.
 
 
+## 7c. Robustness arm: the data defects did not drive the result
+
+§8.7 and §8.9 establish three real, session-scoped data defects. The obvious question is whether
+the negative result is an artifact of them. It is not, and this was tested rather than argued.
+
+The whole protocol was re-run with `--session-quality`, which removes all **18** defective
+sessions (5 in-sample, 13 lockout — see §8.7 for the gate and its measured cost). **The
+expectation was written into the journal before the arm was launched**: a zero with 5 of 104
+in-sample sessions removed is still a zero.
+
+| | pre-registered (all sessions) | robustness (18 excluded) |
+|---|---|---|
+| **G5 gross edge** | **−0.0458 bp, t = −0.79** | **−0.0599 bp, t = −1.01** |
+| G4 primary, net | −0.5458 bp, t = −9.44, n = 1,639 / 99 sessions | −0.5599 bp, t = −9.43, n = 1,565 / 94 sessions |
+| G3 SR3, univariate t | 0.14 | **−0.04** |
+| G3 SR3, coef vs controls | +0.01323 | +0.01161 |
+| G3 ZQ, coef | −0.01176 | −0.0128 |
+| G2 SR3 lead-lag | −4.769 (t = −2.45) | −4.969 (t = −2.43) |
+| G2 ZQ lead-lag | −19.88 (t = −1.78) | −20.22 (t = −1.72) |
+| label-free, net | −0.6402, n = 1,838 | −0.6564, n = 1,768 |
+| G1 poison audit | 343,116 future prints | 303,144 future prints |
+
+**Every gate outcome is identical — 15 of 15.** G1 passes in both; G2 and G3 fail in both spaces
+in both arms; G4 and G5 fail in both. The gross edge remains statistically indistinguishable from
+zero and is, if anything, *more* negative on the cleaned data. G3's SR3 univariate t moves from
+0.14 to −0.04, i.e. closer to zero still.
+
+So the defects cost sample size and cost nothing else. **The verdict stands on the cleaned data.**
+
+**One stage was lost and it is reported rather than quietly dropped.** G0 failed in the robustness
+arm with `psycopg2.errors.QueryCanceled: canceling statement due to statement timeout`. The cause
+was not the study: the tape ingest ran `ALTER TABLE arbs_usd_swap_tape_packages_v2 ADD COLUMN`,
+which needs an AccessExclusive lock on the table G0's `ELIGIBLE_LEGS_SQL` was reading, and the
+long read lost. `stage()` caught it and the run continued — G0 measures the *input* and feeds
+nothing downstream, so the comparison above is unaffected. The single-shot six-month read is now
+chunked by month (`gates._load_units_chunked`) so a future run survives a concurrent migration;
+that helper lives in the read-side package and is deliberately **not** in `VINTAGE_SOURCES`, so
+the stamped dataset is untouched.
+
+Artifacts for this arm are written separately and are not mixed with the pre-registered run's.
+
 ---
 
 ## 8. Limitations, stated before the results

@@ -1,0 +1,4 @@
+,audit,pass,n,mode,observed_delays,illegal_delays,n_shorter_than_minimum,n_timestamps,n_leaking,min_future_prints,max_future_prints,leaks,split_at,max_abs_dev_in_head
+0,visibility_delays,True,304416.0,delay-set-only,"[1.0, 15.0, 30.0, 60.0]",[],0.0,,,,,,,
+1,future_poison,True,,,,,,200.0,0.0,336.0,303144.0,[],,
+2,trailing_moments,True,11520.0,,,,,,,,,,5760.0,0.0

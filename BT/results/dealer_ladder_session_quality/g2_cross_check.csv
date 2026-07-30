@@ -1,0 +1,3 @@
+,space,root,lls_mean,lls_t,peak_rho_mean,peak_rho_t,timing_lead,direction_ok,leads,reading
+0,FUTURES,SR3,-4.969035575858914,-2.4286375810817593,-0.03328802085497648,-2.5552643706537337,False,True,False,leads NEITHER -> no mechanism evidence from the ordering test
+1,FED_FUNDS,ZQ,-20.221162870327767,-1.7244765378080005,-0.006417773683161818,-0.4877550183109813,False,True,False,leads NEITHER -> no mechanism evidence from the ordering test
