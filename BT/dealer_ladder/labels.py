@@ -297,3 +297,84 @@ def implied_accuracy_bounds(flip_rate: float) -> dict:
     a = 1.0 - float(flip_rate) / 2.0
     return {"flip_rate": float(flip_rate), "accuracy_ceiling": a,
             "attenuation_at_ceiling": 2.0 * a - 1.0}
+
+
+def mid_offset_table(recon: pd.DataFrame) -> pd.DataFrame:
+    """How far apart the two mids are, in bp, per stratum.
+
+    The direct measurement behind the whole gate. Our spread-to-mid minus the
+    independent one is exactly (independent mid - our mid), so a systematic positive
+    number means our curve sits BELOW theirs and a negative one means above. If that
+    offset is comparable to a half-spread, the direction call is being decided by
+    curve disagreement rather than by where the trade printed -- which is the
+    feasibility audit's first kill risk, measured instead of argued.
+    """
+    df = recon.dropna(subset=["our_s2m_bps", "ind_s2m_bps"]).copy()
+    if df.empty:
+        return pd.DataFrame()
+    df["mid_offset_bps"] = df["our_s2m_bps"].astype(float) - df["ind_s2m_bps"].astype(float)
+    df["hour"] = (pd.to_datetime(df["snap_ts"], utc=True)
+                  .dt.tz_convert("America/New_York").dt.hour)
+    rows = []
+    for label, grp in [("ALL", df)] + list(df.groupby("curve_bucket", dropna=False)):
+        rows.append({
+            "stratum": label if isinstance(label, str) else str(label),
+            "n": len(grp),
+            "mean_our_s2m_bps": float(grp["our_s2m_bps"].mean()),
+            "mean_ind_s2m_bps": float(grp["ind_s2m_bps"].mean()),
+            "mean_offset_bps": float(grp["mid_offset_bps"].mean()),
+            "median_offset_bps": float(grp["mid_offset_bps"].median()),
+            "share_offset_gt_quarter_bp": float((grp["mid_offset_bps"].abs() > 0.25).mean()),
+        })
+    return pd.DataFrame(rows)
+
+
+# --------------------------------------------------------------------------
+# G1 — arrival integrity
+# --------------------------------------------------------------------------
+
+
+def flip_study(units, direction_rows, *, source="citivelo", limit=0, per_day=40,
+               seed=0, strata=None) -> dict:
+    """The whole independent-mid comparison, as tables. No DB or vendor of its own.
+
+    Extracted from ``gates.run_g0`` so that the gate and a standalone run share ONE
+    implementation. That matters more than it looks: this is the study that adjudicates
+    the 68-82% PAID skew, and two copies of it would eventually disagree about which
+    prints were in the pool -- at which point neither number means anything.
+
+    ``strata`` optionally carries per-unit columns (``curve_bucket``, ``venue_bucket``)
+    to break the tables down by. Absent, the by-bucket tables are simply omitted rather
+    than silently computed over an undifferentiated pool.
+    """
+    recon = reclassify_units(units, direction_rows, source=source, limit=limit,
+                             per_day=per_day, seed=seed)
+    out = {"recon": recon}
+    if recon.empty:
+        return out
+    if strata is not None and len(strata):
+        keep = [c for c in ("unit_key", "curve_bucket", "venue_bucket")
+                if c in strata.columns]
+        if "unit_key" in keep and len(keep) > 1:
+            recon = recon.merge(strata[keep], on="unit_key", how="left")
+    out["recon"] = recon
+
+    hour = (pd.to_datetime(recon["snap_ts"], utc=True)
+            .dt.tz_convert("America/New_York").dt.hour)
+    by_hour = recon.assign(hour=hour)
+
+    out["flip_by_confidence"] = flip_rate_table(recon, ("our_confidence",))
+    out["flip_by_trade_type"] = flip_rate_table(recon, ("trade_type",))
+    out["flip_by_hour"] = flip_rate_table(by_hour, ("hour",))
+    out["skew_vs_independent"] = direction_skew_table(recon)
+    out["skew_vs_independent_by_hour"] = direction_skew_table(by_hour, ("hour",))
+    if "curve_bucket" in recon.columns:
+        out["flip_by_curve_bucket"] = flip_rate_table(recon, ("curve_bucket",))
+        out["mid_offset_bps"] = mid_offset_table(recon)
+        clean = recon[recon["curve_bucket"] == "CURVE_CLEAN"]
+    else:
+        clean = recon
+    overall = (float(clean["flipped"].mean())
+               if len(clean) and clean["flipped"].notna().any() else float("nan"))
+    out["implied_accuracy"] = implied_accuracy_bounds(overall)
+    return out

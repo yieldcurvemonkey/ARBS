@@ -580,3 +580,73 @@ session selected zero minutes. A warm pass that silently does nothing is worse t
 because the cost reappears as thousands of cold builds in the middle of the gate run. There is now
 a guard that exits if any session maps to zero grid minutes, and ten tests including one that pins
 the `Timestamp != date` comparison itself.
+
+### G0 preliminary, on the completed January slice (2026-07-30 03:05) — the biggest result so far
+
+Run standalone (`scripts/dealer_ladder_flip_study.py`), which costs **no Barchart quota**: the
+independent source is the Citi Velocity swap-quote store, so this could run against a finished
+month while the rest of the backfill was still going. It calls the same `labels.flip_study` the
+gate calls — extracted from `run_g0` for exactly this reason, because two copies of the study that
+adjudicates the PAID skew would eventually disagree about which prints were in the pool.
+
+**14 sessions, 5,026 on-market signed units, 560 sampled (time-of-day stratified), 488 compared
+(87.1% coverage). Overall flip rate 33.4%.**
+
+**1 — The PAID skew is substantially a mid artefact.** On the *same* 488 prints:
+
+| | our mid | independent mid |
+|---|---|---|
+| PAID share | **86.7%** | **60.7%** |
+
+Twenty-six points of the skew come from which curve you ask. Some skew survives an independent
+mid (60.7% is still not 50%), so this is not the whole story — but the headline "dealers are
+overwhelmingly paying" is mostly our curve talking.
+
+**2 — The two mids differ by more than the edge being read.**
+
+| stratum | n | mean offset (bp) | median | share \|offset\| > 0.25bp |
+|---|---|---|---|---|
+| ALL | 488 | −0.469 | −0.278 | **63.9%** |
+| CURVE_CLEAN | 339 | −0.393 | −0.261 | 58.7% |
+| CURVE_SUSPECT | 149 | −0.644 | −0.486 | 75.8% |
+
+Negative means **our curve sits above theirs** — the same direction the 25-print overnight probe
+suggested, now on 488 prints across a month. Against a typical half-spread of about a quarter of a
+basis point, **64% of prints have a curve gap larger than the signal the direction rule reads**.
+
+**3 — And the flips are ENTIRELY that gap, not noise.** The mechanism is checkable, so it was
+checked. Predicting a flip purely from `|mid offset| > |distance to mid|`:
+
+| | observed agree | observed flip |
+|---|---|---|
+| rule says agree | 317 | **0** |
+| rule says flip | 8 | 163 |
+
+**98.4% agreement, zero false negatives.** Every observed flip is a case where the two curves
+disagree by more than the trade's own printed edge. That converts "the label is uncertain" from an
+assertion into a measured mechanism with a closed form.
+
+Consistent with it, the flip rate collapses to **12.2%** in the top quintile of `|spread-to-mid|`
+(median 3.88 bp): a trade that printed four basis points from mid is unambiguous no matter which
+curve you hold.
+
+**4 — `direction_confidence` does not predict agreement.** HIGH 33.7%, MEDIUM 44.7%, LOW 30.3%.
+The confidence tier says nothing about this failure mode, so it cannot be used to select a
+higher-quality stratum for it.
+
+**5 — CURVE_SUSPECT flips LESS than CURVE_CLEAN (28.2% vs 35.7%), and that is not an inversion.**
+Suspect prints sit far from mid (mean `|s2m|` 4.73 bp against 0.49 bp for clean), and a trade that
+printed far from mid survives a 0.5 bp curve disagreement. The gate is selecting on distance, so
+the lower flip rate is mechanical, not a quality signal. Reporting it the other way round would
+have been a real misread.
+
+**What it implies for the study.** With a 33.4% disagreement rate and no truth label, if each mid
+is right half the time where they disagree, direction accuracy is bounded above by ~83% and the
+signed exposure retains at most ~0.64. The pre-registered attenuation grid {0.6, 0.7, 0.8}
+brackets that, which is luck rather than foresight, but it means the grid does not need moving.
+
+**Caveats, stated with the result.** January only, 488 comparisons. A flip is a *disagreement*, not
+proof our label is wrong — neither curve is truth, and the accuracy ceiling assumes symmetric
+error on disagreements. Coverage misses (12.9%) are dominated by `STALE_INDEPENDENT_CURVE`, whose
+source runs Monday 00:01 to Friday 11:59, so hours 0 and 23 ET are almost uncovered and the
+comparison is not uniform across the session. **To be re-run on the full window as the real G0.**

@@ -290,37 +290,20 @@ def run_g0(ctx, conn=None, *, independent_source="citivelo", label_limit=0,
             ctx.prints_all["classification_method"].isin(cfg.ON_MARKET_METHODS)
             & ctx.prints_all["dealer_direction"].isin(("PAID", "RECEIVED"))
         ].drop_duplicates("unit_key")
-        recon = labels.reclassify_units(units, pool.to_dict(orient="records"),
-                                        source=independent_source,
-                                        limit=label_limit, per_day=label_per_day,
-                                        seed=ctx.config.stats.seed)
-        out["label_recon"] = recon
-        if not recon.empty:
-            recon = recon.merge(
-                pool[["unit_key", "curve_bucket", "venue_bucket"]],
-                on="unit_key", how="left")
-            out["label_recon"] = recon
-            _write(ctx, "g0_label_recon", recon)
-            out["flip_by_confidence"] = labels.flip_rate_table(recon, ("our_confidence",))
-            out["flip_by_trade_type"] = labels.flip_rate_table(recon, ("trade_type",))
-            out["flip_by_curve_bucket"] = labels.flip_rate_table(recon, ("curve_bucket",))
-            out["flip_by_hour"] = labels.flip_rate_table(
-                recon.assign(hour=pd.to_datetime(recon["snap_ts"], utc=True)
-                             .dt.tz_convert("America/New_York").dt.hour), ("hour",))
-            out["skew_vs_independent"] = labels.direction_skew_table(recon)
-            out["skew_vs_independent_by_hour"] = labels.direction_skew_table(
-                recon.assign(hour=pd.to_datetime(recon["snap_ts"], utc=True)
-                             .dt.tz_convert("America/New_York").dt.hour), ("hour",))
-            out["mid_offset_bps"] = _mid_offset_table(recon)
+        study_out = labels.flip_study(
+            units, pool.to_dict(orient="records"), source=independent_source,
+            limit=label_limit, per_day=label_per_day, seed=ctx.config.stats.seed,
+            strata=pool)
+        out.update({k: v for k, v in study_out.items() if k != "recon"})
+        out["label_recon"] = study_out["recon"]
+        if not study_out["recon"].empty:
+            _write(ctx, "g0_label_recon", study_out["recon"])
             for name in ("flip_by_confidence", "flip_by_trade_type",
                          "flip_by_curve_bucket", "flip_by_hour",
                          "skew_vs_independent", "skew_vs_independent_by_hour",
                          "mid_offset_bps"):
-                _write(ctx, f"g0_{name}", out[name])
-            clean = recon[recon["curve_bucket"] == "CURVE_CLEAN"]
-            overall = (float(clean["flipped"].mean())
-                       if clean["flipped"].notna().any() else np.nan)
-            out["implied_accuracy"] = labels.implied_accuracy_bounds(overall)
+                if name in out:
+                    _write(ctx, f"g0_{name}", out[name])
 
     n_vint = int(out["universe_summary"]["n_code_vintages"].iloc[0])
     out["verdict"] = _verdict(
@@ -332,39 +315,6 @@ def run_g0(ctx, conn=None, *, independent_source="citivelo", label_limit=0,
     return out
 
 
-def _mid_offset_table(recon: pd.DataFrame) -> pd.DataFrame:
-    """How far apart the two mids are, in bp, per stratum.
-
-    The direct measurement behind the whole gate. Our spread-to-mid minus the
-    independent one is exactly (independent mid - our mid), so a systematic positive
-    number means our curve sits BELOW theirs and a negative one means above. If that
-    offset is comparable to a half-spread, the direction call is being decided by
-    curve disagreement rather than by where the trade printed -- which is the
-    feasibility audit's first kill risk, measured instead of argued.
-    """
-    df = recon.dropna(subset=["our_s2m_bps", "ind_s2m_bps"]).copy()
-    if df.empty:
-        return pd.DataFrame()
-    df["mid_offset_bps"] = df["our_s2m_bps"].astype(float) - df["ind_s2m_bps"].astype(float)
-    df["hour"] = (pd.to_datetime(df["snap_ts"], utc=True)
-                  .dt.tz_convert("America/New_York").dt.hour)
-    rows = []
-    for label, grp in [("ALL", df)] + list(df.groupby("curve_bucket", dropna=False)):
-        rows.append({
-            "stratum": label if isinstance(label, str) else str(label),
-            "n": len(grp),
-            "mean_our_s2m_bps": float(grp["our_s2m_bps"].mean()),
-            "mean_ind_s2m_bps": float(grp["ind_s2m_bps"].mean()),
-            "mean_offset_bps": float(grp["mid_offset_bps"].mean()),
-            "median_offset_bps": float(grp["mid_offset_bps"].median()),
-            "share_offset_gt_quarter_bp": float((grp["mid_offset_bps"].abs() > 0.25).mean()),
-        })
-    return pd.DataFrame(rows)
-
-
-# --------------------------------------------------------------------------
-# G1 — arrival integrity
-# --------------------------------------------------------------------------
 def run_g1(ctx, *, space=None, sample_grid=200) -> dict:
     """Automated no-lookahead audits. A gate that must PASS for anything later to mean anything."""
     space = space or ctx.config.signal.space
