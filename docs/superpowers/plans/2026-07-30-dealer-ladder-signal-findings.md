@@ -220,8 +220,8 @@ disagreement rather than a difference of rule.
 
 The scale of the problem, **measured on two months and replicated across them**. These are
 preliminary runs of the same `labels.flip_study` the gate uses, reported here because they are
-limitations established by measurement; the full-window version is the real G0. February is
-*provisional* — the projection phase was still running, so 15 of its sessions were available.
+limitations established by measurement; the full-window version is the real G0. Both months are
+complete through all three backfill phases, and the coverage report exits clean on the window.
 
 | | January | February | **Combined** |
 |---|---|---|---|
@@ -257,9 +257,9 @@ alone reproduces the observed outcome with **97.8% agreement and zero false nega
 1,155 comparisons (403 flips predicted and observed, 727 agreements predicted and observed, 25
 false positives). Zero false negatives in **every** `|s2m|` stratum, in each month separately and
 combined: there is no flip that the curve gap fails to account for.
-Consistently, the flip rate collapses to **12.2%** in the top quintile of `|spread-to-mid|`
-(median 3.88 bp) — a trade that printed four basis points from mid is unambiguous whichever curve
-you hold. So this is not label noise to be averaged away; it is a mechanism with a closed form,
+Consistently, the flip rate collapses to **10.4%** in the top quintile of `|spread-to-mid|`
+(median 3.67 bp) — a trade that printed nearly four basis points from mid is unambiguous whichever
+curve you hold. So this is not label noise to be averaged away; it is a mechanism with a closed form,
 and it bites hardest exactly where the trade printed closest to mid.
 
 Two further readings, both of which would be easy to get backwards.
@@ -272,10 +272,12 @@ label: MEDIUM sits closest to mid (median \|s2m\| 0.16 bp) and flips most, LOW s
 (1.10 bp) and flips least, exactly as a fixed-size curve gap predicts. But the ordering does not
 recover when distance is held roughly constant — inside the 0.2–0.8 bp band HIGH still flips 41.9%
 against LOW's 29.8% at almost the same median distance. So the tier is not a quality filter for
-this failure, however much it looks like one. And CURVE_SUSPECT prints flip **less** than CURVE_CLEAN ones
-(28.2% vs 35.7%) — not an inversion of the gate's quality, but an artefact of what it selects on:
-suspect prints sit far from mid (mean `|s2m|` 4.73 bp against 0.49 bp) and far-from-mid prints
-survive a half-bp disagreement.
+this failure, however much it looks like one. And CURVE_SUSPECT prints flip **half as often** as CURVE_CLEAN ones
+(**20.5%** against **40.8%**, n = 337 and 818) — not an inversion of the gate's quality, but an
+artefact of what it selects on: suspect prints sit far from mid (median `|s2m|` 1.57 bp against
+0.36 bp, mean 108 bp against 0.90) and a print that far out survives a half-bp disagreement. Note
+the direction this cuts: the stratum the study actually trades, CURVE_CLEAN, is the one with the
+**worse** flip rate.
 
 That is the audit's first kill risk, and it is live and quantified rather than argued.
 
@@ -285,9 +287,11 @@ curves can be wrong together, and a flip does not say which one was right.
 
 With a 34.9% disagreement rate overall — 40.8% on the curve-clean stratum the study actually
 trades — and no truth label, if each mid is right half the time where they disagree then direction
-accuracy is bounded above by **79.6%** and the signed exposure retains at most **~0.59**. The pre-registered grid {0.6, 0.7, 0.8} brackets that. That is luck
-rather than foresight — the grid was fixed before this was measured — but it means the grid does
-not move, which is the only thing that matters now that the lockout rule is in force.
+accuracy is bounded above by **79.6%** and the signed exposure retains at most **~0.59**. The
+pre-registered grid {0.6, 0.7, 0.8} spans that range with its top point sitting essentially *on*
+the ceiling. The grid does **not** move — it was fixed before any of this was measured, and moving
+it after seeing G0 is precisely the re-specification the lockout rule exists to prevent — but its
+rows now have to be read against a known ceiling rather than as three equally live scenarios.
 
 **And the mechanism meant to absorb this uncertainty does not work.** The ladder's `expected`
 weighting is `1 − 2·p_flip`, so a print believed likely to be mislabelled is carried smaller. That
