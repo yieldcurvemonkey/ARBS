@@ -167,9 +167,28 @@ def verdict_strip(verdicts, ax=None):
         head_x = min(max(head_x, measured + 0.022), 0.72)
     except Exception:
         pass                    # a backend without a renderer falls back to the default
-    for yy, v in zip(y, verdicts):
-        ax.text(head_x, yy, str(v.get("headline", ""))[:98], va="center",
-                ha="left", fontsize=8, color=INK_2)
+    # The headline was truncated at a fixed 98 characters, which is a guess at width -- the
+    # same mistake `head_x` above is measured to avoid -- and it clipped every long gate
+    # headline at the axes edge. Lay the text out, ask how wide it actually came out, and cut
+    # to what fits. A guessed character count cannot work when the font and the panel width
+    # are both free.
+    head_texts = [ax.text(head_x, yy, str(v.get("headline", "")), va="center",
+                          ha="left", fontsize=8, color=INK_2)
+                  for yy, v in zip(y, verdicts)]
+    avail = 0.995 - head_x
+    try:
+        fig.canvas.draw()
+        rend = fig.canvas.get_renderer()
+        for tx in head_texts:
+            full = tx.get_text()
+            x1 = tx.get_window_extent(renderer=rend).x1
+            width = ax.transAxes.inverted().transform((x1, 0.0))[0] - head_x
+            if width > avail and len(full) > 6:
+                keep = max(6, int(len(full) * avail / width) - 1)
+                tx.set_text(full[:keep].rstrip(" ,;-") + "\u2026")
+    except Exception:
+        for tx in head_texts:      # no renderer: fall back to the old fixed cut
+            tx.set_text(tx.get_text()[:98])
     ax.set_xlim(0, 1)
     ax.set_ylim(-0.7, len(labels) - 0.3)
     ax.set_yticks([])
@@ -213,7 +232,7 @@ def lead_lag_curve(curves_by_bucket, ax=None, max_series=3):
 
 
 def league_dotplot(league, ax=None, top=18, value="mean", lo="lo", hi="hi",
-                   label="variant", highlight=()):
+                   label="variant", highlight=(), cost_bp=None):
     """Horizontal dot plot with CI whiskers, one row per variant.
 
     A dot plot rather than bars: these are point estimates with uncertainty, and
@@ -235,6 +254,18 @@ def league_dotplot(league, ax=None, top=18, value="mean", lo="lo", hi="hi",
     ax.scatter(df[value], y, s=42, color=colors, zorder=3, edgecolor=SURFACE,
                linewidth=1.2)
     ax.axvline(0.0, color=INK_2, linewidth=1.0, zorder=2)
+    # Where zero GROSS edge falls. Without it a family that is uniformly zero before costs
+    # looks like a family with a consistent negative effect, because every point sits at
+    # -cost. With it, the reader sees the whole grid lying on the cost line.
+    if cost_bp:
+        ax.axvline(-abs(float(cost_bp)), color=MUTED, linewidth=1.2,
+                   linestyle=(0, (5, 3)), zorder=2)
+        # Surface-filled bbox: the rule is drawn at the same x, so without it the dashes
+        # print straight through the label's own digits.
+        ax.annotate(f"zero gross edge (\u2212{abs(float(cost_bp)):.2f} = round-trip cost)",
+                    xy=(-abs(float(cost_bp)), len(df) - 0.4), fontsize=7.5,
+                    color=MUTED, ha="center", va="bottom", zorder=4,
+                    bbox=dict(facecolor=SURFACE, edgecolor="none", pad=1.6))
     ax.set_yticks(y)
     names = _labels(df, label)
     ax.set_yticklabels([str(s)[:46] for s in names], fontsize=7.5)
@@ -248,14 +279,23 @@ def league_dotplot(league, ax=None, top=18, value="mean", lo="lo", hi="hi",
                         "only thing that matters for a pass.")
 
 
-def placebo_panel(placebos, ax=None, value="mean", label="placebo"):
+def placebo_panel(placebos, ax=None, value=None, label="placebo"):
     """Reference row against every placebo, on one axis.
 
     The reference is drawn as a rule across the panel so each placebo is read as a
     distance FROM it rather than as an independent number.
+
+    Drawn on GROSS whenever the frame carries it. Every arm trades a similar number of
+    times and pays the same round-trip cost, so net-of-cost all six land within 0.1 bp of
+    each other on a 0.5 bp offset and the panel says "every placebo survives" -- which is
+    the cost constant, not a result. On gross the same six separate around zero and the
+    suite reads correctly. Pass ``value`` explicitly to override.
     """
     import matplotlib.pyplot as plt
 
+    if value is None:
+        value = "gross_mean" if "gross_mean" in placebos.columns else "mean"
+    measure = "gross" if str(value).startswith("gross") else "net"
     df = placebos.dropna(subset=[value]).copy()
     if ax is None:
         _, ax = plt.subplots(figsize=(8.0, 0.42 * max(len(df), 1) + 1.5))
@@ -275,10 +315,15 @@ def placebo_panel(placebos, ax=None, value="mean", label="placebo"):
     for yy, v in zip(y, df[value]):
         ax.annotate(f" {v:+.3f}", xy=(v, yy), fontsize=8, va="center",
                     color=INK_2)
-    return _finish(ax, "Placebos against the reference (dashed rule)",
-                   "net bp per trade",
-                   note="A placebo near the reference is a failure of the test, "
-                        "not a success of the signal.")
+    unit = "gross bp per trade (before costs)" if measure == "gross" \
+        else "net bp per trade"
+    note = ("A placebo near the reference is a failure of the test, not a success of "
+            "the signal.")
+    if measure == "net":
+        note += (" Shown NET: every arm pays the same round-trip cost, which compresses "
+                 "them together -- read the gross panel instead where available.")
+    return _finish(ax, f"Placebos against the reference (dashed rule) \u2014 {measure}",
+                   unit, note=note)
 
 
 def flip_rate_bars(flip_table, ax=None, group="our_confidence",
