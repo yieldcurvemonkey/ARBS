@@ -43,6 +43,8 @@ SECTIONS = [
      None, None, None),
     ("g0_direction_skew", "G0 — PAID/RECEIVED skew, ours vs independent", False,
      None, None, None),
+    ("g0_flip_mechanism",
+     "G0 — is a flip explained by the curve gap alone?", False, None, None, None),
     ("g0_implied_accuracy", "G0 — implied bounds on direction accuracy", False,
      None, None, None),
 

@@ -38,6 +38,7 @@ STAGES = {
     "G0 flip by bucket": ["g0_flip_by_curve_bucket"],
     "G0 flip by execution hour": ["g0_flip_by_hour"],
     "G0 direction-skew adjudication": ["g0_direction_skew"],
+    "G0 flip mechanism (curve gap vs distance to mid)": ["g0_flip_mechanism"],
     "G1 arrival integrity": ["g1_audits"],
     "G2 lead-lag, SR3": ["g2_lead_lag_summary_FUTURES"],
     "G2 lead-lag, ZQ cross-check": ["g2_lead_lag_summary_FED_FUNDS"],

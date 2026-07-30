@@ -301,7 +301,7 @@ def run_g0(ctx, conn=None, *, independent_source="citivelo", label_limit=0,
             for name in ("flip_by_confidence", "flip_by_trade_type",
                          "flip_by_curve_bucket", "flip_by_hour",
                          "skew_vs_independent", "skew_vs_independent_by_hour",
-                         "mid_offset_bps"):
+                         "mid_offset_bps", "flip_mechanism"):
                 if name in out:
                     _write(ctx, f"g0_{name}", out[name])
 

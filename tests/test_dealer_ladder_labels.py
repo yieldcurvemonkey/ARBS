@@ -251,3 +251,60 @@ def test_stratified_sample_empty_and_passthrough():
     assert labels.stratified_sample([], per_day=5) == []
     plain = [{"unit_key": "x"}, {"unit_key": "y"}]     # no date/timestamp columns
     assert len(labels.stratified_sample(plain, per_day=1)) == 1
+
+
+# ------------------------------------------------------- the flip mechanism
+def _mech_recon(our_s2m, ind_s2m, flipped):
+    return pd.DataFrame({
+        "unit_key": [f"u{i}" for i in range(len(our_s2m))],
+        "our_s2m_bps": our_s2m, "ind_s2m_bps": ind_s2m,
+        "flipped": flipped,
+        "snap_ts": pd.Timestamp("2026-01-13 10:00", tz="America/New_York"),
+    })
+
+
+def test_flip_mechanism_is_exact_when_the_gap_explains_everything():
+    """The closed form: the label is which side of the mid the print landed, so it
+    flips exactly when the two mids differ by more than the print's distance to mid."""
+    rng = np.random.default_rng(0)
+    our = rng.normal(scale=1.0, size=400)
+    ind = our + rng.normal(scale=0.6, size=400)
+    flipped = (np.abs(our - ind) > np.abs(our)).astype(float)
+    tab = labels.flip_mechanism_table(_mech_recon(our, ind, flipped))
+    all_row = tab[tab["stratum"] == "ALL"].iloc[0]
+    assert all_row["agreement"] == pytest.approx(1.0)
+    assert all_row["false_negative"] == 0 and all_row["false_positive"] == 0
+
+
+def test_a_flip_the_gap_does_not_explain_is_reported_as_a_false_negative():
+    """The column that matters. A non-zero count means something other than curve
+    disagreement is moving the label, which would be a different finding entirely."""
+    our = np.array([2.0, 2.0, 2.0])
+    ind = np.array([2.05, 2.05, 2.05])          # a gap far smaller than the distance
+    tab = labels.flip_mechanism_table(_mech_recon(our, ind, [0.0, 0.0, 1.0]))
+    all_row = tab[tab["stratum"] == "ALL"].iloc[0]
+    assert all_row["false_negative"] == 1
+    assert all_row["agreement"] == pytest.approx(2 / 3)
+
+
+def test_flip_mechanism_reports_quintiles_and_the_overall_row():
+    rng = np.random.default_rng(1)
+    our = rng.normal(scale=1.5, size=300)
+    ind = our + rng.normal(scale=0.5, size=300)
+    flipped = (np.abs(our - ind) > np.abs(our)).astype(float)
+    tab = labels.flip_mechanism_table(_mech_recon(our, ind, flipped))
+    assert tab["stratum"].iloc[0] == "ALL"
+    assert (tab["stratum"].str.startswith("|s2m|")).sum() == 5
+    # every row carries the same fields -- no NaN blocks for a reader to misread
+    for col in ("true_positive", "false_negative", "median_abs_s2m_bps"):
+        assert tab[col].notna().all()
+
+
+def test_flip_mechanism_needs_both_mids():
+    tab = labels.flip_mechanism_table(_mech_recon([1.0, 2.0], [np.nan, np.nan], [1.0, 0.0]))
+    assert tab.empty
+
+
+def test_flip_mechanism_on_an_empty_recon():
+    assert labels.flip_mechanism_table(pd.DataFrame(
+        columns=["flipped", "our_s2m_bps", "ind_s2m_bps"])).empty
