@@ -308,6 +308,10 @@ def run_g0(ctx, conn=None, *, independent_source="citivelo", label_limit=0,
                          "mid_offset_bps", "flip_mechanism"):
                 if name in out:
                     _write(ctx, f"g0_{name}", out[name])
+            # a dict, so it needs shaping before it can be an artifact like the rest
+            if isinstance(out.get("implied_accuracy"), dict):
+                _write(ctx, "g0_implied_accuracy",
+                       pd.DataFrame([out["implied_accuracy"]]))
 
     n_vint = int(out["universe_summary"]["n_code_vintages"].iloc[0])
     out["verdict"] = _verdict(

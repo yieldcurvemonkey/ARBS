@@ -104,9 +104,16 @@ def main(argv=None) -> int:
 
     if args.out_dir:
         os.makedirs(args.out_dir, exist_ok=True)
+        # "recon" is written as g0_label_recon, matching what run_g0 writes, so the
+        # renderer and the completeness inventory work against either path.
+        aliases = {"recon": "label_recon"}
         for name, tab in res.items():
             if isinstance(tab, pd.DataFrame):
-                tab.to_csv(os.path.join(args.out_dir, f"g0_{name}.csv"))
+                tab.to_csv(os.path.join(
+                    args.out_dir, f"g0_{aliases.get(name, name)}.csv"))
+            elif isinstance(tab, dict):
+                pd.DataFrame([tab]).to_csv(
+                    os.path.join(args.out_dir, f"g0_{name}.csv"))
         print(f"\nwrote {args.out_dir}")
     return 0
 

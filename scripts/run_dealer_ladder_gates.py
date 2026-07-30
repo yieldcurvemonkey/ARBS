@@ -55,6 +55,8 @@ def main() -> int:
     ap.add_argument("--bars-cache", default=None,
                     help="memoise the settled-window minute-bar pull here, "
                          "so a re-run costs nothing at the vendor")
+    ap.add_argument("--skip-cross-check", action="store_true",
+                    help="skip the ZQ cross-check stages (G2-ZQ, G3-ZQ)")
     ap.add_argument("--skip-grid", action="store_true",
                     help="skip the secondary family (the slowest stage)")
     args = ap.parse_args()
@@ -105,6 +107,14 @@ def main() -> int:
     stage("G1", lambda: gates.run_g1(ctx))
     stage("G2", lambda: gates.run_g2(ctx))
     stage("G3", lambda: gates.run_g3(ctx))
+    # The ZQ cross-check. Not a second bite at the primary -- MEETING and FED_FUNDS are
+    # never test targets for the locked spec -- but the comparison the mechanism turns
+    # on: leading SR3 and not ZQ reads as liquidity-routed hedging, leading ZQ
+    # specifically reads as meeting-targeted. Both stages already take `space=` and
+    # write per-space artifacts; the runner simply never asked.
+    if not args.skip_cross_check:
+        stage("G2-ZQ", lambda: gates.run_g2(ctx, space="FED_FUNDS"))
+        stage("G3-ZQ", lambda: gates.run_g3(ctx, space="FED_FUNDS"))
     primary = stage("G4-primary", lambda: gates.run_primary(ctx, in_sample=True))
     if primary.get("result") is not None and len(primary["result"]):
         sink.record("PRIMARY (in-sample)",
