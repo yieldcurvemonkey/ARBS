@@ -958,3 +958,61 @@ which is a conclusion the mean and the t alone cannot deliver.
 threshold and horizon are locked, and this is a diagnostic added alongside rather than a
 re-specification. It also does not rescue anything: if G4 passes only because rates fell, the
 benchmark will say so.
+
+### Full-stage review of the gate code (07:10) — six more defects
+
+Having found twelve in the adversarial pass and four in the reporting layer, every gate stage got
+read line by line rather than trusted. Six more, in the order found. The pattern is by now
+consistent: none was a crash, all had a green suite, and each was caught by asking "what would this
+number have to be for the claim to hold" rather than by reading for correctness.
+
+**D23 — the label-free cell built its intensity in the wrong space.** It used the configured SIGNAL
+space while taking rates from the TARGET space. Whenever those differ — exactly the ZQ cross-check
+stages added an hour earlier — the SR3 and ZQ bucket namespaces are disjoint, the reindex matched
+nothing, and the cell would have reported "no trades". Indistinguishable from a real null, on the
+ONE diagnostic that survives the labelling problem, which G0 had just made the most load-bearing
+number in the study. It was also missing from the trial ledger despite being a tradable rule.
+
+**D24 — conditioning splits could vanish.** A conditioner whose panel could not be read was dropped
+by a bare `continue`. Every declared conditioner is now split or skipped-with-a-reason, with a test
+asserting `split + skipped == declared`. Also documented what the table is NOT: the tercile
+boundaries are full-sample, which is right for "does the effect survive in every vol regime" but is
+not a tradable filter, and a reader lifting a strong stratum out as a trading rule would silently
+add a fitted parameter to a locked spec.
+
+**D25 — capacity counted volume traded before the position existed.** The volume panel is
+right-closed, so the bar stamped at the entry minute covers the interval *ending* there. A `[entry,
+exit]` slice therefore counted thirteen bars for a twelve-bar holding period: ~8% overstatement of a
+headline number, in the optimistic direction, and the same class of error as the flow-response
+event-bar bug one stage over. It also dropped unpriceable trades silently, so the median was taken
+over a reduced subset.
+
+**D26 — `horse_race` hid its own rank deficiency.** `pinv` absorbs a degenerate design and returns
+standard errors that mean very little, and G3's whole verdict is "does the coefficient SURVIVE the
+controls". The collinearity is plausible rather than hypothetical here: `basis_bp` and
+`abs_basis_bp` coincide whenever the basis rarely changes sign. Rank, column count, condition number
+and a `rank_deficient` flag are now on every row. (Checked the rest of that path and it holds: the
+CGM correction omits only a 1.001 factor at this N, and normal-vs-t(103) moves the threshold by
+0.02.)
+
+**D27 — the placebo reference matched the primary only by coincidence.** All five placebos are read
+as a distance FROM the reference, and the reference was recomputed with
+`buckets=list(rates.columns)` while `load_context` had built the signal from the contract calendar.
+Those sets diverge whenever a contract returned no bars, so a reference off by one bucket would
+silently shift all five comparisons at once. It now takes the primary's result verbatim. Each row
+also carries `share_long`, because the sign shuffle removes the PAID skew as well as the direction
+signal — the shuffled rule is near-balanced while the real one is 80% one-sided, so part of any gap
+is position balance, not lost information, and reading the whole gap as "direction was carrying it"
+would be wrong.
+
+**D28 — the SR3-vs-ZQ comparison was never assembled, and G2's threshold sat outside the locked
+config.** Both spaces wrote their own tables and nothing combined them, even though the brief makes
+this the comparison the mechanism turns on. Leaving a reader to hold two tables side by side and
+infer the label is precisely where a preferred reading gets chosen, so the comparison now carries
+its own interpretation — including the two outcomes easy to gloss: leading BOTH is undiscriminating
+and must not be quoted as if it discriminated, leading NEITHER is no evidence at all. Separately,
+G2's timing gate was a literal `3.0`, which put it OUTSIDE the configuration fingerprint the lockout
+ledger records — so it could have been moved after seeing the holdout without the burn rule
+noticing. It reads `config.primary.t_pass` now, with a test that the literal is gone.
+
+**Running total: 22 defects, across three review rounds, in code that was green throughout.**
