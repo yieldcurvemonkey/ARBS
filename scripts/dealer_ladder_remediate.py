@@ -77,12 +77,19 @@ def _orchestrator_running() -> bool:
     gap list would be wrong by construction -- a month the orchestrator has not reached yet
     looks identical to a month that failed, so the script would dutifully "remediate" work
     that was never attempted.
+
+    The name filter is load-bearing: without `Name -eq 'bash.exe'` the PowerShell process
+    running this very query matches, because the search string appears in its own command
+    line. That self-match made the guard fire permanently and would have blocked the
+    remediation for ever -- a check that can never pass is as useless as one that never
+    fires.
     """
     try:
         out = subprocess.run(
             ["powershell", "-NoProfile", "-Command",
-             "(Get-CimInstance Win32_Process | "
-             "Where-Object { $_.CommandLine -match 'backfill_dealer_ladder_window' } | "
+             "(Get-CimInstance Win32_Process | Where-Object { "
+             "$_.Name -eq 'bash.exe' -and "
+             "$_.CommandLine -match 'backfill_dealer_ladder_window' } | "
              "Measure-Object).Count"],
             capture_output=True, text=True, timeout=60)
         return int((out.stdout or "0").strip() or 0) > 0
@@ -111,8 +118,29 @@ def find_gaps(conn):
     return df
 
 
-def _months(days) -> list:
-    return sorted({(d.year, d.month) for d in days})
+def _month_ranges(days) -> list:
+    """[(year, month, first_missing, last_missing)] — the SPAN of missing days per month.
+
+    Not the whole month. June needs one day (2026-06-09) and re-running the other twenty
+    costs about two and a half hours of classify and project for nothing.
+
+    Narrowing is safe because every phase is idempotent over a range: classify upserts on
+    `unit_key`, and project and marks are invoked with `--rewrite`, which deletes the
+    window's rows before rewriting them. So a span that happens to include already-good
+    days rewrites them identically rather than corrupting them.
+
+    The CALIBRATION window still comes from the month (see ``_calib``), not from the span,
+    so a single-day re-run is calibrated exactly as the original month-long chunk was.
+    Narrowing the range without pinning the calibration would give the repaired day a
+    different `p_flip` from its neighbours, which is the one way this optimisation could
+    have gone wrong.
+    """
+    out = {}
+    for d in days:
+        key = (d.year, d.month)
+        lo, hi = out.get(key, (d, d))
+        out[key] = (min(lo, d), max(hi, d))
+    return [(y, m, lo, hi) for (y, m), (lo, hi) in sorted(out.items())]
 
 
 def _month_bounds(y, m):
@@ -214,8 +242,7 @@ def main(argv=None) -> int:
     rc_all = 0
     # classify per MONTH, because the tick calibration is computed once per invocation and
     # a per-day call would recompute it 20 times and could pick a different window
-    for y, m in _months(need_classify):
-        s, e = _month_bounds(y, m)
+    for y, m, s, e in _month_ranges(need_classify):
         ks, ke = _calib(y, m)
         rc_all |= run(f"classify-{y}-{m:02d}", [
             "SDRUtils._swappulse_scripts.backfill_stir_direction_range",
@@ -224,15 +251,13 @@ def main(argv=None) -> int:
             "--day-jobs", "2", "--warm-jobs", "8", "--log-dir", LOGS,
             "--purge-stale-vintage"], args.dry_run)
 
-    for y, m in _months(need_project):
-        s, e = _month_bounds(y, m)
+    for y, m, s, e in _month_ranges(need_project):
         rc_all |= run(f"project-{y}-{m:02d}", [
             "SDRUtils._swappulse_scripts.backfill_stir_ladder", "--phase", "project",
             "--start", str(s), "--end", str(e), "--day-jobs", "4", "--warm-jobs", "8",
             "--log-dir", LOGS, "--rewrite"], args.dry_run)
 
-    for y, m in _months(need_marks):
-        s, e = _month_bounds(y, m)
+    for y, m, s, e in _month_ranges(need_marks):
         # --rewrite on the marks phase deletes only mark_kind='EOD', so ENTRY marks
         # written by the projection phase survive untouched
         rc_all |= run(f"marks-{y}-{m:02d}", [
