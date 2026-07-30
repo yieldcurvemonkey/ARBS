@@ -172,3 +172,62 @@ def test_build_control_panels_basis_is_constant_when_implied_offset_is():
         grid=r.index)
     assert np.allclose(panels["basis_bp"].to_numpy(), 2.0)
     assert np.allclose(panels["abs_basis_bp"].to_numpy(), 2.0)
+
+
+# ------------------------------------------------- rolling front-rank baskets
+def test_front_rank_rolls_with_the_strip():
+    """"The front six" is a RANK statement; its absolute contracts change."""
+    import datetime
+
+    grid = pd.DatetimeIndex([
+        pd.Timestamp("2026-01-20 10:00", tz=NY),
+        pd.Timestamp("2026-04-20 10:00", tz=NY),
+        pd.Timestamp("2026-07-20 10:00", tz=NY),
+    ])
+    fr = controls.front_rank_panel(grid, "FUTURES", 6)
+    jan = fr.iloc[0].dropna().sort_values()
+    jul = fr.iloc[2].dropna().sort_values()
+    assert list(jan.index) == ["SFRH26", "SFRM26", "SFRU26", "SFRZ26",
+                              "SFRH27", "SFRM27"]
+    assert list(jul.index) == ["SFRU26", "SFRZ26", "SFRH27", "SFRM27",
+                              "SFRU27", "SFRZ27"]
+    # SFRH26 is in the front six in January and gone by July
+    assert fr.loc[grid[0], "SFRH26"] == 1.0
+    assert np.isnan(fr.loc[grid[2], "SFRH26"])
+
+
+def test_front_rank_never_exceeds_n_front():
+    grid = pd.DatetimeIndex([pd.Timestamp("2026-03-02 10:00", tz=NY)])
+    fr = controls.front_rank_panel(grid, "FUTURES", 4)
+    ranks = fr.iloc[0].dropna()
+    assert len(ranks) == 4
+    assert sorted(ranks.tolist()) == [1.0, 2.0, 3.0, 4.0]
+
+
+def test_front_rank_monthly_space():
+    grid = pd.DatetimeIndex([pd.Timestamp("2026-03-02 10:00", tz=NY)])
+    fr = controls.front_rank_panel(grid, "FED_FUNDS", 3)
+    assert list(fr.iloc[0].dropna().sort_values().index) == ["FFH26", "FFJ26", "FFK26"]
+
+
+def test_window_contract_union_spans_both_ends():
+    """The union must hold January's front AND July's, or the basket would either
+    trade an expired contract or look ahead."""
+    import datetime
+
+    u = controls.window_contract_union(
+        (datetime.date(2026, 1, 12), datetime.date(2026, 7, 29)), "FUTURES", 6)
+    buckets = [b for b, *_ in u]
+    assert "SFRH26" in buckets          # January's front
+    assert "SFRZ27" in buckets          # July's back
+    assert len(buckets) == len(set(buckets)) == 8
+    # is_ser must be the quarterly flag for SR3
+    assert all(is_ser is False for _b, _e, _m, is_ser in u)
+
+
+def test_window_contract_union_monthly_is_ser_true():
+    import datetime
+
+    u = controls.window_contract_union(
+        (datetime.date(2026, 1, 12), datetime.date(2026, 2, 28)), "FED_FUNDS", 3)
+    assert all(is_ser is True for _b, _e, _m, is_ser in u)

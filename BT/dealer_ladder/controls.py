@@ -188,6 +188,57 @@ def level_proximity_bp(implied_bp: pd.DataFrame, *, grid_bp=25.0) -> pd.DataFram
     return implied_bp - nearest
 
 
+def front_rank_panel(grid, space, n_front, count=16) -> pd.DataFrame:
+    """Per (minute, contract) front-rank, NaN when the contract is outside the front N.
+
+    WHY THIS IS NEEDED. The ladder keys buckets on ABSOLUTE contracts, deliberately —
+    persisting rank-keyed vectors would smear buckets across roll dates. But a
+    research basket defined as "the front six" is a RANK statement, and over a
+    six-month window the absolute contracts behind that rank change: as of
+    2026-01-12 the SR3 front six is SFRH26..SFRM27, and by 2026-06-18 SFRH26 has
+    expired and the front six is SFRU26..SFRZ27. Freezing the basket at the window
+    start would therefore spend the last weeks trading a contract that no longer
+    exists and would never appear in the ladder, and freezing it at the window END
+    would silently look ahead.
+
+    So the rank is recomputed per session from the same calendar the ladder uses,
+    and the research masks its signal to the front N as of each date. This is the
+    "rank views are derived at read time" the design spec calls for.
+    """
+    from SDRUtils.stir_flow.ladder import FUTURES_SPACE_SPEC, contract_grid
+
+    root = FUTURES_SPACE_SPEC[space][0]
+    idx = pd.DatetimeIndex(grid)
+    et = idx.tz_convert("America/New_York") if idx.tz is not None else idx
+    days = pd.Series(et.date, index=idx)
+    ranks = {}
+    for day in pd.unique(days):
+        for rank, (bucket, _eff, _mat) in enumerate(contract_grid(day, root, count)):
+            ranks.setdefault(bucket, pd.Series(np.nan, index=idx))
+            if rank < n_front:
+                ranks[bucket][(days == day).to_numpy()] = float(rank + 1)
+    return pd.DataFrame(ranks, index=idx) if ranks else pd.DataFrame(index=idx)
+
+
+def window_contract_union(window, space, n_front, count=16) -> list:
+    """Every contract that is in the front ``n_front`` on ANY session of the window.
+
+    The set the target loader must fetch: a superset of every date's basket, so the
+    per-date mask can then narrow it without a second vendor round trip.
+    """
+    from SDRUtils.stir_flow.ladder import FUTURES_SPACE_SPEC, contract_grid
+
+    root, is_ser = FUTURES_SPACE_SPEC[space]
+    start, end = (window if isinstance(window, tuple) else (window.start, window.end))
+    seen, out = set(), []
+    for day in pd.bdate_range(start, end):
+        for bucket, eff, mat in contract_grid(day.date(), root, count)[:n_front]:
+            if bucket not in seen:
+                seen.add(bucket)
+                out.append((bucket, eff, mat, is_ser))
+    return out
+
+
 def build_control_panels(*, rates_bp, volumes, implied_bp, ladder_level,
                          contracts, grid) -> dict:
     """Every per-(minute, bucket) control, as a dict of panels ready for ``align_long``."""

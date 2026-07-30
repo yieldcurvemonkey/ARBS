@@ -40,6 +40,7 @@ class GateContext:
     stale_min: dict                   # space -> staleness in minutes
     implied_bp: dict                  # space -> curve-implied contract rate (bp)
     signal: dict                      # space -> {"level","increment","z"}
+    front_rank: dict                  # space -> per-(minute, contract) front rank
     results_dir: str
 
     def buckets(self, space):
@@ -60,11 +61,12 @@ def _verdict(gate, passed, headline, **detail):
 
 # --------------------------------------------------------------------------
 def contract_calendar(as_of, spaces=("FUTURES", "FED_FUNDS"), count=6) -> list:
-    """``[(bucket_key, eff, mat, is_ser)]`` for the front ``count`` of each space.
+    """``[(bucket_key, eff, mat, is_ser)]`` for the front ``count`` of each space
+    AS OF a single date. ``is_ser`` selects the monthly averaged spec for ZQ and the
+    quarterly compounded one for SR3, matching how the ladder builds these.
 
-    Front six per the pre-registered basket. ``is_ser`` selects the monthly
-    averaged spec for ZQ and the quarterly compounded one for SR3, matching how the
-    ladder itself builds these contracts.
+    For a multi-month study use ``window_contract_calendar`` instead: the absolute
+    contracts behind "the front six" change as the strip rolls.
     """
     from SDRUtils.stir_flow.ladder import FUTURES_SPACE_SPEC, contract_grid
 
@@ -73,6 +75,20 @@ def contract_calendar(as_of, spaces=("FUTURES", "FED_FUNDS"), count=6) -> list:
         root, is_ser = FUTURES_SPACE_SPEC[space]
         for bucket, eff, mat in contract_grid(pd.Timestamp(as_of).date(), root)[:count]:
             out.append((bucket, eff, mat, is_ser))
+    return out
+
+
+def window_contract_calendar(window, spaces=("FUTURES", "FED_FUNDS"), count=6) -> list:
+    """Union of every contract that is in the front ``count`` on ANY session.
+
+    A superset of every date's basket, so the target can be fetched once and then
+    narrowed per date by the front-rank mask. Freezing the basket at the window
+    start would spend the last weeks trading an expired contract the ladder never
+    emits; freezing it at the window end would look ahead.
+    """
+    out = []
+    for space in spaces:
+        out.extend(controls.window_contract_union(window, space, count))
     return out
 
 
@@ -90,12 +106,13 @@ def load_context(conn, config=None, *, window=None, results_dir=None,
     days = data.trading_days(window)
     grid = data.decision_grid(days, config.signal)
 
-    # the contract set is as-of dependent; take the calendar at the window START so
-    # bucket keys stay fixed across the study, and report roll explicitly instead
-    contracts = contract_calendar(window[0], spaces=spaces,
-                                  count=config.primary.n_contracts)
+    # The basket is a RANK statement ("front six") whose absolute contracts roll, so
+    # fetch the union over the window and narrow per session with front_rank below.
+    contracts = window_contract_calendar(window, spaces=spaces,
+                                         count=config.primary.n_contracts)
 
     rates_bp, volumes, stale_min, implied_bp, signal = {}, {}, {}, {}, {}
+    front_rank = {}
     from SDRUtils.stir_flow import config as sconfig
     from SDRUtils.stir_flow.pricing import CurvePricer
 
@@ -123,13 +140,24 @@ def load_context(conn, config=None, *, window=None, results_dir=None,
         implied_bp[space] = controls.curve_implied_contract_rates(
             pricer, curve_name, grid, space_contracts)
 
+        front_rank[space] = controls.front_rank_panel(
+            grid, space, config.primary.n_contracts).reindex(
+                index=grid, columns=buckets)
+
         sig_cfg = dataclasses.replace(config.signal, space=space)
-        signal[space] = signals.build_signal(prints, grid, sig_cfg, buckets=buckets)
+        built = signals.build_signal(prints, grid, sig_cfg, buckets=buckets)
+        # Mask the SIGNAL, not the target: a contract outside that session's front N
+        # simply produces no decision, so nothing downstream has to remember the rule.
+        in_front = front_rank[space].notna()
+        for key in ("level", "increment", "z"):
+            built[key] = built[key].where(in_front.reindex_like(built[key]))
+        signal[space] = built
 
     return GateContext(config=config, window=window, prints_all=prints_all,
                        prints=prints, grid=grid, contracts=contracts,
                        rates_bp=rates_bp, volumes=volumes, stale_min=stale_min,
-                       implied_bp=implied_bp, signal=signal, results_dir=results_dir)
+                       implied_bp=implied_bp, signal=signal, front_rank=front_rank,
+                       results_dir=results_dir)
 
 
 def _space_of(bucket_key: str) -> str:
