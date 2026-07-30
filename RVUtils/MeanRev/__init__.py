@@ -32,6 +32,14 @@ from RVUtils.MeanRev.contracts import (
     package_dv01_usd,
     spread_from_weights,
 )
+from RVUtils.MeanRev.diagnostics import (
+    forward_move,
+    move_profile,
+    oracle_table,
+    selectivity_table,
+    signal_entry_mask,
+    variance_decomposition,
+)
 from RVUtils.MeanRev.engine import (
     COST_SCENARIOS,
     MRConfig,
@@ -40,6 +48,22 @@ from RVUtils.MeanRev.engine import (
     leg_round_trip_bp,
     run_backtest,
     run_continuous,
+)
+from RVUtils.MeanRev.meetings import (
+    FOMC_DECISIONS,
+    LAST_ACTUAL_YEAR,
+    LAST_PUBLISHED_YEAR,
+    calendar_fly_loading,
+    calendar_fly_panel,
+    calendar_tilted_fly,
+    contract_weight_table,
+    effective_meeting_count,
+    fomc_decisions,
+    fomc_schedule,
+    meeting_count_gaps,
+    meeting_residual_panel,
+    meeting_weight_matrix,
+    solve_smooth_path,
 )
 from RVUtils.MeanRev.panel import (
     add_strip_slots,
@@ -53,10 +77,13 @@ from RVUtils.MeanRev.shadow import shadow_levels, shadow_table
 from RVUtils.MeanRev.signals import (
     bollinger_signal,
     coint_spread_signal,
+    calendar_adjusted_signal,
     curvefit_residual_signal,
     kalman_level_signal,
+    meeting_residual_signal,
     ou_sscore_signal,
     pca_residual_signal,
+    structure_signal_from_slots,
     xsection_signal,
     zscore_signal,
 )
@@ -74,4 +101,14 @@ __all__ = [
     "bollinger_signal", "coint_spread_signal", "curvefit_residual_signal",
     "kalman_level_signal", "ou_sscore_signal", "pca_residual_signal",
     "xsection_signal", "zscore_signal",
+    "meeting_residual_signal", "calendar_adjusted_signal",
+    "structure_signal_from_slots",
+    "FOMC_DECISIONS", "LAST_ACTUAL_YEAR", "LAST_PUBLISHED_YEAR",
+    "calendar_fly_loading", "calendar_fly_panel", "calendar_tilted_fly",
+    "contract_weight_table",
+    "effective_meeting_count", "fomc_decisions", "fomc_schedule",
+    "meeting_count_gaps", "meeting_residual_panel", "meeting_weight_matrix",
+    "solve_smooth_path",
+    "forward_move", "move_profile", "oracle_table", "selectivity_table",
+    "signal_entry_mask", "variance_decomposition",
 ]
