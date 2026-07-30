@@ -171,8 +171,16 @@ def romano_wolf(panel: pd.DataFrame, blocks, *, n_boot=2000, seed=0,
         if not np.isfinite(absobs[j]):
             continue
         block = absstar[:, active]
-        with np.errstate(invalid="ignore"):
-            maxes = np.nanmax(block, axis=1) if block.size else np.array([np.nan])
+        # An all-NaN bootstrap row means every active hypothesis was unidentified in
+        # that resample (e.g. a draw with a single block). Treat it as "no evidence"
+        # instead of letting nanmax warn and return NaN.
+        if block.size:
+            usable = np.isfinite(block).any(axis=1)
+            maxes = np.full(block.shape[0], np.nan)
+            if usable.any():
+                maxes[usable] = np.nanmax(block[usable], axis=1)
+        else:
+            maxes = np.array([np.nan])
         p = float(np.nanmean(maxes >= absobs[j])) if np.isfinite(maxes).any() else np.nan
         running = max(running, p)          # monotone non-decreasing down the order
         p_fwer[j] = running
