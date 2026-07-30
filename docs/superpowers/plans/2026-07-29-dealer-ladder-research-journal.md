@@ -1160,3 +1160,35 @@ gate: the dataset is not complete until it exits zero over the full window.
 - [ ] **April 2026: EOD marks only** (ENTRY marks are already correct)
 - [ ] `coverage --strict` over 2026-01-12 → 2026-07-29; re-run every session it flags
 - [ ] deferred to next cycle: tolerant `ensure_schema`, `IRSwapsMDP.py` into `VINTAGE_SOURCES`
+
+### The monitor that was supposed to catch May would not have (08:05)
+
+Having established that an empty month exits zero, I hardened the watcher — and then tested it
+against the actual May logs rather than trusting it. **It still missed May, for two independent
+reasons**, and both are worth recording because each is a general trap.
+
+**The exception filter matched the wrong shape.** It looked for
+`^Name(Error|Exception):`, which is what Python exceptions usually look like. May's classify died
+with `psycopg2.errors.QueryCanceled` — a name ending in neither word — so a genuine crash produced
+no event at all. The filter now extracts the **first unindented line after the indented traceback
+body**, whatever the exception is called, which is structural rather than a guess at naming.
+
+That correction had its own bug, caught the same way. Taking the *last* unindented line in the file
+returned January's closing `range done: 20 days, 7632 units` — because normal output resumes after
+the benign teardown traceback and kept overwriting the capture — so a perfectly healthy chunk would
+have been reported as a FAILURE. Verified against every chunk log: silent on January, February, March
+and April's healthy phases; catches May classify and April marks.
+
+**The emptiness check tested presence rather than quantity.** May's project log contains 21
+`projected 0/0` lines, so "does it have projected lines" passed. Emptiness has to be **measured** —
+the totals are now summed, and a chunk that projected zero units or wrote zero EOD marks is reported
+even though it exited 0 with a clean log.
+
+Also added: a phase with **no `range done` at all** once a later phase has started, which is how a
+death-at-startup looks from outside.
+
+**The general point.** Twice now the monitoring has been the thing that failed, and in both cases the
+fix came from running the filter against a log I already knew the answer for. A filter's job is to
+distinguish states, and until it has been shown a known-bad and a known-good input it is an
+assumption, not a check. The Monitor guidance puts it as *"if this crashed right now, would my filter
+emit anything?"* — and here the honest answer was no, twice.
