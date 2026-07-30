@@ -856,3 +856,35 @@ we can actually measure, the weighting cannot be relied on to correct for it.
 
 Now a permanent artifact (`g0_pflip_calibration`), computed every G0 run, reporting rank and level
 separately so the two failure modes cannot be conflated.
+
+### March classify returned rc=1 — two weekend days, and the pipeline did the right thing (04:43)
+
+`canceling statement due to statement timeout` on the eligible-legs query against the remote
+Supabase prod DB, for **2026-03-28 and 2026-03-29 — a Saturday and a Sunday**. The chunk finished
+`31 days, 15421 units, 2 day-errors`.
+
+Three things went right, and they are worth recording because each is a place this could have gone
+quietly wrong instead:
+
+1. **The vintage purge refused to run**: `purge SKIPPED: 2 day-errors in window -- rerun those days
+   first`. Purging on a window it could not fully verify is exactly how a partial failure becomes a
+   deleted month. Verified afterwards that nothing stale was left behind anyway — the March slice of
+   `arbs_stir_direction_v1` holds 15,421 rows under a single vintage `468474ca6f84`.
+2. **The orchestrator recorded the failure and carried on** rather than aborting the remaining four
+   chunks on two non-trading days.
+3. **The failure monitor fired once, with the actionable line** (`2 day-errors`) and no false
+   positive from the benign teardown traceback — which is what the earlier filter rewrite was for.
+
+**Why the two lost days do not matter, and how that is guaranteed rather than assumed.**
+`data.trading_days` drives the decision grid, so a weekend never enters the study; and the coverage
+report enumerates sessions from that same trading calendar and flags any with zero classified
+units. So a weekend failure is invisible to the report *by construction*, and a trading-day failure
+is caught *by construction*. No judgement call is needed at the point where one would be easy to
+get wrong.
+
+**The residual risk is a timeout landing on a trading day.** It is transient DB load, not something
+about those dates, so it can. The remediation is already in place and needs no new code: after the
+backfill, `dealer_ladder_coverage.py --strict` over the full window exits non-zero on any trading
+session with zero classified units, and those specific days get re-run through
+`backfill_stir_direction_range.py`. Deliberately NOT retried automatically mid-run — a retry loop
+against a DB that is timing out is how a transient problem becomes a sustained one.
