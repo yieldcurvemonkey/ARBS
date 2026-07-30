@@ -1531,3 +1531,60 @@ data. `LOCKOUT_USED.json` does not exist.
 Running now: the same gates with `--session-quality`, to answer whether the audit's defects drove
 the result. Expectation stated in advance -- **they did not**, because a zero with 5 of 104
 in-sample sessions removed is still a zero.
+
+## THE ROBUSTNESS ARM, AND TWO MORE CHECKING-TOOL BUGS (18:10)
+
+### A prod schema migration killed my G0 stage
+
+The lock watchdog fired "UNGRANTED LOCKS: 3". The chain was: my package query (102s) blocked an
+`ALTER TABLE arbs_usd_swap_tape_packages_v2 ADD COLUMN` from the tape ingest, which in turn
+blocked two more readers. I checked the queue, saw Postgres lock queues are FIFO so the ALTER
+could not be starved indefinitely, watched it clear, and called it benign.
+
+**That was half right.** It cleared — by the migration winning and my query hitting
+`statement timeout`. G0's `ELIGIBLE_LEGS_SQL` joins `arbs_usd_swap_tape_legs_v2` to
+`arbs_usd_swap_tape_packages_v2`, which is the exact table being altered, so the stage died with
+`psycopg2.errors.QueryCanceled`.
+
+`stage()` caught it and the run continued, which is what it was written for — "a stage failure
+must not lose the earlier ones". G0 is a measurement of the input, not an input to the later
+stages, so the primary comparison the arm exists to make is unaffected.
+
+The lesson is operational and worth keeping: **a long analytical read against the prod tape can
+be killed by a concurrent schema migration**, and the failure surfaces as a statement timeout
+rather than as a lock error, so it does not look like contention. G0's label study reads six
+months of legs in one query; chunking it by month would make it robust to this. Logged as a
+follow-up rather than changed now, because the arm is mid-run.
+
+A second trap: I thought the arm had died. It had not. `traceback.print_exc()` goes to unbuffered
+stderr while `print` goes to buffered stdout, so the traceback appeared instantly and everything
+after it sat in the buffer. The log looked frozen at a fatal error. `Get-CimInstance Win32_Process`
+showed the process alive at 7.0 GB, still working. **Do not infer death from a silent log when
+stdout is redirected.**
+
+### I quoted a range I had read off the top of a sorted table
+
+The report said the Romano-Wolf spread was "|t| from 79 to 311". The true range is **0.89 to
+310.66, median 18.0** — I took the numbers from the head of a table sorted descending, which is
+where the largest values live by construction. The mean also runs −0.7566 to −0.2888 (median
+−0.5035), so "all within a whisker of −0.50" was an overstatement; 67 of 96 are within ±0.05.
+
+The claim it supported survives intact and is better served by the true figures: **not one of the
+96 variants is positive**, 83 of 96 clear FWER < 0.05, and standard errors reach 0.0016. That is
+a cost constant estimated precisely, not an edge.
+
+The fix is `scripts/verify_findings_numbers.py`, which ties every headline figure in the PROSE to
+the artifact that produced it. §10's tables are rendered from the CSVs and cannot drift; the
+prose is hand-written, and that is where the error was. It checks direction as well as digits —
+that the gross row carries no stars, that no variant is profitable, that `−9.44` never appears
+without being labelled the cost constant — because a digit can match while the sentence around it
+says the opposite.
+
+**Its own first version was wrong**, in the same way as the others: it tested for the substring
+`"lockout was opened"`, which occurs inside *"written down before the lockout was opened"* — a
+statement about the order of recording, not a claim the holdout was spent. It reported a
+correctly-unburned lockout as a mismatch.
+
+That is instances **seven, eight and nine** this engagement of a checking tool that was itself
+the defect (the two completeness bugs, then this). All nine were found the same way: by running
+the check against an input whose answer was already known.
