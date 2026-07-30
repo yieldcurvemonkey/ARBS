@@ -20,7 +20,7 @@ import numpy as np
 import pandas as pd
 
 from BT.dealer_ladder import audit, config as cfg, controls, data, labels
-from BT.dealer_ladder import lockout, signals, stats, study
+from BT.dealer_ladder import lockout, session_quality, signals, stats, study
 
 RESULTS_DIRNAME = "BT/results/dealer_ladder"
 
@@ -108,6 +108,27 @@ def load_context(conn, config=None, *, window=None, results_dir=None,
         else prints_all
 
     days = data.trading_days(window)
+
+    # Session-quality gate. Three defects found by the dataset audit are session-scoped -- a
+    # feed that died mid-session, a run where the tape stopped emitting large packages, and
+    # sessions where the classification mid is displaced by several bp -- so they are removed
+    # by dropping whole sessions rather than by truncating the window. Off unless asked for:
+    # the pre-registered spec must run unchanged, and this is the robustness arm.
+    sq_cfg = getattr(config, "session_quality", None)
+    excluded_days, session_quality_table = set(), None
+    if sq_cfg is not None and getattr(sq_cfg, "enabled", False):
+        session_quality_table = session_quality.assess_sessions(conn, window, sq_cfg)
+        excluded_days = set(session_quality_table.loc[
+            session_quality_table["excluded"], "session_date"])
+        if excluded_days:
+            days = [d for d in days if pd.Timestamp(d).date() not in excluded_days]
+            if not prints.empty:
+                keep = ~pd.to_datetime(prints["as_of_date"]).dt.date.isin(excluded_days)
+                prints = prints[keep]
+            if show_progress:
+                print(f"  session-quality gate: excluded {len(excluded_days)} sessions, "
+                      f"{len(days)} remain")
+
     grid = data.decision_grid(days, config.signal)
 
     # The basket is a RANK statement ("front six") whose absolute contracts roll, so

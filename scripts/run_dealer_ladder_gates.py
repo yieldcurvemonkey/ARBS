@@ -32,7 +32,7 @@ def _date(s):
 
 
 def main() -> int:
-    from BT.dealer_ladder import config as cfg, data, gates
+    from BT.dealer_ladder import config as cfg, data, gates, session_quality
 
     ap = argparse.ArgumentParser()
     ap.add_argument("--start", type=_date, default=None)
@@ -59,6 +59,11 @@ def main() -> int:
                     help="skip the ZQ cross-check stages (G2-ZQ, G3-ZQ)")
     ap.add_argument("--skip-grid", action="store_true",
                     help="skip the secondary family (the slowest stage)")
+    ap.add_argument("--session-quality", action="store_true",
+                    help="drop sessions failing the data-quality gate (truncated feed, "
+                         "broken tape packaging, displaced classification mid). OFF by "
+                         "default so the pre-registered spec runs unchanged; this is the "
+                         "robustness arm that answers whether those defects drove the result")
     args = ap.parse_args()
 
     window = cfg.WindowConfig()
@@ -67,7 +72,10 @@ def main() -> int:
             start=args.start or window.start,
             end=args.end or window.end,
             lockout_start=args.lockout_start or window.lockout_start)
-    conf = cfg.LadderStudyConfig(window=window)
+    conf = cfg.LadderStudyConfig(
+        window=window,
+        session_quality=session_quality.SessionQualityConfig(
+            enabled=bool(args.session_quality)))
 
     print(f"window {window.start}..{window.end}  lockout from {window.lockout_start}")
     print(f"results -> {args.results_dir}")

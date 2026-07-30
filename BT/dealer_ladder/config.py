@@ -160,6 +160,13 @@ class StatsConfig:
 class LadderStudyConfig:
     window: WindowConfig = dataclasses.field(default_factory=WindowConfig)
     universe: UniverseConfig = dataclasses.field(default_factory=UniverseConfig)
+    # Off by default so the pre-registered spec is the one that runs unchanged. Turned ON for
+    # the robustness re-run, which is where the audit's session-scoped defects are answered:
+    # if the verdict is the same with the bad sessions removed, the defects did not drive it.
+    session_quality: "session_quality.SessionQualityConfig" = dataclasses.field(
+        default_factory=lambda: __import__(
+            "BT.dealer_ladder.session_quality", fromlist=["SessionQualityConfig"]
+        ).SessionQualityConfig(enabled=False))
     signal: SignalConfig = dataclasses.field(default_factory=SignalConfig)
     cost: CostConfig = dataclasses.field(default_factory=CostConfig)
     primary: PrimarySpec = dataclasses.field(default_factory=PrimarySpec)
