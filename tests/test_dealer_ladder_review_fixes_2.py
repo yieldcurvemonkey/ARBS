@@ -492,3 +492,35 @@ def test_g2_timing_threshold_comes_from_the_locked_config():
     src = inspect.getsource(gates.run_g2)
     assert "ctx.config.primary.t_pass" in src
     assert ">= 3.0" not in src
+
+
+# ================ a G1 that certified nothing must not report a pass
+def test_g1_treats_a_vacuous_pass_as_a_failure(monkeypatch):
+    """The poison audits work by corrupting prints that should be invisible and checking
+    the value does not move. With no such print in the sample they report clean without
+    testing anything -- and that exact wiring once passed on a builder leaking five hours
+    of future flow. Nothing-detected and nothing-to-detect must not look alike."""
+    _no_write(monkeypatch)
+    ctx = _context(effect=0.5, seed=90)
+    real = gates.audit.run_g1_battery
+
+    def _vacuous(*a, **k):
+        rows = real(*a, **k)
+        for r in rows:
+            if "max_future_prints" in r:
+                r["max_future_prints"] = 0
+        return rows
+
+    monkeypatch.setattr(gates.audit, "run_g1_battery", _vacuous)
+    out = gates.run_g1(ctx, sample_grid=25)
+    assert out["audits"]["pass"].all(), "the individual audits still report clean"
+    assert out["verdict"]["pass"] is False, "but the GATE must fail"
+    assert "VACUOUS" in out["verdict"]["headline"]
+
+
+def test_g1_reports_what_the_poison_audit_was_exercised_on(monkeypatch):
+    _no_write(monkeypatch)
+    out = gates.run_g1(_context(effect=0.5, seed=91), sample_grid=25)
+    assert out["verdict"]["pass"] is True
+    assert out["poison_exercised_on"] and out["poison_exercised_on"] > 0
+    assert "exercised on" in out["verdict"]["headline"]

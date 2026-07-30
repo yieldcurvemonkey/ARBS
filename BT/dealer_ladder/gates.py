@@ -324,7 +324,20 @@ def run_g0(ctx, conn=None, *, independent_source="citivelo", label_limit=0,
 
 
 def run_g1(ctx, *, space=None, sample_grid=200) -> dict:
-    """Automated no-lookahead audits. A gate that must PASS for anything later to mean anything."""
+    """Automated no-lookahead audits. A gate that must PASS for anything later to mean anything.
+
+    A VACUOUS PASS counts as a failure. The poison audits work by corrupting prints that
+    should be invisible at the decision minute and checking the value does not move -- so
+    if no such print exists in the sample, the audit reports clean without having tested
+    anything. `max_future_prints` is therefore required to be non-zero, not merely
+    reported: that exact wiring bug once passed on a builder leaking five hours of future
+    flow. "Nothing detected" and "nothing to detect" must never produce the same verdict.
+
+    ``sample_grid`` audits a random 200 of the ~13,000 decision minutes, which is a cost
+    trade-off with a real limit: a leak present at 10% of minutes is certain to be caught,
+    one present at 0.1% may not be. It is a check against systematic look-ahead, not proof
+    of its absence at every minute.
+    """
     space = space or ctx.config.signal.space
     sig_cfg = dataclasses.replace(ctx.config.signal, space=space)
     buckets = ctx.buckets(space)
@@ -361,11 +374,29 @@ def run_g1(ctx, *, space=None, sample_grid=200) -> dict:
         standardise_fn=lambda p: signals.trailing_zscore(p, sig_cfg.z_window_days))
     frame = pd.DataFrame(verdicts)
     _write(ctx, "g1_audits", frame)
-    ok = bool(frame["pass"].all())
-    return {"audits": frame,
-            "verdict": _verdict("G1", ok,
-                                "all arrival audits pass" if ok else
-                                "LOOK-AHEAD DETECTED — downstream gates are void")}
+    all_pass = bool(frame["pass"].all())
+
+    # Was the poison audit actually EXERCISED? Zero future prints in the sample means it
+    # reported clean without testing anything, and that is not a pass.
+    exercised, n_future = True, None
+    if "max_future_prints" in frame.columns:
+        vals = pd.to_numeric(frame["max_future_prints"], errors="coerce").dropna()
+        if len(vals):
+            n_future = int(vals.max())
+            exercised = n_future > 0
+
+    ok = bool(all_pass and exercised)
+    if not all_pass:
+        head = "LOOK-AHEAD DETECTED — downstream gates are void"
+    elif not exercised:
+        head = ("VACUOUS PASS — the poison audits saw zero not-yet-visible prints, so "
+                "they certified nothing. Treated as a FAILURE.")
+    else:
+        head = (f"all arrival audits pass"
+                + (f", poison audit exercised on {n_future} future prints"
+                   if n_future is not None else ""))
+    return {"audits": frame, "poison_exercised_on": n_future,
+            "verdict": _verdict("G1", ok, head)}
 
 
 # --------------------------------------------------------------------------
