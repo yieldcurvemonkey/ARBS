@@ -716,6 +716,62 @@ Conversely, a lockout *pass* at this cluster count is meaningful precisely becau
 **This study can decisively reject a large, obvious effect. It cannot establish that a small one is
 durable, causal, or capacity-bearing**, and no claim of that kind will be made from it.
 
+### 8.9 Open data defects that need fixing OUTSIDE this study
+
+Three defects survived verification. None is caused by this study's code, all three are live in
+production, and **the first is a production bug in the tape that has nothing to do with this
+research and should be fixed regardless of what happens to the dealer-ladder hypothesis.**
+
+**1. PTP package grouping has been silently dead since 2026-07-21.** `ptp_group_id` is NULL for
+every tape leg from that date — 1,485/1,620/1,800 groups a day through 07-20, then
+0, 75, 0, 0, 0, 0, 0. The **source fields are intact throughout**: `package_transaction_price` is
+populated on 1,550–2,006 legs a day after the break, *more* than the 1,056–1,320 before it. So the
+CFTC feed is fine and the grouper is not seeing it.
+
+The consequence is that large multi-leg structures are torn into standalone prints. Maximum legs
+per package falls from 90/73/109/55/28/30 to a flat **3**, packages with >4 legs falls from 36–64 a
+day to **0**, and `package_id` values change shape from `PTP_4290830669000000301` (30 legs) to
+`FLY_101_4315159479000000701` (3 legs) — i.e. only the structure detectors are still firing and
+the PTP pre-grouper contributes nothing.
+
+*Most likely mechanism, stated as a hypothesis and not as a finding.* `group_by_ptp` gates every
+candidate on
+
+```python
+candidate_mask = pkg_ind_bool & (ptp_usable | pts_usable) & ts_all.notna()
+if not candidate_mask.any():   # -> everything returned ungrouped
+```
+
+`ptp_usable` is confirmed true for thousands of rows a day, so the failure is `pkg_ind_bool` or
+`ts_all`. Both are reachable from the same change: `DETECTION_CACHE_VERSION` is
+`"ptp16-exec-vs-event-timestamps"`, and `169cb1a9 feat(sdr): Phase 1 — read Event timestamp +
+de-conflate execution/event` landed 2026-07-17, four days before the break — consistent with a
+cache-version bump that only takes effect on newly ingested days. Note also that the column
+normaliser at `usd_swaps.py:1971` lowercases *before* applying its CamelCase split regex, so the
+regex can never match and the "snake_case" conversion only replaces spaces; a source column that
+changed from `Package Indicator` to `PackageIndicator` would silently stop mapping.
+
+**The decisive next step** is to run `group_by_ptp` on a raw 07-21 frame and print which of the
+three conditions is empty. That is a ten-minute check for whoever owns the tape, and this study
+should not be the thing that fixes it.
+
+**2. 2026-07-24 is missing its entire US cash session, at the tape level.** 799 legs, of which
+**zero** fall in ET hours 08–16; the feed runs 20:02 (prior day) to 06:57 and stops. Neighbours
+carry 4,097–4,586 legs with 3,162–3,587 in the cash session. This is **not** recoverable by
+re-running classification — the rows are not in `arbs_usd_swap_tape_legs_v2` — so it needs an SDR
+re-ingest, which is outside this work's write scope.
+
+**3. The classification mid is intermittently displaced on 12 sessions** (§8.7). Unlike 1 and 2
+this one is *inside* the study's own curve stack, but diagnosing it means going into the curve
+build rather than the ladder, and it is scoped as its own investigation.
+
+**A gap in my own coverage tool, worth recording.** `dealer_ladder_coverage.py --strict` passed
+2026-07-24. It counts rows, checks vintages and joins marks — it never asked whether a session is
+*shaped* like a trading day, so a day present but missing its cash session reads as complete. The
+generalisation is now `BT/dealer_ladder/session_quality.py`, which found exactly two shape
+anomalies in 138 sessions and correctly exempted the third candidate (Good Friday) as a scheduled
+early close.
+
 ---
 
 ## 9. Completeness pass
