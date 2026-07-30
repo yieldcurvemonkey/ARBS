@@ -159,28 +159,73 @@ def reclassify_one(unit, direction_row, pricer, curve_name,
     return out
 
 
+def stratified_sample(direction_rows, *, per_day=40, seed=0) -> list:
+    """Sample up to ``per_day`` rows per session, SPREAD ACROSS the session.
+
+    A plain head-N is biased in a way that matters here. A first smoke took the
+    first 25 rows of a day and got prints from 02:16-03:59 ET — the thinnest part of
+    the overnight session, where mid quality is worst and a flip rate would read high
+    for reasons that have nothing to do with the classifier. Sampling is therefore
+    stratified by execution HOUR within each session and then randomised inside the
+    hour, so the flip rate describes the day rather than its quietest corner.
+    """
+    rng = np.random.default_rng(seed)
+    rows = list(direction_rows)
+    if not rows:
+        return []
+    frame = pd.DataFrame(rows)
+    if "as_of_date" not in frame.columns or "execution_timestamp" not in frame.columns:
+        return rows[:per_day] if per_day else rows
+    ts = pd.to_datetime(frame["execution_timestamp"], utc=True, errors="coerce")
+    frame["_hour"] = ts.dt.tz_convert("America/New_York").dt.hour
+    keep = []
+    for _day, day_rows in frame.groupby("as_of_date", sort=True):
+        hours = list(day_rows.groupby("_hour"))
+        if not hours:
+            continue
+        per_hour = max(1, per_day // max(len(hours), 1))
+        picked = []
+        for _h, hour_rows in hours:
+            take = min(per_hour, len(hour_rows))
+            picked.extend(hour_rows.sample(take, random_state=int(rng.integers(1e9)))
+                          .index.tolist())
+        # top up to per_day from whatever is left, so a thin-hour day is not starved
+        if per_day and len(picked) < per_day:
+            rest = day_rows.index.difference(pd.Index(picked))
+            extra = min(per_day - len(picked), len(rest))
+            if extra:
+                picked.extend(pd.Index(rest).to_series()
+                              .sample(extra, random_state=int(rng.integers(1e9)))
+                              .tolist())
+        keep.extend(picked[:per_day] if per_day else picked)
+    return [rows[i] for i in sorted(keep)]
+
+
 def reclassify_units(units_by_key, direction_rows, *, source="citivelo",
-                     limit=0, max_staleness_min=MAX_CURVE_STALENESS_MIN) -> pd.DataFrame:
-    """Re-classify every unit that the independent source could cover.
+                     limit=0, max_staleness_min=MAX_CURVE_STALENESS_MIN,
+                     per_day=0, seed=0) -> pd.DataFrame:
+    """Re-classify units the independent source could cover.
 
     ``direction_rows`` is an iterable of dicts from ``arbs_stir_direction_v1``.
     Only SOFR units are attempted: both independent sources are SOFR curves.
+
+    ``per_day`` caps the work with a time-of-day-stratified sample. Worth using: the
+    independent curve is read once per distinct decision minute, and over a six-month
+    window that is tens of thousands of reads for a statistic that a few thousand
+    prints already pins. ``limit`` is the blunt cap and is applied after sampling.
     """
     curve_name = INDEPENDENT_SOURCES[source]
     pricer = independent_pricer(source)
+    rows_in = [d for d in direction_rows if d.get("rate_index_clean") == "SOFR"
+               and d.get("unit_key") in units_by_key]
+    if per_day:
+        rows_in = stratified_sample(rows_in, per_day=per_day, seed=seed)
     rows = []
-    n = 0
-    for drow in direction_rows:
-        unit = units_by_key.get(drow["unit_key"])
-        if unit is None:
-            continue
-        if drow.get("rate_index_clean") != "SOFR":
-            continue                      # no independent FF curve exists here
-        rows.append(reclassify_one(unit, drow, pricer, curve_name,
-                                   max_staleness_min=max_staleness_min))
-        n += 1
+    for n, drow in enumerate(rows_in):
         if limit and n >= limit:
             break
+        rows.append(reclassify_one(units_by_key[drow["unit_key"]], drow, pricer,
+                                   curve_name, max_staleness_min=max_staleness_min))
     df = pd.DataFrame(rows)
     if df.empty:
         return df

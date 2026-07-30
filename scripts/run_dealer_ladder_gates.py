@@ -40,7 +40,9 @@ def main() -> int:
     ap.add_argument("--lockout-start", type=_date, default=None)
     ap.add_argument("--results-dir", default=gates.RESULTS_DIRNAME)
     ap.add_argument("--label-limit", type=int, default=0,
-                    help="cap the independent-mid reclassification (0 = all)")
+                    help="hard cap on the independent-mid reclassification (0 = none)")
+    ap.add_argument("--label-per-day", type=int, default=40,
+                    help="time-of-day-stratified sample size per session for G0")
     ap.add_argument("--lockout", action="store_true",
                     help="ALSO evaluate the one-shot holdout (burn rule applies)")
     ap.add_argument("--skip-grid", action="store_true",
@@ -88,7 +90,8 @@ def main() -> int:
     from BT.dealer_ladder import study
 
     sink = study.TrialLedger()
-    stage("G0", lambda: gates.run_g0(ctx, conn, label_limit=args.label_limit))
+    stage("G0", lambda: gates.run_g0(ctx, conn, label_limit=args.label_limit,
+                                     label_per_day=args.label_per_day))
     stage("G1", lambda: gates.run_g1(ctx))
     stage("G2", lambda: gates.run_g2(ctx))
     stage("G3", lambda: gates.run_g3(ctx))

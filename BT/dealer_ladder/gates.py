@@ -197,7 +197,8 @@ def warm_decision_grid(pricer, curve_name, grid, *, warm_jobs=8, verbose=True) -
 # --------------------------------------------------------------------------
 # G0 — labels and provenance
 # --------------------------------------------------------------------------
-def run_g0(ctx, conn=None, *, independent_source="citivelo", label_limit=0) -> dict:
+def run_g0(ctx, conn=None, *, independent_source="citivelo", label_limit=0,
+           label_per_day=40) -> dict:
     """Provenance: who is in the universe, and does an independent mid agree?
 
     Reports the exclusion ladder, the PAID/RECEIVED skew by stratum, the p_flip
@@ -230,25 +231,49 @@ def run_g0(ctx, conn=None, *, independent_source="citivelo", label_limit=0) -> d
     }])
     _write(ctx, "g0_universe_summary", out["universe_summary"])
 
-    # independent-mid flip study (SOFR only -- both sources are SOFR curves)
+    # Independent-mid flip study (SOFR only -- both sources are SOFR curves).
+    # Deliberately run over ON-MARKET prints INCLUDING curve-suspect ones, not just
+    # the signed universe: the flip rate BY curve_bucket is the diagnostic that says
+    # whether the curve-suspect gate is catching the right prints, and restricting to
+    # curve-clean would throw exactly that comparison away.
     if conn is not None:
         from SDRUtils._swappulse_scripts.backfill_stir_ladder import _load_units
 
         units = _load_units(conn, ctx.window[0], ctx.window[1])
-        drows = (ctx.prints.drop_duplicates("unit_key")
-                 .to_dict(orient="records"))
-        recon = labels.reclassify_units(units, drows, source=independent_source,
-                                        limit=label_limit)
+        pool = ctx.prints_all[
+            ctx.prints_all["classification_method"].isin(cfg.ON_MARKET_METHODS)
+            & ctx.prints_all["dealer_direction"].isin(("PAID", "RECEIVED"))
+        ].drop_duplicates("unit_key")
+        recon = labels.reclassify_units(units, pool.to_dict(orient="records"),
+                                        source=independent_source,
+                                        limit=label_limit, per_day=label_per_day,
+                                        seed=ctx.config.stats.seed)
         out["label_recon"] = recon
         if not recon.empty:
+            recon = recon.merge(
+                pool[["unit_key", "curve_bucket", "venue_bucket"]],
+                on="unit_key", how="left")
+            out["label_recon"] = recon
             _write(ctx, "g0_label_recon", recon)
             out["flip_by_confidence"] = labels.flip_rate_table(recon, ("our_confidence",))
             out["flip_by_trade_type"] = labels.flip_rate_table(recon, ("trade_type",))
+            out["flip_by_curve_bucket"] = labels.flip_rate_table(recon, ("curve_bucket",))
+            out["flip_by_hour"] = labels.flip_rate_table(
+                recon.assign(hour=pd.to_datetime(recon["snap_ts"], utc=True)
+                             .dt.tz_convert("America/New_York").dt.hour), ("hour",))
             out["skew_vs_independent"] = labels.direction_skew_table(recon)
+            out["skew_vs_independent_by_hour"] = labels.direction_skew_table(
+                recon.assign(hour=pd.to_datetime(recon["snap_ts"], utc=True)
+                             .dt.tz_convert("America/New_York").dt.hour), ("hour",))
+            out["mid_offset_bps"] = _mid_offset_table(recon)
             for name in ("flip_by_confidence", "flip_by_trade_type",
-                         "skew_vs_independent"):
+                         "flip_by_curve_bucket", "flip_by_hour",
+                         "skew_vs_independent", "skew_vs_independent_by_hour",
+                         "mid_offset_bps"):
                 _write(ctx, f"g0_{name}", out[name])
-            overall = float(recon["flipped"].mean()) if recon["flipped"].notna().any() else np.nan
+            clean = recon[recon["curve_bucket"] == "CURVE_CLEAN"]
+            overall = (float(clean["flipped"].mean())
+                       if clean["flipped"].notna().any() else np.nan)
             out["implied_accuracy"] = labels.implied_accuracy_bounds(overall)
 
     n_vint = int(out["universe_summary"]["n_code_vintages"].iloc[0])
@@ -259,6 +284,36 @@ def run_g0(ctx, conn=None, *, independent_source="citivelo", label_limit=0) -> d
         f"flip rate {out.get('implied_accuracy', {}).get('flip_rate', float('nan')):.3f}",
         single_vintage=(n_vint == 1))
     return out
+
+
+def _mid_offset_table(recon: pd.DataFrame) -> pd.DataFrame:
+    """How far apart the two mids are, in bp, per stratum.
+
+    The direct measurement behind the whole gate. Our spread-to-mid minus the
+    independent one is exactly (independent mid - our mid), so a systematic positive
+    number means our curve sits BELOW theirs and a negative one means above. If that
+    offset is comparable to a half-spread, the direction call is being decided by
+    curve disagreement rather than by where the trade printed -- which is the
+    feasibility audit's first kill risk, measured instead of argued.
+    """
+    df = recon.dropna(subset=["our_s2m_bps", "ind_s2m_bps"]).copy()
+    if df.empty:
+        return pd.DataFrame()
+    df["mid_offset_bps"] = df["our_s2m_bps"].astype(float) - df["ind_s2m_bps"].astype(float)
+    df["hour"] = (pd.to_datetime(df["snap_ts"], utc=True)
+                  .dt.tz_convert("America/New_York").dt.hour)
+    rows = []
+    for label, grp in [("ALL", df)] + list(df.groupby("curve_bucket", dropna=False)):
+        rows.append({
+            "stratum": label if isinstance(label, str) else str(label),
+            "n": len(grp),
+            "mean_our_s2m_bps": float(grp["our_s2m_bps"].mean()),
+            "mean_ind_s2m_bps": float(grp["ind_s2m_bps"].mean()),
+            "mean_offset_bps": float(grp["mid_offset_bps"].mean()),
+            "median_offset_bps": float(grp["mid_offset_bps"].median()),
+            "share_offset_gt_quarter_bp": float((grp["mid_offset_bps"].abs() > 0.25).mean()),
+        })
+    return pd.DataFrame(rows)
 
 
 # --------------------------------------------------------------------------

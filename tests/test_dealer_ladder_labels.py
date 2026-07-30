@@ -200,3 +200,54 @@ def test_reclassify_units_skips_fed_funds():
     rows = [_drow(rate_index_clean="FED_FUNDS")]
     out = labels.reclassify_units(units, rows, source="citivelo")
     assert out.empty
+
+
+# --------------------------------------------------- stratified sampling for G0
+def _pool(n_per_hour=6, hours=(2, 3, 9, 10, 14, 15), days=("2026-03-10", "2026-03-11")):
+    rows = []
+    for d in days:
+        for h in hours:
+            for i in range(n_per_hour):
+                rows.append(dict(
+                    unit_key=f"{d}-{h}-{i}", as_of_date=d,
+                    execution_timestamp=pd.Timestamp(f"{d} {h:02d}:{i:02d}:00", tz=NY),
+                    rate_index_clean="SOFR"))
+    return rows
+
+
+def test_stratified_sample_spreads_across_the_session():
+    """A head-N took 25 prints all from 02:16-03:59 ET -- the thinnest hours, where
+    mid quality is worst. The sample must describe the day, not its quiet corner."""
+    pool = _pool()
+    out = labels.stratified_sample(pool, per_day=12, seed=0)
+    frame = pd.DataFrame(out)
+    hours = (pd.to_datetime(frame["execution_timestamp"], utc=True)
+             .dt.tz_convert(NY).dt.hour)
+    assert frame["as_of_date"].nunique() == 2
+    # every hour present in the pool must be represented, not just the earliest
+    assert set(hours.unique()) == {2, 3, 9, 10, 14, 15}
+
+
+def test_stratified_sample_respects_per_day_cap():
+    out = labels.stratified_sample(_pool(), per_day=6, seed=1)
+    frame = pd.DataFrame(out)
+    assert (frame.groupby("as_of_date").size() <= 6).all()
+
+
+def test_stratified_sample_tops_up_a_thin_hour_day():
+    """A day whose hours cannot fill the quota must still return what it has."""
+    pool = _pool(n_per_hour=1, hours=(9, 10))
+    out = labels.stratified_sample(pool, per_day=20, seed=2)
+    assert len(out) == 4          # 2 days x 2 hours x 1 print
+
+
+def test_stratified_sample_is_deterministic_for_a_seed():
+    a = labels.stratified_sample(_pool(), per_day=10, seed=7)
+    b = labels.stratified_sample(_pool(), per_day=10, seed=7)
+    assert [r["unit_key"] for r in a] == [r["unit_key"] for r in b]
+
+
+def test_stratified_sample_empty_and_passthrough():
+    assert labels.stratified_sample([], per_day=5) == []
+    plain = [{"unit_key": "x"}, {"unit_key": "y"}]     # no date/timestamp columns
+    assert len(labels.stratified_sample(plain, per_day=1)) == 1
