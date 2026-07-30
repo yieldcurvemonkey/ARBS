@@ -158,6 +158,9 @@ def render(results_dir: str) -> tuple[str, list[str]]:
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--results", default=DEFAULT_RESULTS)
+    ap.add_argument("--inject", default=None,
+                    help="splice the output into this markdown file, between "
+                         "<!-- BEGIN GENERATED TABLES --> and <!-- END GENERATED TABLES -->")
     ap.add_argument("--out", default=None,
                     help="write markdown here; default is stdout")
     ap.add_argument("--check", action="store_true",
@@ -176,13 +179,17 @@ def main(argv=None) -> int:
             return 1
         print("all required artifacts present")
         return 0
+    if args.inject:
+        from BT.dealer_ladder import report
+        report.inject(args.inject, "GENERATED TABLES", md)
+        print(f"spliced {len(md.splitlines())} lines into {args.inject}")
     if args.out:
         with open(args.out, "w", encoding="utf-8", newline="\n") as fh:
             fh.write(md + "\n")
         print(f"wrote {args.out} ({len(md.splitlines())} lines)")
         if missing:
             print("MISSING REQUIRED: " + ", ".join(missing), file=sys.stderr)
-    else:
+    if not (args.inject or args.out):
         print(md)
     return 0
 
