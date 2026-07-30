@@ -689,3 +689,56 @@ flip with **zero false negatives** in every stratum, and again agreement is weak
 LOW 30.3%. February: HIGH **49.0%**, MEDIUM 61.7%, LOW **24.7%** — the HIGH tier flips *twice as
 often* as the LOW tier. Whatever the confidence label ranks, it is not agreement with an
 independent mid, and it must not be used to select a cleaner stratum for this failure.
+
+### Self-review of the post-review code (2026-07-30 03:25)
+
+The adversarial pass found twelve confirmed defects in code that had a green suite throughout, so
+the code written *after* it — lockout, report splicing, the two generators, the coverage report,
+the warm pass, the flip study, the bars cache — was reviewed on the same assumption. Four defects,
+three of them found by writing the test rather than by reading the code.
+
+**D19 — the report named artifacts nothing writes, and missed four that are written.** The findings
+renderer and the completeness inventory both declared `g0_flip_rate` and `g0_direction_skew`, which
+no code path produces, while `run_g0` writes `g0_skew_vs_independent`,
+`g0_skew_vs_independent_by_hour`, `g0_flip_by_trade_type` and `g0_skew_by_stratum`, which neither
+declared. Three stages that *do* run would have been reported MISSING; four that run would not have
+appeared at all. **That is the failure the completeness pass exists to prevent, committed by the
+completeness pass.** `implied_accuracy` is a dict, so it was never written at all.
+
+Fixed structurally rather than by hand: `tests/test_dealer_ladder_artifact_names.py` reads the
+names out of the **source** — the writer's `_write` calls, the renderer's `SECTIONS`, the
+inventory's `STAGES` — and asserts the three agree, with a guard test so the regexes cannot pass
+vacuously. Restating the list in the test would have drifted exactly like the list it guards.
+
+**D20 — the ZQ cross-check was never run.** `run_g2` and `run_g3` both take `space=` and both write
+per-space artifacts, but the runner only ever called them for FUTURES. The FED_FUNDS tables existed
+in the code and were produced by nothing — which is how the name test found them, as
+written-but-never-rendered. This is not decoration: the brief makes ZQ **the comparison the
+mechanism turns on**, since a ladder that leads SR3 but not ZQ reads as liquidity-routed hedging
+while one that leads ZQ specifically reads as meeting-targeted. Now `G2-ZQ` and `G3-ZQ` stages.
+
+**D21 — the coverage report crashed on an empty window**, which is exactly when it is most needed,
+since telling a missing session from an empty one is its whole purpose. A query returning no rows
+contributes no *columns*, so every later reference raised `KeyError`; and `pd.NA` does not survive
+`.astype(float)`. An empty window now reports zeros with a loud anomaly.
+
+**D22 — the warm pass warmed nothing and reported success in 0.0s** (recorded above at C12).
+
+**A process note worth keeping.** Three of these four were found by *writing the test*, not by
+reading the code — the artifact-name test found two the moment it first ran, and the warm-pass bug
+surfaced the first time its output was checked against expectation rather than against exit status.
+The pattern across this whole engagement is consistent: on research code, a green suite certifies
+that the code does what its author believed. The defects live in the beliefs, and only an
+independent statement of what *should* be true — a differential audit, a closed-form prediction, a
+cross-check between two representations of the same list — reaches them.
+
+### Phase status at 03:25
+
+- **Phase A — DONE.** PR #354 merged.
+- **Phase B — running.** January complete and verified (14 sessions, 7,632 classified, 0.18%
+  UNKNOWN, 99.8% projected, 100% marked per unit, single vintage `468474ca6f84`, zero anomalies).
+  February classify done, projection at 02-19. Five chunks remain, ETA ~09:30.
+- **Warm pass — chained**, fires automatically when the last chunk reports `range done`; ~62 min.
+- **Phase C — code complete, reviewed twice, de-risked.** The notebook executes end to end against
+  fixtures with 0 errors and 5 figures. G0 has a strong preliminary result replicated across two
+  months.
