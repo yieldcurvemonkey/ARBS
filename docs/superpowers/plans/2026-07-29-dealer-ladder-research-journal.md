@@ -92,6 +92,52 @@ stands. One caveat for G0/G3: the Citi workbook's sheets run Mon 00:01 → Fri 1
 **Friday-afternoon prints have no independent mid** (2026-01-30 and 2026-05-15 both fell back to
 11:59). Friday PM is therefore an explicit hole in the pseudo-label study, not a silent one.
 
+**D2' — the vintage stamp is a HASH OF THE PIPELINE MODULES, not the repo HEAD.** Superseding
+D2. A ~6-month backfill runs for hours, and committing anything at all meanwhile — a research
+module, a doc — would change HEAD and split the window into artificial vintages, while a dirty
+tree would tar every row `+dirty` regardless of whether the dirt was in this pipeline. So
+`code_vintage()` hashes the contents of the 19 output-determining modules, normalising CRLF→LF,
+excluding `vintage.py` and `daylog.py`. `git_sha()` survives for logs. Also added
+`--purge-stale-vintage`: re-classification upserts on `unit_key`, so rows whose unit is no
+longer eligible survive as orphans from an older **tape** vintage — measured on 07/02, a re-run
+wrote 678 units of which 568 overwrote old rows, leaving **125 orphans plus 110 genuinely new
+units**. The purge is skipped whenever any day in the window errored, because that day wrote
+nothing and deleting its previous rows would leave a hole indistinguishable from an empty session.
+
+**D7 — Phase A's re-classification is folded into Phase B, not run twice.** 07/02–07/14 sit
+inside the Phase B window, and running them under one calibration convention and then again
+under another would leave the verification numbers describing a dataset that no longer exists.
+Phase A's verification was therefore taken on a fully rebuilt cold day (2026-03-10) instead.
+
+**D8 — the backfill was ~30 hours because of a vendor-quota pathology; it is now ~9.**
+Two independent problems, both measured rather than guessed:
+
+*Curve acquisition.* The per-minute `_get_curve` path costs one Barchart request **per
+instrument per minute** — 24 instruments for the SOFR ladder curve, 36 for the FF one — against
+an intraday origin quota of ~55 requests per rolling minute. One curve-minute consumes roughly
+the whole quota; a 479-minute day needs ~28,700 requests, about eight hours of quota per trading
+day even perfectly paced. And the limiter is constructed **per fetch call, not per process**, so
+the documented 3×4 warm defaults burst ~6× through the ceiling and park every worker in
+`Retry-After` sleeps — the observed ~5% CPU with 19 sockets open and no progress. Compounding
+it, `USD-SOFR-1D-Q12xM12STIRT` had **1 day in the local CurveStore against the FF curve's 1376**,
+and the barchart single-point path never writes back, so every SOFR minute missed and would have
+missed forever. Fix: `warm_pricer` now issues one `bulk_get_data` per curve, which fetches the
+whole session once and persists the calibrated day. Measured on a cold day, 5 minutes:
+**71.3 s → 0.02 s**, value-identical to **0.000e+00** on both node discount factors and a priced
+2Y rate. A cold classifier day went from 30+ min with high UNKNOWN to **~5 min with ZERO
+UNKNOWN** (599 units, 411 PAID / 188 RECEIVED), of which ~4 min is the once-per-chunk calibration.
+
+*Projection.* Profiling showed **100%** of the projection's cost in `build_risk_models`
+(5.36 s/snapshot; delta was 2 ms, packaging 3 ms). Per space: MEETING 0.11 s, FUTURES 0.24 s,
+FED_FUNDS 0.49 s, **SERFF_BASIS 13.81 s — 94%**, because it is the one space still needing ~60
+vendor pricer fetches per snapshot. Dropping it (default; `--with-basis` re-enables) took a cold
+day from 74–109 min to **7.75 min**. This costs the research nothing: the plan designates
+SERFF_BASIS conditioning-only and bars it from ever being a test target, and
+`controls.basis_bp` — curve-implied contract rate minus the futures market rate, per contract, on
+the 5-minute **decision** grid — is a better conditioner than a basis DV01 split at scattered
+print times. The old DB rows confirm the projection was always this slow: 07/02's 511 units ran
+15:09→17:20, **2h11m for one day**, long before any change here.
+
 ---
 
 ## Data-surface constraints found by recon (2026-07-29) — all load-bearing
@@ -187,18 +233,35 @@ individually have failed, and its per-unit venue label is an anchor-leg approxim
 ### Phase A — PR #354 cleanup
 
 - [x] A.0 Baseline probes + journal (2026-07-29)
-- [ ] A.1 Worktree hygiene + merge `origin/main`
-- [ ] A.2 FUTURES risk model → curve-implied dates path (+ FF/ZQ if feasible)
-- [ ] A.3 `code_vintage` column + CLI stamping
-- [ ] A.4 Re-classify 07/02–07/14 at one vintage; re-project; diagnose 07/13 UNKNOWN
-- [ ] A.5 EOD marks + Task 9 verification SQL
-- [ ] A.6 Fast gate + goldens → PR body → merge
+- [x] A.1 Worktree hygiene + merge `origin/main` — one conflict (`progress.md`), both ledgers
+      kept; fast gate green after the merge at **3060 passed / 42 skipped**
+- [x] A.2 FUTURES **and** FED_FUNDS risk models → curve-implied dates path, plus the sign fix
+      (see D3/D4) and `SERFF_BASIS` repaired
+- [x] A.3 `code_vintage` (content hash, see D2') + `--rewrite` + curve pre-warm + day-parallel
+      range drivers + per-day logs
+- [x] A.4 07/13's UNKNOWNs diagnosed **and confirmed dead**: the recursion victim
+      re-classifies cleanly under the current vintage (PAID via RATE_VS_MID), so all 131
+      recursion failures across 07/09–07/14 were a code-vintage artefact. Re-classification is
+      folded into Phase B rather than run twice (see D7).
+- [x] A.5 Task 9 verification — **clean** (see the table below)
+- [ ] A.6 Fast gate + network goldens → PR body → merge
+
+**Task 9 verification, run on a fully rebuilt cold day (2026-03-10, 599 units):**
+
+| check | result |
+|---|---|
+| sign convention | **MEETING, FUTURES and FED_FUNDS all agree**: 369/369 PAID → negative, 163/163 RECEIVED → positive. No mixed signs anywhere. |
+| DV01 consistency (outrights, ±10%) | MEETING 522/532, FUTURES 522/532, FED_FUNDS 491/532 inside. Residual is the expected imperfection of a futures basket as a partition of swap DV01 — the monthly ZQ basket is coarser, hence its larger miss. |
+| no-lookahead | 0 rows with visibility earlier than the legal minimum. Delay distribution +1min 14508 / +15min 360 / +30min 1260 / +60min 5436 — genuine Part 43 class variety, not everything collapsing to the conservative fallback. |
+| spaces present | all 3 spaces for all 599 units; 0 `RISK_MODEL_ERROR`, 0 `PROJECT_ERROR` |
 
 ### Phase B — full-window dataset
 
-- [ ] B.1 Intraday curve availability probe at the window start
-- [ ] B.2 Classifier backfill over the realized window
-- [ ] B.3 Projection + EOD marks over the window
+- [x] B.1 Curve availability probed — full window viable, no shrinkage (D6)
+- [x] B.1b **Performance root-cause and fix** (D8) — this was the difference between a
+      feasible backfill and a ~30-hour one
+- [~] B.2/B.3 Full-window backfill running via `scripts/backfill_dealer_ladder_window.sh`
+      (classify → project → marks, monthly chunks, trailing calibration, per-day logs)
 - [ ] B.4 Coverage table
 
 ### Phase C — signal research (G0–G5)
