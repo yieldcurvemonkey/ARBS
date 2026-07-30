@@ -96,22 +96,132 @@ def test_write_mark_rows_upsert_sql():
 
 
 # --------------------------- code vintage stamping ---------------------------
-def test_code_vintage_is_a_short_sha_or_unknown():
+def test_code_vintage_is_a_12_hex_digest():
     from SDRUtils.stir_flow.vintage import UNKNOWN_VINTAGE, code_vintage
 
     v = code_vintage()
     assert isinstance(v, str) and v
     if v == UNKNOWN_VINTAGE:
         return
-    sha = v[:-len("+dirty")] if v.endswith("+dirty") else v
-    assert len(sha) == 12 and all(c in "0123456789abcdef" for c in sha), v
+    assert len(v) == 12 and all(c in "0123456789abcdef" for c in v), v
 
 
 def test_code_vintage_is_resolved_once():
-    """Cached: a per-row subprocess call would dominate a 6-month backfill."""
+    """Cached: re-hashing 19 modules per row would dominate a 6-month backfill."""
     from SDRUtils.stir_flow.vintage import code_vintage
 
     assert code_vintage() is code_vintage()
+
+
+def test_code_vintage_sources_all_exist():
+    """A typo'd path would hash as <missing> and silently never bump again."""
+    import pathlib
+
+    from SDRUtils.stir_flow import vintage
+
+    missing = [rel for rel in vintage.VINTAGE_SOURCES
+               if not (vintage._REPO / rel).is_file()]
+    assert not missing, missing
+
+
+def test_code_vintage_excludes_its_own_module_and_daylog():
+    """Editing the hasher's prose, or stdout plumbing, must not invalidate a backfill."""
+    from SDRUtils.stir_flow import vintage
+
+    assert "SDRUtils/stir_flow/vintage.py" not in vintage.VINTAGE_SOURCES
+    assert "SDRUtils/stir_flow/daylog.py" not in vintage.VINTAGE_SOURCES
+
+
+def test_code_vintage_tracks_content_not_git_head(tmp_path, monkeypatch):
+    """The stamp must change when a pipeline module changes, and ONLY then.
+
+    The point of hashing contents instead of HEAD: a 6-month backfill runs for
+    hours, and committing anything at all meanwhile would otherwise split the
+    window into artificial vintages.
+    """
+    from SDRUtils.stir_flow import vintage
+
+    src = tmp_path / "SDRUtils" / "stir_flow"
+    src.mkdir(parents=True)
+    (src / "a.py").write_text("ONE", encoding="utf-8")
+    (src / "b.py").write_text("TWO", encoding="utf-8")
+    monkeypatch.setattr(vintage, "_REPO", tmp_path)
+    monkeypatch.setattr(vintage, "VINTAGE_SOURCES",
+                        ("SDRUtils/stir_flow/a.py", "SDRUtils/stir_flow/b.py"))
+
+    vintage.code_vintage.cache_clear()
+    first = vintage.code_vintage()
+    vintage.code_vintage.cache_clear()
+    assert vintage.code_vintage() == first          # stable across calls
+
+    (src / "b.py").write_text("TWO-CHANGED", encoding="utf-8")
+    vintage.code_vintage.cache_clear()
+    assert vintage.code_vintage() != first          # content change bumps it
+
+    # a CRLF/LF checkout difference is not a logic change
+    (src / "b.py").write_bytes(b"TWO-CHANGED")
+    vintage.code_vintage.cache_clear()
+    lf = vintage.code_vintage()
+    (src / "b.py").write_bytes(b"TWO-CHANGED".replace(b"-", b"\r\n"))
+    vintage.code_vintage.cache_clear()
+    crlf_source = vintage.code_vintage()
+    (src / "b.py").write_bytes(b"TWO-CHANGED".replace(b"-", b"\n"))
+    vintage.code_vintage.cache_clear()
+    assert vintage.code_vintage() == crlf_source, "CRLF must normalise to LF"
+    assert lf != crlf_source                        # sanity: these differ in content
+
+    # a deleted module must still move the stamp, not be silently skipped
+    (src / "b.py").unlink()
+    vintage.code_vintage.cache_clear()
+    assert vintage.code_vintage() not in (first, lf, crlf_source)
+    vintage.code_vintage.cache_clear()
+
+
+def test_purge_stale_vintage_targets_other_vintages_only():
+    from SDRUtils._swappulse_scripts import backfill_stir_direction_range as R
+
+    conn = _RecordingConn()
+    assert R.purge_stale_vintage(conn, "2026-01-12", "2026-07-29", "abc123") == 7
+    sql, params = conn.log[0]
+    assert f"DELETE FROM {R.DIRECTION_TABLE}" in sql
+    assert "code_vintage IS DISTINCT FROM" in sql       # NULL-safe: pre-stamp rows too
+    assert params == {"s": "2026-01-12", "e": "2026-07-29", "v": "abc123"}
+
+
+def test_purge_is_skipped_when_any_day_errored(monkeypatch, capsys):
+    """A day that errored wrote nothing, so purging would delete its previous rows
+    and leave a hole indistinguishable from a genuinely empty session."""
+    from concurrent.futures import ThreadPoolExecutor
+
+    from SDRUtils._swappulse_scripts import backfill_stir_direction_range as R
+
+    monkeypatch.setattr(R.psycopg2, "connect", lambda url: _DummyRangeConn())
+    monkeypatch.setattr(R, "ensure_schema", lambda conn: None)
+    monkeypatch.setattr(R, "write_tick_rows", lambda conn, stats: None)
+    monkeypatch.setattr(R, "run_calibration", lambda conn, s, e, m: pd.DataFrame())
+    purged = []
+    monkeypatch.setattr(R, "purge_stale_vintage",
+                        lambda conn, s, e, v: purged.append((s, e, v)) or 0)
+    monkeypatch.setattr(R, "_classify_one_day", lambda job: {
+        "date": job[0], "n": 0, "summary": {},
+        "error": "boom" if job[0] == "2026-07-02" else None})
+
+    R.run_range("2026-07-01", "2026-07-02", day_jobs=1, pg_url="dummy",
+                purge_stale=True,
+                executor_factory=lambda: ThreadPoolExecutor(max_workers=1))
+    assert purged == []
+    assert "purge SKIPPED" in capsys.readouterr().out
+
+
+class _DummyRangeConn:
+    def close(self):
+        pass
+
+    def cursor(self):
+        raise AssertionError("purge must not run in this test")
+
+    def commit(self):
+        pass
 
 
 def test_ladder_schema_adds_code_vintage_idempotently():
