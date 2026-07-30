@@ -44,7 +44,14 @@ def main() -> int:
     ap.add_argument("--label-per-day", type=int, default=40,
                     help="time-of-day-stratified sample size per session for G0")
     ap.add_argument("--lockout", action="store_true",
-                    help="ALSO evaluate the one-shot holdout (burn rule applies)")
+                    help="ALSO evaluate the one-shot holdout (burn rule applies). "
+                         "Claiming it writes LOCKOUT_USED.json; a later run under a "
+                         "different specification is refused.")
+    ap.add_argument("--lockout-note", default="",
+                    help="recorded in LOCKOUT_USED.json alongside the claim")
+    ap.add_argument("--force-lockout", action="store_true",
+                    help="re-register against an ALREADY-BURNED holdout. Only with a "
+                         "documented reason: the override is stamped into the ledger.")
     ap.add_argument("--skip-grid", action="store_true",
                     help="skip the secondary family (the slowest stage)")
     args = ap.parse_args()
@@ -110,7 +117,9 @@ def main() -> int:
         stage("G4-grid", lambda: gates.run_grid(ctx, sink))
     stage("G5", lambda: gates.run_g5(ctx, primary))
     if args.lockout:
-        lock = stage("G4-LOCKOUT", lambda: gates.run_primary(ctx, in_sample=False))
+        lock = stage("G4-LOCKOUT", lambda: gates.run_primary(
+            ctx, in_sample=False, force_lockout=args.force_lockout,
+            lockout_note=args.lockout_note))
         if lock.get("result") is not None and len(lock["result"]):
             sink.record("PRIMARY (LOCKOUT - one shot)", {},
                         {"mean": float(lock["result"]["mean"].iloc[0]),

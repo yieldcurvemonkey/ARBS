@@ -110,6 +110,27 @@ holdout, no second lockout evaluation, no "adjusted" primary. The verdict then c
 (ii) or (iii) on the in-sample evidence alone. Every fitted parameter (z-score moments, any
 calibrated half-life, any threshold) is fitted walk-forward on trailing data only.
 
+**The burn rule is enforced in code, not by my discipline.** A promise not to look twice is the
+weakest kind of no-lookahead control, so `BT/dealer_ladder/lockout.py` makes it mechanical.
+Reaching the holdout — the only path is `run_primary(in_sample=False)` — writes
+`BT/results/dealer_ladder/LOCKOUT_USED.json` recording a fingerprint of the **whole** configuration
+plus the code vintage, git SHA and wall clock. Re-running the *same* fingerprint is allowed and
+idempotent (same spec over the same data is the same number — a re-render, not a second shot);
+claiming under a *different* fingerprint raises `LockoutAlreadyBurned`. The fingerprint covers the
+window, universe, signal, cost model, primary block and statistics config, because widening the
+universe or softening the cost model changes the test exactly as much as moving the horizon does,
+and sliding the lockout boundary would otherwise be a free re-registration. An unreadable ledger
+counts as **claimed**, since "cannot parse" must never be the one path back to a second shot. A
+`force=True` override exists for a deliberate, documented re-registration and stamps
+`overrode_prior` into the ledger, so no override is ever invisible. The ledger is committed
+alongside these findings; deleting it is a visible act in the git history rather than an invisible
+one in a notebook.
+
+Also fixed as part of this: G2 and G3 originally ran over the **whole** window including the
+holdout. Since a G3 failure is precisely the verdict that prompts re-specifying the controls, that
+would have burned the holdout silently before the primary ever reached it. Both are now in-sample
+by default (`gates.run_g2`, `gates.run_g3`, commit `45a6d797`).
+
 ---
 
 ## 4. Placebos, all pre-specified

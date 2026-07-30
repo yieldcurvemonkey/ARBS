@@ -20,7 +20,7 @@ import numpy as np
 import pandas as pd
 
 from BT.dealer_ladder import audit, config as cfg, controls, data, labels
-from BT.dealer_ladder import signals, stats, study
+from BT.dealer_ladder import lockout, signals, stats, study
 
 RESULTS_DIRNAME = "BT/results/dealer_ladder"
 
@@ -755,9 +755,24 @@ def _root_and_expiry(ctx, space):
     return roots, near
 
 
-def run_primary(ctx, *, in_sample=True) -> dict:
-    """The ONE locked test. Nothing here is tunable — see config's docstring."""
+def run_primary(ctx, *, in_sample=True, claim_lockout=True, force_lockout=False,
+                lockout_note="") -> dict:
+    """The ONE locked test. Nothing here is tunable — see config's docstring.
+
+    ``in_sample=False`` reaches the holdout, and doing so CLAIMS it: the specification
+    fingerprint is recorded, and a later call under a different fingerprint is refused
+    (see ``lockout.py``). Enforcing that in code rather than trusting the operator is
+    the point — a promise not to look twice is the weakest form of no-lookahead
+    control, and the second look is exactly the one that turns a fitted result into a
+    reported out-of-sample one.
+    """
     p = ctx.config.primary
+    if not in_sample and claim_lockout:
+        rec = lockout.claim(ctx.config, ctx.results_dir, force=force_lockout,
+                            timestamp=str(pd.Timestamp.now(tz="America/New_York")),
+                            code_vintage=_code_vintage(), note=lockout_note)
+        print(f"  LOCKOUT CLAIMED: spec {rec['spec_fingerprint']} at "
+              f"{rec['claimed_at']} (vintage {rec['code_vintage']})")
     space = p.target_space
     rates = ctx.rates_bp.get(space, pd.DataFrame())
     if rates.empty:
@@ -859,6 +874,16 @@ def run_staleness_sensitivity(ctx, *, caps=(None, 30, 15, 10, 5, 2, 0),
                                             / table["n_trades"].iloc[0])
     _write(ctx, "g4_staleness_sensitivity", table)
     return {"table": table}
+
+
+def _code_vintage():
+    """The pipeline's content-hash vintage, or None. Never fatal: a missing vintage
+    must not be able to block the one permitted holdout evaluation."""
+    try:
+        from SDRUtils.stir_flow.vintage import code_vintage
+        return code_vintage()
+    except Exception:
+        return None
 
 
 def _date_mask(index, lo, hi):
@@ -1093,11 +1118,13 @@ def run_g5(ctx, primary: dict) -> dict:
 
 
 # --------------------------------------------------------------------------
-def run_all(ctx, conn=None, *, run_lockout=False, label_limit=0) -> dict:
+def run_all(ctx, conn=None, *, run_lockout=False, label_limit=0,
+            force_lockout=False, lockout_note="") -> dict:
     """Every gate in order, recording each verdict even when a gate fails.
 
     ``run_lockout`` is OFF by default and must be turned on deliberately: the
-    lockout is evaluated once, and a failure burns the configuration.
+    lockout is evaluated once, the claim is recorded in ``LOCKOUT_USED.json``, and a
+    later run under a different specification is refused by ``lockout.claim``.
     """
     ledger_sink = study.TrialLedger()
     res = {"g0": run_g0(ctx, conn, label_limit=label_limit)}
@@ -1117,7 +1144,9 @@ def run_all(ctx, conn=None, *, run_lockout=False, label_limit=0) -> dict:
     res["grid"] = run_grid(ctx, ledger_sink)
     res["g5"] = run_g5(ctx, res["primary_is"])
     if run_lockout:
-        res["primary_lockout"] = run_primary(ctx, in_sample=False)
+        res["primary_lockout"] = run_primary(
+            ctx, in_sample=False, force_lockout=force_lockout,
+            lockout_note=lockout_note)
         ledger_sink.record("PRIMARY (LOCKOUT — one shot)", {},
                            {"mean": float(res["primary_lockout"]["result"]["mean"].iloc[0]),
                             "t": float(res["primary_lockout"]["result"]["t"].iloc[0])})
