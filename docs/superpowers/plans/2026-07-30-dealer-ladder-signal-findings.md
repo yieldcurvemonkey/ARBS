@@ -1,12 +1,36 @@
 # Does dealer positioning inferred from public SDR prints predict SR3 / ZQ?
 
-**Status:** PRE-REGISTRATION LOCKED — results pending
+**Status:** COMPLETE — run 2026-07-30, code vintage `468474ca6f84`, in-sample segment
 **Pre-registration written:** 2026-07-29, before any G4 statistic was computed
 **Plan:** `docs/superpowers/plans/2026-07-14-dealer-ladder-infrastructure.md` (Task 10, gates G0–G5)
 **Audit that set the gates:** `docs/superpowers/audits/2026-07-15-sdr-dealer-positioning-feasibility-audit.md`
 **Running journal:** `docs/superpowers/plans/2026-07-29-dealer-ladder-research-journal.md`
 
-> **Verdict:** _pending — will be written here, first, once G0–G5 have run._
+> ## Verdict: (iii) — no detectable signal
+>
+> **Dealer positioning inferred from public SDR prints does not predict subsequent SR3 or ZQ
+> returns at the pre-registered one-hour horizon**, at any magnitude this design can detect.
+>
+> **The number that matters is the GROSS edge: −0.0458 bp/trade, t = −0.79.** Statistically
+> indistinguishable from zero. Everything else follows from it.
+>
+> **Do not quote the `t = −9.44***` on the primary as a result.** It is what arithmetic produces
+> when a near-constant 0.5 bp round-trip cost is subtracted from a zero-mean quantity across
+> 1,639 trades. The same applies to the entire Romano-Wolf table — 96 variants, all within a
+> whisker of −0.50, |t| from 79 to 311. **Those t-statistics measure the cost constant, not a
+> prediction.**
+>
+> The mechanism is unsupported and the ordering runs the wrong way: lead-lag is **negative in
+> both spaces** (−4.769 SR3, −19.88 ZQ), so futures move *before* the ladder innovation. G3's
+> univariate t is **0.14**, so there is no correlation even to relabel — which is why this is
+> (iii) and not (ii). This is **not cost-marginal**: there is no edge for costs to eat.
+>
+> **The one-shot lockout was NOT opened and remains spendable** (§7b). The protocol terminates
+> at a failed in-sample primary.
+>
+> Bounded honestly: this design can decisively reject a large effect and **cannot** establish
+> that a small one is absent. The claim is *"no detectable effect at this size and horizon"* —
+> minimum detectable gross is ~0.8 bp at 1h in SR3 — not *"no effect"*.
 >
 > Per spec §9c the verdict is exactly one of: **(i)** mechanism supported *and* priced edge
 > survives OOS and costs → Phase 5 planning; **(ii)** a price effect exists but the mechanism is
