@@ -135,6 +135,64 @@ against the 0.25bp half-tick a taker pays — so the program needs an effective 
 entry and exit**. Not the ~2× a per-leg cost model implies. The break-even round trip is
 **0.39bp** on a package whose taker round trip is 2.0bp.
 
+### 2b. Why the equity curves look monotone, and why flipping the sign cannot fix it
+
+The net equity curves slope down almost without interruption, which naturally invites the
+question: if it loses that reliably, why not just trade the other way? Audited end to end in
+`notebooks/rv/_audit_sign_conventions.py`.
+
+**The curve is monotone because of cost, not signal.** For the same config, over 235 trades:
+
+| | max | min | final | trades moving it up | new highs |
+|---|---:|---:|---:|---:|---:|
+| **gross** curve | +121.5 | −10.0 | +72.2 | 40.6% | 26 / 235 |
+| **net** curve | −0.5 | −397.8 | −397.8 | 14.1% | 2 / 235 |
+
+The gross curve wanders like a random walk with a slight upward drift. The net curve is that
+same walk minus a fixed **2.0bp per trade**, which dominates it completely. A monotone net
+curve on a wandering gross curve is a bleed, not an invertible signal.
+
+**Flipping the sign flips the gross but not the cost.** `fade` and `momentum` open the same
+trades on the same bars on opposite sides, so this is an identity, verified exactly:
+
+```
+gross_fade + gross_momentum = +0.000000        (same trades, opposite sides)
+net_fade   + net_momentum   = −940.0 = −2 × total cost
+```
+
+| direction | trades | gross | cost | net |
+|---|---:|---:|---:|---:|
+| fade | 235 | **+72.25** | 470.0 | −397.75 |
+| momentum | 235 | **−72.25** | 470.0 | −542.25 |
+
+Picking the better side is already what the grid does, and the better side is still −398bp,
+because `|gross| = 72bp` is a seventh of the `470bp` of cost. There is no sign to flip into.
+
+**The oracle ceiling.** The strongest possible version of "get the direction right": an oracle
+that knows the winning side on *every* trade in hindsight.
+
+| round trip | perfect-hindsight side | actual rule |
+|---|---:|---:|
+| 0.0bp | +558.8bp | +72.2bp |
+| 1.0bp | +323.8bp | −162.8bp |
+| **2.0bp (per-contract)** | **+88.8bp** | −397.8bp |
+| **2.5bp (taker)** | **−28.8bp** | −515.2bp |
+
+The oracle captures **2.378bp per trade** against a **2.0bp** round trip, so **even perfect
+direction-calling is barely profitable at 2.0bp and loses money at taker costs**. Its
+break-even is a 2.378bp round trip = 0.297bp per contract per side.
+
+That reframes the whole lab. The constraint is not the sign and not the signal quality — it is
+that **the moves being captured (2.4bp on average) are barely larger than the cost of
+capturing them (2.0bp)**. The actual rule harvests 0.31bp of that 2.378bp, i.e. **13% of what
+is theoretically available**, and closing the entire remaining 87% would still only be worth
++0.38bp per trade at 2.0bp cost.
+
+**Per-side attribution confirms there is no sign error.** Under `fade`, *both* sides are
+gross-positive — short-spread +24.50bp over 103 trades, long-spread +47.75bp over 132. A
+flipped sign somewhere in the stack would show up as one side being systematically
+gross-negative; neither is.
+
 ### 3. The "typical level" of a fly is a regime statement, not a number
 
 Median level in bp by constant-maturity slot and policy regime (3m flies, front-8 panel):
