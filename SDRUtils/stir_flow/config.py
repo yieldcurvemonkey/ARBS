@@ -32,6 +32,30 @@ P_FLIP_HIGH = 0.05
 P_FLIP_MEDIUM = 0.20
 SUB3Y_HORIZON_DAYS = 1105      # ~3.02y: maturity cutoff from as_of_date
 
+# Validated D2C platforms for the signed research universe (audit follow-up,
+# Task A2, spec 2026-07-15). `classify_venue` in SDRUtils/analytics/flow.py
+# is a platform heuristic -- it returns D2D only for the six IDB codes in
+# D2D_PLATFORMS and D2C for literally everything else, including unknown or
+# missing platform IDs. That heuristic is fine for the tape's `venue` column
+# (a coarse eligibility filter), but the *signed* research universe needs an
+# explicit whitelist: trades from platforms NOT in this set AND NOT in
+# D2D_PLATFORMS get exclusion reason VENUE_UNKNOWN in the research
+# aggregation (see SDRUtils/stir_flow/trade_selection.py::venue_status).
+#
+# Conservative by design -- only platforms with clear D2C evidence are
+# included. Derived from 07/10 STIR tape platform_identifier counts:
+#   TWSF 1394 (Tradeweb SEF)       -- known D2C SEF, whitelisted
+#   BBSF  604 (Bloomberg SEF)      -- known D2C SEF, whitelisted
+#   BILT  362 (Bloomberg bilateral)-- D2C but off-facility, whitelisted
+#   DWSF  116 -- already D2D/IDB (see D2D_PLATFORMS)
+#   TREU   90 (Truenode)           -- unvalidated, NOT whitelisted -> VENUE_UNKNOWN
+#   TSEF   53 -- already D2D/IDB (see D2D_PLATFORMS)
+#   BGCD   42 -- already D2D/IDB (see D2D_PLATFORMS)
+#   BMTF   36 (BGC MTF, likely D2D)-- unvalidated, NOT whitelisted -> VENUE_UNKNOWN
+# TREU/BMTF and any other platform stay VENUE_UNKNOWN until independently
+# validated against the public SEF registry / counterparty class evidence.
+D2C_PLATFORM_WHITELIST = {"TWSF", "BBSF", "BILT"}
+
 EXCLUDED_LABEL_TOKENS = ("CME Term", "Amortizing")
 EXCLUDED_TRADE_TYPES = (
     "MAC", "SPREADOVER", "SPREADOVER_CURVE", "SPREADOVER_FLY",

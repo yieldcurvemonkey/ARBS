@@ -242,7 +242,17 @@ class RLIRSwapCurve(_IRSwapGenericCurve):
             notional=notional_real * sign,
         )
 
-    def build_stirf(self, fwd=None, tenor=None, effective_date=None, maturity_date=None, fixed_rate=-0, notional=None, bpv=None, is_ser: Optional[bool] = False):
+    def build_stirf(self, fwd=None, tenor=None, effective_date=None, maturity_date=None, fixed_rate=-0, notional=None, bpv=None, is_ser: Optional[bool] = False, fixings=None):
+        """Build an rl.STIRFuture on this curve from explicit dates.
+
+        ``fixings`` (optional) supplies published RFR fixings so a contract whose
+        accrual period STARTS BEFORE the curve's reference date can still be
+        priced — without them rateslib raises "RFRs could not be calculated".
+        This is the norm for the front monthly contract (ZQ/SR1), whose calendar
+        month is always partly in the past. Mirrors
+        ``RLSTIRFuturePricer.build_for_solver``'s fixings handling: mask to the
+        spec calendar's business days, then try each rateslib fixings kwarg name.
+        """
         curve_def = self._curve_definition()
         if bpv and not notional:
             unit_delta = rl.IRS(
@@ -257,11 +267,29 @@ class RLIRSwapCurve(_IRSwapGenericCurve):
         if not bpv and not notional:
             notional = 1_000_000
 
-        return rl.STIRFuture(
+        spec = curve_def["ReferenceRate2"] if not is_ser else curve_def["ReferenceRate3"]
+        kwargs = dict(
             effective=fwd or effective_date,
             termination=tenor or maturity_date,
             price=(100 - fixed_rate),
             curves=self._rl_curve_handle,
-            spec=curve_def["ReferenceRate2"] if not is_ser else curve_def["ReferenceRate3"],
+            spec=spec,
             contracts=int(notional / 1_000_000),
         )
+        if fixings is not None and isinstance(fixings, pd.Series) and not fixings.empty:
+            cal = rl.get_calendar(rl.defaults.spec[spec].get("calendar", "nyc"))
+            mask = pd.Series(
+                [cal.is_bus_day(d.to_pydatetime() if hasattr(d, "to_pydatetime") else d)
+                 for d in fixings.index],
+                index=fixings.index,
+            )
+            masked = fixings[mask]
+            if not masked.empty:
+                for fixings_key in ("leg2_rate_fixings", "leg2_fixings"):
+                    try:
+                        return rl.STIRFuture(**kwargs, **{fixings_key: masked})
+                    except TypeError:
+                        continue
+                    except (ValueError, KeyError):
+                        break
+        return rl.STIRFuture(**kwargs)

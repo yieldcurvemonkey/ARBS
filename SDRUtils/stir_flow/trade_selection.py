@@ -17,7 +17,7 @@ _LEG_COLS = """
     l.effective_date, l.expiration_date,
     l.notional, l.risk, l.fixed_rate,
     l.other_payment_ufro, l.is_capped, l.is_block, l.is_off_date,
-    l.leg_tape_label, l.execution_session,
+    l.leg_tape_label, l.execution_session, l.platform_identifier, l.cleared,
     p.package_structure, p.n_package_legs,
     p.package_transaction_price AS pkg_ptp,
     p.package_transaction_spread AS pkg_pts
@@ -77,6 +77,25 @@ def is_excluded_unit(legs: pd.DataFrame) -> str | None:
     if (mats > _horizon(as_of)).any():
         return "LEG_BEYOND_3Y"
     return None
+
+
+def venue_status(platform_identifier: str) -> str:
+    """Return 'D2C_WHITELISTED', 'D2D', or 'VENUE_UNKNOWN'.
+
+    NOT called from ``is_excluded_unit`` -- venue is not a classification/
+    projection-time exclusion. Units keep flowing through classification and
+    the ladder regardless of venue_status; this is a read-time filter for
+    the *signed research* aggregation (audit follow-up, Task A2), which must
+    be whitelist-based rather than relying on the D2C-by-default heuristic
+    in ``SDRUtils.analytics.flow.classify_venue``.
+    """
+    from SDRUtils.analytics.filters import D2D_PLATFORMS
+    pid = str(platform_identifier).upper().strip() if pd.notna(platform_identifier) else ""
+    if pid in D2D_PLATFORMS:
+        return "D2D"
+    if pid in config.D2C_PLATFORM_WHITELIST:
+        return "D2C_WHITELISTED"
+    return "VENUE_UNKNOWN"
 
 
 def resolve_upfront(pkg_ptp, leg_ufros) -> tuple:
