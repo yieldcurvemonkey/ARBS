@@ -185,23 +185,108 @@ causal, or capacity-bearing, and no claim of that kind will be made from it.
 Every gate reports its outcome whether it passes or fails. A failure is a result, not a blocker to
 route around.
 
+Each subsection states **what the outcome will mean, written before the numbers exist**. That is
+the same discipline as the pre-registered specification, applied to interpretation rather than to the
+statistic: deciding after the fact what a failed G2 implies is how a mechanism gate becomes a
+formality, because whichever reading is convenient at that moment becomes the reading. Only the
+values are outstanding.
+
 ### G0 — Labels and provenance
-_pending_
+
+*What is being established:* who is in the signed universe, what each exclusion costs, and how far
+our direction label sits from an independent one.
+
+*How to read it.* G0 has no pass/fail — it is a measurement of the input, and the number it produces
+bounds every claim downstream. A **flip rate near 50%** would mean the label carries essentially no
+information and the whole signed study collapses to the label-free cell. A **flip rate near 0%**
+would mean our mid and the independent mid agree and the direction label can be taken at close to
+face value. Anything between bounds the attenuation: accuracy ≤ 1 − f/2, and the `(2a−1)` grid must
+be read against that ceiling. The **`false_negative` column of the mechanism table** decides
+whether the disagreement is curve gap (a closed form) or something else (which would be a different
+and more troubling finding).
+
+*Preliminary, on Jan+Feb:* 34.9% on 1,155 comparisons, ceiling 79.6%, zero false negatives. See
+§8.1.
 
 ### G1 — Arrival integrity
-_pending_
+
+*What is being established:* that no feature at decision time `t` uses a print that was not yet
+public at `t`.
+
+*How to read it.* This one is binary and non-negotiable. **Any** audit failing invalidates
+everything after it, and the run stops being a study and becomes a bug report. The subtler failure
+is a **vacuous pass** — an audit that reports clean because it was never given anything to detect —
+which is why `max_future_prints` is reported beside the verdict and a zero there is itself a
+failure. That is not hypothetical: the first version of this battery passed on a builder leaking
+five hours of future flow (see the journal, 2026-07-30 review).
 
 ### G2 — Mechanism ordering (runs before any price test)
-_pending_
+
+*What is being established:* whether a signed ladder innovation PRECEDES signed futures flow, in
+the direction the forced-hedge story requires.
+
+*How to read it.* Three distinguishable outcomes, and they lead to different papers.
+
+1. **Timing lead with negative peak rho** — the forced-hedge channel is supported, and a subsequent
+   price result may be attributed to it.
+2. **Timing lead with positive peak rho** — the ladder leads futures in the ANTI-hedging direction.
+   This *refutes* the channel rather than supporting it, and no price result may be attributed to
+   hedging. LLS alone cannot see this, being built from squared correlations, which is why the
+   signed peak correlation is reported separately.
+3. **No timing lead** — the channel is unsupported. A price result would then have to be relabelled
+   basis or flow continuation, which is verdict (ii), and G4 becomes a description of a correlation
+   rather than evidence of a mechanism.
+
+The **SR3-vs-ZQ comparison** then splits outcome 1: leading SR3 but not ZQ reads as
+liquidity-routed hedging, leading ZQ specifically reads as meeting-targeted, leading **both** is
+undiscriminating and must not be quoted as though it discriminated, and leading neither is no
+evidence at all.
 
 ### G3 — Circularity battery
-_pending_
+
+*What is being established:* whether the ladder's coefficient survives the swap-futures basis, and
+then whether it survives a basis our own curve did not produce.
+
+*How to read it.* The coefficient must survive **both** races, and with the **sign the hypothesis
+predicts** — `|t| ≥ 2` alone would admit a coefficient pointing the wrong way, which is a refutation
+wearing the costume of a pass. Collapse against our own basis means the effect *is* the basis.
+Survival against ours but collapse against the independent one means it was curve-fit error, which
+is the single most likely benign explanation given §8.1. Before reading any of it, check
+`rank_deficient` and the point-in-time drop rate: a survival claim over a degenerate design, or over
+controls thinned by the point-in-time filter, is not a claim.
 
 ### G4 — Pre-registered price prediction
-_pending_
+
+*What is being established:* the one locked test — SR3 front six, 1h horizon, `|z| ≥ 1`, net of
+costs, day-blocked, **pass requires mean > 0 and raw t ≥ 3**.
+
+*How to read it.* Two things must be checked before the t-statistic means anything.
+
+**`share_long`.** The rule is ~80% one-sided (§8.4), so it must be read against the
+constant-position benchmark. **If it does not beat the better constant, the ladder contributes
+nothing beyond direction**, whatever the t. That check comes first.
+
+**The placebos.** Sign shuffle surviving means the result is print *intensity*, not direction — but
+with the `share_long` caveat, since the shuffle also removes the PAID skew. Pre-arrival firing means
+leakage or anticipation. Rotated buckets surviving means generic curve continuation. Live-parity
+collapse means production's 15-minute delay removes the edge, which is fatal to usability even if
+the effect is real.
+
+The **secondary grid** is judged by day-blocked Romano-Wolf at FWER < 0.05 over the whole declared
+family, with the skipped-variant ledger read alongside so untested is never mistaken for weak. Rows
+differing only in `weighting` are duplicates, not robustness (§8.3).
 
 ### G5 — Economics and capacity
-_pending_
+
+*What is being established:* whether anything survives costs and attenuation, and how much size the
+traded volume could have supported.
+
+*How to read it.* The pass criterion is `(2a−1)·gross − cost > 0` at the **worst** grid accuracy —
+attenuating the net figure instead would discount the cost along with the edge and the gate could
+never fail. Given §8.1, `a = 0.8` is at or above the measured ceiling, so the honest reading sits at
+`a = 0.6–0.7`. Capacity is a **traded-volume sensitivity, not measured depth**: this repo has no
+historical depth data, so it is an upper bound on what depth would allow and must never be quoted
+as a size the strategy could carry.
 
 ---
 
