@@ -1,3 +1,4 @@
+import pandas as pd
 import rateslib as rl
 
 from Query.IRSwaps.IRSwapQuery import IRSwapQuery 
@@ -54,22 +55,32 @@ def build_delta_risk_ladder(
 
         # ---- STIR future path ----
         elif isinstance(q_raw, BaseQuery) and q_raw.product == "STIRFUTURE":
-            assert stirf_mdp_handle is not None, "stirf_mdp_handle required for STIRFutureQuery"
             q_resolved = q_raw.resolve_query(ts, pricer_or_curve=curve_handle)
             skw = q_resolved.structure_kwargs or {}
             symbol = skw.get("symbol") or q_resolved.symbol or q_resolved.tenor or ""
 
             if symbol:
+                # Only the symbol path needs the vendor; the dates path below is
+                # built entirely from the supplied curve.
+                assert stirf_mdp_handle is not None, "stirf_mdp_handle required for STIRFutureQuery"
                 pricers = stirf_mdp_handle.fetch_pricers_flat([symbol], ts)
             elif skw.get("effective_date") and skw.get("maturity_date"):
                 eff, mat = skw["effective_date"], skw["maturity_date"]
-                stirf_on_dense = curve_handle.build_stirf(effective_date=eff, maturity_date=mat)
+                # `is_ser` selects the contract-structure spec (ReferenceRate3 =
+                # 1-month averaging vs ReferenceRate2 = 3-month compounding).
+                # Honour the caller's flag: a monthly contract (ZQ/SR1) built on
+                # a quarterly spec silently misprices the averaging period.
+                is_ser = bool(skw.get("is_ser", False))
+                stirf_on_dense = curve_handle.build_stirf(
+                    effective_date=eff, maturity_date=mat, is_ser=is_ser,
+                    fixings=_fixings,
+                )
                 risk_rates.append(stirf_on_dense.rate(curves=_dense_curve).real)
                 mat_dt = rl.dt(mat.year, mat.month, mat.day)
                 _risk_pillar_nodes[mat_dt] = float(_dense_curve[mat_dt])
-                label = f"STIRF {eff}x{mat}"
+                label = skw.get("label") or f"STIRF {eff}x{mat}"
                 instrument_labels.append(label)
-                _builders.append(("STIRF_DATES", (eff, mat, False)))
+                _builders.append(("STIRF_DATES", (eff, mat, is_ser)))
                 continue
             else:
                 raise ValueError(f"STIRFutureQuery has no symbol or dates: {q_resolved}")
@@ -116,6 +127,7 @@ def build_delta_risk_ladder(
             eff, mat, is_ser = data
             rl_risk_instruments[label] = risk_curve_handle.build_stirf(
                 effective_date=eff, maturity_date=mat, is_ser=is_ser,
+                fixings=_fixings,
             )
 
     rl_risk_ladder_solver = rl.Solver(
@@ -129,6 +141,40 @@ def build_delta_risk_ladder(
     )
 
     return risk_curve_handle, rl_risk_ladder_solver
+
+
+def _mask_fixings_to_spec(fixings, spec):
+    """Restrict a fixings series to the spec calendar's business days."""
+    if fixings is None or not isinstance(fixings, pd.Series) or fixings.empty:
+        return None
+    cal = rl.get_calendar(rl.defaults.spec[spec].get("calendar", "nyc"))
+    mask = pd.Series(
+        [cal.is_bus_day(d.to_pydatetime() if hasattr(d, "to_pydatetime") else d)
+         for d in fixings.index],
+        index=fixings.index,
+    )
+    masked = fixings[mask]
+    return masked if not masked.empty else None
+
+
+def _build_with_fixings(ctor, fixings, **kwargs):
+    """Construct an rl instrument, attaching published fixings if it accepts them.
+
+    Needed whenever an instrument's accrual period starts BEFORE the curve's
+    reference date -- the norm for a front monthly contract, whose calendar month
+    is always partly in the past. Without the fixings rateslib raises "RFRs could
+    not be calculated". The fixings calendar comes from ``kwargs["spec"]``.
+    """
+    masked = _mask_fixings_to_spec(fixings, kwargs["spec"])
+    if masked is not None:
+        for key in ("leg2_rate_fixings", "leg2_fixings"):
+            try:
+                return ctor(**kwargs, **{key: masked})
+            except TypeError:
+                continue
+            except (ValueError, KeyError):
+                break
+    return ctor(**kwargs)
 
 
 def build_basis_risk_ladder(
@@ -174,8 +220,9 @@ def build_basis_risk_ladder(
         interpolation="log_linear", id="stir",
     )
 
+    _fixings = curve_handle.index()
     instruments_stir = [
-        p.build_for_solver(curve_stir) for p in ser_list
+        p.build_for_solver(curve_stir, fallback_fixings=_fixings) for p in ser_list
     ]
 
     stir_solver = rl.Solver(
@@ -198,8 +245,11 @@ def build_basis_risk_ladder(
     for p in ser_list:
         eff = rl.dt(p._effective_date.year, p._effective_date.month, p._effective_date.day)
         mat = rl.dt(p._maturity_date.year, p._maturity_date.month, p._maturity_date.day)
-        stir_leg = p.build_for_solver(curve_stir)
-        irs_leg = rl.IRS(effective=eff, termination=mat, spec=ois_spec, curves="ois")
+        stir_leg = p.build_for_solver(curve_stir, fallback_fixings=_fixings)
+        irs_leg = _build_with_fixings(
+            rl.IRS, _fixings,
+            effective=eff, termination=mat, spec=ois_spec, curves="ois",
+        )
         instruments_ois.append(rl.Spread(stir_leg, irs_leg))
         cvx_labels.append(f"cvx_{p.bbg_id()}")
 

@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import dataclasses
 import datetime
+import functools
 
 import pandas as pd
 
@@ -24,19 +25,41 @@ N_SFR = 12
 N_FF = 12
 N_BASIS_MONTHS = 12
 MEETING_TENORS = [f"fomc_{i}" for i in range(1, N_MEETINGS + 1)]
-# Sign flip per solver type: rateslib delta sign convention differs between
-# IRS-based solvers (MEETING) and STIRFuture-based solvers (FUTURES).
-# IRS solver: payer swap → raw delta POSITIVE → need ×-1 for "PAID = negative"
-# STIR solver: payer swap → raw delta NEGATIVE → need ×+1 for "PAID = negative"
-# Golden tests are the arbiter per space.
-_RL_SIGN_BY_SPACE = {
-    "MEETING": -1.0,
-    "FUTURES": +1.0,
-    "FED_FUNDS": +1.0,
-    "SERFF_BASIS_SOFR": +1.0,
-    "SERFF_BASIS_SPREAD": +1.0,
+
+# Futures spaces are built CURVE-IMPLIED from the contract calendar (no vendor
+# fetch): bucket_space -> (CME root, build_stirf is_ser flag). The is_ser flag
+# selects the contract-structure spec on the ladder curve --
+# ReferenceRate2 = "usd_stir"  (quarterly IMM, 3M compounded)  -> SR3
+# ReferenceRate3 = "usd_stir1" (calendar month, averaged)      -> ZQ / SR1
+# which reproduces exactly the spec RLSTIRFuturePricer.rl_spec() picks for the
+# corresponding fetched pricer. Verified per space by network golden.
+FUTURES_SPACE_SPEC = {
+    "FUTURES": ("SR3", False),
+    "FED_FUNDS": ("ZQ", True),
 }
-RL_DELTA_TO_FUTURES_EQ = -1.0  # legacy alias; per-space dict is authoritative
+CME_TO_BBG = {"SR3": "SFR", "SR1": "SER", "ZQ": "FF"}
+MONTHLY_ROOTS = {"SR1", "ZQ"}
+# Sign flip, ONE constant for EVERY bucket space. rateslib's solver delta is
+# dNPV per +1bp bump of the instrument's own *rate*, and every risk model here
+# (IRS meeting strip, SR3 strip, ZQ strip, SERFF basis) is calibrated in rate
+# space -- so a payer swap has POSITIVE raw delta in all of them, and exactly one
+# flip lands the persisted convention (+ = dealer long futures-equivalent =
+# dealer RECEIVED fixed).
+#
+# HISTORY (2026-07-29, PR #354 cleanup): this used to be a per-space dict with
+# +1.0 for FUTURES/FED_FUNDS/SERFF_BASIS, which inverted those spaces relative to
+# MEETING. The persisted table proved it: over 07/02-07/13 OUTRIGHTs, MEETING was
+# 868/868 PAID-negative and 249/249 RECEIVED-positive, while FED_FUNDS was
+# 288 PAID-POSITIVE / 74 RECEIVED-NEGATIVE and FUTURES was split 348 negative /
+# 461 positive on PAID alone. A per-space constant cannot produce mixed signs
+# within one space, so the dict was papering over the real defect: the legacy
+# <ROOT>CM<n> fetch path built its risk curve from vendor settlement prices on
+# nodes seeded from a different (decision-time) curve, yielding an ill-conditioned
+# Jacobian -- hence not just flipped but mis-scaled deltas (e.g. |sum| = 55,575
+# and 67,882 against structure DV01s of 8,274 and 10,126). The curve-implied
+# dates path removed the ill-conditioning; the single constant restores the sign.
+# Goldens in tests/test_stir_ladder_projection.py pin both facts per space.
+RL_DELTA_TO_FUTURES_EQ = -1.0
 
 
 @dataclasses.dataclass
@@ -70,12 +93,83 @@ def extract_bucket_deltas(delta_df, label_to_bucket, *, basis_prefix=None) -> di
     return out
 
 
+@functools.lru_cache(maxsize=512)
+def contract_grid(as_of: datetime.date, root: str, count: int = 12) -> tuple:
+    """Contract calendar for `root` as of `as_of`: ((bbg_id, effective, maturity), ...).
+
+    Pure calendar arithmetic -- no vendor call. Mirrors
+    ``MDP.STIRFutures.STIRFutureMDP``'s ``<ROOT>CM<n>`` alias resolution and its
+    instrument builder exactly, so the grid is the same contract set the fetch
+    path would have returned: quarterly roots use the IMM cutoff and rateslib IMM
+    dates; monthly roots run first-business-day-of-month to
+    first-business-day-of-next-month. Dates are ``datetime`` (rateslib 2.x
+    rejects ``datetime.date``).
+    """
+    import rateslib as rl
+
+    from MDP.IRSwaps.SDR_INTRADAY.rl_curve_utils.tos import (
+        _imm_cutoff, _next_contracts, cme_code_effective_date,
+        first_business_day_next_month,
+    )
+
+    monthly = root in MONTHLY_ROOTS
+    valid_months = list(range(1, 13)) if monthly else [3, 6, 9, 12]
+    cutoff = None if monthly else _imm_cutoff
+    symbols = _next_contracts(as_of, prefix=root, count=count,
+                              valid_months=valid_months, cutoff_fn=cutoff)
+    grid = []
+    for sym in symbols:
+        code = sym[len(root):]
+        if monthly:
+            eff = pd.Timestamp(cme_code_effective_date(code))
+            mat = pd.Timestamp(first_business_day_next_month(eff))
+        else:
+            eff = pd.Timestamp(rl.scheduling.get_imm(code=code))
+            mat = pd.Timestamp(rl.scheduling.next_imm(eff))
+        grid.append((f"{CME_TO_BBG.get(root, root)}{code}",
+                     eff.to_pydatetime(), mat.to_pydatetime()))
+    return tuple(grid)
+
+
+def build_futures_risk_model(space, curve_handle, ts, count=12) -> RiskModel:
+    """Curve-implied futures risk model for `space` -- zero vendor fetches.
+
+    The contracts are built from the calendar onto the dense decision-time curve
+    via ``build_delta_risk_ladder``'s STIRF_DATES branch, so the model exists at
+    EVERY timestamp the curve exists. Two deliberate differences from the legacy
+    ``<ROOT>CM<n>`` fetch path, both improvements:
+
+    1. the risk curve is calibrated to the decision-time curve's own implied
+       contract rates rather than to vendor settlement prices, so the ladder is a
+       reparameterisation of the very curve that produced the direction call; and
+    2. published fixings are cut at the curve's own fixings index, whereas the
+       fetched pricer carried one extra same-day fixing that was not yet
+       published at the decision timestamp (a one-day look-ahead).
+
+    (2) is why the FRONT monthly (ZQ) bucket lands ~14% below the legacy path
+    while every deferred bucket agrees to ~0.001%; SR3 agrees to <=0.03%
+    throughout. See the network goldens in tests/test_stir_ladder_projection.py.
+    """
+    from MDP.IRSwaps.BARCHART_STIRF.risk import build_delta_risk_ladder
+    from Query.STIRFutures.STIRFutureQuery import STIRFutureQuery
+
+    root, is_ser = FUTURES_SPACE_SPEC[space]
+    grid = contract_grid(pd.Timestamp(ts).date(), root, count)
+    queries = [
+        STIRFutureQuery(effective_date=eff, maturity_date=mat,
+                        structure_kwargs={"label": bbg, "is_ser": is_ser})
+        for bbg, eff, mat in grid
+    ]
+    curve, solver = build_delta_risk_ladder(queries, curve_handle, timestamp=ts)
+    return RiskModel(space, curve, solver,
+                     {label: label for label in solver.instrument_labels})
+
+
 def build_risk_models(curve_name, curve_handle, ts, stirf_mdp, include_basis: bool) -> list:
     from MDP.IRSwaps.BARCHART_STIRF.risk import (
         build_basis_risk_ladder, build_delta_risk_ladder,
     )
     from Query.IRSwaps._CENTRAL_BANK_DATES import resolve_central_bank_tenor
-    from Query.STIRFutures.STIRFutureQuery import STIRFutureQuery
 
     models = []
 
@@ -90,45 +184,36 @@ def build_risk_models(curve_name, curve_handle, ts, stirf_mdp, include_basis: bo
     m_curve, m_solver = build_delta_risk_ladder(list(meeting_map.keys()), curve_handle)
     models.append(RiskModel("MEETING", m_curve, m_solver, meeting_map))
 
-    # FUTURES space: SFRCM1..12; bucket = absolute contract id (solver labels ARE ids)
-    try:
-        sfr_queries = [STIRFutureQuery(symbol=f"SFRCM{i}") for i in range(1, N_SFR + 1)]
-        f_curve, f_solver = build_delta_risk_ladder(
-            sfr_queries, curve_handle, stirf_mdp_handle=stirf_mdp, timestamp=ts
-        )
-        fut_map = {label: label for label in f_solver.instrument_labels}
-        models.append(RiskModel("FUTURES", f_curve, f_solver, fut_map))
-    except Exception:
-        pass  # SFR data unavailable at this timestamp; MEETING-only projection
+    # FUTURES (SR3/SFR quarterly) and FED_FUNDS (ZQ/FF monthly) spaces, both
+    # curve-implied. Failures are LOUD, not swallowed: the silent pass that used
+    # to sit here is what let a 74%->0% projection-coverage collapse look like a
+    # clean run.
+    for space in ("FUTURES", "FED_FUNDS"):
+        try:
+            models.append(build_futures_risk_model(space, curve_handle, ts))
+        except Exception as exc:  # noqa: BLE001 - one space must not kill the rest
+            print(f"RISK_MODEL_ERROR {space} @ {ts}: {type(exc).__name__}: {exc}")
 
-    # FED_FUNDS space: FFCM1..N; bucket = absolute FF contract id
-    try:
-        ff_queries = [STIRFutureQuery(symbol=f"FFCM{i}") for i in range(1, N_FF + 1)]
-        ff_curve, ff_solver = build_delta_risk_ladder(
-            ff_queries, curve_handle, stirf_mdp_handle=stirf_mdp, timestamp=ts
-        )
-        ff_map = {label: label for label in ff_solver.instrument_labels}
-        models.append(RiskModel("FED_FUNDS", ff_curve, ff_solver, ff_map))
-    except Exception:
-        pass  # FF data unavailable at this timestamp
-
-    # SERFF basis split (FED_FUNDS prints only)
+    # SERFF basis split (FED_FUNDS prints only). This one genuinely needs the
+    # vendor: the SERFF basis IS the SR1-vs-ZQ market spread, so there is no
+    # curve-implied substitute. Conditioning-only per the research plan, so a
+    # miss degrades gracefully -- but it still logs.
     if include_basis:
-      try:
-        b_curve, b_solver, _stir_solver = build_basis_risk_ladder(
-            [str(i) for i in range(1, N_BASIS_MONTHS + 1)],
-            curve_handle, stirf_mdp_handle=stirf_mdp, timestamp=ts,
-        )
-        ser_pricers = stirf_mdp.fetch_pricers_flat(
-            [f"SERCM{i}" for i in range(1, N_BASIS_MONTHS + 1)], ts
-        )
-        basis_map = {
-            p.bbg_id(): conv.contract_month_key(p.effective_date())
-            for p in ser_pricers.values()
-        }
-        models.append(RiskModel("SERFF_BASIS", b_curve, b_solver, basis_map))
-      except Exception:
-          pass  # SER data unavailable; skip SERFF_BASIS
+        try:
+            b_curve, b_solver, _stir_solver = build_basis_risk_ladder(
+                [str(i) for i in range(1, N_BASIS_MONTHS + 1)],
+                curve_handle, stirf_mdp_handle=stirf_mdp, timestamp=ts,
+            )
+            ser_pricers = stirf_mdp.fetch_pricers_flat(
+                [f"SERCM{i}" for i in range(1, N_BASIS_MONTHS + 1)], ts
+            )
+            basis_map = {
+                p.bbg_id(): conv.contract_month_key(p.effective_date())
+                for p in ser_pricers.values()
+            }
+            models.append(RiskModel("SERFF_BASIS", b_curve, b_solver, basis_map))
+        except Exception as exc:  # noqa: BLE001 - conditioning-only space
+            print(f"RISK_MODEL_ERROR SERFF_BASIS @ {ts}: {type(exc).__name__}: {exc}")
 
     return models
 
@@ -212,9 +297,8 @@ def project_unit(unit, direction_row, risk_models, pricer, curve_name, snap_ts):
         deltas = _project_onto_model(pkgs, model)
         for key, val in deltas.items():
             space, bucket = key if isinstance(key, tuple) else (model.space, key)
-            sign = _RL_SIGN_BY_SPACE.get(space, RL_DELTA_TO_FUTURES_EQ)
             rows.append(dict(meta, bucket_space=space, bucket_key=bucket,
-                             delta_dv01=sign * float(val)
+                             delta_dv01=RL_DELTA_TO_FUTURES_EQ * float(val)
                              if model.curve_handle is not None else float(val)))
 
     # ENTRY mark: dealer-signed NPV at the projection snapshot

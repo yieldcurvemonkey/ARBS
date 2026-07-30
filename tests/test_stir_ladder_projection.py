@@ -40,6 +40,56 @@ def test_extract_bucket_deltas_collapses_duplicate_buckets():
     assert out == {"2026-10-28": 25.0}
 
 
+def test_contract_grid_sr3_quarterly_imm():
+    """SR3 grid = quarterly IMM contracts whose period has not yet STARTED.
+
+    Pinned against the bucket keys the vendor SFRCM1..12 fetch produced at this
+    as-of date, so the curve-implied path stays bucket-compatible with the rows
+    already persisted by the fetch path.
+    """
+    import datetime as _dt
+
+    from SDRUtils.stir_flow.ladder import contract_grid
+
+    grid = contract_grid(_dt.date(2026, 7, 10), "SR3")
+    assert [g[0] for g in grid] == [
+        "SFRU26", "SFRZ26", "SFRH27", "SFRM27", "SFRU27", "SFRZ27",
+        "SFRH28", "SFRM28", "SFRU28", "SFRZ28", "SFRH29", "SFRM29",
+    ]
+    # front contract runs 3rd-Wed Sep 26 -> 3rd-Wed Dec 26; JUN26 already started
+    assert grid[0][1] == _dt.datetime(2026, 9, 16)
+    assert grid[0][2] == _dt.datetime(2026, 12, 16)
+    # rateslib 2.x rejects datetime.date -- these must be datetimes
+    assert all(type(d) is _dt.datetime for _b, e, m in grid for d in (e, m))
+
+
+def test_contract_grid_zq_monthly_includes_current_month():
+    """ZQ grid = calendar months starting with the CURRENT one (mid-period front)."""
+    import datetime as _dt
+
+    from SDRUtils.stir_flow.ladder import contract_grid
+
+    grid = contract_grid(_dt.date(2026, 7, 10), "ZQ")
+    assert [g[0] for g in grid] == [
+        "FFN26", "FFQ26", "FFU26", "FFV26", "FFX26", "FFZ26",
+        "FFF27", "FFG27", "FFH27", "FFJ27", "FFK27", "FFM27",
+    ]
+    assert grid[0][1] == _dt.datetime(2026, 7, 1)      # first business day of July
+    assert grid[0][2] == _dt.datetime(2026, 8, 3)      # first business day of August
+
+
+def test_contract_grid_rolls_with_as_of():
+    """The grid is as-of dependent: past the Sep IMM, SFRU26 drops out."""
+    import datetime as _dt
+
+    from SDRUtils.stir_flow.ladder import contract_grid
+
+    before = [g[0] for g in contract_grid(_dt.date(2026, 9, 15), "SR3")]
+    after = [g[0] for g in contract_grid(_dt.date(2026, 9, 17), "SR3")]
+    assert before[0] == "SFRU26"
+    assert after[0] == "SFRZ26"
+
+
 @pytest.mark.network
 @pytest.mark.slow
 def test_build_risk_models_golden():
@@ -56,14 +106,45 @@ def test_build_risk_models_golden():
     h = mdp._get_curve(curve_name="USD-OIS-Q12xM12STIRT-SERFFX-MIX23", timestamp=ts)
     models = build_risk_models("USD-OIS-Q12xM12STIRT-SERFFX-MIX23", h, ts, stirf, include_basis=True)
     spaces = {m.space for m in models}
-    assert spaces == {"MEETING", "FUTURES", "SERFF_BASIS"}
+    # FUTURES and FED_FUNDS are curve-implied now: both must ALWAYS be present
+    # when the curve exists -- their absence used to be silently tolerated.
+    assert spaces == {"MEETING", "FUTURES", "FED_FUNDS", "SERFF_BASIS"}
     meeting = next(m for m in models if m.space == "MEETING")
     assert len(meeting.label_to_bucket) >= 10          # ~12 upcoming meetings resolved
     assert meeting.label_to_bucket["fomc_1"] == "2026-07-29"
     futures = next(m for m in models if m.space == "FUTURES")
     assert len(futures.label_to_bucket) == 12
+    assert futures.label_to_bucket["SFRU26"] == "SFRU26"
+    ff = next(m for m in models if m.space == "FED_FUNDS")
+    assert len(ff.label_to_bucket) == 12
+    assert ff.label_to_bucket["FFN26"] == "FFN26"
     serff = next(m for m in models if m.space == "SERFF_BASIS")
     assert len(serff.label_to_bucket) >= 10  # ~12 SER months
+
+
+@pytest.mark.network
+@pytest.mark.slow
+def test_futures_risk_model_no_vendor_fetch():
+    """The curve-implied futures model must build with NO STIRFutureMDP handle at all.
+
+    This is the property that kills the availability fallback: it works at every
+    timestamp the dense curve exists, including minutes where the vendor returns
+    nothing.
+    """
+    import datetime
+    import pytz
+    from MDP.IRSwaps.IRSwapsMDP import IRSwapsMDP
+    from SDRUtils.stir_flow.ladder import build_futures_risk_model
+
+    NY = pytz.timezone("America/New_York")
+    ts = NY.localize(datetime.datetime(2026, 7, 10, 15, 40))
+    h = IRSwapsMDP(source="BARCHART_STIRF-RL")._get_curve(
+        curve_name="USD-SOFR-1D-Q12xM12STIRT", timestamp=ts)
+    for space, front in (("FUTURES", "SFRU26"), ("FED_FUNDS", "FFN26")):
+        m = build_futures_risk_model(space, h, ts)
+        assert m.space == space
+        assert list(m.label_to_bucket)[0] == front
+        assert len(m.label_to_bucket) == 12
 
 
 import datetime
@@ -193,3 +274,83 @@ def test_project_unit_golden_sign_and_magnitude():
     futures = {r["bucket_key"]: r["delta_dv01"] for r in rows if r["bucket_space"] == "FUTURES"}
     fut_total = sum(futures.values())
     assert fut_total < 0, f"PAID FUTURES must be negative, got {fut_total}"
+
+
+@pytest.mark.network
+@pytest.mark.slow
+@pytest.mark.parametrize("direction,want_sign", [("PAID", -1.0), ("RECEIVED", +1.0)])
+def test_project_unit_sign_and_scale_agree_across_every_space(direction, want_sign):
+    """EVERY bucket space must agree on the persisted sign, and scale to ~DV01.
+
+    Regression guard for the defect found in the persisted table on 2026-07-29:
+    FED_FUNDS was inverted relative to MEETING and FUTURES was internally mixed,
+    with |ladder sum| up to 6.7x structure DV01. A single `RL_DELTA_TO_FUTURES_EQ`
+    plus the curve-implied futures models fixes both; this pins them.
+    """
+    import datetime
+    import pytz
+    from MDP.IRSwaps.IRSwapsMDP import IRSwapsMDP
+    from MDP.STIRFutures.STIRFutureMDP import STIRFutureMDP
+    from SDRUtils.stir_flow.ladder import build_risk_models, project_unit
+    from SDRUtils.stir_flow.pricing import CurvePricer
+
+    NY = pytz.timezone("America/New_York")
+    ts = NY.localize(datetime.datetime(2026, 7, 10, 15, 40))
+    curve_name = "USD-OIS-Q12xM12STIRT-SERFFX-MIX23"
+    mdp = IRSwapsMDP(source="BARCHART_STIRF-RL")
+    stirf = STIRFutureMDP(source="BARCHART_STIRF-RL")
+    h = mdp._get_curve(curve_name=curve_name, timestamp=ts)
+    models = build_risk_models(curve_name, h, ts, stirf, include_basis=False)
+    rows, _ = project_unit(_unit(), _direction_row(dealer_direction=direction), models,
+                           CurvePricer(mdp=mdp), curve_name, ts)
+    dv01 = 50001.0
+    sums = {}
+    for r in rows:
+        sums[r["bucket_space"]] = sums.get(r["bucket_space"], 0.0) + r["delta_dv01"]
+    assert set(sums) == {"MEETING", "FUTURES", "FED_FUNDS"}, sums
+    for space, total in sums.items():
+        assert total * want_sign > 0, f"{space} sign wrong for {direction}: {total}"
+        # futures baskets do not partition swap DV01 exactly (basis/convexity),
+        # but they must not be off by more than ~10% -- the plan's Task 9 gate.
+        assert abs(abs(total) - dv01) < 0.10 * dv01, f"{space} scale off: {total} vs {dv01}"
+
+
+@pytest.mark.network
+@pytest.mark.slow
+def test_dates_path_matches_vendor_fetch_path_sr3():
+    """SR3 curve-implied ladder must reproduce the vendor SFRCM ladder it replaces.
+
+    Deferred ZQ buckets agree too, but the FRONT monthly bucket does not: the
+    fetched pricer carries one extra same-day fixing that was unpublished at the
+    decision timestamp, so it prices a shorter un-fixed window. That is a
+    look-ahead in the legacy path, not an error here -- see
+    SDRUtils.stir_flow.ladder.build_futures_risk_model.
+    """
+    import datetime
+    import pytz
+    from MDP.IRSwaps.BARCHART_STIRF.risk import build_delta_risk_ladder
+    from MDP.IRSwaps.IRSwapsMDP import IRSwapsMDP
+    from MDP.STIRFutures.STIRFutureMDP import STIRFutureMDP
+    from Query.STIRFutures.STIRFutureQuery import STIRFutureQuery
+    from SDRUtils.stir_flow.ladder import RiskModel, build_futures_risk_model, project_unit
+    from SDRUtils.stir_flow.pricing import CurvePricer
+
+    NY = pytz.timezone("America/New_York")
+    ts = NY.localize(datetime.datetime(2026, 7, 10, 15, 40))
+    curve_name = "USD-OIS-Q12xM12STIRT-SERFFX-MIX23"
+    mdp = IRSwapsMDP(source="BARCHART_STIRF-RL")
+    stirf = STIRFutureMDP(source="BARCHART_STIRF-RL")
+    h = mdp._get_curve(curve_name=curve_name, timestamp=ts)
+    pricer = CurvePricer(mdp=mdp)
+
+    qs = [STIRFutureQuery(symbol=f"SFRCM{i}") for i in range(1, 13)]
+    fc, fs = build_delta_risk_ladder(qs, h, stirf_mdp_handle=stirf, timestamp=ts)
+    fetch = RiskModel("FUTURES", fc, fs, {l: l for l in fs.instrument_labels})
+    dates = build_futures_risk_model("FUTURES", h, ts)
+
+    got = {}
+    for name, model in (("fetch", fetch), ("dates", dates)):
+        rows, _ = project_unit(_unit(), _direction_row(), [model], pricer, curve_name, ts)
+        got[name] = sum(r["delta_dv01"] for r in rows)
+    rel = abs(got["dates"] - got["fetch"]) / abs(got["fetch"])
+    assert rel < 1e-3, f"SR3 dates vs fetch drifted {rel:.4%}: {got}"
