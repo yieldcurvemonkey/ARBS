@@ -7,6 +7,8 @@ its own error rate, the economics gate could not fail, and the capacity headline
 understated by 4.7x. As with the first batch, every one of them passed the suite that
 existed at the time.
 """
+import dataclasses
+
 import numpy as np
 import pandas as pd
 import pytest
@@ -213,3 +215,42 @@ def test_gate_context_volume_is_aggregated_not_sampled(monkeypatch):
     vols = ctx.volumes.get("FUTURES")
     assert vols is not None and not vols.empty
     assert (vols.dropna(how="all").to_numpy() >= 0).all()
+
+
+# =========================== the label-free cell is the one result immune to the label
+def test_label_free_builds_intensity_in_the_TARGET_space(monkeypatch):
+    """It used the configured SIGNAL space. Whenever the two differ the SR3 and ZQ
+    bucket namespaces are disjoint, so the reindex matched nothing and the cell reported
+    "no trades" -- indistinguishable from a real null, on the one diagnostic that is
+    supposed to be immune to the direction label."""
+    _no_write(monkeypatch)
+    ctx = _context(effect=0.6, seed=60)
+    ctx = dataclasses.replace(ctx, config=dataclasses.replace(
+        ctx.config, signal=dataclasses.replace(ctx.config.signal,
+                                               space="FED_FUNDS")))
+    out = gates.run_label_free(ctx, space="FUTURES")
+    assert out["result"]["n"].iloc[0] > 0, "must not go silently empty"
+
+
+def test_label_free_is_recorded_in_the_trial_ledger(monkeypatch):
+    """A family-wise correction is only honest over the family actually searched, and
+    this is a tradable configuration that could be reported as a result."""
+    _no_write(monkeypatch)
+    sink = study.TrialLedger()
+    gates.run_label_free(_context(effect=0.5, seed=61), ledger_sink=sink)
+    frame = sink.frame()
+    assert len(frame) == 1
+    assert "LABEL-FREE" in frame["label"].iloc[0]
+    assert "res_t" in frame.columns
+
+
+def test_label_free_signs_from_z_because_intensity_has_no_zero(monkeypatch):
+    """Not an oversight: |delta_dv01| is non-negative, so a level-signed rule would take
+    the same side every time. The asymmetry against the primary's level-signing is
+    documented rather than hidden, because it weakens what the comparison can claim."""
+    _no_write(monkeypatch)
+    out = gates.run_label_free(_context(effect=0.6, seed=62))
+    led = out["ledger"]
+    assert not led.empty
+    assert set(led["position"].unique()) <= {-1, 1}
+    assert (led["signed_from"] == "zscore").all()

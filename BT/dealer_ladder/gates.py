@@ -591,7 +591,7 @@ def run_g3(ctx, *, space=None, horizon_min=None, in_sample=True) -> dict:
 # --------------------------------------------------------------------------
 # label-free control and conditioning splits
 # --------------------------------------------------------------------------
-def run_label_free(ctx, *, space=None) -> dict:
+def run_label_free(ctx, *, space=None, ledger_sink=None) -> dict:
     """The primary rule driven by UNSIGNED print intensity instead of the ladder.
 
     Immune to classification accuracy: it uses |delta_dv01| and ignores direction
@@ -603,6 +603,16 @@ def run_label_free(ctx, *, space=None) -> dict:
     Intensity is non-negative, so a signed rule needs a reference: it is z-scored
     against its own trailing sessions exactly like the ladder, and a HIGH-intensity
     z then predicts a rate RISE under the same convention as a positive ladder.
+
+    ONE ASYMMETRY, stated because it affects how the comparison reads. The primary signs
+    from the ladder LEVEL (a positive ladder means the dealer is long futures-equivalent,
+    whatever the trailing mean happens to be), but intensity has no meaningful zero --
+    every value is non-negative -- so its direction can only come from a reference, and
+    the trailing mean is that reference. The two rules therefore differ in their signing
+    convention as well as in whether they use the label. That is unavoidable rather than
+    an oversight, but it means "the label-free cell works and the signed one does not"
+    is weaker evidence about the LABEL than it looks: it is also a statement about
+    level-signing versus z-signing.
     """
     space = space or ctx.config.primary.target_space
     p = ctx.config.primary
@@ -611,8 +621,12 @@ def run_label_free(ctx, *, space=None) -> dict:
         return {"verdict": _verdict("label-free", None, "no target data")}
     lo, hi = ctx.config.window.in_sample()
     rates_w = rates[_date_mask(rates.index, lo, hi)]
+    # Build the intensity in the TARGET's own space. Using the configured signal space
+    # here would silently produce an all-NaN panel whenever the two differ -- the SR3 and
+    # ZQ bucket namespaces are disjoint, so the reindex below would match nothing and the
+    # cell would report "no trades" rather than "cross-space is not supported".
     intensity = signals.print_intensity_panel(
-        ctx.prints, ctx.grid, space=ctx.config.signal.space,
+        ctx.prints, ctx.grid, space=space,
         half_lives=ctx.config.signal.half_lives)
     intensity = intensity.reindex(columns=list(rates.columns))
     mask = ctx.front_rank.get(space)
@@ -629,6 +643,14 @@ def run_label_free(ctx, *, space=None) -> dict:
                                 seed=ctx.config.stats.seed)
     frame = pd.DataFrame([{**res, "signal": "unsigned print intensity"}])
     _write(ctx, "g4_label_free", frame)
+    # Recorded in the trial ledger because it IS a tradable configuration that could be
+    # reported as a result -- and a family-wise correction is only honest over the family
+    # actually searched.
+    if ledger_sink is not None:
+        ledger_sink.record(f"LABEL-FREE (unsigned intensity, {space})",
+                           {"horizon": p.horizon_min, "threshold": p.z_threshold,
+                            "signal": "intensity"},
+                           {"mean": res["mean"], "t": res["t"]})
     return {"result": frame, "ledger": led,
             "verdict": _verdict("label-free", None,
                                 f"unsigned intensity: net {res['mean']:.4f}bp, "
@@ -1097,7 +1119,7 @@ def run_all(ctx, conn=None, *, run_lockout=False, label_limit=0,
                         "t": float(res["primary_is"]["result"]["t"].iloc[0])})
     res["staleness"] = run_staleness_sensitivity(ctx)
     res["placebos"] = run_placebos(ctx)
-    res["label_free"] = run_label_free(ctx)
+    res["label_free"] = run_label_free(ctx, ledger_sink=ledger_sink)
     res["conditioning"] = run_conditioning(ctx, res["primary_is"])
     res["grid"] = run_grid(ctx, ledger_sink)
     res["g5"] = run_g5(ctx, res["primary_is"])
