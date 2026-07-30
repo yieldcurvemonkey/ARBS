@@ -58,6 +58,40 @@ COLUMN IF NOT EXISTS`.
 
 ---
 
+**D3 — Sign convention was inverted in three of four bucket spaces (found 2026-07-29).**
+The persisted table settled it: over 07/02–07/13 OUTRIGHTs, MEETING is 868/868 PAID-negative
+and 249/249 RECEIVED-positive, but FED_FUNDS is 288 PAID-**positive** / 74 RECEIVED-**negative**
+and FUTURES is split 348 negative / 461 positive *on PAID alone*. A per-space constant cannot
+produce mixed signs inside one space, so `_RL_SIGN_BY_SPACE` was masking a deeper defect: the
+legacy `<ROOT>CM<n>` fetch path calibrated the risk curve to vendor settlement prices on nodes
+seeded from the decision-time curve, and where those disagreed the Jacobian degraded — giving
+deltas that were mis-scaled as well as flipped (|ladder sum| 55,575 and 67,882 against
+structure DV01s of 8,274 and 10,126). Collapsed to one `RL_DELTA_TO_FUTURES_EQ = -1.0`.
+**Every ladder row written before this is invalid and is being rewritten.**
+
+**D4 — Both futures spaces are now curve-implied; the vendor fetch is gone.**
+`contract_grid` mirrors `STIRFutureMDP`'s `<ROOT>CM<n>` resolution exactly, so bucket keys stay
+compatible (`SFRU26…`, `FFN26…`). SR3 agrees with the fetch path to ≤0.03%; deferred ZQ buckets
+to ~0.001%. The **front ZQ month lands ~14% below** the legacy path because the fetched pricer
+carried one extra same-day fixing that was **not yet published** at the decision timestamp — a
+one-day look-ahead in the path being replaced. Also fixed `SERFF_BASIS`, which had been failing
+for all but the first day or two of each month (only 4 of 456 eligible units on 07/02 produced
+basis rows) because the front SR1 contract and its paired IRS leg were built without fixings.
+
+**D5 — 07/13's 192 UNKNOWN (32.8%) are infrastructure, not data.** Flag histogram:
+85 `BARCHART_TOS_LIVE_STIRF-RL returned no data`, 80 `maximum recursion depth exceeded`,
+27 `403 Client Error: Forbidden`. All three are the vendor-fetch / rate-limit / curve-anchor
+family that later fixes addressed. The recursion failure also hit 07/09 (19) and 07/14 (32) and
+is tracked as an open item — re-run under the current vintage is the test.
+
+**D6 — Realized window: no shrinkage needed (probed 2026-07-29).** At 14:30 ET on a sparse grid
+from 2025-12-15 to 2026-07-15, `USD-SOFR-1D-Q12xM12STIRT` and
+`USD-OIS-Q12xM12STIRT-SERFFX-MIX23` both build at every probe point (17–23 nodes), and the Citi
+Velocity independent mid resolves at every one. So the planned **2026-01-12 → present** window
+stands. One caveat for G0/G3: the Citi workbook's sheets run Mon 00:01 → Fri 11:59, so
+**Friday-afternoon prints have no independent mid** (2026-01-30 and 2026-05-15 both fell back to
+11:59). Friday PM is therefore an explicit hole in the pseudo-label study, not a silent one.
+
 ## Phase log
 
 ### Phase A — PR #354 cleanup
