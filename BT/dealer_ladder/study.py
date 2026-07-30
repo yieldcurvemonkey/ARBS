@@ -376,9 +376,55 @@ def evaluate_trades(ledger: pd.DataFrame, *, value="net_bp", n_boot=2000, seed=0
     ci = stats.day_blocked_ci(ledger[value].to_numpy(), b, n_boot=n_boot,
                               alpha=alpha, seed=seed)
     sc = stats.sign_consistency(ledger[value].to_numpy(), b)
+    share_long = (float((ledger["position"] > 0).mean())
+                  if "position" in ledger.columns else float("nan"))
     return {**ci, "stars": stats.stars(ci["t"]),
             "hit_rate": float((ledger[value] > 0).mean()),
+            # How ONE-SIDED the rule was. 84% of prints are PAID, PAID means negative
+            # delta_dv01, and the position is signed from the ladder LEVEL -- so the
+            # rule can be overwhelmingly directional without that being visible in the
+            # mean or the t. Measured on Jan-Feb: 80% of triggers take the short-rates
+            # side, rising above 95% on the deferred contracts. A reader has to see
+            # this to know whether they are looking at a signal or at a bet on drift.
+            "share_long": share_long,
             "share_agreeing": sc["share_agreeing"], "p_sign": sc["p_sign"]}
+
+
+def constant_position_benchmark(ledger: pd.DataFrame, n_boot=2000, seed=0) -> pd.DataFrame:
+    """What ALWAYS-long and ALWAYS-short would have earned over the same trades.
+
+    The comparison that makes a one-sided rule interpretable. The ladder level is
+    negative in 94.6% of (minute, bucket) cells, because 84% of prints are PAID and PAID
+    means negative ``delta_dv01`` -- so a rule signed from the level takes the
+    short-rates side on ~80% of triggers. At that imbalance the strategy's return is
+    substantially a bet on the window's rate drift, and "net X bp with t = Y" cannot be
+    read as evidence about the LADDER unless it is set against what the same entries and
+    exits would have paid with the sign held constant.
+
+    Uses the ledger's own entry/exit prices and costs, so the only thing that varies is
+    the position. If the rule does not beat the better of the two constants, the ladder
+    is contributing nothing beyond direction.
+    """
+    cols = ["variant", "mean_bp", "t", "stars", "n", "n_blocks", "share_long"]
+    if ledger.empty or not {"entry_bp", "exit_bp"} <= set(ledger.columns):
+        return pd.DataFrame(columns=cols)
+    b = blocks_of(ledger)
+    move = ledger["exit_bp"].to_numpy(float) - ledger["entry_bp"].to_numpy(float)
+    cost = (ledger["cost_bp"].to_numpy(float) if "cost_bp" in ledger.columns
+            else np.zeros(len(ledger)))
+    rows = []
+    variants = [("as traded", ledger["position"].to_numpy(float)
+                 if "position" in ledger.columns else np.ones(len(ledger))),
+                ("always long rates (+1)", np.ones(len(ledger))),
+                ("always short rates (-1)", -np.ones(len(ledger)))]
+    for name, pos in variants:
+        net = pos * move - cost
+        r = stats.day_blocked_ci(net, b, n_boot=n_boot, seed=seed)
+        rows.append({"variant": name, "mean_bp": r["mean"], "t": r["t"],
+                     "stars": stats.stars(r["t"]), "n": r["n"],
+                     "n_blocks": r["n_blocks"],
+                     "share_long": float((pos > 0).mean())})
+    return pd.DataFrame(rows)
 
 
 def cost_bp_map(buckets, cost_cfg, near_expiry: dict, root_by_bucket: dict) -> dict:

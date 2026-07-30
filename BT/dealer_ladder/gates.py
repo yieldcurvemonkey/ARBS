@@ -810,15 +810,22 @@ def run_primary(ctx, *, in_sample=True, claim_lockout=True, force_lockout=False,
                                seed=ctx.config.stats.seed)
     tag = "in-sample" if in_sample else "LOCKOUT"
     passed = bool(np.isfinite(res["t"]) and res["mean"] > 0 and res["t"] >= p.t_pass)
+    bench = study.constant_position_benchmark(ledger, n_boot=ctx.config.stats.n_boot,
+                                              seed=ctx.config.stats.seed)
+    if not bench.empty:
+        _write(ctx, f"g4_directional_benchmark_{'is' if in_sample else 'lockout'}",
+               bench)
     return {
         "ledger": ledger,
+        "directional_benchmark": bench,
         "result": pd.DataFrame([{**res, "segment": tag}]),
         "net_table": study.net_of_costs_table(
             ledger, attenuation=ctx.config.stats.attenuation_grid),
         "verdict": _verdict(
             f"G4-primary({tag})", passed,
             f"net {res['mean']:.4f}bp/trade, t={res['t']:.2f}{res['stars']}, "
-            f"n={res['n']} trades over {res['n_blocks']} sessions "
+            f"n={res['n']} trades over {res['n_blocks']} sessions, "
+            f"{res.get('share_long', float('nan')):.0%} long-rates "
             f"(pass needs mean>0 and t>={p.t_pass})"),
     }
 

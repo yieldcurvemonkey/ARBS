@@ -354,3 +354,61 @@ def test_horse_race_reports_a_healthy_design_as_full_rank():
     out = study.horse_race(frame, controls=["ctl"])
     assert not out["rank_deficient"].any()
     assert (out["design_cond"] < 100).all()
+
+
+# ========== a one-sided rule must be readable against a constant-position benchmark
+def test_share_long_reports_how_one_sided_the_rule_was():
+    """84% of prints are PAID, PAID means negative delta_dv01, and the position is
+    signed from the LEVEL -- so the rule can be overwhelmingly directional without that
+    showing up in the mean or the t. Measured on Jan-Feb: 80% of triggers short rates."""
+    idx = pd.date_range("2026-03-02 08:00", periods=50, freq="15min", tz=NY)
+    led = pd.DataFrame({"ts": idx, "bucket": "A",
+                        "position": [-1] * 40 + [1] * 10,
+                        "entry_bp": 0.0, "exit_bp": 1.0, "cost_bp": 0.0})
+    led["gross_bp"] = led["position"] * (led["exit_bp"] - led["entry_bp"])
+    led["net_bp"] = led["gross_bp"] - led["cost_bp"]
+    r = study.evaluate_trades(led, n_boot=200)
+    assert r["share_long"] == pytest.approx(0.2)
+
+
+def test_constant_position_benchmark_prices_the_same_trades():
+    """Same entries, exits and costs; only the position varies. If the rule cannot beat
+    the better constant, the ladder is contributing nothing beyond direction."""
+    idx = pd.date_range("2026-03-02 08:00", periods=60, freq="15min", tz=NY)
+    rng = np.random.default_rng(11)
+    move = rng.normal(loc=0.5, scale=0.2, size=len(idx))     # rates drift UP
+    led = pd.DataFrame({"ts": idx, "bucket": "A", "position": 1,
+                        "entry_bp": 0.0, "exit_bp": move, "cost_bp": 0.0})
+    led["gross_bp"] = led["position"] * move
+    led["net_bp"] = led["gross_bp"]
+    b = study.constant_position_benchmark(led, n_boot=200)
+    got = dict(zip(b["variant"], b["mean_bp"]))
+    assert got["always long rates (+1)"] == pytest.approx(move.mean())
+    assert got["always short rates (-1)"] == pytest.approx(-move.mean())
+    assert got["as traded"] == pytest.approx(move.mean())
+    assert set(b["variant"]) == {"as traded", "always long rates (+1)",
+                                 "always short rates (-1)"}
+
+
+def test_the_benchmark_subtracts_the_same_cost_from_every_variant():
+    idx = pd.date_range("2026-03-02 08:00", periods=20, freq="15min", tz=NY)
+    led = pd.DataFrame({"ts": idx, "bucket": "A", "position": 1,
+                        "entry_bp": 0.0, "exit_bp": 1.0, "cost_bp": 0.5})
+    led["gross_bp"] = 1.0
+    led["net_bp"] = 0.5
+    b = study.constant_position_benchmark(led, n_boot=100)
+    got = dict(zip(b["variant"], b["mean_bp"]))
+    assert got["always long rates (+1)"] == pytest.approx(0.5)
+    assert got["always short rates (-1)"] == pytest.approx(-1.5)
+
+
+def test_the_benchmark_is_empty_without_prices():
+    led = pd.DataFrame({"ts": [], "bucket": [], "position": []})
+    assert study.constant_position_benchmark(led).empty
+
+
+def test_the_primary_verdict_states_the_position_balance(monkeypatch):
+    _no_write(monkeypatch)
+    out = gates.run_primary(_context(effect=0.7, seed=65), in_sample=True)
+    assert "long-rates" in out["verdict"]["headline"]
+    assert not out["directional_benchmark"].empty

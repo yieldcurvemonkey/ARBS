@@ -98,6 +98,10 @@ SECTIONS = [
     ("g3_residual_race_FED_FUNDS", "G3 — residualised signal, ZQ", False,
      None, None, None),
 
+    ("g4_directional_benchmark_is", "G4 — the rule against a CONSTANT position",
+     False, None, None, None),
+    ("g4_directional_benchmark_lockout",
+     "G4 — the rule against a constant position, LOCKOUT", False, None, None, None),
     ("g4_staleness_sensitivity", "G4 — staleness sensitivity of the primary", False,
      None, None, None),
     ("g4_best_and_median", "G4 — best vs median configuration", False,

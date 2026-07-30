@@ -915,3 +915,46 @@ same Barchart origin quota the backfill is spending: the warm needs ~60 requests
 against a ~55-per-rolling-minute ceiling, so overlapping 49 warmed sessions with April's classify
 would push both into `Retry-After` sleeps and conserve total time at best. The sequencing stays
 backfill → warm → gates.
+
+### The pre-registered rule is 80% one-sided, measured (06:25)
+
+A question worth measuring rather than assuming, since the answer changes how G4 can be read.
+The spec triggers on `|z| >= 1` but signs the position from the ladder **LEVEL**, because the
+hypothesis is about the level. But 84% of prints are PAID and PAID means *negative* `delta_dv01`,
+so the decayed level may be negative nearly everywhere — in which case the rule takes the same side
+on almost every trade and the day-blocked t is measuring the window's rate drift.
+
+Measured on the signed universe over Jan+Feb (prints only, no vendor): 33 sessions, 3,168 decision
+minutes, 12 SR3 buckets, 32,256 finite cells.
+
+- **94.6% of all (minute, bucket) cells have a NEGATIVE ladder level.**
+- At the pre-registered `|z| >= 1.0`, **25.0% of cells trigger** (8,056 of 32,256).
+- **Among triggers, 80.2% have level < 0** — so four trades in five take the short-rates side.
+- `sign(level) != sign(z)` on **20.0%** of triggers, and the disagreement is entirely
+  one-directional: `level < 0, z > 0` happens 1,610 times, `level > 0, z < 0` happens **zero**
+  times. A positive level is rare enough that it is always far above the (negative) trailing mean.
+
+And the imbalance is strongly increasing in maturity:
+
+| bucket | triggers | share level < 0 |
+|---|---|---|
+| SFRH26 | 679 | 54.1% |
+| SFRM26 | 624 | 66.5% |
+| SFRU26 | 831 | 82.2% |
+| SFRZ27 | 803 | 93.2% |
+| SFRU28 | 493 | 94.9% |
+| SFRZ28 | 668 | **97.3%** |
+
+The front of the strip is near-balanced; the back is a constant short-rates bet.
+
+**Two additions, because a number this one-sided must not be reportable without it.**
+`evaluate_trades` now returns `share_long`, and the primary verdict states it inline. And
+`constant_position_benchmark` re-prices the *same* entries, exits and costs with the position held
+at +1 and at −1, so the rule can be read against what pure direction would have earned. If the
+strategy does not beat the better constant, the ladder is contributing nothing beyond direction —
+which is a conclusion the mean and the t alone cannot deliver.
+
+**The pre-registration is NOT changed.** Signing from the level is what the hypothesis says, the
+threshold and horizon are locked, and this is a diagnostic added alongside rather than a
+re-specification. It also does not rescue anything: if G4 passes only because rates fell, the
+benchmark will say so.

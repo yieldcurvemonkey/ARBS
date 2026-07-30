@@ -66,6 +66,9 @@ STAGES = {
     "G3 leave-one-bucket-out, ZQ": ["g3_leave_one_out_FED_FUNDS"],
     "G3 residualised signal, ZQ": ["g3_residual_race_FED_FUNDS"],
     "G4 primary (in-sample)": ["verdicts"],
+    "G4 directional benchmark (constant position)":
+        ["g4_directional_benchmark_is"],
+    "G4 directional benchmark, LOCKOUT": ["g4_directional_benchmark_lockout"],
     "G4 staleness sensitivity": ["g4_staleness_sensitivity"],
     "G4 secondary grid": ["g4_league"],
     "G4 variants that could not run": ["g4_skipped_variants"],
