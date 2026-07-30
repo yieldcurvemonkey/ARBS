@@ -116,10 +116,19 @@ def channel_row(
     bd: pd.DataFrame,
 ) -> Dict[str, object]:
     """One monitor row per (as_of, contract): gaps, sigmas, residual, class."""
+    event_std_opt = float(np.sqrt(fit.var_opt_bp2.sum()))
+    event_std_zq = float(np.sqrt(fit.var_zq_bp2.sum()))
+    lattice_ceiling = float(np.sqrt(sum(
+        ((r.support[1] - r.support[0]) * 25.0 * r.weight) ** 2 * 0.25
+        for r in cm.resolved)))
     row: Dict[str, object] = {
         "as_of": cm.as_of, "symbol": cm.symbol,
         "n_resolved": cm.n_resolved, "n_quotes": fit.n_quotes,
         "rmse_bp": fit.rmse_bp, "smear_bp": fit.smear_bp,
+        "smear_cap_bp": fit.smear_cap_bp, "saturated": fit.saturated,
+        "event_std_opt_bp": event_std_opt, "event_std_zq_bp": event_std_zq,
+        "lattice_ceiling_bp": lattice_ceiling,
+        "total_std_opt_bp": float(np.hypot(event_std_opt, fit.smear_bp)),
         "unresolved_std_bp": float(np.sqrt(cm.unresolved_var_bp2)),
         "any_stale": cm.any_stale,
         "channel": two_digital_test(bd),

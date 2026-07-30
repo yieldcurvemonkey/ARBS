@@ -332,3 +332,171 @@ def test_replication_breaks_off_lattice():
         _digital_value(*q_zq) - _digital_value(*q_zq), abs=1e-12) or True
     # the identity that holds on-lattice fails off it
     assert abs(seller_off_lattice) > 1e-6
+
+
+# ---------------------------------------------------------------------------
+# fast paths must agree with the reference implementations
+# ---------------------------------------------------------------------------
+def test_atom_engine_matches_reference_distribution():
+    from RVUtils.MeetingProb.atoms import AtomEngine
+    cm = _cm_two_meetings(q1=0.35, q2=0.7, w2=0.6)
+    eng = AtomEngine(cm)
+    for q in (None, [0.1, 0.9], [0.5, 0.5]):
+        r1, p1 = atom_distribution(cm, 4.00, q=q)
+        r2, p2 = eng.rates_probs(4.00, q=q)
+        # engine keeps raw outcome order; compare as sorted pairs
+        o1 = sorted(zip(np.round(r1, 10), np.round(p1, 12)))
+        # engine may not merge coincident atoms; aggregate before comparing
+        agg = {}
+        for r, p in zip(np.round(r2, 10), p2):
+            agg[r] = agg.get(r, 0.0) + p
+        o2 = sorted((k, round(v, 12)) for k, v in agg.items())
+        assert len(o1) == len(o2)
+        for (ra, pa), (rb, pb) in zip(o1, o2):
+            assert ra == pytest.approx(rb, abs=1e-9)
+            assert pa == pytest.approx(pb, abs=1e-9)
+
+
+def test_vectorized_pricer_matches_scalar():
+    from RVUtils.MeetingProb.pricer import price_options_vector
+    cm = _cm_two_meetings()
+    rates, probs = atom_distribution(cm, 4.00)
+    rights = np.array(["P", "C", "P", "C"])
+    ks = np.array([4.10, 3.90, 4.30, 4.00])
+    for smear in (0.0, 5.0):
+        vec = price_options_vector(rates, probs, rights, ks, smear_bp=smear)
+        for i in range(4):
+            assert vec[i] == pytest.approx(
+                price_option(rates, probs, rights[i], float(ks[i]),
+                             smear_bp=smear), abs=1e-9)
+
+
+def test_refit_flags_saturation_when_the_market_is_wider_than_the_cap():
+    """A surface wider than lattice + capped smear must be flagged, not read
+    as per-meeting gaps (the probe's day-after-the-surprise failure mode)."""
+    cm = _cm_two_meetings(q1=0.3, q2=0.4)
+    quotes = _quote_frame(cm, 4.00, np.array([0.3, 0.4]), 40.0)   # very wide
+    fit = refit_lattice(cm, 4.00, quotes, diffusion_cap_bp=10.0)
+    assert fit is not None
+    assert fit.saturated
+
+
+# ---------------------------------------------------------------------------
+# channel-1 backtest engine on planted paths
+# ---------------------------------------------------------------------------
+def _bt_fixture(outcome1: int, outcome2: int):
+    """15 business days, two meetings (day 6 and day 12), planted paths.
+
+    The market prices the n>=1 digital rich (q_mkt = [0.55, 0.40]) vs the tree
+    (q_zq = [0.30, 0.40]); the market's excess converges linearly to zero by
+    the first resolution. Jumps drift toward the planted outcomes just before
+    each meeting.
+    """
+    import pandas as pd
+    from RVUtils.MeetingProb.atoms import ContractMeetings, ResolvedMeeting
+
+    days = pd.bdate_range("2026-08-03", periods=15)
+    e1, e2 = days[6].date(), days[12].date()
+    r1 = ResolvedMeeting(effective=e1, decision=e1, weight=1.0, support=(0, 1),
+                         q_zq=0.30, jump_bp=7.5, stale=False)
+    r2 = ResolvedMeeting(effective=e2, decision=e2, weight=1.0, support=(0, 1),
+                         q_zq=0.40, jump_bp=10.0, stale=False)
+    cm = ContractMeetings(
+        symbol="SFRZ26", as_of=days[0].date(),
+        window=(datetime.date(2026, 12, 16), datetime.date(2027, 3, 17)),
+        expiry=datetime.date(2026, 12, 11),
+        resolved=(r1, r2), unresolved_var_bp2=0.0, any_stale=False)
+
+    fwd = 4.00
+    q_ref = [0.30, 0.40]
+    from RVUtils.MeetingProb.atoms import AtomEngine
+    from RVUtils.MeetingProb.pricer import digital_prob
+    eng = AtomEngine(cm)
+    rates0, _ = eng.rates_probs(fwd, q=q_ref, q_ref=q_ref)
+    boundary = float(0.5 * (np.sort(rates0)[0] + np.sort(rates0)[1]))
+    # boundary between the 0-move and 1-move atoms => digital = P(n >= 1)
+
+    def tree_digital(q1, q2):
+        # FRAME-FROZEN: absolute atoms fixed by the entry reference; only the
+        # probabilities move — the real-market dynamic (forward drifts with
+        # the expected path, strikes stay put).
+        rr, pp = eng.rates_probs(fwd, q=[q1, q2], q_ref=q_ref)
+        return digital_prob(rr, pp, boundary, smear_bp=0.0)
+
+    # jump paths: one clean step to the outcome two days before each meeting
+    def path(j0, outcome, step_day, eff):
+        def f(dd):
+            if dd >= eff:
+                return 25.0 * outcome
+            return 25.0 * outcome if dd >= step_day else j0
+        return f
+
+    j1 = path(7.5, outcome1, days[4].date(), e1)
+    j2 = path(10.0, outcome2, days[10].date(), e2)
+    jrows = []
+    for d in days:
+        jrows.append({"as_of": d, "effective": e1, "jump_bp": j1(d.date())})
+        jrows.append({"as_of": d, "effective": e2, "jump_bp": j2(d.date())})
+    jumps = pd.DataFrame(jrows)
+
+    # market marks: frozen-frame tree at the CURRENT jump-implied q's, plus a
+    # planted excess that decays to zero by the first resolution
+    entry_excess = (0.55 - 0.30) * (1 - 0.40)     # richer P(n>=1) via meeting 1
+    mrows = []
+    for k, d in enumerate(days):
+        dd = d.date()
+        q1 = float(outcome1) if dd >= e1 else min(max(j1(dd) / 25.0, 0.0), 1.0)
+        q2 = float(outcome2) if dd >= e2 else min(max(j2(dd) / 25.0, 0.0), 1.0)
+        excess = entry_excess * max(0.0, 1.0 - k / 6.0)
+        mrows.append({"as_of": d, "symbol": "SFRZ26",
+                      "boundary_rate": boundary,
+                      "unit_bp": (tree_digital(q1, q2) + excess) * 100.0})
+    vert_marks = pd.DataFrame(mrows)
+
+    signals = pd.DataFrame([{
+        "as_of": days[0], "symbol": "SFRZ26", "boundary_rate": boundary,
+        "width_bp": 12.5, "gap": entry_excess, "gap_t": 5.0,
+        "smear_bp": 0.0, "channel": "channel1", "gate": True,
+    }])
+    return cm, fwd, signals, vert_marks, jumps, days
+
+
+@pytest.mark.parametrize("o1,o2", [(1, 0), (0, 1), (1, 1), (0, 0)])
+def test_channel1_convergence_is_outcome_independent(o1, o2):
+    """Fading the rich digital + ladder hedge earns ~the entry gap on EVERY
+    outcome branch — the meeting is the delivery date, not the bet."""
+    from RVUtils.MeetingProb.backtest import run_channel1_backtest
+    cm, fwd, signals, vert_marks, jumps, days = _bt_fixture(o1, o2)
+    trades = run_channel1_backtest(
+        signals, vert_marks, jumps,
+        cm_lookup=lambda d, s: cm, fwd_lookup=lambda d, s: fwd,
+        entry_min_gap=0.02, entry_min_t=2.0, lag=1)
+    assert len(trades) == 1
+    t = trades[0]
+    assert t.direction == -1                      # fade the rich listed digital
+    entry_gap_bp = signals["gap"].iloc[0] * 100.0
+    # gross should recover most of the entry gap on every branch; the residual
+    # is the one-day lag decay plus the stale-h cross term, both small here
+    assert t.gross_bp == pytest.approx(entry_gap_bp, abs=0.35 * entry_gap_bp)
+    assert t.exit_reason == "resolved"
+    assert t.n_rebalances >= 3                    # entry + two resolutions
+
+
+def test_channel1_hedge_ratio_is_the_multilinear_coefficient():
+    from RVUtils.MeetingProb.backtest import hedge_ratios
+    cm, fwd, *_ = _bt_fixture(1, 0)
+    rates, _p = atom_distribution(cm, fwd)
+    boundary = float(0.5 * (np.sort(rates)[0] + np.sort(rates)[1]))
+    h = hedge_ratios(cm, fwd, boundary, 0.0)
+    # V = P(n>=1) = 1 - (1-q1)(1-q2); dV/dq1 = (1-q2); per bp: /25
+    assert h[0] == pytest.approx((1 - 0.40) / 25.0, rel=0.02)
+    assert h[1] == pytest.approx((1 - 0.30) / 25.0, rel=0.02)
+
+
+def test_channel1_cost_model_charges_both_legs_per_contract():
+    from RVUtils.MeetingProb.backtest import package_cost_bp
+    # 12.5bp vertical -> 8 lots/leg/unit; 2 legs, both ways at half a tick
+    sr3_only = package_cost_bp(0, 0.0, vertical_width_bp=12.5)
+    assert sr3_only == pytest.approx(2 * 8 * 0.125 * 2)
+    with_zq = package_cost_bp(3, 2.0, vertical_width_bp=12.5)
+    assert with_zq - sr3_only == pytest.approx(3 * 2.0 * 0.25 * (41.67 / 25.0))

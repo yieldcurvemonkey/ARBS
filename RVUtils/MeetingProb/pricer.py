@@ -16,7 +16,8 @@ from typing import Sequence, Tuple
 import numpy as np
 from scipy.stats import norm
 
-__all__ = ["price_option", "digital_prob", "price_vertical", "event_std_bp"]
+__all__ = ["price_option", "price_options_vector", "digital_prob",
+           "price_vertical", "event_std_bp"]
 
 
 def _bachelier_call_on_rate(mu: np.ndarray, k: float, sigma: float) -> np.ndarray:
@@ -45,6 +46,33 @@ def price_option(
     else:
         raise ValueError(f"right must be C or P, got {right!r}")
     return float(np.dot(probs, vals)) * 100.0
+
+
+def price_options_vector(
+    rates: np.ndarray,
+    probs: np.ndarray,
+    rights: np.ndarray,
+    strikes_rate: np.ndarray,
+    *,
+    smear_bp: float = 0.0,
+) -> np.ndarray:
+    """Vectorised premiums (bp of price) for many quotes at once.
+
+    Broadcasting over (atoms x quotes); identical values to ``price_option``.
+    """
+    sigma = smear_bp / 100.0
+    mu = rates[:, None]                                    # (A, 1)
+    k = np.asarray(strikes_rate, dtype=float)[None, :]     # (1, Q)
+    d = mu - k
+    if sigma <= 1e-12:
+        call_on_rate = np.maximum(d, 0.0)
+    else:
+        z = d / sigma
+        call_on_rate = d * norm.cdf(z) + sigma * norm.pdf(z)
+    put_side = probs @ call_on_rate                        # (Q,) put-on-price
+    call_side = put_side - (probs @ d)                     # parity
+    is_put = np.asarray(rights) == "P"
+    return np.where(is_put, put_side, call_side) * 100.0
 
 
 def digital_prob(

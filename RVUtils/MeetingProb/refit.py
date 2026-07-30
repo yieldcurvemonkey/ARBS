@@ -31,8 +31,8 @@ import numpy as np
 import pandas as pd
 from scipy.optimize import least_squares
 
-from RVUtils.MeetingProb.atoms import ContractMeetings, atom_distribution
-from RVUtils.MeetingProb.pricer import price_option
+from RVUtils.MeetingProb.atoms import AtomEngine, ContractMeetings, atom_distribution
+from RVUtils.MeetingProb.pricer import price_option, price_options_vector
 
 __all__ = ["RefitResult", "refit_lattice", "bootstrap_refit", "select_quotes"]
 
@@ -45,6 +45,9 @@ HALF_TICK_BP = 0.125
 class RefitResult:
     q: np.ndarray                     # fitted mantissas, one per resolved meeting
     smear_bp: float
+    smear_cap_bp: float
+    saturated: bool                   # smear pinned at its cap: the lattice
+                                      # cannot supply the width the market wants
     sse: float                        # premium SSE (bp^2)
     rmse_bp: float
     n_quotes: int
@@ -83,12 +86,15 @@ def _premium_vector(
     q: np.ndarray,
     smear_bp: float,
     quotes: pd.DataFrame,
+    engine: Optional[AtomEngine] = None,
 ) -> np.ndarray:
-    rates, probs = atom_distribution(cm, forward_rate, q=q)
-    return np.array([
-        price_option(rates, probs, r, k, smear_bp=smear_bp)
-        for r, k in zip(quotes["right"].to_numpy(), quotes["strike_rate"].to_numpy())
-    ])
+    if engine is not None:
+        rates, probs = engine.rates_probs(forward_rate, q=q)
+    else:
+        rates, probs = atom_distribution(cm, forward_rate, q=q)
+    return price_options_vector(
+        rates, probs, quotes["right"].to_numpy(),
+        quotes["strike_rate"].to_numpy(dtype=float), smear_bp=smear_bp)
 
 
 def refit_lattice(
@@ -98,6 +104,7 @@ def refit_lattice(
     *,
     smear_floor_bp: float = 1.0,
     smear_cap_bp: Optional[float] = None,
+    diffusion_cap_bp: float = 30.0,
     fit_smear: bool = True,
     smear_bp: Optional[float] = None,
     q0: Optional[Sequence[float]] = None,
@@ -105,9 +112,13 @@ def refit_lattice(
 ) -> Optional[RefitResult]:
     """Least-squares fit of (q, smear) to listed premiums.
 
-    ``smear_cap_bp`` defaults to the ZQ-implied outcome std of the unresolved
-    meetings plus a diffusion allowance — the smear must not be free to eat the
-    resolved meetings' variance.
+    ``smear_cap_bp`` defaults to a GENEROUS bound — the unresolved-meeting
+    outcome std composed with ``diffusion_cap_bp`` — so that the smear, not the
+    q's, absorbs smooth excess width, and the q's are identified only by the
+    lattice's own 25bp structure. When even that cap binds, ``saturated`` is
+    True and the day's q-gaps are not evidence of anything. (An earlier tight
+    cap forced every excess-variance day to q=1/2 across the board, which read
+    as large fake per-meeting gaps; the probe caught it.)
     """
     R = cm.n_resolved
     if R == 0 or len(quotes) < R + 3:
@@ -116,13 +127,17 @@ def refit_lattice(
 
     unresolved_std = float(np.sqrt(cm.unresolved_var_bp2))
     if smear_cap_bp is None:
-        smear_cap_bp = max(unresolved_std + 6.0, smear_floor_bp + 0.5)
+        smear_cap_bp = float(np.sqrt(cm.unresolved_var_bp2
+                                     + diffusion_cap_bp ** 2))
+    smear_cap_bp = max(smear_cap_bp, smear_floor_bp + 0.5)
+    engine = AtomEngine(cm)
 
     q_zq = np.array([r.q_zq for r in cm.resolved])
     starts: List[np.ndarray] = []
     base0 = np.clip(q_zq if q0 is None else np.asarray(q0, dtype=float), 0.02, 0.98)
     starts.append(base0)
-    starts.append(np.full(R, 0.5))
+    if q0 is None:                      # bootstrap refits warm-start; skip the
+        starts.append(np.full(R, 0.5))  # flat probe start there for speed
 
     def make_x(qv, sv):
         return np.concatenate([qv, [sv]]) if fit_smear else np.asarray(qv, dtype=float)
@@ -144,7 +159,8 @@ def refit_lattice(
         try:
             def _resid(x):
                 qv, sv = unpack(x)
-                prem = _premium_vector(cm, forward_rate, qv, sv, quotes)
+                prem = _premium_vector(cm, forward_rate, qv, sv, quotes,
+                                       engine=engine)
                 # ZQ-proximity ridge: the tie-break among exchangeable optima
                 # (see module docstring). Units are bp so it is a soft prior,
                 # never a constraint the premiums cannot override.
@@ -163,7 +179,8 @@ def refit_lattice(
         return None
 
     qf, sf = unpack(best.x)
-    resid = _premium_vector(cm, forward_rate, qf, sf, quotes) - prem_mkt
+    resid = _premium_vector(cm, forward_rate, qf, sf, quotes,
+                            engine=engine) - prem_mkt
     sse = float(np.dot(resid, resid))
     var_opt = np.array([
         ((r.support[1] - r.support[0]) * 25.0 * r.weight) ** 2 * qf[i] * (1.0 - qf[i])
@@ -174,7 +191,9 @@ def refit_lattice(
         for r in cm.resolved
     ])
     return RefitResult(
-        q=qf, smear_bp=sf, sse=sse, rmse_bp=float(np.sqrt(sse / len(quotes))),
+        q=qf, smear_bp=sf, smear_cap_bp=float(smear_cap_bp),
+        saturated=bool(sf >= smear_cap_bp - 1e-6),
+        sse=sse, rmse_bp=float(np.sqrt(sse / len(quotes))),
         n_quotes=int(len(quotes)), converged=bool(best.success),
         q_zq=q_zq, p_gap=qf - q_zq, var_opt_bp2=var_opt, var_zq_bp2=var_zq,
     )

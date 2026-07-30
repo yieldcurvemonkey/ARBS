@@ -31,7 +31,8 @@ import numpy as np
 
 from RVUtils.MeetingProb.ladder import MeetingLattice
 
-__all__ = ["ResolvedMeeting", "ContractMeetings", "split_meetings", "atom_distribution"]
+__all__ = ["ResolvedMeeting", "ContractMeetings", "split_meetings",
+           "atom_distribution", "AtomEngine"]
 
 
 @dataclasses.dataclass(frozen=True)
@@ -125,6 +126,68 @@ def split_meetings(
         resolved=tuple(resolved), unresolved_var_bp2=unresolved_var,
         any_stale=any_stale,
     )
+
+
+class AtomEngine:
+    """Precomputed outcome grid for fast repeated (q -> atoms) evaluation.
+
+    The outcome combinations and their displacement contributions are fixed by
+    the meeting structure; only the probabilities depend on q. A refit calls
+    this hundreds of times, so the enumeration is done once.
+    """
+
+    def __init__(self, cm: ContractMeetings, *, move_size_bp: float = 25.0):
+        self.cm = cm
+        self.move_size_bp = move_size_bp
+        R = cm.n_resolved
+        grids = []
+        for r in cm.resolved:
+            a, b = r.support
+            grids.append([a] if a == b else [a, b])
+        combos = np.array(list(itertools.product(*grids)), dtype=float)  # (K, R)
+        w = np.array([r.weight for r in cm.resolved], dtype=float)
+        self.combos = combos
+        self.disp_raw = combos @ (w * move_size_bp)                      # (K,)
+        # per-meeting indicator of "second support point taken"
+        second = np.array([r.support[1] for r in cm.resolved], dtype=float)
+        self.is_second = (combos == second[None, :]).astype(float)       # (K, R)
+        self.wspan = w * move_size_bp * np.array(
+            [r.support[1] - r.support[0] for r in cm.resolved], dtype=float)
+
+    def rates_probs(self, forward_rate: float,
+                    q: Optional[Sequence[float]] = None,
+                    *, q_ref: Optional[Sequence[float]] = None
+                    ) -> Tuple[np.ndarray, np.ndarray]:
+        """Atoms and probabilities under ``q``.
+
+        Default (``q_ref=None``): mean-pinned to ``forward_rate`` under the
+        SAME ``q`` — the snapshot frame for fitting today's surface.
+
+        ``q_ref`` given: the FRAME-FROZEN representation. Atom locations are
+        fixed by the reference vector (``forward - E_ref[disp]`` is the base),
+        and only the probabilities move with ``q``. This is the frame in which
+        real-world dynamics live: when the market reprices a meeting, the
+        forward moves with the expected path, so absolute atom rates
+        (base + n * 25bp) are constant and any digital at a fixed strike is an
+        exactly MULTILINEAR function of the per-meeting probabilities — the
+        property the replication hedge stands on.
+        """
+        cm = self.cm
+        if cm.n_resolved == 0:
+            return np.array([forward_rate]), np.array([1.0])
+        qv = np.array([cm.resolved[i].q_zq for i in range(cm.n_resolved)]
+                      if q is None else q, dtype=float)
+        pk = self.is_second * qv[None, :] + (1.0 - self.is_second) * (1.0 - qv[None, :])
+        probs = pk.prod(axis=1)
+        if q_ref is not None:
+            qr = np.asarray(q_ref, dtype=float)
+            pr = self.is_second * qr[None, :] + (1.0 - self.is_second) * (1.0 - qr[None, :])
+            e_disp = float(np.dot(pr.prod(axis=1), self.disp_raw))
+        else:
+            e_disp = float(np.dot(probs, self.disp_raw))
+        rates = forward_rate + (self.disp_raw - e_disp) / 100.0
+        total = probs.sum()
+        return rates, probs / total
 
 
 def atom_distribution(
