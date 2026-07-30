@@ -1016,3 +1016,41 @@ ledger records — so it could have been moved after seeing the holdout without 
 noticing. It reads `config.primary.t_pass` now, with a test that the literal is gone.
 
 **Running total: 22 defects, across three review rounds, in code that was green throughout.**
+
+### First end-to-end run of the gate runner on real data (07:25)
+
+The runner had accumulated a lot of change — bars cache, ZQ cross-check stages, primary threaded
+into the placebos, ledger sink into the label-free cell — and had never once been executed against
+the database. Ran it on five January sessions, writing to a scratch results directory, no `--lockout`.
+
+**It found a defect no fixture test could have.** `independent_implied_contract_rates` masked stale
+minutes with `.where(mask.to_numpy()[:, None])`, and pandas 2.3 rejects that with *"Array conditional
+must be same shape as self"* because an `(N,1)` conditional will not broadcast to `(N,M)`. The
+exception was swallowed by `load_context`'s guard around the independent source, which printed a
+FAILED line and continued — so `ctx.indep_implied_bp` was simply absent and **G3b, the horse race
+against a basis our own curve did not produce, would have run with no independent controls at all.**
+
+That is the brief's headline G3 upgrade and the most likely benign explanation for any effect we
+find, so having it quietly not exist would have been an expensive route to a wrong verdict. The
+regression test uses a **two**-column frame deliberately: a single-column fixture cannot reproduce
+this, since `(6,1)` broadcasts to `(6,1)` without complaint. That is precisely why every existing
+test missed it.
+
+**Zero trades, and that is NOT a bug.** `trailing_zscore` has `min_days=5`, documented: a session
+with fewer than five complete trailing sessions yields NaN rather than a z-score fitted on almost
+nothing. The smoke window held five sessions and four in-sample, so z was NaN throughout, nothing
+triggered, and G3 correctly reported "no aligned observations". Checked rather than assumed, because
+"zero trades" is exactly the symptom a real masking bug would also produce. A second smoke over
+Jan 12 – Feb 27 (33 sessions) now runs to exercise the trading path properly; it also pre-warms 33
+sessions of curves, so the work is not thrown away.
+
+**Everything else ran, and the verdict text reads as designed.** `context loaded in 255s`, G0 on
+1,150 signed units (flip rate 0.435 on a per-day-10 sample, consistent with the larger study), G1
+PASS, G2 producing its full explanatory headline, the cross-check correctly reporting
+*"leads NEITHER"*, and each downstream stage degrading to a stated N/A rather than an exception.
+
+**A first, underpowered look at the mechanism.** On four sessions, SR3 LLS mean **−14.87** (t = −1.14)
+— *negative*, meaning the ladder LAGS futures rather than leading — with mean peak rho **+0.046**
+where hedging requires negative. ZQ likewise: LLS −16.2, peak rho −0.006. Four sessions is far too
+little to conclude anything and this is recorded only so it cannot look like a surprise later. But
+the direction of the early evidence is not favourable to the forced-hedge channel.
