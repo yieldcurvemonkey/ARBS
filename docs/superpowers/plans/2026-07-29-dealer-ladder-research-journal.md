@@ -888,3 +888,30 @@ backfill, `dealer_ladder_coverage.py --strict` over the full window exits non-ze
 session with zero classified units, and those specific days get re-run through
 `backfill_stir_direction_range.py`. Deliberately NOT retried automatically mid-run — a retry loop
 against a DB that is timing out is how a transient problem becomes a sustained one.
+
+### Revised backfill ETA — ~16:30, not ~10:00 (06:15)
+
+Measured per-chunk wall clock, end of one phase to the end of the next:
+
+| month | units | classify | project | marks | chunk total |
+|---|---|---|---|---|---|
+| Jan (20d) | 7,632 | — | 45 | 1 | ~91 |
+| Feb (28d) | 10,397 | 51 | 62 | 3 | **116** |
+| Mar (31d) | 15,421 | 69 | 88 | 1 | **158** |
+
+**Cost is linear in UNITS, not degrading**: 0.0112 min/unit for February, 0.0102 for March. The
+slowdown is entirely volume growth — flow doubled from January to March — so the earlier ~80
+min/chunk figure was an artefact of extrapolating from the two thinnest months. With four chunks
+left at roughly 15k units each, the realistic finish is **~16:30**, about seven hours later than the
+estimate quoted in the last two status notes. Correcting it here because a wrong ETA quietly
+reshapes every decision about what to do while waiting.
+
+Projection is now **4 min/trading-day** (88 min / 22 sessions), comfortably better than the 7.75
+min/day measured before SERFF_BASIS was made opt-in, so nothing has regressed.
+
+**Not speeding it up, deliberately.** The obvious lever is raising `DAY_JOBS`, and the obvious
+second one is starting the decision-grid warm pass on the months already finished. Both spend the
+same Barchart origin quota the backfill is spending: the warm needs ~60 requests per session
+against a ~55-per-rolling-minute ceiling, so overlapping 49 warmed sessions with April's classify
+would push both into `Retry-After` sleeps and conserve total time at best. The sequencing stays
+backfill → warm → gates.
