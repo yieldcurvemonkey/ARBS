@@ -87,3 +87,45 @@ def test_floats_keep_four_decimals_where_a_sign_flip_would_matter(results):
 
 def test_missing_results_dir_is_an_error_not_an_empty_report(tmp_path):
     assert R.main(["--results", str(tmp_path / "nope")]) == 2
+
+
+def test_pipes_in_variant_names_are_escaped(results):
+    """Variant names are pipe-delimited, and an unescaped pipe splits the table cell.
+
+    GFM splits a table row on `|` BEFORE inline code is parsed, so backticks do not save it --
+    the cell content itself must carry the escape. 109 rows in the findings doc rendered against
+    the wrong column count until this was fixed.
+    """
+    _write(results, "g4_league", pd.DataFrame(
+        [{"variant": "FUTURES->FUTURES|hl30|expected|h5", "mean": -0.5, "t": -76.8}]))
+    md, _ = R.render(str(results))
+    esc = "FUTURES->FUTURES" + "".join(f"\\|{p}" for p in ("hl30", "expected", "h5"))
+    assert esc in md
+    # and no BARE pipe survives anywhere in the name
+    assert "FUTURES->FUTURES|" not in md.replace("\\|", "<ESCAPED>")
+
+
+def test_every_rendered_table_row_matches_its_header_width(results):
+    """The property that the escaping exists to preserve, checked directly."""
+    import re
+
+    _write(results, "g4_league", pd.DataFrame(
+        [{"variant": f"A->B|hl{h}|expected|h5", "mean": -0.5, "t": -1.0} for h in (30, 90)]))
+    md, _ = R.render(str(results))
+    unescaped = re.compile(r"(?<!\\)\|")      # a pipe NOT preceded by a backslash
+    divider = re.compile(r"^\s*\|[\s:|-]+\|\s*$")
+    lines, i, checked = md.splitlines(), 0, 0
+    while i < len(lines):
+        if (lines[i].strip().startswith("|") and i + 1 < len(lines)
+                and divider.match(lines[i + 1])):
+            width = len(unescaped.findall(lines[i]))
+            j = i + 2
+            while j < len(lines) and lines[j].strip().startswith("|"):
+                assert len(unescaped.findall(lines[j])) == width, (
+                    f"row {j} has the wrong cell count: {lines[j][:70]}")
+                checked += 1
+                j += 1
+            i = j
+        else:
+            i += 1
+    assert checked, "no table rows were checked -- the test proves nothing"
