@@ -273,9 +273,16 @@ curves can be wrong together, and a flip does not say which one was right.
 
 With a 33–40% disagreement rate and no truth label, if each mid is right half the time where they
 disagree then direction accuracy is bounded above by about **80–83%** and the signed exposure
-retains at most **~0.60–0.64**. The pre-registered grid {0.6, 0.7, 0.8} brackets that. That is luck rather than
-foresight — the grid was fixed before this was measured — but it means the grid does not move,
-which is the only thing that matters now that the lockout rule is in force.
+retains at most **~0.60–0.64**. The pre-registered grid {0.6, 0.7, 0.8} brackets that. That is luck
+rather than foresight — the grid was fixed before this was measured — but it means the grid does
+not move, which is the only thing that matters now that the lockout rule is in force.
+
+**Read the a = 0.8 row as a ceiling, not a scenario.** The measured disagreement puts accuracy at
+*most* ~0.80–0.83, so that row sits at the very top of what the data admits and should be treated
+as a best case the evidence does not support exceeding. The honest centre of the grid is a = 0.6–0.7.
+The a = 0.5 point — trading noise, and paying the full round trip — is drawn on the attenuation
+figure as the dashed reference at −cost, because a curve that passes through zero there is
+plotting the wrong quantity.
 
 ### 8.2 Structural limits of the data
 
