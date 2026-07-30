@@ -223,44 +223,56 @@ preliminary runs of the same `labels.flip_study` the gate uses, reported here be
 limitations established by measurement; the full-window version is the real G0. February is
 *provisional* — the projection phase was still running, so 15 of its sessions were available.
 
-| | January | February (partial) |
-|---|---|---|
-| sampled → compared (coverage) | 560 → 488 (87.1%) | 600 → 524 (87.3%) |
-| **flip rate** | **33.4%** | **40.3%** |
-| PAID share, our mid | 86.7% | 81.7% |
-| **PAID share, independent mid** | **60.7%** | **48.7%** |
-| mean / median mid offset (bp) | −0.469 / −0.278 | −0.499 / −0.320 |
-| share \|offset\| > 0.25bp | 63.9% | 67.2% |
-| mechanism agreement | 98.4% | 96.9% |
-| **flips the curve gap does NOT explain** | **0** | **0** |
+| | January | February | **Combined** |
+|---|---|---|---|
+| sessions | 14 | 19 | **33** |
+| sampled → compared (coverage) | 560 → 488 (87.1%) | 600 → 524 (87.3%) | **1,320 → 1,155 (87.5%)** |
+| **flip rate** | 33.4% | 40.3% | **34.9%** |
+| PAID share, our mid | 86.7% | 81.7% | **84.4%** |
+| **PAID share, independent mid** | 60.7% | 48.7% | **55.4%** |
+| mean / median mid offset (bp) | −0.469 / −0.278 | −0.499 / −0.320 | **−0.475 / −0.331** |
+| share \|offset\| > 0.25bp | 63.9% | 67.2% | **67.5%** |
+| mechanism agreement | 98.4% | 96.9% | **97.8%** |
+| **flips the curve gap does NOT explain** | **0** | **0** | **0** |
 
-**Overall flip rate 33–40%**, and three things follow.
+The dataset behind the combined column was verified first: 33 sessions, 18,029 classified, 0.22%
+UNKNOWN, 99.8% projected, 100% marked per unit, a single code vintage and zero anomalies.
 
-*The PAID skew is substantially, and on February data entirely, a mid artefact.* On the same
-prints, our mid gives 86.7% / 81.7% PAID and the independent mid gives 60.7% / **48.7%**. February
-leaves **a coin flip**. January leaves some skew standing, so this is not uniformly the whole
-story — but the headline "dealers are overwhelmingly paying" is mostly, and in one month wholly,
-our curve talking.
+**Overall flip rate 34.9% on 1,155 comparisons**, and three things follow.
+
+*Most of the PAID skew is a mid artefact.* On the same 1,155 prints our mid gives **84.4%** PAID
+and the independent mid gives **55.4%** — twenty-nine points of the skew is which curve you ask.
+February on its own leaves a coin flip (48.7%); January leaves 60.7%, so some skew does survive an
+independent mid and this is not uniformly the whole story. But the headline "dealers are
+overwhelmingly paying" is mostly our curve talking.
 
 *The gap is bigger than the edge being read, and it is a stable property of our curve.* Mean
-offset −**0.469** then −**0.499 bp**, median −0.278 then −0.320, with **64–67% of prints showing a
-gap wider than a quarter of a basis point** — roughly the half-spread the direction rule is trying
+offset −**0.475 bp**, median −**0.331**, stable to within 0.03 bp across the two months, with
+**67.5% of prints showing a gap wider than a quarter of a basis point** — roughly the half-spread the direction rule is trying
 to resolve. Negative means our curve sits **above** Citi's, in both months, which is the direction
 that mechanically makes trades look like they printed below mid, i.e. dealer PAID.
 
 *And the flips are entirely that gap.* Predicting a flip from `|mid offset| > |distance to mid|`
-alone reproduces the observed outcome with **98.4% agreement and zero false negatives**
-(163 flips predicted and observed, 317 agreements predicted and observed, 8 false positives).
+alone reproduces the observed outcome with **97.8% agreement and zero false negatives** across all
+1,155 comparisons (403 flips predicted and observed, 727 agreements predicted and observed, 25
+false positives). Zero false negatives in **every** `|s2m|` stratum, in each month separately and
+combined: there is no flip that the curve gap fails to account for.
 Consistently, the flip rate collapses to **12.2%** in the top quintile of `|spread-to-mid|`
 (median 3.88 bp) — a trade that printed four basis points from mid is unambiguous whichever curve
 you hold. So this is not label noise to be averaged away; it is a mechanism with a closed form,
 and it bites hardest exactly where the trade printed closest to mid.
 
-Two further readings, both of which would be easy to get backwards. `direction_confidence` is
-worse than uninformative: January HIGH 33.7% / MEDIUM 44.7% / LOW 30.3%, February HIGH **49.0%** /
-MEDIUM 61.7% / LOW **24.7%** — in February the HIGH tier flips *twice as often* as the LOW tier.
-Whatever that label ranks, it is not agreement with an independent mid, so it cannot be used to
-select a cleaner stratum for this failure. And CURVE_SUSPECT prints flip **less** than CURVE_CLEAN ones
+Two further readings, both of which would be easy to get backwards.
+
+`direction_confidence` is mildly **anti**-informative, and it would be a natural mistake to use it
+to select a cleaner stratum. Combined: HIGH 40.0% (n=588), MEDIUM 47.9% (n=117), LOW **24.9%**
+(n=450) — Spearman(tier rank, flipped) = **+0.141**, so the *higher* the stated confidence the
+*more* often the independent mid disagrees. Part of that is the distance mechanism rather than the
+label: MEDIUM sits closest to mid (median \|s2m\| 0.16 bp) and flips most, LOW sits furthest
+(1.10 bp) and flips least, exactly as a fixed-size curve gap predicts. But the ordering does not
+recover when distance is held roughly constant — inside the 0.2–0.8 bp band HIGH still flips 41.9%
+against LOW's 29.8% at almost the same median distance. So the tier is not a quality filter for
+this failure, however much it looks like one. And CURVE_SUSPECT prints flip **less** than CURVE_CLEAN ones
 (28.2% vs 35.7%) — not an inversion of the gate's quality, but an artefact of what it selects on:
 suspect prints sit far from mid (mean `|s2m|` 4.73 bp against 0.49 bp) and far-from-mid prints
 survive a half-bp disagreement.
@@ -271,15 +283,15 @@ Every signed result therefore carries the `(2a − 1)` attenuation grid, and G0'
 reported as what it is: a **lower bound on disagreement-driven error, not an accuracy**. Both
 curves can be wrong together, and a flip does not say which one was right.
 
-With a 33–40% disagreement rate and no truth label, if each mid is right half the time where they
-disagree then direction accuracy is bounded above by about **80–83%** and the signed exposure
-retains at most **~0.60–0.64**. The pre-registered grid {0.6, 0.7, 0.8} brackets that. That is luck
+With a 34.9% disagreement rate overall — 40.8% on the curve-clean stratum the study actually
+trades — and no truth label, if each mid is right half the time where they disagree then direction
+accuracy is bounded above by **79.6%** and the signed exposure retains at most **~0.59**. The pre-registered grid {0.6, 0.7, 0.8} brackets that. That is luck
 rather than foresight — the grid was fixed before this was measured — but it means the grid does
 not move, which is the only thing that matters now that the lockout rule is in force.
 
-**Read the a = 0.8 row as a ceiling, not a scenario.** The measured disagreement puts accuracy at
-*most* ~0.80–0.83, so that row sits at the very top of what the data admits and should be treated
-as a best case the evidence does not support exceeding. The honest centre of the grid is a = 0.6–0.7.
+**Read the a = 0.8 row as UNREACHABLE, not as a scenario.** The measured disagreement puts accuracy
+at *most* **0.796** on the curve-clean stratum, so that row sits marginally *above* what the data
+admits and must not be read as an optimistic-but-plausible case. The honest centre of the grid is a = 0.6–0.7.
 The a = 0.5 point — trading noise, and paying the full round trip — is drawn on the attenuation
 figure as the dashed reference at −cost, because a curve that passes through zero there is
 plotting the wrong quantity.

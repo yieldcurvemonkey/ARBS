@@ -775,3 +775,47 @@ chunk.
 
 Saved to memory as `reference-background-task-orphans`, since the next long backfill in this repo
 will meet the same trap.
+
+#### Combined Jan+Feb, both months COMPLETE — the definitive preliminary G0 (2026-07-30 03:45)
+
+February finished all three phases, so this supersedes the two single-month runs above.
+Dataset verified first: `dealer_ladder_coverage.py --strict` exits 0 on 2026-01-12 → 2026-02-28 —
+**33 sessions, 18,029 classified, 0.22% UNKNOWN, 99.8% projected, 100% marked per unit, 5,154 EOD
+marks, single vintage `468474ca6f84`, zero anomalies.**
+
+**1,320 sampled → 1,155 compared (87.5% coverage). Flip rate 34.9%.**
+
+| | value |
+|---|---|
+| PAID share, our mid | **84.4%** |
+| PAID share, independent mid | **55.4%** |
+| mean / median mid offset | **−0.475 / −0.331 bp** |
+| share \|offset\| > 0.25bp | **67.5%** |
+| mechanism agreement | **97.8%** (403 TP, 25 FP, **0 FN**, 727 TN) |
+| CURVE_CLEAN flip rate | 40.8% |
+| **implied accuracy ceiling** | **79.6%** |
+| attenuation at ceiling | 0.592 |
+
+**The a = 0.8 row of the attenuation grid is now marginally ABOVE the measured ceiling** (0.796).
+Not a reason to move the grid — it was fixed before any of this was measured, and moving it after
+seeing G0 is the re-specification the lockout rule exists to prevent — but the top row must be read
+as unreachable rather than optimistic, and the honest range is a = 0.6–0.7.
+
+**Twenty-nine points of the PAID skew is the mid.** 84.4% under our curve, 55.4% under an
+independent one, on the same 1,155 prints.
+
+**`direction_confidence` is mildly ANTI-informative, and distance explains only part of it.**
+
+| tier | n | flip rate | median \|s2m\| | flip rate within 0.2–0.8bp |
+|---|---|---|---|---|
+| HIGH | 588 | 40.0% | 0.442 bp | 41.9% |
+| MEDIUM | 117 | 47.9% | 0.156 bp | 62.5% |
+| LOW | 450 | 24.9% | 1.096 bp | 29.8% |
+
+Part of this *is* the distance mechanism: MEDIUM sits closest to mid and flips most, LOW sits
+furthest and flips least, exactly as a curve gap of fixed size predicts. But the ordering does not
+recover when distance is held roughly constant — within the 0.2–0.8 bp band HIGH still flips 41.9%
+against LOW's 29.8% at almost the same median distance. Spearman(tier rank, flipped) = **+0.141**,
+i.e. the *higher* the stated confidence the *more* likely the independent mid disagrees. So the tier
+cannot be used to select a cleaner stratum for this failure, and the temptation to do so — it is the
+obvious move — has to be resisted explicitly.
