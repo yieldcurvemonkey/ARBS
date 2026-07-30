@@ -101,6 +101,10 @@ def _context(effect=0.0, seed=0, n_sessions=30):
         rates_bp={"FUTURES": rates}, volumes={"FUTURES": vols},
         stale_min={"FUTURES": stale}, implied_bp={"FUTURES": implied},
         signal={"FUTURES": built}, front_rank={"FUTURES": front},
+        indep_implied_bp={"FUTURES": implied - 0.05},   # a second, slightly different mid
+        block_share={"FUTURES": pd.DataFrame(
+            rng.uniform(0, 0.5, size=(len(grid), len(BUCKETS))),
+            index=grid, columns=BUCKETS)},
         results_dir=None)
 
 
@@ -240,3 +244,50 @@ def test_front_rank_mask_suppresses_out_of_basket_decisions(monkeypatch):
     led = gates.run_primary(ctx, in_sample=True)["ledger"]
     assert "SFRZ27" not in set(led["bucket"])
     assert len(set(led["bucket"])) == len(BUCKETS) - 1
+
+
+# ---------------------------------------------- independent basis / label-free / strata
+def test_g3_runs_a_second_race_against_the_independent_basis(monkeypatch):
+    """The circularity gate's real teeth: does the ladder also survive a basis our
+    own curve did not produce?"""
+    _no_write(monkeypatch)
+    res = gates.run_g3(_context(effect=0.6, seed=21))
+    assert "horse_race_independent" in res, res.get("verdict")
+    indep = res["verdict"]["independent_controls"]
+    assert "indep_basis_bp" in indep
+    race = res["horse_race_independent"]
+    assert "indep_basis_bp" in set(race["term"])
+    # the headline must carry all three t-statistics, not just two
+    assert "independent basis" in res["verdict"]["headline"]
+
+
+def test_label_free_cell_uses_unsigned_intensity(monkeypatch):
+    """If this works and the signed ladder does not, direction carries nothing."""
+    _no_write(monkeypatch)
+    res = gates.run_label_free(_context(effect=0.8, seed=22))
+    assert res["result"].iloc[0]["signal"] == "unsigned print intensity"
+    led = res["ledger"]
+    assert len(led) > 0
+    assert "unsigned intensity" in res["verdict"]["headline"]
+
+
+def test_conditioning_splits_report_sign_consistency(monkeypatch):
+    _no_write(monkeypatch)
+    ctx = _context(effect=0.9, seed=23)
+    primary = gates.run_primary(ctx, in_sample=True)
+    res = gates.run_conditioning(ctx, primary, n_bins=3)
+    frame = res["conditioning"]
+    assert not frame.empty
+    assert set(frame["bucket"]) <= {"q1", "q2", "q3"}
+    assert "block_share" in set(frame["conditioner"])
+    # every reported stratum must carry its own day-blocked n_blocks
+    assert (frame["n_blocks"] >= 1).all()
+    assert "sign-consistent" in res["verdict"]["headline"]
+
+
+def test_conditioning_on_an_empty_ledger_is_a_non_event(monkeypatch):
+    _no_write(monkeypatch)
+    ctx = _context(effect=0.0, seed=24)
+    res = gates.run_conditioning(ctx, {"ledger": pd.DataFrame()})
+    assert res["verdict"]["pass"] is None
+    assert "no trades" in res["verdict"]["headline"]

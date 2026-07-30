@@ -41,6 +41,8 @@ class GateContext:
     implied_bp: dict                  # space -> curve-implied contract rate (bp)
     signal: dict                      # space -> {"level","increment","z"}
     front_rank: dict                  # space -> per-(minute, contract) front rank
+    indep_implied_bp: dict            # space -> INDEPENDENT-curve implied rate (bp)
+    block_share: dict                 # space -> decayed share of |DV01| from blocks
     results_dir: str
 
     def buckets(self, space):
@@ -93,7 +95,8 @@ def window_contract_calendar(window, spaces=("FUTURES", "FED_FUNDS"), count=6) -
 
 
 def load_context(conn, config=None, *, window=None, results_dir=None,
-                 spaces=("FUTURES", "FED_FUNDS"), show_progress=True) -> GateContext:
+                 spaces=("FUTURES", "FED_FUNDS"), show_progress=True,
+                 with_independent=True, independent_source="citivelo") -> GateContext:
     """Assemble the study's inputs. The only step that touches DB or vendor."""
     config = config or cfg.LadderStudyConfig()
     window = window or (config.window.start, config.window.end)
@@ -112,7 +115,7 @@ def load_context(conn, config=None, *, window=None, results_dir=None,
                                          count=config.primary.n_contracts)
 
     rates_bp, volumes, stale_min, implied_bp, signal = {}, {}, {}, {}, {}
-    front_rank = {}
+    front_rank, indep_implied_bp, block_share = {}, {}, {}
     from SDRUtils.stir_flow import config as sconfig
     from SDRUtils.stir_flow.pricing import CurvePricer
 
@@ -144,6 +147,24 @@ def load_context(conn, config=None, *, window=None, results_dir=None,
             grid, space, config.primary.n_contracts).reindex(
                 index=grid, columns=buckets)
 
+        # G3's independent fair value. SR3 only: both independent sources are USD
+        # SOFR curves, so there is no independent ZQ basis to build.
+        if space == "FUTURES" and with_independent:
+            try:
+                indep_implied_bp[space] = controls.independent_implied_contract_rates(
+                    grid, space_contracts, source=independent_source)
+                if show_progress:
+                    cov = float(indep_implied_bp[space].notna().mean().mean())
+                    print(f"  independent implied ({independent_source}) coverage "
+                          f"{cov:.1%}")
+            except Exception as exc:  # a missing second source must not stop the gate
+                print(f"  independent implied ({independent_source}) FAILED: "
+                      f"{type(exc).__name__}: {exc}")
+
+        block_share[space] = controls.block_share_panel(
+            prints, grid, space=space, half_lives=config.signal.half_lives,
+            buckets=buckets)
+
         sig_cfg = dataclasses.replace(config.signal, space=space)
         built = signals.build_signal(prints, grid, sig_cfg, buckets=buckets)
         # Mask the SIGNAL, not the target: a contract outside that session's front N
@@ -157,6 +178,7 @@ def load_context(conn, config=None, *, window=None, results_dir=None,
                        prints=prints, grid=grid, contracts=contracts,
                        rates_bp=rates_bp, volumes=volumes, stale_min=stale_min,
                        implied_bp=implied_bp, signal=signal, front_rank=front_rank,
+                       indep_implied_bp=indep_implied_bp, block_share=block_share,
                        results_dir=results_dir)
 
 
@@ -416,7 +438,9 @@ def run_g3(ctx, *, space=None, horizon_min=None) -> dict:
         implied_bp=ctx.implied_bp.get(space, pd.DataFrame()),
         ladder_level=ctx.signal[space]["level"],
         contracts=[c for c in ctx.contracts if _space_of(c[0]) == space],
-        grid=ctx.grid)
+        grid=ctx.grid,
+        independent_implied_bp=ctx.indep_implied_bp.get(space),
+        block_share=ctx.block_share.get(space))
     long = study.align_long(z, target, extra=panels)
     out = {"long": long}
     if long.empty:
@@ -426,6 +450,17 @@ def run_g3(ctx, *, space=None, horizon_min=None) -> dict:
     race = study.horse_race(long, controls=ctrl)
     out["horse_race"] = race
     _write(ctx, f"g3_horse_race_{space}", race)
+
+    # SECOND race, against a basis our own curve did not produce. Run separately
+    # rather than folded in: the two bases are highly collinear, so one regression
+    # would inflate both SEs and confound "survives our basis" with "survives an
+    # independent one" -- which are different questions.
+    indep = [c for c in controls.INDEPENDENT_CONTROLS if c in long.columns]
+    if indep:
+        sub = long.dropna(subset=indep)
+        out["horse_race_independent"] = study.horse_race(sub, controls=ctrl + indep)
+        out["n_independent_rows"] = len(sub)
+        _write(ctx, f"g3_horse_race_independent_{space}", out["horse_race_independent"])
 
     def _stat(sub):
         r = stats.cluster_mean_t((np.sign(sub["signal"]) * sub["target"]).to_numpy(),
@@ -445,13 +480,133 @@ def run_g3(ctx, *, space=None, horizon_min=None) -> dict:
     t_both = float(both["t"].iloc[0]) if len(both) else np.nan
     survives = bool(np.isfinite(t_both) and abs(t_both) >= 2.0
                     and np.sign(t_both) == np.sign(t_alone))
+    t_indep = np.nan
+    if "horse_race_independent" in out:
+        row = out["horse_race_independent"]
+        row = row[(row["spec"] == "signal + controls") & (row["term"] == "signal")]
+        t_indep = float(row["t"].iloc[0]) if len(row) else np.nan
+        survives = survives and bool(np.isfinite(t_indep) and abs(t_indep) >= 2.0
+                                     and np.sign(t_indep) == np.sign(t_alone))
     out["verdict"] = _verdict(
         "G3", survives,
-        f"signal t alone={t_alone:.2f}, beside controls={t_both:.2f}"
-        + ("" if survives else " — effect lives in the controls; relabel as "
-                              "basis/RV, not a dealer-inventory mechanism"),
-        controls_used=ctrl)
+        f"signal t alone={t_alone:.2f}, vs our controls={t_both:.2f}, "
+        f"vs independent basis={t_indep:.2f}"
+        + ("" if survives else " — effect does not survive; relabel as basis/RV, "
+                               "not a dealer-inventory mechanism"),
+        controls_used=ctrl, independent_controls=indep)
     return out
+
+
+# --------------------------------------------------------------------------
+# label-free control and conditioning splits
+# --------------------------------------------------------------------------
+def run_label_free(ctx, *, space=None) -> dict:
+    """The primary rule driven by UNSIGNED print intensity instead of the ladder.
+
+    Immune to classification accuracy: it uses |delta_dv01| and ignores direction
+    entirely. The comparison is the point. If the signed ladder works and this does
+    not, direction is carrying the result. If BOTH work similarly, the finding is a
+    flow-ACTIVITY effect and the direction model is carrying nothing -- a materially
+    weaker claim, and one the attenuation grid cannot rescue.
+
+    Intensity is non-negative, so a signed rule needs a reference: it is z-scored
+    against its own trailing sessions exactly like the ladder, and a HIGH-intensity
+    z then predicts a rate RISE under the same convention as a positive ladder.
+    """
+    space = space or ctx.config.primary.target_space
+    p = ctx.config.primary
+    rates = ctx.rates_bp.get(space, pd.DataFrame())
+    if rates.empty:
+        return {"verdict": _verdict("label-free", None, "no target data")}
+    lo, hi = ctx.config.window.in_sample()
+    rates_w = rates[_date_mask(rates.index, lo, hi)]
+    intensity = signals.print_intensity_panel(
+        ctx.prints, ctx.grid, space=ctx.config.signal.space,
+        half_lives=ctx.config.signal.half_lives)
+    intensity = intensity.reindex(columns=list(rates.columns))
+    mask = ctx.front_rank.get(space)
+    if mask is not None and len(mask):
+        intensity = intensity.where(mask.notna().reindex_like(intensity))
+    z = signals.trailing_zscore(intensity, ctx.config.signal.z_window_days)
+    z = z.reindex(rates_w.index)
+    roots, near = _root_and_expiry(ctx, space)
+    costs = study.cost_bp_map(list(rates_w.columns), ctx.config.cost, near, roots)
+    led = study.trade_ledger(z, rates_w, horizon_min=p.horizon_min,
+                             threshold=p.z_threshold, cost_bp_by_bucket=costs,
+                             predicted_sign=p.predicted_sign)
+    res = study.evaluate_trades(led, n_boot=ctx.config.stats.n_boot,
+                                seed=ctx.config.stats.seed)
+    frame = pd.DataFrame([{**res, "signal": "unsigned print intensity"}])
+    _write(ctx, "g4_label_free", frame)
+    return {"result": frame, "ledger": led,
+            "verdict": _verdict("label-free", None,
+                                f"unsigned intensity: net {res['mean']:.4f}bp, "
+                                f"t={res['t']:.2f}{res['stars']}, n={res['n']}")}
+
+
+def run_conditioning(ctx, primary: dict, *, space=None, n_bins=3) -> dict:
+    """Split the primary ledger by each conditioner and report net bp per stratum.
+
+    Terciles rather than a regression interaction: with ~150 independent epochs an
+    interaction term is not identified, whereas "does the sign hold in all three
+    buckets" is answerable and is what the audit actually asks for (segment, do not
+    merely control).
+    """
+    space = space or ctx.config.primary.target_space
+    led = primary.get("ledger", pd.DataFrame())
+    if led is None or led.empty:
+        return {"verdict": _verdict("conditioning", None, "no trades to split")}
+
+    rates = ctx.rates_bp.get(space, pd.DataFrame())
+    panels = controls.build_control_panels(
+        rates_bp=rates, volumes=ctx.volumes.get(space, pd.DataFrame()),
+        implied_bp=ctx.implied_bp.get(space, pd.DataFrame()),
+        ladder_level=ctx.signal[space]["level"] if space in ctx.signal
+        else pd.DataFrame(0.0, index=rates.index, columns=rates.columns),
+        contracts=[c for c in ctx.contracts if _space_of(c[0]) == space],
+        grid=ctx.grid,
+        independent_implied_bp=ctx.indep_implied_bp.get(space),
+        block_share=ctx.block_share.get(space))
+
+    rows = []
+    names = [n for n in (controls.CONDITIONING_PANELS + controls.CONDITIONING_SERIES)
+             if n in panels]
+    for name in names:
+        panel = panels[name]
+        vals = []
+        for _i, tr in led.iterrows():
+            try:
+                vals.append(float(panel.at[tr["ts"], tr["bucket"]]))
+            except Exception:
+                vals.append(np.nan)
+        s = pd.Series(vals, index=led.index)
+        if s.notna().sum() < 3 * n_bins:
+            continue
+        try:
+            bins = pd.qcut(s, n_bins, labels=[f"q{i + 1}" for i in range(n_bins)],
+                           duplicates="drop")
+        except ValueError:
+            continue
+        for label, grp in led.groupby(bins, observed=True):
+            r = stats.cluster_mean_t(grp["net_bp"].to_numpy(),
+                                     stats.day_codes(grp["ts"]))
+            rows.append({"conditioner": name, "bucket": str(label),
+                         "n": r["n"], "n_blocks": r["n_blocks"],
+                         "mean_net_bp": r["mean"], "t": r["t"],
+                         "stars": stats.stars(r["t"]),
+                         "median_value": float(grp.assign(v=s.loc[grp.index])["v"].median())})
+    frame = pd.DataFrame(rows)
+    if not frame.empty:
+        _write(ctx, "g4_conditioning", frame)
+        signs = frame.groupby("conditioner")["mean_net_bp"].apply(
+            lambda x: bool((x > 0).all() or (x < 0).all()))
+        consistent = [k for k, v in signs.items() if v]
+    else:
+        consistent = []
+    return {"conditioning": frame,
+            "verdict": _verdict("conditioning", None,
+                                f"{len(consistent)}/{frame['conditioner'].nunique() if len(frame) else 0}"
+                                f" conditioners sign-consistent across terciles")}
 
 
 # --------------------------------------------------------------------------
@@ -701,6 +856,8 @@ def run_all(ctx, conn=None, *, run_lockout=False, label_limit=0) -> dict:
                        {"mean": float(res["primary_is"]["result"]["mean"].iloc[0]),
                         "t": float(res["primary_is"]["result"]["t"].iloc[0])})
     res["placebos"] = run_placebos(ctx)
+    res["label_free"] = run_label_free(ctx)
+    res["conditioning"] = run_conditioning(ctx, res["primary_is"])
     res["grid"] = run_grid(ctx, ledger_sink)
     res["g5"] = run_g5(ctx, res["primary_is"])
     if run_lockout:

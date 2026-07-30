@@ -76,6 +76,55 @@ def basis_bp(implied_bp: pd.DataFrame, market_bp: pd.DataFrame) -> pd.DataFrame:
     return implied_bp.loc[idx, cols] - market_bp.loc[idx, cols]
 
 
+def independent_implied_contract_rates(grid, contracts, *, source="citivelo",
+                                       curve_name="USD-SOFR-1D") -> pd.DataFrame:
+    """Contract rates implied by an INDEPENDENT (swap-quote-derived) curve.
+
+    The point of the circularity gate is that our own basis control is built from the
+    very curve that produced the signal, so it cannot by itself separate "the ladder
+    forecasts" from "our curve was mispriced against the futures strip and both
+    reverted". A basis measured against a curve calibrated from SWAP QUOTES rather
+    than the futures strip can: if the ladder's coefficient survives our basis but
+    dies against the independent one, the effect was curve-fit error.
+
+    Only meaningful for SR3 (both independent sources are USD SOFR curves), and it
+    inherits the source's coverage holes -- notably Friday afternoons for citivelo,
+    where its reader silently returns the last snapshot. Those minutes come back NaN
+    here rather than stale, via the staleness check below.
+    """
+    from MDP.IRSwaps.IRSwapsMDP import IRSwapsMDP
+    from SDRUtils.stir_flow.pricing import CurvePricer
+
+    pricer = CurvePricer(mdp=IRSwapsMDP(source=source))
+    out = curve_implied_contract_rates(pricer, curve_name, grid, contracts)
+    # blank out minutes the independent source did not actually cover
+    stale = _independent_staleness_min(pricer, curve_name, grid)
+    if stale is not None:
+        mask = stale.abs() <= 5.0
+        out = out.where(mask.reindex(out.index).to_numpy()[:, None])
+    return out
+
+
+def _independent_staleness_min(pricer, curve_name, grid):
+    """Minutes between each decision minute and the independent curve's own stamp."""
+    vals = []
+    for ts in pd.DatetimeIndex(grid):
+        try:
+            handle = pricer.handle(curve_name, ts)
+            meta = handle.meta() if hasattr(handle, "meta") else {}
+            ct = pd.Timestamp(meta.get("timestamp"))
+            if pd.isna(ct):
+                vals.append(np.nan)
+                continue
+            ct = (ct.tz_localize("America/New_York") if ct.tzinfo is None
+                  else ct.tz_convert("America/New_York"))
+            vals.append((pd.Timestamp(ts).tz_convert("America/New_York") - ct)
+                        .total_seconds() / 60.0)
+        except Exception:
+            vals.append(np.nan)
+    return pd.Series(vals, index=pd.DatetimeIndex(grid))
+
+
 def signed_basis_dv01(basis: pd.DataFrame, ladder_level: pd.DataFrame) -> pd.DataFrame:
     """``sign(basis) * |ladder|`` — the audit's explicit control.
 
@@ -239,8 +288,64 @@ def window_contract_union(window, space, n_front, count=16) -> list:
     return out
 
 
+def block_share_panel(prints: pd.DataFrame, grid, *, space="FUTURES",
+                      half_lives=None, buckets=None) -> pd.DataFrame:
+    """Share of the decayed |DV01| in each bucket coming from BLOCK prints.
+
+    A conditioning split the audit asks for by name. It matters because blocks carry
+    a longer legal delay and a longer assumed half-life, so a result driven entirely
+    by block-heavy buckets is a result about a different (slower, more delayed)
+    information channel than one driven by ordinary prints.
+    """
+    from BT.dealer_ladder import signals
+
+    blocks = prints[prints["is_block"].fillna(False).astype(bool)]
+    total = signals.print_intensity_panel(prints, grid, space=space,
+                                          half_lives=half_lives)
+    if buckets is not None:
+        total = total.reindex(columns=buckets)
+    if blocks.empty:
+        return pd.DataFrame(0.0, index=total.index, columns=total.columns)
+    blk = signals.print_intensity_panel(blocks, grid, space=space,
+                                        half_lives=half_lives)
+    blk = blk.reindex(index=total.index, columns=total.columns).fillna(0.0)
+    return (blk / total.replace(0.0, np.nan)).fillna(0.0)
+
+
+def funding_regime_series(grid):
+    """Daily funding-regime label and SOFR-EFFR spread, broadcast to the grid.
+
+    Reuses ``BT/serff/data.build_panel`` rather than rebuilding: it already carries
+    the daily SOFR-EFFR spread in bp, H.4.1 reserves/RRP/TGA and five named funding
+    regimes. Returns ``(regime_label, sofr_effr_bp)``, both indexed by the grid, or
+    ``(None, None)`` if the panel is unavailable -- a missing conditioner must not
+    take the gate down.
+    """
+    idx = pd.DatetimeIndex(grid)
+    try:
+        from BT.serff import data as serff_data
+
+        panel = serff_data.build_panel()
+    except Exception:
+        return None, None
+    if panel is None or not len(panel):
+        return None, None
+    et = idx.tz_convert("America/New_York") if idx.tz is not None else idx
+    day = pd.DatetimeIndex(pd.to_datetime(pd.Series(et.date)))
+    p = panel.copy()
+    p.index = pd.DatetimeIndex(p.index).tz_localize(None).normalize()
+    regime_col = next((c for c in p.columns if "regime" in str(c).lower()), None)
+    spread_col = next((c for c in p.columns
+                       if "sofr" in str(c).lower() and "effr" in str(c).lower()), None)
+    regime = (p[regime_col].reindex(day).to_numpy() if regime_col else None)
+    spread = (p[spread_col].reindex(day).to_numpy() if spread_col else None)
+    return (pd.Series(regime, index=idx) if regime is not None else None,
+            pd.Series(spread, index=idx) if spread is not None else None)
+
+
 def build_control_panels(*, rates_bp, volumes, implied_bp, ladder_level,
-                         contracts, grid) -> dict:
+                         contracts, grid, independent_implied_bp=None,
+                         block_share=None) -> dict:
     """Every per-(minute, bucket) control, as a dict of panels ready for ``align_long``."""
     b = basis_bp(implied_bp, rates_bp)
     shape = curve_shape(rates_bp)
@@ -256,11 +361,20 @@ def build_control_panels(*, rates_bp, volumes, implied_bp, ladder_level,
         "days_to_expiry": days_to_expiry(grid, contracts),
         "level_prox_bp": level_proximity_bp(implied_bp),
     }
+    if independent_implied_bp is not None and len(independent_implied_bp):
+        ib = basis_bp(independent_implied_bp, rates_bp)
+        panels["indep_basis_bp"] = ib
+        panels["abs_indep_basis_bp"] = ib.abs()
+    if block_share is not None and len(block_share):
+        panels["block_share"] = block_share.reindex(
+            index=rates_bp.index, columns=rates_bp.columns)
     # broadcast the per-minute (bucket-invariant) series across buckets
+    regime, sofr_effr = funding_regime_series(grid)
     for name, series in (("level_bp", shape.get("level_bp")),
                          ("slope_bp", shape.get("slope_bp")),
                          ("curvature_bp", shape.get("curvature_bp")),
-                         ("tod_min", tod), ("days_to_fomc", fomc)):
+                         ("tod_min", tod), ("days_to_fomc", fomc),
+                         ("sofr_effr_bp", sofr_effr)):
         if series is None:
             continue
         panels[name] = pd.DataFrame(
@@ -274,3 +388,13 @@ DEFAULT_CONTROLS = (
     "curvature_bp", "trailing_60m_bp", "realized_vol_bp", "amihud",
     "tod_min", "days_to_expiry", "days_to_fomc",
 )
+
+# The independent (swap-quote-derived) basis is kept OUT of DEFAULT_CONTROLS on
+# purpose: it exists to be added in a SECOND horse race, so the report can show
+# whether the ladder survives our own basis and then whether it also survives a basis
+# our curve did not produce. Folding both into one regression would confound the two
+# questions and, since the two bases are highly collinear, would inflate both SEs.
+INDEPENDENT_CONTROLS = ("indep_basis_bp", "abs_indep_basis_bp")
+# Conditioning splits -- reported as strata, not as regressors.
+CONDITIONING_PANELS = ("block_share", "level_prox_bp", "realized_vol_bp", "amihud")
+CONDITIONING_SERIES = ("sofr_effr_bp", "days_to_fomc", "tod_min")
