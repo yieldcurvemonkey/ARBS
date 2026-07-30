@@ -20,11 +20,22 @@ import pandas as pd
 
 from RVUtils.MeanRev.engine import MRConfig, leg_round_trip_bp, run_backtest
 
-__all__ = ["shadow_levels", "shadow_table", "SHADOW_LEGS"]
+__all__ = ["shadow_levels", "shadow_table", "SHADOW_LEGS", "SHADOW_CONTRACTS"]
 
 #: number of futures legs each shadow instrument costs to trade
 SHADOW_LEGS: Dict[str, int] = {
     "fly": 3, "belly": 1, "belly_vs_front": 2, "belly_vs_back": 2, "wings_curve": 2,
+}
+
+#: number of **contracts** each shadow instrument costs to trade. This differs
+#: from the leg count in exactly one place and it is the place that matters: a
+#: ``1/-2/1`` butterfly is three legs but **four contracts**, because the belly
+#: is two. Costing the fly per leg charges it 1.5bp round trip against the 2.0bp
+#: it actually pays, while every shadow's leg count and contract count coincide
+#: -- so per-leg costing hands the butterfly a **0.5bp per trade advantage** in
+#: the one comparison the shadow test exists to make.
+SHADOW_CONTRACTS: Dict[str, int] = {
+    "fly": 4, "belly": 1, "belly_vs_front": 2, "belly_vs_back": 2, "wings_curve": 2,
 }
 
 
@@ -63,14 +74,28 @@ def shadow_levels(struct: pd.DataFrame, *, date_col: str = "as_of",
 def shadow_table(
     signal: pd.DataFrame, shadows: Dict[str, pd.DataFrame], *,
     base: MRConfig, gate: Optional[pd.DataFrame] = None,
-    per_leg_one_way_bp: float = 0.25,
+    per_leg_one_way_bp: float = 0.25, cost_mode: str = "per_leg",
     names: Sequence[str] = ("fly", "belly", "belly_vs_front", "belly_vs_back"),
 ) -> pd.DataFrame:
     """Run the identical signal on each shadow and tabulate the comparison.
 
-    Each instrument is charged **its own** leg count, so the butterfly pays
-    1.5bp round trip and the outright belly pays 0.5bp. Charging them all the
-    fly's cost would manufacture the conclusion that the fly is best.
+    Each instrument is charged **its own** cost, because the shadow test is only
+    meaningful if each pays its own spread -- charging them all the fly's cost
+    would manufacture the conclusion that the fly is best.
+
+    ``cost_mode``:
+
+    ``'per_leg'``
+        the prior lab's convention -- ``2 * n_legs * half_spread``, so a fly pays
+        1.5bp and the outright belly 0.5bp. Kept as the default so the published
+        fly mean-reversion numbers stay reproducible.
+    ``'per_contract'``
+        the correct convention for futures -- ``2 * n_contracts * half_spread``.
+        Identical to ``per_leg`` for every shadow *except the butterfly*, whose
+        belly is two contracts: 2.0bp, not 1.5bp. Per-leg costing therefore hands
+        the fly a 0.5bp per-trade advantage over its own shadows, which is
+        backwards for a test designed to find out whether the fly is worth its
+        extra legs.
 
     Read the result as: if ``belly_vs_front`` or ``belly_vs_back`` matches the
     fly, the signal is a calendar trade; if ``belly`` matches it, it is a
@@ -78,18 +103,23 @@ def shadow_table(
     """
     import dataclasses
 
+    if cost_mode not in ("per_leg", "per_contract"):
+        raise ValueError("cost_mode must be 'per_leg' or 'per_contract'")
     rows = []
     for name in names:
         lv = shadows.get(name)
         if lv is None:
             continue
         n_legs = SHADOW_LEGS.get(name, 3)
+        n_units = (n_legs if cost_mode == "per_leg"
+                   else SHADOW_CONTRACTS.get(name, 4))
         cfg = dataclasses.replace(
-            base, round_trip_cost_bp=leg_round_trip_bp(n_legs, per_leg_one_way_bp))
+            base, round_trip_cost_bp=leg_round_trip_bp(n_units, per_leg_one_way_bp))
         res = run_backtest(cfg, levels=lv, signal=signal, gate=gate)
         m = res.metrics
         rows.append({
             "instrument": name, "n_legs": n_legs,
+            "n_contracts": SHADOW_CONTRACTS.get(name, 4),
             "round_trip_bp": cfg.round_trip_cost_bp,
             "n_trades": m["n_trades"],
             "total_gross_bp": round(m["total_gross_bp"], 1),
