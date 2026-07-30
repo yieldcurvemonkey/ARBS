@@ -593,6 +593,53 @@ threshold and horizon stay locked. The benchmark is a diagnostic set beside the 
 rescues nothing — if G4 passes only because rates fell over the window, the benchmark says so.
 
 
+### 8.5 Scope reductions taken deliberately
+
+- **`SERFF_BASIS` is not projected.** Measured at 13.81 s of the 14.6 s per-snapshot risk-model
+  cost — 94% — because it is the one space still needing ~60 vendor pricer fetches per snapshot.
+  Including it meant 74–109 min/day against 4–8, i.e. an infeasible backfill. The plan designates
+  it conditioning-only and bars it from being a test target, and `controls.basis_bp` (curve-implied
+  contract rate minus futures market rate, per contract, on the **decision** grid) is a better
+  conditioner than a basis DV01 split at scattered print times.
+- **The primary signal space is `FUTURES`, not `MEETING`** as the plan's Task 10 draft named it.
+  The later bench ordering makes SR3-in-`FUTURES` the primary bench, and using it aligns signal and
+  target contract-by-contract instead of inventing a meeting→contract mapping. `MEETING` remains
+  in the secondary grid, and is barred from ever being a test *target* — it has no traded
+  instrument, so such a test would be circular by construction.
+
+### 8.6 Power
+
+Independent observations are set by the signal's integration window, not the number of minute
+bars. More precisely: the inference is **clustered by session** — `cluster_mean_t` and
+`day_blocked_ci` both use the day-cluster count — so that count is the effective sample size.
+Decisions within a session sharpen the daily mean; they do not add independent observations.
+
+Counted from the trading calendar rather than estimated:
+
+| segment | sessions | mean/sd needed for **t ≥ 3** | for t ≥ 2 | 80%-power MDE |
+|---|---|---|---|---|
+| in-sample (2026-01-12 → 06-09) | **104** | 0.294 | 0.196 | 0.275 |
+| **lockout** (2026-06-10 → 07-29) | **34** | **0.514** | 0.343 | 0.480 |
+| whole window | 138 | 0.255 | 0.170 | 0.238 |
+
+All in units of a **daily** standard deviation. In basis points, if the daily mean net result has a
+spread of about 1 bp, passing `t ≥ 3` in-sample needs a mean of **+0.29 bp per trade after costs** —
+on top of a round trip that is 0.25 bp for a near contract and 0.50 bp for a deferred one. The
+gross edge would have to be roughly 0.8 bp at a one-hour horizon in SR3.
+
+**The lockout is much weaker than the in-sample segment, and this has to be said before it is
+opened.** Thirty-four sessions give a minimum detectable effect **1.75× larger** than the 104
+in-sample ones. So a lockout failure is consistent with *two* different worlds: no effect, or a real
+but modest effect the holdout cannot resolve. The burn rule still applies — the configuration is
+burned either way, and no re-specification follows — but the **interpretation** of that failure must
+not be overstated into "the effect is absent". It licenses verdict (ii) or (iii), never a positive
+claim about absence.
+
+Conversely, a lockout *pass* at this cluster count is meaningful precisely because the bar is high.
+
+**This study can decisively reject a large, obvious effect. It cannot establish that a small one is
+durable, causal, or capacity-bearing**, and no claim of that kind will be made from it.
+
 ### 8.7 The data regime changes mid-window, and the lockout sits entirely inside the change
 
 Found by an adversarial audit of the dataset (six agents, independent attack surfaces), then
@@ -669,52 +716,30 @@ verifier establishing that only a single logging-only commit touched those modul
 stamped window and that no session straddles it, so no reported number is numerically affected. It
 remains a provenance-detection gap, recorded in §8.8.
 
-### 8.5 Scope reductions taken deliberately
+### 8.8 `VINTAGE_SOURCES` does not cover every value-determining module
 
-- **`SERFF_BASIS` is not projected.** Measured at 13.81 s of the 14.6 s per-snapshot risk-model
-  cost — 94% — because it is the one space still needing ~60 vendor pricer fetches per snapshot.
-  Including it meant 74–109 min/day against 4–8, i.e. an infeasible backfill. The plan designates
-  it conditioning-only and bars it from being a test target, and `controls.basis_bp` (curve-implied
-  contract rate minus futures market rate, per contract, on the **decision** grid) is a better
-  conditioner than a basis DV01 split at scattered print times.
-- **The primary signal space is `FUTURES`, not `MEETING`** as the plan's Task 10 draft named it.
-  The later bench ordering makes SR3-in-`FUTURES` the primary bench, and using it aligns signal and
-  target contract-by-contract instead of inventing a meeting→contract mapping. `MEETING` remains
-  in the secondary grid, and is barred from ever being a test *target* — it has no traded
-  instrument, so such a test would be circular by construction.
+The one audit finding that completed independent verification. **Confirmed on the facts and
+downgraded on severity** by its own verifier, and recorded here rather than quietly dropped.
 
-### 8.6 Power
+`code_vintage` is a hash over the contents of the modules in
+`SDRUtils/stir_flow/vintage.py:VINTAGE_SOURCES`, so that the stamp changes exactly when the
+pipeline changes. The list is **incomplete**: 13 further modules can influence what gets
+written and are not hashed, so an edit to one of them would leave the vintage unchanged and a
+mixed-vintage dataset would read as uniform.
 
-Independent observations are set by the signal's integration window, not the number of minute
-bars. More precisely: the inference is **clustered by session** — `cluster_mean_t` and
-`day_blocked_ci` both use the day-cluster count — so that count is the effective sample size.
-Decisions within a session sharpen the daily mean; they do not add independent observations.
+**No number in this report is affected, and that was established rather than assumed.** The
+verifier checked every commit touching those modules inside the stamped window and found a
+single one, logging-only, with no session straddling it. The entire dataset carries one vintage
+(`468474ca6f84`, confirmed by the G0 census: *1 code vintage*).
 
-Counted from the trading calendar rather than estimated:
+It is left unfixed **deliberately**. Adding modules to `VINTAGE_SOURCES` changes the hash, which
+would re-stamp a concluded six-month dataset as stale and make every row look like it needed
+re-running. The correct moment to widen the list is the next backfill, not after the study that
+depends on the current stamp. Recorded as an owner ticket, not silently deferred.
 
-| segment | sessions | mean/sd needed for **t ≥ 3** | for t ≥ 2 | 80%-power MDE |
-|---|---|---|---|---|
-| in-sample (2026-01-12 → 06-09) | **104** | 0.294 | 0.196 | 0.275 |
-| **lockout** (2026-06-10 → 07-29) | **34** | **0.514** | 0.343 | 0.480 |
-| whole window | 138 | 0.255 | 0.170 | 0.238 |
-
-All in units of a **daily** standard deviation. In basis points, if the daily mean net result has a
-spread of about 1 bp, passing `t ≥ 3` in-sample needs a mean of **+0.29 bp per trade after costs** —
-on top of a round trip that is 0.25 bp for a near contract and 0.50 bp for a deferred one. The
-gross edge would have to be roughly 0.8 bp at a one-hour horizon in SR3.
-
-**The lockout is much weaker than the in-sample segment, and this has to be said before it is
-opened.** Thirty-four sessions give a minimum detectable effect **1.75× larger** than the 104
-in-sample ones. So a lockout failure is consistent with *two* different worlds: no effect, or a real
-but modest effect the holdout cannot resolve. The burn rule still applies — the configuration is
-burned either way, and no re-specification follows — but the **interpretation** of that failure must
-not be overstated into "the effect is absent". It licenses verdict (ii) or (iii), never a positive
-claim about absence.
-
-Conversely, a lockout *pass* at this cluster count is meaningful precisely because the bar is high.
-
-**This study can decisively reject a large, obvious effect. It cannot establish that a small one is
-durable, causal, or capacity-bearing**, and no claim of that kind will be made from it.
+Note that `BT/dealer_ladder/session_quality.py` correctly does **not** belong in this list.
+`VINTAGE_SOURCES` covers the modules that determine what is *written* to the direction and
+ladder tables; the session-quality gate filters at read time and changes no stored row.
 
 ### 8.9 Open data defects that need fixing OUTSIDE this study
 
