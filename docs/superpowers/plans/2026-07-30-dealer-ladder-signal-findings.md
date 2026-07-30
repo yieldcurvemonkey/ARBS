@@ -490,10 +490,35 @@ rescues nothing — if G4 passes only because rates fell over the window, the be
 ### 8.6 Power
 
 Independent observations are set by the signal's integration window, not the number of minute
-bars: ≈150 independent score epochs in-sample at a 90-minute half-life, ≈56 at 240. At that scale
-the 80%-power minimum detectable standardised effect is ≈0.25 for a single test. **This study can
-decisively reject a large, obvious effect. It cannot establish that a small one is durable,
-causal, or capacity-bearing**, and no claim of that kind will be made from it.
+bars. More precisely: the inference is **clustered by session** — `cluster_mean_t` and
+`day_blocked_ci` both use the day-cluster count — so that count is the effective sample size.
+Decisions within a session sharpen the daily mean; they do not add independent observations.
+
+Counted from the trading calendar rather than estimated:
+
+| segment | sessions | mean/sd needed for **t ≥ 3** | for t ≥ 2 | 80%-power MDE |
+|---|---|---|---|---|
+| in-sample (2026-01-12 → 06-09) | **104** | 0.294 | 0.196 | 0.275 |
+| **lockout** (2026-06-10 → 07-29) | **34** | **0.514** | 0.343 | 0.480 |
+| whole window | 138 | 0.255 | 0.170 | 0.238 |
+
+All in units of a **daily** standard deviation. In basis points, if the daily mean net result has a
+spread of about 1 bp, passing `t ≥ 3` in-sample needs a mean of **+0.29 bp per trade after costs** —
+on top of a round trip that is 0.25 bp for a near contract and 0.50 bp for a deferred one. The
+gross edge would have to be roughly 0.8 bp at a one-hour horizon in SR3.
+
+**The lockout is much weaker than the in-sample segment, and this has to be said before it is
+opened.** Thirty-four sessions give a minimum detectable effect **1.75× larger** than the 104
+in-sample ones. So a lockout failure is consistent with *two* different worlds: no effect, or a real
+but modest effect the holdout cannot resolve. The burn rule still applies — the configuration is
+burned either way, and no re-specification follows — but the **interpretation** of that failure must
+not be overstated into "the effect is absent". It licenses verdict (ii) or (iii), never a positive
+claim about absence.
+
+Conversely, a lockout *pass* at this cluster count is meaningful precisely because the bar is high.
+
+**This study can decisively reject a large, obvious effect. It cannot establish that a small one is
+durable, causal, or capacity-bearing**, and no claim of that kind will be made from it.
 
 ---
 
