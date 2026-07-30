@@ -254,3 +254,28 @@ def test_label_free_signs_from_z_because_intensity_has_no_zero(monkeypatch):
     assert not led.empty
     assert set(led["position"].unique()) <= {-1, 1}
     assert (led["signed_from"] == "zscore").all()
+
+
+# ================= a conditioner that could not be split must SAY so, not vanish
+def test_conditioning_records_conditioners_it_could_not_split(monkeypatch):
+    """A split that quietly disappeared is indistinguishable from one that ran and
+    showed nothing -- the same failure the grid's skipped-variant ledger exists for."""
+    _no_write(monkeypatch)
+    ctx = _context(effect=0.7, seed=63)
+    primary = gates.run_primary(ctx, in_sample=True)
+    out = gates.run_conditioning(ctx, primary)
+    assert "skipped" in out
+    total = len(out["conditioning"]["conditioner"].unique()) if len(out["conditioning"]) else 0
+    from BT.dealer_ladder import controls as C
+    declared = len(C.CONDITIONING_PANELS) + len(C.CONDITIONING_SERIES)
+    assert total + len(out["skipped"]) == declared, (
+        f"{total} split + {len(out['skipped'])} skipped != {declared} declared")
+    if len(out["skipped"]):
+        assert out["skipped"]["reason"].str.len().gt(0).all()
+
+
+def test_conditioning_verdict_reports_the_skipped_count(monkeypatch):
+    _no_write(monkeypatch)
+    ctx = _context(effect=0.7, seed=64)
+    out = gates.run_conditioning(ctx, gates.run_primary(ctx, in_sample=True))
+    assert "could not be split" in out["verdict"]["headline"]

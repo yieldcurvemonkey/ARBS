@@ -74,6 +74,7 @@ STAGES = {
     "G4 placebos": ["g4_placebos"],
     "G4 label-free cell": ["g4_label_free"],
     "G4 conditioning splits": ["g4_conditioning"],
+    "G4 conditioners that could not be split": ["g4_conditioning_skipped"],
     "G5 economics": ["g5_net_table"],
     "G5 capacity": ["g5_capacity"],
     "Trial ledger": ["trial_ledger"],

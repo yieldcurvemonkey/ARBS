@@ -664,6 +664,18 @@ def run_conditioning(ctx, primary: dict, *, space=None, n_bins=3) -> dict:
     interaction term is not identified, whereas "does the sign hold in all three
     buckets" is answerable and is what the audit actually asks for (segment, do not
     merely control).
+
+    THE TERCILE BOUNDARIES ARE FULL-SAMPLE, and this table is therefore DESCRIPTIVE, not
+    a tradable filter. "Does the effect survive in every volatility regime" is a
+    question about the sample and is legitimately asked with sample-wide cut points.
+    "Only trade the top Amihud tercile" is a different claim, it needs boundaries
+    knowable at decision time, and nothing here supports it. The distinction matters
+    because a reader who takes a strong stratum from this table as a trading rule has
+    silently added a fitted parameter to a pre-registered spec.
+
+    A conditioner whose panel cannot be read for the traded buckets is REPORTED as
+    skipped rather than dropped: a split that quietly vanished is indistinguishable from
+    one that ran and showed nothing.
     """
     space = space or ctx.config.primary.target_space
     led = primary.get("ledger", pd.DataFrame())
@@ -682,10 +694,13 @@ def run_conditioning(ctx, primary: dict, *, space=None, n_bins=3) -> dict:
         block_share=ctx.block_share.get(space),
         front_rank=ctx.front_rank.get(space))
 
-    rows = []
-    names = [n for n in (controls.CONDITIONING_PANELS + controls.CONDITIONING_SERIES)
-             if n in panels]
-    for name in names:
+    rows, skipped = [], []
+    declared = controls.CONDITIONING_PANELS + controls.CONDITIONING_SERIES
+    for name in declared:
+        if name not in panels:
+            skipped.append({"conditioner": name,
+                            "reason": "panel not built for this space"})
+            continue
         panel = panels[name]
         vals = []
         for _i, tr in led.iterrows():
@@ -695,11 +710,17 @@ def run_conditioning(ctx, primary: dict, *, space=None, n_bins=3) -> dict:
                 vals.append(np.nan)
         s = pd.Series(vals, index=led.index)
         if s.notna().sum() < 3 * n_bins:
+            skipped.append({"conditioner": name,
+                            "reason": f"only {int(s.notna().sum())} of {len(s)} trades "
+                                      f"could be read from the panel (need "
+                                      f"{3 * n_bins})"})
             continue
         try:
             bins = pd.qcut(s, n_bins, labels=[f"q{i + 1}" for i in range(n_bins)],
                            duplicates="drop")
         except ValueError:
+            skipped.append({"conditioner": name,
+                            "reason": "not enough distinct values to form terciles"})
             continue
         for label, grp in led.groupby(bins, observed=True):
             r = stats.cluster_mean_t(grp["net_bp"].to_numpy(),
@@ -710,6 +731,12 @@ def run_conditioning(ctx, primary: dict, *, space=None, n_bins=3) -> dict:
                          "stars": stats.stars(r["t"]),
                          "median_value": float(grp.assign(v=s.loc[grp.index])["v"].median())})
     frame = pd.DataFrame(rows)
+    out_skipped = pd.DataFrame(skipped)
+    if not out_skipped.empty:
+        _write(ctx, "g4_conditioning_skipped", out_skipped)
+        print(f"  conditioning: {len(declared) - len(out_skipped)} of {len(declared)} "
+              f"conditioners split; {len(out_skipped)} skipped "
+              f"(see g4_conditioning_skipped.csv)")
     if not frame.empty:
         _write(ctx, "g4_conditioning", frame)
         signs = frame.groupby("conditioner")["mean_net_bp"].apply(
@@ -717,10 +744,14 @@ def run_conditioning(ctx, primary: dict, *, space=None, n_bins=3) -> dict:
         consistent = [k for k, v in signs.items() if v]
     else:
         consistent = []
-    return {"conditioning": frame,
-            "verdict": _verdict("conditioning", None,
-                                f"{len(consistent)}/{frame['conditioner'].nunique() if len(frame) else 0}"
-                                f" conditioners sign-consistent across terciles")}
+    n_split = frame["conditioner"].nunique() if len(frame) else 0
+    return {
+        "conditioning": frame,
+        "skipped": out_skipped,
+        "verdict": _verdict(
+            "conditioning", None,
+            f"{len(consistent)}/{n_split} conditioners sign-consistent across "
+            f"terciles ({len(out_skipped)} of {len(declared)} could not be split)")}
 
 
 # --------------------------------------------------------------------------

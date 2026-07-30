@@ -111,6 +111,8 @@ SECTIONS = [
     ("g4_label_free", "G4 — the label-free cell (unsigned print intensity)", False,
      None, None, None),
     ("g4_conditioning", "G4 — conditioning splits", False, None, None, None),
+    ("g4_conditioning_skipped", "G4 — conditioners that could NOT be split", False,
+     None, None, None),
 
     ("g5_net_table", "G5 — gross, cost, net and the attenuation grid", False,
      None, None, None),
