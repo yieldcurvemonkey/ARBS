@@ -524,3 +524,45 @@ def test_g1_reports_what_the_poison_audit_was_exercised_on(monkeypatch):
     assert out["verdict"]["pass"] is True
     assert out["poison_exercised_on"] and out["poison_exercised_on"] > 0
     assert "exercised on" in out["verdict"]["headline"]
+
+
+# ====== the INDEPENDENT basis silently did not exist, and no fixture test saw it
+def test_independent_implied_masks_stale_minutes_without_a_shape_error(monkeypatch):
+    """pandas 2.3 rejects `.where(arr[:, None])` with "Array conditional must be same
+    shape as self", and load_context swallowed the exception -- so the independent basis,
+    the whole point of G3's second horse race, was silently absent and G3b ran with no
+    independent controls. Every fixture test had mocked past this line; only executing
+    the runner end to end on real data surfaced it."""
+    grid = pd.date_range("2026-03-02 09:00", periods=6, freq="15min", tz=NY)
+    contracts = [("SFRU26", pd.Timestamp("2026-09-16").to_pydatetime(),
+                  pd.Timestamp("2026-12-16").to_pydatetime(), False),
+                 ("SFRZ26", pd.Timestamp("2026-12-16").to_pydatetime(),
+                  pd.Timestamp("2027-03-17").to_pydatetime(), False)]
+
+    # two contracts and six minutes, so a (6,1) conditional cannot broadcast to (6,2)
+    frame = pd.DataFrame(400.0, index=grid, columns=["SFRU26", "SFRZ26"])
+    lags = pd.Series([0.0, 1.0, 99.0, 2.0, 99.0, 0.0], index=grid)
+
+    monkeypatch.setattr(controls, "curve_implied_contract_rates",
+                        lambda *a, **k: frame.copy())
+    monkeypatch.setattr(controls, "_independent_staleness_min",
+                        lambda *a, **k: lags)
+
+    class _MDP:
+        def __init__(self, **kw):
+            pass
+
+    import sys
+    import types
+    mod = types.ModuleType("MDP.IRSwaps.IRSwapsMDP")
+    mod.IRSwapsMDP = _MDP
+    monkeypatch.setitem(sys.modules, "MDP.IRSwaps.IRSwapsMDP", mod)
+    pr = types.ModuleType("SDRUtils.stir_flow.pricing")
+    pr.CurvePricer = lambda **kw: object()
+    monkeypatch.setitem(sys.modules, "SDRUtils.stir_flow.pricing", pr)
+
+    out = controls.independent_implied_contract_rates(grid, contracts)
+    assert list(out.columns) == ["SFRU26", "SFRZ26"]
+    # the two 99-minute-stale rows are blanked, the other four survive
+    assert out.notna().all(axis=1).sum() == 4
+    assert out.isna().all(axis=1).sum() == 2

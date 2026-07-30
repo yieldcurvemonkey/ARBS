@@ -149,10 +149,16 @@ def independent_implied_contract_rates(grid, contracts, *, source="citivelo",
     out = curve_implied_contract_rates(pricer, curve_name, grid, contracts)
     # blank out minutes the independent source did not actually cover
     stale = _independent_staleness_min(pricer, curve_name, grid)
-    if stale is not None:
+    if stale is not None and len(out):
         attrs = dict(out.attrs)
-        mask = stale.abs() <= 5.0
-        out = out.where(mask.reindex(out.index).to_numpy()[:, None])
+        # `.where(series, axis=0)`, NOT `.where(arr[:, None])`. pandas 2.3 rejects a
+        # broadcast conditional with "Array conditional must be same shape as self", and
+        # the exception was swallowed by load_context's guard -- so the INDEPENDENT basis,
+        # which is the whole point of G3's second horse race, silently did not exist and
+        # G3b ran with no independent controls at all. Found only by executing the runner
+        # end to end on real data; every fixture test had mocked past this line.
+        keep = (stale.abs() <= 5.0).reindex(out.index).fillna(False)
+        out = out.where(keep, axis=0)
         out.attrs.update(attrs)          # .where does not reliably carry attrs
     return out
 
