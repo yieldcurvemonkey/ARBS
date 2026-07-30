@@ -1266,3 +1266,36 @@ apart is to ask the calendar.
 July's purge was skipped for the same day-errors reason as March's and June's. Harmless in all three
 cases, verified for March by census; the full-window vintage census after remediation is the check
 that closes it for all of them.
+
+### Backfill done, curves warmed (11:30 → 13:04)
+
+`BACKFILL DONE rc=1` at 11:30:14 — rc=1 reflecting the known phase failures, not a late surprise.
+The chained warm pass then fired on its own and finished cleanly:
+
+```
+done in 89.4min: {'bulk_seeded': 26496, 'built': 0, 'reused': 0, 'failed': 0}
+```
+
+**26,496 decision-grid minutes seeded, zero single-point builds, zero failures.** That is the bulk
+path doing exactly what it was built for: had these fallen through to the per-minute path, at ~24
+Barchart requests each, it would have been ~636,000 requests against a ~55-per-minute ceiling.
+
+**Two more self-inflicted checker bugs, both found by running the check.**
+
+*The remediation guard could never pass.* `_orchestrator_running()` shelled out to PowerShell
+matching command lines against `backfill_dealer_ladder_window` — and the PowerShell process running
+that query has the string in its **own** command line, so it matched itself and reported the backfill
+as running for ever. Filtered on `Name -eq 'bash.exe'` now; verified it aborts while the orchestrator
+lives and passes once it exits. That is the fourth checking tool today to be the broken thing, after
+the awk exception filter, the emptiness test, and the notebook audit regex.
+
+*It re-ran whole months for a single day.* June needs only 2026-06-09; month granularity would have
+re-classified and re-projected the other twenty sessions for about two and a half hours of nothing.
+Ranges are now the span of missing days per month — safe because every phase is idempotent over a
+range (classify upserts on `unit_key`, project and marks use `--rewrite`), **but the calibration
+window still comes from the month**, so the single-day June re-run is calibrated with
+2026-05-01..05-31 exactly as June's original chunk was. Narrowing the range without pinning the
+calibration would have given the repaired day a different `p_flip` from its neighbours.
+
+**Remediation running** (discovered, not hardcoded): classify May 05-01..05-29 and 06-09 alone;
+project the same; marks for April, May, 06-09 and 07-24. Its own `coverage --strict` is the gate.
