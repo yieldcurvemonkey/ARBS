@@ -742,3 +742,36 @@ cross-check between two representations of the same list — reaches them.
 - **Phase C — code complete, reviewed twice, de-risked.** The notebook executes end to end against
   fixtures with 0 errors and 5 figures. G0 has a strong preliminary result replicated across two
   months.
+
+### Incident — "task killed" did NOT mean the work stopped (2026-07-30 03:29)
+
+Both the backfill and the chained warm pass were reported killed. The correct response looked
+obvious — restart the backfill from the last completed chunk — and it would have been the damaging
+one.
+
+`Get-CimInstance Win32_Process` showed the whole tree still alive and orphaned: the shell script
+running the chunk loop, its `backfill_stir_ladder --phase project` child, and four
+`multiprocessing spawn_main` workers. What the harness killed was the **task wrapper**, not the
+processes. Ninety seconds later the orphan finished February's projection normally
+(`range done: 20 days, 0 day-errors`) and moved on to the marks phase by itself.
+
+**Restarting would have produced two concurrent writers.** The project and marks phases run
+delete-then-rewrite against `arbs_stir_ladder_prints_v1` and `arbs_stir_book_marks_v1`, so a second
+process would have interleaved deletes with the first one's inserts — corruption that would not
+have surfaced until the coverage report much later, and would have looked like a data gap rather
+than a self-inflicted one.
+
+A static log is not evidence of death either: a projection day takes minutes, and the file sat
+unchanged for a full 20-second sample while the process was working normally. What settled it was
+the process tree, not the log.
+
+**What was actually lost is the wake-up path.** With the wrappers gone no task notification can
+arrive, so a `Monitor` watching the log files directly is now the only signal. Its first version
+immediately cried wolf on the benign `_FilteredWriteStream` teardown traceback (the one quieted in
+`7c383320`) — so the filter now excludes that specific line while still emitting on
+`day-errors: [1-9]`, driver errors, and, importantly, on the orchestrator disappearing before the
+warm pass completes. A monitor that only reports success cannot distinguish a crash from a slow
+chunk.
+
+Saved to memory as `reference-background-task-orphans`, since the next long backfill in this repo
+will meet the same trap.
