@@ -1250,3 +1250,19 @@ orchestrator for the same rows.
 
 **Pending remediation is now a query, not a list.** Re-running the script is safe and idempotent
 because it re-derives the gaps each time. The checklist earlier in this journal is superseded by it.
+
+### July classify: 1 day-error, on a market holiday (10:15)
+
+`range done: 29 days, 15484 units, 1 day-errors`. The failure is **2026-07-03**, which
+`data.trading_days` excludes — Independence Day observed, the Friday before a Saturday 4th. So it is
+harmless for the same reason March's two were and June's was **not**: the decision grid is built from
+the trading calendar, so a non-trading day cannot enter the study, and the gap query in
+`dealer_ladder_remediate.py` enumerates from that same calendar and will never list it.
+
+Checked rather than assumed. The three timeout failures so far are 2026-03-28 (Sat), 2026-03-29
+(Sun), 2026-06-09 (**Tue — a real gap**) and 2026-07-03 (holiday), and the only way to tell them
+apart is to ask the calendar.
+
+July's purge was skipped for the same day-errors reason as March's and June's. Harmless in all three
+cases, verified for March by census; the full-window vintage census after remediation is the check
+that closes it for all of them.
