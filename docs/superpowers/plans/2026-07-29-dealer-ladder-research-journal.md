@@ -449,3 +449,69 @@ axes, and the sample panel is there to stop the right-hand edge being over-read:
 cap only the busiest contract-minutes survive, which is a different population.
 
 Notebook now 37 cells (staleness, skipped variants, point-in-time), normalized with cell ids.
+
+#### Second batch — the two gates that were not gates (2026-07-30 04:10)
+
+The review workflow completed after the first batch was already committed: **31 candidates, 12
+confirmed** across four dimensions plus an adversarial verify pass. Eight were the ones already
+fixed above. Four were new, and three of those were rated *invalidates-a-result*. Commit
+`1c1737c1`.
+
+**D15 — Romano-Wolf was not controlling its own error rate.** `romano_wolf` passed the ORIGINAL
+block labels for the resampled rows, so a day drawn *m* times collapsed into **one** cluster
+instead of *m*. The cluster meat became `sum(m² S²)` instead of `sum(m S²)`; with `E[m]=1` and
+`E[m²]≈2` that doubles the bootstrap variance and shrinks `|t*|` by ~1/√2 — while the *observed*
+t is computed correctly, so the null it was compared against was simply too narrow. Measured on
+pure-null panels at a nominal 0.05:
+
+| panel | before | after |
+|---|---|---|
+| `run_grid` shape: 104 sessions × 24 variants | **0.190** | 0.057 |
+| intraday: 40 sessions × 8 rows × 12 variants | **0.190** | 0.057 |
+| 104 sessions × 40 variants, `n_boot=1000` | **0.233** | 0.058 |
+
+So `g4_romano_wolf.csv` — the artifact the pre-registration names as the family-wise gate — had
+roughly a **1-in-4 chance of certifying a spurious winner on data with no edge at all**. The
+calibration test that existed to prevent exactly this could not: it observed 2 rejections in 12
+trials against `assert rejections <= 2`, sitting precisely on its own tolerance, and at the true
+0.19 it passed 59% of the time. It is re-armed at 60 trials with tolerance 6 — p(pass) = 0.96 at
+a true 0.05 and 0.02 at 0.19. Also switched to `(B+1)` bootstrap p-values, because the shipped
+form could report `p_fwer` as **exactly 0.0**, which is not a p-value.
+
+**D16 — the economics gate could not fail.** The `(2a−1)` haircut was applied to the **net**
+number. It models a direction label right with probability `a`: a wrong label reverses the
+position and earns `−gross`, but the round trip is paid **either way**. So
+`E[net | a] = (2a−1)·gross − cost`, and attenuating net overstates every row by `2·cost·(1−a)` —
+an error that *grows* as accuracy falls, largest exactly where the report is trying hardest to be
+conservative. At `a = 0.5` it printed 0.000 where the truth is `−cost`: you trade noise and pay
+every tick. On gross 0.9776 against the config's 0.5bp round trip, G5 computed **+0.0955 and
+pass=True** where the correct worst case is **−0.3045 and pass=False**. A 0.4bp overstatement is
+most of the edge this study is trying to measure, and the error always ran toward "economic".
+
+**D17 — volume was sampled, not aggregated.** `load_context` reindexed a **1-minute** volume
+panel onto the 5-minute decision grid, keeping one minute in five and discarding the rest: 21% of
+true traded volume. Capacity was understated **4.7×** ($3,250 vs $15,250 per trade at 10%
+participation), and G2's signed flow multiplied a 5-minute price direction by the volume of a
+single minute the move did not touch — attenuating a gate that must *pass* for a price result to
+be attributable to hedging. Price is a level, so sampling it is right; volume is a flow, so it
+needs `data.to_grid_sum`, which sums the interval **ending** at each stamp.
+
+**D18 — the "trailing 60-minute" Amihud was a trailing 5-hour Amihud.** A minute count was passed
+to `rolling`, which counts observations, so on the 5-minute grid it reached back 300 minutes —
+through the previous session's close, with the overnight gap entering as one `diff`. `G3`'s
+"survives the liquidity control" was a claim about a different control than the documented one.
+Both this and `realized_vol_bp` now infer the step from the panel's own spacing (inferred rather
+than defaulted, since the defect *was* a units assumption) and difference, roll and shift within
+the ET session.
+
+**One pre-existing test had to change rather than be preserved**: it asserted five NaN rows from
+`window_min=5`, which only held while the window was counted in rows. That expectation *was* the
+bug, so it is updated with a note saying so.
+
+**What this batch is really evidence of.** Twelve confirmed defects, and the suite was green
+before every one of them. Four separate mechanisms by which a null result could have been
+manufactured (attenuating net, merging bootstrap clusters, signing from z, decimating volume) and
+two by which a real one could have been destroyed (sample-mismatched horse race, second-difference
+placebo). None was a crash, none was a type error, and no amount of re-running would have
+surfaced any of them — which is the argument for adversarial review of research code
+specifically, where the output is a number nobody can independently check.
