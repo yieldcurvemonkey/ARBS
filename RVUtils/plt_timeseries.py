@@ -321,20 +321,13 @@ def make_secondary_axis_plot(*, ylabel_left=None, ylabel_right=None, title=None,
         return s.rolling(int(window)).rank(pct=True)
 
     def _hurst_exponent(s, max_lag=100):
-        x = s.dropna().values
-        if x.size < 20:
-            return np.nan
-        lags = np.arange(2, min(int(max_lag), x.size // 2))
-        if lags.size < 2:
-            return np.nan
-        tau = np.array([np.std(x[lag:] - x[:-lag]) for lag in lags])
-        mask = np.isfinite(tau) & (tau > 0)
-        if mask.sum() < 2:
-            return np.nan
-        lags = lags[mask]
-        tau = tau[mask]
-        slope, _ = np.polyfit(np.log(lags), np.log(tau), 1)
-        return float(2.0 * slope)
+        # Delegates to the canonical estimator. The version that used to live
+        # here returned 2*slope and so measured H = 1.035 on a pure random walk
+        # (it should be 0.5) -- every "trending" reading off this indicator was
+        # double-counted.
+        from RVUtils.mean_reversion import hurst_exponent as _h
+
+        return _h(s, max_lag=max_lag)
 
     def _hurst_roll(s, window=252, max_lag=100):
         w = int(window)
@@ -365,24 +358,10 @@ def make_secondary_axis_plot(*, ylabel_left=None, ylabel_right=None, title=None,
         return float(-np.log(2.0) / np.log(b))
 
     def _ou_calibrate(s: pd.Series, *, dt: float = 1.0, demean: bool = False):
-        y = s.dropna().astype(float)
-        if len(y) < 5:
-            return {"mu": np.nan, "kappa": np.nan, "sigma": np.nan, "phi": np.nan, "intercept": np.nan, "half_life": np.nan}
-        if demean:
-            y = y - y.mean()
-        y0 = y.shift(1).dropna()
-        y1 = y.loc[y0.index]
-        X = np.column_stack([np.ones(len(y0)), y0.values])
-        a, b = np.linalg.lstsq(X, y1.values, rcond=None)[0]
-        if not (0.0 < b < 1.0) or not np.isfinite(b):
-            return {"mu": np.nan, "kappa": np.nan, "sigma": np.nan, "phi": float(b), "intercept": float(a), "half_life": np.nan}
-        mu = a / (1.0 - b)
-        kappa = -np.log(b) / float(dt)
-        eps = y1.values - (a + b * y0.values)
-        s2_eta = np.var(eps, ddof=1)
-        sigma = np.sqrt(max(0.0, s2_eta * (2.0 * kappa) / (1.0 - b**2)))
-        half_life = np.log(2.0) / kappa
-        return {"mu": float(mu), "kappa": float(kappa), "sigma": float(sigma), "phi": float(b), "intercept": float(a), "half_life": float(half_life)}
+        # Was a line-for-line copy of RVUtils.mean_reversion.calibrate_ou.
+        from RVUtils.mean_reversion import calibrate_ou as _c
+
+        return _c(s, dt=dt, demean=demean)
 
     def _adf_pvalue_series(s, window=None, reg="c"):
         try:
