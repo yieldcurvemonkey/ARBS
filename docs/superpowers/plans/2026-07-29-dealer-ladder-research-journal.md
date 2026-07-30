@@ -1363,3 +1363,81 @@ been guarding against.
 alerting on ungranted locks and on any transaction held past seven minutes, because a held read lock
 from a research connection is precisely what destroyed May, and there are now seven processes on
 this database at once.
+
+## THE LOCKOUT IS CONFOUNDED BY A DATA-REGIME CHANGE (17:20)
+
+The adversarial audit returned seven `blocks-the-study` findings. Its verify phase was destroyed by
+a session limit (17 of 25 agents died), so I verified the most consequential one myself with my own
+queries. **It holds, and it changes what this study can claim.**
+
+### The finding: the classification mid is displaced from 2026-05-07
+
+2Y on-market OUTRIGHTs, median **signed** spread-to-mid — signed, because a widening of genuine
+dealer spreads moves the ABSOLUTE value and leaves the signed median near zero:
+
+| month | n | median signed | curve-suspect |
+|---|---|---|---|
+| 2026-01 | 801 | −0.322 bp | 16.5% |
+| 2026-02 | 1,303 | −0.350 | 17.7% |
+| 2026-03 | 2,050 | −0.321 | 14.0% |
+| 2026-04 | 1,301 | −0.357 | 12.6% |
+| **2026-05** | 1,301 | **−5.857** | **79.7%** |
+| **2026-06** | 1,388 | **−8.153** | **79.5%** |
+| 2026-07 | 1,562 | −0.719 | 43.4% |
+
+A one-sided 6–8 bp median spread-to-mid in 2Y SOFR is not a market state. Daily resolution shows it
+is **intermittent, not a step**: 05-07 (−1.01), 05-08 (−4.61), 05-11 (−0.22), 05-12 (+0.04),
+05-14 (−5.25). Some sessions are fine and some are badly displaced, which is why no monthly average
+caught it.
+
+### Why it reaches the study even though the filter "works"
+
+The universe excludes curve-suspect trades, so most displaced prints never enter. That is not a
+rescue — it converts a pricing error into a **selection effect that tracks the calendar**:
+
+| | Jan–Apr | May–Jun |
+|---|---|---|
+| curve-suspect share | 20–31% | 48–51% |
+| signed share of all units | 40.3% | **27.1%** |
+| signed units per session | 225 | **167 (−26%)** |
+
+### The consequence, which is the real finding
+
+**The lockout is 2026-06-10 → 07-29. Every one of its 34 sessions sits inside the degraded
+regime.** The in-sample segment is 74% clean-regime. So the two halves of the pre-registered split
+differ in **data quality**, not only in time, and three further audit findings land in the holdout
+as well: the tape package grouping collapses on 2026-07-21 (7 lockout sessions, ~21% of it, where
+multi-leg structures are torn into standalone OUTRIGHTs), 2026-07-24 is missing its entire US cash
+session from the tape, and 2026-07-29 has 8 package units orphaned by a tape re-grouping.
+
+A lockout failure would therefore be **uninterpretable**: indistinguishable between "the signal does
+not generalise" and "the holdout is drawn from a different data-generating process". That is a
+confound, and it is not one the burn rule contemplates.
+
+### What I am doing about it, decided before any G4 number is read
+
+1. The pre-registered primary **still runs on the full window**, unchanged. It is the locked spec.
+2. **The confound is written down here and in §8 BEFORE the lockout is opened.**
+3. The lockout **will still be opened**, once, as pre-registered. Declining to open it after finding
+   a reason it might fail would be indistinguishable from avoiding a bad answer — the confound is
+   stated first precisely so that the decision to open cannot be contaminated by the result.
+4. A **data-regime split** (pre/post 2026-05-07) becomes a mandatory reported conditioning
+   dimension, and the clean-regime subset (2026-01-12 → 2026-05-06, ~77 sessions) is reported
+   alongside the full-window primary as the honest robustness check.
+5. No verdict of type **(i)** — mechanism plus priced edge — can be issued from this dataset. The
+   holdout cannot certify generalisation when it is not drawn from the same regime. The reachable
+   verdicts are (ii) and (iii).
+
+### Audit accounting
+
+Seven `blocks-the-study` findings, cross-corroborated across independent surfaces: the 07-21 package
+break was found by both the completeness and distributional auditors, and the 07-24 truncation by
+both the completeness and temporal auditors. Independent agents converging on the same break from
+different angles is much stronger evidence than one agent finding it twice.
+
+**The audit was itself degraded and I will not pretend otherwise**: 17 of 25 agents died on a
+session limit, so five of six surfaces never had their findings adversarially refuted, and the
+completeness critic never ran. The findings above are therefore *auditor claims that I verified
+personally*, not claims that survived independent refutation — except the VINTAGE_SOURCES one, which
+did, and which its verifier correctly downgraded to "could-mislead" after establishing that only one
+logging-only commit touched those modules inside the stamped window and no session straddles it.
