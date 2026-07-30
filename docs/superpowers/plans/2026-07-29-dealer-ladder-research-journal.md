@@ -537,3 +537,46 @@ addition belongs at the **start of the next backfill cycle**, not the end of thi
 be paired with a full re-classification, since after the addition the existing dataset reads as
 stale. Recorded here rather than fixed silently, because the hazard is in the sequencing, not the
 one-line change.
+
+### C12 — the decision grid was NOT warm, and it is a scheduled step (2026-07-30 02:45)
+
+Probed five January decision minutes directly against the pricer, deliberately bounded, because
+a cold single-point build is ~14 s and ~24 Barchart requests and the backfill is using the same
+quota:
+
+| curve | 01-13 09:35 | 01-13 14:05 | 01-21 10:00 |
+|---|---|---|---|
+| `USD-OIS-…-SERFFX-MIX23` (FF/ZQ) | 0.03 s | 0.02 s | 0.02 s |
+| `USD-SOFR-1D-Q12xM12STIRT` (SR3) | **6.83 s** | 2.40 s | **57.90 s** |
+
+The FF curve is fully warm; the **SOFR ladder curve is not warm at grid minutes**. That is
+consistent with the store census recorded during Phase A (SOFR had one partition against FF's
+1,376) and with how the backfill warms: it seeds the minutes prints actually happened at (~445 per
+session), and the decision grid is a *different* set — 5-minute marks across the session.
+
+**Not a blocker — a scheduled step.** `warm_decision_grid` already fetches the whole session once
+per curve (`bulk_get_data`, ~60 requests) and serves every grid minute from those bars, instead of
+~24 requests per minute. Measured on 2026-01-13, concurrent with the running backfill:
+
+- first pass: **26.7 s**, 96/96 minutes bulk-seeded, **0 single-point builds, 0 failures**;
+- FF curve: 0.0 s (already present);
+- **re-run in a FRESH process: 1.0 s** — so the calibrated day really is persisted to the local
+  CurveStore, which is the part Phase C depends on. Seeded-into-this-process and
+  persisted-for-the-next-one are different claims and only the second one helps.
+
+At ~27 s per session, the full window is **138 sessions ≈ 62 minutes**, against ~13,400
+single-point builds if left to the gate run to discover. `scripts/warm_dealer_ladder_grid.py`
+drives it session by session with a resume ledger.
+
+**Sequenced deliberately after the classify/project backfill, not alongside it.** Both draw on the
+same Barchart origin quota, and the limiter is constructed per API call rather than per process, so
+two warm fronts burst through the ceiling and park every worker in `Retry-After` sleeps — measured
+during Phase A at ~5% CPU with nineteen sockets open and no progress. The backfill is the long pole;
+stalling it to save an hour later would be a bad trade. Order is: backfill → warm (~1 h) → gates.
+
+**The script's first version warmed nothing and reported success in 0.0 s.** `trading_days` yields
+Timestamps, the grid mask is built from `.date` objects, and `Timestamp == date` is False, so every
+session selected zero minutes. A warm pass that silently does nothing is worse than one that fails,
+because the cost reappears as thousands of cold builds in the middle of the gate run. There is now
+a guard that exits if any session maps to zero grid minutes, and ten tests including one that pins
+the `Timestamp != date` comparison itself.
