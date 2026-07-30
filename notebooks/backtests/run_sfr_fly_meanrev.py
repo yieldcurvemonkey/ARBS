@@ -34,6 +34,7 @@ FRAMEWORKS = [
     "sfr_fly_meanrev_xsection",
     "sfr_fly_meanrev_regime",
     "sfr_fly_meanrev_arblab",
+    "sfr_fly_meanrev_weights",
     "sfr_fly_meanrev_summary",
     "sfr_fly_rules_of_thumb",
 ]

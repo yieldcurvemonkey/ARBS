@@ -19,6 +19,19 @@ The honesty rules are structural, not configurable, and are the same ones
 Grading is deliberately shared with the options lab: :mod:`RVUtils.SFRRVLab.stats`
 consumes :class:`MRResult` directly, so both labs are scored by identical code.
 """
+from RVUtils.MeanRev.contracts import (
+    FLY_WEIGHTS_CONTRACTS,
+    SR3_DV01_USD,
+    SR3_HALF_SPREAD_BP,
+    PackageWeights,
+    best_integer_weights,
+    integer_weight_frontier,
+    package_contracts,
+    package_cost_bp,
+    package_cost_usd,
+    package_dv01_usd,
+    spread_from_weights,
+)
 from RVUtils.MeanRev.engine import (
     COST_SCENARIOS,
     MRConfig,
@@ -51,6 +64,10 @@ from RVUtils.MeanRev.signals import (
 __all__ = [
     "COST_SCENARIOS", "MRConfig", "MRResult", "grid_search", "leg_round_trip_bp",
     "run_backtest", "run_continuous",
+    "FLY_WEIGHTS_CONTRACTS", "SR3_DV01_USD", "SR3_HALF_SPREAD_BP",
+    "PackageWeights", "best_integer_weights", "integer_weight_frontier",
+    "package_contracts", "package_cost_bp", "package_cost_usd",
+    "package_dv01_usd", "spread_from_weights",
     "add_strip_slots", "cm_label", "enumerate_structures", "pivot_levels",
     "regime_tag", "structure_liquidity",
     "shadow_levels", "shadow_table",

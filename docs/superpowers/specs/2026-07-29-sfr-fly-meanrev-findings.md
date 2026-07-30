@@ -36,10 +36,13 @@ Three results carry more information than the league table itself:
 * **The fly loses to its own outright belly.** Running the identical signal on the belly beats
   the butterfly in **16 of 24** frameworks; the fly beats every linear shadow in **1 of 24**,
   and that one has a single trade.
-* **The `1/-2/1` convention is the wrong weighting, measurably.** Two independent methods put
-  the fitted wings at ~0.43/0.58 rather than 0.5/0.5, and the fitted spread is stationary on
-  **17/23** keys where the traded fly is stationary on **3/23**. Fitting it moves the grid
-  median 3× (−557bp → −188bp) and leaves the best config 7.5bp from break-even.
+* **~~The `1/-2/1` convention is the wrong weighting~~ — retracted in §5a.** The apparent tilt
+  to ~0.43/0.58 was substantially +1.9% of outright rate exposure; forcing level-neutrality
+  moves it to 0.463/0.537, *cuts* the stationary count 7/16 → 4/16 and *lengthens* the median
+  half-life 20.6d → 30.3d. `1/-2/1` at 4 contracts is the cheapest level-neutral 3-leg package
+  that exists, and with identical-DV01 futures no re-weighting can improve cost per sigma
+  (measured invariance: 1.000). What does survive is unrelated to cointegration — larger
+  integer coefficients resolve the spread more finely against the 0.5bp tick grid.
 
 ## Data
 
@@ -94,7 +97,7 @@ this sample size, while the variance ratio is built for exactly it. Reporting on
 have concluded "not stationary, nothing here", and reporting only Hurst against a 0.5
 threshold would have concluded "all 23 mean-revert". Both would be wrong.
 
-### 2. The edge is real and it is about half the cost
+### 2. The edge is real, and it is about a fifth of the cost
 
 The clean statement, from the primary z-score fade on the 3m panel over 2022+:
 
@@ -103,13 +106,34 @@ The clean statement, from the primary z-score fade on the 3m panel over 2022+:
 | 0.0 (maker) | **+105.5** | +0.75 | 47.5% |
 | 0.5 | −98.5 | −0.33 | 31.3% |
 | 1.0 | −247.0 | −0.83 | 20.9% |
-| **1.5 (3 legs, 0.25bp/side)** | **−395.5** | −1.33 | 16.2% |
+| 1.5 (a per-*leg* charge) | −395.5 | −1.33 | 16.2% |
+| **2.0 (per-CONTRACT — the correct figure)** | | | |
 | 2.5 (taker) | −692.5 | −2.33 | 9.8% |
 
 141 trades. The hit rate at zero cost is essentially a coin flip with a small positive
 expectancy; the cost curve does the rest. Every framework in the lab has this shape — gross
 positive, maker positive, taker negative — which is why the verdict distribution is almost
 entirely `MARGINAL-maker-only` rather than `DEAD`.
+
+**Cost correction.** The lab charges 0.25bp per **leg** one-way, i.e. 1.5bp round trip on a
+3-leg fly. That is wrong for futures: cost is per **contract**, the belly is two contracts,
+and you cross the spread on both. The correct round trip for a `1/-2/1` fly is
+`4 contracts × 2 sides × 0.25bp = ` **2.0bp**, so every net figure in this document is ~25%
+optimistic and the true numbers sit between the 1.5bp and 2.5bp rows. Re-run on the Q12
+universe with per-contract costing, the plain fly makes **+29.75bp gross over 76 trades** and
+**−122.25bp net at 2.0bp**.
+
+That gives the sharpest statement of the problem. Break-even requires
+
+```
+half-spread per contract = gross bp per trade / (2 × contracts)
+                         = 0.391 / 8 = 0.049 bp
+```
+
+against the 0.25bp half-tick a taker pays — so the program needs an effective half-spread of
+**one fifth of a half-tick**, i.e. roughly **5× better execution on every contract, on both
+entry and exit**. Not the ~2× a per-leg cost model implies. The break-even round trip is
+**0.39bp** on a package whose taker round trip is 2.0bp.
 
 ### 3. The "typical level" of a fly is a regime statement, not a number
 
@@ -180,7 +204,103 @@ Any screen that ranks flies by fitted half-life will therefore put the *least* t
 slots at the top. This also accounts for the TAR asymmetry result below being strongest
 precisely where the lattice is tightest.
 
-### 5. The fitted cointegrating vector is genuinely better than `1/-2/1` — and still not enough
+### 5a. RETRACTION — the fitted vector was buying direction, and re-weighting cannot pay for itself
+
+**This supersedes §5b below, which was written before the weights were mapped back to whole
+contracts.** §5b reported the fitted cointegrating vector as the strongest remaining lead.
+Testing it properly (`notebooks/backtests/sfr_fly_meanrev_weights.ipynb`, Q12 universe,
+slots ≤ 12) closes it for two independent reasons.
+
+**First: the tilt was net outright rate exposure.** An unconstrained regression of the belly
+on its two wings has no reason to make the loadings sum to 1, and any excess *is* direction —
+the same direction the shadow test (§7) already showed makes money on its own. Measured on 16
+keys:
+
+| | front wing | back wing | loading sum | ADF p < 0.10 | median half-life |
+|---|---:|---:|---:|---:|---:|
+| plain fly | 0.500 | 0.500 | 1.000 | — | 42.0d |
+| **unconstrained fit** | 0.448 | 0.572 | **1.019** | **7/16** | **20.6d** |
+| **level-neutral fit** | 0.463 | 0.537 | 1.000 (forced) | **4/16** | **30.3d** |
+
+The unconstrained fit carries **+1.9% of outright rate exposure per unit belly**, positive on
+every key. Forcing level-neutrality — which is mandatory, or it is not a fly — moves the wings
+back toward 0.5/0.5, **reduces** the stationary count from 7/16 to 4/16 and **lengthens** the
+median half-life from 20.6d to 30.3d. The stationarity and the fast reversion in §5b were
+substantially the leak. A *rolling* 252-day fit carries the same leak (mean loading sum 1.021,
+sd 0.018) and wanders, so this is not an in-sample artifact that a causal fit removes.
+
+**Second: with identical-DV01 futures, re-weighting cannot improve cost-to-signal.** Each SR3
+contract is $25 per bp of its own rate, so for weights `w`:
+
+```
+DV01       = $25 per bp of the spread S = Σ wᵢrᵢ   -- INDEPENDENT of w
+contracts  = Σ|wᵢ|
+round trip = Σ|wᵢ| × 2 × 0.25bp = Σ|wᵢ| × 0.5 bp of S
+```
+
+For a level-neutral 3-leg package the wings sum to the belly, so `Σ|w| = 2 × belly` and the
+cost in bp of the spread **is** the belly. The spread also scales with the belly, so
+`cost / σ(spread)` is invariant to package scale and depends only on volatility *per unit
+belly*. Any tilt that damps that volatility therefore raises the cost per sigma one-for-one:
+
+| package | contracts | round trip | σ per belly-2 | median half-life | ADF p<0.10 | **round trip in σ_eq** |
+|---|---:|---:|---:|---:|---:|---:|
+| **`1/-2/1`** | **4** | **2.0bp** | 3.76 | 42.0d | 0/16 | **0.463** |
+| `2/-5/3` | 10 | 5.0bp | 3.46 | 62.7d | 3/16 | 0.495 |
+| `3/-7/4` | 14 | 7.0bp | 3.40 | 46.9d | 2/16 | 0.514 |
+| `6/-13/7` | 26 | 13.0bp | 3.31 | — | — | 0.529 |
+
+Tilting *does* damp the spread's volatility (3.76 → 3.31 per belly-2, ρ ≈ 0.88) — and the
+cost per equilibrium sigma rises by exactly `1/ρ`. The product of the two ratios measures
+**1.000**. There is no free lunch in re-weighting a package of identical-DV01 futures, and
+`1/-2/1` at 4 contracts is the **cheapest level-neutral 3-leg package that exists**.
+
+The backtests agree. Normalised to the same 100-contract position (valid because DV01 per bp
+of spread is weight-independent), and with **every** grid having zero positive configs:
+
+| package | gross $ | net $ | grid median |
+|---|---:|---:|---:|
+| `1/-2/1` | +$29.4k → | **−$76.4k** | negative |
+| `3/-7/4` | | −$70.1k | negative |
+| `6/-13/7` | +$29.4k | −$68.1k | negative |
+
+An 11% improvement in a large negative number, from 6.5× the contracts, with 0/4 grids
+positive. That is noise, not a lead.
+
+**Integer expression.** The level-neutral tilt (0.463 front share) needs a belly of
+**13 — 26 contracts** — to express to within 0.001. The practical menu is only ever three
+packages (belly 2, 5, 7) and then nothing better until belly 41.
+
+**But one thing does survive, and it is not what §5b claimed.** On an equal-contract basis the
+tilted packages capture *more* gross per contract, and the break-even execution requirement
+falls: `6/-13/7` needs **3.3×** better fills against the plain fly's **5.1×**. The mechanism is
+resolution against the tick grid, not the cointegrating vector:
+
+| package | contracts | spread tick | σ | **σ in grid steps** | distinct values | % days unchanged |
+|---|---:|---:|---:|---:|---:|---:|
+| `1/-2/1` | 4 | 0.5bp | 3.76 | **7.5** | 166 | 26.3% |
+| `2/-5/3` | 10 | 0.5bp | 8.65 | 17.3 | 347 | 12.1% |
+| `3/-7/4` | 14 | 0.5bp | 11.89 | 23.8 | 385 | 8.5% |
+| `6/-13/7` | 26 | 0.5bp | 21.49 | **43.0** | 462 | 7.0% |
+| *6× plain fly* | *24* | *3.0bp* | *22.57* | ***7.5*** | *166* | *26.3%* |
+| *7× plain fly* | *28* | *3.5bp* | *26.34* | ***7.5*** | *166* | *26.3%* |
+
+The two italic control rows are the point. **Every equal-wing package is an exact integer
+multiple of `1/-2/1`**, so scaling raises the tick and the σ together, leaves σ/grid at exactly
+7.5, and produces a *literally identical* z-score (verified: `max |z(fly) − z(6× fly)| ≈ 0`)
+— the same trades, 6× the size. Tilting is the **only** way to obtain a spread that is resolved
+finely against the 0.5bp settlement grid, because it raises the coefficients without changing
+the base grid. The plain fly is unchanged on **26% of sessions**; `6/-13/7` on **7%**.
+
+Given §4 — that a coarse grid corrupts every mean-reversion estimator, and that the whole back
+of the strip is a lattice — that is a real and previously unnoticed effect. It is also
+*orthogonal to cointegration*: the benefit comes from the size of the integer coefficients, not
+from their ratio matching a fitted vector. So the residual lead is **"pick weights that resolve
+finely against the tick grid"**, which is a different and cheaper question than
+**"estimate the cointegrating vector"** — and it is still not enough to make anything tradeable
+(0/4 grids positive, every package net negative).
+
+### 5b. [SUPERSEDED by §5a] The fitted cointegrating vector looked better than `1/-2/1`
 
 This is the most interesting near-miss in the lab, and the one place where a modelling
 choice moved the result by a factor of three.
@@ -484,18 +604,19 @@ Tests: **85** synthetic, no-network tests in `tests/test_rv_meanrev_core.py` and
 
 ## What I would test next
 
-1. **Trade the fitted vector, not the convention.** §5 is the strongest lead in the lab: the
-   back-weighted fitted spread is stationary where the asserted fly is not, reverts 2.8×
-   faster, and moves the grid median 3× (−557bp → −188bp) with a best config 7.5bp from
-   break-even. It was only used as a *signal* here because a non-integer vector is not
-   executable. The next step is a per-leg contract-count model — e.g. 4/−9/5 instead of
-   1/−2/1 — with its own DV01 and cost accounting. That is a bounded piece of work with a
-   quantified upside.
-2. **Maker execution, not a better signal.** The edge is ~0.5–0.9bp per trade against a
-   1.5bp taker round trip and it is *positive at zero cost with a 47.5% hit rate*. The whole
-   question is what fraction of fills can be passive. A queue-position/fill-probability study
-   on SR3 leg quotes would answer whether the maker column is reachable, and that is worth
-   more than any further signal work here.
+1. **~~Trade the fitted vector~~ — CLOSED, see §5a.** Tested and retracted: the tilt was
+   substantially a directional leak, and re-weighting a package of identical-DV01 futures
+   cannot improve cost per sigma. What replaced it is narrower and more interesting:
+   **choose integer weights that resolve finely against the 0.5bp tick grid.** `6/-13/7`
+   is unchanged on 7% of sessions against the plain fly's 26%, and needs 3.3× better fills
+   rather than 5.1×. That is worth one more pass — but on grid resolution, not cointegration,
+   and it does not on its own make anything tradeable.
+2. **Maker execution — now the only real lead.** The edge is +0.39bp per trade against a
+   **2.0bp** per-contract taker round trip, and it is positive at zero cost with a 47.5% hit
+   rate. Break-even needs an effective half-spread of **0.049bp per contract per side**, one
+   fifth of a half-tick, on all four contracts and on both entry and exit. A
+   queue-position / fill-probability study on SR3 leg quotes is the only thing that can move
+   this, and it is now the whole question.
 3. **Intraday.** The measured half-lives on the tradeable front slots are 28–53 days, which
    is far longer than any of the swept holds, while the back slots' short half-lives are
    lattice artifacts. Daily EOD may simply be the wrong frequency; the repo already has
