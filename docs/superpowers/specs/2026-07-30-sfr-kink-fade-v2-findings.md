@@ -3,8 +3,10 @@
 **Date:** 2026-07-30
 **Branch:** `feat/sfr-kink-fade-v2`
 **Design:** `2026-07-30-sfr-kink-fade-v2-design.md`
-**Notebook:** `notebooks/backtests/sfr_kink_fade_backtest.ipynb` (executed; 40 code
-cells, 134 outputs, 15 figures, 0 unrun, 0 errors; ~6 min)
+**Notebooks:** `notebooks/backtests/sfr_kink_fade_backtest.ipynb` (executed;
+40 code cells, 133 outputs, 15 figures, 0 unrun, 0 errors; 264s) and the
+follow-up `sfr_kink_fade_curvefit.ipynb` (14 code cells, 127 outputs, 8 figures,
+0 unrun, 0 errors; 151s)
 **Outputs:** `notebooks/data/sfr_kink_fade/`
 
 ## The question
@@ -48,6 +50,10 @@ positive grid median.**
 | rows net positive at taker (**2.0bp per contract**) | 9 / 28 |
 | rows with a positive **grid median** | **0 / 28** |
 | median DSR probability | **0.0000** (threshold 0.5) |
+
+The follow-up notebook `sfr_kink_fade_curvefit.ipynb` (§8b) writes 14 more rows
+into the same table. Combined: **42 rows, 0 ALIVE, 0 with a positive grid
+median**, 30 net positive gross and 14 net positive at taker.
 
 The least-dead row, for the record:
 
@@ -525,21 +531,94 @@ single one flattered the hypothesis being tested.**
   but the strip slope divided by the meetings inside it, which measures ~2bp
   even in a hiking cycle.
 
+## 8b. The three follow-ups, run
+
+The three leads this document ended with were all executed. **Two produced
+useful measurements and one falsified its own recommendation.**
+
+### 8b.1 The shadow re-audit at per-contract cost — CONFIRMED, and slightly worse
+
+`notebooks/rv/_reaudit_fly_meanrev_shadows.py`. No re-run was needed: cost enters
+net P&L linearly and once per completed trade, so `net(c) = gross - c*n`, and the
+stored table carries both. The identity was asserted first and reconciles to the
+CSV's 1-decimal rounding on all 96 rows.
+
+| | per LEG (published) | per CONTRACT (correct) |
+|---|---:|---:|
+| outright belly beats the fly | 16 / 24 | **17 / 24** |
+| any shadow beats the fly | 22 / 24 | 22 / 24 |
+
+One framework flipped: *5. Kalman local-level (3m, liquid16)*, whose fly went
+from −184.5bp to −270.0bp and fell below its own belly. The prior lab's
+conclusion was **understated**, exactly as the arithmetic requires — the fly is
+charged 0.5bp/trade more and every shadow is unchanged, so the count can only
+rise.
+
+### 8b.2 Wider spacings — the pond scales, and cost stops being the constraint
+
+9m and 12m butterflies were never built by either prior lab. They are now
+(`build_sfr_fly_structures.py --spacings 1 2 3 4`), and **all four are the same
+four contracts and the same 2.0bp round trip**:
+
+| spacing | pooled sd | round trip in days of typical movement | best signal oracle net, h=21 |
+|---|---:|---:|---:|
+| 3m | 6.87bp | 2.08 | +0.77bp |
+| 6m | 20.00bp | 0.86 | +4.31bp |
+| 9m | 34.08bp | 0.58 | +8.42bp |
+| **12m** | **46.64bp** | **0.42** | **+11.62bp** |
+
+Widening the spacing is the only lever found in three labs that improves the
+cost-to-move ratio for free, and it improves it by a factor of five.
+
+**And it still is not enough.** `notebooks/backtests/sfr_kink_fade_curvefit.ipynb`
+runs the full house treatment on all four: **0 of 14 curve-fit rows ALIVE, 0 with
+a positive grid median.** The best row is the 12m curve-fit residual at
+**+666.2bp net over 156 trades (+4.27bp/trade, 50% hit)** — against a grid median
+of **−275.8bp** and DSR 0.002. `SELECTION-ARTIFACT`.
+
+That is the useful reframing. On the 3m fly the binding constraint was **cost**:
+the pond was smaller than the boat. At 12m the pond is five times the boat and
+the constraint moves to **signal quality** — and the signal is not there. Both
+failures are real and they are different failures, which is worth knowing before
+anyone widens the spacing again expecting the first problem to be the only one.
+
+### 8b.3 "Keep the model's zero" — MY OWN RECOMMENDATION, FALSIFIED
+
+This document recommended sweeping the pairing of `scale_only_zscore` (divide by
+a trailing sd, keep the fitted model's zero) with the `z0` exit ("exit at fitted
+fair value"), on the grounds that it produced the winning configs here and had
+never been a grid axis. It has now been swept as one:
+
+| standardisation | configs | median net bp | % positive | best net bp |
+|---|---:|---:|---:|---:|
+| `scale` (keep the model's zero) | 144 | **−289.1** | 20.8% | +666.2 |
+| `z` (re-centre on a trailing mean) | 144 | **−266.6** | 27.8% | +491.5 |
+
+`scale` owns the best single corner and `z` owns the distribution — which is the
+same "wider sweep, not better signal" pattern §2 identified for the meeting
+bases. The best cell of the standardisation × exit grid is **`z` × `t42`**, a
+fixed 42-day horizon on a re-centred z-score, **not** `scale` × `z0`.
+
+So the lead was wrong. The winning configs in this lab used `scale`+`z0` because
+that corner happened to be the best corner, not because keeping the model's zero
+is a better idea — and the honest way to find that out was to make it an axis
+rather than a choice, which is what the recommendation got right.
+
 ## 9. What I would test next
 
-1. **Stop fitting calendars and fit the strip.** The cubic spline in slot index
-   beat every meeting basis on the grid median, the positive-config share, the
-   average bp per trade and the Sharpe, using four parameters and no calendar.
-   The prior lab's curve-fit notebook swept NS/NSS/spline/poly3 but z-scored the
-   residual; this lab found that keeping the **model's own zero**
-   (`scale_only_zscore`) rather than re-centring on a trailing mean is what makes
-   the `z0` exit — "exit at fitted fair value" — the winning rule. That
-   combination has not been swept properly and is the cheapest open lead.
-2. **6m flies only, ~21-day holds.** The 3m butterfly's oracle bound does not
-   clear a 2.0bp round trip; the 6m fly's clears it by 4bp for the identical
-   contract count. Every future SR3 curvature study should start there. The 9m
-   and 12m spacings in `butterfly_rv_backfill.parquet` were never tested at all
-   and carry more dispersion again.
+1. ~~**Stop fitting calendars and fit the strip**, sweeping `scale_only_zscore`
+   with the `z0` exit.~~ **RUN — see §8b.3.** The spline is confirmed as the
+   better basis, but the standardisation recommendation was **wrong**: on the
+   sweep distribution a plain trailing z-score beats keeping the model's zero,
+   and the best cell is `z` × `t42`. What remains open is the *exit*: `z0` on a
+   `scale` signal and `t42` on a `z` signal are the two corners that work, and
+   nothing tested why.
+2. ~~**6m flies, and 9m/12m were never tested.**~~ **RUN — see §8b.2.** The 12m
+   fly carries 6.8× the 3m fly's dispersion for the identical four-contract
+   cost, and its oracle clears the round trip by 11.6bp. It still produces
+   nothing ALIVE. The open question is now the one that replaced it: at 12m the
+   constraint is **signal quality**, not cost, so the next lab should be about
+   prediction and not about packaging.
 3. **Maker execution remains the only thing that changes the answer.** 20 of 28
    rows are positive gross and 9 of 28 survive 2.0bp. The whole distance between
    those two numbers is the spread.
@@ -550,13 +629,9 @@ single one flattered the hypothesis being tested.**
 5. **Fix or wrap the direction-blind `bpv` seam** (§6) before any further
    `QueryDrivenBacktest` result is believed. A one-line regression test on
    `resolve_pricable` would have caught it.
-6. **Re-audit the fly mean-reversion lab's shadow tests at per-CONTRACT cost.**
-   §7b.3 found the shadow table subsidising the butterfly by 0.5bp per trade.
-   The prior lab's headline diagnostic — "the outright belly beats the fly in 16
-   of 24 frameworks" — was computed under that subsidy, so the true count is
-   **at least** 16 and the conclusion is if anything understated. Re-running it
-   with `cost_mode='per_contract'` is a one-line change and would sharpen a
-   result the whole programme leans on.
+6. ~~**Re-audit the fly mean-reversion lab's shadow tests at per-CONTRACT
+   cost.**~~ **RUN — see §8b.1.** 16 of 24 becomes 17 of 24; one framework
+   flipped.
 
 ### A methodological note worth keeping
 

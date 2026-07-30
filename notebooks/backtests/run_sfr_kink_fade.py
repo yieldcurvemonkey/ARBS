@@ -22,7 +22,10 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 REPO = HERE.parents[1]
 
-NOTEBOOKS = ["sfr_kink_fade_backtest"]
+NOTEBOOKS = ["sfr_kink_fade_backtest", "sfr_kink_fade_curvefit"]
+
+#: the ZQ lab writes to its own directory and has its own runner
+ZQ_NOTEBOOKS = ["zq_kink_fade_backtest"]
 
 DATA = REPO / "notebooks" / "data" / "sfr_kink_fade"
 
@@ -34,7 +37,9 @@ OUTPUTS = ("league_table.csv", "league_table_sorted.csv", "sign_tests.csv",
            "regime_splits.csv", "shadow_tests.csv",
            "pond_test_3m.csv", "pond_test_6m.csv",
            "placebo_ic.csv", "placebo_backtest.csv", "symmetry_gate.csv",
-           "symmetry_pond.csv")
+           "symmetry_pond.csv",
+           "curvefit_forms.csv", "curvefit_pond.csv",
+           "curvefit_standardisation.csv")
 
 
 def sh(cmd: list[str], cwd: Path, timeout: int = 7200) -> tuple[int, str]:

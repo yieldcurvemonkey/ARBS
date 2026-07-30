@@ -186,6 +186,9 @@ def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--data-dir", type=Path, default=DATA)
     ap.add_argument("--max-slot", type=int, default=MAX_SLOT)
+    ap.add_argument("--spacings", type=int, nargs="*", default=[1, 2],
+                    help="leg spacings in quarters; 1=3m 2=6m 3=9m 4=12m "
+                         "(default 1 2, i.e. unchanged from the original lab)")
     ap.add_argument("--verify-sign", action="store_true")
     a = ap.parse_args(argv)
 
@@ -198,10 +201,12 @@ def main(argv=None) -> int:
         index="as_of", columns="slot", values="rate_pct", aggfunc="first")
     slot_panel.to_parquet(a.data_dir / "slot_panel.parquet")
 
-    specs = [
-        ("structures_3m", 1, (-1.0, 2.0, -1.0), "3m"),
-        ("structures_6m", 2, (-1.0, 2.0, -1.0), "6m"),
-    ]
+    # Legs `spacing` quarters apart: 1 = 3m, 2 = 6m, 3 = 9m, 4 = 12m. The wider
+    # spacings carry more dispersion for the SAME four-contract cost, which is
+    # the only lever the SR3 kink-fade work found that moves the cost/move ratio,
+    # so they are worth building even though the prior lab only used 1 and 2.
+    specs = [(f"structures_{3 * s}m", s, (-1.0, 2.0, -1.0), f"{3 * s}m")
+             for s in a.spacings]
     built = {}
     with open(a.data_dir / "panel_audit.txt", "w", encoding="utf-8") as fh:
         class Tee:
