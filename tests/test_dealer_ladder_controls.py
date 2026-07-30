@@ -81,8 +81,12 @@ def test_futures_amihud_is_impact_per_contract_and_shifted():
     idx = _grid(30)
     r = pd.DataFrame({"A": np.cumsum(np.r_[np.zeros(10), np.ones(20)])}, index=idx)
     vol = pd.DataFrame({"A": np.full(30, 100.0)}, index=idx)
-    a = controls.futures_amihud(r, vol, window_min=5)
-    assert a["A"].iloc[:5].isna().all()              # min_periods
+    # 30 minutes on a 5-minute grid = 6 steps, min_periods 3, plus the one-step shift.
+    # This assertion used to read `window_min=5` and expect five NaN rows, which only
+    # held while the window was counted in ROWS -- the units bug itself.
+    a = controls.futures_amihud(r, vol, window_min=30)
+    assert a["A"].iloc[:3].isna().all()              # min_periods, then the shift
+    assert a["A"].iloc[4:].notna().any()
     later = a["A"].dropna()
     assert (later >= 0).all()
     # constant volume, larger moves -> larger amihud

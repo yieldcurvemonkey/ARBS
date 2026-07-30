@@ -233,29 +233,91 @@ def trailing_return_bp(rates_bp: pd.DataFrame, lookback_min=60) -> pd.DataFrame:
     return rates_bp - prior
 
 
-def realized_vol_bp(rates_bp: pd.DataFrame, window_min=60, step_min=5) -> pd.DataFrame:
-    """Rolling stdev of ``step_min`` rate changes over a trailing window, in bp.
+def _session_key(frame):
+    """ET session date per row — the grouping every rolling window here needs."""
+    idx = pd.DatetimeIndex(frame.index)
+    et = idx.tz_convert(NY) if idx.tz is not None else idx
+    return pd.Series(et.date, index=idx)
+
+
+def _steps_for(frame, window_min, step_min=None):
+    """A window in MINUTES converted to rows, using the panel's own spacing.
+
+    ``rolling(n)`` counts OBSERVATIONS, so passing a minute count to a panel on a
+    5-minute grid silently asks for a window five times too long. Inferring the step
+    from the index rather than trusting a default is deliberate: this exact units
+    mismatch turned a documented trailing-60-minute Amihud into a trailing 5-HOUR one
+    that reached back through the previous session.
+    """
+    if step_min is None:
+        idx = pd.DatetimeIndex(frame.index)
+        if idx.size > 1:
+            deltas = pd.Series(idx).diff().dt.total_seconds().div(60.0)
+            deltas = deltas[deltas > 0]
+            step_min = float(deltas.mode().iloc[0]) if len(deltas) else 1.0
+        else:
+            step_min = 1.0
+    return max(int(window_min // max(step_min, 1e-9)), 2)
+
+
+def _session_rolling(frame, steps, how, min_periods):
+    """``rolling`` that never reaches across the overnight break."""
+    if frame.empty:
+        return frame.copy()
+    g = frame.groupby(_session_key(frame)).rolling(steps, min_periods=min_periods)
+    return getattr(g, how)().droplevel(0).reindex(frame.index)
+
+
+def _session_diff(frame):
+    """First difference within the session; first row of each session is NaN."""
+    if frame.empty:
+        return frame.copy()
+    return frame.groupby(_session_key(frame)).diff()
+
+
+def _session_shift(frame, periods=1):
+    """``shift`` that does not carry the previous session's last value into the
+    first minute of the next one."""
+    if frame.empty:
+        return frame.copy()
+    return frame.groupby(_session_key(frame)).shift(periods)
+
+
+def realized_vol_bp(rates_bp: pd.DataFrame, window_min=60, step_min=None) -> pd.DataFrame:
+    """Rolling stdev of one-step rate changes over a trailing window, in bp.
 
     Shifted by one step so the value at ``t`` uses only changes completed strictly
-    before ``t``.
+    before ``t``, and computed WITHIN the session so neither the differences nor the
+    window straddles the overnight break — an overnight gap entering as a single
+    change would dominate the whole window it lands in.
     """
-    steps = max(int(window_min // step_min), 2)
-    diffs = rates_bp.diff()
-    return diffs.rolling(steps, min_periods=max(steps // 2, 2)).std().shift(1)
+    steps = _steps_for(rates_bp, window_min, step_min)
+    diffs = _session_diff(rates_bp)
+    return _session_shift(_session_rolling(diffs, steps, "std", max(steps // 2, 2)))
 
 
 def futures_amihud(rates_bp: pd.DataFrame, volumes: pd.DataFrame,
-                   window_min=60) -> pd.DataFrame:
+                   window_min=60, step_min=None) -> pd.DataFrame:
     """Contract-native Amihud: |rate change| per contract traded, trailing.
 
     Same construction as the tick table's Amihud (price impact per unit of traded
     size) but keyed on the futures contract, avoiding a guessed mapping from swap
     tenor buckets onto contracts. Shifted one step so it is knowable at ``t``.
+
+    The window is in MINUTES and is converted to rows from the panel's own spacing;
+    both the differences and the sums are taken within the ET session. Passing the
+    minute count straight to ``rolling`` made this a trailing 5-hour measure that
+    crossed the overnight break, so the horse race reported "survives the liquidity
+    control" about a control other than the documented one.
     """
     cols = [c for c in rates_bp.columns if c in volumes.columns]
-    absmove = rates_bp[cols].diff().abs().rolling(window_min, min_periods=5).sum()
-    vol = volumes[cols].rolling(window_min, min_periods=5).sum()
-    return (absmove / vol.replace(0.0, np.nan)).shift(1)
+    if not cols:
+        return pd.DataFrame(index=rates_bp.index)
+    steps = _steps_for(rates_bp, window_min, step_min)
+    mp = max(steps // 2, 2)
+    absmove = _session_rolling(_session_diff(rates_bp[cols]).abs(), steps, "sum", mp)
+    vol = _session_rolling(volumes[cols], steps, "sum", mp)
+    return _session_shift(absmove / vol.replace(0.0, np.nan))
 
 
 def time_of_day_min(grid) -> pd.Series:

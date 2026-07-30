@@ -406,7 +406,15 @@ def test_net_of_costs_table_reports_the_attenuation_grid():
     assert any("a=0.60" in m for m in measures)
     net = float(tab[tab["measure"] == "net of costs"]["mean_bp"].iloc[0])
     a60 = float(tab[tab["measure"] == "net, accuracy a=0.60"]["mean_bp"].iloc[0])
-    assert a60 == pytest.approx(net * 0.2)
+    gross = float(tab[tab["measure"] == "gross"]["mean_bp"].iloc[0])
+    # (2a-1)*GROSS - cost, NOT (2a-1)*net. The round trip is paid whether or not the
+    # direction label was right, so attenuating the net figure discounts the cost
+    # along with the edge and overstates every row by 2*cost*(1-a) -- 0.4bp at a=0.60
+    # on this study's 0.5bp round trip, which is most of the edge being measured. The
+    # old assertion (`net * 0.2`) locked the overstatement in.
+    cost = float(led["cost_bp"].mean())
+    assert a60 == pytest.approx(gross * 0.2 - cost)
+    assert a60 < net * 0.2, "attenuating net would have looked better than the truth"
 
 
 def test_trial_ledger_is_append_only_and_ordered():

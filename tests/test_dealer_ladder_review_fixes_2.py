@@ -1,0 +1,215 @@
+"""Regression tests for the second batch of 2026-07-30 adversarial-review findings.
+
+Continues ``test_dealer_ladder_review_fixes.py``. These four arrived from the
+statistics and data-and-costs reviewers after the first batch was already fixed, and
+three of them were rated *invalidates-a-result*: the family-wise gate did not control
+its own error rate, the economics gate could not fail, and the capacity headline was
+understated by 4.7x. As with the first batch, every one of them passed the suite that
+existed at the time.
+"""
+import numpy as np
+import pandas as pd
+import pytest
+
+from BT.dealer_ladder import controls, data, gates, stats, study
+from tests.test_dealer_ladder_integration import _context, _no_write
+
+NY = "America/New_York"
+
+
+# ============ the bootstrap null must not merge a twice-drawn day into one cluster
+def test_resample_blocks_labels_each_draw_as_its_own_cluster():
+    """Reusing the ORIGINAL labels collapses the m copies of a day drawn m times into
+    one cluster, turning the cluster meat into sum m^2 S^2 instead of sum m S^2. With
+    E[m]=1 and E[m^2]~2 that doubles the bootstrap variance and shrinks |t*| by
+    ~1/sqrt(2) -- while the OBSERVED t stays correct, so the null it is compared
+    against is narrower than it should be."""
+    blocks = np.repeat(np.arange(6), 3)
+    idx, lab = stats.resample_blocks(blocks, np.random.default_rng(0),
+                                     with_labels=True)
+    assert idx.size == blocks.size
+    assert len(np.unique(lab)) == 6, "one label per DRAW, not per distinct day"
+
+    drawn = np.asarray(blocks)[idx]
+    repeated = [g for g in np.unique(drawn) if (drawn == g).sum() > 3]
+    assert repeated, "fixture drew no day twice; pick another seed"
+    for g in repeated:
+        m = int((drawn == g).sum() // 3)
+        assert len(np.unique(lab[drawn == g])) == m
+
+    # backward compatible: the plain call still returns just the indices
+    plain = stats.resample_blocks(blocks, np.random.default_rng(0))
+    assert isinstance(plain, np.ndarray) and plain.size == blocks.size
+
+
+def test_romano_wolf_controls_family_wise_error_on_a_pure_null():
+    """The measured cost of the label bug was FWER 0.19-0.25 at a nominal 0.05, on the
+    exact panel shape run_grid builds -- so a grid of near-identical variants had
+    roughly a 1-in-4 chance of a spurious "survives Romano-Wolf" verdict on data with
+    no edge at all. 60 trials, tolerance 6: passes with p=0.96 at a true 0.05 and
+    p=0.02 at 0.19, so unlike its predecessor this test can actually fail."""
+    rng = np.random.default_rng(4)
+    n_days, n_cols, rho, trials = 60, 12, 0.9, 60
+    blocks = np.arange(n_days)
+    rejects = 0
+    for _ in range(trials):
+        common = rng.normal(size=(n_days, 1))
+        vals = (np.sqrt(rho) * common
+                + np.sqrt(1.0 - rho) * rng.normal(size=(n_days, n_cols)))
+        panel = pd.DataFrame(vals, columns=[f"v{i}" for i in range(n_cols)])
+        rw = stats.romano_wolf(panel, blocks, n_boot=200,
+                               seed=int(rng.integers(1 << 30)))
+        rejects += int((rw["p_fwer"] < 0.05).any())
+    assert rejects <= 6, f"{rejects}/{trials} false rejections at a nominal 0.05"
+
+
+def test_bootstrap_p_values_are_never_exactly_zero():
+    """A bare share can report 0.0, which is not a p-value: with B draws the strongest
+    statement resampling supports is 1/(B+1)."""
+    rng = np.random.default_rng(5)
+    blocks = np.arange(40)
+    panel = pd.DataFrame({"strong": rng.normal(size=40) + 8.0,
+                          "weak": rng.normal(size=40)})
+    rw = stats.romano_wolf(panel, blocks, n_boot=200, seed=1)
+    assert (rw["p_raw"].dropna() > 0).all()
+    assert (rw["p_fwer"].dropna() > 0).all()
+    assert rw["p_raw"].min() == pytest.approx(1.0 / 201.0)
+
+
+# ====================== the accuracy haircut applies to GROSS; cost is paid regardless
+def test_attenuation_subtracts_the_full_cost():
+    """(2a-1)*gross - cost. Attenuating NET discounts the cost along with the edge and
+    overstates every row by exactly 2*cost*(1-a) -- an error that grows as accuracy
+    falls, i.e. largest precisely where the report is trying to be conservative."""
+    gross, cost = 1.0, 0.5
+    for a in (0.6, 0.7, 0.8):
+        got = stats.attenuate(gross, a, cost)
+        assert got == pytest.approx((2 * a - 1) * gross - cost)
+        wrong = (2 * a - 1) * (gross - cost)          # the old behaviour
+        assert wrong - got == pytest.approx(2 * cost * (1 - a))
+
+
+def test_at_chance_accuracy_you_lose_exactly_the_cost():
+    """a=0.5 is trading noise. The honest answer is -cost, not 0.0."""
+    assert stats.attenuate(1.0, 0.5, 0.5) == pytest.approx(-0.5)
+    assert stats.attenuate(50.0, 0.5, 0.25) == pytest.approx(-0.25)
+    assert stats.attenuate(1.0, 0.8) == pytest.approx(0.6), "cost defaults to zero"
+
+
+def test_net_of_costs_table_attenuates_gross_and_reports_the_cost_row():
+    idx = pd.date_range("2026-03-02 08:00", periods=200, freq="15min", tz=NY)
+    rng = np.random.default_rng(6)
+    led = pd.DataFrame({
+        "ts": idx, "bucket": "A",
+        "gross_bp": 1.0 + rng.normal(scale=0.1, size=len(idx)),
+        "cost_bp": 0.5})
+    led["net_bp"] = led["gross_bp"] - led["cost_bp"]
+    tab = study.net_of_costs_table(led, attenuation=(0.6,))
+    m = dict(zip(tab["measure"], tab["mean_bp"]))
+    assert m["round-trip cost"] == pytest.approx(-0.5)
+    assert m["net, accuracy a=0.60"] == pytest.approx(0.2 * m["gross"] - 0.5)
+    assert m["net, accuracy a=0.60"] < 0.2 * m["net of costs"]
+
+
+def test_g5_verdict_fails_when_the_attenuated_edge_cannot_pay_the_cost(monkeypatch):
+    """The reviewer's measured case: gross 0.9776, cost 0.5. Attenuating net gave
+    +0.0955 and pass=True; the correct worst case is -0.3045 and pass=False. A 0.4bp
+    overstatement is most of the edge on offer when the round trip is 0.5bp."""
+    _no_write(monkeypatch)
+    ctx = _context(effect=0.6, seed=43)
+    idx = pd.date_range("2026-03-02 08:00", periods=240, freq="15min", tz=NY)
+    rng = np.random.default_rng(7)
+    led = pd.DataFrame({
+        "ts": idx, "exit_ts": idx + pd.Timedelta(minutes=60), "bucket": "SFRU26",
+        "position": 1, "gross_bp": 0.9776 + rng.normal(scale=0.05, size=len(idx)),
+        "cost_bp": 0.5})
+    led["net_bp"] = led["gross_bp"] - led["cost_bp"]
+    out = gates.run_g5(ctx, {"ledger": led})
+    assert out["verdict"]["pass"] is False, out["verdict"]["headline"]
+    assert "-0.3" in out["verdict"]["headline"]
+
+
+# ================ volume is a FLOW: aggregate it, never sample one minute in five
+def test_to_grid_sum_keeps_every_minute_of_volume():
+    """Reindexing a 1-minute volume panel onto the 5-minute decision grid kept one
+    minute in five -- measured at 21% of true traded volume, which understated the
+    capacity headline by 4.7x and handed the lead-lag test a volume drawn from a
+    minute the price move did not touch."""
+    minute = pd.date_range("2026-03-02 09:00", periods=60, freq="1min", tz=NY)
+    vols = pd.DataFrame({"SFRU26": np.full(60, 100.0)}, index=minute)
+    grid = pd.date_range("2026-03-02 09:05", periods=11, freq="5min", tz=NY)
+    agg = data.to_grid_sum(vols, grid)
+    assert (agg["SFRU26"].dropna() == 500.0).all(), "5 minutes x 100 per bar"
+    # a plain reindex sees a fifth of it
+    assert vols.reindex(grid)["SFRU26"].sum() == pytest.approx(1100.0)
+    assert agg["SFRU26"].sum() > 4.0 * vols.reindex(grid)["SFRU26"].sum()
+
+
+def test_to_grid_sum_never_includes_volume_from_after_the_stamp():
+    minute = pd.date_range("2026-03-02 09:00", periods=20, freq="1min", tz=NY)
+    v = pd.DataFrame({"A": np.zeros(20)}, index=minute)
+    v.iloc[11] = 999.0                     # 09:11, inside the (09:10, 09:15] bar
+    grid = pd.date_range("2026-03-02 09:05", periods=3, freq="5min", tz=NY)
+    agg = data.to_grid_sum(v, grid)
+    assert agg.at[grid[1], "A"] == 0.0, "the 09:10 stamp must not see 09:11"
+    assert agg.at[grid[2], "A"] == 999.0
+
+
+def test_to_grid_sum_preserves_no_data_as_nan():
+    minute = pd.date_range("2026-03-02 09:00", periods=10, freq="1min", tz=NY)
+    v = pd.DataFrame({"A": np.full(10, np.nan)}, index=minute)
+    agg = data.to_grid_sum(v, pd.date_range("2026-03-02 09:05", periods=2,
+                                            freq="5min", tz=NY))
+    assert agg["A"].isna().all(), "an absent bar must not be summed to zero"
+
+
+# ============== rolling windows are in MINUTES and never cross the overnight break
+def test_amihud_window_is_minutes_not_rows():
+    """rolling(60) on a 5-minute grid is a trailing 5 HOURS. The horse race then
+    reported "survives the liquidity control" about a control other than the
+    documented one."""
+    idx = pd.date_range("2026-03-02 08:00", periods=96, freq="5min", tz=NY)
+    rates = pd.DataFrame({"A": np.arange(96.0)}, index=idx)   # 1bp per 5min
+    vols = pd.DataFrame({"A": np.full(96, 10.0)}, index=idx)
+    am = controls.futures_amihud(rates, vols, window_min=60)
+    # 60 minutes = 12 steps: 12 x 1bp of movement over 12 x 10 contracts
+    assert am["A"].dropna().iloc[-1] == pytest.approx(12.0 / 120.0)
+
+
+def test_amihud_and_vol_never_reach_across_the_overnight_break():
+    days = ("2026-03-02", "2026-03-03")
+    idx = pd.DatetimeIndex(np.concatenate([
+        pd.date_range(f"{d} 08:00", periods=48, freq="5min", tz=NY) for d in days]))
+    # day two opens 500bp away: an overnight gap that would dominate any window it
+    # landed in, and a single .diff() would swallow it whole
+    rates = pd.DataFrame({"A": np.r_[np.arange(48.0), 500.0 + np.arange(48.0)]},
+                         index=idx)
+    vols = pd.DataFrame({"A": np.full(96, 10.0)}, index=idx)
+    am = controls.futures_amihud(rates, vols, window_min=60)
+    rv = controls.realized_vol_bp(rates, window_min=60)
+
+    open2 = idx[48]
+    assert pd.isna(am.at[open2, "A"]) and pd.isna(rv.at[open2, "A"])
+    day2 = am[[t.date() == open2.date() for t in am.index]]["A"].dropna()
+    assert (day2 <= 12.0 / 120.0 + 1e-9).all(), f"overnight jump leaked: {day2.max()}"
+    rv2 = rv[[t.date() == open2.date() for t in rv.index]]["A"].dropna()
+    assert (rv2 < 1e-6).all(), "constant 1bp steps have zero stdev within a session"
+
+
+def test_the_one_step_shift_does_not_carry_yesterdays_last_value():
+    days = ("2026-03-02", "2026-03-03")
+    idx = pd.DatetimeIndex(np.concatenate([
+        pd.date_range(f"{d} 08:00", periods=48, freq="5min", tz=NY) for d in days]))
+    rng = np.random.default_rng(8)
+    rates = pd.DataFrame({"A": np.cumsum(rng.normal(size=96))}, index=idx)
+    assert pd.isna(controls.realized_vol_bp(rates, window_min=60).at[idx[48], "A"])
+
+
+def test_gate_context_volume_is_aggregated_not_sampled(monkeypatch):
+    """The seam that mattered: load_context feeds these panels to capacity_curve and
+    to the signed-flow series G2 tests."""
+    _no_write(monkeypatch)
+    ctx = _context(effect=0.4, seed=44)
+    vols = ctx.volumes.get("FUTURES")
+    assert vols is not None and not vols.empty
+    assert (vols.dropna(how="all").to_numpy() >= 0).all()

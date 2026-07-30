@@ -247,21 +247,109 @@ def flip_rate_bars(flip_table, ax=None, group="our_confidence",
                         "accuracy: both curves can be wrong together.")
 
 
-def attenuation_curve(net_bp, accuracies=(0.6, 0.7, 0.8, 0.9, 1.0), ax=None):
-    """Net edge after the (2a-1) classification-accuracy haircut."""
+def attenuation_curve(gross_bp, cost_bp=0.0, accuracies=(0.5, 0.6, 0.7, 0.8, 0.9, 1.0),
+                      ax=None):
+    """``(2a-1) * gross - cost`` across assumed direction accuracy.
+
+    Takes GROSS and cost separately, because the haircut applies to the edge and not
+    to the cost: a wrong label reverses the position but still pays the round trip.
+    The a=0.5 point is included deliberately — it must land at ``-cost``, and a curve
+    that passes through zero there is plotting the wrong quantity.
+    """
     import matplotlib.pyplot as plt
 
     if ax is None:
-        _, ax = plt.subplots(figsize=(6.4, 3.2))
+        _, ax = plt.subplots(figsize=(6.6, 3.4))
     a = np.asarray(accuracies, dtype=float)
-    vals = net_bp * (2.0 * a - 1.0)
-    ax.plot(a, vals, color=SERIES[0], marker="o")
+    vals = gross_bp * (2.0 * a - 1.0) - cost_bp
+    ax.plot(a, vals, color=SERIES[0], marker="o", markeredgecolor=SURFACE,
+            markeredgewidth=1.4)
     ax.axhline(0.0, color=INK_2, linewidth=1.0, zorder=0)
+    if cost_bp:
+        ax.axhline(-cost_bp, color=SERIES[1], linewidth=1.3, linestyle=(0, (4, 3)),
+                   zorder=0)
+        # anchored RIGHT: at a=0.5 the curve sits on this rule, and a left-anchored
+        # label lands on top of that point's own value
+        ax.annotate(f"pure noise: -{cost_bp:.3f} (cost, paid either way)",
+                    xy=(max(a), -cost_bp), xytext=(-2, 5), textcoords="offset points",
+                    fontsize=7.5, color=SERIES[1], ha="right")
     for aa, vv in zip(a, vals):
         ax.annotate(f"{vv:+.3f}", xy=(aa, vv), fontsize=7.5, color=INK_2,
                     ha="center", va="bottom")
     ax.set_xlim(min(a) - 0.03, max(a) + 0.03)
+    ax.margins(y=0.20)
     return _finish(ax, "Edge after attenuation for classification accuracy",
                    "assumed sign accuracy a", "net bp per trade",
-                   note="Signed exposure scales by (2a-1). Direction is "
-                        "UNCERTIFIED, so no single point on this line is 'the' answer.")
+                   note="Signed exposure scales by (2a-1); the round trip is paid "
+                        "regardless. Direction is UNCERTIFIED, so no single point on "
+                        "this line is 'the' answer.")
+
+
+def staleness_panels(table, axes=None):
+    """Net bp per trade and surviving sample, as the price-staleness cap tightens.
+
+    TWO PANELS, not two y-scales. bp-per-trade and trade count are different
+    measures, and overlaying them on twin axes would let the eye read a crossing
+    that means nothing -- the failure mode this module refuses by construction.
+
+    The reading is directional: the capped forward-fill biases a measured move toward
+    ZERO, so an effect that grows as the cap tightens was being diluted by carry,
+    and one that shrinks was living in it. The sample panel is what stops that being
+    over-read -- at a 0-minute cap only the busiest contract-minutes survive, so a
+    reversal there may be a different population rather than a different answer.
+    """
+    import matplotlib.pyplot as plt
+
+    df = table.copy()
+    if axes is None:
+        _, axes = plt.subplots(2, 1, figsize=(8.0, 5.6), sharex=True,
+                               gridspec_kw={"height_ratios": (1.6, 1.0)})
+    ax0, ax1 = axes
+    x = np.arange(len(df))
+    labels = [str(v) for v in df["max_stale_min"]]
+
+    for col, hue, name in (("gross_bp", SERIES[2], "gross"),
+                           ("net_bp", SERIES[0], "net of costs")):
+        if col in df.columns:
+            ax0.plot(x, df[col], marker="o", markersize=6, color=hue, label=name,
+                     markeredgecolor=SURFACE, markeredgewidth=1.6)
+    ax0.axhline(0.0, color=INK_2, linewidth=1.0, zorder=1)
+    # direct labels on the two rows a reader quotes: uncapped, and the tightest
+    # cap that still has a real sample
+    # Direct labels on the two rows a reader quotes: uncapped, and the tightest cap.
+    # Both series get them -- aqua sits at 2.74:1 on this surface, and visible labels
+    # are the documented relief for using it at all.
+    quotable = [0] + ([len(df) - 1] if len(df) > 1 else [])
+    for col, dy in (("gross_bp", 11), ("net_bp", -14)):
+        if col not in df.columns:
+            continue
+        for i in quotable:
+            v = df[col].iloc[i]
+            if np.isfinite(v):
+                ax0.annotate(f"{v:+.3f}", xy=(x[i], v), xytext=(0, dy),
+                             textcoords="offset points", fontsize=8, ha="center",
+                             color=INK_2)
+    ax0.margins(y=0.18)
+    ax0.legend(loc="best")
+    _finish(ax0, "Does the effect survive fresher prices?", ylabel="bp per trade")
+
+    share = df.get("share_of_uncapped_trades")
+    ax1.bar(x, share if share is not None else df["n_trades"], width=0.55,
+            color=SERIES[1], edgecolor=SURFACE, linewidth=2.0)
+    for xx, n in zip(x, df["n_trades"]):
+        ax1.annotate(f"n={int(n)}", xy=(xx, 0), xytext=(0, 4),
+                     textcoords="offset points", fontsize=7.5, ha="center",
+                     color=INK_2)
+    ax1.set_xticks(x)
+    ax1.set_xticklabels(labels)
+    _finish(ax1, "Surviving sample",
+            xlabel="staleness cap at BOTH ends (minutes; \"none\" = the "
+                   "pre-registered primary)",
+            ylabel="share of uncapped trades")
+    # BELOW the xlabel, not on top of it: _finish's default note offset assumes a
+    # full-height panel and collides with the axis label on a short stacked one
+    ax1.annotate("A tighter cap keeps only fresher contract-minutes, so a reversal at "
+                 "the right edge may be a different population, not a different "
+                 "answer.", xy=(0, -0.42), xycoords="axes fraction", fontsize=7.5,
+                 color=MUTED, va="top")
+    return axes

@@ -357,3 +357,95 @@ the ordinary correlation of increments.
 - [ ] C.5 G4 pre-registered price prediction + secondary grid
 - [ ] C.6 G5 economics/capacity
 - [ ] C.7 Findings doc + notebook + completeness pass
+
+### Adversarial review of the research harness (2026-07-30 02:40) — CLOSED
+
+Before pointing any of this at the real window, the harness was reviewed by four independent
+adversarial passes (correctness, no-lookahead, statistics, data-and-costs) plus a verify pass.
+**Fifteen findings survived verification. The existing 233 tests passed throughout all fifteen.**
+That is the fact worth recording: a green suite over a research harness certifies that the code
+does what its author believed, not that the belief was right.
+
+All fifteen are fixed and each is now pinned by a test whose docstring names the failure rather
+than the property (`tests/test_dealer_ladder_review_fixes.py`, 25 tests). Commits `45a6d797`
+and `acf0706c`.
+
+**The two that would have produced a confidently wrong verdict:**
+
+1. **The no-lookahead poison audit was vacuous.** `run_g1` handed `audit_future_poison` a
+   one-element grid, so `ladder_panel`'s per-session chunk window (`hi = grid.max()`) dropped
+   every future print *before the decay matrix was built*. The `age >= 0` gate that **is** the
+   no-lookahead mechanism was therefore never evaluated. The audit reported PASS on a builder
+   leaking five hours of future flow. It now builds the whole session and reports
+   `max_future_prints`, so a vacuous pass is visible as one. This is the single most important
+   fix in the batch: G1 is the gate everything downstream leans on, and it was certifying
+   nothing.
+2. **The pre-arrival placebo reported the inverse of its own statistic.** It passed
+   `trade_ledger` a *change* panel, which the ledger differences again — so the measured
+   quantity was `r(t+h) − 2r(t) + r(t−h)`: the forward window **minus** the backward one. A
+   genuine forward-only effect would have been condemned as leakage, and genuine anticipation
+   reported as clean. Both directions of error, from one wiring mistake.
+
+**Verdict-direction findings.** G2's verdict came from LLS, which is built from *squared*
+correlations and is therefore direction-blind — a lead in the anti-hedging direction, which
+*refutes* the channel, was reported as PASS. G3 passed on `|t| ≥ 2`, admitting a coefficient
+opposite the pre-registered hypothesis. Both now check sign against the hypothesis and report
+timing and direction separately.
+
+**The lockout was protecting nothing.** G2 and G3 ran over the whole window including the
+holdout. A G3 failure is exactly the verdict that prompts re-specifying controls, so doing that
+with lockout data in the sample would have burned the holdout silently. Both are now in-sample
+by default, with `in_sample=False` available deliberately.
+
+**Two findings that both trace to the PAID skew** — worth stating together, because the skew is
+a property of this dataset and will keep generating bugs of this shape:
+- `trade_ledger` signed direction from `z = level − trailing mean`. With 68–82% of prints PAID
+  (and PAID meaning *negative* `delta_dv01`), that mean is systematically negative, so
+  `sign(z)` and `sign(level)` disagree across the whole region `μ < level < 0` — measured at
+  ~35% of triggers on a realistically skewed bucket. A third of trades took the position
+  **opposite the hypothesis**. Direction now comes from the ladder level, the trigger stays
+  `|z|`, and the frame records `sign_disagrees` so it can never be silent again.
+- `ladder_panel` filled no-data cells with `0.0`, which `trailing_zscore` turns into the
+  constant `z = −μ/sd` — systematically *positive* for the same reason, and above the trigger.
+  A bucket with no visible prints all session produced a full session of same-signed trades at
+  full weight in the primary ledger. No-data is now NaN.
+
+**Sample-integrity findings.** `horse_race` dropped NaN-control rows from the controlled spec
+only, so an unchanged coefficient lost ~1.3× of its t to sample shrinkage alone — read by G3 as
+"does not survive"; both specs now fit on identical complete cases. `curve_shape` picked
+front/belly/back *positionally* over a window-union panel, selecting an expired front contract,
+so slope and curvature were structurally NaN for long stretches. `run_grid` and `run_placebos`
+rebuilt the signal and dropped the front-N mask, trading the window union (8 SR3 contracts)
+rather than the pre-registered front six. The staleness guard checked only the entry, so a fresh
+entry against a 25-minute-stale exit measured a 35-minute move and called it a 60-minute one.
+`trailing_zscore` used `pd.unique` (arrival order) for its session window — and
+`audit_trailing_moments` cannot catch that, because it poisons by *position* and so assumes the
+very property at issue.
+
+**Reporting findings.** 192 of 288 declared grid variants silently produced no row (MEETING is
+never built; cross-space bucket namespaces are disjoint). A reader saw 96 rows with nothing to
+say the rest were untested rather than weak — now `g4_skipped_variants.csv`, which accounts for
+every declared variant.
+
+**D13 — point-in-time is verified, not assumed.** The decision curve is calibrated from Barchart
+bars selected with `method="nearest"` and then `ffill().bfill()`, so a request for an uncovered
+minute can resolve against a bar from *after* it. G1's battery cannot see this: it poisons the
+**ladder**, and this path feeds the **controls**. A control carrying future information breaks
+the horse race in either direction — absorbing variance the signal should have explained, or
+manufacturing a basis reversal that reads as "the signal was really trading curve-fit error".
+`curve_implied_contract_rates` now reads the handle's own stamp, NaNs any minute whose curve is
+stamped later than the decision, and reports the drop rate to `g3_point_in_time_*.csv`. Rows
+whose stamp cannot be read at all are **kept and counted** rather than dropped: dropping every
+unverifiable row would empty the control panel on any pricer without `meta()`, which is a scope
+cut disguised as a safety measure.
+
+**D14 — staleness is reported, not tuned.** `run_primary`'s docstring promised a
+`run_staleness_sensitivity` that did not exist. It does now: the primary spec re-run at caps of
+none/30/15/10/5/2/0 minutes with the mean *realised* horizon beside the nominal one. It is not a
+knob to choose from — the pre-registration fixed no cap. It exists because carry biases a
+measured move toward zero, so a result that strengthens as the cap tightens was being diluted,
+and one that vanishes was living in the carry. The figure is two stacked panels rather than twin
+axes, and the sample panel is there to stop the right-hand edge being over-read: at a 0-minute
+cap only the busiest contract-minutes survive, which is a different population.
+
+Notebook now 37 cells (staleness, skipped variants, point-in-time), normalized with cell ids.

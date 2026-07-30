@@ -132,7 +132,13 @@ def load_context(conn, config=None, *, window=None, results_dir=None,
                                       ffill_limit_min=0)
         r = data.price_to_rate_bp(closes) if not closes.empty else pd.DataFrame()
         rates_bp[space] = r.reindex(grid) if not r.empty else r
-        volumes[space] = vols.reindex(grid) if not vols.empty else vols
+        # Price is a LEVEL, so sampling it onto the decision grid is right. Volume is
+        # a FLOW, and reindexing a 1-minute volume panel onto a 5-minute grid keeps
+        # one minute in five and silently throws the other four away -- measured at
+        # 21% of true traded volume, which understated the G5 capacity headline by
+        # 4.7x and handed G2 a signed-flow series whose volume came from a minute the
+        # price move did not touch. Aggregate.
+        volumes[space] = (data.to_grid_sum(vols, grid) if not vols.empty else vols)
         stale_min[space] = stale.reindex(grid) if not stale.empty else stale
 
         curve_name = sconfig.CURVE_FOR["SOFR" if space == "FUTURES" else "FED_FUNDS"]
@@ -1066,13 +1072,23 @@ def run_g5(ctx, primary: dict) -> dict:
         dv01_per_contract=ctx.config.cost.dv01_per_contract["SR3" if space == "FUTURES" else "ZQ"])
     _write(ctx, "g5_capacity", out["capacity"])
     net = out["net_table"]
-    net_row = net[net["measure"] == "net of costs"]
-    mean_net = float(net_row["mean_bp"].iloc[0]) if len(net_row) else np.nan
-    worst_att = stats.attenuate(mean_net, min(ctx.config.stats.attenuation_grid))
+
+    def _measure(name):
+        row = net[net["measure"] == name]
+        return float(row["mean_bp"].iloc[0]) if len(row) else np.nan
+
+    mean_net, mean_gross = _measure("net of costs"), _measure("gross")
+    mean_cost = float(ledger["cost_bp"].mean()) if "cost_bp" in ledger.columns else 0.0
+    # The worst case attenuates GROSS and still pays the full round trip. Attenuating
+    # the net figure discounts the cost too, which overstates this by 2*cost*(1-a) --
+    # 0.4bp at a=0.60 on a 0.5bp round trip, i.e. most of the edge on offer. That is
+    # the difference between G5 passing and failing, and it errs toward "economic".
+    worst_a = min(ctx.config.stats.attenuation_grid)
+    worst_att = stats.attenuate(mean_gross, worst_a, mean_cost)
     out["verdict"] = _verdict(
         "G5", bool(np.isfinite(worst_att) and worst_att > 0),
-        f"net {mean_net:.4f}bp/trade; at accuracy a="
-        f"{min(ctx.config.stats.attenuation_grid):.2f} -> {worst_att:.4f}bp")
+        f"gross {mean_gross:.4f} - cost {mean_cost:.4f} = net {mean_net:.4f}bp/trade; "
+        f"at accuracy a={worst_a:.2f} -> (2a-1)*gross - cost = {worst_att:.4f}bp")
     return out
 
 

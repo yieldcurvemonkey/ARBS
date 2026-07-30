@@ -384,6 +384,36 @@ def to_minute_grid(df: pd.DataFrame, *, ffill_limit_min=30):
     return filled, stale
 
 
+def to_grid_sum(minute_df: pd.DataFrame, grid) -> pd.DataFrame:
+    """Aggregate a per-MINUTE flow panel onto a coarser decision grid by SUMMING.
+
+    The counterpart to reindexing, and not interchangeable with it. A price is a
+    level, so sampling it at the decision minute is exactly right. Volume is a flow
+    over an interval, and `reindex` onto a 5-minute grid keeps the volume of one
+    minute in five and discards the other four — measured at 21% of the true traded
+    volume, which understated the capacity headline by 4.7x and gave the lead-lag
+    test a signed-flow series whose volume came from a minute the price move did not
+    touch.
+
+    Each grid stamp gets the flow over the interval ENDING at it, closed on the right,
+    so no volume from after the decision minute is ever included. Bars before the
+    first grid stamp are dropped rather than folded into it, and NaN is preserved as
+    "no data" rather than being summed to zero.
+    """
+    if minute_df is None or minute_df.empty:
+        return pd.DataFrame()
+    gi = pd.DatetimeIndex(grid).sort_values()
+    if gi.size == 0:
+        return pd.DataFrame(index=gi, columns=minute_df.columns, dtype=float)
+    step = (int(pd.Series(gi).diff().dt.total_seconds().div(60).mode().iloc[0])
+            if gi.size > 1 else 1)
+    step = max(step, 1)
+    src = minute_df.sort_index()
+    # right-closed, right-labelled: the bar stamped t covers (t-step, t]
+    agg = src.resample(f"{step}min", label="right", closed="right").sum(min_count=1)
+    return agg.reindex(gi)
+
+
 def price_to_rate_bp(prices: pd.DataFrame) -> pd.DataFrame:
     """Contract price -> implied rate in BASIS POINTS.
 

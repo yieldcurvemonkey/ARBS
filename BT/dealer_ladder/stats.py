@@ -84,13 +84,31 @@ def cluster_mean_t(values, blocks) -> dict:
             "n": int(n), "n_blocks": int(g)}
 
 
-def resample_blocks(blocks, rng) -> np.ndarray:
-    """Row indices for one day-blocked bootstrap draw (whole days, with replacement)."""
+def resample_blocks(blocks, rng, *, with_labels=False):
+    """Row indices for one day-blocked bootstrap draw (whole days, with replacement).
+
+    With ``with_labels=True`` also returns a FRESH cluster label per draw. That is
+    not a convenience: a day drawn twice must count as TWO clusters. Reusing the
+    original labels collapses the copies into one, turning the cluster meat into
+    ``sum_g m_g^2 S_g^2`` instead of ``sum_g m_g S_g^2`` — and since ``E[m]=1`` with
+    ``E[m^2]≈2``, that doubles the variance, shrinks ``|t*|`` by ~1/sqrt(2), and (because
+    the OBSERVED t is computed correctly) hands back a null distribution that is too
+    narrow. Measured cost of getting this wrong: family-wise error 0.19–0.25 at a
+    nominal 0.05.
+    """
     b = np.asarray(blocks)
     uniq = np.unique(b)
+    if uniq.size == 0:
+        empty = np.array([], dtype=int)
+        return (empty, empty) if with_labels else empty
     where = {g: np.flatnonzero(b == g) for g in uniq}
     picked = rng.choice(uniq, size=uniq.size, replace=True)
-    return np.concatenate([where[g] for g in picked]) if uniq.size else np.array([], dtype=int)
+    idx = np.concatenate([where[g] for g in picked])
+    if not with_labels:
+        return idx
+    lab = np.concatenate([np.full(where[g].size, i, dtype=np.int64)
+                          for i, g in enumerate(picked)])
+    return idx, lab
 
 
 def day_blocked_ci(values, blocks, *, n_boot=2000, alpha=0.05, seed=0) -> dict:
@@ -193,17 +211,28 @@ def romano_wolf(panel: pd.DataFrame, blocks, *, n_boot=2000, seed=0,
     vals = panel.to_numpy(dtype=float)
     t_star = np.full((n_boot, len(cols)), np.nan, dtype=float)
     for i in range(n_boot):
-        idx = resample_blocks(b, rng)
+        # `lab`, NOT `b[idx]`: a day drawn twice is two clusters. See resample_blocks.
+        idx, lab = resample_blocks(b, rng, with_labels=True)
         # recentre on the observed mean -> a null distribution, all columns at once
-        t_star[i, :] = _cluster_t_matrix(vals[idx] - means[None, :], b[idx])
+        t_star[i, :] = _cluster_t_matrix(vals[idx] - means[None, :], lab)
 
     absobs = np.abs(t_obs) if two_sided else t_obs
     absstar = np.abs(t_star) if two_sided else t_star
 
-    p_raw = np.array([
-        np.nanmean(absstar[:, j] >= absobs[j]) if np.isfinite(absobs[j]) else np.nan
-        for j in range(len(cols))
-    ])
+    # (B+1) bootstrap p-values. A plain share can report EXACTLY 0.0, which is not a
+    # p-value: with B draws the strongest statement the resampling supports is
+    # 1/(B+1). Unidentified draws (NaN t*) are excluded from both parts rather than
+    # silently counted as non-exceedances, which `>=` on NaN would otherwise do.
+    def _boot_p(col_vals, obs_val):
+        if not np.isfinite(obs_val):
+            return np.nan
+        usable = np.isfinite(col_vals)
+        if not usable.any():
+            return np.nan
+        exceed = int((col_vals[usable] >= obs_val).sum())
+        return (1.0 + exceed) / (1.0 + int(usable.sum()))
+
+    p_raw = np.array([_boot_p(absstar[:, j], absobs[j]) for j in range(len(cols))])
 
     order = np.argsort(-np.nan_to_num(absobs, nan=-np.inf))
     p_fwer = np.full(len(cols), np.nan, dtype=float)
@@ -211,7 +240,8 @@ def romano_wolf(panel: pd.DataFrame, blocks, *, n_boot=2000, seed=0,
     running = 0.0
     for pos, j in enumerate(order):
         if not np.isfinite(absobs[j]):
-            continue
+            active = active[1:]     # still retire it, or later columns keep testing
+            continue                # against a hypothesis that was never identified
         block = absstar[:, active]
         # An all-NaN bootstrap row means every active hypothesis was unidentified in
         # that resample (e.g. a draw with a single block). Treat it as "no evidence"
@@ -223,7 +253,10 @@ def romano_wolf(panel: pd.DataFrame, blocks, *, n_boot=2000, seed=0,
                 maxes[usable] = np.nanmax(block[usable], axis=1)
         else:
             maxes = np.array([np.nan])
-        p = float(np.nanmean(maxes >= absobs[j])) if np.isfinite(maxes).any() else np.nan
+        p = _boot_p(maxes, absobs[j])
+        if not np.isfinite(p):
+            active = active[1:]
+            continue
         running = max(running, p)          # monotone non-decreasing down the order
         p_fwer[j] = running
         active = active[1:]                 # drop the leading hypothesis
@@ -322,11 +355,23 @@ def sign_consistency(values, blocks) -> dict:
             "n_blocks": int(uniq.size), "p_sign": p}
 
 
-def attenuate(net_bp, accuracy) -> float:
-    """Scale a signed result by the classification-attenuation factor ``2a - 1``.
+def attenuate(gross_bp, accuracy, cost_bp=0.0) -> float:
+    """Expected result per trade when the direction label is right with prob ``a``.
 
-    With independent sign accuracy ``a`` the signed exposure retains ``2a-1``:
-    0.6 -> 20%, 0.7 -> 40%, 0.8 -> 60%. Direction here is UNCERTIFIED against
-    truth labels, so every headline number is reported across a grid of ``a``.
+    ``(2a - 1) * gross - cost``. The factor scales the GROSS edge only: a wrong label
+    takes the opposite position and earns ``-gross``, so the signed exposure retains
+    ``2a-1`` (0.6 -> 20%, 0.7 -> 40%, 0.8 -> 60%) — but the round-trip cost is paid
+    EITHER WAY.
+
+    Attenuating the NET number instead discounts the cost along with the edge,
+    overstating the result by exactly ``2 * cost * (1 - a)``. That error is largest
+    where the report is trying hardest to be conservative, and at ``a = 0.5`` it
+    returns 0.0 when the truth is ``-cost``: you trade noise and pay every tick. On
+    this study's 0.5bp round trip the overstatement at ``a = 0.6`` is 0.4bp, which is
+    most of the edge being measured — enough to flip G5's verdict on its own. So
+    ``cost_bp`` is an explicit parameter and callers pass GROSS.
+
+    Direction here is UNCERTIFIED against truth labels, which is why every headline
+    number is reported across a grid of ``a`` rather than at a point estimate.
     """
-    return float(net_bp) * (2.0 * float(accuracy) - 1.0)
+    return float(gross_bp) * (2.0 * float(accuracy) - 1.0) - float(cost_bp)

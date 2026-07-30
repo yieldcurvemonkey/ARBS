@@ -498,20 +498,29 @@ def capacity_curve(ledger: pd.DataFrame, volumes: pd.DataFrame, *,
 
 
 def net_of_costs_table(ledger: pd.DataFrame, attenuation=(0.6, 0.7, 0.8)) -> pd.DataFrame:
-    """Gross, net, and attenuation-scaled net per bp, with day-blocked t."""
+    """Gross, net, and attenuation-scaled net per bp, with day-blocked t.
+
+    The attenuated rows scale the GROSS edge and subtract the full cost, because the
+    round trip is paid whether or not the direction label was right. Attenuating the
+    net number would discount the cost too, overstating each row by
+    ``2 * cost * (1 - a)`` — see ``stats.attenuate``.
+    """
     if ledger.empty:
         return pd.DataFrame(columns=["measure", "mean_bp", "t", "stars", "n"])
     b = blocks_of(ledger)
-    rows = []
+    rows, mean_by = [], {}
     for label, col in (("gross", "gross_bp"), ("net of costs", "net_bp")):
         r = stats.cluster_mean_t(ledger[col].to_numpy(), b)
+        mean_by[col] = r["mean"]
         rows.append({"measure": label, "mean_bp": r["mean"], "t": r["t"],
                      "stars": stats.stars(r["t"]), "n": r["n"]})
-    base = rows[-1]["mean_bp"]
+    mean_cost = float(ledger["cost_bp"].mean()) if "cost_bp" in ledger.columns else 0.0
+    rows.append({"measure": "round-trip cost", "mean_bp": -mean_cost,
+                 "t": np.nan, "stars": "", "n": rows[-1]["n"]})
     for a in attenuation:
         rows.append({"measure": f"net, accuracy a={a:.2f}",
-                     "mean_bp": stats.attenuate(base, a),
-                     "t": np.nan, "stars": "", "n": rows[-1]["n"]})
+                     "mean_bp": stats.attenuate(mean_by["gross_bp"], a, mean_cost),
+                     "t": np.nan, "stars": "", "n": rows[0]["n"]})
     return pd.DataFrame(rows)
 
 
