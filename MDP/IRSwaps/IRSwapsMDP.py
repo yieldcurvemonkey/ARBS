@@ -1630,10 +1630,20 @@ class IRSwapsMDP(MarketDataProvider[_GenericPricable]):
                 return len(s)
 
             def flush(self) -> None:
-                if self._buffer:
-                    self._emit(self._buffer)
+                # A wrapper can outlive the stream it wraps: a per-day log context
+                # manager closes its file, then this object is flushed again at GC or
+                # interpreter shutdown. Python reports that as "Exception ignored in
+                # ... ValueError: I/O operation on closed file" -- harmless, but it
+                # puts a traceback in every worker's log, which teaches the reader to
+                # skip tracebacks. Suppressing output is all this class is for, so
+                # there is nothing to salvage by failing loudly here.
+                try:
+                    if self._buffer:
+                        self._emit(self._buffer)
+                        self._buffer = ""
+                    self._stream.flush()
+                except ValueError:
                     self._buffer = ""
-                self._stream.flush()
 
             def _emit(self, line: str) -> None:
                 if not IRSwapsMDP._should_suppress_ratelibs_solver_output(line):

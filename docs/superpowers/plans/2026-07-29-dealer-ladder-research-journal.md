@@ -515,3 +515,25 @@ two by which a real one could have been destroyed (sample-mismatched horse race,
 placebo). None was a crash, none was a type error, and no amount of re-running would have
 surfaced any of them — which is the argument for adversarial review of research code
 specifically, where the output is a number nobody can independently check.
+
+### C1' — a gap in `VINTAGE_SOURCES`, deliberately NOT closed mid-backfill (2026-07-30 02:30)
+
+While quieting a benign teardown traceback in `MDP/IRSwaps/IRSwapsMDP.py`
+(`_FilteredWriteStream.flush` on a stream the per-day log context manager had already closed —
+Python reports it as *Exception ignored in…*, and January's chunk log contains the same line and
+still finished `0 day-errors`, so it never failed anything) I checked whether that file feeds the
+content-hash vintage. **It does not**, which is why the edit was safe to make with the backfill
+running.
+
+But it *should*. `VINTAGE_SOURCES` includes `BARCHART_STIRF/risk.py` and `RLIRSwapCurve.py` while
+omitting `IRSwapsMDP.py`, which is the module that fetches the bars those two price against — an
+edit to its curve-fetch logic would change what gets written without bumping the vintage, which is
+exactly what the hash exists to prevent.
+
+**Deliberately deferred, with the reason.** Adding it now would change the vintage mid-run, which
+does two bad things at once: it splits the dataset across two vintages, and the next
+`--purge-stale-vintage` invocation would delete every day classified under the old one. So the
+addition belongs at the **start of the next backfill cycle**, not the end of this one — and it must
+be paired with a full re-classification, since after the addition the existing dataset reads as
+stale. Recorded here rather than fixed silently, because the hazard is in the sequencing, not the
+one-line change.
