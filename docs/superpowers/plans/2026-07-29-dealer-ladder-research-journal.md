@@ -1329,3 +1329,37 @@ is a slightly absurd sentence to have to write, and exactly the point.
 filter (matched the wrong line), the emptiness test (tested presence not quantity), the notebook
 audit regex (could not match uppercase), and this guard twice. Every one was found by running the
 check against an input whose answer I already knew. None would have been found by reading it.
+
+### Adversarial data-quality audit — response rule, written BEFORE the findings (13:45)
+
+Six agents are attacking the dataset along independent surfaces (session/bucket completeness,
+vintage provenance, referential integrity, value sanity, temporal integrity, distributional
+continuity), each finding is then handed to a separate agent whose job is to **refute** it, and a
+final critic is asked what nobody checked. The known-and-pending gaps are given to every agent up
+front so they cannot spend effort rediscovering them.
+
+**How I will respond is fixed now, before I know what they find.** Deciding afterwards is how an
+inconvenient finding becomes "expected behaviour".
+
+| severity | response — not negotiable after the fact |
+|---|---|
+| **blocks-the-study** | fix the data and re-run whatever depended on it, **before** the gate run. No gate result is reported on a dataset with an open finding at this level. |
+| **biases-a-result** | fix if fixable at the current code vintage; if not, it becomes a stated limitation in §8 **with its measured magnitude**, and every affected gate result carries it. |
+| **cosmetic** | record in the journal, do not fix, do not let it delay the run. |
+| **refuted** | record the claim and the refutation both. A refuted finding is evidence the audit was adversarial, and hiding it would make the clean surfaces look unearned. |
+
+Two commitments that matter more than the table.
+
+**A clean surface only counts if it names its checks.** An agent reporting "no problems found"
+without listing what it ran has told me nothing, and I will treat it as an un-audited surface rather
+than a clean one.
+
+**The critic's "what was not checked" is a finding in its own right.** If it names a plausible
+failure nobody tested, that gap goes into §8 as a limitation even if I never get to test it. The
+alternative — quietly enjoying six clean reports — is exactly the failure this whole engagement has
+been guarding against.
+
+**Sequencing.** The audit runs read-only and concurrently with the remediation. A watchdog is
+alerting on ungranted locks and on any transaction held past seven minutes, because a held read lock
+from a research connection is precisely what destroyed May, and there are now seven processes on
+this database at once.
