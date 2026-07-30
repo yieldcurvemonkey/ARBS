@@ -1054,3 +1054,48 @@ PASS, G2 producing its full explanatory headline, the cross-check correctly repo
 where hedging requires negative. ZQ likewise: LLS −16.2, peak rho −0.006. Four sessions is far too
 little to conclude anything and this is recorded only so it cannot look like a surprise later. But
 the direction of the early evidence is not favourable to the forced-hedge channel.
+
+### April marks failed at STARTUP, and the fix must NOT be applied yet (07:50)
+
+`marks rc=1`. Not a per-day failure — the phase died before touching a single day:
+
+```
+_stir_ladder_schema_v1.py line 51, in ensure_schema
+    cur.execute(stmt)
+psycopg2.errors.QueryCanceled: canceling statement due to statement timeout
+```
+
+`ensure_schema` re-asserts the idempotent DDL (`CREATE TABLE IF NOT EXISTS`, `ALTER TABLE ... ADD
+COLUMN IF NOT EXISTS`, `CREATE INDEX IF NOT EXISTS`) on **every phase invocation** — twenty-one times
+across seven chunks — against a remote Supabase instance, and DDL takes locks. So there are
+twenty-one chances to lose a whole phase to a lock wait on a schema that has existed since Phase A.
+That is the actual defect; the timeout is just how it surfaced.
+
+**April therefore has projections but NO EOD marks.** It does not touch the signal — the ladder
+prints and futures prices are what the study trades on — but marks are part of the stated dataset
+deliverable and the coverage report will show April at 0% marked.
+
+**Why the obvious fix is wrong right now.** Making `ensure_schema` tolerant means editing
+`_stir_ladder_schema_v1.py` or `backfill_stir_ladder.py`, and **both are in `VINTAGE_SOURCES`**. Any
+edit changes the content hash from `468474ca6f84`, which would split the dataset across two vintages
+mid-run and, worse, make every subsequent `--purge-stale-vintage` treat the first four months as
+stale. A one-line robustness fix would cost a full re-classification of the window.
+
+**Sequenced instead:**
+
+1. Leave the code untouched. May, June and July keep running at `468474ca6f84`.
+2. After the backfill finishes and DB contention drops, **re-run April marks with the unchanged
+   code**, so the new rows carry the same vintage as the rest.
+3. `dealer_ladder_coverage.py --strict` over the full window is the check that this actually closed —
+   it exits non-zero on any trading session with zero marks, so the gap cannot be forgotten by being
+   remembered.
+4. Only then, as a follow-up for the NEXT backfill cycle, make `ensure_schema` check
+   `information_schema` first and skip the DDL when the tables and columns already exist. Paired with
+   adding `MDP/IRSwaps/IRSwapsMDP.py` to `VINTAGE_SOURCES` (see C1'), since both are vintage-changing
+   edits and should land together, once, with a re-classification.
+
+**Pending remediation list** (the thing that must survive an interruption):
+
+- [ ] re-run April 2026 EOD marks at vintage `468474ca6f84`
+- [ ] `coverage --strict` over 2026-01-12 → 2026-07-29 and re-run any trading session it flags
+- [ ] deferred to next cycle: tolerant `ensure_schema` + `IRSwapsMDP.py` into `VINTAGE_SOURCES`
