@@ -48,11 +48,20 @@ def curve_implied_contract_rates(pricer, curve_name, grid, contracts) -> pd.Data
             rows[ts] = {b: np.nan for b, *_ in contracts}
             continue
         fixings = handle.index()
+        ref = pd.Timestamp(handle.reference_date())
         vals = {}
         for bucket, eff, mat, is_ser in contracts:
+            # Fixings are only needed when the accrual period STARTS before the
+            # curve's reference date -- true for the front monthly (ZQ) contract and
+            # essentially never for a quarterly IMM one. Passing them anyway costs a
+            # business-day mask over the full ~6,500-row fixings index per
+            # instrument per minute, which across 12 contracts x ~13,000 decisions
+            # dominates this loop.
+            needs_fixings = pd.Timestamp(eff) < ref
             try:
-                stirf = handle.build_stirf(effective_date=eff, maturity_date=mat,
-                                           is_ser=is_ser, fixings=fixings)
+                stirf = handle.build_stirf(
+                    effective_date=eff, maturity_date=mat, is_ser=is_ser,
+                    fixings=fixings if needs_fixings else None)
                 vals[bucket] = float(stirf.rate(curves=dense).real) * 100.0
             except Exception:
                 vals[bucket] = np.nan

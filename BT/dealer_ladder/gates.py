@@ -117,6 +117,9 @@ def load_context(conn, config=None, *, window=None, results_dir=None,
 
         curve_name = sconfig.CURVE_FOR["SOFR" if space == "FUTURES" else "FED_FUNDS"]
         space_contracts = [c for c in contracts if _space_of(c[0]) == space]
+        # warm BEFORE asking for implied rates: the backfill only warmed print
+        # minutes, and a cold decision-grid minute costs ~14s and ~24 vendor requests
+        warm_decision_grid(pricer, curve_name, grid, verbose=show_progress)
         implied_bp[space] = controls.curve_implied_contract_rates(
             pricer, curve_name, grid, space_contracts)
 
@@ -131,6 +134,36 @@ def load_context(conn, config=None, *, window=None, results_dir=None,
 
 def _space_of(bucket_key: str) -> str:
     return "FED_FUNDS" if str(bucket_key).startswith("FF") else "FUTURES"
+
+
+def warm_decision_grid(pricer, curve_name, grid, *, warm_jobs=8, verbose=True) -> dict:
+    """Warm every DECISION-grid minute for ``curve_name``, one bulk call per session.
+
+    Necessary because the backfill only ever warms the minutes prints ACTUALLY
+    happened at (~445/session), and the decision grid is a different set — 5-minute
+    marks across the session. A grid minute that is absent from an otherwise-present
+    store partition falls through to a full single-point build, which was measured at
+    ~14 s and ~24 vendor requests. Across 138 sessions x 96 decisions that is both
+    hours of wall clock and a quota burst large enough to throttle anything else
+    running.
+
+    Batched per session rather than in one enormous call so memory stays flat and a
+    failure costs one day, not the window.
+    """
+    from SDRUtils.stir_flow.curve_warm import warm_pricer
+
+    grid = pd.DatetimeIndex(grid)
+    et = grid.tz_convert("America/New_York") if grid.tz is not None else grid
+    days = pd.Series(et.date, index=grid)
+    totals = {"bulk_seeded": 0, "built": 0, "reused": 0, "failed": 0}
+    for day in pd.unique(days):
+        demand = {(curve_name, ts) for ts in grid[(days == day).to_numpy()]}
+        res = warm_pricer(pricer, demand, max_workers=warm_jobs)
+        for k in totals:
+            totals[k] += int(res.get(k, 0))
+    if verbose:
+        print(f"  warmed decision grid for {curve_name}: {totals}")
+    return totals
 
 
 # --------------------------------------------------------------------------
