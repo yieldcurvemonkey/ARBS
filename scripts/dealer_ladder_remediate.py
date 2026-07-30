@@ -78,19 +78,28 @@ def _orchestrator_running() -> bool:
     looks identical to a month that failed, so the script would dutifully "remediate" work
     that was never attempted.
 
-    The name filter is load-bearing: without `Name -eq 'bash.exe'` the PowerShell process
-    running this very query matches, because the search string appears in its own command
-    line. That self-match made the guard fire permanently and would have blocked the
-    remediation for ever -- a check that can never pass is as useless as one that never
-    fires.
+    Matched on the WRITER processes, not on the orchestrating shell's name. Two earlier
+    versions matched a command-line substring and both were wrong for the same underlying
+    reason -- any process whose command line merely MENTIONS the target matches it:
+
+      1. the first matched `backfill_dealer_ladder_window` without a name filter, so the
+         PowerShell process running the query matched itself;
+      2. the second added `Name -eq 'bash.exe'`, and then the shell LAUNCHING this script
+         matched, because the git commit message in that same command line happened to
+         quote the string while describing bug (1).
+
+    So the check now looks for the python processes that actually write rows -- the
+    `backfill_stir_direction*` / `backfill_stir_ladder` modules. Those are unambiguous, and
+    they are what would genuinely conflict. Safe against self-match because this runs ONCE
+    at startup, before this script spawns any phase of its own.
     """
     try:
         out = subprocess.run(
             ["powershell", "-NoProfile", "-Command",
              "(Get-CimInstance Win32_Process | Where-Object { "
-             "$_.Name -eq 'bash.exe' -and "
-             "$_.CommandLine -match 'backfill_dealer_ladder_window' } | "
-             "Measure-Object).Count"],
+             "$_.Name -eq 'python.exe' -and "
+             "$_.CommandLine -match '-m\\s+SDRUtils\\._swappulse_scripts\\.backfill_stir' "
+             "} | Measure-Object).Count"],
             capture_output=True, text=True, timeout=60)
         return int((out.stdout or "0").strip() or 0) > 0
     except Exception:
