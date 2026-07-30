@@ -1,0 +1,12 @@
+gate,pass,headline,single_vintage,timing_lead,direction_ok,flow_sign_ok,controls_used,independent_controls,sign_matches_hypothesis
+G0,,signed universe 28704 units; 1 code vintage(s); flip rate 0.398,True,,,,,,
+G1,True,"all arrival audits pass, poison audit exercised on 343116 future prints",,,,,,,
+G2,False,"LLS mean=-4.769 t=-2.45*, mean peak rho=-0.035 (hedging needs < 0), 104 sessions — no timing lead; forced-hedge channel UNSUPPORTED, so any price result must be relabelled flow/basis continuation",,False,True,False,,,
+G3,False,"signal t alone=0.14, vs our controls=0.50 (coef +0.01323), vs independent basis=0.84 — effect does not survive; relabel as basis/RV, not a dealer-inventory mechanism",,,,,"['basis_bp', 'abs_basis_bp', 'signed_basis_dv01', 'level_bp', 'slope_bp', 'curvature_bp', 'trailing_60m_bp', 'realized_vol_bp', 'amihud', 'tod_min', 'days_to_expiry', 'days_to_fomc']","['indep_basis_bp', 'abs_indep_basis_bp']",True
+G2,False,"LLS mean=-19.88 t=-1.78., mean peak rho=-0.005 (hedging needs < 0), 104 sessions — no timing lead; forced-hedge channel UNSUPPORTED, so any price result must be relabelled flow/basis continuation",,False,True,False,,,
+G3,False,"signal t alone=-1.47, vs our controls=-1.19 (coef -0.01176), vs independent basis=nan — coefficient is -0.01176, the OPPOSITE direction to the pre-registered hypothesis: this is a negative result, not a pass",,,,,"['basis_bp', 'abs_basis_bp', 'signed_basis_dv01', 'level_bp', 'slope_bp', 'curvature_bp', 'trailing_60m_bp', 'realized_vol_bp', 'amihud', 'tod_min', 'days_to_expiry', 'days_to_fomc']",[],False
+G2-cross-check,,leads NEITHER -> no mechanism evidence from the ordering test,,,,,,,
+G4-primary(in-sample),False,"net -0.5458bp/trade, t=-9.44***, n=1639 trades over 99 sessions, 28% long-rates (pass needs mean>0 and t>=3.0)",,,,,,,
+label-free,,"unsigned intensity: net -0.6402bp, t=-9.03***, n=1838",,,,,,,
+conditioning,,6/6 conditioners sign-consistent across terciles (1 of 7 could not be split),,,,,,,
+G5,False,gross -0.0458 - cost 0.5000 = net -0.5458bp/trade; at accuracy a=0.60 -> (2a-1)*gross - cost = -0.5092bp,,,,,,,

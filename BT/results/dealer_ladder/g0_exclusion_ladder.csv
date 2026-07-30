@@ -1,0 +1,8 @@
+,step,units,removed
+0,start: all projected prints,84201,0
+1,direction in PAID/RECEIVED,84201,0
+2,classification method in universe,53543,30658
+3,TICK_RULE excluded,53543,0
+4,curve-clean only,32719,20824
+5,whitelisted D2C venue only,28704,4015
+6,single code vintage,28704,0

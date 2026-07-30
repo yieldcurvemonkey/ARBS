@@ -1,0 +1,4 @@
+,participation,median_dv01_per_trade,total_dv01,n_trades_priced,n_trades_dropped,basis
+0,0.01,4274.5,9401895.5,1639,0,"traded-volume sensitivity over (entry, exit], NOT measured depth"
+1,0.05,21372.500000000004,47009477.5,1639,0,"traded-volume sensitivity over (entry, exit], NOT measured depth"
+2,0.1,42745.00000000001,94018955.0,1639,0,"traded-volume sensitivity over (entry, exit], NOT measured depth"
