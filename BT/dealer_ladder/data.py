@@ -356,6 +356,15 @@ def load_futures_minutes(symbols, start, end, *, fields=("Close", "Volume"),
     returned an EMPTY frame for the ZQ strip while the same symbols returned
     99-197 bars each individually; and one call yields every field at once instead
     of one call per field, which matters against a 55-request-per-minute quota.
+
+    ``cache_dir`` (or ``$DEALER_LADDER_BARS_CACHE``) memoises a SETTLED window to disk, so
+    re-running the gates costs nothing at the vendor. The key covers the whole
+    ``(symbols, start, end, fields)`` tuple, so it helps a REPEAT of the same window and
+    NOT an overlapping one — a Jan–Feb run does not warm a Jan–Jul run. Worth stating,
+    because the natural assumption is that it composes. Per-day shards would compose, but
+    they would have to reason about partial days and stitching, and the fetch is one vendor
+    call per symbol for the entire range (measured under a second for six symbols) — so the
+    saving would be small and the correctness risk real.
     """
     from MDP.STIRFutures.STIRFutureMDP import STIRFutureMDP
 
