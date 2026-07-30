@@ -412,3 +412,39 @@ def test_the_primary_verdict_states_the_position_balance(monkeypatch):
     out = gates.run_primary(_context(effect=0.7, seed=65), in_sample=True)
     assert "long-rates" in out["verdict"]["headline"]
     assert not out["directional_benchmark"].empty
+
+
+# =========== the placebo reference must BE the primary, not merely resemble it
+def test_placebo_reference_is_the_primary_verbatim(monkeypatch):
+    """run_placebos rebuilds the signal with buckets=rates.columns while load_context
+    built it from the contract calendar. Those sets differ whenever a contract returned
+    no bars, so the reference matched the primary only by coincidence -- and every one of
+    the five placebos is read as a distance FROM that reference."""
+    _no_write(monkeypatch)
+    ctx = _context(effect=0.7, seed=70)
+    primary = gates.run_primary(ctx, in_sample=True)
+    plac = gates.run_placebos(ctx, primary=primary)["placebos"]
+    ref = plac[plac["placebo"] == "none (reference)"].iloc[0]
+    prim = primary["result"].iloc[0]
+    for col in ("mean", "t", "n", "n_blocks"):
+        assert ref[col] == pytest.approx(prim[col]), col
+
+
+def test_placebos_still_work_without_a_primary(monkeypatch):
+    """The reference falls back to a recomputation, which is what standalone use needs."""
+    _no_write(monkeypatch)
+    plac = gates.run_placebos(_context(effect=0.7, seed=71))["placebos"]
+    assert len(plac) == 6
+    assert plac[plac["placebo"] == "none (reference)"]["n"].iloc[0] > 0
+
+
+def test_every_placebo_row_reports_its_position_balance(monkeypatch):
+    """The sign shuffle removes the PAID skew as well as the direction signal, so the
+    shuffled rule is near-balanced while the real one is ~80% one-sided. Without
+    share_long on every row a reader attributes the whole gap to lost information."""
+    _no_write(monkeypatch)
+    ctx = _context(effect=0.7, seed=72)
+    plac = gates.run_placebos(ctx, primary=gates.run_primary(ctx, in_sample=True))["placebos"]
+    assert "share_long" in plac.columns
+    assert plac["share_long"].notna().sum() >= 5
+    assert ((plac["share_long"].dropna() >= 0) & (plac["share_long"].dropna() <= 1)).all()

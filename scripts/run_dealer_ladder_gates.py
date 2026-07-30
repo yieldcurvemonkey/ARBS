@@ -123,7 +123,7 @@ def main() -> int:
                     {"mean": float(primary["result"]["mean"].iloc[0]),
                      "t": float(primary["result"]["t"].iloc[0])})
     stage("G4-staleness", lambda: gates.run_staleness_sensitivity(ctx))
-    stage("G4-placebos", lambda: gates.run_placebos(ctx))
+    stage("G4-placebos", lambda: gates.run_placebos(ctx, primary=primary))
     stage("G4-label-free", lambda: gates.run_label_free(ctx, ledger_sink=sink))
     stage("G4-conditioning", lambda: gates.run_conditioning(ctx, primary))
     if not args.skip_grid:

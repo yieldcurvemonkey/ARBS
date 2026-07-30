@@ -1042,8 +1042,25 @@ def _romano_wolf_over_variants(per_variant: dict, ctx) -> pd.DataFrame | None:
                              seed=ctx.config.stats.seed)
 
 
-def run_placebos(ctx, *, space=None) -> dict:
-    """The five pre-specified placebos, each with what firing would mean."""
+def run_placebos(ctx, *, space=None, primary=None) -> dict:
+    """The five pre-specified placebos plus the reference, each with what firing means.
+
+    Pass ``primary`` and its result becomes the reference row VERBATIM. Recomputing the
+    reference here instead makes it match only by coincidence: this function rebuilds the
+    signal with ``buckets=list(rates.columns)`` while ``load_context`` built it from the
+    contract calendar, and those two sets differ whenever a contract returned no bars. A
+    reference that drifts from the primary by even one bucket silently changes every one
+    of the five comparisons, since each is read as a distance from it.
+
+    Two reporting notes. Each row carries ``share_long``, because the sign-shuffle
+    placebo does not only remove the direction signal -- it also removes the PAID skew
+    that makes the real rule 80% one-sided, so the shuffled rule is near-balanced and
+    part of any gap between them is position balance rather than lost information. And
+    the placebos bootstrap at ``n_boot=300`` against the primary's 2000: means and
+    t-statistics are unaffected (they come from the clustered estimator, not the
+    bootstrap) but the interval widths are coarser and should not be compared across the
+    two.
+    """
     space = space or ctx.config.primary.target_space
     p = ctx.config.primary
     rates = ctx.rates_bp.get(space, pd.DataFrame())
@@ -1073,9 +1090,15 @@ def run_placebos(ctx, *, space=None) -> dict:
         return study.evaluate_trades(led, n_boot=300, seed=ctx.config.stats.seed)
 
     prints = ctx.prints
+    reference = None
+    if primary is not None:
+        res = primary.get("result")
+        if res is not None and len(res):
+            reference = {k: v for k, v in res.iloc[0].to_dict().items()
+                         if k != "segment"}
     rows = [
         {"placebo": "none (reference)", "expect": "the effect, if any",
-         **evaluate(prints)},
+         **(reference if reference is not None else evaluate(prints))},
         {"placebo": "sign shuffle within session",
          "expect": "destroyed; survival means intensity not direction",
          **evaluate(study.placebo_sign_shuffle(prints, ctx.config.stats.seed))},
@@ -1156,7 +1179,7 @@ def run_all(ctx, conn=None, *, run_lockout=False, label_limit=0,
                        {"mean": float(res["primary_is"]["result"]["mean"].iloc[0]),
                         "t": float(res["primary_is"]["result"]["t"].iloc[0])})
     res["staleness"] = run_staleness_sensitivity(ctx)
-    res["placebos"] = run_placebos(ctx)
+    res["placebos"] = run_placebos(ctx, primary=res["primary_is"])
     res["label_free"] = run_label_free(ctx, ledger_sink=ledger_sink)
     res["conditioning"] = run_conditioning(ctx, res["primary_is"])
     res["grid"] = run_grid(ctx, ledger_sink)
