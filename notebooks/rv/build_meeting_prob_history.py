@@ -53,6 +53,12 @@ def parse_args(argv=None):
     p.add_argument("--boot-n", type=int, default=25)
     p.add_argument("--min-oi", type=float, default=100.0)
     p.add_argument("--min-quotes", type=int, default=8)
+    # Channel 1 can only live where the lattice is small enough to see: deep
+    # contracts carry 8-9 resolved meetings (2^9 atoms, seconds per fit) whose
+    # exchangeable high-dim refit is meaningless and always saturated. Cap the
+    # panel to the region where the question is even posed.
+    p.add_argument("--max-resolved", type=int, default=6)
+    p.add_argument("--max-dte", type=int, default=300)
     p.add_argument("--merge", action="store_true")
     return p.parse_args(argv)
 
@@ -146,6 +152,9 @@ def main(argv=None) -> int:
         for sym in day_syms:
             cm = split_meetings(d, sym, ladder)
             if cm is None or cm.n_resolved == 0:
+                continue
+            if cm.n_resolved > a.max_resolved \
+                    or (cm.expiry - d).days > a.max_dte:
                 continue
             f = fwd.get((pd.Timestamp(ts), sym))
             if f is None or not np.isfinite(f):
