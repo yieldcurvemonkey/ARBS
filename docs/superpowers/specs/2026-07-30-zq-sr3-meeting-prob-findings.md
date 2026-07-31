@@ -80,6 +80,18 @@ settles with the day-after-the-hold repricing visible.
 - Channel mix and episode structure: …
 - Channel-1 backtest grid, sign test, cost scenarios, verdict: …
 
+### 5. The ladder must keep the current month's meeting — and doing so is noisy
+
+The first implementation started the FedWatch range at the month after
+``as_of``, silently dropping each meeting for the ~three weeks before its
+decision — the event window. Fixed and fixture-pinned (mid-September 2022
+vantage reproduces the CME worked example). The residual limit: intra-month
+jump extraction divides by the post-meeting day count, amplifying ZQ price
+noise late in the month — the 2024-09-17 read is P(50bp) = 78% against
+official FedWatch's ~64% (both on the right side of the coin flip; the realized
+outcome was 50). A realized-EFFR-anchored current-month treatment is the
+upgrade path.
+
 ## Honest limits
 
 - Daily EOD marks; the design conversation itself predicted the cross-market
