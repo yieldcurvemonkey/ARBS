@@ -16,24 +16,99 @@ cells, 53 outputs, 4 figures, 0 unrun, 0 errors; 53s)
 
 **Neither. It does not pay, and the tick lattice is not what stops it.**
 
-**VERDICT: DEAD.** 0 of 6 league rows ALIVE, 0 with a positive grid median,
+**VERDICT: DEAD.** 0 of 12 league rows ALIVE, 0 with a positive grid median,
 median DSR 0.0000.
 
 The **oracle ceiling** is the whole story and it says stop before any signal work:
 
 | structure | round trip | best oracle net, h=21, **across the entire penalty sweep** |
 |---|---:|---:|
-| M1-M2 calendar spread | 1.0bp | **+0.093bp** |
-| 3-month butterfly | 2.0bp | **−0.778bp** |
+| M1-M2 calendar spread | 1.0bp | +0.093bp |
+| **meeting-indexed spread** | **1.0bp** | **+0.522bp** |
+| calendar butterfly | 2.0bp | -0.778bp |
+| **meeting-indexed butterfly (the FOMC 1/2/3)** | **2.0bp** | **-0.111bp** |
 
 With **perfect foresight of the direction**, at the most favourable smoothing
-available, the FF kink earns nine hundredths of a basis point per trade on the
-cheapest structure it has and loses on everything else. The sweep spans every
-definition of the kink between "fit every meeting jump exactly" and "the Fed is
-a metronome", so this is not a statement about one parameterisation.
+available, the best FF kink structure earns **0.52bp per trade**. The sweep spans
+every definition of the kink between "fit every meeting jump exactly" and "the
+Fed is a metronome", so this is not a statement about one parameterisation.
 
-For comparison, SR3's oracle was 2.378bp against a 2.0bp round trip — marginal,
-and it still failed. FF's is not marginal.
+Put it in the units a rule has to deliver. The meeting-residual spread moves
+1.52bp on average over 21 days against a 1.0bp round trip, and a rule right `p` of
+the time nets `(2p−1)·move − cost`. Break-even needs
+
+> **p > 83% of trades called correctly.**
+
+SR3's 12m fly needed 57% and still produced nothing ALIVE. SR3's headline oracle
+was 2.378bp against a 2.0bp round trip — marginal, and it failed anyway. FF's is
+not marginal.
+
+⚠ **A correction to an earlier version of this document.** It reported the
+oracle as **+0.093bp** and tested only **calendar-consecutive** legs
+(`codes[i:i+n]`). That is not the structure a desk trades — see §0 below — and
+indexing by meeting instead is worth a factor of **5.6** on the spread and turns
+the raw butterfly's oracle from negative to positive. The verdict is unchanged;
+the number was wrong and understated the FF kink.
+
+## 0. Index by MEETING, not by month
+
+A STIR desk does not build FF structures from consecutive delivery months. It
+indexes by **meeting**, using the contract whose month spends the largest share
+of itself at that decision's rate. As of 2026-07-30 the next three decisions are
+Sep-16, Oct-28 and Dec-09, and the FOMC 1/2/3 fly is
+
+> **ZQV26 / ZQX26 / ZQF27** — October, November and January-27.
+
+**December is not in it.** ZQZ26 splits 22/31 at the post-December rate against
+9/31 at the post-October rate, so it reads neither decision cleanly — and
+January reads December *better* than December does (27/31 against 22/31). The
+reader of meeting `k` is a one-line consequence of the exposure matrix:
+`share[k] = W[:, k] − W[:, k+1]`, days at or after `k` minus days at or after
+`k+1`.
+
+Over the 77 decisions from 2018-01 to 2027-07, **every one gets its own
+contract** — 76 readable transitions, 76 distinct readers, zero shared — and the
+least clean read is still **73%** of a month (Nov-18), with a median of a full
+1.000. That is not guaranteed a priori, since a ~6-week regime window need not
+contain a whole calendar month, so the builder collapses consecutive duplicate
+readers as a guard; it never fires, because no calendar month in the sample
+contains two decisions.
+
+⚠ An intermediate probe reported "111 meetings → 77 readers". That was an
+artifact of passing a meeting list wider than the contract strip: meetings
+outside the strip's reach all take their `argmax` on an edge contract and look
+like shared readers. The reader map must be built against `lab["meetings"]`.
+
+The difference is not cosmetic. In loadings on the December decision:
+
+| | loading |
+|---|---:|
+| meeting fly `2·Nov − Oct − Jan` | **−1.00** |
+| calendar fly `2·Nov − Oct − Dec` | −0.71 |
+
+The calendar-consecutive version is a **diluted** version of the same trade, and
+it measures that way on every axis, for identical contract counts and identical
+cost:
+
+| | median differential exposure | pooled sd | ticks | raw oracle net, h=21 |
+|---|---:|---:|---:|---:|
+| calendar spread | 0.58 | 9.03bp | 18.1 | +1.22bp |
+| **meeting spread** | **1.00** | **12.90bp** | **25.8** | **+2.29bp** |
+| calendar fly | 0.84 | 5.12bp | 10.2 | -0.49bp |
+| **meeting fly** | **1.00** | **7.24bp** | **14.5** | **+0.16bp** |
+
+The raw FF **fly crosses zero** on this switch: a calendar-consecutive fly
+cannot pay its round trip even with perfect foresight, and a meeting-indexed one
+can. This is the same lever that made wider SR3 spacings better — more of the
+thing you want per unit of cost — and it is the single largest measurement
+correction in this lab.
+
+It does not rescue the kink, because the residual is what is left *after* a
+meeting-step model, and a cleaner structure is also a structure the model
+explains better. In the league table the meeting-indexed families are the best
+rows the FF lab has — the raw meeting spread runs **+121.8bp** over
+289 trades against the calendar version's +62.2bp — and they are still
+`SELECTION-ARTIFACT`, with grid medians of -222bp and DSR 0.001.
 
 ## Why — and it is the opposite of the expected reason
 
@@ -80,15 +155,23 @@ about the model and not the market. At the stiff end the policy path is a
 straight line and the residual is everything a perfectly regular Fed cannot
 express. **The oracle is below cost at every point in between.**
 
-| lam | residual sd | ticks | spread oracle h21 | fly oracle h21 | spread P(beat cost) |
-|---:|---:|---:|---:|---:|---:|
-| 0 | 0.189 | 0.38 | −0.794 | −1.597 | 0.014 |
-| 0.1 | 0.800 | 1.60 | −0.460 | −1.146 | 0.150 |
-| 1 | 1.106 | 2.21 | −0.285 | −0.976 | 0.222 |
-| 10 | 1.750 | 3.50 | −0.100 | −0.871 | 0.280 |
-| 100 | 2.294 | 4.59 | **+0.059** | −0.795 | 0.328 |
-| 1e3 | 2.389 | 4.78 | **+0.089** | −0.780 | 0.337 |
-| 1e5 | 2.400 | 4.80 | **+0.093** | −0.778 | 0.338 |
+Oracle net of cost, h=21, for all four structures. The meeting-indexed columns
+are the ones that matter (§0); the calendar columns are kept because they are
+what the first pass reported.
+
+| lam | residual sd | ticks | cal. spread | **mtg spread** | cal. fly | **mtg fly** |
+|---:|---:|---:|---:|---:|---:|---:|
+| 0 | 0.189 | 0.38 | −0.794 | −0.914 | −1.597 | −1.859 |
+| 0.1 | 0.800 | 1.60 | −0.460 | −0.314 | −1.146 | −0.764 |
+| 1 | 1.106 | 2.21 | −0.285 | −0.042 | −0.976 | −0.429 |
+| 10 | 1.750 | 3.50 | −0.100 | **+0.240** | −0.871 | −0.254 |
+| 100 | 2.294 | 4.59 | **+0.059** | **+0.474** | −0.795 | −0.136 |
+| 1e3 | 2.389 | 4.78 | **+0.089** | **+0.517** | −0.780 | −0.114 |
+| 1e5 | 2.400 | 4.80 | **+0.093** | **+0.522** | −0.778 | −0.111 |
+
+Both spread columns cross zero and neither fly does, at the same place in the
+sweep — the meeting-indexed one is simply a factor of ~5.6 further along. The
+shape of the curve is a property of the *model*, not of the packaging.
 
 The saturation trap is worth naming because the SR3 lab fell into a version of
 it: an unpenalised residual is small *by construction* and reporting it as "the
@@ -237,20 +320,29 @@ depth assumption being made.
 
 ## 8. What I would test next
 
-1. **Stop looking for an FF kink; the FF *meeting* trade is the live object.**
-   The high-exposure M1-M2 spread has an oracle of +1.55bp against a 1.0bp round
-   trip. Nothing in this lab predicts its direction, but the pond is real and
-   the structure is the cleanest policy expression in the listed complex. That
-   is a *forecasting* problem, not an RV one, and it wants a different lab.
-2. **The SR3↔FF cross-market kink** (the SERFF basis kink) was a stretch goal
+1. **Stop looking for an FF kink; the FF *meeting* trade is the live object,
+   and it should be built on meeting-indexed legs.** The meeting-indexed spread
+   has a raw oracle of **+2.29bp** against a 1.0bp round trip — 1.9× the
+   calendar-consecutive version — and 64% of its 21-day moves clear the cost.
+   Nothing in this lab predicts its direction, but the pond is real and the
+   structure is the cleanest policy expression in the listed complex. That is a
+   *forecasting* problem, not an RV one, and it wants a different lab.
+2. **Meeting-indexed legs everywhere else, too.** The reader map in
+   `zq_kink_fade_common.meeting_reader_map` is eight lines of arithmetic on the
+   exposure matrix and it moved every dispersion statistic in this lab by 30–40%.
+   Any future FF or SERFF work should start from it rather than from
+   `codes[i:i+n]`. The same question is open for SR3: an IMM quarter contains
+   1–2 meetings, so "which contract reads meeting k" is fuzzier there, but the
+   3m butterfly's weak differential exposure suggests it is worth asking.
+3. **The SR3↔FF cross-market kink** (the SERFF basis kink) was a stretch goal
    conditional on 1–2 surviving. They did not, so it was not run. It is also the
    one FF structure whose residual could plausibly be larger, because the two
    complexes read the same meetings through different windows and the basis has
    its own dynamics — `BT/serff` already models it.
-3. **Fix or wrap the `is_ser` root predicate** so `ZQ` selects the averaged spec
+4. **Fix or wrap the `is_ser` root predicate** so `ZQ` selects the averaged spec
    by construction rather than by the caller remembering. A one-line set
    membership, and the current safety is that rateslib happens to raise.
-4. **Turn-of-month EFFR.** The residual this lab measures is whatever a
+5. **Turn-of-month EFFR.** The residual this lab measures is whatever a
    policy-step path cannot express, and month-end/quarter-end EFFR pressure is a
    known, dateable part of it. Modelling it would shrink the residual further —
    which makes the trade *worse*, not better, and is worth confirming for that
@@ -265,8 +357,13 @@ calendar and §22103's carry rule; `zq_exposure_vector` / `zq_exposure_matrix` /
 `zq_regime_weights` (a partition of the month's days, summing to exactly 1);
 `expected_settle_rate`; `round_settle_rate` (decimal, ties up);
 `compounding_bias_bp`; `half_tick_onset` / `tick_bp` / `round_trip_bp` encoding
-§22102.C exactly. **27 synthetic no-network tests**, every assertion derived from
-the rulebook or hand-arithmetic rather than from the implementation's own output.
+§22102.C exactly. **31 synthetic no-network tests**, every assertion derived from
+the rulebook or hand-arithmetic rather than from the implementation's own output
+— including the meeting-indexing golden test (the 2026-07-30 FOMC 1/2/3 fly is
+ZQV26/ZQX26/ZQF27, taken from desk convention, not from this code) and the two
+calendar facts that make meeting-indexing well-defined at all: no calendar month
+in 2018–2027 holds two decisions, and every decision's best reader carries at
+least 70% of a month.
 
 **`notebooks/rv/build_zq_panel.py`** — the ZQ panel builder.
 
@@ -275,9 +372,12 @@ block from `sfr_fly_meanrev_common` unchanged so all three labs are graded by
 identical code, plus `load_zq`, `zq_structures` (with the differential-exposure
 degeneracy measure), `meeting_residual_panel_zq`, `zq_cost_panel` (masked to live
 cells), `implied_jump_panel`, `zq_shadow_block` (a spread's shadows are its
-outright legs) and `zq_run_family`.
+outright legs), `zq_run_family`, and — added after the first pass —
+`meeting_reader_map` / `zq_meeting_structures`, which index legs by FOMC decision
+instead of by delivery month.
 
 **Probes, all runnable:** `_probe_zq_curve.py` (the golden test),
 `_probe_zq_oracle.py` (the first pass, with the wrong degeneracy criterion, kept
 because the record of it being wrong is the point), `_probe_zq_oracle2.py`
-(the corrected criterion), `_probe_zq_oracle3.py` (the penalty sweep).
+(the corrected criterion), `_probe_zq_oracle3.py` (the penalty sweep),
+`_probe_zq_meeting_fly.py` (the meeting-indexed structures).

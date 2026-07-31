@@ -143,6 +143,23 @@ maximally stiff.
 
 **F3 — the FF kink fly.** The same residual on a `1/-2/1` three-month package.
 
+**F4/F5/F6 — the same three, MEETING-INDEXED.** Added after the first pass, and
+they should have been the *first* three. F1–F3 build legs from consecutive
+*delivery months* (`codes[i:i+n]`); a STIR desk builds them from consecutive
+*meeting readers* — the contract whose month spends the largest share of itself
+at each decision's rate — which skips the blended months entirely. As of
+2026-07-30 the FOMC 1/2/3 fly is `2·ZQX26 − ZQV26 − ZQF27` (Oct/Nov/**Jan**),
+and December is not in it: it splits 22/31 against 9/31 and reads neither
+decision cleanly, while January reads December better (27/31) than December
+does. The reader of meeting `k` falls straight out of the exposure matrix as
+`W[:, k] − W[:, k+1]`, so this is arithmetic, not a search.
+
+For identical contract counts and identical cost the meeting-indexed versions
+carry a full unit of differential exposure against 0.58/0.84, run 25.8/14.5
+ticks of dispersion against 18.1/10.2, and lift the raw oracle from +1.22 to
++2.29bp (spread) and from −0.49 to **+0.16bp** (fly — it crosses zero). The
+calendar-consecutive package is a *diluted* version of the same trade.
+
 **Degeneracy.** A structure is pinned only when its legs have *identical*
 exposure vectors, i.e. `max_m |Σ_j w_j·W[leg_j,m]| = 0`. The obvious alternative
 — "is there a meeting between the two delivery-month starts" — is wrong, and the

@@ -35,6 +35,7 @@ from RVUtils.MeanRev.ff import (
     zq_exposure_vector,
     zq_regime_weights,
 )
+from RVUtils.MeanRev.meetings import fomc_decisions
 
 D = datetime.date
 
@@ -387,3 +388,118 @@ def test_day_regime_index_counts_meetings_in_force():
     assert idx.size == 31
     assert (idx[:9] == 0).all()
     assert (idx[9:] == 1).all()
+
+
+# ---------------------------------------------------------------------------
+# meeting-INDEXED structures -- the ones a desk actually trades
+# ---------------------------------------------------------------------------
+
+def test_the_desk_fomc_123_fly_as_of_2026_07_30():
+    """The golden test for meeting indexing, taken from desk convention.
+
+    As of 2026-07-30 the next three decisions are Sep-16, Oct-28 and Dec-09, and
+    a desk's "FOMC 1/2/3 fly" is built on the contracts that READ them:
+    **ZQV26 / ZQX26 / ZQF27** -- October, November and January-27.
+
+    **December is not in it.** ZQZ26 splits 22/31 at the post-December rate and
+    9/31 at the post-October rate, so it reads neither decision cleanly, and the
+    January contract reads December better (27/31) than December does (22/31).
+
+    A calendar-consecutive fly on (Oct, Nov, Dec) is a DIFFERENT and weaker
+    object: it loads the December decision at -0.71 instead of -1.00.
+    """
+    asof = D(2026, 7, 30)
+    meetings = fomc_decisions(D(2017, 1, 1), D(2031, 12, 31))
+    nxt = [m for m in meetings if m > asof][:3]
+    assert nxt == [D(2026, 9, 16), D(2026, 10, 28), D(2026, 12, 9)]
+
+    candidates = ["U26", "V26", "X26", "Z26", "F27", "G27"]
+
+    def regime_share(code, k):
+        """Day share of `code`'s month spent at meeting k's rate."""
+        w = delivery_window(code)[:2]
+        e = zq_exposure_vector(w, meetings)
+        i = meetings.index(k)
+        return float(e[i] - e[i + 1])
+
+    readers = [max(candidates, key=lambda c: regime_share(c, k)) for k in nxt]
+    assert readers == ["V26", "X26", "F27"], readers
+
+    # the numbers behind it, hand-checkable
+    assert regime_share("V26", D(2026, 9, 16)) == pytest.approx(28 / 31, abs=1e-9)
+    assert regime_share("X26", D(2026, 10, 28)) == pytest.approx(1.0)
+    assert regime_share("Z26", D(2026, 12, 9)) == pytest.approx(22 / 31, abs=1e-9)
+    assert regime_share("F27", D(2026, 12, 9)) == pytest.approx(27 / 31, abs=1e-9)
+    # January reads December better than December does -- that is why Z26 is skipped
+    assert regime_share("F27", D(2026, 12, 9)) > regime_share("Z26", D(2026, 12, 9))
+
+
+def test_meeting_fly_loads_the_decision_harder_than_the_calendar_fly():
+    """Why the distinction is worth the trouble, in one assertion.
+
+    Both flies are 4 contracts and cost 2.0bp. The meeting-indexed one carries
+    a full unit of the December decision; the calendar-consecutive one carries
+    0.71 of it, because December only spends 22/31 of itself at the new rate.
+    """
+    meetings = fomc_decisions(D(2017, 1, 1), D(2031, 12, 31))
+    i_dec = meetings.index(D(2026, 12, 9))
+    e = {c: zq_exposure_vector(delivery_window(c)[:2], meetings)
+         for c in ("V26", "X26", "Z26", "F27")}
+
+    meeting_fly = 2 * e["X26"] - e["V26"] - e["F27"]        # Oct, Nov, Jan
+    calendar_fly = 2 * e["X26"] - e["V26"] - e["Z26"]       # Oct, Nov, Dec
+    assert meeting_fly[i_dec] == pytest.approx(-1.0)
+    assert calendar_fly[i_dec] == pytest.approx(-22 / 31, abs=1e-9)
+    assert abs(meeting_fly[i_dec]) > abs(calendar_fly[i_dec])
+
+    # both are still level-neutral: a parallel shift of every regime moves neither
+    assert float(np.sum([2.0, -1.0, -1.0])) == pytest.approx(0.0)
+
+
+def test_no_calendar_month_holds_two_fomc_decisions():
+    """The fact that makes meeting-indexing well-defined at all.
+
+    A ZQ contract is one calendar month, so "the contract that reads meeting k"
+    is only a sensible idea if a month never has to read two. Over 2018-2027 no
+    calendar month contains two decisions -- the Fed's ~6-8 week spacing
+    guarantees it in practice, though nothing in the rulebook does.
+
+    This is a claim about the CALENDAR, asserted independently of the reader
+    map, so it fails if the schedule is ever edited into an impossible shape.
+    """
+    from RVUtils.MeanRev.meetings import fomc_decisions
+    ms = fomc_decisions(D(2018, 1, 1), D(2027, 12, 31))
+    months = [(m.year, m.month) for m in ms]
+    dupes = {k for k in months if months.count(k) > 1}
+    assert not dupes, f"months with two decisions: {sorted(dupes)}"
+
+    # and the spacing that causes it
+    gaps = [(b - a).days for a, b in zip(ms, ms[1:])]
+    assert min(gaps) >= 28, f"two decisions inside 28 days: min gap {min(gaps)}"
+
+
+def test_a_month_always_reads_its_decision_by_a_clear_majority():
+    """No meeting is read by a coin-flip of a month.
+
+    If some decision's best reader only carried, say, 55% of a month, the
+    "meeting-indexed" label would be a fiction for that node. The measured floor
+    over 2018-2027 is 73% (Nov-18: the 2018-11-08 decision takes effect on the
+    9th, leaving 22 of 30 November days at the new rate).
+    """
+    from RVUtils.MeanRev.meetings import fomc_decisions
+    ms = fomc_decisions(D(2018, 1, 1), D(2027, 12, 31))
+    codes = [f"{c}{y % 100:02d}" for y in range(2018, 2028)
+             for c in "FGHJKMNQUVXZ"]
+    exps = {c: zq_exposure_vector(delivery_window(c)[:2], ms) for c in codes}
+
+    worst = 1.0
+    for i, m in enumerate(ms[:-1]):
+        shares = [float(e[i] - e[i + 1]) for e in exps.values()]
+        worst = min(worst, max(shares))
+    assert worst > 0.70, f"a decision's best reader carries only {worst:.3f}"
+
+    # the specific floor, pinned by hand: Nov-18 has 30 days, the 2018-11-08
+    # decision is effective the 9th, so 22/30 of the month sits at the new rate
+    i = ms.index(D(2018, 11, 8))
+    assert float(exps["X18"][i] - exps["X18"][i + 1]) == pytest.approx(22 / 30,
+                                                                      abs=1e-9)

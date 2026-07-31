@@ -362,6 +362,99 @@ print(f"""
   carrying a policy decision, which is a directional meeting trade and not a
   kink fade. Section 4 asks whether the KINK specifically has any.""")
 
+
+# %% [markdown]
+# ### 3b. Meeting-indexed structures — what a desk actually trades
+#
+# Everything above indexes by **delivery month**. A STIR desk does not: it
+# indexes by **meeting**, and uses the contract whose month spends the largest
+# share of itself at that decision's rate.
+#
+# As of 2026-07-30 the next three decisions are Sep-16, Oct-28 and Dec-09, and
+# the "FOMC 1/2/3 fly" is built on **ZQV26 / ZQX26 / ZQF27** — October, November
+# and January-27. **December is skipped.** It splits 22/31 at the post-December
+# rate against 9/31 at the post-October rate and reads neither decision cleanly,
+# and January reads December *better* than December does (27/31 against 22/31).
+#
+# That makes the meeting fly a different object from the calendar fly, and the
+# difference is measurable in the only units that matter — how much of a decision
+# the package carries:
+#
+# | | loading on the Dec-09 decision |
+# |---|---:|
+# | meeting fly `2·Nov − Oct − Jan` | **−1.00** |
+# | calendar fly `2·Nov − Oct − Dec` | −0.71 |
+#
+# The calendar-consecutive version is a **diluted** version of the same trade.
+# This is the same lever that made wider SR3 spacings better: more of the thing
+# you want per unit of cost.
+
+# %%
+readers = Z.meeting_reader_map(lab)
+_show = readers[(readers["meeting"] >= datetime.date(2026, 6, 1))
+                & (readers["meeting"] <= datetime.date(2027, 6, 30))]
+print("MEETING -> READER CONTRACT")
+print(_show.to_string(index=False))
+
+_asof = datetime.date(2026, 7, 30)
+_nxt = [m for m in lab["meetings"] if m > _asof][:3]
+_got = ["ZQ" + readers.set_index("meeting").loc[m, "reader"] for m in _nxt]
+print(f"\n  as of {_asof}, the next three decisions are {[str(d) for d in _nxt]}")
+print(f"  the FOMC 1/2/3 fly is {' / '.join(_got)}")
+print(f"  matches the desk convention ZQV26/ZQX26/ZQF27: "
+      f"{_got == ['ZQV26', 'ZQX26', 'ZQF27']}")
+_span = [k for k in lab["codes"]
+         if datetime.date(2026, 10, 1) <= lab["windows"][k][0] <= datetime.date(2027, 1, 1)]
+print(f"  months in that span reading no meeting cleanly: "
+      f"{[c for c in _span if 'ZQ' + c not in _got]}")
+print(f"\n  {len(readers)} readable transitions -> {readers['reader'].nunique()} distinct readers "
+      f"({int(readers['reader'].duplicated().sum())} shared)")
+print(f"  cleanliness of the read: min {readers['day_share'].min():.3f}, "
+      f"median {readers['day_share'].median():.3f}")
+print(f"  least clean: "
+      f"{readers.nsmallest(3, 'day_share')[['meeting', 'reader_month', 'day_share']].to_dict('records')}")
+print("""
+  Every decision in this sample gets its OWN contract, and the worst read is
+  still 73% of a month. That is not guaranteed a priori -- a ~6-week regime
+  window need not contain a whole calendar month -- so the builder collapses
+  consecutive duplicate readers as a guard. It never fires here, because no
+  calendar month in 2018-2027 contains two decisions.""")
+
+# %%
+m_spread = Z.zq_meeting_structures(lab, n_legs=2)
+m_fly = Z.zq_meeting_structures(lab, n_legs=3)
+rows = []
+for nm, st in (("calendar spread", spread), ("MEETING spread", m_spread),
+               ("calendar fly", fly), ("MEETING fly", m_fly)):
+    lv = st["levels"]
+    d = lv.diff().stack()
+    p = Z.move_profile(lv, None, horizons=(21,),
+                       round_trip_bp=st["cost_bp"]).iloc[0]
+    rows.append({"structure": nm, "n_keys": lv.shape[1], "cost_bp": st["cost_bp"],
+                 "diff_exposure_median": float(st["diff_exposure"].median()),
+                 "sd_bp": float(lv.stack().std()),
+                 "sd_ticks": float(lv.stack().std() / ZQ_TICK_BP),
+                 "pct_unchanged": float((d.abs() < 1e-9).mean()),
+                 "absmove_h21": p["mean_abs_bp"],
+                 "oracle_net_h21": p["oracle_net_bp"],
+                 "p_beat_cost": p["p_beat_cost"]})
+mix = pd.DataFrame(rows)
+print("CALENDAR-INDEXED vs MEETING-INDEXED (same costs, same engine)")
+print(mix.round(3).to_string(index=False))
+mix.to_csv(Z.DATA_DIR / "meeting_vs_calendar.csv", index=False)
+print(f"""
+  Indexing by meeting is strictly better on every axis, because it stops
+  spending legs on months that read nothing:
+
+    spread   differential exposure {mix.loc[0, 'diff_exposure_median']:.2f} -> {mix.loc[1, 'diff_exposure_median']:.2f},  sd {mix.loc[0, 'sd_bp']:.2f} -> {mix.loc[1, 'sd_bp']:.2f}bp,
+             oracle {mix.loc[0, 'oracle_net_h21']:+.2f} -> {mix.loc[1, 'oracle_net_h21']:+.2f}bp
+    fly      differential exposure {mix.loc[2, 'diff_exposure_median']:.2f} -> {mix.loc[3, 'diff_exposure_median']:.2f},  sd {mix.loc[2, 'sd_bp']:.2f} -> {mix.loc[3, 'sd_bp']:.2f}bp,
+             oracle {mix.loc[2, 'oracle_net_h21']:+.2f} -> {mix.loc[3, 'oracle_net_h21']:+.2f}bp
+
+  The FF FLY crosses zero on this switch: a calendar-consecutive fly cannot pay
+  its round trip even with perfect foresight, and a meeting-indexed one can --
+  barely. That is the correction this section exists to make.""")
+
 # %% [markdown]
 # ## 4. The FF kink, and the saturation trap
 #
@@ -386,7 +479,8 @@ for lam in CONFIG["lam_sweep"]:
     resid_by_lam[lam] = r
     row = {"lam": lam, "resid_sd_bp": float(r.stack().std()),
            "resid_sd_ticks": float(r.stack().std() / ZQ_TICK_BP)}
-    for nm, st in (("spread", spread), ("fly", fly)):
+    for nm, st in (("spread", spread), ("fly", fly),
+                   ("m_spread", m_spread), ("m_fly", m_fly)):
         w = st["weights"]
         lv = {}
         for key in st["levels"].columns:
@@ -403,9 +497,10 @@ for lam in CONFIG["lam_sweep"]:
         row[f"{nm}_pbeat"] = p["p_beat_cost"]
     rows.append(row)
     print(f"  lam={lam:<9g} residual {row['resid_sd_bp']:6.3f}bp "
-          f"({row['resid_sd_ticks']:5.2f} ticks)   spread oracle "
-          f"{row['spread_oracle_h21']:+7.3f}   fly oracle "
-          f"{row['fly_oracle_h21']:+7.3f}", flush=True)
+          f"({row['resid_sd_ticks']:5.2f}t)  calendar spread {row['spread_oracle_h21']:+6.3f}"
+          f"  MEETING spread {row['m_spread_oracle_h21']:+6.3f}"
+          f"  calendar fly {row['fly_oracle_h21']:+6.3f}"
+          f"  MEETING fly {row['m_fly_oracle_h21']:+6.3f}", flush=True)
 sweep = pd.DataFrame(rows)
 sweep.to_csv(Z.DATA_DIR / "residual_lambda_sweep.csv", index=False)
 print()
@@ -437,16 +532,24 @@ THE SECOND AND DECISIVE DECISION POINT
      3-month fly    raw sd {raw_fly_sd:6.2f}bp -> residual {stiff['fly_sd_bp']:5.2f}bp   model explains {exp_fl:5.1f}%
 
   BEST ORACLE ACROSS THE ENTIRE SWEEP, net of the round trip:
-     spread  {sweep['spread_oracle_h21'].max():+.3f} bp   (cost {spread['cost_bp']}bp)
-     fly     {sweep['fly_oracle_h21'].max():+.3f} bp   (cost {fly['cost_bp']}bp)
+     calendar spread  {sweep['spread_oracle_h21'].max():+.3f} bp   (cost {spread['cost_bp']}bp)
+     MEETING  spread  {sweep['m_spread_oracle_h21'].max():+.3f} bp   (cost {m_spread['cost_bp']}bp)
+     calendar fly     {sweep['fly_oracle_h21'].max():+.3f} bp   (cost {fly['cost_bp']}bp)
+     MEETING  fly     {sweep['m_fly_oracle_h21'].max():+.3f} bp   (cost {m_fly['cost_bp']}bp)
 
-  With PERFECT foresight of the direction, at the most favourable smoothing the
-  FF kink earns nine hundredths of a basis point per trade on the cheapest
-  structure and loses on every other. There is no signal quality that rescues
-  this, and no definition of the kink that changes it -- the sweep spans every
-  definition between "fit every jump" and "the Fed is a metronome".
+  Indexing by meeting is worth a factor of {sweep['m_spread_oracle_h21'].max() / max(sweep['spread_oracle_h21'].max(), 1e-9):.1f} on the spread, and it is the
+  right structure -- but the best number on the board is still {sweep['m_spread_oracle_h21'].max():+.2f}bp per trade
+  WITH PERFECT FORESIGHT OF THE DIRECTION.
 
-  This is the STOP the brief anticipated.""")
+  Translate it into what a signal would have to do. The meeting-residual spread
+  moves {sweep.set_index('lam').loc[1e5, 'm_spread_absmove_h21']:.2f}bp on average over 21 days against a {m_spread['cost_bp']}bp round trip, and a
+  rule right p of the time nets (2p-1) x move - cost. Break-even needs
+
+      p > (1 + {m_spread['cost_bp']}/{sweep.set_index('lam').loc[1e5, 'm_spread_absmove_h21']:.2f}) / 2 = {(1 + m_spread['cost_bp'] / sweep.set_index('lam').loc[1e5, 'm_spread_absmove_h21']) / 2:.1%} of trades called correctly.
+
+  For scale, the SR3 12m fly needed 57%. This is the STOP the brief anticipated,
+  and the meeting-indexed correction moves it from hopeless to merely
+  unreachable.""")
 
 # %%
 fig, axes = plt.subplots(1, 3, figsize=(16, 3.9))
@@ -648,6 +751,63 @@ out_kink_fly = Z.zq_run_family("F3. FF kink -- meeting residual fly", lab=lab,
                                params=PARAMS, base=BASE_FL, cls="ff-kink",
                                note="4 contracts, 2.0bp round trip")
 
+
+# %% [markdown]
+# ## 8b. The meeting-indexed families
+#
+# The structures a desk would actually put on, run through the same machinery so
+# their league rows sit beside everything else.
+
+# %%
+Z.set_taker(m_spread["cost_bp"])
+BASE_MS = MRConfig(lag=CONFIG["lag"], round_trip_cost_bp=m_spread["cost_bp"],
+                   max_hold=CONFIG["max_hold"], n_packages=CONFIG["n_packages"])
+
+out_m_raw = Z.zq_run_family("F4. raw MEETING spread z-score", lab=lab,
+                            struct=m_spread, signal_fn=f_raw, grid_spec=GRID,
+                            params=PARAMS, base=BASE_MS, cls="ff-meeting",
+                            note="consecutive meeting readers, not consecutive months")
+
+# %%
+def f_kink_m(L, window):
+    lv = {}
+    for key in L.columns:
+        legs = key.split("-")
+        if any(l not in R.columns for l in legs):
+            continue
+        lv[key] = -1.0 * R[legs[0]] + 1.0 * R[legs[1]]
+    r = pd.DataFrame(lv).reindex(index=L.index, columns=L.columns)
+    return scale_only_zscore(r, window=window)
+
+
+out_m_kink = Z.zq_run_family("F5. MEETING kink -- residual spread", lab=lab,
+                             struct=m_spread, signal_fn=f_kink_m, grid_spec=GRID,
+                             params=PARAMS, base=BASE_MS, cls="ff-meeting-kink",
+                             note="the thesis, on the right structure")
+
+# %%
+Z.set_taker(m_fly["cost_bp"])
+BASE_MF = MRConfig(lag=CONFIG["lag"], round_trip_cost_bp=m_fly["cost_bp"],
+                   max_hold=CONFIG["max_hold"], n_packages=CONFIG["n_packages"])
+
+
+def f_kink_m_fly(L, window):
+    lv = {}
+    for key in L.columns:
+        legs = key.split("-")
+        if any(l not in R.columns for l in legs):
+            continue
+        lv[key] = -1.0 * R[legs[0]] + 2.0 * R[legs[1]] - 1.0 * R[legs[2]]
+    r = pd.DataFrame(lv).reindex(index=L.index, columns=L.columns)
+    return scale_only_zscore(r, window=window)
+
+
+out_m_kink_fly = Z.zq_run_family("F6. MEETING kink -- residual fly (the FOMC 1/2/3)",
+                                 lab=lab, struct=m_fly, signal_fn=f_kink_m_fly,
+                                 grid_spec=GRID, params=PARAMS, base=BASE_MF,
+                                 cls="ff-meeting-kink",
+                                 note="2*FOMC2 - FOMC1 - FOMC3 on the reader contracts")
+
 # %% [markdown]
 # ## 9. Verdict
 
@@ -713,14 +873,20 @@ print(f"""
    the fly's, leaving residuals of {stiff['spread_sd_bp']:.2f}bp and {stiff['fly_sd_bp']:.2f}bp against round trips of
    {spread['cost_bp']}bp and {fly['cost_bp']}bp.
 
-2. THE ORACLE CEILING SAYS STOP.
+2. INDEX BY MEETING, NOT BY MONTH -- IT IS WORTH A FACTOR OF {sweep['m_spread_oracle_h21'].max() / max(sweep['spread_oracle_h21'].max(), 1e-9):.0f}.
+   A desk's FOMC 1/2/3 fly skips the blended month: as of 2026-07-30 it is
+   ZQV26/ZQX26/ZQF27, and December is not in it. That loads the December
+   decision at -1.00 against the calendar fly's -0.71, and the difference shows
+   up everywhere -- spread sd {mix.loc[0, 'sd_bp']:.1f} -> {mix.loc[1, 'sd_bp']:.1f}bp, fly sd {mix.loc[2, 'sd_bp']:.1f} -> {mix.loc[3, 'sd_bp']:.1f}bp, and the raw fly's
+   oracle crossing zero ({mix.loc[2, 'oracle_net_h21']:+.2f} -> {mix.loc[3, 'oracle_net_h21']:+.2f}bp).
+
+3. THE ORACLE CEILING STILL SAYS STOP.
    Across the whole penalty sweep -- every kink definition between "fit every
    jump" and "the Fed is a metronome" -- the best oracle net of cost is
-   {sweep['spread_oracle_h21'].max():+.3f}bp on the spread (cost {spread['cost_bp']}bp) and {sweep['fly_oracle_h21'].max():+.3f}bp on the fly (cost {fly['cost_bp']}bp).
-   Perfect direction-calling earns nine hundredths of a basis point. There is no
-   signal that fixes that.
+   {sweep['m_spread_oracle_h21'].max():+.3f}bp, on the MEETING spread. A rule would have to call the
+   direction right {(1 + m_spread['cost_bp'] / sweep.set_index('lam').loc[1e5, 'm_spread_absmove_h21']) / 2:.0%} of the time to break even; the SR3 12m fly needed 57%.
 
-3. THE KINK REVERTS -- AND IT DOES NOT HELP.
+4. THE KINK REVERTS -- AND IT DOES NOT HELP.
    Median fitted half-life of the per-contract residual is {hl.median():.0f} days, FASTER
    than the 28-53 days the SR3 lab fitted on its tradeable slots. The FF kink
    does what the thesis says it should. It just does it inside a band narrower
@@ -728,12 +894,12 @@ print(f"""
    21-day move {_s100['spread_absmove_h21']:.2f}bp, and only {100 * _s100['spread_pbeat']:.0f}% of entries move further than the
    {spread['cost_bp']}bp it costs to take them.
 
-4. NOTHING IS STRUCTURALLY PINNED, WHICH IS ALSO NOT WHAT WAS EXPECTED.
+5. NOTHING IS STRUCTURALLY PINNED, WHICH IS ALSO NOT WHAT WAS EXPECTED.
    Every adjacent ZQ pair carries 0.13 to 1.00 of a policy decision. The
    "adjacent no-meeting months are degenerate" intuition is false, because a
    meeting inside EITHER month splits the pair.
 
-5. VERDICT: {int((league['verdict'] == 'ALIVE').sum())} of {n} league rows ALIVE, {int((league['grid_median_net_bp'] > 0).sum())} with a positive grid median.
+6. VERDICT: {int((league['verdict'] == 'ALIVE').sum())} of {n} league rows ALIVE, {int((league['grid_median_net_bp'] > 0).sum())} with a positive grid median.
    Best row {best_row['framework']} / {best_row['variant']}:
    {best_row['total_net_bp']:+.1f}bp net over {int(best_row['n_trades'])} trades, grid median {best_row['grid_median_net_bp']:+.1f}bp,
    DSR p = {best_row['dsr_prob']:.3f} -> {best_row['verdict']}.

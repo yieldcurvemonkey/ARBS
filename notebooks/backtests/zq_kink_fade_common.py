@@ -114,6 +114,7 @@ __all__ = [
     "variance_decomposition",
     "load_zq", "zq_structures", "meeting_residual_panel_zq", "zq_cost_panel",
     "oracle_block", "zq_shadow_block", "zq_run_family", "implied_jump_panel",
+    "meeting_reader_map", "zq_meeting_structures",
     "ZQ_DV01_USD", "ZQ_TICK_BP", "ZQ_HALF_TICK_BP", "ZQ_POINT_USD",
 ]
 
@@ -474,3 +475,114 @@ def zq_run_family(name: str, *, lab: Dict[str, object], struct: Dict[str, object
                    window="zq", structure=f"{struct['n_legs']}leg")
     return {"grid": grid, "best": best, "config": cfg_best, "result": res,
             "median_result": res_med, "signal": sig_best}
+
+
+def meeting_reader_map(lab: Dict[str, object]) -> pd.DataFrame:
+    """Which delivery month READS each FOMC decision.
+
+    A desk does not index FF structures by calendar month -- it indexes by
+    **meeting**, and uses the contract whose delivery month spends the largest
+    share of itself at that decision's rate. As of 2026-07-30 the next three
+    decisions are Sep-16, Oct-28 and Dec-09 and their readers are **October,
+    November and January-27** (ZQV26 / ZQX26 / ZQF27). **December is skipped**:
+    it splits 22/31 post-December against 9/31 post-October and reads neither
+    decision cleanly.
+
+    The share of a contract's month spent at meeting ``k``'s rate is exactly
+    ``exposure[k] - exposure[k+1]`` -- days at or after ``k`` minus days at or
+    after ``k+1`` -- so this is arithmetic on the exposure matrix, not a search.
+
+    Returns one row per meeting: ``meeting``, ``reader``, ``day_share`` (how
+    cleanly that month reads it, 1.0 = the whole month) and ``reader_month``.
+    """
+    codes, exposure, win = lab["codes"], lab["exposure"], lab["windows"]
+    meetings = lab["meetings"]
+    E = np.vstack([exposure[k] for k in codes])
+    share = pd.DataFrame(E[:, :-1] - E[:, 1:], index=codes,
+                         columns=list(meetings[:-1]))
+    out = pd.DataFrame({"meeting": share.columns,
+                        "reader": share.idxmax(axis=0).to_numpy(),
+                        "day_share": share.max(axis=0).to_numpy()})
+    out["reader_month"] = [win[r][0].strftime("%b-%y") for r in out["reader"]]
+    return out
+
+
+def zq_meeting_structures(lab: Dict[str, object], *, n_legs: int = 2,
+                          weights: Optional[Sequence[float]] = None,
+                          max_rank: Optional[int] = None,
+                          min_day_share: float = 0.0) -> Dict[str, object]:
+    """MEETING-indexed ZQ packages -- the structures a STIR desk actually trades.
+
+    Legs are consecutive *readers* rather than consecutive delivery months, so
+    the blended months are skipped. The FOMC 1/2/3 fly as of 2026-07-30 is
+    ``2*ZQX26 - ZQV26 - ZQF27``, whose legs are Oct, Nov and Jan -- **December
+    is not in it**.
+
+    Why this is a different object from the calendar-consecutive fly, in the
+    units that matter. Loadings of the December decision:
+
+        meeting fly     2*Nov - Oct - Jan   ->  -1.00   (January is 87% post-Dec)
+        calendar fly    2*Nov - Oct - Dec   ->  -0.71   (December is 71% post-Dec)
+
+    So the calendar version is a **diluted** version of the same trade, and
+    measurably so: median differential exposure 0.84 against 1.00, pooled sd
+    5.12bp against 7.24bp. Indexing by meeting is the same lever that made wider
+    SR3 spacings better -- more of the thing you want per unit of cost.
+
+    Consecutive duplicate readers are collapsed as a guard, but **it never fires
+    on this sample**: over the 77 decisions from 2018-01 to 2027-07 all 76
+    readable transitions have a distinct reader, no calendar month contains two
+    meetings, and the least clean read is still 73% of a month (Nov-18; median
+    is a full 1.000). ``min_day_share`` additionally drops meetings whose best
+    reader is too blended to call a read at all.
+
+    ⚠ Feed this a meeting list wider than the contract span and the counts go
+    wrong: meetings outside the strip's reach all take an ``argmax`` on an edge
+    contract and look like shared readers. Use ``lab["meetings"]``.
+    """
+    w = list(weights) if weights is not None else (
+        [-1.0, 1.0] if n_legs == 2 else [-1.0, 2.0, -1.0])
+    n_legs = len(w)
+    max_rank = int(max_rank if max_rank is not None else lab["max_rank"])
+    rates, rank, exposure = lab["rates"], lab["rank"], lab["exposure"]
+
+    rd = meeting_reader_map(lab)
+    if min_day_share > 0:
+        rd = rd[rd["day_share"] >= float(min_day_share)]
+    chain: list = []
+    for r in rd["reader"].tolist():
+        if not chain or r != chain[-1]:
+            chain.append(r)
+
+    lv, gt, de, rows = {}, {}, {}, []
+    for i in range(len(chain) - n_legs + 1):
+        legs = chain[i:i + n_legs]
+        if any(l not in rates.columns for l in legs):
+            continue
+        key = "-".join(legs)
+        val = sum(x * rates[l] for x, l in zip(w, legs)) * 100.0
+        ok = np.ones(len(rates), dtype=bool)
+        for l in legs:
+            ok &= (rank[l] <= max_rank).fillna(False).to_numpy()
+        ok &= val.notna().to_numpy()
+        lv[key] = val.where(ok)
+        gt[key] = pd.Series(ok, index=rates.index)
+        de[key] = float(np.abs(sum(x * exposure[l] for x, l in zip(w, legs))).max())
+        blk = pd.DataFrame({"as_of": rates.index, "key": key,
+                            "value": lv[key].to_numpy()})
+        for j, l in enumerate(legs):
+            blk[f"leg{j}_id"] = l
+            blk[f"leg{j}_value"] = rates[l].to_numpy()
+        blk["cm_slot"] = i + 1
+        blk["cm_label_short"] = key
+        rows.append(blk.dropna(subset=["value"]))
+
+    levels = pd.DataFrame(lv)
+    gate = (pd.DataFrame(gt).reindex(index=levels.index, columns=levels.columns)
+            .astype("boolean").fillna(False).astype(bool))
+    struct = pd.concat(rows, ignore_index=True) if rows else pd.DataFrame()
+    cost = float(sum(abs(x) for x in w)) * 2.0 * (ZQ_TICK_BP / 2.0)
+    return {"levels": levels, "gate": gate, "diff_exposure": pd.Series(de),
+            "struct": struct, "weights": tuple(w), "n_legs": n_legs,
+            "cost_bp": cost, "regimes": lab["regimes"], "chain": chain,
+            "readers": rd}
