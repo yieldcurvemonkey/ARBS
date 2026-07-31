@@ -347,25 +347,38 @@ read correctly they say the strategy reliably pays the spread and reliably earns
 expectation was "~0". That was the cost swamping the comparison, not a finding, and the suite now
 reports both (commit `fix(dealer-ladder): report placebos on GROSS`).
 
-On gross the six span **−0.046 to +0.052 — every arm is zero.** Sign-shuffle, bucket-rotation and
-pre-arrival all produce the same nothing as the reference, which is the signature of no
-bucket-specific, no direction-specific and no timing-specific content whatever.
+On gross the six span **−0.046 to +0.042, and not one differs significantly from zero.**
+Sign-shuffle, bucket-rotation and pre-arrival all produce the same nothing as the reference,
+which is the signature of no bucket-specific, no direction-specific and no timing-specific
+content whatever.
 
-| placebo | net (measured) | gross | pre-written expectation |
-|---|---|---|---|
-| none (reference) | −0.546 | **−0.046** | the effect, if any |
-| sign shuffle within session | −0.448 | **+0.052** | destroyed; survival ⇒ intensity not direction |
-| arrival +1 grid step later | −0.537 | **−0.037** | largely preserved; loss ⇒ knife-edge timing |
-| live parity (exec+15m floor) | −0.540 | **−0.040** | attenuated, same sign |
-| rotated buckets | −0.520 | **−0.020** | ~0; survival ⇒ generic curve continuation |
-| pre-arrival window | −0.458 | **+0.042** | ~0; a result ⇒ leakage or anticipation |
+| placebo | net | **gross** | gross t | sig. | pre-written expectation |
+|---|---|---|---|---|---|
+| none (reference) | −0.5458 | **−0.0458** | −0.79 | — | the effect, if any |
+| sign shuffle within session | −0.4698 | **+0.0302** | +0.72 | — | destroyed; survival ⇒ intensity not direction |
+| arrival +1 grid step later | −0.5366 | **−0.0366** | −0.66 | — | largely preserved; loss ⇒ knife-edge timing |
+| live parity (exec+15m floor) | −0.5405 | **−0.0405** | −0.68 | — | attenuated, same sign |
+| rotated buckets | −0.5200 | **−0.0200** | −0.36 | — | ~0; survival ⇒ generic curve continuation |
+| pre-arrival window | −0.4582 | **+0.0418** | +0.57 | — | ~0; a result ⇒ leakage or anticipation |
 
-> The gross column here is **derived** as net + the measured round-trip cost of 0.500 bp, not
-> independently estimated: the placebo fix was committed after this run had already loaded its
-> code, so both arms of the run predate it. The derivation is exact to ~0.001 bp because every
-> variant trades the same SR3 front-six bucket set under one cost model, but it carries no
-> standard error of its own, so the `gross_t` for each arm is **not** claimed here. It is
-> re-measured directly in the follow-up run recorded in §9.
+These are **measured**, not derived: `g4_placebos.csv` now carries `gross_mean` / `gross_t`
+directly. Read net, every arm looks like it "survives" and the suite appears to have failed
+completely, including the two whose expectation was "~0". Read gross, two arms land on the
+*opposite side* of the reference and none is distinguishable from zero — the suite discriminated
+perfectly and the cost was hiding it.
+
+**The sign-shuffle arm was not reproducible, and that is fixed rather than papered over.**
+Re-running the suite over the same config returned five arms bit-identical and this one at a
+different value (−0.4476, n=1636 → −0.4644, n=1631). Cause: `_PRINTS_SQL` had no `ORDER BY`, so
+identical rows arrived in a different sequence, and `placebo_sign_shuffle` consumed its seeded
+RNG *positionally*. The other five are order-independent transforms, which is exactly why only
+this one moved. Both are fixed — a total `ORDER BY`, and a shuffle that orders its own groups —
+and both defences are verified independently: 553,932 prints return in an identical sequence
+across separate connections, and the shuffle is order-invariant on synthetic data
+(`tests/test_dealer_ladder_placebo_determinism.py`, mutation-checked). The figures above are
+from the post-fix run, in which the primary reproduced **exactly** (−0.5458, t = −9.44, n =
+1,639) and the five stable arms reproduced bit-identically — which is the evidence that the
+`ORDER BY` changed nothing else.
 
 **The label-free cell rules out the obvious excuse.** Unsigned print intensity — no direction label
 involved, so immune to every §8.1 concern about the classifier — returns net −0.6402 bp
@@ -2238,14 +2251,14 @@ _Source: `g4_skipped_variants.csv` (40 rows shown, 152 more in the CSV — trunc
 
 ### G4 — placebos
 
-| placebo                                      | expect                                            |    mean |     se |        t |    n |   n_blocks |      lo |      hi |   n_boot | stars   |   hit_rate |   share_long |   share_agreeing |   p_sign |
-|:---------------------------------------------|:--------------------------------------------------|--------:|-------:|---------:|-----:|-----------:|--------:|--------:|---------:|:--------|-----------:|-------------:|-----------------:|---------:|
-| none (reference)                             | the effect, if any                                | -0.5458 | 0.0578 |  -9.4433 | 1639 |         99 | -0.6588 | -0.425  |     2000 | ***     |      0.236 |        0.277 |            0.899 |        0 |
-| sign shuffle within session                  | destroyed; survival means intensity not direction | -0.4476 | 0.0399 | -11.2199 | 1636 |         99 | -0.5168 | -0.3701 |      300 | ***     |      0.257 |        0.4   |            0.899 |        0 |
-| arrival +1 grid step later                   | largely preserved; loss means knife-edge timing   | -0.5366 | 0.0552 |  -9.7137 | 1640 |         99 | -0.6533 | -0.4314 |      300 | ***     |      0.24  |        0.279 |            0.869 |        0 |
-| live parity (visibility floored at exec+15m) | attenuated, same sign                             | -0.5405 | 0.0594 |  -9.0949 | 1636 |         98 | -0.6663 | -0.4279 |      300 | ***     |      0.234 |        0.276 |            0.888 |        0 |
-| rotated buckets                              | ~0; survival means generic curve continuation     | -0.52   | 0.0557 |  -9.3347 | 1639 |         99 | -0.6372 | -0.4039 |      300 | ***     |      0.218 |        0.277 |            0.909 |        0 |
-| pre-arrival window                           | ~0; a result means leakage or anticipation        | -0.4582 | 0.0735 |  -6.2323 | 1434 |         97 | -0.5799 | -0.3281 |      300 | ***     |      0.25  |        0.273 |            0.825 |        0 |
+| placebo                                      | expect                                            |    mean |     se |        t |    n |   n_blocks |      lo |      hi |   n_boot | stars   |   hit_rate |   share_long |   share_agreeing |   p_sign |   gross_mean |   gross_t | gross_stars   |   gross_hit_rate |
+|:---------------------------------------------|:--------------------------------------------------|--------:|-------:|---------:|-----:|-----------:|--------:|--------:|---------:|:--------|-----------:|-------------:|-----------------:|---------:|-------------:|----------:|:--------------|-----------------:|
+| none (reference)                             | the effect, if any                                | -0.5458 | 0.0578 |  -9.4433 | 1639 |         99 | -0.6588 | -0.425  |     2000 | ***     |      0.236 |        0.277 |            0.899 |        0 |       -0.046 |    -0.792 |               |            0.365 |
+| sign shuffle within session                  | destroyed; survival means intensity not direction | -0.4698 | 0.0419 | -11.2249 | 1648 |         99 | -0.5585 | -0.3933 |      300 | ***     |      0.262 |        0.411 |            0.929 |        0 |        0.03  |     0.721 |               |            0.384 |
+| arrival +1 grid step later                   | largely preserved; loss means knife-edge timing   | -0.5366 | 0.0552 |  -9.7137 | 1640 |         99 | -0.6533 | -0.4314 |      300 | ***     |      0.24  |        0.279 |            0.869 |        0 |       -0.037 |    -0.662 |               |            0.382 |
+| live parity (visibility floored at exec+15m) | attenuated, same sign                             | -0.5405 | 0.0594 |  -9.0949 | 1636 |         98 | -0.6663 | -0.4279 |      300 | ***     |      0.234 |        0.276 |            0.888 |        0 |       -0.04  |    -0.681 |               |            0.368 |
+| rotated buckets                              | ~0; survival means generic curve continuation     | -0.52   | 0.0557 |  -9.3347 | 1639 |         99 | -0.6372 | -0.4039 |      300 | ***     |      0.218 |        0.277 |            0.909 |        0 |       -0.02  |    -0.359 |               |            0.355 |
+| pre-arrival window                           | ~0; a result means leakage or anticipation        | -0.4582 | 0.0735 |  -6.2323 | 1434 |         97 | -0.5799 | -0.3281 |      300 | ***     |      0.25  |        0.273 |            0.825 |        0 |        0.042 |     0.569 |               |            0.383 |
 
 _Source: `g4_placebos.csv` (6 rows)._
 
