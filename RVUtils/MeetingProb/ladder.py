@@ -129,11 +129,15 @@ def meeting_ladder(
     if (ts - row.index[-1]) > pd.Timedelta(days=5):
         return []                      # no fresh ZQ session near this date
 
-    y, m = as_of.year, as_of.month + 1
-    if m == 13:
-        y, m = y + 1, 1
-    start_ym = (y, m)
-    y2, m2 = y, m + horizon_months
+    # Start at the CURRENT month. Its ZQ price blends realized and expected
+    # EFFR, but the CME month identity avg = (n/N)*start + (m/N)*end holds
+    # regardless of where today falls in the month (EFFR is constant at the
+    # start level until the meeting), so the current month's meeting — the one
+    # the market is actively trading — stays in the ladder. Starting at the
+    # NEXT month (the first version) silently dropped each meeting for the
+    # ~three weeks before its decision: precisely the event window.
+    start_ym = (as_of.year, as_of.month)
+    y2, m2 = start_ym[0], start_ym[1] + horizon_months
     while m2 > 12:
         y2, m2 = y2 + 1, m2 - 12
     prices = {}

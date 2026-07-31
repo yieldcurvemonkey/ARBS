@@ -45,7 +45,7 @@ def _sep22_schedule() -> pd.DataFrame:
 
 
 def _sep22_panel() -> pd.DataFrame:
-    idx = pd.bdate_range("2022-08-25", "2022-08-31")
+    idx = pd.bdate_range("2022-08-25", "2022-09-12")
     data = {
         "ZQU22": 97.4475, "ZQV22": 96.9400, "ZQX22": 96.4300, "ZQZ22": 96.2000,
     }
@@ -500,3 +500,19 @@ def test_channel1_cost_model_charges_both_legs_per_contract():
     assert sr3_only == pytest.approx(2 * 8 * 0.125 * 2)
     with_zq = package_cost_bp(3, 2.0, vertical_width_bp=12.5)
     assert with_zq - sr3_only == pytest.approx(3 * 2.0 * 0.25 * (41.67 / 25.0))
+
+
+def test_ladder_keeps_the_current_months_meeting():
+    """Mid-September 2022, before the Sep 20-21 meeting: the ladder must still
+    carry the September meeting with the CME fixture numbers. The first
+    implementation started at the NEXT month and silently dropped each meeting
+    for the ~3 weeks before its decision — the exact event window."""
+    ladder = meeting_ladder(
+        datetime.date(2022, 9, 12), _sep22_panel(), _sep22_schedule(),
+        horizon_months=3,
+    )
+    eff = [m.effective for m in ladder]
+    assert datetime.date(2022, 9, 22) in eff
+    sep = next(m for m in ladder if m.effective == datetime.date(2022, 9, 22))
+    assert sep.jump_bp == pytest.approx(72.50, abs=0.1)
+    assert sep.q == pytest.approx(0.90, abs=0.005)
