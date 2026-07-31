@@ -159,7 +159,11 @@ def main(argv=None) -> int:
             fit = refit_lattice(cm, float(f), sel)
             if fit is None:
                 continue
-            boot = bootstrap_refit(cm, float(f), sel, n=a.boot_n)
+            # the bootstrap prices identification; a saturated fit has none by
+            # construction (the cap, not the premiums, pins it) and its slow
+            # bound-hugging refits dominated the build's runtime — skip it
+            boot = (None if fit.saturated
+                    else bootstrap_refit(cm, float(f), sel, n=a.boot_n))
             # channel measurement is against the STRICT ZQ-null tree: baseline
             # smear = unresolved outcome std composed with a small spread/drift
             # allowance, never the fitted width (which would hide the premium)
