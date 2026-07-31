@@ -63,24 +63,7 @@ entirely different machine — the standing, one-sided, off-lattice premium
 lattice-infeasible outcomes — measurable, one-sided information, not the
 convergence trade"*).
 
-### 4. The CME fixture ties end to end
-
-The committed FedWatch tree builder reproduces the CME Sep-2022 worked example
-from planted ZQ prices through this module's ladder (72.5bp → 10/90; Nov
-81.4/18.6), and the 2026-07-27 ladder read P(Sep16 hike) = 68% off live cached
-settles with the day-after-the-hold repricing visible.
-
-## Empirical results (from the 2024-07 → 2026-07 panel)
-
-<!-- FILLED AFTER THE EXECUTED NOTEBOOKS -->
-
-- Tie-out gate: …
-- Feasibility frontier in days-to-expiry: …
-- Identification (half-tick bootstrap) in the feasible region: …
-- Channel mix and episode structure: …
-- Channel-1 backtest grid, sign test, cost scenarios, verdict: …
-
-### 5. The ladder must keep the current month's meeting — and doing so is noisy
+### 5b. The ladder must keep the current month's meeting — and doing so is noisy
 
 The first implementation started the FedWatch range at the month after
 ``as_of``, silently dropping each meeting for the ~three weeks before its
@@ -91,6 +74,66 @@ noise late in the month — the 2024-09-17 read is P(50bp) = 78% against
 official FedWatch's ~64% (both on the right side of the coin flip; the realized
 outcome was 50). A realized-EFFR-anchored current-month treatment is the
 upgrade path.
+
+
+### 4. The CME fixture ties end to end
+
+The committed FedWatch tree builder reproduces the CME Sep-2022 worked example
+from planted ZQ prices through this module's ladder (72.5bp → 10/90; Nov
+81.4/18.6), and the 2026-07-27 ladder read P(Sep16 hike) = 68% off live cached
+settles with the day-after-the-hold repricing visible.
+
+## Empirical results (2024-07 → 2026-07: 540 sessions, 1,337 contract-days, 9 contracts)
+
+### The feasibility frontier is sharp, and the channel mix flips across it
+
+| days to expiry | n | saturated | fit RMSE (bp) | channel 1 | channel 2 |
+|---|---:|---:|---:|---:|---:|
+| < 30 | 19 | **0%** | 0.24 | **89.5%** | 0.0% |
+| 30–60 | 84 | 2% | 0.64 | 40.5% | 47.6% |
+| 60–90 | 128 | 10% | 1.03 | 18.8% | 77.3% |
+| 90–135 | 225 | 42% | 1.72 | 24.0% | 73.8% |
+| 135–200 | 359 | 94% | 4.01 | 6.4% | 93.6% |
+| 200–300 | 522 | **100%** | 8.81 | 1.7% | 98.3% |
+
+Beyond ~4 months the surface wants ~40bp of total width against a ~20–28bp
+lattice ceiling — every day is the standing off-lattice premium (channel 2),
+the options lab's tail premium re-derived. Inside ~2 months the lattice becomes
+feasible, the premium compresses, and the mode-flank asymmetry (per-meeting
+reallocation — channel 1) dominates. **The convergence question only exists in
+the last two months of an option's life.** 161 channel-1 rows; 123 of them
+unsaturated with fresh ZQ prints.
+
+### Identification is strong where it matters — on the option side
+
+In the feasible region the half-tick bootstrap pins the fitted q's to ~0.2pp
+(dense 6.25bp near-expiry ladders), so the median 11pp gaps are measured, not
+noise — **on the option side**. The un-priced error is the ZQ ladder itself:
+intra-month jump extraction amplifies contract noise (the 78%-vs-64%
+FedWatch deviation), and the tie-out gate (only 35.4% of days inside ±6bp
+across all contracts; median |resid| 2.47bp, p90 10.4bp) is the defense.
+
+### The channel-1 backtest: right sign, too few trades, costs ≈ edge
+
+After every gate (channel 1, unsaturated, fresh ZQ, tie-out inside 6bp) the
+2-year panel yields **five** qualifying episodes. Fading the listed boundary
+digital against the ZQ-ladder hedge:
+
+| direction | trades | gross bp | net @1x costs | net @2x | hit (gross) |
+|---|---:|---:|---:|---:|---:|
+| **fade** (best, gap ≥ 0.06) | 5 | **+46.6** | +6.0 | −34.6 | 80% |
+| momentum (same) | 5 | −46.6 | −87.2 | — | 0% |
+
+The sign test is unambiguous: the listed digital converges toward the tree
+(fade wins gross in 4 of 5, avg ≈ +9bp gross per trade ≈ the entry gaps), the
+hedge behaves (rebalances at resolutions, outcomes logged per trade), and the
+**~8bp package round trip — 16 option lots per probability unit on a 6.25bp
+vertical, plus the ZQ basket — is the same size as the typical gap.** Bigger
+gaps are rarer; raising the threshold to 0.08 drops to 4 trades and negative
+net. **Verdict: DEAD (too few trades)** under the house taxonomy, with the
+economics reading "real convergence, episodic, cost-bound at EOD" — precisely
+the design conversation's own prediction that the cross-market lag is "real
+for hours, not weeks."
 
 ## Honest limits
 
