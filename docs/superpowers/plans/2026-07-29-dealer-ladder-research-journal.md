@@ -1588,3 +1588,63 @@ correctly-unburned lockout as a mismatch.
 That is instances **seven, eight and nine** this engagement of a checking tool that was itself
 the defect (the two completeness bugs, then this). All nine were found the same way: by running
 the check against an input whose answer was already known.
+
+## A PLACEBO THAT WASN'T REPRODUCIBLE (19:30)
+
+Re-running the placebo suite to convert the derived gross figures into measured ones turned up
+something the first run could not have shown: **the sign-shuffle arm returns a different number
+every time.**
+
+Five of six arms came back bit-identical. `sign shuffle within session` went from −0.4476
+(n=1636) to −0.4644 (n=1631) over the same config, same seed, same data.
+
+Two compounding causes, and the fact that only ONE arm moved is what identified them:
+
+1. `data._PRINTS_SQL` had **no `ORDER BY`**. Postgres guarantees no row order without one, so
+   two reads of identical data return identical ROWS in a different SEQUENCE.
+2. `placebo_sign_shuffle` iterates `pd.unique(day)` and permutes `signs[m]` in frame order, so
+   the seeded RNG is consumed **positionally**. A different row order spends the same seed
+   differently and lands different signs on different prints.
+
+The other five placebos are order-independent transforms — shift the timestamps, floor the
+visibility, rotate the buckets — which is exactly why they were immune. That asymmetry is the
+diagnosis, not a coincidence, and it is what made a two-line cause findable in a 400-line module.
+
+Most of the study is immune for the same reason: panels are built by reindexing on timestamps,
+not by position. Only code that consumes a seeded RNG positionally cares.
+
+**Why it mattered enough to fix rather than note.** The suite is read as a *distance from the
+reference*. An arm that moves between runs makes that distance partly noise, and its pre-written
+expectation — "destroyed; survival means intensity not direction" — cannot be judged against a
+moving number. The verdict was never at risk (both values are ~0 on gross) but a reported number
+has to be reproducible or it is not a number.
+
+Both fixed: a total `ORDER BY (visibility_timestamp, unit_key, bucket_key)`, and a shuffle that
+sorts its own day groups and orders rows within each by a stable key before permuting — so a
+caller that re-orders, filters or concatenates the frame cannot silently change what the placebo
+means. Verified independently rather than argued once: 553,932 prints return in an identical
+sequence across separate connections, and the shuffle is order-invariant on synthetic data
+(mutation-checked — reverting the loop fails exactly the order-invariance test).
+
+The post-fix run is the one reported. The primary reproduced **exactly** (−0.5458, t = −9.44,
+n = 1,639, 99 sessions) and the five stable arms reproduced bit-identically, which is the
+evidence that the `ORDER BY` changed nothing else.
+
+**Measured gross, finally:** −0.046, +0.030, −0.037, −0.040, −0.020, +0.042. **Zero of six arms
+differ significantly from zero.** Read net, all six sit between −0.46 and −0.55 and every one
+reads as "survives", including the two whose expectation was "~0"; read gross, two land on the
+opposite side of the reference and none is distinguishable from zero. The suite had
+discriminated perfectly all along and the cost constant was hiding it.
+
+### A process failure worth recording
+
+I chained `nohup ... & && git add/commit/push`. The `&` ended the command list, so the git
+commands ran in the **primary working tree** — the one the brief says never to touch — instead
+of the worktree. Verified afterwards that nothing was staged, HEAD was unchanged, my pathspecs
+matched nothing there and the user's uncommitted work was untouched; the `push` was a no-op
+because worktrees share refs. No damage, but the guard should not have been "the `cd` will
+hold". Every git call is `git -C <worktree>` from here.
+
+That is the third time this session the shell has silently changed what a command meant — the
+other two being heredocs collapsing `\` and `conda run` rejecting multiline `-c`. All three are
+in the memory notes. Reading them is not the same as applying them.
