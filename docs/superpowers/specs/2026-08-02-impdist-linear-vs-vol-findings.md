@@ -68,6 +68,40 @@ the strip rather than vanishing. The BL mean follows the forward on both
 contracts (parity; the mean channel stays dead), SFRZ26 width compresses
 52.5 → 43.5bp.
 
+## The ICS anchor and the trade question (added 2026-08-02, second pass)
+
+Mean-pinning kills the level channel by construction — but CME lists it: the
+FF-vs-SR3 inter-commodity spread (for SFRZ26: `0.5·ZQF27 + 0.5·ZQG27 −
+SR3Z26`, 10:6 leg ratio, $250/bp DV01-neutral both sides, quoted `SOFR rate −
+FF rate`; conventions from the CME "STIR ICS on Globex" deck, reproduced in
+`RVUtils/MeetingProb/ics.py` with the worked 3.5bp example under test). The
+observed spread then decomposes on the lattice:
+
+| as_of | observed ICS | basis | compounding | proxy wedge | **residual** | ZQ-chain fit |
+|---|---:|---:|---:|---:|---:|---:|
+| 07-28 | 5.25bp | 2.0 | 2.11 | 0.18 | **+1.31** | −0.42 |
+| 07-31 | 5.25bp | 2.0 | 2.09 | 0.28 | **+1.44** | +0.45 |
+
+The spread did not move a quarter-tick across the FOMC resolution — the
+level channel is its own market, orthogonal to the meeting repricing. The
+residual (+1.3–1.4bp, SR3 rich) sits on a December quarterly whose window
+contains the year-end turn, so it is at least partly the turn premium; the
+serff fair-value study already ran this trade class with a 3-layer model and
+found costs dominate. The FF-anchored absolute overlay
+(`ff_conditional_atoms`) now shows the option RND and the FF conditional
+distribution on one axis with the mean gap visible instead of pinned away.
+
+**Is there a trade?** Computed answer, both channels: (i) the LEVEL — fade
+the decomposed residual (never the raw 5.25bp, ~75% of which is mechanical)
+via the listed 10:6 ICS, only when it exceeds a few bp and the turn is
+hedged against an adjacent non-turn quarterly; at +1.3bp it does not signal.
+(ii) the SHAPE — the surface prices ~16pp more off-lattice mass than the FF
+tree; selling it is the standing-insurance short the options lab already
+sign-flipped on, and the convergence flavour is the meeting-prob channel-1
+trade: episodic, cost-bound at EOD, best executed <60 dte with the swap
+ladder as the linear leg. No standing harvest; two episodic, cost-gated
+entries.
+
 ## Honest limits
 
 - The 07-31 session has no published open interest, so both 07-31 densities

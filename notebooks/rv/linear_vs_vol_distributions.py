@@ -430,6 +430,126 @@ print("\nBoth contracts, both dates, price BOTH off-lattice tails above the "
       "ladder is the cleaner linear leg to trade it against.")
 
 # %% [markdown]
+# ## E. The ICS anchor: putting the mean gap back on the table
+#
+# Sections B–D mean-pinned both trees to the option forward, which kills the
+# level channel by construction. But CME LISTS the level: the FF-vs-SR3
+# inter-commodity spread — for SFRZ26, `0.5·ZQF27 + 0.5·ZQG27 − SR3Z26` at a
+# 10:6 leg ratio ($250/bp DV01-neutral both sides), quoted as
+# `SOFR rate − FF rate` ("STIR ICS on Globex", CME, June 2026). So the mean
+# gap is an observable with its own order book, and it decomposes:
+#
+# `ICS = SOFR-EFFR basis + compounding wedge + calendar proxy wedge + residual`
+#
+# * **basis** — SR3 compounds SOFR, ZQ averages EFFR (spot ~+2bp);
+# * **compounding** — compounded vs arithmetic: ~r²·(D−1)/720 (~+2bp at 4%);
+# * **proxy wedge** — Jan+Feb is the exchange's IMM proxy for the true
+#   Dec16→Mar17 window; the same lattice prices the difference (~+0.3bp when
+#   hikes are priced);
+# * **residual** — whatever is left. For a DECEMBER quarterly the window
+#   contains the year-end turn, when SOFR prints spike — so a positive
+#   residual is at least partly the turn premium, not free money.
+
+# %%
+from RVUtils.MeetingProb.ics import (
+    compounding_wedge_bp,
+    ff_conditional_atoms,
+    ics_blend_contracts,
+    ics_spread_bp,
+    proxy_wedge_bp,
+)
+from MDP.STIRFutures._sofr_option_contracts import quarterly_reference_window
+
+ICS_SYM = "SFRZ26"
+blend = ics_blend_contracts(ICS_SYM)
+S_win, E_win = quarterly_reference_window(ICS_SYM)
+win_days = (E_win - S_win).days
+print(f"{ICS_SYM} ICS blend: {blend}, reference window {S_win} -> {E_win} "
+      f"({win_days} days)")
+
+ics_rows, ff_view = [], {}
+for d in (D0, D1):
+    ffp = [float(zq_panel.loc[:pd.Timestamp(d), c].iloc[-1]) for c in blend]
+    fwd = snaps[(ICS_SYM, d)].bl_result.input.forward_rate
+    spread = ics_spread_bp(100.0 - fwd, ffp)
+    basis = (get_current_fixing("USD-SOFR-1D", d)
+             - get_current_fixing("USD-OIS", d)) * 1e4
+    comp = compounding_wedge_bp(fwd, win_days)
+    wedge = proxy_wedge_bp(ladders[(d, "ZQ")], ICS_SYM)
+    resid = spread - basis - comp + wedge
+    effr = get_current_fixing("USD-OIS", d) * 100
+    ff_view[d] = ff_conditional_atoms(d, ICS_SYM, ladders[(d, "ZQ")], effr)
+    lattice_mean = ff_view[d][3]
+    blend_rate = 100.0 - float(np.mean(ffp))
+    ics_rows.append({
+        "as_of": d, "ics_bp": round(spread, 2), "basis_bp": round(basis, 2),
+        "compounding_bp": round(comp, 2), "proxy_wedge_bp": round(wedge, 2),
+        "residual_bp": round(resid, 2),
+        "zq_fit_gap_bp": round((blend_rate - wedge / 100.0
+                                - lattice_mean) * 100.0, 2),
+    })
+ics_table = pd.DataFrame(ics_rows)
+print(ics_table.to_string(index=False))
+print("\nzq_fit_gap = market blend (proxy-adjusted) minus the lattice window "
+      "mean — how far the bootstrap tree sits from the very contracts it was "
+      "built on; a consistency check on the whole chain, not a signal.")
+
+# %%
+# The absolute view: the option RND on its own axis vs the FF conditional
+# distribution anchored at EFFR + the lattice path. The horizontal offset IS
+# the ICS decomposition — nothing is pinned away.
+fig, axes = plt.subplots(1, 2, figsize=(14, 5), sharey=True)
+for ax, d in zip(axes, (D0, D1)):
+    bl = snaps[(ICS_SYM, d)].bl_result
+    ax.plot(bl.strike_grid_rate, bl.rnd_density, lw=2, color="k",
+            label="SR3 option RND (SOFR, compounded)")
+    rates, probs, smear_raw, mean, _ = ff_view[d]
+    smear = float(np.sqrt(smear_raw ** 2 + BASIS_SMEAR_BP ** 2))
+    ax.plot(bl.strike_grid_rate, mix_pdf(bl.strike_grid_rate, rates, probs, smear),
+            "--", color="tab:purple", lw=1.5,
+            label=f"FF conditional (ZQ lattice, absolute, smear {smear:.1f}bp)")
+    ax.axvline(bl.input.forward_rate, color="k", lw=0.8, ls=":")
+    ax.axvline(mean, color="tab:purple", lw=0.8, ls=":")
+    gap = (bl.input.forward_rate - mean) * 100
+    ax.set_title(f"{ICS_SYM} absolute axes, {d}  (mean gap {gap:+.1f}bp)")
+    ax.set_xlabel("rate (%)")
+    ax.legend(fontsize=8)
+axes[0].set_ylabel("density")
+plt.tight_layout()
+plt.show()
+
+# %%
+# Is there a trade? Both channels, priced with listed conventions.
+r0, r1 = ics_table.iloc[0], ics_table.iloc[1]
+tails0 = tails[(ICS_SYM, D0)]
+print("CHANNEL 1 — the level (the listed ICS, 10 SR3 : 3+3 ZQ, $250/bp):")
+print(f"  observed {r0.ics_bp:.1f}bp -> {r1.ics_bp:.1f}bp; decomposed fair "
+      f"(basis+compounding-wedge) {r0.basis_bp + r0.compounding_bp - r0.proxy_wedge_bp:.1f}"
+      f" / {r1.basis_bp + r1.compounding_bp - r1.proxy_wedge_bp:.1f}bp; "
+      f"residual {r0.residual_bp:+.1f} -> {r1.residual_bp:+.1f}bp.")
+print("  The residual on a DECEMBER quarterly contains the year-end turn "
+      "premium (the turn sits inside the window), so it is not cleanly "
+      "harvestable; and the serff fair-value study already ran this class of "
+      "trade with a 3-layer model — costs dominated. Fading the residual is "
+      "only interesting if it exceeds a few bp AND the turn is hedged "
+      "(e.g. vs the adjacent non-turn quarterly's residual).")
+print("\nCHANNEL 2 — the shape (options vs the FF lattice):")
+print(f"  the surface prices {tails0[0] + tails0[1]:.0f}pp more off-lattice "
+      f"mass than the tree ({tails0[0]:+.1f} below, {tails0[1]:+.1f} above "
+      "at 07-28). Selling it is selling insurance against intermeeting / "
+      ">25bp outcomes: the SR3 options lab measured the same premium "
+      "(+21pp vs the FedWatch null) and its short-vol harvest REVERSED SIGN "
+      "when front contracts entered the sample; the meeting-prob backtest "
+      "found the tradeable convergence flavour is episodic and cost-bound "
+      "at EOD. Nothing in this notebook overturns those verdicts.")
+print("\nNET: the honest trade inventory from this triangle is (i) the "
+      "listed ICS when the residual decomposition — not the raw spread — "
+      "signals, sized at 10:6, with the turn hedged; and (ii) the <60-dte "
+      "convergence channel from the meeting-prob study, for which the swap "
+      "ladder built here is the cleaner linear leg. Neither is a standing "
+      "harvest; both are episodic and cost-gated.")
+
+# %% [markdown]
 # ## Summary
 #
 # Every claim below is computed in this notebook, above.
@@ -456,3 +576,9 @@ print("\nBoth contracts, both dates, price BOTH off-lattice tails above the "
 # * **Across the July decision** the linear legs show the mechanics
 #   (front-level collapse, back-jump inflation); the option mean follows the
 #   forward by parity while the width compresses ~7bp.
+# * **The listed ICS re-opens the level channel**: `0.5·ZQF27+0.5·ZQG27 −
+#   SR3Z26` decomposes into basis + compounding + calendar-proxy wedge +
+#   residual, and the residual on a December quarterly carries the year-end
+#   turn. The trade inventory is episodic and cost-gated: fade the DECOMPOSED
+#   residual (turn-hedged, 10:6) when it signals, and run the <60-dte
+#   convergence channel with the swap ladder as the linear leg.
