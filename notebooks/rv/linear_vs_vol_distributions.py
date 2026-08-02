@@ -550,6 +550,210 @@ print("\nNET: the honest trade inventory from this triangle is (i) the "
       "harvest; both are episodic and cost-gated.")
 
 # %% [markdown]
+# ## F. The path ledger: every FOMC outcome, linear vs vol
+#
+# The FedWatch matrix is conditional-by-meeting; the option surface settles
+# once. For a quarterly whose resolved meetings all carry day-weight 1, every
+# ORDERING of moves lands on the same settlement rate, so the 2^k paths
+# collapse to the move COUNT: P(hike, hike, hike) is exactly the terminal
+# 425–450 bucket, and that is an option-identified object (the exchangeability
+# result from the meeting-prob study, working for us here). The ledger below
+# prices every count bucket both ways. Yardstick: a 25bp-wide digital moves
+# 4pp of probability per 1bp of premium, and the half-tick quote floor
+# (0.125bp) is ~0.5pp — so gaps of several pp are measurement, not noise.
+
+# %%
+def count_ledger(sym, d, tag="ZQ"):
+    """Move-count buckets: pure lattice, smeared tree, and option RND."""
+    bl = snaps[(sym, d)].bl_result
+    r, p, smear, cm = tree(sym, d, tag)
+    assert all(m.weight == 1.0 for m in cm.resolved), "count labels need w=1"
+    counts = {0: 1.0}                       # pure count convolution
+    for m in cm.resolved:
+        a, b = m.support
+        new = {}
+        for n, pn in counts.items():
+            new[n + a] = new.get(n + a, 0.0) + pn * (1.0 - m.q_zq)
+            if b != a:
+                new[n + b] = new.get(n + b, 0.0) + pn * m.q_zq
+        counts = new
+    ns = sorted(counts)
+    edges = np.concatenate([[r[0] - 0.125], (r[:-1] + r[1:]) / 2,
+                            [r[-1] + 0.125]])
+    p_opt = np.diff(np.interp(edges, bl.strike_grid_rate, bl.rnd_cumulative,
+                              left=0.0, right=1.0))
+    p_tree = np.diff(mix_cdf(edges, r, p, smear))
+    effr = get_current_fixing("USD-OIS", d) * 100
+    base_lo = int(np.floor(effr * 100 / 25.0) * 25)
+    rows = []
+    for k, n in enumerate(ns):
+        gap = 100 * (p_opt[k] - p_tree[k])
+        rows.append({
+            "bucket": f"{base_lo + 25 * n}-{base_lo + 25 * n + 25}",
+            "path": f"{n} net moves" if n >= 0 else f"{n} (net cut)",
+            "p_lattice": round(counts[n], 3), "p_tree": round(p_tree[k], 3),
+            "p_opt": round(p_opt[k], 3), "gap_pp": round(gap, 1),
+            "gap_bp_digital": round(gap / 4.0, 2),
+        })
+    below = float(np.interp(edges[0], bl.strike_grid_rate, bl.rnd_cumulative))
+    above = 1.0 - float(np.interp(edges[-1], bl.strike_grid_rate,
+                                  bl.rnd_cumulative))
+    t_below = float(mix_cdf(np.array([edges[0]]), r, p, smear)[0])
+    t_above = 1.0 - float(mix_cdf(np.array([edges[-1]]), r, p, smear)[0])
+    for name, po, pt in (("off-lattice below", below, t_below),
+                         ("off-lattice above", above, t_above)):
+        gap = 100 * (po - pt)
+        rows.append({"bucket": name, "path": "intermeeting / >25bp",
+                     "p_lattice": 0.0, "p_tree": round(pt, 3),
+                     "p_opt": round(po, 3), "gap_pp": round(gap, 1),
+                     "gap_bp_digital": round(gap / 4.0, 2)})
+    return pd.DataFrame(rows), edges, r
+
+for d in (D0, D1):
+    led, _, _ = count_ledger("SFRZ26", d)
+    print(f"\n=== SFRZ26 path ledger (ZQ tree vs options), {d} ===")
+    print(led.to_string(index=False))
+
+led1, edges1, atoms1 = count_ledger("SFRZ26", D1)
+hikes3 = led1[led1.path == "3 net moves"].iloc[0]
+print(f"\nTHE HEADLINE CASE ({D1}): P(hike at sep AND oct AND dec) — "
+      f"FedWatch-style lattice {hikes3.p_lattice:.1%}, smeared tree "
+      f"{hikes3.p_tree:.1%}, options {hikes3.p_opt:.1%} -> the surface pays "
+      f"{hikes3.gap_pp:+.1f}pp ≈ {hikes3.gap_bp_digital:+.1f}bp on the "
+      "25bp-wide 425-450 vertical for the all-hikes path.")
+
+# %%
+# Listed cross-check: the same digitals from RAW listed premiums (no spline).
+# A 6.25bp vertical at the bucket edge, undiscounted: 1 full premium tick
+# (0.25bp) is 4pp on this width, so this check is coarse — it bounds the
+# spline, it does not refine it.
+def listed_digital(sym, d, edge_rate):
+    """P(rate > edge) from the nearest listed vertical; None off the grid."""
+    pts = pd.DataFrame([q.__dict__ for q in smiles[(sym, d)].points])
+    edge_price = 100.0 - edge_rate
+    for side, sign in (("P", +1), ("C", -1)):
+        leg = pts[pts.right == side].sort_values("strike_price")
+        ks = leg.strike_price.values
+        lo = ks[ks <= edge_price][-1] if (ks <= edge_price).any() else None
+        hi = ks[ks > edge_price][0] if (ks > edge_price).any() else None
+        if lo is None or hi is None or hi - lo > 0.26:
+            continue
+        prem = leg.set_index("strike_price").market_price
+        df_ = float(leg.discount_factor.iloc[0])
+        p_below = (prem[hi] - prem[lo]) / (hi - lo) / df_
+        if side == "C":
+            p_below = 1.0 + p_below          # dC/dK = -(1 - F(K))
+        # price < mid  <=>  rate > 100 - mid ~= the edge
+        return float(np.clip(p_below, 0.0, 1.0))
+    return None
+
+print("=== listed-vertical bound on the outer digitals, SFRZ26", D1, "===")
+for name, e in (("P(rate > above-lattice edge)", edges1[-1]),
+                ("P(rate > 3-hike lower edge)", edges1[-2]),
+                ("P(rate < below-lattice edge)", edges1[0])):
+    lv = listed_digital("SFRZ26", D1, e)
+    bl = snaps[("SFRZ26", D1)].bl_result
+    spl = 1.0 - float(np.interp(e, bl.strike_grid_rate, bl.rnd_cumulative))
+    if "below" in name:
+        lv = None if lv is None else 1.0 - lv
+        spl = 1.0 - spl
+    print(f"  {name} @ {e:.4f}%: listed {lv if lv is None else round(lv, 3)}"
+          f"  spline {spl:.3f}")
+
+# %%
+# What the ledger is actually saying — one premium, not many edges.
+led0, _, _ = count_ledger("SFRZ26", D0)
+for d, led in ((D0, led0), (D1, led1)):
+    interior = led[~led.bucket.str.startswith("off-lattice")]
+    deficit = -interior[interior.gap_pp < 0].gap_pp.sum()
+    surplus = led[led.gap_pp > 0].gap_pp.sum()
+    modal = interior.loc[interior.p_tree.idxmax()]
+    print(f"{d}: modal bucket {modal.bucket} priced {modal.gap_pp:+.1f}pp "
+          f"({modal.gap_bp_digital:+.1f}bp on its vertical); total mode "
+          f"deficit {deficit:.1f}pp == wing+tail surplus {surplus:.1f}pp "
+          "(probability conservation).")
+print("\nThe listed check bounds the honesty of this: the two upper edges "
+      "reprice within 0.2-0.7pp of the spline, so the interior gaps are "
+      "real; the BELOW-lattice tail HALVES on listed quotes (4.1% vs 8.2% "
+      "at 07-31) — haircut that row before believing it. What remains is "
+      "ONE premium seen from two sides: the surface flattens the modal "
+      "paths and pays for everything else — off-lattice outcomes, "
+      "intermeeting risk, SOFR-vs-EFFR dispersion the lattice cannot "
+      "represent. Selling it (buy the modal vertical, sell the wings — a "
+      "fly) is short realized dispersion around the FedWatch lattice: the "
+      "channel-2 insurance short in fly clothing, NOT a collection of "
+      "independent mispricings. It becomes a genuine convergence trade "
+      "only where the lattice is feasible and the asymmetry is one-sided — "
+      "the <60-dte channel-1 regime the meeting-prob study gated and "
+      "backtested (5 trades/2y, cost-bound at EOD).")
+
+# %% [markdown]
+# ### F3. The conditional block: what options say about the January meeting
+#
+# One expiry can never attribute (exchangeability) — but TWO can. SFRH27's
+# resolved set is SFRZ26's plus exactly {jan27}, so under the same
+# independence assumption FedWatch itself makes, the H27 count distribution
+# is the Z26 count distribution convolved with one Bernoulli. Fitting that
+# Bernoulli to the two OPTION-implied count distributions extracts the
+# option market's own conditional P(jan27 move) — the first per-meeting
+# number in this research line that comes from options alone.
+
+# %%
+def opt_count_vector(sym, d):
+    """Option bucket masses on the contract's own recentered count lattice."""
+    bl = snaps[(sym, d)].bl_result
+    r, p, smear, cm = tree(sym, d, "ZQ")
+    shift = bl.forward_residual_bp / 1e4      # align edges to the RND's mean
+    edges = np.concatenate([[r[0] - 0.375], [r[0] - 0.125],
+                            (r[:-1] + r[1:]) / 2,
+                            [r[-1] + 0.125], [r[-1] + 0.375]]) + shift
+    cdf = np.interp(edges, bl.strike_grid_rate, bl.rnd_cumulative,
+                    left=0.0, right=1.0)
+    v = np.diff(cdf)                          # cells: counts -1 .. n+1
+    v[0] += cdf[0]                            # fold the far tails into the
+    v[-1] += 1.0 - cdf[-1]                    # outermost count cells
+    return v / v.sum(), cm.n_resolved
+
+for d in (D0, D1):
+    smiles[("SFRH27", d)] = stirfo_mdp.fetch_sabr_smile({
+        "symbol": "SFRH27", "as_of": d, "strike_offsets_bps": "listed"})
+    snaps[("SFRH27", d)], var = extract_best(smiles[("SFRH27", d)])
+    blh = snaps[("SFRH27", d)].bl_result
+    print(f"SFRH27 {d} [{var}]: fwd {blh.input.forward_rate:.3f} "
+          f"std {blh.std_rate*100:.1f}bp resid {blh.forward_residual_bp:+.2f}bp")
+
+fit_rows = []
+for d in (D0, D1):
+    vz, nz = opt_count_vector("SFRZ26", d)
+    vh, nh = opt_count_vector("SFRH27", d)
+    assert nh == nz + 1                       # the extra meeting is jan27
+    qs = np.linspace(0.0, 1.0, 1001)
+    best_q, best_e = None, np.inf
+    for q in qs:
+        model = np.convolve(vz, [1.0 - q, q])
+        m = min(len(model), len(vh))
+        err = float(np.abs(model[:m] - vh[:m]).sum())
+        if err < best_e:
+            best_q, best_e = q, err
+    q_zq = next((m.q for m in ladders[(d, "ZQ")]
+                 if m.effective == datetime.date(2027, 1, 27)), np.nan)
+    q_sw = next((m.q for m in ladders[(d, "SOFR-swap")]
+                 if m.effective == datetime.date(2027, 1, 27)), np.nan)
+    fit_rows.append({"as_of": d, "q_jan_options": round(best_q, 3),
+                     "q_jan_ZQ": round(q_zq, 3),
+                     "q_jan_SOFR_swap": round(q_sw, 3),
+                     "fit_L1": round(best_e, 3)})
+cond = pd.DataFrame(fit_rows)
+print("\n=== option-implied conditional P(jan27 move), via Z26 (x) Bern = H27 ===")
+print(cond.to_string(index=False))
+print("\nfit_L1 is the L1 mass the one-Bernoulli model CANNOT explain — the "
+      "cross-expiry residual. It is dominated by SFRH27's extra off-lattice "
+      "width (its smear and tails exceed anything a single 0/25bp meeting "
+      "can add), so read q_jan_options as indicative, not tradeable: the "
+      "far expiry sits deep in the saturated band where shape, not "
+      "attribution, is the priced object.")
+
+# %% [markdown]
 # ## Summary
 #
 # Every claim below is computed in this notebook, above.
@@ -576,6 +780,15 @@ print("\nNET: the honest trade inventory from this triangle is (i) the "
 # * **Across the July decision** the linear legs show the mechanics
 #   (front-level collapse, back-jump inflation); the option mean follows the
 #   forward by parity while the width compresses ~7bp.
+# * **The path ledger prices every FOMC outcome both ways** (orderings
+#   collapse to move counts for weight-1 quarterlies): the surface flattens
+#   the modal count buckets (~−4bp on the modal 25bp vertical) and pays for
+#   every non-modal one; upper edges validate against listed verticals to
+#   <1pp, the below-lattice tail halves on listed quotes. One dispersion
+#   premium, not many edges. Cross-expiry deconvolution (H27 = Z26 ⊛ Bern)
+#   gives options' own conditional P(jan27 move) — above the linear reads,
+#   but a third of the mass doesn't fit any single Bernoulli (weak
+#   identification in the saturated band).
 # * **The listed ICS re-opens the level channel**: `0.5·ZQF27+0.5·ZQG27 −
 #   SR3Z26` decomposes into basis + compounding + calendar-proxy wedge +
 #   residual, and the residual on a December quarterly carries the year-end

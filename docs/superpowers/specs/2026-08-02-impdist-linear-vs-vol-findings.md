@@ -102,6 +102,49 @@ trade: episodic, cost-bound at EOD, best executed <60 dte with the swap
 ladder as the linear leg. No standing harvest; two episodic, cost-gated
 entries.
 
+## The path ledger (added 2026-08-02, third pass)
+
+For a quarterly whose resolved meetings all carry day-weight 1, the 2^k FOMC
+orderings collapse to the move COUNT, so "hike, hike, hike" IS the terminal
+425–450 bucket — an option-identified object despite exchangeability. The
+ledger (notebook section F), at 07-31, ZQ tree vs options, with the
+1bp-of-premium ≈ 4pp yardstick on 25bp verticals:
+
+| bucket | path | lattice | tree (smeared) | options | gap | on the vertical |
+|---|---|---:|---:|---:|---:|---:|
+| 350–375 | 0 moves | 13.2% | 13.7% | 20.1% | +6.5pp | +1.6bp |
+| 375–400 | 1 move | 41.0% | 40.0% | 23.3% | **−16.7pp** | −4.2bp |
+| 400–425 | 2 moves | 36.3% | 35.7% | 23.9% | −11.8pp | −3.0bp |
+| 425–450 | 3 moves (all hikes) | 9.4% | 10.0% | 15.7% | +5.7pp | +1.4bp |
+| below lattice | intermeeting/>25bp | 0 | 0.4% | 8.2% | +7.8pp | +1.9bp |
+| above lattice | intermeeting/>25bp | 0 | 0.3% | 8.8% | +8.5pp | +2.1bp |
+
+**The user's example answers**: the all-hikes path (FedWatch ~9.7%) is
+priced at 15.7% by the surface — +5.7pp ≈ +1.4bp rich on its vertical.
+
+**Listed-vertical validation**: the two upper edges reprice from RAW listed
+premiums within 0.2–0.7pp of the spline (P(rate>4.35): 24.3% listed vs
+24.5% spline) — the interior gaps are real. The BELOW-lattice tail HALVES
+on listed quotes (4.1% vs 8.2%) — that row is half spline artifact.
+
+**One premium, not many edges**: probability conservation makes the modal
+deficit (28.5pp at 07-31) identically the wing+tail surplus. The surface
+flattens the modal paths and pays for everything the lattice cannot
+represent. Selling it (buy the modal vertical, sell the wings — a fly) is
+short realized dispersion around the FedWatch lattice — the channel-2
+insurance short in fly clothing. It becomes a convergence trade only in the
+<60-dte feasible regime with one-sided asymmetry (the meeting-prob
+channel-1 gate: 5 trades/2y, cost-bound at EOD).
+
+**Cross-expiry conditional (F3)**: SFRH27's resolved set = SFRZ26's + {jan27},
+so fitting H27_counts = Z26_counts ⊛ Bernoulli(q) to the two option-implied
+count distributions extracts options' own conditional P(jan27 move): 0.26 /
+0.49 (07-28 / 07-31) vs ZQ's 0.17 / 0.26 and the SOFR-swap's 0.20 / 0.29.
+Options put more weight on January moving — but the one-Bernoulli fit
+leaves an L1 residual of 0.33–0.41 (a third of the mass), dominated by
+H27's off-lattice width, so this is indicative, not tradeable. First
+per-meeting number in this line derived from options alone.
+
 ## Honest limits
 
 - The 07-31 session has no published open interest, so both 07-31 densities
