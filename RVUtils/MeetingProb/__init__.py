@@ -11,6 +11,7 @@ Modules
 -------
 ``ladder``   ZQ settles -> per-meeting jump lattices, with staleness gates.
 ``swap_ladder``  FOMC-dated swap curves -> the same lattices, no bootstrap.
+``ics``      CME FF-vs-SR3 spread conventions; the FF-anchored absolute view.
 ``atoms``    the settlement transform -> mean-pinned atom distribution at expiry.
 ``pricer``   closed-form listed-structure pricing over smeared atoms.
 ``refit``    mantissa refit to listed premiums + the half-tick bootstrap.
@@ -35,6 +36,13 @@ from RVUtils.MeetingProb.pricer import (
     price_option,
     price_vertical,
 )
+from RVUtils.MeetingProb.ics import (
+    compounding_wedge_bp,
+    ff_conditional_atoms,
+    ics_blend_contracts,
+    ics_spread_bp,
+    proxy_wedge_bp,
+)
 from RVUtils.MeetingProb.swap_ladder import (
     fomc_period_rates,
     jumps_from_period_rates,
@@ -52,7 +60,9 @@ __all__ = [
     "HALF_TICK_BP",
     "ContractMeetings", "MeetingLattice", "RefitResult", "ResolvedMeeting",
     "atom_distribution", "boundary_digitals", "bootstrap_refit", "channel_row",
-    "digital_prob", "event_std_bp", "fomc_period_rates",
+    "compounding_wedge_bp", "digital_prob", "event_std_bp",
+    "ff_conditional_atoms", "fomc_period_rates", "ics_blend_contracts",
+    "ics_spread_bp", "proxy_wedge_bp",
     "jumps_from_period_rates", "ladder_history", "meeting_ladder",
     "price_option", "price_vertical", "refit_lattice", "select_quotes",
     "split_meetings", "swap_meeting_ladder", "two_digital_test",
