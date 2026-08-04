@@ -17,7 +17,8 @@ Modules
 """
 from RVUtils.OutcomeMap.cells import (
     Cell, CellMap, build_cell_map, decompose, distinct_atoms, snap_center,
-    map_full_weights, pair_odd_signal, pair_raw_signal,
+    map_full_weights, pair_odd_dev_signal, pair_odd_signal,
+    pair_raw_signal,
 )
 from RVUtils.OutcomeMap.structures import (
     FLY_WING, fly_legs, package_contracts, telescope,
@@ -31,7 +32,8 @@ from RVUtils.OutcomeMap.engine import (
 
 __all__ = [
     "Cell", "CellMap", "build_cell_map", "decompose", "distinct_atoms",
-    "snap_center", "map_full_weights", "pair_odd_signal", "pair_raw_signal",
+    "snap_center", "map_full_weights", "pair_odd_dev_signal",
+    "pair_odd_signal", "pair_raw_signal",
     "FLY_WING", "fly_legs", "package_contracts", "telescope",
     "linear_leg_cost_bp", "option_leg_cost_bp", "package_hedge_ratios",
     "package_tree_value", "zq_basket_contracts",

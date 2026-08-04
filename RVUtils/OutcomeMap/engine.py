@@ -86,8 +86,8 @@ def _resolve_outcome(last_jump: float, support: Tuple[int, int]) -> int:
 
 def run_outcome_backtest(
     entries: pd.DataFrame,
-    mark_fn: Callable[[pd.Timestamp, Sequence[Leg]], float],
-    fair_fn: Callable[[pd.Timestamp, str, Sequence[Leg]], float],
+    mark_fn: Callable[[pd.Timestamp, str, Sequence[Leg]], float],
+    signal_fn: Callable[[pd.Timestamp, object], float],
     all_dates: pd.DatetimeIndex,
     *,
     direction: str = "fade",
@@ -112,6 +112,12 @@ def run_outcome_backtest(
     ``converge`` (half the entry signal), ``hold`` (``max_hold`` sessions) or
     ``decision`` (the session after the next FOMC decision, via
     ``decision_after_fn``).
+
+    ``signal_fn(as_of, row) -> float`` must return the SAME object the entry
+    rule selected on — for an odd-component expression that is the package's
+    richness with the standing premium projected out, not its raw richness.
+    Exiting on a different signal from the one you entered on is how a
+    convergence trade silently becomes a dispersion trade.
     """
     if entries.empty:
         return []
@@ -135,13 +141,12 @@ def run_outcome_backtest(
             continue
         d_entry = later[lag - 1]
         legs = list(row["legs"])
-        m0 = mark_fn(d_entry, legs)
-        f0 = fair_fn(d_entry, sym, legs)
-        if not (np.isfinite(m0) and np.isfinite(f0)):
+        m0 = mark_fn(d_entry, sym, legs)
+        sig0 = signal_fn(d_entry, row)
+        if not (np.isfinite(m0) and np.isfinite(sig0)):
             continue
-        sig0 = m0 - f0                       # package richness (negative by
-        if abs(sig0) < 1e-9:                 # construction: long cheap/short rich)
-            continue
+        if abs(sig0) < 1e-9:                 # negative by construction:
+            continue                         # long the cheap cell, short the rich
 
         side = side_base
         # the contract bill is a property of the LEGS (netted), never of a
@@ -216,13 +221,13 @@ def run_outcome_backtest(
                             step += d_hedge
                         prev_jump[eff] = float(jn)
 
-            mk = mark_fn(dt, legs)
+            mk = mark_fn(dt, sym, legs)
             if np.isfinite(mk):
                 step += side * (mk - prev_mark)
                 prev_mark = float(mk)
-                fv = fair_fn(dt, sym, legs)
-                if np.isfinite(fv):
-                    last_sig = float(mk) - float(fv)
+                sv = signal_fn(dt, row)
+                if np.isfinite(sv):
+                    last_sig = float(sv)
             daily[dt] = daily.get(dt, 0.0) + step
             d_exit = dt
 

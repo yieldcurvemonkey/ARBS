@@ -341,6 +341,32 @@ def pair_odd_signal(cm: CellMap, *, p_floor: float = P_FLOOR
             "tilt_bp_per_cell": float(cm.b), "kind": "pair_odd"}
 
 
+def pair_odd_dev_signal(cm: CellMap, b_bar: float, *,
+                        p_floor: float = P_FLOOR
+                        ) -> Optional[Dict[str, object]]:
+    """``pair_odd`` against the contract's OWN trailing tilt rather than zero.
+
+    The panel says the tilt has a persistent positive level: on-lattice mass
+    sits higher than the lattice puts it, because the surface holds a one-sided
+    off-lattice CUT tail that an even basis {1, d^2} cannot absorb. Fading the
+    raw tilt would therefore be a standing short of that tail wearing a
+    convergence costume. ``b_bar`` is a causal trailing mean of the fitted tilt
+    for the same contract, so what is traded is today's DEVIATION from the
+    contract's own normal tilt.
+    """
+    if cm.n_cells < 3 or not np.isfinite(cm.b) or not np.isfinite(b_bar):
+        return None
+    o = cm.odd - b_bar * cm.d
+    pick = _extremes(o, _tradeable(cm, p_floor))
+    if pick is None:
+        return None
+    i_long, i_short = pick
+    return {"i_long": i_long, "i_short": i_short,
+            "strength_bp": float(o[i_short] - o[i_long]),
+            "tilt_bp_per_cell": float(cm.b), "tilt_bar_bp_per_cell": float(b_bar),
+            "kind": "pair_odd_dev"}
+
+
 def map_full_weights(cm: CellMap, *, p_floor: float = P_FLOOR
                      ) -> Optional[Dict[str, object]]:
     """Sell every odd-rich cell and buy every odd-cheap cell, gap-proportional.

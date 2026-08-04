@@ -145,7 +145,9 @@ The sample spans 2021-02 → 2026-07: ZIRP, the 2022 hiking cycle, SVB, the
 2024 cutting cycle and the 2025-26 pause. Costs in the 2021–22 era were thinner
 than the half-tick model assumes — flagged, never adjusted away.
 
-## The grid (pre-declared, 288 configs)
+## The grid (pre-declared as 288; **run as 360** — see amendments A1/A2/A5)
+
+Declared first, from the handover's axes:
 
 ```
 expression  {pair_raw, pair_odd, map_full, reswin}      4
@@ -157,17 +159,94 @@ direction   {fade, momentum}                            2
                                                     = 288
 ```
 
+Run, after the three amendments below (all made from the panel and from cost
+arithmetic, none from a P&L number):
+
+```
+expression  {pair_raw, pair_odd, pair_odd_dev, map_full, reswin}   5
+dte band    {<=130, >130}                                          2
+threshold   {4pp, 8pp, 16pp}  (= 1.0, 2.0, 4.0bp of fly premium)   3
+exit        {converge-half, hold-15}                               2
+linear leg  {none, zq, swap}                                       3
+direction   {fade, momentum}                                       2
+                                                               = 360
+```
+
 `reswin` overrides `exit` with "the session after the decision" but still runs
 both exit cells (they differ only through the max-hold cap) so the trial count is
 honest. 1bp of fly premium = 4pp of cell probability (25bp payoff scale) — the
 thresholds are stated in pp to match the rest of the program.
 
+## Amendments (made from the PANEL, before any P&L was computed)
+
+Building the map over the full sample produced two facts that invalidate parts
+of the pre-declaration above. Both changes are recorded here rather than
+silently applied, and both were made before a single backtest ran.
+
+**A1 — the dte bands move to {≤120, 120–160, >160}.** A map needs ≥3 cells,
+which needs ≥2 resolved meetings, which for a quarterly whose option expires
+before its reference window starts means roughly 60+ days to expiry. Over
+2021-02 → 2026-07 the panel holds 1,572 contract-days and only **4** of them sit
+under 45 dte, 55 under 60. The declared bands {<30, 30–60, <60} are empty or
+near-empty by construction, so they are replaced by three roughly equal buckets
+of the population that exists (530 / 506 / 536 contract-days).
+
+This is itself a structural result and it is uncomfortable for the thesis: the
+meeting-prob feasibility frontier put the convergence channel *inside* 60 dte,
+and the outcome map only exists *outside* it. The map is, by construction, an
+object of the region where the lattice cannot carry the surface's width. The
+study proceeds where the data is and says so.
+
+**A2 — a fifth expression, `pair_odd_dev`.** The panel shows the fitted tilt has
+a persistent POSITIVE level (yearly means +0.27 to +2.32 bp per cell against a
+1.3–3.0 bp std): relative to the lattice the surface systematically holds
+on-lattice mass at higher rates. With the mean and the mass both pinned, that is
+the on-lattice shadow of a one-sided off-lattice CUT tail — which the even basis
+{1, d²} cannot absorb. Fading the raw tilt would therefore be a standing short
+of that tail in convergence costume. `pair_odd_dev` measures each day's tilt
+against the contract's own causal 20-session trailing tilt, so what is traded is
+the deviation. The three rungs — raw richness → minus the standing smile → minus
+the contract's own trailing tilt — each strip one component that prior work
+already showed is not a convergence trade, and the comparison across rungs is
+part of the answer.
+
+**A5 — the threshold axis moves up a rung and the dte axis loses one.** The
+declared thresholds {4pp, 8pp} were set from the triangle ledger's 6–16pp cell
+gaps, before the cost side was written down. A pair of butterflies is 8
+contracts = 2.0bp round trip = **8pp of cell probability at 1×**, so the 4pp
+rung cannot clear costs by arithmetic, not by outcome. The axis becomes
+{4pp, 8pp, 16pp} — the 4pp rung kept deliberately as the mechanism measurement
+(the family-E precedent: a real, standing, un-collectable edge is worth
+reporting), 8pp at break-even, 16pp the first rung that can clear at 2×. To pay
+for it the dte axis drops to a median split {≤130, >130}: every map in the panel
+already sits above 60 dte, so dte is the least discriminating axis available,
+while the threshold is the one the verdict turns on.
+
+The grid is therefore **5 × 2 × 3 × 2 × 3 × 2 = 360 configs**, and DSR is
+computed at 360.
+
+**A3 — the exit signal is the entry signal.** The engine takes a
+`signal_fn(as_of, row)` rather than a fair value, and each expression's daily
+signal re-evaluates its own metric (raw richness / minus the day's fitted even
+part on the package's own cells at today's forward / minus the trailing tilt).
+Exiting a convergence trade on a signal it did not enter on turns it into a
+dispersion trade without saying so.
+
+**A4 — measured cell dynamics** (reported here because they set the exit
+parameters, not because they are results): pooled AR(1) within (symbol, cell),
+half-lives — raw richness 2.9 sessions, even part 3.2, odd part 2.7, local
+residual 1.6. Far faster than family B's 7–18-session package richness, so the
+`converge` exit will normally bind well inside the 15-session cap. A floor of
+1% lattice mass (`P_FLOOR`) makes a cell tradeable; below it the butterfly is a
+few ticks wide and its richness is kernel noise. Fly centring error on the
+6.25/12.5bp strike grid: median 1.5bp, max 12.25bp.
+
 ## Statistics and discipline (house law)
 
 * Both directions always; the sign test is `fade` vs `momentum` on gross.
 * n ≥ 10 floor before any row is named a winner (`pick_winner`).
-* DSR (`BT.signals.deflated_sharpe`) at the FULL trial count of 288, on per-trade
-  nets, plus NW t on the daily position series.
+* DSR (`BT.signals.deflated_sharpe`) at the FULL trial count of 360 (see
+  amendment A2), on per-trade nets, plus NW t on the daily position series.
 * Chronological halves; neighbourhood count around the winner.
 * Costs per contract per side (option half-tick 0.125bp, futures 0.25bp), reported
   at 0× / 1× / 2×.
@@ -196,8 +275,8 @@ thresholds are stated in pp to match the rest of the program.
    channel-1 → DEAD (too few trades), the EOD ceiling is confirmed, and the
    recommendation is the intraday escalation, not more EOD configs.
 3. If the placebos retain the edge → it was never lattice information.
-4. If `pair_odd` does not separate from `pair_raw` → the even/odd split bought
-   nothing; report the map as one premium and stop.
+4. If the odd expressions do not separate from `pair_raw` → the decomposition
+   bought nothing; report the map as one premium and stop.
 5. **ALIVE** requires all of: n ≥ 10, positive at 2× costs, DSR > 0.5,
    non-negative median config in its family, mirrored sign test, and survival of
    both placebos.

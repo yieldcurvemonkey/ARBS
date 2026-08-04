@@ -23,8 +23,8 @@ from RVUtils.OutcomeMap import (
     Cell, CellMap, HedgeContext, build_cell_map, decompose, distinct_atoms,
     fly_legs, linear_leg_cost_bp, map_full_weights, option_leg_cost_bp,
     package_contracts, package_hedge_ratios, package_tree_value,
-    pair_odd_signal, pair_raw_signal, run_outcome_backtest, snap_center,
-    telescope, zq_basket_contracts,
+    pair_odd_dev_signal, pair_odd_signal, pair_raw_signal,
+    run_outcome_backtest, snap_center, telescope, zq_basket_contracts,
 )
 from RVUtils.OutcomeMap.structures import package_mark
 
@@ -256,6 +256,23 @@ def test_low_mass_cells_are_measured_but_not_traded():
     assert cm.n_cells == 4                 # ...but it is still in the map
 
 
+def test_pair_odd_dev_trades_the_deviation_from_the_trailing_tilt():
+    """A map whose tilt is exactly its own normal level has nothing to trade."""
+    cells = [(3.50, -3.0), (3.75, -1.0), (4.00, +1.0), (4.25, +3.0)]
+    cm = _planted_map(cells, forward=3.875)
+    assert cm.b == pytest.approx(2.0)                    # 2bp of tilt per cell
+    flat = pair_odd_dev_signal(cm, 2.0)                  # ...which is normal
+    assert flat["strength_bp"] == pytest.approx(0.0, abs=1e-9)
+    # half the normal tilt: still worth fading, but only half as much
+    half = pair_odd_dev_signal(cm, 1.0)
+    assert half["strength_bp"] == pytest.approx(3.0)
+    assert half["i_long"] == 0 and half["i_short"] == 3
+    # a tilt BELOW normal flips the package
+    flip = pair_odd_dev_signal(cm, 4.0)
+    assert flip["i_long"] == 3 and flip["i_short"] == 0
+    assert pair_odd_dev_signal(cm, float("nan")) is None
+
+
 def test_map_full_weights_are_zero_sum_and_normalised():
     cm = _planted_map([(3.50, +1.0), (3.75, -3.0), (4.00, 0.0), (4.25, +2.0)],
                       forward=3.875)
@@ -338,10 +355,11 @@ def test_linear_cost_scales_with_the_basket_and_the_dv01_ratio():
 # ---------------------------------------------------------------------------
 
 def _scripted(dates, marks, fairs):
+    """mark_fn plus a signal_fn that returns the package's richness."""
     mk = dict(zip(dates, marks))
     fr = dict(zip(dates, fairs))
-    return (lambda ts, legs: mk.get(ts, np.nan),
-            lambda ts, sym, legs: fr.get(ts, np.nan))
+    return (lambda ts, sym, legs: mk.get(ts, np.nan),
+            lambda ts, row: mk.get(ts, np.nan) - fr.get(ts, np.nan))
 
 
 def _entries(legs):
@@ -355,9 +373,9 @@ def test_engine_converge_exit_and_cost_arithmetic():
     #      sig = mark - fair : -4, -3, -1.5, ... converges to half at t=3
     marks = [0.0, 6.0, 7.0, 8.5, 9.0, 9.0, 9.0, 9.0]
     fairs = [10.0] * 8
-    mark_fn, fair_fn = _scripted(dates, marks, fairs)
+    mark_fn, sig_fn = _scripted(dates, marks, fairs)
     legs = fly_legs(96.0) + fly_legs(96.5, weight=-1.0)
-    tr = run_outcome_backtest(_entries(legs), mark_fn, fair_fn, dates,
+    tr = run_outcome_backtest(_entries(legs), mark_fn, sig_fn, dates,
                               direction="fade", exit_rule="converge",
                               exit_frac=0.5, max_hold=10)
     assert len(tr) == 1
@@ -375,12 +393,12 @@ def test_engine_direction_mirrors_on_gross():
     dates = pd.DatetimeIndex(pd.bdate_range("2026-01-05", periods=8))
     marks = [0.0, 6.0, 7.0, 8.5, 9.0, 9.0, 9.0, 9.0]
     fairs = [10.0] * 8
-    mark_fn, fair_fn = _scripted(dates, marks, fairs)
+    mark_fn, sig_fn = _scripted(dates, marks, fairs)
     legs = fly_legs(96.0)
     kw = dict(exit_rule="hold", max_hold=3)
-    a = run_outcome_backtest(_entries(legs), mark_fn, fair_fn, dates,
+    a = run_outcome_backtest(_entries(legs), mark_fn, sig_fn, dates,
                              direction="fade", **kw)[0]
-    b = run_outcome_backtest(_entries(legs), mark_fn, fair_fn, dates,
+    b = run_outcome_backtest(_entries(legs), mark_fn, sig_fn, dates,
                              direction="momentum", **kw)[0]
     assert a.gross_bp == pytest.approx(-b.gross_bp)
     assert a.cost_bp == pytest.approx(b.cost_bp)
@@ -390,7 +408,7 @@ def test_engine_hedge_leg_pnl_and_bill_are_separable():
     dates = pd.DatetimeIndex(pd.bdate_range("2026-01-05", periods=6))
     marks = [0.0, 6.0, 6.0, 6.0, 6.0, 6.0]          # option leg flat
     fairs = [10.0] * 6
-    mark_fn, fair_fn = _scripted(dates, marks, fairs)
+    mark_fn, sig_fn = _scripted(dates, marks, fairs)
     legs = fly_legs(96.0)
     eff = datetime.date(2026, 3, 19)
     ctx = HedgeContext(effectives=(eff,), supports=((0, 1),),
@@ -403,7 +421,7 @@ def test_engine_hedge_leg_pnl_and_bill_are_separable():
         return jumps.get(ts, np.nan)
 
     t = run_outcome_backtest(
-        _entries(legs), mark_fn, fair_fn, dates, direction="fade",
+        _entries(legs), mark_fn, sig_fn, dates, direction="fade",
         exit_rule="hold", max_hold=3, linear_leg="zq",
         hedge_ctx_fn=lambda ts, sym, lg: ctx, jump_fn=jump_fn)[0]
     # hedge = -side * h * d(jump) = -1 * 0.5 * (12 - 10)
@@ -419,11 +437,11 @@ def test_engine_holds_one_package_per_symbol():
     dates = pd.DatetimeIndex(pd.bdate_range("2026-01-05", periods=12))
     marks = [float(i) for i in range(12)]
     fairs = [20.0] * 12
-    mark_fn, fair_fn = _scripted(dates, marks, fairs)
+    mark_fn, sig_fn = _scripted(dates, marks, fairs)
     legs = fly_legs(96.0)
     ent = pd.concat([_entries(legs),
                      _entries(legs).assign(
                          as_of=pd.Timestamp(dates[2]))], ignore_index=True)
-    tr = run_outcome_backtest(ent, mark_fn, fair_fn, dates, direction="fade",
+    tr = run_outcome_backtest(ent, mark_fn, sig_fn, dates, direction="fade",
                               exit_rule="hold", max_hold=6)
     assert len(tr) == 1
