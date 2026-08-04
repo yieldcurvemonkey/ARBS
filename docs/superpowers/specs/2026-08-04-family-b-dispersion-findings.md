@@ -124,6 +124,40 @@ search-uncertified*. Certification requires out-of-regime confirmation
 (the 2022 backfill, still running) or a pre-registered single config run
 forward, not more search.
 
+## THE REFEREE'S RULING (third pass — full backfill landed, sample 2021-02 → 2026-07)
+
+All 12 old expiries landed (~177k quote rows, 26 symbols, ~275 days each).
+The full sample contains the 2022 hiking cycle and March-2023 (SVB) — and
+it splits family B in half:
+
+**1. Passive tail-short carry is DEAD — the insurance paid.** STRG50 Q1
+short: +28.0bp total over 1,095 days, Sharpe 0.15, **worst day −55.4bp**,
+maxDD −105.9, skew −7.15; STRG75 Q2 short's worst day is **−91.8bp**. The
+modern-sample carry (Sharpe 1.15) was regime luck; over the full cycle the
+seller collects bp in front of a steamroller that arrives. Only the
+defined-risk FLY25 Q1 short stays positive (+41.0bp, Sharpe 0.66, worst
+day −4.2) — the wings cap the damage — but at t 1.5 it is not a result.
+
+**2. The conditional intra-quarter fade SURVIVES the same events, with
+the opposite skew.** Full-sample winner: **STRG75 Q1, thr 4bp, exit at
+25% of entry richness, hold ≤ 15 sessions, fade** — 16 trades, **88% hit,
++75.3bp net@1×, +67.3 @2×**; daily series Sharpe 1.62, NW t 2.10, maxDD
+−19.7, **skew +3.51**. The trade log is the mechanism made visible: entry
+2023-03-20 (post-SVB richness spike) collected +44.0bp as the panic
+premium converged; the one hiking-cycle loss (SFRU22, June-2022
+repricing) was bounded at −7.7bp. The rule enters AFTER richness spikes —
+it sells insurance when it is expensive and already paid, not through the
+event. That is why fade skew is +3.5 while carry skew is −7.
+
+**3. The taxonomy still says SELECTION-ARTIFACT** (DSR 0.000 at 720
+trials, median config −51.5bp) — and that stands. But the robustness
+strengthened: neighborhood 16/24 positive (median +20.4), halves
++55.3/+20.0 at 80%/100% hit, and the winner REGION (front-rank strangle
+fade, thr 4–6, exit 0.25) is stable across samples while the exact cell
+moved from Q2 to Q1 — the signature of a real edge measured noisily, not
+of a mined corner. Pre-registration spec, if pursued: STRG Q1, thr 4,
+exit 0.25, hold 15, fade only, one trial, no deflation penalty.
+
 ## Verdicts (house taxonomy, this sample)
 
 - Long dispersion (fly, dfly): **DEAD** — fairly priced, costs decide.
