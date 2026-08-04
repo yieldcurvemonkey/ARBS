@@ -90,6 +90,20 @@ The 1:1 hedge takes out **28% of the dispersion and 44% of the edge**. Gross per
 unit of risk falls from 0.213 to 0.167 — the hedge makes the trade worse **at
 zero cost**, so no execution assumption can rescue it. Then it doubles the bill.
 
+Because every ratio mode runs the *same trades*, the edge reduction is a paired
+quantity and is well estimated rather than a difference of noisy medians:
+
+| λ | paired trades | edge removed | SE | t | share of edge | risk ratio | gross/risk before → after |
+|---|---:|---:|---:|---:|---:|---:|---|
+| one | 442 | 0.237bp | 0.070 | **3.37** | 39.8% | 0.765 | 0.2122 → 0.1669 |
+| tree | 337 | 0.340bp | 0.137 | **2.47** | 59.4% | 0.824 | 0.2229 → 0.1099 |
+| emp | 423 | 0.196bp | 0.046 | **4.24** | 32.7% | 0.837 | 0.2149 → 0.1728 |
+
+(The trades pool across configs sharing dates, so the t overstates significance;
+the magnitudes and the uniform sign are the point.) **Every ratio degrades
+gross-per-unit-risk.** There is no size at which the calendar leg improves the
+trade.
+
 The reason is structural and, in hindsight, forced. The two expiries share
 meetings; the far contract's cell map is rich and cheap in the same places the
 near one's is, because it is the near one's map convolved with the extra

@@ -207,6 +207,46 @@ print("If the hedge cuts edge and risk in similar proportion, it cannot improve"
 print("the trade even before its bill — and its bill is the second problem.")
 
 # %% [markdown]
+# The medians above compare configs. The sharper version is a **paired** test:
+# every lambda mode runs the *same trades*, so the per-trade difference in gross
+# is a matched quantity and the pairing removes all of the trade-selection
+# variance. (The trades are pooled across configs that share dates, so the t
+# below overstates significance — the magnitudes and the sign are the point.)
+
+# %%
+trades = pd.read_parquet(OUT / "trades_real.parquet")
+lg = real.copy()
+lg["config"] = lg.index
+lg = lg.rename(columns={"exit": "exit_rule"})
+K = ["signal", "dte", "thr_pp", "exit_rule", "direction"]
+j = trades.merge(lg[["config", "lam"] + K], on="config")
+j = j[(j["signal"] == "map_odd") & (j["direction"] == "fade")]
+rows = []
+for lam in ("one", "tree", "emp"):
+    a = j[j["lam"] == "none"].set_index(K + ["symbol", "entry"])["gross_bp"]
+    b = j[j["lam"] == lam].set_index(K + ["symbol", "entry"])["gross_bp"]
+    p = pd.concat([a.rename("none"), b.rename("hedged")], axis=1).dropna()
+    if len(p) < 5:
+        continue
+    d = (p["none"] - p["hedged"]).to_numpy()
+    se = d.std(ddof=1) / np.sqrt(len(d))
+    rows.append({
+        "lam": lam, "paired_trades": len(d),
+        "edge_removed_bp": round(float(d.mean()), 3), "se": round(float(se), 3),
+        "t": round(float(d.mean() / se), 2),
+        "share_of_edge_removed": round(float(d.mean() / p["none"].mean()), 3),
+        "risk_ratio": round(float(p["hedged"].std() / p["none"].std()), 3),
+        "gross_per_risk_before": round(
+            float(p["none"].mean() / p["none"].std()), 4),
+        "gross_per_risk_after": round(
+            float(p["hedged"].mean() / p["hedged"].std()), 4)})
+pt = pd.DataFrame(rows)
+print(pt.to_string(index=False))
+print("\nEvery ratio degrades gross per unit of risk. The hedge is not mispriced;")
+print("it is cancelling the thing the trade is paid for — the two expiries share")
+print("meetings, so they are rich and cheap in the same places.")
+
+# %% [markdown]
 # ### The control
 #
 # `map_odd` with `lambda = none` is the prior study's `pair_odd_dev` row run
