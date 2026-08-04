@@ -516,38 +516,40 @@ def _build_rl_basic_gsquant_curve_from_frame(curve: str, as_of: datetime.date, f
     }
 
     if curve_cfg.get("extrapolation"):
-        # The right spline boundary must be anchored on the true LAST knot, not
-        # the second-to-last: the previous form built `extrapolated` from
-        # `knot_names[-2]`, which left the spline domain short of the curve's
-        # actual longest node (the last knot's own termination) whenever the
-        # extrapolation window undershot that gap even slightly - undefined
-        # evaluation there, which showed up as an all-NaN Solver failure once a
-        # calibrating instrument's cashflow landed past the spline's endpoint.
+        # `extrapolated` anchors the spline's right boundary on the true LAST
+        # knot, not the second-to-last (the previous bug: EUR-ESTR/JPY-TONAR
+        # silently produced an all-NaN Solver failure once the last knot's own
+        # node fell outside the domain).
         #
-        # The textbook fix would also promote the last knot itself into the
-        # interior control-point list (`knot_names[1:]` instead of
-        # `knot_names[1:-1]`), since it now lies strictly inside the domain.
-        # That does not solve here: every curve in this map is built so its
-        # `knots` list is exactly 1:1 with the curve's in-domain nodes (any
-        # meeting-dated/imm front-end instrument always terminates before the
-        # first knot, so it never contributes a node inside the spline's
-        # domain) - which means rateslib's per-curve exact (non-least-squares)
-        # spline fit is already exactly determined: `len(t) - 4` basis
-        # functions against exactly that many fit points. Adding one more
-        # interior knot without a new underlying node to fit makes the system
-        # overdetermined by one and rateslib's `csolve` raises `` `csolve`
-        # cannot complete if length of `tau` < n or `allow_lsq` is false ``
-        # (verified directly against USD-OIS on 2015-06-30, 2020-06-30 and
-        # 2026-07-31, all three failing identically with the textbook form).
-        # So only the `extrapolated` anchor moves to the true last knot; the
-        # interior control-point list is unchanged, which keeps every curve's
-        # spline exactly determined while still fixing the boundary bug: the
-        # domain's right edge now clears the true last knot's date by the full
-        # extrapolation window, rather than by window-minus-gap-to-the-
-        # second-to-last-knot.
+        # The interior control-point list stays `knot_names[1:-1]`, not
+        # `knot_names[1:]`: rateslib's exact (non-least-squares) spline fit
+        # needs `len(t) - 4` basis functions to equal the number of DISTINCT
+        # curve-node dates >= t[0]. That count equals `len(knots)` for every
+        # curve here - by construction for most (front-end meeting/imm
+        # instruments terminate before t[0]), and for USD-OIS-STIR-LCH only by
+        # a termination-date collision (`imm4 to 3m` / `imm3 to 6m` share a
+        # date), not by construction. Adding the last knot as an interior
+        # control point (`knot_names[1:]`) adds a basis function with no new
+        # node to fit, which UNDERdetermines the system by one and rateslib's
+        # `csolve` raises.
         knot_names = list(curve_cfg["knots"])
         knots = [df.loc[name]["terminationDate"] for name in knot_names[1:-1]]
         extrapolated = df.loc[knot_names[-1]]["terminationDate"] + curve_cfg["extrapolation"]
+
+        # Guard the bug class above directly: if the extrapolation window still
+        # doesn't reach every node (e.g. a too-short `extrapolation` value),
+        # fail loudly here instead of building a curve that evaluates as NaN
+        # past the spline's endpoint - which `rl.Solver` reports as a FAILURE
+        # log line without raising, and which then gets cached as a "success".
+        offending = sorted(d for d in nodes if d > extrapolated)
+        if offending:
+            raise ValueError(
+                f"GSQUANT curve '{curve}': extrapolation window does not reach "
+                f"its own longest node(s) on {as_of}. Spline domain ends "
+                f"{extrapolated.date()} but node date(s) "
+                f"{[d.date() for d in offending]} lie beyond it."
+            )
+
         curve_kwargs.update(
             interpolation="log_linear",
             t=[
