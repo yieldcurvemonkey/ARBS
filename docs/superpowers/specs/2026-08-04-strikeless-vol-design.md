@@ -32,8 +32,9 @@ ledger (carry collected vs convexity paid).
 | USD 2y10y normal vol history **starts 2017-01-03**, 2409 daily obs → 2026-08-03 | GS dataset | **no vol regression before 2017.** The Citi 2010–19 *regression* cannot be reproduced; the 2010–19 *P&L* control can (curves only) |
 | Today's USD 2y10y `impliedNormalVolatility` = 5.329 daily-bp; × √252 = **84.6 annual normals** | GS dataset | identical to the figure in the research brief — same series, so the brief's betas are directly comparable |
 | GS `USD-OIS` rateslib curve cached back to **2010-10-11** (daily) | `data/ts` asset `IRS__GSQUANT-RL__USD-OIS__*` | long-history curve spine for the static-long control |
-| `USD-OIS` knot set stops at **30Y**, extrapolation +20y | `MDP/IRSwaps/GSQUANT/rl_basic/build.py` | 10y10y ✅ 15y5y ✅ 20y10y ✅ — **25y10y needs the 35y point, which today is extrapolated, i.e. fitted air.** Must add a 40Y knot or drop the pair |
-| `EUR-ESTR` and `JPY-TONAR` builders exist but nothing is cached; **no GBP-SONIA builder** | same file | EUR/JPY = backfill cost only; GBP = new curve definition (stretch) |
+| `USD-OIS` knot set stops at **30Y**, extrapolation +20y | `MDP/IRSwaps/GSQUANT/rl_basic/build.py` | 10y10y ✅ 15y5y ✅ 20y10y ✅; 25y10y needs a 35y point |
+| **GS coverage sheet settles the knot question** (33,111 instruments, local file, no network): USD OIS **max 30y** (history 2010-01-04), USD SOFR max 30y (2018-04-27), **EUR ESTR to 50y** (2018-12/2019-08), JPY TONA max 30y (2010-01-04), **GBP OIS to 50y (2010-01-04)** | `MDP/IRSwaps/GSQUANT/COVERAGE/IR_SWAP_RATES_V1_STANDARD_COVERAGE.xlsx` | **USD 25y10y is dead — the 35y point does not exist at any provider tenor.** EUR and GBP support it; GBP is the *only* market with both 50y coverage and 2010 history |
+| `EUR-ESTR` and `JPY-TONAR` builders exist but nothing is cached; no GBP builder, but the instruments are named `GBP Swap OIS 1y ATM 0b to Ny LCH Cleared` and cover 1–50y from 2010 | same file + coverage sheet | EUR/JPY = backfill cost only. GBP is no longer speculative: writing the curve definition is mechanical, mirroring EUR/JPY |
 | `BT/signals/tfp_swap_spread.py` already implements the Dallas Fed / JPM cross-sectional regression (ASW vs modified duration, intercept discarded) | repo | **UMEP is reuse, not a build** — but it is USD-only (needs a UST curve) |
 | ERIS `USD-SOFR-1D` panel starts 2022; Barchart intraday from 2021 | `data/ts` | cross-validation window for the OIS-built series, not a primary spine |
 
@@ -158,17 +159,22 @@ inception tenor minus elapsed time.
 
 ## Universe
 
-| Market | Pairs | Notes |
-|---|---|---|
-| USD | 10y10y/20y10y, 15y5y/20y10y, 5y10y/15y10y, 10y10y/25y10y* | *only if the 40Y knot lands; otherwise dropped and said so |
-| EUR | 10y10y/20y10y, 15y5y/20y10y | Wtp calendar as a drift covariate |
-| JPY | 10y10y/20y10y, 15y5y/20y10y | post-lifer-exit "back-book" configuration |
-| GBP | 15y10y/25y10y | **stretch** — needs a new `GBP-SONIA` curve definition *and* the 35y point (same knot dependency as USD 25y10y); dropped without ceremony if either fails |
+Set by measured provider coverage, not by preference:
 
-Node-set coverage per market is a P0 measurement, not an assumption: `EUR-ESTR`
-lists a 50y instrument, `JPY-TONAR` and `GBP-SONIA` are unverified. A pair whose
-longest point is extrapolated is excluded from that market's universe and the
-exclusion is published in the findings.
+| Market | Curve | Longest observed point | Sample | Pairs |
+|---|---|---|---|---|
+| USD | `USD-OIS` (spine), `USD-SOFR-1D` (cross-check) | 30y | 2010-01-04 (OIS), 2018-04-27 (SOFR) | 10y10y/20y10y, 15y5y/20y10y, 5y10y/15y10y |
+| EUR | `EUR-ESTR` | 50y | ~2019 | 10y10y/20y10y, 15y5y/20y10y, 10y10y/25y10y |
+| JPY | `JPY-TONAR` | 30y | 2010-01-04 | 10y10y/20y10y, 15y5y/20y10y |
+| GBP | `GBP-OIS` (new definition) | 50y | 2010-01-04 | 15y10y/25y10y, 10y10y/20y10y |
+
+**USD 10y10y/25y10y is excluded** — its 35y point is not published at any GS
+tenor, so it cannot be observed and will not be extrapolated. GBP was scoped as
+a stretch before the coverage sheet was read; it is now the only market with
+both 50y coverage and 2010 history, so it carries the ultra-long pair the USD
+curve cannot. A pair whose longest point is not an observed instrument is
+excluded from that market's universe and the exclusion is published in the
+findings.
 
 Constructions compared (H9): pure two-leg flattener; the same package hedged
 with a received 1y-fwd 2-7-30 fly at PCA-solved weights (uses the existing
@@ -247,11 +253,12 @@ after costs, and uncompensated factor risk measured as residual PCA exposure.
 
 ## Deliverables and phasing (one spec, staged execution)
 
-- **P0 data** — extend `ASSET_IDS_MAP` to EUR/GBP/JPY from coverage; add 40Y
-  (and 50Y if it resolves) knots to `USD-OIS`/`EUR-ESTR`/`JPY-TONAR`; backfill
-  EUR/JPY curves; build and cache forward/vol/UMEP panels; measure and publish
-  actual coverage per market. Cross-validate OIS-built vs SOFR-built USD
-  forwards on 2022+ and report the divergence before choosing the spine.
+- **P0 data** — extend `ASSET_IDS_MAP` to EUR/GBP/JPY from the swaption
+  coverage; extend `EUR-ESTR` knots to 35/40/50y (they exist); write the
+  `GBP-OIS` curve definition (1–50y, 2010+); backfill EUR/JPY/GBP curves; build
+  and cache forward/vol/UMEP panels. Cross-validate OIS-built vs SOFR-built USD
+  forwards on the 2018-04-27+ overlap and report the divergence before fixing
+  the spine. USD and JPY node sets stay at 30y — the instruments stop there.
 - **P1 greeks** — `greeks.py` + analytic control tests + BE panel.
 - **P2 replication + control** — `replication.py`, four ledgers, reconciliation
   test, **the Citi static-long positive control**. Gate: no downstream work
@@ -274,8 +281,10 @@ Tests run under `conda run -n stir`; fast gate is
   curves alone.
 - UMEP is USD-only (it needs a UST curve); EUR/JPY/GBP signals run on
   valuation + drift, and the two-factor levels residual is a USD-only overlay.
-- The 35y forward point does not exist in the current node set. Either the 40Y
-  knot lands or 25y10y is dropped — it is not to be fitted from extrapolation.
+- The 35y USD point does not exist at the provider. USD 25y10y is dropped, not
+  extrapolated; the ultra-long pair lives in GBP and EUR instead.
+- EUR's sample starts ~2019 (ESTR); pre-2019 EUR would need EURIBOR-discounted
+  curves and is out of scope, so EUR contributes ~7 years, not 16.
 - Max GS swaption expiry is 10y, so a 20y-expiry vol (the mechanically exact
   regressor for the long leg of a 20y10y position) is unavailable; 10y10y is
   the closest and the approximation is reported.
