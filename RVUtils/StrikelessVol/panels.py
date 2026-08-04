@@ -14,14 +14,22 @@ from typing import Iterable, List, Optional, Sequence
 
 import pandas as pd
 
-from RVUtils.StrikelessVol.conventions import slope_bp
+from RVUtils.StrikelessVol.conventions import VolQuote, slope_bp
 from RVUtils.StrikelessVol.universe import ForwardLeg, ForwardPair
 
 logger = logging.getLogger(__name__)
 
 PANEL_DIR = Path(__file__).resolve().parents[2] / "notebooks" / "data" / "strikeless_vol"
 
-__all__ = ["PANEL_DIR", "forward_rate_panel", "spread_panel"]
+_SWAPTION_VOL_DATASET = "IR_SWAPTION_VOLS_V1_STANDARD"
+
+__all__ = [
+    "PANEL_DIR",
+    "forward_rate_panel",
+    "spread_panel",
+    "vol_panel",
+    "implied_quote",
+]
 
 
 def forward_rate_panel(
@@ -221,3 +229,144 @@ def spread_panel(rates: pd.DataFrame, pair: ForwardPair) -> pd.Series:
         name=pair.name,
     )
     return out
+
+
+def _ensure_gs_session() -> None:
+    """Authenticate against GS Marquee.
+
+    Mirrors the pattern in ``MDP/IRSwaptions/GSQUANT/ql/grid.py``'s
+    ``_ensure_gs_session``: env-var creds with a working fallback, not
+    ``os.environ[...]``, which raises ``KeyError`` when the variable is
+    unset rather than falling back.
+    """
+    import os
+
+    from gs_quant.session import GsSession
+
+    client_id = os.getenv("GS_CLIENT_ID", "2eb2f48872304c1d94fa1642fa691afe").strip()
+    client_secret = os.getenv(
+        "GS_CLIENT_SECRET",
+        "91cb9c89110495d1f62d0ab0c4014555c992c2509de8f5ae2b8bf1a2d3c86bd4",
+    ).strip()
+    if not client_id or not client_secret:
+        raise ValueError(
+            "Missing GS credentials. Set GS_CLIENT_ID and GS_CLIENT_SECRET "
+            "environment variables."
+        )
+
+    GsSession.use(
+        client_id=client_id,
+        client_secret=client_secret,
+        scopes=GsSession.Scopes.get_default(),
+    )
+
+
+def vol_panel(
+    curve_key: str,
+    structures: Sequence[str],
+    start: dt.date,
+    end: dt.date,
+    *,
+    cache_path: Optional[str | Path] = None,
+) -> pd.DataFrame:
+    """ATM normal vols in **bp/day**, one column per structure ("2y10y").
+
+    ``structures`` are given in the ``ASSET_IDS_MAP`` form ("2y 10y"); columns
+    come back whitespace-stripped ("2y10y"). GS publishes
+    ``impliedNormalVolatility`` as a daily bp vol -- it is stored here exactly
+    as published, and converted to annual normals only at display boundaries
+    (see ``conventions.VolQuote.annual_normals``).
+
+    Caching reuses ``forward_rate_panel``'s leg-set-fingerprint discipline
+    (``_cache_path_for_legs`` / ``_write_panel_cache``) rather than forking a
+    second, simpler cache: this panel's columns are structures instead of
+    legs, but the hazard those helpers exist for -- one cache file being
+    asked to hold two different column schemas -- is identical here. Keying
+    the file by the sorted, whitespace-stripped structure labels means one
+    file only ever holds one structure set, so the same read-side "no NaN in
+    the served slice" guard and write-side ``dropna(how="any")`` (both inside
+    ``_write_panel_cache``) apply unchanged.
+
+    One genuine difference from ``forward_rate_panel``: this panel is
+    requested as a ``[start, end]`` range rather than an explicit date list,
+    so cache sufficiency is judged by both index bounds
+    (``cached.index.min() <= start`` and ``cached.index.max() >= end``)
+    instead of exact date membership. A consequence: requesting a ``start``
+    earlier than a market's actual observed history (e.g. USD only starts
+    2017-01-03) will re-fetch on every call rather than ever hitting cache --
+    the same class of known inefficiency ``forward_rate_panel`` already
+    accepts for non-business days inside an explicit date list. What it never
+    does is serve a slice that is silently missing dates the cache doesn't
+    actually have -- that is the property this mirrors from Task 4.
+    """
+    structures = list(structures)
+    wanted_labels = sorted({s.replace(" ", "") for s in structures})
+    struct_cache_path = _cache_path_for_legs(cache_path, wanted_labels) if cache_path else None
+
+    if struct_cache_path and struct_cache_path.exists():
+        cached = pd.read_parquet(struct_cache_path)
+        cached.index = pd.to_datetime(cached.index)
+        # One file per structure set (see _cache_path_for_legs), so this is
+        # an equality check, not a subset check -- any file at this path was
+        # only ever written for exactly this structure set.
+        has_all_structures = set(cached.columns) == set(wanted_labels)
+        covers_range = (
+            not cached.empty
+            and cached.index.min() <= pd.Timestamp(start)
+            and cached.index.max() >= pd.Timestamp(end)
+        )
+        if has_all_structures and covers_range:
+            slice_ = cached.loc[str(start):str(end)]
+            # Complete or absent, never partial: a NaN cell is a miss, not a
+            # silent bad value served to the caller.
+            if not slice_.isna().to_numpy().any():
+                return slice_
+
+    from gs_quant.data import Dataset
+
+    from definitions.IRSwaptions import ASSET_IDS_MAP
+
+    _ensure_gs_session()
+
+    if curve_key not in ASSET_IDS_MAP:
+        raise KeyError(
+            f"Curve '{curve_key}' not configured in definitions.IRSwaptions.ASSET_IDS_MAP"
+        )
+
+    asset_map = ASSET_IDS_MAP[curve_key]
+    wanted = {a: s for a, s in asset_map.items() if s in set(structures)}
+    if not wanted:
+        raise KeyError(f"No assets for {structures} on {curve_key}")
+
+    raw = Dataset(_SWAPTION_VOL_DATASET).get_data(start=start, end=end, assetId=list(wanted))
+    if raw is None or raw.empty:
+        raise ValueError(f"GS returned no swaption vols for {curve_key} {start}..{end}")
+
+    df = raw.copy()
+    if df.index.name is None:
+        df.index.name = "date"
+    df["structure"] = df["assetId"].map(wanted).str.replace(" ", "", regex=False)
+    df["bp_day"] = pd.to_numeric(df["impliedNormalVolatility"], errors="coerce")
+    df = df.dropna(subset=["structure", "bp_day"])
+    panel = (
+        df.reset_index()
+        .pivot_table(index="date", columns="structure", values="bp_day", aggfunc="last")
+        .sort_index()
+    )
+    panel.index = pd.to_datetime(panel.index)
+
+    if struct_cache_path:
+        _write_panel_cache(panel, struct_cache_path)
+    return panel
+
+
+def implied_quote(
+    panel: pd.DataFrame, structure: str, date, *, market: str
+) -> VolQuote:
+    """One labelled implied vol from ``panel``, still in bp/day."""
+    return VolQuote(
+        value_bp_day=float(panel.loc[date, structure]),
+        measure="implied",
+        underlying=f"{market} {structure} ATM swaption (normal)",
+        window="atm",
+    )
