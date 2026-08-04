@@ -14,6 +14,7 @@ Modules
 ``structures``  butterfly legs, telescoping, contract counts
 ``hedge``       package hedge ratios vs per-meeting jumps; ZQ / swap leg costs
 ``engine``      the trade loop (lag-1 entries, one package per symbol)
+``calendar``    the adjacent-expiry (vol-vs-vol) leg: pairing, mirroring, ratios
 """
 from RVUtils.OutcomeMap.cells import (
     Cell, CellMap, build_cell_map, decompose, distinct_atoms, snap_center,
@@ -27,6 +28,10 @@ from RVUtils.OutcomeMap.hedge import (
     linear_leg_cost_bp, option_leg_cost_bp, package_hedge_ratios,
     package_tree_value, zq_basket_contracts,
 )
+from RVUtils.OutcomeMap.calendar import (
+    LAMBDA_CAP, MIN_SHARED_MEETINGS, adjacent, align_exposure,
+    empirical_ratio, mirror_package, residual_exposure, tree_ratio,
+)
 from RVUtils.OutcomeMap.engine import (
     HedgeContext, OutcomeTrade, run_outcome_backtest)
 
@@ -38,4 +43,6 @@ __all__ = [
     "linear_leg_cost_bp", "option_leg_cost_bp", "package_hedge_ratios",
     "package_tree_value", "zq_basket_contracts",
     "HedgeContext", "OutcomeTrade", "run_outcome_backtest",
+    "LAMBDA_CAP", "MIN_SHARED_MEETINGS", "adjacent", "align_exposure",
+    "empirical_ratio", "mirror_package", "residual_exposure", "tree_ratio",
 ]
