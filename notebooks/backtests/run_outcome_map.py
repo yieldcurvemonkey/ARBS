@@ -19,6 +19,7 @@ ORDER = [
     (RV, "outcome_map_atlas"),
     (HERE, "outcome_map_league"),
     (HERE, "outcome_map_autopsy"),
+    (HERE, "volvol_calendar"),
 ]
 
 
