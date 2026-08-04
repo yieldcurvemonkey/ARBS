@@ -9,6 +9,8 @@ from __future__ import annotations
 import datetime as dt
 import hashlib
 import logging
+import os
+import tempfile
 from pathlib import Path
 from typing import Iterable, List, Optional, Sequence
 
@@ -231,81 +233,90 @@ def spread_panel(rates: pd.DataFrame, pair: ForwardPair) -> pd.Series:
     return out
 
 
-def _interval_sidecar_path(cache_path: Path) -> Path:
-    """The JSON file recording which ``[start, end]`` windows have actually
-    been *queried* into ``cache_path`` -- see ``vol_panel``'s docstring for
-    why a parquet's data extent alone cannot prove contiguous coverage.
+def _cache_path_for_window(
+    cache_path: str | Path,
+    curve_key: str,
+    wanted_labels: Sequence[str],
+    start: dt.date,
+    end: dt.date,
+) -> Path:
+    """Derive the exact-window-and-curve-specific file backing ``cache_path``
+    for ``vol_panel``.
 
-    A sidecar next to the parquet, not parquet key-value metadata: it stays
-    human-inspectable without a parquet reader, and avoids coupling this
-    module to whichever parquet engine/version pandas resolves to for its
-    custom-metadata API.
+    Unlike ``_cache_path_for_legs`` (structure/leg set only -- sufficient for
+    ``forward_rate_panel``, whose explicit date list makes exact-date
+    membership an available and load-bearing completeness check),
+    ``vol_panel`` takes a ``[start, end]`` **range**. Every attempt to let a
+    cache file answer an *arbitrary* sub-range of what it holds -- an
+    endpoint-only min/max check, then an explicit fetched-interval sidecar --
+    added its own way for the cache's metadata and its data to disagree:
+    a cross-schema merge, then served NaN, then evicted rows, then a
+    silently gapped read, and finally a sidecar that could outlive the
+    parquet it described and resurrect a phantom coverage claim for data no
+    longer on disk. Folding ``(curve_key, sorted wanted_labels, start, end)``
+    into the file's identity removes the need to prove anything about
+    coverage: the filename *is* the claim, and a hit requires an exact match
+    on the whole request. The cost -- a changed window re-fetches instead of
+    extending an existing file -- is deliberate: these builds are
+    ``network``/``slow``-marked and run rarely, the repeated-identical-call
+    case that actually matters in a research session still hits, and
+    incremental extension is exactly the feature that produced every defect
+    above. ``curve_key`` is part of the fingerprint so two curves that
+    happen to share a structure label (e.g. two markets both quoting
+    "2y 10y") and a ``cache_path`` prefix never collide on one file.
     """
-    return Path(str(cache_path) + ".intervals.json")
+    cache_path = Path(cache_path)
+    key = "|".join([curve_key, *sorted(wanted_labels), start.isoformat(), end.isoformat()])
+    fingerprint = hashlib.sha1(key.encode()).hexdigest()[:8]
+    return cache_path.with_name(f"{cache_path.stem}__{fingerprint}{cache_path.suffix}")
 
 
-def _load_fetched_intervals(sidecar_path: Path) -> List[tuple[dt.date, dt.date]]:
-    if not sidecar_path.exists():
-        return []
-    import json
+def _read_window_cache(cache_path: Path, wanted_labels: Sequence[str]) -> Optional[pd.DataFrame]:
+    """Load ``cache_path`` if it exists, is an exact-column match for
+    ``wanted_labels``, and has no NaN cell -- otherwise ``None`` (a miss).
 
-    with sidecar_path.open("r", encoding="utf-8") as f:
-        raw = json.load(f)
-    return [(dt.date.fromisoformat(s), dt.date.fromisoformat(e)) for s, e in raw]
-
-
-def _save_fetched_intervals(sidecar_path: Path, intervals: List[tuple[dt.date, dt.date]]) -> None:
-    import json
-
-    sidecar_path.parent.mkdir(parents=True, exist_ok=True)
-    raw = [[s.isoformat(), e.isoformat()] for s, e in sorted(intervals)]
-    with sidecar_path.open("w", encoding="utf-8") as f:
-        json.dump(raw, f)
-
-
-def _merge_fetched_interval(
-    intervals: List[tuple[dt.date, dt.date]], new_start: dt.date, new_end: dt.date
-) -> List[tuple[dt.date, dt.date]]:
-    """Fold ``[new_start, new_end]`` into ``intervals``, merging only where it
-    overlaps or abuts an existing interval -- its start is at most one
-    calendar day past that interval's end, i.e. no date sits strictly
-    between them. Disjoint intervals are kept apart: collapsing them into
-    one bounding range would assert coverage for dates that were never
-    fetched, which is exactly the bug this mechanism exists to rule out.
-
-    Assumes ``intervals`` is already itself fully merged (the only way this
-    function is ever called), so a single sorted pass is enough: once a
-    stored interval is far enough past the growing merged window to be
-    rejected, no later (even-further-out) stored interval can bridge back to
-    it without an overlapping entry in between, which by that invariant
-    cannot exist.
+    Both checks are defensive rather than load-bearing: the filename already
+    encodes the exact structure set this file was written for (see
+    ``_cache_path_for_window``), and every write already goes through
+    ``dropna(how="any")`` in ``vol_panel`` before being persisted. This is
+    the same "belt-and-braces on top of a structural guarantee" stance used
+    throughout this module, in case of a legacy or hand-written file.
     """
-    one_day = dt.timedelta(days=1)
-    merged_start, merged_end = new_start, new_end
-    remaining: List[tuple[dt.date, dt.date]] = []
-    for s, e in sorted(intervals):
-        if s <= merged_end + one_day and e >= merged_start - one_day:
-            merged_start = min(merged_start, s)
-            merged_end = max(merged_end, e)
-        else:
-            remaining.append((s, e))
-    remaining.append((merged_start, merged_end))
-    return sorted(remaining)
+    if not cache_path.exists():
+        return None
+    cached = pd.read_parquet(cache_path)
+    cached.index = pd.to_datetime(cached.index)
+    if set(cached.columns) != set(wanted_labels):
+        return None
+    if cached.isna().to_numpy().any():
+        return None
+    return cached
 
 
-def _fetched_intervals_cover(
-    intervals: List[tuple[dt.date, dt.date]], start: dt.date, end: dt.date
-) -> bool:
-    """Whether some *single* recorded interval fully contains ``[start, end]``.
+def _write_window_cache(panel: pd.DataFrame, cache_path: Path) -> None:
+    """Write ``panel`` to ``cache_path`` atomically: build it at a temp file
+    in the same directory, then ``os.replace`` into place.
 
-    Deliberately not "the union of all intervals covers [start, end]": two
-    disjoint fetches (e.g. one for 2015, an unrelated one for 2018) must
-    never be read as a single 2015-2018 fetch just because their union
-    happens to bracket a later request -- the calendar days between them
-    were never actually queried, and reading them as covered is precisely
-    the silent-gap bug this mechanism exists to close.
+    This cache no longer does incremental/merged writes (see
+    ``_cache_path_for_window``), so there is nothing to combine on disk --
+    but a partial write (process killed mid-``to_parquet``, or two callers
+    racing on the same exact window) could otherwise leave a truncated or
+    corrupt file at a name a later run would treat as a hit. ``os.replace``
+    is atomic on both POSIX and Windows, so ``cache_path`` is always either
+    absent or the complete new file, never a partial one in between.
     """
-    return any(s <= start and e >= end for s, e in intervals)
+    cache_path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp_name = tempfile.mkstemp(
+        dir=cache_path.parent, prefix=f".{cache_path.stem}.", suffix=".tmp"
+    )
+    os.close(fd)
+    tmp_path = Path(tmp_name)
+    try:
+        panel.to_parquet(tmp_path)
+        os.replace(tmp_path, cache_path)
+    except Exception:
+        tmp_path.unlink(missing_ok=True)
+        raise
 
 
 def vol_panel(
@@ -324,46 +335,25 @@ def vol_panel(
     as published, and converted to annual normals only at display boundaries
     (see ``conventions.VolQuote.annual_normals``).
 
-    Caching reuses ``forward_rate_panel``'s leg-set-fingerprint discipline
-    (``_cache_path_for_legs`` / ``_write_panel_cache``) rather than forking a
-    second, simpler cache: this panel's columns are structures instead of
-    legs, but the schema hazard those helpers exist for -- one cache file
-    being asked to hold two different column sets -- is identical here.
-    Keying the file by the sorted, whitespace-stripped structure labels means
-    one file only ever holds one structure set.
+    Caching is keyed by an exact-window fingerprint of ``(curve_key, sorted
+    structures, start, end)`` (``_cache_path_for_window``): a hit requires
+    an **exact match** on the whole request, nothing else. See that
+    function's docstring for why -- in short, every attempt to let a cache
+    file answer an arbitrary sub-range of what it holds added its own way
+    for the cache's metadata and its data to disagree, and making the
+    window part of the file's identity removes the need to prove anything.
+    A changed window always re-fetches rather than extending an existing
+    file; the repeated-identical-call case that matters in a research
+    session still hits.
 
-    Coverage is a genuinely different problem from ``forward_rate_panel``,
-    though, because this panel is requested as a ``[start, end]`` **range**
-    rather than an explicit date list. An *endpoint* check
-    (``cached.index.min() <= start and cached.index.max() >= end``) is not
-    safe: ``_write_panel_cache``'s ``combine_first`` will happily union two
-    **disjoint** fetch windows into one file (e.g. an early-history window
-    and an unrelated, much later one). A later request spanning both would
-    pass the endpoint check, and the missing months/years in between produce
-    *no NaN* to trip the "no NaN in the served slice" guard -- those dates
-    are simply absent rows, not null cells, so that guard cannot see the
-    hole either. This is the same failure shape Task 4 closed for
-    ``forward_rate_panel`` (there, exact date-list membership makes it
-    impossible for a gap to hide; a range interface loses that property for
-    free and has to earn it back explicitly).
-
-    The fix: coverage is tracked explicitly rather than inferred from the
-    data. A JSON sidecar (``_interval_sidecar_path``) records the list of
-    ``[start, end]`` windows that were actually *queried* -- not the
-    (possibly narrower) range the returned data happens to span, since a
-    market's own earliest-history boundary is not a gap, it is the market
-    not existing yet; recording the queried window is also what lets a
-    ``start`` earlier than a market's real history still hit cache on a
-    repeat call. On write, a new window is merged into the stored list only
-    when it overlaps or abuts an existing one (``_merge_fetched_interval``);
-    disjoint windows stay separate entries -- never collapsed into one
-    bounding range, which would assert coverage that was never fetched. On
-    read, a hit requires the requested ``[start, end]`` to sit inside **one**
-    stored interval (``_fetched_intervals_cover``): a request straddling two
-    disjoint intervals is a miss, not a hit, because nothing on disk proves
-    the gap between them was ever queried. The "no NaN in the served slice"
-    guard still runs afterwards, belt-and-braces, exactly as it does in
-    ``forward_rate_panel``.
+    Any row this function returns -- fresh or cached -- is guaranteed
+    complete across every requested structure: the panel is
+    ``dropna(how="any")``'d once, right after the pivot, before it is either
+    returned or written to cache, so a date with a genuine data gap in even
+    one structure is dropped for all of them rather than served with a NaN
+    cell (matches ``forward_rate_panel``'s "never forward-filled, never
+    partially filled" stance). Cache writes are atomic
+    (``_write_window_cache``: write-to-temp, then ``os.replace``).
     """
     structures = list(structures)
 
@@ -388,29 +378,18 @@ def vol_panel(
         )
 
     # Derived from what the curve actually carries (`wanted`), not the raw
-    # request -- so the cache schema check below can never be permanently
-    # unsatisfiable just because a caller asked for a structure this curve
-    # doesn't have.
+    # request -- so the cache key can never end up naming a structure that
+    # no data was ever fetched for.
     wanted_labels = sorted({s.replace(" ", "") for s in wanted.values()})
-    struct_cache_path = _cache_path_for_legs(cache_path, wanted_labels) if cache_path else None
-    sidecar_path = _interval_sidecar_path(struct_cache_path) if struct_cache_path else None
+    window_cache_path = (
+        _cache_path_for_window(cache_path, curve_key, wanted_labels, start, end)
+        if cache_path else None
+    )
 
-    if struct_cache_path and struct_cache_path.exists() and sidecar_path.exists():
-        fetched_intervals = _load_fetched_intervals(sidecar_path)
-        if _fetched_intervals_cover(fetched_intervals, start, end):
-            cached = pd.read_parquet(struct_cache_path)
-            cached.index = pd.to_datetime(cached.index)
-            # One file per structure set (see _cache_path_for_legs), so this
-            # is an equality check, not a subset check -- any file at this
-            # path was only ever written for exactly this structure set.
-            has_all_structures = set(cached.columns) == set(wanted_labels)
-            if has_all_structures:
-                slice_ = cached.loc[str(start):str(end)]
-                # Complete or absent, never partial -- belt-and-braces on top
-                # of the interval check above, which is what actually rules
-                # out a silently-missing-rows gap.
-                if not slice_.isna().to_numpy().any():
-                    return slice_
+    if window_cache_path:
+        cached = _read_window_cache(window_cache_path, wanted_labels)
+        if cached is not None:
+            return cached
 
     from gs_quant.data import Dataset
 
@@ -434,16 +413,12 @@ def vol_panel(
         .sort_index()
     )
     panel.index = pd.to_datetime(panel.index)
+    # Complete or absent, never partial: a date missing even one requested
+    # structure is dropped for all of them, not served with a NaN cell.
+    panel = panel.dropna(how="any")
 
-    if struct_cache_path:
-        # Parquet first, sidecar second: if a crash lands between the two
-        # writes, the sidecar under-reports coverage (a wasted re-fetch next
-        # time) rather than over-reporting it (which would recreate the
-        # exact silent-gap bug this mechanism exists to close).
-        _write_panel_cache(panel, struct_cache_path)
-        fetched_intervals = _load_fetched_intervals(sidecar_path)
-        fetched_intervals = _merge_fetched_interval(fetched_intervals, start, end)
-        _save_fetched_intervals(sidecar_path, fetched_intervals)
+    if window_cache_path:
+        _write_window_cache(panel, window_cache_path)
     return panel
 
 
