@@ -287,6 +287,31 @@ if len(cal) > 30:
           "SIZE, or the wrong IDEA?")
 
 # %% [markdown]
+# The same rescaling applied to the winner alone is the sharpest test of what
+# its headline gross actually was. If the hedge were replicating, shrinking it
+# to its statistically correct size would cost a little gross and save a lot of
+# bill. If the hedge was a directional accident, shrinking it destroys the
+# gross — because the gross *was* the accident.
+
+# %%
+if len(tr) and tr["lin_contracts"].max() > 0:
+    rows = []
+    for k, label in ((1.0, "as traded"), (beta, "beta-sized"),
+                     (0.5, "half"), (0.0, "unhedged")):
+        gross = tr["opt_gross_bp"] + k * tr["hedge_bp"]
+        cost = tr["opt_cost_bp"] + k * tr["lin_cost_bp"]
+        rows.append({"k": round(k, 3), "what": label,
+                     "gross_bp": round(float(gross.sum()), 1),
+                     "cost_bp": round(float(cost.sum()), 1),
+                     "net_1x_bp": round(float((gross - cost).sum()), 1),
+                     "per_trade_gross": round(float(gross.mean()), 3),
+                     "std_per_trade": round(float(gross.std()), 2)})
+    print("=== the winner, with the basket scaled (IN-SAMPLE) ===")
+    print(pd.DataFrame(rows).to_string(index=False))
+    print("\nA hedge shrunk to its correct size taking the P&L with it is the "
+          "definition of a directional position mislabelled as a hedge.")
+
+# %% [markdown]
 # There are two candidate explanations for a beta well under one, and they have
 # opposite implications. **Staleness**: the ratios are frozen at entry, so a
 # large move over a long hold walks the package away from the frame they were

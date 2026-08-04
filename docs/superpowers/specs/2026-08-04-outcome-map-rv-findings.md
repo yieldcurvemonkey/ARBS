@@ -178,11 +178,38 @@ the market's flies are. Rescaled to its own in-sample optimum (k ≈ 0.175–0.2
 the basket cuts per-trade dispersion only from 2.81 to 2.57bp — a 9% risk
 reduction for 0.34bp/trade of cost, against an option leg earning 0.2–0.5bp.
 
+### What the winner's headline gross actually was
+
+Rescaling only the basket, on the winner's own 38 trades (in-sample, and the
+point is the shape not the level):
+
+| k | | gross | cost | net@1× | per-trade gross | per-trade std |
+|---:|---|---:|---:|---:|---:|---:|
+| 1.000 | as traded | +143.8 | 144.9 | −1.1 | 3.783 | **8.51** |
+| 0.500 | half | +83.1 | 104.7 | −21.6 | 2.187 | 4.38 |
+| 0.175 | beta-sized | +43.7 | 78.6 | −34.9 | 1.149 | **2.92** |
+| 0.000 | unhedged | +22.5 | 64.5 | −42.0 | 0.591 | 3.27 |
+
+**The gross scales almost linearly with the basket size** — which is the
+definition of a directional position mislabelled as a hedge. 84% of the
+winner's headline +143.8bp is a leveraged rates bet that paid because 2022–23
+happened, and the mirror-image config loses exactly as much.
+
+The fair version of the conclusion, though, is not "the hedge is worthless". At
+its *statistically correct* size the leg does behave like a hedge: per-trade
+dispersion falls 3.27 → **2.92** (−11%, the only k at which it falls at all),
+and it costs 0.37bp/trade for +0.56bp/trade of gross, a net +0.19bp/trade. The
+problem is the size of the hole: the option leg earns +0.59bp/trade against
++1.70bp/trade of its own costs, so even a perfectly sized linear leg closes
+about a sixth of the gap — and its contribution is the same directional term
+scaled down, which does not survive the ZQ-vs-swap consistency test (ratio 0.48).
+
 **This is the closed answer the handover asked for: the linear leg does not earn
 its leg, and not because the trade is too small — because the hedge ratio the
 lattice supplies is the wrong object for the payoff that made the trade
-affordable.** The cheap instrument and the hedgeable instrument are not the same
-instrument. That is a real trade-off, not a tuning failure.
+affordable.** At the prescribed size it triples risk; at the correct size it is
+too small to matter. The cheap instrument and the hedgeable instrument are not
+the same instrument. That is a real trade-off, not a tuning failure.
 
 ## The placebos
 
