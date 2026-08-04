@@ -120,7 +120,11 @@ doubt — only its size against the spread.
 
 The winner's cost curve is the cleanest statement of the result: gross +143.8bp
 over 38 trades, round trip 3.81bp, **break-even at 0.99× the house half-tick
-model**. It is profitable at any maker fill and unprofitable at any taker fill.
+model**. It is profitable at any maker fill and unprofitable at any taker fill —
+though that headline gross does not survive its own autopsy, since 84% of it is
+the mis-sized linear leg (below). The same statement holds, more modestly, for
+every unhedged rung: positive at 0×, negative at 1×, per-trade gross of +0.19 to
++0.53bp against an option bill near 1.8bp.
 
 ## The linear leg, priced — and why it fails
 
