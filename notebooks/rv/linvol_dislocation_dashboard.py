@@ -76,8 +76,18 @@ def show(fig):
         print(f"[fig] {t[:64]} - {len(fig.data)} traces", flush=True)
 
 
-DATA_MP = Path("../data/meeting_prob")
-DATA_LG = Path("../data/linvol_grid")
+def _data_dir(name: str) -> Path:
+    """Local notebooks/data first; the research worktree as fallback, so
+    the notebook runs from either checkout."""
+    local = Path("../data") / name
+    if local.exists() and any(local.iterdir()):
+        return local
+    alt = Path(r"C:\Users\chris\clee\ARBS-xm\notebooks\data") / name
+    return alt if alt.exists() else local
+
+
+DATA_MP = _data_dir("meeting_prob")
+DATA_LG = _data_dir("linvol_grid")
 
 # %% [markdown]
 # ## Data spine: ladders, swap ladders, smiles, panels
