@@ -531,10 +531,10 @@ def carry_state(ctx: Context, *, cost_mult: float = 1.0) -> Optional[dict]:
         "held_since": cur.marks.index[0].date().isoformat(),
         "mark_bp": mark, "fair_bp": fair, "rich_bp": mark - fair,
         "expiry": expiry.isoformat(), "roll_on": roll.isoformat(),
-        "sessions_to_roll": int((ctx.dates > ctx.as_of).sum()
-                                if roll <= ctx.dates[-1].date()
-                                else (pd.Timestamp(roll)
-                                      - ctx.as_of).days * 5 // 7),
+        # forward business days, not a count of history rows: on the newest
+        # session there are no later dates in the index to count
+        "sessions_to_roll": int(len(pd.bdate_range(
+            ctx.as_of + pd.Timedelta(days=1), pd.Timestamp(roll)))),
         "days_to_roll": (roll - ctx.as_of.date()).days,
         "roll_cost_bp": 2.0 * fc.n_contracts(CARRY["book"])
         * OPT_HALF_TICK_BP * cost_mult,
