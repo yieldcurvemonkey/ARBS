@@ -94,6 +94,29 @@ def _make_fake_get_data():
     return fake_get_data
 
 
+def _make_gappy_fake_get_data(gap_date: dt.date, gap_asset_id: str):
+    """Like ``_make_fake_get_data``, but omits ``gap_asset_id``'s row on
+    ``gap_date`` -- simulating a genuine per-instrument data gap (that one
+    structure's print was missing that day, not every structure GS was
+    asked for).
+    """
+    calls: list[tuple[dt.date, dt.date, tuple]] = []
+
+    def fake_get_data(self, start, end, assetId):
+        calls.append((start, end, tuple(sorted(assetId))))
+        dates = pd.bdate_range(start, end)
+        rows = [
+            {"date": d, "assetId": aid, "impliedNormalVolatility": 5.0}
+            for d in dates
+            for aid in assetId
+            if not (d.date() == gap_date and aid == gap_asset_id)
+        ]
+        return pd.DataFrame(rows).set_index("date")
+
+    fake_get_data.calls = calls
+    return fake_get_data
+
+
 def _patch_gs(monkeypatch, fake_get_data) -> None:
     monkeypatch.setattr("gs_quant.data.Dataset.get_data", fake_get_data)
     monkeypatch.setattr(
@@ -185,3 +208,43 @@ def test_vol_panel_different_curves_sharing_a_structure_label_do_not_share_a_cac
     assert fake.calls[0][2] != fake.calls[1][2]  # different assetIds were requested
     assert list(p_usd.columns) == ["2y10y"]
     assert list(p_eur.columns) == ["2y10y"]
+
+
+def test_vol_panel_preserves_per_column_nan_instead_of_dropping_the_whole_row(
+    tmp_path, monkeypatch
+):
+    """vol_panel's columns are independently quoted instruments, not legs of
+    one curve build that together produce a single spread -- a gap in one
+    structure on one date must not delete that date for the others. A
+    healthy 10y10y print must survive even though 2y10y is missing that day.
+
+    Uses USD-SOFR-1D's real assetIds for 2y10y and 10y10y (per
+    definitions.IRSwaptions.ASSET_IDS_MAP) so the structure->column mapping
+    inside vol_panel is exercised exactly as it is against real data.
+    """
+    gap_date = dt.date(2020, 1, 15)
+    gap_asset_id = "MAYKPCJKVA8ACJZN"  # USD-SOFR-1D "2y 10y"
+    fake = _make_gappy_fake_get_data(gap_date, gap_asset_id)
+    _patch_gs(monkeypatch, fake)
+    cache_path = tmp_path / "vp.parquet"
+    start, end = dt.date(2020, 1, 1), dt.date(2020, 1, 31)
+
+    panel = vol_panel(
+        "USD-SOFR-1D", ["2y 10y", "10y 10y"], start, end, cache_path=cache_path
+    )
+
+    gap_ts = pd.Timestamp(gap_date)
+    assert gap_ts in panel.index  # the date itself is not dropped
+    assert pd.isna(panel.loc[gap_ts, "2y10y"])  # the gapped column is NaN
+    assert panel.loc[gap_ts, "10y10y"] == pytest.approx(5.0)  # the healthy column survives
+    # every other date is fully populated -- the gap is isolated to one cell
+    other_dates = panel.index.drop(gap_ts)
+    assert not panel.loc[other_dates].isna().to_numpy().any()
+
+    # A cached round-trip of the same request must reproduce the frame
+    # exactly, NaN included -- not silently drop or fill the gap.
+    cached_panel = vol_panel(
+        "USD-SOFR-1D", ["2y 10y", "10y 10y"], start, end, cache_path=cache_path
+    )
+    assert len(fake.calls) == 1  # second call was a cache hit, not a re-fetch
+    pd.testing.assert_frame_equal(panel, cached_panel)

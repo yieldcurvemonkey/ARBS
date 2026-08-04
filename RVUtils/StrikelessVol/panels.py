@@ -272,23 +272,29 @@ def _cache_path_for_window(
 
 
 def _read_window_cache(cache_path: Path, wanted_labels: Sequence[str]) -> Optional[pd.DataFrame]:
-    """Load ``cache_path`` if it exists, is an exact-column match for
-    ``wanted_labels``, and has no NaN cell -- otherwise ``None`` (a miss).
+    """Load ``cache_path`` if it exists and is an exact-column match for
+    ``wanted_labels`` -- otherwise ``None`` (a miss).
 
-    Both checks are defensive rather than load-bearing: the filename already
-    encodes the exact structure set this file was written for (see
-    ``_cache_path_for_window``), and every write already goes through
-    ``dropna(how="any")`` in ``vol_panel`` before being persisted. This is
-    the same "belt-and-braces on top of a structural guarantee" stance used
-    throughout this module, in case of a legacy or hand-written file.
+    The column check is defensive rather than load-bearing: the filename
+    already encodes the exact structure set this file was written for (see
+    ``_cache_path_for_window``), the same "belt-and-braces on top of a
+    structural guarantee" stance used throughout this module, in case of a
+    legacy or hand-written file.
+
+    Deliberately **not** a no-NaN check: under exact-window keying, the file
+    at this path is by construction precisely the result of the request
+    that produced it, and ``_write_window_cache``'s atomic rename means a
+    partial write can never appear at a hit-able name -- so a NaN cell here
+    is never a symptom of a broken cache, only of a genuine per-instrument
+    data gap the fresh fetch would reproduce identically (see ``vol_panel``
+    for why that NaN is preserved, not dropped). Rejecting it would only
+    force a permanent, pointless re-fetch of legitimately sparse data.
     """
     if not cache_path.exists():
         return None
     cached = pd.read_parquet(cache_path)
     cached.index = pd.to_datetime(cached.index)
     if set(cached.columns) != set(wanted_labels):
-        return None
-    if cached.isna().to_numpy().any():
         return None
     return cached
 
@@ -346,13 +352,18 @@ def vol_panel(
     file; the repeated-identical-call case that matters in a research
     session still hits.
 
-    Any row this function returns -- fresh or cached -- is guaranteed
-    complete across every requested structure: the panel is
-    ``dropna(how="any")``'d once, right after the pivot, before it is either
-    returned or written to cache, so a date with a genuine data gap in even
-    one structure is dropped for all of them rather than served with a NaN
-    cell (matches ``forward_rate_panel``'s "never forward-filled, never
-    partially filled" stance). Cache writes are atomic
+    Unlike ``forward_rate_panel``, a date missing one structure's print is
+    **not** dropped for the others: this panel's columns are independently
+    quoted instruments, not legs of one curve build that together produce a
+    single spread, so there is no shared unit of "complete" to enforce.
+    Dropping a healthy ``10y10y`` print because ``2y10y`` had a gap that day
+    would discard good data for no reason, and with a wide structure grid
+    one instrument's hiccup would silently delete that day from every
+    column. NaN cells are therefore preserved exactly where GS's own data
+    has a gap, fresh fetch or cache hit alike (the cache is exact-window
+    keyed and atomically written, so a cached NaN can only mean the fetch
+    that produced it also had one -- see ``_read_window_cache``). Consumers
+    align and drop per column as they need. Cache writes are atomic
     (``_write_window_cache``: write-to-temp, then ``os.replace``).
     """
     structures = list(structures)
@@ -413,9 +424,6 @@ def vol_panel(
         .sort_index()
     )
     panel.index = pd.to_datetime(panel.index)
-    # Complete or absent, never partial: a date missing even one requested
-    # structure is dropped for all of them, not served with a NaN cell.
-    panel = panel.dropna(how="any")
 
     if window_cache_path:
         _write_window_cache(panel, window_cache_path)
