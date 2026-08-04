@@ -148,6 +148,27 @@ Error behaviour differs by function and **must be handled differently**:
   `pywintypes.datetime`, depending on the number format the add-in applied. Parsers
   must accept both.
 
+### Intraday capability is per-family, and not uniform
+
+`Velocity_Charting_Intraday_Tags.xlsx` (supplied by the desk) maps tag regex →
+intraday capability. This is a hard constraint on what a fetcher can ask for, so the
+cache layer must key on it rather than assume every family supports every frequency:
+
+| family | finest freq | intraday OHLC | EOD OHLC | streaming |
+|---|---|---|---|---|
+| `RATES.OIS.*` | **SE10** (10-second) | no | no | yes |
+| `RATES.TSY.OTR.*` | **SE10** | no | no | yes |
+| `RATES.FUTURES.*` | MI01 | **yes** | **yes** | yes |
+| `RATES.SWAP.*PAR/FWD` | MI01 | no | no | yes |
+| `RATES.SOV.*OTR` | MI01 | no | no | yes |
+| `RATES.VOL.USD.ATM.NORMAL.ANNUAL.*` | MI01 | no | no | yes |
+| `RATES.SWAP.*SWAP_SPREAD/CURVES/BFLY`, `RATES.SOV.*CURVES/BFLY`, `RATES.VOL…DAILY` | MI01 | no | no | **no** |
+
+Two consequences: `PricePoint="OHLC"` is only meaningful for `RATES.FUTURES` in the
+rates complex, and only `RATES.OIS` / `RATES.TSY.OTR` go finer than one minute. Note
+this workbook describes *intraday* capability — it is not a substitute for the
+catalog harvest, which is what enumerates the tags themselves.
+
 ### Tag families verified live
 
 Valid: `RATES.OIS.<CCY>_<INDEX>.PAR.<tenor>` (USD_SOFR, GBP_SONIA, CAD_CORRA,
@@ -163,13 +184,67 @@ Rejected: `EUR_ESTR` and `JPY_TONA` return "No data available" — the correct i
 tokens for those currencies are unknown and must be discovered, not guessed. This is
 precisely why builders are validated against `CVMETADATA` rather than assumed.
 
-### Catalog
+### Catalog — solved by harvesting the Function Builder, not by guessing
 
-There is **no tag catalog on disk**, and the endpoints the add-in uses to populate
-its TagBrowser (`chartingbe/rest/feed/DataExplorerFeed6/dag/SERIES`, `.../CURVE`,
-`relval/marketdatanamemap`) sit behind the same auth wall. Full coverage is therefore
-delivered as **grammar + curated builders + `CVMETADATA` validation**, not as
-auto-enumeration.
+There is no tag catalog on disk, and the endpoints that populate the add-in's
+TagBrowser (`chartingbe/rest/feed/DataExplorerFeed6/dag/SERIES`, `.../CURVE`,
+`relval/marketdatanamemap`) sit behind the same auth wall. The first version of this
+spec therefore proposed "grammar + curated builders + guessing". **That approach was
+tried and is provably insufficient.**
+
+Generate-and-test over plausible token spellings found 14 OIS currencies but got the
+two biggest ones wrong and missed six curves outright. The real identifiers, from the
+add-in itself:
+
+| guessed | actual |
+|---|---|
+| `EUR_ESTR` / `EUR_ESTER` / `EUR_EONIA` | **`EUR_EUROSTR`** (and `EUR_EONIA`, stale) |
+| `USD_FEDFUNDS` / `USD_FF` | **`USD_FEDFUND`** |
+| — | **`JPY_TONAR_JSCC`**, **`JPY_TONAR_LCH`** (CCP-qualified) |
+| — | **`DKK_TNDKK`**, **`MXN_T_FONDEO`** |
+| sub-types PAR/FWD/SWAP_SPREAD | + **`ROLL_CARRY`**, **`BFLY`**, **`CURVES`** |
+
+No amount of further guessing closes that gap, and a builder that silently emits
+wrong tags is worse than none.
+
+**The Function Builder's DATA BROWSER exposes the whole DAG through UI Automation.**
+Its window (`HwndWrapper[FullTrustSandbox…]`, title `Function Builder`) contains a
+category `List`; selecting a node materialises the next level as a further `List`.
+Walking that tree yields the authoritative catalog — it is by construction the same
+tree the add-in accepts.
+
+`RATES` has **33 families**:
+
+```
+OIS  OIS_MEETING  OIS_INVOICESPREAD  INVOICESPREAD  SWAP_LIBOR  SWAP_INTERNAL
+TSY  SOV  SSA  SSA_CS  BOND  VOL  MIDCURVES  SPREAD_OPTIONS  FUTURES
+BASIS_SWAPS  XCCY_SWAP  XCCY_OIS_SWAP  XCCY_SWAP_IUO  XCCY_OIS_SWAP_IUO
+XCCY_BASIS_INTERNAL  FRA  FRA_OIS  INFLATION  MONEY_MARKETS  REPO  BENCH_RATES
+MBS  AGENCY_INVENTORY  FLOWS  FORECAST  POS_MON  LIQUIDITY_IDX
+```
+
+with e.g. `OIS` → 20 curves, `SWAP_LIBOR` → 46 currencies, `XCCY_SWAP` → 23,
+`VOL` → 11, `FUTURES` → 13 exchange-qualified contracts (`XCBT_TY`, `XCME_ED`,
+`XEUR_RX`, …), `BASIS_SWAPS` → 6 named bases (`SOFR_FEDFUND_BASIS`,
+`EUROSTR_EURIBOR_BASIS`, `3S1S_BASIS`, …).
+
+Harvest mechanics that matter:
+
+- **Breadth-first with a depth cap.** Depth-first starves: `RATES.MBS` is a coupon ×
+  coupon × coupon cross product and consumed the entire budget before reaching any
+  other family.
+- **Cross-product subtrees are recorded but not expanded.** `BFLY`, `CURVES` and
+  `ROLL_CARRY` draw their legs from the same tenor axis as `PAR`, so they are
+  generated, not enumerated.
+- **Stale-read guard is mandatory.** After selecting a node the child `List` briefly
+  still holds the *previous* node's children — `RATES.SPREAD_OPTIONS` was recorded
+  with `RATES.REPO.*` children before this was caught. Children are always named
+  `<parent>.<something>`, so the harvester waits for that prefix invariant to hold
+  and retries otherwise. Without the guard the catalog is silently wrong.
+- Selection uses the UIA **SelectionItem pattern**, not mouse clicks: the Function
+  Builder window is positioned off-screen (negative Y), so coordinate clicks fail.
+- Incremental selection: selecting level N leaves 0..N-1 selected, so walking
+  siblings costs one select rather than re-descending from the root.
 
 ## Design
 
@@ -208,17 +283,34 @@ Owns the COM bridge and nothing else.
   default sized to the proven 44-tag curve export). `CVMETADATA` batches **bisect on
   `#VALUE!`** to isolate a poison tag rather than losing the batch.
 
-### 2. `tags.py` — grammar and curated builders
+### 2. `catalog.py` + `catalog_harvest.py` — the tag universe
 
-- Pass-through: any string starting `RATES.` is accepted unchanged, so nothing in the
-  namespace is out of reach.
-- Typed builders per verified family: `ois_par`, `ois_fwd`, `swap_spread`,
-  `invoice_spread`, `invoice_spread_frontmonth`, `treasury_otr`, `vol_atm`, `vol_otm`,
-  `meeting_priced`, `bonds_by_country`. Each returns canonical tag strings.
-- `validate(tags) -> dict[tag, Metadata | error]` round-trips through `CVMETADATA`
-  (with bisect), so a builder's output can always be checked before a large pull.
-  Builders are **verified against this**, never assumed correct — the `EUR_ESTR` /
-  `JPY_TONA` misses are the standing reminder.
+- `catalog_harvest.py` walks the Function Builder DATA BROWSER over UI Automation
+  (breadth-first, depth-capped, stale-read guarded — see above) and writes a
+  catalog JSON. This is an **occasional offline refresh**, not a runtime dependency:
+  it needs the Function Builder open, takes minutes, and its output is committed.
+- `catalog.py` loads that catalog and exposes it: `families()`, `children(node)`,
+  `search(pattern)`, `tenors(node)`. Builders are **derived from the catalog**
+  rather than hand-written, so they cannot drift from what the add-in accepts.
+- Pass-through remains: any `RATES.*` string is accepted unchanged, so a tag newer
+  than the catalog is never blocked.
+- `validate(tags)` confirms a tag list against the live add-in before a large pull —
+  and it uses **`CVTSHIST`, not `CVMETADATA`** (below).
+
+### 2b. Validation must go through `CVTSHIST`
+
+`CVMETADATA` is not a sound validator. It returns a hard `#VALUE!` for tags that
+exist and serve data but carry no metadata: it reported **zero** valid tenors for
+`RATES.OIS.USD_SOFR.SWAP_SPREAD`, hard-failing on exactly the liquid ones
+(1M 3M 6M 1Y 2Y 3Y 5Y 7Y 10Y 20Y 30Y). `CVTSHIST` serves all eleven. Trusting
+`CVMETADATA` would have silently dropped a whole family.
+
+`CVTSHIST` is the right validator on every count: it is the path we actually fetch
+through, it degrades per column (`Bad tag: <tag>` in that column's first data cell)
+rather than poisoning the batch, and it validates many tags per call.
+
+`CVMETADATA` stays useful for what it is good at — description, history start/end,
+last-update times — with bisect-on-`#VALUE!` to isolate a poison tag.
 
 ### 3. `cache.py` — incremental parquet store
 
