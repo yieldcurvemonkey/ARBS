@@ -654,14 +654,24 @@ def test_built_curve_reprices_its_own_calibrating_instruments(market, as_of):
 
     mdp = IRSwapsMDP(source="GSQUANT-RL")
     curve = mdp.get_pricer({"curve_name": MARKET_CURVES[market], "timestamp": as_of})
-    for years in (10, 20, 30, MARKET_MAX_POINT_YEARS[market]):
-        swap = curve.build_irswap(fwd="0D", tenor=f"{int(years)}Y")
-        assert curve.fair_rate(swap) == pytest.approx(
-            curve.fair_rate(swap), abs=1e-12
-        )
-        # the real check: the node at that maturity must be an observed knot,
-        # so the fair rate must be finite and inside a sane band
-        assert 0.0 < curve.fair_rate(swap) < 0.15
+
+    rates = {}
+    for years in (10, 20, 30, int(MARKET_MAX_POINT_YEARS[market])):
+        swap = curve.build_irswap(fwd="0D", tenor=f"{years}Y")
+        rates[years] = float(curve.fair_rate(swap))
+        assert 0.0 < rates[years] < 0.15, f"{market} {years}Y rate {rates[years]}"
+
+    # The long knots must actually be calibrated, not flat extrapolation off
+    # the 30y point: if 50y prices identically to 30y, the instruments did not
+    # load and the curve is inventing the ultra-long sector.
+    longest = int(MARKET_MAX_POINT_YEARS[market])
+    if longest > 30:
+        assert abs(rates[longest] - rates[30]) > 1e-6
+
+    # And the curve's last node must reach the market cap, so nothing in the
+    # traded universe is priced off the extrapolation stub.
+    last_node = max(curve.nodes())
+    assert (last_node - as_of).days / 365.0 >= longest - 1.0
 ```
 
 - [ ] **Step 3: Run the test to verify it fails**
