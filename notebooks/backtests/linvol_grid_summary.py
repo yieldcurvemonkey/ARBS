@@ -15,6 +15,9 @@ from pathlib import Path
 import pandas as pd
 
 sys.path.append("../../")
+sys.path.append(".")
+from linvol_grid_common import pick_winner  # noqa: E402
+
 DATA = Path("../data/linvol_grid")
 league = pd.read_parquet(DATA / "league.parquet")
 verdicts = pd.read_csv(DATA / "verdicts.csv")
@@ -25,7 +28,7 @@ print("=== verdicts (per-family best, house taxonomy) ===")
 print(verdicts.to_string(index=False))
 
 # %%
-w = live.sort_values("net_1x_bp").iloc[-1]
+w = pick_winner(live)
 n_cfg = len(real)
 n_live = len(live)
 frac_pos_1x = (live["net_1x_bp"] > 0).mean()

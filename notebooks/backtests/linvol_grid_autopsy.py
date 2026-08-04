@@ -21,12 +21,13 @@ if "ipykernel" not in sys.modules:
 import matplotlib.pyplot as plt
 
 from SDRUtils.analytics.fomc import load_fomc_schedule  # noqa: E402
+from linvol_grid_common import pick_winner  # noqa: E402
 
 DATA = Path("../data/linvol_grid")
 league = pd.read_parquet(DATA / "league.parquet")
 real = league[league["family"].isin(["A", "B", "C", "E"])]
 live = real[real["n_trades"] > 0]
-w = live.sort_values("net_1x_bp").iloc[-1]
+w = pick_winner(live)
 print("WINNER:", w[["family", "boundary", "dte", "gated", "thr", "direction",
                     "n_trades", "total_gross_bp", "net_1x_bp", "net_2x_bp",
                     "t_stat"]].to_dict())

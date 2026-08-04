@@ -23,7 +23,9 @@ import pandas as pd
 sys.path.append("../../")
 sys.path.append(".")
 
-from RVUtils.SFRRVLab.stats import deflated_for_grid, verdict  # noqa: E402
+from BT.signals.deflated_sharpe import deflated_sharpe  # noqa: E402
+from RVUtils.SFRRVLab.stats import verdict  # noqa: E402
+from linvol_grid_common import pick_winner  # noqa: E402
 
 DATA = Path("../data/linvol_grid")
 league = pd.read_parquet(DATA / "league.parquet")
@@ -42,8 +44,13 @@ cols = ["family", "boundary", "dte", "gated", "thr", "direction", "n_trades",
         "hit", "total_gross_bp", "net_1x_bp", "net_2x_bp", "avg_net_1x_bp",
         "t_stat"]
 top = live.sort_values("net_1x_bp", ascending=False).head(15)
-print("=== top 15 by net @1x costs ===")
+print("=== top 15 by net @1x costs (raw — mind n_trades!) ===")
 print(top[cols].round(2).to_string(index=False))
+solid = live[live["n_trades"] >= 10]
+print(f"\n=== rows clearing the n>=10 verdict floor: {len(solid)} ===")
+if len(solid):
+    print(solid.sort_values("net_1x_bp", ascending=False).head(10)[cols]
+          .round(2).to_string(index=False))
 
 print("\n=== best per family (net @1x) ===")
 fam_best = live.loc[live.groupby("family")["net_1x_bp"].idxmax()]
@@ -75,17 +82,35 @@ _mirror(real[real.family == "E"], "fade", "momentum", "E  ")
 # binding one.
 
 # %%
-overall = deflated_for_grid(live, metric="net_1x_bp")
-print(f"pooled: n_trials={overall['n_trials']}  "
-      f"dsr_prob={overall['dsr_prob']:.3f}")
+# DSR of each family's WINNER trade log (per-trade periods), deflated by the
+# family's full config count; sweep variance from cross-config per-trade
+# Sharpes (t / sqrt(n)). Fewer than 5 trades -> undefined, treated as 0 in
+# the verdict (conservative: cannot certify ALIVE on a starved log).
+def family_dsr(fam):
+    n_total = int((real["family"] == fam).sum())
+    g = live[live["family"] == fam]
+    tl_path = DATA / f"trades_{fam}_best.parquet"
+    if not tl_path.exists() or g.empty:
+        return {"dsr_prob": np.nan, "n_trials": n_total}
+    nets = pd.read_parquet(tl_path)["net_1x_bp"].astype(float).dropna()
+    if len(nets) < 5:
+        return {"dsr_prob": np.nan, "n_trials": n_total}
+    sr_pp = (g["t_stat"] / np.sqrt(g["n_trades"].clip(lower=1))).dropna()
+    var = float(sr_pp.var(ddof=1)) if len(sr_pp) > 2 else None
+    out = deflated_sharpe(nets.to_numpy(), n_trials=n_total,
+                          sr_variance=var, annualisation=1.0)
+    out["n_trials"] = n_total
+    return out
+
+
 dsr_by_family = {}
-for fam, g in live.groupby("family"):
-    n_total = int((real["family"] == fam).sum())   # count no-trade rows too
-    d = deflated_for_grid(g, metric="net_1x_bp")
-    d["n_trials"] = n_total
+for fam in sorted(live["family"].unique()):
+    d = family_dsr(fam)
     dsr_by_family[fam] = d
-    print(f"  {fam}: trials={n_total}  live={len(g)}  "
-          f"dsr_prob={d['dsr_prob']:.3f}")
+    print(f"  {fam}: trials={d['n_trials']}  "
+          f"dsr_prob={d['dsr_prob']:.3f}" if np.isfinite(d["dsr_prob"])
+          else f"  {fam}: trials={d['n_trials']}  dsr_prob=n/a (winner log "
+               "< 5 trades)")
 
 # %% [markdown]
 # ## Placebos — is the family-A edge lattice information?
@@ -112,11 +137,13 @@ if len(a_best):
 # %%
 rows = []
 for fam, g in live.groupby("family"):
-    b = g.sort_values("net_1x_bp").iloc[-1]
+    b = pick_winner(g)                     # same row the trade log belongs to
     med = float(real[real["family"] == fam]["net_1x_bp"].fillna(0.0).median())
+    dsr = dsr_by_family[fam]["dsr_prob"]
+    dsr = float(dsr) if np.isfinite(dsr) else 0.0
     v = verdict(net_bp_at_taker=float(b["net_2x_bp"]),
                 net_bp_at_maker=float(b["total_gross_bp"]),
-                dsr_prob=float(dsr_by_family[fam]["dsr_prob"]),
+                dsr_prob=dsr,
                 median_net_bp=med, n_trades=int(b["n_trades"]))
     rows.append({"family": fam, "best_config": f"{b['boundary']}|{b['dte']}|"
                  f"thr{b['thr']}|{b['direction']}|gated={b['gated']}",
@@ -139,7 +166,7 @@ verdicts.to_csv(DATA / "verdicts.csv", index=False)
 
 # %%
 if len(live):
-    w = live.sort_values("net_1x_bp").iloc[-1]
+    w = pick_winner(live)
     print(f"overall winner: {w['family']} {w['boundary']} {w['dte']} "
           f"thr{w['thr']} {w['direction']} gated={w['gated']} "
           f"-> {w['net_1x_bp']:+.1f}bp over {int(w['n_trades'])} trades")

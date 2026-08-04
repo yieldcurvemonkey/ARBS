@@ -280,6 +280,19 @@ def league_row(trades: Sequence, config: dict, *,
 # Placebos
 # ---------------------------------------------------------------------------
 
+def pick_winner(live: pd.DataFrame) -> pd.Series:
+    """Best league row with a sample-size floor: a 1-trade max() is noise.
+
+    n >= 10 preferred (the verdict floor), n >= 5 tolerated with a flag,
+    otherwise the least-starved row — callers print n_trades either way.
+    """
+    for floor in (10, 5, 1):
+        cand = live[live["n_trades"] >= floor]
+        if not cand.empty:
+            return cand.sort_values("net_1x_bp").iloc[-1]
+    return live.iloc[-1]
+
+
 def gaussian_tree_gaps(sig: pd.DataFrame, mon: pd.DataFrame) -> pd.DataFrame:
     """P1: replace the lattice digitals with a moment-matched Gaussian.
 
@@ -301,6 +314,47 @@ def gaussian_tree_gaps(sig: pd.DataFrame, mon: pd.DataFrame) -> pd.DataFrame:
     # RE-classify: mode flank and largest-|gap| are functions of the tree,
     # so the placebo must recompute them — stale flags would leak the real
     # lattice's information into the "no-lattice" world
+    out = (out.drop(columns=["is_outer", "is_mode_flank", "is_largest"])
+           .groupby(["as_of", "symbol"], group_keys=False)
+           .apply(_classify_boundaries).reset_index(drop=True))
+    return out
+
+
+def tree_digitals_from_ladders(sig: pd.DataFrame, mon: pd.DataFrame,
+                               ladders: dict) -> pd.DataFrame:
+    """Recompute p_tree/gap at the panel's boundaries from GIVEN ladders.
+
+    Reproduces the history build's convention: strict ZQ-null tree, smear =
+    sqrt(unresolved_var + 3^2). Used by the wrong-calendar placebo so the
+    SIGNAL (not just the hedge) lives in the shifted world; verified against
+    the frozen panel when called with the real ladders.
+    """
+    from scipy.stats import norm
+    from RVUtils.MeetingProb.atoms import AtomEngine, split_meetings
+
+    fwd = mon.set_index(["as_of", "symbol"])["forward_rate"]
+    out = sig.copy()
+    p_new = np.full(len(out), np.nan)
+    for (ts, sym), idx in out.groupby(["as_of", "symbol"]).groups.items():
+        lad = ladders.get(pd.Timestamp(ts).date())
+        if not lad:
+            continue
+        cm = split_meetings(pd.Timestamp(ts).date(), sym, lad)
+        if cm is None:
+            continue
+        try:
+            f = float(fwd.loc[(ts, sym)])
+        except KeyError:
+            continue
+        rates, probs = AtomEngine(cm).rates_probs(f)
+        smear = float(np.sqrt(cm.unresolved_var_bp2 + 9.0)) / 100.0
+        b = out.loc[idx, "boundary_rate"].to_numpy()
+        z = (b[:, None] - rates[None, :]) / smear
+        p_new[out.index.get_indexer(idx)] = (probs[None, :]
+                                             * (1.0 - norm.cdf(z))).sum(axis=1)
+    out["p_tree"] = p_new
+    out["gap"] = out["p_listed"] - out["p_tree"]
+    out = out.dropna(subset=["p_tree"])
     out = (out.drop(columns=["is_outer", "is_mode_flank", "is_largest"])
            .groupby(["as_of", "symbol"], group_keys=False)
            .apply(_classify_boundaries).reset_index(drop=True))

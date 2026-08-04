@@ -30,7 +30,7 @@ from linvol_grid_common import (
     OUT, boundary_signal_frame, build_ladders, claim_series, fly_series,
     gaussian_tree_gaps, ics_cost_fn, ics_residual_series, league_row,
     load_panels, run_ics_backtest, run_package_backtest, select_boundaries,
-    shifted_ladders,
+    shifted_ladders, tree_digitals_from_ladders,
 )
 from RVUtils.MeetingProb import split_meetings
 from RVUtils.MeetingProb.backtest import run_channel1_backtest
@@ -237,7 +237,8 @@ def dump(rows, trades_map, name):
     # persist the single best row's trade log for the autopsy
     live = df[df["n_trades"] > 0]
     if not live.empty:
-        i = int(live["net_1x_bp"].idxmax())
+        from linvol_grid_common import pick_winner
+        i = int(pick_winner(live).name)
         tl = trades_map.get(i, [])
         recs = []
         for x in tl:
@@ -270,11 +271,23 @@ le = dump(rows_e, best_e, "E")
 sig_p1 = gaussian_tree_gaps(SIG, P["mon"])
 rows_p1, _ = family_A(sig_p1, LADDERS, tag="P1_gauss")
 lp1 = dump(rows_p1, {}, "P1")
+# convention check: recomputing tree digitals from the REAL ladders must
+# reproduce the frozen panel before the shifted world means anything
+chk_days = sorted(SIG["as_of"].unique())[::40]
+chk = tree_digitals_from_ladders(
+    SIG[SIG["as_of"].isin(chk_days)], P["mon"], LADDERS)
+j = chk.merge(SIG, on=["as_of", "symbol", "boundary_rate"],
+              suffixes=("_re", ""))
+err = (j["p_tree_re"] - j["p_tree"]).abs()
+print(f"P2 convention check on {len(j)} rows: max |dp_tree| = {err.max():.4f}"
+      f"  (median {err.median():.4f})", flush=True)
+
 lad_p2 = shifted_ladders(LADDERS)
 jumps_p2 = pd.DataFrame(
     [{"as_of": pd.Timestamp(d), "effective": m.effective, "jump_bp": m.jump_bp}
      for d, lad in lad_p2.items() for m in lad])
-rows_p2, _ = family_A(SIG, lad_p2, tag="P2_calendar", jumps=jumps_p2)
+sig_p2 = tree_digitals_from_ladders(SIG, P["mon"], lad_p2)
+rows_p2, _ = family_A(sig_p2, lad_p2, tag="P2_calendar", jumps=jumps_p2)
 lp2 = dump(rows_p2, {}, "P2")
 
 league = pd.concat([la, lb, lc, le, lp1, lp2], ignore_index=True)
