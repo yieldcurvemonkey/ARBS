@@ -233,6 +233,23 @@ precisely: **what the winner trades is the cell GEOMETRY, not the FOMC lattice's
 probability structure.** The lattice supplies the strike grid and nothing else
 that pays.
 
+## The weight-<1 probe: closed, and the answer is zero
+
+The handover listed "meetings with day-weight < 1" as one of two partial escapes
+from exchangeability — resolved before expiry but effective inside the reference
+window, which would partially identify orderings and open a genuinely new cell
+dimension. Measured across **3,728 contract-days with at least one resolved
+meeting: zero** such meetings exist.
+
+The reason is structural rather than lucky. It needs `decision ≤ X < S <
+effective`, i.e. the window start `S` falling strictly inside a meeting's
+one-to-six-day decision-to-effective gap. Across all 26 quarterlies in the
+sample `S − X` is **exactly 5 days, every time** (SOFR options expire the Friday
+before the third Wednesday; the reference window starts on the IMM date). The
+escape would need a meeting whose decision lands in that fixed five-day slot in
+a way that straddles `S` — it never does. **Exchangeability is exact everywhere
+in the listed quarterly universe**, and that escape route can be struck off.
+
 ## Two structural results worth keeping
 
 **1. Through a decision, the surface is right and the lattice is wrong.**
