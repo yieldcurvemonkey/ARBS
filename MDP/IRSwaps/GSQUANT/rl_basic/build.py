@@ -239,6 +239,9 @@ GSQUANT_CURVE_MAP = {
                 "EUR Swap EuroSTR 1y ATM 0b to 5y LCH Cleared",
                 "EUR Swap EuroSTR 1y ATM 0b to 10y LCH Cleared",
                 "EUR Swap EuroSTR 1y ATM 0b to 30y LCH Cleared",
+                "EUR Swap EuroSTR 1y ATM 0b to 35y LCH Cleared",
+                "EUR Swap EuroSTR 1y ATM 0b to 40y LCH Cleared",
+                "EUR Swap EuroSTR 1y ATM 0b to 45y LCH Cleared",
                 "EUR Swap EuroSTR 1y ATM 0b to 50y LCH Cleared",
             ],
             "knots": [
@@ -247,9 +250,12 @@ GSQUANT_CURVE_MAP = {
                 "EUR Swap EuroSTR 1y ATM 0b to 5y LCH Cleared",
                 "EUR Swap EuroSTR 1y ATM 0b to 10y LCH Cleared",
                 "EUR Swap EuroSTR 1y ATM 0b to 30y LCH Cleared",
+                "EUR Swap EuroSTR 1y ATM 0b to 35y LCH Cleared",
+                "EUR Swap EuroSTR 1y ATM 0b to 40y LCH Cleared",
+                "EUR Swap EuroSTR 1y ATM 0b to 45y LCH Cleared",
                 "EUR Swap EuroSTR 1y ATM 0b to 50y LCH Cleared",
             ],
-            "extrapolation": datetime.timedelta(days=30),
+            "extrapolation": datetime.timedelta(days=365 * 20),
             "reference_key": "EUR-ESTR"
         }
     },
@@ -282,7 +288,69 @@ GSQUANT_CURVE_MAP = {
             "extrapolation": datetime.timedelta(days=365 * 10),
             "reference_key": "JPY-TONAR"
         }
-    }
+    },
+    # GBP OIS (SONIA). Instruments verified against
+    # COVERAGE/IR_SWAP_RATES_V1_STANDARD_COVERAGE.xlsx: 1-30y plus 35/40/45/50y,
+    # every one with historyStartDate 2010-01-04. Meeting-dated MPC front-end
+    # instruments (mpc1..mpc7) also exist in that sheet and are included in
+    # base_tenors, mirroring EUR-ESTR/USD-OIS's ecb1-7/frb1-7 blocks - but every
+    # pair traded off this curve starts >=10y forward, so front-end meeting
+    # precision cannot reach them either way, and none of the six MPC segments
+    # are curve knots.
+    "GBP-SONIA": {
+        "rl_basic": {
+            "base_tenors": [
+                "GBP Swap OIS ATM mpc1 to mpc2 LCH Cleared",
+                "GBP Swap OIS ATM mpc2 to mpc3 LCH Cleared",
+                "GBP Swap OIS ATM mpc3 to mpc4 LCH Cleared",
+                "GBP Swap OIS ATM mpc4 to mpc5 LCH Cleared",
+                "GBP Swap OIS ATM mpc5 to mpc6 LCH Cleared",
+                "GBP Swap OIS ATM mpc6 to mpc7 LCH Cleared",
+
+                "GBP Swap OIS 1y ATM 0b to 1y LCH Cleared",
+                "GBP Swap OIS 1y ATM 0b to 2y LCH Cleared",
+                "GBP Swap OIS 1y ATM 0b to 3y LCH Cleared",
+                "GBP Swap OIS 1y ATM 0b to 4y LCH Cleared",
+                "GBP Swap OIS 1y ATM 0b to 5y LCH Cleared",
+                "GBP Swap OIS 1y ATM 0b to 6y LCH Cleared",
+                "GBP Swap OIS 1y ATM 0b to 7y LCH Cleared",
+                "GBP Swap OIS 1y ATM 0b to 8y LCH Cleared",
+                "GBP Swap OIS 1y ATM 0b to 9y LCH Cleared",
+                "GBP Swap OIS 1y ATM 0b to 10y LCH Cleared",
+                "GBP Swap OIS 1y ATM 0b to 12y LCH Cleared",
+                "GBP Swap OIS 1y ATM 0b to 15y LCH Cleared",
+                "GBP Swap OIS 1y ATM 0b to 20y LCH Cleared",
+                "GBP Swap OIS 1y ATM 0b to 25y LCH Cleared",
+                "GBP Swap OIS 1y ATM 0b to 30y LCH Cleared",
+                "GBP Swap OIS 1y ATM 0b to 35y LCH Cleared",
+                "GBP Swap OIS 1y ATM 0b to 40y LCH Cleared",
+                "GBP Swap OIS 1y ATM 0b to 45y LCH Cleared",
+                "GBP Swap OIS 1y ATM 0b to 50y LCH Cleared",
+            ],
+            "knots": [
+                "GBP Swap OIS 1y ATM 0b to 2y LCH Cleared",
+                "GBP Swap OIS 1y ATM 0b to 3y LCH Cleared",
+                "GBP Swap OIS 1y ATM 0b to 4y LCH Cleared",
+                "GBP Swap OIS 1y ATM 0b to 5y LCH Cleared",
+                "GBP Swap OIS 1y ATM 0b to 6y LCH Cleared",
+                "GBP Swap OIS 1y ATM 0b to 7y LCH Cleared",
+                "GBP Swap OIS 1y ATM 0b to 8y LCH Cleared",
+                "GBP Swap OIS 1y ATM 0b to 9y LCH Cleared",
+                "GBP Swap OIS 1y ATM 0b to 10y LCH Cleared",
+                "GBP Swap OIS 1y ATM 0b to 12y LCH Cleared",
+                "GBP Swap OIS 1y ATM 0b to 15y LCH Cleared",
+                "GBP Swap OIS 1y ATM 0b to 20y LCH Cleared",
+                "GBP Swap OIS 1y ATM 0b to 25y LCH Cleared",
+                "GBP Swap OIS 1y ATM 0b to 30y LCH Cleared",
+                "GBP Swap OIS 1y ATM 0b to 35y LCH Cleared",
+                "GBP Swap OIS 1y ATM 0b to 40y LCH Cleared",
+                "GBP Swap OIS 1y ATM 0b to 45y LCH Cleared",
+                "GBP Swap OIS 1y ATM 0b to 50y LCH Cleared",
+            ],
+            "extrapolation": datetime.timedelta(days=365 * 20),
+            "reference_key": "GBP-SONIA",
+        }
+    },
 }
 # fmt: on
 
@@ -448,9 +516,38 @@ def _build_rl_basic_gsquant_curve_from_frame(curve: str, as_of: datetime.date, f
     }
 
     if curve_cfg.get("extrapolation"):
+        # The right spline boundary must be anchored on the true LAST knot, not
+        # the second-to-last: the previous form built `extrapolated` from
+        # `knot_names[-2]`, which left the spline domain short of the curve's
+        # actual longest node (the last knot's own termination) whenever the
+        # extrapolation window undershot that gap even slightly - undefined
+        # evaluation there, which showed up as an all-NaN Solver failure once a
+        # calibrating instrument's cashflow landed past the spline's endpoint.
+        #
+        # The textbook fix would also promote the last knot itself into the
+        # interior control-point list (`knot_names[1:]` instead of
+        # `knot_names[1:-1]`), since it now lies strictly inside the domain.
+        # That does not solve here: every curve in this map is built so its
+        # `knots` list is exactly 1:1 with the curve's in-domain nodes (any
+        # meeting-dated/imm front-end instrument always terminates before the
+        # first knot, so it never contributes a node inside the spline's
+        # domain) - which means rateslib's per-curve exact (non-least-squares)
+        # spline fit is already exactly determined: `len(t) - 4` basis
+        # functions against exactly that many fit points. Adding one more
+        # interior knot without a new underlying node to fit makes the system
+        # overdetermined by one and rateslib's `csolve` raises `` `csolve`
+        # cannot complete if length of `tau` < n or `allow_lsq` is false ``
+        # (verified directly against USD-OIS on 2015-06-30, 2020-06-30 and
+        # 2026-07-31, all three failing identically with the textbook form).
+        # So only the `extrapolated` anchor moves to the true last knot; the
+        # interior control-point list is unchanged, which keeps every curve's
+        # spline exactly determined while still fixing the boundary bug: the
+        # domain's right edge now clears the true last knot's date by the full
+        # extrapolation window, rather than by window-minus-gap-to-the-
+        # second-to-last-knot.
         knot_names = list(curve_cfg["knots"])
         knots = [df.loc[name]["terminationDate"] for name in knot_names[1:-1]]
-        extrapolated = df.loc[knot_names[-2]]["terminationDate"] + curve_cfg["extrapolation"]
+        extrapolated = df.loc[knot_names[-1]]["terminationDate"] + curve_cfg["extrapolation"]
         curve_kwargs.update(
             interpolation="log_linear",
             t=[
