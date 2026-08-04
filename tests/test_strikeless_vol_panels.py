@@ -60,15 +60,16 @@ def test_missing_dates_are_dropped_not_filled():
             out.pop(request["timestamps"][1], None)
             return out
 
-    # 10 dates so the one drop (10%) sits comfortably under the default
-    # max_missing_frac=0.2 systemic-failure guard -- this test is about
-    # dropped-not-filled, not about that guard (see the two tests below).
-    dates = [dt.date(2026, 7, d) for d in range(22, 32)]
+    # max_missing_frac=1.0: this test is about dropped-not-filled, not about
+    # the systemic-failure guard (see the two tests below), so it opts out of
+    # that guard explicitly rather than being sized to dodge its default.
+    dates = [dt.date(2026, 7, 29), dt.date(2026, 7, 30), dt.date(2026, 7, 31)]
     panel = forward_rate_panel(
-        "USD-OIS", dates, [ForwardLeg("10Y", "10Y")], mdp=_GappyMDP()
+        "USD-OIS", dates, [ForwardLeg("10Y", "10Y")], mdp=_GappyMDP(),
+        max_missing_frac=1.0,
     )
-    assert len(panel) == 9
-    assert pd.Timestamp(dates[1]) not in panel.index
+    assert len(panel) == 2
+    assert pd.Timestamp("2026-07-30") not in panel.index
 
 
 def test_spread_panel_is_long_minus_short_in_bp():
@@ -168,6 +169,69 @@ def test_cache_write_merges_new_dates_instead_of_overwriting(tmp_path):
         assert pd.Timestamp(d) in on_disk.index
 
 
+def test_cache_never_serves_or_persists_a_partial_row(tmp_path):
+    """Guards the complete-or-absent invariant: a cached row must carry every
+    column the file has, or it must not be in the cache at all -- never a
+    silent NaN served back to a caller asking for the full leg set.
+    """
+    cache_path = tmp_path / "panel.parquet"
+    legs_both = [ForwardLeg("10Y", "10Y"), ForwardLeg("20Y", "10Y")]
+    leg_one = [ForwardLeg("10Y", "10Y")]
+    dates_1_3 = [dt.date(2026, 7, d) for d in (27, 28, 29)]
+    dates_4_5 = [dt.date(2026, 7, d) for d in (30, 31)]
+
+    # Step 1: cache both legs for dates 1-3.
+    forward_rate_panel(
+        "USD-OIS", dates_1_3, legs_both, mdp=_FakeMDP(), cache_path=cache_path
+    )
+
+    # Step 2: fetch only ONE leg for dates 4-5 against the same cache file.
+    # A naive combine_first would union in the new dates with the missing
+    # leg as NaN; that must not survive the write.
+    forward_rate_panel(
+        "USD-OIS", dates_4_5, leg_one, mdp=_FakeMDP(), cache_path=cache_path
+    )
+
+    on_disk = pd.read_parquet(cache_path)
+    assert not on_disk.isna().to_numpy().any()
+    for d in dates_4_5:
+        assert pd.Timestamp(d) not in on_disk.index  # incomplete -> dropped, not kept as NaN
+
+    # Step 3: request both legs over the full 5-date union. The cache only
+    # has dates 1-3, so this must be a clean re-fetch, never a served NaN.
+    mdp = _FakeMDP()
+    panel = forward_rate_panel(
+        "USD-OIS", dates_1_3 + dates_4_5, legs_both, mdp=mdp, cache_path=cache_path
+    )
+    assert mdp.bulk_calls == 1
+    assert len(panel) == 5
+    assert not panel.isna().to_numpy().any()
+
+
+def test_cache_read_rejects_a_slice_containing_nan(tmp_path):
+    """Read-side half of the complete-or-absent invariant: even a hand-written
+    or legacy cache file with a NaN cell must never be served -- it is a miss.
+    """
+    cache_path = tmp_path / "panel.parquet"
+    dates = [dt.date(2026, 7, 30), dt.date(2026, 7, 31)]
+    corrupt = pd.DataFrame(
+        {"10Y10Y": [0.0400, float("nan")], "20Y10Y": [0.0342, 0.0342]},
+        index=pd.DatetimeIndex([pd.Timestamp(d) for d in dates]),
+    )
+    corrupt.to_parquet(cache_path)
+
+    mdp = _FakeMDP()
+    panel = forward_rate_panel(
+        "USD-OIS",
+        dates,
+        [ForwardLeg("10Y", "10Y"), ForwardLeg("20Y", "10Y")],
+        mdp=mdp,
+        cache_path=cache_path,
+    )
+    assert mdp.bulk_calls == 1  # the NaN in the cached slice forced a re-fetch
+    assert not panel.isna().to_numpy().any()
+
+
 @pytest.mark.network
 @pytest.mark.slow
 def test_real_usd_panel_matches_desk_levels():
@@ -176,8 +240,13 @@ def test_real_usd_panel_matches_desk_levels():
 
     dates = [dt.date(2026, 7, 31), dt.date(2026, 8, 3)]
     legs = [ForwardLeg("10Y", "10Y"), ForwardLeg("20Y", "10Y")]
+    # max_missing_frac=1.0: this test checks the sign and level of a real
+    # slope, not provider health -- a single dropped date out of 2 requested
+    # is 50% missing, which would otherwise raise before the assertions below
+    # are reached and turn a graceful degrade into a hard failure.
     panel = forward_rate_panel(
-        "USD-OIS", dates, legs, mdp=IRSwapsMDP(source="GSQUANT-RL")
+        "USD-OIS", dates, legs, mdp=IRSwapsMDP(source="GSQUANT-RL"),
+        max_missing_frac=1.0,
     )
     assert len(panel) >= 1
     pair = ForwardPair("USD", "USD-OIS", *legs)

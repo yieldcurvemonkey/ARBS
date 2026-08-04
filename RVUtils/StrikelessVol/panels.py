@@ -52,6 +52,11 @@ def forward_rate_panel(
 
     ``show_progress`` is accepted but not yet wired up; reserved for a later
     task's progress bar on long bulk fetches.
+
+    ``cache_path`` never serves or persists a partial row: a cached slice
+    with any NaN in the requested columns is treated as a miss and
+    re-fetched, and a merged write drops any row that is not complete across
+    every column the file carries. See ``_write_panel_cache``.
     """
     legs = list(legs)
     dates = list(dates)
@@ -64,7 +69,12 @@ def forward_rate_panel(
         has_all_dates = wanted.isin(cached.index).all()
         has_all_legs = set(wanted_labels).issubset(cached.columns)
         if has_all_dates and has_all_legs:
-            return cached.loc[cached.index.isin(wanted), wanted_labels]
+            slice_ = cached.loc[cached.index.isin(wanted), wanted_labels]
+            # A row is complete or it is absent, never partial -- a NaN cell
+            # (e.g. a legacy cache file, or one written outside this module)
+            # is a miss, not a silent bad value served to the caller.
+            if not slice_.isna().to_numpy().any():
+                return slice_
 
     if mdp is None:
         from MDP.IRSwaps.IRSwapsMDP import IRSwapsMDP
@@ -138,6 +148,15 @@ def _write_panel_cache(panel: pd.DataFrame, cache_path: str | Path) -> None:
     of redundant external fetch that has hit provider rate limits before in
     this repo. On any date/column overlap the freshly fetched value in
     ``panel`` wins.
+
+    A narrower fetch (fewer legs than the file already carries) unions in new
+    columns for its dates, which ``combine_first`` alone would leave NaN
+    wherever the fresh fetch has no value. A row is complete or it is absent,
+    never partial -- exactly the invariant the whole-date-drop logic above
+    exists to protect -- so any row that is not complete across every column
+    the merged file carries is dropped before writing. Those dates are not
+    lost, only re-fetched on the next call that needs them; that is cheap
+    next to a silent NaN sitting in a rate panel.
     """
     cache_path = Path(cache_path)
     cache_path.parent.mkdir(parents=True, exist_ok=True)
@@ -147,6 +166,7 @@ def _write_panel_cache(panel: pd.DataFrame, cache_path: str | Path) -> None:
         combined = panel.combine_first(existing)
     else:
         combined = panel
+    combined = combined.dropna(how="any")
     combined.sort_index().to_parquet(cache_path)
 
 
