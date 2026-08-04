@@ -37,8 +37,36 @@ package with its mirror at the same absolute strikes on the adjacent expiry, ove
 | far (next expiry out) | **0.259** | 0.112 | **1.35×** | 0.91× |
 | near (previous expiry) | **0.320** | 0.121 | **1.19×** | 0.91× |
 
-The tree-implied calendar ratio is roughly **4× too large** and, used as
-prescribed, *raises* risk — the same failure as the linear leg, milder in degree.
+The tree-implied calendar ratio is too large and, used as prescribed, *raises*
+risk — the same failure as the linear leg, milder in degree.
+
+### Correction: those are DAILY numbers, and daily is the wrong horizon
+
+The table above was the first thing measured and it is attenuated. Marks move on
+a 0.5bp tick grid, so each leg's daily change carries quantisation noise that is
+independent across expiries — classic errors-in-variables, which biases a daily
+regression's slope and R² toward zero. The tradeable horizon is the holding
+period, and re-measured there the picture changes materially:
+
+| horizon (sessions) | corr | fitted β | R² | β vs tree λ | risk-min λ | variance removed |
+|---:|---:|---:|---:|---:|---:|---:|
+| 1 | 0.43 | 0.61 | 0.18 | 0.27 | 0.60 | 18.4% |
+| 3 | 0.59 | 0.91 | 0.35 | 0.38 | 0.90 | 35.0% |
+| 5 | 0.65 | 1.03 | 0.42 | 0.42 | 1.05 | 42.1% |
+| 10 | 0.70 | 1.14 | 0.48 | 0.45 | 1.15 | 48.4% |
+| **15** | **0.73** | **1.22** | **0.53** | **0.49** | **1.20** | **52.6%** |
+
+So, corrected: an adjacent-expiry fly **is** a real hedge — at a 15-session
+holding period it removes **52.6%** of the package's variance, and the naive
+**1:1** ratio captures 50.9% of that without estimating anything. The claim that
+fails is narrower than "the hedge does not work": it is that the *lattice* can
+size it. `beta` against the tree ratio is 0.49 — the tree is still ~2× too large,
+just as it was ~5.7× too large for the linear leg. **The market can size this
+hedge; the model cannot.**
+
+The 1:1 result is confirmed independently by per-trade P&L dispersion in the
+backtest harness (3.22 → 2.30 bp/trade, a 49% variance reduction on a completely
+separate computation).
 
 The tempting explanation — that `c` rises with dte, so `c_1/c_2 < 1` — **is not
 supported**: measured per fixed-strike series, `c` is 0.19–0.61 with
@@ -51,7 +79,8 @@ rather than rescued.
 Two things survive the refutation and are worth measuring properly.
 
 **1. The pairing convention is a real result.** Head to head over 67,423 daily
-observations, best-case (pooled, in-sample) fitted hedges:
+observations, best-case (pooled, in-sample) fitted hedges (daily, so attenuated —
+the comparison between conventions is what matters, not the levels):
 
 | hedge side | matching | corr | fitted β | variance removed |
 |---|---|---:|---:|---:|
@@ -62,11 +91,14 @@ observations, best-case (pooled, in-sample) fitted hedges:
 
 Absolute-rate matching beats moneyness matching by an order of magnitude, which
 is the frame-freezing principle (atoms live at `base + n·25bp`) confirmed from a
-third direction. And it bounds the whole enterprise: **the best an
-adjacent-expiry fly can do is remove 16% of a cell package's variance**, fitted
-with hindsight, for ~11.5 contracts (≈2.9bp/trade round trip) against a package
-earning 0.2–0.5bp/trade. The linear leg's correctly-sized ceiling was ~9–11% for
-1.93bp. Better hedge, worse price.
+third direction. The near side is the weaker hedge on every axis as well as the
+rarer one.
+
+The economics, at the corrected horizon: ~52% of variance removed for roughly a
+doubling of the option bill (1.83 → 3.66 bp/trade at 1:1) against a package
+earning 0.2–0.7bp/trade. Compare the linear leg — 9–11% for 1.93bp. **The
+vol-vs-vol hedge is five times the hedge for twice the price, and the package it
+protects still does not earn enough to pay for either.**
 
 **2. The calendar disagreement is an untested SIGNAL.** The same machinery that
 fails as a hedge defines a trade nobody in this program has run: the *same count
@@ -134,14 +166,14 @@ re-derived from atoms up through the same `Context` subclasses.
 
 ## Kill criteria (pre-declared)
 
-1. **Already fired, before the build**: if the tree calendar ratio is not
-   right-sized (`beta` far from 1), the "hedge a density with a density" thesis
-   is refuted as stated. It measured 0.26/0.32. The build continues only to
-   quantify the ceiling and to test the calendar *signal*; the hedge claim is not
-   re-litigated.
-2. If the fitted-in-sample variance reduction is under 25%, an adjacent-expiry
-   fly is not a hedge at any price, and the correct recommendation is to stop
-   looking for one. (Measured: 16.1%.)
+1. **Fired before the build**: if the tree calendar ratio is not right-sized
+   (`beta` far from 1), the "the lattice can size a density hedge" thesis is
+   refuted. Measured 0.49 at the trade horizon — the tree is ~2× too large, down
+   from ~5.7× for the linear leg but still wrong. Not re-litigated.
+2. If the variance reduction at the holding horizon is under 25%, an
+   adjacent-expiry fly is not a hedge at any price. **Measured 52.6% at 15
+   sessions (50.9% at a flat 1:1) — this does NOT fire**, and the hedge is real.
+   The question moves entirely onto price.
 3. If the calendar signal's gross does not exceed the unhedged `pair_odd_dev`
    row's gross per trade, the extra expiry adds nothing and the cross-expiry
    channel is closed too.

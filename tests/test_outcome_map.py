@@ -358,7 +358,7 @@ def _scripted(dates, marks, fairs):
     """mark_fn plus a signal_fn that returns the package's richness."""
     mk = dict(zip(dates, marks))
     fr = dict(zip(dates, fairs))
-    return (lambda ts, sym, legs: mk.get(ts, np.nan),
+    return (lambda ts, row: mk.get(ts, np.nan),
             lambda ts, row: mk.get(ts, np.nan) - fr.get(ts, np.nan))
 
 
