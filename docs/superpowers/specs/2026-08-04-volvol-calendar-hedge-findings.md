@@ -21,10 +21,13 @@ anyway — before costs.**
 | variance removed, best size | 9–11% | **53%** |
 | variance removed, no estimation | — | **51%** (flat 1:1) |
 | beta vs the model's own ratio | 0.175 (5.7× too big) | **0.489** (2.0× too big) |
-| bill per trade | 1.93bp | **1.85bp** (1:1: 3.69 total vs 1.84 unhedged) |
-| gross per unit of risk | — | **0.213 → 0.167** |
+| the hedge leg's OWN bill per trade | 1.93bp | **1.85bp** at 1:1 |
+| total bill per trade, unhedged → hedged | 1.76 → 3.69 | 1.84 → **3.69** |
+| **gross per unit of risk, unhedged → hedged** | — | **0.213 → 0.167** |
 
-That last row is the finding. Everything else is detail.
+The two hedges cost almost exactly the same. The last row is the finding, and it
+is not about cost at all: the calendar leg makes the trade worse *before* a
+single tick is paid. Everything else is detail.
 
 ## 1. The hedge is real — five times the ZQ basket
 
