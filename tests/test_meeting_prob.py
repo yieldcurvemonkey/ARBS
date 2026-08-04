@@ -357,6 +357,37 @@ def test_atom_engine_matches_reference_distribution():
             assert pa == pytest.approx(pb, abs=1e-9)
 
 
+def test_atom_engine_degenerate_meeting_contributes_probability_one():
+    """A zero-jump meeting (support (a, a), q = 0) must not zero the tree.
+
+    Regression: the is_second mask marks the single support point as "second"
+    with q = 0, which zeroed every combo and made the normalisation divide
+    by zero — NaN trees whenever a ladder carried an exactly-on-lattice
+    meeting (common under the wrong-calendar placebo, rare but real live).
+    """
+    from RVUtils.MeetingProb.atoms import AtomEngine
+    r1 = ResolvedMeeting(
+        effective=datetime.date(2026, 9, 17),
+        decision=datetime.date(2026, 9, 16),
+        weight=1.0, support=(0, 0), q_zq=0.0, jump_bp=0.0, stale=False,
+    )
+    r2 = ResolvedMeeting(
+        effective=datetime.date(2026, 10, 29),
+        decision=datetime.date(2026, 10, 28),
+        weight=1.0, support=(0, 1), q_zq=0.4, jump_bp=10.0, stale=False,
+    )
+    cm = ContractMeetings(
+        symbol="SFRZ26", as_of=datetime.date(2026, 7, 30),
+        window=(datetime.date(2026, 12, 16), datetime.date(2027, 3, 17)),
+        expiry=datetime.date(2026, 12, 11),
+        resolved=(r1, r2), unresolved_var_bp2=0.0, any_stale=False,
+    )
+    rates, probs = AtomEngine(cm).rates_probs(4.00)
+    assert np.isfinite(probs).all()
+    assert probs.sum() == pytest.approx(1.0)
+    assert sorted(np.round(probs, 12)) == pytest.approx([0.4, 0.6])
+
+
 def test_vectorized_pricer_matches_scalar():
     from RVUtils.MeetingProb.pricer import price_options_vector
     cm = _cm_two_meetings()
