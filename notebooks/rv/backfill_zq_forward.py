@@ -27,10 +27,10 @@ def zq_symbols(start_ym, end_ym):
 
 
 if __name__ == "__main__":
-    syms = zq_symbols((2026, 8), (2027, 12))
+    syms = zq_symbols((2026, 6), (2027, 12))
     print(f"fetching {len(syms)}: {syms}", flush=True)
     out = backfill_settles(
-        datetime.date(2024, 1, 1), datetime.date(2026, 7, 30),
+        datetime.date(2024, 1, 1), datetime.date(2026, 8, 1),
         symbols=syms, show_progress=True,
     )
     for s in syms:

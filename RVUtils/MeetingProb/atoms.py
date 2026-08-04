@@ -148,9 +148,14 @@ class AtomEngine:
         w = np.array([r.weight for r in cm.resolved], dtype=float)
         self.combos = combos
         self.disp_raw = combos @ (w * move_size_bp)                      # (K,)
-        # per-meeting indicator of "second support point taken"
+        # per-meeting indicator of "second support point taken"; a DEGENERATE
+        # meeting (support (a, a), q irrelevant) contributes probability 1 —
+        # without the mask, q = 0 there would zero every combo and the
+        # normalisation would divide by zero
         second = np.array([r.support[1] for r in cm.resolved], dtype=float)
         self.is_second = (combos == second[None, :]).astype(float)       # (K, R)
+        self.degenerate = np.array(
+            [r.support[0] == r.support[1] for r in cm.resolved])         # (R,)
         self.wspan = w * move_size_bp * np.array(
             [r.support[1] - r.support[0] for r in cm.resolved], dtype=float)
 
@@ -178,10 +183,12 @@ class AtomEngine:
         qv = np.array([cm.resolved[i].q_zq for i in range(cm.n_resolved)]
                       if q is None else q, dtype=float)
         pk = self.is_second * qv[None, :] + (1.0 - self.is_second) * (1.0 - qv[None, :])
+        pk[:, self.degenerate] = 1.0
         probs = pk.prod(axis=1)
         if q_ref is not None:
             qr = np.asarray(q_ref, dtype=float)
             pr = self.is_second * qr[None, :] + (1.0 - self.is_second) * (1.0 - qr[None, :])
+            pr[:, self.degenerate] = 1.0
             e_disp = float(np.dot(pr.prod(axis=1), self.disp_raw))
         else:
             e_disp = float(np.dot(probs, self.disp_raw))
