@@ -228,6 +228,45 @@ with e.g. `OIS` → 20 curves, `SWAP_LIBOR` → 46 currencies, `XCCY_SWAP` → 2
 `XEUR_RX`, …), `BASIS_SWAPS` → 6 named bases (`SOFR_FEDFUND_BASIS`,
 `EUROSTR_EURIBOR_BASIS`, `3S1S_BASIS`, …).
 
+**The catalog is a grammar, not a tag list.** Walking to every leaf was attempted
+and abandoned on evidence:
+
+- `RATES.XCCY_OIS_SWAP` is `ccy1 → ccy2 → SPOT → tenor → {BASE_LEG, SPREAD_LEG} →
+  BASIS_SPREAD` — one leaf per node, so ~20,000 UI selections at ~8s to enumerate
+  a grammar that is just *tenor × leg*. `RATES.MBS` is the same trap over coupons.
+- Switching the walk from breadth-first to depth-first did **not** help (8.1s/node
+  vs 7.0): the cost is UIA tree traversal, not path re-descent.
+- `RATES.VOL` is ~23,000 tags for USD alone and ~250,000 across 11 currencies.
+  Validating that many at 15 tags per ~2s call is ~9 hours.
+
+Exhaustive enumeration is therefore neither affordable nor needed. What a notebook
+actually does is ask for *one* series; the library generates that tag from the
+grammar and `CVTSHIST` answers in under a second. So the catalog stores **structure
++ per-branch grammar**, and validation happens on demand.
+
+**Grammar must be per-branch, never pooled per level.** Pooling `RATES.VOL`'s
+level-4 vocabulary gives `[1M, 1Y, 3M, 6M, BLACK, NORMAL, NORMALABSOLUTE,
+FWDPREMIUM, NORMALSKEW]` — expiries and vol conventions mixed, because each measure
+has its own shape. Generating from the pooled vocabulary produced 2,163 VOL tags of
+which **zero** were valid. Per-branch shapes fixed it:
+
+```
+VOL.<ccy>.ATM       {NORMAL,BLACK,PREMIUM,FWDPREMIUM} x {DAILY,ANNUAL} x expiry x tenor
+VOL.<ccy>.ATM_RFR   {NORMAL,BLACK,PREMIUM,FWDPREMIUM} x {ANNUAL}       x expiry x tenor
+VOL.<ccy>.OTM_RFR   {PREMIUM,NORMALABSOLUTE,NORMALSKEW,RISK_REVERSAL} x [ANNUAL] x OTM_* x expiry x tenor
+VOL.<ccy>.VOL_RATIO {1M,3M,6M,1Y} x expiry x tenor            <- one level shallower
+MIDCURVES.<ccy>     {OPT_PAY,OPT_REC,OPT_STR} x {PRICE,VOL} x expiry x <1Y1Y>
+SPREAD_OPTIONS.<ccy>{OPT_CAP,...}             x {PRICE,VOL} x expiry x <2Y5Y>
+```
+
+Depth varies *within* a family and even between conventions of one measure:
+`OTM_RFR.PREMIUM` has no `ANNUAL` level while `OTM_RFR.NORMALABSOLUTE` does. Any
+generator must treat the shape as branch-local and confirm with `CVTSHIST`.
+
+**Legacy non-RFR branches are empty.** `ATM`, `REALIZED` and `VOL_RATIO` returned
+nothing on every sampled tag while `ATM_RFR`, `REALIZED_RFR` and `VOL_RATIO_RFR`
+returned 8/8. Builders should default to the `_RFR` variants.
+
 Harvest mechanics that matter:
 
 - **Breadth-first with a depth cap.** Depth-first starves: `RATES.MBS` is a coupon ×
