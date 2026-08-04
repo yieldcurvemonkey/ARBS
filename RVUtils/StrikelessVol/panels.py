@@ -450,6 +450,17 @@ def _build_tfp_history(*args, **kwargs):
     return build_tfp_history(*args, **kwargs)
 
 
+_TFP_FIT_R_SQUARED_FLOOR = 0.955
+"""Empirically-set floor separating well-conditioned cross-sectional TFP fits
+from degenerate ones -- see ``umep_panel``'s docstring and the Task 6 fix
+report for the diagnosis. Observed on 2024-01-02..2026-08-03 real data
+(n=639 days): 7 days have ``r_squared`` topping out at 0.9520 (and a
+per-tenor modified duration that is not monotonically increasing with
+tenor -- a physically impossible input for on-the-run Treasuries); every
+other day's ``r_squared`` is >= 0.9618. 0.955 sits in that observed gap
+with margin on both sides."""
+
+
 def umep_panel(
     start: dt.date,
     end: dt.date,
@@ -467,24 +478,60 @@ def umep_panel(
     infrastructure exists for EUR/JPY/GBP in this repo. Cross-market signals run
     on valuation and drift alone -- see the spec's stated limits.
 
-    Observed on real data (2024-01-02..2026-08-03, USD ERIS_EOD_LIVE-RL_BASIC /
-    USTS_FEDINVEST_WSJ_LIVE-RL, n=639 rows): ``mmss_30Y`` (the raw 30y
-    maturity-matched swap spread) is negative on every observed day (median
-    ~-77bp), and ``umep_bp_per_year`` is correspondingly positive, sitting in a
-    ~3.5-4.7bp/year band on 632/639 days (Jan-2024 median ~3.7bp, Aug-2026
-    median ~4.3bp) -- so under this tool's convention a positive
-    ``umep_bp_per_year`` records a richening/widening term funding premium
-    against negative (swaps-rich) matched-maturity spreads, the sign H2 calls
-    "drag" rather than "common factor". Seven days in July 2026 produce
-    ``mmss_30Y``/``umep_bp_per_year`` off by 3-6 orders of magnitude -- a
-    pre-existing data/regression-conditioning artifact in the wrapped
-    ``build_tfp_history``/``compute_tfp_regression``, upstream of this wrapper
-    (see task-6-report.md); the committed network test can fail if those days
-    land in its tail(60) window, which is a fact about the current data, not
-    about this function.
+    Convention (established from real data, not assumed): this repo's
+    ``mmss_30Y`` is **desk** convention (swap rate minus UST yield), the
+    negative of the tool convention the spec pins (UST yield minus swap rate).
+    Observed 2024-01-02..2026-08-03 (USD ERIS_EOD_LIVE-RL_BASIC /
+    USTS_FEDINVEST_WSJ_LIVE-RL, n=639 days, 632 after the degenerate-fit filter
+    below): ``mmss_30Y`` is negative on every day (median ~-77bp); sign-flipping
+    it (-(-77bp) = +77bp) cross-checks against the research brief's +74.6bp 30y
+    ASW figure. Because ``TFP = -slope``, ``umep_bp_per_year`` needs **no** sign
+    flip -- it is already positive and in the Dallas Fed's published range
+    (~4.3bp/year by Aug-2026, matching their ~4.3bp Feb-2026 figure).
+    **``mmss_*``/``dev_*``/``baseline_*`` and ``umep_bp_per_year``/``zds_bp``
+    therefore carry opposite sign conventions (desk vs. tool) -- do not mix
+    them in one regression without normalising one to match the other.** This
+    establishes the sign *convention* only; it is not a reading of H2 (the
+    sign of the forward-slope-on-UMEP coefficient), which is Task 16's
+    regression and has not been run here.
+
+    Degenerate-fit guard: rows whose cross-sectional regression has
+    ``r_squared`` below ``_TFP_FIT_R_SQUARED_FLOOR`` (0.955) are dropped
+    before return. Diagnosed on the same real-data pull: 7 of 639 days
+    (2026-07-09, 07-10, 07-13, 07-17, 07-20, 07-24, 07-27) all have their full
+    complement of 6 regression tenors (ruling out a too-few-tenors cause) but
+    a per-tenor modified duration that is **not monotonically increasing with
+    tenor** -- e.g. 2026-07-09's ``dur_5Y`` (0.0257) is below its ``dur_3Y``
+    (0.0592), physically impossible for on-the-run Treasuries and evidence of
+    a corrupted duration read upstream, not a defect in
+    ``compute_tfp_regression`` (unmodified here). The corrupted durations make
+    the cross-section ill-conditioned and the fitted slope explodes
+    (``umep_bp_per_year`` from ~4bp/year to as much as several million on
+    those days). Those same 7 days are exactly the days with
+    ``r_squared < 0.9520``; every other day's ``r_squared >= 0.9618``.
+    Excluded rows are logged at ``WARNING`` with their date and ``r_squared``,
+    and the count is exposed at ``out.attrs["umep_excluded_degenerate_days"]``
+    so exclusions are visible rather than silent.
     """
     raw = _build_tfp_history(start, end, cache_path=str(cache_path) if cache_path else None, **kwargs)
     if raw is None or raw.empty:
         return pd.DataFrame()
     out = raw.rename(columns={"tfp": "umep_bp_per_year", "zds": "zds_bp"})
+
+    n_excluded = 0
+    if "r_squared" in out.columns:
+        degenerate = out["r_squared"] < _TFP_FIT_R_SQUARED_FLOOR
+        n_excluded = int(degenerate.sum())
+        if n_excluded:
+            for idx in out.index[degenerate]:
+                d = idx.date() if hasattr(idx, "date") else idx
+                logger.warning(
+                    "umep_panel: excluding %s -- cross-sectional TFP fit r_squared=%.4f "
+                    "is below the %.3f floor (near-degenerate/ill-conditioned fit, "
+                    "typically a corrupted per-tenor modified-duration input -- see "
+                    "the Task 6 fix report).",
+                    d, out.loc[idx, "r_squared"], _TFP_FIT_R_SQUARED_FLOOR,
+                )
+            out = out.loc[~degenerate].copy()
+    out.attrs["umep_excluded_degenerate_days"] = n_excluded
     return out
