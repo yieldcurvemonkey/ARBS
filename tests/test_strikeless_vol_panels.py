@@ -3,7 +3,11 @@ import datetime as dt
 import pandas as pd
 import pytest
 
-from RVUtils.StrikelessVol.panels import forward_rate_panel, spread_panel
+from RVUtils.StrikelessVol.panels import (
+    _cache_path_for_legs,
+    forward_rate_panel,
+    spread_panel,
+)
 from RVUtils.StrikelessVol.universe import ForwardLeg, ForwardPair
 
 
@@ -163,7 +167,9 @@ def test_cache_write_merges_new_dates_instead_of_overwriting(tmp_path):
     forward_rate_panel("USD-OIS", dates_1_3, leg, mdp=_FakeMDP(), cache_path=cache_path)
     forward_rate_panel("USD-OIS", dates_4_5, leg, mdp=_FakeMDP(), cache_path=cache_path)
 
-    on_disk = pd.read_parquet(cache_path)
+    # cache_path is a prefix, not the literal file -- the same leg set on
+    # both calls resolves to one derived, leg-set-specific file.
+    on_disk = pd.read_parquet(_cache_path_for_legs(cache_path, ["10Y10Y"]))
     assert len(on_disk) == 5
     for d in dates_1_3 + dates_4_5:
         assert pd.Timestamp(d) in on_disk.index
@@ -171,8 +177,15 @@ def test_cache_write_merges_new_dates_instead_of_overwriting(tmp_path):
 
 def test_cache_never_serves_or_persists_a_partial_row(tmp_path):
     """Guards the complete-or-absent invariant: a cached row must carry every
-    column the file has, or it must not be in the cache at all -- never a
+    column its own file has, or it must not be in that file at all -- never a
     silent NaN served back to a caller asking for the full leg set.
+
+    Each leg set is its own file (see ``_cache_path_for_legs``), so a
+    narrower fetch for a different leg set cannot contaminate the wider
+    cache's file at all -- there is nothing to evict or NaN-out. What this
+    test actually guards is the end state: after both writes, neither file
+    has a NaN, and a subsequent both-legs request over the full date union
+    still gets a clean, complete re-fetch rather than a served NaN.
     """
     cache_path = tmp_path / "panel.parquet"
     legs_both = [ForwardLeg("10Y", "10Y"), ForwardLeg("20Y", "10Y")]
@@ -185,20 +198,27 @@ def test_cache_never_serves_or_persists_a_partial_row(tmp_path):
         "USD-OIS", dates_1_3, legs_both, mdp=_FakeMDP(), cache_path=cache_path
     )
 
-    # Step 2: fetch only ONE leg for dates 4-5 against the same cache file.
-    # A naive combine_first would union in the new dates with the missing
-    # leg as NaN; that must not survive the write.
+    # Step 2: fetch only ONE leg for dates 4-5 against the same cache_path
+    # prefix -- a different leg set, so (by design) a different file.
     forward_rate_panel(
         "USD-OIS", dates_4_5, leg_one, mdp=_FakeMDP(), cache_path=cache_path
     )
 
-    on_disk = pd.read_parquet(cache_path)
-    assert not on_disk.isna().to_numpy().any()
-    for d in dates_4_5:
-        assert pd.Timestamp(d) not in on_disk.index  # incomplete -> dropped, not kept as NaN
+    both_legs_file = _cache_path_for_legs(cache_path, ["10Y10Y", "20Y10Y"])
+    one_leg_file = _cache_path_for_legs(cache_path, ["10Y10Y"])
+    assert not pd.read_parquet(both_legs_file).isna().to_numpy().any()
+    assert not pd.read_parquet(one_leg_file).isna().to_numpy().any()
 
-    # Step 3: request both legs over the full 5-date union. The cache only
-    # has dates 1-3, so this must be a clean re-fetch, never a served NaN.
+    # The both-legs file is untouched by the narrower write -- still exactly
+    # its original 3 rows, none contaminated.
+    both_legs_on_disk = pd.read_parquet(both_legs_file)
+    assert len(both_legs_on_disk) == 3
+    for d in dates_1_3:
+        assert pd.Timestamp(d) in both_legs_on_disk.index
+
+    # Step 3: request both legs over the full 5-date union. The both-legs
+    # file only has dates 1-3, so this must be a clean re-fetch, never a
+    # served NaN.
     mdp = _FakeMDP()
     panel = forward_rate_panel(
         "USD-OIS", dates_1_3 + dates_4_5, legs_both, mdp=mdp, cache_path=cache_path
@@ -214,22 +234,112 @@ def test_cache_read_rejects_a_slice_containing_nan(tmp_path):
     """
     cache_path = tmp_path / "panel.parquet"
     dates = [dt.date(2026, 7, 30), dt.date(2026, 7, 31)]
+    legs = [ForwardLeg("10Y", "10Y"), ForwardLeg("20Y", "10Y")]
     corrupt = pd.DataFrame(
         {"10Y10Y": [0.0400, float("nan")], "20Y10Y": [0.0342, 0.0342]},
         index=pd.DatetimeIndex([pd.Timestamp(d) for d in dates]),
     )
-    corrupt.to_parquet(cache_path)
+    corrupt.to_parquet(_cache_path_for_legs(cache_path, ["10Y10Y", "20Y10Y"]))
 
     mdp = _FakeMDP()
     panel = forward_rate_panel(
-        "USD-OIS",
-        dates,
-        [ForwardLeg("10Y", "10Y"), ForwardLeg("20Y", "10Y")],
-        mdp=mdp,
-        cache_path=cache_path,
+        "USD-OIS", dates, legs, mdp=mdp, cache_path=cache_path,
     )
     assert mdp.bulk_calls == 1  # the NaN in the cached slice forced a re-fetch
     assert not panel.isna().to_numpy().any()
+
+
+def test_narrow_then_wide_does_not_evict_the_narrow_cache(tmp_path):
+    """The eviction repro: caching a narrow leg set, then fetching a wider
+    leg set for disjoint dates against the same cache_path, must not disturb
+    the narrow cache -- each leg set has its own file, so a subsequent
+    request for the original narrow leg set over its original dates hits the
+    cache cleanly instead of losing rows a blanket dropna once evicted.
+    """
+    cache_path = tmp_path / "panel.parquet"
+    leg_a = [ForwardLeg("10Y", "10Y")]
+    legs_ab = [ForwardLeg("10Y", "10Y"), ForwardLeg("20Y", "10Y")]
+    dates_1_3 = [dt.date(2026, 7, d) for d in (27, 28, 29)]
+    dates_4_6 = [dt.date(2026, 7, 30), dt.date(2026, 7, 31), dt.date(2026, 8, 1)]
+
+    # Cache the narrow leg set for dates 1-3.
+    forward_rate_panel("USD-OIS", dates_1_3, leg_a, mdp=_FakeMDP(), cache_path=cache_path)
+
+    # A wider leg set over disjoint dates, same cache_path prefix.
+    forward_rate_panel(
+        "USD-OIS", dates_4_6, legs_ab, mdp=_FakeMDP(), cache_path=cache_path
+    )
+
+    # Re-requesting the narrow leg set over its original dates must still
+    # hit the cache -- zero fresh fetches -- and return all three rows.
+    mdp = _FakeMDP()
+    panel = forward_rate_panel(
+        "USD-OIS", dates_1_3, leg_a, mdp=mdp, cache_path=cache_path
+    )
+    assert mdp.bulk_calls == 0
+    assert len(panel) == 3
+    for d in dates_1_3:
+        assert pd.Timestamp(d) in panel.index
+
+
+def test_wide_then_narrow_persists_and_then_hits_not_refetches_forever(tmp_path):
+    """The Minor: a narrow request against dates a wider cache does not yet
+    have must persist its own (separately-keyed) file after the first fetch,
+    then be served from that cache on a repeat of the identical request --
+    not re-fetch on every single call forever.
+    """
+    cache_path = tmp_path / "panel.parquet"
+    leg_a = [ForwardLeg("10Y", "10Y")]
+    legs_ab = [ForwardLeg("10Y", "10Y"), ForwardLeg("20Y", "10Y")]
+    dates_1_3 = [dt.date(2026, 7, d) for d in (27, 28, 29)]
+    dates_4_6 = [dt.date(2026, 7, 30), dt.date(2026, 7, 31), dt.date(2026, 8, 1)]
+
+    # Cache the wide leg set for dates 1-3.
+    forward_rate_panel(
+        "USD-OIS", dates_1_3, legs_ab, mdp=_FakeMDP(), cache_path=cache_path
+    )
+
+    # First narrow request over dates the wide cache does not have: one fetch.
+    mdp_first = _FakeMDP()
+    forward_rate_panel(
+        "USD-OIS", dates_4_6, leg_a, mdp=mdp_first, cache_path=cache_path
+    )
+    assert mdp_first.bulk_calls == 1
+
+    # Repeating the identical narrow request must now hit -- zero fresh
+    # fetches -- not re-fetch again.
+    mdp_second = _FakeMDP()
+    panel = forward_rate_panel(
+        "USD-OIS", dates_4_6, leg_a, mdp=mdp_second, cache_path=cache_path
+    )
+    assert mdp_second.bulk_calls == 0
+    assert len(panel) == 3
+
+
+def test_cache_path_for_legs_is_order_independent(tmp_path):
+    """The same legs passed in two different orders must resolve to the same
+    file, so a caller's leg ordering can't fragment the cache.
+    """
+    assert _cache_path_for_legs(
+        "panel.parquet", ["10Y10Y", "20Y10Y"]
+    ) == _cache_path_for_legs("panel.parquet", ["20Y10Y", "10Y10Y"])
+
+    cache_path = tmp_path / "panel.parquet"
+    dates = [dt.date(2026, 7, 30), dt.date(2026, 7, 31)]
+    leg_10 = ForwardLeg("10Y", "10Y")
+    leg_20 = ForwardLeg("20Y", "10Y")
+
+    forward_rate_panel(
+        "USD-OIS", dates, [leg_10, leg_20], mdp=_FakeMDP(), cache_path=cache_path
+    )
+
+    # Same legs, reversed order: must hit the same file -- zero fresh fetches.
+    mdp = _FakeMDP()
+    panel = forward_rate_panel(
+        "USD-OIS", dates, [leg_20, leg_10], mdp=mdp, cache_path=cache_path
+    )
+    assert mdp.bulk_calls == 0
+    assert list(panel.columns) == ["20Y10Y", "10Y10Y"]
 
 
 @pytest.mark.network

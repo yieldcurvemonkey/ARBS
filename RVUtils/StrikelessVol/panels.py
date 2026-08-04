@@ -7,6 +7,7 @@ going through ``replication``, which owns the aging.
 from __future__ import annotations
 
 import datetime as dt
+import hashlib
 import logging
 from pathlib import Path
 from typing import Iterable, List, Optional, Sequence
@@ -53,21 +54,34 @@ def forward_rate_panel(
     ``show_progress`` is accepted but not yet wired up; reserved for a later
     task's progress bar on long bulk fetches.
 
-    ``cache_path`` never serves or persists a partial row: a cached slice
-    with any NaN in the requested columns is treated as a miss and
-    re-fetched, and a merged write drops any row that is not complete across
-    every column the file carries. See ``_write_panel_cache``.
+    ``cache_path`` is keyed by leg set, not used as a literal path: the
+    effective file is derived by appending a fingerprint of the (sorted, so
+    order-independent) requested leg labels, e.g. ``panel.parquet`` becomes
+    ``panel__a3f19c2b.parquet``. A caller who passes the same ``cache_path``
+    for two different leg sets gets two different files -- that is intended.
+    One file ever holds exactly one column schema, which is what makes the
+    completeness guards below sufficient rather than merely defensive: see
+    ``_cache_path_for_legs`` and ``_write_panel_cache``.
+
+    Independently of that, ``cache_path`` never serves or persists a partial
+    row: a cached slice with any NaN in the requested columns is treated as a
+    miss and re-fetched, and a merged write drops any row that is not
+    complete across every column the file carries.
     """
     legs = list(legs)
     dates = list(dates)
     wanted_labels = [leg.label for leg in legs]
+    leg_cache_path = _cache_path_for_legs(cache_path, wanted_labels) if cache_path else None
 
-    if cache_path and Path(cache_path).exists():
-        cached = pd.read_parquet(cache_path)
+    if leg_cache_path and leg_cache_path.exists():
+        cached = pd.read_parquet(leg_cache_path)
         cached.index = pd.to_datetime(cached.index)
         wanted = pd.to_datetime(pd.Index(dates))
         has_all_dates = wanted.isin(cached.index).all()
-        has_all_legs = set(wanted_labels).issubset(cached.columns)
+        # One file per leg set (see _cache_path_for_legs), so this is an
+        # equality check, not a subset check: any file at this path was only
+        # ever written for exactly this leg set.
+        has_all_legs = set(cached.columns) == set(wanted_labels)
         if has_all_dates and has_all_legs:
             slice_ = cached.loc[cached.index.isin(wanted), wanted_labels]
             # A row is complete or it is absent, never partial -- a NaN cell
@@ -132,31 +146,58 @@ def forward_rate_panel(
     panel.index = pd.to_datetime(panel.index)
     panel = panel[wanted_labels]
 
-    if cache_path:
-        _write_panel_cache(panel, cache_path)
+    if leg_cache_path:
+        _write_panel_cache(panel, leg_cache_path)
     return panel
 
 
+def _cache_path_for_legs(cache_path: str | Path, wanted_labels: Sequence[str]) -> Path:
+    """Derive the leg-set-specific file backing ``cache_path``.
+
+    Three rounds of cache bugs (a cross-schema merge, then NaN cells, then
+    silent eviction of complete rows) all had the same shape: one file being
+    asked to hold two different column sets. Keying the file by a fingerprint
+    of the (sorted) leg labels means one file only ever holds one schema, so
+    ``combine_first`` only ever merges identical columns and the
+    completeness guards elsewhere can only ever fire on a genuinely partial
+    row within that one schema -- the whole class of cross-schema bug is
+    structurally impossible rather than guarded against.
+
+    The fingerprint is stable across runs and independent of the order legs
+    were passed in: ``[10Y10Y, 20Y10Y]`` and ``[20Y10Y, 10Y10Y]`` resolve to
+    the same file. A hex digest of the joined, sorted labels, truncated to 8
+    characters, mirrors this repo's own fingerprinted-asset naming (e.g.
+    ``Caching/utils.py``'s ``to_filename_key``, and the ``asset=<name>__<hash>``
+    directories under ``data/ts``) -- this is house style, not a one-off.
+    """
+    cache_path = Path(cache_path)
+    fingerprint = hashlib.sha1("|".join(sorted(wanted_labels)).encode()).hexdigest()[:8]
+    return cache_path.with_name(f"{cache_path.stem}__{fingerprint}{cache_path.suffix}")
+
+
 def _write_panel_cache(panel: pd.DataFrame, cache_path: str | Path) -> None:
-    """Persist ``panel`` to ``cache_path``, unioned with whatever is already
-    on disk rather than overwritten.
+    """Persist ``panel`` to ``cache_path`` (already leg-set-specific -- see
+    ``_cache_path_for_legs``), unioned with whatever is already on disk
+    rather than overwritten.
 
     The natural incremental call pattern is "extend the panel by a day, same
     cache file". Overwriting would silently shrink the cache down to just the
-    freshly fetched (possibly narrower) rows, forcing a full re-fetch of
+    freshly fetched (narrower, date-wise) rows, forcing a full re-fetch of
     history the file already had on every subsequent call -- exactly the kind
     of redundant external fetch that has hit provider rate limits before in
-    this repo. On any date/column overlap the freshly fetched value in
-    ``panel`` wins.
+    this repo. On any date overlap the freshly fetched value in ``panel``
+    wins.
 
-    A narrower fetch (fewer legs than the file already carries) unions in new
-    columns for its dates, which ``combine_first`` alone would leave NaN
-    wherever the fresh fetch has no value. A row is complete or it is absent,
-    never partial -- exactly the invariant the whole-date-drop logic above
-    exists to protect -- so any row that is not complete across every column
-    the merged file carries is dropped before writing. Those dates are not
-    lost, only re-fetched on the next call that needs them; that is cheap
-    next to a silent NaN sitting in a rate panel.
+    Because ``cache_path`` is already keyed by leg set, ``panel`` and any
+    existing file at this path always share the same columns, so
+    ``combine_first`` only ever merges identical schemas -- it can no longer
+    introduce a NaN column the way a cross-leg-set merge once did (``panel``
+    itself is always complete per row: ``forward_rate_panel`` only appends a
+    date once every requested leg has priced). The ``dropna(how="any")``
+    below is now belt-and-braces on top of that structural fix rather than
+    the load-bearing guard -- it still refuses to persist a row that is not
+    complete, in case ``existing`` is a legacy or externally-written file
+    that predates the per-leg-set keying.
     """
     cache_path = Path(cache_path)
     cache_path.parent.mkdir(parents=True, exist_ok=True)
