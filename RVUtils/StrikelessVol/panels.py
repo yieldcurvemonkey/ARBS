@@ -31,6 +31,7 @@ __all__ = [
     "spread_panel",
     "vol_panel",
     "implied_quote",
+    "umep_panel",
 ]
 
 
@@ -440,3 +441,50 @@ def implied_quote(
         underlying=f"{market} {structure} ATM swaption (normal)",
         window="atm",
     )
+
+
+def _build_tfp_history(*args, **kwargs):
+    """Indirection so tests can substitute the (slow, networked) builder."""
+    from BT.signals.tfp_swap_spread import build_tfp_history
+
+    return build_tfp_history(*args, **kwargs)
+
+
+def umep_panel(
+    start: dt.date,
+    end: dt.date,
+    *,
+    cache_path: Optional[str | Path] = None,
+    **kwargs,
+) -> pd.DataFrame:
+    """USD term funding premium: the ASW-vs-modified-duration slope, bp/year.
+
+    Thin wrapper over ``BT.signals.tfp_swap_spread.build_tfp_history`` (the
+    Dallas Fed WP 2613 / JPM construction), renaming to this package's vocabulary
+    and keeping the raw columns for diagnostics.
+
+    USD only: the construction needs a Treasury curve, and no equivalent ASW
+    infrastructure exists for EUR/JPY/GBP in this repo. Cross-market signals run
+    on valuation and drift alone -- see the spec's stated limits.
+
+    Observed on real data (2024-01-02..2026-08-03, USD ERIS_EOD_LIVE-RL_BASIC /
+    USTS_FEDINVEST_WSJ_LIVE-RL, n=639 rows): ``mmss_30Y`` (the raw 30y
+    maturity-matched swap spread) is negative on every observed day (median
+    ~-77bp), and ``umep_bp_per_year`` is correspondingly positive, sitting in a
+    ~3.5-4.7bp/year band on 632/639 days (Jan-2024 median ~3.7bp, Aug-2026
+    median ~4.3bp) -- so under this tool's convention a positive
+    ``umep_bp_per_year`` records a richening/widening term funding premium
+    against negative (swaps-rich) matched-maturity spreads, the sign H2 calls
+    "drag" rather than "common factor". Seven days in July 2026 produce
+    ``mmss_30Y``/``umep_bp_per_year`` off by 3-6 orders of magnitude -- a
+    pre-existing data/regression-conditioning artifact in the wrapped
+    ``build_tfp_history``/``compute_tfp_regression``, upstream of this wrapper
+    (see task-6-report.md); the committed network test can fail if those days
+    land in its tail(60) window, which is a fact about the current data, not
+    about this function.
+    """
+    raw = _build_tfp_history(start, end, cache_path=str(cache_path) if cache_path else None, **kwargs)
+    if raw is None or raw.empty:
+        return pd.DataFrame()
+    out = raw.rename(columns={"tfp": "umep_bp_per_year", "zds": "zds_bp"})
+    return out
