@@ -1,4 +1,5 @@
 # tests/test_strikeless_vol_greeks_control.py
+import pandas as pd
 import pytest
 import rateslib as rl
 
@@ -6,6 +7,7 @@ from RVUtils.StrikelessVol.conventions import FLATTENER
 from RVUtils.StrikelessVol.greeks import (
     analytic_leg_gamma,
     build_package,
+    daily_dcf,
     gamma_by_h,
     package_dv01,
     package_gamma,
@@ -14,13 +16,13 @@ from RVUtils.StrikelessVol.universe import ForwardLeg, ForwardPair
 from Query.IRSwaps.backends.rateslib.RLIRSwapCurve import RLIRSwapCurve
 
 REF = rl.dt(2026, 8, 3)
+PAIR = ForwardPair("USD", "USD-OIS", ForwardLeg("10Y", "10Y"), ForwardLeg("20Y", "10Y"))
 
 
-@pytest.fixture(scope="module")
-def curve():
+def _curve(convention: str):
     nodes = {REF: 1.0}
     nodes.update({rl.dt(2026 + y, 8, 3): 1.0 / (1.04 ** y) for y in range(1, 41)})
-    handle = rl.Curve(nodes=nodes, convention="act365f", calendar="nyc", id="flat4")
+    handle = rl.Curve(nodes=nodes, convention=convention, calendar="nyc", id="flat4")
     return RLIRSwapCurve(
         rl_curve_id="USD-OIS",
         rl_curve_handle=handle,
@@ -34,13 +36,120 @@ def curve():
 
 
 @pytest.fixture(scope="module")
+def curve():
+    """act365f. Deliberately mismatched against the act360 usd_irs legs.
+
+    Kept because Task 7's fixture is this curve and its numbers must not move,
+    but note it is NOT the production convention: see
+    ``test_the_act365f_fixture_pays_365_over_360_on_the_float_leg``.
+    """
+    return _curve("act365f")
+
+
+@pytest.fixture(scope="module")
+def act360_curve():
+    """The convention the repo's USD SOFR curves actually use.
+
+    ``rl_curve_definitions_map.py`` gives USD-SOFR-1D DayCounter act360, and
+    the ``usd_irs`` spec's legs are act360 too, so curve and legs agree here
+    and the replication holds without a scaling artefact.
+    """
+    return _curve("act360")
+
+
+@pytest.fixture(scope="module")
 def pkg(curve):
-    pair = ForwardPair("USD", "USD-OIS", ForwardLeg("10Y", "10Y"), ForwardLeg("20Y", "10Y"))
-    return build_package(curve, pair, package_dv01_usd=100_000.0, sign=FLATTENER)
+    return build_package(curve, PAIR, package_dv01_usd=100_000.0, sign=FLATTENER)
+
+
+@pytest.fixture(scope="module")
+def act360_pkg(act360_curve):
+    return build_package(act360_curve, PAIR, package_dv01_usd=100_000.0, sign=FLATTENER)
+
+
+def _bumped(price, h=25.0):
+    """Second difference of a one-argument repricer, in $/bp^2."""
+    return (price(h) + price(-h) - 2.0 * price(0.0)) / (h * h)
+
+
+def _leg_gamma_bumped(curve, swap, h=25.0):
+    handle = curve.handle()
+    return _bumped(
+        lambda s: swap.npv(curves=handle.shift(s) if s else handle).real, h
+    )
+
+
+def _float_leg_gamma_bumped(curve, swap, h=25.0):
+    handle = curve.handle()
+
+    def price(s):
+        c = handle.shift(s) if s else handle
+        return swap.leg2.npv(c, c).real
+
+    return _bumped(price, h)
+
+
+def _legacy_365_control(curve, swap):
+    """The pre-fix control, with time hard-coded to days/365.
+
+    Kept so the act360 miss can be measured rather than asserted from theory.
+    """
+    handle = curve.handle()
+    ref = pd.Timestamp(curve.reference_date())
+    n, k = float(curve.notional(swap)), float(curve.fixed_rate(swap))
+
+    def t(x):
+        return (pd.Timestamp(x) - ref).days / 365.0
+
+    ann = sum(
+        float(r["DCF"]) * t(r["Payment"]) ** 2
+        * float(handle[pd.Timestamp(r["Payment"]).to_pydatetime()])
+        for _, r in swap.leg1.cashflows(handle).iterrows()
+    )
+    eff, mat = curve.effective_date(swap), curve.maturity_date(swap)
+    return n * (
+        t(eff) ** 2 * float(handle[eff]) - t(mat) ** 2 * float(handle[mat]) - k * ann
+    ) * 1e-8
+
+
+def _float_replication(curve, swap):
+    """N * (t0^2 D(T0) - tN^2 D(TN)) * 1e-8 -- the float half of the control."""
+    handle = curve.handle()
+    ref = pd.Timestamp(curve.reference_date())
+    d = daily_dcf(handle)
+    eff, mat = curve.effective_date(swap), curve.maturity_date(swap)
+    t0 = (pd.Timestamp(eff) - ref).days * d
+    tn = (pd.Timestamp(mat) - ref).days * d
+    n = float(curve.notional(swap))
+    return n * (t0 * t0 * float(handle[eff]) - tn * tn * float(handle[mat])) * 1e-8
+
+
+def _semiannual_par_swap(curve, notional=100_000_000.0):
+    """A semiannual-schedule par OIS, so ``row["DCF"]`` is ~0.507 not ~1.0."""
+    handle = curve.handle()
+    kw = dict(
+        effective=rl.dt(2036, 8, 3),
+        termination=rl.dt(2046, 8, 3),
+        spec="usd_irs",
+        frequency="S",
+        leg2_frequency="S",
+        curves=handle,
+        notional=notional,
+        leg2_fixings=rl.NoInput(0),
+    )
+    return rl.IRS(**kw, fixed_rate=rl.IRS(**kw).rate(curves=handle).real)
 
 
 def test_package_dv01_is_neutral_at_inception(curve, pkg):
-    assert package_dv01(curve, pkg) == pytest.approx(0.0, abs=50.0)
+    """Neutrality is imposed on pv01 (the annuity), so the reprice differs a little.
+
+    Each leg is struck at its own fair rate, so each leg's PV is exactly zero at
+    inception and there is no discounting residual to explain. What is left is
+    that ``dR_fair/dDelta`` under a convention-measured parallel shift is not
+    identical for a 10y10y and a 20y10y, so matching annuities does not match
+    the repriced deltas to the last cent. Observed $1.44 on a $100k package.
+    """
+    assert package_dv01(curve, pkg) == pytest.approx(0.0, abs=10.0)
 
 
 def test_bumped_gamma_matches_the_analytic_replication_formula(curve, pkg):
@@ -66,6 +175,105 @@ def test_each_leg_matches_the_control_on_its_own(curve, pkg):
         dn = swap.npv(curves=handle.shift(-25.0)).real
         bumped = (up + dn - 2.0 * base) / (25.0 ** 2)
         assert bumped == pytest.approx(analytic_leg_gamma(curve, swap), rel=0.02)
+
+
+def test_control_holds_on_the_production_act360_convention(act360_curve, act360_pkg):
+    """The case that actually ships: curve act360, usd_irs legs act360.
+
+    With curve and leg conventions agreeing there is no scaling artefact, and
+    the control lands an order of magnitude closer than on the act365f fixture.
+    """
+    analytic = (
+        analytic_leg_gamma(act360_curve, act360_pkg.short)
+        + analytic_leg_gamma(act360_curve, act360_pkg.long)
+    )
+    bumped = package_gamma(act360_curve, act360_pkg, h_bp=25.0)
+    assert bumped == pytest.approx(analytic, rel=0.02)
+    # ...and it is not merely inside the band, it is far inside it
+    assert abs(bumped - analytic) / abs(analytic) < 0.005
+
+
+def test_hard_coding_365_would_miss_on_an_act360_curve(act360_curve, act360_pkg):
+    """The test that proves the daily_dcf fix rather than restating it.
+
+    ``rl.Curve.shift``'s time exponent is ``days * d`` with ``d`` the curve's
+    own 1-day DCF, so on an act360 curve a control measuring ``days/365``
+    understates ``t`` by 360/365. Gamma goes as ``t**2``, so it reads
+    ``(360/365)**2`` low -- deterministic, and outside the 2% band.
+    """
+    bumped = package_gamma(act360_curve, act360_pkg, h_bp=25.0)
+    legacy = (
+        _legacy_365_control(act360_curve, act360_pkg.short)
+        + _legacy_365_control(act360_curve, act360_pkg.long)
+    )
+    assert bumped != pytest.approx(legacy, rel=0.02)
+    assert (bumped - legacy) / abs(legacy) == pytest.approx(
+        (365.0 / 360.0) ** 2 - 1.0, abs=0.005
+    )
+
+
+def test_the_fix_is_exactly_neutral_on_an_act365f_curve(curve, pkg):
+    """days*d IS days/365 under act365f, so Task 7's fixture must not move.
+
+    Neutrality where the conventions already agreed is the evidence that the
+    daily_dcf change corrected a convention bug rather than retuning a number.
+    """
+    for swap in (pkg.short, pkg.long):
+        assert analytic_leg_gamma(curve, swap) == _legacy_365_control(curve, swap)
+
+
+def test_daily_dcf_is_read_off_the_curve_convention(curve, act360_curve):
+    assert daily_dcf(curve.handle()) == pytest.approx(1.0 / 365.0, rel=1e-12)
+    assert daily_dcf(act360_curve.handle()) == pytest.approx(1.0 / 360.0, rel=1e-12)
+
+
+def test_the_act365f_fixture_pays_365_over_360_on_the_float_leg(curve, pkg):
+    """Why the act365f fixture agrees to 0.7-1.0% but act360 agrees to 0.05%.
+
+    rateslib compounds the RFR off the *curve* (act365f in this fixture) and
+    then multiplies by the *leg's* own accrual fraction (act360, from the
+    usd_irs spec). When the two conventions disagree the float leg comes out
+    scaled by tau_leg/tau_curve = 365/360 relative to the D(T0)-D(TN)
+    replication, and that ratio is the entire residual: divide it out and the
+    float leg agrees to ~0.05%, which is what the matched-convention curve
+    gives directly. A fixture artefact, not a defect in the mechanic -- pinned
+    here so it does not get rediscovered as a bug.
+    """
+    for swap in (pkg.short, pkg.long):
+        ratio = _float_leg_gamma_bumped(curve, swap) / _float_replication(curve, swap)
+        assert ratio == pytest.approx(365.0 / 360.0, rel=0.002)
+
+
+def test_the_tau_term_is_bound_by_a_semiannual_schedule(act360_curve):
+    """The annual fixture cannot tell tau from 1.0, so check on a semiannual one.
+
+    With DCF ~= 0.507 the accrual fraction carries real weight, and replacing it
+    with 1.0 throws the control ~23% -- more than ten times the band. Without
+    this an edit that dropped the tau weighting would pass the whole suite.
+    """
+    swap = _semiannual_par_swap(act360_curve)
+    handle = act360_curve.handle()
+    cf = swap.leg1.cashflows(handle)
+    assert float(cf["DCF"].mean()) == pytest.approx(0.507, abs=0.01)
+
+    bumped = _leg_gamma_bumped(act360_curve, swap)
+    assert bumped == pytest.approx(analytic_leg_gamma(act360_curve, swap), rel=0.02)
+
+    ref = pd.Timestamp(act360_curve.reference_date())
+    d = daily_dcf(handle)
+    n, k = float(act360_curve.notional(swap)), float(act360_curve.fixed_rate(swap))
+    eff, mat = act360_curve.effective_date(swap), act360_curve.maturity_date(swap)
+    t0 = (pd.Timestamp(eff) - ref).days * d
+    tn = (pd.Timestamp(mat) - ref).days * d
+    ann_tau_is_one = sum(
+        1.0 * ((pd.Timestamp(r["Payment"]) - ref).days * d) ** 2
+        * float(handle[pd.Timestamp(r["Payment"]).to_pydatetime()])
+        for _, r in cf.iterrows()
+    )
+    mutant = n * (
+        t0 * t0 * float(handle[eff]) - tn * tn * float(handle[mat]) - k * ann_tau_is_one
+    ) * 1e-8
+    assert bumped != pytest.approx(mutant, rel=0.02)
 
 
 def test_flattener_convexity_is_positive(curve, pkg):
@@ -100,14 +308,22 @@ def test_control_bites_when_the_bump_unit_is_wrong(curve, pkg, monkeypatch):
     """
     import RVUtils.StrikelessVol.greeks as g
 
+    def _analytic():
+        return analytic_leg_gamma(curve, pkg.short) + analytic_leg_gamma(curve, pkg.long)
+
+    before = _analytic()
+    assert before != 0.0
+
     real_shift = rl.Curve.shift
     monkeypatch.setattr(
         rl.Curve, "shift", lambda self, spread, **kw: real_shift(self, spread * 1e-4, **kw)
     )
-    analytic = analytic_leg_gamma(curve, pkg.short) + analytic_leg_gamma(curve, pkg.long)
+    # The control's independence, proved by the suite rather than by reading:
+    # sabotaging shift() must leave the analytic side bit-for-bit unmoved.
+    assert _analytic() == before
+
     bumped = g.package_gamma(curve, pkg, h_bp=25.0)
-    assert analytic != 0.0
-    assert bumped != pytest.approx(analytic, rel=0.02)
+    assert bumped != pytest.approx(before, rel=0.02)
 
 
 def test_bp_read_as_a_decimal_cannot_even_be_repriced(curve, pkg, monkeypatch):
