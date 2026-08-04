@@ -14,6 +14,9 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
+from typing import Any
+
+import numpy as np
 
 TRADING_DAYS: float = 252.0
 
@@ -41,12 +44,19 @@ def bp_day_to_annual_normals(bp_day: float) -> float:
     return float(bp_day) * math.sqrt(TRADING_DAYS)
 
 
-def slope_bp(*, short_rate: float, long_rate: float) -> float:
+def slope_bp(*, short_rate: Any, long_rate: Any) -> Any:
     """Forward slope in bp: (longer forward - shorter forward), both decimals.
+
+    Works on scalars and on array-likes (e.g. a pandas Series of decimal par
+    rates) alike: uses ``np.asarray`` rather than ``float()``, which raises on
+    a multi-element Series. One formula serves both a single scalar slope and
+    a vectorised panel column -- callers that need pandas metadata (index,
+    name) back re-attach it themselves; this function only computes the
+    number(s).
 
     Negative = inverted = the normal state of the ultra-long forward curve.
     """
-    return (float(long_rate) - float(short_rate)) * 10_000.0
+    return (np.asarray(long_rate) - np.asarray(short_rate)) * 10_000.0
 
 
 @dataclass(frozen=True)

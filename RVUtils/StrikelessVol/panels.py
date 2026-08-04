@@ -32,33 +32,58 @@ def forward_rate_panel(
     mdp=None,
     cache_path: Optional[str | Path] = None,
     show_progress: bool = False,
+    max_missing_frac: float = 0.2,
 ) -> pd.DataFrame:
     """Constant-maturity forward par rates (decimals), one column per leg.
 
     Dates the provider cannot serve are dropped. They are never forward-filled:
     a filled day is a manufactured zero-change observation, and every realized
     vol and every changes-regression in this package would inherit the bias.
+
+    ``max_missing_frac`` (default 0.2) guards against mistaking a systemic
+    failure for a quiet market: a ``bdate_range`` legitimately contains market
+    holidays no provider serves (~10/year in USD, roughly 4%; more in some
+    other markets), so a small drop rate is normal. If the dropped fraction
+    exceeds this threshold, or the panel would come back empty while dates
+    were requested, that means the MDP or the pricing path broke for
+    (almost) everything asked for -- not that a handful of holidays were
+    skipped -- and this raises ``ValueError`` rather than silently returning
+    a near-empty panel the caller has no way to distinguish from a calm one.
+
+    ``show_progress`` is accepted but not yet wired up; reserved for a later
+    task's progress bar on long bulk fetches.
     """
     legs = list(legs)
+    dates = list(dates)
+    wanted_labels = [leg.label for leg in legs]
+
     if cache_path and Path(cache_path).exists():
         cached = pd.read_parquet(cache_path)
         cached.index = pd.to_datetime(cached.index)
-        wanted = pd.to_datetime(pd.Index(list(dates)))
-        if wanted.isin(cached.index).all():
-            return cached.loc[cached.index.isin(wanted), [l.label for l in legs]]
+        wanted = pd.to_datetime(pd.Index(dates))
+        has_all_dates = wanted.isin(cached.index).all()
+        has_all_legs = set(wanted_labels).issubset(cached.columns)
+        if has_all_dates and has_all_legs:
+            return cached.loc[cached.index.isin(wanted), wanted_labels]
 
     if mdp is None:
         from MDP.IRSwaps.IRSwapsMDP import IRSwapsMDP
 
         mdp = IRSwapsMDP(source=source)
 
-    curve_map = mdp.bulk_get_data(
-        {"curve_name": curve_name, "timestamps": list(dates)}
-    )
+    curve_map = mdp.bulk_get_data({"curve_name": curve_name, "timestamps": dates})
 
     rows: List[dict] = []
     for ts, curve in curve_map.items():
+        if ts == "live":
+            raise ValueError(
+                f"forward_rate_panel('{curve_name}'): bulk_get_data returned the "
+                "'live' key -- one of the requested dates matched today and the "
+                "MDP resolved it to the live snapshot, which cannot be placed on "
+                "a DatetimeIndex here. Pass an explicit historical date instead."
+            )
         if curve is None:
+            logger.warning("skipping %s on %s: no curve returned", curve_name, ts)
             continue
         rec: dict = {}
         try:
@@ -71,23 +96,67 @@ def forward_rate_panel(
         rec["date"] = ts.date() if hasattr(ts, "date") else ts
         rows.append(rec)
 
+    requested = len(dates)
+    produced = len(rows)
+    dropped = requested - produced
+    missing_frac = (dropped / requested) if requested else 0.0
+    logger.info(
+        "forward_rate_panel('%s'): %d/%d requested dates produced rows "
+        "(%d dropped, %.1f%% missing)",
+        curve_name, produced, requested, dropped, missing_frac * 100.0,
+    )
+    if requested and (produced == 0 or missing_frac > max_missing_frac):
+        date_range = f"{min(dates)}..{max(dates)}"
+        raise ValueError(
+            f"forward_rate_panel('{curve_name}', {date_range}): only "
+            f"{produced}/{requested} requested dates produced rows ({dropped} "
+            f"dropped, {missing_frac:.1%} missing, threshold "
+            f"{max_missing_frac:.1%}). This looks like a systemic pricing "
+            "failure, not ordinary holiday/weekend gaps."
+        )
+
     if not rows:
-        return pd.DataFrame(columns=[l.label for l in legs])
+        return pd.DataFrame(columns=wanted_labels)
 
     panel = pd.DataFrame(rows).set_index("date").sort_index()
     panel.index = pd.to_datetime(panel.index)
-    panel = panel[[l.label for l in legs]]
+    panel = panel[wanted_labels]
 
     if cache_path:
-        Path(cache_path).parent.mkdir(parents=True, exist_ok=True)
-        panel.to_parquet(cache_path)
+        _write_panel_cache(panel, cache_path)
     return panel
+
+
+def _write_panel_cache(panel: pd.DataFrame, cache_path: str | Path) -> None:
+    """Persist ``panel`` to ``cache_path``, unioned with whatever is already
+    on disk rather than overwritten.
+
+    The natural incremental call pattern is "extend the panel by a day, same
+    cache file". Overwriting would silently shrink the cache down to just the
+    freshly fetched (possibly narrower) rows, forcing a full re-fetch of
+    history the file already had on every subsequent call -- exactly the kind
+    of redundant external fetch that has hit provider rate limits before in
+    this repo. On any date/column overlap the freshly fetched value in
+    ``panel`` wins.
+    """
+    cache_path = Path(cache_path)
+    cache_path.parent.mkdir(parents=True, exist_ok=True)
+    if cache_path.exists():
+        existing = pd.read_parquet(cache_path)
+        existing.index = pd.to_datetime(existing.index)
+        combined = panel.combine_first(existing)
+    else:
+        combined = panel
+    combined.sort_index().to_parquet(cache_path)
 
 
 def spread_panel(rates: pd.DataFrame, pair: ForwardPair) -> pd.Series:
     """The pair's slope in bp: longer forward minus shorter forward."""
-    s = rates[pair.short.label].astype(float)
-    l = rates[pair.long.label].astype(float)
-    out = (l - s) * 10_000.0
-    out.name = pair.name
+    short = rates[pair.short.label].astype(float)
+    long_ = rates[pair.long.label].astype(float)
+    out = pd.Series(
+        slope_bp(short_rate=short, long_rate=long_),
+        index=rates.index,
+        name=pair.name,
+    )
     return out
