@@ -40,6 +40,8 @@ import pandas as pd
 __all__ = [
     "forward_move", "move_profile", "oracle_table", "selectivity_table",
     "signal_entry_mask", "variance_decomposition",
+    "roll_effective_spread", "debounced_abs_move", "variance_ratio",
+    "bounce_implied_variance_ratio",
 ]
 
 
@@ -172,3 +174,106 @@ def variance_decomposition(actual: pd.DataFrame, explained: pd.DataFrame, *,
                      if va > 0 and np.var(ev, ddof=1) > 0 else np.nan),
         })
     return pd.DataFrame(rows)
+
+
+# ---------------------------------------------------------------------------
+# microstructure -- what a taker can actually reach
+# ---------------------------------------------------------------------------
+
+def roll_effective_spread(panel: pd.DataFrame) -> float:
+    """Roll's (1984) effective spread from the lag-1 autocovariance of returns.
+
+    ``s = 2*sqrt(-Cov(r_t, r_{t-1}))`` when that covariance is negative. Under
+    Roll's model an efficient price is observed through a bid-ask bounce: trade
+    prints alternate between the two sides, which injects an MA(1) with negative
+    autocovariance ``-(s/2)^2`` and no drift. Inverting it recovers the spread
+    the tape implies, which is how a backtest's assumed cost gets AUDITED rather
+    than asserted.
+
+    Returns 0.0 when the autocovariance is non-negative (trending microstructure,
+    or simply not enough data) -- deliberately, so a caller subtracting this
+    never inflates its own opportunity.
+    """
+    d = panel.diff() if isinstance(panel, pd.DataFrame) else panel.diff().to_frame()
+    a = d.stack(future_stack=True).rename("r")
+    b = d.shift(1).stack(future_stack=True).rename("l")
+    p = pd.concat([a, b], axis=1).dropna()
+    if len(p) < 100:
+        return 0.0
+    cov = float(np.cov(p["r"], p["l"])[0, 1])
+    return 2.0 * np.sqrt(-cov) if cov < 0 else 0.0
+
+
+def debounced_abs_move(moves, roll_bp: float) -> float:
+    """``E|move|`` with the bid-ask bounce removed, distribution-free.
+
+    A liquidity taker does not harvest the bounce, they PAY it, so the portion
+    of an observed move that is two draws of microstructure noise is not
+    opportunity and must come out of any oracle ceiling. With Roll spread ``s``
+    each observed price carries noise of sd ``s/2``, so a move between two
+    prices carries ``2*(s/2)^2`` of noise variance.
+
+    The correction is applied as a **scale factor on the measured mean absolute
+    move**, not by converting a corrected variance through the Gaussian identity
+    ``E|X| = sqrt(2/pi)*sd``. That identity fails badly on this kind of data --
+    STIR package moves on a tick lattice have ``E|X|/sd`` of 0.59-0.69 against
+    the Gaussian 0.798, kurtosis in the tens to hundreds, and a large mass of
+    exactly-zero moves. Using it produces a "corrected" figure LARGER than the
+    raw one, which is impossible and is the tell that the conversion is wrong.
+    """
+    m = pd.Series(moves).dropna()
+    if m.empty:
+        return float("nan")
+    var_obs = float(m.std()) ** 2
+    if var_obs <= 0:
+        return float(m.abs().mean())
+    var_noise = 2.0 * (float(roll_bp) / 2.0) ** 2
+    return float(m.abs().mean()) * np.sqrt(max(var_obs - var_noise, 0.0) / var_obs)
+
+
+def variance_ratio(panel: pd.DataFrame, horizons=(2, 3, 6, 12, 30)) -> pd.Series:
+    """``VR(q) = Var(r_q) / (q * Var(r_1))`` -- below 1 is mean reversion.
+
+    Read against ``1 + rho(1)``: a pure bid-ask bounce is an MA(1), so it forces
+    ``VR(2) = 1 + rho(1)`` exactly and then DECAYS BACK TOWARD 1 as ``q`` grows
+    and the fixed noise becomes negligible against accumulating signal. A ``VR``
+    that keeps falling past that point is reverting on something other than
+    microstructure.
+    """
+    r1 = panel.diff().stack(future_stack=True).dropna()
+    v1 = float(r1.var())
+    out = {}
+    for q in horizons:
+        rq = (panel.shift(-q) - panel).stack(future_stack=True).dropna()
+        out[q] = float(rq.var() / (q * v1)) if v1 > 0 else np.nan
+    return pd.Series(out, name="variance_ratio")
+
+
+def bounce_implied_variance_ratio(roll_bp: float, var_one_period: float,
+                                  horizons=(2, 3, 6, 12, 30)) -> pd.Series:
+    """The ``VR(q)`` profile a PURE bid-ask bounce would produce, for comparison.
+
+    It is tempting to read a falling variance ratio as evidence of mean
+    reversion beyond microstructure, on the grounds that a fixed noise term
+    becomes negligible at long horizons. **That is wrong**, and the error is easy
+    to make. For an efficient random walk of step variance ``sw2`` observed
+    through a bounce of noise variance ``su2 = (s/2)^2``:
+
+        Var(r_q) = q*sw2 + 2*su2          (the noise enters ONCE, not q times)
+        VR(q)    = (q*sw2 + 2*su2) / (q*(sw2 + 2*su2))
+
+    which is 1 at ``q=1`` and falls MONOTONICALLY to ``sw2/(sw2 + 2*su2)`` -- a
+    constant below 1, never back to 1. So a decreasing VR is exactly what pure
+    bounce looks like and proves nothing on its own.
+
+    The real test is whether the observed profile falls *faster* than this one.
+    ``var_one_period`` is the measured ``Var(r_1)``, from which ``sw2`` is backed
+    out as ``var_one_period - 2*su2``.
+    """
+    su2 = (float(roll_bp) / 2.0) ** 2
+    sw2 = max(float(var_one_period) - 2.0 * su2, 0.0)
+    denom = sw2 + 2.0 * su2
+    if denom <= 0:
+        return pd.Series({q: np.nan for q in horizons}, name="bounce_vr")
+    return pd.Series({q: (q * sw2 + 2.0 * su2) / (q * denom) for q in horizons},
+                     name="bounce_vr")
