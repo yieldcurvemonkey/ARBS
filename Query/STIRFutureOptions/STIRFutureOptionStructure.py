@@ -21,6 +21,7 @@ class STIRFutureOptionStructure(Enum):
     OUTRIGHT = auto()
     VERTICAL = auto()
     STRADDLE = auto()
+    FLY = auto()
 
 
 class STIRFutureOptionStructureFunctionMap(
@@ -46,6 +47,7 @@ class STIRFutureOptionStructureFunctionMap(
             STIRFutureOptionStructure.OUTRIGHT: wrap(partial(self._build_outright)),
             STIRFutureOptionStructure.VERTICAL: wrap(partial(self._build_vertical)),
             STIRFutureOptionStructure.STRADDLE: wrap(partial(self._build_straddle)),
+            STIRFutureOptionStructure.FLY: wrap(partial(self._build_fly)),
         }
 
     @staticmethod
@@ -223,6 +225,36 @@ class STIRFutureOptionStructureFunctionMap(
         pr1 = self.common_kwargs["pricer"][keys[1]]
         weights = [1.0, -1.0] if risk_weights is None else [float(x) for x in risk_weights]
         package = [pr0.build_pricable(quantity=1.0), pr1.build_pricable(quantity=1.0)]
+        return self._apply_premium_overrides(package, _), weights
+
+    def _build_fly(
+        self,
+        *,
+        low_symbol: Optional[str] = None,
+        mid_symbol: Optional[str] = None,
+        high_symbol: Optional[str] = None,
+        symbols: Optional[List[str]] = None,
+        risk_weights: Optional[List[float]] = None,
+        **_,
+    ) -> Tuple[List[_STIRFutureOptionGenericPricable], List[float]]:
+        """1/-2/1 butterfly across three strikes, same right on every leg.
+
+        Long fly (default weights ``[1, -2, 1]``) pays when the underlying
+        settles at the mid strike; pass ``[-1, 2, -1]`` for the short fly.
+        """
+        if symbols is not None:
+            keys = self._resolve_keys_for_n_legs(list(symbols), 3)
+        elif low_symbol and mid_symbol and high_symbol:
+            keys = self._resolve_keys_for_n_legs(
+                [low_symbol, mid_symbol, high_symbol], 3)
+        else:
+            keys = self._resolve_keys_for_n_legs(None, 3)
+        pricers = self.common_kwargs["pricer"]
+        weights = ([1.0, -2.0, 1.0] if risk_weights is None
+                   else [float(x) for x in risk_weights])
+        if len(weights) != 3:
+            raise ValueError(f"FLY requires 3 risk weights, got {len(weights)}")
+        package = [pricers[k].build_pricable(quantity=1.0) for k in keys]
         return self._apply_premium_overrides(package, _), weights
 
     def _build_straddle(

@@ -78,6 +78,17 @@ class STIRFutureOptionQuery(BaseQuery):
                     skw.setdefault("short_symbol", maybe[1])
             assert skw.get("long_symbol") is not None and skw.get("short_symbol") is not None, "VERTICAL requires long_symbol and short_symbol"
             skw.setdefault("risk_weights", [1.0, -1.0])
+        elif self.structure == STIRFutureOptionStructure.FLY:
+            symbols = skw.get("symbols")
+            if isinstance(symbols, (list, tuple)) and len(symbols) == 3:
+                skw.setdefault("low_symbol", symbols[0])
+                skw.setdefault("mid_symbol", symbols[1])
+                skw.setdefault("high_symbol", symbols[2])
+            assert (skw.get("low_symbol") is not None
+                    and skw.get("mid_symbol") is not None
+                    and skw.get("high_symbol") is not None), \
+                "FLY requires low_symbol/mid_symbol/high_symbol (or symbols=[3])"
+            skw.setdefault("risk_weights", [1.0, -2.0, 1.0])
         elif self.structure == STIRFutureOptionStructure.STRADDLE:
             if skw.get("symbol") is not None:
                 pass
@@ -115,6 +126,10 @@ class STIRFutureOptionQuery(BaseQuery):
             return f"{skw.get('symbol','')} {self.structure.name} {val}".strip()
         if self.structure == STIRFutureOptionStructure.VERTICAL:
             return f"{skw.get('long_symbol','')}v{skw.get('short_symbol','')} {self.structure.name} {val}".strip()
+        if self.structure == STIRFutureOptionStructure.FLY:
+            return (f"{skw.get('low_symbol','')}/{skw.get('mid_symbol','')}/"
+                    f"{skw.get('high_symbol','')} {self.structure.name} {val}"
+                    ).strip()
         if skw.get("symbol"):
             return f"{skw.get('symbol')} {self.structure.name} {val}".strip()
         return f"{skw.get('call_symbol','')}+{skw.get('put_symbol','')} {self.structure.name} {val}".strip()
@@ -138,7 +153,9 @@ class STIRFutureOptionQuery(BaseQuery):
 
         skw = self.structure_kwargs or {}
         symbols: List[str] = []
-        for key in ("symbol", "long_symbol", "short_symbol", "call_symbol", "put_symbol", "symbols"):
+        for key in ("symbol", "long_symbol", "short_symbol", "call_symbol",
+                    "put_symbol", "low_symbol", "mid_symbol", "high_symbol",
+                    "symbols"):
             val = skw.get(key)
             if not val:
                 continue
