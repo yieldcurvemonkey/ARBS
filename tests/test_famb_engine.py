@@ -185,3 +185,22 @@ class TestMeanReversion:
         h = self._holding([1.0, 2.0, 3.0])
         rf = richness_frame([h])
         assert rf["rich_bp"].tolist() == pytest.approx([1.0, 2.0, 3.0])
+
+    def test_trades_daily_pnl_matches_trade_totals(self):
+        from famb_common import trades_daily_pnl
+        path = [4.0, 4.0, 3.5, 2.5, 1.5, 0.5, 0.2, 0.1, 0.0, 0.0]
+        h = self._holding(path)
+        trades = intra_quarter_backtest([h], thr_bp=3.0, exit_frac=0.5,
+                                        direction="fade", cost_mult=1.0)
+        daily = trades_daily_pnl(trades, [h], cost_mult=1.0, n_legs=4)
+        assert daily.sum() == pytest.approx(sum(t["net_bp"] for t in trades))
+
+    def test_series_stats_shapes(self):
+        from famb_common import series_stats
+        d = pd.Series(np.r_[np.ones(10), -0.5 * np.ones(5)],
+                      index=pd.bdate_range("2024-01-01", periods=15))
+        s = series_stats(d)
+        assert s["days"] == 15
+        assert s["total_bp"] == pytest.approx(7.5)
+        assert s["max_dd_bp"] == pytest.approx(-2.5)
+        assert s["worst_day_bp"] == pytest.approx(-0.5)

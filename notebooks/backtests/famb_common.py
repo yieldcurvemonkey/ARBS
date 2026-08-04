@@ -372,6 +372,59 @@ def ou_half_life(rich: pd.DataFrame) -> Tuple[float, float, int]:
     return hl, phi, len(x)
 
 
+def series_stats(daily: pd.Series) -> dict:
+    """Uniform daily-series statistics: Sharpe, NW t, maxDD, skew, worst."""
+    from RVUtils.SFRRVLab.stats import nw_tstat
+    d = daily.dropna()
+    if len(d) < 5:
+        return {"days": len(d), "total_bp": float(d.sum())}
+    sd = d.std(ddof=1)
+    eq = d.cumsum()
+    dd = eq - eq.cummax()
+    return {
+        "days": int(len(d)),
+        "total_bp": round(float(d.sum()), 1),
+        "sharpe_ann": round(float(d.mean() / sd * np.sqrt(252)), 2)
+        if sd > 0 else np.nan,
+        "nw_t": round(float(nw_tstat(d.to_numpy())), 2),
+        "max_dd_bp": round(float(dd.min()), 1),
+        "worst_day_bp": round(float(d.min()), 2),
+        "skew": round(float(d.skew()), 2),
+    }
+
+
+def trades_daily_pnl(trades: Sequence[dict], holdings: Sequence[Holding],
+                     *, cost_mult: float = 1.0, n_legs: int = 4) -> pd.Series:
+    """Position-based daily PnL of an intra-quarter trade list.
+
+    Each trade contributes side * daily mark change over (entry, exit], with
+    half the round-trip cost booked on the entry day and half on the exit
+    day — the honest daily series for NW t / Sharpe / drawdown.
+    """
+    hmap: Dict[Tuple[str, pd.Timestamp], Holding] = {}
+    for h in holdings:
+        hmap[(h.symbol, h.marks.index[0])] = h
+    by_sym: Dict[str, List[Holding]] = {}
+    for h in holdings:
+        by_sym.setdefault(h.symbol, []).append(h)
+    out: Dict[pd.Timestamp, float] = {}
+    half_cost = n_legs * OPT_HALF_TICK_BP * cost_mult
+    for t in trades:
+        h = next((h for h in by_sym.get(t["symbol"], [])
+                  if h.marks.index[0] <= t["entry"] <= h.marks.index[-1]),
+                 None)
+        if h is None:
+            continue
+        seg = h.marks[(h.marks.index >= t["entry"])
+                      & (h.marks.index <= t["exit"])]
+        d = float(t["side"]) * seg.diff().dropna()
+        for ts, v in d.items():
+            out[ts] = out.get(ts, 0.0) + float(v)
+        out[seg.index[0]] = out.get(seg.index[0], 0.0) - half_cost
+        out[seg.index[-1]] = out.get(seg.index[-1], 0.0) - half_cost
+    return pd.Series(out).sort_index()
+
+
 def intra_quarter_backtest(
     holdings: Sequence[Holding], *,
     thr_bp: float, exit_frac: float = 0.5, max_hold: int = 15,
@@ -403,6 +456,7 @@ def intra_quarter_backtest(
             trades.append({
                 "symbol": h.symbol, "entry": rich.index[e],
                 "exit": rich.index[j], "entry_rich": r0,
+                "side": float(side),
                 "gross_bp": gross, "net_bp": gross - per_round_trip,
                 "sessions": int(j - e),
             })

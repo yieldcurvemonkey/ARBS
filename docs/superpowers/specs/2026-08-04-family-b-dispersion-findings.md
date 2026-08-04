@@ -87,13 +87,51 @@ consumes parts incrementally — re-executing the two notebooks after it
 lands extends every table into the hiking cycle without code changes. The
 tail-selling verdict is provisional until then.
 
+## The parameter grid and full statistics (second pass, sample now 2023-08→2026-07)
+
+With SFRU24/SFRZ24 backfilled (books extend to 2023-08), full carry-book
+statistics @1x, both signs — the best cells:
+
+| book (short) | rank | total bp | Sharpe | NW t | maxDD | worst day | skew |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| STRG50 | 1 | +35.5 | 1.15 | 2.05 | −13.7 | −10.5 | −1.86 |
+| STRG75 | 1 | +22.2 | **1.17** | **2.12** | **−7.8** | −5.5 | −0.19 |
+| STRG50 | 2 | +8.7 | 0.11 | 0.18 | −65.0 | −18.0 | −1.49 |
+| FLY25 | 1 | +18.0 | 0.63 | 0.97 | −13.2 | −3.5 | +1.01 |
+
+The extended sample concentrates the carry in **rank-1 tail shorts** and
+dilutes Q2/Q3 (their worst days −18/−21bp show why). Every long book is
+negative. The negative skew on the shorts is the insurance signature,
+priced in plain sight.
+
+**The intra-quarter grid** (pre-declared 720 configs: 5 books × 3 ranks ×
+thr {2,3,4,6} × exit {0.25,0.5} × hold {5,10,15} × both directions):
+every top-12 row is a STRG fade; winner STRG50 Q2 thr4/exit0.25/hold15 —
+35 trades, 63% hit, **+37.5bp net@1×, +20.0 @2×**, per-trade t 1.07;
+daily-series stats: Sharpe 0.58, NW t 1.02, maxDD −36.4, skew −1.08.
+Neighborhood **SUPPORTED** (15/24 positive, median +12.7); halves
+consistent (+14.0 / +23.5); fade beats momentum family-wide (−16.8 vs
+−41.6 medians). The cleanest single cell: STRG50 Q1 thr3 — 11 trades, 91%
+hit, +29.2/+23.8, t 2.57.
+
+**But the house discipline says: SELECTION-ARTIFACT.** DSR = 0.000 at 720
+trials and the median config is −26.3bp — a wide search found a
+consistent-looking corner, and the taxonomy correctly refuses to certify
+it. What separates this from noise-mining is the mechanism evidence
+(half-lives, frontier-consistent richness levels, mirrored signs,
+neighborhood, halves) — the honest status is: *mechanism-supported,
+search-uncertified*. Certification requires out-of-regime confirmation
+(the 2022 backfill, still running) or a pre-registered single config run
+forward, not more search.
+
 ## Verdicts (house taxonomy, this sample)
 
 - Long dispersion (fly, dfly): **DEAD** — fairly priced, costs decide.
 - Frontier calendar: **DEAD** (redundant with the outright).
 - Short tails as passive carry: cost-cleared, sign-consistent, but
   **untested insurance** — WATCH pending the 2022 extension; not ALIVE.
-- Intra-quarter richness fade (STRG): the genuine candidate —
-  cost-cleared with mirrored sign test and a measured 7–18-session
-  reversion mechanism; **WATCH** (54-config trial count, overlap-optimistic
-  inference, no payout-regime coverage yet).
+- Intra-quarter richness fade (STRG): cost-cleared with a measured
+  7–18-session reversion mechanism, neighborhood- and halves-supported —
+  but **SELECTION-ARTIFACT** at the full 720-trial count (DSR 0.000,
+  median config −26.3). Mechanism-supported, search-uncertified: the next
+  test is the 2022 regime or a pre-registered forward run, not more grid.
