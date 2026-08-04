@@ -85,6 +85,11 @@ DEFINED_RISK = {"FLY25": True, "FLY50": True, "DFLY": True,
 #: convergence costume. Pre-declared, not tuned.
 EXPLORATORY_Z = 1.0
 
+#: observations of the CURRENT holding's own richness needed before its standing
+#: level is considered established. Below this the level is unknown and an
+#: exploratory cell cannot fire — see the comment on ``_standing_level``.
+MIN_LEVEL_OBS = 20
+
 
 # ---------------------------------------------------------------------------
 # Context
@@ -313,6 +318,7 @@ class Idea:
     level_bp: float                 # the cell's own standing richness
     dev_bp: float                   # rich - level: the comparable dislocation
     z_dev: float
+    level_source: str
     thr_bp: float
     side: int                       # +1 buy the structure, -1 sell it
     state: str                      # ACTIONABLE | WATCH | OFF | NO-DATA
@@ -343,12 +349,14 @@ class Idea:
     @property
     def gate_note(self) -> str:
         """Which gate is holding this cell back — the bp one or the z one."""
+        if self.state == "NO-LEVEL":
+            return f"level {self.level_source}"
         if self.state != "WATCH":
             return ""
         if self.prereg:
             return f"needs {self.thr_bp - abs(self.rich_bp):+.2f}bp more rich"
         if not np.isfinite(self.dev_bp):
-            return "no history"
+            return f"level {self.level_source}"
         if abs(self.dev_bp) < self.thr_bp:
             return f"needs {self.thr_bp - abs(self.dev_bp):+.2f}bp more dev"
         return (f"dev ok, z {self.z_dev:+.1f} short of "
@@ -370,6 +378,29 @@ def _pct(x: float, sample: np.ndarray) -> float:
     return float((np.abs(s) <= abs(x)).mean())
 
 
+def _standing_level(own: np.ndarray, pooled: np.ndarray) -> Tuple[float, float, str]:
+    """(level, sigma, source) for a cell's normal richness.
+
+    Measured against the cell's OWN contract, never against a calendar window
+    that pools whichever contracts happened to occupy the rank slot. That
+    pooling is not a detail — on 2026-08-03 the rank-3 strangle slot had rolled
+    through five contracts in 250 sessions whose median richness ran
+    7.2 / 8.1 / 7.6 / 14.0 / 18.0bp. Pooling them put the "level" at 10.0, so
+    the current contract's +16.6 read as +6.6 RICH and the screen said sell.
+    Against its own contract (median 18.0) the same number is slightly CHEAP.
+    The estimator inverted the signal, which is the same error as gating on raw
+    richness one layer down: comparing a number to the wrong baseline.
+
+    Below ``MIN_LEVEL_OBS`` observations the level is reported as unknown rather
+    than backfilled from the pool, because the pool is exactly what cannot be
+    trusted here.
+    """
+    o = own[np.isfinite(own)]
+    if o.size >= MIN_LEVEL_OBS:
+        return float(np.median(o)), float(np.std(o, ddof=1)), "own"
+    return float("nan"), float("nan"), f"unknown (n={o.size})"
+
+
 def gate_state(rich: float, dev: float, z: float, thr: float, *,
                prereg: bool) -> str:
     """ACTIONABLE / WATCH / NO-DATA for one cell.
@@ -386,14 +417,24 @@ def gate_state(rich: float, dev: float, z: float, thr: float, *,
     if prereg:
         return "ACTIONABLE" if abs(rich) >= thr else "WATCH"
     if not np.isfinite(dev):
-        return "NO-DATA"
+        # priceable, but its normal level cannot be established — a different
+        # thing from "no data", and it must not borrow another contract's level
+        return "NO-LEVEL"
     return ("ACTIONABLE"
             if abs(dev) >= thr and np.isfinite(z) and abs(z) >= EXPLORATORY_Z
             else "WATCH")
 
 
 def gate_side(signal: float, direction: str = "fade") -> int:
-    """Fade sells what is rich, exactly as the backtest signs it."""
+    """Fade sells what is rich, exactly as the backtest signs it.
+
+    A non-finite signal has no side. That case is reachable whenever a cell's
+    standing level is unknown, so it returns 0 rather than raising — the state
+    machine already refuses to trade such a cell, and a screener should not die
+    on a contract it simply cannot judge.
+    """
+    if not np.isfinite(signal):
+        return 0
     return int(-np.sign(signal)) if direction == "fade" else int(np.sign(signal))
 
 
@@ -418,7 +459,8 @@ def _blank_idea(book: str, rank: int, symbol: str, thr_bp: float,
     return Idea(
         book=book, rank=rank, symbol=symbol, dte=-1, center_px=np.nan,
         legs=[], mark_bp=np.nan, fair_bp=np.nan, rich_bp=np.nan,
-        level_bp=np.nan, dev_bp=np.nan, z_dev=np.nan, thr_bp=thr_bp, side=0,
+        level_bp=np.nan, dev_bp=np.nan, z_dev=np.nan, level_source="none",
+        thr_bp=thr_bp, side=0,
         state=state, n_contracts=fc.n_contracts(book),
         defined_risk=DEFINED_RISK.get(book, False), max_loss_bp=np.nan,
         cost_bp=np.nan, gross_target_bp=np.nan, net_target_bp=np.nan,
@@ -450,7 +492,7 @@ def score_cell(ctx: Context, book: str, rank: int, *,
                     center_px=np.nan, legs=cur.legs, mark_bp=np.nan,
                     fair_bp=np.nan, rich_bp=np.nan, thr_bp=thr_bp, side=0,
                     level_bp=np.nan, dev_bp=np.nan, z_dev=np.nan,
-                    state="NO-DATA", n_contracts=fc.n_contracts(book),
+                    level_source="none", state="NO-DATA", n_contracts=fc.n_contracts(book),
                     defined_risk=DEFINED_RISK.get(book, False),
                     max_loss_bp=np.nan,
                     cost_bp=np.nan, gross_target_bp=np.nan,
@@ -474,12 +516,9 @@ def score_cell(ctx: Context, book: str, rank: int, *,
     pooled = np.concatenate([(h.marks - h.fair).dropna().to_numpy()
                              for h in holds]) if holds else np.array([])
     pooled = pooled[np.isfinite(pooled)]
-    # the cell's STANDING richness — the feasibility frontier in premium bp,
-    # which grows with dte and is not a dislocation
-    level = float(np.median(pooled)) if pooled.size >= 10 else 0.0
+    # the cell's STANDING richness, from its OWN contract (see _standing_level)
+    level, dev_sd, level_source = _standing_level(rich_hold.to_numpy(), pooled)
     dev = rich - level
-    dev_sd = (float(np.std(pooled - level, ddof=1))
-              if pooled.size > 10 else np.nan)
     z_dev = float(dev / dev_sd) if dev_sd and np.isfinite(dev_sd) \
         and dev_sd > 0 else np.nan
 
@@ -508,7 +547,8 @@ def score_cell(ctx: Context, book: str, rank: int, *,
         dte=(expiry - ctx.as_of.date()).days,
         center_px=float(cur.legs[len(cur.legs) // 2][1]), legs=list(cur.legs),
         mark_bp=mark, fair_bp=fair, rich_bp=rich, level_bp=level, dev_bp=dev,
-        z_dev=z_dev, thr_bp=thr_bp, side=side, state=state, n_contracts=n_leg,
+        z_dev=z_dev, level_source=level_source, thr_bp=thr_bp, side=side,
+        state=state, n_contracts=n_leg,
         defined_risk=DEFINED_RISK.get(book, False),
         max_loss_bp=short_max_loss_bp(book, cur.legs, mark),
         cost_bp=cost, gross_target_bp=gross, net_target_bp=gross - cost,
@@ -597,8 +637,8 @@ def rank_ideas(ideas: Sequence[Idea]) -> List[Idea]:
        different leg counts and a 4bp dislocation on a two-leg strangle is not
        the same opportunity as one on an eight-leg double fly.
     """
-    order = {"ACTIONABLE": 0, "WATCH": 1, "OFF": 2, "NO-DATA": 3,
-             "NO-BOOK": 4}
+    order = {"ACTIONABLE": 0, "WATCH": 1, "NO-LEVEL": 2, "OFF": 3,
+             "NO-DATA": 4, "NO-BOOK": 5}
     return sorted(
         ideas,
         key=lambda i: (order.get(i.state, 9),
@@ -682,11 +722,14 @@ def format_report(ctx: Context, ideas: Sequence[Idea],
             continue
         tag = "*" if i.prereg else " "
         note = f" ({i.gate_note})" if i.gate_note else ""
+
+        def _f(v, w=8, p=2):
+            return (f"{v:>+{w}.{p}f}" if np.isfinite(v) else f"{'n/a':>{w}}")
+
         L.append(
             f" {tag}{i.book + ' Q' + str(i.rank):<12}{i.symbol:<8}{i.dte:>4}"
-            f"{i.rich_bp:>+8.2f}{i.level_bp:>+8.2f}{i.dev_bp:>+8.2f}"
-            f"{(i.z_dev if np.isfinite(i.z_dev) else 0):>+6.1f}"
-            f"{i.net_target_bp:>+8.2f}{i.edge_mult:>6.1f}"
+            f"{_f(i.rich_bp)}{_f(i.level_bp)}{_f(i.dev_bp)}{_f(i.z_dev, 6, 1)}"
+            f"{_f(i.net_target_bp)}{_f(i.edge_mult, 6, 1)}"
             f"{('def' if i.defined_risk else 'UNB'):>6}  "
             f"{i.state}{note}")
     L.append("  * = the pre-registered cell, gated on RAW richness exactly as "

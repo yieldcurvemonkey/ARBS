@@ -76,6 +76,13 @@ def test_momentum_flips_the_side():
     assert scr.gate_side(-3.0, "fade") == +1
 
 
+def test_an_unjudgeable_cell_has_no_side_and_does_not_raise():
+    """Reachable once a cell's standing level can be unknown: dev is NaN, and
+    the screener must survive a contract it cannot judge."""
+    assert scr.gate_side(np.nan, "fade") == 0
+    assert scr.gate_side(np.nan, "momentum") == 0
+
+
 # ---------------------------------------------------------------------------
 # the exploratory gate: the standing-level correction
 # ---------------------------------------------------------------------------
@@ -94,12 +101,44 @@ def test_standing_level_cannot_trigger_an_exploratory_cell():
                           prereg=True) == "ACTIONABLE"
 
 
+def test_level_comes_from_the_contract_not_the_rank_slot():
+    """The 2026-08-03 inversion, pinned.
+
+    The rank-3 strangle slot had rolled through five contracts whose median
+    richness ran 7.2 / 8.1 / 7.6 / 14.0 / 18.0bp. Pooling them puts the level
+    at ~10, so the current contract's +16.6 reads +6.6 RICH and the screen says
+    sell. Against its own contract (median 18.0) the same number is CHEAP.
+    """
+    own = np.full(38, 17.96)                 # the live contract's own history
+    pooled = np.concatenate([np.full(14, 7.23), np.full(64, 8.10),
+                             np.full(61, 7.62), np.full(63, 13.99), own])
+    level, sd, src = scr._standing_level(own, pooled)
+    assert src == "own"
+    assert level == pytest.approx(17.96)     # not the ~10 the pool would give
+    assert float(np.median(pooled)) < 12.0   # ...and the pool really is lower
+    # the sign of the dislocation flips between the two baselines
+    assert 16.55 - level < 0                 # cheap against its own contract
+    assert 16.55 - float(np.median(pooled)) > 0   # rich against the pool
+
+
+def test_level_is_unknown_rather_than_borrowed_when_history_is_short():
+    """A fresh holding must not inherit a level from other contracts."""
+    own = np.full(5, 18.0)
+    pooled = np.full(200, 8.0)
+    level, sd, src = scr._standing_level(own, pooled)
+    assert np.isnan(level) and "unknown" in src
+    # ...and an unknown level cannot fire an exploratory cell. It is its own
+    # state: the cell PRICES fine, we just cannot say what normal looks like.
+    assert scr.gate_state(rich=18.0, dev=np.nan, z=np.nan, thr=4.0,
+                          prereg=False) == "NO-LEVEL"
+
+
 def test_exploratory_needs_both_bp_and_sigma():
     assert scr.gate_state(20.0, 5.0, 2.0, 4.0, prereg=False) == "ACTIONABLE"
     assert scr.gate_state(20.0, 3.0, 2.0, 4.0, prereg=False) == "WATCH"   # bp
     assert scr.gate_state(20.0, 5.0, 0.4, 4.0, prereg=False) == "WATCH"   # sigma
     assert scr.gate_state(np.nan, 5.0, 2.0, 4.0, prereg=False) == "NO-DATA"
-    assert scr.gate_state(5.0, np.nan, 2.0, 4.0, prereg=False) == "NO-DATA"
+    assert scr.gate_state(5.0, np.nan, 2.0, 4.0, prereg=False) == "NO-LEVEL"
 
 
 # ---------------------------------------------------------------------------
@@ -142,7 +181,8 @@ def _idea(book="STRG75", rank=1, side=-1, state="ACTIONABLE", net=1.0,
     return scr.Idea(
         book=book, rank=rank, symbol="SFRZ26", dte=100, center_px=center,
         legs=fc.structure_legs(book, center), mark_bp=10.0, fair_bp=5.0,
-        rich_bp=rich, level_bp=rich - dev, dev_bp=dev, z_dev=z, thr_bp=4.0,
+        rich_bp=rich, level_bp=rich - dev, dev_bp=dev, z_dev=z,
+        level_source="own", thr_bp=4.0,
         side=side, state=state, n_contracts=fc.n_contracts(book),
         defined_risk=scr.DEFINED_RISK[book], max_loss_bp=10.0, cost_bp=0.5,
         gross_target_bp=net + 0.5, net_target_bp=net, edge_mult=3.0,
