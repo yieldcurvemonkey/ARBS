@@ -26,6 +26,10 @@ import pandas as pd
 HERE = Path(__file__).resolve().parent
 LAB = Path("C:/Users/chris/clee/ARBS/notebooks/data/sfr_rv_lab")
 FAMB = HERE.parent / "data" / "famb"
+if not FAMB.exists():                      # run from a checkout without the
+    _alt = Path(r"C:\Users\chris\clee\ARBS-xm\notebooks\data\famb")
+    if _alt.exists():                      # panels: use the research worktree
+        FAMB = _alt
 
 OPT_HALF_TICK_BP = 0.125
 _MONTHS = {"H": 3, "M": 6, "U": 9, "Z": 12}
