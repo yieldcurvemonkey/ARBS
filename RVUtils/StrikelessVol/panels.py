@@ -231,34 +231,81 @@ def spread_panel(rates: pd.DataFrame, pair: ForwardPair) -> pd.Series:
     return out
 
 
-def _ensure_gs_session() -> None:
-    """Authenticate against GS Marquee.
+def _interval_sidecar_path(cache_path: Path) -> Path:
+    """The JSON file recording which ``[start, end]`` windows have actually
+    been *queried* into ``cache_path`` -- see ``vol_panel``'s docstring for
+    why a parquet's data extent alone cannot prove contiguous coverage.
 
-    Mirrors the pattern in ``MDP/IRSwaptions/GSQUANT/ql/grid.py``'s
-    ``_ensure_gs_session``: env-var creds with a working fallback, not
-    ``os.environ[...]``, which raises ``KeyError`` when the variable is
-    unset rather than falling back.
+    A sidecar next to the parquet, not parquet key-value metadata: it stays
+    human-inspectable without a parquet reader, and avoids coupling this
+    module to whichever parquet engine/version pandas resolves to for its
+    custom-metadata API.
     """
-    import os
+    return Path(str(cache_path) + ".intervals.json")
 
-    from gs_quant.session import GsSession
 
-    client_id = os.getenv("GS_CLIENT_ID", "2eb2f48872304c1d94fa1642fa691afe").strip()
-    client_secret = os.getenv(
-        "GS_CLIENT_SECRET",
-        "91cb9c89110495d1f62d0ab0c4014555c992c2509de8f5ae2b8bf1a2d3c86bd4",
-    ).strip()
-    if not client_id or not client_secret:
-        raise ValueError(
-            "Missing GS credentials. Set GS_CLIENT_ID and GS_CLIENT_SECRET "
-            "environment variables."
-        )
+def _load_fetched_intervals(sidecar_path: Path) -> List[tuple[dt.date, dt.date]]:
+    if not sidecar_path.exists():
+        return []
+    import json
 
-    GsSession.use(
-        client_id=client_id,
-        client_secret=client_secret,
-        scopes=GsSession.Scopes.get_default(),
-    )
+    with sidecar_path.open("r", encoding="utf-8") as f:
+        raw = json.load(f)
+    return [(dt.date.fromisoformat(s), dt.date.fromisoformat(e)) for s, e in raw]
+
+
+def _save_fetched_intervals(sidecar_path: Path, intervals: List[tuple[dt.date, dt.date]]) -> None:
+    import json
+
+    sidecar_path.parent.mkdir(parents=True, exist_ok=True)
+    raw = [[s.isoformat(), e.isoformat()] for s, e in sorted(intervals)]
+    with sidecar_path.open("w", encoding="utf-8") as f:
+        json.dump(raw, f)
+
+
+def _merge_fetched_interval(
+    intervals: List[tuple[dt.date, dt.date]], new_start: dt.date, new_end: dt.date
+) -> List[tuple[dt.date, dt.date]]:
+    """Fold ``[new_start, new_end]`` into ``intervals``, merging only where it
+    overlaps or abuts an existing interval -- its start is at most one
+    calendar day past that interval's end, i.e. no date sits strictly
+    between them. Disjoint intervals are kept apart: collapsing them into
+    one bounding range would assert coverage for dates that were never
+    fetched, which is exactly the bug this mechanism exists to rule out.
+
+    Assumes ``intervals`` is already itself fully merged (the only way this
+    function is ever called), so a single sorted pass is enough: once a
+    stored interval is far enough past the growing merged window to be
+    rejected, no later (even-further-out) stored interval can bridge back to
+    it without an overlapping entry in between, which by that invariant
+    cannot exist.
+    """
+    one_day = dt.timedelta(days=1)
+    merged_start, merged_end = new_start, new_end
+    remaining: List[tuple[dt.date, dt.date]] = []
+    for s, e in sorted(intervals):
+        if s <= merged_end + one_day and e >= merged_start - one_day:
+            merged_start = min(merged_start, s)
+            merged_end = max(merged_end, e)
+        else:
+            remaining.append((s, e))
+    remaining.append((merged_start, merged_end))
+    return sorted(remaining)
+
+
+def _fetched_intervals_cover(
+    intervals: List[tuple[dt.date, dt.date]], start: dt.date, end: dt.date
+) -> bool:
+    """Whether some *single* recorded interval fully contains ``[start, end]``.
+
+    Deliberately not "the union of all intervals covers [start, end]": two
+    disjoint fetches (e.g. one for 2015, an unrelated one for 2018) must
+    never be read as a single 2015-2018 fetch just because their union
+    happens to bracket a later request -- the calendar days between them
+    were never actually queried, and reading them as covered is precisely
+    the silent-gap bug this mechanism exists to close.
+    """
+    return any(s <= start and e >= end for s, e in intervals)
 
 
 def vol_panel(
@@ -280,53 +327,47 @@ def vol_panel(
     Caching reuses ``forward_rate_panel``'s leg-set-fingerprint discipline
     (``_cache_path_for_legs`` / ``_write_panel_cache``) rather than forking a
     second, simpler cache: this panel's columns are structures instead of
-    legs, but the hazard those helpers exist for -- one cache file being
-    asked to hold two different column schemas -- is identical here. Keying
-    the file by the sorted, whitespace-stripped structure labels means one
-    file only ever holds one structure set, so the same read-side "no NaN in
-    the served slice" guard and write-side ``dropna(how="any")`` (both inside
-    ``_write_panel_cache``) apply unchanged.
+    legs, but the schema hazard those helpers exist for -- one cache file
+    being asked to hold two different column sets -- is identical here.
+    Keying the file by the sorted, whitespace-stripped structure labels means
+    one file only ever holds one structure set.
 
-    One genuine difference from ``forward_rate_panel``: this panel is
-    requested as a ``[start, end]`` range rather than an explicit date list,
-    so cache sufficiency is judged by both index bounds
-    (``cached.index.min() <= start`` and ``cached.index.max() >= end``)
-    instead of exact date membership. A consequence: requesting a ``start``
-    earlier than a market's actual observed history (e.g. USD only starts
-    2017-01-03) will re-fetch on every call rather than ever hitting cache --
-    the same class of known inefficiency ``forward_rate_panel`` already
-    accepts for non-business days inside an explicit date list. What it never
-    does is serve a slice that is silently missing dates the cache doesn't
-    actually have -- that is the property this mirrors from Task 4.
+    Coverage is a genuinely different problem from ``forward_rate_panel``,
+    though, because this panel is requested as a ``[start, end]`` **range**
+    rather than an explicit date list. An *endpoint* check
+    (``cached.index.min() <= start and cached.index.max() >= end``) is not
+    safe: ``_write_panel_cache``'s ``combine_first`` will happily union two
+    **disjoint** fetch windows into one file (e.g. an early-history window
+    and an unrelated, much later one). A later request spanning both would
+    pass the endpoint check, and the missing months/years in between produce
+    *no NaN* to trip the "no NaN in the served slice" guard -- those dates
+    are simply absent rows, not null cells, so that guard cannot see the
+    hole either. This is the same failure shape Task 4 closed for
+    ``forward_rate_panel`` (there, exact date-list membership makes it
+    impossible for a gap to hide; a range interface loses that property for
+    free and has to earn it back explicitly).
+
+    The fix: coverage is tracked explicitly rather than inferred from the
+    data. A JSON sidecar (``_interval_sidecar_path``) records the list of
+    ``[start, end]`` windows that were actually *queried* -- not the
+    (possibly narrower) range the returned data happens to span, since a
+    market's own earliest-history boundary is not a gap, it is the market
+    not existing yet; recording the queried window is also what lets a
+    ``start`` earlier than a market's real history still hit cache on a
+    repeat call. On write, a new window is merged into the stored list only
+    when it overlaps or abuts an existing one (``_merge_fetched_interval``);
+    disjoint windows stay separate entries -- never collapsed into one
+    bounding range, which would assert coverage that was never fetched. On
+    read, a hit requires the requested ``[start, end]`` to sit inside **one**
+    stored interval (``_fetched_intervals_cover``): a request straddling two
+    disjoint intervals is a miss, not a hit, because nothing on disk proves
+    the gap between them was ever queried. The "no NaN in the served slice"
+    guard still runs afterwards, belt-and-braces, exactly as it does in
+    ``forward_rate_panel``.
     """
     structures = list(structures)
-    wanted_labels = sorted({s.replace(" ", "") for s in structures})
-    struct_cache_path = _cache_path_for_legs(cache_path, wanted_labels) if cache_path else None
-
-    if struct_cache_path and struct_cache_path.exists():
-        cached = pd.read_parquet(struct_cache_path)
-        cached.index = pd.to_datetime(cached.index)
-        # One file per structure set (see _cache_path_for_legs), so this is
-        # an equality check, not a subset check -- any file at this path was
-        # only ever written for exactly this structure set.
-        has_all_structures = set(cached.columns) == set(wanted_labels)
-        covers_range = (
-            not cached.empty
-            and cached.index.min() <= pd.Timestamp(start)
-            and cached.index.max() >= pd.Timestamp(end)
-        )
-        if has_all_structures and covers_range:
-            slice_ = cached.loc[str(start):str(end)]
-            # Complete or absent, never partial: a NaN cell is a miss, not a
-            # silent bad value served to the caller.
-            if not slice_.isna().to_numpy().any():
-                return slice_
-
-    from gs_quant.data import Dataset
 
     from definitions.IRSwaptions import ASSET_IDS_MAP
-
-    _ensure_gs_session()
 
     if curve_key not in ASSET_IDS_MAP:
         raise KeyError(
@@ -337,6 +378,45 @@ def vol_panel(
     wanted = {a: s for a, s in asset_map.items() if s in set(structures)}
     if not wanted:
         raise KeyError(f"No assets for {structures} on {curve_key}")
+
+    missing = set(structures) - set(wanted.values())
+    if missing:
+        logger.warning(
+            "vol_panel('%s'): requested structures %s are not in "
+            "ASSET_IDS_MAP and will be absent from the returned panel.",
+            curve_key, sorted(missing),
+        )
+
+    # Derived from what the curve actually carries (`wanted`), not the raw
+    # request -- so the cache schema check below can never be permanently
+    # unsatisfiable just because a caller asked for a structure this curve
+    # doesn't have.
+    wanted_labels = sorted({s.replace(" ", "") for s in wanted.values()})
+    struct_cache_path = _cache_path_for_legs(cache_path, wanted_labels) if cache_path else None
+    sidecar_path = _interval_sidecar_path(struct_cache_path) if struct_cache_path else None
+
+    if struct_cache_path and struct_cache_path.exists() and sidecar_path.exists():
+        fetched_intervals = _load_fetched_intervals(sidecar_path)
+        if _fetched_intervals_cover(fetched_intervals, start, end):
+            cached = pd.read_parquet(struct_cache_path)
+            cached.index = pd.to_datetime(cached.index)
+            # One file per structure set (see _cache_path_for_legs), so this
+            # is an equality check, not a subset check -- any file at this
+            # path was only ever written for exactly this structure set.
+            has_all_structures = set(cached.columns) == set(wanted_labels)
+            if has_all_structures:
+                slice_ = cached.loc[str(start):str(end)]
+                # Complete or absent, never partial -- belt-and-braces on top
+                # of the interval check above, which is what actually rules
+                # out a silently-missing-rows gap.
+                if not slice_.isna().to_numpy().any():
+                    return slice_
+
+    from gs_quant.data import Dataset
+
+    from MDP.IRSwaptions.GSQUANT.ql.grid import _ensure_gs_session
+
+    _ensure_gs_session()
 
     raw = Dataset(_SWAPTION_VOL_DATASET).get_data(start=start, end=end, assetId=list(wanted))
     if raw is None or raw.empty:
@@ -356,7 +436,14 @@ def vol_panel(
     panel.index = pd.to_datetime(panel.index)
 
     if struct_cache_path:
+        # Parquet first, sidecar second: if a crash lands between the two
+        # writes, the sidecar under-reports coverage (a wasted re-fetch next
+        # time) rather than over-reporting it (which would recreate the
+        # exact silent-gap bug this mechanism exists to close).
         _write_panel_cache(panel, struct_cache_path)
+        fetched_intervals = _load_fetched_intervals(sidecar_path)
+        fetched_intervals = _merge_fetched_interval(fetched_intervals, start, end)
+        _save_fetched_intervals(sidecar_path, fetched_intervals)
     return panel
 
 
