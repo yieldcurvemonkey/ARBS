@@ -204,6 +204,52 @@ def test_report_shouts_when_nothing_could_be_priced():
     assert "NO TRADE. No cell" not in txt
 
 
+def test_report_lists_cells_it_could_not_screen():
+    """A cell that went dark must be visible as dark, not simply absent.
+
+    On 2022-06-15 the thin chain leaves the PRE-REGISTERED strangle unmarked.
+    Dropping it from the table would read as "quiet today" when the truth is
+    the strategy was blind on the day it was most exposed.
+    """
+    ctx = scr.Context(
+        as_of=pd.Timestamp("2022-06-15"),
+        dates=pd.DatetimeIndex(pd.bdate_range("2022-01-05", periods=60)),
+        surface=pd.Series(dtype=float), fwd_idx=pd.Series(dtype=float),
+        tree=None, quote_dates=pd.DatetimeIndex([]), live=False, fetched=False,
+        settle_asof={})
+    dark = scr._blank_idea("STRG75", 1, "SFRU22", 4.0, "NO-DATA",
+                           "no mark on 2022-06-15")
+    txt = scr.format_report(ctx, [_idea(book="FLY25", state="WATCH"), dark],
+                            None)
+    assert "NOT SCREENED" in txt
+    assert "STRG75 Q1 SFRU22" in txt and "no mark on 2022-06-15" in txt
+    # ...and it must not be counted as a tradeable cell
+    assert "NO TRADE" in txt
+
+
+def test_screen_emits_a_row_for_a_cell_it_could_not_build(monkeypatch):
+    """`screen` must MAKE the placeholder, not just render one it was handed."""
+    monkeypatch.setattr(scr, "score_cell", lambda *a, **k: None)
+    ctx = scr.Context(
+        as_of=pd.Timestamp("2022-06-15"),
+        dates=pd.DatetimeIndex(pd.bdate_range("2022-01-05", periods=60)),
+        surface=pd.Series(dtype=float), fwd_idx=pd.Series(dtype=float),
+        tree=None, quote_dates=pd.DatetimeIndex([]), live=False, fetched=False,
+        settle_asof={})
+    ideas = scr.screen(ctx, books=("STRG75",), ranks=(1,))
+    assert len(ideas) == 1
+    assert ideas[0].state == "NO-BOOK" and ideas[0].book == "STRG75"
+    assert ideas[0].note
+
+
+def test_blank_cells_sort_last_and_never_get_recommended():
+    ideas = scr.rank_ideas([
+        scr._blank_idea("STRG75", 1, "SFRU22", 4.0, "NO-BOOK", "x"),
+        _idea(book="FLY25", state="WATCH", net=0.1),
+    ])
+    assert ideas[-1].state == "NO-BOOK"
+
+
 def test_report_labels_an_exploratory_recommendation_as_unmandated():
     ctx = scr.Context(
         as_of=pd.Timestamp("2026-08-04"),

@@ -412,6 +412,22 @@ def short_max_loss_bp(book: str, legs: Sequence[Tuple[str, float, float]],
     return float(peak - mark_bp)
 
 
+def _blank_idea(book: str, rank: int, symbol: str, thr_bp: float,
+                state: str, note: str) -> "Idea":
+    """A cell that could not be priced or built — reported, never dropped."""
+    return Idea(
+        book=book, rank=rank, symbol=symbol, dte=-1, center_px=np.nan,
+        legs=[], mark_bp=np.nan, fair_bp=np.nan, rich_bp=np.nan,
+        level_bp=np.nan, dev_bp=np.nan, z_dev=np.nan, thr_bp=thr_bp, side=0,
+        state=state, n_contracts=fc.n_contracts(book),
+        defined_risk=DEFINED_RISK.get(book, False), max_loss_bp=np.nan,
+        cost_bp=np.nan, gross_target_bp=np.nan, net_target_bp=np.nan,
+        edge_mult=np.nan, exit_rich_bp=np.nan, max_hold_date=None,
+        pct_holding=np.nan, pct_pooled=np.nan, z_pooled=np.nan, n_hist=0,
+        half_life_hint=HALF_LIFE_HINT.get(book, np.nan), prereg=False,
+        stale_ladder=False, note=note)
+
+
 def score_cell(ctx: Context, book: str, rank: int, *,
                thr_bp: float = 4.0, exit_frac: float = 0.25,
                max_hold: int = 15, direction: str = "fade",
@@ -552,8 +568,15 @@ def screen(ctx: Context, *, books: Sequence[str] = BOOKS,
             idea = score_cell(ctx, book, rank, thr_bp=thr_bp,
                               exit_frac=exit_frac, max_hold=max_hold,
                               direction=direction, cost_mult=cost_mult)
-            if idea is not None:
-                out.append(idea)
+            if idea is None:
+                # A cell that cannot be BUILT must still appear. Dropping it
+                # silently is indistinguishable from "quiet today", and the
+                # thin 2022 chains drop the front strangle exactly when the
+                # strategy was most exposed.
+                sym = fc.rank_symbol(ctx.as_of.date(), rank) or "?"
+                idea = _blank_idea(book, rank, sym, thr_bp, "NO-BOOK",
+                                   "strikes not listed/marked on this date")
+            out.append(idea)
     return rank_ideas(out)
 
 
@@ -574,7 +597,8 @@ def rank_ideas(ideas: Sequence[Idea]) -> List[Idea]:
        different leg counts and a 4bp dislocation on a two-leg strangle is not
        the same opportunity as one on an eight-leg double fly.
     """
-    order = {"ACTIONABLE": 0, "WATCH": 1, "OFF": 2, "NO-DATA": 3}
+    order = {"ACTIONABLE": 0, "WATCH": 1, "OFF": 2, "NO-DATA": 3,
+             "NO-BOOK": 4}
     return sorted(
         ideas,
         key=lambda i: (order.get(i.state, 9),
@@ -654,7 +678,7 @@ def format_report(ctx: Context, ideas: Sequence[Idea],
     L.append(hdr)
     L.append("  " + "-" * (len(hdr) - 2))
     for i in ideas:
-        if i.state == "NO-DATA":
+        if i.state in ("NO-DATA", "NO-BOOK"):
             continue
         tag = "*" if i.prereg else " "
         note = f" ({i.gate_note})" if i.gate_note else ""
@@ -674,9 +698,20 @@ def format_report(ctx: Context, ideas: Sequence[Idea],
              "off-lattice premium, not a signal.")
     L.append("    risk: def = defined (short fly capped); UNB = unbounded "
              "(short strangle).")
+    dark = [i for i in ideas if i.state in ("NO-DATA", "NO-BOOK")]
+    if dark:
+        L.append("")
+        L.append("  NOT SCREENED (absence here is a data gap, not a quiet "
+                 "signal):")
+        for i in dark:
+            star = " *" if (i.book == PREREG["book"]
+                            and i.rank == PREREG["rank"]) else "  "
+            L.append(f"  {star}{i.book} Q{i.rank} {i.symbol}: {i.state}"
+                     f" — {i.note}")
 
     act = [i for i in ideas if i.state == "ACTIONABLE"]
-    priced = [i for i in ideas if i.state != "NO-DATA"]
+    priced = [i for i in ideas if i.state not in ("NO-DATA", "NO-BOOK")]
+    blind = [i for i in ideas if i.state in ("NO-DATA", "NO-BOOK")]
     L.append("")
     L.append("-- RECOMMENDATION " + "-" * (w - 19))
     if not priced:
@@ -822,7 +857,8 @@ def main(argv=None) -> int:
     else:
         print(format_report(ctx, ideas, carry, lots=a.lots))
     # a screen that priced nothing is a failure, not a flat answer
-    return 0 if any(i.state != "NO-DATA" for i in ideas) else 2
+    return (0 if any(i.state not in ("NO-DATA", "NO-BOOK") for i in ideas)
+            else 2)
 
 
 if __name__ == "__main__":
