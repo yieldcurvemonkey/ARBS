@@ -325,6 +325,62 @@ if len(cal) > 30:
           "moves is not a staleness problem.")
 
 # %% [markdown]
+# ### The same claim, checked without the hedge
+#
+# The regression above is downstream of the hedge ratios, the jump panels and
+# the trade selection. If the explanation is right — the lattice's density is
+# sharper than the market's — it should be visible far upstream of all of that,
+# in the raw panel: a FIXED butterfly's lattice-fair price should simply move
+# more from day to day than its market price does. No hedge, no trades, no
+# jumps; just two price series for the same package.
+
+# %%
+cells = pd.read_parquet(DATA / "cells.parquet")
+cells["as_of"] = pd.to_datetime(cells["as_of"])
+cells = cells[cells["p_lattice"] >= 0.01].sort_values(
+    ["symbol", "center_px", "as_of"])
+rows = []
+for (sym, k), g in cells.groupby(["symbol", "center_px"]):
+    if len(g) < 15:
+        continue
+    g = g.set_index("as_of")
+    jj = pd.concat([g["mkt_bp"].diff().rename("mkt"),
+                    g["fair_bp"].diff().rename("fair")], axis=1).dropna()
+    if len(jj) < 15:
+        continue
+    rows.append({"symbol": sym, "k": k, "n": len(jj),
+                 "std_mkt": jj["mkt"].std(), "std_fair": jj["fair"].std(),
+                 "corr": jj["mkt"].corr(jj["fair"]),
+                 "beta": float(np.dot(jj["fair"], jj["mkt"])
+                               / np.dot(jj["fair"], jj["fair"]))})
+dz = pd.DataFrame(rows)
+if len(dz):
+    print(f"fixed-strike butterfly series compared: {len(dz)}")
+    print(f"  median daily std, MARKET  price change : "
+          f"{dz['std_mkt'].median():.3f}bp")
+    print(f"  median daily std, LATTICE price change : "
+          f"{dz['std_fair'].median():.3f}bp")
+    print(f"  median ratio market / lattice          : "
+          f"{(dz['std_mkt'] / dz['std_fair']).median():.3f}")
+    print(f"  median beta of market change on lattice change: "
+          f"{dz['beta'].median():.3f}  (corr {dz['corr'].median():.3f})")
+    print(f"  share of series where the LATTICE moves more: "
+          f"{(dz['std_fair'] > dz['std_mkt']).mean():.1%}")
+    m = pd.cut(cells["p_lattice"], [0.01, 0.1, 0.3, 0.6, 1.0])
+    mass = (cells.assign(bin=m).groupby(["symbol", "center_px"], observed=True)
+            ["p_lattice"].mean().rename("mass").reset_index()
+            .rename(columns={"center_px": "k"}))
+    dm = dz.merge(mass, on=["symbol", "k"], how="inner")
+    dm["mass_bin"] = pd.cut(dm["mass"], [0.01, 0.1, 0.3, 0.6, 1.0])
+    print("\n=== by the cell's lattice mass (is it a wing artefact?) ===")
+    print(dm.groupby("mass_bin", observed=True).agg(
+        series=("beta", "size"), beta=("beta", "median"),
+        ratio=("std_mkt", "median")).round(3).to_string())
+    print("\nThis beta is computed from the panel alone — no hedge ratios, no "
+          "jump marks, no trade selection — and lands in the same place as the "
+          "hedge regression. Two independent routes to the same number.")
+
+# %% [markdown]
 # ## 6. The pre-declared kill criteria, answered
 
 # %%

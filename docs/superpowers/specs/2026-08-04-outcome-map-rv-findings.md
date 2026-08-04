@@ -157,6 +157,17 @@ fix. Split by realised move it is 0.484 (<2bp), 0.413 (2–8bp), 0.120 (≥8bp):
 support migration adds damage on top for large moves, but even the smallest
 moves want half the hedge.
 
+**The same number arrives from upstream of everything.** Take a FIXED butterfly
+and compare its two daily price series — market and lattice-fair — with no
+hedge ratios, no jump marks and no trade selection anywhere in the calculation.
+Over 120 (symbol, strike) series: median daily std **0.586bp for the market
+against 1.065bp for the lattice**, the lattice moves more in **86.7%** of
+series, and the regression of the market's change on the lattice's gives
+**beta 0.295** (correlation 0.541), flat across lattice-mass buckets
+(0.22–0.38, so not a wing artefact). Two independent routes — a trade-level
+hedge regression and a panel-level price-change regression — land on the same
+0.2–0.3.
+
 The reason is geometric. **A digital's lattice sensitivity is a difference of
 CDFs; a butterfly's is a density.** Channel-1 hedged a digital and its
 replication identity held on every outcome branch (tested ×4). The market's
@@ -241,6 +252,14 @@ package cannot hold.
 - Butterfly centres are snapped to the listed 6.25/12.5bp strike grid (median
   error 1.5bp, max 12.25bp) and the tree-fair price is computed on the same
   snapped legs, so richness is market-vs-tree on an identical package.
+- The threshold axis is NOT comparable across expressions: a pair's strength is
+  a spread (max − min of the odd component) while `map_full`'s is a mean
+  absolute deviation, so the same pp threshold bites harder on the book (12
+  trades at 16pp against a pair's 46–56). Each rung is read against itself.
+- `reswin` overrides the exit rule with "the session after the decision", so its
+  two exit cells are duplicates and 36 of its 72 configs are identical rows.
+  They are still counted in the 360 trials, which makes the DSR penalty
+  slightly conservative rather than slightly flattering.
 
 ## What would change the verdict
 
