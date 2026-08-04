@@ -450,15 +450,37 @@ def _build_tfp_history(*args, **kwargs):
     return build_tfp_history(*args, **kwargs)
 
 
-_TFP_FIT_R_SQUARED_FLOOR = 0.955
-"""Empirically-set floor separating well-conditioned cross-sectional TFP fits
-from degenerate ones -- see ``umep_panel``'s docstring and the Task 6 fix
-report for the diagnosis. Observed on 2024-01-02..2026-08-03 real data
-(n=639 days): 7 days have ``r_squared`` topping out at 0.9520 (and a
-per-tenor modified duration that is not monotonically increasing with
-tenor -- a physically impossible input for on-the-run Treasuries); every
-other day's ``r_squared`` is >= 0.9618. 0.955 sits in that observed gap
-with margin on both sides."""
+def _duration_tenor_sort_key(tenor: str) -> float:
+    """Parse an 'NY' tenor label (e.g. '2Y', '30Y') into years, so the
+    regression tenors can be ordered shortest-to-longest maturity."""
+    return float(tenor.rstrip("Yy"))
+
+
+def _duration_inversion(row: pd.Series, tenors: Sequence[str]):
+    """First tenor-order pair where per-tenor modified duration decreases, or
+    ``None`` if durations are non-decreasing across ``tenors`` (checked
+    shortest-to-longest maturity).
+
+    A Treasury's modified duration cannot fall as its maturity rises -- this
+    is a physical property of the instrument, true of every data pull, not a
+    statistic tuned to one. An inversion is unambiguous evidence of a
+    corrupted per-tenor duration read, independent of how well or poorly the
+    resulting cross-sectional regression happens to fit.
+
+    Returns ``(earlier_tenor, earlier_dur, later_tenor, later_dur)`` for the
+    first violating pair (missing/NaN tenors are skipped, not treated as
+    violations), else ``None``.
+    """
+    ordered = sorted(set(tenors), key=_duration_tenor_sort_key)
+    prev_t, prev_d = None, None
+    for t in ordered:
+        d = row.get(f"dur_{t}")
+        if d is None or pd.isna(d):
+            continue
+        if prev_d is not None and d < prev_d:
+            return prev_t, prev_d, t, d
+        prev_t, prev_d = t, d
+    return None
 
 
 def umep_panel(
@@ -482,56 +504,74 @@ def umep_panel(
     ``mmss_30Y`` is **desk** convention (swap rate minus UST yield), the
     negative of the tool convention the spec pins (UST yield minus swap rate).
     Observed 2024-01-02..2026-08-03 (USD ERIS_EOD_LIVE-RL_BASIC /
-    USTS_FEDINVEST_WSJ_LIVE-RL, n=639 days, 632 after the degenerate-fit filter
-    below): ``mmss_30Y`` is negative on every day (median ~-77bp); sign-flipping
-    it (-(-77bp) = +77bp) cross-checks against the research brief's +74.6bp 30y
-    ASW figure. Because ``TFP = -slope``, ``umep_bp_per_year`` needs **no** sign
-    flip -- it is already positive and in the Dallas Fed's published range
-    (~4.3bp/year by Aug-2026, matching their ~4.3bp Feb-2026 figure).
-    **``mmss_*``/``dev_*``/``baseline_*`` and ``umep_bp_per_year``/``zds_bp``
-    therefore carry opposite sign conventions (desk vs. tool) -- do not mix
-    them in one regression without normalising one to match the other.** This
-    establishes the sign *convention* only; it is not a reading of H2 (the
-    sign of the forward-slope-on-UMEP coefficient), which is Task 16's
-    regression and has not been run here.
+    USTS_FEDINVEST_WSJ_LIVE-RL, n=639 days, 632 after the duration-monotonicity
+    filter below): ``mmss_30Y`` is negative on every day (median ~-77bp);
+    sign-flipping it (-(-77bp) = +77bp) cross-checks against the research
+    brief's +74.6bp 30y ASW figure. Because ``TFP = -slope``, ``umep_bp_per_year``
+    needs **no** sign flip -- it is already positive and in the Dallas Fed's
+    published range (~4.3bp/year by Aug-2026, matching their ~4.3bp Feb-2026
+    figure). **``mmss_*``/``dev_*``/``baseline_*`` and ``umep_bp_per_year``/
+    ``zds_bp`` therefore carry opposite sign conventions (desk vs. tool) -- do
+    not mix them in one regression without normalising one to match the
+    other.** This establishes the sign *convention* only; it is not a reading
+    of H2 (the sign of the forward-slope-on-UMEP coefficient), which is
+    Task 16's regression and has not been run here.
 
-    Degenerate-fit guard: rows whose cross-sectional regression has
-    ``r_squared`` below ``_TFP_FIT_R_SQUARED_FLOOR`` (0.955) are dropped
-    before return. Diagnosed on the same real-data pull: 7 of 639 days
-    (2026-07-09, 07-10, 07-13, 07-17, 07-20, 07-24, 07-27) all have their full
-    complement of 6 regression tenors (ruling out a too-few-tenors cause) but
-    a per-tenor modified duration that is **not monotonically increasing with
-    tenor** -- e.g. 2026-07-09's ``dur_5Y`` (0.0257) is below its ``dur_3Y``
+    Degenerate-fit guard -- **duration monotonicity, not an r_squared floor**:
+    rows are dropped when their per-tenor modified duration is not
+    non-decreasing across the regression tenors (see ``_duration_inversion``).
+    This is the diagnosed invariant, not a tuned statistic: a Treasury's
+    modified duration cannot fall as its maturity rises, in any data pull --
+    an inversion is unambiguous evidence of a corrupted duration read
+    regardless of how the resulting cross-sectional fit happens to score.
+    An ``r_squared`` floor was tried first and discarded even though, on the
+    one real pull diagnosed so far, it separated the same 7 bad days from the
+    632 good ones with a clean gap (outlier max 0.9520, clean min 0.9618):
+    that gap is a symptom of *this* pull's corruption, not a property of
+    duration corruption in general -- a milder future corruption could clear
+    any r_squared floor while still violating monotonicity, and a
+    legitimately volatile but valid fit could dip under one. ``r_squared``
+    stays in the output as an (unfiltered) diagnostic column.
+
+    Diagnosed on 2024-01-02..2026-08-03 real data (n=639 days): exactly 7 days
+    (2026-07-09, 07-10, 07-13, 07-17, 07-20, 07-24, 07-27) have a duration
+    inversion -- e.g. 2026-07-09's ``dur_5Y`` (0.0257) is below its ``dur_3Y``
     (0.0592), physically impossible for on-the-run Treasuries and evidence of
     a corrupted duration read upstream, not a defect in
-    ``compute_tfp_regression`` (unmodified here). The corrupted durations make
-    the cross-section ill-conditioned and the fitted slope explodes
-    (``umep_bp_per_year`` from ~4bp/year to as much as several million on
-    those days). Those same 7 days are exactly the days with
-    ``r_squared < 0.9520``; every other day's ``r_squared >= 0.9618``.
-    Excluded rows are logged at ``WARNING`` with their date and ``r_squared``,
-    and the count is exposed at ``out.attrs["umep_excluded_degenerate_days"]``
-    so exclusions are visible rather than silent.
+    ``compute_tfp_regression`` (unmodified here) -- and all 632 remaining days
+    are duration-monotonic. Excluded rows are logged at ``WARNING`` naming the
+    inverted tenor pair and both duration values, and the count is exposed at
+    ``out.attrs["umep_excluded_degenerate_days"]`` on every return path
+    (including the empty-input path) so exclusions are visible rather than
+    silent.
     """
     raw = _build_tfp_history(start, end, cache_path=str(cache_path) if cache_path else None, **kwargs)
     if raw is None or raw.empty:
-        return pd.DataFrame()
+        empty = pd.DataFrame()
+        empty.attrs["umep_excluded_degenerate_days"] = 0
+        return empty
     out = raw.rename(columns={"tfp": "umep_bp_per_year", "zds": "zds_bp"})
 
-    n_excluded = 0
-    if "r_squared" in out.columns:
-        degenerate = out["r_squared"] < _TFP_FIT_R_SQUARED_FLOOR
-        n_excluded = int(degenerate.sum())
-        if n_excluded:
-            for idx in out.index[degenerate]:
-                d = idx.date() if hasattr(idx, "date") else idx
-                logger.warning(
-                    "umep_panel: excluding %s -- cross-sectional TFP fit r_squared=%.4f "
-                    "is below the %.3f floor (near-degenerate/ill-conditioned fit, "
-                    "typically a corrupted per-tenor modified-duration input -- see "
-                    "the Task 6 fix report).",
-                    d, out.loc[idx, "r_squared"], _TFP_FIT_R_SQUARED_FLOOR,
-                )
-            out = out.loc[~degenerate].copy()
+    from BT.signals.tfp_swap_spread import REGRESSION_TENORS
+
+    regression_tenors = kwargs.get("regression_tenors") or REGRESSION_TENORS
+    exclude_idx = []
+    for idx, row in out.iterrows():
+        inversion = _duration_inversion(row, regression_tenors)
+        if inversion is None:
+            continue
+        earlier_t, earlier_d, later_t, later_d = inversion
+        d = idx.date() if hasattr(idx, "date") else idx
+        logger.warning(
+            "umep_panel: excluding %s -- duration_monotonicity violated: "
+            "dur_%s=%.6f > dur_%s=%.6f (modified duration decreased across "
+            "tenor; physically impossible for a Treasury, evidence of a "
+            "corrupted per-tenor duration read -- see the Task 6 fix report).",
+            d, earlier_t, earlier_d, later_t, later_d,
+        )
+        exclude_idx.append(idx)
+    n_excluded = len(exclude_idx)
+    if exclude_idx:
+        out = out.drop(index=exclude_idx)
     out.attrs["umep_excluded_degenerate_days"] = n_excluded
     return out
