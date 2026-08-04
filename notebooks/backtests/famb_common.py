@@ -56,13 +56,12 @@ def rank_symbol(as_of: datetime.date, rank: int) -> Optional[str]:
 # ---------------------------------------------------------------------------
 
 def load_quotes() -> pd.DataFrame:
-    """Lab panel plus the famb old-expiry backfill (if it has landed)."""
+    """Lab panel plus every landed old-expiry backfill part (incremental)."""
     frames = [pd.read_parquet(LAB / "quotes.parquet")[
         ["as_of", "symbol", "right", "strike_price", "strike_rate",
          "premium_bp", "oi", "volume"]]]
-    old = FAMB / "quotes_old.parquet"
-    if old.exists():
-        frames.append(pd.read_parquet(old))
+    for p in sorted((FAMB / "parts").glob("*_quotes.parquet")):
+        frames.append(pd.read_parquet(p))
     q = pd.concat(frames, ignore_index=True)
     q["as_of"] = pd.to_datetime(q["as_of"])
     q = q.drop_duplicates(["as_of", "symbol", "right", "strike_price"])
@@ -70,11 +69,14 @@ def load_quotes() -> pd.DataFrame:
 
 
 def sr3_forwards(symbols: Sequence[str]) -> pd.DataFrame:
-    """Daily forward RATE (percent) per symbol from serff SR3 settles."""
+    """Daily forward RATE (percent) per OPTION symbol from serff SR3 settles.
+
+    Option roots are SFR*; the futures cache keys the same contracts SR3*.
+    """
     from BT.serff.futures_data import load_cached
     rows = []
     for s in symbols:
-        df = load_cached(s)
+        df = load_cached("SR3" + s[3:] if s.startswith("SFR") else s)
         col = next((c for c in ("Close", "Last", "Settle") if
                     df is not None and c in df.columns), None)
         if col is None:
