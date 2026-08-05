@@ -58,7 +58,14 @@ def simulate(
 
     last_hedge_rate_bp = ctx.rate(d0, "long") * 1e4
     inception = pd.Timestamp(d0)
-    roll_days = int(round(cfg.roll_months * 21))
+    # Date-based, not row-counted: ``dates`` may be a business-day index (as
+    # in the synthetic tests), a calendar-day index, or a real dated curve
+    # (Task 13). Counting elapsed rows and assuming ~21/month drifts against
+    # any of those -- ~11.6 months on a business-day index, ~8.3 on a
+    # calendar-day one, per the actual number of rows a "month" contains.
+    # DateOffset tracks the calendar directly, so the roll fires at the same
+    # elapsed wall-clock time regardless of what ``dates`` is sampled on.
+    roll_due = inception + pd.DateOffset(months=cfg.roll_months)
 
     n_long_base = n_long  # notional before any resize increments
     prev_pv = ctx.pv(d0, n_long, n_short)
@@ -78,9 +85,7 @@ def simulate(
         }
     ]
 
-    days_held = 0
     for d in dates[1:]:
-        days_held += 1
         long_rate_bp = ctx.rate(d, "long") * 1e4
 
         # what actually happened, on everything held
@@ -112,12 +117,20 @@ def simulate(
         increment_carry = carry - base_carry
         harvest = (increment_pv_today - increment_pv_yesterday) - increment_carry
 
-        # 4. cross: retained as a completeness check on the arithmetic, not a
-        #    tolerance for missing economics. With harvest exact, cross is
-        #    zero up to floating point by construction of the identity above;
-        #    a value beyond float noise means one of the three buckets above
-        #    is miscomputed (e.g. a carry term double-counted or dropped),
-        #    not that the ledger split is missing a real effect.
+        # 4. cross: retained as a completeness check on the ARITHMETIC only --
+        #    that the four terms above were summed and subtracted correctly,
+        #    nothing more. It is NOT a check on the VALUES of carry/mtm/
+        #    harvest: expand the definitions and every one of C, Cb, B, Q, A,
+        #    P cancels algebraically, so cross == 0 for any six input values,
+        #    not just correct ones (carry+mtm+harvest = C+(B-Q-Cb)+((A-B)-
+        #    (P-Q)-(C-Cb)) = A-P = total_pv_change, identically). A bug that
+        #    corrupts a variable shared symmetrically by two buckets (e.g. a
+        #    stale prev_base_pv feeding both mtm and harvest) cancels in this
+        #    sum exactly as cleanly as a correct run does -- verified: it
+        #    corrupts harvest by 6 orders of magnitude with mtm absorbing the
+        #    mirror image, and cross stays at float noise throughout. Do not
+        #    read a passing cross as evidence any individual bucket is
+        #    right -- use the closed-form value tests below for that.
         cross = total_pv_change - (carry + mtm + harvest)
 
         cost = 0.0
@@ -137,10 +150,10 @@ def simulate(
                 n_hedges = 1
             last_hedge_rate_bp = long_rate_bp
 
-        if days_held >= roll_days:
+        if pd.Timestamp(d) >= roll_due:
             cost -= costs.cost_usd("roll", abs(cfg.package_dv01_usd))
-            days_held = 0
             inception = pd.Timestamp(d)
+            roll_due = inception + pd.DateOffset(months=cfg.roll_months)
             n_long = cfg.sign * cfg.package_dv01_usd / ctx.dv01(d, "long")
             n_short = -cfg.sign * cfg.package_dv01_usd / ctx.dv01(d, "short")
             n_long_base = n_long
@@ -172,37 +185,53 @@ CROSS_ABS_TOL_USD: float = 1e-3
 
 
 def reconcile(ledger: pd.DataFrame) -> dict:
-    """Check that carry, mtm and harvest exactly partition the total.
+    """Check that the ledger's daily arithmetic sums correctly. Nothing more.
 
-    carry, mtm and harvest are each computed directly from the pricing
-    context on a specific notional slice (full position, base position, or
-    their difference), net of their own carry -- not as a residual of one
-    another. Given that, they sum to ``total_pv_change`` as a mathematical
-    property, and ``cross`` should be zero up to floating point on any path.
+    carry, mtm and harvest are each written as differences of PV/theta calls
+    on specific notional slices, and ``cross := total_pv_change - (carry +
+    mtm + harvest)``. Expand those definitions with carry=C, mtm=(B-Q-Cb),
+    harvest=((A-B)-(P-Q)-(C-Cb)): every symbol cancels, leaving
+    ``carry+mtm+harvest = A-P = total_pv_change`` for ANY six input values,
+    correct or not. So ``cross`` is an identity of how the code is written,
+    not a property that requires carry/mtm/harvest to hold correct values --
+    a bug that corrupts a variable shared symmetrically by two buckets (e.g.
+    a stale ``prev_base_pv`` feeding both ``mtm`` and ``harvest``) cancels in
+    this sum exactly as cleanly as a correct run does. Verified directly:
+    that specific mutant corrupts ``harvest`` by six orders of magnitude with
+    ``mtm`` absorbing the mirror-image error, and ``cross`` stays at float
+    noise (~1e-10) throughout, ``ok`` reporting True.
 
-    ``cross`` is retained here as a completeness check on the arithmetic, not
-    as a tolerance band for missing economics: a value beyond float noise
-    means one of the three buckets is miscomputed -- e.g. a carry term
-    double-counted or dropped, or a base/full notional mismatch across the
-    day boundary -- not that the ledger split omits a real second-order
-    effect. The pass/fail call is the tight absolute bound below
-    (``max|cross| < CROSS_ABS_TOL_USD``): checked directly against a
-    dropped-carry-term mutant, a correct run holds |cross| at ~1e-10 (float
-    noise) with frac ~1e-17, while the mutant jumps to |cross| ~1e1-1e2 with
-    frac ~1e-5..1e-4 -- twelve orders of magnitude apart on both, an easy
-    separation. ``max_abs_cross_frac`` is kept in the return value for that
-    reason: it is a genuine discriminator. ``cross_trend_t`` is kept too, but
-    do not lean on it as one -- against the same mutant it stayed in the same
-    20-60 range as a fully healthy run, because a trend fit against a
-    residual near the float-noise floor is dominated by rounding structure,
-    not by the bug. It is diagnostic context, not a second gate.
+    What this function actually checks, then, is only that the day's five
+    numbers were added up without a transcription slip in the summation
+    itself (e.g. a sign flip in the ``cross`` line, or ``total`` summing the
+    wrong columns) -- a real but narrow guarantee. It says NOTHING about
+    whether carry, mtm or harvest individually hold the right value, and
+    should not be read that way. For that, see the closed-form value tests
+    in ``tests/test_strikeless_vol_replication.py`` (harvest and carry each
+    checked against an independent closed-form expectation derived from the
+    synthetic world's own PV formula) -- those are what catch a bug like the
+    one above; this function cannot.
+
+    ``max_abs_cross`` and ``max_abs_cross_frac`` (the former as a fraction of
+    the path's total absolute P&L) are the numbers the pass/fail bound below
+    is built from, both returned so a caller can reproduce or log the gate.
+    ``cross_trend_t`` is returned too but is not part of the gate and is not
+    a reliable discriminator at this scale -- against the same mutant it sat
+    in the same range (tens) as a fully healthy run, because a linear-trend
+    fit against a residual already at the float-noise floor is dominated by
+    rounding structure, not by whatever produced the residual.
     """
     if ledger.empty:
-        return {"max_abs_cross_frac": 0.0, "cross_trend_t": 0.0, "ok": True}
+        return {
+            "max_abs_cross": 0.0,
+            "max_abs_cross_frac": 0.0,
+            "cross_trend_t": 0.0,
+            "ok": True,
+        }
     total = ledger["total"].abs().sum()
     cross_abs = ledger["cross"].abs()
     max_abs_cross = float(cross_abs.max())
-    frac = float(cross_abs.sum() / total) if total else 0.0
+    frac = float(max_abs_cross / total) if total else 0.0
     cum = ledger["cross"].cumsum().to_numpy()
     x = np.arange(len(cum), dtype=float)
     if len(cum) > 2 and np.std(cum) > 0:
@@ -213,6 +242,7 @@ def reconcile(ledger: pd.DataFrame) -> dict:
     else:
         t = 0.0
     return {
+        "max_abs_cross": max_abs_cross,
         "max_abs_cross_frac": frac,
         "cross_trend_t": t,
         "ok": bool(max_abs_cross < CROSS_ABS_TOL_USD),
