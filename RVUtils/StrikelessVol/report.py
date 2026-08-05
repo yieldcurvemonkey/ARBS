@@ -108,9 +108,15 @@ def residual_stats(daily_pnl: pd.Series, spread_changes: pd.Series) -> dict:
     Regressing the P&L on ``d(spread)`` and looking at what is left removes
     exactly the term all three share. What remains for a convex book is
     ``~0.5*Gamma*move**2``, which is strictly signed -- positive for long
-    convexity, negative for short -- so ``resid_skew`` is expected to be
-    strongly positive for the long package, its mirror image for the
-    steepener, and ~0 for anything without gamma.
+    convexity, negative for short. Measured on the study pair that is what
+    happens (+2.4767 long, -2.6558 mirror), and the zero-gamma twin correctly
+    returns NaN.
+
+    **It does not follow that the number tracks gamma in general.** Two placebo
+    pairs with identical measured gamma (+20.31 and +20.34 $/bp^2, a tenth of
+    the study pair's) printed +0.7835 and -0.4451 -- opposite signs for the
+    same convexity. Whatever this statistic reads at low signal, it is not
+    gamma. See :func:`mirror_split` for the domain where it can be trusted.
 
     ``spread_changes`` must be the change in the pair's OWN slope (a placebo
     pair is regressed on the placebo's slope, not on the study pair's).
@@ -122,16 +128,19 @@ def residual_stats(daily_pnl: pd.Series, spread_changes: pd.Series) -> dict:
       with the opposite ``sign`` -- over reading ``resid_skew`` alone. The
       quadratic term is strictly signed but MODEL MISFIT IS NOT REMOVED by the
       regression, and unpaired the two are indistinguishable. Differencing
-      against the mirror cancels the misfit, which is common to both.
+      cancels contamination that is COMMON to both; it does not cancel
+      position-odd noise, and on one real placebo it doubled the error instead
+      (see :func:`mirror_split`).
     * Respect :data:`RESID_R2_SIGN_USABLE` (0.93) and :data:`RESID_R2_FLOOR`
       (0.90). At R^2 0.882 -- a high R^2 by ordinary standards -- the sign was
       measured to be unreliable.
 
-    **``resid_skew``'s magnitude is not a convexity scale.** It is closer to a
-    fit-quality scale: the study pair and its mirror print ~2.5-2.7 at R^2
-    ~0.956 while the placebos print 0.45-0.78 at R^2 0.86-0.88, and the
-    ordering there tracks how well the linear model fits, not how much gamma
-    each book holds. Rank on the paired sign, never on ``|resid_skew|``.
+    **``resid_skew``'s magnitude is not a convexity scale.** The study pair and
+    its mirror print ~2.5-2.7 at R^2 ~0.956 while the placebos print 0.45-0.89
+    at R^2 0.86-0.88 on a tenth the gamma -- but the two placebos have the SAME
+    gamma as each other and print different magnitudes AND different signs, so
+    the ordering is not tracking convexity. Rank on the paired sign inside the
+    usable domain, never on ``|resid_skew|``.
 
     **Scope note.** In this study ``daily_pnl`` is the ledger's ``total``,
     which includes carry and transaction costs, whereas the ``0.5*Gamma*x**2``
@@ -187,20 +196,37 @@ def mirror_split(
     misfit. Differencing them cancels everything that is not strictly signed in
     the position, which is exactly what an unpaired read fails to do.
 
-    Task 13's calibration is the argument for it. Unpaired, ``resid_skew``
-    printed the WRONG SIGN (-0.4451) on a placebo flattener whose linear fit
-    was poorer (R^2 0.882), because the residual there carries model misfit and
-    not just gamma. Paired, the misfit is common to both legs of the comparison
-    and drops out.
+    Task 13's calibration is the argument for it, AND the measurement of its
+    limits. Both are load-bearing; read both before using this.
 
-    Expected behaviour: ``split ~ 2 * |resid_skew|`` and strongly signed for a
-    genuinely convex book (the study pair gives +2.4767 - (-2.6558) = +5.13);
-    ``split ~ 0`` for a book whose apparent asymmetry is misfit rather than
-    convexity.
+    *What pairing fixes.* Unpaired, ``resid_skew`` printed the WRONG SIGN
+    (-0.4451) on a placebo flattener. Where the contaminating asymmetry is
+    COMMON to a book and its mirror -- ordinary model misfit -- differencing
+    removes it, which is pinned synthetically by
+    ``test_mirror_split_cancels_misfit_that_fools_the_unpaired_read``.
+
+    *What it does not fix, measured.* Running that same placebo's actual mirror
+    did NOT rescue it. The steepener printed +0.3846, a near-exact reflection
+    of the flattener's -0.4451, so the asymmetry there was already ODD IN THE
+    POSITION and differencing **doubled** it: ``split = -0.8296``, still the
+    wrong sign. Pairing removes common contamination; it cannot remove
+    position-odd noise.
+
+    *The domain, measured directly.* On the study pair (Gamma = 204 $/bp^2,
+    R^2 0.956) the split is decisive: +2.4767 - (-2.6558) = **+5.13**. On the
+    two placebos (Gamma = 20 $/bp^2, R^2 0.86-0.88) it is not: they have
+    **identical gamma to within 0.2% (+20.31 and +20.34) and receive OPPOSITE
+    signs** (+1.68 and -0.83). At a tenth the convexity the sign carries no
+    information.
+
+    So: use this to CONFIRM the sign of a structure already believed convex,
+    in the high-Gamma/high-R^2 regime, reporting ``min_r2`` (and the package's
+    gamma) alongside. Do not use it to DISCOVER convexity in a marginal
+    structure -- the placebo pair is the counterexample.
 
     ``usable`` reports whether BOTH fits clear :data:`RESID_R2_SIGN_USABLE`.
     Treat a False as "this comparison does not support a sign", not as a
-    negative result.
+    negative result. Note it correctly rejects both placebos.
     """
     lo = residual_stats(pnl_long, spread_changes)
     sh = residual_stats(pnl_short, spread_changes)
