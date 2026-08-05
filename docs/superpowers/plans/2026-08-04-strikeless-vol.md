@@ -2698,7 +2698,9 @@ git -C C:\Users\chris\clee\ARBS-sv commit -m "feat(sv): path-wise replication wi
   - `report.distribution_stats(daily_pnl: pd.Series) -> dict` with `sharpe_annualised`, `skew`, `kurtosis`, `max_drawdown`, `daily_pnl_vol`.
   - `report.vol_beta(monthly_pnl: pd.Series, vol_changes: pd.Series) -> dict` with `corr`, `beta`, `n`.
 
-**This task is a gate.** The spec requires that a faithful static-long reproduction recovers the published distributional signature: Sharpe roughly 0.05–0.35 by pair, daily P&L skew ≈ 0 (versus ≈ −3 for a short 1m10y straddle), monthly P&L correlation to Δ1y10y vol ≈ +26%. **The Sharpe point estimate is not the test — the distribution is.** If skew comes out materially negative or the vol correlation is near zero or negative, the greeks or the ledgers are wrong and Tasks 14+ do not start.
+> **SUPERSEDED — READ THIS FIRST.** The gate described in this task was **run, and its criteria were measured non-discriminating.** A DV01-matched **zero-convexity twin** (constant-maturity flattener, no aging, no gamma, zero harvest) clears skew, Sharpe *and* vol-correlation with **better** numbers than the real package (skew +0.288 vs +0.087; vol-corr +0.613 vs +0.635; Sharpe +0.228 vs +0.046, inside the published band the real book misses), and the short-convexity **steepener** passes the skew criterion too (−0.0815). The instrument carries an unhedged first-order slope exposure holding ~95.6% of its daily variance, so its distribution *is* the slope's distribution, and `corr(−Δspread, Δvol)` reproduces the twin's vol correlation to four decimals. The twin is committed as a runnable null model. The criteria below are retained as the historical record of what was tried; **do not reinstate them, and do not record `harvest_to_mtm`** (renamed `harvest_flow_ratio` / `harvest_pnl_share` — see Task 18). Downstream work proceeds on the mechanism evidence listed in the design spec's superseded-positive-control section, not on this signature.
+
+**This task was written as a gate.** The spec originally required that a faithful static-long reproduction recover the published distributional signature: Sharpe roughly 0.05–0.35 by pair, daily P&L skew ≈ 0 (versus ≈ −3 for a short 1m10y straddle), monthly P&L correlation to Δ1y10y vol ≈ +26%, with "the distribution, not the Sharpe" as the test. See the banner above for why that framing did not survive contact with the instrument.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -2738,7 +2740,9 @@ def test_vol_beta_recovers_a_planted_relationship():
 @pytest.mark.network
 @pytest.mark.slow
 def test_static_long_flattener_has_the_long_vol_signature():
-    """THE GATE. A long-convexity position cannot have short-vol skew."""
+    """HISTORICAL. These assertions were measured non-discriminating — the
+    zero-convexity twin passes all of them with better numbers. Retained only
+    as the record of what was tried; see the SUPERSEDED banner above."""
     from scripts.sv_static_long_control import run_control
 
     res = run_control(
@@ -2969,7 +2973,7 @@ conda run -n stir python scripts/sv_static_long_control.py
 conda run -n stir python -m pytest tests/test_strikeless_vol_control.py -v -m network
 ```
 
-Record in the commit message: Sharpe, skew, kurtosis, max drawdown, `vol_corr`, `harvest_to_mtm`, and the reconciliation dict. Compare against the published anchors (Sharpe 0.05–0.35, skew ≈ 0, vol correlation ≈ +26%).
+Record in the commit message: Sharpe, skew, kurtosis, max drawdown, `vol_corr`, `harvest_flow_ratio`, `harvest_pnl_share`, and the reconciliation dict — **and the same statistics for the zero-convexity twin beside them**, since the twin clearing the published anchors more comfortably than the real package is the finding, not a footnote.
 
 **If skew is materially negative, or `vol_corr` ≤ 0, STOP.** Do not proceed to Task 14. Debug in this order: (1) `reconcile` — is the plug small and trendless? (2) the sign of `daily_roll_usd` on an inverted curve — a flattener must bleed; (3) `PAYER_NOTIONAL_SIGN`; (4) whether `CurvePricer.pv` is repricing the *aged* legs rather than rebuilding constant-maturity ones each day (rebuilding destroys the convexity and produces exactly a zero-gamma, wrong-skew result).
 
@@ -4197,6 +4201,15 @@ def _extract_trades(signals: pd.DataFrame, ledger: pd.DataFrame) -> pd.DataFrame
     rows = []
     for entry, exit_, s in blocks:
         seg = ledger.loc[entry:exit_]
+        # NOTE (amended after Task 13): these are DOLLARS, not bp. The ledger
+        # buckets are dollar P&L, and the divisor a reader would assume ($100k
+        # of DV01) is not the realised book size -- Task 13 measured a mean of
+        # ~$98.8k with a daily range of $52.7k-$148.9k. Either rename these to
+        # *_usd, or divide by the REALISED average DV01 per trade rather than
+        # by the design notional. Do not leave dollars wearing a bp name, and
+        # do not compare dollar P&L across roll frequencies or trigger widths
+        # without normalising -- a regression beta of P&L on the spread is the
+        # dspread^2-weighted DV01, not the book's size.
         rows.append({"entry": entry, "exit": exit_, "sign": s,
                      "gross_bp": float(seg[["carry", "harvest", "mtm", "cross"]].sum().sum()),
                      "cost_bp": float(-seg["cost"].sum()),
@@ -4313,6 +4326,8 @@ git -C C:\Users\chris\clee\ARBS-sv commit -m "feat(sv): backtest engine, config 
 1. **Short-dated placebo** — the identical rulebook on `PLACEBO_PAIRS` (1y5y/2y5y, 2y2y/3y2y), where the convexity story should not hold. A surviving signal there is a calendar/curve artifact.
 2. **Shuffled-vol placebo** — block-bootstrap the vol series (preserving its autocorrelation) and re-run. The valuation switch must degrade.
 3. **Sign-mirror** — every config run with the sign reversed. If both directions "work", the P&L is coming from something other than the stated mechanism.
+
+   **Amended after Task 13 — this is arithmetically vacuous for a *static* book and must be scoped to the conditional rule.** `simulate` was measured exactly antisymmetric in `sign`: per-unit DV01 is sign-invariant, notionals flip, PV and theta are linear in notionals, the trigger reads a sign-independent constant-maturity rate, and cost is a magnitude fee. So `P&L_short = −P&L_long_gross + cost` identically, and both directions cannot "work" as a matter of arithmetic rather than of evidence. Run the sign-mirror **only on the Task 17 conditional rule**, where the signal's timing — not the engine — decides direction, and where both sides genuinely can win or lose together.
 4. **Confound alternatives** for whatever config wins: duration-only (long the long leg outright, DV01-matched to the package), PC1-only (the slope's projection on the first principal component of the curve), and pure-carry (hold whichever sign has positive roll). If the winner does not beat all three, the vol story is not what is paying.
 
 - [ ] **Step 1: Write the failing test**
