@@ -29,9 +29,19 @@ for any book carrying the same DV01, convex or not.
 
 ``distribution_stats`` and ``vol_beta`` remain correct and useful as
 DESCRIPTIONS of a P&L series -- they are used throughout the study for exactly
-that. They are not evidence of convexity. For that use :func:`residual_stats`,
-which removes the shared linear term first, and read its docstring for the
-conditions under which even it is usable.
+that. They are not evidence of convexity.
+
+**Nor is anything else in this module.** :func:`residual_stats` was built as
+the replacement and then failed its own calibration (1-for-2 on the cases where
+the truth was independently known), and :func:`mirror_split` was built to
+rescue it and turned out to be an arithmetic x2 rescaling. Both are kept as a
+committed record of that, with their limits in their docstrings, and both are
+report-only.
+
+**To ask whether a package is convex, call** :func:`greeks.package_gamma` --
+it answers directly, from a bump-and-reprice, and it settled the case these
+statistics could not in a single call. **To ask whether that convexity was
+realised, read the ledger's ``harvest`` bucket.**
 """
 from __future__ import annotations
 
@@ -79,16 +89,18 @@ def distribution_stats(daily_pnl: pd.Series) -> dict:
 
 RESIDUAL_DEGENERATE_FRAC: float = 1e-6
 
-# Operational cuts on the linear fit, calibrated in Task 13 rather than chosen.
-# The residual is a convexity read only to the extent the linear model actually
-# fits, and the calibration found the boundary is NOT where ordinary statistical
-# habits put it: R^2 = 0.882 is a high R^2 by most standards and is exactly
-# where the sign became a coin flip (a flattener printed resid_skew -0.4451,
-# the wrong sign for a long-convexity book). The two study-pair runs sat at
-# 0.956/0.958 and behaved perfectly. There is no data between 0.882 and 0.956,
-# so these cuts are drawn conservatively inside that gap.
-RESID_R2_SIGN_USABLE: float = 0.93   # below this, do not trust the SIGN
-RESID_R2_FLOOR: float = 0.90         # below this, do not read the number at all
+# Reporting thresholds on the linear fit. **These are NOT a validated gate.**
+#
+# They were drawn after the fact, inside the gap between the only two R^2
+# regimes observed: 0.882, where the sign came out wrong, and 0.956, where it
+# came out right. That is a 1-vs-1 in-sample separator fitted to the very rows
+# that failed, never tested on a case it was not drawn from -- and in this
+# sample Gamma is perfectly confounded with R^2 (the high-R^2 rows are also the
+# 10x-Gamma rows), so the cut cannot even be attributed to fit quality rather
+# than signal strength. Treat them as a reminder to look at min_r2, not as a
+# criterion anything may be decided on.
+RESID_R2_SIGN_USABLE: float = 0.93   # below this the sign is certainly not readable
+RESID_R2_FLOOR: float = 0.90         # below this do not report the number at all
 
 
 def residual_stats(daily_pnl: pd.Series, spread_changes: pd.Series) -> dict:
@@ -121,26 +133,29 @@ def residual_stats(daily_pnl: pd.Series, spread_changes: pd.Series) -> dict:
     ``spread_changes`` must be the change in the pair's OWN slope (a placebo
     pair is regressed on the placebo's slope, not on the study pair's).
 
-    **Use it paired, and only where the fit is good.** Two calibrated
-    conditions, both from Task 13:
+    **REPORT IT; DO NOT ACT ON IT.** After calibration this statistic may be
+    computed and shown alongside ``min_r2`` and the package's measured gamma.
+    It may **not** serve as a gate, a ranking key, evidence for or against
+    convexity, or a tiebreaker. The reasons are cumulative, and each is
+    measured rather than argued:
 
-    * Prefer :func:`mirror_split` -- the difference against the same book run
-      with the opposite ``sign`` -- over reading ``resid_skew`` alone. The
-      quadratic term is strictly signed but MODEL MISFIT IS NOT REMOVED by the
-      regression, and unpaired the two are indistinguishable. Differencing
-      cancels contamination that is COMMON to both; it does not cancel
-      position-odd noise, and on one real placebo it doubled the error instead
-      (see :func:`mirror_split`).
-    * Respect :data:`RESID_R2_SIGN_USABLE` (0.93) and :data:`RESID_R2_FLOOR`
-      (0.90). At R^2 0.882 -- a high R^2 by ordinary standards -- the sign was
-      measured to be unreliable.
+    1. It is **1-for-2** on the only configurations where the truth is known
+       independently: two placebo pairs with the same gamma, one right sign and
+       one wrong.
+    2. :func:`mirror_split` **adds nothing** -- ``simulate`` is exactly
+       antisymmetric in ``sign``, so pairing is a x2 rescaling that cannot
+       change a sign. The study pair and its mirror are one observation.
+    3. The R^2 cuts are a **1-vs-1 in-sample separator** drawn because those
+       rows failed, never tested out of sample, with gamma confounded with
+       R^2 across the whole sample.
+    4. It is **dominated** by :func:`greeks.package_gamma`, which answers the
+       convexity question directly and settled the placebo case in one call,
+       and by the ledger's ``harvest`` bucket, which answers whether that
+       convexity was realised. Both are cheaper and neither can be fooled by
+       the residual's shape.
 
-    **``resid_skew``'s magnitude is not a convexity scale.** The study pair and
-    its mirror print ~2.5-2.7 at R^2 ~0.956 while the placebos print 0.45-0.89
-    at R^2 0.86-0.88 on a tenth the gamma -- but the two placebos have the SAME
-    gamma as each other and print different magnitudes AND different signs, so
-    the ordering is not tracking convexity. Rank on the paired sign inside the
-    usable domain, never on ``|resid_skew|``.
+    Its value is as a committed record of a measured defect in the original
+    distributional criteria (see this module's docstring), not as a tool.
 
     **Scope note.** In this study ``daily_pnl`` is the ledger's ``total``,
     which includes carry and transaction costs, whereas the ``0.5*Gamma*x**2``
@@ -188,45 +203,40 @@ def mirror_split(
     pnl_short: pd.Series,
     spread_changes: pd.Series,
 ) -> dict:
-    """The paired difference ``resid_skew(book) - resid_skew(its mirror)``.
+    """``resid_skew(book) - resid_skew(its mirror)``. **A x2 rescaling. Adds nothing.**
 
-    **This, not ``resid_skew`` on its own, is the test statistic.** A book and
-    its sign-flipped mirror share the same underlying, the same path, the same
-    linear slope exposure up to sign, and -- critically -- the same model
-    misfit. Differencing them cancels everything that is not strictly signed in
-    the position, which is exactly what an unpaired read fails to do.
+    Kept only as committed documentation of a measured dead end. It was
+    introduced on the theory that a book and its sign-flipped mirror share
+    their model misfit, so differencing would cancel the contamination that
+    made the unpaired ``resid_skew`` print a wrong sign. **That theory is
+    false, and the reason is structural rather than empirical.**
 
-    Task 13's calibration is the argument for it, AND the measurement of its
-    limits. Both are load-bearing; read both before using this.
+    ``simulate`` is EXACTLY ANTISYMMETRIC in ``sign``. Per-unit ``dv01`` is
+    sign-invariant (numerator and denominator both flip); the notionals flip;
+    ``pv`` and ``theta`` are linear in the notionals; the trigger reads the
+    sign-independent constant-maturity rate, so the two runs hedge on the same
+    dates; and ``cost`` is a magnitude fee. Every P&L bucket therefore negates
+    exactly and only the cost ledger is shared:
 
-    *What pairing fixes.* Unpaired, ``resid_skew`` printed the WRONG SIGN
-    (-0.4451) on a placebo flattener. Where the contaminating asymmetry is
-    COMMON to a book and its mirror -- ordinary model misfit -- differencing
-    removes it, which is pinned synthetically by
-    ``test_mirror_split_cancels_misfit_that_fools_the_unpaired_read``.
+        resid_short = -resid_long - resid_cost
+        split       = resid_long - resid_short  ~=  2 * resid_long
 
-    *What it does not fix, measured.* Running that same placebo's actual mirror
-    did NOT rescue it. The steepener printed +0.3846, a near-exact reflection
-    of the flattener's -0.4451, so the asymmetry there was already ODD IN THE
-    POSITION and differencing **doubled** it: ``split = -0.8296``, still the
-    wrong sign. Pairing removes common contamination; it cannot remove
-    position-odd noise.
+    So the "mirror" is not a second book carrying a common contaminant -- it
+    is the arithmetic negation of the first, and there is nothing to cancel.
+    Measured: on a synthetic engine-mirror with no costs the ratio
+    ``split / resid_long`` is **2.000000** exactly; with costs 2.12; on the
+    three real 2017-2026 runs 2.072 / 2.140 / 1.864. Pinned by
+    ``test_the_mirror_is_the_negation_so_pairing_only_rescales``.
 
-    *The domain, measured directly.* On the study pair (Gamma = 204 $/bp^2,
-    R^2 0.956) the split is decisive: +2.4767 - (-2.6558) = **+5.13**. On the
-    two placebos (Gamma = 20 $/bp^2, R^2 0.86-0.88) it is not: they have
-    **identical gamma to within 0.2% (+20.31 and +20.34) and receive OPPOSITE
-    signs** (+1.68 and -0.83). At a tenth the convexity the sign carries no
-    information.
+    A monotone positive rescaling cannot change a sign, so pairing **cannot
+    rescue a wrong one** -- and indeed did not: the placebo that printed
+    -0.4451 unpaired printed -0.8296 paired. The study pair and its mirror are
+    ONE observation, not two.
 
-    So: use this to CONFIRM the sign of a structure already believed convex,
-    in the high-Gamma/high-R^2 regime, reporting ``min_r2`` (and the package's
-    gamma) alongside. Do not use it to DISCOVER convexity in a marginal
-    structure -- the placebo pair is the counterexample.
-
-    ``usable`` reports whether BOTH fits clear :data:`RESID_R2_SIGN_USABLE`.
-    Treat a False as "this comparison does not support a sign", not as a
-    negative result. Note it correctly rejects both placebos.
+    Use :func:`greeks.package_gamma` to ask whether a package is convex -- it
+    answers directly, and it settled the placebo case in a single call. Use
+    the ledger's ``harvest`` bucket to ask whether that convexity was actually
+    realised. Neither goes through this function.
     """
     lo = residual_stats(pnl_long, spread_changes)
     sh = residual_stats(pnl_short, spread_changes)

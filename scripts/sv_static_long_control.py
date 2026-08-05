@@ -24,12 +24,18 @@ correlation (+0.6129 vs +0.6353). ``vol_corr`` in particular is a property of
 the market's slope/vol comovement that anything carrying this DV01 inherits;
 it is not a property of gamma.
 
-The statistics that do separate them, and the ones downstream work should
-rank on, are :func:`report.residual_stats`' ``resid_skew`` **as a paired
-difference against the position's mirror** (:func:`report.mirror_split`, and
-only where the linear fit is good enough -- see its thresholds), the SIGN OF
-CARRY, and the harvest flow ratio. See the Task 13 report for the seven-way
-comparison.
+**What to use instead.** :func:`greeks.package_gamma` answers "is this package
+convex?" directly, from a bump-and-reprice, and the ledger's ``harvest`` bucket
+answers "was that convexity realised?". Those two, plus the SIGN OF CARRY and
+the harvest flow ratio, are what downstream work should rank on.
+
+:func:`report.residual_stats` was built as the distributional replacement and
+then failed its own calibration -- two placebo pairs with the same measured
+gamma received opposite signs -- and :func:`report.mirror_split` was built to
+rescue it and turned out to be an arithmetic x2 rescaling (``simulate`` is
+exactly antisymmetric in ``sign``). Both are computed and reported here, and
+**neither may be used as a gate, a ranking key, or evidence about convexity.**
+See the Task 13 report and those functions' docstrings.
 
 The roll is implemented by SEGMENTATION: one ``CurvePricer`` and one
 ``simulate`` call per roll period, each holding one package aged from its own

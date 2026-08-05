@@ -143,15 +143,23 @@ def test_residual_stats_reports_nan_rather_than_noise_on_a_purely_linear_book():
     assert np.isnan(out["resid_kurtosis"])
 
 
-def test_mirror_split_cancels_misfit_that_fools_the_unpaired_read():
-    """The reason the paired difference is the test statistic and not advice.
+def test_mirror_split_cancels_a_misfit_common_to_both_books():
+    """Tests the DIFFERENCE OPERATOR on a structure this pipeline cannot produce.
 
-    Plants a book that is linear + convex + a NON-CONVEX asymmetric misfit term
-    (a cubic in the driver, which the linear regression cannot remove and which
-    is not part of the position's convexity). The misfit is large enough to
-    flip the unpaired ``resid_skew`` sign on the convex book -- exactly the
-    failure measured on the placebo pair. Differencing against the mirror
-    cancels it, because misfit is common to both while the quadratic is not.
+    **Do not read this as a model of a real mirror.** It plants a misfit term
+    with the SAME sign in both books, and differencing duly cancels it, which
+    is a correct test of the arithmetic and nothing more.
+
+    A real ``sign=STEEPENER`` run does not look like this. ``simulate`` is
+    exactly antisymmetric in ``sign``, so a real mirror's misfit is the
+    NEGATION of the original's rather than a copy, and there is nothing to
+    cancel -- see ``test_the_mirror_is_the_negation_so_pairing_only_rescales``
+    and ``report.mirror_split``'s docstring for why that makes the function a
+    x2 rescaling and hence report-only.
+
+    Kept because the operator's behaviour on common-mode contamination is worth
+    pinning, and because the false premise that motivated ``mirror_split``
+    should stay visible beside the test that encoded it.
     """
     rng = np.random.default_rng(11)
     ds = pd.Series(rng.normal(0.0, 1.0, 4000))
@@ -173,8 +181,55 @@ def test_mirror_split_cancels_misfit_that_fools_the_unpaired_read():
     )
 
 
+def test_the_mirror_is_the_negation_so_pairing_only_rescales():
+    """Why ``mirror_split`` adds nothing: ``simulate`` is antisymmetric in sign.
+
+    Per-unit ``dv01`` is sign-invariant (numerator and denominator both flip),
+    the notionals flip, ``pv``/``theta`` are linear in the notionals, and the
+    trigger reads a sign-independent constant-maturity rate -- so both runs
+    hedge on the same dates and every P&L bucket negates EXACTLY. ``cost`` is a
+    magnitude fee and is the only shared additive term.
+
+    Consequence: ``split == 2 * resid_skew_long`` with no costs, and a monotone
+    positive rescaling near it with costs. A rescaling cannot change a sign, so
+    pairing cannot rescue one -- which is exactly what was observed on the real
+    placebo (-0.4451 unpaired became -0.8296 paired).
+    """
+    from RVUtils.StrikelessVol.conventions import STEEPENER
+    from RVUtils.StrikelessVol.costs import CostSchedule
+
+    rng = np.random.default_rng(3)
+    ctx = _BothLegsDriftCtx(list(np.cumsum(rng.normal(0.0, 6.0, 600))))
+    ds = pd.Series([ctx.rate(d, "long") for d in ctx.dates],
+                   index=ctx.dates).diff() * 1e4
+
+    flat = simulate(ctx, ctx.dates, ReplicationConfig(trigger_bp=25.0), FREE)
+    steep = simulate(ctx, ctx.dates,
+                     ReplicationConfig(trigger_bp=25.0, sign=STEEPENER), FREE)
+
+    for col in ("carry", "harvest", "mtm", "total"):
+        assert flat[col].to_numpy() == pytest.approx(
+            -steep[col].to_numpy(), abs=1e-9
+        ), f"{col} is not an exact negation under sign flip"
+
+    out = mirror_split(flat["total"], steep["total"], ds)
+    solo = residual_stats(flat["total"], ds)["resid_skew"]
+    assert out["split"] == pytest.approx(2.0 * solo, rel=1e-9)
+
+    # with costs the two runs share one additive term, so the ratio moves off
+    # 2 -- but stays a positive rescaling, which is the load-bearing property
+    sched = CostSchedule()
+    flat_c = simulate(ctx, ctx.dates, ReplicationConfig(trigger_bp=25.0), sched)
+    steep_c = simulate(ctx, ctx.dates,
+                       ReplicationConfig(trigger_bp=25.0, sign=STEEPENER), sched)
+    assert flat_c["cost"].to_numpy() == pytest.approx(steep_c["cost"].to_numpy())
+    ratio = (mirror_split(flat_c["total"], steep_c["total"], ds)["split"]
+             / residual_stats(flat_c["total"], ds)["resid_skew"])
+    assert 1.5 < ratio < 2.5
+
+
 def test_mirror_split_reports_unusable_below_the_calibrated_r2_cut():
-    """The thresholds are calibrated, so they have to be enforced somewhere."""
+    """The thresholds are reporting cuts, not a gate -- but they must still fire."""
     from RVUtils.StrikelessVol.report import RESID_R2_FLOOR, RESID_R2_SIGN_USABLE
 
     assert RESID_R2_FLOOR < RESID_R2_SIGN_USABLE  # floor is the looser cut
@@ -628,10 +683,18 @@ def test_the_book_stays_dv01_neutral_while_its_size_drifts(pricer):
     for d in hedged:
         assert long_dv01[d] + short_dv01[d] == pytest.approx(0.0, abs=1e-6)
 
-    # 3. but the SIZE drifts: it is not pinned to the target
+    # 3. the SIZE is free to drift, and does
     size = long_dv01.abs()
     assert size.max() / size.min() > 1.10
     assert not (size.between(0.99 * PACKAGE_DV01, 1.01 * PACKAGE_DV01)).all()
+
+    # 4. ...but it does NOT systematically shrink. This is the assertion that
+    #    actually refutes the withdrawn claim: the mean sits on the target, so
+    #    a ~10% average shortfall is excluded, not merely unmentioned. (On the
+    #    full 2017-2026 run the daily mean is $98,813 against $100,000, range
+    #    $52,672-$148,915; this fixture is one 14-month package, so the band
+    #    is looser here.)
+    assert size.mean() == pytest.approx(PACKAGE_DV01, rel=0.05)
 
 
 @pytest.mark.network
@@ -664,6 +727,80 @@ def test_the_simulated_position_gains_when_the_curve_flattens(pricer, real_curve
     beta = float(np.polyfit(df["d"], df["mtm"], 1)[0])
     assert beta < -50_000.0  # ~ -$100k per bp of steepening, by construction
     assert df["mtm"].corr(df["d"]) < -0.9
+
+
+@pytest.mark.network
+@pytest.mark.slow
+def test_equal_gamma_pairs_receive_opposite_resid_skew_signs():
+    """**The counterexample that retired ``resid_skew``. Do not delete it.**
+
+    ``greeks.package_gamma`` measures convexity directly. Measured on real
+    GSQUANT curves, the two ``universe.PLACEBO_PAIRS`` have the SAME gamma to
+    within 0.2% -- and ``resid_skew`` gives them OPPOSITE SIGNS. That is not a
+    marginal disagreement; it is the statistic reading noise at this signal
+    level, and it is why ``residual_stats``/``mirror_split`` are report-only.
+
+    This test pins the gamma half, which is the cheap and decisive half. The
+    signs come from full 2017-2026 runs (~15 min each) and are recorded here
+    rather than recomputed::
+
+        pair                    Gamma $/bp^2   resid_skew   mirror split
+        USD 10Y10Y/20Y10Y             203.86      +2.4767       +5.1325
+        placebo USD 1Y5Y/2Y5Y          20.31      +0.7835       +1.6769
+        placebo USD 2Y2Y/3Y2Y          20.34      -0.4451       -0.8296
+
+    Reproduce the right-hand columns with::
+
+        run_control(market="USD", start=date(2017,1,3), end=date(2026,8,3),
+                    pair=p, sign=s, with_vol=False)["residual"]
+
+    Note the structural point the ratio makes: 203.86/20.31 = 10.04, and the
+    study pair's legs are a 10-year forward gap against the placebos' 1-year.
+    Gamma tracks the forward gap, so this is a property of the instruments and
+    not an artefact of one probe date.
+    """
+    import datetime as _dt
+    import os
+
+    from RVUtils.StrikelessVol.greeks import build_package, package_gamma
+    from RVUtils.StrikelessVol.universe import PLACEBO_PAIRS
+
+    os.environ.setdefault("ARBS_SUPABASE_ENABLED", "0")
+    from MDP.IRSwaps.IRSwapsMDP import IRSwapsMDP
+
+    probe = [_dt.date(y, 1, 15) for y in range(2017, 2027)]
+    raw = IRSwapsMDP(source="GSQUANT-RL").bulk_get_data(
+        {"curve_name": "USD-OIS", "timestamps": probe}
+    )
+    curves = {pd.Timestamp(k): v for k, v in raw.items()
+              if v is not None and k != "live"}
+    assert len(curves) >= 3, f"only {len(curves)} probe curves returned"
+
+    gamma = {}
+    for pair in (_usd_pair(), *PLACEBO_PAIRS):
+        gs = [
+            package_gamma(
+                curves[d],
+                build_package(curves[d], pair, package_dv01_usd=PACKAGE_DV01,
+                              sign=FLATTENER),
+                h_bp=25.0,
+            )
+            for d in sorted(curves)
+        ]
+        gamma[pair.name] = float(np.mean(gs))
+        # every flattener here is LONG convexity: the placebos are not secretly
+        # short, which is the alternative that would have exonerated -0.4451
+        assert min(gs) > 0.0, f"{pair.name} has non-positive gamma somewhere"
+
+    study = gamma[_usd_pair().name]
+    p1, p2 = (gamma[p.name] for p in PLACEBO_PAIRS)
+
+    # the two placebos are the same instrument class: same gamma...
+    assert p1 == pytest.approx(p2, rel=0.01)
+    # ...an order of magnitude below the study pair, tracking the forward gap
+    assert study / p1 == pytest.approx(10.0, rel=0.15)
+    # ...and yet resid_skew signed them +0.7835 and -0.4451 (see docstring).
+    assert study > 150.0 and 15.0 < p1 < 30.0
 
 
 @pytest.mark.network
@@ -761,8 +898,12 @@ def test_the_zero_convexity_twin_clears_the_old_gate_criteria():
 
 @pytest.mark.network
 @pytest.mark.slow
-def test_static_long_flattener_has_the_long_vol_signature():
+def test_the_original_gate_criteria_still_hold_but_do_not_discriminate():
     """The original Task 13 gate. **These assertions do not discriminate.**
+
+    Renamed from ``test_static_long_flattener_has_the_long_vol_signature``:
+    the function name is what pytest prints, and the old one asserted the
+    withdrawn claim on every run.
 
     Kept because it is a real end-to-end smoke test -- it runs the whole
     machinery on ten years of real curves and would catch a crash, an empty

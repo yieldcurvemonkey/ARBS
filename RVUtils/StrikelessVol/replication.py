@@ -223,6 +223,33 @@ class CurvePricer:
     roll date's curve) instead of inside a pricer whose whole contract is
     "these legs, aged".
 
+    **The book this holds is not a constant $100k of DV01, and that has one
+    operational consequence Task 14+ can trip on.** Both legs are struck to
+    ``package_dv01_usd`` on the inception curve, but the rebalancing rule fixes
+    DV01 *neutrality*, not DV01 *size* (it resizes the longer leg against the
+    shorter leg as held -- see ``simulate``'s hedge branch), so the size is free
+    to drift with both legs' repriced DV01s. Measured daily over 2017-2026 on
+    USD 10Y10Y/20Y10Y at a $100,000 target: mean **$98,813**, range **$52,672
+    to $148,915** (-47% to +49%), CV 0.161.
+
+        **Dollar P&L is therefore NOT comparable across roll frequencies or
+        trigger widths without normalising by the realised average DV01.**
+
+    Two corollaries worth stating because both were got wrong before they were
+    measured:
+
+    * The book does **not** systematically shrink over a roll period. It
+      averages within ~1.2% of target; it swings.
+    * **A regression coefficient of P&L on d(spread) is not the book's size.**
+      It is the ``d(spread)**2``-WEIGHTED mean DV01, ``E[D*ds^2]/E[ds^2]``,
+      because the big-move days carry nearly all the regression weight. Here
+      that weighted mean is **$87,061** against a fitted beta of **$89,910** --
+      within 3.2% -- while the arithmetic mean $98,813 is 9.9% away. The gap
+      exists because ``rho(D, ds^2) = -0.218``: the book is SMALLEST on the
+      biggest-move days, which is what sizing to neutrality against a
+      never-resized short leg produces when rates rise (the largest slope moves
+      in this sample came in 2022, as rates rose ~300bp).
+
     Every quantity the simulator asks for is exactly linear in the notionals,
     which is what lets ``simulate`` decompose the day into base and increment
     slices without any of them being an approximation:
@@ -425,9 +452,10 @@ class ZeroConvexityPricer:
 
     Why it is committed rather than left in a review note: it was built to
     audit Task 13's gate and it **passed every one of that gate's
-    distributional criteria, with better numbers than the real package** --
-    higher skew, comparable vol correlation, a Sharpe inside the published
-    band the real package misses. Those criteria therefore carry no
+    distributional criteria, on $0 of harvest across 0 hedges** -- better than
+    the real package on skew (+0.288 vs +0.087) and Sharpe (+0.228 vs +0.046),
+    effectively equal on the vol correlation (+0.6129 vs +0.6353), and a Sharpe
+    inside the published band the real package misses. Those criteria carry no
     information about convexity, and the only way to stop them being
     reinstated by a later reader is to keep the counterexample runnable in the
     repo next to the thing it refutes. See
