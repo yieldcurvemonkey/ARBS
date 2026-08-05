@@ -1415,6 +1415,24 @@ def causal_signals(
     # supplied series to BE that builder's output. Anything less goes into the
     # certificate as `drift_t(source uncertified)` with `changes_resid` named
     # among the uncertified inputs.
+    # A builder with no series to check it against would otherwise be a silent
+    # no-op -- an argument that reads as "I certified the source" and does
+    # nothing, which is the failure mode of this whole module in miniature.
+    if changes_resid_fn is not None and changes_resid is None:
+        raise ValueError(
+            "`changes_resid_fn=` was supplied without `changes_resid=`. The "
+            "builder is probed for causality, but what is certified is the "
+            "SERIES `drift_t` was built from, checked against that builder's "
+            "own output -- pass both."
+        )
+    if iv_bp_day_fn is not None and iv_bp_day is None:
+        raise ValueError(
+            "`iv_bp_day_fn=` was supplied without `iv_bp_day=`. The builder is "
+            "probed for causality, but what is certified is the SERIES `iv_z` "
+            "was built from, checked against that builder's own output -- pass "
+            "both."
+        )
+
     certified = ["residual_z"]
     uncertified = list(UNCERTIFIED_SIGNAL_INPUTS)
     input_audits: Dict[str, object] = {}
@@ -1465,6 +1483,28 @@ def causal_signals(
                 "builder beside a leaky series is the exact defect this check "
                 "exists to close, one level down. Pass the series that builder "
                 "returned."
+            )
+        if (audit["source_probe_reached"]
+                and not audit["source_responds_to_history"]
+                and np.isfinite(audit["source_max_abs_diff"])
+                and audit["source_max_abs_diff"] <= 0.0):
+            # Refused either way -- but calling this one "not causal" would be
+            # actively wrong for the honest reading, in a module whose subject
+            # is certificates that say more than they mean.
+            raise ValueError(
+                f"`{builder_kw}` is a POINTWISE transform of its input: its "
+                "head does not move when the tail is shocked, and its tail "
+                "does not move when the head is. Two things look like this. "
+                "(1) A genuinely pointwise builder -- a smoother with no "
+                "memory, or the identity, e.g. an `iv_bp_day` that IS the raw "
+                f"observable. Drop `{builder_kw}=`: with `{source_name}=` alone "
+                "the transform is still certified and the certificate reads "
+                f"`{column}(source uncertified)`, which is the honest verdict, "
+                "because no shock probe can certify a raw observable. (2) A fit "
+                "whose coefficients were estimated on the whole sample "
+                "elsewhere and are merely applied here -- a full-sample "
+                "residual wearing a builder's clothes, which is what this leg "
+                "exists to catch. The probe cannot tell them apart; you can."
             )
         raise ValueError(
             f"`{builder_kw}` is not causal, so `{column}` cannot be certified "

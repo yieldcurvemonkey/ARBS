@@ -953,6 +953,40 @@ def test_a_smoothed_iv_source_is_refused_once_its_builder_is_probed():
         "residual_z", "iv_z", "iv_bp_day"}
 
 
+@pytest.mark.parametrize("kw", ["changes_resid_fn", "iv_bp_day_fn"])
+def test_a_builder_without_its_series_is_not_silently_ignored(kw):
+    """An argument that reads as 'I certified the source' and does nothing is
+    this module's failure mode in miniature."""
+    spread, drivers = _factor_frame()
+    panel = _panel_for(spread, drivers)
+    with pytest.raises(ValueError, match="without"):
+        causal_signals(panel, SignalConfig(), spread_bp=spread, drivers=drivers,
+                       min_periods=252, **{kw: lambda y, d: pd.Series(y)})
+
+
+def test_a_pointwise_source_builder_is_refused_but_not_called_non_causal():
+    """The identity is perfectly causal and still cannot pass a probe whose
+    third leg asks whether the fit responds to its own history. Refusing it is
+    right (the same shape is a frozen-coefficient fit, which is a full-sample
+    residual in disguise); calling it "not causal" would not be."""
+    spread, drivers = _factor_frame()
+    rng = np.random.default_rng(33)
+    iv = pd.Series(60.0 + np.cumsum(rng.normal(0, 0.4, len(spread))),
+                   index=spread.index)
+    panel = _panel_for(spread, drivers)
+    panel["iv_z"] = residual_z(iv, window=252, min_periods=126)
+
+    with pytest.raises(ValueError, match="POINTWISE transform of its input"):
+        causal_signals(panel, SignalConfig(), spread_bp=spread, drivers=drivers,
+                       min_periods=252, iv_bp_day=iv,
+                       iv_bp_day_fn=lambda y, d: pd.Series(y), iv_bp_day_source=iv)
+
+    # and the honest route for a raw observable: no builder, transform certified
+    sig = causal_signals(panel, SignalConfig(), spread_bp=spread, drivers=drivers,
+                         min_periods=252, iv_bp_day=iv)
+    assert "iv_z(source uncertified)" in sig.attrs["certified_signal_inputs"]
+
+
 def test_a_source_builder_without_its_input_is_refused():
     spread, drivers = _factor_frame()
     rng = np.random.default_rng(32)
