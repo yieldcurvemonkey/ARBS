@@ -24,7 +24,11 @@ from RVUtils.StrikelessVol.backtest import (
     with_placebo,
 )
 from RVUtils.StrikelessVol.costs import FREE, MAKER, TAKER, CostSchedule
-from RVUtils.StrikelessVol.factors import expanding_residual, levels_regression
+from RVUtils.StrikelessVol.factors import (
+    expanding_residual,
+    levels_regression,
+    residual_z,
+)
 from RVUtils.StrikelessVol.replication import ReplicationConfig
 from RVUtils.StrikelessVol.report import (
     cost_table,
@@ -684,6 +688,113 @@ def _panel_for(spread, drivers):
         },
         index=idx,
     )
+
+
+# ------------------- the OTHER four signal inputs `residual_z` does not cover
+
+
+def _drift_t_from(changes_resid, window=63):
+    from RVUtils.StrikelessVol.factors import drift
+    return drift(changes_resid, window=window)["t_stat"]
+
+
+def test_a_certified_residual_z_does_not_certify_the_signal():
+    """`signal_state` reads five columns. The certificate must say which of them
+    it actually covers, because four passes of this module attached the
+    certificate to something adjacent to the object the signal is built from."""
+    spread, drivers = _factor_frame()
+    sig = causal_signals(_panel_for(spread, drivers), SignalConfig(),
+                         spread_bp=spread, drivers=drivers, min_periods=252)
+    assert sig.attrs["certified_signal_inputs"] == ("residual_z",)
+    assert set(sig.attrs["uncertified_signal_inputs"]) == {
+        "be_over_realized", "drift_t", "spread_vol_bp_day", "iv_z", "drivers"}
+
+
+def test_supplying_the_sources_certifies_drift_t_and_iv_z():
+    spread, drivers = _factor_frame()
+    rng = np.random.default_rng(11)
+    changes_resid = pd.Series(rng.normal(0, 1.0, len(spread)), index=spread.index)
+    iv = pd.Series(60.0 + np.cumsum(rng.normal(0, 0.4, len(spread))),
+                   index=spread.index)
+
+    panel = _panel_for(spread, drivers)
+    panel["drift_t"] = _drift_t_from(changes_resid)
+    panel["iv_z"] = residual_z(iv, window=252, min_periods=126)
+
+    sig = causal_signals(panel, SignalConfig(), spread_bp=spread, drivers=drivers,
+                         min_periods=252, changes_resid=changes_resid,
+                         iv_bp_day=iv)
+    assert set(sig.attrs["certified_signal_inputs"]) == {
+        "residual_z", "drift_t", "iv_z"}
+    assert set(sig.attrs["uncertified_signal_inputs"]) == {
+        "be_over_realized", "spread_vol_bp_day", "drivers"}
+    assert sig.attrs["drift_t_max_abs_diff"] == pytest.approx(0.0, abs=1e-8)
+    assert sig.attrs["iv_z_max_abs_diff"] == pytest.approx(0.0, abs=1e-8)
+
+
+def test_a_full_sample_iv_z_is_refused():
+    """A z on a full-sample sigma is exactly the look-ahead requirement 3
+    refuses -- one column across. It must not survive by living in `iv_z`."""
+    spread, drivers = _factor_frame()
+    rng = np.random.default_rng(12)
+    iv = pd.Series(60.0 + np.cumsum(rng.normal(0, 0.4, len(spread))),
+                   index=spread.index)
+
+    panel = _panel_for(spread, drivers)
+    panel["iv_z"] = (iv - iv.mean()) / iv.std(ddof=1)      # full-sample z
+
+    with pytest.raises(ValueError, match="iv_z"):
+        causal_signals(panel, SignalConfig(), spread_bp=spread, drivers=drivers,
+                       min_periods=252, iv_bp_day=iv)
+
+
+def test_a_drift_t_from_the_wrong_residual_is_refused():
+    spread, drivers = _factor_frame()
+    rng = np.random.default_rng(13)
+    honest_resid = pd.Series(rng.normal(0, 1.0, len(spread)), index=spread.index)
+    other_resid = pd.Series(rng.normal(0, 1.0, len(spread)), index=spread.index)
+
+    panel = _panel_for(spread, drivers)
+    panel["drift_t"] = _drift_t_from(other_resid)          # not what we declare
+
+    with pytest.raises(ValueError, match="drift_t"):
+        causal_signals(panel, SignalConfig(), spread_bp=spread, drivers=drivers,
+                       min_periods=252, changes_resid=honest_resid)
+
+
+def test_a_backfilled_warmup_is_refused_even_though_it_agrees_where_both_exist():
+    """The realistic accident: someone back-fills the warmup so the column has
+    no NaNs. Every date the recomputation defines agrees to float zero, so an
+    overlap-only check passes it -- while the first 62 days carry a statistic
+    the trade date could not have computed."""
+    spread, drivers = _factor_frame()
+    rng = np.random.default_rng(15)
+    changes_resid = pd.Series(rng.normal(0, 1.0, len(spread)), index=spread.index)
+
+    panel = _panel_for(spread, drivers)
+    honest = _drift_t_from(changes_resid)
+    panel["drift_t"] = honest.bfill()
+    assert honest.isna().sum() > 0 and panel["drift_t"].isna().sum() == 0
+
+    with pytest.raises(ValueError, match="drift_t"):
+        causal_signals(panel, SignalConfig(), spread_bp=spread, drivers=drivers,
+                       min_periods=252, changes_resid=changes_resid)
+
+
+def test_a_longer_drift_window_is_refused_as_a_different_statistic():
+    """Right source, wrong window: the column is a trailing statistic, just not
+    the declared one. A check that only asked 'is it trailing?' would pass it."""
+    spread, drivers = _factor_frame()
+    rng = np.random.default_rng(14)
+    changes_resid = pd.Series(rng.normal(0, 1.0, len(spread)), index=spread.index)
+
+    panel = _panel_for(spread, drivers)
+    panel["drift_t"] = _drift_t_from(changes_resid, window=126)
+
+    with pytest.raises(ValueError, match="drift_t"):
+        causal_signals(panel, SignalConfig(), spread_bp=spread, drivers=drivers,
+                       min_periods=252, changes_resid=changes_resid,
+                       drift_window=63)
 
 
 # ----------------------------- requirement 2: the hedge frozen at entry vintage

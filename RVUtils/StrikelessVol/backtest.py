@@ -77,6 +77,7 @@ import pandas as pd
 from RVUtils.StrikelessVol.costs import CostSchedule, charge_usd
 from RVUtils.StrikelessVol.factors import (
     WalkForwardFit,
+    drift,
     expanding_residual,
     residual_z,
 )
@@ -865,6 +866,52 @@ def audit_rolling_sigma_z(
             "n_compared": int(len(both))}
 
 
+def audit_trailing_statistic(
+    got, source, *, recompute: Callable[[pd.Series], pd.Series], label: str,
+    tol: float = ROLLING_Z_TOL,
+) -> dict:
+    """Certify that a panel column IS a trailing statistic of a named source.
+
+    The same shape as :func:`audit_rolling_sigma_z`, generalised, and it exists
+    for the same reason the betas check does: ``causal_signals`` certified
+    ``residual_z`` and nothing else, while ``signal_state`` consumes **five**
+    panel columns. A certified ``residual_z`` makes one of five inputs causal,
+    not the signal.
+
+    Of the other four, three are trailing by construction where they are built
+    -- ``spread_vol_bp_day`` and ``realized_vol_bp_day`` are
+    ``.diff().rolling(window).std()``, and ``be_over_realized`` is a pointwise
+    ratio of a contemporaneous breakeven to one of them. The two that are NOT
+    safe by construction are the ones whose own input can leak:
+
+    * ``drift_t`` -- :func:`factors.drift` takes a trailing rolling mean and
+      Newey-West t of ``changes_resid``, so its WINDOW is causal but its INPUT
+      is a regression residual, exactly the object that leaked through four
+      passes of this module.
+    * ``iv_z`` -- a z-score, and a z is only causal if its sigma is trailing.
+      A full-sample sigma overstated expectancy by 20-45% where it was measured.
+
+    Supply the source and this certifies the column against a recomputation,
+    raising in :func:`causal_signals` on mismatch rather than scoring it lower.
+    """
+    want = recompute(pd.Series(source).astype(float))
+    both = pd.concat([pd.Series(got).astype(float).rename("got"),
+                      pd.Series(want).astype(float).rename("want")], axis=1)
+    aligned = both.dropna()
+    n_got = int(both["got"].notna().sum())
+    if aligned.empty:
+        return {"matched": False, "max_abs_diff": float("nan"), "n_compared": 0,
+                "n_defined": n_got, "label": label}
+    diff = float((aligned["got"] - aligned["want"]).abs().max())
+    # A column defined on dates the recomputation is not is not "matching on the
+    # overlap" -- it is a different series that happens to agree where both
+    # exist, which is how an endpoint-only check passes a gapped file.
+    complete = bool(len(aligned) == n_got)
+    return {"matched": bool(complete and np.isfinite(diff) and diff <= tol),
+            "max_abs_diff": diff, "n_compared": int(len(aligned)),
+            "n_defined": n_got, "label": label}
+
+
 def entry_vintage_signals(
     panel: pd.DataFrame,
     cfg: SignalConfig,
@@ -978,6 +1025,11 @@ def causal_signals(
     refit_every: int = 1,
     window: int = 252,
     z_min_periods: int = 126,
+    changes_resid: Optional[pd.Series] = None,
+    drift_window: int = 63,
+    iv_bp_day: Optional[pd.Series] = None,
+    iv_z_window: int = 252,
+    iv_z_min_periods: int = 126,
 ) -> pd.DataFrame:
     """The only supported way to build a signal for this study.
 
@@ -1049,13 +1101,15 @@ def causal_signals(
         # the one the audit just ran on.
         both = pd.concat([pd.Series(fit.residual).astype(float).rename("got"),
                           baseline.rename("want")], axis=1)
-        drift = float((both["got"] - both["want"]).abs().max())
+        # NB `fit_gap`, not `drift` -- `drift` is the imported factor function,
+        # and shadowing it here broke the drift_t certification below.
+        fit_gap = float((both["got"] - both["want"]).abs().max())
         disagree_on_nan = bool(
             (both["got"].isna() != both["want"].isna()).any())
-        if disagree_on_nan or not np.isfinite(drift) or drift > FIT_MATCH_TOL:
+        if disagree_on_nan or not np.isfinite(fit_gap) or fit_gap > FIT_MATCH_TOL:
             raise ValueError(
                 "the supplied `fit` does not reproduce the audited causal fit "
-                f"(max abs deviation {drift:.6g}"
+                f"(max abs deviation {fit_gap:.6g}"
                 + (", and the two disagree on which dates are defined"
                    if disagree_on_nan else "")
                 + "). causal_signals certifies the residual it USES, so a fit "
@@ -1138,6 +1192,55 @@ def causal_signals(
     z_ok = bool(causal["causal"] and rolling["rolling"]
                 and np.isfinite(z_causal_diff) and z_causal_diff <= ROLLING_Z_TOL)
 
+    # Optional certification of the OTHER signal inputs. `residual_z` is one of
+    # five columns `signal_state` reads; certifying it makes one input causal,
+    # not the signal. Supplying the sources closes the two that can actually
+    # leak -- see :func:`audit_trailing_statistic` for why these two and not the
+    # other three. Omit them and behaviour is unchanged, but the certificate
+    # then says so rather than staying silent.
+    certified = ["residual_z"]
+    uncertified = list(UNCERTIFIED_SIGNAL_INPUTS)
+    input_audits: Dict[str, float] = {}
+
+    if changes_resid is not None and "drift_t" in panel.columns:
+        audit = audit_trailing_statistic(
+            panel["drift_t"], changes_resid, label="drift_t",
+            recompute=lambda s: drift(s, window=int(drift_window))["t_stat"])
+        input_audits["drift_t_max_abs_diff"] = audit["max_abs_diff"]
+        if not audit["matched"]:
+            raise ValueError(
+                f"`drift_t` does not reproduce as a trailing {drift_window}-day "
+                "Newey-West t of the supplied `changes_resid` (max abs deviation "
+                f"{audit['max_abs_diff']:.6g} over {audit['n_compared']} of "
+                f"{audit['n_defined']} dated values). drift_t VETOES a flattener, "
+                "so a drift built from a full-sample residual vetoes trades using "
+                "information the trade date did not have. Pass the changes "
+                "residual this column was built from, or drop `changes_resid=` "
+                "and accept it as uncertified."
+            )
+        certified.append("drift_t")
+        uncertified.remove("drift_t")
+
+    if iv_bp_day is not None and "iv_z" in panel.columns:
+        audit = audit_trailing_statistic(
+            panel["iv_z"], iv_bp_day, label="iv_z",
+            recompute=lambda s: residual_z(s, window=int(iv_z_window),
+                                           min_periods=int(iv_z_min_periods)))
+        input_audits["iv_z_max_abs_diff"] = audit["max_abs_diff"]
+        if not audit["matched"]:
+            raise ValueError(
+                f"`iv_z` does not reproduce as a trailing {iv_z_window}-day z of "
+                f"the supplied `iv_bp_day` (max abs deviation "
+                f"{audit['max_abs_diff']:.6g} over {audit['n_compared']} of "
+                f"{audit['n_defined']} dated values). iv_z GATES the steepener, "
+                "and a z on a full-sample sigma is exactly the look-ahead "
+                "requirement 3 exists to refuse -- the same error, one column "
+                "across. Pass the implied-vol series it was built from, or drop "
+                "`iv_bp_day=` and accept it as uncertified."
+            )
+        certified.append("iv_z")
+        uncertified.remove("iv_z")
+
     p = panel.copy()
     p["residual_z"] = z.reindex(p.index)
     out = entry_vintage_signals(p, cfg, spread_bp=spread_bp, drivers=drivers,
@@ -1166,6 +1269,9 @@ def causal_signals(
         "rolling_z_max_abs_diff": max(float(rolling["max_abs_diff"]),
                                       z_causal_diff),
         "beta_vintage": fit.kind,
+        "certified_signal_inputs": tuple(certified),
+        "uncertified_signal_inputs": tuple(uncertified),
+        **input_audits,
     })
     return out
 
