@@ -886,6 +886,31 @@ def test_an_honest_builder_beside_a_leaky_series_is_refused():
                        changes_resid_fn=_changes_builder())     # honest builder
 
 
+def test_a_back_filled_source_is_not_the_builders_output():
+    """The same accident as the back-filled COLUMN, one level up on the SOURCE.
+
+    Every numeric leg agrees: the two series are identical wherever the builder
+    defines anything, and the transform reproduces to float zero. What differs
+    is which dates are defined -- so the `drift_t` built on it starts 250 days
+    early, on residuals that were invented by `bfill`. Only the NaN-pattern leg
+    of the artifact tie sees it.
+    """
+    spread, drivers = _factor_frame()
+    honest = expanding_changes_residual(spread, drivers, min_periods=252).residual
+    filled = honest.bfill()
+
+    assert honest.isna().sum() > 200 and filled.isna().sum() == 0
+    assert float((filled - honest).abs().max()) == 0.0   # nothing numeric to see
+
+    panel = _panel_for(spread, drivers)
+    panel["drift_t"] = _drift_t_from(filled)
+
+    with pytest.raises(ValueError, match="is not what `changes_resid_fn` produces"):
+        causal_signals(panel, SignalConfig(), spread_bp=spread, drivers=drivers,
+                       min_periods=252, changes_resid=filled,
+                       changes_resid_fn=_changes_builder())
+
+
 def test_a_smoothed_iv_source_is_refused_once_its_builder_is_probed():
     """`iv_z`'s milder form. Leg 1 catches a full-sample sigma because the raw
     vol series is an observable; it cannot catch a CENTRED-window smoothing of

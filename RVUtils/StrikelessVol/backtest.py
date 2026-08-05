@@ -1032,6 +1032,13 @@ def audit_trailing_statistic(
         # the overlap" -- it is a different series that happens to agree where
         # both exist, which is how an endpoint-only check passes a gapped file.
         complete = bool(len(aligned) == n_got)
+        # `np.isfinite(diff)` cannot change this verdict and is kept only for
+        # symmetry with the other audits -- recorded here rather than left for
+        # the next reader to mistake for a working guard. `diff` is the max of
+        # an ABSOLUTE difference, so it is >= 0 or NaN; `nan <= tol` and
+        # `inf <= tol` are both False, and the all-NaN case is already refused
+        # by the `n_differenced` leg. (`-inf <= tol` IS True, which is why the
+        # leg is not simply wrong -- `.abs()` is what makes it unreachable.)
         out.update({"matched": bool(complete and n_differenced == len(aligned)
                                     and np.isfinite(diff) and diff <= tol),
                     "max_abs_diff": diff, "n_compared": int(len(aligned)),
