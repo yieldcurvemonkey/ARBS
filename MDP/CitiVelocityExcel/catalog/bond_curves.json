@@ -1,0 +1,241 @@
+{
+ "curves": {
+  "USA/GOVT": {
+   "n": 349,
+   "sample_isins": [
+    "US91282CCS89",
+    "US91282CNJ61",
+    "US91282CHZ77"
+   ]
+  },
+  "USA/AGENCY": {
+   "n": 65,
+   "sample_isins": [
+    "US3130AWMP20",
+    "US880591FE74",
+    "US31359MFP32"
+   ]
+  },
+  "GBR/GOVT": {
+   "n": 69,
+   "sample_isins": [
+    "GB00BMF9LG83",
+    "GB00BLH38158",
+    "GB00BFMCN652"
+   ]
+  },
+  "GBR/AGENCY": {
+   "n": 2,
+   "sample_isins": [
+    "XS0094835278",
+    "XS0094804126"
+   ]
+  },
+  "DEU/GOVT": {
+   "n": 78,
+   "sample_isins": [
+    "DE000BU2Z023",
+    "DE0001102473",
+    "DE0001102432"
+   ]
+  },
+  "DEU/AGENCY": {
+   "n": 64,
+   "sample_isins": [
+    "DE000NRW0KG2",
+    "DE000NRW0LQ9",
+    "DE000NRW0MK0"
+   ]
+  },
+  "DEU/COVERED": {
+   "n": 121,
+   "sample_isins": [
+    "DE000A255CR0",
+    "DE000A2LQ587",
+    "DE000A14JZL1"
+   ]
+  },
+  "FRA/GOVT": {
+   "n": 58,
+   "sample_isins": [
+    "FR0013234333",
+    "FR001400PM68",
+    "FR001400Z2L7"
+   ]
+  },
+  "FRA/AGENCY": {
+   "n": 192,
+   "sample_isins": [
+    "FR0011586494",
+    "FR001400CHC6",
+    "FR0014019UO3"
+   ]
+  },
+  "FRA/COVERED": {
+   "n": 47,
+   "sample_isins": [
+    "FR0014018ML8",
+    "FR0013535820",
+    "FR001400FFW1"
+   ]
+  },
+  "ITA/GOVT": {
+   "n": 122,
+   "sample_isins": [
+    "IT0005633794",
+    "IT0005083057",
+    "IT0005442097"
+   ]
+  },
+  "ITA/AGENCY": {
+   "n": 19,
+   "sample_isins": [
+    "IT0005713042",
+    "IT0005508954",
+    "IT0005318149"
+   ]
+  },
+  "ESP/GOVT": {
+   "n": 57,
+   "sample_isins": [
+    "ES0000012L78",
+    "ES0000012P74",
+    "ES0000012M93"
+   ]
+  },
+  "ESP/AGENCY": {
+   "n": 47,
+   "sample_isins": [
+    "ES00001010R3",
+    "XS2708407015",
+    "ES0224261059"
+   ]
+  },
+  "JPN/GOVT": {
+   "n": 326,
+   "sample_isins": [
+    "JP1300561H93",
+    "JP1051501N14",
+    "JP12010618A8"
+   ]
+  },
+  "NLD/GOVT": {
+   "n": 25,
+   "sample_isins": [
+    "NL0013552060",
+    "NL0015001RG8",
+    "NL0000102317"
+   ]
+  },
+  "NLD/AGENCY": {
+   "n": 77,
+   "sample_isins": [
+    "XS3398041338",
+    "XS1673097710",
+    "XS2102284622"
+   ]
+  },
+  "NLD/COVERED": {
+   "n": 1,
+   "sample_isins": [
+    "NL0009550441"
+   ]
+  },
+  "CHE/GOVT": {
+   "n": 8,
+   "sample_isins": [
+    "CH0127181029",
+    "CH0009755197",
+    "CH0127181169"
+   ]
+  },
+  "SWE/GOVT": {
+   "n": 11,
+   "sample_isins": [
+    "SE0021308541",
+    "SE0016102115",
+    "SE0002829192"
+   ]
+  },
+  "NOR/GOVT": {
+   "n": 12,
+   "sample_isins": [
+    "NO0013238246",
+    "NO0010844079",
+    "NO0012837642"
+   ]
+  },
+  "DNK/GOVT": {
+   "n": 9,
+   "sample_isins": [
+    "DK0009925265",
+    "DK0009924888",
+    "DK0009923567"
+   ]
+  },
+  "NZL/GOVT": {
+   "n": 15,
+   "sample_isins": [
+    "NZGOVDT538C5",
+    "NZGOVDT532C8",
+    "NZGOVDT541C9"
+   ]
+  },
+  "MEX/GOVT": {
+   "n": 19,
+   "sample_isins": [
+    "MX0MGO0001N5",
+    "MX0MGO0001O3",
+    "MX0MGO0000R8"
+   ]
+  },
+  "BRA/GOVT": {
+   "n": 6,
+   "sample_isins": [
+    "BRSTNCNTF212",
+    "BRSTNCNTF2K7",
+    "BRSTNCNTF1P8"
+   ]
+  },
+  "CHN/GOVT": {
+   "n": 189,
+   "sample_isins": [
+    "CND1000113G9",
+    "CND10008WR28",
+    "HK0000867637"
+   ]
+  },
+  "CHN/AGENCY": {
+   "n": 59,
+   "sample_isins": [
+    "CND000000D09",
+    "CND10004NXL3",
+    "CND10005ZV06"
+   ]
+  },
+  "KOR/GOVT": {
+   "n": 98,
+   "sample_isins": [
+    "KR10350172C8",
+    "KR310101GEA8",
+    "KR310102GG17"
+   ]
+  },
+  "ZAF/GOVT": {
+   "n": 17,
+   "sample_isins": [
+    "ZAG000219478",
+    "ZAG000096173",
+    "ZAG000215088"
+   ]
+  }
+ },
+ "measures": [
+  "YIELD",
+  "PRICE",
+  "SPREAD_TSY",
+  "ASW_4_USD",
+  "OAS",
+  "DURATION"
+ ]
+}

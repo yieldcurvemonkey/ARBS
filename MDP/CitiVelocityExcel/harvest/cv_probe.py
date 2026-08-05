@@ -68,8 +68,23 @@ def com_retry(fn, attempts: int = 40, delay: float = 0.5):
 class Prober:
     """Drives CVMETADATA in batches and classifies each tag."""
 
+    @classmethod
+    def _connect(cls, attempts: int = 18, delay: float = 10.0):
+        """Retry the bind: Excel can be busy for minutes during a long recalc, and
+        a single pass over the candidates then wrongly reports 'no usable Excel'.
+        """
+        last = None
+        for i in range(attempts):
+            try:
+                return cls._connect_once()
+            except Exception as exc:
+                last = exc
+                if i < attempts - 1:
+                    time.sleep(delay)
+        raise last
+
     @staticmethod
-    def _connect():
+    def _connect_once():
         """Bind to a USABLE Excel.
 
         GetActiveObject returns whatever registered in the ROT first, which can be

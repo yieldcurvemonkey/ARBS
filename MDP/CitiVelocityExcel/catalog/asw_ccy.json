@@ -1,0 +1,1433 @@
+{
+ "RATES.OIS.USD_SOFR.PAR.10Y": {
+  "status": "valid",
+  "via": "tshist",
+  "sample": 4.20995,
+  "rows": 5
+ },
+ "RATES.BOND.BRSTNCNTF212.ASW_4_USD": {
+  "status": "empty",
+  "via": "tshist",
+  "note": "no rows in window"
+ },
+ "RATES.BOND.BRSTNCNTF212.ASW_4_EUR": {
+  "status": "empty",
+  "via": "tshist",
+  "note": "no rows in window"
+ },
+ "RATES.BOND.BRSTNCNTF212.ASW_4_GBP": {
+  "status": "empty",
+  "via": "tshist",
+  "note": "no rows in window"
+ },
+ "RATES.BOND.BRSTNCNTF212.ASW_4_CHF": {
+  "status": "empty",
+  "via": "tshist",
+  "note": "no rows in window"
+ },
+ "RATES.BOND.BRSTNCNTF212.ASW_4_JPY": {
+  "status": "empty",
+  "via": "tshist",
+  "note": "no rows in window"
+ },
+ "RATES.BOND.BRSTNCNTF212.ASW_4_SEK": {
+  "status": "failed",
+  "via": "tshist",
+  "note": "bad tag"
+ },
+ "RATES.BOND.BRSTNCNTF212.ASW_4_NOK": {
+  "status": "failed",
+  "via": "tshist",
+  "note": "bad tag"
+ },
+ "RATES.BOND.BRSTNCNTF212.ASW_4_DKK": {
+  "status": "failed",
+  "via": "tshist",
+  "note": "bad tag"
+ },
+ "RATES.BOND.BRSTNCNTF212.ASW_4_CAD": {
+  "status": "failed",
+  "via": "tshist",
+  "note": "bad tag"
+ },
+ "RATES.BOND.BRSTNCNTF212.ASW_4_AUD": {
+  "status": "empty",
+  "via": "tshist",
+  "note": "no rows in window"
+ },
+ "RATES.BOND.BRSTNCNTF212.ASW_4_NZD": {
+  "status": "failed",
+  "via": "tshist",
+  "note": "bad tag"
+ },
+ "RATES.BOND.BRSTNCNTF212.ASW_4_MXN": {
+  "status": "failed",
+  "via": "tshist",
+  "note": "bad tag"
+ },
+ "RATES.BOND.BRSTNCNTF212.ASW_4_BRL": {
+  "status": "failed",
+  "via": "tshist",
+  "note": "bad tag"
+ },
+ "RATES.BOND.BRSTNCNTF212.ASW_4_CNY": {
+  "status": "failed",
+  "via": "tshist",
+  "note": "bad tag"
+ },
+ "RATES.BOND.BRSTNCNTF212.ASW_4_KRW": {
+  "status": "failed",
+  "via": "tshist",
+  "note": "bad tag"
+ },
+ "RATES.BOND.BRSTNCNTF212.ASW_4_ZAR": {
+  "status": "failed",
+  "via": "tshist",
+  "note": "bad tag"
+ },
+ "RATES.BOND.BRSTNCNTF212.ZSPREAD": {
+  "status": "empty",
+  "via": "tshist",
+  "note": "no rows in window"
+ },
+ "RATES.BOND.BRSTNCNTF212.CAS": {
+  "status": "empty",
+  "via": "tshist",
+  "note": "no rows in window"
+ },
+ "RATES.BOND.BRSTNCNTF212.YIELD_WORST": {
+  "status": "empty",
+  "via": "tshist",
+  "note": "no rows in window"
+ },
+ "RATES.BOND.BRSTNCNTF212.CONVEXITY": {
+  "status": "empty",
+  "via": "tshist",
+  "note": "no rows in window"
+ },
+ "RATES.BOND.CH0127181029.ASW_4_USD": {
+  "status": "valid",
+  "via": "tshist",
+  "sample": -23.6648,
+  "rows": 19
+ },
+ "RATES.BOND.CH0127181029.ASW_4_EUR": {
+  "status": "empty",
+  "via": "tshist",
+  "note": "no rows in window"
+ },
+ "RATES.BOND.CH0127181029.ASW_4_GBP": {
+  "status": "valid",
+  "via": "tshist",
+  "sample": -8.38538,
+  "rows": 19
+ },
+ "RATES.BOND.CH0127181029.ASW_4_CHF": {
+  "status": "empty",
+  "via": "tshist",
+  "note": "no rows in window"
+ },
+ "RATES.BOND.CH0127181029.ASW_4_JPY": {
+  "status": "valid",
+  "via": "tshist",
+  "sample": -28.2557,
+  "rows": 19
+ },
+ "RATES.BOND.CH0127181029.ASW_4_SEK": {
+  "status": "failed",
+  "via": "tshist",
+  "note": "bad tag"
+ },
+ "RATES.BOND.CH0127181029.ASW_4_NOK": {
+  "status": "failed",
+  "via": "tshist",
+  "note": "bad tag"
+ },
+ "RATES.BOND.CH0127181029.ASW_4_DKK": {
+  "status": "failed",
+  "via": "tshist",
+  "note": "bad tag"
+ },
+ "RATES.BOND.CH0127181029.ASW_4_CAD": {
+  "status": "failed",
+  "via": "tshist",
+  "note": "bad tag"
+ },
+ "RATES.BOND.CH0127181029.ASW_4_AUD": {
+  "status": "valid",
+  "via": "tshist",
+  "sample": 4.54799,
+  "rows": 19
+ },
+ "RATES.BOND.CH0127181029.ASW_4_NZD": {
+  "status": "failed",
+  "via": "tshist",
+  "note": "bad tag"
+ },
+ "RATES.BOND.CH0127181029.ASW_4_MXN": {
+  "status": "failed",
+  "via": "tshist",
+  "note": "bad tag"
+ },
+ "RATES.BOND.CH0127181029.ASW_4_BRL": {
+  "status": "failed",
+  "via": "tshist",
+  "note": "bad tag"
+ },
+ "RATES.BOND.CH0127181029.ASW_4_CNY": {
+  "status": "failed",
+  "via": "tshist",
+  "note": "bad tag"
+ },
+ "RATES.BOND.CH0127181029.ASW_4_KRW": {
+  "status": "failed",
+  "via": "tshist",
+  "note": "bad tag"
+ },
+ "RATES.BOND.CH0127181029.ASW_4_ZAR": {
+  "status": "failed",
+  "via": "tshist",
+  "note": "bad tag"
+ },
+ "RATES.BOND.CH0127181029.ZSPREAD": {
+  "status": "empty",
+  "via": "tshist",
+  "note": "no rows in window"
+ },
+ "RATES.BOND.CH0127181029.CAS": {
+  "status": "empty",
+  "via": "tshist",
+  "note": "no rows in window"
+ },
+ "RATES.BOND.CH0127181029.YIELD_WORST": {
+  "status": "empty",
+  "via": "tshist",
+  "note": "no rows in window"
+ },
+ "RATES.BOND.CH0127181029.CONVEXITY": {
+  "status": "empty",
+  "via": "tshist",
+  "note": "no rows in window"
+ },
+ "RATES.BOND.CND1000113G9.ASW_4_USD": {
+  "status": "empty",
+  "via": "tshist",
+  "note": "no rows in window"
+ },
+ "RATES.BOND.CND1000113G9.ASW_4_EUR": {
+  "status": "empty",
+  "via": "tshist",
+  "note": "no rows in window"
+ },
+ "RATES.BOND.CND1000113G9.ASW_4_GBP": {
+  "status": "empty",
+  "via": "tshist",
+  "note": "no rows in window"
+ },
+ "RATES.BOND.CND1000113G9.ASW_4_CHF": {
+  "status": "empty",
+  "via": "tshist",
+  "note": "no rows in window"
+ },
+ "RATES.BOND.CND1000113G9.ASW_4_JPY": {
+  "status": "empty",
+  "via": "tshist",
+  "note": "no rows in window"
+ },
+ "RATES.BOND.CND1000113G9.ASW_4_SEK": {
+  "status": "failed",
+  "via": "tshist",
+  "note": "bad tag"
+ },
+ "RATES.BOND.CND1000113G9.ASW_4_NOK": {
+  "status": "failed",
+  "via": "tshist",
+  "note": "bad tag"
+ },
+ "RATES.BOND.CND1000113G9.ASW_4_DKK": {
+  "status": "failed",
+  "via": "tshist",
+  "note": "bad tag"
+ },
+ "RATES.BOND.CND1000113G9.ASW_4_CAD": {
+  "status": "failed",
+  "via": "tshist",
+  "note": "bad tag"
+ },
+ "RATES.BOND.CND1000113G9.ASW_4_AUD": {
+  "status": "empty",
+  "via": "tshist",
+  "note": "no rows in window"
+ },
+ "RATES.BOND.CND1000113G9.ASW_4_NZD": {
+  "status": "failed",
+  "via": "tshist",
+  "note": "bad tag"
+ },
+ "RATES.BOND.CND1000113G9.ASW_4_MXN": {
+  "status": "failed",
+  "via": "tshist",
+  "note": "bad tag"
+ },
+ "RATES.BOND.CND1000113G9.ASW_4_BRL": {
+  "status": "failed",
+  "via": "tshist",
+  "note": "bad tag"
+ },
+ "RATES.BOND.CND1000113G9.ASW_4_CNY": {
+  "status": "failed",
+  "via": "tshist",
+  "note": "bad tag"
+ },
+ "RATES.BOND.CND1000113G9.ASW_4_KRW": {
+  "status": "failed",
+  "via": "tshist",
+  "note": "bad tag"
+ },
+ "RATES.BOND.CND1000113G9.ASW_4_ZAR": {
+  "status": "failed",
+  "via": "tshist",
+  "note": "bad tag"
+ },
+ "RATES.BOND.CND1000113G9.ZSPREAD": {
+  "status": "empty",
+  "via": "tshist",
+  "note": "no rows in window"
+ },
+ "RATES.BOND.CND1000113G9.CAS": {
+  "status": "valid",
+  "via": "tshist",
+  "sample": 43.4983,
+  "rows": 21
+ },
+ "RATES.BOND.CND1000113G9.YIELD_WORST": {
+  "status": "empty",
+  "via": "tshist",
+  "note": "no rows in window"
+ },
+ "RATES.BOND.CND1000113G9.CONVEXITY": {
+  "status": "empty",
+  "via": "tshist",
+  "note": "no rows in window"
+ },
+ "RATES.BOND.DK0009925265.ASW_4_USD": {
+  "status": "empty",
+  "via": "tshist",
+  "note": "no rows in window"
+ },
+ "RATES.BOND.DK0009925265.ASW_4_EUR": {
+  "status": "empty",
+  "via": "tshist",
+  "note": "no rows in window"
+ },
+ "RATES.BOND.DK0009925265.ASW_4_GBP": {
+  "status": "empty",
+  "via": "tshist",
+  "note": "no rows in window"
+ },
+ "RATES.BOND.DK0009925265.ASW_4_CHF": {
+  "status": "empty",
+  "via": "tshist",
+  "note": "no rows in window"
+ },
+ "RATES.BOND.DK0009925265.ASW_4_JPY": {
+  "status": "empty",
+  "via": "tshist",
+  "note": "no rows in window"
+ },
+ "RATES.BOND.DK0009925265.ASW_4_SEK": {
+  "status": "failed",
+  "via": "tshist",
+  "note": "bad tag"
+ },
+ "RATES.BOND.DK0009925265.ASW_4_NOK": {
+  "status": "failed",
+  "via": "tshist",
+  "note": "bad tag"
+ },
+ "RATES.BOND.DK0009925265.ASW_4_DKK": {
+  "status": "failed",
+  "via": "tshist",
+  "note": "bad tag"
+ },
+ "RATES.BOND.DK0009925265.ASW_4_CAD": {
+  "status": "failed",
+  "via": "tshist",
+  "note": "bad tag"
+ },
+ "RATES.BOND.DK0009925265.ASW_4_AUD": {
+  "status": "empty",
+  "via": "tshist",
+  "note": "no rows in window"
+ },
+ "RATES.BOND.DK0009925265.ASW_4_NZD": {
+  "status": "failed",
+  "via": "tshist",
+  "note": "bad tag"
+ },
+ "RATES.BOND.DK0009925265.ASW_4_MXN": {
+  "status": "failed",
+  "via": "tshist",
+  "note": "bad tag"
+ },
+ "RATES.BOND.DK0009925265.ASW_4_BRL": {
+  "status": "failed",
+  "via": "tshist",
+  "note": "bad tag"
+ },
+ "RATES.BOND.DK0009925265.ASW_4_CNY": {
+  "status": "failed",
+  "via": "tshist",
+  "note": "bad tag"
+ },
+ "RATES.BOND.DK0009925265.ASW_4_KRW": {
+  "status": "failed",
+  "via": "tshist",
+  "note": "bad tag"
+ },
+ "RATES.BOND.DK0009925265.ASW_4_ZAR": {
+  "status": "failed",
+  "via": "tshist",
+  "note": "bad tag"
+ },
+ "RATES.BOND.DK0009925265.ZSPREAD": {
+  "status": "empty",
+  "via": "tshist",
+  "note": "no rows in window"
+ },
+ "RATES.BOND.DK0009925265.CAS": {
+  "status": "empty",
+  "via": "tshist",
+  "note": "no rows in window"
+ },
+ "RATES.BOND.DK0009925265.YIELD_WORST": {
+  "status": "empty",
+  "via": "tshist",
+  "note": "no rows in window"
+ },
+ "RATES.BOND.DK0009925265.CONVEXITY": {
+  "status": "empty",
+  "via": "tshist",
+  "note": "no rows in window"
+ },
+ "RATES.BOND.DE000BU2Z023.ASW_4_USD": {
+  "status": "valid",
+  "via": "tshist",
+  "sample": -9.02496,
+  "rows": 19
+ },
+ "RATES.BOND.DE000BU2Z023.ASW_4_EUR": {
+  "status": "empty",
+  "via": "tshist",
+  "note": "no rows in window"
+ },
+ "RATES.BOND.DE000BU2Z023.ASW_4_GBP": {
+  "status": "valid",
+  "via": "tshist",
+  "sample": 5.22501,
+  "rows": 19
+ },
+ "RATES.BOND.DE000BU2Z023.ASW_4_CHF": {
+  "status": "valid",
+  "via": "tshist",
+  "sample": 0.569313,
+  "rows": 19
+ },
+ "RATES.BOND.DE000BU2Z023.ASW_4_JPY": {
+  "status": "empty",
+  "via": "tshist",
+  "note": "no rows in window"
+ },
+ "RATES.BOND.DE000BU2Z023.ASW_4_SEK": {
+  "status": "failed",
+  "via": "tshist",
+  "note": "bad tag"
+ },
+ "RATES.BOND.DE000BU2Z023.ASW_4_NOK": {
+  "status": "failed",
+  "via": "tshist",
+  "note": "bad tag"
+ },
+ "RATES.BOND.DE000BU2Z023.ASW_4_DKK": {
+  "status": "failed",
+  "via": "tshist",
+  "note": "bad tag"
+ },
+ "RATES.BOND.DE000BU2Z023.ASW_4_CAD": {
+  "status": "failed",
+  "via": "tshist",
+  "note": "bad tag"
+ },
+ "RATES.BOND.DE000BU2Z023.ASW_4_AUD": {
+  "status": "valid",
+  "via": "tshist",
+  "sample": 20.6698,
+  "rows": 19
+ },
+ "RATES.BOND.DE000BU2Z023.ASW_4_NZD": {
+  "status": "failed",
+  "via": "tshist",
+  "note": "bad tag"
+ },
+ "RATES.BOND.DE000BU2Z023.ASW_4_MXN": {
+  "status": "failed",
+  "via": "tshist",
+  "note": "bad tag"
+ },
+ "RATES.BOND.DE000BU2Z023.ASW_4_BRL": {
+  "status": "failed",
+  "via": "tshist",
+  "note": "bad tag"
+ },
+ "RATES.BOND.DE000BU2Z023.ASW_4_CNY": {
+  "status": "failed",
+  "via": "tshist",
+  "note": "bad tag"
+ },
+ "RATES.BOND.DE000BU2Z023.ASW_4_KRW": {
+  "status": "failed",
+  "via": "tshist",
+  "note": "bad tag"
+ },
+ "RATES.BOND.DE000BU2Z023.ASW_4_ZAR": {
+  "status": "failed",
+  "via": "tshist",
+  "note": "bad tag"
+ },
+ "RATES.BOND.DE000BU2Z023.ZSPREAD": {
+  "status": "empty",
+  "via": "tshist",
+  "note": "no rows in window"
+ },
+ "RATES.BOND.DE000BU2Z023.CAS": {
+  "status": "empty",
+  "via": "tshist",
+  "note": "no rows in window"
+ },
+ "RATES.BOND.DE000BU2Z023.YIELD_WORST": {
+  "status": "empty",
+  "via": "tshist",
+  "note": "no rows in window"
+ },
+ "RATES.BOND.DE000BU2Z023.CONVEXITY": {
+  "status": "empty",
+  "via": "tshist",
+  "note": "no rows in window"
+ },
+ "RATES.BOND.GB00BMF9LG83.ASW_4_USD": {
+  "status": "empty",
+  "via": "tshist",
+  "note": "no rows in window"
+ },
+ "RATES.BOND.GB00BMF9LG83.ASW_4_EUR": {
+  "status": "valid",
+  "via": "tshist",
+  "sample": -3.93542,
+  "rows": 19
+ },
+ "RATES.BOND.GB00BMF9LG83.ASW_4_GBP": {
+  "status": "valid",
+  "via": "tshist",
+  "sample": 4.12468,
+  "rows": 19
+ },
+ "RATES.BOND.GB00BMF9LG83.ASW_4_CHF": {
+  "status": "empty",
+  "via": "tshist",
+  "note": "no rows in window"
+ },
+ "RATES.BOND.GB00BMF9LG83.ASW_4_JPY": {
+  "status": "empty",
+  "via": "tshist",
+  "note": "no rows in window"
+ },
+ "RATES.BOND.GB00BMF9LG83.ASW_4_SEK": {
+  "status": "failed",
+  "via": "tshist",
+  "note": "bad tag"
+ },
+ "RATES.BOND.GB00BMF9LG83.ASW_4_NOK": {
+  "status": "failed",
+  "via": "tshist",
+  "note": "bad tag"
+ },
+ "RATES.BOND.GB00BMF9LG83.ASW_4_DKK": {
+  "status": "failed",
+  "via": "tshist",
+  "note": "bad tag"
+ },
+ "RATES.BOND.GB00BMF9LG83.ASW_4_CAD": {
+  "status": "failed",
+  "via": "tshist",
+  "note": "bad tag"
+ },
+ "RATES.BOND.GB00BMF9LG83.ASW_4_AUD": {
+  "status": "valid",
+  "via": "tshist",
+  "sample": 14.2761,
+  "rows": 19
+ },
+ "RATES.BOND.GB00BMF9LG83.ASW_4_NZD": {
+  "status": "failed",
+  "via": "tshist",
+  "note": "bad tag"
+ },
+ "RATES.BOND.GB00BMF9LG83.ASW_4_MXN": {
+  "status": "failed",
+  "via": "tshist",
+  "note": "bad tag"
+ },
+ "RATES.BOND.GB00BMF9LG83.ASW_4_BRL": {
+  "status": "failed",
+  "via": "tshist",
+  "note": "bad tag"
+ },
+ "RATES.BOND.GB00BMF9LG83.ASW_4_CNY": {
+  "status": "failed",
+  "via": "tshist",
+  "note": "bad tag"
+ },
+ "RATES.BOND.GB00BMF9LG83.ASW_4_KRW": {
+  "status": "failed",
+  "via": "tshist",
+  "note": "bad tag"
+ },
+ "RATES.BOND.GB00BMF9LG83.ASW_4_ZAR": {
+  "status": "failed",
+  "via": "tshist",
+  "note": "bad tag"
+ },
+ "RATES.BOND.GB00BMF9LG83.ZSPREAD": {
+  "status": "empty",
+  "via": "tshist",
+  "note": "no rows in window"
+ },
+ "RATES.BOND.GB00BMF9LG83.CAS": {
+  "status": "empty",
+  "via": "tshist",
+  "note": "no rows in window"
+ },
+ "RATES.BOND.GB00BMF9LG83.YIELD_WORST": {
+  "status": "empty",
+  "via": "tshist",
+  "note": "no rows in window"
+ },
+ "RATES.BOND.GB00BMF9LG83.CONVEXITY": {
+  "status": "empty",
+  "via": "tshist",
+  "note": "no rows in window"
+ },
+ "RATES.BOND.JP1300561H93.ASW_4_USD": {
+  "status": "valid",
+  "via": "tshist",
+  "sample": 23.4129,
+  "rows": 20
+ },
+ "RATES.BOND.JP1300561H93.ASW_4_EUR": {
+  "status": "empty",
+  "via": "tshist",
+  "note": "no rows in window"
+ },
+ "RATES.BOND.JP1300561H93.ASW_4_GBP": {
+  "status": "empty",
+  "via": "tshist",
+  "note": "no rows in window"
+ },
+ "RATES.BOND.JP1300561H93.ASW_4_CHF": {
+  "status": "empty",
+  "via": "tshist",
+  "note": "no rows in window"
+ },
+ "RATES.BOND.JP1300561H93.ASW_4_JPY": {
+  "status": "empty",
+  "via": "tshist",
+  "note": "no rows in window"
+ },
+ "RATES.BOND.JP1300561H93.ASW_4_SEK": {
+  "status": "failed",
+  "via": "tshist",
+  "note": "bad tag"
+ },
+ "RATES.BOND.JP1300561H93.ASW_4_NOK": {
+  "status": "failed",
+  "via": "tshist",
+  "note": "bad tag"
+ },
+ "RATES.BOND.JP1300561H93.ASW_4_DKK": {
+  "status": "failed",
+  "via": "tshist",
+  "note": "bad tag"
+ },
+ "RATES.BOND.JP1300561H93.ASW_4_CAD": {
+  "status": "failed",
+  "via": "tshist",
+  "note": "bad tag"
+ },
+ "RATES.BOND.JP1300561H93.ASW_4_AUD": {
+  "status": "valid",
+  "via": "tshist",
+  "sample": 58.3577,
+  "rows": 20
+ },
+ "RATES.BOND.JP1300561H93.ASW_4_NZD": {
+  "status": "failed",
+  "via": "tshist",
+  "note": "bad tag"
+ },
+ "RATES.BOND.JP1300561H93.ASW_4_MXN": {
+  "status": "failed",
+  "via": "tshist",
+  "note": "bad tag"
+ },
+ "RATES.BOND.JP1300561H93.ASW_4_BRL": {
+  "status": "failed",
+  "via": "tshist",
+  "note": "bad tag"
+ },
+ "RATES.BOND.JP1300561H93.ASW_4_CNY": {
+  "status": "failed",
+  "via": "tshist",
+  "note": "bad tag"
+ },
+ "RATES.BOND.JP1300561H93.ASW_4_KRW": {
+  "status": "failed",
+  "via": "tshist",
+  "note": "bad tag"
+ },
+ "RATES.BOND.JP1300561H93.ASW_4_ZAR": {
+  "status": "failed",
+  "via": "tshist",
+  "note": "bad tag"
+ },
+ "RATES.BOND.JP1300561H93.ZSPREAD": {
+  "status": "empty",
+  "via": "tshist",
+  "note": "no rows in window"
+ },
+ "RATES.BOND.JP1300561H93.CAS": {
+  "status": "empty",
+  "via": "tshist",
+  "note": "no rows in window"
+ },
+ "RATES.BOND.JP1300561H93.YIELD_WORST": {
+  "status": "empty",
+  "via": "tshist",
+  "note": "no rows in window"
+ },
+ "RATES.BOND.JP1300561H93.CONVEXITY": {
+  "status": "empty",
+  "via": "tshist",
+  "note": "no rows in window"
+ },
+ "RATES.BOND.KR10350172C8.ASW_4_USD": {
+  "status": "empty",
+  "via": "tshist",
+  "note": "no rows in window"
+ },
+ "RATES.BOND.KR10350172C8.ASW_4_EUR": {
+  "status": "empty",
+  "via": "tshist",
+  "note": "no rows in window"
+ },
+ "RATES.BOND.KR10350172C8.ASW_4_GBP": {
+  "status": "empty",
+  "via": "tshist",
+  "note": "no rows in window"
+ },
+ "RATES.BOND.KR10350172C8.ASW_4_CHF": {
+  "status": "empty",
+  "via": "tshist",
+  "note": "no rows in window"
+ },
+ "RATES.BOND.KR10350172C8.ASW_4_JPY": {
+  "status": "empty",
+  "via": "tshist",
+  "note": "no rows in window"
+ },
+ "RATES.BOND.KR10350172C8.ASW_4_SEK": {
+  "status": "failed",
+  "via": "tshist",
+  "note": "bad tag"
+ },
+ "RATES.BOND.KR10350172C8.ASW_4_NOK": {
+  "status": "failed",
+  "via": "tshist",
+  "note": "bad tag"
+ },
+ "RATES.BOND.KR10350172C8.ASW_4_DKK": {
+  "status": "failed",
+  "via": "tshist",
+  "note": "bad tag"
+ },
+ "RATES.BOND.KR10350172C8.ASW_4_CAD": {
+  "status": "failed",
+  "via": "tshist",
+  "note": "bad tag"
+ },
+ "RATES.BOND.KR10350172C8.ASW_4_AUD": {
+  "status": "empty",
+  "via": "tshist",
+  "note": "no rows in window"
+ },
+ "RATES.BOND.KR10350172C8.ASW_4_NZD": {
+  "status": "failed",
+  "via": "tshist",
+  "note": "bad tag"
+ },
+ "RATES.BOND.KR10350172C8.ASW_4_MXN": {
+  "status": "failed",
+  "via": "tshist",
+  "note": "bad tag"
+ },
+ "RATES.BOND.KR10350172C8.ASW_4_BRL": {
+  "status": "failed",
+  "via": "tshist",
+  "note": "bad tag"
+ },
+ "RATES.BOND.KR10350172C8.ASW_4_CNY": {
+  "status": "failed",
+  "via": "tshist",
+  "note": "bad tag"
+ },
+ "RATES.BOND.KR10350172C8.ASW_4_KRW": {
+  "status": "failed",
+  "via": "tshist",
+  "note": "bad tag"
+ },
+ "RATES.BOND.KR10350172C8.ASW_4_ZAR": {
+  "status": "failed",
+  "via": "tshist",
+  "note": "bad tag"
+ },
+ "RATES.BOND.KR10350172C8.ZSPREAD": {
+  "status": "empty",
+  "via": "tshist",
+  "note": "no rows in window"
+ },
+ "RATES.BOND.KR10350172C8.CAS": {
+  "status": "valid",
+  "via": "tshist",
+  "sample": 44.2101,
+  "rows": 21
+ },
+ "RATES.BOND.KR10350172C8.YIELD_WORST": {
+  "status": "empty",
+  "via": "tshist",
+  "note": "no rows in window"
+ },
+ "RATES.BOND.KR10350172C8.CONVEXITY": {
+  "status": "empty",
+  "via": "tshist",
+  "note": "no rows in window"
+ },
+ "RATES.BOND.MX0MGO0001N5.ASW_4_USD": {
+  "status": "empty",
+  "via": "tshist",
+  "note": "no rows in window"
+ },
+ "RATES.BOND.MX0MGO0001N5.ASW_4_EUR": {
+  "status": "empty",
+  "via": "tshist",
+  "note": "no rows in window"
+ },
+ "RATES.BOND.MX0MGO0001N5.ASW_4_GBP": {
+  "status": "empty",
+  "via": "tshist",
+  "note": "no rows in window"
+ },
+ "RATES.BOND.MX0MGO0001N5.ASW_4_CHF": {
+  "status": "empty",
+  "via": "tshist",
+  "note": "no rows in window"
+ },
+ "RATES.BOND.MX0MGO0001N5.ASW_4_JPY": {
+  "status": "empty",
+  "via": "tshist",
+  "note": "no rows in window"
+ },
+ "RATES.BOND.MX0MGO0001N5.ASW_4_SEK": {
+  "status": "failed",
+  "via": "tshist",
+  "note": "bad tag"
+ },
+ "RATES.BOND.MX0MGO0001N5.ASW_4_NOK": {
+  "status": "failed",
+  "via": "tshist",
+  "note": "bad tag"
+ },
+ "RATES.BOND.MX0MGO0001N5.ASW_4_DKK": {
+  "status": "failed",
+  "via": "tshist",
+  "note": "bad tag"
+ },
+ "RATES.BOND.MX0MGO0001N5.ASW_4_CAD": {
+  "status": "failed",
+  "via": "tshist",
+  "note": "bad tag"
+ },
+ "RATES.BOND.MX0MGO0001N5.ASW_4_AUD": {
+  "status": "empty",
+  "via": "tshist",
+  "note": "no rows in window"
+ },
+ "RATES.BOND.MX0MGO0001N5.ASW_4_NZD": {
+  "status": "failed",
+  "via": "tshist",
+  "note": "bad tag"
+ },
+ "RATES.BOND.MX0MGO0001N5.ASW_4_MXN": {
+  "status": "failed",
+  "via": "tshist",
+  "note": "bad tag"
+ },
+ "RATES.BOND.MX0MGO0001N5.ASW_4_BRL": {
+  "status": "failed",
+  "via": "tshist",
+  "note": "bad tag"
+ },
+ "RATES.BOND.MX0MGO0001N5.ASW_4_CNY": {
+  "status": "failed",
+  "via": "tshist",
+  "note": "bad tag"
+ },
+ "RATES.BOND.MX0MGO0001N5.ASW_4_KRW": {
+  "status": "failed",
+  "via": "tshist",
+  "note": "bad tag"
+ },
+ "RATES.BOND.MX0MGO0001N5.ASW_4_ZAR": {
+  "status": "failed",
+  "via": "tshist",
+  "note": "bad tag"
+ },
+ "RATES.BOND.MX0MGO0001N5.ZSPREAD": {
+  "status": "empty",
+  "via": "tshist",
+  "note": "no rows in window"
+ },
+ "RATES.BOND.MX0MGO0001N5.CAS": {
+  "status": "empty",
+  "via": "tshist",
+  "note": "no rows in window"
+ },
+ "RATES.BOND.MX0MGO0001N5.YIELD_WORST": {
+  "status": "empty",
+  "via": "tshist",
+  "note": "no rows in window"
+ },
+ "RATES.BOND.MX0MGO0001N5.CONVEXITY": {
+  "status": "empty",
+  "via": "tshist",
+  "note": "no rows in window"
+ },
+ "RATES.BOND.NO0013238246.ASW_4_USD": {
+  "status": "valid",
+  "via": "tshist",
+  "sample": 8.20769,
+  "rows": 19
+ },
+ "RATES.BOND.NO0013238246.ASW_4_EUR": {
+  "status": "empty",
+  "via": "tshist",
+  "note": "no rows in window"
+ },
+ "RATES.BOND.NO0013238246.ASW_4_GBP": {
+  "status": "valid",
+  "via": "tshist",
+  "sample": 19.1015,
+  "rows": 19
+ },
+ "RATES.BOND.NO0013238246.ASW_4_CHF": {
+  "status": "valid",
+  "via": "tshist",
+  "sample": 15.0012,
+  "rows": 19
+ },
+ "RATES.BOND.NO0013238246.ASW_4_JPY": {
+  "status": "empty",
+  "via": "tshist",
+  "note": "no rows in window"
+ },
+ "RATES.BOND.NO0013238246.ASW_4_SEK": {
+  "status": "failed",
+  "via": "tshist",
+  "note": "bad tag"
+ },
+ "RATES.BOND.NO0013238246.ASW_4_NOK": {
+  "status": "failed",
+  "via": "tshist",
+  "note": "bad tag"
+ },
+ "RATES.BOND.NO0013238246.ASW_4_DKK": {
+  "status": "failed",
+  "via": "tshist",
+  "note": "bad tag"
+ },
+ "RATES.BOND.NO0013238246.ASW_4_CAD": {
+  "status": "failed",
+  "via": "tshist",
+  "note": "bad tag"
+ },
+ "RATES.BOND.NO0013238246.ASW_4_AUD": {
+  "status": "empty",
+  "via": "tshist",
+  "note": "no rows in window"
+ },
+ "RATES.BOND.NO0013238246.ASW_4_NZD": {
+  "status": "failed",
+  "via": "tshist",
+  "note": "bad tag"
+ },
+ "RATES.BOND.NO0013238246.ASW_4_MXN": {
+  "status": "failed",
+  "via": "tshist",
+  "note": "bad tag"
+ },
+ "RATES.BOND.NO0013238246.ASW_4_BRL": {
+  "status": "failed",
+  "via": "tshist",
+  "note": "bad tag"
+ },
+ "RATES.BOND.NO0013238246.ASW_4_CNY": {
+  "status": "failed",
+  "via": "tshist",
+  "note": "bad tag"
+ },
+ "RATES.BOND.NO0013238246.ASW_4_KRW": {
+  "status": "failed",
+  "via": "tshist",
+  "note": "bad tag"
+ },
+ "RATES.BOND.NO0013238246.ASW_4_ZAR": {
+  "status": "failed",
+  "via": "tshist",
+  "note": "bad tag"
+ },
+ "RATES.BOND.NO0013238246.ZSPREAD": {
+  "status": "empty",
+  "via": "tshist",
+  "note": "no rows in window"
+ },
+ "RATES.BOND.NO0013238246.CAS": {
+  "status": "empty",
+  "via": "tshist",
+  "note": "no rows in window"
+ },
+ "RATES.BOND.NO0013238246.YIELD_WORST": {
+  "status": "empty",
+  "via": "tshist",
+  "note": "no rows in window"
+ },
+ "RATES.BOND.NO0013238246.CONVEXITY": {
+  "status": "empty",
+  "via": "tshist",
+  "note": "no rows in window"
+ },
+ "RATES.BOND.NZGOVDT538C5.ASW_4_USD": {
+  "status": "valid",
+  "via": "tshist",
+  "sample": 6.83467,
+  "rows": 14
+ },
+ "RATES.BOND.NZGOVDT538C5.ASW_4_EUR": {
+  "status": "empty",
+  "via": "tshist",
+  "note": "no rows in window"
+ },
+ "RATES.BOND.NZGOVDT538C5.ASW_4_GBP": {
+  "status": "valid",
+  "via": "tshist",
+  "sample": 18.5352,
+  "rows": 14
+ },
+ "RATES.BOND.NZGOVDT538C5.ASW_4_CHF": {
+  "status": "empty",
+  "via": "tshist",
+  "note": "no rows in window"
+ },
+ "RATES.BOND.NZGOVDT538C5.ASW_4_JPY": {
+  "status": "valid",
+  "via": "tshist",
+  "sample": -6.59061,
+  "rows": 14
+ },
+ "RATES.BOND.NZGOVDT538C5.ASW_4_SEK": {
+  "status": "failed",
+  "via": "tshist",
+  "note": "bad tag"
+ },
+ "RATES.BOND.NZGOVDT538C5.ASW_4_NOK": {
+  "status": "failed",
+  "via": "tshist",
+  "note": "bad tag"
+ },
+ "RATES.BOND.NZGOVDT538C5.ASW_4_DKK": {
+  "status": "failed",
+  "via": "tshist",
+  "note": "bad tag"
+ },
+ "RATES.BOND.NZGOVDT538C5.ASW_4_CAD": {
+  "status": "failed",
+  "via": "tshist",
+  "note": "bad tag"
+ },
+ "RATES.BOND.NZGOVDT538C5.ASW_4_AUD": {
+  "status": "empty",
+  "via": "tshist",
+  "note": "no rows in window"
+ },
+ "RATES.BOND.NZGOVDT538C5.ASW_4_NZD": {
+  "status": "failed",
+  "via": "tshist",
+  "note": "bad tag"
+ },
+ "RATES.BOND.NZGOVDT538C5.ASW_4_MXN": {
+  "status": "failed",
+  "via": "tshist",
+  "note": "bad tag"
+ },
+ "RATES.BOND.NZGOVDT538C5.ASW_4_BRL": {
+  "status": "failed",
+  "via": "tshist",
+  "note": "bad tag"
+ },
+ "RATES.BOND.NZGOVDT538C5.ASW_4_CNY": {
+  "status": "failed",
+  "via": "tshist",
+  "note": "bad tag"
+ },
+ "RATES.BOND.NZGOVDT538C5.ASW_4_KRW": {
+  "status": "failed",
+  "via": "tshist",
+  "note": "bad tag"
+ },
+ "RATES.BOND.NZGOVDT538C5.ASW_4_ZAR": {
+  "status": "failed",
+  "via": "tshist",
+  "note": "bad tag"
+ },
+ "RATES.BOND.NZGOVDT538C5.ZSPREAD": {
+  "status": "empty",
+  "via": "tshist",
+  "note": "no rows in window"
+ },
+ "RATES.BOND.NZGOVDT538C5.CAS": {
+  "status": "empty",
+  "via": "tshist",
+  "note": "no rows in window"
+ },
+ "RATES.BOND.NZGOVDT538C5.YIELD_WORST": {
+  "status": "empty",
+  "via": "tshist",
+  "note": "no rows in window"
+ },
+ "RATES.BOND.NZGOVDT538C5.CONVEXITY": {
+  "status": "empty",
+  "via": "tshist",
+  "note": "no rows in window"
+ },
+ "RATES.BOND.SE0021308541.ASW_4_USD": {
+  "status": "valid",
+  "via": "tshist",
+  "sample": -26.1315,
+  "rows": 19
+ },
+ "RATES.BOND.SE0021308541.ASW_4_EUR": {
+  "status": "empty",
+  "via": "tshist",
+  "note": "no rows in window"
+ },
+ "RATES.BOND.SE0021308541.ASW_4_GBP": {
+  "status": "valid",
+  "via": "tshist",
+  "sample": -12.9142,
+  "rows": 19
+ },
+ "RATES.BOND.SE0021308541.ASW_4_CHF": {
+  "status": "empty",
+  "via": "tshist",
+  "note": "no rows in window"
+ },
+ "RATES.BOND.SE0021308541.ASW_4_JPY": {
+  "status": "empty",
+  "via": "tshist",
+  "note": "no rows in window"
+ },
+ "RATES.BOND.SE0021308541.ASW_4_SEK": {
+  "status": "failed",
+  "via": "tshist",
+  "note": "bad tag"
+ },
+ "RATES.BOND.SE0021308541.ASW_4_NOK": {
+  "status": "failed",
+  "via": "tshist",
+  "note": "bad tag"
+ },
+ "RATES.BOND.SE0021308541.ASW_4_DKK": {
+  "status": "failed",
+  "via": "tshist",
+  "note": "bad tag"
+ },
+ "RATES.BOND.SE0021308541.ASW_4_CAD": {
+  "status": "failed",
+  "via": "tshist",
+  "note": "bad tag"
+ },
+ "RATES.BOND.SE0021308541.ASW_4_AUD": {
+  "status": "empty",
+  "via": "tshist",
+  "note": "no rows in window"
+ },
+ "RATES.BOND.SE0021308541.ASW_4_NZD": {
+  "status": "failed",
+  "via": "tshist",
+  "note": "bad tag"
+ },
+ "RATES.BOND.SE0021308541.ASW_4_MXN": {
+  "status": "failed",
+  "via": "tshist",
+  "note": "bad tag"
+ },
+ "RATES.BOND.SE0021308541.ASW_4_BRL": {
+  "status": "failed",
+  "via": "tshist",
+  "note": "bad tag"
+ },
+ "RATES.BOND.SE0021308541.ASW_4_CNY": {
+  "status": "failed",
+  "via": "tshist",
+  "note": "bad tag"
+ },
+ "RATES.BOND.SE0021308541.ASW_4_KRW": {
+  "status": "failed",
+  "via": "tshist",
+  "note": "bad tag"
+ },
+ "RATES.BOND.SE0021308541.ASW_4_ZAR": {
+  "status": "failed",
+  "via": "tshist",
+  "note": "bad tag"
+ },
+ "RATES.BOND.SE0021308541.ZSPREAD": {
+  "status": "empty",
+  "via": "tshist",
+  "note": "no rows in window"
+ },
+ "RATES.BOND.SE0021308541.CAS": {
+  "status": "empty",
+  "via": "tshist",
+  "note": "no rows in window"
+ },
+ "RATES.BOND.SE0021308541.YIELD_WORST": {
+  "status": "empty",
+  "via": "tshist",
+  "note": "no rows in window"
+ },
+ "RATES.BOND.SE0021308541.CONVEXITY": {
+  "status": "empty",
+  "via": "tshist",
+  "note": "no rows in window"
+ },
+ "RATES.BOND.US91282CCS89.ASW_4_USD": {
+  "status": "valid",
+  "via": "tshist",
+  "sample": -1.00749,
+  "rows": 18
+ },
+ "RATES.BOND.US91282CCS89.ASW_4_EUR": {
+  "status": "empty",
+  "via": "tshist",
+  "note": "no rows in window"
+ },
+ "RATES.BOND.US91282CCS89.ASW_4_GBP": {
+  "status": "empty",
+  "via": "tshist",
+  "note": "no rows in window"
+ },
+ "RATES.BOND.US91282CCS89.ASW_4_CHF": {
+  "status": "empty",
+  "via": "tshist",
+  "note": "no rows in window"
+ },
+ "RATES.BOND.US91282CCS89.ASW_4_JPY": {
+  "status": "valid",
+  "via": "tshist",
+  "sample": -5.76242,
+  "rows": 18
+ },
+ "RATES.BOND.US91282CCS89.ASW_4_SEK": {
+  "status": "failed",
+  "via": "tshist",
+  "note": "bad tag"
+ },
+ "RATES.BOND.US91282CCS89.ASW_4_NOK": {
+  "status": "failed",
+  "via": "tshist",
+  "note": "bad tag"
+ },
+ "RATES.BOND.US91282CCS89.ASW_4_DKK": {
+  "status": "failed",
+  "via": "tshist",
+  "note": "bad tag"
+ },
+ "RATES.BOND.US91282CCS89.ASW_4_CAD": {
+  "status": "failed",
+  "via": "tshist",
+  "note": "bad tag"
+ },
+ "RATES.BOND.US91282CCS89.ASW_4_AUD": {
+  "status": "empty",
+  "via": "tshist",
+  "note": "no rows in window"
+ },
+ "RATES.BOND.US91282CCS89.ASW_4_NZD": {
+  "status": "failed",
+  "via": "tshist",
+  "note": "bad tag"
+ },
+ "RATES.BOND.US91282CCS89.ASW_4_MXN": {
+  "status": "failed",
+  "via": "tshist",
+  "note": "bad tag"
+ },
+ "RATES.BOND.US91282CCS89.ASW_4_BRL": {
+  "status": "failed",
+  "via": "tshist",
+  "note": "bad tag"
+ },
+ "RATES.BOND.US91282CCS89.ASW_4_CNY": {
+  "status": "failed",
+  "via": "tshist",
+  "note": "bad tag"
+ },
+ "RATES.BOND.US91282CCS89.ASW_4_KRW": {
+  "status": "failed",
+  "via": "tshist",
+  "note": "bad tag"
+ },
+ "RATES.BOND.US91282CCS89.ASW_4_ZAR": {
+  "status": "failed",
+  "via": "tshist",
+  "note": "bad tag"
+ },
+ "RATES.BOND.US91282CCS89.ZSPREAD": {
+  "status": "empty",
+  "via": "tshist",
+  "note": "no rows in window"
+ },
+ "RATES.BOND.US91282CCS89.CAS": {
+  "status": "empty",
+  "via": "tshist",
+  "note": "no rows in window"
+ },
+ "RATES.BOND.US91282CCS89.YIELD_WORST": {
+  "status": "empty",
+  "via": "tshist",
+  "note": "no rows in window"
+ },
+ "RATES.BOND.US91282CCS89.CONVEXITY": {
+  "status": "empty",
+  "via": "tshist",
+  "note": "no rows in window"
+ },
+ "RATES.BOND.ZAG000219478.ASW_4_USD": {
+  "status": "empty",
+  "via": "tshist",
+  "note": "no rows in window"
+ },
+ "RATES.BOND.ZAG000219478.ASW_4_EUR": {
+  "status": "empty",
+  "via": "tshist",
+  "note": "no rows in window"
+ },
+ "RATES.BOND.ZAG000219478.ASW_4_GBP": {
+  "status": "empty",
+  "via": "tshist",
+  "note": "no rows in window"
+ },
+ "RATES.BOND.ZAG000219478.ASW_4_CHF": {
+  "status": "empty",
+  "via": "tshist",
+  "note": "no rows in window"
+ },
+ "RATES.BOND.ZAG000219478.ASW_4_JPY": {
+  "status": "empty",
+  "via": "tshist",
+  "note": "no rows in window"
+ },
+ "RATES.BOND.ZAG000219478.ASW_4_SEK": {
+  "status": "failed",
+  "via": "tshist",
+  "note": "bad tag"
+ },
+ "RATES.BOND.ZAG000219478.ASW_4_NOK": {
+  "status": "failed",
+  "via": "tshist",
+  "note": "bad tag"
+ },
+ "RATES.BOND.ZAG000219478.ASW_4_DKK": {
+  "status": "failed",
+  "via": "tshist",
+  "note": "bad tag"
+ },
+ "RATES.BOND.ZAG000219478.ASW_4_CAD": {
+  "status": "failed",
+  "via": "tshist",
+  "note": "bad tag"
+ },
+ "RATES.BOND.ZAG000219478.ASW_4_AUD": {
+  "status": "empty",
+  "via": "tshist",
+  "note": "no rows in window"
+ },
+ "RATES.BOND.ZAG000219478.ASW_4_NZD": {
+  "status": "failed",
+  "via": "tshist",
+  "note": "bad tag"
+ },
+ "RATES.BOND.ZAG000219478.ASW_4_MXN": {
+  "status": "failed",
+  "via": "tshist",
+  "note": "bad tag"
+ },
+ "RATES.BOND.ZAG000219478.ASW_4_BRL": {
+  "status": "failed",
+  "via": "tshist",
+  "note": "bad tag"
+ },
+ "RATES.BOND.ZAG000219478.ASW_4_CNY": {
+  "status": "failed",
+  "via": "tshist",
+  "note": "bad tag"
+ },
+ "RATES.BOND.ZAG000219478.ASW_4_KRW": {
+  "status": "failed",
+  "via": "tshist",
+  "note": "bad tag"
+ },
+ "RATES.BOND.ZAG000219478.ASW_4_ZAR": {
+  "status": "failed",
+  "via": "tshist",
+  "note": "bad tag"
+ },
+ "RATES.BOND.ZAG000219478.ZSPREAD": {
+  "status": "empty",
+  "via": "tshist",
+  "note": "no rows in window"
+ },
+ "RATES.BOND.ZAG000219478.CAS": {
+  "status": "empty",
+  "via": "tshist",
+  "note": "no rows in window"
+ },
+ "RATES.BOND.ZAG000219478.YIELD_WORST": {
+  "status": "empty",
+  "via": "tshist",
+  "note": "no rows in window"
+ },
+ "RATES.BOND.ZAG000219478.CONVEXITY": {
+  "status": "empty",
+  "via": "tshist",
+  "note": "no rows in window"
+ }
+}

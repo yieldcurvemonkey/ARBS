@@ -148,6 +148,90 @@ Error behaviour differs by function and **must be handled differently**:
   `pywintypes.datetime`, depending on the number format the add-in applied. Parsers
   must accept both.
 
+### Bonds are a two-step mechanism, not a tag family
+
+`RATES.BOND` has **zero children** in the DAG — bonds are not enumerated there,
+because the ISIN universe is far too large for a browse tree. They are reached in
+two steps:
+
+1. **`CVCURVEBOND` is the universe.** A curve tag
+   `RATES.BONDS.BY_COUNTRY.<CTRY>.<CCY>.ASSET_TYPE_<TYPE>.<MEASURE>.<yyyymmdd>`
+   returns a grid of `Date | ISIN | Description | <measure>`, e.g. 349 rows for
+   `USA.USD.ASSET_TYPE_GOVT`, with descriptions like `T 1.25 08/15/2031`.
+   Note `RATES.BONDS` (plural) is a **separate curve namespace** — it is not one of
+   the 33 timeseries families.
+2. **`RATES.BOND.<ISIN>.<value>` is the timeseries** for one bond.
+
+Universe (probed 2026-08-04): **2,162 distinct ISINs** over 18 countries and three
+asset types — `GOVT`, `AGENCY`, `COVERED`. `CORP`, `MUNI`, `SUPRA`, `SSA`, `TIPS`,
+`INFL`, `ILB`, `SOVEREIGN`, `QUASI` all return nothing, as do `CAN` and `AUS`
+entirely. Largest: USA GOVT 349, JPN GOVT 326, FRA AGENCY 192, CHN GOVT 189,
+ITA GOVT 122, DEU COVERED 121.
+
+**Value vocabulary is 8**, established by probing rather than taken from the desk's
+measure catalogue:
+
+```
+PRICE  YIELD  SPREAD_TSY  ASW_4_USD  ASW_4_JPY  OAS  DURATION  DV01
+```
+
+The measure catalogue supplied by the desk (`MARKET_DATA` / `REFERENCE_DATA`,
+43 entries) is **not** the tag vocabulary and must not be used as one:
+
+- every `REFERENCE_DATA` field (`SEDOL`, `RIC`, `ISSUERNAME`,
+  `MATURITYDATEYYYYMMDD`, …) is rejected as a tag — reference data is static and
+  not served as a timeseries;
+- `DOLLAR_DURATION` is the catalogue's name but the tag is **`DV01`**;
+- `YIELD_WORST`, `YIELD_NEXT`, `ZSPREAD`, `CAS`, `CONVEXITY`, `ASW`, `ASW_4_EUR`,
+  `ASW_4_GBP`, `ASW_4_CHF` are recognised but empty — and empty on agency paper
+  too, so this is not a "straight Treasury has no call" artefact;
+- `OAS` needs a window longer than 1W to show data, so a short-window probe alone
+  would have wrongly discarded it.
+
+The two surfaces disagree, which the builders must respect: `CVCURVEBOND` accepts
+`YIELD PRICE SPREAD_TSY ASW_4_USD OAS DURATION` but **not** `DV01` or `ZSPREAD`,
+while `DV01` *is* a valid per-bond timeseries value.
+
+**`ASW_4_<CCY>` is a sparse cross-currency matrix, not the bond's own currency.**
+A bund carries `ASW_4_USD/GBP/CHF/AUD` but **not** `ASW_4_EUR`; a gilt carries
+`ASW_4_EUR/GBP/AUD`; a Treasury carries `ASW_4_USD/JPY`. There is no derivable
+rule — which legs are populated must be discovered per bond. `ASW_4_AUD` and `CAS`
+(the latter populated on CNY/KRW paper) were missed entirely by a first sweep that
+sampled only USD instruments; sampling one bond per currency is the minimum for
+this family.
+
+Exhaustive validation of 2,162 ISINs × 8 values gave **12,570 valid tags**:
+
+| value | coverage |
+|---|---|
+| `PRICE` / `YIELD` / `DURATION` | 97% |
+| `SPREAD_TSY` | 83% |
+| `DV01` | 77% |
+| `OAS` | 65% |
+| `ASW_4_USD` | 50% |
+| `ASW_4_JPY` | 15% (≈ the JGB universe) |
+
+Zero tags were rejected — every ISIN × value combination is either populated or
+empty, never invalid, so the tag grammar itself is confirmed.
+
+### Operational hazard: never kill a probe mid-flight
+
+Killing a COM client while Excel is serving a call can wedge Excel's OLE server:
+the process stays alive, idle and responsive to the UI, but every automation bind
+fails (`GetObject` returns an object exposing no properties; `Application.Workbooks`
+raises `AttributeError`). Clearing win32com's `gen_py` cache does not help.
+
+Worse, restarting Excel does **not** restore the add-in. Across four launch paths —
+`DispatchEx`, `Start-Process`, shell/`explorer.exe` open, and forced foreground
+activation — the add-in loads and `CustomRibbon.onLoad` fires, but the login
+taskpane never appears and the UDFs never register. Only a genuinely interactive
+start produces `Showing taskpane LoginViewModel → User session resumed →
+Registering functions`.
+
+So a harvest/validation run must be allowed to finish or be stopped through its own
+checkpointing, never `Stop-Process`. Recovering from a wedged session needs a human
+to open Excel and let the add-in sign in.
+
 ### Intraday capability is per-family, and not uniform
 
 `Velocity_Charting_Intraday_Tags.xlsx` (supplied by the desk) maps tag regex →
