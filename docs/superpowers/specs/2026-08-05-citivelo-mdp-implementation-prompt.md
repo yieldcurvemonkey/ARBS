@@ -88,6 +88,12 @@ be built in rateslib/QuantLib from Citi quotes. That is the bulk of the work.
    - Excel-busy surfaces as `AttributeError` on `Application.Workbooks` from
      win32com dynamic dispatch; retry it. `GetActiveObject` can return a zombie —
      enumerate the ROT and pick an instance that actually works.
+5. **`CVTSHIST` frequencies are exactly `MI01 MI10 HOURLY DAILY WEEKLY MONTHLY`**
+   (the `enumValues` in `ExcelConfiguration.json`). The desk's intraday workbook
+   lists "SE10 (Ten-secondly)" as the finest frequency for `OIS` and `TSY.OTR`, but
+   that describes the **streaming** feed (`CVSTREAM`); `CVTSHIST` rejects `SE10`
+   outright. **One minute is the finest historical granularity for every family** —
+   do not build a sub-minute code path.
 
 ## Deliverable 1 — the fetcher (`MDP/CitiVelocityExcel/`)
 
@@ -154,9 +160,11 @@ OAS DURATION DV01 CAS` — `ASW_4_<CCY>` is a **sparse cross-currency matrix**, 
 the bond's own currency. The desk's 43-entry measure catalogue is *not* the tag
 vocabulary: all `REFERENCE_DATA` fields are rejected, `DOLLAR_DURATION` is really
 `DV01`, and `CVCURVEBOND` accepts `OAS` but not `DV01` while `DV01` is a valid
-per-bond value. Bonds appear to be **EOD-only** (absent from the intraday map) —
-verify. Wire into rateslib `FixedRateBond` and QuantLib `FixedRateBond`/
-`BondFunctions`, following `../ARBS-ladder/MDP/FixedRateBonds`.
+per-bond value. **Bonds are intraday-capable** — tested 2026-08-05,
+`RATES.BOND.<ISIN>.{PRICE,YIELD}` returned 1,564 one-minute rows over two days
+against a 2,291-row known-intraday control, and 65 hourly rows against 70. Wire
+into rateslib `FixedRateBond` and QuantLib `FixedRateBond`/`BondFunctions`,
+following `../ARBS-ladder/MDP/FixedRateBonds`.
 
 **Inflation.** `RATES.INFLATION.{INDEX,INF_CARRY,SWAP,SWAPTION}.*`, 100%
 shape-valid.

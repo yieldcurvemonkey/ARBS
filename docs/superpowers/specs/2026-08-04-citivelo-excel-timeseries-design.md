@@ -244,20 +244,43 @@ Practical rules:
 intraday capability. This is a hard constraint on what a fetcher can ask for, so the
 cache layer must key on it rather than assume every family supports every frequency:
 
-| family | finest freq | intraday OHLC | EOD OHLC | streaming |
+| family | map's "finest" | intraday OHLC | EOD OHLC | streaming |
 |---|---|---|---|---|
-| `RATES.OIS.*` | **SE10** (10-second) | no | no | yes |
-| `RATES.TSY.OTR.*` | **SE10** | no | no | yes |
+| `RATES.OIS.*` | SE10 (10-second) | no | no | yes |
+| `RATES.TSY.OTR.*` | SE10 | no | no | yes |
 | `RATES.FUTURES.*` | MI01 | **yes** | **yes** | yes |
 | `RATES.SWAP.*PAR/FWD` | MI01 | no | no | yes |
 | `RATES.SOV.*OTR` | MI01 | no | no | yes |
 | `RATES.VOL.USD.ATM.NORMAL.ANNUAL.*` | MI01 | no | no | yes |
 | `RATES.SWAP.*SWAP_SPREAD/CURVES/BFLY`, `RATES.SOV.*CURVES/BFLY`, `RATES.VOL…DAILY` | MI01 | no | no | **no** |
 
-Two consequences: `PricePoint="OHLC"` is only meaningful for `RATES.FUTURES` in the
-rates complex, and only `RATES.OIS` / `RATES.TSY.OTR` go finer than one minute. Note
-this workbook describes *intraday* capability — it is not a substitute for the
-catalog harvest, which is what enumerates the tags themselves.
+**The "SE10" column does not apply to `CVTSHIST`.** Tested 2026-08-05: `CVTSHIST`
+rejects it outright —
+
+```
+Error: Parameter 'Frequency' must be one of "MI01","MI10","HOURLY","DAILY","WEEKLY","MONTHLY".
+```
+
+which is exactly the `Frequency` `enumValues` in `ExcelConfiguration.json`. The
+ten-second figure describes the **streaming** feed (`CVSTREAM`), not historical
+retrieval. **One minute is the finest historical granularity for every family.**
+
+`PricePoint="OHLC"` remains meaningful only for `RATES.FUTURES` in the rates complex.
+
+**Bonds ARE intraday-capable**, despite `RATES.BOND` being absent from this
+workbook. Absence from the map is not absence of capability — tested against a
+known-intraday control in the same window and frequency:
+
+| window | control `TSY.OTR.10Y.YIELD` | `RATES.BOND.<ISIN>.{PRICE,YIELD}` |
+|---|---|---|
+| MI01, 2 days | 2,291 rows | 1,564–1,566 rows |
+| MI01, `period=1D` | 1,408 | 948–950 |
+| HOURLY, 4 days | 70 | 65 |
+
+The lower bond counts are liquidity — a specific ISIN ticks less than the
+on-the-run — not a capability limit. Note this workbook describes intraday
+capability only; it is not a substitute for the catalog harvest, and it is not
+authoritative about `CVTSHIST` frequencies.
 
 ### Tag families verified live
 
