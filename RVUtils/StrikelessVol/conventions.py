@@ -34,14 +34,22 @@ __all__ = [
 ]
 
 
-def annual_normals_to_bp_day(annual_normals: float) -> float:
-    """Annualised normal vol (bp/yr) -> daily bp vol."""
-    return float(annual_normals) / math.sqrt(TRADING_DAYS)
+def annual_normals_to_bp_day(annual_normals: Any) -> Any:
+    """Annualised normal vol (bp/yr) -> daily bp vol.
+
+    Works on scalars and on array-likes (e.g. a pandas Series of daily
+    implied-vol prints) alike: uses ``np.asarray`` rather than ``float()``,
+    which raises on a multi-element Series -- same pattern as ``slope_bp``.
+    """
+    return np.asarray(annual_normals) / math.sqrt(TRADING_DAYS)
 
 
-def bp_day_to_annual_normals(bp_day: float) -> float:
-    """Daily bp vol -> annualised normal vol (bp/yr)."""
-    return float(bp_day) * math.sqrt(TRADING_DAYS)
+def bp_day_to_annual_normals(bp_day: Any) -> Any:
+    """Daily bp vol -> annualised normal vol (bp/yr).
+
+    Works on scalars and on array-likes alike -- see ``annual_normals_to_bp_day``.
+    """
+    return np.asarray(bp_day) * math.sqrt(TRADING_DAYS)
 
 
 def slope_bp(*, short_rate: Any, long_rate: Any) -> Any:

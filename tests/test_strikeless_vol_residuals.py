@@ -37,24 +37,37 @@ def test_half_life_is_infinite_for_a_random_walk():
     assert not np.isfinite(ar1_half_life_days(rw)) or ar1_half_life_days(rw) > 100
 
 
+def test_half_life_is_strictly_infinite_for_a_random_walk_via_adf():
+    """This fixture (seed=1) is the reason the guard cannot be a ``phi >= 1.0``
+    boundary comparison alone: OLS's finite-sample downward bias recovers
+    phi ~= 0.9982 here, strictly below 1.0, so a boundary-only implementation
+    computes a large but *finite* half-life (~393 business days) -- and the
+    verbatim test above still passes on that, because its own fallback
+    (``> 100``) accepts any sufficiently large finite value as good enough.
+    A ~1.6-year "half life" on a residual that does not mean-revert at all is
+    exactly the failure this function exists to prevent, so accepting it as
+    a passing test does not actually verify the fix. This test requires
+    literal infinity, which is only produced once an Augmented Dickey-Fuller
+    test (not just the phi point estimate) is what decides -- ADF fails to
+    reject the unit-root null for this fixture (p ~= 0.41), which is the
+    actual, correct basis for calling this a unit root."""
+    rng = np.random.default_rng(1)
+    rw = pd.Series(np.cumsum(rng.normal(0, 1, 3000)))
+    assert math.isinf(ar1_half_life_days(rw))
+
+
 def test_half_life_is_strictly_infinite_at_and_above_the_unit_root():
     """Mutation evidence: dropping the ``phi >= 1.0`` branch (keeping only
     ``phi <= 0.0``) is NOT caught by ``test_half_life_is_infinite_for_a_random_walk``
     above -- seed=1's random walk recovers phi ~= 0.9982 (below 1.0), so the
     mutated code still returns a large-but-finite half-life (~393 business
     days) that clears that test's ``> 100`` fallback. This test plants a
-    residual series whose OLS AR(1) fit is exactly phi=1.0 (a perfect,
-    noise-free linear ramp: resid[i] = resid[i-1] + 1 for every i) so the
-    boundary itself is exercised deterministically, and asserts the return is
-    *literally* infinite -- not merely a large or negative finite number, both
-    of which a guard missing the upper bound can produce (division by
-    log(phi)=0 gives -inf for phi==1.0 exactly, but any phi > 1.0, e.g. a
-    mildly explosive OLS fit, gives a negative *finite* half-life under a
-    broken guard, which is not caught by an `or > 100` fallback either)."""
-    ramp = pd.Series(np.arange(1.0, 31.0), index=pd.bdate_range("2020-01-01", periods=30))
-    assert ar1_phi(ramp) == pytest.approx(1.0)
-    assert math.isinf(ar1_half_life_days(ramp))
-
+    mildly explosive, noise-free series (phi ~= 1.01, comfortably above the
+    unit-root boundary -- unlike an exact phi==1.0 fixture, this is not
+    sensitive to which side of 1.0 a platform's floating-point/LAPACK
+    implementation happens to land a "perfect" ramp on) and asserts the
+    return is *literally* infinite, not merely a large (or negative) finite
+    number -- both of which a guard missing the upper bound can produce."""
     explosive = pd.Series(1.01 ** np.arange(30), index=pd.bdate_range("2020-01-01", periods=30))
     assert ar1_phi(explosive) > 1.0
     assert math.isinf(ar1_half_life_days(explosive))

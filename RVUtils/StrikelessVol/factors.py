@@ -123,10 +123,31 @@ def ar1_phi(resid) -> float:
     return float(np.polyfit(x.to_numpy(), y.to_numpy(), 1)[0])
 
 
-def ar1_half_life_days(resid) -> float:
-    """Business days to halve. Infinite for a unit root."""
+def ar1_half_life_days(resid, *, adf_pvalue_threshold: float = 0.05) -> float:
+    """Business days to halve. Infinite for a unit root.
+
+    "Unit root" is decided by an Augmented Dickey-Fuller test
+    (``RVUtils.regression.residual_diagnostics``), not by a ``phi >= 1.0``
+    boundary comparison alone: finite-sample OLS estimates of phi for a
+    genuine unit-root process are biased downward and essentially never land
+    exactly at or above 1.0 in practice (a true random walk of 3000
+    observations recovers phi ~= 0.998, not 1.0), so a boundary check by
+    itself reports a large-but-finite "half life" for a residual that does
+    not actually mean-revert -- exactly the failure this function exists to
+    prevent. ``phi >= 1.0`` (or non-finite/non-positive phi) is kept as a
+    cheap short-circuit for when the point estimate itself is already at or
+    past the boundary; whenever phi is interior, the ADF p-value is what
+    decides -- failing to reject the unit-root null (p > ``adf_pvalue_threshold``,
+    default 0.05) returns infinity regardless of how plausible phi looks.
+    """
     phi = ar1_phi(resid)
     if not np.isfinite(phi) or phi <= 0.0 or phi >= 1.0:
+        return float("inf")
+
+    from RVUtils.regression import residual_diagnostics
+
+    adf_p = residual_diagnostics(resid).get("adf_pvalue", float("nan"))
+    if not np.isfinite(adf_p) or adf_p > float(adf_pvalue_threshold):
         return float("inf")
     return float(np.log(0.5) / np.log(phi))
 
