@@ -16,7 +16,7 @@ from __future__ import annotations
 import math
 from collections.abc import Sequence
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any
 
 import pandas as pd
@@ -130,7 +130,7 @@ def build_package(
 
 
 def package_npv(curve_handle, package: Package) -> float:
-    """Package PV on an arbitrary curve handle (base, shifted or translated)."""
+    """Package PV on an arbitrary curve handle (base, shifted, or rolled)."""
     return float(
         package.short.npv(curves=curve_handle).real
         + package.long.npv(curves=curve_handle).real
@@ -251,7 +251,13 @@ def analytic_leg_gamma(curve, swap) -> float:
 
 
 def daily_roll_usd(curve, package: Package, *, next_date) -> float:
-    """One business day of carry+roll, in dollars, package dates held fixed.
+    """Carry+roll to ``next_date``, in dollars, package dates held fixed.
+
+    ``next_date`` is caller-supplied (see :func:`compute_greeks`'s default,
+    which uses exactly one CALENDAR day -- not one business day, since a
+    weekend or holiday is not a market convention the curve's shape needs to
+    respect, and letting the horizon vary with the calendar would silently
+    change the "bp/day" unit ``breakeven_by_h`` is labelled in).
 
     ``rl.Curve.roll`` slides the curve's *shape* forward in time while holding
     the package's own cashflow dates fixed -- rateslib's own docs call this
@@ -315,7 +321,22 @@ def compute_greeks(
     sign: int = FLATTENER,
     h_bps=(10.0, 25.0, 50.0),
 ) -> PackageGreeks:
-    """Everything for one pair on one date, all of it repriced."""
+    """Everything for one pair on one date, all of it repriced.
+
+    ``next_date`` defaults to exactly one CALENDAR day forward, not one
+    business day. ``roll_bps_running``/``calendar_advance``-style "1b" jumps
+    3 calendar days over a weekend and 4 over a holiday-adjacent Friday, and
+    with the roll spanning more calendar days the dollar roll and the
+    breakeven it feeds both grow with the gap (a real panel showed Friday
+    breakevens inflated ~sqrt(3) over midweek ones purely from the horizon,
+    not from anything economic) -- while ``breakeven_by_h`` is labelled and
+    consumed as bp/*day*. ``rl.Curve.roll`` slides the curve's shape forward
+    in time; a weekend is not a market convention it needs to respect, so
+    there is no reason to skip it. Pass an explicit ``next_date`` to measure
+    a different horizon, but note the "bp/day" label then no longer applies
+    literally -- divide the returned $ roll by the horizon's calendar-day
+    count first if a genuine daily rate is needed.
+    """
     from RVUtils.StrikelessVol.conventions import slope_bp
 
     pkg = build_package(curve, pair, package_dv01_usd=package_dv01_usd, sign=sign)
@@ -323,7 +344,7 @@ def compute_greeks(
     long_rate = float(curve.fair_rate(curve.build_irswap(fwd=pair.long.fwd, tenor=pair.long.tail)))
 
     if next_date is None:
-        next_date = curve.calendar_advance(curve.reference_date(), "1b")
+        next_date = curve.reference_date() + timedelta(days=1)
 
     gammas = gamma_by_h(curve, pkg, h_bps=h_bps)
     roll = daily_roll_usd(curve, pkg, next_date=next_date)

@@ -141,13 +141,20 @@ def _semiannual_par_swap(curve, notional=100_000_000.0):
 
 
 def test_package_dv01_is_neutral_at_inception(curve, pkg):
-    """Neutrality is imposed on pv01 (the annuity), so the reprice differs a little.
+    """Neutrality is now imposed directly in the repriced measure this
+    checks, so the residual is float noise, not a small but real number.
 
-    Each leg is struck at its own fair rate, so each leg's PV is exactly zero at
-    inception and there is no discounting residual to explain. What is left is
-    that ``dR_fair/dDelta`` under a convention-measured parallel shift is not
-    identical for a 10y10y and a 20y10y, so matching annuities does not match
-    the repriced deltas to the last cent. Observed $1.44 on a $100k package.
+    Each leg is struck at its own fair rate, so each leg's PV is exactly zero
+    at inception. ``build_leg`` originally sized each leg off ``curve.pv01``
+    (the analytic annuity) while this test checks neutrality in the repriced
+    (bump-and-reprice) measure -- those two measures disagree once the curve
+    isn't flat (``dR_fair/dDelta`` under a parallel shift is not identical for
+    a 10y10y and a 20y10y), which is what left the originally-observed $1.44
+    residual on a $100k package here, and an 11.4%-of-target residual on an
+    inverted fixture (see ``tests/test_strikeless_vol_breakeven.py``).
+    ``build_leg`` now sizes off the same repriced measure
+    (``greeks._reprice_dv01``) this test checks, so the two can no longer
+    disagree: observed residual is 0.0 (float-exact) on this fixture.
     """
     assert package_dv01(curve, pkg) == pytest.approx(0.0, abs=10.0)
 

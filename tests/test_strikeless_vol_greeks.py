@@ -51,6 +51,25 @@ def test_leg_is_sized_to_the_requested_dv01(curve):
     not $100,000, for this same leg -- see
     ``tests/test_strikeless_vol_breakeven.py``'s inverted-curve residual for
     where that gap becomes 11%+ and the reason sizing moved off ``pv01``).
+
+    **This is circular, not an independent check**: it recomputes the exact
+    same +/-1bp central difference ``build_leg``/``_reprice_dv01`` sizes off,
+    on the same curve and the same ``h_bp``, so it can only fail if NPV is
+    non-linear in notional (it is not -- NPV is a linear function of
+    notional for a fixed-rate/float swap under a given curve, by
+    construction). There is currently no independent closed-form control for
+    this first-derivative sizing specifically. What IS independent:
+    ``test_control_bites_when_the_bump_unit_is_wrong`` /
+    ``test_bp_read_as_a_decimal_cannot_even_be_repriced``
+    (``test_strikeless_vol_greeks_control.py``) sabotage the underlying
+    ``rl.Curve.shift`` primitive that ``_reprice_dv01`` and ``package_gamma``
+    both depend on, and confirm a unit/sign bug in THAT primitive is caught
+    -- but that control validates the SECOND derivative (Gamma) against a
+    closed form using whatever notional the leg already has; it does not
+    independently re-derive that the notional itself is correct. This test
+    is kept as a smoke test (a gross regression -- e.g. someone deleting the
+    scaling entirely -- would still fail it) with that limitation stated
+    plainly rather than left circular and unlabelled.
     """
     leg = build_leg(curve, ForwardLeg("10Y", "10Y"), dv01_usd=100_000.0, direction=+1)
     handle = curve.handle()
