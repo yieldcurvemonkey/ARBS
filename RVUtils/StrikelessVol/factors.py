@@ -26,6 +26,7 @@ __all__ = [
     "residual_z",
     "drift",
     "positive_residual_clustering",
+    "beta_vs_vol_level",
 ]
 
 
@@ -243,3 +244,20 @@ def positive_residual_clustering(resid, *, window: int = 21) -> pd.Series:
     """Share of positive residuals in the window -- the regime tell (H4)."""
     e = pd.Series(resid).astype(float)
     return (e > 0).rolling(int(window), min_periods=int(window)).mean()
+
+
+def beta_vs_vol_level(spread_bp, vol_ann, *, window: int = 126) -> pd.DataFrame:
+    """H3: convexity is proportional to sigma^2, so the beta should scale in sigma."""
+    from RVUtils.regression import rolling_beta_stability
+
+    dy = pd.Series(spread_bp).astype(float).diff()
+    dx = pd.Series(vol_ann).astype(float).diff()
+    tbl = rolling_beta_stability(dy, dx.rename("vol"), window_beta=int(window))
+    out = pd.DataFrame(
+        {"beta": tbl["beta_vol"], "vol_level": pd.Series(vol_ann).astype(float)}
+    ).dropna()
+    if len(out) > 10:
+        slope, intercept = np.polyfit(out["vol_level"], out["beta"], 1)
+        out.attrs["beta_on_vol_slope"] = float(slope)
+        out.attrs["beta_on_vol_intercept"] = float(intercept)
+    return out
