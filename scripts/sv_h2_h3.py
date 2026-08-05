@@ -193,8 +193,8 @@ def main(start=FULL_START, end=END) -> None:
               f"vol={row['vol_beta']:+.4f} (t={row['vol_t']:+.2f})  "
               f"R2={row['r_squared']:.3f} DW={row['durbin_watson']:.2f} n={int(row['n'])}")
 
-    print("\n=== H2 placebo: real |t(umep)| vs circular-shift placebo distribution (n=20 draws) ===")
-    placebo = h2_placebo(swap_slope, ust_slope, vol_ann, umep)
+    print("\n=== H2 placebo: real |t(umep)| vs circular-shift placebo distribution (n=100 draws) ===")
+    placebo = h2_placebo(swap_slope, ust_slope, vol_ann, umep, n_draws=100)
     for _, row in placebo.iterrows():
         print(f"{row['label']:28s} h={int(row['horizon_days']):2d}d  "
               f"real|t|={row['real_abs_t']:.2f}  placebo median|t|={row['placebo_median_abs_t']:.2f}  "

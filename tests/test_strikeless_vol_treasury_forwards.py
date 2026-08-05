@@ -1,10 +1,15 @@
+import datetime as dt
+
 import numpy as np
+import pandas as pd
 import pytest
 
 from RVUtils.StrikelessVol.treasury_forwards import (
     forward_par_rate,
     par_to_discount,
+    treasury_forward_panel,
 )
+from RVUtils.StrikelessVol.universe import ForwardLeg
 
 
 def _analytic_curve(rate, ttms, freq=2):
@@ -46,3 +51,52 @@ def test_discount_factors_are_monotone_decreasing():
 def test_bootstrap_rejects_an_unsorted_grid():
     with pytest.raises(ValueError):
         par_to_discount(np.array([2.0, 1.0]), np.array([0.04, 0.04]))
+
+
+class _FakeSpline:
+    """Minimal stand-in for CashSpline: a flat curve plus an rmse attribute."""
+
+    def __init__(self, rate: float, rmse: float):
+        self.rate = rate
+        self.rmse = rmse
+
+    def yield_at(self, ttm):
+        return self.rate
+
+
+def test_treasury_forward_panel_excludes_bad_fit_days_and_reports_the_count():
+    """A spline whose own fit RMSE is anomalously high (see the module
+    docstring's "RMSE guard" -- found on real 2021-2026 data: 13 dates with
+    RMSE 22.5bp-80,000+bp against a normal ~2bp) does not represent its
+    input bonds and must not silently corrupt the forward panel.
+    """
+    legs = [ForwardLeg("10Y", "10Y"), ForwardLeg("20Y", "10Y")]
+    good_date = dt.date(2024, 1, 2)
+    bad_date = dt.date(2024, 1, 3)
+    spline_by_date = {
+        good_date: _FakeSpline(rate=4.0, rmse=2.5),   # normal fit quality
+        bad_date: _FakeSpline(rate=4.0, rmse=43.6),   # matches a real corrupted date's RMSE
+    }
+    panel = treasury_forward_panel(spline_by_date, legs)
+    assert list(panel.index.date) == [good_date]
+    assert panel.attrs["treasury_excluded_bad_fit_days"] == 1
+
+
+def test_treasury_forward_panel_keeps_a_borderline_good_fit():
+    """rmse_guard_bp=10.0 sits between the normal group's 99th percentile
+    (3.62bp) and the corrupted group's minimum (22.5bp) -- a fit at 5bp,
+    inside that gap but still far below any corrupted date, must be kept.
+    """
+    legs = [ForwardLeg("10Y", "10Y"), ForwardLeg("20Y", "10Y")]
+    d = dt.date(2024, 1, 2)
+    spline_by_date = {d: _FakeSpline(rate=4.0, rmse=5.0)}
+    panel = treasury_forward_panel(spline_by_date, legs)
+    assert list(panel.index.date) == [d]
+    assert panel.attrs["treasury_excluded_bad_fit_days"] == 0
+
+
+def test_treasury_forward_panel_reports_zero_excluded_on_the_empty_path():
+    legs = [ForwardLeg("10Y", "10Y"), ForwardLeg("20Y", "10Y")]
+    panel = treasury_forward_panel({}, legs)
+    assert panel.empty
+    assert panel.attrs["treasury_excluded_bad_fit_days"] == 0
