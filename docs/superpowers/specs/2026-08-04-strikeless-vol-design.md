@@ -221,12 +221,21 @@ after costs, and uncompensated factor risk measured as residual PCA exposure.
   per-day replay carrying a shuffle counterexample; the DV01 traded per resize
   implied by the cost ledger matching Γ·h (measured $5,311 vs $5,102, 4%);
   harvest flipping sign exactly with the position and vanishing on instruments
-  without convexity; and **`resid_skew` — the skew of the residual after
-  removing the linear Δspread term — used only as a signed, mirrored, paired
-  difference against the same configuration's exact mirror, on fits with
-  R² ≳ 0.93.** Its magnitude is a fit-quality scale, not a convexity scale.
-  Sharpe is actively misleading here: both placebo pairs out-Sharpe every real
-  pair while running the opposite carry sign.
+  without convexity. Sharpe is actively misleading here: both placebo pairs
+  out-Sharpe every real pair while running the opposite carry sign.
+
+  **`resid_skew` / `mirror_split` — domain established by refutation, not by
+  assumption.** The mirrored paired difference was tested on the placebos and
+  failed: placebo-2's steepener printed a near-exact *reflection* rather than
+  the same-signed misfit the cancellation argument needs, so differencing
+  doubled the error (−0.830) instead of cancelling it. Decisively, the two
+  placebo pairs carry **identical Γ to within 0.2%** (20.31 vs 20.34 $/bp²) and
+  receive **opposite** `resid_skew` signs — at a tenth the study pair's
+  convexity the sign carries no information. Pairing cancels contamination
+  *common* to both books; it does nothing to position-odd noise. `mirror_split`
+  is therefore a **confirmatory** statistic in the high-Γ, high-R² regime only
+  (study pair: Γ ≈ 204 $/bp², R² ≈ 0.956, split +5.13), the **R² cut is what
+  excludes the placebos**, and neither statistic may rank anything.
 - **Analytic control**: repriced DV01/Γ vs closed form on a vanilla swap.
 - **Regime re-basing check**: fit 2017–19, predict 2026; the brief's claim is a
   ~35bp intercept shift invisible to within-sample regression. Reproduce the
