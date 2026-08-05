@@ -14,6 +14,7 @@ from RVUtils.StrikelessVol.backtest import (
     RequirementFlags,
     audit_causal_betas,
     audit_rolling_sigma_z,
+    audit_trailing_statistic,
     build_config_grid,
     causal_signals,
     entry_vintage_signals,
@@ -25,6 +26,8 @@ from RVUtils.StrikelessVol.backtest import (
 )
 from RVUtils.StrikelessVol.costs import FREE, MAKER, TAKER, CostSchedule
 from RVUtils.StrikelessVol.factors import (
+    changes_regression,
+    expanding_changes_residual,
     expanding_residual,
     levels_regression,
     residual_z,
@@ -710,7 +713,15 @@ def test_a_certified_residual_z_does_not_certify_the_signal():
         "be_over_realized", "drift_t", "spread_vol_bp_day", "iv_z", "drivers"}
 
 
-def test_supplying_the_sources_certifies_drift_t_and_iv_z():
+def test_supplying_only_the_sources_certifies_the_transform_and_says_so():
+    """A source with no builder certifies the TRANSFORM and nothing more.
+
+    This is the honesty half of the amendment. The fact is real -- `drift_t`
+    IS a trailing 63-day NW-t of the series it was handed -- but the series
+    itself is unaudited, and a leaky source reproduces its own transform
+    perfectly. So the certificate must name what it covers (`drift_t(source
+    uncertified)`) and name the source among what it does not.
+    """
     spread, drivers = _factor_frame()
     rng = np.random.default_rng(11)
     changes_resid = pd.Series(rng.normal(0, 1.0, len(spread)), index=spread.index)
@@ -725,11 +736,289 @@ def test_supplying_the_sources_certifies_drift_t_and_iv_z():
                          min_periods=252, changes_resid=changes_resid,
                          iv_bp_day=iv)
     assert set(sig.attrs["certified_signal_inputs"]) == {
-        "residual_z", "drift_t", "iv_z"}
+        "residual_z", "drift_t(source uncertified)", "iv_z(source uncertified)"}
+    # the bare column names must NOT appear -- that is the over-read
+    assert "drift_t" not in sig.attrs["certified_signal_inputs"]
+    assert "iv_z" not in sig.attrs["certified_signal_inputs"]
     assert set(sig.attrs["uncertified_signal_inputs"]) == {
-        "be_over_realized", "spread_vol_bp_day", "drivers"}
+        "be_over_realized", "spread_vol_bp_day", "drivers",
+        "changes_resid", "iv_bp_day"}
     assert sig.attrs["drift_t_max_abs_diff"] == pytest.approx(0.0, abs=1e-8)
     assert sig.attrs["iv_z_max_abs_diff"] == pytest.approx(0.0, abs=1e-8)
+    # `*_max_abs_diff` is <= tol by construction (a mismatch raises), so the
+    # number that can actually carry evidence is the count.
+    assert sig.attrs["drift_t_n_compared"] > 100
+    assert sig.attrs["iv_z_n_compared"] > 100
+
+
+# ---------------- the HIGH finding: certifying the transform is not enough
+
+
+def _changes_builder(min_periods=252):
+    return lambda y, x: expanding_changes_residual(
+        y, x, min_periods=min_periods).residual
+
+
+def _leaky_changes_builder():
+    """The repo's ONLY changes-regression builder before this fix: full sample."""
+    return lambda y, x: changes_regression(y, x).residuals
+
+
+def test_the_walk_forward_changes_residual_is_causal_and_the_full_sample_one_is_not():
+    """Verify the source probe against inputs whose answers are already known.
+
+    `factors.changes_regression` fits one set of betas on the whole sample, so
+    shocking the last 25% of the spread moves the FIRST 75% of its residual --
+    and the `drift_t` built on it moves 6.1 t-units in that head, against a
+    veto gate of 2.0.
+    """
+    spread, drivers = _factor_frame()
+
+    honest = audit_causal_betas(_changes_builder(), spread, drivers)
+    assert honest["causal"] is True
+    assert honest["max_abs_diff"] == 0.0
+    assert honest["probe_reached"] is True
+    assert honest["responds_to_history"] is True
+    assert honest["n_compared"] > 100
+
+    leaky = audit_causal_betas(_leaky_changes_builder(), spread, drivers)
+    assert leaky["causal"] is False
+    assert leaky["max_abs_diff"] > 1.0        # measured 2.628
+
+    # ... and what that is worth where it is READ: the veto column itself.
+    from RVUtils.StrikelessVol.factors import drift as _drift
+    cut = int(len(spread) * 0.75)
+    shocked = spread.copy()
+    shocked.iloc[cut:] = shocked.iloc[cut:] + 250.0
+    head = spread.index[:cut]
+    base_t = _drift(_leaky_changes_builder()(spread, drivers))["t_stat"]
+    sh_t = _drift(_leaky_changes_builder()(shocked, drivers))["t_stat"]
+    pair = pd.concat([base_t.reindex(head).rename("a"),
+                      sh_t.reindex(head).rename("b")], axis=1).dropna()
+    assert float((pair["a"] - pair["b"]).abs().max()) > 2.0   # the veto gate
+
+
+def test_expanding_changes_residual_is_a_changes_fit_not_a_levels_one():
+    """Pin the arithmetic, not just the causality: the residual at t is dy_t
+    minus the prediction of an OLS fitted on rows STRICTLY BEFORE t, with BOTH
+    sides differenced. A builder that forgot to difference one side would still
+    be causal, and every causality test would still pass."""
+    spread, drivers = _factor_frame(n=400)
+    fit = expanding_changes_residual(spread, drivers, min_periods=100)
+    dy, dx = spread.diff(), drivers["vol"].diff()
+
+    i = 300
+    ts = spread.index[i]
+    hist = pd.concat([dy.rename("y"), dx.rename("x")], axis=1).iloc[:i].dropna()
+    A = np.column_stack([np.ones(len(hist)), hist["x"].to_numpy()])
+    coef = np.linalg.lstsq(A, hist["y"].to_numpy(), rcond=None)[0]
+    expected = float(dy.loc[ts]) - (coef[0] + coef[1] * float(dx.loc[ts]))
+    assert float(fit.residual.loc[ts]) == pytest.approx(expected, abs=1e-12)
+
+    # the planted relation is in LEVELS, so the two fits are different objects
+    levels = expanding_residual(spread, drivers, min_periods=100).residual
+    assert float((fit.residual - levels).abs().max()) > 1.0
+    assert fit.kind == "expanding_changes"
+    assert fit.residual.iloc[:100].isna().all()      # warmup, not back-filled
+
+
+def test_a_full_sample_changes_residual_source_is_refused_by_causal_signals():
+    """THE finding. The transform leg alone accepts this at 0.0 -- so the test
+    first proves the old check passes it, then that the new one does not."""
+    spread, drivers = _factor_frame()
+    leaky = _leaky_changes_builder()(spread, drivers)
+
+    panel = _panel_for(spread, drivers)
+    panel["drift_t"] = _drift_t_from(leaky)
+
+    # premise: the column IS the declared trailing statistic of that source,
+    # to float zero, over hundreds of dates. Leg 1 cannot see the hazard.
+    transform_only = audit_trailing_statistic(
+        panel["drift_t"], leaky, label="drift_t",
+        recompute=lambda s: _drift_t_from(s))
+    assert transform_only["matched"] is True
+    assert transform_only["max_abs_diff"] == pytest.approx(0.0, abs=1e-9)
+    assert transform_only["source_causal"] is None      # nothing was asked
+    assert transform_only["certified"] is False
+
+    with pytest.raises(ValueError, match="changes_resid_fn` is not causal"):
+        causal_signals(panel, SignalConfig(), spread_bp=spread, drivers=drivers,
+                       min_periods=252, changes_resid=leaky,
+                       changes_resid_fn=_leaky_changes_builder())
+
+
+def test_a_walk_forward_changes_residual_source_is_certified():
+    """The honest counterpart, so the refusal above is not simply 'refuses
+    everything' -- the trap in a source check is that both builders pass."""
+    spread, drivers = _factor_frame()
+    resid = expanding_changes_residual(spread, drivers, min_periods=252).residual
+
+    panel = _panel_for(spread, drivers)
+    panel["drift_t"] = _drift_t_from(resid)
+
+    sig = causal_signals(panel, SignalConfig(), spread_bp=spread, drivers=drivers,
+                         min_periods=252, changes_resid=resid,
+                         changes_resid_fn=_changes_builder())
+    assert set(sig.attrs["certified_signal_inputs"]) == {
+        "residual_z", "drift_t", "changes_resid"}
+    assert "drift_t" not in sig.attrs["uncertified_signal_inputs"]
+    assert "changes_resid" not in sig.attrs["uncertified_signal_inputs"]
+    # certifying the SOURCE's builder does not certify the drivers it regresses
+    # on: `audit_causal_betas` shocks only the dependent variable.
+    assert "drivers" in sig.attrs["uncertified_signal_inputs"]
+    assert sig.attrs["changes_resid_causal_max_abs_diff"] == 0.0
+    assert sig.attrs["changes_resid_artifact_max_abs_diff"] == pytest.approx(
+        0.0, abs=1e-9)
+
+
+def test_an_honest_builder_beside_a_leaky_series_is_refused():
+    """The same defect one level down: audit a builder, then build the signal
+    from a different object. That is how `fit=` leaked in the first place."""
+    spread, drivers = _factor_frame()
+    leaky = _leaky_changes_builder()(spread, drivers)
+
+    panel = _panel_for(spread, drivers)
+    panel["drift_t"] = _drift_t_from(leaky)
+
+    with pytest.raises(ValueError, match="is not what `changes_resid_fn` produces"):
+        causal_signals(panel, SignalConfig(), spread_bp=spread, drivers=drivers,
+                       min_periods=252, changes_resid=leaky,
+                       changes_resid_fn=_changes_builder())     # honest builder
+
+
+def test_a_smoothed_iv_source_is_refused_once_its_builder_is_probed():
+    """`iv_z`'s milder form. Leg 1 catches a full-sample sigma because the raw
+    vol series is an observable; it cannot catch a CENTRED-window smoothing of
+    that observable, which is a realistic 'clean up the series' step."""
+    spread, drivers = _factor_frame()
+    rng = np.random.default_rng(31)
+    raw_iv = pd.Series(60.0 + np.cumsum(rng.normal(0, 0.4, len(spread))),
+                       index=spread.index)
+
+    def centred(y, _drivers):
+        return pd.Series(y).rolling(21, center=True, min_periods=1).mean()
+
+    smoothed = centred(raw_iv, {})
+    panel = _panel_for(spread, drivers)
+    panel["iv_z"] = residual_z(smoothed, window=252, min_periods=126)
+
+    # premise: leg 1 certifies the smoothed series at float zero
+    transform_only = audit_trailing_statistic(
+        panel["iv_z"], smoothed, label="iv_z",
+        recompute=lambda s: residual_z(s, window=252, min_periods=126))
+    assert transform_only["matched"] is True
+    assert transform_only["max_abs_diff"] == pytest.approx(0.0, abs=1e-12)
+
+    with pytest.raises(ValueError, match="iv_bp_day_fn` is not causal"):
+        causal_signals(panel, SignalConfig(), spread_bp=spread, drivers=drivers,
+                       min_periods=252, iv_bp_day=smoothed,
+                       iv_bp_day_fn=centred, iv_bp_day_source=raw_iv)
+
+    # and the honest counterpart -- a TRAILING smoother -- is certified
+    def trailing(y, _drivers):
+        return pd.Series(y).rolling(21, min_periods=1).mean()
+
+    clean = trailing(raw_iv, {})
+    panel2 = _panel_for(spread, drivers)
+    panel2["iv_z"] = residual_z(clean, window=252, min_periods=126)
+    sig = causal_signals(panel2, SignalConfig(), spread_bp=spread, drivers=drivers,
+                         min_periods=252, iv_bp_day=clean,
+                         iv_bp_day_fn=trailing, iv_bp_day_source=raw_iv)
+    assert set(sig.attrs["certified_signal_inputs"]) == {
+        "residual_z", "iv_z", "iv_bp_day"}
+
+
+def test_a_source_builder_without_its_input_is_refused():
+    spread, drivers = _factor_frame()
+    rng = np.random.default_rng(32)
+    iv = pd.Series(60.0 + np.cumsum(rng.normal(0, 0.4, len(spread))),
+                   index=spread.index)
+    panel = _panel_for(spread, drivers)
+    panel["iv_z"] = residual_z(iv, window=252, min_periods=126)
+    with pytest.raises(ValueError, match="needs `iv_bp_day_source"):
+        causal_signals(panel, SignalConfig(), spread_bp=spread, drivers=drivers,
+                       min_periods=252, iv_bp_day=iv,
+                       iv_bp_day_fn=lambda y, d: pd.Series(y))
+
+
+def test_the_trailing_statistic_tolerance_is_tight():
+    """`tol` could go 1e-8 -> 0.7 with zero test failures: the smallest
+    mismatch any other test exercises is 0.676, so nothing separated 'this IS
+    the declared statistic' from 'this is roughly it'."""
+    spread, _drivers = _factor_frame()
+    rng = np.random.default_rng(21)
+    src = pd.Series(rng.normal(0, 1.0, len(spread)), index=spread.index)
+    honest = _drift_t_from(src)
+    recompute = _drift_t_from
+
+    exact = audit_trailing_statistic(honest, src, recompute=recompute,
+                                     label="drift_t")
+    assert exact["matched"] is True
+
+    noise = audit_trailing_statistic(honest + 1e-9, src, recompute=recompute,
+                                     label="drift_t")
+    assert noise["matched"] is True          # float noise is not a mismatch
+
+    tiny = audit_trailing_statistic(honest + 1e-7, src, recompute=recompute,
+                                    label="drift_t")
+    assert tiny["matched"] is False          # ... and 1e-7 already is one
+    assert tiny["max_abs_diff"] == pytest.approx(1e-7, rel=1e-3)
+
+
+def test_a_source_on_the_wrong_index_is_refused_not_silently_matched():
+    """Empty overlap is not agreement. A bare numpy array -- the natural way to
+    lose a DatetimeIndex -- compares on zero dates."""
+    spread, _drivers = _factor_frame()
+    rng = np.random.default_rng(22)
+    src = pd.Series(rng.normal(0, 1.0, len(spread)), index=spread.index)
+    audit = audit_trailing_statistic(_drift_t_from(src), src.to_numpy(),
+                                     recompute=_drift_t_from, label="drift_t")
+    assert audit["n_compared"] == 0
+    assert audit["matched"] is False
+    assert audit["certified"] is False
+
+
+def test_dates_infinite_on_both_sides_do_not_shrink_the_comparison():
+    """`inf - inf` is NaN and `.max()` skips NaN, so those dates contributed
+    nothing to the maximum while still being counted as compared."""
+    idx = pd.bdate_range("2020-01-01", periods=10)
+    got = pd.Series([np.inf] * 5 + [1.0] * 5, index=idx)
+    audit = audit_trailing_statistic(got, got, recompute=lambda s: s,
+                                     label="probe")
+    assert audit["n_compared"] == 10
+    assert audit["n_differenced"] == 5
+    assert audit["matched"] is False
+
+
+def test_a_column_defined_on_a_single_date_is_not_certified():
+    """`max_abs_diff = 0.0` over ONE observation is not a certificate."""
+    spread, drivers = _factor_frame()
+    rng = np.random.default_rng(23)
+    src = pd.Series(rng.normal(0, 1.0, len(spread)), index=spread.index)
+    honest = _drift_t_from(src)
+    last = honest.dropna().index[-1]
+    sparse = honest.where(honest.index == last)
+
+    # premise: every other leg passes it
+    audit = audit_trailing_statistic(sparse, src, recompute=_drift_t_from,
+                                     label="drift_t")
+    assert audit["matched"] is True and audit["n_compared"] == 1
+
+    panel = _panel_for(spread, drivers)
+    panel["drift_t"] = sparse
+    with pytest.raises(ValueError, match="compared on only 1 dates"):
+        causal_signals(panel, SignalConfig(), spread_bp=spread, drivers=drivers,
+                       min_periods=252, changes_resid=src)
+
+
+def test_a_source_for_a_column_the_panel_does_not_have_says_so():
+    spread, drivers = _factor_frame()
+    rng = np.random.default_rng(24)
+    src = pd.Series(rng.normal(0, 1.0, len(spread)), index=spread.index)
+    panel = _panel_for(spread, drivers).drop(columns=["drift_t"])
+    with pytest.raises(ValueError, match="no `drift_t` column to certify"):
+        causal_signals(panel, SignalConfig(), spread_bp=spread, drivers=drivers,
+                       min_periods=252, changes_resid=src)
 
 
 def test_a_full_sample_iv_z_is_refused():
@@ -884,12 +1173,62 @@ def test_a_claimed_flag_without_evidence_does_not_open_the_gate():
     assert res2.requirements.rolling_sigma_z is False
 
     passed = _signals(ctx.dates)
-    passed.attrs.update({"expanding_betas": True, "causal_max_abs_diff": 0.0,
-                         "rolling_sigma_z": True, "rolling_z_max_abs_diff": 0.0})
+    passed.attrs.update(_causal_evidence())
     res3 = run_pair(ctx, passed, rep_cfg=ReplicationConfig(), costs=FREE,
                     pair_name="TEST")
     assert res3.requirements.expanding_betas is True
     assert res3.requirements.rolling_sigma_z is True
+
+
+def _causal_evidence(**over):
+    """The full set of numbers `causal_signals` stamps for requirements 1 and 3."""
+    ev = {"expanding_betas": True, "causal_max_abs_diff": 0.0,
+          "causal_probe_reached": True, "causal_tail_max_abs_diff": 250.0,
+          "causal_responds_to_history": True,
+          "causal_head_shock_tail_response": 216.0,
+          "betas_reproduce_residual_max_abs_diff": 0.0,
+          "rolling_sigma_z": True, "rolling_z_max_abs_diff": 0.0}
+    ev.update(over)
+    return ev
+
+
+@pytest.mark.parametrize(
+    "broken, why",
+    [
+        ({"causal_probe_reached": False}, "the shock never reached the builder"),
+        ({"causal_tail_max_abs_diff": 0.0}, "nothing moved, so nothing was tested"),
+        ({"causal_responds_to_history": False}, "frozen coefficients"),
+        ({"causal_head_shock_tail_response": 0.0}, "frozen coefficients, measured"),
+        ({"betas_reproduce_residual_max_abs_diff": 15.3}, "centred betas"),
+        ({"causal_probe_reached": None}, "stamp absent, not merely false"),
+        ({"betas_reproduce_residual_max_abs_diff": float("nan")}, "no number at all"),
+    ],
+)
+def test_every_stamped_number_the_certificate_asserts_is_required(broken, why):
+    """Stamping the numbers is worth nothing if the gate reads only the flag.
+
+    Measured before this: an `attrs` claiming `causal_probe_reached=False`,
+    `causal_responds_to_history=False` and a betas gap of 15.3 still returned
+    `expanding_betas=True`, because `_derive_requirements` consulted one of the
+    six numbers `causal_signals` stamps. That frame is reachable without hand
+    editing -- `run_grid`'s prebuilt-signals path passes the caller's attrs
+    straight through.
+    """
+    ctx = SyntheticCtx(list(np.linspace(0, 40, 60)))
+    sig = _signals(ctx.dates)
+    ev = _causal_evidence()
+    for k, v in broken.items():
+        if v is None:
+            ev.pop(k)
+        else:
+            ev[k] = v
+    sig.attrs.update(ev)
+    res = run_pair(ctx, sig, rep_cfg=ReplicationConfig(), costs=FREE,
+                   pair_name="TEST")
+    assert res.requirements.expanding_betas is False, why
+    # requirement 3's substance is a trailing z OF A CAUSAL RESIDUAL, so it
+    # inherits requirement 1's verdict in the gate as well as in the stamp
+    assert res.requirements.rolling_sigma_z is False, why
 
 
 def test_run_pair_marks_entry_vintage_unmet_when_the_column_is_absent():
@@ -1398,8 +1737,7 @@ def test_run_grid_uses_the_supplied_signal_builder():
         out = pd.DataFrame({"sign": 0, "size": 0.0, "reason": "builder"},
                            index=p.index)
         out["dv01_usd"] = 0.0
-        out.attrs["expanding_betas"] = True
-        out.attrs["causal_max_abs_diff"] = 0.0
+        out.attrs.update(_causal_evidence())
         return out
 
     out = run_grid({"TEST": ctx}, {"TEST": panel}, [{"trigger_bp": 25.0}],

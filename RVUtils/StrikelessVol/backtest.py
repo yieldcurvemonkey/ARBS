@@ -97,6 +97,7 @@ __all__ = [
     "REQUIREMENTS",
     "audit_causal_betas",
     "audit_rolling_sigma_z",
+    "audit_trailing_statistic",
     "build_config_grid",
     "causal_signals",
     "entry_vintage_signals",
@@ -129,21 +130,33 @@ LEDGER_COLS = ("carry", "harvest", "mtm", "cross", "cost")
 #: earlier is "name every input to the decision, and say what certifies it", so
 #: that list is written down here where it can be read next to the certificate.
 #:
-#: ``signal_state`` consumes five panel columns. Exactly ONE of them is audited:
+#: **This tuple is the DEFAULT, not the verdict.** It is what nothing is
+#: certified: :func:`causal_signals` narrows it when the caller supplies the
+#: sources, and stamps the result it actually reached on
+#: ``attrs["uncertified_signal_inputs"]``. Read the stamp on the frame in
+#: hand, never this constant, when asking what a particular run certified.
+#:
+#: ``signal_state`` consumes five panel columns. With no optional sources
+#: supplied, exactly ONE of them is audited:
 #:
 #: * ``residual_z`` -- **certified** (expanding fit, betas-vs-residual
 #:   consistency, head- and tail-shock probes, trailing-sigma reproduction,
 #:   entry-vintage freeze).
 #: * ``be_over_realized`` -- sets the SIGN. Uncertified: built upstream in
-#:   Task 10 and passed through ``causal_signals`` untouched.
-#: * ``drift_t`` -- vetoes a flattener. Uncertified (Task 16).
+#:   Task 10 and passed through ``causal_signals`` untouched. It is the
+#:   LARGEST lever of the five and no argument to this function can certify it
+#:   today.
+#: * ``drift_t`` -- vetoes a flattener. Certifiable via ``changes_resid=`` /
+#:   ``changes_resid_fn=``; uncertified without them.
 #: * ``spread_vol_bp_day`` -- sets the SIZE by risk parity. Uncertified.
-#: * ``iv_z`` -- gates the steepener. Uncertified.
+#: * ``iv_z`` -- gates the steepener. Certifiable via ``iv_bp_day=`` /
+#:   ``iv_bp_day_fn=``; uncertified without them.
 #:
 #: plus the regression DRIVERS themselves: :func:`audit_causal_betas` shocks
 #: only the dependent variable, so a driver built with future information (a
 #: full-sample-standardised or smoothed factor) is invisible to every check
-#: here.
+#: here. ``drivers`` is therefore never removed from this list, not even when
+#: a source builder that regresses ON those drivers is certified causal.
 #:
 #: A certified ``residual_z`` therefore does NOT make the signal causal. It
 #: makes one of its five inputs causal. Anything asserting requirement 1 for the
@@ -154,6 +167,14 @@ UNCERTIFIED_SIGNAL_INPUTS: Tuple[str, ...] = (
 
 CAUSALITY_TOL: float = 1e-9
 ROLLING_Z_TOL: float = 1e-8
+#: The minimum overlap an input audit needs before "certified" means anything.
+#: Measured: a ``drift_t`` defined on **1 of 900** dates (NaN everywhere else)
+#: reproduces its own recomputation at ``max_abs_diff = 0.0`` and was
+#: certified on that single point. The completeness leg is one-sided on
+#: purpose (the column must not be defined where the recomputation is not, but
+#: it may be missing where the recomputation exists), which is what leaves
+#: room for a one-observation certificate.
+MIN_INPUT_AUDIT_OBS: int = 100
 #: How closely a caller-supplied ``fit`` must reproduce the audited causal one.
 #: The fit is deterministic for identical inputs, so this is float noise, not a
 #: modelling tolerance.
@@ -479,10 +500,36 @@ def _derive_requirements(signals, trades, placebo) -> RequirementFlags:
     attrs = getattr(signals, "attrs", {}) or {}
     causal_diff = attrs.get("causal_max_abs_diff", float("nan"))
     z_diff = attrs.get("rolling_z_max_abs_diff", float("nan"))
+    # `expanding_betas` is a conjunction of FOUR measurements -- head still,
+    # probe reached, fit responsive to its own history, betas reproducing the
+    # residual -- and this gate used to read only the first. `causal_signals`
+    # stamps all four; a frame that does not carry them is a frame this engine
+    # did not build, and the module's stated principle is evidence over flags.
+    # Measured before this line existed: an `attrs` claiming
+    # `causal_probe_reached=False`, `causal_responds_to_history=False` and a
+    # betas gap of 15.3 (the centred-betas number) still returned
+    # `expanding_betas=True`. That is reachable without hand-editing, via
+    # `run_grid`'s prebuilt-signals path, which hands the caller's frame and
+    # its attrs straight through.
+    tail_diff = attrs.get("causal_tail_max_abs_diff", float("nan"))
+    history_diff = attrs.get("causal_head_shock_tail_response", float("nan"))
+    betas_gap = attrs.get("betas_reproduce_residual_max_abs_diff", float("nan"))
     expanding = bool(attrs.get("expanding_betas", False)
-                     and np.isfinite(causal_diff) and causal_diff <= CAUSALITY_TOL)
+                     and np.isfinite(causal_diff) and causal_diff <= CAUSALITY_TOL
+                     and attrs.get("causal_probe_reached", False)
+                     and np.isfinite(tail_diff) and tail_diff > 0.0
+                     and attrs.get("causal_responds_to_history", False)
+                     and np.isfinite(history_diff) and history_diff > 0.0
+                     and np.isfinite(betas_gap) and betas_gap <= FIT_MATCH_TOL)
+    # Requirement 3 inherits requirement 1 HERE as well as in the stamp: the
+    # substance of "rolling sigma z" is a trailing-sigma z OF A CAUSAL
+    # RESIDUAL, and `causal_signals` already refuses to stamp `rolling_sigma_z`
+    # without `expanding_betas`. Leaving the gate uncoupled would mean a frame
+    # this engine never built could hold requirement 3 while failing 1 -- the
+    # same defect one requirement across.
     rolling = bool(attrs.get("rolling_sigma_z", False)
-                   and np.isfinite(z_diff) and z_diff <= ROLLING_Z_TOL)
+                   and np.isfinite(z_diff) and z_diff <= ROLLING_Z_TOL
+                   and expanding)
     # Requirement 2 needs the same shape of proof as 1 and 3: a stamp only
     # `entry_vintage_signals` sets, carrying a measured number, PLUS the
     # per-episode label check. The label alone is satisfied by any constant
@@ -517,7 +564,13 @@ def _derive_requirements(signals, trades, placebo) -> RequirementFlags:
         random_walk_placebo=bool(placebo is not None and placebo.passes),
         evidence={
             "causal_max_abs_diff": causal_diff,
+            "causal_tail_max_abs_diff": tail_diff,
+            "causal_head_shock_tail_response": history_diff,
+            "betas_reproduce_residual_max_abs_diff": betas_gap,
             "rolling_z_max_abs_diff": z_diff,
+            "certified_signal_inputs": attrs.get("certified_signal_inputs", ()),
+            "uncertified_signal_inputs": attrs.get(
+                "uncertified_signal_inputs", UNCERTIFIED_SIGNAL_INPUTS),
             "entry_vintage": vintage_evidence,
             "n_episodes": int(len(trades)),
             "placebo_p_value": placebo.p_value if placebo is not None else float("nan"),
@@ -869,47 +922,152 @@ def audit_rolling_sigma_z(
 def audit_trailing_statistic(
     got, source, *, recompute: Callable[[pd.Series], pd.Series], label: str,
     tol: float = ROLLING_Z_TOL,
+    source_fn: Optional[Callable[[pd.Series, Dict[str, pd.Series]], pd.Series]] = None,
+    source_input=None,
+    source_drivers: Optional[Dict[str, pd.Series]] = None,
+    source_tol: float = CAUSALITY_TOL,
 ) -> dict:
-    """Certify that a panel column IS a trailing statistic of a named source.
+    """Certify that a panel column IS a trailing statistic of a CAUSAL source.
 
-    The same shape as :func:`audit_rolling_sigma_z`, generalised, and it exists
-    for the same reason the betas check does: ``causal_signals`` certified
-    ``residual_z`` and nothing else, while ``signal_state`` consumes **five**
-    panel columns. A certified ``residual_z`` makes one of five inputs causal,
-    not the signal.
+    Two independent legs, and the second one is the point.
 
-    Of the other four, three are trailing by construction where they are built
-    -- ``spread_vol_bp_day`` and ``realized_vol_bp_day`` are
-    ``.diff().rolling(window).std()``, and ``be_over_realized`` is a pointwise
-    ratio of a contemporaneous breakeven to one of them. The two that are NOT
-    safe by construction are the ones whose own input can leak:
+    **Leg 1, the transform (always run).** ``got`` must reproduce as
+    ``recompute(source)``, on every date ``got`` is defined -- not merely
+    where the two happen to overlap, which is how an endpoint check passes a
+    back-filled warmup. This is the same shape as
+    :func:`audit_rolling_sigma_z`, generalised.
+
+    **Leg 2, the source (run only when ``source_fn`` is supplied).** Leg 1 is
+    a *consistency* check between two objects the caller handed over. It
+    catches a wrong source, a wrong window and a back-filled warmup. It cannot
+    catch a LEAKY source, because a leaky source reproduces its own transform
+    perfectly -- ``drift_t`` built from a full-sample
+    :func:`factors.changes_regression` residual matched at ``max_abs_diff =
+    0.0`` while moving 6.1 t-units in the head of the sample under a tail-only
+    shock, against a veto gate of 2.0. That is the fifth appearance of this
+    module's recurring defect: **the certificate attaching to something
+    adjacent to the object the signal is built from** (the re-derivation
+    instead of the fit; the builder instead of its output; the residual
+    instead of the betas; and here, the transform instead of the source).
+
+    So pass the source's BUILDER, ``source_fn(y, drivers) -> Series``, and it
+    gets the same treatment ``causal_signals`` gives a levels fit:
+
+    1. :func:`audit_causal_betas` shocks the tail of ``source_input`` and
+       requires the head of the builder's output to be bit-still, plus the two
+       anti-tautology legs (the shock must have reached the code, and the fit
+       must respond to its own history).
+    2. the ``source`` series actually handed over is compared against that
+       audit's own ``baseline``, so the audit certifies the ARTIFACT rather
+       than a re-derivation of it. Without this, an honest builder plus a
+       leaky series passes -- which is exactly the shape of the defect being
+       fixed, one level down.
+
+    ``source_causal`` is ``None`` when no builder was supplied, and
+    ``certified`` is ``matched and source_causal is True``. Callers that
+    certify only leg 1 must say so where the certificate is read;
+    :func:`causal_signals` writes ``"<label>(source uncertified)"`` and names
+    the source itself among the uncertified inputs.
+
+    **Which columns need this, and what "trailing by construction" is worth.**
+    ``signal_state`` reads five panel columns. Of the four besides
+    ``residual_z``, three are trailing WHERE THEY ARE BUILT --
+    ``vol_metrics.spread_vol_bp_day`` and ``realized_vol_bp_day`` are
+    ``.diff().rolling(window, min_periods=window).std(ddof=1)``, and
+    ``be_over_realized`` is a pointwise ratio. But that is a property of those
+    BUILDERS, not of the columns in the panel: ``causal_signals`` takes the
+    panel wholesale from its caller and hands those columns to ``signal_state``
+    unexamined. A panel carrying a 21-day forward-SHIFTED ``be_over_realized``
+    (the column that sets the SIGN, the largest lever of the five) beside a
+    CENTRED-window ``spread_vol_bp_day`` runs to a full result, because
+    nothing here looks. The stamp is honest about it -- both appear in
+    ``uncertified_signal_inputs`` -- and "a pointwise ratio adds no
+    look-ahead" says nothing whatever about the breakeven numerator it divides.
+    This function is exported so those two can be certified the same way when
+    a caller has their sources; they are not wired into ``causal_signals``
+    because their sources are Task 10 panel builders rather than arguments
+    this function already holds.
+
+    The two that are wired in are the ones whose own input can leak into a
+    trading decision:
 
     * ``drift_t`` -- :func:`factors.drift` takes a trailing rolling mean and
-      Newey-West t of ``changes_resid``, so its WINDOW is causal but its INPUT
-      is a regression residual, exactly the object that leaked through four
-      passes of this module.
+      Newey-West t, so its WINDOW is causal but its INPUT is a regression
+      residual, exactly the object that leaked through four passes of this
+      module. Build it from :func:`factors.expanding_changes_residual`.
     * ``iv_z`` -- a z-score, and a z is only causal if its sigma is trailing.
-      A full-sample sigma overstated expectancy by 20-45% where it was measured.
-
-    Supply the source and this certifies the column against a recomputation,
-    raising in :func:`causal_signals` on mismatch rather than scoring it lower.
+      A full-sample sigma overstated expectancy by 20-45% where it was
+      measured. Leg 1 catches that one, because the raw implied-vol series is
+      an observable; what it does not catch is a smoothed or centred vol
+      series handed over as the source, which certifies at 0.0.
     """
     want = recompute(pd.Series(source).astype(float))
     both = pd.concat([pd.Series(got).astype(float).rename("got"),
                       pd.Series(want).astype(float).rename("want")], axis=1)
     aligned = both.dropna()
     n_got = int(both["got"].notna().sum())
+    out = {"label": label, "n_defined": n_got,
+           "source_audited": source_fn is not None, "source_causal": None,
+           "source_is_builder_output": None,
+           "source_max_abs_diff": float("nan"),
+           "source_artifact_max_abs_diff": float("nan"),
+           "source_probe_reached": None, "source_responds_to_history": None,
+           "source_tail_max_abs_diff": float("nan"),
+           "source_head_shock_tail_response": float("nan")}
     if aligned.empty:
-        return {"matched": False, "max_abs_diff": float("nan"), "n_compared": 0,
-                "n_defined": n_got, "label": label}
-    diff = float((aligned["got"] - aligned["want"]).abs().max())
-    # A column defined on dates the recomputation is not is not "matching on the
-    # overlap" -- it is a different series that happens to agree where both
-    # exist, which is how an endpoint-only check passes a gapped file.
-    complete = bool(len(aligned) == n_got)
-    return {"matched": bool(complete and np.isfinite(diff) and diff <= tol),
-            "max_abs_diff": diff, "n_compared": int(len(aligned)),
-            "n_defined": n_got, "label": label}
+        # The branch a wrongly-INDEXED source lands in: a bare numpy array or a
+        # differently-dated series gives an empty overlap, and "no disagreement"
+        # is not agreement.
+        out.update({"matched": False, "max_abs_diff": float("nan"),
+                    "n_compared": 0, "n_differenced": 0})
+    else:
+        d = (aligned["got"] - aligned["want"]).abs()
+        # `.max()` skips NaN, and `inf - inf` IS NaN, so a date where both
+        # series are infinite contributes nothing to the maximum while still
+        # being counted in `n_compared`. Require every compared date to have
+        # produced a real difference rather than quietly maximising over fewer.
+        n_differenced = int(d.notna().sum())
+        diff = float(d.max())
+        # A column defined on dates the recomputation is not is not "matching on
+        # the overlap" -- it is a different series that happens to agree where
+        # both exist, which is how an endpoint-only check passes a gapped file.
+        complete = bool(len(aligned) == n_got)
+        out.update({"matched": bool(complete and n_differenced == len(aligned)
+                                    and np.isfinite(diff) and diff <= tol),
+                    "max_abs_diff": diff, "n_compared": int(len(aligned)),
+                    "n_differenced": n_differenced})
+
+    if source_fn is not None:
+        if source_input is None:
+            raise ValueError(
+                f"`source_fn` was supplied for {label!r} without "
+                "`source_input`; the causality probe has nothing to shock. "
+                "Pass the series the builder is called on."
+            )
+        probe = audit_causal_betas(source_fn, source_input,
+                                   source_drivers if source_drivers is not None else {},
+                                   tol=source_tol)
+        base = pd.Series(probe["baseline"]).astype(float)
+        pair = pd.concat([pd.Series(source).astype(float).rename("got"),
+                          base.rename("want")], axis=1)
+        artifact_gap = float((pair["got"] - pair["want"]).abs().max())
+        artifact_nan_gap = bool((pair["got"].isna() != pair["want"].isna()).any())
+        artifact_ok = bool(not artifact_nan_gap and np.isfinite(artifact_gap)
+                           and artifact_gap <= FIT_MATCH_TOL)
+        out.update({
+            "source_causal": bool(probe["causal"] and artifact_ok),
+            "source_is_builder_output": artifact_ok,
+            "source_max_abs_diff": float(probe["max_abs_diff"]),
+            "source_artifact_max_abs_diff": artifact_gap,
+            "source_probe_reached": bool(probe["probe_reached"]),
+            "source_responds_to_history": bool(probe["responds_to_history"]),
+            "source_tail_max_abs_diff": float(probe["tail_max_abs_diff"]),
+            "source_head_shock_tail_response": float(probe["head_shock_tail_response"]),
+            "source_n_compared": int(probe["n_compared"]),
+        })
+
+    out["certified"] = bool(out["matched"] and out["source_causal"] is True)
+    return out
 
 
 def entry_vintage_signals(
@@ -1026,8 +1184,13 @@ def causal_signals(
     window: int = 252,
     z_min_periods: int = 126,
     changes_resid: Optional[pd.Series] = None,
+    changes_resid_fn: Optional[
+        Callable[[pd.Series, Dict[str, pd.Series]], pd.Series]] = None,
     drift_window: int = 63,
     iv_bp_day: Optional[pd.Series] = None,
+    iv_bp_day_fn: Optional[
+        Callable[[pd.Series, Dict[str, pd.Series]], pd.Series]] = None,
+    iv_bp_day_source: Optional[pd.Series] = None,
     iv_z_window: int = 252,
     iv_z_min_periods: int = 126,
 ) -> pd.DataFrame:
@@ -1062,15 +1225,50 @@ def causal_signals(
     is then certified the same way, so the shortcut cannot be used to smuggle a
     non-causal fit past the gate either.
 
-    **What this function does and does not certify.** It certifies
+    **What this function does and does not certify.** It always certifies
     ``residual_z``, end to end: the fit is causal (head still under a future
     shock, tail responsive to a past one), the artifact is the audited one, the
     BETAS reproduce that residual, and the z is a trailing-sigma z of it, frozen
-    at the entry vintage. It certifies **nothing else**. The other four panel
-    columns that reach a trading decision -- ``be_over_realized`` (the sign),
-    ``drift_t`` (the veto), ``spread_vol_bp_day`` (the size), ``iv_z`` (the
-    short-side gate) -- are passed through untouched, as are the regression
-    drivers. See :data:`UNCERTIFIED_SIGNAL_INPUTS`.
+    at the entry vintage.
+
+    Two of the other four panel columns that reach a trading decision can be
+    certified as well, if -- and only if -- the caller supplies their sources.
+    Nothing is certified by default, and what a given call reached is stamped
+    on ``attrs["certified_signal_inputs"]`` /
+    ``attrs["uncertified_signal_inputs"]``, which is the authority; the
+    module-level :data:`UNCERTIFIED_SIGNAL_INPUTS` is only the starting point.
+
+    * ``drift_t`` (the veto) -- ``changes_resid=`` is the changes residual the
+      column was built from. Supplying it alone certifies the TRANSFORM: that
+      ``drift_t`` is a trailing ``drift_window``-day Newey-West t of that
+      series, nothing more, and the certificate then reads
+      ``drift_t(source uncertified)`` with ``changes_resid`` named among the
+      uncertified inputs. Add ``changes_resid_fn=`` -- the builder, called as
+      ``fn(spread_bp, drivers)`` -- and the source itself is put through
+      :func:`audit_causal_betas` and checked to BE that builder's output, so a
+      full-sample :func:`factors.changes_regression` closure is refused exactly
+      as a full-sample ``levels_regression`` closure already is. Use
+      :func:`factors.expanding_changes_residual`.
+    * ``iv_z`` (the short-side gate) -- ``iv_bp_day=`` is the implied-vol
+      series the z was computed on. Supplying it alone certifies that ``iv_z``
+      is a trailing ``iv_z_window``-day z of that series, which is enough to
+      refuse a full-sample sigma but NOT enough to refuse a centred-window
+      SMOOTHED vol series (that certifies at 0.0). ``iv_bp_day_fn=`` plus
+      ``iv_bp_day_source=`` (the raw observable the builder processes) probes
+      the smoother the same way; the builder is called as
+      ``fn(iv_bp_day_source, {})``.
+
+    ``be_over_realized`` (the sign -- the largest lever of the five) and
+    ``spread_vol_bp_day`` (the size) are always passed through untouched, as
+    are the regression drivers, which no probe here shocks. A certified
+    ``residual_z`` plus a certified ``drift_t`` still does not make the SIGNAL
+    causal; it makes three of its five inputs causal. See
+    :func:`audit_trailing_statistic` for why those two are not wired in and
+    what "trailing by construction" is and is not worth.
+
+    Every optional argument defaults to ``None`` and changes no behaviour when
+    omitted -- except that the certificate then says, in the frame's own
+    ``attrs``, that it certified nothing there.
     """
     if fit_fn is None:
         def fit_fn(y, x):
@@ -1198,15 +1396,109 @@ def causal_signals(
     # leak -- see :func:`audit_trailing_statistic` for why these two and not the
     # other three. Omit them and behaviour is unchanged, but the certificate
     # then says so rather than staying silent.
+    #
+    # TWO levels, and the second one is the amendment. Supplying only the
+    # source certifies the TRANSFORM: `drift_t` really is a trailing NW-t of
+    # the series it was handed. That says nothing about the series, and the
+    # study's own reference panel built it with a FULL-SAMPLE
+    # `changes_regression` -- which reproduces its own transform at 0.0 while
+    # moving 6.1 t-units in the head under a tail-only shock, against a veto
+    # gate of 2.0. Supplying the BUILDER as well puts the source through the
+    # same `audit_causal_betas` probe the levels fit gets, and requires the
+    # supplied series to BE that builder's output. Anything less goes into the
+    # certificate as `drift_t(source uncertified)` with `changes_resid` named
+    # among the uncertified inputs.
     certified = ["residual_z"]
     uncertified = list(UNCERTIFIED_SIGNAL_INPUTS)
-    input_audits: Dict[str, float] = {}
+    input_audits: Dict[str, object] = {}
 
-    if changes_resid is not None and "drift_t" in panel.columns:
+    def _record(column: str, source_name: str, audit: dict) -> None:
+        """Move ``column`` out of the uncertified list, saying WHAT was certified.
+
+        The whole point of the amendment this function implements: certifying a
+        transform of an unaudited source is a real fact worth stamping, and it
+        must not read as more than it is. So a transform-only pass is named
+        ``"<column>(source uncertified)"`` and the source is added to the
+        uncertified list under its own name, where a reader looking for what is
+        NOT covered will find it.
+        """
+        input_audits[f"{column}_max_abs_diff"] = audit["max_abs_diff"]
+        # `*_max_abs_diff` is <= tol by construction here -- a mismatch RAISES,
+        # so this number can never carry failing evidence the way
+        # `causal_max_abs_diff` can, and it is not falsifiable on its own.
+        # `n_compared` is: it is the number the one-observation certificate
+        # would have exposed, so stamp it beside.
+        input_audits[f"{column}_n_compared"] = int(audit["n_compared"])
+        uncertified.remove(column)
+        if audit["certified"]:
+            certified.extend([column, source_name])
+            input_audits[f"{source_name}_causal_max_abs_diff"] = float(
+                audit["source_max_abs_diff"])
+            input_audits[f"{source_name}_artifact_max_abs_diff"] = float(
+                audit["source_artifact_max_abs_diff"])
+        else:
+            certified.append(f"{column}(source uncertified)")
+            uncertified.append(source_name)
+
+    def _refuse_source(column: str, source_name: str, builder_kw: str,
+                       audit: dict) -> None:
+        """Raise when the source builder was supplied and did not survive.
+
+        No builder supplied is not a failure -- it is the transform-only case,
+        which `_record` stamps honestly as ``<column>(source uncertified)``.
+        """
+        if not audit["source_audited"] or audit["source_causal"] is True:
+            return
+        if not audit["source_is_builder_output"]:
+            raise ValueError(
+                f"the `{source_name}` series supplied for `{column}` is not what "
+                f"`{builder_kw}` produces (max abs deviation "
+                f"{audit['source_artifact_max_abs_diff']:.6g}). The audit has to "
+                "certify the ARTIFACT, not a re-derivation of it: an honest "
+                "builder beside a leaky series is the exact defect this check "
+                "exists to close, one level down. Pass the series that builder "
+                "returned."
+            )
+        raise ValueError(
+            f"`{builder_kw}` is not causal, so `{column}` cannot be certified "
+            f"(head moved {audit['source_max_abs_diff']:.6g} under a shock to "
+            f"the tail alone; probe_reached={audit['source_probe_reached']}, "
+            f"responds_to_history={audit['source_responds_to_history']}). "
+            f"`{column}` reproducing as a trailing statistic of "
+            f"`{source_name}` proves nothing about `{source_name}`: a leaky "
+            "source reproduces its own transform perfectly. "
+            "`factors.changes_regression` fits ONE set of betas on the WHOLE "
+            "sample -- use `factors.expanding_changes_residual` (or any builder "
+            "whose fit at t sees only data before t), or drop "
+            f"`{builder_kw}=` and accept the source as uncertified."
+        )
+
+    def _require_floor(column: str, audit: dict) -> None:
+        if int(audit["n_compared"]) < MIN_INPUT_AUDIT_OBS:
+            raise ValueError(
+                f"`{column}` was compared on only {audit['n_compared']} dates "
+                f"(minimum {MIN_INPUT_AUDIT_OBS}). A column defined on one date "
+                "reproduces its own recomputation exactly, and 'certified' on "
+                "one observation is not a certificate. Supply the column over "
+                "the sample the signal is run on."
+            )
+
+    if changes_resid is not None:
+        # Not `and "drift_t" in panel.columns`: `strategy.REQUIRED_COLUMNS`
+        # already makes an absent `drift_t` a KeyError further down, so that
+        # conjunction could only ever skip the audit silently on a path that
+        # was about to fail anyway -- and it depended on a constant in another
+        # module for that. Say it here instead.
+        if "drift_t" not in panel.columns:
+            raise ValueError(
+                "`changes_resid=` was supplied but the panel has no `drift_t` "
+                "column to certify."
+            )
         audit = audit_trailing_statistic(
             panel["drift_t"], changes_resid, label="drift_t",
-            recompute=lambda s: drift(s, window=int(drift_window))["t_stat"])
-        input_audits["drift_t_max_abs_diff"] = audit["max_abs_diff"]
+            recompute=lambda s: drift(s, window=int(drift_window))["t_stat"],
+            source_fn=changes_resid_fn, source_input=spread_bp,
+            source_drivers=drivers)
         if not audit["matched"]:
             raise ValueError(
                 f"`drift_t` does not reproduce as a trailing {drift_window}-day "
@@ -1218,15 +1510,28 @@ def causal_signals(
                 "residual this column was built from, or drop `changes_resid=` "
                 "and accept it as uncertified."
             )
-        certified.append("drift_t")
-        uncertified.remove("drift_t")
+        _require_floor("drift_t", audit)
+        _refuse_source("drift_t", "changes_resid", "changes_resid_fn", audit)
+        _record("drift_t", "changes_resid", audit)
 
-    if iv_bp_day is not None and "iv_z" in panel.columns:
+    if iv_bp_day is not None:
+        if "iv_z" not in panel.columns:
+            raise ValueError(
+                "`iv_bp_day=` was supplied but the panel has no `iv_z` column "
+                "to certify."
+            )
+        if iv_bp_day_fn is not None and iv_bp_day_source is None:
+            raise ValueError(
+                "`iv_bp_day_fn=` needs `iv_bp_day_source=`: the probe shocks the "
+                "RAW series the builder processes, and without it there is "
+                "nothing to shock."
+            )
         audit = audit_trailing_statistic(
             panel["iv_z"], iv_bp_day, label="iv_z",
             recompute=lambda s: residual_z(s, window=int(iv_z_window),
-                                           min_periods=int(iv_z_min_periods)))
-        input_audits["iv_z_max_abs_diff"] = audit["max_abs_diff"]
+                                           min_periods=int(iv_z_min_periods)),
+            source_fn=iv_bp_day_fn, source_input=iv_bp_day_source,
+            source_drivers={})
         if not audit["matched"]:
             raise ValueError(
                 f"`iv_z` does not reproduce as a trailing {iv_z_window}-day z of "
@@ -1238,8 +1543,9 @@ def causal_signals(
                 "across. Pass the implied-vol series it was built from, or drop "
                 "`iv_bp_day=` and accept it as uncertified."
             )
-        certified.append("iv_z")
-        uncertified.remove("iv_z")
+        _require_floor("iv_z", audit)
+        _refuse_source("iv_z", "iv_bp_day", "iv_bp_day_fn", audit)
+        _record("iv_z", "iv_bp_day", audit)
 
     p = panel.copy()
     p["residual_z"] = z.reindex(p.index)
