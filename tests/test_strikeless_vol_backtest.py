@@ -41,8 +41,9 @@ BASE_DV01 = 100_000.0
 class SyntheticCtx:
     """Same closed-form world as tests/test_strikeless_vol_replication.py."""
 
-    def __init__(self, path_bp, theta_per_day=-500.0, gamma=40.0):
-        self.dates = pd.bdate_range("2026-01-01", periods=len(path_bp))
+    def __init__(self, path_bp, theta_per_day=-500.0, gamma=40.0,
+                 start="2026-01-01"):
+        self.dates = pd.bdate_range(start, periods=len(path_bp))
         self.path = dict(zip(self.dates, np.asarray(path_bp, dtype=float)))
         self.day_index = {d: i for i, d in enumerate(self.dates)}
         self.theta_per_day = theta_per_day
@@ -332,6 +333,82 @@ def test_rolling_sigma_z_audit_rejects_a_full_sample_sigma_z():
     bad_z = (resid - resid.mean()) / resid.std(ddof=1)     # full-sample sigma
     bad = audit_rolling_sigma_z(bad_z, resid)
     assert bad["rolling"] is False
+
+
+def _full_sample_fit(spread, drivers):
+    """A `WalkForwardFit` carrying a FULL-SAMPLE residual and betas.
+
+    Shaped exactly like the causal article so it is accepted structurally --
+    which is the whole point: it must be rejected on the evidence, not on duck
+    typing.
+    """
+    from RVUtils.StrikelessVol.factors import WalkForwardFit
+
+    lev = levels_regression(spread, drivers)
+    resid = lev.residuals.reindex(spread.index)
+    betas = pd.DataFrame({"const": lev.intercept}, index=spread.index)
+    for k in drivers:
+        betas[k] = lev.betas[k]
+    betas["vintage_date"] = spread.index[-1]
+    return WalkForwardFit(residual=resid, betas=betas, min_periods=252)
+
+
+def test_causal_signals_refuses_a_full_sample_fit():
+    """C1: the audit must certify the ARTIFACT, not a re-derivation of it.
+
+    Before this, passing a full-sample fit was stamped
+    `expanding_betas=True, causal_max_abs_diff=0.0` and `run_pair` reported
+    every requirement met but the placebo -- ~8.5bp/trade of look-ahead
+    carrying the engine's own certificate.
+    """
+    spread, drivers = _factor_frame()
+    panel = _panel_for(spread, drivers)
+    with pytest.raises(ValueError, match="does not reproduce the audited causal fit"):
+        causal_signals(panel, SignalConfig(), spread_bp=spread, drivers=drivers,
+                       fit=_full_sample_fit(spread, drivers), min_periods=252)
+
+
+def test_causal_signals_refuses_a_fit_built_with_different_parameters():
+    spread, drivers = _factor_frame()
+    panel = _panel_for(spread, drivers)
+    mismatched = expanding_residual(spread, drivers, min_periods=300)
+    with pytest.raises(ValueError, match="does not reproduce the audited causal fit"):
+        causal_signals(panel, SignalConfig(), spread_bp=spread, drivers=drivers,
+                       fit=mismatched, min_periods=252)
+
+
+def test_causal_signals_accepts_a_matching_precomputed_fit():
+    """The performance shortcut still works -- it just has to be the same fit."""
+    spread, drivers = _factor_frame()
+    panel = _panel_for(spread, drivers)
+    fit = expanding_residual(spread, drivers, min_periods=252)
+    reused = causal_signals(panel, SignalConfig(), spread_bp=spread,
+                            drivers=drivers, fit=fit, min_periods=252)
+    fresh = causal_signals(panel, SignalConfig(), spread_bp=spread,
+                           drivers=drivers, min_periods=252)
+    pd.testing.assert_frame_equal(reused, fresh)
+    assert reused.attrs["expanding_betas"] is True
+
+
+def test_a_non_causal_builder_is_refused_even_as_fit_fn():
+    """The `fit_fn` shortcut cannot smuggle a non-causal fit past the gate."""
+    spread, drivers = _factor_frame()
+    panel = _panel_for(spread, drivers)
+
+    def full_sample_builder(y, x):
+        return _full_sample_fit(pd.Series(y), x)
+
+    out = causal_signals(panel, SignalConfig(), spread_bp=spread, drivers=drivers,
+                         fit_fn=full_sample_builder, min_periods=252)
+    assert out.attrs["expanding_betas"] is False
+    assert out.attrs["causal_max_abs_diff"] > 1.0
+    assert out.attrs["rolling_sigma_z"] is False     # the z inherits the leak
+
+    ctx = SyntheticCtx([0.0] * len(spread), start=spread.index[0])
+    res = run_pair(ctx, out, rep_cfg=ReplicationConfig(), costs=FREE,
+                   pair_name="TEST")
+    assert res.requirements.expanding_betas is False
+    assert res.requirements.rolling_sigma_z is False
 
 
 def test_causal_signals_stamps_verified_provenance():

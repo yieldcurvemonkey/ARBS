@@ -113,6 +113,10 @@ LEDGER_COLS = ("carry", "harvest", "mtm", "cross", "cost")
 
 CAUSALITY_TOL: float = 1e-9
 ROLLING_Z_TOL: float = 1e-8
+#: How closely a caller-supplied ``fit`` must reproduce the audited causal one.
+#: The fit is deterministic for identical inputs, so this is float noise, not a
+#: modelling tolerance.
+FIT_MATCH_TOL: float = 1e-6
 
 
 @dataclass(frozen=True)
@@ -623,6 +627,19 @@ def audit_causal_betas(
     :func:`factors.levels_regression` fails by basis points, which is the
     control that shows this checker actually bites (a checking tool that is
     itself wrong reports success and hides the thing it was built to find).
+
+    **Scope: only the DEPENDENT variable is shocked.** Look-ahead entering
+    through a *driver* -- a regressor that is itself built with future
+    information, e.g. a full-sample-standardised or smoothed factor -- is
+    invisible to this audit. The drivers' own causality is the caller's
+    responsibility.
+
+    Returns ``baseline`` and ``shocked`` (the two residual series) alongside the
+    verdict, so a caller can **certify the artifact it actually uses** against
+    the causal one this function computed, rather than trusting that the two are
+    the same object. :func:`causal_signals` does exactly that; without it, the
+    audit is a statement about a function while the signal is built from a
+    series, and nothing connects them.
     """
     y = pd.Series(spread_bp).astype(float)
     base = pd.Series(fit_fn(y, drivers)).astype(float)
@@ -637,10 +654,12 @@ def audit_causal_betas(
     both = pd.concat([a.rename("a"), b.rename("b")], axis=1).dropna()
     if both.empty:
         return {"causal": False, "max_abs_diff": float("nan"), "n_compared": 0,
-                "shock": float(shock), "cut": cut}
+                "shock": float(shock), "cut": cut,
+                "baseline": base, "shocked": shocked}
     diff = float((both["a"] - both["b"]).abs().max())
     return {"causal": bool(diff <= tol), "max_abs_diff": diff,
-            "n_compared": int(len(both)), "shock": float(shock), "cut": cut}
+            "n_compared": int(len(both)), "shock": float(shock), "cut": cut,
+            "baseline": base, "shocked": shocked}
 
 
 def audit_rolling_sigma_z(
@@ -751,6 +770,7 @@ def causal_signals(
     spread_bp,
     drivers: Dict[str, pd.Series],
     fit: Optional[WalkForwardFit] = None,
+    fit_fn: Optional[Callable[[pd.Series, Dict[str, pd.Series]], WalkForwardFit]] = None,
     min_periods: int = 252,
     refit_every: int = 1,
     window: int = 252,
@@ -758,25 +778,84 @@ def causal_signals(
 ) -> pd.DataFrame:
     """The only supported way to build a signal for this study.
 
-    Runs the walk-forward fit, AUDITS its causality, replaces the panel's
-    ``residual_z`` with a trailing-252-day z on that causal residual, AUDITS
-    that too, and then freezes the beta vintage at entry. The audits' own
-    numbers are stamped on ``attrs`` so ``run_pair`` requires evidence rather
-    than a claim: a forged ``expanding_betas=True`` with no finite
-    ``causal_max_abs_diff`` does not open the gate.
+    Runs the walk-forward fit, AUDITS its causality, derives a trailing-252-day
+    z from **the audited residual**, audits that the z is causal too, and then
+    freezes the beta vintage at entry. The audits' own numbers are stamped on
+    ``attrs`` so ``run_pair`` requires evidence rather than a claim: a forged
+    ``expanding_betas=True`` with no finite ``causal_max_abs_diff`` does not
+    open the gate.
+
+    **The audit certifies the artifact, not a re-derivation of it.** An earlier
+    version audited a local closure over :func:`factors.expanding_residual` and
+    then built the signal from the caller's ``fit``, never comparing the two --
+    so both audits were constants on that path. Handing it a ``WalkForwardFit``
+    carrying :func:`factors.levels_regression`'s FULL-SAMPLE residual produced
+    ``expanding_betas=True, causal_max_abs_diff=0.0, rolling_sigma_z=True``,
+    i.e. requirements 1, 2 and 3 all granted on a signal built with ~8.5bp/trade
+    of look-ahead, wearing this engine's own certificate. That is the precise
+    failure Task 15 exists to prevent.
+
+    So ``fit`` is now **verified against the audited baseline** and a mismatch
+    RAISES rather than failing quietly -- passing a precomputed fit is a
+    performance shortcut (it is the natural response to the builder's cost in a
+    162-config sweep), and a fit that does not reproduce the causal one means
+    the caller passed the wrong object or mismatched parameters, not that the
+    result should be scored a little lower.
+
+    ``fit_fn`` supplies a different causal builder (e.g. a rolling rather than
+    expanding window). It is audited in place of the default, and its own output
+    is then certified the same way, so the shortcut cannot be used to smuggle a
+    non-causal fit past the gate either.
     """
+    if fit_fn is None:
+        def fit_fn(y, x):
+            return expanding_residual(y, x, min_periods=min_periods,
+                                      refit_every=refit_every)
+
+    causal = audit_causal_betas(lambda y, x: fit_fn(y, x).residual,
+                                spread_bp, drivers)
+    baseline = pd.Series(causal["baseline"]).astype(float)
+
     if fit is None:
-        fit = expanding_residual(spread_bp, drivers, min_periods=min_periods,
-                                 refit_every=refit_every)
+        fit = fit_fn(spread_bp, drivers)
+    else:
+        # Certify the artifact: the residual about to become the signal must BE
+        # the one the audit just ran on.
+        both = pd.concat([pd.Series(fit.residual).astype(float).rename("got"),
+                          baseline.rename("want")], axis=1)
+        drift = float((both["got"] - both["want"]).abs().max())
+        disagree_on_nan = bool(
+            (both["got"].isna() != both["want"].isna()).any())
+        if disagree_on_nan or not np.isfinite(drift) or drift > FIT_MATCH_TOL:
+            raise ValueError(
+                "the supplied `fit` does not reproduce the audited causal fit "
+                f"(max abs deviation {drift:.6g}"
+                + (", and the two disagree on which dates are defined"
+                   if disagree_on_nan else "")
+                + "). causal_signals certifies the residual it USES, so a fit "
+                "built with different parameters -- or by a non-causal "
+                "regression -- cannot be certified as causal. Either drop "
+                "`fit=` and let this function build it, align `min_periods`/"
+                "`refit_every` with how `fit` was built, or pass the builder "
+                "itself as `fit_fn=` so it is the thing audited."
+            )
 
-    def _refit(y, x):
-        return expanding_residual(y, x, min_periods=min_periods,
-                                  refit_every=refit_every).residual
-
-    causal = audit_causal_betas(_refit, spread_bp, drivers)
+    # The z is derived from the AUDITED residual, and its own causality is
+    # checked against the shocked run the audit already computed -- free, and it
+    # is what a full-sample sigma would fail. Comparing the z only against a
+    # recomputation of itself is a tautology.
     z = residual_z(fit.residual, window=window, min_periods=z_min_periods)
     rolling = audit_rolling_sigma_z(z, fit.residual, window=window,
                                     min_periods=z_min_periods)
+    z_shocked = residual_z(pd.Series(causal["shocked"]).astype(float),
+                           window=window, min_periods=z_min_periods)
+    head = pd.Series(spread_bp).index[:int(causal["cut"])]
+    z_both = pd.concat([z.reindex(head).rename("a"),
+                        z_shocked.reindex(head).rename("b")], axis=1).dropna()
+    z_causal_diff = (float((z_both["a"] - z_both["b"]).abs().max())
+                     if len(z_both) else float("nan"))
+    z_ok = bool(rolling["rolling"] and np.isfinite(z_causal_diff)
+                and z_causal_diff <= ROLLING_Z_TOL)
 
     p = panel.copy()
     p["residual_z"] = z.reindex(p.index)
@@ -786,9 +865,9 @@ def causal_signals(
     out.attrs.update({
         "expanding_betas": bool(causal["causal"]),
         "causal_max_abs_diff": float(causal["max_abs_diff"]),
-        "rolling_sigma_z": bool(rolling["rolling"]),
-        "rolling_z_max_abs_diff": float(rolling["max_abs_diff"]),
-        "entry_vintage_hedge": True,
+        "rolling_sigma_z": z_ok,
+        "rolling_z_max_abs_diff": max(float(rolling["max_abs_diff"]),
+                                      z_causal_diff),
         "beta_vintage": fit.kind,
     })
     return out
