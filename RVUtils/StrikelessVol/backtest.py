@@ -455,6 +455,18 @@ def _derive_requirements(signals, trades, placebo) -> RequirementFlags:
     # per-episode label check. The label alone is satisfied by any constant
     # column -- `beta_vintage_date = Timestamp("1999-01-01")` passed it -- which
     # made requirement 2 the one gate a hand-made frame could walk through.
+    #
+    # The deviation must be strictly POSITIVE, not merely finite: 0.0 is exactly
+    # what a freeze that was never applied produces (frozen z == live z on every
+    # held day), so accepting it accepts the thing the stamp exists to detect.
+    #
+    # Scope, stated because it is easy to over-read: this gate proves a frozen
+    # vintage was USED and that it made a difference. It does NOT catch the M8
+    # shape -- pricing the hold on the live z while leaving the label frozen --
+    # because the deviation is measured on a different line from the pricing and
+    # stays positive under that mutation. What catches M8 is the formula test,
+    # `test_the_hold_is_priced_on_the_entry_vintage_z_not_the_live_z`. Do not
+    # cite this gate as the enforcement for that behaviour.
     vintage_deviation = attrs.get("entry_vintage_frozen_z_deviation", float("nan"))
     vintage_ok, vintage_evidence = _entry_vintage_verified(signals)
     vintage_evidence["frozen_z_deviation"] = vintage_deviation
@@ -462,7 +474,8 @@ def _derive_requirements(signals, trades, placebo) -> RequirementFlags:
         expanding_betas=expanding,
         entry_vintage_hedge=bool(vintage_ok
                                  and attrs.get("entry_vintage_hedge", False)
-                                 and np.isfinite(vintage_deviation)),
+                                 and np.isfinite(vintage_deviation)
+                                 and vintage_deviation > 0.0),
         rolling_sigma_z=rolling,
         # Structural: there is no residual-P&L path in this module at all.
         spread_leg_pnl=True,

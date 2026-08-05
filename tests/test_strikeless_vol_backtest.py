@@ -381,6 +381,34 @@ def test_causal_signals_refuses_a_fit_built_with_different_parameters():
                        fit=mismatched, min_periods=252)
 
 
+def test_the_fit_certification_numeric_leg_is_load_bearing():
+    """The guard has two legs and the other two refusal tests both ride the
+    NaN-pattern one, so `FIT_MATCH_TOL = 1e9` left the whole suite green.
+
+    `refit_every=5` is the case the numeric leg exists for: identical defined
+    dates, different values. Measured against the causal fit --
+
+        candidate            same NaN pattern   max|diff|   leg tripped
+        min_periods=300      False              0.0000      NaN-pattern only
+        refit_every=5        True               0.3346      numeric only
+        full-sample levels   False              6.9415      both
+    """
+    spread, drivers = _factor_frame()
+    panel = _panel_for(spread, drivers)
+    causal = expanding_residual(spread, drivers, min_periods=252).residual
+    stale = expanding_residual(spread, drivers, min_periods=252,
+                               refit_every=5).residual
+    # the premise: same defined dates, materially different values
+    assert (causal.isna() == stale.isna()).all()
+    assert float((causal - stale).abs().max()) > 0.1
+
+    with pytest.raises(ValueError, match="does not reproduce the audited causal fit"):
+        causal_signals(panel, SignalConfig(), spread_bp=spread, drivers=drivers,
+                       fit=expanding_residual(spread, drivers, min_periods=252,
+                                              refit_every=5),
+                       min_periods=252)
+
+
 def test_causal_signals_accepts_a_matching_precomputed_fit():
     """The performance shortcut still works -- it just has to be the same fit."""
     spread, drivers = _factor_frame()
@@ -630,6 +658,15 @@ def test_a_constant_vintage_label_alone_does_not_grant_requirement_two():
     res2 = run_pair(ctx, half, rep_cfg=ReplicationConfig(), costs=FREE,
                     pair_name="TEST")
     assert res2.requirements.entry_vintage_hedge is False
+
+    # ... and strictly positive: 0.0 is exactly what a freeze that was never
+    # applied produces, so accepting it accepts what the stamp exists to detect
+    zero = _signals(ctx.dates)
+    zero["beta_vintage_date"] = pd.Timestamp("1999-01-01")
+    zero.attrs.update(_vintage_evidence(deviation=0.0))
+    res3 = run_pair(ctx, zero, rep_cfg=ReplicationConfig(), costs=FREE,
+                    pair_name="TEST")
+    assert res3.requirements.entry_vintage_hedge is False
 
 
 def test_entry_vintage_signals_stamp_the_deviation_they_measured():
