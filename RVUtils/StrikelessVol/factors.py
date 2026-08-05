@@ -125,7 +125,10 @@ def ar1_phi(resid) -> float:
     return float(np.polyfit(x.to_numpy(), y.to_numpy(), 1)[0])
 
 
-def ar1_half_life_days(resid, *, adf_pvalue_threshold: float = 0.05) -> float:
+def ar1_half_life_days(
+    resid, *, adf_pvalue_threshold: float = 0.05,
+    n_cointegrating_vars: Optional[int] = None,
+) -> float:
     """Business days to halve. Infinite for a unit root.
 
     "Unit root" is decided by an Augmented Dickey-Fuller test
@@ -141,6 +144,35 @@ def ar1_half_life_days(resid, *, adf_pvalue_threshold: float = 0.05) -> float:
     past the boundary; whenever phi is interior, the ADF p-value is what
     decides -- failing to reject the unit-root null (p > ``adf_pvalue_threshold``,
     default 0.05) returns infinity regardless of how plausible phi looks.
+
+    **Critical-value warning for regression residuals -- read before passing
+    a ``levels_regression``/``changes_regression`` residual (Task 15's
+    primary intended input for this whole module):** the default ADF
+    p-value uses STANDARD, single-series critical values. If ``resid`` is
+    the residual of an OLS regression estimated **on the same data**, OLS
+    has already minimised that residual's in-sample variance
+    ("superconsistency"), which makes it look more stationary than it is
+    under the null of no cointegration -- standard critical values are
+    miscalibrated for this case and systematically over-reject the unit
+    root. Measured on a placebo (a random walk regressed on an unrelated
+    random walk, i.e. no true relationship at all): the standard-ADF gate
+    at ``adf_pvalue_threshold=0.05`` opened in ~20% of trials, four times
+    the nominal rate (Task 15 round-4 report). The correct values are
+    Engle-Granger's (Engle & Granger 1987; MacKinnon 1994/2010), which
+    depend on the number of I(1) series in the cointegrating regression
+    (the dependent variable plus its regressors). Pass
+    ``n_cointegrating_vars=k+1`` (``k`` = number of regressors, NOT
+    counting the constant -- e.g. ``k=1`` for a single-driver
+    ``levels_regression``, so ``n_cointegrating_vars=2``) whenever
+    ``resid`` comes from an estimated regression, and this function uses
+    ``statsmodels.tsa.stattools.mackinnonp`` with the correct ``N`` in
+    place of the default single-series p-value -- verified to reproduce
+    ``statsmodels.tsa.stattools.coint``'s own end-to-end Engle-Granger
+    p-value to within a few thousandths on real data. Left at the default
+    (``None``), this function silently uses the wrong critical values for
+    a regression residual -- **that is a known, documented limitation, not
+    a bug fixed by omission: callers that know they are testing a
+    cointegrating-regression residual must pass this parameter.**
     """
     phi = ar1_phi(resid)
     if not np.isfinite(phi) or phi <= 0.0 or phi >= 1.0:
@@ -148,7 +180,16 @@ def ar1_half_life_days(resid, *, adf_pvalue_threshold: float = 0.05) -> float:
 
     from RVUtils.regression import residual_diagnostics
 
-    adf_p = residual_diagnostics(resid).get("adf_pvalue", float("nan"))
+    diag = residual_diagnostics(resid)
+    adf_p = diag.get("adf_pvalue", float("nan"))
+    if n_cointegrating_vars is not None:
+        adf_stat = diag.get("adf_stat", float("nan"))
+        if np.isfinite(adf_stat):
+            from statsmodels.tsa.adfvalues import mackinnonp
+
+            adf_p = float(mackinnonp(adf_stat, regression="c", N=int(n_cointegrating_vars)))
+        else:
+            adf_p = float("nan")
     if not np.isfinite(adf_p) or adf_p > float(adf_pvalue_threshold):
         return float("inf")
     return float(np.log(0.5) / np.log(phi))
@@ -160,6 +201,26 @@ def residual_z(resid, *, window: int = 252, min_periods: int = 126) -> pd.Series
     Not the OLS standard error: that is sigma/sqrt(n), it shrinks with sample
     size, and bands built on it tighten as history accumulates until the rule
     fires constantly.
+
+    The rolling window here (``e.rolling(...)``, a trailing/causal window by
+    pandas construction) is NOT the source of look-ahead risk in this
+    function -- it is causal by construction, on its own. **The look-ahead
+    risk lives entirely upstream, in how ``resid`` itself was built (Task 15
+    round 4).** ``levels_regression``/``changes_regression`` fit a SINGLE
+    set of betas on the WHOLE requested window; every point of the returned
+    residual is computed with betas that saw data from after that point, in
+    a normal walk-forward/live-trading sense. Feeding a full-sample-fit
+    residual into ``residual_z`` produces a z-score no live book could ever
+    have computed on the date it is dated -- this was measured directly: a
+    naive full-sample expectancy calculation this way overstated realised,
+    entry-vintage-frozen-beta P&L by roughly 8bp/trade on one window. **This
+    function requires its ``resid`` argument to already come from a causal
+    (expanding-window or rolling-window) regression fit -- never pass a
+    ``levels_regression``/``changes_regression`` residual computed on the
+    full sample directly.** No expanding/rolling regression fit is provided
+    in this module as of Task 15; building one (and re-deriving ``resid``
+    causally before it ever reaches this function) is recorded as a Task 18
+    requirement, not implemented here.
     """
     e = pd.Series(resid).astype(float)
     roll = e.rolling(int(window), min_periods=int(min_periods))

@@ -3,6 +3,8 @@ import math
 import numpy as np
 import pandas as pd
 import pytest
+import statsmodels.api as sm
+from statsmodels.tsa.adfvalues import mackinnonp
 
 from RVUtils.StrikelessVol.factors import (
     ar1_half_life_days,
@@ -71,6 +73,46 @@ def test_half_life_is_strictly_infinite_at_and_above_the_unit_root():
     explosive = pd.Series(1.01 ** np.arange(30), index=pd.bdate_range("2020-01-01", periods=30))
     assert ar1_phi(explosive) > 1.0
     assert math.isinf(ar1_half_life_days(explosive))
+
+
+def test_engle_granger_critical_values_are_stricter_than_standard_adf():
+    """Mechanism check for the ``n_cointegrating_vars`` correction (Task 15
+    round 4): for the SAME ADF test statistic, Engle-Granger critical values
+    (N>1 I(1) series in a cointegrating regression) must report a LARGER
+    (more conservative) p-value than the standard single-series (N=1) ADF
+    table -- that is the entire point of the correction, since OLS has
+    already minimised a regression residual's in-sample variance and made it
+    look spuriously more stationary. Deterministic: fixed stat values, no
+    simulation, so this cannot be flaky."""
+    for stat in (-2.5, -3.0, -3.5, -4.0):
+        p_standard = mackinnonp(stat, regression="c", N=1)
+        p_two_series = mackinnonp(stat, regression="c", N=2)
+        p_three_series = mackinnonp(stat, regression="c", N=3)
+        assert p_two_series > p_standard
+        assert p_three_series > p_two_series
+
+
+def test_ar1_half_life_days_eg_correction_closes_a_placebo_regression_gate():
+    """The actual failure mode the correction exists to prevent: regress one
+    random walk on an UNRELATED random walk (no true relationship at all --
+    the placebo the Task 15 round-4 review used) and confirm the standard
+    (uncorrected) gate opens -- a finite half-life on a residual with no real
+    mean-reversion -- while ``n_cointegrating_vars=2`` closes it. Seed=27 was
+    chosen by search for a comfortable, non-borderline margin on both sides
+    (standard p=0.0315, well under 0.05; EG p=0.1015, well over it) rather
+    than a razor's-edge case that could flip under a different LAPACK/BLAS
+    build -- the I3 lesson from this same test module's own history."""
+    rng = np.random.default_rng(27)
+    n = 300
+    x = pd.Series(np.cumsum(rng.normal(0, 1, n)))
+    y = pd.Series(np.cumsum(rng.normal(0, 1, n)))
+    resid = sm.OLS(y, sm.add_constant(x)).fit().resid
+
+    hl_standard = ar1_half_life_days(resid)
+    hl_corrected = ar1_half_life_days(resid, n_cointegrating_vars=2)
+
+    assert np.isfinite(hl_standard)  # the uncorrected gate is fooled ...
+    assert math.isinf(hl_corrected)  # ... the EG-corrected gate is not
 
 
 def test_residual_z_uses_the_residuals_own_dispersion_not_the_ols_se():

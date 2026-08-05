@@ -1,10 +1,14 @@
-"""Task 15 review round 2: does H6 (levels-residual mean-reversion) survive a
-higher-power test than the 146-observation 2026-only sample allows?
+"""Task 15 review round 2 (power) + round 4 (critical values / expectancy
+withdrawal): does H6 (levels-residual mean-reversion) survive a
+higher-power, correctly-calibrated test, and is it tradeable?
 
-An ADF on 146 observations of a near-unit-root process has very little power
--- failing to reject at p=0.267 (the 2026-only result) is weak evidence for a
-unit root, not strong evidence. This script re-measures the same test with as
-much history as each data source actually supports.
+**Round 2** established that a 146-observation, 2026-only ADF test is
+underpowered (fails to reject at p=0.267 -- weak evidence for a unit root,
+not strong evidence) and re-measured with as much history as each data
+source actually supports. **Round 4 found the round-2/3 test itself was
+mis-specified, and withdrew round 3's expectancy conclusion.** Both rounds'
+findings are recorded here; nothing from round 3 should be quoted without
+reading round 4's corrections below.
 
 **The two factors do NOT have the same history depth, and this script does
 not pretend otherwise:**
@@ -21,9 +25,7 @@ not pretend otherwise:**
   mid-2020, and dense, reliable coverage from 2021-01-04 onward. The
   two-factor residual therefore runs on 2021-01-04..2026-08-03 (~1450 daily
   observations) -- NOT the full 2017+ vol-panel history a naive reading of
-  "vol starts 2017" would suggest. This is a real data-availability
-  constraint, not a scope choice; see the round-2 report for the raw probe
-  output.
+  "vol starts 2017" would suggest.
 
 Because the two-factor window is shorter than the one-factor window, this
 script runs THREE regressions, not two, so the effect of adding the ASW
@@ -33,45 +35,56 @@ factor can be told apart from the effect of a shorter sample:
   (b) two-factor (vol+asw),   2021-01-04..2026-08-03        (~1450 obs, max robust UMEP window)
   (c) one-factor (vol only),  SAME 2021-01-04..2026-08-03    (~1450 obs, isolates window length)
 
-(a) vs (c) isolates the effect of sample length alone (same one-factor spec,
-different windows). (b) vs (c) isolates the effect of adding the ASW factor
-(same window, one vs two factors).
+(a) vs (c) isolates the effect of sample length alone. (b) vs (c) isolates
+the effect of adding the ASW factor.
 
-ADF specification (must be stated explicitly per the review's requirement --
-this is the SAME specification ``ar1_half_life_days``/
-``RVUtils.regression.residual_diagnostics`` already use internally, made
-visible here rather than left implicit): ``statsmodels.tsa.stattools.
-adfuller``, ``regression="c"`` (constant only, no trend -- the standard
-Engle-Granger residual-based cointegration-test convention; a regression
-residual is already demeaned by its own intercept, so no additional trend
-term is fitted), ``autolag="AIC"`` (lag length chosen to minimise AIC).
+**ADF specification, and the round-4 correction to it.** Base test:
+``statsmodels.tsa.stattools.adfuller``, ``regression="c"`` (constant only,
+no trend), ``autolag="AIC"``. **Round 4 finding: the STANDARD (single-series,
+N=1) MacKinnon p-value this produces is the wrong critical-value table for a
+residual from an ESTIMATED regression.** OLS has already minimised that
+residual's in-sample variance ("superconsistency"), which mechanically makes
+it look more stationary than it is under the null of no cointegration.
+Measured directly: a random walk regressed on an UNRELATED random walk (no
+true relationship at all) opened the standard-ADF gate at ~20% across
+simulated trials, four times the nominal 5% rate; a genuine AR(1) placebo
+passed at the expected ~100% rate, and the *raw, unregressed* spread series
+(no estimated relationship at all) did not open the gate -- confirming the
+regression step itself, not the data or the test in general, is what
+mis-sizes the standard gate. **This script now reports BOTH the standard
+ADF p-value (for comparison/audit trail) and the corrected Engle-Granger
+p-value** (``statsmodels.tsa.stattools.mackinnonp`` with ``N`` = number of
+I(1) series in the cointegrating regression = regressors + 1; verified to
+reproduce ``statsmodels.tsa.stattools.coint``'s own end-to-end computation
+to within a few thousandths on this exact data), and the REJECT/FAIL
+verdict and the half-life used everywhere below are based on the CORRECTED
+(EG) p-value via ``ar1_half_life_days(..., n_cointegrating_vars=...)``, not
+the standard one.
 
-A rejection on the long sample is NOT license for Signal 3 on any window: if
-the residual is stationary over nine years but its half-life is not short
-relative to a tradeable holding period, the z-score bands built on it are
-still not tradeable against this package's modeled round-trip cost. This
-script prints the half-life next to that cost on every regression so the
-comparison cannot be skipped.
-
-**Round 3 addition -- expected reversion, not just half-life.** A half-life
-alone is not an expectancy: a 20-day half-life with a small residual sigma
-and a 47-day one with a large sigma are very different trades. For each
-window this script now also measures the residual's own standard deviation
-(bp -- the residual is a bp-denominated spread residual, so this is directly
-comparable to the cost schedule) and computes the OU-style expected reversion
-from a ``|z|=2`` entry: distance from mean at entry is ``2*sigma``; after one
-half-life it has decayed by half to ``sigma``, so the reversion captured is
-``2*sigma - sigma = sigma``; after two half-lives it has decayed to
-``0.5*sigma`` (a quarter of the original ``2*sigma``), so the reversion
-captured is ``2*sigma - 0.5*sigma = 1.5*sigma``. Net expectancy is that
-reversion minus the modeled round-trip cost (``MAKER``/``TAKER`` from
-``costs.py`` -- already expressed in bp of spread at the package's reference
-$100k-DV01 clip, per ``test_initiation_cost_at_the_reference_clip``, so no
-further unit conversion against a bp-denominated residual is needed). This is
-an expectancy calculation, not a backtest: it says nothing about entry
-frequency, path risk between entry and the assumed exit point, or whether
-z=2 crossings are themselves well-behaved out of sample -- that is Task 18's
-event study and net-of-cost P&L, not this script.
+**Round 3's expectancy table has been WITHDRAWN, not restated.** It was
+priced in the residual (Task 17's rule scales SIZE by residual z, but the
+POSITION is the linear spread package -- the spread leg, not the residual,
+is what P&L accrues to, and the reviewer's leg decomposition showed the
+spread leg is NEGATIVE at these entries, with essentially all of the
+apparent "reversion" living in the vol-hedge leg at 1.5-1.7x its regression
+beta -- i.e. short the convexity this package exists to own); it used the
+full-sample residual standard deviation rather than the trailing 252-day
+rolling sigma ``residual_z`` (and any live implementation) actually uses
+(measured ratio: rolling/full sigma = 0.55-0.80 across the three windows);
+it used full-sample-fit (look-ahead) betas rather than entry-vintage-frozen
+ones (measured impact on one window: realised capture fell from an
+uncorrected +12.3bp/trade to +0.13bp gross, -1.87bp net of TAKER, once
+betas were frozen at entry date); and its own "verification" that
+``reversion_1hl == sigma`` was a tautology (the code IS that assignment),
+not an independent check that an OU process actually delivers sigma of
+reversion under the ROLLING-z entry rule Signal 3 would use (measured:
+0.685-0.879 of sigma, not 1.0). None of these are independently fatal in
+isolation; stacked, they falsify the round-3 headline. **No expectancy
+number appears in this script's output as of round 4.** The correct,
+un-shortcut version of this calculation -- expanding-window betas,
+entry-vintage-frozen hedge, rolling(252) sigma, spread-leg (not residual)
+P&L, actual distinct |z|>=2 episode counts, and a random-walk placebo run
+alongside every real result -- is Task 18's event study, not this script.
 """
 from __future__ import annotations
 
@@ -79,10 +92,10 @@ import datetime as dt
 from pathlib import Path
 
 import pandas as pd
+from statsmodels.tsa.adfvalues import mackinnonp
 from statsmodels.tsa.stattools import adfuller
 
 from RVUtils.StrikelessVol.conventions import bp_day_to_annual_normals
-from RVUtils.StrikelessVol.costs import MAKER, TAKER
 from RVUtils.StrikelessVol.factors import ar1_half_life_days, ar1_phi, levels_regression
 from RVUtils.StrikelessVol.panels import (
     PANEL_DIR,
@@ -135,41 +148,34 @@ def build() -> dict:
     return {"spread": spread, "vol_ann": vol_ann, "asw30": asw30, "excluded": excluded}
 
 
-def _adf_report(resid: pd.Series, label: str) -> dict:
-    r = pd.Series(resid).astype(float).dropna()
-    stat, pvalue, usedlag, nobs, crit, icbest = adfuller(r.to_numpy(), regression="c", autolag="AIC")
-    phi = ar1_phi(resid)
-    hl = ar1_half_life_days(resid)
-    hl_str = "inf" if not (hl < float("inf")) else f"{hl:.1f}d"
-    verdict = "FAILS to reject unit root" if pvalue > 0.05 else "REJECTS unit root"
-    print(f"  [{label}] ADF(regression='c', autolag='AIC', lag={usedlag}, nobs={nobs}): "
-          f"stat={stat:.3f} p={pvalue:.4f} crit(1%/5%/10%)="
-          f"{crit['1%']:.3f}/{crit['5%']:.3f}/{crit['10%']:.3f} -> {verdict} at 5%")
-    print(f"  [{label}] phi(downward-biased in finite samples)={phi:.4f} half_life={hl_str}")
-    return {"phi": phi, "half_life": hl, "pvalue": pvalue}
+def _adf_report(resid: pd.Series, label: str, *, n_regressors: int) -> dict:
+    """Reports BOTH the standard and Engle-Granger-corrected ADF p-value.
 
-
-def _expectancy_report(resid: pd.Series, hl: float, label: str) -> None:
-    """|z|=2 expected-reversion expectancy vs. the modeled round-trip cost.
-
-    See the module docstring for the OU-style sigma/1.5*sigma derivation.
-    Skipped (not silently zero-filled) when the half-life is infinite --
-    "expected reversion over one half-life" is meaningless without one.
+    ``n_regressors`` is the count of regressors in the levels_regression
+    that produced ``resid`` (not counting the constant); EG's ``N`` is
+    ``n_regressors + 1`` (the dependent variable plus its regressors, all
+    treated as candidate I(1) series in the cointegrating relationship).
+    The verdict and the half-life reported/returned are based on the
+    CORRECTED (EG) p-value -- see the module docstring for why the standard
+    one is the wrong table for a regression residual.
     """
-    sigma = float(pd.Series(resid).astype(float).dropna().std(ddof=1))
-    print(f"  [{label}] residual sigma={sigma:.3f}bp (full-sample std, ddof=1, n={len(resid.dropna())})")
-    if not (hl < float("inf")):
-        print(f"  [{label}] expectancy: N/A -- half-life is infinite (no mean-reversion to time)")
-        return
-    reversion_1hl = sigma          # 2*sigma*(1 - exp(-ln2))   = 2*sigma*0.5  = sigma
-    reversion_2hl = 1.5 * sigma    # 2*sigma*(1 - exp(-2*ln2)) = 2*sigma*0.75 = 1.5*sigma
-    for n_hl, reversion, days in ((1, reversion_1hl, hl), (2, reversion_2hl, 2 * hl)):
-        for name, cost in (("MAKER", 2 * MAKER.initiate_bp), ("TAKER", 2 * TAKER.initiate_bp)):
-            net = reversion - cost
-            verdict = "POSITIVE" if net > 0 else "NEGATIVE"
-            print(f"  [{label}] |z|=2 entry, {n_hl} half-life (~{days:.1f}d holding): "
-                  f"reversion={reversion:.2f}bp - {name} round trip {cost:.2f}bp "
-                  f"= net {net:+.2f}bp [{verdict}]")
+    n_coint = n_regressors + 1
+    r = pd.Series(resid).astype(float).dropna()
+    stat, pvalue_std, usedlag, nobs, crit, icbest = adfuller(r.to_numpy(), regression="c", autolag="AIC")
+    pvalue_eg = float(mackinnonp(stat, regression="c", N=n_coint))
+    phi = ar1_phi(resid)
+    hl = ar1_half_life_days(resid, n_cointegrating_vars=n_coint)
+    hl_str = "inf" if not (hl < float("inf")) else f"{hl:.1f}d"
+    verdict_std = "rejects" if pvalue_std <= 0.05 else "FAILS to reject"
+    verdict_eg = "REJECTS" if pvalue_eg <= 0.05 else "FAILS TO REJECT"
+    verdict_eg_1pct = "rejects" if pvalue_eg <= 0.01 else "does not reject"
+    print(f"  [{label}] ADF stat={stat:.3f} (regression='c', autolag='AIC', lag={usedlag}, nobs={nobs})")
+    print(f"  [{label}] standard (N=1, WRONG for a regression residual) p={pvalue_std:.4f} "
+          f"-> {verdict_std} unit root at 5% -- shown for audit trail only, not the verdict")
+    print(f"  [{label}] Engle-Granger (N={n_coint}, CORRECT) p={pvalue_eg:.4f} "
+          f"-> {verdict_eg} unit root at 5%, {verdict_eg_1pct} at 1%")
+    print(f"  [{label}] phi(downward-biased in finite samples)={phi:.4f} half_life(EG-gated)={hl_str}")
+    return {"phi": phi, "half_life": hl, "pvalue_std": pvalue_std, "pvalue_eg": pvalue_eg}
 
 
 def _run_and_report(label: str, spread: pd.Series, drivers: dict) -> None:
@@ -177,9 +183,14 @@ def _run_and_report(label: str, spread: pd.Series, drivers: dict) -> None:
     driver_str = " ".join(f"{k}={lev.betas[k]:+.3f}" for k in drivers)
     print(f"\n=== {label} ===")
     print(f"  intercept={lev.intercept:+.3f} {driver_str} R2={lev.r_squared:.3f} "
-          f"DW={lev.durbin_watson:.3f} n={lev.n} [ANCHOR ONLY]")
-    diag = _adf_report(lev.residuals, label)
-    _expectancy_report(lev.residuals, diag["half_life"], label)
+          f"DW={lev.durbin_watson:.3f} n={lev.n} [ANCHOR ONLY, full-sample OLS -- NOT causal, "
+          f"see module docstring's round-4 note]")
+    _adf_report(lev.residuals, label, n_regressors=len(drivers))
+    sigma_full = float(lev.residuals.dropna().std(ddof=1))
+    print(f"  [{label}] residual sigma, FULL-SAMPLE (bp, ddof=1, n={len(lev.residuals.dropna())}): "
+          f"{sigma_full:.3f} -- NOT the number Signal 3 would trade against; see module docstring")
+    print(f"  [{label}] NO EXPECTANCY REPORTED -- round-3's table for this window is WITHDRAWN, "
+          "not restated; see module docstring for the four compounding reasons")
 
 
 def main() -> None:
@@ -214,16 +225,15 @@ def main() -> None:
         print("\n[SKIPPED] two-factor / same-window one-factor: build_tfp_history returned "
               "no data for the 2021+ window (DB/network unavailable) -- reporting the gap.")
 
-    print("\n--- cost context (RVUtils/StrikelessVol/costs.py) ---")
-    print(f"MAKER round trip (2x initiate_bp, one-way 0.75bp each): {2*MAKER.initiate_bp:.2f}bp")
-    print(f"TAKER round trip (2x initiate_bp, one-way 1.00bp each): {2*TAKER.initiate_bp:.2f}bp")
-    print("Already in bp of spread at the reference $100k-DV01 clip -- directly comparable")
-    print("to a bp-denominated residual sigma, no further conversion needed (see")
-    print("test_initiation_cost_at_the_reference_clip: 0.875bp on $100k DV01 = $87,500,")
-    print("i.e. cost_usd = cost_bp * DV01_usd, the standard bp<->DV01 identity).")
-    print("A half-life must be short relative to a holding period that can clear this cost")
-    print("for z-score bands built on it to be tradeable -- a long sample rejecting a unit")
-    print("root does not by itself establish that; see each block's expectancy above.")
+    print("\n--- H6 verdict (round 4) ---")
+    print("Mean-reversion: ESTABLISHED but DOWNGRADED -- Engle-Granger p-values reject the unit")
+    print("root at 5% on all three windows and at 1% on (a) and (b); (c) rejects at 5% only,")
+    print("not at 1% (marginal). This is weaker than the standard-ADF p-values reported by round")
+    print("2/3, which used the wrong (too permissive) critical-value table.")
+    print("Tradeability: NOT ESTABLISHED. Round 3's expectancy table is withdrawn (see module")
+    print("docstring). No net-of-cost number should be quoted from this script; Task 18's event")
+    print("study, built on expanding betas / entry-vintage hedge / rolling sigma / spread-leg")
+    print("P&L / a random-walk placebo, is what will actually answer that question.")
 
 
 if __name__ == "__main__":

@@ -32,6 +32,7 @@ from __future__ import annotations
 
 import datetime as dt
 
+import numpy as np
 import pandas as pd
 
 from RVUtils.StrikelessVol.conventions import bp_day_to_annual_normals
@@ -96,18 +97,26 @@ def build(start=dt.date(2026, 1, 2), end=dt.date(2026, 8, 3)) -> dict:
 
 
 def _print_levels_2f(label: str, spread: pd.Series, vol: pd.Series, asw30: pd.Series) -> None:
+    # ADF p-value must be Engle-Granger-corrected, not the standard single-series
+    # table: this is a residual from an estimated 2-regressor cointegrating
+    # regression (n_cointegrating_vars=3=2 regressors+1), and standard critical
+    # values were measured (Task 15 round 4) to open this gate ~4x too often on
+    # exactly this class of input. See ar1_half_life_days's docstring.
+    from statsmodels.tsa.adfvalues import mackinnonp
+
     from RVUtils.regression import residual_diagnostics
 
     lev = levels_regression(spread, {"vol": vol, "asw30": asw30})
     print(f"\nlevels  2F [{label}]: intercept={lev.intercept:+.3f} vol={lev.betas['vol']:+.3f} "
           f"asw[tool]={lev.betas['asw30']:+.3f} "
           f"R2={lev.r_squared:.3f} DW={lev.durbin_watson:.2f} n={lev.n} [ANCHOR ONLY]")
-    hl = ar1_half_life_days(lev.residuals)
+    hl = ar1_half_life_days(lev.residuals, n_cointegrating_vars=3)
     diag = residual_diagnostics(lev.residuals)
+    adf_p_eg = float(mackinnonp(diag["adf_stat"], regression="c", N=3)) if np.isfinite(diag["adf_stat"]) else float("nan")
     print(f"  levels residual [{label}]: phi={ar1_phi(lev.residuals):.3f} "
-          f"half_life={'inf' if not (hl < float('inf')) else f'{hl:.1f}d'} "
-          f"(ADF p={diag['adf_pvalue']:.3f} -> "
-          f"{'FAILS to reject unit root' if diag['adf_pvalue'] > 0.05 else 'rejects unit root'}) "
+          f"half_life(EG-gated)={'inf' if not (hl < float('inf')) else f'{hl:.1f}d'} "
+          f"(EG p={adf_p_eg:.3f}, standard p={diag['adf_pvalue']:.3f} shown for audit only -> "
+          f"{'FAILS to reject unit root' if adf_p_eg > 0.05 else 'rejects unit root'}) "
           f"latest={lev.residuals.iloc[-1]:+.2f}bp")
 
 
