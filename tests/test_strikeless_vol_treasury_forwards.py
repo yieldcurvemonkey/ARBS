@@ -64,11 +64,22 @@ class _FakeSpline:
         return self.rate
 
 
-def test_treasury_forward_panel_excludes_bad_fit_days_and_reports_the_count():
+class _RaisingSpline:
+    """A spline whose yield_at always raises -- simulates a compute failure
+    distinct from a bad-RMSE fit (I2)."""
+
+    rmse = 2.0  # a fine RMSE reading -- the guard must NOT be what excludes this
+
+    def yield_at(self, ttm):
+        raise ValueError("simulated forward-computation failure")
+
+
+def test_treasury_forward_panel_excludes_bad_fit_days_and_reports_the_count_and_dates():
     """A spline whose own fit RMSE is anomalously high (see the module
     docstring's "RMSE guard" -- found on real 2021-2026 data: 13 dates with
     RMSE 22.5bp-80,000+bp against a normal ~2bp) does not represent its
-    input bonds and must not silently corrupt the forward panel.
+    input bonds and must not silently corrupt the forward panel. I1: the
+    exact excluded (date, rmse) pairs must be recoverable, not just a count.
     """
     legs = [ForwardLeg("10Y", "10Y"), ForwardLeg("20Y", "10Y")]
     good_date = dt.date(2024, 1, 2)
@@ -80,6 +91,45 @@ def test_treasury_forward_panel_excludes_bad_fit_days_and_reports_the_count():
     panel = treasury_forward_panel(spline_by_date, legs)
     assert list(panel.index.date) == [good_date]
     assert panel.attrs["treasury_excluded_bad_fit_days"] == 1
+    assert panel.attrs["treasury_excluded_bad_fit_dates"] == [(bad_date, 43.6)]
+
+
+def test_treasury_forward_panel_counts_compute_errors_separately_from_bad_fits():
+    """I2: a date whose forward computation itself fails (yield_at raising)
+    must be excluded, logged, AND counted on its own attrs key -- not
+    silently dropped through the bare except with no counter moved.
+    """
+    legs = [ForwardLeg("10Y", "10Y"), ForwardLeg("20Y", "10Y")]
+    good_date = dt.date(2024, 1, 2)
+    error_date = dt.date(2024, 1, 3)
+    spline_by_date = {
+        good_date: _FakeSpline(rate=4.0, rmse=2.5),
+        error_date: _RaisingSpline(),
+    }
+    panel = treasury_forward_panel(spline_by_date, legs)
+    assert list(panel.index.date) == [good_date]
+    assert panel.attrs["treasury_excluded_compute_errors"] == 1
+    # the compute-error date must NOT also show up as an RMSE-guard exclusion
+    assert panel.attrs["treasury_excluded_bad_fit_days"] == 0
+    assert panel.attrs["treasury_excluded_bad_fit_dates"] == []
+
+
+def test_treasury_forward_panel_keeps_a_spline_with_no_rmse_reading():
+    """I3: rmse=None (or NaN) fails OPEN -- the guard treats a missing
+    fit-quality reading as "unknown", not "assume the worst", so it cannot
+    silently exclude an entire panel if some future spline stops populating
+    rmse. Pinned by this test, not merely documented.
+    """
+    legs = [ForwardLeg("10Y", "10Y"), ForwardLeg("20Y", "10Y")]
+    none_date = dt.date(2024, 1, 2)
+    nan_date = dt.date(2024, 1, 3)
+    spline_by_date = {
+        none_date: _FakeSpline(rate=4.0, rmse=None),
+        nan_date: _FakeSpline(rate=4.0, rmse=float("nan")),
+    }
+    panel = treasury_forward_panel(spline_by_date, legs)
+    assert sorted(panel.index.date) == [none_date, nan_date]
+    assert panel.attrs["treasury_excluded_bad_fit_days"] == 0
 
 
 def test_treasury_forward_panel_keeps_a_borderline_good_fit():

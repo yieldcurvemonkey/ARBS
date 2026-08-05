@@ -37,10 +37,13 @@ minimum of 22.5bp) and exposes the excluded count on
 """
 from __future__ import annotations
 
+import logging
 from typing import Dict, Iterable
 
 import numpy as np
 import pandas as pd
+
+logger = logging.getLogger(__name__)
 
 __all__ = ["par_to_discount", "forward_par_rate", "treasury_forward_panel"]
 
@@ -90,23 +93,48 @@ def treasury_forward_panel(
 
     Skips any spline whose ``rmse`` exceeds ``rmse_guard_bp`` -- see the
     module docstring's "RMSE guard" section for why this is a diagnosed
-    defect, not a speculative filter, and for the exact dates it excludes.
-    The excluded count is exposed on
-    ``panel.attrs["treasury_excluded_bad_fit_days"]`` on every return path,
-    including the empty-input path, so the exclusion is visible rather than
-    silent.
+    defect, not a speculative filter. Each exclusion is logged at WARNING
+    with its date and RMSE (mirroring ``panels.umep_panel``'s
+    duration-monotonicity exclusion logging), and the exact list -- not
+    only a count -- is exposed on
+    ``panel.attrs["treasury_excluded_bad_fit_dates"]`` (a list of
+    ``(date, rmse)`` tuples) alongside the count on
+    ``panel.attrs["treasury_excluded_bad_fit_days"]``. Both are set on every
+    return path, including the empty-input path.
+
+    A spline whose row otherwise fails to compute (``yield_at``/bootstrap/
+    forward-rate raising) is excluded and counted SEPARATELY, on
+    ``panel.attrs["treasury_excluded_compute_errors"]``, also logged at
+    WARNING with the date and the exception -- a silently-dropped date that
+    left no counter moved would be invisible through the very mechanism
+    meant to surface exclusions.
+
+    A ``None``/NaN ``rmse`` does NOT trigger the guard (fails open): a
+    missing fit-quality reading is treated as "unknown," not "assume the
+    worst," so that this guard cannot silently exclude an entire panel if
+    some future spline stops populating ``rmse``. Every real
+    ``JPM_PAR_CURVE_CONFIG`` fit populates ``rmse`` in practice, so this has
+    no live impact today; it is a deliberate, tested choice, not an
+    oversight -- see ``test_treasury_forward_panel_keeps_a_spline_with_no_rmse_reading``.
     """
     legs = list(legs)
     grid = np.arange(0.5, 40.5, 0.5)
     rows = []
-    n_excluded_bad_fit = 0
+    excluded_bad_fit: list = []
+    n_excluded_compute_errors = 0
     for ts in sorted(spline_by_date):
         spline = spline_by_date[ts]
         if spline is None:
             continue
         rmse = getattr(spline, "rmse", None)
         if rmse is not None and np.isfinite(rmse) and rmse > rmse_guard_bp:
-            n_excluded_bad_fit += 1
+            logger.warning(
+                "treasury_forward_panel: excluding %s -- fit RMSE=%.3fbp exceeds "
+                "rmse_guard_bp=%.1fbp (spline does not represent its input bonds; "
+                "see the module docstring's RMSE guard section).",
+                ts, rmse, rmse_guard_bp,
+            )
+            excluded_bad_fit.append((ts, float(rmse)))
             continue
         try:
             par = np.asarray([float(spline.yield_at(x)) for x in grid], dtype=float)
@@ -120,13 +148,22 @@ def treasury_forward_panel(
                 for leg in legs
             }
         except Exception:
+            logger.warning(
+                "treasury_forward_panel: excluding %s -- forward computation failed",
+                ts, exc_info=True,
+            )
+            n_excluded_compute_errors += 1
             continue
         rec["date"] = pd.Timestamp(ts)
         rows.append(rec)
+
+    def _set_attrs(df: pd.DataFrame) -> pd.DataFrame:
+        df.attrs["treasury_excluded_bad_fit_days"] = len(excluded_bad_fit)
+        df.attrs["treasury_excluded_bad_fit_dates"] = list(excluded_bad_fit)
+        df.attrs["treasury_excluded_compute_errors"] = n_excluded_compute_errors
+        return df
+
     if not rows:
-        empty = pd.DataFrame(columns=[l.label for l in legs])
-        empty.attrs["treasury_excluded_bad_fit_days"] = n_excluded_bad_fit
-        return empty
+        return _set_attrs(pd.DataFrame(columns=[l.label for l in legs]))
     panel = pd.DataFrame(rows).set_index("date").sort_index()
-    panel.attrs["treasury_excluded_bad_fit_days"] = n_excluded_bad_fit
-    return panel
+    return _set_attrs(panel)

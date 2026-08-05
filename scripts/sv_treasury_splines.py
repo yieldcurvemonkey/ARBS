@@ -91,12 +91,25 @@ box for this exact source string.
    strongly inverted curve 2023-03-10 during the SVB week, both matching
    the real UST market on those dates). ``compute_spline_for_date`` is
    still used for its CACHE (``get_cached_spline``/``put_cached_spline``,
-   keyed on ``(as_of_date, config_hash)`` -- not backend-tagged, so a hit
-   may legitimately be a prior QL-backend fit; this is accepted, since QL
-   and RL price the same FedInvest quotes under the same day-count spec and
-   should agree, not because backend provenance is untracked by design) via
-   a thin local re-implementation, ``_fit_spline_local``, that shares its
-   caching calls but supplies the corrected ``ttm``.
+   keyed on ``(as_of_date, config_hash)`` -- NOT backend-tagged, so a hit
+   may legitimately be a prior QL-backend fit) via a thin local
+   re-implementation, ``_fit_spline_local``, that shares its caching calls
+   but supplies the corrected ``ttm``. **Correction (this claim was wrong
+   in an earlier revision of this docstring): QL and RL do NOT price under
+   the identical day-count convention here** -- QL's own ``time_to_maturity()``
+   is unaffected by the rateslib bug and uses the intended Act/Act-ICMA
+   fraction, while this module's RL path uses the Act/365 workaround above.
+   The panel is therefore a two-backend, two-day-count-convention mixture
+   wherever a cache hit resolves to a pre-existing QL fit rather than a
+   fresh RL one (784 of 1382 dates in this task's build were fresh RL
+   fits; 599 resolved to pre-existing QL cache hits with a different exact
+   ``ttm`` convention). Measured impact: immaterial numerically -- 4 dates
+   where a forward leg's discrete grid point ends up on a different side of
+   a coupon boundary between the two conventions, each worth ~0.29bp on a
+   ~108bp slope -- but the earlier claim that this was a non-issue "since
+   QL and RL price under the same day-count spec" was false and is
+   withdrawn; see Task 16's report, concern I5, for the shared-cache
+   provenance issue this also raises.
 
 Runtime
 -------
