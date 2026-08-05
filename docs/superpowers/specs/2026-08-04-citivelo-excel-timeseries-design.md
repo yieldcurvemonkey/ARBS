@@ -221,16 +221,22 @@ the process stays alive, idle and responsive to the UI, but every automation bin
 fails (`GetObject` returns an object exposing no properties; `Application.Workbooks`
 raises `AttributeError`). Clearing win32com's `gen_py` cache does not help.
 
-Worse, restarting Excel does **not** restore the add-in. Across four launch paths —
-`DispatchEx`, `Start-Process`, shell/`explorer.exe` open, and forced foreground
-activation — the add-in loads and `CustomRibbon.onLoad` fires, but the login
-taskpane never appears and the UDFs never register. Only a genuinely interactive
-start produces `Showing taskpane LoginViewModel → User session resumed →
-Registering functions`.
+Restarting Excel does restore the add-in, but **the login is slow — about 13
+minutes** between `CustomRibbon.onLoad` and
+`User session resumed → Registering functions`. Nothing is logged in between, so
+the instance looks permanently stuck. Four launch paths were tried (`DispatchEx`,
+`Start-Process`, shell/`explorer.exe`, forced foreground activation) and every one
+was wrongly written off as failed before the login landed; the shell-launched
+instance signed in on its own at the 13-minute mark.
 
-So a harvest/validation run must be allowed to finish or be stopped through its own
-checkpointing, never `Stop-Process`. Recovering from a wedged session needs a human
-to open Excel and let the add-in sign in.
+Practical rules:
+
+- a readiness poll must wait **≥15 minutes** before concluding the add-in is dead;
+- polling COM every couple of seconds during startup is counter-productive — the
+  login runs through `ExcelAsyncUtil.QueueAsMacro` and needs Excel idle;
+- a harvest/validation run must be allowed to finish or be stopped through its own
+  checkpointing, never `Stop-Process` — that is what wedges the OLE server in the
+  first place, and the recovery costs ~15 minutes.
 
 ### Intraday capability is per-family, and not uniform
 
@@ -344,12 +350,42 @@ SPREAD_OPTIONS.<ccy>{OPT_CAP,...}             x {PRICE,VOL} x expiry x <2Y5Y>
 ```
 
 Depth varies *within* a family and even between conventions of one measure:
-`OTM_RFR.PREMIUM` has no `ANNUAL` level while `OTM_RFR.NORMALABSOLUTE` does. Any
-generator must treat the shape as branch-local and confirm with `CVTSHIST`.
+`ATM.NORMAL` carries a `DAILY|ANNUAL` basis level while `ATM.BLACK`, `ATM.PREMIUM`
+and `ATM.FWDPREMIUM` go straight to expiry. Any generator must treat the shape as
+branch-local and confirm with `CVTSHIST`.
 
-**Legacy non-RFR branches are empty.** `ATM`, `REALIZED` and `VOL_RATIO` returned
-nothing on every sampled tag while `ATM_RFR`, `REALIZED_RFR` and `VOL_RATIO_RFR`
-returned 8/8. Builders should default to the `_RFR` variants.
+**The generator must be path-consistent, not level-consistent.** Storing "the
+vocabulary at each level" and sampling one entry per level produces combinations
+that exist on no real path — e.g. `OTM_RFR` at level 0 with `BLACK`/`DAILY` below,
+which only exist under `ATM`. That scored 17% on VOL while scoring 100% on
+`XCCY_OIS_SWAP` purely because the latter is homogeneous. The correct rule is
+recursive and keeps every tag on a recorded path:
+
+```
+tags(N) = for each option O of N:
+             if N/O was recorded  -> seg(O) + "." + tags(N/O)
+             else                 -> seg(O) + "." + tags(first recorded child)
+```
+
+Unexpanded siblings inherit the shape of the sibling that was expanded — the
+working assumption below the fan-out depth.
+
+Final validation of 1,546 path-consistent tags: **94% shape-correct**.
+
+| family | valid | empty | failed | shape-ok |
+|---|---|---|---|---|
+| `XCCY_OIS_SWAP` | 1,097 | 0 | 0 | **100%** |
+| `INFLATION` | 153 | 31 | 0 | **100%** |
+| `VOL` | 100 | 75 | 90 | 66% |
+
+`RATES.XCCY_OIS_SWAP` resolves to
+`<ccy1>.<ccy2>.<fwd>.<tenor>.{BASE_LEG,SPREAD_LEG}.BASIS_SPREAD` — seven segments.
+
+**Legacy non-RFR vol branches are deprecated.** Split by measure, every `_RFR`
+variant is **100% shape-correct with zero failures** (`ATM_RFR`, `OTM_RFR`,
+`REALIZED_RFR`, `VOL_RATIO_RFR`), while their legacy twins `ATM`, `OTM`,
+`REALIZED`, `VOL_RATIO` account for all 90 failures and return no data. Builders
+must default to `_RFR`; the whole of VOL's residual 34% is these dead branches.
 
 Harvest mechanics that matter:
 
