@@ -21,11 +21,14 @@ def test_realized_vol_of_a_known_series():
     assert rv.iloc[-1] == pytest.approx(5.0, rel=0.02)
 
 
-def test_spread_vol_is_computed_on_bp_input_without_rescaling():
+def test_spread_vol_detects_rescaling():
+    # alternating +2bp/-2bp increments -> known std of 2bp
     idx = pd.date_range("2026-01-01", periods=101, freq="B")
-    spread = pd.Series(np.arange(101, dtype=float) * 1.65, index=idx)
+    steps = np.where(np.arange(100) % 2 == 0, 2.0, -2.0)
+    spread = pd.Series(np.concatenate([[0.0], np.cumsum(steps)]), index=idx)
     sv = spread_vol_bp_day(spread, window=100)
-    assert sv.iloc[-1] == pytest.approx(0.0, abs=1e-9)  # constant increments
+    # mean of diffs is 0, std of ±2 values is 2.0
+    assert sv.iloc[-1] == pytest.approx(2.0, rel=0.02)
 
 
 def test_realized_quote_is_labelled():
@@ -46,6 +49,14 @@ def test_ratios_below_one_mean_embedded_vol_is_cheap():
     assert r.iloc[1] == pytest.approx(1.0)
 
 
-def test_ratio_is_nan_when_the_denominator_is_zero():
-    r = be_over_implied(pd.Series([2.0]), pd.Series([0.0]))
-    assert np.isnan(r.iloc[0])
+def test_ratio_is_nan_for_non_positive_denominator():
+    r = be_over_implied(pd.Series([2.0, 2.0]), pd.Series([0.0, -1.5]))
+    assert np.isnan(r.iloc[0])  # zero denominator
+    assert np.isnan(r.iloc[1])  # negative denominator
+
+
+def test_realized_quote_raises_on_insufficient_history():
+    idx = pd.date_range("2026-01-01", periods=5, freq="B")
+    rates = pd.Series(np.linspace(0.04, 0.041, 5), index=idx)
+    with pytest.raises(ValueError, match="not enough observations"):
+        realized_quote(rates, 63, underlying="test")
