@@ -192,6 +192,20 @@ after costs, and uncompensated factor risk measured as residual PCA exposure.
 | H4 | the vol-orthogonal residual drift is persistent in 2025–26 and partly forecastable | drift persistence (AR, variance ratio); predictive regressions on flow proxies (Wtp calendar windows, UMEP trend, dealer inventory) | drift indistinguishable from zero-mean noise out of sample |
 | H5 | conditional two-sided rule beats static long on **distribution and drawdown** | both books, same costs; compare skew, tail, max DD, not just Sharpe | conditional book's distribution is not better despite similar Sharpe |
 | H6 | levels residual mean-reverts ~1 week and is tradeable at \|z\| ≥ 1.5–2 | AR(1) half-life; event study of z-entries; net-of-cost expectancy | expected reversion < round-trip cost at every threshold |
+
+**H6 — ANSWERED IN TWO PARTS (Task 15). Split the claim; the brief bundles them.**
+
+*Mean-reversion: established, downgraded.* Under **Engle–Granger** critical values — mandatory, because the residual comes from an estimated cointegrating regression where OLS has already minimised it in sample — p = **0.0037** (1F 2017+, n=2391), **0.0037** (2F 2021+, n=1382), **0.0472** (1F 2021+). The first two reject at 1%; the third is marginal at 5%. Standard ADF criticals, used initially, gave p-values **5–40× too small**. Half-lives are **20–47 business days**, not the brief's ~1 week: measured φ ≈ 0.966–0.985 against the brief's 0.87. The 2026-only sample fails to reject purely from underpower (n=146).
+
+*Tradeability: NOT established. No net-of-cost expectancy from this build may be quoted.* An initial +8.46bp/trade result was withdrawn after four compounding artefacts were measured, every one flattering the result:
+1. **Look-ahead** — the residual was full-sample OLS. Holding entry, exit and sign fixed and changing only the beta vintage: +12.31 → +3.80bp (NW-t 4.54 → 1.15); with the hedge frozen at entry-date betas, the only live-holdable version, **+0.127bp gross / −1.87bp net of taker, NW-t 0.04**.
+2. **Mis-sized gate** — a random-walk placebo with no relationship to vol opened the ADF gate in **20.6%** of 500 sims (4× nominal), and among gate-passers **100%** exceeded the +8.46bp headline. The raw spread through the same pipeline is gate-closed, so the regression is what opens it.
+3. **Wrong denomination** — residual z scales size, not sign, so the book holds the linear spread package. Decomposed, the **spread leg loses money** at these entries (−2.62bp / −3.73bp, NW-t −2.14); all capture sits in an untraded 2y10y vol leg whose monetisation would mean being **short** the convexity the strategy exists to own.
+4. **Tautological verification** — `reversion_1hl = sigma` is a literal assignment, so "12/12 cells positive" reduces to "three σ exceed 2bp", true of 97% of random walks at this daily vol; and the reported σ was full-sample where the rule uses a trailing 252-day σ (ratios 0.60/0.80/0.56).
+
+Also corrected here: the **11–12× intercept swing is a window-length artefact** of comparing a 5-month fit to a 9-year fit, **not** trading-horizon anchor instability. Measured drift at the holding horizon is 2.38bp (23% of σ) and 0.42bp (4%).
+
+**Binding requirement set for any later mean-reversion result** (learned in Task 15, must be met before a number counts): expanding betas; hedge frozen at entry vintage; rolling-σ z; **spread-leg P&L, not residual P&L**; distinct-episode counts; and a random-walk placebo run through the identical pipeline.
 | H7 | 15–30bp trigger plateau replicates OOS and cross-market | trigger grid × market × sub-sample | Sharpe monotone in trigger, or the plateau is sample-specific |
 | H8 | cross-market signs currently differ and the book has better skew | per-market signal state; combined vs best-single distribution | signs agree everywhere, or the combination adds no distributional benefit |
 | H9 | fly-hedged improves carry-per-vega without dominant factor risk; 15y5y/20y10y dominates 10y10y/20y10y after costs | three constructions, same engine and cost schedule | fly hedge's added cost and factor risk exceed the carry gain |

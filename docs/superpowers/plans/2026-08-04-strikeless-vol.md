@@ -3754,6 +3754,12 @@ git -C C:\Users\chris\clee\ARBS-sv commit -m "feat(sv): Treasury-built forwards 
   - `build_signals(panel: pd.DataFrame, cfg: SignalConfig) -> pd.DataFrame` with columns `sign`, `size`, `reason`, `dv01_usd`.
   - Input panel columns required: `be_over_realized`, `drift_t`, `residual_z`, `spread_vol_bp_day`, `iv_z`.
 
+**Amended after Task 15 — build Signal 3, but not on a demonstrated edge.** Task 15 measured that the residual's tradeability is **not established**: an apparent +8.46bp/trade collapsed to **−1.87bp net of taker (NW-t 0.04)** once betas were expanding rather than full-sample and the hedge was frozen at its entry vintage; a random-walk placebo with no relationship to vol beat that headline in **100%** of the sims where it opened the gate; and, decisively for this rule, the **spread leg — the thing this rule actually holds — loses money at |z| ≥ 2 entries** (−2.62bp / −3.73bp, NW-t −2.14), with all apparent capture living in an untraded vol leg.
+
+So: keep `residual_z` as a **size scaler only**, exactly as this rule already specifies (it scales size, never sign), and do **not** carry any prior that it adds expectancy. Two hard requirements follow:
+- **`residual_z` must be causal by construction.** A residual from a full-sample levels fit is not implementable live; the fit feeding it must be expanding or rolling. A causal rolling window over a non-causal residual does not fix this.
+- **Any P&L attributed to this signal must be spread-leg P&L**, never residual P&L — they have opposite signs here.
+
 **The rule, restated as code contract:**
 1. **Valuation** sets the sign: `be_over_realized < be_cheap` → flattener; `> be_rich` → steepener; between → flat.
 2. **Drift** can veto: a significantly positive vol-orthogonal drift (`drift_t > drift_t_gate`) is a structural cost to flatteners and cancels a *mildly* cheap flattener signal.
@@ -3998,6 +4004,17 @@ git -C C:\Users\chris\clee\ARBS-sv commit -m "feat(sv): two-sided conditional ru
 **Grid (the trial count that DSR must be deflated by):** `trigger_bp ∈ {10,15,20,25,30,40}` × `be_cheap ∈ {0.6,0.8,0.9}` × `be_rich ∈ {1.1,1.2,1.5}` × `z_entry ∈ {1.0,1.5,2.0}` × `drift_t_gate ∈ {1.5,2.0,∞}` × `short_side_enabled ∈ {True,False}`. That is 972 configs per pair before markets. `deflated_for_grid` must receive the **full** trial count across all pairs and families, not the per-pair count.
 
 **Verdict:** reuse `RVUtils.SFRRVLab.stats.verdict(net_bp_at_taker, net_bp_at_maker, dsr_prob, median_net_bp, n_trades)` verbatim. The taxonomy is repo-wide and this study does not get its own.
+
+**Binding requirement set — added after Task 15, where a +8.46bp/trade result collapsed to −1.87bp once these were applied.** No mean-reversion or signal-conditioned number produced by this task counts as a result until it meets all six:
+
+1. **Expanding (or rolling) betas.** Any regression feeding a signal must use coefficients knowable at the decision date. A full-sample fit was worth **~8.5bp/trade** of pure look-ahead on the headline window.
+2. **Hedge frozen at entry vintage.** Re-hedging with later-known betas is the same look-ahead wearing a different hat; it is what took +3.80bp down to +0.13bp gross.
+3. **Rolling-σ z.** The entry rule uses a trailing 252-day σ, so expectancy priced on a full-sample σ overstates by 20–45% (measured ratios 0.60/0.80/0.56).
+4. **Spread-leg P&L, never residual P&L.** They have **opposite signs** here: the residual gained while the leg the book actually holds lost 2.6–3.7bp at the same entries.
+5. **Distinct-episode counts.** Overlapping windows are not independent trades; the corrected windows yielded 9–30 episodes across nine years, which is where the DSR penalty bites hardest.
+6. **A random-walk placebo through the identical pipeline.** One with no relationship to vol opened the Task 15 gate in **20.6%** of sims and beat its headline in 100% of those. If the placebo clears the criterion, the criterion is the finding.
+
+Report each of the six as met or not met beside every league-table row. A row that cannot say so is not eligible for an ALIVE verdict.
 
 - [ ] **Step 1: Write the failing test**
 
