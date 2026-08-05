@@ -21,6 +21,11 @@ __all__ = [
     "levels_regression",
     "frequency_ladder",
     "durbin_watson",
+    "ar1_phi",
+    "ar1_half_life_days",
+    "residual_z",
+    "drift",
+    "positive_residual_clustering",
 ]
 
 
@@ -107,3 +112,50 @@ def frequency_ladder(
             rec[f"t_{k}"] = res.tstats[k]
         rows.append(rec)
     return pd.DataFrame(rows)
+
+
+def ar1_phi(resid) -> float:
+    """OLS AR(1) coefficient of a residual series."""
+    e = pd.Series(resid).astype(float).dropna()
+    if len(e) < 20:
+        return float("nan")
+    x, y = e.shift(1).dropna(), e.iloc[1:]
+    return float(np.polyfit(x.to_numpy(), y.to_numpy(), 1)[0])
+
+
+def ar1_half_life_days(resid) -> float:
+    """Business days to halve. Infinite for a unit root."""
+    phi = ar1_phi(resid)
+    if not np.isfinite(phi) or phi <= 0.0 or phi >= 1.0:
+        return float("inf")
+    return float(np.log(0.5) / np.log(phi))
+
+
+def residual_z(resid, *, window: int = 252, min_periods: int = 126) -> pd.Series:
+    """Rolling z on the residual's OWN dispersion.
+
+    Not the OLS standard error: that is sigma/sqrt(n), it shrinks with sample
+    size, and bands built on it tighten as history accumulates until the rule
+    fires constantly.
+    """
+    e = pd.Series(resid).astype(float)
+    roll = e.rolling(int(window), min_periods=int(min_periods))
+    return (e - roll.mean()) / roll.std(ddof=1)
+
+
+def drift(changes_resid, *, window: int = 63) -> pd.DataFrame:
+    """Signal 2: the vol-orthogonal structural drift, and its significance."""
+    from RVUtils.SFRRVLab.stats import nw_tstat
+
+    e = pd.Series(changes_resid).astype(float)
+    mean = e.rolling(int(window), min_periods=int(window)).mean()
+    t = e.rolling(int(window), min_periods=int(window)).apply(
+        lambda w: nw_tstat(w, lags=5), raw=False
+    )
+    return pd.DataFrame({"mean_bp_per_day": mean, "t_stat": t})
+
+
+def positive_residual_clustering(resid, *, window: int = 21) -> pd.Series:
+    """Share of positive residuals in the window -- the regime tell (H4)."""
+    e = pd.Series(resid).astype(float)
+    return (e > 0).rolling(int(window), min_periods=int(window)).mean()
