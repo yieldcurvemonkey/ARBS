@@ -33,6 +33,7 @@ __all__ = [
 class RegressionResult:
     betas: Dict[str, float]
     tstats: Dict[str, float]
+    intercept: float
     r_squared: float
     durbin_watson: float
     n: int
@@ -62,6 +63,7 @@ def _fit(y: pd.Series, X: pd.DataFrame, *, kind: str, anchor_only: bool,
     return RegressionResult(
         betas={c: float(model.params[c]) for c in cols},
         tstats={c: float(robust.tvalues[list(Xm.columns).index(c)]) for c in cols},
+        intercept=float(model.params["const"]),
         r_squared=float(model.rsquared),
         durbin_watson=durbin_watson(model.resid),
         n=int(len(data)),

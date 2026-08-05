@@ -99,7 +99,8 @@ def _print_levels_2f(label: str, spread: pd.Series, vol: pd.Series, asw30: pd.Se
     from RVUtils.regression import residual_diagnostics
 
     lev = levels_regression(spread, {"vol": vol, "asw30": asw30})
-    print(f"\nlevels  2F [{label}]: vol={lev.betas['vol']:+.3f} asw[tool]={lev.betas['asw30']:+.3f} "
+    print(f"\nlevels  2F [{label}]: intercept={lev.intercept:+.3f} vol={lev.betas['vol']:+.3f} "
+          f"asw[tool]={lev.betas['asw30']:+.3f} "
           f"R2={lev.r_squared:.3f} DW={lev.durbin_watson:.2f} n={lev.n} [ANCHOR ONLY]")
     hl = ar1_half_life_days(lev.residuals)
     diag = residual_diagnostics(lev.residuals)
@@ -108,6 +109,13 @@ def _print_levels_2f(label: str, spread: pd.Series, vol: pd.Series, asw30: pd.Se
           f"(ADF p={diag['adf_pvalue']:.3f} -> "
           f"{'FAILS to reject unit root' if diag['adf_pvalue'] > 0.05 else 'rejects unit root'}) "
           f"latest={lev.residuals.iloc[-1]:+.2f}bp")
+
+
+def _print_changes_2f(label: str, spread: pd.Series, vol: pd.Series, asw30: pd.Series) -> None:
+    two = changes_regression(spread, {"vol": vol, "asw30": asw30})
+    print(f"changes 2F [{label}]: vol={two.betas['vol']:+.3f} (t={two.tstats['vol']:+.2f}) "
+          f"asw[tool]={two.betas['asw30']:+.3f} (t={two.tstats['asw30']:+.2f}) "
+          f"R2={two.r_squared:.3f} n={two.n}")
 
 
 def main() -> None:
@@ -139,11 +147,14 @@ def main() -> None:
         asw30_filtered = -d["mmss_30y_filtered"]  # desk -> tool convention; see module docstring
         asw30_unfiltered = -d["mmss_30y_unfiltered"]
 
-        two = changes_regression(spread, {"vol": vol, "asw30": asw30_filtered})
-        print(f"\nchanges 2F: vol={two.betas['vol']:+.3f} (t={two.tstats['vol']:+.2f}) "
-              f"asw[tool]={two.betas['asw30']:+.3f} (t={two.tstats['asw30']:+.2f}) "
-              f"R2={two.r_squared:.3f} n={two.n}")
+        print()
+        _print_changes_2f("filtered, headline", spread, vol, asw30_filtered)
         print("  target   : vol ~ -0.67 (significant), ASW ~ -0.17 (t ~ -1.2, insignificant), R2 ~ 0.345")
+        # I5 extension: the changes-2F ASW sign disagreement vs the brief was
+        # left unresolved in the prior review round -- test it against the
+        # same 7-day duration-monotonicity exclusion the levels-2F check used,
+        # rather than leaving it open.
+        _print_changes_2f("UNFILTERED, robustness check", spread, vol, asw30_unfiltered)
 
         # I5 robustness check: the degenerate-duration-monotonicity exclusion
         # (Task 6's guard) drops a temporally-clustered set of days, not a

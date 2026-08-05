@@ -78,6 +78,28 @@ def test_frequency_ladder_reports_every_horizon(planted):
     assert list(lad["n"]) == [len(spread) - h for h in (1, 5, 21)]
 
 
+def test_regression_result_exposes_the_intercept():
+    """RegressionResult.betas deliberately excludes the constant term (see
+    _fit's cols = [c for c in data.columns if c != '_y_'], built BEFORE
+    sm.add_constant is called) -- but the brief's published levels equation
+    (y = 5.66 - 1.18*vol + 0.443*ASW) is entirely about the intercept plus
+    two slopes, and comparing only the slopes silently drops the regime-level
+    ('re-basing') claim the intercept carries. This plants a known intercept
+    and confirms it comes back unchanged, not merely present as some field."""
+    rng = np.random.default_rng(13)
+    n = 300
+    idx = pd.bdate_range("2022-01-01", periods=n)
+    x = pd.Series(rng.normal(0, 1, n), index=idx)
+    y = pd.Series(5.66 + 2.0 * x + rng.normal(0, 0.01, n), index=idx)
+    res = levels_regression(y, {"x": x})
+    assert res.intercept == pytest.approx(5.66, abs=0.05)
+    # cross-check against an independently-fit OLS on the same data --
+    # not just "some number close to 5.66 by construction," but literally
+    # the same constant term statsmodels itself would report.
+    naive = sm.OLS(y, sm.add_constant(x)).fit()
+    assert res.intercept == pytest.approx(float(naive.params["const"]), rel=1e-9)
+
+
 def test_two_factor_regression_returns_both_betas(planted):
     spread, vol = planted
     rng = np.random.default_rng(11)
