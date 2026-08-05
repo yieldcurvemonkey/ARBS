@@ -35,7 +35,12 @@ TARGETS = [
 NO_EXPAND = ("BFLY", "CURVES", "ROLL_CARRY", "FWD")
 MAX_DEPTH = 7
 
-SRC = pathlib.Path(__file__).parent / "dag_rates.json"
+# dag_rates_deep.json is a strict superset of dag_rates.json (2,517 nodes vs 2,101,
+# zero missing, zero differing children), so only the deep file is committed.
+# fb_harvest2.py still writes dag_rates.json when the structural walk is re-run.
+_HERE = pathlib.Path(__file__).parent
+SRC = next((p for p in (_HERE / "dag_rates_deep.json", _HERE / "dag_rates.json")
+            if p.exists()), _HERE / "dag_rates.json")
 OUT = pathlib.Path(__file__).parent / "dag_rates_deep.json"
 
 doc = json.loads(SRC.read_text())
