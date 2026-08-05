@@ -105,6 +105,41 @@ def test_the_hedge_restores_package_dv01_neutrality_when_both_legs_drift():
         assert abs(naive_residual) > 1_000.0
 
 
+def test_roll_segments_overlap_by_one_date_and_cover_the_path():
+    """The annual roll IS this function, so it gets its own test.
+
+    Each segment must end on the date the next one starts: the old package is
+    held through the roll date (its P&L belongs to the closing segment) and the
+    new one is struck on that date's curve. Without the overlap the roll date
+    would contribute no P&L at all -- one business day silently lost per year.
+    """
+    from scripts.sv_static_long_control import roll_segments
+
+    dates = list(pd.bdate_range("2017-01-03", "2026-08-03"))
+    segs = roll_segments(dates, roll_months=12)
+
+    assert len(segs) == 10  # 9.6 years of annual rolls
+    assert segs[0][0] == 0
+    assert segs[-1][1] == len(dates) - 1
+    for (_, end), (nxt_start, _) in zip(segs, segs[1:]):
+        assert end == nxt_start  # shared boundary date, not a gap and not a skip
+    # every date is inside some segment
+    covered = {i for a, b in segs for i in range(a, b + 1)}
+    assert covered == set(range(len(dates)))
+    # and each closed segment really is ~12 months, not a row count
+    for a, b in segs[:-1]:
+        span = (dates[b] - dates[a]).days
+        assert 360 <= span <= 372, (dates[a], dates[b], span)
+
+
+def test_roll_segments_handles_paths_shorter_than_one_roll():
+    from scripts.sv_static_long_control import roll_segments
+
+    dates = list(pd.bdate_range("2026-01-05", "2026-03-31"))
+    assert roll_segments(dates, roll_months=12) == [(0, len(dates) - 1)]
+    assert roll_segments([], roll_months=12) == []
+
+
 # --------------------------------------------------------------------------
 # Real-curve checks. Task 12's ledger VALUES are pinned only inside its
 # synthetic world, and ``reconcile`` is an arithmetic identity that holds for
