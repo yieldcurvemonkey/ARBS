@@ -8,6 +8,7 @@ Nothing here calls the three raising methods.
 """
 from __future__ import annotations
 
+import math
 from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime
@@ -27,11 +28,16 @@ PAYER_NOTIONAL_SIGN: int = 1
 __all__ = [
     "PAYER_NOTIONAL_SIGN",
     "Package",
+    "PackageGreeks",
     "analytic_leg_gamma",
+    "breakeven_bp_day",
     "build_leg",
     "build_package",
+    "compute_greeks",
     "daily_dcf",
+    "daily_roll_usd",
     "gamma_by_h",
+    "greeks_panel",
     "package_dv01",
     "package_gamma",
     "package_npv",
@@ -202,3 +208,108 @@ def analytic_leg_gamma(curve, swap) -> float:
 
     second_derivative = notional * (t0 * t0 * d0 - tN * tN * dN - k * annuity_term)
     return second_derivative * 1e-8
+
+
+def daily_roll_usd(curve, package: Package, *, next_date) -> float:
+    """One business day of carry+roll, in dollars, curve held fixed.
+
+    ``rl.Curve.translate`` advances the valuation date while holding the forward
+    curve, which is exactly "nothing happened, a day passed". Negative means the
+    position bleeds -- the normal state of a flattener on an inverted ultra-long
+    curve.
+    """
+    handle = curve.handle()
+    base = package_npv(handle, package)
+    rolled = package_npv(handle.translate(next_date), package)
+    return rolled - base
+
+
+def breakeven_bp_day(daily_roll: float, gamma: float) -> float:
+    """The parallel move whose convexity gain pays one day of roll, in bp.
+
+    ``sqrt(2 * |roll| / gamma)``. Undefined (NaN) when convexity is not positive:
+    a non-convex package has no breakeven, and returning 0.0 there would read as
+    "infinitely cheap".
+    """
+    if gamma is None or gamma <= 0.0:
+        return float("nan")
+    return math.sqrt(2.0 * abs(float(daily_roll)) / float(gamma))
+
+
+@dataclass(frozen=True)
+class PackageGreeks:
+    date: Any
+    pair_name: str
+    short_rate: float
+    long_rate: float
+    spread_bp: float
+    short_dv01: float
+    long_dv01: float
+    package_dv01: float
+    gamma_by_h: dict
+    daily_roll_usd: float
+    breakeven_by_h: dict
+
+
+def compute_greeks(
+    curve,
+    pair: ForwardPair,
+    *,
+    next_date=None,
+    package_dv01_usd: float = 100_000.0,
+    sign: int = FLATTENER,
+    h_bps=(10.0, 25.0, 50.0),
+) -> PackageGreeks:
+    """Everything for one pair on one date, all of it repriced."""
+    from RVUtils.StrikelessVol.conventions import slope_bp
+
+    pkg = build_package(curve, pair, package_dv01_usd=package_dv01_usd, sign=sign)
+    short_rate = float(curve.fair_rate(curve.build_irswap(fwd=pair.short.fwd, tenor=pair.short.tail)))
+    long_rate = float(curve.fair_rate(curve.build_irswap(fwd=pair.long.fwd, tenor=pair.long.tail)))
+
+    if next_date is None:
+        next_date = curve.calendar_advance(curve.reference_date(), "1b")
+
+    gammas = gamma_by_h(curve, pkg, h_bps=h_bps)
+    roll = daily_roll_usd(curve, pkg, next_date=next_date)
+    return PackageGreeks(
+        date=curve.reference_date(),
+        pair_name=pair.name,
+        short_rate=short_rate,
+        long_rate=long_rate,
+        spread_bp=slope_bp(short_rate=short_rate, long_rate=long_rate),
+        short_dv01=pkg.short_dv01,
+        long_dv01=pkg.long_dv01,
+        package_dv01=package_dv01(curve, pkg),
+        gamma_by_h=gammas,
+        daily_roll_usd=roll,
+        breakeven_by_h={h: breakeven_bp_day(roll, g) for h, g in gammas.items()},
+    )
+
+
+def greeks_panel(curve_map: dict, pair: ForwardPair, **kwargs) -> pd.DataFrame:
+    """One row per date. Dates whose curve cannot price the pair are dropped."""
+    rows = []
+    for ts in sorted(curve_map):
+        curve = curve_map[ts]
+        if curve is None:
+            continue
+        try:
+            g = compute_greeks(curve, pair, **kwargs)
+        except Exception:
+            continue
+        rec = {
+            "date": pd.Timestamp(ts),
+            "pair": g.pair_name,
+            "short_rate": g.short_rate,
+            "long_rate": g.long_rate,
+            "spread_bp": g.spread_bp,
+            "package_dv01": g.package_dv01,
+            "daily_roll_usd": g.daily_roll_usd,
+        }
+        for h, val in g.gamma_by_h.items():
+            rec[f"gamma_h{int(h)}"] = val
+        for h, val in g.breakeven_by_h.items():
+            rec[f"breakeven_h{int(h)}"] = val
+        rows.append(rec)
+    return pd.DataFrame(rows).set_index("date").sort_index()
