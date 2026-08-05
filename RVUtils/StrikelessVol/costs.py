@@ -22,7 +22,11 @@ class CostSchedule:
     multiplier: float = 1.0
 
     def cost_usd(self, kind: str, dv01_traded_usd: float) -> float:
-        """Dollars charged for trading ``dv01_traded_usd`` of risk."""
+        """Dollars charged for trading ``dv01_traded_usd`` of risk.
+
+        Returns a non-negative magnitude regardless of the sign of ``dv01_traded_usd``.
+        Callers subtract this from signed P&L to account for transaction costs.
+        """
         rate_bp = {
             "initiate": self.initiate_bp,
             "hedge": self.hedge_bp,
