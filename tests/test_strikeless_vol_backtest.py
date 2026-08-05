@@ -415,6 +415,50 @@ def test_a_non_causal_builder_is_refused_even_as_fit_fn():
     assert res.requirements.rolling_sigma_z is False
 
 
+def test_the_causality_audit_requires_the_shock_to_have_moved_the_tail():
+    """An unmoved head is only evidence of causality if the shock moved
+    ANYTHING. Pins the three-way separation, so a future change that weakens
+    the requirement to `tail >= 0` shows up here."""
+    spread, drivers = _factor_frame()
+
+    constant = expanding_residual(spread, drivers, min_periods=252).residual
+    memoised = audit_causal_betas(lambda y, x: constant, spread, drivers)
+    assert memoised["tail_max_abs_diff"] == 0.0
+    assert memoised["probe_reached"] is False
+    assert memoised["max_abs_diff"] == 0.0      # the head IS still
+    assert memoised["causal"] is False          # ... and that is not enough
+
+    genuine = audit_causal_betas(
+        lambda y, x: expanding_residual(y, x, min_periods=252).residual,
+        spread, drivers)
+    assert genuine["tail_max_abs_diff"] > 0.0
+    assert genuine["causal"] is True
+
+    honest_full_sample = audit_causal_betas(
+        lambda y, x: levels_regression(y, x).residuals, spread, drivers)
+    assert honest_full_sample["tail_max_abs_diff"] > 0.0   # probe landed
+    assert honest_full_sample["causal"] is False           # head moved
+
+
+def test_a_builder_constant_in_its_input_is_refused_by_causal_signals():
+    """C1, second doorway: `fit_fn` is called three times per invocation, so a
+    memoising closure is the natural response to its cost -- and a closure over
+    a precomputed full-sample fit was certified `expanding_betas=True`."""
+    spread, drivers = _factor_frame()
+    panel = _panel_for(spread, drivers)
+    precomputed = _full_sample_fit(spread, drivers)
+    calls = {"n": 0}
+
+    def memoised(y, x):
+        calls["n"] += 1
+        return precomputed                      # ignores y entirely
+
+    with pytest.raises(ValueError, match="never reached it"):
+        causal_signals(panel, SignalConfig(), spread_bp=spread, drivers=drivers,
+                       fit_fn=memoised, min_periods=252)
+    assert calls["n"] >= 2                      # it really was invoked
+
+
 def test_causal_signals_stamps_verified_provenance():
     spread, drivers = _factor_frame()
     panel = _panel_for(spread, drivers)

@@ -699,6 +699,32 @@ def audit_causal_betas(
     the same object. :func:`causal_signals` does exactly that; without it, the
     audit is a statement about a function while the signal is built from a
     series, and nothing connects them.
+
+    **The probe must have reached the code (``probe_reached``).** An unmoved
+    head is only evidence of causality if the shock moved ANYTHING; otherwise it
+    is evidence the shock never got in. A ``fit_fn`` that ignores its ``y``
+    argument -- a closure over a precomputed fit, or a memoised builder, both
+    natural responses to this function being called three times per invocation
+    -- returns the identical series for the shocked and unshocked calls, so the
+    head cannot move and a naive audit certifies it. That reopened C1 on the
+    ``fit_fn`` seam exactly as ``fit=`` had: a full-sample residual carrying
+    ~8.5bp/trade of look-ahead, stamped ``expanding_betas=True,
+    causal_max_abs_diff=0.0``.
+
+    ``tail_max_abs_diff`` (the movement AFTER the cut) separates that case from
+    both legitimate ones, and the separation is not marginal:
+
+    ====================================  =========  =========
+    builder                               head diff  tail diff
+    ====================================  =========  =========
+    genuine expanding fit                 0          250.000
+    honest full-sample levels_regression  148        186.055
+    constant / memoised builder           0            0.000
+    ====================================  =========  =========
+
+    So ``causal`` requires a still head AND a moved tail. Note the middle row:
+    the requirement does not weaken the audit's verdict on an honest non-causal
+    fit, which still fails on the head.
     """
     y = pd.Series(spread_bp).astype(float)
     base = pd.Series(fit_fn(y, drivers)).astype(float)
@@ -707,18 +733,28 @@ def audit_causal_betas(
     y2.iloc[cut:] = y2.iloc[cut:] + float(shock)
     shocked = pd.Series(fit_fn(y2, drivers)).astype(float)
 
+    # Did the shock reach the code at all?
+    tail = y.index[cut:]
+    tail_both = pd.concat([base.reindex(tail).rename("a"),
+                           shocked.reindex(tail).rename("b")], axis=1).dropna()
+    tail_diff = (float((tail_both["a"] - tail_both["b"]).abs().max())
+                 if len(tail_both) else float("nan"))
+    probe_reached = bool(np.isfinite(tail_diff) and tail_diff > 0.0)
+
     head = y.index[:cut]
     a = base.reindex(head).dropna()
     b = shocked.reindex(a.index)
     both = pd.concat([a.rename("a"), b.rename("b")], axis=1).dropna()
+    out = {"shock": float(shock), "cut": cut, "baseline": base, "shocked": shocked,
+           "tail_max_abs_diff": tail_diff, "probe_reached": probe_reached,
+           "n_tail_compared": int(len(tail_both))}
     if both.empty:
-        return {"causal": False, "max_abs_diff": float("nan"), "n_compared": 0,
-                "shock": float(shock), "cut": cut,
-                "baseline": base, "shocked": shocked}
+        out.update({"causal": False, "max_abs_diff": float("nan"), "n_compared": 0})
+        return out
     diff = float((both["a"] - both["b"]).abs().max())
-    return {"causal": bool(diff <= tol), "max_abs_diff": diff,
-            "n_compared": int(len(both)), "shock": float(shock), "cut": cut,
-            "baseline": base, "shocked": shocked}
+    out.update({"causal": bool(probe_reached and diff <= tol),
+                "max_abs_diff": diff, "n_compared": int(len(both))})
+    return out
 
 
 def audit_rolling_sigma_z(
@@ -892,6 +928,19 @@ def causal_signals(
 
     causal = audit_causal_betas(lambda y, x: fit_fn(y, x).residual,
                                 spread_bp, drivers)
+    if not causal["probe_reached"]:
+        raise ValueError(
+            "the builder returned the same residual for shocked and unshocked "
+            f"inputs (tail movement {causal['tail_max_abs_diff']!r}), so the "
+            "causality probe never reached it. A `fit_fn` that ignores its `y` "
+            "argument -- a closure over a precomputed fit, or a memoised "
+            "builder -- cannot be audited: its head is unmoved because nothing "
+            "moved, not because the fit is causal, and certifying it would "
+            "stamp a full-sample residual as expanding. Pass a builder that "
+            "genuinely re-fits on the `y` it is given; if the cost is the "
+            "concern, use `fit=` with a matching precomputed fit, which is "
+            "certified against the audit instead."
+        )
     baseline = pd.Series(causal["baseline"]).astype(float)
 
     if fit is None:
