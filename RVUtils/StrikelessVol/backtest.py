@@ -1143,9 +1143,25 @@ def causal_signals(
     out = entry_vintage_signals(p, cfg, spread_bp=spread_bp, drivers=drivers,
                                 betas=fit.betas, window=window,
                                 min_periods=z_min_periods)
+    # Stamp EVERY leg's number, not just the head-shock one. `causal` is a
+    # conjunction of three measurements, and only one of them was being
+    # recorded -- so a fit that failed on a different leg still carried
+    # `causal_max_abs_diff: 0.0` on its certificate, which reads as a clean
+    # pass. Measured on the frozen-coefficient builder (doorway A):
+    # `expanding_betas=False` with `causal_max_abs_diff=0.0`, because its head
+    # genuinely does not move under a future shock -- it fails because its tail
+    # does not respond to its own history, and that number was nowhere. The
+    # flag governs the gate either way, so no gate was wrong; but this study
+    # trusts stamped evidence over flags, and evidence that omits the failing
+    # leg invites the reader to trust the flag instead.
     out.attrs.update({
         "expanding_betas": bool(causal["causal"]),
         "causal_max_abs_diff": float(causal["max_abs_diff"]),
+        "causal_probe_reached": bool(causal["probe_reached"]),
+        "causal_tail_max_abs_diff": float(causal["tail_max_abs_diff"]),
+        "causal_responds_to_history": bool(causal["responds_to_history"]),
+        "causal_head_shock_tail_response": float(causal["head_shock_tail_response"]),
+        "betas_reproduce_residual_max_abs_diff": float(beta_gap),
         "rolling_sigma_z": z_ok,
         "rolling_z_max_abs_diff": max(float(rolling["max_abs_diff"]),
                                       z_causal_diff),

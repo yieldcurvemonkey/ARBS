@@ -635,6 +635,43 @@ def test_causal_signals_stamps_verified_provenance():
     assert "beta_vintage_date" in sig.columns
 
 
+def test_the_certificate_carries_the_number_for_every_leg_it_asserts():
+    """`expanding_betas` is a conjunction of three measurements plus a betas
+    check, and stamping only the head-shock number let a fit that failed a
+    DIFFERENT leg carry `causal_max_abs_diff: 0.0` -- which reads as a clean
+    pass. The frozen-coefficient builder is exactly that case: its head really
+    does not move under a future shock; it fails because its tail does not
+    respond to its own history."""
+    spread, drivers = _factor_frame()
+    panel = _panel_for(spread, drivers)
+
+    honest = causal_signals(panel, SignalConfig(), spread_bp=spread,
+                            drivers=drivers, min_periods=252)
+    leaky = causal_signals(panel, SignalConfig(), spread_bp=spread, drivers=drivers,
+                           fit_fn=_leaky_frozen_builder(spread, drivers),
+                           min_periods=252)
+
+    for attrs in (honest.attrs, leaky.attrs):
+        for key in ("causal_max_abs_diff", "causal_probe_reached",
+                    "causal_tail_max_abs_diff", "causal_responds_to_history",
+                    "causal_head_shock_tail_response",
+                    "betas_reproduce_residual_max_abs_diff"):
+            assert key in attrs, f"{key} is asserted but never stamped"
+
+    # The failing leg is identifiable FROM THE CERTIFICATE, not just from the flag.
+    assert leaky.attrs["expanding_betas"] is False
+    assert leaky.attrs["causal_max_abs_diff"] == pytest.approx(0.0)   # looks clean
+    assert leaky.attrs["causal_probe_reached"] is True
+    assert leaky.attrs["causal_responds_to_history"] is False          # the real cause
+    assert leaky.attrs["causal_head_shock_tail_response"] == 0.0
+
+    assert honest.attrs["causal_responds_to_history"] is True
+    assert honest.attrs["causal_head_shock_tail_response"] > 0.0
+    assert honest.attrs["causal_tail_max_abs_diff"] > 0.0
+    assert honest.attrs["betas_reproduce_residual_max_abs_diff"] == pytest.approx(
+        0.0, abs=1e-9)
+
+
 def _panel_for(spread, drivers):
     idx = spread.index
     return pd.DataFrame(
