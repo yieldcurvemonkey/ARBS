@@ -3904,7 +3904,14 @@ class SignalConfig:
     z_entry: float = 1.5
     z_exit: float = 0.0
     z_size_cap: float = 3.0
-    target_vol_bp_day: float = 1.65
+    # Corrected after Task 15: the research brief's 1.65 bp/day was measured at
+    # 1.32 on this repo's own spread series. The gap is not an error in either
+    # number -- our forwards are re-derived from a log-cubic spline rather than
+    # quoted, so the series carries no bid/ask bounce (lag-1 autocorrelation
+    # -0.018 against the brief's -0.270), and CostSchedule prices that
+    # microstructure separately. Sizing off 1.65 AND charging the cost schedule
+    # would double-count it.
+    target_vol_bp_day: float = 1.32
     size_cap: float = 1.0
     short_side_enabled: bool = True
     iv_spike_gate_z: float = 2.0
