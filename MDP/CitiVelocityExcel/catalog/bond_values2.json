@@ -1,0 +1,32 @@
+{
+ "isin": "US912810UA42",
+ "valid_1w": [
+  "PRICE",
+  "YIELD",
+  "SPREAD_TSY",
+  "ASW_4_USD",
+  "DURATION",
+  "DV01"
+ ],
+ "valid_5y_only": [
+  "OAS"
+ ],
+ "still_empty": [
+  "YIELD_WORST",
+  "YIELD_NEXT",
+  "ZSPREAD",
+  "CAS",
+  "ASW_4_EUR",
+  "ASW_4_GBP",
+  "ASW_4_CHF",
+  "CONVEXITY",
+  "ASW"
+ ],
+ "extra_valid": [
+  "ASW_4_JPY"
+ ],
+ "extra_empty": [
+  "ASW_4_AUD",
+  "YIELD_MAT"
+ ]
+}
