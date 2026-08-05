@@ -545,6 +545,29 @@ def test_full_sample_betas_beside_a_causal_residual_are_refused():
                        min_periods=252)
 
 
+def test_betas_missing_where_the_residual_is_defined_are_refused():
+    """The consistency check has a coverage leg as well as a numeric one: betas
+    that are absent on dates the residual covers would silently produce a NaN
+    entry z on exactly those dates, and the value comparison cannot see it
+    because it runs on the overlap."""
+    from RVUtils.StrikelessVol.factors import WalkForwardFit
+
+    spread, drivers = _factor_frame()
+    panel = _panel_for(spread, drivers)
+    honest = expanding_residual(spread, drivers, min_periods=252)
+    holed = honest.betas.copy()
+    dated = honest.residual.dropna().index
+    holed.loc[dated[50:120], ["const", "vol"]] = np.nan
+    # the premise: values still agree wherever both are defined
+    assert holed.loc[dated, ["const", "vol"]].isna().any(axis=1).sum() == 70
+
+    with pytest.raises(ValueError, match="does not reproduce"):
+        causal_signals(panel, SignalConfig(), spread_bp=spread, drivers=drivers,
+                       fit=WalkForwardFit(residual=honest.residual, betas=holed,
+                                          min_periods=252),
+                       min_periods=252)
+
+
 def _leaky_frozen_builder(spread, drivers):
     """Doorway A: a pure pointwise transform of y with FULL-SAMPLE coefficients
     baked in before the builder is ever called. Plausible as an accident --
