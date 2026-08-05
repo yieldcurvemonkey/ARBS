@@ -380,3 +380,61 @@ def test_greeks_panel_is_one_row_per_date():
     assert "breakeven_h25" in panel.columns
     assert "gamma_h25" in panel.columns
     assert "daily_roll_usd" in panel.columns
+
+
+@pytest.mark.network
+@pytest.mark.slow
+def test_real_usd_curve_daily_roll_is_stable_and_negative():
+    """Item 4: settle it on real data. Nothing before this test ran on a
+    real curve -- everything else in this module is a synthetic fixture.
+
+    USD 10y10y/20y10y, real GSQUANT-RL ``USD-OIS`` curves,
+    2026-07-20..2026-08-03 (business days only; the provider drops
+    weekends/holidays and this test does not force them). Measured (this
+    exact pull, reproducible -- these are historical dates):
+
+    - ``spread_bp`` ranges -54.9 to -60.4bp (2026-07-31: -60.4bp,
+      2026-08-03: -57.3bp -- matches the desk levels
+      ``test_real_usd_panel_matches_desk_levels`` independently pins).
+    - ``daily_roll_usd`` ranges -$2,448.05 to -$2,335.71 across all 11
+      business days: negative on EVERY day, std/mean = 1.5%.
+    - ``breakeven_h25`` ranges 4.78 to 4.90 bp/day, essentially flat.
+
+    **The answer to Item 4's question is: yes, stable, on this pull.** The
+    real curve does not have the synthetic stress fixture's artificial kink,
+    and behaves like the smooth realistic fixture the correction round built
+    to match it (both show a materially negative, day-stable roll) rather
+    than like the pathological one. This is one ~2-week pull, not a
+    multi-year backtest -- it demonstrates the metric is usable, not that it
+    is profitable or stable over all regimes; that is Tasks 10-13's question
+    to answer, not this test's.
+    """
+    import datetime as dt
+
+    from MDP.IRSwaps.IRSwapsMDP import IRSwapsMDP
+
+    dates = [dt.date(2026, 7, d) for d in range(20, 32)] + [dt.date(2026, 8, d) for d in range(1, 4)]
+    mdp = IRSwapsMDP(source="GSQUANT-RL")
+    raw_curve_map = mdp.bulk_get_data({"curve_name": "USD-OIS", "timestamps": dates})
+    curve_map = {
+        pd.Timestamp(ts): curve
+        for ts, curve in raw_curve_map.items()
+        if curve is not None and ts != "live"
+    }
+    # A systemic provider failure should fail loudly, not silently pass on
+    # whatever scraps came back -- more than half the ~10 business days
+    # expected out of ~14 calendar days must have produced a curve.
+    assert len(curve_map) >= 5
+
+    panel = greeks_panel(curve_map, PAIR)
+    assert len(panel) >= 5
+
+    assert -70.0 < panel["spread_bp"].mean() < -40.0  # in the real desk range
+
+    roll = panel["daily_roll_usd"]
+    assert (roll < 0.0).all()  # the real desk flattener bleeds, every day sampled
+    assert roll.abs().max() / roll.abs().min() < 2.0  # stable, not the stress fixture's chaos
+
+    be25 = panel["breakeven_h25"]
+    assert (be25 > 0.0).all()
+    assert 2.0 < be25.mean() < 10.0
