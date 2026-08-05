@@ -738,6 +738,39 @@ def audit_causal_betas(
     So ``causal`` requires a still head AND a moved tail. Note the middle row:
     the requirement does not weaken the audit's verdict on an honest non-causal
     fit, which still fails on the head.
+
+    **And the fit must depend on its own history (``responds_to_history``).** A
+    builder whose coefficients are baked in before it is called -- ``resid = y -
+    (C + B*x)`` with ``C``/``B`` fitted on the whole sample elsewhere -- is a
+    pure pointwise transform of ``y``. Its head is still under a tail shock and
+    its tail moves, so it passes both checks above, yet its residual is
+    bit-identical to a full-sample ``levels_regression`` residual. It is a
+    plausible accident ("I already have the betas, just apply them"), not an
+    adversarial construction. Shocking the HEAD and requiring the TAIL to
+    respond separates it: a genuinely refitting builder must change its later
+    coefficients, a frozen-coefficient one cannot.
+
+    =====================================  ==========================
+    builder                                tail response to head shock
+    =====================================  ==========================
+    genuine expanding fit                  216.008
+    frozen-coefficient leaky builder         0.000
+    honest full-sample levels_regression   160.485
+    =====================================  ==========================
+
+    **Scope limit of the method, stated where the certificate is read.** A
+    single cut at ``1 - shock_frac`` certifies only that the last
+    ``shock_frac`` of the sample does not leak into the first part. Leakage
+    *within* the tail region -- a fit at date ``t`` late in the sample seeing
+    ``t+1`` -- is invisible to this probe **by construction**, because both the
+    shocked and unshocked runs contain that leak identically. Two or three cuts
+    would narrow the blind spot. This is a property of the one-cut method, not a
+    defect of this implementation, and it means a passing ``causal`` is evidence
+    about a boundary rather than a proof of causality everywhere.
+
+    Cost note: ``fit_fn`` is called **three** times (baseline, tail-shocked,
+    head-shocked). See :func:`causal_signals` for why the answer to that cost is
+    ``fit=``, not a memoising builder.
     """
     y = pd.Series(spread_bp).astype(float)
     base = pd.Series(fit_fn(y, drivers)).astype(float)
@@ -746,27 +779,38 @@ def audit_causal_betas(
     y2.iloc[cut:] = y2.iloc[cut:] + float(shock)
     shocked = pd.Series(fit_fn(y2, drivers)).astype(float)
 
-    # Did the shock reach the code at all?
     tail = y.index[cut:]
-    tail_both = pd.concat([base.reindex(tail).rename("a"),
-                           shocked.reindex(tail).rename("b")], axis=1).dropna()
-    tail_diff = (float((tail_both["a"] - tail_both["b"]).abs().max())
-                 if len(tail_both) else float("nan"))
+    head = y.index[:cut]
+
+    def _gap(u, v, where):
+        pair = pd.concat([u.reindex(where).rename("a"),
+                          v.reindex(where).rename("b")], axis=1).dropna()
+        if pair.empty:
+            return float("nan"), 0
+        return float((pair["a"] - pair["b"]).abs().max()), int(len(pair))
+
+    # 1. Did the shock reach the code at all?
+    tail_diff, n_tail = _gap(base, shocked, tail)
     probe_reached = bool(np.isfinite(tail_diff) and tail_diff > 0.0)
 
-    head = y.index[:cut]
-    a = base.reindex(head).dropna()
-    b = shocked.reindex(a.index)
-    both = pd.concat([a.rename("a"), b.rename("b")], axis=1).dropna()
+    # 2. Does the fit depend on its own history, or are its coefficients frozen?
+    y3 = y.copy()
+    y3.iloc[:cut] = y3.iloc[:cut] + float(shock)
+    head_shocked = pd.Series(fit_fn(y3, drivers)).astype(float)
+    history_diff, n_history = _gap(base, head_shocked, tail)
+    responds_to_history = bool(np.isfinite(history_diff) and history_diff > 0.0)
+
+    # 3. The actual causality question: did the future move the past?
+    diff, n_head = _gap(base, shocked, head)
+
     out = {"shock": float(shock), "cut": cut, "baseline": base, "shocked": shocked,
            "tail_max_abs_diff": tail_diff, "probe_reached": probe_reached,
-           "n_tail_compared": int(len(tail_both))}
-    if both.empty:
-        out.update({"causal": False, "max_abs_diff": float("nan"), "n_compared": 0})
-        return out
-    diff = float((both["a"] - both["b"]).abs().max())
-    out.update({"causal": bool(probe_reached and diff <= tol),
-                "max_abs_diff": diff, "n_compared": int(len(both))})
+           "n_tail_compared": n_tail,
+           "head_shock_tail_response": history_diff,
+           "responds_to_history": responds_to_history,
+           "max_abs_diff": diff, "n_compared": n_head}
+    out["causal"] = bool(probe_reached and responds_to_history
+                         and np.isfinite(diff) and diff <= tol)
     return out
 
 
@@ -980,6 +1024,55 @@ def causal_signals(
                 "itself as `fit_fn=` so it is the thing audited."
             )
 
+    # Certify the BETAS against the certified residual. This is the object the
+    # signal is ACTUALLY built from: `entry_vintage_signals` rebuilds the entry
+    # z and the whole frozen hold from `betas`, not from the residual audited
+    # above. Nothing tied the two together, and on the honest path they agree,
+    # which is exactly why it stayed invisible through three fixes. A fit
+    # carrying the genuine causal residual next to centred-window betas (fitted
+    # on [t-126, t+126]) was granted requirements 1, 2 AND 3, with the "hedge
+    # frozen at entry vintage" frozen at a vintage that saw 126 days of the
+    # future -- and, being time-varying, it defeated the deviation gate too.
+    #
+    #   fit                                     consistency gap
+    #   honest expanding                                      0
+    #   causal residual + centred betas                    15.3
+    #   causal residual + full-sample betas                6.94
+    y_series = pd.Series(spread_bp).astype(float)
+    X_frame = pd.DataFrame({k: pd.Series(v).astype(float)
+                            for k, v in drivers.items()}).reindex(y_series.index)
+    beta_cols = [c for c in fit.betas.columns if c not in ("const", "vintage_date")]
+    missing_drivers = [c for c in beta_cols if c not in X_frame.columns]
+    if missing_drivers:
+        raise ValueError(
+            f"`fit.betas` carries coefficients for {missing_drivers}, which are "
+            "not among `drivers`; the betas cannot be checked against the "
+            "residual they are supposed to explain."
+        )
+    b_frame = fit.betas.reindex(y_series.index)
+    implied_pred = b_frame["const"].astype(float)
+    for c in beta_cols:
+        implied_pred = implied_pred + b_frame[c].astype(float) * X_frame[c]
+    beta_pair = pd.concat([(y_series - implied_pred).rename("implied"),
+                           pd.Series(fit.residual).astype(float).rename("certified")],
+                          axis=1)
+    aligned = beta_pair.dropna()
+    n_certified = int(beta_pair["certified"].notna().sum())
+    beta_gap = (float((aligned["implied"] - aligned["certified"]).abs().max())
+                if len(aligned) else float("nan"))
+    if (len(aligned) != n_certified or not np.isfinite(beta_gap)
+            or beta_gap > FIT_MATCH_TOL):
+        raise ValueError(
+            "`fit.betas` does not reproduce `fit.residual` "
+            f"(max abs deviation {beta_gap:.6g} over {len(aligned)} of "
+            f"{n_certified} dated residuals). The betas -- not the residual --"
+            " are what `entry_vintage_signals` rebuilds the entry z and the "
+            "frozen hold from, so certifying only the residual leaves the "
+            "object that actually drives the signal unchecked. A fit whose two "
+            "faces disagree is not a fit: pass betas and residual from the same "
+            "regression."
+        )
+
     # The z is derived from the AUDITED residual, and its own causality is
     # checked against the shocked run the audit already computed -- free, and it
     # is what a full-sample sigma would fail. Comparing the z only against a
@@ -994,8 +1087,14 @@ def causal_signals(
                         z_shocked.reindex(head).rename("b")], axis=1).dropna()
     z_causal_diff = (float((z_both["a"] - z_both["b"]).abs().max())
                      if len(z_both) else float("nan"))
-    z_ok = bool(rolling["rolling"] and np.isfinite(z_causal_diff)
-                and z_causal_diff <= ROLLING_Z_TOL)
+    # Requirement 3's substance is "a trailing-252d z OF A CAUSAL RESIDUAL", so
+    # it inherits requirement 1's verdict. Without this, a frozen-coefficient
+    # builder (doorway A) was stamped rolling_sigma_z=True: its z really is a
+    # trailing-sigma z, and really is unmoved by a future shock -- of a residual
+    # that leaks the whole sample. Both statements were true and the conjunction
+    # was still misleading.
+    z_ok = bool(causal["causal"] and rolling["rolling"]
+                and np.isfinite(z_causal_diff) and z_causal_diff <= ROLLING_Z_TOL)
 
     p = panel.copy()
     p["residual_z"] = z.reindex(p.index)

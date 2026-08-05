@@ -487,6 +487,120 @@ def test_a_builder_constant_in_its_input_is_refused_by_causal_signals():
     assert calls["n"] >= 2                      # it really was invoked
 
 
+def _centred_window_betas(spread, drivers, win=126):
+    """Betas at t fitted on [t-win, t+win]: textbook look-ahead, and TIME-VARYING,
+    so the frozen-z deviation gate cannot incidentally block it."""
+    idx, vol = spread.index, drivers["vol"]
+    rows = {}
+    for i, ts in enumerate(idx):
+        lo, hi = max(0, i - win), min(len(idx), i + win + 1)
+        if hi - lo < 60:
+            continue
+        A = np.column_stack([np.ones(hi - lo), vol.iloc[lo:hi].to_numpy()])
+        c = np.linalg.lstsq(A, spread.iloc[lo:hi].to_numpy(), rcond=None)[0]
+        rows[ts] = {"const": c[0], "vol": c[1], "vintage_date": ts}
+    return pd.DataFrame.from_dict(rows, orient="index").reindex(idx)
+
+
+def test_betas_must_reproduce_the_certified_residual():
+    """Doorway C: `entry_vintage_signals` rebuilds the entry z and the frozen
+    hold from `betas`, NOT from the residual `causal_signals` certifies.
+
+    A fit carrying the genuine causal residual beside centred-window betas was
+    granted requirements 1, 2 AND 3 -- with the hedge "frozen at entry vintage"
+    frozen at a vintage that saw 126 days of the future.
+    """
+    from RVUtils.StrikelessVol.factors import WalkForwardFit
+
+    spread, drivers = _factor_frame()
+    panel = _panel_for(spread, drivers)
+    honest = expanding_residual(spread, drivers, min_periods=252)
+
+    leaky = WalkForwardFit(residual=honest.residual,
+                           betas=_centred_window_betas(spread, drivers),
+                           min_periods=252)
+    with pytest.raises(ValueError, match="does not reproduce"):
+        causal_signals(panel, SignalConfig(), spread_bp=spread, drivers=drivers,
+                       fit=leaky, min_periods=252)
+
+
+def test_full_sample_betas_beside_a_causal_residual_are_refused():
+    """Doorway B, the weaker form: every position would claim a vintage dated
+    the last day of the sample. It was blocked only incidentally before, by the
+    deviation gate firing because constant betas make frozen z == live z."""
+    from RVUtils.StrikelessVol.factors import WalkForwardFit
+
+    spread, drivers = _factor_frame()
+    panel = _panel_for(spread, drivers)
+    honest = expanding_residual(spread, drivers, min_periods=252)
+    lev = levels_regression(spread, drivers)
+    betas = pd.DataFrame({"const": lev.intercept, "vol": lev.betas["vol"]},
+                         index=spread.index)
+    betas["vintage_date"] = spread.index[-1]
+
+    with pytest.raises(ValueError, match="does not reproduce"):
+        causal_signals(panel, SignalConfig(), spread_bp=spread, drivers=drivers,
+                       fit=WalkForwardFit(residual=honest.residual, betas=betas,
+                                          min_periods=252),
+                       min_periods=252)
+
+
+def _leaky_frozen_builder(spread, drivers):
+    """Doorway A: a pure pointwise transform of y with FULL-SAMPLE coefficients
+    baked in before the builder is ever called. Plausible as an accident --
+    "I already have the betas, just apply them"."""
+    from RVUtils.StrikelessVol.factors import WalkForwardFit
+
+    lev = levels_regression(spread, drivers)
+    c0, b0 = float(lev.intercept), float(lev.betas["vol"])
+
+    def builder(y, x):
+        resid = pd.Series(y).astype(float) - (c0 + b0 * x["vol"])
+        betas = pd.DataFrame({"const": c0, "vol": b0}, index=resid.index)
+        betas["vintage_date"] = resid.index[-1]
+        return WalkForwardFit(residual=resid, betas=betas, min_periods=252)
+
+    return builder
+
+
+def test_a_frozen_coefficient_builder_fails_the_head_shock_probe():
+    """Doorway A passes both earlier legs -- still head, moved tail -- yet its
+    residual is bit-identical to a full-sample one. Shocking the HEAD and
+    requiring the TAIL to respond separates it: a genuinely refitting builder
+    must change its later coefficients, a frozen-coefficient one cannot."""
+    spread, drivers = _factor_frame()
+    builder = _leaky_frozen_builder(spread, drivers)
+
+    leaky = audit_causal_betas(lambda y, x: builder(y, x).residual, spread, drivers)
+    assert leaky["max_abs_diff"] == pytest.approx(0.0)       # head still ...
+    assert leaky["tail_max_abs_diff"] > 0.0                  # ... tail moved ...
+    assert leaky["probe_reached"] is True                    # ... probe landed
+    assert leaky["head_shock_tail_response"] == 0.0          # but no history
+    assert leaky["responds_to_history"] is False
+    assert leaky["causal"] is False
+
+    # its residual really is the full-sample one, which is the point
+    full = levels_regression(spread, drivers).residuals.reindex(spread.index)
+    assert float((builder(spread, drivers).residual - full).abs().max()) < 1e-9
+
+    # both legitimate builders respond to their own history
+    for fn in (lambda y, x: expanding_residual(y, x, min_periods=252).residual,
+               lambda y, x: levels_regression(y, x).residuals):
+        assert audit_causal_betas(fn, spread, drivers)["head_shock_tail_response"] > 0.0
+
+
+def test_a_frozen_coefficient_builder_is_not_certified_by_causal_signals():
+    spread, drivers = _factor_frame()
+    panel = _panel_for(spread, drivers)
+    out = causal_signals(panel, SignalConfig(), spread_bp=spread, drivers=drivers,
+                         fit_fn=_leaky_frozen_builder(spread, drivers),
+                         min_periods=252)
+    assert out.attrs["expanding_betas"] is False
+    # requirement 3 inherits requirement 1's verdict: a trailing-sigma z of a
+    # leaking residual is still a z of a leaking residual
+    assert out.attrs["rolling_sigma_z"] is False
+
+
 def test_causal_signals_stamps_verified_provenance():
     spread, drivers = _factor_frame()
     panel = _panel_for(spread, drivers)
