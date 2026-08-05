@@ -199,12 +199,34 @@ after costs, and uncompensated factor risk measured as residual PCA exposure.
 
 ## Controls, placebos, confounds
 
-- **Positive control (required)**: a faithful static-long Citi-style backtest
-  must land near the published stats — Sharpes ~0.05–0.35 by pair, daily P&L
-  skew ≈ 0 (vs ≈ −3 for a short 1m10y straddle), monthly P&L correlation to
-  Δ1y10y vol ≈ +26%. Recovering the long-vol **distributional signature** is
-  the control, not the Sharpe point estimate. Failure here halts everything
-  downstream — it means the greeks or the ledgers are wrong.
+- **Positive control — SUPERSEDED, and the reason is itself a finding.** This
+  spec originally required the static-long backtest to recover the published
+  distributional signature: Sharpe ~0.05–0.35, daily P&L skew ≈ 0 (vs ≈ −3 for
+  a short 1m10y straddle), monthly P&L correlation to Δ1y10y vol ≈ +26%, with
+  "the distribution, not the Sharpe" as the test. **Task 13 measured that none
+  of those three criteria carries information about convexity.** A DV01-matched
+  **zero-convexity twin** — a constant-maturity flattener with no aging, no
+  gamma and zero harvest — clears all of them with *better* numbers than the
+  real package (skew +0.288 vs +0.087, vol-corr +0.613 vs +0.635, Sharpe +0.228
+  vs +0.046, the twin landing inside the published band the real book misses),
+  and the short-convexity **steepener** passes the skew and Sharpe criteria too.
+  The mechanism is exact: this instrument carries an unhedged first-order slope
+  exposure holding ~95.6% of its daily variance, so its distribution is the
+  slope's distribution, and `corr(−Δspread, Δvol)` reproduces the twin's vol
+  correlation to four decimals. The twin is committed as a runnable null model.
+
+  **Replacement control.** Convexity is evidenced by, in order of strength:
+  the closed-form analytic Γ check; carry equal to the independently repriced
+  daily roll date by date on real curves; harvest equal to an independent
+  per-day replay carrying a shuffle counterexample; the DV01 traded per resize
+  implied by the cost ledger matching Γ·h (measured $5,311 vs $5,102, 4%);
+  harvest flipping sign exactly with the position and vanishing on instruments
+  without convexity; and **`resid_skew` — the skew of the residual after
+  removing the linear Δspread term — used only as a signed, mirrored, paired
+  difference against the same configuration's exact mirror, on fits with
+  R² ≳ 0.93.** Its magnitude is a fit-quality scale, not a convexity scale.
+  Sharpe is actively misleading here: both placebo pairs out-Sharpe every real
+  pair while running the opposite carry sign.
 - **Analytic control**: repriced DV01/Γ vs closed form on a vanilla swap.
 - **Regime re-basing check**: fit 2017–19, predict 2026; the brief's claim is a
   ~35bp intercept shift invisible to within-sample regression. Reproduce the
@@ -261,8 +283,12 @@ after costs, and uncompensated factor risk measured as residual PCA exposure.
   the spine. USD and JPY node sets stay at 30y — the instruments stop there.
 - **P1 greeks** — `greeks.py` + analytic control tests + BE panel.
 - **P2 replication + control** — `replication.py`, four ledgers, reconciliation
-  test, **the Citi static-long positive control**. Gate: no downstream work
-  until the distributional signature is recovered.
+  test, **the Citi static-long positive control**. Gate — as run: the control
+  executes, is directionally correct, and reproduces the published Sharpe
+  *spread*; the distributional criteria were found **non-discriminating** (see
+  the superseded positive-control section above) and were replaced by the
+  mechanism evidence listed there. Downstream work proceeds on that evidence,
+  not on the distributional signature.
 - **P3 factors** — `factors.py`, H1–H4, H6 diagnostics; reproduce the brief's
   2026 numbers from raw data as validation (β ≈ −0.78/R² ≈ 0.34 changes;
   two-factor levels R² ≈ 0.455) before extending the sample.

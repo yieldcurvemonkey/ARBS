@@ -3987,7 +3987,9 @@ git -C C:\Users\chris\clee\ARBS-sv commit -m "feat(sv): two-sided conditional ru
   - `run_pair(ctx, signals, *, rep_cfg, costs, pair_name) -> BacktestResult`.
   - `run_grid(ctx_by_pair, signal_panel_by_pair, grid: list[dict], *, costs) -> pd.DataFrame`.
   - `report.league_table(results: list[BacktestResult], *, cost_multipliers=(0,1,2)) -> pd.DataFrame` with columns `pair`, `config`, `n_trades`, `hit`, `gross_bp`, `net_1x_bp`, `net_2x_bp`, `t_stat`, `sharpe`, `dsr_prob`, `verdict`.
-  - `report.ledger_attribution(results) -> pd.DataFrame` — carry / harvest / mtm / cost / cross totals and the `harvest_to_mtm` ratio per pair (H10).
+  - `report.ledger_attribution(results) -> pd.DataFrame` — carry / harvest / mtm / cost / cross totals plus, per pair, `harvest_flow_ratio` (gross daily absolute flows — a measure of the increment book's size, **not** a share of P&L) and `harvest_pnl_share` (the signed contribution share) (H10).
+
+  **Amended after Task 13.** The original name `harvest_to_mtm` was renamed because it was computed from gross daily absolute flows and so measured book size rather than a P&L contribution share. Use the two names above; do not reintroduce `harvest_to_mtm`.
 
 **Grid (the trial count that DSR must be deflated by):** `trigger_bp ∈ {10,15,20,25,30,40}` × `be_cheap ∈ {0.6,0.8,0.9}` × `be_rich ∈ {1.1,1.2,1.5}` × `z_entry ∈ {1.0,1.5,2.0}` × `drift_t_gate ∈ {1.5,2.0,∞}` × `short_side_enabled ∈ {True,False}`. That is 972 configs per pair before markets. `deflated_for_grid` must receive the **full** trial count across all pairs and families, not the per-pair count.
 
@@ -4089,13 +4091,14 @@ def test_league_table_reports_costs_at_multiple_multipliers():
     assert {"net_1x_bp", "net_2x_bp", "dsr_prob", "verdict"} <= set(tbl.columns)
 
 
-def test_ledger_attribution_exposes_the_harvest_to_mtm_ratio():
+def test_ledger_attribution_exposes_the_harvest_flow_ratio():
     ctx = SyntheticCtx(list(np.linspace(0, 100, 101)))
     res = run_pair(ctx, _signals(ctx.dates), rep_cfg=ReplicationConfig(trigger_bp=25.0),
                    costs=FREE, pair_name="TEST")
     att = ledger_attribution([res])
-    assert "harvest_to_mtm" in att.columns
-    assert att["harvest_to_mtm"].iloc[0] >= 0.0
+    assert "harvest_flow_ratio" in att.columns
+    assert "harvest_pnl_share" in att.columns
+    assert att["harvest_flow_ratio"].iloc[0] >= 0.0
 ```
 
 - [ ] **Step 2: Run the test to verify it fails**
@@ -4271,7 +4274,11 @@ def ledger_attribution(results) -> pd.DataFrame:
             "cost": float(led["cost"].sum()),
             "cross": float(led["cross"].sum()),
             "harvest_positive_share": float((led["harvest"] > 0).mean()),
-            "harvest_to_mtm": float(led["harvest"].abs().sum() / mtm) if mtm else float("nan"),
+            "harvest_flow_ratio": float(led["harvest"].abs().sum() / mtm) if mtm else float("nan"),
+            "harvest_pnl_share": float(
+                led["harvest"].sum()
+                / sum(abs(led[c].sum()) for c in ("carry", "harvest", "mtm"))
+            ),
         })
     return pd.DataFrame(rows)
 ```
@@ -4539,7 +4546,9 @@ git -C C:\Users\chris\clee\ARBS-sv commit -m "feat(sv): construction comparison 
 - Consumes: Task 18's results per market.
 - Produces: `report.portfolio(results_by_market: dict[str, pd.Series], *, target_bp_day: float, caps: dict | None = None) -> pd.DataFrame` with columns `pnl`, plus one weight column per market.
 
-**What H8 claims:** one rulebook, expected different signs — JPY entering flatteners at post-lifer-exit levels with a better carry profile, EUR drift-dominated with a datable Wtp calendar (avoid flatteners into tranche windows), USD near-fair valuation against hostile drift. The test is whether the combined book has better **skew and drawdown** than the best single market, not merely a higher Sharpe.
+**What H8 claims:** one rulebook, expected different signs — JPY entering flatteners at post-lifer-exit levels with a better carry profile, EUR drift-dominated with a datable Wtp calendar (avoid flatteners into tranche windows), USD near-fair valuation against hostile drift. The test is whether the combined book has a better distribution and drawdown than the best single market, not merely a higher Sharpe.
+
+**Amended after Task 13 — do not compare on raw daily-P&L skew.** Task 13 measured that this instrument's raw skew is inherited from `skew(Δspread)` and carries no information about convexity: a DV01-matched **zero-convexity twin** cleared skew, Sharpe and vol-correlation with better numbers than the real package, and the short-convexity steepener passed the skew criterion too. Compare instead on **max drawdown**, the **carry sign**, `harvest_pnl_share`, and — only in mirrored, paired form on configurations whose linear fit exceeds R² ≈ 0.93 — `resid_skew`. Sharpe is actively misleading here: both placebo pairs out-Sharpe every real pair while running the opposite carry sign.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -4819,7 +4828,7 @@ Sections, in order: (1) data coverage per market, printed from the coverage shee
 
 - [ ] **Step 2: Build the backtest notebook**
 
-Sections: (1) the static-long control and its distribution, versus the published anchors; (2) ledger attribution and the harvest:MTM ratio (H10); (3) the trigger plateau (H7); (4) the conditional two-sided book versus static long, compared on skew and drawdown, not only Sharpe (H5); (5) constructions (H9); (6) the cross-market book (H8); (7) league table with DSR and verdicts, cost curve versus clip size; (8) placebos and confounds.
+Sections: (1) the static-long control, its distribution, **and the zero-convexity twin beside it** — the twin clears the published distributional anchors with better numbers than the real package, so the anchors must be shown as non-discriminating rather than as a pass; (2) ledger attribution, `harvest_flow_ratio` and `harvest_pnl_share` (H10); (3) the trigger plateau (H7); (4) the conditional two-sided book versus static long, compared on drawdown, carry sign and mirrored `resid_skew` — **not** on raw skew or Sharpe (H5); (5) constructions (H9); (6) the cross-market book (H8); (7) league table with DSR and verdicts, cost curve versus clip size, **including the roll-charge convention as its own row** (charging rolls as initiations moves 67.5% of the headline P&L); (8) placebos and confounds — noting that both placebos out-Sharpe every real pair on the opposite carry sign.
 
 - [ ] **Step 3: Run the fast gate and the full package tests**
 
