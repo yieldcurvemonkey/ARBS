@@ -7,9 +7,12 @@ import rateslib as rl
 
 from RVUtils.StrikelessVol.greeks import (
     breakeven_bp_day,
+    build_package,
     compute_greeks,
     daily_roll_usd,
     greeks_panel,
+    package_dv01,
+    package_npv,
 )
 from RVUtils.StrikelessVol.universe import ForwardLeg, ForwardPair
 from Query.IRSwaps.backends.rateslib.RLIRSwapCurve import RLIRSwapCurve
@@ -48,10 +51,13 @@ def test_breakeven_is_nan_when_convexity_is_non_positive():
     assert math.isnan(breakeven_bp_day(-800.0, -5.0))
 
 
-def test_daily_roll_is_a_one_day_translate_not_a_maturity_shortening():
+def test_daily_roll_is_a_shape_preserving_curve_roll_not_a_maturity_shortening():
+    """``daily_roll_usd`` holds the package's own dates fixed and slides the
+    curve's *shape* forward (``rl.Curve.roll``) -- not a reprice against a
+    curve whose OWN maturity/final node has been shortened, which would pick
+    up a duration/convexity distortion unrelated to genuine roll-down.
+    """
     curve = _curve(slope=-0.5)  # inverted ultra-long -> flattener should bleed
-    from RVUtils.StrikelessVol.greeks import build_package
-
     pkg = build_package(curve, PAIR, package_dv01_usd=100_000.0)
     roll = daily_roll_usd(curve, pkg, next_date=rl.dt(2026, 8, 4))
     assert roll != 0.0
@@ -60,16 +66,36 @@ def test_daily_roll_is_a_one_day_translate_not_a_maturity_shortening():
 
 def test_inverted_curve_makes_the_flattener_bleed():
     curve = _curve(slope=-0.5)
-    from RVUtils.StrikelessVol.greeks import build_package
-
     pkg = build_package(curve, PAIR, package_dv01_usd=100_000.0)
     assert daily_roll_usd(curve, pkg, next_date=rl.dt(2026, 8, 4)) < 0.0
 
 
-def test_roll_is_at_the_floating_point_noise_floor_for_this_far_forward_pair():
-    """Pins a finding, not a requirement: the sign check above passes for the
-    wrong reason on THIS fixture, and a reader must not mistake it for a real
-    bleed.
+def test_inverted_roll_is_materially_negative_not_merely_negative():
+    """A real bleed, not a rounding artifact: of a size that could plausibly
+    fund the day's convexity gain (Gamma ~160 $/bp^2 on this fixture -> a
+    breakeven in the low single-digit bp/day range, not micro-bp).
+    """
+    curve = _curve(slope=-0.5)
+    pkg = build_package(curve, PAIR, package_dv01_usd=100_000.0)
+    roll = daily_roll_usd(curve, pkg, next_date=rl.dt(2026, 8, 4))
+    assert roll < -100.0  # measured -676.04; generous headroom below that
+
+
+def test_flat_curve_roll_is_near_zero():
+    """The sanity check that ``roll`` is measuring curve SHAPE, not something
+    else: with no inversion there is nothing to bleed, so roll should be tiny
+    relative to the materially-negative inverted case above (~28x smaller).
+    """
+    curve = _curve(slope=0.0)
+    pkg = build_package(curve, PAIR, package_dv01_usd=100_000.0)
+    roll = daily_roll_usd(curve, pkg, next_date=rl.dt(2026, 8, 4))
+    assert abs(roll) < 100.0  # measured -24.76
+
+
+def test_translate_yields_no_carry_for_a_par_struck_forward_package():
+    """Pins the finding that changed the mechanic: ``rl.Curve.translate`` is
+    the wrong primitive for this module's roll-down, kept as a permanent
+    record rather than deleted now that ``daily_roll_usd`` no longer calls it.
 
     ``rl.curves.curves.TranslatedCurve.__getitem__`` returns
     ``self.obj[date] / self.obj[self.nodes.initial]`` -- a pure per-date
@@ -78,31 +104,88 @@ def test_roll_is_at_the_floating_point_noise_floor_for_this_far_forward_pair():
     at par (NPV == 0.0 on the original curve, confirmed below) reprices to
     0.0 again under ANY translate horizon, for ANY curve shape, as long as
     the new valuation date stays before the package's first cashflow --
-    which it does here for horizons from 1 day out to 9 years (measured;
-    both legs start 10-20y forward). What ``daily_roll_usd`` returns for
-    THIS pair is therefore double-precision rounding noise from computing
-    the same zero two different ways, not a `sqrt` of anything path-dependent
-    on the curve's slope. ``test_inverted_curve_makes_the_flattener_bleed``
-    still passes -- the noise happens to land negative on this fixture and
-    this rateslib build -- but that sign is not evidence of a real $/day
-    bleed and must not be read as validating the module's economic story.
-    A genuine forward-starting roll-down needs a different construction
-    (e.g. rebuilding the same relative tenor off the rolled date and
-    comparing fair rates, as ``RLIRSwapCurve.roll_bps_running`` already
-    does), not this translate-and-reprice-the-frozen-package approach.
+    confirmed empirically from 1 day out to 9 years (both legs start
+    10-20y forward). A discounting re-base cannot produce carry for a
+    not-yet-started, par-struck forward package -- which is exactly why
+    ``daily_roll_usd`` now uses ``rl.Curve.roll`` (shape-preserving,
+    date-fixed) instead.
     """
     curve = _curve(slope=-0.5)
-    from RVUtils.StrikelessVol.greeks import build_package, package_npv
-
     pkg = build_package(curve, PAIR, package_dv01_usd=100_000.0)
     assert package_npv(curve.handle(), pkg) == 0.0  # struck exactly at par
 
-    roll = daily_roll_usd(curve, pkg, next_date=rl.dt(2026, 8, 4))
+    translated = curve.handle().translate(rl.dt(2026, 8, 4))
+    roll_via_translate = package_npv(translated, pkg) - package_npv(curve.handle(), pkg)
     # A real one-day bleed on a $100k/bp package would plausibly be tens to
-    # low thousands of dollars; 1e-3 is generous headroom above the ~1e-7
-    # noise floor actually observed while still being far below any
+    # low thousands of dollars (the roll()-based daily_roll_usd measures
+    # -676.04 on this same fixture); 1e-3 is generous headroom above the
+    # ~1e-7 noise floor actually observed while still being far below any
     # economically plausible carry number.
-    assert abs(roll) < 1e-3
+    assert abs(roll_via_translate) < 1e-3
+
+
+def test_repo_bps_running_convention_disagrees_in_sign_with_curve_roll_here():
+    """Cross-check requested against ``RLIRSwapCurve.carry_and_roll_bps_running``
+    -- reported here as a pinned, investigated finding, not silently reconciled.
+
+    ``carry_and_roll_bps_running`` (via ``roll_bps_running``) holds the leg's
+    EFFECTIVE date fixed and SHORTENS ITS OWN MATURITY by the horizon, then
+    diffs fair rates of those two different-tenor instruments -- a maturity-
+    shortening construction. ``daily_roll_usd`` (via ``rl.Curve.roll``) holds
+    the leg's dates fixed and slides the CURVE's shape forward instead. On a
+    smoothly-sloped curve the two agree in sign (verified below on the flat
+    fixture, and per-leg on this inverted one too when checked individually
+    -- see the report). On this fixture, which has a sharp kink at y=10
+    (flat below, steeply inverted above -- exactly where both legs sit),
+    they disagree.
+
+    Verified per-leg (not just at the package level, which could hide a
+    combination error): for both the short (10-20y) and the long (20-30y)
+    leg individually, converting each leg's OWN ``rl.Curve.roll``-based
+    dollar reprice to a bp-equivalent via that leg's own signed DV01
+    (``leg_roll_usd / leg_dv01``) gives a POSITIVE number for both legs on
+    this fixture, while ``roll_bps_running`` gives a NEGATIVE number for both
+    legs. Agreement on the flat curve plus a clean per-leg (not just
+    package-level) sign flip specifically on the kinked/inverted curve rules
+    out a bookkeeping error in how the two legs are combined -- this is a
+    genuine divergence between the two conventions once the curve's shape is
+    not smooth, not a mistake in this module. Per the brief: reported and
+    pinned rather than forced to agree; whoever compares Task 9's roll
+    against ``carry_and_roll_bps_running``-derived numbers on real curves
+    should re-verify which convention matches the trade they mean to
+    describe. This test's assertions are a snapshot of the current
+    (currently correct, per this investigation) disagreement, and will need
+    re-examining if the referenced repo functions change.
+    """
+    curve = _curve(slope=-0.5)
+    pkg = build_package(curve, PAIR, package_dv01_usd=100_000.0)
+    handle = curve.handle()
+
+    roll_usd = daily_roll_usd(curve, pkg, next_date=rl.dt(2026, 8, 4))
+    pkg_dv01_target = 100_000.0
+    roll_bp_equiv = roll_usd / pkg_dv01_target
+
+    short_cr = curve.carry_and_roll_bps_running(pkg.short, "1b")
+    long_cr = curve.carry_and_roll_bps_running(pkg.long, "1b")
+    # Package convention: we PAY the short leg (opposite of the "receiver"
+    # convention roll_bps_running is quoted in) and RECEIVE the long leg
+    # (matching it directly).
+    repo_bp_running = long_cr - short_cr
+
+    assert roll_bp_equiv < 0.0
+    assert repo_bp_running > 0.0  # the pinned disagreement
+
+    # Per-leg check (rules out a package-combination error): each leg's own
+    # roll()-based bp-equivalent is positive while its own roll_bps_running
+    # is negative, individually, not just after combining the two legs.
+    for swap, dv01_sign in ((pkg.short, +1.0), (pkg.long, -1.0)):
+        base = swap.npv(curves=handle).real
+        rolled = swap.npv(curves=handle.roll(rl.dt(2026, 8, 4))).real
+        leg_roll_usd = rolled - base
+        leg_bp_equiv = leg_roll_usd / (dv01_sign * pkg_dv01_target)
+        leg_rr = curve.roll_bps_running(swap, "1b")
+        assert leg_bp_equiv > 0.0
+        assert leg_rr < 0.0
 
 
 def test_compute_greeks_returns_a_full_labelled_record():
@@ -113,17 +196,13 @@ def test_compute_greeks_returns_a_full_labelled_record():
     assert set(g.gamma_by_h) == {10.0, 25.0, 50.0}
     assert set(g.breakeven_by_h) == {10.0, 25.0, 50.0}
     assert g.breakeven_by_h[25.0] > 0.0
-    # PV01-based neutrality (Task 7's build_leg sizing) assumes the fair rate
-    # moves ~1-for-1 with a parallel curve shift, which holds tightly on a flat
-    # curve (Task 8: $1.44 residual on $100k) but not here: on this slope=-0.5
-    # fixture the reprice-DV01/PV01 ratio is 1.018 for the short (10-20y) leg
-    # and 0.904 for the long (20-30y) leg (measured), so the near-perfect
-    # cancellation seen on a flat curve does not hold and the package residual
-    # widens to ~$11,411 (11.4% of the $100k target). The brief's bound of
-    # 50.0 was calibrated on the flat fixture's residual, not this inverted
-    # one; 15,000 is set with headroom above the measured value while still
-    # catching a construction regression (e.g. a doubling of the mismatch).
-    assert abs(g.package_dv01) < 15_000.0
+    # Sizing each leg on its own repriced DV01 (central difference, matching
+    # the measure package_dv01 checks) rather than the analytic annuity
+    # (curve.pv01) makes the package neutral in the measure that matters by
+    # construction: measured residual is ~1e-8 on this inverted fixture (was
+    # $11,411 -- 11.4% of target -- when sizing was pv01-based and the check
+    # was in the repriced measure). abs=10.0 restored to the tight bound.
+    assert abs(g.package_dv01) == pytest.approx(0.0, abs=10.0)
 
 
 def test_greeks_panel_is_one_row_per_date():

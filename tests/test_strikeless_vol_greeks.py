@@ -45,8 +45,19 @@ def test_payer_gains_when_rates_rise(curve):
 
 
 def test_leg_is_sized_to_the_requested_dv01(curve):
+    """Sized in the spec's DV01 measure -- bump-and-reprice, +/-1bp central
+    difference -- not the analytic annuity (``curve.pv01``). The two agree
+    to within ~4% even on this flat fixture (``curve.pv01`` gives ~$96,161,
+    not $100,000, for this same leg -- see
+    ``tests/test_strikeless_vol_breakeven.py``'s inverted-curve residual for
+    where that gap becomes 11%+ and the reason sizing moved off ``pv01``).
+    """
     leg = build_leg(curve, ForwardLeg("10Y", "10Y"), dv01_usd=100_000.0, direction=+1)
-    assert abs(curve.pv01(leg)) == pytest.approx(100_000.0, rel=1e-6)
+    handle = curve.handle()
+    up = leg.npv(curves=handle.shift(1.0)).real
+    dn = leg.npv(curves=handle.shift(-1.0)).real
+    reprice_dv01 = (up - dn) / 2.0
+    assert abs(reprice_dv01) == pytest.approx(100_000.0, rel=1e-6)
 
 
 def test_flattener_receives_the_longer_leg_and_pays_the_shorter(curve, pair):

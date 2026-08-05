@@ -3,8 +3,13 @@
 The rateslib backend raises on ``dv01``/``gamma``/``dollar_carry`` because a
 true DV01 needs a calibrated ``rl.Solver`` it does not carry. So this module
 bumps the curve itself (``rl.Curve.shift``, in **bp**) and reprices, and takes
-theta from ``rl.Curve.translate`` (advance the valuation date, hold the curve).
-Nothing here calls the three raising methods.
+theta/roll-down from ``rl.Curve.roll`` (slide the curve's shape forward in
+time, holding a package's own cashflow dates fixed -- see
+:func:`daily_roll_usd`). ``rl.Curve.translate`` was tried first and found to
+give zero carry for any par-struck, not-yet-started forward package regardless
+of curve shape (pinned by
+``test_translate_yields_no_carry_for_a_par_struck_forward_package``), which is
+why it is not used. Nothing here calls the three raising methods.
 """
 from __future__ import annotations
 
@@ -56,15 +61,43 @@ class Package:
     sign: int
 
 
-def build_leg(curve, leg: ForwardLeg, *, dv01_usd: float, direction: int):
+def _reprice_dv01(curve, swap, *, h_bp: float = 1.0) -> float:
+    """Dollars per bp for a single instrument: central difference on a
+    +/-``h_bp`` parallel curve shift, repricing the instrument as-is (sign
+    and magnitude both reflect the instrument's own current notional).
+
+    This is the spec's DV01 measure -- the same bump-and-reprice used by
+    ``package_dv01`` -- factored out so sizing (``build_leg``) and reporting
+    (``Package.short_dv01``/``long_dv01``) both speak the one measure instead
+    of one of them quietly using the analytic annuity (``curve.pv01``).
+    """
+    handle = curve.handle()
+    up = swap.npv(curves=handle.shift(h_bp)).real
+    dn = swap.npv(curves=handle.shift(-h_bp)).real
+    return float((up - dn) / (2.0 * h_bp))
+
+
+def build_leg(curve, leg: ForwardLeg, *, dv01_usd: float, direction: int, h_bp: float = 1.0):
     """A forward-starting par swap sized to ``dv01_usd`` dollars per bp.
 
     ``direction`` is +1 to pay fixed, -1 to receive fixed.
+
+    Sized off the unit leg's own REPRICED DV01 (:func:`_reprice_dv01`) -- a
+    central difference on a +/-``h_bp`` parallel curve shift -- not off
+    ``curve.pv01`` (the analytic annuity/``analytic_delta``). The two
+    measures diverge once the curve is not flat (on this module's own
+    inverted fixture: reprice-DV01/PV01 ratio 1.018 for a 10-20y leg vs 0.904
+    for a 20-30y leg), and the package's own neutrality is checked in the
+    repriced measure (``package_dv01``), so sizing on the annuity while
+    checking neutrality on the reprice would let a directional residual
+    sneak into what is supposed to be a pure convexity package. ``curve.pv01``
+    remains fine wherever an annuity is genuinely what is wanted; this is
+    only about sizing.
     """
     unit = curve.build_irswap(fwd=leg.fwd, tenor=leg.tail, notional=1.0)
-    dv01_per_unit = float(curve.pv01(unit))
+    dv01_per_unit = _reprice_dv01(curve, unit, h_bp=h_bp)
     if dv01_per_unit == 0.0:
-        raise ValueError(f"zero analytic delta for {leg.label}")
+        raise ValueError(f"zero repriced delta for {leg.label}")
     notional = direction * PAYER_NOTIONAL_SIGN * float(dv01_usd) / dv01_per_unit
     return curve.build_irswap(fwd=leg.fwd, tenor=leg.tail, notional=notional)
 
@@ -76,15 +109,22 @@ def build_package(
     package_dv01_usd: float = 100_000.0,
     sign: int = FLATTENER,
 ) -> Package:
-    """DV01-neutral slope package. ``sign=+1`` is the flattener (long convexity)."""
+    """DV01-neutral slope package. ``sign=+1`` is the flattener (long convexity).
+
+    ``short_dv01``/``long_dv01`` are reported in the same repriced measure
+    the legs are sized to (:func:`_reprice_dv01`), not ``curve.pv01`` --
+    otherwise a reader comparing these fields to the sizing target would see
+    a drift that isn't really there (the legs ARE dv01-neutral in the
+    measure that matters; only the unrelated annuity isn't).
+    """
     short = build_leg(curve, pair.short, dv01_usd=package_dv01_usd, direction=+sign)
     long_ = build_leg(curve, pair.long, dv01_usd=package_dv01_usd, direction=-sign)
     return Package(
         pair=pair,
         short=short,
         long=long_,
-        short_dv01=float(curve.pv01(short)),
-        long_dv01=float(curve.pv01(long_)),
+        short_dv01=_reprice_dv01(curve, short),
+        long_dv01=_reprice_dv01(curve, long_),
         sign=int(sign),
     )
 
@@ -211,16 +251,31 @@ def analytic_leg_gamma(curve, swap) -> float:
 
 
 def daily_roll_usd(curve, package: Package, *, next_date) -> float:
-    """One business day of carry+roll, in dollars, curve held fixed.
+    """One business day of carry+roll, in dollars, package dates held fixed.
 
-    ``rl.Curve.translate`` advances the valuation date while holding the forward
-    curve, which is exactly "nothing happened, a day passed". Negative means the
-    position bleeds -- the normal state of a flattener on an inverted ultra-long
-    curve.
+    ``rl.Curve.roll`` slides the curve's *shape* forward in time while holding
+    the package's own cashflow dates fixed -- rateslib's own docs call this
+    "the traditional direction for measuring roll down on a trade strategy".
+    That is the roll-down assumption this module's economics rests on: the
+    position's calendar dates stay put while the curve shape (a function of
+    tenor-from-today) slides past them, so an inverted ultra-long curve makes
+    the flattener bleed.
+
+    This is NOT ``rl.Curve.translate``, which was tried first and found to be
+    the wrong primitive: ``translate`` re-bases discounting to a new start
+    date but keeps every discount factor's CALENDAR-DATE value identical (up
+    to one constant rescale), so a package struck exactly at par -- true of
+    every leg this module builds -- reprices to the same zero it started at,
+    at ANY horizon before its first cashflow, regardless of curve shape. See
+    ``test_translate_yields_no_carry_for_a_par_struck_forward_package`` for
+    the pinned record of that finding, which is why the mechanic changed.
+
+    Negative means the position bleeds -- the normal state of a flattener on
+    an inverted ultra-long curve.
     """
     handle = curve.handle()
     base = package_npv(handle, package)
-    rolled = package_npv(handle.translate(next_date), package)
+    rolled = package_npv(handle.roll(next_date), package)
     return rolled - base
 
 
