@@ -4354,6 +4354,12 @@ git -C C:\Users\chris\clee\ARBS-sv commit -m "feat(sv): backtest engine, config 
    **Amended after Task 13 — this is arithmetically vacuous for a *static* book and must be scoped to the conditional rule.** `simulate` was measured exactly antisymmetric in `sign`: per-unit DV01 is sign-invariant, notionals flip, PV and theta are linear in notionals, the trigger reads a sign-independent constant-maturity rate, and cost is a magnitude fee. So `P&L_short = −P&L_long_gross + cost` identically, and both directions cannot "work" as a matter of arithmetic rather than of evidence. Run the sign-mirror **only on the Task 17 conditional rule**, where the signal's timing — not the engine — decides direction, and where both sides genuinely can win or lose together.
 4. **Confound alternatives** for whatever config wins: duration-only (long the long leg outright, DV01-matched to the package), PC1-only (the slope's projection on the first principal component of the curve), and pure-carry (hold whichever sign has positive roll). If the winner does not beat all three, the vol story is not what is paying.
 
+5. **Amended after Task 18 — strengthen `backtest.random_walk_placebo`, which currently checks nothing.** Requirement 6 of the six is "a random-walk placebo through the **identical** pipeline". As shipped in Task 18, `random_walk_placebo(baseline, run_one, ...)` never calls `random_walk_like`: both the *construction* of the null and the *pipeline it runs through* are supplied by the caller as `run_one`, so a caller can pass any function at all and the requirement flag opens. Task 18's own end-to-end test closes on `lambda r: float(r.normal())` — neither a random walk nor the pipeline (Task 18 review, m5). It demonstrates flag plumbing, not the property.
+
+   The property matters more here than anywhere else in the study: a null with no relationship to vol opened Task 15's gate in **20.6%** of sims and beat the headline in 100% of those. A placebo that cannot fail is worse than no placebo, because it certifies.
+
+   Change the API so the function builds the null itself: take the **observed series** plus a `run_one(series) -> float` that runs the *same* `causal_signals → run_pair` path the real result used, generate each null with `random_walk_like(series, seed=...)` internally, and push the result through `run_one`. Then "identical pipeline" is at least half a check — the null's construction is no longer the caller's to fake — and the remaining half (that `run_one` really is the shipped path) is pinned by a test that calls it with the actual `causal_signals → run_pair` composition rather than a lambda. Update `backtest.py`'s callers and Task 18's test accordingly; the requirement-6 flag must still fail closed.
+
 - [ ] **Step 1: Write the failing test**
 
 ```python
@@ -4870,6 +4876,14 @@ Sections, in order: (1) data coverage per market, printed from the coverage shee
 - [ ] **Step 2: Build the backtest notebook**
 
 Sections: (1) the static-long control, its distribution, **and the zero-convexity twin beside it** — the twin clears the published distributional anchors with better numbers than the real package, so the anchors must be shown as non-discriminating rather than as a pass; (2) ledger attribution, `harvest_flow_ratio` and `harvest_pnl_share` (H10); (3) the trigger plateau (H7); (4) the conditional two-sided book versus static long, compared on drawdown, carry sign and mirrored `resid_skew` — **not** on raw skew or Sharpe (H5); (5) constructions (H9); (6) the cross-market book (H8); (7) league table with DSR and verdicts, cost curve versus clip size, **including the roll-charge convention as its own row** (charging rolls as initiations moves 67.5% of the headline P&L); (8) placebos and confounds — noting that both placebos out-Sharpe every real pair on the opposite carry sign.
+
+**Amended after Task 18 — three binding requirements on how this notebook calls the engine.** Task 18's review could not settle these from its own diff, because they are properties of the *call*, not of the code:
+
+1. **Call `report.league_table` exactly once, over every pair, with a single concatenated grid frame.** The DSR trial count is taken from the grid handed to that call. A per-pair league table — `league_table([res_A], grid=grid_A)` — does not raise and silently deflates the trial count by `1/n_pairs`, which is the named trap this study was built to avoid. Concatenate every family's grid (all pairs, all constructions, the cross-market book, and the placebo rows) and rank once. If Task 18's fix round makes `n_trials` declarable above `len(grid)`, state the full count explicitly as well.
+
+2. **Wire `ZeroConvexityPricer` by name into `comparator_ctx_by_pair`.** Task 18 built the seam and tagged the rows `book="zero_convexity"`, but nothing in that task names the class, so the comparator exists and is unused until this notebook instantiates it. It is not decoration: a DV01-matched zero-convexity twin has already cleared skew, Sharpe *and* vol-correlation with **better** numbers than the real package. The twin's row is what makes the real row's numbers mean anything.
+
+3. **Report the realised DV01 range beside every `*_bp` column.** The bp columns divide by realised DV01, which Task 13 measured at $52.7k–$148.9k against a $100k design notional. On synthetic paths the two normalisations in `gross_bp` and `net_1x_bp` compose; on the real path they may not, and the notebook is the first place anyone sees them on real curves.
 
 - [ ] **Step 3: Run the fast gate and the full package tests**
 
