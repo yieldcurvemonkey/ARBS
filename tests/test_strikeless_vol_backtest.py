@@ -210,6 +210,27 @@ def test_cost_table_multipliers_scale_the_charge():
     assert charged.loc[2.0] == pytest.approx(2.0 * charged.loc[1.0], rel=1e-9)
 
 
+def test_simulate_charges_exactly_the_fee_on_the_risk_it_records():
+    """The invariant `cost_table` (and `sv_static_long_control`'s roll override)
+    rely on: every dollar of `cost` is the fee on a recorded traded-risk volume.
+
+    If a charge were ever booked without recording its volume -- or a volume
+    recorded without being charged -- repricing a ledger at another schedule or
+    the other roll convention would silently disagree with the run itself.
+    """
+    from RVUtils.StrikelessVol.costs import charge_usd
+    from RVUtils.StrikelessVol.replication import simulate
+
+    # steep enough that the trigger fires between rolls (the roll resets the
+    # hedge anchor, so a shallow path would exercise the roll branch only)
+    ctx = SyntheticCtx(list(np.linspace(0, 400, 400)), gamma=5.0)
+    led = simulate(ctx, list(ctx.dates), ReplicationConfig(trigger_bp=25.0,
+                                                           roll_months=3), TAKER)
+    assert led["n_hedges"].sum() > 0 and led["n_rolls"].sum() > 0  # both paths live
+    pd.testing.assert_series_equal(led["cost"], -charge_usd(led, TAKER),
+                                   check_names=False)
+
+
 def test_the_ledger_cost_reprices_to_the_cost_table_at_one_times():
     ctx = SyntheticCtx(list(np.linspace(0, 100, 101)))
     res = run_pair(ctx, _signals(ctx.dates), rep_cfg=ReplicationConfig(trigger_bp=25.0),
@@ -752,6 +773,16 @@ def test_run_grid_uses_the_supplied_signal_builder():
                    costs=FREE, signal_builder=flat_builder)
     assert out["n_trades"].iloc[0] == 0            # the builder was used
     assert bool(out["req_expanding_betas"].iloc[0]) is True   # its attrs survived
+
+
+def test_run_pair_refuses_a_reused_simulation_from_a_different_date_range():
+    from RVUtils.StrikelessVol.replication import simulate
+
+    ctx = SyntheticCtx(list(np.linspace(0, 40, 60)))
+    short = simulate(ctx, list(ctx.dates[:30]), ReplicationConfig(), FREE)
+    with pytest.raises(ValueError, match="same dates"):
+        run_pair(ctx, _signals(ctx.dates), rep_cfg=ReplicationConfig(), costs=FREE,
+                 pair_name="TEST", unit=short)
 
 
 def test_run_pair_refuses_an_unsorted_signal_index():

@@ -218,6 +218,17 @@ def run_control(
             led.iloc[0, led.columns.get_loc("cost")] = -costs.cost_usd(
                 roll_charge_kind, abs(package_dv01_usd)
             )
+            # Move the traded RISK to match the fee. ``simulate`` records
+            # volume separately from the charge (Task 18) so a ledger can be
+            # repriced at another schedule or the other roll convention; if the
+            # volume stayed on ``initiate_dv01_usd`` here, report.cost_table
+            # would bill this roll as a fresh initiation and the roll-charge
+            # convention row -- the one worth 67.5% of this book's headline --
+            # would be computed on the wrong bucket.
+            led.iloc[0, led.columns.get_loc("initiate_dv01_usd")] = 0.0
+            led.iloc[0, led.columns.get_loc(f"{roll_charge_kind}_dv01_usd")] = abs(
+                package_dv01_usd
+            )
         frames.append(led)
         # Read the constant-maturity rates off the pricer rather than
         # rebuilding them afterwards: the long leg's are already cached there

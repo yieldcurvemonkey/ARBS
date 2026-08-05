@@ -359,6 +359,13 @@ def run_pair(
     dates = list(signals.index)
     if unit is None:
         unit = simulate(ctx, dates, rep_cfg, costs)
+    elif not unit.index.equals(signals.index):
+        # a memoised simulation reused against a different date range would
+        # align by label and silently drop or invent days
+        raise ValueError(
+            "supplied `unit` ledger is indexed differently from `signals`; a "
+            "reused simulation must cover exactly the same dates"
+        )
     if dv01_unit is None:
         dv01_unit = pd.Series(
             [abs(float(ctx.dv01(d, "long"))) for d in unit.index], index=unit.index
