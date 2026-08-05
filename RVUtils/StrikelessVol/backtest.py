@@ -119,6 +119,38 @@ REQUIREMENTS: Tuple[str, ...] = (
 PNL_BUCKETS = ("carry", "harvest", "mtm", "cross")
 LEDGER_COLS = ("carry", "harvest", "mtm", "cross", "cost")
 
+#: Inputs that reach a trading decision and are **not** covered by any audit in
+#: this module. Enumerated rather than discovered: four passes on
+#: :func:`causal_signals` each found the certificate attached to something
+#: *adjacent* to the object the signal is built from -- the re-derivation
+#: instead of the fit, the builder instead of its output, the residual instead
+#: of the betas the z is computed from. The check that would have found each
+#: earlier is "name every input to the decision, and say what certifies it", so
+#: that list is written down here where it can be read next to the certificate.
+#:
+#: ``signal_state`` consumes five panel columns. Exactly ONE of them is audited:
+#:
+#: * ``residual_z`` -- **certified** (expanding fit, betas-vs-residual
+#:   consistency, head- and tail-shock probes, trailing-sigma reproduction,
+#:   entry-vintage freeze).
+#: * ``be_over_realized`` -- sets the SIGN. Uncertified: built upstream in
+#:   Task 10 and passed through ``causal_signals`` untouched.
+#: * ``drift_t`` -- vetoes a flattener. Uncertified (Task 16).
+#: * ``spread_vol_bp_day`` -- sets the SIZE by risk parity. Uncertified.
+#: * ``iv_z`` -- gates the steepener. Uncertified.
+#:
+#: plus the regression DRIVERS themselves: :func:`audit_causal_betas` shocks
+#: only the dependent variable, so a driver built with future information (a
+#: full-sample-standardised or smoothed factor) is invisible to every check
+#: here.
+#:
+#: A certified ``residual_z`` therefore does NOT make the signal causal. It
+#: makes one of its five inputs causal. Anything asserting requirement 1 for the
+#: rule as a whole has to establish the other four separately.
+UNCERTIFIED_SIGNAL_INPUTS: Tuple[str, ...] = (
+    "be_over_realized", "drift_t", "spread_vol_bp_day", "iv_z", "drivers",
+)
+
 CAUSALITY_TOL: float = 1e-9
 ROLLING_Z_TOL: float = 1e-8
 #: How closely a caller-supplied ``fit`` must reproduce the audited causal one.
@@ -977,6 +1009,16 @@ def causal_signals(
     expanding window). It is audited in place of the default, and its own output
     is then certified the same way, so the shortcut cannot be used to smuggle a
     non-causal fit past the gate either.
+
+    **What this function does and does not certify.** It certifies
+    ``residual_z``, end to end: the fit is causal (head still under a future
+    shock, tail responsive to a past one), the artifact is the audited one, the
+    BETAS reproduce that residual, and the z is a trailing-sigma z of it, frozen
+    at the entry vintage. It certifies **nothing else**. The other four panel
+    columns that reach a trading decision -- ``be_over_realized`` (the sign),
+    ``drift_t`` (the veto), ``spread_vol_bp_day`` (the size), ``iv_z`` (the
+    short-side gate) -- are passed through untouched, as are the regression
+    drivers. See :data:`UNCERTIFIED_SIGNAL_INPUTS`.
     """
     if fit_fn is None:
         def fit_fn(y, x):
