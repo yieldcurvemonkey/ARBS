@@ -114,10 +114,14 @@ def test_run_grid_reports_one_row_per_config():
 
 
 def test_league_table_reports_costs_at_multiple_multipliers():
+    # CHANGED from the brief: `cost_schedule=TAKER` added. The run is FREE, and
+    # league_table now refuses to quote 1x/2x costs from a zero-cost run without
+    # a schedule to reprice from (I5) -- scaling zero by two is still zero, and
+    # net_2x_bp is the ALIVE gate's own input. The assertion is the brief's.
     ctx = SyntheticCtx(list(np.linspace(0, 40, 60)))
     res = run_pair(ctx, _signals(ctx.dates), rep_cfg=ReplicationConfig(),
                    costs=FREE, pair_name="TEST")
-    tbl = league_table([res])
+    tbl = league_table([res], cost_schedule=TAKER)
     assert {"net_1x_bp", "net_2x_bp", "dsr_prob", "verdict"} <= set(tbl.columns)
 
 
@@ -538,17 +542,63 @@ def test_run_pair_marks_entry_vintage_unmet_when_the_column_is_absent():
     assert res.requirements.entry_vintage_hedge is False
 
 
+def _vintage_evidence(deviation=0.5):
+    return {"entry_vintage_hedge": True,
+            "entry_vintage_frozen_z_deviation": deviation}
+
+
 def test_run_pair_rejects_a_vintage_that_moves_inside_an_episode():
     ctx = SyntheticCtx(list(np.linspace(0, 40, 60)))
     sig = _signals(ctx.dates)
     sig["beta_vintage_date"] = list(ctx.dates)     # re-hedged every single day
+    sig.attrs.update(_vintage_evidence())
     res = run_pair(ctx, sig, rep_cfg=ReplicationConfig(), costs=FREE, pair_name="TEST")
     assert res.requirements.entry_vintage_hedge is False
 
     sig2 = _signals(ctx.dates)
     sig2["beta_vintage_date"] = ctx.dates[0]
+    sig2.attrs.update(_vintage_evidence())
     res2 = run_pair(ctx, sig2, rep_cfg=ReplicationConfig(), costs=FREE, pair_name="TEST")
     assert res2.requirements.entry_vintage_hedge is True
+
+
+def test_a_constant_vintage_label_alone_does_not_grant_requirement_two():
+    """I4: requirement 2 was the one gate a hand-made frame could walk through.
+
+    A constant nonsense label satisfied the per-episode constancy check, so
+    `beta_vintage_date = 1999-01-01` returned True -- asymmetric with
+    requirements 1 and 3, which refuse a flag with no measured evidence. And
+    mutation M8 shows the label is the wrong thing to check on its own: it stays
+    frozen while the hold is priced on the live z.
+    """
+    ctx = SyntheticCtx(list(np.linspace(0, 40, 60)))
+    forged = _signals(ctx.dates)
+    forged["beta_vintage_date"] = pd.Timestamp("1999-01-01")
+    res = run_pair(ctx, forged, rep_cfg=ReplicationConfig(), costs=FREE,
+                   pair_name="TEST")
+    assert res.requirements.entry_vintage_hedge is False
+
+    # the stamp must be present AND finite, not merely truthy
+    half = _signals(ctx.dates)
+    half["beta_vintage_date"] = pd.Timestamp("1999-01-01")
+    half.attrs.update({"entry_vintage_hedge": True,
+                       "entry_vintage_frozen_z_deviation": float("nan")})
+    res2 = run_pair(ctx, half, rep_cfg=ReplicationConfig(), costs=FREE,
+                    pair_name="TEST")
+    assert res2.requirements.entry_vintage_hedge is False
+
+
+def test_entry_vintage_signals_stamp_the_deviation_they_measured():
+    spread, drivers = _factor_frame()
+    panel = _panel_for(spread, drivers)
+    fit = expanding_residual(spread, drivers, min_periods=252)
+    out = entry_vintage_signals(panel, SignalConfig(z_entry=1.0), spread_bp=spread,
+                                drivers=drivers, betas=fit.betas)
+    assert out.attrs["entry_vintage_hedge"] is True
+    assert np.isfinite(out.attrs["entry_vintage_frozen_z_deviation"])
+    # the freeze genuinely bit on this data -- otherwise the stamp is vacuous
+    assert out.attrs["entry_vintage_frozen_z_deviation"] > 0.0
+    assert out.attrs["entry_vintage_episodes"] > 0
 
 
 # ------------------------------------ requirement 4: spread-leg, never residual
@@ -601,93 +651,215 @@ def test_the_placebo_is_seed_reproducible():
 # --------------------------------------------------- the league table's honesty
 
 
-def _alive_looking_result(pair="TEST", n=400):
+def _alive_looking_result(pair="TEST", n=400, costs=MAKER):
     """A result engineered to clear every one of verdict()'s numeric tests.
 
-    Flat curve, positive carry: 20 disjoint 9-day episodes, every one a winner.
-    It exists to show that clearing the ARITHMETIC is not enough to be ALIVE.
+    Flat curve, positive carry: 20 disjoint 9-day episodes, every one a winner
+    AFTER a real round-trip charge at 2x. It exists to show that clearing the
+    ARITHMETIC is not enough to be ALIVE.
+
+    Deliberately NOT a FREE run: a zero-cost result makes `net_2x_bp` -- the
+    ALIVE gate's own input -- identical to `gross_bp`, so an "ALIVE" from it
+    would be an ALIVE at zero cost (league_table now refuses to quote one).
     """
-    ctx = SyntheticCtx([0.0] * n, theta_per_day=+50.0)
+    ctx = SyntheticCtx([0.0] * n, theta_per_day=+50_000.0)
     sig = _signals(ctx.dates, sign=0, size=0.0)
     for k in range(0, n - 8, 20):
         sig.loc[ctx.dates[k]:ctx.dates[k + 8], ["sign", "size", "dv01_usd"]] = [
             1, 1.0, 100_000.0]
     return run_pair(ctx, sig, rep_cfg=ReplicationConfig(trigger_bp=25.0),
-                    costs=FREE, pair_name=pair)
+                    costs=costs, pair_name=pair)
+
+
+def _harvesting_result(pair="SAW", n=200):
+    """A book that actually scalps gamma, so its harvest share differs from
+    the flat-carry fixture's (which is exactly zero)."""
+    path = list(np.tile(list(np.linspace(0, 30, 5)) + list(np.linspace(24, 6, 4)),
+                        n // 9 + 1))[:n]
+    ctx = SyntheticCtx(path, theta_per_day=+50_000.0)
+    sig = _signals(ctx.dates, sign=0, size=0.0)
+    for k in range(0, n - 8, 20):
+        sig.loc[ctx.dates[k]:ctx.dates[k + 8], ["sign", "size", "dv01_usd"]] = [
+            1, 1.0, 100_000.0]
+    return run_pair(ctx, sig, rep_cfg=ReplicationConfig(trigger_bp=25.0),
+                    costs=MAKER, pair_name=pair)
+
+
+def _mixed_size_result(pair="MIX", n=200):
+    """Episodes held at DIFFERENT sizes, so realised DV01 varies across them.
+
+    Measured on this fixture: per-episode avg DV01 spans $25,561..$105,004
+    (4.11x), which is the shape Task 13 found on real curves ($52.7k-$148.9k).
+    A fixture whose episodes all carry the SAME realised DV01 cannot tell a
+    per-episode normalisation from a run-level one -- the sawtooth fixture has
+    them equal to float noise, and an m3 test built on it let the mutation
+    through.
+    """
+    ctx = SyntheticCtx(list(np.linspace(0.0, 300.0, n)), theta_per_day=+50_000.0)
+    sig = _signals(ctx.dates, sign=0, size=0.0)
+    for j, k in enumerate(range(0, n - 8, 20)):
+        size = 1.0 if j % 2 == 0 else 0.25
+        sig.loc[ctx.dates[k]:ctx.dates[k + 8], ["sign", "size", "dv01_usd"]] = [
+            1, size, size * 100_000.0]
+    return run_pair(ctx, sig, rep_cfg=ReplicationConfig(trigger_bp=25.0),
+                    costs=MAKER, pair_name=pair)
+
+
+def _grid_for(pairs, n=4):
+    return pd.DataFrame({
+        "pair": [p for p in pairs for _ in range(n)],
+        "sharpe": np.linspace(0.1, 0.4, n * len(pairs)),
+        "total_net_bp": np.linspace(1.0, 4.0, n * len(pairs)),
+    })
+
+
+_ALL_MET = RequirementFlags(expanding_betas=True, entry_vintage_hedge=True,
+                            rolling_sigma_z=True, spread_leg_pnl=True,
+                            distinct_episodes=True, random_walk_placebo=True)
 
 
 def test_a_row_that_cannot_report_the_six_requirements_is_never_alive():
     res = _alive_looking_result()
-    grid = pd.DataFrame({"pair": ["TEST"] * 4, "sharpe": [0.1, 0.2, 0.3, 0.4],
-                         "total_net_bp": [1.0, 2.0, 3.0, 4.0]})
-    tbl = league_table([res], grid=grid)
-    assert tbl["requirements_met"].iloc[0] is np.False_ or not tbl["requirements_met"].iloc[0]
+    tbl = league_table([res], grid=_grid_for(["TEST"]), n_trials=4)
+    assert not bool(tbl["requirements_met"].iloc[0])
     assert tbl["verdict"].iloc[0] != "ALIVE"
     assert "INELIGIBLE" in tbl["verdict"].iloc[0]
 
 
 def test_every_league_row_reports_all_six_requirements():
     res = _alive_looking_result()
-    tbl = league_table([res])
+    tbl = league_table([res], grid=_grid_for(["TEST"]), n_trials=4)
     for name in ("expanding_betas", "entry_vintage_hedge", "rolling_sigma_z",
                  "spread_leg_pnl", "distinct_episodes", "random_walk_placebo"):
         assert f"req_{name}" in tbl.columns
 
 
 def test_all_six_met_restores_eligibility():
-    res = _alive_looking_result()
-    met = RequirementFlags(expanding_betas=True, entry_vintage_hedge=True,
-                           rolling_sigma_z=True, spread_leg_pnl=True,
-                           distinct_episodes=True, random_walk_placebo=True)
-    res = res.with_requirements(met)
-    tbl = league_table([res])
+    """I2: with the SAME grid as the downgrade test, so the base verdict really
+    is ALIVE and the assertion is live in both directions.
+
+    Without `grid=`, dsr_prob is NaN, the base verdict is SELECTION-ARTIFACT,
+    and `"INELIGIBLE" not in verdict` holds no matter what the downgrade logic
+    does -- a mutation that downgrades EVERY ALIVE row survived that version.
+    """
+    res = _alive_looking_result().with_requirements(_ALL_MET)
+    tbl = league_table([res], grid=_grid_for(["TEST"]), n_trials=4)
     assert bool(tbl["requirements_met"].iloc[0]) is True
-    assert "INELIGIBLE" not in tbl["verdict"].iloc[0]
+    assert tbl["verdict"].iloc[0] == "ALIVE"
+
+
+def test_league_table_costs_actually_scale_with_the_multiplier():
+    """I1: net_2x_bp is `verdict`'s net_bp_at_taker -- the ALIVE gate's primary
+    numeric input -- and nothing checked its value."""
+    res = _alive_looking_result(costs=TAKER)
+    row = league_table([res], grid=_grid_for(["TEST"]), n_trials=4).iloc[0]
+    assert row["cost_1x_usd"] > 0.0
+    assert row["net_2x_bp"] < row["net_1x_bp"] < row["gross_bp"]
+    assert row["net_2x_bp"] == pytest.approx(
+        row["gross_bp"] - 2.0 * (row["gross_bp"] - row["net_1x_bp"]))
+    assert row["net_1x_usd"] == pytest.approx(row["gross_usd"] - row["cost_1x_usd"])
+    assert row["net_2x_usd"] == pytest.approx(
+        row["gross_usd"] - 2.0 * row["cost_1x_usd"])
+
+
+def test_every_league_bp_column_shares_one_divisor():
+    """m3: gross_bp summed PER-EPISODE bp while the cost was normalised at the
+    run level. The two only compose when realised DV01 is stable across
+    episodes, which Task 13 measured that it is not ($52.7k-$148.9k)."""
+    res = _mixed_size_result("MIX")
+    dv01s = res.trades["avg_dv01_usd"]
+    # The fixture must actually be able to tell the two apart. Measured here:
+    # a 4.1x spread in per-episode realised DV01, giving a 0.45% gap between
+    # the per-episode sum and the run-level figure -- far above approx's
+    # tolerance. A fixture with a flat DV01 makes this test unfalsifiable.
+    assert dv01s.max() / dv01s.min() > 3.0
+    per_episode_bp = float(res.trades["gross_bp"].sum())
+
+    row = league_table([res], grid=_grid_for(["MIX"]), n_trials=4).iloc[0]
+    dv01 = row["realised_dv01_mean_usd"]
+    assert row["gross_bp"] == pytest.approx(row["gross_usd"] / dv01)
+    assert row["net_1x_bp"] == pytest.approx(row["net_1x_usd"] / dv01)
+    assert row["net_2x_bp"] == pytest.approx(row["net_2x_usd"] / dv01)
+    assert row["gross_bp"] != pytest.approx(per_episode_bp)   # they DO differ
+
+
+def test_league_table_refuses_to_quote_costs_from_a_zero_cost_run():
+    """I5: scaling a FREE run's realised charge by 2 is still zero, so
+    net_2x_bp would equal gross_bp and the ALIVE gate would read a cost-free
+    number."""
+    res = _alive_looking_result(costs=FREE)
+    with pytest.raises(ValueError, match="cost multiplier 0"):
+        league_table([res], grid=_grid_for(["TEST"]), n_trials=4)
+    # ... unless it is repriced from the ledger's traded-risk volumes
+    row = league_table([res], grid=_grid_for(["TEST"]), n_trials=4,
+                       cost_schedule=TAKER).iloc[0]
+    assert row["cost_1x_usd"] > 0.0
+    assert row["net_2x_bp"] < row["gross_bp"]
 
 
 def test_league_table_refuses_a_grid_that_is_only_one_pairs_slice():
     """The DSR trap: deflating by the per-pair trial count, not the full one."""
     a, b = _alive_looking_result("A"), _alive_looking_result("B")
-    per_pair = pd.DataFrame({"pair": ["A"] * 5, "sharpe": np.linspace(0.1, 0.5, 5),
-                             "total_net_bp": np.linspace(1, 5, 5)})
     with pytest.raises(ValueError, match="per-pair"):
-        league_table([a, b], grid=per_pair)
+        league_table([a, b], grid=_grid_for(["A"]), n_trials=4)
+
+
+def test_ranking_one_pair_against_its_own_grid_needs_a_declared_count():
+    """I3: the per-pair league table is the natural shape of the trap, and it
+    used to pass silently reporting n_trials = one pair's sweep."""
+    a = _alive_looking_result("A")
+    with pytest.raises(ValueError, match="single pair"):
+        league_table([a], grid=_grid_for(["A"]))
 
 
 def test_league_table_deflates_by_the_full_trial_count():
     a, b = _alive_looking_result("A"), _alive_looking_result("B")
-    full = pd.DataFrame({"pair": ["A"] * 5 + ["B"] * 5,
-                         "sharpe": np.linspace(0.1, 1.0, 10),
-                         "total_net_bp": np.linspace(1, 10, 10)})
-    tbl = league_table([a, b], grid=full)
-    assert set(tbl["n_trials"]) == {10}
+    tbl = league_table([a, b], grid=_grid_for(["A", "B"]))
+    assert set(tbl["n_trials"]) == {8}
+
+
+def test_a_cross_family_trial_count_can_be_declared_above_the_grid():
+    """I3: `n_trials` must be allowed to EXCEED the frame in hand -- that is how
+    'across all pairs and families' is stated when the other families' grids are
+    not concatenated here. It must also reach the deflation, not just be
+    cross-checked."""
+    a = _alive_looking_result("A")
+    small = league_table([a], grid=_grid_for(["A"]), n_trials=8).iloc[0]
+    huge = league_table([a], grid=_grid_for(["A"]), n_trials=2916).iloc[0]
+    assert small["n_trials"] == 8 and huge["n_trials"] == 2916
+    assert huge["dsr_prob"] < small["dsr_prob"]     # the penalty actually bit
 
 
 def test_league_table_rejects_a_declared_trial_count_below_the_grid():
     a = _alive_looking_result("A")
-    full = pd.DataFrame({"pair": ["A"] * 5, "sharpe": np.linspace(0.1, 0.5, 5),
-                         "total_net_bp": np.linspace(1, 5, 5)})
     with pytest.raises(ValueError, match="n_trials"):
-        league_table([a], grid=full, n_trials=3)
+        league_table([a], grid=_grid_for(["A"]), n_trials=3)
 
 
-def test_league_table_refuses_to_rank_on_sharpe():
+@pytest.mark.parametrize("key", ["sharpe", "sharpe_annualised", "skew",
+                                 "kurtosis", "resid_skew", "t_stat"])
+def test_league_table_refuses_every_forbidden_ranking_key(key):
     res = _alive_looking_result()
-    with pytest.raises(ValueError, match="[Ss]harpe"):
-        league_table([res], rank_by=("sharpe",))
+    with pytest.raises(ValueError, match="refusing to rank"):
+        league_table([res], rank_by=(key,))
 
 
 def test_league_table_ranks_on_the_permitted_keys():
-    a = _alive_looking_result("A")
-    b = _alive_looking_result("B")
-    tbl = league_table([a, b], rank_by=("harvest_pnl_share",))
-    assert list(tbl["harvest_pnl_share"]) == sorted(tbl["harvest_pnl_share"],
-                                                    reverse=True)
+    """m4: the two fixtures must have genuinely DIFFERENT shares, or the
+    sorted-check holds under any ordering."""
+    flat = _alive_looking_result("FLAT")          # no hedges -> harvest is 0
+    saw = _harvesting_result("SAW")               # scalps gamma -> harvest > 0
+    tbl = league_table([flat, saw], grid=_grid_for(["FLAT", "SAW"]),
+                       rank_by=("harvest_pnl_share",))
+    shares = list(tbl["harvest_pnl_share"])
+    assert shares[0] != pytest.approx(shares[1])  # the test can fail
+    assert shares == sorted(shares, reverse=True)
+    assert tbl["pair"].iloc[0] == "SAW"
 
 
 def test_league_table_carries_the_carry_sign_and_the_harvest_share():
     res = _alive_looking_result()
-    tbl = league_table([res])
+    tbl = league_table([res], grid=_grid_for(["TEST"]), n_trials=4)
     assert {"carry_sign", "harvest_pnl_share", "book"} <= set(tbl.columns)
 
 
@@ -795,6 +967,24 @@ def test_run_grid_reuses_one_simulation_per_replication_config():
     calls["n"] = 0
     run_grid({"TEST": ctx}, {"TEST": panel}, grid[:1], costs=FREE)
     assert one == calls["n"]        # three configs, one simulation
+
+
+def test_run_grid_refuses_signal_axes_against_a_prebuilt_frame():
+    """m1: a prebuilt frame is reused for every config, so the signal axes are
+    swept in the output columns and nowhere else."""
+    ctx = SyntheticCtx(list(np.linspace(0, 40, 60)))
+    grid = [{"trigger_bp": 25.0, "z_entry": z} for z in (1.0, 2.0)]
+    with pytest.raises(ValueError, match="PREBUILT"):
+        run_grid({"TEST": ctx}, {"TEST": _signals(ctx.dates)}, grid, costs=FREE)
+
+
+def test_run_grid_refuses_an_unknown_config_key():
+    """m2: `{"zz_entry": ...}` used to give two rows, one distinct result, and a
+    tidy column to read the non-difference off."""
+    ctx = SyntheticCtx(list(np.linspace(0, 40, 60)))
+    with pytest.raises(ValueError, match="zz_entry"):
+        run_grid({"TEST": ctx}, {"TEST": _signals(ctx.dates)},
+                 [{"trigger_bp": 25.0, "zz_entry": 1.0}], costs=FREE)
 
 
 def test_memoised_simulations_are_still_keyed_on_the_trigger_width():

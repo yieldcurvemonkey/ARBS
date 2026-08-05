@@ -310,6 +310,11 @@ FORBIDDEN_RANK_KEYS = {
         "truth was known independently."
     ),
     "kurtosis": "a shape statistic on a series that is ~96% linear slope exposure",
+    "t_stat": (
+        "a monotone function of Sharpe on the same series (t = SR * sqrt(n) up "
+        "to the HAC correction), so ranking on it is ranking on Sharpe through "
+        "a side door. Same measurement disqualifies it."
+    ),
 }
 
 _REQUIREMENT_PREFIX = "req_"
@@ -362,11 +367,18 @@ def league_table(
 
     Three things this enforces rather than reports.
 
-    **The DSR trial count.** ``grid`` must cover every pair being ranked. A
-    per-pair slice deflates by a fraction of the searches actually run, which
-    is the cheapest way to manufacture a surviving row, so it raises instead.
-    ``n_trials``, if given, must equal the grid's length -- to account for other
-    families, concatenate their grids and pass the whole thing.
+    **The DSR trial count.** ``grid`` must cover every pair being ranked, and
+    the count handed to ``deflated_for_grid`` must be every configuration tried
+    across every pair **and family**. Three ways that goes wrong, all closed:
+
+    * a grid with no rows for a ranked pair -> raises;
+    * a **single-pair grid with no declared count** -> raises, because that is
+      the shape of the trap (ranking one pair against its own sweep deflates by
+      1/n_pairs of the real search, silently). Declare ``n_trials`` or pass the
+      concatenated grid;
+    * ``n_trials`` below ``len(grid)`` -> raises. Above it is allowed and is the
+      point: it is how a cross-family count gets declared, and it is passed
+      through to ``deflated_for_grid`` rather than merely cross-checked.
 
     **The six requirements.** Every row reports each of them as ``req_*``, and a
     row that cannot report all six met is downgraded out of ``ALIVE`` to
@@ -390,22 +402,34 @@ def league_table(
                     f"refusing to rank on {key!r}: {FORBIDDEN_RANK_KEYS[key]}"
                 )
 
+    effective_trials = None
     if grid is not None:
+        if "sharpe" not in grid.columns:
+            raise ValueError("grid must carry a 'sharpe' column for deflation")
+        if n_trials is not None and int(n_trials) < len(grid):
+            raise ValueError(
+                f"n_trials={n_trials} is below the grid's {len(grid)} rows; the "
+                "declared trial count cannot be smaller than the search shown"
+            )
         if "pair" in grid.columns:
-            missing = {r.pair_name for r in results} - set(grid["pair"].astype(str))
+            grid_pairs = set(grid["pair"].astype(str))
+            missing = {r.pair_name for r in results} - grid_pairs
             if missing:
                 raise ValueError(
                     "grid looks like a per-pair slice: it has no rows for "
                     f"{sorted(missing)}. deflated_for_grid must receive the FULL "
                     "trial count across every pair and family, not one pair's."
                 )
-        if "sharpe" not in grid.columns:
-            raise ValueError("grid must carry a 'sharpe' column for deflation")
-        if n_trials is not None and int(n_trials) != len(grid):
-            raise ValueError(
-                f"n_trials={n_trials} does not match the grid's {len(grid)} rows; "
-                "pass the full concatenated grid rather than a declared count"
-            )
+            if len(grid_pairs) <= 1 and n_trials is None:
+                raise ValueError(
+                    f"grid covers a single pair ({sorted(grid_pairs)}) and no "
+                    "n_trials was declared. Deflating by one pair's own sweep "
+                    "understates the search by a factor of the pair count -- "
+                    "pass the concatenated grid for every pair and family, or "
+                    "declare the full count as n_trials (n_trials >= len(grid) "
+                    "is allowed precisely so a cross-family count can be stated)."
+                )
+        effective_trials = int(n_trials) if n_trials is not None else len(grid)
 
     median_net_bp = (float(grid["total_net_bp"].median())
                      if grid is not None and "total_net_bp" in grid.columns else 0.0)
@@ -415,18 +439,34 @@ def league_table(
         trades = res.trades
         n = int(len(trades))
         gross_usd = float(trades["gross_usd"].sum()) if n else 0.0
-        gross_bp = float(trades["gross_bp"].sum()) if n else 0.0
         dv01 = res.stats.get("realised_dv01_mean_usd", float("nan"))
         usable_dv01 = bool(np.isfinite(dv01)) and dv01 != 0.0
+
+        if cost_schedule is None and res.config.get("cost_multiplier") == 0:
+            raise ValueError(
+                f"{res.pair_name}: this result was run at cost multiplier 0, so "
+                "its realised charge is zero and scaling it by 1x or 2x is still "
+                "zero -- net_1x_bp and net_2x_bp would equal gross_bp and the "
+                "ALIVE gate would be reading a cost-free number. Pass "
+                "cost_schedule= to reprice from the ledger's traded-risk "
+                "volumes, or run the pair at a real schedule."
+            )
         cost_usd = {m: _cost_at(res, m, schedule=cost_schedule)
                     for m in cost_multipliers}
         one_x = cost_usd.get(1.0, float(-res.ledger["cost"].sum()))
         two_x = cost_usd.get(2.0, 2.0 * one_x)
+        # m3: ONE divisor for every bp column on this row -- the run-level
+        # realised mean DV01. gross_bp was previously the sum of per-EPISODE bp
+        # figures while the cost was normalised at the run level, and the two
+        # only compose when realised DV01 is stable across episodes, which Task
+        # 13 measured that it is not ($52.7k-$148.9k). Per-episode bp still
+        # lives on `trades`, where each row carries its own avg_dv01_usd.
+        gross_bp = gross_usd / dv01 if usable_dv01 else float("nan")
         one_x_bp = one_x / dv01 if usable_dv01 else float("nan")
         two_x_bp = two_x / dv01 if usable_dv01 else float("nan")
 
-        dsr = (deflated_for_grid(res.daily_pnl, grid) if grid is not None
-               else {"dsr_prob": float("nan")})
+        dsr = (deflated_for_grid(res.daily_pnl, grid, n_trials=effective_trials)
+               if grid is not None else {"dsr_prob": float("nan")})
         net1_bp, net2_bp = gross_bp - one_x_bp, gross_bp - two_x_bp
         maker_bp = gross_bp - 0.5 * one_x_bp
 
@@ -470,7 +510,7 @@ def league_table(
             "harvest_flow_ratio": flow_ratio,
             "vol_corr": vol_corr,
             "dsr_prob": dsr.get("dsr_prob"),
-            "n_trials": int(len(grid)) if grid is not None else float("nan"),
+            "n_trials": effective_trials if grid is not None else float("nan"),
             "requirements_met": bool(flags.all_met),
             "verdict": base,
         }

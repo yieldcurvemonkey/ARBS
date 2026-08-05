@@ -15,15 +15,23 @@ implemented as something the engine either DOES or refuses to claim:
    :func:`audit_causal_betas` *verifies* it by shocking the tail of the input
    and confirming the head of the residual does not move. A full-sample fit
    fails that audit by more than a basis point, which is how the checker was
-   itself checked against an input whose answer was already known.
+   itself checked against an input whose answer was already known. **The audit
+   is tied to the artifact**: :func:`causal_signals` requires the residual it is
+   about to use to reproduce the audited baseline and raises otherwise --
+   without that link the audit describes a function while the signal comes from
+   a series, and a full-sample fit collected a clean certificate.
 2. **Hedge frozen at entry vintage** -- :func:`entry_vintage_signals` freezes
-   the beta vector on the entry date and re-derives the residual z from THAT
-   vector for the whole hold; :func:`run_pair` then re-verifies the frozen
-   vintage from the ``beta_vintage_date`` column rather than trusting a flag,
-   and marks the requirement unmet if the vintage moves inside an episode.
+   the beta vector on the entry date, re-derives the residual z from THAT vector
+   for the whole hold, and stamps how far the frozen z diverged from the live
+   one. :func:`run_pair` requires that stamp AND per-episode constancy of
+   ``beta_vintage_date``: the label alone is satisfied by any constant column,
+   and mutation M8 shows it stays frozen even when the hold is priced on the
+   live z.
 3. **Rolling-sigma z** -- :func:`audit_rolling_sigma_z` recomputes the z from
    the residual with a trailing 252-day window and rejects any z that does not
-   reproduce; a full-sample-sigma z fails by construction.
+   reproduce; :func:`causal_signals` additionally checks the z's OWN causality
+   against the shocked run, so the stamp is not a tautology on the path that
+   builds the z itself. A full-sample-sigma z fails both legs.
 4. **Spread-leg P&L, never residual P&L** -- there is no residual-P&L path in
    this module. ``daily_pnl`` IS ``ledger["total"]`` from
    :func:`replication.simulate`, i.e. the repriced package the book actually
@@ -442,10 +450,19 @@ def _derive_requirements(signals, trades, placebo) -> RequirementFlags:
                      and np.isfinite(causal_diff) and causal_diff <= CAUSALITY_TOL)
     rolling = bool(attrs.get("rolling_sigma_z", False)
                    and np.isfinite(z_diff) and z_diff <= ROLLING_Z_TOL)
+    # Requirement 2 needs the same shape of proof as 1 and 3: a stamp only
+    # `entry_vintage_signals` sets, carrying a measured number, PLUS the
+    # per-episode label check. The label alone is satisfied by any constant
+    # column -- `beta_vintage_date = Timestamp("1999-01-01")` passed it -- which
+    # made requirement 2 the one gate a hand-made frame could walk through.
+    vintage_deviation = attrs.get("entry_vintage_frozen_z_deviation", float("nan"))
     vintage_ok, vintage_evidence = _entry_vintage_verified(signals)
+    vintage_evidence["frozen_z_deviation"] = vintage_deviation
     return RequirementFlags(
         expanding_betas=expanding,
-        entry_vintage_hedge=bool(vintage_ok),
+        entry_vintage_hedge=bool(vintage_ok
+                                 and attrs.get("entry_vintage_hedge", False)
+                                 and np.isfinite(vintage_deviation)),
         rolling_sigma_z=rolling,
         # Structural: there is no residual-P&L path in this module at all.
         spread_leg_pnl=True,
@@ -506,6 +523,47 @@ _SIGNAL_FIELDS = set(SignalConfig.__dataclass_fields__)
 _SIGNAL_OUTPUT_COLS = {"sign", "size", "dv01_usd"}
 
 
+def _check_grid_keys(grid: Sequence[dict], *, prebuilt: bool, pair_name: str) -> None:
+    """Refuse a grid whose axes this pair's source cannot actually sweep.
+
+    Two silent no-ops, both measured:
+
+    * **A prebuilt signal frame disables every signal axis.** ``run_grid`` reuses
+      such a frame for every config, so six configs sweeping ``z_entry`` and
+      ``be_cheap`` produced ONE distinct ``total_net_usd`` -- with the swept
+      values faithfully printed in the columns. ``causal_signals``' output has
+      exactly the columns that trigger the prebuilt path, and the parameter name
+      ``signal_panel_by_pair`` invites passing it, so this is the likely
+      accident, not an exotic one.
+    * **An unknown or misspelled key is dropped.** ``{"zz_entry": 1.0}`` vs
+      ``{"zz_entry": 9.9}`` gave two rows, one distinct result, and a tidy
+      ``zz_entry`` column to read the difference off.
+
+    A grid that cannot sweep what it says it sweeps is worse than no grid: it
+    produces a full league table of identical results wearing different labels.
+    """
+    keys = {k for cfg in grid for k in cfg}
+    unknown = sorted(keys - _REP_FIELDS - _SIGNAL_FIELDS)
+    if unknown:
+        raise ValueError(
+            f"grid has key(s) {unknown} belonging to neither ReplicationConfig "
+            f"{sorted(_REP_FIELDS)} nor SignalConfig. They would be swept in the "
+            "output columns and ignored by the engine."
+        )
+    if prebuilt:
+        blocked = sorted(keys & _SIGNAL_FIELDS)
+        if blocked:
+            raise ValueError(
+                f"{pair_name}: the signal source is a PREBUILT signal frame "
+                f"(it carries {sorted(_SIGNAL_OUTPUT_COLS)}), so it is reused "
+                f"unchanged for every config -- but the grid sweeps {blocked}, "
+                "which only a raw signal panel can vary. Every row would be the "
+                "same run with different labels. Pass the raw panel (with "
+                "strategy.REQUIRED_COLUMNS) plus a signal_builder, or drop the "
+                "signal axes from the grid."
+            )
+
+
 def run_grid(
     ctx_by_pair: Dict[str, object],
     signal_panel_by_pair: Dict[str, pd.DataFrame],
@@ -555,6 +613,7 @@ def run_grid(
         for pair_name, ctx in ctx_map.items():
             source = signal_panel_by_pair[pair_name]
             prebuilt = _SIGNAL_OUTPUT_COLS <= set(source.columns)
+            _check_grid_keys(grid, prebuilt=prebuilt, pair_name=pair_name)
             sim_cache: dict = {}
             sig_cache: dict = {}
             for cfg in grid:
@@ -723,7 +782,10 @@ def entry_vintage_signals(
     base = build_signals(panel, cfg)
     lagged = panel.shift(1)
 
+    live_z_lagged = panel["residual_z"].shift(1)
     records = []
+    held_z_deviation = 0.0     # max |z_frozen - z_live| on days actually held
+    n_episodes = 0
     open_sign = 0
     frozen_z = None
     vintage = pd.NaT
@@ -744,11 +806,16 @@ def entry_vintage_signals(
                                           min_periods=min_periods).shift(1)
                     open_sign = int(st["sign"])
                     vintage = b.get("vintage_date", ts)
+                    n_episodes += 1
             records.append({**st, "beta_vintage_date": vintage if st["sign"] else pd.NaT})
             continue
 
         row = lagged.loc[ts].copy()
-        row["residual_z"] = frozen_z.get(ts, np.nan) if frozen_z is not None else np.nan
+        z_frozen = frozen_z.get(ts, np.nan) if frozen_z is not None else np.nan
+        row["residual_z"] = z_frozen
+        z_live = live_z_lagged.get(ts, np.nan)
+        if np.isfinite(z_frozen) and np.isfinite(z_live):
+            held_z_deviation = max(held_z_deviation, abs(float(z_frozen) - float(z_live)))
         st = signal_state(row, cfg) if not row.isna().all() else {
             "sign": 0, "size": 0.0, "reason": "warmup"}
         if int(st["sign"]) != open_sign:
@@ -759,7 +826,18 @@ def entry_vintage_signals(
 
     out = pd.DataFrame(records, index=idx)
     out["dv01_usd"] = out["sign"] * out["size"] * cfg.base_dv01_usd
-    out.attrs["entry_vintage_hedge"] = True
+    # Evidence, not just a claim (I4). ``run_pair`` requires this stamp AND the
+    # per-episode constancy of ``beta_vintage_date``: the label alone is
+    # satisfied by any constant column, including a hand-written one, and
+    # mutation M8 showed the label stays frozen even when the hold is priced on
+    # the live z. ``entry_vintage_frozen_z_deviation`` is how far the frozen z
+    # actually diverged from the live one on days the book was on -- the
+    # quantity that is identically zero if the freeze was never applied.
+    out.attrs.update({
+        "entry_vintage_hedge": True,
+        "entry_vintage_frozen_z_deviation": float(held_z_deviation),
+        "entry_vintage_episodes": int(n_episodes),
+    })
     return out
 
 

@@ -41,22 +41,37 @@ def grid_distribution(res: pd.DataFrame, metric: str = "total_net_bp") -> Dict[s
 
 
 def deflated_for_grid(
-    daily_bp: pd.Series, res: pd.DataFrame, *, sharpe_col: str = "sharpe"
+    daily_bp: pd.Series, res: pd.DataFrame, *, sharpe_col: str = "sharpe",
+    n_trials: Optional[int] = None,
 ) -> Dict[str, float]:
     """DSR of one config's daily P&L, deflated by the whole sweep.
 
-    ``n_trials`` is the number of configs actually run; the cross-trial variance
-    of per-period Sharpes comes from the sweep itself (the honest input — using
-    the default would understate the multiple-testing penalty).
+    ``n_trials`` defaults to the number of configs in ``res``; the cross-trial
+    variance of per-period Sharpes comes from the sweep itself (the honest input
+    — using the default would understate the multiple-testing penalty).
+
+    **Pass ``n_trials`` explicitly when the sweep in ``res`` is not the whole
+    search.** The count that belongs here is every configuration tried across
+    every pair AND every family, which is usually larger than any one frame a
+    caller happens to hold — deflating by a per-pair slice is the cheapest way
+    to manufacture a surviving row. The variance estimate still comes from
+    ``res``, which is fine (it is a shape, not a count), but the penalty must
+    see the full count. Values below ``len(res)`` are rejected rather than
+    silently used.
     """
     r = pd.Series(daily_bp).astype(float).dropna()
+    n = int(n_trials) if n_trials is not None else int(len(res))
+    if n_trials is not None and n < len(res):
+        raise ValueError(
+            f"n_trials={n_trials} is below the {len(res)} configs actually in "
+            "`res`; the deflation cannot be smaller than the search it is given"
+        )
     if r.empty or len(r) < 5:
-        return {"dsr_prob": np.nan, "sr_annualised": np.nan, "n_trials": len(res)}
+        return {"dsr_prob": np.nan, "sr_annualised": np.nan, "n_trials": n}
     sr_per_period = res[sharpe_col].astype(float).dropna() / np.sqrt(252.0)
     var = float(sr_per_period.var(ddof=1)) if len(sr_per_period) > 2 else None
-    out = deflated_sharpe(r.to_numpy(), n_trials=max(int(len(res)), 1),
-                          sr_variance=var)
-    out["n_trials"] = int(len(res))
+    out = deflated_sharpe(r.to_numpy(), n_trials=max(n, 1), sr_variance=var)
+    out["n_trials"] = n
     return out
 
 
