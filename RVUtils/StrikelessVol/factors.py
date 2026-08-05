@@ -19,6 +19,7 @@ __all__ = [
     "RegressionResult",
     "WalkForwardFit",
     "changes_regression",
+    "expanding_changes_residual",
     "expanding_residual",
     "levels_regression",
     "frequency_ladder",
@@ -247,12 +248,91 @@ def expanding_residual(
     vintage in between; that is still causal (an older vintage saw strictly
     less), it is only cheaper.
     """
-    y = pd.Series(spread_bp).astype(float).rename("_y_")
+    y = pd.Series(spread_bp).astype(float)
     X = pd.DataFrame({k: pd.Series(v).astype(float) for k, v in drivers.items()})
-    df = pd.concat([y, X], axis=1)
+    return _walk_forward(y, X, min_periods=min_periods, refit_every=refit_every,
+                         kind="expanding", what="expanding_residual")
+
+
+def expanding_changes_residual(
+    spread_bp,
+    drivers: Dict[str, pd.Series],
+    *,
+    horizon_days: int = 1,
+    min_periods: int = 252,
+    refit_every: int = 1,
+) -> WalkForwardFit:
+    """Walk-forward CHANGES residual -- :func:`changes_regression`, made causal.
+
+    This is the object :func:`drift` is supposed to be fed. It did not exist
+    until now, and its absence is why the ``drift_t`` veto leaked: the only
+    changes-regression builder in this module was :func:`changes_regression`,
+    which fits ONE set of betas on the WHOLE sample, and the study's own
+    reference panel built the veto as ``drift(changes_regression(...).residuals)``.
+    Measured on the 900-day synthetic frame the audits use, shocking the last
+    25% of the spread by +250bp and looking at the FIRST 75% of the sample --
+    the head cannot legitimately move at all, because nothing in it happened
+    after the shock:
+
+    ============================================  =========  ==============
+    changes residual builder                      head move  drift_t head move
+    ============================================  =========  ==============
+    ``changes_regression(...).residuals``           2.628         6.105
+    ``expanding_changes_residual(...).residual``    0.0           0.0
+    ============================================  =========  ==============
+
+    ``drift_t`` is what ``strategy.signal_state`` vetoes on, at
+    ``drift_t_gate = 2.0``. A veto column that moves **6.1 t-units** in the
+    head of the sample when only the tail of its input was shocked is using
+    information the trade date did not have, whichever way the veto points --
+    and 6.1 is three times the gate. On the unshocked frame the two builders
+    happen to disagree about vetoing on only 2 of 585 days (this synthetic
+    spread is close to linear in its driver, so a full-sample fit and an
+    expanding one nearly coincide); against the cruder causal proxy the review
+    used, ``expanding_residual(...).residual.diff()``, the same leaky column
+    disagrees on 18 of 585 days with a max t-gap of 1.61. The disagreement
+    count is a property of the sample; the head movement is a property of the
+    builder, which is why the audit gates on the latter.
+
+    Mechanically identical to :func:`expanding_residual` -- the fit at date
+    ``t`` uses only rows strictly BEFORE ``t``, so the head is bit-identical
+    under a tail shock and ``backtest.audit_causal_betas`` certifies it -- with
+    ``spread_bp`` and every driver differenced at ``horizon_days`` first, which
+    is the only difference between a levels fit and a changes fit.
+
+    ``betas`` is the per-date coefficient vintage on the DIFFERENCED
+    regressors, so it is not interchangeable with
+    :func:`expanding_residual`'s: do not hand this fit to
+    ``entry_vintage_signals``, whose hedge is a levels hedge.
+    """
+    h = int(horizon_days)
+    y = pd.Series(spread_bp).astype(float).diff(h)
+    X = pd.DataFrame({k: pd.Series(v).astype(float).diff(h)
+                      for k, v in drivers.items()})
+    return _walk_forward(y, X, min_periods=min_periods, refit_every=refit_every,
+                         kind="expanding_changes", what="expanding_changes_residual")
+
+
+def _walk_forward(
+    y: pd.Series,
+    X: pd.DataFrame,
+    *,
+    min_periods: int,
+    refit_every: int,
+    kind: str,
+    what: str,
+) -> WalkForwardFit:
+    """The shared expanding-window loop. See :func:`expanding_residual`.
+
+    Factored out so the levels and changes walk-forward fits cannot drift
+    apart: the causality of both rests on the single line ``hist =
+    values[:i]`` -- history strictly before the row being predicted -- and one
+    copy of that line is easier to keep honest than two.
+    """
+    df = pd.concat([y.rename("_y_"), X], axis=1)
     cols = [c for c in df.columns if c != "_y_"]
     if not cols:
-        raise ValueError("expanding_residual needs at least one driver")
+        raise ValueError(f"{what} needs at least one driver")
 
     idx = df.index
     resid = pd.Series(np.nan, index=idx, dtype=float)
@@ -286,12 +366,12 @@ def expanding_residual(
         vintage.iloc[i] = coef_date
 
     betas["vintage_date"] = vintage
-    resid.attrs["beta_vintage"] = "expanding"
+    resid.attrs["beta_vintage"] = kind
     resid.attrs["causal"] = True
     resid.attrs["min_periods"] = int(min_periods)
     return WalkForwardFit(
         residual=resid, betas=betas, min_periods=int(min_periods),
-        refit_every=int(refit_every), kind="expanding", n_fitted=n_fitted,
+        refit_every=int(refit_every), kind=kind, n_fitted=n_fitted,
     )
 
 
@@ -317,10 +397,13 @@ def residual_z(resid, *, window: int = 252, min_periods: int = 126) -> pd.Series
     function requires its ``resid`` argument to already come from a causal
     (expanding-window or rolling-window) regression fit -- never pass a
     ``levels_regression``/``changes_regression`` residual computed on the
-    full sample directly.** No expanding/rolling regression fit is provided
-    in this module as of Task 15; building one (and re-deriving ``resid``
-    causally before it ever reaches this function) is recorded as a Task 18
-    requirement, not implemented here.
+    full sample directly.** The causal builders now exist and are the only
+    supported inputs: :func:`expanding_residual` for a levels residual and
+    :func:`expanding_changes_residual` for a changes residual. Pass one of
+    their ``.residual`` series. (This paragraph used to end "no
+    expanding/rolling regression fit is provided in this module", which was
+    true when written; the levels one landed in Task 18 and the changes one
+    with the ``drift_t`` certificate.)
     """
     e = pd.Series(resid).astype(float)
     roll = e.rolling(int(window), min_periods=int(min_periods))
@@ -328,7 +411,19 @@ def residual_z(resid, *, window: int = 252, min_periods: int = 126) -> pd.Series
 
 
 def drift(changes_resid, *, window: int = 63) -> pd.DataFrame:
-    """Signal 2: the vol-orthogonal structural drift, and its significance."""
+    """Signal 2: the vol-orthogonal structural drift, and its significance.
+
+    The rolling mean and the Newey-West t are TRAILING (``min_periods=window``,
+    no centring), so this function's own window adds no look-ahead. Its
+    ``changes_resid`` argument does: it must come from
+    :func:`expanding_changes_residual`, not from
+    :func:`changes_regression`, whose betas are fitted on the whole sample.
+    ``t_stat`` is what ``strategy.signal_state`` VETOES on, and a full-sample
+    source moves it by 6.1 t-units in the head of a sample whose tail alone
+    was shocked -- against a gate of 2.0. See
+    :func:`expanding_changes_residual` and
+    ``backtest.audit_trailing_statistic``.
+    """
     from RVUtils.SFRRVLab.stats import nw_tstat
 
     e = pd.Series(changes_resid).astype(float)
