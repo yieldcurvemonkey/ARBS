@@ -20,13 +20,26 @@ from RVUtils.StrikelessVol.conventions import FLATTENER
 from RVUtils.StrikelessVol.costs import CostSchedule
 
 __all__ = [
+    "COST_KIND_BY_VOLUME_COL",
     "CurvePricer",
     "PricingContext",
     "ReplicationConfig",
+    "TRADED_DV01_COLS",
     "ZeroConvexityPricer",
     "reconcile",
     "simulate",
 ]
+
+#: Traded-risk columns on the ledger, and the ``CostSchedule`` kind each is
+#: charged at. ``simulate`` records the VOLUME separately from the fee so the
+#: same path can be repriced at another schedule, multiplier or roll
+#: convention without re-running it.
+COST_KIND_BY_VOLUME_COL = {
+    "initiate_dv01_usd": "initiate",
+    "hedge_dv01_usd": "hedge",
+    "roll_dv01_usd": "roll",
+}
+TRADED_DV01_COLS = tuple(COST_KIND_BY_VOLUME_COL)
 
 
 class PricingContext(Protocol):
@@ -85,7 +98,17 @@ def simulate(
             "mtm": 0.0,
             "cross": 0.0,
             "cost": -costs.cost_usd("initiate", abs(cfg.package_dv01_usd)),
+            # Traded RISK, not the fee charged on it. Kept separately from
+            # ``cost`` so a caller can reprice the same path under a different
+            # schedule, a different cost multiplier, or a different ROLL
+            # CONVENTION without re-running the simulation -- the roll charge
+            # alone was measured at 67.5% of the static book's headline, so it
+            # has to be separable rather than baked into one number.
+            "initiate_dv01_usd": abs(cfg.package_dv01_usd),
+            "hedge_dv01_usd": 0.0,
+            "roll_dv01_usd": 0.0,
             "n_hedges": 0,
+            "n_rolls": 0,
             "long_notional": n_long,
             "short_notional": n_short,
             "position_age_years": 0.0,
@@ -142,6 +165,9 @@ def simulate(
 
         cost = 0.0
         n_hedges = 0
+        n_rolls = 0
+        hedge_dv01 = 0.0
+        roll_dv01 = 0.0
 
         # Tolerance against float round-trip noise: rate() returns a decimal
         # that gets re-expanded to bp here, and a genuine trigger_bp move can
@@ -168,12 +194,15 @@ def simulate(
             delta_n = target_long - n_long
             if delta_n != 0.0:
                 n_long = target_long
-                cost -= costs.cost_usd("hedge", abs(delta_n) * ctx.dv01(d, "long"))
+                hedge_dv01 = abs(delta_n * ctx.dv01(d, "long"))
+                cost -= costs.cost_usd("hedge", hedge_dv01)
                 n_hedges = 1
             last_hedge_rate_bp = long_rate_bp
 
         if pd.Timestamp(d) >= roll_due:
-            cost -= costs.cost_usd("roll", abs(cfg.package_dv01_usd))
+            roll_dv01 = abs(cfg.package_dv01_usd)
+            cost -= costs.cost_usd("roll", roll_dv01)
+            n_rolls = 1
             inception = pd.Timestamp(d)
             roll_due = inception + pd.DateOffset(months=cfg.roll_months)
             n_long = cfg.sign * cfg.package_dv01_usd / ctx.dv01(d, "long")
@@ -189,7 +218,11 @@ def simulate(
                 "mtm": mtm,
                 "cross": cross,
                 "cost": cost,
+                "initiate_dv01_usd": 0.0,
+                "hedge_dv01_usd": hedge_dv01,
+                "roll_dv01_usd": roll_dv01,
                 "n_hedges": n_hedges,
+                "n_rolls": n_rolls,
                 "long_notional": n_long,
                 "short_notional": n_short,
                 "position_age_years": (pd.Timestamp(d) - inception).days / 365.0,

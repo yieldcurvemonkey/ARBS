@@ -17,7 +17,9 @@ import statsmodels.api as sm
 
 __all__ = [
     "RegressionResult",
+    "WalkForwardFit",
     "changes_regression",
+    "expanding_residual",
     "levels_regression",
     "frequency_ladder",
     "durbin_watson",
@@ -194,6 +196,103 @@ def ar1_half_life_days(
     if not np.isfinite(adf_p) or adf_p > float(adf_pvalue_threshold):
         return float("inf")
     return float(np.log(0.5) / np.log(phi))
+
+
+@dataclass(frozen=True)
+class WalkForwardFit:
+    """A causal regression fit: the betas at date ``t`` never saw date ``t``.
+
+    ``betas`` is the per-date coefficient vintage, which is what a hedge
+    frozen at the entry date is frozen TO (Task 18 requirement 2). Keeping it
+    is the difference between being able to freeze the hedge and only being
+    able to claim you did.
+    """
+
+    residual: pd.Series = field(repr=False)
+    betas: pd.DataFrame = field(repr=False)
+    min_periods: int = 252
+    refit_every: int = 1
+    kind: str = "expanding"
+    n_fitted: int = 0
+
+
+def expanding_residual(
+    spread_bp,
+    drivers: Dict[str, pd.Series],
+    *,
+    min_periods: int = 252,
+    refit_every: int = 1,
+) -> WalkForwardFit:
+    """Walk-forward levels residual. **The betas at ``t`` see only data before ``t``.**
+
+    This exists because :func:`levels_regression` fits ONE set of betas on the
+    WHOLE requested window and applies them to every date in it, so every point
+    of its residual before the end of the sample was computed with coefficients
+    that saw data from after that point. Measured directly in Task 15, holding
+    entry rule, exit rule and sign identical and changing ONLY the beta
+    vintage: an apparent +12.313bp/trade became +3.796bp expanding and
+    **+0.127bp gross with the hedge frozen at the entry date**. The look-ahead
+    was worth roughly **8.5bp/trade**, which is larger than any edge this study
+    has measured. A full-sample residual must never reach a signal.
+
+    The fit at date ``t`` uses ``spread_bp``/``drivers`` strictly BEFORE ``t``
+    (``df.iloc[:i]``), so the residual at ``t`` is out-of-sample by
+    construction and the causality can be checked mechanically rather than
+    asserted -- shock the tail of the input and the head of the residual does
+    not move (``backtest.audit_causal_betas``). ``levels_regression``'s
+    residual fails that same check by more than a basis point, which is how
+    the checker itself was verified against an input whose answer was known.
+
+    ``refit_every`` re-estimates every N-th row and carries the previous
+    vintage in between; that is still causal (an older vintage saw strictly
+    less), it is only cheaper.
+    """
+    y = pd.Series(spread_bp).astype(float).rename("_y_")
+    X = pd.DataFrame({k: pd.Series(v).astype(float) for k, v in drivers.items()})
+    df = pd.concat([y, X], axis=1)
+    cols = [c for c in df.columns if c != "_y_"]
+    if not cols:
+        raise ValueError("expanding_residual needs at least one driver")
+
+    idx = df.index
+    resid = pd.Series(np.nan, index=idx, dtype=float)
+    betas = pd.DataFrame(np.nan, index=idx, columns=["const"] + cols, dtype=float)
+    vintage = pd.Series(pd.NaT, index=idx, dtype="datetime64[ns]")
+
+    coef = None
+    coef_date = None
+    n_fitted = 0
+    values = df.to_numpy(dtype=float)
+    y_col = list(df.columns).index("_y_")
+    x_cols = [list(df.columns).index(c) for c in cols]
+    for i, ts in enumerate(idx):
+        if i >= min_periods and (coef is None or i % max(int(refit_every), 1) == 0):
+            hist = values[:i]
+            ok = np.isfinite(hist).all(axis=1)
+            if ok.sum() >= min_periods:
+                h = hist[ok]
+                A = np.column_stack([np.ones(len(h))] + [h[:, j] for j in x_cols])
+                coef = np.linalg.lstsq(A, h[:, y_col], rcond=None)[0]
+                coef_date = idx[i - 1]
+                n_fitted += 1
+        if coef is None:
+            continue
+        row = values[i]
+        if not np.isfinite(row[[y_col] + x_cols]).all():
+            continue
+        pred = coef[0] + float(np.dot(coef[1:], row[x_cols]))
+        resid.iloc[i] = float(row[y_col]) - pred
+        betas.iloc[i] = coef
+        vintage.iloc[i] = coef_date
+
+    betas["vintage_date"] = vintage
+    resid.attrs["beta_vintage"] = "expanding"
+    resid.attrs["causal"] = True
+    resid.attrs["min_periods"] = int(min_periods)
+    return WalkForwardFit(
+        residual=resid, betas=betas, min_periods=int(min_periods),
+        refit_every=int(refit_every), kind="expanding", n_fitted=n_fitted,
+    )
 
 
 def residual_z(resid, *, window: int = 252, min_periods: int = 126) -> pd.Series:

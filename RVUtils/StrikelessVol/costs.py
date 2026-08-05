@@ -7,9 +7,9 @@ constraint here, so the conclusion is stated in clips, not in ratios.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
-__all__ = ["CostSchedule", "FREE", "MAKER", "TAKER"]
+__all__ = ["CostSchedule", "FREE", "MAKER", "TAKER", "charge_usd"]
 
 
 @dataclass(frozen=True)
@@ -41,6 +41,49 @@ class CostSchedule:
             else 1.0
         )
         return self.multiplier * rate_bp * dv01 * size_factor
+
+
+def charge_usd(
+    volumes,
+    schedule: CostSchedule,
+    *,
+    multiplier: float | None = None,
+    roll_charged: bool = True,
+):
+    """Fee, in dollars, for a frame of traded-risk volumes. Non-negative.
+
+    ``volumes`` is a DataFrame carrying ``replication.TRADED_DV01_COLS`` -- the
+    RISK traded per day, which ``simulate`` records separately from the fee
+    precisely so the same path can be repriced. Two knobs matter and both are
+    reported as their own dimension in :func:`report.cost_table`:
+
+    * ``multiplier`` -- costs are first-order here (41% of gross at 1x on the
+      static long, 83% at 2x), so no number is quoted at one multiplier only.
+    * ``roll_charged`` -- whether the annual roll is charged at all. That
+      single convention was measured at **67.5% of the static book's
+      headline**, which makes it a result in its own right rather than a
+      modelling detail to bury inside a total.
+    """
+    import pandas as pd
+
+    from RVUtils.StrikelessVol.replication import COST_KIND_BY_VOLUME_COL
+
+    sched = schedule if multiplier is None else replace(schedule, multiplier=float(multiplier))
+    out = pd.Series(0.0, index=volumes.index)
+    for col, kind in COST_KIND_BY_VOLUME_COL.items():
+        if col not in volumes.columns:
+            continue
+        if kind == "roll" and not roll_charged:
+            continue
+        vol = volumes[col].astype(float).fillna(0.0)
+        if sched.clip_exponent:
+            out = out + vol.map(lambda v: sched.cost_usd(kind, v))
+        else:
+            # exactly linear in the volume when there is no size penalty
+            rate = {"initiate": sched.initiate_bp, "hedge": sched.hedge_bp,
+                    "roll": sched.roll_bp}[kind]
+            out = out + sched.multiplier * rate * vol.abs()
+    return out
 
 
 FREE = CostSchedule(multiplier=0.0)

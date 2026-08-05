@@ -50,7 +50,16 @@ import pandas as pd
 
 from RVUtils.StrikelessVol.conventions import TRADING_DAYS
 
-__all__ = ["distribution_stats", "mirror_split", "residual_stats", "vol_beta"]
+__all__ = [
+    "cost_table",
+    "distribution_stats",
+    "league_table",
+    "ledger_attribution",
+    "mirror_split",
+    "per_year_attribution",
+    "residual_stats",
+    "vol_beta",
+]
 
 
 def distribution_stats(daily_pnl: pd.Series) -> dict:
@@ -276,3 +285,314 @@ def vol_beta(pnl: pd.Series, vol_changes: pd.Series) -> dict:
         return {"corr": float("nan"), "beta": float("nan"), "n": int(len(df))}
     beta = float(np.polyfit(df["v"], df["p"], 1)[0])
     return {"corr": float(df["p"].corr(df["v"])), "beta": beta, "n": int(len(df))}
+
+
+# --------------------------------------------------------------- Task 18 panels
+
+#: Ranking keys this module refuses, with the measurement that disqualified each.
+FORBIDDEN_RANK_KEYS = {
+    "sharpe": (
+        "Sharpe is actively misleading on this instrument: both Task 13 placebo "
+        "pairs out-Sharpe every real pair (+0.475, +0.343) while running the "
+        "OPPOSITE carry sign, and a DV01-matched zero-convexity twin prints a "
+        "better Sharpe than the convex book on zero gamma. Rank on vol_corr, "
+        "harvest_pnl_share or carry_sign."
+    ),
+    "sharpe_annualised": "see 'sharpe'",
+    "skew": (
+        "Raw daily-P&L skew carries no information about convexity here: the "
+        "zero-convexity twin prints +0.288 against the real package's +0.087, "
+        "because ~95.6% of daily variance is unhedged first-order slope."
+    ),
+    "resid_skew": (
+        "resid_skew may be REPORTED, never acted on -- not a gate, ranking key, "
+        "evidence or tiebreaker. It was 1-for-2 on the only cases where the "
+        "truth was known independently."
+    ),
+    "kurtosis": "a shape statistic on a series that is ~96% linear slope exposure",
+}
+
+_REQUIREMENT_PREFIX = "req_"
+
+
+def _harvest_shares(led: pd.DataFrame) -> tuple:
+    """``(flow_ratio, pnl_share)`` -- a book-size measure and a signed share.
+
+    They are different objects and were once conflated under the single name
+    ``harvest_to_mtm``: that quantity was built from gross daily ABSOLUTE
+    flows, so it measured how big the increment book was, not what share of
+    P&L it contributed. Both are reported, separately, and the old name is not
+    reintroduced.
+    """
+    mtm_flow = float(led["mtm"].abs().sum())
+    flow_ratio = float(led["harvest"].abs().sum() / mtm_flow) if mtm_flow else float("nan")
+    denom = sum(abs(float(led[c].sum())) for c in ("carry", "harvest", "mtm"))
+    pnl_share = float(led["harvest"].sum() / denom) if denom else float("nan")
+    return flow_ratio, pnl_share
+
+
+def _cost_at(res, multiplier: float, *, schedule=None, roll_charged: bool = True) -> float:
+    """The run's charge at ``multiplier``, in dollars, as a positive number.
+
+    With ``schedule`` given the fee is recomputed from the ledger's traded-risk
+    volumes, which is the only correct route when the run itself used ``FREE``
+    (scaling zero by two is still zero). Without it, the run's own realised
+    charge is scaled -- the cheap path, and the one not to quote from a
+    zero-cost run.
+    """
+    from RVUtils.StrikelessVol.costs import charge_usd
+
+    if schedule is not None:
+        return float(charge_usd(res.ledger, schedule, multiplier=multiplier,
+                                roll_charged=roll_charged).sum())
+    return float(-res.ledger["cost"].sum()) * float(multiplier)
+
+
+def league_table(
+    results,
+    *,
+    grid=None,
+    n_trials=None,
+    cost_multipliers=(0.0, 1.0, 2.0),
+    cost_schedule=None,
+    rank_by=None,
+    vol_changes_by_pair=None,
+) -> pd.DataFrame:
+    """The honesty panel: costs at 0x/1x/2x, DSR on the FULL trial count, verdict.
+
+    Three things this enforces rather than reports.
+
+    **The DSR trial count.** ``grid`` must cover every pair being ranked. A
+    per-pair slice deflates by a fraction of the searches actually run, which
+    is the cheapest way to manufacture a surviving row, so it raises instead.
+    ``n_trials``, if given, must equal the grid's length -- to account for other
+    families, concatenate their grids and pass the whole thing.
+
+    **The six requirements.** Every row reports each of them as ``req_*``, and a
+    row that cannot report all six met is downgraded out of ``ALIVE`` to
+    ``INELIGIBLE``. Task 15's +8.46bp/trade headline became -1.87bp once they
+    were applied; a verdict issued without them is a verdict about a different
+    strategy.
+
+    **The ranking key.** ``rank_by`` refuses Sharpe, raw skew, kurtosis and
+    ``resid_skew`` -- see ``FORBIDDEN_RANK_KEYS`` for the measurement behind
+    each. Rank on ``vol_corr``, ``harvest_pnl_share`` and ``carry_sign``.
+
+    ``verdict`` itself is ``RVUtils.SFRRVLab.stats.verdict``, reused verbatim:
+    the taxonomy is repo-wide and this study does not get its own.
+    """
+    from RVUtils.SFRRVLab.stats import deflated_for_grid, nw_tstat, verdict
+
+    if rank_by:
+        for key in rank_by:
+            if key in FORBIDDEN_RANK_KEYS:
+                raise ValueError(
+                    f"refusing to rank on {key!r}: {FORBIDDEN_RANK_KEYS[key]}"
+                )
+
+    if grid is not None:
+        if "pair" in grid.columns:
+            missing = {r.pair_name for r in results} - set(grid["pair"].astype(str))
+            if missing:
+                raise ValueError(
+                    "grid looks like a per-pair slice: it has no rows for "
+                    f"{sorted(missing)}. deflated_for_grid must receive the FULL "
+                    "trial count across every pair and family, not one pair's."
+                )
+        if "sharpe" not in grid.columns:
+            raise ValueError("grid must carry a 'sharpe' column for deflation")
+        if n_trials is not None and int(n_trials) != len(grid):
+            raise ValueError(
+                f"n_trials={n_trials} does not match the grid's {len(grid)} rows; "
+                "pass the full concatenated grid rather than a declared count"
+            )
+
+    median_net_bp = (float(grid["total_net_bp"].median())
+                     if grid is not None and "total_net_bp" in grid.columns else 0.0)
+
+    rows = []
+    for res in results:
+        trades = res.trades
+        n = int(len(trades))
+        gross_usd = float(trades["gross_usd"].sum()) if n else 0.0
+        gross_bp = float(trades["gross_bp"].sum()) if n else 0.0
+        dv01 = res.stats.get("realised_dv01_mean_usd", float("nan"))
+        usable_dv01 = bool(np.isfinite(dv01)) and dv01 != 0.0
+        cost_usd = {m: _cost_at(res, m, schedule=cost_schedule)
+                    for m in cost_multipliers}
+        one_x = cost_usd.get(1.0, float(-res.ledger["cost"].sum()))
+        two_x = cost_usd.get(2.0, 2.0 * one_x)
+        one_x_bp = one_x / dv01 if usable_dv01 else float("nan")
+        two_x_bp = two_x / dv01 if usable_dv01 else float("nan")
+
+        dsr = (deflated_for_grid(res.daily_pnl, grid) if grid is not None
+               else {"dsr_prob": float("nan")})
+        net1_bp, net2_bp = gross_bp - one_x_bp, gross_bp - two_x_bp
+        maker_bp = gross_bp - 0.5 * one_x_bp
+
+        led = res.ledger
+        flow_ratio, pnl_share = _harvest_shares(led)
+        vol_corr = float("nan")
+        if vol_changes_by_pair and res.pair_name in vol_changes_by_pair:
+            vol_corr = vol_beta(res.daily_pnl, vol_changes_by_pair[res.pair_name])["corr"]
+
+        base = verdict(
+            net_bp_at_taker=net2_bp,
+            net_bp_at_maker=maker_bp,
+            dsr_prob=float(dsr.get("dsr_prob") or 0.0),
+            median_net_bp=median_net_bp,
+            n_trades=n,
+        )
+        flags = res.requirements
+        if base == "ALIVE" and not flags.all_met:
+            base = f"INELIGIBLE (requirements unmet: {', '.join(flags.unmet)})"
+
+        row = {
+            "pair": res.pair_name,
+            "book": res.config.get("book", "package"),
+            "config": res.config,
+            "n_trades": n,
+            "n_distinct_episodes": int(res.stats.get("n_distinct_episodes", n)),
+            "hit": float((trades["net_usd"] > 0).mean()) if n else float("nan"),
+            "gross_usd": gross_usd,
+            "gross_bp": gross_bp,
+            "net_1x_usd": gross_usd - one_x,
+            "net_2x_usd": gross_usd - two_x,
+            "net_1x_bp": net1_bp,
+            "net_2x_bp": net2_bp,
+            "cost_1x_usd": one_x,
+            "realised_dv01_mean_usd": dv01,
+            "t_stat": nw_tstat(res.daily_pnl.dropna(), lags=5),
+            "sharpe": res.stats.get("sharpe_annualised"),
+            "skew": res.stats.get("skew"),
+            "carry_sign": int(np.sign(float(led["carry"].sum()))),
+            "harvest_pnl_share": pnl_share,
+            "harvest_flow_ratio": flow_ratio,
+            "vol_corr": vol_corr,
+            "dsr_prob": dsr.get("dsr_prob"),
+            "n_trials": int(len(grid)) if grid is not None else float("nan"),
+            "requirements_met": bool(flags.all_met),
+            "verdict": base,
+        }
+        row.update(flags.as_columns(_REQUIREMENT_PREFIX))
+        rows.append(row)
+
+    out = pd.DataFrame(rows)
+    if rank_by and len(out):
+        out = out.sort_values(list(rank_by), ascending=False).reset_index(drop=True)
+    return out
+
+
+def ledger_attribution(results) -> pd.DataFrame:
+    """H10: is the harvest near-uniformly positive while total P&L is MTM-driven?
+
+    ``harvest_flow_ratio`` is gross daily absolute harvest over gross daily
+    absolute MTM -- a measure of the increment book's SIZE, not a share of P&L.
+    ``harvest_pnl_share`` is the signed contribution share. Reporting only one
+    of them (under either name) is what the amendment after Task 13 exists to
+    prevent.
+    """
+    rows = []
+    for res in results:
+        led = res.ledger
+        flow_ratio, pnl_share = _harvest_shares(led)
+        rows.append({
+            "pair": res.pair_name,
+            "book": res.config.get("book", "package"),
+            "carry": float(led["carry"].sum()),
+            "harvest": float(led["harvest"].sum()),
+            "mtm": float(led["mtm"].sum()),
+            "cost": float(led["cost"].sum()),
+            "cross": float(led["cross"].sum()),
+            "total": float(led["total"].sum()),
+            "harvest_positive_share": float((led["harvest"] > 0).mean()),
+            "harvest_flow_ratio": flow_ratio,
+            "harvest_pnl_share": pnl_share,
+            "n_hedges": int(led["n_hedges"].sum()) if "n_hedges" in led else 0,
+            "n_rolls": int(led["n_rolls"].sum()) if "n_rolls" in led else 0,
+            "realised_dv01_mean_usd": res.stats.get("realised_dv01_mean_usd",
+                                                    float("nan")),
+        })
+    return pd.DataFrame(rows)
+
+
+def cost_table(
+    results,
+    *,
+    schedule,
+    multipliers=(0.0, 1.0, 2.0),
+    roll_conventions=(True, False),
+) -> pd.DataFrame:
+    """Costs as their own result: 0x/1x/2x AND the roll-charge convention.
+
+    Costs are first-order on this book -- 41% of gross at 1x on the static
+    long, 83% at 2x -- so no P&L number in this study is quoted at one
+    multiplier. Separately, **whether the annual roll is charged at all was
+    measured at 67.5% of the static book's headline**, which makes it a row in
+    this table rather than an assumption buried inside a total.
+
+    The fee is recomputed from the ledger's traded-risk VOLUMES, so a run made
+    at any schedule can be repriced at any other without re-simulating.
+    """
+    from RVUtils.StrikelessVol.costs import charge_usd
+
+    rows = []
+    for res in results:
+        led = res.ledger
+        gross = float(led[["carry", "harvest", "mtm", "cross"]].sum().sum())
+        dv01 = res.stats.get("realised_dv01_mean_usd", float("nan"))
+        usable = bool(np.isfinite(dv01)) and dv01 != 0.0
+        for m in multipliers:
+            for roll_charged in roll_conventions:
+                cost = float(charge_usd(led, schedule, multiplier=m,
+                                        roll_charged=bool(roll_charged)).sum())
+                net = gross - cost
+                rows.append({
+                    "pair": res.pair_name,
+                    "book": res.config.get("book", "package"),
+                    "cost_multiplier": float(m),
+                    "roll_charged": bool(roll_charged),
+                    "gross_usd": gross,
+                    "cost_usd": cost,
+                    "net_usd": net,
+                    "net_bp": net / dv01 if usable else float("nan"),
+                    # a magnitude share: |cost| over |gross|, so a losing book
+                    # does not report a negative "share of gross"
+                    "cost_share_of_gross": (cost / abs(gross)) if gross else float("nan"),
+                })
+    out = pd.DataFrame(rows)
+    if len(out):
+        out["roll_charged"] = out["roll_charged"].astype(bool)
+    return out
+
+
+def per_year_attribution(results) -> pd.DataFrame:
+    """P&L by calendar year, and what the lifetime looks like without each one.
+
+    The static long is concentrated: 2022 alone was +$5.1M of a +$0.7M lifetime
+    total, i.e. materially NEGATIVE ex-2022. ``share_of_lifetime`` above 1 with a
+    negative ``lifetime_ex_year_usd`` is how that shows up rather than being
+    averaged away into a nine-year mean.
+    """
+    rows = []
+    for res in results:
+        pnl = pd.Series(res.daily_pnl).astype(float).dropna()
+        if pnl.empty:
+            continue
+        total = float(pnl.sum())
+        dv01 = res.stats.get("realised_dv01_mean_usd", float("nan"))
+        usable = bool(np.isfinite(dv01)) and dv01 != 0.0
+        for year, grp in pnl.groupby(pnl.index.year):
+            y = float(grp.sum())
+            rows.append({
+                "pair": res.pair_name,
+                "book": res.config.get("book", "package"),
+                "year": int(year),
+                "n_days": int(len(grp)),
+                "pnl_usd": y,
+                "pnl_bp": y / dv01 if usable else float("nan"),
+                "share_of_lifetime": y / total if total else float("nan"),
+                "lifetime_usd": total,
+                "lifetime_ex_year_usd": total - y,
+            })
+    return pd.DataFrame(rows)
