@@ -151,13 +151,20 @@ def pricer(real_curves):
 @pytest.mark.network
 @pytest.mark.slow
 def test_pricer_notionals_reproduce_build_package(pricer, real_curves):
-    """The sign test. A steepener would pass every ledger check and fail the gate.
+    """The sign test, and it has to be its own test.
 
     ``simulate`` sizes with ``n = sign * package_dv01 / ctx.dv01(...)``, so the
     sign convention ``CurvePricer.dv01`` returns is what decides whether the
     simulated position is the flattener (receive the longer forward, long
-    convexity) or its mirror image. Pinned against ``build_package``, which is
-    the package the greeks tests were all validated on.
+    convexity) or its mirror image. A steepener would satisfy every arithmetic
+    check in this module -- and, measured, two of the three gate criteria. Its
+    ledger is the negative of the flattener's before costs (costs are a
+    magnitude fee and are identical in both), so on 2017-2026 it prints skew
+    -0.0815, which passes ``skew > -1.0``, and Sharpe -0.111, which passes
+    ``-0.5 < sharpe < 1.5``. Only the vol correlation flips (-0.632 against
+    +0.635). So the direction cannot be left to the gate; it is pinned here
+    against ``build_package``, which is the package every greeks test was
+    validated on.
     """
     from RVUtils.StrikelessVol.greeks import build_package
 
