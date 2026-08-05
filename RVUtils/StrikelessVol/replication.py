@@ -325,11 +325,19 @@ class CurvePricer:
         a negative rateslib notional on it (``PAYER_NOTIONAL_SIGN``). A unit-
         notional payer swap has a positive repriced dv01, so returning it
         unnegated would hand ``simulate`` a payer on the longer leg and a
-        receiver on the shorter -- a steepener, short convexity, the exact
-        sign error the gate's skew test is built to catch. The negation makes
-        the notionals reproduce ``greeks.build_leg``'s own direction
-        convention identically for both legs and both signs, which is pinned
-        by ``test_pricer_notionals_reproduce_build_package``.
+        receiver on the shorter -- a steepener, i.e. the mirror image of the
+        intended position with SHORT convexity.
+
+        **Nothing in the distributional gate would catch that.** Measured on
+        real curves over 2017-2026, the steepener prints daily P&L skew of
+        -0.0815 (clearing ``> -1.0``) and a Sharpe of -0.111 (inside
+        ``-0.5..1.5``); only the vol correlation flips sign, and that statistic
+        is inherited from the market rather than from the position (see
+        ``ZeroConvexityPricer``). So the direction is pinned HERE, by
+        construction and by a dedicated test --
+        ``test_pricer_notionals_reproduce_build_package``, which checks the
+        notionals against ``greeks.build_leg``'s own direction convention for
+        both legs and both signs -- and not left to any downstream statistic.
         """
         key = (pd.Timestamp(date), leg)
         out = self._dv01_cache.get(key)

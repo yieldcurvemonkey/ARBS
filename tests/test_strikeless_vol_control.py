@@ -15,6 +15,7 @@ from RVUtils.StrikelessVol.replication import (
 )
 from RVUtils.StrikelessVol.report import (
     distribution_stats,
+    mirror_split,
     residual_stats,
     vol_beta,
 )
@@ -140,6 +141,55 @@ def test_residual_stats_reports_nan_rather_than_noise_on_a_purely_linear_book():
     assert out["r2"] == pytest.approx(1.0, abs=1e-12)
     assert np.isnan(out["resid_skew"])
     assert np.isnan(out["resid_kurtosis"])
+
+
+def test_mirror_split_cancels_misfit_that_fools_the_unpaired_read():
+    """The reason the paired difference is the test statistic and not advice.
+
+    Plants a book that is linear + convex + a NON-CONVEX asymmetric misfit term
+    (a cubic in the driver, which the linear regression cannot remove and which
+    is not part of the position's convexity). The misfit is large enough to
+    flip the unpaired ``resid_skew`` sign on the convex book -- exactly the
+    failure measured on the placebo pair. Differencing against the mirror
+    cancels it, because misfit is common to both while the quadratic is not.
+    """
+    rng = np.random.default_rng(11)
+    ds = pd.Series(rng.normal(0.0, 1.0, 4000))
+    misfit = -900.0 * ds ** 3  # asymmetric, not convexity, common to both books
+    convex = 0.5 * 200.0 * ds ** 2
+
+    long_pnl = -100_000.0 * ds + convex + misfit
+    short_pnl = +100_000.0 * ds - convex + misfit
+
+    # unpaired, the misfit wins and the convex book reads NEGATIVE
+    assert residual_stats(long_pnl, ds)["resid_skew"] < 0.0
+    # paired, it cancels and the sign is recovered
+    out = mirror_split(long_pnl, short_pnl, ds)
+    assert out["split"] > 0.0
+    assert out["split"] == pytest.approx(
+        residual_stats(long_pnl, ds)["resid_skew"]
+        - residual_stats(short_pnl, ds)["resid_skew"],
+        rel=1e-12,
+    )
+
+
+def test_mirror_split_reports_unusable_below_the_calibrated_r2_cut():
+    """The thresholds are calibrated, so they have to be enforced somewhere."""
+    from RVUtils.StrikelessVol.report import RESID_R2_FLOOR, RESID_R2_SIGN_USABLE
+
+    assert RESID_R2_FLOOR < RESID_R2_SIGN_USABLE  # floor is the looser cut
+    rng = np.random.default_rng(12)
+    ds = pd.Series(rng.normal(0.0, 1.0, 2000))
+    noisy = pd.Series(rng.normal(0.0, 120_000.0, 2000))  # swamps the linear term
+
+    out = mirror_split(-100_000.0 * ds + noisy, 100_000.0 * ds + noisy, ds)
+    assert out["min_r2"] < RESID_R2_SIGN_USABLE
+    assert out["usable"] is False
+
+    clean = mirror_split(-100_000.0 * ds + 0.5 * 200.0 * ds ** 2,
+                         100_000.0 * ds - 0.5 * 200.0 * ds ** 2, ds)
+    assert clean["min_r2"] > RESID_R2_SIGN_USABLE
+    assert clean["usable"] is True
 
 
 def test_distribution_stats_keeps_the_same_keys_when_empty():
@@ -537,6 +587,55 @@ def test_harvest_matches_an_independent_replay_on_real_curves(pricer):
 
 @pytest.mark.network
 @pytest.mark.slow
+def test_the_book_stays_dv01_neutral_while_its_size_drifts(pricer):
+    """Both halves of what the hedge rule actually does, on real curves.
+
+    Committed as an assertion because the claim it replaces -- that the book
+    shrinks ~10% over a roll period -- was written into a report as fact and
+    turned out to be false when measured (the held DV01 averages ~target). The
+    measurement should be as durable as the claim was.
+
+    NEUTRALITY is enforced: after each resize the package's net DV01 is ~0,
+    which is the point of targeting the held short leg rather than a fixed
+    dollar figure (see ``simulate``'s hedge branch). SIZE is not: it is free to
+    drift with both legs' repriced DV01s, and it does. Dollar P&L from any run
+    is therefore on a moving base.
+    """
+    dates = pricer.dates()
+    led = simulate(
+        pricer, dates,
+        ReplicationConfig(trigger_bp=25.0, roll_months=NEVER,
+                          package_dv01_usd=PACKAGE_DV01),
+        FREE,
+    )
+    # true signed DV01s: pricer.dv01() returns the negated per-unit value
+    long_dv01 = pd.Series(
+        [-led.loc[d, "long_notional"] * pricer.dv01(d, "long") for d in dates],
+        index=dates,
+    )
+    short_dv01 = pd.Series(
+        [-led.loc[d, "short_notional"] * pricer.dv01(d, "short") for d in dates],
+        index=dates,
+    )
+
+    # 1. sized to target at inception, and neutral there
+    assert abs(long_dv01.iloc[0]) == pytest.approx(PACKAGE_DV01, rel=1e-9)
+    assert long_dv01.iloc[0] + short_dv01.iloc[0] == pytest.approx(0.0, abs=1e-6)
+
+    # 2. neutral again after every resize -- the (Task 13) hedge-rule change
+    hedged = led.index[led["n_hedges"] == 1]
+    assert len(hedged) >= 3
+    for d in hedged:
+        assert long_dv01[d] + short_dv01[d] == pytest.approx(0.0, abs=1e-6)
+
+    # 3. but the SIZE drifts: it is not pinned to the target
+    size = long_dv01.abs()
+    assert size.max() / size.min() > 1.10
+    assert not (size.between(0.99 * PACKAGE_DV01, 1.01 * PACKAGE_DV01)).all()
+
+
+@pytest.mark.network
+@pytest.mark.slow
 def test_the_simulated_position_gains_when_the_curve_flattens(pricer, real_curves):
     """Direction, measured rather than asserted: a flattener is short the slope.
 
@@ -623,11 +722,12 @@ def test_the_zero_convexity_twin_clears_the_old_gate_criteria():
     correlation to changes in implied vol > 0, Sharpe in -0.5..1.5. Every one
     of those is cleared here by a book with **no convexity in it at all** -- a
     constant-maturity, DV01-matched, gamma-free, carry-free exposure to the
-    same slope -- and cleared with better numbers than the real package on
-    each. The mechanism is that all three statistics are inherited from the
-    slope itself: raw skew from ``skew(d spread)``, and ``vol_corr`` from the
-    market's own ``corr(-d spread, d vol)``, neither of which knows anything
-    about gamma.
+    same slope. It clears them BETTER than the real package on skew (+0.288 vs
+    +0.087) and Sharpe (+0.228 vs +0.046), and effectively EQUAL on the vol
+    correlation (+0.6129 vs +0.6353). The mechanism is that all three
+    statistics are inherited from the slope itself: raw skew from
+    ``skew(d spread)``, and ``vol_corr`` from the market's own
+    ``corr(-d spread, d vol)``, neither of which knows anything about gamma.
 
     So these criteria must never be reinstated as evidence of long convexity.
     If someone tries, this test is the counterexample, runnable, on the same
@@ -662,7 +762,23 @@ def test_the_zero_convexity_twin_clears_the_old_gate_criteria():
 @pytest.mark.network
 @pytest.mark.slow
 def test_static_long_flattener_has_the_long_vol_signature():
-    """THE GATE. A long-convexity position cannot have short-vol skew."""
+    """The original Task 13 gate. **These assertions do not discriminate.**
+
+    Kept because it is a real end-to-end smoke test -- it runs the whole
+    machinery on ten years of real curves and would catch a crash, an empty
+    sample, or a wildly wrong scale -- and because its numbers are the
+    reference the study was originally specified against. It is NOT evidence
+    of long convexity, and its title should be read as historical.
+
+    Every assertion below is also satisfied by books with no long convexity:
+    the short-convexity steepener clears the skew and Sharpe bounds
+    (-0.0815 and -0.111), and the DV01-matched zero-convexity twin clears all
+    four on $0 of harvest across 0 hedges, with a BETTER skew (+0.288) and
+    Sharpe (+0.228) than the real package. See
+    ``test_the_zero_convexity_twin_clears_the_old_gate_criteria`` forty lines
+    below, which is the counterexample, and ``report.residual_stats`` for what
+    replaced these criteria.
+    """
     from scripts.sv_static_long_control import run_control
 
     res = run_control(

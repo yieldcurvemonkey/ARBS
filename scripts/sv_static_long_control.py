@@ -17,15 +17,19 @@ originally specified. Daily P&L skew, the monthly correlation to changes in
 implied vol, and the Sharpe were each measured against two null models --
 the short-convexity steepener and the DV01-matched zero-convexity twin
 (:class:`replication.ZeroConvexityPricer`) -- and **all three criteria are
-cleared by books with no long convexity in them**, the twin scoring better
-than the real package on every one. ``vol_corr`` in particular is a property
-of the market's slope/vol comovement that anything carrying this DV01
-inherits; it is not a property of gamma.
+cleared by books with no long convexity in them**. The twin, on $0 of harvest
+across 0 hedges, scores BETTER than the real package on skew (+0.288 vs
++0.087) and Sharpe (+0.228 vs +0.046) and effectively the SAME on the vol
+correlation (+0.6129 vs +0.6353). ``vol_corr`` in particular is a property of
+the market's slope/vol comovement that anything carrying this DV01 inherits;
+it is not a property of gamma.
 
 The statistics that do separate them, and the ones downstream work should
-rank on, are :func:`report.residual_stats`' ``resid_skew`` (the shape left
-after the linear slope term is removed), the SIGN OF CARRY, and the harvest
-flow ratio. See the Task 13 report for the five-way comparison.
+rank on, are :func:`report.residual_stats`' ``resid_skew`` **as a paired
+difference against the position's mirror** (:func:`report.mirror_split`, and
+only where the linear fit is good enough -- see its thresholds), the SIGN OF
+CARRY, and the harvest flow ratio. See the Task 13 report for the seven-way
+comparison.
 
 The roll is implemented by SEGMENTATION: one ``CurvePricer`` and one
 ``simulate`` call per roll period, each holding one package aged from its own
@@ -104,29 +108,6 @@ def roll_segments(dates: Sequence, roll_months: int = 12) -> List[Tuple[int, int
         bounds.append((i, j))
         i = j
     return bounds
-
-
-def constant_maturity_spread(curve_map: dict, dates: Sequence, pair) -> pd.Series:
-    """The pair's constant-maturity slope in bp, one point per date.
-
-    This is the linear term :func:`report.residual_stats` removes, and it must
-    be the PAIR'S OWN slope -- a placebo pair regressed against the study
-    pair's slope would have most of its variance left in the residual and the
-    comparison would mean nothing.
-    """
-    return pd.Series(
-        [
-            float(slope_bp(
-                short_rate=curve_map[d].fair_rate(
-                    curve_map[d].build_irswap(fwd=pair.short.fwd, tenor=pair.short.tail)),
-                long_rate=curve_map[d].fair_rate(
-                    curve_map[d].build_irswap(fwd=pair.long.fwd, tenor=pair.long.tail)),
-            ))
-            for d in dates
-        ],
-        index=list(dates),
-        name="spread_bp",
-    )
 
 
 def _stitch(frames: Sequence[pd.DataFrame]) -> pd.DataFrame:
