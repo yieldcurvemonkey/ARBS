@@ -4754,7 +4754,9 @@ from typing import Optional, Sequence
 
 import pandas as pd
 
-from RVUtils.StrikelessVol.factors import changes_regression, drift, levels_regression, residual_z
+from RVUtils.StrikelessVol.factors import (
+    drift, expanding_changes_residual, expanding_residual, residual_z,
+)
 from RVUtils.StrikelessVol.greeks import greeks_panel
 from RVUtils.StrikelessVol.panels import forward_rate_panel, spread_panel, umep_panel, vol_panel
 from RVUtils.StrikelessVol.strategy import SignalConfig, signal_state
@@ -4816,10 +4818,21 @@ def today_state(
             if not umep.empty:
                 drivers["umep"] = umep["umep_bp_per_year"]
 
-        chg = changes_regression(spread, drivers)
-        lev = levels_regression(spread, drivers)
-        z = residual_z(lev.residuals)
-        dr = drift(chg.residuals)
+        # WALK-FORWARD, both of them. The obvious version of these four lines
+        # is `changes_regression` / `levels_regression`, and it is wrong for
+        # anything but the last row: both fit ONE set of betas on the WHOLE
+        # window, so every earlier row of the residual was computed with
+        # coefficients that saw its future. This runner only reports
+        # `.iloc[-1]`, where a fit on [0, today] is legitimately causal -- but
+        # this block is the reference panel builder the Task 23 notebooks copy,
+        # and there every row reaches a decision. Measured on the audit frame:
+        # a `drift_t` from a full-sample changes fit moves 6.1 t-units in the
+        # head of the sample when only the tail is shocked, against a veto gate
+        # of 2.0; the levels version was worth ~8.5bp/trade (Task 15).
+        chg = expanding_changes_residual(spread, drivers, min_periods=252)
+        lev = expanding_residual(spread, drivers, min_periods=252)
+        z = residual_z(lev.residual)
+        dr = drift(chg.residual)
 
         row = {
             "pair": pair.name,
@@ -4842,6 +4855,28 @@ def today_state(
 
     return pd.DataFrame(rows)
 ```
+
+**Why the walk-forward builders here, and what Task 23 must not copy.** This
+block was written as `changes_regression` / `levels_regression` and is the
+reference panel builder the Task 23 notebooks are meant to follow. Reviewed
+2026-08-04: that construction is the leaky one. `factors.changes_regression`
+and `factors.levels_regression` fit ONE set of betas on the whole requested
+window, so every row of their residuals except the last was computed with
+coefficients that saw data from after that row. For THIS runner, which reads
+only `.iloc[-1]`, a fit on `[0, today]` is causal at today and the original
+code was defensible; for a panel where every row reaches a decision it is
+exactly the ~8.5bp/trade look-ahead Task 15 measured, and for `drift_t` it is
+a veto moving 6.1 t-units in the head of the sample when only the tail is
+shocked, against a gate of 2.0. Use `expanding_changes_residual` /
+`expanding_residual` in both places, and remember they need warmup:
+`min_periods=252` for the fit plus `residual_z`'s 126 means the first ~378
+business days of any window produce NaN, and `signal_state` fails CLOSED on a
+NaN, so the `lookback_days` default must stay comfortably above that.
+
+Anything building `drift_t` for a backtest panel must additionally hand
+`causal_signals` both `changes_resid=` AND `changes_resid_fn=`; supplying only
+the series certifies the transform and the certificate then reads
+`drift_t(source uncertified)`.
 
 - [ ] **Step 4: Run both test modes**
 
@@ -4913,7 +4948,7 @@ Checked against the spec:
 - **Spec coverage.** Data facts → Tasks 3–6. Conventions → Task 1. Greeks contract (repricing, `h`-sensitivity, analytic control, mutation check) → Tasks 7–9. Four ledgers plus the cross plug → Task 12. Replication rule, trigger grid, aging, annual roll → Tasks 12–13, 18. Positive control → Task 13 (gate). Factor model, frequency ladder, levels-as-anchor → Task 14. Residual dynamics, drift, 2026 reproduction → Task 15. H2/H3 → Task 16. The rule → Task 17. Backtest, league, DSR, verdict taxonomy → Task 18. Placebos and confounds → Task 19. Constructions (H9) → Task 20. Cross-market (H8) → Task 21. Runner → Task 22. Notebooks and findings → Task 23.
 - **Known gaps, deliberate.** `fly_hedge_weights` / `compare_constructions` (Task 20) and `run_placebos` / `run_confounds` (Task 19) are specified by interface and reuse an existing solver rather than shipped as full code — they compose already-tested pieces, and writing their internals blind would invent an API for `solve_best_n_leg_hedge_pca` rather than read it. The implementer reads that function first. Every other task carries complete code.
 - **Hedge-instrument comparison** (`hedge_instrument="spot_atm"` versus `"long_leg"`) is carried in `ReplicationConfig` from Task 12 and exercised in the Task 18 grid; the spec flags it as an open implementation question, so it is a config axis rather than a decision.
-- **Type consistency.** `ForwardLeg.label` is the panel column name everywhere; `PricingContext.rate/dv01/pv/theta` signatures are identical in `SyntheticCtx` (both test modules), `CurvePricer`, and the backtest tests; `CostSchedule.cost_usd(kind, dv01)` takes the same two arguments at every call site; `RegressionResult.residuals` feeds `residual_z` and `drift` unchanged; `LEDGER_COLS` is the same five buckets in `simulate`, `run_pair` and `ledger_attribution`.
+- **Type consistency.** `ForwardLeg.label` is the panel column name everywhere; `PricingContext.rate/dv01/pv/theta` signatures are identical in `SyntheticCtx` (both test modules), `CurvePricer`, and the backtest tests; `CostSchedule.cost_usd(kind, dv01)` takes the same two arguments at every call site; `WalkForwardFit.residual` feeds `residual_z` and `drift` unchanged (**not** `RegressionResult.residuals`, as this line said until the 2026-08-04 review — both regression builders are full-sample fits and neither residual may reach a signal; see Task 22 Step 3); `LEDGER_COLS` is the same five buckets in `simulate`, `run_pair` and `ledger_attribution`.
 - **One defect found and fixed during this review.** The first draft defined `mtm` as `total_pv_change − harvest − carry`, which forces `cross` to zero by construction and would have made the reconciliation test pass vacuously — the exact failure the spec says the plug exists to catch. `mtm` is now computed independently from the base notionals and `cross` is the genuine residual. The synthetic test context was also given a rate-dependent `dv01`, without which the resize rule never fires and no ledger test proves anything about gamma scalping.
 
 ## Execution Handoff
