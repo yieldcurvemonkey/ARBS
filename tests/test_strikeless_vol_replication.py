@@ -124,3 +124,36 @@ def test_steepener_mirrors_the_flattener_ledgers():
     steep = simulate(ctx, ctx.dates, ReplicationConfig(sign=STEEPENER), FREE)
     assert flat["harvest"].sum() == pytest.approx(-steep["harvest"].sum(), rel=1e-9)
     assert flat["carry"].sum() == pytest.approx(-steep["carry"].sum(), rel=1e-9)
+
+
+def test_carry_mtm_harvest_alone_match_an_independently_repriced_total():
+    """carry + mtm + harvest, WITHOUT cross, must equal the day's actual PV
+    change -- recomputed here straight from ctx.pv() and the notionals the
+    ledger reports having held, not read off the ledger's own 'total' or
+    'cross' columns.
+
+    This is deliberately not the same check as reconcile()'s cross-near-zero
+    test: cross is defined as total_pv_change - (carry+mtm+harvest), so by
+    that definition alone cross ALWAYS absorbs whatever carry+mtm+harvest
+    gets wrong, and carry+harvest+mtm+cross sums to total_pv_change as a
+    tautology regardless of any bug in the first three. Excluding cross from
+    the comparison here is what gives a double-counted or dropped carry term
+    (inside harvest's own increment_carry, or mtm's base_carry) somewhere to
+    be caught instead of silently absorbed.
+    """
+    path = list(np.linspace(0.0, 50.0, 51)) + list(np.linspace(49.0, 0.0, 50))
+    ctx = SyntheticCtx(path)
+    led = simulate(ctx, ctx.dates, ReplicationConfig(trigger_bp=25.0), FREE)
+    assert led["n_hedges"].sum() >= 3  # several resizes, not a degenerate path
+
+    dates = list(ctx.dates)
+    held_long = led["long_notional"].shift(1).fillna(led["long_notional"].iloc[0])
+    held_short = led["short_notional"].shift(1).fillna(led["short_notional"].iloc[0])
+
+    independent_total = sum(
+        ctx.pv(dates[i], held_long.iloc[i], held_short.iloc[i])
+        - ctx.pv(dates[i - 1], held_long.iloc[i], held_short.iloc[i])
+        for i in range(1, len(dates))
+    )
+    three_bucket_total = led.iloc[1:][["carry", "mtm", "harvest"]].sum().sum()
+    assert three_bucket_total == pytest.approx(independent_total, abs=1e-3)
