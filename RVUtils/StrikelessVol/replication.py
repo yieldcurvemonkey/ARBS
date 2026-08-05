@@ -19,7 +19,14 @@ import pandas as pd
 from RVUtils.StrikelessVol.conventions import FLATTENER
 from RVUtils.StrikelessVol.costs import CostSchedule
 
-__all__ = ["CurvePricer", "PricingContext", "ReplicationConfig", "simulate", "reconcile"]
+__all__ = [
+    "CurvePricer",
+    "PricingContext",
+    "ReplicationConfig",
+    "ZeroConvexityPricer",
+    "reconcile",
+    "simulate",
+]
 
 
 class PricingContext(Protocol):
@@ -395,6 +402,96 @@ class CurvePricer:
         """One interval of repriced carry, scaled to the notionals held."""
         roll_long, roll_short = self._unit_roll(date)
         return notional_long * roll_long + notional_short * roll_short
+
+
+class ZeroConvexityPricer:
+    """The DV01-matched twin of :class:`CurvePricer` with the gamma removed.
+
+    **This is a null model, not a strategy.** It exists to answer one question:
+    does a given statistic actually detect convexity, or would it print the
+    same number for a book that has none? It carries the identical first-order
+    slope exposure (``package_dv01_usd`` per bp of the pair's slope) and
+    nothing else -- constant maturity, so no aging; constant DV01, so the
+    resize rule is a no-op and no gamma is ever scalped; no carry. Its daily
+    P&L is exactly ``-sign * package_dv01_usd * d(spread_bp)``.
+
+    Why it is committed rather than left in a review note: it was built to
+    audit Task 13's gate and it **passed every one of that gate's
+    distributional criteria, with better numbers than the real package** --
+    higher skew, comparable vol correlation, a Sharpe inside the published
+    band the real package misses. Those criteria therefore carry no
+    information about convexity, and the only way to stop them being
+    reinstated by a later reader is to keep the counterexample runnable in the
+    repo next to the thing it refutes. See
+    ``tests/test_strikeless_vol_control.py::
+    test_the_zero_convexity_twin_clears_the_old_gate_criteria``.
+
+    The mechanism is not subtle: ``vol_corr`` is inherited from the market's
+    own slope/vol comovement (``corr(-d spread, d vol)``), which anything
+    holding this DV01 inherits identically, and raw skew is inherited from
+    ``skew(d spread)``. Use :func:`report.residual_stats` instead -- the twin's
+    residual is identically zero by construction, which is the point.
+
+    Units note: this pricer's "notional" is denominated in **dollars per bp**,
+    not in swap notional, because there is no swap. ``dv01`` returns -1.0 for
+    both legs, so ``simulate``'s ``n = sign * package_dv01 / dv01`` yields
+    ``n_long = -package_dv01`` and ``n_short = +package_dv01`` -- the same
+    receive-the-longer-leg direction ``CurvePricer`` produces, in different
+    units.
+    """
+
+    def __init__(
+        self,
+        curve_map: dict,
+        pair,
+        *,
+        package_dv01_usd: float = 100_000.0,
+        sign: int = FLATTENER,
+    ):
+        # package_dv01_usd and sign are accepted for signature compatibility
+        # with CurvePricer (the runner constructs either) and deliberately
+        # unused: this pricer has no legs to size, and ``simulate`` applies
+        # both when it turns dv01() into notionals.
+        self._curves = {pd.Timestamp(k): v for k, v in curve_map.items()
+                        if v is not None and k != "live"}
+        self._dates = sorted(self._curves)
+        if not self._dates:
+            raise ValueError("ZeroConvexityPricer needs at least one non-None curve")
+        self._pair = pair
+        self._rate_cache: dict = {}
+        d0 = self._dates[0]
+        self._base = {leg: self.rate(d0, leg) for leg in ("long", "short")}
+
+    def dates(self) -> list:
+        return list(self._dates)
+
+    def rate(self, date, leg: str) -> float:
+        """Constant-maturity forward par rate -- identical to ``CurvePricer``."""
+        key = (pd.Timestamp(date), leg)
+        out = self._rate_cache.get(key)
+        if out is None:
+            curve = self._curves[pd.Timestamp(date)]
+            spec = self._pair.long if leg == "long" else self._pair.short
+            out = float(curve.fair_rate(curve.build_irswap(fwd=spec.fwd, tenor=spec.tail)))
+            self._rate_cache[key] = out
+        return out
+
+    def dv01(self, date, leg: str) -> float:
+        """Constant. That constancy IS the absence of gamma: with a fixed
+        target, ``simulate``'s ``delta_n`` is identically zero, so the resize
+        rule never fires and there is nothing to harvest."""
+        return -1.0
+
+    def pv(self, date, notional_long: float, notional_short: float) -> float:
+        """Exactly linear in the two forward rates, in bp since inception."""
+        return (
+            notional_long * (self.rate(date, "long") - self._base["long"]) * 1e4
+            + notional_short * (self.rate(date, "short") - self._base["short"]) * 1e4
+        )
+
+    def theta(self, date, notional_long: float, notional_short: float) -> float:
+        """No carry: a constant-maturity exposure does not roll down."""
+        return 0.0
 
 
 CROSS_ABS_TOL_USD: float = 1e-3

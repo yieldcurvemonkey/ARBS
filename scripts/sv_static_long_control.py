@@ -1,10 +1,31 @@
 # scripts/sv_static_long_control.py
-"""The Citi-style static-long reproduction. This is the gate on the greeks.
+"""The Citi-style static-long reproduction, and the control on the greeks.
 
 Buys the flattener, rebalances at the trigger, rolls annually, holds throughout.
-Reports the DISTRIBUTION -- skew, correlation of monthly P&L to changes in
-implied vol -- because that, not the Sharpe, is what a long-vol position must
-look like.
+
+**What this control did and did not establish (Task 13, read this before
+quoting it).** It runs end to end on real curves, it is directionally correct
+(measured, not asserted: P&L regresses on the pair's slope at -$89,910/bp
+against a -$100,000 design, R^2 0.956), its levels reproduce the desk anchors
+(spread -57bp, roll -$2,400/day, Gamma 204 $/bp^2), and its Sharpe SPREAD
+across pairs reproduces the published 0.05-0.35 band (+0.247 / +0.046 /
+-0.279 on the three USD pairs).
+
+It did **not** reproduce a distributional signature that identifies long
+convexity, because no such signature was available from the criteria
+originally specified. Daily P&L skew, the monthly correlation to changes in
+implied vol, and the Sharpe were each measured against two null models --
+the short-convexity steepener and the DV01-matched zero-convexity twin
+(:class:`replication.ZeroConvexityPricer`) -- and **all three criteria are
+cleared by books with no long convexity in them**, the twin scoring better
+than the real package on every one. ``vol_corr`` in particular is a property
+of the market's slope/vol comovement that anything carrying this DV01
+inherits; it is not a property of gamma.
+
+The statistics that do separate them, and the ones downstream work should
+rank on, are :func:`report.residual_stats`' ``resid_skew`` (the shape left
+after the linear slope term is removed), the SIGN OF CARRY, and the harvest
+flow ratio. See the Task 13 report for the five-way comparison.
 
 The roll is implemented by SEGMENTATION: one ``CurvePricer`` and one
 ``simulate`` call per roll period, each holding one package aged from its own
@@ -32,13 +53,19 @@ import pandas as pd
 from RVUtils.StrikelessVol.conventions import FLATTENER
 from RVUtils.StrikelessVol.costs import CostSchedule
 from RVUtils.StrikelessVol.panels import vol_panel
+from RVUtils.StrikelessVol.conventions import slope_bp
 from RVUtils.StrikelessVol.replication import (
     CurvePricer,
     ReplicationConfig,
+    ZeroConvexityPricer,
     reconcile,
     simulate,
 )
-from RVUtils.StrikelessVol.report import distribution_stats, vol_beta
+from RVUtils.StrikelessVol.report import (
+    distribution_stats,
+    residual_stats,
+    vol_beta,
+)
 from RVUtils.StrikelessVol.universe import ALL_PAIRS, MARKET_CURVES
 
 # Long enough that simulate's internal roll can never fire inside a segment.
@@ -80,6 +107,29 @@ def roll_segments(dates: Sequence, roll_months: int = 12) -> List[Tuple[int, int
     return bounds
 
 
+def constant_maturity_spread(curve_map: dict, dates: Sequence, pair) -> pd.Series:
+    """The pair's constant-maturity slope in bp, one point per date.
+
+    This is the linear term :func:`report.residual_stats` removes, and it must
+    be the PAIR'S OWN slope -- a placebo pair regressed against the study
+    pair's slope would have most of its variance left in the residual and the
+    comparison would mean nothing.
+    """
+    return pd.Series(
+        [
+            float(slope_bp(
+                short_rate=curve_map[d].fair_rate(
+                    curve_map[d].build_irswap(fwd=pair.short.fwd, tenor=pair.short.tail)),
+                long_rate=curve_map[d].fair_rate(
+                    curve_map[d].build_irswap(fwd=pair.long.fwd, tenor=pair.long.tail)),
+            ))
+            for d in dates
+        ],
+        index=list(dates),
+        name="spread_bp",
+    )
+
+
 def _stitch(frames: Sequence[pd.DataFrame]) -> pd.DataFrame:
     """Concatenate segment ledgers, summing flows on the shared roll dates."""
     if not frames:
@@ -104,12 +154,29 @@ def run_control(
     curve_map: dict | None = None,
     pair=None,
     with_vol: bool = True,
+    roll_charge_kind: str = "roll",
+    zero_convexity: bool = False,
 ) -> dict:
     """Run the static-long control and report its distribution.
 
     ``curve_map`` may be supplied to reuse an already-fetched set of curves
     (the fetch dominates the runtime); otherwise it is pulled from GSQUANT-RL.
     ``pair`` defaults to the headline 10Y10Y/20Y10Y slope for ``market``.
+
+    ``roll_charge_kind`` selects what an annual roll is charged as. The default
+    ``"roll"`` (0.35bp) follows the research brief's cost prior, but a roll
+    unwinds two legs and strikes two new ones, which is strictly more trading
+    than the single ``"initiate"`` (0.875bp) charge -- and the difference is
+    not academic: 9 rolls x 0.525bp x $100k is $472,500, i.e. **67% of the
+    headline lifetime P&L**. Both conventions are reported side by side rather
+    than one being picked silently.
+
+    ``zero_convexity=True`` swaps :class:`CurvePricer` for
+    :class:`ZeroConvexityPricer`, giving the DV01-matched null model with no
+    aging, no gamma and no carry. Use it to check whether a statistic detects
+    convexity or merely the slope exposure that both books share. The twin
+    does not age, so it runs as a single segment regardless of ``roll_months``
+    and is charged only the initial trade.
     """
     costs = costs or CostSchedule()
     if pair is None:
@@ -147,10 +214,15 @@ def run_control(
         package_dv01_usd=package_dv01_usd,
         sign=sign,
     )
+    # The twin does not age, so there is nothing to roll: one segment.
+    segments = ([(0, len(all_dates) - 1)] if zero_convexity
+                else roll_segments(all_dates, roll_months))
     frames: List[pd.DataFrame] = []
-    for k, (i, j) in enumerate(roll_segments(all_dates, roll_months)):
+    rates: dict = {}
+    for k, (i, j) in enumerate(segments):
         seg_dates = all_dates[i:j + 1]
-        ctx = CurvePricer(
+        maker = ZeroConvexityPricer if zero_convexity else CurvePricer
+        ctx = maker(
             {d: curve_map[d] for d in seg_dates}, pair,
             package_dv01_usd=package_dv01_usd, sign=sign,
         )
@@ -158,10 +230,22 @@ def run_control(
         if k:
             # Not a fresh trade: the previous package is unwound into this one.
             led.iloc[0, led.columns.get_loc("cost")] = -costs.cost_usd(
-                "roll", abs(package_dv01_usd)
+                roll_charge_kind, abs(package_dv01_usd)
             )
         frames.append(led)
+        # Read the constant-maturity rates off the pricer rather than
+        # rebuilding them afterwards: the long leg's are already cached there
+        # (simulate asks for one per date to run the trigger), so only the
+        # short leg is new work. Rebuilding both from the curves afterwards
+        # doubled the runtime of every call for an identical answer.
+        for d in seg_dates:
+            rates[d] = (ctx.rate(d, "short"), ctx.rate(d, "long"))
     led = _stitch(frames)
+
+    spread_bp = pd.Series(
+        {d: float(slope_bp(short_rate=s, long_rate=l)) for d, (s, l) in rates.items()},
+        name="spread_bp",
+    ).sort_index()
 
     out = {
         "pair": pair.name,
@@ -172,10 +256,25 @@ def run_control(
         "n_segments": len(frames),
         "daily_pnl": led["total"],
         "ledger": led,
+        "spread_bp": spread_bp,
         "stats": distribution_stats(led["total"]),
+        "residual": residual_stats(led["total"], spread_bp.diff()),
         "reconciliation": reconcile(led),
-        "harvest_to_mtm": float(
+        # NOT a share of P&L -- a ratio of GROSS DAILY ABSOLUTE FLOWS, i.e. how
+        # much of the book's daily movement comes from the resize increments
+        # relative to the base position. Renamed from "harvest_to_mtm" after
+        # review, which correctly pointed out that the old name read as a
+        # contribution share and this is not one. Both are reported.
+        "harvest_flow_ratio": float(
             led["harvest"].abs().sum() / max(led["mtm"].abs().sum(), 1e-9)
+        ),
+        "harvest_usd": float(led["harvest"].sum()),
+        # A genuine contribution share: harvest against the summed magnitudes
+        # of the three P&L buckets, so it is bounded and signed.
+        "harvest_pnl_share": float(
+            led["harvest"].sum()
+            / max(abs(led["carry"].sum()) + abs(led["harvest"].sum())
+                  + abs(led["mtm"].sum()), 1e-9)
         ),
         "vol_corr": float("nan"),
         "vol_beta": float("nan"),
@@ -196,13 +295,19 @@ def run_control(
     return out
 
 
-def _print(res: dict) -> None:
-    print(res["pair"], f"{res['start']}..{res['end']}",
+def _print(res: dict, label: str = "") -> None:
+    print(f"{label}{res['pair']}", f"{res['start']}..{res['end']}",
           f"n={res['n_days']} days, {res['n_segments']} roll periods")
     print(pd.Series(res["stats"]))
-    print("monthly P&L corr to d(1y10y vol):", round(res["vol_corr"], 3),
+    print("monthly P&L corr to d(1y10y vol):", round(res["vol_corr"], 4),
           f"(beta {res['vol_beta']:,.0f} $/bp-of-vol, n={res['vol_n']} months)")
-    print("harvest / |mtm|:", round(res["harvest_to_mtm"], 4))
+    r = res["residual"]
+    print(f"residual (P&L less its linear d(spread) term): skew {r['resid_skew']:+.4f} "
+          f"kurt {r['resid_kurtosis']:.2f} beta {r['beta']:,.0f} $/bp R2 {r['r2']:.4f}")
+    print("harvest flow ratio (gross flows, NOT a P&L share):",
+          round(res["harvest_flow_ratio"], 4),
+          "| harvest $", f"{res['harvest_usd']:,.0f}",
+          "| harvest share of |P&L| buckets:", round(res["harvest_pnl_share"], 4))
     print("ledger totals ($):")
     print(res["ledger"][["carry", "harvest", "mtm", "cross", "cost", "total"]].sum())
     print("hedges:", int(res["ledger"]["n_hedges"].sum()))
@@ -210,5 +315,12 @@ def _print(res: dict) -> None:
 
 
 if __name__ == "__main__":
-    res = run_control(market="USD", start=dt.date(2017, 1, 3), end=dt.date(2026, 8, 3))
+    START, END = dt.date(2017, 1, 3), dt.date(2026, 8, 3)
+    res = run_control(market="USD", start=START, end=END)
     _print(res)
+    # The null model, printed alongside on purpose: every distributional
+    # criterion the original gate used is cleared by this book, which has no
+    # convexity in it at all. Only the residual separates them.
+    twin = run_control(market="USD", start=START, end=END, zero_convexity=True,
+                       curve_map=None)
+    _print(twin, label="ZERO-CONVEXITY TWIN | ")

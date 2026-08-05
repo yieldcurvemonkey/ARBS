@@ -10,9 +10,14 @@ from RVUtils.StrikelessVol.costs import FREE
 from RVUtils.StrikelessVol.replication import (
     CurvePricer,
     ReplicationConfig,
+    ZeroConvexityPricer,
     simulate,
 )
-from RVUtils.StrikelessVol.report import distribution_stats, vol_beta
+from RVUtils.StrikelessVol.report import (
+    distribution_stats,
+    residual_stats,
+    vol_beta,
+)
 from RVUtils.StrikelessVol.universe import ALL_PAIRS
 
 PACKAGE_DV01 = 100_000.0
@@ -103,6 +108,45 @@ def test_the_hedge_restores_package_dv01_neutrality_when_both_legs_drift():
             + row["short_notional"] * ctx.dv01(d, "short")
         )
         assert abs(naive_residual) > 1_000.0
+
+
+def test_residual_stats_recovers_a_planted_convexity_and_its_mirror():
+    """A book that is linear-plus-``0.5*g*x**2`` must leave a signed residual.
+
+    The whole replacement statistic rests on this: the quadratic term is
+    strictly signed, so removing the linear part leaves a right-skewed residual
+    for long convexity and its mirror for short. Planted here on a symmetric
+    driver so the skew cannot come from the driver's own asymmetry.
+    """
+    rng = np.random.default_rng(7)
+    ds = pd.Series(rng.normal(0.0, 1.0, 2000))
+    long_convex = -100_000.0 * ds + 0.5 * 200.0 * ds ** 2
+    short_convex = -100_000.0 * ds - 0.5 * 200.0 * ds ** 2
+
+    lo = residual_stats(long_convex, ds)
+    sh = residual_stats(short_convex, ds)
+    assert lo["resid_skew"] > 1.5
+    assert sh["resid_skew"] < -1.5
+    assert lo["resid_skew"] == pytest.approx(-sh["resid_skew"], rel=1e-6)
+    assert lo["beta"] == pytest.approx(-100_000.0, rel=1e-3)
+
+
+def test_residual_stats_reports_nan_rather_than_noise_on_a_purely_linear_book():
+    """R^2 = 1 has no residual to take a skew of, and inventing one would
+    hand the zero-convexity twin a number that looks like evidence."""
+    rng = np.random.default_rng(8)
+    ds = pd.Series(rng.normal(0.0, 1.0, 500))
+    out = residual_stats(-100_000.0 * ds, ds)
+    assert out["r2"] == pytest.approx(1.0, abs=1e-12)
+    assert np.isnan(out["resid_skew"])
+    assert np.isnan(out["resid_kurtosis"])
+
+
+def test_distribution_stats_keeps_the_same_keys_when_empty():
+    assert set(distribution_stats(pd.Series(dtype=float))) == set(
+        distribution_stats(pd.Series([1.0, 2.0, 3.0]))
+    )
+    assert distribution_stats(pd.Series(dtype=float))["n"] == 0
 
 
 def test_roll_segments_overlap_by_one_date_and_cover_the_path():
@@ -225,9 +269,20 @@ def test_the_package_ages_rather_than_being_rebuilt(pricer, real_curves):
     c0, cN = real_curves[dates[0]], real_curves[dates[-1]]
     leg = pricer.package.long
 
-    # same instrument, same dates, priced on a curve 14 months later
-    assert c0.effective_date(leg) == cN.effective_date(leg)
-    assert c0.maturity_date(leg) == cN.maturity_date(leg)
+    # The leg's dates are the INCEPTION curve's 20y point, not the later
+    # curve's -- that is what "aged" means, and it is the assertion with
+    # content. (Comparing c0.effective_date(leg) to cN.effective_date(leg)
+    # would be trivially true: those dates live on the swap object, so any
+    # curve asked about them returns the same answer.)
+    fresh_on_cN = build_package(
+        cN, _usd_pair(), package_dv01_usd=PACKAGE_DV01, sign=FLATTENER
+    ).long
+    assert cN.effective_date(leg) != cN.effective_date(fresh_on_cN)
+    assert cN.maturity_date(leg) != cN.maturity_date(fresh_on_cN)
+    assert cN.effective_date(leg) == c0.effective_date(
+        build_package(c0, _usd_pair(), package_dv01_usd=PACKAGE_DV01,
+                      sign=FLATTENER).long
+    )
     aged_years = (pd.Timestamp(c0.maturity_date(leg))
                   - pd.Timestamp(cN.reference_date())).days / 365.0
     assert 28.0 < aged_years < 29.5  # was ~30.0 at inception: it has aged
@@ -278,6 +333,75 @@ def test_carry_is_the_task9_daily_roll_measured_on_real_curves(pricer, real_curv
     span_days = (dates[-1] - dates[0]).days
     per_calendar_day = carry.sum() / span_days
     assert -5_000.0 < per_calendar_day < -800.0  # Task 9 measured ~-$2,400/day
+
+
+@pytest.mark.network
+@pytest.mark.slow
+def test_carry_scales_per_leg_once_the_long_leg_has_been_resized(pricer, real_curves):
+    """The test with hedges, which is the only place the per-leg theta bites.
+
+    ``CurvePricer.theta`` decomposes the roll per leg (``nl*th_L + ns*th_S``)
+    rather than scaling the whole package roll by the long leg's notional
+    ratio. Those two agree EXACTLY while the notionals are the built ones, so
+    the zero-hedge test above -- where the scale factor is identically 1.0 --
+    cannot tell them apart and has no power over this choice at all. Here the
+    trigger fires, the long leg is resized away from its built notional, and
+    the two definitions separate.
+
+    Checks both directions: the ledger's carry equals the per-leg value, and
+    it is measurably NOT the package-scaled value, so the assertion cannot be
+    satisfied by both definitions at once.
+    """
+    from RVUtils.StrikelessVol.greeks import daily_roll_usd
+
+    dates = pricer.dates()
+    led = simulate(
+        pricer, dates,
+        ReplicationConfig(trigger_bp=25.0, roll_months=NEVER,
+                          package_dv01_usd=PACKAGE_DV01),
+        FREE,
+    )
+    assert led["n_hedges"].sum() >= 3
+
+    built_long = float(real_curves[dates[0]].notional(pricer.package.long))
+    built_short = float(real_curves[dates[0]].notional(pricer.package.short))
+    held_long = led["long_notional"].shift(1)
+    held_short = led["short_notional"].shift(1)
+
+    # days on which the long leg is genuinely away from its built size
+    resized = [
+        i for i in range(1, len(dates))
+        if abs(held_long.iloc[i] / built_long - 1.0) > 1e-4
+    ]
+    assert len(resized) > 20, "path never departs from the built notional"
+
+    separations = []
+    for i in resized[:8] + resized[-8:]:
+        d, prev = dates[i], dates[i - 1]
+        nl, ns = held_long.iloc[i], held_short.iloc[i]
+
+        # per-leg: each leg's own roll, scaled by its own notional
+        handle = real_curves[prev].handle()
+        rolled = handle.roll(d.to_pydatetime())
+        leg_roll = {}
+        for name, swap, built in (("long", pricer.package.long, built_long),
+                                  ("short", pricer.package.short, built_short)):
+            leg_roll[name] = (
+                float(swap.npv(curves=rolled).real) - float(swap.npv(curves=handle).real)
+            ) / built
+        per_leg = nl * leg_roll["long"] + ns * leg_roll["short"]
+
+        # the alternative: whole-package roll scaled by the LONG leg's ratio
+        package_scaled = daily_roll_usd(
+            real_curves[prev], pricer.package, next_date=d.to_pydatetime()
+        ) * abs(nl) / abs(built_long)
+
+        assert led.loc[d, "carry"] == pytest.approx(per_leg, rel=1e-9)
+        separations.append(abs(per_leg - package_scaled))
+
+    # ...and the two definitions really are different here, so the equality
+    # above is a choice this test enforces rather than one it cannot see.
+    assert max(separations) > 1.0
 
 
 @pytest.mark.network
@@ -333,6 +457,13 @@ def _replay_harvest(ctx, dates, cfg):
     themselves, because it reads them from the same ctx; that is what
     ``test_carry_is_the_task9_daily_roll_measured_on_real_curves`` and the
     Task 7 analytic-gamma control are for.
+
+    Returns the harvest **per day**, not just the total. An earlier version
+    returned only the total, which review pointed out would accept a harvest
+    series that was correct in aggregate but temporally shuffled -- and a
+    misdated harvest is a real defect, since every per-period statistic
+    downstream (the yearly table, the monthly vol regression, residual skew)
+    reads the daily series and not the sum.
     """
     dates = list(dates)
     n_long = cfg.sign * cfg.package_dv01_usd / ctx.dv01(dates[0], "long")
@@ -351,16 +482,31 @@ def _replay_harvest(ctx, dates, cfg):
 
     unit_pv = [ctx.pv(d, 1.0, 0.0) for d in dates]
     unit_theta = [ctx.theta(d, 1.0, 0.0) for d in dates]
-    return sum(
-        dn * (unit_pv[-1] - unit_pv[i] - sum(unit_theta[i + 1:]))
-        for dn, i in trades
-    ), trades
+
+    # Increments outstanding INTO each day: a resize on day t_k is held from
+    # t_k+1 onward, which is the same convention simulate uses (it sets the
+    # new notional after the day's ledger row is written).
+    outstanding = np.zeros(len(dates))
+    for dn, i in trades:
+        outstanding[i + 1:] += dn
+    per_day = pd.Series(
+        [0.0] + [
+            outstanding[i] * (unit_pv[i] - unit_pv[i - 1] - unit_theta[i])
+            for i in range(1, len(dates))
+        ],
+        index=dates,
+    )
+    return per_day, trades
 
 
 @pytest.mark.network
 @pytest.mark.slow
 def test_harvest_matches_an_independent_replay_on_real_curves(pricer):
-    """The value check the real-curve ledgers were missing."""
+    """The value check the real-curve ledgers were missing.
+
+    Checked DAY BY DAY, so a harvest series that summed correctly but landed
+    on the wrong dates would fail -- the total alone cannot see that.
+    """
     dates = pricer.dates()
     cfg = ReplicationConfig(trigger_bp=25.0, roll_months=NEVER,
                             package_dv01_usd=PACKAGE_DV01)
@@ -370,7 +516,23 @@ def test_harvest_matches_an_independent_replay_on_real_curves(pricer):
     expected, trades = _replay_harvest(pricer, dates, cfg)
     assert len(trades) == int(led["n_hedges"].sum())
     scale = max(led["harvest"].abs().sum(), 1.0)
-    assert led["harvest"].sum() == pytest.approx(expected, rel=1e-6, abs=1e-4 * scale)
+
+    # per-day, then the total as well
+    assert led["harvest"].to_numpy() == pytest.approx(
+        expected.to_numpy(), rel=1e-6, abs=1e-6 * scale
+    )
+    assert led["harvest"].sum() == pytest.approx(
+        expected.sum(), rel=1e-6, abs=1e-4 * scale
+    )
+    # a shuffled-but-equal-sum series must NOT pass the per-day check, or the
+    # strengthening above bought nothing
+    shuffled = pd.Series(
+        np.roll(led["harvest"].to_numpy(), 5), index=led.index
+    )
+    assert shuffled.sum() == pytest.approx(led["harvest"].sum(), rel=1e-9)
+    assert shuffled.to_numpy() != pytest.approx(
+        expected.to_numpy(), rel=1e-6, abs=1e-6 * scale
+    )
 
 
 @pytest.mark.network
@@ -403,6 +565,98 @@ def test_the_simulated_position_gains_when_the_curve_flattens(pricer, real_curve
     beta = float(np.polyfit(df["d"], df["mtm"], 1)[0])
     assert beta < -50_000.0  # ~ -$100k per bp of steepening, by construction
     assert df["mtm"].corr(df["d"]) < -0.9
+
+
+@pytest.mark.network
+@pytest.mark.slow
+def test_the_zero_convexity_twin_is_exactly_the_slope_and_nothing_else(
+    pricer, real_curves
+):
+    """The twin's construction, pinned: P&L == -package_dv01 * d(spread).
+
+    If this drifts, the null model stops being a null model and the
+    non-discrimination result below stops meaning anything.
+    """
+    from RVUtils.StrikelessVol.conventions import slope_bp
+
+    dates = pricer.dates()
+    twin = ZeroConvexityPricer(real_curves, _usd_pair(), package_dv01_usd=PACKAGE_DV01)
+    led = simulate(
+        twin, dates,
+        ReplicationConfig(trigger_bp=25.0, roll_months=NEVER,
+                          package_dv01_usd=PACKAGE_DV01),
+        FREE,
+    )
+    spread = pd.Series(
+        [float(slope_bp(short_rate=twin.rate(d, "short"), long_rate=twin.rate(d, "long")))
+         for d in dates],
+        index=dates,
+    )
+    expected = -PACKAGE_DV01 * spread.diff()
+    assert led["total"].iloc[1:].to_numpy() == pytest.approx(
+        expected.iloc[1:].to_numpy(), rel=1e-9, abs=1e-6
+    )
+
+    # no aging, no gamma, no carry, and therefore nothing to rebalance
+    assert led["n_hedges"].sum() == 0
+    assert led["harvest"].abs().sum() == 0.0
+    assert led["carry"].abs().sum() == 0.0
+    # ...and it carries the SAME first-order slope exposure as the real book
+    real = simulate(
+        pricer, dates,
+        ReplicationConfig(trigger_bp=25.0, roll_months=NEVER,
+                          package_dv01_usd=PACKAGE_DV01),
+        FREE,
+    )
+    twin_beta = residual_stats(led["total"], spread.diff())["beta"]
+    real_beta = residual_stats(real["total"], spread.diff())["beta"]
+    assert twin_beta == pytest.approx(-PACKAGE_DV01, rel=1e-9)
+    assert real_beta == pytest.approx(twin_beta, rel=0.15)
+
+
+@pytest.mark.network
+@pytest.mark.slow
+def test_the_zero_convexity_twin_clears_the_old_gate_criteria():
+    """**This test documents a defect in the original gate. Do not delete it.**
+
+    Task 13 shipped with a distributional gate: daily P&L skew > -1, monthly
+    correlation to changes in implied vol > 0, Sharpe in -0.5..1.5. Every one
+    of those is cleared here by a book with **no convexity in it at all** -- a
+    constant-maturity, DV01-matched, gamma-free, carry-free exposure to the
+    same slope -- and cleared with better numbers than the real package on
+    each. The mechanism is that all three statistics are inherited from the
+    slope itself: raw skew from ``skew(d spread)``, and ``vol_corr`` from the
+    market's own ``corr(-d spread, d vol)``, neither of which knows anything
+    about gamma.
+
+    So these criteria must never be reinstated as evidence of long convexity.
+    If someone tries, this test is the counterexample, runnable, on the same
+    data. What replaces them is ``report.residual_stats`` -- and the twin's
+    residual is NaN here (R^2 = 1), which is exactly the discrimination the
+    raw statistics could not provide.
+    """
+    from scripts.sv_static_long_control import run_control
+
+    res = run_control(
+        market="USD",
+        start=dt.date(2017, 1, 3),
+        end=dt.date(2026, 8, 3),
+        zero_convexity=True,
+    )
+    daily = res["daily_pnl"]
+    stats = distribution_stats(daily)
+
+    # the four assertions the real package is gated on, verbatim
+    assert len(daily) > 1500
+    assert stats["skew"] > -1.0
+    assert res["vol_corr"] > 0.0
+    assert -0.5 < stats["sharpe_annualised"] < 1.5
+
+    # and it has no convexity whatsoever to have earned them with
+    assert res["ledger"]["harvest"].abs().sum() == 0.0
+    assert res["ledger"]["n_hedges"].sum() == 0
+    assert res["residual"]["r2"] == pytest.approx(1.0, abs=1e-9)
+    assert np.isnan(res["residual"]["resid_skew"])
 
 
 @pytest.mark.network
