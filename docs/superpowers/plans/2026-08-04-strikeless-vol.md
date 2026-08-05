@@ -2683,7 +2683,7 @@ git -C C:\Users\chris\clee\ARBS-sv commit -m "feat(sv): path-wise replication wi
 
 ---
 
-### Task 13: `CurvePricer` and the Citi static-long positive control — **GATE**
+### Task 13: `CurvePricer` and the Citi static-long positive control — **GATE (SUPERSEDED — see banner below)**
 
 **Files:**
 - Modify: `RVUtils/StrikelessVol/replication.py` (add `CurvePricer`)
@@ -2975,7 +2975,7 @@ conda run -n stir python -m pytest tests/test_strikeless_vol_control.py -v -m ne
 
 Record in the commit message: Sharpe, skew, kurtosis, max drawdown, `vol_corr`, `harvest_flow_ratio`, `harvest_pnl_share`, and the reconciliation dict — **and the same statistics for the zero-convexity twin beside them**, since the twin clearing the published anchors more comfortably than the real package is the finding, not a footnote.
 
-**If skew is materially negative, or `vol_corr` ≤ 0, STOP.** Do not proceed to Task 14. Debug in this order: (1) `reconcile` — is the plug small and trendless? (2) the sign of `daily_roll_usd` on an inverted curve — a flattener must bleed; (3) `PAYER_NOTIONAL_SIGN`; (4) whether `CurvePricer.pv` is repricing the *aged* legs rather than rebuilding constant-maturity ones each day (rebuilding destroys the convexity and produces exactly a zero-gamma, wrong-skew result).
+**SUPERSEDED — this stop condition was measured to have no discriminating power.** It was retained through implementation and then falsified: the zero-convexity twin clears skew and `vol_corr` more comfortably than the real package, and the steepener passes the skew bound at −0.0815. Do **not** stop or proceed on these numbers. The debugging order below remains useful for its own sake, since each item is a genuine failure mode — particularly (4), which is how a rebuilt-daily package produces a zero-gamma result: (1) `reconcile` — is the plug at float scale? (2) the sign of `daily_roll_usd` on an inverted curve — a flattener must bleed; (3) `PAYER_NOTIONAL_SIGN`; (4) whether `CurvePricer.pv` reprices the *aged* legs rather than rebuilding constant-maturity ones each day.
 
 - [ ] **Step 8: Commit**
 
