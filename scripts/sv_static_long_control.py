@@ -50,10 +50,9 @@ from typing import List, Sequence, Tuple
 
 import pandas as pd
 
-from RVUtils.StrikelessVol.conventions import FLATTENER
+from RVUtils.StrikelessVol.conventions import FLATTENER, slope_bp
 from RVUtils.StrikelessVol.costs import CostSchedule
 from RVUtils.StrikelessVol.panels import vol_panel
-from RVUtils.StrikelessVol.conventions import slope_bp
 from RVUtils.StrikelessVol.replication import (
     CurvePricer,
     ReplicationConfig,
