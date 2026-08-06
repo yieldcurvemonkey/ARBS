@@ -627,7 +627,13 @@ def run_confounds(
     ``beats_winner`` and ``attrs["winner_beats_all"]`` fail closed on a
     confound that never traded: a comparator with no episodes did not lose the
     comparison, it never entered it. Same shape as the placebo's
-    ``probe_reached``.
+    ``probe_reached``. They also fail closed on a WINNER that never traded --
+    its metric is ``nan``, ``>= nan`` is False for every confound, and an empty
+    book would otherwise read as a clean sweep of all three. That leg is
+    currently redundant with the confound one, because ``duration_only`` runs
+    the winner's own signals and is untraded whenever the winner is; it is kept
+    because that redundancy is an implementation detail of one confound, and
+    ``attrs["winner_informative"]`` reports it either way.
     """
     signal_cfg = signal_cfg or SignalConfig()
     grid = [dict(config)]
