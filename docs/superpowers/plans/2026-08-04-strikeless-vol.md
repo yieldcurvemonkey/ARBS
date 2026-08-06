@@ -5184,6 +5184,85 @@ vol valuation.
 
 ---
 
+---
+
+# Citi Velocity refactor (2026-08-06) — Tasks 29–31
+
+PR #391 merged to main and brings three things this branch must absorb:
+`MDP/CitiVelocityExcel/` (COM bridge, RFR curves, swaption cubes, a `CITIVELO`
+query product), the `citivelo_excel` MDP source, **and a rateslib 2.1.1 → 2.7.1
+migration that collides with this branch's own fix**.
+
+**Measured before planning.** `git merge-tree origin/main feat/strikeless-vol`
+gives **11 conflicting files, every one of them the duplicated rateslib fix**.
+Nothing under `RVUtils/StrikelessVol/` conflicts — the study package merges
+clean. Main pins 2.7.1 in `requirements.txt` and renames call sites; this branch
+added a version-tolerant `utils/rl_compat.py`. **Main's philosophy wins** — a
+compat layer supporting 2.1.1 is dead weight once the requirement is pinned.
+
+**But main's migration is not a superset.** Verified by inspection: main
+correctly renamed the four `leg2_rate_fixings` call sites and fixed the regrouped
+`kwargs.leg1["notional"]` / `["fixed_rate"]` access, yet **three
+`except TypeError` fixings loops survive** — `RLIRSwapCurve.py:288`,
+`RLSTIRFuturePricer.py:351` and `:448`, and `BARCHART_STIRF/risk.py:173`. That
+pattern swallows a `TypeError` raised *inside* rateslib and falls through to a
+constructor with **no fixings**, which does not raise — it silently misprices the
+front monthly contract. Those three fixes are the only part of `rl_compat` worth
+carrying.
+
+### Task 29: Take main, resolve the duplicated rateslib fix
+
+Merge `origin/main`. Resolve all 11 conflicts **in main's favour**. Port the
+three swallow-loops as targeted edits to main's files, so an internal `TypeError`
+propagates instead of silently dropping fixings — and pin each with a test that
+fails if the loop returns.
+
+`RVUtils/StrikelessVol/greeks.py` imports `rl_compat`; migrate it to direct 2.7.1
+calls, then **delete `utils/rl_compat.py` and `tests/test_rl_compat.py`**. One
+codebase, one idiom. The study's suite must stay green at its current count, and
+main's `tests/test_rateslib_27_migration.py` must pass unchanged.
+
+### Task 30: Citi Velocity RFR curves and cubes behind the existing seam
+
+**The seam already exists and is the right one.** `panels.py`
+(`forward_rate_panel`, `vol_panel`, `implied_quote`) is the data boundary, and
+`greeks`/`replication` already take rateslib `Curve` handles. This is a backend
+behind that boundary, not a rewrite.
+
+- Forwards from `RATES.OIS.<ccy>_<idx>` — build the **locally-stripped rateslib
+  `Curve`** via the pricer rather than reading `.FWD` tags, because greeks needs
+  an object to bump, not a rate.
+- Vols from `RATES.VOL.<ccy>.ATM_RFR` / `OTM_RFR` through
+  `build_rl_vol_cube(..., backend="native")`.
+- **RFR only.** `USD_SOFR`, `EUR_EUROSTR`, `JPY_TONA`, `GBP_SONIA`. Never
+  `RATES.SWAP_LIBOR`, which has no local repricing anyway.
+- Source selectable per run; the GSQUANT path stays working.
+
+Build and test it **hermetically against the shipped `testing.py` COM fake** —
+no Excel needed for the code. Note the strike-axis trap the cube commit records:
+`IRSplineCube(strikes=...)` takes signed **basis points** from the ATM forward,
+and passing percent builds without error while mispricing the wings up to 5x.
+
+### Task 31: Source agreement as a cross-check, not a cutover
+
+Run both backends over the overlapping dates and compare forwards, vols and the
+derived breakeven per pair per date. **Disagreement is a finding, not a
+reconciliation chore.** The single most valuable error this study caught — the
+parallel-vs-spread vol denominator — was found because two implementations
+computed the same statistic and disagreed; no test, mutation or in-task review
+found it. A second independent data source is that check made permanent.
+
+### Operational note, which is not a task
+
+There is **no cached `citivelo_excel` data on this machine** and the transport is
+COM into a **human-logged-in Excel** — no headless path, and ~13 minutes to log
+in after an Excel restart. History depth is unknown until queried. So the code
+lands without Excel; the historical fetch is a step the user runs. Until it does,
+**every published number in this branch stands on the GSQUANT source**, and a
+cutover would require re-running all of them.
+
+---
+
 ## Self-Review Notes
 
 Checked against the spec:
