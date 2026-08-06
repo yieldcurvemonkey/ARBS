@@ -400,6 +400,40 @@ def pca_metric(pca_model, *, pca_weights=None, n_factors: int = HEDGED_FACTORS) 
     return G
 
 
+def _refuse_legs_past_the_curve(curve, legs, fly_tenors, fly_fwd) -> None:
+    """Refuse a fly whose longest leg matures beyond the curve's last node.
+
+    **The default H9 structure over-runs a real USD curve by a year.** A
+    1y-forward 30y wing matures at 31 years; the GS Quant USD-OIS curve's final
+    node is 30 years out (measured: reference 2026-07-31, final node
+    2056-08-04), and USD publishes no 31y instrument -- the same fact that
+    keeps ``10y10y/25y10y`` out of ``universe.USD_PAIRS`` by construction.
+    Pricing it anyway means extrapolating past the last quote and then hedging
+    against the extrapolation.
+
+    Checked on the BUILT swaps' own maturity dates rather than on a
+    ``fwd + tail`` year count, because a year count needs a day-count
+    convention to compare against a node date and would be approximately right
+    at exactly the boundary this guard exists to police. Use wings that fit
+    (e.g. ``("2Y", "7Y", "29Y")`` at ``fly_fwd="1Y"``) and say so in the
+    write-up, rather than quietly extrapolating.
+    """
+    final = pd.Timestamp(curve.handle().nodes.final)
+    over = [
+        (t, pd.Timestamp(_greeks._as_dt(curve.maturity_date(leg))))
+        for t, leg in zip(fly_tenors, legs)
+    ]
+    over = [(t, m) for t, m in over if m > final]
+    if over:
+        raise ValueError(
+            f"fly leg(s) {[t for t, _ in over]} at fwd {fly_fwd!r} mature "
+            f"{[m.date().isoformat() for _, m in over]}, beyond the curve's "
+            f"final node {final.date().isoformat()}. Pricing them extrapolates "
+            "past the last quoted point and the hedge would be solved against "
+            "that extrapolation. Choose wings that fit inside the curve."
+        )
+
+
 def fly_hedge_weights(
     curve,
     package,
@@ -457,6 +491,7 @@ def fly_hedge_weights(
         )
         for t in fly_tenors
     ]
+    _refuse_legs_past_the_curve(curve, unit_legs, fly_tenors, fly_fwd)
     basis = [
         key_rate_ladder(curve, [leg], tenor_grid=grid, shocks=shocks)
         for leg in unit_legs

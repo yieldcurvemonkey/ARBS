@@ -274,6 +274,24 @@ def test_each_tent_is_one_at_its_knot_and_zero_at_its_neighbours():
     assert w == pytest.approx(np.eye(len(g)))
 
 
+def test_the_tent_splits_an_interior_node_by_distance():
+    """Where BETWEEN the knots the mass goes, not just that it adds to one.
+
+    Found by mutation: halving the interpolation fraction
+    (``frac -> 0.5 * frac``) keeps every row summing to exactly one -- both
+    terms scale -- and puts every knot's own value at exactly one, so neither
+    of the two tests above notices. The mass simply moves to the wrong bucket,
+    which is a ladder that reports the right total risk in the wrong places
+    and a hedge solved against it.
+    """
+    g = np.array([1.0, 2.0, 5.0, 10.0, 30.0])
+    w = _tent_matrix(np.array([3.5, 7.5, 20.0, 1.25]), g)
+    assert w[0] == pytest.approx([0.0, 0.5, 0.5, 0.0, 0.0])       # midpoint 2-5
+    assert w[1] == pytest.approx([0.0, 0.0, 0.5, 0.5, 0.0])       # midpoint 5-10
+    assert w[2] == pytest.approx([0.0, 0.0, 0.0, 0.5, 0.5])       # midpoint 10-30
+    assert w[3] == pytest.approx([0.75, 0.25, 0.0, 0.0, 0.0])     # quarter 1-2
+
+
 def test_a_flat_tent_reproduces_rateslib_shift(flat_curve):
     """The composite-curve shock IS a parallel shift when the weights are flat.
 
@@ -541,6 +559,38 @@ def test_fly_hedge_weights_refuses_anything_that_is_not_three_legs(realistic_cur
         fly_hedge_weights(realistic_curve, pkg, pca_model=model, fly_tenors=("2Y", "30Y"))
 
 
+def test_a_fly_leg_beyond_the_curve_is_refused_not_extrapolated():
+    """H9's own default over-runs a REAL USD curve by a year.
+
+    A 1y-forward 30y wing matures at 31 years. The GS Quant USD-OIS curve's
+    final node is 30 years out (measured: reference 2026-07-31, final node
+    2056-08-04) and USD publishes no 31y instrument -- the same fact that keeps
+    ``10y10y/25y10y`` out of ``universe.USD_PAIRS``. Pricing it anyway hedges
+    against an extrapolation.
+
+    This fixture stops at 30 years to reproduce that, rather than the 40 the
+    rest of this file uses so it can price the specified structure at all.
+    """
+    ref = REF
+    nodes = {ref: 1.0}
+    for y in range(1, 31):
+        nodes[rl.dt(ref.year + y, ref.month, ref.day)] = 1.0 / (1.04 ** y)
+    short_curve = RLIRSwapCurve(
+        rl_curve_id="USD-OIS",
+        rl_curve_handle=rl.Curve(nodes=nodes, convention="act360", calendar="nyc", id="s30"),
+        fixings=rl.NoInput(0),
+        meta_data={"reference_curve_name": "USD-OIS"},
+    )
+    m = _pca_model(cols=("1Y", "2Y", "5Y", "10Y", "20Y", "30Y"))
+    pkg = build_package(short_curve, PAIR)
+    with pytest.raises(ValueError, match="beyond the curve's final node"):
+        fly_hedge_weights(short_curve, pkg, pca_model=m)
+    # ...and a wing that fits prices fine, so the guard is about the span and
+    # not about the fixture being unusable.
+    got = fly_hedge_weights(short_curve, pkg, pca_model=m, fly_tenors=("2Y", "7Y", "29Y"))
+    assert set(got["weights_bpv"]) == {"2Y", "7Y", "29Y"}
+
+
 def test_a_pc2_shaped_curve_shock_confirms_the_hedge_by_repricing(realistic_curve, model, grid):
     """The independent control: no ladder, no metric, no projection.
 
@@ -614,8 +664,18 @@ def test_the_two_leg_round_trip_is_twice_the_initiate_charge():
 
 
 def test_cost_scales_with_the_risk_actually_traded():
+    """Traded risk is the SUM OF MAGNITUDES, not the net.
+
+    Found by mutation: with ``traded = abs(sum(x))`` both books below net to
+    exactly zero, both costs come back 0.0, and ``five == 2 * two`` passes as
+    ``0 == 0``. A cost model in which every BPV-neutral package is free is the
+    one failure this study cannot afford (costs are 41% of gross at 1x), so
+    both figures are asserted absolutely as well as relatively.
+    """
     two = cost_bp_round_trip([100_000.0, -100_000.0])
     five = cost_bp_round_trip([100_000.0, -100_000.0, 50_000.0, -100_000.0, 50_000.0])
+    assert two == pytest.approx(1.75)
+    assert five == pytest.approx(3.50)
     assert five == pytest.approx(two * 2.0)
 
 
@@ -666,6 +726,34 @@ def test_every_construction_appears_exactly_once(comparison):
     assert comparison["pair"].loc[SAME_SECTOR] == "USD 15Y5Y/20Y10Y"
     assert comparison["pair"].loc[TWO_LEG] == PAIR.name
     assert comparison["n_legs"].to_dict() == {TWO_LEG: 2, FLY_HEDGED: 5, SAME_SECTOR: 2}
+
+
+def test_the_same_sector_row_is_priced_off_the_same_sector_package(realistic_curve, comparison):
+    """The label is not the evidence; the number is.
+
+    Found by mutation: building the SAME_SECTOR package off the INPUT pair
+    while still labelling the row ``USD 15Y5Y/20Y10Y`` leaves
+    ``test_every_construction_appears_exactly_once`` passing, because that test
+    reads the label. This rebuilds the same-sector package independently and
+    checks the row's roll came from it -- the "a placebo leg that reproduced
+    the real number" failure, one module across.
+    """
+    sector = same_sector_pair(PAIR)
+    pkg = build_package(realistic_curve, sector)
+    nxt = realistic_curve.reference_date() + pd.Timedelta(days=1)
+    assert comparison.loc[SAME_SECTOR, "daily_roll_usd"] == pytest.approx(
+        legs_roll_usd(realistic_curve, [pkg.short, pkg.long], next_date=nxt), rel=1e-12
+    )
+    ladder = key_rate_ladder(
+        realistic_curve, [pkg.short, pkg.long], tenor_grid=ladder_tenor_years(_pca_model())
+    )
+    pcs = factor_exposures(_pca_model(), ladder)
+    assert comparison.loc[SAME_SECTOR, "residual_pc1"] == pytest.approx(
+        float(pcs.iloc[0]), rel=1e-9
+    )
+    assert comparison.loc[SAME_SECTOR, "residual_pc2"] == pytest.approx(
+        float(pcs.iloc[1]), rel=1e-9
+    )
 
 
 def test_the_wings_cost_money(comparison):
