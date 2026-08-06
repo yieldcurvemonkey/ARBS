@@ -197,7 +197,11 @@ def test_package_dv01_is_neutral_at_inception(curve, pkg):
     inverted fixture (see ``tests/test_strikeless_vol_breakeven.py``).
     ``build_leg`` now sizes off the same repriced measure
     (``greeks._reprice_dv01``) this test checks, so the two can no longer
-    disagree: observed residual is 0.0 (float-exact) on this fixture.
+    disagree: observed residual is 3.7e-09 dollars on this fixture (0.0
+    float-exact on the act360 one), against a $100k package. The abs=10.0
+    band is 9 orders of magnitude of headroom, kept because it is the size of
+    residual that would matter economically, not the size float noise
+    happens to be.
     """
     assert package_dv01(curve, pkg) == pytest.approx(0.0, abs=10.0)
 
@@ -231,7 +235,17 @@ def test_control_holds_on_the_production_act360_convention(act360_curve, act360_
     """The case that actually ships: curve act360, usd_irs legs act360.
 
     With curve and leg conventions agreeing there is no scaling artefact, and
-    the control lands an order of magnitude closer than on the act365f fixture.
+    the control lands far inside its band: residual 0.078% against a 2%
+    tolerance.
+
+    **This docstring used to say "an order of magnitude closer than on the
+    act365f fixture", and that comparison is gone.** It was true when the
+    act365f fixture was the MISMATCHED one, whose float leg carried the
+    365/360 artefact and pushed the control's residual to ~1%. Both fixtures
+    are now matched, so both are artefact-free and the residuals are the same
+    order: 0.078% here against 0.105% on the GBP act365f fixture. What the
+    two cases still test between them is that the control holds on either day
+    count, not that one of them is broken.
     """
     analytic = (
         analytic_leg_gamma(act360_curve, act360_pkg.short)
