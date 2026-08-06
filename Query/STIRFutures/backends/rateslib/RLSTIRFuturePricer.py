@@ -10,6 +10,31 @@ from Query.STIRFutures._STIRFutureGenericPricer import _STIRFutureGenericPricer
 from Query.IRSwaps.backends.rateslib.rl_curve_definitions_map import RATESLIB_CURVE_DEFINITIONS
 
 
+#: A DF==1 curve spanning any plausible contract, used only to satisfy rateslib
+#: 2.7's requirement that ``analytic_delta`` be given a discount curve.
+#:
+#: A STIR future's analytic delta is ``nominal * dcf * 1e-4`` and carries no
+#: discounting - measured: the same contract returns -25.0 against a flat DF==1
+#: curve and against a curve falling to DF=0.2, so the curve argument cannot
+#: change the answer. Before rateslib 2.7 this pricer called
+#: ``analytic_delta()`` with no arguments (it holds no curve: ``handle()``
+#: returns None); 2.7 made the argument mandatory, so a unit curve reproduces the
+#: old value exactly rather than approximating it.
+_UNIT_DISCOUNT_CURVE: Optional[rl.Curve] = None
+
+
+def _unit_discount_curve() -> rl.Curve:
+    global _UNIT_DISCOUNT_CURVE
+    if _UNIT_DISCOUNT_CURVE is None:
+        _UNIT_DISCOUNT_CURVE = rl.Curve(
+            {datetime.datetime(1990, 1, 1): 1.0, datetime.datetime(2090, 1, 1): 1.0},
+            id="_stirf_unit_discount",
+            convention="act360",
+            calendar="nyc",
+        )
+    return _UNIT_DISCOUNT_CURVE
+
+
 def _extract_stirf_contracts(stirf: rl.STIRFuture) -> int:
     kwargs_obj = getattr(stirf, "_kwargs", None) or getattr(stirf, "kwargs", None)
     if kwargs_obj is not None:
@@ -199,11 +224,21 @@ class RLSTIRFuturePricer(_STIRFutureGenericPricer):
 
     def pv01(self, contracts=None, notional=None, stirf: rl.STIRFuture = None) -> float:
         if stirf is not None:
-            unit_bpv = -float(self.build_stirf().analytic_delta().real)
+            unit_bpv = -float(
+                self.build_stirf().analytic_delta(curves=_unit_discount_curve()).real
+            )
             return _extract_stirf_contracts(stirf) * unit_bpv
 
-        # Use analytic_delta which for STIRFuture requires no arguments (based on docs)
-        return -float(self.build_stirf(contracts=contracts or self._contracts, notional=notional or self._notional).analytic_delta().real)
+        # rateslib 2.7 made the curve argument mandatory on analytic_delta; a
+        # future carries no discounting, so a DF==1 curve reproduces the old
+        # no-argument value exactly. See _unit_discount_curve.
+        return -float(
+            self.build_stirf(
+                contracts=contracts or self._contracts, notional=notional or self._notional
+            )
+            .analytic_delta(curves=_unit_discount_curve())
+            .real
+        )
 
     def dv01(self, shift: float = 1e-4) -> float:
         return self.pv01()
@@ -411,6 +446,6 @@ class RLSTIRFuturePricer(_STIRFutureGenericPricer):
             try:
                 return rl.STIRFuture(**stir_kwargs, leg2_rate_fixings=applied_fixings)
             except TypeError:
-                return rl.STIRFuture(**stir_kwargs, leg2_fixings=applied_fixings)
+                return rl.STIRFuture(**stir_kwargs, leg2_rate_fixings=applied_fixings)
 
         return rl.STIRFuture(**stir_kwargs)

@@ -149,9 +149,9 @@ def run_screener_for_date(as_of, curve_mdp, stirfo_mdp, dist) -> list:
         try:
             q = IRSwapQuery(curve=CURVE, tenor=t).resolve_query(ts, pricer_or_curve=curve_handle)
             pkg, _ = q.resolve_package(pricer_or_curve=curve_handle)
-            eff = pkg[0].__dict__["kwargs"]["effective"]
-            price = 100 - pkg[0].__dict__["kwargs"]["fixed_rate"]
-            rate = pkg[0].__dict__["kwargs"]["fixed_rate"] * 100  # percent
+            eff = pkg[0].leg1.schedule.effective
+            price = 100 - pkg[0].kwargs.leg1["fixed_rate"]
+            rate = pkg[0].kwargs.leg1["fixed_rate"] * 100  # percent
             imm = ql.IMM.code(ql.Date(eff.day, eff.month, eff.year))
             contracts.append(imm)
             prices.append(price)

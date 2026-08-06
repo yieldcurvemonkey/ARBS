@@ -238,3 +238,6 @@ temp.ipynb
 tests/fixtures/tape_golden_mar_2_6.pkl
 notebooks/sdr/_cache/
 .vercel
+
+# Live Citi Velocity comparison snapshots written by harvest/verify_live.py --vol-compare
+MDP/CitiVelocityExcel/harvest/*.parquet

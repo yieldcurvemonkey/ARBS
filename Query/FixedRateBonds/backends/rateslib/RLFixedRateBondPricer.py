@@ -85,7 +85,7 @@ class RLFixedRateBondPricer(_FixedRateBondGenericPricer):
     def build_schedule(self) -> rl.Schedule:
         return rl.FixedRateBond(
             self._to_rl_dt(self.issue_date()), self._to_rl_dt(self.maturity_date()), spec=RATESLIB_FRB_DEFINITIONS[self._rl_frb_id]["spec"], fixed_rate=self.coupon()
-        ).kwargs["schedule"]
+        ).kwargs.leg1["schedule"]
 
     def coupon(self):
         return self._cpn
@@ -199,7 +199,7 @@ class RLFixedRateBondPricer(_FixedRateBondGenericPricer):
         raise NotImplementedError()
 
     def notional(self, frb: rl.FixedRateBond):
-        return float(frb.__dict__["kwargs"]["notional"])
+        return float(frb.kwargs.leg1["notional"])
 
     def resolve_pricable(self, frb: rl.FixedRateBond, risk_weight=None):
         raise NotImplementedError()

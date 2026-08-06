@@ -39,8 +39,10 @@ def strip_rates(mdp, curve, d, n):
         q = IRSwapQuery(curve=curve, tenor=f"IMM_{i}xIMM_{i+1}").resolve_query(
             ts, pricer_or_curve=ch)
         pkg, _ = q.resolve_package(pricer_or_curve=ch)
-        kw = pkg[0].__dict__["kwargs"]
-        out[i] = (kw["effective"].date(), kw["fixed_rate"])
+        # rateslib 2.7 moved the constructor arguments behind `.kwargs.leg1` and
+        # the schedule dates onto the built schedule.
+        leg = pkg[0]
+        out[i] = (leg.leg1.schedule.effective.date(), leg.kwargs.leg1["fixed_rate"])
     return out
 
 

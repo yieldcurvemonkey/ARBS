@@ -72,7 +72,7 @@ class RLIRSwapCurve(_IRSwapGenericCurve):
         return float(irswap.fixed_rate) / 100.0
 
     def notional(self, irswap: rl.IRS):
-        return irswap.__dict__["kwargs"]["notional"]
+        return irswap.kwargs.leg1["notional"]
 
     def fair_rate(self, irswap: rl.IRS):
         return irswap.rate(curves=self._rl_curve_handle).real / 100
@@ -87,14 +87,14 @@ class RLIRSwapCurve(_IRSwapGenericCurve):
                 curves=self._rl_curve_handle,
                 spec=curve_def["ReferenceRate"],
                 notional=self.notional(irswap),
-                leg2_fixings=self._fixings,
+                leg2_rate_fixings=self._fixings,
             )
             .npv(curves=self._rl_curve_handle)
             .real
         )
 
     def pv01(self, irswap: rl.IRS):
-        return irswap.analytic_delta(curve=self._rl_curve_handle).real
+        return irswap.analytic_delta(curves=self._rl_curve_handle).real
 
     def dv01(self, irswap: rl.IRS):
         # A true DV01 is a full re-solve of the calibrating instruments, which
@@ -170,8 +170,8 @@ class RLIRSwapCurve(_IRSwapGenericCurve):
                 spec=curve_def["ReferenceRate"],
                 curves=self._rl_curve_handle,
                 notional=1,
-                leg2_fixings=self._fixings,
-            ).analytic_delta(self._rl_curve_handle)
+                leg2_rate_fixings=self._fixings,
+            ).analytic_delta(curves=self._rl_curve_handle)
             notional = bpv / unit_delta
 
         if not bpv and not notional:
@@ -185,7 +185,7 @@ class RLIRSwapCurve(_IRSwapGenericCurve):
                     spec=curve_def["ReferenceRate"],
                     curves=self._rl_curve_handle,
                     notional=1,
-                    leg2_fixings=self._fixings,
+                    leg2_rate_fixings=self._fixings,
                 )
             )
 
@@ -204,7 +204,7 @@ class RLIRSwapCurve(_IRSwapGenericCurve):
             # number was wrong, but every object handed out was.
             fixed_rate=float(fixed_rate) * 100.0,
             notional=notional,
-            leg2_fixings=self._fixings,
+            leg2_rate_fixings=self._fixings,
         )
 
     def build_pricable(self, /, **kwargs: Any) -> rl.IRS:
@@ -224,7 +224,7 @@ class RLIRSwapCurve(_IRSwapGenericCurve):
         # to -pv01) is negative. The previous implementation unconditionally
         # multiplied by -1, which flipped the sign of every NPV reported by
         # mark_to_market and on_unwind for IRSwapQuery positions.
-        notional_real = irswap.__dict__["kwargs"]["notional"]
+        notional_real = irswap.kwargs.leg1["notional"]
         try:
             direction = risk_weight if risk_weight is not None else (
                 self.pv01(irswap) * -1
@@ -261,7 +261,7 @@ class RLIRSwapCurve(_IRSwapGenericCurve):
                 spec=curve_def["ReferenceRate"],
                 curves=self._rl_curve_handle,
                 notional=1,
-            ).analytic_delta(self._rl_curve_handle)
+            ).analytic_delta(curves=self._rl_curve_handle)
             notional = bpv / unit_delta
 
         if not bpv and not notional:
