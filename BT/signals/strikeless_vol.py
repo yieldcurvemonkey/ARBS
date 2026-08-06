@@ -142,12 +142,14 @@ __all__ = [
     "REQUIRED_OUTPUT_COLUMNS",
     "SIGNAL_COLUMNS",
     "HONESTY_COLUMNS",
+    "PLACEBO_P_VALUE",
     "SignalWindows",
     "STUDY_N_TRIALS",
     "VOL_CURVE_BY_MARKET",
     "VOL_STRUCTURE",
     "build_pair_inputs",
     "certified_signals",
+    "format_state",
     "greeks_with_cache",
     "market_verdict",
     "pair_state",
@@ -834,6 +836,13 @@ def today_state(
 
     ``with_umep`` is off by default: Task 21 ran implied vol alone in all four
     markets, so that is the model the stored verdict describes.
+
+    **The last row is path-dependent on ``lookback_days``.**
+    ``entry_vintage_signals`` is stateful -- it walks the whole index holding an
+    episode -- so today's sign can differ between two lookbacks. Hold it fixed
+    when comparing two days' output. ``ARBS_SUPABASE_ENABLED=0`` is set here
+    before the MDP import, which is too late if the caller already imported
+    anything under ``MDP/`` or ``Caching/``; set it in the entry point.
     """
     cfg = cfg or SignalConfig()
     asof = asof or dt.date.today()
