@@ -400,6 +400,22 @@ def run_market(market: str, *, start: dt.date, end: dt.date,
     built = build_signal_panel(market, curves, pair, start=start, end=end,
                                with_umep=with_umep)
     signals = build_signals(built, cfg)
+    # **The ledger runs on the dates the PANEL priced, not on every curve
+    # returned.** ``greeks_panel`` swallows a date whose curve cannot build the
+    # package (recording it on ``attrs["dropped"]``) while ``CurvePricer``
+    # builds its package on whatever date it is handed first -- so a market
+    # whose earliest curves are unpriceable dies in the pricer with an error
+    # from nine frames down instead of being trimmed. Measured on EUR-ESTR: the
+    # first curves have an EMPTY ESTR fixing series, and rateslib 2.7.1 raises
+    # ``IndexError: index -1 is out of bounds for axis 0 with size 0`` from
+    # ``_push_rate_fixings_as_series_to_fixing_rates``. Trimming here also
+    # guarantees the signals and the ledger share one calendar, which
+    # ``run_pair`` requires and would otherwise only discover by label
+    # alignment.
+    priced = set(built["panel"].index)
+    dropped_by_pricer = sorted(pd.Timestamp(d) for d in curves
+                               if pd.Timestamp(d) not in priced)
+    curves = {d: c for d, c in curves.items() if pd.Timestamp(d) in priced}
     unit, dv01 = unit_ledger(curves, pair, trigger_bp=trigger_bp,
                              roll_months=roll_months,
                              package_dv01_usd=package_dv01_usd, sign=sign,
@@ -427,6 +443,7 @@ def run_market(market: str, *, start: dt.date, end: dt.date,
     return {
         "market": market, "pair": pair, "coverage": cov, "built": built,
         "signals": signals, "result": res, "unit": unit,
+        "dropped_by_pricer": dropped_by_pricer,
         "vol_beta_monthly": vb,
         "vol_changes_daily": daily_dvol,
         "start": res.ledger.index.min().date(),
@@ -706,6 +723,12 @@ def main(argv=None) -> dict:
         g = out["built"]["greeks"]
         print(f"   greeks: {len(g)} rows, {g.attrs.get('n_dropped', 0)} dropped of "
               f"{g.attrs.get('dates_in', 0)}")
+        drops = out["dropped_by_pricer"]
+        if drops:
+            first_err = next(iter((g.attrs.get("dropped") or {}).values()), "")
+            print(f"   {len(drops)} dates dropped before the ledger "
+                  f"[{drops[0].date()}..{drops[-1].date()}]; first error: "
+                  f"{str(first_err)[:140]}")
         print(f"   certified: {out['signals'].attrs.get('certified_signal_inputs')}")
         print(f"   uncertified: {out['signals'].attrs.get('uncertified_signal_inputs')}")
 
