@@ -553,6 +553,22 @@ def test_run_confounds_fails_closed_on_a_confound_that_never_traded():
     assert out.attrs["winner_beats_all"] is False   # ... and still cannot certify
 
 
+def test_run_confounds_fails_closed_on_a_WINNER_that_never_traded():
+    """`>= nan` is False for every confound, so an empty book would otherwise
+    'beat' all three. The same hole as the uninformative-confound one, one row
+    across."""
+    ctx, panel = _world()
+    flat = pd.DataFrame({"sign": 0, "size": 0.0, "dv01_usd": 0.0,
+                         "reason": "never"}, index=panel.index)
+    out = run_confounds({"USD": ctx}, {"USD": flat}, {"trigger_bp": 25.0},
+                        costs=TAKER)
+    won = out[out["family"] == "winner"]
+    assert int(won["n_trades"].iloc[0]) == 0
+    assert not bool(out["beats_winner"].any())   # nothing compares to a NaN
+    assert out.attrs["winner_informative"] is False
+    assert out.attrs["winner_beats_all"] is False
+
+
 def test_duration_only_is_a_materially_different_book():
     """If the DV01-matched outright pays the same, the package's premise --
     that it has no directional exposure -- is what is wrong."""

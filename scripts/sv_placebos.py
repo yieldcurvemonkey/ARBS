@@ -679,12 +679,20 @@ def run_confounds(
                            & (out[CONFOUND_METRIC] >= winner_metric).to_numpy()
                            & (out["family"] != "winner").to_numpy())
     alt = out[out["family"] != "winner"]
+    won = out[out["family"] == "winner"]
+    # A winner that never traded has a NaN metric, and `>= nan` is False for
+    # every confound -- so without this leg an empty book "beats" all three.
+    # The hole is the same shape as the confound one, one row across.
+    winner_ok = bool(len(won) > 0 and bool(won["informative"].all())
+                     and bool(np.isfinite(won[CONFOUND_METRIC].to_numpy()).all()))
     out.attrs.update({
         "metric": CONFOUND_METRIC,
         "skipped": tuple(skipped),
         "families": tuple(dict.fromkeys(out["family"])),
+        "winner_informative": winner_ok,
         # fail closed: an uninformative confound has not been beaten
-        "winner_beats_all": bool(len(alt) > 0
+        "winner_beats_all": bool(winner_ok
+                                 and len(alt) > 0
                                  and bool(alt["informative"].all())
                                  and not bool(alt["beats_winner"].any())
                                  and not skipped),
