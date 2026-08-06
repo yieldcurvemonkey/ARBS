@@ -14,52 +14,93 @@ from RVUtils.StrikelessVol.greeks import (
 )
 from RVUtils.StrikelessVol.universe import ForwardLeg, ForwardPair
 from Query.IRSwaps.backends.rateslib.RLIRSwapCurve import RLIRSwapCurve
+from Query.IRSwaps.backends.rateslib.rl_curve_definitions_map import (
+    RATESLIB_CURVE_DEFINITIONS,
+)
+from utils.rl_compat import leg_cashflows, leg_npv, rate_fixings_kwargs
 
 REF = rl.dt(2026, 8, 3)
 PAIR = ForwardPair("USD", "USD-OIS", ForwardLeg("10Y", "10Y"), ForwardLeg("20Y", "10Y"))
 
+#: The act365f market. ``rl_curve_definitions_map`` gives GBP-SONIA DayCounter
+#: act365f and ReferenceRate ``gbp_irs``, whose legs are act365f too -- the only
+#: shape in which an act365f curve exists in this repo, on either side. It is a
+#: pair the study already trades: ``universe.GBP_PAIRS`` contains this exact
+#: 10y10y/20y10y slope.
+GBP_PAIR = ForwardPair("GBP", "GBP-SONIA", ForwardLeg("10Y", "10Y"), ForwardLeg("20Y", "10Y"))
 
-def _curve(convention: str):
+#: Curve name -> (curve day count, calendar), read from the definitions map so
+#: the fixture cannot drift out of agreement with the spec whose legs it prices.
+_DEFS = {
+    name: (RATESLIB_CURVE_DEFINITIONS[name]["DayCounter"],
+           RATESLIB_CURVE_DEFINITIONS[name]["Calendar"])
+    for name in ("USD-OIS", "GBP-SONIA")
+}
+
+
+def _curve(curve_name: str, convention: str | None = None):
+    """Flat 4% on ``curve_name``'s own day count, unless ``convention`` overrides.
+
+    The override exists for exactly one test -- the one that pins rateslib
+    2.7.1's refusal of a curve/index convention mismatch -- and is never used
+    to build a package that then gets measured.
+    """
+    day_count, calendar = _DEFS[curve_name]
     nodes = {REF: 1.0}
     nodes.update({rl.dt(2026 + y, 8, 3): 1.0 / (1.04 ** y) for y in range(1, 41)})
-    handle = rl.Curve(nodes=nodes, convention=convention, calendar="nyc", id="flat4")
+    handle = rl.Curve(
+        nodes=nodes,
+        convention=convention or day_count,
+        calendar=calendar,
+        id="flat4",
+    )
     return RLIRSwapCurve(
-        rl_curve_id="USD-OIS",
+        rl_curve_id=curve_name,
         rl_curve_handle=handle,
         # rateslib 2.1.1 crashes in _set_fixings on an empty pd.Series and
         # fails later at .npv() on None; only the NoInput sentinel works.
         # See tests/test_strikeless_vol_greeks.py for the full note. Legs
         # here are forward-starting 10-20y out and need no historical fixings.
         fixings=rl.NoInput(0),
-        meta_data={"reference_curve_name": "USD-OIS"},
+        meta_data={"reference_curve_name": curve_name},
     )
 
 
 @pytest.fixture(scope="module")
 def curve():
-    """act365f. Deliberately mismatched against the act360 usd_irs legs.
+    """The act365f case, on a market that really is act365f on BOTH sides.
 
-    Kept because Task 7's fixture is this curve and its numbers must not move,
-    but note it is NOT the production convention: see
-    ``test_the_act365f_fixture_pays_365_over_360_on_the_float_leg``.
+    This fixture used to be an act365f curve carrying USD ``usd_irs`` (act360)
+    legs -- a deliberate mismatch, kept so the 365/360 float-leg scaling
+    artefact it produced could be pinned rather than rediscovered as a bug.
+    **rateslib 2.7.1 refuses that pairing outright** (see
+    ``test_a_curve_index_convention_mismatch_is_now_refused_outright``), so the
+    artefact is no longer constructible and the fixture has moved to GBP-SONIA,
+    where act365f is the curve's convention AND ``gbp_irs``'s.
+
+    Nothing that was asserted on the old fixture named a number: every
+    assertion reached through it is a sign, a tolerance band, or a convention
+    identity (``days * d == days / 365``), all of which hold for any act365f
+    curve/leg pair. The act365f side of this file therefore still tests what
+    it tested, on a pairing that can actually ship.
     """
-    return _curve("act365f")
+    return _curve("GBP-SONIA")
 
 
 @pytest.fixture(scope="module")
 def act360_curve():
     """The convention the repo's USD SOFR curves actually use.
 
-    ``rl_curve_definitions_map.py`` gives USD-SOFR-1D DayCounter act360, and
-    the ``usd_irs`` spec's legs are act360 too, so curve and legs agree here
-    and the replication holds without a scaling artefact.
+    ``rl_curve_definitions_map.py`` gives USD-SOFR-1D and USD-OIS DayCounter
+    act360, and the ``usd_irs`` spec's legs are act360 too, so curve and legs
+    agree here and the replication holds without a scaling artefact.
     """
-    return _curve("act360")
+    return _curve("USD-OIS")
 
 
 @pytest.fixture(scope="module")
 def pkg(curve):
-    return build_package(curve, PAIR, package_dv01_usd=100_000.0, sign=FLATTENER)
+    return build_package(curve, GBP_PAIR, package_dv01_usd=100_000.0, sign=FLATTENER)
 
 
 @pytest.fixture(scope="module")
@@ -84,7 +125,7 @@ def _float_leg_gamma_bumped(curve, swap, h=25.0):
 
     def price(s):
         c = handle.shift(s) if s else handle
-        return swap.leg2.npv(c, c).real
+        return leg_npv(swap.leg2, c).real
 
     return _bumped(price, h)
 
@@ -104,7 +145,7 @@ def _legacy_365_control(curve, swap):
     ann = sum(
         float(r["DCF"]) * t(r["Payment"]) ** 2
         * float(handle[pd.Timestamp(r["Payment"]).to_pydatetime()])
-        for _, r in swap.leg1.cashflows(handle).iterrows()
+        for _, r in leg_cashflows(swap.leg1, handle).iterrows()
     )
     eff, mat = curve.effective_date(swap), curve.maturity_date(swap)
     return n * (
@@ -135,7 +176,9 @@ def _semiannual_par_swap(curve, notional=100_000_000.0):
         leg2_frequency="S",
         curves=handle,
         notional=notional,
-        leg2_fixings=rl.NoInput(0),
+        # `leg2_fixings` became `leg2_rate_fixings` in rateslib 2.7; resolved
+        # once, by introspection, in utils.rl_compat rather than named here.
+        **rate_fixings_kwargs(rl.NoInput(0)),
     )
     return rl.IRS(**kw, fixed_rate=rl.IRS(**kw).rate(curves=handle).real)
 
@@ -220,13 +263,44 @@ def test_hard_coding_365_would_miss_on_an_act360_curve(act360_curve, act360_pkg)
 
 
 def test_the_fix_is_exactly_neutral_on_an_act365f_curve(curve, pkg):
-    """days*d IS days/365 under act365f, so Task 7's fixture must not move.
+    """days*d IS days/365 under act365f, so an act365f fixture must not move.
 
     Neutrality where the conventions already agreed is the evidence that the
     daily_dcf change corrected a convention bug rather than retuning a number.
+    The claim names no number, so it is independent of WHICH act365f market the
+    fixture is -- it moved from a USD-on-act365f mismatch to GBP-SONIA when
+    rateslib 2.7.1 outlawed the mismatch.
+
+    **Where the neutrality is bit-exact, and where it is not.** The fix lives
+    entirely in ``t``, and there it IS bit-exact: ``daily_dcf`` returns
+    ``fl(1/365)`` to the last bit on an act365f curve, and ``days * fl(1/365)``
+    equals ``fl(days / 365)`` exactly for every cashflow date either fixture
+    produces (checked below, per date, not assumed -- across day counts
+    3000..8000 the two disagree by 1 ulp about 4.9% of the time, so this is a
+    property of these dates and it is asserted rather than trusted).
+
+    The two whole formulas then agree to ~1 ulp rather than bit-for-bit,
+    because they associate the same three factors differently:
+    ``greeks.analytic_leg_gamma`` accumulates ``(tau * ti) * ti * D`` while the
+    control below writes ``(tau * t**2) * D``. Float multiplication is not
+    associative. The previous fixture happened to round identically for its own
+    day counts and the assertion was written as ``==``; that was luck, not
+    identity, and it is stated as the noise floor it is. The mutation this test
+    exists to catch -- ``daily_dcf`` hard-coded to 1/360 -- moves the answer by
+    ``(365/360)**2 - 1 = 2.8%``, ten orders of magnitude outside the band.
     """
+    handle = curve.handle()
+    ref = pd.Timestamp(curve.reference_date())
+    d = daily_dcf(handle)
+    assert d == 1.0 / 365.0  # bit-exact: this IS the whole of the fix
+
     for swap in (pkg.short, pkg.long):
-        assert analytic_leg_gamma(curve, swap) == _legacy_365_control(curve, swap)
+        for date in leg_cashflows(swap.leg1, handle)["Payment"]:
+            days = (pd.Timestamp(date) - ref).days
+            assert days * d == days / 365.0  # bit-exact, per date
+        assert analytic_leg_gamma(curve, swap) == pytest.approx(
+            _legacy_365_control(curve, swap), rel=1e-12
+        )
 
 
 def test_daily_dcf_is_read_off_the_curve_convention(curve, act360_curve):
@@ -234,21 +308,67 @@ def test_daily_dcf_is_read_off_the_curve_convention(curve, act360_curve):
     assert daily_dcf(act360_curve.handle()) == pytest.approx(1.0 / 360.0, rel=1e-12)
 
 
-def test_the_act365f_fixture_pays_365_over_360_on_the_float_leg(curve, pkg):
-    """Why the act365f fixture agrees to 0.7-1.0% but act360 agrees to 0.05%.
+def test_a_curve_index_convention_mismatch_is_now_refused_outright():
+    """The successor to ``test_the_act365f_fixture_pays_365_over_360_...``.
 
-    rateslib compounds the RFR off the *curve* (act365f in this fixture) and
-    then multiplies by the *leg's* own accrual fraction (act360, from the
-    usd_irs spec). When the two conventions disagree the float leg comes out
-    scaled by tau_leg/tau_curve = 365/360 relative to the D(T0)-D(TN)
-    replication, and that ratio is the entire residual: divide it out and the
-    float leg agrees to ~0.05%, which is what the matched-convention curve
-    gives directly. A fixture artefact, not a defect in the mechanic -- pinned
-    here so it does not get rediscovered as a bug.
+    **That test's subject no longer exists.** It pinned a fixture artefact:
+    rateslib compounded the RFR off the *curve* (act365f) and then multiplied
+    by the *leg's* own accrual fraction (act360, from the ``usd_irs`` spec), so
+    a mismatched pair scaled the float leg by tau_leg/tau_curve = 365/360
+    relative to the ``D(T0) - D(TN)`` replication. It was pinned "so it does
+    not get rediscovered as a bug".
+
+    rateslib 2.7.1 makes it unconstructible instead: forecasting an act360 RFR
+    index off an act365f curve raises before any number is produced. The
+    artefact can no longer be measured, so what is pinned here is the refusal
+    that replaced it -- which is the stronger statement, and the one that would
+    catch the pairing coming back.
+
+    Production was never exposed to the artefact: the only act365f curves in
+    this repo are CAD/JPY/GBP/EUR-side and each is paired with a matching
+    act365f spec (``RATESLIB_CURVE_DEFINITIONS``), which the assertion below
+    checks rather than asserts from memory.
+    """
+    mismatched = _curve("USD-OIS", convention="act365f")  # act365f curve, act360 usd_irs legs
+    with pytest.raises(ValueError, match="conflicting parameters"):
+        build_package(mismatched, PAIR, package_dv01_usd=100_000.0, sign=FLATTENER)
+
+    # ...and no shipped curve is in that shape: every act365f curve definition
+    # names a spec whose own legs are act365f.
+    act365f_curves = [
+        name for name, d in RATESLIB_CURVE_DEFINITIONS.items()
+        if d["DayCounter"] == "act365f"
+    ]
+    assert act365f_curves, "expected at least one act365f curve definition"
+    for name in act365f_curves:
+        d = RATESLIB_CURVE_DEFINITIONS[name]
+        nodes = {REF: 1.0, rl.dt(2036, 8, 3): 0.5}
+        handle = rl.Curve(nodes=nodes, convention=d["DayCounter"],
+                          calendar=d["Calendar"], id=name)
+        # Constructing and RATING is what triggers the check; a spec whose legs
+        # were act360 would raise here exactly as the USD case above does.
+        swap = rl.IRS(effective=rl.dt(2027, 8, 3), termination=rl.dt(2032, 8, 3),
+                      spec=d["ReferenceRate"], curves=handle, notional=1.0,
+                      **rate_fixings_kwargs(rl.NoInput(0)))
+        assert float(swap.rate(curves=handle).real) != 0.0, name
+
+
+def test_the_matched_act365f_fixture_needs_no_365_over_360_correction(curve, pkg):
+    """The positive half of the finding above, on the matched pairing.
+
+    The old test's own conclusion was that dividing the 365/360 ratio out left
+    the float leg agreeing "to ~0.05%, which is what the matched-convention
+    curve gives directly". This asserts that directly: with curve and index
+    both act365f, the bumped float-leg convexity IS the ``D(T0) - D(TN)``
+    replication, with no scaling factor -- so any reappearance of a ratio
+    would be a real defect in the mechanic rather than a fixture artefact.
+
+    The band is 0.5%, generous against the 365/360 = 1.0139 the mismatch used
+    to produce (28x outside it) and against exact 1.0.
     """
     for swap in (pkg.short, pkg.long):
         ratio = _float_leg_gamma_bumped(curve, swap) / _float_replication(curve, swap)
-        assert ratio == pytest.approx(365.0 / 360.0, rel=0.002)
+        assert ratio == pytest.approx(1.0, rel=0.005)
 
 
 def test_the_tau_term_is_bound_by_a_semiannual_schedule(act360_curve):
@@ -260,7 +380,7 @@ def test_the_tau_term_is_bound_by_a_semiannual_schedule(act360_curve):
     """
     swap = _semiannual_par_swap(act360_curve)
     handle = act360_curve.handle()
-    cf = swap.leg1.cashflows(handle)
+    cf = leg_cashflows(swap.leg1, handle)
     assert float(cf["DCF"].mean()) == pytest.approx(0.507, abs=0.01)
 
     bumped = _leg_gamma_bumped(act360_curve, swap)

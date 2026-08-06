@@ -20,13 +20,43 @@ from Query.IRSwaps.backends.rateslib.RLIRSwapCurve import RLIRSwapCurve
 REF = rl.dt(2026, 8, 3)
 PAIR = ForwardPair("USD", "USD-OIS", ForwardLeg("10Y", "10Y"), ForwardLeg("20Y", "10Y"))
 
+# Every fixture here is act360 -- the DayCounter ``rl_curve_definitions_map``
+# gives USD-OIS, and the convention the ``usd_irs`` legs these curves price
+# already carried. They were act365f until rateslib 2.7.1, which refuses to
+# forecast an act360 RFR index off an act365f curve at all.
+#
+# WHY EVERY MEASURED NUMBER BELOW MOVED, IN ONE FACTOR. ``rl.Curve.shift``
+# applies its bp at time exponent ``days * d`` with ``d`` the curve's own 1-day
+# DCF (see ``greeks.daily_dcf``), so an act360 curve moves 365/360 further per
+# nominal bp -- measured straight off discount factors, log-DF ratio
+# 1.01388889 against 365/360 = 1.01388889. Every package here is normalised to
+# $100k of REPRICED DV01, so the notional absorbs that: N scales by 360/365.
+# Hence
+#
+#     roll, breakeven  ~  N          ->  x 360/365 = 0.986301
+#     gamma            ~  N * t^2    ->  x 365/360 = 1.013889
+#
+# and that is not a story, it is the arithmetic every re-measured number here
+# obeys -- each to the precision the act365f value had been recorded at:
+#
+#   realistic roll   -1102.39 -> -1087.2845   ratio 0.986297  (err 3.9e-06)
+#   panel roll max   -1472.36 -> -1452.19     ratio 0.986301  (err 4.7e-07)
+#   flat roll          -24.76 ->   -24.4222   ratio 0.986357  (err 5.6e-05)
+#   flat breakeven      0.497 ->     0.490476 ratio 0.986873  (err 5.8e-04)
+#   realistic gamma      ~201 ->   203.9967   ratio 1.014909  (err 1.0e-03)
+#
+# The residual is the rounding of the OLD quoted value in every row (6sf ->
+# 4e-6, 3sf -> 1e-3), which is what it should be if nothing but the convention
+# changed. Each number is additionally confirmed by a route that does not go
+# through this module -- named in the docstring that quotes it.
+
 
 def _flat_curve(ref=REF):
     """Flat 4%: the true-zero-roll sanity baseline."""
     nodes = {ref: 1.0}
     for y in range(1, 41):
         nodes[rl.dt(ref.year + y, ref.month, ref.day)] = 1.0 / (1.04 ** y)
-    handle = rl.Curve(nodes=nodes, convention="act365f", calendar="nyc", id="c")
+    handle = rl.Curve(nodes=nodes, convention="act360", calendar="nyc", id="c")
     return RLIRSwapCurve(
         rl_curve_id="USD-OIS",
         rl_curve_handle=handle,
@@ -58,7 +88,10 @@ def _stress_curve(ref=REF, slope=-0.5):
     exactly 1 calendar day (see the realistic fixture and Item 1 of the
     correction round) does not fix it -- what fixes it is removing the
     first-derivative kink at y=10 (replacing it with a smooth, C1-continuous
-    transition; see ``_realistic_curve``). A curve this shaped is not
+    transition; see ``_realistic_curve``). On act360 those five readings are
+    -667, +9426, +9255, +800, +7836 (they were -676, +9557, +9384, +811,
+    +7945 on act365f -- a uniform ~1.4% shift, the convention's whole effect;
+    the instability is unchanged and is the point). A curve this shaped is not
     something the module's roll story can be trusted on, which is the whole
     point of keeping it here as the labelled stress case rather than as
     the source of any headline number.
@@ -67,7 +100,7 @@ def _stress_curve(ref=REF, slope=-0.5):
     for y in range(1, 41):
         r = 0.04 + slope * max(0.0, y - 10) / 100.0
         nodes[rl.dt(ref.year + y, ref.month, ref.day)] = 1.0 / ((1.0 + r) ** y)
-    handle = rl.Curve(nodes=nodes, convention="act365f", calendar="nyc", id="c")
+    handle = rl.Curve(nodes=nodes, convention="act360", calendar="nyc", id="c")
     return RLIRSwapCurve(
         rl_curve_id="USD-OIS",
         rl_curve_handle=handle,
@@ -81,8 +114,16 @@ def _realistic_curve(ref=REF, a=7.4e-6):
     at y=10 -- no kink) quadratic inversion beyond, ``r(y) = 0.04 - a*(y-10)^2``
     for y>10. Calibrated (``a=7.4e-6``) to the real USD 10y10y/20y10y level:
     desk print was -60.4bp on 2026-07-31 and -57.3bp on 2026-08-03; this
-    fixture gives -58.10bp. Rates stay positive everywhere out to y=40
-    (minimum ~3.33%), unlike the stress fixture.
+    fixture gives **-57.31bp** on act360 (it gave -58.10bp on act365f).
+    Rates stay positive everywhere out to y=40 (minimum ~3.33%), unlike the
+    stress fixture.
+
+    That number is confirmed two ways, neither of them the pricer: reading the
+    par forward rate straight off the curve's own nodes,
+    ``(D(T0) - D(TN)) / sum_i tau_i D(Ti)``, gives -57.34bp for the same
+    slope; and the desk print this fixture was calibrated to is -57.34bp on
+    the very date it is anchored to (2026-08-03). The convention change moved
+    the fixture 0.79bp CLOSER to the level it exists to reproduce.
 
     The smoothness is not cosmetic. The same slope magnitude on the KINKED
     (``_stress_curve``-style, non-smooth) shape was tried first and was
@@ -92,7 +133,7 @@ def _realistic_curve(ref=REF, a=7.4e-6):
     not the destabilising factor, the first-derivative discontinuity at y=10
     (exactly the short leg's own effective date) was. Removing it (this
     function) gives a roll that is stable in sign and within ~34% of itself
-    across 10 business days -- see
+    across 10 business days (measured on act360: 33.6%) -- see
     ``test_realistic_fixture_roll_is_stable_across_consecutive_dates``.
     """
     nodes = {ref: 1.0}
@@ -100,7 +141,7 @@ def _realistic_curve(ref=REF, a=7.4e-6):
         excess = max(0.0, y - 10)
         r = 0.04 - a * excess * excess
         nodes[rl.dt(ref.year + y, ref.month, ref.day)] = 1.0 / ((1.0 + r) ** y)
-    handle = rl.Curve(nodes=nodes, convention="act365f", calendar="nyc", id="c")
+    handle = rl.Curve(nodes=nodes, convention="act360", calendar="nyc", id="c")
     return RLIRSwapCurve(
         rl_curve_id="USD-OIS",
         rl_curve_handle=handle,
@@ -163,9 +204,9 @@ def test_translate_yields_no_carry_for_a_par_struck_forward_package():
     translated = curve.handle().translate(next_date)
     roll_via_translate = package_npv(translated, pkg) - package_npv(curve.handle(), pkg)
     # A real one-day bleed on a $100k/bp package is materially larger (this
-    # fixture's roll()-based daily_roll_usd measures -1102.39); 1e-3 is
-    # generous headroom above the ~1e-7 noise floor actually observed while
-    # still being far below any economically plausible carry number.
+    # fixture's roll()-based daily_roll_usd measures -1087.28 on act360);
+    # 1e-3 is generous headroom above the ~5e-8 noise floor actually observed
+    # while still being far below any economically plausible carry number.
     assert abs(roll_via_translate) < 1e-3
 
 
@@ -205,38 +246,57 @@ def test_realistic_curve_flattener_bleeds():
 
 def test_realistic_curve_roll_is_materially_negative_not_merely_negative():
     """A real bleed, not a rounding artifact: of a size that could plausibly
-    fund the day's convexity gain (Gamma ~201 $/bp^2 on this fixture ->
+    fund the day's convexity gain (Gamma ~204 $/bp^2 on this fixture ->
     breakeven in the low single-digit bp/day range, not micro-bp).
+
+    Both numbers confirmed off the pricing path. Gamma: ``analytic_leg_gamma``
+    -- the closed-form second derivative of the single-curve replication, the
+    Task 8 control -- gives 203.80 against the repriced 204.00, 0.095% apart
+    (the control's own agreement band is 2%, and Task 13's measured net
+    convexity anchor is ~200 $/bp^2). Roll: for a leg struck at ``k`` on the
+    base curve, its PV on the rolled curve is exactly
+    ``N * (fair_rolled - k) * A_rolled``; summing that over the two legs, with
+    ``fair`` from ``IRS.rate()`` and the annuity ``A`` from the rolled curve's
+    own discount factors -- no ``npv()``, none of this module's arithmetic --
+    reproduces -1087.2845 to printed precision on all three fixtures.
     """
     curve = _realistic_curve()
     pkg = build_package(curve, PAIR, package_dv01_usd=100_000.0)
     next_date = curve.reference_date() + pd.Timedelta(days=1)
     roll = daily_roll_usd(curve, pkg, next_date=next_date)
-    assert roll < -500.0  # measured -1102.39; generous headroom below that
+    assert roll < -500.0  # measured -1087.28 (act365f gave -1102.39)
 
 
 def test_flat_curve_roll_is_near_zero():
     """The sanity check that ``roll`` is measuring curve SHAPE, not something
     else: with no inversion there is nothing to bleed, so roll should be tiny
-    relative to the materially-negative inverted case above (~44x smaller).
+    relative to the materially-negative inverted case above (~44x smaller;
+    measured 1087.28 / 24.42 = 44.5x, and it was 44.5x on act365f too -- the
+    convention shifts both by the same 1.4% and cancels out of the ratio).
     """
     curve = _flat_curve()
     pkg = build_package(curve, PAIR, package_dv01_usd=100_000.0)
     next_date = curve.reference_date() + pd.Timedelta(days=1)
     roll = daily_roll_usd(curve, pkg, next_date=next_date)
-    assert abs(roll) < 100.0  # measured -24.76
+    # measured -24.4222 (act365f gave -24.76); confirmed to printed precision
+    # by the annuity identity described in the test above.
+    assert abs(roll) < 100.0
 
 
 def test_flat_curve_breakeven_is_small():
     """The true answer on a flat curve is a breakeven of 0 (nothing to fund).
-    ``daily_roll_usd`` is not exactly 0 on this fixture (-$24.76, see above --
+    ``daily_roll_usd`` is not exactly 0 on this fixture (-$24.42, see above --
     a residual of the same repriced-DV01-vs-fair-rate-sensitivity kind Task 8
     already documents), so the breakeven it implies is not exactly 0 either.
     This pins it as small, not as an unexplained nonzero number.
+
+    0.490 is DERIVED, not observed: ``breakeven_bp_day`` is
+    ``sqrt(2|roll| / gamma)`` and ``sqrt(2 * 24.4222 / 203.0391) = 0.490476``
+    exactly reproduces it from two numbers each confirmed independently above.
     """
     curve = _flat_curve()
     g = compute_greeks(curve, PAIR)
-    assert 0.0 < g.breakeven_by_h[25.0] < 1.0  # measured 0.497
+    assert 0.0 < g.breakeven_by_h[25.0] < 1.0  # measured 0.490 (act365f: 0.497)
 
 
 def test_realistic_fixture_roll_is_stable_across_consecutive_dates():
@@ -248,8 +308,12 @@ def test_realistic_fixture_roll_is_stable_across_consecutive_dates():
 
     On this realistic fixture the roll is stable: negative on every day,
     and the largest magnitude is within ~34% of the smallest (measured
-    range -1472.36 to -1102.39; the assertion below uses a 2x band for
-    headroom). Per the brief: if this had NOT held, the fixture would not
+    range -1452.19 to -1087.28 on act360, ratio 1.336; act365f gave
+    -1472.36 to -1102.39, ratio 1.336 -- the SAME ratio, because the
+    convention scales every day by the same 1.4% and cancels. That
+    invariance is the confirmation: the assertion is on a ratio, and the
+    ratio did not move at all. The assertion below uses a 2x band for
+    headroom.) Per the brief: if this had NOT held, the fixture would not
     have been tuned until it did -- it would have been reported as a finding
     that the package roll cannot be measured this way. It holds here.
     """
@@ -294,19 +358,30 @@ def test_repo_bps_running_cross_check():
     itself unrelated in sign convention to a shortening-based diff) produces
     a sign flip PER LEG purely from that subtraction-order mismatch, whenever
     both mechanics move the fair rate the same way -- which they do here
-    (e.g. short leg: aging +0.2816 vs -roll_bps_running +0.5153; long leg:
-    +0.2884 vs +0.2495 -- once ``roll_bps_running`` is negated to the same
+    (short leg: aging +0.0099 vs -roll_bps_running +0.0123; long leg:
+    +0.0207 vs +0.0066 -- once ``roll_bps_running`` is negated to the same
     orientation, both legs agree). That per-leg "agreement" (or the
     previous version's "disagreement") is guaranteed by algebra, not
     independent corroboration of anything -- it holds regardless of whether
     the two mechanics actually measure the same economics.
 
+    **Those four per-leg numbers used to be the wrong fixture's, and that was
+    not caused by the act360 move.** They were previously quoted as
+    "+0.2816 / +0.5153 / +0.2884 / +0.2495". Measured on ``_stress_curve``
+    (act360) they are +0.2778 / +0.5082 / +0.2845 / +0.2461 -- the same
+    numbers up to the 1.4% the convention is worth -- while this test's body
+    runs on ``_realistic_curve``, which gives the values now quoted, ~28x
+    smaller. ``c0aa20fc`` switched the body from the kinked curve to the
+    realistic one and carried the old fixture's readings into the new
+    docstring. Nothing failed, because the assertion is a sign check that
+    holds on both. Re-measured here on the fixture the test actually runs.
+
     **The only apples-to-apples comparison is at the package level**, and
     even that is not a stable finding here. Correcting the combination
     formula for the same subtraction-order issue (package repo measure =
     ``short_cr - long_cr``, not the original ``long_cr - short_cr``) makes
-    the two agree in sign on 2026-08-03 (roll_bp_equiv -0.0110 vs corrected
-    repo -0.0058, same sign, ~1.9x apart in magnitude -- the kind of
+    the two agree in sign on 2026-08-03 (roll_bp_equiv -0.0109 vs corrected
+    repo -0.0057, same sign, ~1.9x apart in magnitude -- the kind of
     "genuine divergence in magnitude" a clean finding would look like).
     **But it does not hold on other dates**: checked on 2026-08-04, 08-06 and
     on the flat fixture, the corrected package-level comparison's sign
