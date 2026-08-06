@@ -339,9 +339,11 @@ def test_a_curve_index_convention_mismatch_is_now_refused_outright():
     catch the pairing coming back.
 
     Production was never exposed to the artefact: the only act365f curves in
-    this repo are CAD/JPY/GBP/EUR-side and each is paired with a matching
-    act365f spec (``RATESLIB_CURVE_DEFINITIONS``), which the assertion below
-    checks rather than asserts from memory.
+    this repo are CAD-CORRA, JPY-TONAR, JPY-TONA and GBP-SONIA, and each is
+    paired with a spec whose own legs are act365f -- which the loop below
+    checks against ``RATESLIB_CURVE_DEFINITIONS`` rather than asserting from
+    memory, because the set is easy to misremember (EUR-ESTR is act360, not
+    act365f).
     """
     mismatched = _curve("USD-OIS", convention="act365f")  # act365f curve, act360 usd_irs legs
     with pytest.raises(ValueError, match="conflicting parameters"):

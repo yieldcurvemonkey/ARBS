@@ -220,6 +220,14 @@ def analytic_leg_gamma(curve, swap) -> float:
     legs) on an act365f curve therefore misses by 365/360 = 1.39% on the float
     leg. Matched conventions -- the production case -- agree to ~0.05%.
 
+    **From rateslib 2.7.1 that caveat is unreachable, not merely unlikely**:
+    forecasting an act360 RFR index off an act365f curve raises
+    ``ValueError: A `rate_curve` and `rate_index` have been supplied with
+    conflicting parameters`` before any number is produced. Kept because it
+    explains what the assumption IS, and because it is the reason the
+    telescoping is sound wherever this function can now be called at all. See
+    ``test_a_curve_index_convention_mismatch_is_now_refused_outright``.
+
     Residual against a repriced bump, on matched conventions, is second-order:
     the second difference's own truncation error, rateslib's discrete
     ``(1 + d*s)**n`` against this formula's ``e^{-Dt}`` (~0.01% on t), and
