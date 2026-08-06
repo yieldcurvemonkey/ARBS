@@ -4,8 +4,8 @@ Every defect found post-hoc in this repo's research so far has flattered the
 hypothesis. So the placebos run BEFORE the winner is believed, not after it is
 questioned.
 
-Four legs, and each one is written so that it can come back with the answer
-nobody wants:
+Three legs plus one diagnostic, each written so that it can come back with the
+answer nobody wants:
 
 1. **Short-dated placebo** -- the identical rulebook on
    ``universe.PLACEBO_PAIRS``, where the convexity story should not hold. A
@@ -29,7 +29,8 @@ nobody wants:
    ``mirror_is_arithmetic`` on every mirror row it does produce. What the
    mirror can still show is BOTH SIDES LOSING -- the pair
    sitting inside the cost band -- which is a statement about costs, not about
-   convexity. Read it as that.
+   convexity. Read it as that. **It is therefore a diagnostic, not a placebo,
+   and it is opt-in** (``sign_mirror=True``): see :data:`PLACEBO_FAMILIES`.
 4. **Confound alternatives** for whatever config wins: duration-only
    (:class:`DurationOnlyPricer` -- the long leg outright, DV01-matched to the
    package), PC1-only (the slope's projection on the first principal component
@@ -70,6 +71,7 @@ from RVUtils.pca_rv import make_pca_rv_builder
 
 __all__ = [
     "CONFOUND_METRIC",
+    "MIRROR_FAMILY",
     "PLACEBO_FAMILIES",
     "PLACEBO_PAIR_NAMES",
     "MIRROR_REL_TOL",
@@ -84,8 +86,27 @@ __all__ = [
     "z_rule_signals",
 ]
 
-#: The families :func:`run_placebos` can emit, in report order.
-PLACEBO_FAMILIES = ("real", "short_dated", "shuffled_vol", "sign_mirror")
+#: The real run and the families that are genuinely PLACEBOS -- an identical
+#: rulebook run somewhere the story should not hold, in report order.
+#:
+#: ``sign_mirror`` is deliberately NOT here. It is a cost-band diagnostic, not
+#: a placebo: the mirror is arithmetically vacuous in this engine (measured on
+#: the Task 17 conditional rule, real gross ``+1,816,800.428923`` against
+#: mirror ``-1,816,800.428923``, summing to exactly ``0.0``), so it can never
+#: be evidence about convexity the way the other two legs can. Listing it
+#: beside them said the three were the same kind of object, and cost the run
+#: :func:`_direction_coverage`'s sweep -- one ``build_signals`` per distinct
+#: signal-config key, 162 of them per pair on ``build_config_grid`` -- for a
+#: leg whose result is known before it runs. The mirror is now opt-in
+#: (``sign_mirror=True``); the guard that refuses it on a one-directional
+#: book is unchanged, because what the guard buys is that a one-directional
+#: book cannot be REPORTED as evidence.
+PLACEBO_FAMILIES = ("real", "short_dated", "shuffled_vol")
+
+#: The diagnostic leg's family label. Emitted in the ``family`` column like the
+#: placebos, and named here so the truthfulness check below stays honest
+#: without pretending it is one of them.
+MIRROR_FAMILY = "sign_mirror"
 
 #: The short-dated slopes requirement 1 nominates, read from the universe
 #: rather than restated here: ``USD 1Y5Y/2Y5Y`` and ``USD 2Y2Y/3Y2Y``. The leg
@@ -495,10 +516,10 @@ def run_placebos(
     n_shuffles: int = 5,
     seed: int = 0,
     min_autocorr_ratio: float = 0.5,
-    sign_mirror: bool = True,
+    sign_mirror: bool = False,
     expect_placebo_pairs: bool = True,
 ) -> pd.DataFrame:
-    """The three placebo legs plus the real run, one frame, one ``family`` column.
+    """The two placebo legs plus the real run, one frame, one ``family`` column.
 
     Everything goes through :func:`backtest.run_grid`, so every leg inherits
     its refusals -- an unsweepable grid axis, a prebuilt frame reused for every
@@ -514,9 +535,15 @@ def run_placebos(
     defaults to ``be_over_realized`` -- the valuation switch, the largest lever
     of ``signal_state``'s five inputs and the one the vol story lives in.
 
-    The sign mirror is refused outright unless the signal takes BOTH directions
-    at some point: see the module docstring, and do not report a
-    one-directional book's mirror as evidence.
+    ``sign_mirror`` is **off by default**, and is a diagnostic rather than a
+    placebo (see :data:`PLACEBO_FAMILIES`): the mirror is exactly ``-gross``
+    by construction, so it answers a cost-band question, not a convexity one,
+    and running it costs :func:`_direction_coverage` one ``build_signals`` per
+    distinct signal-config key -- 162 per pair on the study's own grid. Ask
+    for it when the cost-band reading is what you want. When it does run it is
+    refused outright unless the signal takes BOTH directions at some point:
+    see the module docstring, and do not report a one-directional book's
+    mirror as evidence.
     """
     base_signal_cfg = base_signal_cfg or SignalConfig()
     if (placebo_ctx_by_pair is None) != (placebo_panel_by_pair is None):
@@ -674,7 +701,8 @@ def run_placebos(
     else:
         skipped.append("sign_mirror")
 
-    unknown = [f for f in ran + skipped if f not in PLACEBO_FAMILIES]
+    unknown = [f for f in ran + skipped
+               if f not in PLACEBO_FAMILIES + (MIRROR_FAMILY,)]
     if unknown:  # pragma: no cover -- keeps the exported constant truthful
         raise AssertionError(f"undeclared placebo family/families {unknown}")
     out = pd.concat(frames, ignore_index=True, sort=False)

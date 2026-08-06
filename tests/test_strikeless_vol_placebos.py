@@ -21,13 +21,16 @@ from RVUtils.StrikelessVol.conventions import FLATTENER, STEEPENER
 from RVUtils.StrikelessVol.costs import FREE, TAKER
 from RVUtils.StrikelessVol.replication import ReplicationConfig
 from RVUtils.StrikelessVol.report import FORBIDDEN_RANK_KEYS
-from RVUtils.StrikelessVol.strategy import SignalConfig
+from RVUtils.StrikelessVol.strategy import SignalConfig, build_signals
 from RVUtils.StrikelessVol.universe import PLACEBO_PAIRS
 from RVUtils.StrikelessVol.backtest import run_grid
 from scripts.sv_placebos import (
     CONFOUND_METRIC,
+    MIRROR_FAMILY,
+    PLACEBO_FAMILIES,
     PLACEBO_PAIR_NAMES,
     _annotate_mirror,
+    _direction_coverage,
     DurationOnlyPricer,
     block_bootstrap,
     carry_sign_signals,
@@ -296,7 +299,7 @@ def test_run_placebos_runs_every_leg_and_says_which():
     out = run_placebos({"USD": ctx}, {"USD": panel}, GRID, costs=TAKER,
                        placebo_ctx_by_pair={SHORT: pl_ctx},
                        placebo_panel_by_pair={SHORT: pl_panel},
-                       block=21, n_shuffles=2, seed=1)
+                       block=21, n_shuffles=2, seed=1, sign_mirror=True)
     assert out.attrs["legs_run"] == ("real", "short_dated", "shuffled_vol",
                                      "sign_mirror")
     assert out.attrs["legs_skipped"] == ()
@@ -487,6 +490,95 @@ def test_run_placebos_refuses_a_bootstrap_that_destroyed_the_persistence():
                      block=21, n_shuffles=1, min_autocorr_ratio=0.999)
 
 
+def test_the_mirror_is_a_diagnostic_not_a_placebo_and_is_opt_in():
+    """The mirror is not a placebo, is not listed as one, and does not run
+    unless asked.
+
+    ``simulate`` is exactly antisymmetric, so the mirror's result is known
+    before it runs (measured on the conditional rule: real gross
+    +1,816,800.428923 against mirror -1,816,800.428923, summing to exactly
+    0.0). It answers a cost-band question, not a convexity one, so it does not
+    belong beside the two legs that CAN come back with the answer nobody
+    wants. The guard that refuses it on a one-directional book is unchanged --
+    see the two tests below, both of which now ask for the leg explicitly.
+    """
+    assert "sign_mirror" not in PLACEBO_FAMILIES
+    assert PLACEBO_FAMILIES == ("real", "short_dated", "shuffled_vol")
+    assert MIRROR_FAMILY == "sign_mirror"
+
+    ctx, panel = _world()
+    out = run_placebos({"USD": ctx}, {"USD": panel}, GRID, costs=TAKER,
+                       n_shuffles=0)
+    assert out.attrs["legs_run"] == ("real",)
+    assert MIRROR_FAMILY in out.attrs["legs_skipped"]
+    assert MIRROR_FAMILY not in set(out["family"])
+    assert out.attrs["sign_mirror_is_arithmetic"] is None
+
+
+def test_leaving_the_mirror_out_skips_the_direction_coverage_sweep():
+    """The cost the label change was made for, counted rather than asserted.
+
+    ``_direction_coverage`` builds signals once per DISTINCT signal-config key
+    so it can decide the mirror's scope per config, and the study's own
+    ``build_config_grid`` has 162 of them per pair (3x3x3x3x2) -- the
+    Task 19 re-review's "162 extra ``build_signals`` calls per pair when the
+    mirror leg runs". Measured here on a 6-signal-config grid:
+
+    * the real run alone costs one build per distinct signal config
+      (``run_grid`` memoises within a call);
+    * ``_direction_coverage`` costs exactly one more each -- the reviewer's
+      162;
+    * and the mirror's own ``run_grid`` costs a further one each, since it is
+      a separate call with a separate memo and ``sign`` is a replication axis
+      that does not collapse the signal keys.
+
+    So the leg is 2x the real run's signal work, for a result that is
+    ``-gross`` by construction. Turning it off is the whole point of the
+    label change.
+    """
+    ctx, panel = _world()
+    # 3 x 2 configs but only 3 x 2 = 6 DISTINCT SIGNAL configs when both axes
+    # are SignalConfig fields; `trigger_bp` is not one (it is a replication
+    # axis), which is exactly why the count has to be taken from the signal
+    # axes rather than from len(grid).
+    grid = [{"trigger_bp": 25.0, "z_entry": z, "short_side_enabled": s}
+            for z in (1.0, 1.5, 2.0) for s in (True, False)]
+    n_signal_configs = len({(c["z_entry"], c["short_side_enabled"]) for c in grid})
+    assert n_signal_configs == 6
+
+    def count(**kw):
+        calls = []
+
+        def builder(source, cfg):
+            calls.append(cfg)
+            return build_signals(source, cfg)
+
+        run_placebos({"USD": ctx}, {"USD": panel}, grid, costs=TAKER,
+                     signal_builder=builder, n_shuffles=0, **kw)
+        return len(calls)
+
+    without = count(sign_mirror=False)
+    with_ = count(sign_mirror=True)
+    assert without == n_signal_configs
+    assert with_ - without == 2 * n_signal_configs
+
+    # ...and the coverage sweep is exactly half of that extra: the number the
+    # Task 19 re-review put at 162 on the real grid. Called directly so the
+    # claim is attributed to the right function, not inferred from a total.
+    coverage_calls = []
+
+    def coverage_builder(source, cfg):
+        coverage_calls.append(cfg)
+        return build_signals(source, cfg)
+
+    coverage = _direction_coverage(panel, grid, signal_builder=coverage_builder,
+                                   base_signal_cfg=SignalConfig())
+    assert len(coverage_calls) == n_signal_configs
+    assert len(coverage) == n_signal_configs
+    # and it is genuinely per-config: short_side_enabled=False is one-directional
+    assert sorted(coverage.values()) == [False, False, False, True, True, True]
+
+
 def test_run_placebos_refuses_the_sign_mirror_on_a_static_book():
     """Task 13's amendment, enforced rather than written down.
 
@@ -496,7 +588,7 @@ def test_run_placebos_refuses_the_sign_mirror_on_a_static_book():
     ctx, _ = _world()
     with pytest.raises(ValueError, match="arithmetically vacuous"):
         run_placebos({"USD": ctx}, {"USD": _static_panel(ctx.dates)}, GRID,
-                     costs=FREE, n_shuffles=0)
+                     costs=FREE, n_shuffles=0, sign_mirror=True)
 
 
 def test_the_sign_mirror_is_measured_arithmetic_not_evidence():
@@ -508,7 +600,7 @@ def test_the_sign_mirror_is_measured_arithmetic_not_evidence():
     """
     ctx, panel = _world()
     out = run_placebos({"USD": ctx}, {"USD": panel}, GRID, costs=TAKER,
-                       n_shuffles=0)
+                       n_shuffles=0, sign_mirror=True)
     mirror = out[out["family"] == "sign_mirror"]
     assert len(mirror) == 1
     assert bool(mirror["mirror_is_arithmetic"].all())
@@ -529,7 +621,7 @@ def test_the_mirror_pairs_each_row_with_the_config_it_actually_mirrors():
     ctx, panel = _world()
     grid = [{"trigger_bp": 25.0, "sign": 1}, {"trigger_bp": 25.0, "sign": -1}]
     out = run_placebos({"USD": ctx}, {"USD": panel}, grid, costs=TAKER,
-                       n_shuffles=0)
+                       n_shuffles=0, sign_mirror=True)
     mirror = out[out["family"] == "sign_mirror"]
     assert len(mirror) == 2
     assert sorted(mirror["sign"]) == [-1, 1]
@@ -584,7 +676,7 @@ def test_the_mirror_scope_is_decided_per_config_not_per_pair():
     grid = [{"trigger_bp": 25.0, "short_side_enabled": True},
             {"trigger_bp": 25.0, "short_side_enabled": False}]
     out = run_placebos({"USD": ctx}, {"USD": panel}, grid, costs=TAKER,
-                       n_shuffles=0)
+                       n_shuffles=0, sign_mirror=True)
     mirror = out[out["family"] == "sign_mirror"].set_index("short_side_enabled")
     assert bool(mirror.loc[True, "mirror_scope_ok"]) is True
     assert bool(mirror.loc[False, "mirror_scope_ok"]) is False
@@ -592,7 +684,7 @@ def test_the_mirror_scope_is_decided_per_config_not_per_pair():
     with pytest.raises(ValueError, match="NO config in this grid"):
         run_placebos({"USD": ctx}, {"USD": panel},
                      [{"trigger_bp": 25.0, "short_side_enabled": False}],
-                     costs=TAKER, n_shuffles=0)
+                     costs=TAKER, n_shuffles=0, sign_mirror=True)
 
 
 def test_the_bootstrap_stamp_and_the_gate_agree_on_persistence():
