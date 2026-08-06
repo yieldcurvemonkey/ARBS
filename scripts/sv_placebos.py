@@ -71,6 +71,7 @@ from RVUtils.pca_rv import make_pca_rv_builder
 
 __all__ = [
     "CONFOUND_METRIC",
+    "DEFAULT_BLOCK",
     "MIRROR_FAMILY",
     "PLACEBO_FAMILIES",
     "PLACEBO_PAIR_NAMES",
@@ -150,8 +151,15 @@ _SIGNAL_FIELDS = set(SignalConfig.__dataclass_fields__)
 
 # --------------------------------------------------------------- the resample
 
+#: The moving-block length, measured off a real ``be_over_realized`` rather
+#: than chosen for safety -- see :func:`block_bootstrap` for the table. Named
+#: once and used in BOTH signatures below so the resampler's default and the
+#: suite's default cannot drift apart; two independently-restated 21s is how
+#: an unmeasured judgement survives a review that only looked at one of them.
+DEFAULT_BLOCK: int = 63
 
-def block_bootstrap(series: pd.Series, *, block: int = 21, seed: int = 0,
+
+def block_bootstrap(series: pd.Series, *, block: int = DEFAULT_BLOCK, seed: int = 0,
                     min_ratio: float = 0.5) -> pd.Series:
     """Resample in blocks, preserving short-run autocorrelation.
 
@@ -161,6 +169,36 @@ def block_bootstrap(series: pd.Series, *, block: int = 21, seed: int = 0,
     permutation takes lag-1 autocorrelation to **-0.009** and inflates the
     increment volatility **5.5x**, while this at ``block=63`` leaves it at
     0.960.
+
+    **The default is 63 because the real series was measured, not because 21
+    looked safe.** Task 19's review flagged the old default as errs-safe-but-
+    unmeasured. Measured on a REAL ``be_over_realized``: a full-sample
+    USD 10Y10Y/20Y10Y greeks panel, 2391 GSQUANT-RL USD-OIS curves over
+    2017-01-03..2026-08-03 (0 dropped), ``breakeven_h25`` over a rolling-63
+    realized vol. **Observed lag-1 autocorrelation 0.881** (0.882 against the
+    spread-vol denominator; identical to 4 d.p. at h=10, 25 and 50, because
+    the three breakevens are proportional to within 0.2%). The resample then
+    delivers, median over 20 seeds:
+
+    ========  ==================  ==========================
+    block     ac1 ratio (kept)    increment-vol ratio (cost)
+    ========  ==================  ==========================
+    5              0.795 - 0.800                 1.58
+    21             0.945 - 0.949                 1.16 - 1.18
+    **63**         **0.983 - 0.985**             **1.04 - 1.05**
+    126            0.975 - 0.995                 1.04
+    ========  ==================  ==========================
+
+    63 dominates 21 on BOTH axes and is not beaten by 126, which buys nothing
+    on persistence while halving the number of independent blocks per draw
+    (2328/63 = 37 against 2328/126 = 18, and a null built from 18 blocks is
+    starting to be a copy of the real series). There is a mechanism, not just a
+    grid search: ``be_over_realized``'s denominator IS a rolling-63 standard
+    deviation, so a block shorter than that window slices through the window
+    and breaks exactly the persistence the window creates.
+
+    Callers with a series shorter than ~130 rows must pass a smaller ``block``
+    explicitly -- ``block >= len(series)`` is refused below.
 
     **What it preserves and what it does not, measured rather than asserted.**
     The moving-block bootstrap is defined for a STATIONARY series. It preserves
@@ -512,7 +550,7 @@ def run_placebos(
     placebo_ctx_by_pair: Optional[Dict[str, object]] = None,
     placebo_panel_by_pair: Optional[Dict[str, pd.DataFrame]] = None,
     vol_col: str = "be_over_realized",
-    block: int = 21,
+    block: int = DEFAULT_BLOCK,
     n_shuffles: int = 5,
     seed: int = 0,
     min_autocorr_ratio: float = 0.5,
@@ -534,6 +572,12 @@ def run_placebos(
     ``vol_col`` is the column the shuffled-vol leg block-bootstraps. It
     defaults to ``be_over_realized`` -- the valuation switch, the largest lever
     of ``signal_state``'s five inputs and the one the vol story lives in.
+
+    ``block`` defaults to 63, chosen from the MEASURED lag-1 autocorrelation of
+    a real ``be_over_realized`` (0.881 on 2391 USD-OIS curves, 2017-2026) --
+    see :func:`block_bootstrap` for the ac1-kept/increment-vol-cost table 63
+    was picked off. A panel shorter than ~130 rows needs a smaller ``block``
+    passed explicitly.
 
     ``sign_mirror`` is **off by default**, and is a diagnostic rather than a
     placebo (see :data:`PLACEBO_FAMILIES`): the mirror is exactly ``-gross``

@@ -26,6 +26,7 @@ from RVUtils.StrikelessVol.universe import PLACEBO_PAIRS
 from RVUtils.StrikelessVol.backtest import run_grid
 from scripts.sv_placebos import (
     CONFOUND_METRIC,
+    DEFAULT_BLOCK,
     MIRROR_FAMILY,
     PLACEBO_FAMILIES,
     PLACEBO_PAIR_NAMES,
@@ -131,6 +132,44 @@ def test_block_bootstrap_preserves_length_and_roughly_the_vol():
     # null the switch could have failed on
     assert out.std(ddof=1) == pytest.approx(s.std(ddof=1), rel=0.25)
     assert out.mean() == pytest.approx(s.mean(), rel=0.10)
+
+
+def test_the_default_block_keeps_more_persistence_than_the_old_one():
+    """The default is 63 because it was MEASURED, and this is the measurement.
+
+    Task 19's review flagged ``block=21`` as errs-safe-but-unmeasured. The real
+    ``be_over_realized`` -- 2391 GSQUANT-RL USD-OIS curves, 2017-01-03..
+    2026-08-03, ``breakeven_h25`` over a rolling-63 realized vol -- has lag-1
+    autocorrelation **0.881**, and the resample keeps 0.945 of it at block 21
+    against 0.983 at block 63, while the increment-volatility distortion falls
+    from 1.17 to 1.05. 63 dominates 21 on BOTH axes.
+
+    Reproduced here on a synthetic rho=0.97 series of the same length rather
+    than asserted from prose, and stated as an inequality between the default
+    and the old value so a revert to 21 fails rather than merely disagrees with
+    a docstring. Medians over seeds, because one draw is one draw.
+    """
+    s = _vol_like(2400, rho=0.97, seed=11)
+    default = [block_bootstrap(s, seed=k) for k in range(1, 11)]
+    old = [block_bootstrap(s, block=21, seed=k) for k in range(1, 11)]
+    assert DEFAULT_BLOCK == 63
+    keep_new = np.median([o.attrs["autocorr1_ratio"] for o in default])
+    keep_old = np.median([o.attrs["autocorr1_ratio"] for o in old])
+    assert keep_new > keep_old
+    assert keep_new > 0.95
+    base = float(s.diff().std(ddof=1))
+    dist_new = np.median([float(o.diff().std(ddof=1)) / base for o in default])
+    dist_old = np.median([float(o.diff().std(ddof=1)) / base for o in old])
+    assert dist_new < dist_old
+
+
+def test_the_suite_and_the_resampler_share_one_default_block():
+    """Two independently-restated 21s is how an unmeasured judgement survives a
+    review that only looked at one of them."""
+    import inspect
+
+    assert inspect.signature(block_bootstrap).parameters["block"].default is DEFAULT_BLOCK
+    assert inspect.signature(run_placebos).parameters["block"].default is DEFAULT_BLOCK
 
 
 def test_block_bootstrap_is_seed_reproducible():
