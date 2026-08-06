@@ -504,11 +504,17 @@ def test_uniform_pca_weights_are_refused_because_the_metric_is_the_identity(mode
 
 
 def test_the_uniform_metric_really_is_the_identity(model):
-    """The refusal above is not a superstition; this is the measurement."""
-    from RVUtils.rl_swap_risk_ladder_utils import _build_pca_metric_matrix
+    """The refusal is not a superstition; this is the measurement it rests on.
 
+    Built here straight from the loadings rather than through
+    ``_build_pca_metric_matrix``, which now refuses this case -- a guard cannot
+    be its own evidence. ``eigh`` returns an orthonormal square ``L``, so
+    ``L diag(1) L^T = L L^T = I``; measured at 8.9e-16 on a real fitted
+    10-bucket USD-OIS model.
+    """
     K = len(model.columns)
-    G = _build_pca_metric_matrix(model, np.ones(K))
+    L = model.loadings.values
+    G = L @ np.diag(np.ones(K)) @ L.T
     assert G == pytest.approx(np.eye(K), abs=1e-10)
 
 
@@ -523,10 +529,35 @@ def test_the_default_metric_projects_onto_the_first_two_components(model):
 
 
 def test_pca_metric_refuses_n_factors_outside_the_model(model):
+    K = len(model.columns)
     with pytest.raises(ValueError, match="n_factors"):
         pca_metric(model, n_factors=0)
     with pytest.raises(ValueError, match="n_factors"):
-        pca_metric(model, n_factors=len(model.columns) + 1)
+        pca_metric(model, n_factors=K + 1)
+    # K itself IS the identity, and the message has to say so in terms of the
+    # argument the caller passed rather than in terms of pca_weights
+    with pytest.raises(ValueError, match=f"n_factors must be in 1..{K - 1}"):
+        pca_metric(model, n_factors=K)
+
+
+def test_the_identity_refusal_lives_at_source_not_only_in_this_module(model):
+    """The degenerate default was ``_build_pca_metric_matrix``'s own, so every
+    caller in the repo was affected -- not only this study. Fixing it here
+    would have left ``solve_best_n_leg_hedge_pca`` handing out an unweighted
+    least-squares hedge under a PCA label."""
+    from RVUtils.rl_swap_risk_ladder_utils import (
+        _build_pca_metric_matrix,
+        _build_pca_projection,
+    )
+
+    with pytest.raises(ValueError, match="arithmetically the identity"):
+        _build_pca_metric_matrix(model)          # the function's OWN default
+    with pytest.raises(ValueError, match="arithmetically the identity"):
+        _build_pca_projection(model, None)       # the same branch, one function over
+    # a genuine projector still passes
+    w = np.zeros(len(model.columns))
+    w[:2] = 1.0
+    assert _build_pca_metric_matrix(model, w).shape == (len(model.columns),) * 2
 
 
 # --------------------------------------------------------- fly_hedge_weights

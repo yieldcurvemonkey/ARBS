@@ -465,7 +465,7 @@ def factor_exposures(pca_model, ladder: pd.Series) -> pd.Series:
 
 
 def pca_metric(pca_model, *, pca_weights=None, n_factors: int = HEDGED_FACTORS) -> np.ndarray:
-    """``G = L diag(w) L^T``, with the degenerate uniform case refused.
+    """``G = L diag(w) L^T``, defaulting to the PC1..PCn projector.
 
     **Uniform weights make G the identity, and that is not a small
     approximation -- it is the PCA doing nothing at all.** ``eigh`` returns an
@@ -476,37 +476,39 @@ def pca_metric(pca_model, *, pca_weights=None, n_factors: int = HEDGED_FACTORS) 
     the same ladder, 478,517 -- the same number, and the fly removed 0.16% of
     it. That is the signature of a metric that is not a metric.
 
-    ``_build_pca_metric_matrix`` never reads ``pca_weights=None`` as anything
-    but ones, so the default here is **not** ``None``: it is
-    ``w = [1]*n_factors + [0]*rest``, which makes ``G`` the orthogonal
+    That refusal now lives **at source**, in
+    ``rl_swap_risk_ladder_utils._refuse_degenerate_pca_metric``, because the
+    degenerate case was ``_build_pca_metric_matrix``'s own default and so
+    affected every caller in the repo, not only this module. It is deliberately
+    not duplicated here: one refusal in one place, which a reader can find from
+    either end.
+
+    What this function adds is the **default**. ``_build_pca_metric_matrix``
+    reads ``pca_weights=None`` as ones (and now raises on it), so the default
+    here is ``w = [1]*n_factors + [0]*rest``, which makes ``G`` the orthogonal
     projector onto the first ``n_factors`` components. Minimising ``x^T G x``
     is then literally "minimise the level and slope exposure of the residual",
     which is the claim H9 makes.
 
-    Pass ``pca_weights`` explicitly to weight differently (e.g. by eigenvalue);
-    the identity refusal still applies, because it is about what the metric
-    does, not about how it was asked for.
+    ``n_factors`` is bounded at ``K-1``, not ``K``: asking for every component
+    IS the identity, and it is friendlier to say so in terms of the argument
+    the caller passed than to let the source refusal answer a question about
+    ``n_factors`` in the language of ``pca_weights``.
     """
     K = pca_model.loadings.shape[1]
     if pca_weights is None:
         n = int(n_factors)
-        if not 1 <= n <= K:
-            raise ValueError(f"n_factors must be in 1..{K}, got {n_factors}")
+        if not 1 <= n <= K - 1:
+            raise ValueError(
+                f"n_factors must be in 1..{K - 1}, got {n_factors}. Hedging all "
+                f"{K} components makes G = L I L^T = the identity, i.e. plain "
+                "least squares on the dollar ladder wearing a PCA label."
+            )
         w = np.zeros(K, dtype=float)
         w[:n] = 1.0
     else:
         w = np.asarray(pca_weights, dtype=float)
     G = _build_pca_metric_matrix(pca_model, w)
-    if np.allclose(G, np.eye(K), atol=1e-8):
-        raise ValueError(
-            "the PCA metric came back as the identity, so this hedge would be "
-            "plain unweighted least squares on the dollar ladder while "
-            "reporting itself as PCA-neutralising. `eigh` gives an orthonormal "
-            "L, so L diag(w) L^T = I whenever w is all-ones -- which is exactly "
-            f"what `_build_pca_metric_matrix` does for uniform weights. Weights: "
-            f"{np.asarray(w).round(4).tolist()}. Pass n_factors (default "
-            f"{HEDGED_FACTORS}) or non-uniform pca_weights."
-        )
     return G
 
 
