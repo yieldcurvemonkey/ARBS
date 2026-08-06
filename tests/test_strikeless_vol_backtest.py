@@ -9,6 +9,7 @@ import pandas as pd
 import pytest
 
 from RVUtils.StrikelessVol.backtest import (
+    HISTORY_RESPONSE_MIN_DATES,
     BacktestResult,
     PlaceboResult,
     RequirementFlags,
@@ -662,6 +663,7 @@ def test_the_certificate_carries_the_number_for_every_leg_it_asserts():
         for key in ("causal_max_abs_diff", "causal_probe_reached",
                     "causal_tail_max_abs_diff", "causal_responds_to_history",
                     "causal_head_shock_tail_response",
+                    "causal_head_shock_tail_dates_responded",
                     "betas_reproduce_residual_max_abs_diff"):
             assert key in attrs, f"{key} is asserted but never stamped"
 
@@ -671,9 +673,14 @@ def test_the_certificate_carries_the_number_for_every_leg_it_asserts():
     assert leaky.attrs["causal_probe_reached"] is True
     assert leaky.attrs["causal_responds_to_history"] is False          # the real cause
     assert leaky.attrs["causal_head_shock_tail_response"] == 0.0
+    assert leaky.attrs["causal_head_shock_tail_dates_responded"] == 0
 
     assert honest.attrs["causal_responds_to_history"] is True
     assert honest.attrs["causal_head_shock_tail_response"] > 0.0
+    # The number the leg is a verdict ON. The magnitude beside it is 250.0 for
+    # a frozen-coefficient CHANGES builder too -- see
+    # `test_a_frozen_coefficient_changes_builder_is_a_full_sample_fit_in_disguise`.
+    assert honest.attrs["causal_head_shock_tail_dates_responded"] == 225
     assert honest.attrs["causal_tail_max_abs_diff"] > 0.0
     assert honest.attrs["betas_reproduce_residual_max_abs_diff"] == pytest.approx(
         0.0, abs=1e-9)
@@ -869,6 +876,154 @@ def test_a_walk_forward_changes_residual_source_is_certified():
     assert sig.attrs["changes_resid_causal_max_abs_diff"] == 0.0
     assert sig.attrs["changes_resid_artifact_max_abs_diff"] == pytest.approx(
         0.0, abs=1e-9)
+
+
+def _frozen_changes_builder(spread, drivers):
+    """Doorway A, transposed one function across: a full-sample
+    `changes_regression` whose coefficients are baked in and applied pointwise.
+
+    Reachable, not adversarial. `changes_regression` is exported, `factors.py`
+    says inference runs on it, and its `RegressionResult` hands the caller
+    `.betas` and `.intercept`. The amended API requires a `source_fn` to get
+    anything better than `drift_t(source uncertified)`, so a user holding a
+    full-sample fit and wanting the certificate has a direct incentive to wrap
+    it -- and wrapping it means applying the coefficients pointwise.
+    """
+    chg = changes_regression(spread, drivers)
+    c0, b0 = float(chg.intercept), float(chg.betas["vol"])
+
+    def builder(y, x):
+        return pd.Series(y).astype(float).diff() - (c0 + b0 * x["vol"].diff())
+
+    return builder
+
+
+def test_a_frozen_coefficient_changes_builder_is_a_full_sample_fit_in_disguise():
+    """The magnitude of the tail response cannot see doorway A once the builder
+    DIFFERENCES its input; only the count can.
+
+    A head shock changes `dy` at exactly the cut boundary -- `y[cut] - y[cut-1]`
+    loses the shock added to `y[cut-1]` -- and at no later date, because from
+    there on both sides carry it and it cancels. That single date carries the
+    FULL shock, so `head_shock_tail_response` is 250.0 for the frozen builder
+    and 250.0 for the honest one. Every other leg of the probe is satisfied.
+    The count is 1 of 225 against 225 of 225.
+    """
+    spread, drivers = _factor_frame()
+    frozen = _frozen_changes_builder(spread, drivers)
+
+    # the premise: this IS the object the whole source probe exists to refuse
+    full_sample = changes_regression(spread, drivers).residuals
+    assert float((frozen(spread, drivers) - full_sample).abs().max()) == 0.0
+
+    leaky = audit_causal_betas(frozen, spread, drivers)
+    honest = audit_causal_betas(_changes_builder(), spread, drivers)
+
+    # the magnitude is the same number for both, to float noise
+    assert leaky["head_shock_tail_response"] == pytest.approx(250.0, abs=1e-9)
+    assert honest["head_shock_tail_response"] == pytest.approx(250.0, abs=1e-9)
+
+    # ... and the count is what separates them. PIN THE COUNT.
+    assert leaky["head_shock_tail_dates_responded"] == 1
+    assert honest["head_shock_tail_dates_responded"] == 225
+    assert leaky["n_history_compared"] == 225
+    assert honest["n_history_compared"] == 225
+
+    assert leaky["responds_to_history"] is False
+    assert leaky["causal"] is False
+    assert honest["responds_to_history"] is True
+    assert honest["causal"] is True
+
+    # every OTHER leg passes, so this one is the only thing standing between a
+    # full-sample changes residual and the certificate
+    assert leaky["probe_reached"] is True
+    assert leaky["max_abs_diff"] == 0.0
+
+    # the honest LEVELS builder and the already-refused frozen LEVELS one, so
+    # the count leg is not simply "refuses differencing builders"
+    lev_frozen = _leaky_frozen_builder(spread, drivers)
+    lev = audit_causal_betas(lambda y, x: lev_frozen(y, x).residual, spread, drivers)
+    assert lev["head_shock_tail_dates_responded"] == 0
+    assert lev["causal"] is False
+    honest_levels = audit_causal_betas(
+        lambda y, x: expanding_residual(y, x, min_periods=252).residual,
+        spread, drivers)
+    assert honest_levels["head_shock_tail_dates_responded"] == 225
+    assert honest_levels["causal"] is True
+
+
+def test_a_frozen_coefficient_changes_source_is_refused_by_causal_signals():
+    """The same builder through the seam a caller actually reaches.
+
+    Before the count leg this collected the full certificate
+    `('residual_z', 'drift_t', 'changes_resid')` with
+    `changes_resid_causal_max_abs_diff = 0.0` and
+    `changes_resid_artifact_max_abs_diff = 0.0`, on a series bit-identical to
+    `changes_regression(...).residuals`.
+    """
+    spread, drivers = _factor_frame()
+    frozen = _frozen_changes_builder(spread, drivers)
+    src = frozen(spread, drivers)
+
+    panel = _panel_for(spread, drivers)
+    panel["drift_t"] = _drift_t_from(src)
+
+    # the premise, leg by leg: every other check this module owns is satisfied.
+    audit = audit_trailing_statistic(
+        panel["drift_t"], src, label="drift_t",
+        recompute=lambda s: _drift_t_from(s),
+        source_fn=frozen, source_input=spread, source_drivers=drivers)
+    assert audit["matched"] is True                      # the transform holds
+    assert audit["source_is_builder_output"] is True     # the artifact tie holds
+    assert audit["source_artifact_max_abs_diff"] == 0.0
+    assert audit["source_max_abs_diff"] == 0.0           # the head is still
+    assert audit["source_probe_reached"] is True         # the probe landed
+    assert audit["source_head_shock_tail_response"] == pytest.approx(250.0, abs=1e-9)
+    # ... and this is the one that refuses, on the count and only the count
+    assert audit["source_head_shock_tail_dates_responded"] == 1
+    assert audit["source_responds_to_history"] is False
+    assert audit["source_causal"] is False
+    assert audit["certified"] is False
+
+    with pytest.raises(ValueError, match="POINTWISE transform of its input"):
+        causal_signals(panel, SignalConfig(), spread_bp=spread, drivers=drivers,
+                       min_periods=252, changes_resid=src,
+                       changes_resid_fn=frozen)
+
+
+def test_the_history_response_allowance_is_the_frequency_ladders_top_horizon():
+    """Where the frontier is, measured, in both directions.
+
+    A one-cut probe can only ask how FAR past the cut the response reaches, so
+    "frozen coefficients on a lag-N difference" and "a rolling window of N
+    observations" are the same shape to it and only N tells them apart. The
+    allowance is set from the largest lag this module puts in front of a user:
+    `factors.frequency_ladder` runs `changes_regression` at (1, 5, 21).
+
+    This test exists to stop the constant drifting silently in either
+    direction, and to state the limit rather than leave a reader to assume the
+    probe covers every lag -- it does not, and lag 22 is the proof.
+    """
+    spread, drivers = _factor_frame()
+    chg = changes_regression(spread, drivers)
+    c0, b0 = float(chg.intercept), float(chg.betas["vol"])
+
+    def frozen_at(lag):
+        return lambda y, x: (pd.Series(y).astype(float).diff(lag)
+                             - (c0 + b0 * x["vol"].diff(lag)))
+
+    assert HISTORY_RESPONSE_MIN_DATES == 21
+    for lag in (1, 5, 21):                    # frequency_ladder's own horizons
+        a = audit_causal_betas(frozen_at(lag), spread, drivers)
+        assert a["head_shock_tail_dates_responded"] == lag
+        assert a["causal"] is False, f"lag {lag} is on the ladder and must refuse"
+
+    # and the honest limit of the method, stated rather than implied
+    beyond = audit_causal_betas(frozen_at(22), spread, drivers)
+    assert beyond["head_shock_tail_dates_responded"] == 22
+    assert beyond["causal"] is True, (
+        "a one-cut probe cannot refuse a frozen fit on a 22-day difference; "
+        "if this ever starts failing the method got stronger, not the test")
 
 
 def test_an_honest_builder_beside_a_leaky_series_is_refused():
@@ -1245,6 +1400,7 @@ def _causal_evidence(**over):
           "causal_probe_reached": True, "causal_tail_max_abs_diff": 250.0,
           "causal_responds_to_history": True,
           "causal_head_shock_tail_response": 216.0,
+          "causal_head_shock_tail_dates_responded": 225,
           "betas_reproduce_residual_max_abs_diff": 0.0,
           "rolling_sigma_z": True, "rolling_z_max_abs_diff": 0.0}
     ev.update(over)
@@ -1258,8 +1414,17 @@ def _causal_evidence(**over):
         ({"causal_tail_max_abs_diff": 0.0}, "nothing moved, so nothing was tested"),
         ({"causal_responds_to_history": False}, "frozen coefficients"),
         ({"causal_head_shock_tail_response": 0.0}, "frozen coefficients, measured"),
+        # The magnitude leg above cannot see a frozen-coefficient CHANGES
+        # builder: it stamps the FULL shock off one responding date at the
+        # differencing boundary. 1 of 225 is the measured number.
+        ({"causal_head_shock_tail_dates_responded": 1},
+         "one responding date is the differencing boundary, not a refit"),
+        ({"causal_head_shock_tail_dates_responded": 21},
+         "21 is the top of frequency_ladder's horizons, still an artefact"),
         ({"betas_reproduce_residual_max_abs_diff": 15.3}, "centred betas"),
         ({"causal_probe_reached": None}, "stamp absent, not merely false"),
+        ({"causal_head_shock_tail_dates_responded": None},
+         "the count absent, not merely low"),
         ({"betas_reproduce_residual_max_abs_diff": float("nan")}, "no number at all"),
     ],
 )

@@ -179,6 +179,49 @@ MIN_INPUT_AUDIT_OBS: int = 100
 #: The fit is deterministic for identical inputs, so this is float noise, not a
 #: modelling tolerance.
 FIT_MATCH_TOL: float = 1e-6
+#: How many tail dates must respond to a HEAD shock before the builder counts as
+#: refitting on its own history (:func:`audit_causal_betas` leg 2).
+#:
+#: A COUNT, not a maximum, and that is the whole point. A builder that
+#: DIFFERENCES its input responds to a head shock at exactly the dates where the
+#: difference straddles the cut -- ``lag`` dates for ``.diff(lag)``, and nowhere
+#: else -- because for every later date both ``y_t`` and ``y_{t-lag}`` carry the
+#: shock and it cancels. That response is an artefact of the probe's own
+#: boundary, not evidence of refitting, and it is the FULL SHOCK in size, so no
+#: threshold on the magnitude can see it. Measured on the 900-day frame the
+#: tests use (cut at 675, 225 tail dates):
+#:
+#: =========================================  =============  =====================
+#: builder                                    max response   tail dates responding
+#: =========================================  =============  =====================
+#: frozen-coefficient LEVELS (refused)                0.000                      0
+#: frozen-coefficient CHANGES (must refuse)         250.000                      1
+#: honest ``expanding_changes_residual``            250.000                    225
+#: honest ``expanding_residual``                    250.000                    225
+#: honest full-sample ``levels_regression``         186.055                    225
+#: =========================================  =============  =====================
+#:
+#: The maximum is identical (250.000) for the frozen CHANGES builder and both
+#: honest ones; the count separates them 1 against 225.
+#:
+#: The value is set from the largest differencing lag this module puts in front
+#: of a user, not picked round: ``factors.changes_regression`` takes
+#: ``horizon_days``, and ``factors.frequency_ladder`` runs it at **(1, 5, 21)**,
+#: so a caller holding a monthly changes fit and applying its coefficients
+#: pointwise produces a 21-date boundary artefact. ``> 21`` refuses every lag on
+#: that ladder. Measured, frozen ``.diff(lag)`` with full-sample coefficients:
+#: refused at lag 1/5/10/21 (1, 5, 10, 21 responding dates), accepted at lag 22.
+#:
+#: The cost is fail-CLOSED and worth stating plainly, because the two cases are
+#: the same shape to a one-cut probe -- "the response is confined to N dates
+#: after the cut" -- and only N distinguishes them. A legitimate ROLLING-window
+#: builder genuinely stops depending on the shocked head once its window clears
+#: the cut, so it responds on exactly ``window`` dates: measured, window 252/63
+#: accepted (225, 63 dates), window 21 and shorter REFUSED as if frozen. No
+#: builder in this module is rolling; a caller who supplies one with a window at
+#: or below the ladder's top must widen this constant deliberately, and should
+#: know they are trading a real refusal for a real detection.
+HISTORY_RESPONSE_MIN_DATES: int = 21
 
 
 @dataclass(frozen=True)
@@ -513,6 +556,13 @@ def _derive_requirements(signals, trades, placebo) -> RequirementFlags:
     # its attrs straight through.
     tail_diff = attrs.get("causal_tail_max_abs_diff", float("nan"))
     history_diff = attrs.get("causal_head_shock_tail_response", float("nan"))
+    # The COUNT of responding tail dates, not just the magnitude. A
+    # frozen-coefficient CHANGES builder -- a full-sample `changes_regression`
+    # with its betas applied pointwise -- stamps
+    # `causal_head_shock_tail_response = 250.0`, the same number the honest
+    # walk-forward builder stamps, off ONE responding date at the differencing
+    # boundary. A gate reading only the magnitude passes it.
+    history_dates = attrs.get("causal_head_shock_tail_dates_responded", -1)
     betas_gap = attrs.get("betas_reproduce_residual_max_abs_diff", float("nan"))
     expanding = bool(attrs.get("expanding_betas", False)
                      and np.isfinite(causal_diff) and causal_diff <= CAUSALITY_TOL
@@ -520,6 +570,8 @@ def _derive_requirements(signals, trades, placebo) -> RequirementFlags:
                      and np.isfinite(tail_diff) and tail_diff > 0.0
                      and attrs.get("causal_responds_to_history", False)
                      and np.isfinite(history_diff) and history_diff > 0.0
+                     and np.isfinite(history_dates)
+                     and history_dates > HISTORY_RESPONSE_MIN_DATES
                      and np.isfinite(betas_gap) and betas_gap <= FIT_MATCH_TOL)
     # Requirement 3 inherits requirement 1 HERE as well as in the stamp: the
     # substance of "rolling sigma z" is a trailing-sigma z OF A CAUSAL
@@ -566,6 +618,7 @@ def _derive_requirements(signals, trades, placebo) -> RequirementFlags:
             "causal_max_abs_diff": causal_diff,
             "causal_tail_max_abs_diff": tail_diff,
             "causal_head_shock_tail_response": history_diff,
+            "causal_head_shock_tail_dates_responded": history_dates,
             "betas_reproduce_residual_max_abs_diff": betas_gap,
             "rolling_z_max_abs_diff": z_diff,
             "certified_signal_inputs": attrs.get("certified_signal_inputs", ()),
@@ -836,13 +889,33 @@ def audit_causal_betas(
     respond separates it: a genuinely refitting builder must change its later
     coefficients, a frozen-coefficient one cannot.
 
-    =====================================  ==========================
-    builder                                tail response to head shock
-    =====================================  ==========================
-    genuine expanding fit                  216.008
-    frozen-coefficient leaky builder         0.000
-    honest full-sample levels_regression   160.485
-    =====================================  ==========================
+    **That leg counts DATES, not magnitude, and the difference is the whole
+    finding.** Transpose the same accident one function across -- freeze the
+    coefficients of a ``factors.changes_regression`` and apply them to
+    ``y.diff()`` -- and the magnitude test collapses. A head shock changes
+    ``dy`` at exactly the cut boundary, where ``y[cut] - y[cut-1]`` loses a
+    shock the earlier row carries; every later difference has the shock on both
+    sides and cancels it. One responding date, at the full shock size:
+
+    =====================================  ==========  ================
+    builder                                max resp.   dates responding
+    =====================================  ==========  ================
+    genuine expanding LEVELS fit              250.000        225 of 225
+    genuine expanding CHANGES fit             250.000        225 of 225
+    frozen-coefficient LEVELS builder           0.000          0 of 225
+    frozen-coefficient CHANGES builder        250.000          1 of 225
+    honest full-sample levels_regression      186.055        225 of 225
+    =====================================  ==========  ================
+
+    The frozen CHANGES builder's output is bit-identical (0.000e+00) to
+    ``changes_regression(...).residuals``, the full-sample object this probe
+    exists to refuse, and its ``head_shock_tail_response`` is the same 250.000
+    the honest builders report. So the verdict reads
+    ``head_shock_tail_dates_responded`` against
+    :data:`HISTORY_RESPONSE_MIN_DATES`, and the magnitude is reported beside it
+    as context rather than as evidence. ``probe_reached`` is deliberately left
+    on the magnitude: a boundary artefact satisfying it opens no hole, because
+    a builder that responds ONLY at the boundary now fails this leg.
 
     **Scope limit of the method, stated where the certificate is read.** A
     single cut at ``1 - shock_frac`` certifies only that the last
@@ -872,27 +945,37 @@ def audit_causal_betas(
         pair = pd.concat([u.reindex(where).rename("a"),
                           v.reindex(where).rename("b")], axis=1).dropna()
         if pair.empty:
-            return float("nan"), 0
-        return float((pair["a"] - pair["b"]).abs().max()), int(len(pair))
+            return float("nan"), 0, 0
+        d = (pair["a"] - pair["b"]).abs()
+        return float(d.max()), int(len(pair)), int((d > 0.0).sum())
 
     # 1. Did the shock reach the code at all?
-    tail_diff, n_tail = _gap(base, shocked, tail)
+    tail_diff, n_tail, _n_tail_moved = _gap(base, shocked, tail)
     probe_reached = bool(np.isfinite(tail_diff) and tail_diff > 0.0)
 
     # 2. Does the fit depend on its own history, or are its coefficients frozen?
+    #    COUNT the responding dates -- see `HISTORY_RESPONSE_MIN_DATES`. Taking
+    #    the maximum here is what a differencing builder defeats: it responds on
+    #    ONE date (the cut boundary, where `.diff()` straddles the shock) with
+    #    the full shock magnitude, so `history_diff > 0.0` is satisfied by an
+    #    artefact of the probe rather than by a refit. `history_diff` is 250.0
+    #    for the frozen CHANGES builder AND for the honest one; only the count
+    #    tells them apart (1 of 225 against 225 of 225).
     y3 = y.copy()
     y3.iloc[:cut] = y3.iloc[:cut] + float(shock)
     head_shocked = pd.Series(fit_fn(y3, drivers)).astype(float)
-    history_diff, n_history = _gap(base, head_shocked, tail)
-    responds_to_history = bool(np.isfinite(history_diff) and history_diff > 0.0)
+    history_diff, n_history, n_history_moved = _gap(base, head_shocked, tail)
+    responds_to_history = bool(n_history_moved > HISTORY_RESPONSE_MIN_DATES)
 
     # 3. The actual causality question: did the future move the past?
-    diff, n_head = _gap(base, shocked, head)
+    diff, n_head, _n_head_moved = _gap(base, shocked, head)
 
     out = {"shock": float(shock), "cut": cut, "baseline": base, "shocked": shocked,
            "tail_max_abs_diff": tail_diff, "probe_reached": probe_reached,
            "n_tail_compared": n_tail,
            "head_shock_tail_response": history_diff,
+           "head_shock_tail_dates_responded": n_history_moved,
+           "n_history_compared": n_history,
            "responds_to_history": responds_to_history,
            "max_abs_diff": diff, "n_compared": n_head}
     out["causal"] = bool(probe_reached and responds_to_history
@@ -1013,7 +1096,8 @@ def audit_trailing_statistic(
            "source_artifact_max_abs_diff": float("nan"),
            "source_probe_reached": None, "source_responds_to_history": None,
            "source_tail_max_abs_diff": float("nan"),
-           "source_head_shock_tail_response": float("nan")}
+           "source_head_shock_tail_response": float("nan"),
+           "source_head_shock_tail_dates_responded": None}
     if aligned.empty:
         # The branch a wrongly-INDEXED source lands in: a bare numpy array or a
         # differently-dated series gives an empty overlap, and "no disagreement"
@@ -1070,6 +1154,11 @@ def audit_trailing_statistic(
             "source_responds_to_history": bool(probe["responds_to_history"]),
             "source_tail_max_abs_diff": float(probe["tail_max_abs_diff"]),
             "source_head_shock_tail_response": float(probe["head_shock_tail_response"]),
+            # The COUNT, not the magnitude, is what leg 2 reads -- a frozen
+            # CHANGES builder reports the full shock here and responds on one
+            # date. See `HISTORY_RESPONSE_MIN_DATES`.
+            "source_head_shock_tail_dates_responded": int(
+                probe["head_shock_tail_dates_responded"]),
             "source_n_compared": int(probe["n_compared"]),
         })
 
@@ -1494,7 +1583,12 @@ def causal_signals(
             raise ValueError(
                 f"`{builder_kw}` is a POINTWISE transform of its input: its "
                 "head does not move when the tail is shocked, and its tail "
-                "does not move when the head is. Two things look like this. "
+                "responds to a head shock on only "
+                f"{audit['source_head_shock_tail_dates_responded']} dates "
+                f"(minimum {HISTORY_RESPONSE_MIN_DATES + 1}) -- for a builder "
+                "that DIFFERENCES its input those are the boundary dates where "
+                "the difference straddles the shock, not a refit. Two things "
+                "look like this. "
                 "(1) A genuinely pointwise builder -- a smoother with no "
                 "memory, or the identity, e.g. an `iv_bp_day` that IS the raw "
                 f"observable. Drop `{builder_kw}=`: with `{source_name}=` alone "
@@ -1510,7 +1604,9 @@ def causal_signals(
             f"`{builder_kw}` is not causal, so `{column}` cannot be certified "
             f"(head moved {audit['source_max_abs_diff']:.6g} under a shock to "
             f"the tail alone; probe_reached={audit['source_probe_reached']}, "
-            f"responds_to_history={audit['source_responds_to_history']}). "
+            f"responds_to_history={audit['source_responds_to_history']} on "
+            f"{audit['source_head_shock_tail_dates_responded']} responding tail "
+            f"dates, minimum {HISTORY_RESPONSE_MIN_DATES + 1}). "
             f"`{column}` reproducing as a trailing statistic of "
             f"`{source_name}` proves nothing about `{source_name}`: a leaky "
             "source reproduces its own transform perfectly. "
@@ -1617,6 +1713,13 @@ def causal_signals(
         "causal_tail_max_abs_diff": float(causal["tail_max_abs_diff"]),
         "causal_responds_to_history": bool(causal["responds_to_history"]),
         "causal_head_shock_tail_response": float(causal["head_shock_tail_response"]),
+        # The number `responds_to_history` is actually a verdict ON. The
+        # magnitude beside it is 250.0 for a frozen-coefficient CHANGES builder
+        # AND for the honest one, so stamping only the magnitude would repeat
+        # this module's recurring defect one leg across: evidence that cannot
+        # distinguish the case the leg exists to refuse.
+        "causal_head_shock_tail_dates_responded": int(
+            causal["head_shock_tail_dates_responded"]),
         "betas_reproduce_residual_max_abs_diff": float(beta_gap),
         "rolling_sigma_z": z_ok,
         "rolling_z_max_abs_diff": max(float(rolling["max_abs_diff"]),
