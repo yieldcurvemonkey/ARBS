@@ -45,9 +45,14 @@ implemented as something the engine either DOES or refuses to claim:
    pushes it through the caller's ``run_one``; the requirement is met only when
    the real headline beats the nulls at the stated alpha AND the nulls actually
    varied. If the placebo clears the criterion, the criterion is the finding.
-   The construction of the null is deliberately NOT the caller's: the first
+   **Neither the null nor the headline is the caller's to supply.** The first
    version took ``run_one(rng)`` and never called :func:`random_walk_like`, so
-   any function at all opened this gate.
+   any function at all opened this gate; the second fixed that and left
+   ``headline`` a free float, so any NUMBER did (measured: the real headline
+   gave ``p = 0.952``, a fabricated ``1e18`` gave ``p = 0.048`` on the same
+   nulls). The headline is now ``run_one(series)``, and
+   :func:`placebo_matches_result` requires it to reproduce the named statistic
+   on the result it is attached to.
 
 A row that cannot report all six met is **not eligible for an ALIVE verdict**
 (:func:`report.league_table` enforces the downgrade).
@@ -96,6 +101,7 @@ from RVUtils.StrikelessVol.strategy import SignalConfig, build_signals, signal_s
 
 __all__ = [
     "BacktestResult",
+    "MAX_ALPHA",
     "PlaceboResult",
     "RequirementFlags",
     "REQUIREMENTS",
@@ -106,6 +112,7 @@ __all__ = [
     "causal_signals",
     "entry_vintage_signals",
     "min_sims_for",
+    "placebo_matches_result",
     "random_walk_like",
     "random_walk_placebo",
     "run_grid",
@@ -180,6 +187,16 @@ ROLLING_Z_TOL: float = 1e-8
 #: it may be missing where the recomputation exists), which is what leaves
 #: room for a one-observation certificate.
 MIN_INPUT_AUDIT_OBS: int = 100
+#: How closely a placebo's headline must reproduce the statistic it claims to
+#: be -- both against ``run_one(series)`` and against the result it is attached
+#: to. ``run_one`` is deterministic for identical inputs (measured bit-identical
+#: on the shipped pipeline), so this is float noise, not a modelling tolerance.
+HEADLINE_MATCH_TOL: float = 1e-9
+#: The loosest alpha a random-walk placebo may be run at. Measured rationale in
+#: :func:`min_sims_for`: Task 15's null opened the gate in 20.6% of sims, so a
+#: criterion at or above 0.2 is looser than the failure it exists to catch.
+#: Without this bound ``alpha=1.0, n_sims=2`` passed unconditionally.
+MAX_ALPHA: float = 0.2
 #: How closely a caller-supplied ``fit`` must reproduce the audited causal one.
 #: The fit is deterministic for identical inputs, so this is float noise, not a
 #: modelling tolerance.
@@ -545,7 +562,7 @@ def run_pair(
     )
     stats["reconciliation"] = reconcile(ledger)
 
-    flags = _derive_requirements(signals, trades, placebo)
+    flags = _derive_requirements(signals, trades, placebo, stats)
     return BacktestResult(
         pair_name=pair_name,
         config={"trigger_bp": rep_cfg.trigger_bp, "roll_months": rep_cfg.roll_months,
@@ -560,7 +577,7 @@ def run_pair(
     )
 
 
-def _derive_requirements(signals, trades, placebo) -> RequirementFlags:
+def _derive_requirements(signals, trades, placebo, stats=None) -> RequirementFlags:
     """Requirements 1/3 come from verified provenance, 2/4/5 are re-derived here."""
     attrs = getattr(signals, "attrs", {}) or {}
     causal_diff = attrs.get("causal_max_abs_diff", float("nan"))
@@ -624,6 +641,14 @@ def _derive_requirements(signals, trades, placebo) -> RequirementFlags:
     vintage_deviation = attrs.get("entry_vintage_frozen_z_deviation", float("nan"))
     vintage_ok, vintage_evidence = _entry_vintage_verified(signals)
     vintage_evidence["frozen_z_deviation"] = vintage_deviation
+    # Requirement 6 needs the placebo to be a placebo FOR THIS RESULT. A grid
+    # shares one placebo across every config, and a null distribution computed
+    # for one configuration says nothing about another, so the flag opens only
+    # on the row whose statistic the placebo's headline actually reproduces.
+    # Quietly, not by raising: `run_grid` would otherwise explode on 971 of 972
+    # rows. `with_placebo` -- where a caller asserts the pairing by hand --
+    # raises instead.
+    placebo_ok, placebo_reason = placebo_matches_result(stats, placebo)
     return RequirementFlags(
         expanding_betas=expanding,
         entry_vintage_hedge=bool(vintage_ok
@@ -635,8 +660,10 @@ def _derive_requirements(signals, trades, placebo) -> RequirementFlags:
         spread_leg_pnl=True,
         # Structural: _extract_trades raises rather than emit overlaps.
         distinct_episodes=True,
-        random_walk_placebo=bool(placebo is not None and placebo.passes),
+        random_walk_placebo=bool(placebo is not None and placebo.passes
+                                 and placebo_ok),
         evidence={
+            "placebo_matches_result": placebo_reason,
             "causal_max_abs_diff": causal_diff,
             "causal_tail_max_abs_diff": tail_diff,
             "causal_head_shock_tail_response": history_diff,
@@ -653,14 +680,69 @@ def _derive_requirements(signals, trades, placebo) -> RequirementFlags:
     )
 
 
+def placebo_matches_result(stats: dict, placebo: "Optional[PlaceboResult]") -> Tuple[bool, str]:
+    """Does this placebo's headline reproduce on THIS result? ``(ok, reason)``.
+
+    The last unenforced link in requirement 6. ``random_walk_placebo`` now
+    computes its headline from ``run_one(series)``, so the number cannot be
+    invented -- but nothing said that ``run_one`` had anything to do with the
+    result the placebo gets attached to. Naming the statistic closes the loop:
+
+        ``result.stats[statistic] == headline == run_one(observed series)``
+
+    and the nulls came from that same ``run_one``. A caller can still hand over
+    a wrong ``run_one``, but it must now be one that reproduces THIS result's
+    statistic on the observed series, which is a far narrower door than "any
+    function".
+
+    Fail-closed on a missing name: an unnamed statistic is unverifiable, and an
+    unverifiable placebo does not open the gate.
+    """
+    if placebo is None:
+        return False, "no placebo"
+    name = placebo.statistic
+    if not name:
+        return False, ("placebo carries no `statistic` name, so its headline "
+                       "cannot be checked against this result")
+    if name not in (stats or {}):
+        return False, f"result has no stats[{name!r}] to check the headline against"
+    got = float((stats or {})[name])
+    want = float(placebo.headline)
+    gap = abs(got - want)
+    scale = max(abs(got), abs(want), 1.0)
+    if not np.isfinite(gap) or gap > HEADLINE_MATCH_TOL * scale:
+        return False, (f"placebo headline {want!r} does not reproduce this "
+                       f"result's stats[{name!r}] = {got!r}; the placebo was "
+                       "run for a different result")
+    return True, "ok"
+
+
 def with_placebo(result: BacktestResult, placebo: "PlaceboResult") -> BacktestResult:
-    """Attach a placebo run to an existing result. Returns a NEW result."""
+    """Attach a placebo run to an existing result. Returns a NEW result.
+
+    RAISES when the placebo's headline does not reproduce on ``result``. This
+    call is a caller asserting "this placebo belongs to this result", so a
+    mismatch is an error rather than a quietly withheld flag --
+    :func:`run_pair`'s grid path takes the quiet route instead, because one
+    placebo legitimately does not cover 972 configs.
+    """
+    ok, reason = placebo_matches_result(result.stats, placebo)
+    if not ok:
+        raise ValueError(
+            f"refusing to attach this placebo: {reason}. Requirement 6 is "
+            "'a random-walk placebo through the identical pipeline', and a "
+            "placebo whose headline is not this result's own statistic was "
+            "run through a different one. Build it with "
+            "`random_walk_placebo(series, run_one, statistic=...)` where "
+            "`run_one` is the path that produced this result."
+        )
     flags = replace(
         result.requirements,
         random_walk_placebo=bool(placebo.passes),
         evidence={**result.requirements.evidence,
                   "placebo_p_value": placebo.p_value,
-                  "placebo_n_sims": placebo.n_sims},
+                  "placebo_n_sims": placebo.n_sims,
+                  "placebo_statistic": placebo.statistic},
     )
     return replace(result, requirements=flags)
 
@@ -1835,12 +1917,24 @@ class PlaceboResult:
       never got in, not evidence the real result is better.
     * **No sims is not a pass.** An empty ``placebo_headlines`` gives a ``nan``
       p-value, not a zero one.
+
+    And one that is NOT enforced here, because it cannot be: whether
+    ``headline`` belongs to the result this placebo is attached to.
+    :attr:`statistic` names the ``BacktestResult.stats`` key the headline was
+    read from, and :func:`with_placebo` / :func:`run_pair` refuse to grant
+    requirement 6 unless that key on the result reproduces it. Without the
+    name there is nothing to check against, so an unnamed statistic does not
+    open the gate either -- see :func:`placebo_matches_result`.
     """
 
     headline: float
     placebo_headlines: Tuple[float, ...]
     seed: int
     alpha: float = 0.05
+    #: The ``BacktestResult.stats`` key ``headline`` was computed from. Not
+    #: decorative: it is the only thing tying this object to a particular
+    #: result, and requirement 6 stays shut without it.
+    statistic: Optional[str] = None
 
     @property
     def n_sims(self) -> int:
@@ -1896,21 +1990,50 @@ def min_sims_for(alpha: float) -> int:
     rather than a quieter warning.
     """
     a = float(alpha)
-    if not np.isfinite(a) or a <= 0.0 or a > 1.0:
-        raise ValueError(f"alpha must be in (0, 1], got {alpha!r}")
+    if not np.isfinite(a) or a <= 0.0 or a > MAX_ALPHA:
+        raise ValueError(
+            f"alpha must be in (0, {MAX_ALPHA}], got {alpha!r}. The upper bound "
+            "is the same argument as the lower one and it was missing: at "
+            "alpha=1.0 with 2 sims the placebo passed unconditionally, and a "
+            "criterion a null clears by definition is not a criterion. The "
+            "bound is not picked round -- Task 15's null with no relationship "
+            f"to vol opened the gate in 20.6% of simulations, so an alpha at "
+            "or above that is looser than the failure this gate exists to "
+            "catch."
+        )
     return max(1, int(np.ceil((1.0 - a) / a - 1e-9)))
 
 
 def random_walk_placebo(
-    headline: float,
     series,
     run_one: Callable[[pd.Series], float],
     *,
+    statistic: Optional[str] = None,
+    headline: Optional[float] = None,
     n_sims: int = 200,
     seed: int = 0,
     alpha: float = 0.05,
 ) -> PlaceboResult:
     """Build ``n_sims`` random-walk nulls from ``series`` and run each one.
+
+    **The headline is computed here, from ``run_one(series)``, not taken from
+    the caller.** It was a caller-supplied float in the first version of this
+    amendment, tied to nothing: measured on the genuine pipeline, the real
+    headline gave ``p = 0.95238, passes = False`` while a fabricated ``1e18``
+    gave ``p = 0.04762, passes = True`` -- same nulls, same ``run_one``. That
+    moved the hole from "any function opens the gate" to "any NUMBER opens the
+    gate", one argument across, which is the same defect wearing a different
+    hat. ``run_one`` on the observed series reproduces the real result exactly
+    (measured ``-4,057,357.5612 == -4,057,357.5612``), so there is nothing for
+    the caller to supply.
+
+    ``headline=`` is still accepted and is **verified, not trusted**: a value
+    that does not reproduce ``run_one(series)`` raises, because it means the
+    number being defended did not come from the pipeline the nulls ran through.
+
+    ``statistic=`` names the ``BacktestResult.stats`` key the headline is, and
+    is what lets :func:`with_placebo` check that this placebo belongs to the
+    result it is being attached to. Omitting it leaves requirement 6 shut.
 
     ``run_one(null_series) -> float`` must be the SAME
     ``causal_signals -> run_pair`` path the real headline came from, returning
@@ -1965,10 +2088,26 @@ def random_walk_placebo(
             f"unreachable and the run would read as a placebo failure rather "
             f"than as an under-sampled test. Use n_sims >= {floor}."
         )
+    observed = float(run_one(s))
+    if headline is not None:
+        supplied = float(headline)
+        gap = abs(supplied - observed)
+        scale = max(abs(supplied), abs(observed), 1.0)
+        if not np.isfinite(gap) or gap > HEADLINE_MATCH_TOL * scale:
+            raise ValueError(
+                f"the supplied headline {supplied!r} is not what this pipeline "
+                f"produces on the observed series ({observed!r}). The placebo "
+                "compares the nulls against the number the SAME `run_one` "
+                "computed; a headline from somewhere else is a number the "
+                "nulls were never a null for. Drop `headline=` and let this "
+                "function compute it, or pass the `run_one` the headline "
+                "actually came from."
+            )
     children = np.random.SeedSequence(int(seed)).spawn(n)
     vals = tuple(
         float(run_one(random_walk_like(s, np.random.default_rng(child))))
         for child in children
     )
-    return PlaceboResult(headline=float(headline), placebo_headlines=vals,
-                         seed=int(seed), alpha=float(alpha))
+    return PlaceboResult(headline=observed, placebo_headlines=vals,
+                         seed=int(seed), alpha=float(alpha),
+                         statistic=None if statistic is None else str(statistic))
