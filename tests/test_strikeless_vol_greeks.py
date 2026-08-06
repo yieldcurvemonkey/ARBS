@@ -67,15 +67,27 @@ def test_leg_is_sized_to_the_requested_dv01(curve):
     where that gap becomes 11%+ and the reason sizing moved off ``pv01``).
 
     Those two figures are Task 9's own ("$96,161/-$96,162 on the flat
-    fixture") and they are unchanged by this file's act365f -> act360 fixture
-    move -- because they were **always act360 numbers**. ``rl.Curve.shift``
-    moves an act360 curve ``365/360`` further per nominal bp than an act365f
-    one (measured directly on discount factors: log-DF ratio 1.01388889 vs
-    365/360 = 1.01388889), so a leg sized to $100k of repriced DV01 carries a
-    ``360/365`` smaller notional there, and its ``pv01`` scales with it. On
-    the act365f fixture this docstring used to sit on, the same leg gives
-    $97,496.54. The number was quoted from the act360 control fixture; the
-    fixture change made it true of the fixture it is written on.
+    fixture") and the act365f -> act360 fixture move **did not touch them**,
+    because the notional is invariant across it. Measured on the old fixture,
+    reconstructed rather than reasoned about (see
+    ``test_strikeless_vol_greeks_control.py``'s note on how): act365f notional
+    172,988,501.32 against act360's 172,988,495.98, ratio 1.00000003, and
+    ``curve.pv01`` 96,160.9713 / -96,162.3027 against 96,160.9683 /
+    -96,162.2942. Task 9's numbers described their own fixture to the cent.
+
+    **Why invariant, when the shift exponent did change.** Two things differed
+    between the fixtures, not one. ``rl.Curve.shift`` moves an act360 curve
+    ``365/360`` further per nominal bp (log-DF ratio 1.01388889, measured on
+    discount factors) -- call that ``d``. But the old fixture was also
+    MISMATCHED, so its whole swap PV carried a uniform multiplier
+    ``A = tau_leg/tau_curve = 365/360`` (measured 1.013889 on both legs).
+    A leg sized to $100k of repriced DV01 has ``N = 1e5 / (A*d*...)``, and
+    ``A*d`` is the same number in both worlds -- so ``A`` cancels in the
+    notional and the notional does not move. It does not cancel in roll or
+    gamma; see ``tests/test_strikeless_vol_breakeven.py``'s block comment.
+
+    Pinned below against the measured value rather than left in prose, so a
+    future convention change has to move an assertion rather than a sentence.
 
     **This is circular, not an independent check**: it recomputes the exact
     same +/-1bp central difference ``build_leg``/``_reprice_dv01`` sizes off,
@@ -102,6 +114,13 @@ def test_leg_is_sized_to_the_requested_dv01(curve):
     dn = leg.npv(curves=handle.shift(-1.0)).real
     reprice_dv01 = (up - dn) / 2.0
     assert abs(reprice_dv01) == pytest.approx(100_000.0, rel=1e-6)
+
+    # The pv01/reprice gap the docstring quotes, asserted rather than narrated.
+    # Both figures are measured on THIS fixture and hold on the reconstructed
+    # act365f one to 8 significant figures, so the band is tight on purpose.
+    assert float(curve.pv01(leg)) == pytest.approx(96_160.97, rel=1e-6)
+    long_leg = build_leg(curve, ForwardLeg("20Y", "10Y"), dv01_usd=100_000.0, direction=-1)
+    assert float(curve.pv01(long_leg)) == pytest.approx(-96_162.29, rel=1e-6)
 
 
 def test_flattener_receives_the_longer_leg_and_pays_the_shorter(curve, pair):

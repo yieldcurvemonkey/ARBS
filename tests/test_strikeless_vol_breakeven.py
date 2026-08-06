@@ -6,16 +6,19 @@ import pytest
 import rateslib as rl
 
 from RVUtils.StrikelessVol.greeks import (
+    analytic_leg_gamma,
     breakeven_bp_day,
     build_package,
     compute_greeks,
     daily_roll_usd,
     greeks_panel,
     package_dv01,
+    package_gamma,
     package_npv,
 )
 from RVUtils.StrikelessVol.universe import ForwardLeg, ForwardPair
 from Query.IRSwaps.backends.rateslib.RLIRSwapCurve import RLIRSwapCurve
+from utils.rl_compat import leg_cashflows, rate_fixings_kwargs
 
 REF = rl.dt(2026, 8, 3)
 PAIR = ForwardPair("USD", "USD-OIS", ForwardLeg("10Y", "10Y"), ForwardLeg("20Y", "10Y"))
@@ -25,30 +28,49 @@ PAIR = ForwardPair("USD", "USD-OIS", ForwardLeg("10Y", "10Y"), ForwardLeg("20Y",
 # already carried. They were act365f until rateslib 2.7.1, which refuses to
 # forecast an act360 RFR index off an act365f curve at all.
 #
-# WHY EVERY MEASURED NUMBER BELOW MOVED, IN ONE FACTOR. ``rl.Curve.shift``
-# applies its bp at time exponent ``days * d`` with ``d`` the curve's own 1-day
-# DCF (see ``greeks.daily_dcf``), so an act360 curve moves 365/360 further per
-# nominal bp -- measured straight off discount factors, log-DF ratio
-# 1.01388889 against 365/360 = 1.01388889. Every package here is normalised to
-# $100k of REPRICED DV01, so the notional absorbs that: N scales by 360/365.
-# Hence
+# WHY EVERY MEASURED NUMBER BELOW MOVED. TWO factors changed, not one, and
+# which of them cancels where is the whole content of this note.
 #
-#     roll, breakeven  ~  N          ->  x 360/365 = 0.986301
-#     gamma            ~  N * t^2    ->  x 365/360 = 1.013889
+#   d  the curve's own 1-day DCF. ``rl.Curve.shift`` applies its bp at time
+#      exponent ``days * d`` (see ``greeks.daily_dcf``), so an act360 curve
+#      moves 365/360 further per nominal bp -- measured straight off discount
+#      factors, log-DF ratio 1.01388889 against 365/360 = 1.01388889.
+#   A  a uniform multiplier on the whole swap PV, present ONLY on the old
+#      mismatched fixture: the float leg was forecast off the act365f curve
+#      and then multiplied by the act360 leg accrual, so PV carried
+#      ``A = tau_leg/tau_curve = 365/360`` (measured 1.013889 on both legs).
+#      A = 1 once the conventions match.
 #
-# and that is not a story, it is the arithmetic every re-measured number here
-# obeys -- each to the precision the act365f value had been recorded at:
+# Every package here is normalised to $100k of REPRICED DV01, and that unit
+# DV01 goes as ``A * d``. So
 #
-#   realistic roll   -1102.39 -> -1087.2845   ratio 0.986297  (err 3.9e-06)
-#   panel roll max   -1472.36 -> -1452.19     ratio 0.986301  (err 4.7e-07)
-#   flat roll          -24.76 ->   -24.4222   ratio 0.986357  (err 5.6e-05)
-#   flat breakeven      0.497 ->     0.490476 ratio 0.986873  (err 5.8e-04)
-#   realistic gamma      ~201 ->   203.9967   ratio 1.014909  (err 1.0e-03)
+#     N = 1e5 / (A*d*...)     A*d is 1/360 in BOTH worlds  ->  N INVARIANT
+#     roll, breakeven ~ N*A   ~ 1/d   ->  x 360/365 = 0.986301
+#     gamma           ~ N*A*d^2 ~ d   ->  x 365/360 = 1.013889
+#     pv01            ~ N              ->  UNCHANGED
 #
-# The residual is the rounding of the OLD quoted value in every row (6sf ->
-# 4e-6, 3sf -> 1e-3), which is what it should be if nothing but the convention
-# changed. Each number is additionally confirmed by a route that does not go
-# through this module -- named in the docstring that quotes it.
+# The earlier version of this note said "the notional absorbs it, N scales by
+# 360/365". That gets roll and gamma right for the wrong reason and predicts a
+# pv01 move that does not happen. Measured: notional 172,988,501.32 (act365f)
+# vs 172,988,495.98 (act360), ratio 1.00000003. See
+# ``test_strikeless_vol_greeks.py::test_leg_is_sized_to_the_requested_dv01``.
+#
+# The arithmetic every re-measured number obeys, against the old fixture
+# RECONSTRUCTED under rateslib 2.7.1 (not merely against values recorded under
+# an older rateslib -- see ``test_strikeless_vol_greeks_control.py`` for how,
+# and note the reconstruction reproduces all six recorded numbers, so these
+# ratios carry no upgrade drift):
+#
+#   realistic roll   -1102.3859 -> -1087.2845   ratio 0.9862993
+#   flat roll           -24.7614 ->   -24.4222  ratio 0.9862994
+#   flat breakeven        0.497297 ->  0.490476 ratio 0.9862831
+#   realistic gamma     201.1952 ->  203.9967   ratio 1.0139239
+#   flat gamma          200.2507 ->  203.0391   ratio 1.0139245
+#   realistic spread     -58.1035 ->  -57.3075  ratio 0.9863007
+#
+# -- every one of them 360/365 or 365/360 to 6 s.f. Each number is
+# additionally confirmed by a route that does not go through this module --
+# named in the docstring that quotes it.
 
 
 def _flat_curve(ref=REF):
@@ -118,12 +140,20 @@ def _realistic_curve(ref=REF, a=7.4e-6):
     Rates stay positive everywhere out to y=40 (minimum ~3.33%), unlike the
     stress fixture.
 
-    That number is confirmed two ways, neither of them the pricer: reading the
-    par forward rate straight off the curve's own nodes,
-    ``(D(T0) - D(TN)) / sum_i tau_i D(Ti)``, gives -57.34bp for the same
-    slope; and the desk print this fixture was calibrated to is -57.34bp on
-    the very date it is anchored to (2026-08-03). The convention change moved
-    the fixture 0.79bp CLOSER to the level it exists to reproduce.
+    The move from -58.10 to -57.31 is **arithmetic, not corroboration**: it is
+    the 360/365 multiplier this file's block comment derives, applied to a
+    number that was already there (-58.1035 x 0.9863007 = -57.3075). It lands
+    nearer the desk print than the old value did, and that is a coincidence of
+    which direction the multiplier pointed -- nothing about the act360 fixture
+    is better calibrated than the act365f one was. An earlier version of this
+    docstring presented the closer agreement as confirmation; it is not, and
+    the honest reading is that ``a`` has simply never been re-fitted.
+
+    What IS an independent check on the level is reading the par forward rate
+    off the curve's own nodes, ``(D(T0) - D(TN)) / sum_i tau_i D(Ti)``, which
+    gives -57.34bp against the pricer's -57.31bp -- agreement to 0.03bp
+    between two routes, which says the pricer is reading the fixture right.
+    It says nothing about whether the fixture matches the market.
 
     The smoothness is not cosmetic. The same slope magnitude on the KINKED
     (``_stress_curve``-style, non-smooth) shape was tried first and was
@@ -148,6 +178,41 @@ def _realistic_curve(ref=REF, a=7.4e-6):
         fixings=rl.NoInput(0),
         meta_data={"reference_curve_name": "USD-OIS"},
     )
+
+
+def _roll_by_annuity_identity(curve, pkg, next_date) -> float:
+    """The package's roll, by a route that touches none of ``greeks``' arithmetic.
+
+    A swap struck at ``k`` on the base curve has PV ``N*(fair_new - k)*A_new``
+    on ANY other curve, by the definition of the fair rate. Each leg here is
+    struck at par on the base curve, so the package's roll is just that
+    expression summed over the two legs, evaluated on the ROLLED curve --
+    ``fair`` from ``rl.IRS.rate()``, the annuity from the rolled curve's own
+    discount factors. No ``npv()``, no ``shift()``, no ``daily_roll_usd``.
+    """
+    handle = curve.handle()
+    rolled = handle.roll(next_date)
+
+    def pv_on(disc):
+        total = 0.0
+        for swap in (pkg.short, pkg.long):
+            cf = leg_cashflows(swap.leg1, handle)
+            eff = pd.Timestamp(cf["Acc Start"].min()).to_pydatetime()
+            mat = pd.Timestamp(cf["Acc End"].max()).to_pydatetime()
+            notional = float(curve.notional(swap))
+            struck_pct = float(swap.fixed_rate)  # rateslib unit: percent
+            twin = rl.IRS(effective=eff, termination=mat, spec="usd_irs",
+                          curves=disc, notional=notional,
+                          **rate_fixings_kwargs(rl.NoInput(0)))
+            fair_pct = float(twin.rate(curves=disc).real)
+            annuity = sum(
+                float(r["DCF"]) * float(disc[pd.Timestamp(r["Payment"]).to_pydatetime()])
+                for _, r in cf.iterrows()
+            )
+            total += notional * (fair_pct - struck_pct) / 100.0 * annuity
+        return total
+
+    return pv_on(rolled) - pv_on(handle)
 
 
 def test_breakeven_formula():
@@ -264,7 +329,47 @@ def test_realistic_curve_roll_is_materially_negative_not_merely_negative():
     pkg = build_package(curve, PAIR, package_dv01_usd=100_000.0)
     next_date = curve.reference_date() + pd.Timedelta(days=1)
     roll = daily_roll_usd(curve, pkg, next_date=next_date)
-    assert roll < -500.0  # measured -1087.28 (act365f gave -1102.39)
+    assert roll < -500.0  # measured -1087.2845 (act365f gave -1102.3859)
+
+    # The annuity identity, computed here rather than quoted: this PINS the
+    # roll without hard-coding it, so it is a derivation check and not a
+    # baseline. A re-baselined literal would agree with whatever the code
+    # emits; this disagrees unless the two routes really coincide.
+    assert roll == pytest.approx(_roll_by_annuity_identity(curve, pkg, next_date),
+                                 rel=1e-9)
+
+    # ...and gamma against the Task 8 closed form, on the fixture the headline
+    # number is quoted from (the control file checks the flat and GBP ones).
+    gamma = package_gamma(curve, pkg, h_bp=25.0)
+    analytic = (analytic_leg_gamma(curve, pkg.short)
+                + analytic_leg_gamma(curve, pkg.long))
+    assert gamma == pytest.approx(analytic, rel=0.02)
+    assert abs(gamma - analytic) / abs(analytic) < 0.005  # measured 0.00095
+
+
+def test_the_realistic_fixture_is_still_the_calibrated_one():
+    """``a`` must stay load-bearing, or the fixture drifts off its own premise.
+
+    ``_realistic_curve``'s whole claim is that ``a=7.4e-6`` reproduces the real
+    USD 10y10y/20y10y level (-57.34bp on 2026-08-03, Task 4's measured desk
+    print, which this fixture is anchored to). Nothing asserted that. A review
+    mutation moving ``a`` to 7.6e-6 SURVIVED the entire suite for exactly that
+    reason -- every other assertion here is a sign, an inequality with orders
+    of headroom, or a ratio the fixture scale cancels out of.
+
+    Band chosen from the measured sensitivity, not tuned to pass: the fixture
+    lands 0.03bp from the desk print, and ``a`` moves the spread about
+    7.8bp per 1e-6, so 7.5e-6 gives -58.08 (0.74bp out) and 7.6e-6 gives
+    -58.86 (1.52bp out). A 0.5bp band is ~17x the achieved residual and still
+    catches both.
+
+    This pins the CALIBRATION against an external datum -- it is not a
+    re-baseline, because the target is the desk print rather than whatever the
+    code emits.
+    """
+    desk_bp = -57.34
+    g = compute_greeks(_realistic_curve(), PAIR)
+    assert g.spread_bp == pytest.approx(desk_bp, abs=0.5)  # measured -57.3075
 
 
 def test_flat_curve_roll_is_near_zero():
@@ -443,6 +548,71 @@ def test_compute_greeks_returns_a_full_labelled_record():
     # (curve.pv01) makes the package neutral in the measure that matters by
     # construction: measured residual is 0.0 (float-exact) on this fixture.
     assert abs(g.package_dv01) == pytest.approx(0.0, abs=10.0)
+
+
+class _UnpriceableCurve:
+    """A curve that raises wherever ``compute_greeks`` first touches it."""
+
+    def __init__(self, message="synthetic pricing failure"):
+        self._message = message
+
+    def __getattr__(self, name):
+        def _raise(*_args, **_kwargs):
+            raise ValueError(self._message)
+        return _raise
+
+
+def test_greeks_panel_records_what_it_dropped_instead_of_silently_losing_it():
+    """One bad date must not lose the panel, but it must not vanish either.
+
+    The swallow is deliberate -- a provider gap on one day should not cost the
+    other nine -- so what closes the hole is the record, not a refusal.
+    """
+    curve_map = {
+        pd.Timestamp("2026-08-03"): _realistic_curve(),
+        pd.Timestamp("2026-08-04"): _UnpriceableCurve("no curve for this date"),
+        pd.Timestamp("2026-08-05"): _realistic_curve(ref=rl.dt(2026, 8, 5)),
+    }
+    panel = greeks_panel(curve_map, PAIR)
+
+    assert len(panel) == 2
+    assert panel.attrs["dates_in"] == 3
+    assert panel.attrs["n_dropped"] == 1
+    assert list(panel.attrs["dropped"]) == [pd.Timestamp("2026-08-04")]
+    # the reason survives, not just the fact
+    assert "no curve for this date" in panel.attrs["dropped"][pd.Timestamp("2026-08-04")]
+
+
+def test_greeks_panel_raises_when_no_date_prices_at_all():
+    """The failure mode this exists for, reproduced deliberately.
+
+    When rateslib 2.7.1 began refusing this module's fixtures, EVERY date
+    failed, ``rows`` came back empty and the caller saw
+    ``KeyError: "None of ['date'] are in the columns"`` from ``set_index`` --
+    a missing-column message for a convention conflict nine frames down. A
+    systematic failure must say so, and must carry the real exception.
+    """
+    curve_map = {
+        pd.Timestamp("2026-08-03"): _UnpriceableCurve("convention conflict"),
+        pd.Timestamp("2026-08-04"): _UnpriceableCurve("convention conflict"),
+    }
+    with pytest.raises(ValueError, match="priced 0 of 2 dates") as excinfo:
+        greeks_panel(curve_map, PAIR)
+    # the original cause is attached, not discarded
+    assert isinstance(excinfo.value.__cause__, ValueError)
+    assert "convention conflict" in str(excinfo.value.__cause__)
+    # ...and it is emphatically not the old KeyError about a 'date' column
+    assert not isinstance(excinfo.value, KeyError)
+
+
+def test_greeks_panel_is_empty_not_raising_when_there_were_no_candidates():
+    """No dates offered is not a systematic failure -- there was nothing to fail.
+
+    Guards the refusal against firing on an empty or all-``None`` curve map,
+    which is a caller passing nothing rather than a pipeline breaking.
+    """
+    assert len(greeks_panel({}, PAIR)) == 0
+    assert len(greeks_panel({pd.Timestamp("2026-08-03"): None}, PAIR)) == 0
 
 
 def test_greeks_panel_is_one_row_per_date():

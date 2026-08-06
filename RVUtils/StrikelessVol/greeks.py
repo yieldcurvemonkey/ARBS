@@ -373,15 +373,46 @@ def compute_greeks(
 
 
 def greeks_panel(curve_map: dict, pair: ForwardPair, **kwargs) -> pd.DataFrame:
-    """One row per date. Dates whose curve cannot price the pair are dropped."""
+    """One row per date. Dates whose curve cannot price the pair are dropped.
+
+    **What gets dropped is recorded, and dropping EVERY date raises.** The
+    ``try`` wraps a whole ``compute_greeks`` -- two ``build_irswap``s, two
+    ``fair_rate``s and nine repricings -- so a single date's genuine pricing
+    failure and a systematic breakage look identical from outside: both are
+    just missing rows. That is not hypothetical. When rateslib 2.7.1 started
+    refusing this module's own test fixtures, every date failed, ``rows`` came
+    back empty, and the error the caller finally saw was
+    ``KeyError: "None of ['date'] are in the columns"`` from ``set_index`` --
+    a message about a missing column, for a problem that was a convention
+    conflict nine frames down.
+
+    So: the surviving swallow is still per-date (a provider gap on one day
+    should not lose the panel), but
+
+    * ``attrs["dropped"]`` maps each dropped timestamp to its exception's
+      ``repr``, and ``attrs["n_dropped"]`` counts them;
+    * if there was at least one candidate date and NOT ONE of them priced,
+      that is a systematic failure and it raises, carrying the first
+      exception as its ``__cause__``.
+
+    ``attrs["dates_in"]`` is the number of non-``None`` curves offered, so a
+    caller can see the drop rate rather than infer it from a row count.
+    """
     rows = []
+    dropped: dict = {}
+    first_error: Exception | None = None
+    candidates = 0
     for ts in sorted(curve_map):
         curve = curve_map[ts]
         if curve is None:
             continue
+        candidates += 1
         try:
             g = compute_greeks(curve, pair, **kwargs)
-        except Exception:
+        except Exception as exc:  # per-date: one bad curve must not lose the panel
+            dropped[pd.Timestamp(ts)] = repr(exc)
+            if first_error is None:
+                first_error = exc
             continue
         rec = {
             "date": pd.Timestamp(ts),
@@ -397,4 +428,25 @@ def greeks_panel(curve_map: dict, pair: ForwardPair, **kwargs) -> pd.DataFrame:
         for h, val in g.breakeven_by_h.items():
             rec[f"breakeven_h{int(h)}"] = val
         rows.append(rec)
-    return pd.DataFrame(rows).set_index("date").sort_index()
+
+    if candidates and not rows:
+        raise ValueError(
+            f"greeks_panel priced 0 of {candidates} dates for {pair.name}. "
+            f"Every date raised, so this is a systematic failure, not a data "
+            f"gap -- the first one is attached as __cause__. Distinct errors: "
+            f"{sorted(set(dropped.values()))[:3]}"
+        ) from first_error
+
+    # No candidates at all: an empty panel, correctly shaped. Without this
+    # `pd.DataFrame([])` has no "date" column and `set_index` raises the same
+    # misleading KeyError the refusal above exists to replace.
+    if not rows:
+        panel = pd.DataFrame(columns=["date"]).set_index("date")
+    else:
+        panel = pd.DataFrame(rows).set_index("date").sort_index()
+    panel.attrs.update({
+        "dates_in": candidates,
+        "n_dropped": len(dropped),
+        "dropped": dropped,
+    })
+    return panel

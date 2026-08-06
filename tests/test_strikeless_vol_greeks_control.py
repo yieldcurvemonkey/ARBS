@@ -332,11 +332,29 @@ def test_a_curve_index_convention_mismatch_is_now_refused_outright():
     relative to the ``D(T0) - D(TN)`` replication. It was pinned "so it does
     not get rediscovered as a bug".
 
-    rateslib 2.7.1 makes it unconstructible instead: forecasting an act360 RFR
-    index off an act365f curve raises before any number is produced. The
-    artefact can no longer be measured, so what is pinned here is the refusal
-    that replaced it -- which is the stronger statement, and the one that would
-    catch the pairing coming back.
+    rateslib 2.7.1 refuses that pairing instead: forecasting an act360 RFR
+    index off an act365f curve raises before any number is produced. What is
+    pinned here is that refusal -- the statement that would catch the pairing
+    coming back.
+
+    **The old fixture is still MEASURABLE, and here is how.** An earlier
+    version of this docstring said the artefact "can no longer be measured",
+    and that was wrong in a way that cost something: believing it, the repair
+    DERIVED an old-fixture number instead of measuring one, and derived it
+    from a mechanism that was itself wrong (see
+    ``test_strikeless_vol_greeks.py::test_leg_is_sized_to_the_requested_dv01``).
+    The guard lives in one function,
+    ``rateslib.data.fixings._maybe_get_rate_series_from_curve``: given a rate
+    curve it either builds the index FROM the curve (when no index was
+    supplied) or compares conventions and raises. Pre-2.7 always took the
+    first path. Monkeypatching it to do so unconditionally reconstructs the
+    old fixture exactly -- it reproduces all six numbers this branch recorded
+    under rateslib 2.1.1 (flat roll -24.7614, flat gamma 200.2507, flat
+    breakeven 0.497297, realistic roll -1102.3859, realistic gamma 201.1952,
+    realistic spread -58.1035), so the reconstruction is validated against
+    values it was not fitted to.
+
+    Do that rather than re-derive, if a pre-repair number is ever in question.
 
     Production was never exposed to the artefact: the only act365f curves in
     this repo are CAD-CORRA, JPY-TONAR, JPY-TONA and GBP-SONIA, and each is
