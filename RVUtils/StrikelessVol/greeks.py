@@ -24,6 +24,7 @@ import rateslib as rl
 
 from RVUtils.StrikelessVol.conventions import FLATTENER
 from RVUtils.StrikelessVol.universe import ForwardLeg, ForwardPair
+from utils.rl_compat import leg_cashflows
 
 # rateslib's leg1 (fixed) notional sign for a PAYER swap. Pinned by
 # test_payer_gains_when_rates_rise; flip this constant if that test fails,
@@ -240,7 +241,7 @@ def analytic_leg_gamma(curve, swap) -> float:
     d0, dN = float(handle[eff]), float(handle[mat])
 
     annuity_term = 0.0
-    for _, row in swap.leg1.cashflows(handle).iterrows():
+    for _, row in leg_cashflows(swap.leg1, handle).iterrows():
         pay = _as_dt(row["Payment"])
         tau = float(row["DCF"])
         ti = _t(pay)

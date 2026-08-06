@@ -28,6 +28,8 @@ old                           new
 ``analytic_delta(curve=x)``   ``analytic_delta(curves=x)`` (keyword-only)
 ``inst.kwargs["notional"]``   ``inst._kwargs.leg1["notional"]`` (grouped)
 ``STIRFuture.pv01``           ``abs(STIRFuture.analytic_delta())``
+``leg.cashflows(x)``          ``leg.cashflows(rate_curve=x)`` (keyword-only)
+``leg.npv(x, d)``             ``leg.npv(rate_curve=x, disc_curve=d)`` (kw-only)
 ============================  ==================================================
 
 2.7 additionally requires a *resolvable* discount curve for
@@ -47,6 +49,8 @@ __all__ = [
     "rate_fixings_kwargs",
     "analytic_delta",
     "instrument_kwarg",
+    "leg_cashflows",
+    "leg_npv",
     "stirf_analytic_delta",
     "stirf_pv01",
 ]
@@ -123,6 +127,39 @@ def analytic_delta(instrument: Any, curve: Any = None, **kwargs: Any) -> Any:
     if _ANALYTIC_DELTA_TAKES_CURVES:
         return instrument.analytic_delta(curves=curve, **kwargs)
     return instrument.analytic_delta(curve, **kwargs)
+
+
+# 2.7 made the *leg* accessors keyword-only as well and renamed their first
+# argument. ``leg.cashflows(handle)`` and ``leg.npv(handle, handle)`` -- both
+# legal in 2.1.x/2.6.x -- are now ``TypeError: takes 1 positional argument``.
+# Resolved once here for the same reason as everything else in this module: the
+# name is version-specific, the call sites should not be.
+_LEG_RATE_CURVE_KWARG: str = _resolve_kwarg_name(
+    rl.legs.FixedLeg.cashflows, ("rate_curve", "curve")
+)
+
+
+def leg_cashflows(leg: Any, curve: Any) -> Any:
+    """``leg.cashflows`` with the forecasting curve named the way this rateslib wants.
+
+    Only the forecasting curve is passed, matching the pre-2.7 positional call
+    this replaces (whose single argument was ``curve``); ``disc_curve`` then
+    defaults to it exactly as it did before.
+    """
+    return leg.cashflows(**{_LEG_RATE_CURVE_KWARG: curve})
+
+
+def leg_npv(leg: Any, curve: Any, disc_curve: Any = None) -> Any:
+    """``leg.npv`` with forecasting and discount curves named for this rateslib.
+
+    ``disc_curve=None`` means "discount off the same curve", which is what the
+    two-positional-argument form ``leg.npv(c, c)`` said before 2.7.
+    """
+    kwargs = {_LEG_RATE_CURVE_KWARG: curve}
+    if _accepts_named(rl.legs.FixedLeg.npv, "disc_curve"):
+        kwargs["disc_curve"] = curve if disc_curve is None else disc_curve
+        return leg.npv(**kwargs)
+    return leg.npv(curve, curve if disc_curve is None else disc_curve)
 
 
 def instrument_kwarg(instrument: Any, name: str, default: Any = _MISSING) -> Any:
