@@ -33,6 +33,7 @@ from RVUtils.StrikelessVol.universe import ALL_PAIRS
 
 from BT.signals.strikeless_vol import (
     MEASURED_VERDICT,
+    _frozen_z_at,
     REQUIRED_OUTPUT_COLUMNS,
     STUDY_N_TRIALS,
     SignalWindows,
@@ -351,35 +352,83 @@ def _z_quoted_in(reason):
     return float(str(reason).rsplit("; z=", 1)[1].split()[0])
 
 
+def _episode_last_dates(sign):
+    """The last held date of every episode in a sign series."""
+    s = pd.Series(sign).fillna(0).astype(int)
+    out, cur, prev = [], 0, None
+    for ts, v in s.items():
+        if v != cur:
+            if cur != 0 and prev is not None:
+                out.append(prev)
+            cur = int(v)
+        prev = ts
+    if cur != 0 and prev is not None:
+        out.append(prev)
+    return out
+
+
 def test_decision_z_is_the_number_the_engines_reason_quotes():
     """The runner reports the live z AND the z that actually decided the row.
 
     On a continuing hold those are different numbers -- the engine prices the
-    hold on the z frozen at entry -- so reporting only the live one puts a
-    figure next to a ``reason`` string quoting a different figure. This checks
-    the reproduction against the engine's own output, on a frame where the two
-    genuinely differ (a case whose answer is known independently: the engine
-    printed it).
+    hold on the z frozen at ENTRY -- so reporting only the live one puts a
+    figure next to a ``reason`` string quoting a different figure. Checked on
+    the last day of EVERY episode against the engine's own printed reason, i.e.
+    against an answer known independently rather than against a re-derivation
+    of the thing under test.
+
+    The last two assertions are what make this discriminating rather than
+    merely green. The betas move slowly, so on a short hold the entry vintage
+    and today's vintage agree to within the reason string's two decimal places
+    -- a check that only ever looked at the most recent row passed even when
+    the entry date was replaced by today's. ``n_discriminating`` counts the
+    episodes where the two genuinely differ, and requiring at least one of them
+    is the proof that this test can tell them apart at all.
     """
-    seen_hold = seen_entry = False
-    for be_scale in (1.0, 0.25, 3.0):
-        inputs, _g, _iv = built(be_scale=be_scale)
-        cfg = SignalConfig()
-        signals = certified_signals(inputs, cfg)
-        row = state_row(inputs, signals, cfg)
+    inputs, _g, _iv = built()
+    cfg = SignalConfig()
+    signals = certified_signals(inputs, cfg)
+
+    ends = _episode_last_dates(signals["sign"])
+    assert len(ends) >= 5, "too few episodes to say anything"
+
+    n_held = n_discriminating = 0
+    for end in ends:
+        trunc = dataclasses.replace(inputs, panel=inputs.panel.loc[:end])
+        row = state_row(trunc, signals.loc[:end], cfg)
         quoted = _z_quoted_in(row["reason"])
         if quoted is None:
             continue
-        assert row["decision_z"] == pytest.approx(quoted, abs=5e-3), be_scale
-        if row["held_days"] > 0:
-            seen_hold = True
-            # the reproduction is not vacuous: the live z is a DIFFERENT number
-            assert abs(row["residual_z"] - row["decision_z"]) > 1e-3
-        else:
-            seen_entry = True
+        assert row["decision_z"] == pytest.approx(quoted, abs=5e-3), end
+        if row["held_days"] == 0:
             assert row["decision_z"] == pytest.approx(row["residual_z"], rel=1e-12)
-    assert seen_hold, "no held row in the fixtures -- the frozen branch is untested"
-    assert seen_entry, "no fresh-entry row in the fixtures"
+            continue
+        n_held += 1
+        # not vacuous: on a hold the live z is a different number
+        assert abs(row["residual_z"] - row["decision_z"]) > 1e-3, end
+        # would using TODAY's beta vintage instead of the entry's give the same
+        # answer? On at least one episode it must not, or this test proves
+        # nothing about which vintage was used.
+        today_vintage = _frozen_z_at(trunc, end, end)
+        if abs(today_vintage - quoted) > 5e-3:
+            n_discriminating += 1
+
+    assert n_held >= 3, "the frozen-z branch is barely exercised"
+    assert n_discriminating >= 1, (
+        "on every episode the entry vintage and today's vintage agree to the "
+        "reason string's precision, so this test cannot tell which was used")
+
+
+def test_the_last_row_of_the_default_fixture_is_a_hold_priced_on_a_frozen_z():
+    """The headline path, stated as a fact about the fixture rather than left
+    to chance: the row the other tests read is a continuing hold, so
+    ``residual_z`` and ``decision_z`` are genuinely different numbers there."""
+    inputs, _g, _iv = built()
+    cfg = SignalConfig()
+    row = state_row(inputs, certified_signals(inputs, cfg), cfg)
+    assert row["held_days"] > 0
+    assert row["residual_z_is_decision_input"] is False
+    assert abs(row["residual_z"] - row["decision_z"]) > 0.3
 
 
 def test_held_days_counts_the_run_of_identical_signs_ending_yesterday():
