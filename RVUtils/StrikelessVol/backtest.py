@@ -202,7 +202,15 @@ FIT_MATCH_TOL: float = 1e-6
 #: =========================================  =============  =====================
 #:
 #: The maximum is identical (250.000) for the frozen CHANGES builder and both
-#: honest ones; the count separates them 1 against 225.
+#: honest ones; the count separates them 1 against 225 -- for THIS artefact
+#: class, which is the accidental one. It is not a separation in general: a
+#: frozen full-sample residual carrying ``1e-12 x`` an expanding-mean memory
+#: term responds on 225 of 225 dates and is fully certified, with an output
+#: 2.46e-12 from ``changes_regression(...).residuals``. That is an adversarial
+#: construction rather than a plausible accident -- nobody writes it by
+#: mistake -- but the count is a detector for a shape, not a proof of
+#: causality, and this line is where a reader decides which of the two they
+#: are being handed.
 #:
 #: The value is set from the largest differencing lag this module puts in front
 #: of a user, not picked round: ``factors.changes_regression`` takes
@@ -216,11 +224,20 @@ FIT_MATCH_TOL: float = 1e-6
 #: the same shape to a one-cut probe -- "the response is confined to N dates
 #: after the cut" -- and only N distinguishes them. A legitimate ROLLING-window
 #: builder genuinely stops depending on the shocked head once its window clears
-#: the cut, so it responds on exactly ``window`` dates: measured, window 252/63
-#: accepted (225, 63 dates), window 21 and shorter REFUSED as if frozen. No
-#: builder in this module is rolling; a caller who supplies one with a window at
-#: or below the ladder's top must widen this constant deliberately, and should
-#: know they are trading a real refusal for a real detection.
+#: the cut, so it responds on about ``window`` dates: measured on a rolling
+#: LEVELS builder, window 252/63 accepted (225, 63 dates), window 21 and shorter
+#: REFUSED as if frozen.
+#:
+#: A rolling CHANGES builder responds on one date MORE than the levels case --
+#: the differencing boundary adds it -- so window 63 gives 64 and **window 21
+#: gives 22, which is ACCEPTED, not refused.** The two paragraphs above were
+#: written from the levels measurement and read as if it covered both; it does
+#: not, and this is the paragraph whose whole job is the frontier. The error is
+#: fail-OPEN by one date on the rolling changes side. No builder in this module
+#: is rolling and no test pins the rolling side, so a caller who supplies one
+#: with a window at or below the ladder's top must widen this constant
+#: deliberately, and should know they are trading a real refusal for a real
+#: detection.
 HISTORY_RESPONSE_MIN_DATES: int = 21
 
 
