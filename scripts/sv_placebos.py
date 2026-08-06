@@ -26,7 +26,8 @@ nobody wants:
    involved, and a mirror run on a static book is not evidence of anything.
    :func:`run_placebos` refuses to run the mirror unless the signal takes BOTH
    directions at some point -- the Task 17 conditional rule -- and stamps
-   ``mirror_is_arithmetic`` on every mirror row it does produce. What the mirror can still show is BOTH SIDES LOSING -- the pair
+   ``mirror_is_arithmetic`` on every mirror row it does produce. What the
+   mirror can still show is BOTH SIDES LOSING -- the pair
    sitting inside the cost band -- which is a statement about costs, not about
    convexity. Read it as that.
 4. **Confound alternatives** for whatever config wins: duration-only
@@ -64,11 +65,14 @@ from RVUtils.StrikelessVol.strategy import (
     SignalConfig,
     build_signals,
 )
+from RVUtils.StrikelessVol.universe import PLACEBO_PAIRS
 from RVUtils.pca_rv import make_pca_rv_builder
 
 __all__ = [
     "CONFOUND_METRIC",
     "PLACEBO_FAMILIES",
+    "PLACEBO_PAIR_NAMES",
+    "MIRROR_REL_TOL",
     "DurationOnlyPricer",
     "block_bootstrap",
     "carry_sign_signals",
@@ -83,6 +87,15 @@ __all__ = [
 #: The families :func:`run_placebos` can emit, in report order.
 PLACEBO_FAMILIES = ("real", "short_dated", "shuffled_vol", "sign_mirror")
 
+#: The short-dated slopes requirement 1 nominates, read from the universe
+#: rather than restated here: ``USD 1Y5Y/2Y5Y`` and ``USD 2Y2Y/3Y2Y``. The leg
+#: is the identical rulebook run WHERE THE CONVEXITY STORY SHOULD NOT HOLD, so
+#: which pairs it runs on is the whole content of it -- run against an
+#: arbitrary second pair it is a second real run wearing a placebo label.
+#: :func:`run_placebos` refuses anything outside this list unless the caller
+#: says ``expect_placebo_pairs=False``.
+PLACEBO_PAIR_NAMES: tuple = tuple(p.name for p in PLACEBO_PAIRS)
+
 #: What :func:`run_confounds` ranks on. Stated here, before the run, because
 #: the point of a confound table is that the winner was not chosen after
 #: looking at it. Net of costs and divided by the REALISED DV01 of the book on
@@ -90,6 +103,14 @@ PLACEBO_FAMILIES = ("real", "short_dated", "shuffled_vol", "sign_mirror")
 #: study's per-trade unit. **Not Sharpe**, which a zero-convexity twin and both
 #: short-dated placebo pairs already beat the real package on.
 CONFOUND_METRIC = "net_bp_per_trade"
+
+#: How far ``gross_real + gross_mirror`` may sit from zero and still be called
+#: arithmetic. ``simulate`` is antisymmetric to float noise, so this is float
+#: noise -- named rather than inlined because the boolean it produces is what
+#: the module docstring tells a reader to consult first, and a tolerance nobody
+#: can see is a tolerance nobody can test. Measured: loosening it to 1e9 made
+#: ``mirror_is_arithmetic`` unfalsifiable and the whole suite still passed.
+MIRROR_REL_TOL: float = 1e-9
 
 #: Below this lag-1 autocorrelation there is no persistence to preserve, so
 #: :func:`persistence_check` has nothing to verify and says so rather than
@@ -102,11 +123,15 @@ _SIGNAL_OUTPUT_COLS = {"sign", "size", "dv01_usd"}
 
 _GROSS_COLS = ("carry_usd", "harvest_usd", "mtm_usd", "cross_usd")
 
+#: The ``SignalConfig`` axes a grid can sweep -- mirrors ``backtest``'s own set.
+_SIGNAL_FIELDS = set(SignalConfig.__dataclass_fields__)
+
 
 # --------------------------------------------------------------- the resample
 
 
-def block_bootstrap(series: pd.Series, *, block: int = 21, seed: int = 0) -> pd.Series:
+def block_bootstrap(series: pd.Series, *, block: int = 21, seed: int = 0,
+                    min_ratio: float = 0.5) -> pd.Series:
     """Resample in blocks, preserving short-run autocorrelation.
 
     A plain shuffle destroys the persistence of a vol series and makes the
@@ -183,7 +208,11 @@ def block_bootstrap(series: pd.Series, *, block: int = 21, seed: int = 0) -> pd.
     starts = rng.integers(0, n - block + 1, size=n_blocks)
     out = np.concatenate([values[st:st + block] for st in starts])[:n]
     resampled = pd.Series(out, index=s.index, name=s.name)
-    resampled.attrs.update(persistence_check(s, resampled))
+    # `min_ratio` is threaded through rather than defaulted so the stamp on the
+    # series and the verdict that gated the run cannot disagree: a caller
+    # reading `out.attrs["persistence_preserved"]` was previously answering a
+    # different question from the one `run_placebos` asked.
+    resampled.attrs.update(persistence_check(s, resampled, min_ratio=min_ratio))
     resampled.attrs.update({"block": block, "seed": int(seed),
                             "n_blocks": n_blocks})
     return resampled
@@ -356,7 +385,7 @@ def carry_sign_signals(
     *,
     rep_cfg: Optional[ReplicationConfig] = None,
     costs: CostSchedule,
-    size: float = 1.0,
+    size=1.0,
     base_dv01_usd: float = 100_000.0,
 ) -> pd.DataFrame:
     """Hold whichever sign has positive roll. Confound (c).
@@ -367,13 +396,23 @@ def carry_sign_signals(
     is paying" alternative, and the study has already measured that both
     short-dated placebo pairs out-Sharpe every real pair **while running the
     opposite carry sign**, so it is not a straw man.
+
+    ``size`` is a flat 1.0 by default, which is **not** matched to the winner's
+    risk-parity sizing. :data:`CONFOUND_METRIC` divides by the realised DV01 of
+    the book on the days it was held, so the comparison survives that -- but
+    the two books are not the same size, and a caller who wants them to be can
+    pass the winner's own ``size`` column as a Series.
     """
     rep = replace(rep_cfg or ReplicationConfig(), sign=FLATTENER)
     unit = simulate(ctx, list(dates), rep, costs)
     carry = unit["carry"].astype(float).shift(1)
     sign = np.sign(carry).fillna(0.0).astype(int)
+    if isinstance(size, pd.Series):
+        sz = size.astype(float).reindex(unit.index).fillna(0.0).to_numpy()
+    else:
+        sz = np.full(len(unit.index), float(size))
     out = pd.DataFrame({"sign": sign,
-                        "size": np.where(sign != 0, float(size), 0.0),
+                        "size": np.where(sign != 0, sz, 0.0),
                         "reason": "carry sign"},
                        index=unit.index)
     out["dv01_usd"] = out["sign"] * out["size"] * float(base_dv01_usd)
@@ -393,6 +432,40 @@ def _built_sign(source: pd.DataFrame, *, signal_builder, base_signal_cfg) -> pd.
         return pd.Series(source["sign"]).astype(float)
     built = (signal_builder or build_signals)(source, base_signal_cfg)
     return pd.Series(built["sign"]).astype(float)
+
+
+def _signal_key(cfg: dict) -> tuple:
+    """The signal-axis part of a grid config, as a hashable key."""
+    return tuple(sorted((k, v) for k, v in cfg.items() if k in _SIGNAL_FIELDS))
+
+
+def _takes_both_directions(sign: pd.Series) -> bool:
+    return (set(int(v) for v in sign.dropna().unique()) - {0}) == {FLATTENER,
+                                                                  STEEPENER}
+
+
+def _direction_coverage(source: pd.DataFrame, grid: Sequence[dict], *,
+                        signal_builder, base_signal_cfg) -> Dict[tuple, bool]:
+    """``{signal-config key: does that config take BOTH directions}``.
+
+    The mirror is vacuous on a one-directional book, and whether a book is
+    one-directional is a property of the CONFIG, not of the pair: the study's
+    own ``build_config_grid`` sweeps ``short_side_enabled``, and every config
+    with it False holds the flattener alone. Reading only the base config
+    answers for a run nobody made.
+    """
+    if _is_prebuilt(source):
+        return {(): _takes_both_directions(pd.Series(source["sign"]))}
+    out: Dict[tuple, bool] = {}
+    for cfg in grid:
+        key = _signal_key(cfg)
+        if key in out:
+            continue
+        scfg = replace(base_signal_cfg,
+                       **{k: v for k, v in cfg.items() if k in _SIGNAL_FIELDS})
+        built = (signal_builder or build_signals)(source, scfg)
+        out[key] = _takes_both_directions(pd.Series(built["sign"]))
+    return out
 
 
 def _tag(frame: pd.DataFrame, family: str, sim: int = -1) -> pd.DataFrame:
@@ -423,6 +496,7 @@ def run_placebos(
     seed: int = 0,
     min_autocorr_ratio: float = 0.5,
     sign_mirror: bool = True,
+    expect_placebo_pairs: bool = True,
 ) -> pd.DataFrame:
     """The three placebo legs plus the real run, one frame, one ``family`` column.
 
@@ -465,8 +539,32 @@ def run_placebos(
 
     # 1. the identical rulebook where the story should not hold
     if placebo_ctx_by_pair is not None:
-        frames.append(_tag(run_grid(placebo_ctx_by_pair, placebo_panel_by_pair,
-                                    grid, **common), "short_dated"))
+        if expect_placebo_pairs:
+            unknown = sorted(set(placebo_ctx_by_pair) - set(PLACEBO_PAIR_NAMES))
+            if unknown or not placebo_ctx_by_pair:
+                raise ValueError(
+                    f"short-dated placebo pairs {unknown or 'none'} are not in "
+                    f"universe.PLACEBO_PAIRS {list(PLACEBO_PAIR_NAMES)}. This "
+                    "leg is requirement 1 -- the identical rulebook on the "
+                    "SHORT-DATED slopes, where the convexity story should not "
+                    "hold -- and it means nothing run against an arbitrary "
+                    "second pair. Pass `expect_placebo_pairs=False` only when "
+                    "deliberately probing a pair the study did not nominate."
+                )
+        short = _tag(run_grid(placebo_ctx_by_pair, placebo_panel_by_pair,
+                              grid, **common), "short_dated")
+        # The leg must have run on the PLACEBO contexts. Measured: replacing
+        # this call with `_tag(real, "short_dated")` -- the real run's own rows
+        # wearing the placebo label -- left the whole suite passing. A placebo
+        # leg that reproduces the real number is a leg that ran nothing.
+        got, want = set(short["pair"]), set(placebo_ctx_by_pair)
+        if got != want:
+            raise ValueError(
+                f"the short-dated leg produced rows for {sorted(got)}, not for "
+                f"the placebo pairs {sorted(want)} -- it did not run on the "
+                "contexts it was given"
+            )
+        frames.append(short)
         ran.append("short_dated")
     else:
         skipped.append("short_dated")
@@ -489,13 +587,36 @@ def run_placebos(
                     f"{pair}: no {vol_col!r} column to bootstrap; the panel has "
                     f"{sorted(source.columns)}"
                 )
+        drawn: Dict[str, Dict[bytes, int]] = {p: {} for p in panel_by_pair}
         for sim in range(1, int(n_shuffles) + 1):
             shuffled = {}
             for pair, source in panel_by_pair.items():
                 null = block_bootstrap(source[vol_col], block=block,
-                                       seed=int(seed) * 10_000 + sim)
-                ev = persistence_check(source[vol_col], null,
+                                       seed=int(seed) * 10_000 + sim,
                                        min_ratio=min_autocorr_ratio)
+                # `n_shuffles` must not be decorative. Measured: changing the
+                # per-sim seed to a constant makes every simulation draw the
+                # SAME null and the whole suite still passed -- a placebo
+                # reporting n independent draws while holding one, i.e. an
+                # under-dispersed null presented with n times its real sample
+                # size. This is the same shape as the random-walk placebo's
+                # own per-sim seeding, one function across.
+                fingerprint = null.to_numpy().tobytes()
+                if fingerprint in drawn[pair]:
+                    raise ValueError(
+                        f"{pair} sim {sim}: this null is identical to sim "
+                        f"{drawn[pair][fingerprint]}. The shuffled-vol leg "
+                        f"would report {n_shuffles} independent draws while "
+                        "holding fewer, so its spread understates the null's. "
+                        "Check that the per-sim seed actually varies."
+                    )
+                drawn[pair][fingerprint] = sim
+                # The draw's OWN stamp, not a re-computation of it. Recomputing
+                # is what let the two verdicts disagree (the series said one
+                # thing at the default ratio, the gate said another at the
+                # caller's), and it made the `min_ratio=` above dead code --
+                # measured: removing it changed nothing observable.
+                ev = dict(null.attrs)
                 if not ev["persistence_preserved"]:
                     raise ValueError(
                         f"{pair} sim {sim}: the block bootstrap destroyed the "
@@ -517,15 +638,25 @@ def run_placebos(
         skipped.append("shuffled_vol")
 
     # 3. the sign mirror -- scoped, because the engine is antisymmetric
+    scope_by_pair: Dict[str, dict] = {}
     if sign_mirror:
         for pair, source in panel_by_pair.items():
-            sign = _built_sign(source, signal_builder=signal_builder,
-                               base_signal_cfg=base_signal_cfg)
-            held = set(int(v) for v in sign.dropna().unique()) - {0}
-            if held != {FLATTENER, STEEPENER}:
+            # Per CONFIG, not just the base one. `build_config_grid` sweeps
+            # `short_side_enabled`, and a config with it False is
+            # one-directional however the base config behaves, so a guard that
+            # only reads the base config passes it on the base's behalf.
+            coverage = _direction_coverage(
+                source, grid, signal_builder=signal_builder,
+                base_signal_cfg=base_signal_cfg)
+            scope_by_pair[pair] = coverage
+            if not any(coverage.values()):
+                held = _built_sign(source, signal_builder=signal_builder,
+                                   base_signal_cfg=base_signal_cfg)
+                held = sorted(set(int(v) for v in held.dropna().unique()) - {0})
                 raise ValueError(
-                    f"{pair}: the signal only ever holds {sorted(held) or 'nothing'}, "
-                    "so the sign mirror is arithmetically vacuous on it. "
+                    f"{pair}: NO config in this grid takes both directions "
+                    f"(the base config holds {held or 'nothing'}), so the sign "
+                    "mirror is arithmetically vacuous on all of them. "
                     "`simulate` is exactly antisymmetric in `sign` -- per-unit "
                     "DV01 is sign-invariant, notionals flip, PV and theta are "
                     "linear in notionals, the trigger reads a sign-independent "
@@ -537,7 +668,8 @@ def run_placebos(
                 )
         mirror = _tag(run_grid(ctx_by_pair, panel_by_pair, mirror_configs(grid),
                                **common), "sign_mirror")
-        frames.append(_annotate_mirror(real, mirror, grid))
+        frames.append(_annotate_mirror(real, mirror, grid,
+                                       scope_by_pair=scope_by_pair))
         ran.append("sign_mirror")
     else:
         skipped.append("sign_mirror")
@@ -562,7 +694,8 @@ def run_placebos(
 
 
 def _annotate_mirror(real: pd.DataFrame, mirror: pd.DataFrame,
-                     grid: Sequence[dict], *, rel_tol: float = 1e-9) -> pd.DataFrame:
+                     grid: Sequence[dict], *, rel_tol: float = MIRROR_REL_TOL,
+                     scope_by_pair: Optional[Dict[str, dict]] = None) -> pd.DataFrame:
     """Measure, on the run itself, whether the mirror was pure arithmetic.
 
     Joins each mirror row to its real counterpart on everything except the sign
@@ -571,6 +704,10 @@ def _annotate_mirror(real: pd.DataFrame, mirror: pd.DataFrame,
     module docstring's word for it, and so that a future change to ``simulate``
     that breaks the antisymmetry shows up as a number rather than as a
     silently more interesting mirror.
+
+    ``mirror_scope_ok`` says whether THAT config's own signal takes both
+    directions. A config that does not (``short_side_enabled=False``, say) has
+    a vacuous mirror even when its neighbours in the grid do not.
     """
     keys = [k for k in {k for cfg in grid for k in cfg} if k != "sign"]
     on = ["pair", "book"] + sorted(keys)
@@ -592,6 +729,13 @@ def _annotate_mirror(real: pd.DataFrame, mirror: pd.DataFrame,
     left = left.reset_index(drop=True)
     left["mirror_gross_sum_usd"] = total.to_numpy()
     left["mirror_is_arithmetic"] = (total.abs() <= rel_tol * scale).to_numpy()
+    if scope_by_pair is not None:
+        left["mirror_scope_ok"] = [
+            bool(scope_by_pair.get(row["pair"], {}).get(
+                _signal_key({k: row[k] for k in row.index
+                             if k in _SIGNAL_FIELDS}), False))
+            for _, row in left.iterrows()
+        ]
     return left
 
 

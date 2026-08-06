@@ -22,8 +22,12 @@ from RVUtils.StrikelessVol.costs import FREE, TAKER
 from RVUtils.StrikelessVol.replication import ReplicationConfig
 from RVUtils.StrikelessVol.report import FORBIDDEN_RANK_KEYS
 from RVUtils.StrikelessVol.strategy import SignalConfig
+from RVUtils.StrikelessVol.universe import PLACEBO_PAIRS
+from RVUtils.StrikelessVol.backtest import run_grid
 from scripts.sv_placebos import (
     CONFOUND_METRIC,
+    PLACEBO_PAIR_NAMES,
+    _annotate_mirror,
     DurationOnlyPricer,
     block_bootstrap,
     carry_sign_signals,
@@ -270,12 +274,28 @@ GRID = [{"trigger_bp": 25.0}]
 # --------------------------------------------------------------- run_placebos
 
 
+SHORT = PLACEBO_PAIR_NAMES[0]      # "USD 1Y5Y/2Y5Y"
+
+
+def _short_dated_world(panel, seed=9):
+    """A second, materially different pricing context for the short-dated leg.
+
+    Named from ``universe.PLACEBO_PAIRS``, not invented here: the leg is
+    requirement 1 -- the identical rulebook where the convexity story should
+    NOT hold -- so which pair it runs on is the whole content of it.
+    """
+    pl_ctx = SyntheticCtx(
+        list(np.cumsum(np.random.default_rng(seed).normal(0, 0.4, len(panel)))),
+        gamma=2.0, theta_per_day=-90.0)
+    return pl_ctx, panel.set_axis(pl_ctx.dates)
+
+
 def test_run_placebos_runs_every_leg_and_says_which():
     ctx, panel = _world()
-    pl_ctx = SyntheticCtx(list(np.cumsum(np.random.default_rng(9).normal(0, 0.4, 320))))
+    pl_ctx, pl_panel = _short_dated_world(panel)
     out = run_placebos({"USD": ctx}, {"USD": panel}, GRID, costs=TAKER,
-                       placebo_ctx_by_pair={"SHORT": pl_ctx},
-                       placebo_panel_by_pair={"SHORT": panel.set_axis(pl_ctx.dates)},
+                       placebo_ctx_by_pair={SHORT: pl_ctx},
+                       placebo_panel_by_pair={SHORT: pl_panel},
                        block=21, n_shuffles=2, seed=1)
     assert out.attrs["legs_run"] == ("real", "short_dated", "shuffled_vol",
                                      "sign_mirror")
@@ -302,7 +322,61 @@ def test_run_placebos_refuses_half_a_short_dated_placebo():
     ctx, panel = _world()
     with pytest.raises(ValueError, match="BOTH"):
         run_placebos({"USD": ctx}, {"USD": panel}, GRID, costs=FREE,
-                     placebo_ctx_by_pair={"SHORT": ctx})
+                     placebo_ctx_by_pair={SHORT: ctx})
+
+
+def test_the_short_dated_leg_actually_ran_on_the_placebo_contexts():
+    """I-2: requirement 1's leg had no "it ran" test.
+
+    Measured: replacing the leg's ``run_grid`` call with
+    ``_tag(real, "short_dated")`` -- the real run's own rows wearing the
+    placebo label -- left the whole suite passing. That is the identical
+    failure mode as "the shuffled leg reuses the ORIGINAL panel", which WAS
+    defended, on the other leg.
+    """
+    ctx, panel = _world()
+    pl_ctx, pl_panel = _short_dated_world(panel)
+    out = run_placebos({"USD": ctx}, {"USD": panel}, GRID, costs=TAKER,
+                       placebo_ctx_by_pair={SHORT: pl_ctx},
+                       placebo_panel_by_pair={SHORT: pl_panel},
+                       n_shuffles=0, sign_mirror=False)
+    real = out[out["family"] == "real"]
+    short = out[out["family"] == "short_dated"]
+    # it carries the PLACEBO pair's name, not the real pair's
+    assert list(short["pair"]) == [SHORT]
+    assert list(real["pair"]) == ["USD"]
+    # and it is a different book: the numbers do not reproduce the real run's
+    assert float(short["total_net_usd"].iloc[0]) \
+        != pytest.approx(float(real["total_net_usd"].iloc[0]))
+    # ... and it IS what run_grid gives on the placebo context, independently
+    want = run_grid({SHORT: pl_ctx}, {SHORT: pl_panel}, GRID, costs=TAKER)
+    assert float(short["total_net_usd"].iloc[0]) == pytest.approx(
+        float(want["total_net_usd"].iloc[0]), rel=1e-12)
+
+
+def test_run_placebos_binds_the_short_dated_leg_to_the_studys_placebo_pairs():
+    """The brief names ``universe.PLACEBO_PAIRS`` as a consumed interface.
+
+    Run against an arbitrary second pair the leg is a second REAL run wearing
+    a placebo label; the whole content of requirement 1 is that the pairs are
+    the short-dated slopes where the convexity story should not hold.
+    """
+    assert PLACEBO_PAIR_NAMES == ("USD 1Y5Y/2Y5Y", "USD 2Y2Y/3Y2Y")
+    assert PLACEBO_PAIR_NAMES == tuple(p.name for p in PLACEBO_PAIRS)
+    ctx, panel = _world()
+    pl_ctx, pl_panel = _short_dated_world(panel)
+    with pytest.raises(ValueError, match="universe.PLACEBO_PAIRS"):
+        run_placebos({"USD": ctx}, {"USD": panel}, GRID, costs=FREE,
+                     placebo_ctx_by_pair={"SOMETHING ELSE": pl_ctx},
+                     placebo_panel_by_pair={"SOMETHING ELSE": pl_panel},
+                     n_shuffles=0, sign_mirror=False)
+    # ... and the escape hatch is explicit, not accidental
+    out = run_placebos({"USD": ctx}, {"USD": panel}, GRID, costs=FREE,
+                       placebo_ctx_by_pair={"SOMETHING ELSE": pl_ctx},
+                       placebo_panel_by_pair={"SOMETHING ELSE": pl_panel},
+                       n_shuffles=0, sign_mirror=False,
+                       expect_placebo_pairs=False)
+    assert "short_dated" in out.attrs["legs_run"]
 
 
 def test_the_shuffled_vol_leg_actually_changes_the_result():
@@ -314,6 +388,79 @@ def test_the_shuffled_vol_leg_actually_changes_the_result():
     shuffled = out.loc[out["family"] == "shuffled_vol", "total_net_usd"]
     assert len(shuffled) == 3
     assert (shuffled != real).all()
+
+
+def test_the_shuffled_vol_sims_are_mutually_distinct_draws():
+    """I-1: ``n_shuffles`` could be decorative and nothing noticed.
+
+    Measured: pinning the per-sim seed to a constant made every simulation
+    draw the SAME null, and the whole suite still passed --
+    ``(shuffled != real).all()`` is satisfied by three identical shuffles. A
+    placebo reporting n independent draws while holding one presents an
+    under-dispersed null with n times its real sample size.
+    """
+    ctx, panel = _world()
+    out = run_placebos({"USD": ctx}, {"USD": panel}, GRID, costs=TAKER,
+                       block=21, n_shuffles=4, seed=1, sign_mirror=False)
+    vals = list(out.loc[out["family"] == "shuffled_vol", "total_net_usd"])
+    assert len(vals) == 4
+    assert len(set(vals)) == 4, "the sims are not independent draws"
+    # the nulls themselves differ, which is the property the P&L only reflects
+    nulls = [block_bootstrap(panel["be_over_realized"], block=21,
+                             seed=1 * 10_000 + s) for s in (1, 2, 3, 4)]
+    assert len({n.to_numpy().tobytes() for n in nulls}) == 4
+
+
+def test_run_placebos_refuses_a_short_dated_leg_that_ran_on_the_wrong_context():
+    """The guard behind the leg-ran test, exercised directly.
+
+    The frame-level assertions in that test would catch the leg being rewired,
+    but nothing in a real study run is a test -- so the module checks it too,
+    and this pins the check rather than the consequence.
+    """
+    ctx, panel = _world()
+    pl_ctx, pl_panel = _short_dated_world(panel)
+    import scripts.sv_placebos as mod
+    real_run_grid = mod.run_grid
+    calls = {"n": 0}
+
+    def wrong_pairs(ctx_map, panels, grid, **kw):
+        calls["n"] += 1
+        if calls["n"] == 2:            # the short-dated leg
+            return real_run_grid({"USD": ctx}, {"USD": panel}, grid, **kw)
+        return real_run_grid(ctx_map, panels, grid, **kw)
+
+    mod.run_grid = wrong_pairs
+    try:
+        with pytest.raises(ValueError, match="did not run on the contexts"):
+            run_placebos({"USD": ctx}, {"USD": panel}, GRID, costs=FREE,
+                         placebo_ctx_by_pair={SHORT: pl_ctx},
+                         placebo_panel_by_pair={SHORT: pl_panel},
+                         n_shuffles=0, sign_mirror=False)
+    finally:
+        mod.run_grid = real_run_grid
+
+
+def test_run_placebos_refuses_a_shuffle_that_repeats_a_draw():
+    """The guard behind the test above, exercised directly: two sims that draw
+    the same null are not two sims."""
+    ctx, panel = _world()
+    seen = {}
+
+    real_bb = block_bootstrap
+
+    def one_null(series, **kw):
+        kw = {**kw, "seed": 0}          # every sim gets the same draw
+        return real_bb(series, **kw)
+
+    import scripts.sv_placebos as mod
+    mod.block_bootstrap = one_null
+    try:
+        with pytest.raises(ValueError, match="identical to sim"):
+            run_placebos({"USD": ctx}, {"USD": panel}, GRID, costs=FREE,
+                         block=21, n_shuffles=3, seed=1, sign_mirror=False)
+    finally:
+        mod.block_bootstrap = real_bb
 
 
 def test_run_placebos_refuses_a_prebuilt_panel_for_the_shuffled_vol_leg():
@@ -396,6 +543,70 @@ def test_the_mirror_pairs_each_row_with_the_config_it_actually_mirrors():
                                   "cross_usd"]].sum())
         assert float(row["mirror_gross_sum_usd"]) == pytest.approx(
             gross_real + gross_mirror, abs=1e-6)
+
+
+def test_mirror_is_arithmetic_has_a_FALSE_case():
+    """m-1: the boolean had no failing case -- loosening its tolerance to 1e9
+    left the suite green, so ``attrs["sign_mirror_is_arithmetic"]`` (which the
+    module tells a reader to consult first) could not report a broken
+    antisymmetry.
+
+    Driven through ``_annotate_mirror`` directly, because the engine IS
+    antisymmetric and no run can produce the failing case.
+    """
+    cols = ["carry_usd", "harvest_usd", "mtm_usd", "cross_usd"]
+    real = pd.DataFrame([{"pair": "USD", "book": "package", "trigger_bp": 25.0,
+                          "carry_usd": 1_000_000.0, "harvest_usd": 0.0,
+                          "mtm_usd": 0.0, "cross_usd": 0.0}])
+    exact = real.copy()
+    exact[cols] = -exact[cols]
+    got = _annotate_mirror(real, exact, GRID)
+    assert float(got["mirror_gross_sum_usd"].iloc[0]) == pytest.approx(0.0)
+    assert bool(got["mirror_is_arithmetic"].iloc[0]) is True
+
+    broken = real.copy()
+    broken[cols] = -broken[cols]
+    broken["carry_usd"] = broken["carry_usd"] + 5_000.0   # antisymmetry broken
+    bad = _annotate_mirror(real, broken, GRID)
+    assert float(bad["mirror_gross_sum_usd"].iloc[0]) == pytest.approx(5_000.0)
+    assert bool(bad["mirror_is_arithmetic"].iloc[0]) is False
+
+
+def test_the_mirror_scope_is_decided_per_config_not_per_pair():
+    """m-4: the guard read the BASE signal config, so a config that is in fact
+    one-directional passed on the base config's behalf.
+
+    ``build_config_grid`` sweeps ``short_side_enabled``, and every config with
+    it False holds the flattener alone -- a vacuous mirror sitting in the same
+    grid as valid ones.
+    """
+    ctx, panel = _world()
+    grid = [{"trigger_bp": 25.0, "short_side_enabled": True},
+            {"trigger_bp": 25.0, "short_side_enabled": False}]
+    out = run_placebos({"USD": ctx}, {"USD": panel}, grid, costs=TAKER,
+                       n_shuffles=0)
+    mirror = out[out["family"] == "sign_mirror"].set_index("short_side_enabled")
+    assert bool(mirror.loc[True, "mirror_scope_ok"]) is True
+    assert bool(mirror.loc[False, "mirror_scope_ok"]) is False
+    # and if NO config takes both directions, the leg is refused outright
+    with pytest.raises(ValueError, match="NO config in this grid"):
+        run_placebos({"USD": ctx}, {"USD": panel},
+                     [{"trigger_bp": 25.0, "short_side_enabled": False}],
+                     costs=TAKER, n_shuffles=0)
+
+
+def test_the_bootstrap_stamp_and_the_gate_agree_on_persistence():
+    """m-5: the series' own stamp used the default ratio while the run used the
+    caller's, so a reader could get a different verdict from the one that
+    gated the run."""
+    s = _vol_like(600, rho=0.97, seed=3)
+    out = block_bootstrap(s, block=21, seed=1, min_ratio=0.999)
+    assert out.attrs["min_ratio"] == 0.999
+    assert out.attrs["persistence_preserved"] is False
+    same = persistence_check(s, out, min_ratio=0.999)
+    assert same["persistence_preserved"] == out.attrs["persistence_preserved"]
+    lenient = block_bootstrap(s, block=21, seed=1, min_ratio=0.5)
+    assert lenient.attrs["persistence_preserved"] is True
 
 
 # --------------------------------------------------------------- the confounds
@@ -569,6 +780,39 @@ def test_run_confounds_fails_closed_on_a_WINNER_that_never_traded():
     assert int(won["n_trades"].iloc[0]) == 0
     assert not bool(out["beats_winner"].any())   # nothing compares to a NaN
     assert out.attrs["winner_informative"] is False
+    assert out.attrs["winner_beats_all"] is False
+
+
+class NoShortLegCtx(SyntheticCtx):
+    """A world whose short leg contributes nothing to PV or theta.
+
+    Contrived on purpose: it makes ``DurationOnlyPricer`` price EXACTLY the
+    same book as the package, so the confound ties the winner to the last
+    float. Nothing else can produce an exact tie, and an untested tie rule is
+    a coin flip on the conservative direction.
+    """
+
+    def pv(self, date, nl, ns):
+        return super().pv(date, nl, 0.0)
+
+
+def test_a_confound_that_exactly_ties_the_winner_counts_as_beating_it():
+    """m-2: ``>=`` is a deliberate conservatism with nothing pinning it --
+    flipping it to ``>`` left the suite green."""
+    from RVUtils.StrikelessVol.strategy import build_signals
+
+    rng = np.random.default_rng(4)
+    ctx = NoShortLegCtx(list(np.cumsum(rng.normal(0, 1.1, 320))))
+    _, panel = _world()
+    panel = panel.set_axis(ctx.dates)
+    signals = build_signals(panel, SignalConfig())
+    out = run_confounds({"USD": ctx}, {"USD": signals}, {"trigger_bp": 25.0},
+                        costs=TAKER)
+    dur = out[out["family"] == "duration_only"].iloc[0]
+    win = out[out["family"] == "winner"].iloc[0]
+    assert float(dur[CONFOUND_METRIC]) == float(win[CONFOUND_METRIC])
+    assert bool(dur["informative"]) is True
+    assert bool(dur["beats_winner"]) is True      # a tie is not a win
     assert out.attrs["winner_beats_all"] is False
 
 
