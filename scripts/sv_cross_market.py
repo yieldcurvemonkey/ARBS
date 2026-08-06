@@ -123,6 +123,22 @@ SAMPLE_END = dt.date(2026, 8, 3)
 
 CACHE_DIR = PANEL_DIR / "cross_market"
 
+#: Task 15/H2's UMEP history, reused rather than rebuilt. Two reasons, and the
+#: second one is not optional: the series is identical (same construction, same
+#: window), and rebuilding it goes through ``TB.FixedRateBondsTB``, which at
+#: line 446 calls ``hasattr(cache_map, '_l2_read')`` on a ``diskcache``
+#: ``FanoutCache`` whose ``__getattr__`` ASSERTS on an unknown name -- so the
+#: ``hasattr`` raises ``AssertionError`` instead of returning False. That is a
+#: pre-existing repo bug, unrelated to this study, and it makes any fresh UMEP
+#: build fail outright. Reported, not worked around anywhere but here.
+UMEP_CACHE = PANEL_DIR / "full_sample_persistence" / "tfp_history.parquet"
+
+#: UMEP only exists from 2021 in this repo's build (Task 15's own
+#: ``TWO_FACTOR_START``), so the contrast runs BOTH models on that window --
+#: comparing a 2017-start vol-only book to a 2021-start vol+umep one would
+#: measure the sample, not the driver.
+UMEP_START = dt.date(2021, 1, 4)
+
 #: Trailing window for the realized spread vol that sets ``be_over_realized``'s
 #: denominator and the position size. Trailing by construction.
 REALIZED_WINDOW = 63
@@ -275,7 +291,7 @@ def build_signal_panel(market: str, curves: dict, pair, *,
                 f"umep is USD-only (panels.umep_panel needs a Treasury curve); "
                 f"asked for {market}"
             )
-        umep_df = umep_panel(start, end, cache_path=str(CACHE_DIR / "tfp_history.parquet"))
+        umep_df = umep_panel(start, end, cache_path=str(UMEP_CACHE))
         drivers["umep"] = (umep_df["umep_bp_per_year"].astype(float).reindex(idx)
                            if not umep_df.empty else pd.Series(np.nan, index=idx))
 
@@ -496,11 +512,28 @@ def align_for_book(series_by_market: Dict[str, pd.Series]) -> pd.DataFrame:
     return frame.sort_index()
 
 
-def scaled_legs(book: pd.DataFrame, frame: pd.DataFrame) -> pd.DataFrame:
-    """Each market's contribution to the book: ``w_i * pnl_i``, on the book's index."""
-    return pd.DataFrame(
+def scaled_legs(book: pd.DataFrame, frame: pd.DataFrame,
+                *, window: int = PORTFOLIO_WINDOW) -> pd.DataFrame:
+    """Each market's contribution to the book: ``w_i * pnl_i``.
+
+    **On the book's own calendar, with the book's own flat-day convention** --
+    a leg with no weight contributed nothing that day, which is a zero, exactly
+    as :func:`book_pnl` treats the book itself. The legs then sum to the
+    reported book P&L identically (pinned by
+    ``test_the_scaled_legs_sum_to_the_book_pnl_exactly``).
+
+    Dropping those rows instead is not a neutral choice: requiring all four
+    weights to be defined at once left **327 of 1777** rows on the real run, so
+    the decomposition would have described an 18% subsample of a book while
+    being read as a decomposition of the book.
+    """
+    first = book_start(frame, window=window)
+    legs = pd.DataFrame(
         {c: book[f"w_{c}"] * frame[c] for c in frame.columns}, index=frame.index
     )
+    if first is None:
+        return legs
+    return legs.loc[first:].fillna(0.0)
 
 
 def book_start(frame: pd.DataFrame, *, window: int = PORTFOLIO_WINDOW):
@@ -575,7 +608,7 @@ def diversification_prediction(book: pd.DataFrame, frame: pd.DataFrame) -> dict:
     a single market is the averaging, not a cross-market signal. The formal
     test is the circular-shift control; this is the closed-form reading of it.
     """
-    legs = scaled_legs(book, frame).dropna()
+    legs = scaled_legs(book, frame)
     if len(legs) < 30 or legs.shape[1] < 2:
         return {"n": int(len(legs)), "independent_sharpe": float("nan"),
                 "realised_sharpe": float("nan"), "per_market_sr": {},
@@ -741,10 +774,16 @@ def main(argv=None) -> dict:
 
     if args.umep_contrast and "USD" in outs:
         print("\n\n############ USD WITH UMEP -- the substitution, sized ############")
-        usd_umep = run_market("USD", start=SAMPLE_START["USD"], end=end, cfg=cfg,
+        print(f"BOTH models re-run on {UMEP_START}..{end}: UMEP does not exist "
+              "before 2021 in this repo's build, so comparing against the "
+              "2017-start book would measure the sample, not the driver.")
+        base = run_market("USD", start=UMEP_START, end=end, cfg=cfg, costs=costs,
+                          n_jobs=args.n_jobs)
+        usd_umep = run_market("USD", start=UMEP_START, end=end, cfg=cfg,
                               costs=costs, with_umep=True, n_jobs=args.n_jobs)
-        _umep_contrast(outs["USD"], usd_umep)
-        outs["USD_umep"] = usd_umep
+        _umep_contrast(base, usd_umep)
+        outs["USD_2021_vol_only"] = base
+        outs["USD_2021_vol_umep"] = usd_umep
 
     return outs
 
@@ -942,34 +981,52 @@ def _report(outs: Dict[str, dict], *, costs: CostSchedule,
 
 def _compare(frame: pd.DataFrame, pnl: pd.Series, *, target_bp_day: float,
              label: str) -> None:
-    """Book against each single market, each scaled to the SAME target vol.
+    """Book against each single market, on a drawdown that is scale-free.
 
     An unscaled single market is not a comparison: the book is deliberately
-    sized to ``target_bp_day`` and a raw leg is not, so a drawdown comparison
-    would be reading the sizing. Each leg is therefore run through the identical
-    one-market ``portfolio`` call, and through the same ``book_pnl`` flat-day
-    convention -- otherwise the book and the legs would be scored on different
-    calendars, which is the comparison quietly measuring something else.
+    sized and a raw leg is not, so a drawdown comparison would be reading the
+    sizing. Each leg is therefore run through the identical one-market
+    ``portfolio`` call and the same ``book_pnl`` flat-day convention.
+
+    **That is necessary and not sufficient, and the reason is measured.**
+    Targeting the vol does NOT equalise the realised vol here, because the
+    weight is ``target / trailing sd`` of a series that is ~80% exact zeros
+    when the rule is flat -- so an idle market reads as a quiet one and gets
+    levered up. On the real run the legs come out at 1.09 to 6.47 bp/day
+    against a target of 1.0, a spread of nearly 6x. A raw max-drawdown ranking
+    across those is largely a ranking of how badly each leg's vol estimate was
+    fooled.
+
+    So ``dd_per_vol_day`` -- max drawdown divided by the leg's OWN realised
+    daily sd -- is reported beside it and is what the verdict is read off.
+    It is invariant to any constant rescaling of a series, which is exactly
+    the nuisance the target was supposed to remove and did not.
     """
-    print(f"\n[{label}]  every leg risk-scaled to the same target, so the "
-          "comparison is not reading position size")
+    print(f"\n[{label}]  each leg through the identical one-market portfolio "
+          "call; verdict read off dd_per_vol_day, which no rescaling can move")
     rows = {}
     for c in frame.columns:
         solo = portfolio({c: frame[c]}, target_bp_day=target_bp_day)
         rows[c] = book_stats(book_pnl(solo, frame[[c]]))
     rows["BOOK"] = book_stats(pnl)
     out = pd.DataFrame(rows).T
+    out["dd_per_vol_day"] = out["max_drawdown"] / out["daily_vol"]
     print(out.round(4).to_string())
     singles = out.drop(index="BOOK")
-    best_dd_market = singles["max_drawdown"].idxmax()
-    print(f"   best single market by max drawdown: {best_dd_market} "
-          f"({singles.loc[best_dd_market, 'max_drawdown']:+.3f} bp) "
-          f"vs BOOK {out.loc['BOOK', 'max_drawdown']:+.3f} bp "
-          f"-- book is {'BETTER' if out.loc['BOOK', 'max_drawdown'] > singles['max_drawdown'].max() else 'WORSE'}")
+    for key, unit in (("max_drawdown", "bp"), ("dd_per_vol_day", "vol-days")):
+        best = singles[key].idxmax()
+        better = out.loc["BOOK", key] > singles[key].max()
+        print(f"   best single market by {key}: {best} "
+              f"({singles.loc[best, key]:+.3f} {unit}) vs BOOK "
+              f"{out.loc['BOOK', key]:+.3f} {unit} "
+              f"-- book is {'BETTER' if better else 'WORSE'}")
     best_sr_market = singles["sharpe"].idxmax()
     print(f"   best single market by Sharpe (reported, NOT ranked on): "
           f"{best_sr_market} ({singles.loc[best_sr_market, 'sharpe']:+.4f}) "
           f"vs BOOK {out.loc['BOOK', 'sharpe']:+.4f}")
+    print(f"   realised daily sd, legs vs target {target_bp_day}: "
+          + "  ".join(f"{k} {v:.3f}" for k, v in singles["daily_vol"].items())
+          + f"   |   BOOK {out.loc['BOOK', 'daily_vol']:.3f}")
 
 
 def _umep_contrast(base: dict, with_umep: dict) -> None:

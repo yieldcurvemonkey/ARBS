@@ -270,6 +270,29 @@ def test_the_decomposition_reads_the_scaled_legs_not_the_raw_series():
     assert float(loud.std(ddof=1) / quiet.std(ddof=1)) > 10.0
 
 
+def test_the_scaled_legs_sum_to_the_book_pnl_exactly():
+    """The decomposition must describe the book that was reported.
+
+    Requiring every leg's weight to be defined on the same date left 327 of
+    1777 rows on the real four-market run -- an 18% subsample being read as a
+    decomposition of the whole book.
+    """
+    n = 600
+    rng = np.random.default_rng(23)
+    a = pd.Series(np.concatenate([np.zeros(2 * PORTFOLIO_WINDOW),
+                                  rng.normal(0.1, 1.0, n - 2 * PORTFOLIO_WINDOW)]),
+                  index=_idx(n))
+    b = pd.Series(rng.normal(0.1, 2.0, n), index=_idx(n))
+    frame = X.align_for_book({"A": a, "B": b})
+    book = portfolio(dict(frame.items()), target_bp_day=1.0)
+    legs = X.scaled_legs(book, frame)
+    pnl = X.book_pnl(book, frame)
+    assert legs.index.equals(pnl.index)
+    assert legs.sum(axis=1).sub(pnl).abs().max() < 1e-12
+    # ... and it is not a subsample: the A leg is idle for a long stretch
+    assert int((legs["A"] == 0.0).sum()) > PORTFOLIO_WINDOW
+
+
 def test_the_decomposition_refuses_a_one_market_book():
     n = 400
     frame = pd.DataFrame({"A": pd.Series(np.arange(n, dtype=float), index=_idx(n))})
