@@ -122,6 +122,26 @@ def test_the_weight_is_trailing_not_full_sample():
     assert loud == pytest.approx(0.2, rel=0.3)
 
 
+def test_the_weight_is_exactly_target_over_the_trailing_sample_sd():
+    """Pinned against a hand-computed rolling sd, not against a bound.
+
+    A bound leaves the estimator's own convention free: ``ddof=0`` differs from
+    ``ddof=1`` by only ``sqrt(63/62) = 1.008`` on the default window, which
+    every tolerance in this file would accept while quietly changing every
+    weight the study reports.
+    """
+    a = _series(0, 1.0, n=300, seed=131)
+    out = portfolio({"A": a}, target_bp_day=2.5, window=63)
+    want = 2.5 / a.rolling(63, min_periods=63).std(ddof=1).shift(1)
+    assert out["w_A"].dropna().sub(want.dropna()).abs().max() < 1e-12
+    assert len(out["w_A"].dropna()) == 300 - 63
+    # ddof=0 would sit ~0.8% away everywhere -- far above the 1e-12 above and
+    # far below every rel= in this file, which is the point.
+    ddof0 = 2.5 / a.rolling(63, min_periods=63).std(ddof=0).shift(1)
+    gap = float(out["w_A"].dropna().div(ddof0.dropna()).sub(1.0).abs().median())
+    assert 0.002 < gap < 0.02
+
+
 def test_target_scales_the_book_linearly():
     a, b = _series(0, 1.0, seed=31), _series(0, 2.0, seed=32)
     one = portfolio({"A": a, "B": b}, target_bp_day=1.0)
