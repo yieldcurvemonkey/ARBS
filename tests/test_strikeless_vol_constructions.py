@@ -27,10 +27,12 @@ from RVUtils.StrikelessVol.constructions import (
     HEDGED_FACTORS,
     SAME_SECTOR,
     TWO_LEG,
+    _pca_norm,
     _shock_handle,
     _tent_matrix,
     build_shocks,
     carry_per_vega,
+    carry_per_vega_after_costs,
     compare_constructions,
     cost_bp_round_trip,
     factor_exposures,
@@ -187,6 +189,44 @@ def test_carry_per_vega_is_nan_when_spread_dv01_is_zero():
     """Zero vega is undefined, not free. Returning 0.0 would read as "no carry
     cost per unit of vega", i.e. the most attractive row in the table."""
     assert np.isnan(carry_per_vega(daily_roll_usd=-500.0, beta=-0.7, spread_dv01=0.0))
+
+
+# ------------------------------------------------ carry_per_vega_after_costs
+
+
+def test_after_costs_amortises_the_round_trip_over_the_holding_period():
+    """The brief's prose says "after costs"; its formula has no cost term.
+    Both are reported, and this is the after-cost one, spelled out."""
+    got = carry_per_vega_after_costs(
+        daily_roll_usd=-500.0, beta=-0.7, spread_dv01=1e5,
+        cost_bp_round_trip=1.75, holding_days=100.0, package_dv01_usd=1e5,
+    )
+    # $1.75bp x $100k = $175,000 spread over 100 days = $1,750/day
+    assert got == pytest.approx((-500.0 - 1750.0) / 70_000.0)
+
+
+def test_after_costs_converges_to_the_cost_free_number_as_the_hold_lengthens():
+    kw = dict(daily_roll_usd=-500.0, beta=-0.7, spread_dv01=1e5,
+              cost_bp_round_trip=1.75, package_dv01_usd=1e5)
+    free = carry_per_vega(daily_roll_usd=-500.0, beta=-0.7, spread_dv01=1e5)
+    short = carry_per_vega_after_costs(holding_days=21.0, **kw)
+    long = carry_per_vega_after_costs(holding_days=10_000_000.0, **kw)
+    assert short < long < free
+    assert long == pytest.approx(free, rel=1e-3)
+
+
+def test_a_free_schedule_leaves_the_after_cost_number_equal_to_the_cost_free_one():
+    kw = dict(daily_roll_usd=-500.0, beta=-0.7, spread_dv01=1e5, package_dv01_usd=1e5)
+    assert carry_per_vega_after_costs(
+        cost_bp_round_trip=0.0, holding_days=21.0, **kw
+    ) == pytest.approx(carry_per_vega(daily_roll_usd=-500.0, beta=-0.7, spread_dv01=1e5))
+
+
+def test_a_nonpositive_holding_period_is_undefined_not_infinitely_expensive():
+    kw = dict(daily_roll_usd=-500.0, beta=-0.7, spread_dv01=1e5,
+              cost_bp_round_trip=1.75, package_dv01_usd=1e5)
+    assert np.isnan(carry_per_vega_after_costs(holding_days=0.0, **kw))
+    assert np.isnan(carry_per_vega_after_costs(holding_days=-5.0, **kw))
 
 
 # -------------------------------------------------------- ladder_tenor_years
@@ -388,6 +428,29 @@ def test_prebuilt_shocks_give_the_same_ladder(realistic_curve, grid):
     assert shared.to_numpy() == pytest.approx(fresh.to_numpy(), rel=1e-12)
 
 
+def test_shocks_built_at_one_bump_are_refused_at_another(realistic_curve, grid):
+    """The central difference divides by the bump, so a mismatched pair would
+    scale every bucket by the ratio -- in the right shape, with the right
+    signs, and wrong by a constant. The bump therefore travels with the
+    handles."""
+    pkg = build_package(realistic_curve, PAIR)
+    five = build_shocks(realistic_curve, grid, bump_bp=5.0)
+    assert five.bump_bp == 5.0
+    with pytest.raises(ValueError, match="bumped at 5.0bp"):
+        key_rate_ladder(
+            realistic_curve, [pkg.short, pkg.long], tenor_grid=grid,
+            bump_bp=1.0, shocks=five,
+        )
+    # ...and asked for at its own bump it agrees with the 1bp ladder, because a
+    # DV01 is a rate: the guard is about the divisor, not about 5bp being wrong
+    at_five = key_rate_ladder(
+        realistic_curve, [pkg.short, pkg.long], tenor_grid=grid,
+        bump_bp=5.0, shocks=five,
+    )
+    at_one = key_rate_ladder(realistic_curve, [pkg.short, pkg.long], tenor_grid=grid)
+    assert at_five.to_numpy() == pytest.approx(at_one.to_numpy(), rel=1e-3)
+
+
 # --------------------------------------------------------- factor_exposures
 
 
@@ -520,6 +583,59 @@ def test_the_fly_cuts_the_level_slope_norm(realistic_curve, model):
     fly = fly_hedge_weights(realistic_curve, pkg, pca_model=model)
     assert fly["target_pca_norm"] > 0.0
     assert fly["residual_pca_norm"] < 0.1 * fly["target_pca_norm"]
+
+
+def test_the_pca_norm_is_the_hypotenuse_of_the_hedged_components(realistic_curve, model):
+    """An EQUALITY on the number the write-up quotes, not a ratio or a bound.
+
+    Found by a reviewer's mutation: dropping ``_pca_norm``'s ``sqrt`` left all
+    59 tests green while doubling the published headline -- the reported cut is
+    ``residual_pca_norm / target_pca_norm``, and squaring both turns 0.9475
+    into 0.8978, i.e. "5.3% removed" into "10.2% removed". The two tests that
+    touched it were a ratio and an inequality, the exact shape three earlier
+    survivors had.
+
+    The identity is exact rather than approximate, and it is a genuine
+    cross-check rather than a restatement: at the default metric ``G`` is the
+    orthogonal projector onto the first ``HEDGED_FACTORS`` components and
+    ``L`` is orthonormal, so ``sqrt(x^T G x) == hypot(pc1, pc2)`` -- which is
+    true only if ``G`` really is that projector and ``factor_exposures`` really
+    is ``L^T x``. Two independent code paths, one number.
+    """
+    pkg = build_package(realistic_curve, PAIR)
+    fly = fly_hedge_weights(realistic_curve, pkg, pca_model=model)
+    G = pca_metric(model)
+    for key, ladder in (("target", fly["target_ladder"]), ("residual", fly["residual_ladder"])):
+        pcs = factor_exposures(model, ladder)
+        # rel=1e-9, not 1e-12: the residual norm (369) is a near-cancellation
+        # of two ~78,000 exposures, so relative precision bottoms out around
+        # 6e-12. It is still nine orders tighter than a squared-vs-rooted
+        # confusion, which would move 369 to 135,931.
+        assert _pca_norm(G, ladder) == pytest.approx(
+            float(np.hypot(pcs.iloc[0], pcs.iloc[1])), rel=1e-9
+        ), key
+        assert fly[f"{key}_pca_norm"] == pytest.approx(_pca_norm(G, ladder), rel=1e-12)
+    # the target norm is large enough that a squared-vs-rooted confusion could
+    # not hide inside floating point
+    assert fly["target_pca_norm"] > 1_000.0
+
+
+def test_the_fly_reports_the_dv01_it_actually_trades(realistic_curve, model):
+    """``traded_dv01_usd`` is a reported number, so it is pinned as one.
+
+    Found by a reviewer's mutation: reporting the LARGEST leg instead of the
+    sum of magnitudes left every test green, because nothing read the field
+    numerically -- the cost column reads ``weights_bpv`` directly. On the fly's
+    own 0.5/1/0.5 BPV structure, ``max`` is exactly half the sum, so the
+    analysis' ``fly_traded_dv01`` would have been understated 2x.
+    """
+    pkg = build_package(realistic_curve, PAIR)
+    fly = fly_hedge_weights(realistic_curve, pkg, pca_model=model)
+    legs = list(fly["weights_bpv"].values())
+    assert fly["traded_dv01_usd"] == pytest.approx(sum(abs(v) for v in legs), rel=1e-12)
+    # sum, not max: the wing/belly structure makes max exactly half the sum
+    assert fly["traded_dv01_usd"] == pytest.approx(2.0 * max(abs(v) for v in legs), rel=1e-6)
+    assert fly["traded_dv01_usd"] > 0.0
 
 
 def test_one_scalar_zeroes_one_functional_and_no_more(realistic_curve, model):
@@ -815,6 +931,57 @@ def test_a_beta_mapping_gives_each_construction_its_own(realistic_curve, model):
             spread_dv01=1e5,
         )
     )
+
+
+def test_a_scalar_beta_makes_carry_per_vega_a_rescaled_roll(comparison):
+    """Recorded because it broke this task's own headline once.
+
+    With one scalar beta and one sizing constant, every row's denominator is
+    the same number and ``carry_per_vega`` is ``daily_roll_usd`` divided by a
+    constant -- so the per-unit-of-vega normalisation, the whole reason the
+    brief chose this metric, is inert for exactly the cross-pair comparison the
+    table exists to make. ``attrs["shared_beta"]`` says which mode a frame is
+    in, so a reader does not have to notice.
+    """
+    assert comparison.attrs["shared_beta"] is True
+    ratio = (comparison["carry_per_vega"] / comparison["daily_roll_usd"]).to_numpy()
+    assert np.allclose(ratio, ratio[0], rtol=1e-12)
+
+
+def test_a_beta_mapping_is_not_flagged_as_shared(realistic_curve, model):
+    out = compare_constructions(
+        realistic_curve, PAIR, pca_model=model,
+        beta={TWO_LEG: -1.3, FLY_HEDGED: -1.3, SAME_SECTOR: -0.8},
+    )
+    assert out.attrs["shared_beta"] is False
+    ratio = (out["carry_per_vega"] / out["daily_roll_usd"]).to_numpy()
+    assert not np.allclose(ratio, ratio[0], rtol=1e-6)
+
+
+def test_the_after_cost_column_is_nan_until_a_holding_period_is_given(
+    realistic_curve, model, comparison
+):
+    assert comparison.attrs["holding_days"] is None
+    assert comparison["carry_per_vega_after_costs"].isna().all()
+
+    out = compare_constructions(
+        realistic_curve, PAIR, pca_model=model, beta=-1.3, holding_days=21.0
+    )
+    assert out.attrs["holding_days"] == 21.0
+    assert out["carry_per_vega_after_costs"].notna().all()
+    # costs only ever make a bleeding book bleed faster
+    assert (out["carry_per_vega_after_costs"] < out["carry_per_vega"]).all()
+    for name, row in out.iterrows():
+        assert row["carry_per_vega_after_costs"] == pytest.approx(
+            carry_per_vega_after_costs(
+                daily_roll_usd=row["daily_roll_usd"],
+                beta=row["beta"],
+                spread_dv01=row["spread_dv01"],
+                cost_bp_round_trip=row["cost_bp_round_trip"],
+                holding_days=21.0,
+                package_dv01_usd=row["spread_dv01"],
+            )
+        ), name
 
 
 def test_a_beta_mapping_missing_a_construction_raises(realistic_curve, model):

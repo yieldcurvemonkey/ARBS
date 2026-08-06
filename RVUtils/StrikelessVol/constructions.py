@@ -9,9 +9,26 @@
 * SAME_SECTOR  -- 15y5y/20y10y, both legs inside the ultra-long sector, so no
                   fly leg is needed and the market is tighter.
 
-The metric is carry per unit of vega AFTER costs, reported next to the residual
-factor exposure. A construction that wins on carry while still carrying PC1 has
-not won; it has changed the question.
+The metric is carry per unit of vega, reported next to the residual factor
+exposure. A construction that wins on carry while still carrying PC1 has not
+won; it has changed the question.
+
+**"After costs" is not one number, and this module says so rather than picking
+one.** The brief calls the metric "carry per unit of vega AFTER costs" while
+specifying, in its own test block, the cost-free
+``daily_roll_usd / (|beta| * spread_dv01)``. Both cannot be true: carry is a
+rate per day and a round trip is a one-off, and netting them requires a HOLDING
+PERIOD, which this study has not established. So both forms are reported:
+
+* :func:`carry_per_vega` -- the brief's formula, cost-free, the column named
+  ``carry_per_vega``;
+* :func:`carry_per_vega_after_costs` -- the round trip amortised over an
+  explicit ``holding_days``, the column ``carry_per_vega_after_costs``, which
+  is NaN unless a holding period is passed.
+
+The cost-free number is never the whole answer here. On real curves the fly
+improves the daily roll by $59.5 and costs $33,501 more to put on and take off,
+so its carry advantage does not repay its own spread until roughly day 563.
 
 **How much of H9 this module can actually test, stated up front.**
 
@@ -25,6 +42,15 @@ not won; it has changed the question.
   its own single direction. Both components are therefore reported side by
   side and neither is asserted to be zero. See
   :func:`fly_hedge_weights`.
+* **Whatever this module concludes about "the fly" is about H9's NAMED fly.**
+  ``solve_best_n_leg_hedge_pca`` does two things: it enumerates
+  ``itertools.combinations(tenors, 3)`` and ranks the triples by residual PCA
+  norm, and it solves each one. Only the SOLVE is reused here (see below), so
+  the tenor SEARCH is not run. A verdict from this module is therefore "this
+  fly, at these tenors, fails" -- never "no fly can do it". Restoring the
+  ranking over triples needs a solver-free ladder for each candidate, which
+  this module now has; it was simply not in scope for H9, which names the
+  structure.
 * "Flips theta positive" is checkable and is checked -- ``daily_roll_usd`` is
   repriced for the flattener and for the fly legs on the same curve roll
   (:func:`legs_roll_usd`, pinned against ``greeks.daily_roll_usd``).
@@ -64,6 +90,7 @@ new optimiser is written here.
 """
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import Any, Mapping, Sequence
 
 import numpy as np
@@ -82,10 +109,12 @@ __all__ = [
     "HEDGED_FACTORS",
     "LADDER_BUMP_BP",
     "SAME_SECTOR",
+    "Shocks",
     "TWO_LEG",
     "UNIT_LEG_DV01_USD",
     "build_shocks",
     "carry_per_vega",
+    "carry_per_vega_after_costs",
     "compare_constructions",
     "cost_bp_round_trip",
     "factor_exposures",
@@ -134,6 +163,43 @@ def carry_per_vega(*, daily_roll_usd: float, beta: float, spread_dv01: float) ->
     if vega == 0.0:
         return float("nan")
     return float(daily_roll_usd) / vega
+
+
+def carry_per_vega_after_costs(
+    *,
+    daily_roll_usd: float,
+    beta: float,
+    spread_dv01: float,
+    cost_bp_round_trip: float,
+    holding_days: float,
+    package_dv01_usd: float = 100_000.0,
+) -> float:
+    """The same number with the round trip amortised over ``holding_days``.
+
+    ``(daily_roll_usd - cost_usd / holding_days) / (|beta| * spread_dv01)``,
+    where ``cost_usd = cost_bp_round_trip * package_dv01_usd``.
+
+    **The holding period is required and has no default**, because there is no
+    honest one. Carry is a rate per day, a round trip is a one-off, and the
+    ratio between them is entirely a function of how long the book is held --
+    which is exactly the quantity this study has not established. A default
+    would turn a modelling assumption into a printed number. The brief's
+    "carry per unit of vega AFTER costs" is this function; the brief's own
+    formula, and :func:`carry_per_vega`, is the cost-free one. Both are
+    reported.
+
+    ``holding_days <= 0`` is NaN, not infinite cost: a position held for no
+    time has no carry either, and the ratio is undefined rather than terrible.
+    """
+    h = float(holding_days)
+    if not (h > 0.0):
+        return float("nan")
+    cost_usd = float(cost_bp_round_trip) * abs(float(package_dv01_usd))
+    return carry_per_vega(
+        daily_roll_usd=float(daily_roll_usd) - cost_usd / h,
+        beta=beta,
+        spread_dv01=spread_dv01,
+    )
 
 
 # --------------------------------------------------------------- the ladder
@@ -266,11 +332,29 @@ def _shock_handle(handle, node_dates, node_years, weights, bump_bp: float):
     return rl.CompositeCurve([handle, tent])
 
 
-def build_shocks(curve, tenor_grid: pd.Series, *, bump_bp: float = LADDER_BUMP_BP):
+@dataclass(frozen=True)
+class Shocks:
+    """Prebuilt ``(up, down)`` curve handles, carrying the bump they were built at.
+
+    The bump travels WITH the handles rather than being passed again alongside
+    them. ``key_rate_ladder`` divides by ``2 * bump_bp``, so a caller who built
+    shocks at 5bp and then asked for a ladder at the default 1bp would get every
+    bucket scaled by five, silently and in the right shape. Carrying the number
+    on the object makes that unrepresentable rather than merely unlikely.
+    """
+
+    bump_bp: float
+    pairs: list
+
+    def __len__(self) -> int:
+        return len(self.pairs)
+
+
+def build_shocks(curve, tenor_grid: pd.Series, *, bump_bp: float = LADDER_BUMP_BP) -> Shocks:
     """The ``2K`` shocked curve handles a ladder needs, built once.
 
-    Returned as a list of ``(up, down)`` pairs in the grid's own order.
-    Repricing every instrument against one prebuilt set is what keeps
+    Returned as a :class:`Shocks` carrying ``(up, down)`` pairs in the grid's
+    own order. Repricing every instrument against one prebuilt set is what keeps
     :func:`compare_constructions` from rebuilding the same curves three times.
     """
     handle = curve.handle()
@@ -281,13 +365,16 @@ def build_shocks(curve, tenor_grid: pd.Series, *, bump_bp: float = LADDER_BUMP_B
         [(pd.Timestamp(d) - ref).days * dcf for d in node_dates], dtype=float
     )
     tents = _tent_matrix(node_years, np.asarray(tenor_grid, dtype=float))
-    return [
-        (
-            _shock_handle(handle, node_dates, node_years, tents[:, k], +bump_bp),
-            _shock_handle(handle, node_dates, node_years, tents[:, k], -bump_bp),
-        )
-        for k in range(tents.shape[1])
-    ]
+    return Shocks(
+        bump_bp=float(bump_bp),
+        pairs=[
+            (
+                _shock_handle(handle, node_dates, node_years, tents[:, k], +bump_bp),
+                _shock_handle(handle, node_dates, node_years, tents[:, k], -bump_bp),
+            )
+            for k in range(tents.shape[1])
+        ],
+    )
 
 
 def key_rate_ladder(
@@ -308,21 +395,44 @@ def key_rate_ladder(
     over a full-grid ladder, 1.1e-4 relative -- the continuous-vs-discrete
     compounding of the two bump conventions, and second order in the bump).
 
-    The bucket shock is a **zero-rate** tent. If ``pca_model`` was fitted on
-    PAR rate changes, its loadings live in par-rate coordinates and this ladder
-    lives in zero-rate coordinates; the two differ at second order in curve
-    shape and this module does not correct for it. Fit the model on the same
-    coordinates the ladder speaks, or read the factor exposures as
-    approximate.
+    **The bucket shock is a zero-rate tent, and the PCA must be fitted on zero
+    rates too. This is not a second-order caveat.** A risk ladder is a gradient
+    with respect to whatever variable was bumped, and ``factor_exposures``
+    computes ``L^T x``, which is ``dPV/d(PC score)`` ONLY if ``L`` and ``x``
+    are gradients in the same variable. Pairing par-fitted loadings with this
+    zero-rate ladder is not "working in par coordinates" -- it is a mismatch.
+    The par-to-zero Jacobian is essentially triangular for a key-rate
+    decomposition (a 30y par rate depends on every zero out to 30y), nothing
+    like the identity.
+
+    Measured, and the reason an earlier version of this docstring calling the
+    gap "second order in curve shape" was wrong: on 116 real month-end USD-OIS
+    curves the solved fly's own DIRECTION flips with the choice -- belly
+    received on 116/116 dates against zero-fitted loadings, PAID on 116/116
+    against par-fitted ones. A sign flip in the derived hedge on every date in
+    the sample is not second order.
+
+    **Adopting par coordinates requires a par-rate ladder as well** -- bump each
+    grid par swap rate and re-solve, or apply ``J = dz/dp`` and project
+    ``J^T x``. Neither is implemented here and neither was attempted; this
+    module is coherent in zero coordinates and inconsistent in any other, and
+    that is a limit rather than a preference.
     """
     if shocks is None:
         shocks = build_shocks(curve, tenor_grid, bump_bp=bump_bp)
+    elif float(shocks.bump_bp) != float(bump_bp):
+        raise ValueError(
+            f"prebuilt shocks were bumped at {shocks.bump_bp}bp but this ladder "
+            f"was asked for at {bump_bp}bp. The central difference divides by "
+            "the bump, so every bucket would be scaled by the ratio -- in the "
+            "right shape, with the right signs, and wrong by a constant factor."
+        )
     insts = list(instruments)
     vals = []
-    for up, dn in shocks:
+    for up, dn in shocks.pairs:
         pv_up = sum(float(i.npv(curves=up).real) for i in insts)
         pv_dn = sum(float(i.npv(curves=dn).real) for i in insts)
-        vals.append((pv_up - pv_dn) / (2.0 * float(bump_bp)))
+        vals.append((pv_up - pv_dn) / (2.0 * float(shocks.bump_bp)))
     return pd.Series(vals, index=tenor_grid.index, name="dv01_usd")
 
 
@@ -535,7 +645,21 @@ def fly_hedge_weights(
 
 
 def _pca_norm(G: np.ndarray, ladder: pd.Series) -> float:
-    """``sqrt(x^T G x)`` -- the objective ``_solve_fly_ls_pca`` minimises."""
+    """``sqrt(x^T G x)`` -- the objective ``_solve_fly_ls_pca`` minimises.
+
+    **The square root is load-bearing and is pinned as an identity, not as an
+    inequality.** At the default metric ``G`` is the orthogonal projector onto
+    the first ``n_factors`` components and ``L`` is orthonormal, so
+    ``_pca_norm(G, x) == hypot(*factor_exposures(model, x)[:n_factors])``
+    exactly. Found by a reviewer's mutation: dropping the ``sqrt`` left all 59
+    tests green -- both tests that touched this were a ratio and an inequality
+    -- while turning the published headline "the fly removes 5.3% of the
+    level+slope norm" into 10.2%, because the reported cut is
+    ``residual/target`` and ``0.9475**2 = 0.8978``. A number that reaches a
+    write-up has to be pinned by an equality somewhere. See
+    ``test_the_pca_norm_is_the_hypotenuse_of_the_hedged_components``, which
+    doubles as an independent check that ``G`` really is that projector.
+    """
     x = ladder.to_numpy(dtype=float)
     return float(np.sqrt(max(float(x @ (G @ x)), 0.0)))
 
@@ -641,8 +765,31 @@ def compare_constructions(
     pca_weights=None,
     n_factors: int = HEDGED_FACTORS,
     same_sector: ForwardPair | None = None,
+    holding_days: float | None = None,
 ) -> pd.DataFrame:
     """One row per construction: carry per vega, beside the risk it still runs.
+
+    **A scalar ``beta`` is almost always the wrong call for this table, and it
+    fails silently.** ``carry_per_vega``'s denominator is ``|beta| * spread
+    DV01``; with one scalar and one sizing constant that denominator is the
+    SAME NUMBER on every row, and the whole per-unit-of-vega normalisation --
+    the reason the brief chose this metric, so that differently-sized
+    constructions could be compared -- collapses into a rescaled roll. Measured
+    on this study's own comparison: USD 10Y10Y/20Y10Y has beta -0.4373 while
+    USD 15Y5Y/20Y10Y has **-0.2644** (60% of it, and 73% of the gamma). Lending
+    the first pair's beta to the second turned "same-sector bleeds 38.6% less
+    per unit of vega, on 99.1% of dates" into "1.6% MORE, on 62.1%" -- a sign
+    flip in the headline. **Pass a ``{construction: beta}`` mapping whenever any
+    row is a different pair**, which is always true of SAME_SECTOR.
+
+    A scalar is still accepted, because FLY_HEDGED shares TWO_LEG's pair and a
+    two-row comparison genuinely has one beta; it is echoed in the ``beta``
+    column so a reader can see which rows share one.
+
+    ``holding_days`` turns on ``carry_per_vega_after_costs``; without it that
+    column is NaN, because netting a one-off round trip against a daily carry
+    needs a holding period this study has not established. See the module
+    docstring.
 
     ``beta`` is the pair's rolling changes-regression coefficient of the spread
     on vol. A scalar is applied to every row and echoed in the ``beta`` column,
@@ -675,12 +822,27 @@ def compare_constructions(
         pcs = factor_exposures(pca_model, ladder)
         roll = legs_roll_usd(curve, legs, next_date=next_date)
         b = _beta_for(beta, name)
+        cost_bp = cost_bp_round_trip(
+            leg_dv01s, schedule=sched, package_dv01_usd=package_dv01_usd
+        )
         return {
             "construction": name,
             "pair": this_pair.name,
             "n_legs": len(legs),
             "carry_per_vega": carry_per_vega(
                 daily_roll_usd=roll, beta=b, spread_dv01=package_dv01_usd
+            ),
+            "carry_per_vega_after_costs": (
+                float("nan")
+                if holding_days is None
+                else carry_per_vega_after_costs(
+                    daily_roll_usd=roll,
+                    beta=b,
+                    spread_dv01=package_dv01_usd,
+                    cost_bp_round_trip=cost_bp,
+                    holding_days=holding_days,
+                    package_dv01_usd=package_dv01_usd,
+                )
             ),
             "daily_roll_usd": roll,
             "beta": b,
@@ -690,9 +852,7 @@ def compare_constructions(
             "residual_pca_norm": _pca_norm(G, ladder),
             "net_dv01_usd": float(ladder.sum()),
             "traded_dv01_usd": float(np.abs(np.asarray(leg_dv01s, dtype=float)).sum()),
-            "cost_bp_round_trip": cost_bp_round_trip(
-                leg_dv01s, schedule=sched, package_dv01_usd=package_dv01_usd
-            ),
+            "cost_bp_round_trip": cost_bp,
         }
 
     pkg = _greeks.build_package(curve, pair, package_dv01_usd=package_dv01_usd, sign=sign)
@@ -748,6 +908,10 @@ def compare_constructions(
             "schedule": sched,
             "n_factors": int(n_factors),
             "pca_weights": pca_weights,
+            "holding_days": holding_days,
+            # True when every row shares one beta -- i.e. when carry_per_vega
+            # is a rescaled roll rather than a per-vega comparison.
+            "shared_beta": not isinstance(beta, Mapping),
             # `residual_pca_norm` is sqrt(x^T G x) with G the projector onto
             # the first `n_factors` components -- NOT a whole-ladder norm.
             "sector_tightness_modelled": False,
