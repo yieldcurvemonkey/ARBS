@@ -162,24 +162,38 @@ def test_book_pnl_scores_the_book_on_the_trading_calendar_not_on_its_weights():
 def test_book_pnl_preserves_the_books_total():
     """Filling flat days with zeros must not invent or destroy P&L.
 
-    The hole has to be INTERIOR for this to bite -- which is the real shape
-    (JPY trades, goes quiet for months, trades again). A leading hole is
-    followed by nothing to carry forward, so a fill-forward mutation survives
-    a flat-then-active fixture while changing every number on a real one.
+    Two properties the fixture must have, both of them established by a failed
+    attempt before this one:
+
+    * the hole must be INTERIOR -- a leading hole has nothing before it, so a
+      fill-forward is indistinguishable from a fill-with-zero;
+    * the value immediately before the hole must be NON-ZERO. A market that
+      goes quiet by producing exactly-zero P&L reaches its zero-vol window
+      through a stretch of zeros, so the last defined value is already 0.0 and
+      fill-forward is again the same thing. Here the market goes quiet by
+      producing a CONSTANT non-zero P&L, which drives the trailing sd to zero
+      while the last defined book value is not.
+
+    Without the second property a fill-forward mutation survives this test
+    while changing the book's total on any path that has one.
     """
     rng = np.random.default_rng(5)
     s = pd.Series(np.concatenate([
-        rng.normal(0.5, 1.0, 200),                   # on
-        np.zeros(3 * PORTFOLIO_WINDOW),              # idle: sd 0 -> no weight
-        rng.normal(0.5, 1.0, 200),                   # on again
+        rng.normal(0.5, 1.0, 200),                       # on
+        np.full(3 * PORTFOLIO_WINDOW, 0.7),              # constant: sd 0, level > 0
+        rng.normal(0.5, 1.0, 200),                       # on again
     ]))
     s.index = _idx(len(s))
     frame = pd.DataFrame({"A": s})
     book = portfolio({"A": frame["A"]}, target_bp_day=1.0)
-    interior_holes = int(book["pnl"].iloc[PORTFOLIO_WINDOW + 1:-1].isna().sum())
-    assert interior_holes > 50, "fixture must actually have interior holes"
-    assert float(X.book_pnl(book, frame).sum()) == pytest.approx(
-        float(book["pnl"].sum()), rel=1e-12)
+    holes = book["pnl"].iloc[PORTFOLIO_WINDOW + 1:-1].isna()
+    assert int(holes.sum()) > 50, "fixture must actually have interior holes"
+    first_hole = holes.idxmax()
+    prev = book["pnl"].shift(1).loc[first_hole]
+    assert abs(float(prev)) > 0.1, "the value before the hole must be non-zero"
+    filled = X.book_pnl(book, frame)
+    assert float(filled.sum()) == pytest.approx(float(book["pnl"].sum()), rel=1e-12)
+    assert float(filled.loc[first_hole]) == 0.0
 
 
 def test_book_pnl_does_not_reach_back_before_the_book_could_be_sized():
