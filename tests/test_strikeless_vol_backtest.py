@@ -4,6 +4,8 @@ The six binding requirements (Task 15) are tested here as CODE PATHS, not as
 report strings: every one of them has a test that fails if the enforcement is
 removed. See the task-18 report's mutation table.
 """
+from dataclasses import replace
+
 import numpy as np
 import pandas as pd
 import pytest
@@ -19,6 +21,7 @@ from RVUtils.StrikelessVol.backtest import (
     build_config_grid,
     causal_signals,
     entry_vintage_signals,
+    min_sims_for,
     random_walk_like,
     random_walk_placebo,
     run_grid,
@@ -1604,8 +1607,15 @@ def test_random_walk_like_keeps_the_index_and_the_level_dispersion():
     assert not np.allclose(out.to_numpy(), s.to_numpy())
 
 
+#: The observed series every placebo test below builds its nulls from.
+_OBSERVED = pd.Series(
+    np.cumsum(np.random.default_rng(11).normal(0, 1, 300)) * 2.0,
+    index=pd.bdate_range("2021-01-04", periods=300),
+)
+
+
 def test_the_placebo_passes_when_the_headline_beats_the_nulls():
-    pl = random_walk_placebo(10.0, lambda rng: float(rng.normal(0.0, 1.0)),
+    pl = random_walk_placebo(1e9, _OBSERVED, lambda s: float(s.diff().mean()),
                              n_sims=200, seed=0)
     assert isinstance(pl, PlaceboResult)
     assert pl.n_sims == 200
@@ -1614,16 +1624,103 @@ def test_the_placebo_passes_when_the_headline_beats_the_nulls():
 
 
 def test_the_placebo_fails_when_a_null_with_no_signal_beats_the_headline():
-    pl = random_walk_placebo(0.0, lambda rng: float(rng.normal(5.0, 1.0)),
+    pl = random_walk_placebo(-1e9, _OBSERVED, lambda s: float(s.diff().mean()),
                              n_sims=200, seed=0)
     assert pl.p_value > 0.5
     assert pl.passes is False
 
 
 def test_the_placebo_is_seed_reproducible():
-    a = random_walk_placebo(1.0, lambda rng: float(rng.normal()), n_sims=50, seed=7)
-    b = random_walk_placebo(1.0, lambda rng: float(rng.normal()), n_sims=50, seed=7)
+    a = random_walk_placebo(1.0, _OBSERVED, lambda s: float(s.std()), n_sims=50, seed=7)
+    b = random_walk_placebo(1.0, _OBSERVED, lambda s: float(s.std()), n_sims=50, seed=7)
     assert a.placebo_headlines == b.placebo_headlines
+    c = random_walk_placebo(1.0, _OBSERVED, lambda s: float(s.std()), n_sims=50, seed=8)
+    assert c.placebo_headlines != a.placebo_headlines
+
+
+def test_the_placebo_builds_the_null_itself_rather_than_taking_the_callers():
+    """The construction of the null is not the caller's to fake.
+
+    The first version took ``run_one(rng)`` and never called
+    ``random_walk_like``, so a caller supplied BOTH the null and the pipeline.
+    What ``run_one`` receives must be a random walk on the observed index,
+    matched to its dispersion, and NOT the observed series.
+    """
+    seen = []
+
+    def capture(s):
+        seen.append(s)
+        return float(s.iloc[-1])
+
+    random_walk_placebo(0.0, _OBSERVED, capture, n_sims=20, seed=0)
+    assert len(seen) == 20
+    for null in seen:
+        assert isinstance(null, pd.Series)
+        assert null.index.equals(_OBSERVED.index)
+        assert null.std(ddof=1) == pytest.approx(_OBSERVED.std(ddof=1), rel=1e-9)
+        assert not np.allclose(null.to_numpy(), _OBSERVED.to_numpy())
+    # and each simulation is a DIFFERENT null, not the same one three times
+    assert not np.allclose(seen[0].to_numpy(), seen[1].to_numpy())
+
+
+def test_the_placebo_fails_closed_when_the_nulls_never_vary():
+    """A ``run_one`` that ignores its argument is a placebo that cannot fail.
+
+    Same shape as ``audit_causal_betas``' ``probe_reached``: an unmoved result
+    is evidence the probe never got in, not evidence the headline is better.
+    """
+    pl = random_walk_placebo(10.0, _OBSERVED, lambda s: 0.0, n_sims=50, seed=0)
+    assert pl.n_distinct == 1
+    assert pl.probe_reached is False
+    assert pl.p_value < 0.05          # the arithmetic alone would certify
+    assert pl.passes is False         # ... and the probe gate refuses
+
+
+def test_the_placebo_fails_closed_when_a_null_produces_no_number():
+    """``nan >= headline`` is False, so a NaN counts as a null the headline
+    beat and DRIVES THE P-VALUE DOWN. It must not."""
+    calls = {"n": 0}
+
+    def one_nan(s):
+        calls["n"] += 1
+        return float("nan") if calls["n"] == 1 else float(s.iloc[-1])
+
+    pl = random_walk_placebo(1e9, _OBSERVED, one_nan, n_sims=50, seed=0)
+    assert pl.n_nonfinite == 1
+    assert pl.probe_reached is True          # the other 49 varied
+    assert not np.isfinite(pl.p_value)       # ... and one NaN still refuses
+    assert pl.passes is False
+
+
+def test_the_placebo_refuses_a_series_it_cannot_build_a_null_from():
+    flat = pd.Series(3.0, index=pd.bdate_range("2021-01-04", periods=100))
+    with pytest.raises(ValueError, match="no dispersion"):
+        random_walk_placebo(1.0, flat, lambda s: float(s.std()), n_sims=5)
+    with pytest.raises(ValueError, match="at least 2 points"):
+        random_walk_placebo(1.0, _OBSERVED.iloc[:1], lambda s: float(s.std()), n_sims=5)
+    with pytest.raises(ValueError, match="n_sims"):
+        random_walk_placebo(1.0, _OBSERVED, lambda s: float(s.std()), n_sims=0)
+
+
+def test_the_placebo_refuses_a_sim_count_that_could_never_clear_alpha():
+    """The mirror image of a check that cannot fail: one that cannot PASS.
+
+    ``p = (1 + beat) / (1 + n_sims)`` floors at ``1 / (1 + n_sims)``, so at
+    alpha=0.05 six sims cap the best achievable p-value at 0.143 -- measured
+    on the shipped pipeline, where requirement 6 read as FAILED against a
+    headline of 1e18. An under-sampled placebo is not a placebo failure.
+    """
+    assert min_sims_for(0.05) == 19
+    assert min_sims_for(0.10) == 9
+    assert min_sims_for(0.01) == 99
+    with pytest.raises(ValueError, match="cannot clear alpha"):
+        random_walk_placebo(1e18, _OBSERVED, lambda s: float(s.std()),
+                            n_sims=6, alpha=0.05)
+    # 19 is enough, and it is enough by exactly one sim
+    ok = random_walk_placebo(1e18, _OBSERVED, lambda s: float(s.std()),
+                             n_sims=19, alpha=0.05)
+    assert ok.p_value == pytest.approx(0.05)
+    assert ok.passes is True
 
 
 # --------------------------------------------------- the league table's honesty
@@ -1990,7 +2087,8 @@ def test_run_grid_reports_the_zero_convexity_comparator_as_its_own_book():
 def test_with_placebo_returns_a_new_result_carrying_the_flag():
     res = _alive_looking_result()
     assert res.requirements.random_walk_placebo is False
-    pl = random_walk_placebo(10.0, lambda rng: float(rng.normal()), n_sims=50, seed=1)
+    pl = random_walk_placebo(1e9, _OBSERVED, lambda s: float(s.iloc[-1]),
+                             n_sims=50, seed=1)
     out = with_placebo(res, pl)
     assert out.requirements.random_walk_placebo is True
     assert res.requirements.random_walk_placebo is False   # frozen, not mutated
@@ -2036,8 +2134,40 @@ def test_run_pair_refuses_an_unsorted_signal_index():
         run_pair(ctx, sig, rep_cfg=ReplicationConfig(), costs=FREE, pair_name="TEST")
 
 
-def test_causal_signals_survive_the_full_requirement_check_end_to_end():
-    """Requirements 1-5 met from data, 6 only once a placebo has actually run."""
+def _pipeline_headline(ctx, panel, drivers, cfg, *, costs=TAKER,
+                       rep_cfg=None, pair_name="USD"):
+    """A ``run_one`` that IS the shipped ``causal_signals -> run_pair`` path.
+
+    The half of "identical pipeline" that ``random_walk_placebo`` cannot
+    enforce from the inside is enforced here: nothing in this closure is a
+    stand-in for the engine. ``total_net_usd`` rather than ``total_net_bp``
+    because a null that never trades has no realised DV01 to divide by, and a
+    NaN headline is not a null that lost -- see ``PlaceboResult``.
+    """
+    rep = rep_cfg or ReplicationConfig()
+
+    def run_one(series):
+        sigs = causal_signals(panel, cfg, spread_bp=series, drivers=drivers)
+        res = run_pair(ctx, sigs, rep_cfg=rep, costs=costs, pair_name=pair_name)
+        return float(res.stats["total_net_usd"])
+
+    return run_one
+
+
+@pytest.fixture(scope="module")
+def pipeline_placebo():
+    """The real composition, run once: ``causal_signals -> run_pair``.
+
+    The null is a random walk in the SPREAD, run against the real vol driver,
+    so it carries no relationship to vol whatsoever -- and it goes through the
+    full requirement-1/2/3 machinery and the real ledger, producing the same
+    statistic the real headline is. 20 sims because ``min_sims_for(0.05)`` is
+    19; the fixture is module-scoped because that is ~20 walk-forward fits
+    (measured 5.0s at n=700, against 1.9s at n=400 -- but requirement 3 is not
+    reachable below ~600 rows: the fit needs 252 and the trailing-sigma z
+    another 126 on top, so a shorter frame leaves ``rolling_sigma_z`` unmet
+    for want of data and the test would pin the wrong reason).
+    """
     n = 700
     rng = np.random.default_rng(5)
     ctx = SyntheticCtx(list(np.cumsum(rng.normal(0, 1.2, n))))
@@ -2050,13 +2180,47 @@ def test_causal_signals_survive_the_full_requirement_check_end_to_end():
          "spread_vol_bp_day": 1.32, "iv_z": 0.0},
         index=idx,
     )
-    sigs = causal_signals(panel, SignalConfig(z_entry=1.5), spread_bp=spread,
-                          drivers={"vol": vol})
-    res = run_pair(ctx, sigs, rep_cfg=ReplicationConfig(), costs=TAKER,
-                   pair_name="USD")
+    cfg = SignalConfig(z_entry=1.5)
+    run_one = _pipeline_headline(ctx, panel, {"vol": vol}, cfg)
+    real = run_pair(ctx, causal_signals(panel, cfg, spread_bp=spread,
+                                        drivers={"vol": vol}),
+                    rep_cfg=ReplicationConfig(), costs=TAKER, pair_name="USD")
+    headline = float(real.stats["total_net_usd"])
+    placebo = random_walk_placebo(headline, spread, run_one, n_sims=20, seed=3)
+    return {"real": real, "headline": headline, "placebo": placebo}
+
+
+def test_causal_signals_survive_the_full_requirement_check_end_to_end(
+        pipeline_placebo):
+    """Requirements 1-5 met from data, 6 only once a placebo has actually run."""
+    res = pipeline_placebo["real"]
     assert res.requirements.unmet == ("random_walk_placebo",)
-    pl = random_walk_placebo(1e18, lambda r: float(r.normal()), n_sims=50, seed=2)
-    assert with_placebo(res, pl).requirements.all_met is True
+    beaten = replace(pipeline_placebo["placebo"], headline=1e18)
+    assert with_placebo(res, beaten).requirements.all_met is True
+
+
+def test_the_placebo_runs_the_real_causal_signals_to_run_pair_pipeline(
+        pipeline_placebo):
+    """The other half of requirement 6, which no guard inside the function can
+    reach: ``run_one`` must be the shipped path, not a lambda."""
+    pl = pipeline_placebo["placebo"]
+    # The nulls really went through the engine: they traded, and they differed.
+    # Measured on this seed: all 20 nulls traded and all 20 gave a distinct
+    # number. `probe_reached` counts DISTINCT values rather than requiring
+    # every sim to differ, because a null that never fires legitimately
+    # returns 0.0 -- at n=400 only 11 of 20 traded.
+    assert pl.n_nonfinite == 0
+    assert pl.probe_reached is True
+    assert pl.n_distinct == 20
+    assert sum(1 for v in pl.placebo_headlines if v != 0.0) == 20
+    # ... and the real headline (-4,057,358 USD here) does NOT clear its own
+    # placebo: 19 of the 20 nulls matched or beat it. The gate bites on the
+    # genuine composition, which a lambda placebo could never have shown.
+    assert pl.p_value == pytest.approx(20 / 21)
+    assert pl.passes is False
+    # The comparison is real in BOTH directions on the SAME nulls.
+    assert replace(pl, headline=1e18).passes is True
+    assert replace(pl, headline=-1e18).passes is False
 
 
 def test_cost_schedule_multiplier_is_respected_end_to_end():

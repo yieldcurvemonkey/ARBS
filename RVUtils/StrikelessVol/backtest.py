@@ -40,10 +40,14 @@ implemented as something the engine either DOES or refuses to claim:
    ``sign`` transitions and :func:`_assert_disjoint` raises if any two
    overlap, so an overlapping-window count cannot be reported as a trade
    count.
-6. **Random-walk placebo** -- :func:`random_walk_placebo` runs a null with no
-   relationship to vol through the identical pipeline; the requirement is met
-   only when the real headline beats it at the stated alpha. If the placebo
-   clears the criterion, the criterion is the finding.
+6. **Random-walk placebo** -- :func:`random_walk_placebo` takes the OBSERVED
+   series and builds each null itself with :func:`random_walk_like`, then
+   pushes it through the caller's ``run_one``; the requirement is met only when
+   the real headline beats the nulls at the stated alpha AND the nulls actually
+   varied. If the placebo clears the criterion, the criterion is the finding.
+   The construction of the null is deliberately NOT the caller's: the first
+   version took ``run_one(rng)`` and never called :func:`random_walk_like`, so
+   any function at all opened this gate.
 
 A row that cannot report all six met is **not eligible for an ALIVE verdict**
 (:func:`report.league_table` enforces the downgrade).
@@ -101,6 +105,7 @@ __all__ = [
     "build_config_grid",
     "causal_signals",
     "entry_vintage_signals",
+    "min_sims_for",
     "random_walk_like",
     "random_walk_placebo",
     "run_grid",
@@ -1809,7 +1814,28 @@ def random_walk_like(series, rng: np.random.Generator) -> pd.Series:
 
 @dataclass(frozen=True)
 class PlaceboResult:
-    """How often a null with no relationship to vol matched the real headline."""
+    """How often a null with no relationship to vol matched the real headline.
+
+    Three ways this refuses to certify, all of them fail-CLOSED, and none of
+    them decorative:
+
+    * **A non-finite null is not a null that lost.** ``nan >= headline`` is
+      ``False``, so a NaN silently counts as a null the headline beat and
+      DRIVES THE P-VALUE DOWN. Twenty NaNs out of 200 look exactly like twenty
+      losses. :attr:`p_value` is therefore ``nan`` when any null is non-finite,
+      and :attr:`n_nonfinite` says how many. Pick a statistic that is defined
+      for a null that never traded (``total_net_usd`` is 0.0; ``total_net_bp``
+      is ``nan``, because its divisor is the realised DV01 over the held days
+      and there are none).
+    * **A null that cannot vary cannot fail.** If every simulation returns the
+      identical number -- a ``run_one`` that ignores the series it is handed,
+      or a null that never trades -- then the comparison was never run.
+      :attr:`probe_reached` is the same idea as
+      :func:`audit_causal_betas`'s: an unmoved result is evidence the probe
+      never got in, not evidence the real result is better.
+    * **No sims is not a pass.** An empty ``placebo_headlines`` gives a ``nan``
+      p-value, not a zero one.
+    """
 
     headline: float
     placebo_headlines: Tuple[float, ...]
@@ -1821,9 +1847,31 @@ class PlaceboResult:
         return len(self.placebo_headlines)
 
     @property
+    def n_nonfinite(self) -> int:
+        """Nulls that produced no number. See the class docstring."""
+        if not self.placebo_headlines:
+            return 0
+        a = np.asarray(self.placebo_headlines, dtype=float)
+        return int(np.sum(~np.isfinite(a)))
+
+    @property
+    def n_distinct(self) -> int:
+        """How many distinct values the nulls took. One means nothing varied."""
+        if not self.placebo_headlines:
+            return 0
+        a = np.asarray(self.placebo_headlines, dtype=float)
+        a = a[np.isfinite(a)]
+        return int(len(np.unique(a)))
+
+    @property
+    def probe_reached(self) -> bool:
+        """Did the null actually reach the statistic, and vary once there?"""
+        return bool(self.n_distinct > 1)
+
+    @property
     def p_value(self) -> float:
         """Share of nulls that matched or beat the headline (+1 smoothing)."""
-        if not self.placebo_headlines:
+        if not self.placebo_headlines or self.n_nonfinite:
             return float("nan")
         a = np.asarray(self.placebo_headlines, dtype=float)
         beat = int(np.sum(a >= self.headline))
@@ -1832,24 +1880,95 @@ class PlaceboResult:
     @property
     def passes(self) -> bool:
         p = self.p_value
-        return bool(np.isfinite(p) and p <= self.alpha)
+        return bool(self.probe_reached and np.isfinite(p) and p <= self.alpha)
+
+
+def min_sims_for(alpha: float) -> int:
+    """Fewest sims at which the smoothed p-value can reach ``alpha``.
+
+    ``p = (1 + beat) / (1 + n_sims)`` bottoms out at ``1 / (1 + n_sims)``, so
+    at ``alpha = 0.05`` **fewer than 19 sims can never pass**, no matter how
+    good the result is. Measured on the shipped pipeline: 6 sims produced a
+    placebo whose p-value floor was 0.143, and requirement 6 read as failed
+    against a headline of 1e18. That is the mirror image of a check that
+    cannot fail, and it is not obviously distinguishable from a real failure
+    in a league table -- hence the refusal in :func:`random_walk_placebo`
+    rather than a quieter warning.
+    """
+    a = float(alpha)
+    if not np.isfinite(a) or a <= 0.0 or a > 1.0:
+        raise ValueError(f"alpha must be in (0, 1], got {alpha!r}")
+    return max(1, int(np.ceil((1.0 - a) / a - 1e-9)))
 
 
 def random_walk_placebo(
     headline: float,
-    run_one: Callable[[np.random.Generator], float],
+    series,
+    run_one: Callable[[pd.Series], float],
     *,
     n_sims: int = 200,
     seed: int = 0,
     alpha: float = 0.05,
 ) -> PlaceboResult:
-    """Run ``run_one`` on ``n_sims`` random-walk nulls through the SAME pipeline.
+    """Build ``n_sims`` random-walk nulls from ``series`` and run each one.
 
-    ``run_one`` must take an RNG and return the same headline statistic the
-    real run produced, computed by the same code -- a placebo through a
-    different pipeline tests the pipeline, not the signal.
+    ``run_one(null_series) -> float`` must be the SAME
+    ``causal_signals -> run_pair`` path the real headline came from, returning
+    the same statistic. A placebo through a different pipeline tests the
+    pipeline, not the signal.
+
+    **Why this function constructs the null itself.** As first shipped it took
+    ``run_one(rng) -> float`` and never called :func:`random_walk_like`: both
+    the null's construction AND the pipeline it ran through were the caller's,
+    so ANY function opened requirement 6, and this module's own end-to-end test
+    closed the gate on ``lambda r: float(r.normal())`` -- neither a random walk
+    nor the pipeline. That is a placebo that cannot fail, which is worse than
+    no placebo because it certifies. Half of "identical pipeline" is now
+    structural: the null is a :func:`random_walk_like` of the observed series,
+    built here, and the caller cannot substitute an easier one. The other half
+    -- that ``run_one`` really is the shipped path -- is not enforceable from
+    inside this function and is pinned by
+    ``test_the_placebo_runs_the_real_causal_signals_to_run_pair_pipeline``.
+
+    The stakes are measured, not rhetorical: a null with no relationship to vol
+    opened Task 15's gate in **20.6%** of 500 simulations and beat the reported
+    headline in 100% of those.
+
+    Each simulation gets its own child seed stream
+    (``SeedSequence(seed).spawn``), so sim ``k`` is reproducible from ``seed``
+    regardless of how many sims ran or in what order they were consumed.
     """
-    rng = np.random.default_rng(seed)
-    vals = tuple(float(run_one(rng)) for _ in range(int(n_sims)))
+    s = pd.Series(series).astype(float)
+    n = int(n_sims)
+    if n < 1:
+        raise ValueError(f"n_sims must be at least 1, got {n_sims!r}")
+    if len(s) < 2:
+        raise ValueError(
+            "the observed series must have at least 2 points: a random walk "
+            "matched to a one-point series is a constant, and every null "
+            "would be identical"
+        )
+    sd = float(s.std(ddof=1))
+    if not np.isfinite(sd) or sd == 0.0:
+        raise ValueError(
+            f"the observed series has no dispersion to match (std {sd!r}), so "
+            "random_walk_like would return the same constant for every seed "
+            "and the placebo could not fail. Pass the series the real headline "
+            "was computed from."
+        )
+    floor = min_sims_for(alpha)
+    if n < floor:
+        raise ValueError(
+            f"n_sims={n} cannot clear alpha={alpha!r}: the smoothed p-value is "
+            f"(1 + beat) / (1 + n_sims), so its MINIMUM is {1.0 / (1 + n):.4g} "
+            f"even when no null beats the headline. Requirement 6 would be "
+            f"unreachable and the run would read as a placebo failure rather "
+            f"than as an under-sampled test. Use n_sims >= {floor}."
+        )
+    children = np.random.SeedSequence(int(seed)).spawn(n)
+    vals = tuple(
+        float(run_one(random_walk_like(s, np.random.default_rng(child))))
+        for child in children
+    )
     return PlaceboResult(headline=float(headline), placebo_headlines=vals,
                          seed=int(seed), alpha=float(alpha))
