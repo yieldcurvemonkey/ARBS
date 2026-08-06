@@ -22,6 +22,7 @@ import rateslib as rl
 
 from MDP.IRSwaps.SDR_INTRADAY.rl_curve_utils.stir_curve_building_utils import RLCurveBase
 from MDP.IRSwaps.CITI_VELOCITY_INTRADAY.citi_velocity_loader import CURVE_TENOR_ORDER
+from utils.rl_compat import instrument_kwarg
 
 __all__ = [
     "build_rl_usd_sofr_intraday_curve",
@@ -249,7 +250,7 @@ def par_reprice_errors_bp(rlcurve: RLCurveBase) -> "pd.Series":
     errors = {}
     for tenor, irs in rlcurve.rl_pricing_curve_instruments.items():
         model_rate = float(irs.rate(curves=curve))
-        fixed = float(irs.__dict__.get("kwargs", {}).get("fixed_rate"))
+        fixed = float(instrument_kwarg(irs, "fixed_rate"))
         errors[tenor] = (model_rate - fixed) * 100.0
     order = sorted(errors, key=_tenor_sort_key)
     return pd.Series({t: errors[t] for t in order}, name="reprice_error_bp")

@@ -18,6 +18,7 @@ from MDP.IRSwaps.SDR_INTRADAY.rl_curve_utils.stir_curve_building_utils import (
     get_fomc_meetings_list,
     get_short_end_curve_tickers,
 )
+from utils.rl_compat import instrument_kwarg
 
 
 def rl_usd_sofr_mt_builder(
@@ -288,7 +289,7 @@ def rl_usd_sofr_mt_builder(
     st_nodes = list({*fomc_curve_nodes, *[d for d in imm_nodes if (d.year, d.month) not in {(d.year, d.month) for d in fomc_curve_nodes}]})
     st_nodes.sort()
 
-    mt_nodes = sorted(s.__dict__["kwargs"]["termination"] for s in rl_irss.values())
+    mt_nodes = sorted(instrument_kwarg(s, "termination") for s in rl_irss.values())
     curve_nodes = sorted(st_nodes + mt_nodes)
 
     rl_stirfs_s = [_safe_fixed_rate(f) for f in rl_stirfs.values()]

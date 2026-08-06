@@ -10,6 +10,8 @@ from Query.IRSwaps.IRSwapStructure import (
 )
 import rateslib as rl
 
+from utils.rl_compat import rate_fixings_kwargs
+
 T1 = datetime.date(2024, 6, 3)
 T2 = datetime.date(2024, 6, 4)
 CURVE = "USD-SOFR-1D"
@@ -63,7 +65,7 @@ raw_pos = rl.IRS(
     spec=curve_def["ReferenceRate"],
     curves=c_rl_2._rl_curve_handle,
     notional=1_000_000,
-    leg2_fixings=c_rl_2._fixings,
+    **rate_fixings_kwargs(c_rl_2._fixings),
 )
 raw_neg = rl.IRS(
     effective=c_rl_1.effective_date(s_pos),
@@ -72,7 +74,7 @@ raw_neg = rl.IRS(
     spec=curve_def["ReferenceRate"],
     curves=c_rl_2._rl_curve_handle,
     notional=-1_000_000,
-    leg2_fixings=c_rl_2._fixings,
+    **rate_fixings_kwargs(c_rl_2._fixings),
 )
 raw_npv_pos = raw_pos.npv(curves=c_rl_2._rl_curve_handle).real
 raw_npv_neg = raw_neg.npv(curves=c_rl_2._rl_curve_handle).real

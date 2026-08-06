@@ -7,6 +7,7 @@ import numpy as np
 
 from Query.FixedRateBonds._FixedRateBondGenericPricer import _FixedRateBondGenericPricer
 from Query.FixedRateBonds.backends.rateslib.rl_frb_definitions_map import RATESLIB_FRB_DEFINITIONS
+from utils.rl_compat import instrument_kwarg
 
 
 @dataclass
@@ -83,9 +84,12 @@ class RLFixedRateBondPricer(_FixedRateBondGenericPricer):
         return self._meta_data
 
     def build_schedule(self) -> rl.Schedule:
-        return rl.FixedRateBond(
-            self._to_rl_dt(self.issue_date()), self._to_rl_dt(self.maturity_date()), spec=RATESLIB_FRB_DEFINITIONS[self._rl_frb_id]["spec"], fixed_rate=self.coupon()
-        ).kwargs["schedule"]
+        return instrument_kwarg(
+            rl.FixedRateBond(
+                self._to_rl_dt(self.issue_date()), self._to_rl_dt(self.maturity_date()), spec=RATESLIB_FRB_DEFINITIONS[self._rl_frb_id]["spec"], fixed_rate=self.coupon()
+            ),
+            "schedule",
+        )
 
     def coupon(self):
         return self._cpn
@@ -199,7 +203,7 @@ class RLFixedRateBondPricer(_FixedRateBondGenericPricer):
         raise NotImplementedError()
 
     def notional(self, frb: rl.FixedRateBond):
-        return float(frb.__dict__["kwargs"]["notional"])
+        return float(instrument_kwarg(frb, "notional"))
 
     def resolve_pricable(self, frb: rl.FixedRateBond, risk_weight=None):
         raise NotImplementedError()

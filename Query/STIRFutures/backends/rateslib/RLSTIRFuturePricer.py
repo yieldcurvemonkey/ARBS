@@ -8,6 +8,7 @@ import pandas as pd
 
 from Query.STIRFutures._STIRFutureGenericPricer import _STIRFutureGenericPricer
 from Query.IRSwaps.backends.rateslib.rl_curve_definitions_map import RATESLIB_CURVE_DEFINITIONS
+from utils.rl_compat import rate_fixings_kwargs, stirf_analytic_delta, stirf_pv01
 
 
 def _extract_stirf_contracts(stirf: rl.STIRFuture) -> int:
@@ -199,11 +200,16 @@ class RLSTIRFuturePricer(_STIRFutureGenericPricer):
 
     def pv01(self, contracts=None, notional=None, stirf: rl.STIRFuture = None) -> float:
         if stirf is not None:
-            unit_bpv = -float(self.build_stirf().analytic_delta().real)
+            unit_bpv = -float(stirf_analytic_delta(self.build_stirf()).real)
             return _extract_stirf_contracts(stirf) * unit_bpv
 
-        # Use analytic_delta which for STIRFuture requires no arguments (based on docs)
-        return -float(self.build_stirf(contracts=contracts or self._contracts, notional=notional or self._notional).analytic_delta().real)
+        # A STIR future's analytic_delta needs no curve of its own -- see
+        # utils.rl_compat.stirf_analytic_delta for why 2.7 nonetheless asks for one.
+        return -float(
+            stirf_analytic_delta(
+                self.build_stirf(contracts=contracts or self._contracts, notional=notional or self._notional)
+            ).real
+        )
 
     def dv01(self, shift: float = 1e-4) -> float:
         return self.pv01()
@@ -313,13 +319,7 @@ class RLSTIRFuturePricer(_STIRFutureGenericPricer):
             )
             fixings = fixings[mask]
             if not fixings.empty:
-                for fixings_key in ("leg2_rate_fixings", "leg2_fixings"):
-                    try:
-                        return rl.STIRFuture(**kwargs, **{fixings_key: fixings})
-                    except TypeError:
-                        continue
-                    except (ValueError, KeyError):
-                        break
+                return rl.STIRFuture(**kwargs, **rate_fixings_kwargs(fixings))
         return rl.STIRFuture(**kwargs)
 
     def build_pricable(self, /, **kwargs: Any) -> Any:
@@ -373,7 +373,7 @@ class RLSTIRFuturePricer(_STIRFutureGenericPricer):
                 curves=self._curve
             )
 
-            pv01_per_contract = abs(one_contract.pv01)
+            pv01_per_contract = stirf_pv01(one_contract)
             if pv01_per_contract <= 0:
                 raise ValueError("Computed pv01_per_contract is zero or invalid")
 
@@ -407,10 +407,4 @@ class RLSTIRFuturePricer(_STIRFutureGenericPricer):
 
         meta_fixings = self._meta_data.get("fixings", None) if isinstance(self._meta_data, dict) else None
         applied_fixings = fixings if fixings is not None else meta_fixings
-        if applied_fixings is not None:
-            try:
-                return rl.STIRFuture(**stir_kwargs, leg2_rate_fixings=applied_fixings)
-            except TypeError:
-                return rl.STIRFuture(**stir_kwargs, leg2_fixings=applied_fixings)
-
-        return rl.STIRFuture(**stir_kwargs)
+        return rl.STIRFuture(**stir_kwargs, **rate_fixings_kwargs(applied_fixings))

@@ -17,6 +17,7 @@ from bs4 import BeautifulSoup
 
 from MDP.IRSwaps.SDR_INTRADAY.rl_curve_utils.BarchartFetcher import BarchartFetcher
 from MDP.IRSwaps.SDR_INTRADAY.rl_curve_utils.tos import cme_code_effective_date, first_business_day_next_month, get_quotes, get_short_end_curve_tickers
+from utils.rl_compat import rate_fixings_kwargs
 
 
 @dataclass
@@ -507,7 +508,7 @@ def build_rl_stirf(ticker: str, curve_id: str, price: float, fixings: pd.Series 
             roll="som",
             curves=curve_id,
             price=price,
-            leg2_fixings=fixings,
+            **rate_fixings_kwargs(fixings),
         )
 
     def build_rl_sfr(month: str, curve_id: str, price: float):
@@ -517,7 +518,7 @@ def build_rl_stirf(ticker: str, curve_id: str, price: float, fixings: pd.Series 
             spec="usd_stir",
             curves=curve_id,
             price=price,
-            # leg2_fixings=fixings
+            # **rate_fixings_kwargs(fixings)
         )
 
     if ser_key in ticker:

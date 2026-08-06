@@ -16,6 +16,8 @@ import requests
 from pandas.tseries.holiday import USFederalHolidayCalendar
 from pandas.tseries.offsets import CustomBusinessDay
 
+from utils.rl_compat import rate_fixings_kwargs
+
 us_bd = CustomBusinessDay(calendar=USFederalHolidayCalendar())
 nytz = pytz.timezone("US/Eastern")
 
@@ -98,7 +100,7 @@ def build_rl_stirf(ticker: str, curve_id: str, price: float, fixings: pd.Series 
             roll="som",
             curves=curve_id,
             price=price,
-            leg2_fixings=fixings,
+            **rate_fixings_kwargs(fixings),
         )
 
     def build_rl_sfr(month: str, curve_id: str, price: float):
@@ -108,7 +110,7 @@ def build_rl_stirf(ticker: str, curve_id: str, price: float, fixings: pd.Series 
             spec="usd_stir",
             curves=curve_id,
             price=price,
-            # leg2_fixings=fixings
+            # **rate_fixings_kwargs(fixings)
         )
 
     if ser_key in ticker:

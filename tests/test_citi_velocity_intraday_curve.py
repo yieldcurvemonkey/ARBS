@@ -15,6 +15,8 @@ import pandas as pd
 import pytest
 import rateslib as rl
 
+from utils.rl_compat import instrument_kwarg
+
 from MDP.IRSwaps.CITI_VELOCITY_INTRADAY import (
     CitiVelocityIntradayFetcher,
     CitiVelocityWorkbook,
@@ -194,7 +196,7 @@ def test_builder_holiday_ref_anchors_prior_business_day():
     rlc = build_rl_usd_sofr_intraday_curve(par_rates=s, ref_date=s.name)
     assert rlc.rl_pricing_curve_solver.result["status"] == "SUCCESS"
     # every calibrating swap starts at the Friday-anchored spot date
-    eff = list(rlc.rl_pricing_curve_instruments.values())[0].__dict__["kwargs"]["effective"]
+    eff = instrument_kwarg(list(rlc.rl_pricing_curve_instruments.values())[0], "effective")
     assert eff == rl.dt(2026, 1, 21)
     assert par_reprice_errors_bp(rlc).abs().max() < 1e-2
 

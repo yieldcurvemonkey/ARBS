@@ -13,6 +13,7 @@ from Query.STIRFutures.backends.rateslib.RLSTIRFuturePricer import RLSTIRFutureP
 
 from typing import Union
 from Query.Base.BaseQuery import BaseQuery
+from utils.rl_compat import rate_fixings_kwargs
 
 
 def build_delta_risk_ladder(
@@ -166,15 +167,7 @@ def _build_with_fixings(ctor, fixings, **kwargs):
     not be calculated". The fixings calendar comes from ``kwargs["spec"]``.
     """
     masked = _mask_fixings_to_spec(fixings, kwargs["spec"])
-    if masked is not None:
-        for key in ("leg2_rate_fixings", "leg2_fixings"):
-            try:
-                return ctor(**kwargs, **{key: masked})
-            except TypeError:
-                continue
-            except (ValueError, KeyError):
-                break
-    return ctor(**kwargs)
+    return ctor(**kwargs, **rate_fixings_kwargs(masked))
 
 
 def build_basis_risk_ladder(

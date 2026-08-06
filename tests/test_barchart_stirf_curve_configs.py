@@ -68,9 +68,18 @@ def test_curve_configs_cover_central_banks_added_from_calendar_file():
 
 
 def test_rateslib_calendar_keys_exist_for_added_curves():
+    # ``rl.defaults.calendars`` was the 2.1-era registry and is gone in 2.7.
+    # ``get_calendar`` is the stable spelling and raises KeyError on an unknown
+    # name, so it asserts the same property without naming an internal.
     for curve_key in ["CAD-CORRA", "GBP-SONIA", "JPY-TONA", "CHF-SARON", "EUR-EURIBOR-3M"]:
         cal_key = RATESLIB_CURVE_DEFINITIONS[curve_key]["Calendar"]
-        assert cal_key in rl.defaults.calendars
+        assert rl.get_calendar(cal_key) is not None, cal_key
+
+
+def test_calendar_key_assertion_is_not_vacuous():
+    """A name that is not a calendar must actually raise -- else the test above proves nothing."""
+    with pytest.raises(KeyError):
+        rl.get_calendar("NOT_A_REAL_CALENDAR")
 
 
 def test_reference_rate2_3_stir_specs_when_available():

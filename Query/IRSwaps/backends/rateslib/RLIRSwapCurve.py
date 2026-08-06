@@ -7,6 +7,7 @@ import rateslib as rl
 
 from Query.IRSwaps._IRSwapGenericCurve import _IRSwapGenericCurve
 from Query.IRSwaps.backends.rateslib.rl_curve_definitions_map import RATESLIB_CURVE_DEFINITIONS
+from utils.rl_compat import analytic_delta as rl_analytic_delta, instrument_kwarg, rate_fixings_kwargs
 
 
 @dataclass
@@ -72,7 +73,7 @@ class RLIRSwapCurve(_IRSwapGenericCurve):
         return float(irswap.fixed_rate) / 100.0
 
     def notional(self, irswap: rl.IRS):
-        return irswap.__dict__["kwargs"]["notional"]
+        return instrument_kwarg(irswap, "notional")
 
     def fair_rate(self, irswap: rl.IRS):
         return irswap.rate(curves=self._rl_curve_handle).real / 100
@@ -87,14 +88,14 @@ class RLIRSwapCurve(_IRSwapGenericCurve):
                 curves=self._rl_curve_handle,
                 spec=curve_def["ReferenceRate"],
                 notional=self.notional(irswap),
-                leg2_fixings=self._fixings,
+                **rate_fixings_kwargs(self._fixings),
             )
             .npv(curves=self._rl_curve_handle)
             .real
         )
 
     def pv01(self, irswap: rl.IRS):
-        return irswap.analytic_delta(curve=self._rl_curve_handle).real
+        return rl_analytic_delta(irswap, self._rl_curve_handle).real
 
     def dv01(self, irswap: rl.IRS):
         # A true DV01 is a full re-solve of the calibrating instruments, which
@@ -164,14 +165,15 @@ class RLIRSwapCurve(_IRSwapGenericCurve):
             rl_effective = effective_date
 
         if bpv and not notional:
-            unit_delta = rl.IRS(
+            unit_swap = rl.IRS(
                 effective=rl.dt(rl_effective.year, rl_effective.month, rl_effective.day),
                 termination=tenor or rl.dt(maturity_date.year, maturity_date.month, maturity_date.day),
                 spec=curve_def["ReferenceRate"],
                 curves=self._rl_curve_handle,
                 notional=1,
-                leg2_fixings=self._fixings,
-            ).analytic_delta(self._rl_curve_handle)
+                **rate_fixings_kwargs(self._fixings),
+            )
+            unit_delta = rl_analytic_delta(unit_swap, self._rl_curve_handle)
             notional = bpv / unit_delta
 
         if not bpv and not notional:
@@ -185,7 +187,7 @@ class RLIRSwapCurve(_IRSwapGenericCurve):
                     spec=curve_def["ReferenceRate"],
                     curves=self._rl_curve_handle,
                     notional=1,
-                    leg2_fixings=self._fixings,
+                    **rate_fixings_kwargs(self._fixings),
                 )
             )
 
@@ -204,7 +206,7 @@ class RLIRSwapCurve(_IRSwapGenericCurve):
             # number was wrong, but every object handed out was.
             fixed_rate=float(fixed_rate) * 100.0,
             notional=notional,
-            leg2_fixings=self._fixings,
+            **rate_fixings_kwargs(self._fixings),
         )
 
     def build_pricable(self, /, **kwargs: Any) -> rl.IRS:
@@ -224,7 +226,7 @@ class RLIRSwapCurve(_IRSwapGenericCurve):
         # to -pv01) is negative. The previous implementation unconditionally
         # multiplied by -1, which flipped the sign of every NPV reported by
         # mark_to_market and on_unwind for IRSwapQuery positions.
-        notional_real = irswap.__dict__["kwargs"]["notional"]
+        notional_real = instrument_kwarg(irswap, "notional")
         try:
             direction = risk_weight if risk_weight is not None else (
                 self.pv01(irswap) * -1
@@ -251,17 +253,19 @@ class RLIRSwapCurve(_IRSwapGenericCurve):
         This is the norm for the front monthly contract (ZQ/SR1), whose calendar
         month is always partly in the past. Mirrors
         ``RLSTIRFuturePricer.build_for_solver``'s fixings handling: mask to the
-        spec calendar's business days, then try each rateslib fixings kwarg name.
+        spec calendar's business days, then pass them under whichever kwarg name
+        the installed rateslib uses (see ``utils.rl_compat``).
         """
         curve_def = self._curve_definition()
         if bpv and not notional:
-            unit_delta = rl.IRS(
+            unit_swap = rl.IRS(
                 effective=fwd or effective_date,
                 termination=tenor or maturity_date,
                 spec=curve_def["ReferenceRate"],
                 curves=self._rl_curve_handle,
                 notional=1,
-            ).analytic_delta(self._rl_curve_handle)
+            )
+            unit_delta = rl_analytic_delta(unit_swap, self._rl_curve_handle)
             notional = bpv / unit_delta
 
         if not bpv and not notional:
@@ -285,11 +289,5 @@ class RLIRSwapCurve(_IRSwapGenericCurve):
             )
             masked = fixings[mask]
             if not masked.empty:
-                for fixings_key in ("leg2_rate_fixings", "leg2_fixings"):
-                    try:
-                        return rl.STIRFuture(**kwargs, **{fixings_key: masked})
-                    except TypeError:
-                        continue
-                    except (ValueError, KeyError):
-                        break
+                return rl.STIRFuture(**kwargs, **rate_fixings_kwargs(masked))
         return rl.STIRFuture(**kwargs)
