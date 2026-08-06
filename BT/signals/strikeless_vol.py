@@ -67,11 +67,13 @@ it is read as**, both of which cost a real defect elsewhere in this study:
    row here is read at ``information_date``, and ``information_date`` is
    emitted next to ``signal_date`` so the gap is visible rather than assumed.
 2. *``be_over_realized``'s denominator is a RATE vol, not a slope vol.*
-   ``breakeven_h25`` is ``sqrt(2|roll|/gamma)`` with gamma measured by a
-   parallel LEVEL bump, so it is a breakeven rate move per day, and
-   ``vol_metrics`` says in as many words that it is compared to "the longer
-   leg's forward par rate" while ``spread_vol_bp_day`` is "the sizing base --
-   they are different numbers". This runner uses the long leg's rate vol, per
+   ``greeks.breakeven_bp_day`` defines its own output as "**the parallel move**
+   whose convexity gain pays one day of roll, in bp", and ``package_gamma`` is
+   a "second difference on **parallel reprices**" (``handle.shift(±h)``), so
+   ``breakeven_h25`` is a breakeven LEVEL move per day. ``vol_metrics`` names
+   the comparator that goes with it in as many words: it is compared to "the
+   longer leg's forward par rate", while ``spread_vol_bp_day`` is "the sizing
+   base -- they are different numbers". This runner uses the long leg's rate vol, per
    that contract and per the Task 10 brief's own motivating case (``be 1.3 / rv
    3.0 -> 0.43``, deeply cheap). ``scripts/sv_cross_market`` divides by the
    SPREAD's vol instead, which is roughly 4x smaller and turns the same
