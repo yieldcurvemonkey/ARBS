@@ -19,15 +19,25 @@ Public surface:
 **READ THIS BEFORE READING A ROW.**
 
 **Nothing here is a validated edge.** Every measured result in this study is
-DEAD. The four markets run end to end in Task 21 print DSR ``9.7e-127`` (USD),
-``1.5e-40`` (EUR), ``1.5e-48`` (JPY) and ``1.8e-95`` (GBP) on a declared 3888
-trials, all four lose at 1x costs, and **three of the four have a NEGATIVE
-break-even cost multiplier** -- gross is already negative, so no cost assumption
-rescues them. Only EUR's is positive, at ``+0.23x``: EUR needs the true cost to
-be under a quarter of the assumed schedule merely to reach zero. Those numbers
-travel on every row (``verdict``, ``dsr_prob``, ``n_trials``,
+DEAD. The four markets run end to end in Task 21 print DSR ``8.3e-30`` (USD),
+``3.1e-23`` (EUR), ``1.8e-16`` (JPY) and ``2.5e-33`` (GBP) on a declared 3888
+trials, and **all four lose at 1x costs**. Two of the four have a NEGATIVE
+break-even cost multiplier -- EUR at ``-0.19x`` and GBP at ``-0.10x``, where
+gross is already negative and no cost assumption rescues them. The other two are
+positive but nowhere near 1: USD at ``+0.29x`` and JPY at ``+0.36x`` need the
+true cost to be roughly a third of the assumed schedule merely to reach zero.
+Those numbers travel on every row (``verdict``, ``dsr_prob``, ``n_trials``,
 ``breakeven_cost_mult``) so that a reader of a single day's output cannot
 mistake it for something it is not.
+
+**Those figures were re-measured after this runner's denominator finding was
+adopted** (see point 2 below): Task 21 re-ran the cross-market study on the rate
+-vol denominator and the league table moved -- USD's DSR by ~97 orders of
+magnitude (``9.7e-127`` to ``8.3e-30``) and three of four break-even multipliers
+by sign. Nothing dead became live. The numbers below are transcribed from that
+corrected run, and :func:`measured_verdict_drift` re-reads the run file and
+reports any disagreement, so the next time the source moves the suite goes red
+instead of quietly quoting a superseded study.
 
 **A row is a statement about the rule, not a recommendation.** If the rule emits
 a sign today, what that means is "the published rulebook, run on today's data,
@@ -75,13 +85,20 @@ it is read as**, both of which cost a real defect elsewhere in this study:
    longer leg's forward par rate", while ``spread_vol_bp_day`` is "the sizing
    base -- they are different numbers". This runner uses the long leg's rate vol, per
    that contract and per the Task 10 brief's own motivating case (``be 1.3 / rv
-   3.0 -> 0.43``, deeply cheap). ``scripts/sv_cross_market`` divides by the
-   SPREAD's vol instead, which is roughly 4x smaller and turns the same
-   breakeven into a ratio of 1.75-4.17, i.e. "rich" on 72-98% of days. Both are
-   emitted -- ``be_over_realized`` (rate vol, the sign's input) and
-   ``be_over_spread_vol`` (slope vol, the Task 21 variant) -- so the difference
-   is visible on the row. ``verdict_pair`` names the structure the stored
-   verdict was measured on, and ``verdict_basis`` names the denominator it used.
+   3.0 -> 0.43``, deeply cheap). ``scripts/sv_cross_market`` divided by the
+   SPREAD's vol, which is ~4.4x smaller and inverted the measured valuation
+   state in all four markets. **That was adopted and fixed upstream**: Task 21
+   verified it by repricing (a 1bp parallel move on a real USD curve gives
+   dPV +101.88 against 0.5*Gamma*h^2 = +102.01 with an implied first-order term
+   of 0.00, while a 1bp SPREAD move is ~$100k of first-order P&L -- 980x), and
+   ``vol_metrics.be_over_realized`` now REFUSES an unlabelled or spread-labelled
+   denominator. USD's median BE/RV went from 5.26 (99.7% rich) to 1.32 (65.1%
+   rich). Both ratios are still emitted -- ``be_over_realized`` (rate vol, the
+   sign's input) and ``be_over_spread_vol`` (slope vol, explicitly labelled
+   ``denominator="spread"`` at the call site) -- so the difference stays visible
+   on the row. ``verdict_pair`` names the structure the stored verdict was
+   measured on and ``verdict_basis`` the denominator it used; both now agree
+   with this runner.
 
 A third of the same shape, closed rather than flagged: on a day the rule is
 already holding, ``entry_vintage_signals`` prices the row on the z FROZEN at
@@ -144,10 +161,18 @@ __all__ = [
     "PairInputs",
     "REQUIRED_OUTPUT_COLUMNS",
     "SIGNAL_COLUMNS",
+    "GREEKS_CACHE_VERSION",
     "HONESTY_COLUMNS",
+    "LEAGUE_TABLE_FIELDS",
+    "MEASURED_VERDICT_SOURCE",
+    "MEASURED_VERDICT_SOURCE_SHA256",
     "PLACEBO_P_VALUE",
     "SignalWindows",
     "STUDY_N_TRIALS",
+    "TARGET_NOT_RECOMMENDATION",
+    "failed_row",
+    "measured_verdict_drift",
+    "parse_league_table",
     "VOL_CURVE_BY_MARKET",
     "VOL_STRUCTURE",
     "build_pair_inputs",
@@ -212,9 +237,11 @@ class MarketVerdict:
     sample_start: dt.date
     sample_end: dt.date
     n_trials: int = STUDY_N_TRIALS
-    #: What ``be_over_realized``'s denominator was in the run that produced
-    #: these numbers. Not this runner's default -- see the module docstring.
-    basis: str = "spread_vol_bp_day denominator (scripts/sv_cross_market)"
+    #: What ``be_over_realized``'s denominator was in the run that produced these
+    #: numbers. It now MATCHES this runner's -- the earlier transcription said
+    #: ``spread_vol_bp_day`` and that was a real difference between the stored
+    #: verdict and the rule being run, which is why the field exists at all.
+    basis: str = "realized_vol_bp_day (long-leg forward par rate) denominator"
 
     @property
     def cost_1x_bp(self) -> float:
@@ -257,24 +284,167 @@ class MarketVerdict:
         )
 
 
-def _measured() -> Dict[str, MarketVerdict]:
-    """The Task 21 league table, verbatim.
+#: The run whose stdout the numbers below are transcribed from.
+#:
+#: **It is a file that can move, and it did.** The first transcription was made
+#: at 06:35 on 2026-08-06 and was correct then; at 07:58 the same day Task 21
+#: adopted this runner's denominator finding, re-ran, and overwrote this file
+#: (archiving the old one as ``task-21-run-BEFORE-spread-denominator.txt``).
+#: For 45 minutes the runner quoted a superseded study on every row -- USD's DSR
+#: wrong by ~97 orders of magnitude and three of four break-even multipliers
+#: wrong in SIGN -- and no test could see it, because the test asserted
+#: constants against constants. :func:`measured_verdict_drift` and
+#: :data:`MEASURED_VERDICT_SOURCE_SHA256` are the guard against the next time.
+MEASURED_VERDICT_SOURCE: Path = (
+    Path(__file__).resolve().parents[2]
+    / ".superpowers" / "sdd" / "2026-08-04-strikeless-vol"
+    / "task-21-cross-market-run.txt"
+)
 
-    Source: ``.superpowers/sdd/2026-08-04-strikeless-vol/task-21-cross-market-run.txt``
-    (the run's own stdout), section "league table (one config per market, DSR on
-    the multiplied count)". One config per market: ``SignalConfig()`` defaults,
-    the ``10Y10Y/20Y10Y`` structure, implied vol as the only driver, one
-    ``CostSchedule`` at multiplier 1.
+#: sha256 of :data:`MEASURED_VERDICT_SOURCE` when the numbers below were read
+#: out of it. Any edit to that file -- inside the league table or not -- changes
+#: this and turns ``test_the_measured_verdict_source_has_not_moved`` red, which
+#: is the point: a number copied out of a regenerable file needs a tripwire on
+#: the file, not just a check of the copy against itself.
+MEASURED_VERDICT_SOURCE_SHA256: str = (
+    "77539eedb884706546385b0c1ab5fcf83b43b1804e6712c2e808c8cfba6839c5"
+)
+
+#: The league table's columns after the pair name, in the order the run prints
+#: them. Used to parse rather than assumed: :func:`parse_league_table` reads the
+#: header line and refuses if it does not match.
+LEAGUE_TABLE_FIELDS = (
+    "n_trades", "gross_bp", "net_1x_bp", "net_2x_bp", "carry_sign",
+    "harvest_pnl_share", "vol_corr", "dsr_prob", "n_trials",
+    "requirements_met", "verdict",
+)
+
+_LEAGUE_HEADER_MARKER = "league table (one config per market"
+
+
+def parse_league_table(path: Optional[Path] = None) -> Dict[str, dict]:
+    """Read the league table out of a cross-market run's stdout.
+
+    Returns ``{market: {field: value}}`` with the numeric fields as floats/ints
+    and ``sample_start`` / ``sample_end`` picked up from the per-market table
+    above it. Raises if the header does not carry
+    :data:`LEAGUE_TABLE_FIELDS` in order -- a silently reordered column would
+    otherwise map ``net_1x_bp`` onto ``net_2x_bp`` and the whole guard would
+    read as a pass.
+    """
+    path = Path(path) if path is not None else MEASURED_VERDICT_SOURCE
+    lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+
+    header_i = None
+    for i, line in enumerate(lines):
+        if _LEAGUE_HEADER_MARKER in line:
+            for j in range(i, min(i + 6, len(lines))):
+                if lines[j].split()[:2] == ["pair", "n_trades"]:
+                    header_i = j
+                    break
+            break
+    if header_i is None:
+        raise ValueError(
+            f"{path}: no league-table header found (looked for a line starting "
+            f"'pair n_trades' within 6 lines of {_LEAGUE_HEADER_MARKER!r}). The "
+            "run format changed; the parser has to change with it rather than "
+            "return nothing and read as 'no drift'."
+        )
+    header = lines[header_i].split()
+    if tuple(header[1:]) != LEAGUE_TABLE_FIELDS:
+        raise ValueError(
+            f"{path}: league-table columns are {tuple(header[1:])}, expected "
+            f"{LEAGUE_TABLE_FIELDS}. Parsing positionally into a reordered "
+            "header would silently map one column's number onto another."
+        )
+
+    out: Dict[str, dict] = {}
+    for line in lines[header_i + 1:]:
+        tok = line.split()
+        # "<MKT> <SHORT>/<LONG>" is always exactly two tokens
+        if len(tok) < 2 + len(LEAGUE_TABLE_FIELDS) or "/" not in tok[1]:
+            break
+        market = tok[0]
+        rec: dict = {"pair": f"{tok[0]} {tok[1]}"}
+        vals = tok[2:]
+        for k, v in zip(LEAGUE_TABLE_FIELDS[:-1], vals):
+            rec[k] = int(v) if k in ("n_trades", "n_trials", "carry_sign") else (
+                v == "True" if k == "requirements_met" else float(v))
+        rec["verdict"] = " ".join(vals[len(LEAGUE_TABLE_FIELDS) - 1:])
+        out[market] = rec
+
+    if not out:
+        raise ValueError(f"{path}: league-table header found but no data rows")
+
+    # the per-market table above carries the sample window, transposed
+    markets: list = []
+    for line in lines:
+        tok = line.split()
+        if tok[:1] == ["market"] and set(tok[1:]) >= set(out):
+            markets = tok[1:]
+        elif markets and tok[:1] in (["start"], ["end"]):
+            for m, v in zip(markets, tok[1:]):
+                if m in out:
+                    out[m][f"sample_{tok[0]}"] = dt.date.fromisoformat(v)
+    return out
+
+
+def measured_verdict_drift(path: Optional[Path] = None) -> Dict[str, list]:
+    """``{market: [disagreements]}`` between :data:`MEASURED_VERDICT` and the run.
+
+    Empty when the stored numbers still describe the run they cite. This is the
+    check the original test could not make: it asserted the module's constants
+    against the test's constants, which detects a mutation of the module and is
+    a *zero*-strength detector of the upstream run being re-measured.
+    """
+    live = parse_league_table(path)
+    fields = ("n_trades", "gross_bp", "net_1x_bp", "net_2x_bp", "dsr_prob",
+              "n_trials", "sample_start", "sample_end")
+    drift_out: Dict[str, list] = {}
+    for market, mv in MEASURED_VERDICT.items():
+        if market not in live:
+            drift_out[market] = [f"absent from {Path(path or MEASURED_VERDICT_SOURCE).name}"]
+            continue
+        bad = []
+        row = live[market]
+        if row["pair"] != mv.pair_name:
+            bad.append(f"pair {mv.pair_name!r} != {row['pair']!r}")
+        for f in fields:
+            want, got = getattr(mv, f), row.get(f)
+            if got is None:
+                bad.append(f"{f} missing from the run file")
+            elif isinstance(want, float):
+                if not np.isclose(want, got, rtol=1e-9, atol=0.0):
+                    bad.append(f"{f} stored {want!r} != run {got!r}")
+            elif want != got:
+                bad.append(f"{f} stored {want!r} != run {got!r}")
+        if row["verdict"] != mv.verdict:
+            bad.append(f"verdict derived {mv.verdict!r} != run {row['verdict']!r}")
+        if bad:
+            drift_out[market] = bad
+    for market in set(live) - set(MEASURED_VERDICT):
+        drift_out[market] = ["scored by the run but absent from MEASURED_VERDICT"]
+    return drift_out
+
+
+def _measured() -> Dict[str, MarketVerdict]:
+    """The Task 21 league table, verbatim -- see :data:`MEASURED_VERDICT_SOURCE`.
+
+    Section "league table (one config per market, DSR on the multiplied count)".
+    One config per market: ``SignalConfig()`` defaults, the ``10Y10Y/20Y10Y``
+    structure, implied vol as the only driver, one ``CostSchedule`` at
+    multiplier 1, and -- since the 07:58 re-run -- ``be_over_realized`` on the
+    long-leg RATE vol, which is what this runner uses.
     """
     rows = [
         # market, n_trades, gross_bp, net_1x_bp, net_2x_bp, dsr_prob, start, end
-        ("USD", 116, -4.349373, -191.370916, -378.392458, 9.730617e-127,
+        ("USD", 103, 52.406660, -129.741905, -311.890471, 8.280439e-30,
          dt.date(2017, 1, 3), dt.date(2026, 8, 3)),
-        ("EUR", 58, 21.239336, -72.739479, -166.718293, 1.508078e-40,
+        ("EUR", 51, -18.061138, -112.824072, -207.587007, 3.131033e-23,
          dt.date(2019, 10, 2), dt.date(2026, 8, 3)),
-        ("JPY", 61, -36.895482, -165.815749, -294.736017, 1.471768e-48,
+        ("JPY", 76, 58.470790, -103.564716, -265.600221, 1.842530e-16,
          dt.date(2017, 1, 4), dt.date(2026, 8, 3)),
-        ("GBP", 93, -25.644988, -215.519128, -405.393268, 1.794651e-95,
+        ("GBP", 54, -11.708713, -128.992651, -246.276590, 2.499986e-33,
          dt.date(2017, 1, 3), dt.date(2026, 8, 3)),
     ]
     return {
@@ -327,8 +497,9 @@ SIGNAL_COLUMNS = (
 #: carries a sign without these is a row a reader can mistake for a validated
 #: edge, which no result in this study is.
 HONESTY_COLUMNS = (
-    "market", "asof", "signal_date", "information_date",
-    "sample_end", "n_obs", "held_days", "decision_z", "residual_z_is_decision_input",
+    "market", "status", "asof", "signal_date", "information_date",
+    "sample_end", "n_obs", "lookback_days", "windows",
+    "held_days", "decision_z", "residual_z_is_decision_input",
     "spread_vol_bp_day", "be_over_spread_vol", "iv_z", "beta_vintage_date",
     "verdict", "verdict_pair", "verdict_is_for_this_pair", "verdict_basis",
     "dsr_prob", "n_trials", "gross_bp", "net_1x_bp", "net_2x_bp",
@@ -583,6 +754,18 @@ def _frozen_z_at(inputs: PairInputs, entry_ts, ts) -> float:
     return float(frozen.get(ts, float("nan")))
 
 
+#: The clause that stops a row reading as advice. Named, so that deleting it
+#: from :func:`_note` cannot pass silently: :func:`_assert_note_is_honest`
+#: requires it to be present in the emitted note, and that check runs on every
+#: row rather than only in a test.
+TARGET_NOT_RECOMMENDATION: str = (
+    "This row is a TARGET implied by the published rulebook on this date, "
+    "not a recommendation: the rule is stateless, so the target changes "
+    "whenever the signal does, and that turnover is what the cost schedule "
+    "bites on (costs are 41% of gross at 1x, 83% at 2x)."
+)
+
+
 def _note(mv: MarketVerdict, flags, uncertified, *, verdict: str) -> str:
     return (
         f"{verdict}: DSR {mv.dsr_prob:.2e} on {mv.n_trials} declared trials, "
@@ -596,11 +779,49 @@ def _note(mv: MarketVerdict, flags, uncertified, *, verdict: str) -> str:
         f"Uncertified signal inputs: {', '.join(uncertified)} -- "
         "be_over_realized SETS THE SIGN and no argument to causal_signals can "
         "certify it. "
-        "This row is a TARGET implied by the published rulebook on this date, "
-        "not a recommendation: the rule is stateless, so the target changes "
-        "whenever the signal does, and that turnover is what the cost schedule "
-        "bites on (costs are 41% of gross at 1x, 83% at 2x)."
+        + TARGET_NOT_RECOMMENDATION
     )
+
+
+def _assert_note_is_honest(row: dict) -> None:
+    """The note is the string a human reads; make it unable to drift.
+
+    ``format_state`` prints ``note`` under ``VERDICT :``, so it -- not the
+    ``verdict`` column -- is what a reader actually sees. Everything numeric on
+    the row was pinned by tests; the *statements about* the numbers were not,
+    and a review demonstrated two one-line edits that left the whole fast suite
+    green: dropping :data:`TARGET_NOT_RECOMMENDATION`, and hardcoding the note's
+    leading word to ``ALIVE`` over a row whose ``verdict`` column said ``DEAD``.
+
+    This is a runtime check rather than only a test because the failure mode is
+    a note that *says* something the row does not support -- and a row that can
+    say that must not be emitted at all, not merely be caught in CI.
+    """
+    note = str(row["note"])
+    verdict = str(row["verdict"])
+    problems = []
+    if not note.startswith(verdict):
+        problems.append(
+            f"note opens {note.split(':')[0]!r} but the row's verdict is "
+            f"{verdict!r}; the sentence a human reads must not announce a "
+            "different result from the column beside it"
+        )
+    if TARGET_NOT_RECOMMENDATION not in note:
+        problems.append(
+            "note is missing the target-not-a-recommendation clause, which is "
+            "the whole reason a DEAD strategy's runner is allowed to emit a sign"
+        )
+    if str(row["n_trials"]) not in note.replace(",", ""):
+        problems.append(f"note does not state the declared trial count {row['n_trials']}")
+    if not row["sign_input_certified"] and "be_over_realized" not in note:
+        problems.append(
+            "the sign's input is uncertified and the note does not name it"
+        )
+    if problems:
+        raise AssertionError(
+            f"{row.get('pair')}: the row's note does not support the row -- "
+            + "; ".join(problems)
+        )
 
 
 def state_row(
@@ -609,6 +830,7 @@ def state_row(
     cfg: SignalConfig,
     *,
     asof: Optional[dt.date] = None,
+    lookback_days: Optional[int] = None,
 ) -> dict:
     """One output row: the last signal, the panel that decided it, and the verdict.
 
@@ -624,6 +846,14 @@ def state_row(
             f"(panel {len(panel)}, signals {len(signals)}). The signal for a "
             "date is decided on the previous date's panel row, so a single-row "
             "panel has no information date to report."
+        )
+    if signals.index[-1] != panel.index[-1]:
+        raise ValueError(
+            f"{inputs.pair.name}: the signals frame ends {signals.index[-1]} and "
+            f"the panel ends {panel.index[-1]}. `signal_date` is read off the "
+            "signals and `information_date` off the panel, so two frames that "
+            "do not end together would put a sign next to diagnostics from a "
+            "different day -- the exact adjacency this row exists to prevent."
         )
     signal_date = signals.index[-1]
     info_date = panel.index[-2]
@@ -650,6 +880,7 @@ def state_row(
     row = {
         "pair": inputs.pair.name,
         "market": inputs.pair.market,
+        "status": "ok",
         "asof": pd.Timestamp(asof) if asof is not None else signal_date,
         "signal_date": signal_date,
         "information_date": info_date,
@@ -675,6 +906,15 @@ def state_row(
         "sample_start": panel.index.min(),
         "sample_end": panel.index.max(),
         "n_obs": int(len(panel)),
+        # The requested window and the windows the rule ran with. `today_state`'s
+        # last row is path-dependent on BOTH -- measured at +6.4% of target dv01
+        # for 60 extra rows of history on this module's own fixture -- and
+        # without them on the row two days' output cannot be checked for equal
+        # provenance. NaN when `state_row` is called directly, which is honest:
+        # nobody requested a lookback on that path.
+        "lookback_days": (float("nan") if lookback_days is None
+                          else int(lookback_days)),
+        "windows": inputs.windows,
         "verdict": v,
         "verdict_pair": mv.pair_name,
         "verdict_is_for_this_pair": bool(mv.pair_name == inputs.pair.name),
@@ -697,6 +937,85 @@ def state_row(
     missing = [c for c in REQUIRED_OUTPUT_COLUMNS if c not in row]
     if missing:
         raise AssertionError(f"state_row omitted required columns: {missing}")
+    _assert_note_is_honest(row)
+    return row
+
+
+def failed_row(
+    pair: ForwardPair,
+    reason: str,
+    *,
+    asof: Optional[dt.date] = None,
+    windows: SignalWindows = SignalWindows(),
+    lookback_days: Optional[int] = None,
+) -> dict:
+    """A complete row for a pair that could NOT produce a state.
+
+    A daily runner that silently emits nothing is worse than one that errors:
+    an empty frame from a data outage is indistinguishable from an empty
+    universe. Measured -- a short lookback does not produce the visibly-flat
+    rows the docstring once promised, it RAISES inside ``certified_signals``
+    (``drift_t`` compared on only 85 dates at ``n=400``, minimum 100), and the
+    caller used to get an empty DataFrame.
+
+    So the pair still appears, carrying ``status="failed: ..."``, ``sign=0``,
+    every honesty column populated and a ``reason`` that says what happened.
+    The diagnostics are NaN because there are none -- not zero, which would be
+    a number.
+    """
+    mv = market_verdict(pair.market)
+    v = mv.verdict
+    flags = _derive_requirements(pd.DataFrame(), (), None, None)
+    uncertified = tuple(UNCERTIFIED_SIGNAL_INPUTS)
+    nan = float("nan")
+    row = {
+        "pair": pair.name,
+        "market": pair.market,
+        "status": f"failed: {reason}",
+        "asof": pd.Timestamp(asof) if asof is not None else pd.NaT,
+        "signal_date": pd.NaT,
+        "information_date": pd.NaT,
+        "sample_start": pd.NaT,
+        "sample_end": pd.NaT,
+        "n_obs": 0,
+        "lookback_days": (nan if lookback_days is None else int(lookback_days)),
+        "windows": windows,
+        "sign": 0,
+        "size": 0.0,
+        "dv01_usd": 0.0,
+        "reason": f"NO STATE -- {reason}",
+        "held_days": 0,
+        "decision_z": nan,
+        "residual_z_is_decision_input": False,
+        "beta_vintage_date": pd.NaT,
+        "verdict": v,
+        "verdict_pair": mv.pair_name,
+        "verdict_is_for_this_pair": bool(mv.pair_name == pair.name),
+        "verdict_basis": mv.basis,
+        "dsr_prob": float(mv.dsr_prob),
+        "n_trials": int(mv.n_trials),
+        "gross_bp": float(mv.gross_bp),
+        "net_1x_bp": float(mv.net_1x_bp),
+        "net_2x_bp": float(mv.net_2x_bp),
+        "breakeven_cost_mult": float(mv.breakeven_cost_mult),
+        "placebo_p_value": float(PLACEBO_P_VALUE),
+        "requirements_met": bool(flags.all_met),
+        "unmet_requirements": tuple(flags.unmet),
+        "certified_signal_inputs": (),
+        "uncertified_signal_inputs": uncertified,
+        "sign_input_certified": False,
+        "note": _note(mv, flags, uncertified, verdict=v),
+    }
+    for col in ("spread_bp", "breakeven_h25", "realized_vol_bp_day",
+                "spread_vol_bp_day", "implied_bp_day", "be_over_realized",
+                "be_over_implied", "be_over_spread_vol", "drift_t", "iv_z",
+                "residual_z"):
+        row[col] = nan
+    row.update(flags.as_columns("req_"))
+    missing = [c for c in REQUIRED_OUTPUT_COLUMNS if c not in row]
+    if missing:
+        raise AssertionError(f"failed_row omitted required columns: {missing}")
+    _assert_note_is_honest(row)
     return row
 
 
@@ -709,23 +1028,63 @@ def pair_state(
     umep: Optional[pd.Series] = None,
     windows: SignalWindows = SignalWindows(),
     asof: Optional[dt.date] = None,
+    lookback_days: Optional[int] = None,
 ) -> dict:
     """``build_pair_inputs`` -> ``certified_signals`` -> ``state_row``."""
     cfg = cfg or SignalConfig()
     inputs = build_pair_inputs(pair, greeks, iv_bp_day, umep=umep, windows=windows)
-    return state_row(inputs, certified_signals(inputs, cfg), cfg, asof=asof)
+    return state_row(inputs, certified_signals(inputs, cfg), cfg, asof=asof,
+                     lookback_days=lookback_days)
 
 
 # --------------------------------------------------------------- the caches
 
 
-def _greeks_cache_path(pair: ForwardPair, cache_dir) -> Path:
-    """One file per pair, fingerprinted by the pair's own identity.
+#: Bumped by hand whenever the cached greeks panel's SCHEMA or meaning changes.
+#: The bump sizes are picked up automatically (see :func:`_greeks_kwargs_key`);
+#: this covers everything that is not an argument -- a column added or renamed,
+#: a convention corrected inside ``compute_greeks``.
+GREEKS_CACHE_VERSION: int = 1
+
+
+def _greeks_kwargs_key(greeks_kwargs: Optional[dict]) -> str:
+    """A stable key for the arguments the cached panel was computed with.
+
+    **Read from ``compute_greeks``' live signature, not restated.**
+    ``breakeven_h25`` exists because ``h_bps`` contains 25; if that default ever
+    changes upstream, a key built from a hardcoded copy would keep serving rows
+    computed at the old bump under the new meaning. ``inspect`` makes the
+    dependency real: change the default and the digest moves.
+    """
+    import inspect
+
+    from RVUtils.StrikelessVol.greeks import compute_greeks
+
+    kw = dict(greeks_kwargs or {})
+    for name, param in inspect.signature(compute_greeks).parameters.items():
+        if name in ("curve", "pair") or param.default is inspect.Parameter.empty:
+            continue
+        kw.setdefault(name, param.default)
+    return "|".join(f"{k}={kw[k]!r}" for k in sorted(kw))
+
+
+def _greeks_cache_path(pair: ForwardPair, cache_dir, *,
+                       greeks_kwargs: Optional[dict] = None) -> Path:
+    """One file per (pair, greeks-definition), fingerprinted.
 
     Same house pattern as ``panels._cache_path_for_legs``: a hex digest of the
     identifying string, truncated, so one file only ever holds one schema.
+
+    The digest covers the pair, :data:`GREEKS_CACHE_VERSION` **and the greeks
+    arguments** -- the bump sizes above all, since ``breakeven_h25`` is only
+    ``h=25`` by convention. Keyed on the pair alone, changing the bump size or
+    the panel's schema would serve the old numbers under the new name, which is
+    a worse failure than a cache miss.
     """
-    key = f"{pair.market}|{pair.curve_name}|{pair.short.label}|{pair.long.label}"
+    key = "|".join([
+        pair.market, pair.curve_name, pair.short.label, pair.long.label,
+        f"v{GREEKS_CACHE_VERSION}", _greeks_kwargs_key(greeks_kwargs),
+    ])
     digest = hashlib.sha1(key.encode()).hexdigest()[:8]
     stem = f"greeks__{pair.market}_{pair.short.label}_{pair.long.label}__{digest}"
     return Path(cache_dir) / f"{stem}.parquet"
@@ -738,6 +1097,7 @@ def greeks_with_cache(
     fetch_curves: Callable[[Sequence[dt.date]], dict],
     cache_dir=CACHE_DIR,
     panel_fn: Callable[[dict, ForwardPair], pd.DataFrame] = greeks_panel,
+    greeks_kwargs: Optional[dict] = None,
 ) -> pd.DataFrame:
     """``greeks_panel`` for ``dates``, computing only the dates not already cached.
 
@@ -754,7 +1114,7 @@ def greeks_with_cache(
     and the re-request is cheap -- a curve the MDP has no data for costs no
     repricing.
     """
-    path = _greeks_cache_path(pair, cache_dir)
+    path = _greeks_cache_path(pair, cache_dir, greeks_kwargs=greeks_kwargs)
     cached: Optional[pd.DataFrame] = None
     if path.exists():
         cached = pd.read_parquet(path)
@@ -769,7 +1129,7 @@ def greeks_with_cache(
         curves = {pd.Timestamp(k): v for k, v in curves.items()
                   if v is not None and k != "live"}
         if curves:
-            fresh = panel_fn(curves, pair)
+            fresh = panel_fn(curves, pair, **(greeks_kwargs or {}))
             if not fresh.empty:
                 fresh.index = pd.to_datetime(fresh.index)
                 cached = fresh if cached is None else fresh.combine_first(cached)
@@ -792,6 +1152,16 @@ def _market_curve_fetcher(market: str, *, mdp, n_jobs: int):
     ``JSONDecodeError`` on its ``convention`` field, failing the bulk request
     for 199 dates over one of them. A market that returns nothing looks exactly
     like a market with no data.
+
+    **The routine case is logged BELOW the alarm, on purpose.** The greeks cache
+    deliberately never records a market holiday (there is no curve), so those
+    dates stay in the missing set and are re-requested every run; a year chunk
+    whose missing dates are all holidays makes the MDP raise "Request
+    'timestamps' resolved to an empty collection". That fired **nine times at
+    WARNING in a warm 3-pair USD run**, in the same words and at the same level
+    as the real GBP-SONIA failure this chunker exists to isolate -- an alarm
+    camouflaged by its own routine noise. It is now DEBUG and worded
+    differently, so a WARNING here still means something went wrong.
     """
     curve_name = MARKET_CURVES[market]
 
@@ -806,8 +1176,14 @@ def _market_curve_fetcher(market: str, *, mdp, n_jobs: int):
                                         "timestamps": by_year[year],
                                         "n_jobs": n_jobs})
             except Exception as exc:  # noqa: BLE001
-                logger.warning("%s %s: curve chunk failed -- %s: %s",
-                               market, year, type(exc).__name__, exc)
+                if "empty collection" in str(exc):
+                    logger.debug(
+                        "%s %s: no serveable dates in this chunk (%d requested, "
+                        "all non-trading) -- expected, the cache never stores a "
+                        "holiday", market, year, len(by_year[year]))
+                else:
+                    logger.warning("%s %s: curve chunk failed -- %s: %s",
+                                   market, year, type(exc).__name__, exc)
                 continue
             for k, v in cm.items():
                 if v is None or k == "live":
@@ -829,6 +1205,8 @@ def today_state(
     mdp=None,
     cache_dir=CACHE_DIR,
     n_jobs: int = 4,
+    vol_panel_fn: Callable[..., pd.DataFrame] = vol_panel,
+    panel_fn: Callable[..., pd.DataFrame] = greeks_panel,
 ) -> pd.DataFrame:
     """One row per supported pair: today's state, and what the study measured.
 
@@ -836,12 +1214,26 @@ def today_state(
     requested is ``1.5x`` that, which is roughly the business/calendar ratio.
     The default 750 leaves ~800 rows against ``windows.warmup_rows`` of 378, so
     the rule has ~420 usable dates and the causality audit's 75% cut is far from
-    the warm-up. A shorter lookback silently produces "no valuation" rows,
-    because ``signal_state`` fails CLOSED on a NaN.
+    the warm-up.
+
+    **A short lookback does not produce flat rows -- it RAISES.** Measured on
+    the module's own fixture at default windows: ``n=250`` raises out of the
+    causality probe, ``n=340`` and ``n=400`` raise "``drift_t`` was compared on
+    only 25 / 85 dates (minimum 100)", and only from ``n=430`` does a row come
+    out. Every one of those is a pair that cannot be stated, and the runner now
+    emits :func:`failed_row` for it rather than dropping it, so an outage is
+    never indistinguishable from an empty universe.
 
     Curves are fetched once per market and shared across that market's pairs;
     the per-pair greeks panel is cached incrementally (:func:`greeks_with_cache`)
     so a daily re-run prices only the new day.
+
+    ``vol_panel_fn`` and ``panel_fn`` are seams for the two networked/expensive
+    builders, so this function is reachable from the fast gate with a fake
+    ``mdp=`` -- the same indirection ``panels._build_tfp_history`` uses. Without
+    them ``today_state`` was covered only by a deselected network test, and a
+    one-line edit that stripped the verdict, the DSR, the requirement flags and
+    the note off every emitted row passed the whole fast suite.
 
     ``with_umep`` is off by default: Task 21 ran implied vol alone in all four
     markets, so that is the model the stored verdict describes.
@@ -875,18 +1267,27 @@ def today_state(
         today = dt.date.today()
         dates = [d for d in pd.bdate_range(start, asof).date.tolist() if d != today]
         fetch = _market_curve_fetcher(market, mdp=mdp, n_jobs=n_jobs)
+
+        def _fail(reason: str) -> None:
+            for pair in pairs:
+                rows.append(failed_row(pair, reason, asof=asof, windows=windows,
+                                       lookback_days=lookback_days))
+
         try:
-            iv = vol_panel(VOL_CURVE_BY_MARKET[market], [VOL_STRUCTURE],
-                           start, asof,
-                           cache_path=Path(cache_dir) / "vol.parquet")
+            iv = vol_panel_fn(VOL_CURVE_BY_MARKET[market], [VOL_STRUCTURE],
+                              start, asof,
+                              cache_path=Path(cache_dir) / "vol.parquet")
         except Exception as exc:  # noqa: BLE001
-            logger.warning("%s: no swaption vols (%s: %s) -- skipping the "
-                           "market; the driver, the gate and the valuation all "
-                           "rest on them", market, type(exc).__name__, exc)
+            logger.warning("%s: no swaption vols (%s: %s) -- every pair in the "
+                           "market reports NO STATE; the driver, the gate and "
+                           "the valuation all rest on them",
+                           market, type(exc).__name__, exc)
+            _fail(f"no swaption vols for {market}: {type(exc).__name__}: {exc}")
             continue
         iv_col = VOL_STRUCTURE.replace(" ", "")
         if iv_col not in iv.columns:
             logger.warning("%s: vol panel has no %s column", market, iv_col)
+            _fail(f"vol panel for {market} has no {iv_col} column")
             continue
         iv_bp_day = iv[iv_col].astype(float)
 
@@ -899,18 +1300,38 @@ def today_state(
                 umep = umep_df["umep_bp_per_year"].astype(float)
 
         for pair in pairs:
-            greeks = greeks_with_cache(pair, dates, fetch_curves=fetch,
-                                       cache_dir=cache_dir)
+            try:
+                greeks = greeks_with_cache(pair, dates, fetch_curves=fetch,
+                                           cache_dir=cache_dir, panel_fn=panel_fn)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("%s: greeks panel failed (%s: %s)", pair.name,
+                               type(exc).__name__, exc, exc_info=True)
+                rows.append(failed_row(pair, f"greeks panel failed: "
+                                             f"{type(exc).__name__}: {exc}",
+                                       asof=asof, windows=windows,
+                                       lookback_days=lookback_days))
+                continue
             if greeks.empty or len(greeks) < 2:
-                logger.warning("%s: %d greeks rows -- skipped", pair.name,
+                logger.warning("%s: %d greeks rows -- no state", pair.name,
                                len(greeks))
+                rows.append(failed_row(
+                    pair, f"only {len(greeks)} priced dates in "
+                          f"{dates[0]}..{dates[-1]}" if dates else "no dates requested",
+                    asof=asof, windows=windows, lookback_days=lookback_days))
                 continue
             try:
                 rows.append(pair_state(pair, greeks, iv_bp_day, cfg=cfg,
-                                       umep=umep, windows=windows, asof=asof))
+                                       umep=umep, windows=windows, asof=asof,
+                                       lookback_days=lookback_days))
             except Exception as exc:  # noqa: BLE001
+                # A pair that cannot be stated still appears, saying why. It used
+                # to vanish with a log line, which made a data outage look
+                # exactly like an empty universe from the caller's side.
                 logger.warning("%s: no state (%s: %s)", pair.name,
                                type(exc).__name__, exc, exc_info=True)
+                rows.append(failed_row(pair, f"{type(exc).__name__}: {exc}",
+                                       asof=asof, windows=windows,
+                                       lookback_days=lookback_days))
 
     if not rows:
         return pd.DataFrame(columns=list(REQUIRED_OUTPUT_COLUMNS))
@@ -921,6 +1342,11 @@ def format_state(out: pd.DataFrame) -> str:
     """A human-readable block per row, verdict first. For notebooks and logs."""
     lines = []
     for _, r in out.iterrows():
+        if str(r["status"]) != "ok":
+            lines.append(f"{r['pair']:24s} {r['status']}\n"
+                         f"    reason        : {r['reason']}\n"
+                         f"    VERDICT       : {r['note']}")
+            continue
         lines.append(
             f"{r['pair']:24s} signal {r['signal_date'].date()} "
             f"(decided on {r['information_date'].date()})  "
