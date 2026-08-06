@@ -777,13 +777,30 @@ def carry_side_split(unit_carry: pd.Series, scale: pd.Series) -> dict:
 
     So the counterfactual is exact and costs nothing: had the book held the
     FLATTENER on every day it held anything, its carry would be
-    ``sum(unit_carry * |scale|)``. Measured on the real run that is negative in
-    all four markets (USD −748,645 / EUR −195,499 / JPY −283,200 / GBP −463,472)
-    against the actual +746,791 / +189,817 / +273,734 / +436,669. A uniform +1
-    and a uniform −1 are equally available; which one appears is decided
-    entirely by which side the valuation rule picks. The uniform carry sign is
-    therefore not weak evidence about the mechanism -- it is a restatement of
-    "BE/RV sits above 1.2 in every market".
+    ``sum(unit_carry * |scale|)``.
+
+    **It was computed on the SUPERSEDED run -- the one whose valuation switch
+    divided by a spread vol -- and it PREDICTED the correction's outcome before
+    the correction was made.** That is why it is worth more than the caveat it
+    replaced:
+
+    ===  ==========================  ==========================  =====================
+    ccy  actual carry, spread-denom  flattener-only counterfact.  actual, rate-denom
+    ===  ==========================  ==========================  =====================
+    USD  +746,791  (sign **+1**)     -748,645  (sign **-1**)      -139,752  (**-1**)
+    EUR  +189,817  (sign **+1**)     -195,499  (sign **-1**)      -109,386  (**-1**)
+    JPY  +273,734  (sign **+1**)     -283,200  (sign **-1**)      -206,358  (**-1**)
+    GBP  +436,669  (sign **+1**)     -463,472  (sign **-1**)       -87,986  (**-1**)
+    ===  ==========================  ==========================  =====================
+
+    The counterfactual said "if this rule held flatteners the carry sign would
+    be -1 in all four markets". Correcting the denominator made the rule hold
+    flatteners (89-99.7% of held days), and the carry sign IS -1 in all four.
+
+    A uniform +1 and a uniform -1 are equally available; which one appears is
+    decided entirely by which side the valuation rule picks. **A uniform carry
+    sign, of either sign, is zero evidence about the mechanism** -- it restates
+    which side the valuation switch is on.
     """
     c = pd.Series(unit_carry).astype(float)
     s = pd.Series(scale).astype(float).reindex(c.index).fillna(0.0)

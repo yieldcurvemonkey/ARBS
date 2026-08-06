@@ -48,8 +48,10 @@ import pandas as pd
 from RVUtils.StrikelessVol.conventions import VolQuote
 
 __all__ = [
+    "UNDERLYING_IMPLIED",
     "UNDERLYING_RATE",
     "UNDERLYING_SPREAD",
+    "as_implied_vol",
     "realized_vol_bp_day",
     "spread_vol_bp_day",
     "realized_quote",
@@ -63,6 +65,10 @@ __all__ = [
 #: magnitude on any single observation.
 UNDERLYING_RATE: str = "rate"
 UNDERLYING_SPREAD: str = "spread"
+#: Not built here -- implied vol arrives from ``panels.vol_panel`` as a provider
+#: print. :func:`as_implied_vol` stamps it for callers who want
+#: :func:`be_over_implied` to be as strict as :func:`be_over_realized`.
+UNDERLYING_IMPLIED: str = "implied"
 
 _UNDERLYING_KEY = "underlying"
 
@@ -159,6 +165,20 @@ def be_over_realized(be_bp_day: pd.Series, rv_bp_day: pd.Series, *,
       impossible;
     * a stated ``denominator`` that disagrees with the label raises.
 
+    **The unlabelled branch is about the MESSAGE, not about admission, and the
+    difference was measured.** Weakening it to
+    ``if label is None and denominator is None:`` -- the sympathetic edit
+    someone makes the first time a dropped label bites them -- was applied to
+    this file and run against the full nine-case contract matrix: it accepts
+    **0** cases this version refuses. An unlabelled series with a stated
+    ``denominator`` still falls through to the mismatch branch (``"rate" !=
+    None``) and is refused there. What the weakening actually costs is the
+    diagnosis: the caller is told "you said ``denominator='rate'`` but the
+    series is labelled ``None``", which points at the argument rather than at
+    the missing builder call. Both the refusal AND which message fires are
+    pinned, so that edit goes red -- see
+    ``test_the_unlabelled_branch_diagnoses_the_missing_builder``.
+
     Caveat (see the module docstring's mechanism note): ``rv_bp_day`` --
     whether from ``realized_vol_bp_day`` or ``spread_vol_bp_day`` -- is
     measured on this package's spline-derived forward par rates, which are
@@ -205,6 +225,50 @@ def be_over_realized(be_bp_day: pd.Series, rv_bp_day: pd.Series, *,
     return _ratio(be_bp_day, rv_bp_day)
 
 
+def as_implied_vol(iv_bp_day: pd.Series, *, window: str = "atm") -> pd.Series:
+    """Label a provider's implied-vol series so :func:`be_over_implied` is strict.
+
+    This module does not BUILD implied vol -- it arrives from
+    ``panels.vol_panel`` as a provider print -- so unlike the two realized
+    builders there is no natural place for the label to be stamped. This is
+    that place, for a caller who wants the same strictness
+    :func:`be_over_realized` enforces.
+    """
+    out = pd.Series(iv_bp_day).astype(float)
+    out.attrs.update({"measure": "implied", _UNDERLYING_KEY: UNDERLYING_IMPLIED,
+                      "window": str(window)})
+    return out
+
+
 def be_over_implied(be_bp_day: pd.Series, iv_bp_day: pd.Series) -> pd.Series:
-    """<1 means the embedded vol is cheap versus the swaption surface."""
+    """<1 means the embedded vol is cheap versus the swaption surface.
+
+    **The same swap is available here as in :func:`be_over_realized`** -- the
+    denominator is a bp/day vol like every other series in this module, and
+    passing a REALIZED rate vol or a SPREAD vol in place of the implied print
+    produces a plausible-looking ratio that means something else entirely. So a
+    denominator carrying either of this module's own labels is REFUSED.
+
+    **This is deliberately weaker than :func:`be_over_realized`, and the reason
+    is structural rather than an oversight.** There, every legitimate
+    denominator is produced by a builder in this module, so requiring the label
+    costs nothing and closes the hole completely -- and the failure that
+    actually happened was a hand-rolled series that no builder ever touched.
+    Here the legitimate denominator comes from OUTSIDE the module (a provider
+    panel), so requiring a label would make every provider boundary a labelling
+    site rather than making anything safer. An unlabelled series is therefore
+    accepted, and :func:`as_implied_vol` is offered for callers who want the
+    strict form. What is closed is the swap that is actually available: putting
+    one of this module's OWN series under the implied ratio.
+    """
+    label = (getattr(iv_bp_day, "attrs", None) or {}).get(_UNDERLYING_KEY)
+    if label in (UNDERLYING_RATE, UNDERLYING_SPREAD):
+        raise ValueError(
+            f"be_over_implied's denominator is a {label!r} vol, not an implied "
+            "one. This ratio compares the package's breakeven to the SWAPTION "
+            "SURFACE; a realized rate vol or a slope vol under it silently "
+            "answers a different question. Pass the implied print (optionally "
+            "through vol_metrics.as_implied_vol), or use be_over_realized if "
+            "the realized comparison is what you want."
+        )
     return _ratio(be_bp_day, iv_bp_day)

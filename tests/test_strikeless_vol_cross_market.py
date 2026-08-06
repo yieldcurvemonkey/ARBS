@@ -135,7 +135,10 @@ def test_making_the_span_exclusive_at_its_endpoints_changes_nothing():
         return frame.sort_index()
 
     rng = np.random.default_rng(0)
-    for _ in range(300):
+    # 3,000, matching the number commit 6c4a00ac's message quotes. That commit
+    # said "3,000 randomised frames" while the committed test ran 300 -- the
+    # 3,000 was a one-off script. The claim is now the one the suite enforces.
+    for _ in range(3_000):
         n = int(rng.integers(3, 25))
         idx = _idx(n)
         cols = {}
