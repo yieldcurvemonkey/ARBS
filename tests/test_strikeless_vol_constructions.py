@@ -742,3 +742,16 @@ def test_the_comparison_records_what_it_was_run_with(comparison):
     assert attrs["fly"]["fly_tenors"] == ("2Y", "7Y", "30Y")
     assert attrs["fly"]["fly_fwd"] == "1Y"
     assert attrs["reference_date"] == REF
+
+
+def test_the_default_horizon_is_one_calendar_day(comparison):
+    """One CALENDAR day, matching ``greeks.compute_greeks``.
+
+    A business-day step jumps three calendar days over a weekend and four over
+    a holiday-adjacent Friday, and the dollar roll -- and every carry-per-vega
+    built on it -- grows with the gap. The unit on this table would then be
+    "per day" on Tuesdays and "per three days" on Mondays.
+    """
+    assert pd.Timestamp(comparison.attrs["next_date"]) == pd.Timestamp(REF) + pd.Timedelta(
+        days=1
+    )
