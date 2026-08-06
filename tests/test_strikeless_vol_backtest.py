@@ -1026,6 +1026,55 @@ def test_the_history_response_allowance_is_the_frequency_ladders_top_horizon():
         "if this ever starts failing the method got stronger, not the test")
 
 
+def test_the_artifact_ties_value_leg_refuses_an_identical_nan_pattern():
+    """The artifact tie has a NaN-pattern leg and a VALUE leg, and every other
+    wrong-source test also has a wrong NaN pattern -- so dropping the value leg
+    kept the whole suite green (the reviewer's mutation B2). The leg WORKS; it
+    was simply not pinned, which is the same shape as MEDIUM-4 one level down.
+
+    This source is the honest builder's own output plus 1e-5: identical index,
+    identical NaN pattern, identical transform, and a builder that passes the
+    causality probe outright (source head move 0.0). Nothing but the value leg
+    can refuse it.
+    """
+    spread, drivers = _factor_frame()
+    honest = expanding_changes_residual(spread, drivers, min_periods=252).residual
+    perturbed = honest + 1e-5
+
+    # the premise: only the values differ
+    assert (honest.isna() == perturbed.isna()).all()
+    assert honest.isna().sum() > 200          # there IS a NaN pattern to match
+    assert honest.index.equals(perturbed.index)
+    assert float((perturbed - honest).abs().max()) == pytest.approx(1e-5, rel=1e-6)
+
+    audit = audit_trailing_statistic(
+        _drift_t_from(perturbed), perturbed, label="drift_t",
+        recompute=lambda s: _drift_t_from(s),
+        source_fn=_changes_builder(), source_input=spread, source_drivers=drivers)
+    assert audit["matched"] is True                       # the transform holds
+    assert audit["source_max_abs_diff"] == 0.0            # the BUILDER is causal
+    assert audit["source_responds_to_history"] is True
+    assert audit["source_is_builder_output"] is False     # ... refused on value
+    assert audit["source_artifact_max_abs_diff"] == pytest.approx(1e-5, rel=1e-6)
+    assert audit["source_causal"] is False
+
+    panel = _panel_for(spread, drivers)
+    panel["drift_t"] = _drift_t_from(perturbed)
+    with pytest.raises(ValueError, match="is not what `changes_resid_fn` produces"):
+        causal_signals(panel, SignalConfig(), spread_bp=spread, drivers=drivers,
+                       min_periods=252, changes_resid=perturbed,
+                       changes_resid_fn=_changes_builder())
+
+    # and the tolerance is where FIT_MATCH_TOL says it is, not wherever the
+    # first refusal happens to land: 1e-7 is float noise and is accepted.
+    inside = audit_trailing_statistic(
+        _drift_t_from(honest + 1e-7), honest + 1e-7, label="drift_t",
+        recompute=lambda s: _drift_t_from(s),
+        source_fn=_changes_builder(), source_input=spread, source_drivers=drivers)
+    assert inside["source_is_builder_output"] is True
+    assert inside["source_causal"] is True
+
+
 def test_an_honest_builder_beside_a_leaky_series_is_refused():
     """The same defect one level down: audit a builder, then build the signal
     from a different object. That is how `fit=` leaked in the first place."""
