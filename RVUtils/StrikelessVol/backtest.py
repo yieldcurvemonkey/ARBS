@@ -917,15 +917,20 @@ def audit_causal_betas(
     on the magnitude: a boundary artefact satisfying it opens no hole, because
     a builder that responds ONLY at the boundary now fails this leg.
 
-    **Scope limit of the method, stated where the certificate is read.** A
-    single cut at ``1 - shock_frac`` certifies only that the last
-    ``shock_frac`` of the sample does not leak into the first part. Leakage
-    *within* the tail region -- a fit at date ``t`` late in the sample seeing
-    ``t+1`` -- is invisible to this probe **by construction**, because both the
-    shocked and unshocked runs contain that leak identically. Two or three cuts
-    would narrow the blind spot. This is a property of the one-cut method, not a
-    defect of this implementation, and it means a passing ``causal`` is evidence
-    about a boundary rather than a proof of causality everywhere.
+    **Scope limit of the method, and it is not abstract.** A single cut at
+    ``1 - shock_frac`` certifies only that the last ``shock_frac`` of the sample
+    does not leak into the first part. Leakage *within* the tail region is
+    invisible to this probe **by construction**, because both the shocked and
+    unshocked runs contain that leak identically. Concretely: a builder whose
+    fit at row ``i`` uses ``hist = values[:i + 1]`` -- a regression that
+    literally sees today's observation -- is ACCEPTED here, with a head move of
+    **0.0**. The head is ``idx[:cut]`` and the shock starts at ``cut``, so row
+    ``cut-1``'s inclusive history stops one row short of the shock and the
+    off-by-one never crosses the boundary the probe watches. Two or three cuts
+    would narrow this; one cut cannot close it, and no amount of work on the
+    legs above changes that. A passing ``causal`` is evidence about ONE boundary,
+    not proof of causality everywhere. See :func:`causal_signals` for what that
+    means for the shipped builders.
 
     Cost note: ``fit_fn`` is called **three** times (baseline, tail-shocked,
     head-shocked). See :func:`causal_signals` for why the answer to that cost is
@@ -1361,6 +1366,38 @@ def causal_signals(
     causal; it makes three of its five inputs causal. See
     :func:`audit_trailing_statistic` for why those two are not wired in and
     what "trailing by construction" is and is not worth.
+
+    **What ``expanding_betas=True`` does NOT mean, concretely.** Every causality
+    verdict here rests on :func:`audit_causal_betas`, which cuts the sample once
+    (at 75%) and asks whether shocking one side moves the other. Leakage that
+    lives ENTIRELY INSIDE the tail region is invisible to that probe **by
+    construction** -- both the shocked and the unshocked run contain it
+    identically -- and this is not a hypothetical:
+
+        a caller-supplied builder whose fit at row ``i`` uses
+        ``hist = values[:i + 1]`` -- an OLS that literally sees today's
+        observation before predicting it -- is **ACCEPTED**, with a source head
+        move of exactly **0.0**, and is certified end to end through
+        ``changes_resid_fn=``.
+
+    The reason is an off-by-one that never crosses the cut: the head is
+    ``idx[:cut]``, the shock starts at ``cut``, so row ``cut-1``'s inclusive
+    history stops one row short of the shocked data. The probe sees nothing
+    because there is nothing at the boundary to see, not because the fit is
+    causal. Two or three cuts would narrow this; one cut cannot close it, and
+    no strengthening of the individual legs will.
+
+    The distinction a reader must not have to infer: the SHIPPED builders
+    (:func:`factors.expanding_residual`,
+    :func:`factors.expanding_changes_residual`, both on
+    ``factors._walk_forward``) are protected against exactly this by a **unit
+    test, not by this audit** --
+    ``test_expanding_changes_residual_is_a_changes_fit_not_a_levels_one``
+    pins the residual at ``t`` against a hand-computed OLS on rows STRICTLY
+    BEFORE ``t``, and mutating ``values[:i]`` to ``values[:i + 1]`` fails it.
+    A builder passed in as ``fit_fn=``, ``changes_resid_fn=`` or
+    ``iv_bp_day_fn=`` carries no such protection: for those, the certificate is
+    a statement about one boundary, and the caller owns the rest.
 
     Every optional argument defaults to ``None`` and changes no behaviour when
     omitted -- except that the certificate then says, in the frame's own
