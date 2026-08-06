@@ -4966,6 +4966,224 @@ git -C C:\Users\chris\clee\ARBS-sv commit -m "docs(sv): research and backtest no
 
 ---
 
+---
+
+# Addendum tasks (2026-08-06) — carry-adjusted vol, the grail quadrant, the spot-fly coordinate system
+
+**Ordering: Tasks 24–28 run BEFORE Task 23.** H11–H15 enter the global DSR trial
+count, so a findings document written first would publish a count the addendum
+invalidates — the precise staleness defect Task 22's runner hit when it copied a
+constant out of a file that later moved. Task 23 runs last and quotes the final
+count.
+
+**Constraints, not topics.** Task 13 (the zero-convexity twin; ~95.6% of package
+daily variance is first-order slope; the distributional positive control is
+non-discriminating) and Task 15 (H6 downgraded under Engle–Granger criticals,
+φ ≈ 0.966–0.985, 20–47bd half-lives, no net-of-cost expectancy) are settled.
+Every new tradeable claim inherits the Task 15 binding requirement set verbatim:
+expanding betas, entry-vintage hedges, rolling-σ z, spread-leg P&L, distinct
+episodes, and a random-walk placebo through the identical pipeline.
+
+**Three collisions with already-measured results.** Carry these into the tasks
+that meet them rather than rediscovering them:
+
+1. **Peter's 1y-forward 2-7-30 fly is unpriceable on the USD curve as built** —
+   the 1y-forward 30y wing matures at 31y and the curve's final node is 30y.
+   Task 20 measured this and substituted 2-7-29. Tasks 24 and 27 must state which
+   structure they price and what the substitution costs.
+2. **H9 already rejected a fly, but not this claim.** Task 20 tested a fly as a
+   *factor hedge* and rejected it: one free scalar cannot touch a PC1-dominated
+   residual, theta went positive on 9.5% of dates, and the round trip was 19%
+   larger for a 5.3% norm cut. H14 tests a fly as a *carry engine* — a different
+   claim that the H9 result does not settle, and must not be reported as settling.
+3. **The per-leg cost ruling reverses.** I ruled "record, don't build" on the
+   fact that `replication.simulate` charges per package while
+   `cost_bp_round_trip` charges per traded leg DV01, on the grounds that the fly
+   was rejected on independent grounds. H14 requires four-ledgering a package
+   *with* a fly leg, so that mismatch is now binding and must be built. Doing so
+   re-prices published two-leg results: re-run them and show both.
+
+**Ambiguity is parameterised or declared, never backfilled.** "5% delta hedges
+at the wings" has at least two readings — hedging in ~5%-of-risk increments at
+the fly's wing points, or wing-threshold triggers. Implement both as
+parameterisations and report sensitivity, or declare untestable. Do not invent
+precision the source did not provide.
+
+**Already adjudicated, do not relitigate:** the "every time you take profit"
+claim is true of the harvest ledger only; total P&L is MTM-dominated (H10 as
+measured, ledger decomposition is the arbiter). The macro claim — that
+10y10y/20y10y "has absolutely nothing to do with fiscal policy" — stands only
+for the expectations component; the funding-premium channel (fiscal → supply →
+dealer inventories → UMEP → swap-forward slope) is a live second factor. Carry
+the amendment, not the original.
+
+---
+
+### Task 24: The exact decomposition and spot-fly replication (H11)
+
+**Files:** Create `RVUtils/StrikelessVol/decomposition.py`; Test
+`tests/test_strikeless_vol_decomposition.py`.
+
+**Interfaces:** Consumes `greeks` (the bucketed DV01 ladder), `universe`,
+`costs`, and the PCA hedge machinery. Produces `duration_weights(pair) -> dict`,
+`ladder_replication(pair, curve, *, buckets) -> pd.Series`,
+`replication_basis(pair, curve_panel, *, structure) -> pd.DataFrame`.
+
+Under a flat-annuity, no-discounting approximation `f(10,20) ≈ 2·s20 − s10` and
+`f(20,30) ≈ 3·s30 − 2·s20`, so `spread = 20y10y − 10y10y ≈ 1·s10 − 4·s20 + 3·s30`:
+the flattener is **receive 1×10s, pay 4×20s, receive 3×30s** — a misweighted
+**1:4:3** fly, long wings against a double-weight belly, nothing like 1:2:1.
+
+**That formula is narrative and unit-test material only.** Discounting tilts
+1:4:3 materially. Solve the replication off the **bucketed DV01 ladder the
+greeks contract already stores**, and pin the toy formula only as the
+zero-discounting limit — if the solved weights do not approach 1:4:3 as
+discounting is removed, one of the two is wrong and that is a finding.
+
+Measure the daily basis of the exact 10-20-30 replication and of the liquid
+proxies **5-10-30** and **2-7-30 (or 2-7-29, stating which)** at PCA weights.
+The proxies' wings re-import front and belly cycle factors that the ultra-long
+forwards do not carry — attribute the basis to those factors rather than
+reporting it as noise. Price the spot-fly hedge path and the forward-space hedge
+path **separately** through the cost model: the execution claim is that 25bp
+delta hedges execute in liquid spot flies instead of wide forward-swap markets.
+
+**Falsified if** the exact replication basis is large (the decomposition is
+wrong), or the liquid proxy is no cheaper once basis costs are included.
+
+---
+
+### Task 25: Carry-adjusted vol as two columns, and H12
+
+**Files:** Modify `RVUtils/StrikelessVol/vol_metrics.py` and
+`RVUtils/StrikelessVol/report.py`; Test
+`tests/test_strikeless_vol_carry_adjusted.py`.
+
+Task 13 measured that ~95.6% of package daily variance is first-order slope, so
+"carry-adjusted vol" for this family is **two ratios, not one**:
+
+- **Column A — linear:** `annual roll ÷ (spread daily vol × √252)`, per pair per
+  construction. Prices the component that dominates the variance.
+- **Column B — convexity:** `BE/realized` and `BE/implied`, as already built.
+  Prices the embedded option, and its predictive target is the **harvest
+  ledger**, not total P&L.
+
+Both columns appear per pair, per market, per construction, in the league tables
+and in the daily runner state, **beside the drift state** — positive carry with
+hostile drift is not positive carry. Signal 1 remains Column B. **Column A is a
+companion diagnostic and an H12 test object, not a trading rule** until it earns
+one under the binding requirements.
+
+Column A's denominator is a **spread** vol and Column B's is a **rate** vol.
+`vol_metrics` now refuses the wrong one — use the labelled builders, and add
+Column A's own label rather than defeating the guard.
+
+**H12:** predictive regressions, per column, per target — package returns for A,
+harvest ledger for B — with HAC errors and vintage-honest inputs. **Falsified
+if** neither column adds predictive content beyond the other and beyond drift.
+
+---
+
+### Task 26: The grail-state detector and H13
+
+**Files:** Modify `RVUtils/StrikelessVol/strategy.py` and `report.py`; Test
+`tests/test_strikeless_vol_grail.py`.
+
+Classify every (pair, construction, market, date) by sign of net vol exposure
+(vega-beta and/or `Γ_net`) × sign of all-in daily roll, net of the fly leg where
+one exists, reporting gross and net of amortised costs. The **grail quadrant** is
+long vol with non-negative theta. Because of Task 13 the reported classification
+carries a **third axis**: the drift state. The honest quadrant is (carry, vol
+exposure, drift).
+
+Ship a **detector**: daily quadrant occupancy per (pair, construction, market)
+over full history, fraction of time in-quadrant, and transition dates.
+
+**H13 event study:** conditional forward risk-adjusted returns of long-convexity
+entries in grail states against unconditional entries, controlling for drift and
+vol level. **Descriptive first.** A trading rule only if it survives the binding
+requirements and the DSR count. **Falsified if** grail-state entries are
+indistinguishable from unconditional ones.
+
+**Why the state can exist without being an arbitrage**, to be encoded in the
+findings rather than assumed: the seller is mandate-driven flow (ALM/VA/LDI
+receiving pins the belly rich, leaving wings cheap, so a long-wings misweighted
+fly can be simultaneously carry-positive and long convexity). The state is
+therefore **episodic and flow-driven**, and the compensation is basis, aging and
+unwind risk — there is no terminal payoff, so the vega risk is always realised at
+exit.
+
+**Priors to test, never to seed the answer:** USD pure flattener currently
+out-of-quadrant (carry negative at the −58bp inversion); JPY 10y10y/20y10y
+plausibly in or near it after the lifer-exit steepening; EUR tactically
+in-quadrant only around flow windows; the USD steepener theta-positive but short
+vol by construction — the wrong quadrant and a different trade.
+
+---
+
+### Task 27: The manufactured package (H14)
+
+**Files:** Modify `RVUtils/StrikelessVol/constructions.py` and
+`RVUtils/StrikelessVol/replication.py` (the per-leg cost propagation); Test
+`tests/test_strikeless_vol_manufactured.py`.
+
+Construct Peter's package: the 10y10y/20y10y DV01-neutral flattener plus a
+**received 1y-forward 2-7-30 fly** (2-7-29 if the wing cannot be priced — state
+which and what it costs). Solve the fly weights with the existing PCA hedge
+solver and **test the ~5:1 prior against the solved weights** rather than
+assuming it. The claim under test is that this leaves the book **long vega,
+short gamma** — a calendar built from linear instruments, where the flattener
+supplies far-dated vega and the received fly supplies theta.
+
+**Build the per-leg cost propagation first** (see collision 3 above), re-run the
+published two-leg results through it, and show both sets of numbers.
+
+Four-ledger the package. Report theta sign in USD today, the **fraction of the
+pure flattener's vega-beta retained**, and the added factor risk via residual PCA
+exposure. **Falsified if** the fly's carry does not cover the flattener's bleed,
+or the factor risk and cost exceed the carry gain, or vega retention is poor.
+
+Implement both readings of "5% delta hedges at the wings" as parameterisations
+and report sensitivity, or declare the instruction untestable.
+
+---
+
+### Task 28: Aging decay (H15) and the report-layer row
+
+**Files:** Modify `RVUtils/StrikelessVol/replication.py` (aging) and `report.py`
+and `BT/signals/strikeless_vol.py`; Test `tests/test_strikeless_vol_aging.py`.
+
+**H15:** long-dated forward vol positions are claimed to age slowly — "in 3 years
+that's still 7y10y", and selling 10y10y GBP vol at "2 norms a day" stays a
+position worth holding. In the aging engine, measure `Γ_net` and vega-beta of an
+aging position as a **fraction of inception, by year held, per pair**.
+**Falsified if** convexity and vega decay fast enough that multi-year back-book
+holding retains little exposure.
+
+**The report-layer row**, which is the shape of "done" for this addendum. Per
+(pair, market, construction), one headline row:
+
+`Column A | Column B | drift state | quadrant (carry sign × vol sign × drift) |
+grail flag | current rule sign | harvest:|MTM| ratio | basis to spot-fly
+replication`
+
+That row belongs in the league tables **and** in the daily runner's state. It is
+the desk head's sentence — "the game is mostly carry and vol" — rendered as the
+system's daily output, with the convexity, drift and replication caveats this
+build has measured attached to it rather than assumed away.
+
+---
+
+**Task 23 is amended by this addendum:** it runs **after** Tasks 24–28, its
+findings must answer H11–H15 alongside H1–H10, it must quote the **final** DSR
+trial count including every addendum grid, and it must render the §8 report-layer
+row. It must also record the convergence worth noting: after Task 13 removed the
+distributional signature and Task 15 downgraded the fast overlay, the surviving
+edges of this system are precisely the desk head's two — the roll ledger and the
+vol valuation.
+
+---
+
 ## Self-Review Notes
 
 Checked against the spec:
