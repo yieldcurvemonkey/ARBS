@@ -57,9 +57,11 @@ _MISSING = object()
 def _resolve_kwarg_name(func: Any, candidates: tuple[str, ...]) -> str:
     """Return the first name in ``candidates`` that ``func`` actually accepts.
 
-    Falls back to ``candidates[0]`` when the signature cannot be read or the
-    callable takes ``**kwargs`` (in which case any name is forwarded and the
-    preferred, newest name is the right guess).
+    Candidates are ordered newest-first. Falls back to ``candidates[0]`` when no
+    name matches -- which covers both an unreadable signature and a callable that
+    takes ``**kwargs`` (any name is forwarded, so the newest is the right guess).
+    Nothing downstream depends on that fallback today: rateslib declares every
+    name explicitly, which is why a wrong one raises rather than being ignored.
     """
     try:
         params = inspect.signature(func).parameters
@@ -70,9 +72,6 @@ def _resolve_kwarg_name(func: Any, candidates: tuple[str, ...]) -> str:
         if name in params:
             return name
 
-    if any(p.kind is inspect.Parameter.VAR_KEYWORD for p in params.values()):
-        return candidates[0]
-
     return candidates[0]
 
 
@@ -81,6 +80,7 @@ def _resolve_kwarg_name(func: Any, candidates: tuple[str, ...]) -> str:
 RATE_FIXINGS_KWARG: str = _resolve_kwarg_name(
     rl.IRS.__init__, ("leg2_rate_fixings", "leg2_fixings")
 )
+
 
 def _accepts_named(func: Any, name: str) -> bool:
     """True when ``func`` declares ``name`` as an actual named parameter."""
