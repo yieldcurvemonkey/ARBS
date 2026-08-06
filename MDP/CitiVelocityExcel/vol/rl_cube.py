@@ -60,6 +60,7 @@ from Query.Base.bachelier import bachelier_greeks_fd, bachelier_price, implied_n
 __all__ = [
     "CitiVeloNormalVolCube",
     "build_rl_vol_cube",
+    "convention_for_cube",
     "SurfaceBackendError",
     "EXPIRY_DAY_COUNT",
     "SWAPTION_RIGHTS",
@@ -246,7 +247,7 @@ class CitiVeloNormalVolCube:
         self._interpolation = str(interpolation).lower()
 
         self.forecast_curve, self.disc_curve = _resolve_curves(rl_curve, disc_curve)
-        self.convention = _convention_for_cube(cube, citi_index=citi_index)
+        self.convention = convention_for_cube(cube, citi_index=citi_index)
         self.calendar = self.convention.rl_calendar_object()
         if self.convention.approximate:
             _logger.warning(
@@ -548,9 +549,17 @@ def _resolve_curves(rl_curve: Any, disc_curve: Any = None) -> Tuple[Any, Any]:
     )
 
 
-def _convention_for_cube(
+def convention_for_cube(
     cube: SwaptionCubeData, *, citi_index: Optional[str] = None
 ) -> CurveConvention:
+    """The underlying-swap conventions for a vol cube's currency.
+
+    Public because :mod:`MDP.CitiVelocityExcel.vol.rl_native_cube` resolves the
+    underlying through this same call - if the two backends read different
+    conventions their forwards diverge and the comparison in
+    :func:`~MDP.CitiVelocityExcel.vol.rl_native_cube.compare_backends` would be
+    measuring the wrong thing.
+    """
     token = str(citi_index).upper() if citi_index else VOL_CCY_DEFAULT_OIS_INDEX.get(cube.currency.upper())
     if not token:
         raise CitiVelocityError(
@@ -570,8 +579,9 @@ def build_rl_vol_cube(
     citi_index: Optional[str] = None,
     notional: float = 1e8,
     disc_curve: Any = None,
-) -> CitiVeloNormalVolCube:
-    """Build a :class:`CitiVeloNormalVolCube`.
+    backend: str = "hand",
+) -> Any:
+    """Build a Citi swaption cube on either rateslib backend.
 
     Parameters
     ----------
@@ -580,13 +590,53 @@ def build_rl_vol_cube(
     rl_curve
         Solved rateslib curve, ``RLCurveBase``, or ``(forecast, discount)``.
     interpolation
-        ``'spline'`` or ``'linear'``; see
-        :attr:`CitiVeloNormalVolCube.interpolation_used` for what was really used.
+        ``'spline'`` or ``'linear'`` for the hand-built backend; see
+        :attr:`CitiVeloNormalVolCube.interpolation_used` for what was really
+        used. On the native backend it selects the strike-axis spline order.
+    backend
+        - ``'hand'`` (default): :class:`CitiVeloNormalVolCube`, built from
+          ``PPSplineF64`` and priced through ``Query.Base.bachelier``. Works on
+          every supported rateslib.
+        - ``'native'``: :class:`~MDP.CitiVelocityExcel.vol.rl_native_cube.NativeSwaptionCube`
+          over ``rl.IRSplineCube`` and ``rl.IRSCall``, which carries AD risk and
+          can be calibrated in a ``Solver``. Needs rateslib >= 2.7.0 and raises
+          if it is not there.
+        - ``'auto'``: native when this rateslib has it, hand otherwise.
+
+    The default stays ``'hand'`` because it is the tested one and because the
+    native path needs a rateslib whose IR vol is still labelled Beta upstream.
+    The two agree on price to ~1e-9 relative - see
+    :func:`~MDP.CitiVelocityExcel.vol.rl_native_cube.compare_backends`.
 
     Returns
     -------
-    CitiVeloNormalVolCube
+    CitiVeloNormalVolCube or NativeSwaptionCube
     """
+    choice = str(backend).strip().lower()
+    if choice not in {"hand", "native", "auto"}:
+        raise ValueError(f"backend must be 'hand', 'native' or 'auto', got {backend!r}.")
+
+    if choice != "hand":
+        from MDP.CitiVelocityExcel.vol.rl_native_cube import (
+            RATESLIB_NATIVE_AVAILABLE,
+            build_rl_native_swaption_cube,
+        )
+
+        if choice == "native" or RATESLIB_NATIVE_AVAILABLE:
+            return build_rl_native_swaption_cube(
+                cube=cube,
+                rl_curve=rl_curve,
+                # None lets native_spline_order() downgrade a short strike axis to
+                # linear, matching what this class does with _MIN_SPLINE_SITES.
+                spline_order=None if str(interpolation).lower() == "spline" else 2,
+                citi_index=citi_index,
+                notional=notional,
+                disc_curve=disc_curve,
+            )
+        _logger.info(
+            "backend='auto' fell back to the hand-built cube: this rateslib has no IRSplineCube."
+        )
+
     return CitiVeloNormalVolCube(
         cube=cube,
         rl_curve=rl_curve,

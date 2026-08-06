@@ -332,6 +332,35 @@ def case_units() -> None:
         print("    *** units guard PASSED decimal quotes declared as bp - THE GUARD IS BROKEN ***")
 
 
+def case_native(cube: SwaptionCubeData, rl_curve) -> None:
+    """The rateslib-native backend, and whether it agrees with the hand-built one."""
+    from MDP.CitiVelocityExcel.vol.rl_native_cube import (
+        RATESLIB_NATIVE_AVAILABLE,
+        compare_backends,
+    )
+
+    if not RATESLIB_NATIVE_AVAILABLE:
+        print("(n) rl.IRSplineCube not present (needs rateslib >= 2.7.0) - skipped.")
+        return
+
+    frame = compare_backends(
+        cube=cube,
+        rl_curve=rl_curve,
+        notional=NOTIONAL,
+        expiries=["1Y", "5Y"],
+        tenors=["2Y", "10Y", "30Y"],
+    )
+    vega_rel = (frame["vega_diff"].abs() / frame["hand_vega"].abs()).max()
+    print(f"(n) native rl.IRSplineCube + rl.IRSCall vs the hand-built cube, {len(frame)} nodes:")
+    print(f"    max |vol - Citi quote|, native   : {frame['citi_vol_err_bp'].abs().max():.3e} bp")
+    print(f"    max |forward difference|         : {frame['forward_diff_bp'].abs().max():.3e} bp")
+    print(f"    max relative price difference    : {frame['price_rel'].max():.3e}")
+    print(f"    max relative vega difference     : {vega_rel:.3e}")
+    print("    (the vega residual is the +/-0.5bp central difference the native vega uses;")
+    print("     it does NOT read rateslib's analytic vega, which is timed off the CURVE and")
+    print("     is wrong by ~0.14%/day when the cube's as_of and the curve's first node differ)")
+
+
 def case_g() -> None:
     """What the harvest actually covers - the constraint on every other case."""
     print("(g) catalog coverage of RATES.VOL (computed, not stored):")
@@ -359,6 +388,8 @@ def main() -> int:
     rlc, _ = case_c(cube, rl_curve)
     print()
     case_d(built, rlc, ql_handle)
+    print()
+    case_native(cube, rl_curve)
     print()
     case_e()
     print()

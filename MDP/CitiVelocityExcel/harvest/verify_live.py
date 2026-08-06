@@ -25,10 +25,33 @@ It is DELIBERATELY SHORT - roughly a dozen ``CV*`` calls. It drives the user's o
 Excel process, and the risk of a long unattended run is not worth the marginal
 information. Do not add a sweep here; and never ``Stop-Process`` it mid-call,
 which wedges the OLE server for ~15 minutes.
+
+``--vol-compare``
+-----------------
+A second, separate mode that pulls a REAL swaption cube and reconciles the two
+rateslib backends on it::
+
+    <env>/python.exe MDP/CitiVelocityExcel/harvest/verify_live.py --vol-compare
+
+It is the live counterpart of ``tests/test_citivelo_native_vol_cube.py``, which
+can only ever prove the two backends agree on data this repo invented. Here they
+are handed Citi's own quotes and Citi's own curve, and it reports three separate
+things that are easy to conflate:
+
+* whether each backend reproduces the **quoted vol** at every node (a
+  transformation bug shows up here and nowhere else);
+* whether the two agree on **price and vega** (an implementation bug);
+* how our curve-implied ATM forward compares with **Citi's own published
+  forward** (``RATES.OIS.<idx>.FWD.<expiry>.<tenor>``). Citi measures its strike
+  offsets from its forward, not ours, and a gap there slides the whole smile
+  along the strike axis without changing a single node vol.
+
+Roughly 5 ``CV*`` calls on the default grid. It does not write to the cache.
 """
 
 from __future__ import annotations
 
+import argparse
 import datetime
 import pathlib
 import sys
@@ -49,13 +72,180 @@ CONTROLS = (
 )
 
 
+#: The grid --vol-compare pulls. Small on purpose: 4x4x6 skew plus 16 ATM tags is
+#: 112 tags, which CVTSHIST serves in 3 calls at the 44-tag chunk size.
+VOL_EXPIRIES = ("1Y", "2Y", "5Y", "10Y")
+VOL_TENORS = ("2Y", "5Y", "10Y", "30Y")
+VOL_OFFSETS = (-100.0, -50.0, -25.0, 25.0, 50.0, 100.0)
+
+
 def _rule(title: str) -> None:
     print("\n" + "=" * 78)
     print(title)
     print("=" * 78)
 
 
+def vol_compare(client, currency: str = "USD", citi_index: str = "USD_SOFR") -> int:
+    """Reconcile both rateslib vol backends on a real Citi cube."""
+    import numpy as np
+
+    from MDP.CitiVelocityExcel import tags as T
+    from MDP.CitiVelocityExcel.curves import build_rl_ois_curve, par_reprice_errors_bp
+    from MDP.CitiVelocityExcel.vol import (
+        RATESLIB_NATIVE_AVAILABLE,
+        build_rl_native_swaption_cube,
+        build_rl_vol_cube,
+        compare_backends,
+        fetch_cube,
+    )
+
+    _rule("V1. the curve the strikes are measured from")
+    if not RATESLIB_NATIVE_AVAILABLE:
+        print("  this rateslib has no IRSplineCube (needs >= 2.7.0) - nothing to compare.")
+        return 4
+    grid_tags = T.ois_par_grid(citi_index)
+    grid = client.fetch_frame(grid_tags, "DAILY", period="1M")
+    if grid.empty:
+        print(f"  no par grid served for {citi_index}: {client.last_failures()}")
+        return 5
+    row = grid.iloc[-1]
+    par_rates = {tag.rsplit(".", 1)[-1]: float(v) for tag, v in row.items() if pd.notna(v)}
+    ref = grid.index[-1].date()
+    rl_curve = build_rl_ois_curve(par_rates=par_rates, ref_date=ref, citi_index=citi_index)
+    print(f"  {ref}: {len(par_rates)} tenors, max |reprice error| "
+          f"{par_reprice_errors_bp(rl_curve).abs().max():.3e} bp")
+
+    _rule("V2. the cube, from the live add-in")
+    before = client.calls
+    cube = fetch_cube(
+        client=client,
+        currency=currency,
+        expiries=VOL_EXPIRIES,
+        tenors=VOL_TENORS,
+        offsets_bp=VOL_OFFSETS,
+        period="1M",
+        strict=False,
+    )
+    print(f"  {cube!r}")
+    print(f"  {client.calls - before} CV* call(s) for "
+          f"{len(cube.expiries()) * len(cube.tenors()) * len(cube.offsets())} nodes")
+    if cube.as_of != ref:
+        print(f"  NOTE: cube as_of {cube.as_of} != curve ref {ref}; the forward is from {ref}.")
+
+    _rule("V3. do the backends reproduce CITI'S OWN quoted vols?")
+    frame = compare_backends(cube=cube, rl_curve=rl_curve, citi_index=citi_index, notional=1e8)
+    hand_err = (frame["hand_vol_bp"] - frame["citi_vol_bp"]).abs().max()
+    nat_err = frame["citi_vol_err_bp"].abs().max()
+    print(f"  nodes compared                   : {len(frame)}")
+    print(f"  hand-built  max |vol - quote|    : {hand_err:.3e} bp")
+    print(f"  native      max |vol - quote|    : {nat_err:.3e} bp")
+    print("  -> " + ("both reproduce the wire exactly; no transformation is applied."
+                     if max(hand_err, nat_err) < 1e-9
+                     else "A BACKEND IS TRANSFORMING THE QUOTES. Do not price off it."))
+
+    _rule("V4. do the two backends agree with EACH OTHER?")
+    frame["vega_rel"] = frame["vega_diff"].abs() / frame["hand_vega"].abs().replace(0.0, np.nan)
+    print(f"  max |forward difference|         : {frame['forward_diff_bp'].abs().max():.6f} bp")
+    print(f"  max relative price difference    : {frame['price_rel'].max():.3e}")
+    print(f"  max relative vega difference     : {frame['vega_rel'].max():.3e}")
+    print(f"  largest absolute price gap       : {frame['price_diff'].abs().max():,.4f} "
+          "currency units on 100m notional")
+    # A max with no location is a weak report - name the nodes, because a gap
+    # concentrated in one corner is a different bug from one spread evenly.
+    for label, column in (("price", "price_rel"), ("vega", "vega_rel")):
+        worst = frame.nlargest(3, column)
+        print(f"\n  worst 3 by relative {label} difference:")
+        for _, r in worst.iterrows():
+            print(f"    {r['expiry']:>3}x{r['tenor']:<3} {r['offset_bp']:>+6.0f}bp  "
+                  f"vol {r['citi_vol_bp']:7.3f}  hand {r['hand_' + label]:>16,.4f}  "
+                  f"native {r['native_' + label]:>16,.4f}  rel {r[column]:.3e}")
+    out = _REPO_ROOT / "MDP" / "CitiVelocityExcel" / "harvest" / "vol_compare_live.parquet"
+    frame.to_parquet(out)
+    print(f"\n  full frame written to {out.relative_to(_REPO_ROOT)} ({len(frame)} rows)")
+
+    _rule("V5. the real smile, and what it costs")
+    native = build_rl_native_swaption_cube(cube=cube, rl_curve=rl_curve, citi_index=citi_index)
+    hand = build_rl_vol_cube(cube=cube, rl_curve=rl_curve, citi_index=citi_index)
+    for expiry, tenor in (("1Y", "10Y"), ("5Y", "10Y")):
+        forward = native.forward(expiry, tenor)
+        print(f"\n  {expiry}x{tenor}  forward {forward * 100:.4f}%  "
+              f"(hand {hand.forward(expiry, tenor) * 100:.4f}%)")
+        print(f"    {'offset':>8}{'Citi bp':>10}{'native bp':>11}"
+              f"{'payer PV':>16}{'vega/bp':>12}")
+        for off in cube.offsets():
+            strike = forward + off / 1e4
+            print(f"    {off:>+8.0f}{cube.vol(expiry, tenor, off):>10.4f}"
+                  f"{native.normal_vol(expiry, tenor, offset_bp=off):>11.4f}"
+                  f"{native.price(expiry, tenor, strike):>16,.0f}"
+                  f"{native.vega(expiry, tenor, strike):>12,.0f}")
+
+    _rule("V6. our ATM forward against CITI'S OWN published forward")
+    # This is the one number the cube cannot check itself. Citi measures its
+    # strike offsets from ITS forward; we measure them from the forward our
+    # curve implies. A disagreement slides the whole smile along the strike axis
+    # and nothing inside the cube reveals it - but RATES.OIS.<idx>.FWD.<e>.<t>
+    # publishes Citi's, so it does not have to stay unknown.
+    points = [(e, t) for e in ("1Y", "5Y") for t in ("2Y", "10Y", "30Y")]
+    fwd_tags = {T.ois_fwd(citi_index, e, t): (e, t) for e, t in points}
+    quoted_fwd = client.fetch_frame(list(fwd_tags), "DAILY", period="1M")
+    print(f"    {'point':>10}{'Citi FWD':>12}{'ours':>12}{'gap bp':>10}")
+    gaps = []
+    for tag, (expiry, tenor) in fwd_tags.items():
+        if tag not in quoted_fwd.columns or quoted_fwd[tag].dropna().empty:
+            print(f"    {expiry + 'x' + tenor:>10}{'no data':>12}")
+            continue
+        citi = float(quoted_fwd[tag].dropna().iloc[-1])
+        ours = native.forward(expiry, tenor) * 100.0
+        gaps.append(abs(citi - ours) * 100.0)
+        print(f"    {expiry + 'x' + tenor:>10}{citi:>12.5f}{ours:>12.5f}{(ours - citi) * 100:>10.3f}")
+    if gaps:
+        worst = max(gaps)
+        print(f"\n  worst forward gap: {worst:.3f} bp")
+        print("  -> " + (
+            "the strike axis is anchored where Citi anchors it."
+            if worst < 1.0 else
+            f"the smile is shifted ~{worst:.1f}bp along the strike axis. Node vols still "
+            "round-trip (they are keyed by offset) but a STRIKE-quoted price is off by "
+            "the skew slope times this gap."
+        ))
+    return 0
+
+
 def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__ or "")
+    parser.add_argument(
+        "--vol-compare",
+        action="store_true",
+        help="reconcile the two rateslib vol backends on a real cube instead of "
+             "running the eight wire checks",
+    )
+    parser.add_argument("--currency", default="USD", help="vol currency for --vol-compare")
+    parser.add_argument("--index", default="USD_SOFR", help="Citi OIS index for --vol-compare")
+    args = parser.parse_args()
+
+    if args.vol_compare:
+        _rule("connect")
+        try:
+            client = CitiVelocityExcelClient.connect(attempts=1, readiness_timeout=120.0)
+        except Exception as exc:  # noqa: BLE001 - the report IS the exception
+            print(f"FAILED: {type(exc).__name__}: {exc}")
+            return 1
+        print("connected")
+        try:
+            code = vol_compare(client, currency=args.currency, citi_index=args.index)
+            _rule("done")
+            print(f"total CV* calls: {client.calls}")
+            return code
+        except Exception:  # noqa: BLE001 - print and still tear down cleanly
+            traceback.print_exc()
+            return 3
+        finally:
+            client.close()
+
+    return _wire_checks()
+
+
+def _wire_checks() -> int:
     _rule("1. connect")
     try:
         client = CitiVelocityExcelClient.connect(attempts=1, readiness_timeout=120.0)

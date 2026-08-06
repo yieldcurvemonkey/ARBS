@@ -307,23 +307,79 @@ scope, but they carry the same exposure.
 approximated as monthly and flagged "indicative only"; the rateslib leg now rolls
 on the traded schedule (verified: 28-day gaps after the front stub, repricing to
 1.1e-04 bp). It moved from `provenance="market_standard"` to `"rateslib_spec"`,
-leaving five approximate currencies rather than six. The QuantLib side still has
-no 28-day period, so the two backends legitimately disagree on MXN now - and the
-rateslib one is the right one.
+leaving five approximate currencies rather than six.
 
-### The native IR vol cube is present but NOT usable
+QuantLib spells the same schedule `EveryFourthWeek` (4W), so `_QL_FREQUENCY` maps
+`"28d"` onto it and **both backends roll on the same dates**. Without that entry
+the QuantLib MXN builder raises `No QuantLib frequency for rateslib letter '28d'`
+- which it did between the upgrade commit and this one.
 
-`rl.IRSplineCube` builds from a Citi cube and its **ATM node round-trips
-exactly**. The off-ATM nodes do not, and it is not a unit problem: passing the
-strike axis in basis points, percent moneyness and decimal moneyness produced
-**byte-identical** wrong off-ATM values, which rules out scaling and points at a
-parameterisation of the smile's strike axis I did not identify. Worst off-ATM
-node: 453.80 returned against 82.55 bp fed in.
+### The native IR vol cube, and the swaptions that go with it
 
-`MDP/CitiVelocityExcel/vol/rl_native_cube.py` therefore round-trips every node
-and **raises** unless they all reproduce - so today it refuses for any cube with
-off-ATM strikes, and the `PPSplineF64` cube stays the default. Shipping it would
-have been a silently wrong smile, which is the exact failure mode this package
-guards against everywhere else. What would settle it: one worked example of
-`IRSplineCube(strikes=..., parameters=...)` read back through
-`get_smile(...).get_from_strike(k, f=...)` at a non-ATM strike.
+rateslib 2.7 ships `IRSplineCube`, `IRSabrCube` **and a full swaption suite** -
+`IRSCall`, `IRSPut`, `IRSStraddle`, `IRSStrangle`, `IRSRiskReversal`. They are
+wired up in `MDP/CitiVelocityExcel/vol/rl_native_cube.py` as
+`NativeSwaptionCube`, selectable with:
+
+```python
+build_rl_vol_cube(cube=cube, rl_curve=curve, backend="native")   # or "auto"
+```
+
+**The strike axis is signed BASIS POINTS from the ATM forward** -
+`strikes=[-50, -25, 0, 25, 50]` - and the `parameters` are normal vol in basis
+points. Both are exactly Citi's own convention, so a `SwaptionCubeData` maps on
+with no transformation at all. An earlier revision of this file passed the strike
+axis in percent; it builds without error, round-trips the ATM node exactly and
+misprices the wings by up to 5x. `assert_native_cube_round_trips` is
+mutation-tested against that mistake, a transposed parameter block, and a single
+0.01bp nudge.
+
+**Why the hand-built cube is still the default.** Not accuracy - the two agree on
+live Citi quotes to 1.7e-10 on price and 1.6e-05 on vega. It is that rateslib
+labels IR vol Beta, and the live reconciliation found a real defect in it (next
+section). The native path is the better one for *risk*: it carries AD back to the
+curve and vol nodes and can sit in a `Solver`, which the `PPSplineF64` cube
+cannot.
+
+### rateslib times the option from the CURVE, and its analytic vega pays for it
+
+Found on live Citi quotes on 2026-08-06, reproduced exactly offline, pinned by
+`test_analytic_vega_is_wrong_when_the_curve_starts_after_the_cube`.
+
+When the curve's first node is not the cube's `eval_date`, rateslib computes
+`analytic_greeks()['vega_usd']` at a time to expiry measured from the **curve**,
+while the premium uses the cube's eval date. The premium stays correct - it
+matches the hand-built backend to 1e-15 - but the analytic vega comes back low by
+`sqrt(T'/T) * phi(d')/phi(d)`. For a one-day gap on a 1Y expiry that is **0.137%
+at the money and 0.34% at the 100bp wings**, and nothing raises.
+
+Two defences:
+
+- `NativeSwaptionCube.vega()` central-differences its own `price()` over a
+  +/-0.5bp shift of the cube (both shifted cubes built once and cached), so it is
+  consistent with the premium by construction. Live worst-case agreement with the
+  hand-built backend went from 3.7e-03 to 1.6e-05 when this replaced `vega_usd`.
+- the constructor warns when `cube.as_of` and the curve's first node disagree,
+  naming the size of the error - because `greeks()` still returns rateslib's raw
+  dict and someone will read `vega_usd` out of it.
+
+Pass `vega(..., analytic=True)` to get rateslib's value; it is exact and faster
+**when the dates line up**.
+
+### What the live comparison settled
+
+`verify_live.py --vol-compare` (5 `CV*` calls) reconciles both backends on a real
+USD cube. On 2026-08-06:
+
+| check | result |
+|---|---|
+| both backends reproduce Citi's quoted vol | 2.8e-14 bp (float noise) - no transformation applied |
+| the two backends agree on price | 1.7e-10 relative, 0.0003 currency units on 100m |
+| the two backends agree on vega | 1.6e-05 relative (central-difference truncation) |
+| **our ATM forward vs Citi's published `RATES.OIS.USD_SOFR.FWD.<e>.<t>`** | **worst gap 0.286 bp over six points** |
+
+That last row is the one the cube cannot check itself. Citi measures its strike
+offsets from *its* forward; we measure them from ours, and a gap there slides the
+whole smile along the strike axis without changing a single node vol. It is now
+measured rather than assumed: **the strike axis is anchored where Citi anchors
+it.**

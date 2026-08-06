@@ -15,7 +15,19 @@ Layers
                (or the SABR variant), with the volSpreads row-ordering contract
                enforced by :func:`assert_vol_spread_ordering`
 ``rl_cube``    :class:`CitiVeloNormalVolCube`, a locally-built cube over rateslib
-               primitives - rateslib 2.1.1 has no IR vol cube and no swaption
+               primitives (``PPSplineF64`` + ``Query.Base.bachelier``). Works on
+               every supported rateslib, including 2.1.x, which has no IR vol at
+               all. This is the DEFAULT backend.
+``rl_native_cube``
+               :class:`NativeSwaptionCube` over ``rl.IRSplineCube`` and
+               ``rl.IRSCall``, available from rateslib 2.7.0. Prices identically
+               (~1e-9 relative) but carries AD risk back to the curve and vol
+               nodes and can be calibrated inside a ``Solver``. Select it with
+               ``build_rl_vol_cube(..., backend='native')``.
+
+The two backends are reconciled node by node by
+:func:`~MDP.CitiVelocityExcel.vol.rl_native_cube.compare_backends`, which is what
+``harvest/verify_live.py --vol-compare`` runs against real Citi quotes.
 
 Two things worth reading before use
 -----------------------------------
@@ -55,25 +67,37 @@ from MDP.CitiVelocityExcel.vol.ql_cube import (
     swap_indices_for,
     vol_spreads_matrix,
 )
-from MDP.CitiVelocityExcel.vol.rl_native_cube import (
-    RATESLIB_NATIVE_AVAILABLE,
-    NativeCubeUnverifiedError,
-    assert_native_cube_round_trips,
-    build_rl_native_cube,
-    irs_series_for,
-)
 from MDP.CitiVelocityExcel.vol.rl_cube import (
     CitiVeloNormalVolCube,
     build_rl_vol_cube,
+    convention_for_cube,
+)
+from MDP.CitiVelocityExcel.vol.rl_native_cube import (
+    NATIVE_VOL_PARAM_UNIT,
+    RATESLIB_NATIVE_AVAILABLE,
+    NativeCubeUnverifiedError,
+    NativeSwaptionCube,
+    assert_native_cube_round_trips,
+    build_rl_native_cube,
+    build_rl_native_swaption_cube,
+    compare_backends,
+    irs_series_for,
+    native_spline_order,
 )
 
 __all__ = [
     "CitiVeloNormalVolCube",
+    "NATIVE_VOL_PARAM_UNIT",
     "NativeCubeUnverifiedError",
+    "NativeSwaptionCube",
     "RATESLIB_NATIVE_AVAILABLE",
     "assert_native_cube_round_trips",
     "build_rl_native_cube",
+    "build_rl_native_swaption_cube",
+    "compare_backends",
+    "convention_for_cube",
     "irs_series_for",
+    "native_spline_order",
     "DEFAULT_OFFSETS_BP",
     "DEFAULT_SWAP_TENORS",
     "QLSwaptionCube",

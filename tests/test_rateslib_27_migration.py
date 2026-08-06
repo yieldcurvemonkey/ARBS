@@ -278,21 +278,22 @@ def test_ir_vol_cubes_now_exist():
     assert RATESLIB_NATIVE_AVAILABLE is True
 
 
-def test_native_cube_refuses_rather_than_serving_an_unverified_smile():
-    """The native backend must not hand back a smile it cannot reproduce.
+def test_native_cube_serves_and_matches_the_hand_built_one():
+    """Both rateslib vol backends reproduce the Citi grid and agree on price.
 
-    ``rl.IRSplineCube`` builds from the Citi grid and its ATM node round-trips
-    exactly, but the off-ATM nodes do not, and the strike axis is scale-invariant
-    across bp / percent / decimal - so the cause is a parameterisation convention
-    that has not been identified, not a unit error. Until it is, the builder
-    raises. A cube that quietly returned 453 bp where 82 bp was fed in would pass
-    every downstream assertion.
+    The strike axis of ``rl.IRSplineCube`` is signed BASIS POINTS from the ATM
+    forward, which is Citi's own convention, so the grid maps on untransformed.
+    An earlier revision of this repo passed it in percent: that builds, the ATM
+    node round-trips exactly, and the wings come back up to 5x wrong with nothing
+    raising. ``assert_native_cube_round_trips`` is the guard, mutation-tested in
+    ``tests/test_citivelo_native_vol_cube.py``.
     """
     import math
 
     from MDP.CitiVelocityExcel.curves import build_rl_ois_curve
     from MDP.CitiVelocityExcel.vol import (
         NativeCubeUnverifiedError,
+        assert_native_cube_round_trips,
         build_rl_native_cube,
         build_rl_vol_cube,
     )
@@ -319,15 +320,40 @@ def test_native_cube_refuses_rather_than_serving_an_unverified_smile():
         par_rates=par, ref_date=datetime.date(2026, 8, 5), citi_index="USD_SOFR"
     )
     hand = build_rl_vol_cube(cube=cube, rl_curve=rl_curve)
-    forwards = {(e, t): hand.forward(e, t) for e in expiries for t in tenors}
+    native = build_rl_vol_cube(cube=cube, rl_curve=rl_curve, backend="native")
+    forwards = {(e, t): hand.forward(e, t) * 100.0 for e in expiries for t in tenors}
 
-    with pytest.raises(NativeCubeUnverifiedError, match="did not reproduce"):
-        build_rl_native_cube(cube=cube, forwards=forwards, citi_index="USD_SOFR")
+    assert assert_native_cube_round_trips(native.native, cube, forwards) < 1e-9
 
-    # ... while the hand-built cube reproduces its nodes exactly.
     for expiry in expiries:
         for tenor in tenors:
+            assert native.forward(expiry, tenor) == pytest.approx(
+                hand.forward(expiry, tenor), abs=1e-12
+            )
             for offset in offsets:
+                quoted = cube.vol(expiry, tenor, offset)
                 assert hand.normal_vol(expiry, tenor, offset_bp=offset) == pytest.approx(
-                    cube.vol(expiry, tenor, offset), abs=1e-8
+                    quoted, abs=1e-8
                 )
+                assert native.normal_vol(expiry, tenor, offset_bp=offset) == pytest.approx(
+                    quoted, abs=1e-8
+                )
+                strike = hand.forward(expiry, tenor) + offset / 1e4
+                assert native.price(expiry, tenor, strike) == pytest.approx(
+                    hand.price(expiry, tenor, strike), rel=1e-9
+                )
+
+    # And the guard still fires on the mistake that was actually made: the strike
+    # axis in percent rather than basis points.
+    wrong = rl.IRSplineCube(
+        expiries=list(expiries),
+        tenors=list(tenors),
+        strikes=[o / 100.0 for o in cube.offsets()],
+        eval_date=datetime.datetime(2026, 8, 5),
+        irs_series="usd_irs",
+        parameters=[[[cube.vol(e, t, o) for o in cube.offsets()] for t in tenors] for e in expiries],
+        pricing_model="normal_vol",
+        id="MIGRATION-BAD",
+    )
+    with pytest.raises(NativeCubeUnverifiedError, match="did not reproduce"):
+        assert_native_cube_round_trips(wrong, cube)

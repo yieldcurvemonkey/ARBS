@@ -163,11 +163,18 @@ END_OF_MONTH_BY_INDEX: Dict[str, bool] = {
 }
 
 #: rateslib frequency letter -> QuantLib coupon frequency.
+#:
+#: ``"28d"`` comes from rateslib 2.7's ``mxn_irs``, which expresses MXN Fondeo's
+#: 28-day roll natively where 2.1.1 approximated it as monthly. QuantLib spells
+#: the same period ``EveryFourthWeek`` (4W, not 28 calendar days by name but the
+#: identical schedule), so the two backends roll on the same dates rather than
+#: drifting a couple of days per coupon.
 _QL_FREQUENCY: Dict[str, int] = {
     "a": ql.Annual,
     "s": ql.Semiannual,
     "q": ql.Quarterly,
     "m": ql.Monthly,
+    "28d": ql.EveryFourthWeek,
 }
 
 #: rateslib day-count spelling -> QuantLib day counter factory.
