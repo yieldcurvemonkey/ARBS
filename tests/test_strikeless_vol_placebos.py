@@ -426,8 +426,11 @@ def test_pc1_projection_recovers_a_slope_that_is_pure_pc1():
     spread = 3.0 * level - 7.0
     proj = pc1_projection(rates, spread)
     assert proj.attrs["look_ahead"] == "full_sample_pca"
-    assert np.corrcoef(proj.dropna(), spread.reindex(proj.dropna().index))[0, 1] \
-        == pytest.approx(1.0, abs=1e-6)
+    got = proj.dropna()
+    want = spread.reindex(got.index)
+    # R^2 = 1, so the OLS fitted values ARE the series, not merely correlated
+    assert np.corrcoef(got, want)[0, 1] == pytest.approx(1.0, abs=1e-6)
+    assert np.allclose(got.to_numpy(), want.to_numpy(), rtol=1e-8, atol=1e-6)
 
 
 def test_carry_sign_signals_read_only_the_carry():
