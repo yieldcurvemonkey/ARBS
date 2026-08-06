@@ -289,7 +289,6 @@ def rl_xcs_kwargs(
         "fixing_method": "rfr_payment_delay",
         "leg2_fixing_method": "rfr_payment_delay",
         "method_param": 0,
-        "leg2_method_param": 0,
     }
     return kwargs, True, tuple(notes)
 

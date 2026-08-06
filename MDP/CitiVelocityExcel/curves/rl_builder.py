@@ -20,14 +20,20 @@ every guarantee that builder makes:
 
 What is honest about the conventions
 ------------------------------------
-Fourteen of the twenty curves are built from a rateslib **named spec**
-(``usd_irs``, ``eur_irs``, ...). The remaining six - DKK, ILS, MXN, SGD, THB,
-ZAR - have no rateslib spec, so the ``rl.IRS`` is assembled from explicit fields
-taken from :mod:`MDP.CitiVelocityExcel.curves.conventions`, whose provenance for
-those six is ``market_standard`` rather than ``rateslib_spec``. Every such build
-logs exactly one warning per curve id naming what is approximate. MXN is the
-worst of them: Fondeo swaps roll on a 28-day schedule that neither library
-expresses, and monthly is the closest available frequency.
+Fifteen of the twenty curves are built from a rateslib **named spec**
+(``usd_irs``, ``eur_irs``, ...). The remaining five - DKK, ILS, SGD, THB, ZAR -
+have no rateslib spec, so the ``rl.IRS`` is assembled from explicit fields taken
+from :mod:`MDP.CitiVelocityExcel.curves.conventions`, whose provenance for those
+five is ``market_standard`` rather than ``rateslib_spec``. Every such build logs
+exactly one warning per curve id naming what is approximate.
+
+MXN used to be the worst of them - Fondeo rolls on a 28-day schedule that
+rateslib 2.1.1 could not express, so it was approximated as monthly and flagged
+indicative. rateslib 2.7's ``mxn_irs`` declares ``frequency="28d"`` natively, so
+the rateslib leg now rolls on the traded schedule (verified: 28-day gaps after
+the front stub). The QuantLib side still has no 28-day period and remains
+monthly, so the two backends legitimately disagree on MXN and the rateslib one
+is the right one.
 
 rateslib's calendars are not QuantLib's
 --------------------------------------
@@ -259,7 +265,7 @@ def _warn_if_approximate(conv: CurveConvention, curve_id: str) -> None:
         return
     _WARNED_APPROXIMATE.add(curve_id)
     _logger.warning(
-        "%s: rateslib 2.1.1 ships no named spec for %s, so the schedule is built from "
+        "%s: rateslib ships no named spec for %s, so the schedule is built from "
         "market-standard fields (frequency=%s, convention=%s, spot_lag=%s, payment_lag=%s) and "
         "the holiday calendar is synthesised from QuantLib's %s list. %s",
         curve_id,
@@ -323,7 +329,6 @@ def make_rl_irs(
         currency=conv.currency.lower(),
         leg2_fixing_method="rfr_payment_delay",
         leg2_spread_compound_method="none_simple",
-        leg2_method_param=0,
         curves=curve_id,
         fixed_rate=fixed_rate,
     )
@@ -351,6 +356,7 @@ def build_rl_ois_curve(
     min_tenors: int = 4,
     func_tol: float = 1e-9,
     conv_tol: float = 1e-10,
+    max_reprice_error_bp: float = 1.0,
 ) -> RLCurveBase:
     """Calibrate a rateslib OIS discount curve to one Citi Velocity par snapshot.
 
@@ -548,6 +554,31 @@ def build_rl_ois_curve(
         "approximate": conv.approximate,
         "payment_lag": payment_lag_for(conv.citi_index),
     }
+
+    # A SUCCESS status is no longer sufficient evidence that the solve worked.
+    # Measured on rateslib 2.7.1: a grid with a -5000% front quote returns
+    # status='SUCCESS' from a curve that misprices its own calibration
+    # instruments by 4.9e+05 bp (2.1.1 reported FAILURE for the same input, which
+    # is what this guard used to rely on). So the curve is asked to reprice the
+    # quotes it was built from, and a curve that cannot is not returned. This is
+    # the same class of failure as the recorded all-NaN-risk incident: the
+    # dangerous outcome is not an exception, it is a plausible number.
+    #
+    # Cost: 17.5 ms on a 44-tenor grid, ~8.8% of the ~200 ms build. That is a
+    # real tax on a bulk warm (930 days x N currencies), and it is still the
+    # right default - raise max_reprice_error_bp to disable the raise, but note
+    # the errors are computed either way because they are recorded on meta.
+    worst = float(par_reprice_errors_bp(result).abs().max())
+    if not (worst <= max_reprice_error_bp):
+        raise ValueError(
+            f"build_rl_ois_curve({conv.citi_index}): the solved curve does not reprice its own "
+            f"calibration swaps - worst error {worst:.6g} bp against a tolerance of "
+            f"{max_reprice_error_bp:g} bp, for ref_date={ref.date()} with "
+            f"{len(solve_instruments)} instruments (solver status={status!r}). The curve is NOT "
+            "returned. Check the par grid for a bad quote; raise max_reprice_error_bp only if "
+            "you have established the residual is benign."
+        )
+    result.meta["max_reprice_error_bp"] = worst
     return result
 
 
@@ -642,7 +673,7 @@ def par_reprice_errors_bp(rlc: RLCurveBase) -> pd.Series:
     errors: Dict[str, float] = {}
     for tenor, irs in (rlc.rl_pricing_curve_instruments or {}).items():
         model_rate = float(irs.rate(curves=curve))
-        fixed = float(irs.kwargs["fixed_rate"])
+        fixed = float(irs.kwargs.leg1["fixed_rate"])
         errors[tenor] = (model_rate - fixed) * 100.0
     order = sorted(errors, key=_tenor_sort_key)
     return pd.Series({t: errors[t] for t in order}, name="reprice_error_bp", dtype=float)

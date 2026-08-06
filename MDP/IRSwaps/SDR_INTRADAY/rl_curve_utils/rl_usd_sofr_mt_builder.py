@@ -288,7 +288,7 @@ def rl_usd_sofr_mt_builder(
     st_nodes = list({*fomc_curve_nodes, *[d for d in imm_nodes if (d.year, d.month) not in {(d.year, d.month) for d in fomc_curve_nodes}]})
     st_nodes.sort()
 
-    mt_nodes = sorted(s.__dict__["kwargs"]["termination"] for s in rl_irss.values())
+    mt_nodes = sorted(s.leg1.schedule.termination for s in rl_irss.values())
     curve_nodes = sorted(st_nodes + mt_nodes)
 
     rl_stirfs_s = [_safe_fixed_rate(f) for f in rl_stirfs.values()]

@@ -340,7 +340,7 @@ class CitiVeloNormalVolCube:
         swap = self._swap(expiry, tenor)
         rate = float(swap.rate(curves=[self.forecast_curve, self.disc_curve])) / 100.0
         delta = float(
-            swap.analytic_delta(curve=self.forecast_curve, disc_curve=self.disc_curve)
+            swap.analytic_delta(curves=[self.forecast_curve, self.disc_curve])
         )
         annuity = delta * 1e4 / self.notional
         if not math.isfinite(rate) or not math.isfinite(annuity) or annuity <= 0.0:

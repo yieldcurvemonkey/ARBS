@@ -21,10 +21,11 @@ count, payment lag, end-of-month and pillar placement. It does **not** prove the
 conventions match the market: the rateslib reprice arm in particular is weakly
 circular (the calibrating swap and the grid come from the same ``_make_irs``),
 so a wrong day count would cancel out of it. That arm is a convergence check,
-not a convention check, and its docstring says so. For the six
-``market_standard`` currencies (DKK ILS MXN SGD THB ZAR) nothing hermetic could
-establish correctness against the market, and MXN's 28-day Fondeo roll is
-knowingly approximated by a monthly schedule.
+not a convention check, and its docstring says so. For the five
+``market_standard`` currencies (DKK ILS SGD THB ZAR) nothing hermetic could
+establish correctness against the market. MXN left that set at rateslib 2.7,
+which added ``mxn_irs`` with a native ``frequency="28d"`` - the Fondeo roll this
+module previously had to approximate as monthly.
 
 Several tests are paired with a MUTATION CHECK: the same input is run through a
 deliberately-wrong variant and the test asserts the wrong one produces a
@@ -92,8 +93,9 @@ REF_DATE = datetime.date(2026, 8, 5)
 #: only T+0 settle in the table, CAD is the only semi-annual one among the four.
 DEFAULT_CURRENCIES = ["USD_SOFR", "EUR_EUROSTR", "GBP_SONIA", "CAD_CORRA"]
 
-#: The six currencies rateslib 2.1.1 ships no named spec for.
-MARKET_STANDARD = {"DKK_TNDKK", "ILS_SHIR", "MXN_T_FONDEO", "SGD_SORA", "THB_THOR", "ZAR_ZARONIA"}
+#: The five currencies rateslib 2.7.1 ships no named spec for. MXN left this set
+#: when rateslib 2.7 added mxn_irs with its native 28-day frequency.
+MARKET_STANDARD = {"DKK_TNDKK", "ILS_SHIR", "SGD_SORA", "THB_THOR", "ZAR_ZARONIA"}
 
 #: Reprice/agreement tolerance in basis points. Measured residuals sit ~5x
 #: inside it (rateslib ~2e-3 bp, QuantLib ~2e-9 bp) and the cross-backend
@@ -291,11 +293,11 @@ def test_specd_currencies_agree_with_rateslib(citi_index):
     assert conv.provenance == "rateslib_spec"
 
 
-def test_the_six_unspecd_currencies_are_flagged_and_explained():
+def test_the_unspecd_currencies_are_flagged_and_explained():
     """No rateslib spec means ``approximate=True`` and a note saying what is approximate.
 
     Silently shipping market-standard conventions as if they were
-    library-supplied is the failure this guards: the six are exactly DKK, ILS,
+    library-supplied is the failure this guards: the five are exactly DKK, ILS,
     MXN, SGD, THB and ZAR, and MXN in particular approximates a 28-day Fondeo
     roll with a monthly schedule.
     """
@@ -620,19 +622,33 @@ def test_two_tenors_on_one_maturity_raises(build):
 def test_an_unconvergent_rateslib_solve_raises_instead_of_returning_the_curve():
     """A -5000% front quote breaks the solve, and the curve must NOT come back.
 
-    rateslib reports ``FAILURE: max_iter breached ... f_val: nan`` and returns a
-    Solver object regardless; the builder reads ``solver.result['status']`` and
-    refuses. An unconverged curve prices everything downstream wrongly and
-    silently, which is the exact shape of the NULL-risk incident this repo
-    already has on record.
+    The mechanism CHANGED at rateslib 2.7 and that is the point of this test.
+    Under 2.1.1 the solver reported ``FAILURE`` and the builder refused on
+    ``solver.result['status']``. Under 2.7.1 the very same grid returns
+    ``status='SUCCESS'`` from a curve that misprices its own calibration swaps by
+    4.9e+05 bp - so a status check alone would now hand back a catastrophically
+    wrong curve while reporting success.
+
+    The builder therefore asks the solved curve to reprice the quotes it was
+    built from and refuses if it cannot. That is a strictly stronger check than
+    the status, and it is the guard against repeating the recorded NULL-risk
+    incident, where the dangerous outcome was not an exception but a plausible
+    number.
     """
     with pytest.raises(ValueError) as excinfo:
         build_rl_ois_curve(
             par_rates={"1Y": -5000.0, "2Y": 4.0, "5Y": 3.8, "10Y": 3.9}, ref_date=REF_DATE
         )
     message = str(excinfo.value)
-    assert "status='FAILURE'" in message
-    assert "not returned" in message.lower()
+    assert "does not reprice its own calibration swaps" in message
+    assert "NOT" in message
+
+    # ... and a good grid still builds, recording how well it repriced.
+    good = build_rl_ois_curve(
+        par_rates={"1Y": 3.9, "2Y": 4.0, "5Y": 4.1, "10Y": 4.2, "30Y": 4.3},
+        ref_date=REF_DATE,
+    )
+    assert good.meta["max_reprice_error_bp"] < 0.01
 
 
 def test_a_failed_quantlib_bootstrap_raises_with_the_currency_named():
@@ -885,7 +901,7 @@ def test_every_currency_builds_and_reprices_on_both_backends(citi_index):
     Kept out of the fast gate because it is 20 currencies x 2 bootstraps x 44
     instruments (~16s wall). The default set above covers the four shapes that
     differ structurally; this one is the regression net for the other sixteen,
-    including the six whose conventions are market standard rather than
+    including the five whose conventions are market standard rather than
     library-supplied.
     """
     par = _par(citi_index)

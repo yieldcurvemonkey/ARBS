@@ -230,7 +230,7 @@ def build_rl_bond(
 
 def _rl_notional(bond: Any) -> float:
     try:
-        return float(bond.kwargs["notional"])
+        return float(bond.kwargs.leg1["notional"])
     except Exception:  # pragma: no cover - defensive, rateslib always sets it
         return 100.0
 

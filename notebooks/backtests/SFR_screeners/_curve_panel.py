@@ -70,9 +70,9 @@ def curve_for_date(as_of, curve_mdp):
         try:
             q = IRSwapQuery(curve=CURVE, tenor=t).resolve_query(ts, pricer_or_curve=ch)
             pkg, _ = q.resolve_package(pricer_or_curve=ch)
-            eff = pkg[0].__dict__["kwargs"]["effective"]
-            prices.append(100 - pkg[0].__dict__["kwargs"]["fixed_rate"])
-            rates.append(pkg[0].__dict__["kwargs"]["fixed_rate"] * 100)
+            eff = pkg[0].leg1.schedule.effective
+            prices.append(100 - pkg[0].kwargs.leg1["fixed_rate"])
+            rates.append(pkg[0].kwargs.leg1["fixed_rate"] * 100)
             contracts.append(ql.IMM.code(ql.Date(eff.day, eff.month, eff.year)))
         except Exception:
             return []

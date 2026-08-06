@@ -98,7 +98,7 @@ def build_rl_stirf(ticker: str, curve_id: str, price: float, fixings: pd.Series 
             roll="som",
             curves=curve_id,
             price=price,
-            leg2_fixings=fixings,
+            leg2_rate_fixings=fixings,
         )
 
     def build_rl_sfr(month: str, curve_id: str, price: float):

@@ -55,6 +55,13 @@ from MDP.CitiVelocityExcel.vol.ql_cube import (
     swap_indices_for,
     vol_spreads_matrix,
 )
+from MDP.CitiVelocityExcel.vol.rl_native_cube import (
+    RATESLIB_NATIVE_AVAILABLE,
+    NativeCubeUnverifiedError,
+    assert_native_cube_round_trips,
+    build_rl_native_cube,
+    irs_series_for,
+)
 from MDP.CitiVelocityExcel.vol.rl_cube import (
     CitiVeloNormalVolCube,
     build_rl_vol_cube,
@@ -62,6 +69,11 @@ from MDP.CitiVelocityExcel.vol.rl_cube import (
 
 __all__ = [
     "CitiVeloNormalVolCube",
+    "NativeCubeUnverifiedError",
+    "RATESLIB_NATIVE_AVAILABLE",
+    "assert_native_cube_round_trips",
+    "build_rl_native_cube",
+    "irs_series_for",
     "DEFAULT_OFFSETS_BP",
     "DEFAULT_SWAP_TENORS",
     "QLSwaptionCube",

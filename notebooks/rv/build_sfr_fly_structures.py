@@ -161,7 +161,7 @@ def verify_sign(contracts: pd.DataFrame, st: pd.DataFrame, out) -> None:
             ch = mdp.get_pricer(request=dict(curve_name=CURVE, timestamp=ts))
             q = IRSwapQuery(curve=CURVE, tenor=tenor).resolve_query(ts, pricer_or_curve=ch)
             pkg, rw = q.resolve_package(pricer_or_curve=ch)
-            rates = [lg.__dict__["kwargs"]["fixed_rate"] for lg in pkg]
+            rates = [lg.kwargs.leg1["fixed_rate"] for lg in pkg]
             curve_fly = (2 * rates[1] - rates[0] - rates[2]) * 100.0
         except Exception as exc:
             p(f"  {d} {r['key']}: curve fetch failed ({type(exc).__name__}: "

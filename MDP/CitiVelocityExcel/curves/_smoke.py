@@ -460,7 +460,7 @@ def check_spline(par: Dict[str, float]) -> None:
             interpolation="log_linear",
         )
         return max(
-            abs(float(irs.rate(curves=naked)) - float(irs.kwargs["fixed_rate"])) * 100.0
+            abs(float(irs.rate(curves=naked)) - float(irs.kwargs.leg1["fixed_rate"])) * 100.0
             for irs in curve.rl_pricing_curve_instruments.values()
         )
 

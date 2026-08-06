@@ -596,7 +596,7 @@ class CitiVeloPricer:
             fixed_rate=0.0,
         )
         irs.notional = float(leg.notional or 1_000_000.0)
-        return float(irs.analytic_delta(curve=rlc.rl_pricing_curve))
+        return float(irs.analytic_delta(curves=rlc.rl_pricing_curve))
 
     def rl_dv01(self, leg: CitiVeloLeg) -> float:
         """Alias for :meth:`rl_pv01`.

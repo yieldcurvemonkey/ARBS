@@ -44,7 +44,12 @@ def test_rlstirfuture_pricer_pv01_stirf_contracts_rateslib26_safe(monkeypatch):
         real = -2.0
 
     class _DummyPricable:
-        def analytic_delta(self):
+        def analytic_delta(self, *args, **kwargs):
+            # rateslib 2.7 made the curve argument MANDATORY on analytic_delta,
+            # so RLSTIRFuturePricer.pv01 now passes a unit (DF==1) discount
+            # curve - a future carries no discounting, so that reproduces the
+            # old no-argument value exactly. The dummy has to accept it or this
+            # test asserts against a signature rateslib no longer has.
             return _DummyDelta()
 
     class _DummyKwargs:

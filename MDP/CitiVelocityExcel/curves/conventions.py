@@ -7,18 +7,22 @@ each of those tokens onto everything both backends need.
 
 Two honesty rules are built into the table
 ------------------------------------------
-**Provenance is recorded per curve.** rateslib 2.1.1 ships named specs for ten of
-these currencies (``usd_irs``, ``eur_irs``, ``gbp_irs``, ``jpy_irs``, ``chf_irs``,
-``cad_irs``, ``aud_irs``, ``nzd_irs``, ``nok_irs``, ``sek_irs``). For the other
-six - DKK, ILS, MXN, SGD, THB, ZAR - the schedule conventions here are market
-standard rather than library-supplied, and every one of them carries
-``provenance="market_standard"`` plus a note saying what specifically is
-approximate. Builders warn once per curve when they use one.
+**Provenance is recorded per curve.** rateslib 2.7.1 ships named specs for eleven
+of these currencies (``usd_irs``, ``eur_irs``, ``gbp_irs``, ``jpy_irs``,
+``chf_irs``, ``cad_irs``, ``aud_irs``, ``nzd_irs``, ``nok_irs``, ``sek_irs`` and -
+new in 2.7 - ``mxn_irs``). For the other five - DKK, ILS, SGD, THB, ZAR - the
+schedule conventions here are market standard rather than library-supplied, and
+every one of them carries ``provenance="market_standard"`` plus a note saying what
+specifically is approximate. Builders warn once per curve when they use one.
 
-**Holiday calendars come from QuantLib, not from a proxy.** rateslib 2.1.1 ships
-14 calendars (``nyc tgt ldn tyo zur tro syd wlg osl stk mum fed bus all``) and
-none of them is Denmark, Israel, Mexico, Singapore, Thailand or South Africa.
-Rather than silently substituting TARGET for Copenhagen, :func:`rl_calendar_from_quantlib`
+``mxn_irs`` is worth calling out: it declares ``frequency="28d"``, so MXN Fondeo's
+28-day roll is now expressed natively instead of approximated as monthly. Under
+2.1.1 that curve drifted a few days per coupon and was flagged indicative.
+
+**Holiday calendars come from QuantLib, not from a proxy.** rateslib 2.7.1 ships
+15 calendars (``nyc tgt ldn tyo zur tro syd wlg osl stk mum mex fed bus all``) and
+none of them is Denmark, Israel, Singapore, Thailand or South Africa. Rather than
+silently substituting TARGET for Copenhagen, :func:`rl_calendar_from_quantlib`
 builds a real :class:`rateslib.Cal` from QuantLib's holiday list for that country.
 Israel matters most: it trades Sunday-Thursday, so its week mask is Friday and
 Saturday, and a Monday-Friday proxy would misdate every single roll.
@@ -190,8 +194,9 @@ def rl_calendar_from_quantlib(
 ) -> Any:
     """Build a :class:`rateslib.Cal` from a QuantLib calendar's holiday list.
 
-    rateslib 2.1.1 ships 14 calendars and none of them covers DKK, ILS, MXN, SGD,
-    THB or ZAR. Substituting a proxy (TARGET for Copenhagen, say) misdates rolls
+    rateslib 2.7.1 ships 15 calendars and none of them covers DKK, ILS, SGD, THB
+    or ZAR (``mex`` arrived in 2.7, so MXN no longer needs this). Substituting a
+    proxy (TARGET for Copenhagen, say) misdates rolls
     quietly; QuantLib has the real holiday data for every one of these countries,
     so it is used as the source of truth and the calendar is materialised once.
     """
@@ -427,18 +432,21 @@ _CONVENTIONS: Tuple[CurveConvention, ...] = (
     CurveConvention(
         citi_index="MXN_T_FONDEO",
         currency="MXN",
-        rl_spec=None,
-        fixed_frequency="m",
+        rl_spec="mxn_irs",
+        fixed_frequency="28d",
         convention="act360",
         spot_lag=1,
-        rl_calendar=None,
+        rl_calendar="mex",
         ql_calendar=_cal("Mexico"),
         ql_index=_generic_index("TIIE_FONDEO", "MXN", _cal("Mexico"), "Actual360"),
-        provenance="market_standard",
+        provenance="rateslib_spec",
         note=(
-            "MXN Fondeo swaps roll on a 28-DAY schedule, which neither rateslib nor QuantLib "
-            "expresses directly; monthly is the closest available frequency and will differ from "
-            "the traded schedule by a few days per coupon. Treat MXN levels as indicative."
+            "MXN Fondeo swaps roll on a 28-DAY schedule. rateslib 2.7's mxn_irs spec expresses "
+            "that natively (frequency='28d', calendar='mex'), so the rateslib leg is now the "
+            "traded schedule rather than an approximation. Under rateslib 2.1.1 this curve was "
+            "built monthly and drifted a few days per coupon, and was flagged indicative. "
+            "The QUANTLIB side still has no 28-day period and remains monthly - so the two "
+            "backends legitimately disagree on MXN, and the rateslib one is the right one."
         ),
     ),
     CurveConvention(

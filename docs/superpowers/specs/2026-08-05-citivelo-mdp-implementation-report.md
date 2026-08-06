@@ -165,11 +165,8 @@ synthetic inputs. Self-consistency does not prove the conventions match the mark
   two backends agree perfectly *because they read the same convention row* — that
   agreement is one assumption checked against itself, not evidence. MXN Fondeo's
   28-day roll is approximated as monthly; treat MXN as indicative.
-- **rateslib is 2.1.1, not 2.7.** `IRSabrCube` and `IRSplineCube` **do not exist**,
-  and there is no rateslib `Swaption` either. The rateslib-side cube is built from
-  `PPSplineF64` + `rl.IRS` forwards + the repo's own Bachelier, behind an interface
-  an `IRSabrCube` backend could drop into later. The spec's 2.7 doc links do not
-  apply to this environment.
+- **rateslib was upgraded 2.1.1 -> 2.7.1** (below). There is still no rateslib
+  `Swaption` instrument, and the native IR vol cube is present but unusable.
 
 ---
 
@@ -205,3 +202,119 @@ synthetic inputs. Self-consistency does not prove the conventions match the mark
    dedicated and `reference_key` must stay a `RATES(LIB)_CURVE_DEFINITIONS` key.
 6. **`CVSTREAM`** remains out of scope — entitled, but an RTD push model needing a
    live event loop rather than request/response.
+
+---
+
+## rateslib 2.1.1 -> 2.7.1
+
+Done to get `IRSabrCube`/`IRSplineCube`. Those first appear in **2.7.0**; the
+source-available licence notice first appears in **2.6.0**, so there is no version
+with the cubes and without it. (This is personal infrastructure, so the
+non-commercial terms are fine.)
+
+### Nothing broke, and that was measured on numbers
+
+`scripts/rateslib_upgrade_baseline.py` dumps **918 numbers** from the repo's real
+objects - curve nodes, par reprices, IRS fair rates and PV01s, STIR rates, bond
+metrics, every calendar and day count, the whole spec table, inflation
+breakevens, the xccy solve - and diffs them across the upgrade. A green test
+suite is a weaker claim: a signature change that silently alters a schedule still
+passes any assertion that only checks a curve came back.
+
+| section | max absolute change |
+|---|---|
+| `scheduling_and_calendars` (15 calendars, tenor arithmetic, day counts) | **0** |
+| `fixed_rate_bonds` | **0** |
+| `spec_table` | 0 numerically |
+| `rl_irswap_curve_wrapper` (IRS fair rates, PV01) | 2.3e-13 |
+| `stir_futures` (rates) | 8.8e-14 |
+| `citivelo_intraday_curve` | 6.2e-13 |
+| `citivelo_xccy` | 2.6e-12 |
+
+0 values missing, 0 added. Everything above is floating-point noise.
+
+### The migration: 38 call sites, all mechanical
+
+| change | sites |
+|---|---|
+| `obj.__dict__["kwargs"][...]` reach-through -> `.kwargs.leg1[...]` / `.leg1.schedule.*` | 17 |
+| `leg2_fixings=` -> `leg2_rate_fixings=` | 10 |
+| `analytic_delta(curve=)` / positional -> `(curves=)` | 7 |
+| `instrument.kwargs["x"]` -> `.kwargs.leg1["x"]` | 5 |
+| `leg2_method_param=` removed | 2 |
+| `rl.defaults.calendars` removed -> `get_calendar` | 1 |
+
+Two traps in there. The `leg2_fixings` rename: rateslib suggests
+`leg2_fx_fixings`, which is the MTM FX reset series, a completely different
+thing. And the `__dict__["kwargs"]` reach-through: the `["kwargs"]` form raises
+`KeyError`, but the `.get("kwargs", {}).get(...)` variant returns `None`
+**silently** and only surfaces later as `float(None)` somewhere unrelated. Two of
+those seventeen were production STIR/SDR curve builders. Schedule fields moved as
+well: `effective`/`termination` are now on `leg1.schedule`, while
+`fixed_rate`/`notional` stay in `kwargs.leg1`.
+
+`tests/test_rateslib_27_migration.py` greps the whole repo to make sure the
+reach-through form cannot come back.
+
+### Three behaviour changes worth knowing
+
+**STIR futures BPV moved, and 2.7 is right.** `usd_stir`/`eur_stir`/`gbp_stir`
+changed convention from `act360`/`act365f` to `actacticma`. The future's *rate* is
+unchanged, but `analytic_delta` went from `-25.2778` to exactly `-25.0` - the
+exchange-defined $25/bp for a 3M SOFR contract. Anything sizing off STIR DV01
+moves ~1.1% and becomes correct. `RLSTIRFuturePricer.pv01()` also had to change:
+2.7 made the curve argument mandatory, and since a future carries no discounting
+a DF==1 curve reproduces the old value exactly (verified: identical against a
+flat and a steeply-discounting curve).
+
+**UK gilt stub flipped** `shortfront` -> `longfront`, which changes the coupon
+schedule without moving a yield-based metric.
+
+**`ex_div` became a signed business-day string** (`1` -> `'-1b'`). Cosmetic -
+accrued is identical either side of the ex-div boundary.
+
+All three are pinned by `tests/test_rateslib_27_migration.py`.
+
+### A safety regression the upgrade introduced, and the fix
+
+**`solver.result['status'] == 'SUCCESS'` is no longer sufficient.** Measured: a
+par grid with a -5000% front quote returns `status='SUCCESS'` from a curve that
+misprices its own calibration swaps by **4.9e+05 bp**. Under 2.1.1 the same input
+reported `FAILURE` and every builder in this repo refuses on that status.
+
+`build_rl_ois_curve` now asks the solved curve to reprice the quotes it was built
+from and raises if it cannot (`max_reprice_error_bp`, default 1.0 bp; the worst
+real residual is ~2e-3 bp). Costs 17.5 ms on a 44-tenor grid, ~8.8% of the build.
+
+**This affects every other rateslib curve builder in the repo** - the SDR STIR
+builders, BARCHART_STIRF, the Eris and GSQuant paths - which all still gate on
+the status alone. They were not changed here because that is outside this work's
+scope, but they carry the same exposure.
+
+### What the upgrade gained beyond the vol cubes
+
+**MXN is now modelled properly.** rateslib 2.7 added `mxn_irs` with
+`frequency="28d"` and a `mex` calendar. MXN Fondeo's 28-day roll was previously
+approximated as monthly and flagged "indicative only"; the rateslib leg now rolls
+on the traded schedule (verified: 28-day gaps after the front stub, repricing to
+1.1e-04 bp). It moved from `provenance="market_standard"` to `"rateslib_spec"`,
+leaving five approximate currencies rather than six. The QuantLib side still has
+no 28-day period, so the two backends legitimately disagree on MXN now - and the
+rateslib one is the right one.
+
+### The native IR vol cube is present but NOT usable
+
+`rl.IRSplineCube` builds from a Citi cube and its **ATM node round-trips
+exactly**. The off-ATM nodes do not, and it is not a unit problem: passing the
+strike axis in basis points, percent moneyness and decimal moneyness produced
+**byte-identical** wrong off-ATM values, which rules out scaling and points at a
+parameterisation of the smile's strike axis I did not identify. Worst off-ATM
+node: 453.80 returned against 82.55 bp fed in.
+
+`MDP/CitiVelocityExcel/vol/rl_native_cube.py` therefore round-trips every node
+and **raises** unless they all reproduce - so today it refuses for any cube with
+off-ATM strikes, and the `PPSplineF64` cube stays the default. Shipping it would
+have been a silently wrong smile, which is the exact failure mode this package
+guards against everywhere else. What would settle it: one worked example of
+`IRSplineCube(strikes=..., parameters=...)` read back through
+`get_smile(...).get_from_strike(k, f=...)` at a non-ATM strike.

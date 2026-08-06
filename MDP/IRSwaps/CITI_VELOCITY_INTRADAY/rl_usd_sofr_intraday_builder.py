@@ -249,7 +249,7 @@ def par_reprice_errors_bp(rlcurve: RLCurveBase) -> "pd.Series":
     errors = {}
     for tenor, irs in rlcurve.rl_pricing_curve_instruments.items():
         model_rate = float(irs.rate(curves=curve))
-        fixed = float(irs.__dict__.get("kwargs", {}).get("fixed_rate"))
+        fixed = float(irs.kwargs.leg1["fixed_rate"])
         errors[tenor] = (model_rate - fixed) * 100.0
     order = sorted(errors, key=_tenor_sort_key)
     return pd.Series({t: errors[t] for t in order}, name="reprice_error_bp")

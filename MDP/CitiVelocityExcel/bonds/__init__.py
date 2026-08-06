@@ -4,7 +4,7 @@ r"""Citi Velocity bonds: universe, conventions, and both pricing backends.
 ``CVCURVEBOND`` returns the ISIN universe for a country, and
 ``RATES.BOND.<ISIN>.<value>`` returns one bond's timeseries. Velocity supplies
 quotes only - no ``CVD*`` pricer is entitled - so every analytic here is built
-in rateslib 2.1.1 and QuantLib 1.41 from those quotes.
+in rateslib 2.7.1 and QuantLib 1.41 from those quotes.
 
 Layout
 ------
