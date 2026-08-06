@@ -23,6 +23,8 @@ from utils.rl_compat import (  # noqa: E402
     RATE_FIXINGS_KWARG,
     analytic_delta,
     instrument_kwarg,
+    leg_cashflows,
+    leg_npv,
     rate_fixings_kwargs,
     stirf_analytic_delta,
     stirf_pv01,
@@ -141,6 +143,47 @@ def test_analytic_delta_positional_fallback_branch():
 # --------------------------------------------------------------------------
 # instrument_kwarg
 # --------------------------------------------------------------------------
+
+
+# --------------------------------------------------------------------------
+# leg accessors (keyword-only from 2.7)
+# --------------------------------------------------------------------------
+
+
+def test_leg_cashflows_returns_the_frame_and_the_positional_form_is_rejected(irs, curve):
+    """Both halves, so the first assertion cannot be vacuous."""
+    frame = leg_cashflows(irs.leg1, curve)
+    assert len(frame) > 0
+    assert {"Payment", "DCF"} <= set(frame.columns)
+
+    takes_positional = True
+    try:
+        irs.leg1.cashflows(curve)
+    except TypeError:
+        takes_positional = False
+    # exactly one call shape is live on the installed rateslib; if BOTH worked
+    # the shim would be untested rather than tested
+    assert not takes_positional or "curve" in inspect.signature(
+        rl.legs.FixedLeg.cashflows).parameters
+
+
+def test_leg_npv_defaults_the_discount_curve_to_the_forecasting_one(irs, curve):
+    """``leg.npv(c, c)`` was the pre-2.7 spelling; ``disc_curve=None`` means it."""
+    implicit = complex(leg_npv(irs.leg1, curve)).real
+    explicit = complex(leg_npv(irs.leg1, curve, disc_curve=curve)).real
+    assert implicit == explicit
+    assert implicit != 0.0
+
+
+def test_leg_npv_actually_uses_the_discount_curve_it_is_given(irs, curve):
+    """Otherwise the disc_curve argument could be ignored and nothing would say so."""
+    other = rl.Curve(
+        nodes={rl.dt(2025, 1, 2): 1.0, rl.dt(2027, 1, 2): 0.70},
+        id="rl_compat_probe_disc", convention="act360", calendar="nyc",
+    )
+    assert complex(leg_npv(irs.leg1, curve, disc_curve=other)).real != pytest.approx(
+        complex(leg_npv(irs.leg1, curve)).real
+    )
 
 
 def test_instrument_kwarg_reads_notional(irs):
