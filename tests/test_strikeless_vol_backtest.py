@@ -1659,7 +1659,7 @@ def test_the_placebo_builds_the_null_itself_rather_than_taking_the_callers():
         assert null.index.equals(_OBSERVED.index)
         assert null.std(ddof=1) == pytest.approx(_OBSERVED.std(ddof=1), rel=1e-9)
         assert not np.allclose(null.to_numpy(), _OBSERVED.to_numpy())
-    # and each simulation is a DIFFERENT null, not the same one three times
+    # and each simulation is a DIFFERENT null, not one null twenty times
     assert not np.allclose(seen[0].to_numpy(), seen[1].to_numpy())
 
 

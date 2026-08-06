@@ -24,9 +24,9 @@ nobody wants:
    identically, for the static book AND for a conditional one. "Both
    directions work" is therefore refuted by arithmetic before any data is
    involved, and a mirror run on a static book is not evidence of anything.
-   :func:`run_placebos` refuses to run the mirror on a signal whose sign never
-   varies, and stamps ``mirror_is_arithmetic`` on every mirror row it does
-   produce. What the mirror can still show is BOTH SIDES LOSING -- the pair
+   :func:`run_placebos` refuses to run the mirror unless the signal takes BOTH
+   directions at some point -- the Task 17 conditional rule -- and stamps
+   ``mirror_is_arithmetic`` on every mirror row it does produce. What the mirror can still show is BOTH SIDES LOSING -- the pair
    sitting inside the cost band -- which is a statement about costs, not about
    convexity. Read it as that.
 4. **Confound alternatives** for whatever config wins: duration-only
@@ -440,9 +440,9 @@ def run_placebos(
     defaults to ``be_over_realized`` -- the valuation switch, the largest lever
     of ``signal_state``'s five inputs and the one the vol story lives in.
 
-    The sign mirror is refused outright on a signal whose sign never varies:
-    see the module docstring, and do not report a static book's mirror as
-    evidence.
+    The sign mirror is refused outright unless the signal takes BOTH directions
+    at some point: see the module docstring, and do not report a
+    one-directional book's mirror as evidence.
     """
     base_signal_cfg = base_signal_cfg or SignalConfig()
     if (placebo_ctx_by_pair is None) != (placebo_panel_by_pair is None):
