@@ -796,6 +796,76 @@ def test_a_book_that_never_traded_reports_no_side():
     assert got["carry_usd"] == 0.0
 
 
+# ---------------------------------------------------------- the reason census
+
+
+def test_the_reason_census_counts_the_decisions_the_real_rule_made():
+    """Pinned against `strategy.signal_state`'s OWN strings, not against a
+    re-derivation of them: if a message is reworded the census silently goes to
+    zero, which is how a gate stops being reported without stopping being
+    claimed."""
+    from RVUtils.StrikelessVol.strategy import SignalConfig, signal_state
+
+    cfg = SignalConfig()
+    rows = [
+        # cheap + calm drift + stretched z -> a flattener is taken
+        {"be_over_realized": 0.6, "drift_t": 0.0, "residual_z": 2.5,
+         "spread_vol_bp_day": 1.0, "iv_z": 0.0},
+        # cheap but the DRIFT VETO blocks it
+        {"be_over_realized": 0.6, "drift_t": 9.0, "residual_z": 2.5,
+         "spread_vol_bp_day": 1.0, "iv_z": 0.0},
+        # cheap, drift missing -> fail closed
+        {"be_over_realized": 0.6, "drift_t": np.nan, "residual_z": 2.5,
+         "spread_vol_bp_day": 1.0, "iv_z": 0.0},
+        # rich, vol spike gates the steepener
+        {"be_over_realized": 1.5, "drift_t": 0.0, "residual_z": 2.5,
+         "spread_vol_bp_day": 1.0, "iv_z": 9.0},
+        # rich, iv_z missing -> fail closed
+        {"be_over_realized": 1.5, "drift_t": 0.0, "residual_z": 2.5,
+         "spread_vol_bp_day": 1.0, "iv_z": np.nan},
+        # fair
+        {"be_over_realized": 1.0, "drift_t": 0.0, "residual_z": 2.5,
+         "spread_vol_bp_day": 1.0, "iv_z": 0.0},
+        # cheap but the residual is not stretched enough
+        {"be_over_realized": 0.6, "drift_t": 0.0, "residual_z": 0.1,
+         "spread_vol_bp_day": 1.0, "iv_z": 0.0},
+    ]
+    states = [signal_state(pd.Series(r), cfg) for r in rows]
+    signals = pd.DataFrame(states, index=_idx(len(rows)))
+    c = X.signal_reason_census(signals)
+    assert c["n_rows"] == 7
+    assert c["n_held"] == 1                 # only the first row takes a position
+    assert c["n_cheap"] == 4
+    assert c["n_rich"] == 2
+    assert c["n_fair"] == 1
+    assert c["n_drift_vetoed"] == 1
+    assert c["n_drift_unconfirmed"] == 1
+    assert c["n_iv_spike_gated"] == 1
+    assert c["n_iv_unconfirmed"] == 1
+    assert c["n_below_entry"] == 1
+    assert c["drift_veto_share_of_cheap"] == pytest.approx(0.25)
+
+
+def test_the_veto_can_be_over_its_threshold_and_still_block_nothing():
+    """Why `share_drift_veto` is not the same statistic as the veto's effect.
+
+    The veto only applies to a FLATTENER, so a panel that reads RICH every day
+    has `drift_t` far over the gate on every row and zero blocks -- which is
+    precisely what the slope-vol denominator produced.
+    """
+    from RVUtils.StrikelessVol.strategy import SignalConfig, signal_state
+
+    cfg = SignalConfig()
+    rows = [{"be_over_realized": 5.0, "drift_t": 9.0, "residual_z": 2.5,
+             "spread_vol_bp_day": 1.0, "iv_z": 0.0} for _ in range(20)]
+    signals = pd.DataFrame([signal_state(pd.Series(r), cfg) for r in rows],
+                           index=_idx(20))
+    c = X.signal_reason_census(signals)
+    assert c["n_rich"] == 20
+    assert c["n_drift_vetoed"] == 0        # over the gate on every row, blocks none
+    assert np.isnan(c["drift_veto_share_of_cheap"])
+
+
 # --------------------------------------------------------- the never-roll trap
 
 
@@ -825,8 +895,14 @@ def test_the_never_roll_constants_survive_a_nanosecond_index():
 def _wire_fake_market(monkeypatch, n=800, seed=41):
     idx = _idx(n)
     rng = np.random.default_rng(seed)
+    spread = np.cumsum(rng.normal(0, 1.0, n)) - 50.0
+    # the LEVEL moves several times harder than the slope, as it does on every
+    # real curve in this study (measured 2.6-6.2x across the four markets)
+    long_rate = 0.04 + np.cumsum(rng.normal(0, 4e-4, n))
     fake_greeks = pd.DataFrame({
-        "spread_bp": np.cumsum(rng.normal(0, 1.0, n)) - 50.0,
+        "spread_bp": spread,
+        "long_rate": long_rate,
+        "short_rate": long_rate - spread / 10_000.0,
         "breakeven_h25": np.abs(rng.normal(3.0, 0.4, n)),
         "gamma_h25": np.full(n, 200.0),
         "daily_roll_usd": rng.normal(-2000.0, 100.0, n),
@@ -850,24 +926,42 @@ def test_the_signal_panel_carries_every_column_the_rule_reads(monkeypatch):
     assert built["changes_resid"].notna().sum() > 0
 
 
-def test_the_realized_vol_is_the_trailing_window_a_hand_computation_gives(monkeypatch):
-    """Derivation check, not a bound: the size input and the valuation
-    denominator are the same trailing statistic, computed one way."""
+def test_the_size_base_and_the_valuation_comparator_are_DIFFERENT_series(monkeypatch):
+    """The defect this whole correction is about.
+
+    One series was bound to both `spread_vol_bp_day` (the SIZE) and
+    `realized_vol_bp_day` (the valuation comparator), so the panel reported a
+    `realized_vol_bp_day` that was not one. They are computed on different
+    underlyings and must not coincide.
+    """
     g, _ = _wire_fake_market(monkeypatch)
     built = X.build_signal_panel("USD", {}, X.headline_pair("USD"),
                                  start=dt.date(2020, 1, 1), end=dt.date(2021, 1, 1))
-    want = g["spread_bp"].diff().rolling(
+    p = built["panel"]
+    want_slope = g["spread_bp"].diff().rolling(
         X.REALIZED_WINDOW, min_periods=X.REALIZED_WINDOW).std(ddof=1)
-    got = built["panel"]["spread_vol_bp_day"]
-    assert got.dropna().sub(want.dropna()).abs().max() < 1e-12
-    assert got.iloc[:X.REALIZED_WINDOW].isna().all()
-    # a centred window would be defined at the head; a trailing one is not
-    assert int(got.notna().sum()) == len(g) - X.REALIZED_WINDOW
+    want_rate = (g["long_rate"].diff() * 10_000.0).rolling(
+        X.REALIZED_WINDOW, min_periods=X.REALIZED_WINDOW).std(ddof=1)
+    assert p["spread_vol_bp_day"].dropna().sub(want_slope.dropna()).abs().max() < 1e-12
+    assert p["realized_vol_bp_day"].dropna().sub(want_rate.dropna()).abs().max() < 1e-12
+    both = pd.concat([p["spread_vol_bp_day"], p["realized_vol_bp_day"]],
+                     axis=1).dropna()
+    assert len(both) > 100
+    assert (both.iloc[:, 0] - both.iloc[:, 1]).abs().min() > 1e-9
+    # trailing, not centred: undefined through the warm-up
+    assert p["spread_vol_bp_day"].iloc[:X.REALIZED_WINDOW].isna().all()
+    assert p["realized_vol_bp_day"].iloc[:X.REALIZED_WINDOW].isna().all()
 
 
-def test_be_over_realized_is_breakeven_over_realized_not_the_other_way(monkeypatch):
-    """It sets the SIGN: inverted, every cheap day reads rich and vice versa."""
-    g, _ = _wire_fake_market(monkeypatch)
+def test_the_valuation_switch_divides_the_breakeven_by_the_RATE_vol(monkeypatch):
+    """It sets the SIGN, and BE is a PARALLEL-move breakeven.
+
+    `package_gamma` is a second difference over `Curve.shift(±h)`, so the
+    comparator is the LEVEL vol. Dividing by the slope vol instead -- which is
+    several times smaller -- makes every day read richer and inverts the
+    valuation state.
+    """
+    _wire_fake_market(monkeypatch)
     built = X.build_signal_panel("USD", {}, X.headline_pair("USD"),
                                  start=dt.date(2020, 1, 1), end=dt.date(2021, 1, 1))
     p = built["panel"]
@@ -875,6 +969,24 @@ def test_be_over_realized_is_breakeven_over_realized_not_the_other_way(monkeypat
              / p["breakeven_bp_day"]).dropna()
     assert np.allclose(ratio.to_numpy(), 1.0)
     assert float(p["be_over_realized"].dropna().median()) > 0.0
+    # the slope ratio is kept as a LABELLED alternate, and is uniformly larger
+    slope_ratio = (p["be_over_spread_vol"] * p["spread_vol_bp_day"]
+                   / p["breakeven_bp_day"]).dropna()
+    assert np.allclose(slope_ratio.to_numpy(), 1.0)
+    both = pd.concat([p["be_over_realized"].rename("rate"),
+                      p["be_over_spread_vol"].rename("slope")], axis=1).dropna()
+    assert len(both) > 100
+    assert (both["slope"] > both["rate"]).mean() > 0.9
+
+
+def test_a_hand_rolled_denominator_cannot_reach_the_valuation_switch():
+    """The guard, from the panel's side: the builders are the only way in."""
+    from RVUtils.StrikelessVol.vol_metrics import be_over_realized
+
+    s = pd.Series(np.cumsum(np.random.default_rng(9).normal(0, 1.0, 300)))
+    with pytest.raises(ValueError, match="carries no `underlying` label"):
+        be_over_realized(pd.Series(4.0, index=s.index),
+                         s.diff().rolling(63, min_periods=63).std(ddof=1))
 
 
 def test_the_pipeline_certifies_the_drift_source_end_to_end(monkeypatch):
@@ -956,7 +1068,8 @@ def test_umep_is_refused_for_a_non_usd_market(monkeypatch):
     quietly run three markets on a different model from the fourth."""
     monkeypatch.setattr(X, "greeks_panel",
                         lambda curves, pair, **kw: pd.DataFrame(
-                            {"spread_bp": [1.0], "breakeven_h25": [1.0],
+                            {"spread_bp": [1.0], "long_rate": [0.04],
+                             "short_rate": [0.04], "breakeven_h25": [1.0],
                              "gamma_h25": [1.0], "daily_roll_usd": [1.0]},
                             index=_idx(1)))
     monkeypatch.setattr(X, "vol_panel",

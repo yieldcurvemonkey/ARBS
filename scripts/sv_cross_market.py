@@ -91,6 +91,12 @@ from RVUtils.StrikelessVol.report import (
 )
 from RVUtils.StrikelessVol.strategy import SignalConfig
 from RVUtils.StrikelessVol.universe import ALL_PAIRS, MARKET_CURVES
+from RVUtils.StrikelessVol.vol_metrics import (
+    UNDERLYING_SPREAD,
+    be_over_realized,
+    realized_vol_bp_day,
+    spread_vol_bp_day,
+)
 
 MARKETS: Tuple[str, ...] = ("USD", "EUR", "JPY", "GBP")
 
@@ -281,8 +287,24 @@ def build_signal_panel(market: str, curves: dict, pair, *,
     vol_ann = pd.Series(bp_day_to_annual_normals(iv_bp_day), index=idx, name="vol")
 
     spread_bp = g["spread_bp"].astype(float)
-    realized = spread_bp.diff().rolling(REALIZED_WINDOW,
-                                        min_periods=REALIZED_WINDOW).std(ddof=1)
+    # TWO different series, through the two labelled builders. They are not
+    # interchangeable and the first draft of this script used ONE series under
+    # both names, which inverted the valuation state in every market.
+    #
+    # `rate_vol` is the comparator for the breakeven: `package_gamma` is a
+    # second difference over `Curve.shift(±h)`, so BE is a PARALLEL-move
+    # breakeven and the inequality being bought is `½Γσ_level² > |roll|`.
+    # Measured on a real 2026-08-03 USD curve: package_dv01 is exactly 0.0 and
+    # a 1bp parallel move gives ΔPV +101.88 against ½Γh² = +102.01 with an
+    # implied first-order term of 0.00, while a 1bp SPREAD move is ~$100,000 of
+    # first-order P&L against ~$102 of convexity (980x). Slope vol does not
+    # enter the inequality.
+    #
+    # `slope_vol` is the SIZE base -- `strategy.signal_state` risk-parities the
+    # position against the spread's own vol, which is the risk the book carries.
+    rate_vol = realized_vol_bp_day(g["long_rate"].astype(float),
+                                   window=REALIZED_WINDOW)
+    slope_vol = spread_vol_bp_day(spread_bp, window=REALIZED_WINDOW)
 
     drivers: Dict[str, pd.Series] = {"vol": vol_ann}
     if with_umep:
@@ -299,15 +321,22 @@ def build_signal_panel(market: str, curves: dict, pair, *,
     drift_t = drift(changes_resid, window=63)["t_stat"]
     iv_z = residual_z(iv_bp_day, window=252, min_periods=126)
 
+    be = g["breakeven_h25"].astype(float)
     panel = pd.DataFrame({
-        "be_over_realized": g["breakeven_h25"].astype(float) / realized,
+        # the SIGN: a parallel-move breakeven against the LEVEL vol
+        "be_over_realized": be_over_realized(be, rate_vol),
         "drift_t": drift_t.reindex(idx),
         # placeholder -- causal_signals overwrites this from the audited fit
         "residual_z": pd.Series(np.nan, index=idx),
-        "spread_vol_bp_day": realized,
+        # the SIZE: risk parity against the spread's own vol
+        "spread_vol_bp_day": slope_vol,
         "iv_z": iv_z.reindex(idx),
-        "realized_vol_bp_day": realized,
-        "breakeven_bp_day": g["breakeven_h25"].astype(float),
+        "realized_vol_bp_day": rate_vol,
+        # the slope ratio, kept beside it as a LABELLED alternate so the
+        # before/after contrast is readable off one frame
+        "be_over_spread_vol": be_over_realized(be, slope_vol,
+                                               denominator=UNDERLYING_SPREAD),
+        "breakeven_bp_day": be,
         "iv_bp_day": iv_bp_day,
         "gamma_h25": g["gamma_h25"].astype(float),
         "daily_roll_usd": g["daily_roll_usd"].astype(float),
@@ -686,6 +715,53 @@ def book_stats(pnl: pd.Series) -> dict:
             "n": d["n"]}
 
 
+#: Substrings ``strategy.signal_state`` puts in ``reason``, and what each means.
+#: Matched rather than re-derived, so the census counts the decisions the rule
+#: actually made. Pinned against signals built by the real ``signal_state`` --
+#: if a message is reworded, the test fails rather than the count silently
+#: going to zero, which is how a gate stops being reported without stopping
+#: being claimed.
+REASON_MARKERS: Dict[str, str] = {
+    "cheap": "cheap",
+    "rich": "rich",
+    "fair": "fair",
+    "drift_vetoed": "vetoed by drift",
+    "drift_unconfirmed": "drift unconfirmed",
+    "iv_spike_gated": "gated by vol spike",
+    "iv_unconfirmed": "iv spike unconfirmed",
+    "below_entry": "< entry",
+    "exit": "exit -- entry-vintage signal closed",
+    "warmup": "warmup",
+    "no_valuation": "no valuation",
+    "short_side_disabled": "short side disabled",
+}
+
+
+def signal_reason_census(signals: pd.DataFrame) -> dict:
+    """How often each gate actually changed the decision.
+
+    ``share_drift_veto`` elsewhere in this script counts days where
+    ``drift_t > gate``, which is NOT the same thing: the veto only applies to a
+    FLATTENER that is not deeply cheap, so on a panel whose valuation reads
+    RICH almost every day the gate can be over its threshold constantly and
+    never block anything. Under the original (slope-vol) denominator that is
+    exactly what happened -- the rule was a convexity seller, the veto never
+    fired, and H8's EUR claim was therefore never exercised at all. This
+    counts the decisions, not the threshold crossings.
+    """
+    reasons = pd.Series(signals["reason"]).astype(str)
+    out = {"n_rows": int(len(reasons)),
+           "n_held": int((signals["sign"].astype(float) != 0).sum())}
+    for name, marker in REASON_MARKERS.items():
+        out[f"n_{name}"] = int(reasons.str.contains(marker, regex=False).sum())
+    # of the rows where the valuation asked for a flattener, how many did the
+    # drift veto actually block?
+    wanted_flattener = out["n_cheap"]
+    out["drift_veto_share_of_cheap"] = (
+        out["n_drift_vetoed"] / wanted_flattener if wanted_flattener else float("nan"))
+    return out
+
+
 def carry_side_split(unit_carry: pd.Series, scale: pd.Series) -> dict:
     """Which side the rule was on, and what the carry sign would have been on the other.
 
@@ -970,6 +1046,20 @@ def _report(outs: Dict[str, dict], *, costs: CostSchedule,
               f"veto {r['share_drift_veto']:.1%}  "
               f"net {r['total_net_bp']:+.2f}bp  "
               f"breakeven cost x{r['breakeven_cost_mult']:.2f}")
+
+    print("\n--- what each gate actually DID (decisions, not threshold crossings) ---")
+    print("`share_drift_veto` above counts days drift_t exceeded its gate; the veto")
+    print("only applies to a FLATTENER that is not deeply cheap, so that number can")
+    print("be large while the veto blocks nothing. These are the blocks.")
+    for market, out in outs.items():
+        c = signal_reason_census(out["signals"])
+        print(f"{market:4s} rows {c['n_rows']:5d} held {c['n_held']:5d}  |  "
+              f"cheap {c['n_cheap']:5d} rich {c['n_rich']:5d} fair {c['n_fair']:5d}  |  "
+              f"DRIFT VETOED {c['n_drift_vetoed']:5d} "
+              f"({c['drift_veto_share_of_cheap']:.1%} of cheap days)  "
+              f"drift NaN {c['n_drift_unconfirmed']:4d}  "
+              f"iv-gated {c['n_iv_spike_gated']:4d}  iv NaN {c['n_iv_unconfirmed']:4d}  "
+              f"|z|<entry {c['n_below_entry']:5d}  exits {c['n_exit']:4d}")
 
     print("\n--- the uniform carry sign is an ARTEFACT: the counterfactual ---")
     print("Same days, same sizes, the other side. If a uniform -1 is equally "

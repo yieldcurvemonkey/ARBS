@@ -129,6 +129,7 @@ from RVUtils.StrikelessVol.universe import (
 )
 from RVUtils.StrikelessVol.vol_metrics import (
     be_over_implied,
+    UNDERLYING_SPREAD,
     be_over_realized,
     realized_vol_bp_day,
     spread_vol_bp_day,
@@ -476,7 +477,13 @@ def build_pair_inputs(
         "realized_vol_bp_day": rate_vol,
         "implied_bp_day": iv,
         "be_over_implied": be_over_implied(be, iv),
-        "be_over_spread_vol": be_over_realized(be, slope_vol),
+        # `denominator="spread"` is now REQUIRED for the slope ratio: BE is a
+        # parallel-move breakeven, so `be_over_realized` refuses a slope
+        # denominator unless the caller says that is deliberate. This IS the
+        # deliberate diagnostic; the accidental version is what inverted Task
+        # 21's valuation state in all four markets.
+        "be_over_spread_vol": be_over_realized(be, slope_vol,
+                                               denominator=UNDERLYING_SPREAD),
         "gamma_h25": greeks["gamma_h25"].astype(float),
         "daily_roll_usd": greeks["daily_roll_usd"].astype(float),
     }, index=idx)
