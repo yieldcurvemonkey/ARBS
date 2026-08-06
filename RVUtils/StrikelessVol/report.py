@@ -57,6 +57,7 @@ __all__ = [
     "ledger_attribution",
     "mirror_split",
     "per_year_attribution",
+    "portfolio",
     "residual_stats",
     "vol_beta",
 ]
@@ -603,6 +604,112 @@ def cost_table(
     out = pd.DataFrame(rows)
     if len(out):
         out["roll_charged"] = out["roll_charged"].astype(bool)
+    return out
+
+
+#: Default trailing window for the risk-parity weights, in observations.
+PORTFOLIO_WINDOW: int = 63
+
+
+def portfolio(
+    results_by_market: dict,
+    *,
+    target_bp_day: float,
+    caps: dict | None = None,
+    window: int = PORTFOLIO_WINDOW,
+    min_periods: int | None = None,
+) -> pd.DataFrame:
+    """Risk-parity book across markets, weights from trailing P&L vol.
+
+    Returns one ``w_<market>`` column per market plus ``pnl``, on the union of
+    the inputs' indices.
+
+    **Weights are lagged one day: today's weight cannot know today's
+    volatility.** ``w = target_bp_day / sd(trailing ``window`` observations,
+    ending yesterday)``, clipped above by ``caps`` where given.
+
+    **The unit contract, and why the parameter is named ``_bp_day``.** The
+    weight is a pure ratio, so ``target_bp_day`` must be in **the same unit as
+    the input series**, and the book then realises that unit as its own daily
+    sd (pinned by
+    ``test_the_book_realises_the_target_when_the_legs_are_independent``). This
+    study's ledgers are DOLLARS (:func:`distribution_stats` says so), and a
+    dollar book is not comparable across markets whose realised DV01s differ --
+    so the caller divides by each run's ``realised_dv01_mean_usd`` first and
+    feeds bp/day. Feeding dollars is not an error this function can detect; it
+    just makes the parameter's name a lie and the "risk parity" a parity of
+    nothing.
+
+    **A missing value is missing, not a flat day.** Any NaN inside the trailing
+    window leaves that market's weight NaN for the rest of the window, and a
+    market with no weight simply does not trade (``pnl`` sums what is present,
+    ``min_count=1``). This matters cross-market because the calendars differ:
+    JPY is closed on days USD trades, and treating those as zero-P&L days would
+    shrink JPY's measured vol and hand it a bigger weight for being shut. The
+    caller has to decide what a closed day is and say so; the two cases are
+    genuinely different and only one of them is a zero.
+
+    **This function does not answer H8, and must not be read as if it did.** A
+    multi-market book beats the best single market on Sharpe almost
+    automatically -- averaging weakly-correlated series raises the ratio whether
+    or not the mechanism generalises, and this book is *constructed* to exploit
+    that. Whether the signs hold across markets is a per-market question about
+    the sign and magnitude of the measured relationships (carry sign,
+    ``harvest_pnl_share``, vol correlation, valuation state); the aggregate
+    ratio is downstream of the arithmetic, not evidence about the mechanism.
+    Compare distributions on **max drawdown**, never on Sharpe -- see
+    ``FORBIDDEN_RANK_KEYS`` and this module's docstring for the measurements
+    behind that.
+
+    Three refusals, each because the silent version reads as a pass:
+
+    * an empty book -- there is no risk parity over no markets;
+    * ``target_bp_day <= 0`` -- a zero target gives a zero book, which reports
+      as a flawless flat P&L rather than as a mistake;
+    * a cap naming a market that is not in the book -- a misspelled cap never
+      binds, and "the cap was respected" is exactly what a never-binding cap
+      looks like from the outside.
+    """
+    if not results_by_market:
+        raise ValueError(
+            "portfolio() needs at least one market: a risk-parity book over an "
+            "empty set of markets is not an empty book, it is a mistake."
+        )
+    if not np.isfinite(target_bp_day) or float(target_bp_day) <= 0.0:
+        raise ValueError(
+            f"target_bp_day must be finite and positive, got {target_bp_day!r}. "
+            "A non-positive target produces a zero or sign-flipped book, which "
+            "reports as a flat (or inverted) P&L rather than as an error."
+        )
+    caps = dict(caps or {})
+    frame = pd.DataFrame(
+        {k: pd.Series(v).astype(float) for k, v in results_by_market.items()}
+    )
+    unknown = [m for m in caps if m not in frame.columns]
+    if unknown:
+        raise ValueError(
+            f"caps name markets that are not in the book: {sorted(unknown)} "
+            f"(book has {sorted(frame.columns)}). A cap on a market that is not "
+            "there never binds, and an un-bound cap is indistinguishable from a "
+            "respected one."
+        )
+    bad_caps = {m: c for m, c in caps.items()
+                if not np.isfinite(c) or float(c) <= 0.0}
+    if bad_caps:
+        raise ValueError(
+            f"every cap must be finite and positive, got {bad_caps}. A zero cap "
+            "silently removes the market instead of limiting it."
+        )
+
+    window = int(window)
+    mp = window if min_periods is None else int(min_periods)
+    vol = frame.rolling(window, min_periods=mp).std(ddof=1).shift(1)
+    weights = (float(target_bp_day) / vol).replace([np.inf, -np.inf], np.nan)
+    for market, cap in caps.items():
+        weights[market] = weights[market].clip(upper=float(cap))
+
+    out = pd.DataFrame({f"w_{c}": weights[c] for c in frame.columns})
+    out["pnl"] = (weights * frame).sum(axis=1, min_count=1)
     return out
 
 
