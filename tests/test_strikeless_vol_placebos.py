@@ -42,11 +42,16 @@ class SyntheticCtx:
     """Same closed-form world as tests/test_strikeless_vol_backtest.py."""
 
     def __init__(self, path_bp, theta_per_day=-500.0, gamma=40.0,
-                 start="2022-01-03"):
+                 start="2022-01-03", theta_flip_at=None):
         self.dates = pd.bdate_range(start, periods=len(path_bp))
         self.path = dict(zip(self.dates, np.asarray(path_bp, dtype=float)))
         self.day_index = {d: i for i, d in enumerate(self.dates)}
         self.theta_per_day = theta_per_day
+        #: row index at and after which theta REVERSES sign. The pure-carry
+        #: confound is the only thing that reads carry, and with a constant
+        #: theta its answer never changes -- so no test on such a path can tell
+        #: a lagged rule from one that acts on its own day's carry.
+        self.theta_flip_at = theta_flip_at
         self.k = gamma / 1e4
 
     def rate(self, date, leg):
@@ -55,14 +60,26 @@ class SyntheticCtx:
     def dv01(self, date, leg):
         return 1.0 + self.k * self.path[date] if leg == "long" else 1.0
 
+    def _theta_per_day(self, date):
+        if self.theta_flip_at is not None \
+                and self.day_index[date] >= self.theta_flip_at:
+            return -self.theta_per_day
+        return self.theta_per_day
+
     def theta(self, date, nl, ns):
-        return self.theta_per_day * (nl / BASE_DV01)
+        return self._theta_per_day(date) * (nl / BASE_DV01)
+
+    def _cum_theta(self, i):
+        if self.theta_flip_at is None:
+            return self.theta_per_day * i
+        before = min(i, self.theta_flip_at)
+        return self.theta_per_day * before - self.theta_per_day * (i - before)
 
     def pv(self, date, nl, ns):
         dr = self.path[date]
         i = self.day_index[date]
         return (nl * (dr + 0.5 * self.k * dr * dr) - ns * dr
-                + self.theta_per_day * i * (nl / BASE_DV01))
+                + self._cum_theta(i) * (nl / BASE_DV01))
 
 
 def _ar1(n, rho=0.97, sd=1.0, seed=0):
@@ -358,6 +375,29 @@ def test_the_sign_mirror_is_measured_arithmetic_not_evidence():
         float(out.loc[out["family"] == "real", "cost_usd"].iloc[0]), rel=1e-9)
 
 
+def test_the_mirror_pairs_each_row_with_the_config_it_actually_mirrors():
+    """When the grid itself sweeps ``sign``, the join is ambiguous on the
+    remaining keys -- both real rows match every mirror row. The mirror row
+    carrying sign s must be paired with the real row carrying -s."""
+    ctx, panel = _world()
+    grid = [{"trigger_bp": 25.0, "sign": 1}, {"trigger_bp": 25.0, "sign": -1}]
+    out = run_placebos({"USD": ctx}, {"USD": panel}, grid, costs=TAKER,
+                       n_shuffles=0)
+    mirror = out[out["family"] == "sign_mirror"]
+    assert len(mirror) == 2
+    assert sorted(mirror["sign"]) == [-1, 1]
+    assert bool(mirror["mirror_is_arithmetic"].all())
+    real = out[out["family"] == "real"].set_index("sign")
+    for _, row in mirror.iterrows():
+        partner = real.loc[-int(row["sign"])]
+        gross_real = float(partner[["carry_usd", "harvest_usd", "mtm_usd",
+                                    "cross_usd"]].sum())
+        gross_mirror = float(row[["carry_usd", "harvest_usd", "mtm_usd",
+                                  "cross_usd"]].sum())
+        assert float(row["mirror_gross_sum_usd"]) == pytest.approx(
+            gross_real + gross_mirror, abs=1e-6)
+
+
 # --------------------------------------------------------------- the confounds
 
 
@@ -400,6 +440,35 @@ def test_carry_sign_signals_read_only_the_carry():
     assert set(sig["sign"].unique()) <= {0, FLATTENER, STEEPENER}
     assert (sig["sign"].iloc[2:] == STEEPENER).all()
     assert sig["sign"].iloc[0] == 0          # lag-1: nothing known on day one
+
+
+def test_carry_sign_signals_act_on_YESTERDAYS_carry():
+    """A constant-theta world cannot tell a lagged rule from a look-ahead one.
+
+    The first version of this test asserted only that the sign was constant
+    after the warmup, which is true whether or not the rule is lagged -- and a
+    mutation removing the ``shift(1)`` survived it. So the world's theta
+    REVERSES mid-sample, and the assertion is that the position turns one day
+    AFTER the carry does, never on the same day.
+    """
+    from RVUtils.StrikelessVol.replication import simulate
+
+    n, flip = 120, 60
+    ctx = SyntheticCtx(list(np.linspace(0, 30, n)), theta_flip_at=flip)
+    carry = simulate(ctx, list(ctx.dates), ReplicationConfig(), FREE)["carry"]
+    sign_of_carry = np.sign(carry.to_numpy())
+    turns = [i for i in range(2, n)
+             if sign_of_carry[i] != 0 and sign_of_carry[i - 1] != 0
+             and sign_of_carry[i] != sign_of_carry[i - 1]]
+    assert turns == [flip], f"the world must turn exactly once, at {flip}"
+
+    sig = carry_sign_signals(ctx, list(ctx.dates), rep_cfg=ReplicationConfig(),
+                             costs=FREE)["sign"].to_numpy()
+    # on the turn date the rule still holds YESTERDAY's side ...
+    assert sig[flip] == sign_of_carry[flip - 1]
+    assert sig[flip] != sign_of_carry[flip]
+    # ... and it turns on the next date, not this one
+    assert sig[flip + 1] == sign_of_carry[flip]
 
 
 def test_z_rule_signals_use_the_same_entry_and_sizing_as_the_real_rule():

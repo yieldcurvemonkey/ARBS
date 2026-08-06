@@ -542,6 +542,9 @@ def run_placebos(
     else:
         skipped.append("sign_mirror")
 
+    unknown = [f for f in ran + skipped if f not in PLACEBO_FAMILIES]
+    if unknown:  # pragma: no cover -- keeps the exported constant truthful
+        raise AssertionError(f"undeclared placebo family/families {unknown}")
     out = pd.concat(frames, ignore_index=True, sort=False)
     out.attrs.update({
         "legs_run": tuple(ran),
@@ -572,9 +575,16 @@ def _annotate_mirror(real: pd.DataFrame, mirror: pd.DataFrame,
     keys = [k for k in {k for cfg in grid for k in cfg} if k != "sign"]
     on = ["pair", "book"] + sorted(keys)
     left = mirror.copy()
-    right = real[on + list(_GROSS_COLS)].copy()
+    right = real.copy()
     right["_gross_real"] = _gross_usd(right)
-    merged = left.merge(right[on + ["_gross_real"]], on=on, how="left")
+    if "sign" in right.columns and "sign" in left.columns:
+        # the mirror row carrying sign s came from the real row carrying -s.
+        # Without this the join is ambiguous whenever the grid itself sweeps
+        # `sign`: both real rows match every mirror row on the remaining keys.
+        right["sign"] = -right["sign"].astype(int)
+        on = on + ["sign"]
+    merged = left.merge(right[on + ["_gross_real"]], on=on, how="left",
+                        validate="m:1")
     gross_mirror = _gross_usd(merged)
     total = merged["_gross_real"] + gross_mirror
     scale = pd.concat([merged["_gross_real"].abs(), gross_mirror.abs()],
@@ -605,7 +615,10 @@ def run_confounds(
     its single replication config -- confounds are run against one winner, not
     against a grid, because the question is "what else pays this much" and a
     grid of alternatives would just re-open the multiple-testing problem the
-    league table's DSR closes.
+    league table's DSR closes. Since the signals are prebuilt, ``config`` may
+    name only ``ReplicationConfig`` fields; ``run_grid`` refuses a signal axis
+    here, because a prebuilt frame cannot sweep one and every row would be the
+    same run wearing a different label.
 
     The PC1 leg needs ``rates_by_pair`` (a wide curve panel) and
     ``spread_by_pair`` (the slope), plus ``panel_by_pair`` for the sizing
