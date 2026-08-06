@@ -109,6 +109,68 @@ def test_the_live_span_is_inclusive_at_both_of_its_endpoints():
     assert out["B"].iloc[8:].isna().all()     # after the span
 
 
+def test_making_the_span_exclusive_at_its_endpoints_changes_nothing():
+    """A reviewer mutation survived here, and the reason is that it CANNOT fail.
+
+    Turning `>=`/`<=` into `>`/`<` in the span looks like an off-by-one at the
+    dates a market arrives and leaves. It is not observable: the endpoints come
+    from `dropna()`, so those two dates are non-NaN by construction and the
+    `fillna` applied over the span is a no-op there. The mutant is EQUIVALENT.
+
+    Recorded as a MEASURED null rather than an argued one -- an equivalence
+    claim is exactly the kind of thing that is quietly wrong. Two
+    implementations, compared over randomised frames plus the edge cases; if
+    the structure of `align_for_book` ever changes so that the boundary starts
+    to matter, this test fails and says so.
+    """
+    def exclusive(series_by_market):
+        frame = pd.DataFrame(series_by_market)
+        for col, s in series_by_market.items():
+            live = s.dropna()
+            if live.empty:
+                continue
+            span = ((frame.index > live.index.min())
+                    & (frame.index < live.index.max()))
+            frame.loc[span, col] = frame.loc[span, col].fillna(0.0)
+        return frame.sort_index()
+
+    rng = np.random.default_rng(0)
+    for _ in range(300):
+        n = int(rng.integers(3, 25))
+        idx = _idx(n)
+        cols = {}
+        for c in "ABC"[:int(rng.integers(1, 4))]:
+            v = rng.normal(0, 1, n)
+            mask = rng.random(n) < rng.random()
+            cols[c] = pd.Series(np.where(mask, np.nan, v), index=idx)
+        assert X.align_for_book(cols).equals(exclusive(cols))
+
+    # the edge cases the random draw is unlikely to hit
+    idx = _idx(6)
+    edges = {
+        "all_nan": pd.Series(np.nan, index=idx),
+        "one_live": pd.Series([np.nan, np.nan, 1.0, np.nan, np.nan, np.nan], index=idx),
+        "live_at_both_ends": pd.Series([1.0, np.nan, np.nan, np.nan, np.nan, 1.0],
+                                       index=idx),
+        "no_holes": pd.Series(1.0, index=idx),
+    }
+    for name, s in edges.items():
+        one = {name: s}
+        assert X.align_for_book(one).equals(exclusive(one)), name
+
+
+def test_the_lower_and_upper_span_bounds_are_not_interchangeable():
+    """The boundary mutation that IS observable: both ends read from the same
+    endpoint, which empties the span and stops every interior hole filling."""
+    idx = _idx(10)
+    b = pd.Series(np.nan, index=idx)
+    b.iloc[2] = 1.0
+    b.iloc[8] = 1.0
+    out = X.align_for_book({"A": pd.Series(1.0, index=idx), "B": b})
+    assert (out["B"].iloc[3:8] == 0.0).all()
+    assert int(out["B"].notna().sum()) == 7
+
+
 def test_the_union_calendar_is_the_union_not_the_intersection():
     a = pd.Series(1.0, index=_idx(5, "2024-01-01"))
     b = pd.Series(1.0, index=_idx(5, "2024-01-08"))

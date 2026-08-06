@@ -146,7 +146,7 @@ REALIZED_WINDOW = 63
 #: Long enough that ``simulate``'s internal roll can never fire inside a segment
 #: -- the roll is done by segmentation, as in ``scripts/sv_static_long_control``.
 #:
-#: **100 years, not that script's 1,000.** ``simulate`` computes
+#: **100 years, not the 1,000 both scripts used to carry.** ``simulate`` computes
 #: ``pd.Timestamp(d0) + pd.DateOffset(months=roll_months)``, and the result has
 #: to be representable at the index's own resolution. ``pd.Timestamp`` built
 #: from a ``datetime.date`` is SECOND resolution (range to year 2500+), which is
