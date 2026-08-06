@@ -456,10 +456,16 @@ def run_market(market: str, *, start: dt.date, end: dt.date,
     vb = vol_beta(monthly_pnl, monthly_dvol)
     daily_dvol = built["iv_bp_day"].diff()
 
+    # The scale `run_pair` applied, recovered from the same two objects it used,
+    # so the carry decomposition below reads the book that actually ran.
+    scale = (signals["dv01_usd"].astype(float)
+             / rep_cfg.package_dv01_usd).reindex(unit.index).fillna(0.0)
+
     return {
         "market": market, "pair": pair, "coverage": cov, "built": built,
         "signals": signals, "result": res, "unit": unit,
         "dropped_by_pricer": dropped_by_pricer,
+        "carry_split": carry_side_split(unit["carry"], scale),
         "vol_beta_monthly": vb,
         "vol_changes_daily": daily_dvol,
         "start": res.ledger.index.min().date(),
@@ -673,10 +679,121 @@ def circular_shift_control(frame: pd.DataFrame, *, target_bp_day: float,
 
 
 def book_stats(pnl: pd.Series) -> dict:
+    """``total`` is the SUM of the daily P&L, not its mean -- see the test."""
     d = distribution_stats(pnl)
     return {"sharpe": d["sharpe_annualised"], "max_drawdown": d["max_drawdown"],
             "daily_vol": d["daily_pnl_vol"], "total": float(pd.Series(pnl).dropna().sum()),
             "n": d["n"]}
+
+
+def carry_side_split(unit_carry: pd.Series, scale: pd.Series) -> dict:
+    """Which side the rule was on, and what the carry sign would have been on the other.
+
+    **The uniform carry sign across markets is an artefact, and this is the
+    measurement that shows it rather than the argument.**
+
+    ``simulate`` builds the unit ledger once at ``sign = FLATTENER`` and
+    ``run_pair`` scales every bucket by ``scale = dv01_usd / package_dv01_usd``,
+    which is NEGATIVE on a steepener day. The unit flattener's carry is negative
+    on ~89-99.8% of dates in every market, so a market whose valuation rule reads
+    RICH most of the time *must* print a positive carry sign, whatever the
+    mechanism does.
+
+    So the counterfactual is exact and costs nothing: had the book held the
+    FLATTENER on every day it held anything, its carry would be
+    ``sum(unit_carry * |scale|)``. Measured on the real run that is negative in
+    all four markets (USD −748,645 / EUR −195,499 / JPY −283,200 / GBP −463,472)
+    against the actual +746,791 / +189,817 / +273,734 / +436,669. A uniform +1
+    and a uniform −1 are equally available; which one appears is decided
+    entirely by which side the valuation rule picks. The uniform carry sign is
+    therefore not weak evidence about the mechanism -- it is a restatement of
+    "BE/RV sits above 1.2 in every market".
+    """
+    c = pd.Series(unit_carry).astype(float)
+    s = pd.Series(scale).astype(float).reindex(c.index).fillna(0.0)
+    held = s != 0.0
+    steepener = s < 0.0
+    flattener = s > 0.0
+    actual = c * s
+    n_held = int(held.sum())
+    return {
+        "n_held": n_held,
+        "n_steepener": int(steepener.sum()),
+        "n_flattener": int(flattener.sum()),
+        "steepener_share": float(steepener.sum() / n_held) if n_held else float("nan"),
+        "carry_usd": float(actual.sum()),
+        "carry_sign": int(np.sign(float(actual.sum()))),
+        "carry_from_steepener_usd": float(actual[steepener].sum()),
+        "carry_from_flattener_usd": float(actual[flattener].sum()),
+        # the counterfactual: the same days, the same sizes, the other side
+        "carry_flattener_only_usd": float((c * s.abs()).sum()),
+        "carry_flattener_only_sign": int(np.sign(float((c * s.abs()).sum()))),
+        "unit_carry_frac_negative": float((c < 0).mean()) if len(c) else float("nan"),
+    }
+
+
+#: Row label for the combined book in :func:`compare_book_to_singles`. Named
+#: once so a test and the printer cannot disagree about it.
+BOOK_ROW = "BOOK"
+
+#: Statistics on which a HIGHER value is better. Both of these are negative
+#: quantities here (a drawdown, and a Sharpe on a losing book), so "best" is
+#: ``idxmax`` -- the LEAST BAD leg. Picking ``idxmin`` would compare the book
+#: against the WORST single market, which is exactly how one manufactures "the
+#: book beats the best single market"; it survived 58 tests before this was
+#: factored out and pinned.
+HIGHER_IS_BETTER = ("max_drawdown", "dd_per_vol_day", "sharpe")
+
+
+def compare_book_to_singles(frame: pd.DataFrame, pnl: pd.Series, *,
+                            target_bp_day: float) -> pd.DataFrame:
+    """One row per market plus ``BOOK``: sharpe, drawdown, sd, total, n, dd/vol.
+
+    Each leg goes through the identical one-market :func:`portfolio` call and
+    the same :func:`book_pnl` flat-day convention, so the book and its legs are
+    scored on one calendar and one sizing rule.
+
+    ``dd_per_vol_day`` is the max drawdown over the row's OWN realised daily
+    sd. Dividing by anything else -- the row count, say -- produces a number
+    that still ranks plausibly and is no longer scale-free.
+    """
+    rows = {}
+    for c in frame.columns:
+        solo = portfolio({c: frame[c]}, target_bp_day=target_bp_day)
+        rows[c] = book_stats(book_pnl(solo, frame[[c]]))
+    rows[BOOK_ROW] = book_stats(pnl)
+    out = pd.DataFrame(rows).T
+    out["dd_per_vol_day"] = out["max_drawdown"] / out["daily_vol"]
+    return out
+
+
+def book_verdicts(table: pd.DataFrame, keys=HIGHER_IS_BETTER) -> dict:
+    """For each statistic: the best SINGLE market, the book, and who wins.
+
+    Separated from the printing because the H8 answer is stated here. Three
+    mutations of the inline version survived the whole suite -- ``dd/n``
+    instead of ``dd/daily_vol``, the BETTER/WORSE word inverted, and ``idxmin``
+    picking the worst leg as the bar the book has to clear.
+
+    ``verdict`` is the word the report prints, derived from ``book_is_better``
+    in one place so the two cannot drift apart. A tie is NOT better: the book
+    has to beat the bar, not match it.
+    """
+    singles = table.drop(index=BOOK_ROW)
+    out = {}
+    for key in keys:
+        best = singles[key].idxmax()
+        best_value = float(singles.loc[best, key])
+        book_value = float(table.loc[BOOK_ROW, key])
+        better = bool(book_value > best_value)
+        out[key] = {
+            "best_single": str(best),
+            "best_single_value": best_value,
+            "book_value": book_value,
+            "book_is_better": better,
+            "verdict": "BETTER" if better else "WORSE",
+        }
+    return out
 
 
 def breakeven_cost_multiplier(res, schedule: CostSchedule) -> float:
@@ -854,6 +971,21 @@ def _report(outs: Dict[str, dict], *, costs: CostSchedule,
               f"net {r['total_net_bp']:+.2f}bp  "
               f"breakeven cost x{r['breakeven_cost_mult']:.2f}")
 
+    print("\n--- the uniform carry sign is an ARTEFACT: the counterfactual ---")
+    print("Same days, same sizes, the other side. If a uniform -1 is equally "
+          "available, a uniform +1 is not evidence about the mechanism -- it is")
+    print("a restatement of 'BE/RV sits above 1.2 in every market'.")
+    for market, out in outs.items():
+        cs = out["carry_split"]
+        print(f"{market:4s} held {cs['n_held']:4d}d  steepener {cs['n_steepener']:4d}d "
+              f"({cs['steepener_share']:.1%})  flattener {cs['n_flattener']:4d}d  |  "
+              f"carry {cs['carry_usd']:+12,.0f} (sign {cs['carry_sign']:+d}) = "
+              f"steepener {cs['carry_from_steepener_usd']:+12,.0f} + "
+              f"flattener {cs['carry_from_flattener_usd']:+10,.0f}  |  "
+              f"FLATTENER-ONLY counterfactual {cs['carry_flattener_only_usd']:+12,.0f} "
+              f"(sign {cs['carry_flattener_only_sign']:+d})  "
+              f"unit carry negative on {cs['unit_carry_frac_negative']:.1%} of dates")
+
     print("\n--- league table (one config per market, DSR on the multiplied count) ---")
     results = [out["result"] for out in outs.values()]
     grid = pd.DataFrame([{
@@ -1001,32 +1133,45 @@ def _compare(frame: pd.DataFrame, pnl: pd.Series, *, target_bp_day: float,
     daily sd -- is reported beside it and is what the verdict is read off.
     It is invariant to any constant rescaling of a series, which is exactly
     the nuisance the target was supposed to remove and did not.
+
+    **And on this data it is not an independent reading.** Every series loses
+    close to monotonically, so its max drawdown IS its total loss, and
+    ``dd_per_vol_day / sharpe`` comes out at 105.9-115.3 on every row --
+    ``dd_per_vol_day`` is Sharpe rescaled by a near-constant. The ratio is
+    printed so a reader can see that rather than infer two independent
+    verdicts from one statistic. Both agreeing is a robustness point (no metric
+    choice rescues the book), not corroboration.
+
+    The table and the verdicts come from :func:`compare_book_to_singles` and
+    :func:`book_verdicts`, which are pure and tested; this function only
+    prints them. The verdict used to be computed inline here, where three
+    mutations of it -- ``dd/n`` instead of ``dd/daily_vol``, the BETTER/WORSE
+    word inverted, and ``idxmin`` picking the WORST leg as the bar -- survived
+    the whole suite.
     """
+    out = compare_book_to_singles(frame, pnl, target_bp_day=target_bp_day)
+    verdicts = book_verdicts(out)
     print(f"\n[{label}]  each leg through the identical one-market portfolio "
           "call; verdict read off dd_per_vol_day, which no rescaling can move")
-    rows = {}
-    for c in frame.columns:
-        solo = portfolio({c: frame[c]}, target_bp_day=target_bp_day)
-        rows[c] = book_stats(book_pnl(solo, frame[[c]]))
-    rows["BOOK"] = book_stats(pnl)
-    out = pd.DataFrame(rows).T
-    out["dd_per_vol_day"] = out["max_drawdown"] / out["daily_vol"]
     print(out.round(4).to_string())
-    singles = out.drop(index="BOOK")
     for key, unit in (("max_drawdown", "bp"), ("dd_per_vol_day", "vol-days")):
-        best = singles[key].idxmax()
-        better = out.loc["BOOK", key] > singles[key].max()
-        print(f"   best single market by {key}: {best} "
-              f"({singles.loc[best, key]:+.3f} {unit}) vs BOOK "
-              f"{out.loc['BOOK', key]:+.3f} {unit} "
-              f"-- book is {'BETTER' if better else 'WORSE'}")
-    best_sr_market = singles["sharpe"].idxmax()
-    print(f"   best single market by Sharpe (reported, NOT ranked on): "
-          f"{best_sr_market} ({singles.loc[best_sr_market, 'sharpe']:+.4f}) "
-          f"vs BOOK {out.loc['BOOK', 'sharpe']:+.4f}")
+        v = verdicts[key]
+        print(f"   best single market by {key}: {v['best_single']} "
+              f"({v['best_single_value']:+.3f} {unit}) vs BOOK "
+              f"{v['book_value']:+.3f} {unit} -- book is {v['verdict']}")
+    v = verdicts["sharpe"]
+    print(f"   best single market by sharpe (reported, NOT ranked on): "
+          f"{v['best_single']} ({v['best_single_value']:+.4f}) "
+          f"vs BOOK {v['book_value']:+.4f}")
+    ratio = (out["dd_per_vol_day"] / out["sharpe"]).round(1)
+    print("   dd_per_vol_day / sharpe per row: "
+          + "  ".join(f"{k} {v:.1f}" for k, v in ratio.items())
+          + "  <- a near-constant, so these are ONE statistic on this data, "
+            "not two independent readings")
     print(f"   realised daily sd, legs vs target {target_bp_day}: "
-          + "  ".join(f"{k} {v:.3f}" for k, v in singles["daily_vol"].items())
-          + f"   |   BOOK {out.loc['BOOK', 'daily_vol']:.3f}")
+          + "  ".join(f"{k} {v:.3f}" for k, v
+                      in out.drop(index=BOOK_ROW)["daily_vol"].items())
+          + f"   |   BOOK {out.loc[BOOK_ROW, 'daily_vol']:.3f}")
 
 
 def _umep_contrast(base: dict, with_umep: dict) -> None:

@@ -78,7 +78,21 @@ from RVUtils.StrikelessVol.report import (
 from RVUtils.StrikelessVol.universe import ALL_PAIRS, MARKET_CURVES
 
 # Long enough that simulate's internal roll can never fire inside a segment.
-_NEVER_ROLL_MONTHS = 12_000
+#
+# **100 years, not 1,000, and the difference is not cosmetic.** ``simulate``
+# computes ``pd.Timestamp(d0) + pd.DateOffset(months=roll_months)``, whose result
+# has to be representable at the index's own resolution. A ``pd.Timestamp`` built
+# from a ``datetime.date`` -- what a real curve map carries -- is SECOND
+# resolution and reaches year 2500+, which is the only reason 12,000 ever worked
+# here. A ``pd.bdate_range`` index is NANOSECOND resolution, whose maximum is
+# 2262-04-11, and 12,000 months past 2020 raises ``OutOfBoundsDatetime`` from
+# inside ``simulate``. Nothing in this script feeds it an ns-resolution index
+# today, so this is a latent trap rather than a live bug -- but the study's own
+# ns-indexed tests do hit it (see
+# ``tests/test_strikeless_vol_cross_market.py::test_the_never_roll_constants_survive_a_nanosecond_index``).
+# The longest sample this study runs is under ten years, so 1,200 is equally
+# unreachable and works at either resolution.
+_NEVER_ROLL_MONTHS = 1_200
 
 VOL_CURVE_KEYS = {
     "USD": "USD-SOFR-1D",

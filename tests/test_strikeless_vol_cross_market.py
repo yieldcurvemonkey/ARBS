@@ -87,6 +87,28 @@ def test_a_gap_outside_a_markets_span_stays_missing():
     assert out["B"].iloc[4:8].notna().all()
 
 
+def test_the_live_span_is_inclusive_at_both_of_its_endpoints():
+    """The span boundary itself, which every other test steps over.
+
+    Making the span exclusive at the first and last live date is an off-by-one
+    at exactly the dates where a market arrives and leaves -- 8 rows across four
+    markets on the real run, immaterial to the result but unpinned until now.
+    """
+    idx = _idx(10)
+    a = pd.Series(1.0, index=idx)
+    b = pd.Series(np.nan, index=idx)
+    # live only on days 3 and 7; days 4..6 are interior holes, and days 3 and 7
+    # are the endpoints an exclusive span would drop out of the fill
+    b.iloc[3] = 5.0
+    b.iloc[7] = 5.0
+    out = X.align_for_book({"A": a, "B": b})
+    assert out["B"].iloc[3] == 5.0            # first live date survives
+    assert out["B"].iloc[7] == 5.0            # last live date survives
+    assert (out["B"].iloc[4:7] == 0.0).all()  # interior filled
+    assert out["B"].iloc[:3].isna().all()     # before the span
+    assert out["B"].iloc[8:].isna().all()     # after the span
+
+
 def test_the_union_calendar_is_the_union_not_the_intersection():
     a = pd.Series(1.0, index=_idx(5, "2024-01-01"))
     b = pd.Series(1.0, index=_idx(5, "2024-01-08"))
@@ -482,16 +504,47 @@ def test_bp_day_series_refuses_an_unusable_dv01(dv01):
 
 
 def test_breakeven_cost_multiplier_is_gross_over_the_one_x_charge():
+    """Every P&L bucket carries a DISTINCT non-zero value.
+
+    The first version of this fixture had `cross: 0.0`, so dropping `cross`
+    from the gross bucket list was invisible -- and the break-even multiplier
+    is a headline row and the basis of the "three of four are negative" claim.
+    Distinct values, so dropping ANY one bucket changes the answer.
+    """
     idx = _idx(4)
     led = pd.DataFrame({
-        "carry": [0.0, 100.0, 100.0, 100.0],
-        "harvest": 0.0, "mtm": 0.0, "cross": 0.0,
+        "carry": [0.0, 100.0, 100.0, 100.0],       # 300
+        "harvest": [0.0, 7.0, 0.0, 0.0],           # 7
+        "mtm": [0.0, 0.0, 13.0, 0.0],              # 13
+        "cross": [0.0, 0.0, 0.0, 29.0],            # 29
         "initiate_dv01_usd": [100_000.0, 0.0, 0.0, 0.0],
         "hedge_dv01_usd": 0.0, "roll_dv01_usd": 0.0,
     }, index=idx)
     sched = CostSchedule(initiate_bp=0.875)
+    res = _FakeResult(None, 1.0, led)
+    got = X.breakeven_cost_multiplier(res, sched)
+    assert got == pytest.approx((300.0 + 7.0 + 13.0 + 29.0) / (0.875 * 100_000.0))
+    # and each bucket is load-bearing: no single one may be droppable
+    for bucket, value in (("carry", 300.0), ("harvest", 7.0), ("mtm", 13.0),
+                          ("cross", 29.0)):
+        without = X.breakeven_cost_multiplier(
+            _FakeResult(None, 1.0, led.assign(**{bucket: 0.0})), sched)
+        assert got - without == pytest.approx(value / (0.875 * 100_000.0))
+
+
+def test_breakeven_cost_multiplier_prices_every_traded_risk_bucket():
+    """The denominator is the 1x charge on ALL of initiate/hedge/roll."""
+    idx = _idx(3)
+    led = pd.DataFrame({
+        "carry": [0.0, 0.0, 1000.0], "harvest": 0.0, "mtm": 0.0, "cross": 0.0,
+        "initiate_dv01_usd": [100_000.0, 0.0, 0.0],
+        "hedge_dv01_usd": [0.0, 50_000.0, 0.0],
+        "roll_dv01_usd": [0.0, 0.0, 25_000.0],
+    }, index=idx)
+    sched = CostSchedule(initiate_bp=0.875, hedge_bp=0.35, roll_bp=0.35)
+    charge = 0.875 * 100_000.0 + 0.35 * 50_000.0 + 0.35 * 25_000.0
     got = X.breakeven_cost_multiplier(_FakeResult(None, 1.0, led), sched)
-    assert got == pytest.approx(300.0 / (0.875 * 100_000.0))
+    assert got == pytest.approx(1000.0 / charge)
 
 
 def test_a_losing_market_gets_a_negative_breakeven_multiplier():
@@ -504,6 +557,204 @@ def test_a_losing_market_gets_a_negative_breakeven_multiplier():
     }, index=idx)
     assert X.breakeven_cost_multiplier(
         _FakeResult(None, 1.0, led), CostSchedule()) < 0.0
+
+
+# ------------------------------------------------- the comparison that states H8
+
+
+def _two_leg_frame(seed=201, n=600):
+    rng = np.random.default_rng(seed)
+    quiet = pd.Series(rng.normal(-0.02, 0.5, n), index=_idx(n))
+    loud = pd.Series(rng.normal(-0.10, 3.0, n), index=_idx(n))
+    return X.align_for_book({"QUIET": quiet, "LOUD": loud})
+
+
+def test_book_stats_total_is_a_sum_not_a_mean():
+    pnl = pd.Series([1.0, 2.0, 3.0, 4.0], index=_idx(4))
+    got = X.book_stats(pnl)
+    assert got["total"] == pytest.approx(10.0)
+    assert got["n"] == 4
+
+
+def test_dd_per_vol_day_is_the_drawdown_over_the_rows_own_daily_sd():
+    """Hand-computed, not a bound.
+
+    Dividing by anything else -- the row count, say -- still ranks plausibly
+    and is no longer scale-free, which is the whole reason the column exists.
+    """
+    frame = _two_leg_frame()
+    book = portfolio(dict(frame.items()), target_bp_day=1.0)
+    pnl = X.book_pnl(book, frame)
+    out = X.compare_book_to_singles(frame, pnl, target_bp_day=1.0)
+    assert set(out.index) == {"QUIET", "LOUD", X.BOOK_ROW}
+    for row in out.index:
+        assert out.loc[row, "dd_per_vol_day"] == pytest.approx(
+            out.loc[row, "max_drawdown"] / out.loc[row, "daily_vol"])
+    # and it is NOT the drawdown over the row count -- the two must differ
+    n_route = out["max_drawdown"] / out["n"]
+    assert (out["dd_per_vol_day"] - n_route).abs().min() > 1e-6
+
+
+def test_dd_per_vol_day_is_invariant_to_rescaling_a_leg_and_raw_drawdown_is_not():
+    """The property the column is for, demonstrated rather than asserted."""
+    frame = _two_leg_frame()
+    scaled = frame.copy()
+    scaled["LOUD"] = scaled["LOUD"] * 10.0
+    a = X.compare_book_to_singles(
+        frame, X.book_pnl(portfolio(dict(frame.items()), target_bp_day=1.0), frame),
+        target_bp_day=1.0)
+    b = X.compare_book_to_singles(
+        scaled, X.book_pnl(portfolio(dict(scaled.items()), target_bp_day=1.0), scaled),
+        target_bp_day=1.0)
+    assert b.loc["LOUD", "dd_per_vol_day"] == pytest.approx(
+        a.loc["LOUD", "dd_per_vol_day"], rel=1e-9)
+    assert b.loc["LOUD", "max_drawdown"] == pytest.approx(
+        a.loc["LOUD", "max_drawdown"], rel=1e-9)
+
+
+def test_the_best_single_market_is_the_least_bad_leg_not_the_worst():
+    """`idxmin` would compare the book against the WORST single market -- which
+    is exactly how one manufactures 'the book beats the best single market'."""
+    table = pd.DataFrame(
+        {"max_drawdown": [-10.0, -50.0, -30.0],
+         "dd_per_vol_day": [-10.0, -50.0, -30.0],
+         "sharpe": [-0.5, -2.0, -1.0],
+         "daily_vol": [1.0, 1.0, 1.0], "total": [-1.0, -1.0, -1.0],
+         "n": [100, 100, 100]},
+        index=["GOOD", "BAD", X.BOOK_ROW])
+    v = X.book_verdicts(table)
+    for key in ("max_drawdown", "dd_per_vol_day", "sharpe"):
+        assert v[key]["best_single"] == "GOOD"
+        assert v[key]["book_is_better"] is False
+        assert v[key]["verdict"] == "WORSE"
+    assert v["max_drawdown"]["best_single_value"] == pytest.approx(-10.0)
+    assert v["max_drawdown"]["book_value"] == pytest.approx(-30.0)
+
+
+def test_a_book_that_really_does_beat_every_leg_is_reported_as_better():
+    """The verdict word must be able to say BETTER, or it says nothing."""
+    table = pd.DataFrame(
+        {"max_drawdown": [-10.0, -50.0, -3.0],
+         "dd_per_vol_day": [-10.0, -50.0, -3.0],
+         "sharpe": [-0.5, -2.0, +0.4],
+         "daily_vol": [1.0, 1.0, 1.0], "total": [-1.0, -1.0, 1.0],
+         "n": [100, 100, 100]},
+        index=["GOOD", "BAD", X.BOOK_ROW])
+    v = X.book_verdicts(table)
+    for key in ("max_drawdown", "dd_per_vol_day", "sharpe"):
+        assert v[key]["book_is_better"] is True
+        assert v[key]["verdict"] == "BETTER"
+
+
+def test_a_tie_is_not_better():
+    """The book has to beat the bar, not match it."""
+    table = pd.DataFrame(
+        {"max_drawdown": [-10.0, -10.0], "dd_per_vol_day": [-10.0, -10.0],
+         "sharpe": [-0.5, -0.5], "daily_vol": [1.0, 1.0],
+         "total": [-1.0, -1.0], "n": [100, 100]},
+        index=["GOOD", X.BOOK_ROW])
+    v = X.book_verdicts(table)
+    assert v["max_drawdown"]["book_is_better"] is False
+    assert v["max_drawdown"]["verdict"] == "WORSE"
+
+
+def test_the_printed_verdict_word_matches_the_computed_one(capsys):
+    """The print layer, so the word cannot drift from the boolean behind it."""
+    frame = _two_leg_frame()
+    book = portfolio(dict(frame.items()), target_bp_day=1.0)
+    pnl = X.book_pnl(book, frame)
+    out = X.compare_book_to_singles(frame, pnl, target_bp_day=1.0)
+    verdicts = X.book_verdicts(out)
+    X._compare(frame, pnl, target_bp_day=1.0, label="unit test")
+    printed = capsys.readouterr().out
+    for key in ("max_drawdown", "dd_per_vol_day"):
+        v = verdicts[key]
+        assert (f"best single market by {key}: {v['best_single']}") in printed
+        assert f"book is {v['verdict']}" in printed
+        assert f"{v['book_value']:+.3f}" in printed
+    # the collinearity note is printed with real numbers, not asserted in prose
+    assert "dd_per_vol_day / sharpe per row" in printed
+
+
+# ------------------------------------------------- the carry-sign counterfactual
+
+
+def test_carry_side_split_reports_the_side_the_rule_was_actually_on():
+    idx = _idx(6)
+    # unit flattener carry is negative every day, as it is in all four markets
+    unit_carry = pd.Series([-10.0, -10.0, -10.0, -10.0, -10.0, -10.0], index=idx)
+    # two flat days, three steepener days (scale < 0), one flattener day
+    scale = pd.Series([0.0, 0.0, -1.0, -1.0, -1.0, +1.0], index=idx)
+    got = X.carry_side_split(unit_carry, scale)
+    assert got["n_held"] == 4
+    assert got["n_steepener"] == 3
+    assert got["n_flattener"] == 1
+    assert got["steepener_share"] == pytest.approx(0.75)
+    assert got["carry_usd"] == pytest.approx(3 * 10.0 - 10.0)          # +20
+    assert got["carry_sign"] == 1
+    assert got["carry_from_steepener_usd"] == pytest.approx(+30.0)
+    assert got["carry_from_flattener_usd"] == pytest.approx(-10.0)
+    assert got["unit_carry_frac_negative"] == pytest.approx(1.0)
+
+
+def test_the_flattener_only_counterfactual_flips_the_carry_sign():
+    """The measurement that makes 'carry +1 in all four markets' an artefact.
+
+    Same days, same sizes, the other side. If a uniform -1 is equally
+    available, a uniform +1 carries no information about the mechanism.
+    """
+    idx = _idx(6)
+    unit_carry = pd.Series(-10.0, index=idx)
+    scale = pd.Series([0.0, 0.0, -1.0, -1.0, -1.0, +1.0], index=idx)
+    got = X.carry_side_split(unit_carry, scale)
+    assert got["carry_sign"] == +1
+    assert got["carry_flattener_only_usd"] == pytest.approx(-40.0)
+    assert got["carry_flattener_only_sign"] == -1
+    # the two counterfactuals are the same days and sizes, opposite side
+    assert abs(got["carry_flattener_only_usd"]) == pytest.approx(
+        abs(got["carry_from_steepener_usd"]) + abs(got["carry_from_flattener_usd"]))
+
+
+def test_the_counterfactual_uses_the_magnitude_of_the_scale_not_a_sign_flip():
+    """Sizes vary day to day; the counterfactual must keep each day's own size."""
+    idx = _idx(4)
+    unit_carry = pd.Series([-10.0, -20.0, -30.0, -40.0], index=idx)
+    scale = pd.Series([-0.5, -1.0, +0.25, 0.0], index=idx)
+    got = X.carry_side_split(unit_carry, scale)
+    assert got["carry_usd"] == pytest.approx(5.0 + 20.0 - 7.5)
+    assert got["carry_flattener_only_usd"] == pytest.approx(-5.0 - 20.0 - 7.5)
+    assert got["n_held"] == 3
+
+
+def test_a_book_that_never_traded_reports_no_side():
+    idx = _idx(4)
+    got = X.carry_side_split(pd.Series(-1.0, index=idx), pd.Series(0.0, index=idx))
+    assert got["n_held"] == 0
+    assert np.isnan(got["steepener_share"])
+    assert got["carry_usd"] == 0.0
+
+
+# --------------------------------------------------------- the never-roll trap
+
+
+def test_the_never_roll_constants_survive_a_nanosecond_index():
+    """`DateOffset(months=12_000)` past 2020 is not representable at ns.
+
+    A real curve map keys on `pd.Timestamp(date)`, which is SECOND resolution
+    and reaches year 2500+, which is the only reason 12_000 ever worked. A
+    `pd.bdate_range` index is nanosecond, capped at 2262-04-11.
+    """
+    from scripts.sv_static_long_control import _NEVER_ROLL_MONTHS as CONTROL_NEVER
+
+    ns_start = pd.bdate_range("2020-01-01", periods=1)[0]
+    assert ns_start.unit == "ns"
+    for months in (X._NEVER_ROLL_MONTHS, CONTROL_NEVER):
+        # unreachable for any sample this study runs ...
+        assert months >= 1_200
+        # ... and representable, which 12_000 is not
+        assert (ns_start + pd.DateOffset(months=months)).year > 2100
+    with pytest.raises(Exception):
+        ns_start + pd.DateOffset(months=12_000)
 
 
 # --------------------------------------------------------------- panel wiring
