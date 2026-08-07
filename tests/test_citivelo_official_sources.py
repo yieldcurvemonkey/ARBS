@@ -235,3 +235,45 @@ def test_the_reset_helper_actually_drops_the_cache(monkeypatch):
         assert len(calls) == 2
     finally:
         F.reset_publisher_fixings_cache()
+
+
+def test_publishers_are_asked_for_their_whole_history(monkeypatch):
+    """An 800-day window silently truncated a 5-year-old swap's fixings.
+
+    The failure mode is quiet: the series just starts late, and a seasoned OIS
+    compounds over dates nobody has a number for.
+    """
+    from MDP.IRSwaps.CITIVELO_EXCEL import fixings as F
+
+    F.reset_publisher_fixings_cache()
+    seen = {}
+
+    def _capture(url, **kw):
+        seen["url"] = url
+        return _Response(payload=_EFFR_PAYLOAD)
+
+    monkeypatch.setattr(OS, "_get", _capture)
+    try:
+        F.official_fixings("USD-FEDFUNDS-1D")
+        assert "startDate=1990-01-01" in seen["url"], (
+            f"asked for a truncated window: {seen['url']}"
+        )
+    finally:
+        F.reset_publisher_fixings_cache()
+
+
+@pytest.mark.network
+def test_live_full_history_reaches_back_further_than_three_years():
+    """The window this replaced would have capped every source at ~2.2 years."""
+    from MDP.IRSwaps.CITIVELO_EXCEL import fixings as F
+
+    F.reset_publisher_fixings_cache()
+    try:
+        effr = F.official_fixings("USD-FEDFUNDS-1D")
+        nowa = F.official_fixings("NOK-NOWA-1D")
+        assert not effr.empty and not nowa.empty
+        # EFFR publishes from 2000, NOWA from 2011 - both far past a 800d window.
+        assert effr.index[0].year <= 2005, f"EFFR starts {effr.index[0].date()}"
+        assert nowa.index[0].year <= 2012, f"NOWA starts {nowa.index[0].date()}"
+    finally:
+        F.reset_publisher_fixings_cache()

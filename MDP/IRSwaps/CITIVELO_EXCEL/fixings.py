@@ -251,9 +251,19 @@ def official_fixings(curve_name: str) -> pd.Series:
     return series[~series.index.duplicated(keep="last")]
 
 
-#: How much history a publisher is asked for. Long enough to cover the
-#: compounding period of any seasoned OIS this package prices.
-_PUBLISHER_LOOKBACK = datetime.timedelta(days=800)
+#: Publishers are asked for EVERYTHING they have, from a date earlier than any
+#: of these rates existed. Each API clamps to its own inception, so this is not a
+#: guess that can be wrong - it is a request for the whole series.
+#:
+#: This replaced an 800-day rolling window, which was arbitrary and too short: a
+#: 10Y swap traded five years ago compounds over fixings the window would simply
+#: not contain, and the failure is silent - the series just starts late.
+#:
+#: There is no cost argument for truncating. Measured 2026-08-07, full history:
+#: EFFR 6,558 rows to 2000-07-03 (0.5s), NOWA 3,735 to 2011-09-30 (0.4s),
+#: ZARONIA 1,004 to 2022-08-01 (1.8s) - and the fetcher is now process-wide, so
+#: this is paid once per run rather than per curve request.
+_PUBLISHER_HISTORY_START = datetime.date(1990, 1, 1)
 
 #: ONE fetcher for the whole process, so its cache actually survives.
 #:
@@ -312,7 +322,7 @@ def _publisher_fixings(curve_name: str) -> pd.Series:
 
     end = datetime.date.today()
     try:
-        series = fetcher.fetch(citi_index, end - _PUBLISHER_LOOKBACK, end)
+        series = fetcher.fetch(citi_index, _PUBLISHER_HISTORY_START, end)
     except Exception as exc:  # noqa: BLE001 - an offline machine is not a failure
         _warn_once(
             f"publisher-{citi_index}",
