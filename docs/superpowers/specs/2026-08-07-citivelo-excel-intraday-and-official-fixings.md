@@ -186,6 +186,25 @@ that it worked: after the fix every curve's session reads **08:00–19:59 in its
 local zone**, a clean contiguous 12-hour session with no interior gaps. Before it,
 EUR read 02:00–13:59.
 
+#### And it survives the asymmetric DST windows
+
+The US and EU do not change clocks on the same day — US DST ran 2026-03-08 to
+11-01, EU DST 2026-03-29 to 10-25 — so for about three weeks each spring and one
+each autumn the ET↔Berlin offset is **5 hours, not 6**. A fixed-offset conversion
+would be silently an hour out on exactly those days. Checked against the fetched
+EUR history:
+
+| date | regime | session (Berlin local) |
+|---|---|---|
+| 2026-03-04 | both on winter time (6h) | 08:00 → 19:59 |
+| **2026-03-16** | **US on DST, EU not (5h)** | **08:00 → 19:59** |
+| 2026-04-07 | both on summer time (6h) | 08:00 → 19:59 |
+| **2025-10-28** | **EU back, US not (5h)** | **08:00 → 19:59** |
+| 2025-11-05 | both on winter time (6h) | 08:01 → 19:59 |
+
+Identical in every regime, so the `zoneinfo` conversion is genuinely tracking both
+zones' transitions rather than applying a constant.
+
 ### Results
 
 | curve | days | minutes | curves built | errors | max reprice |
