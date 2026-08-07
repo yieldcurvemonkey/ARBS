@@ -86,7 +86,7 @@ def _resolve_outcome(last_jump: float, support: Tuple[int, int]) -> int:
 
 def run_outcome_backtest(
     entries: pd.DataFrame,
-    mark_fn: Callable[[pd.Timestamp, str, Sequence[Leg]], float],
+    mark_fn: Callable[[pd.Timestamp, object], float],
     signal_fn: Callable[[pd.Timestamp, object], float],
     all_dates: pd.DatetimeIndex,
     *,
@@ -102,6 +102,7 @@ def run_outcome_backtest(
                                     Optional[HedgeContext]]] = None,
     jump_fn: Optional[Callable[[pd.Timestamp, datetime.date], float]] = None,
     cost_mult: float = 1.0,
+    contracts_fn: Optional[Callable[[object], float]] = None,
     expiry_fn: Optional[Callable[[str], datetime.date]] = None,
     decision_after_fn: Optional[Callable[[pd.Timestamp], pd.Timestamp]] = None,
 ) -> List[OutcomeTrade]:
@@ -141,7 +142,7 @@ def run_outcome_backtest(
             continue
         d_entry = later[lag - 1]
         legs = list(row["legs"])
-        m0 = mark_fn(d_entry, sym, legs)
+        m0 = mark_fn(d_entry, row)
         sig0 = signal_fn(d_entry, row)
         if not (np.isfinite(m0) and np.isfinite(sig0)):
             continue
@@ -151,8 +152,11 @@ def run_outcome_backtest(
         side = side_base
         # the contract bill is a property of the LEGS (netted), never of a
         # caller-supplied column: a multi-cell book telescopes, and costing the
-        # un-netted legs would overstate every map expression's bill
-        n_con = package_contracts(legs)
+        # un-netted legs would overstate every map expression's bill. A
+        # package spanning two expiries nets PER EXPIRY, which only the caller
+        # knows how to do — hence contracts_fn, still computed from legs.
+        n_con = (package_contracts(legs) if contracts_fn is None
+                 else float(contracts_fn(row)))
 
         # --- hedge context -------------------------------------------------
         ctx = None
@@ -221,7 +225,7 @@ def run_outcome_backtest(
                             step += d_hedge
                         prev_jump[eff] = float(jn)
 
-            mk = mark_fn(dt, sym, legs)
+            mk = mark_fn(dt, row)
             if np.isfinite(mk):
                 step += side * (mk - prev_mark)
                 prev_mark = float(mk)
