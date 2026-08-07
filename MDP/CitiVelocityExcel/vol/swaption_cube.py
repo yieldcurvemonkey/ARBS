@@ -83,6 +83,7 @@ __all__ = [
     "UnavailableBackendError",
     "build_citivelo_swaption_cube",
     "normalise_backend",
+    "unwrap_rl_curve",
 ]
 
 _logger = logging.getLogger(__name__)
@@ -121,6 +122,39 @@ _BACKEND_LIBRARY = BACKEND_LIBRARY
 
 class UnavailableBackendError(CitiVelocityError):
     """The requested backend has no curve, or its library is too old."""
+
+
+def unwrap_rl_curve(rl_curve: Any) -> Any:
+    """Accept the repo's ``RLIRSwapCurve`` wrapper as well as a bare curve.
+
+    ``IRSwapsMDP(source="citivelo_excel_rl")`` - Citi's own warmed SOFR curve -
+    returns an ``RLIRSwapCurve``, which is the natural thing for a caller to hand
+    straight to this class. It exposes the ``rateslib.Curve`` through a
+    ``handle()`` METHOD and satisfies none of the duck tests
+    ``rl_cube._resolve_curves`` makes (``rl_pricing_curve``, or ``nodes`` plus
+    ``__getitem__``), so it used to raise a TypeError whose message listed three
+    shapes and not the one that had just been passed.
+
+    Only unwrapped when the wrapper does not already resolve and what comes back
+    looks like a rateslib curve; a ``QLIRSwapCurve``'s ``handle()`` returns a
+    QuantLib object and must not be routed here.
+    """
+    if rl_curve is None or isinstance(rl_curve, (tuple, list)):
+        return rl_curve
+    if getattr(rl_curve, "rl_pricing_curve", None) is not None:
+        return rl_curve
+    if hasattr(rl_curve, "__getitem__") and hasattr(rl_curve, "nodes"):
+        return rl_curve
+    handle = getattr(rl_curve, "handle", None)
+    if not callable(handle):
+        return rl_curve
+    try:
+        inner = handle()
+    except Exception:  # noqa: BLE001 - a wrapper that cannot say is left alone
+        return rl_curve
+    if inner is not None and hasattr(inner, "__getitem__") and hasattr(inner, "nodes"):
+        return inner
+    return rl_curve
 
 
 def normalise_backend(backend: str) -> str:
@@ -211,9 +245,9 @@ class CitiVeloSwaptionCube:
         self.cube = cube
         self.as_of: datetime.date = cube.as_of
         self.notional = float(notional)
-        self.rl_curve = rl_curve
+        self.rl_curve = unwrap_rl_curve(rl_curve)
         self.ql_curve = ql_curve
-        self.rl_disc_curve = rl_disc_curve
+        self.rl_disc_curve = unwrap_rl_curve(rl_disc_curve)
         self.interpolation = str(interpolation)
         self.spline_order = spline_order
         self.verify = bool(verify)

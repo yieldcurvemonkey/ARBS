@@ -268,6 +268,40 @@ def test_a_structure_prices_through_both_engines(ql_context, rl_context, cube):
 # ------------------------------------------------------------------ #
 
 
+def test_the_cube_accepts_an_RLIRSwapCurve_wrapper_directly(rl_curve, cube, snapshot):
+    """``IRSwapsMDP`` hands back the wrapper, so the cube has to take the wrapper.
+
+    ``IRSwapsMDP(source="citivelo_excel_rl")`` - Citi's own warmed SOFR curve -
+    returns an ``RLIRSwapCurve``, which is the obvious thing to pass here. It
+    exposes the ``rateslib.Curve`` through a ``handle()`` METHOD and satisfies
+    none of the duck tests ``_resolve_curves`` makes, so it used to raise a
+    TypeError listing three accepted shapes and not the one just passed - while
+    this class's own docstring said it was accepted.
+    """
+    from MDP.CitiVelocityExcel.vol.swaption_cube import (
+        build_citivelo_swaption_cube,
+        unwrap_rl_curve,
+    )
+
+    wrapped = build_citivelo_swaption_cube(
+        cube=cube, rl_curve=rl_curve, citi_index=snapshot.citi_index
+    )
+    bare = build_citivelo_swaption_cube(
+        cube=cube, rl_curve=rl_curve.handle(), citi_index=snapshot.citi_index
+    )
+    assert wrapped.backend == bare.backend
+    for expiry in EXPIRIES:
+        for tenor in TENORS:
+            assert wrapped.forward(expiry, tenor) == pytest.approx(
+                bare.forward(expiry, tenor), rel=0, abs=0
+            )
+
+    # A QuantLib wrapper's handle() is a QuantLib object and must NOT be routed
+    # down the rateslib branch; unwrap_rl_curve leaves it alone.
+    assert unwrap_rl_curve(rl_curve) is rl_curve.handle()
+    assert unwrap_rl_curve(None) is None
+
+
 def test_a_rateslib_curve_is_refused_by_the_quantlib_engine(rl_curve, cube, snapshot):
     """The old ``hasattr`` gate passed this and then failed inside SWIG.
 
