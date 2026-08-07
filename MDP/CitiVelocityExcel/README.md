@@ -211,6 +211,84 @@ conda run -n stir python MDP/CitiVelocityExcel/harvest/verify_live.py --spot-che
 
 ---
 
+## The cube store, and the 7-year warm
+
+`Caching/swaption_cube_store.py` — **`SwaptionCubeStore`**. The vol analogue of
+`CurveStore`, built the way `USTFutureStore` was (the repo's precedent is *clone
+CurveStore, don't reuse it*): content-addressed parquet under
+`vol_raw/asset=<NAME>/date=<ISO>/<sha256>.parquet`, atomic temp-then-rename,
+misses that return `None`, a `default()` singleton, its own cache leaf.
+
+**It stores the data, not the pricer.** `CurveStore` keeps `node_dates` +
+`discount_factors` and rebuilds an `rl.Curve`; this keeps the quoted grid —
+`(expiry, tenor, offset_bp) -> vol in bp`, plus the units and provenance — and
+rebuilds a `SwaptionCubeData`. That is a decision: rateslib 2.7's serialization
+page marks the feature *"experimental, and in development"*, lists
+`PPSplineF64`/`Cal`/`FXRates`, and says nothing about `IRSplineCube`,
+`IRSabrCube` or even `Curve`. A cache readable by one patch release of one
+library is not a cache. Storing the grid also keeps the store **curve-free** — a
+cube and the curve its strikes are measured from have different vintages — so one
+stored day serves all four backends and the caller supplies the curve at read
+time.
+
+**One partition is one cube.** This is where it departs from `CurveStore`, and a
+test caught it: there, a partition may hold several parquet files and readers
+concat them (different timestamps within the day). A surface has no such reading,
+and content addressing means a *restated* day lands under a different sha rather
+than replacing the first — so the read would pick by hash order, i.e. at random.
+A conflicting write raises `FileExistsError` naming both shas; `overwrite=True`
+replaces.
+
+**No Supabase L2, deliberately.** `SUPABASE_ENABLED` defaults to `True` and
+`get_database_url()` falls back to hard-coded *production* credentials, so
+cloning that pattern would have a fresh checkout creating tables in the live
+database the first time anyone built a cube. The local tier is complete; the
+follow-up shape is recorded in the module docstring.
+
+### Warming it
+
+```bash
+conda run -n stir python scripts/citivelo_swaption_vol_warm.py fetch --years 7
+conda run -n stir python scripts/citivelo_swaption_vol_warm.py build
+conda run -n stir python scripts/citivelo_swaption_vol_warm.py status
+```
+
+Two phases that fail for different reasons, and only one can hurt anybody.
+`fetch` is the **only** phase that touches Excel: it pulls the `RATES.VOL` tag
+grid into the `CitiVeloTagCache`, chunked by strike offset, checking the add-in's
+memory between chunks and aborting at `--memory-abort-mb`. `build` assembles one
+cube per date from the cached quotes — pure local work, so it survives the add-in
+dying and can run against whatever has landed. Offset groups run most-valuable
+first (`atm`, `±25/50`, `±75/100`, `±10/200`) so an abort leaves a usable ATM-only
+surface rather than a random third of a smile.
+
+Measured on the real run, USD, 2026-08-07:
+
+| | |
+|---|---|
+| fetch | 153/187 ATM tags, 612/748 per offset group, ~1,746 daily rows each |
+| Excel | 3,904 → 4,694 MB (**+790 MB** total), never near the 6,000 abort |
+| wall time | 24–76 s per group, ~4 min for all four |
+| build | **1,746 days, 2019-08-07 → 2026-08-06, 0 unbuildable**, 81 business-day gaps |
+| round trip | **0.000e+00 bp** over 260 real nodes; axes, units and provenance preserved |
+
+Pricing a 1Yx10Y +25bp off a cube **read back from the store** reproduces the live
+snapshot exactly: forward 4.322495%, vol 84.5553 bp, PV 1,767,324.40.
+
+Two things the first pass surfaced, both of which cost history:
+
+- **A served `0.0` is a placeholder, not a quote.** Citi serves them on grid
+  corners it did not quote. They are finite, so `cube_from_quotes` kept them and
+  the units guard then rejected the *whole day* — 174 days lost to a handful of
+  zeros each. The build drops them at the node instead, which is the same
+  judgement the guard makes one level down.
+- **The OTM skew history is shorter than the ATM history.** Before 2020-01-24 no
+  expiry×tenor rectangle has all twelve offsets. Those days do have an ATM
+  surface, so the build falls back to an ATM-only cube and records it in `source`
+  (`citivelo_excel_warm/DAILY/atm_only`) rather than leaving a hole.
+
+---
+
 ## Notes
 
 Everything below cost real debugging time. None of it is speculative.
