@@ -69,6 +69,11 @@ from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple, Union
 
 import pandas as pd
 
+try:
+    from zoneinfo import ZoneInfo
+except ImportError:  # pragma: no cover
+    from backports.zoneinfo import ZoneInfo  # type: ignore
+
 from MDP.CitiVelocityExcel import tags as T
 from MDP.CitiVelocityExcel.quotes import CitiVeloQuotes
 from MDP.IRSwaps.CITIVELO_EXCEL.curve_names import CurveNameEntry, entry_for_curve_name
@@ -158,14 +163,11 @@ class CurveSnapshot:
     requested_at: Optional[datetime.datetime]
     lag: datetime.timedelta
     freq: str
+    reference_date: datetime.date = None  # type: ignore[assignment]
+    local_timezone: str = "America/New_York"
     tenors_served: Tuple[str, ...] = ()
     tenors_missing: Tuple[str, ...] = ()
     n_rows_fetched: int = 0
-
-    @property
-    def reference_date(self) -> datetime.date:
-        """The curve's anchor date - the snapshot's own date in the wire zone."""
-        return self.snapshot_at.date()
 
     @property
     def constituent_spread(self) -> datetime.timedelta:
@@ -188,6 +190,8 @@ class CurveSnapshot:
             "mode": self.mode,
             "freq": self.freq,
             "wire_timezone": wire_timezone().key,
+            "local_timezone": self.local_timezone,
+            "reference_date": self.reference_date.isoformat(),
             "snapshot_at": self.snapshot_at.isoformat(),
             "oldest_constituent_at": self.oldest_constituent_at.isoformat(),
             "requested_at": None if self.requested_at is None else self.requested_at.isoformat(),
@@ -457,6 +461,8 @@ class CitiVeloExcelCurveFetcher:
             requested_at=requested_at,
             lag=lag,
             freq=freq,
+            reference_date=_reference_date(entry, request.mode, snapshot_at, request.eod_date),
+            local_timezone=entry.local_timezone,
             tenors_served=tuple(t for t in all_tenors if t in par_rates),
             tenors_missing=tuple(t for t in all_tenors if t not in par_rates),
             n_rows_fetched=int(len(frame)),
@@ -492,6 +498,34 @@ class CitiVeloExcelCurveFetcher:
             citi_index=snapshot.citi_index,
             **build_kwargs,
         )
+
+
+def _reference_date(
+    entry: CurveNameEntry,
+    mode: str,
+    snapshot_at: datetime.datetime,
+    eod_date: Optional[datetime.date],
+) -> datetime.date:
+    """The business date a snapshot belongs to, in the curve's OWN market.
+
+    Citi stamps everything in America/New_York, and for the Asia/Pacific curves
+    that means one trading session straddles two ET dates. Measured on JPY_TONAR
+    over 2026-08-05/07: the session runs 19:00 ET through 06:59 ET the next day as
+    one continuous block - the 23:59 print and the following 00:00 print are the
+    same number - and it belongs to Citi's DAILY row for the LATER date (ET 08-06
+    19:00-23:59 ended at 2.6575 against a DAILY 08-07 of 2.6500, while DAILY 08-06
+    was 2.6300). Dating by the ET calendar date would build a JPY, AUD or NZD
+    curve one business day early for its whole morning session, shifting spot and
+    all 44 maturities by a day.
+
+    **EOD keeps the ET date**, and that is not an inconsistency: an end-of-day row
+    is stamped with the label Citi assigned it, and re-deriving that label through
+    a local zone would move it for any market WEST of New York - midnight ET is
+    the previous day in Mexico City, so MXN's EOD date would silently go backwards.
+    """
+    if mode == "eod":
+        return eod_date if eod_date is not None else snapshot_at.date()
+    return snapshot_at.astimezone(ZoneInfo(entry.local_timezone)).date()
 
 
 def _coverage_hint(entry: CurveNameEntry, mode: str) -> str:

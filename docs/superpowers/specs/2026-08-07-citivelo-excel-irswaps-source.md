@@ -171,6 +171,25 @@ meaning. `CITIVELO_EXCEL_STRICT_TZ=1` (or `strict_tz=True`) turns it into a rais
 returns naive ET — deliberate, because a naive stamp is exactly what lets a
 one-hour error read as a real market move.
 
+### The reference date is the curve's OWN business date, not the ET one
+
+Citi stamps everything in ET, so an Asia/Pacific session straddles two ET dates.
+Measured on `JPY_TONAR` over 2026-08-05/07: the session runs **19:00 ET through
+06:59 ET the next day as one continuous block** — the 23:59 print and the
+following 00:00 print are the same number — and it belongs to Citi's `DAILY` row
+for the **later** date (ET 08-06 19:00–23:59 ended at 2.6575 against a DAILY
+08-07 of 2.6500; DAILY 08-06 was 2.6300).
+
+So an **intraday or live** snapshot is dated by the curve's own market calendar,
+via a `local_timezone` per curve. Without it every JPY, AUD, NZD, SGD and THB
+request in its morning session built a curve one business day early, shifting spot
+and all 44 maturities.
+
+An **EOD** snapshot deliberately keeps the ET date: a daily row carries the label
+Citi assigned it, and re-deriving that label through a local zone would move it
+backwards for any market west of New York — midnight ET is the previous day in
+Mexico City.
+
 ### Guards
 
 | guard | default | why |
@@ -280,10 +299,17 @@ different code path from the builder, reading a different conventions table:
 
 | check | what it can catch | what it cannot |
 |---|---|---|
+| `npv` at the curve's own fair rate | a float leg that silently lost its fixings, a schedule that does not match the curve — both of which still *build* | anything about the level, which it is blind to by construction |
 | `par` | a registered curve definition that disagrees with `conventions.py` about calendar, frequency, settlement lag or day count | anything about the curve itself — it is near-circular on the curve |
 | `forward` vs Citi's published `FWD.<e>.<t>` | **everything**: this is independent data | only runs on the 17 curves that have `FWD` tags, and in EOD mode |
 | `interpolation` (drop-one-out) | interpolation error between nodes | conventions, which the reduced curve shares |
 | `backends` (rateslib vs QuantLib) | schedule, day-count and annuity divergence | a convention both libraries are told the same wrong thing about |
+
+A sixth check runs against a **live** Excel rather than the cache
+(`verify_live.py`): everything above runs on a tag cache this repo wrote, so it
+proves self-consistency with data already held. `verify_live.py` drives the whole
+path for real — `IRSwapsMDP` → fetcher → `CitiVeloQuotes` → COM → Excel → Citi →
+parser → cache → both builders → `IRSwapQuery` — in one `CVTSHIST` call per curve.
 
 The `forward` check runs **EOD only**. Citi publishes `FWD` on the daily series;
 comparing a 10:50 intraday curve against a daily forward measures the time of day,

@@ -110,9 +110,9 @@ def run_tie_out(
     quotes = CitiVeloQuotes(offline=offline)
     rows = []
     plans = (
-        ("eod", eod_date, ("par", "forward", "interpolation", "backends")),
-        ("intraday", intraday_at, ("par", "backends")),
-        ("live", "live", ("par", "backends")),
+        ("eod", eod_date, ("par", "forward", "interpolation", "backends", "npv")),
+        ("intraday", intraday_at, ("par", "backends", "npv")),
+        ("live", "live", ("par", "backends", "npv")),
     )
     for name in curves:
         for mode, when, checks in plans:
@@ -239,6 +239,10 @@ def main() -> int:
     parser.add_argument("--only", default="", help="comma-separated curve names")
     parser.add_argument("--out", default=str(OUT_DIR))
     parser.add_argument("--tolerance-bp", type=float, default=1.0)
+    parser.add_argument(
+        "--stability-days", type=int, default=40,
+        help="business days over which to test whether a forward residual is a bias or noise; 0 skips",
+    )
     args = parser.parse_args()
 
     logging.basicConfig(level=logging.WARNING)
@@ -276,7 +280,7 @@ def main() -> int:
     summary = _summarise(frame)
     summary.to_csv(out_dir / "tie_out_summary.csv", index=False)
 
-    for check in ("forward", "par", "backends", "interpolation"):
+    for check in ("forward", "par", "npv", "backends", "interpolation"):
         sub = summary[summary["check"] == check]
         if sub.empty:
             continue
@@ -309,6 +313,34 @@ def main() -> int:
         print(f"\n  NOT covered by the published-forward check ({len(missing)}): {missing}")
         print("  (Citi publishes no RATES.OIS.<idx>.FWD.* tags for these, so the only available "
               "comparison is against their own calibration inputs.)")
+
+    if args.stability_days > 0 and not fwd.empty:
+        _rule(f"4. is each forward residual a BIAS or NOISE? ({args.stability_days} business days)")
+        covered = sorted(fwd["curve_name"].unique())
+        stability = forward_stability(
+            curves=covered,
+            start=eod_date - datetime.timedelta(days=int(args.stability_days * 1.5)),
+            end=eod_date,
+        )
+        if not stability.empty:
+            stability = stability.sort_values("bias_to_noise", ascending=False)
+            stability.to_csv(out_dir / "forward_stability.csv", index=False)
+            biased = stability[(stability["bias_to_noise"] > 2.0) & (stability["mean_bp"].abs() > 1.0)]
+            print("  residuals that SURVIVE averaging (a convention, not timing):")
+            print(
+                biased[["curve_name", "point", "n_days", "mean_bp", "sd_bp", "bias_to_noise"]]
+                .to_string(index=False, float_format=lambda v: f"{v:8.3f}")
+                if not biased.empty
+                else "    (none)"
+            )
+            noisy = stability[(stability["bias_to_noise"] <= 2.0) & (stability["max_bp"].abs() > 1.0)]
+            if not noisy.empty:
+                print("\n  residuals that AVERAGE AWAY (timing between the PAR and FWD rows):")
+                print(
+                    noisy[["curve_name", "point", "n_days", "mean_bp", "sd_bp", "min_bp", "max_bp"]]
+                    .to_string(index=False, float_format=lambda v: f"{v:8.3f}")
+                )
+            print(f"\n  -> {out_dir / 'forward_stability.csv'}")
 
     interp = frame[(frame["check"] == "interpolation") & frame["err_bp"].notna()]
     if not interp.empty:

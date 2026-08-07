@@ -188,6 +188,36 @@ def test_wire_zone_is_overridable(monkeypatch):
     assert ts_mod.wire_timezone().key == "Europe/London"
 
 
+def test_a_request_inside_the_dst_gap_is_not_silently_moved():
+    """02:30 ET on 2026-03-08 never happened. A UTC instant that lands there must
+    resolve to a wall clock the add-in can be asked about, and the caller must not
+    get an hour's shift smuggled in - which on a rates curve reads as a real move."""
+    # 07:30 UTC on the spring-forward date is 02:30 EST / 03:30 EDT.
+    got = to_wire_naive(datetime.datetime(2026, 3, 8, 7, 30, tzinfo=UTC))
+    assert got == datetime.datetime(2026, 3, 8, 3, 30), got
+    # An hour earlier in UTC is an hour earlier on the wire, DST notwithstanding.
+    earlier = to_wire_naive(datetime.datetime(2026, 3, 8, 6, 30, tzinfo=UTC))
+    assert earlier == datetime.datetime(2026, 3, 8, 1, 30), earlier
+
+
+def test_the_ambiguous_fall_back_hour_resolves_instead_of_raising():
+    """01:30 ET occurs twice on 2026-11-01, and ``tz_localize`` RAISES on it by
+    default - which would make one snapshot a year an unhandled crash inside a
+    curve build rather than a curve. It must resolve, and resolve the same way
+    every time."""
+    first = ts_mod.from_wire_naive(datetime.datetime(2026, 11, 1, 1, 30))
+    second = ts_mod.from_wire_naive(datetime.datetime(2026, 11, 1, 1, 30))
+    assert first == second
+    assert first.utcoffset() == datetime.timedelta(hours=-4)  # first occurrence, EDT
+
+
+def test_a_stamp_in_the_spring_forward_gap_resolves_instead_of_raising():
+    """02:30 ET on 2026-03-08 never happened; ``tz_localize`` raises
+    ``NonExistentTimeError``. Shift forward to the first instant that does."""
+    got = ts_mod.from_wire_naive(datetime.datetime(2026, 3, 8, 2, 30))
+    assert got.hour == 3 and got.utcoffset() == datetime.timedelta(hours=-4)
+
+
 def test_returned_stamps_are_timezone_aware():
     got = ts_mod.from_wire_naive(datetime.datetime(2026, 8, 6, 10, 30))
     assert got.tzinfo is not None
@@ -479,6 +509,51 @@ def test_an_hour_later_is_a_different_snapshot():
     b = f.snapshot("USD-SOFR-1D", datetime.datetime(2026, 8, 6, 11, 30, tzinfo=NY))
     assert a.snapshot_at != b.snapshot_at
     assert a.par_rates != b.par_rates
+
+
+def test_an_asian_curve_in_its_morning_session_is_dated_by_its_own_calendar():
+    """Citi stamps in ET, so Tokyo's morning falls on the PREVIOUS ET date.
+
+    Measured on JPY_TONAR 2026-08-05/07: the session runs 19:00 ET through 06:59
+    ET next day as one continuous block, and it belongs to Citi's DAILY row for
+    the LATER date. Dating by the ET calendar date builds the curve a business day
+    early, shifting spot and all 44 maturities.
+    """
+    et_evening = pd.date_range("2026-08-06 20:00", "2026-08-06 20:30", freq="min")
+    f = CitiVeloExcelCurveFetcher(quotes=_StubQuotes(_grid(et_evening, citi_index="JPY_TONAR")))
+    snap = f.snapshot("JPY-TONAR-1D", datetime.datetime(2026, 8, 6, 20, 30, tzinfo=NY))
+    assert snap.snapshot_at.date() == datetime.date(2026, 8, 6)  # the ET stamp
+    assert snap.reference_date == datetime.date(2026, 8, 7), "Tokyo is already on the 7th"
+    assert snap.local_timezone == "Asia/Tokyo"
+
+
+def test_a_western_curve_is_dated_by_the_et_date_it_was_stamped_with():
+    et_morning = pd.date_range("2026-08-06 10:00", "2026-08-06 10:30", freq="min")
+    f = CitiVeloExcelCurveFetcher(quotes=_StubQuotes(_grid(et_morning)))
+    snap = f.snapshot("USD-SOFR-1D", datetime.datetime(2026, 8, 6, 10, 30, tzinfo=NY))
+    assert snap.reference_date == datetime.date(2026, 8, 6)
+
+
+def test_eod_keeps_the_et_date_even_for_a_market_west_of_new_york():
+    """Midnight ET is the PREVIOUS day in Mexico City. An EOD row carries the label
+    Citi assigned it, so re-deriving that label through a local zone would move
+    MXN's end-of-day date backwards by one."""
+    index = pd.DatetimeIndex([pd.Timestamp("2026-08-06")])
+    f = CitiVeloExcelCurveFetcher(quotes=_StubQuotes(_grid(index, citi_index="MXN_T_FONDEO")))
+    snap = f.snapshot("MXN-FONDEO-1D", datetime.date(2026, 8, 6))
+    assert snap.reference_date == datetime.date(2026, 8, 6)
+
+
+def test_every_curve_has_a_real_local_timezone():
+    from MDP.IRSwaps.CITIVELO_EXCEL.curve_names import CITIVELO_EXCEL_CURVES
+
+    for entry in CITIVELO_EXCEL_CURVES:
+        assert ZoneInfo(entry.local_timezone) is not None, entry.curve_name
+    zones = {e.citi_index: e.local_timezone for e in CITIVELO_EXCEL_CURVES}
+    assert zones["JPY_TONAR"] == "Asia/Tokyo"
+    assert zones["AUD_AONIA"] == "Australia/Sydney"
+    assert zones["USD_SOFR"] == "America/New_York"
+    assert zones["MXN_T_FONDEO"] == "America/Mexico_City"
 
 
 def test_snapshot_meta_carries_the_provenance_a_reader_needs():

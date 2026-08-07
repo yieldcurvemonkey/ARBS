@@ -209,6 +209,40 @@ def query_par_rate(
     return float(value_map.apply(IRSwapValue.RATE))
 
 
+def query_npv_at_fair_rate(
+    curve: Any, *, curve_name: str, tenor: str, notional: float = 1_000_000.0
+) -> float:
+    """NPV of a swap struck at the curve's own fair rate. Must be ~0.
+
+    A cheap, sharp end-to-end check, and the one that catches the failure mode a
+    successful build does not: a float leg that silently lost its fixings, or an
+    instrument whose schedule does not match the curve it was calibrated against,
+    still *builds* - it just prices wrong. Striking at the fair rate and asking
+    for zero exercises the fixed leg, the float leg, the discounting and the
+    schedule together, and there is exactly one right answer.
+
+    Kept inside the curve's own node span (2Y-30Y on a 44-tenor grid) on purpose:
+    a short strip curve extrapolates past its last node with a warning and a
+    meaningless number, which would make this check noisy for the wrong reason.
+    """
+    from Query.IRSwaps.IRSwapQuery import IRSwapQuery
+    from Query.IRSwaps.IRSwapStructure import IRSwapStructure
+    from Query.IRSwaps.IRSwapValue import IRSwapValue
+
+    query = IRSwapQuery(
+        structure=IRSwapStructure.OUTRIGHT,
+        value=IRSwapValue.NPV,
+        tenor=tenor,
+        curve=curve_name,
+        structure_kwargs={"notional": notional},
+    )
+    package, weights = query.resolve_package(pricer_or_curve=curve)
+    value_map = query.build_value_map(
+        pricer_or_curve=curve, package=package, risk_weights=weights
+    )
+    return float(value_map.apply(IRSwapValue.NPV))
+
+
 # ------------------------------------------------------------------ #
 #                             the checks                             #
 # ------------------------------------------------------------------ #
@@ -334,6 +368,22 @@ def tie_out_curve(
                 par_quotes={t: citi_par[tag] for t, tag in par_tag_map.items() if tag in citi_par},
             )
         )
+
+    # ---- 3b. NPV at the swap's own fair rate must be ~0 --------------
+    if "npv" in checks:
+        for backend, curve in curves.items():
+            for tenor in ("2Y", "5Y", "10Y", "30Y"):
+                if tenor not in par_tag_map:
+                    continue
+                try:
+                    npv = query_npv_at_fair_rate(curve, curve_name=curve_name, tenor=tenor)
+                except Exception as exc:  # noqa: BLE001
+                    _row("npv", backend, tenor, error=f"{type(exc).__name__}: {exc}")
+                    continue
+                # Reported in bp of a 1mm notional so it is comparable with the
+                # other checks: 1 bp of PV01 on 10Y is ~ 800 currency units, so a
+                # genuinely-zero NPV lands many orders of magnitude below 1.
+                _row("npv", backend, tenor, citi=0.0, model=npv, err_bp=npv / 100.0)
 
     # ---- 4. the two backends against each other ---------------------
     if "backends" in checks and {"rl", "ql"} <= set(curves):

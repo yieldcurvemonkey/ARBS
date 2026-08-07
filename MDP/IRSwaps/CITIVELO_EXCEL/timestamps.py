@@ -163,16 +163,29 @@ def to_wire_naive(
 def from_wire_naive(timestamp: TimestampLike) -> datetime.datetime:
     """A naive wire stamp as a tz-aware datetime in the wire zone.
 
-    Every timestamp this source hands back goes through here. On an ambiguous
-    wall clock (the repeated hour of a US fall-back) Python's ``fold=0`` picks the
-    first occurrence, i.e. daylight time; the add-in publishes no fold
-    information, so no better answer exists and both readings are within one hour
-    of each other on a day the market is closed.
+    Every timestamp this source hands back goes through here, so the two DST
+    edge cases have to be decided rather than left to raise. A bare
+    ``Timestamp.tz_localize`` does **not** quietly pick a fold - it raises
+    ``AmbiguousTimeError`` on the repeated hour and ``NonExistentTimeError`` on
+    the skipped one - which would turn one snapshot a year into an unhandled
+    crash inside a curve build.
+
+    ``ambiguous=True``
+        The repeated 01:00-01:59 ET hour on a US fall-back resolves to the FIRST
+        occurrence (still on daylight time). The add-in publishes no fold
+        information, so no better answer exists; the two readings are an hour
+        apart on a Sunday when none of the twenty curves trades.
+    ``nonexistent="shift_forward"``
+        02:00-02:59 ET on a US spring-forward never happened, so no stamp can
+        carry it - but a *request* converted from another zone can land there, and
+        shifting to 03:00 asks for the first instant that does exist.
     """
     ts = pd.Timestamp(timestamp)
     if ts.tzinfo is not None:
         return ts.tz_convert(wire_timezone()).to_pydatetime()
-    return ts.tz_localize(wire_timezone()).to_pydatetime()
+    return ts.tz_localize(
+        wire_timezone(), ambiguous=True, nonexistent="shift_forward"
+    ).to_pydatetime()
 
 
 @dataclass(frozen=True)

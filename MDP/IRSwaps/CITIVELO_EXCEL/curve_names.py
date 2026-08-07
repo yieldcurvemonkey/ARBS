@@ -50,6 +50,7 @@ can ask what a curve supports without discovering it as an empty frame.
 
 from __future__ import annotations
 
+import dataclasses
 import difflib
 from dataclasses import dataclass
 from typing import Dict, List, Optional, Tuple
@@ -94,6 +95,7 @@ class CurveNameEntry:
     modes: Tuple[str, ...]
     has_published_forwards: bool
     note: str = ""
+    local_timezone: str = "America/New_York"
 
     @property
     def currency(self) -> str:
@@ -211,6 +213,47 @@ CITIVELO_EXCEL_CURVES: Tuple[CurveNameEntry, ...] = (
         note="Rolls quarterly on ACT/365. Conventions are market standard, not "
         "rateslib-supplied.",
     ),
+)
+
+#: The zone each curve's own market keeps its business date in.
+#:
+#: Needed because Citi stamps everything in America/New_York, and for the
+#: Asia/Pacific curves that means one trading session straddles two ET dates.
+#: Measured on JPY_TONAR, 2026-08-05/07: the session runs 19:00 ET through 06:59
+#: ET the next day as one continuous block (the 23:59 print and the 00:00 print
+#: are the same number), and it corresponds to Citi's DAILY row for the LATER ET
+#: date - ET 08-06 19:00-23:59 last printed 2.6575 against a DAILY 08-07 of
+#: 2.6500, while the DAILY 08-06 was 2.6300. Dating an intraday snapshot by its
+#: ET calendar date would therefore build a JPY, AUD or NZD curve one business
+#: day early for every request in their morning session.
+_LOCAL_TIMEZONE: Dict[str, str] = {
+    "USD_SOFR": "America/New_York",
+    "USD_FEDFUND": "America/New_York",
+    "EUR_EUROSTR": "Europe/Berlin",
+    "EUR_EONIA": "Europe/Berlin",
+    "GBP_SONIA": "Europe/London",
+    "JPY_TONAR": "Asia/Tokyo",
+    "JPY_TONAR_JSCC": "Asia/Tokyo",
+    "JPY_TONAR_LCH": "Asia/Tokyo",
+    "CHF_SARON": "Europe/Zurich",
+    "CAD_CORRA": "America/Toronto",
+    "AUD_AONIA": "Australia/Sydney",
+    "NZD_NZIONA": "Pacific/Auckland",
+    "NOK_NOWA": "Europe/Oslo",
+    "SEK_STINA": "Europe/Stockholm",
+    "DKK_TNDKK": "Europe/Copenhagen",
+    "ILS_SHIR": "Asia/Jerusalem",
+    "MXN_T_FONDEO": "America/Mexico_City",
+    "SGD_SORA": "Asia/Singapore",
+    "THB_THOR": "Asia/Bangkok",
+    "ZAR_ZARONIA": "Africa/Johannesburg",
+}
+
+# Attached after the fact rather than repeated in twenty constructors, so the
+# table above stays readable as a table and cannot fall out of step with it.
+CITIVELO_EXCEL_CURVES = tuple(
+    dataclasses.replace(e, local_timezone=_LOCAL_TIMEZONE[e.citi_index])
+    for e in CITIVELO_EXCEL_CURVES
 )
 
 CURVE_NAME_BY_CITI_INDEX: Dict[str, str] = {e.citi_index: e.curve_name for e in CITIVELO_EXCEL_CURVES}
