@@ -684,6 +684,14 @@ class CitiVelocityExcelClient:
             except Exception:  # noqa: BLE001
                 pass
             time.sleep(max(self._drain_seconds, 1.0))
+
+            # Create the replacement BEFORE closing the old one. Closing first
+            # leaves Excel momentarily holding ZERO workbooks, and an Excel being
+            # driven over COM with no workbook open can hide its window or quit
+            # outright - which looks to the user exactly like the add-in having
+            # vanished. Overlapping the two never drops to zero.
+            fresh = create_marked_workbook(self._app, self._workbook_tag)
+
             try:
                 alerts = self._app.DisplayAlerts
                 self._app.DisplayAlerts = False
@@ -693,20 +701,16 @@ class CitiVelocityExcelClient:
                 if old is not None:
                     com_retry(lambda: old.Close(SaveChanges=False))
             except Exception as exc:  # noqa: BLE001
+                # The fresh workbook stands; the stale one is left open rather
+                # than fought over. Memory is the cost, the process is the risk.
                 self._logger.warning("recycle_workbook: close refused (%s)", exc)
-                if alerts is not None:
-                    try:
-                        self._app.DisplayAlerts = alerts
-                    except Exception:  # noqa: BLE001
-                        pass
-                return False
             finally:
                 if alerts is not None:
                     try:
                         self._app.DisplayAlerts = alerts
                     except Exception:  # noqa: BLE001
                         pass
-            self._wb = create_marked_workbook(self._app, self._workbook_tag)
+            self._wb = fresh
             self._ws = com_retry(lambda: self._wb.Worksheets(1))
             self._row = 1
         self._logger.info(
