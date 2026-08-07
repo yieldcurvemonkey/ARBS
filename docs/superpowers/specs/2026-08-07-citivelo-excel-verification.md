@@ -247,6 +247,13 @@ Each of these was run and confirmed to fail:
 | tighten `max_reprice_error_bp` to 1e-15 | the builder must refuse | refused with the reprice message; `test_the_reprice_guard_fires_and_is_not_merely_decorative` |
 | put a hole in one tenor of a grid | complete-row count must drop | dropped; `test_grid_report_counts_complete_rows_not_just_rows` |
 | mark one tag bad in a batch | it must be reported, not dropped | reported; `test_a_tag_that_serves_nothing_is_reported_not_dropped` |
+| ask for JPY at **22:00 ET**, inside the Tokyo morning, on real banked data | the reference date must be the **next** ET day | `ref_date=2026-08-06` for a 2026-08-05 22:00 ET request (ET date would be 08-05); the 02:00 ET request four hours later in the same continuous session shares it |
+
+Note on the final re-run: the offline matrix was regenerated after the last fix
+and reproduced the previous numbers exactly. That is expected, **not** a
+re-validation of F7 — its test instants (10:30 ET intraday, midday live) never
+enter the 19:00–23:59 ET branch F7 changed. F7 is evidenced by the row above and
+by the stub tests, not by the matrix.
 
 ---
 
@@ -324,6 +331,14 @@ the rate. A CHF 1s10s curve trade straddling zero was out by a similar amount th
 other way. *Fix:* use the signed rate; `tests/test_irswap_value_negative_rates.py`,
 mutation-verified.
 
+> **Two sibling copies of `calc_spread_rate` exist and were deliberately left
+> alone.** `Query/FixedRateBonds/FixedRateBondValue.py:63` has the same `abs()`,
+> on `ytm()` — a latent bug of the same shape, since negative bond yields are
+> real, but no curve in this work touches it. `Query/STIRFutures/STIRFutureValue.py:36`
+> does **not** have it; it already uses the signed `fair_rate`. Fixing the bond one
+> would be a change to a product this work does not price, on no evidence, so it is
+> named here rather than made.
+
 **F10 — rateslib 2.7.1 rejects both `None` and an empty Series for
 `leg2_rate_fixings`.** Measured: omitting the argument prices, `None` raises
 `ValueError`, an empty Series raises `IndexError` from `index[-1]`, a non-empty
@@ -364,4 +379,44 @@ cell that is genuinely a datetime, or from a *different* cell whose serial is pa
   tenor to be hours behind the rest, so the spread is measured, warned at 30 min
   and raised at 6 h.
 * **The old `CITIVELO` source is untouched** — different token, different fetcher
-  cache, no shared code path.
+  cache, no shared code path. Re-checked at the end: all three aliases
+  (`CITIVELO`, `CITI_VELO`, `CITIVELOCITY`) still serve `USD-SOFR-1D` for
+  2026-06-15 from the CurveStore, with the same naive-ET timestamp as before. The
+  `IRSwapsMDP` diff is **purely additive** (177 insertions, 0 deletions) and
+  touches the old branch only in comments.
+* **`bulk_get_data` and `get_grid` work** for the new source through the generic
+  per-timestamp path — probed, not assumed. No bulk-specific branch was added.
+
+---
+
+## 7. What was done to the user's Excel
+
+The user was away from the machine and Excel had to be driven. Two UI actions were
+taken on their running process; both are recorded here because they should hear it
+from this report rather than discover it.
+
+**Excel's automation interface was blocked for ~90 minutes and was unblocked with
+a single Escape keystroke.** Every COM property (`Version`, `Workbooks`, `AddIns`)
+raised `AttributeError` — the documented signature of a wedged OLE server, whose
+recorded fix is an Excel restart costing ~13 minutes of silent add-in login. It
+was **not** wedged: `IsWindowEnabled(XLMAIN)` was true (so no modal dialog),
+`SendMessageTimeout(WM_NULL)` returned (so the pump was alive), and there was no
+`#32770` child. That is **cell edit mode**, in which Excel rejects all OLE
+automation. A posted `VK_ESCAPE` to XLMAIN cleared it within 5 seconds.
+
+*What that may have cost:* Escape cancels an in-progress cell edit, so a
+half-typed, uncommitted cell entry would have been discarded. Nothing was saved,
+deleted or closed. Only `bridge.xlsx` — a scratch workbook left by an earlier
+session — was open at the time.
+
+**The Citi "Function Builder" window is still open, and was messaged.** The add-in
+log showed it opened at 10:19:08 and it was the first suspect for the block, so it
+was sent `WM_CLOSE`, `WM_SYSCOMMAND/SC_CLOSE` and a posted Escape. It **ignored
+all three** and is still on screen — it is modeless and was never the cause. No
+other window was messaged; XLMAIN was never sent a close.
+
+**Everything else went through `CitiVelocityExcelClient`**, whose spacing and
+teardown discipline is what keeps that process alive. No second write path was
+created, no `Stop-Process` was issued, and no run was killed mid-call. Total live
+cost: **79 `CV*` calls** across five harvest invocations plus 20 in the end-to-end
+live check.
