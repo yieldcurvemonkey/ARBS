@@ -7,6 +7,33 @@ from definitions.IRSwaptions import EXPIRY_LABELS, TAIL_LABELS
 from MDP.IRSwaptions.IRSwaptionMDP import IRSwaptionMDP
 
 
+@pytest.fixture(autouse=True)
+def _restore_registries():
+    """Put ``VOL_PROVIDERS`` / ``ENGINE_FACTORIES`` back after every test here.
+
+    They are CLASS attributes, so ``mdp.ENGINE_FACTORIES[...] = fake`` mutates
+    them for the whole session, not for one instance. Several tests below do
+    exactly that, and one of them replaces ``ENGINE_FACTORIES["QL"]`` - the real
+    ``ql.BachelierSwaptionEngine`` factory - with a local stub that returns a bare
+    ``object()``. Every later test in the session then priced with that stub.
+
+    It stayed invisible because pytest collects files alphabetically and every
+    other swaption test file sorts before this one. It surfaced the moment
+    ``test_citivelo_swaption_provider.py`` asserted the engine's TYPE and the two
+    files were named in the other order on a command line. A test that only
+    passes because of collection order is not passing for a reason.
+    """
+    providers = dict(IRSwaptionMDP.VOL_PROVIDERS)
+    engines = dict(IRSwaptionMDP.ENGINE_FACTORIES)
+    try:
+        yield
+    finally:
+        IRSwaptionMDP.VOL_PROVIDERS.clear()
+        IRSwaptionMDP.VOL_PROVIDERS.update(providers)
+        IRSwaptionMDP.ENGINE_FACTORIES.clear()
+        IRSwaptionMDP.ENGINE_FACTORIES.update(engines)
+
+
 def _make_vol_handle(as_of: dt.date) -> ql.SwaptionVolatilityStructureHandle:
     cal = ql.UnitedStates(ql.UnitedStates.GovernmentBond)
     ql.Settings.instance().evaluationDate = ql.Date(as_of.day, as_of.month, as_of.year)

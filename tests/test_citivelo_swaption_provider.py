@@ -268,6 +268,77 @@ def test_a_structure_prices_through_both_engines(ql_context, rl_context, cube):
 # ------------------------------------------------------------------ #
 
 
+def test_ignore_cache_does_not_bypass_the_curve_cache(rl_curve, cube, snapshot, caplog):
+    """A swaption cache flag must not become a COM fetch against the user's Excel.
+
+    ``ignore_cache`` on a swaption request means "rebuild the context". It used to
+    be forwarded verbatim into the curve request, where it means "do not serve a
+    warmed curve artefact" - and for ``citivelo_excel*`` the CurveStore fast path
+    is gated on exactly that flag, so bypassing it drops through to the
+    cached-then-LIVE quotes layer and, on a cold tag cache, drives the signed-in
+    Excel add-in.
+
+    The two are separate knobs now: ``ignore_cache`` rebuilds the context off the
+    warmed curve, and ``curve_ignore_cache`` is the explicit way to refresh the
+    curve - which warns when that refresh can go outside the process.
+    """
+    import logging
+
+    seen: list[bool] = []
+    mdp = IRSwaptionMDP(source="CITIVELO-RL", curve_source="citivelo_excel_rl")
+
+    def _capture(*, curve_name, dates, ignore_cache):  # noqa: ARG001
+        seen.append(bool(ignore_cache))
+        return {snapshot.as_of: rl_curve}
+
+    mdp._fetch_curve_map = _capture
+    request = {
+        "curve_name": CURVE,
+        "timestamp": snapshot.as_of,
+        "cube": cube,
+        "citi_index": snapshot.citi_index,
+    }
+
+    mdp.get_pricer({**request, "ignore_cache": True})
+    assert seen == [False], "ignore_cache must not reach the curve request"
+
+    seen.clear()
+    with caplog.at_level(logging.WARNING, logger="MDP.IRSwaptions.IRSwaptionMDP"):
+        mdp.get_pricer({**request, "ignore_cache": True, "curve_ignore_cache": True})
+    assert seen == [True], "curve_ignore_cache is the knob that does reach it"
+
+    # And it is loud about what it is about to do, because the caller cannot see
+    # the CurveStore gate from here.
+    real = IRSwaptionMDP(source="CITIVELO-RL", curve_source="citivelo_excel_rl")
+    with caplog.at_level(logging.WARNING, logger="MDP.IRSwaptions.IRSwaptionMDP"):
+        caplog.clear()
+        try:
+            real._fetch_curve_map(curve_name=CURVE, dates=[snapshot.as_of], ignore_cache=True)
+        except Exception:
+            pass
+    assert any("Excel" in r.message or "Excel" in r.getMessage() for r in caplog.records)
+
+
+def test_force_refresh_still_refreshes_the_curve(rl_curve, cube, snapshot):
+    """``force_refresh=True`` is the explicit "refresh everything" switch."""
+    seen: list[bool] = []
+    mdp = IRSwaptionMDP(
+        source="CITIVELO-RL", curve_source="citivelo_excel_rl", force_refresh=True
+    )
+    mdp._fetch_curve_map = lambda *, curve_name, dates, ignore_cache: (  # noqa: ARG005
+        seen.append(bool(ignore_cache)) or {snapshot.as_of: rl_curve}
+    )
+    mdp.get_pricer(
+        {
+            "curve_name": CURVE,
+            "timestamp": snapshot.as_of,
+            "cube": cube,
+            "citi_index": snapshot.citi_index,
+        }
+    )
+    assert seen == [True]
+
+
 def test_the_cube_accepts_an_RLIRSwapCurve_wrapper_directly(rl_curve, cube, snapshot):
     """``IRSwapsMDP`` hands back the wrapper, so the cube has to take the wrapper.
 
