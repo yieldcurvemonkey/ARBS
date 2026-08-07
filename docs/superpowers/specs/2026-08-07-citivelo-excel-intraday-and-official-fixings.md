@@ -191,13 +191,25 @@ route every intraday request down the EOD branch.
 |---|---|---|---|
 | USD-SOFR-1D | 2026-08-05 10:30 | 44 | **0.0013 bp** |
 | USD-SOFR-1D | 2026-07-22 14:15 | 44 | **0.0002 bp** |
-| EUR-ESTR-1D | 2026-08-05 11:00 | 44 | **0.4358 bp** |
+| EUR-ESTR-1D | 2026-08-05 11:00 | 44 | **0.0006 bp** |
+| GBP-SONIA-1D | 2026-08-05 11:00 | 44 | **0.0004 bp** |
+| JPY-TONAR-1D-LCH | 2026-08-05 11:00 | 44 | **0.0002 bp** |
+| CAD-CORRA-1D | 2026-08-05 11:00 | 44 | **0.0015 bp** |
 
-All inside the ±1 bp bar.
+All five currencies, every tenor, three orders of magnitude inside the ±1 bp bar.
 
-> `fair_rate()` returns a **decimal** (it divides rateslib's percent by 100) while
-> Citi quotes percent. Comparing them unscaled reads as a 442 bp error on a curve
-> that is exact — the same units trap as `IRSwapValue.RATE` earlier in this work.
+### Two units/date traps the tie-out walked into first
+
+Both produced large, confident-looking errors on curves that were exact. Worth
+knowing because a reader reproducing this will hit them too:
+
+* `fair_rate()` returns a **decimal** (it divides rateslib's percent by 100) while
+  Citi quotes percent. Comparing them unscaled reads as a **442 bp** error — the
+  same units trap as `IRSwapValue.RATE` earlier in this work.
+* Spot must come from **`SettlementDays`**, not `payment_lag`. They coincide for
+  USD (both 2) and diverge for EUR (1 vs 2). Using `payment_lag` reported
+  **0.4358 bp** at EUR 3M; `SettlementDays` gives **0.0006 bp**. A tie-out that
+  builds its own instruments has to build them the way the warm did.
 
 ---
 
