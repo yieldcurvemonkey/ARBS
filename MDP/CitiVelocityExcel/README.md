@@ -716,12 +716,51 @@ parity_rel             2.345e-14  <= 1e-09
 vol_anchor_gap_bp      1.736e-03  <= 0.05
 ```
 
-**One operational caveat.** The CurveStore fast path is gated on
-`not ignore_cache`, so `IRSwaptionMDP(..., curve_source="citivelo_excel_rl")`
-with `ignore_cache=True` bypasses the store and rebuilds from the quotes layer —
-which is cached-then-**live**, i.e. it can reach for Excel on a cold tag cache.
-Both paths produced an identical 1Yx10Y forward (4.321999%), so it is a
-provenance and etiquette question, not a numerical one.
+### Three ways the swaption layer could open Excel, and what was done
+
+Excel here is signed in, ~3 GB, and only a **human** restart clears it, so a
+library that reaches for it without being asked is a real problem rather than a
+slow path. Three routes existed; the first two are fixed.
+
+**1. `ignore_cache` leaked across layers.** On a swaption request it means "do not
+serve me a cached `IRSwaptionMarketContext`". It was forwarded verbatim into the
+curve request, where it means "do not serve a warmed curve artefact" — and the
+`citivelo_excel` CurveStore fast path is gated on exactly that flag. So wanting a
+fresh context rebuilt the curve through the cached-then-**live** quotes layer.
+They are separate knobs now:
+
+```python
+IRSwaptionMDP(...).get_pricer({..., "ignore_cache": True})        # context only
+IRSwaptionMDP(...).get_pricer({..., "curve_ignore_cache": True})  # and the curve
+IRSwaptionMDP(..., force_refresh=True)                            # everything
+```
+
+**2. `_fetch_curve_map` tried `bulk_get_data` first, and the CurveStore branch
+exists only in `get_data`.** So bulk fell through to the fetcher and reached
+Excel *even with `ignore_cache=False` and a warmed curve on disk*. Measured:
+`bulk_get_data(ignore_cache=False)` raised `AddInNotSignedInError` where
+`get_data(ignore_cache=False)` served the same day from
+`USD-SOFR-1D-CITIVELOEXCEL`. For sources whose refresh goes outside the process
+the per-date path now runs first, and bulk only if it finds nothing.
+
+**3. The fixings, and this one is upstream.** Even on the warmed-store path,
+`IRSwapsMDP._load_citivelo_excel_curve_store_point` calls `fixings_for()` through
+an **online** `CitiVeloQuotes`, so the curve comes off disk and the published
+overnight fixings still go looking for the add-in. For USD-SOFR there is no
+fallback: `CITIVELO_EXCEL.official_sources.OFFICIAL_SOURCES` covers EFFR, NOWA,
+ZARONIA and Fondeo — **not SOFR** — so Citi is the only fixing source.
+
+That is deliberately **not** changed here. The one-line shape is to pass
+`quotes=CitiVeloQuotes(offline=True)` on the store path, and the call site
+already tolerates an empty series (`if result.empty ... fixings = pd.Series()`).
+But empty SOFR fixings break `rl.IRS` construction, and whether that trade is
+acceptable to the curve source's other consumers is its owner's call, not this
+package's. What this package does instead is **fail readably**: the error now
+names the source, the exception, and the fact that it was the fixings rather than
+the curve that went looking.
+
+Numerically none of this matters — the store path and the rebuild produced an
+identical 1Yx10Y forward (4.321999%). It is a provenance and etiquette question.
 
 **Everything in that run has to be one observation date.** The par grid and the
 `FWD` series publish before the OTM skew does, so on any given morning
