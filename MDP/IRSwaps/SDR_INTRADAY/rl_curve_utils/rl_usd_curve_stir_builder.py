@@ -16,6 +16,7 @@ from MDP.IRSwaps.SDR_INTRADAY.rl_curve_utils.stir_curve_building_utils import (
     get_fomc_meetings_list,
     get_short_end_curve_tickers,
 )
+from utils.rl_compat import fixed_rate as rl_fixed_rate
 
 
 def rl_usd_sofr_stir_builder(
@@ -36,10 +37,7 @@ def rl_usd_sofr_stir_builder(
     warnings.filterwarnings("ignore", category=UserWarning)
 
     def _safe_fixed_rate(f):
-        try:
-            return f._fixed_rate.iloc[-1]
-        except Exception:
-            return f._fixed_rate
+        return rl_fixed_rate(f)
 
     def _fetch_stir_market_data(
         curve_id_local: str,
@@ -184,10 +182,7 @@ def rl_usd_ois_stir_builder(
     warnings.filterwarnings("ignore", category=UserWarning)
 
     def _safe_fixed_rate(f):
-        try:
-            return f._fixed_rate.iloc[-1]
-        except Exception:
-            return f._fixed_rate
+        return rl_fixed_rate(f)
 
     def _fetch_stir_market_data(
         curve_id_local: str,

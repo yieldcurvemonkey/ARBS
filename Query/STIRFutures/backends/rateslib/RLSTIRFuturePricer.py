@@ -8,6 +8,7 @@ import pandas as pd
 
 from Query.STIRFutures._STIRFutureGenericPricer import _STIRFutureGenericPricer
 from Query.IRSwaps.backends.rateslib.rl_curve_definitions_map import RATESLIB_CURVE_DEFINITIONS
+from utils.rl_compat import rate_fixings_kwargs, stirf_pv01
 
 
 #: A DF==1 curve spanning any plausible contract, used only to satisfy rateslib
@@ -348,13 +349,7 @@ class RLSTIRFuturePricer(_STIRFutureGenericPricer):
             )
             fixings = fixings[mask]
             if not fixings.empty:
-                for fixings_key in ("leg2_rate_fixings", "leg2_fixings"):
-                    try:
-                        return rl.STIRFuture(**kwargs, **{fixings_key: fixings})
-                    except TypeError:
-                        continue
-                    except (ValueError, KeyError):
-                        break
+                return rl.STIRFuture(**kwargs, **rate_fixings_kwargs(fixings))
         return rl.STIRFuture(**kwargs)
 
     def build_pricable(self, /, **kwargs: Any) -> Any:
@@ -408,7 +403,7 @@ class RLSTIRFuturePricer(_STIRFutureGenericPricer):
                 curves=self._curve
             )
 
-            pv01_per_contract = abs(one_contract.pv01)
+            pv01_per_contract = stirf_pv01(one_contract)
             if pv01_per_contract <= 0:
                 raise ValueError("Computed pv01_per_contract is zero or invalid")
 
@@ -442,10 +437,4 @@ class RLSTIRFuturePricer(_STIRFutureGenericPricer):
 
         meta_fixings = self._meta_data.get("fixings", None) if isinstance(self._meta_data, dict) else None
         applied_fixings = fixings if fixings is not None else meta_fixings
-        if applied_fixings is not None:
-            try:
-                return rl.STIRFuture(**stir_kwargs, leg2_rate_fixings=applied_fixings)
-            except TypeError:
-                return rl.STIRFuture(**stir_kwargs, leg2_rate_fixings=applied_fixings)
-
-        return rl.STIRFuture(**stir_kwargs)
+        return rl.STIRFuture(**stir_kwargs, **rate_fixings_kwargs(applied_fixings))

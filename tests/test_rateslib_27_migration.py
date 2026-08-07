@@ -81,14 +81,21 @@ def test_no_module_reaches_through_instance_dict_for_kwargs():
 
     Schedule fields moved too: ``effective``/``termination`` now live on
     ``leg1.schedule``, while ``fixed_rate``/``notional`` stay in ``kwargs.leg1``.
+
+    Two paths are exempt. ``utils/rl_compat.py`` is the one sanctioned place for
+    the legacy spelling: ``instrument_kwarg`` reads it as a *fallback* after the
+    2.7 form, which is how the rest of the repo gets to stay version-agnostic.
+    ``.claude/worktrees`` holds detached checkouts of other branches, which are
+    not this working tree's source.
     """
     import pathlib
 
     root = pathlib.Path(__file__).resolve().parents[1]
+    exempt = {"tests/test_rateslib_27_migration.py", "utils/rl_compat.py"}
     offenders = []
     for path in root.rglob("*.py"):
         rel = path.relative_to(root).as_posix()
-        if "__pycache__" in rel or rel == "tests/test_rateslib_27_migration.py":
+        if "__pycache__" in rel or rel in exempt or rel.startswith(".claude/"):
             continue
         try:
             text = path.read_text(encoding="utf-8")
