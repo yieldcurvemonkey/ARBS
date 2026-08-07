@@ -347,6 +347,26 @@ the boundary.
 A source that does not answer raises or returns empty. It never falls back to a
 policy rate, a neighbouring currency, or a carried-forward constant.
 
+### Through `fixings_for`, with provenance
+
+Verified live 2026-08-07 against reference date 2026-08-06 — the number of rows,
+the freshness of the tail, and **which source answered**:
+
+| curve | rows | last fixing | gap | source |
+|---|---|---|---|---|
+| USD-FEDFUNDS-1D | 548 | 2026-08-05 | 1d | `official` |
+| NOK-NOWA-1D | 551 | 2026-08-05 | 1d | `official` |
+| ZAR-ZARONIA-1D | 548 | 2026-08-05 | 1d | `official` |
+| USD-SOFR-1D | 5,456 | 2026-08-05 | 1d | `official+citi` |
+| THB-THOR-1D | 0 | — | — | `none` |
+| DKK-TNDKK-1D | 0 | — | — | `none` |
+
+Three curves that previously had **no fixings at all** now carry a real
+two-year history one day behind. The two that still have none report `none`
+rather than an empty series that would read as "the rate is zero", and the live
+tests (`-m network`) assert both the plausibility of the rate and that the tail is
+no more than ten days stale.
+
 ---
 
 ## 5. Tests
