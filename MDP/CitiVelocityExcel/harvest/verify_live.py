@@ -301,11 +301,26 @@ def spot_check(client, currency: str = "USD", citi_index: str = "USD_SOFR",
     points = [(e, t) for e in ("1Y", "5Y") for t in ("2Y", "10Y", "30Y")]
     fwd_tags = {T.ois_fwd(citi_index, e, t): (e, t) for e, t in points}
     quoted_fwd = client.fetch_frame(list(fwd_tags), "DAILY", period="1M")
-    citi_forwards = {}
+    # On the CUBE's date, not the last row. The forward series publishes a day
+    # ahead of the OTM skew, and comparing our 08-06 forward with Citi's 08-07 one
+    # measures a day of market move: it read 4.222 bp across dates against 0.287
+    # bp on the same date. Citi's forward is the anchor the whole smile hangs off,
+    # so this comparison is worthless unless both sides are the same observation.
+    citi_forwards, mismatched = {}, 0
     for tag, point in fwd_tags.items():
-        if tag in quoted_fwd.columns and not quoted_fwd[tag].dropna().empty:
-            citi_forwards[point] = float(quoted_fwd[tag].dropna().iloc[-1])
-    print(f"  {len(citi_forwards)}/{len(fwd_tags)} published forwards served")
+        if tag not in quoted_fwd.columns:
+            continue
+        series = quoted_fwd[tag].dropna()
+        if series.empty:
+            continue
+        if stamp in series.index:
+            citi_forwards[point] = float(series.loc[stamp])
+        else:
+            mismatched += 1
+    print(f"  {len(citi_forwards)}/{len(fwd_tags)} published forwards served on {cube.as_of}")
+    if mismatched:
+        print(f"  {mismatched} tag(s) have no {cube.as_of} row and are DROPPED rather than "
+              "compared across dates.")
 
     _rule("S4. price -> invert -> compare, every node, both backends")
     frame = spot_check_frame(

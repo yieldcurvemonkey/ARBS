@@ -232,6 +232,23 @@ def test_the_two_engines_agree_on_the_premium(
     assert left == pytest.approx(right, rel=1e-3)
 
 
+@pytest.mark.parametrize("expiry", EXPIRIES)
+@pytest.mark.parametrize("tail", TENORS)
+def test_every_grid_point_resolves_on_both_engines(ql_context, rl_context, cube, expiry, tail):
+    """The corners too, not just 1Yx10Y.
+
+    The rateslib engine is handed a leg with explicit DATES and has to turn them
+    back into cube coordinates; it does that in whole months, so 10Y x 30Y becomes
+    ``120M x 360M``. If that conversion ever stopped landing on the node, the
+    volatility would come back interpolated instead of exact and only a corner
+    would show it.
+    """
+    quoted = cube.vol(expiry, tail, 0.0)
+    for context in (ql_context, rl_context):
+        got = _nvol(context, "ATMF", IRSwaptionStructure.PAYER, expiry=expiry, tail=tail)
+        assert got == pytest.approx(quoted, abs=0.05), f"{expiry}x{tail} on {context.source}"
+
+
 def test_vega_agrees_between_the_engines(ql_context, rl_context):
     left = _nvol(ql_context, "ATMF", IRSwaptionStructure.PAYER, value=IRSwaptionValue.VEGA_01)
     right = _nvol(rl_context, "ATMF", IRSwaptionStructure.PAYER, value=IRSwaptionValue.VEGA_01)
@@ -321,6 +338,51 @@ def test_both_engines_are_registered_beside_the_existing_providers():
     }
     # The default is still the one every production call site pins.
     assert mdp.source.upper().startswith("GSQUANT")
+
+
+@pytest.mark.network
+@pytest.mark.parametrize(
+    "source,curve_source",
+    [
+        ("CITIVELO-QL", "ERIS_EOD_LIVE-QL_BASIC"),
+        ("CITIVELO-RL", "ERIS_EOD_LIVE-RL_BASIC"),
+    ],
+)
+def test_both_engines_run_on_a_real_curve_source(snapshot, cube, source, curve_source):
+    """The production path: a curve from IRSwapsMDP, not one built in the fixture.
+
+    Everything else in this file injects the curve so it stays hermetic, which
+    leaves the ``IRSwapsMDP`` fetch itself untested. Marked ``network`` because
+    ERIS EOD curves are not local; run with
+    ``pytest -m network tests/test_citivelo_swaption_provider.py``.
+
+    Measured 2026-08-06: ``CITIVELO-QL`` on the ERIS QuantLib curve returns
+    82.1183 / 96.5198 / 98.7044 bp against Citi's 82.1221 / 96.5305 / 98.6960 at
+    ATMF, +100 and -200 - the residual is that the vol is Citi's and the curve is
+    not, so the strike axis is anchored a fraction of a basis point elsewhere.
+    ``CITIVELO-RL`` on the ERIS rateslib curve is exact, because its engine reads
+    the smile by offset.
+
+    ``curve_source="CITIVELO"`` - Citi's OWN curve - is deliberately not here: the
+    CurveStore asset ``USD-SOFR-1D-CITIVELO`` has no 2026-08-06 partition warmed,
+    so it would fail for want of data rather than for want of code.
+    """
+    clear_citivelo_cube_cache()
+    mdp = IRSwaptionMDP(source=source, curve_source=curve_source)
+    context = mdp.get_pricer(
+        {
+            "curve_name": CURVE,
+            "timestamp": snapshot.as_of,
+            "cube": cube,
+            "citi_index": snapshot.citi_index,
+            "ignore_cache": True,
+        }
+    )
+    assert context.provider == "CITIVELO"
+    for offset, spec, structure in STRIKE_CASES:
+        assert _nvol(context, spec, structure) == pytest.approx(
+            cube.vol("1Y", "10Y", offset), abs=0.05
+        )
 
 
 def test_a_snapshot_dated_elsewhere_is_refused(ql_curve, cube, snapshot):

@@ -41,6 +41,8 @@ from MDP.CitiVelocityExcel.vol.spot_check import (  # noqa: E402
     SpotCheckError,
     assert_spot_check,
     build_ql_mirror_curve,
+    format_spot_check_report,
+    node_error_matrix,
     spot_check_frame,
     summarise_spot_check,
 )
@@ -158,6 +160,27 @@ def test_the_summary_breaks_the_error_out_rather_than_reporting_one_max(clean_fr
     assert list(summary["by_tenor"].index) == list(TENORS)
     assert list(summary["by_offset"].index) == sorted(OFFSETS)
     assert len(summary["worst"]) > 0
+
+
+def test_the_report_carries_a_per_node_table_for_atm_and_every_offset(clean_frame):
+    """The deliverable is a table, not a maximum.
+
+    A max says the worst node is small; it does not say whether the error is
+    spread evenly or piled into one corner, and those are different defects. On
+    the recorded cube it is piled into one corner (short expiry, long tail, deep
+    wing), which only a node-by-node table shows.
+    """
+    table = node_error_matrix(clean_frame, backend="ql", right="payer")
+    assert list(table.columns) == sorted(OFFSETS)
+    assert 0.0 in table.columns, "the ATM node must be a column, not a separate report"
+    assert len(table) == len(EXPIRIES) * len(TENORS)
+    assert table.notna().to_numpy().all()
+
+    report = format_spot_check_report(clean_frame, title="unit test")
+    assert "PER NODE" in report
+    for label in ("by expiry", "by swap tenor", "by strike offset"):
+        assert label in report
+    assert "worst 10 nodes" in report
 
 
 def test_put_call_parity_and_monotonicity_hold_on_the_real_cube(clean_frame):

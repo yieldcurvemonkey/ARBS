@@ -90,6 +90,7 @@ __all__ = [
     "assert_spot_check",
     "build_ql_mirror_curve",
     "format_spot_check_report",
+    "node_error_matrix",
     "spot_check_frame",
     "summarise_spot_check",
 ]
@@ -547,6 +548,43 @@ def summarise_spot_check(frame: pd.DataFrame) -> Dict[str, pd.DataFrame]:
     }
 
 
+def node_error_matrix(
+    frame: pd.DataFrame,
+    *,
+    column: str = "err_cross_bp",
+    backend: Optional[str] = None,
+    right: str = "payer",
+) -> pd.DataFrame:
+    """The per-node table: ``(expiry, tenor)`` rows against strike offsets.
+
+    One cell per ``(expiry, tenor, offset)``, in bp of volatility - ATM in the
+    ``0.0`` column and every OTM offset beside it. This is the shape the error
+    actually has: a summary by expiry and a summary by offset each average over
+    the other axis, and the interesting structure here (short expiries, long
+    tails, deep wings) lives in one corner of the grid rather than along either
+    margin.
+    """
+    if frame.empty:
+        return pd.DataFrame()
+    work = frame
+    if backend is not None:
+        work = work[work["backend"] == backend]
+    if right is not None:
+        work = work[work["right"] == right]
+    if work.empty:
+        return pd.DataFrame()
+    table = work.pivot_table(
+        index=["expiry", "tenor"], columns="offset_bp", values=column, aggfunc="max"
+    )
+    order = [
+        (e, t)
+        for e in dict.fromkeys(frame["expiry"])
+        for t in dict.fromkeys(frame["tenor"])
+        if (e, t) in table.index
+    ]
+    return table.reindex(order)
+
+
 def assert_spot_check(
     frame: pd.DataFrame,
     *,
@@ -672,6 +710,15 @@ def format_spot_check_report(frame: pd.DataFrame, *, title: str = "") -> str:
     ):
         parts.append(f"\nimplied-vol error vs Citi's quote, {label} (bp of vol):")
         parts.append(summary[key].to_string(float_format=lambda v: f"{v:11.3e}"))
+    for backend in dict.fromkeys(frame["backend"]):
+        table = node_error_matrix(frame, backend=backend, right="payer")
+        if table.empty:
+            continue
+        parts.append(
+            f"\nPER NODE, {backend} payers: cross-inverted implied vol minus Citi's quote "
+            "(bp of vol), ATM in the 0.0 column:"
+        )
+        parts.append(table.to_string(float_format=lambda v: f"{v:10.2e}"))
     parts.append("\nworst 10 nodes by |cross-inverted vol - quoted vol|:")
     parts.append(summary["worst"].to_string(index=False))
 

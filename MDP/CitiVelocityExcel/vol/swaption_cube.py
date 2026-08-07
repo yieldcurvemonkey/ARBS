@@ -408,15 +408,23 @@ class CitiVeloSwaptionCube:
         return float(self.inner.time_to_expiry(str(expiry)))
 
     def payment_date(self, expiry: str) -> datetime.date:
-        """When the premium settles: expiry plus the index's payment lag."""
+        """When the premium settles: expiry plus the index's payment lag.
+
+        This is rateslib's convention for ``rate(metric='Premium')``, not the
+        market's upfront-on-trade-date one - it is chosen so the two backends'
+        premia are the same quantity and can be diffed. Use :meth:`price` for a
+        present value.
+        """
+        import rateslib as rl
+
         from MDP.CitiVelocityExcel.curves.ql_builder import PAYMENT_LAG_BY_INDEX
 
         lag = int(PAYMENT_LAG_BY_INDEX[self.convention.citi_index])
-        calendar = self.convention.rl_calendar_object()
-        import rateslib as rl
-
         stamp = rl.add_tenor(
-            pd.Timestamp(self.expiry_date(expiry)).to_pydatetime(), f"{lag}b", "F", calendar
+            pd.Timestamp(self.expiry_date(expiry)).to_pydatetime(),
+            f"{lag}b",
+            "F",
+            self.convention.rl_calendar_object(),
         )
         return stamp.date() if isinstance(stamp, datetime.datetime) else stamp
 

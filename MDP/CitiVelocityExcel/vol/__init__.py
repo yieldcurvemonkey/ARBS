@@ -127,10 +127,12 @@ from MDP.CitiVelocityExcel.vol.spot_check import (
     assert_spot_check,
     build_ql_mirror_curve,
     format_spot_check_report,
+    node_error_matrix,
     spot_check_frame,
     summarise_spot_check,
 )
 from MDP.CitiVelocityExcel.vol.swaption_cube import (
+    BACKEND_LIBRARY,
     BACKENDS,
     CitiVeloSwaptionCube,
     UnavailableBackendError,
@@ -141,6 +143,7 @@ from MDP.CitiVelocityExcel.vol.swaption_cube import (
 __all__ = [
     # the one pricer
     "BACKENDS",
+    "BACKEND_LIBRARY",
     "CitiVeloSwaptionCube",
     "UnavailableBackendError",
     "build_citivelo_swaption_cube",
@@ -151,6 +154,7 @@ __all__ = [
     "assert_spot_check",
     "build_ql_mirror_curve",
     "format_spot_check_report",
+    "node_error_matrix",
     "spot_check_frame",
     "summarise_spot_check",
     # recorded live quotes

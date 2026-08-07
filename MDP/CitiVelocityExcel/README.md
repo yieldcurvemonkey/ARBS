@@ -338,6 +338,14 @@ through the ordinary `cube_from_quotes` path. Re-record with
 wing flattening and no kink, and the mutations are only convincing against one
 that does.
 
+They are **slow for unit tests** - together they add roughly 8 minutes to the
+fast gate, because they build and price thousands of real swaptions across two
+libraries rather than asserting on a fixture. That is the cost of a check that
+can fail; the grids are already trimmed to the corners where the conventions
+differ (`1Y`/`10Y` expiries against `2Y`/`30Y` tails). Two tests in the provider
+file are marked `network` and stay out of the gate: they drive `CITIVELO-QL` and
+`CITIVELO-RL` on real `IRSwapsMDP` curve sources rather than injected ones.
+
 Each analytics package also ships a `_smoke.py` that prints its numbers:
 
 ```bash
@@ -519,3 +527,62 @@ offsets from *its* forward; we measure them from ours, and a gap there slides th
 whole smile along the strike axis without changing a single node vol. It is now
 measured rather than assumed: **the strike axis is anchored where Citi anchors
 it.**
+
+The first three rows, however, are **not a check on the numbers**. Every
+interpolator here is exact at its data sites, so "reproduces the quoted vol"
+reports float noise no matter what the annuity, schedule or day count is doing.
+That is what `--spot-check` exists for.
+
+### What the SPOT CHECK settled
+
+`verify_live.py --spot-check`, 2026-08-06 USD, **8 `CV*` calls, 1040 priced
+nodes** - 5 expiries x 4 tenors x (ATM + all twelve OTM offsets) x payer and
+receiver x both backends. Every premium was inverted back to a volatility with a
+pure-Python bisection and compared against Citi's quote.
+
+| check | result |
+|---|---|
+| implied vol vs quote, inverted with the pricing backend's own `(F, A, T)` | **3.0e-04 bp** worst |
+| implied vol vs quote, inverted with the OTHER library's `(F, A, T)` | **0.213 bp** worst |
+| put-call parity, `PV(payer) - PV(receiver)` vs `N.A.(F-K)` | 5.5e-14 relative |
+| rateslib premium vs QuantLib premium at the same node | 3.3e-05 relative |
+| premium monotone in strike | **0 violations** over 1040 nodes |
+| QuantLib `atmStrike` vs the underlying's own par rate | 0.0017 bp |
+| our forward vs one computed off the curve by an independent path | 0.094 bp |
+| **our forward vs Citi's published `RATES.OIS.USD_SOFR.FWD.<e>.<t>`** | **0.256 bp** worst over six points, identical on both backends |
+
+Reading those two error rows:
+
+- The **self-inverted** residual is 3e-9 bp on the rateslib backends (an
+  arithmetic identity) and 3e-4 bp on QuantLib. All of the QuantLib residual is
+  the `atmStrike` row: its engine reads the vol at `atmStrike + spread` while the
+  strike is measured from the swaption's own par rate, and the residual is that
+  0.0018 bp gap times the local smile slope. Annuity and time to expiry were
+  measured **identical** to 1e-16 and 4e-10.
+- The **cross-inverted** residual is entirely 3M x 30Y at +/-200 bp, where a 3-month
+  option 200 bp in the money has almost no vega (`phi(3.45) ~ 0.001`), so a
+  3.5e-04 bp forward difference between the two bootstrapped curves has to be
+  absorbed by a large volatility move. Hand both libraries the **same** curve -
+  `build_ql_mirror_curve` puts the rateslib nodes into a `ql.DiscountCurve`, both
+  log-linear on discount factors - and it collapses to 3.0e-04 bp, because the
+  two then agree on the forward to **2e-12 bp** and on the annuity to **7e-16**
+  relative. rateslib's `IRSCall` underlying and QuantLib's `MakeOIS` are the same
+  swap: same schedule, same roll, same fixed-leg day count, same payment lag,
+  same discounting.
+
+Per-node output lands in `harvest/spot_check_live.parquet`, and the report prints
+a table of `(expiry, tenor)` against every strike offset with ATM in the `0.0`
+column, plus summaries by expiry, by tenor and by offset. A max alone hides a
+corner, and in this case the corner (`3M x 30Y`, deep wings) is the whole story:
+every other cell in the 20 x 13 grid is at or below 2e-04 bp.
+
+**Everything in that run has to be one observation date.** The par grid and the
+`FWD` series publish before the OTM skew does, so on any given morning
+`grid.iloc[-1]` is a day ahead of the last date the cube is simultaneous on. Two
+separate cross-date reads were found and fixed while producing the table above:
+building the curve off the grid's last row put an 08-06 cube on an 08-07 curve,
+and taking `FWD.dropna().iloc[-1]` compared our 08-06 forward with Citi's 08-07
+one - which read **4.222 bp** and looked exactly like a broken anchor until both
+sides were pinned to the cube's own date, where it reads 0.256 bp. `--spot-check`
+now selects the cube's date on both, prints `SAME DAY` or names the gap, and drops
+a forward tag rather than compare it across dates.
