@@ -629,6 +629,100 @@ column, plus summaries by expiry, by tenor and by offset. A max alone hides a
 corner, and in this case the corner (`3M x 30Y`, deep wings) is the whole story:
 every other cell in the 20 x 13 grid is at or below 2e-04 bp.
 
+### Re-run on Citi's OWN curve — the residual does not move
+
+Once `IRSwapsMDP(source="citivelo_excel_rl")` (PR #394) could serve Citi's warmed
+SOFR curve for 2026-08-06 — asset `USD-SOFR-1D-CITIVELOEXCEL`, 45 nodes spanning
+exactly 50.0 years, tied out to Citi's own quotes — the obvious question was
+whether the 0.256 bp forward residual was curve provenance. **It is not.**
+
+| curve | worst \|our forward − Citi's published FWD\| |
+|---|---|
+| Citi's own warmed CurveStore curve | **0.2558 bp** |
+| our rateslib bootstrap of Citi's par grid | **0.2558 bp** |
+| our QuantLib bootstrap of the same grid | **0.2558 bp** |
+
+The three agree with each other on every forward to **< 0.0001 bp**. So the
+residual is not the curve, and two things it *is* fell out of asking:
+
+**One point does the damage, and it is the only one that has to be interpolated.**
+Citi's par grid is annual to 20Y then 25/30/35/40/45/50, so a `1Yx30Y` — which
+matures at ~31Y — is the only one of the six published points that does not land
+on a pillar. It sits in the widest gap in the grid (30Y→35Y) and it is the worst
+by 3x:
+
+| point | matures | pillar gap | width | error |
+|---|---|---|---|---|
+| 1Yx30Y | 31Y | 30Y – 35Y | **5Y** | **−0.2558 bp** |
+| 1Yx2Y | 3Y | on pillar | 0 | +0.0903 bp |
+| 5Yx2Y | 7Y | on pillar | 0 | −0.0885 bp |
+| 5Yx10Y | 15Y | on pillar | 0 | −0.0806 bp |
+| 1Yx10Y | 11Y | on pillar | 0 | +0.0215 bp |
+| 5Yx30Y | 35Y | on pillar | 0 | −0.0086 bp |
+
+This is **not** a coverage or extrapolation problem — the curve carries nodes to
+50Y and the far corner of the cube (10Y x 30Y) matures at 40Y, well inside it.
+Citi publishes its `FWD` tag off its own internal curve; any curve rebuilt from
+the 44-tenor par *projection* of that curve must interpolate 30Y→35Y, and 31Y is
+where that costs the most.
+
+**At 5Y expiries the forward-START convention is worth ~0.09 bp.** Two rules exist
+for the same "5Yx10Y forward": the swaption's (`MF(as_of + 5Y)` then + settlement
+lag, which is where its underlying actually starts) and `MakeOIS`'s
+(`(spot + 5Y)` adjusted FOLLOWING, which `curves/forward_rate` uses). At 1Y
+expiries they coincide; at 5Y they do not, and **Citi's tag matches the MakeOIS
+rule**:
+
+| point | swaption rule − Citi | MakeOIS rule − Citi |
+|---|---|---|
+| 5Yx10Y | −0.0806 bp | **+0.0005 bp** |
+| 5Yx2Y | −0.0885 bp | **+0.0053 bp** |
+
+That does not make the swaption rule wrong — a swaption's underlying does start a
+settlement lag after the option expires — but it does mean Citi's published `FWD`
+is not the forward of the swap the swaption exercises into, and the two should not
+be expected to agree to better than ~0.09 bp at longer expiries.
+
+What is left after both: **≤ 0.09 bp at 1Y expiries, unexplained**, where the two
+conventions agree and the points sit on pillars.
+
+### The same run, both libraries, on that one curve
+
+Handing rateslib the Citi curve and QuantLib a node-for-node mirror of it
+(`build_ql_mirror_curve`) — so the comparison is of the swaption and not of two
+curve builders — over 1040 priced nodes:
+
+| metric | two independent bootstraps | Citi's curve, mirrored |
+|---|---|---|
+| implied vs quoted, cross-inverted | 0.211 bp | **2.98e-04 bp** |
+| implied vs quoted, self-inverted | 3.0e-04 bp | 2.98e-04 bp |
+| put-call parity | 4.2e-14 | 2.3e-14 |
+| rateslib vs QuantLib premium | 3.3e-05 | 3.3e-05 |
+| monotonicity violations | 0 | 0 |
+
+The cross-inverted error falls by ~700x and lands exactly on the self-inverted
+one, which settles the earlier reading: **the 0.211 bp was the curve bootstrap,
+not the swaption.** The rl-vs-QuantLib premium difference does *not* move, because
+it is the `atmStrike` anchor (0.0017 bp) and not the curve.
+
+All five `DEFAULT_TOLERANCES` — calibrated on the bootstrapped curve — still pass
+on Citi's, with room:
+
+```
+backend_price_rel      3.268e-05  <= 1e-04
+implied_vol_cross_bp   2.977e-04  <= 0.5
+implied_vol_self_bp    2.977e-04  <= 1e-03
+parity_rel             2.345e-14  <= 1e-09
+vol_anchor_gap_bp      1.736e-03  <= 0.05
+```
+
+**One operational caveat.** The CurveStore fast path is gated on
+`not ignore_cache`, so `IRSwaptionMDP(..., curve_source="citivelo_excel_rl")`
+with `ignore_cache=True` bypasses the store and rebuilds from the quotes layer —
+which is cached-then-**live**, i.e. it can reach for Excel on a cold tag cache.
+Both paths produced an identical 1Yx10Y forward (4.321999%), so it is a
+provenance and etiquette question, not a numerical one.
+
 **Everything in that run has to be one observation date.** The par grid and the
 `FWD` series publish before the OTM skew does, so on any given morning
 `grid.iloc[-1]` is a day ahead of the last date the cube is simultaneous on. Two
