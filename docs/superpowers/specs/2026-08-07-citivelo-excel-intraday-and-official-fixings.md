@@ -122,6 +122,39 @@ The delete drains first (`CalculateUntilAsyncQueriesDone` + pause) and suppresse
 `DisplayAlerts`. A refusal is logged and survived, never raised: the window's data
 is already read, and fighting Excel there costs the process.
 
+### Dropping sheets is necessary but NOT sufficient — this wedged Excel
+
+Sheet-dropping bounds the number of live **cells**. It does **not** return Excel's
+**process memory**, and at scale that is the binding constraint.
+
+**What happened (2026-08-07).** A 528-window deep fetch ran cleanly for eight
+minutes — zero refused deletes, zero failed windows, WARM workbook steady at 1
+sheet — and then stopped writing at 14:50:02. The Python process was still alive.
+Excel was at **5,249 MB** and did not answer a 15-second `SendMessageTimeout`
+window ping. `IsWindowEnabled` was **True** and there was no `#32770` child, so
+this was *not* the cell-edit-mode hang seen twice earlier in this work — those
+answered the ping. Killing the fetch process to release COM did not recover it;
+memory did not even move.
+
+**The lesson.** Small-scale success was misleading. The 8-window top-up proved the
+sheet lifecycle, and that was taken as proof the memory problem was solved. It was
+not — it only proved the *cell* problem was solved. 528 windows is 66× the
+validated scale.
+
+**The fix.** `CitiVelocityExcelClient.recycle_workbook()` closes the scratch
+workbook and opens a fresh tagged one, which is the only mechanism that actually
+gives the memory back. `fetch` now checks `excel_memory_mb()` every
+`--recycle-every` windows (default 25) and recycles above `--memory-ceiling-mb`
+(default 3000, comfortably under the 5,250 that wedged). It refuses outright while
+a `CVSTREAM` cell is live — tearing down live RTD is the documented
+`AccessViolation` trigger — and a refused recycle stops that curve rather than
+driving Excel further up. Everything fetched is already on disk, so a re-run
+resumes.
+
+**Nothing was lost**: 563 USD day files (to 2024-07-31) survived, because day
+parquets are written atomically and the two-phase split means Excel work is
+banked per day.
+
 ---
 
 ## 3. Minute-resolution CurveStore warm

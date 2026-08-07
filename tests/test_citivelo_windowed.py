@@ -226,3 +226,41 @@ def test_on_window_is_called_once_per_window_as_it_completes(client):
     assert len(seen) == 6
     assert [w.start for w in seen] == [s for s, _ in iter_windows(START, END, "MI01")]
     assert all(w.n_rows > 0 for w in seen)
+
+
+# -- workbook recycling -------------------------------------------------
+#
+# Dropping each window's sheet bounds the live CELL count but does NOT return
+# Excel's process memory. Measured 2026-08-07: a 528-window fetch left Excel at
+# 5.25 GB and wedged - unresponsive to a 15s window ping, no modal dialog, no
+# cell-edit mode, and it did not recover when the COM client was released.
+# Closing the workbook is the only thing that gives the memory back.
+
+
+def test_recycling_replaces_the_workbook_and_keeps_the_client_usable(client):
+    old = client._wb
+    assert client.recycle_workbook() is True
+    assert client._wb is not old, "the workbook was not actually replaced"
+    assert old.closed, "the bloated workbook was left open"
+    # Still usable afterwards - a recycle mid-backfill must not end the run.
+    series, windows = fetch_windowed(
+        client, [TAG_A], "MI01", START, START + datetime.timedelta(days=5)
+    )
+    assert all(w.ok for w in windows)
+    assert series[TAG_A].size > 0
+
+
+def test_recycling_reuses_the_same_tag_rather_than_orphaning_a_workbook(client):
+    from MDP.CitiVelocityExcel.com_client import workbook_marker
+
+    client._workbook_tag = "WARM"
+    client.recycle_workbook()
+    assert client._wb.Worksheets(1).Range("A1").Value == workbook_marker("WARM")
+
+
+def test_recycling_refuses_while_a_stream_cell_is_live(client):
+    """Tearing down live RTD is the documented AccessViolation trigger."""
+    client._streaming = {"A1": "RATES.OIS.USD_SOFR.PAR.10Y"}
+    old = client._wb
+    assert client.recycle_workbook() is False
+    assert client._wb is old, "a streaming client's workbook must survive"

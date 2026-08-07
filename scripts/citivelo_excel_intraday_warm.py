@@ -151,6 +151,8 @@ def fetch_curve(
     work_dir: Path,
     client: Any,
     force: bool = False,
+    recycle_every: int = 25,
+    memory_ceiling_mb: float = 3000.0,
     logger: logging.Logger = LOGGER,
 ) -> Tuple[int, int]:
     """Fetch ``[start, end)`` of minute par rates for one curve.
@@ -227,6 +229,29 @@ def fetch_curve(
                 days_written += 1
                 logger.info("  wrote %s  %d minutes x %d tenors", out.name, n, sub.shape[1])
         cursor = w_end
+
+        # Dropping each window's sheet bounds the number of live cells but does
+        # NOT return Excel's process memory. Measured 2026-08-07 the hard way: a
+        # 528-window fetch left Excel at 5.25 GB and WEDGED - unresponsive to a
+        # 15s window ping, no modal dialog, no cell-edit mode, and it did not
+        # recover when the COM client was released. Closing the workbook is the
+        # only thing that actually gives the memory back.
+        if recycle_every and windows_run and windows_run % recycle_every == 0:
+            used = client.excel_memory_mb()
+            if used < 0 or used >= memory_ceiling_mb:
+                logger.info(
+                    "  recycling the scratch workbook after %d window(s) (Excel %.0f MB)",
+                    windows_run, used,
+                )
+                if not client.recycle_workbook():
+                    logger.warning(
+                        "  recycle refused - stopping this curve rather than driving "
+                        "Excel further up. Everything fetched so far is on disk; "
+                        "re-run to resume."
+                    )
+                    break
+            else:
+                logger.info("  %d window(s) in, Excel at %.0f MB", windows_run, used)
 
     return days_written, windows_run
 
@@ -487,7 +512,8 @@ def cmd_fetch(args, logger: logging.Logger) -> int:
         try:
             days, windows = fetch_curve(
                 curve, start, end, work_dir=work_dir, client=client,
-                force=args.force, logger=logger,
+                force=args.force, recycle_every=args.recycle_every,
+                memory_ceiling_mb=args.memory_ceiling_mb, logger=logger,
             )
         except Exception as exc:  # noqa: BLE001 - one curve must not end the run
             logger.error("%s FAILED: %s: %s", curve, type(exc).__name__, exc)
@@ -574,6 +600,15 @@ def _build_parser() -> argparse.ArgumentParser:
     f.add_argument("--end", required=True)
     f.add_argument("--workbook-tag", default="WARM")
     f.add_argument("--force", action="store_true")
+    f.add_argument(
+        "--recycle-every", type=int, default=25,
+        help="check Excel's memory every N windows and recycle the workbook "
+             "if it is over the ceiling (0 disables)",
+    )
+    f.add_argument(
+        "--memory-ceiling-mb", type=float, default=3000.0,
+        help="recycle above this. Excel wedged at 5,250 MB on 2026-08-07.",
+    )
     f.set_defaults(func=cmd_fetch)
 
     b = sub.add_parser("build", help="solve curves and write the CurveStore")

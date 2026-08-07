@@ -320,10 +320,14 @@ class CitiVelocityExcelClient:
         readiness_timeout: float = 90.0,
         stream_write_pause: float = 0.15,
         shared_workbook: bool = False,
+        workbook_tag: str = DEFAULT_WORKBOOK_TAG,
         logger: Optional[logging.Logger] = None,
     ):
         self._app = app
         self._wb = workbook
+        #: Which tagged workbook this client owns, so recycle_workbook() can
+        #: recreate the same one rather than adding an untagged orphan.
+        self._workbook_tag = str(workbook_tag)
         self._ws: Any = None
         self._row = 1
         self._gap = int(gap)
@@ -389,7 +393,10 @@ class CitiVelocityExcelClient:
                     readiness_timeout=float(kwargs.get("readiness_timeout", 90.0)),
                     workbook_tag=workbook_tag,
                 )
-                return cls(app=app, workbook=wb, shared_workbook=True, **kwargs)
+                return cls(
+                    app=app, workbook=wb, shared_workbook=True,
+                    workbook_tag=workbook_tag, **kwargs,
+                )
             except AddInNotSignedInError:
                 raise
             except Exception as exc:  # noqa: BLE001 - retried, then re-raised
@@ -623,6 +630,90 @@ class CitiVelocityExcelClient:
             return int(com_retry(lambda: self._wb.Worksheets.Count))
         except Exception:  # noqa: BLE001
             return -1
+
+    def excel_memory_mb(self) -> float:
+        """Excel's working set in MB, or ``-1`` when it cannot be read.
+
+        A long backfill has to watch this. Dropping window sheets bounds the
+        number of live *cells*, but it does NOT return Excel's process memory:
+        measured 2026-08-07, a 528-window fetch left Excel at **5.25 GB** and
+        wedged - unresponsive to a 15s window ping, with no modal dialog and no
+        cell-edit mode, and it did not recover when the COM client was released.
+        """
+        try:
+            import subprocess
+
+            out = subprocess.run(
+                ["powershell.exe", "-NoProfile", "-Command",
+                 "(Get-CimInstance Win32_Process -Filter \"Name='EXCEL.EXE'\")"
+                 ".WorkingSetSize"],
+                capture_output=True, text=True, timeout=30,
+            ).stdout.strip().splitlines()
+            return max(float(v) for v in out if v.strip()) / 1e6
+        except Exception:  # noqa: BLE001
+            return -1.0
+
+    def recycle_workbook(self) -> bool:
+        """Close this client's scratch workbook and open a fresh one.
+
+        The ONLY mechanism that actually returns Excel's memory during a long
+        backfill. Dropping each window's sheet keeps the cell count bounded and
+        is still worth doing, but process memory grows regardless until the
+        workbook itself goes.
+
+        Safe because a settled ``CVTSHIST`` block is the same lifecycle class as
+        the resolved probe blocks that the workbook-cleanup script has closed
+        dozens of times. Refuses outright when this client holds a live
+        ``CVSTREAM`` cell - tearing down live RTD is the documented
+        ``AccessViolation`` trigger.
+
+        Returns ``True`` when a fresh workbook is in place.
+        """
+        if self._streaming:
+            self._logger.warning(
+                "recycle_workbook: %d live CVSTREAM cell(s); refusing - tearing down "
+                "live RTD regions is the documented AccessViolation trigger.",
+                len(self._streaming),
+            )
+            return False
+        self._check_alive()
+        with EXCEL_LOCK:
+            old = self._wb
+            try:
+                self._app.CalculateUntilAsyncQueriesDone()
+            except Exception:  # noqa: BLE001
+                pass
+            time.sleep(max(self._drain_seconds, 1.0))
+            try:
+                alerts = self._app.DisplayAlerts
+                self._app.DisplayAlerts = False
+            except Exception:  # noqa: BLE001
+                alerts = None
+            try:
+                if old is not None:
+                    com_retry(lambda: old.Close(SaveChanges=False))
+            except Exception as exc:  # noqa: BLE001
+                self._logger.warning("recycle_workbook: close refused (%s)", exc)
+                if alerts is not None:
+                    try:
+                        self._app.DisplayAlerts = alerts
+                    except Exception:  # noqa: BLE001
+                        pass
+                return False
+            finally:
+                if alerts is not None:
+                    try:
+                        self._app.DisplayAlerts = alerts
+                    except Exception:  # noqa: BLE001
+                        pass
+            self._wb = create_marked_workbook(self._app, self._workbook_tag)
+            self._ws = com_retry(lambda: self._wb.Worksheets(1))
+            self._row = 1
+        self._logger.info(
+            "recycle_workbook: fresh workbook for tag %s (Excel now %.0f MB)",
+            self._workbook_tag, self.excel_memory_mb(),
+        )
+        return True
 
     # -- sheet plumbing -------------------------------------------------
 
