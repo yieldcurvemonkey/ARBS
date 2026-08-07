@@ -241,3 +241,7 @@ notebooks/sdr/_cache/
 
 # Live Citi Velocity comparison snapshots written by harvest/verify_live.py --vol-compare
 MDP/CitiVelocityExcel/harvest/*.parquet
+
+# Intermediate par-rate day files for the minute-resolution warm.
+# Regenerable from Excel; the CurveStore holds the result.
+MDP/IRSwaps/CITIVELO_EXCEL/_intraday_par_cache/

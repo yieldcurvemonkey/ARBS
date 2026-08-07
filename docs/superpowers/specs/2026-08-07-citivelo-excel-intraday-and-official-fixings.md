@@ -1,0 +1,253 @@
+# Citi Velocity Excel: minute-resolution intraday history, and publisher-direct fixings
+
+Measured 2026-08-07 unless stated. Everything here is a number that was taken off
+the live add-in or a live endpoint, not a documented claim.
+
+---
+
+## 1. The add-in downsamples by requested SPAN, not by age
+
+This is the finding the rest of the work rests on, and it corrects the framing it
+started from ("the add-in silently downsamples long windows" — true, but the
+operative variable was not obvious).
+
+`CVTSHIST` does not serve the frequency you ask for. It serves the frequency it
+thinks the requested **span** deserves, and it does so **silently**: the block
+comes back looking exactly like a healthy minute request, just with fewer rows.
+Ask for a year of `MI01` and you get 261 rows stamped at midnight — daily data,
+no error, no warning.
+
+Measured on `RATES.OIS.USD_SOFR.PAR.10Y`, end fixed at 13:00 ET:
+
+| requested | span | spacing actually served |
+|---|---|---|
+| `MI01` | 2d, 5d, 6d | 1 minute |
+| `MI01` | **7d** | **10 minutes** |
+| `MI01` | 8d – 60d | 10 minutes |
+| `MI01` | 120d | 60 minutes |
+| `MI01` | 365d | 1440 minutes (daily, midnight-stamped) |
+| `HOURLY` | ≤ 120d | 60 minutes |
+| `HOURLY` | 365d | 1440 minutes |
+
+The cliff is at **exactly 7 days**, pinned to the hour: 6.5d served 1-minute,
+7.0d served 10-minute.
+
+### It is span, not retention
+
+Holding the span at four days and walking the window backwards:
+
+| age of window | rows | spacing |
+|---|---|---|
+| 3d ago | 2,697 | 1 min |
+| 10d | 2,700 | 1 min |
+| 25d | 2,306 | 1 min |
+| 60d | 2,701 | 1 min |
+| 90d | 4,235 | 1 min |
+| 180d | 2,875 | 1 min |
+| **365d** | **4,961** | **1 min** |
+
+Minute history is retained for **at least a year**. It is only ever hidden by
+asking for too much of it at once. So a full-resolution backfill was never a
+retention problem — it is a chunking problem.
+
+### The boundary is a property of the add-in, not of USD
+
+Re-measured at 6d and 7d on four more curves, at both "now" and "a year ago":
+
+| index | 6d (now / 1y ago) | 7d (now / 1y ago) |
+|---|---|---|
+| `EUR_EUROSTR` | 1 min / 1 min | 10 min / 10 min |
+| `JPY_TONAR_LCH` | 1 min / 1 min | 10 min / 10 min |
+| `GBP_SONIA` | 1 min / 1 min | 10 min / 10 min |
+| `CAD_CORRA` | 1 min / 1 min | 10 min / 10 min |
+
+Identical everywhere.
+
+### The trap: it is NOT monotone in the argument form
+
+Do not "simplify" the chunker into a single wide request. Two measured
+counter-examples:
+
+* `period="1W"` at `MI01` served **7,676 rows at 1-minute**, while explicit
+  bounds spanning 7.0 days served 10-minute.
+* `period="1Y"` at `HOURLY` served **6,252 hourly rows**, while explicit bounds
+  over the same year served **261 daily** ones.
+
+The relative-period form and the explicit-bounds form take different paths
+through the add-in. `MDP/CitiVelocityExcel/windowed.py` therefore holds windows
+strictly **under** the cliff rather than at it, and verifies the spacing of every
+window it returns.
+
+### Correction to an earlier note
+
+An earlier measurement in this session recorded "MI01 over 1 week → 667 rows
+(~14-min)". That was wrong — re-running it gave 7,676 rows at true 1-minute
+spacing. The 667-row readings all came from **7.0-day explicit-bounds** requests,
+which is the 10-minute rung of the ladder above.
+
+### Argument shape
+
+All three of these are equivalent — the reference workbook's omitted-argument
+form has no special power:
+
+```
+=CVTSHIST(tags,"MI01","","202607200001","202607242359","CLOSE")   6,049 rows
+=CVTSHIST(tags,"MI01",,202607200001,202607242359,"CLOSE")         6,049 rows
+=CVTSHIST(tags,"MI01",,"202607200001","202607242359","CLOSE")     6,049 rows
+```
+
+6,049 rows matches `db_v2.xlsx` exactly, so the fetch path reproduces the
+hand-built workbook bar for bar.
+
+---
+
+## 2. One worksheet per window
+
+A minute window of a full curve is ~5,300 rows × 45 columns. A few hundred of
+them in one sheet is millions of live `CvFunction_*` cells and an Excel that runs
+out of memory.
+
+Each window therefore gets its own worksheet, named for its bounds
+(`202607200001-202607242359`), dropped once the window has been read — the same
+shape as the hand-built `citi_usd_sofr_intraday_curve` workbooks, which are one
+file per Mon–Fri week.
+
+Verified live: two windows × 44 tenors, both sheets created and deleted, **1
+sheet remaining** (the marker sheet), 10,613 minute rows with no duplicates, 1.4 s
+per window.
+
+The delete drains first (`CalculateUntilAsyncQueriesDone` + pause) and suppresses
+`DisplayAlerts`. A refusal is logged and survived, never raised: the window's data
+is already read, and fighting Excel there costs the process.
+
+---
+
+## 3. Minute-resolution CurveStore warm
+
+`scripts/citivelo_excel_intraday_warm.py`, two phases:
+
+* **fetch** — single-threaded through the one Excel session, writing one
+  `{date}.parquet` per calendar day.
+* **build** — pure CPU in a process pool, one rateslib solver per NaN-tenor
+  signature per day, re-solved per minute.
+
+Splitting them is what makes the run **resumable**: a day file on disk is a
+completed unit of Excel work, so losing Excel costs time, never data.
+
+Asset: `<curve_name>-CITIVELOEXCELMIN`. A **fourth** distinct key, deliberately —
+`write_day` replaces a whole day partition, so sharing the EOD warm's
+`-CITIVELOEXCEL` asset would let an EOD re-warm silently delete that day's ~1,100
+minute curves.
+
+### Timezone: the bug this caught
+
+The add-in stamps **every** curve in New York wall-clock, whatever the currency.
+Bucketing those stamps by their raw date would have filed JPY's 19:00 ET bars —
+already 08:00 the *next* morning in Tokyo — under the previous Tokyo business
+date, and Phase 2 would have solved them off the wrong reference and spot date.
+
+Phase 1 therefore converts ET → the curve's own zone before grouping. The check
+that it worked: after the fix every curve's session reads **08:00–19:59 in its own
+local zone**, a clean contiguous 12-hour session with no interior gaps. Before it,
+EUR read 02:00–13:59.
+
+### Results
+
+| curve | days | minutes | curves built | errors | max reprice |
+|---|---|---|---|---|---|
+| USD-SOFR-1D | 35 | 35,874 | 35,874 | 0 | 0.0018 bp |
+| EUR/GBP/JPY/CAD | 121 | ~77,000 | in progress | 0 | 0.0024 bp |
+
+Throughput ~50–60 curves/s on 6 workers; Excel fetch is ~1.4 s per 5-day window
+of 44 tenors and is not the bottleneck.
+
+`solver.result["status"] == "SUCCESS"` stopped being proof of a good solve in
+rateslib 2.7, so every 250th minute is **repriced against its own inputs** and the
+worst error is carried into the run log. Nodes are seeded with the discount factor
+each par rate implies rather than a flat 1.0, which is what stops steep, high-rate
+curves diverging outright.
+
+### Serving it
+
+`IRSwapsMDP._load_citivelo_excel_minute_store_point` serves intraday requests from
+this asset, falling back to live Excel on a miss. Verified end-to-end:
+
+```
+mode                  intraday
+from_curve_store      True
+asset                 USD-SOFR-1D-CITIVELOEXCELMIN
+snapshot_lag_seconds  0.0
+```
+
+Note the `isinstance` order in the dispatch: `pd.Timestamp` subclasses
+`datetime.datetime` subclasses `datetime.date`, so testing for `date` first would
+route every intraday request down the EOD branch.
+
+### Tie-out through the Query path
+
+`curve.fair_rate()` against Citi's own quoted par rates at the same minute:
+
+| curve | when | tenors | max error |
+|---|---|---|---|
+| USD-SOFR-1D | 2026-08-05 10:30 | 44 | **0.0013 bp** |
+| USD-SOFR-1D | 2026-07-22 14:15 | 44 | **0.0002 bp** |
+| EUR-ESTR-1D | 2026-08-05 11:00 | 44 | **0.4358 bp** |
+
+All inside the ±1 bp bar.
+
+> `fair_rate()` returns a **decimal** (it divides rateslib's percent by 100) while
+> Citi quotes percent. Comparing them unscaled reads as a 442 bp error on a curve
+> that is exact — the same units trap as `IRSwapValue.RATE` earlier in this work.
+
+---
+
+## 4. Publisher-direct overnight fixings
+
+`MDP/IRSwaps/CITIVELO_EXCEL/official_sources.py`, modelled on
+`MDP/IRSwaps/CME_NY_EOD_LIVE/ql_basic/FixingsFetcher.py` — a per-source method
+behind a dispatch map keyed by curve.
+
+Citi's `RATES.MONEY_MARKETS` tags cover twelve of the twenty curves. Of the eight
+they do not, **three now serve** and five are recorded unavailable with the
+measured reason:
+
+| curve | source | status |
+|---|---|---|
+| `USD_FEDFUND` | NY Fed `effr/search.json` | **serves** — 549 rows |
+| `NOK_NOWA` | Norges Bank `SHORT_RATES/B.NOWA.ON.R` | **serves** — 552 rows, history to 2011 |
+| `ZAR_ZARONIA` | SARB timeseries `MMRD855A` | **serves** — 546 rows |
+| `MXN_T_FONDEO` | Banxico SIE `SF331451` | needs a free `BANXICO_TOKEN` (HTTP 400 `Token inválido` without) |
+| `DKK_TNDKK` | — | no public API found; every `/api/v1` shape 404s, not in ECB `FM` |
+| `ILS_SHIR` | — | BOI SDMX serves 39 dataflows but none is SHIR/TELBOR; the public endpoint returns the **policy** rate |
+| `SGD_SORA` | — | MAS eservices returns its maintenance page — looks like an outage, worth re-probing |
+| `THB_THOR` | — | BOT requires a registered client key |
+
+### Three traps these endpoints set
+
+* **Norges Bank**: NOWA is **not** in the `IR` dataflow (which carries only the
+  key policy rate). It is in `SHORT_RATES`, and the final `R` selects
+  UNIT_MEASURE=Rate — `T` there returns the daily **transaction count**, small
+  integers like 9, 15, 13 that pass every sanity check a rate would.
+* **SARB**: the undated endpoint silently truncates to the last ~25 observations.
+  The dated form `.../MMRD855A/{start}/{end}` serves history (648 rows to 2024).
+* **Bank of Israel**: the public `GetInterest` endpoint returns the policy rate
+  (3.5%) where a caller reaching for SHIR would expect the overnight fixing.
+
+Everything returns **percent**, indexed by fixing date, ascending — unlike
+`FixingsFetcher`, whose methods return decimals. The conversion happens once, at
+the boundary.
+
+A source that does not answer raises or returns empty. It never falls back to a
+policy rate, a neighbouring currency, or a carried-forward constant.
+
+---
+
+## 5. Tests
+
+* `tests/test_citivelo_windowed.py` — 15 tests. The fake models the span cliff,
+  so the spacing guard has something real to catch. **Mutation-verified**:
+  replacing the guard's condition with `if False` fails 2 tests; restoring it
+  passes 15.
+* `tests/test_citivelo_official_sources.py` — 11 hermetic + 3 network-marked.
+  Guards the parsing traps above (rate-vs-transaction-count, dated-vs-undated,
+  percent-vs-decimal).

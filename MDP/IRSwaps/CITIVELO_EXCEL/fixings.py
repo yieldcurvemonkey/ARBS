@@ -210,14 +210,23 @@ class FixingsResult:
 def official_fixings(curve_name: str) -> pd.Series:
     """The repo's own independent fixing source, in PERCENT. Empty when none.
 
-    Only ``USD-SOFR-1D`` has one here (the New York Fed, through
-    ``MDP.IRSwaps.fixings_cache``). It is preferred over Citi for that curve not
-    because the numbers differ - they are identical to 0.000000 bp across 2,056
-    days - but because Citi's tail was six weeks stale when this was measured and
-    the Fed's was current.
+    Two routes, tried in order:
+
+    1. ``USD-SOFR-1D`` goes through ``MDP.IRSwaps.fixings_cache`` (the New York
+       Fed). Preferred over Citi for that curve not because the numbers differ -
+       they are identical to 0.000000 bp across 2,056 days - but because Citi's
+       tail was six weeks stale when this was measured and the Fed's was current.
+    2. Everything else goes to
+       :mod:`MDP.IRSwaps.CITIVELO_EXCEL.official_sources`, which reaches each
+       currency's own publisher directly. That covers the curves Citi has no
+       ``RATES.MONEY_MARKETS`` tag for at all - USD Fed Funds, NOK and ZAR today,
+       MXN once a Banxico token is set.
+
+    Empty means "no source", never "the rate is zero"; callers fall back to Citi
+    and, failing that, refuse to price rather than invent a fixing.
     """
     if str(curve_name).upper() not in _OFFICIAL_SOURCE_CURVES:
-        return pd.Series(dtype="float64")
+        return _publisher_fixings(curve_name)
     try:
         from MDP.IRSwaps.fixings_cache.fixings_cache import _fetch_fixings
 
@@ -237,6 +246,47 @@ def official_fixings(curve_name: str) -> pd.Series:
     # 100 at the point of use. Do it once, here, so nothing downstream has to know.
     if abs(float(series.iloc[-1])) < 0.5:
         series = series * 100.0
+    series.index = pd.DatetimeIndex(series.index).normalize()
+    return series[~series.index.duplicated(keep="last")]
+
+
+#: How much history a publisher is asked for. Long enough to cover the
+#: compounding period of any seasoned OIS this package prices.
+_PUBLISHER_LOOKBACK = datetime.timedelta(days=800)
+
+
+def _publisher_fixings(curve_name: str) -> pd.Series:
+    """Overnight fixings straight from the currency's own publisher, in PERCENT.
+
+    Empty - not an exception - when the currency has no reachable source, so a
+    caller can fall through to Citi. The reason is logged once rather than
+    swallowed, because "NOK has no fixings" should be traceable to the endpoint
+    that did not answer.
+    """
+    from MDP.IRSwaps.CITIVELO_EXCEL.curve_names import citi_index_for_curve_name
+    from MDP.IRSwaps.CITIVELO_EXCEL.official_sources import OfficialFixingsFetcher
+
+    try:
+        citi_index = citi_index_for_curve_name(curve_name)
+    except Exception:  # noqa: BLE001 - an unknown curve simply has no source
+        return pd.Series(dtype="float64")
+
+    fetcher = OfficialFixingsFetcher()
+    if not fetcher.available_for(citi_index):
+        return pd.Series(dtype="float64")
+
+    end = datetime.date.today()
+    try:
+        series = fetcher.fetch(citi_index, end - _PUBLISHER_LOOKBACK, end)
+    except Exception as exc:  # noqa: BLE001 - an offline machine is not a failure
+        _warn_once(
+            f"publisher-{citi_index}",
+            f"citivelo_excel: the official publisher for {citi_index} is unavailable "
+            f"({type(exc).__name__}: {exc}); falling back to Citi's published series.",
+        )
+        return pd.Series(dtype="float64")
+    if series.empty:
+        return series
     series.index = pd.DatetimeIndex(series.index).normalize()
     return series[~series.index.duplicated(keep="last")]
 

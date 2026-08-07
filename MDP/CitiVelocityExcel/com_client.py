@@ -48,6 +48,7 @@ from __future__ import annotations
 
 import datetime
 import logging
+import re
 import threading
 import time
 from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
@@ -533,6 +534,95 @@ class CitiVelocityExcelClient:
                     self._logger.warning("CitiVelocityExcelClient: workbook close failed: %s", exc)
             self._wb = None
             self._ws = None
+
+    # -- window sheets ---------------------------------------------------
+
+    def push_window_sheet(self, name: str) -> str:
+        """Start writing into a fresh worksheet named ``name``, and return it.
+
+        A long backfill is the one workload that cannot share the running sheet:
+        a minute-resolution window is ~5,300 rows x 45 columns, so a few hundred
+        windows would fill the sheet, roll onto another, and leave Excel holding
+        millions of live ``CvFunction_*`` cells.
+
+        Giving each window its own sheet - the shape the hand-built workbooks in
+        ``citi_usd_sofr_intraday_curve`` use, one per Mon-Fri week - makes the
+        window a unit that can be dropped whole once it has been read. See
+        :meth:`drop_window_sheet`.
+
+        Sheet 1 is never touched: it holds the reuse marker that lets the next
+        run find this workbook instead of adding another.
+        """
+        self._check_alive()
+        with EXCEL_LOCK:
+            sheet = com_retry(lambda: self._wb.Worksheets.Add())
+            # Excel sheet names cap at 31 chars and reject : \ / ? * [ ].
+            safe = re.sub(r"[:\\/?*\[\]]", "_", str(name))[:31]
+            try:
+                com_retry(lambda: setattr(sheet, "Name", safe))
+            except Exception:  # noqa: BLE001 - a duplicate name is not worth failing over
+                safe = str(com_retry(lambda: sheet.Name))
+            self._ws = sheet
+            self._row = 1
+        return safe
+
+    def drop_window_sheet(self) -> bool:
+        """Delete the current window sheet after letting the add-in drain.
+
+        Returns ``True`` if the sheet went away. A refusal is reported, not
+        raised: the caller's data is already read, and the cost of a surviving
+        sheet is memory, whereas the cost of fighting Excel here is the process.
+
+        The drain is not optional. The add-in queues ``ExcessClr``/``Format``/
+        ``AutoFit`` against cells it has written, and deleting a sheet out from
+        under those queued actions is the documented ``AccessViolation`` trigger.
+        By the time this is called the block has already settled (it was polled
+        to a non-pending value and read), so the queue is short - but it is not
+        guaranteed empty until Excel says so.
+        """
+        self._check_alive()
+        with EXCEL_LOCK:
+            sheet, self._ws = self._ws, None
+            if sheet is None:
+                return False
+            try:
+                self._app.CalculateUntilAsyncQueriesDone()
+            except Exception:  # noqa: BLE001
+                pass
+            time.sleep(self._drain_seconds)
+            alerts = None
+            try:
+                alerts = self._app.DisplayAlerts
+                self._app.DisplayAlerts = False
+            except Exception:  # noqa: BLE001
+                pass
+            try:
+                com_retry(lambda: sheet.Delete())
+                dropped = True
+            except Exception as exc:  # noqa: BLE001
+                self._logger.warning(
+                    "CitiVelocityExcelClient.drop_window_sheet: Excel refused the delete "
+                    "(%s). Leaving the sheet in place - the window's data is already read.",
+                    exc,
+                )
+                dropped = False
+            finally:
+                if alerts is not None:
+                    try:
+                        self._app.DisplayAlerts = alerts
+                    except Exception:  # noqa: BLE001
+                        pass
+            # Fall back to the marker sheet so the client stays usable either way.
+            self._ws = com_retry(lambda: self._wb.Worksheets(1))
+            self._row = 1
+            return dropped
+
+    def sheet_count(self) -> int:
+        """How many worksheets the scratch workbook is currently carrying."""
+        try:
+            return int(com_retry(lambda: self._wb.Worksheets.Count))
+        except Exception:  # noqa: BLE001
+            return -1
 
     # -- sheet plumbing -------------------------------------------------
 

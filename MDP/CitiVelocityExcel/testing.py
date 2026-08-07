@@ -30,7 +30,7 @@ from __future__ import annotations
 import datetime
 import re
 from dataclasses import dataclass, field
-from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
+from typing import Any, Callable, ClassVar, Dict, List, Optional, Sequence, Tuple
 
 import pandas as pd
 
@@ -150,12 +150,44 @@ class FakeVelocityData:
     #: How much a CVSTREAM cell moves per read, so "it ticks" is assertable.
     stream_tick: float = 1e-5
     stream_reads: Dict[str, int] = field(default_factory=dict)
+    #: Model the add-in's silent span-driven downsampling. Measured 2026-08-07:
+    #: an ``MI01`` request spanning 6 days serves 1-minute data and one spanning
+    #: 7 days serves 10-minute, at any age. The block looks identical either way,
+    #: which is what makes it dangerous - so the fake reproduces it, and the
+    #: windowed fetcher's spacing guard has something real to catch.
+    #: Setting this False is the mutation that proves the guard has teeth.
+    downsample_cliff: bool = True
 
     # -- helpers --------------------------------------------------------
 
     def _stamp(self, when: pd.Timestamp) -> Any:
         py = when.to_pydatetime()
         return to_excel_serial(py) if self.date_as_serial else py
+
+    #: What the add-in degrades to, per requested frequency, once the span
+    #: exceeds the widest window that frequency is served at. From the measured
+    #: ladder in ``MDP.CitiVelocityExcel.windowed``.
+    _CLIFF: ClassVar[Dict[str, Tuple[datetime.timedelta, str]]] = {
+        "MI01": (datetime.timedelta(days=6), "10min"),
+        "MI10": (datetime.timedelta(days=60), "60min"),
+        "HOURLY": (datetime.timedelta(days=120), "1D"),
+    }
+
+    def _apply_cliff(self, s: pd.Series, *, freq: str, start: str, end: str) -> pd.Series:
+        """Coarsen ``s`` the way the add-in does when the span is too wide."""
+        if not self.downsample_cliff or s.empty:
+            return s
+        entry = self._CLIFF.get((freq or "").upper())
+        if entry is None:
+            return s
+        cap, coarse = entry
+        if start and end:
+            span = _parse_bound(end) - _parse_bound(start)
+        else:
+            span = s.index.max() - s.index.min()
+        if span <= cap:
+            return s
+        return s.resample(coarse).last().dropna()
 
     def _window(
         self,
@@ -164,6 +196,7 @@ class FakeVelocityData:
         period: str,
         start: str,
         end: str,
+        freq: str = "",
     ) -> pd.Series:
         out = s
         if start:
@@ -182,7 +215,7 @@ class FakeVelocityData:
             if not out.empty:
                 cutoff = out.index.max() - pd.Timedelta(days=per_unit[unit] * n)
                 out = out[out.index >= cutoff]
-        return out
+        return self._apply_cliff(out, freq=freq, start=start, end=end)
 
     # -- block builders -------------------------------------------------
 
@@ -191,6 +224,7 @@ class FakeVelocityData:
         if not self.udf_registered:
             return NAME_ERR
         tags = [t.strip() for t in (args[0] if args else "").split(",") if t.strip()]
+        freq = args[1] if len(args) > 1 else ""
         period = args[2] if len(args) > 2 else ""
         start = args[3] if len(args) > 3 else ""
         end = args[4] if len(args) > 4 else ""
@@ -203,7 +237,7 @@ class FakeVelocityData:
             s = self.series.get(tag)
             if s is None:
                 continue
-            frames[tag] = self._window(s, period=period, start=start, end=end)
+            frames[tag] = self._window(s, period=period, start=start, end=end, freq=freq)
 
         index = pd.DatetimeIndex([])
         for s in frames.values():
@@ -508,6 +542,19 @@ class FakeWorksheet:
         #: same cell 25 s apart returned 4.05612604557329 then 4.05596231843847.
         self._stream_cells: Dict[Tuple[int, int], Sequence[str]] = {}
         self.Names = _Names()
+        #: Set by tests that need to prove a refused delete is survivable rather
+        #: than fatal - Excel does refuse, and the backfill must carry on.
+        self.refuse_delete = False
+
+    # -- lifecycle ------------------------------------------------------
+
+    def Delete(self) -> None:
+        """Drop this sheet from its workbook, as ``Worksheet.Delete`` does."""
+        if self.refuse_delete:
+            raise RuntimeError("Excel refused to delete the sheet")
+        if self in self.book.sheets:
+            self.book.sheets.remove(self)
+            self.book.sheets_deleted.append(self.Name)
 
     # -- addressing -----------------------------------------------------
 
@@ -640,8 +687,9 @@ class _Worksheets:
         return self.book.sheets[int(index) - 1]
 
     def Add(self) -> FakeWorksheet:
-        sheet = FakeWorksheet(self.book, f"Sheet{len(self.book.sheets) + 1}")
+        sheet = FakeWorksheet(self.book, f"Sheet{self.book.sheets_created + 1}")
         self.book.sheets.append(sheet)
+        self.book.sheets_created += 1
         return sheet
 
     @property
@@ -656,6 +704,10 @@ class FakeWorkbook:
         self.closed = False
         self.saved = False
         self.Names = _Names()
+        #: Sheets ever added, so a test can tell "created and dropped" from
+        #: "never created" - the whole point of the per-window sheet lifecycle.
+        self.sheets_created = 1
+        self.sheets_deleted: List[str] = []
 
     @property
     def Worksheets(self) -> _Worksheets:
@@ -726,6 +778,9 @@ class FakeExcelApp:
         self.workbooks_list: List[FakeWorkbook] = []
         self.workbooks_created: List[FakeWorkbook] = []
         self.calculate_calls = 0
+        #: Excel prompts before deleting a sheet with content; the client turns
+        #: this off around the delete and restores it, and a test asserts it did.
+        self.DisplayAlerts = True
 
     @property
     def Workbooks(self) -> _Workbooks:
