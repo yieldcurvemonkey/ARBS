@@ -31,11 +31,51 @@ from RVUtils.SFRRVLab.stats import (  # noqa: E402
     nonoverlapping_sharpe, nw_tstat, verdict,
 )
 
+#: where the built panels live. ``set_output_dir`` moves the *results*; the
+#: source parquets stay put, because there is only one panel.
+PANEL_DIR = REPO / "notebooks" / "data" / "sfr_fly_meanrev"
+
 DATA_DIR = REPO / "notebooks" / "data" / "sfr_fly_meanrev"
 LEAGUE_CSV = DATA_DIR / "league_table.csv"
 SIGN_CSV = DATA_DIR / "sign_tests.csv"
 REGIME_CSV = DATA_DIR / "regime_splits.csv"
 SHADOW_CSV = DATA_DIR / "shadow_tests.csv"
+
+#: The round trip a league row is graded "taker" at, in bp on the package.
+#: 2.5 is the prior lab's per-*leg* scenario and is kept as this module's default
+#: so its published numbers are reproducible. The correct per-**contract** figure
+#: for a 1/-2/1 fly is 2.0bp (4 contracts x 2 sides x 0.25bp) -- the kink lab sets
+#: it, rather than this module silently changing under the older notebooks.
+TAKER_BP = 2.5
+
+#: Round trips shown in ``cost_block``'s cost curve.
+COST_CURVE_BP = (0.0, 0.5, 1.0, 1.5, 2.0, 2.5, 4.0)
+
+
+def set_output_dir(path, *, taker_bp: Optional[float] = None,
+                   cost_curve_bp: Optional[Sequence[float]] = None,
+                   shadow_cost_mode: Optional[str] = None) -> None:
+    """Point the reporting blocks at another lab's output directory.
+
+    The blocks below read these as module globals at call time, so a sibling lab
+    can reuse the identical header / grid / regime / shadow / league code without
+    writing into this lab's CSVs. Nothing else about the blocks changes, which is
+    the point -- two labs graded by different code are not comparable.
+    """
+    global DATA_DIR, LEAGUE_CSV, SIGN_CSV, REGIME_CSV, SHADOW_CSV
+    global TAKER_BP, COST_CURVE_BP, SHADOW_COST_MODE
+    DATA_DIR = Path(path)
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
+    LEAGUE_CSV = DATA_DIR / "league_table.csv"
+    SIGN_CSV = DATA_DIR / "sign_tests.csv"
+    REGIME_CSV = DATA_DIR / "regime_splits.csv"
+    SHADOW_CSV = DATA_DIR / "shadow_tests.csv"
+    if taker_bp is not None:
+        TAKER_BP = float(taker_bp)
+    if cost_curve_bp is not None:
+        COST_CURVE_BP = tuple(float(c) for c in cost_curve_bp)
+    if shadow_cost_mode is not None:
+        SHADOW_COST_MODE = str(shadow_cost_mode)
 
 #: The two honest sample windows, chosen from measured liquidity, not taste.
 #: Slots 10-16 have 100% zero-volume days through 2020 and 50-63% in 2021; from
@@ -53,20 +93,43 @@ WINDOWS: Dict[str, dict] = {
 
 REGIME_ORDER = ["ZIRP", "HIKING", "PLATEAU", "CUTTING"]
 
+#: Sessions dropped from every panel because the strip on them is not the strip.
+#:
+#: **2025-07-04** is US Independence Day, a market holiday, and it carries a panel
+#: row built from **8 contracts -- H29 ... Z30, every one with zero open
+#: interest**. The strip builder ranked those deep back months into slots 1-8, so
+#: slot 1 is a four-year-forward contract: the front slot prints a -57bp jump in
+#: and +58bp out, and every structure that day is mislabelled (`H29-M29-U29`
+#: tagged `SFR123`). It is the only session in the file with fewer than 16
+#: contracts. Reproduce with ``notebooks/rv/_probe_kink_bad_dates.py``.
+#:
+#: This was found after the 2026-07-29 fly mean-reversion findings were written,
+#: so those numbers include the bad session -- one of 1,150 in `liquid16`.
+BAD_DATES: Sequence[str] = ("2025-07-04",)
+
 
 # ---------------------------------------------------------------------------
 # loading
 # ---------------------------------------------------------------------------
 
 def load_lab(structure: str = "3m", window: str = "liquid16", *,
-             data_dir: Path = DATA_DIR, min_oi: float = 0.0,
-             min_days_to_front_start: int = 0) -> Dict[str, object]:
-    """Load one structure family over one window, with its shadows and gate."""
+             data_dir: Optional[Path] = None, min_oi: float = 0.0,
+             min_days_to_front_start: int = 0,
+             drop_dates: Sequence[str] = BAD_DATES) -> Dict[str, object]:
+    """Load one structure family over one window, with its shadows and gate.
+
+    ``data_dir`` defaults to the **source panel** directory, which is where the
+    built parquets live regardless of where a lab writes its results.
+    """
+    data_dir = Path(data_dir) if data_dir is not None else PANEL_DIR
     if window not in WINDOWS:
         raise ValueError(f"window must be one of {sorted(WINDOWS)}")
     w = WINDOWS[window]
     st = pd.read_parquet(data_dir / f"structures_{structure}.parquet")
     st["as_of"] = pd.to_datetime(st["as_of"])
+    if drop_dates:
+        bad = pd.DatetimeIndex(pd.to_datetime(list(drop_dates)))
+        st = st[~st["as_of"].isin(bad)]
     if w["start"]:
         st = st[st["as_of"] >= pd.Timestamp(w["start"])]
     if w["end"]:
@@ -79,6 +142,7 @@ def load_lab(structure: str = "3m", window: str = "liquid16", *,
     slot_panel = pd.read_parquet(data_dir / "slot_panel.parquet")
     slot_panel.index = pd.to_datetime(slot_panel.index)
     slot_panel = slot_panel.loc[levels.index.min():levels.index.max()]
+    slot_panel = slot_panel.reindex(levels.index)
     slot_panel.columns = [int(c) for c in slot_panel.columns]
 
     ok = pd.Series(True, index=st.index)
@@ -310,7 +374,7 @@ def stability_block(grid: pd.DataFrame, best: pd.Series, params: Sequence[str],
 def cost_block(res: MRResult) -> pd.DataFrame:
     if res.trades.empty:
         return pd.DataFrame()
-    cc = cost_curve(res.trades, [0.0, 0.5, 1.0, 1.5, 2.5, 4.0])
+    cc = cost_curve(res.trades, list(COST_CURVE_BP))
     cc["total_net_usd"] = cc["total_net_bp"] * DOLLARS_PER_BP * res.config.n_packages
     print("\n  cost curve (round-trip bp charged on the package):")
     print(cc.round(3).to_string(index=False))
@@ -401,6 +465,14 @@ def regime_block(res: MRResult, regimes: pd.Series, *, framework: str = "",
     return out
 
 
+#: how ``shadow_block`` charges each shadow instrument. ``per_leg`` reproduces
+#: the prior lab; ``per_contract`` is correct for futures and is what
+#: ``set_output_dir`` switches the kink lab to. They differ only on the
+#: butterfly (4 contracts, 2.0bp -- not 3 legs, 1.5bp), and per-leg costing
+#: therefore gives the fly a 0.5bp/trade head start over its own shadows.
+SHADOW_COST_MODE = "per_leg"
+
+
 def shadow_block(signal: pd.DataFrame, lab: Dict[str, object], base: MRConfig, *,
                  framework: str = "", write: bool = True) -> pd.DataFrame:
     """Run the identical signal on the fly's linear shadows.
@@ -408,7 +480,8 @@ def shadow_block(signal: pd.DataFrame, lab: Dict[str, object], base: MRConfig, *
     fly = (belly - front) + (belly - back), so if the edge is really a calendar
     or a directional trade it shows up on an instrument that costs fewer legs.
     """
-    tbl = shadow_table(signal, lab["shadows"], base=base, gate=lab["gate"])
+    tbl = shadow_table(signal, lab["shadows"], base=base, gate=lab["gate"],
+                       cost_mode=SHADOW_COST_MODE)
     print("\nLINEAR-SHADOW DECOMPOSITION (same signal, simpler instrument, own cost)")
     print(tbl.round(3).to_string(index=False))
     print(f"  -> {tbl.attrs.get('verdict', 'n/a')}")
@@ -430,10 +503,11 @@ def league_row(framework: str, variant: str, res: MRResult, *,
                ) -> Dict[str, object]:
     """Build (and upsert) one league-table row with the uniform verdict."""
     m = dict(res.metrics)
-    cc = (cost_curve(res.trades, [0.0, 2.5]).set_index("round_trip_bp")
+    taker_bp = float(TAKER_BP)
+    cc = (cost_curve(res.trades, [0.0, taker_bp]).set_index("round_trip_bp")
           if not res.trades.empty else None)
     maker = float(cc.loc[0.0, "total_net_bp"]) if cc is not None else 0.0
-    taker = float(cc.loc[2.5, "total_net_bp"]) if cc is not None else 0.0
+    taker = float(cc.loc[taker_bp, "total_net_bp"]) if cc is not None else 0.0
     dsr = (deflated_for_grid(res.daily_bp, grid).get("dsr_prob", np.nan)
            if grid is not None and len(grid) and not res.daily_bp.empty else np.nan)
     median_net = (float(grid["total_net_bp"].median())
@@ -445,7 +519,7 @@ def league_row(framework: str, variant: str, res: MRResult, *,
         "avg_net_bp": m["avg_net_bp"],
         "total_gross_bp": m.get("total_gross_bp", np.nan),
         "total_net_bp": m["total_net_bp"], "total_net_usd": m["total_net_usd"],
-        "net_bp_maker": maker, "net_bp_taker": taker,
+        "net_bp_maker": maker, "net_bp_taker": taker, "taker_bp": taker_bp,
         "net_usd_taker": taker * DOLLARS_PER_BP * res.config.n_packages,
         "sharpe": m["sharpe"], "max_dd_bp": m["max_dd_bp"],
         "max_dd_usd": m["max_dd_usd"], "avg_hold_days": m["avg_hold_days"],
@@ -480,6 +554,7 @@ def run_family(
     name: str, *, lab: Dict[str, object], signal_fn, grid_spec: Dict[str, Sequence],
     params: Sequence[str], base: MRConfig, cls: str, note: str = "",
     plot: bool = True, league: bool = True, show_trades: int = 25,
+    exits: Optional[Sequence[str]] = None,
 ) -> Dict[str, object]:
     """grid -> distribution -> stability -> sign -> best -> equity -> trades ->
     exits -> costs -> regimes -> shadows -> median config -> league rows.
@@ -509,8 +584,9 @@ def run_family(
         print("\n  trade log (first rows):")
         print(res.trades.sort_values("entry").head(show_trades).to_string(index=False))
     print("\n  exit comparison:")
-    print(exit_comparison(cfg_best, levels=levels, signal=sig_best, gate=gate)
-          .round(3).to_string(index=False))
+    ex_kw = {} if exits is None else {"exits": tuple(exits)}
+    print(exit_comparison(cfg_best, levels=levels, signal=sig_best, gate=gate,
+                          **ex_kw).round(3).to_string(index=False))
     cost_block(res)
     regime_block(res, lab["regimes"], framework=name)
     shadow_block(sig_best, lab, cfg_best, framework=name)

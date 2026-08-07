@@ -554,6 +554,72 @@ def test_shadow_table_charges_each_instrument_its_own_legs():
     assert "verdict" in tbl.attrs
 
 
+def _shadow_fixture():
+    """A strip whose belly wobbles, so the butterfly actually trades.
+
+    The base drifts as a random walk (giving the outright belly something to
+    do) and the belly carries an independent mean-reverting wobble on top
+    (giving the fly something to do). Without the wobble the fly is a constant
+    and no shadow test can compare anything.
+    """
+    rng = np.random.default_rng(13)
+    n = 400
+    idx = pd.bdate_range("2021-01-01", periods=n)
+    base = np.cumsum(rng.standard_normal(n)) * 0.02 + 4.0
+    wobble = np.zeros(n)
+    for i in range(1, n):
+        wobble[i] = 0.85 * wobble[i - 1] + rng.standard_normal() * 0.01
+    struct = pd.DataFrame([
+        {"as_of": d, "key": "K", "leg0_value": base[i],
+         "leg1_value": base[i] + 0.05 + wobble[i], "leg2_value": base[i] + 0.11}
+        for i, d in enumerate(idx)])
+    sh = shadow_levels(struct)
+    return sh, zscore_signal(sh["fly"], window=60)
+
+
+def test_per_contract_costing_only_moves_the_butterfly():
+    """The belly of a 1/-2/1 package is two contracts; every wing is one.
+
+    So per-contract costing charges the fly 2.0bp instead of 1.5bp and leaves
+    every shadow untouched. Per-LEG costing therefore hands the butterfly a
+    0.5bp/trade head start over exactly the instruments it is being compared
+    against, which is backwards for a test that exists to find out whether the
+    fly is worth its extra legs.
+    """
+    sh, sig = _shadow_fixture()
+    cfg = MRConfig(entry_z=1.0, max_hold=10)
+    per_leg = shadow_table(sig, sh, base=cfg, cost_mode="per_leg")
+    per_ct = shadow_table(sig, sh, base=cfg, cost_mode="per_contract")
+    a = dict(zip(per_leg["instrument"], per_leg["round_trip_bp"]))
+    b = dict(zip(per_ct["instrument"], per_ct["round_trip_bp"]))
+    assert a["fly"] == pytest.approx(1.5) and b["fly"] == pytest.approx(2.0)
+    for name in ("belly", "belly_vs_front", "belly_vs_back"):
+        assert a[name] == pytest.approx(b[name]), name
+    assert dict(zip(per_ct["instrument"], per_ct["n_contracts"])) == {
+        "fly": 4, "belly": 1, "belly_vs_front": 2, "belly_vs_back": 2}
+
+
+def test_per_contract_costing_never_flatters_the_fly():
+    """Charging the fly its true cost can only lower its net P&L."""
+    sh, sig = _shadow_fixture()
+    cfg = MRConfig(entry_z=1.0, max_hold=10)
+    a = shadow_table(sig, sh, base=cfg, cost_mode="per_leg").set_index("instrument")
+    b = shadow_table(sig, sh, base=cfg, cost_mode="per_contract").set_index("instrument")
+    n = float(a.loc["fly", "n_trades"])
+    assert n > 0
+    assert b.loc["fly", "total_net_bp"] == pytest.approx(
+        a.loc["fly", "total_net_bp"] - 0.5 * n)
+    for name in ("belly", "belly_vs_front", "belly_vs_back"):
+        assert b.loc[name, "total_net_bp"] == pytest.approx(
+            a.loc[name, "total_net_bp"]), name
+
+
+def test_shadow_table_rejects_an_unknown_cost_mode():
+    sh, sig = _shadow_fixture()
+    with pytest.raises(ValueError, match="cost_mode"):
+        shadow_table(sig, sh, base=MRConfig(), cost_mode="per_tick")
+
+
 # ---------------------------------------------------------------------------
 # interop with the options lab's grading code
 # ---------------------------------------------------------------------------
