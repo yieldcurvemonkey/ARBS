@@ -2769,21 +2769,33 @@ class IRSwapsMDP(MarketDataProvider[_GenericPricable]):
             and not kwargs.get("force_refresh", kwargs.get("ignore_cache", False))
             and not kwargs.get("no_curve_store", False)
         )
-        # NOTE the isinstance order: pd.Timestamp subclasses datetime.datetime,
-        # which subclasses datetime.date. Testing for date first would route every
-        # intraday request down the EOD branch.
-        if _store_eligible and isinstance(timestamp, datetime.datetime):
-            hit = self._load_citivelo_excel_minute_store_point(
-                curve_name=curve_name, timestamp=timestamp
-            )
-            if hit is not None:
-                return hit
-        elif _store_eligible and isinstance(timestamp, datetime.date):
-            hit = self._load_citivelo_excel_curve_store_point(
-                curve_name=curve_name, trading_date=timestamp
-            )
-            if hit is not None:
-                return hit
+        # Route on the RESOLVED mode, never on isinstance. pd.Timestamp subclasses
+        # datetime.datetime subclasses datetime.date, so an isinstance ladder gets
+        # this wrong in both directions: testing date first swallows every
+        # intraday request, and testing datetime first swallows
+        # pd.Timestamp("2026-08-05") - a midnight stamp, which is the common
+        # spelling of "that day" and which resolve_request reads as EOD. The
+        # second case is worse than it looks: the minute loader declines it, and
+        # an elif chain then never reaches the EOD store at all.
+        if _store_eligible:
+            from MDP.IRSwaps.CITIVELO_EXCEL.timestamps import resolve_request
+
+            try:
+                _mode = resolve_request(timestamp)
+            except Exception:  # noqa: BLE001 - let the normal path report it
+                _mode = None
+            if _mode is not None and _mode.mode == "intraday":
+                hit = self._load_citivelo_excel_minute_store_point(
+                    curve_name=curve_name, timestamp=timestamp
+                )
+                if hit is not None:
+                    return hit
+            elif _mode is not None and _mode.mode == "eod" and _mode.eod_date is not None:
+                hit = self._load_citivelo_excel_curve_store_point(
+                    curve_name=curve_name, trading_date=_mode.eod_date
+                )
+                if hit is not None:
+                    return hit
 
         fetcher_kwargs = {
             k: kwargs[k]
