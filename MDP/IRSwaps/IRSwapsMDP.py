@@ -24,6 +24,20 @@ from pandas.tseries.offsets import CustomBusinessDay as _CBD
 # SOFR for date D publishes on the next US business day (~08:00 ET).
 _FIXING_PUBLISH_OFFSET = _CBD(calendar=_USFedCal())
 
+_citivelo_excel_logger = logging.getLogger("MDP.IRSwaps.citivelo_excel")
+
+# Source tokens for the Citi Velocity Excel add-in source (all 20 OIS curves, in
+# EOD / intraday / live). Spelled here rather than imported so that importing
+# IRSwapsMDP does not drag in the whole CitiVelocityExcel package; a test asserts
+# these agree with MDP.IRSwaps.CITIVELO_EXCEL.SOURCE_TOKENS.
+#
+# NOT "CITIVELO"/"CITI_VELO"/"CITIVELOCITY": those name the older workbook-based
+# USD-SOFR-only source that ~930 warmed CurveStore partitions and the dealer-ladder
+# study depend on, and nothing in this source touches it.
+CITIVELO_EXCEL_RL_TOKENS = ("CITIVELO_EXCEL", "CITIVELO-EXCEL", "CITIVELO_EXCEL-RL", "CITIVELO_EXCEL_RL")
+CITIVELO_EXCEL_QL_TOKENS = ("CITIVELO_EXCEL-QL", "CITIVELO_EXCEL_QL")
+CITIVELO_EXCEL_SOURCE_TOKENS = CITIVELO_EXCEL_RL_TOKENS + CITIVELO_EXCEL_QL_TOKENS
+
 
 class IRSwapsMDP(MarketDataProvider[_GenericPricable]):
     _DEFAULT_GRID_FWDS: tuple[str, ...] = ("Spot", "1M", "3M", "6M", "1Y", "2Y", "5Y", "7Y", "10Y")
@@ -38,6 +52,14 @@ class IRSwapsMDP(MarketDataProvider[_GenericPricable]):
         "lock": threading.Lock(),
     }
     _CITIVELO_STATE: Dict[str, Any] = {
+        "fetchers": {},
+        "lock": threading.RLock(),
+    }
+    #: Separate from _CITIVELO_STATE on purpose. That one belongs to the older
+    #: workbook-based USD-SOFR source, which ~930 warmed CurveStore partitions and
+    #: the dealer-ladder study depend on; citivelo_excel is a different source with
+    #: a different transport and must not share its cache keys.
+    _CITIVELO_EXCEL_STATE: Dict[str, Any] = {
         "fetchers": {},
         "lock": threading.RLock(),
     }
@@ -138,6 +160,27 @@ class IRSwapsMDP(MarketDataProvider[_GenericPricable]):
                 from MDP.IRSwaps.CITI_VELOCITY_INTRADAY import CitiVelocityIntradayFetcher
 
                 fetcher = CitiVelocityIntradayFetcher(workbook_path, curve_id=curve_id)
+                S["fetchers"][key] = fetcher
+            return fetcher
+
+    def _get_citivelo_excel_fetcher(self, **kwargs: Any) -> Any:
+        """Lazily build + cache the ``citivelo_excel`` curve fetcher, per option set.
+
+        Cached because the fetcher owns the seam to the tag cache and, when a
+        request is not fully cached, to the COM client. Reconnecting per request
+        would open a scratch workbook in the user's Excel every time - and Excel
+        is a single shared mutable resource whose write discipline is the whole
+        reason that client exists.
+        """
+        S = IRSwapsMDP._CITIVELO_EXCEL_STATE
+        key = tuple(sorted((k, repr(v)) for k, v in kwargs.items()))
+        with S["lock"]:
+            fetcher = S["fetchers"].get(key)
+            if fetcher is None:
+                from MDP.IRSwaps.CITIVELO_EXCEL import CitiVeloExcelCurveFetcher, register
+
+                register()
+                fetcher = CitiVeloExcelCurveFetcher(**kwargs)
                 S["fetchers"][key] = fetcher
             return fetcher
 
@@ -2662,8 +2705,142 @@ class IRSwapsMDP(MarketDataProvider[_GenericPricable]):
                 f"timestamp={timestamp!r}. Run the poller (scripts/eris_live_curve_service.py)."
             )
 
+        elif self.source.upper() in CITIVELO_EXCEL_SOURCE_TOKENS:
+            # Citi Velocity, all 20 OIS curves, in three time modes. NOTE there is
+            # no `assert curve_name == "USD-SOFR-1D"` here: the curve name resolves
+            # through a 20-entry map to a Citi index token, and that is the whole
+            # point of this source. See MDP/IRSwaps/CITIVELO_EXCEL/curve_names.py.
+            return self._build_citivelo_excel_curve(
+                curve_name=curve_name, timestamp=timestamp, kwargs=kwargs
+            )
+
         else:
             raise NotImplementedError(f"Curve Build '{self.source}' does not exist")
+
+    def _build_citivelo_excel_curve(
+        self,
+        *,
+        curve_name: str,
+        timestamp: Union[datetime.datetime, datetime.date, Literal["live"]],
+        kwargs: Dict[str, Any],
+    ) -> "_IRSwapGenericCurve":
+        """One Citi Velocity curve, in whichever of the three modes ``timestamp`` means.
+
+        ``timestamp`` dispatch (see ``CITIVELO_EXCEL/timestamps.py`` for the full
+        contract and the evidence behind the timezone):
+
+        * ``"live"`` -> the newest complete one-minute grid, with its lag reported;
+        * a ``datetime.datetime`` -> intraday at that instant. Tz-aware is
+          converted to Citi's zone; naive is localised to it with a warning, which
+          matches what the sibling ``citivelo`` and ``eris_live_intraday`` sources
+          already do;
+        * a ``datetime.date`` -> that date's close.
+
+        The returned ``meta_data["timestamp"]`` is **tz-aware** in
+        ``America/New_York``. That differs from the older ``citivelo`` source,
+        which hands back a naive ET datetime; it is deliberate, because a naive
+        stamp is exactly what lets a one-hour error read as a real market move.
+        """
+        from MDP.IRSwaps.CITIVELO_EXCEL import CitiVeloExcelCurveFetcher  # noqa: F401
+        from MDP.IRSwaps.CITIVELO_EXCEL import citi_index_for_curve_name
+
+        backend = "ql" if self.source.upper() in CITIVELO_EXCEL_QL_TOKENS else "rl"
+
+        fetcher_kwargs = {
+            k: kwargs[k]
+            for k in ("offline", "method", "max_staleness", "max_constituent_spread", "min_tenors")
+            if k in kwargs
+        }
+        fetcher = self._get_citivelo_excel_fetcher(**fetcher_kwargs)
+
+        snapshot = fetcher.snapshot(
+            curve_name,
+            timestamp,
+            strict_tz=kwargs.get("strict_tz"),
+            force_refresh=bool(kwargs.get("force_refresh", kwargs.get("ignore_cache", False))),
+            min_tenors=kwargs.get("min_tenors"),
+        )
+        build_kwargs = {
+            k: kwargs[k]
+            for k in ("interpolation", "spline_start_tenor", "extrapolation_years", "max_reprice_error_bp")
+            if k in kwargs
+        }
+
+        curve_id = f"{self.source.upper()}-{curve_name}-{snapshot.snapshot_at.isoformat()}"
+        meta = {
+            "timestamp": snapshot.snapshot_at,
+            "id": curve_id,
+            "source": "citivelo_excel",
+            "backend": backend,
+            **snapshot.to_meta(),
+        }
+
+        if backend == "ql":
+            import QuantLib as ql
+
+            from Query.IRSwaps.backends.quantlib.QLIRSwapCurve import QLIRSwapCurve
+
+            qlc = fetcher.build_ql(snapshot, **build_kwargs)
+            # QuantLib instruments resolve their spot date off the GLOBAL
+            # evaluation date, and QLIRSwapCurve's pricer builds them outside any
+            # pinned block. Without this, a curve for 2026-08-05 would be priced
+            # with today's spot date and every rate would be quietly wrong. The
+            # curve object itself is absolute and does not observe this setting;
+            # the instruments built against it do.
+            ql.Settings.instance().evaluationDate = ql.Date(
+                snapshot.reference_date.day,
+                snapshot.reference_date.month,
+                snapshot.reference_date.year,
+            )
+            meta["ql_evaluation_date"] = snapshot.reference_date.isoformat()
+            meta["max_reprice_error_bp"] = getattr(qlc, "max_reprice_error_bp", None)
+            return QLIRSwapCurve(
+                ql_curve_id=curve_name,
+                ql_curve_handle=ql.YieldTermStructureHandle(qlc.curve),
+                ql_curve_index=qlc.index,
+                meta_data=meta,
+            )
+
+        from Query.IRSwaps.backends.rateslib.RLIRSwapCurve import RLIRSwapCurve
+
+        rlc = fetcher.build_rl(snapshot, **build_kwargs)
+        meta["max_reprice_error_bp"] = (getattr(rlc, "meta", {}) or {}).get("max_reprice_error_bp")
+        meta["provenance"] = (getattr(rlc, "meta", {}) or {}).get("provenance")
+        return RLIRSwapCurve(
+            rl_curve_id=curve_name,
+            rl_curve_handle=rlc.rl_pricing_curve,
+            fixings=self._citivelo_excel_fixings(curve_name=curve_name, snapshot=snapshot),
+            meta_data=meta,
+        )
+
+    def _citivelo_excel_fixings(self, *, curve_name: str, snapshot: Any) -> pd.Series:
+        """Past index fixings for the float leg, where this repo has a source for them.
+
+        Only USD-SOFR has a fixings source here, so the other nineteen curves get
+        an EMPTY series. That is correct for everything this source is built to
+        price - a par or forward-starting swap begins at or after spot and needs no
+        history - and it fails loudly rather than silently for a seasoned swap,
+        because rateslib raises when a float period needs a fixing it does not have.
+        Substituting zeros, or the other currency's SOFR fixings, would be the
+        silent-wrong-number alternative.
+        """
+        if str(curve_name).upper() != "USD-SOFR-1D":
+            return pd.Series(dtype="float64")
+        try:
+            return self._asof_fixings(
+                curve_name="USD-SOFR-1D",
+                reference_date=snapshot.reference_date,
+                as_of_instant=snapshot.snapshot_at,
+            )
+        except Exception as exc:  # noqa: BLE001 - fixings are optional for par pricing
+            _citivelo_excel_logger.warning(
+                "citivelo_excel: SOFR fixings unavailable for %s (%s); serving the curve with an "
+                "empty fixings series. Par and forward-starting rates are unaffected; a seasoned "
+                "swap will raise.",
+                snapshot.reference_date,
+                exc,
+            )
+            return pd.Series(dtype="float64")
 
     def bulk_get_data(self, request: dict) -> Dict[Union[datetime.date, datetime.datetime], _IRSwapGenericCurve]:
         if not isinstance(request, dict):

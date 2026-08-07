@@ -772,8 +772,16 @@ class CitiVelocityExcelClient:
                 out.update(self._parse_scalar_grid(rows, chunk))
         return out
 
-    @staticmethod
+    #: Excel serial floor below which a numeric cell is a PRICE, not a date.
+    #: 32874 is 1990-01-01; no Citi series starts earlier, and a par rate is a
+    #: single-digit float. Without this floor ``coerce_excel_datetime(4.23919)``
+    #: happily returns ``1900-01-03 05:44:26`` and a rate is reported as a
+    #: timestamp - measured on a live ``CVSNAP`` on 2026-08-07.
+    _MIN_STAMP_SERIAL = 32_874.0
+
+    @classmethod
     def _parse_scalar_grid(
+        cls,
         rows: Sequence[Sequence[Any]],
         tags: Sequence[str],
     ) -> Dict[str, Tuple[Optional[float], Optional[datetime.datetime]]]:
@@ -783,6 +791,23 @@ class CitiVelocityExcelClient:
         (the ``CVTSHIST`` shape) or as one row per tag. Both are handled, and the
         row form is only used when the header form does not apply, so a header
         that happens to be absent never silently shifts the mapping.
+
+        Measured live on 2026-08-07, and both facts cost a wrong answer before
+        they were known:
+
+        **The row form is POSITIONAL and can contain empty rows.** ``CVLATEST``
+        over six tags where one is a discontinued curve (``EUR_EONIA``) returns
+        six rows, one of them blank. Compacting the blanks away before checking
+        ``len(body) == len(tags)`` made the count disagree and returned
+        ``(None, None)`` for **all six** - one dead curve silently blanked five
+        live ones. Rows are therefore aligned by position, not by compaction.
+
+        **A single-column row has no timestamp.** ``CVLATEST`` and ``CVSNAP`` both
+        answer with bare values; neither publishes a stamp. Reading the same cell
+        as both value and date turned the 10Y rate ``4.23287`` into the timestamp
+        ``1900-01-03 05:35:20``. A stamp is now only taken from a cell that is
+        genuinely a datetime, or from a *different* cell whose serial is past
+        :attr:`_MIN_STAMP_SERIAL`.
         """
         out: Dict[str, Tuple[Optional[float], Optional[datetime.datetime]]] = {}
         if not rows:
@@ -798,20 +823,108 @@ class CitiVelocityExcelClient:
                     out[tag] = (float(s.iloc[-1]), s.index[-1].to_pydatetime())
             return out
 
-        body = [r for r in rows if r and any(c is not None for c in r)]
-        if len(body) == len(tags):
-            for tag, cells in zip(tags, body):
-                value = None
-                stamp = None
-                for cell in cells:
-                    if value is None:
-                        value = coerce_float(cell)
-                    if stamp is None:
-                        stamp = coerce_excel_datetime(cell)
-                out[tag] = (value, stamp)
-            return out
+        body = cls._align_scalar_rows(rows, len(tags))
+        if body is None:
+            return {t: (None, None) for t in tags}
+        for tag, cells in zip(tags, body):
+            out[tag] = cls._scalar_row(cells)
+        return out
 
-        return {t: (None, None) for t in tags}
+    @staticmethod
+    def _align_scalar_rows(
+        rows: Sequence[Sequence[Any]], n_tags: int
+    ) -> Optional[List[Sequence[Any]]]:
+        """Line a scalar grid up with the tag list without reordering it.
+
+        Blank rows in the middle are DATA (a tag that served nothing) and are kept
+        where they are. Blank rows at the edges, and a leading header row, are
+        padding and are trimmed - but only when trimming makes the count match, so
+        an unrecognised shape is reported as such rather than silently shifted.
+        """
+        candidate = [list(r) for r in rows]
+        if len(candidate) == n_tags:
+            return candidate
+
+        def _blank(row: Sequence[Any]) -> bool:
+            return not row or all(c is None or (isinstance(c, str) and not c.strip()) for c in row)
+
+        trimmed = list(candidate)
+        while trimmed and _blank(trimmed[0]):
+            trimmed.pop(0)
+        while trimmed and _blank(trimmed[-1]):
+            trimmed.pop()
+        if len(trimmed) == n_tags:
+            return trimmed
+        # A header row carries no numbers at all.
+        if len(trimmed) == n_tags + 1 and all(coerce_float(c) is None for c in trimmed[0]):
+            return trimmed[1:]
+        return None
+
+    @classmethod
+    def _scalar_row(cls, cells: Sequence[Any]) -> Tuple[Optional[float], Optional[datetime.datetime]]:
+        """One row of a scalar grid as ``(value, stamp)``; stamp is usually ``None``."""
+        value: Optional[float] = None
+        value_at: Optional[int] = None
+        for i, cell in enumerate(cells):
+            v = coerce_float(cell)
+            if v is not None:
+                value, value_at = v, i
+                break
+        stamp: Optional[datetime.datetime] = None
+        for i, cell in enumerate(cells):
+            if i == value_at:
+                continue
+            if isinstance(cell, datetime.datetime) or isinstance(cell, datetime.date):
+                stamp = coerce_excel_datetime(cell)
+                break
+            if isinstance(cell, (int, float)) and not isinstance(cell, bool):
+                if float(cell) >= cls._MIN_STAMP_SERIAL:
+                    stamp = coerce_excel_datetime(cell)
+                    break
+        return value, stamp
+
+    # -- arbitrary CV* formulas -----------------------------------------
+
+    def evaluate_formula(
+        self,
+        formula: str,
+        *,
+        rows_needed: int = 4,
+        timeout: Optional[float] = None,
+    ) -> Tuple[Any, List[List[Any]]]:
+        """Write one arbitrary formula, settle it, and return ``(value, rows)``.
+
+        The escape hatch for the ``CV*`` functions that have no typed wrapper -
+        ``CVNOW``, ``CVTODAY``, ``CVSTREAM``, ``CVTICK`` - and for probing a new
+        one before deciding what its wrapper should look like. It goes through the
+        SAME disciplined write path as every other call (anchor below every live
+        region, cursor advanced by the block's measured extent, nothing ever
+        cleared), which is the whole point of it living here rather than in a
+        probe script: a second write path that does not honour the spacing rules
+        is an ``AccessViolation`` waiting to happen.
+
+        Returns
+        -------
+        tuple
+            ``value`` is the settled anchor cell - the answer itself for a scalar
+            function, or the formula text for one that spills a block. ``rows`` is
+            the normalised block at the measured extent, empty when the formula
+            resolved to a scalar error.
+
+        Notes
+        -----
+        ``rows_needed`` is only a provisional reservation; pass a generous number
+        for a function whose block size is unknown. It does not need to be right,
+        because the cursor is corrected from the real extent afterwards - but
+        under-reserving costs nothing only because the default gap is 30 rows.
+        """
+        with EXCEL_LOCK:
+            rows, value, elapsed = self._write_and_read(
+                str(formula), rows_needed=int(rows_needed), timeout=timeout
+            )
+        if is_pending(value):
+            raise AsyncTimeoutError([str(formula)], elapsed, str(formula))
+        return value, rows
 
     # -- CVCURVE / CVCURVEBOND ------------------------------------------
 

@@ -64,8 +64,22 @@ def calc_spread_rate(
     package: List[_IRSwapGenericObject],
     risk_weights: List[float],
 ) -> float:
+    """Risk-weighted sum of the legs' fair rates.
+
+    The leg rate is used with its own SIGN. It used to be wrapped in ``abs()``,
+    which is invisible while every rate in the book is positive and wrong the
+    moment one is not: measured 2026-08-07 against Citi Velocity's own quotes, the
+    CHF SARON curve's front is -0.055314% and an outright came back as
+    +0.055314% - an 11.06 bp error, exactly twice the rate. A CHF 1s10s curve
+    trade whose legs straddle zero was out by a similar amount in the other
+    direction.
+
+    ``abs()`` cannot have been doing sign normalisation: ``fair_rate`` is a par
+    rate and carries no direction - the direction lives in ``risk_weights``, which
+    ``_swap_structure_sign_mapper`` has already applied on the line above.
+    """
     risk_weights = _swap_structure_sign_mapper[_swap_structure_legs_mapper[len(package)][0]](risk_weights)
-    return sum([risk_weights[i] * abs(curve.fair_rate(sw)) for i, sw in enumerate(package)])
+    return sum([risk_weights[i] * curve.fair_rate(sw) for i, sw in enumerate(package)])
 
 
 class IRSwapValueFunctionMap(BaseValueFunctionMap[IRSwapValue, float]):

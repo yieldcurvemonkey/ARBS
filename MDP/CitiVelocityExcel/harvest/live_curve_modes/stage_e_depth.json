@@ -1,0 +1,108 @@
+{
+ "~1 month": {
+  "date": "2026-07-08",
+  "served": {
+   "CAD_CORRA": 61,
+   "CHF_SARON": 61,
+   "DKK_TNDKK": 61,
+   "EUR_EUROSTR": 61,
+   "GBP_SONIA": 61,
+   "ILS_SHIR": 61,
+   "MXN_T_FONDEO": 61,
+   "NOK_NOWA": 61,
+   "SEK_STINA": 61,
+   "USD_FEDFUND": 61,
+   "USD_SOFR": 61,
+   "ZAR_ZARONIA": 61,
+   "AUD_AONIA": 61,
+   "JPY_TONAR": 61,
+   "JPY_TONAR_LCH": 61,
+   "NZD_NZIONA": 61,
+   "SGD_SORA": 61,
+   "THB_THOR": 59
+  }
+ },
+ "~6 months": {
+  "date": "2026-02-06",
+  "served": {
+   "CAD_CORRA": 61,
+   "CHF_SARON": 60,
+   "DKK_TNDKK": 60,
+   "EUR_EUROSTR": 61,
+   "GBP_SONIA": 61,
+   "ILS_SHIR": 59,
+   "MXN_T_FONDEO": 60,
+   "NOK_NOWA": 61,
+   "SEK_STINA": 61,
+   "USD_FEDFUND": 61,
+   "USD_SOFR": 61,
+   "ZAR_ZARONIA": 59,
+   "AUD_AONIA": 61,
+   "JPY_TONAR": 61,
+   "JPY_TONAR_LCH": 52,
+   "SGD_SORA": 46,
+   "THB_THOR": 48
+  }
+ },
+ "~1 year": {
+  "date": "2025-08-07",
+  "served": {
+   "CAD_CORRA": 60,
+   "CHF_SARON": 60,
+   "DKK_TNDKK": 60,
+   "EUR_EONIA": 60,
+   "EUR_EUROSTR": 60,
+   "GBP_SONIA": 60,
+   "ILS_SHIR": 60,
+   "MXN_T_FONDEO": 60,
+   "NOK_NOWA": 60,
+   "SEK_STINA": 60,
+   "USD_FEDFUND": 60,
+   "USD_SOFR": 60,
+   "ZAR_ZARONIA": 60,
+   "AUD_AONIA": 60,
+   "JPY_TONAR": 60,
+   "JPY_TONAR_LCH": 60,
+   "NZD_NZIONA": 60,
+   "SGD_SORA": 60,
+   "THB_THOR": 60
+  }
+ },
+ "~3 years": {
+  "date": "2023-08-08",
+  "served": {
+   "CAD_CORRA": 61,
+   "CHF_SARON": 61,
+   "DKK_TNDKK": 61,
+   "EUR_EONIA": 61,
+   "EUR_EUROSTR": 61,
+   "GBP_SONIA": 61,
+   "NOK_NOWA": 61,
+   "SEK_STINA": 61,
+   "USD_FEDFUND": 61,
+   "USD_SOFR": 61,
+   "AUD_AONIA": 61,
+   "JPY_TONAR": 61,
+   "NZD_NZIONA": 61,
+   "SGD_SORA": 61,
+   "THB_THOR": 61
+  }
+ },
+ "~5 years": {
+  "date": "2021-08-06",
+  "served": {
+   "AUD_AONIA": 61,
+   "CAD_CORRA": 61,
+   "CHF_SARON": 61,
+   "DKK_TNDKK": 61,
+   "EUR_EONIA": 61,
+   "GBP_SONIA": 61,
+   "JPY_TONAR": 61,
+   "NOK_NOWA": 61,
+   "NZD_NZIONA": 61,
+   "SEK_STINA": 61,
+   "SGD_SORA": 61,
+   "USD_FEDFUND": 61
+  }
+ }
+}

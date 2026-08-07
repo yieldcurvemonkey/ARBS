@@ -1,0 +1,16 @@
+{
+ "generated_at": "2026-08-07T11:28:35.120015-04:00",
+ "offline": true,
+ "eod_date": "2026-08-06",
+ "intraday_at": "2026-08-06T10:30:00-04:00",
+ "tolerance_bp": 1.0,
+ "n_curves": 20,
+ "forward_comparisons": 204,
+ "forward_worst_abs_bp": 6.0921634013968,
+ "forward_outside_tolerance": 14,
+ "curves_without_published_forwards": [
+  "EUR-EONIA-1D",
+  "JPY-TONAR-1D-JSCC",
+  "JPY-TONAR-1D-LCH"
+ ]
+}

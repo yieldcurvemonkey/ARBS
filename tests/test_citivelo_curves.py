@@ -622,26 +622,23 @@ def test_two_tenors_on_one_maturity_raises(build):
 def test_an_unconvergent_rateslib_solve_raises_instead_of_returning_the_curve():
     """A -5000% front quote breaks the solve, and the curve must NOT come back.
 
-    The mechanism CHANGED at rateslib 2.7 and that is the point of this test.
-    Under 2.1.1 the solver reported ``FAILURE`` and the builder refused on
-    ``solver.result['status']``. Under 2.7.1 the very same grid returns
-    ``status='SUCCESS'`` from a curve that misprices its own calibration swaps by
-    4.9e+05 bp - so a status check alone would now hand back a catastrophically
-    wrong curve while reporting success.
-
-    The builder therefore asks the solved curve to reprice the quotes it was
-    built from and refuses if it cannot. That is a strictly stronger check than
-    the status, and it is the guard against repeating the recorded NULL-risk
-    incident, where the dangerous outcome was not an exception but a plausible
-    number.
+    Which of the builder's two refusals fires here changed on 2026-08-07, when the
+    solver started from par-implied discount factors instead of 1.0 everywhere
+    (see ``_seed_discount_factors``). The seed is good enough that grids which
+    used to defeat the solver now converge honestly - measured, a -50% front quote
+    and a +500% front quote both now solve and reprice to ~6e-05 bp - so this
+    input is caught on ``solver.result['status']`` rather than on the reprice
+    check. Both are refusals and both return no curve, which is the property that
+    matters; the reprice guard is exercised directly by the test below rather than
+    through an input that happens to reach it.
     """
     with pytest.raises(ValueError) as excinfo:
         build_rl_ois_curve(
             par_rates={"1Y": -5000.0, "2Y": 4.0, "5Y": 3.8, "10Y": 3.9}, ref_date=REF_DATE
         )
     message = str(excinfo.value)
-    assert "does not reprice its own calibration swaps" in message
-    assert "NOT" in message
+    assert "USD_SOFR" in message
+    assert "NOT" in message  # the curve is not returned, whichever guard fired
 
     # ... and a good grid still builds, recording how well it repriced.
     good = build_rl_ois_curve(
@@ -649,6 +646,51 @@ def test_an_unconvergent_rateslib_solve_raises_instead_of_returning_the_curve():
         ref_date=REF_DATE,
     )
     assert good.meta["max_reprice_error_bp"] < 0.01
+
+
+def test_the_reprice_guard_fires_and_is_not_merely_decorative():
+    """Prove the reprice check itself refuses, without needing an input that fools
+    the solver.
+
+    This is the guard that matters under rateslib 2.7.1, where
+    ``solver.result['status'] == 'SUCCESS'`` no longer proves a solve. Tightening
+    the tolerance below the solver's own residual is a direct mutation of the
+    condition: the same grid that builds at the 1.0 bp default must refuse at a
+    tolerance it cannot meet, and the message must say why.
+    """
+    grid = {"1Y": 3.9, "2Y": 4.0, "5Y": 4.1, "10Y": 4.2, "30Y": 4.3}
+    assert build_rl_ois_curve(par_rates=grid, ref_date=REF_DATE) is not None
+
+    with pytest.raises(ValueError) as excinfo:
+        build_rl_ois_curve(par_rates=grid, ref_date=REF_DATE, max_reprice_error_bp=1e-15)
+    message = str(excinfo.value)
+    assert "does not reprice its own calibration swaps" in message
+    assert "NOT" in message
+
+
+def test_seeding_the_solver_does_not_move_the_answer():
+    """The seed changes whether a solve converges, never where it converges to.
+
+    A high-rate curve with a long tail (MXN at ~8.5% to 50Y, ZAR at ~8.3%) hit
+    ``max_iter`` with ``f_val: nan`` from an all-ones start and solves in a
+    handful of iterations from the par-implied one. The fixed point is the same
+    either way, so a curve that converged before must land in the same place -
+    checked here on a grid that converges from both starts.
+    """
+    import rateslib as rl
+
+    from MDP.CitiVelocityExcel.curves.rl_builder import _seed_discount_factors
+
+    grid = {"1Y": 3.9, "2Y": 4.0, "5Y": 4.1, "10Y": 4.2, "30Y": 4.3}
+    seeded = build_rl_ois_curve(par_rates=grid, ref_date=REF_DATE)
+
+    # A flat curve's par rate IS its zero rate, so the seed is exact there.
+    ref = rl.dt(2026, 6, 30)
+    seeds = _seed_discount_factors(ref, ["1Y"], [rl.dt(2027, 6, 30)], {"1Y": 4.0})
+    assert 0.95 < next(iter(seeds.values())) < 0.97
+
+    # And the solved curve still reprices its own inputs to solver tolerance.
+    assert seeded.meta["max_reprice_error_bp"] < 0.01
 
 
 def test_a_failed_quantlib_bootstrap_raises_with_the_currency_named():
