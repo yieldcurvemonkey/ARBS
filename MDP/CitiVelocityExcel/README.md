@@ -272,6 +272,13 @@ Measured on the real run, USD, 2026-08-07:
 | build | **1,746 days, 2019-08-07 → 2026-08-06, 0 unbuildable**, 81 business-day gaps |
 | round trip | **0.000e+00 bp** over 260 real nodes; axes, units and provenance preserved |
 
+The 81 gaps are not dropped fetches. 77 are US bond-market holidays, and no
+stored day falls on one, so the store lines up with the calendar exactly. The
+remaining 4 — 2020-01-31, 2020-02-03, 2021-03-19, 2021-04-29 — are ordinary
+weekdays that Citi did not publish: absent from all 35 ATM tags while their
+neighbours are present. The store is faithful to the source on all 1,827
+weekdays in the window.
+
 Pricing a 1Yx10Y +25bp off a cube **read back from the store** reproduces the live
 snapshot exactly: forward 4.322495%, vol 84.5553 bp, PV 1,767,324.40.
 
