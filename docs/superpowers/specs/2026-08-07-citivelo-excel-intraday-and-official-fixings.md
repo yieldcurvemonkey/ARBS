@@ -155,6 +155,31 @@ resumes.
 parquets are written atomically and the two-phase split means Excel work is
 banked per day.
 
+### The memory is in the add-in's cache, not the workbooks — measured twice
+
+Recycling helps but cannot keep up, and closing workbooks barely moves it:
+
+| action | Excel before | after | recovered |
+|---|---|---|---|
+| recycle the scratch workbook | 2,621 MB | 2,409 MB | **212 MB** |
+| …while the preceding 20 windows had *added* | | | **~340 MB** |
+| close 3 workbooks (one holding a 3,537×45 window sheet) | 3,974 MB | 3,832 MB | **142 MB** |
+
+After the second, Excel was down to **one** workbook and still at 3,832 MB. So
+the growth is the add-in's own series cache, and **only an Excel restart clears
+it**. Recycling is still worth doing — it buys windows — but it is a brake, not a
+fix.
+
+**The restart has to be the user's.** A programmatically spawned Excel never
+registers the `CV*` UDFs, so quitting and relaunching from code would destroy the
+only working transport with no way to restore it.
+
+**Therefore the run is designed to stop, not to push.** `fetch` raises
+`MemoryCeilingReached` above `--memory-abort-mb` (3,800), reports what it banked,
+and ends. A watchdog run confirmed the design live: it stopped the fetch at
+**4,001 MB** and Excel stayed healthy and responsive at 3,796 MB — no wedge, no
+lost data, ~750 day files banked across EUR and GBP in that pass.
+
 ---
 
 ## 3. Minute-resolution CurveStore warm
