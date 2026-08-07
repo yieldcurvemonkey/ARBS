@@ -107,6 +107,7 @@ class Context:
     fetched: bool
     settle_asof: Dict[str, pd.Timestamp]
     requested: Optional[pd.Timestamp] = None
+    refresh_note: str = ""
 
 
 def option_label(symbol: str, strike_price: float, right: str) -> str:
@@ -162,21 +163,71 @@ def _snapshot_quotes(legs: Sequence[Tuple[str, float]],
     return pd.DataFrame(rows)
 
 
-def _refresh_settles(symbols: Sequence[str], as_of: datetime.date) -> None:
+def settle_asof(symbols: Sequence[str]) -> Optional[pd.Timestamp]:
+    """Newest cached settle across the SR3 contracts we price against."""
+    from BT.serff.futures_data import load_cached
+
+    best = None
+    for s in symbols:
+        df = load_cached("SR3" + s[3:] if s.startswith("SFR") else s)
+        if df is None or df.empty:
+            continue
+        d = pd.to_datetime(df.index).max()
+        best = d if best is None else max(best, d)
+    return best
+
+
+def _refresh_settles(symbols: Sequence[str],
+                     as_of: datetime.date) -> Tuple[bool, str]:
     """Re-fetch SR3 and ZQ EOD settles so the forward and the ladder are current.
 
     The ZQ leg matters as much as the SR3 one: the lattice that prices fair
     value is built from ZQ settles, and a just-expired front ZQ silently
     dropping out of the refresh is a failure this program has already had twice.
+
+    Two things this has to survive. Inside a Jupyter kernel the fetcher's
+    ``asyncio.run`` cannot nest in the kernel's own loop, and ``backfill_settles``
+    swallows the resulting error per batch — so a notebook screen would run on
+    stale settles while calling itself LIVE. The loop is patched when one is
+    already running, and the cache's newest date is compared before and after so
+    a refresh that achieved nothing is REPORTED rather than assumed.
     """
     from BT.serff.futures_data import backfill_settles
+
+    before = settle_asof(symbols)
+    try:
+        import asyncio
+        asyncio.get_running_loop()
+    except RuntimeError:
+        pass
+    except Exception:                                  # pragma: no cover
+        pass
+    else:
+        try:
+            import nest_asyncio
+            nest_asyncio.apply()
+        except Exception as exc:                       # pragma: no cover
+            return False, (f"a loop is already running and nest_asyncio is "
+                           f"unavailable ({type(exc).__name__}) — settles NOT "
+                           f"refreshed")
 
     sr3 = ["SR3" + s[3:] for s in symbols]
     zq = [f"ZQ{c}{y:02d}" for y in range(as_of.year % 100, as_of.year % 100 + 2)
           for c in "FGHJKMNQUVXZ"]
     start = as_of - datetime.timedelta(days=420)
-    backfill_settles(start, as_of, symbols=sr3 + zq, force_refresh=True,
-                     show_progress=False)
+    try:
+        backfill_settles(start, as_of, symbols=sr3 + zq, force_refresh=True,
+                         show_progress=False)
+    except Exception as exc:                           # pragma: no cover
+        return False, f"refresh raised {type(exc).__name__}: {str(exc)[:80]}"
+
+    after = settle_asof(symbols)
+    if after is None:
+        return False, "no cached settles at all after the refresh"
+    if before is not None and after <= before and before.date() < as_of:
+        return False, (f"refresh did not advance the settle cache "
+                       f"(still {after.date()}) — screening on stale forwards")
+    return True, f"settles current to {after.date()}"
 
 
 def load_context(as_of, *, history: int = 250, refresh: bool = False,
@@ -203,8 +254,11 @@ def load_context(as_of, *, history: int = 250, refresh: bool = False,
     # A live screen without fresh settles is not a stale screen, it is a BLANK
     # one: premium_surface inner-joins quotes to forwards, so a missing settle
     # silently deletes the day's quotes rather than degrading them.
+    refresh_note = ""
     if refresh or (live and refresh is not False):
-        _refresh_settles(need_symbols, want.date())
+        ok, refresh_note = _refresh_settles(need_symbols, want.date())
+        if not ok:
+            refresh_note = f"SETTLE REFRESH FAILED: {refresh_note}"
 
     def _frames(q: pd.DataFrame, ds: pd.DatetimeIndex):
         syms = sorted(q["symbol"].unique())
@@ -263,7 +317,7 @@ def load_context(as_of, *, history: int = 250, refresh: bool = False,
     return Context(as_of=want, dates=dates, surface=surface, fwd_idx=fwd_idx,
                    tree=tree, quote_dates=quote_dates, live=live,
                    fetched=fetched, settle_asof=settle_asof,
-                   requested=clamped_from)
+                   requested=clamped_from, refresh_note=refresh_note)
 
 
 def _legs_in_play(surface, fwd_idx, tree, dates, *, books, ranks) -> set:
@@ -566,6 +620,28 @@ def score_cell(ctx: Context, book: str, rank: int, *,
     )
 
 
+def richness_series(ctx: Context, book: str, rank: int
+                    ) -> Optional[Tuple[pd.DataFrame, object]]:
+    """The CURRENT holding's daily mark / fair / richness, plus the holding.
+
+    What the notebook charts. It exists so the notebook does not rebuild the
+    book itself: a chart drawn from a second, hand-rolled version of the signal
+    is a chart of a different strategy, and the whole design rule here is that
+    there is only ever one.
+    """
+    holds = fc.build_book(book, rank, ctx.dates, ctx.surface, ctx.fwd_idx,
+                          ctx.tree)
+    if not holds:
+        return None
+    cur = holds[-1]
+    df = pd.DataFrame({"mark_bp": cur.marks, "fair_bp": cur.fair})
+    df["rich_bp"] = df["mark_bp"] - df["fair_bp"]
+    df = df.dropna()
+    if df.empty:
+        return None
+    return df, cur
+
+
 def carry_state(ctx: Context, *, cost_mult: float = 1.0) -> Optional[dict]:
     """The always-on sleeve: what is held now, and when it rolls."""
     holds = fc.build_book(CARRY["book"], CARRY["rank"], ctx.dates, ctx.surface,
@@ -618,6 +694,28 @@ def screen(ctx: Context, *, books: Sequence[str] = BOOKS,
                                    "strikes not listed/marked on this date")
             out.append(idea)
     return rank_ideas(out)
+
+
+def gap_to_trigger(idea: Idea) -> float:
+    """bp of extra dislocation this cell needs before it fires; inf if n/a."""
+    if idea.state != "WATCH":
+        return float("inf")
+    v = idea.rich_bp if idea.prereg else idea.dev_bp
+    if not np.isfinite(v):
+        return float("inf")
+    return float(idea.thr_bp - abs(v))
+
+
+def closest_to_trigger(ideas: Sequence[Idea]) -> Optional[Idea]:
+    """The cell nearest to firing, by bp of gap.
+
+    One definition, used by the report and by the notebook. Two places
+    computing "closest" their own way is how a screen ends up naming different
+    cells in the same output.
+    """
+    watch = [i for i in ideas if i.state == "WATCH"
+             and np.isfinite(gap_to_trigger(i))]
+    return min(watch, key=gap_to_trigger) if watch else None
 
 
 def rank_ideas(ideas: Sequence[Idea]) -> List[Idea]:
@@ -677,6 +775,9 @@ def format_report(ctx: Context, ideas: Sequence[Idea],
     L.append(f"  screen date {ctx.as_of.date()}   history "
              f"{ctx.dates[0].date()} -> {ctx.dates[-1].date()} "
              f"({len(ctx.dates)} sessions)")
+    if ctx.refresh_note:
+        flag = "  !! " if ctx.refresh_note.startswith("SETTLE") else "  "
+        L.append(f"{flag}{ctx.refresh_note}")
     if ctx.requested is not None:
         L.append(f"  !! you asked for {ctx.requested.date()}; the newest "
                  f"session with BOTH quotes and a settle is "
@@ -771,12 +872,18 @@ def format_report(ctx: Context, ideas: Sequence[Idea],
                  "earlier --date to confirm the")
         L.append("  pipeline works before trusting a quiet screen.")
     elif not act:
-        best = next((i for i in ideas if i.state == "WATCH"), None)
         L.append("  NO TRADE. No cell clears its entry threshold.")
-        if best is not None:
-            L.append(f"  closest: {best.book} Q{best.rank} — rich "
-                     f"{best.rich_bp:+.2f}bp, dev {best.dev_bp:+.2f}bp "
-                     f"({best.gate_note})")
+        pr = next((i for i in ideas
+                   if i.prereg and i.state == "WATCH"), None)
+        if pr is not None:
+            L.append(f"  pre-registered {pr.book} Q{pr.rank}: rich "
+                     f"{pr.rich_bp:+.2f}bp — {pr.gate_note}")
+        near = closest_to_trigger(ideas)
+        if near is not None and near is not pr:
+            L.append(f"  nearest of any cell: {near.book} Q{near.rank} — "
+                     f"rich {near.rich_bp:+.2f}bp, dev {near.dev_bp:+.2f}bp "
+                     f"({near.gate_note}"
+                     f"{'' if near.prereg else ', exploratory'})")
         if carry is not None and carry["days_to_roll"] <= 5:
             L.append("  (the carry sleeve's roll above is still due)")
     else:

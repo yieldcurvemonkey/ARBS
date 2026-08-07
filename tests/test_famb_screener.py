@@ -231,6 +231,35 @@ def test_gate_note_names_the_gate_that_failed():
     assert _idea(state="ACTIONABLE").gate_note == ""
 
 
+def _ctx(**kw):
+    base = dict(
+        as_of=pd.Timestamp("2026-08-05"),
+        dates=pd.DatetimeIndex(pd.bdate_range("2026-01-05", periods=60)),
+        surface=pd.Series(dtype=float), fwd_idx=pd.Series(dtype=float),
+        tree=None, quote_dates=pd.DatetimeIndex([]), live=True, fetched=True,
+        settle_asof={})
+    base.update(kw)
+    return scr.Context(**base)
+
+
+def test_report_shouts_when_the_settle_refresh_failed():
+    """A live screen on stale forwards must say so.
+
+    Inside a Jupyter kernel the fetcher's asyncio.run cannot nest, and
+    backfill_settles swallows that per batch — so the notebook would screen on
+    week-old forwards while printing LIVE at the top.
+    """
+    txt = scr.format_report(
+        _ctx(refresh_note="SETTLE REFRESH FAILED: refresh did not advance "
+                          "the settle cache (still 2026-07-31)"),
+        [_idea(state="WATCH")], None)
+    assert "SETTLE REFRESH FAILED" in txt and "!!" in txt
+    ok = scr.format_report(_ctx(refresh_note="settles current to 2026-08-05"),
+                           [_idea(state="WATCH")], None)
+    assert "settles current to 2026-08-05" in ok
+    assert "SETTLE REFRESH FAILED" not in ok
+
+
 def test_report_shouts_when_nothing_could_be_priced():
     """The failure this screener shipped with once: silence read as a decision."""
     ctx = scr.Context(
