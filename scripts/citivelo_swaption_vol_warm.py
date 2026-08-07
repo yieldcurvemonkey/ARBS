@@ -1,0 +1,324 @@
+r"""Warm the Citi Velocity swaption vol history, then build the cube store from it.
+
+Two phases, deliberately separable, because they fail for different reasons and
+only one of them can hurt anybody.
+
+``fetch``
+    Pull the ``RATES.VOL.<ccy>`` tag grid into the :class:`CitiVeloTagCache`.
+    This is the only phase that touches Excel. It is chunked by strike offset,
+    checks the add-in's memory between chunks, and aborts cleanly at
+    ``--memory-abort-mb`` rather than pushing a 3-4 GB process over the edge -
+    the add-in's cache only ever grows and only a HUMAN restart clears it.
+``build``
+    Assemble one :class:`SwaptionCubeData` per observation date out of the cached
+    quotes and write it into the store. Pure local work: no Excel, no network.
+
+Splitting them is what makes the whole thing resumable. The tag cache is
+incremental (``missing_spans``), so a re-run of ``fetch`` asks only for what it
+does not already have, and ``build`` can run at any time against whatever has
+landed so far - including after the add-in has died.
+
+The offset groups are ordered by how much they are worth, so an abort leaves
+something usable rather than a random third of a surface:
+
+1. ``atm``       - the ATM surface alone is a complete, priceable cube
+2. ``+/-25,50``  - the liquid smile
+3. ``+/-75,100`` - the wings people actually quote
+4. ``+/-10,200`` - the tails
+
+Run from the repo root::
+
+    <env>/python.exe scripts/citivelo_swaption_vol_warm.py fetch --years 7
+    <env>/python.exe scripts/citivelo_swaption_vol_warm.py build
+    <env>/python.exe scripts/citivelo_swaption_vol_warm.py status
+"""
+
+from __future__ import annotations
+
+import argparse
+import datetime
+import logging
+import math
+import pathlib
+import sys
+import time
+from typing import Dict, List, Optional, Sequence, Tuple
+
+_REPO_ROOT = pathlib.Path(__file__).resolve().parents[1]
+if str(_REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(_REPO_ROOT))
+
+import pandas as pd  # noqa: E402
+
+_logger = logging.getLogger("citivelo_swaption_vol_warm")
+
+#: Strike-offset groups, most valuable first. See the module docstring.
+OFFSET_GROUPS: Tuple[Tuple[str, Tuple[float, ...]], ...] = (
+    ("atm", ()),
+    ("liquid", (-25.0, 25.0, -50.0, 50.0)),
+    ("wings", (-100.0, 100.0, -75.0, 75.0)),
+    ("tails", (-200.0, 200.0, -10.0, 10.0)),
+)
+
+#: Stop asking Excel for more once it is this large. The add-in's own cache grows
+#: with everything it has served and is never released; a spawned Excel cannot
+#: replace it because it would not register the CV* UDFs. Leaving headroom is the
+#: difference between "resume tomorrow" and "the user has to restart Excel".
+DEFAULT_MEMORY_ABORT_MB = 6000
+
+
+def _excel_memory_mb() -> Optional[float]:
+    """Resident size of the running Excel, or None if it cannot be read."""
+    try:
+        import subprocess
+
+        out = subprocess.run(
+            [
+                "powershell",
+                "-NoProfile",
+                "-Command",
+                "(Get-Process EXCEL -ErrorAction SilentlyContinue | "
+                "Measure-Object WorkingSet64 -Sum).Sum",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+        raw = (out.stdout or "").strip()
+        return float(raw) / 1e6 if raw else None
+    except Exception:  # noqa: BLE001 - a missing probe must not stop the warm
+        return None
+
+
+def _tags_for(currency: str, offsets: Sequence[float]) -> Dict[str, tuple]:
+    from MDP.CitiVelocityExcel.vol.cube_data import cube_tags
+
+    return cube_tags(currency=currency, offsets_bp=list(offsets))
+
+
+# ------------------------------------------------------------------ #
+#                              fetch                                 #
+# ------------------------------------------------------------------ #
+
+
+def fetch(
+    *,
+    currency: str,
+    years: float,
+    groups: Sequence[str],
+    memory_abort_mb: float,
+    freq: str = "DAILY",
+) -> int:
+    """Pull the vol tag grid into the tag cache. The only phase that uses Excel."""
+    from MDP.CitiVelocityExcel.cache import CitiVeloTagCache
+    from MDP.CitiVelocityExcel.quotes import CitiVeloQuotes
+
+    end = datetime.date.today()
+    start = end - datetime.timedelta(days=int(round(365.25 * years)))
+    cache = CitiVeloTagCache()
+    quotes = CitiVeloQuotes(cache=cache)
+
+    baseline = _excel_memory_mb()
+    _logger.warning(
+        "fetch: %s %.1fy (%s .. %s); Excel at %s MB, abort at %.0f MB",
+        currency, years, start, end,
+        f"{baseline:.0f}" if baseline else "unknown",
+        memory_abort_mb,
+    )
+
+    done, aborted = [], False
+    try:
+        for name, offsets in OFFSET_GROUPS:
+            if groups and name not in groups:
+                continue
+            mem = _excel_memory_mb()
+            if mem is not None and mem >= memory_abort_mb:
+                _logger.warning(
+                    "fetch: ABORTING before group %r - Excel is at %.0f MB (limit %.0f). "
+                    "Everything already fetched is cached and the next run resumes here.",
+                    name, mem, memory_abort_mb,
+                )
+                aborted = True
+                break
+
+            # cube_tags returns ATM + the requested offsets; for a non-ATM group
+            # drop the ATM tags, which the 'atm' group already covers.
+            tag_map = _tags_for(currency, offsets)
+            tags = [t for t, meta in tag_map.items() if name == "atm" or meta[0] == "OTM"]
+            if not tags:
+                continue
+
+            t0 = time.time()
+            _logger.warning(
+                "fetch: group %r - %d tags, ~%d CVTSHIST call(s), Excel at %s MB",
+                name, len(tags), math.ceil(len(tags) / 44),
+                f"{mem:.0f}" if mem else "unknown",
+            )
+            frame = quotes.frame(tags, freq, start=start, end=end)
+            served = 0 if frame is None or frame.empty else int(frame.notna().any().sum())
+            after = _excel_memory_mb()
+            _logger.warning(
+                "fetch: group %r DONE - %d/%d tags served, %s rows, %.0fs, Excel %s MB (%s)",
+                name, served, len(tags),
+                0 if frame is None or frame.empty else len(frame),
+                time.time() - t0,
+                f"{after:.0f}" if after else "unknown",
+                f"{after - mem:+.0f} MB" if (after and mem) else "delta unknown",
+            )
+            done.append(name)
+    finally:
+        try:
+            quotes.close()
+        except Exception:  # noqa: BLE001
+            pass
+
+    _logger.warning("fetch: groups completed %s%s", done, " (ABORTED early)" if aborted else "")
+    return 0 if done else 1
+
+
+# ------------------------------------------------------------------ #
+#                              build                                 #
+# ------------------------------------------------------------------ #
+
+
+def build(
+    *,
+    currency: str,
+    citi_index: str,
+    overwrite: bool,
+    max_days: Optional[int] = None,
+    freq: str = "DAILY",
+) -> int:
+    """Assemble one cube per observation date from the CACHE. No Excel, no network."""
+    from Caching.swaption_cube_store import SwaptionCubeStore, asset_for
+    from MDP.CitiVelocityExcel.cache import CitiVeloTagCache
+    from MDP.CitiVelocityExcel.vol.cube_data import (
+        DEFAULT_OFFSETS_BP,
+        RaggedCubeError,
+        cube_from_quotes,
+    )
+
+    cache = CitiVeloTagCache()
+    tag_map = _tags_for(currency, list(DEFAULT_OFFSETS_BP))
+
+    # Read every cached tag once; a date is buildable when its row is complete
+    # enough for cube_from_quotes(strict=False) to keep a rectangle.
+    series: Dict[str, pd.Series] = {}
+    for tag in tag_map:
+        s = cache.read(tag, freq)
+        if s is not None and not s.empty:
+            series[tag] = s
+    if not series:
+        _logger.error("build: no RATES.VOL tags are cached. Run the fetch phase first.")
+        return 1
+
+    frame = pd.DataFrame(series).sort_index()
+    store = SwaptionCubeStore.default()
+    asset = asset_for(currency)
+    _logger.warning(
+        "build: %d cached tags, %d dates (%s .. %s) -> asset %s",
+        frame.shape[1], len(frame), frame.index.min().date(), frame.index.max().date(), asset,
+    )
+
+    written = skipped = failed = 0
+    dates = list(frame.index)
+    if max_days:
+        dates = dates[-int(max_days):]
+    for stamp in dates:
+        as_of = stamp.date() if hasattr(stamp, "date") else stamp
+        if not overwrite and store.has_day(asset, as_of):
+            skipped += 1
+            continue
+        row = frame.loc[stamp].dropna()
+        if row.empty:
+            continue
+        try:
+            cube = cube_from_quotes(
+                quotes=row.to_dict(),
+                currency=currency,
+                as_of=as_of,
+                offsets_bp=list(DEFAULT_OFFSETS_BP),
+                served_unit="bp",
+                strict=False,
+                source=f"citivelo_excel_warm/{freq}",
+            )
+        except (RaggedCubeError, ValueError, KeyError) as exc:
+            # A day with too few served nodes is a real gap, not an error to
+            # paper over. Skip it and say so; the store stays honest about which
+            # days exist.
+            _logger.info("build: %s unbuildable (%s: %s)", as_of, type(exc).__name__, exc)
+            failed += 1
+            continue
+        store.write_day(asset, as_of, cube, citi_index=citi_index, overwrite=overwrite)
+        written += 1
+        if written % 100 == 0:
+            _logger.warning("build: %d written, %d skipped, %d unbuildable", written, skipped, failed)
+
+    _logger.warning(
+        "build: DONE - %d written, %d already present, %d unbuildable", written, skipped, failed
+    )
+    return 0
+
+
+def status(*, currency: str) -> int:
+    """What is in the tag cache and what is in the store."""
+    from Caching.swaption_cube_store import SwaptionCubeStore, asset_for
+    from MDP.CitiVelocityExcel.cache import CitiVeloTagCache
+    from MDP.CitiVelocityExcel.vol.cube_data import DEFAULT_OFFSETS_BP
+
+    cache = CitiVeloTagCache()
+    tag_map = _tags_for(currency, list(DEFAULT_OFFSETS_BP))
+    cached = [t for t in tag_map if cache.read(t, "DAILY") is not None]
+    print(f"tag cache : {len(cached)}/{len(tag_map)} {currency} vol tags")
+    if cached:
+        cov = cache.coverage(cached[0], "DAILY")
+        print(f"            sample coverage: {cov}")
+
+    store = SwaptionCubeStore.default()
+    asset = asset_for(currency)
+    days = store.available_dates(asset)
+    print(f"cube store: asset {asset}, {len(days)} day(s)")
+    if days:
+        print(f"            {days[0]} .. {days[-1]}")
+    print(f"            base_dir {store.base_dir}")
+    return 0
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__ or "")
+    parser.add_argument("phase", choices=["fetch", "build", "status"])
+    parser.add_argument("--currency", default="USD")
+    parser.add_argument("--citi-index", default="USD_SOFR")
+    parser.add_argument("--years", type=float, default=7.0)
+    parser.add_argument(
+        "--groups", default="", help="comma-separated subset of " + ",".join(g for g, _ in OFFSET_GROUPS)
+    )
+    parser.add_argument("--memory-abort-mb", type=float, default=DEFAULT_MEMORY_ABORT_MB)
+    parser.add_argument("--overwrite", action="store_true")
+    parser.add_argument("--max-days", type=int, default=None)
+    args = parser.parse_args()
+
+    logging.basicConfig(
+        level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s", stream=sys.stdout
+    )
+    groups = [g.strip() for g in args.groups.split(",") if g.strip()]
+
+    if args.phase == "fetch":
+        return fetch(
+            currency=args.currency,
+            years=args.years,
+            groups=groups,
+            memory_abort_mb=args.memory_abort_mb,
+        )
+    if args.phase == "build":
+        return build(
+            currency=args.currency,
+            citi_index=args.citi_index,
+            overwrite=args.overwrite,
+            max_days=args.max_days,
+        )
+    return status(currency=args.currency)
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
