@@ -1,0 +1,86 @@
+{
+ "session_windows": {
+  "AUD_AONIA": null,
+  "CAD_CORRA": null,
+  "CHF_SARON": null,
+  "DKK_TNDKK": null,
+  "EUR_EONIA": null,
+  "EUR_EUROSTR": null,
+  "GBP_SONIA": null,
+  "ILS_SHIR": null,
+  "JPY_TONAR": null,
+  "JPY_TONAR_JSCC": null,
+  "JPY_TONAR_LCH": null,
+  "MXN_T_FONDEO": null,
+  "NOK_NOWA": null,
+  "NZD_NZIONA": null,
+  "SEK_STINA": null,
+  "SGD_SORA": null,
+  "THB_THOR": null,
+  "USD_FEDFUND": null,
+  "USD_SOFR": null,
+  "ZAR_ZARONIA": null
+ },
+ "mi01_grids": {
+  "USD_SOFR": {
+   "skipped": "no HOURLY data, so no session window to aim at"
+  },
+  "AUD_AONIA": {
+   "skipped": "no HOURLY data, so no session window to aim at"
+  },
+  "CAD_CORRA": {
+   "skipped": "no HOURLY data, so no session window to aim at"
+  },
+  "CHF_SARON": {
+   "skipped": "no HOURLY data, so no session window to aim at"
+  },
+  "DKK_TNDKK": {
+   "skipped": "no HOURLY data, so no session window to aim at"
+  },
+  "EUR_EONIA": {
+   "skipped": "no HOURLY data, so no session window to aim at"
+  },
+  "EUR_EUROSTR": {
+   "skipped": "no HOURLY data, so no session window to aim at"
+  },
+  "GBP_SONIA": {
+   "skipped": "no HOURLY data, so no session window to aim at"
+  },
+  "ILS_SHIR": {
+   "skipped": "no HOURLY data, so no session window to aim at"
+  },
+  "JPY_TONAR": {
+   "skipped": "no HOURLY data, so no session window to aim at"
+  },
+  "JPY_TONAR_JSCC": {
+   "skipped": "no HOURLY data, so no session window to aim at"
+  },
+  "JPY_TONAR_LCH": {
+   "skipped": "no HOURLY data, so no session window to aim at"
+  },
+  "MXN_T_FONDEO": {
+   "skipped": "no HOURLY data, so no session window to aim at"
+  },
+  "NOK_NOWA": {
+   "skipped": "no HOURLY data, so no session window to aim at"
+  },
+  "NZD_NZIONA": {
+   "skipped": "no HOURLY data, so no session window to aim at"
+  },
+  "SEK_STINA": {
+   "skipped": "no HOURLY data, so no session window to aim at"
+  },
+  "SGD_SORA": {
+   "skipped": "no HOURLY data, so no session window to aim at"
+  },
+  "THB_THOR": {
+   "skipped": "no HOURLY data, so no session window to aim at"
+  },
+  "USD_FEDFUND": {
+   "skipped": "no HOURLY data, so no session window to aim at"
+  },
+  "ZAR_ZARONIA": {
+   "skipped": "no HOURLY data, so no session window to aim at"
+  }
+ }
+}

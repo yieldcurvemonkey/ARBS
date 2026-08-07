@@ -7,6 +7,7 @@ import threading
 import time
 import logging
 import re
+import zoneinfo
 from typing import Any, Dict, Iterable, List, Literal, Optional, Sequence, Union
 
 import pandas as pd
@@ -24,6 +25,29 @@ from pandas.tseries.offsets import CustomBusinessDay as _CBD
 # SOFR for date D publishes on the next US business day (~08:00 ET).
 _FIXING_PUBLISH_OFFSET = _CBD(calendar=_USFedCal())
 
+_citivelo_excel_logger = logging.getLogger("MDP.IRSwaps.citivelo_excel")
+
+# Source tokens for the Citi Velocity Excel add-in source (all 20 OIS curves, in
+# EOD / intraday / live). Spelled here rather than imported so that importing
+# IRSwapsMDP does not drag in the whole CitiVelocityExcel package; a test asserts
+# these agree with MDP.IRSwaps.CITIVELO_EXCEL.SOURCE_TOKENS.
+#
+# NOT "CITIVELO"/"CITI_VELO"/"CITIVELOCITY": those name the older workbook-based
+# USD-SOFR-only source that ~930 warmed CurveStore partitions and the dealer-ladder
+# study depend on, and nothing in this source touches it.
+CITIVELO_EXCEL_RL_TOKENS = ("CITIVELO_EXCEL", "CITIVELO-EXCEL", "CITIVELO_EXCEL-RL", "CITIVELO_EXCEL_RL")
+CITIVELO_EXCEL_QL_TOKENS = ("CITIVELO_EXCEL-QL", "CITIVELO_EXCEL_QL")
+CITIVELO_EXCEL_SOURCE_TOKENS = CITIVELO_EXCEL_RL_TOKENS + CITIVELO_EXCEL_QL_TOKENS
+
+# How far the newest published fixing may sit behind a curve's reference date
+# before the fixings are withheld entirely. A fixing for date D publishes on D+1,
+# so a one-day gap is normal and a long weekend is three; beyond that the series
+# is not describing the period the swap accrued over.
+_CITIVELO_EXCEL_MAX_FIXING_GAP = datetime.timedelta(days=5)
+
+#: The zone the add-in stamps every curve in, whatever the currency.
+_CITIVELO_EXCEL_WIRE_TZ = "America/New_York"
+
 
 class IRSwapsMDP(MarketDataProvider[_GenericPricable]):
     _DEFAULT_GRID_FWDS: tuple[str, ...] = ("Spot", "1M", "3M", "6M", "1Y", "2Y", "5Y", "7Y", "10Y")
@@ -38,6 +62,14 @@ class IRSwapsMDP(MarketDataProvider[_GenericPricable]):
         "lock": threading.Lock(),
     }
     _CITIVELO_STATE: Dict[str, Any] = {
+        "fetchers": {},
+        "lock": threading.RLock(),
+    }
+    #: Separate from _CITIVELO_STATE on purpose. That one belongs to the older
+    #: workbook-based USD-SOFR source, which ~930 warmed CurveStore partitions and
+    #: the dealer-ladder study depend on; citivelo_excel is a different source with
+    #: a different transport and must not share its cache keys.
+    _CITIVELO_EXCEL_STATE: Dict[str, Any] = {
         "fetchers": {},
         "lock": threading.RLock(),
     }
@@ -138,6 +170,27 @@ class IRSwapsMDP(MarketDataProvider[_GenericPricable]):
                 from MDP.IRSwaps.CITI_VELOCITY_INTRADAY import CitiVelocityIntradayFetcher
 
                 fetcher = CitiVelocityIntradayFetcher(workbook_path, curve_id=curve_id)
+                S["fetchers"][key] = fetcher
+            return fetcher
+
+    def _get_citivelo_excel_fetcher(self, **kwargs: Any) -> Any:
+        """Lazily build + cache the ``citivelo_excel`` curve fetcher, per option set.
+
+        Cached because the fetcher owns the seam to the tag cache and, when a
+        request is not fully cached, to the COM client. Reconnecting per request
+        would open a scratch workbook in the user's Excel every time - and Excel
+        is a single shared mutable resource whose write discipline is the whole
+        reason that client exists.
+        """
+        S = IRSwapsMDP._CITIVELO_EXCEL_STATE
+        key = tuple(sorted((k, repr(v)) for k, v in kwargs.items()))
+        with S["lock"]:
+            fetcher = S["fetchers"].get(key)
+            if fetcher is None:
+                from MDP.IRSwaps.CITIVELO_EXCEL import CitiVeloExcelCurveFetcher, register
+
+                register()
+                fetcher = CitiVeloExcelCurveFetcher(**kwargs)
                 S["fetchers"][key] = fetcher
             return fetcher
 
@@ -2666,8 +2719,393 @@ class IRSwapsMDP(MarketDataProvider[_GenericPricable]):
                 f"timestamp={timestamp!r}. Run the poller (scripts/eris_live_curve_service.py)."
             )
 
+        elif self.source.upper() in CITIVELO_EXCEL_SOURCE_TOKENS:
+            # Citi Velocity, all 20 OIS curves, in three time modes. NOTE there is
+            # no `assert curve_name == "USD-SOFR-1D"` here: the curve name resolves
+            # through a 20-entry map to a Citi index token, and that is the whole
+            # point of this source. See MDP/IRSwaps/CITIVELO_EXCEL/curve_names.py.
+            return self._build_citivelo_excel_curve(
+                curve_name=curve_name, timestamp=timestamp, kwargs=kwargs
+            )
+
         else:
             raise NotImplementedError(f"Curve Build '{self.source}' does not exist")
+
+    def _build_citivelo_excel_curve(
+        self,
+        *,
+        curve_name: str,
+        timestamp: Union[datetime.datetime, datetime.date, Literal["live"]],
+        kwargs: Dict[str, Any],
+    ) -> "_IRSwapGenericCurve":
+        """One Citi Velocity curve, in whichever of the three modes ``timestamp`` means.
+
+        ``timestamp`` dispatch (see ``CITIVELO_EXCEL/timestamps.py`` for the full
+        contract and the evidence behind the timezone):
+
+        * ``"live"`` -> the newest complete one-minute grid, with its lag reported;
+        * a ``datetime.datetime`` -> intraday at that instant. Tz-aware is
+          converted to Citi's zone; naive is localised to it with a warning, which
+          matches what the sibling ``citivelo`` and ``eris_live_intraday`` sources
+          already do;
+        * a ``datetime.date`` -> that date's close.
+
+        The returned ``meta_data["timestamp"]`` is **tz-aware** in
+        ``America/New_York``. That differs from the older ``citivelo`` source,
+        which hands back a naive ET datetime; it is deliberate, because a naive
+        stamp is exactly what lets a one-hour error read as a real market move.
+        """
+        from MDP.IRSwaps.CITIVELO_EXCEL import CitiVeloExcelCurveFetcher  # noqa: F401
+        from MDP.IRSwaps.CITIVELO_EXCEL import citi_index_for_curve_name
+
+        backend = "ql" if self.source.upper() in CITIVELO_EXCEL_QL_TOKENS else "rl"
+
+        # A warmed EOD day reconstructs from stored discount factors instead of
+        # re-reading 44 parquet files and re-solving. Only for rateslib (the store
+        # holds an rl.Curve's nodes) and only for an end-of-day request, because a
+        # live or intraday one is asking for something the store cannot contain.
+        _store_eligible = (
+            backend == "rl"
+            and not kwargs.get("force_refresh", kwargs.get("ignore_cache", False))
+            and not kwargs.get("no_curve_store", False)
+        )
+        # Route on the RESOLVED mode, never on isinstance. pd.Timestamp subclasses
+        # datetime.datetime subclasses datetime.date, so an isinstance ladder gets
+        # this wrong in both directions: testing date first swallows every
+        # intraday request, and testing datetime first swallows
+        # pd.Timestamp("2026-08-05") - a midnight stamp, which is the common
+        # spelling of "that day" and which resolve_request reads as EOD. The
+        # second case is worse than it looks: the minute loader declines it, and
+        # an elif chain then never reaches the EOD store at all.
+        if _store_eligible:
+            from MDP.IRSwaps.CITIVELO_EXCEL.timestamps import resolve_request
+
+            try:
+                _mode = resolve_request(timestamp)
+            except Exception:  # noqa: BLE001 - let the normal path report it
+                _mode = None
+            if _mode is not None and _mode.mode == "intraday":
+                hit = self._load_citivelo_excel_minute_store_point(
+                    curve_name=curve_name, timestamp=timestamp
+                )
+                if hit is not None:
+                    return hit
+            elif _mode is not None and _mode.mode == "eod" and _mode.eod_date is not None:
+                hit = self._load_citivelo_excel_curve_store_point(
+                    curve_name=curve_name, trading_date=_mode.eod_date
+                )
+                if hit is not None:
+                    return hit
+
+        fetcher_kwargs = {
+            k: kwargs[k]
+            for k in ("offline", "method", "max_staleness", "max_constituent_spread", "min_tenors")
+            if k in kwargs
+        }
+        fetcher = self._get_citivelo_excel_fetcher(**fetcher_kwargs)
+
+        snapshot = fetcher.snapshot(
+            curve_name,
+            timestamp,
+            strict_tz=kwargs.get("strict_tz"),
+            force_refresh=bool(kwargs.get("force_refresh", kwargs.get("ignore_cache", False))),
+            min_tenors=kwargs.get("min_tenors"),
+        )
+        build_kwargs = {
+            k: kwargs[k]
+            for k in ("interpolation", "spline_start_tenor", "extrapolation_years", "max_reprice_error_bp")
+            if k in kwargs
+        }
+
+        curve_id = f"{self.source.upper()}-{curve_name}-{snapshot.snapshot_at.isoformat()}"
+        meta = {
+            "timestamp": snapshot.snapshot_at,
+            "id": curve_id,
+            "source": "citivelo_excel",
+            "backend": backend,
+            **snapshot.to_meta(),
+        }
+
+        if backend == "ql":
+            import QuantLib as ql
+
+            from Query.IRSwaps.backends.quantlib.QLIRSwapCurve import QLIRSwapCurve
+
+            qlc = fetcher.build_ql(snapshot, **build_kwargs)
+            # QuantLib instruments resolve their spot date off the GLOBAL
+            # evaluation date, and QLIRSwapCurve's pricer builds them outside any
+            # pinned block. Without this, a curve for 2026-08-05 would be priced
+            # with today's spot date and every rate would be quietly wrong. The
+            # curve object itself is absolute and does not observe this setting;
+            # the instruments built against it do.
+            ql.Settings.instance().evaluationDate = ql.Date(
+                snapshot.reference_date.day,
+                snapshot.reference_date.month,
+                snapshot.reference_date.year,
+            )
+            meta["ql_evaluation_date"] = snapshot.reference_date.isoformat()
+            meta["max_reprice_error_bp"] = getattr(qlc, "max_reprice_error_bp", None)
+            return QLIRSwapCurve(
+                ql_curve_id=curve_name,
+                ql_curve_handle=ql.YieldTermStructureHandle(qlc.curve),
+                ql_curve_index=qlc.index,
+                meta_data=meta,
+            )
+
+        from Query.IRSwaps.backends.rateslib.RLIRSwapCurve import RLIRSwapCurve
+
+        rlc = fetcher.build_rl(snapshot, **build_kwargs)
+        meta["max_reprice_error_bp"] = (getattr(rlc, "meta", {}) or {}).get("max_reprice_error_bp")
+        meta["provenance"] = (getattr(rlc, "meta", {}) or {}).get("provenance")
+        return RLIRSwapCurve(
+            rl_curve_id=curve_name,
+            rl_curve_handle=rlc.rl_pricing_curve,
+            fixings=self._citivelo_excel_fixings(curve_name=curve_name, snapshot=snapshot),
+            meta_data=meta,
+        )
+
+    def _load_citivelo_excel_curve_store_point(
+        self, *, curve_name: str, trading_date: datetime.date
+    ) -> Optional["_IRSwapGenericCurve"]:
+        """A warmed EOD curve from the CurveStore, or ``None`` for a cold day.
+
+        Asset ``<curve_name>-CITIVELOEXCEL``, written by
+        ``scripts/citivelo_excel_warm.py``. Deliberately a DIFFERENT key from the
+        older workbook source's ``USD-SOFR-1D-CITIVELO`` and from the streaming
+        daemon's ``-CITIVELOSTREAM``: the three are built from different data by
+        different code, and this repo has a recorded incident where two variants
+        shared one key and which answer you got depended on cache state.
+
+        Returns ``None`` rather than raising on any miss or malformed row, so a
+        cold or damaged store degrades to the normal build path instead of taking
+        the request down. That is the one place a silent fallback is right - the
+        fallback recomputes the same curve from the same quotes.
+        """
+        from MDP.IRSwaps.CITIVELO_EXCEL.fixings import fixings_for
+        from MDP.IRSwaps.CITIVELO_EXCEL.warm import asset_for
+        from MDP.IRSwaps.CITIVELO_EXCEL.curve_names import citi_index_for_curve_name
+        from MDP.IRSwaps.CITIVELO_EXCEL.timestamps import from_wire_naive
+        from Query.IRSwaps.backends.rateslib.RLIRSwapCurve import RLIRSwapCurve
+
+        asset = asset_for(curve_name)
+        try:
+            store = self._get_curve_store()
+            if not store.has_day(asset, trading_date):
+                return None
+            raw = store.read_raw_day(asset, trading_date)
+            if raw is None or getattr(raw, "empty", True):
+                return None
+            curves = store.reconstruct_curves_batch(raw.iloc[[-1]], cfg=None, max_workers=1)
+            if not curves:
+                return None
+            rl_curve_handle = next(iter(curves.values()))
+        except Exception as exc:  # noqa: BLE001 - a store miss must never be fatal
+            _citivelo_excel_logger.debug(
+                "citivelo_excel: CurveStore miss for %s %s (%s); building from quotes.",
+                asset, trading_date, exc,
+            )
+            return None
+
+        citi_index = citi_index_for_curve_name(curve_name)
+        stamp = from_wire_naive(datetime.datetime.combine(trading_date, datetime.time(17, 0)))
+        result = fixings_for(curve_name, citi_index, reference_date=trading_date)
+        gap = result.gap_to(trading_date)
+        fixings = result.series
+        if result.empty or (gap is not None and gap > _CITIVELO_EXCEL_MAX_FIXING_GAP):
+            fixings = pd.Series(dtype="float64")
+
+        curve_id = f"{self.source.upper()}-{curve_name}-{stamp.isoformat()}"
+        return RLIRSwapCurve(
+            rl_curve_id=curve_name,
+            rl_curve_handle=rl_curve_handle,
+            fixings=fixings,
+            meta_data={
+                "timestamp": stamp,
+                "id": curve_id,
+                "source": "citivelo_excel",
+                "backend": "rl",
+                "mode": "eod",
+                "from_curve_store": True,
+                "asset": asset,
+                "citi_index": citi_index,
+                "reference_date": trading_date.isoformat(),
+                "wire_timezone": stamp.tzinfo.key if hasattr(stamp.tzinfo, "key") else str(stamp.tzinfo),
+            },
+        )
+
+    def _load_citivelo_excel_minute_store_point(
+        self, *, curve_name: str, timestamp: datetime.datetime
+    ) -> Optional["_IRSwapGenericCurve"]:
+        """The warmed minute curve nearest ``timestamp``, or ``None``.
+
+        Asset ``<curve_name>-CITIVELOEXCELMIN``, written by
+        ``scripts/citivelo_excel_intraday_warm.py`` - one curve per published
+        minute, built from windowed ``CVTSHIST`` pulls. A fourth distinct key,
+        for the same reason the other three are distinct: an EOD ``write_day``
+        replaces a whole day partition, so sharing the ``-CITIVELOEXCEL`` asset
+        would let an EOD re-warm delete that day's ~1,100 minute curves.
+
+        Serving intraday from here rather than from Excel matters beyond speed:
+        it is the only path that works when Excel is closed, logged out, or busy,
+        and it is reproducible - the same request returns the same curve.
+
+        ``None`` on any miss, so a cold store degrades to the live Excel build.
+        """
+        from MDP.IRSwaps.CITIVELO_EXCEL.curve_names import (
+            citi_index_for_curve_name,
+            entry_for_curve_name,
+        )
+        from MDP.IRSwaps.CITIVELO_EXCEL.fixings import fixings_for
+        from MDP.IRSwaps.CITIVELO_EXCEL.timestamps import from_wire_naive, resolve_request
+        from Query.IRSwaps.backends.rateslib.RLIRSwapCurve import RLIRSwapCurve
+
+        asset = f"{curve_name}-CITIVELOEXCELMIN"
+        entry = entry_for_curve_name(curve_name)
+        try:
+            resolved = resolve_request(timestamp)
+            if resolved.mode != "intraday" or resolved.wire_instant is None:
+                return None
+            wanted = from_wire_naive(resolved.wire_instant)
+            local_zone = zoneinfo.ZoneInfo(entry.local_timezone)
+        except Exception:  # noqa: BLE001 - fall through to the live Excel path
+            return None
+
+        # The store partitions by the curve's LOCAL trading date. Check the
+        # neighbouring days too: a session running to 19:59 local straddles the
+        # UTC date boundary, so the minute asked for can sit under either.
+        local_date = wanted.astimezone(local_zone).date()
+        try:
+            store = self._get_curve_store()
+            frames = []
+            for offset in (0, -1, 1):
+                day = local_date + datetime.timedelta(days=offset)
+                if not store.has_day(asset, day):
+                    continue
+                raw = store.read_raw_day(asset, day)
+                if raw is not None and not getattr(raw, "empty", True):
+                    frames.append(raw)
+            if not frames:
+                return None
+            raw = pd.concat(frames) if len(frames) > 1 else frames[0]
+            stamps = pd.to_datetime(raw["timestamp_utc"], utc=True)
+            position = int((stamps - pd.Timestamp(wanted).tz_convert("UTC")).abs().values.argmin())
+            row = raw.iloc[[position]]
+            curves = store.reconstruct_curves_batch(row, cfg=None, max_workers=1)
+            if not curves:
+                return None
+            rl_curve_handle = next(iter(curves.values()))
+            actual = stamps.iloc[position].to_pydatetime()
+        except Exception as exc:  # noqa: BLE001 - a store miss must never be fatal
+            _citivelo_excel_logger.debug(
+                "citivelo_excel: minute-store miss for %s %s (%s); building from quotes.",
+                asset, timestamp, exc,
+            )
+            return None
+
+        lag = abs((actual - wanted).total_seconds())
+        citi_index = citi_index_for_curve_name(curve_name)
+        reference_date = actual.astimezone(local_zone).date()
+        result = fixings_for(curve_name, citi_index, reference_date=reference_date)
+        gap = result.gap_to(reference_date)
+        fixings = result.series
+        if result.empty or (gap is not None and gap > _CITIVELO_EXCEL_MAX_FIXING_GAP):
+            fixings = pd.Series(dtype="float64")
+
+        stamp = actual.astimezone(zoneinfo.ZoneInfo(_CITIVELO_EXCEL_WIRE_TZ))
+        return RLIRSwapCurve(
+            rl_curve_id=curve_name,
+            rl_curve_handle=rl_curve_handle,
+            fixings=fixings,
+            meta_data={
+                "timestamp": stamp,
+                "id": f"{self.source.upper()}-{curve_name}-{stamp.isoformat()}",
+                "source": "citivelo_excel",
+                "backend": "rl",
+                "mode": "intraday",
+                "from_curve_store": True,
+                "asset": asset,
+                "citi_index": citi_index,
+                "requested": wanted.isoformat(),
+                # How far the served minute sits from the one asked for. A caller
+                # holding this to a tolerance needs the number, not a promise.
+                "snapshot_lag_seconds": lag,
+                "reference_date": reference_date.isoformat(),
+            },
+        )
+
+    def _citivelo_excel_fixings(
+        self, *, curve_name: str, snapshot: Any, quotes: Any = None
+    ) -> pd.Series:
+        """Published overnight fixings for the float leg, in PERCENT.
+
+        Twelve of the twenty curves now get a real history, from Citi's own
+        ``RATES.MONEY_MARKETS.<ccy>.<index>.ON`` (21 years, back to 2005-01-03).
+        That is trusted because it was checked against an independent source on
+        the one currency where this repo has one: Citi's USD SOFR series and the
+        New York Fed's agree to **0.000000 bp across 2,056 overlapping business
+        days**. USD additionally prefers the Fed's, not because the values differ
+        but because Citi's tail was six weeks stale when measured.
+
+        The remaining eight curves have no source at all and still get an empty
+        series - see ``CITIVELO_EXCEL/fixings.py``. That is correct for everything
+        par or forward-starting, and a seasoned swap on them still raises, which is
+        better than a number nobody published.
+
+        Never raises: fixings are optional for the pricing this source is built
+        for, and a fixings outage must not take the curve down with it.
+        """
+        from MDP.IRSwaps.CITIVELO_EXCEL.fixings import fixings_for
+
+        try:
+            result = fixings_for(
+                curve_name,
+                snapshot.citi_index,
+                reference_date=snapshot.reference_date,
+                quotes=quotes,
+            )
+        except Exception as exc:  # noqa: BLE001
+            _citivelo_excel_logger.warning(
+                "citivelo_excel: fixings lookup failed for %s (%s: %s); serving the curve with an "
+                "empty fixings series. Par and forward-starting rates are unaffected; a seasoned "
+                "swap will raise.",
+                curve_name, type(exc).__name__, exc,
+            )
+            return pd.Series(dtype="float64")
+
+        if result.empty:
+            _citivelo_excel_logger.debug(
+                "citivelo_excel: no published fixings for %s - %s", curve_name, result.note
+            )
+            return result.series
+
+        gap = result.gap_to(snapshot.reference_date)
+        if gap is not None and gap > _CITIVELO_EXCEL_MAX_FIXING_GAP:
+            # A stale TAIL is far more dangerous than a hole. Measured
+            # 2026-08-07: rateslib RAISES on a missing fixing in the middle of an
+            # elapsed period, but when the series merely stops early it forecasts
+            # the remaining days off a curve that does not extend back that far -
+            # CAD-CORRA, whose published fixings stopped 99 days before the curve
+            # date, priced a seasoned 5Y at -27.26%. A plausible-looking number is
+            # the worst outcome available, so the series is withheld entirely and
+            # rateslib is allowed to raise instead.
+            _citivelo_excel_logger.warning(
+                "citivelo_excel: %s published fixings stop at %s, %d days before the curve's "
+                "reference date %s (source: %s) - WITHHOLDING them. Par and forward-starting "
+                "pricing is unaffected and unchanged; a seasoned swap will now raise rather than "
+                "silently forecast the missing days off the curve (measured: that produced "
+                "-27.26%% on CAD). Pass the fixings explicitly if you have a better source.",
+                curve_name, result.last_date, gap.days, snapshot.reference_date, result.source,
+            )
+            return pd.Series(dtype="float64")
+
+        filled = result.contributions.get("calendar_filled", 0)
+        if filled:
+            _citivelo_excel_logger.debug(
+                "citivelo_excel: %s carried %d previous fixing(s) forward onto business days the "
+                "publisher skipped (~0.0012 bp on a seasoned 5Y, per the repo's own measurement).",
+                curve_name, filled,
+            )
+        return result.series
 
     def bulk_get_data(self, request: dict) -> Dict[Union[datetime.date, datetime.datetime], _IRSwapGenericCurve]:
         if not isinstance(request, dict):
