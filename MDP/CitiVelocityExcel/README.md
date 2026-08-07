@@ -746,18 +746,35 @@ the per-date path now runs first, and bulk only if it finds nothing.
 **3. The fixings, and this one is upstream.** Even on the warmed-store path,
 `IRSwapsMDP._load_citivelo_excel_curve_store_point` calls `fixings_for()` through
 an **online** `CitiVeloQuotes`, so the curve comes off disk and the published
-overnight fixings still go looking for the add-in. For USD-SOFR there is no
-fallback: `CITIVELO_EXCEL.official_sources.OFFICIAL_SOURCES` covers EFFR, NOWA,
-ZARONIA and Fondeo — **not SOFR** — so Citi is the only fixing source.
+overnight fixings can still go looking for the add-in on a cold tag cache.
 
-That is deliberately **not** changed here. The one-line shape is to pass
-`quotes=CitiVeloQuotes(offline=True)` on the store path, and the call site
-already tolerates an empty series (`if result.empty ... fixings = pd.Series()`).
-But empty SOFR fixings break `rl.IRS` construction, and whether that trade is
-acceptable to the curve source's other consumers is its owner's call, not this
-package's. What this package does instead is **fail readably**: the error now
-names the source, the exception, and the fact that it was the fixings rather than
-the curve that went looking.
+How safe the obvious fix (`quotes=CitiVeloQuotes(offline=True)`) is depends
+entirely on the currency, and it is worth measuring rather than assuming.
+`official_fixings()` has **two** routes: `USD-SOFR-1D` goes through
+`MDP.IRSwaps.fixings_cache` (the New York Fed), and everything else goes to
+`CITIVELO_EXCEL.official_sources.OFFICIAL_SOURCES` (EFFR, NOWA, ZARONIA, Fondeo).
+Measured 2026-08-07, with Citi cut off entirely:
+
+| curve | independent rows | offline total | source |
+|---|---|---|---|
+| USD-SOFR-1D | **2,085** (NY Fed, from 2018-04-02) | 5,456 | `official+citi` |
+| USD-FEDFUNDS-1D | **6,558** (EFFR publisher) | 6,557 | `official` |
+| EUR-ESTR-1D | **0** | 5,571 | `citi_money_markets` |
+| GBP-SONIA-1D | **0** | 5,460 | `citi_money_markets` |
+| CAD-CORRA-1D | **0** | 5,331 | `citi_money_markets` |
+
+So the two USD curves would survive Citi being unavailable; **EUR, GBP and CAD
+have no independent source at all** and survive today only because the tag cache
+is warm. That asymmetry, not a blanket risk, is the reason this is left to the
+curve source's owner. What this package does instead is **fail readably**: the
+error names the source, the exception, and the fact that it was the fixings
+rather than the curve that went looking.
+
+One thing that table shows in passing: **CAD-CORRA's Citi fixing tail ends
+2026-04-29.** Any CAD curve dated more than five days after that has its fixings
+withheld by design (a stale tail with a hole was measured at -27.26%). Par and
+forward-starting pricing is unaffected — a swaption underlying never consumes
+them — but a seasoned CAD swap will raise rather than forecast off the curve.
 
 Numerically none of this matters — the store path and the rebuild produced an
 identical 1Yx10Y forward (4.321999%). It is a provenance and etiquette question.

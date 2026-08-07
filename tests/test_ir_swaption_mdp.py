@@ -113,8 +113,8 @@ def test_single_and_bulk_shapes_provider_engine_dispatch_and_cache(monkeypatch):
         return object()
 
     monkeypatch.setattr(mdp._curve_mdp, "bulk_get_data", _bulk_curve)
-    mdp.VOL_PROVIDERS["TESTPROV"] = _provider
-    mdp.ENGINE_FACTORIES["TESTENG"] = _engine
+    monkeypatch.setitem(IRSwaptionMDP.VOL_PROVIDERS, "TESTPROV", _provider)
+    monkeypatch.setitem(IRSwaptionMDP.ENGINE_FACTORIES, "TESTENG", _engine)
 
     d1 = dt.date(2026, 3, 4)
     d2 = dt.date(2026, 3, 5)
@@ -197,8 +197,8 @@ def test_bulk_get_data_skips_single_date_curve_failures(monkeypatch):
 
     monkeypatch.setattr(mdp._curve_mdp, "bulk_get_data", _bulk_curve)
     monkeypatch.setattr(mdp._curve_mdp, "get_data", _single_curve)
-    mdp.VOL_PROVIDERS["PARTIALPROV"] = _provider
-    mdp.ENGINE_FACTORIES["PARTIALENG"] = _engine
+    monkeypatch.setitem(IRSwaptionMDP.VOL_PROVIDERS, "PARTIALPROV", _provider)
+    monkeypatch.setitem(IRSwaptionMDP.ENGINE_FACTORIES, "PARTIALENG", _engine)
 
     out = mdp.bulk_get_data(
         {
@@ -236,8 +236,8 @@ def test_constructor_data_dir_flows_to_monkeycube_and_partitions_cache(monkeypat
         return object()
 
     monkeypatch.setattr(mdp._curve_mdp, "bulk_get_data", _bulk_curve)
-    mdp.VOL_PROVIDERS["MONKEYCUBE"] = _provider
-    mdp.ENGINE_FACTORIES["QL"] = _engine
+    monkeypatch.setitem(IRSwaptionMDP.VOL_PROVIDERS, "MONKEYCUBE", _provider)
+    monkeypatch.setitem(IRSwaptionMDP.ENGINE_FACTORIES, "QL", _engine)
 
     d = dt.date(2026, 3, 6)
     base_req = {
