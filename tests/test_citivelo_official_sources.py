@@ -186,3 +186,52 @@ def test_live_each_working_source_returns_a_plausible_percent_rate(index, low, h
     # A decimal-vs-percent slip is the failure mode a range check actually catches.
     assert low < float(series.iloc[-1]) < high
     assert (end - series.index[-1].date()).days <= 10, "the tail is stale"
+
+
+# -- the shared fetcher -------------------------------------------------
+#
+# The fetcher used to be constructed per call, which made its cache dead on
+# arrival: every curve request did a live HTTP GET. Measured 2026-08-07, five
+# requests produced five round trips at ~175 ms each - so a caller resolving
+# fixings per node (a 1,040-node swaption cube, a minute-resolution backfill)
+# would issue one request per node and hammer the NY Fed / Norges Bank / SARB.
+
+
+def test_repeated_curve_requests_hit_the_publisher_once(monkeypatch):
+    from MDP.IRSwaps.CITIVELO_EXCEL import fixings as F
+
+    F.reset_publisher_fixings_cache()
+    calls = []
+    monkeypatch.setattr(
+        OS, "_get",
+        lambda url, **kw: (calls.append(url), _Response(payload=_EFFR_PAYLOAD))[1],
+    )
+    try:
+        for _ in range(5):
+            got = F.official_fixings("USD-FEDFUNDS-1D")
+            assert not got.empty
+        assert len(calls) == 1, (
+            f"{len(calls)} HTTP calls for 5 curve requests - the fetcher is being "
+            f"rebuilt per call, so its cache never survives"
+        )
+    finally:
+        F.reset_publisher_fixings_cache()
+
+
+def test_the_reset_helper_actually_drops_the_cache(monkeypatch):
+    """Otherwise a long-lived daemon could never pick up a new fixing."""
+    from MDP.IRSwaps.CITIVELO_EXCEL import fixings as F
+
+    F.reset_publisher_fixings_cache()
+    calls = []
+    monkeypatch.setattr(
+        OS, "_get",
+        lambda url, **kw: (calls.append(url), _Response(payload=_EFFR_PAYLOAD))[1],
+    )
+    try:
+        F.official_fixings("USD-FEDFUNDS-1D")
+        F.reset_publisher_fixings_cache()
+        F.official_fixings("USD-FEDFUNDS-1D")
+        assert len(calls) == 2
+    finally:
+        F.reset_publisher_fixings_cache()
