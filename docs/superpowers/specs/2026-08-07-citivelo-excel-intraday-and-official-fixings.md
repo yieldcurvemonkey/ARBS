@@ -46,9 +46,11 @@ Holding the span at four days and walking the window backwards:
 | 180d | 2,875 | 1 min |
 | **365d** | **4,961** | **1 min** |
 
-Minute history is retained for **at least a year**. It is only ever hidden by
-asking for too much of it at once. So a full-resolution backfill was never a
-retention problem — it is a chunking problem.
+Minute history is retained for **at least two years** — the deep backfill has
+since pulled USD-SOFR back to **2024-07-31 at true 1-minute spacing**, 563 day
+files. It is only ever hidden by asking for too much of it at once. So a
+full-resolution backfill was never a retention problem — it is a chunking
+problem.
 
 ### The boundary is a property of the add-in, not of USD
 
