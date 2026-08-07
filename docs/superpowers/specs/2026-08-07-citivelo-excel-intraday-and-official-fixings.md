@@ -233,6 +233,22 @@ route every intraday request down the EOD branch.
 
 All five currencies, every tenor, three orders of magnitude inside the ±1 bp bar.
 
+### The deep history reconstructs too
+
+The table above is all 2026 dates — the top-up window. The two-year backfill is a
+different question (older quotes, different rate regimes, curves solved months
+apart), so it was checked separately, mid-session, at a random minute of each day:
+
+| date | minute | tenors | max error |
+|---|---|---|---|
+| 2024-08-01 | 12:01 | 44 | **0.0003 bp** |
+| 2024-11-15 | 09:00 | 44 | **0.0014 bp** |
+| 2025-03-14 | 09:10 | 44 | **0.0017 bp** |
+
+Every one served `from_curve_store`, so the whole path — windowed fetch, ET→local
+conversion, day partitioning, solve, store round-trip — holds across two years of
+history and not just the recent weeks.
+
 ### Two units/date traps the tie-out walked into first
 
 Both produced large, confident-looking errors on curves that were exact. Worth
