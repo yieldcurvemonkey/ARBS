@@ -186,3 +186,94 @@ def test_live_each_working_source_returns_a_plausible_percent_rate(index, low, h
     # A decimal-vs-percent slip is the failure mode a range check actually catches.
     assert low < float(series.iloc[-1]) < high
     assert (end - series.index[-1].date()).days <= 10, "the tail is stale"
+
+
+# -- the shared fetcher -------------------------------------------------
+#
+# The fetcher used to be constructed per call, which made its cache dead on
+# arrival: every curve request did a live HTTP GET. Measured 2026-08-07, five
+# requests produced five round trips at ~175 ms each - so a caller resolving
+# fixings per node (a 1,040-node swaption cube, a minute-resolution backfill)
+# would issue one request per node and hammer the NY Fed / Norges Bank / SARB.
+
+
+def test_repeated_curve_requests_hit_the_publisher_once(monkeypatch):
+    from MDP.IRSwaps.CITIVELO_EXCEL import fixings as F
+
+    F.reset_publisher_fixings_cache()
+    calls = []
+    monkeypatch.setattr(
+        OS, "_get",
+        lambda url, **kw: (calls.append(url), _Response(payload=_EFFR_PAYLOAD))[1],
+    )
+    try:
+        for _ in range(5):
+            got = F.official_fixings("USD-FEDFUNDS-1D")
+            assert not got.empty
+        assert len(calls) == 1, (
+            f"{len(calls)} HTTP calls for 5 curve requests - the fetcher is being "
+            f"rebuilt per call, so its cache never survives"
+        )
+    finally:
+        F.reset_publisher_fixings_cache()
+
+
+def test_the_reset_helper_actually_drops_the_cache(monkeypatch):
+    """Otherwise a long-lived daemon could never pick up a new fixing."""
+    from MDP.IRSwaps.CITIVELO_EXCEL import fixings as F
+
+    F.reset_publisher_fixings_cache()
+    calls = []
+    monkeypatch.setattr(
+        OS, "_get",
+        lambda url, **kw: (calls.append(url), _Response(payload=_EFFR_PAYLOAD))[1],
+    )
+    try:
+        F.official_fixings("USD-FEDFUNDS-1D")
+        F.reset_publisher_fixings_cache()
+        F.official_fixings("USD-FEDFUNDS-1D")
+        assert len(calls) == 2
+    finally:
+        F.reset_publisher_fixings_cache()
+
+
+def test_publishers_are_asked_for_their_whole_history(monkeypatch):
+    """An 800-day window silently truncated a 5-year-old swap's fixings.
+
+    The failure mode is quiet: the series just starts late, and a seasoned OIS
+    compounds over dates nobody has a number for.
+    """
+    from MDP.IRSwaps.CITIVELO_EXCEL import fixings as F
+
+    F.reset_publisher_fixings_cache()
+    seen = {}
+
+    def _capture(url, **kw):
+        seen["url"] = url
+        return _Response(payload=_EFFR_PAYLOAD)
+
+    monkeypatch.setattr(OS, "_get", _capture)
+    try:
+        F.official_fixings("USD-FEDFUNDS-1D")
+        assert "startDate=1990-01-01" in seen["url"], (
+            f"asked for a truncated window: {seen['url']}"
+        )
+    finally:
+        F.reset_publisher_fixings_cache()
+
+
+@pytest.mark.network
+def test_live_full_history_reaches_back_further_than_three_years():
+    """The window this replaced would have capped every source at ~2.2 years."""
+    from MDP.IRSwaps.CITIVELO_EXCEL import fixings as F
+
+    F.reset_publisher_fixings_cache()
+    try:
+        effr = F.official_fixings("USD-FEDFUNDS-1D")
+        nowa = F.official_fixings("NOK-NOWA-1D")
+        assert not effr.empty and not nowa.empty
+        # EFFR publishes from 2000, NOWA from 2011 - both far past a 800d window.
+        assert effr.index[0].year <= 2005, f"EFFR starts {effr.index[0].date()}"
+        assert nowa.index[0].year <= 2012, f"NOWA starts {nowa.index[0].date()}"
+    finally:
+        F.reset_publisher_fixings_cache()
