@@ -234,6 +234,23 @@ labelled as such rather than counted as a pass.
 
 ---
 
+## 4b. Gates
+
+```
+conda run -n stir python -m pytest tests -m "not slow and not network and not db"
+3983 passed, 51 skipped, 103 deselected, 0 failed  (864 s)
+```
+
+The spec's baseline was 3714 passed / 51 skipped. The 269 extra passes are main's
+`test_rl_compat.py` (merged into this branch mid-session) plus the 66 added here.
+Skips are unchanged, and **nothing fails**.
+
+The old `CITIVELO` / `CITI_VELO` / `CITIVELOCITY` source was re-checked
+independently of the suite and still serves `USD-SOFR-1D` from the CurveStore with
+its original naive-ET timestamp.
+
+---
+
 ## 5. The tie-out was mutation-verified
 
 A check that cannot fail reports success and hides what it was built to find.
