@@ -62,11 +62,12 @@ were outside their own trading sessions at 11:00 ET. Serving them silently as
 Four checks plus an end-to-end NPV check, all through
 `IRSwapsMDP → IRSwapQuery → IRSwapStructure`.
 
-### 2.1 NPV at the curve's own fair rate — 0.0000 everywhere
+### 2.1 NPV at the curve's own fair rate — zero to floating-point noise
 
 | | eod | intraday | live |
 |---|---|---|---|
-| worst \|NPV\| over 20 curves × 4 tenors, both backends | 0.0000 | 0.0000 | 0.0000 |
+| worst \|NPV\| on 1mm notional, 20 curves × 4 tenors, rateslib | 1.4e-11 | 1.0e-11 | 5.8e-12 |
+| the same, QuantLib | 9.1e-11 | 6.6e-11 | 7.8e-11 |
 
 The check a successful build does not give you. A float leg that silently lost
 its fixings, or an instrument whose schedule does not match the curve it was
@@ -80,8 +81,8 @@ Worst \|error\| in bp over all 44 tenors:
 
 | backend | eod | intraday | live |
 |---|---|---|---|
-| rateslib | **0.0017** | 0.0015 | 0.0016 |
-| QuantLib | 0.4217 | 0.3478 | 0.4126 |
+| rateslib | **0.0017** | **0.0015** | **0.0016** |
+| QuantLib | 0.3972 | 0.3478 | 0.4126 |
 
 This is near-circular on the *curve* but not on the *definitions*: `IRSwapQuery`
 builds its swaps from `RATESLIB_CURVE_DEFINITIONS`, a different table read by a
@@ -118,7 +119,7 @@ Five are not, on 14 of the 204 comparisons.
 ### 2.4 rateslib vs QuantLib on the same trade
 
 Worst \|difference\| over 2Y/5Y/10Y/30Y: **0.1113 bp** (JPY-TONAR-1D-LCH, live);
-median across curves ~0.013 bp. This is the check that catches schedule, day-count
+0.064 bp at EOD and intraday; median across curves ~0.013 bp. This is the check that catches schedule, day-count
 and annuity divergence, because the two libraries agree on nothing by accident.
 
 ### 2.5 Interpolation (drop one interior node, then price it)
@@ -210,8 +211,8 @@ publishes for those curves, ties out to 0.002 bp on all three.
 |---|---|
 | all 20 curves fetchable in EOD / intraday / live with tz-aware timestamps | **yes**, 55/60 combinations; the 5 gaps are two genuinely dead/EOD-only curves and are reported, not hidden |
 | swaps price through MDP → Query → Structure | **yes**, both backends, all three modes |
-| NPV at the curve's own fair rate is zero | **yes**, 0.0000 on every curve, backend and mode |
-| par rates tie out to Citi's quotes | **yes**, ≤0.0017 bp (rateslib) / ≤0.42 bp (QuantLib) |
+| NPV at the curve's own fair rate is zero | **yes**, ≤9.1e-11 on 1mm notional, every curve, backend and mode |
+| par rates tie out to Citi's quotes | **yes**, ≤0.0017 bp (rateslib) / ≤0.41 bp (QuantLib) |
 | the two backends agree | **yes**, ≤0.11 bp |
 | **forwards tie out to Citi's published forwards within ±1 bp** | **12 of 17 curves on all six points; 5 fail on 14 of 204 comparisons.** Of those, DKK and AUD are draws from a noisy 1Yx1Y point (§3) and only **THB, MXN and ZAR** carry a real bias — at 5Yx10Y and 10Yx10Y, 1.0–4.3 bp |
 | the tie-out is mutation-verified | **yes** — §5 |
