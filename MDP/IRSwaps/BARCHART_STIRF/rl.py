@@ -26,6 +26,7 @@ from MDP.STIRFutures.STIRFutureMDP import STIRFutureMDP
 from Query.IRSwaps._CENTRAL_BANK_DATES import _CENTRAL_BANK_DATES
 from Query.IRSwaps.backends.rateslib.rl_curve_definitions_map import RATESLIB_CURVE_DEFINITIONS
 from Query.STIRFutures.backends.rateslib.RLSTIRFuturePricer import RLSTIRFuturePricer
+from utils.rl_compat import fly as rl_fly, rate_fixings_kwargs
 
 _STIR_ROOT_CODE_RE = re.compile(
     r"^(SR1|SER|SL|SR3|SFR|SQ|ZQ|FF|RA|EB|IJ|RG|IM|TV|J8|JU|T0|IT|J2)([FGHJKMNQUVXZ]\d{2})$",
@@ -1012,12 +1013,10 @@ def build_rl_stirf_turn_flies(
 
     if one_step:
         for i in range(0, len(rl_irs) - 2):
-            fly = rl.Fly(rl_irs[i], rl_irs[i + 1], rl_irs[i + 2])
-            flies[f"{i}/{i+1}/{i+2}"] = fly
+            flies[f"{i}/{i+1}/{i+2}"] = rl_fly(rl_irs[i], rl_irs[i + 1], rl_irs[i + 2])
     else:
         for i in range(3, len(rl_irs) - 2, 2):
-            fly = rl.Fly(rl_irs[i], rl_irs[i + 1], rl_irs[i + 2])
-            flies[f"{i}/{i+1}/{i+2}"] = fly
+            flies[f"{i}/{i+1}/{i+2}"] = rl_fly(rl_irs[i], rl_irs[i + 1], rl_irs[i + 2])
 
     return flies
 
@@ -2536,8 +2535,8 @@ class BARCHART_STIRF_CURVE(LayeredCacheMixin):
             "contracts": int(getattr(pricer, "_contracts", 1) or 1),
             "curves": curve_key,
         }
-        if is_ser and meta.get("fixings") is not None:
-            kwargs["leg2_fixings"] = meta["fixings"]
+        if is_ser:
+            kwargs.update(rate_fixings_kwargs(meta.get("fixings")))
 
         return rl.STIRFuture(**kwargs)
 

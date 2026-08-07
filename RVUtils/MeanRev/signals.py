@@ -18,6 +18,7 @@ __all__ = [
     "zscore_signal", "bollinger_signal", "ou_sscore_signal", "kalman_level_signal",
     "xsection_signal", "pca_residual_signal", "curvefit_residual_signal",
     "coint_spread_signal", "rolling_ols2_residual", "structure_signal_from_slots",
+    "meeting_residual_signal", "calendar_adjusted_signal", "scale_only_zscore",
 ]
 
 
@@ -306,6 +307,98 @@ def curvefit_residual_signal(
     R = pd.DataFrame(out, index=P.index, columns=cols)
     return structure_signal_from_slots(R, struct, n_legs=n_legs, weights=weights,
                                        scale=scale, date_col=date_col)
+
+
+# ---------------------------------------------------------------------------
+# 4b. meeting-calendar residuals
+# ---------------------------------------------------------------------------
+
+def scale_only_zscore(levels: pd.DataFrame, *, window: int = 120,
+                      min_periods: Optional[int] = None) -> pd.DataFrame:
+    """``x / rolling_sd(x)`` -- standardise the scale, do **not** re-centre.
+
+    For a series that is already a deviation from a fitted fair value, a plain
+    z-score subtracts a *trailing window mean* of that deviation and so throws
+    away the model's own zero. If the model is any good, zero is the right
+    anchor and the only thing left to estimate is how far from it counts as far.
+
+    Keeping both this and :func:`zscore_signal` in the grid makes "does the
+    model's zero beat a trailing mean?" a measurement rather than a choice.
+    """
+    w = int(window)
+    mp = min_periods if min_periods is not None else max(20, w // 3)
+    sd = levels.rolling(w, min_periods=mp).std(ddof=0)
+    return levels / sd.where(sd > 1e-12)
+
+
+def meeting_residual_signal(
+    levels: pd.DataFrame, *, resid_panel: pd.DataFrame, struct: pd.DataFrame,
+    window: int = 120, standardise: str = "scale", n_legs: int = 3,
+    weights: Sequence[float] = (-1.0, 2.0, -1.0), date_col: str = "as_of",
+    min_periods: Optional[int] = None,
+) -> pd.DataFrame:
+    """Butterfly of the per-contract residual from a smooth **policy path**.
+
+    ``resid_panel`` is the ``date x slot`` residual from
+    :func:`RVUtils.MeanRev.meetings.meeting_residual_panel`, already in bp. It
+    is combined into structures with the same weights the level uses, so the
+    signal is in bp of the traded object and directly comparable to the fly
+    itself.
+
+    This is the whole thesis of the kink lab in one function. A butterfly on
+    three consecutive SR3 contracts is not a clean curvature measure, because
+    each contract settles on a day-weighted average over its own IMM quarter and
+    the FOMC calendar is lumpy against the IMM grid. Removing the fly that a
+    *smooth policy path* would print leaves the curvature the calendar cannot
+    explain -- which is the only part there was ever any reason to fade.
+
+    ``standardise`` is ``'scale'`` (divide by a trailing sd, keep the model's
+    zero -- see :func:`scale_only_zscore`), ``'z'`` (full trailing z-score) or
+    ``'raw'`` (bp, for a threshold expressed in bp).
+
+    ``levels`` is accepted and unused so the signature matches the grid-search
+    contract; the residual panel is the input that matters.
+    """
+    sig_bp = structure_signal_from_slots(resid_panel, struct, n_legs=n_legs,
+                                         weights=weights, scale=1.0,
+                                         date_col=date_col)
+    sig_bp = sig_bp.reindex(index=levels.index, columns=levels.columns)
+    return _standardise(sig_bp, standardise, window, min_periods)
+
+
+def _standardise(panel: pd.DataFrame, how: str, window: int,
+                 min_periods: Optional[int]) -> pd.DataFrame:
+    if how == "raw":
+        return panel
+    if how == "scale":
+        return scale_only_zscore(panel, window=window, min_periods=min_periods)
+    if how == "z":
+        return zscore_signal(panel, window=window, min_periods=min_periods)
+    raise ValueError("standardise must be 'scale', 'z' or 'raw'")
+
+
+def calendar_adjusted_signal(
+    levels: pd.DataFrame, *, adjusted: pd.DataFrame, window: int = 120,
+    standardise: str = "scale", min_periods: Optional[int] = None,
+) -> pd.DataFrame:
+    """Standardise an already calendar-adjusted level panel.
+
+    ``adjusted`` is normally
+    :func:`RVUtils.MeanRev.meetings.calendar_tilted_fly`'s ``'level'`` -- the
+    butterfly with the fly a **locally uniform** policy path would print removed,
+    using nothing but the structure's own two wings and the meeting calendar.
+
+    This is the one-degree-of-freedom cousin of
+    :func:`meeting_residual_signal`: it removes the first-order calendar effect
+    without fitting a jump per meeting, so it cannot overfit and it is trivial to
+    explain to a desk. If the full per-meeting fit does not beat it, the extra
+    machinery is not earning anything.
+
+    ``levels`` fixes the output's index and columns and is otherwise unused, so
+    the signature matches the grid-search contract.
+    """
+    adj = adjusted.reindex(index=levels.index, columns=levels.columns)
+    return _standardise(adj, standardise, window, min_periods)
 
 
 # ---------------------------------------------------------------------------

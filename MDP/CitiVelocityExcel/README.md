@@ -263,6 +263,59 @@ complaint and the wrong one silently misprices by up to ~4.85 bp.
 `vol.assert_vol_spread_ordering` is the check, and
 `tests/test_citivelo_vol_cube.py` mutation-tests it.
 
+### The wire's timezone, measured 2026-08-07
+
+**Citi Velocity timestamps are `America/New_York` wall clock and they observe US
+daylight saving.** This was unknown until now - `format_bound` emitted naive
+stamps and nothing recorded what zone they were in.
+
+`CVNOW()` matching the local clock is *not* the evidence, because this machine is
+itself in ET and cannot separate exchange time from machine-local. The decisive
+measurement is that **`EUR_EUROSTR`'s session is fixed in Frankfurt but its stamps
+move with US DST**: hourly stamps read `02:00-13:59` on 2026-03-05/06 and
+`03:00-14:59` on 2026-03-09/11 - the same 08:00-20:00 CET either side of the
+**2026-03-08 US** spring-forward, not Europe's (2026-03-29). No fixed UTC offset
+can produce that, and neither can London time. Corroborated on three more
+currencies whose sessions are unambiguous locally: `JPY_TONAR` 19:00-06:59 ET =
+08:00-19:59 JST, `AUD_AONIA` 18:00-05:59 ET = 08:00-19:59 AEST, `GBP_SONIA`
+03:00-14:59 ET = 08:00-19:59 London.
+
+The **request** side is the same zone: a `CVSNAP` at `2026-08-06 10:30` returned
+`4.23287`, exactly the `MI01` row stamped 10:30.
+
+Machine-local remains unruled-out on a machine in ET, so the zone is a named
+constant overridable with `CITIVELO_EXCEL_WIRE_TZ`.
+
+A consequence worth knowing: an Asia/Pacific **session straddles two ET dates**.
+`JPY_TONAR` runs 19:00 ET through 06:59 ET the next day as one continuous block
+(the 23:59 print and the following 00:00 print are the same number) and belongs to
+Citi's `DAILY` row for the **later** date. Dating an intraday snapshot by its ET
+calendar date builds a JPY/AUD/NZD curve one business day early.
+
+### What each `CV*` function actually returns, measured 2026-08-07
+
+| function | result |
+|---|---|
+| `CVTSHIST` intraday bounds | `yyyyMMddHHmm` **is honoured** - a 10:00-11:00 request returned exactly 61 rows. Previously inferred, now measured |
+| `CVTSHIST` `HOURLY` + relative `period=` | **returns no block at all**, instantly. `HOURLY` with explicit bounds works |
+| `CVTSHIST` `MI01` freshness | newest row was **1 minute old** at 10:47 ET |
+| `CVLATEST` | serves - a bare column, one row per tag, 5 dp - with **no timestamp** |
+| `CVSNAP` | serves the right value (cross-checked to the digit against `MI01`) with **no timestamp** |
+| `CVSTREAM` | a live RTD-style cell: full double precision (`4.23909408453934` vs `CVLATEST`'s `4.23919`) and **the value changed between two reads 20 s apart** |
+
+Because none of the point-read functions carries a stamp, none of them can tell a
+curve that stopped ticking four hours ago from one that ticked a second ago - and
+two of the twenty OIS curves have stopped (`EUR_EONIA` since 2025-08-15;
+`JPY_TONAR_JSCC` serves EOD only). `CVSTREAM` is the right primitive for a polling
+**daemon**, not for a request/response path.
+
+### Serving these curves through `IRSwapsMDP`
+
+`MDP/IRSwaps/CITIVELO_EXCEL/` wraps all twenty as an `IRSwapsMDP` source under the
+token **`CITIVELO_EXCEL`** (`-RL` default, `-QL`), in EOD / intraday / live modes
+with timezone-aware timestamps. See
+`docs/superpowers/specs/2026-08-07-citivelo-excel-irswaps-source.md`.
+
 ### Verified live, 2026-08-05
 
 `harvest/verify_live.py` ran against the signed-in add-in in 6 `CV*` calls and

@@ -48,6 +48,7 @@ from __future__ import annotations
 
 import datetime
 import logging
+import re
 import threading
 import time
 from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
@@ -119,16 +120,72 @@ DEFAULT_CHUNK_SIZE = 44
 #: whole batch and forces a bisect.
 DEFAULT_METADATA_CHUNK_SIZE = 20
 
-#: The window used when the caller asks for "everything". The add-in truncates to
-#: the tag's own history, so this is a ceiling rather than a promise.
-DEFAULT_FULL_PERIOD = "50Y"
+#: The window used when the caller asks for "everything".
+#:
+#: This was ``"50Y"``, which the add-in **rejects**: ``Period`` is a closed
+#: vocabulary (see :data:`MDP.CitiVelocityExcel.frequencies.PERIODS`) and 50Y is
+#: not in it. The rejection is silent - no block is written at all - so
+#: ``fetch_timeseries`` with neither ``period`` nor ``start`` returned an empty
+#: frame for every tag, and looked exactly like a set of tags that do not serve.
+#: ``"MAX"`` is the add-in's own token for the tag's whole history.
+DEFAULT_FULL_PERIOD = "MAX"
 
 #: Excel's formula length ceiling, with headroom for the fixed arguments.
 _MAX_FORMULA_CHARS = 8_000
 
 
+#: Written into ``A1`` of a scratch workbook's first sheet so this package can
+#: recognise its own workbooks and REUSE them.
+#:
+#: Without it every ``connect()`` called ``Workbooks.Add()`` and a process that
+#: did not reach ``close()`` - a streaming daemon by design, a killed run by
+#: accident - left the workbook behind. Measured 2026-08-07: **62 open workbooks**,
+#: almost all carrying the readiness probe's ``$A$1:$C$71`` footprint.
+WORKBOOK_MARKER_PREFIX = "ARBS_CITIVELO_"
+
+#: The tag ordinary request/response clients share, so they all reuse ONE
+#: workbook rather than one per process.
+DEFAULT_WORKBOOK_TAG = "SCRATCH"
+
+
+def workbook_marker(tag: str) -> str:
+    return f"{WORKBOOK_MARKER_PREFIX}{str(tag).strip().upper()}"
+
+
+def find_marked_workbook(app: Any, tag: str) -> Optional[Any]:
+    """An already-open workbook this package created for ``tag``, or ``None``.
+
+    Identified by a marker string in ``A1`` rather than by file name, because a
+    scratch workbook is never saved and Excel names it ``Book47``.
+    """
+    marker = workbook_marker(tag)
+    try:
+        count = int(com_retry(lambda: app.Workbooks.Count, attempts=4, delay=0.25))
+    except Exception:  # noqa: BLE001
+        return None
+    for i in range(1, count + 1):
+        try:
+            workbook = com_retry(lambda: app.Workbooks(i), attempts=2, delay=0.1)
+            value = com_retry(
+                lambda: workbook.Worksheets(1).Range("A1").Value, attempts=2, delay=0.1
+            )
+        except Exception:  # noqa: BLE001 - a workbook we cannot read is not ours
+            continue
+        if isinstance(value, str) and value.strip() == marker:
+            return workbook
+    return None
+
+
+def create_marked_workbook(app: Any, tag: str) -> Any:
+    """A fresh scratch workbook, stamped so it can be found again."""
+    workbook = com_retry(lambda: app.Workbooks.Add())
+    sheet = com_retry(lambda: workbook.Worksheets(1))
+    com_retry(lambda: setattr(sheet.Range("A1"), "Value", workbook_marker(tag)))
+    return workbook
+
+
 def probe_readiness(
-    app: Any, *, timeout: float = 90.0, poll: float = 0.5
+    app: Any, *, timeout: float = 90.0, poll: float = 0.5, workbook: Any = None
 ) -> Tuple[str, Any]:
     """Classify a candidate Excel by what ``=CVTODAY()`` answers.
 
@@ -152,15 +209,20 @@ def probe_readiness(
     nothing in between, so an impatient caller concludes it is dead when it is
     merely slow.
     """
-    workbook = None
+    created = workbook is None
     try:
         com_retry(lambda: app.Workbooks.Count, attempts=4, delay=0.25)
-        workbook = com_retry(lambda: app.Workbooks.Add())
+        if workbook is None:
+            workbook = com_retry(lambda: app.Workbooks.Add())
         sheet = com_retry(lambda: workbook.Worksheets(1))
-        com_retry(lambda: setattr(sheet.Range("A1"), "Formula", "=CVTODAY()"))
+        # Probe below whatever is already in the sheet. A1 carries the reuse
+        # marker, and a reused workbook may already hold live regions - writing
+        # the probe on top of one is the AccessViolation trigger.
+        probe_cell = f"B{_next_free_row(sheet)}"
+        com_retry(lambda: setattr(sheet.Range(probe_cell), "Formula", "=CVTODAY()"))
         deadline = time.time() + max(0.0, timeout)
         while True:
-            value = com_retry(lambda: sheet.Range("A1").Value)
+            value = com_retry(lambda: sheet.Range(probe_cell).Value)
             if not is_pending(value):
                 break
             if time.time() >= deadline:
@@ -174,7 +236,23 @@ def probe_readiness(
             return "not_signed_in", workbook
         return "ready", workbook
     except Exception:  # noqa: BLE001 - a zombie fails on the very first property
-        return "unusable", workbook
+        return "unusable", workbook if created else None
+
+
+def _next_free_row(sheet: Any, *, gap: int = DEFAULT_GAP) -> int:
+    """First row safely below everything already on ``sheet``.
+
+    A reused scratch workbook already holds resolved ``CvFunction_*`` regions (and
+    possibly live RTD cells), so a newcomer must start below all of them.
+    ``UsedRange`` is the only thing Excel offers that covers the whole sheet;
+    where it cannot be read, fall back to a row far enough down to be safe.
+    """
+    try:
+        used = com_retry(lambda: sheet.UsedRange, attempts=2, delay=0.1)
+        bottom = int(used.Row) + int(used.Rows.Count) - 1
+    except Exception:  # noqa: BLE001
+        return 1 + gap
+    return max(1, bottom) + gap
 
 
 def com_retry(fn, *, attempts: int = 40, delay: float = 0.5):
@@ -240,10 +318,16 @@ class CitiVelocityExcelClient:
         poll_interval: float = 0.25,
         drain_seconds: float = 2.0,
         readiness_timeout: float = 90.0,
+        stream_write_pause: float = 0.15,
+        shared_workbook: bool = False,
+        workbook_tag: str = DEFAULT_WORKBOOK_TAG,
         logger: Optional[logging.Logger] = None,
     ):
         self._app = app
         self._wb = workbook
+        #: Which tagged workbook this client owns, so recycle_workbook() can
+        #: recreate the same one rather than adding an untagged orphan.
+        self._workbook_tag = str(workbook_tag)
         self._ws: Any = None
         self._row = 1
         self._gap = int(gap)
@@ -256,16 +340,41 @@ class CitiVelocityExcelClient:
         self._logger = logger or _logger
         self._closed = False
         self.calls = 0
+        #: ``{tag: cell}`` for every live CVSTREAM cell this client has written.
+        #: Non-empty makes close() a no-op - see open_stream().
+        self._streaming: Dict[str, str] = {}
+        self._stream_write_pause = float(stream_write_pause)
+        # True only when this client ATTACHED to a tagged workbook that outlives
+        # it. A client that created its own workbook (the hermetic tests, and any
+        # direct `app=` construction) still owns it and still closes it.
+        self._shared_workbook = bool(shared_workbook)
 
         if self._app is not None and self._wb is None:
             self._wb = com_retry(lambda: self._app.Workbooks.Add())
         if self._wb is not None:
             self._ws = com_retry(lambda: self._wb.Worksheets(1))
-            self._row = 1 + self._gap  # A1 may hold a readiness probe
+            # Start below EVERYTHING already on the sheet, not below a presumed
+            # readiness probe: a reused scratch workbook carries every previous
+            # run's regions, and writing on top of one kills Excel.
+            self._row = _next_free_row(self._ws, gap=self._gap)
 
     @classmethod
-    def connect(cls, *, attempts: int = 6, delay: float = 10.0, **kwargs: Any) -> "CitiVelocityExcelClient":
-        """Bind to a running, signed-in Excel and open a scratch workbook.
+    def connect(
+        cls,
+        *,
+        attempts: int = 6,
+        delay: float = 10.0,
+        workbook_tag: str = DEFAULT_WORKBOOK_TAG,
+        **kwargs: Any,
+    ) -> "CitiVelocityExcelClient":
+        """Bind to a running, signed-in Excel and REUSE this tag's scratch workbook.
+
+        ``workbook_tag`` groups clients onto one workbook. Every ordinary
+        request/response client shares ``SCRATCH``; the streaming daemon uses one
+        tag per currency, so its never-closable RTD workbooks are a handful rather
+        than one per curve per restart. Before tags existed each ``connect()``
+        added a workbook and any process that did not reach ``close()`` left it
+        behind - 62 of them had accumulated by 2026-08-07.
 
         Retries the bind: Excel can be busy for minutes during a long recalc, and
         a single pass over the candidates then wrongly reports "no usable Excel".
@@ -280,8 +389,14 @@ class CitiVelocityExcelClient:
         last: Optional[BaseException] = None
         for i in range(max(1, int(attempts))):
             try:
-                app, wb = cls._bind_once(readiness_timeout=float(kwargs.get("readiness_timeout", 90.0)))
-                return cls(app=app, workbook=wb, **kwargs)
+                app, wb = cls._bind_once(
+                    readiness_timeout=float(kwargs.get("readiness_timeout", 90.0)),
+                    workbook_tag=workbook_tag,
+                )
+                return cls(
+                    app=app, workbook=wb, shared_workbook=True,
+                    workbook_tag=workbook_tag, **kwargs,
+                )
             except AddInNotSignedInError:
                 raise
             except Exception as exc:  # noqa: BLE001 - retried, then re-raised
@@ -293,7 +408,9 @@ class CitiVelocityExcelClient:
         raise ExcelNotRunningError(str(last) if last else "")
 
     @staticmethod
-    def _bind_once(*, readiness_timeout: float = 90.0) -> Tuple[Any, Any]:
+    def _bind_once(
+        *, readiness_timeout: float = 90.0, workbook_tag: str = DEFAULT_WORKBOOK_TAG
+    ) -> Tuple[Any, Any]:
         """Bind to a USABLE Excel: one whose Workbooks work and whose UDFs answer.
 
         ``GetActiveObject`` returns whatever registered in the Running Object
@@ -339,14 +456,29 @@ class CitiVelocityExcelClient:
         saw_excel = False
         saw_name_error = False
         for app in candidates:
-            status, wb = probe_readiness(app, timeout=max(1.0, readiness_timeout))
+            existing = find_marked_workbook(app, workbook_tag)
+            status, wb = probe_readiness(
+                app, timeout=max(1.0, readiness_timeout), workbook=existing
+            )
             if status != "unusable":
                 saw_excel = True
             if status == "ready":
+                if existing is None and wb is not None:
+                    # The probe created it; stamp it so the next process finds it
+                    # instead of adding another.
+                    try:
+                        com_retry(
+                            lambda: setattr(
+                                wb.Worksheets(1).Range("A1"), "Value",
+                                workbook_marker(workbook_tag),
+                            )
+                        )
+                    except Exception as exc:  # noqa: BLE001 - reuse is best-effort
+                        _logger.debug("could not stamp the scratch workbook: %s", exc)
                 return app, wb
             if status == "not_signed_in":
                 saw_name_error = True
-            if wb is not None:
+            if wb is not None and existing is None:
                 try:
                     wb.Close(SaveChanges=False)
                 except Exception:  # noqa: BLE001
@@ -380,7 +512,26 @@ class CitiVelocityExcelClient:
         """
         if self._closed:
             return
+        if self._streaming:
+            # An RTD cell always has queued add-in actions against it, so closing
+            # the workbook that holds one is the documented AccessViolation
+            # trigger. A streaming client's workbook is abandoned in place, on
+            # purpose: an orphaned scratch workbook costs the user a tab, and the
+            # alternative costs them the process.
+            self._logger.info(
+                "CitiVelocityExcelClient.close(): %d live CVSTREAM cell(s) open; leaving the "
+                "workbook in place rather than tearing down live RTD regions.",
+                len(self._streaming),
+            )
+            self._closed = True
+            return
         self._closed = True
+        if self._shared_workbook:
+            # A tagged workbook outlives the process that happened to create it;
+            # closing it would make the next run add another.
+            self._wb = None
+            self._ws = None
+            return
         with EXCEL_LOCK:
             time.sleep(self._drain_seconds)
             if self._wb is not None:
@@ -390,6 +541,179 @@ class CitiVelocityExcelClient:
                     self._logger.warning("CitiVelocityExcelClient: workbook close failed: %s", exc)
             self._wb = None
             self._ws = None
+
+    # -- window sheets ---------------------------------------------------
+
+    def push_window_sheet(self, name: str) -> str:
+        """Start writing into a fresh worksheet named ``name``, and return it.
+
+        A long backfill is the one workload that cannot share the running sheet:
+        a minute-resolution window is ~5,300 rows x 45 columns, so a few hundred
+        windows would fill the sheet, roll onto another, and leave Excel holding
+        millions of live ``CvFunction_*`` cells.
+
+        Giving each window its own sheet - the shape the hand-built workbooks in
+        ``citi_usd_sofr_intraday_curve`` use, one per Mon-Fri week - makes the
+        window a unit that can be dropped whole once it has been read. See
+        :meth:`drop_window_sheet`.
+
+        Sheet 1 is never touched: it holds the reuse marker that lets the next
+        run find this workbook instead of adding another.
+        """
+        self._check_alive()
+        with EXCEL_LOCK:
+            sheet = com_retry(lambda: self._wb.Worksheets.Add())
+            # Excel sheet names cap at 31 chars and reject : \ / ? * [ ].
+            safe = re.sub(r"[:\\/?*\[\]]", "_", str(name))[:31]
+            try:
+                com_retry(lambda: setattr(sheet, "Name", safe))
+            except Exception:  # noqa: BLE001 - a duplicate name is not worth failing over
+                safe = str(com_retry(lambda: sheet.Name))
+            self._ws = sheet
+            self._row = 1
+        return safe
+
+    def drop_window_sheet(self) -> bool:
+        """Delete the current window sheet after letting the add-in drain.
+
+        Returns ``True`` if the sheet went away. A refusal is reported, not
+        raised: the caller's data is already read, and the cost of a surviving
+        sheet is memory, whereas the cost of fighting Excel here is the process.
+
+        The drain is not optional. The add-in queues ``ExcessClr``/``Format``/
+        ``AutoFit`` against cells it has written, and deleting a sheet out from
+        under those queued actions is the documented ``AccessViolation`` trigger.
+        By the time this is called the block has already settled (it was polled
+        to a non-pending value and read), so the queue is short - but it is not
+        guaranteed empty until Excel says so.
+        """
+        self._check_alive()
+        with EXCEL_LOCK:
+            sheet, self._ws = self._ws, None
+            if sheet is None:
+                return False
+            try:
+                self._app.CalculateUntilAsyncQueriesDone()
+            except Exception:  # noqa: BLE001
+                pass
+            time.sleep(self._drain_seconds)
+            alerts = None
+            try:
+                alerts = self._app.DisplayAlerts
+                self._app.DisplayAlerts = False
+            except Exception:  # noqa: BLE001
+                pass
+            try:
+                com_retry(lambda: sheet.Delete())
+                dropped = True
+            except Exception as exc:  # noqa: BLE001
+                self._logger.warning(
+                    "CitiVelocityExcelClient.drop_window_sheet: Excel refused the delete "
+                    "(%s). Leaving the sheet in place - the window's data is already read.",
+                    exc,
+                )
+                dropped = False
+            finally:
+                if alerts is not None:
+                    try:
+                        self._app.DisplayAlerts = alerts
+                    except Exception:  # noqa: BLE001
+                        pass
+            # Fall back to the marker sheet so the client stays usable either way.
+            self._ws = com_retry(lambda: self._wb.Worksheets(1))
+            self._row = 1
+            return dropped
+
+    def sheet_count(self) -> int:
+        """How many worksheets the scratch workbook is currently carrying."""
+        try:
+            return int(com_retry(lambda: self._wb.Worksheets.Count))
+        except Exception:  # noqa: BLE001
+            return -1
+
+    def excel_memory_mb(self) -> float:
+        """Excel's working set in MB, or ``-1`` when it cannot be read.
+
+        A long backfill has to watch this. Dropping window sheets bounds the
+        number of live *cells*, but it does NOT return Excel's process memory:
+        measured 2026-08-07, a 528-window fetch left Excel at **5.25 GB** and
+        wedged - unresponsive to a 15s window ping, with no modal dialog and no
+        cell-edit mode, and it did not recover when the COM client was released.
+        """
+        try:
+            import subprocess
+
+            out = subprocess.run(
+                ["powershell.exe", "-NoProfile", "-Command",
+                 "(Get-CimInstance Win32_Process -Filter \"Name='EXCEL.EXE'\")"
+                 ".WorkingSetSize"],
+                capture_output=True, text=True, timeout=30,
+            ).stdout.strip().splitlines()
+            return max(float(v) for v in out if v.strip()) / 1e6
+        except Exception:  # noqa: BLE001
+            return -1.0
+
+    def recycle_workbook(self) -> bool:
+        """Close this client's scratch workbook and open a fresh one.
+
+        The ONLY mechanism that actually returns Excel's memory during a long
+        backfill. Dropping each window's sheet keeps the cell count bounded and
+        is still worth doing, but process memory grows regardless until the
+        workbook itself goes.
+
+        Safe because a settled ``CVTSHIST`` block is the same lifecycle class as
+        the resolved probe blocks that the workbook-cleanup script has closed
+        dozens of times. Refuses outright when this client holds a live
+        ``CVSTREAM`` cell - tearing down live RTD is the documented
+        ``AccessViolation`` trigger.
+
+        Returns ``True`` when a fresh workbook is in place.
+        """
+        if self._streaming:
+            self._logger.warning(
+                "recycle_workbook: %d live CVSTREAM cell(s); refusing - tearing down "
+                "live RTD regions is the documented AccessViolation trigger.",
+                len(self._streaming),
+            )
+            return False
+        self._check_alive()
+        with EXCEL_LOCK:
+            old = self._wb
+            try:
+                self._app.CalculateUntilAsyncQueriesDone()
+            except Exception:  # noqa: BLE001
+                pass
+            time.sleep(max(self._drain_seconds, 1.0))
+            try:
+                alerts = self._app.DisplayAlerts
+                self._app.DisplayAlerts = False
+            except Exception:  # noqa: BLE001
+                alerts = None
+            try:
+                if old is not None:
+                    com_retry(lambda: old.Close(SaveChanges=False))
+            except Exception as exc:  # noqa: BLE001
+                self._logger.warning("recycle_workbook: close refused (%s)", exc)
+                if alerts is not None:
+                    try:
+                        self._app.DisplayAlerts = alerts
+                    except Exception:  # noqa: BLE001
+                        pass
+                return False
+            finally:
+                if alerts is not None:
+                    try:
+                        self._app.DisplayAlerts = alerts
+                    except Exception:  # noqa: BLE001
+                        pass
+            self._wb = create_marked_workbook(self._app, self._workbook_tag)
+            self._ws = com_retry(lambda: self._wb.Worksheets(1))
+            self._row = 1
+        self._logger.info(
+            "recycle_workbook: fresh workbook for tag %s (Excel now %.0f MB)",
+            self._workbook_tag, self.excel_memory_mb(),
+        )
+        return True
 
     # -- sheet plumbing -------------------------------------------------
 
@@ -772,8 +1096,16 @@ class CitiVelocityExcelClient:
                 out.update(self._parse_scalar_grid(rows, chunk))
         return out
 
-    @staticmethod
+    #: Excel serial floor below which a numeric cell is a PRICE, not a date.
+    #: 32874 is 1990-01-01; no Citi series starts earlier, and a par rate is a
+    #: single-digit float. Without this floor ``coerce_excel_datetime(4.23919)``
+    #: happily returns ``1900-01-03 05:44:26`` and a rate is reported as a
+    #: timestamp - measured on a live ``CVSNAP`` on 2026-08-07.
+    _MIN_STAMP_SERIAL = 32_874.0
+
+    @classmethod
     def _parse_scalar_grid(
+        cls,
         rows: Sequence[Sequence[Any]],
         tags: Sequence[str],
     ) -> Dict[str, Tuple[Optional[float], Optional[datetime.datetime]]]:
@@ -783,6 +1115,23 @@ class CitiVelocityExcelClient:
         (the ``CVTSHIST`` shape) or as one row per tag. Both are handled, and the
         row form is only used when the header form does not apply, so a header
         that happens to be absent never silently shifts the mapping.
+
+        Measured live on 2026-08-07, and both facts cost a wrong answer before
+        they were known:
+
+        **The row form is POSITIONAL and can contain empty rows.** ``CVLATEST``
+        over six tags where one is a discontinued curve (``EUR_EONIA``) returns
+        six rows, one of them blank. Compacting the blanks away before checking
+        ``len(body) == len(tags)`` made the count disagree and returned
+        ``(None, None)`` for **all six** - one dead curve silently blanked five
+        live ones. Rows are therefore aligned by position, not by compaction.
+
+        **A single-column row has no timestamp.** ``CVLATEST`` and ``CVSNAP`` both
+        answer with bare values; neither publishes a stamp. Reading the same cell
+        as both value and date turned the 10Y rate ``4.23287`` into the timestamp
+        ``1900-01-03 05:35:20``. A stamp is now only taken from a cell that is
+        genuinely a datetime, or from a *different* cell whose serial is past
+        :attr:`_MIN_STAMP_SERIAL`.
         """
         out: Dict[str, Tuple[Optional[float], Optional[datetime.datetime]]] = {}
         if not rows:
@@ -798,20 +1147,244 @@ class CitiVelocityExcelClient:
                     out[tag] = (float(s.iloc[-1]), s.index[-1].to_pydatetime())
             return out
 
-        body = [r for r in rows if r and any(c is not None for c in r)]
-        if len(body) == len(tags):
-            for tag, cells in zip(tags, body):
-                value = None
-                stamp = None
-                for cell in cells:
-                    if value is None:
-                        value = coerce_float(cell)
-                    if stamp is None:
-                        stamp = coerce_excel_datetime(cell)
-                out[tag] = (value, stamp)
-            return out
+        body = cls._align_scalar_rows(rows, len(tags))
+        if body is None:
+            return {t: (None, None) for t in tags}
+        for tag, cells in zip(tags, body):
+            out[tag] = cls._scalar_row(cells)
+        return out
 
-        return {t: (None, None) for t in tags}
+    @staticmethod
+    def _align_scalar_rows(
+        rows: Sequence[Sequence[Any]], n_tags: int
+    ) -> Optional[List[Sequence[Any]]]:
+        """Line a scalar grid up with the tag list without reordering it.
+
+        Blank rows in the middle are DATA (a tag that served nothing) and are kept
+        where they are. Blank rows at the edges, and a leading header row, are
+        padding and are trimmed - but only when trimming makes the count match, so
+        an unrecognised shape is reported as such rather than silently shifted.
+        """
+        candidate = [list(r) for r in rows]
+        if len(candidate) == n_tags:
+            return candidate
+
+        def _blank(row: Sequence[Any]) -> bool:
+            return not row or all(c is None or (isinstance(c, str) and not c.strip()) for c in row)
+
+        trimmed = list(candidate)
+        while trimmed and _blank(trimmed[0]):
+            trimmed.pop(0)
+        while trimmed and _blank(trimmed[-1]):
+            trimmed.pop()
+        if len(trimmed) == n_tags:
+            return trimmed
+        # A header row carries no numbers at all.
+        if len(trimmed) == n_tags + 1 and all(coerce_float(c) is None for c in trimmed[0]):
+            return trimmed[1:]
+        return None
+
+    @classmethod
+    def _scalar_row(cls, cells: Sequence[Any]) -> Tuple[Optional[float], Optional[datetime.datetime]]:
+        """One row of a scalar grid as ``(value, stamp)``; stamp is usually ``None``."""
+        value: Optional[float] = None
+        value_at: Optional[int] = None
+        for i, cell in enumerate(cells):
+            v = coerce_float(cell)
+            if v is not None:
+                value, value_at = v, i
+                break
+        stamp: Optional[datetime.datetime] = None
+        for i, cell in enumerate(cells):
+            if i == value_at:
+                continue
+            if isinstance(cell, datetime.datetime) or isinstance(cell, datetime.date):
+                stamp = coerce_excel_datetime(cell)
+                break
+            if isinstance(cell, (int, float)) and not isinstance(cell, bool):
+                if float(cell) >= cls._MIN_STAMP_SERIAL:
+                    stamp = coerce_excel_datetime(cell)
+                    break
+        return value, stamp
+
+    # -- arbitrary CV* formulas -----------------------------------------
+
+    def evaluate_formula(
+        self,
+        formula: str,
+        *,
+        rows_needed: int = 4,
+        timeout: Optional[float] = None,
+    ) -> Tuple[Any, List[List[Any]]]:
+        """Write one arbitrary formula, settle it, and return ``(value, rows)``.
+
+        The escape hatch for the ``CV*`` functions that have no typed wrapper -
+        ``CVNOW``, ``CVTODAY``, ``CVSTREAM``, ``CVTICK`` - and for probing a new
+        one before deciding what its wrapper should look like. It goes through the
+        SAME disciplined write path as every other call (anchor below every live
+        region, cursor advanced by the block's measured extent, nothing ever
+        cleared), which is the whole point of it living here rather than in a
+        probe script: a second write path that does not honour the spacing rules
+        is an ``AccessViolation`` waiting to happen.
+
+        Returns
+        -------
+        tuple
+            ``value`` is the settled anchor cell - the answer itself for a scalar
+            function, or the formula text for one that spills a block. ``rows`` is
+            the normalised block at the measured extent, empty when the formula
+            resolved to a scalar error.
+
+        Notes
+        -----
+        ``rows_needed`` is only a provisional reservation; pass a generous number
+        for a function whose block size is unknown. It does not need to be right,
+        because the cursor is corrected from the real extent afterwards - but
+        under-reserving costs nothing only because the default gap is 30 rows.
+        """
+        with EXCEL_LOCK:
+            rows, value, elapsed = self._write_and_read(
+                str(formula), rows_needed=int(rows_needed), timeout=timeout
+            )
+        if is_pending(value):
+            raise AsyncTimeoutError([str(formula)], elapsed, str(formula))
+        return value, rows
+
+    # -- CVSTREAM -------------------------------------------------------
+
+    def open_stream(
+        self,
+        tags: Sequence[str],
+        *,
+        timeout: Optional[float] = None,
+        settle: bool = True,
+    ) -> Dict[str, str]:
+        """Write one live ``CVSTREAM`` cell per tag and return ``{tag: address}``.
+
+        ``CVSTREAM`` is **one tag per cell** - measured 2026-08-07, a
+        comma-separated list of three tags returned a single scalar (the first
+        tag's), silently dropping the rest. So a 44-tenor curve is 44 cells.
+
+        The cells are real RTD: the same cell read 25 s apart returned
+        ``4.05612604557329`` then ``4.05596231843847``. Two consequences shape
+        this API:
+
+        * **The value lands in the anchor cell itself**, unlike ``CVTSHIST``,
+          which puts its formula text there and spills its block one column left.
+          A scalar does not spill, so polling is just reading the anchor.
+        * **The workbook holding these cells must never be closed.** An RTD cell
+          always has queued add-in actions against it, and tearing one down is the
+          documented ``AccessViolation`` trigger. :meth:`close` is therefore a
+          no-op once a stream is open; see :attr:`has_open_stream`.
+
+        Writing happens once, here, through the same spacing discipline as every
+        other call. :meth:`read_stream` afterwards performs **no writes at all**,
+        which is what makes a long-running poller safe.
+        """
+        wanted = list(dict.fromkeys(str(t).strip() for t in tags if str(t).strip()))
+        cells: Dict[str, str] = {}
+        if not wanted:
+            return cells
+        with EXCEL_LOCK:
+            for tag in wanted:
+                self._check_alive()
+                anchor = self._anchor(2)
+                formula = f'=CVSTREAM("{tag}")'
+                self._write_stream_formula(anchor, formula, tag)
+                self.calls += 1
+                cells[tag] = anchor
+                # Establishing an RTD subscription is real work for Excel, and a
+                # burst of them makes it reject the next write outright. Measured
+                # 2026-08-07: 44 cells opened cleanly, then the 45th (the first of
+                # the next curve) raised com_error(-2147352567, 'Exception
+                # occurred'). Pacing removes it; see _write_stream_formula for the
+                # retry that covers the rest.
+                if self._stream_write_pause:
+                    time.sleep(self._stream_write_pause)
+            self._streaming.update(cells)
+            if settle:
+                # One settle pass over the whole set rather than per cell: they
+                # resolve concurrently, so waiting on each in turn would serialise
+                # what the add-in already parallelises.
+                for tag, anchor in cells.items():
+                    value, elapsed = self._settle(anchor, timeout=timeout)
+                    if is_pending(value):
+                        self._logger.warning(
+                            "CitiVelocityExcelClient.open_stream: %s still pending after %.1fs "
+                            "(cell %s). Leaving it live; read_stream will report it as absent "
+                            "until it resolves.",
+                            tag,
+                            elapsed,
+                            anchor,
+                        )
+        return cells
+
+    def _write_stream_formula(
+        self, anchor: str, formula: str, tag: str, *, attempts: int = 5
+    ) -> None:
+        """Set one ``CVSTREAM`` formula, retrying Excel's transient refusals.
+
+        ``com_retry`` covers the two documented busy HRESULTs and win32com's
+        AttributeError, but a burst of RTD subscriptions produces a *different*
+        rejection: ``com_error(-2147352567, 'Exception occurred.', (0, None, None,
+        None, 0, -2146777998))`` - measured on the 45th consecutive stream write.
+        It is transient and clears in under a second, so it is retried with
+        backoff rather than allowed to abort a daemon that has already placed 44
+        live cells.
+
+        The retry is bounded and re-raises with the tag named, because the same
+        error shape would also be produced by a genuinely bad formula, and a
+        daemon that retried that forever would look like a hang.
+        """
+        last: Optional[BaseException] = None
+        for attempt in range(max(1, attempts)):
+            try:
+                com_retry(lambda: setattr(self._ws.Range(anchor), "Formula", formula))
+                return
+            except Exception as exc:  # noqa: BLE001 - re-raised below if persistent
+                last = exc
+                self._logger.debug(
+                    "open_stream: %s at %s rejected (attempt %d/%d): %s",
+                    tag, anchor, attempt + 1, attempts, exc,
+                )
+                time.sleep(0.5 * (attempt + 1))
+        raise CitiVelocityError(
+            f"CVSTREAM formula for {tag!r} at {anchor} was refused {attempts} times "
+            f"({last}). Excel may be saturated with RTD subscriptions - reduce the number of "
+            "streamed curves, or raise stream_write_pause."
+        ) from last
+
+    @property
+    def has_open_stream(self) -> bool:
+        """True once :meth:`open_stream` has written a live RTD cell."""
+        return bool(self._streaming)
+
+    def read_stream(
+        self, cells: Optional[Mapping[str, str]] = None
+    ) -> Dict[str, Optional[float]]:
+        """Current value of each streaming cell. **Reads only - never writes.**
+
+        A tag whose cell is still pending, or has resolved to an Excel error,
+        comes back as ``None`` rather than as a number. That distinction is the
+        whole point: an RTD cell that has stopped updating still holds its last
+        value, so the caller needs the timestamp discipline of the layer above to
+        decide whether a number is current.
+        """
+        target = dict(cells) if cells is not None else dict(self._streaming)
+        out: Dict[str, Optional[float]] = {}
+        with EXCEL_LOCK:
+            for tag, anchor in target.items():
+                try:
+                    value = com_retry(lambda: self._ws.Range(anchor).Value)
+                except Exception as exc:  # noqa: BLE001 - one bad cell is not the batch
+                    self._logger.debug("read_stream: %s (%s) failed: %s", tag, anchor, exc)
+                    out[tag] = None
+                    continue
+                if is_pending(value) or (isinstance(value, int) and excel_error_name(value)):
+                    out[tag] = None
+                    continue
+                out[tag] = coerce_float(value)
+        return out
 
     # -- CVCURVE / CVCURVEBOND ------------------------------------------
 

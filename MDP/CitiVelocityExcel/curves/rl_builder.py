@@ -71,6 +71,7 @@ we have.
 from __future__ import annotations
 
 import datetime
+import math
 import logging
 from typing import Any, Dict, List, Mapping, Optional, Tuple, Union
 
@@ -255,6 +256,40 @@ def _normalise_par_rates(par_rates: Union[Mapping[str, float], pd.Series]) -> Di
 # ------------------------------------------------------------------ #
 #                       instrument construction                      #
 # ------------------------------------------------------------------ #
+
+
+def _seed_discount_factors(
+    ref: datetime.datetime,
+    tenors: List[str],
+    node_dates: List[datetime.datetime],
+    rates: Mapping[str, float],
+) -> Dict[datetime.datetime, float]:
+    """Starting discount factors for the solver: ``exp(-par_t * t)`` per node.
+
+    The solver's fixed point does not depend on where it starts, but whether it
+    *reaches* it does. Seeding every node at 1.0 - which is what this builder used
+    to do - diverges on a high-rate curve with a long tail. Measured 2026-08-06 on
+    real Citi grids: ``MXN_T_FONDEO`` (8.47-8.59% out to 50Y) and ``ZAR_ZARONIA``
+    (8.26-8.44%) both hit ``max_iter`` with ``f_val: nan`` after 100 iterations,
+    and both solve in a handful of iterations from this seed. Bisection put the
+    boundary in the same place for both: the 40-tenor prefix to 30Y converged,
+    adding 35Y did not. Nothing at the long end of either grid is degenerate - the
+    quotes are smooth and monotone - it is purely that ``DF(50Y) ~ exp(-0.085*50)
+    = 0.014`` is a long way from 1.0 and the Levenberg-Marquardt step runs the
+    factor negative on the way.
+
+    For an OIS the par swap rate is close to the average zero rate over its life,
+    so this is a good guess everywhere and an exact one for a flat curve. It
+    cannot change any answer - the reprice guard downstream checks the solved
+    curve against the quotes it was built from either way - it only changes
+    whether an answer is produced at all.
+    """
+    out: Dict[datetime.datetime, float] = {}
+    for tenor, node in zip(tenors, node_dates):
+        years = max((node - ref).days / 365.0, 1.0 / 365.0)
+        rate = float(rates[tenor]) / 100.0
+        out[node] = math.exp(-rate * years)
+    return out
 
 
 def _warn_if_approximate(conv: CurveConvention, curve_id: str) -> None:
@@ -480,7 +515,7 @@ def build_rl_ois_curve(
     solve_rates = [rates_map[t] for t in ordered_tenors]
 
     curve_kwargs: Dict[str, Any] = dict(
-        nodes={ref: 1.0, **{d: 1.0 for d in node_dates}},
+        nodes={ref: 1.0, **_seed_discount_factors(ref, ordered_tenors, node_dates, rates_map)},
         id=cid,
         convention=conv.convention,
         calendar=calendar,

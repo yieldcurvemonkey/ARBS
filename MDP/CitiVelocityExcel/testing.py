@@ -30,7 +30,7 @@ from __future__ import annotations
 import datetime
 import re
 from dataclasses import dataclass, field
-from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
+from typing import Any, Callable, ClassVar, Dict, List, Optional, Sequence, Tuple
 
 import pandas as pd
 
@@ -147,12 +147,47 @@ class FakeVelocityData:
     date_as_serial: bool = False
     udf_registered: bool = True
     price_point_in_header: bool = True
+    #: How much a CVSTREAM cell moves per read, so "it ticks" is assertable.
+    stream_tick: float = 1e-5
+    stream_reads: Dict[str, int] = field(default_factory=dict)
+    #: Model the add-in's silent span-driven downsampling. Measured 2026-08-07:
+    #: an ``MI01`` request spanning 6 days serves 1-minute data and one spanning
+    #: 7 days serves 10-minute, at any age. The block looks identical either way,
+    #: which is what makes it dangerous - so the fake reproduces it, and the
+    #: windowed fetcher's spacing guard has something real to catch.
+    #: Setting this False is the mutation that proves the guard has teeth.
+    downsample_cliff: bool = True
 
     # -- helpers --------------------------------------------------------
 
     def _stamp(self, when: pd.Timestamp) -> Any:
         py = when.to_pydatetime()
         return to_excel_serial(py) if self.date_as_serial else py
+
+    #: What the add-in degrades to, per requested frequency, once the span
+    #: exceeds the widest window that frequency is served at. From the measured
+    #: ladder in ``MDP.CitiVelocityExcel.windowed``.
+    _CLIFF: ClassVar[Dict[str, Tuple[datetime.timedelta, str]]] = {
+        "MI01": (datetime.timedelta(days=6), "10min"),
+        "MI10": (datetime.timedelta(days=60), "60min"),
+        "HOURLY": (datetime.timedelta(days=120), "1D"),
+    }
+
+    def _apply_cliff(self, s: pd.Series, *, freq: str, start: str, end: str) -> pd.Series:
+        """Coarsen ``s`` the way the add-in does when the span is too wide."""
+        if not self.downsample_cliff or s.empty:
+            return s
+        entry = self._CLIFF.get((freq or "").upper())
+        if entry is None:
+            return s
+        cap, coarse = entry
+        if start and end:
+            span = _parse_bound(end) - _parse_bound(start)
+        else:
+            span = s.index.max() - s.index.min()
+        if span <= cap:
+            return s
+        return s.resample(coarse).last().dropna()
 
     def _window(
         self,
@@ -161,20 +196,26 @@ class FakeVelocityData:
         period: str,
         start: str,
         end: str,
+        freq: str = "",
     ) -> pd.Series:
         out = s
         if start:
             out = out[out.index >= _parse_bound(start)]
         if end:
             out = out[out.index <= _parse_bound(end)]
-        if period and not start:
+        if period and not start and period.upper() != "MAX":
+            # "MAX" means the tag's whole history, so there is nothing to trim.
+            # The rest are <n><D|W|M|Y|H|I> from the add-in's closed vocabulary;
+            # the intraday units are minutes/hours.
             unit = period[-1].upper()
             n = int(period[:-1])
-            days = {"D": 1, "W": 7, "M": 31, "Y": 366}[unit] * n
+            per_unit = {"I": 1 / 1440, "H": 1 / 24, "D": 1, "W": 7, "M": 31, "Y": 366}
+            if unit not in per_unit:
+                return out
             if not out.empty:
-                cutoff = out.index.max() - pd.Timedelta(days=days)
+                cutoff = out.index.max() - pd.Timedelta(days=per_unit[unit] * n)
                 out = out[out.index >= cutoff]
-        return out
+        return self._apply_cliff(out, freq=freq, start=start, end=end)
 
     # -- block builders -------------------------------------------------
 
@@ -183,6 +224,7 @@ class FakeVelocityData:
         if not self.udf_registered:
             return NAME_ERR
         tags = [t.strip() for t in (args[0] if args else "").split(",") if t.strip()]
+        freq = args[1] if len(args) > 1 else ""
         period = args[2] if len(args) > 2 else ""
         start = args[3] if len(args) > 3 else ""
         end = args[4] if len(args) > 4 else ""
@@ -195,7 +237,7 @@ class FakeVelocityData:
             s = self.series.get(tag)
             if s is None:
                 continue
-            frames[tag] = self._window(s, period=period, start=start, end=end)
+            frames[tag] = self._window(s, period=period, start=start, end=end, freq=freq)
 
         index = pd.DatetimeIndex([])
         for s in frames.values():
@@ -297,12 +339,37 @@ class FakeVelocityData:
             return NAME_ERR
         return [[self._stamp(pd.Timestamp(datetime.date.today()))]]
 
+    def stream_block(self, args: Sequence[str]) -> Any:
+        """A live ``CVSTREAM`` cell: ONE scalar, which moves on every read.
+
+        Both properties are measured, not invented (2026-08-07):
+
+        * ``CVSTREAM("a,b,c")`` returned a single scalar - the FIRST tag's - so
+          the comma-separated list is silently truncated to one. The fake does the
+          same, which is what lets a test prove the caller writes one cell per tag
+          instead of assuming a batch;
+        * the same cell read 25 s apart returned ``4.05612604557329`` then
+          ``4.05596231843847``. The drift here is deterministic rather than random
+          so a test can assert "it moved" without a seed.
+        """
+        if not self.udf_registered:
+            return NAME_ERR
+        raw = (args[0] if args else "").split(",")
+        tag = raw[0].strip()
+        series = self.series.get(tag)
+        if series is None or series.empty:
+            return VALUE_ERR
+        self.stream_reads[tag] = self.stream_reads.get(tag, 0) + 1
+        base = float(series.iloc[-1])
+        return [[base + self.stream_tick * self.stream_reads[tag]]]
+
     def dispatch(self, fn: str, args: Sequence[str]) -> Any:
         handler: Optional[Callable[[Sequence[str]], Any]] = {
             "CVTSHIST": self.tshist_block,
             "CVMETADATA": self.metadata_block,
             "CVLATEST": self.latest_block,
             "CVSNAP": self.snap_block,
+            "CVSTREAM": self.stream_block,
             "CVCURVE": self.curve_block,
             "CVCURVEBOND": self.curve_block,
             "CVTODAY": self.today_block,
@@ -371,6 +438,18 @@ class FakeRange:
                 tuple(self._sheet.read(r, c) for c in range(self.Column, self.Column + self._n_cols))
             )
         return tuple(rows)
+
+    @Value.setter
+    def Value(self, value: Any) -> None:
+        """Write a literal (not a formula) into a single cell.
+
+        Used for the workbook reuse marker; a formula would be evaluated, and the
+        marker is deliberately inert.
+        """
+        if self._n_rows == 1 and self._n_cols == 1:
+            self._sheet.cells[(self.Row, self.Column)] = value
+            return
+        raise ValueError("FakeRange.Value: only a single cell can be assigned")
 
     @property
     def CurrentRegion(self) -> "FakeRange":
@@ -458,9 +537,43 @@ class FakeWorksheet:
         self.Name = name
         self.cells: Dict[Tuple[int, int], Any] = {}
         self._pending: Dict[Tuple[int, int], int] = {}
+        #: Cells holding a live CVSTREAM formula, re-evaluated on every read so
+        #: the fake actually behaves like RTD. Measured on the real add-in: the
+        #: same cell 25 s apart returned 4.05612604557329 then 4.05596231843847.
+        self._stream_cells: Dict[Tuple[int, int], Sequence[str]] = {}
         self.Names = _Names()
+        #: Set by tests that need to prove a refused delete is survivable rather
+        #: than fatal - Excel does refuse, and the backfill must carry on.
+        self.refuse_delete = False
+
+    # -- lifecycle ------------------------------------------------------
+
+    def Delete(self) -> None:
+        """Drop this sheet from its workbook, as ``Worksheet.Delete`` does."""
+        if self.refuse_delete:
+            raise RuntimeError("Excel refused to delete the sheet")
+        if self in self.book.sheets:
+            self.book.sheets.remove(self)
+            self.book.sheets_deleted.append(self.Name)
 
     # -- addressing -----------------------------------------------------
+
+    @property
+    def UsedRange(self) -> FakeRange:
+        """The rectangle spanning every populated cell on the sheet.
+
+        Unlike ``CurrentRegion`` this is not contiguity-based: it covers
+        everything, which is exactly what a client reusing a workbook needs in
+        order to start below all of it.
+        """
+        occupied = [(r, c) for (r, c), v in self.cells.items() if v is not None]
+        if not occupied:
+            return FakeRange(self, 1, 1, 1, 1)
+        rows = [r for r, _ in occupied]
+        cols = [c for _, c in occupied]
+        top, bottom = min(rows), max(rows)
+        left, right = min(cols), max(cols)
+        return FakeRange(self, top, left, bottom - top + 1, right - left + 1)
 
     def Range(self, addr: str) -> FakeRange:
         m = _ADDR_RE.match(str(addr).strip())
@@ -472,6 +585,15 @@ class FakeWorksheet:
 
     def read(self, row: int, col: int) -> Any:
         key = (row, col)
+        if key in self._stream_cells and not self._pending.get(key, 0):
+            # A live RTD cell: its value is whatever the feed says NOW, not what
+            # it said when the formula was written.
+            fresh = self.book.app.data.dispatch("CVSTREAM", self._stream_cells[key])
+            if isinstance(fresh, list):
+                self.cells[key] = fresh[0][0]
+            else:
+                self.cells[key] = fresh
+            return self.cells[key]
         remaining = self._pending.get(key, 0)
         if remaining < 0:
             # Never settles - models an add-in that has stopped answering.
@@ -500,6 +622,17 @@ class FakeWorksheet:
         if isinstance(result, int):
             # A scalar error replaces the anchor value entirely.
             self.cells[(row, col)] = result
+            return
+
+        if fn.upper() == "CVSTREAM":
+            self._stream_cells[(row, col)] = args
+            # A scalar does not spill: CVSTREAM's value lands in the ANCHOR cell
+            # itself (measured - evaluate_formula saw the number as the settled
+            # anchor value). Reproducing that here is what makes read_stream's
+            # "read the anchor" strategy actually exercised.
+            self.cells[(row, col)] = result[0][0]
+            self.book.app.blocks.append((self.Name, row, col, 1, 1))
+            self.Names.define(f"CvFunction_{row}_{col}", [FakeRange(self, row, col, 1, 1)])
             return
 
         # The block starts one row down and one column LEFT of the anchor.
@@ -554,8 +687,9 @@ class _Worksheets:
         return self.book.sheets[int(index) - 1]
 
     def Add(self) -> FakeWorksheet:
-        sheet = FakeWorksheet(self.book, f"Sheet{len(self.book.sheets) + 1}")
+        sheet = FakeWorksheet(self.book, f"Sheet{self.book.sheets_created + 1}")
         self.book.sheets.append(sheet)
+        self.book.sheets_created += 1
         return sheet
 
     @property
@@ -570,6 +704,10 @@ class FakeWorkbook:
         self.closed = False
         self.saved = False
         self.Names = _Names()
+        #: Sheets ever added, so a test can tell "created and dropped" from
+        #: "never created" - the whole point of the per-window sheet lifecycle.
+        self.sheets_created = 1
+        self.sheets_deleted: List[str] = []
 
     @property
     def Worksheets(self) -> _Worksheets:
@@ -585,6 +723,14 @@ class FakeWorkbook:
 class _Workbooks:
     def __init__(self, app: "FakeExcelApp"):
         self.app = app
+
+    def __call__(self, index: int) -> FakeWorkbook:
+        """1-based indexing, like Excel's own collection.
+
+        Needed so ``find_marked_workbook`` - which walks the collection looking
+        for this package's reuse marker - is exercised hermetically.
+        """
+        return self.app.workbooks_list[int(index) - 1]
 
     def Add(self) -> FakeWorkbook:
         book = FakeWorkbook(self.app)
@@ -632,6 +778,9 @@ class FakeExcelApp:
         self.workbooks_list: List[FakeWorkbook] = []
         self.workbooks_created: List[FakeWorkbook] = []
         self.calculate_calls = 0
+        #: Excel prompts before deleting a sheet with content; the client turns
+        #: this off around the delete and restores it, and a test asserts it did.
+        self.DisplayAlerts = True
 
     @property
     def Workbooks(self) -> _Workbooks:

@@ -21,7 +21,7 @@ from __future__ import annotations
 
 import datetime
 import re
-from typing import Iterable, Optional, Sequence, Union
+from typing import Dict, Iterable, Optional, Sequence, Tuple, Union
 
 from MDP.CitiVelocityExcel.errors import FrequencyError
 from MDP.CitiVelocityExcel.excel_constants import (
@@ -31,6 +31,8 @@ from MDP.CitiVelocityExcel.excel_constants import (
 )
 
 __all__ = [
+    "PERIODS",
+    "INTRADAY_PERIODS",
     "normalise_frequency",
     "normalise_price_point",
     "is_intraday",
@@ -42,6 +44,33 @@ __all__ = [
 ]
 
 DateLike = Union[datetime.date, datetime.datetime, str]
+
+#: ``CVTSHIST``'s ``Period`` argument is a CLOSED VOCABULARY, not a grammar. The
+#: add-in rejects anything else outright - and it does so by writing nothing at
+#: all into the sheet, instantly, which reads exactly like "this tag has no data"
+#: rather than like a bad argument.
+#:
+#: Transcribed verbatim from the add-in's own error, observed 2026-08-07 in
+#: ``Citi_Velocity_Excel.log``::
+#:
+#:     Error in params. CVTSHIST - Parameter 'Period' must be one of "30I", "1H",
+#:     "2H", "4H", "8H", "12H", "1D", "2D", "4D", "1W", "2W", "1M", "2M", "3M",
+#:     "6M", "1Y", "2Y", "3Y", "5Y", "10Y", "MAX".
+#:
+#: This module previously validated with ``^\d+[DWMY]$``, which accepts ``5D``,
+#: ``4M``, ``15Y`` and ``50Y`` - none of which the add-in takes. The cost was
+#: silent: a request with an unaccepted period returned an empty frame and the
+#: caller concluded the tags did not serve.
+PERIODS: Tuple[str, ...] = (
+    "30I", "1H", "2H", "4H", "8H", "12H",
+    "1D", "2D", "4D", "1W", "2W",
+    "1M", "2M", "3M", "6M",
+    "1Y", "2Y", "3Y", "5Y", "10Y",
+    "MAX",
+)
+
+#: The intraday subset, for callers pairing a period with MI01/MI10/HOURLY.
+INTRADAY_PERIODS: Tuple[str, ...] = ("30I", "1H", "2H", "4H", "8H", "12H")
 
 _PERIOD_RE = re.compile(r"^\d+[DWMY]$", re.IGNORECASE)
 
@@ -118,17 +147,60 @@ def format_bound(when: Optional[DateLike], *, freq: str) -> str:
 
 
 def normalise_period(period: Optional[str]) -> str:
-    """Validate a relative period such as ``'1W'``, ``'6M'``, ``'5Y'``."""
+    """Validate a relative period against the add-in's CLOSED vocabulary.
+
+    See :data:`PERIODS`. A period the add-in does not accept is rejected here,
+    loudly, rather than sent - because the add-in's own rejection is silent: it
+    writes no block at all and the caller sees an empty frame, which is
+    indistinguishable from a tag that has no data.
+
+    Raises
+    ------
+    FrequencyError
+        Naming the accepted set, and - for a value of the right shape but the
+        wrong size, which is the mistake people actually make - the nearest
+        accepted period.
+    """
     if period is None:
         return ""
     token = str(period).strip().upper()
     if not token:
         return ""
-    if not _PERIOD_RE.match(token):
-        raise FrequencyError(
-            f"Unsupported CVTSHIST period {period!r}; expected <n><D|W|M|Y>, e.g. '1W', '6M', '5Y'."
+    if token in PERIODS:
+        return token
+    hint = ""
+    if _PERIOD_RE.match(token):
+        nearest = _nearest_period(token)
+        hint = (
+            f" {token!r} has the right shape but is not one of them"
+            + (f"; the nearest accepted period is {nearest!r}." if nearest else ".")
+            + " Use explicit start=/end= bounds for a window this vocabulary cannot express -"
+            " they are honoured, and 'MAX' gives the tag's whole history."
         )
-    return token
+    raise FrequencyError(
+        f"Unsupported CVTSHIST period {period!r}. Must be one of {', '.join(PERIODS)}.{hint}"
+    )
+
+
+#: Approximate calendar length of each accepted period, for the "nearest" hint
+#: only. Intraday periods are excluded: suggesting '12H' to someone who asked for
+#: '5D' would be worse than saying nothing.
+_PERIOD_DAYS: Dict[str, float] = {
+    "1D": 1, "2D": 2, "4D": 4, "1W": 7, "2W": 14,
+    "1M": 30, "2M": 61, "3M": 91, "6M": 183,
+    "1Y": 365, "2Y": 730, "3Y": 1095, "5Y": 1826, "10Y": 3652,
+}
+_UNIT_DAYS = {"D": 1.0, "W": 7.0, "M": 30.44, "Y": 365.25}
+
+
+def _nearest_period(token: str) -> Optional[str]:
+    try:
+        wanted = float(token[:-1]) * _UNIT_DAYS[token[-1]]
+    except (ValueError, KeyError):
+        return None
+    if wanted > _PERIOD_DAYS["10Y"]:
+        return "MAX"
+    return min(_PERIOD_DAYS, key=lambda k: abs(_PERIOD_DAYS[k] - wanted))
 
 
 # ------------------------------------------------------------------ #
