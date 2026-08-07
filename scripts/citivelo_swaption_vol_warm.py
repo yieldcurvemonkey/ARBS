@@ -188,6 +188,7 @@ def build(
     overwrite: bool,
     max_days: Optional[int] = None,
     freq: str = "DAILY",
+    atm_fallback: bool = True,
 ) -> int:
     """Assemble one cube per observation date from the CACHE. No Excel, no network."""
     from Caching.swaption_cube_store import SwaptionCubeStore, asset_for
@@ -221,6 +222,7 @@ def build(
     )
 
     written = skipped = failed = 0
+    last_exc: Optional[BaseException] = None
     dates = list(frame.index)
     if max_days:
         dates = dates[-int(max_days):]
@@ -230,23 +232,50 @@ def build(
             skipped += 1
             continue
         row = frame.loc[stamp].dropna()
+        # An exact 0.0 is a PLACEHOLDER, not a quote. Citi serves them on the
+        # corners of the grid that were not quoted that day, and they are finite,
+        # so cube_from_quotes keeps them and assert_vol_units then rejects the
+        # whole day - measured, 174 days of early history lost to a handful of
+        # zeros each. A normal swaption vol cannot be 0.0 bp (the plausible band
+        # starts at 0.5), so dropping them here is the same judgement the units
+        # guard makes, applied at the node instead of the day. strict=False then
+        # keeps the largest complete rectangle.
+        row = row[row != 0.0]
         if row.empty:
             continue
-        try:
-            cube = cube_from_quotes(
-                quotes=row.to_dict(),
-                currency=currency,
-                as_of=as_of,
-                offsets_bp=list(DEFAULT_OFFSETS_BP),
-                served_unit="bp",
-                strict=False,
-                source=f"citivelo_excel_warm/{freq}",
-            )
-        except (RaggedCubeError, ValueError, KeyError) as exc:
+        cube = None
+        for offsets, tag in (
+            (list(DEFAULT_OFFSETS_BP), ""),
+            # Citi's OTM skew history is shorter than its ATM history: before
+            # 2020-01-24 there is no expiry x tenor rectangle for which all
+            # twelve offsets were served, so the full grid has nothing to build.
+            # Those days DO have an ATM surface, and an ATM-only cube is a
+            # complete, priceable one - so fall back rather than leave a hole,
+            # and record the shape in `source` so a reader can tell the two
+            # apart without inspecting the axes.
+            ((), "/atm_only") if atm_fallback else (None, None),
+        ):
+            if offsets is None:
+                break
+            try:
+                cube = cube_from_quotes(
+                    quotes=row.to_dict(),
+                    currency=currency,
+                    as_of=as_of,
+                    offsets_bp=list(offsets),
+                    served_unit="bp",
+                    strict=False,
+                    source=f"citivelo_excel_warm/{freq}{tag}",
+                )
+                break
+            except (RaggedCubeError, ValueError, KeyError) as exc:
+                last_exc = exc
+                continue
+        if cube is None:
             # A day with too few served nodes is a real gap, not an error to
             # paper over. Skip it and say so; the store stays honest about which
             # days exist.
-            _logger.info("build: %s unbuildable (%s: %s)", as_of, type(exc).__name__, exc)
+            _logger.info("build: %s unbuildable (%s: %s)", as_of, type(last_exc).__name__, last_exc)
             failed += 1
             continue
         store.write_day(asset, as_of, cube, citi_index=citi_index, overwrite=overwrite)
@@ -296,6 +325,11 @@ def main() -> int:
     parser.add_argument("--memory-abort-mb", type=float, default=DEFAULT_MEMORY_ABORT_MB)
     parser.add_argument("--overwrite", action="store_true")
     parser.add_argument("--max-days", type=int, default=None)
+    parser.add_argument(
+        "--no-atm-fallback",
+        action="store_true",
+        help="do not fall back to an ATM-only cube on days with no full-smile rectangle",
+    )
     args = parser.parse_args()
 
     logging.basicConfig(
@@ -316,6 +350,7 @@ def main() -> int:
             citi_index=args.citi_index,
             overwrite=args.overwrite,
             max_days=args.max_days,
+            atm_fallback=not args.no_atm_fallback,
         )
     return status(currency=args.currency)
 
