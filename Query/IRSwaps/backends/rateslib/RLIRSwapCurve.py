@@ -7,6 +7,7 @@ import rateslib as rl
 
 from Query.IRSwaps._IRSwapGenericCurve import _IRSwapGenericCurve
 from Query.IRSwaps.backends.rateslib.rl_curve_definitions_map import RATESLIB_CURVE_DEFINITIONS
+from utils.rl_compat import rate_fixings_kwargs
 
 
 @dataclass
@@ -87,7 +88,7 @@ class RLIRSwapCurve(_IRSwapGenericCurve):
                 curves=self._rl_curve_handle,
                 spec=curve_def["ReferenceRate"],
                 notional=self.notional(irswap),
-                leg2_rate_fixings=self._fixings,
+                **rate_fixings_kwargs(self._fixings),
             )
             .npv(curves=self._rl_curve_handle)
             .real
@@ -170,7 +171,7 @@ class RLIRSwapCurve(_IRSwapGenericCurve):
                 spec=curve_def["ReferenceRate"],
                 curves=self._rl_curve_handle,
                 notional=1,
-                leg2_rate_fixings=self._fixings,
+                **rate_fixings_kwargs(self._fixings),
             ).analytic_delta(curves=self._rl_curve_handle)
             notional = bpv / unit_delta
 
@@ -185,7 +186,7 @@ class RLIRSwapCurve(_IRSwapGenericCurve):
                     spec=curve_def["ReferenceRate"],
                     curves=self._rl_curve_handle,
                     notional=1,
-                    leg2_rate_fixings=self._fixings,
+                    **rate_fixings_kwargs(self._fixings),
                 )
             )
 
@@ -204,7 +205,7 @@ class RLIRSwapCurve(_IRSwapGenericCurve):
             # number was wrong, but every object handed out was.
             fixed_rate=float(fixed_rate) * 100.0,
             notional=notional,
-            leg2_rate_fixings=self._fixings,
+            **rate_fixings_kwargs(self._fixings),
         )
 
     def build_pricable(self, /, **kwargs: Any) -> rl.IRS:
@@ -251,7 +252,8 @@ class RLIRSwapCurve(_IRSwapGenericCurve):
         This is the norm for the front monthly contract (ZQ/SR1), whose calendar
         month is always partly in the past. Mirrors
         ``RLSTIRFuturePricer.build_for_solver``'s fixings handling: mask to the
-        spec calendar's business days, then try each rateslib fixings kwarg name.
+        spec calendar's business days, then pass them under whichever kwarg name
+        the installed rateslib uses (see ``utils.rl_compat``).
         """
         curve_def = self._curve_definition()
         if bpv and not notional:
@@ -285,11 +287,5 @@ class RLIRSwapCurve(_IRSwapGenericCurve):
             )
             masked = fixings[mask]
             if not masked.empty:
-                for fixings_key in ("leg2_rate_fixings", "leg2_fixings"):
-                    try:
-                        return rl.STIRFuture(**kwargs, **{fixings_key: masked})
-                    except TypeError:
-                        continue
-                    except (ValueError, KeyError):
-                        break
+                return rl.STIRFuture(**kwargs, **rate_fixings_kwargs(masked))
         return rl.STIRFuture(**kwargs)

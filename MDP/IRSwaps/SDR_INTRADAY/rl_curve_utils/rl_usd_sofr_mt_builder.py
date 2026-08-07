@@ -18,6 +18,7 @@ from MDP.IRSwaps.SDR_INTRADAY.rl_curve_utils.stir_curve_building_utils import (
     get_fomc_meetings_list,
     get_short_end_curve_tickers,
 )
+from utils.rl_compat import fixed_rate as rl_fixed_rate
 
 
 def rl_usd_sofr_mt_builder(
@@ -41,10 +42,7 @@ def rl_usd_sofr_mt_builder(
     warnings.filterwarnings("ignore", category=UserWarning)
 
     def _safe_fixed_rate(f):
-        try:
-            return f._fixed_rate.iloc[-1]
-        except Exception:
-            return f._fixed_rate
+        return rl_fixed_rate(f)
 
     def ql_date_to_datetime(ql_date: ql.Date) -> datetime.datetime:
         return datetime.datetime(ql_date.year(), ql_date.month(), ql_date.dayOfMonth())

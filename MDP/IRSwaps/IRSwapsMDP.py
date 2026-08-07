@@ -2397,7 +2397,11 @@ class IRSwapsMDP(MarketDataProvider[_GenericPricable]):
 
         elif self.source.upper() in ["SDR_INTRADAY-RL_USD_SOFR_STIR_Q12X12", "SDR_INTRADAY_RL_USD_SOFR_STIR_Q12X12"]:
             assert type(timestamp) == datetime.datetime or timestamp == "live", "need to pass in a 'datetime.datetime' timestamp"
-            assert curve_name == "USD-SOFR", "SOFR!"
+            # 'USD-SOFR' (the name this branch used to demand) is not a key in
+            # RATESLIB_CURVE_DEFINITIONS, so the curve built and then every
+            # pricing call off it died with KeyError: 'USD-SOFR'. Every sibling
+            # SOFR branch asserts 'USD-SOFR-1D'; this one was the odd one out.
+            assert curve_name == "USD-SOFR-1D", "SOFR!"
 
             from MDP.IRSwaps.SDR_INTRADAY.rl_usd_sofr_stir_q12x12.rl_usd_sofr_stir_q12x12 import rl_usd_sofr_stir_curve
             from Query.IRSwaps.backends.rateslib.RLIRSwapCurve import RLIRSwapCurve
