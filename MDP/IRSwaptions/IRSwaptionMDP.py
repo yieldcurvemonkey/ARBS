@@ -3,6 +3,7 @@ from __future__ import annotations
 import datetime as dt
 import hashlib
 import json
+import logging
 from dataclasses import dataclass
 from typing import Any, Callable, Dict, Iterable, Literal, Optional
 
@@ -15,16 +16,36 @@ from Query.IRSwaps._IRSwapGenericCurve import _IRSwapGenericCurve
 
 DateLike = dt.date | dt.datetime | str
 
+_logger = logging.getLogger(__name__)
+
 
 @dataclass
 class IRSwaptionMarketContext:
+    """One dated market snapshot: a curve, a vol object and an engine to use them.
+
+    The four market fields are annotated ``Any`` because the engine decides what
+    they are, not this class. Under ``engine='QL'`` they are exactly what they
+    always were - ``ql.YieldTermStructureHandle``, ``ql.SwapIndex``,
+    ``ql.SwaptionVolatilityStructureHandle``, ``ql.PricingEngine`` - and every
+    existing provider still produces those. Under ``engine='RL'`` the curve handle
+    is a ``rateslib.Curve``, the vol object is a
+    :class:`~MDP.CitiVelocityExcel.vol.swaption_cube.CitiVeloSwaptionCube` and the
+    pricing engine is an
+    :class:`~MDP.IRSwaptions.CITIVELO.rl_engine.RLSwaptionEngine`.
+
+    The registry was always this permissive - ``tests/test_ir_swaption_mdp.py``
+    registers an engine factory returning a bare ``object()`` and drives it end to
+    end - so the annotations were describing one engine rather than the contract.
+    Writing ``Any`` is not a loosening; it is what the code has always done.
+    """
+
     curve_name: str
     as_of_date: dt.date
     curve: _IRSwapGenericCurve
-    curve_handle: ql.YieldTermStructureHandle
-    swap_index: ql.SwapIndex
-    vol_handle: ql.SwaptionVolatilityStructureHandle
-    pricing_engine: ql.PricingEngine
+    curve_handle: Any
+    swap_index: Any
+    vol_handle: Any
+    pricing_engine: Any
     provider: str
     engine: str
     surface_type: str
@@ -91,6 +112,35 @@ def _normalize_dates(values: Iterable[DateLike]) -> list[dt.date]:
     return sorted(out)
 
 
+def _citivelo_vol_provider(
+    *,
+    curve_name: str,
+    dates: list[dt.date],
+    surface_type: str,
+    **kwargs: Any,
+) -> dict[dt.date, Any]:
+    """Citi Velocity's swaption cube, as a ``VOL_PROVIDERS`` entry.
+
+    A module-level function rather than a static method so the two flags below
+    survive attribute lookup: ``_build_contexts`` reads them off whatever object
+    the registry holds.
+    """
+    from MDP.IRSwaptions.CITIVELO.provider import get_citivelo_vol_objects
+
+    return get_citivelo_vol_objects(
+        curve_name=curve_name, dates=dates, surface_type=surface_type, **kwargs
+    )
+
+
+#: This provider needs the curve (its strike axis is anchored on one) and the
+#: engine token (it returns a QuantLib handle under ``-QL`` and the cube itself
+#: under ``-RL``). Both are passed ONLY to providers that ask, because
+#: ``MONKEYCUBE``'s provider forwards ``**kwargs`` straight into
+#: ``get_sabr_vol_surfaces``, where an unexpected keyword is a TypeError.
+_citivelo_vol_provider.wants_curves = True  # type: ignore[attr-defined]
+_citivelo_vol_provider.wants_engine = True  # type: ignore[attr-defined]
+
+
 class IRSwaptionMDP(LayeredCacheMixin, MarketDataProvider[IRSwaptionMarketContext]):
     _CACHE_VERSION = "v1"
     _CACHE_ATTR = "_irswaption_mdp_cache"
@@ -129,8 +179,12 @@ class IRSwaptionMDP(LayeredCacheMixin, MarketDataProvider[IRSwaptionMarketContex
             self.VOL_PROVIDERS["MONKEYCUBE"] = self._monkeycube_vol_provider
         if "GSQUANT_MC_ENHANCED" not in self.VOL_PROVIDERS:
             self.VOL_PROVIDERS["GSQUANT_MC_ENHANCED"] = self._gsquant_mc_enhanced_vol_provider
+        if "CITIVELO" not in self.VOL_PROVIDERS:
+            self.VOL_PROVIDERS["CITIVELO"] = _citivelo_vol_provider
         if "QL" not in self.ENGINE_FACTORIES:
             self.ENGINE_FACTORIES["QL"] = self._ql_engine_factory
+        if "RL" not in self.ENGINE_FACTORIES:
+            self.ENGINE_FACTORIES["RL"] = self._rl_engine_factory
 
     @staticmethod
     def _gsquant_vol_provider(
@@ -186,6 +240,21 @@ class IRSwaptionMDP(LayeredCacheMixin, MarketDataProvider[IRSwaptionMarketContex
             return ql.BachelierSwaptionEngine(curve_handle, vol_handle)
         except TypeError:
             return ql.BachelierSwaptionEngine(curve_handle, vol_handle, day_counter)
+
+    @staticmethod
+    def _rl_engine_factory(
+        *,
+        curve_handle: Any,
+        vol_handle: Any,
+        day_counter: Any,
+        **kwargs: Any,
+    ) -> Any:
+        """The rateslib swaption engine. See :mod:`MDP.IRSwaptions.CITIVELO.rl_engine`."""
+        from MDP.IRSwaptions.CITIVELO.rl_engine import make_rl_swaption_engine
+
+        return make_rl_swaption_engine(
+            curve_handle=curve_handle, vol_handle=vol_handle, day_counter=day_counter, **kwargs
+        )
 
     def _cache_key(
         self,
@@ -266,6 +335,31 @@ class IRSwaptionMDP(LayeredCacheMixin, MarketDataProvider[IRSwaptionMarketContex
                 "engine": value.engine,
                 "surface_type": value.surface_type,
             }
+
+    @staticmethod
+    def _assert_curve_matches_engine(*, engine: str, curve: Any, curve_handle: Any) -> None:
+        """Refuse a curve the engine cannot price with, and say which one to use.
+
+        ``handle()`` returns a ``ql.YieldTermStructureHandle`` on the QuantLib
+        curve backend and a ``rateslib.Curve`` on the rateslib one, and both
+        classes define it, so the only honest check is on the returned object.
+        """
+        token = str(engine).upper()
+        is_ql = isinstance(
+            curve_handle, (ql.YieldTermStructureHandle, ql.RelinkableYieldTermStructureHandle, ql.YieldTermStructure)
+        )
+        if token == "QL" and not is_ql:
+            raise TypeError(
+                f"engine='QL' needs a QuantLib curve, but {type(curve).__name__}.handle() returned "
+                f"{type(curve_handle).__name__}. Use a -QL_BASIC curve_source (e.g. "
+                "'ERIS_EOD_LIVE-QL_BASIC'), or 'CITIVELO-RL' if you meant the rateslib engine."
+            )
+        if token == "RL" and is_ql:
+            raise TypeError(
+                f"engine='RL' needs a rateslib curve, but {type(curve).__name__}.handle() returned "
+                f"{type(curve_handle).__name__}. Use curve_source='CITIVELO' (Citi's own SOFR "
+                "curve) or 'ERIS_EOD_LIVE-RL_BASIC'."
+            )
 
     @staticmethod
     def _extract_curve_for_date(curve_map: dict[Any, _IRSwapGenericCurve], d: dt.date) -> Optional[_IRSwapGenericCurve]:
@@ -367,14 +461,45 @@ class IRSwaptionMDP(LayeredCacheMixin, MarketDataProvider[IRSwaptionMarketContex
             dates=misses,
             ignore_cache=ignore_cache,
         )
+        # Checked BEFORE the vol provider runs. The provider call below is
+        # wrapped in a broad except that falls back date by date, so a curve the
+        # engine cannot use would surface as an empty vol map and then as a bare
+        # KeyError on the requested date - the caller would never learn why.
+        for candidate in curve_map.values():
+            if candidate is None:
+                continue
+            handle = getattr(candidate, "handle", None)
+            if callable(handle):
+                self._assert_curve_matches_engine(
+                    engine=engine, curve=candidate, curve_handle=handle()
+                )
+            break
+
+        # Additive, and opt-in per provider: a provider whose strike axis is
+        # anchored on the curve needs the curve, and one that serves a different
+        # object per engine needs the engine token. GSQUANT and
+        # GSQUANT_MC_ENHANCED swallow **kwargs, but MONKEYCUBE forwards them into
+        # get_sabr_vol_surfaces, where an unexpected keyword raises - so these
+        # are handed only to providers that advertise they want them.
+        provider_kwargs = dict(effective_request_kwargs)
+        if getattr(vol_provider, "wants_curves", False):
+            provider_kwargs.setdefault("curves", curve_map)
+        if getattr(vol_provider, "wants_engine", False):
+            provider_kwargs.setdefault("engine", engine.upper())
         try:
             vol_map = vol_provider(
                 curve_name=curve_name,
                 dates=misses,
                 surface_type=surface_type,
-                **effective_request_kwargs,
+                **provider_kwargs,
             )
-        except Exception:
+        except Exception as bulk_exc:  # noqa: BLE001 - fall back per date, but say why
+            _logger.warning(
+                "%s vol provider failed on the whole batch (%s: %s); retrying date by date.",
+                provider.upper(),
+                type(bulk_exc).__name__,
+                bulk_exc,
+            )
             vol_map = {}
             for d in misses:
                 try:
@@ -382,9 +507,16 @@ class IRSwaptionMDP(LayeredCacheMixin, MarketDataProvider[IRSwaptionMarketContex
                         curve_name=curve_name,
                         dates=[d],
                         surface_type=surface_type,
-                        **effective_request_kwargs,
+                        **provider_kwargs,
                     )
-                except Exception:
+                except Exception as one_exc:  # noqa: BLE001 - one bad date must not kill a batch
+                    _logger.warning(
+                        "%s vol provider produced nothing for %s (%s: %s).",
+                        provider.upper(),
+                        d,
+                        type(one_exc).__name__,
+                        one_exc,
+                    )
                     continue
                 if isinstance(one, dict):
                     vol_map.update(one)
@@ -403,7 +535,19 @@ class IRSwaptionMDP(LayeredCacheMixin, MarketDataProvider[IRSwaptionMarketContex
 
             curve_handle = curve.handle()
             swap_index = curve.index()
+            # The hasattr() gate above passes for a rateslib curve too - both
+            # backends define handle() and index() - and used to let the wrong
+            # types through to a QuantLib engine, which then failed inside SWIG
+            # with a message about nothing in particular. Check what came OUT.
+            self._assert_curve_matches_engine(
+                engine=engine, curve=curve, curve_handle=curve_handle
+            )
             day_counter = curve.daycounter() if hasattr(curve, "daycounter") else ql.Actual365Fixed()
+            if day_counter is None:
+                # RLIRSwapCurve does not override daycounter(), and the base class
+                # stub makes hasattr() true, so the Actual365Fixed fallback above
+                # is unreachable for it and None flows on into the engine factory.
+                day_counter = ql.Actual365Fixed()
             pricing_engine = engine_factory(
                 curve_handle=curve_handle,
                 vol_handle=vol_handle,
@@ -431,6 +575,21 @@ class IRSwaptionMDP(LayeredCacheMixin, MarketDataProvider[IRSwaptionMarketContex
                 vol_cube = get_cached_enhanced_cube(curve_name, d)
                 if vol_cube is not None:
                     metadata["vol_cube"] = vol_cube
+
+            if provider.upper() == "CITIVELO":
+                from MDP.IRSwaptions.CITIVELO.provider import get_cached_citivelo_cube
+
+                citi_cube = get_cached_citivelo_cube(curve_name, d, engine)
+                if citi_cube is not None:
+                    # Deliberately NOT metadata['vol_cube']: that key routes
+                    # pricer.py's leg_cube_vol into cube.volatility_at_point(),
+                    # which takes an option TIME and has to reconstruct an option
+                    # DATE from it. The reconstruction moves the strike offset and
+                    # therefore the volatility, so the Citi cube is read the way
+                    # QuantLib reads a surface instead - through vol_handle - and
+                    # the object is exposed here for anything that wants the
+                    # smile, the forwards or the other backend.
+                    metadata["citivelo_cube"] = citi_cube
 
             ctx = IRSwaptionMarketContext(
                 curve_name=curve_name,

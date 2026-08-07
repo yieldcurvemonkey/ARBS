@@ -30,8 +30,82 @@ def _py_to_ql_date(d: dt.date) -> ql.Date:
     return ql.Date(d.day, d.month, d.year)
 
 
+def rl_engine(context: IRSwaptionMarketContext) -> Optional[Any]:
+    """The rateslib engine when the context has one, else ``None``.
+
+    Every ``leg_*`` metric below opens with this. When it returns ``None`` -
+    which is every pre-existing provider, all of which are ``-QL`` - the function
+    body is byte-for-byte what it was, so ``GSQUANT-QL``, ``MONKEYCUBE-QL`` and
+    ``GSQUANT-MC-ENHANCED`` cannot change behaviour.
+
+    See :mod:`MDP.IRSwaptions.CITIVELO.rl_engine` for what the engine implements
+    and, more importantly, what it refuses to.
+    """
+    if str(getattr(context, "engine", "")).upper() != "RL":
+        return None
+    engine = getattr(context, "pricing_engine", None)
+    if engine is None:
+        raise TypeError(
+            "The context says engine='RL' but carries no pricing engine. "
+            "ENGINE_FACTORIES['RL'] builds one from the vol object the CITIVELO provider returns."
+        )
+    return engine
+
+
+def rl_engine_for(context: IRSwaptionMarketContext, leg: "IRSwaptionPricable") -> Optional[Any]:
+    """:func:`rl_engine`, refusing the one input it cannot honour.
+
+    ``premium_override`` means "value this leg at the volatility that reproduces
+    this premium". The QuantLib path does that by inverting through
+    ``ql.Swaption.impliedVolatility`` and re-pricing at a flat
+    ``ql.ConstantSwaptionVolatility``. Matching it here would need a second
+    inverter and would quietly value the leg off a different model.
+
+    The guard lives here rather than inside the engine because ``leg_spot_npv``
+    used to short-circuit on the override before any engine was consulted, so an
+    override would have changed the PV while ``NVOL`` kept coming off the cube -
+    a silently inconsistent leg, which is worse than an error.
+    """
+    engine = rl_engine(context)
+    if engine is not None and getattr(leg, "premium_override", None) is not None:
+        raise NotImplementedError(
+            "premium_override is not supported on a '-RL' swaption engine: the QuantLib path "
+            "inverts the supplied premium through ql.Swaption.impliedVolatility and re-prices at "
+            "that flat volatility, and doing the same here would need a second inverter and would "
+            "quietly price off a different model. Use a '-QL' source for premium overrides."
+        )
+    return engine
+
+
+def discount_factor(context: IRSwaptionMarketContext, when: dt.date) -> float:
+    """Discount factor to ``when``, whichever library the curve came from.
+
+    ``context.curve_handle`` is a ``ql.YieldTermStructureHandle`` under ``-QL``
+    and a ``rateslib.Curve`` under ``-RL``; the QuantLib one is called and the
+    rateslib one is subscripted.
+
+    The QuantLib branch is tried first and by duck typing rather than by
+    ``isinstance``, because test fakes supply a bare object with a ``discount``
+    method and an ``isinstance`` gate would silently route them into the rateslib
+    branch.
+    """
+    handle = context.curve_handle
+    discount = getattr(handle, "discount", None)
+    if callable(discount):
+        return float(discount(_py_to_ql_date(when)))
+    return float(handle[dt.datetime(when.year, when.month, when.day)])
+
+
 def _curve_day_counter(context: IRSwaptionMarketContext) -> ql.DayCounter:
-    return context.curve.daycounter() if hasattr(context.curve, "daycounter") else ql.Actual365Fixed()
+    """The curve's day counter, or ACT/365F.
+
+    ``hasattr(curve, "daycounter")`` is true on EVERY backend because the stub
+    lives on ``_IRSwapGenericCurve`` with a bare ``...`` body, so the rateslib
+    curve - which does not override it - returns ``None`` and the fallback here
+    was unreachable. Check the value, not the attribute.
+    """
+    day_counter = context.curve.daycounter() if hasattr(context.curve, "daycounter") else None
+    return day_counter if day_counter is not None else ql.Actual365Fixed()
 
 
 def _curve_calendar(context: IRSwaptionMarketContext) -> ql.Calendar:
@@ -81,15 +155,35 @@ def build_underlying_swap(
     )
 
 
+def swap_pvbp(context: IRSwaptionMarketContext, swap: Any) -> float:
+    """|PV change per 1 bp| of a built underlying's fixed leg.
+
+    ``ql.FixedVsFloatingSwap.fixedLegBPS()`` and rateslib's ``analytic_delta``
+    (which is what ``RLIRSwapCurve.pv01`` returns) are the same quantity; only the
+    accessor differs. Takes the swap rather than the leg so callers keep building
+    it through their own module-level ``build_underlying_swap`` - which is the
+    name the existing tests monkeypatch.
+    """
+    accessor = getattr(swap, "fixedLegBPS", None)
+    if callable(accessor):
+        return abs(float(accessor()))
+    return abs(float(context.curve.pv01(swap)))
+
+
+def leg_pvbp(context: IRSwaptionMarketContext, leg: IRSwaptionPricable) -> float:
+    """|PV change per 1 bp| of the leg's underlying fixed leg, for its notional."""
+    return swap_pvbp(context, build_underlying_swap(context, leg))
+
+
 def leg_tte_years(context: IRSwaptionMarketContext, leg: IRSwaptionPricable) -> float:
-    day_counter = context.curve.daycounter() if hasattr(context.curve, "daycounter") else ql.Actual365Fixed()
+    day_counter = _curve_day_counter(context)
     ref = _py_to_ql_date(context.as_of_date)
     exp = _py_to_ql_date(leg.exercise_date)
     return max(float(day_counter.yearFraction(ref, exp)), 1e-10)
 
 
 def leg_swap_length_years(context: IRSwaptionMarketContext, leg: IRSwaptionPricable) -> float:
-    day_counter = context.curve.daycounter() if hasattr(context.curve, "daycounter") else ql.Actual365Fixed()
+    day_counter = _curve_day_counter(context)
     eff = _py_to_ql_date(leg.underlying_effective_date)
     mat = _py_to_ql_date(leg.underlying_maturity_date)
     return max(float(day_counter.yearFraction(eff, mat)), 1e-10)
@@ -208,6 +302,7 @@ def _override_implied_normal_vol(
     premium_override = _premium_override_value(leg)
     if premium_override is None:
         return None
+    rl_engine_for(context, leg)  # refuses an override on the RL engine
     if premium_override <= 0.0:
         return 0.0
 
@@ -289,6 +384,9 @@ def build_ql_swaption(
 
 
 def leg_spot_npv(context: IRSwaptionMarketContext, leg: IRSwaptionPricable) -> float:
+    engine = rl_engine_for(context, leg)
+    if engine is not None:
+        return float(engine.spot_npv(context, leg))
     premium_override = _premium_override_value(leg)
     if premium_override is not None:
         return float(premium_override)
@@ -298,13 +396,16 @@ def leg_spot_npv(context: IRSwaptionMarketContext, leg: IRSwaptionPricable) -> f
 
 def leg_fwd_npv(context: IRSwaptionMarketContext, leg: IRSwaptionPricable) -> float:
     spot = leg_spot_npv(context, leg)
-    discount = float(context.curve_handle.discount(_py_to_ql_date(leg.exercise_date)))
+    discount = discount_factor(context, leg.exercise_date)
     if abs(discount) < 1e-12:
         return float(spot)
     return (float(spot) / discount) * 100
 
 
 def leg_implied_normal_vol_bps(context: IRSwaptionMarketContext, leg: IRSwaptionPricable) -> float:
+    engine = rl_engine_for(context, leg)
+    if engine is not None:
+        return float(engine.implied_normal_vol_bps(context, leg))
     override_vol = _override_implied_normal_vol(context, leg)
     if override_vol is not None:
         return float(override_vol) * 10_000.0
@@ -333,6 +434,9 @@ def leg_implied_normal_vol_bps(context: IRSwaptionMarketContext, leg: IRSwaption
 
 
 def leg_delta(context: IRSwaptionMarketContext, leg: IRSwaptionPricable) -> float:
+    engine = rl_engine_for(context, leg)
+    if engine is not None:
+        return float(engine.delta(context, leg))
     with _temporary_eval_date(_curve_eval_date(context)):
         swpt = build_ql_swaption(context, leg)
         annuity = float(swpt.annuity())
@@ -352,6 +456,9 @@ def leg_gamma(context: IRSwaptionMarketContext, leg: IRSwaptionPricable, *, bump
 
 
 def leg_theta_1d(context: IRSwaptionMarketContext, leg: IRSwaptionPricable) -> float:
+    engine = rl_engine_for(context, leg)
+    if engine is not None:
+        return float(engine.theta_1d(context, leg))
     today = _curve_eval_date(context)
     next_day = today + 1
     with _temporary_eval_date(today):
@@ -375,12 +482,18 @@ def leg_theta_1d(context: IRSwaptionMarketContext, leg: IRSwaptionPricable) -> f
 
 
 def leg_vega_01(context: IRSwaptionMarketContext, leg: IRSwaptionPricable) -> float:
+    engine = rl_engine_for(context, leg)
+    if engine is not None:
+        return float(engine.vega_01(context, leg))
     with _temporary_eval_date(_curve_eval_date(context)):
         swpt = build_ql_swaption(context, leg)
         return float(swpt.vega()) / 10_000.0
 
 
 def leg_dv01(context: IRSwaptionMarketContext, leg: IRSwaptionPricable) -> float:
+    engine = rl_engine_for(context, leg)
+    if engine is not None:
+        return float(engine.dv01(context, leg))
     with _temporary_eval_date(_curve_eval_date(context)):
         swpt = build_ql_swaption(context, leg)
         abs_dv01 = abs(float(swpt.delta()) / 10_000.0)
@@ -409,6 +522,9 @@ def _roll_exercise_date_back_one_day(
 
 
 def leg_charm(context: IRSwaptionMarketContext, leg: IRSwaptionPricable) -> float:
+    engine = rl_engine_for(context, leg)
+    if engine is not None:
+        return float(engine.charm(context, leg))
     today = _curve_eval_date(context)
     next_day = today + 1
     with _temporary_eval_date(today):
@@ -429,6 +545,9 @@ def leg_charm(context: IRSwaptionMarketContext, leg: IRSwaptionPricable) -> floa
 
 
 def leg_veta(context: IRSwaptionMarketContext, leg: IRSwaptionPricable) -> float:
+    engine = rl_engine_for(context, leg)
+    if engine is not None:
+        return float(engine.veta(context, leg))
     today = _curve_eval_date(context)
     next_day = today + 1
     with _temporary_eval_date(today):

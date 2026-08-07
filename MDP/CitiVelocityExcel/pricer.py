@@ -632,7 +632,64 @@ class CitiVeloPricer:
 
         return self._model(key, build)
 
+    def swaption_cube(
+        self,
+        currency: Optional[str] = None,
+        *,
+        backend: str = "auto",
+        notional: float = 1e8,
+        **kwargs: Any,
+    ) -> Any:
+        """The one Citi swaption pricer, in whichever backend is asked for.
+
+        :class:`~MDP.CitiVelocityExcel.vol.swaption_cube.CitiVeloSwaptionCube`
+        over ATM **and every OTM offset**, serving rateslib and QuantLib behind
+        one API. Both curves are built so that ``.with_backend('ql')`` works
+        without refetching anything; ``backend='auto'`` prefers the rateslib
+        native cube, which is the one that carries AD risk.
+
+        ``**kwargs`` are the cube's AXIS arguments (``expiries``, ``tenors``,
+        ``offsets_bp``, ``measure``, ``skew_measure``) and go to
+        :meth:`cube_data`. This is a real fix, not a rename: ``rl_vol_cube``
+        routed its ``**kwargs`` the same way while ALSO being the only entry
+        point, so there was no way to reach the native backend from here at all.
+        """
+        from MDP.CitiVelocityExcel.vol.swaption_cube import build_citivelo_swaption_cube
+
+        ccy = str(currency or self.default_currency or "").upper()
+        cube = self.cube_data(ccy, **kwargs)
+        index = _ois_index_for_currency(ccy)
+        key = ("swaption_cube", ccy, str(backend), f"{float(notional):g}", _kwargs_key(kwargs))
+
+        def build() -> Any:
+            ql_curve: Any = None
+            try:
+                ql_curve = self.ql_curve(index)
+            except Exception as exc:  # noqa: BLE001 - name it, do not hide it
+                _logger.warning(
+                    "No QuantLib curve for %s (%s: %s); the QuantLib backends will raise "
+                    "UnavailableBackendError rather than price off a curve that was not built.",
+                    index,
+                    type(exc).__name__,
+                    exc,
+                )
+            return build_citivelo_swaption_cube(
+                cube=cube,
+                rl_curve=self.rl_curve(index),
+                ql_curve=ql_curve,
+                backend=backend,
+                citi_index=index,
+                notional=float(notional),
+            )
+
+        return self._model(key, build)
+
     def rl_vol_cube(self, currency: Optional[str] = None, **kwargs: Any) -> Any:
+        """The hand-built rateslib cube. Kept for callers that pin its type.
+
+        Prefer :meth:`swaption_cube`, which serves both libraries and both
+        rateslib backends behind one API.
+        """
         from MDP.CitiVelocityExcel.vol.rl_cube import build_rl_vol_cube
 
         ccy = str(currency or self.default_currency or "").upper()
@@ -645,6 +702,11 @@ class CitiVeloPricer:
         )
 
     def ql_vol_cube(self, currency: Optional[str] = None, **kwargs: Any) -> Any:
+        """The QuantLib vol SURFACE. Kept for callers that pin its type.
+
+        It is a surface, not a pricer - :meth:`swaption_cube` with
+        ``backend='ql'`` is what prices a ``ql.Swaption``.
+        """
         from MDP.CitiVelocityExcel.vol.ql_cube import build_ql_swaption_cube
 
         ccy = str(currency or self.default_currency or "").upper()
@@ -659,56 +721,72 @@ class CitiVeloPricer:
         )
 
     def rl_vol(self, leg: CitiVeloLeg, *, strike: Optional[float] = None) -> float:
-        """Normal vol in basis points, off the rateslib-backed cube."""
-        cube = self.rl_vol_cube(leg.currency)
+        """Normal vol in basis points, off the rateslib backend."""
+        cube = self.swaption_cube(leg.currency, backend="auto")
         return float(
             cube.normal_vol(leg.expiry, leg.tenor, strike=strike, offset_bp=leg.offset_bp or 0.0)
         )
 
     def ql_vol(self, leg: CitiVeloLeg, *, strike: Optional[float] = None) -> float:
-        """Normal vol in basis points, off the QuantLib cube."""
-        cube = self.ql_vol_cube(leg.currency)
-        return float(cube.vol(leg.expiry, leg.tenor, strike, offset_bp=leg.offset_bp))
+        """Normal vol in basis points, off the QuantLib backend."""
+        cube = self.swaption_cube(leg.currency, backend="auto").with_backend("ql")
+        return float(
+            cube.normal_vol(leg.expiry, leg.tenor, strike=strike, offset_bp=leg.offset_bp or 0.0)
+        )
 
     def rl_option_premium(self, leg: CitiVeloLeg, **kwargs: Any) -> float:
-        cube = self.rl_vol_cube(leg.currency)
+        """Present value of the swaption on the rateslib backend, currency units."""
+        return self._option_premium(leg, backend="auto", **kwargs)
+
+    def ql_option_premium(self, leg: CitiVeloLeg, **kwargs: Any) -> float:
+        """Present value of the swaption on the QuantLib backend, currency units.
+
+        A real ``ql.Swaption`` on a real ``ql.BachelierSwaptionEngine`` now.
+
+        The previous implementation took the QuantLib cube's volatility and the
+        **rateslib** cube's forward, annuity and time to expiry, and evaluated
+        ``Query.Base.bachelier`` by hand - and divided an already-decimal forward
+        and strike by 100 while leaving the volatility in decimals. A Bachelier
+        price depends on ``(K - F)`` measured in units of ``sigma * sqrt(T)``, so
+        that scaled the moneyness by 100. At the money ``K == F`` and the error
+        vanished, which is why it survived; every OTM premium it returned was
+        wrong. Found by
+        :mod:`MDP.CitiVelocityExcel.vol.spot_check`, which prices and inverts
+        instead of reading the interpolator back out.
+        """
+        return self._option_premium(leg, backend="ql", **kwargs)
+
+    def _option_premium(self, leg: CitiVeloLeg, *, backend: str, **kwargs: Any) -> float:
+        """Shared premium path. ``strike`` is a DECIMAL absolute strike.
+
+        Two behaviours changed with the consolidation, both deliberately:
+
+        * the default strike is the leg's **own** node, ``forward + offset/1e4``,
+          not the forward. An ``OTM_M25`` leg used to be priced at the money,
+          which made every off-the-money premium an ATM premium wearing an OTM
+          label.
+        * the default notional is the cube's (1e8). ``ql_option_premium``
+          previously fell back to ``1.0`` while ``rl_option_premium`` fell back to
+          the cube's, so the two were not comparable without passing one.
+        """
+        cube = self.swaption_cube(leg.currency, backend="auto")
+        if backend != "auto":
+            cube = cube.with_backend(backend)
         strike = kwargs.get("strike")
         if strike is None:
-            strike = cube.forward(leg.expiry, leg.tenor)
+            offset = float(leg.offset_bp or 0.0)
+            strike = cube.strike_for(leg.expiry, leg.tenor, offset)
+        notional = kwargs.get("notional")
+        if notional is None and leg.notional:
+            notional = float(leg.notional)
         return float(
             cube.price(
                 leg.expiry,
                 leg.tenor,
                 float(strike),
                 right=str(kwargs.get("right", "payer")),
-                notional=kwargs.get("notional"),
+                notional=notional,
             )
-        )
-
-    def ql_option_premium(self, leg: CitiVeloLeg, **kwargs: Any) -> float:
-        """Bachelier premium off the QuantLib cube's vol and the QuantLib curve."""
-        from Query.Base.bachelier import bachelier_price
-
-        cube = self.ql_vol_cube(leg.currency)
-        rl_cube = self.rl_vol_cube(leg.currency)
-        forward = float(kwargs.get("forward", rl_cube.forward(leg.expiry, leg.tenor)))
-        strike = float(kwargs.get("strike", forward))
-        vol_bp = cube.vol(leg.expiry, leg.tenor, strike)
-        tte = float(rl_cube.time_to_expiry(leg.expiry))
-        annuity = float(rl_cube.annuity(leg.expiry, leg.tenor))
-        notional = float(leg.notional or kwargs.get("notional") or 1.0)
-        right = "C" if str(kwargs.get("right", "payer")).lower().startswith("p") else "P"
-        return (
-            bachelier_price(
-                right,
-                strike / 100.0,
-                forward / 100.0,
-                vol_bp / 10_000.0,
-                tte,
-                1.0,
-            )
-            * annuity
-            * notional
         )
 
     # -- bonds ----------------------------------------------------------

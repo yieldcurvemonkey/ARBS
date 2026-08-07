@@ -12,6 +12,11 @@ Cases
     be decoration;
 (c) round-trip every node through the rateslib cube;
 (d) price the same payer swaption through both backends and print both premia;
+(1) the ONE pricer - :class:`CitiVeloSwaptionCube` across every backend it can
+    reach, then the spot check: price the swaption, invert the premium with a
+    solver that shares no code with it, and compare against the quote. Every
+    other case compares one implementation with another; only this one can see a
+    wrong annuity, schedule or day count;
 (e) drive :func:`fetch_cube` through the fake COM Excel, so the tag/fetch path is
     exercised end to end without a live add-in;
 (f) hand the units guard decimal quotes declared as bp and show that it RAISES -
@@ -361,6 +366,59 @@ def case_native(cube: SwaptionCubeData, rl_curve) -> None:
     print("     is wrong by ~0.14%/day when the cube's as_of and the curve's first node differ)")
 
 
+def case_one_object(cube: SwaptionCubeData, rl_curve, ql_handle) -> None:
+    """The one pricer, all four backends, and the check that can fail.
+
+    Everything above compares an implementation against another implementation.
+    This prices the swaption and inverts the premium back with a solver that
+    shares no code with either pricer, then compares against the QUOTE - which is
+    the only comparison that can see a wrong annuity, schedule or day count.
+
+    On the synthetic surface the quote is one this module invented, so a clean
+    result here means the machinery is self-consistent. The claim about Citi's
+    real numbers is made by ``tests/test_citivelo_swaption_spot_check.py``, which
+    runs the same code against a recorded live capture.
+    """
+    from MDP.CitiVelocityExcel.vol.spot_check import (
+        assert_spot_check,
+        format_spot_check_report,
+        spot_check_frame,
+    )
+    from MDP.CitiVelocityExcel.vol.swaption_cube import build_citivelo_swaption_cube
+
+    one = build_citivelo_swaption_cube(
+        cube=cube, rl_curve=rl_curve, ql_curve=ql_handle, notional=NOTIONAL
+    )
+    print(f"(1) {one!r}")
+    strike = one.strike_for("1Y", "10Y", 25.0)
+    print(f"    1Yx10Y +25bp, strike {strike * 100:.5f}%:")
+    print(f"    {'backend':10}{'fwd %':>11}{'annuity':>11}{'vol bp':>10}{'payer PV':>16}{'vega/bp':>12}")
+    for name in one.backends_available:
+        side = one.with_backend(name)
+        print(f"    {name:10}{side.forward('1Y', '10Y') * 100:>11.5f}"
+              f"{side.annuity('1Y', '10Y'):>11.6f}"
+              f"{side.normal_vol('1Y', '10Y', offset_bp=25.0):>10.4f}"
+              f"{side.price('1Y', '10Y', strike):>16,.2f}"
+              f"{side.vega('1Y', '10Y', strike):>12,.2f}")
+
+    frame = spot_check_frame(
+        cube=cube,
+        cube_obj=one,
+        backends=("rl-native", "ql") if "rl-native" in one.backends_available else ("rl-hand", "ql"),
+        expiries=["1Y", "5Y"],
+        tenors=["2Y", "30Y"],
+    )
+    print()
+    for line in format_spot_check_report(frame).splitlines():
+        print(f"    {line}")
+    try:
+        assert_spot_check(frame)
+    except Exception as exc:  # noqa: BLE001 - the report IS the exception
+        print(f"\n    *** SPOT CHECK FAILED: {str(exc)[:400]}")
+    else:
+        print("\n    -> every node reproduces its quote when priced and inverted independently.")
+
+
 def case_g() -> None:
     """What the harvest actually covers - the constraint on every other case."""
     print("(g) catalog coverage of RATES.VOL (computed, not stored):")
@@ -390,6 +448,8 @@ def main() -> int:
     case_d(built, rlc, ql_handle)
     print()
     case_native(cube, rl_curve)
+    print()
+    case_one_object(cube, rl_curve, ql_handle)
     print()
     case_e()
     print()

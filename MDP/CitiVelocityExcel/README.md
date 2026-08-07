@@ -31,7 +31,7 @@ The new MDP source string is **`citivelo_excel`**.
 | Family | Tags | Built into |
 |---|---|---|
 | `RATES.OIS.<ccy>_<idx>.{PAR,FWD,SWAP_SPREAD,CURVES,BFLY,ROLL_CARRY}` | 20 RFR curves x 44 tenors | rateslib `Curve`+`Solver`, QuantLib `OISRateHelper` bootstrap |
-| `RATES.VOL.<ccy>.{ATM_RFR,OTM_RFR,REALIZED_RFR,VOL_RATIO_RFR}` | expiry x tenor x strike offset | QuantLib `InterpolatedSwaptionVolatilityCube` / `SabrSwaptionVolatilityCube`; a rateslib-primitive normal-vol cube |
+| `RATES.VOL.<ccy>.{ATM_RFR,OTM_RFR,REALIZED_RFR,VOL_RATIO_RFR}` | expiry x tenor x strike offset | **one** `CitiVeloSwaptionCube` over four backends - `rl.IRSplineCube`+`IRSCall`, `PPSplineF64`+Bachelier, `ql.Swaption`+`BachelierSwaptionEngine`, and the QuantLib SABR variant - reachable as `IRSwaptionMDP(source="CITIVELO-QL"\|"CITIVELO-RL")` |
 | `RATES.BOND.<ISIN>.<value>` + `CVCURVEBOND` universe | 2,162 ISINs, 16,288 validated tags | rateslib + QuantLib `FixedRateBond`, `BondFunctions`, par-par ASW |
 | `RATES.INFLATION.{INDEX,SWAP,INF_CARRY,SWAPTION}` | 17 indices | rateslib index `Curve`+`ZCIS`, QuantLib `PiecewiseZeroInflation` |
 | `RATES.XCCY_OIS_SWAP.<a>.<b>.<fwd>.<tenor>.<leg>.BASIS_SPREAD` | 1,097 validated | rateslib `XCS`+`FXForwards` collateral solve; QuantLib explicit cashflows |
@@ -93,6 +93,120 @@ tb.assert_fast_path_matches(
     [CitiVeloQuery(citi_index="USD_SOFR", tenor="10Y")],
     model_value=CitiVeloValue.RL_RATE, tol=0.01,
 )
+
+# --- the swaption cube: ONE object, ATM and every OTM offset --------------
+cube = pricer.swaption_cube("USD")                 # rateslib native by default
+k = cube.forward("1Y", "10Y") + 25e-4              # Citi's +25bp node
+cube.normal_vol("1Y", "10Y", offset_bp=25)         # 84.5553 bp
+cube.price("1Y", "10Y", k, right="payer")          # 1,767,324
+cube.with_backend("ql").price("1Y", "10Y", k)      # 1,767,324 - same object, QuantLib
+
+# --- or through the repo's own swaption product ---------------------------
+from MDP.IRSwaptions.IRSwaptionMDP import IRSwaptionMDP
+from Query.IRSwaptions import IRSwaptionQuery, IRSwaptionStructure, IRSwaptionValue
+
+swpt = IRSwaptionMDP(source="CITIVELO-QL", curve_source="ERIS_EOD_LIVE-QL_BASIC")
+ctx = swpt.get_pricer({"curve_name": "USD-SOFR-1D", "timestamp": date(2026, 8, 6)})
+q = IRSwaptionQuery(curve="USD-SOFR-1D", shorthand="1Yx10Y", strike="ATMF+25",
+                    structure=IRSwaptionStructure.PAYER, value=IRSwaptionValue.NVOL)
+# ... resolve_query / resolve_package / build_value_map -> 84.55 bp
+```
+
+---
+
+## The one swaption cube
+
+`MDP/CitiVelocityExcel/vol/swaption_cube.py` — **`CitiVeloSwaptionCube`**. One
+object, one API, ATM **and every OTM offset**, over four backends and two
+libraries.
+
+| backend | what it is | what only it gives you |
+|---|---|---|
+| `rl-native` (default) | `rl.IRSplineCube` + `rl.IRSCall` | AD risk back to the curve and vol nodes; calibratable in a `rateslib.Solver` |
+| `rl-hand` | `PPSplineF64` + `Query.Base.bachelier` | works on every supported rateslib, including 2.1.x, which has no IR vol at all |
+| `ql` | `ql.Swaption` + `ql.BachelierSwaptionEngine` | the QuantLib stack, and a `SwaptionVolatilityStructureHandle` any QuantLib engine accepts |
+| `ql-sabr` | the same over `ql.SabrSwaptionVolatilityCube` | a smooth arbitrage-free fit — and it does **not** reproduce its own nodes |
+
+`with_backend("ql")` hands back a sibling on the same cube data and the same
+curves, built once and cached, so switching library costs nothing and compares
+like for like.
+
+### What this replaced
+
+Four objects, three of them pricers, no two with the same API — and three
+consequences that were measured rather than assumed:
+
+- **`NativeSwaptionCube` was unreachable from the MDP.** `rl_vol_cube()` called
+  `build_rl_vol_cube(...)` with no `backend=`, and routed its own `**kwargs` to
+  the cube's *axis* arguments, so there was no way to ask for it. Every cube the
+  MDP or `Query/CitiVelocity` produced was the hand-built one.
+- **The "QuantLib premium" was not a QuantLib price.** `ql_option_premium` took
+  the QuantLib cube's vol but the *rateslib* cube's forward, annuity and time to
+  expiry and evaluated Bachelier by hand — and divided an already-decimal forward
+  and strike by 100 while leaving the vol in decimals. A Bachelier price depends
+  on `(K − F)` measured in units of `σ√T`, so that scaled the moneyness by 100.
+  At the money `K == F` and the error vanished, which is why it survived. **Every
+  OTM premium it returned was wrong.**
+- **None of it reached the repo's own swaption product**, which already carries
+  13 structures, 20 value metrics, a strike grammar and a backtest handler.
+
+### Reachable through the MDP / Query seams
+
+```python
+# the Citi Velocity MDP
+pricer.swaption_cube("USD", backend="auto")
+
+# the repo's swaption product - every structure and value metric, on Citi's cube
+IRSwaptionMDP(source="CITIVELO-QL")     # ql.Swaption + BachelierSwaptionEngine
+IRSwaptionMDP(source="CITIVELO-RL")     # rateslib, through ENGINE_FACTORIES["RL"]
+```
+
+`CITIVELO` joins `GSQUANT`, `MONKEYCUBE` and `GSQUANT_MC_ENHANCED` in
+`VOL_PROVIDERS`; `RL` is the second entry ever in `ENGINE_FACTORIES`. Both
+widenings are additive and the three existing providers are untouched — the
+registry was always this permissive (`tests/test_ir_swaption_mdp.py` registers an
+engine factory returning a bare `object()`), it just had one engine in it.
+
+Three latent defects surfaced while wiring it, all fixed:
+
+- the `handle()`/`index()` gate could not tell a rateslib curve from a QuantLib
+  one (both define both), so the wrong types flowed into a QuantLib engine and
+  failed inside SWIG. It now checks what came *out*, per engine.
+- `curve.daycounter()` returns `None` on the rateslib backend — the stub on
+  `_IRSwapGenericCurve` makes `hasattr` true, so the `ql.Actual365Fixed()`
+  fallback was unreachable.
+- the vol provider's exceptions were swallowed whole, so a provider that raised
+  surfaced as a bare `KeyError` on the requested date. It logs the cause now, and
+  the engine/curve check runs *before* the provider so it cannot be swallowed.
+
+`premium_override` is **not** supported on `-RL` and says so: the QuantLib path
+inverts the supplied premium through `ql.Swaption.impliedVolatility`, and matching
+that would mean a second inverter and a silently different model.
+
+### The check that can fail
+
+A vol → cube → vol round trip is a **tautology**. Every interpolator here is exact
+at its own data sites, so reading a node back out and comparing it with the quote
+scores 2.8e-14 bp and cannot see a wrong annuity, schedule, day count, discounting
+convention or strike/forward misalignment.
+
+`vol/spot_check.py` closes the loop: it prices the actual swaption at
+`forward + offset/1e4`, inverts the premium with
+`RVUtils/ImpliedDistribution/_bachelier.py::bachelier_implied_vol` — a
+pure-Python bisection over `scipy.stats.norm`, the **only** implied-vol solver in
+the repo with no QuantLib in it — and compares against Citi's quote. It also
+**crosses the annuities**: the QuantLib premium is inverted with rateslib's
+`(F, A, T)` and vice versa, because a backend's own annuity cancels exactly out of
+its own inversion (and `NativeSwaptionCube.annuity` is itself backed out of that
+same ATM premium).
+
+Mutation-verified in `tests/test_citivelo_swaption_spot_check.py` against a
+**real** recorded cube, five ways: shift one node 1 bp, transpose two tenor
+slices, perturb one forward, scale one annuity by 1%, swap payer for receiver. The
+last two exist because the first three only move the volatility the pricer reads.
+
+```bash
+conda run -n stir python MDP/CitiVelocityExcel/harvest/verify_live.py --spot-check
 ```
 
 ---
@@ -178,9 +292,12 @@ Reference quotes at 2026-08-05: 2Y 4.04128, 5Y 4.04945, 10Y 4.21055, 30Y 4.42447
   MXN Fondeo's 28-day roll is approximated as monthly - treat MXN as indicative.
 - Only USD's vol axes were walked; a non-USD skew cube is shape-inferred and warns.
 - AUD, DKK, KRW, NOK and SEK have no `_RFR` vol branch in the catalog at all.
-- Only the ATM vol unit was measured. `PREMIUM`, `FWDPREMIUM` and the `OTM_RFR`
-  skew branches still carry a declared unit - extend `verify_live.py` before
-  trusting a skew cube.
+- `PREMIUM` and `FWDPREMIUM` still carry a **declared** unit - nothing has ever
+  fetched one. `OTM_RFR.NORMALABSOLUTE` no longer does: all twelve USD offsets
+  (`+/-10, 25, 50, 75, 100, 200`) were fetched live on 2026-08-07 with zero
+  per-tag failures and priced through both libraries, and a skew declared in the
+  wrong unit could not survive that. `NORMALSKEW` remains coded, untagged and
+  untested - the catalog walk never recorded its strike-offset level.
 - Bond, inflation, cross-currency and options numbers have **not** been checked
   against a Citi quote. They are internal consistency between two independent
   implementations on synthetic inputs. The highest-value next step is to fetch
@@ -194,6 +311,8 @@ Reference quotes at 2026-08-05: 2Y 4.04128, 5Y 4.04945, 10Y 4.21055, 30Y 4.42447
 # hermetic - no Excel, no network, no database
 conda run -n stir python -m pytest tests/test_citivelo_excel_client.py tests/test_citivelo_excel_cache.py \
   tests/test_citivelo_catalog.py tests/test_citivelo_curves.py tests/test_citivelo_vol_cube.py \
+  tests/test_citivelo_native_vol_cube.py tests/test_citivelo_swaption_spot_check.py \
+  tests/test_citivelo_swaption_provider.py \
   tests/test_citivelo_bonds.py tests/test_citivelo_inflation.py tests/test_citivelo_xccy.py \
   tests/test_citivelo_options.py tests/test_citivelo_timeseries.py -q
 
@@ -203,7 +322,21 @@ conda run -n stir python -m pytest tests -m "not slow and not network and not db
 # live, against a signed-in Excel. Opt-in, and it drives the USER'S OWN process.
 set CITIVELO_EXCEL_LIVE_TESTS=1
 conda run -n stir python -m pytest tests/test_citivelo_excel_integration.py -m integration -q
+
+# live probes, also against the user's own Excel. Bounded: ~8 CV* calls each.
+conda run -n stir python MDP/CitiVelocityExcel/harvest/verify_live.py               # the wire
+conda run -n stir python MDP/CitiVelocityExcel/harvest/verify_live.py --vol-compare # backend vs backend
+conda run -n stir python MDP/CitiVelocityExcel/harvest/verify_live.py --spot-check  # price -> invert -> quote
 ```
+
+`test_citivelo_swaption_spot_check.py` and `test_citivelo_swaption_provider.py`
+are hermetic but run on **real** Citi quotes: `harvest/snapshots/` holds a
+recorded capture (USD 2026-08-06, 260 tags, zero per-tag failures, the 44-tenor
+par grid and six published forwards) and `vol/live_snapshot.py` reads it back
+through the ordinary `cube_from_quotes` path. Re-record with
+`verify_live.py --spot-check --save-snapshot NAME.json`. A synthetic smile has no
+wing flattening and no kink, and the mutations are only convincing against one
+that does.
 
 Each analytics package also ships a `_smoke.py` that prints its numbers:
 
@@ -319,10 +452,12 @@ the QuantLib MXN builder raises `No QuantLib frequency for rateslib letter '28d'
 rateslib 2.7 ships `IRSplineCube`, `IRSabrCube` **and a full swaption suite** -
 `IRSCall`, `IRSPut`, `IRSStraddle`, `IRSStrangle`, `IRSRiskReversal`. They are
 wired up in `MDP/CitiVelocityExcel/vol/rl_native_cube.py` as
-`NativeSwaptionCube`, selectable with:
+`NativeSwaptionCube`, which is now one of the four backends behind
+`CitiVeloSwaptionCube` (see **The one swaption cube** below):
 
 ```python
-build_rl_vol_cube(cube=cube, rl_curve=curve, backend="native")   # or "auto"
+build_citivelo_swaption_cube(cube=cube, rl_curve=rlc, ql_curve=qlc, backend="rl-native")
+build_rl_vol_cube(cube=cube, rl_curve=curve, backend="native")   # the old entry point, unchanged
 ```
 
 **The strike axis is signed BASIS POINTS from the ATM forward** -
@@ -334,12 +469,13 @@ misprices the wings by up to 5x. `assert_native_cube_round_trips` is
 mutation-tested against that mistake, a transposed parameter block, and a single
 0.01bp nudge.
 
-**Why the hand-built cube is still the default.** Not accuracy - the two agree on
-live Citi quotes to 1.7e-10 on price and 1.6e-05 on vega. It is that rateslib
-labels IR vol Beta, and the live reconciliation found a real defect in it (next
-section). The native path is the better one for *risk*: it carries AD back to the
-curve and vol nodes and can sit in a `Solver`, which the `PPSplineF64` cube
-cannot.
+**Why `build_rl_vol_cube` still defaults to the hand-built cube.** Not accuracy -
+the two agree on live Citi quotes to 1.7e-10 on price and 1.6e-05 on vega. It is
+that rateslib labels IR vol Beta, and the live reconciliation found a real defect
+in it (next section). The native path is the better one for *risk*: it carries AD
+back to the curve and vol nodes and can sit in a `Solver`, which the `PPSplineF64`
+cube cannot - which is why `CitiVeloSwaptionCube`'s `backend="auto"`, and
+therefore everything reached through the MDP, prefers it.
 
 ### rateslib times the option from the CURVE, and its analytic vega pays for it
 

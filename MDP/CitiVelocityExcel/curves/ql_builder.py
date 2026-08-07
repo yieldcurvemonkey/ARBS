@@ -88,6 +88,7 @@ __all__ = [
     "END_OF_MONTH_BY_INDEX",
     "PAYMENT_LAG_BY_INDEX",
     "QLOisCurve",
+    "build_ql_mirror_curve",
     "build_ql_ois_curve",
     "evaluation_date",
     "ql_forward_rate",
@@ -744,3 +745,80 @@ def ql_forward_rate(curve: QLOisCurve, *, forward: str, tenor: str) -> float:
             forward_start=forward,
         )
         return float(swap.fairRate()) * 100.0
+
+
+# ------------------------------------------------------------------ #
+#                    a QuantLib view of a rateslib curve             #
+# ------------------------------------------------------------------ #
+
+
+def build_ql_mirror_curve(
+    rl_curve: Any,
+    *,
+    calendar: Optional[Any] = None,
+    day_count: Optional[Any] = None,
+) -> Any:
+    """A ``ql.DiscountCurve`` carrying a rateslib curve's own discount factors.
+
+    Two curves bootstrapped independently from the same par quotes agree at their
+    pillars and drift between them, and that drift is indistinguishable from a
+    schedule difference when two libraries are compared on the same instrument.
+    Mirroring the node set removes it: rateslib's ``log_linear`` and QuantLib's
+    ``ql.DiscountCurve`` are both log-linear in the discount factor, so on the
+    shared nodes the two curves are equal by construction and between them they
+    are the same interpolation of the same numbers.
+
+    Measured on the recorded 2026-08-06 USD snapshot: mirroring takes the
+    rateslib-vs-QuantLib forward gap from 3.5e-4 bp to 2e-13 bp and the annuity
+    gap from 3.6e-7 relative to 5e-16 - which is what proved the two swaption
+    schedules are identical rather than merely close.
+
+    Use it for reconciliation, and when a QuantLib engine must price off a curve
+    that only exists in rateslib (the Citi Velocity CurveStore serves rateslib
+    curves and nothing else). Production bootstraps should still start from the
+    quotes.
+
+    Parameters
+    ----------
+    rl_curve
+        A ``rateslib.Curve``, or anything exposing ``rl_pricing_curve``.
+    calendar, day_count
+        Default to the US government-bond calendar and ACT/360, matching
+        ``QUANTLIB_CURVE_DEFINITIONS['USD-SOFR-1D']``. They affect only how the
+        curve answers date arithmetic, never the mirrored discount factors.
+
+    Returns
+    -------
+    QuantLib.YieldTermStructureHandle
+        Extrapolation enabled, anchored on the rateslib curve's first node.
+    """
+    nodes = getattr(rl_curve, "nodes", None)
+    raw = getattr(nodes, "nodes", None) if nodes is not None else None
+    if raw is None:
+        inner = getattr(rl_curve, "rl_pricing_curve", None)
+        if inner is not None:
+            return build_ql_mirror_curve(inner, calendar=calendar, day_count=day_count)
+        raise TypeError(
+            f"Cannot read discount-factor nodes off {type(rl_curve).__name__}; pass a rateslib "
+            "Curve or an object exposing rl_pricing_curve."
+        )
+
+    dates: list = []
+    dfs: list = []
+    for when, df in raw.items():
+        stamp = pd.Timestamp(when).to_pydatetime()
+        dates.append(ql.Date(stamp.day, stamp.month, stamp.year))
+        dfs.append(float(df))
+    if len(dates) < 2:
+        raise ValueError(
+            f"A mirrored curve needs at least two nodes; {type(rl_curve).__name__} has {len(dates)}."
+        )
+
+    curve = ql.DiscountCurve(
+        dates,
+        dfs,
+        day_count if day_count is not None else ql.Actual360(),
+        calendar if calendar is not None else ql.UnitedStates(ql.UnitedStates.GovernmentBond),
+    )
+    curve.enableExtrapolation()
+    return ql.YieldTermStructureHandle(curve)
