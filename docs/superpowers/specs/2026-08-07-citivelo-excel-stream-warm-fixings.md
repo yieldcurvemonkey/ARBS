@@ -197,13 +197,19 @@ depend on that one) and from the daemon's `-CITIVELOSTREAM`. The repo has a
 recorded incident where two curve variants shared a key and *which answer you got
 depended on cache state*.
 
-| curve | days written | span | worst reprice |
+| curve | days | span | worst reprice |
 |---|---|---|---|
 | USD-SOFR-1D | 680 | 2024-01-01 → 2026-08-07 | 5.52e-04 bp |
 | EUR-ESTR-1D | 680 | 2024-01-01 → 2026-08-07 | 1.71e-03 bp |
 | JPY-TONAR-1D | 633 (46 sparse, 1 failed) | 2024-01-04 → 2026-08-07 | 1.95e-03 bp |
-| CAD-CORRA-1D | in progress | | |
-| GBP-SONIA-1D | in progress | | |
+| CAD-CORRA-1D | 680 | 2024-01-01 → 2026-08-07 | 2.41e-03 bp |
+| GBP-SONIA-1D | 680 | 2024-01-01 → 2026-08-07 | 2.95e-04 bp |
+
+**3,353 curve-days.** GBP needed a second pass: its first warm covered only a year
+because the deep-history fetch had been the one that used the rejected
+`period="15Y"` (§0). Re-fetched with explicit bounds it gave 5,566 daily rows and
+the warm resumed, skipping the 261 days already present - which is the resumability
+the atomic per-day write exists for.
 
 "Sparse" days are ones with fewer than 20 tenors quoted; they are counted, not
 hidden. Requiring all 44 would have thrown away two thirds of the available
