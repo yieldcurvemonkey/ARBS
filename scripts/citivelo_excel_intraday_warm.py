@@ -90,6 +90,14 @@ WIRE_TZ = "America/New_York"
 LOGGER = logging.getLogger("citivelo_excel_intraday_warm")
 
 
+class MemoryCeilingReached(RuntimeError):
+    """Excel's memory reached the point where continuing risks wedging it.
+
+    Not a failure: everything fetched is already on disk. The run stops so the
+    next one can resume after an Excel restart.
+    """
+
+
 def asset_name(curve_name: str) -> str:
     return f"{curve_name}-{ASSET_SUFFIX}"
 
@@ -153,6 +161,7 @@ def fetch_curve(
     force: bool = False,
     recycle_every: int = 25,
     memory_ceiling_mb: float = 3000.0,
+    memory_abort_mb: float = 3800.0,
     logger: logging.Logger = LOGGER,
 ) -> Tuple[int, int]:
     """Fetch ``[start, end)`` of minute par rates for one curve.
@@ -238,20 +247,35 @@ def fetch_curve(
         # only thing that actually gives the memory back.
         if recycle_every and windows_run and windows_run % recycle_every == 0:
             used = client.excel_memory_mb()
-            if used < 0 or used >= memory_ceiling_mb:
+            if 0 <= used < memory_ceiling_mb:
+                logger.info("  %d window(s) in, Excel at %.0f MB", windows_run, used)
+            else:
                 logger.info(
                     "  recycling the scratch workbook after %d window(s) (Excel %.0f MB)",
                     windows_run, used,
                 )
-                if not client.recycle_workbook():
+                recycled = client.recycle_workbook()
+                after = client.excel_memory_mb() if recycled else used
+                if not recycled:
                     logger.warning(
-                        "  recycle refused - stopping this curve rather than driving "
-                        "Excel further up. Everything fetched so far is on disk; "
-                        "re-run to resume."
+                        "  recycle refused - stopping rather than driving Excel further "
+                        "up. Everything fetched is on disk; re-run to resume."
                     )
-                    break
-            else:
-                logger.info("  %d window(s) in, Excel at %.0f MB", windows_run, used)
+                    raise MemoryCeilingReached(f"recycle refused at {used:.0f} MB")
+                # Recycling recovers far less than it costs. MEASURED 2026-08-07:
+                # a recycle took Excel 2,621 -> 2,409 MB (~200 MB back) while the
+                # 20 windows before it had ADDED ~340 MB. The memory is in the
+                # add-in's own cache, not in the workbook, so closing the workbook
+                # cannot reclaim it and the trend stays upward. Stop cleanly well
+                # under the 5,249 MB that wedged Excel: the fetch banks its work
+                # per day and resumes, so an early stop costs only time.
+                if after >= memory_abort_mb:
+                    raise MemoryCeilingReached(
+                        f"Excel is at {after:.0f} MB, at or above the {memory_abort_mb:.0f} MB "
+                        f"abort ceiling, and recycling no longer recovers enough. Stopping "
+                        f"before it wedges (it did at 5,249 MB on 2026-08-07). Everything "
+                        f"fetched is on disk - restart Excel and re-run to resume."
+                    )
 
     return days_written, windows_run
 
@@ -513,8 +537,19 @@ def cmd_fetch(args, logger: logging.Logger) -> int:
             days, windows = fetch_curve(
                 curve, start, end, work_dir=work_dir, client=client,
                 force=args.force, recycle_every=args.recycle_every,
-                memory_ceiling_mb=args.memory_ceiling_mb, logger=logger,
+                memory_ceiling_mb=args.memory_ceiling_mb,
+                memory_abort_mb=args.memory_abort_mb, logger=logger,
             )
+        except MemoryCeilingReached as exc:
+            # Deliberately ends the WHOLE run, not just this curve: the ceiling
+            # is a property of the shared Excel, so the next curve would hit it
+            # immediately and the one after that would wedge.
+            logger.warning("%s stopped: %s", curve, exc)
+            logger.info(
+                "fetch stopped early at %d day file(s) under %s. Restart Excel and "
+                "re-run the same command to resume.", total_days, work_dir,
+            )
+            return 3
         except Exception as exc:  # noqa: BLE001 - one curve must not end the run
             logger.error("%s FAILED: %s: %s", curve, type(exc).__name__, exc)
             continue
@@ -608,6 +643,11 @@ def _build_parser() -> argparse.ArgumentParser:
     f.add_argument(
         "--memory-ceiling-mb", type=float, default=3000.0,
         help="recycle above this. Excel wedged at 5,250 MB on 2026-08-07.",
+    )
+    f.add_argument(
+        "--memory-abort-mb", type=float, default=3800.0,
+        help="stop the run when recycling can no longer hold Excel below this. "
+             "The fetch resumes from disk, so stopping early costs only time.",
     )
     f.set_defaults(func=cmd_fetch)
 
