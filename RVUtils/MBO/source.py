@@ -308,19 +308,21 @@ def scan_activity(src: MboSource, force: bool = False) -> ActivityScan:
                 g = grids.setdefault(int(uniq[k]), np.zeros((3, 1440), dtype=np.int64))
                 g[row] += h[k]
 
-    fields = (["n_msgs", "n_snapshot", "n_trades", "trade_volume"]
-              + [f"n_{a}" for a in _ACTIONS] + ["first_ts", "last_ts", "px_min", "px_max"])
+    counts = (["n_msgs", "n_snapshot", "n_trades", "trade_volume"]
+              + [f"n_{a}" for a in _ACTIONS] + ["first_ts", "last_ts"])
     rows = []
     for u in sorted(acc["n_msgs"]):
         row = {"instrument_id": u, "symbol": src.symbol(u)}
-        for f in fields:
+        for f in counts:
             row[f] = acc.get(f, {}).get(u, 0)
+        # Missing must be None, not 0: a calendar spread legitimately prints at
+        # 0.000, and a zero sentinel would erase its real price range.
+        row["px_min"] = acc.get("px_min", {}).get(u)
+        row["px_max"] = acc.get("px_max", {}).get(u)
         rows.append(row)
     per = pd.DataFrame(rows).sort_values("n_msgs", ascending=False).reset_index(drop=True)
-    per["px_min"] = per["px_min"].replace(0, _UNDEF_PRICE)
-    per["px_max"] = per["px_max"].replace(0, -_UNDEF_PRICE)
-    per["px_min"] = np.where(per["px_min"] == _UNDEF_PRICE, np.nan, per["px_min"] / 1e9)
-    per["px_max"] = np.where(per["px_max"] == -_UNDEF_PRICE, np.nan, per["px_max"] / 1e9)
+    per["px_min"] = per["px_min"].astype("float64") / 1e9
+    per["px_max"] = per["px_max"].astype("float64") / 1e9
 
     ids = per["instrument_id"].to_numpy()
     zero = np.zeros((3, 1440), dtype=np.int64)
