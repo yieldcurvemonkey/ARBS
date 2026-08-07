@@ -264,3 +264,32 @@ def test_recycling_refuses_while_a_stream_cell_is_live(client):
     old = client._wb
     assert client.recycle_workbook() is False
     assert client._wb is old, "a streaming client's workbook must survive"
+
+
+def test_recycling_never_leaves_excel_with_zero_workbooks(client):
+    """The replacement is created BEFORE the old one closes.
+
+    An Excel driven over COM with no workbook open can hide its window or quit,
+    which to the user is indistinguishable from the add-in having vanished. The
+    fake records the workbook count at the moment of each close.
+    """
+    app = client._app
+    counts = []
+    real_close = type(client._wb).Close
+
+    def _spy(self, SaveChanges=False):  # noqa: N803 - COM name
+        counts.append(len(app.workbooks_list))
+        return real_close(self, SaveChanges)
+
+    type(client._wb).Close = _spy
+    try:
+        assert client.recycle_workbook() is True
+    finally:
+        type(client._wb).Close = real_close
+
+    assert counts, "nothing was closed - the test did not exercise the path"
+    assert min(counts) >= 2, (
+        f"only {min(counts)} workbook(s) open at close time; the replacement must "
+        f"exist first so the count never reaches zero"
+    )
+    assert len(app.workbooks_list) >= 1
