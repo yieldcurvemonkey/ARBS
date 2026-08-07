@@ -525,9 +525,9 @@ def stage_c(
     report: Dict[str, Any] = {}
 
     # -- C1. all 20 activity windows in ONE call ------------------------
-    _rule("C1. HOURLY 5D across all 20 curves - the session-window fingerprint")
+    _rule("C1. HOURLY 1W across all 20 curves - the session-window fingerprint")
     fp_tags = [f"RATES.OIS.{idx}.PAR.10Y" for idx in INDICES]
-    hourly = fetch_and_bank(client, cache, ev, fp_tags, "HOURLY", label="C1 HOURLY 5D x20", period="5D")
+    hourly = fetch_and_bank(client, cache, ev, fp_tags, "HOURLY", label="C1 HOURLY 1W x20", period="1W")
     windows: Dict[str, Any] = {}
     last_tick: Dict[str, pd.Timestamp] = {}
     print(f"\n  {'index':<16}{'rows':>6}  {'session (ET hour of day)':<40}")
@@ -707,6 +707,165 @@ def stage_f(
     ev.summary("stage_f_live", report)
 
 
+#: The overnight fixing tag per currency, from the harvested grammar. Eleven of
+#: the twenty OIS currencies have one; ILS, MXN, SGD, THB and ZAR are absent from
+#: ``RATES.MONEY_MARKETS`` entirely, and there is no Fed Funds entry either (only
+#: ``FFT``/``BGCR``/``TGCR``, which the walk recorded with no children).
+MONEY_MARKET_ON_TAGS: Dict[str, str] = {
+    "USD_SOFR": "RATES.MONEY_MARKETS.USD.SOFR.ON",
+    "EUR_EUROSTR": "RATES.MONEY_MARKETS.EUR.EUROSTR.ON",
+    "GBP_SONIA": "RATES.MONEY_MARKETS.GBP.SONIA.ON",
+    "JPY_TONAR": "RATES.MONEY_MARKETS.JPY.TONAR.ON",
+    "CAD_CORRA": "RATES.MONEY_MARKETS.CAD.CORRA.ON",
+    "CHF_SARON": "RATES.MONEY_MARKETS.CHF.SARON.ON",
+    "AUD_AONIA": "RATES.MONEY_MARKETS.AUD.AONIA.ON",
+    "NZD_NZIONA": "RATES.MONEY_MARKETS.NZD.NZIONA.ON",
+    "NOK_NOWA": "RATES.MONEY_MARKETS.NOK.NOWA.ON",
+    "SEK_STINA": "RATES.MONEY_MARKETS.SEK.STINA.ON",
+    "DKK_TNDKK": "RATES.MONEY_MARKETS.DKK.TNDKK.ON",
+}
+
+#: Probed alongside, because the catalog recorded them with no children and a
+#: childless node means "the walk stopped here", not "nothing is below".
+MONEY_MARKET_SPECULATIVE_TAGS: Tuple[str, ...] = (
+    "RATES.MONEY_MARKETS.USD.FFT.ON",
+    "RATES.MONEY_MARKETS.USD.BGCR.ON",
+    "RATES.MONEY_MARKETS.USD.TGCR.ON",
+    "RATES.MONEY_MARKETS.USD.FEDFUND.ON",
+    "RATES.MONEY_MARKETS.USD.EFFR.ON",
+)
+
+
+def stage_m(client: CitiVelocityExcelClient, cache: CitiVeloTagCache, ev: Evidence) -> None:
+    """Does Citi serve published overnight FIXINGS, and for which currencies?
+
+    ``RATES.MONEY_MARKETS.<ccy>.<index>.ON`` is the candidate. If it serves, every
+    curve gets a float-leg fixing history from the same vendor and the same
+    transport as its par grid, and a seasoned swap becomes priceable - today
+    nineteen of the twenty curves carry an EMPTY fixings series and raise on one.
+
+    One call. The catalog supplies the grammar, so nothing here is guessed except
+    the deliberately-speculative tags, which cost nothing to include in the same
+    batch and answer whether the childless nodes hide anything.
+    """
+    _rule("M. RATES.MONEY_MARKETS overnight fixings")
+    tags = list(MONEY_MARKET_ON_TAGS.values()) + list(MONEY_MARKET_SPECULATIVE_TAGS)
+    # Explicit bounds, not `period=`: CVTSHIST rejects a long relative period
+    # outright (measured - `period="15Y"` returned no block at all, instantly,
+    # the same signature as HOURLY+period), while yyyyMMdd bounds are proven.
+    series = fetch_and_bank(
+        client, cache, ev, tags, "DAILY", label="M money-market ON",
+        start=datetime.date(2005, 1, 1), end=datetime.date.today(),
+    )
+    report: Dict[str, Any] = {}
+    print(f"\n  {'index':<14}{'tag':<44}{'rows':>6}{'first':>12}{'last':>12}{'latest':>10}")
+    for citi_index, tag in MONEY_MARKET_ON_TAGS.items():
+        s = series.get(tag)
+        if s is None or s.empty:
+            report[citi_index] = {"tag": tag, "served": False}
+            print(f"  {citi_index:<14}{tag:<44}{'-':>6}")
+            continue
+        report[citi_index] = {
+            "tag": tag,
+            "served": True,
+            "n": int(len(s)),
+            "first": s.index.min().isoformat(),
+            "last": s.index.max().isoformat(),
+            "latest": float(s.iloc[-1]),
+        }
+        print(
+            f"  {citi_index:<14}{tag:<44}{len(s):>6}"
+            f"{s.index.min().strftime('%Y-%m-%d'):>12}"
+            f"{s.index.max().strftime('%Y-%m-%d'):>12}{float(s.iloc[-1]):>10.5f}"
+        )
+    speculative = {t: (t in series and not series[t].empty) for t in MONEY_MARKET_SPECULATIVE_TAGS}
+    print("\n  speculative tags:")
+    for tag, ok in speculative.items():
+        latest = f"{float(series[tag].iloc[-1]):.5f}" if ok else "-"
+        print(f"    {'SERVES' if ok else 'no    '}  {tag:<44}{latest:>10}")
+    report["_speculative"] = speculative
+    ev.summary("stage_m_money_markets", report)
+
+
+def stage_w(
+    client: CitiVelocityExcelClient,
+    cache: CitiVeloTagCache,
+    ev: Evidence,
+    *,
+    only: Optional[Sequence[str]] = None,
+    period: str = "10Y",
+) -> None:
+    """Deep DAILY par history for the currencies the CurveStore will be warmed on.
+
+    One ``CVTSHIST`` per currency. The add-in truncates to whatever history the tag
+    actually has, so an over-long period costs nothing and removes a guess.
+    """
+    start = datetime.date(2005, 1, 1)
+    end = datetime.date.today()
+    _rule(f"W. deep DAILY par history, {start} .. {end} (explicit bounds)")
+    targets = list(only) if only else ["USD_SOFR", "EUR_EUROSTR", "JPY_TONAR", "CAD_CORRA", "GBP_SONIA"]
+    report: Dict[str, Any] = {}
+    for idx in targets:
+        grid_tags = [f"RATES.OIS.{idx}.PAR.{t}" for t in _par_axis(idx)]
+        series = fetch_and_bank(
+            client, cache, ev, grid_tags, "DAILY", label=f"W deep {idx}", start=start, end=end
+        )
+        frame = pd.concat(series, axis=1).sort_index() if series else pd.DataFrame()
+        report[idx] = _grid_report(idx, grid_tags, series, frame)
+        _print_grid_report(idx, report[idx])
+        ev.summary("stage_w_deep_history", report)
+    ev.summary("stage_w_deep_history", report)
+
+
+def stage_t(client: CitiVelocityExcelClient, cache: CitiVeloTagCache, ev: Evidence) -> None:
+    """Can one ``CVSTREAM`` carry MANY tags? The daemon's whole shape depends on it.
+
+    A single-tag ``CVSTREAM`` means 44 live RTD regions per curve, which is a lot
+    of surface to keep alive and never tear down. If it takes a comma-separated
+    list like ``CVTSHIST`` does, a curve is one region and the daemon is tractable.
+
+    **This stage deliberately leaves its workbook open.** The cells it writes are
+    live RTD; closing a workbook while the add-in still has queued actions against
+    them is the documented second crash trigger, and an RTD cell never stops having
+    them. That is not a workaround - it is the rule the daemon is built on.
+    """
+    _rule("T. CVSTREAM shape - one tag or many?")
+    probes = (
+        ('=CVSTREAM("RATES.OIS.USD_SOFR.PAR.10Y")', "single tag"),
+        (
+            '=CVSTREAM("RATES.OIS.USD_SOFR.PAR.2Y,RATES.OIS.USD_SOFR.PAR.5Y,'
+            'RATES.OIS.USD_SOFR.PAR.10Y")',
+            "three tags, comma-separated",
+        ),
+    )
+    out: Dict[str, Any] = {}
+    for formula, label in probes:
+        try:
+            value, rows = client.evaluate_formula(formula, rows_needed=12, timeout=120.0)
+        except Exception as exc:  # noqa: BLE001
+            print(f"  {label}: RAISED {type(exc).__name__}: {exc}")
+            ev.log("cvstream_shape", label=label, formula=formula, error=f"{type(exc).__name__}: {exc}")
+            continue
+        print(f"  {label}")
+        print(f"    settled : {value!r} ({type(value).__name__})")
+        print(f"    block   : {len(rows)} row(s)")
+        for row in rows[:8]:
+            print(f"      {row}")
+        out[label] = {"value": _jsonable(value), "n_rows": len(rows), "rows": _jsonable(rows[:8])}
+        ev.log("cvstream_shape", label=label, formula=formula, **out[label])
+
+    # Does a multi-tag region keep ticking, tag by tag?
+    time.sleep(25.0)
+    try:
+        value2, rows2 = client.evaluate_formula(probes[1][0], rows_needed=12, timeout=120.0)
+        changed = _jsonable(rows2[:8]) != out.get(probes[1][1], {}).get("rows")
+        print(f"\n  re-read 25s later: {'CHANGED' if changed else 'identical'}  {rows2[:4]}")
+        ev.log("cvstream_shape_reread", changed=changed, rows=_jsonable(rows2[:8]))
+    except Exception as exc:  # noqa: BLE001
+        print(f"  re-read RAISED {type(exc).__name__}: {exc}")
+    ev.summary("stage_t_cvstream_shape", out)
+
+
 def stage_s(client: CitiVelocityExcelClient, cache: CitiVeloTagCache, ev: Evidence) -> None:
     """``CVSTREAM`` - one call, last, from its own client. See the module docstring.
 
@@ -839,8 +998,16 @@ _STAGES = {
     "E": stage_e,
     "F": stage_f,
     "L": stage_l,
+    "M": stage_m,
     "S": stage_s,
+    "T": stage_t,
+    "W": stage_w,
 }
+
+#: Stages that leave live RTD cells behind. Their workbook is NEVER closed: an
+#: RTD cell always has queued add-in actions against it, and tearing one down is
+#: the documented second crash trigger.
+_LEAVES_RTD_CELLS = frozenset({"T"})
 
 
 def main() -> int:
@@ -883,9 +1050,13 @@ def main() -> int:
             kw: Dict[str, Any] = {}
             if letter == "B":
                 kw["period"] = args.period
-            if letter in {"B", "C", "F"} and only:
+            if letter == "W":
+                kw["period"] = args.period
+            if letter in {"B", "C", "F", "W"} and only:
                 kw["only"] = only
             fn(client, cache, ev, **kw)
+            if letter in _LEAVES_RTD_CELLS:
+                abandoned = True
         return 0
     except AsyncTimeoutError as exc:
         # A formula that never settled may STILL resolve, into a block of unknown

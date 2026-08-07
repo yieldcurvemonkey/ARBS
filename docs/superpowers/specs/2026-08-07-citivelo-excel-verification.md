@@ -313,11 +313,18 @@ history" for every Asian curve.** It was the middle of their night. *Fix:* two
 probe windows (10:00 and 02:00 ET); coverage went from 12/20 to 18/20 at one
 month and 15/20 to 19/20 at one year.
 
-**F6 — `CVTSHIST` at `HOURLY` with a relative `period=` returns no block at all**
-(instantly, not a timeout), while `HOURLY` with explicit bounds works. The
-session-fingerprint stage relied on it and produced a confident "no intraday data
-for all 20 curves". *Fix:* stage removed; the same information is derived from the
-`MI01` data already banked. Recorded as a wire fact.
+**F6 — a `CVTSHIST` request with an unaccepted `Period` returns no block at all**
+(instantly, not a timeout), and that reads exactly like a tag with no data.
+*Originally written up here as "`HOURLY` does not take a relative period", which
+was **wrong**.* The add-in's own log later gave the real cause: `Period` is a
+**closed vocabulary** — `30I 1H 2H 4H 8H 12H 1D 2D 4D 1W 2W 1M 2M 3M 6M 1Y 2Y 3Y
+5Y 10Y MAX` — and `5D` is simply not in it (`1D`, `2D`, `4D` are). `HOURLY`
+accepts a period perfectly well; it wants an intraday one. Worse, the package's
+`DEFAULT_FULL_PERIOD` was `"50Y"`, also not in the list, so "give me all the
+history" had been returning an empty frame for every tag. *Fix:* validate against
+the real set, default to `"MAX"`, and use explicit bounds for anything the
+vocabulary cannot express. See
+[the stream/warm/fixings note](2026-08-07-citivelo-excel-stream-warm-fixings.md).
 
 **F7 — an Asian curve's morning session was dated a business day early.** Citi
 stamps everything in ET, so Tokyo's morning (19:00–23:59 ET) falls on the

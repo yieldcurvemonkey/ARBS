@@ -1,0 +1,89 @@
+{
+ "USD_SOFR": {
+  "tag": "RATES.MONEY_MARKETS.USD.SOFR.ON",
+  "served": true,
+  "n": 5427,
+  "first": "2005-01-03T00:00:00",
+  "last": "2026-06-25T00:00:00",
+  "latest": 3.64
+ },
+ "EUR_EUROSTR": {
+  "tag": "RATES.MONEY_MARKETS.EUR.EUROSTR.ON",
+  "served": true,
+  "n": 5572,
+  "first": "2005-01-03T00:00:00",
+  "last": "2026-08-06T00:00:00",
+  "latest": 2.185
+ },
+ "GBP_SONIA": {
+  "tag": "RATES.MONEY_MARKETS.GBP.SONIA.ON",
+  "served": true,
+  "n": 5458,
+  "first": "2005-01-04T00:00:00",
+  "last": "2026-08-06T00:00:00",
+  "latest": 3.7323
+ },
+ "JPY_TONAR": {
+  "tag": "RATES.MONEY_MARKETS.JPY.TONAR.ON",
+  "served": true,
+  "n": 5529,
+  "first": "2005-01-03T00:00:00",
+  "last": "2026-08-06T00:00:00",
+  "latest": 0.98
+ },
+ "CAD_CORRA": {
+  "tag": "RATES.MONEY_MARKETS.CAD.CORRA.ON",
+  "served": true,
+  "n": 5330,
+  "first": "2005-01-04T00:00:00",
+  "last": "2026-04-29T00:00:00",
+  "latest": 2.3
+ },
+ "CHF_SARON": {
+  "tag": "RATES.MONEY_MARKETS.CHF.SARON.ON",
+  "served": true,
+  "n": 5515,
+  "first": "2005-01-03T00:00:00",
+  "last": "2026-08-06T00:00:00",
+  "latest": -0.059883
+ },
+ "AUD_AONIA": {
+  "tag": "RATES.MONEY_MARKETS.AUD.AONIA.ON",
+  "served": true,
+  "n": 5442,
+  "first": "2005-01-04T00:00:00",
+  "last": "2026-08-06T00:00:00",
+  "latest": 4.35
+ },
+ "NZD_NZIONA": {
+  "tag": "RATES.MONEY_MARKETS.NZD.NZIONA.ON",
+  "served": true,
+  "n": 5495,
+  "first": "2005-01-04T00:00:00",
+  "last": "2026-08-07T00:00:00",
+  "latest": 2.5
+ },
+ "NOK_NOWA": {
+  "tag": "RATES.MONEY_MARKETS.NOK.NOWA.ON",
+  "served": false
+ },
+ "SEK_STINA": {
+  "tag": "RATES.MONEY_MARKETS.SEK.STINA.ON",
+  "served": true,
+  "n": 5393,
+  "first": "2005-01-03T00:00:00",
+  "last": "2026-06-26T00:00:00",
+  "latest": 1.756
+ },
+ "DKK_TNDKK": {
+  "tag": "RATES.MONEY_MARKETS.DKK.TNDKK.ON",
+  "served": false
+ },
+ "_speculative": {
+  "RATES.MONEY_MARKETS.USD.FFT.ON": false,
+  "RATES.MONEY_MARKETS.USD.BGCR.ON": false,
+  "RATES.MONEY_MARKETS.USD.TGCR.ON": false,
+  "RATES.MONEY_MARKETS.USD.FEDFUND.ON": false,
+  "RATES.MONEY_MARKETS.USD.EFFR.ON": false
+ }
+}

@@ -92,7 +92,7 @@ def test_no_stage_ever_overlaps_a_live_region(rig):
     app, client, cache, ev = rig
     H.stage_a(client, cache, ev)
     H.stage_d(client, cache, ev)
-    H.stage_b(client, cache, ev, period="5D", only=PROBE_INDICES)
+    H.stage_b(client, cache, ev, period="1W", only=PROBE_INDICES)
     H.stage_c(client, cache, ev, only=PROBE_INDICES)
     H.stage_e(client, cache, ev)
     H.stage_f(client, cache, ev, only=PROBE_INDICES)
@@ -126,7 +126,7 @@ def test_every_served_series_is_persisted_before_the_call_returns(rig):
     """A series fetched but not banked has to be re-fetched from an Excel that may be gone."""
     _app, client, cache, ev = rig
     tags = [f"RATES.OIS.USD_SOFR.PAR.{t}" for t in _axis("USD_SOFR")[:6]]
-    out = H.fetch_and_bank(client, cache, ev, tags, "DAILY", label="unit", period="5D")
+    out = H.fetch_and_bank(client, cache, ev, tags, "DAILY", label="unit", period="1W")
     assert out
     for tag in out:
         cached = cache.read(tag, "DAILY")
@@ -143,7 +143,7 @@ def test_grid_report_counts_complete_rows_not_just_rows(rig, served):
     served.series[holed] = s.iloc[: len(s) // 2]
 
     tags = [f"RATES.OIS.USD_SOFR.PAR.{t}" for t in axis[:8]]
-    out = H.fetch_and_bank(client, cache, ev, tags, "DAILY", label="unit", period="10D")
+    out = H.fetch_and_bank(client, cache, ev, tags, "DAILY", label="unit", period="2W")
     frame = pd.concat(out, axis=1).sort_index()
     rep = H._grid_report("USD_SOFR", tags, out, frame)
     assert rep["n_rows"] > rep["n_complete_rows"] > 0
@@ -157,7 +157,7 @@ def test_a_tag_that_serves_nothing_is_reported_not_dropped(rig, served):
     bad = f"RATES.OIS.USD_SOFR.PAR.{axis[2]}"
     served.bad_tags.add(bad)
     tags = [f"RATES.OIS.USD_SOFR.PAR.{t}" for t in axis[:6]]
-    out = H.fetch_and_bank(client, cache, ev, tags, "DAILY", label="unit", period="5D")
+    out = H.fetch_and_bank(client, cache, ev, tags, "DAILY", label="unit", period="1W")
     assert bad not in out
     assert len(out) == len(tags) - 1
     record = [r for r in ev.records if r["event"] == "cvtshist"][-1]
@@ -178,7 +178,7 @@ def test_evidence_is_written_per_call_not_at_the_end(rig, tmp_path):
 def test_stage_summaries_are_rewritten_after_every_currency(rig, tmp_path):
     """A currency-by-currency rewrite is what makes a partial run useful."""
     _app, client, cache, ev = rig
-    H.stage_b(client, cache, ev, period="5D", only=PROBE_INDICES)
+    H.stage_b(client, cache, ev, period="1W", only=PROBE_INDICES)
     payload = json.loads((ev.dir / "stage_b_eod.json").read_text(encoding="utf-8"))
     assert set(payload) == set(PROBE_INDICES)
     for index, rep in payload.items():
