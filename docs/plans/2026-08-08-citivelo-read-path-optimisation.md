@@ -311,6 +311,23 @@ that covers it **fails**. A test that still passes with the code it covers
 reverted is a comment, not a test — and this repo has a record of tests that
 passed with the fix removed.
 
+**All 12 mutations were caught.** What each one removes:
+
+| mutation | test that must fail |
+|---|---|
+| `reference_date` dropped from the fixings memo key | leak test (asks for the LATER date first) |
+| the memo's defensive copy | `..._hands_out_a_copy` |
+| the day cache's mtime check | `..._revalidates_when_the_partition_changes` |
+| the cold-partition short circuit (`has_day`'s contract) | `..._treats_a_cold_partition_as_absent` |
+| the par-rate handoff | `..._computed_once_per_built_swap` |
+| the par-rate cache's curve-identity guard | `..._not_reused_for_a_different_curve` |
+| the per-wrapper fixings memo | `..._resolve_once_per_wrapper` |
+| that memo's identity guard | `..._follows_a_reassigned_series` |
+| the opt-in's elapsed-period gate | `..._only_for_a_forward_start` |
+| the opt-in's default-off | `..._is_off_unless_asked_for` |
+| the batch's `ignore_cache` guard | `..._honours_ignore_cache` |
+| the batch's nearest-snapshot search | `..._matches_single_point_intraday` |
+
 ---
 
 ## 5. Results
