@@ -163,3 +163,440 @@ cross-sectional many-bet books, event windows), not more EOD carry variants.
 - USD: all pairs carry-negative today; BE/RV 0.96–1.72; 20s30s spot inverted.
 - JPY 10y10y/20y10y at −3.7bp, flattest in a year — the PM's Japan-flattener thesis is a
   multi-year expectations-wash argument, not a current BE/RV entry state (both recorded).
+
+---
+
+# Session 2 (2026-08-08) — the QDB backlog, and what making it executable found
+
+**Verdict first: no verdict changed, and three of them got worse.** The standing rule asked for
+`QueryDrivenBacktest` implementations of the graded strategies as executed notebooks. Building
+them forced conventions into the open that the panel engines had left implicit, and every one
+of them had been flattering its strategy. Branch `feat/citivelo-rv-loop-s2`, PR #405.
+`trials_total` is unchanged at **22** — these are implementations of DEAD strategies.
+
+## The continuation contract, items 1 and 2
+
+**famb STRG forward run — BLOCKED** (L-0047). Four of the ~20 required forward sessions have
+elapsed since the spec froze on 2026-08-04. Re-check on or after 2026-09-02. Nothing was run:
+previewing it would consume the one pre-registered trial's independence.
+
+**SR3 listed-butterfly history — NOT REACHABLE** (L-0048). Barchart's EOD endpoint serves no
+exchange-listed spread instrument under any of seven encodings, and the cross-product control
+(`CLF27-CLG27`, the most heavily traded listed calendar in US futures) fails identically — so
+this is a property of the endpoint, not a symbology guess that missed. Databento is installed
+but has no API key anywhere reachable, and one MBO day is the entire local corpus.
+
+> **A Databento API key is the only thing standing between this program and its
+> highest-value remaining study** — re-costing the dead STIR labs at the measured 0.506 bp
+> round trip instead of the 2.0 bp they were killed at.
+
+The probe's first version scored a hit as `len(df) > 0`. Barchart answers an unknown symbol
+with HTTP 200 and a one-row body reading `Error: invalid symbol`, so it reported all seven
+encodings served — **the defect manufactured the high-value outcome on the session's first
+measurement** (L-0049). Hits now require a parsed date, and both a positive and a
+cross-product negative control run every time.
+
+## H13 — the fill day is the whole edge
+
+`sv_h13_qdb.ipynb`. Engine ties out against a matched-semantics panel rerun at **corr 0.99995**
+over 2,755 days, on episodes asserted byte-equal to the graded ones.
+
+The panel sums the flows *dated* `entry..exit`, and the flow dated at the entry is the move
+from the **previous** close. So the graded book fills at the same close its signal was computed
+from — `state = grail.shift(1)` removes the lookahead but leaves zero implementation lag. The
+design doc's marking policy requires lag-1 fills ("signal on day t, execute at day t+1 marks")
+and the checker charter asks "Fills at t+1?".
+
+On the same aged panel package, moving the window one day later:
+
+| | gross | registered cost @1x | net |
+|---|---:|---:|---:|
+| as graded (fill at signal close) | +282.7 bp | 174.0 bp | **+106.7 bp** |
+| at a `t+1` fill | +166.1 bp | 174.0 bp | **−7.9 bp** ⚠️ |
+
+> **⚠️ The −7.9 bp is superseded — see `L-0065` and the checker section below.** The 174.0 bp is a
+> *nominal* cost (it assumes realised DV01 ≡ $100k; the episodes average $103,961). Like-for-like
+> the `t+1` net is **−9.85 bp** (panel) or **−10.24 bp** (full `shift(2)` re-book). Same side of
+> zero — the finding is unchanged and slightly stronger.
+
+The engine books agree in direction and size: **+162.4 bp `SELECTION-ARTIFACT` → −13.8 bp
+`DEAD`**, median episode −1.29 bp, hit 31%, per-episode Sharpe −0.019.
+
+Split by end (L-0052): dropping the entry-dated flow costs **+70.9 bp**, adding the day after
+the exit costs a further **−45.6 bp**. Both ends are material, and the pairing is the finding —
+the state does not merely *begin* on a big favourable day, it *ends* just before a big adverse
+one. Both boundaries are timed on same-day information. That is a spread-extreme **bracket**,
+which is L-0030's occupancy-matched rival check with a price at each end, and L-0027's
+"chattering at the carry-zero boundary" made quantitative: carry crosses zero on days the
+spread moves, in both directions.
+
+**Containment:** this is specific to H13's state-scaled `_book` path. The always-on controls and
+H14G have trivial states, the F-gates have no fills at all, and the rival check compared
+like-for-like. No other verdict needs re-auditing for it.
+
+**The alternative reading, stated:** a desk prices this state intraday and could trade before
+the close, so a same-close fill is defensible as a description of practice. It is simply not the
+convention this program grades on.
+
+## H14 — the engine re-derives the checker's kill, and prices what it could only qualify
+
+`sv_h14_qdb.ipynb`, the fly leg only (the flattener is what L-0045 certified).
+
+A `QueryDrivenBacktest` book **cannot** double-count carry: its equity change *is* the total PV
+change, once, with no separate carry bucket to add. The engine lands at **+13.0 bp** — 4.2 bp
+from the committed `fly_mtm` (+8.8) and 27.8 bp from `fly_mtm + fly_carry` (+40.9). V-SV-14G-KILL,
+re-derived from an independent code path.
+
+Correlation cannot settle this and is not asked to: `fly_carry` is a smooth ~0.006 bp/day drift
+and both readings correlate at 0.995. The **terminal level** is the discriminating statistic.
+
+The solve schedule is replayed from the artifact; the weights are re-derived, because the
+artifact stores only the per-leg DV01 *changes* and never the levels. **187 of 201 solves
+reproduce to floating-point equality** off the re-derived path — 200-odd independent PCA solves
+do not agree to the last bit by accident.
+
+The 14 that do not close the checker's other finding. There are **22** annual segments, so 22
+re-initiations; the ledger carries **8**. Every unexplained solve is the first one after a
+segment start whose row is absent — **paired 1:1, 14/14**. So "~14 lost re-initiations" is
+exactly 14, they are named, and at `cost_model` half-spreads they are worth **+5.27 bp** of
+maintenance the graded bill never charged. Restoring them in the engine moves gross by only
+−0.54 bp, which is the useful negative: their damage is almost entirely in the cost line.
+
+Net contribution is negative at every multiplier: **−5.1 / −23.2 / −59.5 bp** at 0.5x / 1x / 2x.
+
+**A live trap, recorded not repaired:** `h14_fly_ledger_USD.parquet` is stored in the **pre-fix**
+convention while `scripts/sv_citivelo_h14_graded.py` was repaired at `f362eac4` and never re-run.
+Read `fly_mtm` alone from the committed parquet; read the sum from any freshly generated one.
+
+## H16b — the cube-served swaption path works, and the vol mark has a vintage mix
+
+`sv_h16b_qdb.ipynb`. The handover pre-authorised recording a gap if this needed real plumbing.
+It does not. Recipe of record:
+
+    IRSwaptionMDP(source="CITIVELO-RL", curve_source="CITIVELO_EXCEL")
+    IRSwaptionQuery(STRADDLE, SPOT_NPV, shorthand="2Yx10Y", strike="ATMF", side="sell",
+                    structure_kwargs={"notional": m * 100e6})
+
+`IRSwaptionPositionHandler` is entry-anchored as documented, so strike and exercise date are
+both frozen — a real held swaption. **Four silent failure modes** on the way (L-0055): the source
+token needs a provider-engine pair; `curve_source` is a constructor argument, not a request key;
+`curve_source="CITIVELO"` is the **minute** asset and has no pre-2023 days; and `run()` swallows
+all three into a completed backtest with a full equity curve, no holes, no NaNs and **every mark
+exactly 0.0**. The non-zero-marks assertion carried over from the H13 notebook is what caught
+the third.
+
+The graded vol leg freezes the strike and ages the time to expiry, but takes the forward and
+annuity from the **constant-maturity** locus panel — an ageing option written on a forward that
+never ages, the vintage trap the `CurvePricer` docstring warns about on the linear side,
+reproduced on the vol side. Unhedged and short the same straddle, the daily paths track at
+corr 0.999, so the disagreement is a level: the held swaption loses **16.2%** and **11.2%** more
+than the graded mark. Not apportioned — vol interpolation and the business-day time-to-expiry
+approximation are also candidates — but both episodes agree on the sign, and the sign says the
+convention flattered the short-straddle leg. Two episodes; a scoping result, recorded as one.
+
+## The engine assertion that earns its keep
+
+`DateTriggerRequirements` tests `state.date() in set(self.dates)`, so a `pd.Timestamp` in that
+set never compares equal and **every trigger becomes a silent no-op**. The run completes, the
+equity curve has no holes, there are no NaNs, and every mark is exactly zero. "No holes and no
+NaNs" does not distinguish a working book from an empty one. Every engine cell in these three
+notebooks now asserts non-zero marks *and* a closed-position count — the assertion caught two
+further instances in the H16b work.
+
+## The pattern, again
+
+Four defects were found this session — the probe's error-payload hit, H13's fill day, H14's
+missing re-initiations, H16b's vintage mix. **All four flattered the thing being measured.** The
+session-1 tally was twelve of twelve. Nothing about that has changed.
+
+## The DSR wall is not the trial count — it is config disagreement (L-0057)
+
+Computed before spending a gate on the next family, because the answer decides what a next
+family should even look like.
+
+`DSR > 0.5` is exactly `sr > sr0`, and `sr0 = expected_max_sharpe_null(N, var_sr) = sd(SR) × k(N)`
+where `k` grows like `sqrt(2 ln N)`. Measured:
+
+| N | k(N) |
+|---:|---:|
+| 22 | 1.943 |
+| 30 | 2.073 |
+| 40 | 2.190 |
+| 3,905 | 3.622 |
+
+**The trial count enters through a term that barely moves — N from 3,905 down to 22 buys a
+factor of 1.87 — while the cross-trial Sharpe dispersion enters linearly.**
+
+For the SV arms the measured `sd(per-trade Sharpe)` is **0.2758** (range −0.784…+0.219 across 14
+arms). So the bar was **0.536 at N=22** and **0.9997 at N=3,905**, and the best arm was **0.219**.
+It failed both. Recomputed directly on the committed `h13_trades_*`:
+
+> **Max DSR over all 14 H13 arms at n_trials = 22 is 0.101.**
+> H13 would have died at the loop's own trial count.
+
+So the handover's framing — *"this is why carry-class books can never be ALIVE in the SV family —
+and why family selection matters more than signal cleverness"* — is too generous to family
+selection. L-0042(b) is arithmetically true and nearly irrelevant.
+
+### What this binds on every registration from here
+
+A family passes DSR when **its configs agree on a positive Sharpe**, not when it has few trials.
+A wide sweep is self-defeating twice over: it raises `N` a little and `sd(SR)` a lot. Register
+**few, closely-related configs and require them all to work.**
+
+Two caveats that must travel with this, because it is otherwise a recipe for gaming the bar:
+
+1. The house convention estimates `var_sr` **from the sweep itself** (`deflated_sharpe`
+   docstring: "the honest input"). A deliberately tiny sweep would therefore understate its own
+   penalty. Any registration relying on this must **pre-state where `sd(SR)` comes from** and
+   report the verdict's sensitivity to it.
+2. DSR is pulled toward 0.5 *from below* on small samples — the n=6 arm scores the **highest**
+   DSR at N=22 while being net **negative**. A DSR near 0.5 on few observations is not evidence.
+
+## H17 — vol term-structure roll-down carry, dead at gate, twice over
+
+> **⚠️ SUPERSEDED IN PART — see "The checker's verdict (C-0001)" below, and ledger `V-V-17B`.**
+> The death stands. Its **grounds and every realized number in this section do not**: −0.29× RT and
+> "12 of 15" were quoted at one arbitrary cycle phase. The phase-invariant figures are
+> **−0.097× RT, 9 of 15 negative, best cell +0.165×**, and "two independent grounds" is **one**.
+
+A new non-SV-lineage family, pre-registered before numbers: a vega-neutral ATM straddle calendar
+harvesting the roll-down of the vol term structure; direction pinned by a written entry-day slide
+rule; universe restricted to CM-1-printed cells (1M excluded as CM-1's worst); horizons registered
+as a pair rather than tuned; 15 feasible cells of 18, 41–126 non-overlapping cycles each.
+
+1. **The carry does not clear the boat even if the surface never moves.** The frozen-surface
+   roll-down the rule is designed to harvest, from entry-day data alone, is a median **0.73×** the
+   CM-1 round trip — above 1× in only 2 of 15 cells.
+2. **The market takes back more than all of it.** Realized median gross is **−0.29× RT**, negative
+   in 12 of 15 cells; best cell **+0.37×**; zero cells clear 1× on median or mean. Per-cycle
+   Sharpes −0.371…+0.082, worst cycles −3.2 to −21.1 annual vol bp against a ~1bp round trip. The
+   rule sits long-back/short-front 50–71% of the time — net short gamma — so the pre-registered
+   steamroller criterion fires too.
+
+The gate carries a **planted-value self-test**: a flat frozen surface pays exactly `0.000`, a
+frozen sloped surface pays `+4.1454` bp/cycle and the gate reproduces it to `1e-6`. So `0.73×` and
+`−0.29×` are statements about the market, not about the code. That closes L-0042(c)'s discipline
+gap for this gate.
+
+**Not crisis-driven** (L-0062): re-run on full / pre-2020 / 2020+, **zero of 15 cells clear 1× RT
+in any subsample**. Best pre-2020 cell 0.39×, best 2020+ cell 0.66×. There was no calm-market
+carry either.
+
+**The sentence:** the vol term-structure carry is real, smaller than the round trip, and then the
+front-vol spikes take it back.
+
+Trial accounting is deliberately stricter than session 1's gate precedent — those measured oracles
+and consumed nothing; this measured the registered rule's *realized* gross, so all 15 cells are
+consumed. **22 → 37**.
+
+## CM-2 — the measured linear cost line
+
+The linear leg dominates every boat in this program (L-0019: 0.26–0.43 bp/day against a swaption
+leg of 0.03–0.09), and that line is the Citi 2019 schedule — an *assumption* applied cross-market.
+L-0042(a) named it as the reopener for F3 and H16. CM-2 measures it: **905,820** CFTC Part 43 USD
+OIS prints over **700 days (2010-12-15 → 2026-07-21)** against the same-day Citi EOD curve, each
+priced on **its own effective and maturity dates** (59,218 unique swaps).
+
+Dedup drops any chain containing a CORR or EROR rather than resolving it — dropping cannot
+introduce a wrong rate, and a wrong rate *inflates* the deviation, which is the direction that
+would flatter the study.
+
+**Planted-value verify PASS:** a print planted at the fair rate measures `0.00e+00` bp through the
+real path; the same print with its rate read as percent measures `39,053` bp.
+
+**The smear table locates the curve's own stamp without being told it** — median `|print − EOD mid|`
+falls monotonically from 3.3bp overnight to **0.526 at 14:00 ET** and **0.508 at 15:00**, then rises
+to 0.828 at 16:00. That V is the best single piece of evidence the measurement is working.
+
+### What is decisive: the shape
+
+| tenor | all-hours median | at 15:00 ET | assumed (`cost_model`) | at-stamp ÷ assumed |
+|---:|---:|---:|---:|---:|
+| 1Y | 1.47 | 0.41 | 0.30 | 1.36 |
+| 5Y | 1.74 | 0.53 | 0.50 | 1.06 |
+| 10Y | 1.53 | 0.46 | 0.75 | 0.62 |
+| 20Y | 1.20 | 0.40 | 1.25 | 0.32 |
+| 30Y | 1.35 | 0.43 | 1.75 | 0.24 |
+
+At the stamp hour the measured deviation is **essentially flat in tenor** (0.32–0.53 bp from 1Y to
+30Y) while `RVUtils/cost_model` is **linear in tenor** (0.30 → 1.75 bp). The assumed line
+**over-charges 20Y+ by 3–4× and under-charges 1–3Y by ~1.2–1.4×**. Its shape is wrong, not merely
+its level.
+
+### What is not decisive: the level
+
+The confound checks kill that claim, and they are reported rather than argued around. The deviation
+distribution **peaks at mid even at the stamp hour** (density at zero *is* the modal bin,
+centre/peak = 1.000), and 6.3% of stamp-hour prints sit within 0.05bp of mid. A half-spread should
+show a **dip** at zero; there is none. The test is one-directional — one-sided flow produces a
+*shifted unimodal* distribution, so the absence of a dip is not proof of drift-dominance — but it
+does mean **0.508 bp cannot be asserted as a half-spread**. CM-2 measures an upper bound whose
+composition it does not separate.
+
+> **Later addition (L-0072).** One candidate explanation is now struck: **compression is excluded
+> from the Part 43 public tape by §43.2**, per the sibling program's cited `(action, event)` →
+> `on_p43` matrix — so compression cannot be what puts the mass at mid. The same matrix confirms
+> CM-2's `NEWT`/`TRAD` filter is exactly the ECONOMIC_FLOW cell, which turns that filter from an
+> assumption into a citation. The level remains unclaimable; only the reasoning is narrowed.
+
+**Forward starts: uninformative.** 47 cells, median at-stamp **16.6×** the assumed line, **zero**
+below it, small samples, and evident contamination by package legs and off-market unwinds (the 1Y
+`<3M` cell prints 6.69 bp). The line F3 and H16 actually trade is **not measured**. The
+size-vs-spread test is **unrun** (notional cells too sparse after the quartile guard).
+
+## The L-0042(a) reopener closes — the wrong way
+
+F3 traded a direction-neutral package of k-year-forward 1Y swaps and its gate charged a **flat
+1.0 bp** package round trip. CM-2 cannot measure the forward line, but it **bounds** it: a
+forward-starting swap cannot trade tighter than its spot equivalent, so the spot cell is a *lower*
+bound.
+
+At the tightest defensible reading — spot 1Y at the stamp hour, **0.407 bp per leg** — a 1-2-1
+package round trip is `Σ|w| × 2 × hs = 8 × 0.407 =` **3.26 bp** against the **1.00 bp** charged
+(11.73 bp at the all-hours upper bound). Even the most generous direction-neutral structure
+(`Σ|w| = 2`) costs **1.63 bp**, still above 1.00.
+
+| ccy | episodes | oracle median 63bd reversion | ÷ graded boat | ÷ measured lower-bound boat |
+|---|---:|---:|---:|---:|
+| USD | 292 | 2.260 bp | 2.26× | **0.69×** |
+| EUR | 706 | 1.174 bp | 1.17× | **0.36×** |
+| GBP | 197 | 2.341 bp | 2.34× | **0.72×** |
+| JPY | 686 | 1.206 bp | 1.21× | **0.37×** |
+
+And these are **oracle** medians; realized harvest has historically been 10–30% of oracle in this
+program. So F3's flat 1.0 bp benchmark was **too generous** and its kill was, if anything,
+understated. The clause was written as a hope that a better execution line existed; the measurement
+says the assumed line was already better than reality for this instrument. **F3 stays dead and the
+clause is closed by measurement rather than left open.** H16's linear leg is unmeasured for the
+same reason and its half of the clause remains open but unsupported.
+
+---
+
+# The checker's verdict (C-0001)
+
+**Verdict first: PASS / PASS-with-correction / KILL.** A fresh adversarial checker, calibrated on
+a planted defect first per the charter, took session 2's three load-bearing claims. It modified
+nothing in the repo, and its cold rerun of the H17 gate reproduced the committed parquet
+**byte-identically** (max abs diff 0.0).
+
+**Calibration passed.** Given a fabricated ALIVE memo, it found the planted defect precisely — the
+memo estimates `sd(SR)` over six near-**clone** configs, driving its own bar to 0.00041 so that any
+positive Sharpe passes, and it cites L-0057's design rule while skipping L-0057's own travelling
+caveat. It added four corroborating defects: the bar *ratio* conflated with the DSR; "daily"
+Sharpes quoted on a 41-**trade** book; a median of +14bp against a net of +58bp at *worse* costs;
+and six new configs registered without moving `N`.
+
+## Claim A — L-0057: PASS, with a required amendment
+
+Every asserted number reproduced: `k(22) = 1.942343`, `k(3905) = 3.624245` (the ledger's 3.622 is
+0.06% low), `sd = 0.275843` over −0.784227…+0.218662, bar `0.535781` / `0.999721`, and **max DSR
+over the 14 arms at n_trials=22 = 0.101281**. The equivalence `DSR>0.5 ⟺ sr > sd × k(N)` is
+**exact**, not approximate. It is robust to the Sharpe *unit* — rebuilt on daily series, 0 of 14
+arms clear under either convention.
+
+**It is not robust to the `sr_variance` source, and L-0057 failed to say so.** 62% of the
+dispersion comes from two arms (GBP 10Y10Y/20Y10Y −0.784, GBP 15Y10Y/25Y10Y −0.520). Excluding
+them: `sd` 0.2758 → **0.1033**, bar 0.536 → **0.201**, and USD 10Y5Y/15Y15Y reaches **DSR 0.5416 >
+0.5** at N=22. It remains a PASS because the registered family is unambiguous (V-SV-13 carries
+`trials_delta 17` for all 17 arms as one family; the house gate uses the whole grid's variance),
+because at today's N=37 even the narrowed source gives 0.4920, and because that arm has
+`biggest_trade_frac = 0.8997` — 90% of its net in one trade — failing charter 4 regardless.
+
+**The design rule is replaced.** As written, *"register few closely-related configs and require
+them all to work"* is a recipe for the calibration memo. It governs **selection only**, and must be
+paired with a **separate, pre-stated source for `sd(SR)` that is not the registered set** — because
+narrowing the registration drives `sd → 0` and the bar → 0. The deflation variance must come from a
+wider reference distribution named *before* the numbers, and every verdict must report its
+sensitivity to that choice. **A registration that does not name its sd source is not registered.**
+
+## Claim B — the H13 fill day: PASS, with an arithmetic correction
+
+The checker did not take the code reading on trust. It regressed the panel's `mtm` on the pair's
+constant-maturity spread change:
+
+| dating | corr | beta |
+|---|---:|---:|
+| `d(spread)` over **d−1 → d** | **−0.8516** | **−$96,022/bp** (the $100k package DV01, correct flattener sign) |
+| `d(spread)` over d → d+1 | +0.3236 | — |
+
+and confirmed `sv_citivelo_detector.py:51` builds the state from the **same** day's columns with no
+shift. So `state = grail.shift(1)` on a d−1→d-dated panel *is* a fill at the signal's own close.
+A **full re-book at `shift(2)`** — the actual strict `t+1` state — gives gross **+165.92bp**, net
+**−10.24bp** over the same 116 episodes.
+
+**Correction.** L-0051's −7.9bp mixed a *nominal* cost with an actual gross: 174.0 = 2 × 0.75 × 116
+assumes realised DV01 ≡ $100k, but the episodes average **$103,961** (range $70,119–$181,095), so
+true entry+exit is **171.46bp** and the arm's actual graded cost is **176.00bp**. Like-for-like the
+`t+1` net is **−9.85bp** (panel) or **−10.24bp** (full re-book). Same side of zero — a sharpening.
+
+The permutation also survives a tighter null: a circular-shift null preserving entry-day spacing
+exactly gives p **0.0008 / 0.0111** against the iid draw's 0.0006 / 0.0112.
+
+**New, unrecorded (L-0066).** The pair's daily CM **spread** change has **ac1 = −0.392** (ac2
++0.002, ac5 −0.013) while each **leg**'s daily change has ac1 −0.045 / −0.023. Pure one-day-
+reversing noise is −0.5, so ~**39% of the daily spread move is one-day-reversing relative-pricing
+noise in the Citi curve build**, not market — and that is what the graded book collects on its entry
+day. It strengthens the kill and it generalises: any daily-frequency RV signal read off differences
+of two points on this build inherits that noise floor.
+
+## Claim C — the H17 gate: KILL as stated. The verdict survives; two of three grounds do not
+
+**It is not a bug.** Every "is this death manufactured?" check cleared: units (`vol_bp` medians
+74.9 / 73.1 / 69.0 — annual normal bp, the same unit as `CM1_HALF`), grid coverage (all 9 marking
+expiries on **100.0%** of days), interpolation (the decisive 6M-1Y h=63 cell is interpolation-**free**
+and reproduces to 4dp with node lookups only), the non-overlapping construction, the direction rule,
+sample composition (no subsample above **+0.55×**), real elapsed time (ACT/365 dt moves cells by up
+to +0.72bp and flips one sign, but 0/15 still clear), and cold reproduction (bit-identical).
+
+**But the headline was quoted at one arbitrary cycle phase.** `run_cell` always started its
+non-overlapping grid at `i=0`, and H-V-17 pins no phase — so all 21 (or 63) phases are equally the
+pre-registered statistic.
+
+| | across-cell median | negative | best cell |
+|---|---:|---:|---:|
+| published (phase 0) | −0.289× | 12/15 | +0.371× |
+| **phase-median (all phases)** | **−0.097×** | **9/15** | **+0.165×** |
+
+Within-cell phase sd is 0.233 at h=21 and **0.640 at h=63**; 5Y 6M-1Y h=63 spans **−2.87× to
++1.15×** across phases on 41 cycles. **And the gate bar itself is phase-crossable**: in four of the
+six h=63 cells, 3–4 of 63 phases have median > 1× RT, and the registered bar is "median > 1× RT in
+at least one pair" — so under an equally-valid start date **H17 would have PASSED the gate and been
+graded**.
+
+**The self-test could not have caught this.** Both its surfaces are *frozen*, so the exit row equals
+the entry row and it is structurally blind to reading the aged marks off the wrong day — verified
+with a surgical mutant that returns **byte-identical +4.145403** on both. A **moving** surface
+detects it.
+
+**And the two grounds are not independent of the cost line.** Ground (1) is phase-stable (published
+0.734 vs phase-median 0.766, phase sd 0.079) — a real measurement — but `CM1_HALF` are recorded
+**upper bounds**, and ground (1) flips if true half-spreads are ≤ **0.766×** those bounds, i.e. 23%
+tighter. In the other direction the RT is *understated*: it charges the **entry** expiries'
+half-spreads for both sides while the legs unwind at their **aged, wider** expiries — true RT
+**1.05 vs the coded 0.92 (+14%)** on the 6M-1Y h=63 cells.
+
+**Corrected statement.** H17 is dead on **one** phase-stable ground — the frozen-surface carry is a
+median 0.766× of a cost line that is itself an admitted upper bound — plus a direction-correct but
+phase-noise-dominated realized measurement of −0.097×. Not "two independent grounds".
+
+## Both defects are fixed in the machine, not just the write-up
+
+`run_cell_ensemble` now reports the median over **all** phases plus the phase dispersion as the
+statistic of record; phase-0 survives only as a field labelled deprecated. A second self-test on a
+**moving** surface (level factor `f(t) = 1 + 0.25·sin(t/13)`, total variance kept linear in `T` so
+the interpolation stays exact) pins the time indexing to **<1e-9** on 3M-6M h21, 6M-1Y h63 and
+1Y-2Y h21. The repaired gate reproduces the checker's numbers exactly.
+
+## Why A is a PASS and C is a KILL when both are "an alternative convention crosses a bar"
+
+The discriminator is the **registration**, not the size of the effect. Claim A's alternative `sd`
+source is *barred* by the registration — V-SV-13 consumed all 17 arms as one family, and excluding
+GBP post-hoc is the manoeuvre L-0057's own caveat prohibits. Claim C's phase 0 is registered
+**nowhere**, so it has no privileged standing among 21 or 63 equally valid grids.
+
+## The tally
+
+Seven defects found in session 2 — the probe's error-payload hit, H13's fill day, H14's missing
+re-initiations, H16b's vintage mix, H17's phase artifact, H17's blind self-test, and L-0051's
+nominal-cost arithmetic. **All seven flattered the maker.** Session 1's tally was twelve of twelve.
