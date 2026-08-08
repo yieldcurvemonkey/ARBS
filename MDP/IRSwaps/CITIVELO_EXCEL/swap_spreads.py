@@ -180,8 +180,9 @@ SOURCE_TOKEN = "citivelo_excel"
 #: same days and tenors: median difference **-0.0015 to +0.39 bp** across 2Y, 3Y,
 #: 5Y, 7Y, 10Y, 20Y and 30Y (2Y +0.036, 3Y +0.386, 5Y +0.015, 7Y +0.067,
 #: 10Y -0.002, 20Y -0.069, 30Y -0.156). Two different constructions from two
-#: different data sources landing sub-basis-point on six of seven tenors is what
-#: makes the unit settled rather than merely plausible.
+#: different data sources landing under 0.4 bp on ALL seven tenors - and under
+#: 0.1 bp on five of them - is what makes the unit settled rather than merely
+#: plausible.
 #:
 #: The MEAN difference over the same days is ~150,000 bp and is meaningless: the
 #: repo's ``SPREADOVER`` failed to price on 9 of 23 days and returns values like

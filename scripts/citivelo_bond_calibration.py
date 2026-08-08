@@ -43,14 +43,31 @@ grows and only a human restart clears it, so a long session can be lost; splitti
 them means a lost session costs time and never data. ``fetch`` refuses to start
 above :data:`MEMORY_CEILING_MB` and samples again on the way out.
 
-Status as of this writing
--------------------------
-**Not yet run.** Excel was at 7,639 MB when this was written — above the 3,800 MB
-ceiling and above the 5,249 MB that wedged it on 2026-08-07 — so the calibration
-was written and left unrun rather than guessed at. Until someone runs it, every
-affected mapping in ``values.py`` carries ``verified=False`` and the source
-records the interpretation it used in each pricer's provenance, so a wrong
-reading is traceable rather than invisible.
+Status
+------
+**Run 2026-08-08 against as-of 2026-08-07.** 57/57 tags served over 7 US Treasuries
+chosen so accrued spans 0.095 to 2.188 price points. Verdicts, all now carried into
+``bonds/values.py`` with ``verified=True``:
+
+============  ===========================  ==========================================
+value         verdict                      margin
+============  ===========================  ==========================================
+``PRICE``     **clean**, per 100 face      0.0186 bp median error against Citi's own
+                                           YIELD, versus 57.43 bp read as dirty
+``YIELD``     percent, semi-annual         0.0001-0.0008 bp on the four bonds that
+                                           reconstruct cleanly
+``DURATION``  **modified**                 1.9e-05 yr median error, versus 0.0500 yr
+                                           read as Macaulay
+``DV01``      **per 1mm face**, + for long ratio to local per-100 dv01 = 10000.06
+                                           median (9999.997-10000.09 on the clean 4)
+============  ===========================  ==========================================
+
+Raw per-bond rows are in ``catalog/bond_calibration.json``. Three of the seven bonds do
+NOT reconstruct cleanly - yield errors -12.44, +25.70 and +0.62 bp. On the 0.5Y bond that
+is ~0.006 price points, i.e. sub-tick; on ``US91282CLF67`` it is 1.71 price points, which
+is real and unexplained, most likely a coupon or first-coupon date parsed from Citi's
+description text. It does not touch the verdicts above, which turn on factors of
+2,600-3,000. ``ASW_4_<CCY>`` remains unmeasured.
 """
 
 from __future__ import annotations

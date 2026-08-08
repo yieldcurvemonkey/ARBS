@@ -59,11 +59,24 @@ Run from the repo root, AFTER a human has restarted Excel::
     <env>/python.exe scripts/citivelo_swap_spread_tieout.py compare
     <env>/python.exe scripts/citivelo_swap_spread_tieout.py compare --max-days 20
 
-Not run as of 2026-08-08: ``EXCEL.EXE`` (pid 51420, started 2026-08-07 17:24:33)
-read **13,865 MB** on this script's own probe - 3.6x the 3,800 MB ceiling and 2.6x
-the 5,249 MB that wedged it on 2026-08-07. Note the unit: this probe divides
-``WorkingSet64`` by 1e6, so it reports decimal MB, and the same process shows
-13,222 MiB to a ``Win32_Process`` query. The ceiling is in the probe's unit.
+Run 2026-08-08 over 2026-07-08..2026-08-07, USD_SOFR, 23 daily observations per tenor.
+
+**Citi publishes BASIS POINTS.** 2Y -14.56, 10Y -41.78, 30Y -75.11 as served: the right
+magnitude, sign and term structure for USD swap spreads, and three orders of magnitude
+from a decimal reading. ``MDP/IRSwaps/CITIVELO_EXCEL/swap_spreads.py`` now declares
+``UNIT = "bp"``; the served number did not change, because it was bp all along.
+
+Against the repo's independently computed ``SPREADOVER``, median difference per tenor:
+2Y +0.036, 3Y +0.386, 5Y +0.015, 7Y +0.067, 10Y -0.002, 20Y -0.069, 30Y -0.156 bp. All
+seven are under 0.4 bp and five are under 0.1 bp - two different constructions from two
+different data sources.
+
+The MEAN difference over the same days is ~150,000 bp and means nothing: the repo's own
+``SPREADOVER`` failed to price on **9 of 23 days**, returning values like -151,276 bp,
+and no mean survives that. Those days are excluded from the median, counted in the
+``note`` column, and the full per-day series is persisted so the mean cannot be quoted by
+accident. The first version of this table read 0.85 bp purely because the broken days
+were still inside the median.
 """
 
 from __future__ import annotations
@@ -387,6 +400,7 @@ def compare(
         if max_days:
             dates = dates[-int(max_days):]
         diffs: List[float] = []
+        priced_dates: List[str] = []
         citi_vals: List[float] = []
         repo_vals: List[float] = []
         first_error = ""
@@ -401,6 +415,7 @@ def compare(
                     first_error = f"{type(exc).__name__}: {exc}"[:110]
                 continue
             citi_value = float(series[iso])
+            priced_dates.append(iso)
             citi_vals.append(citi_value)
             repo_vals.append(repo)
             diffs.append(citi_value - repo)
@@ -441,7 +456,11 @@ def compare(
             )
         )
         per_day[tenor] = {
-            "dates": [iso for iso in dates][-len(diffs):],
+            # The dates that actually PRICED, recorded as they are appended. Slicing
+            # `dates[-len(diffs):]` instead would silently mislabel every row whenever
+            # a date in the MIDDLE of the range raised: the tail happens to line up
+            # only when the failures are all at the front.
+            "dates": priced_dates,
             "citi": citi_vals,
             "repo": repo_vals,
             "diff": diffs,

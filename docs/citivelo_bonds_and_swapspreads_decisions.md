@@ -399,8 +399,8 @@ Against the repo's independently computed `SPREADOVER`, median difference per te
 |---|---|---|---|---|---|---|
 | +0.036 | +0.386 | +0.015 | +0.067 | −0.002 | −0.069 | −0.156 |
 
-Two different constructions from two different data sources landing sub-basis-point on six
-of seven tenors. **The mean difference over the same days is ~150,000 bp and is
+Two different constructions from two different data sources landing under 0.4 bp on all
+seven tenors, and under 0.1 bp on five of them. **The mean difference over the same days is ~150,000 bp and is
 meaningless** — the repo's own `SPREADOVER` failed to price on **9 of 23 days** and
 returns values like −151,276 bp when it does. That is a repo-side gap, not a disagreement
 with Citi, and the script now excludes those days from the median, counts them in the
