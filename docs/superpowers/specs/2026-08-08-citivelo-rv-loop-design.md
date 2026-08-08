@@ -79,29 +79,59 @@ band of **0.5×–2.0×** the assumed line. A verdict that flips inside the band
 the 2022 hiking regime in-sample. The famb lesson ("modern-sample carry was regime luck") makes
 this load-bearing for any carry-flavoured family.
 
-## Family queue (priors, mechanism-first; each opens with its oracle gate)
+## Family queue (revised 2026-08-08 after user directive — see ledger L-0005)
 
-- **F1 — swaption surface residual mean-reversion.** A-priori factor basis: BofA hierarchical
-  PCs (HPC1 level, HPC2 gamma-vs-vega rotation, HPC3 left-vs-right), FIXED basis primary
-  (sidesteps eigenvector instability + look-ahead); rolling PCA is a walk-forward robustness
-  arm only. Trade node-vs-fit residuals as vega-weighted vol spreads/flies. Placebos
-  (pre-registered): scale-matched 2D smoother with no factor structure; node shuffle at matched
-  marginals; random orthonormal basis rotation. Shadow: ATM vol level / dominant single leg on
-  the same signal.
-- **F2 — gamma vs realized carry (IV−RV), conditional.** Short-expiry (1M–3M) sector only
-  (Nordea prior-killer bars long-expiry vol carry). Realized vol primary series from **daily
-  EOD curves back to 2019** (cube start); minute-curve realized is a refinement arm (632 days,
-  2024+, no hiking regime — regime-luck trap). Famb steamroller lesson: tail risk reported with
-  skew/maxDD/worst-day always.
+- **F-SV — strikeless vol / long-dated convexity (FRONT OF QUEUE).** Continues PR #392
+  `feat/strikeless-vol` (22/23 tasks done on GSQUANT data; all four markets DEAD at 3,888
+  trials; mechanism certified real). This loop executes the branch's own tasks 29–31 (take
+  main; Citi backend behind the `panels.py` seam; source-agreement cross-check) with one
+  amendment: the Citi backend reads the **warmed stores** (CurveStore fast path inside
+  `IRSwapsMDP(source="CITIVELO_EXCEL")` + SwaptionCubeStore), not COM — the plan's "no cached
+  citivelo data" blocker is stale. Then addendum tasks 24–28 (H11–H15: spot-fly decomposition,
+  carry-adjusted vol columns, grail-quadrant detector, Peter's manufactured package, aging
+  decay) on the upgraded universe, then **H16 (new): the strike-ful basis trade** — flattener
+  embedded BE (bp/day) vs cube-traded implied per locus (2y10y, 10y10y, and the long-expiry
+  exact-locus points 15Y/20Y/30Y expiry the GS data never had), vega-matched via rolling β,
+  binding requirement set inherited verbatim. What is genuinely new vs the DEAD verdict:
+  2005+ multi-regime sample, JPY/GBP/EUR ultra-long pairs (JPY is the PM's live candidate),
+  USD pairs beyond 30y (Citi serves 35–50Y daily from 2005; GS stopped at 30Y), grail-quadrant
+  *episodic* entries instead of always-on, and a tradeable implied leg from the cube.
+- **F1 — swaption surface residual mean-reversion.** A-priori factor basis: BofA **HPCA**
+  (arXiv:1910.02310; 5 static clusters ULC/URC/LLC/IV/LRC; HPC1 level, HPC2 gamma-vs-vega,
+  HPC3 left-vs-right), FIXED basis primary. **Prior-killer built in (BofA p.14): raw vol-grid
+  PC residual mean-reversion is a RATES trade, not a vol trade — regress vol PCs on forward
+  PCs first and trade the residual to the rate-explained model.** Placebos: scale-matched 2D
+  smoother; node shuffle at matched marginals; random orthonormal rotation. Shadow: ATM vol
+  level on the same signal.
+- **F2 — gamma vs realized carry (IV−RV), conditional.** Short-expiry sector only (Nordea
+  prior-killer, measured: long 10Y10Y straddles were NET POSITIVE over 2005–21 EUR gross of
+  costs — long-expiry vol selling is the losing side; vol-level timing dead). ATM cube history
+  now 2015+ (concurrent warm extended it). Realized from daily EOD curves; minute-curve
+  realized is a refinement arm (2024+, regime-luck trap).
+- **F-ING — ING EUR curve framework** (user-supplied): evaluate its signals on the EUR ESTR
+  2005+ par grids; verdict through the house bar.
 - **F3 — curve RV: fitted-curve → PCA → residual selection** (Huggins-Schaller ch8–9), 2005+
-  banked par grids, multi-ccy. Mark on **quoted par rates, never the fitted curve** (the curve
-  is a model of the quotes; a fitted-curve mark lets the strategy trade its own interpolation
-  error). Tenor-sparsity mask written before the panel is cut.
-- **F4 — conditional trades / skew RV** (curve×vol joint; swap-desk conditional-trades primer;
-  implied vs delivered directionality).
-- **PARKED — SR3 listed-butterfly re-costing** (needs butterfly history, not one MBO day) and
-  **famb STRG pre-registered forward run** (spec named in famb findings; needs forward window).
-  Ledger rows exist so the loop cannot re-discover them.
+  banked par grids, multi-ccy. Mark on **quoted par rates, never the fitted curve**.
+- **F4 — conditional trades / skew RV** (curve×vol joint; conditional-trades primer; the
+  2025-10-08 skew ticket is the spec template: 4-leg vega+delta-neutral, 50bp RR percentile
+  vs 1y history signal, ±5bp/5abpv rebalance thresholds).
+- **PARKED — SR3 listed-butterfly re-costing** and **famb STRG forward run** (ledger L-0002/3).
+
+## Cost line (sources found 2026-08-08; workflow wf_8c6e10e3)
+
+1. **Measured (deliverable CM-1): SDR swaption prints.** 643 days of local raw CFTC Part 43
+   RATES parquet (`sdr_cache/CFTC/RATES/`, 2023-12-01→2026-07-21), ~600 USD swaption prints
+   per day with premium+strike+notional; per-print Bachelier implied-vol back-out already
+   exists (`SDRUtils/products/_swaptions/pricer/leg_pricer.py`). Effective spread = print IV
+   vs same-day cube mid, by (expiry, tenor, moneyness). Premium/strike must go through
+   `parse_notation_scalar`. Chooser rows (`SWAPTION_CHOOSER`) are absent from the ProductType
+   Literal — handle.
+2. **Shelf priors:** BofA primer's single anchor — a 3-leg 300m 1y10y 1×2 package residual
+   ≈$44k ≈ **1.9 normal-vol bp of package vega** "in the context of the bid/offer" (2024);
+   grid liquidity: only a small subset of cells actively trade, rest are dealer extrapolation.
+   Citi vol lab priors for forward-swap packages: initiate 0.75–1.0bp, hedge/roll 0.3–0.4bp
+   one-way per $100k DV01 (already the sv cost schedule). Swap legs: `RVUtils/cost_model.py`.
+3. Nordea prior-killer is measured GROSS — costs strengthen it.
 
 ## The machine
 
