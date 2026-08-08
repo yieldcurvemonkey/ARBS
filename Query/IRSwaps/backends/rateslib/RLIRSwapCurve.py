@@ -9,6 +9,89 @@ from Query.IRSwaps._IRSwapGenericCurve import _IRSwapGenericCurve
 from Query.IRSwaps.backends.rateslib.rl_curve_definitions_map import RATESLIB_CURVE_DEFINITIONS
 from utils.rl_compat import rate_fixings_kwargs
 
+#: Where ``build_irswap`` parks the par rate it computed, as
+#: ``(wrapper, curve_handle, decimal_rate)``. Read back only by
+#: :meth:`RLIRSwapCurve.fair_rate`, and only when BOTH the wrapper and the curve
+#: handle are the same objects - so a swap re-priced against a different curve,
+#: or handed to a different wrapper, recomputes.
+#:
+#: Why this exists. ``build_irswap`` defaults to striking at par, which it did by
+#: constructing a THROWAWAY unit-notional swap and rating it; the caller then
+#: rated the returned swap again to report it. Every par rate in a timeseries was
+#: therefore computed twice, each costing a full ``rl.IRS`` construction (1.40 ms)
+#: plus ``IRS.rate()`` (4.34 ms) - measured 2026-08-08 on a warmed USD 10Y.
+#:
+#: The rate is now computed ONCE, on the instrument that is actually returned.
+#: That is not merely close to the old number, it is the same one: measured on
+#: the same curve, ``rate()`` is bit-identical across notional 1 vs 1,000,000 and
+#: across struck vs unstruck, and ``fixed_rate`` is set afterwards - which
+#: ``rate()`` does not read.
+_PAR_RATE_ATTR = "_arbs_par_rate"
+
+
+# --------------------------------------------------------------------------- #
+#     opt-in: skip the fixings machinery for instruments that consume none     #
+# --------------------------------------------------------------------------- #
+#
+# A swap whose first accrual period starts on or after the curve's reference
+# date has no elapsed observation, so no published fixing enters its rate. It
+# still costs one, because rateslib's RFR path - taken whenever a fixings series
+# is attached - materialises a business-date Series over EVERY accrual period
+# before discovering that none of them is in scope. Measured 2026-08-08 on a
+# warmed USD 10Y, one ``IRS.rate()``:
+#
+#     with a 5,445-row fixings series   4.341 ms
+#     with no fixings series            0.188 ms       23x
+#
+# It is NOT bit-identical, which is why this is off by default. The two routes
+# are the same quantity computed two ways - daily compounding of curve discount
+# factors versus the endpoint ratio the compounding telescopes to - and they
+# disagree in the last unit in the last place. Measured across par tenors on the
+# same curve:
+#
+#     10Y, 30Y   identical
+#     2Y         4.154360000019888  ->  4.154360000019887
+#     5Y         4.120890000061977  ->  4.1208900000619755
+#     40Y        4.275369857811132  ->  4.275369857811131
+#     5Yx5Y      4.3758958166657465 ->  4.375895816665747
+#
+# i.e. ~2e-13 bp. Immaterial to any decision, and still a changed number, so a
+# caller has to ask for it: set ``ARBS_RL_OMIT_UNUSED_FIXINGS=1`` or call
+# :func:`set_omit_unused_fixings`. Seasoned, IMM- and central-bank-dated legs
+# that start BEFORE the reference date keep the full series either way - for
+# those the fixings are not an optimisation, they are the answer.
+_OMIT_UNUSED_FIXINGS: Optional[bool] = None
+
+
+def set_omit_unused_fixings(enabled: Optional[bool]) -> None:
+    """Turn the fixings shortcut on/off for this process (``None`` = re-read env)."""
+    global _OMIT_UNUSED_FIXINGS
+    _OMIT_UNUSED_FIXINGS = None if enabled is None else bool(enabled)
+
+
+def omit_unused_fixings() -> bool:
+    """Whether the shortcut is active. Default OFF."""
+    global _OMIT_UNUSED_FIXINGS
+    if _OMIT_UNUSED_FIXINGS is None:
+        import os
+
+        raw = str(os.getenv("ARBS_RL_OMIT_UNUSED_FIXINGS", "")).strip().lower()
+        _OMIT_UNUSED_FIXINGS = raw in {"1", "true", "yes", "on"}
+    return _OMIT_UNUSED_FIXINGS
+
+
+def _as_date(value: Any) -> Optional[datetime.date]:
+    if value is None:
+        return None
+    if isinstance(value, datetime.datetime):
+        return value.date()
+    if isinstance(value, datetime.date):
+        return value
+    to_pydatetime = getattr(value, "to_pydatetime", None)
+    if to_pydatetime is not None:
+        return to_pydatetime().date()
+    return None
+
 
 @dataclass
 class RLIRSwapCurve(_IRSwapGenericCurve):
@@ -76,19 +159,56 @@ class RLIRSwapCurve(_IRSwapGenericCurve):
         return irswap.kwargs.leg1["notional"]
 
     def fair_rate(self, irswap: rl.IRS):
+        # A swap this wrapper struck AT PAR already had its par rate computed,
+        # on this same object against this same curve, inside build_irswap. The
+        # cached value is therefore that call's result verbatim, not an
+        # approximation of it - see _PAR_RATE_ATTR.
+        cached = getattr(irswap, _PAR_RATE_ATTR, None)
+        if cached is not None:
+            owner, handle, value = cached
+            if owner is self and handle is self._rl_curve_handle:
+                return value
         return irswap.rate(curves=self._rl_curve_handle).real / 100
+
+    def _fixings_kwargs(self, *, effective: Any = None) -> dict[str, Any]:
+        """Fixings constructor kwargs for an instrument starting at ``effective``.
+
+        Always the full series unless the opt-in shortcut is enabled AND the
+        instrument provably consumes none of it - see ``_OMIT_UNUSED_FIXINGS``.
+        An ``effective`` this cannot resolve to a date is treated as "might be
+        seasoned", so an unrecognised date type keeps the fixings rather than
+        quietly dropping them.
+        """
+        if omit_unused_fixings():
+            start = _as_date(effective)
+            reference = _as_date(self.reference_date())
+            if start is not None and reference is not None and start >= reference:
+                return {}
+
+        # One resolution per wrapper. rate_fixings_kwargs is content-addressed -
+        # it cleans, sorts and hashes the series to derive rateslib's identifier -
+        # which costs 0.235 ms on a 5,445-row history, and a curve/fly query
+        # builds a leg per component on top of a leg per query. Invalidated by
+        # IDENTITY, so reassigning _fixings after construction re-resolves.
+        cached = self.__dict__.get("_fixings_kwargs_cache")
+        if cached is not None and cached[0] is self._fixings:
+            return cached[1]
+        resolved = rate_fixings_kwargs(self._fixings)
+        self.__dict__["_fixings_kwargs_cache"] = (self._fixings, resolved)
+        return resolved
 
     def npv(self, irswap: rl.IRS):
         curve_def = self._curve_definition()
+        effective = self.effective_date(irswap)
         return (
             rl.IRS(
-                effective=self.effective_date(irswap),
+                effective=effective,
                 termination=self.maturity_date(irswap),
                 fixed_rate=irswap.fixed_rate,  # already percent, rateslib's own unit
                 curves=self._rl_curve_handle,
                 spec=curve_def["ReferenceRate"],
                 notional=self.notional(irswap),
-                **rate_fixings_kwargs(self._fixings),
+                **self._fixings_kwargs(effective=effective),
             )
             .npv(curves=self._rl_curve_handle)
             .real
@@ -171,28 +291,19 @@ class RLIRSwapCurve(_IRSwapGenericCurve):
                 spec=curve_def["ReferenceRate"],
                 curves=self._rl_curve_handle,
                 notional=1,
-                **rate_fixings_kwargs(self._fixings),
+                **self._fixings_kwargs(effective=rl_effective),
             ).analytic_delta(curves=self._rl_curve_handle)
             notional = bpv / unit_delta
 
         if not bpv and not notional:
             notional = 1_000_000
 
-        if fixed_rate == -0:
-            fixed_rate = self.fair_rate(
-                irswap=rl.IRS(
-                    effective=rl.dt(rl_effective.year, rl_effective.month, rl_effective.day),
-                    termination=tenor or rl.dt(maturity_date.year, maturity_date.month, maturity_date.day),
-                    spec=curve_def["ReferenceRate"],
-                    curves=self._rl_curve_handle,
-                    notional=1,
-                    **rate_fixings_kwargs(self._fixings),
-                )
-            )
+        termination = tenor or rl.dt(maturity_date.year, maturity_date.month, maturity_date.day)
+        strike_at_par = fixed_rate == -0
 
-        return rl.IRS(
+        irswap = rl.IRS(
             effective=rl.dt(rl_effective.year, rl_effective.month, rl_effective.day),
-            termination=tenor or rl.dt(maturity_date.year, maturity_date.month, maturity_date.day),
+            termination=termination,
             spec=curve_def["ReferenceRate"],
             curves=self._rl_curve_handle,
             # `fixed_rate` arrives as a DECIMAL (that is this wrapper's contract,
@@ -203,10 +314,22 @@ class RLIRSwapCurve(_IRSwapGenericCurve):
             # .npv()/.cashflows()/.delta() on it directly or handed it to a
             # Solver. Only this wrapper's own npv() compensated, so no shipped
             # number was wrong, but every object handed out was.
-            fixed_rate=float(fixed_rate) * 100.0,
+            #
+            # Left unset when this call is the one choosing the strike: the par
+            # rate is then read off THIS instrument (rl.IRS.rate() does not
+            # consult fixed_rate) and assigned below, instead of off a throwaway
+            # unit-notional copy that was built and rated purely to be discarded.
+            **({} if strike_at_par else {"fixed_rate": float(fixed_rate) * 100.0}),
             notional=notional,
-            **rate_fixings_kwargs(self._fixings),
+            **self._fixings_kwargs(effective=rl_effective),
         )
+
+        if strike_at_par:
+            par = irswap.rate(curves=self._rl_curve_handle).real / 100
+            irswap.fixed_rate = float(par) * 100.0
+            setattr(irswap, _PAR_RATE_ATTR, (self, self._rl_curve_handle, par))
+
+        return irswap
 
     def build_pricable(self, /, **kwargs: Any) -> rl.IRS:
         fwd: Optional[str] = kwargs.get("fwd")

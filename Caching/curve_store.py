@@ -606,6 +606,19 @@ class CurveStore:
 
     # ── Read Path (Bulk) ──
 
+    def raw_partition_dir(self, curve_name: str, trading_date: datetime.date) -> Path:
+        """The Hive partition directory a ``(curve_name, trading_date)`` day lives in.
+
+        Public so callers that want to *validate* a cached day frame (file list +
+        mtimes) can do so without reimplementing the asset-name sanitiser, which
+        is what decides whether two names share a directory.
+        """
+        return (
+            self._raw_dir
+            / f"asset={_sanitize(curve_name)}"
+            / f"date={trading_date.isoformat()}"
+        )
+
     def read_raw_day(
         self,
         curve_name: str,
@@ -615,11 +628,7 @@ class CurveStore:
 
         ~5ms vs ~200ms for DuckDB Hive scan on a single partition.
         """
-        part_dir = (
-            self._raw_dir
-            / f"asset={_sanitize(curve_name)}"
-            / f"date={trading_date.isoformat()}"
-        )
+        part_dir = self.raw_partition_dir(curve_name, trading_date)
         if not part_dir.exists() or not any(part_dir.glob("*.parquet")):
             # L2 fallback: try pulling from Supabase before returning empty
             sync = _get_curve_sync(self._base_dir)
@@ -1131,11 +1140,7 @@ class CurveStore:
 
     def has_day(self, curve_name: str, trading_date: datetime.date) -> bool:
         """Check if raw data exists for a (curve_name, trading_date)."""
-        part_dir = (
-            self._raw_dir
-            / f"asset={_sanitize(curve_name)}"
-            / f"date={trading_date.isoformat()}"
-        )
+        part_dir = self.raw_partition_dir(curve_name, trading_date)
         if not part_dir.exists():
             return False
         return any(part_dir.glob("*.parquet"))
