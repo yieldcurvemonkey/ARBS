@@ -29,6 +29,8 @@ SUMMARY = re.compile(r"^[=\s]*\d+ (passed|failed|error)")
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--chunks", type=int, default=6)
+    ap.add_argument("--start", type=int, default=1,
+                    help="resume from this chunk (1-based); earlier chunks are reported as skipped")
     ap.add_argument("--python", default=sys.executable)
     args = ap.parse_args()
 
@@ -39,6 +41,9 @@ def main() -> int:
     env = dict(os.environ, ARBS_SUPABASE_ENABLED="0")
     results = []
     for i, group in enumerate(groups, 1):
+        if i < args.start:
+            print(f"\n=== chunk {i}/{len(groups)}: SKIPPED (--start {args.start})", flush=True)
+            continue
         print(f"\n=== chunk {i}/{len(groups)}: {group[0]} .. {group[-1]} "
               f"({len(group)} files)", flush=True)
         proc = subprocess.run(
