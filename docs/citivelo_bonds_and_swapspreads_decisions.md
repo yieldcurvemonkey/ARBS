@@ -301,3 +301,180 @@ the actionable half) but the default is documented rather than enforced, because
 `offline=True` would break the interactive case the curve fetcher's own default serves.
 And `scripts/citivelo_bond_calibration.py` probes memory only *after* `quotes.client()`
 has already connected — a different defect on the bonds track's file, left alone here.
+
+## D8 — The memory guard has to run before the connection, not after
+
+Found by adversarial review, in code written earlier in this same session, and it is
+worth recording because the mistake looked exactly like the fix.
+
+Both `scripts/citivelo_bond_calibration.py` and `daily_cache_warmer._citivelo_excel_guard`
+read Excel's size like this:
+
+```python
+quotes = CitiVeloQuotes()
+client = quotes.client()          # <- this is the COM connection
+mem = client.excel_memory_mb()    # <- the "guard", after the fact
+if mem > CEILING: raise
+```
+
+`CitiVelocityExcelClient.excel_memory_mb` is a method on a **connected** client, so
+reading it requires doing the exact thing the ceiling exists to prevent. The guard ran
+after the damage. It would have refused to *fetch*, having already opened a workbook
+against whatever it found.
+
+`MDP/CitiVelocityExcel/memory_guard.py` asks Windows over `Get-Process` instead — same
+query, no COM — and every caller now gates before constructing anything.
+
+The second half is subtler. The old probe returned `None` both when **no Excel was
+running** and when **the probe itself failed**, and the gate read that as "fine, carry
+on". Those are opposite situations: a machine with no `EXCEL.EXE` is the safest state
+there is, while a probe that timed out says *nothing at all* about what is running —
+and what was running, measured, was a 13,884 MB add-in. So `0.0` and `None` are now
+distinct and the gate **fails closed** on `None`.
+
+**Mutation-tested, and the first attempt was not good enough.** Seven mutations; three
+survived the first pass and were closed rather than written up as passing:
+
+- the ordering assertion matched the *name* `assert_safe_to_connect`, which first appears
+  on the `from ... import` line — so it compared an import against a call and was vacuous.
+  It now compares `ast.Call` line numbers, and imports are not calls.
+- `>=` → `>` on the ceiling survived, because `is_safe_to_connect` has its own comparison
+  and the test only exercised that one. A process sitting exactly on the limit would have
+  been let through.
+- the "probe must not touch COM" test searched the whole source, including the docstring
+  that deliberately *names* the connected client's method to explain why it is not used.
+
+All seven are killed now. The general lesson is the one this repo keeps relearning: a
+guard is only as good as the mutation you ran against it, and the first mutation you try
+is often the one your test was already shaped to survive.
+
+## D9 — Excel came back mid-session, so everything blocked got measured after all
+
+`EXCEL.EXE` pid 51420 was restarted by a human at **07:28**, arriving fresh at
+**1,944 MB** — under the 3,800 MB ceiling. The standing instruction was never "do not
+touch Excel", it was "stop at the ceiling"; under the ceiling, the correct action is to
+proceed. So D0's consequences were retired rather than handed off, and everything below
+is measured rather than deferred.
+
+Excel went 1,967 → 1,945 MB across the whole session's work. The cost was never the
+concern; the ceiling was.
+
+### D4 settled — quote-vs-compute, decided by measurement
+
+`scripts/citivelo_bond_calibration.py fetch build`, 2026-08-07, 7 US Treasuries chosen
+so accrued spans **0.095 to 2.188** price points. **57/57 tags served.**
+
+| value | verdict | margin |
+|---|---|---|
+| `PRICE` | **clean**, per 100 face | 0.0186 bp median error vs Citi's own YIELD, against **57.43 bp** if read as dirty |
+| `YIELD` | percent, semi-annual | reproduced to 0.0001–0.0008 bp on the four bonds that reconstruct cleanly |
+| `DURATION` | **modified** | 1.9e-05 yr median error, against **0.0500 yr** as Macaulay |
+| `DV01` | **per 1mm face, positive for a long** | ratio to local per-100 dv01 = 10000.06 median; 9999.997 / 10000.03 / 10000.06 / 10000.09 on the clean four |
+
+Each was settled by asking which reading of one Citi number reproduces **another Citi
+number** — never by repricing Citi's figure with our own model and noting that it agrees,
+which is a tautology. The margins are factors of 2,600–3,000, so none is a close call.
+
+**Reported against my own interest:** three of the seven bonds do *not* reconstruct
+cleanly — yield errors −12.44, +25.70 and +0.62 bp. On the 0.5Y bond that is ~0.006 price
+points, i.e. sub-tick rounding; on `US91282CLF67` it is 1.71 price points, which is real
+and unexplained. The coupon and schedule come from parsing Citi's description text, and a
+wrong first coupon shows up exactly this way. It does not touch the three verdicts, which
+turn on ratios far larger than any schedule error can produce, but it is an open question
+and not a rounding story.
+
+`ASW_4_<CCY>` is still **unmeasured**: which asset-swap variant `_4_` denotes is open.
+
+### Citi's SWAP_SPREAD is in basis points, and agrees with the repo sub-bp
+
+`scripts/citivelo_swap_spread_tieout.py`, USD_SOFR, 2026-07-08..08-07, 23 daily
+observations per tenor. Citi publishes 2Y −14.56, 10Y −41.78, 30Y −75.11 — right
+magnitude, sign and term structure for USD swap spreads, three orders of magnitude from a
+decimal reading. `UNIT` moved from `"as_published"` to `"bp"`, and the served value did
+not move, because Citi was publishing bp all along.
+
+Against the repo's independently computed `SPREADOVER`, median difference per tenor:
+
+| 2Y | 3Y | 5Y | 7Y | 10Y | 20Y | 30Y |
+|---|---|---|---|---|---|---|
+| +0.036 | +0.386 | +0.015 | +0.067 | −0.002 | −0.069 | −0.156 |
+
+Two different constructions from two different data sources landing sub-basis-point on six
+of seven tenors. **The mean difference over the same days is ~150,000 bp and is
+meaningless** — the repo's own `SPREADOVER` failed to price on **9 of 23 days** and
+returns values like −151,276 bp when it does. That is a repo-side gap, not a disagreement
+with Citi, and the script now excludes those days from the median, counts them in the
+output, and persists the per-day series so nobody can quote the mean by accident. The
+first run of this table reported a median of 0.85 bp precisely because the broken days
+were still inside the median; excluding them moved it to ~0.05 bp.
+
+### `bulk_get_data` needed a real branch, not a documented gap
+
+The timeseries warm raised `NotImplementedError: Unsupported source USTS_CITIVELO-RL` —
+`TimeseriesBuilder` goes through `bulk_get_data`, which had no Velocity branch. It had
+been written up as a known gap; it was actually a blocker for the whole timeseries
+deliverable. `_citivelo_prefetch_range` now issues **one** `CVTSHIST` over the full date
+range and every per-date build is a tag-cache read that opens no workbook. That is not
+just speed: N workbook round-trips for one backfill is the growth the ceiling exists to
+bound.
+
+### The warms ran
+
+| job | result |
+|---|---|
+| 7 · bond tags (store) | OK 56.9s — `RATES.BOND` cached **0 → 131** |
+| 8 · swap-spread tags (store) | all **11** USD_SOFR tenors cached |
+| 9 · FRB values EOD | OK 55.8s — **15 rows × 42 cols** |
+| 10 · swap spreads EOD | OK 23.2s — **15 rows × 11 cols** |
+
+Job 8 also raised `OLE error 0x800AC472` on a follow-up call — Excel busy or in cell-edit
+mode, consistent with a human using it minutes after restarting it. The tags it was
+fetching all landed, which is why it is recorded as an interruption rather than a failure.
+
+### A claim I made and then disproved
+
+I wrote in the hand-off notes that running `--jobs 9,10` without the store warms "warns
+and is refused". It warns and **proceeds** — `assert_ordered` deliberately skips a
+requirement no *selected* job provides, so a subset that omits the producer entirely is
+unconstrained. Checking it is what found it. The warning names the missing warm and the
+consequence, which is the behaviour that matters; the doc claim was wrong and is corrected
+rather than quietly dropped.
+
+## Status at hand-off
+
+Built, tested, **measured**, and both caches warmed. Excel was under the ceiling for the
+second half of the session and every deferred item was retired — see D9.
+
+**Done and measured:** the eight values Citi serves per bond, reachable through
+`FixedRateBondValue`; alias -> CUSIP -> ISIN resolution verified on 2,162 real ISINs and
+349 round trips; Citi's swap spread as `IRSwapValue.CITIVELO_SWAP_SPREAD` alongside the
+computed MMSS/SPREADOVER; all three modes; the quote-vs-compute semantics for PRICE,
+YIELD, DURATION and DV01; Citi's swap-spread unit and its sub-bp agreement with the
+repo's own number; and both warms (pricer cache 0 -> 131 bond tags + 11 swap-spread
+tenors; timeseries 15x42 and 15x11).
+
+**Open, and stated rather than buried:**
+
+- `ASW_4_<CCY>` — which asset-swap variant `_4_` denotes is unmeasured. `ql_asset_swap_spread`
+  computes par-par and is reconciled to `ql.AssetSwap.fairSpread()` at 4.8e-14 bp, so the
+  comparison is one fetch away; it was not run.
+- Three of seven calibration bonds reconstruct with yield errors of −12.44, +25.70 and
+  +0.62 bp. Sub-tick on the short one, real on `US91282CLF67`. Most likely the coupon or
+  first-coupon date parsed from Citi's description text. Does not affect the D4 verdicts,
+  which turn on factors of 2,600–3,000.
+- The repo's `SPREADOVER` fails to price on 9 of 23 days in the tie-out window and returns
+  values like −151,276 bp when it does. Pre-existing, surfaced here, not fixed here.
+- `SWAP_SPREAD` off USD is catalog-recorded but never observed to serve. `EUR_EUROSTR` has
+  no such node at all; `GBP_SONIA`'s axis is a different ten.
+- `USTS_TRADINGVIEW-*` still has no `bulk_get_data` branch; only the Velocity one was added.
+
+**To re-run any of it:**
+
+```
+python scripts/citivelo_bond_calibration.py fetch build      # D4 verdicts
+python scripts/citivelo_swap_spread_tieout.py fetch compare  # units + agreement
+python scripts/daily_cache_warmer.py --jobs 7,8,9,10         # store warms, then values
+```
+
+Each aborts on its own if Excel is at or above 3,800 MB, checked **before** anything
+connects, so none of them can be the thing that wedges it.

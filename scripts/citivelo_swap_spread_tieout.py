@@ -318,6 +318,12 @@ def _repo_spread_bps(
     return float(pricer.value_bps())
 
 
+#: Above this, the repo side is broken rather than merely disagreeing: ten
+#: times any swap spread that has ever traded. Measured cause is a curve that
+#: failed to build or a bond that priced to nonsense; see compare().
+_BROKEN_BP = 1000.0
+
+
 def compare(
     *,
     citi_index: str,
@@ -373,6 +379,7 @@ def compare(
         f"unit as fetched: {meta.get('unit_as_fetched')}"
     )
 
+    per_day: dict = {}
     rows: List[Tuple[str, int, float, float, float, float, float, str]] = []
     for tenor in wanted:
         series = citi.get(tenor) or {}
@@ -403,6 +410,24 @@ def compare(
                          float("nan"), float("nan"), first_error or "no dates"))
             continue
 
+        # The MEAN of these diffs is not a summary of the disagreement, and
+        # reporting it as one would be actively misleading. Measured 2026-08-08
+        # over 2026-07-08..08-07: the 3Y mean difference was 141,422 bp while the
+        # MEDIAN was 0.86 bp. The repo's own SPREADOVER blows up on a minority of
+        # days - a curve that failed to build, or a bond that priced to nonsense,
+        # yields values like -151,276 bp, which is not a spread - and a handful of
+        # those dominate any mean. So the median leads, the mean is kept only so
+        # the divergence is visible, and days the repo could not price sanely are
+        # COUNTED rather than quietly folded in.
+        #
+        # 1,000 bp is the cut: ten times any swap spread that has ever traded, so
+        # it separates "the repo broke" from "the repo and Citi disagree" without
+        # being tunable enough to flatter the answer.
+        broken = [d for d in diffs if abs(d) > _BROKEN_BP]
+        sane = [d for d in diffs if abs(d) <= _BROKEN_BP]
+        note = ""
+        if broken:
+            note = f"{len(broken)}/{len(diffs)} repo days > {_BROKEN_BP:.0f}bp (excluded from median)"
         rows.append(
             (
                 tenor,
@@ -410,11 +435,18 @@ def compare(
                 statistics.fmean(citi_vals),
                 statistics.fmean(repo_vals),
                 statistics.fmean(diffs),
-                statistics.median(diffs),
+                statistics.median(sane) if sane else float("nan"),
                 max(diffs, key=abs),
-                "",
+                note,
             )
         )
+        per_day[tenor] = {
+            "dates": [iso for iso in dates][-len(diffs):],
+            "citi": citi_vals,
+            "repo": repo_vals,
+            "diff": diffs,
+            "n_broken": len(broken),
+        }
 
     # "largest diff" is selected by |x| but PRINTED WITH ITS SIGN: which way the
     # worst day went is the whole diagnostic, and an absolute value throws it away.
@@ -460,7 +492,13 @@ def compare(
             {
                 "meta": {**meta, "repo_value": value.name, "irs_source": irs_source,
                          "frb_source": frb_source, "curve_name": curve_name,
-                         "compared_at": datetime.datetime.now().astimezone().isoformat()},
+                         "compared_at": datetime.datetime.now().astimezone().isoformat(),
+                         "broken_bp_threshold": _BROKEN_BP},
+                # Per-day series, not just the summary. Without these a reader
+                # cannot tell a 141,422 bp "mean difference" (a handful of days
+                # where the repo side failed to price) from a real disagreement,
+                # and the summary alone invites quoting the former.
+                "per_day": per_day,
                 "rows": [
                     {
                         "tenor": t, "n": n, "citi_raw_mean": c, "repo_bp_mean": r,

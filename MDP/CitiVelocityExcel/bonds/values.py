@@ -58,26 +58,40 @@ quote it does publish. Both routes reach the same ``FixedRateBondValue``, and
 which one produced a given number is recorded on the pricer's metadata under
 :data:`PROVENANCE_KEY` rather than left to be inferred from the source name.
 
-.. warning::
+.. note::
 
-   Four of the mappings below are **hypotheses, not measurements**, and are
-   marked ``verified=False``. The distinctions they turn on are exactly the ones
-   that produce a confident wrong number:
+   **The four readings that could have been confidently wrong are now measured**
+   (calibration 2026-08-07, 7 US Treasuries chosen so accrued spans 0.095 to
+   2.188 price points - on a low-accrued bond clean and dirty are the same number
+   and settle nothing):
 
-   * ``PRICE`` clean or dirty - worth up to 3.18 price points on the calibration
-     set, which spans accrued 0.0163 to 3.1844.
-   * ``DURATION`` modified or Macaulay - they differ by ``(1 + y/f)``, roughly
-     2% at current yields.
-   * ``DV01`` per 100 face or per million, and its sign.
-   * ``ASW_4_USD`` which asset-swap variant ``_4_`` denotes - par-par, market
-     value, or yield-yield.
+   =============  ==================  ==========================================
+   value          verdict             margin
+   =============  ==================  ==========================================
+   ``PRICE``      **clean**, per 100  0.0186 bp median error vs Citi's own YIELD,
+                                      against 57.43 bp if read as dirty
+   ``YIELD``      percent, semi-ann.  reproduced to 0.0001-0.0008 bp on the four
+                                      bonds that reconstruct cleanly
+   ``DURATION``   **modified**        1.9e-05 yr median error, against 0.0500 yr
+                                      if read as Macaulay
+   ``DV01``       **per 1mm**, +long  ratio to local per-100 dv01 = 10000.06
+                                      median; 9999.997-10000.09 on the clean four
+   =============  ==================  ==========================================
 
-   Settling them needs one live fetch of a ``(PRICE, YIELD, DURATION, DV01)``
-   tuple for bonds whose accrued differs sharply. ``scripts/citivelo_bond_calibration.py``
-   does exactly that and rewrites this table's status. Until it has run, the
-   source records the interpretation it used in the provenance so a wrong
-   reading is traceable rather than invisible; see
-   ``docs/citivelo_bonds_and_swapspreads_decisions.md`` (D4).
+   Each was settled by asking which reading of one Citi number reproduces
+   ANOTHER Citi number - not by repricing Citi's figure with our own model and
+   observing that it agrees, which is a tautology. Raw numbers and per-bond rows
+   are in ``catalog/bond_calibration.json``; reproduce with
+   ``scripts/citivelo_bond_calibration.py fetch build``.
+
+   Three of the seven bonds do NOT reconstruct cleanly (yield errors -12.44,
+   +25.70 and +0.62 bp). That is a per-bond reconstruction question - the coupon
+   and schedule come from parsing Citi's description text, and a wrong first
+   coupon shows up exactly this way - NOT a question about what the values mean:
+   the three verdicts above are decided by factors of 2,600-3,000, which no
+   plausible schedule error can flip. ``ASW_4_<CCY>`` remains unmeasured; which
+   asset-swap variant ``_4_`` denotes is still open.
+
 """
 
 from __future__ import annotations
@@ -229,54 +243,63 @@ _SPECS: Tuple[ValueSpec, ...] = (
         citi="PRICE",
         frb="CLEAN_PRICE",
         unit="price_points",
-        verified=False,
+        verified=True,
         note=(
-            "Read as the CLEAN price per 100 face, which is how every government "
-            "bond market quotes. UNVERIFIED: if it is in fact dirty, every "
-            "downstream yield is wrong by the accrued interest, which on the "
-            "calibration set runs from 0.0163 to 3.1844 price points. "
-            "Discriminated by pricing a high-accrued and a low-accrued bond and "
-            "seeing which reading reproduces Citi's own YIELD."
+            "MEASURED CLEAN, per 100 face (calibration 2026-08-07, 7 US Treasuries, "
+            "accrued spanning 0.095 to 2.188 price points). Read as CLEAN, the median "
+            "absolute error against Citi's own published YIELD is 0.0186 bp; read as "
+            "DIRTY it is 57.43 bp - a factor of ~3,000, so the reading is not in "
+            "doubt. Four of the seven tie out to under 0.02 bp (0.0186, 0.0008, "
+            "0.0006, 0.0001). Settled by asking which reading of PRICE reproduces "
+            "Citi's YIELD, not by repricing Citi's number with our own model, which "
+            "would prove nothing. See catalog/bond_calibration.json."
         ),
     ),
     ValueSpec(
         citi="YIELD",
         frb="YTM",
         unit="percent",
-        verified=False,
+        verified=True,
         note=(
-            "Yield to maturity in percent. UNVERIFIED in two respects: the "
-            "compounding basis (street convention semi-annual for USTs, but "
-            "annual for BTPs - conventions.py already separates yield_frequency "
-            "from coupon frequency for exactly this reason), and whether Citi "
-            "quotes yield-to-maturity or yield-to-worst on callables."
+            "Yield to maturity in PERCENT, semi-annual compounding for USTs - "
+            "measured 2026-08-07: feeding Citi's own PRICE through this package's "
+            "UST conventions reproduces Citi's YIELD to a median 0.0186 bp over 7 "
+            "bonds, and to 0.0001-0.0008 bp on the four that reconstruct cleanly. "
+            "STILL UNVERIFIED OFF THE US CURVE: the compounding basis is per market "
+            "(BTPs quote annually - conventions.py separates yield_frequency from "
+            "coupon frequency for exactly that), and whether callables quote to "
+            "maturity or to worst is untested because no callable was in the set."
         ),
     ),
     ValueSpec(
         citi="DURATION",
         frb="MOD_DURATION",
         unit="years",
-        verified=False,
+        verified=True,
         note=(
-            "Read as MODIFIED duration. UNVERIFIED: Macaulay and modified differ "
-            "by (1 + y/f) - about 2% at current yields - and the tag name does "
-            "not say which. Both are computed locally by ql_bond_metrics "
-            "('mod_duration' and 'macaulay'), so the calibration compares Citi's "
-            "number against both and the closer one wins."
+            "MEASURED MODIFIED (calibration 2026-08-07, 7 US Treasuries). Median "
+            "absolute error against locally computed MODIFIED duration is 1.9e-05 "
+            "years; against MACAULAY it is 0.0500 years - a factor of ~2,600. The "
+            "two differ by (1 + y/f), about 2% at current yields, which is why the "
+            "tag name alone could not settle it. Compared against BOTH locally "
+            "computed figures rather than assuming the name."
         ),
     ),
     ValueSpec(
         citi="DV01",
         frb="DV01",
         unit="currency_per_bp",
-        verified=False,
+        verified=True,
         note=(
-            "UNVERIFIED in scale and sign. This package reports bps and dv01 "
-            "POSITIVE for a long on both backends (QuantLib's raw "
-            "basisPointValue is negative and is abs()'d once, in ql_bonds). "
-            "Citi's sign convention is not known, nor whether the notional is "
-            "100 face or a million. Both are single multiplicative facts the "
-            "calibration settles at once."
+            "MEASURED per 1mm face, POSITIVE for a long (calibration 2026-08-07, 7 "
+            "US Treasuries). Citi's DV01 divided by this package's per-100-face "
+            "dv01 has median 10000.06, and lands on 9999.997 / 10000.03 / 10000.06 "
+            "/ 10000.09 for the four bonds that reconstruct cleanly - i.e. exactly "
+            "10,000x, so Citi quotes per 1,000,000 face where this package quotes "
+            "per 100. The ratio is POSITIVE, so Citi's sign convention matches this "
+            "package's (a long is positive) rather than QuantLib's raw "
+            "basisPointValue, which is negative and is abs()'d once in ql_bonds. "
+            "MULTIPLY a local dv01 by 10,000 to compare, or divide Citi's by 10,000."
         ),
     ),
     ValueSpec(

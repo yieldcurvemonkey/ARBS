@@ -671,20 +671,30 @@ def test_client_kwargs_reach_the_lazily_built_quotes(monkeypatch):
 
 
 def test_the_served_number_is_returned_unscaled():
-    """The whole units position rests on this. Nothing multiplies or divides, so
-    the tie-out script can read Citi's raw magnitude and settle bp-vs-decimal."""
+    """Nothing multiplies or divides. This survived the unit being MEASURED:
+    ``UNIT`` moved from "as_published" to "bp", and the number itself did not
+    move, because Citi was publishing bp all along. A future "unit fix" that
+    scales the value is the thing this catches."""
     stub = _StubQuotes(_series(value=SENTINEL))
     quote = fetch_swap_spread("USD_SOFR", "10Y", datetime.date(2026, 8, 6), quotes=stub)
     assert quote.value == pytest.approx(SENTINEL, abs=0.0)
-    assert quote.unit == "as_published"
+    assert quote.unit == "bp"
 
 
-def test_the_unit_is_declared_unmeasured_until_the_tieout_runs():
-    """A constant that says "as_published" cannot be mistaken for a measurement.
-    When ``scripts/citivelo_swap_spread_tieout.py`` has run, this becomes "bp" and
-    this test's expectation moves with it - deliberately, so the change is a
-    decision somebody made rather than a default that drifted."""
-    assert UNIT == "as_published"
+def test_the_unit_is_bp_as_measured_by_the_tieout():
+    """``UNIT`` was "as_published" - explicitly *not measured* - until
+    ``scripts/citivelo_swap_spread_tieout.py`` ran on 2026-08-08. It is now "bp",
+    on two independent grounds recorded beside the constant:
+
+    * magnitude: USD_SOFR reads 10Y -41.78, 30Y -75.11, 2Y -14.56 as published,
+      the right size, sign and term structure for USD swap spreads and three
+      orders of magnitude from a decimal reading;
+    * agreement: median difference against the repo's independently computed
+      SPREADOVER is -0.0015 to +0.39 bp across seven tenors.
+
+    The expectation moved because somebody measured it, not because a default
+    drifted - which is why this assertion is spelled out rather than derived."""
+    assert UNIT == "bp"
 
 
 # ------------------------------------------------------------------ #

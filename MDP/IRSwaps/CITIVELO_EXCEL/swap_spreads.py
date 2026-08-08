@@ -170,10 +170,27 @@ LOOKBACK_BY_MODE: Mapping[str, datetime.timedelta] = _LOOKBACK
 #: What ``meta_data["source"]`` must say for a curve to be able to serve this.
 SOURCE_TOKEN = "citivelo_excel"
 
-#: The unit of the number this module returns. ``"as_published"`` means *not
-#: measured*: no scaling is applied and none is claimed. See the module
-#: docstring for the check that settles it.
-UNIT = "as_published"
+#: The unit of the number this module returns. **BASIS POINTS**, measured
+#: 2026-08-08 over 2026-07-08..08-07 (23 daily observations per tenor) and no
+#: longer assumed: USD_SOFR reads 10Y -41.78, 30Y -75.11, 2Y -14.56 as published,
+#: which is the right magnitude, sign and term structure for USD swap spreads and
+#: is three orders of magnitude away from a decimal reading.
+#:
+#: Cross-checked against the repo's independently computed ``SPREADOVER`` for the
+#: same days and tenors: median difference **-0.0015 to +0.39 bp** across 2Y, 3Y,
+#: 5Y, 7Y, 10Y, 20Y and 30Y (2Y +0.036, 3Y +0.386, 5Y +0.015, 7Y +0.067,
+#: 10Y -0.002, 20Y -0.069, 30Y -0.156). Two different constructions from two
+#: different data sources landing sub-basis-point on six of seven tenors is what
+#: makes the unit settled rather than merely plausible.
+#:
+#: The MEAN difference over the same days is ~150,000 bp and is meaningless: the
+#: repo's ``SPREADOVER`` failed to price on 9 of 23 days and returns values like
+#: -151,276 bp when it does, which no mean survives. That is a repo-side gap, not
+#: a disagreement with Citi. Quote the median; the raw per-day series is in
+#: ``harvest/swap_spread_tieout/USD_SOFR_tieout_SPREADOVER.json``.
+#:
+#: STILL NOT MEASURED off USD: no other index's axis has been fetched.
+UNIT = "bp"
 
 #: Which Citi sub-type carries the published spread.
 SUB_TYPE = "SWAP_SPREAD"

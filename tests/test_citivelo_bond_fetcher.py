@@ -489,16 +489,30 @@ def test_a_computed_value_records_the_backend_and_the_quote_it_used(resolutions)
         assert prov.detail.endswith(f"<-RATES.BOND.{ISIN_WITH_ASW_USD}.PRICE")
 
 
-def test_clean_price_carries_the_unverified_reading_forward(resolutions):
-    """Citi's PRICE is READ as clean and that has not been measured. The source
-    must propagate the standing, not quietly assert it - if the number is dirty
-    every downstream yield is wrong by up to 3.18 price points."""
+def test_clean_price_carries_the_measured_reading_forward(resolutions):
+    """Citi's PRICE reads CLEAN, and that is now MEASURED rather than assumed.
+
+    Calibration 2026-08-07 over 7 US Treasuries with accrued spanning 0.095 to
+    2.188 price points: read as clean, the median absolute error against Citi's
+    own published YIELD is 0.0186 bp; read as dirty, 57.43 bp. The source must
+    carry that standing rather than restate the old caveat - a note still saying
+    UNVERIFIED after the measurement is its own kind of wrong."""
     meta = _args_for(resolutions)["meta_data"]
     prov = V.provenance_of(meta, "CLEAN_PRICE")
     assert prov.origin == "quoted"
-    assert prov.verified is False
-    assert "UNVERIFIED" in prov.note
-    assert "PRICE" in V.unverified_values()
+    assert prov.verified is True
+    assert "MEASURED" in prov.note and "0.0186" in prov.note
+    assert "PRICE" not in V.unverified_values()
+
+
+def test_the_still_unmeasured_values_are_still_declared_so():
+    """The point of `verified` is that it distinguishes. If everything became
+    True the flag would carry no information - the ASW matrix, CAS, OAS and
+    SPREAD_TSY are pass-through quotes whose methodology Citi does not publish
+    and which nothing this session measured."""
+    unverified = set(V.unverified_values())
+    assert {"ASW_4_USD", "CAS", "OAS", "SPREAD_TSY"} <= unverified
+    assert not ({"PRICE", "YIELD", "DURATION", "DV01"} & unverified)
 
 
 def test_every_computed_frb_value_has_a_provenance_entry(resolutions):

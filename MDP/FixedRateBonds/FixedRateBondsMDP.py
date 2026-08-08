@@ -2035,6 +2035,77 @@ class FixedRateBondsMDP(MarketDataProvider[_GenericPricable], LayeredCacheMixin)
         _logger.info("RL prefetch: cached %d pricer entries for %d cusips", write_count, len(unique_cusips))
         return True
 
+    def _citivelo_prefetch_range(
+        self,
+        *,
+        timestamps: Sequence[DateLike],
+        symbols: Sequence[str],
+        force_refresh: bool = False,
+    ) -> int:
+        """Warm the Velocity tag cache for a whole date range in one call.
+
+        The Velocity tag cache stores a whole SERIES per tag, not a row per date,
+        so fetching per date re-requests the same history once per date. One
+        ``CVTSHIST`` over ``[min(timestamps), max(timestamps)]`` warms every date
+        at once, and every subsequent per-date build is a cache read that opens no
+        workbook. That matters beyond speed: the add-in's memory only ever grows
+        and only a human restart clears it, so N workbook round trips for one
+        backfill is the failure mode the ceiling exists to prevent.
+
+        Aliases are resolved at the LATEST timestamp, so a backfill covers the
+        bonds that are on the run at the end of the range. Earlier dates whose
+        on-the-run differs are still correct - ``_process_one`` re-resolves per
+        date and any tag this missed is simply fetched then.
+
+        Returns
+        -------
+        int
+            Tags requested. ``0`` when nothing resolved to a bond Citi quotes.
+        """
+        from MDP.CitiVelocityExcel.bonds.fetcher import CitiVeloBondFetcher
+        from MDP.CitiVelocityExcel.bonds.resolution import resolve_bonds
+        from MDP.FixedRateBonds.reference_data_cache.ust_reference_data import update_reference_data
+
+        dates = [
+            (ts.date() if hasattr(ts, "date") else ts)
+            for ts in timestamps
+            if not (isinstance(ts, str) and ts.strip().lower() == "live")
+        ]
+        if not dates:
+            return 0
+        start, end = min(dates), max(dates)
+
+        ref_df = update_reference_data(source="fiscaldata", force_refresh=force_refresh)
+        ref_df = _filter_and_rank_ref_df(ref_df, end)
+        alias_to_cusip, _ = self._resolve_aliases_bulk(list(symbols), end, ref_df=ref_df)
+        if not alias_to_cusip:
+            return 0
+
+        resolved, failures = resolve_bonds(
+            list(dict.fromkeys(alias_to_cusip.values())), strict=False
+        )
+        for token, reason in failures.items():
+            _logger.info("citivelo prefetch: %s not quoted by Citi, skipped (%s)", token, reason)
+        if not resolved:
+            return 0
+
+        fetcher = CitiVeloBondFetcher()
+        try:
+            plan = fetcher.plan(list(resolved.values()))
+            tags = [t for entry in plan.values() for t in entry["tags"].values()]
+            if not tags:
+                return 0
+            _logger.info(
+                "citivelo prefetch: %d tags over %d bonds, %s..%s",
+                len(tags), len(plan), start, end,
+            )
+            fetcher.quotes().frame(
+                tags, "DAILY", start=start, end=end, force_refresh=force_refresh
+            )
+            return len(tags)
+        finally:
+            fetcher.close()
+
     def bulk_get_data(
         self,
         timestamps: Sequence[DateLike],
@@ -2103,6 +2174,32 @@ class FixedRateBondsMDP(MarketDataProvider[_GenericPricable], LayeredCacheMixin)
                         force_refresh=force_refresh,
                         show_tqdm=show_tqdm,
                     )
+
+            # ----------------------------------------------------------------
+            # CITIVELO PREFETCH: one CVTSHIST for the WHOLE range, then every
+            # per-date build is a cache read with no Excel.
+            #
+            # Without this the loop below would open a workbook per date, which
+            # is both slow and the thing the memory ceiling exists to avoid -
+            # the add-in's memory only ever grows. The tag cache stores whole
+            # series, so a per-day loop re-fetches the same data once per day;
+            # one call over [min, max] warms every date at once. It is also why
+            # a real branch beats "just loop get_data" here.
+            #
+            # Failure is deliberately NOT fatal: a warm that already populated
+            # the cache makes this a no-op, and a transport failure should
+            # surface per date below (where it is classified) rather than as one
+            # opaque error for the whole range.
+            # ----------------------------------------------------------------
+            if self.source.upper() in ("USTS_CITIVELO-QL", "USTS_CITIVELO-RL"):
+                try:
+                    self._citivelo_prefetch_range(
+                        timestamps=timestamps,
+                        symbols=base_cusips,
+                        force_refresh=force_refresh,
+                    )
+                except Exception as exc:  # noqa: BLE001 - reported, then retried per date
+                    _logger.warning("citivelo bulk prefetch failed (%s); falling back to per-date reads", exc)
 
             def _process_one(ts: DateLike, symbols: List[str]) -> Tuple[DateLike, Dict[str, "_FixedRateBondGenericPricer"]]:
                 # --- alias resolution per timestamp ---
@@ -2504,15 +2601,24 @@ class FixedRateBondsMDP(MarketDataProvider[_GenericPricable], LayeredCacheMixin)
                     # for an RL daily close in your repo; we’ll just raise to match your existing semantics.
                     raise NotImplementedError("For RL, pass an intraday datetime for timestamp or ‘live’.")
 
+                # -------------------- Citi Velocity --------------------
+                # The batched historical read this wants is one CVTSHIST for the
+                # whole range, which _citivelo_prefetch_range has already done
+                # above; every call here is then a tag-cache read with no Excel.
+                # Delegating to _get_multi_pricers keeps ONE implementation of
+                # the resolution, provenance and staleness rules rather than a
+                # second copy that drifts.
+                elif self.source.upper() in ("USTS_CITIVELO-QL", "USTS_CITIVELO-RL"):
+                    return ts, (self._get_multi_pricers(
+                        cusips=symbols, timestamp=ts,
+                        kwargs={"force_refresh": force_refresh},
+                    ) or {})
+
                 # -------------------- Unsupported source --------------------
-                # Known gap, stated rather than left to be discovered: neither
-                # USTS_CITIVELO-QL/-RL nor USTS_TRADINGVIEW-* has a branch here, so
-                # a UnifiedQuery TIMESERIES over the Velocity bond source raises
-                # from this line. It fails loudly rather than silently, and
-                # _get_multi_pricers per date is the working route; a real bulk
-                # branch is a feature, not a fix, because the batched historical
-                # read it would want is one CVTSHIST for the whole range and the
-                # pricer cache is keyed per date.
+                # USTS_TRADINGVIEW-* still has no branch here, so a UnifiedQuery
+                # TIMESERIES over it raises from this line. It fails loudly
+                # rather than silently, and _get_multi_pricers per date is the
+                # working route.
                 else:
                     raise NotImplementedError(f"Unsupported source {self.source}")
 

@@ -24,6 +24,7 @@ was - wrong source, not served for this bond, or served-but-empty-in-this-window
 
 from __future__ import annotations
 
+import dataclasses
 import datetime
 
 import pandas as pd
@@ -443,7 +444,7 @@ def test_the_provenance_book_reaches_the_pricer(wired):
     assert V.is_velocity_meta(meta)
     assert V.provenance_of(meta, "SPREAD_TSY").origin == "quoted"
     assert V.provenance_of(meta, "YTM").origin == "computed"
-    assert V.provenance_of(meta, "CLEAN_PRICE").verified is False
+    assert V.provenance_of(meta, "CLEAN_PRICE").verified is True
 
 
 def test_a_pricer_from_the_branch_answers_the_quote_only_values(wired):
@@ -823,17 +824,43 @@ def test_a_pricer_whose_meta_raises_does_not_impersonate_the_wrong_source():
 # ------------------------------------------------------------------ #
 
 
-def test_a_number_solved_from_an_unverified_quote_is_not_reported_as_verified():
+def test_a_computed_number_tracks_the_standing_of_the_quote_it_came_from():
     """``verified`` exists so a consumer can filter on it. Hardcoding ``True`` for
     every computed value inverted it: CLEAN_PRICE declared its clean-vs-dirty
     uncertainty (worth 0.0163 to 3.1844 price points) and the seven numbers solved
     FROM that price all claimed to be verified, so a filter kept the derived ones
     and dropped the only one that told the truth."""
     meta = _velocity_meta()
-    assert V.provenance_of(meta, "CLEAN_PRICE").verified is False
+    price = V.provenance_of(meta, "CLEAN_PRICE")
 
+    # The invariant is PROPAGATION, not a particular value. PRICE's reading was
+    # measured on 2026-08-07 and is now verified, so the seven numbers solved
+    # from it are too - but they must still track it rather than hardcode
+    # anything, which is what the original defect did in the other direction.
     for name in ("YTM", "MOD_DURATION", "PV01", "DV01", "NPV", "DIRTY_PRICE", "CONVEXITY"):
         prov = V.provenance_of(meta, name)
         assert prov.origin == "computed", name
-        assert prov.verified is False, f"{name} claims to be verified"
-        assert "Inherits the standing of its input" in prov.note, name
+        assert prov.verified is price.verified, (
+            f"{name} reports verified={prov.verified} while the CLEAN_PRICE it was "
+            f"solved from reports {price.verified}: a derived number cannot be better "
+            "established than its input"
+        )
+        if not price.verified:
+            # The caveat is attached only when there is something to caveat;
+            # a verified input needs no disclaimer trailing every derived number.
+            assert "Inherits the standing of its input" in prov.note, name
+
+
+def test_a_number_solved_from_an_unverified_quote_inherits_that(monkeypatch):
+    """The other direction, forced: make the input unverified and every number
+    solved from it must follow. Without this the propagation test above would
+    pass on a hardcoded ``True`` now that PRICE is measured."""
+    spec = V.CITI_BOND_VALUES["PRICE"]
+    monkeypatch.setitem(
+        V.CITI_BOND_VALUES, "PRICE",
+        dataclasses.replace(spec, verified=False, note="forced unverified for this test"),
+    )
+    meta = _velocity_meta()
+    assert V.provenance_of(meta, "CLEAN_PRICE").verified is False
+    for name in ("YTM", "MOD_DURATION", "DV01"):
+        assert V.provenance_of(meta, name).verified is False, name
