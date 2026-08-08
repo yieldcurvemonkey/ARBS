@@ -25,6 +25,8 @@ REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 os.chdir(REPO_ROOT)
 sys.path.insert(0, REPO_ROOT)
 
+from utils.warm_jobs import STORE, WarmJob, check, describe  # noqa: E402
+
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(message)s",
@@ -320,17 +322,239 @@ def warm_ustf_invoice_caches(start, end):
 
 
 # ─────────────────────────────────────────────────────────────────────
-# Job registry
+# Citi Velocity jobs
+#
+# These four are the only jobs in the registry with an ordering constraint
+# between them, and it is a real one rather than a tidiness preference. The
+# Velocity sources read their numbers from the tag cache and fall through to
+# LIVE EXCEL on a miss. A value job scheduled before its tag warm therefore
+# does not fail - it opens a workbook, on a scheduled task, at whatever hour
+# this runs, against an add-in whose memory only ever grows and that only a
+# human restart clears. It wedged at 5,249 MB on 2026-08-07.
+#
+# So the dependency is declared (`provides`/`requires` on each WarmJob) and
+# checked at import by utils.warm_jobs.check. Reordering two lines in the
+# registry now raises instead of quietly arranging that failure.
 # ─────────────────────────────────────────────────────────────────────
 
-JOBS = [
-    ("GSQUANT USD-OIS EOD", warm_gsquant_ois_eod),
-    ("ERIS USD-SOFR-1D EOD", warm_eris_eod),
-    ("FRB FedInvest EOD", warm_frb_fedinvest_eod),
-    ("STIRF CME Session", warm_stirf_cme_session),
-    ("UST Futures Invoice Caches", warm_ustf_invoice_caches),
-    ("STIRFO SFR Options EOD", warm_stirfo_eod),
+#: Asset keys the tag warms provide and the value jobs require. Distinct per
+#: producer: two jobs writing one key is caught by assert_unique_providers.
+_CV_BOND_TAGS = "CITIVELO-TAGS-RATES.BOND"
+_CV_SWAP_SPREAD_TAGS = "CITIVELO-TAGS-RATES.OIS.SWAP_SPREAD"
+
+#: Stop below this. See utils/warm_jobs.py and the 2026-08-07 wedge.
+_CV_MEMORY_CEILING_MB = 3800.0
+
+#: The bonds warmed daily. On-the-run and first three off-the-runs across the
+#: curve, expressed as ISINs at run time via the alias table, plus whatever the
+#: caller adds. Kept small deliberately: the universe is 2,162 bonds and a full
+#: warm is an Excel-memory problem, not a time problem.
+_CV_BOND_TENORS = (2, 3, 5, 7, 10, 20, 30)
+_CV_BOND_ALIASES = tuple(f"CT{t}" for t in _CV_BOND_TENORS) + tuple(f"O{t}" for t in _CV_BOND_TENORS)
+
+#: The index whose swap-spread axis is warmed. The TENORS are deliberately NOT
+#: listed here: the axis is ragged and per index, so a hardcoded tuple is wrong
+#: for anything but USD. USD_SOFR/USD_FEDFUND carry eleven (money-market tenors
+#: in, no 4Y/15Y/25Y); GBP_SONIA carries a different ten (no 1M-1Y, but 15Y/40Y/
+#: 50Y); EUR_EUROSTR has no SWAP_SPREAD sub-type at all. Only 13 of the 20
+#: indices carry the family. `swap_spread_tenors` reads the real axis from the
+#: catalog and raises rather than inventing one.
+_CV_SWAP_SPREAD_INDEX = "USD_SOFR"
+
+
+def _citivelo_excel_guard():
+    """Refuse to start a Velocity warm against an Excel that is already too big.
+
+    Returns the client so the caller can sample again on the way out. Raises
+    rather than warning: the whole point of the ceiling is that an unattended
+    job must not be the thing that wedges the add-in.
+    """
+    from MDP.CitiVelocityExcel.quotes import CitiVeloQuotes
+
+    quotes = CitiVeloQuotes()
+    client = quotes.client()
+    mb = client.excel_memory_mb()
+    if mb < 0:
+        quotes.close()
+        raise RuntimeError("Could not read Excel's memory; refusing to warm blind.")
+    if mb > _CV_MEMORY_CEILING_MB:
+        quotes.close()
+        raise RuntimeError(
+            f"Excel is at {mb:.0f} MB, above the {_CV_MEMORY_CEILING_MB:.0f} MB ceiling. "
+            "The add-in's memory only ever grows and only a human restart clears it "
+            "(it wedged at 5,249 MB on 2026-08-07). Restart Excel, sign in, re-run."
+        )
+    log.info("  Excel at %.0f MB (ceiling %.0f)", mb, _CV_MEMORY_CEILING_MB)
+    return quotes, client
+
+
+def _citivelo_bond_resolutions(as_of):
+    """The warm's bond set, as BondResolutions, via the repo's own alias table.
+
+    Uses ``FixedRateBondsMDP._resolve_aliases_bulk`` rather than a private alias
+    list so the warm covers exactly the bonds the queries will ask for. An alias
+    that resolves to a bond Citi does not quote is dropped with a log line
+    instead of failing the job - Citi carries a liquid subset, and a warm that
+    dies because one off-the-run is missing is worse than one that says so.
+    """
+    from MDP.CitiVelocityExcel.bonds.resolution import resolve_bonds
+    from MDP.FixedRateBonds.FixedRateBondsMDP import FixedRateBondsMDP, _filter_and_rank_ref_df
+    from MDP.FixedRateBonds.reference_data_cache.ust_reference_data import update_reference_data
+
+    mdp = FixedRateBondsMDP(source="USTS_CITIVELO-RL")
+    ref_df = _filter_and_rank_ref_df(update_reference_data(source="fiscaldata"), as_of)
+    alias_to_cusip, _ = mdp._resolve_aliases_bulk(list(_CV_BOND_ALIASES), as_of, ref_df=ref_df)
+    resolved, failures = resolve_bonds(list(alias_to_cusip.values()), strict=False)
+    if failures:
+        log.info("  %d alias(es) not quoted by Citi, skipped: %s",
+                 len(failures), ", ".join(sorted(failures)))
+    return list(resolved.values())
+
+
+def warm_citivelo_bond_tags(start, end):
+    """Job 7 [STORE]: pull RATES.BOND.<ISIN>.<value> into the Velocity tag cache.
+
+    Must run before any FRB value job on the citivelo source; see the section
+    comment above for what happens otherwise.
+    """
+    from MDP.CitiVelocityExcel.bonds.fetcher import CitiVeloBondFetcher
+
+    quotes, client = _citivelo_excel_guard()
+    try:
+        resolutions = _citivelo_bond_resolutions(end)
+        if not resolutions:
+            log.warning("  no bonds resolved; nothing to warm")
+            return None
+        fetcher = CitiVeloBondFetcher(quotes=quotes)
+        plan = fetcher.plan(resolutions)
+        n_tags = sum(len(e["tags"]) for e in plan.values())
+        log.info("  %d bonds, %d tags, %s..%s", len(plan), n_tags, start, end)
+
+        # One EOD pass over the range populates the cache for every date in it:
+        # the tag cache stores whole series, so a per-day loop would be the same
+        # data fetched once per day.
+        quotes.frame(
+            [t for e in plan.values() for t in e["tags"].values()],
+            "DAILY", start=start, end=end,
+        )
+        log.info("  Excel at %.0f MB after", client.excel_memory_mb())
+        return None
+    finally:
+        quotes.close()
+
+
+def warm_citivelo_swap_spread_tags(start, end):
+    """Job 8 [STORE]: pull RATES.OIS.<index>.SWAP_SPREAD.<tenor> into the tag cache.
+
+    The tenor axis comes from the catalog, not from a literal here — it is ragged
+    and per index, and the USD tuple would ask GBP for four tenors that do not
+    exist while missing three that do.
+    """
+    from MDP.IRSwaps.CITIVELO_EXCEL.swap_spreads import swap_spread_history, swap_spread_tenors
+
+    quotes, client = _citivelo_excel_guard()
+    try:
+        tenors = swap_spread_tenors(_CV_SWAP_SPREAD_INDEX)
+        log.info("  %s: %d tenors (%s), %s..%s",
+                 _CV_SWAP_SPREAD_INDEX, len(tenors), ", ".join(tenors), start, end)
+        frame = swap_spread_history(
+            _CV_SWAP_SPREAD_INDEX, tenors, start=start, end=end, quotes=quotes,
+        )
+        log.info("  served %d/%d tenors; Excel at %.0f MB after",
+                 len(frame.columns), len(tenors), client.excel_memory_mb())
+        return frame
+    finally:
+        quotes.close()
+
+
+def warm_citivelo_frb_values(start, end):
+    """Job 9 [VALUE]: FRB values on the citivelo source, into the computed TS cache.
+
+    Requires the bond tag warm. Reads only what Citi serves per bond, so the
+    quote-only values (SPREAD_TSY, OAS, ASW) are asked for alongside the ones
+    rebuilt locally from PRICE.
+    """
+    from Query.Unified.UnifiedQuery import UnifiedQuery
+    from Query.Unified.registry import UnifiedValue
+    from MDP.FixedRateBonds.FixedRateBondsMDP import FixedRateBondsMDP
+    from TB.FixedRateBondsTB import FixedRateBondsTB
+    from TB.TimeseriesBuilder import TimeseriesBuilder
+
+    mdp = FixedRateBondsMDP(source="USTS_CITIVELO-RL")
+    tb = TimeseriesBuilder()
+    wanted = [UnifiedValue.FRB_YTM, UnifiedValue.FRB_CLEAN_PRICE, UnifiedValue.FRB_SPREAD_TSY]
+    queries = [
+        UnifiedQuery(cusip=c, value=v) for c in _CV_BOND_ALIASES for v in wanted
+    ]
+    log.info("  %d queries (%d aliases x %d values)", len(queries), len(_CV_BOND_ALIASES), len(wanted))
+    return tb.get_timeseries(
+        start=start, end=end, queries=queries, n_jobs=N_JOBS,
+        routers={"FRB": FixedRateBondsTB(mdp, show_tqdm=True)},
+        ignore_cache_miss=True,
+    )
+
+
+def warm_citivelo_swap_spread_values(start, end):
+    """Job 10 [VALUE]: Citi's published swap spreads, into the computed TS cache.
+
+    Requires the swap-spread tag warm. This is Citi's OWN published number, not
+    the repo's computed IRS_MMSS / IRS_SPREADOVER — see the value's docstring for
+    what each one is a spread between.
+    """
+    from MDP.IRSwaps.CITIVELO_EXCEL.swap_spreads import swap_spread_tenors
+    from MDP.IRSwaps.IRSwapsMDP import IRSwapsMDP
+    from Query.Unified.UnifiedQuery import UnifiedQuery
+    from Query.Unified.registry import UnifiedValue
+    from TB.IRSwapsTB import IRSwapsTB
+    from TB.TimeseriesBuilder import TimeseriesBuilder
+
+    tenors = swap_spread_tenors(_CV_SWAP_SPREAD_INDEX)
+    mdp = IRSwapsMDP(source="CITIVELO_EXCEL-RL")
+    tb = TimeseriesBuilder()
+    queries = [
+        UnifiedQuery(curve="USD-SOFR-1D", tenor=t,
+                     value=UnifiedValue.IRS_CITIVELO_SWAP_SPREAD)
+        for t in tenors
+    ]
+    log.info("  %d tenors: %s", len(tenors), ", ".join(tenors))
+    return tb.get_timeseries(
+        start=start, end=end, queries=queries, n_jobs=N_JOBS,
+        routers={"IRS": IRSwapsTB(mdp, show_tqdm=True)},
+        ignore_cache_miss=True,
+    )
+
+
+# ─────────────────────────────────────────────────────────────────────
+# Job registry
+#
+# ORDER IS LOAD-BEARING for the Velocity jobs and is enforced, not trusted:
+# utils.warm_jobs.check runs at import and raises if a value job precedes the
+# store warm it reads, or if two jobs write the same store asset.
+# ─────────────────────────────────────────────────────────────────────
+
+WARM_JOBS = [
+    WarmJob("GSQUANT USD-OIS EOD", warm_gsquant_ois_eod),
+    WarmJob("ERIS USD-SOFR-1D EOD", warm_eris_eod),
+    WarmJob("FRB FedInvest EOD", warm_frb_fedinvest_eod),
+    WarmJob("STIRF CME Session", warm_stirf_cme_session),
+    WarmJob("UST Futures Invoice Caches", warm_ustf_invoice_caches),
+    WarmJob("STIRFO SFR Options EOD", warm_stirfo_eod),
+    # -- Citi Velocity: tag warms FIRST, then the jobs that read them --
+    WarmJob("CITIVELO bond tags (store)", warm_citivelo_bond_tags,
+            kind=STORE, provides=(_CV_BOND_TAGS,)),
+    WarmJob("CITIVELO swap-spread tags (store)", warm_citivelo_swap_spread_tags,
+            kind=STORE, provides=(_CV_SWAP_SPREAD_TAGS,)),
+    WarmJob("CITIVELO FRB values EOD", warm_citivelo_frb_values,
+            requires=(_CV_BOND_TAGS,)),
+    WarmJob("CITIVELO swap spreads EOD", warm_citivelo_swap_spread_values,
+            requires=(_CV_SWAP_SPREAD_TAGS,)),
 ]
+
+check(WARM_JOBS)
+
+#: The ``(name, fn)`` shape the runner below has always consumed. Derived rather
+#: than maintained separately, so the two cannot drift.
+JOBS = [j.as_tuple() for j in WARM_JOBS]
 
 
 # ─────────────────────────────────────────────────────────────────────
@@ -346,9 +570,8 @@ def main():
     args = parser.parse_args()
 
     if args.list:
-        print("Available jobs:")
-        for i, (name, _) in enumerate(JOBS, 1):
-            print(f"  {i}. {name}")
+        print("Available jobs (store warms must precede the value jobs that read them):")
+        print(describe(WARM_JOBS))
         return
 
     # Determine date range
@@ -367,6 +590,22 @@ def main():
     if args.jobs:
         indices = [int(x.strip()) - 1 for x in args.jobs.split(",")]
         selected = [(i, JOBS[i]) for i in indices if 0 <= i < len(JOBS)]
+        # The import-time check only proves the FULL list is ordered. A subset
+        # can still put a value job on the wrong side of its store warm, which
+        # is the same failure by a different route — a live Excel fall-through
+        # on an unattended run. Re-check what was actually selected.
+        chosen = [WARM_JOBS[i] for i, _ in selected]
+        chosen_names = {j.name for j in chosen}
+        for job in chosen:
+            for asset in job.requires:
+                provider = next((p for p in WARM_JOBS if asset in p.provides), None)
+                if provider is not None and provider.name not in chosen_names:
+                    log.warning(
+                        "Job %r requires %r, warmed by %r, which is NOT in --jobs %s. "
+                        "It will read an unwarmed cache and fall through to LIVE Excel.",
+                        job.name, asset, provider.name, args.jobs,
+                    )
+        check(chosen)
     else:
         selected = list(enumerate(JOBS))
 
