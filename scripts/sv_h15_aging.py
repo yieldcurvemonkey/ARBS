@@ -74,6 +74,25 @@ def main() -> None:
                 d0 = abs(pkg.long_dv01)
             except Exception:
                 continue
+            # PURE aging: same curve, shape slid forward k years (rl.Curve.roll)
+            # — no market move, so the fraction isolates position aging from the
+            # level path that confounds the market-curve fractions below.
+            from RVUtils.StrikelessVol.greeks import package_npv
+
+            h0 = c0.handle()
+            for k in HOLD_YEARS:
+                try:
+                    hk = h0.roll(f"{int(k * 365)}d")
+                    base = package_npv(hk, pkg)
+                    up = package_npv(hk.shift(25.0), pkg)
+                    dn = package_npv(hk.shift(-25.0), pkg)
+                    g_pure = (up + dn - 2.0 * base) / (25.0 ** 2)
+                    rows.append({"market": market, "pair": pair.name,
+                                 "inception": str(inc), "years_held": k,
+                                 "measure": "pure_aging",
+                                 "gamma_frac": g_pure / g0 if g0 else float("nan")})
+                except Exception:
+                    pass
             for k in HOLD_YEARS:
                 w = nearest(inc.replace(year=inc.year + k))
                 ck = cm.get(w)
@@ -85,7 +104,8 @@ def main() -> None:
                 except Exception:
                     continue
                 rows.append({"market": market, "pair": pair.name, "inception": str(inc),
-                             "years_held": k, "gamma_frac": gk / g0 if g0 else float("nan"),
+                             "years_held": k, "measure": "market_curve",
+                             "gamma_frac": gk / g0 if g0 else float("nan"),
                              "long_dv01_frac": dk / d0 if d0 else float("nan"),
                              "gamma_0": g0, "gamma_k": gk})
 
@@ -93,7 +113,7 @@ def main() -> None:
     out = DATA / f"h15_aging_{market}.parquet"
     df.to_parquet(out, index=False)
     if len(df):
-        summ = df.groupby(["pair", "years_held"])[["gamma_frac", "long_dv01_frac"]].median()
+        summ = df.groupby(["pair", "measure", "years_held"])[["gamma_frac", "long_dv01_frac"]].median()
         print(summ.to_string(float_format=lambda x: f"{x:6.3f}"))
     print(f"wrote {out.name} ({len(df)} rows)")
 
