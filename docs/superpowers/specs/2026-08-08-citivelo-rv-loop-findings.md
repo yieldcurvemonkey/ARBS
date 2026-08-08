@@ -212,7 +212,12 @@ On the same aged panel package, moving the window one day later:
 | | gross | registered cost @1x | net |
 |---|---:|---:|---:|
 | as graded (fill at signal close) | +282.7 bp | 174.0 bp | **+106.7 bp** |
-| at a `t+1` fill | +166.1 bp | 174.0 bp | **−7.9 bp** |
+| at a `t+1` fill | +166.1 bp | 174.0 bp | **−7.9 bp** ⚠️ |
+
+> **⚠️ The −7.9 bp is superseded — see `L-0065` and the checker section below.** The 174.0 bp is a
+> *nominal* cost (it assumes realised DV01 ≡ $100k; the episodes average $103,961). Like-for-like
+> the `t+1` net is **−9.85 bp** (panel) or **−10.24 bp** (full `shift(2)` re-book). Same side of
+> zero — the finding is unchanged and slightly stronger.
 
 The engine books agree in direction and size: **+162.4 bp `SELECTION-ARTIFACT` → −13.8 bp
 `DEAD`**, median episode −1.29 bp, hit 31%, per-episode Sharpe −0.019.
@@ -350,6 +355,11 @@ Two caveats that must travel with this, because it is otherwise a recipe for gam
 
 ## H17 — vol term-structure roll-down carry, dead at gate, twice over
 
+> **⚠️ SUPERSEDED IN PART — see "The checker's verdict (C-0001)" below, and ledger `V-V-17B`.**
+> The death stands. Its **grounds and every realized number in this section do not**: −0.29× RT and
+> "12 of 15" were quoted at one arbitrary cycle phase. The phase-invariant figures are
+> **−0.097× RT, 9 of 15 negative, best cell +0.165×**, and "two independent grounds" is **one**.
+
 A new non-SV-lineage family, pre-registered before numbers: a vega-neutral ATM straddle calendar
 harvesting the roll-down of the vol term structure; direction pinned by a written entry-day slide
 rule; universe restricted to CM-1-printed cells (1M excluded as CM-1's worst); horizons registered
@@ -423,6 +433,12 @@ show a **dip** at zero; there is none. The test is one-directional — one-sided
 *shifted unimodal* distribution, so the absence of a dip is not proof of drift-dominance — but it
 does mean **0.508 bp cannot be asserted as a half-spread**. CM-2 measures an upper bound whose
 composition it does not separate.
+
+> **Later addition (L-0072).** One candidate explanation is now struck: **compression is excluded
+> from the Part 43 public tape by §43.2**, per the sibling program's cited `(action, event)` →
+> `on_p43` matrix — so compression cannot be what puts the mass at mid. The same matrix confirms
+> CM-2's `NEWT`/`TRAD` filter is exactly the ECONOMIC_FLOW cell, which turns that filter from an
+> assumption into a citation. The level remains unclaimable; only the reasoning is narrowed.
 
 **Forward starts: uninformative.** 47 cells, median at-stamp **16.6×** the assumed line, **zero**
 below it, small samples, and evident contamination by package legs and off-market unwinds (the 1Y
