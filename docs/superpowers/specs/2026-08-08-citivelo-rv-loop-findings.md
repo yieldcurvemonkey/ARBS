@@ -600,3 +600,197 @@ GBP post-hoc is the manoeuvre L-0057's own caveat prohibits. Claim C's phase 0 i
 Seven defects found in session 2 — the probe's error-payload hit, H13's fill day, H14's missing
 re-initiations, H16b's vintage mix, H17's phase artifact, H17's blind self-test, and L-0051's
 nominal-cost arithmetic. **All seven flattered the maker.** Session 1's tally was twelve of twelve.
+
+---
+
+# Session 3 (2026-08-09) — the first family to clear a capacity gate, and the first audit that killed a death's grounds
+
+**Verdict: F7 is DEAD AT GATE. Thirteen families dead, nothing ALIVE. `trials_total` 55.**
+
+Queue items 1 and 2 were both re-checked and both are still blocked, with evidence rather than
+assumption: the famb STRG forward window does not open until **2026-09-02** (L-0047, not previewed),
+and **no `DATABENTO_API_KEY` exists** in the process environment, `ARBS/.env`, `~/.databento` (the
+directory does not exist), or any `.env` in either tree — `databento 0.83.0` is installed but
+keyless and the filesystem still holds exactly one `.dbn` file. So session 3 is queue item 3: a new
+family at loop N, on the one genuinely unexplored conditioning axis.
+
+## F7 — fade only what forced flow made cheap
+
+Every one of the twelve dead families is a **fade**, and not one conditioned on **why** the
+dislocation exists. Huggins–Schaller ch1 says fade **transient** richness — forced flow, demand for
+immediacy — and do not fade structural hedging demand. F7 tested that: condition a USD curve-structure
+fade on a flow shock measured from the **DTCC Part 43 tape**, a dataset this loop had only ever used
+to measure costs (CM-1, CM-2), never as a signal.
+
+**The structural advantage that made it worth running:** the state is measured on a *different
+dataset from the mark*. H13 died because its state was a function of the same Citi curves that
+generated its P&L (L-0051, L-0066). F7's trigger cannot inherit that noise.
+
+### The capacity gate passes — for the first time in this program
+
+L-0071 named capacity as a kill dimension this loop had never measured. F7 carried it **before** the
+cost gate, and it passes by an order of magnitude: **124,045 packages over 641 file-days**, with the
+leaders printing ~17/day. 14 of 56 canonical signatures clear the pre-registered floor of ≥60
+packages per 60 trading days.
+
+### The measurement that outlives F7: most apparent 2-leg "packages" are coincidence
+
+A shuffled-timestamp null permutes *which* legs sit in each second while preserving the group-size
+distribution exactly, so it isolates tenor composition. Enrichment (as-built ÷ null):
+
+| | 3-leg flies | 2-leg spreads |
+|---|---|---|
+| enriched | 5-10-30 **13.8x**, 2-5-10 8.2x, 5-7-10 11.9x, 10-15-30 24.9x, 10-20-30 24.2x | 5-30 2.44x, 2-10 2.28x, 10-30 1.71x, 2-30 1.53x, 5-10 1.23x |
+| **actively depleted (z <= -3)** | — | 7-10 **0.45x**, 5-7 0.51x, 10-20 0.46x, 5-20 0.54x, 10-15 0.46x, 2-7 0.38x, 5-15 0.39x, 15-30 0.62x |
+
+A depleted signature is not a thin structure — **it is not a structure**. The raw capacity table
+would have handed F7 four signatures that do not exist as traded packages. The test is
+one-directional: for a pair of very common tenors the null is enormous (5-10's null mean is 817.6),
+so enrichment near 1 is *low power*, not evidence of unreality.
+
+**Execution Timestamp is second precision, not sub-second** — L-0080 claimed otherwise and L-0081
+withdrew it. Contamination is bounded by the permutation instead of asserted away.
+
+### The death
+
+**Ground 1, decisive, and it survives switching the universe filter off entirely.** H-F7 clause (5)
+passes only if the conditional book clears the round trip on **at least 2 signatures at the same h**.
+Re-run over the full **18-signature superset** — the 10 registered plus all 8 excluded:
+
+| h | signatures clearing the round trip |
+|---|---|
+| 1 | **0 of 18** (best 5-10-30 +0.322 vs 3.60) |
+| 5 | **0 of 18** (best 5-10-30 +0.731 vs 3.60) |
+| 21 | **1 of 18** — 2-5 at +3.791 vs 1.80 |
+
+One signature cannot satisfy a two-signature rule.
+
+**Ground 2, the mechanism.** The shock variable is *not* broken: it fires on 11.7–14.2% of eligible
+days and coincides with a **1.548x** median absolute-move elevation (10/10 signatures, Spearman
+p <= 1.2e-3). But that elevation is **1.548x at the signal day, 1.075x at the fill day, and
+1.056 / 1.016 / 0.883 across the h=1/5/21 holding windows.** By the time the registered lag-1 rule is
+in the trade, there is nothing left to monetise.
+
+**Ground 3, the increment is inside its own null**, under both registered shock definitions:
+
+| shock definition | median increment h=1/5/21 | placebo p(null >= real) |
+|---|---|---|
+| count (primary) | −0.123 / −0.216 / −0.215 bp | 0.880 / 0.615 / 0.775 |
+| notional-weighted (registered sensitivity) | −0.064 / −0.272 / −0.225 bp | 0.695 / 0.755 / 0.765 |
+
+A randomly-dated shock beats the real one 62–88% of the time, and the null's dispersion (sd
+0.096–0.446 bp) exceeds the effect.
+
+**The executable check agrees.** The QDB notebook runs the gate's single *most favourable* cell —
+5-10 at h=21, increment +3.750 bp, the largest anywhere — and it dies: per-trade Sharpe **−0.549**,
+net **−3.108 bp** against the 1.80 bp round trip, NW t −4.06, engine ends **−$4,175,985**, DSR
+**0.0000 / 0.0002 / 0.0000** at N=55 under all three pre-stated sd(SR) sources. That cell is also
+the cleanest demonstration of why L-0082 registered the *median* as the headline: its +3.750 bp
+increment is not the shock book being good, it is the **control being unusually bad** there (no-shock
+hit rate 10%). Selecting the max-increment cell selects a bad control.
+
+**The mark is exonerated by an independent dataset.** Rebuilding every structure from the **traded
+leg rates in the Part 43 tape** gives traded-minus-grid deviation medians of +0.12 / −0.01 / −0.05 /
++0.01 / −0.07 / −0.05 / +0.06 bp, and pond ratios agreeing to two decimals at h=21. The model-mark
+mirage — hit three times in this record — did not happen here.
+
+### What survives: the pond is real, and it is the largest this program has measured
+
+The five 2-leg spreads clear the perfect-direction upper bound at h=21 by **2.05–4.88x** on the
+governing CM-2 line (5-30 4.88, 2-30 4.86, 10-30 2.66, 2-10 2.50, 5-10 2.05) and **0.96–2.08x** on
+the pre-stated sensitivity line. **Caveat that must travel with it:** each is a median over only
+19–21 non-overlapping episodes, and a sweep of all 21 block-phase offsets puts 10-30 anywhere in
+1.49–3.23x against a committed 2.66x. It never crosses 1.0x at any offset, so it changes no decision
+— but nothing may be sized against the point estimate.
+
+What is dead is the **harvest**. Neither the conditional nor the unconditional fade collects it, and
+`corr(z_t, forward move)` is **positive** (+0.110 at h=5, +0.127 at h=21) — these structures *trend*
+at these horizons. Momentum therefore wins by construction and its increment is the exact negation
+(+0.123 / +0.216 / +0.215 bp), which is 8.3–16.7x short of the round trip. **The better of two
+mirrors is not information**, and any momentum family must be registered on a sample these numbers
+were not read from.
+
+## The audit inverted the brief — and killed three of the four headline numbers
+
+F7 is a *death*, so the maker's failure mode is not wishful thinking but **killing a real family with
+a bug**. Four probes (15 agents, 296 tool calls) were briefed to hunt defects that *manufacture a
+death*; every claimed defect then went to a fresh agent briefed to refute it. All four returned
+`death_is_sound` — and then withdrew three of the four numbers the maker was about to publish:
+
+1. **"All five flies fail the pond at every horizon" is false.** 2-5-10 at h=21 is 1.08x on all
+   eligible entries, 1.23x unconditional, 1.30x on the traded mark. It dies at step (ii), not at pond.
+2. **The fill-lag monotonicity KILL criterion fires on 88–95% of pure-noise draws at this n.** See
+   below — this rewrites a registration rule.
+3. **The increment point estimates flip sign under a one-day change in the entry rule.** The placebo
+   p-values are the only honest step-(ii) headline.
+
+It also traced the "2.0–4.1x" pond in an earlier commit message to a superseded pre-fix run. The
+committed figure is 2.05–4.88x — **the stale digit understated the pond, so for once the error
+flattered the death rather than the maker.**
+
+Verified clean by *running* code, not reading it: the fade sign (9 real episodes hand-recomputed to
+under 1e-9), strict causality (0 boundary mismatches on truncated recomputation), loop bounds, the
+flow join, the cost convention against L-0061, and a **bit-identical cold re-run**. The self-test is
+not blind to the defect class that would manufacture this death: mutating `side` to `+np.sign(z)`
+makes it fail as designed.
+
+## L-0084 — a kill criterion that fires on noise is not a test
+
+H-F7 made the fill-lag profile the spine of its placebo battery, on L-0069's import: a real
+immediacy premium decays monotonically in fill lag, so non-monotonicity is a kill. At 4 lag points
+and 11–38 episodes per cell, **exact monotonicity is a low-probability event whether or not an edge
+exists** — the criterion fires on 88–95% of pure-noise draws. The import was not wrong, it was
+**unpowered**: the sibling applied it to books with hundreds of trades.
+
+> **Binding from here:** a fill-lag profile may be *reported* as a diagnostic at any n, but may only
+> be *registered as a kill criterion* alongside a stated false-positive rate computed at the family's
+> own episode count. Above roughly 20%, it is descriptive only.
+>
+> This is the companion to session 2's self-test rule. Before citing a test, ask not only **what
+> mutation it would fail to catch** (V-V-17B) but **how often it fires when nothing is wrong**.
+
+## L-0085 — the third instance, and the first on a signal that is not the mark
+
+| | signal source | finding |
+|---|---|---|
+| H13 | same Citi curves as the P&L | the entire graded net was the entry-day flow (+70.9 of +106.7 bp; entry days 17x the unconditional mean; permutation p 0.0006) |
+| Citi CM spread / sibling `pfin/ARBS` | the mark itself | ac1 −0.392 vs per-leg −0.045/−0.023; a +5.24-Sharpe book retired on AR(1) around −0.25, lag-1 removing ~80% of every Sharpe |
+| **F7** | **DTCC Part 43 tape — independent of the mark** | shock coincides with 1.548x same-day absolute move; **1.075x by the fill day**; ~1.0 over the holding window |
+
+The third case is the important one, because it removes the obvious escape — *"the effect was the
+mark's noise, so a cleaner signal would survive."* F7's signal has no exposure to the mark's noise
+and the effect still dies at the fill.
+
+> **The information in a curve-RV signal at daily frequency is concentrated in the bar the signal is
+> computed from** — demonstrated now for a vendor-mark signal, a same-mark signal, and an
+> independent-dataset signal. Price impact from curve-package flow is substantially resolved within
+> the session in which it prints.
+
+That is also the sharpest statement of what an ALIVE candidate here would need: **either an intraday
+fill** (F6 already killed that on cost arithmetic — the boat is frequency-invariant while the pond
+shrinks), **or a signal whose information is not resolved same-session.** Everything this loop has
+tested is the former.
+
+## One imported claim does not describe this data
+
+L-0072 imported from `pfin/SwapPulse` that `('*','COMP')` carries `on_p43 = False` — compression
+excluded from Part 43 — and used it to strike compression as an explanation for CM-2's mid-peak.
+Measured on ten files (47,029 USD-OIS rows): **246 NEWT+COMP rows on 5 of 10 days, all carrying a
+parsed fixed rate.** The import is wrong about this tape. The conclusion it supported survives for a
+better reason — CM-2's own `NEWT AND TRAD` filter already excluded those rows — so the honest
+statement of why the level stays unclaimable is "other mid-printed populations remain unseparated",
+not "compression is excluded by regulation". **Note the direction: this correction removes a reason
+to be confident.**
+
+## The tally
+
+Session 1: twelve defects, twelve flattered the maker. Session 2: seven, all seven flattered the
+maker. **Session 3's audit found defects that flatter the *death*** — which is what an inverted brief
+is for, and it is the first time this program has caught that direction. They were caught **before**
+the verdict row existed rather than after: the V-V-17 to V-V-17B sequence, run in the right order for
+the first time.
+
+One defect this session flattered nothing and was mine: V-F7 quoted its DSR figures at N=55 while the
+notebook that produced them hardcoded N=47 (L-0086). Every quoted digit reproduces at N=55, the
+notebook constant is fixed and re-executed, and the provenance is on record — a number quoted at a
+parameter it was not computed at is exactly the class this program keeps finding.

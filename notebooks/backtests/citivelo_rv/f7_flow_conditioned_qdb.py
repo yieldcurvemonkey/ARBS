@@ -78,7 +78,7 @@ CURVE = "USD-SOFR-1D"
 SIG, H = "5-10", 21                 # the most favourable cell in the whole gate
 SHORT_T, LONG_T = "5Y", "10Y"
 LEG_DV01 = 100_000.0                # $ per bp per leg
-TRIALS_TOTAL = 47                   # ledger N after the F7 gate consumes K = 10
+TRIALS_TOTAL = 55                   # ledger N at V-F7: 37 + 18 (K=10 registered + 8 superset)
 
 RT_BP = round_trips(SIG)["rt_cm2"]  # 1.8 bp, the registered governing line
 print(f"arm {SIG} h={H}bd   registered round trip {RT_BP:.2f} bp "
