@@ -413,15 +413,25 @@ def _per_column_report(a: pd.DataFrame, b: pd.DataFrame) -> None:
         if not diff.any():
             identical.append(col)
             continue
-        u = _ulps(x[both][diff], y[both][diff])
-        rel = np.abs((y[both][diff] - x[both][diff]) / np.where(x[both][diff] == 0, 1, x[both][diff]))
-        moved.append((col, int(diff.sum()), int(u.max()), float(rel.max())))
+        xd, yd = x[both][diff], y[both][diff]
+        scale = float(np.abs(np.concatenate([x[both], y[both]])).max())
+        # ULP distance is only meaningful for values of the same sign and far
+        # from zero: across zero it counts the whole exponent range and reads as
+        # astronomical for a difference of 3e-11. Report it only when it means
+        # something, and always report the absolute size.
+        same_side = (np.sign(xd) == np.sign(yd)) & (xd != 0) & (yd != 0)
+        max_ulp = int(_ulps(xd[same_side], yd[same_side]).max()) if same_side.any() else None
+        moved.append(
+            (col, int(diff.sum()), max_ulp, float(np.abs(yd - xd).max()), scale)
+        )
 
     print(f"\n  per-column: {len(identical)} identical, {len(moved)} moved")
     for col in identical:
         print(f"    IDENTICAL  {col}")
-    for col, n, max_ulp, max_rel in moved:
-        print(f"    MOVED      {col}: {n} values, max {max_ulp} ulp, max rel {max_rel:.3e}")
+    for col, n, max_ulp, max_abs, scale in moved:
+        ulp_txt = f"max {max_ulp} ulp" if max_ulp is not None else "straddles zero"
+        print(f"    MOVED      {col}: {n} values, {ulp_txt}, "
+              f"max |delta| {max_abs:.3e} on a column whose largest |value| is {scale:.3e}")
 
 
 def _explain_frame_diff(a: pd.DataFrame, b: pd.DataFrame) -> None:

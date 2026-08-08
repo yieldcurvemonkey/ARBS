@@ -11,6 +11,11 @@ PY="${1:?python}"
 REF="${2:?reference worktree at main}"
 PERF="${3:?this branch's worktree}"
 
+# The reference worktree is at main, so it does not have this branch's bench
+# script. Both sides must run the SAME driver - only the code under test differs.
+mkdir -p "$REF/scripts/perf"
+cp "$PERF/scripts/perf/citivelo_read_path_bench.py" "$REF/scripts/perf/"
+
 run() {
   local label="$1" dir="$2" bench="$3" n="$4"
   echo

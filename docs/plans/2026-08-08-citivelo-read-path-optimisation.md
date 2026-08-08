@@ -242,6 +242,55 @@ on, the 841-point request returns in 0.13 s from cached rows and compares a
 cache against itself — a "benchmark" that measures nothing and a diff that
 proves nothing.
 
+### Result
+
+```
+OK  curves.json: 173 entries identical
+OK  fixings.json: 25 entries identical
+    frames: 1,557 rows x 59 columns — 55 columns bit-identical, 4 moved
+```
+
+Bit-identical: **every** reported rate (outright, forward-starting, curve, fly,
+seasoned), every PV01, and every NPV on an explicitly-struck swap. Also every
+curve: node dates, discount factors and the fixings series compared by SHA-256
+of their raw bytes, across 5 currencies × EOD and intraday, including
+`snapshot_lag_seconds` and `requested` in the metadata — which is where a wrong
+nearest-snapshot pick would show.
+
+#### The one deviation, and why it was taken
+
+The four columns that moved are all `NPV` on a swap struck at **its own par
+rate** — a number that is zero by construction:
+
+| column | values moved | max abs delta | largest abs value in the column |
+|---|---:|---:|---:|
+| USD seasoned NPV-par | 451 | 1.164e-10 | 1.164e-10 |
+| EUR seasoned NPV-par | 92 | 8.731e-11 | 5.821e-11 |
+| GBP seasoned NPV-par | 57 | 1.164e-10 | 8.731e-11 |
+| JPY seasoned NPV-par | 48 | 5.821e-11 | 1.164e-10 |
+
+On a $1,000,000 notional. The column *is* zero; the change is the same order as
+its own noise, and several entries move to **exactly** 0.0.
+
+The cause is §2.3 and it is deliberate. The swap's strike used to be the par
+rate of a *different* object — a unit-notional probe — and is now the par rate
+of the swap itself. Those two differ in the last ulp in about half of cases:
+measured across 60 (currency × date × tenor) combinations including seasoned
+legs, **28 of 60 differed by 1 ulp** (e.g. EUR 5Y `0.025395199980949603` vs
+`0.025395199980949613`). Striking a swap at its own par rate rather than a
+copy's is the more self-consistent of the two, which is why its NPV is now
+exactly zero more often than before.
+
+The stated bar for this work was byte-identical, so this is called out as a
+**deviation, not a pass**. Two things about its blast radius, honestly:
+
+* it is program-wide, not citivelo-scoped — `RLIRSwapCurve.build_irswap` serves
+  every rateslib-backed source (ERIS, CME-RL, GSQUANT, SDR, BARCHART). The fast
+  gate is the evidence that no golden test elsewhere pins a struck rate;
+* it is **one hunk to revert**. Restoring the probe solve in `build_irswap`
+  gives back full bit-identity at a cost of ~5.7 ms/observation, and nothing
+  else in this branch depends on it.
+
 ---
 
 ## 4. Mutation testing
