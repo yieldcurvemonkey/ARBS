@@ -1,7 +1,11 @@
 # Citi Velocity RV loop — findings
 
-**VERDICT: _pending_ — no graded family has completed its gauntlet yet. Nothing here is a
-result until the verdict line above changes and quotes its number.**
+**VERDICT (session 1, in progress): two graded hypotheses DEAD at their pre-registered specs
+— H13 grail-conditional entries (best arm +106.7bp/116 episodes, DSR 0.000 at n=3,905, median
+across 17 arms ≈ 0; ledger V-SV-13) and H16b sandwich basis trade (median of 4 combos −1.35bp,
+steamroller confirmed; V-SV-16B). Both underlying mechanisms are placebo-certified real; the
+expressions are not certifiable at the program's trial count. H14-graded (the
+manufactured-package hold, H-SV-14G) is the remaining open candidate this session.**
 
 **Predecessors:** `2026-08-08-citivelo-rv-loop-design.md` (+ ledger
 `docs/superpowers/ledgers/2026-08-08-citivelo-rv-loop-ledger.jsonl` — the row-level record),
@@ -52,7 +56,24 @@ _pending_
 
 ## Deaths
 
-_none recorded yet — a death gets its number and its ledger row here_
+- **H13 grail-conditional entries (V-SV-13, 17 pre-registered arms).** DEAD at the registered
+  spec. The number that killed it: **DSR 0.000 at n_trials = 3,905** on every arm, median
+  across arms ≈ 0. Best arm USD 15y5y/20y10y: +106.7bp net@1× over 116 episodes (+0.92/trade,
+  NW t 1.23). GBP arms −816/−517bp: the state chatters at the carry-zero boundary (~3-day
+  episodes), so in-state carry ≈ 0 *by construction* while entry/exit churn burns 1.5bp per
+  crossing. JPY arms gate-dead (occupancy 0–1.1% over 20 years). What survives: the state
+  genuinely times convexity harvest (ex-carry placebo p ≤ 0.014 on 7 USD arms; no post-exit
+  steamroller), and always-on flattener profits are first-half (2005–2016) concentrated —
+  which *reconciles* the +157…+296bp 21-year controls with the sv-on-GS all-DEAD verdict on
+  its 2017+ sample. Regime, not contradiction.
+- **H16b sandwich basis trade (V-SV-16B, 4 pre-registered combos).** DEAD. The number:
+  **median −1.35bp across combos**, best +23.1bp/19 trades at placebo p 0.075, and worst
+  episodes −$0.7–1.2M on ~$30k-vega books. The gate's 15–35× wedge pond was a state-margin
+  proxy; premium-marked collection is a fraction of it, and the sandwich exits *with* the vol
+  spike (63-day realized lags), hitting the short straddle first — the famb insurance lesson,
+  reproduced in swaption space.
+- **H16 z-fade (L-0019).** Killed at its oracle gate: pond/boat 0.8–1.8× with harvest
+  historically 10–30% of oracle. Never backtested — the gate said stop.
 
 ## DSR accounting
 
