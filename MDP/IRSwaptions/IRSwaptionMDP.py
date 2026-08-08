@@ -107,6 +107,30 @@ def _parse_source_token(source: str) -> tuple[str, str]:
     return provider, engine
 
 
+def resolve_timestamp_mode(timestamp: Any) -> str:
+    """``'live'`` | ``'intraday'`` | ``'eod'`` for a request timestamp.
+
+    Delegates to ``CITIVELO_EXCEL.timestamps.resolve_request``, which is the
+    curve side's answer to the same question and already carries the evidence for
+    every rule. Reusing it is the point: ``pd.Timestamp`` subclasses
+    ``datetime.datetime`` subclasses ``datetime.date``, so an isinstance ladder
+    gets this wrong in *both* directions - testing ``date`` first swallows every
+    intraday request, and testing ``datetime`` first swallows
+    ``pd.Timestamp("2026-08-06")``, which is midnight and means EOD. That bug
+    shipped on the curve side.
+
+    Falls back to ``'eod'`` rather than raising: the mode only selects *where the
+    vol comes from*, and the normal parse below is the thing entitled to reject a
+    bad timestamp with a useful message.
+    """
+    try:
+        from MDP.IRSwaps.CITIVELO_EXCEL.timestamps import resolve_request
+
+        return str(resolve_request(timestamp).mode)
+    except Exception:  # noqa: BLE001
+        return "eod"
+
+
 def _to_date(value: DateLike) -> dt.date:
     if isinstance(value, dt.datetime):
         return value.date()
@@ -158,6 +182,10 @@ def _citivelo_vol_provider(
 #: ``get_sabr_vol_surfaces``, where an unexpected keyword is a TypeError.
 _citivelo_vol_provider.wants_curves = True  # type: ignore[attr-defined]
 _citivelo_vol_provider.wants_engine = True  # type: ignore[attr-defined]
+#: ...and the resolved timestamp mode, so a ``"live"`` request is not served the
+#: warmed close. ``_to_date`` turns ``"live"`` into ``date.today()``, which is
+#: indistinguishable from a request for today by the time the provider sees it.
+_citivelo_vol_provider.wants_timestamp_mode = True  # type: ignore[attr-defined]
 
 
 class IRSwaptionMDP(LayeredCacheMixin, MarketDataProvider[IRSwaptionMarketContext]):
@@ -530,6 +558,7 @@ class IRSwaptionMDP(LayeredCacheMixin, MarketDataProvider[IRSwaptionMarketContex
         ignore_cache: bool,
         request_kwargs: dict[str, Any],
         curve_ignore_cache: bool = False,
+        timestamp_mode: str = "eod",
     ) -> dict[dt.date, IRSwaptionMarketContext]:
         out: dict[dt.date, IRSwaptionMarketContext] = {}
         effective_request_kwargs = self._merge_request_kwargs(request_kwargs)
@@ -596,6 +625,8 @@ class IRSwaptionMDP(LayeredCacheMixin, MarketDataProvider[IRSwaptionMarketContex
             provider_kwargs.setdefault("curves", curve_map)
         if getattr(vol_provider, "wants_engine", False):
             provider_kwargs.setdefault("engine", engine.upper())
+        if getattr(vol_provider, "wants_timestamp_mode", False):
+            provider_kwargs.setdefault("timestamp_mode", timestamp_mode)
         try:
             vol_map = vol_provider(
                 curve_name=curve_name,
@@ -687,7 +718,19 @@ class IRSwaptionMDP(LayeredCacheMixin, MarketDataProvider[IRSwaptionMarketContex
                     metadata["vol_cube"] = vol_cube
 
             if provider.upper() == "CITIVELO":
-                from MDP.IRSwaptions.CITIVELO.provider import get_cached_citivelo_cube
+                from MDP.IRSwaptions.CITIVELO.provider import (
+                    get_cached_citivelo_cube,
+                    get_cached_citivelo_provenance,
+                )
+
+                # Where the numbers came from, and what shape they were. Exposed
+                # because "did this read the warmed store or drive Excel?" and
+                # "is this an ATM-only day?" were both invisible before, and the
+                # second one reads exactly like a cache miss.
+                prov = get_cached_citivelo_provenance(curve_name, d, engine)
+                if prov is not None:
+                    metadata["citivelo_provenance"] = prov
+                metadata["timestamp_mode"] = timestamp_mode
 
                 citi_cube = get_cached_citivelo_cube(curve_name, d, engine)
                 if citi_cube is not None:
@@ -752,6 +795,10 @@ class IRSwaptionMDP(LayeredCacheMixin, MarketDataProvider[IRSwaptionMarketContex
         return {
             "curve_name": str(curve_name),
             "date": _to_date(timestamp),
+            # Resolved from the RAW timestamp, before _to_date flattens it. A
+            # provider that must not serve a warmed close to a "live" request
+            # cannot recover the distinction afterwards.
+            "timestamp_mode": resolve_timestamp_mode(timestamp),
             "curve_ignore_cache": curve_ignore_cache,
             "provider": provider,
             "engine": engine,
@@ -774,9 +821,17 @@ class IRSwaptionMDP(LayeredCacheMixin, MarketDataProvider[IRSwaptionMarketContex
         if timestamps is None:
             raise ValueError("Bulk request must include 'timestamps'.")
         if isinstance(timestamps, (str, dt.date, dt.datetime)):
-            date_list = _normalize_dates([timestamps])
+            raw_list = [timestamps]
         else:
-            date_list = _normalize_dates(timestamps)
+            raw_list = list(timestamps)
+        date_list = _normalize_dates(raw_list)
+        # One mode for the batch. 'live' only if EVERY timestamp is live: a mixed
+        # batch that resolved to live would stop the whole range reading the store
+        # to satisfy one entry, which is the expensive direction to be wrong in.
+        modes = {resolve_timestamp_mode(t) for t in raw_list}
+        bulk_mode = modes.pop() if len(modes) == 1 else (
+            "intraday" if "intraday" in modes else "eod"
+        )
 
         surface_type = str(req.pop("surface_type", "atmf_normal")).strip().lower()
         ignore_cache = bool(req.pop("ignore_cache", False))
@@ -788,6 +843,7 @@ class IRSwaptionMDP(LayeredCacheMixin, MarketDataProvider[IRSwaptionMarketContex
         return {
             "curve_name": str(curve_name),
             "dates": date_list,
+            "timestamp_mode": bulk_mode,
             "curve_ignore_cache": curve_ignore_cache,
             "provider": provider,
             "engine": engine,
@@ -810,6 +866,7 @@ class IRSwaptionMDP(LayeredCacheMixin, MarketDataProvider[IRSwaptionMarketContex
             ignore_cache=p["ignore_cache"],
             curve_ignore_cache=p["curve_ignore_cache"],
             request_kwargs=p["kwargs"],
+            timestamp_mode=p["timestamp_mode"],
         )
         return ctxs[p["date"]]
 
@@ -824,6 +881,7 @@ class IRSwaptionMDP(LayeredCacheMixin, MarketDataProvider[IRSwaptionMarketContex
             ignore_cache=p["ignore_cache"],
             curve_ignore_cache=p["curve_ignore_cache"],
             request_kwargs=p["kwargs"],
+            timestamp_mode=p["timestamp_mode"],
         )
 
     def get_bulk_data(self, request: dict[str, Any]) -> dict[dt.date, IRSwaptionMarketContext]:

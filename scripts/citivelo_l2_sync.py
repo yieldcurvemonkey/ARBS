@@ -459,8 +459,19 @@ def push_snapshot_rows(engine, curve_base: pathlib.Path, asset: str, days: Seque
         if frame.empty:
             continue
         max_minute = frame["session_minute"].max()
+        # Only two kinds of row can be tagged with an empty event calendar:
+        # session_minute == 0 (OPEN) and the last row of the day (EOD). Narrowing
+        # to those before iterating is the difference between ~2 rows and ~1,100
+        # per day on a minute asset — 3.1M pandas row objects across the minute
+        # families, to find about 5,700 tagged rows. get_tags is still the
+        # authority on what the tags ARE; this only decides who to ask.
+        # NOTE: an event calendar would make an interior minute taggable too, so
+        # this narrowing is only valid while the calendar is empty.
+        candidates = frame[
+            (frame["session_minute"] == 0) | (frame["session_minute"] == max_minute)
+        ]
         rows = []
-        for _, row in frame.iterrows():
+        for _, row in candidates.iterrows():
             tags = get_tags(
                 session_minute=int(row["session_minute"]),
                 trading_date=day,
@@ -639,8 +650,23 @@ def cmd_push(args) -> int:
                 (fam, asset, sync, plan_asset(sync, fam, asset, start=start, end=end, rewrite=args.rewrite))
             )
         if args.limit:
-            for _, _, _, p in plans:
+            # Recompute the byte total from the truncated list. Truncating without
+            # it makes the confirmation banner quote the WHOLE asset's size for a
+            # five-day smoke test, which is the one number the operator is meant
+            # to read before typing --yes.
+            for _, asset, sync, p in plans:
                 p.to_push = p.to_push[: args.limit]
+                p.push_bytes = 0
+                for day in p.to_push:
+                    sha = sync.local_sha(asset, day)
+                    if sha is None:
+                        continue
+                    try:
+                        p.push_bytes += (
+                            sync.partition_dir(asset, day).joinpath(f"{sha}.parquet").stat().st_size
+                        )
+                    except OSError:
+                        pass
 
         total_days = sum(len(p.to_push) for *_, p in plans)
         total_bytes = sum(p.push_bytes for *_, p in plans)

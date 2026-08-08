@@ -58,6 +58,7 @@ from MDP.CitiVelocityExcel.errors import CitiVelocityError
 __all__ = [
     "clear_citivelo_cube_cache",
     "get_cached_citivelo_cube",
+    "get_cached_citivelo_provenance",
     "get_citivelo_vol_objects",
 ]
 
@@ -67,6 +68,12 @@ _logger = logging.getLogger(__name__)
 #: ``MONKEYCUBE._CUBE_CACHE`` so ``IRSwaptionMDP`` can attach the built object to
 #: the context's metadata the same way.
 _CUBE_CACHE: Dict[Tuple[str, str, str], Any] = {}
+
+#: Same key, but **where the numbers came from** and what shape they were. Kept
+#: alongside rather than inside the cube because it is a fact about the fetch, not
+#: about the surface, and because "which of the five sources answered" is exactly
+#: what was impossible to see when every request silently reached Excel.
+_CUBE_PROVENANCE: Dict[Tuple[str, str, str], Dict[str, Any]] = {}
 
 #: Vol currency per ``IRSwapsMDP`` curve name. Only USD is served by the Citi
 #: Velocity curve sources today; anything else must pass ``currency=``.
@@ -150,6 +157,7 @@ def _cube_for_date(
     offsets_bp: Optional[Sequence[float]],
     strict: bool,
     client: Any,
+    stored: Optional[Dict[dt.date, Any]] = None,
 ) -> Any:
     """One :class:`SwaptionCubeData`, from whichever source was configured."""
     if cubes:
@@ -172,11 +180,29 @@ def _cube_for_date(
             expiries=expiries, tenors=tenors, offsets_bp=offsets_bp, strict=strict
         )
 
+    # The WARMED STORE, ahead of Excel and behind everything the caller passed in
+    # explicitly. This is the branch that did not exist: without it every dated
+    # request below reaches CitiVelocityExcelClient.connect(), once per date, for
+    # data already on disk - and gets whatever Excel happens to serve, which on
+    # one measured run was an ATM-only cube for a date whose stored partition has
+    # the full thirteen-offset smile.
+    if stored:
+        hit = stored.get(when)
+        if hit is not None:
+            return hit.data
+
     from MDP.CitiVelocityExcel.vol.cube_data import fetch_cube
 
     if client is None:
         from MDP.CitiVelocityExcel.com_client import CitiVelocityExcelClient
 
+        _logger.warning(
+            "Citi vol for %s is not in the swaption cube store and no client was "
+            "supplied, so this will connect to Excel over COM. Warm it with "
+            "scripts/citivelo_swaption_vol_warm.py build, or pass use_cube_store=False "
+            "if driving Excel is what you meant.",
+            when,
+        )
         client = CitiVelocityExcelClient.connect()
     return fetch_cube(
         client=client,
@@ -208,6 +234,9 @@ def get_citivelo_vol_objects(
     notional: float = 1e8,
     client: Any = None,
     sabr: bool = False,
+    use_cube_store: bool = True,
+    cube_store: Any = None,
+    timestamp_mode: str = "eod",
     **kwargs: Any,
 ) -> Dict[dt.date, Any]:
     """Build one Citi vol object per date, for ``IRSwaptionMDP.VOL_PROVIDERS``.
@@ -235,6 +264,27 @@ def get_citivelo_vol_objects(
     engine_token = str(engine or "QL").strip().upper()
     wanted = _normalise_dates(dates)
     out: Dict[dt.date, Any] = {}
+
+    # Read the store ONCE for the whole range, before the per-date loop. The
+    # alternative - checking inside _cube_for_date - would still work but would
+    # re-resolve the store and the asset name per date.
+    #
+    # 'live' deliberately does not read the store. IRSwaptionMDP._to_date turns
+    # "live" into date.today(), so without this a live request on a day that had
+    # already been warmed would be served this morning's close and look right.
+    # timestamp_mode is resolved upstream by CITIVELO_EXCEL.timestamps.resolve_request
+    # rather than by an isinstance ladder here; see IRSwaptionMDP for why.
+    stored: Dict[dt.date, Any] = {}
+    mode = str(timestamp_mode or "eod").strip().lower()
+    if use_cube_store and mode != "live":
+        from MDP.IRSwaptions.CITIVELO.cube_store import load_stored_cubes
+
+        stored = load_stored_cubes(ccy, wanted, store=cube_store)
+        if stored:
+            _logger.debug(
+                "citivelo vol: %d/%d date(s) served from the swaption cube store",
+                len(stored), len(wanted),
+            )
 
     for when in wanted:
         curve = None
@@ -274,8 +324,21 @@ def get_citivelo_vol_objects(
             offsets_bp=offsets_bp,
             strict=strict,
             client=client,
+            stored=stored,
         )
         backend = "rl-native" if engine_token == "RL" else ("ql-sabr" if sabr else "ql")
+
+        # A QuantLib CUBE needs at least one non-zero offset. Say why when the day
+        # has none, before build_ql_swaption_cube's generic message sends the
+        # caller off to refetch from Excel for quotes that were never published.
+        hit = stored.get(when)
+        if hit is not None and not hit.has_smile and backend in ("ql", "ql-sabr"):
+            from MDP.IRSwaptions.CITIVELO.cube_store import explain_missing_smile
+
+            raise CitiVelocityError(
+                explain_missing_smile(hit, backend=f"the {backend!r} backend")
+            )
+
         built = build_citivelo_swaption_cube(
             cube=data,
             rl_curve=rl_curve,
@@ -285,6 +348,16 @@ def get_citivelo_vol_objects(
             notional=float(notional),
         )
         _CUBE_CACHE[(str(curve_name), when.isoformat(), engine_token)] = built
+        _CUBE_PROVENANCE[(str(curve_name), when.isoformat(), engine_token)] = (
+            hit.provenance()
+            if hit is not None
+            else {
+                "origin": "snapshot" if snapshot else ("caller" if (cube or cubes) else "excel"),
+                "as_of": when.isoformat(),
+                "smile": "full" if [o for o in data.skew_offsets() if o != 0.0] else "atm_only",
+                "n_offsets": len(data.offsets()),
+            }
+        )
         out[when] = built if engine_token == "RL" else built.ql_handle
 
     return out
@@ -305,6 +378,20 @@ def get_cached_citivelo_cube(
     return _CUBE_CACHE.get((str(curve_name), d.isoformat(), str(engine).upper()))
 
 
+def get_cached_citivelo_provenance(
+    curve_name: str, d: dt.date, engine: str = "QL"
+) -> Optional[Dict[str, Any]]:
+    """Where the cube for one date came from, and what shape it was.
+
+    ``{'origin': 'swaption_cube_store'|'excel'|'snapshot'|'caller', 'smile':
+    'full'|'atm_only', 'n_offsets': int, ...}``. ``IRSwaptionMDP`` attaches this
+    to the context metadata, so a caller can tell a warmed read from a COM fetch
+    and a full smile from an ATM-only day without inferring either.
+    """
+    return _CUBE_PROVENANCE.get((str(curve_name), d.isoformat(), str(engine).upper()))
+
+
 def clear_citivelo_cube_cache() -> None:
     """Drop every cached cube. Tests use this; nothing else should need it."""
     _CUBE_CACHE.clear()
+    _CUBE_PROVENANCE.clear()
