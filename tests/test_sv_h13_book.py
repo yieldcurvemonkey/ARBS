@@ -64,10 +64,10 @@ def test_boundary_roll_charged_only_when_held():
     s_on = pd.Series(1.0, index=unit.index)
     r_on = h13._book(unit, s_on, b, initiate_bp=1.0, hedge_bp=0.3, roll_bp=0.3,
                      mult=1.0, roll_kind="roll")
-    # always-on: 1 open (day0), no close inside window (episode never exits →
-    # exit fee unattributed by design at sample end), 1 roll at 0.3bp = $30k
-    # gross 10 days x 1.0 = 10; net = 10 - 100_000 - 30_000
-    assert r_on["stats"]["net_bp_total"] == pytest.approx((10.0 - 130_000.0) / PKG)
+    # always-on: 1 open (day0), SYNTHETIC terminal exit at sample end (an
+    # unexited final episode must not get a free leg), 1 roll at 0.3bp = $30k
+    # gross 10 days x 1.0 = 10; net = 10 - 100_000 - 100_000 - 30_000
+    assert r_on["stats"]["net_bp_total"] == pytest.approx((10.0 - 230_000.0) / PKG)
     s_off = pd.Series([1, 1, 1, 1, 0, 0, 0, 0, 0, 0], index=unit.index, dtype=float)
     r_off = h13._book(unit, s_off, b, initiate_bp=1.0, hedge_bp=0.3, roll_bp=0.3,
                       mult=1.0, roll_kind="roll")

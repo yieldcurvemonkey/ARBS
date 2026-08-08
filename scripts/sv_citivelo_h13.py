@@ -170,6 +170,10 @@ def _book(unit: pd.DataFrame, state: pd.Series, boundaries: set, *,
         if xi + 1 < len(net.index):
             nd = net.index[xi + 1]
             seg_net -= float(total_cost.loc[nd]) * float(closes.loc[nd])
+        else:
+            # episode runs to sample end: charge a SYNTHETIC terminal exit so
+            # an unexited final episode cannot flatter the book by a free leg
+            seg_net -= initiate_bp * mult * PKG_DV01
         d = seg_dv01 if np.isfinite(seg_dv01) and seg_dv01 else np.nan
         trades.append({"entry": str(e.date()), "exit": str(x.date()),
                        "n_days": int(on.loc[e:x].sum()),
