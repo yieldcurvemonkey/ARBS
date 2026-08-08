@@ -600,3 +600,377 @@ GBP post-hoc is the manoeuvre L-0057's own caveat prohibits. Claim C's phase 0 i
 Seven defects found in session 2 — the probe's error-payload hit, H13's fill day, H14's missing
 re-initiations, H16b's vintage mix, H17's phase artifact, H17's blind self-test, and L-0051's
 nominal-cost arithmetic. **All seven flattered the maker.** Session 1's tally was twelve of twelve.
+
+---
+
+# Session 3 (2026-08-09) — the first family to clear a capacity gate, and the first audit that killed a death's grounds
+
+**Verdict: F7 is DEAD AT GATE. Thirteen families dead, nothing ALIVE. `trials_total` 55.**
+
+Queue items 1 and 2 were both re-checked and both are still blocked, with evidence rather than
+assumption: the famb STRG forward window does not open until **2026-09-02** (L-0047, not previewed),
+and **no `DATABENTO_API_KEY` exists** in the process environment, `ARBS/.env`, `~/.databento` (the
+directory does not exist), or any `.env` in either tree — `databento 0.83.0` is installed but
+keyless and the filesystem still holds exactly one `.dbn` file. So session 3 is queue item 3: a new
+family at loop N, on the one genuinely unexplored conditioning axis.
+
+## F7 — fade only what forced flow made cheap
+
+Every one of the twelve dead families is a **fade**, and not one conditioned on **why** the
+dislocation exists. Huggins–Schaller ch1 says fade **transient** richness — forced flow, demand for
+immediacy — and do not fade structural hedging demand. F7 tested that: condition a USD curve-structure
+fade on a flow shock measured from the **DTCC Part 43 tape**, a dataset this loop had only ever used
+to measure costs (CM-1, CM-2), never as a signal.
+
+**The structural advantage that made it worth running:** the state is measured on a *different
+dataset from the mark*. H13 died because its state was a function of the same Citi curves that
+generated its P&L (L-0051, L-0066). F7's trigger cannot inherit that noise.
+
+### The capacity gate passes — for the first time in this program
+
+L-0071 named capacity as a kill dimension this loop had never measured. F7 carried it **before** the
+cost gate, and it passes by an order of magnitude: **124,045 packages over 641 file-days**, with the
+leaders printing ~17/day. 14 of 56 canonical signatures clear the pre-registered floor of ≥60
+packages per 60 trading days.
+
+### The measurement that outlives F7: most apparent 2-leg "packages" are coincidence
+
+A shuffled-timestamp null permutes *which* legs sit in each second while preserving the group-size
+distribution exactly, so it isolates tenor composition. Enrichment (as-built ÷ null):
+
+| | 3-leg flies | 2-leg spreads |
+|---|---|---|
+| enriched | 5-10-30 **13.8x**, 2-5-10 8.2x, 5-7-10 11.9x, 10-15-30 24.9x, 10-20-30 24.2x | 5-30 2.44x, 2-10 2.28x, 10-30 1.71x, 2-30 1.53x, 5-10 1.23x |
+| **actively depleted (z <= -3)** | — | 7-10 **0.45x**, 5-7 0.51x, 10-20 0.46x, 5-20 0.54x, 10-15 0.46x, 2-7 0.38x, 5-15 0.39x, 15-30 0.62x |
+
+A depleted signature is not a thin structure — **it is not a structure**. The raw capacity table
+would have handed F7 four signatures that do not exist as traded packages. The test is
+one-directional: for a pair of very common tenors the null is enormous (5-10's null mean is 817.6),
+so enrichment near 1 is *low power*, not evidence of unreality.
+
+**Execution Timestamp is second precision, not sub-second** — L-0080 claimed otherwise and L-0081
+withdrew it. Contamination is bounded by the permutation instead of asserted away.
+
+### The death
+
+**Ground 1, decisive, and it survives switching the universe filter off entirely.** H-F7 clause (5)
+passes only if the conditional book clears the round trip on **at least 2 signatures at the same h**.
+Re-run over the full **18-signature superset** — the 10 registered plus all 8 excluded:
+
+| h | signatures clearing the round trip |
+|---|---|
+| 1 | **0 of 18** (best 5-10-30 +0.322 vs 3.60) |
+| 5 | **0 of 18** (best 5-10-30 +0.731 vs 3.60) |
+| 21 | **1 of 18** — 2-5 at +3.791 vs 1.80 |
+
+One signature cannot satisfy a two-signature rule.
+
+**Ground 2, the mechanism.** The shock variable is *not* broken: it fires on 11.7–14.2% of eligible
+days and coincides with a **1.548x** median absolute-move elevation (10/10 signatures, Spearman
+p <= 1.2e-3). But that elevation is **1.548x at the signal day, 1.075x at the fill day, and
+1.056 / 1.016 / 0.883 across the h=1/5/21 holding windows.** By the time the registered lag-1 rule is
+in the trade, there is nothing left to monetise.
+
+**Ground 3, the increment is inside its own null**, under both registered shock definitions:
+
+| shock definition | median increment h=1/5/21 | placebo p(null >= real) |
+|---|---|---|
+| count (primary) | −0.123 / −0.216 / −0.215 bp | 0.880 / 0.615 / 0.775 |
+| notional-weighted (registered sensitivity) | −0.064 / −0.272 / −0.225 bp | 0.695 / 0.755 / 0.765 |
+
+A randomly-dated shock beats the real one 62–88% of the time, and the null's dispersion (sd
+0.096–0.446 bp) exceeds the effect.
+
+**The executable check agrees.** The QDB notebook runs the gate's single *most favourable* cell —
+5-10 at h=21, increment +3.750 bp, the largest anywhere — and it dies: per-trade Sharpe **−0.549**,
+net **−3.108 bp** against the 1.80 bp round trip, NW t −4.06, engine ends **−$4,175,985**, DSR
+**0.0000 / 0.0002 / 0.0000** at N=55 under all three pre-stated sd(SR) sources. That cell is also
+the cleanest demonstration of why L-0082 registered the *median* as the headline: its +3.750 bp
+increment is not the shock book being good, it is the **control being unusually bad** there (no-shock
+hit rate 10%). Selecting the max-increment cell selects a bad control.
+
+**The mark is exonerated by an independent dataset.** Rebuilding every structure from the **traded
+leg rates in the Part 43 tape** gives traded-minus-grid deviation medians of +0.12 / −0.01 / −0.05 /
++0.01 / −0.07 / −0.05 / +0.06 bp, and pond ratios agreeing to two decimals at h=21. The model-mark
+mirage — hit three times in this record — did not happen here.
+
+### What survives: the pond is real, and it is the largest this program has measured
+
+The five 2-leg spreads clear the perfect-direction upper bound at h=21 by **2.05–4.88x** on the
+governing CM-2 line (5-30 4.88, 2-30 4.86, 10-30 2.66, 2-10 2.50, 5-10 2.05) and **0.96–2.08x** on
+the pre-stated sensitivity line. **Caveat that must travel with it:** each is a median over only
+19–21 non-overlapping episodes, and a sweep of all 21 block-phase offsets puts 10-30 anywhere in
+1.49–3.23x against a committed 2.66x. It never crosses 1.0x at any offset, so it changes no decision
+— but nothing may be sized against the point estimate.
+
+What is dead is the **harvest**. Neither the conditional nor the unconditional fade collects it, and
+`corr(z_t, forward move)` is **positive** (+0.110 at h=5, +0.127 at h=21) — these structures *trend*
+at these horizons. Momentum therefore wins by construction and its increment is the exact negation
+(+0.123 / +0.216 / +0.215 bp), which is 8.3–16.7x short of the round trip. **The better of two
+mirrors is not information**, and any momentum family must be registered on a sample these numbers
+were not read from.
+
+## The audit inverted the brief — and killed three of the four headline numbers
+
+F7 is a *death*, so the maker's failure mode is not wishful thinking but **killing a real family with
+a bug**. Four probes (15 agents, 296 tool calls) were briefed to hunt defects that *manufacture a
+death*; every claimed defect then went to a fresh agent briefed to refute it. All four returned
+`death_is_sound` — and then withdrew three of the four numbers the maker was about to publish:
+
+1. **"All five flies fail the pond at every horizon" is false.** 2-5-10 at h=21 is 1.08x on all
+   eligible entries, 1.23x unconditional, 1.30x on the traded mark. It dies at step (ii), not at pond.
+2. **The fill-lag monotonicity KILL criterion fires on 88–95% of pure-noise draws at this n.** See
+   below — this rewrites a registration rule.
+3. **The increment point estimates flip sign under a one-day change in the entry rule.** The placebo
+   p-values are the only honest step-(ii) headline.
+
+It also traced the "2.0–4.1x" pond in an earlier commit message to a superseded pre-fix run. The
+committed figure is 2.05–4.88x — **the stale digit understated the pond, so for once the error
+flattered the death rather than the maker.**
+
+Verified clean by *running* code, not reading it: the fade sign (9 real episodes hand-recomputed to
+under 1e-9), strict causality (0 boundary mismatches on truncated recomputation), loop bounds, the
+flow join, the cost convention against L-0061, and a **bit-identical cold re-run**. The self-test is
+not blind to the defect class that would manufacture this death: mutating `side` to `+np.sign(z)`
+makes it fail as designed.
+
+## L-0084 — a kill criterion that fires on noise is not a test
+
+H-F7 made the fill-lag profile the spine of its placebo battery, on L-0069's import: a real
+immediacy premium decays monotonically in fill lag, so non-monotonicity is a kill. At 4 lag points
+and 11–38 episodes per cell, **exact monotonicity is a low-probability event whether or not an edge
+exists** — the criterion fires on 88–95% of pure-noise draws. The import was not wrong, it was
+**unpowered**: the sibling applied it to books with hundreds of trades.
+
+> **Binding from here:** a fill-lag profile may be *reported* as a diagnostic at any n, but may only
+> be *registered as a kill criterion* alongside a stated false-positive rate computed at the family's
+> own episode count. Above roughly 20%, it is descriptive only.
+>
+> This is the companion to session 2's self-test rule. Before citing a test, ask not only **what
+> mutation it would fail to catch** (V-V-17B) but **how often it fires when nothing is wrong**.
+
+## L-0085 — the third instance, and the first on a signal that is not the mark
+
+| | signal source | finding |
+|---|---|---|
+| H13 | same Citi curves as the P&L | the entire graded net was the entry-day flow (+70.9 of +106.7 bp; entry days 17x the unconditional mean; permutation p 0.0006) |
+| Citi CM spread / sibling `pfin/ARBS` | the mark itself | ac1 −0.392 vs per-leg −0.045/−0.023; a +5.24-Sharpe book retired on AR(1) around −0.25, lag-1 removing ~80% of every Sharpe |
+| **F7** | **DTCC Part 43 tape — independent of the mark** | shock coincides with 1.548x same-day absolute move; **1.075x by the fill day**; ~1.0 over the holding window |
+
+The third case is the important one, because it removes the obvious escape — *"the effect was the
+mark's noise, so a cleaner signal would survive."* F7's signal has no exposure to the mark's noise
+and the effect still dies at the fill.
+
+> **The information in a curve-RV signal at daily frequency is concentrated in the bar the signal is
+> computed from** — demonstrated now for a vendor-mark signal, a same-mark signal, and an
+> independent-dataset signal. Price impact from curve-package flow is substantially resolved within
+> the session in which it prints.
+
+That is also the sharpest statement of what an ALIVE candidate here would need: **either an intraday
+fill** (F6 already killed that on cost arithmetic — the boat is frequency-invariant while the pond
+shrinks), **or a signal whose information is not resolved same-session.** Everything this loop has
+tested is the former.
+
+## One imported claim does not describe this data
+
+L-0072 imported from `pfin/SwapPulse` that `('*','COMP')` carries `on_p43 = False` — compression
+excluded from Part 43 — and used it to strike compression as an explanation for CM-2's mid-peak.
+Measured on ten files (47,029 USD-OIS rows): **246 NEWT+COMP rows on 5 of 10 days, all carrying a
+parsed fixed rate.** The import is wrong about this tape. The conclusion it supported survives for a
+better reason — CM-2's own `NEWT AND TRAD` filter already excluded those rows — so the honest
+statement of why the level stays unclaimable is "other mid-printed populations remain unseparated",
+not "compression is excluded by regulation". **Note the direction: this correction removes a reason
+to be confident.**
+
+## F8 — and the axis closes
+
+The handover named **exactly one** genuinely unexplored conditioning axis: every dead family here is
+a fade, and not one conditioned on **why** the dislocation exists. F7 tested one shape of it. Session
+3 tested the other two, and the axis is now closed.
+
+**The composition shape was never registered, because its precondition was measured first and
+fails.** New-risk vs unwind *is* derivable from the SDR `(action, event)` matrix even though side is
+not (L-0073), so it was the obvious candidate. But over 120 files: USD OIS new risk runs a median
+**3,553 rows/day against 106 unwinds** — the tape is ~97% new risk every day — and the unwind share
+has autocorrelation **+0.105 / +0.098 / +0.118 / +0.012** at roughly 5/25/50/105 trading days. **There
+is no unwind-dominance regime in this tape to condition on.** L-0085 requires a persistent state;
+this one does not exist. Registering a hypothesis whose state variable had already been measured to
+be untestable would have been exactly the "manufacture a family to have something to run" the mandate
+forbids (L-0087).
+
+**F8 tested the shape L-0085 explicitly leaves alive**: a *persistent* regime rather than an event —
+trailing-21d flow intensity, ranked against a trailing 252d window, top tercile, **held ≥10
+consecutive days at entry**. Everything except the state was inherited verbatim from H-F7, so F8
+tests the state and nothing else. Its bar was registered **direction-free** — `|median increment|` >
+1× the round trip — because F7 had already shown me on this sample that the fade is the losing
+mirror, and a direction registered afterwards would launder a post-hoc choice.
+
+**DEAD on all three registered prongs:**
+
+| prong | h=5 | h=21 |
+|---|---|---|
+| `\|median increment\|` / round trip (bar: > 1) | −0.042 bp → **0.023** | −0.444 bp → **0.247** |
+| signatures with ≥10 non-overlapping episodes | 6 / 10 | **0 / 10** |
+| wrong-day placebo p(\|null\| ≥ \|real\|), bar < 0.10 | **0.895** | 0.445 |
+
+The regime book's own net at 1× is a median −3.58 / −4.25 bp, and **all 20 signature-horizon cells
+are negative** (−2.93 to −9.71 bp).
+
+**The h=21 arm is uninformative and is labelled as such.** With 2–7 episodes per signature, neither
+its −0.444 bp headline nor its eye-catching per-signature swings (+2.691 for 2-30, −4.691 for 2-10
+and 5-10) are quotable in either direction. The informative arm is h=5, where the increment sits
+**0.13 null standard deviations from zero**. The thinness is structural: a 21-day mean ranked against
+a 252-day window consumes 273 of 643 file-days before the persistence requirement thins it further.
+
+> **A persistent state and a 643-day tape are close to incompatible.** Carry that to any future
+> session that wants to condition on a regime using this data.
+
+### L-0088 — what the closed axis licenses, and what it does not
+
+> On USD spot curve packages, at EOD frequency, marked on quoted par rates and costed at the measured
+> CM-2 line: **knowing what traded does not help you fade what moved.**
+
+The reason is L-0085 and it is **mechanical, not statistical** — the price impact of curve-package
+flow is substantially resolved inside the session in which it prints, so any state built from the
+public tape is informative on day t and spent by day t+1.
+
+**What this does not say**, named so it cannot be over-read: it does *not* test an intraday fill (F6
+killed that separately, on cost arithmetic — the boat is frequency-invariant while the pond shrinks);
+it does *not* test a private flow feed carrying side; and it does *not* test a state built from
+something other than flow.
+
+**What remains, stated honestly as thin.** L-0085 leaves two shapes — an intraday fill, and a signal
+whose information is not resolved same-session — and this loop has now closed the *flow* route to the
+second. A **non-flow** persistent state (dealer positioning, issuance and supply calendars,
+index-extension demand, mortgage convexity triggers) is the remaining candidate class, and **none of
+it lives in the Citi or DTCC data this mandate covers.** So the honest next move is either **new
+data** or the machine work named at L-0068 — the CM-2 impact-exponent calibration, which the F7
+package extract already supports — and **not another family on this data.**
+
+**Fourteen families dead. Nothing ALIVE. `trials_total` 65.**
+
+## CM-3 — an attempt on CM-2's unclaimable level, and why it failed
+
+CM-2 is decisive on the **shape** of the linear cost line but not on its **level**, because
+`|print − EOD mid|` contains the execution spread *plus* intraday drift to the 15:00 ET stamp. Roll
+(1984) estimates an effective spread from the **transaction series alone** — consecutive price
+changes carry a serial covariance of −s²/4 under bid-ask bounce — so it needs no mid, no curve and no
+drift model. The design rested on the *direction of its bias*: drift pushes the implied spread
+**down**, so Roll should be a **lower** bound, and the two together would **bracket** a level neither
+can pin alone.
+
+**The estimator is correctly implemented.** Planted spreads of 0.2 / 0.5 / 1.0 bp recover at 0.192 /
+0.505 / 0.956 (within 4.4%); on 200 spreadless random walks it returns a median 0.0063 bp (p95
+0.0169, no estimate at all on 41.5% of runs); it is unmoved by pure drift (ratio 1.015 at μ=0.02) and
+by momentum in the efficient rate (0.501 against a planted 0.5).
+
+**The answer is nevertheless impossible.** Over 4,293 (tenor, day) cells across 641 days the implied
+half-spread is **1.6–13.3 bp** by tenor — **3 to 30× a measured upper bound of 0.32–0.53 bp**. Two
+estimates of one quantity cannot sit on opposite sides of a bound by an order of magnitude. Note
+which way it fails: the number is far too **big**, so nothing in this program's cost line was ever
+flattered by it.
+
+**The diagnostic is the actual result.** Roll assumes consecutive prints are the same instrument at
+the same efficient price. A "10Y" cell in this tape pools every maturity inside a 15-day bucket,
+every effective date inside the 5-day spot window, package legs struck away from mid, and prints
+spread over an 8-hour session. Removing that heterogeneity collapses the estimate **monotonically**:
+
+| restriction | Roll half-spread | vs CM-2 upper bound |
+|---|---|---|
+| tenor bucket, whole day (as first run) | 10.616 bp | 23.6× |
+| one **exact maturity date** | 3.762 bp | 8.4× |
+| + one exact **effective date** | 3.189 bp | 7.1× |
+| + a single **one-hour window** | **0.830 bp** | **1.8×** |
+
+A **12.8× collapse from pooling alone.** So Roll on an SDR tape measures **instrument dispersion and
+intraday rate movement, not the bid-ask** — roughly 92% of the naive estimate is contamination.
+
+**What it costs and what it buys.** It costs the bracket: Roll cannot lower-bound the linear cost
+line here, because its contamination is positive and large rather than negative as the design
+assumed. **CM-2's level remains unclaimable and L-0060 stands unchanged.** It buys two things — a
+number for anyone later building a trade-only cost estimator (at the tightest homogeneity available,
+one instrument in one hour on ~30 prints, the estimate is 0.830 bp and *still falling*, so the route
+is tighter windows and more prints, and the sample thins fast), and a method warning:
+
+> **A validated estimator can still be inapplicable.** Validation on simulated data tests the
+> arithmetic, never whether the *real* data satisfies the assumptions the simulation was built to
+> embody. My simulation planted bounce around a single efficient price; the tape supplies many
+> instruments around many prices, and no amount of planted-value testing would have revealed that.
+>
+> The companion to L-0084's question ("how often does this test fire when nothing is wrong?") is:
+> **what does my simulation assume about the data that the data does not satisfy?**
+
+L-0068's named next step — the impact exponent η by metaorder reconstruction with a Naviglio
+concavity correction — is unaffected and still open. CM-3 was a cheaper attempt at the same target
+and it did not land.
+
+## CM-4 — the impact exponent is measurable, and it is nearly flat
+
+CM-3 failed but handed this study its on-ramp: the only cells in this tape homogeneous enough to
+compare prints within are **one exact instrument (maturity *and* effective date) inside a single
+hour**. Design registered at L-0091 before any number existed, with three things pre-stated because
+each is a way the study could flatter itself — censoring (3.33% of notionals are capped, exactly
+where a power law is identified), reverse causality (large prints cluster in volatile hours), and
+that a failure to measure is a valid close.
+
+**211,027 consecutive print pairs in 7,230 homogeneous cells.** Within-cell slope of log|move| on
+log(size), cell means removed.
+
+| tenor | η (primary, uncapped) | η (cap-at-floor sensitivity) | z vs shuffle null | size p5–p95 |
+|---|---|---|---|---|
+| 2Y | 0.0885 | 0.1003 | 5.2 | $8mm – $357mm |
+| 5Y | 0.0313 | 0.0406 | 5.4 | $4mm – $200mm |
+| 10Y | 0.0833 | 0.0957 | 17.2 | $3mm – $120mm |
+| 30Y | 0.0908 | 0.0989 | 9.6 | $2mm – $53mm |
+| **pooled** | **0.0677** | 0.0785 | **20.0** | $3mm – $150mm |
+
+The sensitivity arm is higher exactly as predicted — recording a capped print at its floor understates
+its size and biases the exponent up — so the two arms **bracket η in roughly [0.03, 0.10]**.
+
+**Size matters, and the control says so.** The pre-registered shuffle null permutes sizes *within*
+each cell, holding ambient hourly volatility and cell composition fixed. It centres on zero
+everywhere (null means −0.0009 … +0.0005) and the measured exponent sits **5.2 to 25.0 standard
+deviations outside it**. The reverse-causality confound is handled by construction, because the fit
+is within-cell.
+
+**But 0.07 is not 0.5, and the honest reading is that it is a lower bound.** The square-root law would
+put η ≈ 0.5. Two readings this study cannot separate: (a) cleared USD OIS genuinely has a much flatter
+impact curve than equities, plausible for an RFQ/block market where dealers quote size-insensitive
+spreads for standard clips; or (b) **the estimate is diluted** — the dependent variable is the move
+between two consecutive prints, which contains the second print's impact *plus* all ambient rate
+movement over the intervening minutes, and when ambient dominates, log|move| becomes nearly
+independent of size and the slope is pulled toward zero. Dilution can only push η **down**, so
+0.03–0.10 is a **lower bound** and the square-root law is not refuted — it is unreachable with this
+identification, which needs a clean pre-print reference price the tape does not supply.
+
+### What it buys, and it is the useful part
+
+**Every backtest in this program charges a size-independent half-spread, and that assumption had
+never been checked.** CM-4 checks it over the size range these strategies would actually trade:
+
+> At η ≤ 0.10, a **fifty-fold** change in clip size moves impact by at most 50^0.10 ≈ **1.48×**, and
+> at the pooled 0.068 by **1.31×**. The flat cost line this program uses is a defensible
+> approximation across the observable range.
+
+That is a validation of an assumption sitting underneath fourteen verdicts, obtained from the tape
+rather than assumed. It does **not** license extrapolation above ~$350mm (2Y) or ~$50mm (30Y), where
+the data stops and the cap censors.
+
+This is an exponent, not a level, so it neither rescues nor damages CM-2's unclaimable level — L-0060
+stands and L-0089 is unchanged. L-0068 asked for η by **metaorder** reconstruction with a Naviglio
+concavity correction; what is delivered is the simpler per-print version on homogeneous cells, and
+the metaorder form — which needs prints grouped into parent orders, and therefore a counterparty or
+package identifier the public tape withholds — **remains open**.
+
+## The tally
+
+Session 1: twelve defects, twelve flattered the maker. Session 2: seven, all seven flattered the
+maker. **Session 3's audit found defects that flatter the *death*** — which is what an inverted brief
+is for, and it is the first time this program has caught that direction. They were caught **before**
+the verdict row existed rather than after: the V-V-17 to V-V-17B sequence, run in the right order for
+the first time.
+
+One defect this session flattered nothing and was mine: V-F7 quoted its DSR figures at N=55 while the
+notebook that produced them hardcoded N=47 (L-0086). Every quoted digit reproduces at N=55, the
+notebook constant is fixed and re-executed, and the provenance is on record — a number quoted at a
+parameter it was not computed at is exactly the class this program keeps finding.
