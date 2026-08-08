@@ -320,6 +320,74 @@ What the preflight gives up is stated in the script: it catches a bad
 
 ---
 
+## 7. What an adversarial review found after the tests were green
+
+Four reviewers over the branch diff, one dimension each, with an independent
+skeptic per finding prompted to REFUTE and defaulting to refuted. **34 raised,
+14 survived.** The suite was green throughout, and the mutation testing had
+already run — so this is a measurement of what mutation testing does not reach.
+
+Three were data loss in the new blob tier, all in the *pull* direction that the
+backfill never exercised:
+
+- **`prefetch_range` destroyed multi-file local partitions.** `local_sha`
+  declines to answer for one, prefetch read that `None` as "absent", and `_land`
+  — called with a hardcoded `overwrite=True` — unlinked every file that was not
+  the one it had just written. `push_day` refuses such a partition, so those rows
+  were never in L2 and the loss was unrecoverable. Reproduced with the branch's
+  own harness. There are **1,231 multi-file days** under
+  `asset=USD-OIS-Q12xM12STIRT-SERFFX-MIX23` on this machine.
+- **`pull_day` could not repair a corrupt local file.** The "byte-identical;
+  nothing to do" branch compared *filenames*. The filename is a content claim and
+  the writers that make these files do not verify it, so a truncated file under
+  the right name made pull return success and change nothing — the one thing pull
+  exists to do.
+- **`local_sha`'s 64-hex shortcut is trusted by prefetch, coverage and the plan.**
+  Now cross-checked against the manifest's byte count, which is what catches
+  truncation for the cost of a `stat()`.
+
+Two were guards that failed *open*:
+
+- `resolve_cube_sync`'s `need` gate let any value that was neither `"read"` nor
+  `"write"` fall through both branches and return a live, production-bound sync.
+- `schema_already_current` only knows tables, `ADD COLUMN`s and indexes. A view,
+  an `ALTER COLUMN TYPE` or a constraint would be invisible, and "everything I
+  check is present" would mean "skip that migration forever". It now refuses to
+  short-circuit unless every statement is one it can verify — today's
+  20-statement bundle is fully checkable; a bundle with a view is not.
+
+And three produced silently wrong values:
+
+- **the swaption value cache collided across `curve_source`.** A value depends on
+  the curve — it discounts the premium and anchors the ATMF strike — but neither
+  the TB's cache stem nor its key carried it, so values built against
+  `ERIS_EOD_LIVE-RL_BASIC` were served to a reader on `curve_source=CITIVELO`.
+  Latent while one curve_source was used per source token; a value warm over
+  thousands of days makes it a persistent wrong cache.
+- **`timestamp_mode` was not in the context cache key** (section 5) — found here
+  independently as well.
+- **the default warm grid double-counted.** A signed strike overrides the
+  requested structure, so the cartesian product contained exact duplicates:
+  measured **18 -> 12** after dedupe.
+
+The rest were dead flags and broken promises: the stream service's `--push-l2`
+still unreachable through `main([...])`; `_normalise_l2_mode` raising on
+`push_l2=0`, which the previous `bool()` coerced unambiguously; the daemon's
+day-rollover flush not existing, so a daemon crossing midnight never published
+the earlier day; `application_name` clipped by characters against a byte limit;
+`ALTER TABLE ONLY a` and `ONLY b` batched together because both reported a target
+of `"ONLY"`; and `PushTotals.record` absorbing an unknown status into a new
+attribute so an outcome could vanish while the run said "0 failed".
+
+**What this says about the mutation testing.** Fifteen mutations, all caught, and
+the suite still missed fourteen real defects. Mutation testing proves a test can
+fail when the code it covers changes; it says nothing about code the tests never
+reach. Every one of the three data-loss findings is in `prefetch_range` /
+`pull_day` — the read direction, which the backfill (a write) never used and
+which the hermetic tests exercised only on single-file partitions.
+
+---
+
 ## 7. What was left undone, and why
 
 **`curve_source='CITIVELO_EXCEL'` still reaches Excel, and it is not the vol
