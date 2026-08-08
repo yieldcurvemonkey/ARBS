@@ -67,8 +67,8 @@ def _unserved_value() -> str:
     These tests used to say "no US Treasury serves CAS" and "CUSIP_B does not
     serve ASW_4_USD". Both were artefacts of a ONE-WEEK probe window against a
     single bond: re-measured over five years, 304 of 349 USTs serve CAS and all
-    349 serve ASW_4_USD. The property under test — a value the bond's own
-    vocabulary lacks is reported as unavailable, never as an empty window — is
+    349 serve ASW_4_USD. The property under test â€” a value the bond's own
+    vocabulary lacks is reported as unavailable, never as an empty window â€” is
     unchanged, so it now asks the catalog which value has that shape.
     """
     from MDP.CitiVelocityExcel import tags as _T
@@ -116,7 +116,16 @@ def _fake_quotes(*, minutes: bool = False, bad_tags=()):
     degradation ``CVTSHIST`` really has, and the shape of a transport failure that
     costs one value rather than the whole request.
     """
-    idx = pd.date_range("2026-07-01", "2026-08-06", freq="D")
+    # Runs to TODAY, not to a literal. The daily leg used to stop at the same
+    # hardcoded 2026-08-06 as ``AS_OF``, which was "recent" on the day it was
+    # written and decayed from there: once the calendar moved two days past it, a
+    # LIVE request - whose window looks back five days from now - saw daily rows
+    # up to 08-06, then a hole, then the minute block, measured the span at
+    # one-day spacing and raised DownsampledWindowError. A fixture that only works
+    # in the week it was written fails silently as a calendar bug rather than
+    # loudly as a code one. Later rows cannot disturb the EOD tests: those ask for
+    # AS_OF, which is an as-of search, not the end of the series.
+    idx = pd.date_range("2026-07-01", max(pd.Timestamp(AS_OF), pd.Timestamp.now().normalize()), freq="D")
     series = {}
     for value, per_cusip in _VALUES.items():
         for cusip, number in per_cusip.items():
