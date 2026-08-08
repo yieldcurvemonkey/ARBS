@@ -6,7 +6,7 @@ import json
 import logging
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from typing import DefaultDict, Dict, Iterable, List, Optional, Tuple, Union
+from typing import Any, DefaultDict, Dict, Iterable, List, Optional, Tuple, Union
 
 import pandas as pd
 from tqdm import tqdm as _tqdm
@@ -100,6 +100,39 @@ def _build_row_for_query(
     return ref_dt, col, float(value)
 
 
+def _context_for(built_map: Dict[Any, Any], d: DateLike) -> Optional[Any]:
+    """The context for one reference point, whatever type the two sides used.
+
+    ``IRSwaptionMDP.bulk_get_data`` keys its result by ``datetime.date``
+    (``_normalize_dates`` flattens every input). ``build_reference_points``
+    returns ``datetime.date`` for the ordinary ``start``/``end`` path but
+    ``datetime.datetime`` when the caller passes ``timestamps=`` - and
+    ``datetime(2026, 7, 27) != date(2026, 7, 27)`` and hashes differently, so a
+    plain ``built_map.get(d)`` misses EVERY row on that path.
+
+    The failure is silent and looks exactly like missing data: one "No swaption
+    context" warning per date and an empty frame. Measured on a 10-day warm:
+    every context was built (the cubes logged their round-trip) and every lookup
+    missed. The pre-existing ``if ctx is None and d == date.today()`` line was a
+    partial attempt at the same normalisation that could only ever fix today.
+
+    Mirrors ``IRSwaptionMDP._extract_curve_for_date``, which already solves this
+    for the curve map.
+    """
+    ctx = built_map.get(d)
+    if ctx is not None:
+        return ctx
+    as_date = d.date() if isinstance(d, datetime.datetime) else d
+    ctx = built_map.get(as_date)
+    if ctx is not None:
+        return ctx
+    for key, value in built_map.items():
+        key_date = key.date() if isinstance(key, datetime.datetime) else key
+        if key_date == as_date:
+            return value
+    return None
+
+
 class IRSwaptionsTB(LayeredCacheMixin, BaseTimeseriesTB):
     _CACHE_ATTR_BASE = "_irswaptions_tb_cache"
     _CACHE_VERSION = "v1"
@@ -125,7 +158,20 @@ class IRSwaptionsTB(LayeredCacheMixin, BaseTimeseriesTB):
             show_tqdm=show_tqdm,
         )
         self._logger = logger or logging.getLogger(_LOGGER_NAME)
-        stem = cache_stem or f"IRSwaptionsTB_{self._CACHE_VERSION}_{mdp.source}"
+        # curve_source is part of the stem, and has to be. A swaption VALUE is a
+        # function of the curve as well as the vol - the discount curve prices the
+        # premium and anchors the ATMF strike - but neither the stem nor
+        # _cache_key carried it, so values computed against
+        # ERIS_EOD_LIVE-RL_BASIC were served to a reader on curve_source=CITIVELO
+        # under the same key. Harmless while only one curve_source was ever used
+        # per source token; a value warm over thousands of days makes it a
+        # persistent, silently wrong cache. Separate stems keep the two apart
+        # without invalidating anything already written under the old name for a
+        # single-curve_source user.
+        curve_token = str(getattr(mdp, "curve_source", "") or "default")
+        stem = cache_stem or (
+            f"IRSwaptionsTB_{self._CACHE_VERSION}_{mdp.source}_{curve_token}"
+        )
         self._cache_path = self.default_cache_path(stem=stem)
         self._cache_attr = f"{self._CACHE_ATTR_BASE}_{self._CACHE_VERSION}"
         self.open_cache(cache_attr=self._cache_attr, path=self._cache_path)
@@ -211,9 +257,7 @@ class IRSwaptionsTB(LayeredCacheMixin, BaseTimeseriesTB):
             qs = by_curve[curve_name]
             tasks: list[tuple[DateLike, IRSwaptionQuery, IRSwaptionMarketContext]] = []
             for d in sorted(missing_dates):
-                ctx = built_map.get(d)
-                if ctx is None and d == datetime.date.today():
-                    ctx = built_map.get(datetime.date.today())
+                ctx = _context_for(built_map, d)
                 if ctx is None:
                     self._logger.warning(f"No swaption context for curve='{curve_name}', date='{d}'.")
                     continue

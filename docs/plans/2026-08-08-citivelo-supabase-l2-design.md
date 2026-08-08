@@ -1,0 +1,424 @@
+# Supabase L2 for the Citi Velocity stores — design and measurements
+
+2026-08-08. Branch `feat/citivelo-supabase-l2`, based on `origin/main` 33fe6981.
+
+Two jobs that turned out to be one: put the Citi Velocity history into the
+Supabase L2 tier, and make the swaption cube store readable by the code that
+needs it. Both were blocked by the same thing — a default that points at
+production — so the safety story is the first commit and everything else builds
+on it.
+
+---
+
+## 1. What was actually true at the start
+
+The brief's framing was "the curve L2 tier exists and works, it is simply not
+being used for Citi." Half right, and the correction matters:
+
+| asset | local | in L2 already |
+|---|---|---|
+| `USD-SOFR-1D-CITIVELO` | 930 days / 398 MB | **all of it** — 930 days, 0 differing by sha |
+| `<curve>-CITIVELOEXCEL` | 5 assets | none |
+| `<curve>-CITIVELOEXCELMIN` | 5 assets | none |
+| `<curve>-CITIVELOSTREAM` | 3 assets | none |
+| `<CCY>-SWAPTIONVOL-CITIVELOEXCEL` | 2,699 days | no table at all |
+
+So the workbook asset had been synced at some point and was byte-for-byte
+current. `citivelo_l2_sync.py plan` reports it as 0 to push rather than
+re-uploading 398 MB, and that is checked by content, not by date presence.
+
+**Capacity.** The instance is PostgreSQL 17.4, 210.7 GB, top table `sdr_data` at
+104 GB. Adding ~750 MB is 0.35%. Not a constraint; recorded rather than assumed.
+Server defaults measured at the same time: `statement_timeout` **120 s**,
+`lock_timeout` **0**, `idle_in_transaction_session_timeout` **0**,
+`default_toast_compression` `pglz`, `max_connections` 240.
+
+**The stores are a moving target.** `USD-SOFR-1D-CITIVELOEXCEL` went 680 → 4,256
+→ 5,506 days during this session, and the cube store 1,746 → 2,699, because
+`citivelo_excel_warm.py` and `daily_cache_warmer.py` were extending them
+concurrently. Three independent counts (raw directory walk, `sync.local_dates`,
+`store.available_dates`) agreed at each instant, which is how that was
+distinguished from a counting bug. Every number below is as-of a stated moment.
+
+---
+
+## 2. The safety story
+
+`Caching/supabase_engine.py` resolves a fully-credentialed **production** URL
+from module constants when no env var is set, `SUPABASE_ENABLED` defaults to
+`True`, and `ensure_schema()` is called from *read* paths — so reading a cache
+can run `ALTER TABLE` against a live table. The existing mitigations do not close
+it: the flag is evaluated at import, its opt-out vocabulary is a closed falsy set
+(so `disabled`, `none` and every typo mean **enabled**), and the
+`SUPABASE_ENABLED and bool(_DATABASE_URL)` line can never fire.
+
+Four things, in order of how much they carry:
+
+**A tripwire on `psycopg2.connect`** (`Caching/prod_db_guard.py`), installed by a
+session-autouse fixture in `tests/conftest.py`. Not `create_engine`: an engine is
+lazy and opens no socket, several scripts call the DBAPI directly, and a module
+attribute on `psycopg2` survives the `importlib.reload` the suite performs. It
+blocks one host and only when no connection env var names it, so `PG_TEST_URL` /
+`DATABASE_URL` still reach a real database. The escape hatch uses a closed
+**truthy** set — the opposite convention to `_env_enabled` — so a typo in an
+opt-in fails safe where a typo in an opt-out points at production.
+
+**Opt-in, strictly parsed, at call time** (`Caching/l2_policy.py`). Three states
+(`off` / `read` / `read_write`), default `off`, and an unrecognised token
+**raises** naming the vocabulary. Read when asked rather than at import, which is
+what makes a `--push-l2` flag work at all.
+
+**Transaction labelling** (`Caching/db_session.py`). The obvious fix —
+`connect_args={"application_name": ...}` — **does not work here**, measured:
+
+```
+with application_name: SHOW='Supavisor'  pg_stat_activity='Supavisor'
+baseline:              SHOW='Supavisor'  pg_stat_activity='Supavisor'
+```
+
+Port 6543 is Supavisor in transaction mode; it owns the server connection and
+stamps its own name, and both connections were the same backend pid. `SET LOCAL`
+does work, and is the right granularity anyway:
+
+```
+inside txn : app_name = arbs_l2_probe   pg_stat_activity = arbs_l2_probe
+inside txn : stmt_to  = 0     lock_to = 5s
+next txn   : app_name = Supavisor       stmt_to = 2min
+```
+
+Values go through `set_config(..., is_local => true)`: `SET` takes no bind
+parameters and concatenating a label into one makes it an injection point.
+
+**A DDL applier that does not deadlock** (`Caching/supabase_schema.py`).
+`str.split(";")` replaced with the tape's line-based splitter and grouper
+(ported, not imported — `Caching` is the lower layer), and the
+one-transaction-no-lock_timeout bundle replaced with per-group short transactions
+carrying `SET LOCAL lock_timeout` and retry-with-backoff. A currency check
+derived from the SQL itself turns the usual case into three read-only queries
+instead of twenty DDL round trips, which is what keeps a read path off an
+`ACCESS EXCLUSIVE` lock.
+
+### Verified capable of failing
+
+Not asserted. With `is_blocked_host()` stubbed to `return False`, **14 of 24**
+guard tests fail, including the end-to-end one that drives `get_engine().connect()`
+with an empty environment and expects a refusal.
+
+---
+
+## 3. The blob tier
+
+`Caching/supabase_blob_blocks.py` is one implementation of the whole-partition
+blob pattern, used by the new swaption sync and by a new adapter that points it
+at the existing curve table. The three existing copies were left alone — they are
+load-bearing for the live curve path — but they **disagree**, and each
+disagreement is a defect worth naming:
+
+- `supabase_curve_sync.pull_day` writes with `dest.write_bytes()`, not
+  atomically. `supabase_ustf_sync` uses `_atomic_write_bytes`.
+- **Neither verifies the payload against the stored sha on the way in.** Both
+  name the file `f"{row.sha256}.parquet"` and trust it, so a truncated payload
+  lands under a filename that lies.
+- `prefetch_range` SELECTs `payload` for the whole range and then discards the
+  days it already had — 400 MB over the pooler to learn nothing.
+- `_local_parquet_bytes` takes `pq_files[0]` (curve) or `[-1]` (ustf) when a
+  partition holds several files, while `CurveStore.read_raw_day` **concats**
+  them. The blob then publishes fewer rows than the local store serves, silently.
+  `USD-OIS-Q12xM12STIRT-SERFFX-MIX23` has 2,613 files across 1,382 days on this
+  machine, so the case is live.
+
+The new code fixes all four, refuses a multi-file partition outright, and makes
+restatement symmetric so `SwaptionCubeStore`'s one-partition-one-cube property
+survives the round trip: push raises on a differing remote sha, pull raises on a
+differing local partition. Reads run no DDL — they do an `information_schema`
+existence check and answer "no data".
+
+### Verified capable of failing, twice
+
+*In tests*: five mutations, each reverted after — no sha verification (4
+failures), L2 gate always open (3), prefetch downloads everything (2), multi-file
+picks `file[0]` (1), push overwrites silently (1). A sixth mutation was written,
+survived, and was **discarded as a bad mutation rather than counted**: it removed
+one of two branches that both skip a locally-identical day, so behaviour was
+unchanged and the test was right to pass.
+
+*Against the real production table*: two synthetic days were pushed under a
+throwaway asset, then each thing the verifier claims to catch was corrupted in
+turn — truncated payload, scrambled sha column, a **self-consistent but wrong**
+payload, a lying `row_count`, an absent remote day — and it went red on every
+one, and `pull_day` refused the corrupted blob without landing anything. Scratch
+rows deleted; zero confirmed remaining.
+
+---
+
+## 4. The backfill
+
+`scripts/citivelo_l2_sync.py` — `plan` / `push` / `verify` / `status` over all
+five families in both stores. One process, one engine, a bounded thread pool, so
+connections are `--workers + 2` however many days are pushed. Under the process
+pools these warms use, each worker would build its own engine at pool 5 +
+overflow 4 = **9 connections per process**, which is how a dev backfill exhausts
+a pooler the dashboard is also using.
+
+Resume is by **content**: local partitions are content-addressed, so the filename
+*is* the sha and a whole-asset diff costs a directory listing plus one indexed
+query with no payloads. `backfill_local_curve_store_to_supabase` resumes on date
+presence, so a day whose parquet was rebuilt after it was pushed is never
+noticed; here it shows up as `differing` and is not overwritten without
+`--rewrite`.
+
+`push` prints the target and the byte count and refuses without `--yes`.
+
+### Measured runs
+
+| family | days | bytes | wall | rate | failures |
+|---|---:|---:|---:|---:|---:|
+| cube | 2,699 | 41.9 MB | 0.8 min | 57.6 d/s | 0 |
+| eod + stream | 13,480 | 66.4 MB | 27.1 min | 8.3 d/s | 0 |
+| minute | 2,845 | 637.1 MB | 8.0 min | 5.9 d/s | 0 |
+| eod delta (the warm kept extending history mid-run) | 8,452 | 42.2 MB | 18.9 min | 7.5 d/s | 0 |
+
+Final coverage: **28,406 of 28,412 local days in L2, 0 differing, 0 remote-only,
+1.2 GB**. The 6 are CAD days the concurrently-running EOD warm wrote minutes
+earlier; they went in on the next pass, and 2 more had appeared by the time the
+last check ran. A live store has no fixed point.
+
+Database before -> after: **210.7 GB -> 211.3 GB (+0.6 GB, +0.29%)**.
+`arbs_curve_intraday_blocks_v1` 11,173 -> 35,956 rows;
+`arbs_curve_snapshots_v1` 27,447 -> 52,224 rows;
+`arbs_swaption_cube_blocks_v1` absent -> 2,699 rows / 40.3 MB.
+
+Plus 24,783 tagged `arbs_curve_snapshots_v1` rows, written with the same
+`curve_tag_config.get_tags` gate the existing `_push_tagged_snapshots` uses, so
+the Citi assets are tagged the way `USD-SOFR-1D-CITIVELO`'s existing rows are
+rather than as a second, untagged convention. `get_tags` is timezone-agnostic
+(OPEN at `session_minute == 0`, EOD on the last row), so it is correct for the
+non-US currencies whose `session_minute` is minute-of-day in their **own** zone.
+
+The eod family is slower per day than the minute family despite 100× smaller
+blobs, because the snapshot-row phase is serial and one transaction per day. The
+blob push itself was ~3 minutes of the 27.
+
+**Verification — every family pulled back and compared, 0 problems.** A problem
+is any of: the payload not hashing to its sha column, differing from the local
+file byte for byte, failing to parse as parquet, or disagreeing with the stored
+`row_count`.
+
+| family | days checked | bytes | problems |
+|---|---:|---:|---:|
+| cube (exhaustive) | 2,699 | 42.0 MB | 0 |
+| eod (sampled, 25/asset) | 125 | 634.7 KB | 0 |
+| minute + stream + workbook (sampled, 20/asset) | 123 | 30.1 MB | 0 |
+
+The 20 sampled `USD-SOFR-1D-CITIVELO` days are an independent confirmation of
+the "already synced and correct" claim, beyond the sha diff.
+
+The snapshot-row phase, not the blobs, dominated the eod runs: 27.1 min for
+13,480 days of which the blob push was ~3, because it was one transaction per
+day to write at most one ~1 KB row. Now batched 100 days to a transaction.
+
+---
+
+## 5. The swaption cube read path
+
+`Caching/swaption_cube_store.py` was referenced by exactly one thing — the warm
+script. `IRSwaptionMDP` never read it, so every dated swaption request went
+`_cube_for_date` → `fetch_cube` → `CitiVelocityExcelClient.connect()`, once per
+date. Reported before: a 4-date range took **134 s and returned an empty frame**,
+failing with "A swaption CUBE needs strike offsets" while the stored partitions
+held the full thirteen-offset smile.
+
+After, with `connect` replaced by a function that raises: **4.4 s for the same 4
+dates, 0 COM attempts**, every context reporting `origin=swaption_cube_store`,
+`smile=full`, `n_offsets=13`.
+
+Note it bypassed *two* caches: `fetch_cube` accepts a `cache=CitiVeloTagCache`
+("only the missing spans hit Excel") and `provider.py` never passed one.
+
+**The pre-2020 history is data, not a cache miss.** Measured over all 2,699
+stored USD days: **1,067 ATM-only** (2015-10-08 .. 2020-01-23, one offset) and
+**1,632 full-smile** (2020-01-24 onward). A QuantLib cube on such a day now
+raises a message that says so and says refetching cannot help, instead of the
+generic advice to refetch with offsets — which is the behaviour being removed.
+The rateslib backend is not blocked on those days; that would discard 1,067
+usable ATM surfaces.
+
+### Read cost, profiled rather than assumed
+
+The note on record was "batch reconstruction is 0.1 ms/curve against 1.3 ms one
+at a time." Measured over 60 real days: `reconstruct_cubes_batch` 61.9 ms/day, a
+loop of `reconstruct_cube` 63.9 ms/day. There is no batching — it *is* a loop —
+so no speed claim is made for it.
+
+The real profile: `read_day` 6 ms, `validate()` 0.6 ms, `sort_tenors` 0.2 ms, and
+**78% in fourteen separate `pivot_table` calls**, one of whose results was
+assigned and discarded (`_ = pivot`). `cube_from_frame` now does one grouped
+reshape sliced per offset: **33.3 → 8.25 ms/day, 4.0×**, and bit-identical over
+all 2,699 days (`assert_frame_equal(check_exact=True)` on every ATM and skew
+frame, across both shapes of history).
+
+### A defect found in review, after the tests were green
+
+`timestamp_mode` was threaded to the provider through `provider_kwargs`, but
+`_cache_key`'s `request_token` is computed from `effective_request_kwargs`
+*before* those additions — so a `"live"` request and an `"eod"` request for the
+same date shared a context cache key, **including the persistent disk cache**.
+Build an EOD context for today (served from the warmed store), then ask for
+`timestamp="live"` with `ignore_cache=False`: `_cache_get` hits, the provider
+never runs, and the caller is handed this morning's close believing it is live.
+Today's close IS in the store, so this fires on the common case, and it defeats
+the provider's live guard one layer up. The mode is now part of the key,
+appended only when non-default so keys already on disk keep their meaning.
+
+The mutation suite did not catch this: it tested the mode at the *parse* level,
+not the cache-key level. There is now a test for the collision, and dropping the
+mode from the key fails it.
+
+### Verified capable of failing
+
+Nine mutations, each caught by the test that guards it: store branch removed
+(4 failures), live mode ignored (2), `use_cube_store` ignored (1), ATM-only guard
+removed (1), provenance dropped (1), timestamp mode always `eod` (6), memo
+removed (1), smile always `full` (2), timestamp mode dropped from the cache key (1).
+
+The end-to-end check was mutation-tested too, and **the first run exposed two of
+its own assertions passing vacuously** — `all()` over an empty dict is True, and
+under the store-branch mutation the result *is* empty. Both now assert the
+expected count.
+
+---
+
+## 6. Two bugs the value warm found
+
+**`IRSwaptionsTB.get_timeseries(timestamps=[...])` returned an empty frame** for
+every provider that keys `bulk_get_data` by date — which `IRSwaptionMDP` does.
+`build_reference_points` returns `datetime` for that argument and `date` for the
+ordinary path, and `datetime(2026,7,27) != date(2026,7,27)`, so `built_map.get(d)`
+missed every row. Silent: one "No swaption context" warning per date. The
+pre-existing `if ctx is None and d == date.today()` line was a partial attempt at
+the same normalisation that could only ever fix today.
+
+**The first valuation in a process took 235.8 s; the next took 1.54 s.** Profiled:
+236.8 s of it is `assert_vol_spread_ordering` inside `build_ql_swaption_cube` —
+1,990 QuantLib `SwaptionVolatilityStructure_volatility` calls at 110 ms each,
+re-pricing every node of the 1,989-node cube. It runs under `-RL` too, because
+`CitiVeloSwaptionCube.volatility()` is deliberately QuantLib-served (it turns an
+option *time* into an option *date* itself, and an approximate expiry date moves
+the strike offset), so resolving `ATMF+25` builds a QuantLib cube whatever the
+pricing engine is.
+
+Measured on one USD date, six values: `verify=True` **242.4 s**, `verify=False`
+**7.3 s** — 33× — and every value **identical to 0.0e+00**. The check changes no
+number; it only detects. The knob existed on `build_citivelo_swaption_cube` and
+was unreachable from the provider; it is now a passthrough (default unchanged,
+ON), and the warm runs it as a **preflight on the first date** rather than
+per-chunk — because the cost is per *date*, so "verify one chunk in ten" still
+pays it for every date in that chunk.
+
+What the preflight gives up is stated in the script: it catches a bad
+*construction*, which is systematic; it can miss a bad *day*.
+
+---
+
+## 7. What an adversarial review found after the tests were green
+
+Four reviewers over the branch diff, one dimension each, with an independent
+skeptic per finding prompted to REFUTE and defaulting to refuted. **34 raised,
+14 survived.** The suite was green throughout, and the mutation testing had
+already run — so this is a measurement of what mutation testing does not reach.
+
+Three were data loss in the new blob tier, all in the *pull* direction that the
+backfill never exercised:
+
+- **`prefetch_range` destroyed multi-file local partitions.** `local_sha`
+  declines to answer for one, prefetch read that `None` as "absent", and `_land`
+  — called with a hardcoded `overwrite=True` — unlinked every file that was not
+  the one it had just written. `push_day` refuses such a partition, so those rows
+  were never in L2 and the loss was unrecoverable. Reproduced with the branch's
+  own harness. There are **1,231 multi-file days** under
+  `asset=USD-OIS-Q12xM12STIRT-SERFFX-MIX23` on this machine.
+- **`pull_day` could not repair a corrupt local file.** The "byte-identical;
+  nothing to do" branch compared *filenames*. The filename is a content claim and
+  the writers that make these files do not verify it, so a truncated file under
+  the right name made pull return success and change nothing — the one thing pull
+  exists to do.
+- **`local_sha`'s 64-hex shortcut is trusted by prefetch, coverage and the plan.**
+  Now cross-checked against the manifest's byte count, which is what catches
+  truncation for the cost of a `stat()`.
+
+Two were guards that failed *open*:
+
+- `resolve_cube_sync`'s `need` gate let any value that was neither `"read"` nor
+  `"write"` fall through both branches and return a live, production-bound sync.
+- `schema_already_current` only knows tables, `ADD COLUMN`s and indexes. A view,
+  an `ALTER COLUMN TYPE` or a constraint would be invisible, and "everything I
+  check is present" would mean "skip that migration forever". It now refuses to
+  short-circuit unless every statement is one it can verify — today's
+  20-statement bundle is fully checkable; a bundle with a view is not.
+
+And three produced silently wrong values:
+
+- **the swaption value cache collided across `curve_source`.** A value depends on
+  the curve — it discounts the premium and anchors the ATMF strike — but neither
+  the TB's cache stem nor its key carried it, so values built against
+  `ERIS_EOD_LIVE-RL_BASIC` were served to a reader on `curve_source=CITIVELO`.
+  Latent while one curve_source was used per source token; a value warm over
+  thousands of days makes it a persistent wrong cache.
+- **`timestamp_mode` was not in the context cache key** (section 5) — found here
+  independently as well.
+- **the default warm grid double-counted.** A signed strike overrides the
+  requested structure, so the cartesian product contained exact duplicates:
+  measured **18 -> 12** after dedupe.
+
+The rest were dead flags and broken promises: the stream service's `--push-l2`
+still unreachable through `main([...])`; `_normalise_l2_mode` raising on
+`push_l2=0`, which the previous `bool()` coerced unambiguously; the daemon's
+day-rollover flush not existing, so a daemon crossing midnight never published
+the earlier day; `application_name` clipped by characters against a byte limit;
+`ALTER TABLE ONLY a` and `ONLY b` batched together because both reported a target
+of `"ONLY"`; and `PushTotals.record` absorbing an unknown status into a new
+attribute so an outcome could vanish while the run said "0 failed".
+
+**What this says about the mutation testing.** Fifteen mutations, all caught, and
+the suite still missed fourteen real defects. Mutation testing proves a test can
+fail when the code it covers changes; it says nothing about code the tests never
+reach. Every one of the three data-loss findings is in `prefetch_range` /
+`pull_day` — the read direction, which the backfill (a write) never used and
+which the hermetic tests exercised only on single-file partitions.
+
+---
+
+## 7. What was left undone, and why
+
+**`curve_source='CITIVELO_EXCEL'` still reaches Excel, and it is not the vol
+path.** The curve store fast path serves the curve *nodes* from the warm and then
+calls `_load_citivelo_excel_curve_store_point` → `fixings.py:522 fixings_for` →
+`_merged_sources` → `citi_fixings` → `quotes.py:169 fetch` → `connect()`. Five
+COM attempts per request, for the published overnight fixings.
+`IRSwaptionMDP` already carries a hint string about it. Out of scope here; the
+swaption tests isolate the vol path with `ERIS_EOD_LIVE-RL_BASIC`.
+
+**A full-history swaption value warm was not run.** At ~1.5 s per valuation
+(after the preflight), the default 90-column grid over 1,632 full-smile days is
+~60 hours. The script, the plumbing and the measured rate are delivered; choosing
+the grid is a judgement about what is worth caching, not a mechanical step.
+
+**The three existing sync modules keep their four defects.** They are the live
+curve read path; fixing them is a separate change with a separate blast radius.
+They are documented in `Caching/supabase_blob_blocks.py` rather than silently
+left.
+
+**No `arbs_curve_analytics_blocks_v1` push for Citi**, because there are no Citi
+analytics partitions on disk — the analytics tree holds only ERIS/STIRT assets.
+
+**The plaintext password was not rotated.** It remains in ~13 tracked files and
+in git history, and `tests/test_supabase_engine.py` asserts the full URL
+*including the password* as an expected literal, so the test suite is itself an
+obstacle to rotating it. Given this branch's safety theme that omission is worth
+stating rather than leaving the reader to wonder: the guard reduces the blast
+radius of the *default*, it does not change the credential.
+
+**`ARBS_SUPABASE_ENABLED` still parses leniently.** `l2_policy` fixes the
+vocabulary for new code; changing `_env_enabled` is an import-time behaviour
+change for every existing consumer and belongs in its own commit with its own
+argument.
