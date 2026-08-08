@@ -1,8 +1,11 @@
-"""Schema DDL for the USD swap tape **v2** ingest (Phase 4 cutover).
+"""Schema DDL for the USD swap tape's current-generation ingest.
 
-Creates three tables + one display view with ``_v2`` suffix, alongside the
-v1 objects (see ``_tape_schema.py``). v1 is preserved frozen as the
-rollback target per design §4.11 / implementation §4.11.
+Table, view, and index names are parameterised on ``_tape_tables`` so this
+module always targets whichever generation ARBS currently owns (``_v3`` as
+of the 2026-08-08 migration off the ``_v2`` tables owned by the ``sky``
+cron job), alongside the v1 objects (see ``_tape_schema.py``). v1 is
+preserved frozen as the rollback target per design §4.11 / implementation
+§4.11.
 
 New columns over v1:
   - Economic-vs-Admin matrix columns: ``economic_class``,
@@ -17,23 +20,27 @@ New columns over v1:
 """
 from __future__ import annotations
 
+from ._tape_tables import (
+    DISPLAY_VIEW,
+    IDX_INFIX,
+    LEGS_TABLE,
+    MANUAL_LINKS_TABLE,
+    NOTES_TABLE,
+    OVERRIDE_HISTORY_TABLE,
+    OVERRIDE_MEMBERS_TABLE,
+    OVERRIDES_TABLE,
+    PACKAGES_TABLE,
+    RUNS_TABLE,
+    SIGNAL_TABLE,
+    VWAP_TABLE,
+)
 
-PACKAGES_TABLE_V2 = "arbs_usd_swap_tape_packages_v2"
-LEGS_TABLE_V2 = "arbs_usd_swap_tape_legs_v2"
-RUNS_TABLE_V2 = "arbs_usd_swap_tape_ingestion_runs_v2"
-DISPLAY_VIEW_V2 = "arbs_usd_swap_tape_display_v2"
-MANUAL_LINKS_TABLE = "arbs_usd_swap_manual_links_v2"
-OVERRIDES_TABLE_V2 = "arbs_usd_swap_tape_overrides_v2"
-OVERRIDE_MEMBERS_TABLE_V2 = "arbs_usd_swap_tape_override_members_v2"
-OVERRIDE_HISTORY_TABLE_V2 = "arbs_usd_swap_tape_override_history_v2"
-NOTES_TABLE_V2 = "arbs_usd_swap_tape_notes_v2"
 
-
-TAPE_SCHEMA_SQL_V2 = f"""
+TAPE_SCHEMA_SQL_CURRENT = f"""
 CREATE EXTENSION IF NOT EXISTS pgcrypto;
 
 -- Packages v2: per-package aggregates with matrix + quality columns
-CREATE TABLE IF NOT EXISTS {PACKAGES_TABLE_V2} (
+CREATE TABLE IF NOT EXISTS {PACKAGES_TABLE} (
     package_id TEXT PRIMARY KEY,
     manual_link_id UUID,
     as_of_date DATE NOT NULL,
@@ -96,9 +103,9 @@ CREATE TABLE IF NOT EXISTS {PACKAGES_TABLE_V2} (
 );
 
 -- Legs v2: per-trade enrichment with matrix + quality columns
-CREATE TABLE IF NOT EXISTS {LEGS_TABLE_V2} (
+CREATE TABLE IF NOT EXISTS {LEGS_TABLE} (
     trade_id TEXT PRIMARY KEY,
-    package_id TEXT NOT NULL REFERENCES {PACKAGES_TABLE_V2}(package_id),
+    package_id TEXT NOT NULL REFERENCES {PACKAGES_TABLE}(package_id),
     leg_order INTEGER NOT NULL,
     as_of_date DATE NOT NULL,
     execution_timestamp TIMESTAMPTZ NOT NULL,
@@ -227,7 +234,7 @@ CREATE TABLE IF NOT EXISTS {LEGS_TABLE_V2} (
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
-CREATE TABLE IF NOT EXISTS {RUNS_TABLE_V2} (
+CREATE TABLE IF NOT EXISTS {RUNS_TABLE} (
     run_id BIGSERIAL PRIMARY KEY,
     started_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     ended_at TIMESTAMPTZ,
@@ -240,8 +247,8 @@ CREATE TABLE IF NOT EXISTS {RUNS_TABLE_V2} (
     cache_hit BOOLEAN
 );
 
-CREATE INDEX IF NOT EXISTS idx_tape_v2_packages_date ON {PACKAGES_TABLE_V2}(as_of_date, execution_start DESC);
-CREATE INDEX IF NOT EXISTS idx_tape_v2_packages_orig_date ON {PACKAGES_TABLE_V2}(as_of_date, original_execution_start DESC);
+CREATE INDEX IF NOT EXISTS idx_tape_{IDX_INFIX}_packages_date ON {PACKAGES_TABLE}(as_of_date, execution_start DESC);
+CREATE INDEX IF NOT EXISTS idx_tape_{IDX_INFIX}_packages_orig_date ON {PACKAGES_TABLE}(as_of_date, original_execution_start DESC);
 -- Pagination scan: the main tape route does
 -- ``WHERE d.execution_start < $cursor ORDER BY d.execution_start DESC
 -- NULLS LAST LIMIT 201`` with no as_of_date filter, so the composite
@@ -257,36 +264,36 @@ CREATE INDEX IF NOT EXISTS idx_tape_v2_packages_orig_date ON {PACKAGES_TABLE_V2}
 -- table (~29s at 1.3M rows) and the dashboard's initial tape fetch blows
 -- through the client's 15s abort timeout. See
 -- dashboard/src/app/api/usd-swaps-tape-v2/route.logic.ts (buildTapeQuery).
-CREATE INDEX IF NOT EXISTS idx_tape_v2_packages_exec_start
-  ON {PACKAGES_TABLE_V2}(execution_start DESC NULLS LAST);
-CREATE INDEX IF NOT EXISTS idx_tape_v2_packages_type ON {PACKAGES_TABLE_V2}(package_type, as_of_date);
-CREATE INDEX IF NOT EXISTS idx_tape_v2_packages_cluster ON {PACKAGES_TABLE_V2}(cluster_id);
-CREATE INDEX IF NOT EXISTS idx_tape_v2_packages_fomc ON {PACKAGES_TABLE_V2}(fomc_meeting_label);
-CREATE INDEX IF NOT EXISTS idx_tape_v2_packages_flow ON {PACKAGES_TABLE_V2}(contributes_to_flow_any, as_of_date);
-CREATE INDEX IF NOT EXISTS idx_tape_v2_packages_violation ON {PACKAGES_TABLE_V2}(state_machine_violation_any);
-CREATE INDEX IF NOT EXISTS idx_tape_v2_packages_metrics_gin ON {PACKAGES_TABLE_V2} USING GIN (package_metrics);
-CREATE INDEX IF NOT EXISTS idx_tape_v2_packages_tape_label_upper
-  ON {PACKAGES_TABLE_V2}(UPPER(COALESCE(tape_label, '')), original_execution_start DESC NULLS LAST);
+CREATE INDEX IF NOT EXISTS idx_tape_{IDX_INFIX}_packages_exec_start
+  ON {PACKAGES_TABLE}(execution_start DESC NULLS LAST);
+CREATE INDEX IF NOT EXISTS idx_tape_{IDX_INFIX}_packages_type ON {PACKAGES_TABLE}(package_type, as_of_date);
+CREATE INDEX IF NOT EXISTS idx_tape_{IDX_INFIX}_packages_cluster ON {PACKAGES_TABLE}(cluster_id);
+CREATE INDEX IF NOT EXISTS idx_tape_{IDX_INFIX}_packages_fomc ON {PACKAGES_TABLE}(fomc_meeting_label);
+CREATE INDEX IF NOT EXISTS idx_tape_{IDX_INFIX}_packages_flow ON {PACKAGES_TABLE}(contributes_to_flow_any, as_of_date);
+CREATE INDEX IF NOT EXISTS idx_tape_{IDX_INFIX}_packages_violation ON {PACKAGES_TABLE}(state_machine_violation_any);
+CREATE INDEX IF NOT EXISTS idx_tape_{IDX_INFIX}_packages_metrics_gin ON {PACKAGES_TABLE} USING GIN (package_metrics);
+CREATE INDEX IF NOT EXISTS idx_tape_{IDX_INFIX}_packages_tape_label_upper
+  ON {PACKAGES_TABLE}(UPPER(COALESCE(tape_label, '')), original_execution_start DESC NULLS LAST);
 
 -- Idempotent migrations for tables that pre-date the v2 columns
 -- introduced after the initial deploy. ADD COLUMN IF NOT EXISTS keeps
 -- this DDL safe to re-run on every ensure_schema() call. Per-leg
 -- package economics were added so SPREADOVER_CURVE / MATCHED_MATURITY_FLY
 -- composites can persist distinct per-leg PTS / PTP values.
-ALTER TABLE {LEGS_TABLE_V2} ADD COLUMN IF NOT EXISTS package_transaction_spread NUMERIC;
-ALTER TABLE {LEGS_TABLE_V2} ADD COLUMN IF NOT EXISTS package_transaction_price NUMERIC;
-ALTER TABLE {LEGS_TABLE_V2} ADD COLUMN IF NOT EXISTS package_transaction_price_currency TEXT;
+ALTER TABLE {LEGS_TABLE} ADD COLUMN IF NOT EXISTS package_transaction_spread NUMERIC;
+ALTER TABLE {LEGS_TABLE} ADD COLUMN IF NOT EXISTS package_transaction_price NUMERIC;
+ALTER TABLE {LEGS_TABLE} ADD COLUMN IF NOT EXISTS package_transaction_price_currency TEXT;
 
-CREATE INDEX IF NOT EXISTS idx_tape_v2_legs_package ON {LEGS_TABLE_V2}(package_id);
-CREATE INDEX IF NOT EXISTS idx_tape_v2_legs_exec ON {LEGS_TABLE_V2}(execution_timestamp);
-CREATE INDEX IF NOT EXISTS idx_tape_v2_legs_orig_exec ON {LEGS_TABLE_V2}(original_execution_timestamp);
-CREATE INDEX IF NOT EXISTS idx_tape_v2_legs_lifecycle ON {LEGS_TABLE_V2}(lifecycle_type);
-CREATE INDEX IF NOT EXISTS idx_tape_v2_legs_class ON {LEGS_TABLE_V2}(economic_class);
-CREATE INDEX IF NOT EXISTS idx_tape_v2_legs_flow ON {LEGS_TABLE_V2}(contributes_to_flow);
-CREATE INDEX IF NOT EXISTS idx_tape_v2_legs_violation ON {LEGS_TABLE_V2}(state_machine_violation);
-CREATE INDEX IF NOT EXISTS idx_tape_v2_legs_cluster ON {LEGS_TABLE_V2}(cluster_id);
-CREATE INDEX IF NOT EXISTS idx_tape_v2_legs_metrics_gin ON {LEGS_TABLE_V2} USING GIN (enrichment_metrics);
-CREATE INDEX IF NOT EXISTS idx_tape_v2_legs_flags_gin ON {LEGS_TABLE_V2} USING GIN (quality_flags);
+CREATE INDEX IF NOT EXISTS idx_tape_{IDX_INFIX}_legs_package ON {LEGS_TABLE}(package_id);
+CREATE INDEX IF NOT EXISTS idx_tape_{IDX_INFIX}_legs_exec ON {LEGS_TABLE}(execution_timestamp);
+CREATE INDEX IF NOT EXISTS idx_tape_{IDX_INFIX}_legs_orig_exec ON {LEGS_TABLE}(original_execution_timestamp);
+CREATE INDEX IF NOT EXISTS idx_tape_{IDX_INFIX}_legs_lifecycle ON {LEGS_TABLE}(lifecycle_type);
+CREATE INDEX IF NOT EXISTS idx_tape_{IDX_INFIX}_legs_class ON {LEGS_TABLE}(economic_class);
+CREATE INDEX IF NOT EXISTS idx_tape_{IDX_INFIX}_legs_flow ON {LEGS_TABLE}(contributes_to_flow);
+CREATE INDEX IF NOT EXISTS idx_tape_{IDX_INFIX}_legs_violation ON {LEGS_TABLE}(state_machine_violation);
+CREATE INDEX IF NOT EXISTS idx_tape_{IDX_INFIX}_legs_cluster ON {LEGS_TABLE}(cluster_id);
+CREATE INDEX IF NOT EXISTS idx_tape_{IDX_INFIX}_legs_metrics_gin ON {LEGS_TABLE} USING GIN (enrichment_metrics);
+CREATE INDEX IF NOT EXISTS idx_tape_{IDX_INFIX}_legs_flags_gin ON {LEGS_TABLE} USING GIN (quality_flags);
 
 -- Phase 2 perf indexes for the analytics-dock routes. Each route filters
 -- on a category column ({{rate_index_clean | tape_label | canonical_underlier_key}})
@@ -295,14 +302,14 @@ CREATE INDEX IF NOT EXISTS idx_tape_v2_legs_flags_gin ON {LEGS_TABLE_V2} USING G
 -- scan instead of a seq-scan + sort. NULLS LAST keeps the descending
 -- range scan tight on the recent-end of the data, which is what
 -- DAILY_CLOSE / INTRADAY / extremes queries actually want.
-CREATE INDEX IF NOT EXISTS idx_tape_v2_legs_rate_idx_orig
-  ON {LEGS_TABLE_V2}(rate_index_clean, original_execution_timestamp DESC NULLS LAST);
-CREATE INDEX IF NOT EXISTS idx_tape_v2_legs_tape_label_orig
-  ON {LEGS_TABLE_V2}(tape_label, original_execution_timestamp DESC NULLS LAST);
-CREATE INDEX IF NOT EXISTS idx_tape_v2_legs_trade_type_orig
-  ON {LEGS_TABLE_V2}(trade_type, original_execution_timestamp DESC NULLS LAST);
-CREATE INDEX IF NOT EXISTS idx_tape_v2_legs_tenor_orig
-  ON {LEGS_TABLE_V2}(tenor_label, original_execution_timestamp DESC NULLS LAST);
+CREATE INDEX IF NOT EXISTS idx_tape_{IDX_INFIX}_legs_rate_idx_orig
+  ON {LEGS_TABLE}(rate_index_clean, original_execution_timestamp DESC NULLS LAST);
+CREATE INDEX IF NOT EXISTS idx_tape_{IDX_INFIX}_legs_tape_label_orig
+  ON {LEGS_TABLE}(tape_label, original_execution_timestamp DESC NULLS LAST);
+CREATE INDEX IF NOT EXISTS idx_tape_{IDX_INFIX}_legs_trade_type_orig
+  ON {LEGS_TABLE}(trade_type, original_execution_timestamp DESC NULLS LAST);
+CREATE INDEX IF NOT EXISTS idx_tape_{IDX_INFIX}_legs_tenor_orig
+  ON {LEGS_TABLE}(tenor_label, original_execution_timestamp DESC NULLS LAST);
 
 -- Phase 4 canonical underlier key: per-row collapse of SDR underlier-name
 -- variations ('USD-SOFR-OIS Compound 1D Constant' vs 'USD-SOFR-COMPOUND
@@ -310,112 +317,112 @@ CREATE INDEX IF NOT EXISTS idx_tape_v2_legs_tenor_orig
 -- ingest pipeline (see SDRUtils/core/underlier_canonical.py); read by
 -- the rarity / traded-levels / package-analytics routes. Additive
 -- ALTER + IF NOT EXISTS keeps re-runs idempotent.
-ALTER TABLE {LEGS_TABLE_V2} ADD COLUMN IF NOT EXISTS canonical_underlier_key TEXT;
-CREATE INDEX IF NOT EXISTS idx_tape_v2_legs_canonical_orig
-  ON {LEGS_TABLE_V2}(canonical_underlier_key, original_execution_timestamp DESC NULLS LAST);
+ALTER TABLE {LEGS_TABLE} ADD COLUMN IF NOT EXISTS canonical_underlier_key TEXT;
+CREATE INDEX IF NOT EXISTS idx_tape_{IDX_INFIX}_legs_canonical_orig
+  ON {LEGS_TABLE}(canonical_underlier_key, original_execution_timestamp DESC NULLS LAST);
 
 -- Phase 7: frontend-to-backend logic port
-ALTER TABLE {LEGS_TABLE_V2} ADD COLUMN IF NOT EXISTS off_market_reason TEXT;
-ALTER TABLE {LEGS_TABLE_V2} ADD COLUMN IF NOT EXISTS normalized_tape_label TEXT;
-ALTER TABLE {LEGS_TABLE_V2} ADD COLUMN IF NOT EXISTS tape_tags TEXT;
+ALTER TABLE {LEGS_TABLE} ADD COLUMN IF NOT EXISTS off_market_reason TEXT;
+ALTER TABLE {LEGS_TABLE} ADD COLUMN IF NOT EXISTS normalized_tape_label TEXT;
+ALTER TABLE {LEGS_TABLE} ADD COLUMN IF NOT EXISTS tape_tags TEXT;
 
-ALTER TABLE {PACKAGES_TABLE_V2} ADD COLUMN IF NOT EXISTS is_off_market_any BOOLEAN;
-ALTER TABLE {PACKAGES_TABLE_V2} ADD COLUMN IF NOT EXISTS confidence_score INTEGER;
-ALTER TABLE {PACKAGES_TABLE_V2} ADD COLUMN IF NOT EXISTS confidence_total INTEGER;
-ALTER TABLE {PACKAGES_TABLE_V2} ADD COLUMN IF NOT EXISTS confidence_tone TEXT;
-ALTER TABLE {PACKAGES_TABLE_V2} ADD COLUMN IF NOT EXISTS confidence_signals JSONB;
-ALTER TABLE {PACKAGES_TABLE_V2} ADD COLUMN IF NOT EXISTS summary_rate NUMERIC;
-ALTER TABLE {PACKAGES_TABLE_V2} ADD COLUMN IF NOT EXISTS summary_risk NUMERIC;
-ALTER TABLE {PACKAGES_TABLE_V2} ADD COLUMN IF NOT EXISTS summary_opa NUMERIC;
-ALTER TABLE {PACKAGES_TABLE_V2} ADD COLUMN IF NOT EXISTS is_ccp_switch BOOLEAN;
-ALTER TABLE {PACKAGES_TABLE_V2} ADD COLUMN IF NOT EXISTS ccp_switch_from TEXT;
-ALTER TABLE {PACKAGES_TABLE_V2} ADD COLUMN IF NOT EXISTS ccp_switch_to TEXT;
-ALTER TABLE {PACKAGES_TABLE_V2} ADD COLUMN IF NOT EXISTS package_adjusted_dv01 NUMERIC;
-ALTER TABLE {PACKAGES_TABLE_V2} ADD COLUMN IF NOT EXISTS normalized_tape_label TEXT;
-ALTER TABLE {PACKAGES_TABLE_V2} ADD COLUMN IF NOT EXISTS tape_tags TEXT;
+ALTER TABLE {PACKAGES_TABLE} ADD COLUMN IF NOT EXISTS is_off_market_any BOOLEAN;
+ALTER TABLE {PACKAGES_TABLE} ADD COLUMN IF NOT EXISTS confidence_score INTEGER;
+ALTER TABLE {PACKAGES_TABLE} ADD COLUMN IF NOT EXISTS confidence_total INTEGER;
+ALTER TABLE {PACKAGES_TABLE} ADD COLUMN IF NOT EXISTS confidence_tone TEXT;
+ALTER TABLE {PACKAGES_TABLE} ADD COLUMN IF NOT EXISTS confidence_signals JSONB;
+ALTER TABLE {PACKAGES_TABLE} ADD COLUMN IF NOT EXISTS summary_rate NUMERIC;
+ALTER TABLE {PACKAGES_TABLE} ADD COLUMN IF NOT EXISTS summary_risk NUMERIC;
+ALTER TABLE {PACKAGES_TABLE} ADD COLUMN IF NOT EXISTS summary_opa NUMERIC;
+ALTER TABLE {PACKAGES_TABLE} ADD COLUMN IF NOT EXISTS is_ccp_switch BOOLEAN;
+ALTER TABLE {PACKAGES_TABLE} ADD COLUMN IF NOT EXISTS ccp_switch_from TEXT;
+ALTER TABLE {PACKAGES_TABLE} ADD COLUMN IF NOT EXISTS ccp_switch_to TEXT;
+ALTER TABLE {PACKAGES_TABLE} ADD COLUMN IF NOT EXISTS package_adjusted_dv01 NUMERIC;
+ALTER TABLE {PACKAGES_TABLE} ADD COLUMN IF NOT EXISTS normalized_tape_label TEXT;
+ALTER TABLE {PACKAGES_TABLE} ADD COLUMN IF NOT EXISTS tape_tags TEXT;
 
 -- PTP/OPA package-level columns (package-detection enhancement)
-ALTER TABLE {PACKAGES_TABLE_V2} ADD COLUMN IF NOT EXISTS ptp_group_id TEXT;
-ALTER TABLE {PACKAGES_TABLE_V2} ADD COLUMN IF NOT EXISTS ptp_group_size INTEGER;
-ALTER TABLE {PACKAGES_TABLE_V2} ADD COLUMN IF NOT EXISTS opa_signed_net NUMERIC;
-ALTER TABLE {PACKAGES_TABLE_V2} ADD COLUMN IF NOT EXISTS opa_ptp_residual NUMERIC;
-ALTER TABLE {PACKAGES_TABLE_V2} ADD COLUMN IF NOT EXISTS opa_sign_confidence TEXT;
-ALTER TABLE {PACKAGES_TABLE_V2} ADD COLUMN IF NOT EXISTS opa_constrained_net NUMERIC;
-ALTER TABLE {PACKAGES_TABLE_V2} ADD COLUMN IF NOT EXISTS opa_constrained_residual NUMERIC;
-ALTER TABLE {PACKAGES_TABLE_V2} ADD COLUMN IF NOT EXISTS dealer_spread_est NUMERIC;
-ALTER TABLE {PACKAGES_TABLE_V2} ADD COLUMN IF NOT EXISTS dealer_spread_bps NUMERIC;
-ALTER TABLE {PACKAGES_TABLE_V2} ADD COLUMN IF NOT EXISTS ptp_sub_structures JSONB;
-ALTER TABLE {PACKAGES_TABLE_V2} ADD COLUMN IF NOT EXISTS ptp_price_notation SMALLINT;
+ALTER TABLE {PACKAGES_TABLE} ADD COLUMN IF NOT EXISTS ptp_group_id TEXT;
+ALTER TABLE {PACKAGES_TABLE} ADD COLUMN IF NOT EXISTS ptp_group_size INTEGER;
+ALTER TABLE {PACKAGES_TABLE} ADD COLUMN IF NOT EXISTS opa_signed_net NUMERIC;
+ALTER TABLE {PACKAGES_TABLE} ADD COLUMN IF NOT EXISTS opa_ptp_residual NUMERIC;
+ALTER TABLE {PACKAGES_TABLE} ADD COLUMN IF NOT EXISTS opa_sign_confidence TEXT;
+ALTER TABLE {PACKAGES_TABLE} ADD COLUMN IF NOT EXISTS opa_constrained_net NUMERIC;
+ALTER TABLE {PACKAGES_TABLE} ADD COLUMN IF NOT EXISTS opa_constrained_residual NUMERIC;
+ALTER TABLE {PACKAGES_TABLE} ADD COLUMN IF NOT EXISTS dealer_spread_est NUMERIC;
+ALTER TABLE {PACKAGES_TABLE} ADD COLUMN IF NOT EXISTS dealer_spread_bps NUMERIC;
+ALTER TABLE {PACKAGES_TABLE} ADD COLUMN IF NOT EXISTS ptp_sub_structures JSONB;
+ALTER TABLE {PACKAGES_TABLE} ADD COLUMN IF NOT EXISTS ptp_price_notation SMALLINT;
 
-ALTER TABLE {LEGS_TABLE_V2} ADD COLUMN IF NOT EXISTS basis_type TEXT;
-ALTER TABLE {LEGS_TABLE_V2} ADD COLUMN IF NOT EXISTS basis_spread_bps NUMERIC;
-ALTER TABLE {LEGS_TABLE_V2} ADD COLUMN IF NOT EXISTS leg1_rate_index TEXT;
-ALTER TABLE {LEGS_TABLE_V2} ADD COLUMN IF NOT EXISTS leg2_rate_index TEXT;
+ALTER TABLE {LEGS_TABLE} ADD COLUMN IF NOT EXISTS basis_type TEXT;
+ALTER TABLE {LEGS_TABLE} ADD COLUMN IF NOT EXISTS basis_spread_bps NUMERIC;
+ALTER TABLE {LEGS_TABLE} ADD COLUMN IF NOT EXISTS leg1_rate_index TEXT;
+ALTER TABLE {LEGS_TABLE} ADD COLUMN IF NOT EXISTS leg2_rate_index TEXT;
 
 -- PTP/OPA per-leg columns (package-detection enhancement)
-ALTER TABLE {LEGS_TABLE_V2} ADD COLUMN IF NOT EXISTS ptp_group_id TEXT;
-ALTER TABLE {LEGS_TABLE_V2} ADD COLUMN IF NOT EXISTS opa_sign SMALLINT;
-ALTER TABLE {LEGS_TABLE_V2} ADD COLUMN IF NOT EXISTS opa_signed_amount NUMERIC;
+ALTER TABLE {LEGS_TABLE} ADD COLUMN IF NOT EXISTS ptp_group_id TEXT;
+ALTER TABLE {LEGS_TABLE} ADD COLUMN IF NOT EXISTS opa_sign SMALLINT;
+ALTER TABLE {LEGS_TABLE} ADD COLUMN IF NOT EXISTS opa_signed_amount NUMERIC;
 
 -- Matched-UST-maturity / special-tenor enrichment (leg)
-ALTER TABLE {LEGS_TABLE_V2} ADD COLUMN IF NOT EXISTS matched_ust_maturity BOOLEAN;
-ALTER TABLE {LEGS_TABLE_V2} ADD COLUMN IF NOT EXISTS special_tenor_type TEXT;
-ALTER TABLE {LEGS_TABLE_V2} ADD COLUMN IF NOT EXISTS ust_cusip TEXT;
-ALTER TABLE {LEGS_TABLE_V2} ADD COLUMN IF NOT EXISTS ust_coupon NUMERIC;
-ALTER TABLE {LEGS_TABLE_V2} ADD COLUMN IF NOT EXISTS ust_oi TEXT;
-ALTER TABLE {LEGS_TABLE_V2} ADD COLUMN IF NOT EXISTS ust_label TEXT;
-ALTER TABLE {LEGS_TABLE_V2} ADD COLUMN IF NOT EXISTS ust_issue_date DATE;
-ALTER TABLE {LEGS_TABLE_V2} ADD COLUMN IF NOT EXISTS tape_label_ust_alias TEXT;
-ALTER TABLE {LEGS_TABLE_V2} ADD COLUMN IF NOT EXISTS leg_tape_label_ust_alias TEXT;
-ALTER TABLE {LEGS_TABLE_V2} ADD COLUMN IF NOT EXISTS matched_ust_maturity_trade_confidence TEXT;
+ALTER TABLE {LEGS_TABLE} ADD COLUMN IF NOT EXISTS matched_ust_maturity BOOLEAN;
+ALTER TABLE {LEGS_TABLE} ADD COLUMN IF NOT EXISTS special_tenor_type TEXT;
+ALTER TABLE {LEGS_TABLE} ADD COLUMN IF NOT EXISTS ust_cusip TEXT;
+ALTER TABLE {LEGS_TABLE} ADD COLUMN IF NOT EXISTS ust_coupon NUMERIC;
+ALTER TABLE {LEGS_TABLE} ADD COLUMN IF NOT EXISTS ust_oi TEXT;
+ALTER TABLE {LEGS_TABLE} ADD COLUMN IF NOT EXISTS ust_label TEXT;
+ALTER TABLE {LEGS_TABLE} ADD COLUMN IF NOT EXISTS ust_issue_date DATE;
+ALTER TABLE {LEGS_TABLE} ADD COLUMN IF NOT EXISTS tape_label_ust_alias TEXT;
+ALTER TABLE {LEGS_TABLE} ADD COLUMN IF NOT EXISTS leg_tape_label_ust_alias TEXT;
+ALTER TABLE {LEGS_TABLE} ADD COLUMN IF NOT EXISTS matched_ust_maturity_trade_confidence TEXT;
 
 -- Matched-UST-maturity / special-tenor enrichment (package)
-ALTER TABLE {PACKAGES_TABLE_V2} ADD COLUMN IF NOT EXISTS special_tenor_type TEXT;
-ALTER TABLE {PACKAGES_TABLE_V2} ADD COLUMN IF NOT EXISTS tape_label_ust_alias TEXT;
-ALTER TABLE {PACKAGES_TABLE_V2} ADD COLUMN IF NOT EXISTS is_matched_maturity_all BOOLEAN;
+ALTER TABLE {PACKAGES_TABLE} ADD COLUMN IF NOT EXISTS special_tenor_type TEXT;
+ALTER TABLE {PACKAGES_TABLE} ADD COLUMN IF NOT EXISTS tape_label_ust_alias TEXT;
+ALTER TABLE {PACKAGES_TABLE} ADD COLUMN IF NOT EXISTS is_matched_maturity_all BOOLEAN;
 
 -- Phase 7: lifecycle partial-unwind + seasoned-trade columns
-ALTER TABLE {LEGS_TABLE_V2} ADD COLUMN IF NOT EXISTS lc_was_partially_terminated BOOLEAN;
-ALTER TABLE {LEGS_TABLE_V2} ADD COLUMN IF NOT EXISTS lc_has_partial_unwind BOOLEAN;
-ALTER TABLE {LEGS_TABLE_V2} ADD COLUMN IF NOT EXISTS lc_inception_notional NUMERIC;
-ALTER TABLE {LEGS_TABLE_V2} ADD COLUMN IF NOT EXISTS lc_current_notional NUMERIC;
-ALTER TABLE {LEGS_TABLE_V2} ADD COLUMN IF NOT EXISTS lc_has_past_effective BOOLEAN;
-ALTER TABLE {LEGS_TABLE_V2} ADD COLUMN IF NOT EXISTS lc_is_off_market_seasoned BOOLEAN;
-ALTER TABLE {LEGS_TABLE_V2} ADD COLUMN IF NOT EXISTS lc_days_seasoned INTEGER;
-ALTER TABLE {LEGS_TABLE_V2} ADD COLUMN IF NOT EXISTS xd_was_partially_terminated BOOLEAN;
-ALTER TABLE {LEGS_TABLE_V2} ADD COLUMN IF NOT EXISTS xd_has_past_effective BOOLEAN;
-ALTER TABLE {LEGS_TABLE_V2} ADD COLUMN IF NOT EXISTS xd_is_off_market_seasoned BOOLEAN;
-ALTER TABLE {LEGS_TABLE_V2} ADD COLUMN IF NOT EXISTS xd_days_seasoned INTEGER;
+ALTER TABLE {LEGS_TABLE} ADD COLUMN IF NOT EXISTS lc_was_partially_terminated BOOLEAN;
+ALTER TABLE {LEGS_TABLE} ADD COLUMN IF NOT EXISTS lc_has_partial_unwind BOOLEAN;
+ALTER TABLE {LEGS_TABLE} ADD COLUMN IF NOT EXISTS lc_inception_notional NUMERIC;
+ALTER TABLE {LEGS_TABLE} ADD COLUMN IF NOT EXISTS lc_current_notional NUMERIC;
+ALTER TABLE {LEGS_TABLE} ADD COLUMN IF NOT EXISTS lc_has_past_effective BOOLEAN;
+ALTER TABLE {LEGS_TABLE} ADD COLUMN IF NOT EXISTS lc_is_off_market_seasoned BOOLEAN;
+ALTER TABLE {LEGS_TABLE} ADD COLUMN IF NOT EXISTS lc_days_seasoned INTEGER;
+ALTER TABLE {LEGS_TABLE} ADD COLUMN IF NOT EXISTS xd_was_partially_terminated BOOLEAN;
+ALTER TABLE {LEGS_TABLE} ADD COLUMN IF NOT EXISTS xd_has_past_effective BOOLEAN;
+ALTER TABLE {LEGS_TABLE} ADD COLUMN IF NOT EXISTS xd_is_off_market_seasoned BOOLEAN;
+ALTER TABLE {LEGS_TABLE} ADD COLUMN IF NOT EXISTS xd_days_seasoned INTEGER;
 
 -- Execution-vs-Event timestamp integration (2026-07-17 spec). event_timestamp
 -- (#30) + the two precomputed deltas + alpha-join provenance + EMIR granularity
 -- guard. Nullable / no default so the ADD COLUMN is a fast metadata-only change
 -- on the ~1.3M-row table; historical rows stay NULL until re-ingest (the raw
 -- Event timestamp is not reconstructable from the tape).
-ALTER TABLE {LEGS_TABLE_V2} ADD COLUMN IF NOT EXISTS event_timestamp TIMESTAMPTZ;
-ALTER TABLE {LEGS_TABLE_V2} ADD COLUMN IF NOT EXISTS report_lag_seconds NUMERIC;
-ALTER TABLE {LEGS_TABLE_V2} ADD COLUMN IF NOT EXISTS alpha_lag_seconds NUMERIC;
-ALTER TABLE {LEGS_TABLE_V2} ADD COLUMN IF NOT EXISTS original_execution_source TEXT;
-ALTER TABLE {LEGS_TABLE_V2} ADD COLUMN IF NOT EXISTS event_timestamp_granularity TEXT;
-ALTER TABLE {LEGS_TABLE_V2} ADD COLUMN IF NOT EXISTS report_lag_invariant_violation BOOLEAN;
+ALTER TABLE {LEGS_TABLE} ADD COLUMN IF NOT EXISTS event_timestamp TIMESTAMPTZ;
+ALTER TABLE {LEGS_TABLE} ADD COLUMN IF NOT EXISTS report_lag_seconds NUMERIC;
+ALTER TABLE {LEGS_TABLE} ADD COLUMN IF NOT EXISTS alpha_lag_seconds NUMERIC;
+ALTER TABLE {LEGS_TABLE} ADD COLUMN IF NOT EXISTS original_execution_source TEXT;
+ALTER TABLE {LEGS_TABLE} ADD COLUMN IF NOT EXISTS event_timestamp_granularity TEXT;
+ALTER TABLE {LEGS_TABLE} ADD COLUMN IF NOT EXISTS report_lag_invariant_violation BOOLEAN;
 
-ALTER TABLE {PACKAGES_TABLE_V2} ADD COLUMN IF NOT EXISTS event_start TIMESTAMPTZ;
-ALTER TABLE {PACKAGES_TABLE_V2} ADD COLUMN IF NOT EXISTS event_end TIMESTAMPTZ;
-ALTER TABLE {PACKAGES_TABLE_V2} ADD COLUMN IF NOT EXISTS max_report_lag_seconds NUMERIC;
-ALTER TABLE {PACKAGES_TABLE_V2} ADD COLUMN IF NOT EXISTS median_report_lag_seconds NUMERIC;
-ALTER TABLE {PACKAGES_TABLE_V2} ADD COLUMN IF NOT EXISTS late_report BOOLEAN;
+ALTER TABLE {PACKAGES_TABLE} ADD COLUMN IF NOT EXISTS event_start TIMESTAMPTZ;
+ALTER TABLE {PACKAGES_TABLE} ADD COLUMN IF NOT EXISTS event_end TIMESTAMPTZ;
+ALTER TABLE {PACKAGES_TABLE} ADD COLUMN IF NOT EXISTS max_report_lag_seconds NUMERIC;
+ALTER TABLE {PACKAGES_TABLE} ADD COLUMN IF NOT EXISTS median_report_lag_seconds NUMERIC;
+ALTER TABLE {PACKAGES_TABLE} ADD COLUMN IF NOT EXISTS late_report BOOLEAN;
 
-CREATE INDEX IF NOT EXISTS idx_tape_v2_legs_event
-  ON {LEGS_TABLE_V2}(event_timestamp);
-CREATE INDEX IF NOT EXISTS idx_tape_v2_legs_report_lag
-  ON {LEGS_TABLE_V2}(report_lag_seconds);
-CREATE INDEX IF NOT EXISTS idx_tape_v2_packages_event_start
-  ON {PACKAGES_TABLE_V2}(as_of_date, event_start DESC NULLS LAST);
+CREATE INDEX IF NOT EXISTS idx_tape_{IDX_INFIX}_legs_event
+  ON {LEGS_TABLE}(event_timestamp);
+CREATE INDEX IF NOT EXISTS idx_tape_{IDX_INFIX}_legs_report_lag
+  ON {LEGS_TABLE}(report_lag_seconds);
+CREATE INDEX IF NOT EXISTS idx_tape_{IDX_INFIX}_packages_event_start
+  ON {PACKAGES_TABLE}(as_of_date, event_start DESC NULLS LAST);
 
-CREATE INDEX IF NOT EXISTS idx_tape_v2_legs_norm_label_orig
-  ON {LEGS_TABLE_V2}(normalized_tape_label, original_execution_timestamp DESC NULLS LAST);
-CREATE INDEX IF NOT EXISTS idx_tape_v2_packages_norm_label
-  ON {PACKAGES_TABLE_V2}(normalized_tape_label, original_execution_start DESC NULLS LAST);
+CREATE INDEX IF NOT EXISTS idx_tape_{IDX_INFIX}_legs_norm_label_orig
+  ON {LEGS_TABLE}(normalized_tape_label, original_execution_timestamp DESC NULLS LAST);
+CREATE INDEX IF NOT EXISTS idx_tape_{IDX_INFIX}_packages_norm_label
+  ON {PACKAGES_TABLE}(normalized_tape_label, original_execution_start DESC NULLS LAST);
 
 -- =====================================================================
 -- Manual regrouping + trader notes (2026-07-08). Dashboard-owned tables;
@@ -426,7 +433,7 @@ CREATE INDEX IF NOT EXISTS idx_tape_v2_packages_norm_label
 -- ensure_schema() can re-run safely. These tables MUST be declared before
 -- the CREATE VIEW below, which references the member + notes tables.
 -- =====================================================================
-CREATE TABLE IF NOT EXISTS {OVERRIDES_TABLE_V2} (
+CREATE TABLE IF NOT EXISTS {OVERRIDES_TABLE} (
     override_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     override_type TEXT NOT NULL
       CHECK (override_type IN ('GROUP','SPLIT','DETACH')),
@@ -440,23 +447,23 @@ CREATE TABLE IF NOT EXISTS {OVERRIDES_TABLE_V2} (
     tags TEXT[],
     metrics JSONB NOT NULL DEFAULT '{{}}'::jsonb,
     is_active BOOLEAN NOT NULL DEFAULT TRUE,
-    superseded_by UUID REFERENCES {OVERRIDES_TABLE_V2}(override_id),
-    CONSTRAINT chk_tape_v2_override_group_min_trades
+    superseded_by UUID REFERENCES {OVERRIDES_TABLE}(override_id),
+    CONSTRAINT chk_tape_{IDX_INFIX}_override_group_min_trades
       CHECK (override_type <> 'GROUP' OR array_length(trade_ids, 1) >= 2)
 );
 
-CREATE INDEX IF NOT EXISTS idx_tape_v2_overrides_trade_ids_gin
-  ON {OVERRIDES_TABLE_V2} USING GIN (trade_ids);
-CREATE INDEX IF NOT EXISTS idx_tape_v2_overrides_active
-  ON {OVERRIDES_TABLE_V2} (is_active) WHERE is_active;
-CREATE INDEX IF NOT EXISTS idx_tape_v2_overrides_manual_pkg
-  ON {OVERRIDES_TABLE_V2} (manual_package_id);
-CREATE INDEX IF NOT EXISTS idx_tape_v2_overrides_created_at
-  ON {OVERRIDES_TABLE_V2} (created_at);
+CREATE INDEX IF NOT EXISTS idx_tape_{IDX_INFIX}_overrides_trade_ids_gin
+  ON {OVERRIDES_TABLE} USING GIN (trade_ids);
+CREATE INDEX IF NOT EXISTS idx_tape_{IDX_INFIX}_overrides_active
+  ON {OVERRIDES_TABLE} (is_active) WHERE is_active;
+CREATE INDEX IF NOT EXISTS idx_tape_{IDX_INFIX}_overrides_manual_pkg
+  ON {OVERRIDES_TABLE} (manual_package_id);
+CREATE INDEX IF NOT EXISTS idx_tape_{IDX_INFIX}_overrides_created_at
+  ON {OVERRIDES_TABLE} (created_at);
 
-CREATE TABLE IF NOT EXISTS {OVERRIDE_MEMBERS_TABLE_V2} (
+CREATE TABLE IF NOT EXISTS {OVERRIDE_MEMBERS_TABLE} (
     trade_id TEXT NOT NULL,
-    override_id UUID NOT NULL REFERENCES {OVERRIDES_TABLE_V2}(override_id),
+    override_id UUID NOT NULL REFERENCES {OVERRIDES_TABLE}(override_id),
     override_type TEXT NOT NULL,
     manual_package_id TEXT,
     is_active BOOLEAN NOT NULL DEFAULT TRUE
@@ -465,12 +472,12 @@ CREATE TABLE IF NOT EXISTS {OVERRIDE_MEMBERS_TABLE_V2} (
 -- Backstop invariant: at most one ACTIVE override per trade. The partial
 -- UNIQUE index is ALSO the btree the display view index-probes on
 -- (m.trade_id = l.trade_id AND m.is_active) — no separate probe index needed.
-CREATE UNIQUE INDEX IF NOT EXISTS uq_tape_v2_override_members_active_trade
-  ON {OVERRIDE_MEMBERS_TABLE_V2} (trade_id) WHERE is_active;
+CREATE UNIQUE INDEX IF NOT EXISTS uq_tape_{IDX_INFIX}_override_members_active_trade
+  ON {OVERRIDE_MEMBERS_TABLE} (trade_id) WHERE is_active;
 
-CREATE TABLE IF NOT EXISTS {OVERRIDE_HISTORY_TABLE_V2} (
+CREATE TABLE IF NOT EXISTS {OVERRIDE_HISTORY_TABLE} (
     history_id BIGSERIAL PRIMARY KEY,
-    override_id UUID NOT NULL REFERENCES {OVERRIDES_TABLE_V2}(override_id),
+    override_id UUID NOT NULL REFERENCES {OVERRIDES_TABLE}(override_id),
     action TEXT NOT NULL
       CHECK (action IN ('CREATED','UPDATED','DEACTIVATED','SUPERSEDED')),
     changed_by TEXT NOT NULL,
@@ -479,7 +486,7 @@ CREATE TABLE IF NOT EXISTS {OVERRIDE_HISTORY_TABLE_V2} (
     previous_state JSONB
 );
 
-CREATE TABLE IF NOT EXISTS {NOTES_TABLE_V2} (
+CREATE TABLE IF NOT EXISTS {NOTES_TABLE} (
     note_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     target_type TEXT NOT NULL CHECK (target_type IN ('TRADE','PACKAGE')),
     target_id TEXT NOT NULL,
@@ -490,11 +497,11 @@ CREATE TABLE IF NOT EXISTS {NOTES_TABLE_V2} (
     is_active BOOLEAN NOT NULL DEFAULT TRUE
 );
 
-CREATE INDEX IF NOT EXISTS idx_tape_v2_notes_target_active
-  ON {NOTES_TABLE_V2} (target_type, target_id) WHERE is_active;
+CREATE INDEX IF NOT EXISTS idx_tape_{IDX_INFIX}_notes_target_active
+  ON {NOTES_TABLE} (target_type, target_id) WHERE is_active;
 
-DROP VIEW IF EXISTS {DISPLAY_VIEW_V2};
-CREATE OR REPLACE VIEW {DISPLAY_VIEW_V2} AS
+DROP VIEW IF EXISTS {DISPLAY_VIEW};
+CREATE OR REPLACE VIEW {DISPLAY_VIEW} AS
 SELECT
   p.package_id,
   p.manual_link_id,
@@ -597,7 +604,7 @@ SELECT
   p.max_report_lag_seconds,
   p.median_report_lag_seconds,
   p.late_report
-FROM {PACKAGES_TABLE_V2} p
+FROM {PACKAGES_TABLE} p
 LEFT JOIN LATERAL (
     SELECT
       jsonb_agg(to_jsonb(l) ORDER BY l.leg_order) AS legs_json,
@@ -605,8 +612,8 @@ LEFT JOIN LATERAL (
         FILTER (WHERE m.override_id IS NOT NULL) AS override_map,
       max(m.manual_package_id) AS manual_package_id,
       max(m.override_type) AS override_type
-    FROM {LEGS_TABLE_V2} l
-    LEFT JOIN {OVERRIDE_MEMBERS_TABLE_V2} m
+    FROM {LEGS_TABLE} l
+    LEFT JOIN {OVERRIDE_MEMBERS_TABLE} m
       ON m.trade_id = l.trade_id AND m.is_active
     WHERE l.package_id = p.package_id
 ) l ON TRUE
@@ -616,21 +623,21 @@ LEFT JOIN LATERAL (
     SELECT
       count(*) > 0 AS has_notes,
       count(*)::int AS notes_count
-    FROM {NOTES_TABLE_V2} nt
+    FROM {NOTES_TABLE} nt
     WHERE nt.is_active
       AND (
         (nt.target_type = 'PACKAGE'
            AND nt.target_id IN (p.package_id, l.manual_package_id, ml.manual_package_id))
         OR (nt.target_type = 'TRADE'
            AND nt.target_id IN (
-             SELECT lg.trade_id FROM {LEGS_TABLE_V2} lg
+             SELECT lg.trade_id FROM {LEGS_TABLE} lg
              WHERE lg.package_id = p.package_id
            ))
       )
 ) n ON TRUE;
 
 -- Phase 7: swap spread VWAP daily aggregate table
-CREATE TABLE IF NOT EXISTS arbs_usd_swap_vwap_daily_v2 (
+CREATE TABLE IF NOT EXISTS {VWAP_TABLE} (
     as_of_date DATE NOT NULL,
     ticker TEXT NOT NULL,
     vwap_bps NUMERIC,
@@ -640,16 +647,13 @@ CREATE TABLE IF NOT EXISTS arbs_usd_swap_vwap_daily_v2 (
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     PRIMARY KEY (as_of_date, ticker)
 );
-CREATE INDEX IF NOT EXISTS idx_vwap_v2_ticker
-  ON arbs_usd_swap_vwap_daily_v2(ticker, as_of_date DESC);
+CREATE INDEX IF NOT EXISTS idx_vwap_{IDX_INFIX}_ticker
+  ON {VWAP_TABLE}(ticker, as_of_date DESC);
 """
 
-VWAP_TABLE_V2 = "arbs_usd_swap_vwap_daily_v2"
-
-SIGNAL_TABLE_V2 = "arbs_usd_swap_tape_signal_v2"
 
 SIGNAL_TABLE_DDL = f"""
-CREATE TABLE IF NOT EXISTS {SIGNAL_TABLE_V2} (
+CREATE TABLE IF NOT EXISTS {SIGNAL_TABLE} (
     id INTEGER PRIMARY KEY DEFAULT 1 CHECK (id = 1),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     as_of_date DATE,
@@ -657,7 +661,7 @@ CREATE TABLE IF NOT EXISTS {SIGNAL_TABLE_V2} (
     legs_written INTEGER DEFAULT 0,
     cycle_ms INTEGER DEFAULT 0
 );
-INSERT INTO {SIGNAL_TABLE_V2} (id) VALUES (1) ON CONFLICT DO NOTHING;
+INSERT INTO {SIGNAL_TABLE} (id) VALUES (1) ON CONFLICT DO NOTHING;
 """
 
 SIGNAL_REALTIME_DDL = f"""
@@ -666,7 +670,7 @@ BEGIN
   IF EXISTS (
     SELECT 1 FROM pg_publication WHERE pubname = 'supabase_realtime'
   ) THEN
-    ALTER PUBLICATION supabase_realtime ADD TABLE {SIGNAL_TABLE_V2};
+    ALTER PUBLICATION supabase_realtime ADD TABLE {SIGNAL_TABLE};
   END IF;
 EXCEPTION WHEN duplicate_object THEN
   NULL;
@@ -692,18 +696,7 @@ COMMENT ON TABLE arbs_usd_swap_tape_legs_v1
 
 
 __all__ = [
-    "TAPE_SCHEMA_SQL_V2",
-    "PACKAGES_TABLE_V2",
-    "LEGS_TABLE_V2",
-    "RUNS_TABLE_V2",
-    "DISPLAY_VIEW_V2",
-    "MANUAL_LINKS_TABLE",
-    "OVERRIDES_TABLE_V2",
-    "OVERRIDE_MEMBERS_TABLE_V2",
-    "OVERRIDE_HISTORY_TABLE_V2",
-    "NOTES_TABLE_V2",
-    "VWAP_TABLE_V2",
-    "SIGNAL_TABLE_V2",
+    "TAPE_SCHEMA_SQL_CURRENT",
     "SIGNAL_TABLE_DDL",
     "SIGNAL_REALTIME_DDL",
     "FREEZE_V1_SQL",
