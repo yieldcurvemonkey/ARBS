@@ -441,3 +441,36 @@ which is not a constraint on anything. Left alone.
 * **`_validate_curve_request_timestamp` per point.** `citivelo_excel` is not an
   `EOD` source by `_requires_strict_eod_calendar_validation`'s test, so this is
   already a no-op on this path.
+
+## 7. Test status
+
+**Fast gate: green.** `pytest tests -m "not slow and not network and not db"`,
+run as eight bounded processes because three attempts to run it as one were
+killed mid-stream (at 75%, at 14%, and once with `exit 127`) with no traceback
+and no failing test, while another session on this machine was running a second
+pytest plus two backtest scripts:
+
+| chunk | result |
+|---|---|
+| 1/8 | 806 passed, 9 skipped |
+| 2/8 | 615 passed |
+| 3/8 | 403 passed, 13 skipped |
+| 4/8 | 650 passed, 1 skipped |
+| 5/8 | 573 passed |
+| 6/8 | 358 passed, 2 skipped |
+| 7/8 | 505 passed, 16 skipped |
+| 8/8 | 477 passed, 10 skipped |
+| **total** | **4,387 passed, 51 skipped, every chunk exit 0** |
+
+Separately, the **blast-radius subset** — the 58 test files that reference
+`RLIRSwapCurve`, `rl_compat`/`rate_fixings_kwargs`, `curve_store`/`CurveStore`,
+`IRSwapsMDP`, `IRSwapsTB`, `citivelo`, `build_irswap` or `fair_rate`:
+**829 passed, 11 skipped, exit 0**. That is the set where a golden test pinning a
+*struck* rate would live, and it does not fire — which is the evidence behind
+§3's claim that the one deviation is not load-bearing anywhere else.
+
+Note on why this was run in chunks at all: `cmd | tail` reports **tail's** exit
+code, so the first killed run notified as success. `scripts/perf/run_fast_gate_chunked.py`
+prints each chunk's own exit code and rolls up non-zero if any chunk failed OR
+died, so a partial run cannot be read as a pass. Raw output:
+`2026-08-08-citivelo-read-path-testgate.log`.
