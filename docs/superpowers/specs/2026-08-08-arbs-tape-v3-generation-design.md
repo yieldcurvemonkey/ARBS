@@ -59,8 +59,27 @@ The v1 → v2 cutover was done by copying `_tape_schema.py` to `_tape_schema_v2.
 that would create a third hand-synced copy of a 30 KB DDL — and that DDL has *already* drifted
 (live `_v2` carries a `producer` column that exists nowhere in ARBS's DDL or git history).
 
-Instead, parameterise the generation. `TAPE_SCHEMA_SQL_V2` is already an f-string interpolating
-its table-name constants, so repointing the constants emits v3 objects from unchanged DDL text.
+Instead, parameterise the generation. `TAPE_SCHEMA_SQL_V2` is an f-string interpolating its
+table-name constants, so repointing those constants emits v3 *tables* from unchanged DDL text.
+
+**That is necessary but not sufficient, and the gap fails silently.** Auditing the DDL:
+
+- **37 index and constraint names carry `v2` as literal text** — `idx_tape_v2_packages_date`,
+  `idx_tape_v2_legs_exec`, `uq_tape_v2_override_members_active_trade`, `idx_vwap_v2_ticker`, and
+  33 more. Index names are schema-global in Postgres, so
+  `CREATE INDEX IF NOT EXISTS idx_tape_v2_packages_date ON arbs_usd_swap_tape_packages_v3(...)`
+  matches the *existing v2 index name*, skips, and returns success. **v3 would be created with
+  zero indexes** on 2.3M legs and 1.45M packages — no error raised, the dashboard merely
+  unusable. This is the single most dangerous defect in the migration precisely because
+  `IF NOT EXISTS` converts it from a crash into a performance collapse.
+- **The VWAP block hardcodes `arbs_usd_swap_vwap_daily_v2`** at two lines, with `VWAP_TABLE_V2`
+  defined *after* the DDL that should have used it.
+
+So the parameterisation must cover three name families, not one: table names (already
+interpolated), index/constraint names (37 literals), and the VWAP block. Adding an index-name
+infix to `_tape_tables` and substituting `idx_tape_{GEN}_` / `uq_tape_{GEN}_` / `idx_vwap_{GEN}_`
+throughout is mechanical, but omitting it produces a working-looking v3 that is silently
+unindexed.
 
 New `SDRUtils/_swappulse_scripts/_tape_tables.py`:
 
@@ -175,6 +194,10 @@ After creating v3, assert three column sets agree:
 3. the column list the ingest's `INSERT` statements build
 
 Any column in (2) or (3) absent from (1) is a silent data-loss bug and fails the migration.
+
+**Index parity is checked alongside it**, for the reason in §1: assert v3 carries the same
+*number* of indexes as v2 on the corresponding tables. A v3 with zero indexes passes every
+column check and every row-count check while being unusable.
 
 **The check is itself validated against a known answer:** `producer` must appear in set (2) and
 in neither (1) nor (3). A parity check that does not flag `producer` is broken and its "pass" is
@@ -293,6 +316,7 @@ backfill rebuilds that day in full.
 |---|---|
 | ERIS EOD curves do not reach 2024-03 → 2024 tail unpriceable | Pilot 2024-03-04 **before** the bulk run; if it fails, shorten the range and say so rather than publishing NULL risk |
 | v3 DDL misses a drifted column → silent data loss | Three-way parity check, validated against `producer` as a known answer |
+| 37 literal `idx_tape_v2_*` names → `IF NOT EXISTS` matches v2's indexes and skips → **v3 silently unindexed** | Parameterise the index-name infix (§1); assert index-count parity v3 vs v2 in the parity check (§4) |
 | `_schema_already_current()` short-circuits on v2's columns → v3 tables never created | Derive `_LATEST_MIGRATION_COLS` table names from `_tape_tables` (§1); pilot proves the tables exist before the bulk run |
 | Backfill run from the worktree resolves an empty `./sdr_cache` → 611 days re-download, silently | `--cache-path` pinned to the primary checkout (§5); pilot timing would expose it |
 | A code edit lands mid-backfill → two logic vintages, unmarked | Freeze and record SHA; ledger stores the SHA per day |
