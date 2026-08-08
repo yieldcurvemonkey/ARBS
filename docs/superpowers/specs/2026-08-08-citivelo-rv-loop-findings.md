@@ -849,6 +849,61 @@ package extract already supports — and **not another family on this data.**
 
 **Fourteen families dead. Nothing ALIVE. `trials_total` 65.**
 
+## CM-3 — an attempt on CM-2's unclaimable level, and why it failed
+
+CM-2 is decisive on the **shape** of the linear cost line but not on its **level**, because
+`|print − EOD mid|` contains the execution spread *plus* intraday drift to the 15:00 ET stamp. Roll
+(1984) estimates an effective spread from the **transaction series alone** — consecutive price
+changes carry a serial covariance of −s²/4 under bid-ask bounce — so it needs no mid, no curve and no
+drift model. The design rested on the *direction of its bias*: drift pushes the implied spread
+**down**, so Roll should be a **lower** bound, and the two together would **bracket** a level neither
+can pin alone.
+
+**The estimator is correctly implemented.** Planted spreads of 0.2 / 0.5 / 1.0 bp recover at 0.192 /
+0.505 / 0.956 (within 4.4%); on 200 spreadless random walks it returns a median 0.0063 bp (p95
+0.0169, no estimate at all on 41.5% of runs); it is unmoved by pure drift (ratio 1.015 at μ=0.02) and
+by momentum in the efficient rate (0.501 against a planted 0.5).
+
+**The answer is nevertheless impossible.** Over 4,293 (tenor, day) cells across 641 days the implied
+half-spread is **1.6–13.3 bp** by tenor — **3 to 30× a measured upper bound of 0.32–0.53 bp**. Two
+estimates of one quantity cannot sit on opposite sides of a bound by an order of magnitude. Note
+which way it fails: the number is far too **big**, so nothing in this program's cost line was ever
+flattered by it.
+
+**The diagnostic is the actual result.** Roll assumes consecutive prints are the same instrument at
+the same efficient price. A "10Y" cell in this tape pools every maturity inside a 15-day bucket,
+every effective date inside the 5-day spot window, package legs struck away from mid, and prints
+spread over an 8-hour session. Removing that heterogeneity collapses the estimate **monotonically**:
+
+| restriction | Roll half-spread | vs CM-2 upper bound |
+|---|---|---|
+| tenor bucket, whole day (as first run) | 10.616 bp | 23.6× |
+| one **exact maturity date** | 3.762 bp | 8.4× |
+| + one exact **effective date** | 3.189 bp | 7.1× |
+| + a single **one-hour window** | **0.830 bp** | **1.8×** |
+
+A **12.8× collapse from pooling alone.** So Roll on an SDR tape measures **instrument dispersion and
+intraday rate movement, not the bid-ask** — roughly 92% of the naive estimate is contamination.
+
+**What it costs and what it buys.** It costs the bracket: Roll cannot lower-bound the linear cost
+line here, because its contamination is positive and large rather than negative as the design
+assumed. **CM-2's level remains unclaimable and L-0060 stands unchanged.** It buys two things — a
+number for anyone later building a trade-only cost estimator (at the tightest homogeneity available,
+one instrument in one hour on ~30 prints, the estimate is 0.830 bp and *still falling*, so the route
+is tighter windows and more prints, and the sample thins fast), and a method warning:
+
+> **A validated estimator can still be inapplicable.** Validation on simulated data tests the
+> arithmetic, never whether the *real* data satisfies the assumptions the simulation was built to
+> embody. My simulation planted bounce around a single efficient price; the tape supplies many
+> instruments around many prices, and no amount of planted-value testing would have revealed that.
+>
+> The companion to L-0084's question ("how often does this test fire when nothing is wrong?") is:
+> **what does my simulation assume about the data that the data does not satisfy?**
+
+L-0068's named next step — the impact exponent η by metaorder reconstruction with a Naviglio
+concavity correction — is unaffected and still open. CM-3 was a cheaper attempt at the same target
+and it did not land.
+
 ## The tally
 
 Session 1: twelve defects, twelve flattered the maker. Session 2: seven, all seven flattered the
