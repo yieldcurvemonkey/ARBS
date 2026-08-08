@@ -40,6 +40,13 @@ class IRSwapValue(Enum):
     ROLL_ADJ_RATIO = auto()
     ROLL_ADJ_CALENDAR_WEIGHT = auto()
 
+    # Appended, deliberately, rather than filed next to SPREADOVER/MMSS above:
+    # ``auto()`` renumbers every member after an insertion point, so slotting it
+    # in the middle would silently change the int value of a dozen existing
+    # members. See IRSwapValueFunctionMap._citivelo_swap_spread for what this is
+    # and how it differs from the two computed spreads.
+    CITIVELO_SWAP_SPREAD = auto()
+
 
 # _swap_structure_sign_mapper = {
 #     IRSwapStructure.OUTRIGHT: lambda rws: [abs(rws[0])],
@@ -57,6 +64,25 @@ _swap_structure_legs_mapper = {
     2: (IRSwapStructure.CURVE, 10_000),
     3: (IRSwapStructure.FLY, 10_000),
 }
+
+#: Which ``value_kwargs`` ``CITIVELO_SWAP_SPREAD`` forwards. Named explicitly
+#: rather than splatted: ``apply()`` merges the map's own ``curve``/``package``/
+#: ``risk_weights`` into the same dict, and a blind ``**kwargs`` would pass
+#: ``risk_weights`` through as an unexpected keyword.
+_CITIVELO_SWAP_SPREAD_KWARGS = frozenset(
+    {
+        "tenor",
+        "quotes",
+        "catalog",
+        "max_staleness",
+        "offline",
+        "force_refresh",
+        "return_quote",
+        # Reachable only when ``quotes`` is omitted, which is exactly the batch
+        # case that could not tune the connect at all before.
+        "client_kwargs",
+    }
+)
 
 
 def calc_spread_rate(
@@ -104,6 +130,7 @@ class IRSwapValueFunctionMap(BaseValueFunctionMap[IRSwapValue, float]):
             IRSwapValue.CARRY_AND_ROLL_BPS_RUNNING: self._carry_and_roll_bps_running,
             IRSwapValue.CVX_ADJ: self._convexity_adjustment,
             IRSwapValue.CVX_ADJ_EMPIRICAL: self._convexity_adjustment_empirical,
+            IRSwapValue.CITIVELO_SWAP_SPREAD: self._citivelo_swap_spread,
         }
 
     def _rate(self, **kwargs: Any) -> float:
@@ -199,6 +226,136 @@ class IRSwapValueFunctionMap(BaseValueFunctionMap[IRSwapValue, float]):
         swap_yield_pct = _as_percent(float(curve.fair_rate(swap_obj)))
 
         return (implied_fut_yield_pct - swap_yield_pct) * 100.0
+
+    def _citivelo_swap_spread(self, **kwargs: Any) -> float:
+        r"""Citi Velocity's PUBLISHED swap spread. A THIRD number, not a replacement.
+
+        Served from ``RATES.OIS.<index>.SWAP_SPREAD.<tenor>`` for a curve built by
+        ``IRSwapsMDP(source="CITIVELO_EXCEL")``, at that curve's own instant. This
+        repo already has two swap spreads and this one agrees with neither; the
+        point of the comparison below is that they are three different questions,
+        not three estimates of one answer.
+
+        What each one actually is
+        -------------------------
+        Read off the implementations, not the names -
+        ``MDP/IRSwapSpreads/IRSwapSpreadsMDP.py`` (``IRSwapSpreadPricer``) and
+        ``Query/IRSwaps/adapter.py`` (``IRSProductAdapter.edit_query``):
+
+        ``IRSwapValue.MMSS`` - **matched-maturity swap spread, computed here.**
+            The tenor token is a CUSIP or a UST alias (``CT10``, ``O10``,
+            ``Ox110``, ``MMYY``). ``edit_query`` resolves it against the FiscalData
+            reference table, throws the swap's tenor away and pins the swap to
+            ``effective = calendar_advance(as_of, "2D")`` and ``maturity = that
+            bond's maturity date``. The cash leg is the SAME bond's yield to
+            maturity from ``FixedRateBondsMDP``. So both legs mature on the same
+            day, to the day.
+
+        ``IRSwapValue.SPREADOVER`` - **benchmark spreadover, computed here.**
+            The two legs are deliberately NOT matched. ``_resolve_bond_symbol``
+            rewrites ``10Y`` to ``CT10`` for the cash leg, and ``_build_swap_query``
+            rewrites ``CT10`` back to ``10Y`` for the swap leg. The swap is a round
+            10-year par swap starting spot; the bond is whatever note is currently
+            on the run, whose remaining life is *less* than ten years by however
+            far into the auction cycle the date sits. The difference between MMSS
+            and SPREADOVER on the same day is that maturity mismatch running along
+            the curve, and it is a real number, not noise.
+
+        Both computed values are then::
+
+            (swap_rate_percent - bond_ytm_percent) * 100.0      # IRSwapSpreadPricer.spread_bps
+
+        i.e. **swap minus cash, in basis points**, so a USD spread is negative when
+        the swap rate is below the Treasury yield. ``swap_rate_percent`` is
+        ``IRSwapValue.RATE`` on a one-leg package, which is ``curve.fair_rate() *
+        100`` - a percent, because ``fair_rate`` is a decimal. The four
+        ``*_CARRY_ADJUSTED`` / ``*_ROLL_ADJUSTED`` / ``*_CR_ADJUSTED`` members are
+        the same number plus a 3M-horizon carry and/or roll adjustment in bp.
+
+        ``IRSwapValue.CITIVELO_SWAP_SPREAD`` - **Citi's published quote.**
+            Nothing is computed. One tag is read and returned. Citi does not
+            publish, anywhere in the harvested catalog, which Treasury it spreads
+            against, whether that leg is matched-maturity or an interpolated
+            benchmark, which yield convention it uses, or which of its own curves
+            the swap leg comes from. **Those are unknown here and are not
+            inferred.** What IS known is the shape of the axis: it is ragged and
+            per-index (USD 11 tenors including 1M/3M/6M and no 4Y/15Y/25Y; GBP a
+            different 10 with 15Y/40Y/50Y and no money-market tenors; EUR none at
+            all), which is itself evidence that this is a desk's published grid
+            rather than a mechanical function of the par curve.
+
+        Why they can disagree, in rough order of size
+        --------------------------------------------
+        1. **Which Treasury.** Matched-maturity, on-the-run, or an interpolated
+           benchmark are three different bonds; the on-the-run/off-the-run and
+           roll effects between them are worth basis points, not fractions.
+        2. **Whose swap curve.** Citi's mid against Citi's own curve versus this
+           repo's curve from whichever ``IRSwapsMDP`` source was used.
+        3. **Whose Treasury marks, and at what time.** ``FixedRateBondsMDP`` marks
+           come from FedInvest/WSJ at their own timestamps; Citi's spread is
+           stamped on Citi's clock (America/New_York - see
+           ``CITIVELO_EXCEL/timestamps.py``).
+        4. **Sign and convention.** The repo's is swap-minus-cash by construction,
+           above. Citi's sign convention is NOT verified here (see units).
+
+        Do not reconcile these into one number. If two of them are wanted on the
+        same axis, carry both columns.
+
+        Units
+        -----
+        Returned **exactly as published, unscaled**. As of 2026-08-08 zero
+        ``SWAP_SPREAD`` tags are cached and Excel was unavailable, so bp-versus-
+        decimal has *not* been measured and is not claimed - the module constant
+        is literally ``UNIT = "as_published"``. The magnitude discriminator is
+        unambiguous once one number exists (a USD 10Y swap spread is tens of bp,
+        so ``|x| > 1`` is bp and ``|x| < 1`` is not), and the check that settles it
+        is ``scripts/citivelo_swap_spread_tieout.py``, which prints Citi's raw
+        level beside this repo's ``SPREADOVER`` in bp for the same tenor and date.
+        Until that has run, do NOT subtract this from an MMSS series.
+
+        Parameters (via ``value_kwargs``)
+        ---------------------------------
+        ``tenor``
+            The Citi tenor token, e.g. ``"10Y"``. Omitted, it is derived from the
+            swap's own effective and maturity dates (whole months, then years when
+            exact) and validated against the index's axis - so a 4Y swap raises
+            with the accepted list rather than silently reading the 5Y quote.
+        ``quotes``
+            A ``CitiVeloQuotes``-shaped object. Injectable so this is testable with
+            no Excel. **Omitted, one is built lazily with ``offline=False``** - the
+            same default the curve fetcher uses - so a cold tag cache will try to
+            connect to a signed-in Excel *during pricing*. Pass ``quotes=`` or
+            ``offline=True`` from a batch job that must not do that.
+
+        Raises
+        ------
+        ValueError
+            When the curve did not come from the ``citivelo_excel`` source, naming
+            the source that was found.
+        NotImplementedError
+            For a multi-leg package: Citi publishes ``CURVES`` and ``BFLY`` as
+            separate sub-types, and risk-weighting two published spreads would
+            manufacture a quote that never existed.
+        SpotStartRequiredError
+            A subclass of the above, for a package that does not start SPOT.
+            Citi's axis indexes a maturity, not a ``(forward, tenor)`` pair, and
+            nothing in the tag or the returned number says so: a 5Yx5Y forward
+            derives tenor ``5Y`` from ``maturity - effective`` and would read the
+            SPOT 5Y quote, byte-identical to the spot answer. Differencing that
+            against the swap's own forward rate leaves the entire forward/spot
+            spread as a residual, so it refuses rather than warns. The tolerance
+            is ``swap_spreads.MAX_SPOT_START_LAG`` (10 days: T+2 across a holiday
+            weekend is at most 6, and the shortest forward anybody trades is 1M).
+            Already-running swaps are refused for the mirror-image reason - the
+            derived tenor is their ORIGINAL span, not their remaining life.
+        """
+        from MDP.IRSwaps.CITIVELO_EXCEL.swap_spreads import swap_spread_for_curve
+
+        return swap_spread_for_curve(
+            curve=kwargs["curve"],
+            package=kwargs["package"],
+            **{k: v for k, v in kwargs.items() if k in _CITIVELO_SWAP_SPREAD_KWARGS},
+        )
 
     def _convexity_adjustment_empirical(self, **kwargs: Any) -> float:
         curve = kwargs["curve"]

@@ -42,6 +42,88 @@ class FixedRateBondValue(Enum):
     SPLINE_RMSE = auto()          # Whole-curve RMSE (bp) — date-level aggregate
     SPLINE_RMSE_BUCKET = auto()   # Maturity-bucket RMSE (bp) — pass bucket via value_kwargs
 
+    # ------------------------------------------------------------------
+    # QUOTE-ONLY values: the vendor's own published number, in bp.
+    #
+    # These are NOT computed here and have no local fallback. Each one needs
+    # something this repo does not carry — OAS needs a term-structure model and
+    # a call schedule, SPREAD_TSY needs the vendor's own benchmark choice — and
+    # a locally computed "OAS" that was really a Z-spread would be worse than
+    # no number at all. They are served today by the Citi Velocity bond source
+    # ("USTS_CITIVELO-QL" / "USTS_CITIVELO-RL"); a pricer from any other source
+    # RAISES rather than returning NaN or 0.0, because 0.0 is a perfectly
+    # plausible spread and would be indistinguishable from a real one.
+    # ------------------------------------------------------------------
+    SPREAD_TSY = auto()           # Spread to the Treasury benchmark (bp)
+    OAS = auto()                  # Option-adjusted spread (bp)
+    ASW_SPREAD = auto()           # Asset-swap spread (bp); pass asw_currency="USD"
+    CAS = auto()                  # Vendor's published CAS (bp)
+
+    # ------------------------------------------------------------------
+    # The REST of the vendor's per-bond vocabulary, one member per published
+    # value. MEASURED 2026-08-08 by probing Citi's own 118-field dictionary
+    # against the RATES.BOND tag path across ten country/asset-type universes:
+    # 46 values serve, and a single US Treasury serves 44 of them. The bracketed
+    # count is how many of the ten universes served it.
+    #
+    # An earlier answer of EIGHT came from a probe that used a ONE-WEEK window
+    # against one bond, so "no rows in a week" was recorded as "does not exist".
+    # That is how the whole carry/roll family, the OIS-spread family, the
+    # yield-yield-spread family and every RFR variant went missing.
+    #
+    # ``CITI_`` marks the four this repo ALSO computes locally. Both are kept and
+    # both are reachable: FRB_CITI_DURATION is Citi's published modified
+    # duration, FRB_MOD_DURATION is the one solved here from Citi's PRICE. They
+    # agree to 1.9e-05 years, and they are still different numbers with different
+    # provenance - conflating them is how a silent source swap survives.
+    #
+    # All quote-only, like the four above: a pricer from a non-Velocity source
+    # RAISES rather than returning 0.0.
+    # ------------------------------------------------------------------
+    ASSNP_RFR = auto()                   # ASSNP vs RFR  [10/10]
+    ASW_RFR = auto()                     # ASW vs RFR  [10/10]
+    CARRY_1M = auto()                    # Carry 1M  [10/10]
+    CARRY_1Y = auto()                    # Carry 1Y  [10/10]
+    CARRY_3M = auto()                    # Carry 3M  [10/10]
+    CARRY_6M = auto()                    # Carry 6M  [10/10]
+    CITI_DURATION = auto()               # Modified Duration  [10/10]
+    CITI_DV01 = auto()                   # DV01  [10/10]
+    CITI_PRICE = auto()                  # Price  [10/10]
+    PRICING_ACCRUED = auto()             # Accrued Interest  [10/10]
+    PRICING_CV01 = auto()                # CV01  [10/10]
+    CITI_YIELD = auto()                  # Yield  [10/10]
+    CAS_RFR = auto()                     # Coupon Adjusted Spread vs RFR  [9/10]
+    OISSMM_RFR = auto()                  # OISSMM vs RFR  [9/10]
+    OISS_RFR = auto()                    # OISS vs RFR  [9/10]
+    YYS = auto()                         # YYS  [9/10]
+    YYS_RFR = auto()                     # YYS vs RFR  [9/10]
+    ZSPREAD = auto()                     # Z-Spread to Worst  [9/10]
+    ASW = auto()                         # ASW  [8/10]
+    ASWNP = auto()                       # ASWNP  [8/10]
+    OAS_RFR = auto()                     # OAS vs RFR  [8/10]
+    OISS = auto()                        # OISS  [8/10]
+    OISSMM = auto()                      # OISSMM  [8/10]
+    ROLL_1M = auto()                     # Roll 1M  [8/10]
+    ROLL_1Y = auto()                     # Roll 1Y  [8/10]
+    ROLL_3M = auto()                     # Roll 3M  [8/10]
+    ROLL_6M = auto()                     # Roll 6M  [8/10]
+    ROLLCARRY_1M = auto()                # Roll and Carry 1M  [7/10]
+    ROLLCARRY_1Y = auto()                # Roll and Carry 1Y  [7/10]
+    ROLLCARRY_3M = auto()                # Roll and Carry 3M  [7/10]
+    ROLLCARRY_6M = auto()                # Roll and Carry 6M  [7/10]
+    ASW_4_CHF = auto()                   # Asset Swap Spread, CHF, Quarterly  [6/10]
+    ASW_4_EUR = auto()                   # Asset Swap Spread, EUR, Quarterly  [6/10]
+    ASW_4_GBP = auto()                   # Asset Swap Spread, GBP, Quarterly  [6/10]
+    ASW_4_USD = auto()                   # Asset Swap Spread, USD, Quarterly  [6/10]
+    ASW_4_AUD = auto()                   # Asset Swap Spread, AUD, Quarterly  [5/10]
+    ASW_4_JPY = auto()                   # Asset Swap Spread, JPY, Quarterly  [5/10]
+    OISS_SOFR = auto()                   # OISS vs SOFR  [2/10]
+    ASS_SOFR = auto()                    # Asset Swap Spread vs SOFR  [1/10]
+    CAS_SOFR = auto()                    # Coupon Adjusted Spread vs SOFR  [1/10]
+    SIMPLEYIELD = auto()                 # Simple Yield  [1/10]
+    YIELD_WORST = auto()                 # Yield to Worst  [1/10]
+    YYS_SOFR = auto()                    # Yield Yield Spread vs SOFR  [1/10]
+
 
 # _frb_structure_sign_mapper = {
 #     FixedRateBondStructure.OUTRIGHT: lambda rws: [abs(rws[0])],
@@ -144,6 +226,53 @@ class FixedRateBondValueFunctionMap(BaseValueFunctionMap[FixedRateBondValue, flo
             FixedRateBondValue.SPLINE_Z_SCORE: self._spline_z_score,
             FixedRateBondValue.SPLINE_RMSE: self._spline_rmse,
             FixedRateBondValue.SPLINE_RMSE_BUCKET: self._spline_rmse_bucket,
+            FixedRateBondValue.SPREAD_TSY: self._spread_tsy,
+            FixedRateBondValue.OAS: self._oas,
+            FixedRateBondValue.ASW_SPREAD: self._asw_spread,
+            FixedRateBondValue.CAS: self._cas,
+            FixedRateBondValue.ASSNP_RFR: self._quote_reader("ASSNP_RFR"),
+            FixedRateBondValue.ASW_RFR: self._quote_reader("ASW_RFR"),
+            FixedRateBondValue.CARRY_1M: self._quote_reader("CARRY.1M"),
+            FixedRateBondValue.CARRY_1Y: self._quote_reader("CARRY.1Y"),
+            FixedRateBondValue.CARRY_3M: self._quote_reader("CARRY.3M"),
+            FixedRateBondValue.CARRY_6M: self._quote_reader("CARRY.6M"),
+            FixedRateBondValue.CITI_DURATION: self._quote_reader("DURATION"),
+            FixedRateBondValue.CITI_DV01: self._quote_reader("DV01"),
+            FixedRateBondValue.CITI_PRICE: self._quote_reader("PRICE"),
+            FixedRateBondValue.PRICING_ACCRUED: self._quote_reader("PRICING_ACCRUED"),
+            FixedRateBondValue.PRICING_CV01: self._quote_reader("PRICING_CV01"),
+            FixedRateBondValue.CITI_YIELD: self._quote_reader("YIELD"),
+            FixedRateBondValue.CAS_RFR: self._quote_reader("CAS_RFR"),
+            FixedRateBondValue.OISSMM_RFR: self._quote_reader("OISSMM_RFR"),
+            FixedRateBondValue.OISS_RFR: self._quote_reader("OISS_RFR"),
+            FixedRateBondValue.YYS: self._quote_reader("YYS"),
+            FixedRateBondValue.YYS_RFR: self._quote_reader("YYS_RFR"),
+            FixedRateBondValue.ZSPREAD: self._quote_reader("ZSPREAD"),
+            FixedRateBondValue.ASW: self._quote_reader("ASW"),
+            FixedRateBondValue.ASWNP: self._quote_reader("ASWNP"),
+            FixedRateBondValue.OAS_RFR: self._quote_reader("OAS_RFR"),
+            FixedRateBondValue.OISS: self._quote_reader("OISS"),
+            FixedRateBondValue.OISSMM: self._quote_reader("OISSMM"),
+            FixedRateBondValue.ROLL_1M: self._quote_reader("ROLL.1M"),
+            FixedRateBondValue.ROLL_1Y: self._quote_reader("ROLL.1Y"),
+            FixedRateBondValue.ROLL_3M: self._quote_reader("ROLL.3M"),
+            FixedRateBondValue.ROLL_6M: self._quote_reader("ROLL.6M"),
+            FixedRateBondValue.ROLLCARRY_1M: self._quote_reader("ROLLCARRY.1M"),
+            FixedRateBondValue.ROLLCARRY_1Y: self._quote_reader("ROLLCARRY.1Y"),
+            FixedRateBondValue.ROLLCARRY_3M: self._quote_reader("ROLLCARRY.3M"),
+            FixedRateBondValue.ROLLCARRY_6M: self._quote_reader("ROLLCARRY.6M"),
+            FixedRateBondValue.ASW_4_CHF: self._quote_reader("ASW_4_CHF"),
+            FixedRateBondValue.ASW_4_EUR: self._quote_reader("ASW_4_EUR"),
+            FixedRateBondValue.ASW_4_GBP: self._quote_reader("ASW_4_GBP"),
+            FixedRateBondValue.ASW_4_USD: self._quote_reader("ASW_4_USD"),
+            FixedRateBondValue.ASW_4_AUD: self._quote_reader("ASW_4_AUD"),
+            FixedRateBondValue.ASW_4_JPY: self._quote_reader("ASW_4_JPY"),
+            FixedRateBondValue.OISS_SOFR: self._quote_reader("OISS_SOFR"),
+            FixedRateBondValue.ASS_SOFR: self._quote_reader("ASS_SOFR"),
+            FixedRateBondValue.CAS_SOFR: self._quote_reader("CAS_SOFR"),
+            FixedRateBondValue.SIMPLEYIELD: self._quote_reader("SIMPLEYIELD"),
+            FixedRateBondValue.YIELD_WORST: self._quote_reader("YIELD_WORST"),
+            FixedRateBondValue.YYS_SOFR: self._quote_reader("YYS_SOFR"),
         }
 
     def _frame_covers_package(self, frame: pd.DataFrame) -> bool:
@@ -340,3 +469,125 @@ class FixedRateBondValueFunctionMap(BaseValueFunctionMap[FixedRateBondValue, flo
         bucket_name = kwargs.get("bucket", "ALL")
         lo, hi = parse_bucket(str(bucket_name))
         return spline.rmse_bucket(lo, hi)
+
+    # ------------------------------------------------------------------
+    # Quote-only values
+    # ------------------------------------------------------------------
+    def _quote_reader(self, citi_value: str):
+        """A value function that returns the vendor's published ``citi_value``.
+
+        One factory rather than 43 near-identical methods. Each returned callable
+        accepts ``**kwargs`` because ``BaseValueFunctionMap.apply`` splats the
+        merged common and extra kwargs at it, and a fixed signature would
+        TypeError on the extra keys.
+        """
+        def _read(**kwargs: Any) -> float:
+            return self._vendor_quote(citi_value, **kwargs)
+
+        _read.__name__ = f"_quote_{citi_value.replace('.', '_').lower()}"
+        return _read
+
+    def _vendor_quote(self, citi_value: str, **kwargs: Any) -> float:
+        """Risk-weighted sum of the vendor's published number over the legs.
+
+        Two conventions, both deliberate and both different from ``_ytm``:
+
+        * **No ×100.** ``_ytm`` multiplies a curve/fly by 100 because a yield is
+          quoted in percent and a spread of percents has to become basis points.
+          These values are *already* basis points, so applying the same factor
+          would inflate every curve and fly by 100×. Percent-vs-bp is the trap
+          this repo has been bitten by more than once, and the two scalings live
+          three functions apart, so it is called out here rather than inferred.
+        * **No ``abs()``.** ``calc_spread_rate`` takes ``abs()`` of each leg's
+          yield; a spread to Treasuries is *signed* (a cheap bond trades wide,
+          a rich one trades through) and folding the sign away would make a
+          -8 bp spread read as +8.
+
+        Raises
+        ------
+        QuoteNotServedError
+            When any leg's pricer did not come from the Velocity source, or the
+            bond does not serve this value, or the fetch for it failed, or it
+            served nothing in the window that was fetched. Which one is named in
+            the message, because they have different fixes.
+
+        Notes
+        -----
+        ``pricer.meta()`` is called WITHOUT a ``try``. Wrapping it in
+        ``except Exception: meta = {}`` made any failure - a lazy-deserialisation
+        bug, a corrupted DiskCache entry, an AttributeError from a refactor -
+        impersonate the first of those causes: "this pricer did not come from the
+        Velocity source, build it with FixedRateBondsMDP(source=...)", i.e. telling
+        the user to do exactly what they already did while destroying the
+        traceback that said why. This whole function exists to keep the causes
+        apart; a fourth cause wearing the first one's message defeats it.
+        """
+        from MDP.CitiVelocityExcel.bonds.values import require_quoted
+
+        total = 0.0
+        for i, leg in enumerate(kwargs["package"]):
+            pricer = _resolve_leg_pricer(kwargs["pricer"], leg)
+            meta = pricer.meta() or {}
+            quote = require_quoted(meta, citi_value, subject=f"{citi_value} for {leg.cusip}")
+            total += kwargs["risk_weights"][i] * float(quote)
+        return float(total)
+
+    def _spread_tsy(self, **kwargs: Any) -> float:
+        """Citi's published spread to the Treasury benchmark, in bp.
+
+        Quote-only: reproducing it would mean reproducing Citi's benchmark
+        choice (interpolated on the curve, or the nearest on-the-run), which is
+        unmeasured and matters most for an off-the-run bond sitting between two
+        benchmark points — exactly where the number is interesting.
+        """
+        return self._vendor_quote("SPREAD_TSY", **kwargs)
+
+    def _oas(self, **kwargs: Any) -> float:
+        """Citi's published option-adjusted spread, in bp.
+
+        Served for 1,401 of the 2,162 ISINs in Citi's universe (304 of the 349 US
+        Treasuries), and window-dependent: measured empty over a one-week window
+        and full over five years. An empty OAS therefore raises with "widen the
+        window", not with "this bond has no OAS".
+
+        Because of that window dependence OAS is **not** in
+        ``fetcher.DEFAULT_BOND_VALUES`` - the default 21-day EOD lookback cannot
+        answer it, and fetching a column per bond that comes back empty is the
+        cost that source exists to avoid. On a default-built pricer this raises
+        "not requested, although Citi does serve it"; build the pricer with
+        ``citivelo_values=[..., "OAS"]`` and a wide ``eod_lookback``.
+        """
+        return self._vendor_quote("OAS", **kwargs)
+
+    def _asw_spread(self, **kwargs: Any) -> float:
+        """Citi's published asset-swap spread into ``asw_currency`` (default USD), in bp.
+
+        ``ASW_4_<CCY>`` is a sparse cross-currency MATRIX, not one value per
+        bond: a bund carries USD/GBP/CHF/AUD but not EUR, a gilt carries
+        EUR/GBP/AUD. Where the leg currency differs from the bond's own currency
+        this is a cross-currency asset swap and is not the bond's own spread at
+        all, so the currency is an explicit argument rather than a default the
+        caller never sees.
+
+        The default stays USD on a US Treasury because that is the bond's own
+        currency, even though the AUD leg is the better covered one: measured over
+        the 349 US Treasuries in the harvest, ASW_4_AUD serves 348 and ASW_4_USD
+        253. Both are in ``fetcher.DEFAULT_BOND_VALUES``, so ``asw_currency="AUD"``
+        needs no refetch - but it answers a different question.
+        """
+        from MDP.CitiVelocityExcel.bonds.values import asw_value_for_currency
+
+        return self._vendor_quote(
+            asw_value_for_currency(kwargs.get("asw_currency", "USD")), **kwargs
+        )
+
+    def _cas(self, **kwargs: Any) -> float:
+        """Citi's published CAS, in bp.
+
+        Served for 381 of the 2,162 ISINs (measured ``CND1000113G9`` = 43.4983,
+        ``KR10350172C8`` = 44.2101) and for **no US Treasury** - exactly one US
+        ISIN in the universe carries it, ``US3133EPSW68``, an FFCB agency. So on a
+        Treasury this is expected to raise "Citi does not serve CAS" rather than to
+        return anything.
+        """
+        return self._vendor_quote("CAS", **kwargs)
