@@ -203,15 +203,26 @@ class IRSwaptionMDP(LayeredCacheMixin, MarketDataProvider[IRSwaptionMarketContex
         data_dir: Optional[str] = None,
         cache_stem: Optional[str] = None,
         force_refresh: bool = False,
+        request_defaults: Optional[dict[str, Any]] = None,
         **kwargs: Any,
     ):
+        """``request_defaults`` are merged into every request's kwargs.
+
+        The escape hatch for provider options a caller cannot otherwise reach:
+        ``IRSwaptionsTB.get_timeseries`` builds its ``bulk_get_data`` request from
+        a fixed set of keys and forwards nothing else, so an option like
+        ``verify=False`` (which turns off the CITIVELO cube's 237-second
+        node-ordering check - see the provider) had no route through. They land in
+        ``_default_request_kwargs``, so they are part of the context cache key and
+        two settings cache separately rather than aliasing.
+        """
         self.curve_source = curve_source
         # Whether a request's `ignore_cache` should also bypass the CURVE cache.
         # It should not, by default: see _fetch_curve_map. `force_refresh=True`
         # on the constructor is the explicit "refresh everything" switch and does
         # carry through.
         self.curve_ignore_cache = bool(force_refresh)
-        self._default_request_kwargs: dict[str, Any] = {}
+        self._default_request_kwargs: dict[str, Any] = dict(request_defaults or {})
         if data_dir is not None:
             self._default_request_kwargs["data_dir"] = str(data_dir)
         self._provider_name, self._engine_name = _parse_source_token(source)

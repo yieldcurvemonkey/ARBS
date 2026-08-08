@@ -34,7 +34,11 @@ import sys
 import tempfile
 from logging.handlers import RotatingFileHandler
 
-os.environ.setdefault("ARBS_SUPABASE_ENABLED", "0")
+# Same dead-flag fix as citivelo_excel_warm.py: ARBS_SUPABASE_ENABLED is read at
+# Caching import time, which is long before argparse runs, so --push-l2 could
+# never turn anything on. Default unchanged: local-only unless asked.
+_WANT_L2 = "--push-l2" in sys.argv
+os.environ.setdefault("ARBS_SUPABASE_ENABLED", "1" if _WANT_L2 else "0")
 
 _REPO_ROOT = pathlib.Path(__file__).resolve().parents[1]
 if str(_REPO_ROOT) not in sys.path:

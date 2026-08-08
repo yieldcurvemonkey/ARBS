@@ -237,6 +237,7 @@ def get_citivelo_vol_objects(
     use_cube_store: bool = True,
     cube_store: Any = None,
     timestamp_mode: str = "eod",
+    verify: bool = True,
     **kwargs: Any,
 ) -> Dict[dt.date, Any]:
     """Build one Citi vol object per date, for ``IRSwaptionMDP.VOL_PROVIDERS``.
@@ -339,6 +340,23 @@ def get_citivelo_vol_objects(
                 explain_missing_smile(hit, backend=f"the {backend!r} backend")
             )
 
+        # `verify` is passed through because it is the single biggest cost on this
+        # path and there was no way to reach it. Profiled 2026-08-08 on one USD
+        # date: the FIRST valuation took 235.8 s and the next 1.54 s, and 236.8 s
+        # of the first was assert_vol_spread_ordering inside
+        # build_ql_swaption_cube - 1,990 QuantLib
+        # SwaptionVolatilityStructure_volatility calls at 110 ms each, re-pricing
+        # every node of the 1,989-node cube.
+        #
+        # It happens under `-RL` too: CitiVeloSwaptionCube.volatility() is
+        # deliberately served by the QuantLib surface (it turns an option TIME
+        # into an option DATE itself, and an approximate expiry date moves the
+        # strike offset), so resolving an "ATMF+25" strike builds the QL cube
+        # whatever the pricing engine is.
+        #
+        # Default unchanged - verification stays ON. A warm over hundreds of
+        # identically-shaped days is the case that cannot afford it, and it can
+        # now say so explicitly instead of the knob being unreachable.
         built = build_citivelo_swaption_cube(
             cube=data,
             rl_curve=rl_curve,
@@ -346,6 +364,7 @@ def get_citivelo_vol_objects(
             backend=backend,
             citi_index=citi_index,
             notional=float(notional),
+            verify=bool(verify),
         )
         _CUBE_CACHE[(str(curve_name), when.isoformat(), engine_token)] = built
         _CUBE_PROVENANCE[(str(curve_name), when.isoformat(), engine_token)] = (
