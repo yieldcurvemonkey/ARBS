@@ -33,7 +33,7 @@ import pandas as pd
 
 DATA = _REPO / "notebooks" / "data" / "citivelo_rv"
 N_SV_PRIOR = 3888
-N_LOOP_ARMS = 14  # L-0026: 9 USD + 2 GBP + 3 JPY gate-killed
+N_LOOP_ARMS = 17  # L-0027: 9 USD + 2 GBP + 3 EUR + 3 JPY gate-killed
 
 
 def _nw_t(x: np.ndarray, lags: int = 2) -> float:
