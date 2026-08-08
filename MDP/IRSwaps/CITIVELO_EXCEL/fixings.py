@@ -48,6 +48,29 @@ prefers an official source where this repo has one (USD only), fills the rest fr
 Citi, and **reports the gap** between the last fixing and the date the curve
 actually needs. :class:`FixingsResult.assert_covers` turns that into a refusal.
 
+How this is served, and why that is not an implementation detail
+----------------------------------------------------------------
+A fixing series is never the thing a caller asked for. It is a detail of building
+a curve whose NODES came from the store, so the way it is fetched decides whether
+a fully warmed, fully offline curve request succeeds.
+
+It used to decide the wrong way. ``citi_fixings`` asked the tag cache for
+``start=2005-01-01, end=today``; ``CitiVeloTagCache.missing_spans`` treats an
+explicit ``start`` earlier than the cached first row as a missing head, and any
+``end`` past the cached last row as a missing tail. Citi's USD tail is frozen six
+weeks back, so BOTH spans reopened on every call and neither could ever be
+filled. Measured 2026-08-08 against the warm cache - 5,427 rows, complete - the
+answer was ``[(2005-01-01, 2005-01-03), (2026-06-25, 2026-08-08)]``: two fetches
+per call, forever, for a series already on disk. A signed-out Excel then took the
+whole curve build down with an ``AddInNotSignedInError``.
+
+So the request is unbounded (the head closes through the ``history_start``
+sidecar, the tail through :data:`_FIXINGS_MAX_STALENESS`) and, when Excel refuses
+anyway, the cached rows are re-served rather than raised. Serving them is safe by
+construction: :meth:`FixingsResult.assert_covers` and the callers' own staleness
+gate already refuse a series that does not reach the date being priced, so this
+cannot silently under-fix a float leg - it can only let a curve finish building.
+
 The five currencies with no coverage at all
 -------------------------------------------
 ``ILS``, ``MXN``, ``SGD``, ``THB`` and ``ZAR`` are absent from
@@ -119,6 +142,33 @@ NO_FIXING_SOURCE: Dict[str, str] = {
 
 #: Curve names for which this repo has an INDEPENDENT official source.
 _OFFICIAL_SOURCE_CURVES = {"USD-SOFR-1D"}
+
+#: How long a cached fixing series may go unrefreshed before its tail is
+#: re-requested from Citi.
+#:
+#: The number matters far less than the fact that there is one at all.
+#: :func:`citi_fixings` used to ask for ``end=date.today()``, and
+#: ``CitiVeloTagCache.missing_spans`` opens a tail span for any ``end`` that runs
+#: past what the cache holds. Citi's USD tail is frozen six weeks back and CAD's
+#: three months (see the module docstring), so that span could never be filled:
+#: the fetch returned nothing new, the cache did not advance, and the next call
+#: asked again - forever. Every process went to Excel for a series that was
+#: already complete on disk, and a signed-out Excel took the whole curve build
+#: down with it. MEASURED 2026-08-08 on the warm cache:
+#: ``missing_spans(start=2005-01-01, end=today)`` returned
+#: ``[(2005-01-01, 2005-01-03), (2026-06-25, 2026-08-08)]`` - two spans, neither
+#: fillable, on every single call.
+#:
+#: An unbounded ``end`` routes the tail through this gate instead, and a fetch
+#: DOES satisfy it: the span starts at ``cov.last`` INCLUSIVE, so Citi returns at
+#: least that row, ``write`` runs and ``fetched_at`` advances even when nothing
+#: new arrived.
+#:
+#: Twelve hours means at most two refreshes a day. A fixing for date D publishes
+#: on D+1 and :func:`fixings_for` drops anything dated on or after the curve's own
+#: reference date, so half a day of staleness cannot change a historical answer -
+#: only how soon a brand-new fixing is picked up.
+_FIXINGS_MAX_STALENESS = datetime.timedelta(hours=12)
 
 #: How far the last published fixing may sit behind the date a curve needs before
 #: :meth:`FixingsResult.assert_covers` refuses. Five calendar days spans a long
@@ -435,7 +485,11 @@ def citi_fixings(
 ) -> pd.Series:
     """Citi's published overnight fixing for one curve, in PERCENT.
 
-    Served through the ordinary tag cache, so a warm cache needs no Excel.
+    Served through the ordinary tag cache, and - unlike the rest of this package -
+    it must be able to answer when Excel is not there at all. A fixing series is
+    not the thing a caller asked for; it is a detail of building a curve whose
+    NODES came from the store, and dying on it turns a fully cached curve request
+    into a hard failure. See :func:`_citi_series`.
     """
     tag = MONEY_MARKET_ON_TAG.get(str(citi_index).upper())
     if tag is None:
@@ -444,17 +498,144 @@ def citi_fixings(
         from MDP.CitiVelocityExcel.quotes import CitiVeloQuotes
 
         quotes = CitiVeloQuotes()
-    frame = quotes.frame(
-        [tag],
-        "DAILY",
-        start=start or datetime.date(2005, 1, 1),
-        end=end or datetime.date.today(),
-    )
-    if frame is None or frame.empty or tag not in frame.columns:
+
+    raw = _citi_series(quotes, tag, start=start, end=end)
+    if raw is None or len(raw) == 0:
         return pd.Series(dtype="float64")
-    series = frame[tag].dropna().sort_index()
+    series = raw.dropna().sort_index()
+    if series.empty:
+        return pd.Series(dtype="float64")
     series.index = pd.DatetimeIndex(series.index).normalize()
     return series[~series.index.duplicated(keep="last")]
+
+
+def _citi_series(
+    quotes: Any,
+    tag: str,
+    *,
+    start: Optional[datetime.date] = None,
+    end: Optional[datetime.date] = None,
+) -> Optional[pd.Series]:
+    """One tag's daily series: the cache first, Excel only when it must.
+
+    The bounds are left UNBOUNDED unless the caller named a window, and that is
+    not cosmetic. ``CitiVeloTagCache.missing_spans`` consults the ``history_start``
+    sidecar - the thing that lets a cache say "I already hold everything there
+    is" - only on the ``start is None`` branch, and it re-opens the tail for any
+    ``end`` past what is cached. The previous call passed
+    ``start=2005-01-01, end=today`` and so took the other branch at BOTH ends,
+    producing two permanently unfillable spans per call (see
+    :data:`_FIXINGS_MAX_STALENESS`). ``fetch_timeseries`` turns an unbounded
+    request into ``CVTSHIST(..., "MAX", "", "")``, which the add-in truncates to
+    the tag's own history, so nothing is lost by not naming 2005.
+
+    When Excel refuses - not signed in, not running, died mid-call - the cached
+    rows are re-served instead of propagating. That is safe by construction rather
+    than by optimism: :meth:`FixingsResult.assert_covers` and the callers' own
+    staleness gate already refuse a series that does not reach the date being
+    priced, so a stale answer here cannot silently under-fix a float leg. What it
+    can do is let a curve whose nodes came from the store finish building.
+    """
+    from MDP.CitiVelocityExcel.errors import CitiVelocityError
+
+    before = _coverage(quotes, tag)
+    try:
+        got = quotes.series(
+            [tag], "DAILY", start=start, end=end, max_staleness=_FIXINGS_MAX_STALENESS
+        )
+    except CitiVelocityError as exc:
+        _warn_once(
+            f"citi-fixings-offline-{tag}",
+            f"citivelo_excel: Excel would not serve {tag} ({type(exc).__name__}: {exc}); "
+            "re-serving the cached fixings. The staleness gate still applies, so a "
+            "series that does not reach the date being priced is refused rather than used.",
+        )
+        return _cached_only(quotes, tag, start=start, end=end)
+
+    if start is None and end is None:
+        _record_history_start(quotes, tag, before=before)
+    return got.get(tag)
+
+
+def _coverage(quotes: Any, tag: str) -> Any:
+    """The tag cache's coverage for ``tag``, or ``None`` when there is no cache."""
+    cache = getattr(quotes, "cache", None)
+    if cache is None:
+        return None
+    try:
+        return cache.coverage(tag, "DAILY", "CLOSE")
+    except Exception as exc:  # noqa: BLE001 - a cache that cannot be read is not fatal
+        _logger.debug("citivelo_excel: could not read cache coverage for %s: %s", tag, exc)
+        return None
+
+
+def _cached_only(
+    quotes: Any,
+    tag: str,
+    *,
+    start: Optional[datetime.date],
+    end: Optional[datetime.date],
+) -> Optional[pd.Series]:
+    """Re-serve one tag from the tag cache with no fetcher at all.
+
+    Goes to the cache directly rather than building a second
+    ``CitiVeloQuotes(offline=True)``: offline raises when the request is not fully
+    cached, and the whole point here is that it may not be.
+    """
+    cache = getattr(quotes, "cache", None)
+    if cache is None:
+        return None
+    try:
+        got = cache.get(
+            [tag], "DAILY", start=start, end=end, price_point="CLOSE", fetcher=None
+        )
+    except Exception as exc:  # noqa: BLE001 - the degrade path must not raise either
+        _logger.debug("citivelo_excel: cached-only read failed for %s: %s", tag, exc)
+        return None
+    return got.get(tag)
+
+
+def _record_history_start(quotes: Any, tag: str, *, before: Any) -> None:
+    """Close the head span for good, using what an unbounded fetch returned.
+
+    ``missing_spans`` re-opens ``(None, first)`` on every call until the sidecar
+    records a ``history_start``, so without this the head costs an Excel round
+    trip forever even once the tail is quiet. The value cannot be guessed - too
+    early never closes the head, too late silently truncates history - so it is
+    taken from what an unbounded request actually brought back. ``CVTSHIST`` at
+    ``MAX`` is truncated to the tag's own history by the add-in, so the first row
+    of an unbounded answer IS the inception.
+
+    Three guards keep a guess from becoming a permanent truncation:
+
+    * ``quotes.offline`` - an offline reader never asked the add-in anything, so
+      what is on disk proves nothing about what exists upstream;
+    * ``fetched_at`` must have advanced, which happens only on a ``write``, which
+      happens only when a fetch returned rows. A wire that answered with nothing
+      leaves it untouched and is not evidence of anything;
+    * ``first`` must not have moved earlier. If the head fetch DID bring older
+      rows, the true inception is further back still and the next call - which
+      now starts from the earlier first - is the one that settles it.
+    """
+    if getattr(quotes, "offline", False):
+        return
+    cache = getattr(quotes, "cache", None)
+    if cache is None:
+        return
+    after = _coverage(quotes, tag)
+    if after is None or after.first is None or after.n_rows == 0:
+        return
+    if after.history_start is not None:
+        return
+    if before is not None:
+        if after.fetched_at is None or after.fetched_at == before.fetched_at:
+            return  # nothing was written, so nothing was learned
+        if before.first is not None and after.first < before.first:
+            return  # older rows arrived; this is not the bottom yet
+    try:
+        cache.set_history_start(tag, "DAILY", after.first, price_point="CLOSE")
+    except Exception as exc:  # noqa: BLE001 - a sidecar that will not write is not fatal
+        _logger.debug("citivelo_excel: could not record history_start for %s: %s", tag, exc)
 
 
 # ------------------------------------------------------------------ #
