@@ -176,8 +176,19 @@ noticed; here it shows up as `differing` and is not overwritten without
 | cube | 2,699 | 41.9 MB | 0.8 min | 57.6 d/s | 0 |
 | eod + stream | 13,480 | 66.4 MB | 27.1 min | 8.3 d/s | 0 |
 | minute | 2,845 | 637.1 MB | 8.0 min | 5.9 d/s | 0 |
+| eod delta (the warm kept extending history mid-run) | 8,452 | 42.2 MB | 18.9 min | 7.5 d/s | 0 |
 
-Plus 16,325 tagged `arbs_curve_snapshots_v1` rows, written with the same
+Final coverage: **28,406 of 28,412 local days in L2, 0 differing, 0 remote-only,
+1.2 GB**. The 6 are CAD days the concurrently-running EOD warm wrote minutes
+earlier; they went in on the next pass, and 2 more had appeared by the time the
+last check ran. A live store has no fixed point.
+
+Database before -> after: **210.7 GB -> 211.3 GB (+0.6 GB, +0.29%)**.
+`arbs_curve_intraday_blocks_v1` 11,173 -> 35,956 rows;
+`arbs_curve_snapshots_v1` 27,447 -> 52,224 rows;
+`arbs_swaption_cube_blocks_v1` absent -> 2,699 rows / 40.3 MB.
+
+Plus 24,783 tagged `arbs_curve_snapshots_v1` rows, written with the same
 `curve_tag_config.get_tags` gate the existing `_push_tagged_snapshots` uses, so
 the Citi assets are tagged the way `USD-SOFR-1D-CITIVELO`'s existing rows are
 rather than as a second, untagged convention. `get_tags` is timezone-agnostic
@@ -188,10 +199,23 @@ The eod family is slower per day than the minute family despite 100× smaller
 blobs, because the snapshot-row phase is serial and one transaction per day. The
 blob push itself was ~3 minutes of the 27.
 
-**Verification: all 2,699 cube days pulled back and compared — 0 problems**,
-where a problem is any of: the payload not hashing to its sha column, differing
-from the local file byte for byte, failing to parse as parquet, or disagreeing
-with the stored `row_count`.
+**Verification — every family pulled back and compared, 0 problems.** A problem
+is any of: the payload not hashing to its sha column, differing from the local
+file byte for byte, failing to parse as parquet, or disagreeing with the stored
+`row_count`.
+
+| family | days checked | bytes | problems |
+|---|---:|---:|---:|
+| cube (exhaustive) | 2,699 | 42.0 MB | 0 |
+| eod (sampled, 25/asset) | 125 | 634.7 KB | 0 |
+| minute + stream + workbook (sampled, 20/asset) | 123 | 30.1 MB | 0 |
+
+The 20 sampled `USD-SOFR-1D-CITIVELO` days are an independent confirmation of
+the "already synced and correct" claim, beyond the sha diff.
+
+The snapshot-row phase, not the blobs, dominated the eod runs: 27.1 min for
+13,480 days of which the blob push was ~3, because it was one transaction per
+day to write at most one ~1 KB row. Now batched 100 days to a transaction.
 
 ---
 
@@ -233,12 +257,29 @@ reshape sliced per offset: **33.3 → 8.25 ms/day, 4.0×**, and bit-identical ov
 all 2,699 days (`assert_frame_equal(check_exact=True)` on every ATM and skew
 frame, across both shapes of history).
 
+### A defect found in review, after the tests were green
+
+`timestamp_mode` was threaded to the provider through `provider_kwargs`, but
+`_cache_key`'s `request_token` is computed from `effective_request_kwargs`
+*before* those additions — so a `"live"` request and an `"eod"` request for the
+same date shared a context cache key, **including the persistent disk cache**.
+Build an EOD context for today (served from the warmed store), then ask for
+`timestamp="live"` with `ignore_cache=False`: `_cache_get` hits, the provider
+never runs, and the caller is handed this morning's close believing it is live.
+Today's close IS in the store, so this fires on the common case, and it defeats
+the provider's live guard one layer up. The mode is now part of the key,
+appended only when non-default so keys already on disk keep their meaning.
+
+The mutation suite did not catch this: it tested the mode at the *parse* level,
+not the cache-key level. There is now a test for the collision, and dropping the
+mode from the key fails it.
+
 ### Verified capable of failing
 
-Eight mutations, each caught by the test that guards it: store branch removed
+Nine mutations, each caught by the test that guards it: store branch removed
 (4 failures), live mode ignored (2), `use_cube_store` ignored (1), ATM-only guard
 removed (1), provenance dropped (1), timestamp mode always `eod` (6), memo
-removed (1), smile always `full` (2).
+removed (1), smile always `full` (2), timestamp mode dropped from the cache key (1).
 
 The end-to-end check was mutation-tested too, and **the first run exposed two of
 its own assertions passing vacuously** — `all()` over an empty dict is True, and
@@ -301,6 +342,13 @@ left.
 
 **No `arbs_curve_analytics_blocks_v1` push for Citi**, because there are no Citi
 analytics partitions on disk — the analytics tree holds only ERIS/STIRT assets.
+
+**The plaintext password was not rotated.** It remains in ~13 tracked files and
+in git history, and `tests/test_supabase_engine.py` asserts the full URL
+*including the password* as an expected literal, so the test suite is itself an
+obstacle to rotating it. Given this branch's safety theme that omission is worth
+stating rather than leaving the reader to wonder: the guard reduces the blast
+radius of the *default*, it does not change the credential.
 
 **`ARBS_SUPABASE_ENABLED` still parses leniently.** `l2_policy` fixes the
 vocabulary for new code; changing `_env_enabled` is an import-time behaviour

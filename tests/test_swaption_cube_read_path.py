@@ -435,6 +435,54 @@ class TestMdpPlumbing:
         assert seen["wanting"].get("timestamp_mode") == "live"
         assert "timestamp_mode" not in seen["not_wanting"]
 
+    def test_live_and_eod_do_not_share_a_context_cache_key(self):
+        """The provider's live guard is defeated one layer up if they collide.
+
+        ``request_token`` is computed from ``effective_request_kwargs`` BEFORE
+        ``timestamp_mode`` is added to ``provider_kwargs``, so it cannot carry
+        the mode. Without the mode in the key: build an EOD context for today
+        (served from the warmed store), then ask for ``timestamp="live"`` with
+        ``ignore_cache=False`` — ``_cache_get`` hits, the provider never runs,
+        and the caller gets this morning's close believing it is live. Today's
+        close IS in the store, so this is the common case, not a corner.
+        """
+        from MDP.IRSwaptions.IRSwaptionMDP import IRSwaptionMDP
+
+        mdp = IRSwaptionMDP.__new__(IRSwaptionMDP)
+        mdp.curve_source = "TEST"
+        common = dict(
+            curve_name="USD-SOFR-1D",
+            d=dt.date(2026, 8, 6),
+            provider="CITIVELO",
+            engine="RL",
+            surface_type="atmf_normal",
+            request_token="tok",
+        )
+        eod = IRSwaptionMDP._cache_key(mdp, **common, timestamp_mode="eod")
+        live = IRSwaptionMDP._cache_key(mdp, **common, timestamp_mode="live")
+        intraday = IRSwaptionMDP._cache_key(mdp, **common, timestamp_mode="intraday")
+        assert len({eod, live, intraday}) == 3, (eod, live, intraday)
+
+    def test_the_eod_key_is_unchanged_so_existing_caches_still_hit(self):
+        """The mode is appended only when non-default; every key already on disk
+        keeps its meaning rather than every cache missing once."""
+        from MDP.IRSwaptions.IRSwaptionMDP import IRSwaptionMDP
+
+        mdp = IRSwaptionMDP.__new__(IRSwaptionMDP)
+        mdp.curve_source = "TEST"
+        common = dict(
+            curve_name="USD-SOFR-1D",
+            d=dt.date(2026, 8, 6),
+            provider="CITIVELO",
+            engine="RL",
+            surface_type="atmf_normal",
+            request_token="tok",
+        )
+        assert IRSwaptionMDP._cache_key(mdp, **common) == IRSwaptionMDP._cache_key(
+            mdp, **common, timestamp_mode="eod"
+        )
+        assert "mode=" not in IRSwaptionMDP._cache_key(mdp, **common)
+
     def test_a_live_request_is_classified_before_to_date_flattens_it(self):
         from MDP.IRSwaptions.IRSwaptionMDP import IRSwaptionMDP
 

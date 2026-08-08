@@ -328,19 +328,39 @@ class IRSwaptionMDP(LayeredCacheMixin, MarketDataProvider[IRSwaptionMarketContex
         engine: str,
         surface_type: str,
         request_token: str = "",
+        timestamp_mode: str = "eod",
     ) -> str:
-        return "|".join(
-            [
-                self._CACHE_VERSION,
-                str(curve_name).upper(),
-                d.isoformat(),
-                provider.upper(),
-                engine.upper(),
-                str(surface_type).lower(),
-                str(self.curve_source).upper(),
-                str(request_token),
-            ]
-        )
+        """The context cache key. **``timestamp_mode`` is part of it.**
+
+        It has to be, and it is not covered by ``request_token``:
+        ``request_token`` is computed from ``effective_request_kwargs`` *before*
+        ``timestamp_mode`` is added to ``provider_kwargs``, so without this a
+        ``"live"`` request and an ``"eod"`` request for the same date collide.
+
+        The collision is not theoretical and it defeats the provider's live
+        guard one layer up: build an EOD context for today (served from the
+        warmed cube store), then ask for ``timestamp="live"`` with
+        ``ignore_cache=False`` — ``_cache_get`` hits, the provider never runs,
+        and the caller is handed this morning's close believing it is live.
+        Today's close IS in the store, so this fires on the common case.
+
+        Appended only when the mode is not the default, so every key already on
+        disk keeps its meaning and the existing caches do not all miss once.
+        """
+        parts = [
+            self._CACHE_VERSION,
+            str(curve_name).upper(),
+            d.isoformat(),
+            provider.upper(),
+            engine.upper(),
+            str(surface_type).lower(),
+            str(self.curve_source).upper(),
+            str(request_token),
+        ]
+        mode = str(timestamp_mode or "eod").lower()
+        if mode != "eod":
+            parts.append(f"mode={mode}")
+        return "|".join(parts)
 
     @staticmethod
     def _normalize_request_value(value: Any) -> Any:
@@ -585,6 +605,7 @@ class IRSwaptionMDP(LayeredCacheMixin, MarketDataProvider[IRSwaptionMarketContex
                     engine=engine,
                     surface_type=surface_type,
                     request_token=request_token,
+                    timestamp_mode=timestamp_mode,
                 )
                 hit = self._cache_get(k)
                 if hit is not None:
@@ -776,6 +797,7 @@ class IRSwaptionMDP(LayeredCacheMixin, MarketDataProvider[IRSwaptionMarketContex
                 engine=engine,
                 surface_type=surface_type,
                 request_token=request_token,
+                timestamp_mode=timestamp_mode,
             )
             self._cache_put(k, ctx)
             out[d] = ctx
