@@ -136,6 +136,11 @@ def _book(unit: pd.DataFrame, state: pd.Series, boundaries: set, *,
     """Scale the unit ledger by a {0,1} state and charge what was traded."""
     s = state.reindex(unit.index).fillna(0.0).astype(float)
     gross = unit[FLOWS].mul(s, axis=0).sum(axis=1)
+    # Decomposition (advisor: the carry bucket is conditionally non-negative BY
+    # CONSTRUCTION under a carry>=0 state, so it is non-evidence; the graded
+    # claim lives in whether MTM+costs eat it. Report both separately.)
+    gross_carry = unit["carry"].mul(s)
+    gross_excarry = unit[["harvest", "mtm", "cross"]].sum(axis=1).mul(s)
     flips = s.diff().fillna(s.iloc[0])
     opens = (flips > 0).astype(float)
     closes = (flips < 0).astype(float)
@@ -175,6 +180,8 @@ def _book(unit: pd.DataFrame, state: pd.Series, boundaries: set, *,
     for e, x in blocks:
         seg_net = float(net.loc[e:x].sum())
         seg_gross = float(gross.loc[e:x].sum())
+        seg_carry = float(gross_carry.loc[e:x].sum())
+        seg_excarry = float(gross_excarry.loc[e:x].sum())
         seg_dv01 = float(realised_dv01.loc[e:x][realised_dv01.loc[e:x] > 0].mean())
         # exit fee lands on the first off day; attribute to the episode
         xi = net.index.get_loc(x)
@@ -188,20 +195,29 @@ def _book(unit: pd.DataFrame, state: pd.Series, boundaries: set, *,
         d = seg_dv01 if np.isfinite(seg_dv01) and seg_dv01 else np.nan
         trades.append({"entry": str(e.date()), "exit": str(x.date()),
                        "n_days": int(on.loc[e:x].sum()),
-                       "gross_bp": seg_gross / d, "net_bp": seg_net / d})
+                       "gross_bp": seg_gross / d, "net_bp": seg_net / d,
+                       "carry_bp": seg_carry / d, "excarry_bp": seg_excarry / d})
     tr = pd.DataFrame(trades)
     daily_net_bp = net / denom if np.isfinite(denom) and denom else net * np.nan
+    held_net = daily_net_bp[on]
+    cum = daily_net_bp.fillna(0.0).cumsum()
+    max_dd = float((cum - cum.cummax()).min()) if len(cum) else np.nan
     out = {
         "n_trades": int(len(tr)),
         "n_days_held": int(on.sum()),
         "occupancy": float(on.mean()),
         "gross_bp_total": float(tr["gross_bp"].sum()) if len(tr) else 0.0,
+        "carry_bp_total": float(tr["carry_bp"].sum()) if len(tr) else 0.0,
+        "excarry_bp_total": float(tr["excarry_bp"].sum()) if len(tr) else 0.0,
         "net_bp_total": float(tr["net_bp"].sum()) if len(tr) else 0.0,
         "net_bp_per_trade": float(tr["net_bp"].mean()) if len(tr) else np.nan,
         "hit": float((tr["net_bp"] > 0).mean()) if len(tr) else np.nan,
         "median_days": float(tr["n_days"].median()) if len(tr) else np.nan,
-        "daily_sharpe": float(daily_net_bp[on].mean() / daily_net_bp[on].std())
-        if on.sum() > 2 and daily_net_bp[on].std() > 0 else np.nan,
+        "daily_sharpe": float(held_net.mean() / held_net.std())
+        if on.sum() > 2 and held_net.std() > 0 else np.nan,
+        "skew": float(held_net.skew()) if on.sum() > 3 else np.nan,
+        "worst_day_bp": float(held_net.min()) if on.sum() else np.nan,
+        "max_dd_bp": max_dd,
         "realised_dv01_mean": denom,
     }
     return {"stats": out, "trades": tr, "daily_net_bp": daily_net_bp}
@@ -240,37 +256,76 @@ def main() -> None:
     for pair_name, unit in units.items():
         d = det[det["pair"] == pair_name].set_index("date").sort_index()
         state = d["grail_flattener"].astype(float).shift(1).fillna(0.0)  # LAG-1
-        args = dict(initiate_bp=INITIATE_BP_BY_PAIR.get(pair_name, 1.0),
-                    hedge_bp=HEDGE_BP_BY_PAIR.get(pair_name, 0.40),
-                    roll_bp=HEDGE_BP_BY_PAIR.get(pair_name, 0.40),
-                    mult=1.0, roll_kind="roll")
-        cond = _book(unit, state, boundaries, **args)
-        ctrl = _book(unit, pd.Series(1.0, index=unit.index), boundaries, **args)
+        base_args = dict(initiate_bp=INITIATE_BP_BY_PAIR.get(pair_name, 1.0),
+                         hedge_bp=HEDGE_BP_BY_PAIR.get(pair_name, 0.40),
+                         roll_bp=HEDGE_BP_BY_PAIR.get(pair_name, 0.40), mult=1.0)
+        entry = {}
+        for rk in ("roll", "initiate"):
+            args = dict(base_args, roll_kind=rk)
+            cond = _book(unit, state, boundaries, **args)
+            ctrl = _book(unit, pd.Series(1.0, index=unit.index), boundaries, **args)
+            entry[f"conditional_{rk}"] = cond["stats"]
+            entry[f"control_{rk}"] = ctrl["stats"]
+            if rk == "roll":
+                cond_primary, args_primary = cond, args
 
-        # placebo: circular shifts through the identical machinery
-        placebo_net = []
+        # placebo: circular shifts through the identical machinery. Compared on
+        # BOTH total net and EX-CARRY (the carry bucket is conditionally
+        # non-negative by construction under a carry>=0 state, so a total-net
+        # placebo win proves only that positive-carry days carry positively).
+        placebo_net, placebo_excarry = [], []
         s_vals = state.reindex(unit.index).fillna(0.0).to_numpy()
         n = len(s_vals)
         for _ in range(N_PLACEBO):
             k = int(rng.integers(MIN_SHIFT, n - MIN_SHIFT))
             shifted = pd.Series(np.roll(s_vals, k), index=unit.index)
-            pb = _book(unit, shifted, boundaries, **args)
+            pb = _book(unit, shifted, boundaries, **args_primary)
             placebo_net.append(pb["stats"]["net_bp_total"])
+            placebo_excarry.append(pb["stats"]["excarry_bp_total"])
         placebo_net = np.array(placebo_net)
-        real = cond["stats"]["net_bp_total"]
+        placebo_excarry = np.array(placebo_excarry)
+        real = cond_primary["stats"]["net_bp_total"]
+        real_ex = cond_primary["stats"]["excarry_bp_total"]
         p_val = float((placebo_net >= real).mean())
+        p_val_ex = float((placebo_excarry >= real_ex).mean())
 
-        results[pair_name] = {
-            "conditional": cond["stats"],
-            "control": ctrl["stats"],
-            "placebo": {"n": N_PLACEBO, "mean": float(placebo_net.mean()),
-                        "p95": float(np.quantile(placebo_net, 0.95)),
-                        "p_value_net_ge_real": p_val},
-        }
-        cond["trades"].to_parquet(DATA / f"h13_trades_{market}_{pair_name.replace(' ', '_').replace('/', '-')}.parquet")
-        print(f"  {pair_name}: occ {cond['stats']['occupancy']:.1%}, "
-              f"{cond['stats']['n_trades']} trades, net {real:+.1f}bp "
-              f"(ctrl {ctrl['stats']['net_bp_total']:+.1f}bp), placebo p={p_val:.3f}", flush=True)
+        # State-exit steamroller study: unit EX-CARRY P&L in the 5/21bd AFTER
+        # each episode ends (does the adverse move arrive when the state dies?)
+        excarry_unit = unit[["harvest", "mtm", "cross"]].sum(axis=1)
+        dv01_daily = (unit["long_notional"].abs() * unit["dv01_long_unit"]).replace(0, np.nan)
+        post = {5: [], 21: []}
+        idx = unit.index
+        for _, t in cond_primary["trades"].iterrows():
+            x = pd.Timestamp(t["exit"])
+            if x not in idx:
+                continue
+            j = idx.get_loc(x)
+            for h in (5, 21):
+                seg = excarry_unit.iloc[j + 1:j + 1 + h]
+                dv = dv01_daily.iloc[j + 1:j + 1 + h].mean()
+                if len(seg) == h and np.isfinite(dv) and dv:
+                    post[h].append(float(seg.sum() / dv))
+        exit_study = {f"post_exit_excarry_{h}bd": {
+            "n": len(v), "median_bp": float(np.median(v)) if v else np.nan,
+            "mean_bp": float(np.mean(v)) if v else np.nan} for h, v in post.items()}
+
+        entry["placebo"] = {"n": N_PLACEBO,
+                            "net": {"mean": float(placebo_net.mean()),
+                                    "p95": float(np.quantile(placebo_net, 0.95)),
+                                    "p_value": p_val},
+                            "excarry": {"mean": float(placebo_excarry.mean()),
+                                        "p95": float(np.quantile(placebo_excarry, 0.95)),
+                                        "p_value": p_val_ex}}
+        entry["exit_study"] = exit_study
+        results[pair_name] = entry
+        cond_primary["trades"].to_parquet(
+            DATA / f"h13_trades_{market}_{pair_name.replace(' ', '_').replace('/', '-')}.parquet")
+        s0 = cond_primary["stats"]
+        print(f"  {pair_name}: occ {s0['occupancy']:.1%}, {s0['n_trades']} trades, "
+              f"net {real:+.1f}bp (carry {s0['carry_bp_total']:+.1f} / excarry {real_ex:+.1f}) "
+              f"ctrl {entry['control_roll']['net_bp_total']:+.1f} | "
+              f"p_net {p_val:.3f} p_excarry {p_val_ex:.3f} | "
+              f"post-exit21 {exit_study['post_exit_excarry_21bd']['median_bp']:+.2f}bp", flush=True)
 
     with open(DATA / f"h13_results_{market}.json", "w") as f:
         json.dump(results, f, indent=1, default=str)

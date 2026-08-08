@@ -100,3 +100,16 @@ def test_mutation_unlagged_state_changes_answer():
                       roll_bp=0.0, mult=0.0, roll_kind="roll")
     assert r_raw["stats"]["gross_bp_total"] != pytest.approx(
         r_lag["stats"]["gross_bp_total"])
+
+
+def test_carry_excarry_decomposition_sums():
+    unit = _unit()
+    unit.loc[unit.index[3], "mtm"] = 250.0
+    s = pd.Series([0, 0, 1, 1, 1, 0, 0, 0, 0, 0], index=unit.index, dtype=float)
+    r = h13._book(unit, s, set(), initiate_bp=0.0, hedge_bp=0.0, roll_bp=0.0,
+                  mult=0.0, roll_kind="roll")
+    st = r["stats"]
+    # carry bucket: 3 held days x 1.0; excarry: the planted 250 mtm on day 3
+    assert st["carry_bp_total"] == pytest.approx(3.0 / PKG)
+    assert st["excarry_bp_total"] == pytest.approx(250.0 / PKG)
+    assert st["gross_bp_total"] == pytest.approx(253.0 / PKG)
