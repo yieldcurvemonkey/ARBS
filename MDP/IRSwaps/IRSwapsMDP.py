@@ -8,7 +8,8 @@ import time
 import logging
 import re
 import zoneinfo
-from typing import Any, Dict, Iterable, List, Literal, Optional, Sequence, Union
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from typing import Any, Dict, Iterable, List, Literal, Optional, Sequence, Tuple, Union
 
 import pandas as pd
 import pytz
@@ -2895,21 +2896,21 @@ class IRSwapsMDP(MarketDataProvider[_GenericPricable]):
         the request down. That is the one place a silent fallback is right - the
         fallback recomputes the same curve from the same quotes.
         """
-        from MDP.IRSwaps.CITIVELO_EXCEL.fixings import fixings_for
+        from MDP.IRSwaps.CITIVELO_EXCEL.day_cache import single_day
         from MDP.IRSwaps.CITIVELO_EXCEL.warm import asset_for
-        from MDP.IRSwaps.CITIVELO_EXCEL.curve_names import citi_index_for_curve_name
-        from MDP.IRSwaps.CITIVELO_EXCEL.timestamps import from_wire_naive
-        from Query.IRSwaps.backends.rateslib.RLIRSwapCurve import RLIRSwapCurve
 
         asset = asset_for(curve_name)
         try:
             store = self._get_curve_store()
-            if not store.has_day(asset, trading_date):
+            # ``single_day`` folds has_day + read_raw_day into one mtime-validated
+            # lookup: a partition with no parquet yields an empty window, which is
+            # the same "cold day -> fall through" answer has_day gave.
+            window = single_day(store, asset, trading_date)
+            if window.empty:
                 return None
-            raw = store.read_raw_day(asset, trading_date)
-            if raw is None or getattr(raw, "empty", True):
-                return None
-            curves = store.reconstruct_curves_batch(raw.iloc[[-1]], cfg=None, max_workers=1)
+            curves = store.reconstruct_curves_batch(
+                window.frame.iloc[[-1]], cfg=None, max_workers=1
+            )
             if not curves:
                 return None
             rl_curve_handle = next(iter(curves.values()))
@@ -2920,13 +2921,48 @@ class IRSwapsMDP(MarketDataProvider[_GenericPricable]):
             )
             return None
 
+        return self._wrap_citivelo_excel_eod(
+            curve_name=curve_name,
+            asset=asset,
+            trading_date=trading_date,
+            rl_curve_handle=rl_curve_handle,
+        )
+
+    def _citivelo_excel_store_fixings(
+        self, *, curve_name: str, citi_index: str, reference_date: datetime.date
+    ) -> pd.Series:
+        """Fixings for a store-served curve, with the staleness gate applied.
+
+        Shared by the single-point loaders and by ``bulk_get_data`` so the two
+        cannot drift: a batch that reproduced this rule by hand would be one
+        edit away from serving a stale tail the single-point path refuses.
+        """
+        from MDP.IRSwaps.CITIVELO_EXCEL.fixings import fixings_for
+
+        result = fixings_for(curve_name, citi_index, reference_date=reference_date)
+        gap = result.gap_to(reference_date)
+        if result.empty or (gap is not None and gap > _CITIVELO_EXCEL_MAX_FIXING_GAP):
+            return pd.Series(dtype="float64")
+        return result.series
+
+    def _wrap_citivelo_excel_eod(
+        self,
+        *,
+        curve_name: str,
+        asset: str,
+        trading_date: datetime.date,
+        rl_curve_handle: Any,
+    ) -> "_IRSwapGenericCurve":
+        """The EOD ``RLIRSwapCurve`` for one reconstructed handle."""
+        from MDP.IRSwaps.CITIVELO_EXCEL.curve_names import citi_index_for_curve_name
+        from MDP.IRSwaps.CITIVELO_EXCEL.timestamps import from_wire_naive
+        from Query.IRSwaps.backends.rateslib.RLIRSwapCurve import RLIRSwapCurve
+
         citi_index = citi_index_for_curve_name(curve_name)
         stamp = from_wire_naive(datetime.datetime.combine(trading_date, datetime.time(17, 0)))
-        result = fixings_for(curve_name, citi_index, reference_date=trading_date)
-        gap = result.gap_to(trading_date)
-        fixings = result.series
-        if result.empty or (gap is not None and gap > _CITIVELO_EXCEL_MAX_FIXING_GAP):
-            fixings = pd.Series(dtype="float64")
+        fixings = self._citivelo_excel_store_fixings(
+            curve_name=curve_name, citi_index=citi_index, reference_date=trading_date
+        )
 
         curve_id = f"{self.source.upper()}-{curve_name}-{stamp.isoformat()}"
         return RLIRSwapCurve(
@@ -2965,13 +3001,8 @@ class IRSwapsMDP(MarketDataProvider[_GenericPricable]):
 
         ``None`` on any miss, so a cold store degrades to the live Excel build.
         """
-        from MDP.IRSwaps.CITIVELO_EXCEL.curve_names import (
-            citi_index_for_curve_name,
-            entry_for_curve_name,
-        )
-        from MDP.IRSwaps.CITIVELO_EXCEL.fixings import fixings_for
+        from MDP.IRSwaps.CITIVELO_EXCEL.curve_names import entry_for_curve_name
         from MDP.IRSwaps.CITIVELO_EXCEL.timestamps import from_wire_naive, resolve_request
-        from Query.IRSwaps.backends.rateslib.RLIRSwapCurve import RLIRSwapCurve
 
         asset = f"{curve_name}-CITIVELOEXCELMIN"
         entry = entry_for_curve_name(curve_name)
@@ -2987,23 +3018,28 @@ class IRSwapsMDP(MarketDataProvider[_GenericPricable]):
         # The store partitions by the curve's LOCAL trading date. Check the
         # neighbouring days too: a session running to 19:59 local straddles the
         # UTC date boundary, so the minute asked for can sit under either.
+        #
+        # The three days are joined and stamp-parsed ONCE per session rather than
+        # once per observation - see CITIVELO_EXCEL/day_cache.py, where the 21.4
+        # ms/observation this used to cost is broken down. The day order (0, -1,
+        # +1) is part of the contract: the nearest-snapshot search breaks ties
+        # positionally, so reordering the window could change which of two
+        # equidistant snapshots is served.
         local_date = wanted.astimezone(local_zone).date()
         try:
+            from MDP.IRSwaps.CITIVELO_EXCEL.day_cache import day_window
+
             store = self._get_curve_store()
-            frames = []
-            for offset in (0, -1, 1):
-                day = local_date + datetime.timedelta(days=offset)
-                if not store.has_day(asset, day):
-                    continue
-                raw = store.read_raw_day(asset, day)
-                if raw is not None and not getattr(raw, "empty", True):
-                    frames.append(raw)
-            if not frames:
+            window = day_window(
+                store,
+                asset,
+                tuple(local_date + datetime.timedelta(days=o) for o in (0, -1, 1)),
+            )
+            if window.empty:
                 return None
-            raw = pd.concat(frames) if len(frames) > 1 else frames[0]
-            stamps = pd.to_datetime(raw["timestamp_utc"], utc=True)
+            stamps = window.stamps
             position = int((stamps - pd.Timestamp(wanted).tz_convert("UTC")).abs().values.argmin())
-            row = raw.iloc[[position]]
+            row = window.frame.iloc[[position]]
             curves = store.reconstruct_curves_batch(row, cfg=None, max_workers=1)
             if not curves:
                 return None
@@ -3016,14 +3052,41 @@ class IRSwapsMDP(MarketDataProvider[_GenericPricable]):
             )
             return None
 
+        return self._wrap_citivelo_excel_minute(
+            curve_name=curve_name,
+            asset=asset,
+            local_zone=local_zone,
+            wanted=wanted,
+            actual=actual,
+            rl_curve_handle=rl_curve_handle,
+        )
+
+    def _wrap_citivelo_excel_minute(
+        self,
+        *,
+        curve_name: str,
+        asset: str,
+        local_zone: Any,
+        wanted: datetime.datetime,
+        actual: datetime.datetime,
+        rl_curve_handle: Any,
+    ) -> "_IRSwapGenericCurve":
+        """The intraday ``RLIRSwapCurve`` for one reconstructed snapshot.
+
+        ``wanted`` is what the caller asked for and ``actual`` is what the store
+        had; both go into the metadata, because the whole point of
+        ``snapshot_lag_seconds`` is that a caller holding this to a tolerance
+        needs the number rather than a promise.
+        """
+        from MDP.IRSwaps.CITIVELO_EXCEL.curve_names import citi_index_for_curve_name
+        from Query.IRSwaps.backends.rateslib.RLIRSwapCurve import RLIRSwapCurve
+
         lag = abs((actual - wanted).total_seconds())
         citi_index = citi_index_for_curve_name(curve_name)
         reference_date = actual.astimezone(local_zone).date()
-        result = fixings_for(curve_name, citi_index, reference_date=reference_date)
-        gap = result.gap_to(reference_date)
-        fixings = result.series
-        if result.empty or (gap is not None and gap > _CITIVELO_EXCEL_MAX_FIXING_GAP):
-            fixings = pd.Series(dtype="float64")
+        fixings = self._citivelo_excel_store_fixings(
+            curve_name=curve_name, citi_index=citi_index, reference_date=reference_date
+        )
 
         stamp = actual.astimezone(zoneinfo.ZoneInfo(_CITIVELO_EXCEL_WIRE_TZ))
         return RLIRSwapCurve(
@@ -3046,6 +3109,234 @@ class IRSwapsMDP(MarketDataProvider[_GenericPricable]):
                 "reference_date": reference_date.isoformat(),
             },
         )
+
+    def _bulk_citivelo_excel_curves(
+        self,
+        *,
+        curve_name: str,
+        timestamps: Sequence[Union[datetime.date, datetime.datetime, Literal["live"]]],
+        request: Dict[str, Any],
+        ignore_cache: bool,
+        n_jobs: int,
+    ) -> Dict[Union[datetime.date, datetime.datetime], "_IRSwapGenericCurve"]:
+        """``bulk_get_data`` for ``citivelo_excel``: one day read, one batch solve.
+
+        Before this existed the source fell through to the generic per-point
+        loop, and was measured **slower than calling ``get_data`` in a Python
+        for-loop yourself** (141 vs 16 ms/curve on a warmed EOD history) - which
+        is the worst possible property for a method whose name promises the
+        opposite.
+
+        What the batch actually removes, per requested observation:
+
+        * the day frame is read, joined and stamp-parsed once per SESSION rather
+          than once per observation (the day cache does this for the single-point
+          path too, so both benefit);
+        * curve reconstruction is batched - measured 0.1 ms/curve over 200 rows
+          against 0.57 ms one at a time;
+        * fixings resolve once per distinct reference date rather than once per
+          point.
+
+        Value-identical to N calls of ``get_data`` by construction: every served
+        curve is wrapped by the same ``_wrap_citivelo_excel_*`` helper the
+        single-point loaders use, and anything this path cannot resolve - a QL
+        backend, ``force_refresh``/``no_curve_store``, ``live``, an unwarmed day -
+        is handed back to ``get_data`` one point at a time, exactly as before.
+        """
+        from MDP.IRSwaps.CITIVELO_EXCEL import register as _register_citivelo_definitions
+        from MDP.IRSwaps.CITIVELO_EXCEL.curve_names import entry_for_curve_name
+        from MDP.IRSwaps.CITIVELO_EXCEL.day_cache import day_window, single_day
+        from MDP.IRSwaps.CITIVELO_EXCEL.timestamps import from_wire_naive, resolve_request
+        from MDP.IRSwaps.CITIVELO_EXCEL.warm import asset_for
+
+        out: Dict[Union[datetime.date, datetime.datetime], _IRSwapGenericCurve] = {}
+
+        def _single(t) -> None:
+            single_request = dict(request)
+            single_request["curve_name"] = curve_name
+            single_request["timestamp"] = t
+            single_request["ignore_cache"] = bool(ignore_cache)
+            try:
+                curve = self.get_data(single_request)
+            except Exception:  # noqa: BLE001 - matches the generic loop this replaces
+                return
+            if curve is not None:
+                out[t] = curve
+
+        # The same three conditions _build_citivelo_excel_curve applies. When any
+        # of them rules the store out, so does this: the batch must never serve a
+        # cached curve to a caller who asked for a fresh one.
+        store_eligible = (
+            self.source.upper() not in CITIVELO_EXCEL_QL_TOKENS
+            and not request.get("force_refresh", request.get("ignore_cache", ignore_cache))
+            and not request.get("no_curve_store", False)
+        )
+        if not store_eligible:
+            for t in timestamps:
+                _single(t)
+            return out
+
+        _register_citivelo_definitions()
+
+        try:
+            entry = entry_for_curve_name(curve_name)
+            local_zone = zoneinfo.ZoneInfo(entry.local_timezone)
+        except Exception:  # noqa: BLE001 - an unknown curve has no store layout
+            for t in timestamps:
+                _single(t)
+            return out
+
+        minute_asset = f"{curve_name}-CITIVELOEXCELMIN"
+        eod_asset = asset_for(curve_name)
+        store = self._get_curve_store()
+        workers = max(1, int(n_jobs or 1))
+
+        # ---- 1. resolve every request to a mode, keeping the originals -------
+        intraday: Dict[datetime.date, List[Tuple[Any, datetime.datetime]]] = {}
+        eod: Dict[datetime.date, List[Any]] = {}
+        leftover: List[Any] = []
+        for t in timestamps:
+            try:
+                mode = resolve_request(t)
+            except Exception:  # noqa: BLE001
+                leftover.append(t)
+                continue
+            if mode.mode == "intraday" and mode.wire_instant is not None:
+                wanted = from_wire_naive(mode.wire_instant)
+                intraday.setdefault(wanted.astimezone(local_zone).date(), []).append((t, wanted))
+            elif mode.mode == "eod" and mode.eod_date is not None:
+                eod.setdefault(mode.eod_date, []).append(t)
+            else:  # "live", and anything else the store cannot contain
+                leftover.append(t)
+
+        # ---- 2. intraday, one prepared window per local session --------------
+        for local_date, wants in intraday.items():
+            try:
+                window = day_window(
+                    store,
+                    minute_asset,
+                    tuple(local_date + datetime.timedelta(days=o) for o in (0, -1, 1)),
+                )
+                if window.empty:
+                    raise LookupError("no warmed window")
+                stamps = window.stamps
+                # Same nearest-snapshot rule as the single-point loader, run per
+                # request: positional argmin over the window in its (0, -1, +1)
+                # order, so equidistant snapshots break the same way.
+                positions = {
+                    original: int(
+                        (stamps - pd.Timestamp(wanted).tz_convert("UTC")).abs().values.argmin()
+                    )
+                    for original, wanted in wants
+                }
+                distinct = sorted(set(positions.values()))
+                handles = self._reconstruct_rows_by_position(
+                    store=store, frame=window.frame, positions=distinct, workers=workers,
+                )
+            except Exception as exc:  # noqa: BLE001 - degrade to the proven path
+                _citivelo_excel_logger.debug(
+                    "citivelo_excel: bulk minute window failed for %s %s (%s); "
+                    "falling back to per-point.", minute_asset, local_date, exc,
+                )
+                for original, _wanted in wants:
+                    _single(original)
+                continue
+
+            for original, wanted in wants:
+                handle = handles.get(positions[original])
+                if handle is None:
+                    _single(original)
+                    continue
+                out[original] = self._wrap_citivelo_excel_minute(
+                    curve_name=curve_name,
+                    asset=minute_asset,
+                    local_zone=local_zone,
+                    wanted=wanted,
+                    actual=stamps.iloc[positions[original]].to_pydatetime(),
+                    rl_curve_handle=handle,
+                )
+
+        # ---- 3. EOD, one row per warmed day, reconstructed in one batch ------
+        if eod:
+            frames: List[pd.DataFrame] = []
+            dates_in_order: List[datetime.date] = []
+            for trading_date in sorted(eod):
+                try:
+                    window = single_day(store, eod_asset, trading_date)
+                except Exception:  # noqa: BLE001
+                    continue
+                if window.empty:
+                    continue
+                frames.append(window.frame.iloc[[-1]])
+                dates_in_order.append(trading_date)
+
+            handles_by_date: Dict[datetime.date, Any] = {}
+            if frames:
+                try:
+                    batch = pd.concat(frames, ignore_index=True)
+                    built = self._reconstruct_rows_by_position(
+                        store=store, frame=batch, positions=list(range(len(batch))),
+                        workers=workers,
+                    )
+                    handles_by_date = {
+                        d: built[i] for i, d in enumerate(dates_in_order) if i in built
+                    }
+                except Exception as exc:  # noqa: BLE001
+                    _citivelo_excel_logger.debug(
+                        "citivelo_excel: bulk EOD reconstruct failed (%s); per-point.", exc,
+                    )
+                    handles_by_date = {}
+
+            for trading_date, originals in eod.items():
+                handle = handles_by_date.get(trading_date)
+                for original in originals:
+                    if handle is None:
+                        _single(original)
+                        continue
+                    out[original] = self._wrap_citivelo_excel_eod(
+                        curve_name=curve_name,
+                        asset=eod_asset,
+                        trading_date=trading_date,
+                        rl_curve_handle=handle,
+                    )
+
+        for t in leftover:
+            _single(t)
+
+        return out
+
+    @staticmethod
+    def _reconstruct_rows_by_position(
+        *, store: Any, frame: pd.DataFrame, positions: Sequence[int], workers: int
+    ) -> Dict[int, Any]:
+        """``{positional row index: rl.Curve}`` for the given rows.
+
+        Deliberately keyed by POSITION rather than by ``timestamp_utc``, which is
+        what ``CurveStore.reconstruct_curves_batch`` returns. Two rows in a
+        three-day window can carry the same stamp - overlapping partitions after
+        a re-warm - and a timestamp-keyed dict silently collapses them, serving
+        one day's curve for the other's request. The reconstruction itself is the
+        same call ``reconstruct_curves_batch`` makes.
+        """
+        from Caching.curve_store import CurveStore
+
+        # ``to_dict("records")`` on a sub-frame, exactly as
+        # reconstruct_curves_batch materialises its rows - not ``iloc[p].to_dict()``,
+        # which goes through a mixed-dtype Series and need not produce the same
+        # Python objects for every column.
+        order = list(positions)
+        rows = list(zip(order, frame.iloc[order].to_dict("records")))
+        if len(rows) <= 4 or workers <= 1:
+            return {p: CurveStore.reconstruct_curve(r, cfg=None) for p, r in rows}
+
+        result: Dict[int, Any] = {}
+        with ThreadPoolExecutor(
+            max_workers=min(workers, len(rows)), thread_name_prefix="citivelo-reconstruct"
+        ) as pool:
+            futures = {pool.submit(CurveStore.reconstruct_curve, r, cfg=None): p for p, r in rows}
+            for fut in as_completed(futures):
+                result[futures[fut]] = fut.result()
+        return result
 
     def _citivelo_excel_fixings(
         self, *, curve_name: str, snapshot: Any, quotes: Any = None
@@ -4089,6 +4380,15 @@ class IRSwapsMDP(MarketDataProvider[_GenericPricable]):
                             out[t] = curve
 
             return out
+
+        elif self.source.upper() in CITIVELO_EXCEL_SOURCE_TOKENS:
+            return self._bulk_citivelo_excel_curves(
+                curve_name=curve_name,
+                timestamps=timestamps,
+                request=request,
+                ignore_cache=ignore_cache,
+                n_jobs=n_jobs,
+            )
 
         # ------- default / not implemented -------
         # Fallback: build curves one-by-one for sources without a dedicated bulk implementation.

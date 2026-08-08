@@ -266,6 +266,45 @@ def solve_best_n_leg_hedge(
     return results
 
 
+def _refuse_degenerate_pca_metric(G: np.ndarray, w) -> None:
+    """Refuse a "PCA metric" that is arithmetically the identity.
+
+    ``np.linalg.eigh`` returns an ORTHONORMAL square ``L``, so ``L diag(1) L^T
+    = L L^T = I`` -- measured on a real fitted 10-bucket USD-OIS model,
+    ``max|L L^T - I| = 8.9e-16``. Every quadratic form below then collapses to
+    the plain Euclidean norm of the dollar ladder, and a hedge that reports
+    itself as PCA-neutralising is unweighted least squares.
+
+    That was **the default call path**: ``pca_weights=None`` meant
+    ``np.ones(K)`` in both this module's metric builders, so
+    ``solve_best_n_leg_hedge_pca(..., pca_weights=None)`` -- the documented,
+    lowest-friction call -- never used the PCA at all. Measured on the real
+    2026-08-03 USD-OIS curve, a 1y-forward 2-7-29 fly removed **0.0865%** of
+    that "PCA norm"; against a genuine PC1+PC2 projector the same fly removes
+    5.3%. Reporting a number that small as "PCA-neutralised" is the failure
+    this refusal exists to make impossible.
+
+    Refusing rather than silently substituting a default weight vector: which
+    components a hedge should neutralise is the caller's decision and cannot be
+    guessed here. A truncated loadings matrix (``K x k``, ``k < K``) at uniform
+    weights gives a genuine rank-k projector and is NOT refused -- the test is
+    on the metric that came out, not on how it was asked for.
+    """
+    n = G.shape[0]
+    if G.shape[0] == G.shape[1] and np.allclose(G, np.eye(n), atol=1e-8):
+        raise ValueError(
+            "the PCA metric is arithmetically the identity, so this would be "
+            "plain unweighted least squares on the raw dollar ladder while "
+            "reporting itself as a PCA hedge. `eigh` gives an orthonormal L, "
+            "so L diag(w) L^T = I whenever w is all-ones -- which is what "
+            f"pca_weights=None means here. Weights: "
+            f"{np.asarray(w, dtype=float).round(4).tolist()}. Pass explicit "
+            "pca_weights naming the components to neutralise, e.g. "
+            "[1, 1, 0, ...] for a level+slope hedge or the eigenvalues for a "
+            "variance-weighted one."
+        )
+
+
 def _build_pca_projection(pca_model, pca_weights):
     """
     Returns a function S(x) = W^{1/2} L^T x that maps a ladder x (Series or array)
@@ -273,6 +312,8 @@ def _build_pca_projection(pca_model, pca_weights):
 
     pca_model.loadings: DataFrame of shape (K, K), index = ladder labels.
     pca_weights: sequence of length K, weights per PC (PC1, PC2, ...).
+
+    Uniform weights are refused -- see :func:`_refuse_degenerate_pca_metric`.
     """
     L = pca_model.loadings.values  # (K x K), columns = PCs
     K = L.shape[1]
@@ -283,6 +324,7 @@ def _build_pca_projection(pca_model, pca_weights):
         w = np.asarray(pca_weights, dtype=float)
         if w.shape[0] != K:
             raise ValueError(f"pca_weights must have length {K}, got {w.shape[0]}")
+    _refuse_degenerate_pca_metric(L @ np.diag(w) @ L.T, w)
 
     # Keep only PCs with positive weight (others don't affect the norm)
     mask = w > 0
@@ -304,28 +346,6 @@ def _build_pca_projection(pca_model, pca_weights):
     return S_vec
 
 
-def _solve_bpv_neutral_ls_pca(B_pca: np.ndarray, r_pca: np.ndarray, d: np.ndarray) -> np.ndarray:
-    """
-    Solve:  min_w || r_pca + B_pca w ||_2^2   subject to   d^T w = 0
-
-    B_pca: (K_eff x n)  in PCA-transformed space
-    r_pca: (K_eff,)     in PCA-transformed space
-    d:     (n,)         BPV per leg (unchanged, original ladder basis)
-    """
-    n = B_pca.shape[1]
-    BTB = B_pca.T @ B_pca  # n x n
-    BTr = B_pca.T @ r_pca  # n
-
-    A = d.reshape(1, -1)  # 1 x n
-
-    KKT = np.block([[BTB, A.T], [A, np.zeros((1, 1))]])
-    rhs = np.concatenate([-BTr, np.zeros(1)])
-
-    sol, *_ = np.linalg.lstsq(KKT, rhs, rcond=None)
-    w = sol[:n]
-    return w
-
-
 def _build_pca_metric_matrix(pca_model, pca_weights=None) -> np.ndarray:
     """
     Build G = L diag(w) L^T where:
@@ -334,6 +354,14 @@ def _build_pca_metric_matrix(pca_model, pca_weights=None) -> np.ndarray:
 
     Returned G has shape (K, K) and defines the quadratic form:
         x^T G x = PCA-norm^2(x)
+
+    **Uniform weights -- including this signature's own ``pca_weights=None``
+    default -- are REFUSED**, because for an orthonormal L they make G exactly
+    the identity and the "PCA norm" the plain Euclidean norm of the ladder.
+    See :func:`_refuse_degenerate_pca_metric` for the measurement and for what
+    to pass instead. This is a deliberate behaviour change: the previous
+    default returned I and every caller that took it got an unweighted
+    least-squares hedge labelled as a PCA one.
     """
     L = pca_model.loadings.values  # (K x K), columns = PCs
     K = L.shape[1]
@@ -348,6 +376,7 @@ def _build_pca_metric_matrix(pca_model, pca_weights=None) -> np.ndarray:
     # Keep PCs with positive weight; zeros simply don't contribute
     W = np.diag(w)
     G = L @ W @ L.T  # (K x K)
+    _refuse_degenerate_pca_metric(G, w)
     return G
 
 

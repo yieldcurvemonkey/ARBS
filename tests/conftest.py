@@ -17,6 +17,38 @@ from dataclasses import dataclass
 
 
 @pytest.fixture(autouse=True, scope="session")
+def _block_production_database():
+    """No test may open the hard-coded production Supabase pooler.
+
+    ``Caching.supabase_engine`` defaults ``SUPABASE_ENABLED`` to True and
+    ``get_database_url()`` has no ``None`` branch, so an unconfigured checkout
+    resolves live production credentials; ``ensure_schema()`` then fires DDL from
+    *read* paths. Nothing in this suite previously stood between those two facts:
+    ``pytest.ini`` sets no environment, protection was per-test
+    ``monkeypatch.setenv`` + ``importlib.reload``, and that reload leaves the
+    module mutated for the rest of the session anyway.
+
+    The guard hooks ``psycopg2.connect`` rather than ``create_engine`` because an
+    engine is lazy - ``create_engine`` opens no socket - and because several
+    scripts call the DBAPI directly. It survives ``importlib.reload`` of the
+    engine module for the same reason. Setting an env var *instead* would not
+    work: the tests that reload the engine module would undo it.
+
+    It blocks one host and only when no connection env var names it, so a
+    contributor who sets ``PG_TEST_URL``/``DATABASE_URL`` (which is how the
+    ``db``-marked full suite runs) is unaffected. ``ARBS_ALLOW_PROD_DB=1``
+    overrides it.
+    """
+    from Caching.prod_db_guard import install_prod_db_guard
+
+    uninstall = install_prod_db_guard()
+    try:
+        yield
+    finally:
+        uninstall()
+
+
+@pytest.fixture(autouse=True, scope="session")
 def _isolate_stirfo_raw_eod_cache(tmp_path_factory):
     """Keep the STIR option raw-EOD disk cache out of the developer's real cache.
 

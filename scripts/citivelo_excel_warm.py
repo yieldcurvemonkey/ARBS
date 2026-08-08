@@ -17,9 +17,17 @@ import json
 import logging
 import os
 import pathlib
+import re
 import sys
 
-os.environ.setdefault("ARBS_SUPABASE_ENABLED", "0")
+# ``--push-l2`` used to be a DEAD FLAG. ``ARBS_SUPABASE_ENABLED`` is read once,
+# at ``Caching.supabase_engine`` import time, and this line runs long before
+# argparse does - so ``_get_curve_sync`` returned None whatever the flag said and
+# ``write_day(push_l2=True)` pushed nothing. Sniffing argv here is ugly, but the
+# alternative is a flag that silently does nothing, which is worse. The default is
+# unchanged: local-only unless asked.
+_WANT_L2 = "--push-l2" in sys.argv
+os.environ.setdefault("ARBS_SUPABASE_ENABLED", "1" if _WANT_L2 else "0")
 
 _REPO_ROOT = pathlib.Path(__file__).resolve().parents[1]
 if str(_REPO_ROOT) not in sys.path:
@@ -37,6 +45,23 @@ def cmd_warm(args) -> int:
     from MDP.IRSwaps.CITIVELO_EXCEL.warm import warm_many
 
     register()
+    if args.push_l2:
+        from Caching.supabase_engine import SUPABASE_ENABLED, get_database_url
+
+        target = re.sub(r"//[^@]+@", "//<redacted>@", get_database_url() or "")
+        logging.getLogger(__name__).warning(
+            "--push-l2: SUPABASE_ENABLED=%s target=%s. Each written day is pushed as a "
+            "whole-day blob. For a bulk backfill prefer scripts/citivelo_l2_sync.py, "
+            "which diffs by content and bounds its connection count.",
+            SUPABASE_ENABLED, target,
+        )
+        if not SUPABASE_ENABLED:
+            logging.getLogger(__name__).error(
+                "--push-l2 was asked for but SUPABASE_ENABLED is False. Something "
+                "imported Caching before this script set the env var; the push would "
+                "silently do nothing, so refusing instead."
+            )
+            return 2
     stats = warm_many(
         _curves(args.curves),
         start=datetime.date.fromisoformat(args.start) if args.start else None,

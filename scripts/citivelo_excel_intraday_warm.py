@@ -159,6 +159,7 @@ def fetch_curve(
     work_dir: Path,
     client: Any,
     force: bool = False,
+    freq: str = "MI01",
     recycle_every: int = 25,
     memory_ceiling_mb: float = 3000.0,
     memory_abort_mb: float = 3800.0,
@@ -182,7 +183,7 @@ def fetch_curve(
     curve_dir.mkdir(parents=True, exist_ok=True)
 
     tenor_of = {tag: tag.rsplit(".", 1)[-1] for tag in tags}
-    window = DEFAULT_WINDOW["MI01"]
+    window = DEFAULT_WINDOW[freq]
     days_written = 0
     windows_run = 0
 
@@ -201,7 +202,7 @@ def fetch_curve(
             continue
 
         series, windows = fetch_windowed(
-            client, tags, "MI01", cursor, w_end, window=window, strict_spacing=True
+            client, tags, freq, cursor, w_end, window=window, strict_spacing=True
         )
         windows_run += len(windows)
         for w in windows:
@@ -536,7 +537,8 @@ def cmd_fetch(args, logger: logging.Logger) -> int:
         try:
             days, windows = fetch_curve(
                 curve, start, end, work_dir=work_dir, client=client,
-                force=args.force, recycle_every=args.recycle_every,
+                force=args.force, freq=args.freq,
+                recycle_every=args.recycle_every,
                 memory_ceiling_mb=args.memory_ceiling_mb,
                 memory_abort_mb=args.memory_abort_mb, logger=logger,
             )
@@ -635,6 +637,12 @@ def _build_parser() -> argparse.ArgumentParser:
     f.add_argument("--end", required=True)
     f.add_argument("--workbook-tag", default="WARM")
     f.add_argument("--force", action="store_true")
+    f.add_argument(
+        "--freq", default="MI01", choices=("MI01", "MI10", "HOURLY"),
+        help="MI01 for the recent 1-minute history; MI10 reaches the same ~4-year "
+             "retention wall in a fraction of the Excel memory, because its span "
+             "cliff is 60 days rather than 7.",
+    )
     f.add_argument(
         "--recycle-every", type=int, default=25,
         help="check Excel's memory every N windows and recycle the workbook "

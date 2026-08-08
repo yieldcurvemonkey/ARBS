@@ -63,7 +63,8 @@ import datetime
 import logging
 import threading
 import warnings
-from dataclasses import dataclass, field
+from collections import OrderedDict
+from dataclasses import dataclass, field, replace
 from typing import Any, Dict, Optional, Tuple
 
 import pandas as pd
@@ -349,6 +350,34 @@ def _merged_sources(
     return hit
 
 
+#: ``(curve_name, citi_index, reference_date, prefer_official, fill_gaps) ->
+#: FixingsResult``. Bounded, LRU, and populated ONLY when ``quotes is None``.
+#:
+#: The merged-sources cache above removed the two source lookups (232 ms + 237
+#: ms) but left the per-call work: the ``reference_date`` filter builds a 5,456
+#: element object array of ``datetime.date``, and ``fill_calendar_gaps`` walks
+#: 21 years of calendar days asking ``is_bus_day``. Measured 2026-08-08 that is
+#: **7.9 ms per call, 26% of a warmed minute observation** - and a minute
+#: timeseries pays it 841 times for ONE distinct answer, because every
+#: observation in a session shares a reference date.
+#:
+#: ``reference_date`` is part of the key, not a filter applied to a shared
+#: entry. That is the whole point: an entry cached for a later date contains
+#: fixings an earlier request must not see, and serving them would leak future
+#: rates into a historical curve - invisible in any timing benchmark, and the
+#: exact failure this key shape exists to prevent.
+_RESULT_CACHE: "OrderedDict[Tuple[str, str, Optional[datetime.date], bool, bool], FixingsResult]" = (
+    OrderedDict()
+)
+_RESULT_CACHE_LOCK = threading.RLock()
+
+#: Distinct (curve, reference_date) answers retained. A backfill walks dates in
+#: order, so a small window suffices; 20 curves x a few dates in flight is the
+#: shape this is sized for. Each entry is a ~5,500-element float series (~90 KB
+#: with its index), so this bounds the cache at roughly 45 MB in the worst case.
+_RESULT_CACHE_MAX = 512
+
+
 def reset_fixings_cache() -> None:
     """Drop every cached fixing series - the merged sources and the publisher.
 
@@ -357,6 +386,8 @@ def reset_fixings_cache() -> None:
     """
     with _MERGED_CACHE_LOCK:
         _MERGED_CACHE.clear()
+    with _RESULT_CACHE_LOCK:
+        _RESULT_CACHE.clear()
     reset_publisher_fixings_cache()
 
 
@@ -503,7 +534,58 @@ def fixings_for(
     2005-01-03 while the Fed cache here starts 2018-04-02, and the Fed's tail is
     the fresher one. Union with the official source winning on collision gives the
     longest correct history available.
+
+    The whole result is memoised on ``(curve_name, citi_index, reference_date,
+    prefer_official, fill_gaps)`` when no explicit ``quotes`` is supplied - see
+    :data:`_RESULT_CACHE`. The returned ``series`` is a **copy**, because callers
+    hand it straight to ``RLIRSwapCurve`` and this repo has call sites that
+    assign into a fixings series they were given.
     """
+    citi_index = str(citi_index).upper()
+
+    if quotes is None:
+        key = (
+            str(curve_name), citi_index, reference_date,
+            bool(prefer_official), bool(fill_gaps),
+        )
+        with _RESULT_CACHE_LOCK:
+            hit = _RESULT_CACHE.get(key)
+            if hit is not None:
+                _RESULT_CACHE.move_to_end(key)
+        if hit is None:
+            hit = _fixings_for_uncached(
+                curve_name, citi_index,
+                reference_date=reference_date,
+                quotes=None,
+                prefer_official=prefer_official,
+                fill_gaps=fill_gaps,
+            )
+            with _RESULT_CACHE_LOCK:
+                _RESULT_CACHE[key] = hit
+                _RESULT_CACHE.move_to_end(key)
+                while len(_RESULT_CACHE) > _RESULT_CACHE_MAX:
+                    _RESULT_CACHE.popitem(last=False)
+        return replace(hit, series=hit.series.copy(), contributions=dict(hit.contributions))
+
+    return _fixings_for_uncached(
+        curve_name, citi_index,
+        reference_date=reference_date,
+        quotes=quotes,
+        prefer_official=prefer_official,
+        fill_gaps=fill_gaps,
+    )
+
+
+def _fixings_for_uncached(
+    curve_name: str,
+    citi_index: str,
+    *,
+    reference_date: Optional[datetime.date] = None,
+    quotes: Any = None,
+    prefer_official: bool = True,
+    fill_gaps: bool = True,
+) -> FixingsResult:
+    """:func:`fixings_for` without the result memo. The real work lives here."""
     citi_index = str(citi_index).upper()
     contributions: Dict[str, int] = {}
 

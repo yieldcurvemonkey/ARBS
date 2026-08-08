@@ -133,3 +133,34 @@ CREATE TABLE IF NOT EXISTS arbs_forex_factory_calendar_blocks_v1 (
 
 CREATE INDEX IF NOT EXISTS idx_forex_factory_calendar_date
     ON arbs_forex_factory_calendar_blocks_v1 (trading_date);
+
+-- 2026-08-08: swaption vol cube day-blocks, for Caching.swaption_cube_store's L2
+-- tier (Caching.supabase_swaption_cube_sync).
+--
+-- Same blob-block shape as the curve / USTF / computed-timeseries tables above:
+-- one row per partition, the whole partition's parquet as BYTEA, with
+-- data_format + row_count + sha256 so a reader can tell what it has without
+-- decoding it. The key column is named `asset` rather than `symbol` because the
+-- store's own vocabulary is `asset` — it partitions on
+-- vol_raw/asset=<CCY>-SWAPTIONVOL-<PROVIDER>/ and `asset_for()` mints the name.
+--
+-- One difference in MEANING from arbs_curve_intraday_blocks_v1, even though the
+-- columns are the same: a curve partition may legitimately hold several parquet
+-- files (different timestamps within the day) and readers concat them, whereas a
+-- cube partition is exactly ONE surface. SwaptionCubeStore.write_day raises
+-- FileExistsError on a conflicting local write for that reason, and the sync
+-- refuses a differing remote sha without an explicit rewrite so the property
+-- survives the round trip.
+CREATE TABLE IF NOT EXISTS arbs_swaption_cube_blocks_v1 (
+    trading_date DATE NOT NULL,
+    asset VARCHAR NOT NULL,
+    data_format VARCHAR NOT NULL DEFAULT 'parquet_zstd',
+    row_count INTEGER NOT NULL,
+    payload BYTEA NOT NULL,
+    sha256 VARCHAR NOT NULL,
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    PRIMARY KEY (trading_date, asset)
+);
+
+CREATE INDEX IF NOT EXISTS idx_swaption_cube_asset_date
+    ON arbs_swaption_cube_blocks_v1 (asset, trading_date);

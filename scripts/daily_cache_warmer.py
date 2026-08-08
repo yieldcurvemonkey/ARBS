@@ -84,6 +84,38 @@ _FRB_CUSIPS = (
     *[f"OOO{t}" for t in _FRB_TENORS],
 )
 
+# ── Citi Velocity ────────────────────────────────────────────────────
+#
+# The five majors that are warmed in the CurveStore. The other fifteen Citi
+# curves still work through the live path; they are simply not warmed, so
+# pricing them here would drive Excel on a schedule.
+_CITIVELO_CURVES = (
+    "USD-SOFR-1D",
+    "EUR-ESTR-1D",
+    "GBP-SONIA-1D",
+    "CAD-CORRA-1D",
+    "JPY-TONAR-1D-LCH",
+)
+
+# EOD tenors, same shape as the ERIS job. Capped at 30Y: Citi serves out to 50Y
+# but the long end is thin in the non-USD currencies.
+_CITIVELO_EOD_OUTRIGHTS = (
+    "1Y", "2Y", "3Y", "5Y", "7Y", "10Y", "15Y", "20Y", "30Y",
+)
+_CITIVELO_EOD_FORWARDS = (
+    "1y1y", "1y5y", "2y5y", "5y5y", "5y10y", "10y10y",
+)
+_CITIVELO_EOD_SPREADS = (
+    "2y/5y", "2y/10y", "5y/10y", "10y/30y", "2y/5y/10y", "5y/10y/30y",
+)
+
+# Intraday is deliberately a SUBSET. The minute store holds ~1,100 points per
+# curve per day, so pricing the full EOD grid on a 15-minute stride would be
+# 5 curves x 33 tenors x 33 points a day, every day, for numbers nobody has
+# asked for. These are the ones that get looked at intraday.
+_CITIVELO_INTRADAY_TENORS = ("2Y", "5Y", "10Y", "30Y", "2y/10y", "5y/10y/30y")
+_CITIVELO_INTRADAY_FREQ = "15min"
+
 # USD-OIS uses the same outrights + a subset of forwards (max 30Y)
 _OIS_OUTRIGHT_TENORS = tuple(t for t in _EOD_OUTRIGHT_TENORS if int(t.rstrip("Y")) <= 30)
 _OIS_FORWARD_TENORS = (
@@ -319,6 +351,171 @@ def warm_ustf_invoice_caches(start, end):
             break
 
     return f"UST futures warm: {len(bdates)} day(s)"
+
+
+# ─────────────────────────────────────────────────────────────────────
+# Job registry
+# ─────────────────────────────────────────────────────────────────────
+
+def _business_days(start, end):
+    import pandas as pd
+
+    return [d.date() for d in pd.bdate_range(start, end)]
+
+
+def _run(cmd, label):
+    """Run a warm script as a subprocess and report, without killing the run."""
+    log.info("  %s: %s", label, " ".join(cmd[2:]))
+    result = subprocess.run(cmd, cwd=REPO_ROOT)
+    if result.returncode != 0:
+        log.warning("  %s exited %d", label, result.returncode)
+    return result.returncode
+
+
+def warm_citivelo_curve_stores(start, end):
+    """Job 7: Citi Velocity CurveStore - intraday minutes then EOD.
+
+    ORDER MATTERS and so does the split. ``fetch`` is the only phase that drives
+    Excel; ``build`` is pure CPU. Keeping them separate is what makes the job
+    resumable, because a day already on disk is skipped on the next run.
+
+    The fetch is given a memory ceiling on purpose. The add-in's own series cache
+    only ever grows and only a HUMAN restart clears it - a 528-window run wedged
+    Excel at 5,249 MB on 2026-08-07. Above ``--memory-abort-mb`` the fetch stops
+    cleanly and reports what it banked rather than pushing further; the next
+    scheduled run picks up where it left off.
+    """
+    py = sys.executable
+    days = _business_days(start, end)
+    if not days:
+        log.info("  no business days in range")
+        return None
+
+    curves = ",".join(_CITIVELO_CURVES)
+    # end is exclusive in the fetcher's window arithmetic
+    fetch_end = (max(days) + datetime.timedelta(days=1)).isoformat()
+
+    _run([py, "-u", "scripts/citivelo_excel_intraday_warm.py", "fetch",
+          "--curves", curves, "--start", min(days).isoformat(), "--end", fetch_end,
+          "--recycle-every", "20", "--memory-ceiling-mb", "2500",
+          "--memory-abort-mb", "3800"], "intraday fetch")
+
+    _run([py, "-u", "scripts/citivelo_excel_intraday_warm.py", "build",
+          "--curves", curves], "intraday build")
+
+    # EOD runs entirely offline against the banked tag cache.
+    _run([py, "-u", "scripts/citivelo_excel_warm.py", "warm",
+          "--curves", curves, "--start", min(days).isoformat(),
+          "--end", max(days).isoformat()], "EOD warm")
+
+    _run([py, "-u", "scripts/citivelo_excel_intraday_warm.py", "status"], "status")
+    return None
+
+
+def warm_citivelo_swaption_cube(start, end):
+    """Job 8: Citi Velocity swaption cube - vol tags, then the cube store.
+
+    ``fetch`` is the Excel phase and carries the same memory ceiling; ``build``
+    assembles one cube per observation date from the cached quotes with no Excel
+    and no network.
+    """
+    py = sys.executable
+    _run([py, "-u", "scripts/citivelo_swaption_vol_warm.py", "fetch",
+          "--currency", "USD", "--memory-abort-mb", "3800"], "vol fetch")
+    _run([py, "-u", "scripts/citivelo_swaption_vol_warm.py", "build",
+          "--currency", "USD"], "cube build")
+    _run([py, "-u", "scripts/citivelo_swaption_vol_warm.py", "status",
+          "--currency", "USD"], "status")
+    return None
+
+
+def warm_citivelo_timeseries_eod(start, end):
+    """Job 9: Citi Velocity EOD timeseries values, five currencies.
+
+    Reads the warmed CurveStore - no Excel. Run this AFTER job 7 so the day it
+    needs is already in the store; a date outside the warm silently falls through
+    to the live path and would drive Excel from a scheduled task.
+    """
+    from MDP.IRSwaps.IRSwapsMDP import IRSwapsMDP
+    from Query.Unified.UnifiedQuery import UnifiedQuery
+    from Query.Unified.registry import UnifiedValue
+    from TB.IRSwapsTB import IRSwapsTB
+    from TB.TimeseriesBuilder import TimeseriesBuilder
+
+    mdp = IRSwapsMDP(source="citivelo_excel_rl")
+    tb = TimeseriesBuilder()
+
+    queries = [
+        UnifiedQuery(curve=curve, tenor=tenor, value=UnifiedValue.IRS_RATE)
+        for curve in _CITIVELO_CURVES
+        for tenor in (*_CITIVELO_EOD_OUTRIGHTS, *_CITIVELO_EOD_FORWARDS, *_CITIVELO_EOD_SPREADS)
+    ]
+    log.info("  %d queries (%d curves x %d tenors)", len(queries), len(_CITIVELO_CURVES),
+             len(_CITIVELO_EOD_OUTRIGHTS) + len(_CITIVELO_EOD_FORWARDS) + len(_CITIVELO_EOD_SPREADS))
+
+    return tb.get_timeseries(
+        start=start,
+        end=end,
+        queries=queries,
+        n_jobs=N_JOBS,
+        routers={"IRS": IRSwapsTB(mdp, show_tqdm=True)},
+        ignore_cache_miss=True,
+    )
+
+
+def warm_citivelo_timeseries_intraday(start, end):
+    """Job 10: Citi Velocity intraday timeseries values, five currencies.
+
+    A 15-minute stride over each day's session, from the minute store. The
+    session runs 08:00-19:59 in the curve's OWN zone, so the window below is
+    deliberately wide enough to cover all five and is trimmed by what the store
+    actually holds.
+    """
+    import pytz
+
+    from MDP.IRSwaps.IRSwapsMDP import IRSwapsMDP
+    from Query.Unified.UnifiedQuery import UnifiedQuery
+    from Query.Unified.registry import UnifiedValue
+    from TB.IRSwapsTB import IRSwapsTB
+    from TB.TimeseriesBuilder import TimeseriesBuilder
+
+    nyc = pytz.timezone("America/New_York")
+    days = _business_days(start, end)
+    if not days:
+        log.info("  no business days in range")
+        return None
+
+    mdp = IRSwapsMDP(source="citivelo_excel_rl")
+    tb = TimeseriesBuilder()
+    queries = [
+        UnifiedQuery(curve=curve, tenor=tenor, value=UnifiedValue.IRS_RATE)
+        for curve in _CITIVELO_CURVES
+        for tenor in _CITIVELO_INTRADAY_TENORS
+    ]
+    log.info("  %d queries x %d day(s) at %s", len(queries), len(days), _CITIVELO_INTRADAY_FREQ)
+
+    frames = []
+    for day in days:
+        try:
+            frame = tb.get_timeseries(
+                start=nyc.localize(datetime.datetime.combine(day, datetime.time(2, 0))),
+                end=nyc.localize(datetime.datetime.combine(day, datetime.time(17, 0))),
+                queries=queries,
+                freq=_CITIVELO_INTRADAY_FREQ,
+                n_jobs=N_JOBS,
+                routers={"IRS": IRSwapsTB(mdp, show_tqdm=True)},
+                ignore_cache_miss=True,
+            )
+            if frame is not None and len(frame):
+                frames.append(frame)
+        except Exception as exc:  # one bad day must not end the job
+            log.warning("  %s failed: %s: %s", day, type(exc).__name__, exc)
+
+    if not frames:
+        return None
+    import pandas as pd
+
+    return pd.concat(frames).sort_index()
 
 
 # ─────────────────────────────────────────────────────────────────────
@@ -560,10 +757,23 @@ def warm_citivelo_swap_spread_values(start, end):
 # ─────────────────────────────────────────────────────────────────────
 # Job registry
 #
-# ORDER IS LOAD-BEARING for the Velocity jobs and is enforced, not trusted:
-# utils.warm_jobs.check runs at import and raises if a value job precedes the
-# store warm it reads, or if two jobs write the same store asset.
+# ORDER IS LOAD-BEARING and is now ENFORCED rather than trusted. The comment
+# this replaced already said it - "the two store warms come FIRST and in this
+# order: the value jobs read the stores, and a date that is not warmed falls
+# through to the live Excel path" - which was exactly right and enforced by
+# nothing. utils.warm_jobs.check runs at import and raises if a value job
+# precedes a store warm it reads, or if two jobs write the same store asset
+# (write_day replaces a whole day partition, so a shared key means one silently
+# deletes the other's rows and both report success).
+#
+# Two independent Citi Velocity families live here and do not interact: CURVES
+# and the swaption cube, and BONDS and swap spreads. Each declares its own
+# assets.
 # ─────────────────────────────────────────────────────────────────────
+
+#: Store assets the Velocity CURVE jobs write and read.
+_CV_CURVE_STORE = "CITIVELO-CURVESTORE"
+_CV_SWAPTION_CUBE = "CITIVELO-SWAPTION-CUBE"
 
 WARM_JOBS = [
     WarmJob("GSQUANT USD-OIS EOD", warm_gsquant_ois_eod),
@@ -572,13 +782,24 @@ WARM_JOBS = [
     WarmJob("STIRF CME Session", warm_stirf_cme_session),
     WarmJob("UST Futures Invoice Caches", warm_ustf_invoice_caches),
     WarmJob("STIRFO SFR Options EOD", warm_stirfo_eod),
-    # -- Citi Velocity: tag warms FIRST, then the jobs that read them --
+
+    # -- Citi Velocity STORE warms, all before any value job that reads them --
+    WarmJob("CitiVelo CurveStore (intraday + EOD)", warm_citivelo_curve_stores,
+            kind=STORE, provides=(_CV_CURVE_STORE,)),
+    WarmJob("CitiVelo swaption cube", warm_citivelo_swaption_cube,
+            kind=STORE, provides=(_CV_SWAPTION_CUBE,)),
     WarmJob("CITIVELO UST universe tags EOD (store)", warm_citivelo_ust_universe_eod,
             kind=STORE, provides=(_CV_BOND_TAGS,)),
     WarmJob("CITIVELO UST universe tags INTRADAY (store)", warm_citivelo_ust_universe_intraday,
             kind=STORE, provides=(_CV_BOND_TAGS_MI01,)),
     WarmJob("CITIVELO swap-spread tags (store)", warm_citivelo_swap_spread_tags,
             kind=STORE, provides=(_CV_SWAP_SPREAD_TAGS,)),
+
+    # -- then the value jobs that read them --
+    WarmJob("CitiVelo EOD timeseries", warm_citivelo_timeseries_eod,
+            requires=(_CV_CURVE_STORE,)),
+    WarmJob("CitiVelo intraday timeseries", warm_citivelo_timeseries_intraday,
+            requires=(_CV_CURVE_STORE,)),
     WarmJob("CITIVELO FRB values EOD", warm_citivelo_frb_values,
             requires=(_CV_BOND_TAGS,)),
     WarmJob("CITIVELO swap spreads EOD", warm_citivelo_swap_spread_values,
@@ -627,7 +848,7 @@ def main():
         selected = [(i, JOBS[i]) for i in indices if 0 <= i < len(JOBS)]
         # The import-time check only proves the FULL list is ordered. A subset
         # can still put a value job on the wrong side of its store warm, which
-        # is the same failure by a different route — a live Excel fall-through
+        # is the same failure by a different route -- a live Excel fall-through
         # on an unattended run. Re-check what was actually selected.
         chosen = [WARM_JOBS[i] for i, _ in selected]
         chosen_names = {j.name for j in chosen}
