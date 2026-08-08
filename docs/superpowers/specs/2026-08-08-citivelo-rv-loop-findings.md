@@ -782,6 +782,73 @@ statement of why the level stays unclaimable is "other mid-printed populations r
 not "compression is excluded by regulation". **Note the direction: this correction removes a reason
 to be confident.**
 
+## F8 — and the axis closes
+
+The handover named **exactly one** genuinely unexplored conditioning axis: every dead family here is
+a fade, and not one conditioned on **why** the dislocation exists. F7 tested one shape of it. Session
+3 tested the other two, and the axis is now closed.
+
+**The composition shape was never registered, because its precondition was measured first and
+fails.** New-risk vs unwind *is* derivable from the SDR `(action, event)` matrix even though side is
+not (L-0073), so it was the obvious candidate. But over 120 files: USD OIS new risk runs a median
+**3,553 rows/day against 106 unwinds** — the tape is ~97% new risk every day — and the unwind share
+has autocorrelation **+0.105 / +0.098 / +0.118 / +0.012** at roughly 5/25/50/105 trading days. **There
+is no unwind-dominance regime in this tape to condition on.** L-0085 requires a persistent state;
+this one does not exist. Registering a hypothesis whose state variable had already been measured to
+be untestable would have been exactly the "manufacture a family to have something to run" the mandate
+forbids (L-0087).
+
+**F8 tested the shape L-0085 explicitly leaves alive**: a *persistent* regime rather than an event —
+trailing-21d flow intensity, ranked against a trailing 252d window, top tercile, **held ≥10
+consecutive days at entry**. Everything except the state was inherited verbatim from H-F7, so F8
+tests the state and nothing else. Its bar was registered **direction-free** — `|median increment|` >
+1× the round trip — because F7 had already shown me on this sample that the fade is the losing
+mirror, and a direction registered afterwards would launder a post-hoc choice.
+
+**DEAD on all three registered prongs:**
+
+| prong | h=5 | h=21 |
+|---|---|---|
+| `\|median increment\|` / round trip (bar: > 1) | −0.042 bp → **0.023** | −0.444 bp → **0.247** |
+| signatures with ≥10 non-overlapping episodes | 6 / 10 | **0 / 10** |
+| wrong-day placebo p(\|null\| ≥ \|real\|), bar < 0.10 | **0.895** | 0.445 |
+
+The regime book's own net at 1× is a median −3.58 / −4.25 bp, and **all 20 signature-horizon cells
+are negative** (−2.93 to −9.71 bp).
+
+**The h=21 arm is uninformative and is labelled as such.** With 2–7 episodes per signature, neither
+its −0.444 bp headline nor its eye-catching per-signature swings (+2.691 for 2-30, −4.691 for 2-10
+and 5-10) are quotable in either direction. The informative arm is h=5, where the increment sits
+**0.13 null standard deviations from zero**. The thinness is structural: a 21-day mean ranked against
+a 252-day window consumes 273 of 643 file-days before the persistence requirement thins it further.
+
+> **A persistent state and a 643-day tape are close to incompatible.** Carry that to any future
+> session that wants to condition on a regime using this data.
+
+### L-0088 — what the closed axis licenses, and what it does not
+
+> On USD spot curve packages, at EOD frequency, marked on quoted par rates and costed at the measured
+> CM-2 line: **knowing what traded does not help you fade what moved.**
+
+The reason is L-0085 and it is **mechanical, not statistical** — the price impact of curve-package
+flow is substantially resolved inside the session in which it prints, so any state built from the
+public tape is informative on day t and spent by day t+1.
+
+**What this does not say**, named so it cannot be over-read: it does *not* test an intraday fill (F6
+killed that separately, on cost arithmetic — the boat is frequency-invariant while the pond shrinks);
+it does *not* test a private flow feed carrying side; and it does *not* test a state built from
+something other than flow.
+
+**What remains, stated honestly as thin.** L-0085 leaves two shapes — an intraday fill, and a signal
+whose information is not resolved same-session — and this loop has now closed the *flow* route to the
+second. A **non-flow** persistent state (dealer positioning, issuance and supply calendars,
+index-extension demand, mortgage convexity triggers) is the remaining candidate class, and **none of
+it lives in the Citi or DTCC data this mandate covers.** So the honest next move is either **new
+data** or the machine work named at L-0068 — the CM-2 impact-exponent calibration, which the F7
+package extract already supports — and **not another family on this data.**
+
+**Fourteen families dead. Nothing ALIVE. `trials_total` 65.**
+
 ## The tally
 
 Session 1: twelve defects, twelve flattered the maker. Session 2: seven, all seven flattered the
