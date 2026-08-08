@@ -17,7 +17,29 @@ fill in grading order; the DSR trial count is quoted only in the final revision.
 
 ## What went right
 
-_pending_
+- **The gates killed cheaply.** Four families/expressions died before any backtest could
+  flatter them: H16 z-fade (oracle 0.5–1.8× a *measured* boat), F1 surface residual (tradeable
+  cells a coin flip; the "winners" live in the dealer-extrapolated corner — a marking-model
+  mirage caught at gate, not post-hoc), F2 gamma IV/RV (no conditioning signal; unconditional
+  premium mean-zero with −95-vol-bp tails), JPY grail arms (0–1.1% occupancy over 20 years).
+- **The checker discipline worked twice on the maker's own claims.** A calibration run killed
+  a fabricated memo on the planted defect *and* on arithmetic it found unprompted (L-0025);
+  then the rival check (L-0030) withdrew the maker's strongest surviving claim — the "grail
+  state times convexity harvest" wording — by showing occupancy-matched raw-spread-z states
+  reproduce a median 137% of the ex-carry at 0–52% day overlap. Every defect that mattered
+  favoured the hypothesis, again; adversarial specificity found them, again.
+- **A measured cost line replaced an assumed one** (CM-1: 643 days of SDR swaption prints vs
+  the cube mid; ATM half-spread 0.17–0.71 annual bp by expiry, upper bound; two SDR
+  convention discoveries: forward premiums, UPI package-total duplication).
+- **A live repo-wide pricing bug fixed**: the QDB direction-blind signed-bpv seam (buy ≡ sell
+  since at least 2026-07-30), root-caused to one line, pinned by tests, mirror verified.
+- **The 20-year multi-currency data spine validated**: 2019/2023 published-table tie-outs
+  (spreads to ~1bp; Γ matches Citi's, roll convention ~2× open), GS-overlap basis stable, the
+  holiday-ghost defect found and filtered before grading.
+- **The PM's construction measured honestly**: the fly triples/doubles grail occupancy, covers
+  82% of the median bleed, retains 93–97% of the gamma with the belly received, and nets
+  +27.9bp post-2017 (~+2.9bp/yr) after per-leg maintenance — a real carry engine that still
+  cannot clear a DSR bar set at N≈3,900.
 
 ## Machine (built 2026-08-08, session 1)
 
@@ -77,5 +99,24 @@ _pending_
 
 ## DSR accounting
 
-Quoted only in the final revision. SV family inherits N_sv = 3,888 (PR #392); loop-wide N per
-ledger `trials_total`.
+Convention: each verdict was graded at the family count current at its grading time
+(V-SV-13 at 3,905; V-SV-16B at 3,909; V-SV-14G at 3,910); the final session-1 count is
+**N_sv 3,888 + 22 loop trials = 3,910**. Recomputing H13 at the final count changes nothing
+(DSR 0.000 either way). Gate-killed families consumed no trials (no selection occurred); the
+H16 registration's 4 budgeted trials were released unconsumed.
+
+## The structural finding (L-0029)
+
+At N ≈ 3,900 inherited trials, DSR > 0.5 is out of reach for any carry-class book — Citi's own
+published Sharpes for this family are 0.05–0.35, our best measured 0.28. The bar is the bar;
+what it implies is family selection: the loop's remaining realistic ALIVE candidates need many
+independent periods with high per-period Sharpe (intraday minute-curve constructions,
+cross-sectional many-bet books, event windows), not more EOD carry variants.
+
+## Current state worth knowing (2026-08-07/08 close)
+
+- EUR 15y5y/20y10y: grail occupancy **76.9%** over 21y; today BE/RV **0.61** at carry
+  −0.7bp/y — the closest live analogue anywhere to Citi's 2019 USD entry (BE/RV 0.42).
+- USD: all pairs carry-negative today; BE/RV 0.96–1.72; 20s30s spot inverted.
+- JPY 10y10y/20y10y at −3.7bp, flattest in a year — the PM's Japan-flattener thesis is a
+  multi-year expectations-wash argument, not a current BE/RV entry state (both recorded).
