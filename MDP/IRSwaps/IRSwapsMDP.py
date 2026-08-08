@@ -2760,6 +2760,20 @@ class IRSwapsMDP(MarketDataProvider[_GenericPricable]):
 
         backend = "ql" if self.source.upper() in CITIVELO_EXCEL_QL_TOKENS else "rl"
 
+        # Register the curve definitions HERE, not only in the fetcher. Nineteen
+        # of the twenty curve names exist nowhere else in this repo, and a curve
+        # reconstructed from the CurveStore carries its name as reference_key -
+        # so pricing it needs the definition even though no fetcher was built.
+        #
+        # This was a real failure: the store fast paths bypass
+        # _get_citivelo_excel_fetcher (that is the point of them), which is where
+        # register() used to be called. USD-SOFR-1D worked because the repo
+        # already defines it; EUR/GBP/CAD/JPY raised KeyError on the curve name
+        # after falling back to act360/nyc/mf with a warning.
+        from MDP.IRSwaps.CITIVELO_EXCEL import register as _register_citivelo_definitions
+
+        _register_citivelo_definitions()
+
         # A warmed EOD day reconstructs from stored discount factors instead of
         # re-reading 44 parquet files and re-solving. Only for rateslib (the store
         # holds an rl.Curve's nodes) and only for an end-of-day request, because a
