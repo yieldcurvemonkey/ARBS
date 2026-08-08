@@ -135,6 +135,27 @@ def _build_row_for_query(
     return ref_dt, user_passed_col_name, float(value)
 
 
+def _peek_flag(obj, name):
+    """Read ``obj.name`` if it exists, else ``None`` — without using ``hasattr``.
+
+    ``hasattr`` is the obvious probe and it is WRONG here. The row cache is a
+    ``diskcache.FanoutCache``, whose ``__getattr__`` guards with a bare
+    ``assert`` ("cannot access {name} in cache shard"). ``hasattr`` only swallows
+    ``AttributeError``, so the ``AssertionError`` propagates and the whole call
+    dies.
+
+    Measured 2026-08-08: any FRB timeseries large enough to trip
+    ``_should_suppress_row_cache_l2`` raised ``AssertionError: cannot access
+    _l2_read in cache shard`` — which is every intraday request, since a
+    two-day 1-minute range is thousands of reference points. Daily requests over
+    a few weeks stayed under the threshold and worked, which is why this survived.
+    """
+    try:
+        return getattr(obj, name)
+    except (AttributeError, AssertionError):
+        return None
+
+
 class FixedRateBondsTB(LayeredCacheMixin, BaseTimeseriesTB):
     _CACHE_ATTR_BASE = "_fixedratebonds_tb_cache"
     _DEFAULT_PRICING_MESSAGE = "PRICING FIXED-RATE BONDS."
@@ -443,9 +464,10 @@ class FixedRateBondsTB(LayeredCacheMixin, BaseTimeseriesTB):
             query_count=len(flat),
         )
         _prev_l2_read = None
-        if _suppress_l2 and hasattr(cache_map, '_l2_read'):
-            _prev_l2_read = cache_map._l2_read
-            cache_map._l2_read = False
+        if _suppress_l2:
+            _prev_l2_read = _peek_flag(cache_map, '_l2_read')
+            if _prev_l2_read is not None:
+                cache_map._l2_read = False
 
         try:
             for d in ref_points:
@@ -591,9 +613,10 @@ class FixedRateBondsTB(LayeredCacheMixin, BaseTimeseriesTB):
             mapping = getattr(self, self._cache_attr)
             # Suppress L2 writes for large intraday to avoid write storm
             _prev_l2_write = None
-            if _suppress_l2 and hasattr(mapping, '_l2_write'):
-                _prev_l2_write = mapping._l2_write
-                mapping._l2_write = False
+            if _suppress_l2:
+                _prev_l2_write = _peek_flag(mapping, '_l2_write')
+                if _prev_l2_write is not None:
+                    mapping._l2_write = False
             try:
                 for row, q, d in new_rows_with_q:
                     # Never persist today / live — these are transient snapshots

@@ -440,6 +440,91 @@ unconstrained. Checking it is what found it. The warning names the missing warm 
 consequence, which is the behaviour that matters; the doc claim was wrong and is corrected
 rather than quietly dropped.
 
+## D10 — "349 seems low" — it isn't, but the universe still moves
+
+Asked directly whether 349 ISINs was too few given new issuance and maturities. It is a
+fair challenge and the answer took measuring, because the first check I ran was wrong: I
+printed the catalog's maturity range by sorting date **strings** in `M/D/YYYY`, which
+gave a meaningless "1/15/2027 .. 9/30/2032". Parsed properly the range is
+**2026-08-15 .. 2056-05-15** — 0.02y to 29.8y, the whole curve.
+
+**349 is right.** Measured against the repo's own `fiscaldata` reference table:
+
+| | count |
+|---|---|
+| Citi `USA.USD.GOVT` | **349** |
+| fiscaldata live nominal coupon USTs | **352** |
+
+All 349 carry ticker `T`, real coupons 0.375–6.75, and **zero** zero-coupon
+instruments — so this is the nominal coupon note/bond universe, with bills, TIPS, FRNs
+and STRIPS excluded as separate instrument classes. Buckets: 106 under 2y, 43 2-3y, 57
+3-5y, 31 5-7y, 13 7-10y, 59 10-20y, 40 20-30y. That is the complete curve, not a liquid
+subset.
+
+**But the moving-universe concern is real, and it bites in two directions.**
+
+*New issues.* The six live USTs Citi lacks are three when-issued (settling 2026-08-17,
+correctly not quoted) and **three issued 2026-07-31 that Citi had still not picked up
+eight days later** — `91282CRB9`, `91282CRA1`, `91282CRC7`, which are the on-the-run 2Y,
+5Y and 7Y. So `UnifiedQuery(cusip="CT2")` resolves to a real bond this source cannot
+quote. That is a property of the vendor, not a bug here, and resolution says so by name.
+
+*Maturities.* This is the one that changes the design. `CVCURVEBOND` is date-stamped, so
+it looks like you can ask for a historical constituent list. Measured across five as-of
+dates it returns 115 / 150 / 235 / 296 / 349 ISINs for 2021-08-09 through 2026-08-07 —
+and their **union is exactly the 349 live today**. Not one matured bond came back. Citi
+does not serve the universe as it stood; it serves today's set filtered to what already
+existed.
+
+**Decision: the catalog becomes an accumulating union.** `bonds/refresh.py` merges each
+refresh into `bond_isins.json` and **never removes**, recording `first_seen`/`last_seen`.
+If a matured bond cannot be recovered from Citi, the only way to ever hold its history is
+to have seen it while it was live — so run the refresh regularly and the universe grows
+into the full picture; run it never and it decays back into a snapshot. New bonds also
+get their values probed on discovery, because a bond with no validated tags resolves fine
+and then has nothing requested for it.
+
+A guard came straight out of this: the first refresh ran on a **Saturday**, `CVCURVEBOND`
+returned nothing, and it logged a cheerful "0 new". Zero served is a publication gap, not
+an empty universe, so it now rolls weekends back to Friday and **raises** on an empty
+result rather than recording a no-op that looks like success.
+
+## D11 — The intraday warm succeeded and cached nothing
+
+The first full intraday warm reported **349/349 bonds, 698 tags, 134 s** and wrote
+**zero** MI01 files. The manifest recorded it as done.
+
+`CitiVeloBondFetcher.fetch` is the right way to *read* an intraday quote — it routes
+through `windowed.fetch_windowed`, which chunks under the six-day cliff and verifies
+each window's spacing — but it talks to `quotes.client()` **directly**, so nothing it
+fetches reaches the tag cache. Driving `CitiVeloQuotes.frame` in sub-cliff windows caches
+properly, and is also **5.7× cheaper**: 48 s and +170 MB against 134 s and +971 MB,
+because one batched `CVTSHIST` per window beats a worksheet pushed and dropped per batch.
+
+The structural fix matters more than the bug: `warm()` now asks the **cache** whether the
+tags actually landed and refuses to mark a batch done when none did. A warm that reports
+success and caches nothing is worse than one that fails, and nothing in the previous
+design could tell the difference.
+
+Verifying the result then caught my *checker* being wrong rather than the data. The
+cached MI01 series has a median gap of 2 minutes, which looks like downsampling — it is
+not. A bond does not print every minute: 1,227 of 2,765 gaps are exactly one minute, the
+minimum gap is one minute, and every stamp sits on a 1-minute boundary. Median measures
+liquidity; only the **minimum** gap measures resolution, because a 10-minute grid cannot
+produce a 1-minute gap.
+
+## D12 — A pre-existing bug that blocked every intraday FRB timeseries
+
+`TB/FixedRateBondsTB.py` guarded with `hasattr(cache_map, "_l2_read")`. The row cache is a
+`diskcache.FanoutCache`, whose `__getattr__` uses a bare `assert`, and `hasattr` only
+swallows `AttributeError` — so the `AssertionError` propagated and killed the call:
+`AssertionError: cannot access _l2_read in cache shard`.
+
+It fires whenever the run is large enough to trip `_should_suppress_row_cache_l2`, which
+is every intraday request (a two-day 1-minute range is thousands of reference points) and
+no small daily one — which is why it survived. Unchanged by this branch, confirmed
+against `main`. Fixed in both places with a probe that catches what is actually raised.
+
 ## Status at hand-off
 
 Built, tested, **measured**, and both caches warmed. Excel was under the ceiling for the

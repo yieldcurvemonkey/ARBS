@@ -340,6 +340,7 @@ def warm_ustf_invoice_caches(start, end):
 #: Asset keys the tag warms provide and the value jobs require. Distinct per
 #: producer: two jobs writing one key is caught by assert_unique_providers.
 _CV_BOND_TAGS = "CITIVELO-TAGS-RATES.BOND"
+_CV_BOND_TAGS_MI01 = "CITIVELO-TAGS-RATES.BOND-MI01"
 _CV_SWAP_SPREAD_TAGS = "CITIVELO-TAGS-RATES.OIS.SWAP_SPREAD"
 
 #: Stop below this. See utils/warm_jobs.py and the 2026-08-07 wedge.
@@ -406,36 +407,62 @@ def _citivelo_bond_resolutions(as_of):
     return list(resolved.values())
 
 
-def warm_citivelo_bond_tags(start, end):
-    """Job 7 [STORE]: pull RATES.BOND.<ISIN>.<value> into the Velocity tag cache.
+def warm_citivelo_ust_universe_eod(start, end):
+    """Job 7 [STORE]: the WHOLE Citi UST universe at DAILY, into the tag cache.
 
-    Must run before any FRB value job on the citivelo source; see the section
-    comment above for what happens otherwise.
+    Citi is the truth source for these bonds, so the cache holds all 349 rather
+    than the fourteen on-the-run aliases the value jobs happen to ask for. A
+    warmed tag is what stops a later value request falling through to live Excel,
+    and this runs unattended.
+
+    Measured 2026-08-08: 349 bonds, 2,302 tags, five years of history, 137 s,
+    Excel +287 MB. EOD is cheap - 52 tags over five years cost +1 MB - so the
+    whole universe costs about what one liquid basket used to.
+
+    Resumable: ``citivelo_ust_universe_warm`` records progress per batch, so a
+    run that stops at the memory ceiling resumes tomorrow rather than restarting.
     """
-    from MDP.CitiVelocityExcel.bonds.fetcher import CitiVeloBondFetcher
+    from scripts.citivelo_ust_universe_warm import warm
 
-    quotes, client = _citivelo_excel_guard()
-    try:
-        resolutions = _citivelo_bond_resolutions(end)
-        if not resolutions:
-            log.warning("  no bonds resolved; nothing to warm")
-            return None
-        fetcher = CitiVeloBondFetcher(quotes=quotes)
-        plan = fetcher.plan(resolutions)
-        n_tags = sum(len(e["tags"]) for e in plan.values())
-        log.info("  %d bonds, %d tags, %s..%s", len(plan), n_tags, start, end)
-
-        # One EOD pass over the range populates the cache for every date in it:
-        # the tag cache stores whole series, so a per-day loop would be the same
-        # data fetched once per day.
-        quotes.frame(
-            [t for e in plan.values() for t in e["tags"].values()],
-            "DAILY", start=start, end=end,
+    years = float(os.environ.get("CITIVELO_UST_EOD_YEARS", "5"))
+    out = warm("eod", start=end - datetime.timedelta(days=int(years * 365.25)), end=end,
+               ceiling_mb=_CV_MEMORY_CEILING_MB)
+    if out.get("stopped"):
+        raise RuntimeError(
+            f"UST universe EOD warm stopped after {out['done']}/{out['of']} bonds: "
+            f"{out['reason']}. Progress is in the manifest; re-run to continue."
         )
-        log.info("  Excel at %.0f MB after", client.excel_memory_mb())
-        return None
-    finally:
-        quotes.close()
+    return None
+
+
+def warm_citivelo_ust_universe_intraday(start, end):
+    """Job 8 [STORE]: the WHOLE Citi UST universe at MI01, into the tag cache.
+
+    ``PRICE`` and ``YIELD`` only, and that is a measured budget rather than a
+    preference: intraday costs ~1.7 MB of Excel per tag, so these two across 349
+    bonds are 698 tags and about 170 MB, while the full seven-value set would be
+    2,302 tags and ~3.9 GB - over the ceiling, in a process only a human restart
+    can shrink. Widen with ``--values`` when someone is watching.
+
+    Measured 2026-08-08: 349 bonds, 698 tags, 48 s, Excel +170 MB.
+
+    Note this deliberately drives ``CitiVeloQuotes.frame`` in sub-cliff windows
+    rather than ``CitiVeloBondFetcher.fetch``. The fetcher is the right way to
+    READ an intraday quote, but it reaches ``quotes.client()`` directly, so
+    nothing it fetches is cached - the first version of this warm "succeeded" on
+    349 bonds and left zero MI01 files on disk. See ``_warm_intraday``.
+    """
+    from scripts.citivelo_ust_universe_warm import warm
+
+    days = int(os.environ.get("CITIVELO_UST_INTRADAY_DAYS", "2"))
+    out = warm("intraday", start=end - datetime.timedelta(days=days), end=end,
+               ceiling_mb=_CV_MEMORY_CEILING_MB)
+    if out.get("stopped"):
+        raise RuntimeError(
+            f"UST universe intraday warm stopped after {out['done']}/{out['of']} bonds: "
+            f"{out['reason']}. Progress is in the manifest; re-run to continue."
+        )
+    return None
 
 
 def warm_citivelo_swap_spread_tags(start, end):
@@ -535,8 +562,10 @@ WARM_JOBS = [
     WarmJob("UST Futures Invoice Caches", warm_ustf_invoice_caches),
     WarmJob("STIRFO SFR Options EOD", warm_stirfo_eod),
     # -- Citi Velocity: tag warms FIRST, then the jobs that read them --
-    WarmJob("CITIVELO bond tags (store)", warm_citivelo_bond_tags,
+    WarmJob("CITIVELO UST universe tags EOD (store)", warm_citivelo_ust_universe_eod,
             kind=STORE, provides=(_CV_BOND_TAGS,)),
+    WarmJob("CITIVELO UST universe tags INTRADAY (store)", warm_citivelo_ust_universe_intraday,
+            kind=STORE, provides=(_CV_BOND_TAGS_MI01,)),
     WarmJob("CITIVELO swap-spread tags (store)", warm_citivelo_swap_spread_tags,
             kind=STORE, provides=(_CV_SWAP_SPREAD_TAGS,)),
     WarmJob("CITIVELO FRB values EOD", warm_citivelo_frb_values,

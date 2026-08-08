@@ -391,7 +391,13 @@ class CitiVeloCatalog:
         self._bonds = rows
 
         tags: Set[str] = set()
-        for name in ("bond_tags_validated.json", "bond_tags_validated2.json"):
+        # The two sweep files are the original exhaustive probe and are immutable.
+        # The third accumulates: the UST universe moves (Treasury auctions weekly,
+        # and bonds mature), so bonds/refresh.py adds newly discovered ISINs and
+        # the values they were measured to serve. Missing file is not an error --
+        # a checkout that has never refreshed simply has the sweep.
+        for name in ("bond_tags_validated.json", "bond_tags_validated2.json",
+                     "bond_tags_validated_refresh.json"):
             try:
                 payload = self._load_json(name)
             except CatalogError:
