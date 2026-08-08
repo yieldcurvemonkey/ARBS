@@ -131,8 +131,15 @@ def _fly_segment(seg_days: list, solve_days: list, tenors: tuple) -> dict:
         except Exception as exc:  # noqa: BLE001
             rows.append({"date": str(d.date()), "err": type(exc).__name__})
             continue
-        mtm = pv - prev_pv
+        # CHECKER KILL (ledger V-SV-14G-KILL): an earlier version booked
+        # mtm = pv - prev_pv (TOTAL PV change, which already realizes carry via
+        # the par-struck legs) AND fly_carry on top — a carry double-count that
+        # inflated the fly's gross from +8.8bp realized to +40.9bp. The ledger
+        # now matches replication.simulate's convention: carry is the expected
+        # roll and mtm is the REST of the PV change, so their sum is the
+        # realized total, once.
         carry = rolled - pv
+        mtm = (pv - prev_pv) - carry
         prev_pv = pv
         rows.append({"date": str(d.date()), "fly_mtm": mtm, "fly_carry": carry})
     return {"rows": rows, "leg_halfspread": leg_halfspread}
@@ -176,8 +183,17 @@ def main() -> None:
 
     fly = pd.concat(frames)
     fly["date"] = pd.to_datetime(fly["date"])
-    fly = fly.set_index("date").sort_index()
-    fly = fly[~fly.index.duplicated(keep="first")]
+    # CHECKER KILL follow-up (V-SV-14G-KILL): boundary dates appear in BOTH the
+    # segment that held the old fly (its P&L row) and the one that re-solved
+    # (its trade row). The earlier keep="first" on as_completed order dropped
+    # whichever arrived second — nondeterministic, and it deleted ~14 of ~21
+    # re-initiations from the maintenance bill. Aggregate instead: sum the P&L
+    # and trade columns, keep the last non-null label columns.
+    num_cols = [c for c in fly.columns if c.startswith(("fly_", "trade_"))]
+    lab_cols = [c for c in fly.columns if c not in num_cols and c != "date"]
+    agg = {c: "sum" for c in num_cols}
+    agg.update({c: "last" for c in lab_cols})
+    fly = fly.groupby("date").agg(agg).sort_index()
     out = DATA / "h14_fly_ledger_USD.parquet"
     fly.to_parquet(out)
 
