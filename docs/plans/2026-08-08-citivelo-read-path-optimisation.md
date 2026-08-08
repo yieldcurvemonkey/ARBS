@@ -7,6 +7,15 @@ served from the warmed local `CurveStore` with no Excel and no network —
 **841 observations in 39.3 s, 47 ms per observation**. That was the binding
 constraint on minute-resolution work.
 
+**Result, same request, measured back-to-back against a pristine `main`
+worktree: 51.9 s → 12.5 s (61.75 → 14.84 ms/obs, 4.2×), or 3.7 s
+(4.37 ms/obs, 14.1×) with one opt-in flag.** The store side of it went 32.05 →
+1.40 ms/obs single-point and 38.39 → 0.21 ms/obs batched.
+
+Every reported rate is bit-identical. One quantity moved — a par-struck NPV
+whose entire column is ≤1.2e-10 on a $1mm notional — and §3 says exactly why,
+by how much, and how to revert it.
+
 Everything below is measured on this machine, on that same day
 (2026-07-22, 03:00–17:00 ET, 841 minutes), with `scripts/perf/citivelo_read_path_bench.py`.
 
@@ -20,7 +29,9 @@ I/O or the rateslib solve. So this round started the same way: component timing,
 not a flat total.
 
 Splitting the 47 ms at the seam between "get a curve" and "turn it into a
-number" gives:
+number" gives (measured before any change, on a then-quiet machine — the
+before/after run in §5 was taken later with another job on the box, which is why
+its BEFORE numbers sit ~20–30% higher):
 
 | stage | ms/obs | share |
 |---|---:|---:|
@@ -163,10 +174,10 @@ memos:
 
 Before this, `citivelo_excel` fell through to the generic per-point loop, which
 is literally a `for t in timestamps: self.get_data(...)`. Measured on the
-intraday path before any of these changes: **30.09 ms/obs batched against 29.92
-ms/obs one at a time** — a batch method that did nothing at all. (The brief
-reports it as actively *slower* on EOD history, 141 vs 16 ms/curve; that
-comparison was not re-run here.)
+intraday path with nothing else changed: **38.39 ms/obs batched against 32.05
+ms/obs one at a time** — the batch method was *slower than the loop it wrapped*,
+reproducing on intraday what the brief reported for EOD history (141 vs 16
+ms/curve).
 
 The branch groups requests by mode, reads each session's window once, runs the
 nearest-snapshot search per request against the shared window, reconstructs the
@@ -302,12 +313,94 @@ passed with the fix removed.
 
 ---
 
-## 5. What was NOT worth changing
+## 5. Results
 
-* **A range read for EOD history.** `read_raw_nodes` (one DuckDB Hive scan) vs
-  N `read_raw_day` calls — measured, see the results section. The day cache does
-  not help a cross-day EOD backfill (one read per day either way); the fixings
-  memo does.
+`scripts/perf/run_before_after.py`, interleaving the two worktrees per bench
+(this machine was shared with another job throughout, so the ratios are what
+survive; the absolute BEFORE numbers run ~20-30% above the brief's for that
+reason).
+
+| bench | BEFORE | AFTER | AFTER + opt-in | speedup |
+|---|---:|---:|---:|---:|
+| **`get_timeseries`, 841 minutes, end to end** | **61.75 ms/obs**<br>51.9 s | **14.84 ms/obs**<br>12.5 s | **4.37 ms/obs**<br>3.7 s | **4.2× / 14.1×** |
+| `get_data`, one minute point | 32.05 | 1.40 | — | 22.9× |
+| `bulk_get_data`, 200 minutes | 38.39 | 0.21 | — | 183× |
+| pricing one `IRS_RATE` row | 23.21 | 11.92 | 1.57 | 1.9× / 14.8× |
+| EOD, per-point | 20.48 | 14.38 | — | 1.4× |
+| EOD, batched | 13.51 | 6.39 | — | 2.1× |
+
+**`bulk_get_data` was slower than the loop it wrapped** — 38.39 against 32.05
+ms/obs — reproducing on the intraday path what the brief reported for EOD.
+
+### The store stages, before and after
+
+| stage | BEFORE (ms/obs) | AFTER (ms/obs) |
+|---|---:|---:|
+| `read_raw_day` ×2–3 | 20.739 | — |
+| `pd.to_datetime` | 2.284 | — |
+| `pd.concat` | 1.363 | — |
+| `has_day` ×3 | 1.116 | — |
+| `day_window` (cache hit **incl. revalidation**) | — | 0.464 |
+| `fixings_for` | 9.416 | 0.033 |
+| `reconstruct` | 0.689 | 0.614 |
+| `iloc` / `argmin` / resolve / wrap | 0.549 | 0.431 |
+| **total** | **36.16** | **1.54** |
+
+Day-cache counters over the run: `{'hits': 200, 'misses': 1, 'revalidations': 0}`.
+
+Two honest notes on that table:
+
+* **Revalidation costs 0.464 ms/obs, not the 0.06 ms first guessed.** Three
+  `scandir`+`stat` round trips on Windows are not free. It is still 45× cheaper
+  than the 20.7 ms of reads it replaces, and the batch path pays it once per
+  session rather than once per observation — which is most of why `bulk` (0.21)
+  beats `single` (1.40).
+* `reconstruct` barely moved on the single-point path, because it is the one
+  stage doing genuinely new work per observation. Batching is what removes it,
+  and that is what `bulk_get_data` now does.
+
+### What is left, and where the floor is
+
+At 14.84 ms/obs end to end, the split is roughly 0.2 ms curve + 11.9 ms pricing
++ ~2.7 ms `TimeseriesBuilder` overhead. **Pricing is now 80% of the cost, and
+87% of pricing is rateslib's RFR fixings machinery** — that is not an inference,
+it is the difference between the two pricing measurements: 11.92 ms with the
+fixings series attached against 1.57 ms with the opt-in that omits it.
+
+Under the byte-identical bar there is no further lever there: the cost is
+`O(accrual period)` inside rateslib, incurred before it discovers that no fixing
+is in scope, and it is what makes the two arithmetic routes differ in the last
+ulp. Anyone who can accept ~2e-13 bp gets the remaining 3.4×.
+
+### The swaption cube store (asked for, profiled, unchanged)
+
+`USD-SWAPTIONVOL-CITIVELOEXCEL`, 2,699 days (2015-10-08 → 2026-08-07):
+
+```
+cold      46.43 ms/day     (read 3.48 ms + cube_from_frame ~43 ms)
+warm       0.00 ms/day     (already memoised per process, per day)
+```
+
+Nothing to fix. It was reaching Excel at 134 s per date before PR #400; it now
+costs 46 ms cold and nothing warm. A full-history sweep would be ~2 minutes,
+which is not a constraint on anything. Left alone.
+
+## 6. What was NOT worth changing
+
+* **A range read for EOD history.** The obvious next move for a multi-year EOD
+  backfill is one DuckDB Hive scan instead of N single-day PyArrow reads.
+  Measured over 60 days of `USD-SOFR-1D-CITIVELOEXCEL`:
+
+  ```
+  read_raw_day   x60      5.39 ms/day
+  read_raw_nodes(range)  53.25 ms/day      10x SLOWER
+  ```
+
+  The glob over 5,506 date partitions costs more than the reads it saves. Not
+  taken — and worth recording, because it is exactly the change that looks
+  obviously right. The day cache does not help a cross-day EOD backfill either
+  (one read per day regardless); the fixings memo does, which is most of the
+  1.4× on the EOD per-point path.
 * **Sharing one `rl.IRS` instrument across a session.** Within one trading day
   the instrument differs only by the curve it is rated against, so it could be
   built once. It is a mutable object in a hot, shared, thread-pooled layer, and

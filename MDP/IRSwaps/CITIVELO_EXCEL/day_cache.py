@@ -3,20 +3,23 @@ r"""A process-wide cache of prepared CurveStore day windows.
 Why this exists
 ---------------
 A minute-resolution request re-read the SAME parquet partition once per
-observation. Measured 2026-08-08, one warmed USD session (841 minutes of
-``USD-SOFR-1D-CITIVELOEXCELMIN``, a 1,316 x 13 frame):
+observation. Measured 2026-08-08 on a warmed USD session
+(``USD-SOFR-1D-CITIVELOEXCELMIN``, 2026-07-22, a 1,226 x 13 frame in a 537 KB
+partition):
 
 ===========================  =============  ==================================
 stage                        ms/observation what it was doing
 ===========================  =============  ==================================
-``read_raw_day`` x2-3            17.392      re-reading one 537 KB file, 841x
-``pd.to_datetime``                1.981      re-parsing the same stamp column
-``pd.concat``                     1.080      re-joining the same two frames
-``has_day`` x3                    0.964      re-stat-ing the same directories
+``read_raw_day`` x2-3            20.739      re-reading one 537 KB file, 841x
+``pd.to_datetime``                2.284      re-parsing the same stamp column
+``pd.concat``                     1.363      re-joining the same two frames
+``has_day`` x3                    1.116      re-stat-ing the same directories
 ===========================  =============  ==================================
 
-That is 21.4 of the 30.4 ms a warmed minute point cost - **70%** - and every
-millisecond of it was recomputing a value that had not changed.
+That is 25.5 of the 36.2 ms a warmed minute point cost - **70%** - and every
+millisecond of it was recomputing a value that had not changed. With this cache
+the same stages cost 0.464 ms/observation, and the whole store-side sequence
+drops from 36.16 to 1.54.
 
 What is cached, and what is not
 -------------------------------
@@ -33,11 +36,16 @@ most of the cost it saves. Anything that intends to mutate must copy first.
 Staleness
 ---------
 Every hit re-validates against the partitions' file names, sizes and
-modification times (~0.06 ms for three directories, vs 17 ms to re-read). A day
-that is re-warmed mid-process - which the intraday warmer does, appending
-minutes as they publish - therefore invalidates itself. A cache that trusted its
-first read would serve a truncated session for the rest of the run, and would do
-it silently.
+modification times. A day that is re-warmed mid-process - which the intraday
+warmer does, appending minutes as they publish - therefore invalidates itself. A
+cache that trusted its first read would serve a truncated session for the rest
+of the run, and would do it silently.
+
+That check is **not free**: measured 2026-08-08, a validated cache hit costs
+**0.464 ms**, because three ``scandir``+``stat`` round trips on Windows are not
+cheap. It replaces 20.7 ms of reading, so it is still worth 45x - but it is why
+``bulk_get_data`` (0.21 ms/observation) beats the single-point path (1.40): the
+batch validates the window once per session rather than once per observation.
 
 Absence is cached the same way: a partition with no parquet file yields a
 signature of ``None``, which is a legitimate cached value and is re-checked on
