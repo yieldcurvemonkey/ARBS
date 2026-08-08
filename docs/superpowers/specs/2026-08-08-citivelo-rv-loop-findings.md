@@ -347,3 +347,110 @@ Two caveats that must travel with this, because it is otherwise a recipe for gam
    report the verdict's sensitivity to it.
 2. DSR is pulled toward 0.5 *from below* on small samples — the n=6 arm scores the **highest**
    DSR at N=22 while being net **negative**. A DSR near 0.5 on few observations is not evidence.
+
+## H17 — vol term-structure roll-down carry, dead at gate, twice over
+
+A new non-SV-lineage family, pre-registered before numbers: a vega-neutral ATM straddle calendar
+harvesting the roll-down of the vol term structure; direction pinned by a written entry-day slide
+rule; universe restricted to CM-1-printed cells (1M excluded as CM-1's worst); horizons registered
+as a pair rather than tuned; 15 feasible cells of 18, 41–126 non-overlapping cycles each.
+
+1. **The carry does not clear the boat even if the surface never moves.** The frozen-surface
+   roll-down the rule is designed to harvest, from entry-day data alone, is a median **0.73×** the
+   CM-1 round trip — above 1× in only 2 of 15 cells.
+2. **The market takes back more than all of it.** Realized median gross is **−0.29× RT**, negative
+   in 12 of 15 cells; best cell **+0.37×**; zero cells clear 1× on median or mean. Per-cycle
+   Sharpes −0.371…+0.082, worst cycles −3.2 to −21.1 annual vol bp against a ~1bp round trip. The
+   rule sits long-back/short-front 50–71% of the time — net short gamma — so the pre-registered
+   steamroller criterion fires too.
+
+The gate carries a **planted-value self-test**: a flat frozen surface pays exactly `0.000`, a
+frozen sloped surface pays `+4.1454` bp/cycle and the gate reproduces it to `1e-6`. So `0.73×` and
+`−0.29×` are statements about the market, not about the code. That closes L-0042(c)'s discipline
+gap for this gate.
+
+**Not crisis-driven** (L-0062): re-run on full / pre-2020 / 2020+, **zero of 15 cells clear 1× RT
+in any subsample**. Best pre-2020 cell 0.39×, best 2020+ cell 0.66×. There was no calm-market
+carry either.
+
+**The sentence:** the vol term-structure carry is real, smaller than the round trip, and then the
+front-vol spikes take it back.
+
+Trial accounting is deliberately stricter than session 1's gate precedent — those measured oracles
+and consumed nothing; this measured the registered rule's *realized* gross, so all 15 cells are
+consumed. **22 → 37**.
+
+## CM-2 — the measured linear cost line
+
+The linear leg dominates every boat in this program (L-0019: 0.26–0.43 bp/day against a swaption
+leg of 0.03–0.09), and that line is the Citi 2019 schedule — an *assumption* applied cross-market.
+L-0042(a) named it as the reopener for F3 and H16. CM-2 measures it: **905,820** CFTC Part 43 USD
+OIS prints over **700 days (2010-12-15 → 2026-07-21)** against the same-day Citi EOD curve, each
+priced on **its own effective and maturity dates** (59,218 unique swaps).
+
+Dedup drops any chain containing a CORR or EROR rather than resolving it — dropping cannot
+introduce a wrong rate, and a wrong rate *inflates* the deviation, which is the direction that
+would flatter the study.
+
+**Planted-value verify PASS:** a print planted at the fair rate measures `0.00e+00` bp through the
+real path; the same print with its rate read as percent measures `39,053` bp.
+
+**The smear table locates the curve's own stamp without being told it** — median `|print − EOD mid|`
+falls monotonically from 3.3bp overnight to **0.526 at 14:00 ET** and **0.508 at 15:00**, then rises
+to 0.828 at 16:00. That V is the best single piece of evidence the measurement is working.
+
+### What is decisive: the shape
+
+| tenor | all-hours median | at 15:00 ET | assumed (`cost_model`) | at-stamp ÷ assumed |
+|---:|---:|---:|---:|---:|
+| 1Y | 1.47 | 0.41 | 0.30 | 1.36 |
+| 5Y | 1.74 | 0.53 | 0.50 | 1.06 |
+| 10Y | 1.53 | 0.46 | 0.75 | 0.62 |
+| 20Y | 1.20 | 0.40 | 1.25 | 0.32 |
+| 30Y | 1.35 | 0.43 | 1.75 | 0.24 |
+
+At the stamp hour the measured deviation is **essentially flat in tenor** (0.32–0.53 bp from 1Y to
+30Y) while `RVUtils/cost_model` is **linear in tenor** (0.30 → 1.75 bp). The assumed line
+**over-charges 20Y+ by 3–4× and under-charges 1–3Y by ~1.2–1.4×**. Its shape is wrong, not merely
+its level.
+
+### What is not decisive: the level
+
+The confound checks kill that claim, and they are reported rather than argued around. The deviation
+distribution **peaks at mid even at the stamp hour** (density at zero *is* the modal bin,
+centre/peak = 1.000), and 6.3% of stamp-hour prints sit within 0.05bp of mid. A half-spread should
+show a **dip** at zero; there is none. The test is one-directional — one-sided flow produces a
+*shifted unimodal* distribution, so the absence of a dip is not proof of drift-dominance — but it
+does mean **0.508 bp cannot be asserted as a half-spread**. CM-2 measures an upper bound whose
+composition it does not separate.
+
+**Forward starts: uninformative.** 47 cells, median at-stamp **16.6×** the assumed line, **zero**
+below it, small samples, and evident contamination by package legs and off-market unwinds (the 1Y
+`<3M` cell prints 6.69 bp). The line F3 and H16 actually trade is **not measured**. The
+size-vs-spread test is **unrun** (notional cells too sparse after the quartile guard).
+
+## The L-0042(a) reopener closes — the wrong way
+
+F3 traded a direction-neutral package of k-year-forward 1Y swaps and its gate charged a **flat
+1.0 bp** package round trip. CM-2 cannot measure the forward line, but it **bounds** it: a
+forward-starting swap cannot trade tighter than its spot equivalent, so the spot cell is a *lower*
+bound.
+
+At the tightest defensible reading — spot 1Y at the stamp hour, **0.407 bp per leg** — a 1-2-1
+package round trip is `Σ|w| × 2 × hs = 8 × 0.407 =` **3.26 bp** against the **1.00 bp** charged
+(11.73 bp at the all-hours upper bound). Even the most generous direction-neutral structure
+(`Σ|w| = 2`) costs **1.63 bp**, still above 1.00.
+
+| ccy | episodes | oracle median 63bd reversion | ÷ graded boat | ÷ measured lower-bound boat |
+|---|---:|---:|---:|---:|
+| USD | 292 | 2.260 bp | 2.26× | **0.69×** |
+| EUR | 706 | 1.174 bp | 1.17× | **0.36×** |
+| GBP | 197 | 2.341 bp | 2.34× | **0.72×** |
+| JPY | 686 | 1.206 bp | 1.21× | **0.37×** |
+
+And these are **oracle** medians; realized harvest has historically been 10–30% of oracle in this
+program. So F3's flat 1.0 bp benchmark was **too generous** and its kill was, if anything,
+understated. The clause was written as a hope that a better execution line existed; the measurement
+says the assumed line was already better than reality for this instrument. **F3 stays dead and the
+clause is closed by measurement rather than left open.** H16's linear leg is unmeasured for the
+same reason and its half of the clause remains open but unsupported.
