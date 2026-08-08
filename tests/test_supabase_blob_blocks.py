@@ -421,6 +421,42 @@ class TestPrefetch:
     def test_prefetch_on_an_empty_remote_is_a_no_op(self, sync):
         assert sync.prefetch_range(ASSET, D1, D3) == []
 
+    def test_prefetch_leaves_a_multi_file_local_partition_alone(self, tmp_path, db, sync):
+        """local_sha declines to answer for a multi-file partition. Reading that
+        'None' as 'absent' sends it down the fetch path, where _land unlinks every
+        file that is not the one it just wrote — destroying rows a local read
+        concatenates. MIX23 has 2,613 files across 1,382 days on this machine."""
+        write_local(sync, ASSET, D1, make_parquet(vol=1.0))
+        sync.push_day(ASSET, D1)
+
+        other = _CubeSync(tmp_path / "other", db)
+        write_local(other, ASSET, D1, make_parquet(vol=10.0))
+        write_local(other, ASSET, D1, make_parquet(vol=20.0))
+        before = {f.name for f in other.partition_dir(ASSET, D1).glob("*.parquet")}
+        assert len(before) == 2
+
+        assert other.prefetch_range(ASSET, D1, D1) == []
+        after = {f.name for f in other.partition_dir(ASSET, D1).glob("*.parquet")}
+        assert after == before, "prefetch destroyed a multi-file partition"
+
+    def test_pull_repairs_a_local_file_that_lies_about_its_own_name(self, tmp_path, db, sync):
+        """The filename IS a content claim, and the writers that made these files
+        do not verify it. A truncated file under the right name used to make
+        pull_day return 'nothing to do' — unable to repair the one thing it is
+        for."""
+        payload = make_parquet(vol=7.0)
+        write_local(sync, ASSET, D1, payload)
+        sync.push_day(ASSET, D1)
+
+        cold = _CubeSync(tmp_path / "cold", db)
+        dest = cold.partition_dir(ASSET, D1)
+        dest.mkdir(parents=True, exist_ok=True)
+        lying = dest / f"{sha_of(payload)}.parquet"
+        lying.write_bytes(payload[:40])  # right name, wrong bytes
+
+        assert cold.pull_day(ASSET, D1) is True
+        assert lying.read_bytes() == payload, "the corrupt local file was not repaired"
+
 
 # ── no DDL on the read path ───────────────────────────────────────────────
 

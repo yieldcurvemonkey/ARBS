@@ -119,6 +119,25 @@ def run(args: argparse.Namespace) -> int:
         hh, mm = args.stop_at.split(":")
         stop_at = datetime.time(int(hh), int(mm))
 
+    # The argv sniff at the top of the module cannot see a flag passed through
+    # main(["run", "--push-l2"]) - argv is the process's, not the caller's - so a
+    # programmatic invocation would set push_l2 on the daemon while the engine
+    # stayed off and every row upsert silently did nothing. Refuse instead, the
+    # same way citivelo_excel_warm.py does.
+    if args.push_l2:
+        from Caching.supabase_engine import SUPABASE_ENABLED
+
+        if not SUPABASE_ENABLED:
+            logger.error(
+                "--push-l2 was asked for but the Supabase engine is off. This module "
+                "decides that from sys.argv at import time, so the flag only takes "
+                "effect when it is on the real command line; a programmatic "
+                "main([...]) call cannot turn it on. Set ARBS_SUPABASE_ENABLED=1 "
+                "before importing Caching, or run the script directly. Refusing "
+                "rather than publishing nothing and reporting success."
+            )
+            return 2
+
     lock = SingleInstanceLock(_LOCK_NAME)
     if not lock.acquire():
         logger.error(

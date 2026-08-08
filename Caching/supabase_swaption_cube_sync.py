@@ -115,6 +115,12 @@ def resolve_cube_sync(
     environment now" - deliberately at call time, so the answer tracks a CLI flag
     set after import rather than whatever was true when ``Caching`` first loaded.
     """
+    # Fail CLOSED on an unrecognised `need`. The two-branch form below was
+    # fail-open: any value that was neither "read" nor "write" fell through both
+    # guards and returned a live, production-bound sync with L2 nominally off.
+    if need not in ("read", "write"):
+        raise ValueError(f"need must be 'read' or 'write', not {need!r}")
+
     active = swaption_cube_l2_mode() if mode is None else mode
     if need == "write" and not active.writes:
         return None

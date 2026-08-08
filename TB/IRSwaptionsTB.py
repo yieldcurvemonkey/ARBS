@@ -158,7 +158,20 @@ class IRSwaptionsTB(LayeredCacheMixin, BaseTimeseriesTB):
             show_tqdm=show_tqdm,
         )
         self._logger = logger or logging.getLogger(_LOGGER_NAME)
-        stem = cache_stem or f"IRSwaptionsTB_{self._CACHE_VERSION}_{mdp.source}"
+        # curve_source is part of the stem, and has to be. A swaption VALUE is a
+        # function of the curve as well as the vol - the discount curve prices the
+        # premium and anchors the ATMF strike - but neither the stem nor
+        # _cache_key carried it, so values computed against
+        # ERIS_EOD_LIVE-RL_BASIC were served to a reader on curve_source=CITIVELO
+        # under the same key. Harmless while only one curve_source was ever used
+        # per source token; a value warm over thousands of days makes it a
+        # persistent, silently wrong cache. Separate stems keep the two apart
+        # without invalidating anything already written under the old name for a
+        # single-curve_source user.
+        curve_token = str(getattr(mdp, "curve_source", "") or "default")
+        stem = cache_stem or (
+            f"IRSwaptionsTB_{self._CACHE_VERSION}_{mdp.source}_{curve_token}"
+        )
         self._cache_path = self.default_cache_path(stem=stem)
         self._cache_attr = f"{self._CACHE_ATTR_BASE}_{self._CACHE_VERSION}"
         self.open_cache(cache_attr=self._cache_attr, path=self._cache_path)

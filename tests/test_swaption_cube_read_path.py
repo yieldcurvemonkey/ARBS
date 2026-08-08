@@ -158,19 +158,50 @@ class TestLoadStoredCubes:
         cold = SwaptionCubeStore(base_dir=tmp_path / "cold", l2=False)
         assert load_stored_cubes("USD", [dt.date(2026, 8, 6)], store=cold) == {}
 
-    def test_results_are_memoised_per_process(self, warm_store):
+    def test_results_are_memoised_for_the_same_store(self, warm_store):
         from MDP.IRSwaptions.CITIVELO.cube_store import load_stored_cubes
 
         store, full, _ = warm_store
         first = load_stored_cubes("USD", full, store=store)
-        # A store that raises on every read: only a memo can answer now.
+
         class _Exploding:
+            """Same base_dir, so the memo must answer without touching read_day."""
+
+            base_dir = store.base_dir
+
             def read_day(self, *a, **k):
                 raise AssertionError("read_day was called; the memo did not hold")
 
         second = load_stored_cubes("USD", full, store=_Exploding())
         assert sorted(second) == sorted(first)
         assert second[full[0]] is first[full[0]]
+
+    def test_the_memo_does_not_leak_between_stores(self, warm_store, tmp_path):
+        """The memo key includes the base_dir.
+
+        Without it, the first store to answer for an (asset, date) poisons every
+        other store for the life of the process - so a caller that passed a
+        specific ``store=`` would silently be served the DEFAULT store's cube.
+        """
+        from Caching.swaption_cube_store import asset_for
+        from MDP.IRSwaptions.CITIVELO.cube_store import load_stored_cubes
+
+        store, full, _ = warm_store
+        warm = load_stored_cubes("USD", [full[0]], store=store)
+        assert full[0] in warm
+
+        # A DIFFERENT, empty store must answer "I do not have it", not hand back
+        # the other store's cube.
+        empty = SwaptionCubeStore(base_dir=tmp_path / "elsewhere", l2=False)
+        assert load_stored_cubes("USD", [full[0]], store=empty) == {}
+
+        # ...and one holding DIFFERENT content for the same day must serve its own.
+        other = SwaptionCubeStore(base_dir=tmp_path / "other", l2=False)
+        mine = make_cube_data(full[0], base=140.0)
+        other.write_day(asset_for("USD"), full[0], mine, push_l2=False)
+        got = load_stored_cubes("USD", [full[0]], store=other)[full[0]]
+        assert float(got.data.atm.iloc[0, 0]) == float(mine.atm.iloc[0, 0])
+        assert float(got.data.atm.iloc[0, 0]) != float(warm[full[0]].data.atm.iloc[0, 0])
 
     def test_provenance_is_a_plain_dict_for_metadata(self, warm_store):
         from MDP.IRSwaptions.CITIVELO.cube_store import load_stored_cubes
@@ -338,6 +369,39 @@ class TestProviderUsesTheStore:
             cubes={full[0]: mine},
         )
         assert captured["cube"] is mine
+        assert no_excel == []
+
+    def test_a_caller_cube_is_not_attributed_to_the_store(
+        self, warm_store, no_excel, flat_ql_curve, stub_build
+    ):
+        """The store holds this date too. Provenance must name the branch that
+        actually answered, not "was this date in the store"."""
+        from MDP.IRSwaptions.CITIVELO import provider as prov
+
+        store, full, _ = warm_store
+        prov.clear_citivelo_cube_cache()
+        prov.get_citivelo_vol_objects(
+            curve_name="USD-SOFR-1D", dates=[full[0]], engine="RL",
+            curves={full[0]: flat_ql_curve(full[0])}, cube_store=store,
+            cubes={full[0]: make_cube_data(full[0], base=120.0)},
+        )
+        got = prov.get_cached_citivelo_provenance("USD-SOFR-1D", full[0], "RL")
+        assert got["origin"] == "caller", got
+
+    def test_a_caller_cube_is_not_judged_by_the_stores_smile(
+        self, warm_store, no_excel, flat_ql_curve, stub_build
+    ):
+        """An ATM-only day in the store must not block a full-smile cube the
+        caller supplied for that same date - it is perfectly buildable."""
+        from MDP.IRSwaptions.CITIVELO import provider as prov
+
+        store, _, atm = warm_store
+        out = prov.get_citivelo_vol_objects(
+            curve_name="USD-SOFR-1D", dates=[atm[0]], engine="QL",
+            curves={atm[0]: flat_ql_curve(atm[0])}, cube_store=store,
+            cubes={atm[0]: make_cube_data(atm[0])},  # full smile
+        )
+        assert sorted(out) == [atm[0]]
         assert no_excel == []
 
 

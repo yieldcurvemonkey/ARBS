@@ -501,7 +501,21 @@ class BlobBlockSync:
                         f"Refusing to replace it silently; pass overwrite=True."
                     )
             elif existing:
-                return False  # byte-identical; nothing to do
+                # The NAME matches, which is not the same as the bytes matching.
+                # Content addressing makes the filename a claim about the content,
+                # and the writers that produced these files do not verify it - so a
+                # truncated local file sits here under the right name and this
+                # branch used to return "nothing to do", making pull_day unable to
+                # repair the one thing it exists to repair. Check, and rewrite when
+                # the claim is false. That is a repair, not a restatement, so it
+                # does not need `overwrite`.
+                if sha256_of(dest.read_bytes()) == sha:
+                    return False
+                logger.warning(
+                    "%s %s: local %s.parquet does not hash to its own name "
+                    "(%d bytes on disk); repairing it from L2.",
+                    key, trading_date, sha[:12], dest.stat().st_size,
+                )
         part_dir.mkdir(parents=True, exist_ok=True)
         _atomic_write_bytes(dest, payload)
         for old in part_dir.glob("*.parquet"):
@@ -554,8 +568,45 @@ class BlobBlockSync:
             return []
         wanted: List[datetime.date] = []
         for day, block in manifest.items():
+            # A multi-file partition must be left ALONE. local_sha declines to
+            # answer for one (there is no single content hash), and treating that
+            # "None" as "absent" would send it down the fetch path, where _land
+            # unlinks every file that is not the one it just wrote - silently
+            # destroying the other parquet files a local read concatenates. Not
+            # hypothetical: USD-OIS-Q12xM12STIRT-SERFFX-MIX23 has 2,613 files
+            # across 1,382 days on this machine.
+            part_dir = self.partition_dir(key, day)
+            if part_dir.exists() and len(list(part_dir.glob("*.parquet"))) > 1:
+                logger.warning(
+                    "%s %s: local partition holds several parquet files; leaving it "
+                    "untouched. Pulling would replace them with the single L2 blob. "
+                    "Consolidate it first if the L2 copy is the one you want.",
+                    key, day,
+                )
+                continue
             local = self.local_sha(key, day)
+            # The filename is a CLAIM about the content, and the writers that
+            # produced these files do not verify it - supabase_curve_sync.pull_day
+            # writes non-atomically under f"{row.sha256}.parquet", so an
+            # interrupted pull leaves a truncated file with a correct-looking
+            # name. Cross-check the size against the manifest before believing
+            # "identical": a stat() costs nothing and truncation is the failure
+            # mode this actually has. (A same-size corruption still slips past
+            # here; it is caught on the way in by _verified_payload and by the
+            # repair branch in _land.)
             if local == block.sha256:
+                try:
+                    on_disk = (part_dir / f"{local}.parquet").stat().st_size
+                except OSError:
+                    on_disk = -1
+                if on_disk == block.nbytes:
+                    continue
+                logger.warning(
+                    "%s %s: local %s.parquet is %d bytes but L2 says %d — the name "
+                    "cannot be its content hash. Re-pulling.",
+                    key, day, local[:12], on_disk, block.nbytes,
+                )
+                wanted.append(day)
                 continue
             if local is not None and not overwrite:
                 logger.warning(

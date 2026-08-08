@@ -134,7 +134,13 @@ def _is_view_statement(sql: str) -> bool:
     )
 
 
-_ALTER_TABLE_RE = re.compile(r"^\s*ALTER\s+TABLE\s+(?:IF\s+EXISTS\s+)?(\S+)", re.IGNORECASE)
+# ONLY and IF EXISTS are both optional prefixes to the table name. Without the
+# ONLY alternative, "ALTER TABLE ONLY a" and "ALTER TABLE ONLY b" both report
+# a target of "ONLY" and get batched into one transaction as if they touched
+# the same table.
+_ALTER_TABLE_RE = re.compile(
+    r"^\s*ALTER\s+TABLE\s+(?:IF\s+EXISTS\s+)?(?:ONLY\s+)?(\S+)", re.IGNORECASE
+)
 
 
 def _alter_target(sql: str) -> Optional[str]:
@@ -231,6 +237,31 @@ _ADD_COLUMN_RE = re.compile(
 )
 
 
+#: Statement kinds :func:`schema_already_current` can actually look up. Anything
+#: else means the currency check is incomplete and must not short-circuit.
+_CHECKABLE_HEADS = (
+    "CREATE TABLE",
+    "CREATE INDEX",
+    "CREATE UNIQUE INDEX",
+)
+
+
+def _is_checkable(sql: str) -> bool:
+    head = _sql_body(sql).lstrip().upper()
+    if head.startswith(_CHECKABLE_HEADS):
+        return True
+    # ALTER TABLE is checkable only in the ADD COLUMN form declared_objects
+    # parses, and only when EVERY added column is parsed. _ADD_COLUMN_RE captures
+    # one per statement, so a comma-separated multi-column ALTER would have its
+    # tail silently unchecked and the migration would read as already applied.
+    if head.startswith("ALTER TABLE"):
+        body = _sql_body(sql)
+        declared = len(_ADD_COLUMN_RE.findall(body))
+        written = len(re.findall(r"ADD\s+COLUMN", body, re.IGNORECASE))
+        return declared > 0 and declared == written
+    return False
+
+
 def _unquote(name: str) -> str:
     return name.strip().strip('"').split(".")[-1].lower()
 
@@ -255,8 +286,25 @@ def schema_already_current(engine: Engine, ddl: str = "") -> bool:
     Three queries, no locks. Any error is answered ``False`` - "I could not
     prove it is current" must mean "run the DDL", never "assume it is fine".
     """
-    tables, columns, indexes = declared_objects(ddl or SCHEMA_SQL)
+    bundle = ddl or SCHEMA_SQL
+    tables, columns, indexes = declared_objects(bundle)
     if not tables:
+        return False
+
+    # Only short-circuit when EVERY statement in the bundle is one of the three
+    # kinds this function knows how to look for. A view, an ALTER COLUMN TYPE, a
+    # constraint or a COMMENT is invisible to the three queries below, so with
+    # one of those in the bundle "everything I check is present" would mean
+    # "skip a migration forever". Today's bundle is CREATE TABLE / ALTER TABLE
+    # ADD COLUMN / CREATE INDEX only; the day it is not, this returns False and
+    # the DDL runs, which is the safe direction.
+    unchecked = [s for s in split_ddl_statements(bundle) if not _is_checkable(s)]
+    if unchecked:
+        logger.debug(
+            "CORE cache schema currency check cannot cover %d statement(s) "
+            "(e.g. %r); running the DDL instead of guessing.",
+            len(unchecked), _sql_body(unchecked[0]).splitlines()[0][:70],
+        )
         return False
     try:
         with engine.connect() as conn:

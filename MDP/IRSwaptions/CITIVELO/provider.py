@@ -145,6 +145,13 @@ def _split_curves(curve: Any) -> Tuple[Any, Any]:
     return resolved, build_ql_mirror_curve(resolved)
 
 
+def _fetch_cube_from_excel(**kwargs: Any) -> Tuple[Any, str]:
+    """``fetch_cube`` plus its origin tag. Split out so tests can patch one seam."""
+    from MDP.CitiVelocityExcel.vol.cube_data import fetch_cube
+
+    return fetch_cube(**kwargs), "excel"
+
+
 def _cube_for_date(
     *,
     currency: str,
@@ -158,14 +165,21 @@ def _cube_for_date(
     strict: bool,
     client: Any,
     stored: Optional[Dict[dt.date, Any]] = None,
-) -> Any:
-    """One :class:`SwaptionCubeData`, from whichever source was configured."""
+) -> Tuple[Any, str]:
+    """``(SwaptionCubeData, origin)`` from whichever source was configured.
+
+    Returns the ORIGIN as well as the data, because the caller has to know which
+    branch answered. Inferring it afterwards from ``stored.get(when)`` is wrong:
+    the store can hold that date too, so a caller-supplied ``cubes=``/``cube=``/
+    ``snapshot=`` would be reported as having come from the store — and, worse,
+    would be judged against the STORE's smile shape by the ATM-only guard.
+    """
     if cubes:
         hit = cubes.get(when) or cubes.get(when.isoformat())
         if hit is not None:
-            return hit
+            return hit, "caller"
     if cube is not None:
-        return cube
+        return cube, "caller"
     if snapshot:
         from MDP.CitiVelocityExcel.vol.live_snapshot import load_snapshot
 
@@ -176,8 +190,9 @@ def _cube_for_date(
                 "A cube carried to another date is a wrong number that looks right - request the "
                 "date the snapshot holds, or pass cubes={date: cube}."
             )
-        return snap.cube(
-            expiries=expiries, tenors=tenors, offsets_bp=offsets_bp, strict=strict
+        return (
+            snap.cube(expiries=expiries, tenors=tenors, offsets_bp=offsets_bp, strict=strict),
+            "snapshot",
         )
 
     # The WARMED STORE, ahead of Excel and behind everything the caller passed in
@@ -189,9 +204,7 @@ def _cube_for_date(
     if stored:
         hit = stored.get(when)
         if hit is not None:
-            return hit.data
-
-    from MDP.CitiVelocityExcel.vol.cube_data import fetch_cube
+            return hit.data, "swaption_cube_store"
 
     if client is None:
         from MDP.CitiVelocityExcel.com_client import CitiVelocityExcelClient
@@ -204,7 +217,7 @@ def _cube_for_date(
             when,
         )
         client = CitiVelocityExcelClient.connect()
-    return fetch_cube(
+    return _fetch_cube_from_excel(
         client=client,
         currency=currency,
         as_of=when,
@@ -314,7 +327,7 @@ def get_citivelo_vol_objects(
                 "'ERIS_EOD_LIVE-RL_BASIC'."
             )
 
-        data = _cube_for_date(
+        data, origin = _cube_for_date(
             currency=ccy,
             when=when,
             cube=cube,
@@ -332,7 +345,12 @@ def get_citivelo_vol_objects(
         # A QuantLib CUBE needs at least one non-zero offset. Say why when the day
         # has none, before build_ql_swaption_cube's generic message sends the
         # caller off to refetch from Excel for quotes that were never published.
-        hit = stored.get(when)
+        #
+        # Gated on `origin`, not on "is this date in the store": the store can
+        # hold an ATM-only copy of a date the CALLER supplied a full-smile cube
+        # for, and judging their cube by the store's shape would refuse a request
+        # that is perfectly buildable.
+        hit = stored.get(when) if origin == "swaption_cube_store" else None
         if hit is not None and not hit.has_smile and backend in ("ql", "ql-sabr"):
             from MDP.IRSwaptions.CITIVELO.cube_store import explain_missing_smile
 
@@ -367,11 +385,15 @@ def get_citivelo_vol_objects(
             verify=bool(verify),
         )
         _CUBE_CACHE[(str(curve_name), when.isoformat(), engine_token)] = built
+        # The origin comes from the branch that ANSWERED, not from a guess made
+        # afterwards. Inferring it from `snapshot`/`cube`/`cubes` being truthy was
+        # wrong twice over: those can be set for OTHER dates in the same batch,
+        # and the store can hold a date the caller also supplied.
         _CUBE_PROVENANCE[(str(curve_name), when.isoformat(), engine_token)] = (
             hit.provenance()
             if hit is not None
             else {
-                "origin": "snapshot" if snapshot else ("caller" if (cube or cubes) else "excel"),
+                "origin": origin,
                 "as_of": when.isoformat(),
                 "smile": "full" if [o for o in data.skew_offsets() if o != 0.0] else "atm_only",
                 "n_offsets": len(data.offsets()),

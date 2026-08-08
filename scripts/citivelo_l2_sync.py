@@ -341,7 +341,15 @@ class PushTotals:
     nbytes: int = 0
 
     def record(self, status: str, nbytes: int) -> None:
-        setattr(self, status, getattr(self, status, 0) + 1)
+        # An unrecognised status used to create a NEW attribute and vanish from
+        # every total, so a whole class of outcome could go unreported while the
+        # run said "0 failed".
+        if not hasattr(self, status):
+            raise ValueError(
+                f"unknown push status {status!r}; expected one of "
+                "pushed/rewritten/identical/failed"
+            )
+        setattr(self, status, getattr(self, status) + 1)
         self.nbytes += nbytes
 
 
@@ -673,7 +681,7 @@ def cmd_push(args) -> int:
             plans.append(
                 (fam, asset, sync, plan_asset(sync, fam, asset, start=start, end=end, rewrite=args.rewrite))
             )
-        if args.limit:
+        if args.limit is not None:
             # Recompute the byte total from the truncated list. Truncating without
             # it makes the confirmation banner quote the WHOLE asset's size for a
             # five-day smoke test, which is the one number the operator is meant
@@ -848,7 +856,10 @@ def build_parser() -> argparse.ArgumentParser:
     common(b)
     b.add_argument("--yes", action="store_true", help="required; this writes to production")
     b.add_argument("--rewrite", action="store_true", help="replace days whose content differs")
-    b.add_argument("--limit", type=int, default=None, help="cap days per asset (smoke test)")
+    b.add_argument(
+        "--limit", type=int, default=None,
+        help="cap days per asset (smoke test). 0 means push NOTHING, not 'no cap'.",
+    )
     b.add_argument(
         "--workers", type=int, default=4,
         help="threads sharing ONE engine. The pool is sized to this, so total "

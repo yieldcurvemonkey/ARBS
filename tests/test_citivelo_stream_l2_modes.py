@@ -37,7 +37,15 @@ class TestModeParsing:
         """The change of meaning, pinned so it cannot drift back."""
         assert _normalise_l2_mode(True) == "rows"
 
-    @pytest.mark.parametrize("value", ["yes", "1", "blob", "on", "daily"])
+    @pytest.mark.parametrize(
+        "value,expected", [(0, "off"), (1, "rows"), ("", "off")]
+    )
+    def test_values_the_old_bool_coerced_still_work(self, value, expected):
+        """push_l2=0 unambiguously meant off and 1 meant on under bool(push_l2).
+        Raising on them would be a regression dressed up as strictness."""
+        assert _normalise_l2_mode(value) == expected
+
+    @pytest.mark.parametrize("value", ["yes", "blob", "on", "daily"])
     def test_an_unrecognised_mode_raises(self, value):
         with pytest.raises(ValueError) as excinfo:
             _normalise_l2_mode(value)
@@ -185,6 +193,33 @@ class TestFlush:
         curve.day_snapshots = {dt.date(2026, 8, 6): []}
         daemon.curves = {"USD-SOFR-1D": curve}
         assert daemon.flush_l2()["days"] == 0
+
+    def test_a_new_day_flushes_the_previous_one(self):
+        """The docstring promises "shutdown or day rollover". Without the
+        rollover a daemon crossing midnight — the normal case for the Asian
+        curves, whose session straddles two ET dates — never publishes the
+        earlier day's blob at all."""
+        store, sync = _RecordingStore(), _RecordingSync()
+        daemon = _daemon(True, store, sync)
+        curve = _FakeCurve()
+        daemon.curves = {"USD-SOFR-1D": curve}
+        yesterday, today = dt.date(2026, 8, 5), dt.date(2026, 8, 6)
+        curve.day_snapshots[yesterday] = [_snapshot(yesterday)]
+
+        # the first tick of a NEW day
+        if today not in curve.day_snapshots and curve.day_snapshots:
+            daemon._flush_days(curve, [d for d in curve.day_snapshots if d != today])
+        assert sync.days == [("USD-SOFR-1D-CITIVELOSTREAM", yesterday)]
+
+    def test_rollover_does_not_flush_the_day_still_being_written(self):
+        store, sync = _RecordingStore(), _RecordingSync()
+        daemon = _daemon(True, store, sync)
+        curve = _FakeCurve()
+        daemon.curves = {"USD-SOFR-1D": curve}
+        today = dt.date(2026, 8, 6)
+        curve.day_snapshots[today] = [_snapshot(today)]
+        daemon._flush_days(curve, [d for d in curve.day_snapshots if d != today])
+        assert sync.days == []
 
     def test_run_flushes_even_on_keyboard_interrupt(self, monkeypatch):
         """The one exit path that actually happens for a daemon."""

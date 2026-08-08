@@ -236,6 +236,16 @@ class TestExplicitOverrides:
 # ── the table is declared in the shared bundle ────────────────────────────
 
 
+def test_resolve_cube_sync_fails_closed_on_an_unrecognised_need(tmp_path):
+    """It used to fail OPEN: a value that was neither 'read' nor 'write' fell
+    through both guards and returned a live, production-bound sync."""
+    from Caching.supabase_swaption_cube_sync import resolve_cube_sync
+
+    for need in ("readwrite", "", "READ", "pull", None):
+        with pytest.raises(ValueError):
+            resolve_cube_sync(tmp_path, mode=L2Mode.OFF, need=need)
+
+
 def test_the_new_table_is_in_the_ddl_bundle_and_follows_house_conventions():
     from Caching.supabase_schema import SCHEMA_SQL, declared_objects
     from Caching.supabase_swaption_cube_sync import SWAPTION_CUBE_BLOCKS_TABLE

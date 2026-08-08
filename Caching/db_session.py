@@ -94,6 +94,19 @@ def make_label(component: str, *, detail: str = "") -> str:
     return label[: APP_NAME_MAX - len(tail)] + tail
 
 
+def _clip_bytes(text_value: str, limit: int) -> str:
+    """Trim to ``limit`` BYTES, not characters, without splitting a code point.
+
+    ``application_name``'s NAMEDATALEN budget is in bytes. Slicing by characters
+    lets a label with any non-ASCII in it exceed the limit and be truncated by
+    the server after all - which is the thing this is here to prevent.
+    """
+    encoded = text_value.encode("utf-8")
+    if len(encoded) <= limit:
+        return text_value
+    return encoded[:limit].decode("utf-8", errors="ignore")
+
+
 def apply_session_settings(
     conn,
     *,
@@ -109,7 +122,7 @@ def apply_session_settings(
     if label:
         conn.execute(
             text("SELECT set_config('application_name', :v, true)"),
-            {"v": label[:APP_NAME_MAX]},
+            {"v": _clip_bytes(label, APP_NAME_MAX)},
         )
     if statement_timeout_ms is not None:
         conn.execute(

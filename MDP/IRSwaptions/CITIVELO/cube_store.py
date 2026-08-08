@@ -78,10 +78,19 @@ DEFAULT_STORE_PROVIDER = "CITIVELOEXCEL"
 #: hard-coded date, it branches on how many offsets the partition actually has.
 FIRST_SMILE_DATE = datetime.date(2020, 1, 24)
 
-#: ``(asset, iso date) -> StoredCube``. Per process, unbounded, and that is fine:
-#: a full-history warm is 2,699 entries of a few hundred KB of float frames, and
-#: the alternative is re-pivoting at 8 ms a day on every repeat request.
-_STORE_CACHE: Dict[Tuple[str, str], "StoredCube"] = {}
+#: ``(base_dir, asset, iso date) -> StoredCube``.
+#:
+#: The **base_dir is part of the key** and has to be: ``load_stored_cubes``
+#: accepts a ``store=``, tests build one under ``tmp_path``, and without the
+#: directory in the key the first store to answer for an asset/date poisons every
+#: other store for the life of the process - a caller that passed a specific
+#: store would silently get the DEFAULT store's cube.
+#:
+#: Per process and unbounded. A full-history USD warm is 2,699 entries of a few
+#: hundred KB of float frames each; the alternative is re-pivoting at 8 ms a day
+#: on every repeat request. :func:`clear_stored_cube_cache` drops it if a
+#: long-lived process needs the memory back.
+_STORE_CACHE: Dict[Tuple[str, str, str], "StoredCube"] = {}
 _STORE_CACHE_LOCK = threading.Lock()
 
 
@@ -151,8 +160,16 @@ def _default_store():
     return SwaptionCubeStore.default()
 
 
+def _store_key(store: Any) -> str:
+    """A stable identity for a store, for the memo key. Never raises."""
+    try:
+        return str(getattr(store, "base_dir", None) or repr(store))
+    except Exception:  # noqa: BLE001
+        return repr(store)
+
+
 def _stored_one(store: Any, asset: str, day: datetime.date) -> Optional[StoredCube]:
-    key = (asset, day.isoformat())
+    key = (_store_key(store), asset, day.isoformat())
     hit = _STORE_CACHE.get(key)
     if hit is not None:
         return hit

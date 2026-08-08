@@ -118,19 +118,43 @@ def build_queries(
     from Query.IRSwaptions.IRSwaptionValue import IRSwaptionValue
 
     out: List[Any] = []
+    seen: set = set()
     for shorthand in shorthands:
         for strike in strikes:
             for structure in structures:
-                out.append(
-                    IRSwaptionQuery(
-                        curve=curve_name,
-                        shorthand=shorthand,
-                        strike=strike,
-                        structure=IRSwaptionStructure[structure.upper()],
-                        value=[IRSwaptionValue[v.upper()] for v in values],
-                    )
+                q = IRSwaptionQuery(
+                    curve=curve_name,
+                    shorthand=shorthand,
+                    strike=strike,
+                    structure=IRSwaptionStructure[structure.upper()],
+                    value=[IRSwaptionValue[v.upper()] for v in values],
                 )
+                # DEDUPE on the resolved query, not on the loop variables. A
+                # SIGNED strike overrides the requested structure - "ATMF-25" is
+                # a receiver whether you asked for PAYER or RECEIVER - so the
+                # cartesian product contains exact duplicates, and both the work
+                # and the projected wall time were counted twice for them.
+                key = _query_identity(q)
+                if key in seen:
+                    continue
+                seen.add(key)
+                out.append(q)
     return out
+
+
+def _query_identity(q: Any) -> tuple:
+    """What makes two queries the same COMPUTATION, after resolution."""
+    from TB.IRSwaptionsTB import _query_fingerprint
+
+    try:
+        return ("fp", _query_fingerprint(q))
+    except Exception:  # noqa: BLE001 - fall back to the fields we set
+        return (
+            str(getattr(q, "shorthand", "")),
+            str(getattr(q, "strike", "")),
+            str(getattr(q, "structure", "")),
+            str(getattr(q, "value", "")),
+        )
 
 
 def _chunks(items: Sequence[dt.date], size: int) -> List[Sequence[dt.date]]:

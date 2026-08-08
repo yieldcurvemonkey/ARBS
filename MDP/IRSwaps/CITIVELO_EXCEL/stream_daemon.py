@@ -92,11 +92,16 @@ def _normalise_l2_mode(value: Any) -> str:
     behaviour: that is a change of meaning, and a deliberate one. The old
     behaviour is still reachable as ``"day"`` and is documented as a footgun.
     """
-    if value is None or value is False:
+    if value is None:
         return "off"
-    if value is True:
-        return "rows"
+    # Accept the ints and empty string that the previous ``bool(push_l2)``
+    # coerced silently. Raising on ``push_l2=0`` would be a regression dressed up
+    # as strictness: 0 unambiguously meant off and 1 unambiguously meant on.
+    if isinstance(value, bool) or isinstance(value, int):
+        return "rows" if value else "off"
     token = str(value).strip().lower()
+    if token == "":
+        return "off"
     if token in _L2_MODES:
         return token
     raise ValueError(
@@ -437,6 +442,13 @@ class CitiVeloStreamDaemon:
         # content-addressed, so a rewrite that changes nothing costs nothing; and
         # keeping the day in memory means a restart re-reads rather than
         # truncating what is already on disk.
+        # Day rollover. Without this the "shutdown or day rollover" the docstring
+        # promises is only shutdown, and a daemon that runs across midnight -
+        # which is the normal case for the Asian curves, whose session straddles
+        # two ET dates - never publishes the earlier day's blob at all.
+        if reference_date not in curve.day_snapshots and curve.day_snapshots:
+            self._flush_days(curve, [d for d in curve.day_snapshots if d != reference_date])
+
         bucket = curve.day_snapshots.setdefault(reference_date, [])
         if not bucket:
             bucket.extend(self._existing_day(curve, reference_date))
@@ -492,6 +504,25 @@ class CitiVeloStreamDaemon:
                     curve.asset, exc, self._l2_row_failures,
                 )
 
+    def _flush_days(self, curve: StreamCurve, days: Sequence[datetime.date]) -> int:
+        """Push one curve's day blobs. Returns how many landed. Never raises."""
+        if self._l2_mode != "rows":
+            return 0
+        sync = self._curve_sync()
+        if sync is None:
+            return 0
+        pushed = 0
+        for day in days:
+            try:
+                if sync.push_day(curve.asset, day):
+                    pushed += 1
+            except Exception as exc:  # noqa: BLE001 - a daemon must not die on this
+                _logger.warning(
+                    "citivelo_excel stream: L2 day push failed for %s %s (%s)",
+                    curve.asset, day, exc,
+                )
+        return pushed
+
     def flush_l2(self) -> Dict[str, int]:
         """Push each accumulated day's blob to L2 once. Safe to call repeatedly.
 
@@ -506,15 +537,7 @@ class CitiVeloStreamDaemon:
             return {"days": 0, "rows": self._l2_rows}
         pushed = 0
         for curve in self.curves.values():
-            for day in list(curve.day_snapshots):
-                try:
-                    if sync.push_day(curve.asset, day):
-                        pushed += 1
-                except Exception as exc:  # noqa: BLE001
-                    _logger.warning(
-                        "citivelo_excel stream: L2 day push failed for %s %s (%s)",
-                        curve.asset, day, exc,
-                    )
+            pushed += self._flush_days(curve, list(curve.day_snapshots))
         _logger.info(
             "citivelo_excel stream: flushed %d day blob(s) to L2 (%d row(s) upserted, "
             "%d row failure(s))", pushed, self._l2_rows, self._l2_row_failures,
