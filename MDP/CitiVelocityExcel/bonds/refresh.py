@@ -101,6 +101,31 @@ class RefreshResult:
         )
 
 
+def _seen_path() -> pathlib.Path:
+    """Sidecar for first/last-seen stamps. Lives beside the TAG CACHE, not in the
+    repo: it is a record of what this machine has observed, and it is rewritten by
+    an unattended nightly job."""
+    from MDP.CitiVelocityExcel.cache import default_cache_dir
+
+    return default_cache_dir() / "universe_seen.json"
+
+
+def _record_seen(key: str, isins, stamp: str) -> None:
+    path = _seen_path()
+    book = {}
+    if path.is_file():
+        try:
+            book = json.loads(path.read_text(encoding="utf-8"))
+        except Exception:  # noqa: BLE001
+            book = {}
+    per_key = book.setdefault(key, {})
+    for isin in isins:
+        row = per_key.setdefault(isin, {"first_seen": stamp})
+        row["last_seen"] = stamp
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(book, indent=1, sort_keys=True), encoding="utf-8")
+
+
 def _catalog_dir(catalog: Optional[CitiVeloCatalog] = None) -> pathlib.Path:
     cat = catalog or CitiVeloCatalog.default()
     return pathlib.Path(cat.dir)
@@ -167,33 +192,34 @@ def refresh_universe(
     result = RefreshResult(universe_key=key, seen=len(served))
     stamp = as_of.isoformat()
     for isin, desc, maturity in served:
-        row = existing.get(isin)
-        if row is None:
-            existing[isin] = {
-                "isin": isin, "desc": desc, "maturity": maturity,
-                "first_seen": stamp, "last_seen": stamp,
-            }
+        if isin not in existing:
+            existing[isin] = {"isin": isin, "desc": desc, "maturity": maturity}
             result.added.append(isin)
-        else:
-            row["last_seen"] = stamp
-            row.setdefault("first_seen", stamp)
-            # Refresh the description: a bond's coupon never changes, but the
-            # committed rows predate the first_seen fields and some carry a
-            # blank maturity.
-            if desc:
-                row["desc"] = desc
-            if maturity and not row.get("maturity"):
-                row["maturity"] = maturity
 
     served_isins = {i for i, _, _ in served}
     result.retained_not_seen = sorted(set(existing) - served_isins)
 
-    raw[key] = [existing[i] for i in sorted(existing)]
-    path.write_text(json.dumps(raw, indent=1), encoding="utf-8")
-    _logger.info(
-        "refresh %s: %d new, %d retained but not served today, %d total",
-        key, len(result.added), len(result.retained_not_seen), len(existing),
-    )
+    # Seen-stamps go to a SIDECAR beside the tag cache, never into the committed
+    # catalog. This runs nightly from a scheduled task against the primary
+    # checkout: writing `last_seen` into a tracked file every night would leave
+    # the user's working tree permanently dirty with a change they did not make
+    # and nobody commits. A dirty `bond_isins.json` should MEAN something -
+    # "Citi started quoting a new bond, please commit me" - so the catalog is
+    # written only when the ISIN set actually changed.
+    _record_seen(key, served_isins, stamp)
+
+    if result.added:
+        raw[key] = [existing[i] for i in sorted(existing)]
+        path.write_text(json.dumps(raw, indent=1), encoding="utf-8")
+        _logger.info(
+            "refresh %s: %d NEW bond(s) written to the catalog (%d total) - commit it",
+            key, len(result.added), len(existing),
+        )
+    else:
+        _logger.info(
+            "refresh %s: no new bonds; catalog untouched (%d total, %d not served today)",
+            key, len(existing), len(result.retained_not_seen),
+        )
 
     if validate_new and result.added:
         # A fresh catalog: the one passed in has already cached its bond index,

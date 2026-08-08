@@ -26,20 +26,32 @@ value                   bonds
 **EOD is nearly free.** 52 tags over five years (1,249 rows) cost **+1 MB** of
 Excel and 3.3 s. The whole universe is minutes and tens of megabytes.
 
-**Intraday is not.** The first ``MI01`` fetch costs **+952 MB** — that is one-time
-setup, and measuring only that would have condemned the whole idea. The *marginal*
-cost is **~14 MB per batch of 8 tags, about 1.7 MB per tag**, because
-``fetch_windowed`` pushes and drops a worksheet per window under the six-day
-``CVTSHIST`` downsampling cliff. So:
+**Intraday is dearer, and the cost depends entirely on which transport is used.**
+The first ``MI01`` fetch costs **+952 MB** — that is one-time setup, and measuring
+only that would have condemned the whole idea. Two marginal costs were then
+measured, and the difference between them is why :func:`_warm_intraday` exists:
 
-* ``PRICE`` + ``YIELD`` for all 349 bonds is 698 tags, **~1.2 GB** — feasible in
-  one pass from a freshly restarted Excel, and the default here.
-* The full seven-value set intraday is 2,302 tags, **~3.9 GB** — over the ceiling.
-  Available with ``--values``, and it will stop partway and resume.
+=========================================  ==============  ==================
+transport                                  349 bonds       per tag
+=========================================  ==============  ==================
+``fetch_windowed`` (a sheet per window)    134 s, +971 MB  ~1.7 MB
+``CitiVeloQuotes.frame`` (this script)      48 s, +170 MB  ~0.24 MB
+=========================================  ==============  ==================
 
-``recycle_workbook()`` does **not** rescue this: measured on the same run it
-returned ``True`` and memory went **up 7 MB**. There is no way to give memory back
-short of a human restart, which is why this script stops rather than pushes.
+The chunker pushes and drops a worksheet per window per batch; the cached path
+sends one batched ``CVTSHIST`` per window. **5.7× cheaper and it actually caches**
+— the windowed transport writes nothing to the tag cache at all, which is the bug
+recorded on :func:`_warm_intraday`.
+
+At the measured 0.24 MB/tag, ``PRICE`` + ``YIELD`` for all 349 bonds (698 tags) is
+**~170 MB**, and the full seven-value set (2,302 tags) projects to **~560 MB** —
+which would fit, though it has not been run. The default stays at two values
+because that is what has been measured end to end; widen with ``--values`` when
+someone is watching, and it will stop at the ceiling and resume either way.
+
+``recycle_workbook()`` does **not** give memory back: measured on the same run it
+returned ``True`` and memory went **up 7 MB**. Only a human restart shrinks the
+process, which is why this script stops rather than pushes.
 
 Stop and resume, because a lost session must cost time and not data
 -------------------------------------------------------------------
@@ -78,16 +90,31 @@ os.environ.setdefault("ARBS_SUPABASE_ENABLED", "0")
 
 log = logging.getLogger("citivelo-ust-warm")
 
-#: Where progress lives. Committed deliberately: it is a record of what the cache
-#: on this machine holds, and it is what makes a resumed run cheap.
-MANIFEST = _REPO_ROOT / "MDP" / "CitiVelocityExcel" / "catalog" / "ust_universe_warm_manifest.json"
+def _manifest_path() -> pathlib.Path:
+    """Where progress lives: beside the TAG CACHE, not in the repo.
+
+    It describes what THIS MACHINE's cache holds, which is not a property of the
+    codebase — and it is rewritten after every batch by a nightly scheduled task
+    running against the primary checkout. A tracked file in that position leaves
+    the user's working tree dirty every morning with a change nobody made and
+    nobody commits, which is precisely the state that makes a real edit
+    invisible.
+    """
+    from MDP.CitiVelocityExcel.cache import default_cache_dir
+
+    return default_cache_dir() / "ust_universe_warm_manifest.json"
+
+
+MANIFEST = _manifest_path()
 
 #: Leave headroom below the hard 3,800 MB ceiling so a batch in flight cannot
 #: cross it. One intraday batch is ~14 MB, so 300 MB is ~20 batches of slack.
 WORKING_CEILING_MB = 3500.0
 
-#: Intraday defaults to the two values every bond serves. The full set is 2,302
-#: tags at ~1.7 MB each, which does not fit under the ceiling in one pass.
+#: Intraday defaults to the two values EVERY bond serves. Measured on the cached
+#: transport at ~0.24 MB/tag, so 698 tags is ~170 MB; the full 2,302-tag set
+#: projects to ~560 MB and would fit, but has not been run end to end. Two values
+#: is what is measured, so two values is the default.
 INTRADAY_VALUES = ("PRICE", "YIELD")
 
 #: Bonds per batch. Small enough that the manifest is fine-grained and a stop

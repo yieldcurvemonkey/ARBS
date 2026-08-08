@@ -511,14 +511,28 @@ def _seed(manifest, mode, isins, key):
 
 
 def test_the_committed_catalog_still_holds_the_universe_this_job_sizes_itself_on():
-    """349 USA.USD.GOVT bonds, off disk, with no network and no Excel.
+    """At least 349 USA.USD.GOVT bonds, off disk, with no network and no Excel.
 
-    Every cost in the script's header — 2,302 EOD tags, 698 intraday, ~1.2 GB —
-    is per this number. It is also what makes the resume tests below meaningful
-    rather than a test of a stub.
+    Every cost in the script's header — 2,302 EOD tags, 698 intraday, ~170 MB —
+    is stated per this number. It is also what makes the resume tests below
+    meaningful rather than a test of a stub.
+
+    ``>=`` and not ``==`` on purpose. The catalog is an ACCUMULATING UNION and is
+    *supposed* to grow: Treasury auctions weekly, and the moment Citi picks up an
+    issue it has been lagging (three were still absent eight days after issue on
+    2026-08-08) a refresh adds it. An equality here would fail on correct
+    behaviour, which is the worst kind of test. The tripwire that matters is the
+    other direction — the universe must never SHRINK, because matured bonds are
+    unrecoverable from ``CVCURVEBOND`` and dropping one silently loses history
+    that cannot be re-fetched.
     """
     uni = WARM.universe()
-    assert len(uni) == 349
+    n = len(uni)
+    assert n >= 349, (
+        f"the USA.USD.GOVT universe shrank to {n}. It is a union that never removes, "
+        "so a decrease means something deleted from the catalog — and a matured bond "
+        "cannot be recovered from Citi once it is gone."
+    )
     assert [r.isin for r in uni] == sorted(r.isin for r in uni), "the order must be stable"
 
 
