@@ -253,6 +253,17 @@ on, the 841-point request returns in 0.13 s from cached rows and compares a
 cache against itself — a "benchmark" that measures nothing and a diff that
 proves nothing.
 
+The comparison was run twice: once as a smoke check mid-work, and once more
+after the last source edit, with nothing changing in between. Both runs agree
+value for value; the verbatim output of the second is checked in as
+`2026-08-08-citivelo-read-path-compare.log`.
+
+Branch base: `b1bdb16b` (PR #402). `main` advanced to `c424270c` (PR #401) while
+this was in flight. That commit touches `RLIRSwapCurve.py` as well, but a
+different method (`resolve_pricable`), and `git merge-tree` reports a clean
+merge; the branch is deliberately not rebased so the baseline is exactly what
+these commits are applied to.
+
 ### Result
 
 ```
