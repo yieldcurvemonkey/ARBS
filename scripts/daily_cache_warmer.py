@@ -416,16 +416,27 @@ def warm_citivelo_ust_universe_eod(start, end):
     and this runs unattended.
 
     Measured 2026-08-08: 349 bonds, 2,302 tags, five years of history, 137 s,
-    Excel +287 MB. EOD is cheap - 52 tags over five years cost +1 MB - so the
-    whole universe costs about what one liquid basket used to.
+    Excel +287 MB for the one-off deep warm. EOD is cheap - 52 tags over five
+    years cost +1 MB - so the whole universe costs about what one liquid basket
+    used to. The nightly window is 30 days; see the comment on the call.
 
     Resumable: ``citivelo_ust_universe_warm`` records progress per batch, so a
     run that stops at the memory ceiling resumes tomorrow rather than restarting.
     """
     from scripts.citivelo_ust_universe_warm import warm
 
-    years = float(os.environ.get("CITIVELO_UST_EOD_YEARS", "5"))
-    out = warm("eod", start=end - datetime.timedelta(days=int(years * 365.25)), end=end,
+    # A ROLLING window, not the full history, and the reason is the resume key:
+    # it includes the end date, so `end = today` changes every night and the whole
+    # universe would look un-warmed every single run. Five years nightly is 137 s
+    # of Excel for data that has not moved. Thirty days keeps the cache current
+    # and costs seconds.
+    #
+    # The deep backfill is a separate, deliberate act:
+    #     python scripts/citivelo_ust_universe_warm.py eod --years 5
+    # Run once (it has been), or after a gap. Override here with
+    # CITIVELO_UST_EOD_DAYS when a longer nightly window is actually wanted.
+    days = int(os.environ.get("CITIVELO_UST_EOD_DAYS", "30"))
+    out = warm("eod", start=end - datetime.timedelta(days=days), end=end,
                ceiling_mb=_CV_MEMORY_CEILING_MB)
     if out.get("stopped"):
         raise RuntimeError(
