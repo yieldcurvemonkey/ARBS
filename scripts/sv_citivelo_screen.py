@@ -52,7 +52,9 @@ def run_market(market: str, start: datetime.date, end: datetime.date) -> pathlib
     t0 = time.time()
     for lo in range(0, len(days), CHUNK):
         chunk = days[lo:lo + CHUNK]
-        curve_map = mdp.bulk_get_data({"curve_name": curve_name, "timestamps": chunk})
+        curve_map = mdp.bulk_get_data(
+            {"curve_name": curve_name, "timestamps": chunk, "offline": True}
+        )
         for ts in sorted(curve_map, key=str):
             curve = curve_map[ts]
             if curve is None:

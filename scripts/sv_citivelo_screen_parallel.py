@@ -36,8 +36,11 @@ def _price_chunk(market: str, days: list) -> list:
 
     pairs = citivelo_pairs([market])
     mdp = IRSwapsMDP(source=CITIVELO_SOURCE)
+    # offline=True reaches the fetcher's fall-through path (fetcher_kwargs picks
+    # it off by name) so a store miss re-solves from the banked tag cache and can
+    # NEVER open a COM transport into Excel mid-run.
     curve_map = mdp.bulk_get_data(
-        {"curve_name": CITIVELO_MARKET_CURVES[market], "timestamps": days}
+        {"curve_name": CITIVELO_MARKET_CURVES[market], "timestamps": days, "offline": True}
     )
     rows = []
     for ts in sorted(curve_map, key=str):
@@ -89,6 +92,19 @@ def main() -> None:
                       f"{time.time() - t0:.0f}s", flush=True)
 
     df = pd.DataFrame(all_rows)
+    # Hollow-output guard: workers swallow per-(day, pair) failures, so a
+    # systematic breakage (missing node, bad curve def) would otherwise write a
+    # near-empty parquet indistinguishable from a calm market.
+    from RVUtils.StrikelessVol.citivelo import citivelo_pairs
+
+    expected = len(days) * len(citivelo_pairs([market]))
+    produced_frac = len(df) / expected if expected else 0.0
+    print(f"{market}: produced {len(df):,}/{expected:,} rows ({produced_frac:.1%})", flush=True)
+    if expected and produced_frac < 0.8:
+        raise SystemExit(
+            f"{market}: only {produced_frac:.1%} of expected rows produced - "
+            "systematic pricing failure, refusing to write a hollow parquet."
+        )
     df["date"] = pd.to_datetime(df["date"])
     df = df.sort_values(["pair", "date"])
     out_dir = _REPO / "notebooks" / "data" / "citivelo_rv"
