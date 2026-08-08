@@ -208,6 +208,7 @@ class CitiVeloQuotes:
         price_point: str = "CLOSE",
         force_refresh: bool = False,
         failures: Optional[MutableMapping[str, str]] = None,
+        max_staleness: Optional[datetime.timedelta] = None,
     ) -> Dict[str, pd.Series]:
         """One ascending series per tag that returned data.
 
@@ -220,6 +221,13 @@ class CitiVeloQuotes:
         record belongs to some earlier one. Note that the reason ``"empty"`` means
         the column came back with no rows in the window: the add-in distinguishes
         "no such tag" from "no rows here" and so does this.
+
+        ``max_staleness`` overrides the reader's own setting for THIS call. It
+        exists because the gate belongs to the DATA, not to whoever happens to own
+        the reader: an overnight fixing is worth re-requesting twice a day at most,
+        and a caller handed someone else's ``CitiVeloQuotes`` (the swaption cube
+        provider hands its own to the fixings resolver) would otherwise inherit
+        ``None`` and re-request an unbounded tail on every single call.
         """
         freq_token = normalise_frequency(freq)
         point_token = normalise_price_point(price_point)
@@ -252,7 +260,7 @@ class CitiVeloQuotes:
             price_point=point_token,
             fetcher=fetcher,
             force_refresh=force_refresh,
-            max_staleness=self._max_staleness,
+            max_staleness=self._max_staleness if max_staleness is None else max_staleness,
         )
 
     def frame(

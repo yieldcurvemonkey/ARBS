@@ -486,6 +486,20 @@ class FixedRateBondsMDP(MarketDataProvider[_GenericPricable], LayeredCacheMixin)
 
     _FRB_PRICER_CACHE = "_frb_pricer_cache"
 
+    #: Vintage of the Velocity pricer cache. The key is otherwise
+    #: ``{date}-{cusip}-{source}``, none of which changes when the code that BUILDS
+    #: the pricer changes - so a cached entry outlives any correction to how it was
+    #: made, silently and forever.
+    #:
+    #: That is not hypothetical. The quote sanity screen refuses Citi's
+    #: ``PRICE = -0.562509`` for the on-the-run 2-year on 2026-07-14, and on a
+    #: machine whose cache predates the screen the refusal never ran: the pricer
+    #: came back from disk still carrying the negative price.
+    #:
+    #: **Bump this whenever the pricer's inputs or construction change.**
+    #: v2: quotes are screened by ``bonds.sanity`` before they can price.
+    CITIVELO_PRICER_CACHE_VERSION = "v2"
+
     def __init__(self, source: str = "USTS_FEDINVEST_WSJ_LIVE-QL", **kwargs: Any):
         MarketDataProvider.__init__(self, source, **kwargs)
         LayeredCacheMixin.__init__(self)
@@ -1198,9 +1212,12 @@ class FixedRateBondsMDP(MarketDataProvider[_GenericPricable], LayeredCacheMixin)
                 self._ensure_pricer_cache()
                 cache = getattr(self, self._FRB_PRICER_CACHE)
                 cache_stamp = (
-                    request.eod_date.isoformat()
-                    if request.mode == "eod"
-                    else request.wire_instant.isoformat()
+                    f"{self.CITIVELO_PRICER_CACHE_VERSION}-"
+                    + (
+                        request.eod_date.isoformat()
+                        if request.mode == "eod"
+                        else request.wire_instant.isoformat()
+                    )
                 )
 
             to_fetch: "OrderedDict[str, str]" = OrderedDict()
