@@ -438,6 +438,7 @@ denom = (units["long_notional"].abs() * units["dv01_long_unit"]).replace(0, np.n
 flows = units[["carry", "harvest", "mtm", "cross"]].sum(axis=1)
 
 harvest_bp = committed_bp = committed_shift_bp = 0.0
+entry_day_bp = post_exit_day_bp = 0.0
 for (e, x) in EPISODES:
     d = float(denom.loc[e:x][denom.loc[e:x] > 0].mean())
     if not np.isfinite(d) or d == 0:
@@ -445,9 +446,14 @@ for (e, x) in EPISODES:
     committed_bp += float(flows.loc[e:x].sum()) / d
     harvest_bp += float(units.loc[e:x, "harvest"].sum()) / d
     # the SAME aged panel package, window moved one day later: what the graded
-    # artifact would have printed under a t+1 fill.
+    # artifact would have printed under a t+1 fill. The shift does two separable
+    # things and they are worth different amounts, so both ends are kept apart:
+    # it DROPS the entry-dated flow (the move that generated the signal) and it
+    # ADDS the day after the exit (holding one day past the state).
     i0, i1 = _pos[e] + 1, min(len(_idx) - 1, _pos[x] + 1)
     committed_shift_bp += float(flows.iloc[i0:i1 + 1].sum()) / d
+    entry_day_bp += float(flows.loc[e]) / d
+    post_exit_day_bp += float(flows.iloc[i1]) / d if i1 > _pos[x] else 0.0
 
 GROSS_BP = {b: float(ENGINE[b]["equity_gross_usd"].diff().sum() / PKG_DV01)
             for b in ("A", "B")}
@@ -462,6 +468,8 @@ audit = {
     "engine_gross_bp_bookB_t_plus_1_fill": GROSS_BP["B"],
     "fill_day_cost_bp_engine": GROSS_BP["A"] - GROSS_BP["B"],
     "fill_day_cost_bp_committed_panel": committed_bp - committed_shift_bp,
+    "  of which entry_day_flow_dropped_bp": entry_day_bp,
+    "  of which post_exit_day_flow_added_bp": post_exit_day_bp,
     "resize_harvest_bp": harvest_bp,
     "aged_vs_fresh_and_dv01_residual_bp": committed_bp - harvest_bp - GROSS_BP["A"],
 }
@@ -578,14 +586,23 @@ print(json.dumps(verdict, indent=1))
 # book agrees in direction and size (+162.4 bp → −13.8 bp, `SELECTION-ARTIFACT`
 # → `DEAD`).
 #
-# Why the signal day is worth so much is not mysterious, and it is the same
-# thing two earlier ledger rows saw from other angles. The state is a
-# **carry-zero crossing** (`carry ≥ 0 AND gamma_25 > 0`), and carry crosses zero
-# on days the spread moves — so the flow dated at the entry is substantially
-# *the move that created the signal*. `L-0027` recorded the state "chattering at
-# the carry-zero boundary"; `L-0030` found occupancy-matched raw spread-z states
-# reproducing 137% of the grail state's ex-carry. This is the same fact with a
-# price on it.
+# The shift does **two separable** things, so the audit keeps them apart rather
+# than quoting only the net, and **both ends are material**:
+#
+# * dropping the entry-dated flow costs **+70.9 bp** — the move that generated
+#   the signal;
+# * adding the day after the exit costs a further **−45.6 bp** — one extra day
+#   held past the state is a large loss.
+#
+# That pairing is the finding. The state does not merely *begin* on a big
+# favourable day; it *ends* just before a big adverse one. Both boundaries are
+# timed on same-day information, and the graded book collects at one end and
+# steps aside at the other. This is what `L-0027` saw as the state "chattering
+# at the carry-zero boundary" and what `L-0030` measured when occupancy-matched
+# raw spread-z states reproduced 137% of the grail state's ex-carry: the state
+# is a spread-extreme bracket. Mechanically, `grail_flattener` is a **carry-zero
+# crossing** (`carry ≥ 0 AND gamma_25 > 0`) and carry crosses zero on days the
+# spread moves — in both directions.
 #
 # **The alternative reading, stated rather than buried:** a desk running this
 # framework prices the state intraday and can trade before the close, so a
