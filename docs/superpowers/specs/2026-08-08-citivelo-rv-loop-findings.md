@@ -1,16 +1,19 @@
 # Citi Velocity RV loop — findings
 
-**VERDICT (session 1, complete): NOTHING ALIVE — four registered hypotheses graded and killed,
-three families killed at gate, on validated 20-year multi-currency data with a measured cost
-line. H13 grail-conditional (17 arms, 3 currencies): DEAD — median +0.0bp, DSR 0.000
-everywhere, and its one placebo-certified claim was withdrawn by the rival check (raw spread-z
-reproduces 137% of the ex-carry). H16 z-fade: dead at gate (pond 0.5–1.8× a measured boat).
-H16b sandwich basis: DEAD — median −1.35bp, steamroller confirmed. H14-graded (Peter's
-manufactured package): every registered mechanism column CONFIRMED (+27.9bp net post-2017,
-93–97% gamma retention, belly received, risk-reducing) and still NOT ALIVE — the DSR wall at
-N = 3,910 is arithmetic no carry-class Sharpe clears. F1 surface-residual and F2 gamma IV/RV:
-dead at gate. The loop continues per L-0029's family-selection redirect; the machine, the
-ledger, the measured costs, and one repo-wide pricing fix are the session's durable output.**
+**VERDICT (session 1, complete): NOTHING ALIVE — every registered hypothesis graded and
+killed, three families killed at gate, on validated 20-year multi-currency data with a
+measured cost line, and the adversarial checker killed the maker's last positive claim.
+H13 grail-conditional (17 arms, 3 currencies): DEAD — median +0.0bp, DSR 0.000 everywhere;
+its placebo-certified wording was withdrawn by the rival check (raw spread-z reproduces 137%
+of the ex-carry). H16 z-fade: dead at gate. H16b sandwich basis: DEAD — median −1.35bp,
+steamroller confirmed. H14-graded (Peter's manufactured package): the "+9.9bp at 1×" headline
+was a CARRY DOUBLE-COUNT found by the checker (V-SV-14G-KILL) — corrected, the fly's net
+contribution is **−22.2bp full-sample at 1×** (negative at every multiplier), +14.1bp
+post-2017; what survives is the belly-received solve, genuine risk-reduction, and the
+roll-based gate counterfactuals. F1 and F2: dead at gate. Twelve-of-twelve one more time:
+every defect found this session flattered the maker, and the maker≠checker machinery caught
+them. The loop continues per L-0029; the machine, the ledger, the measured costs, and one
+repo-wide pricing fix are the session's durable output.**
 
 **Predecessors:** `2026-08-08-citivelo-rv-loop-design.md` (+ ledger
 `docs/superpowers/ledgers/2026-08-08-citivelo-rv-loop-ledger.jsonl` — the row-level record),
@@ -41,10 +44,14 @@ fill in grading order; the DSR trial count is quoted only in the final revision.
 - **The 20-year multi-currency data spine validated**: 2019/2023 published-table tie-outs
   (spreads to ~1bp; Γ matches Citi's, roll convention ~2× open), GS-overlap basis stable, the
   holiday-ghost defect found and filtered before grading.
-- **The PM's construction measured honestly**: the fly triples/doubles grail occupancy, covers
-  82% of the median bleed, retains 93–97% of the gamma with the belly received, and nets
-  +27.9bp post-2017 (~+2.9bp/yr) after per-leg maintenance — a real carry engine that still
-  cannot clear a DSR bar set at N≈3,900.
+- **The PM's construction measured, then corrected by the checker**: the roll-based gate
+  numbers stand (occupancy 18.6%→39.9%, 82% median-bleed coverage, belly received on 948/950
+  days, risk-reducing) — but the graded "+9.9bp net at 1×" was a carry double-count
+  (V-SV-14G-KILL); corrected, the fly is net −22.2bp full-sample and +14.1bp post-2017, the
+  gamma-retention figure is retracted as uncommitted, and the maintenance line was itself
+  understated by a dedup nondeterminism. The strongest surviving statement is direction-only:
+  the fly's post-2017 carry contribution is real and roughly half what the maker first
+  published.
 
 ## Machine (built 2026-08-08, session 1)
 
@@ -68,14 +75,14 @@ fill in grading order; the DSR trial count is quoted only in the final revision.
 | (c) GS-vs-Citi basis stability 2017–2026 | L-0009/L-0017 | **PASS** — spread basis median −0.2bp, rolling-median range 4.4bp |
 | Data integrity | L-0018 | holiday-ghost curves found (990 dup rows) → filter in all engines, panels rebuilt |
 | H15 aging | L-0013 | **NOT falsified** — pure-aging Γ retention 1.01–1.06× to 5y (curve-held-fixed) |
-| H14 carry-engine gate | L-0024 | **OPEN** — occupancy 18.6%→39.9% (2.1×) with the fly; covers 82% of median bleed; PCA-metric risk 0.19 residual |
+| H14 carry-engine gate | L-0024→V-SV-14/V-SV-14G-KILL | gate numbers stand; graded headline KILLED (carry double-count) — corrected fly net −22.2bp at 1× full-sample, +14.1bp post-2017 |
 | H13 occupancy | L-0016 (JPY), USD detector | USD pond exists (10–50% by pair); **JPY pure-flattener arm DEAD at gate (0–1.1%)** |
 | H16 z-fade basis pond | L-0019 | **THIN** (0.8–1.8× boat) — expected DEAD at grading |
 | H16b sandwich pond | L-0023→V-SV-16B | gate OPEN → graded **DEAD** (the wedge proxy did not translate) |
 | CM-1 measured swaption cost line | L-0022 | **DONE** — 0.17–0.71 annual bp ATM half-spread by expiry (upper bound), checker 3/3 |
 | F1 surface residual | L-0028 | **DEAD AT GATE** — tradeable cells coin-flip; "winners" are the extrapolated corner |
 | F2 gamma IV/RV | L-0032 | **DEAD AT GATE** — no conditioning signal; unconditional mean-zero with −95bp tails |
-| H14G mechanism columns | V-SV-14G/L-0031 | **CONFIRMED** (not ALIVE) — +27.9bp net 2017+, Γ retention 93–97%, belly received |
+| H14G mechanism columns | V-SV-14G-KILL | **KILLED by the checker** — carry double-count; corrected −22.2bp at 1×; Γ-retention figure retracted (uncommitted); belly-received + risk-reduction survive |
 | H13 rival check | L-0030 | spread-z reproduces 137% of grail ex-carry → mechanism wording withdrawn |
 | Checker calibration | L-0025 | **PASSED** — planted defect + unprompted fabrication both killed |
 | Merged-tree fast gate | L-0033 | **4,766 / 0 failed** (baseline 4,159/0) |
@@ -84,8 +91,11 @@ fill in grading order; the DSR trial count is quoted only in the final revision.
 
 - **H-SV-13** grail-conditional entries — **DEAD** (V-SV-13F: 17/17 arms, median +0.0bp,
   DSR 0.000; mechanism wording withdrawn per L-0030)
-- **H-SV-14G** manufactured-package hold — **mechanism CONFIRMED, NOT ALIVE** (V-SV-14G +
-  L-0031: fly net +9.9bp at 1× full-sample, +27.9bp post-2017; flips at 2× — stated)
+- **H-SV-14 / H-SV-14G** manufactured package — **DEAD; graded headline KILLED by the
+  checker** (V-SV-14G-KILL: the fly ledger double-counted carry; corrected net −22.2bp at 1×
+  full-sample, +14.1bp post-2017; maintenance understated by a dedup nondeterminism;
+  Γ-retention retracted as uncommitted; both registrations closed with terminal rows, the
+  dropped 2-7-29/5:1 reports stated in V-SV-14)
 - **H-SV-16** z-fade — **DEAD AT GATE** (V-SV-16, clean panel, measured boat; never backtested)
 - **H-SV-16B** sandwich basis — **DEAD** (V-SV-16B: median −1.35bp, steamroller −$0.7–1.2M)
 - **F-ING** EUR forward-strip residual screen — built + gated (L-0015); graded run BLOCKED on
