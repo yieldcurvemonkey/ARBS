@@ -43,6 +43,7 @@ import datetime
 import hashlib
 import inspect
 import threading
+import weakref
 from typing import Any
 
 import numpy as np
@@ -55,6 +56,7 @@ __all__ = [
     "fixed_rate",
     "fly",
     "rate_fixings_kwargs",
+    "reset_fixings_name_memo",
     "analytic_delta",
     "instrument_kwarg",
     "leg_cashflows",
@@ -199,6 +201,39 @@ _FIXINGS_LOCK = threading.RLock()
 _REGISTERED_FIXINGS: dict[str, str] = {}
 _FIXINGS_TRANSPORT: str | None = None
 
+#: ``id(series) -> (weakref, fingerprint, name)`` so the SAME series object does
+#: not get cleaned, hashed and looked up on every instrument construction.
+#:
+#: Deriving the identifier from the series' CONTENT is what makes one published
+#: history register once - but it also means paying for the content on every
+#: call: ``dropna().astype(float).sort_index()`` copies the series and the digest
+#: hashes it. Measured 2026-08-08 on a 5,445-row USD SOFR history, that is
+#: 0.235 ms per ``rate_fixings_kwargs``, and a timeseries builds an instrument
+#: per observation.
+#:
+#: Keyed on object identity, guarded three ways: a weakref (so a recycled ``id``
+#: cannot alias a dead entry), and a cheap fingerprint of length plus both
+#: endpoints (so a series appended to or reassigned at either end re-registers).
+#: A series mutated only in its INTERIOR, in place, keeping its length and both
+#: endpoints, would still hit - which no caller here does, and which the
+#: content-addressed name would in any case have already resolved for the
+#: unmutated content.
+_FIXINGS_NAME_MEMO: dict[int, tuple[Any, Any, str]] = {}
+
+
+def _fixings_fingerprint(series: pd.Series) -> Any:
+    try:
+        index = series.index
+        return (
+            len(series),
+            index[0],
+            index[-1],
+            float(series.iat[0]),
+            float(series.iat[-1]),
+        )
+    except Exception:  # noqa: BLE001 - an unusual series simply is not memoised
+        return None
+
 
 def _series_digest(series: pd.Series) -> str:
     index = pd.DatetimeIndex(series.index)
@@ -236,6 +271,18 @@ def _register_fixings(series: pd.Series) -> str | None:
     if add is None:
         return None
 
+    # Identity memo, checked before anything is copied or hashed. See
+    # _FIXINGS_NAME_MEMO for the guards and the one mutation it does not catch.
+    key = id(series)
+    fingerprint = _fixings_fingerprint(series)
+    if fingerprint is not None:
+        with _FIXINGS_LOCK:
+            memo = _FIXINGS_NAME_MEMO.get(key)
+        if memo is not None:
+            ref, cached_fingerprint, cached_name = memo
+            if ref() is series and cached_fingerprint == fingerprint:
+                return cached_name
+
     clean = _clean_fixings(series)
     if clean is None:
         return None
@@ -247,7 +294,22 @@ def _register_fixings(series: pd.Series) -> str | None:
             name = f"{_FIXINGS_NAME_PREFIX}{digest}"
             add(f"{name}{_FIXINGS_NAME_SUFFIX}", clean)
             _REGISTERED_FIXINGS[digest] = name
+        if fingerprint is not None:
+            try:
+                _FIXINGS_NAME_MEMO[key] = (
+                    weakref.ref(series, lambda _r, k=key: _FIXINGS_NAME_MEMO.pop(k, None)),
+                    fingerprint,
+                    name,
+                )
+            except TypeError:  # not weak-referenceable -> simply not memoised
+                pass
     return name
+
+
+def reset_fixings_name_memo() -> None:
+    """Drop the identity memo (not the content registry). For tests."""
+    with _FIXINGS_LOCK:
+        _FIXINGS_NAME_MEMO.clear()
 
 
 def _probe_front_month_rate(fixings_argument: Any) -> float:
