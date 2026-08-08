@@ -64,12 +64,19 @@ LOGGER = logging.getLogger("citivelo_swaption_ts_warm")
 #: assumed - see ``MDP/IRSwaptions/CITIVELO/cube_store.py``.
 FIRST_SMILE_DATE = dt.date(2020, 1, 24)
 
-#: A small, defensible default grid: the liquid expiry x tail corners plus one
-#: OTM strike each side, valued as normal vol and spot premium. 5 x 3 x 3 x 2 =
-#: 90 columns per date. Override with --shorthands / --strikes / --values.
-DEFAULT_SHORTHANDS = ("1Mx10Y", "3Mx10Y", "1Yx10Y", "1Yx2Y", "5Yx5Y")
+#: The default grid is deliberately SMALL, because the cost is per value and it
+#: is not small. Measured 2026-08-08 over 60 real days: 5.31 s/day for 4 values a
+#: day, i.e. ~1.33 s per value. Three shorthands x three strikes x one structure
+#: x two values = 18 values a day = ~24 s/day, so the 1,632 full-smile days are
+#: about 11 hours. A 90-column grid would be 55. Widen it deliberately with
+#: --shorthands / --strikes / --values / --structures; the run prints its own
+#: projection before it starts.
+DEFAULT_SHORTHANDS = ("3Mx10Y", "1Yx10Y", "5Yx5Y")
 DEFAULT_STRIKES = ("ATMF", "ATMF+25", "ATMF-25")
 DEFAULT_VALUES = ("NVOL", "SPOT_PREM")
+
+#: Seconds per value, measured. Only used to print a projection.
+MEASURED_SECONDS_PER_VALUE = 1.33
 
 
 class ExcelWasTouched(RuntimeError):
@@ -210,9 +217,18 @@ def cmd_warm(args) -> int:
         values=[s.strip() for s in args.values.split(",") if s.strip()],
         structures=[s.strip() for s in args.structures.split(",") if s.strip()],
     )
-    LOGGER.info(
-        "warming %d day(s) %s .. %s with %d quer(ies) (source=%s curve_source=%s)",
-        len(days), days[0], days[-1], len(queries), args.source, args.curve_source,
+    n_values = len(queries) * max(1, len([v for v in args.values.split(",") if v.strip()]))
+    projected_s = len(days) * n_values * MEASURED_SECONDS_PER_VALUE
+    LOGGER.warning(
+        "warming %d day(s) %s .. %s with %d quer(ies) x %d value(s) = %d value(s)/day "
+        "(source=%s curve_source=%s)",
+        len(days), days[0], days[-1], len(queries),
+        n_values // max(1, len(queries)), n_values, args.source, args.curve_source,
+    )
+    LOGGER.warning(
+        "projected ~%.1f h at the measured %.2f s/value. Narrow the grid if that is "
+        "not what you meant - the cost is per VALUE, not per day.",
+        projected_s / 3600.0, MEASURED_SECONDS_PER_VALUE,
     )
 
     perf_path = pathlib.Path(args.perf_log) if args.perf_log else None
@@ -226,17 +242,53 @@ def cmd_warm(args) -> int:
             fh.write(json.dumps({**event, "ts": dt.datetime.now().isoformat(timespec="seconds")}) + "\n")
 
     mdp = IRSwaptionMDP(source=args.source, curve_source=args.curve_source)
-    if args.verify_every != 1:
+
+    # PREFLIGHT, not per-chunk sampling. The node-ordering check costs ~240 s per
+    # DATE, not per request, so "verify one chunk in ten" still pays it for every
+    # date in that chunk - a 10-day chunk is 40 minutes. Verifying N dates once,
+    # up front, is one fixed cost for the whole run.
+    #
+    # Measured on one USD date, six values: verify=True 242.4 s, verify=False
+    # 7.3 s, and every value IDENTICAL to 0.0e+00. The check changes no number;
+    # it only detects. What this gives up is detecting a bad DAY (a crossed smile
+    # in one day's quotes). A bad CONSTRUCTION is systematic and the preflight
+    # catches it. --verify-dates 0 skips it; there is no "verify everything"
+    # option because at 240 s x 1,632 days it is 109 hours.
+    if args.verify_dates > 0:
+        preflight = days[: int(args.verify_dates)]
         LOGGER.warning(
-            "--verify-every %d: the CITIVELO cube's node-ordering check will run on "
-            "1 chunk in %d. Measured on one USD date: verify=True 242.4 s for the "
-            "first six values, verify=False 7.3 s, and all six values IDENTICAL to "
-            "0.0e+00 - the check changes no number, it only detects. What sampling "
-            "gives up is detecting a bad DAY (a crossed smile in one day's quotes); "
-            "a bad CONSTRUCTION is systematic and any verified chunk catches it. "
-            "Pass --verify-every 1 to check every date.",
-            args.verify_every, args.verify_every,
+            "preflight: verifying the cube's node ordering on %d date(s) (%s). "
+            "~240 s each; the rest of the run builds unverified, which is measured "
+            "to change no value.",
+            len(preflight), ", ".join(d.isoformat() for d in preflight),
         )
+        mdp._default_request_kwargs["verify"] = True
+        t0 = time.perf_counter()
+        from TB.IRSwaptionsTB import _build_row_for_query
+
+        for d in preflight:
+            try:
+                ctx = mdp.get_data(
+                    {"curve_name": args.curve_name, "timestamp": d, "ignore_cache": True}
+                )
+                # Building the context is NOT enough: the QuantLib cube - and so
+                # the ordering check - is built lazily on the first volatility()
+                # read, which happens when a STRIKE is resolved. A preflight that
+                # only builds the context finishes in 2 s and verifies nothing.
+                # Price one query to force it.
+                _build_row_for_query(ctx, queries[0], d)
+            except ExcelWasTouched:
+                raise
+            except Exception as exc:  # noqa: BLE001
+                LOGGER.error("preflight FAILED on %s: %s: %s", d, type(exc).__name__, exc)
+                perf({"event": "preflight_failed", "date": d.isoformat(),
+                      "error": f"{type(exc).__name__}: {exc}"})
+                return 4
+        LOGGER.warning("preflight OK in %.1f s", time.perf_counter() - t0)
+        perf({"event": "preflight_ok", "dates": len(preflight),
+              "seconds": round(time.perf_counter() - t0, 1)})
+    mdp._default_request_kwargs["verify"] = False
+
     started = time.time()
     total_rows = 0
     failed_chunks = 0
@@ -246,10 +298,6 @@ def cmd_warm(args) -> int:
     with IRSwaptionsTB(mdp, show_tqdm=args.progress) as tb:
         for i, chunk in enumerate(batches, start=1):
             t0 = time.perf_counter()
-            # Chunk 1 is always verified, so a systematically mis-built cube fails
-            # in the first minute rather than after the whole range.
-            verify = (i == 1) or (args.verify_every > 0 and (i - 1) % args.verify_every == 0)
-            mdp._default_request_kwargs["verify"] = bool(verify)
             try:
                 frame = tb.get_timeseries(
                     start=chunk[0], end=chunk[-1], queries=queries,
@@ -261,15 +309,14 @@ def cmd_warm(args) -> int:
                 total_rows += rows
                 elapsed = time.perf_counter() - t0
                 LOGGER.info(
-                    "chunk %d/%d  %s .. %s  %d day(s)  %d value(s)  %.1fs  (%.2fs/day)%s",
+                    "chunk %d/%d  %s .. %s  %d day(s)  %d value(s)  %.1fs  (%.2fs/day)",
                     i, len(batches), chunk[0], chunk[-1], len(chunk), rows,
-                    elapsed, elapsed / len(chunk), "  [verified]" if verify else "",
+                    elapsed, elapsed / len(chunk),
                 )
                 perf({
                     "event": "chunk", "index": i, "count": len(batches),
                     "start": chunk[0].isoformat(), "end": chunk[-1].isoformat(),
                     "days": len(chunk), "values": rows, "seconds": round(elapsed, 2),
-                    "verified": bool(verify),
                 })
             except ExcelWasTouched as exc:
                 LOGGER.error("STOPPING: %s", exc)
@@ -340,10 +387,12 @@ def build_parser() -> argparse.ArgumentParser:
     w.add_argument("--chunk-days", type=int, default=21)
     w.add_argument("--n-jobs", type=int, default=4)
     w.add_argument(
-        "--verify-every", type=int, default=10,
-        help="run the cube's node-ordering check on 1 chunk in N (chunk 1 always). "
-             "Measured: verify=True 242.4s vs verify=False 7.3s for the first six "
-             "values on a date, with every value IDENTICAL. 1 = check every chunk.",
+        "--verify-dates", type=int, default=1,
+        help="verify the cube's node ordering on the first N dates as a PREFLIGHT, "
+             "then build the rest unverified. The check costs ~240s per DATE and "
+             "changes no value (measured: 242.4s vs 7.3s for six values, identical "
+             "to 0.0e+00), so it is a construction check, not a pricing input. "
+             "0 skips it.",
     )
     w.add_argument("--shorthands", default=",".join(DEFAULT_SHORTHANDS))
     w.add_argument("--strikes", default=",".join(DEFAULT_STRIKES))
