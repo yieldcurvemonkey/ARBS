@@ -454,3 +454,133 @@ understated. The clause was written as a hope that a better execution line exist
 says the assumed line was already better than reality for this instrument. **F3 stays dead and the
 clause is closed by measurement rather than left open.** H16's linear leg is unmeasured for the
 same reason and its half of the clause remains open but unsupported.
+
+---
+
+# The checker's verdict (C-0001)
+
+**Verdict first: PASS / PASS-with-correction / KILL.** A fresh adversarial checker, calibrated on
+a planted defect first per the charter, took session 2's three load-bearing claims. It modified
+nothing in the repo, and its cold rerun of the H17 gate reproduced the committed parquet
+**byte-identically** (max abs diff 0.0).
+
+**Calibration passed.** Given a fabricated ALIVE memo, it found the planted defect precisely — the
+memo estimates `sd(SR)` over six near-**clone** configs, driving its own bar to 0.00041 so that any
+positive Sharpe passes, and it cites L-0057's design rule while skipping L-0057's own travelling
+caveat. It added four corroborating defects: the bar *ratio* conflated with the DSR; "daily"
+Sharpes quoted on a 41-**trade** book; a median of +14bp against a net of +58bp at *worse* costs;
+and six new configs registered without moving `N`.
+
+## Claim A — L-0057: PASS, with a required amendment
+
+Every asserted number reproduced: `k(22) = 1.942343`, `k(3905) = 3.624245` (the ledger's 3.622 is
+0.06% low), `sd = 0.275843` over −0.784227…+0.218662, bar `0.535781` / `0.999721`, and **max DSR
+over the 14 arms at n_trials=22 = 0.101281**. The equivalence `DSR>0.5 ⟺ sr > sd × k(N)` is
+**exact**, not approximate. It is robust to the Sharpe *unit* — rebuilt on daily series, 0 of 14
+arms clear under either convention.
+
+**It is not robust to the `sr_variance` source, and L-0057 failed to say so.** 62% of the
+dispersion comes from two arms (GBP 10Y10Y/20Y10Y −0.784, GBP 15Y10Y/25Y10Y −0.520). Excluding
+them: `sd` 0.2758 → **0.1033**, bar 0.536 → **0.201**, and USD 10Y5Y/15Y15Y reaches **DSR 0.5416 >
+0.5** at N=22. It remains a PASS because the registered family is unambiguous (V-SV-13 carries
+`trials_delta 17` for all 17 arms as one family; the house gate uses the whole grid's variance),
+because at today's N=37 even the narrowed source gives 0.4920, and because that arm has
+`biggest_trade_frac = 0.8997` — 90% of its net in one trade — failing charter 4 regardless.
+
+**The design rule is replaced.** As written, *"register few closely-related configs and require
+them all to work"* is a recipe for the calibration memo. It governs **selection only**, and must be
+paired with a **separate, pre-stated source for `sd(SR)` that is not the registered set** — because
+narrowing the registration drives `sd → 0` and the bar → 0. The deflation variance must come from a
+wider reference distribution named *before* the numbers, and every verdict must report its
+sensitivity to that choice. **A registration that does not name its sd source is not registered.**
+
+## Claim B — the H13 fill day: PASS, with an arithmetic correction
+
+The checker did not take the code reading on trust. It regressed the panel's `mtm` on the pair's
+constant-maturity spread change:
+
+| dating | corr | beta |
+|---|---:|---:|
+| `d(spread)` over **d−1 → d** | **−0.8516** | **−$96,022/bp** (the $100k package DV01, correct flattener sign) |
+| `d(spread)` over d → d+1 | +0.3236 | — |
+
+and confirmed `sv_citivelo_detector.py:51` builds the state from the **same** day's columns with no
+shift. So `state = grail.shift(1)` on a d−1→d-dated panel *is* a fill at the signal's own close.
+A **full re-book at `shift(2)`** — the actual strict `t+1` state — gives gross **+165.92bp**, net
+**−10.24bp** over the same 116 episodes.
+
+**Correction.** L-0051's −7.9bp mixed a *nominal* cost with an actual gross: 174.0 = 2 × 0.75 × 116
+assumes realised DV01 ≡ $100k, but the episodes average **$103,961** (range $70,119–$181,095), so
+true entry+exit is **171.46bp** and the arm's actual graded cost is **176.00bp**. Like-for-like the
+`t+1` net is **−9.85bp** (panel) or **−10.24bp** (full re-book). Same side of zero — a sharpening.
+
+The permutation also survives a tighter null: a circular-shift null preserving entry-day spacing
+exactly gives p **0.0008 / 0.0111** against the iid draw's 0.0006 / 0.0112.
+
+**New, unrecorded (L-0066).** The pair's daily CM **spread** change has **ac1 = −0.392** (ac2
++0.002, ac5 −0.013) while each **leg**'s daily change has ac1 −0.045 / −0.023. Pure one-day-
+reversing noise is −0.5, so ~**39% of the daily spread move is one-day-reversing relative-pricing
+noise in the Citi curve build**, not market — and that is what the graded book collects on its entry
+day. It strengthens the kill and it generalises: any daily-frequency RV signal read off differences
+of two points on this build inherits that noise floor.
+
+## Claim C — the H17 gate: KILL as stated. The verdict survives; two of three grounds do not
+
+**It is not a bug.** Every "is this death manufactured?" check cleared: units (`vol_bp` medians
+74.9 / 73.1 / 69.0 — annual normal bp, the same unit as `CM1_HALF`), grid coverage (all 9 marking
+expiries on **100.0%** of days), interpolation (the decisive 6M-1Y h=63 cell is interpolation-**free**
+and reproduces to 4dp with node lookups only), the non-overlapping construction, the direction rule,
+sample composition (no subsample above **+0.55×**), real elapsed time (ACT/365 dt moves cells by up
+to +0.72bp and flips one sign, but 0/15 still clear), and cold reproduction (bit-identical).
+
+**But the headline was quoted at one arbitrary cycle phase.** `run_cell` always started its
+non-overlapping grid at `i=0`, and H-V-17 pins no phase — so all 21 (or 63) phases are equally the
+pre-registered statistic.
+
+| | across-cell median | negative | best cell |
+|---|---:|---:|---:|
+| published (phase 0) | −0.289× | 12/15 | +0.371× |
+| **phase-median (all phases)** | **−0.097×** | **9/15** | **+0.165×** |
+
+Within-cell phase sd is 0.233 at h=21 and **0.640 at h=63**; 5Y 6M-1Y h=63 spans **−2.87× to
++1.15×** across phases on 41 cycles. **And the gate bar itself is phase-crossable**: in four of the
+six h=63 cells, 3–4 of 63 phases have median > 1× RT, and the registered bar is "median > 1× RT in
+at least one pair" — so under an equally-valid start date **H17 would have PASSED the gate and been
+graded**.
+
+**The self-test could not have caught this.** Both its surfaces are *frozen*, so the exit row equals
+the entry row and it is structurally blind to reading the aged marks off the wrong day — verified
+with a surgical mutant that returns **byte-identical +4.145403** on both. A **moving** surface
+detects it.
+
+**And the two grounds are not independent of the cost line.** Ground (1) is phase-stable (published
+0.734 vs phase-median 0.766, phase sd 0.079) — a real measurement — but `CM1_HALF` are recorded
+**upper bounds**, and ground (1) flips if true half-spreads are ≤ **0.766×** those bounds, i.e. 23%
+tighter. In the other direction the RT is *understated*: it charges the **entry** expiries'
+half-spreads for both sides while the legs unwind at their **aged, wider** expiries — true RT
+**1.05 vs the coded 0.92 (+14%)** on the 6M-1Y h=63 cells.
+
+**Corrected statement.** H17 is dead on **one** phase-stable ground — the frozen-surface carry is a
+median 0.766× of a cost line that is itself an admitted upper bound — plus a direction-correct but
+phase-noise-dominated realized measurement of −0.097×. Not "two independent grounds".
+
+## Both defects are fixed in the machine, not just the write-up
+
+`run_cell_ensemble` now reports the median over **all** phases plus the phase dispersion as the
+statistic of record; phase-0 survives only as a field labelled deprecated. A second self-test on a
+**moving** surface (level factor `f(t) = 1 + 0.25·sin(t/13)`, total variance kept linear in `T` so
+the interpolation stays exact) pins the time indexing to **<1e-9** on 3M-6M h21, 6M-1Y h63 and
+1Y-2Y h21. The repaired gate reproduces the checker's numbers exactly.
+
+## Why A is a PASS and C is a KILL when both are "an alternative convention crosses a bar"
+
+The discriminator is the **registration**, not the size of the effect. Claim A's alternative `sd`
+source is *barred* by the registration — V-SV-13 consumed all 17 arms as one family, and excluding
+GBP post-hoc is the manoeuvre L-0057's own caveat prohibits. Claim C's phase 0 is registered
+**nowhere**, so it has no privileged standing among 21 or 63 equally valid grids.
+
+## The tally
+
+Seven defects found in session 2 — the probe's error-payload hit, H13's fill day, H14's missing
+re-initiations, H16b's vintage mix, H17's phase artifact, H17's blind self-test, and L-0051's
+nominal-cost arithmetic. **All seven flattered the maker.** Session 1's tally was twelve of twelve.
