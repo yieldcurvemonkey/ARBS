@@ -23,12 +23,17 @@ S3_ARTIFACTS = [
     "f7_gate_increment.parquet", "f7_gate_verdict.json", "f7_qdb_verdict.json",
     "f8_composition_probe.json", "f8_composition_daily.parquet", "f8_gate.parquet",
     "f8_gate_increment.parquet", "f8_gate_verdict.json",
+    "cm3_roll_cells.parquet", "cm3_roll_verdict.json", "cm3_homogeneity.parquet",
+    "cm3_homogeneity.json", "cm4_pairs.parquet", "cm4_eta_verdict.json",
 ]
 S3_SCRIPTS = [
     "s3_sdr_diag.py", "s3_comp_check.py", "s3_ledger_open.py", "s3_register_f7.py",
     "s3_f7_package_extract.py", "s3_f7_amend_and_validate.py", "s3_f7_collision_check.py",
     "s3_f7_enrichment.py", "s3_f7_universe.py", "s3_f7_gate.py", "s3_verdict_f7.py",
     "s3_build_notebook.py", "s3_f8_composition_probe.py", "s3_f8_gate.py", "s3_verdict_f8.py",
+    "s3_cm3_roll_spread.py", "s3_cm3_homogeneity.py", "s3_record_cm3.py",
+    "s3_park_momentum.py", "s3_cm4_impact_exponent.py", "s3_record_cm4.py",
+    "s3_ledger_integrity.py",
 ]
 NOTEBOOK = _REPO / "notebooks" / "backtests" / "citivelo_rv" / "f7_flow_conditioned_qdb.ipynb"
 

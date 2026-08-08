@@ -904,6 +904,64 @@ L-0068's named next step — the impact exponent η by metaorder reconstruction 
 concavity correction — is unaffected and still open. CM-3 was a cheaper attempt at the same target
 and it did not land.
 
+## CM-4 — the impact exponent is measurable, and it is nearly flat
+
+CM-3 failed but handed this study its on-ramp: the only cells in this tape homogeneous enough to
+compare prints within are **one exact instrument (maturity *and* effective date) inside a single
+hour**. Design registered at L-0091 before any number existed, with three things pre-stated because
+each is a way the study could flatter itself — censoring (3.33% of notionals are capped, exactly
+where a power law is identified), reverse causality (large prints cluster in volatile hours), and
+that a failure to measure is a valid close.
+
+**211,027 consecutive print pairs in 7,230 homogeneous cells.** Within-cell slope of log|move| on
+log(size), cell means removed.
+
+| tenor | η (primary, uncapped) | η (cap-at-floor sensitivity) | z vs shuffle null | size p5–p95 |
+|---|---|---|---|---|
+| 2Y | 0.0885 | 0.1003 | 5.2 | $8mm – $357mm |
+| 5Y | 0.0313 | 0.0406 | 5.4 | $4mm – $200mm |
+| 10Y | 0.0833 | 0.0957 | 17.2 | $3mm – $120mm |
+| 30Y | 0.0908 | 0.0989 | 9.6 | $2mm – $53mm |
+| **pooled** | **0.0677** | 0.0785 | **20.0** | $3mm – $150mm |
+
+The sensitivity arm is higher exactly as predicted — recording a capped print at its floor understates
+its size and biases the exponent up — so the two arms **bracket η in roughly [0.03, 0.10]**.
+
+**Size matters, and the control says so.** The pre-registered shuffle null permutes sizes *within*
+each cell, holding ambient hourly volatility and cell composition fixed. It centres on zero
+everywhere (null means −0.0009 … +0.0005) and the measured exponent sits **5.2 to 25.0 standard
+deviations outside it**. The reverse-causality confound is handled by construction, because the fit
+is within-cell.
+
+**But 0.07 is not 0.5, and the honest reading is that it is a lower bound.** The square-root law would
+put η ≈ 0.5. Two readings this study cannot separate: (a) cleared USD OIS genuinely has a much flatter
+impact curve than equities, plausible for an RFQ/block market where dealers quote size-insensitive
+spreads for standard clips; or (b) **the estimate is diluted** — the dependent variable is the move
+between two consecutive prints, which contains the second print's impact *plus* all ambient rate
+movement over the intervening minutes, and when ambient dominates, log|move| becomes nearly
+independent of size and the slope is pulled toward zero. Dilution can only push η **down**, so
+0.03–0.10 is a **lower bound** and the square-root law is not refuted — it is unreachable with this
+identification, which needs a clean pre-print reference price the tape does not supply.
+
+### What it buys, and it is the useful part
+
+**Every backtest in this program charges a size-independent half-spread, and that assumption had
+never been checked.** CM-4 checks it over the size range these strategies would actually trade:
+
+> At η ≤ 0.10, a **fifty-fold** change in clip size moves impact by at most 50^0.10 ≈ **1.48×**, and
+> at the pooled 0.068 by **1.31×**. The flat cost line this program uses is a defensible
+> approximation across the observable range.
+
+That is a validation of an assumption sitting underneath fourteen verdicts, obtained from the tape
+rather than assumed. It does **not** license extrapolation above ~$350mm (2Y) or ~$50mm (30Y), where
+the data stops and the cap censors.
+
+This is an exponent, not a level, so it neither rescues nor damages CM-2's unclaimable level — L-0060
+stands and L-0089 is unchanged. L-0068 asked for η by **metaorder** reconstruction with a Naviglio
+concavity correction; what is delivered is the simpler per-print version on homogeneous cells, and
+the metaorder form — which needs prints grouped into parent orders, and therefore a counterparty or
+package identifier the public tape withholds — **remains open**.
+
 ## The tally
 
 Session 1: twelve defects, twelve flattered the maker. Session 2: seven, all seven flattered the
