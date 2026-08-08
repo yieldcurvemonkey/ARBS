@@ -89,15 +89,26 @@ def interp_vol(row: pd.Series, t_yrs: float) -> float:
     return float(np.sqrt(np.interp(t_yrs, ts, w) / t_yrs))
 
 
-def run_cell(panel: pd.DataFrame, e1: str, e2: str, h: int) -> dict:
-    """Non-overlapping cycles of the pre-registered rule for one cell."""
+def run_cell(panel: pd.DataFrame, e1: str, e2: str, h: int, phase: int = 0) -> dict:
+    """Non-overlapping cycles of the pre-registered rule for one cell.
+
+    ``phase`` is the offset at which the non-overlapping grid starts. **It is
+    not a free parameter and must not be chosen.** A checker killed this gate's
+    first published numbers for quoting phase 0 alone: the registration says
+    "NON-OVERLAPPING cycles only" and pins no phase, so all ``h`` phases are
+    equally the pre-registered statistic. Within-cell dispersion across phases
+    is large (sd 0.233 at h=21, 0.640 at h=63), and at h=63 three or four of the
+    63 phases cross the gate bar in four cells — i.e. the published OUTCOME was
+    not invariant to an unregistered construction choice. ``run_cell_ensemble``
+    below is the statistic of record; this function exists to serve it.
+    """
     dates = list(panel.index)
     t1, t2 = EXP_YRS[e1], EXP_YRS[e2]
     dt = h / BD_YEAR
     if t1 - dt < MIN_AGED_YRS:
         return {"n_cycles": 0, "skipped": "horizon ages the front leg off the quoted grid"}
     gross, dirs, expected = [], [], []
-    i = 0
+    i = phase
     while i + h < len(dates):
         d0, d1 = dates[i], dates[i + h]
         r0, r1 = panel.loc[d0], panel.loc[d1]
@@ -143,6 +154,33 @@ def run_cell(panel: pd.DataFrame, e1: str, e2: str, h: int) -> dict:
     }
 
 
+def run_cell_ensemble(panel: pd.DataFrame, e1: str, e2: str, h: int) -> dict:
+    """The construction-invariant statistic: median over ALL h cycle phases.
+
+    Reports the phase dispersion alongside, because a point estimate whose
+    phase sd is 0.640x RT carries almost no information and must not be quoted
+    to three decimals as though it did.
+    """
+    runs = [run_cell(panel, e1, e2, h, phase=p) for p in range(h)]
+    ok = [r for r in runs if r.get("n_cycles", 0) >= 5]
+    if not ok:
+        return runs[0] if runs else {"n_cycles": 0}
+    med = np.array([r["median_over_rt"] for r in ok])
+    exp = np.array([r["expected_carry_over_rt"] for r in ok])
+    base = dict(ok[0])
+    base.update({
+        "n_phases": len(ok),
+        "phase_median_over_rt": float(np.median(med)),
+        "phase_sd_over_rt": float(med.std(ddof=1)) if len(med) > 1 else 0.0,
+        "phase_min_over_rt": float(med.min()),
+        "phase_max_over_rt": float(med.max()),
+        "n_phases_clearing_rt": int((med > 1.0).mean() * len(med)),
+        "phase_median_expected_carry_over_rt": float(np.median(exp)),
+        "phase_sd_expected_carry_over_rt": float(exp.std(ddof=1)) if len(exp) > 1 else 0.0,
+    })
+    return base
+
+
 def self_test() -> None:
     """Planted-value test — the thing L-0042(c) records the F-gates as lacking.
 
@@ -179,9 +217,50 @@ def self_test() -> None:
     assert abs(r["mean_gross_bp"] - expected) < 1e-6, \
         f"frozen sloped surface: expected {expected:+.6f}, got {r['mean_gross_bp']:+.6f}"
     assert r["sd_gross_bp"] < 1e-9, "a frozen surface cannot produce dispersion"
-    print(f"SELF-TEST PASS: flat surface pays 0.000; frozen sloped surface pays "
+    print(f"SELF-TEST 1/2 PASS: flat surface pays 0.000; frozen sloped surface pays "
           f"{expected:+.4f} bp/cycle and the gate agrees to 1e-6 "
           f"(slides {slide1:+.4f} / {slide2:+.4f})")
+
+    # ---- the test the first version was MISSING -------------------------
+    # Both surfaces above are FROZEN, so the exit-day row equals the entry-day
+    # row and the test is structurally blind to reading the aged marks off the
+    # WRONG DAY. A checker demonstrated this with a surgical mutant (aged marks
+    # read off the entry day): it returns byte-identical +4.145403 on BOTH
+    # frozen surfaces. A MOVING surface is required to pin the time indexing.
+    #
+    # Total variance stays linear in T at every t (so the interpolation remains
+    # exact and the closed form below is not an approximation); only the LEVEL
+    # moves, by a factor f(t) applied to vol.
+    def f(t: int) -> float:
+        return 1.0 + 0.25 * np.sin(t / 13.0)
+
+    moving = pd.DataFrame(
+        np.outer([f(t) for t in range(len(dates))], curve), index=dates, columns=ts)
+    for pair, hh in (("3M", 21), ("6M", 63), ("1Y", 21)):
+        e_lo, e_hi = ("3M", "6M") if pair == "3M" else (
+            ("6M", "1Y") if pair == "6M" else ("1Y", "2Y"))
+        tl, th = EXP_YRS[e_lo], EXP_YRS[e_hi]
+        d = hh / BD_YEAR
+        want = []
+        i = 0
+        while i + hh < len(dates):
+            f0, f1 = f(i), f(i + hh)
+            # slides are frozen-surface (day-i) quantities -> direction is
+            # unchanged by a pure level factor, so it is the frozen sign
+            s_lo = f0 * (v(tl - d) - v(tl))
+            s_hi = f0 * (v(th - d) - v(th))
+            pnl_hi = f1 * v(th - d) - f0 * v(th)
+            pnl_lo = f1 * v(tl - d) - f0 * v(tl)
+            want.append((pnl_hi - pnl_lo) if s_hi > s_lo else (pnl_lo - pnl_hi))
+            i += hh
+        got = run_cell(moving, e_lo, e_hi, hh)
+        err = abs(got["mean_gross_bp"] - float(np.mean(want)))
+        assert err < 1e-9, (
+            f"moving surface {e_lo}-{e_hi} h={hh}: closed form "
+            f"{np.mean(want):+.8f} vs gate {got['mean_gross_bp']:+.8f} (err {err:.2e})")
+    print("SELF-TEST 2/2 PASS: on a MOVING surface the gate reproduces the closed "
+          "form to <1e-9 on 3M-6M h21, 6M-1Y h63 and 1Y-2Y h21 — which pins the "
+          "time indexing the frozen tests cannot see.")
 
 
 def main() -> None:
@@ -192,7 +271,7 @@ def main() -> None:
         print(f"{tail}: {panel.shape[0]} days, expiries {list(panel.columns)}", flush=True)
         for e1, e2 in PAIRS:
             for h in HORIZONS:
-                r = run_cell(panel, e1, e2, h)
+                r = run_cell_ensemble(panel, e1, e2, h)
                 r.update({"tail": tail, "pair": f"{e1}-{e2}", "h": h})
                 rows.append(r)
                 if r.get("n_cycles", 0) >= 5:
@@ -202,6 +281,10 @@ def main() -> None:
                           f"({r['mean_over_rt']:+.2f}x)  SR {r['per_cycle_sharpe']:+.3f} "
                           f"skew {r['skew']:+.2f} worst {r['worst_cycle_bp']:+.2f} "
                           f"long-back {r['frac_long_back']:.0%} | "
+                          f"PHASE-MEDIAN {r['phase_median_over_rt']:+.2f}x "
+                          f"(sd {r['phase_sd_over_rt']:.2f}, range "
+                          f"{r['phase_min_over_rt']:+.2f}..{r['phase_max_over_rt']:+.2f}, "
+                          f"{r['n_phases_clearing_rt']}/{r['n_phases']} phases clear 1x) | "
                           f"frozen-surface carry {r['median_expected_carry_bp']:+.3f} "
                           f"({r['expected_carry_over_rt']:+.2f}x RT)", flush=True)
                 else:
@@ -212,14 +295,23 @@ def main() -> None:
     verdict = {
         "hypothesis": "H-V-17 ATM vol term-structure roll-down carry",
         "n_cells": int(len(ok)),
-        "best_median_over_rt": float(ok["median_over_rt"].max()),
-        "median_across_cells_of_median_over_rt": float(ok["median_over_rt"].median()),
-        "n_cells_median_above_rt": int((ok["median_over_rt"] > 1.0).sum()),
+        "PHASE-INVARIANT (statistic of record)": {
+            "best_cell_phase_median_over_rt": float(ok["phase_median_over_rt"].max()),
+            "median_across_cells": float(ok["phase_median_over_rt"].median()),
+            "n_cells_above_rt": int((ok["phase_median_over_rt"] > 1.0).sum()),
+            "n_cells_negative": int((ok["phase_median_over_rt"] < 0).sum()),
+            "max_within_cell_phase_sd": float(ok["phase_sd_over_rt"].max()),
+        },
+        "phase0_only_DEPRECATED_see_V-V-17B": {
+            "best_median_over_rt": float(ok["median_over_rt"].max()),
+            "median_across_cells": float(ok["median_over_rt"].median()),
+            "n_cells_above_rt": int((ok["median_over_rt"] > 1.0).sum()),
+        },
         "n_cells_mean_above_rt": int((ok["mean_over_rt"] > 1.0).sum()),
         "gate_bar": "median realized gross per cycle > 1x RT in at least one pair",
         "median_expected_carry_over_rt": float(ok["expected_carry_over_rt"].median()),
         "n_cells_expected_carry_above_rt": int((ok["expected_carry_over_rt"] > 1.0).sum()),
-        "gate_pass": bool((ok["median_over_rt"] > 1.0).any()),
+        "gate_pass": bool((ok["phase_median_over_rt"] > 1.0).any()),
     }
     (DATA / "v17_termstructure_gate.json").write_text(json.dumps(verdict, indent=1))
     print("\n" + json.dumps(verdict, indent=1))
