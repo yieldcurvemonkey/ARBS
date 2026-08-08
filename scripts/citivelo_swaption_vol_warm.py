@@ -189,6 +189,7 @@ def build(
     max_days: Optional[int] = None,
     freq: str = "DAILY",
     atm_fallback: bool = True,
+    push_l2: bool = False,
 ) -> int:
     """Assemble one cube per observation date from the CACHE. No Excel, no network."""
     from Caching.swaption_cube_store import SwaptionCubeStore, asset_for
@@ -201,6 +202,19 @@ def build(
 
     cache = CitiVeloTagCache()
     tag_map = _tags_for(currency, list(DEFAULT_OFFSETS_BP))
+
+    # L2 is opt-in and read at CALL time, so this flag works even though nothing
+    # set an env var before the first Caching import - which is exactly what made
+    # citivelo_excel_warm.py's --push-l2 a dead flag for its whole life.
+    if push_l2:
+        from Caching.l2_policy import SWAPTION_CUBE_L2_ENV
+
+        _logger.warning(
+            "--push-l2: each written cube is also pushed to %s. For a bulk backfill "
+            "prefer scripts/citivelo_l2_sync.py --families cube, which diffs by "
+            "content. (%s is not required when the flag is passed.)",
+            "arbs_swaption_cube_blocks_v1", SWAPTION_CUBE_L2_ENV,
+        )
 
     # Read every cached tag once; a date is buildable when its row is complete
     # enough for cube_from_quotes(strict=False) to keep a rectangle.
@@ -278,7 +292,10 @@ def build(
             _logger.info("build: %s unbuildable (%s: %s)", as_of, type(last_exc).__name__, last_exc)
             failed += 1
             continue
-        store.write_day(asset, as_of, cube, citi_index=citi_index, overwrite=overwrite)
+        store.write_day(
+            asset, as_of, cube, citi_index=citi_index, overwrite=overwrite,
+            push_l2=True if push_l2 else None,
+        )
         written += 1
         if written % 100 == 0:
             _logger.warning("build: %d written, %d skipped, %d unbuildable", written, skipped, failed)
@@ -326,6 +343,14 @@ def main() -> int:
     parser.add_argument("--overwrite", action="store_true")
     parser.add_argument("--max-days", type=int, default=None)
     parser.add_argument(
+        "--push-l2",
+        action="store_true",
+        help="also push each written cube to the Supabase L2 tier "
+             "(arbs_swaption_cube_blocks_v1). Off by default: the tier is opt-in, "
+             "because get_database_url() resolves PRODUCTION credentials when "
+             "nothing is configured.",
+    )
+    parser.add_argument(
         "--no-atm-fallback",
         action="store_true",
         help="do not fall back to an ATM-only cube on days with no full-smile rectangle",
@@ -351,6 +376,7 @@ def main() -> int:
             overwrite=args.overwrite,
             max_days=args.max_days,
             atm_fallback=not args.no_atm_fallback,
+            push_l2=args.push_l2,
         )
     return status(currency=args.currency)
 

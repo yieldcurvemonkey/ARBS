@@ -81,6 +81,34 @@ DEFAULT_POLL_SECONDS = 60.0
 #: persisted all afternoon.
 _STALL_WARN_POLLS = 10
 
+#: What ``push_l2`` may be. See :class:`CitiVeloStreamDaemon`.
+_L2_MODES = ("off", "rows", "day")
+
+
+def _normalise_l2_mode(value: Any) -> str:
+    """``push_l2`` accepts a bool for compatibility and a string for precision.
+
+    ``True`` maps to ``"rows"``, not to the old whole-day-blob-per-poll
+    behaviour: that is a change of meaning, and a deliberate one. The old
+    behaviour is still reachable as ``"day"`` and is documented as a footgun.
+    """
+    if value is None:
+        return "off"
+    # Accept the ints and empty string that the previous ``bool(push_l2)``
+    # coerced silently. Raising on ``push_l2=0`` would be a regression dressed up
+    # as strictness: 0 unambiguously meant off and 1 unambiguously meant on.
+    if isinstance(value, bool) or isinstance(value, int):
+        return "rows" if value else "off"
+    token = str(value).strip().lower()
+    if token == "":
+        return "off"
+    if token in _L2_MODES:
+        return token
+    raise ValueError(
+        f"push_l2={value!r} is not a recognised mode. Use one of {_L2_MODES}, "
+        "or a bool (False -> 'off', True -> 'rows')."
+    )
+
 
 @dataclass
 class StreamCurve:
@@ -146,9 +174,24 @@ class CitiVeloStreamDaemon:
     store
         A ``Caching.curve_store.CurveStore``. Built on first write when omitted.
     push_l2
-        Push each written day to Supabase. **Off by default**: a per-minute
-        daemon writing a whole-day blob to a remote database every tick is a lot
-        of traffic for something the local parquet already answers.
+        What, if anything, to publish to Supabase. **Off by default.**
+
+        ``False`` / ``"off"``
+            local parquet only.
+        ``True`` / ``"rows"``
+            upsert ONE row per poll into ``arbs_curve_snapshots_v1`` via
+            ``SupabaseCurveSync.upsert_snapshot_row``, and push the day blob once
+            at :meth:`flush_l2` (shutdown or day rollover). This is the pattern
+            ``scripts/eris_live_curve_service.py`` already uses for a per-minute
+            feed, and it is what ``True`` now means.
+        ``"day"``
+            the OLD meaning: a whole-day blob per poll. Kept only so an existing
+            caller is not silently re-pointed, and it is a footgun.
+            ``CurveStore.write_day`` re-INSERTs the entire day's BYTEA on every
+            call, so the traffic grows quadratically through the session - the
+            ERIS design doc measures ~88 MB re-pushed per minute by end of day at
+            18k nodes. At 44 nodes it is smaller, but it is still the same shape
+            of mistake: the row tier answers the same question for one row.
     """
 
     def __init__(
@@ -170,7 +213,12 @@ class CitiVeloStreamDaemon:
         self._store = store
         self._poll_seconds = float(poll_seconds)
         self._min_tenors = int(min_tenors)
-        self._push_l2 = bool(push_l2)
+        self._l2_mode = _normalise_l2_mode(push_l2)
+        #: kept for the old attribute name; True for either publishing mode.
+        self._push_l2 = self._l2_mode != "off"
+        self._sync: Any = None
+        self._l2_rows = 0
+        self._l2_row_failures = 0
         self._persist = bool(persist)
         self._on_result = on_result
         self._build_kwargs = dict(build_kwargs or {})
@@ -394,13 +442,107 @@ class CitiVeloStreamDaemon:
         # content-addressed, so a rewrite that changes nothing costs nothing; and
         # keeping the day in memory means a restart re-reads rather than
         # truncating what is already on disk.
+        # Day rollover. Without this the "shutdown or day rollover" the docstring
+        # promises is only shutdown, and a daemon that runs across midnight -
+        # which is the normal case for the Asian curves, whose session straddles
+        # two ET dates - never publishes the earlier day's blob at all.
+        if reference_date not in curve.day_snapshots and curve.day_snapshots:
+            self._flush_days(curve, [d for d in curve.day_snapshots if d != reference_date])
+
         bucket = curve.day_snapshots.setdefault(reference_date, [])
         if not bucket:
             bucket.extend(self._existing_day(curve, reference_date))
         bucket.append(snapshot)
+        # The blob goes to L2 per poll ONLY under the legacy "day" mode. In
+        # "rows" mode write_day stays local and the tick is published as one
+        # indexed row; the day blob is pushed once by flush_l2().
         self.store().write_day(
-            curve.asset, reference_date, bucket, overwrite=True, push_l2=self._push_l2
+            curve.asset,
+            reference_date,
+            bucket,
+            overwrite=True,
+            push_l2=(self._l2_mode == "day"),
         )
+        if self._l2_mode == "rows":
+            self._upsert_row(curve, snapshot)
+
+    def _curve_sync(self) -> Any:
+        """The L2 sync, built once. ``None`` when unavailable, never raising."""
+        if self._sync is None:
+            try:
+                from Caching.supabase_curve_sync import SupabaseCurveSync
+
+                self._sync = SupabaseCurveSync.from_defaults()
+            except Exception as exc:  # noqa: BLE001 - a daemon must not die on this
+                _logger.warning(
+                    "citivelo_excel stream: no Supabase sync (%s); ticks stay local.", exc
+                )
+                self._sync = False
+        return self._sync or None
+
+    def _upsert_row(self, curve: StreamCurve, snapshot: Any) -> None:
+        """One indexed row per tick — the pattern eris_live_curve_service uses.
+
+        A failure here is logged and dropped: the local parquet already has the
+        tick, and a daemon that dies because a pooler blinked is worse than one
+        that skips a row.
+        """
+        sync = self._curve_sync()
+        if sync is None:
+            return
+        try:
+            if sync.upsert_snapshot_row(snapshot, curve.asset):
+                self._l2_rows += 1
+            else:
+                self._l2_row_failures += 1
+        except Exception as exc:  # noqa: BLE001
+            self._l2_row_failures += 1
+            if self._l2_row_failures in (1, 10, 100):
+                _logger.warning(
+                    "citivelo_excel stream: L2 row upsert failed for %s (%s). "
+                    "%d failure(s) so far; the local parquet is unaffected.",
+                    curve.asset, exc, self._l2_row_failures,
+                )
+
+    def _flush_days(self, curve: StreamCurve, days: Sequence[datetime.date]) -> int:
+        """Push one curve's day blobs. Returns how many landed. Never raises."""
+        if self._l2_mode != "rows":
+            return 0
+        sync = self._curve_sync()
+        if sync is None:
+            return 0
+        pushed = 0
+        for day in days:
+            try:
+                if sync.push_day(curve.asset, day):
+                    pushed += 1
+            except Exception as exc:  # noqa: BLE001 - a daemon must not die on this
+                _logger.warning(
+                    "citivelo_excel stream: L2 day push failed for %s %s (%s)",
+                    curve.asset, day, exc,
+                )
+        return pushed
+
+    def flush_l2(self) -> Dict[str, int]:
+        """Push each accumulated day's blob to L2 once. Safe to call repeatedly.
+
+        This is the whole-day push that "rows" mode defers, so a restart or a
+        reader that wants the day as one parquet gets it - without paying for it
+        on every one of the day's several hundred polls.
+        """
+        if self._l2_mode != "rows":
+            return {"days": 0, "rows": self._l2_rows}
+        sync = self._curve_sync()
+        if sync is None:
+            return {"days": 0, "rows": self._l2_rows}
+        pushed = 0
+        for curve in self.curves.values():
+            pushed += self._flush_days(curve, list(curve.day_snapshots))
+        _logger.info(
+            "citivelo_excel stream: flushed %d day blob(s) to L2 (%d row(s) upserted, "
+            "%d row failure(s))", pushed, self._l2_rows, self._l2_row_failures,
+        )
+        return {"days": pushed, "rows": self._l2_rows, "row_failures": self._l2_row_failures}
 
     def _existing_day(self, curve: StreamCurve, day: datetime.date) -> List[Any]:
         """Snapshots already on disk for this day, so a restart appends."""
@@ -475,6 +617,14 @@ class CitiVeloStreamDaemon:
                 time.sleep(max(0.0, self._poll_seconds - (time.monotonic() - cycle)))
         except KeyboardInterrupt:
             _logger.info("citivelo_excel stream: interrupted; the workbook is left in place.")
+        finally:
+            # Deferred day blobs land here, including after Ctrl-C. Without the
+            # finally, "rows" mode would leave the day blob unpublished on the
+            # one exit path that actually happens.
+            try:
+                self.flush_l2()
+            except Exception as exc:  # noqa: BLE001 - teardown must not raise
+                _logger.warning("citivelo_excel stream: L2 flush failed (%s)", exc)
         return {
             "started": started.isoformat(),
             "polls": polls,
