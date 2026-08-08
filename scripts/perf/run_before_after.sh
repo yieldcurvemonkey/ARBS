@@ -24,10 +24,11 @@ run() {
       --bench "$bench" -n "$n" 2>&1 | grep -E "^\[|^ {4}" )
 }
 
-for bench in components single bulk pricing timeseries eod; do
+# The machine is shared, so BEFORE and AFTER are interleaved per bench rather
+# than run as two blocks: under variable load it is the ratio that survives.
+for bench in single bulk pricing timeseries eod; do
   case "$bench" in
     timeseries) n=841 ;;
-    components) n=100 ;;
     *)          n=200 ;;
   esac
   run "BEFORE" "$REF"  "$bench" "$n"
@@ -35,7 +36,12 @@ for bench in components single bulk pricing timeseries eod; do
 done
 
 echo
-echo "--- AFTER only: what the batch and the reader cost now"
+echo "--- diagnosis: the raw store API, unchanged on both sides"
+run "BEFORE" "$REF" "components" 100
+
+echo
+echo "--- AFTER only: the new path's stages, and what else was measured"
+run "AFTER " "$PERF" "components_cached" 200
 run "AFTER " "$PERF" "read_strategy" 60
 run "AFTER " "$PERF" "swaptions" 40
 

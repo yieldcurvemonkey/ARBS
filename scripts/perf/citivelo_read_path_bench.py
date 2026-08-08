@@ -212,6 +212,84 @@ def bench_timeseries(n: int = 841) -> None:
             shutil.rmtree(path, ignore_errors=True)
 
 
+def bench_components_cached(n: int = 200) -> None:
+    """Per-stage cost of the NEW minute path (day-window cache + fixings memo).
+
+    Only runs on a tree that has ``CITIVELO_EXCEL/day_cache.py``; the
+    ``components`` bench above measures the raw store API and is the same on
+    both sides, which is what makes it the diagnosis rather than the result.
+    """
+    import zoneinfo
+
+    from Caching.curve_store import CurveStore
+    from MDP.IRSwaps.CITIVELO_EXCEL import register
+    from MDP.IRSwaps.CITIVELO_EXCEL.curve_names import (
+        citi_index_for_curve_name,
+        entry_for_curve_name,
+    )
+    from MDP.IRSwaps.CITIVELO_EXCEL.day_cache import day_cache_stats, day_window
+    from MDP.IRSwaps.CITIVELO_EXCEL.fixings import fixings_for
+    from MDP.IRSwaps.CITIVELO_EXCEL.timestamps import from_wire_naive, resolve_request
+    from Query.IRSwaps.backends.rateslib.RLIRSwapCurve import RLIRSwapCurve
+
+    register()
+    store = CurveStore.default()
+    asset = f"{CURVE}-CITIVELOEXCELMIN"
+    entry = entry_for_curve_name(CURVE)
+    citi_index = citi_index_for_curve_name(CURVE)
+    local_zone = zoneinfo.ZoneInfo(entry.local_timezone)
+    pts = _minutes(DAY, n)
+
+    fixings_for(CURVE, citi_index, reference_date=DAY)
+    day_window(store, asset, tuple(DAY + datetime.timedelta(days=o) for o in (0, -1, 1)))
+
+    acc: dict[str, float] = {}
+
+    def timed(name: str, fn):
+        t0 = time.perf_counter()
+        r = fn()
+        acc[name] = acc.get(name, 0.0) + (time.perf_counter() - t0)
+        return r
+
+    for t in pts:
+        resolved = timed("resolve_request", lambda: resolve_request(t))
+        wanted = timed("from_wire_naive", lambda: from_wire_naive(resolved.wire_instant))
+        local_date = wanted.astimezone(local_zone).date()
+        window = timed(
+            "day_window",
+            lambda: day_window(
+                store, asset, tuple(local_date + datetime.timedelta(days=o) for o in (0, -1, 1))
+            ),
+        )
+        position = timed(
+            "argmin",
+            lambda: int(
+                (window.stamps - pd.Timestamp(wanted).tz_convert("UTC")).abs().values.argmin()
+            ),
+        )
+        row = timed("iloc", lambda: window.frame.iloc[[position]])
+        curves = timed(
+            "reconstruct", lambda: store.reconstruct_curves_batch(row, cfg=None, max_workers=1)
+        )
+        handle = next(iter(curves.values()))
+        actual = window.stamps.iloc[position].to_pydatetime()
+        ref = actual.astimezone(local_zone).date()
+        res = timed("fixings_for", lambda: fixings_for(CURVE, citi_index, reference_date=ref))
+        timed(
+            "wrap",
+            lambda: RLIRSwapCurve(
+                rl_curve_id=CURVE, rl_curve_handle=handle,
+                fixings=res.series, meta_data={"timestamp": actual},
+            ),
+        )
+
+    total = sum(acc.values())
+    print(f"\n[components-cached] {n} points, {total:.3f}s total ({1000 * total / n:.2f} ms/obs)")
+    for k, v in sorted(acc.items(), key=lambda kv: -kv[1]):
+        print(f"    {k:20s} {1000 * v / n:8.3f} ms/obs   {100 * v / total:5.1f}%")
+    print(f"    day cache: {day_cache_stats()}")
+
+
 def _eod_days(n: int) -> list[datetime.date]:
     from Caching.curve_store import CurveStore
     from MDP.IRSwaps.CITIVELO_EXCEL.warm import asset_for
@@ -314,6 +392,7 @@ BENCHES = {
     "single": bench_single_point,
     "bulk": bench_bulk,
     "components": bench_components,
+    "components_cached": bench_components_cached,
     "pricing": bench_pricing,
     "timeseries": bench_timeseries,
     "eod": bench_eod,
