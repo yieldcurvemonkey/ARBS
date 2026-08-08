@@ -561,13 +561,17 @@ class IRSwaptionMDP(LayeredCacheMixin, MarketDataProvider[IRSwaptionMarketContex
                 # the FIXINGS lookup inside the store read
                 # (IRSwapsMDP._load_citivelo_excel_curve_store_point ->
                 # CITIVELO_EXCEL.fixings.fixings_for -> citi_fixings -> the
-                # cached-then-live quotes layer), and for USD_SOFR there is no
-                # publisher-direct fallback in CITIVELO_EXCEL.official_sources.
+                # cached-then-live quotes layer).
+                #
+                # citi_fixings degrades to the cache rather than raising, so
+                # reaching here means something ELSE in the build wanted Excel -
+                # do not go warming the fixing tags, they already are.
                 hint = (
-                    " The curve itself is warmed; it is the published overnight FIXINGS that "
-                    "went looking for the add-in. Sign in to Velocity, or warm the fixing tags "
-                    "into the CitiVeloTagCache, or use a curve_source that does not depend on "
-                    "them (e.g. 'ERIS_EOD_LIVE-RL_BASIC')."
+                    " The curve itself is warmed. The published overnight FIXINGS no longer "
+                    "raise when the add-in is out (they fall back to the CitiVeloTagCache), so "
+                    "a sign-in error arriving here comes from another leg of the build. Sign in "
+                    "to Velocity, or use a curve_source that does not depend on it "
+                    "(e.g. 'ERIS_EOD_LIVE-RL_BASIC')."
                 )
             raise RuntimeError(
                 f"Failed to fetch IR swap curves for '{curve_name}' from curve_source="
