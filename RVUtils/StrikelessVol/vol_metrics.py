@@ -57,7 +57,10 @@ __all__ = [
     "realized_quote",
     "be_over_realized",
     "be_over_implied",
+    "carry_over_spread_vol",
 ]
+
+_SQRT_252 = 252.0 ** 0.5
 
 #: What a vol series was computed on. Stamped on every series these builders
 #: return, and REQUIRED by :func:`be_over_realized`, because the two series are
@@ -223,6 +226,40 @@ def be_over_realized(be_bp_day: pd.Series, rv_bp_day: pd.Series, *,
             "function will not guess which."
         )
     return _ratio(be_bp_day, rv_bp_day)
+
+
+def carry_over_spread_vol(carry_bp_yr: pd.Series, sv_bp_day: pd.Series) -> pd.Series:
+    """Task 25 Column A — the LINEAR carry ratio: annual roll ÷ annualized spread vol.
+
+    ``carry_bp_yr`` is the package's roll in bp of spread per year (flattener
+    sign); the denominator is the SPREAD vol (Task 13: ~95.6% of package daily
+    variance is first-order slope, so the linear column prices the component
+    that dominates the variance). Dimensionless — a Sharpe-of-carry with zero
+    expected-reversion term.
+
+    **Mirror image of :func:`be_over_realized`'s guard**: Column B's breakeven
+    is a PARALLEL-move quantity and refuses a spread vol; Column A prices the
+    slope exposure and REFUSES anything but a spread-labelled denominator. The
+    two columns answering different questions with lookalike bp/day series is
+    exactly how the sv study's largest error happened; the guards make each
+    column's denominator non-interchangeable at the call site.
+
+    Column A is a companion diagnostic and an H12 test object, NOT a trading
+    rule (addendum Task 25) — Signal 1 remains Column B.
+    """
+    label = (getattr(sv_bp_day, "attrs", None) or {}).get(_UNDERLYING_KEY)
+    if label != UNDERLYING_SPREAD:
+        raise ValueError(
+            f"carry_over_spread_vol's denominator is labelled {label!r}; it must "
+            "be the SPREAD vol from vol_metrics.spread_vol_bp_day(spread_bp). "
+            "Column A prices the slope exposure that dominates package variance; "
+            "a rate vol (or an unlabelled hand-rolled series) under it answers a "
+            "different question — the exact denominator swap the Column-B guard "
+            "exists for, in the other direction."
+        )
+    out = _ratio(pd.Series(carry_bp_yr).astype(float), pd.Series(sv_bp_day).astype(float) * _SQRT_252)
+    out.attrs.update({"measure": "carry_ratio", _UNDERLYING_KEY: UNDERLYING_SPREAD})
+    return out
 
 
 def as_implied_vol(iv_bp_day: pd.Series, *, window: str = "atm") -> pd.Series:
