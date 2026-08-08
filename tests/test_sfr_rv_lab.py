@@ -36,7 +36,11 @@ from RVUtils.SFRRVLab import (
     verdict,
     vertical_digital,
 )
-from RVUtils.SFRRVLab.stats import grid_distribution, neighbourhood_stability
+from RVUtils.SFRRVLab.stats import (
+    deflated_for_grid,
+    grid_distribution,
+    neighbourhood_stability,
+)
 
 DATES = pd.bdate_range("2026-01-01", periods=10)
 
@@ -505,6 +509,43 @@ def test_grid_distribution_summarises_the_sweep():
     assert d["median"] == pytest.approx(-0.25)
     assert d["pct_positive"] == pytest.approx(0.5)
     assert d["best"] == pytest.approx(3.0)
+
+
+def test_deflated_for_grid_default_path_is_unchanged_by_the_n_trials_option():
+    """The override is opt-in: the two-argument form every existing caller uses
+    must be bit-identical to declaring the count it already implies."""
+    rng = np.random.default_rng(0)
+    daily = pd.Series(rng.normal(0.05, 1.0, 500))
+    res = pd.DataFrame({"sharpe": np.linspace(0.1, 1.2, 12),
+                        "total_net_bp": np.linspace(-3.0, 8.0, 12)})
+    implicit = deflated_for_grid(daily, res)
+    explicit = deflated_for_grid(daily, res, n_trials=len(res))
+    assert implicit.keys() == explicit.keys()
+    for k in implicit:
+        assert implicit[k] == pytest.approx(explicit[k]), k
+    assert implicit["n_trials"] == 12
+
+
+def test_deflated_for_grid_deflates_harder_on_a_larger_declared_count():
+    rng = np.random.default_rng(1)
+    daily = pd.Series(rng.normal(0.05, 1.0, 500))
+    res = pd.DataFrame({"sharpe": np.linspace(0.1, 1.2, 12),
+                        "total_net_bp": np.linspace(-3.0, 8.0, 12)})
+    small = deflated_for_grid(daily, res)
+    large = deflated_for_grid(daily, res, n_trials=2916)
+    assert large["n_trials"] == 2916
+    assert large["dsr_prob"] < small["dsr_prob"]
+
+
+def test_deflated_for_grid_rejects_a_count_below_the_sweep_it_was_given():
+    """The deflation cannot be smaller than the search shown. Covered here
+    rather than only through a caller: StrikelessVol's `league_table` raises
+    first with its own message, so this guard had no test of its own."""
+    daily = pd.Series(np.random.default_rng(2).normal(0.05, 1.0, 500))
+    res = pd.DataFrame({"sharpe": np.linspace(0.1, 1.2, 12),
+                        "total_net_bp": np.linspace(-3.0, 8.0, 12)})
+    with pytest.raises(ValueError, match="below the 12 configs"):
+        deflated_for_grid(daily, res, n_trials=5)
 
 
 def test_neighbourhood_stability_moves_one_param_at_a_time():
