@@ -80,6 +80,17 @@ def _segment_unit_ledgers(market: str, seg_days: list) -> dict:
     curve_map = mdp.bulk_get_data(
         {"curve_name": CITIVELO_MARKET_CURVES[market], "timestamps": seg_days, "offline": True}
     )
+    # Holiday-ghost filter (see sv_citivelo_screen_parallel): drop curves whose
+    # resolved reference date is not the requested day.
+    def _ok(ts, c):
+        if c is None:
+            return False
+        ref = c.reference_date()
+        ref_d = ref.date() if hasattr(ref, "date") else ref
+        ts_d = ts.date() if hasattr(ts, "date") else ts
+        return ref_d == ts_d
+
+    curve_map = {ts: c for ts, c in curve_map.items() if _ok(ts, c)}
     out = {}
     for pair in citivelo_pairs([market]):
         try:

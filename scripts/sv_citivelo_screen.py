@@ -60,6 +60,12 @@ def run_market(market: str, start: datetime.date, end: datetime.date) -> pathlib
             if curve is None:
                 dropped += 1
                 continue
+            ref = curve.reference_date()
+            ref_d = ref.date() if hasattr(ref, "date") else ref
+            ts_d = ts.date() if hasattr(ts, "date") else ts
+            if ref_d != ts_d:  # holiday ghost — see the parallel runner's note
+                dropped += 1
+                continue
             for pair in pairs:
                 try:
                     g = compute_greeks(curve, pair)

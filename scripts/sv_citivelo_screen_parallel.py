@@ -47,6 +47,16 @@ def _price_chunk(market: str, days: list) -> list:
         curve = curve_map[ts]
         if curve is None:
             continue
+        # Holiday-ghost filter: some stored days (Good Friday etc.) carry
+        # London-stamped data whose curve resolves to the PRIOR US session's
+        # reference date — two different curves under one label (990 duplicate
+        # rows measured on the first USD run, all value-DIFFERING). Keep only
+        # curves whose reference date is the day requested.
+        ref = curve.reference_date()
+        ref_d = ref.date() if hasattr(ref, "date") else ref
+        ts_d = ts.date() if hasattr(ts, "date") else ts
+        if ref_d != ts_d:
+            continue
         for pair in pairs:
             try:
                 g = compute_greeks(curve, pair)

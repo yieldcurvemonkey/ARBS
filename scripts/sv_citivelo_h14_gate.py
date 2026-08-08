@@ -78,6 +78,9 @@ def main() -> None:
             curve = cm.get(d)
             if curve is None:
                 continue
+            ref = curve.reference_date()
+            if (ref.date() if hasattr(ref, "date") else ref) != d:
+                continue  # holiday ghost (see sv_citivelo_screen_parallel)
             try:
                 hist = par.loc[:pd.Timestamp(d)].tail(PCA_WIN)
                 model, _ = fit_curve_pca_from_timeseries(hist)
