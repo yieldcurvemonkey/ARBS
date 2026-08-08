@@ -161,10 +161,12 @@ memos:
 
 ### 2.5 `bulk_get_data` gets a CITIVELO branch — `IRSwapsMDP`
 
-Before this, `citivelo_excel` fell through to the generic per-point loop and was
-**slower than calling `get_data` in a Python for-loop yourself** (141 vs 16
-ms/curve on a warmed EOD history) — the worst possible property for a method
-whose name promises the opposite.
+Before this, `citivelo_excel` fell through to the generic per-point loop, which
+is literally a `for t in timestamps: self.get_data(...)`. Measured on the
+intraday path before any of these changes: **30.09 ms/obs batched against 29.92
+ms/obs one at a time** — a batch method that did nothing at all. (The brief
+reports it as actively *slower* on EOD history, 141 vs 16 ms/curve; that
+comparison was not re-run here.)
 
 The branch groups requests by mode, reads each session's window once, runs the
 nearest-snapshot search per request against the shared window, reconstructs the

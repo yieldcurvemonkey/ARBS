@@ -356,6 +356,8 @@ def compare(ref: Path, new: Path) -> int:
         print(f"FAIL frames:\n{exc}")
         _explain_frame_diff(a, b)
 
+    _per_column_report(a, b)
+
     for name in ("curves.json", "fixings.json"):
         ja = json.loads((ref / name).read_text())
         jb = json.loads((new / name).read_text())
@@ -370,6 +372,56 @@ def compare(ref: Path, new: Path) -> int:
             print(f"OK  {name}: {len(keys)} entries identical")
 
     return failures
+
+
+def _ulps(x: np.ndarray, y: np.ndarray) -> np.ndarray:
+    """Distance in representable doubles. 0 means bit-identical."""
+    xi = x.view("int64").copy()
+    yi = y.view("int64").copy()
+    # map the sign-magnitude layout onto a monotone integer line
+    xi[xi < 0] = np.int64(-(2**63)) - xi[xi < 0]
+    yi[yi < 0] = np.int64(-(2**63)) - yi[yi < 0]
+    return np.abs(xi - yi)
+
+
+def _per_column_report(a: pd.DataFrame, b: pd.DataFrame) -> None:
+    """Per-column: how many values moved, and by how many representable doubles.
+
+    A pass/fail on the whole frame says nothing about WHICH quantity moved. The
+    claim being made is specific - every reported rate is bit-identical - and
+    that claim is only checkable per column.
+    """
+    if list(a.columns) != list(b.columns) or len(a) != len(b):
+        print("  (shape differs; per-column report skipped)")
+        return
+
+    identical, moved = [], []
+    for col in a.columns:
+        if a[col].dtype.kind != "f":
+            if not a[col].equals(b[col]):
+                moved.append((col, len(a), float("nan"), float("nan")))
+            else:
+                identical.append(col)
+            continue
+        x = a[col].to_numpy(dtype="float64")
+        y = b[col].to_numpy(dtype="float64")
+        both = ~(np.isnan(x) | np.isnan(y))
+        if not (np.isnan(x) == np.isnan(y)).all():
+            moved.append((col, -1, float("nan"), float("nan")))
+            continue
+        diff = x[both] != y[both]
+        if not diff.any():
+            identical.append(col)
+            continue
+        u = _ulps(x[both][diff], y[both][diff])
+        rel = np.abs((y[both][diff] - x[both][diff]) / np.where(x[both][diff] == 0, 1, x[both][diff]))
+        moved.append((col, int(diff.sum()), int(u.max()), float(rel.max())))
+
+    print(f"\n  per-column: {len(identical)} identical, {len(moved)} moved")
+    for col in identical:
+        print(f"    IDENTICAL  {col}")
+    for col, n, max_ulp, max_rel in moved:
+        print(f"    MOVED      {col}: {n} values, max {max_ulp} ulp, max rel {max_rel:.3e}")
 
 
 def _explain_frame_diff(a: pd.DataFrame, b: pd.DataFrame) -> None:

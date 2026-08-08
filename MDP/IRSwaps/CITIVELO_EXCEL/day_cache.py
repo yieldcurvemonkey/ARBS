@@ -64,14 +64,17 @@ __all__ = [
     "day_cache_stats",
 ]
 
-#: Windows retained. One entry is a whole trading day's frame - ~1,300 rows of
-#: 45-node curves, roughly 1.5 MB - so this is a bounded tens-of-MB cache, sized
-#: for a backfill that walks days in order and a dashboard that revisits a few.
-_MAX_ENTRIES = 24
+#: Windows retained. Measured 2026-08-08, one warmed minute session
+#: (``USD-SOFR-1D-CITIVELOEXCELMIN``, 2026-07-22) is 1,226 rows of 45-node
+#: curves and pickles to 0.67 MB, so a three-day window is ~2 MB. Eight windows
+#: plus twenty-four day frames is therefore ~32 MB - enough for a backfill that
+#: walks days in order and a dashboard that revisits a few, and small enough that
+#: nobody has to think about it.
+_MAX_ENTRIES = 8
 
 #: Individual day frames retained under the windows. Larger than _MAX_ENTRIES
 #: because each window holds up to three of them and adjacent windows overlap.
-_MAX_DAY_FRAMES = 64
+_MAX_DAY_FRAMES = 24
 
 _LOCK = threading.RLock()
 _CACHE: "OrderedDict[Tuple[str, str, Tuple[datetime.date, ...]], DayWindow]" = OrderedDict()
