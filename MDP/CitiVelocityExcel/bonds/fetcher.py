@@ -29,7 +29,7 @@ Only what Citi actually serves is asked for
 -------------------------------------------
 Coverage is per bond and uneven - ``PRICE`` for 2,105 of 2,162 ISINs,
 ``ASW_4_USD`` for 1,081, and ``CAS`` for 381 of which exactly one is American
-(``US3133EPSW68``, an FFCB agency; no US Treasury serves it) - and it is read
+(304 of the 349 US Treasuries serve it, re-measured over five years) - and it is read
 from the committed validation harvest through
 :attr:`~MDP.CitiVelocityExcel.bonds.resolution.BondResolution.available_values`.
 A value a bond does not serve is reported as ``unavailable`` and its tag is
@@ -118,6 +118,7 @@ __all__ = [
     "CITI_QUOTE_PREFIX",
     "COMPUTED_FRB_VALUES",
     "DEFAULT_BOND_VALUES",
+    "INTRADAY_BOND_VALUES",
     "DEFAULT_MAX_PRICE_LAG",
     "BondQuoteTransportError",
     "CitiBondQuote",
@@ -146,24 +147,37 @@ class BondQuoteTransportError(CitiVelocityError):
 #: PRICE 2,105/349, YIELD 2,103/349, DURATION 2,097/349, SPREAD_TSY 1,803/349,
 #: DV01 1,656/305, ASW_4_USD 1,081/253, ASW_4_AUD 1,120/348.
 #:
-#: Two values that look like they belong here are deliberately out:
+#: The INTRADAY set, and why these seven:
 #:
-#: ``OAS`` (1,401 of 2,162; 304 of 349 US Treasuries) is **window-dependent** -
-#: measured empty over one week and full over five years - and the default EOD
-#: lookback is 21 days. Fetching it by default spends a column per bond on
-#: something the default window cannot answer, which is the exact cost this module
-#: exists to avoid. Ask for it explicitly, with a lookback to match:
-#: ``citivelo_values=[..., "OAS"], eod_lookback=timedelta(days=1825)``.
+#: ``OAS`` is out of it because it is **window-dependent** - measured empty over
+#: one week and full over five years - and an intraday lookback is days, not
+#: years. Fetching it intraday spends a tag per bond on something the window
+#: cannot answer. It IS in the EOD default, where the lookback can reach it.
 #:
-#: ``ASW_4_JPY`` (324 of 2,162; 56 of 349) is the rarest value Citi publishes.
-#: ``ASW_4_AUD`` replaces it: 348 of the 349 US Treasuries carry it, against 253
-#: for ``ASW_4_USD`` and 56 for JPY. ``FRB_ASW_SPREAD`` still defaults to the USD
-#: leg, because that is the bond's own currency and the AUD leg is a CROSS-currency
-#: asset swap - a different quantity, now merely reachable without a refetch.
+#: The old rationale here was falsified and is worth recording rather than
+#: quietly deleting: it claimed ``ASW_4_JPY`` (324 of 2,162; 56 of 349) was "the
+#: rarest value Citi publishes" and that ``ASW_4_AUD`` covered 348 against 253 for
+#: ``ASW_4_USD``. Re-measured over five years against Citi's own field dictionary,
+#: **all six ``ASW_4_<CCY>`` legs serve 349/349 US Treasuries** - the spread in
+#: those counts was an artefact of a ONE-WEEK probe window, not a property of the
+#: data. ``FRB_ASW_SPREAD`` still defaults to the USD leg because that is the
+#: bond's own currency; the others are CROSS-currency asset swaps, a different
+#: quantity, and all are reachable without a refetch.
 #:
-#: ``CAS`` and the remaining ``ASW_4_<CCY>`` legs are addressable and real
-#: elsewhere (measured ``CND1000113G9.CAS`` = 43.4983); no US Treasury serves CAS.
-DEFAULT_BOND_VALUES: Tuple[str, ...] = (
+#: What an EOD request asks for when the caller does not say: the WHOLE measured
+#: vocabulary. That is affordable and the intraday default is not, and the gap is
+#: measured rather than assumed - EOD costs about +1 MB of Excel per 52 tags over
+#: five years, while intraday costs ~0.15-1.7 MB per tag depending on transport.
+#: Asking for all 46 at EOD is therefore near-free, and it means a caller who
+#: asks for FRB_CARRY_6M gets a number instead of "you did not request it".
+DEFAULT_BOND_VALUES: Tuple[str, ...] = tuple(T.BOND_VALUES)
+
+#: What an INTRADAY request asks for. Deliberately narrow: at ~1.7 MB per tag on
+#: the windowed transport, the full vocabulary across 349 bonds is ~3.9 GB against
+#: a 3,800 MB ceiling in a process only a human restart shrinks. These seven are
+#: the ones an intraday caller actually watches; pass values=[...] for more when
+#: someone is watching the memory.
+INTRADAY_BOND_VALUES: Tuple[str, ...] = (
     "PRICE",
     "YIELD",
     "DURATION",
@@ -500,6 +514,7 @@ class CitiVeloBondFetcher:
                     f"client() or reaches Excel from a path documented as offline. Pass one "
                     f"or the other, not both."
                 )
+        self._values_are_default = values is None
         self._values = tuple(values) if values is not None else DEFAULT_BOND_VALUES
         self._window = window
         intraday = intraday_lookback or _LOOKBACK["intraday"]
@@ -630,11 +645,15 @@ class CitiVeloBondFetcher:
         statement and is reported rather than dropped - and a bond whose values
         FAILED on the transport is a third statement again, on ``quote.failed``.
         """
+        request = resolve_request(timestamp, strict=strict_tz)
+        if values is None and self._values_are_default:
+            # Mode-dependent default. Resolved FIRST so the choice is made on the
+            # decided mode rather than on the shape of the timestamp argument.
+            values = (INTRADAY_BOND_VALUES if request.mode in ("intraday", "live")
+                      else DEFAULT_BOND_VALUES)
         plan = self.plan(resolutions, values=values)
         if not plan:
             return {}
-
-        request = resolve_request(timestamp, strict=strict_tz)
         freq = _FREQ[request.mode]
         start, end = self._window_bounds(request)
 

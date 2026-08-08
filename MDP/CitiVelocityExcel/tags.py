@@ -151,24 +151,128 @@ SWAP_SPREAD_LIQUID_TENORS: Tuple[str, ...] = (
     "30Y",
 )
 
-#: The per-bond timeseries value vocabulary, established by probing rather than
-#: taken from the desk's 43-entry measure catalogue. Every ``REFERENCE_DATA``
-#: field in that catalogue is rejected as a tag, and ``DOLLAR_DURATION`` is
-#: really ``DV01``.
+#: The per-bond timeseries value vocabulary, MEASURED 2026-08-08 by probing
+#: Citi's OWN field dictionary (118 label->tag pairs) against this tag path,
+#: across ten country/asset-type universes over a five-year window.
+#:
+#: **46 values serve. Two earlier answers were badly wrong, in different ways.**
+#:
+#: The first probe reported EIGHT. It ran ``validate_with_controls`` at its
+#: default ``period="1W"`` against a SINGLE US Treasury, so "no rows in one week"
+#: was recorded as "does not exist" - which is how ``ZSPREAD``, ``ASW``, ``CAS``
+#: and ``ASW_4_EUR/GBP/CHF`` were all lost.
+#:
+#: The second attempt widened the window and the bond set and found sixteen. It
+#: was still bounded by GUESSED candidate names, and guessing does not produce
+#: ``PRICING_ACCRUED``, ``OISSMM_RFR`` or ``ROLLCARRY.6M``. The whole carry/roll
+#: family, the OIS-spread family, the yield-yield-spread family and the RFR
+#: variants of ASW/CAS/OAS were invisible to it. A single US Treasury serves
+#: **44** of these.
+#:
+#: Universes serving each, out of ten sampled:
+#:   ASSNP_RFR          10/10  ASSNP vs RFR
+#:   ASW_RFR            10/10  ASW vs RFR
+#:   CARRY.1M           10/10  Carry 1M
+#:   CARRY.1Y           10/10  Carry 1Y
+#:   CARRY.3M           10/10  Carry 3M
+#:   CARRY.6M           10/10  Carry 6M
+#:   DURATION           10/10  Modified Duration
+#:   DV01               10/10  DV01
+#:   OAS                10/10  OAS
+#:   PRICE              10/10  Price
+#:   PRICING_ACCRUED    10/10  Accrued Interest
+#:   PRICING_CV01       10/10  CV01
+#:   YIELD              10/10  Yield
+#:   CAS                 9/10  CAS to swap curve
+#:   CAS_RFR             9/10  Coupon Adjusted Spread vs RFR
+#:   OISSMM_RFR          9/10  OISSMM vs RFR
+#:   OISS_RFR            9/10  OISS vs RFR
+#:   YYS                 9/10  YYS
+#:   YYS_RFR             9/10  YYS vs RFR
+#:   ZSPREAD             9/10  Z-Spread to Worst
+#:   ASW                 8/10  ASW
+#:   ASWNP               8/10  ASWNP
+#:   OAS_RFR             8/10  OAS vs RFR
+#:   OISS                8/10  OISS
+#:   OISSMM              8/10  OISSMM
+#:   ROLL.1M             8/10  Roll 1M
+#:   ROLL.1Y             8/10  Roll 1Y
+#:   ROLL.3M             8/10  Roll 3M
+#:   ROLL.6M             8/10  Roll 6M
+#:   SPREAD_TSY          8/10  G-Spread
+#:   ROLLCARRY.1M        7/10  Roll and Carry 1M
+#:   ROLLCARRY.1Y        7/10  Roll and Carry 1Y
+#:   ROLLCARRY.3M        7/10  Roll and Carry 3M
+#:   ROLLCARRY.6M        7/10  Roll and Carry 6M
+#:   ASW_4_CHF           6/10  Asset Swap Spread, CHF, Quarterly
+#:   ASW_4_EUR           6/10  Asset Swap Spread, EUR, Quarterly
+#:   ASW_4_GBP           6/10  Asset Swap Spread, GBP, Quarterly
+#:   ASW_4_USD           6/10  Asset Swap Spread, USD, Quarterly
+#:   ASW_4_AUD           5/10  Asset Swap Spread, AUD, Quarterly
+#:   ASW_4_JPY           5/10  Asset Swap Spread, JPY, Quarterly
+#:   OISS_SOFR           2/10  OISS vs SOFR
+#:   ASS_SOFR            1/10  Asset Swap Spread vs SOFR
+#:   CAS_SOFR            1/10  Coupon Adjusted Spread vs SOFR
+#:   SIMPLEYIELD         1/10  Simple Yield
+#:   YIELD_WORST         1/10  Yield to Worst
+#:   YYS_SOFR            1/10  Yield Yield Spread vs SOFR
+#:
+#: NOT addressable on this path (56 of the dictionary's tags), and the pattern is
+#: informative: the iBoxx, TRACE, CDS-basis, short-interest and equity-vol fields
+#: belong to a CREDIT screen, not to ``RATES.BOND``. Also absent are the whole
+#: ``SPREAD_BENCH.*`` family, ``ASW_C_*``, ``ASW_4_LCL``, ``PV01_CALL/MAT``,
+#: ``DOLLAR_DURATION``, ``CONVEXITY``, ``ZSPREAD_CALL/MAT``, ``YIELD_MAT`` and
+#: ``YIELD_NEXT`` - so "Citi has a field for it" does not mean this tag serves it.
+#:
+#: Citi's own labels resolve two things this repo had to measure the hard way:
+#: ``DURATION`` is "Modified Duration", and ``SPREAD_TSY`` is "G-Spread".
 BOND_VALUES: Tuple[str, ...] = (
-    "PRICE",
-    "YIELD",
-    "SPREAD_TSY",
-    "OAS",
+    "ASSNP_RFR",
+    "ASW_RFR",
+    "CARRY.1M",
+    "CARRY.1Y",
+    "CARRY.3M",
+    "CARRY.6M",
     "DURATION",
     "DV01",
+    "OAS",
+    "PRICE",
+    "PRICING_ACCRUED",
+    "PRICING_CV01",
+    "YIELD",
     "CAS",
-    "ASW_4_USD",
+    "CAS_RFR",
+    "OISSMM_RFR",
+    "OISS_RFR",
+    "YYS",
+    "YYS_RFR",
+    "ZSPREAD",
+    "ASW",
+    "ASWNP",
+    "OAS_RFR",
+    "OISS",
+    "OISSMM",
+    "ROLL.1M",
+    "ROLL.1Y",
+    "ROLL.3M",
+    "ROLL.6M",
+    "SPREAD_TSY",
+    "ROLLCARRY.1M",
+    "ROLLCARRY.1Y",
+    "ROLLCARRY.3M",
+    "ROLLCARRY.6M",
+    "ASW_4_CHF",
     "ASW_4_EUR",
     "ASW_4_GBP",
-    "ASW_4_CHF",
-    "ASW_4_JPY",
+    "ASW_4_USD",
     "ASW_4_AUD",
+    "ASW_4_JPY",
+    "OISS_SOFR",
+    "ASS_SOFR",
+    "CAS_SOFR",
+    "SIMPLEYIELD",
+    "YIELD_WORST",
+    "YYS_SOFR",
 )
 
 #: What ``CVCURVEBOND`` accepts as the ``<MEASURE>`` segment. This is a DIFFERENT

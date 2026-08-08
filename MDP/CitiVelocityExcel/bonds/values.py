@@ -1,37 +1,49 @@
 r"""What Citi serves for a bond, what this repo calls it, and which one you got.
 
-Citi Velocity publishes **thirteen** values per bond. That is not a guess: it is
-the result of exhaustive ``CVTSHIST`` probing over the whole 2,162-ISIN universe,
-committed as ``catalog/bond_tags_validated.json`` and ``bond_tags_validated2.json``
-(16,288 validated tags in total). Coverage is per-bond and very uneven - the
-counts below were re-derived from those two files:
+Citi Velocity publishes **46** values per bond on this tag path. That number took
+three passes and the first two were wrong, in ways worth keeping:
 
-======================  ==============  ========  ==================
-Citi value              ISINs serving   of 2,162  of the 349 US GOVT
-======================  ==============  ========  ==================
-``PRICE``                       2,105     97.4%                  349
-``YIELD``                       2,103     97.3%                  349
-``DURATION``                    2,097     97.0%                  349
-``SPREAD_TSY``                  1,803     83.4%                  349
-``DV01``                        1,656     76.6%                  305
-``OAS``                         1,401     64.8%                  304
-``ASW_4_AUD``                   1,120     51.8%                  348
-``ASW_4_GBP``                   1,110     51.3%                    0
-``ASW_4_USD``                   1,081     50.0%                  253
-``ASW_4_CHF``                     689     31.9%                    0
-``ASW_4_EUR``                     418     19.3%                    0
-``CAS``                           381     17.6%                    0
-``ASW_4_JPY``                     324     15.0%                   56
-======================  ==============  ========  ==================
+* **8** — the inherited answer. ``validate_with_controls`` defaults to
+  ``period="1W"`` and the original probe used that default against a SINGLE US
+  Treasury, so "no rows in one week" was recorded as "does not exist". That is how
+  ``ZSPREAD``, ``ASW``, ``CAS`` and ``ASW_4_EUR/GBP/CHF`` were all lost, and why
+  this module used to state "``CAS`` serves no US Treasury" when 304 of 349 do.
+* **16** — after widening to five years and ten country/asset-type universes.
+  Better, and still bounded by GUESSED candidate names.
+* **46** — after probing Citi's OWN 118-field dictionary against this path
+  (2026-08-08). A single US Treasury serves **44**. Guesswork could never have
+  produced ``PRICING_ACCRUED``, ``OISSMM_RFR`` or ``ROLLCARRY.6M``; whole families
+  were invisible to it — carry/roll, the OIS-spread family, yield-yield spread,
+  and every RFR variant of ASW/CAS/OAS.
 
-The last column is why the default value set is chosen against the US universe
-rather than against the whole one: ``ASW_4_AUD`` is the leg almost every US
-Treasury carries and ``ASW_4_JPY`` is the rarest value Citi publishes at all.
+Per-universe coverage lives in ``catalog/bond_values_official_sweep.json`` and the
+authoritative list is :data:`MDP.CitiVelocityExcel.tags.BOND_VALUES`, which this
+module reads rather than restating — a hand-copied table here was false in every
+row within a day.
 
-``CAS`` serves 381 ISINs (measured ``CND1000113G9`` = 43.4983, ``KR10350172C8`` =
-44.2101) but **no US Treasury**: exactly one US ISIN in the universe carries it,
-``US3133EPSW68`` (FFCB 4.5 08/14/2026, asset type AGENCY). Addressable, never
-assumed present.
+**56 of Citi's dictionary tags return nothing on this path**, and the pattern is
+informative: the iBoxx, TRACE, CDS-basis, short-interest and equity-vol fields
+belong to a CREDIT screen, not to ``RATES.BOND``. So "Citi has a field for it"
+does not mean this tag serves it. Also absent: the whole ``SPREAD_BENCH.*``
+family, ``ASW_C_*`` (coupon-frequency ASW, against the ``ASW_4_*`` quarterly ones
+that do serve), ``PV01_CALL/MAT``, ``DOLLAR_DURATION``, ``CONVEXITY``,
+``ZSPREAD_CALL/MAT``, ``YIELD_MAT`` and ``YIELD_NEXT``.
+
+Two traps that survive validation
+---------------------------------
+**Six values were retired on 2025-10-03.** ``ASW``, ``ASWNP``, ``CAS``, ``OISS``,
+``YYS`` and ``ZSPREAD`` each run 2021-08-09 .. 2025-10-03 and then stop, while
+their ``_RFR`` counterparts run to 2026-08-07: Citi migrated the family from the
+legacy swap basis to RFR. Each still returns 1,038-1,039 rows, so a coverage probe
+calls it served and a backtest reads four years of it happily — only a recent date
+fails, and it fails as "no rows in the window", which reads as a gap rather than a
+retirement. See :data:`DISCONTINUED_2025_10_03` for the successors.
+
+**Carry and roll lag by exactly their own horizon.** ``CARRY.1M`` ends ~1M back,
+``CARRY.6M`` ~6M, ``ROLLCARRY.1Y`` ~1Y. The lag tracking the horizon that
+precisely says these are REALISED over the window just ended, not forecast over
+the window ahead — so "carry as of today" cannot be satisfied for any horizon, by
+construction rather than by outage.
 
 The sweep is not complete, and that matters
 -------------------------------------------
@@ -353,6 +365,11 @@ _SPECS: Tuple[ValueSpec, ...] = (
 #: carried as ``verified=False`` for that reason.
 ASW_CURRENCY_VALUES: Tuple[str, ...] = ("USD", "EUR", "GBP", "CHF", "JPY", "AUD")
 
+#: ``ASW_4_<CCY>`` is a sparse cross-currency MATRIX rather than one value: the
+#: bond asset-swapped INTO that currency, so a JPY leg on a US Treasury is a
+#: cross-currency asset swap and not the bond's own spread. Measured in basis
+#: points (CH0127181029 ASW_4_USD = -23.6648, GB00BMF9LG83 ASW_4_GBP = 4.12468).
+#: Distinct from plain ``ASW``, which is the bond's own-currency spread.
 _ASW_SPECS = tuple(
     ValueSpec(
         citi=f"ASW_4_{ccy}",
@@ -360,23 +377,151 @@ _ASW_SPECS = tuple(
         unit="basis_points",
         verified=False,
         note=(
-            f"The bond asset-swapped into {ccy}, in bp. NEW value, selected with "
-            f"asw_currency='{ccy}'. UNVERIFIED which ASW variant '_4_' denotes - "
-            "par-par, market-value or yield-yield - which is worth several bp on "
-            "a bond away from par. ql_asset_swap_spread computes the par-par "
-            "spread locally and is reconciled to ql.AssetSwap.fairSpread() at "
-            "4.8e-14 bp, so the calibration can say which variant Citi publishes "
-            "rather than assume. Where the bond's currency differs from the leg "
-            "currency this is a CROSS-currency asset swap and the local par-par "
-            "figure is not the same quantity at all."
+            f"The bond asset-swapped into {ccy}, quarterly, in bp. Selected with "
+            f"asw_currency='{ccy}'. UNVERIFIED which ASW variant this is - Citi's "
+            "own label calls it 'Quarterly', against ASW_C_<CCY> 'Coupon Frequency' "
+            "which is in the dictionary but does NOT serve on this tag path. "
+            "ql_asset_swap_spread computes the par-par spread locally and is "
+            "reconciled to ql.AssetSwap.fairSpread() at 4.8e-14 bp, so the "
+            "comparison is one fetch away. Where the bond's currency differs from "
+            "the leg currency this is a CROSS-currency asset swap and the local "
+            "par-par figure is not the same quantity at all."
         ),
     )
     for ccy in ASW_CURRENCY_VALUES
 )
 
-#: Every Citi bond value, keyed by its tag suffix.
+
+#: The carry/roll horizons Citi publishes. Measured: all four serve on every UST.
+CARRY_HORIZONS: Tuple[str, ...] = ("1M", "3M", "6M", "1Y")
+
+#: Units by family, applied to the values that are not hand-specced above.
+#: Everything spread-shaped is basis points; carry and roll are quoted the same
+#: way. NONE of these is verified against Citi's own arithmetic - they are the
+#: reading the label implies, and the label is Citi's own
+#: (``bond_values_official_sweep.json`` carries the label for every tag).
+_FAMILY_UNITS = (
+    (("PRICE", "ADJ_PRICE", "PRICING_ACCRUED"), "price_points"),
+    (("YIELD", "SIMPLEYIELD", "YIELD_WORST", "YIELD_MAT", "YIELD_NEXT"), "percent"),
+    (("DURATION",), "years"),
+    (("DV01", "PRICING_CV01"), "currency_per_bp"),
+)
+
+
+def _family_unit(token: str) -> str:
+    for names, unit in _FAMILY_UNITS:
+        if token in names:
+            return unit
+    # Spread-shaped by default: ASW*, ASS*, CAS*, OAS*, OISS*, YYS*, ZSPREAD,
+    # SPREAD_TSY, CARRY.*, ROLL.*, ROLLCARRY.*. Basis points is the reading that
+    # matches every one of those labels.
+    return "basis_points"
+
+
+#: Values discovered by probing Citi's own field dictionary and NOT hand-specced
+#: above. Generated rather than transcribed: there are 46 and a hand-written
+#: table would drift from the measurement the first time the sweep is re-run.
+_MEASURED_NOTES = {
+    "ASW": "Plain asset-swap spread in the bond's own currency. Distinct from "
+           "ASW_4_<CCY>, which is the CROSS-currency matrix. DISCONTINUED "
+           "2025-10-03 - use ASW_RFR after that date.",
+    "ASWNP": "Asset-swap spread, non-par. The par/non-par distinction is Citi's; "
+             "which convention each uses is UNMEASURED. DISCONTINUED 2025-10-03 - use ASSNP_RFR after that date.",
+    "ASW_RFR": "Asset-swap spread against the RFR rather than the legacy IBOR leg.",
+    "ASS_SOFR": "Asset-swap spread explicitly vs SOFR. Serves on 1/10 universes "
+                "sampled but 116/120 US Treasuries - it is a USD field.",
+    "ASSNP_RFR": "Asset-swap spread, non-par, vs RFR.",
+    "CAS": "Coupon-adjusted spread to the swap curve. DISCONTINUED 2025-10-03 - use CAS_RFR after that date.",
+    "CAS_RFR": "Coupon-adjusted spread vs RFR.",
+    "CAS_SOFR": "Coupon-adjusted spread vs SOFR; a USD field.",
+    "OAS": "Option-adjusted spread.",
+    "OAS_RFR": "Option-adjusted spread vs RFR.",
+    "OISS": "OIS spread. DISCONTINUED 2025-10-03 - use OISS_RFR after that date.",
+    "OISS_RFR": "OIS spread vs RFR.",
+    "OISS_SOFR": "OIS spread vs SOFR; a USD field.",
+    "OISSMM": "OIS spread, money-market basis. Serves on 87/120 US Treasuries - "
+              "the sparsest of the OIS family.",
+    "OISSMM_RFR": "OIS spread, money-market basis, vs RFR.",
+    "YYS": "Yield-yield spread. DISCONTINUED 2025-10-03 - use YYS_RFR after that date.",
+    "YYS_RFR": "Yield-yield spread vs RFR.",
+    "YYS_SOFR": "Yield-yield spread vs SOFR; a USD field.",
+    "ZSPREAD": "Z-spread to WORST, per Citi's own label - not to maturity. "
+               "ZSPREAD_MAT and ZSPREAD_CALL are in Citi's dictionary but are NOT "
+               "addressable on this tag path. DISCONTINUED 2025-10-03 with no RFR successor observed.",
+    "PRICING_ACCRUED": "Accrued interest. Citi publishes it, so the clean/dirty "
+                       "question can be settled from Citi's own numbers alone.",
+    "PRICING_CV01": "CV01 - the convexity analogue of DV01. Note plain CONVEXITY "
+                    "is in Citi's dictionary but returns nothing on this path.",
+    "SIMPLEYIELD": "Simple yield. Serves on 1/10 universes and ZERO US Treasuries.",
+    "YIELD_WORST": "Yield to worst. Serves only on covered bonds in the sample, "
+                   "and ZERO US Treasuries - USTs are not callable.",
+}
+
+
+def _generated_specs() -> Tuple[ValueSpec, ...]:
+    """One :class:`ValueSpec` per measured value that is not hand-specced."""
+    from MDP.CitiVelocityExcel import tags as _T
+
+    hand = {s.citi for s in _SPECS} | {f"ASW_4_{c}" for c in ASW_CURRENCY_VALUES}
+    out = []
+    for token in _T.BOND_VALUES:
+        if token in hand:
+            continue
+        base = token.split(".")[0]
+        if base in ("CARRY", "ROLL", "ROLLCARRY"):
+            horizon = token.split(".", 1)[1] if "." in token else ""
+            kind = {"CARRY": "Carry", "ROLL": "Roll", "ROLLCARRY": "Roll and carry"}[base]
+            note = (f"{kind} over {horizon}. Citi publishes all four horizons "
+                    f"({', '.join(CARRY_HORIZONS)}) and every one serves on every US "
+                    "Treasury measured. UNVERIFIED whether this is quoted running or "
+                    "over the horizon, and against which financing rate.")
+            frb = None
+        else:
+            note = _MEASURED_NOTES.get(token, "Measured to serve; semantics UNVERIFIED.")
+            frb = None
+        out.append(ValueSpec(citi=token, frb=frb, unit=_family_unit(token),
+                             verified=False, note=note + _MEASURED_SUFFIX))
+    return tuple(out)
+
+
+#: Values Citi STOPPED publishing on 2025-10-03, measured on US912810EX29 over a
+#: five-year window: each runs 2021-08-09 .. 2025-10-03 and then nothing, while
+#: its ``_RFR`` counterpart runs to 2026-08-07. Citi migrated this whole family
+#: from the legacy swap basis to the RFR basis and retired the originals.
+#:
+#: This matters more than it looks. Every one of these still VALIDATES - the tag
+#: is real and returns 1,038-1,039 rows - so a coverage probe calls it served and
+#: a backtest happily reads four years of it. Ask for a recent date and you get
+#: "no rows in the window", which reads as a gap rather than as a discontinued
+#: field. Use the ``_RFR`` variant for anything after 2025-10-03.
+DISCONTINUED_2025_10_03: Mapping[str, str] = {
+    "ASW": "ASW_RFR",
+    "ASWNP": "ASSNP_RFR",
+    "CAS": "CAS_RFR",
+    "OISS": "OISS_RFR",
+    "YYS": "YYS_RFR",
+    "ZSPREAD": "",          # no RFR successor observed
+}
+
+#: Carry and roll are published with a lag equal to their own HORIZON, measured
+#: on the same bond: CARRY.1M ends 2026-07-13 (~1M back), CARRY.6M 2026-02-12
+#: (~6M), ROLL.3M 2026-05-13 (~3M), ROLLCARRY.1Y 2025-08-13 (~1Y). The lag
+#: tracking the horizon that precisely says these are REALISED over the window
+#: just ended, not forecast over the window ahead - so a request for "carry as of
+#: today" cannot be satisfied for any horizon, by construction rather than by
+#: outage. UNVERIFIED against Citi's arithmetic; the pattern is unambiguous.
+CARRY_LAGS_ITS_HORIZON = True
+
+
+_MEASURED_SUFFIX = (
+    " Discovered 2026-08-08 by probing Citi's own 118-field dictionary against "
+    "this tag path; see catalog/bond_values_official_sweep.json for the label and "
+    "the per-universe coverage."
+)
+
+
 CITI_BOND_VALUES: Mapping[str, ValueSpec] = {
-    s.citi: s for s in (_SPECS + _ASW_SPECS)
+    s.citi: s for s in (_SPECS + _ASW_SPECS + _generated_specs())
 }
 
 

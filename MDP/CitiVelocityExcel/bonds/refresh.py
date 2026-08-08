@@ -71,12 +71,10 @@ def _last_business_day(d: datetime.date) -> datetime.date:
 #: immutable, so "what did the original sweep find" stays answerable.
 REFRESH_TAGS_FILE = "bond_tags_validated_refresh.json"
 
-#: The per-bond values worth probing for a newly discovered bond, in the order
-#: the original sweep found them useful.
-PROBE_VALUES: Tuple[str, ...] = (
-    "PRICE", "YIELD", "DURATION", "SPREAD_TSY", "DV01", "OAS",
-    "ASW_4_USD", "ASW_4_AUD", "ASW_4_JPY", "ASW_4_EUR", "ASW_4_GBP", "ASW_4_CHF", "CAS",
-)
+#: What to probe for a newly discovered bond: the measured vocabulary, taken
+#: from :data:`tags.BOND_VALUES` rather than restated here, so the two cannot
+#: drift apart.
+PROBE_VALUES: Tuple[str, ...] = T.BOND_VALUES
 
 
 class EmptyUniverseError(RuntimeError):

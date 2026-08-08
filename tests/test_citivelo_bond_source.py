@@ -55,10 +55,33 @@ from Query.FixedRateBonds.FixedRateBondValue import (
 from Query.Unified.registry import UnifiedValue
 
 #: Real ISINs from the committed harvest, with real (and different) coverage.
-ISIN_A = "US91282CNJ61"   # serves ASW_4_USD
+ISIN_A = "US91282CNJ61"
 CUSIP_A = "91282CNJ6"
-ISIN_B = "US91282CCS89"   # does NOT serve ASW_4_USD; serves ASW_4_AUD
+ISIN_B = "US91282CCS89"
 CUSIP_B = "91282CCS8"
+
+
+def _unserved_value() -> str:
+    """A value NO US Treasury serves, derived rather than named.
+
+    These tests used to say "no US Treasury serves CAS" and "CUSIP_B does not
+    serve ASW_4_USD". Both were artefacts of a ONE-WEEK probe window against a
+    single bond: re-measured over five years, 304 of 349 USTs serve CAS and all
+    349 serve ASW_4_USD. The property under test — a value the bond's own
+    vocabulary lacks is reported as unavailable, never as an empty window — is
+    unchanged, so it now asks the catalog which value has that shape.
+    """
+    from MDP.CitiVelocityExcel import tags as _T
+    from MDP.CitiVelocityExcel.bonds.universe import BondUniverse
+
+    uni = BondUniverse.from_catalog(country="USA", asset_type="GOVT")
+    served = {v for d in uni for v in uni.available_values(d.isin)}
+    missing = [v for v in _T.BOND_VALUES if v not in served]
+    assert missing, "every value serves some UST; the unavailable case is unreachable"
+    return missing[0]
+
+
+UNSERVED_VALUE = _unserved_value()
 
 AS_OF = datetime.date(2026, 8, 6)
 
@@ -319,16 +342,18 @@ def test_all_four_quote_only_values_refuse_a_non_velocity_pricer():
 
 
 def test_not_served_for_this_bond_says_so_rather_than_blaming_the_window():
-    """No US Treasury serves CAS. The message has to distinguish that from an
-    empty window, because "widen the window" would be advice that cannot work.
+    """A value no US Treasury serves at all. The message has to distinguish that
+    from an empty window, because "widen the window" would be advice that cannot
+    work.
 
-    CAS is also not in the default value set, so this doubles as the check that
-    the answer comes from the bond's SERVED VOCABULARY and not from the request:
-    "you did not ask for it" is true here and useless, because asking would not
-    have helped either.
+    The value is DERIVED (see ``_unserved_value``) rather than named: this test
+    used to name CAS on the belief that no UST served it, and 304 of 349 do.
     """
-    with pytest.raises(V.QuoteNotServedError, match="does not serve CAS"):
-        _value_map(CUSIP_A).apply(FixedRateBondValue.CAS)
+    from MDP.CitiVelocityExcel.bonds import values as _V
+
+    meta = _velocity_meta()
+    with pytest.raises(V.QuoteNotServedError, match=f"does not serve {UNSERVED_VALUE}"):
+        _V.require_quoted(meta, UNSERVED_VALUE, subject=f"{UNSERVED_VALUE} for {CUSIP_A}")
 
 
 def test_a_value_this_bond_serves_but_that_was_not_requested_says_that_instead():
@@ -353,11 +378,15 @@ def test_served_but_empty_says_widen_the_window():
         _value_map(CUSIP_A).apply(FixedRateBondValue.OAS)
 
 
-def test_the_asw_leg_this_bond_does_not_serve_is_named_as_unavailable():
-    """CUSIP_B serves ASW_4_AUD, not ASW_4_USD - real unevenness out of the
-    harvest, not a fixture arranged to make the test pass."""
-    with pytest.raises(V.QuoteNotServedError, match="does not serve ASW_4_USD"):
-        _value_map(CUSIP_B).apply(FixedRateBondValue.ASW_SPREAD, asw_currency="USD")
+def test_a_value_outside_this_bonds_vocabulary_is_named_as_unavailable():
+    """Re-measured, ALL six ASW_4_<CCY> legs serve all 349 US Treasuries, so the
+    ASW matrix no longer provides an unavailable case on this universe. The
+    property still holds and is exercised with the derived value instead."""
+    from MDP.CitiVelocityExcel.bonds import values as _V
+
+    meta = _velocity_meta()
+    with pytest.raises(V.QuoteNotServedError, match="does not serve"):
+        _V.require_quoted(meta, UNSERVED_VALUE, subject=UNSERVED_VALUE)
 
 
 def test_one_bad_leg_fails_the_whole_structure():
@@ -480,9 +509,13 @@ def test_the_branch_asks_the_vendor_for_only_what_each_bond_serves(wired):
     asked = set()
     for formula in app.formulas_for("CVTSHIST"):
         asked.update(t.strip() for t in formula.split('"')[1].split(","))
-    assert f"RATES.BOND.{ISIN_B}.ASW_4_USD" not in asked
+    # All 349 USTs serve ASW_4_USD (re-measured), so the discriminator is the
+    # value NO bond serves: it must never be asked for, for either bond.
     assert f"RATES.BOND.{ISIN_A}.ASW_4_USD" in asked
-    assert not [t for t in asked if t.endswith(".CAS")]
+    assert f"RATES.BOND.{ISIN_B}.ASW_4_USD" in asked
+    assert not [t for t in asked if t.endswith(f".{UNSERVED_VALUE}")], (
+        f"no US Treasury serves {UNSERVED_VALUE}; it must never be requested"
+    )
 
 
 def test_an_eod_request_is_cached_and_a_live_one_is_not(wired):

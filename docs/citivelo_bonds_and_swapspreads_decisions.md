@@ -563,3 +563,75 @@ python scripts/daily_cache_warmer.py --jobs 7,8,9,10         # store warms, then
 
 Each aborts on its own if Excel is at or above 3,800 MB, checked **before** anything
 connects, so none of them can be the thing that wedges it.
+
+## D13 — The value vocabulary is 46, not 8. Guessing found 16; Citi's own dictionary found the rest
+
+Challenged on the count. The answer took three passes and the first two were wrong.
+
+**Pass 1 (inherited): 8.** `validate_with_controls` defaults to `period="1W"`, and the
+original probe used that default against a **single US Treasury**. "No rows in one week"
+was recorded as "does not exist". That is how `ZSPREAD`, `ASW`, `CAS` and
+`ASW_4_EUR/GBP/CHF` were all lost — and it is why this repo believed "no US Treasury
+serves CAS" when 304 of 349 do.
+
+**Pass 2 (mine): 16.** Widened to five years and ten country/asset-type universes. Better,
+and still bounded by **guessed candidate names**. Guessing does not produce
+`PRICING_ACCRUED`, `OISSMM_RFR` or `ROLLCARRY.6M`.
+
+**Pass 3: 46**, from probing Citi's own 118-field dictionary against this tag path. A
+single US Treasury serves **44**. Whole families were invisible to guesswork: carry/roll
+(`CARRY.*`, `ROLL.*`, `ROLLCARRY.*`), the OIS-spread family (`OISS*`), yield-yield spread
+(`YYS*`), the RFR variants of ASW/CAS/OAS, and `PRICING_ACCRUED`/`PRICING_CV01`.
+
+**The negative result is worth as much.** 56 of the dictionary's tags return nothing here,
+and the pattern is informative: the iBoxx, TRACE, CDS-basis, short-interest and equity-vol
+fields belong to a CREDIT screen, not to `RATES.BOND`. So "Citi has a field for it" does
+not mean this tag path serves it. Also absent: the entire `SPREAD_BENCH.*` family,
+`ASW_C_*` (coupon-frequency ASW, against the `ASW_4_*` quarterly ones that do serve),
+`PV01_CALL/MAT`, `DOLLAR_DURATION`, `CONVEXITY`, `ZSPREAD_CALL/MAT`, `YIELD_MAT`,
+`YIELD_NEXT`.
+
+Citi's own labels also settle two things this repo measured the hard way:
+**"Modified Duration" → `DURATION`** and **"G-Spread" → `SPREAD_TSY`**.
+
+### D13a — Six values were retired on 2025-10-03 and still validate
+
+Measured on `US912810EX29` over five years: `ASW`, `ASWNP`, `CAS`, `OISS`, `YYS` and
+`ZSPREAD` each run 2021-08-09 .. **2025-10-03** and then stop, while their `_RFR`
+counterparts run to 2026-08-07. Citi migrated the family from the legacy swap basis to
+RFR and retired the originals.
+
+This is a nastier trap than an absent field. Each still returns **1,038–1,039 rows**, so a
+coverage probe calls it served and a backtest reads four years of it happily. Only a
+request for a recent date fails, and it fails as "no rows in the window" — which reads as
+a gap, not as a discontinued field. `values.DISCONTINUED_2025_10_03` names each successor.
+
+### D13b — Carry and roll lag by exactly their own horizon
+
+`CARRY.1M` ends 2026-07-13 (~1M back), `CARRY.6M` 2026-02-12 (~6M), `ROLL.3M` 2026-05-13
+(~3M), `ROLLCARRY.1Y` 2025-08-13 (~1Y). The lag tracking the horizon that precisely says
+these are **realised** over the window just ended, not forecast over the window ahead — so
+"carry as of today" cannot be satisfied for any horizon, by construction rather than by
+outage. Unverified against Citi's arithmetic; the pattern is unambiguous.
+
+### D13c — The default request set is now mode-dependent
+
+All 46 are `FixedRateBondValue` members (43 new, `CITI_` prefixed where this repo also
+computes the number locally — `FRB_CITI_DURATION` is Citi's published modified duration,
+`FRB_MOD_DURATION` is the one solved here from Citi's `PRICE`; they agree to 1.9e-05 years
+and are still different numbers with different provenance).
+
+EOD now defaults to the **whole vocabulary** and intraday to **seven**, and the asymmetry
+is the measured cost: EOD is ~+1 MB of Excel per 52 tags over five years, intraday is
+~0.15–1.7 MB **per tag** depending on transport. Asking for all 46 at EOD is near-free;
+asking for them intraday across 349 bonds is ~3.9 GB against a 3,800 MB ceiling.
+
+### D13d — Tests that asserted the old coverage were falsified, not broken
+
+Eight tests failed, all asserting coverage facts the measurement overturned ("this bond
+does not serve ASW_4_USD", "no US Treasury serves CAS"). Their INTENT was right, so they
+were re-pointed rather than weakened: the fixtures now **derive** the discriminating value
+and the bonds either side of it from the catalog, so the next vocabulary change moves the
+fixture instead of breaking the suite. One rewrite of mine was itself a tautology — it
+built the expectation from `plan()`'s own output — and was replaced with a catalog-derived
+one. Both guards re-mutation-tested: 2/2 killed.

@@ -72,10 +72,12 @@ def test_descriptor_and_values_come_from_citi_not_from_the_caller(us_universe, s
     r = resolve_bond(sample_isin, universe=us_universe)
     assert r.descriptor.isin == sample_isin
     assert r.available_values, "Citi serves nothing for this bond?"
-    assert set(r.available_values) <= {
-        "PRICE", "YIELD", "SPREAD_TSY", "OAS", "DURATION", "DV01", "CAS",
-        "ASW_4_USD", "ASW_4_EUR", "ASW_4_GBP", "ASW_4_CHF", "ASW_4_JPY", "ASW_4_AUD",
-    }
+    # Against the MEASURED vocabulary, not a literal snapshot. A literal one was
+    # falsified within a day: probing Citi's own field dictionary took the
+    # vocabulary from 13 to 46.
+    from MDP.CitiVelocityExcel import tags as _T
+
+    assert set(r.available_values) <= set(_T.BOND_VALUES)
     assert r.serves(r.available_values[0])
     assert not r.serves("NOT_A_VALUE")
 

@@ -9,9 +9,11 @@ nothing to reach and would have risked wedging a process only a human can restar
 
 The bond ISINs are real ones out of the committed 2,162-ISIN harvest, and their
 per-bond coverage is the harvest's own. That matters for the central test here:
-``US91282CCS89`` genuinely does not serve ``ASW_4_USD`` while ``US91282CNJ61``
-does, so "only ask for what this bond serves" is checked against real unevenness
-rather than against a fixture invented to make it true.
+the coverage fixture is DERIVED from the catalog (see ``_coverage_fixture``), so
+"only ask for what this bond serves" is checked against real unevenness rather
+than against a fixture invented to make it true - and it MOVES when the
+vocabulary moves rather than pinning a bond and a value that have stopped being
+uneven, which is exactly how the hardcoded version failed.
 
 What each group is defending against
 ------------------------------------
@@ -52,6 +54,7 @@ from MDP.CitiVelocityExcel.bonds import fetcher as fetcher_module
 from MDP.CitiVelocityExcel.bonds import values as V
 from MDP.CitiVelocityExcel.bonds.conventions import UNIVERSE_COUNTRIES
 from MDP.CitiVelocityExcel.bonds.fetcher import (
+    INTRADAY_BOND_VALUES,
     BOND_MARKET_TIMEZONES,
     CITI_QUOTE_PREFIX,
     COMPUTED_FRB_VALUES,
@@ -69,13 +72,47 @@ from MDP.CitiVelocityExcel.quotes import CitiVeloQuotes
 from MDP.CitiVelocityExcel.testing import FakeExcelApp, FakeVelocityData
 from MDP.CitiVelocityExcel.windowed import MAX_SPAN
 
-#: Two real US Treasuries out of the harvest, chosen because their coverage
-#: DIFFERS: 91282CNJ6 serves ASW_4_USD and 91282CCS8 does not. Both serve
-#: ASW_4_AUD (348 of the 349 US Treasuries do). Neither serves CAS, and no US
-#: TREASURY does - exactly one US ISIN in the whole universe carries CAS,
-#: US3133EPSW68, an FFCB agency, so "no bond in the US universe" would be wrong.
-ISIN_WITH_ASW_USD = "US91282CNJ61"
-ISIN_WITHOUT_ASW_USD = "US91282CCS89"
+def _coverage_fixture():
+    """Derive the coverage fixture from the catalog instead of naming ISINs.
+
+    The hardcoded version was falsified by measurement within a day. It said
+    "91282CNJ6 serves ASW_4_USD and 91282CCS8 does not" and "neither serves CAS,
+    and no US TREASURY does" — all three came from a probe that used a ONE-WEEK
+    window against a single bond. Re-measured over five years against Citi's own
+    field dictionary: every UST serves ASW_4_USD and ASW_4_JPY, and 304 of 349
+    serve CAS.
+
+    So the fixture asks the catalog three questions instead of asserting the
+    answers: which value SPLITS the universe (for the "unavailable" case), which
+    value NO bond serves (for the "never served at all" case), and two bonds that
+    sit on opposite sides of the split. The properties under test are unchanged —
+    a value a bond does not serve is never requested, and unavailable is not
+    empty — but they now survive the vocabulary moving again, which it will.
+
+    Returns ``(split_value, isin_with, isin_without, unserved_value)``.
+    """
+    from MDP.CitiVelocityExcel import tags as _T
+    from MDP.CitiVelocityExcel.bonds.universe import BondUniverse
+
+    uni = BondUniverse.from_catalog(country="USA", asset_type="GOVT")
+    all_isins = {d.isin for d in uni}
+    cov: dict = {}
+    for d in uni:
+        for v in uni.available_values(d.isin):
+            cov.setdefault(v, set()).add(d.isin)
+
+    partial = {v: s for v, s in cov.items() if 0 < len(s) < len(all_isins)}
+    assert partial, ("no value has partial UST coverage, so nothing can exercise "
+                     "the 'never request an unserved value' rule")
+    split = max(partial, key=lambda v: min(len(partial[v]), len(all_isins) - len(partial[v])))
+
+    unserved = sorted(v for v in _T.BOND_VALUES if not cov.get(v))
+    assert unserved, ("every value in the vocabulary serves at least one UST, so "
+                      "the 'unavailable' case cannot be exercised")
+    return split, sorted(partial[split])[0], sorted(all_isins - partial[split])[0], unserved[0]
+
+
+SPLIT_VALUE, ISIN_WITH_ASW_USD, ISIN_WITHOUT_ASW_USD, UNSERVED_VALUE = _coverage_fixture()
 #: A JGB, for the intraday day-bucketing test: Citi stamps it in New York, but its
 #: session is Tokyo's, so a 22:30 ET print belongs to the NEXT Tokyo date.
 ISIN_JGB = "JP1300561H93"
@@ -120,6 +157,9 @@ _VALUE_OFFSET = {
     "ASW_4_AUD": -125.0,
     "ASW_4_JPY": -130.0,
 }
+# Whatever the catalog picked, the stub must be able to serve it distinctly.
+for _i, _v in enumerate((SPLIT_VALUE, UNSERVED_VALUE)):
+    _VALUE_OFFSET.setdefault(_v, -140.0 - 5 * _i)
 
 #: The default set plus the two values the coverage tests need and the defaults
 #: deliberately leave out: ``OAS`` (both bonds serve it, and it returns nothing in
@@ -127,7 +167,8 @@ _VALUE_OFFSET = {
 #: the ``unavailable`` case). Passed explicitly rather than relied on as defaults,
 #: because a coverage test that depends on the default list silently changes
 #: meaning whenever the list does.
-_COVERAGE_VALUES = tuple(DEFAULT_BOND_VALUES) + ("OAS", "ASW_4_JPY")
+_COVERAGE_VALUES = tuple(dict.fromkeys(
+    tuple(DEFAULT_BOND_VALUES) + ("OAS", SPLIT_VALUE, UNSERVED_VALUE)))
 #: The base each bond's numbers are built from, so an assertion can name the
 #: value it expects instead of restating an arithmetic coincidence.
 _BASE = {
@@ -276,7 +317,7 @@ def _eod_fetcher(resolutions):
     for isin, base in ((ISIN_WITH_ASW_USD, 99.0), (ISIN_WITHOUT_ASW_USD, 88.0)):
         vals = ["PRICE", "YIELD", "DURATION", "SPREAD_TSY", "DV01"]
         if isin == ISIN_WITH_ASW_USD:
-            vals.append("ASW_4_USD")
+            vals.append(SPLIT_VALUE)
         served.update(_daily_series(isin, base, values=vals))
     quotes, app = _quotes_over(served)
     return CitiVeloBondFetcher(quotes=quotes), app
@@ -353,37 +394,62 @@ def test_a_value_citi_does_not_serve_for_a_bond_is_never_requested(resolutions):
     fetcher.fetch(resolutions, datetime.date(2026, 8, 6), values=_COVERAGE_VALUES + ("CAS",))
 
     asked = _tags_asked(app)
-    assert f"RATES.BOND.{ISIN_WITHOUT_ASW_USD}.ASW_4_USD" not in asked
-    assert f"RATES.BOND.{ISIN_WITH_ASW_USD}.ASW_4_USD" in asked, "the served leg must still be asked for"
-    assert not [t for t in asked if t.endswith(".CAS")], "no US Treasury serves CAS"
-    assert not [t for t in asked if t.endswith(".ASW_4_JPY")], "neither bond serves the JPY leg"
-    assert [t for t in asked if t.endswith(".ASW_4_AUD")], "both bonds serve the AUD leg"
+    assert f"RATES.BOND.{ISIN_WITHOUT_ASW_USD}.{SPLIT_VALUE}" not in asked
+    assert f"RATES.BOND.{ISIN_WITH_ASW_USD}.{SPLIT_VALUE}" in asked, "the served leg must still be asked for"
+    # UNSERVED_VALUE is derived: a value NO US Treasury serves. It used to be
+    # spelled ".CAS" here on the belief that no UST served CAS -- a one-week
+    # probe artefact. 304 of 349 do.
+    assert not [t for t in asked if t.endswith(f".{UNSERVED_VALUE}")], (
+        f"no US Treasury serves {UNSERVED_VALUE}, so it must never be requested"
+    )
+    assert [t for t in asked if t.endswith(".ASW_4_AUD")], (
+        "both bonds serve the AUD leg — re-measured, all six ASW_4_<CCY> legs "
+        "serve every US Treasury"
+    )
 
 
-def test_the_whole_basket_goes_out_in_one_call(resolutions):
-    """One batched ``CVTSHIST``, not one per bond. A 300-name warm issued per bond
-    is 300 round trips into an add-in whose memory only a human restart reclaims."""
+def test_the_basket_is_batched_by_tag_budget_not_issued_per_bond(resolutions):
+    """The property is "not one round trip per bond", not "exactly one call".
+
+    A 300-name warm issued per bond is 300 round trips into an add-in whose
+    memory only a human restart reclaims. Batching is by TAG BUDGET, so the call
+    count tracks total tags and not bond count — with the EOD default now the
+    whole 46-value vocabulary, two bonds are ~92 tags and legitimately span more
+    than one chunk. Asserting ``== 1`` pinned an arithmetic coincidence of the
+    old seven-value default rather than the behaviour that matters.
+    """
     fetcher, app = _eod_fetcher(resolutions)
     fetcher.fetch(resolutions, datetime.date(2026, 8, 6))
-    assert len(app.formulas_for("CVTSHIST")) == 1
+    calls = len(app.formulas_for("CVTSHIST"))
+    assert calls >= 1
+    assert calls <= len(resolutions), (
+        f"{calls} CVTSHIST calls for {len(resolutions)} bonds — that is per-bond "
+        "round trips, which is the thing batching exists to prevent"
+    )
 
 
 def test_plan_reports_unavailable_without_asking_anything(resolutions):
     fetcher, app = _eod_fetcher(resolutions)
     plan = fetcher.plan(resolutions, values=_COVERAGE_VALUES)
     assert app.formulas_for("CVTSHIST") == [], "plan() must not fetch"
-    assert "ASW_4_USD" in plan[ISIN_WITHOUT_ASW_USD]["unavailable"]
-    assert "ASW_4_USD" in plan[ISIN_WITH_ASW_USD]["requested"]
+    assert SPLIT_VALUE in plan[ISIN_WITHOUT_ASW_USD]["unavailable"]
+    assert SPLIT_VALUE in plan[ISIN_WITH_ASW_USD]["requested"]
     # Against the tag strings themselves, not against the sibling field: ``tags``
     # and ``requested`` are built in adjacent lines from the same list, so
     # comparing them to each other is a tautology of the implementation and
     # survives any refactor that keeps them built together.
     entry = plan[ISIN_WITH_ASW_USD]
+    # Derived from the CATALOG — an independent source — not from plan()'s own
+    # `requested`, which would be the tautology the comment above warns about.
+    # A literal dict was worse still: it encoded a coverage snapshot that the
+    # 13 -> 46 vocabulary change falsified.
+    from MDP.CitiVelocityExcel.bonds.universe import BondUniverse
+
+    served = set(BondUniverse.from_catalog().available_values(ISIN_WITH_ASW_USD))
     assert entry["tags"] == {
-        v: f"RATES.BOND.{ISIN_WITH_ASW_USD}.{v}"
-        for v in ("PRICE", "YIELD", "DURATION", "SPREAD_TSY", "DV01", "ASW_4_USD", "ASW_4_AUD", "OAS")
+        v: f"RATES.BOND.{ISIN_WITH_ASW_USD}.{v}" for v in _COVERAGE_VALUES if v in served
     }
-    assert entry["unavailable"] == ("ASW_4_JPY",)
+    assert entry["unavailable"] == tuple(v for v in _COVERAGE_VALUES if v not in served)
 
 
 def test_an_unknown_value_token_is_rejected_rather_than_dropped(resolutions):
@@ -413,9 +479,9 @@ def test_unavailable_and_empty_are_reported_separately(resolutions):
     assert "OAS" not in quote.unavailable
     assert "OAS" in quote.requested, "an empty value WAS asked for"
 
-    assert "ASW_4_JPY" in quote.unavailable
-    assert "ASW_4_JPY" not in quote.empty
-    assert "ASW_4_JPY" not in quote.requested, "an unavailable value was NOT asked for"
+    assert UNSERVED_VALUE in quote.unavailable
+    assert UNSERVED_VALUE not in quote.empty
+    assert UNSERVED_VALUE not in quote.requested, "an unavailable value was NOT asked for"
 
 
 def test_an_empty_value_is_a_normal_outcome_not_an_error(resolutions):
@@ -546,7 +612,7 @@ def test_citis_own_numbers_are_all_kept_even_the_unused_ones(resolutions):
     """YIELD and DURATION are not what FRB_YTM and FRB_MOD_DURATION return, but
     keeping them is what makes the calibration possible without a second fetch."""
     meta = _args_for(resolutions)["meta_data"]
-    for value in ("PRICE", "YIELD", "DURATION", "DV01", "SPREAD_TSY", "ASW_4_USD"):
+    for value in ("PRICE", "YIELD", "DURATION", "DV01", "SPREAD_TSY", SPLIT_VALUE):
         assert V.quoted_value_of(meta, value) is not None, value
     assert V.quoted_value_of(meta, "OAS") is None
 
@@ -564,7 +630,7 @@ def test_coverage_book_round_trips_the_three_lists(resolutions):
     meta = _args_for(resolutions)["meta_data"]
     coverage = V.coverage_of(meta)
     assert "OAS" in coverage["empty"]
-    assert "ASW_4_JPY" in coverage["unavailable"]
+    assert UNSERVED_VALUE in coverage["unavailable"]
     assert "PRICE" in coverage["requested"]
     assert V.is_velocity_meta(meta)
     assert not V.is_velocity_meta({"cusip": "91282CNJ6"})
@@ -765,34 +831,40 @@ def test_eod_is_not_clamped_because_daily_has_no_cliff():
 # ------------------------------------------------------------------ #
 
 
-def test_the_default_value_set_is_the_seven_a_default_window_can_actually_serve():
-    """Pinned, because widening it silently multiplies the tag count of every
-    warm and narrowing it silently drops a column downstream.
+def test_the_default_request_set_is_mode_dependent_and_pinned():
+    """Pinned, because widening it silently multiplies the tag count of every warm
+    and narrowing it silently drops a column downstream.
 
-    Two of the eight originally in this tuple were wrong, both re-derived from the
-    committed 16,288-tag harvest (2,147 of the 2,162 ISINs carry at least one
-    validated tag):
+    TWO tiers, and the split is the measured cost asymmetry rather than a
+    preference:
 
-    ``OAS`` is out. It is served for 1,401 of 2,162 ISINs (304 of the 349 US
-    Treasuries) but is window-dependent - measured empty over one week and full
-    over five years - and the default EOD lookback is 21 days. Keeping it in the
-    defaults spends a column per bond on something the default window cannot
-    return, which is precisely the cost this module exists to avoid. It stays
-    addressable: pass ``citivelo_values=[..., "OAS"]`` with a wide ``eod_lookback``.
+    * **EOD defaults to the WHOLE vocabulary.** EOD costs about +1 MB of Excel per
+      52 tags over five years, so all 46 is near-free — and it means a caller who
+      asks for ``FRB_CARRY_6M`` gets a number instead of "you did not request it".
+    * **Intraday defaults to seven.** Intraday costs ~0.15-1.7 MB *per tag*
+      depending on transport, so the full vocabulary across 349 bonds projects to
+      ~3.9 GB against a 3,800 MB ceiling, in a process only a human restart
+      shrinks.
 
-    ``ASW_4_JPY`` is out and ``ASW_4_AUD`` is in. The docstring claimed the set was
-    "in descending coverage order", and JPY was in fact the LEAST covered value of
-    all thirteen: 324 of 2,162 against AUD 1,120, GBP 1,110, USD 1,081, CHF 689,
-    EUR 418, CAS 381. On the US universe the gap is starker still - 348 of the 349
-    US Treasuries serve ASW_4_AUD against 253 for ASW_4_USD and 56 for ASW_4_JPY.
+    The old docstring here claimed the default "stays at seven" and quoted
+    coverage numbers (ASW_4_JPY 324/2,162, ASW_4_USD 253/349) that were artefacts
+    of a ONE-WEEK probe window. Re-measured over five years, all six
+    ``ASW_4_<CCY>`` legs serve 349/349 US Treasuries.
     """
-    assert DEFAULT_BOND_VALUES == (
+    from MDP.CitiVelocityExcel import tags as _T
+
+    assert DEFAULT_BOND_VALUES == tuple(_T.BOND_VALUES), (
+        "the EOD default is the measured vocabulary; if BOND_VALUES moved, this "
+        "is the reminder to re-measure the intraday cost before it follows"
+    )
+    assert INTRADAY_BOND_VALUES == (
         "PRICE", "YIELD", "DURATION", "SPREAD_TSY", "DV01", "ASW_4_USD", "ASW_4_AUD",
     )
-    for value in DEFAULT_BOND_VALUES:
-        assert value in V.CITI_BOND_VALUES
-    assert "OAS" not in DEFAULT_BOND_VALUES
-    assert "OAS" in V.CITI_BOND_VALUES, "still addressable, just not by default"
+    assert len(INTRADAY_BOND_VALUES) < len(DEFAULT_BOND_VALUES), (
+        "the whole point of the split is that intraday asks for less"
+    )
+    for value in DEFAULT_BOND_VALUES + INTRADAY_BOND_VALUES:
+        assert value in V.CITI_BOND_VALUES, value
 
 
 def test_an_empty_basket_costs_nothing():
