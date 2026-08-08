@@ -21,7 +21,8 @@ sys.path.insert(0, str(_REPO))
 
 import pandas as pd
 
-LOCI = [("2Y", "10Y"), ("10Y", "10Y"), ("20Y", "10Y"), ("1Y", "10Y"), ("6M", "10Y")]
+LOCI = [("2Y", "10Y"), ("10Y", "10Y"), ("20Y", "10Y"), ("1Y", "10Y"), ("6M", "10Y"),
+        ("1M", "10Y"), ("3M", "10Y"), ("3M", "2Y"), ("6M", "2Y")]
 START = datetime.date(2020, 1, 24)
 CHUNK = 250
 
