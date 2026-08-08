@@ -63,9 +63,18 @@ def main() -> None:
     # F3's k runs 2..19 years forward; the measured buckets that cover it are
     # 1-3Y, 3-6Y and 6-10Y. Beyond 10Y there is no measurement, so those k are
     # priced at the widest measured bucket and the extrapolation is FLAGGED.
-    fwd_buckets = [b for b in ("1-3Y", "3-6Y", "6-10Y") if b in hs]
-    if not fwd_buckets:
-        raise SystemExit("CM-2 measured no forward-starting 1Y cells")
+    # CM-2's forward-start cells are UNINFORMATIVE (47 cells, median at-stamp
+    # 16.6x the assumed line, none below it, small samples, and evidently
+    # contaminated by package legs and off-market unwinds). So the forward line
+    # F3 actually trades is NOT measured. What can still be said rigorously is a
+    # LOWER BOUND: a forward-starting 1Y swap cannot be tighter than a spot 1Y,
+    # so the spot cell bounds the package cost from below. If even the lower
+    # bound exceeds what F3 was charged, F3's death is confirmed rather than
+    # reopened — and no upper bound is needed for that conclusion.
+    fwd_buckets = ["spot"]
+    print("\nUsing the SPOT 1Y cell as a LOWER BOUND on the forward-start line: "
+          "CM-2's forward cells are uninformative (see the ledger row), and a "
+          "forward-starting swap cannot trade tighter than its spot equivalent.")
     for reading in ("upper_bound_bp", "at_stamp_bp"):
         vals = [hs[b][reading] for b in fwd_buckets if np.isfinite(hs[b][reading])]
         if not vals:
