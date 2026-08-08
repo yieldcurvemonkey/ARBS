@@ -167,6 +167,24 @@ def fetch_curve(
 ) -> Tuple[int, int]:
     """Fetch ``[start, end)`` of minute par rates for one curve.
 
+    ``start`` and ``end`` are dates in the curve's OWN zone, and the window sent
+    to the add-in is the wire-zone image of those local midnights - not the wire
+    midnights that share their calendar labels. That distinction is the whole
+    correctness of this function for anything east of New York.
+
+    The add-in stamps every curve in New York wall-clock, and the block below
+    buckets what comes back by curve-LOCAL date. Tokyo is ET+13h, so a wire window
+    of ``[d 00:00, d+1 00:00)`` lands on Tokyo ``[d 13:00, d+1 13:00)``: local day
+    ``d`` gets its afternoon and loses its 00:00-12:59 morning to the previous
+    window. MEASURED 2026-08-08 - JPY days that happened to fall on a 5-day
+    window boundary held **60 minutes** instead of 720, on 2026-07-10, 07-15,
+    07-20, 07-30 and 08-04. Every gap between those dates is a multiple of
+    ``DEFAULT_WINDOW["MI01"]``, which is what identified the boundary rather than
+    the data as the cause.
+
+    Anchoring on local midnight makes a requested local day whole by construction
+    and is a no-op for USD and CAD, whose zone IS the wire zone.
+
     Returns ``(days_written, windows_run)``. Days already on disk are skipped
     unless ``force`` - that skip is what makes a lost Excel session cost only the
     window that was in flight.
@@ -187,19 +205,32 @@ def fetch_curve(
     days_written = 0
     windows_run = 0
 
-    cursor = _dt.datetime.combine(start, _dt.time.min)
-    stop = _dt.datetime.combine(end, _dt.time.min)
-    while cursor < stop:
-        w_end = min(cursor + window, stop)
+    local_zone = zoneinfo.ZoneInfo(entry.local_timezone)
+    wire_zone = zoneinfo.ZoneInfo(WIRE_TZ)
+
+    def _wire_instant(day: _dt.date) -> _dt.datetime:
+        """The naive wire-zone instant at which ``day`` starts in the curve's zone."""
+        local_midnight = _dt.datetime.combine(day, _dt.time.min, tzinfo=local_zone)
+        return local_midnight.astimezone(wire_zone).replace(tzinfo=None)
+
+    # The cursor walks LOCAL dates, so the days named here are the same days the
+    # parquet files are named after. Walking wire datetimes made those two
+    # disagree, which is why the resume check could skip a day it had not filled.
+    cursor_day = start
+    while cursor_day < end:
+        chunk_end_day = min(cursor_day + window, end)
         # Skip a window only when EVERY weekday in it is already on disk.
         needed = [
-            d for d in pd.date_range(cursor, w_end, freq="D", inclusive="left").date
+            d for d in pd.date_range(cursor_day, chunk_end_day, freq="D", inclusive="left").date
             if d.weekday() < 5 and (force or not (curve_dir / f"{d.isoformat()}.parquet").exists())
         ]
         if not needed:
-            logger.info("  %s..%s  already on disk, skipped", cursor.date(), w_end.date())
-            cursor = w_end
+            logger.info("  %s..%s  already on disk, skipped", cursor_day, chunk_end_day)
+            cursor_day = chunk_end_day
             continue
+
+        cursor = _wire_instant(cursor_day)
+        w_end = _wire_instant(chunk_end_day)
 
         series, windows = fetch_windowed(
             client, tags, freq, cursor, w_end, window=window, strict_spacing=True
@@ -238,7 +269,7 @@ def fetch_curve(
                 n = _write_day_parquet(out, sub)
                 days_written += 1
                 logger.info("  wrote %s  %d minutes x %d tenors", out.name, n, sub.shape[1])
-        cursor = w_end
+        cursor_day = chunk_end_day
 
         # Dropping each window's sheet bounds the number of live cells but does
         # NOT return Excel's process memory. Measured 2026-08-07 the hard way: a
