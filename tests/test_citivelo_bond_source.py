@@ -67,8 +67,8 @@ def _unserved_value() -> str:
     These tests used to say "no US Treasury serves CAS" and "CUSIP_B does not
     serve ASW_4_USD". Both were artefacts of a ONE-WEEK probe window against a
     single bond: re-measured over five years, 304 of 349 USTs serve CAS and all
-    349 serve ASW_4_USD. The property under test â€” a value the bond's own
-    vocabulary lacks is reported as unavailable, never as an empty window â€” is
+    349 serve ASW_4_USD. The property under test — a value the bond's own
+    vocabulary lacks is reported as unavailable, never as an empty window — is
     unchanged, so it now asks the catalog which value has that shape.
     """
     from MDP.CitiVelocityExcel import tags as _T
@@ -411,6 +411,21 @@ def test_one_bad_leg_fails_the_whole_structure():
 # ------------------------------------------------------------------ #
 
 
+def _cache_key(stamp, cusip: str, source: str) -> str:
+    """The pricer cache key, VINTAGED.
+
+    Built from the constant rather than restated, because the point of the
+    constant is that it moves; a literal here would have to be edited on every
+    bump and would then assert nothing about whether the key carries a vintage at
+    all. :func:`test_a_pricer_cached_under_an_older_vintage_is_not_served` is what
+    holds the property itself.
+    """
+    return (
+        f"{FixedRateBondsMDP.CITIVELO_PRICER_CACHE_VERSION}-"
+        f"{stamp.isoformat()}-{cusip}-{source}"
+    )
+
+
 @pytest.fixture()
 def wired(monkeypatch):
     """A ``FixedRateBondsMDP`` with reference data stubbed and the pricer cache
@@ -540,7 +555,7 @@ def test_an_eod_request_is_cached_and_a_live_one_is_not(wired):
     mdp = wired("USTS_CITIVELO-QL")
     mdp._get_multi_pricers(cusips=[CUSIP_A], timestamp=AS_OF, kwargs={"citivelo_quotes": quotes})
     cache = getattr(mdp, FixedRateBondsMDP._FRB_PRICER_CACHE)
-    assert list(cache) == [f"{AS_OF.isoformat()}-{CUSIP_A}-USTS_CITIVELO-QL"]
+    assert list(cache) == [_cache_key(AS_OF, CUSIP_A, "USTS_CITIVELO-QL")]
 
     quotes2, _ = _fake_quotes(minutes=True)
     live = wired("USTS_CITIVELO-QL")
@@ -550,6 +565,42 @@ def test_an_eod_request_is_cached_and_a_live_one_is_not(wired):
     assert CUSIP_A in out, "live built no pricer, so the cache assertion below means nothing"
     assert out[CUSIP_A].meta()["citivelo_mode"] == "live"
     assert getattr(live, FixedRateBondsMDP._FRB_PRICER_CACHE) == {}
+
+
+def test_a_pricer_cached_under_an_older_vintage_is_not_served(wired, monkeypatch):
+    """A correction to how pricers are BUILT must not be invisible to the cache.
+
+    The key is ``{date}-{cusip}-{source}``, and not one of those three moves when
+    the building code does - so before the vintage was added, an entry outlived
+    every fix to the thing that made it, silently and forever.
+
+    That is not hypothetical. The quote sanity screen refuses Citi's
+    ``PRICE = -0.562509`` for the on-the-run 2-year on 2026-07-14; on a machine
+    whose cache predated the screen, the pricer came straight back off disk still
+    carrying the negative price and the refusal never ran.
+
+    The poisoned entry here is deliberately a value no real quote produces, so a
+    pass cannot come from the fetcher happening to agree with it.
+    """
+    poison = {"clean_price": -999.0}
+    stale_key = f"v1-{AS_OF.isoformat()}-{CUSIP_A}-USTS_CITIVELO-QL"
+
+    quotes, _ = _fake_quotes()
+    mdp = wired("USTS_CITIVELO-QL")
+    cache = getattr(mdp, FixedRateBondsMDP._FRB_PRICER_CACHE)
+    cache[stale_key] = poison
+    # The control: under the CURRENT vintage the same entry IS served, so this
+    # test is about the vintage and not about the cache being ignored outright.
+    assert FixedRateBondsMDP.CITIVELO_PRICER_CACHE_VERSION != "v1"
+
+    out = mdp._get_multi_pricers(
+        cusips=[CUSIP_A], timestamp=AS_OF, kwargs={"citivelo_quotes": quotes}
+    )
+    assert out[CUSIP_A].clean_price() == pytest.approx(_VALUES["PRICE"][CUSIP_A]), (
+        "a pricer built under an older vintage was served"
+    )
+    assert stale_key in cache, "the stale entry should be ignored, not deleted"
+    assert _cache_key(AS_OF, CUSIP_A, "USTS_CITIVELO-QL") in cache
 
 
 def test_a_second_eod_request_is_served_from_the_cache_without_the_vendor(wired):
@@ -585,7 +636,7 @@ def test_the_cached_args_survive_a_real_pickle_round_trip(wired):
     mdp = wired("USTS_CITIVELO-QL")
     mdp._get_multi_pricers(cusips=[CUSIP_A], timestamp=AS_OF, kwargs={"citivelo_quotes": quotes})
     args = getattr(mdp, FixedRateBondsMDP._FRB_PRICER_CACHE)[
-        f"{AS_OF.isoformat()}-{CUSIP_A}-USTS_CITIVELO-QL"
+        _cache_key(AS_OF, CUSIP_A, "USTS_CITIVELO-QL")
     ]
 
     quoted_book = args["meta_data"][V.QUOTED_KEY]
