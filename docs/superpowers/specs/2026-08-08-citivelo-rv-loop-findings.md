@@ -163,3 +163,143 @@ cross-sectional many-bet books, event windows), not more EOD carry variants.
 - USD: all pairs carry-negative today; BE/RV 0.96–1.72; 20s30s spot inverted.
 - JPY 10y10y/20y10y at −3.7bp, flattest in a year — the PM's Japan-flattener thesis is a
   multi-year expectations-wash argument, not a current BE/RV entry state (both recorded).
+
+---
+
+# Session 2 (2026-08-08) — the QDB backlog, and what making it executable found
+
+**Verdict first: no verdict changed, and three of them got worse.** The standing rule asked for
+`QueryDrivenBacktest` implementations of the graded strategies as executed notebooks. Building
+them forced conventions into the open that the panel engines had left implicit, and every one
+of them had been flattering its strategy. Branch `feat/citivelo-rv-loop-s2`, PR #405.
+`trials_total` is unchanged at **22** — these are implementations of DEAD strategies.
+
+## The continuation contract, items 1 and 2
+
+**famb STRG forward run — BLOCKED** (L-0047). Four of the ~20 required forward sessions have
+elapsed since the spec froze on 2026-08-04. Re-check on or after 2026-09-02. Nothing was run:
+previewing it would consume the one pre-registered trial's independence.
+
+**SR3 listed-butterfly history — NOT REACHABLE** (L-0048). Barchart's EOD endpoint serves no
+exchange-listed spread instrument under any of seven encodings, and the cross-product control
+(`CLF27-CLG27`, the most heavily traded listed calendar in US futures) fails identically — so
+this is a property of the endpoint, not a symbology guess that missed. Databento is installed
+but has no API key anywhere reachable, and one MBO day is the entire local corpus.
+
+> **A Databento API key is the only thing standing between this program and its
+> highest-value remaining study** — re-costing the dead STIR labs at the measured 0.506 bp
+> round trip instead of the 2.0 bp they were killed at.
+
+The probe's first version scored a hit as `len(df) > 0`. Barchart answers an unknown symbol
+with HTTP 200 and a one-row body reading `Error: invalid symbol`, so it reported all seven
+encodings served — **the defect manufactured the high-value outcome on the session's first
+measurement** (L-0049). Hits now require a parsed date, and both a positive and a
+cross-product negative control run every time.
+
+## H13 — the fill day is the whole edge
+
+`sv_h13_qdb.ipynb`. Engine ties out against a matched-semantics panel rerun at **corr 0.99995**
+over 2,755 days, on episodes asserted byte-equal to the graded ones.
+
+The panel sums the flows *dated* `entry..exit`, and the flow dated at the entry is the move
+from the **previous** close. So the graded book fills at the same close its signal was computed
+from — `state = grail.shift(1)` removes the lookahead but leaves zero implementation lag. The
+design doc's marking policy requires lag-1 fills ("signal on day t, execute at day t+1 marks")
+and the checker charter asks "Fills at t+1?".
+
+On the same aged panel package, moving the window one day later:
+
+| | gross | registered cost @1x | net |
+|---|---:|---:|---:|
+| as graded (fill at signal close) | +282.7 bp | 174.0 bp | **+106.7 bp** |
+| at a `t+1` fill | +166.1 bp | 174.0 bp | **−7.9 bp** |
+
+The engine books agree in direction and size: **+162.4 bp `SELECTION-ARTIFACT` → −13.8 bp
+`DEAD`**, median episode −1.29 bp, hit 31%, per-episode Sharpe −0.019.
+
+Split by end (L-0052): dropping the entry-dated flow costs **+70.9 bp**, adding the day after
+the exit costs a further **−45.6 bp**. Both ends are material, and the pairing is the finding —
+the state does not merely *begin* on a big favourable day, it *ends* just before a big adverse
+one. Both boundaries are timed on same-day information. That is a spread-extreme **bracket**,
+which is L-0030's occupancy-matched rival check with a price at each end, and L-0027's
+"chattering at the carry-zero boundary" made quantitative: carry crosses zero on days the
+spread moves, in both directions.
+
+**Containment:** this is specific to H13's state-scaled `_book` path. The always-on controls and
+H14G have trivial states, the F-gates have no fills at all, and the rival check compared
+like-for-like. No other verdict needs re-auditing for it.
+
+**The alternative reading, stated:** a desk prices this state intraday and could trade before
+the close, so a same-close fill is defensible as a description of practice. It is simply not the
+convention this program grades on.
+
+## H14 — the engine re-derives the checker's kill, and prices what it could only qualify
+
+`sv_h14_qdb.ipynb`, the fly leg only (the flattener is what L-0045 certified).
+
+A `QueryDrivenBacktest` book **cannot** double-count carry: its equity change *is* the total PV
+change, once, with no separate carry bucket to add. The engine lands at **+13.0 bp** — 4.2 bp
+from the committed `fly_mtm` (+8.8) and 27.8 bp from `fly_mtm + fly_carry` (+40.9). V-SV-14G-KILL,
+re-derived from an independent code path.
+
+Correlation cannot settle this and is not asked to: `fly_carry` is a smooth ~0.006 bp/day drift
+and both readings correlate at 0.995. The **terminal level** is the discriminating statistic.
+
+The solve schedule is replayed from the artifact; the weights are re-derived, because the
+artifact stores only the per-leg DV01 *changes* and never the levels. **187 of 201 solves
+reproduce to floating-point equality** off the re-derived path — 200-odd independent PCA solves
+do not agree to the last bit by accident.
+
+The 14 that do not close the checker's other finding. There are **22** annual segments, so 22
+re-initiations; the ledger carries **8**. Every unexplained solve is the first one after a
+segment start whose row is absent — **paired 1:1, 14/14**. So "~14 lost re-initiations" is
+exactly 14, they are named, and at `cost_model` half-spreads they are worth **+5.27 bp** of
+maintenance the graded bill never charged. Restoring them in the engine moves gross by only
+−0.54 bp, which is the useful negative: their damage is almost entirely in the cost line.
+
+Net contribution is negative at every multiplier: **−5.1 / −23.2 / −59.5 bp** at 0.5x / 1x / 2x.
+
+**A live trap, recorded not repaired:** `h14_fly_ledger_USD.parquet` is stored in the **pre-fix**
+convention while `scripts/sv_citivelo_h14_graded.py` was repaired at `f362eac4` and never re-run.
+Read `fly_mtm` alone from the committed parquet; read the sum from any freshly generated one.
+
+## H16b — the cube-served swaption path works, and the vol mark has a vintage mix
+
+`sv_h16b_qdb.ipynb`. The handover pre-authorised recording a gap if this needed real plumbing.
+It does not. Recipe of record:
+
+    IRSwaptionMDP(source="CITIVELO-RL", curve_source="CITIVELO_EXCEL")
+    IRSwaptionQuery(STRADDLE, SPOT_NPV, shorthand="2Yx10Y", strike="ATMF", side="sell",
+                    structure_kwargs={"notional": m * 100e6})
+
+`IRSwaptionPositionHandler` is entry-anchored as documented, so strike and exercise date are
+both frozen — a real held swaption. **Four silent failure modes** on the way (L-0055): the source
+token needs a provider-engine pair; `curve_source` is a constructor argument, not a request key;
+`curve_source="CITIVELO"` is the **minute** asset and has no pre-2023 days; and `run()` swallows
+all three into a completed backtest with a full equity curve, no holes, no NaNs and **every mark
+exactly 0.0**. The non-zero-marks assertion carried over from the H13 notebook is what caught
+the third.
+
+The graded vol leg freezes the strike and ages the time to expiry, but takes the forward and
+annuity from the **constant-maturity** locus panel — an ageing option written on a forward that
+never ages, the vintage trap the `CurvePricer` docstring warns about on the linear side,
+reproduced on the vol side. Unhedged and short the same straddle, the daily paths track at
+corr 0.999, so the disagreement is a level: the held swaption loses **16.2%** and **11.2%** more
+than the graded mark. Not apportioned — vol interpolation and the business-day time-to-expiry
+approximation are also candidates — but both episodes agree on the sign, and the sign says the
+convention flattered the short-straddle leg. Two episodes; a scoping result, recorded as one.
+
+## The engine assertion that earns its keep
+
+`DateTriggerRequirements` tests `state.date() in set(self.dates)`, so a `pd.Timestamp` in that
+set never compares equal and **every trigger becomes a silent no-op**. The run completes, the
+equity curve has no holes, there are no NaNs, and every mark is exactly zero. "No holes and no
+NaNs" does not distinguish a working book from an empty one. Every engine cell in these three
+notebooks now asserts non-zero marks *and* a closed-position count — the assertion caught two
+further instances in the H16b work.
+
+## The pattern, again
+
+Four defects were found this session — the probe's error-payload hit, H13's fill day, H14's
+missing re-initiations, H16b's vintage mix. **All four flattered the thing being measured.** The
+session-1 tally was twelve of twelve. Nothing about that has changed.
