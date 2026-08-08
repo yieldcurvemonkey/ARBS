@@ -138,6 +138,12 @@ class _Conn:
             return _Result(out)
         if "SELECT DISTINCT" in sql:
             return _Result([_Row(k=k) for k in sorted({k for _, k in self.db.rows})])
+        if "SELECT payload, sha256, row_count" in sql:  # the verifier's read
+            row = self.db.rows.get((params["d"], params["k"]))
+            if row is None:
+                return _Result([])
+            self.db.payload_reads.append((params["d"], params["k"]))
+            return _Result([_Row(**row)])
         if "SELECT payload, sha256, data_format" in sql:
             row = self.db.rows.get((params["d"], params["key"]))
             if row is None:
