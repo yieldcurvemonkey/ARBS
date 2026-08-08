@@ -303,3 +303,47 @@ further instances in the H16b work.
 Four defects were found this session — the probe's error-payload hit, H13's fill day, H14's
 missing re-initiations, H16b's vintage mix. **All four flattered the thing being measured.** The
 session-1 tally was twelve of twelve. Nothing about that has changed.
+
+## The DSR wall is not the trial count — it is config disagreement (L-0057)
+
+Computed before spending a gate on the next family, because the answer decides what a next
+family should even look like.
+
+`DSR > 0.5` is exactly `sr > sr0`, and `sr0 = expected_max_sharpe_null(N, var_sr) = sd(SR) × k(N)`
+where `k` grows like `sqrt(2 ln N)`. Measured:
+
+| N | k(N) |
+|---:|---:|
+| 22 | 1.943 |
+| 30 | 2.073 |
+| 40 | 2.190 |
+| 3,905 | 3.622 |
+
+**The trial count enters through a term that barely moves — N from 3,905 down to 22 buys a
+factor of 1.87 — while the cross-trial Sharpe dispersion enters linearly.**
+
+For the SV arms the measured `sd(per-trade Sharpe)` is **0.2758** (range −0.784…+0.219 across 14
+arms). So the bar was **0.536 at N=22** and **0.9997 at N=3,905**, and the best arm was **0.219**.
+It failed both. Recomputed directly on the committed `h13_trades_*`:
+
+> **Max DSR over all 14 H13 arms at n_trials = 22 is 0.101.**
+> H13 would have died at the loop's own trial count.
+
+So the handover's framing — *"this is why carry-class books can never be ALIVE in the SV family —
+and why family selection matters more than signal cleverness"* — is too generous to family
+selection. L-0042(b) is arithmetically true and nearly irrelevant.
+
+### What this binds on every registration from here
+
+A family passes DSR when **its configs agree on a positive Sharpe**, not when it has few trials.
+A wide sweep is self-defeating twice over: it raises `N` a little and `sd(SR)` a lot. Register
+**few, closely-related configs and require them all to work.**
+
+Two caveats that must travel with this, because it is otherwise a recipe for gaming the bar:
+
+1. The house convention estimates `var_sr` **from the sweep itself** (`deflated_sharpe`
+   docstring: "the honest input"). A deliberately tiny sweep would therefore understate its own
+   penalty. Any registration relying on this must **pre-state where `sd(SR)` comes from** and
+   report the verdict's sensitivity to it.
+2. DSR is pulled toward 0.5 *from below* on small samples — the n=6 arm scores the **highest**
+   DSR at N=22 while being net **negative**. A DSR near 0.5 on few observations is not evidence.
