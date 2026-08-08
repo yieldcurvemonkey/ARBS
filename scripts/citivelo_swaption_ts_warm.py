@@ -264,7 +264,14 @@ def cmd_warm(args) -> int:
         )
         mdp._default_request_kwargs["verify"] = True
         t0 = time.perf_counter()
-        from TB.IRSwaptionsTB import _build_row_for_query
+        from TB.IRSwaptionsTB import _build_row_for_query, _flatten_queries_with_wrappers
+
+        # A query built with value=[NVOL, SPOT_PREM] is NOT directly priceable -
+        # BaseValue.apply does `value not in self._map` and a list is unhashable.
+        # get_timeseries expands multi-value queries first; the preflight has to
+        # do the same rather than hand a raw one to _build_row_for_query.
+        flat_queries, _ = _flatten_queries_with_wrappers(queries)
+        probe = flat_queries[0]
 
         for d in preflight:
             try:
@@ -276,7 +283,7 @@ def cmd_warm(args) -> int:
                 # read, which happens when a STRIKE is resolved. A preflight that
                 # only builds the context finishes in 2 s and verifies nothing.
                 # Price one query to force it.
-                _build_row_for_query(ctx, queries[0], d)
+                _build_row_for_query(ctx, probe, d)
             except ExcelWasTouched:
                 raise
             except Exception as exc:  # noqa: BLE001

@@ -409,7 +409,14 @@ def push_asset(
 # ── snapshot rows ─────────────────────────────────────────────────────────
 
 
-def push_snapshot_rows(engine, curve_base: pathlib.Path, asset: str, days: Sequence[datetime.date]) -> int:
+def push_snapshot_rows(
+    engine,
+    curve_base: pathlib.Path,
+    asset: str,
+    days: Sequence[datetime.date],
+    *,
+    batch_days: int = 100,
+) -> int:
     """Write the tagged ``arbs_curve_snapshots_v1`` rows for a set of days.
 
     Uses the same ``curve_tag_config.get_tags`` gate the existing
@@ -428,8 +435,16 @@ def push_snapshot_rows(engine, curve_base: pathlib.Path, asset: str, days: Seque
     from Caching.db_session import labelled_transaction, make_label
     from Caching.supabase_curve_blocks import CurveBlobSync
 
+    """
+    ``batch_days`` groups days into ONE transaction. Measured on the first eod
+    run: 13,480 days took 27.1 minutes of which the blob push was ~3 - the rest
+    was this function at one transaction (one pooler round trip) per day. The
+    rows themselves are ~1 KB each and there is at most one tagged row per EOD
+    day, so the batching is pure round-trip elimination.
+    """
     sync = CurveBlobSync(base_dir=curve_base, engine=engine, kind="raw")
     written = 0
+    pending: List[dict] = []
     sql = text(
         """
         INSERT INTO arbs_curve_snapshots_v1
@@ -497,15 +512,24 @@ def push_snapshot_rows(engine, curve_base: pathlib.Path, asset: str, days: Seque
                     "discount_factors": [float(v) for v in row["discount_factors"]],
                 }
             )
-        if not rows:
-            continue
-        with labelled_transaction(
-            engine, label=make_label("curve_l2_rows", detail=asset[:20]), statement_timeout_ms=0
-        ) as conn:
-            for params in rows:
-                conn.execute(sql, params)
-        written += len(rows)
+        pending.extend(rows)
+        if len(pending) >= batch_days:
+            written += _flush_snapshot_rows(engine, sql, asset, pending)
+            pending = []
+
+    written += _flush_snapshot_rows(engine, sql, asset, pending)
     return written
+
+
+def _flush_snapshot_rows(engine, sql, asset: str, rows: List[dict]) -> int:
+    if not rows:
+        return 0
+    with labelled_transaction(
+        engine, label=make_label("curve_l2_rows", detail=asset[:20]), statement_timeout_ms=0
+    ) as conn:
+        for params in rows:
+            conn.execute(sql, params)
+    return len(rows)
 
 
 # ── verify ────────────────────────────────────────────────────────────────
