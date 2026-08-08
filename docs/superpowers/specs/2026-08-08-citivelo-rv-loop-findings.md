@@ -120,8 +120,25 @@ fill in grading order; the DSR trial count is quoted only in the final revision.
   proxy; premium-marked collection is a fraction of it, and the sandwich exits *with* the vol
   spike (63-day realized lags), hitting the short straddle first — the famb insurance lesson,
   reproduced in swaption space.
-- **H16 z-fade (L-0019).** Killed at its oracle gate: pond/boat 0.8–1.8× with harvest
+- **H16 z-fade (L-0019/V-SV-16).** Killed at its oracle gate: pond/boat 0.8–1.8× with harvest
   historically 10–30% of oracle. Never backtested — the gate said stop.
+- **F-ING cross-sectional curve RV (V-FING, cycle 2).** Dead at its fidelity gate — the v2
+  cross-sectional construction closed the v1 gap (frontier R² 0.03→0.68/0.78) but no single
+  realization passes all three registered prongs, and the blockers are structural (21–29Y
+  par-interpolation sawtooth; ESTR-OIS grid vs ING's 2020 EURIBOR curve).
+- **F3 liquid-tenor cross-sectional RV (L-0036, cycle 2).** Dead at gate with the cleanest
+  numbers in the program: 303–686 genuinely independent episodes per currency, median
+  dislocation 2.2–3.4bp, median 63-day reversion +0.81…+1.14bp vs a 1.0bp round trip — the
+  pond equals the boat at the *oracle* median, before the signal-harvest haircut. The
+  fly-mean-reversion sentence, transplanted to swaps.
+- **F4 FOMC event windows (L-0037).** No pond exists: decision days move the ultra-long
+  spreads at 0.92×/0.58× ordinary days — which independently CONFIRMS the framework's
+  expectations-wash premise.
+- **F5 expiry-kink vol flies (L-0038).** Oracle-median reversion (+0.61/+1.08bp at 21bd)
+  under the measured 3-leg round trip (1.38/1.68bp); 30% of fires clear it.
+- **F6 intraday (L-0039).** The STIR arithmetic reproduced in swap space: SV spreads move
+  0.07–0.10bp/hour against a frequency-invariant 1.5bp round trip; every RV structure under
+  the boat out to a week. Only the 10y outright clears — a directional pond, not RV.
 
 ## DSR accounting
 
