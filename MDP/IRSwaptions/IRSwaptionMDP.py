@@ -3,6 +3,7 @@ from __future__ import annotations
 import datetime as dt
 import hashlib
 import json
+import logging
 from dataclasses import dataclass
 from typing import Any, Callable, Dict, Iterable, Literal, Optional
 
@@ -15,16 +16,55 @@ from Query.IRSwaps._IRSwapGenericCurve import _IRSwapGenericCurve
 
 DateLike = dt.date | dt.datetime | str
 
+_logger = logging.getLogger(__name__)
+
+#: Curve sources whose "don't use the cache" path is not merely slower but
+#: reaches OUTSIDE the process for data. ``citivelo_excel*`` falls back from the
+#: CurveStore to the quotes layer, which is cached-then-**live** and drives the
+#: user's signed-in Excel add-in over COM. Forwarding a swaption-level cache flag
+#: into one of these is how a "rebuild my context" request becomes a COM fetch.
+_CURVE_SOURCES_WITH_LIVE_REFRESH: tuple[str, ...] = (
+    "CITIVELO_EXCEL",
+    "CITIVELO-EXCEL",
+    "CITIVELO",
+    "CITI_VELO",
+    "CITIVELOCITY",
+)
+
+
+def _curve_refresh_goes_outside(curve_source: str) -> bool:
+    """True when refreshing this curve source can reach Excel or a workbook."""
+    token = str(curve_source or "").strip().upper().replace("-", "_")
+    return any(token.startswith(t.replace("-", "_")) for t in _CURVE_SOURCES_WITH_LIVE_REFRESH)
+
 
 @dataclass
 class IRSwaptionMarketContext:
+    """One dated market snapshot: a curve, a vol object and an engine to use them.
+
+    The four market fields are annotated ``Any`` because the engine decides what
+    they are, not this class. Under ``engine='QL'`` they are exactly what they
+    always were - ``ql.YieldTermStructureHandle``, ``ql.SwapIndex``,
+    ``ql.SwaptionVolatilityStructureHandle``, ``ql.PricingEngine`` - and every
+    existing provider still produces those. Under ``engine='RL'`` the curve handle
+    is a ``rateslib.Curve``, the vol object is a
+    :class:`~MDP.CitiVelocityExcel.vol.swaption_cube.CitiVeloSwaptionCube` and the
+    pricing engine is an
+    :class:`~MDP.IRSwaptions.CITIVELO.rl_engine.RLSwaptionEngine`.
+
+    The registry was always this permissive - ``tests/test_ir_swaption_mdp.py``
+    registers an engine factory returning a bare ``object()`` and drives it end to
+    end - so the annotations were describing one engine rather than the contract.
+    Writing ``Any`` is not a loosening; it is what the code has always done.
+    """
+
     curve_name: str
     as_of_date: dt.date
     curve: _IRSwapGenericCurve
-    curve_handle: ql.YieldTermStructureHandle
-    swap_index: ql.SwapIndex
-    vol_handle: ql.SwaptionVolatilityStructureHandle
-    pricing_engine: ql.PricingEngine
+    curve_handle: Any
+    swap_index: Any
+    vol_handle: Any
+    pricing_engine: Any
     provider: str
     engine: str
     surface_type: str
@@ -91,6 +131,35 @@ def _normalize_dates(values: Iterable[DateLike]) -> list[dt.date]:
     return sorted(out)
 
 
+def _citivelo_vol_provider(
+    *,
+    curve_name: str,
+    dates: list[dt.date],
+    surface_type: str,
+    **kwargs: Any,
+) -> dict[dt.date, Any]:
+    """Citi Velocity's swaption cube, as a ``VOL_PROVIDERS`` entry.
+
+    A module-level function rather than a static method so the two flags below
+    survive attribute lookup: ``_build_contexts`` reads them off whatever object
+    the registry holds.
+    """
+    from MDP.IRSwaptions.CITIVELO.provider import get_citivelo_vol_objects
+
+    return get_citivelo_vol_objects(
+        curve_name=curve_name, dates=dates, surface_type=surface_type, **kwargs
+    )
+
+
+#: This provider needs the curve (its strike axis is anchored on one) and the
+#: engine token (it returns a QuantLib handle under ``-QL`` and the cube itself
+#: under ``-RL``). Both are passed ONLY to providers that ask, because
+#: ``MONKEYCUBE``'s provider forwards ``**kwargs`` straight into
+#: ``get_sabr_vol_surfaces``, where an unexpected keyword is a TypeError.
+_citivelo_vol_provider.wants_curves = True  # type: ignore[attr-defined]
+_citivelo_vol_provider.wants_engine = True  # type: ignore[attr-defined]
+
+
 class IRSwaptionMDP(LayeredCacheMixin, MarketDataProvider[IRSwaptionMarketContext]):
     _CACHE_VERSION = "v1"
     _CACHE_ATTR = "_irswaption_mdp_cache"
@@ -109,6 +178,11 @@ class IRSwaptionMDP(LayeredCacheMixin, MarketDataProvider[IRSwaptionMarketContex
         **kwargs: Any,
     ):
         self.curve_source = curve_source
+        # Whether a request's `ignore_cache` should also bypass the CURVE cache.
+        # It should not, by default: see _fetch_curve_map. `force_refresh=True`
+        # on the constructor is the explicit "refresh everything" switch and does
+        # carry through.
+        self.curve_ignore_cache = bool(force_refresh)
         self._default_request_kwargs: dict[str, Any] = {}
         if data_dir is not None:
             self._default_request_kwargs["data_dir"] = str(data_dir)
@@ -129,8 +203,12 @@ class IRSwaptionMDP(LayeredCacheMixin, MarketDataProvider[IRSwaptionMarketContex
             self.VOL_PROVIDERS["MONKEYCUBE"] = self._monkeycube_vol_provider
         if "GSQUANT_MC_ENHANCED" not in self.VOL_PROVIDERS:
             self.VOL_PROVIDERS["GSQUANT_MC_ENHANCED"] = self._gsquant_mc_enhanced_vol_provider
+        if "CITIVELO" not in self.VOL_PROVIDERS:
+            self.VOL_PROVIDERS["CITIVELO"] = _citivelo_vol_provider
         if "QL" not in self.ENGINE_FACTORIES:
             self.ENGINE_FACTORIES["QL"] = self._ql_engine_factory
+        if "RL" not in self.ENGINE_FACTORIES:
+            self.ENGINE_FACTORIES["RL"] = self._rl_engine_factory
 
     @staticmethod
     def _gsquant_vol_provider(
@@ -186,6 +264,21 @@ class IRSwaptionMDP(LayeredCacheMixin, MarketDataProvider[IRSwaptionMarketContex
             return ql.BachelierSwaptionEngine(curve_handle, vol_handle)
         except TypeError:
             return ql.BachelierSwaptionEngine(curve_handle, vol_handle, day_counter)
+
+    @staticmethod
+    def _rl_engine_factory(
+        *,
+        curve_handle: Any,
+        vol_handle: Any,
+        day_counter: Any,
+        **kwargs: Any,
+    ) -> Any:
+        """The rateslib swaption engine. See :mod:`MDP.IRSwaptions.CITIVELO.rl_engine`."""
+        from MDP.IRSwaptions.CITIVELO.rl_engine import make_rl_swaption_engine
+
+        return make_rl_swaption_engine(
+            curve_handle=curve_handle, vol_handle=vol_handle, day_counter=day_counter, **kwargs
+        )
 
     def _cache_key(
         self,
@@ -268,6 +361,31 @@ class IRSwaptionMDP(LayeredCacheMixin, MarketDataProvider[IRSwaptionMarketContex
             }
 
     @staticmethod
+    def _assert_curve_matches_engine(*, engine: str, curve: Any, curve_handle: Any) -> None:
+        """Refuse a curve the engine cannot price with, and say which one to use.
+
+        ``handle()`` returns a ``ql.YieldTermStructureHandle`` on the QuantLib
+        curve backend and a ``rateslib.Curve`` on the rateslib one, and both
+        classes define it, so the only honest check is on the returned object.
+        """
+        token = str(engine).upper()
+        is_ql = isinstance(
+            curve_handle, (ql.YieldTermStructureHandle, ql.RelinkableYieldTermStructureHandle, ql.YieldTermStructure)
+        )
+        if token == "QL" and not is_ql:
+            raise TypeError(
+                f"engine='QL' needs a QuantLib curve, but {type(curve).__name__}.handle() returned "
+                f"{type(curve_handle).__name__}. Use a -QL_BASIC curve_source (e.g. "
+                "'ERIS_EOD_LIVE-QL_BASIC'), or 'CITIVELO-RL' if you meant the rateslib engine."
+            )
+        if token == "RL" and is_ql:
+            raise TypeError(
+                f"engine='RL' needs a rateslib curve, but {type(curve).__name__}.handle() returned "
+                f"{type(curve_handle).__name__}. Use curve_source='CITIVELO' (Citi's own SOFR "
+                "curve) or 'ERIS_EOD_LIVE-RL_BASIC'."
+            )
+
+    @staticmethod
     def _extract_curve_for_date(curve_map: dict[Any, _IRSwapGenericCurve], d: dt.date) -> Optional[_IRSwapGenericCurve]:
         if d in curve_map:
             return curve_map[d]
@@ -285,26 +403,77 @@ class IRSwaptionMDP(LayeredCacheMixin, MarketDataProvider[IRSwaptionMarketContex
         dates: list[dt.date],
         ignore_cache: bool,
     ) -> dict[Any, _IRSwapGenericCurve]:
+        """Fetch the curves the contexts will carry.
+
+        ``ignore_cache`` here is the CURVE-level flag, which is deliberately NOT
+        the request's own ``ignore_cache``. The two mean different things and one
+        of them has a side effect outside the process:
+
+        * on a swaption request, ``ignore_cache`` means "do not serve me a cached
+          :class:`IRSwaptionMarketContext`" - it is about this MDP's own layered
+          cache;
+        * on a curve request, it means "do not serve me a warmed curve artefact",
+          and for ``citivelo_excel*`` the CurveStore fast path is gated on exactly
+          that flag. Bypassing it drops through to the quotes layer, which is
+          cached-then-**live**, so on a cold tag cache the curve is rebuilt by
+          driving the user's signed-in Excel add-in over COM.
+
+        Forwarding one into the other meant a caller who wanted a fresh context -
+        the ordinary thing to want after registering a provider, or in a test -
+        silently got a COM fetch against a 3 GB Excel that only a human can
+        restart. It also made the common case impossible: rebuild a context off
+        the warmed curve.
+
+        So they are separate knobs now. ``curve_ignore_cache`` on the request (or
+        ``force_refresh=True`` on the constructor) is the explicit way to ask for
+        a curve refresh, and it says so out loud when that refresh can go outside.
+        """
+        if ignore_cache and _curve_refresh_goes_outside(self.curve_source):
+            _logger.warning(
+                "curve_ignore_cache=True with curve_source=%r bypasses the CurveStore. That "
+                "source rebuilds through a cached-then-LIVE quotes layer, so on a cold tag cache "
+                "this drives the signed-in Excel add-in over COM. Drop the flag to use the warmed "
+                "curve - it is the same curve.",
+                self.curve_source,
+            )
+        # Route AROUND bulk_get_data for these sources. Not a preference: the
+        # CurveStore fast path lives only in IRSwapsMDP.get_data, so
+        # bulk_get_data for citivelo_excel* falls through to the fetcher and its
+        # cached-then-LIVE quotes layer - which means bulk reaches Excel even
+        # when ignore_cache is False and a warmed curve is sitting on disk.
+        # Measured: bulk_get_data(..., ignore_cache=False) raised
+        # AddInNotSignedInError while get_data(..., ignore_cache=False) served the
+        # same day from asset USD-SOFR-1D-CITIVELOEXCEL without touching COM.
+        # The upstream fix is a CurveStore branch in bulk_get_data; until then the
+        # swaption layer must not be the thing that opens Excel.
+        prefer_single = _curve_refresh_goes_outside(self.curve_source)
+
         bulk_req = {
             "curve_name": curve_name,
             "timestamps": list(dates),
             "ignore_cache": bool(ignore_cache),
         }
         bulk_exc: Optional[Exception] = None
-        try:
-            out = self._curve_mdp.bulk_get_data(dict(bulk_req))
-            if isinstance(out, dict):
-                return out
-        except Exception as exc:
-            bulk_exc = exc
+        if not prefer_single:
+            try:
+                out = self._curve_mdp.bulk_get_data(dict(bulk_req))
+                if isinstance(out, dict):
+                    return out
+            except Exception as exc:
+                bulk_exc = exc
 
         # Some IRSwapsMDP sources do not implement bulk_get_data; fallback to one-by-one.
         out: dict[Any, _IRSwapGenericCurve] = {}
+        single_exc: Optional[Exception] = None
         for d in dates:
             req = {"curve_name": curve_name, "timestamp": d, "ignore_cache": bool(ignore_cache)}
             try:
                 curve = self._curve_mdp.get_data(req)
-            except Exception:
+            except Exception as exc:  # noqa: BLE001 - one bad date must not kill a batch
+                single_exc = single_exc or exc
+                _logger.warning(
+                    "no %s curve for %s (%s: %s)", self.curve_source, d, type(exc).__name__, exc
+                )
                 continue
             if curve is not None:
                 out[d] = curve
@@ -312,11 +481,43 @@ class IRSwaptionMDP(LayeredCacheMixin, MarketDataProvider[IRSwaptionMarketContex
         if out:
             return out
 
-        if bulk_exc is not None:
+        # Only now is bulk worth trying for a store-backed source: the per-date
+        # path found nothing, so there is no warmed curve to protect.
+        if prefer_single:
+            try:
+                bulk_out = self._curve_mdp.bulk_get_data(dict(bulk_req))
+                if isinstance(bulk_out, dict) and bulk_out:
+                    return bulk_out
+            except Exception as exc:
+                bulk_exc = exc
+            if bulk_exc is None:
+                bulk_exc = single_exc
+
+        cause = bulk_exc or single_exc
+        if cause is not None:
+            hint = ""
+            if type(cause).__name__ == "AddInNotSignedInError" or "add-in" in str(cause).lower():
+                # Naming this is the difference between a five-minute fix and an
+                # afternoon. The CurveStore has the curve; what reaches Excel is
+                # the FIXINGS lookup inside the store read
+                # (IRSwapsMDP._load_citivelo_excel_curve_store_point ->
+                # CITIVELO_EXCEL.fixings.fixings_for -> citi_fixings -> the
+                # cached-then-live quotes layer), and for USD_SOFR there is no
+                # publisher-direct fallback in CITIVELO_EXCEL.official_sources.
+                hint = (
+                    " The curve itself is warmed; it is the published overnight FIXINGS that "
+                    "went looking for the add-in. Sign in to Velocity, or warm the fixing tags "
+                    "into the CitiVeloTagCache, or use a curve_source that does not depend on "
+                    "them (e.g. 'ERIS_EOD_LIVE-RL_BASIC')."
+                )
             raise RuntimeError(
-                f"Failed to fetch IR swap curves for '{curve_name}' via bulk and single-date fallback."
-            ) from bulk_exc
-        raise RuntimeError(f"Failed to fetch IR swap curves for '{curve_name}'.")
+                f"Failed to fetch IR swap curves for '{curve_name}' from curve_source="
+                f"{self.curve_source!r} ({type(cause).__name__}: {cause}).{hint}"
+            ) from cause
+        raise RuntimeError(
+            f"Failed to fetch IR swap curves for '{curve_name}' from curve_source="
+            f"{self.curve_source!r}."
+        )
 
     def _build_contexts(
         self,
@@ -328,6 +529,7 @@ class IRSwaptionMDP(LayeredCacheMixin, MarketDataProvider[IRSwaptionMarketContex
         surface_type: str,
         ignore_cache: bool,
         request_kwargs: dict[str, Any],
+        curve_ignore_cache: bool = False,
     ) -> dict[dt.date, IRSwaptionMarketContext]:
         out: dict[dt.date, IRSwaptionMarketContext] = {}
         effective_request_kwargs = self._merge_request_kwargs(request_kwargs)
@@ -365,16 +567,49 @@ class IRSwaptionMDP(LayeredCacheMixin, MarketDataProvider[IRSwaptionMarketContex
         curve_map = self._fetch_curve_map(
             curve_name=curve_name,
             dates=misses,
-            ignore_cache=ignore_cache,
+            # NOT `ignore_cache`: that one is about this MDP's context cache.
+            # See _fetch_curve_map for why conflating them reached Excel.
+            ignore_cache=curve_ignore_cache,
         )
+        # Checked BEFORE the vol provider runs. The provider call below is
+        # wrapped in a broad except that falls back date by date, so a curve the
+        # engine cannot use would surface as an empty vol map and then as a bare
+        # KeyError on the requested date - the caller would never learn why.
+        for candidate in curve_map.values():
+            if candidate is None:
+                continue
+            handle = getattr(candidate, "handle", None)
+            if callable(handle):
+                self._assert_curve_matches_engine(
+                    engine=engine, curve=candidate, curve_handle=handle()
+                )
+            break
+
+        # Additive, and opt-in per provider: a provider whose strike axis is
+        # anchored on the curve needs the curve, and one that serves a different
+        # object per engine needs the engine token. GSQUANT and
+        # GSQUANT_MC_ENHANCED swallow **kwargs, but MONKEYCUBE forwards them into
+        # get_sabr_vol_surfaces, where an unexpected keyword raises - so these
+        # are handed only to providers that advertise they want them.
+        provider_kwargs = dict(effective_request_kwargs)
+        if getattr(vol_provider, "wants_curves", False):
+            provider_kwargs.setdefault("curves", curve_map)
+        if getattr(vol_provider, "wants_engine", False):
+            provider_kwargs.setdefault("engine", engine.upper())
         try:
             vol_map = vol_provider(
                 curve_name=curve_name,
                 dates=misses,
                 surface_type=surface_type,
-                **effective_request_kwargs,
+                **provider_kwargs,
             )
-        except Exception:
+        except Exception as bulk_exc:  # noqa: BLE001 - fall back per date, but say why
+            _logger.warning(
+                "%s vol provider failed on the whole batch (%s: %s); retrying date by date.",
+                provider.upper(),
+                type(bulk_exc).__name__,
+                bulk_exc,
+            )
             vol_map = {}
             for d in misses:
                 try:
@@ -382,9 +617,16 @@ class IRSwaptionMDP(LayeredCacheMixin, MarketDataProvider[IRSwaptionMarketContex
                         curve_name=curve_name,
                         dates=[d],
                         surface_type=surface_type,
-                        **effective_request_kwargs,
+                        **provider_kwargs,
                     )
-                except Exception:
+                except Exception as one_exc:  # noqa: BLE001 - one bad date must not kill a batch
+                    _logger.warning(
+                        "%s vol provider produced nothing for %s (%s: %s).",
+                        provider.upper(),
+                        d,
+                        type(one_exc).__name__,
+                        one_exc,
+                    )
                     continue
                 if isinstance(one, dict):
                     vol_map.update(one)
@@ -403,7 +645,19 @@ class IRSwaptionMDP(LayeredCacheMixin, MarketDataProvider[IRSwaptionMarketContex
 
             curve_handle = curve.handle()
             swap_index = curve.index()
+            # The hasattr() gate above passes for a rateslib curve too - both
+            # backends define handle() and index() - and used to let the wrong
+            # types through to a QuantLib engine, which then failed inside SWIG
+            # with a message about nothing in particular. Check what came OUT.
+            self._assert_curve_matches_engine(
+                engine=engine, curve=curve, curve_handle=curve_handle
+            )
             day_counter = curve.daycounter() if hasattr(curve, "daycounter") else ql.Actual365Fixed()
+            if day_counter is None:
+                # RLIRSwapCurve does not override daycounter(), and the base class
+                # stub makes hasattr() true, so the Actual365Fixed fallback above
+                # is unreachable for it and None flows on into the engine factory.
+                day_counter = ql.Actual365Fixed()
             pricing_engine = engine_factory(
                 curve_handle=curve_handle,
                 vol_handle=vol_handle,
@@ -431,6 +685,21 @@ class IRSwaptionMDP(LayeredCacheMixin, MarketDataProvider[IRSwaptionMarketContex
                 vol_cube = get_cached_enhanced_cube(curve_name, d)
                 if vol_cube is not None:
                     metadata["vol_cube"] = vol_cube
+
+            if provider.upper() == "CITIVELO":
+                from MDP.IRSwaptions.CITIVELO.provider import get_cached_citivelo_cube
+
+                citi_cube = get_cached_citivelo_cube(curve_name, d, engine)
+                if citi_cube is not None:
+                    # Deliberately NOT metadata['vol_cube']: that key routes
+                    # pricer.py's leg_cube_vol into cube.volatility_at_point(),
+                    # which takes an option TIME and has to reconstruct an option
+                    # DATE from it. The reconstruction moves the strike offset and
+                    # therefore the volatility, so the Citi cube is read the way
+                    # QuantLib reads a surface instead - through vol_handle - and
+                    # the object is exposed here for anything that wants the
+                    # smile, the forwards or the other backend.
+                    metadata["citivelo_cube"] = citi_cube
 
             ctx = IRSwaptionMarketContext(
                 curve_name=curve_name,
@@ -475,6 +744,7 @@ class IRSwaptionMDP(LayeredCacheMixin, MarketDataProvider[IRSwaptionMarketContex
 
         surface_type = str(req.pop("surface_type", "atmf_normal")).strip().lower()
         ignore_cache = bool(req.pop("ignore_cache", False))
+        curve_ignore_cache = bool(req.pop("curve_ignore_cache", self.curve_ignore_cache))
         source = str(req.pop("source", self.source))
         provider, engine = _parse_source_token(source)
         request_kwargs = self._merge_request_kwargs(req)
@@ -482,6 +752,7 @@ class IRSwaptionMDP(LayeredCacheMixin, MarketDataProvider[IRSwaptionMarketContex
         return {
             "curve_name": str(curve_name),
             "date": _to_date(timestamp),
+            "curve_ignore_cache": curve_ignore_cache,
             "provider": provider,
             "engine": engine,
             "surface_type": surface_type,
@@ -509,6 +780,7 @@ class IRSwaptionMDP(LayeredCacheMixin, MarketDataProvider[IRSwaptionMarketContex
 
         surface_type = str(req.pop("surface_type", "atmf_normal")).strip().lower()
         ignore_cache = bool(req.pop("ignore_cache", False))
+        curve_ignore_cache = bool(req.pop("curve_ignore_cache", self.curve_ignore_cache))
         source = str(req.pop("source", self.source))
         provider, engine = _parse_source_token(source)
         request_kwargs = self._merge_request_kwargs(req)
@@ -516,6 +788,7 @@ class IRSwaptionMDP(LayeredCacheMixin, MarketDataProvider[IRSwaptionMarketContex
         return {
             "curve_name": str(curve_name),
             "dates": date_list,
+            "curve_ignore_cache": curve_ignore_cache,
             "provider": provider,
             "engine": engine,
             "surface_type": surface_type,
@@ -535,6 +808,7 @@ class IRSwaptionMDP(LayeredCacheMixin, MarketDataProvider[IRSwaptionMarketContex
             engine=p["engine"],
             surface_type=p["surface_type"],
             ignore_cache=p["ignore_cache"],
+            curve_ignore_cache=p["curve_ignore_cache"],
             request_kwargs=p["kwargs"],
         )
         return ctxs[p["date"]]
@@ -548,6 +822,7 @@ class IRSwaptionMDP(LayeredCacheMixin, MarketDataProvider[IRSwaptionMarketContex
             engine=p["engine"],
             surface_type=p["surface_type"],
             ignore_cache=p["ignore_cache"],
+            curve_ignore_cache=p["curve_ignore_cache"],
             request_kwargs=p["kwargs"],
         )
 

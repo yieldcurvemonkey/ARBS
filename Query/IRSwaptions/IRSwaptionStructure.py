@@ -13,6 +13,7 @@ from MDP.IRSwaptions.IRSwaptionMDP import IRSwaptionMarketContext
 from Query.Base.BaseStructure import BaseStructureFunctionMap
 from Query.IRSwaptions.pricer import (
     IRSwaptionPricable,
+    discount_factor,
     leg_forward_rate,
     leg_model_vol,
     leg_spot_npv,
@@ -182,7 +183,10 @@ class IRSwaptionStructureFunctionMap(BaseStructureFunctionMap[IRSwaptionStructur
         if premium_type == "spot_bps":
             return amount / 10_000.0 * notional
         if premium_type == "fwd_bps":
-            discount = float(context.curve_handle.discount(cls._py_to_ql_date(leg.exercise_date)))
+            # Backend-agnostic: curve_handle is a ql.YieldTermStructureHandle
+            # under '-QL' and a rateslib.Curve under '-RL', and the two are read
+            # differently. The QuantLib path is unchanged.
+            discount = discount_factor(context, leg.exercise_date)
             return amount / 10_000.0 * notional * discount
         raise ValueError(f"Unsupported premium_type '{premium_type}'.")
 

@@ -211,6 +211,225 @@ def vol_compare(client, currency: str = "USD", citi_index: str = "USD_SOFR") -> 
     return 0
 
 
+#: The grid --spot-check pulls. Wider on the strike axis than --vol-compare
+#: because the strike axis is the one the spot check is about: 5 x 4 x 12 skew
+#: plus 20 ATM tags is 260, which CVTSHIST serves in 6 calls at the 44-tag chunk.
+SPOT_EXPIRIES = ("3M", "1Y", "2Y", "5Y", "10Y")
+SPOT_TENORS = ("2Y", "5Y", "10Y", "30Y")
+SPOT_OFFSETS = (-200.0, -100.0, -75.0, -50.0, -25.0, -10.0, 10.0, 25.0, 50.0, 75.0, 100.0, 200.0)
+
+
+def spot_check(client, currency: str = "USD", citi_index: str = "USD_SOFR",
+               save_snapshot: str = "") -> int:
+    """Price every node, invert the premium, and meet Citi's quote.
+
+    The counterpart of ``--vol-compare``, and the one that can actually fail.
+    ``--vol-compare`` reads each node's volatility back OUT of the cube and
+    compares it with the quote, which is a tautology - the interpolators are exact
+    at their own data sites. This prices the swaption at ``forward + offset/1e4``,
+    inverts the premium with a bisection that shares no code with either pricer,
+    crosses the annuities between rateslib and QuantLib, and only then compares
+    against the quote.
+
+    Roughly 8 ``CV*`` calls: one par grid, six for the cube, one for Citi's own
+    published forwards.
+    """
+    import pandas as pd
+
+    from MDP.CitiVelocityExcel import tags as T
+    from MDP.CitiVelocityExcel.curves import (
+        build_ql_mirror_curve,
+        build_ql_ois_curve,
+        build_rl_ois_curve,
+        par_reprice_errors_bp,
+    )
+    from MDP.CitiVelocityExcel.vol import RATESLIB_NATIVE_AVAILABLE, fetch_cube
+    from MDP.CitiVelocityExcel.vol.spot_check import (
+        assert_spot_check,
+        format_spot_check_report,
+        spot_check_frame,
+    )
+
+    _rule("S1. the cube, from the live add-in")
+    if not RATESLIB_NATIVE_AVAILABLE:
+        print("  this rateslib has no IRSplineCube (needs >= 2.7.0) - nothing to check.")
+        return 4
+    grid = client.fetch_frame(T.ois_par_grid(citi_index), "DAILY", period="1M")
+    if grid.empty:
+        print(f"  no par grid served for {citi_index}: {client.last_failures()}")
+        return 5
+    before = client.calls
+    cube = fetch_cube(
+        client=client,
+        currency=currency,
+        expiries=SPOT_EXPIRIES,
+        tenors=SPOT_TENORS,
+        offsets_bp=SPOT_OFFSETS,
+        period="1M",
+        strict=False,
+    )
+    print(f"  {cube!r}")
+    print(f"  {client.calls - before} CV* call(s) for "
+          f"{len(cube.expiries()) * len(cube.tenors()) * len(cube.offsets())} nodes")
+
+    _rule("S2. the curve the strikes are measured from, ON THE CUBE'S OWN DATE")
+    # The par grid publishes before the OTM skew does - on 2026-08-07 all 44 par
+    # tenors were live while only the 20 ATM vol tags were, so the grid's LAST row
+    # is routinely a day ahead of the last date the whole cube is simultaneous on.
+    # Building the curve off that row prices an 08-06 cube on an 08-07 curve, puts
+    # the QuantLib evaluation date before the curve reference date, and makes the
+    # comparison against Citi's published forward a comparison across two days.
+    # Take the cube's own row instead.
+    stamp = pd.Timestamp(cube.as_of)
+    if stamp in grid.index:
+        row = grid.loc[stamp]
+        ref = cube.as_of
+    else:
+        row = grid.iloc[-1]
+        ref = grid.index[-1].date()
+        print(f"  WARNING: no par grid row for the cube's date {cube.as_of}; falling back to "
+              f"{ref}. Everything below then mixes two dates.")
+    par_rates = {tag.rsplit(".", 1)[-1]: float(v) for tag, v in row.items() if pd.notna(v)}
+    rlc = build_rl_ois_curve(par_rates=par_rates, ref_date=ref, citi_index=citi_index)
+    qlc = build_ql_ois_curve(par_rates=par_rates, ref_date=ref, citi_index=citi_index)
+    print(f"  {ref}: {len(par_rates)} tenors, max |reprice error| "
+          f"{par_reprice_errors_bp(rlc).abs().max():.3e} bp")
+    print(f"  cube as_of {cube.as_of} vs curve ref {ref}: "
+          + ("SAME DAY." if cube.as_of == ref else "DIFFERENT DAYS - read S6 with that in mind."))
+
+    _rule("S3. Citi's own published forwards")
+    points = [(e, t) for e in ("1Y", "5Y") for t in ("2Y", "10Y", "30Y")]
+    fwd_tags = {T.ois_fwd(citi_index, e, t): (e, t) for e, t in points}
+    quoted_fwd = client.fetch_frame(list(fwd_tags), "DAILY", period="1M")
+    # On the CUBE's date, not the last row. The forward series publishes a day
+    # ahead of the OTM skew, and comparing our 08-06 forward with Citi's 08-07 one
+    # measures a day of market move: it read 4.222 bp across dates against 0.287
+    # bp on the same date. Citi's forward is the anchor the whole smile hangs off,
+    # so this comparison is worthless unless both sides are the same observation.
+    citi_forwards, mismatched = {}, 0
+    for tag, point in fwd_tags.items():
+        if tag not in quoted_fwd.columns:
+            continue
+        series = quoted_fwd[tag].dropna()
+        if series.empty:
+            continue
+        if stamp in series.index:
+            citi_forwards[point] = float(series.loc[stamp])
+        else:
+            mismatched += 1
+    print(f"  {len(citi_forwards)}/{len(fwd_tags)} published forwards served on {cube.as_of}")
+    if mismatched:
+        print(f"  {mismatched} tag(s) have no {cube.as_of} row and are DROPPED rather than "
+              "compared across dates.")
+
+    _rule("S4. price -> invert -> compare, every node, both backends")
+    frame = spot_check_frame(
+        cube=cube,
+        rl_curve=rlc,
+        ql_curve=qlc,
+        backends=("rl-native", "ql"),
+        citi_index=citi_index,
+        citi_forwards=citi_forwards,
+    )
+    print(format_spot_check_report(
+        frame, title=f"{currency} swaption cube {cube.as_of}, {len(frame)} priced nodes"
+    ))
+    out = _REPO_ROOT / "MDP" / "CitiVelocityExcel" / "harvest" / "spot_check_live.parquet"
+    frame.to_parquet(out)
+    print(f"\n  full frame written to {out.relative_to(_REPO_ROOT)} ({len(frame)} rows)")
+
+    _rule("S5. the same run against a MIRRORED QuantLib curve")
+    # Same nodes in both libraries, so whatever is left is the swaption and not
+    # the curve bootstrap. This is what isolates a schedule or annuity difference.
+    # A corner of the grid is enough: the question is about the underlying, which
+    # does not vary along the strike axis.
+    corner_offsets = (-200.0, 0.0, 200.0)
+    mirrored = spot_check_frame(
+        cube=cube,
+        rl_curve=rlc,
+        ql_curve=build_ql_mirror_curve(rlc.rl_pricing_curve),
+        backends=("rl-native", "ql"),
+        citi_index=citi_index,
+        offsets=[o for o in corner_offsets if o in set(cube.offsets())],
+    )
+    point = ["expiry", "tenor"]
+    fwd = mirrored.pivot_table(index=point, columns="backend", values="forward", aggfunc="first")
+    ann = mirrored.pivot_table(index=point, columns="backend", values="annuity", aggfunc="first")
+    print(f"  max |forward difference|   : "
+          f"{((fwd['ql'] - fwd['rl-native']).abs() * 1e4).max():.3e} bp")
+    print(f"  max |annuity difference|   : "
+          f"{(((ann['ql'] - ann['rl-native']) / ann['rl-native']).abs()).max():.3e} relative")
+    print(f"  max |implied - quoted|     : {mirrored['err_cross_bp'].abs().max():.3e} bp")
+    print("  -> " + (
+        "rateslib and QuantLib build the SAME swaption; the ordinary run's residual is "
+        "the curve bootstrap."
+        if ((fwd["ql"] - fwd["rl-native"]).abs() * 1e4).max() < 1e-6 else
+        "THE TWO LIBRARIES DISAGREE ON THE UNDERLYING even on one curve - that is a schedule, "
+        "day-count or payment-lag difference and it must be found before pricing off either."
+    ))
+
+    _rule("S6. verdict")
+    try:
+        observed = assert_spot_check(frame)
+    except Exception as exc:  # noqa: BLE001 - the report IS the exception
+        print(f"FAILED:\n{exc}")
+        return 6
+    for name, value in observed.items():
+        print(f"  {name:26} {value:.6g}")
+    print("\n  -> every node reproduces Citi's quoted volatility when priced and inverted.")
+
+    if save_snapshot:
+        _save_snapshot(
+            path=_REPO_ROOT / "MDP" / "CitiVelocityExcel" / "harvest" / "snapshots" / save_snapshot,
+            client=client,
+            currency=currency,
+            citi_index=citi_index,
+            cube=cube,
+            par_rates=par_rates,
+            citi_forwards=citi_forwards,
+            fwd_tags=fwd_tags,
+        )
+    return 0
+
+
+def _save_snapshot(*, path, client, currency, citi_index, cube, par_rates,
+                   citi_forwards, fwd_tags) -> None:
+    """Record this capture so the hermetic mutation tests run on real quotes."""
+    import json
+
+    from MDP.CitiVelocityExcel.vol.cube_data import cube_tags
+
+    tag_map = cube_tags(
+        currency=currency,
+        expiries=cube.expiries(),
+        tenors=cube.tenors(),
+        offsets_bp=cube.skew_offsets(),
+    )
+    quotes = {}
+    for tag, (_kind, expiry, tenor, offset) in tag_map.items():
+        try:
+            quotes[tag] = float(cube.vol(expiry, tenor, offset))
+        except KeyError:
+            continue
+    payload = {
+        "as_of": cube.as_of.isoformat(),
+        "currency": currency,
+        "citi_index": citi_index,
+        "expiries": list(cube.expiries()),
+        "tenors": list(cube.tenors()),
+        "offsets_bp": list(cube.skew_offsets()),
+        "captured_at": datetime.datetime.now().isoformat(),
+        "vol_quotes": quotes,
+        "par_rates": {str(k): float(v) for k, v in par_rates.items()},
+        "citi_forwards": {tag: citi_forwards[p] for tag, p in fwd_tags.items() if p in citi_forwards},
+        "fwd_points": {tag: list(p) for tag, p in fwd_tags.items()},
+        "tag_map": {k: list(v) for k, v in tag_map.items()},
+    }
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(payload, indent=1, sort_keys=True), encoding="utf-8")
+    print(f"\n  snapshot written to {path.name} ({len(quotes)} quotes)")
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__ or "")
     parser.add_argument(
@@ -219,11 +438,24 @@ def main() -> int:
         help="reconcile the two rateslib vol backends on a real cube instead of "
              "running the eight wire checks",
     )
-    parser.add_argument("--currency", default="USD", help="vol currency for --vol-compare")
-    parser.add_argument("--index", default="USD_SOFR", help="Citi OIS index for --vol-compare")
+    parser.add_argument(
+        "--spot-check",
+        action="store_true",
+        help="price every node, invert the premium with an independent solver and "
+             "compare against Citi's quoted vol (the check that can fail)",
+    )
+    parser.add_argument(
+        "--save-snapshot",
+        default="",
+        metavar="NAME.json",
+        help="with --spot-check, record the capture under harvest/snapshots/ so the "
+             "hermetic tests run on real quotes",
+    )
+    parser.add_argument("--currency", default="USD", help="vol currency")
+    parser.add_argument("--index", default="USD_SOFR", help="Citi OIS index")
     args = parser.parse_args()
 
-    if args.vol_compare:
+    if args.vol_compare or args.spot_check:
         _rule("connect")
         try:
             client = CitiVelocityExcelClient.connect(attempts=1, readiness_timeout=120.0)
@@ -232,7 +464,15 @@ def main() -> int:
             return 1
         print("connected")
         try:
-            code = vol_compare(client, currency=args.currency, citi_index=args.index)
+            if args.spot_check:
+                code = spot_check(
+                    client,
+                    currency=args.currency,
+                    citi_index=args.index,
+                    save_snapshot=args.save_snapshot,
+                )
+            else:
+                code = vol_compare(client, currency=args.currency, citi_index=args.index)
             _rule("done")
             print(f"total CV* calls: {client.calls}")
             return code

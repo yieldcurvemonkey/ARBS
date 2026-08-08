@@ -40,6 +40,7 @@ from MDP.CitiVelocityExcel.curves.ql_builder import (
     END_OF_MONTH_BY_INDEX,
     PAYMENT_LAG_BY_INDEX,
     QLOisCurve,
+    build_ql_mirror_curve,
     build_ql_ois_curve,
     evaluation_date,
     ql_forward_rate,
@@ -81,6 +82,7 @@ __all__ = [
     "spot_date",
     # QuantLib
     "QLOisCurve",
+    "build_ql_mirror_curve",
     "build_ql_ois_curve",
     "evaluation_date",
     "ql_forward_rate",

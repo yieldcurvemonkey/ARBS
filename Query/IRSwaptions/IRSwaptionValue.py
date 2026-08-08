@@ -15,6 +15,7 @@ from Query.IRSwaptions.pricer import (
     leg_model_vol,
     leg_swap_length_years,
     leg_tte_years,
+    swap_pvbp,
 )
 
 
@@ -164,8 +165,11 @@ class IRSwaptionValueFunctionMap(BaseValueFunctionMap[IRSwaptionValue, float]):
 
         short_swap = build_underlying_swap(context, short_leg.with_notional(1.0))
         long_swap = build_underlying_swap(context, long_leg.with_notional(1.0))
-        pvbp_short = abs(float(short_swap.fixedLegBPS()))
-        pvbp_long = abs(float(long_swap.fixedLegBPS()))
+        # swap_pvbp reads fixedLegBPS() on QuantLib and analytic_delta on
+        # rateslib. The swap is still built through this module's own
+        # build_underlying_swap so a monkeypatched fake still reaches it.
+        pvbp_short = swap_pvbp(context, short_swap)
+        pvbp_long = swap_pvbp(context, long_swap)
         denom = pvbp_long - pvbp_short
         if denom <= 1e-12:
             raise ValueError(

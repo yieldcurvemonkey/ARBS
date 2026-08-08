@@ -7,6 +7,33 @@ from definitions.IRSwaptions import EXPIRY_LABELS, TAIL_LABELS
 from MDP.IRSwaptions.IRSwaptionMDP import IRSwaptionMDP
 
 
+@pytest.fixture(autouse=True)
+def _restore_registries():
+    """Put ``VOL_PROVIDERS`` / ``ENGINE_FACTORIES`` back after every test here.
+
+    They are CLASS attributes, so ``mdp.ENGINE_FACTORIES[...] = fake`` mutates
+    them for the whole session, not for one instance. Several tests below do
+    exactly that, and one of them replaces ``ENGINE_FACTORIES["QL"]`` - the real
+    ``ql.BachelierSwaptionEngine`` factory - with a local stub that returns a bare
+    ``object()``. Every later test in the session then priced with that stub.
+
+    It stayed invisible because pytest collects files alphabetically and every
+    other swaption test file sorts before this one. It surfaced the moment
+    ``test_citivelo_swaption_provider.py`` asserted the engine's TYPE and the two
+    files were named in the other order on a command line. A test that only
+    passes because of collection order is not passing for a reason.
+    """
+    providers = dict(IRSwaptionMDP.VOL_PROVIDERS)
+    engines = dict(IRSwaptionMDP.ENGINE_FACTORIES)
+    try:
+        yield
+    finally:
+        IRSwaptionMDP.VOL_PROVIDERS.clear()
+        IRSwaptionMDP.VOL_PROVIDERS.update(providers)
+        IRSwaptionMDP.ENGINE_FACTORIES.clear()
+        IRSwaptionMDP.ENGINE_FACTORIES.update(engines)
+
+
 def _make_vol_handle(as_of: dt.date) -> ql.SwaptionVolatilityStructureHandle:
     cal = ql.UnitedStates(ql.UnitedStates.GovernmentBond)
     ql.Settings.instance().evaluationDate = ql.Date(as_of.day, as_of.month, as_of.year)
@@ -86,8 +113,8 @@ def test_single_and_bulk_shapes_provider_engine_dispatch_and_cache(monkeypatch):
         return object()
 
     monkeypatch.setattr(mdp._curve_mdp, "bulk_get_data", _bulk_curve)
-    mdp.VOL_PROVIDERS["TESTPROV"] = _provider
-    mdp.ENGINE_FACTORIES["TESTENG"] = _engine
+    monkeypatch.setitem(IRSwaptionMDP.VOL_PROVIDERS, "TESTPROV", _provider)
+    monkeypatch.setitem(IRSwaptionMDP.ENGINE_FACTORIES, "TESTENG", _engine)
 
     d1 = dt.date(2026, 3, 4)
     d2 = dt.date(2026, 3, 5)
@@ -170,8 +197,8 @@ def test_bulk_get_data_skips_single_date_curve_failures(monkeypatch):
 
     monkeypatch.setattr(mdp._curve_mdp, "bulk_get_data", _bulk_curve)
     monkeypatch.setattr(mdp._curve_mdp, "get_data", _single_curve)
-    mdp.VOL_PROVIDERS["PARTIALPROV"] = _provider
-    mdp.ENGINE_FACTORIES["PARTIALENG"] = _engine
+    monkeypatch.setitem(IRSwaptionMDP.VOL_PROVIDERS, "PARTIALPROV", _provider)
+    monkeypatch.setitem(IRSwaptionMDP.ENGINE_FACTORIES, "PARTIALENG", _engine)
 
     out = mdp.bulk_get_data(
         {
@@ -209,8 +236,8 @@ def test_constructor_data_dir_flows_to_monkeycube_and_partitions_cache(monkeypat
         return object()
 
     monkeypatch.setattr(mdp._curve_mdp, "bulk_get_data", _bulk_curve)
-    mdp.VOL_PROVIDERS["MONKEYCUBE"] = _provider
-    mdp.ENGINE_FACTORIES["QL"] = _engine
+    monkeypatch.setitem(IRSwaptionMDP.VOL_PROVIDERS, "MONKEYCUBE", _provider)
+    monkeypatch.setitem(IRSwaptionMDP.ENGINE_FACTORIES, "QL", _engine)
 
     d = dt.date(2026, 3, 6)
     base_req = {
