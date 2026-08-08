@@ -277,3 +277,94 @@ def test_live_full_history_reaches_back_further_than_three_years():
         assert nowa.index[0].year <= 2012, f"NOWA starts {nowa.index[0].date()}"
     finally:
         F.reset_publisher_fixings_cache()
+
+
+# -- fixings_for caching ------------------------------------------------
+#
+# The two source lookups dominate a warmed store read and do NOT depend on
+# reference_date. MEASURED 2026-08-08 on USD-SOFR-1D: official_fixings 232 ms +
+# citi_fixings 237 ms, against 11 ms to read the day's parquet and 1.3 ms to
+# reconstruct the curve - fixings were 97% of the cost, paid per CURVE REQUEST.
+# One day of minute curves (~1,100 points) spent ~8 minutes re-merging the same
+# 5,456-row history.
+
+
+def _stub_sources(monkeypatch, calls):
+    import pandas as pd
+
+    from MDP.IRSwaps.CITIVELO_EXCEL import fixings as F
+
+    idx = pd.DatetimeIndex(pd.date_range("2024-01-01", periods=400, freq="D"))
+    series = pd.Series([3.5] * len(idx), index=idx)
+
+    def _official(curve_name):
+        calls.append(("official", curve_name))
+        return series.copy()
+
+    def _citi(citi_index, **kw):
+        calls.append(("citi", citi_index))
+        return series.copy()
+
+    monkeypatch.setattr(F, "official_fixings", _official)
+    monkeypatch.setattr(F, "citi_fixings", _citi)
+    return F
+
+
+def test_the_sources_are_fetched_once_not_once_per_curve_request(monkeypatch):
+    calls = []
+    F = _stub_sources(monkeypatch, calls)
+    F.reset_fixings_cache()
+    try:
+        for _ in range(25):
+            F.fixings_for("USD-SOFR-1D", "USD_SOFR", reference_date=datetime.date(2024, 6, 1))
+        assert len(calls) == 2, (
+            f"{len(calls)} source lookups for 25 curve requests - the sources are "
+            f"being refetched per call"
+        )
+    finally:
+        F.reset_fixings_cache()
+
+
+def test_caching_does_not_break_the_reference_date_filter(monkeypatch):
+    """The cache holds the UNFILTERED sources; the date filter stays per call."""
+    calls = []
+    F = _stub_sources(monkeypatch, calls)
+    F.reset_fixings_cache()
+    try:
+        early = F.fixings_for("USD-SOFR-1D", "USD_SOFR", reference_date=datetime.date(2024, 3, 1))
+        late = F.fixings_for("USD-SOFR-1D", "USD_SOFR", reference_date=datetime.date(2024, 9, 1))
+        assert early.series.index[-1].date() < datetime.date(2024, 3, 1)
+        assert late.series.index[-1].date() < datetime.date(2024, 9, 1)
+        assert len(late.series) > len(early.series), "later date must see more history"
+        assert len(calls) == 2, "two different dates must still share one fetch"
+    finally:
+        F.reset_fixings_cache()
+
+
+def test_an_explicit_quotes_object_bypasses_the_shared_cache(monkeypatch):
+    """A caller supplying its own tag cache must not poison the shared entry."""
+    calls = []
+    F = _stub_sources(monkeypatch, calls)
+    F.reset_fixings_cache()
+    try:
+        F.fixings_for("USD-SOFR-1D", "USD_SOFR", reference_date=datetime.date(2024, 6, 1))
+        n_after_first = len(calls)
+        F.fixings_for("USD-SOFR-1D", "USD_SOFR", reference_date=datetime.date(2024, 6, 1),
+                      quotes=object())
+        assert len(calls) > n_after_first, "an explicit quotes object was served from cache"
+    finally:
+        F.reset_fixings_cache()
+
+
+def test_reset_fixings_cache_forces_a_refetch(monkeypatch):
+    """A daemon crossing midnight needs the next day's fixing."""
+    calls = []
+    F = _stub_sources(monkeypatch, calls)
+    F.reset_fixings_cache()
+    try:
+        F.fixings_for("USD-SOFR-1D", "USD_SOFR", reference_date=datetime.date(2024, 6, 1))
+        F.reset_fixings_cache()
+        F.fixings_for("USD-SOFR-1D", "USD_SOFR", reference_date=datetime.date(2024, 6, 1))
+        assert len(calls) == 4
+    finally:
+        F.reset_fixings_cache()
