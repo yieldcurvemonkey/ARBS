@@ -1,11 +1,16 @@
 # Citi Velocity RV loop — findings
 
-**VERDICT (session 1, in progress): two graded hypotheses DEAD at their pre-registered specs
-— H13 grail-conditional entries (best arm +106.7bp/116 episodes, DSR 0.000 at n=3,905, median
-across 17 arms ≈ 0; ledger V-SV-13) and H16b sandwich basis trade (median of 4 combos −1.35bp,
-steamroller confirmed; V-SV-16B). Both underlying mechanisms are placebo-certified real; the
-expressions are not certifiable at the program's trial count. H14-graded (the
-manufactured-package hold, H-SV-14G) is the remaining open candidate this session.**
+**VERDICT (session 1, complete): NOTHING ALIVE — four registered hypotheses graded and killed,
+three families killed at gate, on validated 20-year multi-currency data with a measured cost
+line. H13 grail-conditional (17 arms, 3 currencies): DEAD — median +0.0bp, DSR 0.000
+everywhere, and its one placebo-certified claim was withdrawn by the rival check (raw spread-z
+reproduces 137% of the ex-carry). H16 z-fade: dead at gate (pond 0.5–1.8× a measured boat).
+H16b sandwich basis: DEAD — median −1.35bp, steamroller confirmed. H14-graded (Peter's
+manufactured package): every registered mechanism column CONFIRMED (+27.9bp net post-2017,
+93–97% gamma retention, belly received, risk-reducing) and still NOT ALIVE — the DSR wall at
+N = 3,910 is arithmetic no carry-class Sharpe clears. F1 surface-residual and F2 gamma IV/RV:
+dead at gate. The loop continues per L-0029's family-selection redirect; the machine, the
+ledger, the measured costs, and one repo-wide pricing fix are the session's durable output.**
 
 **Predecessors:** `2026-08-08-citivelo-rv-loop-design.md` (+ ledger
 `docs/superpowers/ledgers/2026-08-08-citivelo-rv-loop-ledger.jsonl` — the row-level record),
@@ -66,15 +71,26 @@ fill in grading order; the DSR trial count is quoted only in the final revision.
 | H14 carry-engine gate | L-0024 | **OPEN** — occupancy 18.6%→39.9% (2.1×) with the fly; covers 82% of median bleed; PCA-metric risk 0.19 residual |
 | H13 occupancy | L-0016 (JPY), USD detector | USD pond exists (10–50% by pair); **JPY pure-flattener arm DEAD at gate (0–1.1%)** |
 | H16 z-fade basis pond | L-0019 | **THIN** (0.8–1.8× boat) — expected DEAD at grading |
-| H16b sandwich pond | L-0023 | **OPEN** — state 42–75% of days at liquid loci, wedge×episode ≫ boat (proxy) |
+| H16b sandwich pond | L-0023→V-SV-16B | gate OPEN → graded **DEAD** (the wedge proxy did not translate) |
 | CM-1 measured swaption cost line | L-0022 | **DONE** — 0.17–0.71 annual bp ATM half-spread by expiry (upper bound), checker 3/3 |
+| F1 surface residual | L-0028 | **DEAD AT GATE** — tradeable cells coin-flip; "winners" are the extrapolated corner |
+| F2 gamma IV/RV | L-0032 | **DEAD AT GATE** — no conditioning signal; unconditional mean-zero with −95bp tails |
+| H14G mechanism columns | V-SV-14G/L-0031 | **CONFIRMED** (not ALIVE) — +27.9bp net 2017+, Γ retention 93–97%, belly received |
+| H13 rival check | L-0030 | spread-z reproduces 137% of grail ex-carry → mechanism wording withdrawn |
+| Checker calibration | L-0025 | **PASSED** — planted defect + unprompted fabrication both killed |
+| Merged-tree fast gate | L-0033 | **4,766 / 0 failed** (baseline 4,159/0) |
 
 ## Graded hypotheses (pre-registered in the ledger before their numbers)
 
-- **H-SV-13** grail-conditional entries — _pending_
-- **H-SV-14** manufactured package (four ledgers, per-leg costs) — _pending_
-- **H-SV-16** strike-ful basis trade — _pending_
-- **F-ING** EUR forward-strip residual screen — _pending_
+- **H-SV-13** grail-conditional entries — **DEAD** (V-SV-13F: 17/17 arms, median +0.0bp,
+  DSR 0.000; mechanism wording withdrawn per L-0030)
+- **H-SV-14G** manufactured-package hold — **mechanism CONFIRMED, NOT ALIVE** (V-SV-14G +
+  L-0031: fly net +9.9bp at 1× full-sample, +27.9bp post-2017; flips at 2× — stated)
+- **H-SV-16** z-fade — **DEAD AT GATE** (V-SV-16, clean panel, measured boat; never backtested)
+- **H-SV-16B** sandwich basis — **DEAD** (V-SV-16B: median −1.35bp, steamroller −$0.7–1.2M)
+- **F-ING** EUR forward-strip residual screen — built + gated (L-0015); graded run BLOCKED on
+  the fair-value-construction fidelity gap (our PC1 residual ≠ ING's; their 2020-01-15 example
+  does not reproduce) — parked, not silently rescoped
 
 ## Deaths
 
