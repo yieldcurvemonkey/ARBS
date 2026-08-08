@@ -1,0 +1,58 @@
+# Citi Velocity RV loop — findings
+
+**VERDICT: _pending_ — no graded family has completed its gauntlet yet. Nothing here is a
+result until the verdict line above changes and quotes its number.**
+
+**Predecessors:** `2026-08-08-citivelo-rv-loop-design.md` (+ ledger
+`docs/superpowers/ledgers/2026-08-08-citivelo-rv-loop-ledger.jsonl` — the row-level record),
+`docs/superpowers/plans/2026-08-04-strikeless-vol.md` (PR #392, continued here).
+
+This skeleton is committed before results per the addendum ordering rule (a findings doc
+written before the trial count is final publishes a count later work invalidates). Sections
+fill in grading order; the DSR trial count is quoted only in the final revision.
+
+## What went right
+
+_pending_
+
+## Machine (built 2026-08-08, session 1)
+
+- Worktree `ARBS-rv`, branch `feat/citivelo-rv-loop` off main 33fe6981; baseline fast gate
+  4159/0 (pure main); sv merge Task 29 complete, sv suite 544/0.
+- Ledger, checker charter, reference corpus committed; three reading fan-outs (10 agents)
+  distilled the cost line + framework corpus.
+- **Repo fix shipped:** the QDB direction-blind signed-bpv seam (kink-v2 §6) — root-caused to
+  `resolve_pricable` double-signing signed rateslib notionals; fixed, pinned, mirror verified
+  live. See ledger L-0012.
+- Data: banked par grids 2005+ × 5 ccy to 50Y; EOD curve warms extended (USD full 2005–2026;
+  JPY 2006+; GBP by concurrent session; EUR/CAD in flight); cube 2,699 days (ATM 2015-10+,
+  full smile 2020-01-24+).
+
+## Gates (run FIRST, before any graded number)
+
+| gate | spec | outcome |
+|---|---|---|
+| (a) 2019-05-08 Figure-7 tie-out | ledger L-0009 | _pending_ |
+| (b) 2023-06-08 steepener-carry tie-out | L-0009 | _pending_ |
+| (c) GS-vs-Citi basis stability 2017–2026 | L-0009 | _pending_ |
+| H15 aging | L-0013 | **NOT falsified** — pure-aging Γ retention 1.01–1.06× to 5y |
+| H14 carry-engine gate | L-0014 | smoke: fly triples grail occupancy (12.7%→39.2%); full run _pending_ |
+| H13 occupancy/pond | _pending_ | _pending_ |
+| H16 basis pond | _pending_ | _pending_ |
+| CM-1 measured swaption cost line | _pending_ | _pending_ |
+
+## Graded hypotheses (pre-registered in the ledger before their numbers)
+
+- **H-SV-13** grail-conditional entries — _pending_
+- **H-SV-14** manufactured package (four ledgers, per-leg costs) — _pending_
+- **H-SV-16** strike-ful basis trade — _pending_
+- **F-ING** EUR forward-strip residual screen — _pending_
+
+## Deaths
+
+_none recorded yet — a death gets its number and its ledger row here_
+
+## DSR accounting
+
+Quoted only in the final revision. SV family inherits N_sv = 3,888 (PR #392); loop-wide N per
+ledger `trials_total`.
