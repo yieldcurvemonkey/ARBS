@@ -365,27 +365,22 @@ _CV_SWAP_SPREAD_INDEX = "USD_SOFR"
 def _citivelo_excel_guard():
     """Refuse to start a Velocity warm against an Excel that is already too big.
 
-    Returns the client so the caller can sample again on the way out. Raises
-    rather than warning: the whole point of the ceiling is that an unattended
-    job must not be the thing that wedges the add-in.
+    The size is read BEFORE anything connects. An earlier version of this called
+    ``quotes.client()`` and then asked the connected client for its memory, which
+    is a guard that runs after the act it exists to prevent — opening a workbook
+    against a wedged add-in is exactly what the ceiling is for, and by then it has
+    happened. ``memory_guard`` asks Windows over ``Get-Process`` instead, with no
+    COM involved, and fails closed when the probe cannot be read at all.
+
+    Returns ``(quotes, client)`` so the caller can sample again on the way out.
     """
+    from MDP.CitiVelocityExcel.memory_guard import assert_safe_to_connect
     from MDP.CitiVelocityExcel.quotes import CitiVeloQuotes
 
+    mb = assert_safe_to_connect(_CV_MEMORY_CEILING_MB, what="a Citi Velocity warm")
+    log.info("  Excel at %.0f MB before connecting (ceiling %.0f)", mb, _CV_MEMORY_CEILING_MB)
     quotes = CitiVeloQuotes()
-    client = quotes.client()
-    mb = client.excel_memory_mb()
-    if mb < 0:
-        quotes.close()
-        raise RuntimeError("Could not read Excel's memory; refusing to warm blind.")
-    if mb > _CV_MEMORY_CEILING_MB:
-        quotes.close()
-        raise RuntimeError(
-            f"Excel is at {mb:.0f} MB, above the {_CV_MEMORY_CEILING_MB:.0f} MB ceiling. "
-            "The add-in's memory only ever grows and only a human restart clears it "
-            "(it wedged at 5,249 MB on 2026-08-07). Restart Excel, sign in, re-run."
-        )
-    log.info("  Excel at %.0f MB (ceiling %.0f)", mb, _CV_MEMORY_CEILING_MB)
-    return quotes, client
+    return quotes, quotes.client()
 
 
 def _citivelo_bond_resolutions(as_of):

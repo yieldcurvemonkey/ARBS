@@ -20,7 +20,7 @@ from __future__ import annotations
 import datetime
 import logging
 import threading
-from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence
+from typing import Any, Dict, Iterable, List, Mapping, MutableMapping, Optional, Sequence
 
 import pandas as pd
 
@@ -129,6 +129,18 @@ class CitiVeloQuotes:
     def cache(self) -> Optional[CitiVeloTagCache]:
         return self._cache
 
+    @property
+    def offline(self) -> bool:
+        """Whether this reader refuses to connect to Excel.
+
+        Public because a caller that was handed a reader has to be able to ask:
+        ``offline`` also selects the TRANSPORT in the bond fetcher (a clamped
+        cache read versus the windowed chunker, which needs a live client), and a
+        component that guessed wrong called ``client()`` inside what its caller
+        believed was an offline path.
+        """
+        return self._offline
+
     def client(self) -> CitiVelocityExcelClient:
         """The live client, connecting on first use.
 
@@ -164,10 +176,10 @@ class CitiVeloQuotes:
 
     # -- reads ----------------------------------------------------------
 
-    def _fetcher(self, *, period: Optional[str]):
+    def _fetcher(self, *, period: Optional[str], failures: Optional[MutableMapping[str, str]] = None):
         def fetch(tags, freq, start, end, price_point):
             client = self.client()
-            return client.fetch_timeseries(
+            got = client.fetch_timeseries(
                 list(tags),
                 freq,
                 period=period if (start is None and end is None) else None,
@@ -175,6 +187,13 @@ class CitiVeloQuotes:
                 end=end,
                 price_point=price_point,
             )
+            if failures is not None:
+                # Scoped to the call that just happened, not to the client's
+                # lifetime: last_failures() is per fetch_timeseries, and reading it
+                # outside this closure would attribute a previous request's
+                # rejected tag to a fully-cached read that never went to the wire.
+                failures.update(client.last_failures())
+            return got
 
         return fetch
 
@@ -188,11 +207,19 @@ class CitiVeloQuotes:
         period: Optional[str] = None,
         price_point: str = "CLOSE",
         force_refresh: bool = False,
+        failures: Optional[MutableMapping[str, str]] = None,
     ) -> Dict[str, pd.Series]:
         """One ascending series per tag that returned data.
 
         Tags that failed are ABSENT rather than NaN-filled, and the reason is on
         the client's :meth:`~MDP.CitiVelocityExcel.com_client.CitiVelocityExcelClient.last_failures`.
+
+        Pass ``failures`` - any mutable mapping - to have those reasons handed back
+        for THIS call, keyed by tag. Nothing is written to it when the request was
+        served entirely from the cache, because no fetch happened and the client's
+        record belongs to some earlier one. Note that the reason ``"empty"`` means
+        the column came back with no rows in the window: the add-in distinguishes
+        "no such tag" from "no rows here" and so does this.
         """
         freq_token = normalise_frequency(freq)
         point_token = normalise_price_point(price_point)
@@ -201,8 +228,9 @@ class CitiVeloQuotes:
             return {}
 
         if self._cache is None:
-            return dict(
-                self.client().fetch_timeseries(
+            client = self.client()
+            got = dict(
+                client.fetch_timeseries(
                     wanted,
                     freq_token,
                     period=period,
@@ -211,8 +239,11 @@ class CitiVeloQuotes:
                     price_point=point_token,
                 )
             )
+            if failures is not None:
+                failures.update(client.last_failures())
+            return got
 
-        fetcher = None if self._offline else self._fetcher(period=period)
+        fetcher = None if self._offline else self._fetcher(period=period, failures=failures)
         return self._cache.get(
             wanted,
             freq_token,
@@ -230,7 +261,12 @@ class CitiVeloQuotes:
         freq: str = "DAILY",
         **kwargs: Any,
     ) -> pd.DataFrame:
-        """:meth:`series` as one wide, time-indexed frame, columns in tag order."""
+        """:meth:`series` as one wide, time-indexed frame, columns in tag order.
+
+        Takes the same keywords, including ``failures``: a tag that failed is
+        simply an absent COLUMN here, which is indistinguishable from a tag that
+        returned no rows unless the reasons are asked for.
+        """
         series = self.series(tags, freq, **kwargs)
         if not series:
             return pd.DataFrame(index=pd.DatetimeIndex([], name="Date"))

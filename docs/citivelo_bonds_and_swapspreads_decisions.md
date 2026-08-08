@@ -205,3 +205,99 @@ Both are `(swap_rate_percent − bond_ytm_percent) × 100` — swap minus cash, 
 is a published quote whose Treasury leg, yield convention and swap curve are **not
 documented anywhere in the harvested catalog** and are recorded here as unknown, not
 inferred. Carry all three as separate columns.
+
+## D7 — What the adversarial review found in the swap-spread track, and the fixes
+
+D6 recorded no mutation testing. This section is that record, plus the four defects the
+review found that no test could have caught. Excel was **not touched** at any point: the
+one EXCEL.EXE on this box is pid 51420, started 2026-08-07 17:24:33, and its working set
+was 13,222 MiB before and after every run below — **13,865 MB in the tie-out probe's own
+decimal unit**, 3.6× the 3,800 MB ceiling and 2.6× the 5,249 MB that wedged it. The
+standing do-not-connect constraint is more binding than when D0 recorded 7,639 MB, not
+less.
+
+**The silent wrong number.** `tenor_for_swap` derives a tenor from `maturity − effective`
+and nothing checked that `effective` is spot. Citi's `SWAP_SPREAD` axis indexes a
+*maturity* — a forward start would be the `(forward, tenor)` pair its separate `FWD`
+sub-type carries, and that sub-type has no swap spread. So a 5Yx5Y forward derived `5Y`
+and read the **spot** 5Y quote, byte-identical to the spot answer, with no warning: a
+forward-swap RV book differencing it against its own forward rate would have carried the
+entire forward/spot spread as a residual. `swap_spread_for_curve` now measures the
+package's effective date against the **curve's own as-of** (not against today — the
+package is rebuilt per reference date at `TB/IRSwapsTB.py:124`, so this stays a per-date
+property rather than a refusal wall on a timeseries) and raises `SpotStartRequiredError`
+outside `MAX_SPOT_START_LAG = 10 days`. Ten is the widest slack that still admits T+2
+across a Friday-and-Monday holiday weekend (6 calendar days) and refuses the shortest
+forward anybody trades (1M = 28–31 days); a ≤10-day forward is admitted, and that is
+stated rather than papered over. Already-running swaps are refused for the mirror-image
+reason: the derived tenor is their original span, not their remaining life.
+
+**The gate that failed open.** `scripts/citivelo_swap_spread_tieout.py`'s memory guard
+swallowed every probe exception into `None` and read `None` as "proceed". A
+running-but-unreadable Excel and a machine with no Excel were the same observation, and
+their correct actions are opposite. The probe now emits an explicit `NONE` from
+PowerShell (`Measure-Object -Sum` over zero processes sums to `$null` and prints an empty
+line, which is also what a command that never ran prints), so "no EXCEL.EXE" is an
+affirmative `0.0` and everything else unreadable is `None` — and `None` **aborts**. That
+matches `scripts/citivelo_bond_calibration.py`, which already fails closed on
+`mem0 < 0`. Verified against a known answer rather than by reading: the probe returned
+13,864.8 MB against the 13,222 MiB the independent `Win32_Process` query reported (the
+same number, decimal MB vs MiB), and the gate returned `False`.
+
+**The test that could not fail.** The abort test's only sentinel sat on `_out_path`
+(tieout:226), 43 lines *after* `swap_spread_history` (tieout:183) builds a live
+`CitiVeloQuotes`. Proving the gate therefore required connecting to Excel, which is why
+it never was proven. The sentinel now sits on the hazard — and on the **source** module,
+because `fetch` imports the name inside the function, so patching the tieout module object
+would silently not take.
+
+**Mutation sweep — 12 applied, 12 killed, sources restored byte-identical each time**
+(the three files are untracked, so each was copied to scratchpad first; `git restore`
+cannot recover them). The first four are the three the review ran and got `55 passed,
+0 failed` from, plus the one it could not run without connecting:
+
+| # | mutation | before | after |
+|---|----------|--------|-------|
+| A | MI01 cliff | `lookback = LOOKBACK_BY_MODE[request.mode]` | `lookback = timedelta(days=45)` | 
+| B | live upper bound | `end = now(wire)` | `end = now(wire) + timedelta(days=1)` |
+| C | as-of clamp | `if target is not None:` | `if False and target is not None:` |
+| D | memory gate | (gate body) | `return True` at the top of `_memory_gate` |
+| E | spot-start guard | the `_assert_spot_starting(...)` call | deleted |
+| F | probe fail-open | `return False` on `mem is None` | `return True` |
+| G | running-session warning | `if day < today: return` | `if True: return` |
+| H | empty-history contract | empty frame, no columns | `columns=wanted` |
+| I | close failure | `_logger.warning(..., exc_info=True)` | `pass` |
+| I2 | close traceback | `exc_info=True` | dropped |
+| J | `client_kwargs` | forwarded | dropped |
+| K | probe sentinel | `if raw == "NONE"` | `if not raw` |
+
+A–D were the surviving ones and are now killed by 2, 1, 1 and 3 tests respectively. D is
+the load-bearing one: it fails at `scripts/citivelo_swap_spread_tieout.py:229` with
+`AssertionError: fetch proceeded past the memory gate and reached the live-Excel path`,
+**with no COM connection**, which is the property that was impossible to check before.
+
+**Three test holes closed rather than papered over.** `_StubQuotes` pre-filtered by the
+`end` it was handed, which did the as-of clamp's job for it — it now takes
+`honour_bounds=False` so the clamp is the only thing standing between a 10:30 request and
+an 11:00 print. The live fixture's index ended at now−3min, so there were no future rows
+for the "bounded above by now" assertion to exclude — it now carries rows stamped 30
+minutes into the future. And `assert module._memory_gate(3800.0) is not None` was vacuous
+*and* ran a real PowerShell probe against the live EXCEL.EXE from a file whose docstring
+claims "no Excel, no network"; it is gone, and every gate assertion is stubbed.
+
+**Doc corrections.** `tags.ois_swap_spread`'s docstring claimed the catalog "carries the
+full 44-tenor axis because it is shared with `PAR`". Measured against the committed
+catalog it is neither shared nor 44: `USD_SOFR`'s `SWAP_SPREAD` node has 11 children
+against `PAR`'s 44, a proper subset missing 4Y/15Y/25Y, and a test now pins 11-vs-44. The
+repo was asserting both readings; it now asserts one. Separately, `swap_spreads.py` said
+"`CVTSHIST` serves the whole axis" — measured for `USD_SOFR` only (11/11); off USD the
+axis is catalog-recorded and never observed to serve, and that caveat is now carried over
+from `tags.py` rather than dropped.
+
+**Still not fixed, deliberately.** `swap_spread_for_curve` still defaults `offline=False`
+and builds/tears down a `CitiVeloQuotes` per pricing call, so an N-date timeseries with no
+injected `quotes` is N connect/close cycles; `client_kwargs` is now reachable (that was
+the actionable half) but the default is documented rather than enforced, because forcing
+`offline=True` would break the interactive case the curve fetcher's own default serves.
+And `scripts/citivelo_bond_calibration.py` probes memory only *after* `quotes.client()`
+has already connected — a different defect on the bonds track's file, left alone here.

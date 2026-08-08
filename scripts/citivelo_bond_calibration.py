@@ -149,6 +149,7 @@ def select_bonds(as_of: datetime.date, *, n_high: int = 4, n_low: int = 3):
 def do_fetch(as_of: datetime.date, *, lookback_days: int = 30) -> dict:
     """One Excel trip: every wanted value for the calibration bonds."""
     from MDP.CitiVelocityExcel import tags
+    from MDP.CitiVelocityExcel.memory_guard import ExcelTooLargeError, assert_safe_to_connect
     from MDP.CitiVelocityExcel.quotes import CitiVeloQuotes
 
     bonds = select_bonds(as_of)
@@ -164,18 +165,16 @@ def do_fetch(as_of: datetime.date, *, lookback_days: int = 30) -> dict:
             tag_list.append(t)
             tag_owner[t] = (b["isin"], v)
 
+    # BEFORE anything connects. Reading the ceiling off a connected client would be
+    # a guard that runs after the act it exists to prevent.
+    try:
+        mem0 = assert_safe_to_connect(MEMORY_CEILING_MB, what="the bond calibration fetch")
+    except ExcelTooLargeError as exc:
+        raise SystemExit(f"ABORT: {exc}") from None
+    print(f"Excel memory BEFORE: {mem0:.0f} MB (ceiling {MEMORY_CEILING_MB:.0f})")
+
     quotes = CitiVeloQuotes()
     client = quotes.client()
-    mem0 = client.excel_memory_mb()
-    print(f"Excel memory BEFORE: {mem0:.0f} MB (ceiling {MEMORY_CEILING_MB:.0f})")
-    if mem0 < 0:
-        raise SystemExit("Could not read Excel's memory; refusing to run blind.")
-    if mem0 > MEMORY_CEILING_MB:
-        raise SystemExit(
-            f"ABORT: Excel is at {mem0:.0f} MB, above the {MEMORY_CEILING_MB:.0f} MB ceiling. "
-            "The add-in's memory only ever grows and only a human restart clears it; it "
-            "wedged at 5,249 MB on 2026-08-07. Restart Excel, sign in, and re-run."
-        )
 
     print(f"{len(bonds)} bonds, {len(tag_list)} tags")
     frame = quotes.frame(tag_list, "DAILY",

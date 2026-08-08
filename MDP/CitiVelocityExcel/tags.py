@@ -342,8 +342,21 @@ def ois_fwd(index: str, forward: str, tenor: str, *, catalog: Optional[CitiVeloC
 def ois_swap_spread(index: str, tenor: str, *, catalog: Optional[CitiVeloCatalog] = None) -> str:
     """``RATES.OIS.<index>.SWAP_SPREAD.<tenor>``.
 
-    Only :data:`SWAP_SPREAD_LIQUID_TENORS` are known to serve; the catalog carries
-    the full 44-tenor axis because it is shared with ``PAR``.
+    The axis is **not** ``PAR``'s and is **not** 44 tenors. Re-read off the
+    committed catalog on 2026-08-08: ``SWAP_SPREAD`` carries a small, ragged,
+    per-index subset - ``USD_SOFR`` has ELEVEN against ``PAR``'s forty-four, and
+    ``GBP_SONIA`` has a different ten (no 1M-1Y, but 15Y/40Y/50Y). Thirteen of the
+    twenty OIS indices carry the sub-type at all; ``EUR_EUROSTR`` does not. This
+    docstring previously claimed the full 44-tenor axis "shared with PAR", which
+    is what makes the membership check in
+    ``MDP.IRSwaps.CITIVELO_EXCEL.swap_spreads.swap_spread_tag`` look redundant -
+    it is not, and ``tests/test_citivelo_swap_spread.py`` pins 11-vs-44.
+
+    Read the axis with
+    :func:`~MDP.IRSwaps.CITIVELO_EXCEL.swap_spreads.swap_spread_tenors`, which
+    takes it from the catalog per index. :data:`SWAP_SPREAD_LIQUID_TENORS` is the
+    USD axis under a generic name and is the only one measured to SERVE (11/11);
+    off USD the axis is catalog-recorded and unobserved.
     """
     return ois(index, "SWAP_SPREAD", tenor, catalog=catalog)
 

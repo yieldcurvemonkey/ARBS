@@ -1073,6 +1073,157 @@ class FixedRateBondsMDP(MarketDataProvider[_GenericPricable], LayeredCacheMixin)
 
             return out
 
+        elif self.source.upper() in ["USTS_CITIVELO-QL", "USTS_CITIVELO-RL"]:
+            # Citi Velocity bond quotes, read through the Excel add-in seam.
+            #
+            # The real work lives in MDP/CitiVelocityExcel/bonds/fetcher.py; this
+            # branch only resolves identifiers, consults the cache and hands the
+            # quote to a pricer. Three things about it are load-bearing:
+            #
+            #  * the ALIAS table runs first. By the time resolve_bonds() sees a
+            #    string it is already a CUSIP, which is why UnifiedQuery(cusip="CT10")
+            #    works and why there is no fourth alias implementation in the
+            #    Velocity package.
+            #  * the MODE is decided by resolve_request(), the same function the
+            #    Velocity curve source uses. It is not an isinstance ladder:
+            #    pd.Timestamp subclasses datetime subclasses date, so such a ladder
+            #    is wrong in both directions, and a midnight Timestamp means EOD.
+            #  * LIVE is not cached. An EOD or intraday quote is a fixed historical
+            #    fact and caches soundly; caching "live" under today's date would
+            #    serve the 09:31 print at 16:00 and call it live.
+            #
+            # Request kwargs this branch reads:
+            #   citivelo_quotes  an existing CitiVeloQuotes to reuse. Without one a
+            #                    fresh connection is opened and CLOSED per call - safe
+            #                    (this package has a recorded workbook leak, 62
+            #                    accumulated) but wrong for a warm, which should pass
+            #                    one in and close it once at the end.
+            #   offline          serve from the tag cache only; never open Excel.
+            #   citivelo_values  override fetcher.DEFAULT_BOND_VALUES. Pass OAS here
+            #                    (with a wide eod_lookback) - it is deliberately not
+            #                    a default, being empty over any short window.
+            #
+            # bulk_get_data has NO branch for this source: a timeseries query over
+            # it raises NotImplementedError. Loud, not silent, and the per-date
+            # _get_multi_pricers path works.
+            from MDP.CitiVelocityExcel.bonds import fetcher as _citivelo_bond_fetcher
+            from MDP.CitiVelocityExcel.bonds.values import NoQuotedPriceError
+            from MDP.CitiVelocityExcel.bonds.resolution import resolve_bonds
+            from MDP.FixedRateBonds.reference_data_cache.ust_reference_data import update_reference_data
+            from MDP.IRSwaps.CITIVELO_EXCEL.timestamps import resolve_request, wire_timezone
+
+            CitiVeloBondFetcher = _citivelo_bond_fetcher.CitiVeloBondFetcher
+
+            source_upper = self.source.upper()
+            backend = "QL" if source_upper.endswith("-QL") else "RL"
+            force_refresh = bool(kwargs.get("force_refresh", False))
+
+            request = resolve_request(timestamp)
+            # The WIRE zone, not the machine's. Everything else in this package is
+            # anchored there (fetcher._window_bounds does the same job the same
+            # way), and timestamps.py contemplates running from another zone via
+            # CITIVELO_EXCEL_WIRE_TZ. Run from London at 02:00 BST - 21:00 the
+            # previous day in New York - date.today() returns tomorrow's date, so
+            # _filter_and_rank_ref_df is asked for a day on which the current
+            # on-the-run may not yet be eligible and CT10 resolves to a different
+            # CUSIP than the quotes were fetched for.
+            as_of_ref = (
+                datetime.datetime.now(wire_timezone()).date() if request.mode == "live"
+                else (request.eod_date if request.mode == "eod" else request.wire_instant.date())
+            )
+
+            ref_df = update_reference_data(source="fiscaldata", force_refresh=force_refresh)
+            ref_df = _filter_and_rank_ref_df(ref_df, as_of_ref)
+            alias_to_cusip, meta_by_cusip = self._resolve_aliases_bulk(clean_cusips, timestamp, ref_df=ref_df)
+
+            out: Dict[str, _FixedRateBondGenericPricer] = {}
+            if not alias_to_cusip:
+                return out
+
+            cache = None
+            cache_stamp = ""
+            if request.mode != "live":
+                self._ensure_pricer_cache()
+                cache = getattr(self, self._FRB_PRICER_CACHE)
+                cache_stamp = (
+                    request.eod_date.isoformat()
+                    if request.mode == "eod"
+                    else request.wire_instant.isoformat()
+                )
+
+            to_fetch: "OrderedDict[str, str]" = OrderedDict()
+            for original, cusip in alias_to_cusip.items():
+                if cache is not None and not force_refresh:
+                    cached = cache.get(f"{cache_stamp}-{cusip}-{source_upper}")
+                    if cached is not None:
+                        out[original] = self._build_pricer_from_args(
+                            cached, issue_date_key="issue_date", maturity_date_key="maturity_date", cpn_key="cpn"
+                        )
+                        continue
+                to_fetch[original] = cusip
+
+            if to_fetch:
+                # strict=False: one bond outside Citi's 349-name UST subset must not
+                # lose the other 299 in a warm. Citi carries a liquid subset, so
+                # off-the-runs, bills, TIPS and just-auctioned issues do miss.
+                resolved, failures = resolve_bonds(
+                    list(dict.fromkeys(to_fetch.values())), strict=False
+                )
+                for token, reason in failures.items():
+                    _logger.warning("citivelo bonds: %s not resolvable to a quoted bond: %s", token, reason)
+
+                fetcher = CitiVeloBondFetcher(
+                    quotes=kwargs.get("citivelo_quotes"),
+                    offline=bool(kwargs.get("offline", False)),
+                    values=kwargs.get("citivelo_values"),
+                )
+                try:
+                    bond_quotes = fetcher.fetch(
+                        list(resolved.values()), timestamp, force_refresh=force_refresh
+                    )
+                finally:
+                    fetcher.close()
+
+                for original, cusip in to_fetch.items():
+                    resolution = resolved.get(cusip)
+                    if resolution is None:
+                        continue
+                    quote = bond_quotes.get(resolution.isin)
+                    if quote is None:
+                        continue
+                    try:
+                        args = _citivelo_bond_fetcher.build_pricer_args(
+                            quote,
+                            backend=backend,
+                            ref_meta=meta_by_cusip[cusip],
+                            source=source_upper,
+                        )
+                    except NoQuotedPriceError as exc:
+                        # This ONE bond cannot be priced from this window: no PRICE
+                        # row, or a PRICE materially staler than the rest of its own
+                        # response. Reported, not substituted, and the other 299 in
+                        # a warm survive it.
+                        #
+                        # Narrow on purpose. build_pricer_args also raises plain
+                        # ValueError for an unknown backend, and float() raises it
+                        # for a non-numeric cell; catching the base class turned
+                        # "every bond in this basket hit a bug" into an empty dict
+                        # and a WARNING line that read like Citi had no data.
+                        # BondQuoteTransportError is a RuntimeError for the same
+                        # reason and deliberately takes the whole basket down: a
+                        # dead add-in is not a market observation.
+                        _logger.warning("citivelo bonds: %s -> %s", original, exc)
+                        continue
+                    args["meta_data"] = self._pyify_meta(args["meta_data"])
+                    if cache is not None:
+                        cache[f"{cache_stamp}-{cusip}-{source_upper}"] = args
+                        # auto-committed (DiskCache)
+                    out[original] = self._build_pricer_from_args(
+                        args, issue_date_key="issue_date", maturity_date_key="maturity_date", cpn_key="cpn"
+                    )
+
+            return out
+
         pricers = {}
         clean_cusips_iter = tqdm.tqdm(clean_cusips, desc="FETCHING CUSIPS...") if show_tqdm else clean_cusips
         for c in clean_cusips_iter:
@@ -1087,7 +1238,11 @@ class FixedRateBondsMDP(MarketDataProvider[_GenericPricable], LayeredCacheMixin)
         self, cusip: str, timestamp: Union[datetime.datetime, datetime.date, Literal["live"]], kwargs: Optional[Dict[str, Any]] = {}
     ) -> Optional[_FixedRateBondGenericPricer]:
 
-        if self.source.upper() == "USTS_TRADINGVIEW_LIVE-RL":
+        if self.source.upper() in ["USTS_TRADINGVIEW_LIVE-RL", "USTS_CITIVELO-QL", "USTS_CITIVELO-RL"]:
+            # These sources only have a multi implementation - one batched vendor
+            # call for the whole basket. Without this delegation a single-CUSIP
+            # request would fall through to the per-source blocks below and be
+            # answered by a DIFFERENT vendor than the one that was asked for.
             pricers = self._get_multi_pricers([cusip], timestamp, kwargs)
             if not pricers:
                 return None
@@ -2350,6 +2505,14 @@ class FixedRateBondsMDP(MarketDataProvider[_GenericPricable], LayeredCacheMixin)
                     raise NotImplementedError("For RL, pass an intraday datetime for timestamp or ‘live’.")
 
                 # -------------------- Unsupported source --------------------
+                # Known gap, stated rather than left to be discovered: neither
+                # USTS_CITIVELO-QL/-RL nor USTS_TRADINGVIEW-* has a branch here, so
+                # a UnifiedQuery TIMESERIES over the Velocity bond source raises
+                # from this line. It fails loudly rather than silently, and
+                # _get_multi_pricers per date is the working route; a real bulk
+                # branch is a feature, not a fix, because the batched historical
+                # read it would want is one CVTSHIST for the whole range and the
+                # pricer cache is keyed per date.
                 else:
                     raise NotImplementedError(f"Unsupported source {self.source}")
 
