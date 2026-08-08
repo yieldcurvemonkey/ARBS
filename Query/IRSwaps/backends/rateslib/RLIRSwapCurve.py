@@ -220,12 +220,16 @@ class RLIRSwapCurve(_IRSwapGenericCurve):
         return self.build_irswap(fwd=fwd, tenor=tenor, effective_date=eff, maturity_date=mat, fixed_rate=k, notional=notional, bpv=bpv)
 
     def resolve_pricable(self, irswap: rl.IRS, risk_weight: Optional[float] = None):
-        # Mirror the QuantLib backend's resolve_pricable: only invert the
-        # notional sign when the caller's direction (risk_weight, fallback
-        # to -pv01) is negative. The previous implementation unconditionally
-        # multiplied by -1, which flipped the sign of every NPV reported by
-        # mark_to_market and on_unwind for IRSwapQuery positions.
-        notional_real = irswap.kwargs.leg1["notional"]
+        # Mirror the QuantLib backend's resolve_pricable: |notional| first, then
+        # sign from the caller's direction (risk_weight, fallback to -pv01).
+        # Unlike QuantLib, rateslib notionals arrive ALREADY SIGNED (a receiver
+        # built through the bpv path carries notional < 0), so signing the raw
+        # notional double-applies direction: a receiver (-N, rw=-1) resolved to
+        # (+N) - the direction-blind seam kink-fade v2 §6 reported, verified
+        # live 2026-08-08 (bpv=+100k and bpv=-100k priced as the identical
+        # all-payer package through QueryDrivenBacktest). abs() restores the
+        # QL semantics this method claims to mirror.
+        notional_real = abs(irswap.kwargs.leg1["notional"])
         try:
             direction = risk_weight if risk_weight is not None else (
                 self.pv01(irswap) * -1
