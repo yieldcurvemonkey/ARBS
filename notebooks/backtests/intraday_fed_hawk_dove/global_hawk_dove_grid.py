@@ -112,6 +112,19 @@ def build_price_panel(
         return pd.DataFrame()
     long = pd.concat(frames, ignore_index=True)
     panel = long.pivot(index="tag", columns="rank", values=["entry_px", "exit_px"])
+
+    # EVERY structure must be scored on the SAME events, or the grid is comparing
+    # instruments AND samples at once. A rank that is illiquid on some days would
+    # otherwise silently shrink that structure's book - and because the fragile
+    # ranks fail on the thin days, the dropout selects toward whichever legs were
+    # working. Measured on an earlier build, varying only the leg mix moved
+    # annualised Sharpe across a 1.32 range, WIDER than the whole cross-structure
+    # range being ranked. So require a complete row.
+    before = len(panel)
+    panel = panel.dropna(how="any")
+    if before != len(panel):
+        print(f"      panel: {before - len(panel)}/{before} events dropped for "
+              f"incomplete rank coverage (complete-case so structures are comparable)")
     return panel
 
 
@@ -188,10 +201,14 @@ def run_grid(
 
     ``meta`` carries per-event side/bucket/timestamps keyed by tag.
     """
+    # every structure sees the same banks, for the same reason the panel is
+    # complete-case: otherwise the ranking mixes instrument choice with leg mix
+    common = [b for b, p in panels.items() if p is not None and not p.empty]
     rows = []
     for st in structures:
         legs_pnl = []
-        for bank, panel in panels.items():
+        for bank in common:
+            panel = panels[bank]
             if panel is None or panel.empty:
                 continue
             m = meta[bank]
@@ -202,11 +219,14 @@ def run_grid(
             if j.empty:
                 continue
             # hawk (+1) profits when the structure's rate rises
-            pnl = j["side_rate"] * j["d_rate_bp"] * j["size"]
             gross = st.gross or 1.0
+            unit = j["side_rate"] * j["d_rate_bp"] / gross
             legs_pnl.append(pd.DataFrame({
                 "bank": bank, "opened_at": j["opened_at"],
-                "pnl_bp": pnl / gross - cost_bp,
+                # equal-weight: what every reported statistic actually describes
+                "pnl_bp": unit - cost_bp,
+                # and the book as SIZED, since bpv scales with conviction
+                "pnl_bp_sized": unit * j["size"].abs() - cost_bp * j["size"].abs(),
                 "timestamp_source": j.get("timestamp_source", "forexfactory"),
             }))
         if not legs_pnl:
@@ -219,9 +239,15 @@ def run_grid(
         sr_obs = r.mean() / sd if sd > 0 else 0.0
         yrs = max((allp["opened_at"].max() - allp["opened_at"].min()).days / 365.25, 1e-9)
         tpy = len(r) / yrs
+        rs = allp["pnl_bp_sized"].to_numpy(float)
+        sd_s = rs.std(ddof=1)
+        sr_s = rs.mean() / sd_s if sd_s > 0 else 0.0
         rows.append({
             "structure": st.name, "kind": st.kind, "legs": len(st.legs),
-            "trades": len(r), "total_bp": r.sum(), "avg_bp": r.mean(),
+            "banks": len(common), "trades": len(r),
+            "total_bp": r.sum(), "avg_bp": r.mean(),
+            "sharpe_ann_sized": sr_s * math.sqrt(len(rs) / max(
+                (allp["opened_at"].max() - allp["opened_at"].min()).days / 365.25, 1e-9)),
             "hit": float((r > 0).mean()),
             "sharpe_ann": sr_obs * math.sqrt(tpy),
             "sr_per_trade": sr_obs,

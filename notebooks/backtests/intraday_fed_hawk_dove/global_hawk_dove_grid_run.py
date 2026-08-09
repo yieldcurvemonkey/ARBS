@@ -34,7 +34,21 @@ from global_hawk_dove_run import (
 MAX_RANK = 6
 ENTRY_MIN = [-120, -60, -45, -15]
 EXIT_MIN = [60, 120, 180, 240]
-BUCKET_MODES = ["peer", "percentile", "absolute", "researched", "blended"]
+#: Labelling schemes that a desk could actually have run at the time.
+CAUSAL_MODES = ["peer", "percentile", "absolute"]
+
+#: NOT point-in-time. The researched committee-standing table was written in 2026
+#: from sources that postdate the trades it labels, and its period BOUNDARIES are
+#: the largest free parameter in it - an adversarial audit showed an oracle table
+#: at one period per speaker reaches t=5.8, and at speaker x year t=10.5, while
+#: making the same table's estimation window causal collapses it to t=0.9. These
+#: are computed and reported as an UPPER BOUND on what perfect knowledge of who
+#: was a hawk would have been worth. They are never pooled into the deflation
+#: with causal modes, because ranking a fitted label against honest ones and
+#: deflating the lot as one experiment understates the search.
+NONCAUSAL_MODES = ["researched", "blended"]
+
+BUCKET_MODES = CAUSAL_MODES + NONCAUSAL_MODES
 
 
 def _meta_frame(events) -> pd.DataFrame:
@@ -106,16 +120,29 @@ def stage_grid(cost_bp: float) -> pd.DataFrame:
         if g.empty:
             continue
         g["bucket_mode"] = mode
+        g["causal"] = mode in CAUSAL_MODES
         frames.append(g)
     if not frames:
         raise SystemExit("empty grid")
-    grid = pd.concat(frames, ignore_index=True)
+    allg = pd.concat(frames, ignore_index=True)
 
-    # The timing dimension multiplies the trial count even though the panel is
-    # built at one timing: report the honest total so the deflation is not
-    # understated.
+    # Deflate the CAUSAL search on its own. The timing dimension multiplies the
+    # trial count even though the panel is built at one timing, so it is counted:
+    # understating the trials would understate the hurdle.
+    grid = allg[allg["causal"]].reset_index(drop=True)
     n_trials = len(grid) * len(ENTRY_MIN) * len(EXIT_MIN)
     grid = GRID.add_deflated(grid, n_trials=n_trials)
+
+    noncausal = allg[~allg["causal"]].reset_index(drop=True)
+    if len(noncausal):
+        nc = GRID.add_deflated(noncausal, n_trials=len(noncausal) * len(ENTRY_MIN) * len(EXIT_MIN))
+        _p("\n=== NON-CAUSAL UPPER BOUND (researched / blended labels) ===")
+        _p("These use a stance table written in 2026 about trades from 2021-2026. They are")
+        _p("NOT tradeable and are shown only to bound what perfect knowledge of who was a")
+        _p("hawk would have been worth.")
+        _p(nc.sort_values("sharpe_ann", ascending=False)[
+            ["structure", "bucket_mode", "trades", "avg_bp", "sharpe_ann", "t_stat"]
+        ].head(10).round(4).to_string(index=False))
 
     out = grid.drop(columns=["_returns"])
     out.to_csv(CACHE / "grid_results.csv", index=False)

@@ -286,8 +286,22 @@ def make_blackout_fn(cfg: CBConfig, blackout_bd: int) -> Callable[[datetime.date
 # Scores
 # ===========================================================================
 def load_global_scores(path: str, score_metric: str) -> pd.DataFrame:
+    """Scores, with the PUBLICATION date recovered from the source filename.
+
+    A speech date is not when its score became knowable. JPM publishes a report
+    days-to-years after the speech and re-scores history as the model is revised,
+    so a row keyed on the speech date can carry a number that did not exist on the
+    trade date. Measured on this corpus: 60.5% of rows come from a report
+    published after the speech they describe, median 100 days later. Without
+    ``pub_date`` there is no way to ask what was knowable.
+    """
     df = pd.read_csv(path)
     df["date"] = pd.to_datetime(df["date"]).dt.date
+    pub = df["source_file"].str.extract(r"^(\d{4}-\d{2}-\d{2})")[0]
+    df["pub_date"] = pd.to_datetime(pub, errors="coerce").dt.date
+    # a row with no parseable publication date is treated as published at the
+    # speech, which is the most generous reading and is flagged rather than hidden
+    df["pub_date"] = df["pub_date"].fillna(df["date"])
     return df.sort_values(["central_bank", "speaker", "date"]).reset_index(drop=True)
 
 
@@ -298,14 +312,18 @@ class ScoreLookup:
     speech X's own hawk-dove score, which does not exist until the speech is over.
     """
 
-    def __init__(self, scores: pd.DataFrame, bank: str, score_metric: str):
+    def __init__(self, scores: pd.DataFrame, bank: str, score_metric: str,
+                 *, point_in_time: bool = True):
         self._cache: Dict[str, tuple] = {}
+        self._pit = point_in_time
         sub = scores[scores["central_bank"] == bank]
         for speaker, grp in sub.groupby("speaker"):
             g = grp.sort_values("date")
+            pub = (g["pub_date"] if "pub_date" in g else g["date"])
             self._cache[speaker] = (
                 np.array([np.datetime64(d) for d in g["date"]]),
                 g[score_metric].to_numpy(dtype=float),
+                np.array([np.datetime64(d) for d in pub]),
             )
 
     def speakers(self) -> set:
@@ -314,8 +332,11 @@ class ScoreLookup:
     def get(self, speaker: str, as_of: datetime.date) -> float:
         if speaker not in self._cache:
             return np.nan
-        dates, vals = self._cache[speaker]
+        dates, vals, pub = self._cache[speaker]
         mask = dates < np.datetime64(as_of)
+        if self._pit:
+            # the score must ALSO have been published by then
+            mask &= pub <= np.datetime64(as_of)
         if not mask.any():
             return np.nan
         v = vals[mask][-1]
@@ -387,11 +408,15 @@ def make_percentile_bucketer(
     sub = scores[scores["central_bank"] == bank].sort_values("date")
     dates = np.array([np.datetime64(d) for d in sub["date"]])
     vals = sub[score_metric].to_numpy(dtype=float)
+    pubs = np.array([np.datetime64(d) for d in
+                     (sub["pub_date"] if "pub_date" in sub else sub["date"])])
 
     def _fn(_speaker: str, score: float, as_of: datetime.date) -> int:
         if score is None or score != score:
             return 0
-        hist = vals[dates < np.datetime64(as_of)]
+        a = np.datetime64(as_of)
+        # the reference distribution has to be knowable too, not just prior
+        hist = vals[(dates < a) & (pubs <= a)]
         hist = hist[~np.isnan(hist)]
         if len(hist) < min_history:
             return 0
@@ -453,6 +478,8 @@ def make_peer_relative_bucketer(
     dates = np.array([np.datetime64(d) for d in sub["date"]])
     vals = sub[score_metric].to_numpy(dtype=float)
     speakers = sub["speaker"].to_numpy()
+    pubs = np.array([np.datetime64(d) for d in
+                     (sub["pub_date"] if "pub_date" in sub else sub["date"])])
 
     def _fn(speaker: str, score: float, as_of: datetime.date) -> int:
         if score is None or score != score:
@@ -468,7 +495,9 @@ def make_peer_relative_bucketer(
 
         as_of64 = np.datetime64(as_of)
         lo = as_of64 - np.timedelta64(int(peer_window_days), "D")
-        mask = (dates < as_of64) & (dates >= lo)
+        # prior AND published: a peer's score that JPM only published later was
+        # not part of the cross-section a desk could see
+        mask = (dates < as_of64) & (dates >= lo) & (pubs <= as_of64)
         if not mask.any():
             return _fb()
         # most recent observation per OTHER speaker
@@ -1297,6 +1326,12 @@ def enrich_closed(closed: pd.DataFrame) -> pd.DataFrame:
     # which is the only unit in which USD, EUR and GBP trades can be pooled.
     closed["pnl_bp"] = closed["realized_pnl"] / closed["bpv"]
     closed["abs_bucket"] = closed["bucket"].abs()
+    # bpv scales with conviction, so dividing by it hands back the EQUAL-WEIGHT
+    # book rather than the one the engine held. Both are reported: pnl_bp is the
+    # per-unit-risk number that lets currencies pool, pnl_bp_sized is the book as
+    # actually sized. They disagree materially when the conviction buckets have
+    # different edge.
+    closed["pnl_bp_sized"] = closed["pnl_bp"] * closed["abs_bucket"]
     return closed
 
 
@@ -1400,6 +1435,7 @@ def fast_backtest(events: List[dict]) -> pd.DataFrame:
             "opened_at": pd.Timestamp(ev["entry_ts"]),
             "closed_at": pd.Timestamp(ev["exit_ts"]),
             "pnl_bp": pnl_bp, "realized_pnl": pnl_bp * ev["bpv"],
+            "pnl_bp_sized": pnl_bp * abs(ev["bucket"]),
         })
     if not rows:
         return pd.DataFrame()
