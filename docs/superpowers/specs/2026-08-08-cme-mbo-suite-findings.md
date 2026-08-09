@@ -242,29 +242,41 @@ plausible and wrong edge:
 
 The model-free counterpart to check it against is §5's realised fill curve.
 
-## 9. The normalization seam costs 2 ms in the tail, so a re-pull is justified
+## 9. The normalization seam costs little, and an earlier claim here was wrong
 
-The two conventions produce identical book states -- that is pinned by a known-answer
-test -- so the difference has to live in the timestamps. Measured on SR3Z6, three
-sessions either side of 2026-07-07:
+**Correction.** An earlier version of this section reported the seam costing a p90 of
+2,156 us against 111 us -- nineteen times -- and recommended paying for a re-pull on
+that basis. That measurement used **one instrument (SR3Z6) over three sessions a
+side**, and it does not survive a wider look. Recorded rather than quietly amended,
+because the recommendation was to spend money.
 
-| vintage | ts_recv - ts_event p50 | p90 | p99 |
-| --- | ---: | ---: | ---: |
-| new (June, re-pulled) | 99.1 us | 110.9 us | 1,789 us |
-| old (July-August) | 124.5 us | **2,156 us** | **9,962 us** |
+Paired across the five busiest SR3 **outrights**, eight sessions either side of
+2026-07-07:
 
-The median barely moves; the **p90 tail is nineteen times worse** under the old
-convention. That is exactly what buffering-until-event-complete predicts:
-single-packet events are unaffected, and multi-packet events have their early
-records stamped at the completion time. Multi-packet events are the busy ones.
+| difference, old minus new | value |
+| --- | ---: |
+| p50 of `ts_recv - ts_event` | **-1.0 us** |
+| p90 | **+2.1 us** |
+| share of records over 1 ms | **+0.4 pp** (1.0% to 1.4%) |
+| p99 | about +700 us |
 
-**Recommendation.** Re-pull SR3 2026-07-07 to 2026-08-06 if the lead-lag or
-dealer-hedging work is going to use `ts_recv` at sub-second resolution -- a two
-millisecond discontinuity dwarfs the lags such a study looks for. Do not bother if
-the use is quoted spread, depth, cost or fill analysis, none of which reads the
-timestamp at that precision. There is no `DATABENTO_API_KEY` on this machine, so
-the re-pull is a portal batch job: `GLBX.MDP3`, schema `mbo`, `stype_in=parent`,
-symbol `SR3.FUT`, 2026-07-07 to 2026-08-06.
+p90 is roughly 125 us on **both** sides for every one of the five. Six SR3 bundles
+show the same thing, with the new vintage marginally *worse* on p90. So the buffering
+difference is real but small: it shifts about four records in a thousand past a
+millisecond and lengthens the far tail, and it does not move the body of the
+distribution at all.
+
+**Revised recommendation.** Do not pay to re-pull for timestamp fidelity alone. The
+vintage label on every instrument-day is the appropriate defence, and it is already
+there. Re-pull only if a study needs the p99 tail of feed latency specifically, or if
+uniform DBN v3 tooling is wanted for its own sake. If you do: `GLBX.MDP3`, schema
+`mbo`, `stype_in=parent`, symbol `SR3.FUT`, 2026-07-07 to 2026-08-06 -- there is no
+`DATABENTO_API_KEY` on this machine, so it is a portal batch job.
+
+**What the seam does still change**, and what the label is for: the old vintage
+carries no `action='N'` records at all, and emits 0.87 top-of-book states per record
+against 0.81 for the new one. Book states are identical -- a known-answer test pins
+that -- but any count of *events* is not comparable across the seam.
 
 ## 10. ZT is not broken; its information is deeper in the book
 
