@@ -3,11 +3,17 @@
 import { randomUUID } from 'crypto'
 import type { PoolClient } from 'pg'
 import { query } from '@/lib/db'
+import {
+  TAPE_LEGS,
+  TAPE_OVERRIDE_HISTORY,
+  TAPE_OVERRIDE_MEMBERS,
+  TAPE_OVERRIDES,
+} from '@/lib/tape-tables'
 
-export const OVERRIDES_TABLE = 'arbs_usd_swap_tape_overrides_v2'
-export const OVERRIDE_MEMBERS_TABLE = 'arbs_usd_swap_tape_override_members_v2'
-export const OVERRIDE_HISTORY_TABLE = 'arbs_usd_swap_tape_override_history_v2'
-export const TAPE_LEGS_TABLE = 'arbs_usd_swap_tape_legs_v2'
+export const OVERRIDES_TABLE = TAPE_OVERRIDES
+export const OVERRIDE_MEMBERS_TABLE = TAPE_OVERRIDE_MEMBERS
+export const OVERRIDE_HISTORY_TABLE = TAPE_OVERRIDE_HISTORY
+export const TAPE_LEGS_TABLE = TAPE_LEGS
 
 export type OverrideType = 'GROUP' | 'SPLIT' | 'DETACH'
 export const OVERRIDE_TYPES: OverrideType[] = ['GROUP', 'SPLIT', 'DETACH']

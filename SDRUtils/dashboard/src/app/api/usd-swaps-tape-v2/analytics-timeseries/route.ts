@@ -20,13 +20,13 @@ import {
   parseBooleanParam,
   riskAggregateExpression,
 } from './route.logic'
+import { TAPE_LEGS, TAPE_PACKAGES } from '@/lib/tape-tables'
 
-// Phase 2 cutover: analytics-timeseries reads from the v2 leg table so it
-// benefits from the new (filter, original_execution_timestamp DESC)
-// composite indexes added in _tape_schema_v2.py. v1 stays the rollback
-// target; flip this constant to revert.
-const LEGS_TABLE = 'arbs_usd_swap_tape_legs_v2'
-const PACKAGES_TABLE = 'arbs_usd_swap_tape_packages_v2'
+// analytics-timeseries reads from the current-generation leg table so it
+// benefits from the (filter, original_execution_timestamp DESC) composite
+// indexes added alongside it. Generation is owned by src/lib/tape-tables.ts.
+const LEGS_TABLE = TAPE_LEGS
+const PACKAGES_TABLE = TAPE_PACKAGES
 
 // Phase 4 contract: every analytics-dock route exposes the canonical
 // underlier key under groupBy=canonical. The actual SQL filter is

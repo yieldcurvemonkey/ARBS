@@ -22,6 +22,7 @@ import {
   buildOutrightTapeLabelCandidates,
   isOutrightTapeLabelCandidate,
 } from '../analytics-timeseries/route.logic'
+import { TAPE_LEGS, TAPE_PACKAGES } from '@/lib/tape-tables'
 
 const LRU_MAX = Number(process.env.ANALYTICS_LRU_MAX ?? 2048)
 const LRU_TTL = Number(process.env.ANALYTICS_LRU_TTL ?? 300_000)
@@ -35,10 +36,8 @@ const CACHE_HEADERS = {
   'Cache-Control': 'private, max-age=300, stale-while-revalidate=600',
 } as const
 
-// Phase 2 cutover: rarity reads from the v2 leg table to pick up the
-// composite (filter, original_execution_timestamp DESC) indexes.
-const LEGS_TABLE = 'arbs_usd_swap_tape_legs_v2'
-const PACKAGES_TABLE = 'arbs_usd_swap_tape_packages_v2'
+const LEGS_TABLE = TAPE_LEGS
+const PACKAGES_TABLE = TAPE_PACKAGES
 
 // Phase 4 contract: see analytics-timeseries/route.ts for rationale.
 // Named `groupCol` (lowercase) to satisfy the rarity-specific contract

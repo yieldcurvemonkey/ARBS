@@ -101,8 +101,9 @@ describe('PATCH /overrides/[overrideId]', () => {
       .mockResolvedValueOnce({ rows: [{ override_id: 'OID', override_type: 'GROUP', trade_ids: ['T1', 'T2'], manual_package_id: 'SMO-X' }] }) // existing (still active at the pre-txn read)
       .mockResolvedValueOnce({ rows: [{ trade_id: 'T1', package_id: 'P1' }, { trade_id: 'T2', package_id: 'P1' }, { trade_id: 'T3', package_id: 'P2' }] }) // legs
     clientQueryMock.mockImplementation(async (sql: string) => {
-      // Real _v2 table name (arbs_usd_swap_tape_overrides_v2): the parent-row
-      // rewrite is the only statement whose SET list resurrects
+      // Real table name carries a generation suffix directly abutting
+      // "overrides" (see TAPE_OVERRIDES in src/lib/tape-tables.ts): the
+      // parent-row rewrite is the only statement whose SET list resurrects
       // (`is_active = TRUE,`) -- distinguish it from the member-deactivate
       // and supersede statements, which set is_active = FALSE.
       if (/UPDATE\s+\S*overrides\S*[\s\S]*is_active = TRUE,/i.test(sql)) {

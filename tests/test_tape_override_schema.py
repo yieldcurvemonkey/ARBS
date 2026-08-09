@@ -16,15 +16,16 @@ from SDRUtils._swappulse_scripts.ingest_usdswaps_tape import (
     _schema_already_current,
     ensure_schema,
 )
-from SDRUtils._swappulse_scripts._tape_schema_v2 import (
-    DISPLAY_VIEW_V2,
-    LEGS_TABLE_V2,
-    NOTES_TABLE_V2,
-    OVERRIDE_HISTORY_TABLE_V2,
-    OVERRIDE_MEMBERS_TABLE_V2,
-    OVERRIDES_TABLE_V2,
-    PACKAGES_TABLE_V2,
-    TAPE_SCHEMA_SQL_V2,
+from SDRUtils._swappulse_scripts._tape_schema_current import TAPE_SCHEMA_SQL_CURRENT
+from SDRUtils._swappulse_scripts._tape_tables import (
+    DISPLAY_VIEW,
+    IDX_INFIX,
+    LEGS_TABLE,
+    NOTES_TABLE,
+    OVERRIDE_HISTORY_TABLE,
+    OVERRIDE_MEMBERS_TABLE,
+    OVERRIDES_TABLE,
+    PACKAGES_TABLE,
 )
 
 
@@ -33,10 +34,10 @@ def override_engine(pg_test_url):
     """Drop the four new objects, force ensure_schema to re-run, return engine."""
     engine = create_engine(pg_test_url)
     with engine.begin() as conn:
-        conn.execute(text(f"DROP TABLE IF EXISTS {OVERRIDE_MEMBERS_TABLE_V2} CASCADE"))
-        conn.execute(text(f"DROP TABLE IF EXISTS {OVERRIDE_HISTORY_TABLE_V2} CASCADE"))
-        conn.execute(text(f"DROP TABLE IF EXISTS {NOTES_TABLE_V2} CASCADE"))
-        conn.execute(text(f"DROP TABLE IF EXISTS {OVERRIDES_TABLE_V2} CASCADE"))
+        conn.execute(text(f"DROP TABLE IF EXISTS {OVERRIDE_MEMBERS_TABLE} CASCADE"))
+        conn.execute(text(f"DROP TABLE IF EXISTS {OVERRIDE_HISTORY_TABLE} CASCADE"))
+        conn.execute(text(f"DROP TABLE IF EXISTS {NOTES_TABLE} CASCADE"))
+        conn.execute(text(f"DROP TABLE IF EXISTS {OVERRIDES_TABLE} CASCADE"))
     _ing._schema_ensured.discard(str(engine.url))
     ensure_schema(engine)
     return engine
@@ -45,10 +46,10 @@ def override_engine(pg_test_url):
 @pytest.mark.db
 def test_override_tables_created(override_engine):
     expected = {
-        OVERRIDES_TABLE_V2,
-        OVERRIDE_MEMBERS_TABLE_V2,
-        OVERRIDE_HISTORY_TABLE_V2,
-        NOTES_TABLE_V2,
+        OVERRIDES_TABLE,
+        OVERRIDE_MEMBERS_TABLE,
+        OVERRIDE_HISTORY_TABLE,
+        NOTES_TABLE,
     }
     with override_engine.connect() as conn:
         rows = conn.execute(
@@ -70,7 +71,7 @@ def test_group_override_requires_two_trades(override_engine):
         with override_engine.begin() as conn:
             conn.execute(
                 text(
-                    f"INSERT INTO {OVERRIDES_TABLE_V2} "
+                    f"INSERT INTO {OVERRIDES_TABLE} "
                     "(override_type, trade_ids, created_by) "
                     "VALUES ('GROUP', ARRAY['T1'], 'pytest')"
                 )
@@ -78,7 +79,7 @@ def test_group_override_requires_two_trades(override_engine):
     with override_engine.begin() as conn:
         oid = conn.execute(
             text(
-                f"INSERT INTO {OVERRIDES_TABLE_V2} "
+                f"INSERT INTO {OVERRIDES_TABLE} "
                 "(override_type, trade_ids, created_by) "
                 "VALUES ('GROUP', ARRAY['T1','T2'], 'pytest') RETURNING override_id"
             )
@@ -94,7 +95,7 @@ def test_override_type_check(override_engine):
         with override_engine.begin() as conn:
             conn.execute(
                 text(
-                    f"INSERT INTO {OVERRIDES_TABLE_V2} "
+                    f"INSERT INTO {OVERRIDES_TABLE} "
                     "(override_type, trade_ids, created_by) "
                     "VALUES ('FOO', ARRAY['T1','T2'], 'pytest')"
                 )
@@ -108,19 +109,19 @@ def test_override_members_one_active_per_trade(override_engine):
     with override_engine.begin() as conn:
         oid1 = conn.execute(
             text(
-                f"INSERT INTO {OVERRIDES_TABLE_V2} (override_type, trade_ids, created_by) "
+                f"INSERT INTO {OVERRIDES_TABLE} (override_type, trade_ids, created_by) "
                 "VALUES ('GROUP', ARRAY['TX','TY'], 'pytest') RETURNING override_id"
             )
         ).scalar()
         oid2 = conn.execute(
             text(
-                f"INSERT INTO {OVERRIDES_TABLE_V2} (override_type, trade_ids, created_by) "
+                f"INSERT INTO {OVERRIDES_TABLE} (override_type, trade_ids, created_by) "
                 "VALUES ('GROUP', ARRAY['TX','TZ'], 'pytest') RETURNING override_id"
             )
         ).scalar()
         conn.execute(
             text(
-                f"INSERT INTO {OVERRIDE_MEMBERS_TABLE_V2} "
+                f"INSERT INTO {OVERRIDE_MEMBERS_TABLE} "
                 "(trade_id, override_id, override_type, is_active) "
                 "VALUES ('TX', :oid, 'GROUP', TRUE)"
             ),
@@ -130,7 +131,7 @@ def test_override_members_one_active_per_trade(override_engine):
         with override_engine.begin() as conn:
             conn.execute(
                 text(
-                    f"INSERT INTO {OVERRIDE_MEMBERS_TABLE_V2} "
+                    f"INSERT INTO {OVERRIDE_MEMBERS_TABLE} "
                     "(trade_id, override_id, override_type, is_active) "
                     "VALUES ('TX', :oid, 'GROUP', TRUE)"
                 ),
@@ -140,7 +141,7 @@ def test_override_members_one_active_per_trade(override_engine):
     with override_engine.begin() as conn:
         conn.execute(
             text(
-                f"INSERT INTO {OVERRIDE_MEMBERS_TABLE_V2} "
+                f"INSERT INTO {OVERRIDE_MEMBERS_TABLE} "
                 "(trade_id, override_id, override_type, is_active) "
                 "VALUES ('TX', :oid, 'GROUP', FALSE)"
             ),
@@ -156,7 +157,7 @@ def test_notes_target_type_check(override_engine):
         with override_engine.begin() as conn:
             conn.execute(
                 text(
-                    f"INSERT INTO {NOTES_TABLE_V2} "
+                    f"INSERT INTO {NOTES_TABLE} "
                     "(target_type, target_id, author, body) "
                     "VALUES ('FOO', 'T1', 'pytest', 'hi')"
                 )
@@ -166,7 +167,7 @@ def test_notes_target_type_check(override_engine):
 def test_latest_migration_cols_includes_overrides_table():
     from SDRUtils._swappulse_scripts.ingest_usdswaps_tape import _LATEST_MIGRATION_COLS
 
-    assert ("arbs_usd_swap_tape_overrides_v2", "override_id") in _LATEST_MIGRATION_COLS
+    assert (OVERRIDES_TABLE, "override_id") in _LATEST_MIGRATION_COLS
 
 
 @pytest.mark.db
@@ -174,10 +175,10 @@ def test_schema_not_current_when_overrides_missing(pg_test_url):
     engine = create_engine(pg_test_url)
     _ing._schema_ensured.discard(str(engine.url))
     with engine.begin() as conn:
-        conn.execute(text(f"DROP TABLE IF EXISTS {OVERRIDE_MEMBERS_TABLE_V2} CASCADE"))
-        conn.execute(text(f"DROP TABLE IF EXISTS {OVERRIDE_HISTORY_TABLE_V2} CASCADE"))
-        conn.execute(text(f"DROP TABLE IF EXISTS {NOTES_TABLE_V2} CASCADE"))
-        conn.execute(text(f"DROP TABLE IF EXISTS {OVERRIDES_TABLE_V2} CASCADE"))
+        conn.execute(text(f"DROP TABLE IF EXISTS {OVERRIDE_MEMBERS_TABLE} CASCADE"))
+        conn.execute(text(f"DROP TABLE IF EXISTS {OVERRIDE_HISTORY_TABLE} CASCADE"))
+        conn.execute(text(f"DROP TABLE IF EXISTS {NOTES_TABLE} CASCADE"))
+        conn.execute(text(f"DROP TABLE IF EXISTS {OVERRIDES_TABLE} CASCADE"))
     # Missing overrides table -> sentinel probe finds no row -> NOT current.
     assert _schema_already_current(engine) is False
     ensure_schema(engine)
@@ -194,7 +195,7 @@ def test_display_view_has_override_columns(override_engine):
                 "SELECT column_name FROM information_schema.columns "
                 "WHERE table_name = :v"
             ),
-            {"v": DISPLAY_VIEW_V2},
+            {"v": DISPLAY_VIEW},
         ).fetchall()
     cols = {r[0] for r in rows}
     assert expected <= cols, f"view missing columns: {expected - cols}"
@@ -205,7 +206,7 @@ def test_view_legs_json_byte_identical_after_override(override_engine):
     with override_engine.begin() as conn:
         conn.execute(
             text(
-                f"INSERT INTO {PACKAGES_TABLE_V2} "
+                f"INSERT INTO {PACKAGES_TABLE} "
                 "(package_id, as_of_date, execution_start, execution_end, legs_count) "
                 "VALUES ('PKG_OV_1','2026-07-08',"
                 "'2026-07-08T12:00:00Z','2026-07-08T12:00:00Z',2)"
@@ -213,7 +214,7 @@ def test_view_legs_json_byte_identical_after_override(override_engine):
         )
         conn.execute(
             text(
-                f"INSERT INTO {LEGS_TABLE_V2} "
+                f"INSERT INTO {LEGS_TABLE} "
                 "(trade_id, package_id, leg_order, as_of_date, execution_timestamp) VALUES "
                 "('TID_A','PKG_OV_1',0,'2026-07-08','2026-07-08T12:00:00Z'),"
                 "('TID_B','PKG_OV_1',1,'2026-07-08','2026-07-08T12:00:00Z')"
@@ -221,12 +222,12 @@ def test_view_legs_json_byte_identical_after_override(override_engine):
         )
     with override_engine.connect() as conn:
         before = conn.execute(
-            text(f"SELECT legs_json::text FROM {DISPLAY_VIEW_V2} WHERE package_id='PKG_OV_1'")
+            text(f"SELECT legs_json::text FROM {DISPLAY_VIEW} WHERE package_id='PKG_OV_1'")
         ).scalar()
     with override_engine.begin() as conn:
         oid = conn.execute(
             text(
-                f"INSERT INTO {OVERRIDES_TABLE_V2} "
+                f"INSERT INTO {OVERRIDES_TABLE} "
                 "(override_type, manual_package_id, trade_ids, created_by) "
                 "VALUES ('GROUP','SMO-20260708-DEADBEEF', ARRAY['TID_A','TID_B'], 'pytest') "
                 "RETURNING override_id"
@@ -234,7 +235,7 @@ def test_view_legs_json_byte_identical_after_override(override_engine):
         ).scalar()
         conn.execute(
             text(
-                f"INSERT INTO {OVERRIDE_MEMBERS_TABLE_V2} "
+                f"INSERT INTO {OVERRIDE_MEMBERS_TABLE} "
                 "(trade_id, override_id, override_type, manual_package_id, is_active) "
                 "VALUES ('TID_A', :oid, 'GROUP', 'SMO-20260708-DEADBEEF', TRUE)"
             ),
@@ -244,7 +245,7 @@ def test_view_legs_json_byte_identical_after_override(override_engine):
         after_legs, override_map, manual_pkg, ov_type = conn.execute(
             text(
                 f"SELECT legs_json::text, override_map, manual_package_id, override_type "
-                f"FROM {DISPLAY_VIEW_V2} WHERE package_id='PKG_OV_1'"
+                f"FROM {DISPLAY_VIEW} WHERE package_id='PKG_OV_1'"
             )
         ).fetchone()
     assert after_legs == before, "legs_json changed after override attach"
@@ -259,7 +260,7 @@ def test_view_notes_flags(override_engine):
     with override_engine.begin() as conn:
         conn.execute(
             text(
-                f"INSERT INTO {PACKAGES_TABLE_V2} "
+                f"INSERT INTO {PACKAGES_TABLE} "
                 "(package_id, as_of_date, execution_start, execution_end, legs_count) "
                 "VALUES ('PKG_NOTE_1','2026-07-08',"
                 "'2026-07-08T12:00:00Z','2026-07-08T12:00:00Z',1)"
@@ -267,26 +268,26 @@ def test_view_notes_flags(override_engine):
         )
         conn.execute(
             text(
-                f"INSERT INTO {LEGS_TABLE_V2} "
+                f"INSERT INTO {LEGS_TABLE} "
                 "(trade_id, package_id, leg_order, as_of_date, execution_timestamp) "
                 "VALUES ('TID_N','PKG_NOTE_1',0,'2026-07-08','2026-07-08T12:00:00Z')"
             )
         )
         conn.execute(
             text(
-                f"INSERT INTO {NOTES_TABLE_V2} (target_type, target_id, author, body) "
+                f"INSERT INTO {NOTES_TABLE} (target_type, target_id, author, body) "
                 "VALUES ('PACKAGE','PKG_NOTE_1','pytest','watch this')"
             )
         )
         conn.execute(
             text(
-                f"INSERT INTO {NOTES_TABLE_V2} (target_type, target_id, author, body) "
+                f"INSERT INTO {NOTES_TABLE} (target_type, target_id, author, body) "
                 "VALUES ('TRADE','TID_N','pytest','leg note')"
             )
         )
     with override_engine.connect() as conn:
         has_notes, notes_count = conn.execute(
-            text(f"SELECT has_notes, notes_count FROM {DISPLAY_VIEW_V2} WHERE package_id='PKG_NOTE_1'")
+            text(f"SELECT has_notes, notes_count FROM {DISPLAY_VIEW} WHERE package_id='PKG_NOTE_1'")
         ).fetchone()
     assert has_notes is True
     assert notes_count == 2
@@ -298,7 +299,7 @@ def test_view_plan_index_paths_and_cardinality(override_engine):
         for i in range(6):
             conn.execute(
                 text(
-                    f"INSERT INTO {PACKAGES_TABLE_V2} "
+                    f"INSERT INTO {PACKAGES_TABLE} "
                     "(package_id, as_of_date, execution_start, execution_end, legs_count) "
                     "VALUES (:pid,'2026-07-08',:ts,:ts,1)"
                 ),
@@ -306,7 +307,7 @@ def test_view_plan_index_paths_and_cardinality(override_engine):
             )
             conn.execute(
                 text(
-                    f"INSERT INTO {LEGS_TABLE_V2} "
+                    f"INSERT INTO {LEGS_TABLE} "
                     "(trade_id, package_id, leg_order, as_of_date, execution_timestamp) "
                     "VALUES (:tid,:pid,0,'2026-07-08',:ts)"
                 ),
@@ -314,21 +315,21 @@ def test_view_plan_index_paths_and_cardinality(override_engine):
             )
             conn.execute(
                 text(
-                    f"INSERT INTO {OVERRIDES_TABLE_V2} (override_type, trade_ids, created_by) "
+                    f"INSERT INTO {OVERRIDES_TABLE} (override_type, trade_ids, created_by) "
                     "VALUES ('SPLIT', ARRAY[:tid], 'pytest') RETURNING override_id"
                 ),
                 {"tid": f"TID_PLAN_{i}"},
             )
 
     with override_engine.connect() as conn:
-        baseline = conn.execute(text(f"SELECT count(*) FROM {PACKAGES_TABLE_V2}")).scalar()
-        view_rows = conn.execute(text(f"SELECT count(*) FROM {DISPLAY_VIEW_V2}")).scalar()
+        baseline = conn.execute(text(f"SELECT count(*) FROM {PACKAGES_TABLE}")).scalar()
+        view_rows = conn.execute(text(f"SELECT count(*) FROM {DISPLAY_VIEW}")).scalar()
         conn.execute(text("SET enable_seqscan = off"))
         conn.execute(text("SET enable_bitmapscan = off"))
         plan_json = conn.execute(
             text(
                 f"EXPLAIN (ANALYZE, FORMAT JSON) "
-                f"SELECT * FROM {DISPLAY_VIEW_V2} d "
+                f"SELECT * FROM {DISPLAY_VIEW} d "
                 f"WHERE d.execution_start < NOW() "
                 f"ORDER BY d.execution_start DESC NULLS LAST LIMIT 201"
             )
@@ -338,9 +339,11 @@ def test_view_plan_index_paths_and_cardinality(override_engine):
     assert view_rows == baseline
 
     plan_text = json.dumps(plan_json)
-    assert "idx_tape_v2_packages_exec_start" in plan_text, \
-        "outer package scan not using idx_tape_v2_packages_exec_start"
-    assert "uq_tape_v2_override_members_active_trade" in plan_text, \
+    idx_packages_exec_start = f"idx_tape_{IDX_INFIX}_packages_exec_start"
+    uq_override_members_active_trade = f"uq_tape_{IDX_INFIX}_override_members_active_trade"
+    assert idx_packages_exec_start in plan_text, \
+        f"outer package scan not using {idx_packages_exec_start}"
+    assert uq_override_members_active_trade in plan_text, \
         "members probe not served by its unique index (per-package re-scan regression?)"
 
     def _walk(node):
@@ -352,7 +355,7 @@ def test_view_plan_index_paths_and_cardinality(override_engine):
     member_seqscans = [
         n for n in nodes
         if n.get("Node Type") == "Seq Scan"
-        and n.get("Relation Name") == OVERRIDE_MEMBERS_TABLE_V2
+        and n.get("Relation Name") == OVERRIDE_MEMBERS_TABLE
     ]
     assert not member_seqscans, "override_members seq-scanned — plan regression"
 
@@ -366,7 +369,7 @@ def test_view_ddl_contains_override_and_notes_columns():
     5 new columns + the manual_package_id COALESCE resolution have a fast,
     always-running regression guard.
     """
-    view_sql = TAPE_SCHEMA_SQL_V2.split(f"CREATE OR REPLACE VIEW {DISPLAY_VIEW_V2}")[1]
+    view_sql = TAPE_SCHEMA_SQL_CURRENT.split(f"CREATE OR REPLACE VIEW {DISPLAY_VIEW}")[1]
     for col in ("override_map", "manual_package_id", "override_type",
                 "has_notes", "notes_count"):
         assert col in view_sql, f"view DDL missing column {col!r}"
@@ -375,7 +378,7 @@ def test_view_ddl_contains_override_and_notes_columns():
     # level (the nested legs/notes LATERAL subqueries have their own
     # ``AS manual_package_id`` aliases, which are fine — a duplicate only
     # breaks the DDL if it appears twice in the outer view's SELECT list).
-    outer_select = view_sql.split(f"FROM {PACKAGES_TABLE_V2} p")[0]
+    outer_select = view_sql.split(f"FROM {PACKAGES_TABLE} p")[0]
     assert "ml.manual_package_id," not in outer_select, (
         "standalone ml.manual_package_id projection must be removed from "
         "the outer SELECT (collides with the COALESCE column)"

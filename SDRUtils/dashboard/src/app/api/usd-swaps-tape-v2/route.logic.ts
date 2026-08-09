@@ -1,9 +1,11 @@
 // ABOUTME: Pure helpers for the tape v2 main route — parse filters, build WHERE clauses.
 // No DB access here; unit-testable in isolation.
+import { TAPE_DISPLAY } from '@/lib/tape-tables'
 
-// Phase 4 cutover constant. Flip to 'arbs_usd_swap_tape_display_v1' to
-// roll back to the frozen v1 view without a rebuild (design §4.11).
-export const TAPE_DISPLAY_VIEW = 'arbs_usd_swap_tape_display_v2'
+// Re-exported for existing importers. The generation itself now lives in
+// src/lib/tape-tables.ts, which is deliberately a constant rather than an
+// env var — see that file for why, and for the v1-rollback story (design §4.11).
+export const TAPE_DISPLAY_VIEW = TAPE_DISPLAY
 
 export const DEFAULT_LIMIT = 200
 export const MAX_LIMIT = 500

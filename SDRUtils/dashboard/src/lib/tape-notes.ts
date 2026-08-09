@@ -1,5 +1,7 @@
 // ABOUTME: Tape-local helpers for trader notes on trades/packages.
-export const NOTES_TABLE = 'arbs_usd_swap_tape_notes_v2'
+import { TAPE_NOTES } from '@/lib/tape-tables'
+
+export const NOTES_TABLE = TAPE_NOTES
 
 export type NoteTargetType = 'TRADE' | 'PACKAGE'
 const NOTE_TARGET_TYPES: NoteTargetType[] = ['TRADE', 'PACKAGE']

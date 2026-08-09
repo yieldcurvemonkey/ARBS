@@ -1,10 +1,10 @@
-// ABOUTME: Port of timeseries route against tape v1 leg table, with groupBy extension.
+// ABOUTME: Legacy raw-tick timeseries route, with groupBy extension.
 import { NextResponse } from 'next/server'
 import { query } from '@/lib/db'
+import { TAPE_LEGS } from '@/lib/tape-tables'
 
 const MAX_TIMESERIES_ROWS = 50_000
-// Phase 2 cutover: legacy raw-tick timeseries route reads from v2 too.
-const LEGS_TABLE = 'arbs_usd_swap_tape_legs_v2'
+const LEGS_TABLE = TAPE_LEGS
 
 const GROUP_BY_COLUMN: Record<string, string> = {
   package: 'l.package_id',

@@ -28,6 +28,7 @@ import type {
   StructureDef,
   StructureGridResponse,
 } from '@/features/usd-swaps-tape-v2/types/structure-grid.types'
+import { TAPE_LEGS, TAPE_PACKAGES } from '@/lib/tape-tables'
 
 export type { WindowBounds } from '../route.logic'
 export { computeWindowBounds } from '../route.logic'
@@ -310,7 +311,7 @@ export function buildStructureSqlTimeOfDay(ctx: StructureSqlBuildContext): Built
     packages AS (
       SELECT p.package_id, p.execution_start, p.tape_label,
              p.package_type
-      FROM arbs_usd_swap_tape_packages_v2 p
+      FROM ${TAPE_PACKAGES} p
       WHERE p.package_type IN (${pkgPlaceholders})
         AND p.execution_start >= $1::timestamptz
         AND p.execution_start < $2::timestamptz
@@ -330,7 +331,7 @@ export function buildStructureSqlTimeOfDay(ctx: StructureSqlBuildContext): Built
                PARTITION BY p.package_id, s.structure_id
              ) AS leg_count
       FROM packages p
-      JOIN arbs_usd_swap_tape_legs_v2 l ON l.package_id = p.package_id
+      JOIN ${TAPE_LEGS} l ON l.package_id = p.package_id
         AND COALESCE(l.contributes_to_flow, FALSE) = TRUE
       CROSS JOIN structure_defs s
       WHERE EXISTS (
@@ -467,7 +468,7 @@ export function buildStructureSqlRolling(ctx: StructureSqlBuildContext): BuiltSq
     packages AS (
       SELECT p.package_id, p.execution_start, p.tape_label,
              p.package_type
-      FROM arbs_usd_swap_tape_packages_v2 p
+      FROM ${TAPE_PACKAGES} p
       WHERE p.package_type IN (${pkgPlaceholders})
         AND p.execution_start >= $1::timestamptz
         AND p.execution_start < $2::timestamptz
@@ -487,7 +488,7 @@ export function buildStructureSqlRolling(ctx: StructureSqlBuildContext): BuiltSq
                PARTITION BY p.package_id, s.structure_id
              ) AS leg_count
       FROM packages p
-      JOIN arbs_usd_swap_tape_legs_v2 l ON l.package_id = p.package_id
+      JOIN ${TAPE_LEGS} l ON l.package_id = p.package_id
         AND COALESCE(l.contributes_to_flow, FALSE) = TRUE
       CROSS JOIN structure_defs s
       WHERE EXISTS (

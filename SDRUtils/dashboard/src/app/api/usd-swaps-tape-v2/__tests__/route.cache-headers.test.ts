@@ -1,11 +1,12 @@
 import { describe, expect, it, jest } from '@jest/globals'
+import { TAPE_DISPLAY } from '@/lib/tape-tables'
 
 jest.mock('@/lib/db', () => ({
   query: jest.fn(async () => ({ rows: [] })),
 }))
 jest.mock('@/lib/usd-swaps-tape-v2', () => ({
   resolveDisplayView: jest.fn(async () => ({
-    view: 'arbs_usd_swap_tape_display_v2',
+    view: TAPE_DISPLAY,
     columns: 'd.*',
   })),
 }))

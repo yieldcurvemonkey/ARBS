@@ -1,21 +1,24 @@
 """Phase 6 monitoring panel: quality-flag time series.
 
-Views over the v2 tape legs table that expose daily rates of each
-compliance / data-quality signal introduced by phases 2-5. Alerts fire
-when any rate drifts materially from baseline — early warning that the
-upstream SDR feed has changed shape.
+Views over the current-generation tape legs table that expose daily rates
+of each compliance / data-quality signal introduced by phases 2-5. Alerts
+fire when any rate drifts materially from baseline — early warning that
+the upstream SDR feed has changed shape.
 
-Run after ``TAPE_SCHEMA_SQL_V2`` — these views depend on v2 leg columns.
+Run after ``TAPE_SCHEMA_SQL_CURRENT`` — these views depend on the current
+generation's leg columns.
 """
 from __future__ import annotations
 
 from SDRUtils.config import LATE_REPORT_THRESHOLD_SECONDS
 
+from ._tape_tables import LEGS_TABLE, QUALITY_VIEW
+
 
 MONITORING_SQL_V2 = f"""
--- Daily quality-flag rates over the v2 leg table. Alert thresholds
--- live in the Grafana dashboard; this view is the data source.
-CREATE OR REPLACE VIEW arbs_usd_swap_tape_quality_daily_v2 AS
+-- Daily quality-flag rates over the current-generation leg table. Alert
+-- thresholds live in the Grafana dashboard; this view is the data source.
+CREATE OR REPLACE VIEW {QUALITY_VIEW} AS
 SELECT
     l.as_of_date,
     COUNT(*) AS total_rows,
@@ -47,7 +50,7 @@ SELECT
     SUM(CASE WHEN l.original_execution_source = 'lineage' THEN 1 ELSE 0 END) AS n_alpha_lineage,
     SUM(CASE WHEN l.original_execution_source = 'fallback' THEN 1 ELSE 0 END) AS n_alpha_fallback,
     SUM(CASE WHEN l.original_execution_source = 'newt' THEN 1 ELSE 0 END) AS n_alpha_newt
-FROM arbs_usd_swap_tape_legs_v2 l
+FROM {LEGS_TABLE} l
 GROUP BY l.as_of_date
 ORDER BY l.as_of_date DESC;
 """

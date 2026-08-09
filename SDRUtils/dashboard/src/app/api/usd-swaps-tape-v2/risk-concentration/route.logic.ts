@@ -1,3 +1,5 @@
+import { TAPE_LEGS } from '@/lib/tape-tables'
+
 export const GROUPABLE = {
   tape_label: 'l.tape_label',
   trade_type: 'l.trade_type',
@@ -24,7 +26,7 @@ export function buildRiskConcentrationSql(
            COUNT(*)::int AS trade_count,
            SUM(l.risk)::float AS total_dv01,
            SUM(l.notional)::float AS total_notional
-    FROM arbs_usd_swap_tape_legs_v2 l
+    FROM ${TAPE_LEGS} l
     WHERE l.as_of_date = $1::date
     ${whereClean}
       AND ${expr} IS NOT NULL

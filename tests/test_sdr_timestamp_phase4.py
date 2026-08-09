@@ -10,8 +10,8 @@ import pandas as pd
 
 class TestSchemaV2DDL:
     def _sql(self):
-        from SDRUtils._swappulse_scripts._tape_schema_v2 import TAPE_SCHEMA_SQL_V2
-        return TAPE_SCHEMA_SQL_V2
+        from SDRUtils._swappulse_scripts._tape_schema_current import TAPE_SCHEMA_SQL_CURRENT
+        return TAPE_SCHEMA_SQL_CURRENT
 
     def test_leg_columns_added(self):
         sql = self._sql()
@@ -39,14 +39,16 @@ class TestSchemaV2DDL:
             assert col in sql, col
 
     def test_event_index_created(self):
-        assert "idx_tape_v2_legs_event" in self._sql()
+        from SDRUtils._swappulse_scripts._tape_tables import IDX_INFIX
+        assert f"idx_tape_{IDX_INFIX}_legs_event" in self._sql()
 
 
 class TestMigrationMarkers:
     def test_markers_present(self):
         from SDRUtils._swappulse_scripts.ingest_usdswaps_tape import _LATEST_MIGRATION_COLS
-        assert ("arbs_usd_swap_tape_legs_v2", "event_timestamp") in _LATEST_MIGRATION_COLS
-        assert ("arbs_usd_swap_tape_packages_v2", "event_start") in _LATEST_MIGRATION_COLS
+        from SDRUtils._swappulse_scripts._tape_tables import LEGS_TABLE, PACKAGES_TABLE
+        assert (LEGS_TABLE, "event_timestamp") in _LATEST_MIGRATION_COLS
+        assert (PACKAGES_TABLE, "event_start") in _LATEST_MIGRATION_COLS
 
 
 class TestBuildLegRows:

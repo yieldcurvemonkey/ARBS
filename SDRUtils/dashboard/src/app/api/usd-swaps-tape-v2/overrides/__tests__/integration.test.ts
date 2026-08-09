@@ -1,4 +1,5 @@
 import { describe, expect, it, jest, beforeAll, beforeEach } from '@jest/globals'
+import { TAPE_LEGS } from '@/lib/tape-tables'
 
 /**
  * Stateful in-memory fake of the three override tables, wired through the
@@ -17,10 +18,11 @@ const store: Store = { overrides: new Map(), members: [], history: [], seq: 0 }
 function run(sql: string, params: any[] = []): { rows: any[] } {
   const s = sql.replace(/\s+/g, ' ').trim()
   if (/^BEGIN|^COMMIT|^ROLLBACK/i.test(s)) return { rows: [] }
-  // NOTE: table names carry a "_v2" suffix directly abutting "overrides" /
-  // "override_members" / "override_history" (e.g. arbs_usd_swap_tape_overrides_v2),
-  // so every regex below that anchors on the next SQL keyword needs a \S*
-  // between the table stem and that keyword (Tasks 5-6 lesson).
+  // NOTE: table names carry a generation suffix directly abutting "overrides" /
+  // "override_members" / "override_history" (see TAPE_OVERRIDES et al. in
+  // src/lib/tape-tables.ts), so every regex below that anchors on the next
+  // SQL keyword needs a \S* between the table stem and that keyword (Tasks
+  // 5-6 lesson).
   if (/SELECT 1 FROM .*overrides\S* WHERE manual_package_id/i.test(s)) {
     const hit = [...store.overrides.values()].some((o) => o.manual_package_id === params[0])
     return { rows: hit ? [{ '?column?': 1 }] : [] }
@@ -89,7 +91,7 @@ function run(sql: string, params: any[] = []): { rows: any[] } {
   if (/SELECT \* FROM .*overrides/i.test(s)) {
     return { rows: [...store.overrides.values()].filter((o) => o.is_active) }
   }
-  if (/FROM arbs_usd_swap_tape_legs_v2/i.test(s)) {
+  if (new RegExp(`FROM ${TAPE_LEGS}`, 'i').test(s)) {
     return { rows: params[0].map((t: string) => ({ trade_id: t, package_id: 'P1' })) }
   }
   return { rows: [] }

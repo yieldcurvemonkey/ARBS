@@ -1,4 +1,5 @@
 import { describe, expect, it } from '@jest/globals'
+import { TAPE_PACKAGES } from '@/lib/tape-tables'
 import {
   parseVolumeGridCellParams,
   buildIntradaySeasonalitySql,
@@ -85,7 +86,7 @@ describe('buildTimeseriesSql', () => {
       bucketPredicateSql: 'l.forward_start_years < 1',
       packageFilterSql: 'p.package_type IN ($2)',
     })
-    expect(sql).toContain('JOIN arbs_usd_swap_tape_packages_v2 p ON p.package_id = l.package_id')
+    expect(sql).toContain(`JOIN ${TAPE_PACKAGES} p ON p.package_id = l.package_id`)
     expect(sql).toContain('AND l.forward_start_years < 1')
     expect(sql).toContain('AND p.package_type IN ($2)')
     expect(sql).toContain('GROUP BY day')
@@ -100,7 +101,7 @@ describe('buildIntradaySeasonalitySql', () => {
       packageFilterSql: 'p.package_type IN ($5)',
     })
     expect(sql).toContain('generate_series')
-    expect(sql).toContain('JOIN arbs_usd_swap_tape_packages_v2 p ON p.package_id = l.package_id')
+    expect(sql).toContain(`JOIN ${TAPE_PACKAGES} p ON p.package_id = l.package_id`)
     expect(sql).toContain('baseline_cumulative')
     expect(sql).toContain('current_cumulative')
     expect(sql).toContain('SUM(dv01)')

@@ -7,6 +7,7 @@ import datetime
 import pandas as pd
 
 from SDRUtils.stir_flow import config
+from SDRUtils._swappulse_scripts._tape_tables import LEGS_TABLE, PACKAGES_TABLE
 
 _LEG_COLS = """
     l.trade_id, l.package_id, l.as_of_date,
@@ -31,8 +32,8 @@ _LEG_COLS = """
 # tenor_query. The (effective_date, trade_id) tiebreakers make it reproducible.
 ELIGIBLE_LEGS_SQL = f"""
 SELECT {_LEG_COLS}
-FROM arbs_usd_swap_tape_legs_v2 l
-LEFT JOIN arbs_usd_swap_tape_packages_v2 p USING (package_id)
+FROM {LEGS_TABLE} l
+LEFT JOIN {PACKAGES_TABLE} p USING (package_id)
 WHERE l.as_of_date BETWEEN %(start)s AND %(end)s
   AND l.economic_class = 'ECONOMIC_FLOW'
   AND l.contributes_to_flow = true
@@ -44,8 +45,8 @@ ORDER BY l.execution_timestamp, l.trade_id
 
 ALL_PKG_LEGS_SQL = f"""
 SELECT {_LEG_COLS}
-FROM arbs_usd_swap_tape_legs_v2 l
-LEFT JOIN arbs_usd_swap_tape_packages_v2 p USING (package_id)
+FROM {LEGS_TABLE} l
+LEFT JOIN {PACKAGES_TABLE} p USING (package_id)
 WHERE l.package_id = ANY(%(package_ids)s)
 ORDER BY l.package_id, l.expiration_date, l.effective_date, l.trade_id
 """

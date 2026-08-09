@@ -28,6 +28,7 @@ import {
   shapeIntradaySeasonalityResponse,
   type RawIntradaySeasonalityRow,
 } from '../cell/route.logic'
+import { TAPE_LEGS, TAPE_PACKAGES } from '@/lib/tape-tables'
 
 export { computeWindowBounds }
 
@@ -139,8 +140,8 @@ export function buildDailyTimeseriesSql(opts: {
         l.tenor_years,
         p.is_block_any,
         (date_trunc('day', COALESCE(l.original_execution_timestamp, l.execution_timestamp) AT TIME ZONE 'America/New_York'))::date AS day_et
-      FROM arbs_usd_swap_tape_legs_v2 l
-      JOIN arbs_usd_swap_tape_packages_v2 p ON p.package_id = l.package_id
+      FROM ${TAPE_LEGS} l
+      JOIN ${TAPE_PACKAGES} p ON p.package_id = l.package_id
       WHERE COALESCE(l.contributes_to_flow, FALSE) = TRUE
         AND COALESCE(l.original_execution_timestamp, l.execution_timestamp) >= $1::timestamptz
         AND COALESCE(l.original_execution_timestamp, l.execution_timestamp) <  $2::timestamptz
@@ -220,8 +221,8 @@ function buildSummaryTimeOfDaySql(opts: {
           (COALESCE(l.original_execution_timestamp, l.execution_timestamp) AT TIME ZONE 'America/New_York')
           - date_trunc('day', COALESCE(l.original_execution_timestamp, l.execution_timestamp) AT TIME ZONE 'America/New_York')
         )) AS tod_seconds_et
-      FROM arbs_usd_swap_tape_legs_v2 l
-      JOIN arbs_usd_swap_tape_packages_v2 p ON p.package_id = l.package_id
+      FROM ${TAPE_LEGS} l
+      JOIN ${TAPE_PACKAGES} p ON p.package_id = l.package_id
       WHERE COALESCE(l.contributes_to_flow, FALSE) = TRUE
         AND COALESCE(l.original_execution_timestamp, l.execution_timestamp) >= $1::timestamptz
         AND COALESCE(l.original_execution_timestamp, l.execution_timestamp) <  $2::timestamptz
@@ -310,8 +311,8 @@ function buildSummaryRollingSql(opts: {
         ${buildPkgFamilySql('p')} AS pkg_family,
         l.tenor_years,
         p.is_block_any
-      FROM arbs_usd_swap_tape_legs_v2 l
-      JOIN arbs_usd_swap_tape_packages_v2 p ON p.package_id = l.package_id
+      FROM ${TAPE_LEGS} l
+      JOIN ${TAPE_PACKAGES} p ON p.package_id = l.package_id
       WHERE COALESCE(l.contributes_to_flow, FALSE) = TRUE
         AND COALESCE(l.original_execution_timestamp, l.execution_timestamp) >= $1::timestamptz
         AND COALESCE(l.original_execution_timestamp, l.execution_timestamp) <  $2::timestamptz
@@ -432,8 +433,8 @@ export function buildAggregateIntradaySql(opts: {
             )) / ((SELECT bucket_minutes FROM params) * 60)
           )::int)
         ) AS bucket_index
-      FROM arbs_usd_swap_tape_legs_v2 l
-      JOIN arbs_usd_swap_tape_packages_v2 p ON p.package_id = l.package_id
+      FROM ${TAPE_LEGS} l
+      JOIN ${TAPE_PACKAGES} p ON p.package_id = l.package_id
       WHERE COALESCE(l.contributes_to_flow, FALSE) = TRUE
         AND COALESCE(l.original_execution_timestamp, l.execution_timestamp) >= $2::timestamptz
         AND COALESCE(l.original_execution_timestamp, l.execution_timestamp) <
@@ -537,8 +538,8 @@ function buildTenorDistTimeOfDaySql(opts: {
           (COALESCE(l.original_execution_timestamp, l.execution_timestamp) AT TIME ZONE 'America/New_York')
           - date_trunc('day', COALESCE(l.original_execution_timestamp, l.execution_timestamp) AT TIME ZONE 'America/New_York')
         )) AS tod_seconds_et
-      FROM arbs_usd_swap_tape_legs_v2 l
-      JOIN arbs_usd_swap_tape_packages_v2 p ON p.package_id = l.package_id
+      FROM ${TAPE_LEGS} l
+      JOIN ${TAPE_PACKAGES} p ON p.package_id = l.package_id
       WHERE COALESCE(l.contributes_to_flow, FALSE) = TRUE
         AND COALESCE(l.original_execution_timestamp, l.execution_timestamp) >= $1::timestamptz
         AND COALESCE(l.original_execution_timestamp, l.execution_timestamp) <  $2::timestamptz
@@ -597,8 +598,8 @@ function buildTenorDistRollingSql(opts: {
         ABS(COALESCE(l.notional, 0)) AS gross_notional,
         ABS(COALESCE(l.risk, 0))     AS gross_dv01,
         ${tenorBucketExpr} AS tenor_bucket
-      FROM arbs_usd_swap_tape_legs_v2 l
-      JOIN arbs_usd_swap_tape_packages_v2 p ON p.package_id = l.package_id
+      FROM ${TAPE_LEGS} l
+      JOIN ${TAPE_PACKAGES} p ON p.package_id = l.package_id
       WHERE COALESCE(l.contributes_to_flow, FALSE) = TRUE
         AND COALESCE(l.original_execution_timestamp, l.execution_timestamp) >= $1::timestamptz
         AND COALESCE(l.original_execution_timestamp, l.execution_timestamp) <  $2::timestamptz
@@ -688,8 +689,8 @@ export function buildStructureBreakdownSql(opts: {
         ${STRUCTURE_TYPE_CASE} AS structure_type,
         (date_trunc('day', COALESCE(l.original_execution_timestamp, l.execution_timestamp)
           AT TIME ZONE 'America/New_York'))::date AS day_et
-      FROM arbs_usd_swap_tape_legs_v2 l
-      JOIN arbs_usd_swap_tape_packages_v2 p ON p.package_id = l.package_id
+      FROM ${TAPE_LEGS} l
+      JOIN ${TAPE_PACKAGES} p ON p.package_id = l.package_id
       WHERE COALESCE(l.contributes_to_flow, FALSE) = TRUE
         AND COALESCE(l.original_execution_timestamp, l.execution_timestamp) >= $1::timestamptz
         AND COALESCE(l.original_execution_timestamp, l.execution_timestamp) <  $2::timestamptz
