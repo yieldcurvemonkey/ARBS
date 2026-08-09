@@ -11,13 +11,18 @@ from datetime import date
 from scripts.tape_v3_acceptance import EXEMPT_MISSING_DAYS, evaluate_day_parity
 
 
-def test_exempt_missing_days_is_exactly_the_two_documented_dates():
+def test_exempt_missing_days_is_exactly_the_one_documented_date():
     """Guards against silent generalisation: if a future edit widens this
     to a computed rule (e.g. "any holiday" or "any day with a low v2
-    count"), this test breaks and forces the author to look at it."""
+    count"), this test breaks and forces the author to look at it.
+
+    Also guards against silently re-adding 2024-10-14: its exemption was
+    removed because the backfill ties it out 3-for-3 against v2, and the
+    `start=D end=D` probe that originally justified it does not reproduce
+    production's D+1-forward fetch window (see the comment above
+    EXEMPT_MISSING_DAYS)."""
     assert EXEMPT_MISSING_DAYS == frozenset({
         date(2026, 7, 3),
-        date(2024, 10, 14),
     })
 
 
@@ -41,11 +46,15 @@ def test_exempted_missing_day_does_not_fail_and_is_reported():
     assert any("1 exempted" in line for line in report_lines)
 
 
-def test_both_exempted_days_missing_together_reports_both_and_passes():
+def test_multiple_exempted_days_missing_together_reports_both_and_passes():
+    """Exercises the plural-reporting branch with a synthetic exempt set
+    (via the `exempt` parameter) rather than production dates, so this
+    stays valid regardless of how many dates EXEMPT_MISSING_DAYS holds."""
+    synthetic_exempt = frozenset({date(2026, 7, 3), date(2024, 10, 14)})
     v2_days = {date(2026, 8, 5), date(2026, 7, 3), date(2024, 10, 14)}
     v3_days = {date(2026, 8, 5)}
 
-    report_lines, failures = evaluate_day_parity(v3_days, v2_days)
+    report_lines, failures = evaluate_day_parity(v3_days, v2_days, exempt=synthetic_exempt)
 
     assert failures == []
     assert any(

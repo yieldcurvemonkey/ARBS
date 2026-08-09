@@ -4,9 +4,10 @@ Five checks:
   1. Day-set parity against v2, pinned to CUTOFF -- v2 is NOT frozen
      during the backfill (sky keeps writing it), so an unrestricted
      comparison fails as soon as sky publishes a day after the backfill
-     started. Two literal dates (2026-07-03, 2024-10-14) are exempted --
-     DTCC published no daily file for either -- see EXEMPT_MISSING_DAYS
-     for the full, per-date justification.
+     started. One literal date (2026-07-03) is exempted -- DTCC publishes
+     no daily file for the July-4-observed holiday and three production
+     fetch attempts through the real window each returned 0 rows -- see
+     EXEMPT_MISSING_DAYS for the full justification.
   2. Enrichment markers are populated corpus-wide and per-day.
   3. The 2026-07-24 hole sky left ~80% short is actually filled.
   4. v2 activity since backfill_start, informational only (does NOT fail
@@ -65,13 +66,11 @@ CUTOFF = "2026-08-07"
 V2_LEGS = "arbs_usd_swap_tape_legs_v2"
 V2_PACKAGES = "arbs_usd_swap_tape_packages_v2"
 
-# --- Criterion 1 exemption: two dates DTCC never published a file for ----
+# --- Criterion 1 exemption: one date DTCC never published a file for ----
 #
-# Exempt ONLY these two literal dates. Do NOT generalise this to "holidays"
+# Exempt ONLY this one literal date. Do NOT generalise this to "holidays"
 # or "days with few rows" or anything computed -- a rule that generalises
-# could silently absorb a real future failure. Each date below has its own,
-# independently-verified reason; they are NOT the same mechanism, so read
-# both rather than assuming one explains the other.
+# could silently absorb a real future failure.
 #
 # 2026-07-03 (Friday -- Independence Day observed, since 2026-07-04 falls
 # on a Saturday):
@@ -87,24 +86,28 @@ V2_PACKAGES = "arbs_usd_swap_tape_packages_v2"
 #   current historical-bulk-file fetcher structurally cannot replicate (it
 #   never reads a prior day's file).
 #
-# 2024-10-14 (Monday -- Columbus Day):
-#   DTCC published no daily file for this date either: a direct single-day
-#   fetch (SDRDataBuilder.grab_historical_sdr_trades(start=end=2024-10-14))
-#   returns 0 rows, confirmed live 2026-08-09. v2 holds 3 legs for this
-#   date, but -- unlike 07-03 -- they are NOT prior-day spillover: their
-#   execution timestamps are 08:34 ET and 17:34 ET on 10-14 itself, i.e.
-#   during the holiday's own trading hours. They are also not folded into
-#   the neighbouring business day's file: none of their 3 dissemination IDs
-#   appear anywhere in the 2024-10-15 file (23,309 rows, checked across
-#   every identifier column, confirmed live 2026-08-09), so no window over
-#   DTCC's historical bulk-file interface -- forward, backward, or
-#   business-day-adjacent -- can recover them. They reached v2 through a
-#   different, untraced ingest path.
+# Combined impact: 2 legs out of ~2.3 million.
 #
-# Combined impact: 5 legs out of ~2.3 million.
+# --- A warning about the evidence that used to justify a second date ----
+#
+# 2024-10-14 (Columbus Day) was exempted here too, on the strength of a
+# `SDRDataBuilder.grab_historical_sdr_trades(start=2024-10-14, end=2024-10-14)`
+# probe returning 0 rows. That probe does NOT reproduce the production
+# fetch window: `ingest_usdswaps_tape.py` requests D through D+1 forward,
+# and `usd_swaps.py` extends the unfiltered raw pass by another day beyond
+# that. The backfill has since processed 2024-10-14 successfully -- v3
+# now ties out 3 legs to v2's 3 legs exactly -- because its 3 trades were
+# reported in the 2024-10-15 file and bucketed back to 10-14 by execution
+# date, a file the `start=D end=D` probe never looked at.
+#
+# The lesson: a `start=D end=D` probe against a holiday will show a false
+# gap whenever the day's trades were actually reported in the following
+# business day's file. It proves nothing about what production, which
+# fetches D..D+1(+), will find. Do not re-add a date to this set on the
+# strength of that probe alone -- confirm against the actual D+1-forward
+# window, or better, against a completed production backfill attempt.
 EXEMPT_MISSING_DAYS: frozenset[date] = frozenset({
     date(2026, 7, 3),
-    date(2024, 10, 14),
 })
 
 
