@@ -313,7 +313,7 @@ def plot_distribution_change(
     label1 = str(date1)
     label2 = str(date2)
 
-    fig, axes = plt.subplots(3, 2, figsize=figsize, gridspec_kw={"height_ratios": [3, 3, 2]})
+    fig, axes = plt.subplots(3, 1, figsize=figsize, gridspec_kw={"height_ratios": [3, 3, 2]})
     fig.suptitle(
         f"Distribution Change — {snap_before.symbol}:  {label1}  →  {label2}",
         fontsize=14,
@@ -321,7 +321,7 @@ def plot_distribution_change(
     )
 
     # ── Top-left: Overlaid BL densities (or GM fallback) ─────────────────
-    ax = axes[0, 0]
+    ax = axes[0]
     if bl1 is not None and bl2 is not None:
         # Interpolate both onto a common grid
         lo = min(bl1.strike_grid_rate[0], bl2.strike_grid_rate[0])
@@ -367,35 +367,35 @@ def plot_distribution_change(
     ax.grid(True, alpha=0.3)
 
     # ── Top-right: Overlaid GM composite densities ───────────────────────
-    ax = axes[0, 1]
-    if gm1 is not None and gm2 is not None:
-        ax.plot(gm1.strike_grid_rate, gm1.composite_density, color="#1f77b4", linewidth=2, label=f"Composite {label1}")
-        ax.plot(gm2.strike_grid_rate, gm2.composite_density, color="#d62728", linewidth=2, label=f"Composite {label2}")
-        # Show date2 components (dashed)
-        for j, (scenario, w) in enumerate(zip(gm2.scenarios, gm2.weights)):
-            if w < 0.02:
-                continue
-            ax.plot(
-                gm2.strike_grid_rate,
-                gm2.component_densities[j] * w,
-                linestyle=":",
-                linewidth=0.8,
-                color=_COLORS[j % len(_COLORS)],
-                alpha=0.6,
-            )
-        ax.axvline(gm1.input.forward_rate, color="#1f77b4", linestyle="--", linewidth=0.8, alpha=0.6)
-        ax.axvline(gm2.input.forward_rate, color="#d62728", linestyle="--", linewidth=0.8, alpha=0.6)
-        ax.legend(fontsize=7)
-    else:
-        ax.text(0.5, 0.5, "GM not computed", ha="center", va="center", transform=ax.transAxes)
-    ax.set_title("Gaussian Mixture Shift")
-    ax.set_xlabel("Rate (%)")
-    ax.set_ylabel("Density")
-    ax.xaxis.set_major_formatter(mticker.FormatStrFormatter("%.2f"))
-    ax.grid(True, alpha=0.3)
+    # ax = axes[0, 1]
+    # if gm1 is not None and gm2 is not None:
+    #     ax.plot(gm1.strike_grid_rate, gm1.composite_density, color="#1f77b4", linewidth=2, label=f"Composite {label1}")
+    #     ax.plot(gm2.strike_grid_rate, gm2.composite_density, color="#d62728", linewidth=2, label=f"Composite {label2}")
+    #     # Show date2 components (dashed)
+    #     for j, (scenario, w) in enumerate(zip(gm2.scenarios, gm2.weights)):
+    #         if w < 0.02:
+    #             continue
+    #         ax.plot(
+    #             gm2.strike_grid_rate,
+    #             gm2.component_densities[j] * w,
+    #             linestyle=":",
+    #             linewidth=0.8,
+    #             color=_COLORS[j % len(_COLORS)],
+    #             alpha=0.6,
+    #         )
+    #     ax.axvline(gm1.input.forward_rate, color="#1f77b4", linestyle="--", linewidth=0.8, alpha=0.6)
+    #     ax.axvline(gm2.input.forward_rate, color="#d62728", linestyle="--", linewidth=0.8, alpha=0.6)
+    #     ax.legend(fontsize=7)
+    # else:
+    #     ax.text(0.5, 0.5, "GM not computed", ha="center", va="center", transform=ax.transAxes)
+    # ax.set_title("Gaussian Mixture Shift")
+    # ax.set_xlabel("Rate (%)")
+    # ax.set_ylabel("Density")
+    # ax.xaxis.set_major_formatter(mticker.FormatStrFormatter("%.2f"))
+    # ax.grid(True, alpha=0.3)
 
     # ── Mid-left: Grouped bar chart of bin probabilities (or GM fallback)
-    ax = axes[1, 0]
+    ax = axes[1]
     if bl1 is not None and bl2 is not None:
         # Find common bins (union of labels present in either)
         all_labels = sorted(set(bl1.bin_labels) | set(bl2.bin_labels), key=lambda x: float(x))
@@ -440,39 +440,39 @@ def plot_distribution_change(
     ax.set_ylabel("Probability (%)")
     ax.grid(True, axis="y", alpha=0.3)
 
-    # ── Mid-right: Scenario weight deltas ────────────────────────────────
-    ax = axes[1, 1]
-    if gm1 is not None and gm2 is not None:
-        labels_s = [s.label for s in gm2.scenarios]
-        w1_map = {s.label: float(w) for s, w in zip(gm1.scenarios, gm1.weights)}
-        w1s = np.array([w1_map.get(lbl, 0.0) for lbl in labels_s]) * 100
-        w2s = np.array([float(w) for w in gm2.weights]) * 100
-        deltas = w2s - w1s
+    # # ── Mid-right: Scenario weight deltas ────────────────────────────────
+    # ax = axes[1, 1]
+    # if gm1 is not None and gm2 is not None:
+    #     labels_s = [s.label for s in gm2.scenarios]
+    #     w1_map = {s.label: float(w) for s, w in zip(gm1.scenarios, gm1.weights)}
+    #     w1s = np.array([w1_map.get(lbl, 0.0) for lbl in labels_s]) * 100
+    #     w2s = np.array([float(w) for w in gm2.weights]) * 100
+    #     deltas = w2s - w1s
 
-        y = np.arange(len(labels_s))
-        bar_h = 0.35
-        ax.barh(y - bar_h / 2, w1s, bar_h, color="#1f77b4", alpha=0.8, label=label1)
-        ax.barh(y + bar_h / 2, w2s, bar_h, color="#d62728", alpha=0.8, label=label2)
-        # Annotate delta
-        for i, (w1, w2, d) in enumerate(zip(w1s, w2s, deltas)):
-            x_pos = max(w1, w2) + 1
-            sign = "+" if d >= 0 else ""
-            color = "green" if d >= 0 else "red"
-            if abs(d) >= 0.5:
-                ax.text(x_pos, i, f"{sign}{d:.1f}pp", va="center", fontsize=7, color=color, fontweight="bold")
-        ax.set_yticks(list(y))
-        ax.set_yticklabels(labels_s, fontsize=8)
-        ax.set_xlabel("Weight (%)")
-        ax.legend(fontsize=8)
-    else:
-        ax.text(0.5, 0.5, "GM not computed", ha="center", va="center", transform=ax.transAxes)
-    ax.set_title("Scenario Weight Changes")
-    ax.grid(True, axis="x", alpha=0.3)
+    #     y = np.arange(len(labels_s))
+    #     bar_h = 0.35
+    #     ax.barh(y - bar_h / 2, w1s, bar_h, color="#1f77b4", alpha=0.8, label=label1)
+    #     ax.barh(y + bar_h / 2, w2s, bar_h, color="#d62728", alpha=0.8, label=label2)
+    #     # Annotate delta
+    #     for i, (w1, w2, d) in enumerate(zip(w1s, w2s, deltas)):
+    #         x_pos = max(w1, w2) + 1
+    #         sign = "+" if d >= 0 else ""
+    #         color = "green" if d >= 0 else "red"
+    #         if abs(d) >= 0.5:
+    #             ax.text(x_pos, i, f"{sign}{d:.1f}pp", va="center", fontsize=7, color=color, fontweight="bold")
+    #     ax.set_yticks(list(y))
+    #     ax.set_yticklabels(labels_s, fontsize=8)
+    #     ax.set_xlabel("Weight (%)")
+    #     ax.legend(fontsize=8)
+    # else:
+    #     ax.text(0.5, 0.5, "GM not computed", ha="center", va="center", transform=ax.transAxes)
+    # ax.set_title("Scenario Weight Changes")
+    # ax.grid(True, axis="x", alpha=0.3)
 
     # ── Bottom: Summary stats delta table ────────────────────────────────
-    for bottom_ax in [axes[2, 0], axes[2, 1]]:
+    for bottom_ax in [axes[2], axes[2]]:
         bottom_ax.axis("off")
-    ax = axes[2, 0]
+    ax = axes[2]
 
     rows = []
     if bl1 is not None and bl2 is not None:
@@ -518,7 +518,7 @@ def plot_distribution_change(
         ax.set_title("Distribution Summary", fontsize=11, pad=10)
 
     # Scenario weight table on the right
-    ax2 = axes[2, 1]
+    ax2 = axes[2]
     if gm1 is not None and gm2 is not None:
         gm_rows = []
         labels_s = [s.label for s in gm2.scenarios]
@@ -563,33 +563,33 @@ def plot_snapshot_dashboard(
     the left panels show the GM composite density and discrete scenario weights
     instead of the BL-derived panels.
     """
-    fig, axes = plt.subplots(2, 2, figsize=figsize)
+    fig, axes = plt.subplots(2, 1, figsize=figsize)
     fig.suptitle(f"Implied Distribution — {snapshot.symbol} as of {snapshot.as_of}", fontsize=14, fontweight="bold")
 
     scenarios_only = snapshot.bl_result is None and snapshot.gm_result is not None
 
     if snapshot.bl_result is not None:
-        plot_rnd_density(snapshot.bl_result, ax=axes[0, 0], title="Risk-Neutral Density (BL)")
+        plot_rnd_density(snapshot.bl_result, ax=axes[0], title="Risk-Neutral Density (BL)")
         plot_scenario_probabilities(
             snapshot.bl_result,
-            ax=axes[1, 0],
+            ax=axes[1],
             title=f"Scenario Probabilities ({_bin_width_label(snapshot.bl_result)} bins)",
         )
     elif scenarios_only:
         # Fall back to GM composite density
-        plot_gaussian_mixture(snapshot.gm_result, ax=axes[0, 0], title="Risk-Neutral Density (GM)")
+        plot_gaussian_mixture(snapshot.gm_result, ax=axes[0], title="Risk-Neutral Density (GM)")
         # Discrete scenario weight bars
-        _plot_discrete_scenario_bars(snapshot.gm_result, ax=axes[1, 0], title="Scenario Probabilities")
+        _plot_discrete_scenario_bars(snapshot.gm_result, ax=axes[1], title="Scenario Probabilities")
     else:
-        for ax in [axes[0, 0], axes[1, 0]]:
+        for ax in [axes[0], axes[1]]:
             ax.text(0.5, 0.5, "BL not computed", ha="center", va="center", transform=ax.transAxes)
 
-    if snapshot.gm_result is not None:
-        plot_gaussian_mixture(snapshot.gm_result, ax=axes[0, 1], title="Gaussian Mixture Decomposition")
-        plot_scenario_weights_bar(snapshot.gm_result, ax=axes[1, 1], title="Scenario Weights")
-    else:
-        for ax in [axes[0, 1], axes[1, 1]]:
-            ax.text(0.5, 0.5, "GM not computed", ha="center", va="center", transform=ax.transAxes)
+    # if snapshot.gm_result is not None:
+    #     plot_gaussian_mixture(snapshot.gm_result, ax=axes[0, 1], title="Gaussian Mixture Decomposition")
+    #     plot_scenario_weights_bar(snapshot.gm_result, ax=axes[1, 1], title="Scenario Weights")
+    # else:
+    #     for ax in [axes[0, 1], axes[1, 1]]:
+    #         ax.text(0.5, 0.5, "GM not computed", ha="center", va="center", transform=ax.transAxes)
 
     # Surface fit diagnostics: a non-converged GM or a clipped/truncated BL density
     # would otherwise be plotted as if it were clean.
