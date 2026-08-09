@@ -242,7 +242,62 @@ plausible and wrong edge:
 
 The model-free counterpart to check it against is §5's realised fill curve.
 
-## 9. What is built, and what is not
+## 9. The normalization seam costs 2 ms in the tail, so a re-pull is justified
+
+The two conventions produce identical book states -- that is pinned by a known-answer
+test -- so the difference has to live in the timestamps. Measured on SR3Z6, three
+sessions either side of 2026-07-07:
+
+| vintage | ts_recv - ts_event p50 | p90 | p99 |
+| --- | ---: | ---: | ---: |
+| new (June, re-pulled) | 99.1 us | 110.9 us | 1,789 us |
+| old (July-August) | 124.5 us | **2,156 us** | **9,962 us** |
+
+The median barely moves; the **p90 tail is nineteen times worse** under the old
+convention. That is exactly what buffering-until-event-complete predicts:
+single-packet events are unaffected, and multi-packet events have their early
+records stamped at the completion time. Multi-packet events are the busy ones.
+
+**Recommendation.** Re-pull SR3 2026-07-07 to 2026-08-06 if the lead-lag or
+dealer-hedging work is going to use `ts_recv` at sub-second resolution -- a two
+millisecond discontinuity dwarfs the lags such a study looks for. Do not bother if
+the use is quoted spread, depth, cost or fill analysis, none of which reads the
+timestamp at that precision. There is no `DATABENTO_API_KEY` on this machine, so
+the re-pull is a portal batch job: `GLBX.MDP3`, schema `mbo`, `stype_in=parent`,
+symbol `SR3.FUT`, 2026-07-07 to 2026-08-06.
+
+## 10. ZT is not broken; its information is deeper in the book
+
+ZT's touch order-flow imbalance correlates **-0.107** with the same-second mid
+change where every other root sits near +0.5, and only reaches 0.410 at a minute.
+
+| product | tick | touch depth | corr @1s | @10s | @60s | @300s |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| **ZT** | 1/256 | **3,086** | **-0.107** | 0.105 | 0.410 | 0.581 |
+| ZF | 1/128 | 1,566 | 0.435 | 0.594 | 0.735 | 0.808 |
+| ZN | 1/64 | 2,465 | 0.487 | 0.569 | 0.636 | 0.675 |
+| ZB | 1/32 | 846 | 0.521 | 0.644 | 0.798 | 0.873 |
+
+ZT has the finest tick of the complex and the deepest touch, so its front queue
+turns over enormously without the price moving and the touch is close to
+uninformative: an R-squared of **0.004** at one second.
+
+Multi-level OFI resolves it. With ten levels, ZT reaches **R-squared 0.549** at one
+second, and out-of-sample RMSE against the touch-only fit improves:
+
+| | ZT | ZN | ZB |
+| --- | ---: | ---: | ---: |
+| RMSE improvement, 10 levels vs touch, 1 s | **32%** | 29% | 48% |
+| Ridge over OLS, out of sample | 4.3% | 3.1% | 2.7% |
+| fitted penalty | 1.6e4 | 1.0e3 | 602 |
+
+Below Xu-Gould-Howison's 65-75 per cent for large-tick equities, but the direction
+and the mechanism are theirs, and the practical consequence is concrete: **the
+default ten-second bar is too short for the deepest book**, and `ofi_bar_scan`
+reports correlation against bar length beside the share of bars whose mid never
+moved, so the bar is chosen by looking rather than by default.
+
+## 11. What is built, and what is not
 
 Built and tested (232 tests, all passing under `conda run -n stir` equivalent invocation):
 
