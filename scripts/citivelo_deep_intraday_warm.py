@@ -732,11 +732,20 @@ def build_ibor_curve_days(curve_name: str, args, logger: logging.Logger) -> int:
 def _build_ibor_day(task: tuple) -> Dict[str, Any]:
     """Solve every minute of one IBOR day and write the partition. Runs in a worker.
 
-    The discount curve is rebuilt here from the OIS par cache rather than read
-    back out of the CurveStore. That costs a second solve per minute and buys
-    two things worth more than the CPU: the build has no ordering dependency on
-    the OIS warm having already run, and the discount curve is the one from the
-    SAME MINUTE rather than the nearest stored snapshot.
+    The discount curve comes from whichever source has it, in that order:
+
+    * **the OIS par cache**, when this run fetched that day - re-solved per
+      minute, so the discount curve is from the SAME MINUTE and the build has no
+      ordering dependency on the OIS warm having finished;
+    * **the CurveStore**, when the day was already warmed and therefore skipped
+      by the fetch planner - already solved, so it is read back and memoised
+      rather than rebuilt, backward-only to the nearest snapshot;
+    * **nothing**, below every euro OIS floor, where the build self-discounts and
+      records that in ``source_variant``.
+
+    The middle case is not an optimisation. Without it, every EURIBOR day from
+    2024-08 on - the two most liquid years in the range - would self-discount,
+    because those are exactly the days the planner skips.
     """
     import datetime as _dt
     import zoneinfo
