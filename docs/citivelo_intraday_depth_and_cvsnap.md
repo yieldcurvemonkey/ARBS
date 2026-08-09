@@ -147,6 +147,38 @@ workbooks, restarts Excel, waits out the ~13–25 minute silent re-authenticatio
 and resumes on the **same chunk**. Work is banked per day file, so a failed
 restart costs time and never data.
 
+## What to run, in order
+
+```bash
+# 1. what is left, and how much is already done
+conda run -n stir python scripts/citivelo_deep_intraday_warm.py plan
+
+# 2. the Excel-bound half. Unattended, resumable, newest-first.
+conda run -n stir python scripts/citivelo_deep_intraday_warm.py fetch --auto-restart
+
+# 3. the CPU half. OIS curves take the existing builder, EURIBOR the dual-curve one.
+conda run -n stir python scripts/citivelo_deep_intraday_warm.py build --workers 8
+
+# 4. the check that can fail: CVSNAP against the stored curve's own par rate,
+#    sampled per era so the sparse and self-discounted eras are actually covered
+conda run -n stir python scripts/citivelo_deep_intraday_warm.py verify --per-era 5
+
+# 5. the SWAP TIMESERIES cache, which reads the curves step 3 wrote
+conda run -n stir python scripts/citivelo_intraday_ts_warm.py warm --workers 10
+```
+
+Step 5 needs no changes to benefit. `citivelo_intraday_ts_warm.py` prices its
+structure universe off `USD-SOFR-1D-CITIVELOEXCELMIN`, and this warm both extends
+that asset (2022-08 → **2021-09**) and **upgrades 2022-08 → 2023-12 from
+ten-minute to true one-minute** — the stretch its own documentation calls out as
+"ten-minute data wearing a one-minute index, which is worse than useless in a
+mean-reversion study". Re-run it over that range once the build lands.
+
+The other four curves are **not** in that script's universe: it is written around
+one curve (`CURVE = "USD-SOFR-1D"`). Extending it is a separate piece of work and
+deliberately not bundled here — it is a proven pipeline holding 231M rows, and
+the curve cache has to exist before there is anything to price off.
+
 ## Reproducing any of this
 
 ```bash
