@@ -609,6 +609,10 @@ def replay_book(
             "ask_px": g.to_price(out_aidx[s]),
             "ask_sz": out_asz[s].astype(np.int32),
             "ask_ct": out_act[s].astype(np.int32),
+            # The packet's own sequence number.  Carried because it orders events
+            # across instruments within a packet, which a timestamp cannot: every
+            # record inside one shares a timestamp.
+            "sequence": records["sequence"][out_rec[s]],
         }
     )
     tob["mid"] = (tob["bid_px"] + tob["ask_px"]) / 2.0
@@ -629,6 +633,9 @@ def replay_book(
             "aggressor": np.where(side[is_trade] == _BID, "B",
                                   np.where(side[is_trade] == _ASK, "A", "N")),
             "sequence": records["sequence"][is_trade],
+            #: The aggressing order.  MBO carries it, so trade attribution needs
+            #: no tick-rule proxy and its misclassification error is absent.
+            "order_id": order_id[is_trade],
         }
     )
 
