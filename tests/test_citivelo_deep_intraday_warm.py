@@ -408,3 +408,37 @@ def test_a_dual_curve_snapshot_names_its_discount_curve():
 def test_an_unlabelled_snapshot_is_not_assumed_to_be_dual_curve():
     row = {"source_variant": "CITIVELOEXCELMIN"}
     assert D._discount_curve_of(row, store=None) == (None, "self")
+
+
+def test_a_SHORT_day_is_done_not_thin(fake_store, tmp_path):
+    """A Sunday-evening partial is ~180 minutes and complete. A count rule calls it thin.
+
+    Nine of these were already sitting in USD-FEDFUNDS-1D after nine weeks of
+    fetching - one per Sunday - and every one would have re-solved on every
+    build, forever, while `status` reported them as failures. Fridays (17:59
+    local vs 19:59) and holidays do the same thing at scale.
+
+    The fetched file is the authority: as many stored curves as fetched minutes
+    means the day is finished, whatever the count.
+    """
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+
+    asset = "USD-FEDFUNDS-1D-CITIVELOEXCELMIN"
+    day = datetime.date(2026, 6, 14)  # a Sunday
+    store = fake_store({asset: {day: 1}}, counts={(asset, day): 180})
+    par = tmp_path / f"{day.isoformat()}.parquet"
+    pq.write_table(pa.table({"timestamp": list(range(180)), "10Y": [1.0] * 180}), par)
+
+    assert D._already_dense(store, asset, day, "USD-FEDFUNDS-1D", 600, str(par))
+    # ...and a genuinely under-solved day is still caught.
+    short = tmp_path / "short.parquet"
+    pq.write_table(pa.table({"timestamp": list(range(1300)), "10Y": [1.0] * 1300}), short)
+    assert not D._already_dense(store, asset, day, "USD-FEDFUNDS-1D", 600, str(short))
+
+
+def test_without_a_fetched_file_it_falls_back_to_the_threshold(fake_store):
+    asset = "USD-SOFR-1D-CITIVELOEXCELMIN"
+    day = datetime.date(2025, 6, 11)
+    store = fake_store({asset: {day: 1}}, counts={(asset, day): 132})
+    assert not D._already_dense(store, asset, day, "USD-SOFR-1D", 600, None)

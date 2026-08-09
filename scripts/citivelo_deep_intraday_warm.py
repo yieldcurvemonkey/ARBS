@@ -608,11 +608,23 @@ def _connect_or_restart(args, logger: logging.Logger) -> Any:
             )
         else:
             logger.warning("connect failed (%s); waiting for the add-in to sign in.", exc)
-        client = wait_for_addin(
-            timeout=getattr(args, "ready_timeout", 1800.0),
-            workbook_tag=args.workbook_tag,
-            logger=logger,
-        )
+        from MDP.CitiVelocityExcel.supervisor import ExcelRestartError
+
+        try:
+            client = wait_for_addin(
+                timeout=getattr(args, "ready_timeout", 1800.0),
+                workbook_tag=args.workbook_tag,
+                logger=logger,
+            )
+        except ExcelRestartError as fail:
+            # A patient waiter that ends in a traceback teaches nothing. Say what
+            # to do instead: the whole plan is still on disk and one command
+            # picks it up.
+            raise RestartFailed(
+                f"{fail} Nothing was lost - every day fetched so far is on disk and "
+                f"re-running this exact command resumes from it. Open Excel, sign in "
+                f"to Velocity, then start the fetch again."
+            ) from fail
     logger.info("connected to Excel (%s sheets, %.0f MB)",
                 client.sheet_count(), client.excel_memory_mb())
     return client
@@ -737,7 +749,7 @@ def build_ois_curve_days(curve_name: str, args, logger: logging.Logger) -> int:
         if args.end and day > datetime.date.fromisoformat(args.end):
             continue
         if not args.force and store.has_day(asset, day):
-            if _already_dense(store, asset, day, curve_name, args.min_store_curves):
+            if _already_dense(store, asset, day, curve_name, args.min_store_curves, str(path)):
                 continue
             upgrades += 1
         tasks.append((day, str(path), params))
@@ -767,10 +779,27 @@ def build_ois_curve_days(curve_name: str, args, logger: logging.Logger) -> int:
     return 1 if progress.errors else 0
 
 
+def _parquet_rows(path: Optional[str]) -> Optional[int]:
+    """Minutes in a fetched day file, from metadata. ``None`` if unreadable."""
+    if not path:
+        return None
+    import pyarrow.parquet as pq
+
+    try:
+        return int(pq.ParquetFile(path).metadata.num_rows)
+    except Exception:  # noqa: BLE001
+        return None
+
+
 def _already_dense(
-    store: Any, asset: str, day: datetime.date, curve_name: str, min_store_curves: int
+    store: Any,
+    asset: str,
+    day: datetime.date,
+    curve_name: str,
+    min_store_curves: int,
+    par_path: Optional[str] = None,
 ) -> bool:
-    """Is the stored day already at the resolution this run would produce?
+    """Is the stored day already everything this run could produce for it?
 
     ``has_day`` alone is the wrong question and fails silently in the one place
     it matters: ``USD-SOFR-1D``'s 2022-08..2023-12 days ARE in the store, as
@@ -778,16 +807,31 @@ def _already_dense(
     minute is the entire point of refetching them. A ``has_day`` skip would leave
     the new parquets unsolved on disk and report success.
 
-    Below a curve's measured ``dense_from`` the threshold drops to 1, because a
-    sparse-era day cannot reach the dense count and would otherwise rebuild on
-    every run forever.
+    But a raw count threshold has the opposite failure, and it is the one that
+    shows up first at scale. **A short day is not a thin day.** A Sunday-evening
+    partial is ~180 published minutes; Fridays end at 17:59 local against
+    Monday-Thursday's 19:59; a holiday may hold a few hundred. Those are complete
+    days, and judging them by the dense-era count marks them thin on every run,
+    so ``status`` shows phantom failures and every ``build`` re-solves them
+    forever. Nine such days were already sitting in ``USD-FEDFUNDS-1D`` after
+    nine weeks of fetching - one per Sunday.
+
+    So the strongest signal wins: **if the store holds as many curves as the
+    fetched file holds minutes, the day is done, whatever the count is.** The
+    threshold is only the fallback for when there is no fetched file to compare
+    against, and below a curve's ``dense_from`` it drops to 1 because a sparse
+    era cannot reach a dense count either.
     """
     if not store.has_day(asset, day):
         return False
+    stored = _stored_curve_count(store, asset, day)
+    minutes = _parquet_rows(par_path)
+    if minutes is not None and minutes > 0:
+        return stored >= minutes
     horizon = HORIZONS.get(curve_name)
     dense_from = horizon.dense_from if horizon else datetime.date(1900, 1, 1)
     threshold = min_store_curves if day >= dense_from else 1
-    return _stored_curve_count(store, asset, day) >= threshold
+    return stored >= threshold
 
 
 def _ibor_curve_names() -> set:
@@ -854,7 +898,7 @@ def build_ibor_curve_days(curve_name: str, args, logger: logging.Logger) -> int:
         if args.end and day > datetime.date.fromisoformat(args.end):
             continue
         if not args.force and _already_dense(
-            store, asset_name(curve_name), day, curve_name, args.min_store_curves
+            store, asset_name(curve_name), day, curve_name, args.min_store_curves, str(path)
         ):
             continue
         disc_name, disc_from = discount_source_for(curve_name, day, work_dir)
