@@ -4,7 +4,9 @@ Five checks:
   1. Day-set parity against v2, pinned to CUTOFF -- v2 is NOT frozen
      during the backfill (sky keeps writing it), so an unrestricted
      comparison fails as soon as sky publishes a day after the backfill
-     started.
+     started. Two literal dates (2026-07-03, 2024-10-14) are exempted --
+     DTCC published no daily file for either -- see EXEMPT_MISSING_DAYS
+     for the full, per-date justification.
   2. Enrichment markers are populated corpus-wide and per-day.
   3. The 2026-07-24 hole sky left ~80% short is actually filled.
   4. v2 activity since backfill_start, informational only (does NOT fail
@@ -51,6 +53,7 @@ from __future__ import annotations
 
 import argparse
 import sys
+from datetime import date
 
 from sqlalchemy import create_engine, text
 
@@ -61,6 +64,88 @@ CUTOFF = "2026-08-07"
 
 V2_LEGS = "arbs_usd_swap_tape_legs_v2"
 V2_PACKAGES = "arbs_usd_swap_tape_packages_v2"
+
+# --- Criterion 1 exemption: two dates DTCC never published a file for ----
+#
+# Exempt ONLY these two literal dates. Do NOT generalise this to "holidays"
+# or "days with few rows" or anything computed -- a rule that generalises
+# could silently absorb a real future failure. Each date below has its own,
+# independently-verified reason; they are NOT the same mechanism, so read
+# both rather than assuming one explains the other.
+#
+# 2026-07-03 (Friday -- Independence Day observed, since 2026-07-04 falls
+# on a Saturday):
+#   DTCC published no daily file. The production per-day fetch window
+#   (ingest_usdswaps_tape.py: `end = end_day + timedelta(days=1)`) resolves,
+#   via CustomBusinessDay(USFederalHolidayCalendar), to an EMPTY business-day
+#   range for 07-03..07-04 (Fri holiday, Sat, Sun all skipped) -- nothing is
+#   ever fetched. Confirmed by 3 independent live pipeline attempts
+#   (2026-08-08/09), each exit 0 with 0 rows written.
+#   v2 holds 2 legs for this date, executed 21:40-21:47 ET on the PRIOR
+#   business day (2026-07-02) and bucketed into 07-03 only by UTC calendar
+#   date; they reached v2 through a different, untraced ingest path that the
+#   current historical-bulk-file fetcher structurally cannot replicate (it
+#   never reads a prior day's file).
+#
+# 2024-10-14 (Monday -- Columbus Day):
+#   DTCC published no daily file for this date either: a direct single-day
+#   fetch (SDRDataBuilder.grab_historical_sdr_trades(start=end=2024-10-14))
+#   returns 0 rows, confirmed live 2026-08-09. v2 holds 3 legs for this
+#   date, but -- unlike 07-03 -- they are NOT prior-day spillover: their
+#   execution timestamps are 08:34 ET and 17:34 ET on 10-14 itself, i.e.
+#   during the holiday's own trading hours. They are also not folded into
+#   the neighbouring business day's file: none of their 3 dissemination IDs
+#   appear anywhere in the 2024-10-15 file (23,309 rows, checked across
+#   every identifier column, confirmed live 2026-08-09), so no window over
+#   DTCC's historical bulk-file interface -- forward, backward, or
+#   business-day-adjacent -- can recover them. They reached v2 through a
+#   different, untraced ingest path.
+#
+# Combined impact: 5 legs out of ~2.3 million.
+EXEMPT_MISSING_DAYS: frozenset[date] = frozenset({
+    date(2026, 7, 3),
+    date(2024, 10, 14),
+})
+
+
+def evaluate_day_parity(
+    v3_days: set[date],
+    v2_days: set[date],
+    exempt: frozenset[date] = EXEMPT_MISSING_DAYS,
+) -> tuple[list[str], list[str]]:
+    """Pure criterion-1 day-set-parity check. No I/O, easy to unit test.
+
+    Returns ``(report_lines, failures)``:
+      * ``report_lines`` is always printed -- an exempted day never passes
+        unmentioned, whether it is (as expected) missing from v3 or (which
+        would mean the exemption's premise no longer holds) unexpectedly
+        present.
+      * ``failures`` is non-empty exactly when the criterion should fail:
+        any missing day NOT in ``exempt``, or any exempted day that is now
+        present in v3 (a signal to remove it from the exemption, not proof
+        the exemption was wrong to begin with).
+    """
+    def _iso(days: list[date]) -> list[str]:
+        return [d.isoformat() for d in days]
+
+    missing = v2_days - v3_days
+    exempted_missing = sorted(missing & exempt)
+    real_missing = sorted(missing - exempt)
+    exempt_present = sorted(exempt & v3_days)
+
+    report_lines = [
+        f"criterion 1: {len(real_missing)} day(s) missing, "
+        f"{len(exempted_missing)} exempted (holiday, no DTCC file): {_iso(exempted_missing)}"
+    ]
+    failures: list[str] = []
+    if exempt_present:
+        failures.append(
+            "exempted day(s) now present in v3 -- the exemption's premise no "
+            f"longer holds, remove from EXEMPT_MISSING_DAYS: {_iso(exempt_present)}"
+        )
+    if real_missing:
+        failures.append(f"missing from v3: {_iso(real_missing)[:20]}")
+    return report_lines, failures
 
 
 def main() -> int:
@@ -84,8 +169,10 @@ def main() -> int:
             f"SELECT DISTINCT as_of_date FROM {V2_LEGS} WHERE as_of_date <= :cut"
         ), {"cut": CUTOFF})}
         print(f"1. days: v3={len(v3_days)} v2={len(v2_days)}")
-        if v2_days - v3_days:
-            failures.append(f"missing from v3: {sorted(v2_days - v3_days)[:20]}")
+        day_parity_lines, day_parity_failures = evaluate_day_parity(v3_days, v2_days)
+        for line in day_parity_lines:
+            print(f"   {line}")
+        failures.extend(day_parity_failures)
 
         # 2. Enrichment markers.
         overall = c.execute(text(
