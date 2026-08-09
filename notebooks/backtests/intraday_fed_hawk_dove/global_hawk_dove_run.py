@@ -150,6 +150,8 @@ def stage_prewarm(events_by_bank: dict, ranks=(1, 2, 3, 4, 5)) -> None:
     n0 = G.load_bar_cache(CACHE / "bars.pkl")
     _p(f"bar cache: {n0} symbol-days preloaded")
 
+    scores = G.load_global_scores(SCORES_CSV, SCORE_METRIC)
+
     for bank in BANKS:
         evs = events_by_bank[bank]["events"]
         if not evs:
@@ -164,6 +166,25 @@ def stage_prewarm(events_by_bank: dict, ranks=(1, 2, 3, 4, 5)) -> None:
             G.gate_events(variant, cfg, mdp, max_staleness_min=MAX_STALENESS_MIN,
                           show_progress=True)
             _p(f"    +{len(G._BAR_CACHE) - before} symbol-days")
+
+        # §8.6 re-buckets with the Fed's ABSOLUTE cutoffs, which selects a
+        # different subset of speeches - on days the percentile run never gated
+        # and therefore never cached.
+        raw = G.fetch_events(cfg, BT_START, BT_END)
+        lookup = G.ScoreLookup(scores, bank, SCORE_METRIC)
+        abs_evs, _ = G.build_trade_events(
+            cfg, raw, lookup,
+            entry_offset=ENTRY_OFFSET, exit_offset=EXIT_OFFSET,
+            base_bpv=BASE_BPV, contract_rank=CONTRACT_RANK,
+            bucket_fn=lambda _s, x, _d: G.absolute_bucket(x),
+            blackout_fn=G.make_blackout_fn(cfg, BLACKOUT_BD),
+        )
+        abs_evs, _ = G.drop_overlaps(abs_evs)
+        before = len(G._BAR_CACHE)
+        _p(f"  {bank} absolute-bucket set: {len(abs_evs)} events ...")
+        G.gate_events(abs_evs, cfg, mdp, max_staleness_min=MAX_STALENESS_MIN,
+                      show_progress=True)
+        _p(f"    +{len(G._BAR_CACHE) - before} symbol-days")
 
     n = G.save_bar_cache(CACHE / "bars.pkl")
     _p(f"\nbar cache now {n} symbol-days ({n - n0} added)")

@@ -616,6 +616,12 @@ code(r"""
 # already warm, so the gate is cheap and no new data is fetched.
 abs_by_bank, abs_frames = {}, []
 for b in BANKS:
+    # A bank with no tradeable baseline has no book under either scheme. BOJ is
+    # the case: its contracts do not exist on Barchart, so a fetch raises rather
+    # than returning an empty day and no amount of pre-warming can satisfy it.
+    if not events_by_bank[b]["events"]:
+        print(f"  {b}: no tradeable book under either scheme — skipped")
+        continue
     cfg = G.CB_CONFIGS[b]
     raw = G.fetch_events(cfg, BT_START, BT_END)
     lookup = G.ScoreLookup(scores, b, SCORE_METRIC)
@@ -629,11 +635,21 @@ for b in BANKS:
     evs, _ = G.drop_overlaps(evs)
     evs, _r, _d = G.gate_events(evs, cfg, mdp, max_staleness_min=MAX_STALENESS_MIN,
                                 show_progress=False)
+    # The absolute cutoffs select a DIFFERENT subset of speeches, on days the
+    # percentile run never gated. If those bars are not cached this cell cannot
+    # fetch them (kernel), and they would be logged as "no bars that day" — a
+    # failed fetch quietly impersonating a quiet market. Refuse to report that.
+    if _r.get("fetch_failed"):
+        raise RuntimeError(
+            f"{b}: {_r['fetch_failed']} bar fetches FAILED (not empty days). "
+            "Run `python global_hawk_dove_run.py --stage prewarm` — this cell "
+            "cannot fetch from inside a kernel and would under-count."
+        )
     abs_by_bank[b] = evs
     f = G.fast_backtest(evs)
     if not f.empty:
         abs_frames.append(f)
-    print(f"  {b}: {len(evs)} tradeable under absolute cutoffs")
+    print(f"  {b}: {len(evs)} tradeable under absolute cutoffs  (gate: {_r})")
 
 pooled_abs = (pd.concat(abs_frames, ignore_index=True).sort_values("opened_at")
               if abs_frames else pd.DataFrame())

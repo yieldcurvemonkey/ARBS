@@ -626,8 +626,16 @@ def gate_events(
                "speaker": ev["speaker"], "bars": len(bars)}
 
         if bars.empty:
-            reasons["no_bars_that_day"] += 1
-            rec["reason"] = "no_bars_that_day"
+            # A FAILED fetch and a genuinely quiet day both arrive here as an
+            # empty frame, and they mean opposite things. Inside a Jupyter kernel
+            # the fetcher raises (its asyncio.run hits the live loop), so without
+            # this split a whole re-gated section reports "no_bars_that_day" for
+            # days that have perfectly good bars - which is how §8.6 first ran on
+            # a partial cache and under-counted by 142 events.
+            failed = (ev["symbol"], day) in FETCH_FAILURES
+            key = "fetch_failed" if failed else "no_bars_that_day"
+            reasons[key] += 1
+            rec["reason"] = key
             diag.append(rec)
             continue
 
