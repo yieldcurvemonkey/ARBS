@@ -40,6 +40,7 @@ import pandas as pd
 from numba import njit
 
 __all__ = [
+    "BAND_MAD_MULTIPLE",
     "F_BAD_TS_RECV",
     "F_LAST",
     "F_SNAPSHOT",
@@ -87,30 +88,90 @@ class PriceGrid:
     def tick_float(self) -> float:
         return self.tick / PRICE_SCALE
 
+    @property
+    def px_max(self) -> int:
+        """Price of the last slot, on the integer 1e-9 scale."""
+        return self.px_min + (self.n_slots - 1) * self.tick
 
-def build_price_grid(price: np.ndarray) -> PriceGrid:
-    """Infer the tick lattice from the prices the instrument actually printed.
+    def contains(self, price: np.ndarray) -> np.ndarray:
+        """Which of these prices fall inside the band (regardless of lattice)."""
+        p = np.asarray(price, dtype=np.int64)
+        return (p >= self.px_min) & (p <= self.px_max)
 
-    The tick is the gcd of every price offset from the minimum, so it adapts to
-    the quarter-tick front outright, the half-tick back of the strip and the
-    finer grids the spread instruments quote on, without any of them being
-    hard-coded.
+
+#: How many median-absolute-deviations wide the ladder's band is.  Generous on
+#: purpose: the band exists to reject prices that are nowhere near the market,
+#: not to trim the tails of the real book.
+BAND_MAD_MULTIPLE = 1000
+
+
+def build_price_grid(
+    price: np.ndarray,
+    *,
+    mad_multiple: int = BAND_MAD_MULTIPLE,
+    max_slots: int = MAX_PRICE_SLOTS,
+) -> PriceGrid:
+    """Infer the tick lattice and a price band from the prices actually printed.
+
+    The tick is the gcd of price offsets inside the band, so it adapts to the
+    quarter-tick front outright, the half-tick back of the strip and the finer
+    grids the spread instruments quote on, without any of them being hard-coded.
+
+    **The band is why this is not simply min-to-max.**  ``ZNU6`` -- the busiest
+    instrument in the whole archive -- prints 6.76 M records inside about nine
+    hundred ticks and 57 outside it, including an ask at 109,080.00 and stub bids
+    down at 50.00.  A ladder spanning that needs 6,977,921 slots and the old code
+    refused to build one, which made the most active Treasury contract
+    unreplayable.
+
+    The band is a median-absolute-deviation envelope, which is immune to any
+    minority of outliers however extreme, and it is **not padded**: the whole
+    session's prices are known before the ladder is built, so there is nothing to
+    leave headroom for.  That matters because padding would move ``px_min`` and
+    change ``n_slots`` for every well-behaved instrument, and those are the two
+    numbers the existing known-answer tests pin.
+
+    Prices outside the band are not silently dropped.  :func:`replay_book` counts
+    them and asserts that none of them could have been at the touch.
     """
     px = price[price != UNDEF_PRICE].astype(np.int64)
     if px.size == 0:
         return PriceGrid(px_min=0, tick=1, n_slots=1)
-    px_min = int(px.min())
-    offs = np.unique(px - px_min)
+
+    med = int(np.median(px))
+    dev = np.abs(px - med)
+    mad = int(np.median(dev))
+
+    # A first-pass tick, used only as the floor on the band width so that a
+    # pegged instrument (mad == 0) still gets a usable ladder.  An off-lattice
+    # outlier can only shrink this, which widens nothing and is harmless.
+    offs_all = np.unique(px - int(px.min()))
+    tick0 = int(np.gcd.reduce(offs_all)) if offs_all.size > 1 else 0
+    if tick0 <= 0:
+        tick0 = 1
+    half = int(mad_multiple) * max(mad, tick0)
+
+    core = px[dev <= half]
+    if core.size == 0:
+        core = px
+
+    base = int(core.min())
+    offs = np.unique(core - base)
     tick = int(np.gcd.reduce(offs)) if offs.size > 1 else 0
     if tick <= 0:
         tick = 1
     n_slots = int(offs.max() // tick) + 1
-    if n_slots > MAX_PRICE_SLOTS:
-        raise ValueError(
-            f"price ladder would need {n_slots:,} slots (tick={tick / PRICE_SCALE:g}, "
-            f"range={(offs.max()) / PRICE_SCALE:g}); the instrument printed an outlier price"
-        )
-    return PriceGrid(px_min=px_min, tick=tick, n_slots=n_slots)
+
+    if n_slots > max_slots:
+        # Shrink symmetrically about the median rather than refusing: a band this
+        # wide means the instrument's own price distribution is wide, and not
+        # replaying it at all is the worse outcome.
+        keep = (max_slots - 1) * tick
+        base = med - keep // 2
+        base -= (base - int(core.min())) % tick if base > int(core.min()) else 0
+        n_slots = max_slots
+
+    return PriceGrid(px_min=int(base), tick=int(tick), n_slots=int(n_slots))
 
 
 @dataclasses.dataclass
@@ -130,12 +191,37 @@ class ReplayResult:
     depth: Optional[dict] = None
     n_records: int = 0
     n_snapshot: int = 0
+    #: Packet boundaries at which best bid met or exceeded best ask.  Note this
+    #: counts *boundaries*, not distinct book states, so a book that sits locked
+    #: through a busy pre-open contributes one count per packet: ZNU6 on
+    #: 2026-07-14 scores 7,874 here for 23 actual states.  It therefore scales
+    #: with message rate rather than with book health, and
+    #: ``locked_states``/``crossed_states`` below are the metric to judge a
+    #: replay by.
     crossed_events: int = 0
+    #: Emitted top-of-book states with ``bid == ask``.  Expected during the
+    #: settlement break, when the exchange accepts orders without matching them.
+    locked_states: int = 0
+    #: Emitted top-of-book states with ``bid > ask``.  Expected only in the
+    #: pre-open; inside a trading session this is a defect.
+    crossed_states: int = 0
     #: Basis points per unit of this instrument's price.  100 for an outright or
     #: a bundle (index points), 1 for every differential instrument, which CME
     #: quotes directly in bp.  Prices in ``tob``/``trades`` stay in the
-    #: exchange's own units; this is what converts them.
+    #: exchange's own units; this is what converts them.  Meaningless for a
+    #: Treasury root, where a bp needs a CTD DV01 -- see ``store.risk``.
     bp_per_unit: float = 100.0
+    #: Records whose price could not be placed on the ladder: outside the band,
+    #: or inside it but off its lattice.  The kernel already handles these
+    #: correctly -- an add that cannot be indexed never sets the order's
+    #: generation, so its later cancel or modify is a no-op, and a modify that
+    #: leaves the band clears the generation before failing to re-add.  These
+    #: counters exist because it did all that *silently*, and 57 invisible
+    #: records is how the most active Treasury contract came to be unreplayable.
+    n_unindexed: int = 0
+    n_out_of_band: int = 0
+    #: The ladder's price band, in the instrument's own price units.
+    band: Tuple[float, float] = (float("nan"), float("nan"))
 
 
 @njit(cache=True, nogil=True)
@@ -393,6 +479,7 @@ def replay_book(
     grid: Optional[PriceGrid] = None,
     emit_window: Optional[Tuple[pd.Timestamp, pd.Timestamp]] = None,
     bp_per_unit: Optional[float] = None,
+    assert_band: bool = True,
 ) -> ReplayResult:
     """Replay one instrument's MBO records into a top-of-book stream.
 
@@ -414,7 +501,17 @@ def replay_book(
     ``bp_per_unit`` defaults to the tick-implied scale: an instrument ticking in
     0.5 quotes in basis points, one ticking in 0.005 quotes in index points.
     Pass it explicitly (from ``ParsedSymbol.bp_per_price_unit``) when the symbol
-    is known -- see :func:`RVUtils.MBO.symbols.bp_per_price_unit`.
+    is known -- see :func:`RVUtils.MBO.symbols.bp_per_price_unit`.  It is an SR3
+    notion: a Treasury root has no intrinsic basis point, and its prices should be
+    read in ticks, points or dollars.
+
+    ``assert_band`` checks that no order priced outside the ladder's band sits on
+    the side that would have put it at the touch, and raises if one does.  The
+    kernel is already correct about orders it cannot index -- an add that cannot
+    be placed never sets the order's generation, so its later cancel or modify is
+    a no-op -- but it is correct *silently*, and 57 invisible records is how the
+    busiest Treasury contract came to be unreplayable.  Turn it off only when a
+    deliberately narrow band is the point.
     """
     if records.size == 0:
         raise ValueError("no records to replay")
@@ -434,6 +531,28 @@ def replay_book(
 
     action = np.ascontiguousarray(records["action"]).view(np.uint8).astype(np.int64)
     side = np.ascontiguousarray(records["side"]).view(np.uint8).astype(np.int64)
+
+    # --- what the ladder could not hold, and whether that is safe ------------ #
+    n_unindexed = int((live & (px_idx < 0)).sum())
+    outside = live & ((price < g.px_min) | (price > g.px_max))
+    n_out_of_band = int(outside.sum())
+    if assert_band and n_out_of_band:
+        # An out-of-band order is only harmless on the side that keeps it away
+        # from the touch: a bid *below* the band is worse than every in-band bid,
+        # an ask *above* it is worse than every in-band ask.  The opposite cases
+        # mean the band is wrong, and a touch computed without them would be a
+        # silent error rather than a conservative one.
+        bad = ((outside & (side == _BID) & (price > g.px_max))
+               | (outside & (side == _ASK) & (price < g.px_min)))
+        if bad.any():
+            worst = price[bad]
+            raise ValueError(
+                f"{int(bad.sum())} order(s) out of band on the side that would put "
+                f"them at the touch (prices {worst.min() / PRICE_SCALE:g} to "
+                f"{worst.max() / PRICE_SCALE:g}, band "
+                f"[{g.px_min / PRICE_SCALE:g}, {g.px_max / PRICE_SCALE:g}]). "
+                f"Widen the band -- do not ignore them."
+            )
     size = records["size"].astype(np.int64)
     order_id = records["order_id"].astype(np.uint64)
     _, ord_idx = np.unique(order_id, return_inverse=True)
@@ -495,6 +614,10 @@ def replay_book(
     tob["mid"] = (tob["bid_px"] + tob["ask_px"]) / 2.0
     tob["spread"] = tob["ask_px"] - tob["bid_px"]
 
+    _sp = tob["spread"].to_numpy()
+    n_locked = int(np.count_nonzero(_sp == 0.0))
+    n_crossed = int(np.count_nonzero(_sp < 0.0))
+
     is_trade = action == _T
     trades = pd.DataFrame(
         {
@@ -527,4 +650,7 @@ def replay_book(
         tob=tob, trades=trades, grid=g, depth=depth,
         n_records=int(records.size), n_snapshot=int(n_snap),
         crossed_events=int(crossed), bp_per_unit=float(scale),
+        locked_states=n_locked, crossed_states=n_crossed,
+        n_unindexed=n_unindexed, n_out_of_band=n_out_of_band,
+        band=(g.px_min / PRICE_SCALE, g.px_max / PRICE_SCALE),
     )

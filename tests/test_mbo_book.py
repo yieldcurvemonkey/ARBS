@@ -17,6 +17,7 @@ from RVUtils.MBO.book import (
     F_LAST,
     F_SNAPSHOT,
     PRICE_SCALE,
+    PriceGrid,
     build_price_grid,
     replay_book,
 )
@@ -77,10 +78,123 @@ def test_price_grid_handles_negative_spread_prices():
     np.testing.assert_allclose(g.to_price(np.array([0, 1, 2])), [-0.055, -0.05, -0.045])
 
 
-def test_price_grid_rejects_an_outlier_that_would_blow_the_ladder():
-    px = np.array([96.0, 96.005, 1_000_000.0], dtype=np.float64)
-    with pytest.raises(ValueError, match="outlier price"):
-        build_price_grid((px * PRICE_SCALE).round().astype(np.int64))
+def _ints(px):
+    return (np.asarray(px, dtype=np.float64) * PRICE_SCALE).round().astype(np.int64)
+
+
+def test_price_grid_bands_around_the_mass_instead_of_the_extremes():
+    """The real case this replaced a raise for.
+
+    ``ZNU6`` -- the busiest instrument in the whole archive -- prints 6.76 M
+    records inside about nine hundred ticks and 57 outside, including an ask at
+    109,080.00 and stub bids at 50.00.  Sizing the ladder to the extremes needs
+    6,977,921 slots, and refusing to build one made the most active Treasury
+    contract unreplayable.
+    """
+    core = np.arange(108.0, 109.0, 0.015625)
+    px = _ints(np.concatenate([core, [50.0, 88.1875, 109_080.0]]))
+    g = build_price_grid(px)
+
+    assert g.tick == 15_625_000                      # one sixty-fourth, intact
+    assert g.n_slots < 100_000
+    assert g.contains(_ints(core)).all()             # every ordinary price fits
+    assert not g.contains(_ints([109_080.0]))[0]     # the absurd one does not
+
+
+def test_price_grid_band_is_not_padded():
+    """Every price of the session is known before the ladder is built, so there
+    is nothing to leave headroom for -- and padding would move px_min and n_slots
+    for every well-behaved instrument."""
+    px = _ints(np.arange(96.0, 96.5, 0.005))
+    g = build_price_grid(px)
+    assert g.px_min == px.min()
+    assert g.px_max == px.max()
+
+
+def test_tick_is_taken_from_inside_the_band_not_from_an_off_lattice_outlier():
+    """A gcd over every price collapses to near-nothing if one is off-lattice."""
+    px = _ints(np.concatenate([np.arange(96.0, 96.2, 0.005), [1234.5678901]]))
+    g = build_price_grid(px)
+    assert g.tick == 5_000_000
+
+
+def test_price_grid_survives_a_pegged_instrument():
+    g = build_price_grid(_ints([96.0] * 20))
+    assert g.n_slots == 1
+    assert g.px_min == 96_000_000_000
+
+
+def test_replay_counts_orders_it_could_not_index_without_dropping_them_silently():
+    r = replay_book(make([
+        (1, "A", "B", 96.000, 10, 1, 0),
+        (1, "A", "A", 96.010, 7, 2, 0),
+        (1, "A", "B", 96.005, 4, 3, 0),
+        (1, "A", "A", 96.010, 3, 4, 0),
+        (1, "A", "B", 96.000, 6, 5, 0),
+        (2, "A", "B", 50.000, 1, 6, L),      # a stub, nowhere near the market
+    ]))
+    assert r.n_unindexed == 1
+    assert r.n_out_of_band == 1
+    assert r.tob.iloc[-1]["bid_px"] == 96.005     # the stub is not the touch
+    assert r.band[0] > 90.0
+
+
+def test_replay_raises_when_an_out_of_band_order_could_have_been_the_touch():
+    """A bid *above* the band is not a stub -- it means the band is wrong, and a
+    touch computed without it would be silently wrong rather than conservative."""
+    narrow = PriceGrid(px_min=int(95.98 * PRICE_SCALE), tick=5_000_000, n_slots=3)
+    with pytest.raises(ValueError, match="out of band"):
+        replay_book(
+            make([
+                (1, "A", "B", 96.10, 10, 1, 0),
+                (1, "A", "A", 96.50, 7, 2, L),
+            ]),
+            grid=narrow,
+        )
+
+
+def test_an_out_of_band_order_on_the_harmless_side_does_not_raise():
+    narrow = PriceGrid(px_min=int(95.98 * PRICE_SCALE), tick=5_000_000, n_slots=3)
+    r = replay_book(
+        make([
+            (1, "A", "B", 95.98, 10, 1, 0),
+            (1, "A", "A", 95.99, 7, 2, 0),
+            (1, "A", "B", 90.00, 1, 3, L),       # far below: never the touch
+        ]),
+        grid=narrow,
+    )
+    assert r.n_out_of_band == 1
+    assert r.tob.iloc[-1]["bid_px"] == 95.98
+
+
+def test_locked_and_crossed_states_are_counted_separately_from_packet_boundaries():
+    """``crossed_events`` counts packet boundaries and so scales with message
+    rate: a book sitting locked through a busy pre-open scores one per packet.
+    Measured on ZNU6, that is 7,874 counts for 23 actual states.  The state
+    counts are what a replay should be judged on."""
+    r = replay_book(make([
+        (1, "A", "B", 96.00, 10, 1, 0),
+        (1, "A", "A", 96.00, 7, 2, L),       # locked
+        (2, "C", "A", 96.00, 7, 2, 0),
+        (2, "A", "A", 96.01, 7, 3, L),       # resolved
+        (3, "A", "A", 96.00, 1, 4, L),       # locked again, one packet later
+    ]))
+    assert r.locked_states == 2
+    assert r.crossed_states == 0
+    assert r.crossed_events >= r.locked_states
+
+
+def test_assert_band_can_be_disabled_deliberately():
+    narrow = PriceGrid(px_min=int(95.98 * PRICE_SCALE), tick=5_000_000, n_slots=3)
+    r = replay_book(
+        make([
+            (1, "A", "B", 96.10, 10, 1, 0),
+            (1, "A", "A", 96.50, 7, 2, L),
+        ]),
+        grid=narrow,
+        assert_band=False,
+    )
+    assert r.n_out_of_band == 2
 
 
 # --------------------------------------------------------------------------- #
