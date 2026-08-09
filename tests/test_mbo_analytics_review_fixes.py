@@ -114,29 +114,45 @@ def test_a_book_that_is_only_ever_locked_reports_no_spread():
 # --------------------------------------------------------------------------- #
 
 def test_kyle_lambda_on_a_perfect_fit_returns_instead_of_raising():
-    """The exact case: an instrument whose mid moves in lockstep with volume over
-    two bars gives a zero-residual fit. ``se`` is a Python float, so the division
-    raises ZeroDivisionError -- which np.errstate does not govern -- and would
-    kill a sweep over hundreds of instrument-days."""
-    tob = _tob([(0, 96.000, 10, 96.005, 10),
-                (60 * S, 96.005, 10, 96.010, 10),
-                (120 * S, 96.010, 10, 96.015, 10)])
-    tape = _tape([(1, 96.005, 5, 1), (60 * S + 1, 96.010, 5, 1),
-                  (120 * S + 1, 96.015, 5, 1)])
-    # The contract is that it RETURNS. A perfect fit may legitimately give NaN or
-    # an infinite t-statistic; what it may not do is raise and end the sweep.
+    """The exact case the guard is for: a zero-residual regression.
+
+    ``se`` is a Python float, so ``lam / se`` raises ZeroDivisionError there --
+    np.errstate governs numpy's arithmetic and does nothing for it. The fixture
+    needs FOUR quote bars so three differences survive the n >= 3 floor, and the
+    mid must move exactly proportionally to signed volume so the residual is
+    genuinely zero.
+    """
+    tob = _tob([(0, 96.000, 10, 96.000, 10),
+                (60 * S, 96.005, 10, 96.005, 10),
+                (120 * S, 96.015, 10, 96.015, 10),
+                (180 * S, 96.030, 10, 96.030, 10)])
+    tape = _tape([(60 * S + 1, 96.005, 5, 1),
+                  (120 * S + 1, 96.015, 10, 1),
+                  (180 * S + 1, 96.030, 15, 1)])
+    # The contract is that it RETURNS. A perfect fit may give an infinite
+    # t-statistic; what it may not do is raise and end a 553-session sweep.
     out = kyle_lambda(tob, tape, freq="60s")
     assert set(out) >= {"lam", "t_stat", "r2", "n_bars", "alpha"}
-    assert not np.isnan(out["n_bars"])
+    assert out["n_bars"] >= 3
+    assert np.isfinite(out["lam"])
 
 
-def test_kyle_lambda_on_a_pinned_mid_returns_nan_rather_than_raising():
-    """A listed butterfly that trades all session without leaving one tick."""
-    tob = _tob([(k * 60 * S, 96.000, 10, 96.005, 10) for k in range(4)])
-    tape = _tape([(k * 60 * S + 1, 96.005, 5, 1) for k in range(4)])
+def test_kyle_lambda_on_a_pinned_mid_returns_rather_than_raising():
+    """The degenerate day the guard exists for, and the only one that reaches it.
+
+    A near-perfect fit does NOT: floating-point lstsq leaves a residual around
+    1e-31, so the standard error is tiny but non-zero and the division is safe.
+    The standard error is exactly zero only when the residual vector is exactly
+    zero -- which is a mid that never moves at all, while volume varies. That is
+    the listed butterfly pinned to one tick for a session, the most common quiet
+    instrument-day in this catalogue, and without the guard it is 0.0 / 0.0.
+    """
+    tob = _tob([(k * 60 * S, 96.000, 10, 96.005, 10) for k in range(5)])
+    tape = _tape([(k * 60 * S + 1, 96.005, 5 * (k + 1), 1) for k in range(5)])
     out = kyle_lambda(tob, tape, freq="60s")
-    assert out["lam"] == 0.0 or np.isnan(out["lam"])
-    assert not np.isnan(out["n_bars"])
+    assert out["n_bars"] >= 3
+    assert out["lam"] == 0.0
+    assert np.isnan(out["t_stat"])
 
 
 # --------------------------------------------------------------------------- #
@@ -158,3 +174,66 @@ def test_a_clean_tape_still_buckets_normally():
     out = impact_by_size(tape, None, bins=(1, 2, 5))
     assert int(out["volume"].sum()) == 8
     assert (out["volume"] >= 0).all()
+
+
+# --------------------------------------------------------------------------- #
+# flow: contracts the original suite documented but did not pin
+# --------------------------------------------------------------------------- #
+
+def test_d_mid_is_the_bar_to_bar_change_not_the_within_bar_one():
+    """A surviving mutation: swapping mid_last for mid_first in ofi_bars left all
+    45 tests green, because every fixture that asserted d_mid had exactly ONE
+    event per bar, where the two columns are identical by construction. On real
+    SR3 data bars are never single-event, so the mutant would have tripled d_mid
+    everywhere while the suite stayed green.
+    """
+    from RVUtils.MBO.analytics.flow import ofi_bars
+
+    # Bar 0 holds three events with the mid walking inside it; bar 1 holds one.
+    rows = [
+        (0, 96.000, 10, 96.010, 10),
+        (3 * S, 96.005, 10, 96.015, 10),
+        (7 * S, 96.010, 10, 96.020, 10),
+        (12 * S, 96.015, 10, 96.025, 10),
+    ]
+    bars = ofi_bars(_tob(rows), freq="10s")
+    assert len(bars) == 2
+    # bar 0 ends at mid 96.015, bar 1 ends at 96.020: the change is one tick.
+    assert bars["d_mid"].iloc[1] == pytest.approx(0.005)
+    # mid_first would give 96.020 - 96.005 = 0.015, three times as much.
+    assert bars["mid_first"].iloc[0] != bars["mid_last"].iloc[0]
+
+
+def test_events_sharing_one_nanosecond_are_ordered_by_sequence():
+    """A surviving mutation: dropping ``sequence`` from the sort key left all 45
+    tests green, because no fixture had two rows stamped at the same nanosecond.
+    Every record in a CME packet shares one ts_recv, so that is the normal case,
+    and OFI is a first difference -- within-packet order sets the sign.
+    """
+    from RVUtils.MBO.analytics.flow import ofi_events
+
+    # One packet: the bid queue builds 10 -> 20, then is cut to 4, all at one
+    # timestamp. Handed over with the sequence out of order.
+    t = _tob([(0, 96.00, 10, 96.01, 5),
+              (0, 96.00, 20, 96.01, 5),
+              (0, 96.00, 4, 96.01, 5)])
+    t["sequence"] = np.array([0, 1, 2], dtype=np.uint32)
+    shuffled = t.iloc[[2, 0, 1]].reset_index(drop=True)
+
+    got = ofi_events(shuffled).to_numpy()
+    # Correct order gives +10 (queue built) then -16 (queue cut).
+    assert got[1] == pytest.approx(10.0)
+    assert got[2] == pytest.approx(-16.0)
+
+
+def test_a_bucket_median_is_not_a_mean():
+    """A surviving mutation: median -> mean left all 43 impact tests green,
+    because every populated bucket held one or two symmetric rows. The module's
+    headline claim is that one large print must not move a bucket."""
+    from RVUtils.MBO.analytics.impact import impact_by_size
+
+    tape = _tape([(1, 96.005, 1, 1), (2, 96.005, 1, 1), (3, 96.005, 1, 1)])
+    tape["prev_mid"] = [96.0, 96.0, 95.995]        # eff 0.01, 0.01, 0.02
+    out = impact_by_size(tape, None, bins=(1, 2))
+    first = out[out["n"] > 0].iloc[0]
+    assert first["eff_median"] == pytest.approx(0.01)   # mean would be 0.0133
