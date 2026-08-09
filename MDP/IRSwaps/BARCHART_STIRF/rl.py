@@ -1998,11 +1998,13 @@ class BARCHART_STIRF_CURVE(LayeredCacheMixin):
         if not curves_by_ts:
             return
 
+        from Caching.curve_sanity import WRITE_REJECT_CODES, snapshot_defects
         from Caching.curve_store import CurveSnapshot, CurveStore
 
         cfg_hash = self._curve_cfg_hash(cfg)
         curves_by_ts_with_context: Dict[datetime.datetime, rl.Curve] = {}
         new_snapshots = []
+        rejected: Dict[str, int] = {}
         for ts, curve in sorted(curves_by_ts.items()):
             ts_utc = self._curve_store_norm_timestamp(ts)
             curve_with_context = self._attach_curve_context(
@@ -2011,20 +2013,51 @@ class BARCHART_STIRF_CURVE(LayeredCacheMixin):
                 timestamp=ts_utc,
                 cfg=cfg,
             )
-            curves_by_ts_with_context[ts_utc] = curve_with_context
-            new_snapshots.append(
-                CurveSnapshot.from_rl_curve(
-                    curve_with_context,
-                    curve_name=curve_name,
-                    cfg=cfg,
-                    cfg_hash=cfg_hash,
+            snapshot = CurveSnapshot.from_rl_curve(
+                curve_with_context,
+                curve_name=curve_name,
+                cfg=cfg,
+                cfg_hash=cfg_hash,
+            )
+            # Never persist a curve that cannot be a market. 2026-07-01 was
+            # written as 1,381 consecutive identity curves (every DF exactly
+            # 1.0, so every rate 0) and reported as a successful warm.
+            defects = WRITE_REJECT_CODES.intersection(
+                snapshot_defects(
+                    snapshot.node_dates,
+                    snapshot.discount_factors,
+                    trading_date=snapshot.trading_date,
                 )
             )
+            if defects:
+                for code in defects:
+                    rejected[code] = rejected.get(code, 0) + 1
+                continue
+            curves_by_ts_with_context[ts_utc] = curve_with_context
+            new_snapshots.append(snapshot)
+
+        if rejected:
+            logging.getLogger(__name__).error(
+                "BARCHART STIRF rejected %s/%s snapshot(s) for %s/%s before persisting: %s",
+                sum(rejected.values()),
+                len(curves_by_ts),
+                curve_name,
+                date,
+                ", ".join(f"{k}={v}" for k, v in sorted(rejected.items())),
+            )
+
         if not new_snapshots:
-            return
+            # A day that produced nothing believable is a failure, not a no-op.
+            # Returning quietly here is how a bad session became "success".
+            raise ValueError(
+                f"All {len(curves_by_ts)} candidate snapshot(s) for {curve_name}/{date} failed "
+                f"the curve sanity gate ({', '.join(sorted(rejected))}); refusing to write."
+            )
 
         store = CurveStore.default()
-        existing_raw_df = store.read_raw_day(curve_name, date)
+        # Unfiltered on purpose: this read is the merge base. Filtering it would
+        # silently delete quarantined rows from the partition on the next write.
+        existing_raw_df = store.read_raw_day(curve_name, date, apply_sanity_filter=False)
         existing_snapshots = [
             self._curve_store_snapshot_from_raw_row(row, default_curve_name=curve_name)
             for row in existing_raw_df.to_dict("records")
@@ -2706,8 +2739,11 @@ class BARCHART_STIRF_CURVE(LayeredCacheMixin):
         initial_nodes: Optional[Dict] = None,
     ) -> Dict[datetime.datetime, Any]:
         """Calibrate a chronological chunk with warm-starting from previous curve's nodes."""
+        from Caching.curve_sanity import WRITE_REJECT_CODES, snapshot_defects
+
         results: Dict[datetime.datetime, Any] = {}
         prior_nodes: Optional[Dict] = initial_nodes
+        rejected = 0
         for ts, ts_pricers in chunk:
             try:
                 with _suppress_solver_output():
@@ -2719,12 +2755,28 @@ class BARCHART_STIRF_CURVE(LayeredCacheMixin):
                         initial_nodes=prior_nodes,
                         solver_tolerances=solver_tolerances,
                     )
-                prior_nodes = _extract_nodes(curve_obj)
+                built_nodes = _extract_nodes(curve_obj)
+                # An un-solved curve must not become the next minute's warm
+                # start: on 2026-07-01 one identity solve (every DF 1.0) seeded
+                # the whole chunk and 1,381 consecutive minutes were stored as
+                # a flat unit curve. Keep the last believable seed instead.
+                defects = WRITE_REJECT_CODES.intersection(
+                    snapshot_defects(list(built_nodes.keys()), list(built_nodes.values()))
+                )
+                if defects:
+                    rejected += 1
+                    continue
+                prior_nodes = built_nodes
                 curve_obj = self._attach_curve_context(curve_obj, curve_name=curve_name, timestamp=ts, cfg=cfg)
                 self._mem_cache_put(self._curve_cache_key(curve_name, ts, cfg), curve_obj)
                 results[ts] = curve_obj if curve_only else (curve_obj, solver_obj)
             except Exception:
                 pass
+        if rejected:
+            logging.getLogger(__name__).warning(
+                "BARCHART STIRF discarded %s/%s calibrated curve(s) for %s that failed the sanity gate.",
+                rejected, len(chunk), curve_name,
+            )
         return results
 
     def build_curve(
