@@ -21,6 +21,11 @@ from pandas.tseries.offsets import CustomBusinessDay
 
 PYTHON = r"C:\Users\chris\anaconda3\envs\stir\python.exe"
 DEFAULT_CACHE = r"C:\Users\chris\clee\ARBS\sdr_cache"
+# Absolute, not relative-to-CWD: a relative default silently starts a FRESH
+# ledger when invoked from the wrong directory, turning a resume into a
+# full restart. Anchored to the worktree root (this file's grandparent),
+# not to a single hardcoded worktree name.
+DEFAULT_LEDGER = str(Path(__file__).resolve().parent.parent / "tape_v3_backfill_ledger.jsonl")
 
 
 def trading_days(start: dt.date, end: dt.date) -> list[dt.date]:
@@ -55,7 +60,7 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--start", required=True)
     ap.add_argument("--end", required=True)
-    ap.add_argument("--ledger", default="tape_v3_backfill_ledger.jsonl")
+    ap.add_argument("--ledger", default=DEFAULT_LEDGER)
     ap.add_argument("--cache-path", default=DEFAULT_CACHE)
     ap.add_argument("--retry-failed", action="store_true",
                     help="Second pass: run only the days marked failed.")
@@ -72,8 +77,9 @@ def main() -> int:
     else:
         todo = [d for d in days if done.get(d.isoformat()) != "ok"]
 
+    already_ok = sum(1 for d in days if done.get(d.isoformat()) == "ok")
     print(f"{len(todo)} day(s) to run of {len(days)} in range "
-          f"({len(days) - len(todo)} already ok)")
+          f"({already_ok} already ok)")
 
     for i, d in enumerate(todo, 1):
         iso = d.isoformat()
@@ -95,9 +101,14 @@ def main() -> int:
         })
         print(f"    {'ok' if ok else 'FAILED'} in {elapsed}s", flush=True)
 
-    failed = [d for d, s in load_ledger(ledger).items() if s == "failed"]
-    if failed:
-        print(f"\n{len(failed)} day(s) failed: {sorted(failed)[:20]}")
+    # Scoped to the requested range, not the whole ledger: a day can be
+    # absent from the ledger entirely (process killed before it was ever
+    # attempted) and that is just as incomplete as an explicit "failed" --
+    # scanning the ledger alone is blind to it.
+    final = load_ledger(ledger)
+    not_ok = [d.isoformat() for d in days if final.get(d.isoformat()) != "ok"]
+    if not_ok:
+        print(f"\n{len(not_ok)} day(s) not ok: {sorted(not_ok)[:20]}")
         return 1
     print("\nall days ok")
     return 0
