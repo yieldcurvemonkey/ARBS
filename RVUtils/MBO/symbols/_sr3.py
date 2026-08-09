@@ -97,6 +97,10 @@ class ParsedSymbol:
     #: bundle the price is the leg **average**, so a 1 bp move is every one of
     #: its N legs moving 1 bp -- N times the dollars.
     unit_legs: int = 1
+    #: Product root, e.g. ``"SR3"`` or ``"ZN"``.  Filled by the dispatcher in
+    #: :mod:`RVUtils.MBO.symbols`, which is the only place that knows the
+    #: registry; a grammar module parses one family and does not need it.
+    root: str = ""
 
     @property
     def n_legs(self) -> int:
@@ -110,9 +114,40 @@ class ParsedSymbol:
     def is_outright(self) -> bool:
         return self.kind == "OUTRIGHT"
 
+    def _require_intrinsic_bp(self) -> None:
+        """Refuse to express a price contract in basis points.
+
+        ``KINDS_QUOTED_IN_BP`` is an SR3 fact, not a general one.  SR3 is a rate
+        contract -- its price is ``100 - rate``, so a basis point is a fixed
+        number of price units on every instrument in the complex.  A Treasury
+        future is a *price* contract: a basis point of yield is worth whatever
+        the cheapest-to-deliver DV01 says it is worth that day, and there is no
+        constant to return here.
+
+        Returning 100.0 for a Treasury calendar spread -- which is what a global
+        kind set does -- is not so much a wrong answer as a meaningless one, and
+        nothing downstream of it would look wrong.  So this raises and points at
+        the DV01 path instead.
+        """
+        from RVUtils.MBO.products import PRODUCTS
+
+        spec = PRODUCTS.get(self.root)
+        if spec is not None and spec.usd_per_bp_per_lot is None:
+            raise ValueError(
+                f"{self.symbol!r} is a {self.root} instrument, which is quoted in "
+                f"price points and has no intrinsic basis-point value: a bp of "
+                f"yield depends on the cheapest-to-deliver DV01 for the day. Use "
+                f"RVUtils.MBO.store.risk.dv01_for(), or ask for units='ticks', "
+                f"'points' or 'usd'."
+            )
+
     @property
     def bp_per_price_unit(self) -> float:
-        """How many basis points one unit of this instrument's price is worth."""
+        """How many basis points one unit of this instrument's price is worth.
+
+        Raises for a product with no intrinsic basis-point value.
+        """
+        self._require_intrinsic_bp()
         return 1.0 if self.kind in KINDS_QUOTED_IN_BP else 100.0
 
     @property
@@ -124,7 +159,10 @@ class ParsedSymbol:
         moving 1 bp is $25 and not $100.  A bundle is the exception: its price
         is the average of N legs, so 1 bp on the bundle is 1 bp on each of N
         contracts.
+
+        Raises for a product with no intrinsic basis-point value.
         """
+        self._require_intrinsic_bp()
         return USD_PER_BP_PER_CONTRACT * self.unit_legs
 
     @property
