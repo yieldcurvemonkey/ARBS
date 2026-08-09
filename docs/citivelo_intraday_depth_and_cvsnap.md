@@ -167,6 +167,13 @@ conda run -n stir python scripts/citivelo_deep_intraday_warm.py verify --per-era
 conda run -n stir python scripts/citivelo_intraday_ts_warm.py warm --workers 10
 ```
 
+Steps 2 and 4 both drive Excel and **must not overlap**. There is one add-in and
+one COM server; two processes writing into it race, and the failure mode is the
+one the package spent real debugging time on — a block written over a live
+`CvFunction_*` region raises `AccessViolationException` and takes the whole
+process down. Run `verify` in a gap, or after the fetch finishes. Steps 3 and 5
+are pure CPU and can run alongside the fetch.
+
 Step 5 needs no changes to benefit. `citivelo_intraday_ts_warm.py` prices its
 structure universe off `USD-SOFR-1D-CITIVELOEXCELMIN`, and this warm both extends
 that asset (2022-08 → **2021-09**) and **upgrades 2022-08 → 2023-12 from
