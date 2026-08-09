@@ -51,6 +51,11 @@ __all__ = [
     "sum_variance",
     "lambda_from_statistic",
     "variance_bounds_violation",
+    "categorical_comonotone_sum",
+    "categorical_independent_sum",
+    "categorical_min_variance_sum",
+    "three_point_marginal",
+    "fold_to_binary_support",
 ]
 
 #: 2**n joint cells are enumerated for the LP, so the meeting count has to stay small. Every
@@ -312,6 +317,139 @@ def coupling_bounds(marginals: Sequence[float]) -> CouplingBounds:
         lp_feasible=lp.feasible,
         lp_status=lp.status,
     )
+
+
+# ---------------------------------------------------------------------------------------
+# Categorical marginals: what happens to lambda when 50bp moves are live
+# ---------------------------------------------------------------------------------------
+# The binary framing is what makes ZQ pin each marginal EXACTLY. Admit a 50bp move and ZQ
+# gives only the MEAN of each marginal, not its shape -- one equation, two unknowns per
+# meeting. Marginal shape and copula then stop being separately identified from ZQ + SR3
+# alone, and the extra dispersion that size uncertainty puts into the sum gets booked as
+# dependence. The bias runs one way: UPWARD. These functions exist to measure how big it is,
+# not to pretend it away.
+
+
+def _validate_categorical(marginals: Sequence[Sequence[float]]) -> List[np.ndarray]:
+    out: List[np.ndarray] = []
+    for i, row in enumerate(marginals):
+        arr = np.asarray(row, dtype=float)
+        if arr.ndim != 1 or arr.size < 1:
+            raise ValueError(f"marginal {i} must be a non-empty 1-D pmf over step counts 0..m")
+        if np.any(arr < -1e-12) or not np.isfinite(arr).all():
+            raise ValueError(f"marginal {i} must be a finite non-negative pmf, got {arr.tolist()}")
+        total = float(arr.sum())
+        if abs(total - 1.0) > 1e-6:
+            raise ValueError(f"marginal {i} must sum to 1, got {total}")
+        out.append(np.clip(arr, 0.0, None) / total)
+    return out
+
+
+def categorical_comonotone_sum(marginals: Sequence[Sequence[float]]) -> np.ndarray:
+    """Law of ``sum_i X_i`` under the comonotone coupling, ``X_i`` supported on ``0..m_i``.
+
+    One uniform drives everything: ``X_i = F_i^{-1}(U)``. Partition ``[0, 1]`` at every CDF
+    breakpoint of every marginal; on each cell all the ``X_i`` are constant, so the sum is
+    constant and the cell's width is that sum's probability.
+    """
+    pmfs = _validate_categorical(marginals)
+    cdfs = [np.cumsum(p) for p in pmfs]
+    breaks = np.unique(np.clip(np.concatenate([np.array([0.0, 1.0])] + cdfs), 0.0, 1.0))
+    n_max = int(sum(len(p) - 1 for p in pmfs))
+    out = np.zeros(n_max + 1, dtype=float)
+    for lo, hi in zip(breaks[:-1], breaks[1:]):
+        width = float(hi - lo)
+        if width <= 0.0:
+            continue
+        mid = 0.5 * (lo + hi)
+        total = int(sum(int(np.searchsorted(c, mid, side="left")) for c in cdfs))
+        out[min(total, n_max)] += width
+    return out / out.sum()
+
+
+def categorical_independent_sum(marginals: Sequence[Sequence[float]]) -> np.ndarray:
+    """Law of ``sum_i X_i`` under independence: repeated convolution of the pmfs."""
+    pmfs = _validate_categorical(marginals)
+    probs = np.array([1.0])
+    for pmf in pmfs:
+        probs = np.convolve(probs, pmf)
+    return probs / probs.sum()
+
+
+def categorical_min_variance_sum(marginals: Sequence[Sequence[float]]) -> ExtremalSolution:
+    """Minimum-variance coupling of categorical marginals, by LP over the product cells."""
+    from scipy.optimize import linprog
+
+    pmfs = _validate_categorical(marginals)
+    sizes = [len(p) for p in pmfs]
+    n_cells = int(np.prod(sizes))
+    if n_cells > 200_000:
+        raise ValueError(f"{n_cells} LP columns is too many; aggregate meetings first")
+
+    cells = np.array(list(itertools.product(*[range(s) for s in sizes])), dtype=float)
+    k_of_cell = cells.sum(axis=1)
+    n_max = int(sum(s - 1 for s in sizes))
+
+    rows: List[np.ndarray] = [np.ones(n_cells)]
+    rhs: List[float] = [1.0]
+    for i, pmf in enumerate(pmfs):
+        for v in range(len(pmf) - 1):  # the last value is implied by the rest plus the total
+            rows.append((cells[:, i] == v).astype(float))
+            rhs.append(float(pmf[v]))
+
+    res = linprog(k_of_cell ** 2, A_eq=np.vstack(rows), b_eq=np.array(rhs),
+                  bounds=(0.0, 1.0), method="highs")
+    if not res.success:
+        fallback = categorical_independent_sum(marginals)
+        return ExtremalSolution(fallback, float(sum_variance(fallback)), False, str(res.message))
+
+    joint = np.clip(np.asarray(res.x, dtype=float), 0.0, None)
+    probs = np.zeros(n_max + 1, dtype=float)
+    np.add.at(probs, k_of_cell.astype(int), joint)
+    probs = probs / probs.sum()
+    return ExtremalSolution(probs, float(sum_variance(probs)), True, "optimal")
+
+
+def three_point_marginal(expected_steps: float, size_mix: float) -> np.ndarray:
+    """A ``{0, 25, 50}`` marginal with the mean ZQ pins and a chosen 50bp share.
+
+    ``expected_steps`` is the meeting's expected move in units of 25bp (so ZQ's number),
+    ``size_mix`` in ``[0, 1]`` is the fraction of that expected move delivered as 50bp steps
+    rather than 25bp ones. ``size_mix = 0`` returns the binary marginal exactly. Raises when
+    the requested mix is not a probability -- there is no silent clipping, because a clipped
+    marginal no longer has the mean ZQ pinned.
+    """
+    e = float(expected_steps)
+    s = float(size_mix)
+    if not 0.0 <= s <= 1.0:
+        raise ValueError(f"size_mix must lie in [0, 1], got {s}")
+    p2 = s * e / 2.0
+    p1 = e - 2.0 * p2
+    p0 = 1.0 - p1 - p2
+    if min(p0, p1, p2) < -1e-12:
+        raise ValueError(
+            f"size_mix={s} with expected_steps={e} implies a negative probability "
+            f"({p0:.3f}, {p1:.3f}, {p2:.3f}); ZQ's mean cannot be met with this mix"
+        )
+    return np.clip(np.array([p0, p1, p2], dtype=float), 0.0, None)
+
+
+def fold_to_binary_support(probs: Sequence[float], n_binary: int) -> np.ndarray:
+    """Fold a law on ``0..m`` onto the binary lattice's ``0..n`` support by absorbing the top.
+
+    A three-point marginal can reach beyond the binary lattice, and the observed density is
+    bucketed with its own tails absorbed into the end atoms. Folding the model the same way
+    is what keeps the comparison like for like.
+    """
+    arr = np.asarray(probs, dtype=float)
+    n = int(n_binary)
+    if arr.size <= n + 1:
+        out = np.zeros(n + 1, dtype=float)
+        out[: arr.size] = arr
+        return out
+    out = arr[: n + 1].copy()
+    out[-1] += float(arr[n + 1 :].sum())
+    return out
 
 
 def variance_bounds_violation(observed_variance: float, bounds: CouplingBounds, *, tol: float = 0.0) -> float:

@@ -217,3 +217,181 @@ def test_invalid_marginals_raise(bad):
 def test_too_many_meetings_raises_rather_than_hanging():
     with pytest.raises(ValueError, match="LP columns"):
         extremal_sum_distribution([0.3] * 17)
+
+
+# --------------------------------------------------------------------------------------
+# categorical marginals: the 50bp-contamination machinery
+# --------------------------------------------------------------------------------------
+
+from RVUtils.SR3ZQDistributionScreener._copula import (  # noqa: E402
+    categorical_comonotone_sum,
+    categorical_independent_sum,
+    categorical_min_variance_sum,
+    fold_to_binary_support,
+    three_point_marginal,
+)
+
+
+def test_categorical_comonotone_matches_hand_walked_uniform_partition():
+    """Two Bernoullis, worked by hand over the CDF breakpoints {0, .25, .5, 1}."""
+    got = categorical_comonotone_sum([[0.5, 0.5], [0.25, 0.75]])
+    assert got == pytest.approx([0.25, 0.25, 0.50], abs=1e-12)
+
+
+def test_categorical_comonotone_handles_a_genuine_three_point_marginal():
+    """A on {0,1,2} with pmf (.2,.5,.3), B on {0,1} with pmf (.6,.4). Breakpoints
+    {0,.2,.6,.7,1} give sums 0,1,2,3 with widths .2,.4,.1,.3."""
+    got = categorical_comonotone_sum([[0.2, 0.5, 0.3], [0.6, 0.4]])
+    assert got == pytest.approx([0.2, 0.4, 0.1, 0.3], abs=1e-12)
+    assert float(np.dot(np.arange(4), got)) == pytest.approx(1.5, abs=1e-12)
+
+
+def test_categorical_collapses_to_the_bernoulli_case():
+    binary = [[1 - p, p] for p in P0807]
+    assert categorical_comonotone_sum(binary) == pytest.approx(
+        comonotone_sum_distribution(P0807), abs=1e-12
+    )
+    assert categorical_independent_sum(binary) == pytest.approx(
+        independent_sum_distribution(P0807), abs=1e-12
+    )
+    lp = categorical_min_variance_sum(binary)
+    assert lp.feasible
+    assert lp.probs == pytest.approx(
+        extremal_sum_distribution(P0807, objective="min_variance").probs, abs=1e-8
+    )
+
+
+@pytest.mark.parametrize("mix", [0.0, 0.2, 0.5])
+def test_three_point_marginal_keeps_the_mean_zq_pins(mix):
+    for e in (0.420, 0.250, 0.431):
+        pmf = three_point_marginal(e, mix)
+        assert float(pmf.sum()) == pytest.approx(1.0, abs=1e-12)
+        assert float(np.dot(np.arange(3), pmf)) == pytest.approx(e, abs=1e-12)
+    assert three_point_marginal(0.42, 0.0) == pytest.approx([0.58, 0.42, 0.0], abs=1e-12)
+
+
+def test_three_point_marginal_refuses_an_impossible_mix():
+    # 37.5bp expected with no 50s at all needs P(one 25bp step) = 1.5.
+    with pytest.raises(ValueError, match="negative probability"):
+        three_point_marginal(1.5, 0.0)
+    # 62.5bp expected delivered entirely as 50s needs P(one 50bp step) = 1.25.
+    with pytest.raises(ValueError, match="negative probability"):
+        three_point_marginal(2.5, 1.0)
+    with pytest.raises(ValueError, match="size_mix"):
+        three_point_marginal(0.42, 1.5)
+
+
+def test_an_all_50s_mix_is_legal_when_the_mean_is_small_enough():
+    """s = 1 with a 22.5bp expected move is a coin flip between nothing and a 50: it meets
+    ZQ's mean exactly and is a perfectly good marginal. The framework must not reject it."""
+    pmf = three_point_marginal(0.9, 1.0)
+    assert pmf == pytest.approx([0.55, 0.0, 0.45], abs=1e-12)
+    assert float(np.dot(np.arange(3), pmf)) == pytest.approx(0.9, abs=1e-12)
+
+
+@pytest.mark.parametrize("mix", [0.0, 0.25, 0.5])
+def test_categorical_couplings_all_preserve_the_mean(mix):
+    pmfs = [three_point_marginal(e, mix) for e in P0807]
+    want = sum(P0807)
+    for probs in (
+        categorical_comonotone_sum(pmfs),
+        categorical_independent_sum(pmfs),
+        categorical_min_variance_sum(pmfs).probs,
+    ):
+        assert float(np.dot(np.arange(len(probs)), probs)) == pytest.approx(want, abs=1e-8)
+
+
+def test_categorical_variances_stay_ordered():
+    pmfs = [three_point_marginal(e, 0.4) for e in P0807]
+    v_min = categorical_min_variance_sum(pmfs).variance
+    v_ind = sum_variance(categorical_independent_sum(pmfs))
+    v_com = sum_variance(categorical_comonotone_sum(pmfs))
+    assert v_min < v_ind < v_com
+
+
+def test_allowing_50bp_moves_raises_the_wing_mass_at_fixed_marginal_means():
+    """The contamination direction, measured rather than asserted: size uncertainty adds
+    dispersion to the sum, and on the binary support that dispersion lands in the wings."""
+    n = len(P0807)
+    binary = fold_to_binary_support(categorical_independent_sum(
+        [three_point_marginal(e, 0.0) for e in P0807]), n)
+    mixed = fold_to_binary_support(categorical_independent_sum(
+        [three_point_marginal(e, 0.4) for e in P0807]), n)
+    assert wing_mass(mixed) > wing_mass(binary)
+
+
+def test_fold_to_binary_support_absorbs_the_top_and_pads_the_short_case():
+    assert fold_to_binary_support([0.1, 0.2, 0.3, 0.25, 0.15], 3) == pytest.approx(
+        [0.1, 0.2, 0.3, 0.40], abs=1e-12
+    )
+    assert fold_to_binary_support([0.4, 0.6], 3) == pytest.approx([0.4, 0.6, 0.0, 0.0], abs=1e-12)
+
+
+# --------------------------------------------------------------------------------------
+# the lambda_dependence signal
+# --------------------------------------------------------------------------------------
+
+from RVUtils.SR3ZQDistributionScreener._signals import (  # noqa: E402
+    compute_signals,
+    signal_lambda_dependence,
+)
+from RVUtils.SR3ZQDistributionScreener._types import RegimeBucket, TradeFlagKind  # noqa: E402
+
+
+def _sig(**kw):
+    base = dict(lambda_wing=0.5, lambda_prior=0.5, lambda_z=0.0, hard_violation_bp2=0.0,
+                lambda_atom_spread=0.1)
+    base.update(kw)
+    return signal_lambda_dependence(**base)
+
+
+def test_lambda_signal_is_silent_inside_the_z_band():
+    assert _sig(lambda_z=0.9) is None
+    assert _sig(lambda_z=-0.9) is None
+
+
+def test_low_lambda_buys_the_wings_and_high_lambda_sells_them():
+    """Low lambda means the market prices a fat middle, so the wings are the cheap side."""
+    lo = _sig(lambda_wing=0.1, lambda_z=-2.0)
+    hi = _sig(lambda_wing=0.9, lambda_z=+2.0)
+    assert lo.kind is TradeFlagKind.LAMBDA_DEPENDENCE and lo.direction == "buy_wings"
+    assert hi.kind is TradeFlagKind.LAMBDA_DEPENDENCE and hi.direction == "sell_wings"
+    assert hi.severity_decile > _sig(lambda_wing=0.7, lambda_z=+1.1).severity_decile
+
+
+def test_a_variance_outside_every_coupling_outranks_the_view():
+    """The hard tier is a static arbitrage and must not be reported as a view trade, even
+    when the z-score would not have fired at all."""
+    flag = _sig(lambda_z=0.0, hard_violation_bp2=-250.0)
+    assert flag.kind is TradeFlagKind.LAMBDA_ARBITRAGE
+    assert flag.direction == "buy_wings"
+    assert flag.severity_decile == 10
+    assert _sig(lambda_z=0.0, hard_violation_bp2=+250.0).direction == "sell_wings"
+
+
+def test_a_wide_cross_strike_spread_suppresses_the_signal():
+    """If the atoms disagree about lambda the RND has left the one-parameter family, so a
+    single headline lambda is an average of contradictory readings."""
+    assert _sig(lambda_z=-2.5, lambda_atom_spread=0.9) is None
+    assert _sig(lambda_z=-2.5, lambda_atom_spread=0.2) is not None
+
+
+def test_lambda_signal_is_a_no_op_for_callers_that_do_not_pass_it():
+    """Existing callers of compute_signals must be untouched."""
+    flags = compute_signals(
+        residual_ratio=100.0, skew=0.0,
+        tail_upper_50bp=0.1, tail_lower_50bp=0.1,
+        tail_upper_100bp=0.02, tail_lower_100bp=0.02,
+        regime=RegimeBucket.CALM,
+    )
+    assert all(f.kind not in {TradeFlagKind.LAMBDA_DEPENDENCE, TradeFlagKind.LAMBDA_ARBITRAGE}
+               for f in flags)
+
+    with_lambda = compute_signals(
+        residual_ratio=100.0, skew=0.0,
+        tail_upper_50bp=0.1, tail_lower_50bp=0.1,
+        tail_upper_100bp=0.02, tail_lower_100bp=0.02,
+        regime=RegimeBucket.CALM,
+        lambda_wing=0.1, lambda_prior=0.5, lambda_z=-2.2, lambda_atom_spread=0.1,
+    )
+    assert any(f.kind is TradeFlagKind.LAMBDA_DEPENDENCE for f in with_lambda)

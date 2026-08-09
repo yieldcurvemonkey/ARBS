@@ -22,6 +22,8 @@ class TradeFlagKind(Enum):
     SKEW = "skew"                       # directional disagreement (SR3 RR vs FedWatch)
     TAIL = "tail"                       # surprise component (SR3 wing vs ZQ tree-tail-zero)
     CROSS_QUARTER = "cross_quarter"     # term structure of residual variance
+    LAMBDA_DEPENDENCE = "lambda_dependence"  # the copula coordinate vs a prior
+    LAMBDA_ARBITRAGE = "lambda_arbitrage"    # RND variance outside EVERY coupling's reach
 
 
 @dataclass(frozen=True)
