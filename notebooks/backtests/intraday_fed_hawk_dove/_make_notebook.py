@@ -90,7 +90,11 @@ from global_hawk_dove_run import (
 )
 from MDP.STIRFutures.STIRFutureMDP import STIRFutureMDP
 
-mdp = STIRFutureMDP(source="BARCHART_STIRF-RL")
+# cache_full_intraday_fetch: pull each symbol-day ONCE in full and serve every
+# timestamp on that day from cache. The §8.4 sweep re-prices the same days at 20
+# different entry/exit pairs, so without this it makes tens of thousands of
+# per-timestamp requests and risks a rate-limit storm for no new data.
+mdp = STIRFutureMDP(source="BARCHART_STIRF-RL", cache_full_intraday_fetch=True)
 
 print(f"Backtest window : {BT_START} -> {BT_END}")
 print(f"Entry / exit    : T{int(ENTRY_OFFSET.total_seconds()//60):+d}m / T{int(EXIT_OFFSET.total_seconds()//60):+d}m")
@@ -469,7 +473,10 @@ ungated re-run would mark it against a lookahead bar instead of dropping it.
 
 code(r"""
 ENTRY_MIN = [-120, -60, -45, -15]
-EXIT_MIN = [60, 120, 180, 240, 360]
+EXIT_MIN = [60, 120, 180, 240]
+
+# All 20 cells re-gate the SAME symbol-days, so warm the shared bar cache once.
+print(f"bar cache: {G.load_bar_cache(CACHE / 'bars.pkl')} symbol-days preloaded")
 
 ev_only = {b: events_by_bank[b]["events"] for b in BANKS if events_by_bank[b]["events"]}
 

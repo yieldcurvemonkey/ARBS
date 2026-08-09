@@ -106,7 +106,8 @@ def stage_events(bucket_mode: str = "percentile") -> dict:
     fname = "events.pkl" if bucket_mode == "percentile" else f"events_{bucket_mode}.pkl"
     with open(CACHE / fname, "wb") as f:
         pickle.dump(out, f)
-    _p(f"\nwrote {CACHE / fname}")
+    n = G.save_bar_cache(CACHE / "bars.pkl")
+    _p(f"\nwrote {CACHE / fname}   (bar cache: {n} symbol-days)")
     return out
 
 

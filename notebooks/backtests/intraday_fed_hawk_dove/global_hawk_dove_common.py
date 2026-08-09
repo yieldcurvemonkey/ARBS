@@ -97,13 +97,22 @@ def _ql_cal(name: str):
 
 
 #: Session bounds are the measured minute-bar envelopes (see _probe_coverage.csv),
-#: pulled in slightly so an entry/exit at the edge still has a causal bar.
+#: pulled in so an entry/exit at the edge still has a causal bar.
+#:
+#: ``session_end`` must sit STRICTLY INSIDE the quoted window, with margin. A
+#: timestamp on the boundary resolves to the NEXT session inside the MDP, and
+#: because exits are clamped to session_end that hits every late speech at once.
+#: With FED session_end at exactly 17:00 ET, 31 of 496 Fed trades marked their
+#: exit against the next day's price - the engine returned 95.615 where the day's
+#: own bars ended at 95.54 (see _probe8_mark_mismatch.py). It is the same hazard
+#: the Fed notebook's _cap_exit_to_valid_trading_date worked around by capping at
+#: 16:59; a margin fixes it for every market rather than one.
 CB_CONFIGS: Dict[str, CBConfig] = {
     "FED": CBConfig(
         code="FED", label="Federal Reserve", theme=ForexFactoryTheme.FED_SPEAKERS,
         root="SR3", curve_id="USD-SOFR-1D", market_tz="America/New_York",
         ql_calendar=_ql_cal("US"),
-        session_start=datetime.time(7, 0), session_end=datetime.time(17, 0), ccy="USD",
+        session_start=datetime.time(7, 0), session_end=datetime.time(16, 45), ccy="USD",
     ),
     "ECB": CBConfig(
         code="ECB", label="ECB", theme=ForexFactoryTheme.ECB_SPEAKERS,
@@ -111,13 +120,13 @@ CB_CONFIGS: Dict[str, CBConfig] = {
         # (EB 121-473 bars/day vs RA 18-213 on the same dates).
         root="EB", curve_id="EUR-ESTR", market_tz="Europe/London",
         ql_calendar=_ql_cal("EU"),
-        session_start=datetime.time(7, 0), session_end=datetime.time(20, 30), ccy="EUR",
+        session_start=datetime.time(7, 0), session_end=datetime.time(20, 15), ccy="EUR",
     ),
     "BOE": CBConfig(
         code="BOE", label="Bank of England", theme=ForexFactoryTheme.BOE_SPEAKERS,
         root="J8", curve_id="GBP-SONIA", market_tz="Europe/London",
         ql_calendar=_ql_cal("UK"),
-        session_start=datetime.time(7, 45), session_end=datetime.time(17, 45), ccy="GBP",
+        session_start=datetime.time(7, 45), session_end=datetime.time(17, 30), ccy="GBP",
     ),
     "BOJ": CBConfig(
         code="BOJ", label="Bank of Japan", theme=ForexFactoryTheme.BOJ_SPEAKERS,
@@ -507,6 +516,31 @@ def drop_overlaps(events: List[dict]) -> tuple[List[dict], int]:
 # ===========================================================================
 # Empirical data gate
 # ===========================================================================
+#: Shared across every gate_events call in the process. The entry/exit sweep
+#: re-gates the SAME (symbol, day) pairs 20 times over - without this the grid
+#: refetches every bar 20x and hammers Barchart's rate limit for no new data.
+_BAR_CACHE: Dict[tuple, pd.DataFrame] = {}
+
+
+def save_bar_cache(path) -> int:
+    """Persist the minute-bar cache so a fresh process (the notebook) does not
+    re-fetch what the runner already pulled."""
+    import pickle
+    with open(path, "wb") as f:
+        pickle.dump(_BAR_CACHE, f)
+    return len(_BAR_CACHE)
+
+
+def load_bar_cache(path) -> int:
+    import pickle
+    from pathlib import Path as _P
+    if not _P(path).exists():
+        return 0
+    with open(path, "rb") as f:
+        _BAR_CACHE.update(pickle.load(f))
+    return len(_BAR_CACHE)
+
+
 def _day_bars(fetcher, symbol: str, day: datetime.date, tz) -> pd.DataFrame:
     start = tz.localize(datetime.datetime(day.year, day.month, day.day, 0, 0))
     end = tz.localize(datetime.datetime(day.year, day.month, day.day, 23, 59))
@@ -546,7 +580,7 @@ def gate_events(
     """
     fetcher = mdp._get_barchart_fetcher(required_concurrency=6)
     tz = cfg.tz
-    cache: Dict[tuple, pd.DataFrame] = {}
+    cache = _BAR_CACHE
     reasons: Dict[str, int] = defaultdict(int)
     kept: List[dict] = []
     diag: List[dict] = []
