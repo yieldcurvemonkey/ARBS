@@ -12,6 +12,24 @@ The estimator that needs no grid is Hayashi-Yoshida: sum the product of every pa
 of increments whose observation intervals overlap, and nothing else.  No
 interpolation, no previous-tick, no synchronisation bias.
 
+**Hayashi-Yoshida is not noise-robust, and on book data that matters more than
+anything else here.**  Their estimator assumes a continuous semimartingale with no
+microstructure noise.  A stored book is the opposite: measured on ZNU6 against
+ZFU6, **only 0.39% of top-of-book events move the mid at all** -- 99.6% are queue
+flicker at a standing price -- so summing products of 2.4 M mostly-noise increments
+gives a correlation of **0.011** between two tightly-linked Treasury futures.
+Subsampling in trading time recovers it monotonically: 0.011 at every event, 0.13
+at every hundredth, 0.61 at every two-thousandth, 0.88 at every ten-thousandth.
+
+Hoffmann, Rosenbaum and Yoshida prescribe exactly this and say why: their model
+has no noise term, so one must "select a coarse subgrid among the trading times
+where microstructure noise effects can be neglected", chosen by inspecting the
+signature plot **in trading time rather than calendar time**.  :func:`hy_signature`
+produces that plot from your own data, and every estimator here takes a
+``subsample`` factor.  **Running these with ``subsample=1`` on raw book events
+will report no relationship where a strong one exists** -- the same failure this
+module warns about for grids, arriving through the estimator instead.
+
 **Three things this module deliberately refuses to do**, all of them from
 Hoffmann, Rosenbaum & Yoshida (Bernoulli 19(2), 2013):
 
@@ -46,6 +64,7 @@ from numba import njit
 
 __all__ = [
     "DEGENERACY_MULTIPLE",
+    "hy_signature",
     "LeadLagResult",
     "lead_lag_placebo",
     "epps_curve",
@@ -104,7 +123,21 @@ def _increments(ts: np.ndarray, px: np.ndarray
     return t[:-1], t[1:], np.diff(p)
 
 
-def hayashi_yoshida(ts_x, px_x, ts_y, px_y, shift_ns: int = 0) -> dict:
+def _thin(ts, px, k: int):
+    """Every ``k``-th observation, in trading time -- not calendar time.
+
+    Trading time is the point: it is the non-synchronous character of the data
+    that lets a coarse subgrid still resolve a lag finer than its own mesh, which
+    a regular calendar-time subsample cannot do.
+    """
+    k = max(1, int(k))
+    if k == 1:
+        return ts, px
+    return np.asarray(ts)[::k], np.asarray(px)[::k]
+
+
+def hayashi_yoshida(ts_x, px_x, ts_y, px_y, shift_ns: int = 0,
+                    subsample: int = 1) -> dict:
     """Hayashi-Yoshida cumulative covariance and correlation.
 
     Sums ``r_i^X r_j^Y`` over every pair of increments whose observation intervals
@@ -116,6 +149,8 @@ def hayashi_yoshida(ts_x, px_x, ts_y, px_y, shift_ns: int = 0) -> dict:
     each series, which is what makes the lagged quantity a correlation-scaled
     contrast comparable across lags.
     """
+    ts_x, px_x = _thin(ts_x, px_x, subsample)
+    ts_y, px_y = _thin(ts_y, px_y, subsample)
     ax0, ax1, rx = _increments(ts_x, px_x)
     ay0, ay1, ry = _increments(ts_y, px_y)
     if rx.size == 0 or ry.size == 0:
@@ -135,12 +170,14 @@ def hayashi_yoshida(ts_x, px_x, ts_y, px_y, shift_ns: int = 0) -> dict:
 
 
 def lead_lag_curve(ts_x, px_x, ts_y, px_y,
-                   lags_ns: Sequence[int]) -> pd.DataFrame:
+                   lags_ns: Sequence[int], subsample: int = 1) -> pd.DataFrame:
     """The shifted Hayashi-Yoshida contrast over a grid of lags.
 
     A positive lag means **X leads Y**: Y's timestamps are pulled back, so Y's
     later moves line up with X's earlier ones.
     """
+    ts_x, px_x = _thin(ts_x, px_x, subsample)
+    ts_y, px_y = _thin(ts_y, px_y, subsample)
     ax0, ax1, rx = _increments(ts_x, px_x)
     ay0, ay1, ry = _increments(ts_y, px_y)
     if rx.size == 0 or ry.size == 0:
@@ -213,7 +250,8 @@ class LeadLagResult:
 
 def lead_lag(ts_x, px_x, ts_y, px_y,
              max_lag_ns: int = 5_000_000_000,
-             n_lags: int = 81) -> LeadLagResult:
+             n_lags: int = 81,
+             subsample: int = 1) -> LeadLagResult:
     """Estimate by which lag X leads Y, on a symmetric grid around zero.
 
     The estimate is the lag maximising the absolute shifted Hayashi-Yoshida
@@ -226,6 +264,8 @@ def lead_lag(ts_x, px_x, ts_y, px_y,
     that the true lag lies within one maximal mesh of the estimate, and that is
     what ``interval_ns`` reports.
     """
+    ts_x, px_x = _thin(ts_x, px_x, subsample)
+    ts_y, px_y = _thin(ts_y, px_y, subsample)
     lags = np.unique(np.linspace(-int(max_lag_ns), int(max_lag_ns), int(n_lags))
                      .round().astype(np.int64))
     curve = lead_lag_curve(ts_x, px_x, ts_y, px_y, lags)
@@ -360,3 +400,28 @@ def lead_lag_placebo(ts_x, px_x, ts_y, px_y,
         "placebo_p95": float(np.quantile(good, 0.95)) if good.size else np.nan,
         "degenerate": obs.degenerate,
     }
+
+
+def hy_signature(ts_x, px_x, ts_y, px_y,
+                 factors: Sequence[int] = (1, 5, 20, 100, 500, 2000, 10000),
+                 ) -> pd.DataFrame:
+    """Hayashi-Yoshida correlation against the trading-time subsampling factor.
+
+    The signature plot Hoffmann, Rosenbaum and Yoshida prescribe for choosing a
+    subgrid.  Read it as: where the correlation stops climbing, microstructure
+    noise has stopped dominating and the estimate can be trusted.  A curve that is
+    still rising at the coarsest factor means the data is noisier than the sample
+    can see past, and the lead-lag estimate from it should not be believed.
+
+    Measured on ZNU6 against ZFU6 over one session, the curve runs 0.011, 0.032,
+    0.062, 0.127, 0.330, 0.608, 0.880 -- it never flattens, which is what a book
+    where 99.6% of events do not move the mid looks like.
+    """
+    rows = []
+    for k in factors:
+        got = hayashi_yoshida(ts_x, px_x, ts_y, px_y, subsample=int(k))
+        rows.append({"subsample": int(k), "corr": got["corr"],
+                     "n_pairs": got["n_pairs"]})
+    out = pd.DataFrame(rows)
+    out["still_rising"] = out["corr"].diff().fillna(0) > 0.01
+    return out

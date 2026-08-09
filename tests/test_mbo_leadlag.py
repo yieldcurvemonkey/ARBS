@@ -249,3 +249,73 @@ def test_the_placebo_permutes_increments_not_prices():
                            n_placebo=40, seed=5)
     assert got["n_placebo"] == 40
     assert 0.0 <= got["placebo_median"] <= 1.0
+
+
+# --------------------------------------------------------------------------- #
+# microstructure noise and the trading-time subgrid
+# --------------------------------------------------------------------------- #
+
+def _noisy_pair(n=60000, seed=41, flicker=200):
+    """Two views of one price path, buried in tick flicker.
+
+    Reproduces the real book's shape: a common signal that moves rarely, observed
+    through a stream of events that mostly do not move the mid at all. On ZNU6
+    only 0.39% of top-of-book events changed the mid.
+    """
+    rng = np.random.default_rng(seed)
+    t = T0 + np.arange(n, dtype=np.int64) * (S // 1000)
+    signal = np.repeat(_walk(n // flicker + 1, seed)[: n // flicker + 1],
+                       flicker)[:n]
+    x = signal + rng.normal(0.0, 0.5, n)
+    y = signal + rng.normal(0.0, 0.5, n)
+    return t, x, t, y
+
+
+def test_raw_hayashi_yoshida_is_crushed_by_microstructure_noise():
+    """The failure this module now warns about, reproduced.
+
+    HY assumes no microstructure noise. On event-level book data it reports
+    almost nothing between two series that share a signal -- measured at 0.011
+    between ZNU6 and ZFU6, two tightly-linked Treasury futures.
+    """
+    tx, x, ty, y = _noisy_pair()
+    raw = hayashi_yoshida(tx, x, ty, y)["corr"]
+    coarse = hayashi_yoshida(tx, x, ty, y, subsample=500)["corr"]
+    assert raw < 0.2
+    assert coarse > raw * 2
+
+
+def test_subsampling_in_trading_time_recovers_the_relationship():
+    tx, x, ty, y = _noisy_pair()
+    corrs = [hayashi_yoshida(tx, x, ty, y, subsample=k)["corr"]
+             for k in (1, 20, 200, 1000)]
+    assert corrs == sorted(corrs)          # monotone in the subsampling factor
+    assert corrs[-1] > 0.5
+
+
+def test_the_signature_plot_reports_the_curve_and_whether_it_flattened():
+    from RVUtils.MBO.analytics.leadlag import hy_signature
+
+    tx, x, ty, y = _noisy_pair()
+    sig = hy_signature(tx, x, ty, y, factors=(1, 50, 500, 5000))
+    assert list(sig["subsample"]) == [1, 50, 500, 5000]
+    assert (sig["n_pairs"].diff().dropna() < 0).all()   # coarser means fewer pairs
+    assert sig["still_rising"].iloc[1]                  # noise still dominating early
+
+
+def test_subsampling_does_not_disturb_a_clean_signal():
+    """On data with no noise the subgrid should change little -- so the parameter
+    cannot be blamed for a result it did not cause."""
+    t, p = _series(n=8000, seed=61)
+    full = hayashi_yoshida(t, p, t, p)["corr"]
+    thin = hayashi_yoshida(t, p, t, p, subsample=10)["corr"]
+    assert full == pytest.approx(1.0, abs=1e-9)
+    assert thin == pytest.approx(1.0, abs=1e-9)
+
+
+def test_lead_lag_accepts_the_subsample_and_still_recovers_a_lag():
+    lag = 500 * S // 1000
+    tx, x, ty, y = _lagged_pair(lag, n=20000, dt=S // 100)
+    r = lead_lag(tx, x, ty, y, max_lag_ns=2 * S, n_lags=81, subsample=10)
+    assert r.lag_ns > 0
+    assert abs(r.lag_ns - lag) <= 3 * r.mesh_ns
