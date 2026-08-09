@@ -276,6 +276,19 @@ def impact_by_size(
     tag = f"{float(horizon_s):g}s"
 
     size = e["size"].to_numpy()
+    # NaN fails every comparison, so it would slip past the bin-edge guard below,
+    # land in the final open-ended bucket via searchsorted, and then become
+    # INT64_MIN on the int64 cast -- a volume of -9.2e18 that poisons every sum
+    # and share downstream.  The store returns int32 sizes, but this function
+    # accepts any frame, and a size column that has been through a reindex, a
+    # merge or a nullable-integer conversion arrives as float with NaN.
+    if not np.isfinite(size).all():
+        bad = int((~np.isfinite(size)).sum())
+        raise ValueError(
+            f"{bad} trade(s) have a non-finite size, which cannot be bucketed or "
+            f"summed; drop or repair them before bucketing rather than letting "
+            f"them land in the final bucket as a negative volume"
+        )
     if size.min() < edges[0]:
         raise ValueError(
             f"trade size {size.min()} is below the first bin edge {edges[0]:g}, so it "
@@ -388,8 +401,14 @@ def kyle_lambda(tob: pd.DataFrame, trades: pd.DataFrame,
     ss_res = float(resid @ resid)
     ss_tot = float(((y - y.mean()) ** 2).sum())
     se = float(np.sqrt(ss_res / (n - 2) / sxx))
-    with np.errstate(divide="ignore", invalid="ignore"):
-        t_stat = lam / se
+    # ``se`` is a Python float, so ``lam / se`` on a perfect fit raises
+    # ZeroDivisionError -- np.errstate governs numpy's own arithmetic and does
+    # nothing here.  The degenerate case is not exotic: a listed butterfly whose
+    # mid never leaves one tick for a session while still trading produces
+    # exactly it, and that is the most common quiet instrument-day in this
+    # catalogue.  This function's contract is to return NaN and let a sweep over
+    # a few hundred instrument-days continue, so it must not raise.
+    t_stat = float(lam / se) if se > 0.0 else float("inf" if lam else "nan")
     out.update({
         "lam": lam,
         "alpha": alpha,

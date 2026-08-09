@@ -254,6 +254,11 @@ def quoted_spread(
         "frac_time_one_tick": None if tick is None else float("nan"),
         "bid_sz_at_touch": float("nan"), "ask_sz_at_touch": float("nan"),
         "orders_at_touch": float("nan"), "seconds": 0.0,
+        # Share of session time the book was locked or crossed.  Reported rather
+        # than folded into two_sided_frac, because they are real states worth
+        # seeing -- they are just not quoted markets, and averaging a spread over
+        # them produces a width the lattice cannot quote.
+        "locked_frac": 0.0, "crossed_frac": 0.0,
     }
     if tob.empty:
         return empty
@@ -269,14 +274,39 @@ def quoted_spread(
 
     w = _live_seconds(t, bounds)
     sp = t["spread"].to_numpy(dtype=np.float64)
-    two = np.isfinite(sp)
+
+    # A book with both sides present is not automatically a *quoted market*.
+    # Locked (bid == ask) and crossed (bid > ask) states reach the store -- the
+    # replay counts them deliberately and the catalogue persists both per
+    # instrument-day -- and they cluster in the settlement break and pre-open,
+    # where the exchange accepts orders without matching them.
+    #
+    # Treating "both sides finite" as tradeable is not a small error here, and
+    # time weighting makes it worse rather than better: those states are the
+    # LONGEST-STANDING of a stored session, so they dominate exactly the
+    # weighting this module is built around.  Measured on a locked settlement
+    # break followed by ten minutes of a genuine one-tick market, including them
+    # reports a mean spread of a seventh of a tick, and the crossed variant
+    # reports a spread of MINUS one and a half ticks -- prices the lattice cannot
+    # quote, which is the thing this module's own docstring warns against.
+    #
+    # So the spread statistics are computed over strictly positive spreads only,
+    # and the excluded time is reported rather than discarded: a caller who wants
+    # the locked pre-open counted can see how much of the session it was.
+    live = np.isfinite(sp)
+    locked = live & (sp == 0.0)
+    crossed = live & (sp < 0.0)
+    two = live & (sp > 0.0)
     wt = w * two
     tot = float(wt.sum())
+    total_secs = float(w.sum())
 
     out: Dict[str, Optional[float]] = dict(empty)
     out["n_states"] = int(len(t))
-    out["seconds"] = float(w.sum())
-    out["two_sided_frac"] = float(tot / w.sum()) if w.sum() > 0 else 0.0
+    out["seconds"] = total_secs
+    out["two_sided_frac"] = float(tot / total_secs) if total_secs > 0 else 0.0
+    out["locked_frac"] = float((w * locked).sum() / total_secs) if total_secs > 0 else 0.0
+    out["crossed_frac"] = float((w * crossed).sum() / total_secs) if total_secs > 0 else 0.0
     if tot <= 0.0:
         return out
 
