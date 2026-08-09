@@ -353,8 +353,18 @@ def build_meeting_set(
 
     jumps = clean_anchored_jumps(zq_prices=zq_prices, fomc_effectives=meetings, months=months)
 
-    anchor_key = next((k for k in months if k not in {(e.year, e.month) for e in meetings}), None)
-    spot = 100.0 - float(zq_prices[_zq_symbol(*anchor_key)]) if anchor_key else float("nan")
+    # The spot anchor is the first meeting-free month that actually has a price. Taking the
+    # first meeting-free month regardless would KeyError on a thin strip, and defaulting it to
+    # a meeting month would put a jump inside the level.
+    meeting_months = {(e.year, e.month) for e in meetings}
+    spot = float("nan")
+    for key in months:
+        if key in meeting_months:
+            continue
+        price = zq_prices.get(_zq_symbol(*key))
+        if price is not None and math.isfinite(price):
+            spot = 100.0 - float(price)
+            break
 
     resolved: List[MeetingJump] = []
     resolved_weights: List[float] = []
