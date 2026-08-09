@@ -141,11 +141,34 @@ Measured on the live run, `MI01`, 44 tags, 5-day windows:
 | Excel memory | **~35–46 MB per window**, and it only ever grows |
 | implication | ~60–100 windows per Excel session before the ceiling |
 
-Excel memory, not time, is the binding constraint — which is why
-`citivelo_deep_intraday_warm.py fetch --auto-restart` exists: it rescues unsaved
-workbooks, restarts Excel, waits out the ~13–25 minute silent re-authentication,
-and resumes on the **same chunk**. Work is banked per day file, so a failed
-restart costs time and never data.
+Excel memory, not time, is the binding constraint: roughly 60–100 windows per
+Excel session, then the add-in has to be restarted to give the memory back.
+
+**And the restart is where this stops being unattended.** `--auto-restart`
+exists, rescues unsaved workbooks, relaunches Excel and waits — but measured
+2026-08-09, **twice**, the restarted add-in reached
+`Citi.Excel.Presentation.CustomRibbon | onLoad:` and then logged nothing for 20+
+minutes. No portal session, no credentials refresh, no UDF registration;
+`=CVTODAY()` stayed `#NAME?` throughout. A healthy session logs
+`PortalSessionProvider | Updating credentials` about fifteen minutes after the
+add-in entry point. Neither restarted instance ever did. The README's "spawned
+instances never register" appears to cover a restarted Excel as well.
+
+So the flag is **off by default** and not recommended here. Without it the run
+stops cleanly at the ceiling with everything banked; a human restart and sign-in
+followed by the same command resumes it. The diagnostic is one line:
+
+```powershell
+Get-Content "$env:LOCALAPPDATA\Citi\Citi.Velocity.Excel.Charting\logs\Citi_Velocity_Excel.log" -Tail 1
+```
+
+`CustomRibbon onLoad:` with a timestamp minutes old means stuck, not slow.
+
+Work is banked per day file either way, so a failed restart costs time and never
+data — but it can cost a **working signed-in session**, which is how this was
+found: Excel had been signed in since the previous evening and was killed for
+crossing the memory ceiling at 4,834 MB. Correct by policy, unrecoverable in
+practice. (Its unsaved `Book4` was rescued to `~/Documents/ARBS-excel-recovery/`.)
 
 ## What to run, in order
 
@@ -153,8 +176,9 @@ restart costs time and never data.
 # 1. what is left, and how much is already done
 conda run -n stir python scripts/citivelo_deep_intraday_warm.py plan
 
-# 2. the Excel-bound half. Unattended, resumable, newest-first.
-conda run -n stir python scripts/citivelo_deep_intraday_warm.py fetch --auto-restart
+# 2. the Excel-bound half. Resumable, newest-first, all curves interleaved.
+#    Run it DETACHED - Excel is a child of whatever starts it.
+conda run -n stir python scripts/citivelo_deep_intraday_warm.py fetch
 
 # 3. the CPU half. OIS curves take the existing builder, EURIBOR the dual-curve one.
 conda run -n stir python scripts/citivelo_deep_intraday_warm.py build --workers 8

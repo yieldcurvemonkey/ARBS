@@ -58,14 +58,35 @@ Running it
 **Start ``fetch`` DETACHED**, not as a child of a shell you might stop::
 
     Start-Process -FilePath <env>\python.exe -WindowStyle Hidden `
-        -ArgumentList '-u','scripts\citivelo_deep_intraday_warm.py','fetch','--auto-restart' `
+        -ArgumentList '-u','scripts\citivelo_deep_intraday_warm.py','fetch' `
         -RedirectStandardError logs\deep_intraday_fetch.err
 
 Excel is started as a child of whatever runs this, so killing the backfill takes
-its Excel with it and the next run pays a fresh 13-25 minute sign-in. The driver
-recovers - it launches Excel when there is none - but the twenty minutes are
-real. Progress is in the log and in ``_deep_warm_ledger.json`` beside the day
-files; ``plan`` re-run shows the remaining chunk count shrinking.
+its Excel with it. Progress is in the log and in ``_deep_warm_ledger.json``
+beside the day files; ``plan`` re-run shows the remaining chunk count shrinking.
+
+.. warning::
+   **``--auto-restart`` is NOT recommended on this machine, and is off by
+   default.** Measured 2026-08-09: two unattended restarts, and in both the
+   Velocity add-in reached ``CustomRibbon.onLoad`` and then logged nothing for
+   20+ minutes - no portal session, no credentials refresh, no UDF registration.
+   A healthy session logs ``PortalSessionProvider: Updating credentials`` roughly
+   fifteen minutes after the add-in entry point; neither restarted instance ever
+   did. The package README warns that "spawned instances never register"; on this
+   evidence that applies to a restarted Excel too.
+
+   Without the flag the run **stops cleanly at the memory ceiling** with
+   everything banked, and a human restart-and-sign-in followed by the same
+   command resumes it. That trades an unattended night for a run that cannot
+   destroy a working signed-in session - which is the better trade until a
+   restart is observed to work end to end.
+
+   The diagnostic is one line::
+
+       Get-Content "$env:LOCALAPPDATA\\Citi\\Citi.Velocity.Excel.Charting\\logs\\Citi_Velocity_Excel.log" -Tail 1
+
+   If it says ``CustomRibbon onLoad:`` and the timestamp is minutes old, the
+   add-in is stuck rather than slow.
 """
 
 from __future__ import annotations
@@ -420,7 +441,13 @@ def cmd_fetch(args, logger: logging.Logger) -> int:
                 state["restarts"] = restarts
                 logger.warning("Excel is full (%s). Restart %d/%d.",
                                exc, restarts, args.max_restarts)
-                client = _restart(client, args, logger)
+                try:
+                    client = _restart(client, args, logger)
+                except RestartFailed as fail:
+                    logger.error("%s", fail)
+                    state["errors"].append(str(fail))
+                    _write_ledger(ledger, state)
+                    return 4
                 continue  # SAME chunk, on a fresh Excel
             except Exception as exc:  # noqa: BLE001 - one chunk must not end the run
                 logger.error("%s %s..%s FAILED: %s: %s",
@@ -463,7 +490,13 @@ def cmd_fetch(args, logger: logging.Logger) -> int:
                     restarts, args.max_restarts,
                 )
                 _write_ledger(ledger, state)
-                client = _restart(client, args, logger)
+                try:
+                    client = _restart(client, args, logger)
+                except RestartFailed as fail:
+                    logger.error("%s", fail)
+                    state["errors"].append(str(fail))
+                    _write_ledger(ledger, state)
+                    return 4
     finally:
         try:
             client.close()
@@ -572,19 +605,55 @@ def _connect_or_restart(args, logger: logging.Logger) -> Any:
     return client
 
 
+class RestartFailed(RuntimeError):
+    """Excel was restarted and the add-in never signed back in.
+
+    Not a bug in this run and not recoverable by it either: the Velocity add-in
+    re-authenticates from credentials saved in the user's own profile, and when
+    that does not happen there is nothing an unattended process can do about it.
+    Everything fetched is on disk, so the cure is a human sign-in followed by the
+    same command.
+    """
+
+
 def _restart(client: Any, args, logger: logging.Logger) -> Any:
-    from MDP.CitiVelocityExcel.supervisor import restart_excel
+    """Restart Excel and wait for the add-in, or fail with something actionable.
+
+    **The restart is the least proven link in this whole pipeline**, and it is
+    the one an overnight run leans on ~50 times. Measured 2026-08-09 on this
+    machine: two unattended restarts, and in BOTH the add-in reached
+    ``CustomRibbon.onLoad`` and then logged nothing for 20+ minutes - no portal
+    session, no credentials refresh, no UDF registration. A healthy session logs
+    ``PortalSessionProvider: Updating credentials`` about 15 minutes after the
+    add-in entry point; these never did. That is the failure mode the package
+    README warns about in a different context ("spawned instances never
+    register"), and it appears to apply to a restarted Excel as well.
+
+    So this converts a 40-minute silent wait into one sentence the user can act
+    on, instead of letting ``ExcelRestartError`` escape as a traceback from
+    inside the chunk loop.
+    """
+    from MDP.CitiVelocityExcel.supervisor import ExcelRestartError, restart_excel
 
     if client is not None:
         try:
             client.close()
         except Exception:  # noqa: BLE001
             pass
-    return restart_excel(
-        workbook_tag=args.workbook_tag,
-        ready_timeout=args.ready_timeout,
-        logger=logger,
-    )
+    try:
+        return restart_excel(
+            workbook_tag=args.workbook_tag,
+            ready_timeout=args.ready_timeout,
+            logger=logger,
+        )
+    except ExcelRestartError as exc:
+        raise RestartFailed(
+            f"{exc} Everything fetched so far is on disk and this command resumes "
+            f"from it. Sign in to Velocity in Excel by hand once, then re-run. "
+            f"If the add-in log's last line is 'CustomRibbon onLoad:' with nothing "
+            f"after it, the restarted instance never reached its portal session and "
+            f"waiting longer will not help."
+        ) from exc
 
 
 def _write_ledger(path: Path, state: Dict[str, Any]) -> None:
