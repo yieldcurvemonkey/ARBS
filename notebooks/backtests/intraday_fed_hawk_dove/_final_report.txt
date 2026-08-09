@@ -1,0 +1,167 @@
+C:\Users\chris\clee\ARBS-gcb\notebooks\backtests\intraday_fed_hawk_dove\global_hawk_dove_common.py:47: LicenceNotice: 
+Rateslib is source-available (not open-source) software distributed under a dual-licence model.
+No commercial licence is registered for this installation. Use is therefore permitted for non-commercial purposes only (at-home or university based academic use).
+Any use in commercial, professional, or for-profit environments, including evaluation or trial use, requires a valid commercial licence or an approved evaluation licence.
+Certain features may require a registered commercial or evaluation licence in current or future versions.
+For licensing information or to register a licence, please visit: https://rateslib.com/licence
+  from rateslib.scheduling import next_imm
+
+================================================================================================
+EVENT FUNNEL
+================================================================================================
+bank                            FED    ECB    BOE   BOJ
+forexfactory                 1503.0  445.0  616.0  49.0
+x:unknown_speaker             115.0   10.0   83.0  20.0
+x:neutral_or_no_score         509.0  146.0  211.0   4.0
+x:policy_blackout               8.0   17.0   71.0   2.0
+x:not_business_day             43.0   16.0   19.0   3.0
+x:window_too_short            106.0    4.0   37.0   2.0
+gate:stale_quote                1.0   37.0    0.0   0.0
+gate:no_bars_that_day           8.0   45.0    0.0  17.0
+TRADEABLE                     495.0  139.0  172.0   0.0
+gate:entry_before_first_bar     0.0    7.0    0.0   0.0
+gate:same_bar_entry_exit        0.0    1.0    0.0   0.0
+
+================================================================================================
+CORE PERFORMANCE  (bp per unit of risk = realized_pnl / bpv)
+================================================================================================
+        ccy  trades  total     avg     std  hit_rate  sharpe  t_stat  max_dd  trades_per_year   local_pnl
+bank                                                                                                     
+FED     USD     492  177.5  0.3608  3.9981    0.4695  0.9679  2.0015  -58.50         115.0467  27250000.0
+ECB     EUR     139    1.0  0.0072  2.0821    0.4245  0.0246  0.0407  -19.75          50.7698  -2000000.0
+BOE     GBP     172  -37.5 -0.2180  3.1508    0.4302 -0.4898 -0.9075  -52.50          50.0981  -8450000.0
+BOJ     NaN       0    NaN     NaN     NaN       NaN     NaN     NaN     NaN              NaN         NaN
+POOLED   bp     803  141.0  0.1756  3.5649    0.4533  0.6739  1.3958  -92.00         187.1702         NaN
+
+date ranges:
+                            first                       last
+bank                                                        
+FED     2022-04-05 13:15:00-04:00  2026-07-16 11:45:00-04:00
+ECB     2023-10-24 12:45:00+01:00  2026-07-21 11:45:00+01:00
+BOE     2023-02-07 08:15:00+00:00  2026-07-15 10:45:00+01:00
+BOJ                           NaN                        NaN
+POOLED  2022-04-05 13:15:00-04:00  2026-07-21 11:45:00+01:00
+
+================================================================================================
+DIRECTION CHECK — on trades where the PRICE ROSE (rates fell)
+================================================================================================
+           price_up_trades  share_that_lost
+bank side                                  
+BOE  -1.0               49              1.0
+      1.0               31              0.0
+ECB  -1.0               49              1.0
+      1.0               14              0.0
+FED  -1.0              104              1.0
+      1.0              107              0.0
+
+side=-1 is the hawk/short, which MUST lose when the price rises.
+
+================================================================================================
+SIGNAL RESPONSE — pooled, by signed bucket
+================================================================================================
+        trades  total_bp  avg_bp     hit
+bucket                                  
+-2         159     21.25  0.1336  0.4403
+-1         180     46.00  0.2556  0.4500
+ 1         212     68.00  0.3208  0.4623
+ 2         252      5.75  0.0228  0.4563
+
+hawk vs dove:
+                  trades  total_bp  avg_bp     hit
+direction                                         
+dove (long fut)      339     67.25  0.1984  0.4454
+hawk (short fut)     464     73.75  0.1589  0.4591
+
+by conviction |bucket|:
+            trades  total_bp  avg_bp     hit
+abs_bucket                                  
+1              392     114.0  0.2908  0.4566
+2              411      27.0  0.0657  0.4501
+
+================================================================================================
+SIGN-FLIP PERMUTATION TEST (2000 draws)
+================================================================================================
+        realized_sharpe  null_mean  null_std  p_value
+bank                                                 
+FED              0.9688    -0.0041    0.4821   0.0230
+ECB              0.0247    -0.0152    0.6175   0.4815
+BOE             -0.4912     0.0143    0.5454   0.8195
+POOLED           0.6743    -0.0166    0.4761   0.0735
+
+================================================================================================
+SUBSAMPLE STABILITY
+================================================================================================
+                 trades  total_bp  avg_bp    hit  sharpe                   range
+bank   half                                                                     
+FED    1st half     246    137.00  0.5569  0.508    1.25  2022-04-05->2024-10-21
+       2nd half     246     40.50  0.1646  0.431    0.55  2024-10-21->2026-07-16
+ECB    1st half      69      5.75  0.0833  0.493    0.22  2023-10-24->2025-06-24
+       2nd half      70     -4.75 -0.0679  0.357   -0.32  2025-06-26->2026-07-21
+BOE    1st half      86    -14.50 -0.1686  0.465   -0.31  2023-02-07->2024-12-09
+       2nd half      86    -23.00 -0.2674  0.395   -0.80  2025-01-29->2026-07-15
+POOLED 1st half     401    139.00  0.3466  0.499    1.06  2022-04-05->2024-12-06
+       2nd half     402      2.00  0.0050  0.408    0.03  2024-12-09->2026-07-21
+
+================================================================================================
+TRANSACTION-COST SENSITIVITY (bp round trip, charged per trade)
+================================================================================================
+            FED_total  ECB_total  BOE_total  POOLED_total
+cost_bp_rt                                               
+0.000           177.5        1.0      -37.5         141.0
+0.125           116.0      -16.4      -59.0          40.6
+0.250            54.5      -33.8      -80.5         -59.7
+0.500           -68.5      -68.5     -123.5        -260.5
+1.000          -314.5     -138.0     -209.5        -662.0
+
+Pooled break-even round-trip cost = mean bp/trade = 0.1756 bp
+At 0.25bp round trip the pooled book pays 201bp of cost against +141.0bp of gross.
+
+================================================================================================
+CALENDAR YEAR (pooled)
+================================================================================================
+      trades  total_bp  avg_bp     std     hit  sharpe
+year                                                  
+2022      45      -0.5 -0.0111  4.8506  0.5556 -0.0154
+2023     140      68.5  0.4893  4.0454  0.4857  1.4311
+2024     220      74.5  0.3386  3.7787  0.5000  1.3292
+2025     260      51.5  0.1981  3.2304  0.4269  0.9887
+2026     138     -53.0 -0.3841  2.6850  0.3623 -1.6803
+
+by bank x year (total bp):
+bank   BOE   ECB   FED
+year                  
+2022   NaN   NaN  -0.5
+2023 -27.0   0.5  95.0
+2024  12.5  15.0  47.0
+2025  12.0  -6.0  45.5
+2026 -35.0  -8.5  -9.5
+
+================================================================================================
+TOP / BOTTOM SPEAKERS (>=8 trades)
+================================================================================================
+                trades  total_bp  avg_bp     hit
+bank speaker                                    
+FED  Williams       55     47.00  0.8545  0.5273
+     Bowman         56     43.50  0.7768  0.4643
+     Powell         31     37.50  1.2097  0.5484
+     Musalem        20     37.00  1.8500  0.7500
+BOE  Ramsden        15     24.00  1.6000  0.8000
+FED  Harker         18     16.00  0.8889  0.5000
+     Jefferson      19     15.00  0.7895  0.4211
+     Kashkari       14     15.00  1.0714  0.6429
+     Cook           21     14.50  0.6905  0.4286
+BOE  Mann           22     12.50  0.5682  0.5455
+FED  Goolsbee       46     10.50  0.2283  0.4783
+ECB  Nagel          79      9.25  0.1171  0.4684
+...
+              trades  total_bp  avg_bp     hit
+bank speaker                                  
+FED  Mester       11     -7.00 -0.6364  0.5455
+     Barkin       35     -7.50 -0.2143  0.3714
+     Bostic       19     -7.50 -0.3947  0.3158
+     Hammack      10     -8.00 -0.8000  0.4000
+ECB  Lagarde      60     -8.25 -0.1375  0.3667
+FED  Daly         18    -13.50 -0.7500  0.3333
+BOE  Bailey       41    -14.50 -0.3537  0.3659
+     Pill         43    -36.00 -0.8372  0.3488C:\Users\chris\clee\ARBS-gcb\MDP\STIRFutures\BARCHART\BarchartFetcher.py:738: UserWarning: Could not infer format, so each element will be parsed individually, falling back to `dateutil`. To ensure parsing is consistent and as-expected, please specify a format.
+  df_slice["Date"] = pd.to_datetime(df_slice["Date"], errors="coerce")

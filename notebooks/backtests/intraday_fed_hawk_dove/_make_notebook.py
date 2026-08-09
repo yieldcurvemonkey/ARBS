@@ -380,6 +380,52 @@ ax.set_title("Annual P&L by central bank"); plt.tight_layout(); plt.show()
 md(r"""
 ## 8. Robustness
 
+### 8.0 Direction check, and the closed form used by the sweeps
+
+Two things are established here before any robustness number is read.
+
+**Direction.** Hawk must SELL. Reconciling every trade's engine P&L against the bar prices
+the gate recorded shows hawks lost money on ~100% of price-up trades and doves on ~0% — so
+`bpv=+X, risk_weights=[-1.0]` really does short. (A negative `bpv` would have gone long and
+this table is what would have caught it.)
+
+**Closed form.** `STIRFutureHandler.value_position` is exactly `(Δprice/0.01) × side × bpv`,
+so the gate's own bar prices reproduce the engine to the tick. The sensitivity sweeps below
+use that closed form instead of 21 more engine passes at ~15 minutes each. The headline
+numbers in §4–§7 all come from the engine.
+""")
+
+code(r"""
+val = G.validate_fast_vs_engine(events_by_bank, closed_by_bank)
+display(val.style.format({"max_abs_diff_bp": "{:.6f}",
+                          "total_closed_form_bp": "{:+.2f}",
+                          "total_engine_bp": "{:+.2f}"}))
+
+rows = []
+for b in BANKS:
+    cl = closed_by_bank.get(b)
+    if cl is None or cl.empty:
+        continue
+    evs = {e["tag"]: e for e in events_by_bank[b]["events"]}
+    for _, r in cl.iterrows():
+        tag = next(iter(r["source_query"].tags), None)
+        ev = evs.get(tag)
+        if ev is None or "entry_bar_px" not in ev:
+            continue
+        rows.append({"bank": b, "side": ev["side"],
+                     "d_px": ev["exit_bar_px"] - ev["entry_bar_px"],
+                     "pnl_bp": r["pnl_bp"]})
+d = pd.DataFrame(rows)
+up = d[d.d_px > 0]
+chk = (up.assign(lost=up.pnl_bp < 0)
+       .groupby(["bank", "side"])["lost"].agg(["count", "mean"])
+       .rename(columns={"count": "price_up_trades", "mean": "share_that_lost"}))
+print("On trades where the PRICE ROSE (rates fell):")
+print("  side=-1 is the hawk/short — it MUST lose.   side=+1 is the dove/long — it must NOT.")
+display(chk.style.format({"share_that_lost": "{:.1%}"}))
+""")
+
+md(r"""
 ### 8.1 Sign-flip permutation test
 
 Null hypothesis: the labels carried no direction. Each trade's realised move is preserved and only
@@ -473,9 +519,9 @@ ungated re-run would mark it against a lookahead bar instead of dropping it.
 
 code(r"""
 ENTRY_MIN = [-120, -60, -45, -15]
-EXIT_MIN = [60, 120, 180, 240]
+EXIT_MIN = [60, 120, 180, 240, 360]
 
-# All 20 cells re-gate the SAME symbol-days, so warm the shared bar cache once.
+# Every cell re-gates the SAME symbol-days, so warm the shared bar cache once.
 print(f"bar cache: {G.load_bar_cache(CACHE / 'bars.pkl')} symbol-days preloaded")
 
 ev_only = {b: events_by_bank[b]["events"] for b in BANKS if events_by_bank[b]["events"]}
@@ -509,13 +555,43 @@ plt.tight_layout(); plt.show()
 display(grid.sort_values("sharpe", ascending=False).head(10))
 """)
 
-md("### 8.5 Contract selection (1st through 5th quarterly)")
+md(r"""
+### 8.5 Contract selection (1st through 5th quarterly)
+
+Unlike the entry/exit sweep, this asks for **different contracts**, so it needs minute bars
+that the baseline never fetched. A Jupyter kernel cannot fetch them — the Barchart fetcher
+hits the already-running event loop and hands back a coroutine — so the bar cache must be
+pre-warmed from a plain process first:
+
+```
+python global_hawk_dove_run.py --stage prewarm
+```
+
+`_day_bars` now raises rather than returning an empty frame in that situation. That matters:
+silently treating a failed fetch as "no bars that day" is exactly how a sensitivity table
+gets computed from no data at all and still prints numbers.
+""")
 
 code(r"""
 variants = {
     f"{r}Q": (lambda bank, evs, _r=r: G.rebuild_with_contract(evs, G.CB_CONFIGS[bank], _r))
     for r in [1, 2, 3, 4, 5]
 }
+
+# Fail loudly if the cache is cold rather than reporting a sweep over nothing.
+missing = 0
+for b, evs in ev_only.items():
+    for r in [1, 2, 4, 5]:
+        for e in G.rebuild_with_contract(evs, G.CB_CONFIGS[b], r):
+            if (e["symbol"], e["entry_ts"].date()) not in G._BAR_CACHE:
+                missing += 1
+if missing:
+    raise RuntimeError(
+        f"{missing} symbol-days are not in the bar cache. Run "
+        "`python global_hawk_dove_run.py --stage prewarm` first — this sweep cannot "
+        "fetch from inside a kernel and would otherwise report an empty grid."
+    )
+print("bar cache covers every contract rank — sweeping")
 ten = G.sweep(ev_only, mdp, variants)
 display(ten[["variant", "trades", "total", "avg", "hit_rate", "sharpe", "t_stat"]]
         .style.format({"total": "{:+.2f}", "avg": "{:+.3f}", "hit_rate": "{:.1%}",
@@ -536,27 +612,57 @@ signal versus from a constant directional tilt.
 """)
 
 code(r"""
-abs_cache = CACHE / "events_absolute.pkl"
-if abs_cache.exists():
-    with open(abs_cache, "rb") as f:
-        events_abs = pickle.load(f)
-    ev_abs = {b: v["events"] for b, v in events_abs.items() if v["events"]}
-    closed_abs = {}
-    for b, evs in ev_abs.items():
-        closed_abs[b] = G.run_backtest(evs, mdp, name=f"abs_{b}", show_progress=False)
-    pooled_abs = pd.concat([c for c in closed_abs.values() if not c.empty],
-                           ignore_index=True).sort_values("opened_at")
-    rows = []
-    for lbl, p in [("percentile (per-bank)", pooled), ("absolute ±10/±20", pooled_abs)]:
-        s = G.summarize(p); s["scheme"] = lbl
-        s["hawk_share"] = (p["bucket"] > 0).mean()
-        rows.append(s)
-    display(pd.DataFrame(rows).set_index("scheme")[
-        ["trades", "total", "avg", "hit_rate", "sharpe", "t_stat", "hawk_share"]]
-        .style.format({"total": "{:+.2f}", "avg": "{:+.3f}", "hit_rate": "{:.1%}",
-                       "sharpe": "{:.2f}", "t_stat": "{:.2f}", "hawk_share": "{:.1%}"}))
-else:
-    print("run:  python global_hawk_dove_run.py --stage events --bucket absolute")
+# Rebuild the whole event set under the Fed's absolute cutoffs. The bar cache is
+# already warm, so the gate is cheap and no new data is fetched.
+abs_by_bank, abs_frames = {}, []
+for b in BANKS:
+    cfg = G.CB_CONFIGS[b]
+    raw = G.fetch_events(cfg, BT_START, BT_END)
+    lookup = G.ScoreLookup(scores, b, SCORE_METRIC)
+    evs, _excl = G.build_trade_events(
+        cfg, raw, lookup,
+        entry_offset=ENTRY_OFFSET, exit_offset=EXIT_OFFSET,
+        base_bpv=BASE_BPV, contract_rank=CONTRACT_RANK,
+        bucket_fn=lambda _s, x, _d: G.absolute_bucket(x),
+        blackout_fn=G.make_blackout_fn(cfg, BLACKOUT_BD),
+    )
+    evs, _ = G.drop_overlaps(evs)
+    evs, _r, _d = G.gate_events(evs, cfg, mdp, max_staleness_min=MAX_STALENESS_MIN,
+                                show_progress=False)
+    abs_by_bank[b] = evs
+    f = G.fast_backtest(evs)
+    if not f.empty:
+        abs_frames.append(f)
+    print(f"  {b}: {len(evs)} tradeable under absolute cutoffs")
+
+pooled_abs = (pd.concat(abs_frames, ignore_index=True).sort_values("opened_at")
+              if abs_frames else pd.DataFrame())
+
+# Compare like with like: the percentile book re-priced with the same closed form.
+pooled_pct_fast = pd.concat(
+    [G.fast_backtest(events_by_bank[b]["events"]) for b in BANKS
+     if events_by_bank[b]["events"]], ignore_index=True).sort_values("opened_at")
+
+rows = []
+for lbl, p in [("percentile (per-bank, trailing 60)", pooled_pct_fast),
+               ("absolute ±10/±20 (Fed cutoffs)", pooled_abs)]:
+    if p.empty:
+        continue
+    s = G.summarize(p)
+    s["scheme"] = lbl
+    s["hawk_share"] = (p["bucket"] > 0).mean()
+    rows.append(s)
+display(pd.DataFrame(rows).set_index("scheme")[
+    ["trades", "total", "avg", "hit_rate", "sharpe", "t_stat", "hawk_share"]]
+    .style.format({"total": "{:+.2f}", "avg": "{:+.3f}", "hit_rate": "{:.1%}",
+                   "sharpe": "{:.2f}", "t_stat": "{:.2f}", "hawk_share": "{:.1%}"}))
+
+if not pooled_abs.empty:
+    print("\nPer-bank hawk share — the tell that absolute cutoffs are a level bet:")
+    display(pd.DataFrame({
+        "absolute": pooled_abs.groupby("bank").apply(lambda d: (d.bucket > 0).mean()),
+        "percentile": pooled_pct_fast.groupby("bank").apply(lambda d: (d.bucket > 0).mean()),
+    }).style.format("{:.1%}"))
 """)
 
 # --------------------------------------------------------------------------

@@ -54,6 +54,12 @@ def stage_events(bucket_mode: str = "percentile") -> dict:
     scores = G.load_global_scores(SCORES_CSV, SCORE_METRIC)
     mdp = STIRFutureMDP(source="BARCHART_STIRF-RL")
 
+    # The gate calls barchart_timeseries_api directly, which does NOT go through
+    # the MDP's layered disk cache - so without this every re-run re-fetches every
+    # symbol-day from the network and eventually gets throttled to ~20s/request.
+    n = G.load_bar_cache(CACHE / "bars.pkl")
+    _p(f"bar cache: {n} symbol-days preloaded")
+
     out: dict = {}
     for bank in BANKS:
         cfg = G.CB_CONFIGS[bank]
@@ -129,6 +135,42 @@ def stage_backtest(events_by_bank: dict) -> dict:
         pickle.dump(closed_by_bank, f)
     _p(f"\nwrote {CACHE / 'closed.pkl'}")
     return closed_by_bank
+
+
+def stage_prewarm(events_by_bank: dict, ranks=(1, 2, 3, 4, 5)) -> None:
+    """Fetch minute bars for every contract rank the notebook's sweeps will touch.
+
+    The notebook cannot do this itself: inside a Jupyter kernel the Barchart
+    fetcher hits an already-running event loop and returns a coroutine, so every
+    NEW symbol-day comes back empty. The entry/exit sweep is safe (it re-uses the
+    baseline symbols) but the contract sweep asks for ranks 1,2,4,5 which have
+    never been fetched - and would otherwise be silently computed from no data.
+    """
+    mdp = STIRFutureMDP(source="BARCHART_STIRF-RL")
+    n0 = G.load_bar_cache(CACHE / "bars.pkl")
+    _p(f"bar cache: {n0} symbol-days preloaded")
+
+    for bank in BANKS:
+        evs = events_by_bank[bank]["events"]
+        if not evs:
+            continue
+        cfg = G.CB_CONFIGS[bank]
+        for rank in ranks:
+            if rank == CONTRACT_RANK:
+                continue  # already cached by the gate
+            variant = G.rebuild_with_contract(evs, cfg, rank)
+            before = len(G._BAR_CACHE)
+            _p(f"  {bank} rank {rank}: {len(variant)} events ...")
+            G.gate_events(variant, cfg, mdp, max_staleness_min=MAX_STALENESS_MIN,
+                          show_progress=True)
+            _p(f"    +{len(G._BAR_CACHE) - before} symbol-days")
+
+    n = G.save_bar_cache(CACHE / "bars.pkl")
+    _p(f"\nbar cache now {n} symbol-days ({n - n0} added)")
+    if G.FETCH_FAILURES:
+        _p(f"  WARNING: {len(G.FETCH_FAILURES)} fetches FAILED (not empty days)")
+        for k, v in list(G.FETCH_FAILURES.items())[:5]:
+            _p(f"    {k}: {v}")
 
 
 def verify_directions(events_by_bank: dict, closed_by_bank: dict) -> None:
@@ -238,7 +280,7 @@ def report(closed_by_bank: dict) -> None:
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--stage", default="all",
-                    choices=["events", "backtest", "report", "all"])
+                    choices=["events", "backtest", "report", "prewarm", "all"])
     ap.add_argument("--bucket", default="percentile",
                     choices=["percentile", "absolute"])
     args = ap.parse_args()
@@ -251,6 +293,10 @@ def main() -> None:
             ev = pickle.load(f)
 
     if args.stage == "events":
+        return
+
+    if args.stage == "prewarm":
+        stage_prewarm(ev)
         return
 
     if args.stage in ("backtest", "all"):
