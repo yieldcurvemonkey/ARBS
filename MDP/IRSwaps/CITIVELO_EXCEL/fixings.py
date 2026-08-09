@@ -12,9 +12,15 @@ swap on them raised.
 
 Where the numbers come from, and why Citi is trusted
 ----------------------------------------------------
-Citi publishes ``RATES.MONEY_MARKETS.<ccy>.<index>.ON``. Measured live on
-2026-08-07, it serves **21 years** of daily history (from 2005-01-03) for nine of
-the twenty curve currencies.
+Citi publishes ``RATES.MONEY_MARKETS.<ccy>.<index>.ON``. It serves a deep daily
+history for nine of the twenty curve currencies.
+
+An earlier note here recorded that history as "21 years, from 2005-01-03". That
+number was an artefact of how it had been asked for: the request carried
+``start=2005-01-01``, so 2005 was the FLOOR OF THE QUESTION, not the start of the
+data. Once the request went unbounded, USD came back with **7,135 rows from
+1998-02-20** - 1,708 of them earlier than the old answer. A measurement of a
+source is only ever a measurement of the request that produced it.
 
 Whether that can be trusted rests on the one currency where this repo has an
 independent source. It was checked, and the answer is unambiguous:
@@ -26,6 +32,14 @@ independent source. It was checked, and the answer is unambiguous:
 So Citi's money-market ON series **is** the official published fixing, in percent.
 That is what licenses using it for the eight currencies where nothing else is
 available here.
+
+**That licence covers the SOFR era only.** SOFR did not exist before 2018, yet
+this tag serves values back to 1998 - plausible ones (5.37-5.63% through Feb
+1998, 0.85-6.60 across the pre-2005 rows), so a predecessor overnight series
+rather than junk, but of unstated provenance and never tied out against anything.
+Nothing here changed that: the pre-SOFR window merely got seven years longer when
+the request stopped truncating it. Treat a fixing dated before 2018-04-02 as an
+approximation, and note that only a swap seasoned that far back can reach one.
 
 **But Citi's tail goes stale, and the amount differs per currency.** On
 2026-08-07 the last published fixing was:

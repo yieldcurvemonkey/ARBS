@@ -22,6 +22,8 @@ class TradeFlagKind(Enum):
     SKEW = "skew"                       # directional disagreement (SR3 RR vs FedWatch)
     TAIL = "tail"                       # surprise component (SR3 wing vs ZQ tree-tail-zero)
     CROSS_QUARTER = "cross_quarter"     # term structure of residual variance
+    LAMBDA_DEPENDENCE = "lambda_dependence"  # the copula coordinate vs a prior
+    LAMBDA_ARBITRAGE = "lambda_arbitrage"    # RND variance outside EVERY coupling's reach
 
 
 @dataclass(frozen=True)
@@ -168,6 +170,27 @@ class SignalRecord:
 
     warnings: Tuple[str, ...] = ()
 
+    # Copula coordinate. Defaults are NaN so a record built without it is unchanged, and so a
+    # session where the measurement is inapplicable reports "not measured" rather than 0.
+    lambda_wing: float = float("nan")
+    lambda_wing_strict: float = float("nan")
+    lambda_var: float = float("nan")
+    lambda_atom_spread: float = float("nan")
+    lambda_ok: bool = False
+    lambda_reason: str = ""
+    wing_comonotone: float = float("nan")
+    wing_independent: float = float("nan")
+    wing_min_variance: float = float("nan")
+    wing_observed: float = float("nan")
+    var_comonotone_bp2: float = float("nan")
+    var_independent_bp2: float = float("nan")
+    var_min_variance_bp2: float = float("nan")
+    hard_violation_bp2: float = float("nan")
+    lambda_basis_var_share: float = float("nan")
+    trough_peak_ratio: float = float("nan")
+    lambda_mode_prices: Tuple[float, ...] = ()
+    lambda_marginals: Tuple[float, ...] = ()
+
     def to_dict(self) -> Dict[str, Any]:
         return {
             "as_of": self.as_of.isoformat(),
@@ -204,6 +227,24 @@ class SignalRecord:
             "regime_bucket": self.regime_bucket.value,
             "flags": [f.to_dict() for f in self.flags],
             "warnings": list(self.warnings),
+            "lambda_wing": self.lambda_wing,
+            "lambda_wing_strict": self.lambda_wing_strict,
+            "lambda_var": self.lambda_var,
+            "lambda_atom_spread": self.lambda_atom_spread,
+            "lambda_ok": self.lambda_ok,
+            "lambda_reason": self.lambda_reason,
+            "wing_comonotone": self.wing_comonotone,
+            "wing_independent": self.wing_independent,
+            "wing_min_variance": self.wing_min_variance,
+            "wing_observed": self.wing_observed,
+            "var_comonotone_bp2": self.var_comonotone_bp2,
+            "var_independent_bp2": self.var_independent_bp2,
+            "var_min_variance_bp2": self.var_min_variance_bp2,
+            "hard_violation_bp2": self.hard_violation_bp2,
+            "lambda_basis_var_share": self.lambda_basis_var_share,
+            "trough_peak_ratio": self.trough_peak_ratio,
+            "lambda_mode_prices": list(self.lambda_mode_prices),
+            "lambda_marginals": list(self.lambda_marginals),
         }
 
 

@@ -1,0 +1,288 @@
+........................................................................ [  1%]
+........................................................................ [  2%]
+........................................................................ [  3%]
+............................................F........................... [  5%]
+........................................................................ [  6%]
+........................................................................ [  7%]
+.............................................sssssssss.................. [  9%]
+........................................................................ [ 10%]
+.............F.......................................................... [ 11%]
+........................................................................ [ 13%]
+........................................................................ [ 14%]
+........................................................................ [ 15%]
+........................................................................ [ 16%]
+........................................................................ [ 18%]
+........................................................................ [ 19%]
+........................................................................ [ 20%]
+........................................................................ [ 22%]
+........................................................................ [ 23%]
+........................................................................ [ 24%]
+........................................................................ [ 26%]
+........................................................................ [ 27%]
+................F....................................................... [ 28%]
+........................................................................ [ 30%]
+........................................................................ [ 31%]
+........................................................................ [ 32%]
+........................................................................ [ 33%]
+........................................................................ [ 35%]
+.......................................................ssss......sssss.. [ 36%]
+........ssss............................................................ [ 37%]
+........................................................................ [ 39%]
+........................................................................ [ 40%]
+........................................................................ [ 41%]
+........................................................................ [ 43%]
+........................................................................ [ 44%]
+........................................................................ [ 45%]
+........................................................................ [ 46%]
+........................................................................ [ 48%]
+........................................................................ [ 49%]
+........................................................................ [ 50%]
+..............................................s......................... [ 52%]
+........................................................................ [ 53%]
+........................................................................ [ 54%]
+........................................................................ [ 56%]
+........................................................................ [ 57%]
+........................................................................ [ 58%]
+........................................................................ [ 60%]
+........................................................................ [ 61%]
+........................................................................ [ 62%]
+........................................................................ [ 63%]
+........................................................................ [ 65%]
+.......................................s..s............................. [ 66%]
+........................................................................ [ 67%]
+........................................................................ [ 69%]
+........................................................................ [ 70%]
+..........................................................s.ss...sss..ss [ 71%]
+s.s...ss................................................................ [ 73%]
+........................................................................ [ 74%]
+........................................................................ [ 75%]
+........................................................................ [ 76%]
+........................................................................ [ 78%]
+........................................................................ [ 79%]
+........................................................................ [ 80%]
+........................................................................ [ 82%]
+........................................................................ [ 83%]
+...............................ssss..................................... [ 84%]
+........................................................................ [ 86%]
+........................................................................ [ 87%]
+........................................................................ [ 88%]
+.........................................................ss.s....s...... [ 90%]
+........................................................................ [ 91%]
+.............ssssss........sss.....................................s.... [ 92%]
+........................................................................ [ 93%]
+........................................................................ [ 95%]
+........................................................................ [ 96%]
+........................................................................ [ 97%]
+........................................................................ [ 99%]
+..............................................                           [100%]
+================================== FAILURES ===================================
+____ test_the_live_reference_date_comes_from_the_wire_zone_not_the_machine ____
+tests\test_citivelo_bond_source.py:722: in test_the_live_reference_date_comes_from_the_wire_zone_not_the_machine
+    wired("USTS_CITIVELO-QL")._get_multi_pricers(
+MDP\FixedRateBonds\FixedRateBondsMDP.py:1181: in _get_multi_pricers
+    bond_quotes = fetcher.fetch(
+MDP\CitiVelocityExcel\bonds\fetcher.py:670: in fetch
+    frame, failed_tags = self._fetch_frame(
+MDP\CitiVelocityExcel\bonds\fetcher.py:760: in _fetch_frame
+    series, windows = fetch_windowed(
+MDP\CitiVelocityExcel\windowed.py:247: in fetch_windowed
+    result = _fetch_one_window(
+MDP\CitiVelocityExcel\windowed.py:352: in _fetch_one_window
+    raise DownsampledWindowError(msg)
+E   MDP.CitiVelocityExcel.windowed.DownsampledWindowError: 2026-08-03 14:37..2026-08-08 14:37 requested MI01 but was served 1 day, 0:00:00 spacing. The add-in downsamples by span; narrow the window.
+------------------------------ Captured log call ------------------------------
+WARNING  MDP.CitiVelocityExcel.windowed:windowed.py:322 2026-08-03 14:37:11.505268..2026-08-08 14:37:11.505268 came back at 1 day, 0:00:00 spacing (wanted 0:01:00); retrying at half width.
+WARNING  MDP.CitiVelocityExcel.windowed:windowed.py:322 2026-08-03 14:37:11.505268..2026-08-06 02:37:11.505268 came back at 1 day, 0:00:00 spacing (wanted 0:01:00); retrying at half width.
+__ test_the_degraded_series_is_still_refused_when_it_does_not_reach_the_date __
+tests\test_citivelo_fixings_offline.py:379: in test_the_degraded_series_is_still_refused_when_it_does_not_reach_the_date
+    with pytest.warns(UserWarning, match="would not serve"):
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E   Failed: DID NOT WARN. No warnings of type (<class 'UserWarning'>,) were emitted.
+E    Emitted warnings: [].
+_____________ TestPerformance.test_252_dates_200_tenors_under_5s ______________
+tests\test_eod_vectorized_engine.py:399: in test_252_dates_200_tenors_under_5s
+    assert elapsed < 5.0, f"Took {elapsed:.2f}s (budget: 5s)"
+E   AssertionError: Took 5.20s (budget: 5s)
+E   assert 5.2045983001589775 < 5.0
+============================== warnings summary ===============================
+Query\IRSwaps\IRSwapStructure.py:12
+  C:\Users\chris\clee\ARBS-lam\Query\IRSwaps\IRSwapStructure.py:12: LicenceNotice: 
+  Rateslib is source-available (not open-source) software distributed under a dual-licence model.
+  No commercial licence is registered for this installation. Use is therefore permitted for non-commercial purposes only (at-home or university based academic use).
+  Any use in commercial, professional, or for-profit environments, including evaluation or trial use, requires a valid commercial licence or an approved evaluation licence.
+  Certain features may require a registered commercial or evaluation licence in current or future versions.
+  For licensing information or to register a licence, please visit: https://rateslib.com/licence
+    from rateslib.scheduling import get_imm, next_imm
+
+tests/serff/test_backtest.py::TestBacktest::test_attribution_sums_to_gross
+tests/serff/test_ledger.py::TestLedger::test_ledger_identities
+  C:\Users\chris\clee\ARBS-lam\tests\serff\test_ledger.py:29: FutureWarning: DataFrameGroupBy.apply operated on the grouping columns. This behavior is deprecated, and in a future version of pandas the grouping columns will be excluded from the operation. Either pass `include_groups=False` to exclude the groupings or explicitly select the grouping columns after groupby to silence this warning.
+    last_bd = frame.groupby("ym").apply(lambda g: g.index.max())
+
+tests/serff/test_backtest.py::TestBacktest::test_attribution_sums_to_gross
+  C:\Users\chris\clee\ARBS-lam\tests\serff\test_backtest.py:40: FutureWarning: DataFrameGroupBy.apply operated on the grouping columns. This behavior is deprecated, and in a future version of pandas the grouping columns will be excluded from the operation. Either pass `include_groups=False` to exclude the groupings or explicitly select the grouping columns after groupby to silence this warning.
+    for me in frame.groupby("ym").apply(lambda g: g.index.max()).values:
+
+tests/test_barchart_stirf_curve_builder.py::test_q12stirt_explicit_imm_swap_rate_matches_raw_sfr_contract
+  C:\Users\chris\anaconda3\envs\stir\Lib\site-packages\rateslib\data\fixings.py:3426: RuntimeWarning: invalid value encountered in divide
+    r = (v[:-1] / v[1:] - 1) * 100 / dcfs_obs[len(populated) :]
+
+tests/test_basis_packages.py: 6 warnings
+tests/test_basis_upi_gate.py: 2 warnings
+tests/test_curve_detector_snake_case_columns.py: 3 warnings
+tests/test_curve_pts_dv01_guards.py: 10 warnings
+tests/test_curve_upi_gate.py: 3 warnings
+tests/test_fly_detector_arrival_order.py: 7 warnings
+tests/test_fly_upi_gate.py: 2 warnings
+tests/test_gap_curve_detection.py: 3 warnings
+tests/test_gap_fly_detection.py: 5 warnings
+tests/test_package_id_global_uniqueness.py: 8 warnings
+  C:\Users\chris\clee\ARBS-lam\SDRUtils\core\dates.py:70: FutureWarning: Series.view is deprecated and will be removed in a future version. Use ``astype`` as an alternative to change the dtype.
+    return (t.view("int64") // 1_000_000_000).astype(np.int64)
+
+tests/test_citivelo_bond_fetcher.py::test_a_pandas_timestamp_with_a_time_is_intraday_not_a_date
+  C:\Users\chris\clee\ARBS-lam\MDP\IRSwaps\CITIVELO_EXCEL\timestamps.py:261: UserWarning: citivelo_excel: naive timestamp Timestamp('2026-08-06 14:30:00') was localised to America/New_York, which is the zone Citi Velocity's own stamps are in (measured 2026-08-07). Pass a tz-aware datetime to say so explicitly, or set CITIVELO_EXCEL_STRICT_TZ=1 to make this an error. Further naive timestamps this process will not be warned about.
+    wire_instant=to_wire_naive(ts, strict=strict),
+
+tests/test_citivelo_fixings_offline.py::test_the_store_fixings_gate_survives_a_signed_out_excel
+  C:\Users\chris\clee\ARBS-lam\MDP\IRSwaps\CITIVELO_EXCEL\fixings.py:502: UserWarning: citivelo_excel: Excel would not serve RATES.MONEY_MARKETS.USD.SOFR.ON (AddInNotSignedInError: Excel is running but the Citi Velocity add-in is not signed in (=CVTODAY() returned #NAME?). Sign in to Velocity in Excel. After an Excel restart the login takes ~13 minutes and logs nothing in between - wait at least 15 minutes before concluding it is dead, and do not poll COM hard while it starts up.); re-serving the cached fixings. The staleness gate still applies, so a series that does not reach the date being priced is refused rather than used.
+    raw = _citi_series(quotes, tag, start=start, end=end)
+
+tests/test_citivelo_inflation.py::test_both_backends_reprice_their_own_calibration_swaps[USD_CPURNSA]
+  C:\Users\chris\clee\ARBS-lam\tests\test_citivelo_inflation.py:127: UserWarning: USD_CPURNSA: no `nominal_curve` supplied, so a unit-discount placeholder is used. Breakevens are unaffected - both ZCIS legs settle on the same date and the discount factor cancels exactly - but npv() and analytic_delta() off this curve are undiscounted.
+    rl_curve = build_rl_index_curve(
+
+tests/test_citivelo_inflation.py::test_both_backends_reprice_their_own_calibration_swaps[USD_CPURNSA]
+  C:\Users\chris\clee\ARBS-lam\tests\test_citivelo_inflation.py:136: UserWarning: USD_CPURNSA: no `nominal_handle` supplied, so a flat 0% discount handle is used. Breakevens are unaffected - both ZCIS legs settle on the same date and the discount factor cancels - but NPVs are undiscounted.
+    ql_curve = build_ql_zero_inflation_curve(
+
+tests/test_citivelo_inflation.py::test_both_backends_reprice_their_own_calibration_swaps[GBP_UKRPI]
+  C:\Users\chris\clee\ARBS-lam\tests\test_citivelo_inflation.py:127: UserWarning: GBP_UKRPI: no `nominal_curve` supplied, so a unit-discount placeholder is used. Breakevens are unaffected - both ZCIS legs settle on the same date and the discount factor cancels exactly - but npv() and analytic_delta() off this curve are undiscounted.
+    rl_curve = build_rl_index_curve(
+
+tests/test_citivelo_inflation.py::test_both_backends_reprice_their_own_calibration_swaps[GBP_UKRPI]
+  C:\Users\chris\clee\ARBS-lam\tests\test_citivelo_inflation.py:136: UserWarning: GBP_UKRPI: no `nominal_handle` supplied, so a flat 0% discount handle is used. Breakevens are unaffected - both ZCIS legs settle on the same date and the discount factor cancels - but NPVs are undiscounted.
+    ql_curve = build_ql_zero_inflation_curve(
+
+tests/test_citivelo_inflation.py::test_both_backends_reprice_their_own_calibration_swaps[EUR_CPTFEMU]
+  C:\Users\chris\clee\ARBS-lam\tests\test_citivelo_inflation.py:127: UserWarning: EUR_CPTFEMU: no `nominal_curve` supplied, so a unit-discount placeholder is used. Breakevens are unaffected - both ZCIS legs settle on the same date and the discount factor cancels exactly - but npv() and analytic_delta() off this curve are undiscounted.
+    rl_curve = build_rl_index_curve(
+
+tests/test_citivelo_inflation.py::test_both_backends_reprice_their_own_calibration_swaps[EUR_CPTFEMU]
+  C:\Users\chris\clee\ARBS-lam\tests\test_citivelo_inflation.py:136: UserWarning: EUR_CPTFEMU: no `nominal_handle` supplied, so a flat 0% discount handle is used. Breakevens are unaffected - both ZCIS legs settle on the same date and the discount factor cancels - but NPVs are undiscounted.
+    ql_curve = build_ql_zero_inflation_curve(
+
+tests/test_citivelo_inflation.py::test_publication_lag_error_is_measured_not_asserted
+  C:\Users\chris\clee\ARBS-lam\tests\test_citivelo_inflation.py:197: UserWarning: USD_CPURNSA: no `nominal_curve` supplied, so a unit-discount placeholder is used. Breakevens are unaffected - both ZCIS legs settle on the same date and the discount factor cancels exactly - but npv() and analytic_delta() off this curve are undiscounted.
+    curve = build_rl_index_curve(
+
+tests/test_citivelo_inflation.py::test_a_round_trip_is_structurally_blind_to_the_lag
+  C:\Users\chris\clee\ARBS-lam\tests\test_citivelo_inflation.py:233: UserWarning: USD_CPURNSA: no `nominal_curve` supplied, so a unit-discount placeholder is used. Breakevens are unaffected - both ZCIS legs settle on the same date and the discount factor cancels exactly - but npv() and analytic_delta() off this curve are undiscounted.
+    base = build_rl_index_curve(
+
+tests/test_citivelo_inflation.py::test_a_round_trip_is_structurally_blind_to_the_lag
+  C:\Users\chris\clee\ARBS-lam\tests\test_citivelo_inflation.py:237: UserWarning: USD_CPURNSA: no `nominal_curve` supplied, so a unit-discount placeholder is used. Breakevens are unaffected - both ZCIS legs settle on the same date and the discount factor cancels exactly - but npv() and analytic_delta() off this curve are undiscounted.
+    relagged = build_rl_index_curve(
+
+tests/test_citivelo_inflation.py::test_quantlib_zero_rate_is_not_the_breakeven
+  C:\Users\chris\clee\ARBS-lam\tests\test_citivelo_inflation.py:278: UserWarning: USD_CPURNSA: no `nominal_handle` supplied, so a flat 0% discount handle is used. Breakevens are unaffected - both ZCIS legs settle on the same date and the discount factor cancels - but NPVs are undiscounted.
+    curve = build_ql_zero_inflation_curve(
+
+tests/test_citivelo_read_path_perf.py::test_omit_unused_fixings_leaves_a_seasoned_price_alone
+tests/test_citivelo_read_path_perf.py::test_omit_unused_fixings_leaves_a_seasoned_price_alone
+  C:\Users\chris\anaconda3\envs\stir\Lib\site-packages\rateslib\data\fixings.py:3485: UserWarning: The fixings series 'reference_date
+  2026-01-01    4.0
+  2026-01-02    4.0
+  2026-01-05    4.0
+  2026-01-06    4.0
+  2026-01-07    4.0
+               ... 
+  2026-07-15    4.0
+  2026-07-16    4.0
+  2026-07-17    4.0
+  2026-07-20    4.0
+  2026-07-21    4.0
+  Freq: B, Name: rate, Length: 144, dtype: float64' for the RFR 1B rates contains more fixings than are expected from the fixings calendar.
+  Specifically, the extra data item lies within the fixings window: '01-06-2026':'21-07-2026'.
+    warnings.warn(
+
+tests/test_citivelo_read_path_perf.py::test_omit_unused_fixings_leaves_a_seasoned_price_alone
+tests/test_citivelo_read_path_perf.py::test_omit_unused_fixings_leaves_a_seasoned_price_alone
+  C:\Users\chris\anaconda3\envs\stir\Lib\site-packages\rateslib\data\fixings.py:3485: UserWarning: The fixings series 'ARBS_RFR_A8B58626535963FC3C4285FB_1B' for the RFR 1B rates contains more fixings than are expected from the fixings calendar.
+  Specifically, the extra data item lies within the fixings window: '01-06-2026':'21-07-2026'.
+    warnings.warn(
+
+tests/test_continuous_observation_layer.py::TestConditionalMVNUpdateOperator::test_off_grid_observation_influences_multiple_nodes
+  C:\Users\chris\clee\ARBS-lam\tests\test_continuous_observation_layer.py:263: DeprecationWarning: Conversion of an array with ndim > 0 to a scalar is deprecated, and will error in future. Ensure you extract a single element from your array before performing this operation. (Deprecated NumPy 1.25.)
+    interpolated_eod = float(H @ eod_vec)
+
+tests/test_dealer_ladder_labels.py::test_a_fresh_curve_is_compared
+tests/test_dealer_ladder_labels.py::test_staleness_threshold_is_configurable
+tests/test_dealer_ladder_labels.py::test_flip_is_detected_when_the_independent_mid_sits_the_other_side
+tests/test_dealer_ladder_labels.py::test_agreement_when_both_mids_agree
+  C:\Users\chris\clee\ARBS-lam\SDRUtils\stir_flow\classifier.py:64: FutureWarning: Downcasting object dtype arrays on .fillna, .ffill, .bfill is deprecated and will change in a future version. Call result.infer_objects(copy=False) instead. To opt-in to the future behavior, set `pd.set_option('future.no_silent_downcasting', True)`
+    ufros = list(legs["other_payment_ufro"].fillna(0.0))
+
+tests/test_lifecycle_cross_day.py::TestTradeTapeCrossDay::test_with_raw_df_adds_xd_columns
+  C:\Users\chris\clee\ARBS-lam\SDRUtils\analytics\trade_tape.py:616: FutureWarning: Downcasting object dtype arrays on .fillna, .ffill, .bfill is deprecated and will change in a future version. Call result.infer_objects(copy=False) instead. To opt-in to the future behavior, set `pd.set_option('future.no_silent_downcasting', True)`
+    df[col] = df[col].fillna(default)
+
+tests/test_lifecycle_cross_day.py::TestCleanTapeCrossDay::test_xd_terminated_excluded_from_clean
+  C:\Users\chris\clee\ARBS-lam\SDRUtils\analytics\trade_tape.py:2078: FutureWarning: Downcasting object dtype arrays on .fillna, .ffill, .bfill is deprecated and will change in a future version. Call result.infer_objects(copy=False) instead. To opt-in to the future behavior, set `pd.set_option('future.no_silent_downcasting', True)`
+    mask &= ~df["xd_is_terminated"].fillna(False).astype(bool)
+
+tests/test_mlfinlab_package.py::test_mlfinlab_imports_are_repo_friendly
+  C:\Users\chris\anaconda3\envs\stir\Lib\site-packages\numba\core\decorators.py:157: NumbaDeprecationWarning: [1mThe keyword argument 'nopython=False' was supplied. From Numba 0.59.0 the default is True and supplying this argument has no effect.[0m
+    warnings.warn(msg, NumbaDeprecationWarning)
+
+tests/test_pca_rv_scanner.py::test_analyze_candidates_ou_params
+tests/test_pca_rv_scanner.py::test_analyze_trade_target_stop
+  C:\Users\chris\clee\ARBS\RVUtils\arbitragelab\arbitragelab\stochastic_control_approach\ou_model_jurek.py:93: UserWarning: Please make sure length of training data is greater than 10 years. This is the time period used to fit the model in the original paper.
+    warnings.warn("Please make sure length of training data is greater than 10 years. "
+
+tests/test_rl_compat.py::test_without_fixings_the_same_contract_cannot_price
+tests/test_rl_compat.py::test_the_shim_is_not_a_no_op_on_this_rateslib
+  C:\Users\chris\anaconda3\envs\stir\Lib\site-packages\rateslib\data\fixings.py:3426: RuntimeWarning:
+  
+  invalid value encountered in divide
+
+tests/test_rv_lead_lag.py::TestGrangerLeadLag::test_recovers_direction
+  C:\Users\chris\anaconda3\envs\stir\Lib\site-packages\statsmodels\tsa\stattools.py:1556: FutureWarning:
+  
+  verbose is deprecated since functions should not print results
+
+tests/test_sdr_economic_classification.py::TestEnrichDataFrame::test_filter_flow
+  C:\Users\chris\clee\ARBS-lam\SDRUtils\core\economic_classification.py:334: FutureWarning:
+  
+  Downcasting object dtype arrays on .fillna, .ffill, .bfill is deprecated and will change in a future version. Call result.infer_objects(copy=False) instead. To opt-in to the future behavior, set `pd.set_option('future.no_silent_downcasting', True)`
+
+tests/test_stir_daylog.py::test_warnings_during_capture_land_in_the_day_file
+  C:\Users\chris\clee\ARBS-lam\tests\test_stir_daylog.py:87: UserWarning:
+  
+  a pandas-style warning
+
+tests/test_stir_flow_tick_size.py::test_compute_amihud
+  C:\Users\chris\clee\ARBS-lam\SDRUtils\stir_flow\tick_size.py:86: FutureWarning:
+  
+  DataFrameGroupBy.apply operated on the grouping columns. This behavior is deprecated, and in a future version of pandas the grouping columns will be excluded from the operation. Either pass `include_groups=False` to exclude the groupings or explicitly select the grouping columns after groupby to silence this warning.
+
+tests/test_swaption_packages.py: 145 warnings
+tests/test_tape_curve_pkg_0712.py: 3 warnings
+tests/test_tape_fly_pkg_0712.py: 3 warnings
+tests/test_usd_swap_refactor.py: 2 warnings
+tests/test_v2_package_detection.py: 15 warnings
+  C:\Users\chris\clee\ARBS-lam\SDRUtils\core\dates.py:70: FutureWarning:
+  
+  Series.view is deprecated and will be removed in a future version. Use ``astype`` as an alternative to change the dtype.
+
+tests/test_tape_optimization.py::TestCacheLoadSave::test_corrupted_cache_returns_none
+  C:\Users\chris\clee\ARBS-lam\SDRUtils\analytics\trade_tape.py:377: UserWarning:
+  
+  TradeTape cache load failed (C:\Users\chris\AppData\Local\Temp\pytest-of-chris\pytest-3747\test_corrupted_cache_returns_n0\1495b228ad995d02000b.pkl): invalid load key, 'n'.
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+=========================== short test summary info ===========================
+FAILED tests/test_citivelo_bond_source.py::test_the_live_reference_date_comes_from_the_wire_zone_not_the_machine
+FAILED tests/test_citivelo_fixings_offline.py::test_the_degraded_series_is_still_refused_when_it_does_not_reach_the_date
+FAILED tests/test_eod_vectorized_engine.py::TestPerformance::test_252_dates_200_tenors_under_5s
+3 failed, 5460 passed, 55 skipped, 128 deselected, 255 warnings in 1657.46s (0:27:37)

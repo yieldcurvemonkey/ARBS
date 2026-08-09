@@ -73,10 +73,30 @@ LAST = pd.Timestamp("2026-06-25")
 
 
 @pytest.fixture(autouse=True)
-def _clean_module_state():
-    """``_warn_once`` and the source memos are process-wide; tests are not."""
+def _clean_module_state(cache, monkeypatch):
+    """Process-wide state reset, and the real cache root put out of reach.
+
+    ``_warn_once`` and the source memos are module globals; tests are not.
+
+    The cache pin is the more important half. ``fixings_for(quotes=None)``
+    constructs its own :class:`CitiVeloQuotes`, which defaults to the DEVELOPER'S
+    cache root - so a test that seeds ``cache`` and then goes through
+    ``fixings_for`` was reading a completely different store. That is not
+    theoretical: once the real cache settled (``history_start`` recorded, a fresh
+    ``fetched_at``), ``missing_spans`` returned ``[]``, nothing fetched, nothing
+    warned, and ``test_the_degraded_series_is_still_refused_when_it_does_not_reach_the_date``
+    failed for a reason with nothing to do with the behaviour it asserts. It had
+    passed until then only because the real cache happened to be unsettled.
+
+    Pinning here rather than per test because the omission is invisible: the test
+    still seeds a cache, still calls the right function, and still passes on any
+    machine whose cache has not settled yet.
+    """
     F.reset_fixings_cache()
     F._WARNED.clear()
+    monkeypatch.setattr(
+        "MDP.CitiVelocityExcel.quotes.CitiVeloTagCache", lambda *a, **k: cache
+    )
     yield
     F.reset_fixings_cache()
     F._WARNED.clear()
