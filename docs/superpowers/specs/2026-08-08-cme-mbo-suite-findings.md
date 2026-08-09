@@ -294,6 +294,24 @@ ZT has the finest tick of the complex and the deepest touch, so its front queue
 turns over enormously without the price moving and the touch is close to
 uninformative: an R-squared of **0.004** at one second.
 
+**Checked on twelve sessions, not three.** Having just had to correct section 9 for
+generalising from a thin sample, the same scrutiny applies here -- and this one
+survives it. Across twelve sessions spread over the quarter, one front outright per
+root:
+
+| product | median corr at 1 s | range | sessions negative | at 60 s |
+| --- | ---: | --- | ---: | ---: |
+| **ZT** | **-0.050** | -0.165 to +0.429 | **8 of 12** | 0.471 |
+| ZF | 0.488 | 0.393 to 0.624 | 0 | 0.774 |
+| ZN | 0.536 | 0.404 to 0.602 | 0 | 0.776 |
+| ZB | 0.482 | 0.448 to 0.679 | 0 | 0.761 |
+| TN | 0.459 | 0.415 to 0.616 | 0 | 0.767 |
+| UB | 0.483 | 0.402 to 0.631 | 0 | 0.779 |
+
+ZT is negative in two sessions out of three; no other root is negative in a single
+one, and none of their ranges reaches down to ZT's median. The effect is a property
+of the contract, not of the day.
+
 Multi-level OFI resolves it. With ten levels, ZT reaches **R-squared 0.549** at one
 second, and out-of-sample RMSE against the touch-only fit improves:
 
