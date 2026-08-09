@@ -80,20 +80,26 @@ point estimate is on the wrong side of zero and of the noise distribution.
 
 ## Why it did not trade: the fit gate, not the idea
 
-Of 93 sessions on SFRZ26 (2026-03-26 → 2026-08-07):
+Of 555 sessions across 5 contracts (SFRZ25 → SFRZ26, 2025-05 → 2026-08):
 
 | stage | sessions | note |
 |---|---|---|
-| extracted | 93 | 0 SABR model densities — the Part A fix holds |
-| λ computable | 65 | the rest fail the ≥2 unit-weight-meeting structure |
-| clears the fit gate | 19 (29%) | \|fwd resid\| < 1bp, pre-norm ≤ 1.02, ghost ≤ 5% |
-| **also cross-strike coherent** | **10 (11%)** | atom spread ≤ 0.60 |
-| enough to standardise | 0 | needs 30 in a trailing window |
+| extracted | 555 | 0 SABR model densities — the Part A fix holds |
+| λ applicable | 92 (17%) | ≥2 unit-weight meetings, one sign, lattice spans the density, interval wide enough |
+| clears the fit gate | 28 (5%) | \|fwd resid\| < 1bp, pre-norm ≤ 1.02, ghost ≤ 5% |
+| **also cross-strike coherent** | ~10 | atom spread ≤ 0.60 |
+| enough to standardise | 0 | largest contract supplies 7, needs 30 |
 
-**The binding constraint on this programme is the quality of the vol-space Breeden-Litzenberger
-fit on an SR3 chain, not the economics of the copula.** Roughly one session in nine produces a
-density that is both well-fitted and internally coherent enough to read a coupling off. That is
-the number to attack if this is taken further.
+**The binding constraint on this programme is measurability, not economics.** Two independent
+filters compound: the copula framework only applies when the resolved meetings carry unit
+day-weight, share a sign, and produce a lattice that actually spans the density (17% of
+sessions), and the vol-space Breeden-Litzenberger fit only ties out to the martingale on a
+third of those. Roughly one session in twenty survives both. That is the number to attack if
+this is taken further, and it is a data-and-fitting problem, not a thesis problem.
+
+The gates are not arbitrary — see §5b of the measurement note. Three of the four applicability
+guards were forced by an independent quantity refusing to behave: the calibrated SOFR-EFFR
+basis, which came back at a mean of −39bp before them and reads +6.4bp ± 0.9 after.
 
 ## What was established anyway, and it is not nothing
 
@@ -104,16 +110,22 @@ P&L (details and reproduction in the measurement note):
    error bar — the observed RND variance exceeds the comonotone bound on **100%** of admissible
    sessions *at zero assumed non-meeting variance*. Bringing λ_var on scale needs ~66bp/yr of
    non-meeting vol against a total ATM vol of ~70. λ is a shape statistic or it is nothing.
-2. **λ_wing = 0.54 was not a cherry-picked session.** It sits at the 37th percentile of the
-   admissible sample. But λ_wing never goes near the independent null either — minimum +0.32 over
-   19 sessions — so the market prices materially comonotone Fed behaviour essentially always.
-   A trade that waits for λ to reach 0 will wait forever; the tradeable object is deviation from
-   ~0.6, which is what the z-score encodes.
-3. **The 50bp kill test passes, for the reason the design anticipated.** Allowing 50bp outcomes
-   moves λ down by 0.14 at a 25% size mix — comparable to its entire cross-session standard
-   deviation of 0.140 — so the *level* is contaminated. But rank ordering survives at corr 0.993.
-   Entry was pre-registered on the standardised z rather than the level precisely so that this
-   contamination would be survivable, and it is.
+2. **λ is regime-dependent, and that is the substantive finding.** In the 2025 cutting cycle
+   (SFRZ25, 17 sessions) the market priced the meetings as nearly independent, mean λ **+0.15** —
+   "they'll cut, timing uncertain". In the 2026 hiking cycle (SFRZ26) it prices them materially
+   comonotone, mean **+0.55** — "do they go at all". Within a contract λ is stable (sd 0.06);
+   across regimes it is a different animal. The published 0.54 sits at the 37th percentile of
+   SFRZ26 alone and the **79th across four contracts**, so the original worry that it was the
+   favourable end was right *on the pooled sample* — and a pooled prior would have been fitted
+   to one half of the history.
+3. **The 50bp kill test passes within a contract and FAILS across them.** Allowing 50bp outcomes
+   moves λ down by ~0.14 at a 25% size mix, comparable to its entire cross-session standard
+   deviation, so the *level* is contaminated. Rank ordering survives at corr 0.993 on one
+   contract — but only **0.769** across four, below the pre-registered 0.90. Kill criterion 5.6
+   is invoked. The single-contract test was reassuring and wrong: within one contract the
+   marginals are similar enough that a size mix rescales everything almost uniformly; across
+   contracts, where a pooled prior would actually be used, the same contamination reorders the
+   sessions. **λ is comparable within a contract and a regime, not across them.**
 
 ## Standing, un-run
 
