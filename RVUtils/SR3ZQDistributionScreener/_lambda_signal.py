@@ -46,6 +46,7 @@ __all__ = [
     "observed_atom_probabilities",
     "density_modes",
     "measure_lambda",
+    "measure_lambda_from_rnd_record",
     "MOVE_SIZE_BP",
 ]
 
@@ -690,4 +691,61 @@ def measure_lambda(
         n_strikes=int(len(getattr(bl_result.input, "strikes_price", ()))),
         lp_feasible=bounds.lp_feasible,
         lp_status=bounds.lp_status,
+    )
+
+
+class _BLView:
+    """Adapter presenting an ``RNDRecord`` with the attribute names a BL result uses.
+
+    The screener's RND comes from ``STIRAsymmetricScreener.extract_per_expiry_rnd`` and names
+    its arrays ``density_pdf`` / ``density_cdf``; everything in this module was written
+    against ``BreedenLitzenbergerResult``. One adapter is cheaper and safer than teaching the
+    measurement two vocabularies.
+    """
+
+    class _Input:
+        def __init__(self, record, expiry, tte):
+            self.forward_rate = float(getattr(record, "forward_rate", float("nan")))
+            self.forward_price = float(getattr(record, "forward_price", float("nan")))
+            self.time_to_expiry = float(tte)
+            self.expiry_date = expiry
+            self.strikes_price = np.zeros(int(getattr(record, "n_strikes_observed", 0) or 0))
+            self.strike_source = str(getattr(record, "prices_source", ""))
+
+    def __init__(self, record, *, expiry, time_to_expiry):
+        self.strike_grid_rate = np.asarray(record.strike_grid_rate, dtype=float)
+        self.rnd_cumulative = np.asarray(record.density_cdf, dtype=float)
+        self.rnd_density = np.asarray(record.density_pdf, dtype=float)
+        self.std_rate = float(getattr(record, "std_rate", float("nan")))
+        self.forward_residual_bp = (
+            (float(getattr(record, "mean_rate", float("nan")))
+             - float(getattr(record, "forward_rate", float("nan")))) * 100.0
+        )
+        self.pre_normalization_mass = float("nan")
+        self.ghost_mass_fraction = float("nan")
+        self.input = self._Input(record, expiry, time_to_expiry)
+
+
+def measure_lambda_from_rnd_record(
+    *,
+    record,
+    as_of: datetime.date,
+    symbol: str,
+    zq_prices: Dict[str, float],
+    fomc_schedule,
+    expiry: datetime.date,
+    non_meeting_vol_bp_per_sqrt_year: Optional[float] = None,
+) -> LambdaMeasurement:
+    """Screener-side entry point: place one ``RNDRecord`` on the lambda coordinate."""
+    tte = max((expiry - as_of).days, 0) / 365.25
+    view = _BLView(record, expiry=expiry, time_to_expiry=tte)
+    meeting_set = build_meeting_set(
+        as_of=as_of, symbol=symbol, zq_prices=zq_prices,
+        fomc_schedule=fomc_schedule, expiry=expiry,
+    )
+    return measure_lambda(
+        meeting_set=meeting_set,
+        bl_result=view,
+        sr3_forward_rate_pct=float(getattr(record, "forward_rate", float("nan"))),
+        non_meeting_vol_bp_per_sqrt_year=non_meeting_vol_bp_per_sqrt_year,
     )

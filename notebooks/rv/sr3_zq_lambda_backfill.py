@@ -116,6 +116,18 @@ def main() -> int:
     )
     ap.add_argument("--lookback-days", type=int, default=260)
     ap.add_argument("--min-dte-days", type=int, default=14)
+    ap.add_argument(
+        "--fomc-shift-days",
+        type=int,
+        default=0,
+        help=(
+            "WRONG-CALENDAR PLACEBO. Shift every FOMC effective date by this many days and "
+            "measure lambda against that fake calendar. The meeting count and the spacing "
+            "statistics survive; only the dates are wrong. A signal that keeps its edge here "
+            "is measuring cell geometry, not lattice probability -- which is exactly what "
+            "happened to a previous programme in this repo at 88% retention"
+        ),
+    )
     args = ap.parse_args()
 
     start = datetime.date.fromisoformat(args.start)
@@ -127,6 +139,14 @@ def main() -> int:
     from SDRUtils.analytics.fomc import load_fomc_schedule
 
     fomc = load_fomc_schedule("USD-SOFR-1D")
+    if args.fomc_shift_days:
+        fomc = fomc.copy()
+        shift = pd.Timedelta(days=int(args.fomc_shift_days))
+        fomc["effective_date"] = pd.to_datetime(fomc["effective_date"]) + shift
+        if "maturity_date" in fomc.columns:
+            fomc["maturity_date"] = pd.to_datetime(fomc["maturity_date"]) + shift
+        print(f"  WRONG-CALENDAR PLACEBO: every FOMC date shifted by "
+              f"{args.fomc_shift_days:+d} days")
     zq = load_zq_panel(start, end, args.refresh_zq)
     sessions = [d.date() for d in zq.index if start <= d.date() <= end]
     if args.max_sessions:
