@@ -1,0 +1,12 @@
+symbol,note,daily_bars,first,last,last_px,err
+SQZ25,USD SOFR3M CME (control),0,,,,
+RAZ25,EUR ESTR3M ICE,501,2024-02-05,2026-03-17,98.0625,
+EBZ25,EUR ESTR3M CME,0,,,,
+J8Z25,GBP SONIA3M ICE,1253,2020-10-16,2026-03-17,96.2525,
+JUZ25,GBP SONIA1M ICE,0,,,,
+T0Z25,JPY TONA3M JPX (mapped root),0,,,,
+ITZ25,JPY TONA3M TFX (mapped root),0,,,,
+TNZ25,JPY guess TN,0,,,,
+JYZ25,JPY guess JY,0,,,,
+TOZ25,JPY guess TO,0,,,,
+BAZ25,CAD BAX (sanity: known barchart root),0,,,,
