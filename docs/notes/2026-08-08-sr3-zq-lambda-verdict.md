@@ -86,16 +86,18 @@ Of 555 sessions across 5 contracts (SFRZ25 → SFRZ26, 2025-05 → 2026-08):
 |---|---|---|
 | extracted | 555 | 0 SABR model densities — the Part A fix holds |
 | λ applicable | 92 (17%) | ≥2 unit-weight meetings, one sign, lattice spans the density, interval wide enough |
-| clears the fit gate | 28 (5%) | \|fwd resid\| < 1bp, pre-norm ≤ 1.02, ghost ≤ 5% |
-| **also cross-strike coherent** | ~10 | atom spread ≤ 0.60 |
+| clears the fit gate | 28 (5.0%) | \|fwd resid\| < 1bp, pre-norm ≤ 1.02, ghost ≤ 5% |
+| **also cross-strike coherent** | **8 (1.4%)** | atom spread ≤ 0.60 — 7 of them one contract |
 | enough to standardise | 0 | largest contract supplies 7, needs 30 |
 
-**The binding constraint on this programme is measurability, not economics.** Two independent
+**One session in sixty-nine.** Not one in nine, which was the single-contract estimate.
+
+**The binding constraint on this programme is measurability, not economics.** Three independent
 filters compound: the copula framework only applies when the resolved meetings carry unit
 day-weight, share a sign, and produce a lattice that actually spans the density (17% of
-sessions), and the vol-space Breeden-Litzenberger fit only ties out to the martingale on a
-third of those. Roughly one session in twenty survives both. That is the number to attack if
-this is taken further, and it is a data-and-fitting problem, not a thesis problem.
+sessions); the vol-space Breeden-Litzenberger fit ties out to the martingale on 30% of those;
+and the surface is cross-strike coherent on under a third of what is left. That is the number
+to attack if this is taken further, and it is a data-and-fitting problem, not a thesis problem.
 
 The gates are not arbitrary — see §5b of the measurement note. Three of the four applicability
 guards were forced by an independent quantity refusing to behave: the calibrated SOFR-EFFR
@@ -130,12 +132,19 @@ P&L (details and reproduction in the measurement note):
 ## Standing, un-run
 
 - **Q3, the strongest claim in the original thesis** — that the modes stay pinned while the
-  forward translates — is still unanswered. SFRZ26 alone supplies 7 bimodal admissible sessions
-  against a floor of 10. The regression is implemented and includes the control the original
-  framing omitted: the atom pins are ZQ-anchored, so a flat mode-vs-forward β proves nothing
-  unless the pins themselves move with the forward. The multi-contract panel needed for it is
-  still building.
-- **Term structure of λ** across contracts on the same date: implemented, needs the same panel.
+  forward translates — is still unanswered, and the reason is worth stating precisely rather
+  than filing under "didn't get to it". Two causes, one of them mine: (i) the mode data was
+  being *coupled to the copula gates* — `measure_lambda` returned early on a copula-applicability
+  guard before computing the modes, discarding shape evidence for every session where only the
+  *coupling* was unidentified. Fixed: the shape and fit-quality fields are now recorded on every
+  session with a usable density, and the Q3 regression is gated on fit quality alone, since mode
+  location needs no copula machinery. (ii) Even so, bimodality is rare once the fit gate applies
+  — 5 of 28 on the current panel — so the n ≥ 10 floor is not yet cleared. The regression
+  includes the control the original framing omitted: the atom pins are ZQ-anchored, so a flat
+  mode-vs-forward β proves nothing unless the pins themselves move with the forward.
+- **Term structure of λ** across contracts on the same date: implemented, but no adjacent
+  contract pair yet has ≥ 5 overlapping admissible sessions — a direct consequence of the 1-in-69
+  measurability rate.
 - **Dispersion** (SR3 straddle vs a vega-matched ZQ/SR1 straddle basket): not attempted. The
   binding constraint is known and structural — `covering_zq_months(SR3Z26)` = ZQZ26 at 0.516,
   ZQF27 and ZQG27 at 1.0, ZQH27 at 0.516 — so the IMM-vs-calendar stub is carried, and the

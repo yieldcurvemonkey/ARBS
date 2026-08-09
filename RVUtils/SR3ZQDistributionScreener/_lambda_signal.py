@@ -557,6 +557,32 @@ def _quoted_price_range(bl_result) -> Tuple[float, float]:
     return float("nan"), float("nan")
 
 
+def _shape_only(meeting_set: MeetingSet, bl_result, reason: str) -> "LambdaMeasurement":
+    """An inapplicable-copula result that still carries the SHAPE and the fit quality.
+
+    Mode location versus the forward is the strongest claim in the thesis and it needs none of
+    the copula machinery -- just a well-fitted density, two peaks and the pin control. Returning
+    early on a COPULA guard without recording the modes throws that evidence away for every
+    session where only the coupling is unidentified, which is most of them.
+    """
+    mode_prices, trough_peak, n_modes = density_modes(bl_result)
+    return LambdaMeasurement(
+        as_of=meeting_set.as_of,
+        symbol=meeting_set.symbol,
+        ok=False,
+        reason=reason,
+        marginals=meeting_set.resolved_marginals,
+        n_modes=n_modes,
+        mode_prices=mode_prices,
+        trough_peak_ratio=trough_peak,
+        forward_residual_bp=float(getattr(bl_result, "forward_residual_bp", float("nan"))),
+        pre_normalization_mass=float(getattr(bl_result, "pre_normalization_mass", float("nan"))),
+        ghost_mass_fraction=float(getattr(bl_result, "ghost_mass_fraction", float("nan"))),
+        strike_source=str(getattr(getattr(bl_result, "input", None), "strike_source", "")),
+        n_strikes=int(len(getattr(getattr(bl_result, "input", None), "strikes_price", ()) or ())),
+    )
+
+
 def measure_lambda(
     *,
     meeting_set: MeetingSet,
@@ -575,28 +601,19 @@ def measure_lambda(
     """
     ms = meeting_set
     if ms.n_resolved < 2:
-        return LambdaMeasurement(
-            as_of=ms.as_of, symbol=ms.symbol, ok=False,
-            reason=f"only {ms.n_resolved} resolved meeting(s); the coupling is not identified",
-        )
+        return _shape_only(ms, bl_result, f"only {ms.n_resolved} resolved meeting(s); the coupling is not identified")
     if not ms.all_weights_unit:
-        return LambdaMeasurement(
-            as_of=ms.as_of, symbol=ms.symbol, ok=False,
-            reason=(
+        return _shape_only(ms, bl_result, (
                 "resolved meetings do not all carry day-weight 1 "
                 f"({[round(w, 3) for w in ms.resolved_weights]}); the move count is not a "
                 "sufficient statistic and an atom-based lambda would be measuring the calendar"
-            ),
-        )
+            ))
 
     if ms.step_sign == 0:
-        return LambdaMeasurement(
-            as_of=ms.as_of, symbol=ms.symbol, ok=False,
-            reason=(
+        return _shape_only(ms, bl_result, (
                 "resolved meetings mix hikes and cuts; the atoms are no longer equally spaced "
                 "and there is no scalar move count for the coupling to act on"
-            ),
-        )
+            ))
 
     bounds = coupling_bounds(ms.resolved_marginals)
 
@@ -613,15 +630,11 @@ def measure_lambda(
         bounds.wing_independent - bounds.wing_min_variance,
     )
     if not math.isfinite(wing_span) or wing_span < 0.05:
-        return LambdaMeasurement(
-            as_of=ms.as_of, symbol=ms.symbol, ok=False,
-            marginals=ms.resolved_marginals,
-            reason=(
+        return _shape_only(ms, bl_result, (
                 f"the copula interval is only {wing_span:.4f} wide in wing mass "
                 f"(marginals {[round(p, 3) for p in ms.resolved_marginals]}); these marginals "
                 f"do not discriminate between couplings"
-            ),
-        )
+            ))
 
     zq_rate = zq_implied_window_rate_pct(ms)
     basis_bp = (float(sr3_forward_rate_pct) - zq_rate) * 100.0
@@ -638,15 +651,12 @@ def measure_lambda(
     if math.isfinite(span_lo) and math.isfinite(span_hi):
         half_step = 0.5 * MOVE_SIZE_BP / 100.0
         if atom_prices.min() - half_step < span_lo or atom_prices.max() + half_step > span_hi:
-            return LambdaMeasurement(
-                as_of=ms.as_of, symbol=ms.symbol, ok=False,
-                reason=(
+            return _shape_only(ms, bl_result, (
                     f"the {ms.n_resolved + 1}-atom lattice spans "
                     f"[{atom_prices.min():.3f}, {atom_prices.max():.3f}] but quoted strikes only "
                     f"cover [{span_lo:.3f}, {span_hi:.3f}]; the end atoms would be measured "
                     f"against ghost-extrapolated wings"
-                ),
-            )
+                ))
     probs, below, above = observed_atom_probabilities(bl_result, rates, absorb_tails=True)
     strict, _, _ = observed_atom_probabilities(bl_result, rates, absorb_tails=False)
 
@@ -657,15 +667,11 @@ def measure_lambda(
     # lambda above the comonotone bound -- not a static arbitrage, a measurement artefact.
     off_lattice = float(below + above)
     if off_lattice > _MAX_OFF_LATTICE_MASS:
-        return LambdaMeasurement(
-            as_of=ms.as_of, symbol=ms.symbol, ok=False,
-            marginals=ms.resolved_marginals,
-            reason=(
+        return _shape_only(ms, bl_result, (
                 f"{100 * off_lattice:.0f}% of the density falls outside the "
                 f"{ms.n_resolved + 1}-atom lattice (limit {100 * _MAX_OFF_LATTICE_MASS:.0f}%); "
                 f"the lattice does not describe this density"
-            ),
-        )
+            ))
 
     wing_absorbed = wing_mass(probs)
     wing_strict = wing_mass(strict)

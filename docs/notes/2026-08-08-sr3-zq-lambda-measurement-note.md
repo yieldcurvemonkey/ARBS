@@ -178,11 +178,20 @@ and cross-strike spread ≤ 0.60. That is the real limit on this programme — n
 
 ## 4. Q3 — do the modes stay put while the forward moves?
 
-**Not yet answerable, and I am not going to answer it from 7 points.** The mode-location
-regression needs bimodal *admissible* sessions; SFRZ26 alone supplies 7, below the n ≥ 10 floor
-the analysis enforces. The multi-contract panel required for this is still warming its option
-chains. The regression is implemented (`sr3_zq_lambda_analysis.py`, Q3) and reports, with
-contract fixed effects and Newey-West errors:
+**Not yet answerable, and I am not going to answer it from 5 points.** Two separate causes, and
+the first was self-inflicted:
+
+1. **The mode data was coupled to the copula gates.** `measure_lambda` returned early on a
+   copula-applicability guard *before* computing the modes, so every session where only the
+   coupling was unidentified lost its shape evidence too. Mode location versus the forward needs
+   no copula machinery at all — a well-fitted density, two peaks and the pin control are enough.
+   Fixed: shape and fit-quality fields are recorded on every session with a usable density, and
+   the Q3 regression is now gated on fit quality alone.
+2. **Bimodality is genuinely rare once the fit gate applies** — 5 of 28 sessions — so the n ≥ 10
+   floor still is not cleared. That is a fact about the sample, not a limitation of the test.
+
+The regression is implemented (`sr3_zq_lambda_analysis.py`, Q3) and reports, with contract fixed
+effects and Newey-West errors:
 
 - `mode_hi ~ forward` and `mode_lo ~ forward` — β ≈ 0 is the lattice signature.
 - `pin_hi ~ forward` — **the control that the original framing omits.** The atom pins are
@@ -314,9 +323,10 @@ Three axes that *are* real, in descending order of what this work supports:
 | `_lambda_signal.py`: meeting sets, clean anchoring, atoms, modes, the coordinate | done |
 | `lambda_dependence` + `lambda_arbitrage` signals, wired through `SignalRecord` | done |
 | Baseline smoke gate | done, 21/21 |
-| Multi-session λ panel + analysis | done for SFRZ26; multi-contract panel warming |
+| Multi-session λ panel + analysis | done — 555 sessions, 5 contracts, 2025-05 → 2026-08 |
 | QDB backtest fork, pre-registered | done and run — see the verdict note |
-| Mode-location regression | implemented; needs the multi-contract panel |
+| Mode-location regression | implemented and un-gated from the copula; sample still short (5 bimodal) |
+| λ term structure across contracts | implemented; no contract pair yet has ≥5 overlapping sessions |
 
 **Backtest outcome, in one line each.** At the pre-registered gates the strategy never trades
 (10 of 93 sessions are both well-fitted and cross-strike coherent, against a 30-observation

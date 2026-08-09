@@ -177,17 +177,40 @@ def main() -> int:
 
     # ---------------------------------------------------------------------------------
     print("\n--- Q3. do the modes stay put while the forward moves? ---")
+    # Gated on FIT QUALITY ONLY. Mode location versus the forward needs none of the copula
+    # machinery -- a well-fitted density, two peaks and the pin control are enough -- so
+    # applying the copula-applicability gates here would throw away most of the evidence for
+    # the strongest claim in the thesis.
+    fit_gate = (
+        ok.forward_residual_bp.abs().le(args.max_fwd_resid_bp)
+        & ok.pre_normalization_mass.le(args.max_pre_norm_mass)
+        & ok.ghost_mass_fraction.le(args.max_ghost)
+    )
+    shape = ok[fit_gate].copy()
+    if "n_modes" in df.columns:
+        all_fit = df[
+            df.forward_residual_bp.abs().le(args.max_fwd_resid_bp)
+            & df.pre_normalization_mass.le(args.max_pre_norm_mass)
+            & df.ghost_mass_fraction.le(args.max_ghost)
+            & df.n_modes.ge(0)
+        ].copy()
+        if len(all_fit) > len(shape):
+            shape = all_fit
+    print(f"  sessions with a well-fitted density (copula applicability NOT required): {len(shape)}")
     rows = []
-    for r in g.itertuples():
+    for r in shape.itertuples():
         modes = sorted([float(x) for x in (r.mode_prices or [])], reverse=True)
-        pins = [float(x) for x in (r.atom_prices or [])]
-        if len(modes) < 2 or not pins:
+        pins = [float(x) for x in (getattr(r, "atom_prices", None) or [])]
+        if len(modes) < 2:
             continue
         rows.append({
             "symbol": r.symbol, "as_of": r.as_of, "forward_price": float(r.forward_price),
             "mode_hi": modes[0], "mode_lo": modes[1],
-            "pin_hi": max(pins), "pin_lo": min(pins),
-            "n_meetings": int(r.n_meetings),
+            # The pins only exist where the copula measurement completed. The mode-vs-forward
+            # regression does not need them; the pin CONTROL does, and it runs on the subset.
+            "pin_hi": max(pins) if pins else float("nan"),
+            "pin_lo": min(pins) if pins else float("nan"),
+            "n_meetings": int(r.n_meetings) if pd.notna(r.n_meetings) else -1,
         })
     md = pd.DataFrame(rows)
     print(f"  bimodal admissible sessions: {len(md)} of {len(g)}")
