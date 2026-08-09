@@ -100,6 +100,10 @@ class LifecycleResult:
     #: can be filled inside it -- but a large count means the reconstruction is
     #: missing state and the queue numbers should not be trusted.
     n_orphan_fills: int = 0
+    #: Orders detected as display-quantity (iceberg) orders, and the total number
+    #: of refreshed tranches across them.
+    n_icebergs: int = 0
+    n_refreshes: int = 0
 
 
 @njit(cache=True, nogil=True)
@@ -109,6 +113,7 @@ def _lifecycle(
     o_side, o_pidx, o_size, o_size0, o_entry_ts, o_entry_tse, o_entry_seq,
     o_prio_ts, o_ahead_qty, o_ahead_ct, o_trd_at_prio, o_filled, o_first_fill,
     o_nmod, o_nprice, o_nup, o_ndown, o_exit_ts, o_reason, o_seen, o_snap,
+    o_iceberg, o_refresh,
     bid_sz, ask_sz, bid_ct, ask_ct, bid_trd, ask_trd,
 ):
     n = action.shape[0]
@@ -162,6 +167,14 @@ def _lifecycle(
                 o_side[o] = 2
             else:
                 continue
+            # Rule (b): an order that was fully traded and then comes back
+            # with volume is a refreshed tranche.  CME preserves the order id
+            # across the whole life of a display-quantity order, so a slot that
+            # has already been filled and closed cannot legitimately be a new
+            # order under the same id.
+            if o_seen[o] == 1 and o_filled[o] > 0:
+                o_iceberg[o] = 1
+                o_refresh[o] += 1
             o_gen[o] = cur_gen
             o_pidx[o] = pidx
             o_size[o] = sz
@@ -188,6 +201,13 @@ def _lifecycle(
             sz = size[i]
             if sz <= 0:
                 continue
+            # Zotikov-Antonov rule (a): a trade whose volume exceeds the
+            # order's resting volume can only have come from hidden quantity, so
+            # the order is a display-quantity (iceberg) order.  Exact and
+            # threshold-free -- the trade message carries the TOTAL matched
+            # volume including the concealed part.
+            if sz > o_size[o]:
+                o_iceberg[o] = 1
             o_filled[o] += sz
             if o_first_fill[o] == 0:
                 o_first_fill[o] = ts_recv[i]
@@ -274,6 +294,9 @@ def _lifecycle(
                 o_side[o] = 2
             else:
                 continue
+            if o_seen[o] == 1 and o_filled[o] > 0 and not known and sz_new > 0:
+                o_iceberg[o] = 1
+                o_refresh[o] += 1
             o_gen[o] = cur_gen
             o_pidx[o] = pidx_new
             o_size[o] = sz_new
@@ -350,6 +373,7 @@ def replay_lifecycle(
         "side", "pidx", "size", "size0", "entry_ts", "entry_tse", "entry_seq",
         "prio_ts", "ahead_qty", "ahead_ct", "trd_at_prio", "filled", "first_fill",
         "nmod", "nprice", "nup", "ndown", "exit_ts", "reason", "seen", "snap",
+        "iceberg", "refresh",
     )}
 
     ns = g.n_slots
@@ -360,6 +384,7 @@ def replay_lifecycle(
         o["entry_seq"], o["prio_ts"], o["ahead_qty"], o["ahead_ct"],
         o["trd_at_prio"], o["filled"], o["first_fill"], o["nmod"], o["nprice"],
         o["nup"], o["ndown"], o["exit_ts"], o["reason"], o["seen"], o["snap"],
+        o["iceberg"], o["refresh"],
         np.zeros(ns, dtype=np.int64), np.zeros(ns, dtype=np.int64),
         np.zeros(ns, dtype=np.int64), np.zeros(ns, dtype=np.int64),
         np.zeros(ns, dtype=np.int64), np.zeros(ns, dtype=np.int64),
@@ -396,6 +421,13 @@ def replay_lifecycle(
             categories=list(EXIT_REASONS.values()),
         ),
         "from_snapshot": o["snap"][keep].astype(bool),
+        #: A display-quantity (iceberg) order, by the exact structural rule of
+        #: Zotikov & Antonov: a trade exceeding the resting volume, or a full
+        #: fill followed by a return with volume.  No time window and no
+        #: threshold -- the order id is preserved across an iceberg's whole life,
+        #: which is what makes the rule unambiguous.
+        "iceberg": o["iceberg"][keep].astype(bool),
+        "n_refresh": o["refresh"][keep].astype(np.int32),
     })
     df["rest_ns"] = (
         df["exit_ts"].astype("int64") - df["priority_ts"].astype("int64")
@@ -414,6 +446,8 @@ def replay_lifecycle(
         n_priority_loss_price=int(n_loss_price),
         n_priority_loss_size=int(n_loss_size),
         n_orphan_fills=int(n_orphan),
+        n_icebergs=int(df["iceberg"].sum()) if len(df) else 0,
+        n_refreshes=int(df["n_refresh"].sum()) if len(df) else 0,
     )
 
 
