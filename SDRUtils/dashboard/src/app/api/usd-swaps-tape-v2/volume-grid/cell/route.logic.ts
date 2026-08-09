@@ -22,6 +22,7 @@ import type {
   VolumeGridIntradaySeasonality,
   VolumeMetric,
 } from '@/features/usd-swaps-tape-v2/types/volume-grid.types'
+import { TAPE_LEGS, TAPE_PACKAGES } from '@/lib/tape-tables'
 
 export interface VolumeGridCellParams {
   fwd: string
@@ -279,8 +280,8 @@ export function buildTimeseriesSql(opts: {
         ABS(COALESCE(l.risk, 0))     AS dv01,
         l.venue,
         p.package_transaction_spread AS pts
-      FROM arbs_usd_swap_tape_legs_v2 l
-      JOIN arbs_usd_swap_tape_packages_v2 p ON p.package_id = l.package_id
+      FROM ${TAPE_LEGS} l
+      JOIN ${TAPE_PACKAGES} p ON p.package_id = l.package_id
       WHERE COALESCE(l.contributes_to_flow, FALSE) = TRUE
         AND COALESCE(l.original_execution_timestamp, l.execution_timestamp) >= $1::timestamptz
         AND ${opts.bucketPredicateSql}
@@ -350,8 +351,8 @@ export function buildIntradaySeasonalitySql(opts: {
             )::int
           )
         ) AS bucket_index
-      FROM arbs_usd_swap_tape_legs_v2 l
-      JOIN arbs_usd_swap_tape_packages_v2 p ON p.package_id = l.package_id
+      FROM ${TAPE_LEGS} l
+      JOIN ${TAPE_PACKAGES} p ON p.package_id = l.package_id
       WHERE COALESCE(l.contributes_to_flow, FALSE) = TRUE
         AND COALESCE(l.original_execution_timestamp, l.execution_timestamp) >= $2::timestamptz
         AND COALESCE(l.original_execution_timestamp, l.execution_timestamp) <
@@ -449,7 +450,7 @@ export function buildRecentTradesSql(opts: {
           'risk', ABS(COALESCE(l2.risk, 0)),
           'in_cell', CASE WHEN (${opts.inCellPredicateSql}) THEN true ELSE false END
         ) ORDER BY l2.tenor_years)
-        FROM arbs_usd_swap_tape_legs_v2 l2
+        FROM ${TAPE_LEGS} l2
         WHERE l2.package_id = p.package_id
           AND COALESCE(l2.contributes_to_flow, FALSE) = TRUE
       ) AS legs`
@@ -457,8 +458,8 @@ export function buildRecentTradesSql(opts: {
   return `
     WITH eligible_packages AS (
       SELECT DISTINCT l.package_id
-      FROM arbs_usd_swap_tape_legs_v2 l
-      JOIN arbs_usd_swap_tape_packages_v2 p ON p.package_id = l.package_id
+      FROM ${TAPE_LEGS} l
+      JOIN ${TAPE_PACKAGES} p ON p.package_id = l.package_id
       WHERE COALESCE(l.contributes_to_flow, FALSE) = TRUE
         AND COALESCE(l.original_execution_timestamp, l.execution_timestamp) >= $1::timestamptz
         AND ${opts.bucketPredicateSql}
@@ -476,7 +477,7 @@ export function buildRecentTradesSql(opts: {
       p.total_notional,
       p.venue,
       p.is_block_any${legsSubquery}
-    FROM arbs_usd_swap_tape_packages_v2 p
+    FROM ${TAPE_PACKAGES} p
     JOIN eligible_packages e ON e.package_id = p.package_id
     ORDER BY p.execution_start DESC
     LIMIT ${opts.limitParam}
@@ -621,7 +622,7 @@ export function buildStructureBucketPredicate(opts: {
           WHERE l2.tenor_years BETWEEN t.v - ${tolerance}::numeric AND t.v + ${tolerance}::numeric
         )) AS matched_legs,
         COUNT(*) AS total_legs
-      FROM arbs_usd_swap_tape_legs_v2 l2
+      FROM ${TAPE_LEGS} l2
       WHERE l2.package_id = ${a}.package_id
         AND COALESCE(l2.contributes_to_flow, FALSE) = TRUE
       GROUP BY l2.package_id
@@ -680,8 +681,8 @@ export function buildStructureTimeseriesSql(opts: {
              COUNT(*) OVER (
                PARTITION BY p.package_id
              ) AS leg_count
-      FROM arbs_usd_swap_tape_legs_v2 l
-      JOIN arbs_usd_swap_tape_packages_v2 p ON p.package_id = l.package_id
+      FROM ${TAPE_LEGS} l
+      JOIN ${TAPE_PACKAGES} p ON p.package_id = l.package_id
       WHERE COALESCE(l.contributes_to_flow, FALSE) = TRUE
         AND COALESCE(l.original_execution_timestamp, l.execution_timestamp) >= $1::timestamptz
         AND p.package_type IN (${opts.pkgTypePlaceholders})
@@ -753,8 +754,8 @@ export function buildStructureIntradaySeasonalitySql(opts: {
              COUNT(*) OVER (
                PARTITION BY p.package_id
              ) AS leg_count
-      FROM arbs_usd_swap_tape_legs_v2 l
-      JOIN arbs_usd_swap_tape_packages_v2 p ON p.package_id = l.package_id
+      FROM ${TAPE_LEGS} l
+      JOIN ${TAPE_PACKAGES} p ON p.package_id = l.package_id
       WHERE COALESCE(l.contributes_to_flow, FALSE) = TRUE
         AND COALESCE(l.original_execution_timestamp, l.execution_timestamp) >= $2::timestamptz
         AND COALESCE(l.original_execution_timestamp, l.execution_timestamp) <
@@ -889,8 +890,8 @@ export function buildStructureRecentTradesSql(opts: {
              COUNT(*) OVER (
                PARTITION BY p.package_id
              ) AS leg_count
-      FROM arbs_usd_swap_tape_legs_v2 l
-      JOIN arbs_usd_swap_tape_packages_v2 p ON p.package_id = l.package_id
+      FROM ${TAPE_LEGS} l
+      JOIN ${TAPE_PACKAGES} p ON p.package_id = l.package_id
       WHERE COALESCE(l.contributes_to_flow, FALSE) = TRUE
         AND COALESCE(l.original_execution_timestamp, l.execution_timestamp) >= $1::timestamptz
         AND p.package_type IN (${opts.pkgTypePlaceholders})
@@ -930,7 +931,7 @@ export function buildStructureRecentTradesSql(opts: {
         WHERE sm2.package_id = p.package_id
           AND sm2.leg_count = ${expectedLegs}
       ) AS legs
-    FROM arbs_usd_swap_tape_packages_v2 p
+    FROM ${TAPE_PACKAGES} p
     JOIN eligible_packages e ON e.package_id = p.package_id
     ORDER BY p.execution_start DESC
     LIMIT ${opts.limitParam}

@@ -11,8 +11,9 @@ import {
   aggregateUnrecognisedUnderliers,
   type UnrecognisedRow,
 } from './route.logic'
+import { TAPE_LEGS } from '@/lib/tape-tables'
 
-const LEGS_TABLE = 'arbs_usd_swap_tape_legs_v2'
+const LEGS_TABLE = TAPE_LEGS
 const DEFAULT_LOOKBACK_HOURS = 24
 const MAX_LOOKBACK_HOURS = 24 * 30 // 30 days hard cap
 

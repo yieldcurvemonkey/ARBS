@@ -1,4 +1,5 @@
 import { describe, expect, it } from '@jest/globals'
+import { TAPE_LEGS } from '@/lib/tape-tables'
 import { CLUSTERS_SQL } from '../route.logic'
 
 describe('CLUSTERS_SQL', () => {
@@ -8,8 +9,8 @@ describe('CLUSTERS_SQL', () => {
     expect(CLUSTERS_SQL).toContain('GROUP BY cluster_id')
   })
 
-  it('reads the live v2 leg table (not the frozen v1)', () => {
-    expect(CLUSTERS_SQL).toContain('arbs_usd_swap_tape_legs_v2')
+  it('reads the current-generation leg table (not the frozen v1)', () => {
+    expect(CLUSTERS_SQL).toContain(TAPE_LEGS)
     expect(CLUSTERS_SQL).not.toContain('legs_v1')
   })
 

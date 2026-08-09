@@ -1,8 +1,9 @@
 import { NextResponse } from 'next/server'
 import { query } from '@/lib/db'
+import { TAPE_LEGS, TAPE_PACKAGES } from '@/lib/tape-tables'
 
-const LEGS_TABLE = 'arbs_usd_swap_tape_legs_v2'
-const PACKAGES_TABLE = 'arbs_usd_swap_tape_packages_v2'
+const LEGS_TABLE = TAPE_LEGS
+const PACKAGES_TABLE = TAPE_PACKAGES
 
 export async function GET(req: Request) {
   const url = new URL(req.url)

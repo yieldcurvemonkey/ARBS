@@ -1,4 +1,5 @@
 import { describe, expect, it } from '@jest/globals'
+import { TAPE_LEGS } from '@/lib/tape-tables'
 import { buildRiskConcentrationSql, GROUPABLE } from '../route.logic'
 
 describe('buildRiskConcentrationSql', () => {
@@ -16,9 +17,9 @@ describe('buildRiskConcentrationSql', () => {
     expect(sql).toContain('NOT l.is_ufro')
   })
 
-  it('reads the live v2 leg table (not the frozen v1)', () => {
+  it('reads the current-generation leg table (not the frozen v1)', () => {
     const sql = buildRiskConcentrationSql('tape_label', false)
-    expect(sql).toContain('arbs_usd_swap_tape_legs_v2')
+    expect(sql).toContain(TAPE_LEGS)
     expect(sql).not.toContain('legs_v1')
   })
 

@@ -73,8 +73,8 @@ function buildQuery(params: UseTradeTapeDataParams, options?: {
  *
  * Pre-fix, the per-day detector used a local ``CURVE_N`` counter — so the
  * same 2-leg curve reported across multiple ingest runs landed in the
- * ``arbs_usd_swap_tape_packages_v1`` table multiple times under different
- * package_ids. Two side-effects in the dashboard:
+ * legacy v1 packages table multiple times under different package_ids.
+ * Two side-effects in the dashboard:
  *
  *   1. Duplicate rows: both surviving package_ids render, differing only
  *      in aggregated fields like platform_identifier.

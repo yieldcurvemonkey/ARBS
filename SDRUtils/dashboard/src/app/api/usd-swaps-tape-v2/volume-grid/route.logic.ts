@@ -28,6 +28,7 @@ import {
   type ResolvedSchema,
   type TenorSchemaId,
 } from '@/lib/usd-swaps-tape-v2/volumeGridBuckets'
+import { TAPE_LEGS, TAPE_PACKAGES } from '@/lib/tape-tables'
 import {
   PLATFORM_CASE_SQL,
   summariseCells,
@@ -456,8 +457,8 @@ export function buildVolumeGridSqlTimeOfDay(ctx: SqlBuildContext): BuiltSql {
           (COALESCE(l.original_execution_timestamp, l.execution_timestamp) AT TIME ZONE 'America/New_York')
           - date_trunc('day', COALESCE(l.original_execution_timestamp, l.execution_timestamp) AT TIME ZONE 'America/New_York')
         )) AS tod_seconds_et
-      FROM arbs_usd_swap_tape_legs_v2 l
-      JOIN arbs_usd_swap_tape_packages_v2 p ON p.package_id = l.package_id
+      FROM ${TAPE_LEGS} l
+      JOIN ${TAPE_PACKAGES} p ON p.package_id = l.package_id
       WHERE COALESCE(l.contributes_to_flow, FALSE) = TRUE
         AND COALESCE(l.original_execution_timestamp, l.execution_timestamp) >= $1::timestamptz
         AND COALESCE(l.original_execution_timestamp, l.execution_timestamp) <  $2::timestamptz
@@ -570,8 +571,8 @@ export function buildVolumeGridSqlRolling(ctx: SqlBuildContext): BuiltSql {
         ${tenorBucketExpr} AS tenor_bucket,
         ${PLATFORM_CASE_SQL} AS platform,
         ${buildPkgFamilySql('p')} AS pkg_family
-      FROM arbs_usd_swap_tape_legs_v2 l
-      JOIN arbs_usd_swap_tape_packages_v2 p ON p.package_id = l.package_id
+      FROM ${TAPE_LEGS} l
+      JOIN ${TAPE_PACKAGES} p ON p.package_id = l.package_id
       WHERE COALESCE(l.contributes_to_flow, FALSE) = TRUE
         AND COALESCE(l.original_execution_timestamp, l.execution_timestamp) >= $1::timestamptz
         AND COALESCE(l.original_execution_timestamp, l.execution_timestamp) <  $2::timestamptz

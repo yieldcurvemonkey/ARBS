@@ -7,8 +7,9 @@ import {
   parseDatePattern,
   parseParams,
 } from '../route.logic'
+import { TAPE_DISPLAY } from '@/lib/tape-tables'
 
-const VIEW = 'arbs_usd_swap_tape_display_v2'
+const VIEW = TAPE_DISPLAY
 const COLUMNS = 'd.*'
 
 function paramsOf(qs: string) {

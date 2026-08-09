@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server'
 import { query } from '@/lib/db'
+import { TAPE_SIGNAL } from '@/lib/tape-tables'
 
 export const dynamic = 'force-dynamic'
 
@@ -10,7 +11,7 @@ export async function GET() {
       packages_written: number
       legs_written: number
     }>(
-      'SELECT updated_at, packages_written, legs_written FROM arbs_usd_swap_tape_signal_v2 WHERE id = 1',
+      `SELECT updated_at, packages_written, legs_written FROM ${TAPE_SIGNAL} WHERE id = 1`,
       [],
     )
     const row = result.rows[0]

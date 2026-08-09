@@ -1,3 +1,5 @@
+import { TAPE_LEGS } from '@/lib/tape-tables'
+
 export const FOMC_CLUSTERS_SQL = `
   SELECT
     l.fomc_meeting_label,
@@ -5,7 +7,7 @@ export const FOMC_CLUSTERS_SQL = `
     SUM(l.risk)::float AS net_risk,
     SUM(ABS(l.notional))::float AS gross_notional,
     BOOL_OR(l.is_multi_meeting_cluster) AS has_multi_meeting_flow
-  FROM arbs_usd_swap_tape_legs_v2 l
+  FROM ${TAPE_LEGS} l
   WHERE l.as_of_date = $1::date
     AND l.is_fomc_dated = TRUE
     AND l.fomc_meeting_label IS NOT NULL

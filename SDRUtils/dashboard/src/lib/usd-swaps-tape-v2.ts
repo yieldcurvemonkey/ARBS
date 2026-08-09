@@ -1,12 +1,13 @@
 // ABOUTME: Resolver for the USD swap tape v2 display view and column list.
 import { query } from '@/lib/db'
 import { TAPE_DISPLAY_VIEW } from '@/app/api/usd-swaps-tape-v2/route.logic'
+import { TAPE_LEGS, TAPE_PACKAGES } from '@/lib/tape-tables'
 
-// Phase 4 cutover: DISPLAY_VIEW reads from the Phase-4 constant. v1 is
-// preserved frozen; to roll back, flip TAPE_DISPLAY_VIEW in route.logic.ts.
+// Generation is owned by src/lib/tape-tables.ts; v1 is preserved frozen as
+// the rollback target (design §4.11).
 export const DISPLAY_VIEW = TAPE_DISPLAY_VIEW
-export const PACKAGES_TABLE = 'arbs_usd_swap_tape_packages_v2'
-export const LEGS_TABLE = 'arbs_usd_swap_tape_legs_v2'
+export const PACKAGES_TABLE = TAPE_PACKAGES
+export const LEGS_TABLE = TAPE_LEGS
 
 // Audit C1 prevention: the old hard-coded COLUMNS allowlist silently
 // dropped every new view column (the whole PTP feature shipped invisible).

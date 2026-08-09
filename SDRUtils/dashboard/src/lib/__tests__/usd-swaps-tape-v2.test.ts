@@ -1,4 +1,5 @@
 import { describe, expect, it } from '@jest/globals'
+import { TAPE_DISPLAY, TAPE_LEGS, TAPE_PACKAGES } from '@/lib/tape-tables'
 import {
   DISPLAY_VIEW,
   PACKAGES_TABLE,
@@ -8,13 +9,13 @@ import {
 } from '../usd-swaps-tape-v2'
 
 describe('usd-swaps-tape-v2 constants', () => {
-  it('exposes the v2 display view post-cutover', () => {
-    expect(DISPLAY_VIEW).toBe('arbs_usd_swap_tape_display_v2')
+  it('exposes the current-generation display view', () => {
+    expect(DISPLAY_VIEW).toBe(TAPE_DISPLAY)
   })
 
-  it('exposes the v2 backing table names', () => {
-    expect(PACKAGES_TABLE).toBe('arbs_usd_swap_tape_packages_v2')
-    expect(LEGS_TABLE).toBe('arbs_usd_swap_tape_legs_v2')
+  it('exposes the current-generation backing table names', () => {
+    expect(PACKAGES_TABLE).toBe(TAPE_PACKAGES)
+    expect(LEGS_TABLE).toBe(TAPE_LEGS)
   })
 })
 

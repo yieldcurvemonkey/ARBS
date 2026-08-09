@@ -14,6 +14,7 @@ import {
   resolveForwardSchema,
   resolveTenorSchema,
 } from '@/lib/usd-swaps-tape-v2/volumeGridBuckets'
+import { TAPE_PACKAGES } from '@/lib/tape-tables'
 
 describe('parseVolumeGridParams', () => {
   it('applies defaults', () => {
@@ -126,12 +127,12 @@ describe('buildVolumeGridSqlTimeOfDay', () => {
   const tenor = resolveTenorSchema('default')
   const bounds = computeWindowBounds('today', 90, new Date('2026-05-05T14:32:00Z'))
 
-  it('joins arbs_usd_swap_tape_packages_v2 to filter by package_type', () => {
+  it('joins the current-generation packages table to filter by package_type', () => {
     const built = buildVolumeGridSqlTimeOfDay({
       metric: 'notional', forwardSchema: fwd, tenorSchema: tenor,
       packageType: 'outright', bounds,
     })
-    expect(built.sql).toContain('JOIN arbs_usd_swap_tape_packages_v2 p ON p.package_id = l.package_id')
+    expect(built.sql).toContain(`JOIN ${TAPE_PACKAGES} p ON p.package_id = l.package_id`)
     expect(built.sql).toContain('p.package_type IN ($6)')
     expect(built.params[5]).toBe('OUTRIGHT')
   })

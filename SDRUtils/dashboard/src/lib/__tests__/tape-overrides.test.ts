@@ -1,4 +1,5 @@
 import { describe, expect, it, jest, beforeEach } from '@jest/globals'
+import { TAPE_LEGS } from '@/lib/tape-tables'
 
 const queryMock = jest.fn<(sql: string, params?: unknown[]) => Promise<{ rows: unknown[] }>>(
   async () => ({ rows: [] as unknown[] }),
@@ -95,7 +96,7 @@ describe('resolveOverrideLegs (db)', () => {
     const legs = await mod.resolveOverrideLegs(['T1'])
     expect(legs).toEqual([{ trade_id: 'T1', package_id: 'P1' }])
     expect(queryMock).toHaveBeenCalledTimes(1)
-    expect(String(queryMock.mock.calls[0][0])).toContain('arbs_usd_swap_tape_legs_v2')
+    expect(String(queryMock.mock.calls[0][0])).toContain(TAPE_LEGS)
   })
   it('short-circuits on empty input', async () => {
     expect(await mod.resolveOverrideLegs([])).toEqual([])

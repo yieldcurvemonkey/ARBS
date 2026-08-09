@@ -5,8 +5,9 @@ import {
   resolveForwardSchema,
   resolveTenorSchema,
 } from '@/lib/usd-swaps-tape-v2/volumeGridBuckets'
+import { TAPE_LEGS } from '@/lib/tape-tables'
 
-const LEGS_TABLE = 'arbs_usd_swap_tape_legs_v2'
+const LEGS_TABLE = TAPE_LEGS
 
 const WINDOW_HOURS: Record<string, number | null> = {
   '1h': 1,

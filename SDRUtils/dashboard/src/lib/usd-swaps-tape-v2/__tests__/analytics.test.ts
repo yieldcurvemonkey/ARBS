@@ -4,6 +4,7 @@
 // non-D2D. Failing this test means a future refactor accidentally
 // dropped one of the 6 dealer SEFs and would silently mis-bucket
 // Dealerweb / ICAP-Global / Tradition flow as customer.
+import { TAPE_LEGS } from '@/lib/tape-tables'
 import {
   CUSTY_MIC_SET,
   IDB_MIC_SET,
@@ -110,7 +111,7 @@ describe('package summary analytics SQL', () => {
     const predicate = packageAnalyticsFilterPredicate(
       'tape_label',
       '$1',
-      'arbs_usd_swap_tape_legs_v2',
+      TAPE_LEGS,
     )
 
     expect(predicate).toContain('p.tape_label = $1')
