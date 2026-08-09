@@ -33,7 +33,21 @@ def code(src: str) -> None:
 md(r"""
 # Sellside Hawk/Dove Label Predictiveness — Global Front-End STIR Futures Around Central Bank Speeches
 
-Extends the Fed-only SOFR study to **ECB (ESTR)**, **BOE (SONIA)** and **BOJ (TONA)**.
+Six legs, each trading its own front-end STIR future:
+
+| leg | instrument | source |
+|---|---|---|
+| FED | SR3 — 3M SOFR (CME) | Barchart |
+| ECB | **IM — 3M EURIBOR (ICE)** | Barchart |
+| BOE | J8 — 3M SONIA (ICE) | Barchart |
+| BOJ | 3M TONA | **reconstructed from the Citi Velocity minute curve** |
+| BOC | RG — 3M CORRA (MX) | Barchart |
+| SNB | J2 — 3M SARON (Eurex) | Barchart |
+
+The euro leg trades **Euribor, not ESTR**: measured coverage is 352–803 bars every day across
+2021–2026, where ESTR serves nothing before 2024 and Eurex Euribor is largely a padded grid.
+The euro event stream also carries Norges Bank and Riksbank speakers, whose commentary moves
+the euro strip.
 
 **Hypothesis** — if sellside hawk/dove labels carry information, the front end should systematically
 misprice around speeches. Hawk → rates higher → **pay fixed = SELL the future**.
@@ -55,7 +69,8 @@ same instrument the Fed notebook's `IMM_3xIMM_4` swap tenor picked out.
 | **Direction** | On the STIRFuture path a **negative `bpv` does not short** — it flips both the risk-weighted price and the PV01 and the two cancel, silently giving a LONG. The only correct short is `bpv=+X` with `risk_weights=[-1.0]`. Verified on SR3Z25. |
 | **Intraday** | Without `market_request={"timestamp": "now"}` every query prices off the *daily* bar and all same-day P&L is exactly zero. |
 | **Lookahead** | `STIRFutureMDP` serves the last bar at-or-before the request *inside* the session, but serves a **later** bar when the request precedes the day's first bar — measured up to 335 minutes of lookahead. Every event is gated on a real causal bar. |
-| **Signal scale** | The JPM score is **not comparable across banks** (median `trailing_5_avg`: FED +12, ECB +10, BOE +15, BOJ −23). The Fed's absolute ±10/±20 cutoffs label 74% of BOE speeches hawk and 0% dove. Buckets are therefore assigned by **percentile within each bank's own trailing history**. |
+| **Signal scale** | The JPM score is **not comparable across banks** (median `trailing_5_avg`: FED +12, ECB +10, BOE +15, BOJ −23). The Fed's absolute ±10/±20 cutoffs label 69% of BOE speeches hawk and 0% dove. Buckets are assigned **relative to the speaker's own committee at that moment**. |
+| **Score vintage** | 60.5% of score rows come from a report published *after* the speech, and JPM re-scores history. Every lookup and every reference distribution is gated on the publication date, which removes the entire pre-2023 sample. |
 """)
 
 code(r"""
@@ -123,8 +138,8 @@ cov = (scores.groupby("central_bank")
             median_score=(SCORE_METRIC, "median")))
 display(cov)
 
-fig, axes = plt.subplots(1, 4, figsize=(18, 3.6), sharey=True)
-for ax, b in zip(axes, BANKS):
+fig, axes = plt.subplots(1, len(BANKS), figsize=(4 * len(BANKS), 3.6), sharey=True)
+for ax, b in zip(np.atleast_1d(axes), BANKS):
     s = scores.loc[scores.central_bank == b, SCORE_METRIC].dropna()
     ax.hist(s, bins=30, color="steelblue", alpha=.75, edgecolor="k", linewidth=.4)
     ax.axvline(s.median(), color="crimson", lw=2, label=f"median {s.median():.0f}")
@@ -136,18 +151,21 @@ plt.tight_layout(); plt.show()
 """)
 
 md(r"""
-### 1.1 Why the buckets must be scaled per bank
+### 1.1 The label has to be relative to the COMMITTEE
 
-A qualitative hawk/dove read should split roughly evenly within a bank. Applying the Fed's
-absolute ±10/±20 cutoffs to every bank does the opposite — it turns the BOE leg into a
-permanent short-rates bet and the BOJ leg into a permanent long-rates bet, which is a bet on
-the sample period, not on the label.
+A qualitative hawk/dove read should split roughly evenly within a bank. The Fed's absolute
+±10/±20 cutoffs do the opposite — they make the BOE leg 69% hawk and 0% dove, and the BOJ leg
+5% hawk and 45% dove. That is a bet on the sample period, not on the label.
 
-The percentile bucketer ranks each score inside that bank's **trailing 60 observations**
-(strictly before the speech date, so no lookahead) and buckets on the rank. The window is
-trailing rather than expanding because an expanding window compares 2025-26 speeches to the
-very hawkish 2022-23 era and leaks the drift back in as a directional tilt. **60 was chosen on
-label balance alone, before any P&L was computed.**
+Ranking a speaker against **their own past** (`percentile`) fixes the scale but still answers
+the wrong question: "was this speech hawkish *for them*". What moves a rate is where the
+speaker sits on **their own committee** — a Bank of Japan member who sounds dovish to a global
+audience can still be the BOJ's hawk, and in 2022 every FOMC member sounded hawkish while only
+some were hawkish relative to their peers.
+
+So `peer` scores each speech against the cross-section of that committee's *other* members at
+that moment, using only observations that were both prior and already published. It is the
+difference between calling every BoJ member a dove and finding the BoJ's own hawks.
 """)
 
 code(r"""
@@ -199,13 +217,22 @@ with open(CACHE / "events.pkl", "rb") as f:
 
 funnel = []
 for b in BANKS:
-    d = events_by_bank[b]
-    row = {"bank": b, "forexfactory": d["n_raw"]}
-    row.update({f"excl:{k}": v for k, v in d["excluded"].items()})
-    row.update({f"gate:{k}": v for k, v in d["gate_reasons"].items()})
+    d = events_by_bank.get(b)
+    if not d:
+        continue
+    f = d.get("funnel", {})
+    row = {"bank": b,
+           "forexfactory_rows": f.get("n_forexfactory_rows", d.get("n_raw", 0)),
+           "timed": f.get("n_timed", 0), "synthetic": f.get("n_synthetic", 0)}
+    row.update({f"ff:{k}": v for k, v in (f.get("forexfactory") or {}).items()})
+    row.update({f"syn:{k}": v for k, v in (f.get("synthetic") or {}).items()})
+    row.update({f"gate:{k}": v for k, v in (d.get("gate_reasons") or {}).items()})
     row["TRADEABLE"] = len(d["events"])
+    ev = d["events"]
+    row["of which synthetic"] = sum(
+        1 for e in ev if e.get("timestamp_source") == "synthetic")
     funnel.append(row)
-funnel = pd.DataFrame(funnel).set_index("bank").fillna(0).astype(int, errors="ignore")
+funnel = pd.DataFrame(funnel).set_index("bank").fillna(0)
 display(funnel.T)
 """)
 
@@ -305,6 +332,50 @@ plt.tight_layout(); plt.show()
 """)
 
 # --------------------------------------------------------------------------
+md(r"""
+### 4.1 Two things the headline number hides
+
+**Provenance.** ForexFactory names only two euro-area speakers and carries no SEK or NOK rows at
+all, so speeches known from the JPM reports but absent from the calendar are traded as a
+full-session hold and tagged `synthetic`. Those are a different strategy — a day-long directional
+hold, not an event study — so they are reported separately. If the edge lives there, the result is
+about holding a session on a speech day, not about the speech.
+
+**Sizing.** The engine sizes each trade at `|bucket| × BASE_BPV`, but `pnl_bp = realized_pnl / bpv`
+divides that straight back out. Every per-unit-risk statistic therefore describes an *equal-weight*
+book. Both are shown; they disagree whenever the conviction buckets have different edge.
+""")
+
+code(r"""
+print("by timestamp provenance:")
+rows = []
+for src, sub in pooled.groupby("timestamp_source"):
+    s_ = G.summarize(sub)
+    rows.append({"provenance": src, "trades": s_["trades"], "total_bp": s_["total"],
+                 "avg_bp": s_["avg"], "hit": s_["hit_rate"], "sharpe": s_["sharpe"]})
+display(pd.DataFrame(rows).set_index("provenance").round(4))
+
+print(chr(10) + "per leg x provenance:")
+display(pooled.groupby(["bank", "timestamp_source"])
+        .agg(n=("pnl_bp", "size"), total_bp=("pnl_bp", "sum"),
+             avg_bp=("pnl_bp", "mean")).round(4))
+
+print(chr(10) + "equal-weight vs as-sized:")
+rows = []
+for lbl, col in [("equal weight (pnl_bp)", "pnl_bp"),
+                 ("as sized (pnl_bp x |bucket|)", "pnl_bp_sized")]:
+    if col not in pooled.columns:
+        continue
+    s_ = G.summarize(pooled, pnl_col=col)
+    rows.append({"book": lbl, "trades": s_["trades"], "total_bp": s_["total"],
+                 "avg_bp": s_["avg"], "sharpe": s_["sharpe"], "t_stat": s_["t_stat"]})
+display(pd.DataFrame(rows).set_index("book").round(4))
+
+print(chr(10) + "conviction: does a bigger label earn more?")
+display(pooled.groupby("abs_bucket").agg(
+    n=("pnl_bp", "size"), avg_bp=("pnl_bp", "mean"), total_bp=("pnl_bp", "sum")).round(4))
+""")
+
 md("## 5. P&L attribution by speaker")
 
 code(r"""
@@ -581,6 +652,10 @@ variants = {
 # Fail loudly if the cache is cold rather than reporting a sweep over nothing.
 missing = 0
 for b, evs in ev_only.items():
+    # a leg whose future is RECONSTRUCTED from a curve never touches the bar
+    # cache, so requiring bars for it would fail on data it does not use
+    if G.CB_CONFIGS[b].source != "barchart":
+        continue
     for r in [1, 2, 4, 5]:
         for e in G.rebuild_with_contract(evs, G.CB_CONFIGS[b], r):
             if (e["symbol"], e["entry_ts"].date()) not in G._BAR_CACHE:
@@ -612,76 +687,36 @@ signal versus from a constant directional tilt.
 """)
 
 code(r"""
-# Rebuild the whole event set under the Fed's absolute cutoffs. The bar cache is
-# already warm, so the gate is cheap and no new data is fetched.
-abs_by_bank, abs_frames = {}, []
-for b in BANKS:
-    # A bank with no tradeable baseline has no book under either scheme. BOJ is
-    # the case: its contracts do not exist on Barchart, so a fetch raises rather
-    # than returning an empty day and no amount of pre-warming can satisfy it.
-    if not events_by_bank[b]["events"]:
-        print(f"  {b}: no tradeable book under either scheme — skipped")
-        continue
-    cfg = G.CB_CONFIGS[b]
-    raw = G.fetch_events(cfg, BT_START, BT_END)
-    lookup = G.ScoreLookup(scores, b, SCORE_METRIC)
-    evs, _excl = G.build_trade_events(
-        cfg, raw, lookup,
-        entry_offset=ENTRY_OFFSET, exit_offset=EXIT_OFFSET,
-        base_bpv=BASE_BPV, contract_rank=CONTRACT_RANK,
-        bucket_fn=lambda _s, x, _d: G.absolute_bucket(x),
-        blackout_fn=G.make_blackout_fn(cfg, BLACKOUT_BD),
-    )
-    evs, _ = G.drop_overlaps(evs)
-    evs, _r, _d = G.gate_events(evs, cfg, mdp, max_staleness_min=MAX_STALENESS_MIN,
-                                show_progress=False)
-    # The absolute cutoffs select a DIFFERENT subset of speeches, on days the
-    # percentile run never gated. If those bars are not cached this cell cannot
-    # fetch them (kernel), and they would be logged as "no bars that day" — a
-    # failed fetch quietly impersonating a quiet market. Refuse to report that.
-    if _r.get("fetch_failed"):
-        raise RuntimeError(
-            f"{b}: {_r['fetch_failed']} bar fetches FAILED (not empty days). "
-            "Run `python global_hawk_dove_run.py --stage prewarm` — this cell "
-            "cannot fetch from inside a kernel and would under-count."
-        )
-    abs_by_bank[b] = evs
-    f = G.fast_backtest(evs)
-    if not f.empty:
-        abs_frames.append(f)
-    print(f"  {b}: {len(evs)} tradeable under absolute cutoffs  (gate: {_r})")
+# The grid search already scored every labelling scheme on the same events and the
+# same instruments, so the comparison is read from there rather than rebuilt.
+import pandas as pd
+gr = pd.read_csv(CACHE / "grid_results.csv")
 
-pooled_abs = (pd.concat(abs_frames, ignore_index=True).sort_values("opened_at")
-              if abs_frames else pd.DataFrame())
+print("Sharpe by labelling scheme, across all 22 structures:")
+display(gr.groupby("bucket_mode")[["sharpe_ann", "avg_bp", "trades", "dsr"]]
+        .agg({"sharpe_ann": ["count", "median", "max"], "avg_bp": "median",
+              "trades": "median", "dsr": "max"}).round(4))
 
-# Compare like with like: the percentile book re-priced with the same closed form.
-pooled_pct_fast = pd.concat(
-    [G.fast_backtest(events_by_bank[b]["events"]) for b in BANKS
-     if events_by_bank[b]["events"]], ignore_index=True).sort_values("opened_at")
-
+print(chr(10) + "And the label balance each scheme produces per committee "
+      "(hawk share; a real committee should be near 50%):")
 rows = []
-for lbl, p in [("percentile (per-bank, trailing 60)", pooled_pct_fast),
-               ("absolute ±10/±20 (Fed cutoffs)", pooled_abs)]:
-    if p.empty:
+for b in BANKS:
+    if b not in set(scores.central_bank):
         continue
-    s = G.summarize(p)
-    s["scheme"] = lbl
-    s["hawk_share"] = (p["bucket"] > 0).mean()
-    rows.append(s)
-display(pd.DataFrame(rows).set_index("scheme")[
-    ["trades", "total", "avg", "hit_rate", "sharpe", "t_stat", "hawk_share"]]
-    .style.format({"total": "{:+.2f}", "avg": "{:+.3f}", "hit_rate": "{:.1%}",
-                   "sharpe": "{:.2f}", "t_stat": "{:.2f}", "hawk_share": "{:.1%}"}))
-
-if not pooled_abs.empty:
-    print("\nPer-bank hawk share — the tell that absolute cutoffs are a level bet:")
-    display(pd.DataFrame({
-        "absolute": pooled_abs.groupby("bank").apply(lambda d: (d.bucket > 0).mean()),
-        "percentile": pooled_pct_fast.groupby("bank").apply(lambda d: (d.bucket > 0).mean()),
-    }).style.format("{:.1%}"))
+    pct = G.make_percentile_bucketer(scores, b, SCORE_METRIC)
+    peer = G.make_peer_relative_bucketer(scores, b, SCORE_METRIC, fallback=pct)
+    for name, fn in [("absolute", lambda s_, x, d: G.absolute_bucket(x)),
+                     ("percentile", pct), ("peer", peer)]:
+        sp = G.bucket_split(scores, b, SCORE_METRIC, fn)
+        h = sum(v for k, v in sp.items() if k > 0)
+        d_ = sum(v for k, v in sp.items() if k < 0)
+        rows.append({"bank": b, "scheme": name, "hawk": h, "dove": d_,
+                     "imbalance": abs(h - d_)})
+bal = pd.DataFrame(rows).pivot(index="bank", columns="scheme", values="imbalance")
+display(bal.round(3))
+print("Lower is better: it is the gap between the hawk share and the dove share.")
 """)
 
-# --------------------------------------------------------------------------
 md("## 9. Full trade log")
 
 code(r"""

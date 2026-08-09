@@ -80,7 +80,8 @@ from global_hawk_dove_run import CACHE, BANKS
 with open(CACHE / "grid_panel.pkl", "rb") as f:
     store = pickle.load(f)
 
-structures = GRID.build_structures(GRID_MAX_RANK := 6)
+MAX_RANK = 6
+structures = GRID.build_structures(MAX_RANK)
 print(f"{len(structures)} structures, {len(store)} labelling schemes")
 for m, blob in store.items():
     tot = sum(len(v) for v in blob["metas"].values())
@@ -90,19 +91,25 @@ for m, blob in store.items():
 md("## 1. The grid")
 
 code(r"""
+from global_hawk_dove_grid_run import CAUSAL_MODES, NONCAUSAL_MODES, ENTRY_MIN, EXIT_MIN
+
 frames = []
 for mode, blob in store.items():
     g = GRID.run_grid(blob["panels"], blob["metas"], structures, cost_bp=0.0)
     if g.empty:
         continue
     g["bucket_mode"] = mode
+    g["causal"] = mode in CAUSAL_MODES
     frames.append(g)
-grid = pd.concat(frames, ignore_index=True)
+allg = pd.concat(frames, ignore_index=True)
 
-ENTRY_MIN = [-120, -60, -45, -15]
-EXIT_MIN = [60, 120, 180, 240]
+# The researched / blended labels were written in 2026 about trades from 2023-2026.
+# They are not tradeable, so they are held out of the ranking and deflated on their
+# own; mixing a fitted label into the same deflation as honest ones understates the
+# hurdle for the honest ones.
+grid = allg[allg["causal"]].reset_index(drop=True)
+noncausal = allg[~allg["causal"]].reset_index(drop=True)
 N_TRIALS = len(grid) * len(ENTRY_MIN) * len(EXIT_MIN)
-
 grid = GRID.add_deflated(grid, n_trials=N_TRIALS)
 show = ["structure", "kind", "bucket_mode", "trades", "total_bp", "avg_bp",
         "hit", "sharpe_ann", "t_stat", "dsr"]
@@ -138,6 +145,14 @@ plt.tight_layout(); plt.show()
 alive = grid[(grid["dsr"] > 0.95) & (grid["trades"] >= 50)]
 print(f"configs with DSR > 0.95 and >= 50 trades: {len(alive)} / {len(grid)}")
 display(alive[show].round(4).head(20) if len(alive) else "NONE")
+
+if len(noncausal):
+    nc = GRID.add_deflated(noncausal, n_trials=len(noncausal) * len(ENTRY_MIN) * len(EXIT_MIN))
+    print(chr(10) + "NON-CAUSAL UPPER BOUND - researched / blended labels.")
+    print("Written in 2026 about these very trades, so NOT tradeable. Shown only to bound")
+    print("what perfect knowledge of who was a hawk would have been worth:")
+    display(nc.sort_values("sharpe_ann", ascending=False)[
+        ["structure", "bucket_mode", "trades", "avg_bp", "sharpe_ann", "t_stat"]].head(8).round(4))
 """)
 
 md("## 3. Which structure family, and which label?")
