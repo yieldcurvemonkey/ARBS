@@ -23,6 +23,18 @@ class _RawOnlyMapping:
         raise AssertionError("bulk bundle writes should bypass layered __setitem__")
 
 
+# A believable node set. _curve_store_write_day now runs every candidate
+# snapshot through the sanity gate before persisting, so a stub snapshot has to
+# carry node data or it is (correctly) rejected as empty.
+_HEALTHY_NODE_DATES = [
+    datetime.date(2026, 3, 10),
+    datetime.date(2026, 4, 29),
+    datetime.date(2026, 6, 17),
+    datetime.date(2027, 3, 10),
+]
+_HEALTHY_DFS = [1.0, 0.9945, 0.9890, 0.9615]
+
+
 def test_daily_bundle_put_uses_local_mapping_only():
     builder = BARCHART_STIRF_CURVE.__new__(BARCHART_STIRF_CURVE)
     mapping = _RawOnlyMapping()
@@ -99,9 +111,12 @@ def test_curve_store_write_day_persists_one_bulk_day(monkeypatch):
         def __init__(self, timestamp_utc, curve):
             self.timestamp_utc = timestamp_utc
             self.curve = curve
+            self.node_dates = _HEALTHY_NODE_DATES
+            self.discount_factors = _HEALTHY_DFS
+            self.trading_date = datetime.date(2026, 3, 10)
 
     class _DummyStore:
-        def read_raw_day(self, curve_name, trading_date):
+        def read_raw_day(self, curve_name, trading_date, **kwargs):
             return pd.DataFrame()
 
         def reconstruct_curves_batch(self, raw_df, cfg, max_workers=4):
@@ -184,11 +199,14 @@ def test_curve_store_write_day_merges_existing_partial_day(monkeypatch):
         def __init__(self, timestamp_utc, label):
             self.timestamp_utc = timestamp_utc
             self.label = label
+            self.node_dates = _HEALTHY_NODE_DATES
+            self.discount_factors = _HEALTHY_DFS
+            self.trading_date = datetime.date(2026, 3, 10)
 
     captured = {}
 
     class _DummyStore:
-        def read_raw_day(self, curve_name, trading_date):
+        def read_raw_day(self, curve_name, trading_date, **kwargs):
             return pd.DataFrame([{"timestamp_utc": existing_ts}])
 
         def reconstruct_curves_batch(self, raw_df, cfg, max_workers=4):
@@ -257,9 +275,12 @@ def test_curve_store_write_day_attaches_timestamp_context_from_bulk_key(monkeypa
     class _Snapshot:
         def __init__(self, timestamp_utc):
             self.timestamp_utc = timestamp_utc
+            self.node_dates = _HEALTHY_NODE_DATES
+            self.discount_factors = _HEALTHY_DFS
+            self.trading_date = datetime.date(2026, 3, 10)
 
     class _DummyStore:
-        def read_raw_day(self, curve_name, trading_date):
+        def read_raw_day(self, curve_name, trading_date, **kwargs):
             return pd.DataFrame()
 
         def reconstruct_curves_batch(self, raw_df, cfg, max_workers=4):
@@ -383,3 +404,140 @@ def test_persist_bulk_curves_uses_curve_store_for_shallow_days_only_once(monkeyp
     ]
     assert bundle_calls == []
     assert local_cache_calls == [("USD-SOFR-1D-Q12STIRT", fresh_ts, curve_fresh)]
+
+
+def _write_day_harness(monkeypatch, snapshots_by_curve, captured):
+    """Wire _curve_store_write_day to stubs, returning a bare builder.
+
+    ``snapshots_by_curve`` maps the placeholder curve object to the snapshot the
+    stubbed CurveSnapshot factory should return for it.
+    """
+    import Caching.curve_store as curve_store_module
+    import Caching.curve_analytics as curve_analytics_module
+
+    class _DummyStore:
+        def read_raw_day(self, curve_name, trading_date, **kwargs):
+            captured["merge_base_kwargs"] = kwargs
+            return pd.DataFrame()
+
+        def reconstruct_curves_batch(self, raw_df, cfg, max_workers=4):
+            return {}
+
+        def write_day(self, curve_name, trading_date, snapshots, overwrite=False):
+            captured["snapshots"] = list(snapshots)
+
+        def write_analytics_day(self, curve_name, trading_date, df, overwrite=False):
+            captured["analytics_df"] = df.copy()
+
+    monkeypatch.setattr(
+        curve_store_module.CurveSnapshot,
+        "from_rl_curve",
+        classmethod(lambda cls, curve, *, curve_name, cfg, cfg_hash="": snapshots_by_curve[curve]),
+    )
+    monkeypatch.setattr(curve_store_module.CurveStore, "default", staticmethod(lambda: _DummyStore()))
+    monkeypatch.setattr(
+        curve_analytics_module,
+        "compute_analytics_row",
+        lambda curve, *, timestamp_utc, trading_date, session_minute=None, tenors=None, curve_name=None: {
+            "timestamp_utc": pd.Timestamp(timestamp_utc),
+            "trading_date": trading_date,
+        },
+    )
+
+    builder = BARCHART_STIRF_CURVE.__new__(BARCHART_STIRF_CURVE)
+    builder._curve_cfg_hash = lambda cfg: "cfg123"
+    return builder
+
+
+class _GateSnapshot:
+    def __init__(self, timestamp_utc, discount_factors, label):
+        self.timestamp_utc = timestamp_utc
+        self.discount_factors = discount_factors
+        self.label = label
+        self.node_dates = _HEALTHY_NODE_DATES
+        self.trading_date = datetime.date(2026, 3, 10)
+
+
+def test_write_day_rejects_a_degenerate_snapshot_and_keeps_the_rest(monkeypatch):
+    """2026-07-01 stored 1,381 identity curves and reported success.
+
+    A snapshot whose discount factors are all exactly 1.0 is rateslib's
+    pre-solve state, never a market, and must not reach the partition.
+    """
+    ts_good = datetime.datetime(2026, 3, 10, 14, 0, tzinfo=datetime.timezone.utc)
+    ts_dead = datetime.datetime(2026, 3, 10, 15, 0, tzinfo=datetime.timezone.utc)
+    good = _GateSnapshot(ts_good, _HEALTHY_DFS, "good")
+    dead = _GateSnapshot(ts_dead, [1.0] * len(_HEALTHY_NODE_DATES), "dead")
+
+    captured = {}
+    builder = _write_day_harness(monkeypatch, {"c-good": good, "c-dead": dead}, captured)
+    builder._curve_store_write_day(
+        "USD-SOFR-1D-Q12STIRT",
+        datetime.date(2026, 3, 10),
+        {"reference_key": "USD-SOFR-1D"},
+        {ts_good: "c-good", ts_dead: "c-dead"},
+    )
+
+    assert [s.label for s in captured["snapshots"]] == ["good"]
+    # The merge base must be read unfiltered, or quarantined rows would be
+    # silently deleted from the partition by the next write.
+    assert captured["merge_base_kwargs"] == {"apply_sanity_filter": False}
+
+
+def test_write_day_raises_when_every_snapshot_fails_the_gate(monkeypatch):
+    """A day that produced nothing believable is a failure, not a no-op."""
+    ts = datetime.datetime(2026, 3, 10, 14, 0, tzinfo=datetime.timezone.utc)
+    dead = _GateSnapshot(ts, [1.0] * len(_HEALTHY_NODE_DATES), "dead")
+
+    captured = {}
+    builder = _write_day_harness(monkeypatch, {"c-dead": dead}, captured)
+    with pytest.raises(ValueError, match="curve sanity gate"):
+        builder._curve_store_write_day(
+            "USD-SOFR-1D-Q12STIRT",
+            datetime.date(2026, 3, 10),
+            {"reference_key": "USD-SOFR-1D"},
+            {ts: "c-dead"},
+        )
+    assert "snapshots" not in captured
+
+
+def test_calibrate_chunk_does_not_warm_start_from_an_unsolved_curve(monkeypatch):
+    """2026-07-01: one identity solve seeded 1,381 consecutive minutes.
+
+    _calibrate_chunk warm-starts each minute from the previous minute's nodes.
+    A curve that failed to solve must neither be emitted nor become the next
+    minute's seed -- the last believable seed carries forward instead.
+    """
+    nodes_good = {pd.Timestamp("2026-03-11"): 0.994, pd.Timestamp("2026-06-17"): 0.988}
+    nodes_dead = {pd.Timestamp("2026-03-11"): 1.0, pd.Timestamp("2026-06-17"): 1.0}
+
+    def _curve(node_map):
+        return types.SimpleNamespace(nodes=types.SimpleNamespace(_nodes=dict(node_map)))
+
+    ts1 = datetime.datetime(2026, 3, 10, 14, 0, tzinfo=datetime.timezone.utc)
+    ts2 = datetime.datetime(2026, 3, 10, 14, 1, tzinfo=datetime.timezone.utc)
+    ts3 = datetime.datetime(2026, 3, 10, 14, 2, tzinfo=datetime.timezone.utc)
+
+    seeds = []
+    outputs = {ts1: nodes_good, ts2: nodes_dead, ts3: nodes_good}
+
+    builder = BARCHART_STIRF_CURVE.__new__(BARCHART_STIRF_CURVE)
+    builder._attach_curve_context = lambda curve, **kwargs: curve
+    builder._mem_cache_put = lambda key, curve: None
+    builder._curve_cache_key = lambda curve_name, timestamp, cfg: str(timestamp)
+
+    def _build(*, curve_name, timestamp, cfg, pricers, initial_nodes, solver_tolerances):
+        seeds.append(initial_nodes)
+        return _curve(outputs[timestamp]), object()
+
+    builder._build_curve_from_pricers = _build
+
+    results = builder._calibrate_chunk(
+        chunk=[(ts1, {}), (ts2, {}), (ts3, {})],
+        curve_name="USD-SOFR-1D-Q12STIRT",
+        cfg={"reference_key": "USD-SOFR-1D"},
+    )
+
+    assert set(results) == {ts1, ts3}, "the identity curve must not be emitted"
+    # ts3 is seeded from ts1's nodes, not from the identity curve in between.
+    assert seeds[2] == nodes_good

@@ -619,10 +619,34 @@ class CurveStore:
             / f"date={trading_date.isoformat()}"
         )
 
+    def _apply_sanity_filter(self, df: pd.DataFrame, curve_name: str, *, enabled: bool) -> pd.DataFrame:
+        """Quarantine unbelievable snapshots on the way out of the store.
+
+        History already written cannot be trusted wholesale -- see
+        ``Caching/curve_sanity`` for the three measured failure modes. Callers
+        that need the raw truth (the writer, which merges against what is
+        already on disk) pass ``enabled=False``; filtering there would silently
+        delete rows from the partition on the next write.
+        """
+        if not enabled or df is None or df.empty:
+            return df
+        try:
+            from Caching.curve_sanity import filter_raw_frame, sanity_filter_enabled
+
+            if not sanity_filter_enabled():
+                return df
+            return filter_raw_frame(df, curve_name=curve_name)
+        except Exception:
+            # A filter that raises must never take the read down with it.
+            logger.debug("Curve sanity filter failed for %s; serving unfiltered.", curve_name, exc_info=True)
+            return df
+
     def read_raw_day(
         self,
         curve_name: str,
         trading_date: datetime.date,
+        *,
+        apply_sanity_filter: bool = True,
     ) -> pd.DataFrame:
         """Fast single-day read via direct PyArrow (no DuckDB overhead).
 
@@ -633,7 +657,9 @@ class CurveStore:
             # L2 fallback: try pulling from Supabase before returning empty
             sync = _get_curve_sync(self._base_dir)
             if sync is not None and sync.pull_day(curve_name, trading_date):
-                return self.read_raw_day(curve_name, trading_date)
+                return self.read_raw_day(
+                    curve_name, trading_date, apply_sanity_filter=apply_sanity_filter
+                )
             return pd.DataFrame()
 
         pq_files = list(part_dir.glob("*.parquet"))
@@ -648,7 +674,8 @@ class CurveStore:
             table = pa.concat_tables(tables, promote_options="default")
 
         df = _ensure_raw_df_columns(table.to_pandas())
-        return df.sort_values("timestamp_utc").reset_index(drop=True)
+        df = df.sort_values("timestamp_utc").reset_index(drop=True)
+        return self._apply_sanity_filter(df, curve_name, enabled=apply_sanity_filter)
 
     def read_raw_nodes(
         self,
@@ -659,6 +686,7 @@ class CurveStore:
         session_minute_min: Optional[int] = None,
         session_minute_max: Optional[int] = None,
         timestamps_utc: Optional[Sequence[Union[datetime.datetime, pd.Timestamp]]] = None,
+        apply_sanity_filter: bool = True,
     ) -> pd.DataFrame:
         """Bulk read raw node data via DuckDB Hive-partitioned scan.
 
@@ -699,7 +727,11 @@ class CurveStore:
         if requested_timestamps_utc:
             trading_dates = _trading_dates_for_timestamps_utc(requested_timestamps_utc)
             if len(trading_dates) == 1 and session_minute_min is None and session_minute_max is None:
-                day_df = self.read_raw_day(curve_name, trading_dates[0])
+                # Filter on the FULL day, then subset: the shape predicate needs
+                # the session's modal node set, which a sampled grid may not show.
+                day_df = self.read_raw_day(
+                    curve_name, trading_dates[0], apply_sanity_filter=apply_sanity_filter
+                )
                 return _ensure_raw_df_columns(_filter_df_to_timestamps_utc(day_df, requested_timestamps_utc))
 
         # Fast path: if start == end (single day), use direct PyArrow
@@ -712,7 +744,7 @@ class CurveStore:
             s = start.date() if isinstance(start, datetime.datetime) else start
             e = end.date() if isinstance(end, datetime.datetime) else end
             if s == e:
-                return self.read_raw_day(curve_name, s)
+                return self.read_raw_day(curve_name, s, apply_sanity_filter=apply_sanity_filter)
 
         glob_pattern = str(asset_dir / "date=*" / "*.parquet").replace("\\", "/")
 
@@ -762,7 +794,8 @@ class CurveStore:
         if "date" in df.columns:
             df.drop(columns=["date"], inplace=True)
 
-        return _ensure_raw_df_columns(df)
+        df = _ensure_raw_df_columns(df)
+        return self._apply_sanity_filter(df, curve_name, enabled=apply_sanity_filter)
 
     def read_analytics(
         self,
