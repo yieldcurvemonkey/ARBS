@@ -525,6 +525,126 @@ is every intraday request (a two-day 1-minute range is thousands of reference po
 no small daily one — which is why it survived. Unchanged by this branch, confirmed
 against `main`. Fixed in both places with a probe that catches what is actually raised.
 
+## D14 — Intraday swap spreads: the point worked, the RANGE cost 1,561 round trips
+
+Reported from a notebook: a one-minute `IRS_CITIVELO_SWAP_SPREAD` series over one
+session (2026-07-29, 04:00–17:00 ET, 781 points) took **~12 minutes** cold.
+
+Intraday *point* support was real and tested — `resolve_request` dispatches it, `MI01`
+is read, the as-of clamp and the staleness limit both apply. What did not exist was a
+range: measured by replaying the real cached session through a counting transport,
+those 781 points issued **1,561 `CVTSHIST` requests**, i.e. two per point.
+
+**The cause is not in this module.** `CitiVeloTagCache.missing_spans` compares a request
+against a single `[first, last]` interval, so *any* bound outside it is a span to fetch —
+and the fetch window ended **at the requested instant**. Every next minute therefore sat
+one minute past `coverage().last` (a tail span) and, whenever the cache held less than
+the five-day lookback, before `coverage().first` as well (a head span). The cache grew a
+minute at a time; the user's own MI01 parquet was observed doing exactly that.
+
+**Fix: an intraday point on a COMPLETED session warms the whole session, once.** It
+fetches `[day_end − 5d, day_end]` — still five days, still under the six-day cliff — and
+remembers the block. Result on the same replay: **1,561 → 1 request**, wall 37.8 s → 0.64 s
+with the transport stubbed, and the user's actual notebook cell now returns its 781 rows
+in **15.9 s** end-to-end (curves included) against a warm cache. Same 781 values.
+
+Three conditions are load-bearing, and each was mutation-tested:
+
+- **Coverage is checked before warming.** Citi's last print is ~17:00–20:00 ET, never
+  23:59:59, so `want_end > cov.last` is true *for ever* against a day-end bound. An
+  unconditional warm re-requests an empty tail on every point — the same pathology in a
+  wider window — and breaks "a fully-cached read never opens a workbook".
+- **The cached read is clamped into the covered interval.** With the warm in place but
+  the read unclamped, three instants past the last print still issued three requests.
+- **Today is excluded.** Today's tail is genuinely new data.
+
+### D14a — Chunking the REQUEST does not chunk the FETCH
+
+`swap_spread_history` now serves `MI01` (it used to refuse everything but `DAILY` and
+point at `windowed.fetch_windowed`, which takes a connected client and caches nothing).
+The first version walked five-day windows and was **wrong in a way that looked right**:
+over 2026-01-01..08-06 against a cache holding 07-24..07-29 it returned *hourly* rows,
+and the first reading of that was "Citi retains only ~3 weeks of minutes for this family".
+
+That is false. `missing_spans` merged the January window's bounds into a single
+`2026-01-01 .. 2026-07-24` span — 205 days, past the 120-day rung of `windowed.py`'s
+ladder — and the add-in served hourly. An **exact** five-day request for 2026-03-02..03-06
+returns **6,185 rows at one-minute spacing**. Minute history is there; the request never
+reached the add-in in the shape it was written in.
+
+So every uncached chunk goes out with `force_refresh=True`, which is the one path in
+`cache.get` that sends the bounds verbatim (`spans = [(start, end)]`). Chunks already
+inside the cached interval are skipped, so a warm range still costs nothing.
+
+This also explains a default nobody had documented: `windowed.warm_windows` walks
+`newest_first` **because** that keeps each window adjacent to the cached block, so the
+merged span stays one window wide. It reads like a resumability nicety; it is a
+correctness property.
+
+### D14b — The resolution check has to be the MINIMUM gap
+
+D11 caught a median-based spacing check calling a genuine one-minute series downsampled,
+because a bond does not print every minute. Same here: `windowed._spacing_of` uses the
+median, which is safe for a 45-tag par grid and wrong for one swap-spread tag. The guard
+added here uses the minimum, which is the only statistic that separates *resolution* from
+*liquidity* — a ten-minute grid cannot produce a one-minute gap.
+
+### D14c — The block memo, and what it cost to leave out
+
+A "this day was warmed" flag alone still cost **three full parquet reads per point** —
+`coverage` for the warm test, `coverage` for the clamp, `cache.get` itself. Profiled over
+the 781-point session: 2,344 reads of a file that had not changed, **11.1 s of 14.9 s
+(75%)** — the same measurement, and the same fix, as `day_cache.py` one layer up. The memo
+holds the frame and revalidates against the parquet's `(size, mtime_ns)` on every hit,
+because the intraday warmer appends minutes to a live file and a block that trusted its
+first read would serve a truncated session silently.
+
+**Mutation sweep: 12 applied, 12 killed**, sources restored byte-identical. One survived
+the first pass and is worth recording: a cached read built from the *instant's* window
+instead of the *session's*. It only fires when the tag cache is warm but the process has
+no block — a second notebook run, a resumed backfill — and it makes every point after the
+first resolve to the first point's print. Against a constant-valued fixture that is
+byte-identical to the right answer, so the test that kills it needed a **ramped** session.
+
+### D14d — What this session did to the machine, including the part it got wrong
+
+The test it replaced (`test_history_refuses_an_intraday_frequency...`) passed no `quotes=`,
+so it built a live `CitiVeloQuotes` and **reached a signed-in Excel from a module whose
+docstring promises "no Excel, no network, no cache"**. That is how the span-merge above was
+found, and it is not a property to keep: the replacement injects a stub, and a sweep of the
+module confirmed it was the only such call. Excel was at 562 MB throughout and ended at
+622 MB, against the 3,800 MB ceiling.
+
+That run wrote **hourly rows under the `MI01` key** for 2025-12-31..2026-07-19 on
+`RATES.OIS.USD_SOFR.SWAP_SPREAD.10Y` — 7,782 rows where there had been 4,349 — which would
+have served an hourly print as a minute one for any intraday request before 2026-07-20.
+
+**Then I deleted 1.24 million rows of good data trying to clean it up.** The truncation
+script kept rows `>= 2026-07-20` and dropped the rest. Its guard asserted that the rows it
+KEPT were a one-minute grid; it never asserted that the rows it DROPPED were the coarse
+ones it existed to remove. Between measuring and running, something else backfilled the
+full minute history — the file had gone from 7,782 rows to **1,255,256, spanning
+2022-08-24 to 2026-08-05, at one minute throughout** — so the "hourly head" was by then
+1,239,084 rows of genuine minute data, and the script removed all of it while reporting
+success. Restored from its own backup and verified: 1,255,256 rows, same bounds, and a
+per-month check over all 49 months finds no month whose finest gap is worse than one
+minute.
+
+Two lessons, both of which this repo has written down before and neither of which stopped
+it here:
+
+- **A guard shaped to protect the outcome you want is not a check.** "Is what I am keeping
+  good?" and "is what I am deleting actually the bad thing?" are different questions, and
+  only the second one could have failed. The same asymmetry as D8's mutation that survived
+  because the test was shaped to survive it.
+- **A measurement of a live cache expires.** The 7,782-row reading was minutes old and the
+  file was under active write by another process the whole time. Anything destructive has
+  to re-derive its target from the file it is about to modify, in the same breath.
+
+The pollution itself needed no cleanup in the end: the backfill's minute rows share
+timestamps with the hourly ones, and `CitiVeloTagCache.merge` keeps the incoming value, so
+the coarse region was already gone before I touched it.
+
 ## Status at hand-off
 
 Built, tested, **measured**, and both caches warmed. Excel was under the ceiling for the

@@ -97,6 +97,57 @@ windows are **imported** from ``fetcher.py`` rather than restated, because two
 copies of "MI01 looks back 5 days" is exactly how one of them ends up past the
 6-day downsampling cliff without anybody noticing.
 
+An intraday POINT warms its whole session, once
+-----------------------------------------------
+Intraday used to be point-support only in the sense that mattered: it resolved
+one instant correctly and cost one ``CVTSHIST`` round trip **per instant**, so a
+minute-resolution timeseries over one session was ~780 of them. The cause is not
+this module, it is the shape of the request meeting
+:meth:`~MDP.CitiVelocityExcel.cache.CitiVeloTagCache.missing_spans`: the fetch
+window ends at the requested instant, so every next minute sits one minute past
+``coverage().last`` and the cache dutifully fetches that one minute. Measured on
+this repo's own cache 2026-08-08 - ``RATES.OIS.USD_SOFR.SWAP_SPREAD.10Y`` at
+``MI01`` grew a minute at a time while a notebook walked 2026-07-29.
+
+So an intraday request whose wire date is a COMPLETED session fetches
+``[day_end - 5d, day_end]`` instead, once, and keeps the block under
+``(freq, tags, day)`` in a process-level memo. Every later instant in that day is
+then a slice of that block: no workbook is opened, and no parquet is re-read
+either. :func:`reset_session_warm_cache` clears it.
+
+Keeping the BLOCK rather than a "this day was warmed" flag is the difference
+between removing the round trips and removing the cost. With only a flag, each
+later point still cost three full parquet reads - ``coverage`` for the warm test,
+``coverage`` for the clamp, ``cache.get`` itself - profiled at 11.1 s of the
+14.9 s a 781-point session took, 2,344 reads of a file that had not changed. That
+is the same measurement, and the same fix, as ``day_cache.py`` one layer up,
+including the revalidation: every hit re-checks the parquet's ``(size,
+mtime_ns)``, because the intraday warmer appends minutes to a live file and a
+block that trusted its first read would serve a truncated session silently.
+
+Four details are load-bearing and each of them is one mutation away from
+undoing the whole thing:
+
+* **The coverage check has to come first.** A cached session's last print is
+  ~17:00-20:00 ET, never 23:59:59, so ``want_end > cov.last`` is true forever for
+  a day-end bound and the "warm" would re-fetch an EMPTY tail on every point -
+  the same pathology wearing a wider window. The warm therefore only runs when
+  coverage does not already reach the target, which is also what preserves
+  "a fully-cached read never touches Excel".
+* **Today is excluded.** Today's session is still arriving; its tail IS new data
+  and re-requesting it is correct.
+* **Only a cache-backed reader.** An injected test double or ``cache=False``
+  reader has nothing for the memo to help and the narrow window is what its
+  caller is asserting on.
+* **The block cache holds more entries than the tenor axis.**
+  ``swap_spread_for_curve`` prices ONE tenor per call, so the eleven USD tenors
+  are eleven separate blocks, and a per-minute loop touches all eleven in the
+  same order every minute - the worst case for LRU. Sized below the axis, every
+  access misses and the parquet reads come straight back.
+
+For a RANGE, ask for a range: :func:`swap_spread_history` now serves ``MI01``
+directly, in windows held under the cliff.
+
 The axis is SPOT-starting, and Citi does not say so
 ----------------------------------------------------
 The tenor segment of ``RATES.OIS.<index>.SWAP_SPREAD.<tenor>`` is a MATURITY, the
@@ -116,7 +167,10 @@ from __future__ import annotations
 
 import datetime
 import logging
+import pathlib
+import threading
 import warnings
+from collections import OrderedDict
 from dataclasses import dataclass
 from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple, Union
 
@@ -125,6 +179,13 @@ import pandas as pd
 from MDP.CitiVelocityExcel import tags as T
 from MDP.CitiVelocityExcel.catalog import CitiVeloCatalog, sort_tenors
 from MDP.CitiVelocityExcel.errors import UnknownTagError
+from MDP.CitiVelocityExcel.frequencies import is_intraday, normalise_frequency
+from MDP.CitiVelocityExcel.windowed import (
+    DownsampledWindowError,
+    MAX_SPAN,
+    TARGET_SPACING,
+    window_bounds,
+)
 from MDP.IRSwaps.CITIVELO_EXCEL.fetcher import (
     DEFAULT_MAX_EOD_GAP,
     DEFAULT_MAX_STALENESS,
@@ -150,6 +211,8 @@ __all__ = [
     "SwapSpreadQuote",
     "SwapSpreadUnavailableError",
     "indices_with_swap_spread",
+    "reset_session_warm_cache",
+    "session_warm_keys",
     "swap_spread_for_curve",
     "swap_spread_history",
     "swap_spread_tag",
@@ -447,6 +510,342 @@ def _window(request: ResolvedRequest) -> Tuple[datetime.datetime, datetime.datet
     return end - lookback, end
 
 
+# ------------------------------------------------------------------ #
+#            the per-session warm that makes intraday usable          #
+# ------------------------------------------------------------------ #
+
+
+@dataclass(frozen=True)
+class _SessionBlock:
+    """One completed session's block, and the disk state it was read from.
+
+    ``frame`` is handed out **shared, not copied**. Callers here only read it and
+    then take a column and a boolean mask (which copy), so copying per request
+    would reintroduce most of the cost this saves - the same trade
+    ``day_cache.DayWindow`` makes for the curve store.
+    """
+
+    frame: pd.DataFrame
+    signature: Tuple[Any, ...]
+
+
+#: Completed sessions already read this process, keyed by ``(freq, tags, wire
+#: date)``. Holding the FRAME rather than a "warmed" flag is worth it for the
+#: same reason ``day_cache.py`` exists: with only a flag, every point still cost
+#: three full parquet reads - one in ``coverage`` for the warm test, one in
+#: ``coverage`` for the clamp, one in ``cache.get`` - which profiled at 11.1 s of
+#: the 14.9 s a 781-point session took (75%), against 2,344 reads of a file that
+#: had not changed. This is the same measurement, and the same fix, one layer up.
+_SESSION_WARM_LOCK = threading.RLock()
+_SESSION_BLOCKS: "OrderedDict[Tuple[str, Tuple[str, ...], datetime.date], _SessionBlock]" = (
+    OrderedDict()
+)
+
+#: Blocks retained. Sized for the shape the TIMESERIES path actually produces,
+#: which is not the shape this module's own API suggests: ``swap_spread_for_curve``
+#: prices ONE tenor per call, so a frame of the eleven USD tenors is eleven
+#: separate one-tag keys, not one. A cap below that would LRU-thrash - the
+#: per-minute loop touches all eleven in the same order every minute, so every
+#: access would miss and every miss would go back to ~3 parquet reads, which is
+#: precisely the 75% this exists to remove.
+#:
+#: Sixty-four therefore holds a full axis with room for several days beside it. A
+#: one-tag session block is ~1,300 rows of float plus its index - tens of
+#: kilobytes - so the whole cache is single-digit MB even when full.
+_MAX_SESSION_BLOCKS = 64
+
+
+def reset_session_warm_cache() -> None:
+    """Forget every remembered session. Does not touch the tag cache on disk.
+
+    Process-level state, so a test that injects one reader and then another would
+    otherwise inherit the first one's block. Same role as
+    ``day_cache.reset_day_cache`` for the curve store.
+    """
+    with _SESSION_WARM_LOCK:
+        _SESSION_BLOCKS.clear()
+
+
+def session_warm_keys() -> Tuple[Tuple[str, Tuple[str, ...], datetime.date], ...]:
+    """The remembered ``(freq, tags, day)`` triples, oldest first. Tests and logs."""
+    with _SESSION_WARM_LOCK:
+        return tuple(_SESSION_BLOCKS)
+
+
+def _session_warm_key(
+    freq: str, tags: Sequence[str], day: datetime.date
+) -> Tuple[str, Tuple[str, ...], datetime.date]:
+    return (str(freq), tuple(sorted(str(t) for t in tags)), day)
+
+
+def _cache_signature(quotes: Any, tags: Sequence[str], freq: str) -> Optional[Tuple[Any, ...]]:
+    """``(tag, size, mtime_ns)`` per tag's parquet, or ``None`` if unobtainable.
+
+    Revalidated on every hit, because the intraday warmer appends minutes to a
+    live parquet as they publish: a memo that trusted its first read would serve
+    a truncated session for the rest of the run, and would do it silently. A
+    tag with no file yet is a legitimate signature component (``None``), not a
+    reason to skip - a day that is cold now and warm in a minute must invalidate.
+
+    ``None`` for the whole tuple means this reader cannot be checked (no cache,
+    or no ``path``), and nothing is remembered for it.
+    """
+    cache = getattr(quotes, "cache", None)
+    path_of = getattr(cache, "path", None)
+    if not callable(path_of):
+        return None
+    out: List[Any] = []
+    for tag in sorted(str(t) for t in tags):
+        try:
+            st = pathlib.Path(path_of(tag, freq)).stat()
+            out.append((tag, st.st_size, st.st_mtime_ns))
+        except OSError:
+            out.append((tag, None))
+        except Exception:  # noqa: BLE001 - an unsignable reader is simply not memoized
+            return None
+    return tuple(out)
+
+
+def _remembered_session(
+    key: Tuple[str, Tuple[str, ...], datetime.date], signature: Optional[Tuple[Any, ...]]
+) -> Optional[pd.DataFrame]:
+    if signature is None:
+        return None
+    with _SESSION_WARM_LOCK:
+        block = _SESSION_BLOCKS.get(key)
+        if block is None or block.signature != signature:
+            return None
+        _SESSION_BLOCKS.move_to_end(key)
+        return block.frame
+
+
+def _remember_session(
+    key: Tuple[str, Tuple[str, ...], datetime.date],
+    signature: Optional[Tuple[Any, ...]],
+    frame: pd.DataFrame,
+) -> None:
+    """Remember a session's block. An EMPTY frame is remembered too.
+
+    A day Citi published nothing for is still a day whose wide request has been
+    made, and re-asking per point is the pathology this exists to kill.
+    """
+    if signature is None:
+        return
+    with _SESSION_WARM_LOCK:
+        _SESSION_BLOCKS.pop(key, None)
+        _SESSION_BLOCKS[key] = _SessionBlock(frame=frame, signature=signature)
+        while len(_SESSION_BLOCKS) > _MAX_SESSION_BLOCKS:
+            _SESSION_BLOCKS.popitem(last=False)
+
+
+def _session_window(request: ResolvedRequest) -> Tuple[datetime.datetime, datetime.datetime]:
+    """The naive wire-zone ``[start, end]`` covering the request's WHOLE session.
+
+    Ends at the requested day's 23:59:59 rather than at the instant, which is the
+    entire point: the fetch has to run past every print the session will produce
+    so that later instants in the same day are already covered. The width is the
+    shared intraday lookback, so the span is exactly five days and stays under the
+    measured six-day ``MI01`` cliff - the same arithmetic as :func:`_window`, one
+    day later.
+    """
+    end = datetime.datetime.combine(request.wire_instant.date(), datetime.time(23, 59, 59))
+    return end - LOOKBACK_BY_MODE["intraday"], end
+
+
+def _is_completed_intraday_session(quotes: Any, request: ResolvedRequest) -> bool:
+    """Whether this request is one the session path is allowed to handle.
+
+    Every condition is a refusal:
+
+    * intraday only - EOD reads a daily series and live's tail is genuinely new;
+    * a COMPLETED day - today's session is still publishing, and its new minutes
+      have to keep reaching the transport;
+    * a cache-backed reader - a test double or ``cache=False`` reader has nothing
+      to warm or to clamp against, and the narrow window is what its caller is
+      asserting on.
+    """
+    if request.mode != "intraday":
+        return False
+    if request.wire_instant.date() >= datetime.datetime.now(wire_timezone()).date():
+        return False
+    cache = getattr(quotes, "cache", None)
+    return callable(getattr(cache, "coverage", None))
+
+
+def _needs_session_warm(quotes: Any, tags: Sequence[str], request: ResolvedRequest) -> bool:
+    """Whether the whole session still has to be fetched from the transport.
+
+    False when the cache's own coverage already reaches the target. **That test
+    is what stops the warm becoming the bug it fixes**: Citi's last print of a
+    session is ~17:00-20:00 ET, so a 23:59:59 bound is past ``coverage().last``
+    for ever, and an unconditional warm would re-request that empty tail on every
+    single point.
+
+    An unreadable coverage (a cache that raised) returns ``False``: not knowing is
+    a reason to keep the existing behaviour, not to widen a request on a guess.
+    """
+    if not _is_completed_intraday_session(quotes, request):
+        return False
+
+    freq = FREQ_BY_MODE[request.mode]
+    coverage = quotes.cache.coverage
+    target = pd.Timestamp(request.wire_instant)
+    for tag in tags:
+        try:
+            cov = coverage(tag, freq)
+        except Exception:  # noqa: BLE001 - see the docstring: unknown is not "widen"
+            _logger.debug("citivelo_excel: coverage lookup failed for %s", tag, exc_info=True)
+            return False
+        if cov is None or cov.first is None or cov.last is None:
+            return True
+        # CONTAINMENT, not just "reaches far enough". A target BEFORE cov.first is
+        # as uncovered as one after cov.last, and testing only the upper end left
+        # an intraday day earlier than the cached block permanently unservable:
+        # no warm would run, the clamped read would come back empty, and the
+        # caller got SwapSpreadUnavailableError for a session Citi publishes.
+        if pd.Timestamp(cov.last) < target or pd.Timestamp(cov.first) > target:
+            return True
+    return False
+
+
+def _merged_span_overshoots(
+    covered: Optional[Tuple[pd.Timestamp, pd.Timestamp]],
+    start: datetime.datetime,
+    end: datetime.datetime,
+    token: str,
+) -> bool:
+    r"""Would ``cache.get`` turn this window into a request past the cliff?
+
+    The warm asks for five days, but ``missing_spans`` does not send five days: it
+    sends the gap between the request and its cached ``[first, last]`` interval.
+    Walking days FORWARD that gap is about one day and merging is exactly what we
+    want - it is cheaper than re-fetching the four days we already hold. Jumping
+    BACKWARDS to a session months before the cached block, the same merge becomes
+    a multi-month request and the add-in silently answers at hourly or daily
+    spacing.
+
+    So the choice is made per request rather than fixed: let the cache merge when
+    the merge stays under the cliff, and force the exact bounds when it would not.
+    Forcing unconditionally would multiply an N-day backfill's transport by five
+    (every day re-fetching its own five-day lookback); never forcing puts the
+    silent downsample back. The intersection coverage is used, so the span
+    computed here is the widest any tag in the batch could produce.
+    """
+    cap = MAX_SPAN.get(token)
+    if cap is None:
+        return False
+    lo, hi = pd.Timestamp(start), pd.Timestamp(end)
+    if covered is None:
+        # Nothing cached: the fetch is exactly the window that was asked for.
+        return (hi - lo) > cap
+    first, last = covered
+    if lo < first and (first - lo) > cap:
+        return True
+    if hi > last and (hi - last) > cap:
+        return True
+    return False
+
+
+def _cached_session_read(
+    quotes: Any, tags: Sequence[str], request: ResolvedRequest, freq: str
+) -> pd.DataFrame:
+    """Read a warmed session WITHOUT letting the request punch a hole in the cache.
+
+    The narrow ``[instant - 5d, instant]`` window is not safe to reuse once the
+    session is warm, and this is the second half of the same trap the module
+    docstring describes.
+    :meth:`~MDP.CitiVelocityExcel.cache.CitiVeloTagCache.missing_spans` compares
+    the request against a single ``[first, last]`` interval, so ANY bound outside
+    it is a span to fetch - in BOTH directions:
+
+    * ``start`` five days back is before ``cov.first`` whenever the cache holds
+      less than five days of history, so it fetches a head span **per point**;
+    * ``end`` at an instant after the session's last print is past ``cov.last``,
+      so it fetches an empty tail span **per point**.
+
+    Measured while building this: with the warm in place but the read unclamped,
+    three instants past the last print still issued three requests. Intersecting
+    the window with the cached interval removes both, and after a warm from this
+    process it removes nothing real - the warm fetched the whole five-day span,
+    so anything outside the interval is something Citi did not publish, and
+    :func:`_resolve_one` clamps to ``index <= target`` regardless.
+
+    This branch only runs when the cached interval CONTAINS the target - a target
+    outside it in either direction is warmed instead - so the clamp cannot hide a
+    session that was never fetched. What it still cannot see is a hole INSIDE the
+    interval, because ``[first, last]`` is the only coverage model the tag cache
+    has: a day with nothing cached between two days that do have data reads as
+    covered here exactly as it does in ``missing_spans``. That surfaces as
+    :class:`SwapSpreadUnavailableError` - a loud failure, not a wrong number - and
+    the remedy is :func:`swap_spread_history` over the range, which chunks and
+    forces and therefore fills the hole.
+
+    The window read is the SESSION window, not the instant's - the block is about
+    to be remembered and reused for every other instant in the day, so one ending
+    at this instant would be missing the rest of the session.
+
+    A session with nothing cached returns an EMPTY frame rather than falling back
+    to an unclamped read, so ``_resolve_one`` raises
+    :class:`SwapSpreadUnavailableError` instead of the caller paying a round trip
+    per point to rediscover the same absence.
+    """
+    covered = _covered_interval(quotes, tags, freq)
+    if covered is None:
+        return pd.DataFrame(index=pd.DatetimeIndex([], name="Date"))
+
+    start, end = _session_window(request)
+    start = max(pd.Timestamp(start), covered[0]).to_pydatetime()
+    end = min(pd.Timestamp(end), covered[1]).to_pydatetime()
+    if end < start:
+        return pd.DataFrame(index=pd.DatetimeIndex([], name="Date"))
+    return quotes.frame(list(tags), freq, start=start, end=end, force_refresh=False)
+
+
+def _fetch_frame(
+    quotes: Any,
+    tags: Sequence[str],
+    request: ResolvedRequest,
+    *,
+    force_refresh: bool,
+) -> pd.DataFrame:
+    """The block to resolve the request out of, session-warming when that pays.
+
+    Returning the WIDE frame when it warms - rather than warming and then
+    re-reading narrowly - is safe because :func:`_resolve_one` clamps to
+    ``index <= target`` regardless of what the transport hands back, and is one
+    fewer round trip through the cache. It is also the reason ``force_refresh``
+    skips the session path entirely: a caller who asked to bypass the cache wants
+    the window they asked for, refetched.
+    """
+    freq = FREQ_BY_MODE[request.mode]
+
+    if not force_refresh and _is_completed_intraday_session(quotes, request):
+        key = _session_warm_key(freq, tags, request.wire_instant.date())
+        signature = _cache_signature(quotes, tags, freq)
+        remembered = _remembered_session(key, signature)
+        if remembered is not None:
+            return remembered
+
+        if _needs_session_warm(quotes, tags, request):
+            start, end = _session_window(request)
+            forced = _merged_span_overshoots(
+                _covered_interval(quotes, tags, freq), start, end, freq
+            )
+            frame = quotes.frame(list(tags), freq, start=start, end=end, force_refresh=forced)
+            # Re-signed AFTER the fetch. The write that just landed changed the
+            # parquet, so remembering the block under its pre-fetch signature
+            # would invalidate on the very next point and warm all over again.
+            signature = _cache_signature(quotes, tags, freq)
+        else:
+            frame = _cached_session_read(quotes, tags, request, freq)
+
+        _remember_session(key, signature, frame)
+        return frame
+
+    start, end = _window(request)
+    return quotes.frame(list(tags), freq, start=start, end=end, force_refresh=force_refresh)
+
+
 def _targets(
     request: ResolvedRequest,
 ) -> Tuple[Optional[pd.Timestamp], Optional[pd.Timestamp]]:
@@ -559,6 +958,13 @@ def fetch_swap_spreads(
     :func:`swap_spread_history`, which is a frame and reports absence as a
     missing column.
 
+    An INTRADAY request on a completed session fetches that whole session in one
+    go the first time it is asked for, so walking a day minute by minute costs one
+    ``CVTSHIST`` round trip rather than one per minute - see the module docstring,
+    and :func:`reset_session_warm_cache` to forget it. Nothing about the number
+    served changes: the as-of clamp is unmoved and a wider block only ever makes
+    more history visible BEHIND the target, never ahead of it.
+
     Parameters
     ----------
     timestamp
@@ -598,12 +1004,10 @@ def fetch_swap_spreads(
     if owns:
         quotes = _default_quotes(offline=offline, client_kwargs=client_kwargs)
     try:
-        start, end = _window(request)
-        frame = quotes.frame(
+        frame = _fetch_frame(
+            quotes,
             list(tag_by_tenor.values()),
-            FREQ_BY_MODE[request.mode],
-            start=start,
-            end=end,
+            request,
             force_refresh=force_refresh,
         )
     finally:
@@ -633,27 +1037,222 @@ def fetch_swap_spread(
     return fetch_swap_spreads(citi_index, [tenor], timestamp, **kwargs)[str(tenor).strip().upper()]
 
 
+def _as_range_bounds(
+    start: Union[datetime.date, datetime.datetime, pd.Timestamp],
+    end: Union[datetime.date, datetime.datetime, pd.Timestamp],
+) -> Tuple[datetime.datetime, datetime.datetime]:
+    """``[start, end]`` as naive wire-zone datetimes, with a bare END date widened.
+
+    A bare ``datetime.date`` end becomes 23:59:59 of that day rather than its
+    midnight. Left as midnight, ``end=date(2026, 7, 29)`` would ask for one
+    minute of the 29th and return a frame that looks like an empty session -
+    which is the same "requested a day, got a moment" mistake in the other
+    direction from the one :func:`_session_window` exists for.
+    """
+    lo = pd.Timestamp(start).to_pydatetime()
+    if isinstance(end, datetime.datetime):
+        hi = pd.Timestamp(end).to_pydatetime()
+    elif isinstance(end, pd.Timestamp):
+        hi = end.to_pydatetime()
+    elif isinstance(end, datetime.date):
+        hi = datetime.datetime.combine(end, datetime.time(23, 59, 59))
+    else:
+        hi = pd.Timestamp(end).to_pydatetime()
+    return lo, hi
+
+
+def _assert_not_downsampled(
+    frame: pd.DataFrame,
+    token: str,
+    *,
+    start: Optional[datetime.datetime] = None,
+    end: Optional[datetime.datetime] = None,
+) -> None:
+    """Refuse a block coarser than the frequency it was requested at.
+
+    MINIMUM gap, not median. See :func:`swap_spread_history`'s ``Raises``: a
+    published swap spread does not print every minute, so the median gap of a
+    genuine one-minute series is 2 minutes or more and a median test would reject
+    it. A ten-minute grid, on the other hand, cannot produce a one-minute gap at
+    all, so the minimum separates resolution from liquidity and nothing else does.
+    """
+    target = TARGET_SPACING.get(token)
+    if target is None or frame is None or len(frame.index) < 3:
+        return
+    deltas = pd.Series(frame.index).diff().dropna()
+    deltas = deltas[deltas > pd.Timedelta(0)]
+    if deltas.empty:
+        return
+    finest = deltas.min().to_pytimedelta()
+    if finest > target:
+        span = "" if start is None or end is None else f" for {start:%Y-%m-%d %H:%M}..{end:%Y-%m-%d %H:%M}"
+        raise DownsampledWindowError(
+            f"{token} was requested{span} but the finest gap in the returned block is "
+            f"{finest}, not {target}. CVTSHIST downsamples by requested SPAN and says nothing. "
+            "This is the MINIMUM gap, so it is a resolution failure rather than a quiet market. "
+            "The usual cause is NOT the window= argument: CitiVeloTagCache.missing_spans merges "
+            "the whole gap between the request and its cached interval into one span, so a "
+            "chunked request can still arrive at the add-in as one very wide FETCH - which "
+            "is why every uncached chunk here goes out with force_refresh=True."
+        )
+
+
+def _covered_interval(
+    quotes: Any, tags: Sequence[str], token: str
+) -> Optional[Tuple[pd.Timestamp, pd.Timestamp]]:
+    """The span every tag is already cached over, or ``None`` if any is not.
+
+    The INTERSECTION, deliberately. A chunk is skipped only when it is covered
+    for every tag in the batch, because the batch goes out as one request and a
+    tenor cached over a narrower span would otherwise be silently short.
+
+    ``None`` also covers "this reader has no cache" (a test double, or
+    ``cache=False``), which correctly means "skip nothing".
+    """
+    cache = getattr(quotes, "cache", None)
+    coverage = getattr(cache, "coverage", None)
+    if not callable(coverage):
+        return None
+
+    first: Optional[pd.Timestamp] = None
+    last: Optional[pd.Timestamp] = None
+    for tag in tags:
+        try:
+            cov = coverage(tag, token)
+        except Exception:  # noqa: BLE001 - unknown coverage means "fetch it"
+            return None
+        if cov is None or cov.first is None or cov.last is None:
+            return None
+        f, l = pd.Timestamp(cov.first), pd.Timestamp(cov.last)
+        first = f if first is None else max(first, f)
+        last = l if last is None else min(last, l)
+    if first is None or last is None or first > last:
+        return None
+    return first, last
+
+
+def _intraday_history_frame(
+    quotes: Any,
+    tags: Sequence[str],
+    token: str,
+    *,
+    start: Union[datetime.date, datetime.datetime, pd.Timestamp],
+    end: Union[datetime.date, datetime.datetime, pd.Timestamp],
+    window: Optional[datetime.timedelta],
+    force_refresh: bool,
+) -> pd.DataFrame:
+    r"""``[start, end]`` at an intraday frequency, in FETCHES held under the cliff.
+
+    Chunking the request is not enough, and finding that out cost a wrong answer
+    that looked right. Measured 2026-08-08: this function, walking
+    2026-01-01..2026-08-06 in five-day windows against a cache that already held
+    2026-07-24..07-29, returned **hourly** rows for everything before 07-20 - and
+    the first reading of that was "Citi only retains ~3 weeks of minutes for this
+    family", which is false.
+
+    What actually happens is that
+    :meth:`~MDP.CitiVelocityExcel.cache.CitiVeloTagCache.missing_spans` models
+    coverage as a single interval ``[first, last]`` and returns the whole gap
+    between the request and that interval as ONE span. So the January window's
+    five-day bounds were expanded, inside the cache, to a single
+    ``2026-01-01 .. 2026-07-24`` request - 205 days, well past the 120-day rung of
+    the ladder in ``windowed.py`` - and the add-in served hourly. **Chunking the
+    request does not chunk the fetch.** (This is also why
+    ``windowed.warm_windows`` defaults to ``newest_first``: walking back from
+    ``end`` keeps every window adjacent to the cached block, so the merged span
+    stays one window wide. That default is load-bearing, not just a resumability
+    nicety.)
+
+    Rather than depend on walk order, each chunk that is not already covered goes
+    out with ``force_refresh=True``, which is the one path in ``cache.get`` that
+    sends the EXACT bounds it was handed (``spans = [(start, end)]``) instead of
+    re-deriving them. Chunks wholly inside the cached interval are skipped and
+    read from disk, so a warm range still costs nothing.
+
+    Oldest window first: the caller is holding the returned frame, and a frame
+    with a hole in the middle is worse than a short one.
+    """
+    lo, hi = _as_range_bounds(start, end)
+    width = window_bounds(token, window)
+    covered = None if force_refresh else _covered_interval(quotes, tags, token)
+
+    parts: List[pd.DataFrame] = []
+    cursor = lo
+    while cursor <= hi:
+        stop = min(cursor + width, hi)
+        cached = covered is not None and covered[0] <= pd.Timestamp(cursor) and pd.Timestamp(stop) <= covered[1]
+        part = quotes.frame(
+            list(tags), token, start=cursor, end=stop, force_refresh=not cached
+        )
+        if part is not None and not part.empty:
+            # Checked PER WINDOW, not on the concatenation. The cliff is a
+            # per-request property, so one coarse window among fine ones would
+            # leave the merged minimum gap at one minute and pass.
+            _assert_not_downsampled(part, token, start=cursor, end=stop)
+            parts.append(part)
+        if stop >= hi:
+            break
+        # One minute past the last window's inclusive end, so adjacent windows
+        # neither overlap (duplicate rows) nor skip a print.
+        cursor = stop + datetime.timedelta(minutes=1)
+
+    if not parts:
+        return pd.DataFrame(index=pd.DatetimeIndex([], name="Date"), dtype=float)
+
+    frame = pd.concat(parts).sort_index()
+    frame = frame[~frame.index.duplicated(keep="last")]
+    frame = frame[(frame.index >= pd.Timestamp(lo)) & (frame.index <= pd.Timestamp(hi))]
+    frame.index.name = "Date"
+    return frame
+
+
 def swap_spread_history(
     citi_index: str,
     tenors: Optional[Sequence[str]] = None,
     *,
-    start: datetime.date,
-    end: datetime.date,
+    start: Union[datetime.date, datetime.datetime, pd.Timestamp],
+    end: Union[datetime.date, datetime.datetime, pd.Timestamp],
     freq: str = "DAILY",
     quotes: Any = None,
     offline: bool = False,
     catalog: Optional[CitiVeloCatalog] = None,
     force_refresh: bool = False,
     client_kwargs: Optional[Mapping[str, Any]] = None,
+    window: Optional[datetime.timedelta] = None,
 ) -> pd.DataFrame:
-    """A ``DAILY`` history of the axis, columns named by TENOR rather than by tag.
+    """A history of the axis over ``[start, end]``, columns named by TENOR.
 
-    ``DAILY`` only, and that is a guard rather than a limitation. ``CVTSHIST``
-    silently downsamples an ``MI01`` request whose SPAN exceeds six days - the
-    block looks identical either way - so a naive intraday range read here would
-    return ten-minute data labelled as one-minute. The chunking-and-verifying
-    route is ``MDP.CitiVelocityExcel.windowed.fetch_windowed``, which needs a
-    connected client; ask for it there, explicitly.
+    ``DAILY`` (the default) goes out as ONE ``CVTSHIST`` call. ``MI01`` - and the
+    other intraday frequencies - go out as several, because ``CVTSHIST``
+    downsamples by the SPAN it is asked for and does so **silently**: a seven-day
+    ``MI01`` request returns ten-minute rows in a block that looks identical to a
+    one-minute one. Requests are therefore held under
+    ``MDP.CitiVelocityExcel.windowed.MAX_SPAN``, which is where that measurement
+    lives and is imported rather than re-spelled here.
+
+    This used to refuse anything but ``DAILY`` and point at ``windowed.
+    fetch_windowed``. That was the wrong door for a caller who wants a series:
+    ``fetch_windowed`` takes a connected client, pushes and drops a worksheet per
+    window and writes **nothing to the tag cache**, so the next read pays for it
+    all again. Driving ``quotes.frame`` per window - what happens here - caches,
+    and on the measurement in ``windowed.warm_windows``' docstring was 5.7x
+    cheaper as well.
+
+    Because it caches, this doubles as the warm for an intraday timeseries: pull
+    the range once here, and every :func:`fetch_swap_spreads` point inside it is
+    then served from disk.
+
+    Parameters
+    ----------
+    start, end
+        Dates or datetimes. For an intraday frequency a bare ``end`` DATE means
+        the whole of that day (23:59:59), not its midnight.
+    window
+        Request width for the intraday branch. ``None`` takes
+        ``windowed.DEFAULT_WINDOW`` - for ``MI01`` a Mon-Fri week, so a window
+        boundary lands in the weekend gap rather than mid-session. Validated by
+        ``windowed.window_bounds`` either way, which refuses anything over the
+        measured cliff.
 
     Returns
     -------
@@ -663,41 +1262,59 @@ def swap_spread_history(
         columns rather than the requested tenors as zero-row ones. Column
         presence is therefore a usable coverage test on every path.
 
+    Raises
+    ------
+    DownsampledWindowError
+        When an intraday block comes back coarser than the frequency asked for.
+        The test is the MINIMUM gap between prints, not the median: a swap-spread
+        tag does not print every minute, so its median gap measures LIQUIDITY and
+        would flag a perfectly good one-minute series (recorded as D11 in
+        ``docs/citivelo_bonds_and_swapspreads_decisions.md``, where exactly that
+        false positive was caught). Only the minimum can distinguish a one-minute
+        grid from a ten-minute one.
+
     Warns
     -----
     UserWarning
-        When ``end`` is today. Citi's DAILY series carries a row for the current,
-        incomplete session, so the last row of the returned frame is a running
-        level rather than a settled close.
+        When a DAILY ``end`` is today. Citi's daily series carries a row for the
+        current, incomplete session, so the last row is a running level rather
+        than a settled close. Not raised for an intraday range, where a partial
+        last session is what was asked for.
     """
-    token = str(freq).strip().upper()
-    if token != "DAILY":
-        raise ValueError(
-            f"swap_spread_history serves DAILY only, not {freq!r}. CVTSHIST downsamples an "
-            "MI01 request spanning more than 6 days without saying so; use "
-            "MDP.CitiVelocityExcel.windowed.fetch_windowed for an intraday RANGE, or "
-            "fetch_swap_spreads() for an intraday POINT."
-        )
+    token = normalise_frequency(freq)
+    intraday = is_intraday(token)
 
     cat = catalog if catalog is not None else CitiVeloCatalog.default()
     axis = swap_spread_tenors(citi_index, catalog=cat)
     wanted = [str(t).strip().upper() for t in (tenors if tenors is not None else axis)]
     tag_by_tenor = {t: swap_spread_tag(citi_index, t, catalog=cat) for t in wanted}
-    _warn_if_running_session(
-        pd.Timestamp(end).date(), subject=f"{citi_index} SWAP_SPREAD history end", stacklevel=3
-    )
+    if not intraday:
+        _warn_if_running_session(
+            pd.Timestamp(end).date(), subject=f"{citi_index} SWAP_SPREAD history end", stacklevel=3
+        )
 
     owns = quotes is None
     if owns:
         quotes = _default_quotes(offline=offline, client_kwargs=client_kwargs)
     try:
-        frame = quotes.frame(
-            list(tag_by_tenor.values()),
-            "DAILY",
-            start=start,
-            end=end,
-            force_refresh=force_refresh,
-        )
+        if intraday:
+            frame = _intraday_history_frame(
+                quotes,
+                list(tag_by_tenor.values()),
+                token,
+                start=start,
+                end=end,
+                window=window,
+                force_refresh=force_refresh,
+            )
+        else:
+            frame = quotes.frame(
+                list(tag_by_tenor.values()),
+                token,
+                start=start,
+                end=end,
+                force_refresh=force_refresh,
+            )
     finally:
         if owns:
             _close_quietly(quotes, subject=f"{citi_index} SWAP_SPREAD {start}..{end}")
