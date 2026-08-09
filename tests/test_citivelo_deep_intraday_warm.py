@@ -378,3 +378,33 @@ def test_a_day_absent_from_the_store_is_never_dense(fake_store):
     asset = "USD-SOFR-1D-CITIVELOEXCELMIN"
     store = fake_store({asset: {}}, counts={})
     assert not D._already_dense(store, asset, datetime.date(2025, 6, 11), "USD-SOFR-1D", 600)
+
+
+# --------------------------------------------------------------------------- #
+#                     what verify reprices an IBOR curve ON                    #
+# --------------------------------------------------------------------------- #
+
+
+def test_a_self_discounted_snapshot_is_repriced_self_discounted():
+    row = {"source_variant": "CITIVELOEXCELMIN/self_discounted"}
+    curve, how = D._discount_curve_of(row, store=None)
+    assert curve is None and how == "self"
+
+
+def test_a_dual_curve_snapshot_names_its_discount_curve():
+    """The residual would otherwise be the discounting difference, not an error.
+
+    A stored EURIBOR curve built on ESTR, repriced against its projection curve
+    alone, comes back off by a systematic amount on every dual-curve day - on the
+    one curve whose build is least proven. ``source_variant`` is the only record
+    of which curve was used, which is what makes this recoverable.
+    """
+    row = {"source_variant": "CITIVELOEXCELMIN/EUR-ESTR-1D"}
+    curve, how = D._discount_curve_of(row, store=None)
+    # No store to read from, so no curve - but it must NOT silently claim "self".
+    assert curve is None and how == "unavailable"
+
+
+def test_an_unlabelled_snapshot_is_not_assumed_to_be_dual_curve():
+    row = {"source_variant": "CITIVELOEXCELMIN"}
+    assert D._discount_curve_of(row, store=None) == (None, "self")
