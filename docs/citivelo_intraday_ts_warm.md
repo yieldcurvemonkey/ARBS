@@ -67,27 +67,32 @@ per day; some days run to 23:00). Sundays and US bond-market holidays hold no
 priced rows by design — `IRSwapsTB` filters USD-SOFR-1D reference points to US
 government-bond business days.
 
-### Swap spreads and Monday's small hours
+### Swap spreads: minutes that can never be cached
 
-Citi publishes `SWAP_SPREAD` only during its session, but the minute CurveStore
-holds the Sunday-evening open. A Monday 01:44 curve therefore meets a Friday
-17:59 print — 55.8 hours against the 12-hour limit — and the value map refuses it,
-correctly, one `StaleCurveError` per (tenor, minute).
+Citi publishes `SWAP_SPREAD` only during its own session, but the minute
+CurveStore holds the Sunday-evening open. A Monday 01:44 curve therefore meets a
+Friday 17:59 print — 55.8 hours against a 12-hour limit — and the value map
+refuses it, correctly, one `StaleCurveError` per (tenor, minute).
 
 **Those minutes can never be cached**, because there is no value to cache. The
-warm skips them, but a *read* that asks for them still pays: the missing pairs
-drag the whole batch back through the pricer (see above), and each spread query
-re-raises with a full traceback, on every read, forever. There is no negative
-caching in `IRSwapsTB`.
+warm skips them; a *read* that asks for them pays every time, because
+`IRSwapsTB` has no negative caching — the missing pairs drag the whole batch back
+through the pricer (see above) and each spread query re-raises with a full
+traceback.
 
-So bound an intraday swap-spread read to the session:
+Measured over 128,046 minutes across the first 120 store days of 2024+:
 
-```python
-start = NYC_tz.localize(datetime.datetime(d.year, d.month, d.day, 7, 0))   # not 01:00
-```
+| | minutes with no serveable spread |
+|---|---|
+| Tue / Wed / Thu / Fri | **0** |
+| ordinary Monday | ~6 (the session's first minutes, e.g. 01:00–01:44) |
+| US bond holiday that still has curves (Columbus Day, Veterans Day) | ~1,050 — the whole day |
 
-Reading a Monday from 01:00 costs ~30 s and several thousand tracebacks for
-columns that will be `NaN` regardless.
+So the practical rule is narrow: **a swap-spread read covering a US bond holiday
+gets NaN columns and pays full repricing for them.** Ordinary days are unaffected.
+The holidays are the ones to bound or exclude — and note `IRSwapsTB` filters
+USD-SOFR-1D to US government-bond business days anyway, so those days have no
+RATE rows either.
 
 ### Not warmed: IMM structures
 
