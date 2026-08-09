@@ -146,13 +146,30 @@ Excel session, then the add-in has to be restarted to give the memory back.
 
 **And the restart is where this stops being unattended.** `--auto-restart`
 exists, rescues unsaved workbooks, relaunches Excel and waits — but measured
-2026-08-09, **twice**, the restarted add-in reached
+2026-08-09, **three launches and three failures**, the started add-in reached
 `Citi.Excel.Presentation.CustomRibbon | onLoad:` and then logged nothing for 20+
 minutes. No portal session, no credentials refresh, no UDF registration;
 `=CVTODAY()` stayed `#NAME?` throughout. A healthy session logs
 `PortalSessionProvider | Updating credentials` about fifteen minutes after the
-add-in entry point. Neither restarted instance ever did. The README's "spawned
-instances never register" appears to cover a restarted Excel as well.
+add-in entry point. None of the three ever did.
+
+| launch | portal session |
+|---|---|
+| `Popen([exe, "/x"], DETACHED_PROCESS)` — what `launch_excel` does | never, 2× |
+| `ShellExecuteW(exe)` — no `/x`, exactly what the Start menu does | never, 23 min |
+
+The second row is worth stating because it kills the obvious hypothesis: it is
+**not** the launch mode. A `launch_excel` rewrite around `ShellExecute` was
+written, tested against that row, and thrown away. Adding a blank workbook and
+making Excel visible did not help either. The one Excel that *was* signed in had
+been opened by hand the previous evening, which leaves the add-in's saved
+Velocity session having expired — needing an **interactive** sign-in, the one
+thing the supervisor explicitly cannot do ("This module never types a password").
+
+A trap worth avoiding while diagnosing this: the add-in log is append-only and
+holds days of history, so a bare `grep PortalSession` matches **an earlier
+session** and reports success on an instance that has none of its own. Scope it
+to the pid.
 
 So the flag is **off by default** and not recommended here. Without it the run
 stops cleanly at the ceiling with everything banked; a human restart and sign-in
