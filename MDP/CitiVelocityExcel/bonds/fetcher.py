@@ -25,6 +25,16 @@ nor writes the tag cache - see below for why it has to. So a repeated intraday
 request costs a live call every time, while a repeated EOD or offline-intraday
 one does not.
 
+Which is why a RANGE is warmed, not read point by point
+-------------------------------------------------------
+:meth:`CitiVeloBondFetcher.prefetch` warms ``[start, end]`` through the CACHED
+seam, in requests bounded by the measured cliff, and its caller then reads each
+point back OFFLINE. Skipping that costs one live Excel round trip per point:
+measured on a 60-minute, one-minute FRB timeseries at **593 s for 60 points, 500
+s of it in ``time.sleep``** waiting for cells to settle, across 61 fetches for a
+range that is one warm. The cache stores a whole series per tag, so the range was
+being re-requested once per minute bar.
+
 Only what Citi actually serves is asked for
 -------------------------------------------
 Coverage is per bond and uneven - ``PRICE`` for 2,105 of 2,162 ISINs,
@@ -106,7 +116,7 @@ from MDP.CitiVelocityExcel.bonds.resolution import BondResolution
 from MDP.CitiVelocityExcel.bonds.sanity import RejectedQuote, screen_quotes
 from MDP.CitiVelocityExcel.errors import CitiVelocityError
 from MDP.CitiVelocityExcel.quotes import CitiVeloQuotes
-from MDP.CitiVelocityExcel.windowed import MAX_SPAN, fetch_windowed
+from MDP.CitiVelocityExcel.windowed import MAX_SPAN, WarmWindow, fetch_windowed, warm_windows
 from MDP.IRSwaps.CITIVELO_EXCEL.timestamps import (
     ResolvedRequest,
     from_wire_naive,
@@ -124,7 +134,9 @@ __all__ = [
     "BondQuoteTransportError",
     "CitiBondQuote",
     "CitiVeloBondFetcher",
+    "PrefetchResult",
     "build_pricer_args",
+    "default_values_for_mode",
     "market_timezone",
 ]
 
@@ -260,6 +272,72 @@ _FREQ: Mapping[str, str] = {"eod": "DAILY", "intraday": "MI01", "live": "MI01"}
 #: present and empty, and ``windowed`` records the second for a window that came
 #: back with nothing; everything else it can say is a transport failure.
 _EMPTY_REASONS = frozenset({"empty", "no data"})
+
+
+def default_values_for_mode(mode: str) -> Tuple[str, ...]:
+    """The value set a request asks for when the caller did not name one.
+
+    ONE definition, because two callers reading the same request differently is a
+    silent bug rather than a loud one. :meth:`CitiVeloBondFetcher.prefetch` warms
+    the tag cache and :meth:`CitiVeloBondFetcher.fetch` reads it; if the first
+    ever asks for a narrower set than the second, the second's extra values miss
+    the cache - and on the offline path a miss is not an error, it is an empty
+    column. The reader gets a quote with values silently absent and a warm that
+    reported success.
+    """
+    return INTRADAY_BOND_VALUES if str(mode) in ("intraday", "live") else DEFAULT_BOND_VALUES
+
+
+@dataclasses.dataclass(frozen=True)
+class PrefetchResult:
+    """What one :meth:`CitiVeloBondFetcher.prefetch` did, and whether it worked.
+
+    Attributes
+    ----------
+    mode, freq
+        The mode the range was read as, and the ``CVTSHIST`` frequency that
+        implies.
+    start, end
+        The bounds actually warmed - ``start`` already includes the lookback, so
+        this is the range a subsequent per-point read can be served from.
+    tags
+        Every tag requested, in request order.
+    served
+        The subset that came back with rows in at least one window.
+    windows
+        One entry per request issued. Returned so a caller can assert that none
+        of them crossed the measured downsampling cliff.
+    failed
+        ``{tag: reason}`` for tags whose TRANSPORT failed, merged across windows.
+    """
+
+    mode: str
+    freq: str
+    start: Any
+    end: Any
+    tags: Tuple[str, ...] = ()
+    served: Tuple[str, ...] = ()
+    windows: Tuple[WarmWindow, ...] = ()
+    failed: Mapping[str, str] = dataclasses.field(default_factory=dict)
+
+    @property
+    def ok(self) -> bool:
+        """Whether the cache now holds data for this range.
+
+        **Data-bearing, not merely exception-free.** This flag is what a caller
+        uses to decide that subsequent per-point reads can go offline, and an
+        offline read of a cache that was never warmed does not fail - it returns
+        an empty column, which resolves to "Citi served nothing in this window".
+        A prefetch that quietly did nothing would therefore turn a slow-but-right
+        timeseries into a fast, empty, plausible-looking one.
+        """
+        return bool(self.tags) and bool(self.served)
+
+    def describe(self) -> str:
+        return (
+            f"{self.freq} {self.start}..{self.end}: {len(self.served)}/{len(self.tags)} tags "
+            f"served over {len(self.windows)} request(s), {len(self.failed)} failed"
+        )
 
 
 def market_timezone(country: Optional[str]) -> str:
@@ -664,9 +742,9 @@ class CitiVeloBondFetcher:
         request = resolve_request(timestamp, strict=strict_tz)
         if values is None and self._values_are_default:
             # Mode-dependent default. Resolved FIRST so the choice is made on the
-            # decided mode rather than on the shape of the timestamp argument.
-            values = (INTRADAY_BOND_VALUES if request.mode in ("intraday", "live")
-                      else DEFAULT_BOND_VALUES)
+            # decided mode rather than on the shape of the timestamp argument, and
+            # through the shared helper so `prefetch` cannot warm a different set.
+            values = default_values_for_mode(request.mode)
         plan = self.plan(resolutions, values=values)
         if not plan:
             return {}
@@ -688,6 +766,101 @@ class CitiVeloBondFetcher:
         )
         return self._resolve(
             plan, request, frame, freq=freq, end=end, failed_tags=failed_tags
+        )
+
+    def prefetch(
+        self,
+        resolutions: Iterable[BondResolution],
+        start: Union[datetime.date, datetime.datetime, pd.Timestamp],
+        end: Union[datetime.date, datetime.datetime, pd.Timestamp],
+        *,
+        mode: str = "intraday",
+        values: Optional[Sequence[str]] = None,
+        lookback: Optional[datetime.timedelta] = None,
+        force_refresh: bool = False,
+    ) -> PrefetchResult:
+        r"""Warm the tag cache for a whole ``[start, end]`` range, in one place.
+
+        The Velocity tag cache stores a whole SERIES per tag, not a row per
+        instant, so a caller reading N points out of one range pays for that
+        range N times unless somebody warms it once. That is what this is for,
+        and it is why it exists on the fetcher rather than in the caller: the
+        warm has to ask for the SAME value set that :meth:`fetch` will ask for,
+        and the only way to guarantee that is to derive both from
+        :func:`default_values_for_mode`.
+
+        Why this is not ``fetch(...)`` in a loop
+        ----------------------------------------
+        ``fetch``'s INTRADAY transport is ``windowed.fetch_windowed``, which takes
+        ``quotes().client()`` directly and therefore neither reads nor writes the
+        tag cache - a warm through it leaves nothing behind, measured. This goes
+        through ``CitiVeloQuotes.frame`` instead, which is the cached seam, and
+        takes on the downsampling-cliff obligation itself via
+        :func:`~MDP.CitiVelocityExcel.windowed.warm_windows`.
+
+        Parameters
+        ----------
+        start, end
+            NAIVE wire-zone bounds, matching :meth:`_window_bounds`. ``start`` is
+            extended backwards by ``lookback`` before anything is requested.
+        mode
+            ``eod`` | ``intraday`` | ``live``. Selects the frequency and, with
+            ``values=None``, the value set.
+        lookback
+            How far behind ``start`` to warm. ``None`` takes this fetcher's own
+            lookback for ``mode``, which is exactly what :meth:`_window_bounds`
+            subtracts per point - so a point at the START of the range resolves
+            from the cache rather than falling back to a live call. Pass
+            ``timedelta(0)`` to warm precisely ``[start, end]``.
+
+        Returns
+        -------
+        PrefetchResult
+            Including :attr:`PrefetchResult.ok`, which is **data-bearing**. A
+            caller must not switch its reads offline on "did not raise".
+        """
+        token = str(mode).strip().lower()
+        if token not in _FREQ:
+            raise ValueError(f"Unknown mode {mode!r}; use one of {sorted(_FREQ)}.")
+        if values is None and self._values_are_default:
+            values = default_values_for_mode(token)
+        plan = self.plan(resolutions, values=values)
+
+        tags: List[str] = []
+        seen: set = set()
+        for entry in plan.values():
+            for tag in entry["tags"].values():
+                if tag not in seen:
+                    seen.add(tag)
+                    tags.append(tag)
+
+        back = self._lookback[token] if lookback is None else lookback
+        lo = pd.Timestamp(start).to_pydatetime() - back
+        hi = pd.Timestamp(end).to_pydatetime()
+        freq = _FREQ[token]
+        if not tags:
+            return PrefetchResult(mode=token, freq=freq, start=lo, end=hi)
+
+        reported: Dict[str, str] = {}
+        windows = warm_windows(
+            self.quotes(), tags, freq, lo, hi,
+            force_refresh=force_refresh, failures=reported,
+        )
+        served = [t for t in tags if any(t in w.tags for w in windows)]
+        _logger.info(
+            "citivelo bonds prefetch: %d tags over %d bonds, %s %s..%s in %d request(s); "
+            "%d served",
+            len(tags), len(plan), freq, lo, hi, len(windows), len(served),
+        )
+        return PrefetchResult(
+            mode=token,
+            freq=freq,
+            start=lo,
+            end=hi,
+            tags=tuple(tags),
+            served=tuple(served),
+            windows=tuple(windows),
+            failed=self._transport_failures(reported, tags),
         )
 
     # -- internals ------------------------------------------------------
@@ -773,8 +946,24 @@ class CitiVeloBondFetcher:
             )
             return frame, self._transport_failures(reported, tags)
 
+        # SHIFTED UP BY A MINUTE, because the two transports disagree about the
+        # endpoint and this one is the odd one out. ``fetch_windowed`` fetches
+        # ``[start, end)``: it steps each window's upper bound back a minute so
+        # adjacent windows do not both return the shared instant, and the LAST
+        # window's upper bound is the caller's own ``end``. So an as-of read for
+        # 10:00 asked Citi for ``..09:59`` and could never see the 10:00 print -
+        # measured on US912810EX29, 2026-08-07 10:00: this branch resolved the
+        # 09:58 print while the cached branch resolved 10:00, and 27 of 60 minute
+        # bars in one hour differed as a result.
+        #
+        # Shifted rather than widened. Widening to ``end + 1min`` pushes the span
+        # past the chunk width and buys a whole extra round trip for one minute of
+        # data; shifting keeps the span, and the minute lost off the far end of a
+        # five-DAY lookback cannot change an as-of.
+        step = datetime.timedelta(minutes=1)
         series, windows = fetch_windowed(
-            self.quotes().client(), list(tags), freq, start, end, window=self._window
+            self.quotes().client(), list(tags), freq, start + step, end + step,
+            window=self._window,
         )
         # "no data" is this window holding no rows - the market, not the transport.
         broken = [w for w in windows if w.error and w.error.strip().lower() != "no data"]

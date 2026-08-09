@@ -138,22 +138,23 @@ def _warm_intraday(quotes, tags: Sequence[str], *, start: datetime.date, end: da
     instead and takes on the cliff obligation itself: ``CVTSHIST`` silently
     downsamples by requested SPAN, and the ``MI01`` threshold is measured at
     exactly 6 days (7 days returns 10-minute rows that look identical). Every
-    request here is bounded by ``MAX_SPAN["MI01"]``, so a caller asking for a
-    month gets a month of true minutes in five cached requests rather than one
+    request is bounded by ``MAX_SPAN["MI01"]``, so a caller asking for a month
+    gets a month of true minutes in five cached requests rather than one
     downsampled block.
-    """
-    from MDP.CitiVelocityExcel.windowed import MAX_SPAN
 
-    span = MAX_SPAN["MI01"]
-    lo = datetime.datetime.combine(start, datetime.time(0, 0))
-    hi = datetime.datetime.combine(end, datetime.time(23, 59))
-    cursor = hi
-    while cursor > lo:
-        window_start = max(lo, cursor - span)
-        quotes.frame(list(tags), "MI01", start=window_start, end=cursor)
-        if window_start <= lo:
-            break
-        cursor = window_start
+    The loop itself now lives in ``windowed.warm_windows``, because the intraday
+    FRB read path needs exactly the same warm and a second copy of a bound whose
+    whole value is that it is measured once is how the two drift apart.
+    """
+    from MDP.CitiVelocityExcel.windowed import warm_windows
+
+    warm_windows(
+        quotes,
+        list(tags),
+        "MI01",
+        datetime.datetime.combine(start, datetime.time(0, 0)),
+        datetime.datetime.combine(end, datetime.time(23, 59)),
+    )
 
 
 def cached_tags(freq: str, tags: Sequence[str]) -> int:

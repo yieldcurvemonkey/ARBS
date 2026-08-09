@@ -61,7 +61,7 @@ from __future__ import annotations
 
 import datetime
 import logging
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any, Dict, Iterator, List, Optional, Sequence, Tuple
 
 import pandas as pd
@@ -73,11 +73,13 @@ __all__ = [
     "MAX_SPAN",
     "TARGET_SPACING",
     "DEFAULT_WINDOW",
+    "WarmWindow",
     "WindowResult",
     "DownsampledWindowError",
     "window_bounds",
     "iter_windows",
     "fetch_windowed",
+    "warm_windows",
 ]
 
 _logger = logging.getLogger(__name__)
@@ -181,6 +183,140 @@ def iter_windows(
         stop = min(cursor + width, end)
         yield cursor, stop
         cursor = stop
+
+
+@dataclass(frozen=True)
+class WarmWindow:
+    """One request :func:`warm_windows` made, and what came back for it."""
+
+    start: Any
+    end: Any
+    tags: Tuple[str, ...] = ()
+    n_rows: int = 0
+
+    @property
+    def span(self) -> datetime.timedelta:
+        return pd.Timestamp(self.end).to_pydatetime() - pd.Timestamp(self.start).to_pydatetime()
+
+    def __str__(self) -> str:  # pragma: no cover - operator sugar
+        return (
+            f"{pd.Timestamp(self.start):%Y-%m-%d %H:%M} -> {pd.Timestamp(self.end):%Y-%m-%d %H:%M}  "
+            f"{self.n_rows} rows x {len(self.tags)} tags"
+        )
+
+
+def warm_windows(
+    quotes: Any,
+    tags: Sequence[str],
+    freq: str,
+    start: Any,
+    end: Any,
+    *,
+    window: Optional[datetime.timedelta] = None,
+    price_point: str = "CLOSE",
+    force_refresh: bool = False,
+    newest_first: bool = True,
+    failures: Optional[Dict[str, str]] = None,
+) -> List[WarmWindow]:
+    r"""Warm the TAG CACHE over ``[start, end]``, in requests held under the cliff.
+
+    This is deliberately NOT :func:`fetch_windowed`. That one takes a connected
+    ``client`` and pushes a worksheet per window, which is the right transport for
+    a one-off read and the wrong one for anything that wants to be read twice: it
+    **writes nothing to the tag cache**. Measured on the first run of
+    ``scripts/citivelo_ust_universe_warm.py``, 349 bonds and 698 tags "succeeded"
+    in 134 s and left *zero* ``MI01`` parquets on disk. ``CitiVeloQuotes.frame``
+    goes through the cache, so this drives that instead - and on the same
+    measurement it was 48 s and +170 MB against 134 s and +971 MB, 5.7x cheaper as
+    well as actually cached.
+
+    Driving ``frame`` means taking on the cliff obligation that ``fetch_windowed``
+    would otherwise carry: ``CVTSHIST`` silently downsamples by requested SPAN,
+    and the ``MI01`` threshold is measured at exactly 6 days - a 7-day request
+    returns 10-minute rows in a block that looks identical. Every request here is
+    therefore bounded by :data:`MAX_SPAN`, which is where that measurement lives.
+
+    Parameters
+    ----------
+    quotes
+        Anything with ``CitiVeloQuotes.frame``'s signature. A LIVE-capable reader:
+        an offline one cannot warm anything, since a cache miss is what the warm
+        exists to fill.
+    window
+        Request width. ``None`` takes :data:`MAX_SPAN` for the frequency - the
+        widest span measured to still serve at full resolution, so the fewest
+        round trips that are safe. Validated by :func:`window_bounds` either way,
+        which refuses anything over the cliff.
+    newest_first
+        Walk back from ``end``. A warm that stops - at a memory ceiling, on a COM
+        error, because someone closed Excel - then has the RECENT data, which is
+        what a reader asks for first.
+    failures
+        Optional mapping the per-tag transport reasons are merged into, across
+        every window. This is how a caller tells "the fetch did not happen" from
+        "the market held nothing", which is the difference between retrying and
+        widening.
+
+    Returns
+    -------
+    list[WarmWindow]
+        One entry per request actually issued, in the order issued, carrying the
+        tags that served and the row count. A caller can assert on the bounds -
+        which is the point of returning them rather than an ``int``.
+
+    Notes
+    -----
+    A frequency with no measured cliff (``DAILY`` and coarser) is fetched in ONE
+    request. Chunking it would spend round trips against a threshold that does
+    not exist.
+    """
+    token = normalise_frequency(freq)
+    wanted = list(dict.fromkeys(str(t).strip() for t in tags if str(t).strip()))
+    if not wanted:
+        return []
+
+    cap = MAX_SPAN.get(token)
+    if cap is None:
+        spans: List[Tuple[Any, Any]] = [(start, end)]
+    else:
+        width = window_bounds(token, cap if window is None else window)
+        lo = pd.Timestamp(start).to_pydatetime()
+        hi = pd.Timestamp(end).to_pydatetime()
+        spans = []
+        cursor = hi
+        while cursor > lo:
+            w_start = max(lo, cursor - width)
+            spans.append((w_start, cursor))
+            if w_start <= lo:
+                break
+            cursor = w_start
+        if not spans:
+            # A degenerate range (end <= start) is still one request rather than
+            # none: returning nothing here would report a warm that never ran as
+            # a warm that found nothing.
+            spans = [(lo, hi)]
+        if not newest_first:
+            spans.reverse()
+
+    out: List[WarmWindow] = []
+    for w_start, w_end in spans:
+        reported: Dict[str, str] = {}
+        frame = quotes.frame(
+            list(wanted),
+            token,
+            start=w_start,
+            end=w_end,
+            price_point=price_point,
+            force_refresh=force_refresh,
+            failures=reported,
+        )
+        if failures is not None:
+            failures.update(reported)
+        served = tuple(str(c) for c in getattr(frame, "columns", ()))
+        out.append(
+            WarmWindow(start=w_start, end=w_end, tags=served, n_rows=int(len(frame)))
+        )
+    return out
 
 
 def _spacing_of(index: pd.Index) -> Optional[datetime.timedelta]:

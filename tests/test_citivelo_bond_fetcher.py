@@ -101,7 +101,15 @@ def _coverage_fixture():
         for v in uni.available_values(d.isin):
             cov.setdefault(v, set()).add(d.isin)
 
-    partial = {v: s for v, s in cov.items() if 0 < len(s) < len(all_isins)}
+    # OAS is excluded from the candidates because it already has a JOB in this
+    # file: it is the "served but empty in this window" case, and _eod_fetcher
+    # deliberately does not serve it. Once the catalog was seeded with the matured
+    # bonds Citi quotes but does not list, OAS became the value with the most even
+    # partial coverage and was picked as SPLIT_VALUE - so _eod_fetcher appended it
+    # to the served set and four tests that assert `"OAS" in quote.empty` began
+    # failing against an OAS of -41.0. Two derived fixtures collided over one
+    # value; keeping them disjoint is the fix.
+    partial = {v: s for v, s in cov.items() if 0 < len(s) < len(all_isins) and v != "OAS"}
     assert partial, ("no value has partial UST coverage, so nothing can exercise "
                      "the 'never request an unserved value' rule")
     split = max(partial, key=lambda v: min(len(partial[v]), len(all_isins) - len(partial[v])))
