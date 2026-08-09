@@ -499,3 +499,45 @@ def test_write_day_raises_when_every_snapshot_fails_the_gate(monkeypatch):
             {ts: "c-dead"},
         )
     assert "snapshots" not in captured
+
+
+def test_calibrate_chunk_does_not_warm_start_from_an_unsolved_curve(monkeypatch):
+    """2026-07-01: one identity solve seeded 1,381 consecutive minutes.
+
+    _calibrate_chunk warm-starts each minute from the previous minute's nodes.
+    A curve that failed to solve must neither be emitted nor become the next
+    minute's seed -- the last believable seed carries forward instead.
+    """
+    nodes_good = {pd.Timestamp("2026-03-11"): 0.994, pd.Timestamp("2026-06-17"): 0.988}
+    nodes_dead = {pd.Timestamp("2026-03-11"): 1.0, pd.Timestamp("2026-06-17"): 1.0}
+
+    def _curve(node_map):
+        return types.SimpleNamespace(nodes=types.SimpleNamespace(_nodes=dict(node_map)))
+
+    ts1 = datetime.datetime(2026, 3, 10, 14, 0, tzinfo=datetime.timezone.utc)
+    ts2 = datetime.datetime(2026, 3, 10, 14, 1, tzinfo=datetime.timezone.utc)
+    ts3 = datetime.datetime(2026, 3, 10, 14, 2, tzinfo=datetime.timezone.utc)
+
+    seeds = []
+    outputs = {ts1: nodes_good, ts2: nodes_dead, ts3: nodes_good}
+
+    builder = BARCHART_STIRF_CURVE.__new__(BARCHART_STIRF_CURVE)
+    builder._attach_curve_context = lambda curve, **kwargs: curve
+    builder._mem_cache_put = lambda key, curve: None
+    builder._curve_cache_key = lambda curve_name, timestamp, cfg: str(timestamp)
+
+    def _build(*, curve_name, timestamp, cfg, pricers, initial_nodes, solver_tolerances):
+        seeds.append(initial_nodes)
+        return _curve(outputs[timestamp]), object()
+
+    builder._build_curve_from_pricers = _build
+
+    results = builder._calibrate_chunk(
+        chunk=[(ts1, {}), (ts2, {}), (ts3, {})],
+        curve_name="USD-SOFR-1D-Q12STIRT",
+        cfg={"reference_key": "USD-SOFR-1D"},
+    )
+
+    assert set(results) == {ts1, ts3}, "the identity curve must not be emitted"
+    # ts3 is seeded from ts1's nodes, not from the identity curve in between.
+    assert seeds[2] == nodes_good
