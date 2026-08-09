@@ -261,8 +261,15 @@ Three axes that *are* real, in descending order of what this work supports:
 | `lambda_dependence` + `lambda_arbitrage` signals, wired through `SignalRecord` | done |
 | Baseline smoke gate | done, 21/21 |
 | Multi-session λ panel + analysis | done for SFRZ26; multi-contract panel warming |
-| QDB backtest fork, pre-registered | done; run pending the panel |
+| QDB backtest fork, pre-registered | done and run — see the verdict note |
 | Mode-location regression | implemented; needs the multi-contract panel |
+
+**Backtest outcome, in one line each.** At the pre-registered gates the strategy never trades
+(10 of 93 sessions are both well-fitted and cross-strike coherent, against a 30-observation
+standardisation window) — a data-sufficiency result. At relaxed, explicitly EXPLORATORY gates
+it trades 7 times for a gross **−0.214bp per trade before any cost**, and a shuffled λ beats
+the real one on 90% of seeds. Full detail and the sample caveats in
+`2026-08-08-sr3-zq-lambda-verdict.md`.
 
 Two defects in `famb_fly_qdb.py` are fixed in the fork rather than inherited, and both are
 worth knowing about in the parent: its delta hedge is unwound in the step it opens (the engine

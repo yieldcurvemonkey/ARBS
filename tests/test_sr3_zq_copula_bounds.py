@@ -395,3 +395,45 @@ def test_lambda_signal_is_a_no_op_for_callers_that_do_not_pass_it():
         lambda_wing=0.1, lambda_prior=0.5, lambda_z=-2.2, lambda_atom_spread=0.1,
     )
     assert any(f.kind is TradeFlagKind.LAMBDA_DEPENDENCE for f in with_lambda)
+
+
+# --------------------------------------------------------------------------------------
+# cross-check against the repo's own day-weighted meeting variance
+# --------------------------------------------------------------------------------------
+
+def test_independent_coupling_reproduces_the_repo_day_weighted_variance():
+    """``day_weighted_meeting_variance_bp2`` sums ``w_i^2 * 625 * p(1-p)`` with no
+    cross-covariance term, so it IS the independent-coupling point of the interval -- and it
+    gets there through completely different code. Agreement is a check on both.
+    """
+    import datetime
+
+    from RVUtils.SR3ZQDistributionScreener._types import MeetingNode
+    from RVUtils.SR3ZQDistributionScreener._variance import day_weighted_meeting_variance_bp2
+
+    ref_start = datetime.date(2026, 12, 16)
+    ref_end = datetime.date(2027, 3, 17)
+    # Unit day-weight: every meeting effective on or before the window start.
+    nodes = [
+        MeetingNode(
+            label=f"m{i}", date=ref_start, prior_effr=0.0, next_effr=0.0,
+            expected_change_bp=25.0 * p, char_25bp=0, mantissa=p,
+            p_lower=1.0 - p, p_upper=p, variance_bp2=625.0 * p * (1.0 - p),
+        )
+        for i, p in enumerate(P0807)
+    ]
+    repo_var, _ = day_weighted_meeting_variance_bp2(nodes, ref_start=ref_start, ref_end=ref_end)
+
+    mine = 625.0 * sum_variance(independent_sum_distribution(P0807))
+    assert repo_var == pytest.approx(mine, rel=1e-9)
+    assert mine == pytest.approx(422.71, abs=0.02)
+
+
+def test_the_repo_variance_sits_strictly_inside_the_copula_interval():
+    """The screener's existing variance number is one point of a whole interval. Stating the
+    interval is the contribution: the same marginals admit anything from the LP minimum to
+    the comonotone maximum, and only the middle of that range was ever being reported."""
+    b = coupling_bounds(P0807)
+    assert b.var_min_variance * 625.0 == pytest.approx(56.75, abs=0.05)
+    assert b.var_independent * 625.0 == pytest.approx(422.71, abs=0.02)
+    assert b.var_comonotone * 625.0 == pytest.approx(1080.50, abs=0.05)
