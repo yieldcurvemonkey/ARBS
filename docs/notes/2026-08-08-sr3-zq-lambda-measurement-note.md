@@ -130,25 +130,38 @@ quantity this section shows is not identified.)*
 
 ## 3. Q2 — is 0.54 the favourable end of the range?
 
-**No. It is close to the centre.** On the 19 admissible sessions:
+**On one contract, no. Across contracts, yes — and the reason is regime.** This one reverses
+when the sample widens, so both readings are given.
 
-| statistic | λ_wing (absorbed) |
-|---|---|
-| mean | +0.596 |
-| sd | 0.140 |
-| min / max | +0.324 / +0.981 |
-| median | +0.594 |
-| **percentile of 0.54** | **37th** |
+| sample | n | mean λ_wing | median | percentile of 0.54 |
+|---|---|---|---|---|
+| SFRZ26 only | 19 | +0.596 | +0.594 | **37th** (centre) |
+| 4 contracts, 2025-07 → 2026-08 | 28 | +0.304 | +0.361 | **79th** (high end) |
 
-The published session was not cherry-picked in the direction feared. Two observations that
-matter more than the percentile:
+Per contract, the split is not noise:
 
-- **λ_wing never goes near zero.** The minimum over the sample is +0.32. The market has priced
-  materially comonotone Fed behaviour on every admissible session measured. If λ is a
-  mean-reverting quantity, it reverts around ~0.6, not around the independent null.
+| contract | n | mean λ_wing | range | cycle |
+|---|---|---|---|---|
+| SFRZ25 | 17 | **+0.146** | [−0.945, +0.441] | cutting |
+| SFRM26 | 1 | +0.422 | — | |
+| SFRZ26 | 8 | +0.547 | [+0.464, +0.626] | hiking |
+| SFRH26 | 2 | +0.610 | [+0.582, +0.638] | |
+
+**λ is regime-dependent, and that is the finding.** In the 2025 cutting cycle the market priced
+the meetings as close to independent (mean +0.15 — "they'll cut, timing uncertain"). In the
+2026 hiking cycle it prices them materially comonotone (+0.55 — "do they go at all"). The
+original concern was therefore right on the pooled sample: **0.54 is near the top of what has
+been observed across regimes**, and a prior centred there would have been a prior fitted to one
+half of the history.
+
+Two observations that survive both readings:
+
+- **Within a regime, λ is remarkably stable.** SFRZ26's 8 admissible sessions span +0.464 to
+  +0.626 (sd 0.058). That stability is what makes a z-score a sensible entry, and also what
+  makes the entry rarely trigger.
 - **Trough depth and wing mass are different statistics.** 2026-08-07 had the deepest trough in
-  the original eight-session window (0.54 trough/peak) but sits *below* the median on λ_wing.
-  The two 0.54s in the original note are a coincidence, not one quantity seen twice.
+  the original eight-session window (0.54 trough/peak) and is unremarkable on λ_wing within its
+  own contract. The two 0.54s in the original note are a coincidence, not one quantity twice.
 
 **Modal count on admissible sessions: 12 unimodal, 7 bimodal.** Once the fit gate is applied,
 bimodality is the minority — but by the one-way validity argument (convolution with a
@@ -196,17 +209,58 @@ marginals that keep ZQ's mean exactly (`_copula.categorical_*`, `three_point_mar
 | 40% | +0.348 | −0.248 |
 
 **The direction of the bias is confirmed: the binary reading overstates λ.** A quarter of the
-expected move arriving in 50s is worth −0.14 of λ — the same order as the entire cross-session
-standard deviation (0.140). So the *level* of λ is not safe to size off without a view on move
-size.
+expected move arriving in 50s is worth −0.13 to −0.15 of λ, the same order as the entire
+cross-session standard deviation. The *level* of λ is not safe to size off without a view on
+move size.
 
-**But the kill criterion passes.** Rank correlation between the binary λ and the 25%-50s λ is
-**0.993**: the ordering across sessions is preserved. A signal that trades the standardised
-z-score, not the level, survives this contamination. That is exactly why the pre-registration
-fixed entry on z rather than on the raw level, and it is the single most important reason that
-choice was made in advance.
+**And on the wider sample the kill criterion FAILS.** Rank correlation between the binary λ and
+the 25%-50s λ:
+
+| sample | rank corr | pre-registered threshold 0.90 |
+|---|---|---|
+| SFRZ26 only (19 sessions) | **0.993** | pass |
+| 4 contracts (28 sessions) | **0.769** | **FAIL** |
+
+This is a pre-registered kill criterion (§5.6) and it is invoked. The single-contract result was
+reassuring and wrong: within one contract the marginals are similar enough that a size-mix
+rescales everything almost uniformly, so the ordering survives. Across contracts — where the
+marginals differ enough to matter, which is exactly where a pooled prior would be used — the
+same contamination **reorders the sessions**. A z-score computed against a pooled prior is
+therefore not protected from the 50bp problem the way the single-contract test suggested.
+
+Practical consequence: λ is comparable *within* a contract and a regime, and not comparable
+across them without a move-size assumption that ZQ cannot supply.
 
 ---
+
+## 5b. Four applicability guards the data found, not the design
+
+Three of these were discovered by an **independent quantity going wrong** — the calibrated
+SOFR-EFFR basis, which should be small, positive and stable and instead came back at a mean of
+−39bp with a range of [−132, +7]. That is the check working: a number nobody was looking at
+refused to behave, and each fix moved it back toward the truth. After all four, the basis reads
+**+6.39bp ± 0.93, range [+4.45, +8.35], across 92 sessions and 5 contracts** — measured on a
+sample the code was not built against.
+
+1. **Sign of the uncertain path (a real bug).** `resolved_marginals` are magnitudes — the
+   probability of one more 25bp step in whichever direction the meeting is moving. The
+   ZQ-implied window rate added them **unsigned**, which turns a cutting cycle's expected path
+   into a hiking one. This is why SFRZ25 was the worst-behaved contract: it is the cutting one.
+   Fixing it alone moved the basis from −39bp to +5.9bp.
+2. **A meeting earlier in the current month has already happened.** Its move is already inside
+   the anchor month's average; counting it again as uncertain adds a phantom step.
+3. **The lattice must describe most of the density.** A two-meeting lattice spans 50bp while the
+   RND spans several times that, so absorbing the tails declares most of the law to be "wing"
+   and returns λ *above* the comonotone bound — which reads as a static arbitrage and is a
+   measurement artefact. Sessions with more than 25% of the density off-lattice are rejected.
+4. **The interval must be wide enough to place anything on.** When every marginal sits near 0 or
+   near 1, comonotone and independent give nearly the same wing mass, the coordinate's
+   denominator collapses, and λ becomes noise divided by noise (an ungated panel produced +41
+   and −76). Both sides of the interval are now required to span ≥ 0.05 in wing mass.
+
+None of these change the 2026-08-07 baseline — the smoke gate still passes 21/21 — which is the
+point: they reject sessions where the measurement was never valid, and leave alone the one where
+it was.
 
 ## 6. Cross-strike consistency — the RV that lives *inside* the copula
 

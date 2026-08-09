@@ -58,6 +58,9 @@ MOVE_SIZE_BP = 25.0
 #: threshold-free -- is the headline statistic and this is not.
 _MODE_PROMINENCE_FRAC = 0.05
 
+#: Most of the density has to sit on the lattice for the atom reading to mean anything.
+_MAX_OFF_LATTICE_MASS = 0.25
+
 
 @dataclass(frozen=True)
 class MeetingSet:
@@ -371,6 +374,10 @@ def build_meeting_set(
     resolved_weights: List[float] = []
     unresolved: List[Tuple[str, float, float]] = []
     for jump in jumps:
+        if jump.effective < as_of:
+            # A meeting earlier in the current month has already happened; its move is inside
+            # the anchor month's average. Counting it again as uncertain adds a phantom step.
+            continue
         weight = float(fomc_window_weight(window, jump.effective))
         if weight <= 0.0:
             continue  # entirely after the reference window: it cannot touch settlement
@@ -414,7 +421,12 @@ def zq_implied_window_rate_pct(meeting_set: MeetingSet) -> float:
     lattice carries: the certain steps, the expected number of uncertain ones, and the
     day-weighted drift from meetings that land inside the window but after option expiry.
     """
-    expected_uncertain_bp = MOVE_SIZE_BP * float(sum(meeting_set.resolved_marginals))
+    # The uncertain part carries the STEP SIGN. `resolved_marginals` are magnitudes -- the
+    # probability of one more 25bp step in whichever direction the meeting is moving -- so
+    # adding them unsigned turns a cutting cycle's expected path into a hiking one and drives
+    # the calibrated basis to -130bp. `certain_shift_bp` is already signed via char_25bp.
+    sign = meeting_set.step_sign or 1
+    expected_uncertain_bp = sign * MOVE_SIZE_BP * float(sum(meeting_set.resolved_marginals))
     return meeting_set.spot_effr_pct + (meeting_set.certain_shift_bp + expected_uncertain_bp) / 100.0
 
 
@@ -527,6 +539,24 @@ def density_modes(bl_result, *, prominence_frac: float = _MODE_PROMINENCE_FRAC):
     return mode_prices, ratio, int(peaks.size)
 
 
+def _quoted_price_range(bl_result) -> Tuple[float, float]:
+    """The price range actually covered by quotes, for the lattice-fits-inside guard.
+
+    Prefers the observed strikes; falls back to the fitted grid when a caller supplies a
+    density without them (the screener's RNDRecord adapter does). Returns NaNs when neither
+    is available, which disables the guard rather than silently passing it.
+    """
+    strikes = np.asarray(getattr(getattr(bl_result, "input", None), "strikes_price", ()), dtype=float)
+    strikes = strikes[np.isfinite(strikes) & (strikes > 0.0)]
+    if strikes.size >= 2:
+        return float(strikes.min()), float(strikes.max())
+    grid = np.asarray(getattr(bl_result, "strike_grid_rate", ()), dtype=float)
+    grid = grid[np.isfinite(grid)]
+    if grid.size >= 2:
+        return float(100.0 - grid.max()), float(100.0 - grid.min())
+    return float("nan"), float("nan")
+
+
 def measure_lambda(
     *,
     meeting_set: MeetingSet,
@@ -570,11 +600,72 @@ def measure_lambda(
 
     bounds = coupling_bounds(ms.resolved_marginals)
 
+    # The interval has to be wide enough to place anything on. When every marginal sits near 0
+    # or near 1 the comonotone and independent couplings produce almost the same wing mass, the
+    # coordinate's denominator collapses, and lambda becomes an arbitrarily large number
+    # divided by noise -- which is where a +41 and a -76 in an ungated panel come from. Those
+    # marginals genuinely do not discriminate between couplings; saying so is the right answer.
+    # Both sides, not just the upper one: below the independent point the denominator is
+    # wing_independent - wing_min_variance, and marginals clustered near 1 make that collapse
+    # just as effectively.
+    wing_span = min(
+        bounds.wing_comonotone - bounds.wing_independent,
+        bounds.wing_independent - bounds.wing_min_variance,
+    )
+    if not math.isfinite(wing_span) or wing_span < 0.05:
+        return LambdaMeasurement(
+            as_of=ms.as_of, symbol=ms.symbol, ok=False,
+            marginals=ms.resolved_marginals,
+            reason=(
+                f"the copula interval is only {wing_span:.4f} wide in wing mass "
+                f"(marginals {[round(p, 3) for p in ms.resolved_marginals]}); these marginals "
+                f"do not discriminate between couplings"
+            ),
+        )
+
     zq_rate = zq_implied_window_rate_pct(ms)
     basis_bp = (float(sr3_forward_rate_pct) - zq_rate) * 100.0
     rates = atom_rates_percent(ms, basis_bp=basis_bp, include_unresolved_drift=include_unresolved_drift)
+
+    # The lattice has to fit inside the quoted strike range. Far from expiry the resolved
+    # meeting set grows, the atom ladder spans further than the listed strikes, and the end
+    # atoms land in the ghost-extrapolated wings -- where the "wing mass" is a property of the
+    # extrapolation, not a measurement of the market. Absorbing the tails then sends the wings
+    # toward 1 and lambda_wing far above the comonotone bound, which is how a panel built
+    # without this guard reports lambda values of +53 and a SOFR-EFFR basis of -68bp.
+    span_lo, span_hi = _quoted_price_range(bl_result)
+    atom_prices = 100.0 - rates
+    if math.isfinite(span_lo) and math.isfinite(span_hi):
+        half_step = 0.5 * MOVE_SIZE_BP / 100.0
+        if atom_prices.min() - half_step < span_lo or atom_prices.max() + half_step > span_hi:
+            return LambdaMeasurement(
+                as_of=ms.as_of, symbol=ms.symbol, ok=False,
+                reason=(
+                    f"the {ms.n_resolved + 1}-atom lattice spans "
+                    f"[{atom_prices.min():.3f}, {atom_prices.max():.3f}] but quoted strikes only "
+                    f"cover [{span_lo:.3f}, {span_hi:.3f}]; the end atoms would be measured "
+                    f"against ghost-extrapolated wings"
+                ),
+            )
     probs, below, above = observed_atom_probabilities(bl_result, rates, absorb_tails=True)
     strict, _, _ = observed_atom_probabilities(bl_result, rates, absorb_tails=False)
+
+    # The lattice has to describe most of the density. Absorbing the tails is defensible as
+    # "attribute the kernel's leakage to the state it leaked from"; it stops being defensible
+    # when the leakage IS the distribution. A two-meeting lattice spans 50bp while the RND
+    # spans several times that, so absorbing declares most of the law to be wing and returns a
+    # lambda above the comonotone bound -- not a static arbitrage, a measurement artefact.
+    off_lattice = float(below + above)
+    if off_lattice > _MAX_OFF_LATTICE_MASS:
+        return LambdaMeasurement(
+            as_of=ms.as_of, symbol=ms.symbol, ok=False,
+            marginals=ms.resolved_marginals,
+            reason=(
+                f"{100 * off_lattice:.0f}% of the density falls outside the "
+                f"{ms.n_resolved + 1}-atom lattice (limit {100 * _MAX_OFF_LATTICE_MASS:.0f}%); "
+                f"the lattice does not describe this density"
+            ),
+        )
 
     wing_absorbed = wing_mass(probs)
     wing_strict = wing_mass(strict)
