@@ -122,7 +122,7 @@ import zoneinfo
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple, Union
+from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple, Union
 
 import pandas as pd
 
@@ -610,43 +610,53 @@ def _spread_max_staleness() -> datetime.timedelta:
 def fresh_spread_minutes(
     minutes: Sequence[datetime.datetime],
     spread_slice: pd.DataFrame,
+    tags: Mapping[str, str],
     *,
     max_staleness: Optional[datetime.timedelta] = None,
-) -> List[datetime.datetime]:
-    """The minutes at which Citi's published spread has a print fresh enough to serve.
+) -> Dict[str, List[datetime.datetime]]:
+    """``{tenor: minutes}`` where Citi's print is fresh enough for THAT tenor.
 
     Citi publishes SWAP_SPREAD only during its session, but the minute CurveStore
     holds the Sunday-evening open and the small hours - so a Monday 01:44 curve
-    exists while the newest spread print is Friday 17:59, 55.8 hours back. The
-    value map REFUSES that, correctly (``StaleCurveError``, 12-hour limit), and it
+    exists while the newest 30Y print is Friday 17:59, 55.8 hours back. The value
+    map REFUSES that, correctly (``StaleCurveError``, 12-hour limit), and it
     refuses it one (tenor, minute) at a time inside ``IRSwapsTB``, which logs a
-    full traceback for each: ~4,000 tracebacks per Monday, costing more than the
-    pricing and burying every real failure.
+    full traceback for each. So the warm asks only for what will be served.
 
-    So the warm asks only for minutes that will be served. This changes no value -
-    it applies the same 12-hour rule the value map applies, ahead of it, in one
-    vectorised pass instead of 11 exceptions per minute.
+    **Per tenor, not per minute.** The obvious version tested "does this slice have
+    a row here" with ``dropna(how="all")`` on the assumption that eleven tags
+    fetched in one CVTSHIST call share their stamps. Measured on 2024-09-23 01:44
+    they do not: 1M/3M/6M/1Y carry prints while 2Y through 30Y are NaN, so a
+    row-level test passed the minute and the seven long tenors raised anyway. The
+    money-market tenors genuinely trade in those hours; collapsing to an
+    all-tenors rule would have thrown their coverage away to silence the others.
+
+    This changes no value - it applies the value map's own 12-hour rule ahead of
+    it, vectorised, per tag.
     """
     if spread_slice is None or spread_slice.empty or not minutes:
-        return []
+        return {}
 
     from MDP.IRSwaps.CITIVELO_EXCEL.timestamps import to_wire_naive
 
     limit = max_staleness if max_staleness is not None else _spread_max_staleness()
-    # Every tag in a slice shares its stamps - they come back from one CVTSHIST
-    # call - so "a row exists here" is the same question for all eleven.
-    published = spread_slice.dropna(how="all").index
-    if published.empty:
-        return []
-
     wanted = pd.DatetimeIndex([to_wire_naive(m) for m in minutes])
-    position = published.searchsorted(wanted, side="right") - 1
-    out: List[datetime.datetime] = []
-    for minute, wire, pos in zip(minutes, wanted, position):
-        if pos < 0:
+
+    out: Dict[str, List[datetime.datetime]] = {}
+    for tenor, tag in tags.items():
+        if tag not in spread_slice.columns:
             continue
-        if (wire - published[pos]) <= limit:
-            out.append(minute)
+        published = spread_slice[tag].dropna().index
+        if published.empty:
+            continue
+        position = published.searchsorted(wanted, side="right") - 1
+        keep = [
+            minute
+            for minute, wire, pos in zip(minutes, wanted, position)
+            if pos >= 0 and (wire - published[pos]) <= limit
+        ]
+        if keep:
+            out[tenor] = keep
     return out
 
 
@@ -773,39 +783,44 @@ def _price_swap_spreads(
     if spread_slice is None or spread_slice.empty:
         return 0
 
-    # Only ask for tenors whose tag is actually in the slice. A missing tag does
-    # not return NaN - it raises SwapSpreadUnavailableError inside the pricing
-    # loop, where IRSwapsTB logs a full traceback per (tenor, minute). On a
-    # partially-fetched axis that is ~10k tracebacks a day, which costs more than
-    # the pricing does and buries every real failure.
-    available = set(spread_slice.columns)
+    # Only ask for tenors whose tag is in the slice, at minutes their own tag was
+    # published near. A missing tag does not return NaN - it raises inside the
+    # pricing loop, where IRSwapsTB logs a full traceback per (tenor, minute).
     tag_by_tenor = swap_spread_tags(cfg.spread_tenors)
-    wanted = [t for t in cfg.spread_tenors if tag_by_tenor[t] in available]
-    if not wanted:
+    by_tenor = fresh_spread_minutes(minutes, spread_slice, tag_by_tenor)
+    if not by_tenor:
         return 0
 
-    # Only the minutes Citi actually published near. See fresh_spread_minutes.
-    usable = fresh_spread_minutes(minutes, spread_slice)
-    if not usable:
-        return 0
+    # Tenors that share a minute set share a request. Measured, the axis falls
+    # into two or three such groups - the money-market tenors print in hours the
+    # long end does not - so this is a couple of calls a day, not eleven.
+    groups: Dict[Tuple[datetime.datetime, ...], List[str]] = {}
+    for tenor, usable in by_tenor.items():
+        groups.setdefault(tuple(usable), []).append(tenor)
 
-    queries = [
-        IRSwapQuery(curve=cfg.curve, tenor=tenor, value=IRSwapValue.CITIVELO_SWAP_SPREAD)
-        for tenor in wanted
-    ]
+    written = 0
     ss_mod.set_default_quotes(DayQuotes(spread_slice))
     try:
-        frame = tb.get_timeseries(
-            start=usable[0],
-            end=usable[-1],
-            queries=queries,
-            timestamps=list(usable),
-            n_jobs=1,
-            ignore_cache=False,
-        )
+        for usable, tenors in groups.items():
+            queries = [
+                IRSwapQuery(
+                    curve=cfg.curve, tenor=tenor, value=IRSwapValue.CITIVELO_SWAP_SPREAD
+                )
+                for tenor in tenors
+            ]
+            frame = tb.get_timeseries(
+                start=usable[0],
+                end=usable[-1],
+                queries=queries,
+                timestamps=list(usable),
+                n_jobs=1,
+                ignore_cache=False,
+            )
+            if not frame.empty:
+                written += int(frame.notna().to_numpy().sum())
     finally:
         ss_mod.set_default_quotes(None)
-    return int(frame.notna().to_numpy().sum()) if not frame.empty else 0
+    return written
 
 
 def _alias_and_derived_rows(

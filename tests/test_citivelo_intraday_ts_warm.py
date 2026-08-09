@@ -307,40 +307,70 @@ def test_the_day_slice_reaches_back_a_whole_lookback():
     assert sliced.index.max() >= pd.Timestamp("2026-07-29 23:00")
 
 
+_TAGS = {"10Y": "TAG10", "3M": "TAG3M"}
+
+
+def _session_frame() -> pd.DataFrame:
+    """Friday 09:00-17:59 for 10Y; 3M also prints through Monday's small hours."""
+    friday = pd.date_range("2026-07-24 09:00", "2026-07-24 17:59", freq="min")
+    monday_early = pd.date_range("2026-07-27 01:00", "2026-07-27 02:00", freq="min")
+    index = friday.union(monday_early)
+    frame = pd.DataFrame(index=index, dtype=float)
+    frame["TAG10"] = [1.0 if ts in friday else float("nan") for ts in index]
+    frame["TAG3M"] = 1.0
+    return frame
+
+
 def test_fresh_spread_minutes_drops_the_monday_small_hours():
-    """The curve store holds Monday 01:44; Citi's newest print is Friday 17:59.
+    """The curve store holds Monday 01:44; Citi's newest 10Y print is Friday 17:59.
 
     The value map refuses that as 55.8 h stale - one raised exception per (tenor,
     minute), each logged with a full traceback inside IRSwapsTB. Filtering ahead
-    of it changes no value and removes ~4,000 tracebacks per Monday.
+    of it changes no value.
     """
-    friday = pd.date_range("2026-07-24 09:00", "2026-07-24 17:59", freq="min")
-    frame = pd.DataFrame({"TAG": range(len(friday))}, index=friday, dtype=float)
-
-    monday_small_hours = [
+    frame = _session_frame()
+    monday = [
         datetime.datetime(2026, 7, 27, 1, 44, tzinfo=ET),
-        datetime.datetime(2026, 7, 27, 6, 0, tzinfo=ET),
+        datetime.datetime(2026, 7, 27, 2, 0, tzinfo=ET),
     ]
-    assert warm.fresh_spread_minutes(monday_small_hours, frame) == []
+    out = warm.fresh_spread_minutes(monday, frame, _TAGS)
+    assert "10Y" not in out
 
-    same_session = [datetime.datetime(2026, 7, 24, 12, 0, tzinfo=ET)]
-    assert warm.fresh_spread_minutes(same_session, frame) == same_session
+
+def test_fresh_spread_minutes_is_per_tenor_not_per_row():
+    """Measured 2024-09-23 01:44: 1M/3M/6M/1Y print while 2Y-30Y are NaN.
+
+    A row-level test (``dropna(how='all')``) passed that minute and the seven long
+    tenors raised anyway; an all-tenors-must-be-fresh rule would instead have
+    thrown away the money-market coverage that genuinely exists there.
+    """
+    frame = _session_frame()
+    monday = [datetime.datetime(2026, 7, 27, 1, 44, tzinfo=ET)]
+    out = warm.fresh_spread_minutes(monday, frame, _TAGS)
+    assert out == {"3M": monday}
 
 
 def test_fresh_spread_minutes_keeps_an_overnight_gap_inside_the_limit():
-    published = pd.date_range("2026-07-24 09:00", "2026-07-24 17:59", freq="min")
-    frame = pd.DataFrame({"TAG": range(len(published))}, index=published, dtype=float)
-    # 07-25 01:00 is 7 h after the last print - inside the 12 h limit.
+    frame = _session_frame()
+    # 07-25 01:00 is 7 h after Friday's last 10Y print - inside the 12 h limit.
     minute = [datetime.datetime(2026, 7, 25, 1, 0, tzinfo=ET)]
-    assert warm.fresh_spread_minutes(minute, frame) == minute
+    assert warm.fresh_spread_minutes(minute, frame, _TAGS)["10Y"] == minute
 
 
 def test_fresh_spread_minutes_drops_everything_before_the_first_print():
-    published = pd.date_range("2026-07-24 09:00", "2026-07-24 17:59", freq="min")
-    frame = pd.DataFrame({"TAG": range(len(published))}, index=published, dtype=float)
-    assert warm.fresh_spread_minutes(
-        [datetime.datetime(2026, 7, 24, 8, 0, tzinfo=ET)], frame
-    ) == []
+    frame = _session_frame()
+    out = warm.fresh_spread_minutes(
+        [datetime.datetime(2026, 7, 24, 8, 0, tzinfo=ET)], frame, _TAGS
+    )
+    assert "10Y" not in out
+
+
+def test_fresh_spread_minutes_skips_a_tag_the_slice_does_not_carry():
+    frame = _session_frame().drop(columns=["TAG10"])
+    out = warm.fresh_spread_minutes(
+        [datetime.datetime(2026, 7, 24, 12, 0, tzinfo=ET)], frame, _TAGS
+    )
+    assert set(out) == {"3M"}
 
 
 def test_the_day_slice_survives_an_empty_frame():
