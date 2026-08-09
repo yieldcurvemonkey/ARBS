@@ -1104,7 +1104,7 @@ def cmd_verify(args, logger: logging.Logger) -> int:
                         rows.append({"curve": curve, "era": era, "date": str(day),
                                      "error": f"{type(exc).__name__}: {exc}"})
                         continue
-                    fair = _fair_rate_of(row, args.tenor)
+                    fair = _fair_rate_of(row, args.tenor, store)
                     rows.append({
                         "curve": curve, "era": era, "date": str(day),
                         "minute": str(local), "wire": str(wire),
@@ -1188,7 +1188,37 @@ def _quote_tag_for(curve_name: str, tenor: str) -> str:
     return f"RATES.OIS.{citi_index_for_curve_name(curve_name)}.PAR.{tenor.upper()}"
 
 
-def _fair_rate_of(row: Dict[str, Any], tenor: str) -> Optional[float]:
+def _discount_curve_of(row: Dict[str, Any], store: Any) -> Tuple[Optional[Any], str]:
+    """The curve a stored IBOR snapshot was DISCOUNTED on, rebuilt from the store.
+
+    Without this, verifying a EURIBOR curve reprices it self-discounted while it
+    was built dual-curve, and the residual is the discounting difference rather
+    than anything wrong - a systematic false alarm on the one curve that most
+    needs the check. ``source_variant`` is where the build recorded which curve
+    it used, which is what makes this recoverable at all.
+    """
+    variant = str(row.get("source_variant") or "")
+    name = variant.rsplit("/", 1)[-1] if "/" in variant else ""
+    if not name or name.endswith("self_discounted"):
+        return None, "self"
+    if store is None:
+        return None, "unavailable"
+    import pandas as pd
+
+    day = row.get("trading_date")
+    day = pd.Timestamp(day).date() if day is not None else None
+    if day is None:
+        return None, "unavailable"
+    frame = _store_curves_for_day(store, asset_name(name), day)
+    if frame is None:
+        return None, "unavailable"
+    stamp = row.get("timestamp_local") or row.get("timestamp_utc")
+    return _nearest_stored_curve(frame, stamp), name
+
+
+def _fair_rate_of(
+    row: Dict[str, Any], tenor: str, store: Any = None
+) -> Optional[float]:
     """The stored curve's own par rate for ``tenor``, in PERCENT.
 
     The unit is MEASURED, not assumed: on a stored ``USD-FEDFUNDS-1D`` minute of
@@ -1216,8 +1246,10 @@ def _fair_rate_of(row: Dict[str, Any], tenor: str) -> Optional[float]:
     from MDP.CitiVelocityExcel.curves.ibor_builder import IBOR_CURVES
 
     ibor = IBOR_CURVES.get(reference.upper())
+    discount = None
     if ibor is not None:
         spec, calendar, spot_lag = ibor.rl_spec, ibor.calendar, ibor.spot_lag
+        discount, _how = _discount_curve_of(row, store)
     else:
         try:
             import citivelo_excel_intraday_warm as base
@@ -1234,8 +1266,12 @@ def _fair_rate_of(row: Dict[str, Any], tenor: str) -> Optional[float]:
     try:
         cal = rl.get_calendar(calendar)
         spot = cal.add_bus_days(ref, int(spot_lag), True)
-        swap = rl.IRS(effective=spot, termination=tenor, spec=spec, curves=curve)
-        return float(swap.rate(curves=curve))
+        # [leg1 forecast, leg1 discount, leg2 forecast, leg2 discount]. A stored
+        # dual-curve IBOR snapshot repriced self-discounted comes back off by the
+        # discounting difference, not by anything wrong.
+        curves = [curve, discount, curve, discount] if discount is not None else curve
+        swap = rl.IRS(effective=spot, termination=tenor, spec=spec, curves=curves)
+        return float(swap.rate(curves=curves))
     except Exception:  # noqa: BLE001
         return None
 
