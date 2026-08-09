@@ -17,10 +17,13 @@ The strategy never traded, for a reason that has nothing to do with whether λ p
 anything.
 
 ```
-signal availability: 93 rows, 10 admissible, 0 with a z-score, 0 beyond |z| >= 1.0
 NO Z-SCORE ANYWHERE. The trailing window needs 30 admissible observations and the
-largest contract supplies 10.
+largest contract supplies 7. This is a DATA-SUFFICIENCY outcome, not evidence
+about the edge.
 ```
+
+(555 sessions across 5 contracts; 8 clear both the fit gate and the cross-strike gate, 7 of
+them on one contract.)
 
 That is the honest headline and it is deliberately **not** written as DEAD. "The signal fired
 and lost money" and "the signal never fired because the density could not be fitted well
@@ -46,6 +49,13 @@ Labelled EXPLORATORY by the runner and barred from an ALIVE verdict by construct
 (`--z-window 8 --z-min-obs 4 --max-fwd-resid-bp 3.0 --max-atom-spread 1.5`). This exists to
 answer the one question run 1 cannot: **when the signal does fire, does it point the right
 way?**
+
+**Provenance, stated because it matters:** these numbers were measured on the SFRZ26-only panel
+as it stood before the four applicability guards of §5b landed. SFRZ26 is a hiking contract, so
+the sign bug did not touch it, but some of its far-dated sessions would now be rejected by the
+off-lattice guard. The equivalent run on the guarded multi-contract panel was still executing
+when this was written; when it lands, **replace this block rather than adding to it**. Until
+then, read the sign of the result, not its decimals.
 
 ```
 signal availability: 93 rows, 44 admissible, 40 with a z-score, 19 beyond |z| >= 1.0
