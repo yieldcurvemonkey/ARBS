@@ -146,25 +146,39 @@ Excel session, then the add-in has to be restarted to give the memory back.
 
 **And the restart is where this stops being unattended.** `--auto-restart`
 exists, rescues unsaved workbooks, relaunches Excel and waits — but measured
-2026-08-09, **three launches and three failures**, the started add-in reached
-`Citi.Excel.Presentation.CustomRibbon | onLoad:` and then logged nothing for 20+
-minutes. No portal session, no credentials refresh, no UDF registration;
-`=CVTODAY()` stayed `#NAME?` throughout. A healthy session logs
-`PortalSessionProvider | Updating credentials` about fifteen minutes after the
-add-in entry point. None of the three ever did.
+2026-08-09, **four launches and four failures**. Every one reached
+`Citi.Excel.Presentation.CustomRibbon | onLoad:` and then logged nothing: no
+portal session, no credentials refresh, no UDF registration, and `=CVTODAY()`
+stayed `#NAME?` throughout.
 
-| launch | portal session |
-|---|---|
-| `Popen([exe, "/x"], DETACHED_PROCESS)` — what `launch_excel` does | never, 2× |
-| `ShellExecuteW(exe)` — no `/x`, exactly what the Start menu does | never, 23 min |
+| # | launch | prior state | portal session |
+|---|---|---|---|
+| 1 | `Popen([exe, "/x"], DETACHED_PROCESS)` — what `launch_excel` does | a session signed in 15 h earlier | never, 20 min |
+| 2 | the same | no prior Excel | never, 19 min |
+| 3 | `ShellExecuteW(exe)` — no `/x`, exactly what the Start menu does | no prior Excel | never, 23 min |
+| 4 | `Popen([exe, "/x"], DETACHED_PROCESS)` | **a session signed in 37 minutes earlier** | never, 25 min |
 
-The second row is worth stating because it kills the obvious hypothesis: it is
-**not** the launch mode. A `launch_excel` rewrite around `ShellExecute` was
-written, tested against that row, and thrown away. Adding a blank workbook and
-making Excel visible did not help either. The one Excel that *was* signed in had
-been opened by hand the previous evening, which leaves the add-in's saved
-Velocity session having expired — needing an **interactive** sign-in, the one
-thing the supervisor explicitly cannot do ("This module never types a password").
+Every one froze at `CustomRibbon onLoad:` with **zero portal-session lines of its
+own**, while a human-opened Excel signed in in **35 seconds**. Two hypotheses were
+tested and both are dead:
+
+- **Not the launch mode** (row 3). A `launch_excel` rewrite around
+  `ShellExecute` was written against that hypothesis and thrown away rather than
+  shipped on it. Adding a blank workbook and making the window visible did not
+  help either.
+- **Not stale credentials** (row 4). That restart happened 37 minutes after a
+  successful interactive sign-in, from a session that was working seconds
+  earlier. It failed identically.
+
+What is left is something about the *process context* an Excel inherits when a
+background process starts it — the package README's "spawned instances never
+register", which now looks like it covers restarts and is not fixable from here.
+Treat `--auto-restart` as unavailable on this machine.
+
+And it is not merely useless, it is **costly**: a restart evicts whoever is using
+Excel. Run #4 rescued a live, unsaved `Book5` to `ARBS-excel-recovery` and closed
+the workbook its owner was typing in, roughly every 12 chunks (~8 minutes of
+fetching).
 
 A trap worth avoiding while diagnosing this: the add-in log is append-only and
 holds days of history, so a bare `grep PortalSession` matches **an earlier
