@@ -1,0 +1,242 @@
+{
+ "probed_at": "2026-08-09T11:56:17",
+ "stages": [
+  "snapwalk"
+ ],
+ "depths": [
+  0.25,
+  1.0,
+  2.0,
+  3.0,
+  4.0,
+  5.0,
+  7.0,
+  10.0
+ ],
+ "freqs": [
+  "MI01",
+  "MI10",
+  "HOURLY"
+ ],
+ "probes": [
+  "USD_SOFR",
+  "USD_FEDFUND",
+  "EUR_EUROSTR",
+  "EUR_EURIBOR",
+  "JPY_TONAR",
+  "JPY_TONAR_LCH"
+ ],
+ "mem_before": 1236.56192,
+ "snapwalk": {
+  "step_days": 21,
+  "steps": 8,
+  "curves": {
+   "USD_SOFR": {
+    "floor": "2021-09-08",
+    "walk": [
+     {
+      "date": "2021-08-18",
+      "days_below_floor": 21,
+      "n_served": 0,
+      "distinct": 0,
+      "values": []
+     },
+     {
+      "date": "2021-07-28",
+      "days_below_floor": 42,
+      "n_served": 0,
+      "distinct": 0,
+      "values": []
+     }
+    ],
+    "deepest_intraday_below_floor": null,
+    "extra_days": null
+   },
+   "USD_FEDFUND": {
+    "floor": "2018-08-29",
+    "walk": [
+     {
+      "date": "2018-08-08",
+      "days_below_floor": 21,
+      "n_served": 3,
+      "distinct": 3,
+      "values": [
+       2.67436,
+       2.67049,
+       2.67048
+      ]
+     },
+     {
+      "date": "2018-07-18",
+      "days_below_floor": 42,
+      "n_served": 3,
+      "distinct": 3,
+      "values": [
+       2.54969,
+       2.5591,
+       2.5698
+      ]
+     },
+     {
+      "date": "2018-06-27",
+      "days_below_floor": 63,
+      "n_served": 3,
+      "distinct": 3,
+      "values": [
+       2.54365,
+       2.53634,
+       2.51649
+      ]
+     },
+     {
+      "date": "2018-06-06",
+      "days_below_floor": 84,
+      "n_served": 3,
+      "distinct": 3,
+      "values": [
+       2.59757,
+       2.61952,
+       2.62276
+      ]
+     },
+     {
+      "date": "2018-05-16",
+      "days_below_floor": 105,
+      "n_served": 3,
+      "distinct": 3,
+      "values": [
+       2.72212,
+       2.73123,
+       2.74351
+      ]
+     },
+     {
+      "date": "2018-04-25",
+      "days_below_floor": 126,
+      "n_served": 3,
+      "distinct": 1,
+      "values": [
+       2.58133,
+       2.58133,
+       2.58133
+      ]
+     },
+     {
+      "date": "2018-04-04",
+      "days_below_floor": 147,
+      "n_served": 3,
+      "distinct": 3,
+      "values": [
+       2.39095,
+       2.41778,
+       2.41975
+      ]
+     },
+     {
+      "date": "2018-03-14",
+      "days_below_floor": 168,
+      "n_served": 3,
+      "distinct": 3,
+      "values": [
+       2.43963,
+       2.40533,
+       2.41622
+      ]
+     }
+    ],
+    "deepest_intraday_below_floor": "2018-03-14",
+    "extra_days": 168
+   },
+   "EUR_EUROSTR": {
+    "floor": "2021-09-08",
+    "walk": [
+     {
+      "date": "2021-08-18",
+      "days_below_floor": 21,
+      "n_served": 0,
+      "distinct": 0,
+      "values": []
+     },
+     {
+      "date": "2021-07-28",
+      "days_below_floor": 42,
+      "n_served": 0,
+      "distinct": 0,
+      "values": []
+     }
+    ],
+    "deepest_intraday_below_floor": null,
+    "extra_days": null
+   },
+   "EUR_EURIBOR": {
+    "floor": "2016-07-13",
+    "walk": [
+     {
+      "date": "2016-06-22",
+      "days_below_floor": 21,
+      "n_served": 0,
+      "distinct": 0,
+      "values": []
+     },
+     {
+      "date": "2016-06-01",
+      "days_below_floor": 42,
+      "n_served": 0,
+      "distinct": 0,
+      "values": []
+     }
+    ],
+    "deepest_intraday_below_floor": null,
+    "extra_days": null
+   },
+   "JPY_TONAR": {
+    "floor": "2017-12-13",
+    "walk": [
+     {
+      "date": "2017-11-22",
+      "days_below_floor": 21,
+      "n_served": 0,
+      "distinct": 0,
+      "values": []
+     },
+     {
+      "date": "2017-11-01",
+      "days_below_floor": 42,
+      "n_served": 0,
+      "distinct": 0,
+      "values": []
+     }
+    ],
+    "deepest_intraday_below_floor": null,
+    "extra_days": null
+   },
+   "JPY_TONAR_LCH": {
+    "floor": "2024-01-31",
+    "walk": [
+     {
+      "date": "2024-01-10",
+      "days_below_floor": 21,
+      "n_served": 0,
+      "distinct": 0,
+      "values": []
+     },
+     {
+      "date": "2023-12-20",
+      "days_below_floor": 42,
+      "n_served": 0,
+      "distinct": 0,
+      "values": []
+     }
+    ],
+    "deepest_intraday_below_floor": null,
+    "extra_days": null
+   }
+  }
+ },
+ "mem_after": 1227.464704,
+ "calls": {
+  "calls": 54,
+  "seconds": 27.2,
+  "seconds_per_call": 0.5
+ }
+}

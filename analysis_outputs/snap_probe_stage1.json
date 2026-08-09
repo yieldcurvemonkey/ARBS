@@ -1,0 +1,223 @@
+{
+ "probed_at": "2026-08-09T11:49:21",
+ "stages": [
+  "selfcheck",
+  "inception",
+  "crosscheck"
+ ],
+ "depths": [
+  0.25,
+  1.0,
+  2.0,
+  3.0,
+  4.0,
+  5.0,
+  7.0,
+  10.0
+ ],
+ "freqs": [
+  "MI01",
+  "MI10",
+  "HOURLY"
+ ],
+ "probes": [
+  "USD_SOFR",
+  "USD_FEDFUND",
+  "EUR_EUROSTR",
+  "EUR_EURIBOR",
+  "JPY_TONAR",
+  "JPY_TONAR_LCH"
+ ],
+ "mem_before": 602.750976,
+ "selfcheck": {
+  "tag": "RATES.OIS.USD_SOFR.PAR.10Y",
+  "end": "2026-07-22 13:00:00",
+  "narrow": {
+   "rows": 3707,
+   "first": "2026-07-19 17:00:00",
+   "last": "2026-07-22 12:59:00",
+   "spacing_min": 1.0,
+   "first_value": 4.13485,
+   "last_value": 4.22717,
+   "expected_spacing_min": 1.0,
+   "agrees": true
+  },
+  "wide": {
+   "rows": 2929,
+   "first": "2026-06-22 13:00:00",
+   "last": "2026-07-22 13:00:00",
+   "spacing_min": 10.0,
+   "first_value": 4.10362,
+   "last_value": 4.23233,
+   "expected_spacing_min": 10.0,
+   "agrees": true
+  },
+  "ok": true
+ },
+ "inception": {
+  "failures": {},
+  "curves": {
+   "USD_SOFR": {
+    "10Y": {
+     "rows": 9262,
+     "first": "1990-01-01 00:00:00",
+     "last": "2026-08-09 00:00:00",
+     "spacing_min": 1440.0,
+     "first_value": 9.11782,
+     "last_value": 4.23878
+    },
+    "2Y": {
+     "rows": 9262,
+     "first": "1990-01-01 00:00:00",
+     "last": "2026-08-09 00:00:00",
+     "spacing_min": 1440.0,
+     "first_value": 8.54945,
+     "last_value": 4.05094
+    }
+   },
+   "USD_FEDFUND": {
+    "10Y": {
+     "rows": 5618,
+     "first": "2004-06-28 00:00:00",
+     "last": "2026-08-09 00:00:00",
+     "spacing_min": 1440.0,
+     "first_value": 5.04519,
+     "last_value": 4.19199
+    },
+    "2Y": {
+     "rows": 5618,
+     "first": "2004-06-28 00:00:00",
+     "last": "2026-08-09 00:00:00",
+     "spacing_min": 1440.0,
+     "first_value": 3.12263,
+     "last_value": 4.01701
+    }
+   },
+   "EUR_EUROSTR": {
+    "10Y": {
+     "rows": 9304,
+     "first": "1990-01-01 00:00:00",
+     "last": "2026-08-09 00:00:00",
+     "spacing_min": 1440.0,
+     "first_value": 8.13633,
+     "last_value": 2.91291
+    },
+    "2Y": {
+     "rows": 9303,
+     "first": "1990-01-01 00:00:00",
+     "last": "2026-08-09 00:00:00",
+     "spacing_min": 1440.0,
+     "first_value": 8.46508,
+     "last_value": 2.62426
+    }
+   },
+   "EUR_EURIBOR": {
+    "10Y": {
+     "rows": 9300,
+     "first": "1990-01-01 00:00:00",
+     "last": "2026-08-09 00:00:00",
+     "spacing_min": 1440.0,
+     "first_value": 8.25428,
+     "last_value": 3.15521
+    },
+    "2Y": {
+     "rows": 9300,
+     "first": "1990-01-01 00:00:00",
+     "last": "2026-08-09 00:00:00",
+     "spacing_min": 1440.0,
+     "first_value": 8.58267,
+     "last_value": 2.94492
+    }
+   },
+   "JPY_TONAR": {
+    "10Y": {
+     "rows": 5172,
+     "first": "2006-01-02 00:00:00",
+     "last": "2026-08-08 00:00:00",
+     "spacing_min": 1440.0,
+     "first_value": 1.62395,
+     "last_value": 2.65
+    },
+    "2Y": {
+     "rows": 5172,
+     "first": "2006-01-02 00:00:00",
+     "last": "2026-08-08 00:00:00",
+     "spacing_min": 1440.0,
+     "first_value": 0.373995,
+     "last_value": 1.64375
+    }
+   },
+   "JPY_TONAR_LCH": {
+    "10Y": {
+     "rows": 5258,
+     "first": "2006-01-02 00:00:00",
+     "last": "2026-08-08 00:00:00",
+     "spacing_min": 1440.0,
+     "first_value": 1.62395,
+     "last_value": 2.64281
+    },
+    "2Y": {
+     "rows": 5258,
+     "first": "2006-01-02 00:00:00",
+     "last": "2026-08-08 00:00:00",
+     "spacing_min": 1440.0,
+     "first_value": 0.373995,
+     "last_value": 1.64375
+    }
+   }
+  }
+ },
+ "crosscheck": {
+  "date": "2026-05-06",
+  "curves": {
+   "USD_SOFR": {
+    "wire": "2026-05-06 10:30:00",
+    "snap": 3.95079,
+    "mi01": 3.95079,
+    "diff_bp": 0.0,
+    "mi01_rows": 62
+   },
+   "USD_FEDFUND": {
+    "wire": "2026-05-06 10:30:00",
+    "snap": 3.902,
+    "mi01": 3.902,
+    "diff_bp": 0.0,
+    "mi01_rows": 62
+   },
+   "EUR_EUROSTR": {
+    "wire": "2026-05-06 04:30:00",
+    "snap": 2.83161,
+    "mi01": 2.83161,
+    "diff_bp": 0.0,
+    "mi01_rows": 62
+   },
+   "EUR_EURIBOR": {
+    "wire": "2026-05-06 04:30:00",
+    "snap": 3.0532,
+    "mi01": 3.0532,
+    "diff_bp": 0.0,
+    "mi01_rows": 62
+   },
+   "JPY_TONAR": {
+    "wire": "2026-05-05 21:30:00",
+    "snap": 2.28875,
+    "mi01": 2.28875,
+    "diff_bp": 0.0,
+    "mi01_rows": 62
+   },
+   "JPY_TONAR_LCH": {
+    "wire": "2026-05-05 21:30:00",
+    "snap": 2.29,
+    "mi01": 2.29,
+    "diff_bp": 0.0,
+    "mi01_rows": 62
+   }
+  }
+ },
+ "mem_after": 666.533888,
+ "calls": {
+  "calls": 15,
+  "seconds": 9.7,
+  "seconds_per_call": 0.65
+ }
+}

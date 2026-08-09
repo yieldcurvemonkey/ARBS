@@ -385,8 +385,47 @@ calendar date builds a JPY/AUD/NZD curve one business day early.
 | `CVTSHIST` `HOURLY` + relative `period=` | **returns no block at all**, instantly. `HOURLY` with explicit bounds works |
 | `CVTSHIST` `MI01` freshness | newest row was **1 minute old** at 10:47 ET |
 | `CVLATEST` | serves - a bare column, one row per tag, 5 dp - with **no timestamp** |
-| `CVSNAP` | serves the right value (cross-checked to the digit against `MI01`) with **no timestamp** |
+| `CVSNAP` | serves the right value (cross-checked to the digit against `MI01`) with **no timestamp**. It reads the **same store** as `CVTSHIST` and reaches no further back - see below |
 | `CVSTREAM` | a live RTD-style cell: full double precision (`4.23909408453934` vs `CVLATEST`'s `4.23919`) and **the value changed between two reads 20 s apart** |
+| `CVTICK` | **not a history function.** The last entitled `CV*` never called; it answers `Error: Parameter 'Refresh Seconds' must be an integer.` It is an RTD primitive in the `CVSTREAM` family |
+
+### How deep the intraday history goes, measured 2026-08-09
+
+`CVTSHIST` was never capped at two years. That figure was the **span** cliff -
+the add-in downsamples a request wider than six days - and `windowed.py` has
+handled it since 2026-08-07. Retention, measured separately by holding the span
+at four days and bisecting the age to +/-21 days on `RATES.*.PAR.10Y`:
+
+| curve | 1-minute from | years | any intraday from |
+|---|---|---|---|
+| `EUR_EURIBOR` (`RATES.SWAP_LIBOR.EUR`) | **2016-07-06** | 10.1 | 2016-07-06 |
+| `JPY_TONAR` | **2017-12-06** | 8.7 | 2017-12-06 |
+| `EUR_EONIA` | **2017-12-06** | 8.7 | 2017-12-06 |
+| `USD_FEDFUND` | **2018-09-05** | 7.9 | **2017-12-06** |
+| `USD_SOFR` | **2021-09-15** | 4.9 | 2021-09-15 |
+| `EUR_EUROSTR` | **2021-09-15** | 4.9 | 2021-09-15 |
+| `JPY_TONAR_LCH` | **2024-01-17** | 2.6 | 2024-01-17 |
+
+`2017-12-06` is an archive epoch, not a coincidence - three unrelated indices
+floor within one bisection step of it. `EUR_EURIBOR` predates it by 17 months and
+is the only series that can honour a literal ten-year request.
+
+**`CVSNAP` cannot extend any of this.** Three stamps a day at 30, 120 and 365
+days under each curve's floor returned **0 of 3, on every curve, at every
+depth**. Where both serve they agree to 0.0 bp on all six curves. The one
+apparent exception was a measurement artefact: below its dense era `USD_FEDFUND`
+still serves ~330 rows over four days at ~8-minute spacing, and a floor test that
+asks "is the median spacing one minute?" calls that empty. `CVTSHIST` serves
+those instants too.
+
+Nor is there a cross-section argument for it: on a sparse day **every published
+stamp carries every tenor that exists** (2018-03-14, `USD_FEDFUND`: 224 stamps x
+15 tenors, 15 tenors at every stamp). The sparse era is synchronous, just less
+frequent, and the ordinary build solves it unchanged.
+
+Full method, numbers and reproduction: `docs/citivelo_intraday_depth_and_cvsnap.md`.
+The probe is `scripts/citivelo_snap_depth_probe.py`; the backfill that acts on it
+is `scripts/citivelo_deep_intraday_warm.py`.
 
 Because none of the point-read functions carries a stamp, none of them can tell a
 curve that stopped ticking four hours ago from one that ticked a second ago - and

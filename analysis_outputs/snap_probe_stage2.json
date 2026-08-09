@@ -1,0 +1,1902 @@
+{
+ "probed_at": "2026-08-09T11:49:48",
+ "stages": [
+  "inception",
+  "tshist",
+  "snap"
+ ],
+ "depths": [
+  0.25,
+  1.0,
+  2.0,
+  3.0,
+  4.0,
+  5.0,
+  7.0,
+  10.0
+ ],
+ "freqs": [
+  "MI01",
+  "MI10",
+  "HOURLY"
+ ],
+ "probes": [
+  "USD_SOFR",
+  "USD_FEDFUND",
+  "EUR_EUROSTR",
+  "EUR_EURIBOR",
+  "JPY_TONAR",
+  "JPY_TONAR_LCH"
+ ],
+ "mem_before": 660.43904,
+ "inception": {
+  "failures": {},
+  "curves": {
+   "USD_SOFR": {
+    "10Y": {
+     "rows": 9262,
+     "first": "1990-01-01 00:00:00",
+     "last": "2026-08-09 00:00:00",
+     "spacing_min": 1440.0,
+     "first_value": 9.11782,
+     "last_value": 4.23878
+    },
+    "2Y": {
+     "rows": 9262,
+     "first": "1990-01-01 00:00:00",
+     "last": "2026-08-09 00:00:00",
+     "spacing_min": 1440.0,
+     "first_value": 8.54945,
+     "last_value": 4.05094
+    }
+   },
+   "USD_FEDFUND": {
+    "10Y": {
+     "rows": 5618,
+     "first": "2004-06-28 00:00:00",
+     "last": "2026-08-09 00:00:00",
+     "spacing_min": 1440.0,
+     "first_value": 5.04519,
+     "last_value": 4.19199
+    },
+    "2Y": {
+     "rows": 5618,
+     "first": "2004-06-28 00:00:00",
+     "last": "2026-08-09 00:00:00",
+     "spacing_min": 1440.0,
+     "first_value": 3.12263,
+     "last_value": 4.01701
+    }
+   },
+   "EUR_EUROSTR": {
+    "10Y": {
+     "rows": 9304,
+     "first": "1990-01-01 00:00:00",
+     "last": "2026-08-09 00:00:00",
+     "spacing_min": 1440.0,
+     "first_value": 8.13633,
+     "last_value": 2.91291
+    },
+    "2Y": {
+     "rows": 9303,
+     "first": "1990-01-01 00:00:00",
+     "last": "2026-08-09 00:00:00",
+     "spacing_min": 1440.0,
+     "first_value": 8.46508,
+     "last_value": 2.62426
+    }
+   },
+   "EUR_EURIBOR": {
+    "10Y": {
+     "rows": 9300,
+     "first": "1990-01-01 00:00:00",
+     "last": "2026-08-09 00:00:00",
+     "spacing_min": 1440.0,
+     "first_value": 8.25428,
+     "last_value": 3.15521
+    },
+    "2Y": {
+     "rows": 9300,
+     "first": "1990-01-01 00:00:00",
+     "last": "2026-08-09 00:00:00",
+     "spacing_min": 1440.0,
+     "first_value": 8.58267,
+     "last_value": 2.94492
+    }
+   },
+   "JPY_TONAR": {
+    "10Y": {
+     "rows": 5172,
+     "first": "2006-01-02 00:00:00",
+     "last": "2026-08-08 00:00:00",
+     "spacing_min": 1440.0,
+     "first_value": 1.62395,
+     "last_value": 2.65
+    },
+    "2Y": {
+     "rows": 5172,
+     "first": "2006-01-02 00:00:00",
+     "last": "2026-08-08 00:00:00",
+     "spacing_min": 1440.0,
+     "first_value": 0.373995,
+     "last_value": 1.64375
+    }
+   },
+   "JPY_TONAR_LCH": {
+    "10Y": {
+     "rows": 5258,
+     "first": "2006-01-02 00:00:00",
+     "last": "2026-08-08 00:00:00",
+     "spacing_min": 1440.0,
+     "first_value": 1.62395,
+     "last_value": 2.64281
+    },
+    "2Y": {
+     "rows": 5258,
+     "first": "2006-01-02 00:00:00",
+     "last": "2026-08-08 00:00:00",
+     "spacing_min": 1440.0,
+     "first_value": 0.373995,
+     "last_value": 1.64375
+    }
+   }
+  }
+ },
+ "tshist": {
+  "MI01": {
+   "0.25": {
+    "date": "2026-05-06",
+    "curves": {
+     "USD_SOFR": {
+      "rows": 4129,
+      "first": "2026-05-03 17:00:00",
+      "last": "2026-05-06 19:59:00",
+      "spacing_min": 1.0,
+      "first_value": 3.93617,
+      "last_value": 3.93291,
+      "served_at_requested_resolution": true
+     },
+     "USD_FEDFUND": {
+      "rows": 4129,
+      "first": "2026-05-03 17:00:00",
+      "last": "2026-05-06 19:59:00",
+      "spacing_min": 1.0,
+      "first_value": 3.88233,
+      "last_value": 3.886,
+      "served_at_requested_resolution": true
+     },
+     "EUR_EUROSTR": {
+      "rows": 2160,
+      "first": "2026-05-04 02:00:00",
+      "last": "2026-05-06 13:59:00",
+      "spacing_min": 1.0,
+      "first_value": 2.8377,
+      "last_value": 2.80324,
+      "served_at_requested_resolution": true
+     },
+     "EUR_EURIBOR": {
+      "rows": 2160,
+      "first": "2026-05-04 02:00:00",
+      "last": "2026-05-06 13:59:00",
+      "spacing_min": 1.0,
+      "first_value": 3.05785,
+      "last_value": 3.02724,
+      "served_at_requested_resolution": true
+     },
+     "JPY_TONAR": {
+      "rows": 2209,
+      "first": "2026-05-03 19:00:00",
+      "last": "2026-05-06 19:59:00",
+      "spacing_min": 1.0,
+      "first_value": 2.3025,
+      "last_value": 2.29125,
+      "served_at_requested_resolution": true
+     },
+     "JPY_TONAR_LCH": {
+      "rows": 2209,
+      "first": "2026-05-03 19:00:00",
+      "last": "2026-05-06 19:59:00",
+      "spacing_min": 1.0,
+      "first_value": 2.30375,
+      "last_value": 2.2925,
+      "served_at_requested_resolution": true
+     }
+    }
+   },
+   "1.0": {
+    "date": "2025-08-06",
+    "curves": {
+     "USD_SOFR": {
+      "rows": 4073,
+      "first": "2025-08-03 17:00:00",
+      "last": "2025-08-06 19:59:00",
+      "spacing_min": 1.0,
+      "first_value": 3.71386,
+      "last_value": 3.70332,
+      "served_at_requested_resolution": true
+     },
+     "USD_FEDFUND": {
+      "rows": 4071,
+      "first": "2025-08-03 17:00:00",
+      "last": "2025-08-06 19:59:00",
+      "spacing_min": 1.0,
+      "first_value": 3.65832,
+      "last_value": 3.64866,
+      "served_at_requested_resolution": true
+     },
+     "EUR_EUROSTR": {
+      "rows": 2123,
+      "first": "2025-08-04 02:00:00",
+      "last": "2025-08-06 13:59:00",
+      "spacing_min": 1.0,
+      "first_value": 2.48749,
+      "last_value": 2.44701,
+      "served_at_requested_resolution": true
+     },
+     "EUR_EURIBOR": {
+      "rows": 2126,
+      "first": "2025-08-04 02:00:00",
+      "last": "2025-08-06 13:59:00",
+      "spacing_min": 1.0,
+      "first_value": 2.67374,
+      "last_value": 2.63297,
+      "served_at_requested_resolution": true
+     },
+     "JPY_TONAR": {
+      "rows": 2187,
+      "first": "2025-08-03 19:00:00",
+      "last": "2025-08-06 19:59:00",
+      "spacing_min": 1.0,
+      "first_value": 1.335,
+      "last_value": 1.27375,
+      "served_at_requested_resolution": true
+     },
+     "JPY_TONAR_LCH": {
+      "rows": 2188,
+      "first": "2025-08-03 19:00:00",
+      "last": "2025-08-06 19:59:00",
+      "spacing_min": 1.0,
+      "first_value": 1.34125,
+      "last_value": 1.27672,
+      "served_at_requested_resolution": true
+     }
+    }
+   },
+   "2.0": {
+    "date": "2024-08-07",
+    "curves": {
+     "USD_SOFR": {
+      "rows": 4130,
+      "first": "2024-08-04 17:00:00",
+      "last": "2024-08-07 19:59:00",
+      "spacing_min": 1.0,
+      "first_value": 3.35584,
+      "last_value": 3.47637,
+      "served_at_requested_resolution": true
+     },
+     "USD_FEDFUND": {
+      "rows": 4120,
+      "first": "2024-08-04 17:00:00",
+      "last": "2024-08-07 19:59:00",
+      "spacing_min": 1.0,
+      "first_value": 3.29628,
+      "last_value": 3.41659,
+      "served_at_requested_resolution": true
+     },
+     "EUR_EUROSTR": {
+      "rows": 2114,
+      "first": "2024-08-05 02:00:00",
+      "last": "2024-08-07 13:59:00",
+      "spacing_min": 1.0,
+      "first_value": 2.25996,
+      "last_value": 2.39726,
+      "served_at_requested_resolution": true
+     },
+     "EUR_EURIBOR": {
+      "rows": 2096,
+      "first": "2024-08-05 02:00:00",
+      "last": "2024-08-07 13:59:00",
+      "spacing_min": 1.0,
+      "first_value": 2.41888,
+      "last_value": 2.54957,
+      "served_at_requested_resolution": true
+     },
+     "JPY_TONAR": {
+      "rows": 2202,
+      "first": "2024-08-04 19:00:00",
+      "last": "2024-08-07 19:59:00",
+      "spacing_min": 1.0,
+      "first_value": 0.92,
+      "last_value": 0.905,
+      "served_at_requested_resolution": true
+     },
+     "JPY_TONAR_LCH": {
+      "rows": 2183,
+      "first": "2024-08-04 19:00:00",
+      "last": "2024-08-07 19:59:00",
+      "spacing_min": 1.0,
+      "first_value": 0.916875,
+      "last_value": 0.9,
+      "served_at_requested_resolution": true
+     }
+    }
+   },
+   "3.0": {
+    "date": "2023-08-09",
+    "curves": {
+     "USD_SOFR": {
+      "rows": 4140,
+      "first": "2023-08-06 17:00:00",
+      "last": "2023-08-09 19:59:00",
+      "spacing_min": 1.0,
+      "first_value": 3.75389,
+      "last_value": 3.72602,
+      "served_at_requested_resolution": true
+     },
+     "USD_FEDFUND": {
+      "rows": 4140,
+      "first": "2023-08-06 17:00:00",
+      "last": "2023-08-09 19:59:00",
+      "spacing_min": 1.0,
+      "first_value": 3.73024,
+      "last_value": 3.70189,
+      "served_at_requested_resolution": true
+     },
+     "EUR_EUROSTR": {
+      "rows": 2160,
+      "first": "2023-08-07 02:00:00",
+      "last": "2023-08-09 13:59:00",
+      "spacing_min": 1.0,
+      "first_value": 2.91255,
+      "last_value": 2.89495,
+      "served_at_requested_resolution": true
+     },
+     "EUR_EURIBOR": {
+      "rows": 2160,
+      "first": "2023-08-07 02:00:00",
+      "last": "2023-08-09 13:59:00",
+      "spacing_min": 1.0,
+      "first_value": 3.12186,
+      "last_value": 3.09934,
+      "served_at_requested_resolution": true
+     },
+     "JPY_TONAR": {
+      "rows": 2220,
+      "first": "2023-08-06 19:00:00",
+      "last": "2023-08-09 19:59:00",
+      "spacing_min": 1.0,
+      "first_value": 0.80125,
+      "last_value": 0.76125,
+      "served_at_requested_resolution": true
+     },
+     "JPY_TONAR_LCH": {
+      "rows": 0,
+      "served_at_requested_resolution": false
+     }
+    }
+   },
+   "4.0": {
+    "date": "2022-08-03",
+    "curves": {
+     "USD_SOFR": {
+      "rows": 4140,
+      "first": "2022-07-31 17:00:00",
+      "last": "2022-08-03 19:59:00",
+      "spacing_min": 1.0,
+      "first_value": 2.43767,
+      "last_value": 2.49987,
+      "served_at_requested_resolution": true
+     },
+     "USD_FEDFUND": {
+      "rows": 4140,
+      "first": "2022-07-31 17:00:00",
+      "last": "2022-08-03 19:59:00",
+      "spacing_min": 1.0,
+      "first_value": 2.44088,
+      "last_value": 2.50242,
+      "served_at_requested_resolution": true
+     },
+     "EUR_EUROSTR": {
+      "rows": 2160,
+      "first": "2022-08-01 02:00:00",
+      "last": "2022-08-03 13:59:00",
+      "spacing_min": 1.0,
+      "first_value": 1.37459,
+      "last_value": 1.3826,
+      "served_at_requested_resolution": true
+     },
+     "EUR_EURIBOR": {
+      "rows": 2160,
+      "first": "2022-08-01 02:00:00",
+      "last": "2022-08-03 13:59:00",
+      "spacing_min": 1.0,
+      "first_value": 1.66899,
+      "last_value": 1.67976,
+      "served_at_requested_resolution": true
+     },
+     "JPY_TONAR": {
+      "rows": 2220,
+      "first": "2022-07-31 19:00:00",
+      "last": "2022-08-03 19:59:00",
+      "spacing_min": 1.0,
+      "first_value": 0.305,
+      "last_value": 0.29125,
+      "served_at_requested_resolution": true
+     },
+     "JPY_TONAR_LCH": {
+      "rows": 0,
+      "served_at_requested_resolution": false
+     }
+    }
+   },
+   "5.0": {
+    "date": "2021-08-04",
+    "curves": {
+     "USD_SOFR": {
+      "rows": 0,
+      "served_at_requested_resolution": false
+     },
+     "USD_FEDFUND": {
+      "rows": 4497,
+      "first": "2021-08-01 17:00:00",
+      "last": "2021-08-04 19:59:00",
+      "spacing_min": 1.0,
+      "first_value": 1.04232,
+      "last_value": 1.00201,
+      "served_at_requested_resolution": true
+     },
+     "EUR_EUROSTR": {
+      "rows": 0,
+      "served_at_requested_resolution": false
+     },
+     "EUR_EURIBOR": {
+      "rows": 2160,
+      "first": "2021-08-02 02:00:00",
+      "last": "2021-08-04 13:59:00",
+      "spacing_min": 1.0,
+      "first_value": -0.068864,
+      "last_value": -0.110691,
+      "served_at_requested_resolution": true
+     },
+     "JPY_TONAR": {
+      "rows": 4497,
+      "first": "2021-08-01 17:00:00",
+      "last": "2021-08-04 19:59:00",
+      "spacing_min": 1.0,
+      "first_value": -0.0125,
+      "last_value": -0.0225,
+      "served_at_requested_resolution": true
+     },
+     "JPY_TONAR_LCH": {
+      "rows": 0,
+      "served_at_requested_resolution": false
+     }
+    }
+   },
+   "7.0": {
+    "date": "2019-08-07",
+    "curves": {
+     "USD_SOFR": {
+      "rows": 0,
+      "served_at_requested_resolution": false
+     },
+     "USD_FEDFUND": {
+      "rows": 4495,
+      "first": "2019-08-04 17:00:00",
+      "last": "2019-08-07 19:59:00",
+      "spacing_min": 1.0,
+      "first_value": 1.51588,
+      "last_value": 1.32861,
+      "served_at_requested_resolution": true
+     },
+     "EUR_EUROSTR": {
+      "rows": 0,
+      "served_at_requested_resolution": false
+     },
+     "EUR_EURIBOR": {
+      "rows": 1799,
+      "first": "2019-08-05 02:00:00",
+      "last": "2019-08-07 11:59:00",
+      "spacing_min": 1.0,
+      "first_value": -0.110096,
+      "last_value": -0.140526,
+      "served_at_requested_resolution": true
+     },
+     "JPY_TONAR": {
+      "rows": 4480,
+      "first": "2019-08-04 17:00:00",
+      "last": "2019-08-07 19:59:00",
+      "spacing_min": 1.0,
+      "first_value": -0.10367,
+      "last_value": -0.119901,
+      "served_at_requested_resolution": true
+     },
+     "JPY_TONAR_LCH": {
+      "rows": 0,
+      "served_at_requested_resolution": false
+     }
+    }
+   },
+   "10.0": {
+    "date": "2016-08-03",
+    "curves": {
+     "USD_SOFR": {
+      "rows": 0,
+      "served_at_requested_resolution": false
+     },
+     "USD_FEDFUND": {
+      "rows": 0,
+      "served_at_requested_resolution": false
+     },
+     "EUR_EUROSTR": {
+      "rows": 0,
+      "served_at_requested_resolution": false
+     },
+     "EUR_EURIBOR": {
+      "rows": 1792,
+      "first": "2016-08-01 02:00:00",
+      "last": "2016-08-03 12:00:00",
+      "spacing_min": 1.0,
+      "first_value": 0.259578,
+      "last_value": 0.325649,
+      "served_at_requested_resolution": true
+     },
+     "JPY_TONAR": {
+      "rows": 0,
+      "served_at_requested_resolution": false
+     },
+     "JPY_TONAR_LCH": {
+      "rows": 0,
+      "served_at_requested_resolution": false
+     }
+    }
+   }
+  },
+  "MI10": {
+   "0.25": {
+    "date": "2026-05-06",
+    "curves": {
+     "USD_SOFR": {
+      "rows": 2929,
+      "first": "2026-04-06 19:50:00",
+      "last": "2026-05-06 19:50:00",
+      "spacing_min": 10.0,
+      "first_value": 3.88348,
+      "last_value": 3.93291,
+      "served_at_requested_resolution": true
+     },
+     "USD_FEDFUND": {
+      "rows": 2929,
+      "first": "2026-04-06 19:50:00",
+      "last": "2026-05-06 19:50:00",
+      "spacing_min": 10.0,
+      "first_value": 3.82744,
+      "last_value": 3.886,
+      "served_at_requested_resolution": true
+     },
+     "EUR_EUROSTR": {
+      "rows": 1584,
+      "first": "2026-04-07 02:00:00",
+      "last": "2026-05-06 13:50:00",
+      "spacing_min": 10.0,
+      "first_value": 2.85796,
+      "last_value": 2.80324,
+      "served_at_requested_resolution": true
+     },
+     "EUR_EURIBOR": {
+      "rows": 1584,
+      "first": "2026-04-07 02:00:00",
+      "last": "2026-05-06 13:50:00",
+      "spacing_min": 10.0,
+      "first_value": 3.07871,
+      "last_value": 3.02724,
+      "served_at_requested_resolution": true
+     },
+     "JPY_TONAR": {
+      "rows": 1585,
+      "first": "2026-04-06 19:50:00",
+      "last": "2026-05-06 19:50:00",
+      "spacing_min": 10.0,
+      "first_value": 2.21375,
+      "last_value": 2.29125,
+      "served_at_requested_resolution": true
+     },
+     "JPY_TONAR_LCH": {
+      "rows": 1585,
+      "first": "2026-04-06 19:50:00",
+      "last": "2026-05-06 19:50:00",
+      "spacing_min": 10.0,
+      "first_value": 2.21547,
+      "last_value": 2.2925,
+      "served_at_requested_resolution": true
+     }
+    }
+   },
+   "1.0": {
+    "date": "2025-08-06",
+    "curves": {
+     "USD_SOFR": {
+      "rows": 2929,
+      "first": "2025-07-07 19:50:00",
+      "last": "2025-08-06 19:50:00",
+      "spacing_min": 10.0,
+      "first_value": 3.82846,
+      "last_value": 3.70332,
+      "served_at_requested_resolution": true
+     },
+     "USD_FEDFUND": {
+      "rows": 2929,
+      "first": "2025-07-07 19:50:00",
+      "last": "2025-08-06 19:50:00",
+      "spacing_min": 10.0,
+      "first_value": 3.77728,
+      "last_value": 3.64866,
+      "served_at_requested_resolution": true
+     },
+     "EUR_EUROSTR": {
+      "rows": 1584,
+      "first": "2025-07-08 02:00:00",
+      "last": "2025-08-06 13:50:00",
+      "spacing_min": 10.0,
+      "first_value": 2.46522,
+      "last_value": 2.44701,
+      "served_at_requested_resolution": true
+     },
+     "EUR_EURIBOR": {
+      "rows": 1584,
+      "first": "2025-07-08 02:00:00",
+      "last": "2025-08-06 13:50:00",
+      "spacing_min": 10.0,
+      "first_value": 2.62297,
+      "last_value": 2.63297,
+      "served_at_requested_resolution": true
+     },
+     "JPY_TONAR": {
+      "rows": 1585,
+      "first": "2025-07-07 19:50:00",
+      "last": "2025-08-06 19:50:00",
+      "spacing_min": 10.0,
+      "first_value": 1.24875,
+      "last_value": 1.27375,
+      "served_at_requested_resolution": true
+     },
+     "JPY_TONAR_LCH": {
+      "rows": 1585,
+      "first": "2025-07-07 19:50:00",
+      "last": "2025-08-06 19:50:00",
+      "spacing_min": 10.0,
+      "first_value": 1.2575,
+      "last_value": 1.27672,
+      "served_at_requested_resolution": true
+     }
+    }
+   },
+   "2.0": {
+    "date": "2024-08-07",
+    "curves": {
+     "USD_SOFR": {
+      "rows": 2929,
+      "first": "2024-07-08 19:50:00",
+      "last": "2024-08-07 19:50:00",
+      "spacing_min": 10.0,
+      "first_value": 3.85933,
+      "last_value": 3.47637,
+      "served_at_requested_resolution": true
+     },
+     "USD_FEDFUND": {
+      "rows": 2929,
+      "first": "2024-07-08 19:50:00",
+      "last": "2024-08-07 19:50:00",
+      "spacing_min": 10.0,
+      "first_value": 3.80838,
+      "last_value": 3.41659,
+      "served_at_requested_resolution": true
+     },
+     "EUR_EUROSTR": {
+      "rows": 1584,
+      "first": "2024-07-09 02:00:00",
+      "last": "2024-08-07 13:50:00",
+      "spacing_min": 10.0,
+      "first_value": 2.65699,
+      "last_value": 2.39726,
+      "served_at_requested_resolution": true
+     },
+     "EUR_EURIBOR": {
+      "rows": 1584,
+      "first": "2024-07-09 02:00:00",
+      "last": "2024-08-07 13:50:00",
+      "spacing_min": 10.0,
+      "first_value": 2.7997,
+      "last_value": 2.54957,
+      "served_at_requested_resolution": true
+     },
+     "JPY_TONAR": {
+      "rows": 1585,
+      "first": "2024-07-08 19:50:00",
+      "last": "2024-08-07 19:50:00",
+      "spacing_min": 10.0,
+      "first_value": 1.05375,
+      "last_value": 0.905,
+      "served_at_requested_resolution": true
+     },
+     "JPY_TONAR_LCH": {
+      "rows": 1585,
+      "first": "2024-07-08 19:50:00",
+      "last": "2024-08-07 19:50:00",
+      "spacing_min": 10.0,
+      "first_value": 1.05406,
+      "last_value": 0.9,
+      "served_at_requested_resolution": true
+     }
+    }
+   },
+   "3.0": {
+    "date": "2023-08-09",
+    "curves": {
+     "USD_SOFR": {
+      "rows": 2929,
+      "first": "2023-07-10 19:50:00",
+      "last": "2023-08-09 19:50:00",
+      "spacing_min": 10.0,
+      "first_value": 3.7448,
+      "last_value": 3.72602,
+      "served_at_requested_resolution": true
+     },
+     "USD_FEDFUND": {
+      "rows": 2929,
+      "first": "2023-07-10 19:50:00",
+      "last": "2023-08-09 19:50:00",
+      "spacing_min": 10.0,
+      "first_value": 3.72346,
+      "last_value": 3.70189,
+      "served_at_requested_resolution": true
+     },
+     "EUR_EUROSTR": {
+      "rows": 1584,
+      "first": "2023-07-11 02:00:00",
+      "last": "2023-08-09 13:50:00",
+      "spacing_min": 10.0,
+      "first_value": 3.0355,
+      "last_value": 2.89495,
+      "served_at_requested_resolution": true
+     },
+     "EUR_EURIBOR": {
+      "rows": 1584,
+      "first": "2023-07-11 02:00:00",
+      "last": "2023-08-09 13:50:00",
+      "spacing_min": 10.0,
+      "first_value": 3.23403,
+      "last_value": 3.09934,
+      "served_at_requested_resolution": true
+     },
+     "JPY_TONAR": {
+      "rows": 1585,
+      "first": "2023-07-10 19:50:00",
+      "last": "2023-08-09 19:50:00",
+      "spacing_min": 10.0,
+      "first_value": 0.65,
+      "last_value": 0.76125,
+      "served_at_requested_resolution": true
+     },
+     "JPY_TONAR_LCH": {
+      "rows": 0,
+      "served_at_requested_resolution": false
+     }
+    }
+   },
+   "4.0": {
+    "date": "2022-08-03",
+    "curves": {
+     "USD_SOFR": {
+      "rows": 2929,
+      "first": "2022-07-04 19:50:00",
+      "last": "2022-08-03 19:50:00",
+      "spacing_min": 10.0,
+      "first_value": 2.72236,
+      "last_value": 2.49987,
+      "served_at_requested_resolution": true
+     },
+     "USD_FEDFUND": {
+      "rows": 2929,
+      "first": "2022-07-04 19:50:00",
+      "last": "2022-08-03 19:50:00",
+      "spacing_min": 10.0,
+      "first_value": 2.72769,
+      "last_value": 2.50242,
+      "served_at_requested_resolution": true
+     },
+     "EUR_EUROSTR": {
+      "rows": 1584,
+      "first": "2022-07-05 02:00:00",
+      "last": "2022-08-03 13:50:00",
+      "spacing_min": 10.0,
+      "first_value": 1.90779,
+      "last_value": 1.3826,
+      "served_at_requested_resolution": true
+     },
+     "EUR_EURIBOR": {
+      "rows": 1584,
+      "first": "2022-07-05 02:00:00",
+      "last": "2022-08-03 13:50:00",
+      "spacing_min": 10.0,
+      "first_value": 2.1839,
+      "last_value": 1.67976,
+      "served_at_requested_resolution": true
+     },
+     "JPY_TONAR": {
+      "rows": 1585,
+      "first": "2022-07-04 19:50:00",
+      "last": "2022-08-03 19:50:00",
+      "spacing_min": 10.0,
+      "first_value": 0.43125,
+      "last_value": 0.29125,
+      "served_at_requested_resolution": true
+     },
+     "JPY_TONAR_LCH": {
+      "rows": 0,
+      "served_at_requested_resolution": false
+     }
+    }
+   },
+   "5.0": {
+    "date": "2021-08-04",
+    "curves": {
+     "USD_SOFR": {
+      "rows": 0,
+      "served_at_requested_resolution": false
+     },
+     "USD_FEDFUND": {
+      "rows": 3193,
+      "first": "2021-07-05 19:50:00",
+      "last": "2021-08-04 19:50:00",
+      "spacing_min": 10.0,
+      "first_value": 1.2082,
+      "last_value": 1.00201,
+      "served_at_requested_resolution": true
+     },
+     "EUR_EUROSTR": {
+      "rows": 0,
+      "served_at_requested_resolution": false
+     },
+     "EUR_EURIBOR": {
+      "rows": 1584,
+      "first": "2021-07-06 02:00:00",
+      "last": "2021-08-04 13:50:00",
+      "spacing_min": 10.0,
+      "first_value": 0.108717,
+      "last_value": -0.110691,
+      "served_at_requested_resolution": true
+     },
+     "JPY_TONAR": {
+      "rows": 3193,
+      "first": "2021-07-05 19:50:00",
+      "last": "2021-08-04 19:50:00",
+      "spacing_min": 10.0,
+      "first_value": 0.019322,
+      "last_value": -0.0225,
+      "served_at_requested_resolution": true
+     },
+     "JPY_TONAR_LCH": {
+      "rows": 0,
+      "served_at_requested_resolution": false
+     }
+    }
+   },
+   "7.0": {
+    "date": "2019-08-07",
+    "curves": {
+     "USD_SOFR": {
+      "rows": 0,
+      "served_at_requested_resolution": false
+     },
+     "USD_FEDFUND": {
+      "rows": 3072,
+      "first": "2019-07-08 19:50:00",
+      "last": "2019-08-07 19:50:00",
+      "spacing_min": 10.0,
+      "first_value": 1.74113,
+      "last_value": 1.32861,
+      "served_at_requested_resolution": true
+     },
+     "EUR_EUROSTR": {
+      "rows": 0,
+      "served_at_requested_resolution": false
+     },
+     "EUR_EURIBOR": {
+      "rows": 1277,
+      "first": "2019-07-09 02:00:00",
+      "last": "2019-08-07 11:50:00",
+      "spacing_min": 10.0,
+      "first_value": 0.100541,
+      "last_value": -0.140526,
+      "served_at_requested_resolution": true
+     },
+     "JPY_TONAR": {
+      "rows": 3111,
+      "first": "2019-07-08 19:50:00",
+      "last": "2019-08-07 19:50:00",
+      "spacing_min": 10.0,
+      "first_value": -0.080009,
+      "last_value": -0.119901,
+      "served_at_requested_resolution": true
+     },
+     "JPY_TONAR_LCH": {
+      "rows": 0,
+      "served_at_requested_resolution": false
+     }
+    }
+   },
+   "10.0": {
+    "date": "2016-08-03",
+    "curves": {
+     "USD_SOFR": {
+      "rows": 0,
+      "served_at_requested_resolution": false
+     },
+     "USD_FEDFUND": {
+      "rows": 0,
+      "served_at_requested_resolution": false
+     },
+     "EUR_EUROSTR": {
+      "rows": 0,
+      "served_at_requested_resolution": false
+     },
+     "EUR_EURIBOR": {
+      "rows": 2042,
+      "first": "2016-07-04 19:50:00",
+      "last": "2016-08-03 12:00:00",
+      "spacing_min": 10.0,
+      "first_value": 0.300864,
+      "last_value": 0.325649,
+      "served_at_requested_resolution": true
+     },
+     "JPY_TONAR": {
+      "rows": 0,
+      "served_at_requested_resolution": false
+     },
+     "JPY_TONAR_LCH": {
+      "rows": 0,
+      "served_at_requested_resolution": false
+     }
+    }
+   }
+  },
+  "HOURLY": {
+   "0.25": {
+    "date": "2026-05-06",
+    "curves": {
+     "USD_SOFR": {
+      "rows": 957,
+      "first": "2026-03-08 17:00:00",
+      "last": "2026-05-06 19:00:00",
+      "spacing_min": 60.0,
+      "first_value": 3.66529,
+      "last_value": 3.93291,
+      "served_at_requested_resolution": true
+     },
+     "USD_FEDFUND": {
+      "rows": 957,
+      "first": "2026-03-08 17:00:00",
+      "last": "2026-05-06 19:00:00",
+      "spacing_min": 60.0,
+      "first_value": 3.6052,
+      "last_value": 3.886,
+      "served_at_requested_resolution": true
+     },
+     "EUR_EUROSTR": {
+      "rows": 516,
+      "first": "2026-03-09 03:00:00",
+      "last": "2026-05-06 13:00:00",
+      "spacing_min": 60.0,
+      "first_value": 2.77055,
+      "last_value": 2.80324,
+      "served_at_requested_resolution": true
+     },
+     "EUR_EURIBOR": {
+      "rows": 516,
+      "first": "2026-03-09 03:00:00",
+      "last": "2026-05-06 13:00:00",
+      "spacing_min": 60.0,
+      "first_value": 2.96116,
+      "last_value": 3.02724,
+      "served_at_requested_resolution": true
+     },
+     "JPY_TONAR": {
+      "rows": 517,
+      "first": "2026-03-08 19:00:00",
+      "last": "2026-05-06 19:00:00",
+      "spacing_min": 60.0,
+      "first_value": 2.04125,
+      "last_value": 2.29125,
+      "served_at_requested_resolution": true
+     },
+     "JPY_TONAR_LCH": {
+      "rows": 517,
+      "first": "2026-03-08 19:00:00",
+      "last": "2026-05-06 19:00:00",
+      "spacing_min": 60.0,
+      "first_value": 2.04328,
+      "last_value": 2.2925,
+      "served_at_requested_resolution": true
+     }
+    }
+   },
+   "1.0": {
+    "date": "2025-08-06",
+    "curves": {
+     "USD_SOFR": {
+      "rows": 957,
+      "first": "2025-06-08 17:00:00",
+      "last": "2025-08-06 19:00:00",
+      "spacing_min": 60.0,
+      "first_value": 3.97658,
+      "last_value": 3.70332,
+      "served_at_requested_resolution": true
+     },
+     "USD_FEDFUND": {
+      "rows": 957,
+      "first": "2025-06-08 17:00:00",
+      "last": "2025-08-06 19:00:00",
+      "spacing_min": 60.0,
+      "first_value": 3.93231,
+      "last_value": 3.64866,
+      "served_at_requested_resolution": true
+     },
+     "EUR_EUROSTR": {
+      "rows": 516,
+      "first": "2025-06-09 02:00:00",
+      "last": "2025-08-06 13:00:00",
+      "spacing_min": 60.0,
+      "first_value": 2.40797,
+      "last_value": 2.44701,
+      "served_at_requested_resolution": true
+     },
+     "EUR_EURIBOR": {
+      "rows": 516,
+      "first": "2025-06-09 02:00:00",
+      "last": "2025-08-06 13:00:00",
+      "spacing_min": 60.0,
+      "first_value": 2.56658,
+      "last_value": 2.63297,
+      "served_at_requested_resolution": true
+     },
+     "JPY_TONAR": {
+      "rows": 517,
+      "first": "2025-06-08 19:00:00",
+      "last": "2025-08-06 19:00:00",
+      "spacing_min": 60.0,
+      "first_value": 1.24125,
+      "last_value": 1.27375,
+      "served_at_requested_resolution": true
+     },
+     "JPY_TONAR_LCH": {
+      "rows": 517,
+      "first": "2025-06-08 19:00:00",
+      "last": "2025-08-06 19:00:00",
+      "spacing_min": 60.0,
+      "first_value": 1.25125,
+      "last_value": 1.27672,
+      "served_at_requested_resolution": true
+     }
+    }
+   },
+   "2.0": {
+    "date": "2024-08-07",
+    "curves": {
+     "USD_SOFR": {
+      "rows": 957,
+      "first": "2024-06-09 17:00:00",
+      "last": "2024-08-07 19:00:00",
+      "spacing_min": 60.0,
+      "first_value": 4.05275,
+      "last_value": 3.47637,
+      "served_at_requested_resolution": true
+     },
+     "USD_FEDFUND": {
+      "rows": 957,
+      "first": "2024-06-09 17:00:00",
+      "last": "2024-08-07 19:00:00",
+      "spacing_min": 60.0,
+      "first_value": 4.01158,
+      "last_value": 3.41659,
+      "served_at_requested_resolution": true
+     },
+     "EUR_EUROSTR": {
+      "rows": 516,
+      "first": "2024-06-10 02:00:00",
+      "last": "2024-08-07 13:00:00",
+      "spacing_min": 60.0,
+      "first_value": 2.72359,
+      "last_value": 2.39726,
+      "served_at_requested_resolution": true
+     },
+     "EUR_EURIBOR": {
+      "rows": 516,
+      "first": "2024-06-10 02:00:00",
+      "last": "2024-08-07 13:00:00",
+      "spacing_min": 60.0,
+      "first_value": 2.86887,
+      "last_value": 2.54957,
+      "served_at_requested_resolution": true
+     },
+     "JPY_TONAR": {
+      "rows": 517,
+      "first": "2024-06-09 19:00:00",
+      "last": "2024-08-07 19:00:00",
+      "spacing_min": 60.0,
+      "first_value": 1.04625,
+      "last_value": 0.905,
+      "served_at_requested_resolution": true
+     },
+     "JPY_TONAR_LCH": {
+      "rows": 517,
+      "first": "2024-06-09 19:00:00",
+      "last": "2024-08-07 19:00:00",
+      "spacing_min": 60.0,
+      "first_value": 1.04375,
+      "last_value": 0.9,
+      "served_at_requested_resolution": true
+     }
+    }
+   },
+   "3.0": {
+    "date": "2023-08-09",
+    "curves": {
+     "USD_SOFR": {
+      "rows": 957,
+      "first": "2023-06-11 17:00:00",
+      "last": "2023-08-09 19:00:00",
+      "spacing_min": 60.0,
+      "first_value": 3.48822,
+      "last_value": 3.72602,
+      "served_at_requested_resolution": true
+     },
+     "USD_FEDFUND": {
+      "rows": 957,
+      "first": "2023-06-11 17:00:00",
+      "last": "2023-08-09 19:00:00",
+      "spacing_min": 60.0,
+      "first_value": 3.47512,
+      "last_value": 3.70189,
+      "served_at_requested_resolution": true
+     },
+     "EUR_EUROSTR": {
+      "rows": 516,
+      "first": "2023-06-12 02:00:00",
+      "last": "2023-08-09 13:00:00",
+      "spacing_min": 60.0,
+      "first_value": 2.7645,
+      "last_value": 2.89495,
+      "served_at_requested_resolution": true
+     },
+     "EUR_EURIBOR": {
+      "rows": 516,
+      "first": "2023-06-12 02:00:00",
+      "last": "2023-08-09 13:00:00",
+      "spacing_min": 60.0,
+      "first_value": 2.97446,
+      "last_value": 3.09934,
+      "served_at_requested_resolution": true
+     },
+     "JPY_TONAR": {
+      "rows": 517,
+      "first": "2023-06-11 19:00:00",
+      "last": "2023-08-09 19:00:00",
+      "spacing_min": 60.0,
+      "first_value": 0.585,
+      "last_value": 0.76125,
+      "served_at_requested_resolution": true
+     },
+     "JPY_TONAR_LCH": {
+      "rows": 0,
+      "served_at_requested_resolution": false
+     }
+    }
+   },
+   "4.0": {
+    "date": "2022-08-03",
+    "curves": {
+     "USD_SOFR": {
+      "rows": 957,
+      "first": "2022-06-05 17:00:00",
+      "last": "2022-08-03 19:00:00",
+      "spacing_min": 60.0,
+      "first_value": 2.73012,
+      "last_value": 2.49987,
+      "served_at_requested_resolution": true
+     },
+     "USD_FEDFUND": {
+      "rows": 957,
+      "first": "2022-06-05 17:00:00",
+      "last": "2022-08-03 19:00:00",
+      "spacing_min": 60.0,
+      "first_value": 2.73102,
+      "last_value": 2.50242,
+      "served_at_requested_resolution": true
+     },
+     "EUR_EUROSTR": {
+      "rows": 516,
+      "first": "2022-06-06 02:00:00",
+      "last": "2022-08-03 13:00:00",
+      "spacing_min": 60.0,
+      "first_value": 1.69027,
+      "last_value": 1.3826,
+      "served_at_requested_resolution": true
+     },
+     "EUR_EURIBOR": {
+      "rows": 516,
+      "first": "2022-06-06 02:00:00",
+      "last": "2022-08-03 13:00:00",
+      "spacing_min": 60.0,
+      "first_value": 1.96165,
+      "last_value": 1.67976,
+      "served_at_requested_resolution": true
+     },
+     "JPY_TONAR": {
+      "rows": 515,
+      "first": "2022-06-05 19:00:00",
+      "last": "2022-08-03 19:00:00",
+      "spacing_min": 60.0,
+      "first_value": 0.335,
+      "last_value": 0.29125,
+      "served_at_requested_resolution": true
+     },
+     "JPY_TONAR_LCH": {
+      "rows": 0,
+      "served_at_requested_resolution": false
+     }
+    }
+   },
+   "5.0": {
+    "date": "2021-08-04",
+    "curves": {
+     "USD_SOFR": {
+      "rows": 0,
+      "served_at_requested_resolution": false
+     },
+     "USD_FEDFUND": {
+      "rows": 1043,
+      "first": "2021-06-06 17:00:00",
+      "last": "2021-08-04 19:00:00",
+      "spacing_min": 60.0,
+      "first_value": 1.34165,
+      "last_value": 1.00201,
+      "served_at_requested_resolution": true
+     },
+     "EUR_EUROSTR": {
+      "rows": 0,
+      "served_at_requested_resolution": false
+     },
+     "EUR_EURIBOR": {
+      "rows": 516,
+      "first": "2021-06-07 02:00:00",
+      "last": "2021-08-04 13:00:00",
+      "spacing_min": 60.0,
+      "first_value": 0.113192,
+      "last_value": -0.110691,
+      "served_at_requested_resolution": true
+     },
+     "JPY_TONAR": {
+      "rows": 1043,
+      "first": "2021-06-06 17:00:00",
+      "last": "2021-08-04 19:00:00",
+      "spacing_min": 60.0,
+      "first_value": 0.066211,
+      "last_value": -0.0225,
+      "served_at_requested_resolution": true
+     },
+     "JPY_TONAR_LCH": {
+      "rows": 0,
+      "served_at_requested_resolution": false
+     }
+    }
+   },
+   "7.0": {
+    "date": "2019-08-07",
+    "curves": {
+     "USD_SOFR": {
+      "rows": 0,
+      "served_at_requested_resolution": false
+     },
+     "USD_FEDFUND": {
+      "rows": 1014,
+      "first": "2019-06-09 17:00:00",
+      "last": "2019-08-07 19:00:00",
+      "spacing_min": 60.0,
+      "first_value": 1.82995,
+      "last_value": 1.32861,
+      "served_at_requested_resolution": true
+     },
+     "EUR_EUROSTR": {
+      "rows": 0,
+      "served_at_requested_resolution": false
+     },
+     "EUR_EURIBOR": {
+      "rows": 421,
+      "first": "2019-06-10 02:00:00",
+      "last": "2019-08-07 11:00:00",
+      "spacing_min": 60.0,
+      "first_value": 0.268813,
+      "last_value": -0.140526,
+      "served_at_requested_resolution": true
+     },
+     "JPY_TONAR": {
+      "rows": 1027,
+      "first": "2019-06-09 17:00:00",
+      "last": "2019-08-07 19:00:00",
+      "spacing_min": 60.0,
+      "first_value": -0.06626,
+      "last_value": -0.119901,
+      "served_at_requested_resolution": true
+     },
+     "JPY_TONAR_LCH": {
+      "rows": 0,
+      "served_at_requested_resolution": false
+     }
+    }
+   },
+   "10.0": {
+    "date": "2016-08-03",
+    "curves": {
+     "USD_SOFR": {
+      "rows": 0,
+      "served_at_requested_resolution": false
+     },
+     "USD_FEDFUND": {
+      "rows": 0,
+      "served_at_requested_resolution": false
+     },
+     "EUR_EUROSTR": {
+      "rows": 0,
+      "served_at_requested_resolution": false
+     },
+     "EUR_EURIBOR": {
+      "rows": 482,
+      "first": "2016-06-27 01:00:00",
+      "last": "2016-08-03 12:00:00",
+      "spacing_min": 60.0,
+      "first_value": 0.454928,
+      "last_value": 0.325649,
+      "served_at_requested_resolution": true
+     },
+     "JPY_TONAR": {
+      "rows": 0,
+      "served_at_requested_resolution": false
+     },
+     "JPY_TONAR_LCH": {
+      "rows": 0,
+      "served_at_requested_resolution": false
+     }
+    }
+   }
+  }
+ },
+ "snap": {
+  "0.25": {
+   "date": "2026-05-06",
+   "curves": {
+    "USD_SOFR": {
+     "am": 3.9454,
+     "am_wire": "2026-05-06 09:30:00",
+     "pm": 3.94254,
+     "pm_wire": "2026-05-06 15:00:00",
+     "differs": true,
+     "diff_bp": -0.286,
+     "daily_close": 3.94208,
+     "pm_minus_close_bp": 0.046
+    },
+    "USD_FEDFUND": {
+     "am": 3.89496,
+     "am_wire": "2026-05-06 09:30:00",
+     "pm": 3.89563,
+     "pm_wire": "2026-05-06 15:00:00",
+     "differs": true,
+     "diff_bp": 0.067,
+     "daily_close": 3.89518,
+     "pm_minus_close_bp": 0.045
+    },
+    "EUR_EUROSTR": {
+     "am": 2.84345,
+     "am_wire": "2026-05-06 03:30:00",
+     "pm": 2.8075,
+     "pm_wire": "2026-05-06 09:00:00",
+     "differs": true,
+     "diff_bp": -3.595,
+     "daily_close": 2.80772,
+     "pm_minus_close_bp": -0.022
+    },
+    "EUR_EURIBOR": {
+     "am": 3.06489,
+     "am_wire": "2026-05-06 03:30:00",
+     "pm": 3.03191,
+     "pm_wire": "2026-05-06 09:00:00",
+     "differs": true,
+     "diff_bp": -3.298,
+     "daily_close": 3.032,
+     "pm_minus_close_bp": -0.009
+    },
+    "JPY_TONAR": {
+     "am": 2.28875,
+     "am_wire": "2026-05-05 20:30:00",
+     "pm": 2.28875,
+     "pm_wire": "2026-05-06 02:00:00",
+     "differs": false,
+     "diff_bp": 0.0,
+     "daily_close": 2.3025,
+     "pm_minus_close_bp": -1.375
+    },
+    "JPY_TONAR_LCH": {
+     "am": 2.29,
+     "am_wire": "2026-05-05 20:30:00",
+     "pm": 2.29,
+     "pm_wire": "2026-05-06 02:00:00",
+     "differs": false,
+     "diff_bp": 0.0,
+     "daily_close": 2.28812,
+     "pm_minus_close_bp": 0.188
+    }
+   }
+  },
+  "1.0": {
+   "date": "2025-08-06",
+   "curves": {
+    "USD_SOFR": {
+     "am": 3.69995,
+     "am_wire": "2025-08-06 09:30:00",
+     "pm": null,
+     "pm_wire": "2025-08-06 15:00:00",
+     "differs": false,
+     "diff_bp": null,
+     "daily_close": 3.69533,
+     "pm_minus_close_bp": null
+    },
+    "USD_FEDFUND": {
+     "am": 3.64502,
+     "am_wire": "2025-08-06 09:30:00",
+     "pm": null,
+     "pm_wire": "2025-08-06 15:00:00",
+     "differs": false,
+     "diff_bp": null,
+     "daily_close": 3.64083,
+     "pm_minus_close_bp": null
+    },
+    "EUR_EUROSTR": {
+     "am": 2.4382,
+     "am_wire": "2025-08-06 03:30:00",
+     "pm": 2.43204,
+     "pm_wire": "2025-08-06 09:00:00",
+     "differs": true,
+     "diff_bp": -0.616,
+     "daily_close": 2.43471,
+     "pm_minus_close_bp": -0.267
+    },
+    "EUR_EURIBOR": {
+     "am": 2.62421,
+     "am_wire": "2025-08-06 03:30:00",
+     "pm": 2.61932,
+     "pm_wire": "2025-08-06 09:00:00",
+     "differs": true,
+     "diff_bp": -0.489,
+     "daily_close": 2.6212,
+     "pm_minus_close_bp": -0.188
+    },
+    "JPY_TONAR": {
+     "am": 1.2625,
+     "am_wire": "2025-08-05 20:30:00",
+     "pm": null,
+     "pm_wire": "2025-08-06 02:00:00",
+     "differs": false,
+     "diff_bp": null,
+     "daily_close": 1.28125,
+     "pm_minus_close_bp": null
+    },
+    "JPY_TONAR_LCH": {
+     "am": 1.26625,
+     "am_wire": "2025-08-05 20:30:00",
+     "pm": null,
+     "pm_wire": "2025-08-06 02:00:00",
+     "differs": false,
+     "diff_bp": null,
+     "daily_close": 1.28398,
+     "pm_minus_close_bp": null
+    }
+   }
+  },
+  "2.0": {
+   "date": "2024-08-07",
+   "curves": {
+    "USD_SOFR": {
+     "am": 3.49871,
+     "am_wire": "2024-08-07 09:30:00",
+     "pm": 3.52189,
+     "pm_wire": "2024-08-07 15:00:00",
+     "differs": true,
+     "diff_bp": 2.318,
+     "daily_close": 3.52092,
+     "pm_minus_close_bp": 0.097
+    },
+    "USD_FEDFUND": {
+     "am": 3.43872,
+     "am_wire": "2024-08-07 09:30:00",
+     "pm": 3.46207,
+     "pm_wire": "2024-08-07 15:00:00",
+     "differs": true,
+     "diff_bp": 2.335,
+     "daily_close": 3.46114,
+     "pm_minus_close_bp": 0.093
+    },
+    "EUR_EUROSTR": {
+     "am": 2.39326,
+     "am_wire": "2024-08-07 03:30:00",
+     "pm": 2.40516,
+     "pm_wire": "2024-08-07 09:00:00",
+     "differs": true,
+     "diff_bp": 1.19,
+     "daily_close": 2.40468,
+     "pm_minus_close_bp": 0.048
+    },
+    "EUR_EURIBOR": {
+     "am": 2.55167,
+     "am_wire": "2024-08-07 03:30:00",
+     "pm": 2.55654,
+     "pm_wire": "2024-08-07 09:00:00",
+     "differs": true,
+     "diff_bp": 0.487,
+     "daily_close": 2.55724,
+     "pm_minus_close_bp": -0.07
+    },
+    "JPY_TONAR": {
+     "am": 0.87125,
+     "am_wire": "2024-08-06 20:30:00",
+     "pm": 0.89125,
+     "pm_wire": "2024-08-07 02:00:00",
+     "differs": true,
+     "diff_bp": 2.0,
+     "daily_close": 0.8825,
+     "pm_minus_close_bp": 0.875
+    },
+    "JPY_TONAR_LCH": {
+     "am": 0.86625,
+     "am_wire": "2024-08-06 20:30:00",
+     "pm": 0.88625,
+     "pm_wire": "2024-08-07 02:00:00",
+     "differs": true,
+     "diff_bp": 2.0,
+     "daily_close": 0.88625,
+     "pm_minus_close_bp": 0.0
+    }
+   }
+  },
+  "3.0": {
+   "date": "2023-08-09",
+   "curves": {
+    "USD_SOFR": {
+     "am": 3.72834,
+     "am_wire": "2023-08-09 09:30:00",
+     "pm": 3.72057,
+     "pm_wire": "2023-08-09 15:00:00",
+     "differs": true,
+     "diff_bp": -0.777,
+     "daily_close": 3.72012,
+     "pm_minus_close_bp": 0.045
+    },
+    "USD_FEDFUND": {
+     "am": 3.70433,
+     "am_wire": "2023-08-09 09:30:00",
+     "pm": 3.6966,
+     "pm_wire": "2023-08-09 15:00:00",
+     "differs": true,
+     "diff_bp": -0.773,
+     "daily_close": 3.69654,
+     "pm_minus_close_bp": 0.006
+    },
+    "EUR_EUROSTR": {
+     "am": 2.8782,
+     "am_wire": "2023-08-09 03:30:00",
+     "pm": 2.9055,
+     "pm_wire": "2023-08-09 09:00:00",
+     "differs": true,
+     "diff_bp": 2.73,
+     "daily_close": 2.88926,
+     "pm_minus_close_bp": 1.624
+    },
+    "EUR_EURIBOR": {
+     "am": 3.08485,
+     "am_wire": "2023-08-09 03:30:00",
+     "pm": 3.11493,
+     "pm_wire": "2023-08-09 09:00:00",
+     "differs": true,
+     "diff_bp": 3.008,
+     "daily_close": 3.0936,
+     "pm_minus_close_bp": 2.133
+    },
+    "JPY_TONAR": {
+     "am": 0.7575,
+     "am_wire": "2023-08-08 20:30:00",
+     "pm": null,
+     "pm_wire": "2023-08-09 02:00:00",
+     "differs": false,
+     "diff_bp": null,
+     "daily_close": 0.74,
+     "pm_minus_close_bp": null
+    },
+    "JPY_TONAR_LCH": {
+     "am": null,
+     "am_wire": "2023-08-08 20:30:00",
+     "pm": null,
+     "pm_wire": "2023-08-09 02:00:00",
+     "differs": false,
+     "diff_bp": null,
+     "daily_close": 0.79,
+     "pm_minus_close_bp": null
+    }
+   }
+  },
+  "4.0": {
+   "date": "2022-08-03",
+   "curves": {
+    "USD_SOFR": {
+     "am": 2.57514,
+     "am_wire": "2022-08-03 09:30:00",
+     "pm": 2.53138,
+     "pm_wire": "2022-08-03 15:00:00",
+     "differs": true,
+     "diff_bp": -4.376,
+     "daily_close": 2.5339,
+     "pm_minus_close_bp": -0.252
+    },
+    "USD_FEDFUND": {
+     "am": 2.57798,
+     "am_wire": "2022-08-03 09:30:00",
+     "pm": 2.53395,
+     "pm_wire": "2022-08-03 15:00:00",
+     "differs": true,
+     "diff_bp": -4.403,
+     "daily_close": 2.53649,
+     "pm_minus_close_bp": -0.254
+    },
+    "EUR_EUROSTR": {
+     "am": 1.41283,
+     "am_wire": "2022-08-03 03:30:00",
+     "pm": 1.39825,
+     "pm_wire": "2022-08-03 09:00:00",
+     "differs": true,
+     "diff_bp": -1.458,
+     "daily_close": 1.37949,
+     "pm_minus_close_bp": 1.876
+    },
+    "EUR_EURIBOR": {
+     "am": 1.71655,
+     "am_wire": "2022-08-03 03:30:00",
+     "pm": 1.6985,
+     "pm_wire": "2022-08-03 09:00:00",
+     "differs": true,
+     "diff_bp": -1.805,
+     "daily_close": 1.67665,
+     "pm_minus_close_bp": 2.185
+    },
+    "JPY_TONAR": {
+     "am": 0.29875,
+     "am_wire": "2022-08-02 20:30:00",
+     "pm": 0.29625,
+     "pm_wire": "2022-08-03 02:00:00",
+     "differs": true,
+     "diff_bp": -0.25,
+     "daily_close": 0.295,
+     "pm_minus_close_bp": 0.125
+    },
+    "JPY_TONAR_LCH": {
+     "am": null,
+     "am_wire": "2022-08-02 20:30:00",
+     "pm": null,
+     "pm_wire": "2022-08-03 02:00:00",
+     "differs": false,
+     "diff_bp": null,
+     "daily_close": 0.31875,
+     "pm_minus_close_bp": null
+    }
+   }
+  },
+  "5.0": {
+   "date": "2021-08-04",
+   "curves": {
+    "USD_SOFR": {
+     "am": null,
+     "am_wire": "2021-08-04 09:30:00",
+     "pm": null,
+     "pm_wire": "2021-08-04 15:00:00",
+     "differs": false,
+     "diff_bp": null,
+     "daily_close": 0.95592,
+     "pm_minus_close_bp": null
+    },
+    "USD_FEDFUND": {
+     "am": 0.946078,
+     "am_wire": "2021-08-04 09:30:00",
+     "pm": 0.994887,
+     "pm_wire": "2021-08-04 15:00:00",
+     "differs": true,
+     "diff_bp": 4.8809,
+     "daily_close": 0.995118,
+     "pm_minus_close_bp": -0.0231
+    },
+    "EUR_EUROSTR": {
+     "am": null,
+     "am_wire": "2021-08-04 03:30:00",
+     "pm": null,
+     "pm_wire": "2021-08-04 09:00:00",
+     "differs": false,
+     "diff_bp": null,
+     "daily_close": -0.254671,
+     "pm_minus_close_bp": null
+    },
+    "EUR_EURIBOR": {
+     "am": -0.102491,
+     "am_wire": "2021-08-04 03:30:00",
+     "pm": -0.118371,
+     "pm_wire": "2021-08-04 09:00:00",
+     "differs": true,
+     "diff_bp": -1.588,
+     "daily_close": -0.099498,
+     "pm_minus_close_bp": -1.8873
+    },
+    "JPY_TONAR": {
+     "am": null,
+     "am_wire": "2021-08-03 20:30:00",
+     "pm": -0.02625,
+     "pm_wire": "2021-08-04 02:00:00",
+     "differs": false,
+     "diff_bp": null,
+     "daily_close": -0.02625,
+     "pm_minus_close_bp": 0.0
+    },
+    "JPY_TONAR_LCH": {
+     "am": null,
+     "am_wire": "2021-08-03 20:30:00",
+     "pm": null,
+     "pm_wire": "2021-08-04 02:00:00",
+     "differs": false,
+     "diff_bp": null,
+     "daily_close": -0.029375,
+     "pm_minus_close_bp": null
+    }
+   }
+  },
+  "7.0": {
+   "date": "2019-08-07",
+   "curves": {
+    "USD_SOFR": {
+     "am": null,
+     "am_wire": "2019-08-07 09:30:00",
+     "pm": null,
+     "pm_wire": "2019-08-07 15:00:00",
+     "differs": false,
+     "diff_bp": null,
+     "daily_close": 1.31598,
+     "pm_minus_close_bp": null
+    },
+    "USD_FEDFUND": {
+     "am": 1.25274,
+     "am_wire": "2019-08-07 09:30:00",
+     "pm": 1.30968,
+     "pm_wire": "2019-08-07 15:00:00",
+     "differs": true,
+     "diff_bp": 5.694,
+     "daily_close": 1.30909,
+     "pm_minus_close_bp": 0.059
+    },
+    "EUR_EUROSTR": {
+     "am": null,
+     "am_wire": "2019-08-07 03:30:00",
+     "pm": null,
+     "pm_wire": "2019-08-07 09:00:00",
+     "differs": false,
+     "diff_bp": null,
+     "daily_close": -0.413975,
+     "pm_minus_close_bp": null
+    },
+    "EUR_EURIBOR": {
+     "am": -0.105306,
+     "am_wire": "2019-08-07 03:30:00",
+     "pm": -0.157162,
+     "pm_wire": "2019-08-07 09:00:00",
+     "differs": true,
+     "diff_bp": -5.1856,
+     "daily_close": -0.143197,
+     "pm_minus_close_bp": -1.3965
+    },
+    "JPY_TONAR": {
+     "am": -0.125525,
+     "am_wire": "2019-08-06 20:30:00",
+     "pm": -0.124275,
+     "pm_wire": "2019-08-07 02:00:00",
+     "differs": true,
+     "diff_bp": 0.125,
+     "daily_close": -0.12365,
+     "pm_minus_close_bp": -0.0625
+    },
+    "JPY_TONAR_LCH": {
+     "am": null,
+     "am_wire": "2019-08-06 20:30:00",
+     "pm": null,
+     "pm_wire": "2019-08-07 02:00:00",
+     "differs": false,
+     "diff_bp": null,
+     "daily_close": -0.141166,
+     "pm_minus_close_bp": null
+    }
+   }
+  },
+  "10.0": {
+   "date": "2016-08-03",
+   "curves": {
+    "USD_SOFR": {
+     "am": null,
+     "am_wire": "2016-08-03 09:30:00",
+     "pm": null,
+     "pm_wire": "2016-08-03 15:00:00",
+     "differs": false,
+     "diff_bp": null,
+     "daily_close": 1.00276,
+     "pm_minus_close_bp": null
+    },
+    "USD_FEDFUND": {
+     "am": null,
+     "am_wire": "2016-08-03 09:30:00",
+     "pm": null,
+     "pm_wire": "2016-08-03 15:00:00",
+     "differs": false,
+     "diff_bp": null,
+     "daily_close": 1.00276,
+     "pm_minus_close_bp": null
+    },
+    "EUR_EUROSTR": {
+     "am": null,
+     "am_wire": "2016-08-03 03:30:00",
+     "pm": null,
+     "pm_wire": "2016-08-03 09:00:00",
+     "differs": false,
+     "diff_bp": null,
+     "daily_close": -0.012426,
+     "pm_minus_close_bp": null
+    },
+    "EUR_EURIBOR": {
+     "am": 0.341958,
+     "am_wire": "2016-08-03 03:30:00",
+     "pm": 0.324961,
+     "pm_wire": "2016-08-03 09:00:00",
+     "differs": true,
+     "diff_bp": -1.6997,
+     "daily_close": 0.329437,
+     "pm_minus_close_bp": -0.4476
+    },
+    "JPY_TONAR": {
+     "am": null,
+     "am_wire": "2016-08-02 20:30:00",
+     "pm": null,
+     "pm_wire": "2016-08-03 02:00:00",
+     "differs": false,
+     "diff_bp": null,
+     "daily_close": -0.074043,
+     "pm_minus_close_bp": null
+    },
+    "JPY_TONAR_LCH": {
+     "am": null,
+     "am_wire": "2016-08-02 20:30:00",
+     "pm": null,
+     "pm_wire": "2016-08-03 02:00:00",
+     "differs": false,
+     "diff_bp": null,
+     "daily_close": -0.077488,
+     "pm_minus_close_bp": null
+    }
+   }
+  }
+ },
+ "mem_after": 726.626304,
+ "calls": {
+  "calls": 73,
+  "seconds": 43.2,
+  "seconds_per_call": 0.59
+ }
+}

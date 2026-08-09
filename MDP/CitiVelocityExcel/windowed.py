@@ -22,11 +22,33 @@ requested    span        spacing actually served
 
 **The cliff is span, not age.** Holding the span at four days and walking the
 window back - 3, 10, 18, 25, 40, 60, 90, 180, 365 days ago - returned true
-1-minute data every single time. Minute history is retained for at least a year;
-it is only ever hidden by asking for too much of it at once. The 6d/7d boundary
-was re-measured on ``EUR_EUROSTR``, ``JPY_TONAR_LCH``, ``GBP_SONIA`` and
-``CAD_CORRA``, at both "now" and "a year ago": identical everywhere, so it is a
-property of the add-in rather than of any one curve.
+1-minute data every single time. It is only ever hidden by asking for too much of
+it at once. The 6d/7d boundary was re-measured on ``EUR_EUROSTR``,
+``JPY_TONAR_LCH``, ``GBP_SONIA`` and ``CAD_CORRA``, at both "now" and "a year
+ago": identical everywhere, so it is a property of the add-in rather than of any
+one curve.
+
+**Retention, bisected 2026-08-09** (``scripts/citivelo_snap_depth_probe.py``,
+``--stage floor``), is far deeper than the "at least a year" this file used to
+claim, and it is per curve:
+
+==================  ===============  =====
+curve               1-minute from    years
+==================  ===============  =====
+``EUR_EURIBOR``     2016-07-06        10.1
+``JPY_TONAR``       2017-12-06         8.7
+``EUR_EONIA``       2017-12-06         8.7
+``USD_FEDFUND``     2018-09-05         7.9
+``USD_SOFR``        2021-09-15         4.9
+``EUR_EUROSTR``     2021-09-15         4.9
+``JPY_TONAR_LCH``   2024-01-17         2.6
+==================  ===============  =====
+
+Below its 1-minute floor a curve may still serve *sparser* intraday data -
+``USD_FEDFUND`` returns ~330 rows over four days at ~8-minute spacing back to
+2017-12-06. That is real data, and a test which only asks "is the median spacing
+one minute?" reports it as absent. ``CVSNAP`` reaches no deeper than any of this:
+it reads the same store.
 
 So a full-resolution backfill is not a retention problem, it is a chunking
 problem, and this module is the chunker.
