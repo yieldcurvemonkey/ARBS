@@ -7,7 +7,10 @@ any backtest ran.
 ## The call
 
 **At the pre-registered gates: NO SIGNAL — a data-sufficiency result.**
-**At relaxed gates, where it does trade: DEAD, and worse than noise.**
+**At relaxed gates, where it does trade: DEAD. No gross edge; the net is the cost.**
+
+Headline P&L, guarded multi-contract panel, 1-lot fly, 7 trades:
+**gross −$19, net −$194 at the half tick, −$369 at a full tick.**
 
 Two runs, and they say different things, so both are reported.
 
@@ -50,43 +53,70 @@ Labelled EXPLORATORY by the runner and barred from an ALIVE verdict by construct
 answer the one question run 1 cannot: **when the signal does fire, does it point the right
 way?**
 
-**Provenance, stated because it matters:** these numbers were measured on the SFRZ26-only panel
-as it stood before the four applicability guards of §5b landed. SFRZ26 is a hiking contract, so
-the sign bug did not touch it, but some of its far-dated sessions would now be rejected by the
-off-lattice guard. The equivalent run on the guarded multi-contract panel was still executing
-when this was written; when it lands, **replace this block rather than adding to it**. Until
-then, read the sign of the result, not its decimals.
+Measured on the **guarded multi-contract panel** (555 sessions, 5 contracts). 1bp of package on
+a 1-lot fly is $25.
 
 ```
-signal availability: 93 rows, 44 admissible, 40 with a z-score, 19 beyond |z| >= 1.0
+signal availability: 555 rows, 48 admissible, 33 with a z-score, 12 beyond |z| >= 1.0
 trades 7   round trip cost 1.00bp (half tick) / 2.00bp (full tick)
-gross bp/trade   mean -0.214   median -0.250   sd 0.585
-net   bp/trade   mean -1.214   median -1.250
-daily $ P&L: ann Sharpe -3.92   NW t -2.40
+gross bp/trade   mean -0.107   median +0.500   sd 1.994
+net   bp/trade   mean -1.107   median -0.500
+net@fulltick     mean -2.107   median -1.500
+daily $ P&L: n 302   ann Sharpe -1.37   NW t -2.31
+DSR: sr -0.555   prob 0.006
 break-even cost multiple: 0.00x the half-tick round trip
+independent meeting cycles: 6
 ```
 
-**It does not.** The edge is negative *gross*, before a single basis point of cost — so this is
-not the usual "real edge, eaten by costs" outcome that most SR3 RV programmes in this repo have
-produced. There is nothing for costs to eat.
+| | bp/trade | $/trade | total (7 trades) |
+|---|---|---|---|
+| Gross | −0.107 | −$2.68 | **−$19** |
+| Net @ half tick | −1.107 | −$27.68 | **−$194** |
+| Net @ full tick | −2.107 | −$52.68 | **−$369** |
 
-Kill criterion 2 (shuffle placebo) fails outright and is the most informative line in the whole
-study:
+**Answer: there is no gross edge, and the net is the cost.** The break-even cost multiple is
+0.00× — nothing for costs to eat, which is *not* the "real edge eaten by costs" outcome most SR3
+RV programmes in this repo have produced.
+
+**Do not read the t-statistics as evidence.** The daily Sharpe of −1.37 and NW t of −2.31 are
+mostly the cost: the full round trip is booked in a single step at each unwind, so the daily
+series is 7 cost spikes on an otherwise gross curve. The statistic that matters is the gross
+per-trade mean, and there
+
+    t = −0.107 / (1.994 / √7) = **−0.14**
+
+— indistinguishable from zero. (Same trap as the dealer-ladder study, where a t of −9.44\*\*\*
+turned out to be the cost constant rather than evidence.) The confound regression agrees:
+per-trade net on `lambda_z` gives β = −0.067, t = −0.25.
+
+Note also that gross **median is +0.50bp** against a mean of −0.107: most trades are small
+winners and a couple are large losers. At n = 7 that is a description of seven numbers, not a
+distribution.
+
+Criterion 6 (independent meeting cycles ≥ 6) **passes** on this panel — the one bar the study
+clears.
+
+### The placebo, and its provenance
+
+The shuffle placebo was run on the **pre-guard SFRZ26 panel** (10 seeds), not on the guarded
+one:
 
 ```
 shuffled gross bp/trade: mean +0.188  p90 +0.374  max +0.594   LIVE -0.214
-live beats 10% of shuffles   (FAIL)
+live beats 10% of shuffles   (FAIL, kill criterion 2)
 ```
 
-Randomly permuting λ across dates — same trade calendar, same costs, same fit quality, no
-information — produces a *better* result than the real λ, 90% of the time. And the confound
-regression finds no relationship to lean on either: per-trade net on `lambda_z` gives
-β = +0.056, t = +0.51.
+Permuting λ across dates — same trade calendar, same costs, same fit quality, no information —
+beats the real λ nine times in ten. It is stated separately and with its panel named because
+moving it to the guarded panel costs ~4 hours of compute (each seed re-runs every contract
+through the pricing engine), and the obvious shortcut — restricting to the two contracts that
+fire under the *true* λ — would bias the null in the strategy's favour, since a permutation can
+make the other three fire. A rigged placebo is worse than a dated one.
 
-**Sample honesty: 7 trades, 5 meeting cycles, one contract.** That is far too small to
-*conclude* the sign is negative. What it rules out is the opposite claim: on the only sample
-where this signal has been made to trade at all, there is no evidence in its favour and the
-point estimate is on the wrong side of zero and of the noise distribution.
+**Sample honesty: 7 trades, 6 meeting cycles, 2 contracts actually trading.** Far too small to
+*conclude* the sign is negative. What it rules out is the opposite claim: on every sample where
+this signal has been made to trade, there is no evidence in its favour, the point estimate sits
+on the wrong side of zero, and the one placebo that has been run puts it below the noise.
 
 ## Why it did not trade: the fit gate, not the idea
 
