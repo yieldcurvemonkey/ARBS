@@ -1,4 +1,5 @@
 import contextlib
+import dataclasses
 import datetime
 import importlib.util
 import itertools
@@ -43,6 +44,24 @@ _NORD_HOSTS = [
 
 _FRB_PROXY_STATE: Dict[str, Any] = {}
 _FRB_PROXY_LOCK = threading.RLock()
+
+
+@dataclasses.dataclass(frozen=True)
+class _CitiVeloPrefetch:
+    """What ``_citivelo_prefetch_range`` warmed, per mode.
+
+    The per-mode flags are **data-bearing**: True only when the warm actually put
+    rows in the tag cache for that mode. ``bulk_get_data`` reads
+    ``intraday_ok`` to decide that per-point reads may go OFFLINE, and an offline
+    read of a cache that was never warmed does not fail - it returns an empty
+    column, which downstream reads as "Citi served nothing in this window". So
+    "the prefetch did not raise" is the wrong test; a prefetch that quietly did
+    nothing has to leave the old online behaviour in place.
+    """
+
+    tags: int = 0
+    eod_ok: bool = False
+    intraday_ok: bool = False
 
 
 def _socksio_available() -> bool:
@@ -467,6 +486,20 @@ class FixedRateBondsMDP(MarketDataProvider[_GenericPricable], LayeredCacheMixin)
 
     _FRB_PRICER_CACHE = "_frb_pricer_cache"
 
+    #: Vintage of the Velocity pricer cache. The key is otherwise
+    #: ``{date}-{cusip}-{source}``, none of which changes when the code that BUILDS
+    #: the pricer changes - so a cached entry outlives any correction to how it was
+    #: made, silently and forever.
+    #:
+    #: That is not hypothetical. The quote sanity screen refuses Citi's
+    #: ``PRICE = -0.562509`` for the on-the-run 2-year on 2026-07-14, and on a
+    #: machine whose cache predates the screen the refusal never ran: the pricer
+    #: came back from disk still carrying the negative price.
+    #:
+    #: **Bump this whenever the pricer's inputs or construction change.**
+    #: v2: quotes are screened by ``bonds.sanity`` before they can price.
+    CITIVELO_PRICER_CACHE_VERSION = "v2"
+
     def __init__(self, source: str = "USTS_FEDINVEST_WSJ_LIVE-QL", **kwargs: Any):
         MarketDataProvider.__init__(self, source, **kwargs)
         LayeredCacheMixin.__init__(self)
@@ -551,6 +584,32 @@ class FixedRateBondsMDP(MarketDataProvider[_GenericPricable], LayeredCacheMixin)
             t.start()
         else:
             _do_flush()
+
+    def _citivelo_option(self, name: str, kwargs: Optional[Dict[str, Any]] = None, *, default: Any = None) -> Any:
+        """A Velocity bond option, from the REQUEST first and the constructor second.
+
+        Both levels exist because both callers exist and only one of them can pass
+        a request kwarg. ``_get_multi_pricers(kwargs=...)`` is reachable when
+        something calls the MDP directly; a ``TimeseriesBuilder`` run is not -
+        ``TB.FixedRateBondsTB`` calls ``bulk_get_data`` with a fixed signature and
+        forwards nothing, so without a constructor level there is no way to make a
+        timeseries build read ``offline=True``.
+
+        That matters more than convenience. A build phase that cannot be forced
+        offline is a build phase that opens Excel on a cache miss - on a scheduled
+        task, against an add-in whose memory only ever grows and that only a human
+        restart clears. It wedged at 5,249 MB on 2026-08-07.
+
+        Request beats constructor so a single call can still opt out, and ``None``
+        means "not specified" at both levels rather than "off": passing
+        ``offline=None`` explicitly must not defeat a constructor that said True.
+        """
+        if kwargs is not None:
+            value = kwargs.get(name)
+            if value is not None:
+                return value
+        value = self.config.get(name)
+        return default if value is None else value
 
     def _resolve_aliases_bulk(
         self,
@@ -1102,6 +1161,13 @@ class FixedRateBondsMDP(MarketDataProvider[_GenericPricable], LayeredCacheMixin)
             #   citivelo_values  override fetcher.DEFAULT_BOND_VALUES. Pass OAS here
             #                    (with a wide eod_lookback) - it is deliberately not
             #                    a default, being empty over any short window.
+            #   citivelo_universe  a BondUniverse to resolve against, instead of the
+            #                    committed 349-name catalog. See _citivelo_option.
+            #
+            # Each of those may ALSO be given to the constructor, which is the only
+            # route a TimeseriesBuilder run has - TB.FixedRateBondsTB calls
+            # bulk_get_data with a fixed kwarg set and passes nothing through. See
+            # _citivelo_option.
             #
             # bulk_get_data has NO branch for this source: a timeseries query over
             # it raises NotImplementedError. Loud, not silent, and the per-date
@@ -1146,9 +1212,12 @@ class FixedRateBondsMDP(MarketDataProvider[_GenericPricable], LayeredCacheMixin)
                 self._ensure_pricer_cache()
                 cache = getattr(self, self._FRB_PRICER_CACHE)
                 cache_stamp = (
-                    request.eod_date.isoformat()
-                    if request.mode == "eod"
-                    else request.wire_instant.isoformat()
+                    f"{self.CITIVELO_PRICER_CACHE_VERSION}-"
+                    + (
+                        request.eod_date.isoformat()
+                        if request.mode == "eod"
+                        else request.wire_instant.isoformat()
+                    )
                 )
 
             to_fetch: "OrderedDict[str, str]" = OrderedDict()
@@ -1166,16 +1235,28 @@ class FixedRateBondsMDP(MarketDataProvider[_GenericPricable], LayeredCacheMixin)
                 # strict=False: one bond outside Citi's 349-name UST subset must not
                 # lose the other 299 in a warm. Citi carries a liquid subset, so
                 # off-the-runs, bills, TIPS and just-auctioned issues do miss.
+                #
+                # ... and a HISTORICAL query misses far more than that, which is why
+                # the universe is overridable. Citi's listing is today's set: over
+                # ten years the 28 constant-maturity aliases resolve to 597 bonds
+                # and only 307 are still listed. The other 290 matured, and a
+                # matured bond is unrecoverable from CVCURVEBOND. Their TAGS still
+                # serve - measured on ten of them - so a backfill passes
+                # citivelo_universe=historic_universe(...) and gets the whole
+                # chained series instead of a hole wherever the constituent has
+                # since redeemed.
                 resolved, failures = resolve_bonds(
-                    list(dict.fromkeys(to_fetch.values())), strict=False
+                    list(dict.fromkeys(to_fetch.values())),
+                    universe=self._citivelo_option("citivelo_universe", kwargs),
+                    strict=False,
                 )
                 for token, reason in failures.items():
                     _logger.warning("citivelo bonds: %s not resolvable to a quoted bond: %s", token, reason)
 
                 fetcher = CitiVeloBondFetcher(
-                    quotes=kwargs.get("citivelo_quotes"),
-                    offline=bool(kwargs.get("offline", False)),
-                    values=kwargs.get("citivelo_values"),
+                    quotes=self._citivelo_option("citivelo_quotes", kwargs),
+                    offline=bool(self._citivelo_option("offline", kwargs, default=False)),
+                    values=self._citivelo_option("citivelo_values", kwargs),
                 )
                 try:
                     bond_quotes = fetcher.fetch(
@@ -2041,68 +2122,141 @@ class FixedRateBondsMDP(MarketDataProvider[_GenericPricable], LayeredCacheMixin)
         timestamps: Sequence[DateLike],
         symbols: Sequence[str],
         force_refresh: bool = False,
-    ) -> int:
-        """Warm the Velocity tag cache for a whole date range in one call.
+    ) -> "_CitiVeloPrefetch":
+        """Warm the Velocity tag cache for a whole range, EOD and intraday alike.
 
-        The Velocity tag cache stores a whole SERIES per tag, not a row per date,
-        so fetching per date re-requests the same history once per date. One
-        ``CVTSHIST`` over ``[min(timestamps), max(timestamps)]`` warms every date
-        at once, and every subsequent per-date build is a cache read that opens no
-        workbook. That matters beyond speed: the add-in's memory only ever grows
-        and only a human restart clears it, so N workbook round trips for one
-        backfill is the failure mode the ceiling exists to prevent.
+        The Velocity tag cache stores a whole SERIES per tag, not a row per
+        instant, so fetching per point re-requests the same history once per
+        point. One warm over ``[min, max]`` covers every point, and every
+        subsequent per-point build is a cache read that opens no workbook. That
+        matters beyond speed: the add-in's memory only ever grows and only a
+        human restart clears it, so N workbook round trips for one backfill is
+        the failure mode the ceiling exists to prevent.
 
-        Aliases are resolved at the LATEST timestamp, so a backfill covers the
-        bonds that are on the run at the end of the range. Earlier dates whose
-        on-the-run differs are still correct - ``_process_one`` re-resolves per
-        date and any tag this missed is simply fetched then.
+        The two modes are warmed SEPARATELY, because they are different tag
+        cliffs and different value sets
+        -------------------------------------------------------------------
+        EOD warms ``DAILY`` over ``[min_date, max_date]`` in one request, exactly
+        as before. Its per-date reads stay online, and they cost nothing extra:
+        ``CitiVeloBondFetcher._fetch_frame`` takes its CACHED branch for
+        ``DAILY`` whatever the offline flag says, so a warm range is answered off
+        disk and only the 21-day lookback head before ``min_date`` can reach
+        Excel - once, on the first date, not once per date.
+
+        INTRADAY is the case this method used to miss entirely, and missing it
+        cost 500 s of ``time.sleep`` in a 593 s, 60-point profile. An intraday
+        range prefetched nothing, so every point took ``_fetch_frame``'s ONLINE
+        branch - ``windowed.fetch_windowed``, which talks to the COM client
+        directly and therefore bypasses the tag cache in both directions. Warming
+        it here means the per-point reads can be served offline; see
+        :meth:`bulk_get_data`, which only does that when this reports success.
+
+        ``MI01`` also has a measured downsampling cliff at 6 days, which the
+        online chunker used to own. The warm goes through
+        ``CitiVeloBondFetcher.prefetch`` -> ``windowed.warm_windows``, which
+        bounds every request by it.
+
+        Aliases are resolved at BOTH ends of the range
+        ----------------------------------------------
+        The old comment said earlier dates whose on-the-run differs are "still
+        correct - ``_process_one`` re-resolves per date and any tag this missed is
+        simply fetched then". That backstop is exactly what going offline
+        removes: a missed tag is then an empty column, not a live call. So the
+        union of the resolutions at the first and last date is warmed, and a
+        range spanning an auction keeps both the old and the new on-the-run.
+
+        Resolving at both ends is still only TWO days, which is right for a
+        nightly range and wrong for a decade: over ten years the 28
+        constant-maturity aliases pass through 597 bonds, so a two-day union warms
+        a few dozen and every other date reads a tag nobody fetched. A deep
+        backfill therefore warms its own constituent set first and then builds
+        with this MDP ``offline`` - see
+        ``scripts/citivelo_ust_timeseries_warm.py``.
+
+        Skipped entirely when this MDP is configured ``offline``. That flag means
+        "never open a workbook", and this is the one call on the path that would.
 
         Returns
         -------
-        int
-            Tags requested. ``0`` when nothing resolved to a bond Citi quotes.
+        _CitiVeloPrefetch
+            Tag count, and a per-mode flag that is True only when the warm
+            actually put data in the cache.
         """
         from MDP.CitiVelocityExcel.bonds.fetcher import CitiVeloBondFetcher
         from MDP.CitiVelocityExcel.bonds.resolution import resolve_bonds
         from MDP.FixedRateBonds.reference_data_cache.ust_reference_data import update_reference_data
+        from MDP.IRSwaps.CITIVELO_EXCEL.timestamps import resolve_request
 
-        dates = [
-            (ts.date() if hasattr(ts, "date") else ts)
-            for ts in timestamps
-            if not (isinstance(ts, str) and ts.strip().lower() == "live")
-        ]
-        if not dates:
-            return 0
-        start, end = min(dates), max(dates)
+        if bool(self._citivelo_option("offline", default=False)):
+            _logger.info("citivelo prefetch: skipped, this MDP is configured offline")
+            return _CitiVeloPrefetch()
 
-        ref_df = update_reference_data(source="fiscaldata", force_refresh=force_refresh)
-        ref_df = _filter_and_rank_ref_df(ref_df, end)
-        alias_to_cusip, _ = self._resolve_aliases_bulk(list(symbols), end, ref_df=ref_df)
-        if not alias_to_cusip:
-            return 0
+        eod_dates: List[datetime.date] = []
+        intraday_instants: List[datetime.datetime] = []
+        for ts in timestamps:
+            if isinstance(ts, str) and ts.strip().lower() == "live":
+                continue
+            # resolve_request, not an isinstance ladder: pd.Timestamp subclasses
+            # datetime subclasses date, so a ladder is wrong in both directions
+            # and a midnight Timestamp means EOD. This is the same function the
+            # per-point read decides its own mode with, so the two cannot
+            # disagree about which bucket a timestamp is in.
+            request = resolve_request(ts)
+            if request.mode == "eod":
+                eod_dates.append(request.eod_date)
+            elif request.mode == "intraday":
+                intraday_instants.append(request.wire_instant)
+
+        if not eod_dates and not intraday_instants:
+            return _CitiVeloPrefetch()
+
+        all_dates = list(eod_dates) + [i.date() for i in intraday_instants]
+        first, last = min(all_dates), max(all_dates)
+
+        ref_raw = update_reference_data(source="fiscaldata", force_refresh=force_refresh)
+        cusips: List[str] = []
+        for as_of in dict.fromkeys((last, first)):
+            ref_df = _filter_and_rank_ref_df(ref_raw, as_of)
+            alias_to_cusip, _ = self._resolve_aliases_bulk(list(symbols), as_of, ref_df=ref_df)
+            cusips.extend(alias_to_cusip.values())
+        if not cusips:
+            return _CitiVeloPrefetch()
 
         resolved, failures = resolve_bonds(
-            list(dict.fromkeys(alias_to_cusip.values())), strict=False
+            list(dict.fromkeys(cusips)),
+            universe=self._citivelo_option("citivelo_universe"),
+            strict=False,
         )
         for token, reason in failures.items():
             _logger.info("citivelo prefetch: %s not quoted by Citi, skipped (%s)", token, reason)
         if not resolved:
-            return 0
+            return _CitiVeloPrefetch()
 
-        fetcher = CitiVeloBondFetcher()
+        fetcher = CitiVeloBondFetcher(values=self._citivelo_option("citivelo_values"))
         try:
-            plan = fetcher.plan(list(resolved.values()))
-            tags = [t for entry in plan.values() for t in entry["tags"].values()]
-            if not tags:
-                return 0
-            _logger.info(
-                "citivelo prefetch: %d tags over %d bonds, %s..%s",
-                len(tags), len(plan), start, end,
-            )
-            fetcher.quotes().frame(
-                tags, "DAILY", start=start, end=end, force_refresh=force_refresh
-            )
-            return len(tags)
+            tags = 0
+            eod_ok = intraday_ok = False
+            if eod_dates:
+                # lookback=0 keeps the DAILY request bounds byte-for-byte what
+                # they were before intraday joined this method. The EOD per-date
+                # read stays ONLINE, so it still tops up its own 21-day head;
+                # widening the warm here would change the shape of the nightly
+                # job's request for no measured gain.
+                result = fetcher.prefetch(
+                    list(resolved.values()), min(eod_dates), max(eod_dates),
+                    mode="eod", lookback=datetime.timedelta(0),
+                    force_refresh=force_refresh,
+                )
+                tags += len(result.tags)
+                eod_ok = result.ok
+            if intraday_instants:
+                result = fetcher.prefetch(
+                    list(resolved.values()), min(intraday_instants), max(intraday_instants),
+                    mode="intraday", force_refresh=force_refresh,
+                )
+                tags += len(result.tags)
+                intraday_ok = result.ok
+            return _CitiVeloPrefetch(tags=tags, eod_ok=eod_ok, intraday_ok=intraday_ok)
         finally:
             fetcher.close()
 
@@ -2176,30 +2330,32 @@ class FixedRateBondsMDP(MarketDataProvider[_GenericPricable], LayeredCacheMixin)
                     )
 
             # ----------------------------------------------------------------
-            # CITIVELO PREFETCH: one CVTSHIST for the WHOLE range, then every
-            # per-date build is a cache read with no Excel.
+            # CITIVELO PREFETCH: one warm for the WHOLE range, then every
+            # per-point build is a cache read with no Excel.
             #
-            # Without this the loop below would open a workbook per date, which
+            # Without this the loop below would open a workbook per point, which
             # is both slow and the thing the memory ceiling exists to avoid -
             # the add-in's memory only ever grows. The tag cache stores whole
-            # series, so a per-day loop re-fetches the same data once per day;
-            # one call over [min, max] warms every date at once. It is also why
-            # a real branch beats "just loop get_data" here.
+            # series, so a per-point loop re-fetches the same history once per
+            # point; one warm over [min, max] covers them all. It is also why a
+            # real branch beats "just loop get_data" here.
             #
             # Failure is deliberately NOT fatal: a warm that already populated
             # the cache makes this a no-op, and a transport failure should
-            # surface per date below (where it is classified) rather than as one
+            # surface per point below (where it is classified) rather than as one
             # opaque error for the whole range.
             # ----------------------------------------------------------------
+            _citivelo_prefetch = _CitiVeloPrefetch()
             if self.source.upper() in ("USTS_CITIVELO-QL", "USTS_CITIVELO-RL"):
                 try:
-                    self._citivelo_prefetch_range(
+                    _citivelo_prefetch = self._citivelo_prefetch_range(
                         timestamps=timestamps,
                         symbols=base_cusips,
                         force_refresh=force_refresh,
                     )
                 except Exception as exc:  # noqa: BLE001 - reported, then retried per date
                     _logger.warning("citivelo bulk prefetch failed (%s); falling back to per-date reads", exc)
+                    _citivelo_prefetch = _CitiVeloPrefetch()
 
             def _process_one(ts: DateLike, symbols: List[str]) -> Tuple[DateLike, Dict[str, "_FixedRateBondGenericPricer"]]:
                 # --- alias resolution per timestamp ---
@@ -2602,16 +2758,33 @@ class FixedRateBondsMDP(MarketDataProvider[_GenericPricable], LayeredCacheMixin)
                     raise NotImplementedError("For RL, pass an intraday datetime for timestamp or ‘live’.")
 
                 # -------------------- Citi Velocity --------------------
-                # The batched historical read this wants is one CVTSHIST for the
+                # The batched historical read this wants is one warm for the
                 # whole range, which _citivelo_prefetch_range has already done
                 # above; every call here is then a tag-cache read with no Excel.
                 # Delegating to _get_multi_pricers keeps ONE implementation of
                 # the resolution, provenance and staleness rules rather than a
                 # second copy that drifts.
+                #
+                # OFFLINE for intraday, and only once the warm has actually put
+                # data in the cache. This is the flag that closes the read path:
+                # _fetch_frame takes its cached branch when the freq is DAILY *or*
+                # the fetcher is offline, so without it an intraday point goes to
+                # windowed.fetch_windowed, which takes the COM client directly and
+                # bypasses the tag cache in both directions - one live Excel round
+                # trip per minute bar, measured at 500 s of sleep over 60 points.
+                #
+                # EOD is deliberately left online: its cached branch is taken on
+                # the freq alone, so it is already served from disk, and the flag
+                # would only stop it topping up the 21-day head it legitimately
+                # needs on the first date of a range.
                 elif self.source.upper() in ("USTS_CITIVELO-QL", "USTS_CITIVELO-RL"):
+                    from MDP.IRSwaps.CITIVELO_EXCEL.timestamps import resolve_request
+
+                    ts_kwargs: Dict[str, Any] = {"force_refresh": force_refresh}
+                    if _citivelo_prefetch.intraday_ok and resolve_request(ts).mode == "intraday":
+                        ts_kwargs["offline"] = True
                     return ts, (self._get_multi_pricers(
-                        cusips=symbols, timestamp=ts,
-                        kwargs={"force_refresh": force_refresh},
+                        cusips=symbols, timestamp=ts, kwargs=ts_kwargs,
                     ) or {})
 
                 # -------------------- Unsupported source --------------------

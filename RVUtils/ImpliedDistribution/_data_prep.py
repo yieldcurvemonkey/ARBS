@@ -80,6 +80,7 @@ def smile_to_rnd_input(
         so callers that need the JPM method should pass ``False``.
     """
     prep_warnings: List[str] = []
+    oi_screen_skipped = False
     params = smile.params
     fwd = float(params.forward_price)
     tte = float(params.time_to_expiry)
@@ -136,6 +137,37 @@ def smile_to_rnd_input(
         # Use observed premiums when the smile carries them; otherwise fall
         # back to raw market vols. OTM puts are converted into equivalent call
         # premiums via put-call parity, matching JPM Appendix A.
+        # An open-interest screen is only meaningful when the vendor published open interest.
+        # Barchart's queryeod feed carries none for the newest session -- the exchange
+        # disseminates it the following morning -- so a chain fetched for the latest date can
+        # arrive with the field unusable on every single leg. Applying the screen there does
+        # not filter the chain, it deletes it, and the min_strikes fallback below then quietly
+        # substitutes a SABR model density for the observed-premium one the caller asked for.
+        # A screen that cannot discriminate is skipped, loudly, rather than applied.
+        oi_min = raw_market_open_interest_min
+        if oi_min is not None:
+            n_usable_oi = 0
+            for pt in smile.points:
+                oi = getattr(pt, "open_interest", None)
+                if oi is None:
+                    continue
+                try:
+                    oi_f = float(oi)
+                except (TypeError, ValueError):
+                    continue
+                if math.isfinite(oi_f) and oi_f > 0.0:
+                    n_usable_oi += 1
+            if n_usable_oi == 0:
+                oi_screen_skipped = True
+                oi_min = None
+                prep_warnings.append(
+                    f"open interest is unavailable on all {len(smile.points)} smile points "
+                    f"(vendor has not published it for this session), so the >= "
+                    f"{float(raw_market_open_interest_min):g} liquidity screen was SKIPPED; "
+                    f"premiums are unscreened for liquidity"
+                )
+
+        n_dropped_oi = 0
         strike_map: dict[float, tuple[Optional[float], Optional[float], bool, bool]] = {}
         for pt in smile.points:
             k = float(pt.strike_price)
@@ -146,15 +178,18 @@ def smile_to_rnd_input(
             if raw_market_otm_only and not is_otm:
                 continue
 
-            if raw_market_open_interest_min is not None:
+            if oi_min is not None:
                 oi = getattr(pt, "open_interest", None)
                 if oi is None:
+                    n_dropped_oi += 1
                     continue
                 try:
                     oi_f = float(oi)
                 except (TypeError, ValueError):
+                    n_dropped_oi += 1
                     continue
-                if not math.isfinite(oi_f) or oi_f < float(raw_market_open_interest_min):
+                if not math.isfinite(oi_f) or oi_f < float(oi_min):
+                    n_dropped_oi += 1
                     continue
 
             market_price: Optional[float] = None
@@ -221,8 +256,9 @@ def smile_to_rnd_input(
         n_above = int(np.sum(strikes > fwd))
         if len(strikes) < min_strikes:
             msg = (
-                f"raw market filtering left only {len(strikes)} strikes (need >= {min_strikes}"
-                f"); "
+                f"raw market filtering left only {len(strikes)} strikes of "
+                f"{len(smile.points)} smile points (need >= {min_strikes}; "
+                f"{n_dropped_oi} dropped by the open-interest screen); "
             )
             if not allow_sabr_fallback:
                 raise ValueError(
@@ -256,6 +292,9 @@ def smile_to_rnd_input(
         source = "sabr_extrapolated"
     elif use_sabr_vols:
         source = "sabr_smile"
+    elif oi_screen_skipped:
+        # Observed premiums, but not the JPM method: its liquidity screen never ran.
+        source = "market_jpm_no_oi_screen"
     elif raw_market_open_interest_min is not None or raw_market_otm_only:
         source = "market_jpm"
     else:

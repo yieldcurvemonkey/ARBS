@@ -56,15 +56,25 @@ def universe() -> BondUniverse:
 
 
 def test_parser_handles_the_whole_harvested_universe(universe: BondUniverse):
-    """Measured over all 2,162 real descriptions, not a handful of examples.
+    """Measured over every real description in the catalog, not a handful.
 
     The residual non-parses are floating-rate notes and one prospectus line -
     instruments this module deliberately refuses rather than mis-prices. The
     failures are printed in the assertion message so a regression names them.
+
+    The size is a FLOOR, not an equality. It used to read ``== 2162``, the size of
+    the first CVCURVEBOND harvest, which made a pinned snapshot out of a catalog
+    whose whole design is an accumulating union that never removes: seeding the
+    525 matured USTs that Citi quotes but no longer lists took it to 2,690 and the
+    test failed for growing, which is the one thing it should never object to.
+    Shrinking still fails it, and shrinking is the regression that matters.
     """
     frame = universe.to_frame()
     total = len(frame)
-    assert total == 2162
+    assert total >= 2162, (
+        f"the catalog holds {total} bonds, fewer than the 2,162 of the original "
+        f"harvest - it is an accumulating union and must never lose entries"
+    )
     # Maturity comes from the catalog's own column where the description
     # does not yield one, so it is complete. The COUPON is what a floater
     # has no fixed value for, and that is what parse_failures() reports.

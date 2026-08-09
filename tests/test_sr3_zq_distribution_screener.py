@@ -18,11 +18,16 @@ def test_regime_bucket_enum_has_four_members():
     assert {m.value for m in RegimeBucket} == {"calm", "stress", "pivot", "hike"}
 
 
-def test_trade_flag_kind_has_four_members():
+def test_trade_flag_kinds_are_the_four_spec_families_plus_the_two_copula_ones():
+    """The spec's four, plus the copula pair. lambda_dependence is a VIEW on the coupling;
+    lambda_arbitrage is the separate hard tier where the RND variance lies outside what any
+    coupling of the ZQ marginals can produce. They are deliberately distinct kinds: one is
+    tradeable only against a prior, the other is a static arbitrage."""
     from RVUtils.SR3ZQDistributionScreener import TradeFlagKind
 
     assert {m.value for m in TradeFlagKind} == {
         "vol_cone", "skew", "tail", "cross_quarter",
+        "lambda_dependence", "lambda_arbitrage",
     }
 
 

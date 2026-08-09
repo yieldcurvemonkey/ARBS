@@ -189,6 +189,30 @@ class ImpliedDistributionSnapshot:
     gm_result: Optional[GaussianMixtureResult]
     bkm_result: Optional["BKMResult"] = None
 
+    @property
+    def strike_source(self) -> Optional[str]:
+        """Provenance of the premiums the density was fitted to.
+
+        ``"market_jpm"`` observed OTM premiums, open-interest screened (the JPM method);
+        ``"market_jpm_no_oi_screen"`` observed premiums but the screen was inapplicable;
+        ``"market_listed"`` observed premiums, unscreened; ``"sabr_smile"`` /
+        ``"sabr_extrapolated"`` the calibrated SABR model evaluated at strikes -- a model
+        density, not an observed one. Machine-readable because the alternative, a warning
+        string, is missable, and a SABR density is unimodal by construction: read as an
+        observation it would confirm a unimodality thesis that was never tested.
+        """
+        for result in (self.bl_result, self.bkm_result, self.gm_result):
+            source = getattr(getattr(result, "input", None), "strike_source", None)
+            if source:
+                return str(source)
+        return None
+
+    @property
+    def is_model_density(self) -> bool:
+        """True when the density came from the SABR model rather than observed premiums."""
+        source = self.strike_source
+        return source is not None and source.startswith("sabr")
+
     def all_warnings(self) -> Tuple[str, ...]:
         """Return all child warnings prefixed with their source (``bl::`` / ``gm::`` / ``bkm::``)."""
         out: List[str] = []

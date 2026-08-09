@@ -748,6 +748,76 @@ def warm_citivelo_frb_values(start, end):
     )
 
 
+def warm_citivelo_ust_timeseries(start, end):
+    """Job 11 [VALUE]: the UST constant-maturity grid + every listed issue, EOD.
+
+    The daily SLICE of ``scripts/citivelo_ust_timeseries_warm.py``. The ten-year
+    backfill is a separate, deliberate one-off:
+
+        python scripts/citivelo_ust_timeseries_warm.py fetch --years 10
+        python scripts/citivelo_ust_timeseries_warm.py build --years 10
+
+    Only the BUILD phase runs here, and that is the point of the split. Build
+    drives no Excel at all - the MDP is constructed ``offline=True``, so a tag
+    the cache does not hold produces an empty column instead of a workbook. The
+    tags themselves come from job "CITIVELO UST universe tags EOD", which is why
+    this declares ``requires``: run the other way round and an unattended job
+    reaches for a live add-in whose memory only a human restart clears.
+
+    Measured 2026-08-08 on this machine, offline, against the warmed tag cache:
+    **377 symbols (28 aliases + 349 issues) x 2 values over 6 business days =
+    4,488 computed cells in 372 s**, so the default five-day window is about five
+    minutes. Widen with ``CITIVELO_UST_TS_DAYS``; drop the specific issues with
+    ``CITIVELO_UST_TS_CUSIPS=none`` if that is ever too much.
+
+    That cost does NOT scale with the catalog, and the reason is worth knowing.
+    The catalog has since grown to 877 USA.USD.GOVT ISINs by absorbing the
+    matured bonds, but a symbol is only priced over its own life clipped to the
+    window - so a five-day window produces 380 (symbol, year) slices out of 905
+    candidates, the other 525 being bonds that redeemed years ago. A nightly job
+    that priced every catalogued name over the requested window regardless would
+    have doubled overnight without anyone touching this file.
+
+    A rolling window rather than the full history, for the same reason as the tag
+    warm: the resume key includes the window, so a nightly run whose start moves
+    every night would look entirely un-warm and re-price a decade. The manifest
+    lives beside the tag cache, NOT in the repo - this runs from the primary
+    checkout and must not leave a tracked file dirty every morning.
+
+    Overlaps job "CITIVELO FRB values EOD" on 14 aliases x 2 values. That is
+    waste, not damage: both jobs compute the same numbers from the same tag cache
+    into the same ``(symbol, date)`` keys, and ``append_many_rows`` upserts rather
+    than replacing a partition. Folding the older job into this one is the
+    obvious follow-up; it is left alone here so this change adds coverage without
+    altering what already runs.
+    """
+    from scripts.citivelo_ust_timeseries_warm import (
+        DEFAULT_VALUES,
+        WarmPlan,
+        _parse_cusips,
+        build,
+        default_aliases,
+    )
+
+    days = int(os.environ.get("CITIVELO_UST_TS_DAYS", "5"))
+    cusips_env = os.environ.get("CITIVELO_UST_TS_CUSIPS")
+    plan = WarmPlan(
+        start=end - datetime.timedelta(days=days),
+        end=end,
+        aliases=default_aliases(),
+        cusips=_parse_cusips([cusips_env] if cusips_env else None),
+        values=DEFAULT_VALUES,
+    )
+    log.info("  %s", plan.describe().replace("\n", "\n  "))
+    out = build(plan, n_jobs=N_JOBS)
+    if out.get("stopped"):
+        raise RuntimeError(
+            f"UST timeseries build stopped after {out['done']}/{out['of']} slices: "
+            f"{out['reason']}. Progress is in the manifest; re-run to continue."
+        )
+    return None
+
+
 def warm_citivelo_swap_spread_values(start, end):
     """Job 10 [VALUE]: Citi's published swap spreads, into the computed TS cache.
 
@@ -825,6 +895,12 @@ WARM_JOBS = [
     WarmJob("CitiVelo intraday timeseries", warm_citivelo_timeseries_intraday,
             requires=(_CV_CURVE_STORE,)),
     WarmJob("CITIVELO FRB values EOD", warm_citivelo_frb_values,
+            requires=(_CV_BOND_TAGS,)),
+    # Same requirement, and it is the load-bearing one: this job builds OFFLINE,
+    # so a tag the EOD universe warm has not banked comes back as an empty column
+    # rather than as a live Excel call. Silent, and it would populate the computed
+    # store with holes that look like days Citi served nothing.
+    WarmJob("CITIVELO UST timeseries values EOD", warm_citivelo_ust_timeseries,
             requires=(_CV_BOND_TAGS,)),
     WarmJob("CITIVELO swap spreads EOD", warm_citivelo_swap_spread_values,
             requires=(_CV_SWAP_SPREAD_TAGS,)),

@@ -101,7 +101,15 @@ def _coverage_fixture():
         for v in uni.available_values(d.isin):
             cov.setdefault(v, set()).add(d.isin)
 
-    partial = {v: s for v, s in cov.items() if 0 < len(s) < len(all_isins)}
+    # OAS is excluded from the candidates because it already has a JOB in this
+    # file: it is the "served but empty in this window" case, and _eod_fetcher
+    # deliberately does not serve it. Once the catalog was seeded with the matured
+    # bonds Citi quotes but does not list, OAS became the value with the most even
+    # partial coverage and was picked as SPLIT_VALUE - so _eod_fetcher appended it
+    # to the served set and four tests that assert `"OAS" in quote.empty` began
+    # failing against an OAS of -41.0. Two derived fixtures collided over one
+    # value; keeping them disjoint is the fix.
+    partial = {v: s for v, s in cov.items() if 0 < len(s) < len(all_isins) and v != "OAS"}
     assert partial, ("no value has partial UST coverage, so nothing can exercise "
                      "the 'never request an unserved value' rule")
     split = max(partial, key=lambda v: min(len(partial[v]), len(all_isins) - len(partial[v])))
@@ -171,9 +179,16 @@ _COVERAGE_VALUES = tuple(dict.fromkeys(
     tuple(DEFAULT_BOND_VALUES) + ("OAS", SPLIT_VALUE, UNSERVED_VALUE)))
 #: The base each bond's numbers are built from, so an assertion can name the
 #: value it expects instead of restating an arithmetic coincidence.
+#: Distinct, and also POSSIBLE. The second base was 88.0, which put this fixture's
+#: YIELD at ``88.0 - 95.0 = -7.0``; ``bonds.sanity`` refuses that, correctly - the
+#: most negative yield Citi served in ten years of US tape is -2.39725. Which bond
+#: lands on which base depends on the catalog, so the old value failed here only on
+#: a machine whose catalog had been seeded with matured bonds, which is the worst
+#: way for a fixture to be wrong. Distinctness - the property the offsets exist for
+#: - is untouched: the four bases give YIELDs of 4, 1, 6 and 2.
 _BASE = {
     ISIN_WITH_ASW_USD: 99.0,
-    ISIN_WITHOUT_ASW_USD: 88.0,
+    ISIN_WITHOUT_ASW_USD: 96.0,
     ISIN_JGB: 101.0,
     ISIN_MEX: 97.0,
 }

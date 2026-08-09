@@ -48,6 +48,8 @@ from MDP.IRSwaps.CITIVELO_EXCEL.swap_spreads import (
     fetch_swap_spread,
     fetch_swap_spreads,
     indices_with_swap_spread,
+    reset_session_warm_cache,
+    session_warm_keys,
     swap_spread_for_curve,
     swap_spread_history,
     swap_spread_tag,
@@ -71,6 +73,19 @@ USD_SOFR_AXIS = ("1M", "3M", "6M", "1Y", "2Y", "3Y", "5Y", "7Y", "10Y", "20Y", "
 
 #: The sentinel value. See the module docstring.
 SENTINEL = -27.35
+
+
+@pytest.fixture(autouse=True)
+def _forget_warmed_sessions():
+    """The session memo is process-level, so it must not cross tests.
+
+    Without this, a test that warms 2026-08-06 makes the NEXT test's warm a
+    no-op and its request-count assertion measures the wrong thing - passing or
+    failing depending on collection order, which is the worst kind of green.
+    """
+    reset_session_warm_cache()
+    yield
+    reset_session_warm_cache()
 
 
 # ------------------------------------------------------------------ #
@@ -520,15 +535,97 @@ def test_a_tenor_that_served_nothing_raises_and_says_not_to_use_cvmetadata():
         fetch_swap_spread("USD_SOFR", "10Y", datetime.date(2026, 8, 6), quotes=stub)
 
 
-def test_history_refuses_an_intraday_frequency_and_names_the_windowed_fetcher():
-    with pytest.raises(ValueError, match="fetch_windowed"):
-        swap_spread_history(
-            "USD_SOFR",
-            ["10Y"],
-            start=datetime.date(2026, 1, 1),
-            end=datetime.date(2026, 8, 6),
-            freq="MI01",
-        )
+def test_history_serves_mi01_in_requests_held_under_the_cliff():
+    """This used to refuse everything but DAILY and point at ``fetch_windowed``.
+
+    The refusal was re-pointed rather than deleted: ``fetch_windowed`` takes a
+    connected client and writes NOTHING to the tag cache, so it was the wrong
+    door for a caller who wants a series they will read twice. What the refusal
+    was protecting - the span cliff - is now an assertion on the requests that
+    actually go out.
+
+    Note this test passes ``quotes=``. The version it replaced did not, so it
+    built a live ``CitiVeloQuotes`` and reached a signed-in Excel from a module
+    whose docstring promises "no Excel, no network, no cache" - which is how the
+    span-merge below was found, but not a property to keep.
+    """
+    from MDP.CitiVelocityExcel.windowed import MAX_SPAN
+
+    # Minute-spaced on purpose: the chunker's own downsampling guard runs on
+    # every window it reads back, so an hourly fixture makes the fixture the
+    # thing under test.
+    index = pd.date_range("2026-07-06", "2026-07-20", freq="min")
+    stub = _StubQuotes(_series(tenors=("10Y",), index=index))
+    frame = swap_spread_history(
+        "USD_SOFR",
+        ["10Y"],
+        start=datetime.datetime(2026, 7, 6),
+        end=datetime.datetime(2026, 7, 20),
+        freq="MI01",
+        quotes=stub,
+    )
+    assert list(frame.columns) == ["10Y"]
+    assert len(stub.calls) >= 2, "a 14-day MI01 range cannot be one request"
+    for tags, freq, kwargs in stub.calls:
+        assert freq == "MI01"
+        span = kwargs["end"] - kwargs["start"]
+        assert span <= MAX_SPAN["MI01"], f"asked for {span}, past the measured MI01 cliff"
+
+
+def test_every_uncached_history_chunk_is_forced_so_the_cache_cannot_widen_it():
+    r"""The trap that made the first version of this wrong, and silently.
+
+    ``CitiVeloTagCache.missing_spans`` models coverage as ONE interval and returns
+    the whole gap between the request and that interval as a single span. So
+    chunking the REQUEST does not chunk the FETCH: measured 2026-08-08, five-day
+    windows over 2026-01-01..08-06 against a cache holding 07-24..07-29 went out
+    as one ``2026-01-01..2026-07-24`` request - 205 days - and the add-in served
+    HOURLY rows under an ``MI01`` key. The first reading of that result was
+    "Citi only retains three weeks of minutes", which is false: an exact five-day
+    request for 2026-03-02..03-06 returns 6,185 rows at one-minute spacing.
+
+    ``force_refresh=True`` is the one path in ``cache.get`` that sends the bounds
+    it was handed verbatim (``spans = [(start, end)]``), so it is what holds the
+    fetch to the window. Deleting it puts the 205-day request back.
+    """
+    # Minute-spaced on purpose: the chunker's own downsampling guard runs on
+    # every window it reads back, so an hourly fixture makes the fixture the
+    # thing under test.
+    index = pd.date_range("2026-07-06", "2026-07-20", freq="min")
+    stub = _StubQuotes(_series(tenors=("10Y",), index=index))
+    swap_spread_history(
+        "USD_SOFR",
+        ["10Y"],
+        start=datetime.datetime(2026, 7, 6),
+        end=datetime.datetime(2026, 7, 20),
+        freq="MI01",
+        quotes=stub,
+    )
+    assert stub.calls, "no request went out at all"
+    assert all(kwargs.get("force_refresh") for _t, _f, kwargs in stub.calls), (
+        "an unforced chunk lets missing_spans merge it back into the whole gap"
+    )
+
+
+def test_a_bare_end_date_on_an_intraday_history_means_the_whole_day():
+    """``end=date(...)`` at MI01 must not collapse to that day's MIDNIGHT.
+
+    Left as midnight it asks for one minute of the last day and returns a frame
+    that looks like an empty session - the same "asked for a day, got a moment"
+    mistake the session warm exists to fix, in the other direction.
+    """
+    index = pd.date_range("2026-07-16 00:00", "2026-07-17 23:00", freq="min")
+    stub = _StubQuotes(_series(tenors=("10Y",), index=index))
+    frame = swap_spread_history(
+        "USD_SOFR",
+        ["10Y"],
+        start=datetime.date(2026, 7, 16),
+        end=datetime.date(2026, 7, 17),
+        freq="MI01",
+        quotes=stub,
+    )
+    assert frame.index.max() == pd.Timestamp("2026-07-17 23:00")
+    assert stub.calls[-1][2]["end"] == datetime.datetime(2026, 7, 17, 23, 59, 59)
 
 
 def test_history_returns_tenor_named_columns():
@@ -1169,3 +1266,455 @@ def test_appending_the_member_did_not_renumber_the_existing_ones():
     assert IRSwapValue.SPREADOVER.value == 10
     assert IRSwapValue.MMSS.value == 11
     assert IRSwapValue.CITIVELO_SWAP_SPREAD.value == max(v.value for v in IRSwapValue)
+
+
+# ------------------------------------------------------------------ #
+#         the session warm: what makes an intraday RANGE usable      #
+# ------------------------------------------------------------------ #
+#
+# These go through the REAL CitiVeloTagCache rather than _StubQuotes, and that
+# is the whole point. The per-minute pathology did not live in this module: it
+# lived in the interaction between this module's window and
+# CitiVeloTagCache.missing_spans, which re-requests the tail whenever the
+# request ends past coverage().last. A hand-written quotes double has that
+# logic stubbed out and cannot see it - measured on the user's own run, a
+# 780-minute session took ~12 minutes and grew the cache one minute at a time.
+
+
+class _FakeClient:
+    """A ``CVTSHIST`` stand-in that counts requests and honours their bounds.
+
+    Only the two methods ``CitiVeloQuotes._fetcher`` actually calls. Requests are
+    recorded rather than merely counted because the mutation that matters most -
+    warming the INSTANT instead of the SESSION - keeps the count at one on the
+    first point and only shows up in the bounds.
+    """
+
+    def __init__(self, session: pd.DataFrame):
+        self._session = session
+        self.requests: list = []
+
+    def fetch_timeseries(
+        self, tags, freq, *, period=None, start=None, end=None, price_point="CLOSE"
+    ):
+        self.requests.append((tuple(tags), freq, start, end))
+        out = {}
+        for tag in tags:
+            if tag not in self._session.columns:
+                continue
+            s = self._session[tag].dropna()
+            if start is not None:
+                s = s[s.index >= pd.Timestamp(start)]
+            if end is not None:
+                s = s[s.index <= pd.Timestamp(end)]
+            if not s.empty:
+                out[tag] = s
+        return out
+
+    def last_failures(self):
+        return {}
+
+    def close(self):  # pragma: no cover - never reached; the tests own the client
+        pass
+
+
+#: A completed session. The date is fixed and in the past for good, because the
+#: warm deliberately does not apply to today.
+WARM_DAY = datetime.date(2026, 8, 6)
+WARM_TAG = "RATES.OIS.USD_SOFR.SWAP_SPREAD.10Y"
+
+
+def _cached_quotes(tmp_path, tenors=("10Y",), *, ramp=False):
+    """A real ``CitiVeloQuotes`` over a real cache in ``tmp_path``, no Excel.
+
+    ``ramp=True`` gives every minute a distinct value. A constant session cannot
+    tell a correctly-resolved instant from a STALE one - which is exactly the
+    hole that let a mutation through: a block built from the instant's window
+    rather than the session's serves the first point's print for the whole day,
+    and against a constant fixture that looks identical to the right answer.
+    """
+    from MDP.CitiVelocityExcel.cache import CitiVeloTagCache
+    from MDP.CitiVelocityExcel.quotes import CitiVeloQuotes
+
+    index = pd.date_range(f"{WARM_DAY} 08:00", f"{WARM_DAY} 17:00", freq="min")
+    if ramp:
+        session = pd.DataFrame(
+            {
+                f"RATES.OIS.USD_SOFR.SWAP_SPREAD.{t}": [SENTINEL + i for i in range(len(index))]
+                for t in tenors
+            },
+            index=index,
+        )
+    else:
+        session = _series(tenors=tenors, index=index)
+    client = _FakeClient(session)
+    return CitiVeloQuotes(client=client, cache=CitiVeloTagCache(tmp_path)), client
+
+
+def _at(hour, minute):
+    return datetime.datetime(
+        WARM_DAY.year, WARM_DAY.month, WARM_DAY.day, hour, minute, tzinfo=NY
+    )
+
+
+def test_a_whole_past_session_costs_one_cvtshist_call_not_one_per_minute(tmp_path):
+    """The regression this exists for, stated as a number.
+
+    Every extra request here is a COM round trip in production. Before the
+    session warm each of these three instants issued its own, because the window
+    ended AT the instant and so sat one minute past ``coverage().last`` every
+    time; the user's 780-minute session took ~12 minutes for that reason.
+    """
+    quotes, client = _cached_quotes(tmp_path)
+    values = [
+        fetch_swap_spread("USD_SOFR", "10Y", _at(*hm), quotes=quotes).value
+        for hm in ((9, 30), (12, 0), (16, 59))
+    ]
+
+    assert len(client.requests) == 1, (
+        f"{len(client.requests)} requests for three instants in one completed session; "
+        "the warm is not firing, or it is not covering the session"
+    )
+    assert values == [pytest.approx(SENTINEL)] * 3, "the fast path must not change the number"
+
+
+def test_the_one_call_covers_the_session_and_not_merely_the_instant(tmp_path):
+    """Count alone cannot tell the fix from its own bug.
+
+    A warm that fetched ``[instant - 5d, instant]`` also issues exactly one
+    request for the FIRST point - and then one for every point after it. So the
+    property is the END BOUND: it has to run past every print the session will
+    produce, which is why it is the day's 23:59:59 rather than the instant.
+    """
+    quotes, client = _cached_quotes(tmp_path)
+    fetch_swap_spread("USD_SOFR", "10Y", _at(9, 30), quotes=quotes)
+
+    _tags, freq, start, end = client.requests[0]
+    assert freq == "MI01"
+    assert end == datetime.datetime(
+        WARM_DAY.year, WARM_DAY.month, WARM_DAY.day, 23, 59, 59
+    )
+    assert end - start == LOOKBACK_BY_MODE["intraday"], "the span is still the shared lookback"
+    assert end - start <= datetime.timedelta(days=6), "past the measured MI01 cliff"
+
+
+def test_a_session_already_on_disk_is_read_without_touching_the_transport(tmp_path):
+    """"A fully-cached read never opens a workbook" has to survive the warm.
+
+    This is the assertion that pins the coverage check specifically. Citi's last
+    print of a session is ~17:00-20:00 ET, never 23:59:59, so ``want_end >
+    cov.last`` is true FOREVER for a day-end bound: a warm that skipped the
+    coverage test would re-request an empty tail on every single point and
+    reintroduce the pathology wearing a wider window.
+    """
+    quotes, client = _cached_quotes(tmp_path)
+    fetch_swap_spread("USD_SOFR", "10Y", _at(9, 30), quotes=quotes)
+    assert len(client.requests) == 1
+
+    # Forget that we warmed it. Only the cache's own coverage can answer now.
+    reset_session_warm_cache()
+    client.requests.clear()
+
+    quote = fetch_swap_spread("USD_SOFR", "10Y", _at(14, 15), quotes=quotes)
+    assert client.requests == [], "a covered instant must not reach the transport at all"
+    assert quote.value == pytest.approx(SENTINEL)
+
+
+def test_an_instant_past_the_last_print_re_warms_once_and_only_once(tmp_path):
+    """The leak the memo bounds.
+
+    ``cov.last < target`` stays true for every instant after the session's last
+    print, so coverage alone would re-issue the wide request for each of them.
+    The memo is what turns "every point" into "once".
+    """
+    quotes, client = _cached_quotes(tmp_path)
+    fetch_swap_spread("USD_SOFR", "10Y", _at(16, 0), quotes=quotes)
+    client.requests.clear()
+
+    for minute in (0, 20, 40):
+        fetch_swap_spread("USD_SOFR", "10Y", _at(18, minute), quotes=quotes)
+    assert client.requests == [], "the memo did not bound the past-last-print case"
+    assert len(session_warm_keys()) == 1
+
+
+def test_a_cache_warmed_by_an_earlier_process_still_serves_every_instant(tmp_path):
+    """The branch a same-process test cannot reach, and the stale answer it hides.
+
+    When the tag cache is already warm but this process has no block - a second
+    notebook run, a backfill resumed - the session path takes its cached-read
+    branch. If that branch read the INSTANT's window instead of the SESSION's,
+    the block it remembers would end at the first point and every later point in
+    the day would resolve to that first print: a real, current-looking number for
+    the wrong minute. It survived a mutation sweep until this test existed, and
+    only a RAMPED fixture can see it - against a constant session the stale
+    answer and the right one are the same float.
+    """
+    quotes, client = _cached_quotes(tmp_path, ramp=True)
+    fetch_swap_spread("USD_SOFR", "10Y", _at(9, 30), quotes=quotes)
+
+    # The disk stays warm; only the process-level memory goes away.
+    reset_session_warm_cache()
+    client.requests.clear()
+
+    early = fetch_swap_spread("USD_SOFR", "10Y", _at(9, 30), quotes=quotes)
+    late = fetch_swap_spread("USD_SOFR", "10Y", _at(14, 0), quotes=quotes)
+
+    assert client.requests == [], "a warm cache must not go back to the transport"
+    assert late.quoted_at.replace(tzinfo=None) == datetime.datetime(
+        WARM_DAY.year, WARM_DAY.month, WARM_DAY.day, 14, 0
+    ), "the block did not cover the whole session; a stale print was served"
+    assert late.value != early.value
+    assert late.value == pytest.approx(SENTINEL + 6 * 60)
+
+
+def test_a_remembered_session_is_not_re_read_from_disk(tmp_path):
+    """One fetch is not the whole win; one READ is.
+
+    With only a "this day was warmed" flag, every later point still cost three
+    full parquet reads - ``coverage`` for the warm test, ``coverage`` for the
+    clamp, and ``cache.get`` itself. Profiled over this exact 781-point session
+    that was 2,344 reads of a file that had not changed, 11.1 s of 14.9 s. So the
+    assertion is that a remembered session reaches the reader ZERO more times,
+    not merely that it does not fetch.
+    """
+    quotes, _client = _cached_quotes(tmp_path)
+    calls = []
+    inner = quotes.frame
+
+    def counting(*args, **kwargs):
+        calls.append(1)
+        return inner(*args, **kwargs)
+
+    quotes.frame = counting  # type: ignore[method-assign]
+
+    fetch_swap_spread("USD_SOFR", "10Y", _at(9, 30), quotes=quotes)
+    after_warm = len(calls)
+    assert after_warm >= 1
+
+    for hm in ((10, 0), (11, 0), (16, 59)):
+        fetch_swap_spread("USD_SOFR", "10Y", _at(*hm), quotes=quotes)
+    assert len(calls) == after_warm, "a remembered session must not touch the reader again"
+
+
+def test_the_whole_axis_fits_in_the_block_cache_without_thrashing(tmp_path):
+    """Sizing, against the shape the TIMESERIES path really produces.
+
+    ``swap_spread_for_curve`` prices ONE tenor per call, so a frame of the eleven
+    USD tenors is eleven separate one-tag blocks - not one eleven-column block,
+    which is what the cap was first sized for. The per-minute loop then touches
+    all eleven in the same order every minute, which is the worst case for LRU:
+    with a cap below the axis every access misses and every miss goes back to
+    ~3 parquet reads per point, reinstating the 75% this exists to remove.
+
+    Counting READER touches rather than transport requests is the point. A
+    thrashing cache still issues no extra ``CVTSHIST`` calls - coverage already
+    reaches the target by then - so a request-count assertion stays green while
+    the cost comes back.
+    """
+    axis = swap_spread_tenors("USD_SOFR")
+    quotes, _client = _cached_quotes(tmp_path, tenors=axis)
+    calls = []
+    inner = quotes.frame
+
+    def counting(*args, **kwargs):
+        calls.append(1)
+        return inner(*args, **kwargs)
+
+    quotes.frame = counting  # type: ignore[method-assign]
+
+    for tenor in axis:
+        fetch_swap_spread("USD_SOFR", tenor, _at(9, 30), quotes=quotes)
+    after_first_minute = len(calls)
+    assert after_first_minute == len(axis), "one block per tenor on the first minute"
+
+    for hm in ((9, 31), (9, 32), (10, 0)):
+        for tenor in axis:
+            fetch_swap_spread("USD_SOFR", tenor, _at(*hm), quotes=quotes)
+    assert len(calls) == after_first_minute, (
+        f"{len(calls) - after_first_minute} extra reads across three more minutes: the "
+        f"{len(axis)}-tenor axis does not fit in a cache of {ss_mod._MAX_SESSION_BLOCKS}"
+    )
+
+
+def test_a_session_whose_parquet_changed_underneath_is_re_read(tmp_path):
+    """The revalidation, which is the whole reason the block carries a signature.
+
+    The intraday warmer appends minutes to a live parquet as they publish, so a
+    memo that trusted its first read would serve a truncated session for the rest
+    of the run and would do it SILENTLY - the failure ``day_cache.py`` calls out
+    for the curve store, one layer up. Here the 17:30 print is written after the
+    block is remembered, and the next request has to see it.
+    """
+    quotes, _client = _cached_quotes(tmp_path)
+    fetch_swap_spread("USD_SOFR", "10Y", _at(16, 59), quotes=quotes)
+
+    later = pd.Series(
+        [SENTINEL + 5.0], index=pd.DatetimeIndex([pd.Timestamp(f"{WARM_DAY} 17:30")])
+    )
+    quotes.cache.write(WARM_TAG, "MI01", later)
+
+    quote = fetch_swap_spread("USD_SOFR", "10Y", _at(17, 30), quotes=quotes)
+    assert quote.value == pytest.approx(SENTINEL + 5.0), (
+        "a stale block served the 17:00 print for a 17:30 request"
+    )
+
+
+def test_a_day_earlier_than_the_cached_block_is_warmed_rather_than_refused(tmp_path):
+    """Coverage has to be tested for CONTAINMENT, not just for reaching far enough.
+
+    A target BEFORE ``cov.first`` is as uncovered as one after ``cov.last``. While
+    the warm tested only the upper end, a session earlier than the cached block
+    was permanently unservable: no warm ran, the clamped read came back empty, and
+    the caller got ``SwapSpreadUnavailableError`` for a day Citi publishes.
+    """
+    from MDP.CitiVelocityExcel.cache import CitiVeloTagCache
+    from MDP.CitiVelocityExcel.quotes import CitiVeloQuotes
+
+    earlier = WARM_DAY - datetime.timedelta(days=7)
+    index = pd.date_range(f"{earlier} 08:00", f"{WARM_DAY} 17:00", freq="min")
+    client = _FakeClient(_series(tenors=("10Y",), index=index))
+    quotes = CitiVeloQuotes(client=client, cache=CitiVeloTagCache(tmp_path))
+
+    # Warm the LATER day first, so the cached interval starts after the earlier one.
+    fetch_swap_spread("USD_SOFR", "10Y", _at(9, 30), quotes=quotes)
+    assert pd.Timestamp(quotes.cache.coverage(WARM_TAG, "MI01").first).date() > earlier
+
+    before = fetch_swap_spread(
+        "USD_SOFR",
+        "10Y",
+        datetime.datetime(earlier.year, earlier.month, earlier.day, 10, 0, tzinfo=NY),
+        quotes=quotes,
+    )
+    assert before.value == pytest.approx(SENTINEL)
+
+    # ...and the warm that served it must not have been widened by the cache.
+    # ``missing_spans`` would merge this backward jump into one request running
+    # from the window's start all the way up to ``cov.first`` - here seven days,
+    # past the cliff, which the add-in answers at hourly spacing while looking
+    # identical. Forcing the bounds is what holds it to the window.
+    from MDP.CitiVelocityExcel.windowed import MAX_SPAN
+
+    _tags, freq, req_start, req_end = client.requests[-1]
+    assert freq == "MI01"
+    assert req_end - req_start <= MAX_SPAN["MI01"], (
+        f"the warm for {earlier} went out as {req_end - req_start}, past the MI01 cliff: "
+        "the cache merged it back to its own coverage"
+    )
+
+
+def test_the_warm_forces_its_bounds_only_when_the_merge_would_pass_the_cliff(tmp_path):
+    """Neither "always force" nor "never force" is right, so the choice is measured.
+
+    ``missing_spans`` sends the gap between the request and the cached interval,
+    not the five days the warm asked for. Walking days FORWARD that gap is about a
+    day and letting it merge is cheaper than re-fetching the lookback; jumping
+    back to a session months earlier, the same merge becomes a multi-month request
+    that the add-in answers at hourly spacing without saying so. Forcing always
+    would multiply an N-day backfill's transport by five.
+    """
+    from MDP.CitiVelocityExcel.windowed import MAX_SPAN
+
+    covered = (pd.Timestamp(f"{WARM_DAY} 00:00"), pd.Timestamp(f"{WARM_DAY} 17:00"))
+    day_end = datetime.datetime(WARM_DAY.year, WARM_DAY.month, WARM_DAY.day, 23, 59, 59)
+
+    # Next day: the merge is a one-day tail. Let it merge.
+    nxt = day_end + datetime.timedelta(days=1)
+    assert not ss_mod._merged_span_overshoots(covered, nxt - LOOKBACK_BY_MODE["intraday"], nxt, "MI01")
+
+    # Three months earlier: the merge is a head span of ~90 days. Force it.
+    old = day_end - datetime.timedelta(days=90)
+    assert ss_mod._merged_span_overshoots(covered, old - LOOKBACK_BY_MODE["intraday"], old, "MI01")
+
+    # Nothing cached: the fetch is exactly the window, which is under the cliff.
+    assert not ss_mod._merged_span_overshoots(
+        None, day_end - LOOKBACK_BY_MODE["intraday"], day_end, "MI01"
+    )
+    assert LOOKBACK_BY_MODE["intraday"] <= MAX_SPAN["MI01"]
+
+
+def test_reset_clears_the_memo(tmp_path):
+    quotes, _client = _cached_quotes(tmp_path)
+    fetch_swap_spread("USD_SOFR", "10Y", _at(9, 30), quotes=quotes)
+    assert len(session_warm_keys()) == 1
+    reset_session_warm_cache()
+    assert session_warm_keys() == ()
+
+
+def test_today_is_not_session_warmed_because_its_tail_is_still_arriving():
+    """Today's session is still publishing, so its tail IS new data.
+
+    Asserted on the predicate rather than through a fetch: a behavioural version
+    would have to pick an instant relative to the wall clock and would change
+    meaning when the suite runs just after midnight ET.
+    """
+    from MDP.IRSwaps.CITIVELO_EXCEL.timestamps import ResolvedRequest
+
+    class _NothingCached:
+        class cache:
+            @staticmethod
+            def coverage(tag, freq, price_point="CLOSE"):
+                return None
+
+    now = datetime.datetime.now(wire_timezone()).replace(tzinfo=None)
+    today = ResolvedRequest(mode="intraday", requested=now, wire_instant=now)
+    yesterday_stamp = datetime.datetime.combine(
+        now.date() - datetime.timedelta(days=1), datetime.time(10, 30)
+    )
+    yesterday = ResolvedRequest(
+        mode="intraday", requested=yesterday_stamp, wire_instant=yesterday_stamp
+    )
+    tags = ["RATES.OIS.USD_SOFR.SWAP_SPREAD.10Y"]
+
+    assert ss_mod._needs_session_warm(_NothingCached(), tags, today) is False
+    assert ss_mod._needs_session_warm(_NothingCached(), tags, yesterday) is True
+
+
+def test_a_reader_with_no_cache_keeps_the_narrow_window():
+    """An injected double has nothing for the memo to help, and its caller is
+    asserting on the window it was handed. ``_StubQuotes`` has no ``cache``."""
+    index = pd.date_range(f"{WARM_DAY} 08:00", f"{WARM_DAY} 17:00", freq="min")
+    stub = _StubQuotes(_series(tenors=("10Y",), index=index))
+    fetch_swap_spread("USD_SOFR", "10Y", _at(9, 30), quotes=stub)
+    assert stub.calls[-1][2]["end"] == datetime.datetime(
+        WARM_DAY.year, WARM_DAY.month, WARM_DAY.day, 9, 30
+    )
+
+
+def test_eod_and_live_are_left_alone(tmp_path):
+    """Only intraday is warmed. EOD reads a daily series, and live's tail is new."""
+    from MDP.IRSwaps.CITIVELO_EXCEL.timestamps import ResolvedRequest
+
+    quotes, _client = _cached_quotes(tmp_path)
+    tags = ["RATES.OIS.USD_SOFR.SWAP_SPREAD.10Y"]
+    eod = ResolvedRequest(mode="eod", requested=WARM_DAY, eod_date=WARM_DAY)
+    live = ResolvedRequest(mode="live", requested="live")
+    assert ss_mod._needs_session_warm(quotes, tags, eod) is False
+    assert ss_mod._needs_session_warm(quotes, tags, live) is False
+
+
+def test_the_downsample_guard_uses_the_minimum_gap_not_the_median():
+    """D11's false positive, as a test.
+
+    A published swap spread does not print every minute. This series has a MEDIAN
+    gap of five minutes and a MINIMUM of one - a genuine one-minute grid that is
+    simply quiet - and a median-based check would reject it. The coarse case is
+    the one that must raise: a ten-minute grid cannot produce a one-minute gap.
+    """
+    from MDP.CitiVelocityExcel.windowed import DownsampledWindowError
+
+    sparse = pd.DatetimeIndex(
+        [pd.Timestamp("2026-08-06 09:00") + pd.Timedelta(minutes=m)
+         for m in (0, 1, 6, 11, 16, 30)]
+    )
+    assert pd.Series(sparse).diff().dropna().median() > pd.Timedelta(minutes=1), (
+        "the fixture has to have a median a median-based check would reject"
+    )
+    ss_mod._assert_not_downsampled(
+        pd.DataFrame({"x": range(len(sparse))}, index=sparse), "MI01"
+    )
+
+    coarse = pd.date_range("2026-08-06 09:00", "2026-08-06 12:00", freq="10min")
+    with pytest.raises(DownsampledWindowError, match="MINIMUM gap"):
+        ss_mod._assert_not_downsampled(
+            pd.DataFrame({"x": range(len(coarse))}, index=coarse), "MI01"
+        )

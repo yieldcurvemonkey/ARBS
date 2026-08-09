@@ -4992,8 +4992,16 @@ class STIRFutureOptionMDP(MarketDataProvider[InstrumentLike], LayeredCacheMixin)
             return {}
         symbols = list(symbols)
         if not self._fanout_should_engage(len(symbols)):
-            return self._run_eod_fetch_single(symbols, start_dt, end_dt, show_tqdm, mc, mk, mr)
-        return self._run_eod_fetch_fanout(symbols, start_dt, end_dt, mc, mk, mr)
+            out = self._run_eod_fetch_single(symbols, start_dt, end_dt, show_tqdm, mc, mk, mr)
+        else:
+            out = self._run_eod_fetch_fanout(symbols, start_dt, end_dt, mc, mk, mr)
+        # The newest bar's open interest has not been disseminated yet and comes back as a
+        # literal 0. Blank it here, before the frame reaches the raw-EOD cache, so no caller
+        # ever sees a fabricated zero. See BarchartFetcher.blank_unpublished_open_interest.
+        return {
+            sym: BarchartFetcher.blank_unpublished_open_interest(frame)
+            for sym, frame in out.items()
+        }
 
     def _run_eod_fetch_fanout(
         self,
@@ -5282,7 +5290,12 @@ class STIRFutureOptionMDP(MarketDataProvider[InstrumentLike], LayeredCacheMixin)
                     # sees exactly what it saw before: absent, not an empty frame.
                     skipped_no_data += 1
                     continue
-                result[n] = self._slice_eod_frame(ent.get("frame"), start, end)
+                # Also applied on read: entries written before the guard existed still carry
+                # the vendor's fabricated last-bar zero, and a frame whose newest bar predates
+                # its fetch day is served straight from cache without ever being refetched.
+                result[n] = self._slice_eod_frame(
+                    BarchartFetcher.blank_unpublished_open_interest(ent.get("frame")), start, end
+                )
             else:
                 to_fetch.append(n)
 
