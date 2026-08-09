@@ -263,3 +263,45 @@ def test_mlofi_session_names_the_available_symbols_when_one_is_wrong():
 
     with pytest.raises(KeyError, match="available"):
         mlofi_session("ZB", datetime.date(2026, 7, 14), "NOPE9")
+
+
+@pytest.mark.slow
+def test_the_two_kernels_agree_on_the_book_exactly():
+    """The MLOFI kernel maintains its own ladder, so it and the top-of-book kernel
+    are two independent implementations of the same contract. They must produce
+    the same book, and on real data they do -- zero disagreements over 3.8 million
+    timestamps across ZBU6 and ZTU6.
+
+    The alignment is the subtle part: both emit at F_LAST boundaries and several
+    boundaries can share one ts_recv, so comparing with an as-of join reports
+    spurious disagreements at a rate of about 1e-4 by matching states from
+    different packets. The last state at each timestamp is the sound comparison.
+    """
+    import datetime
+    import os
+
+    if not os.path.isdir("D:/zb_mbo"):
+        pytest.skip("archives not present")
+    import databento as db
+
+    from RVUtils.MBO.archive import MboArchive
+    from RVUtils.MBO.mlofi import replay_mlofi
+
+    day = datetime.date(2026, 7, 14)
+    with MboArchive().open_session("ZB", day, keep=True) as path:
+        store = db.DBNStore.from_file(path)
+        s2i = {s: int(e["symbol"]) for s, ents in store.metadata.mappings.items()
+               for e in ents if e["symbol"]}
+        rec = np.concatenate([a[a["instrument_id"] == s2i["ZBU6"]]
+                              for a in store.to_ndarray(count=3_000_000)])
+
+    g = build_price_grid(rec["price"].astype(np.int64))
+    tob = replay_book(rec, grid=g).tob
+    ml = replay_mlofi(rec, grid=g, levels=3).frame
+
+    a = tob.groupby("ts_recv")[["bid_px", "ask_px"]].last()
+    b = ml.groupby("ts_recv")[["bid_px", "ask_px"]].last()
+    j = a.join(b, how="inner", lsuffix="_book", rsuffix="_ml").dropna()
+    assert len(j) > 1_000_000
+    assert np.isclose(j["bid_px_book"], j["bid_px_ml"]).all()
+    assert np.isclose(j["ask_px_book"], j["ask_px_ml"]).all()
