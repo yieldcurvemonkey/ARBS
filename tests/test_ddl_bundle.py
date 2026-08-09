@@ -99,7 +99,7 @@ def test_real_tape_schema_view_stays_atomic():
 
 
 from unittest.mock import patch, MagicMock
-from SDRUtils._swappulse_scripts.ingest_usdswaps_tape import ensure_schema
+from SDRUtils._swappulse_scripts.ingest_usdswaps_tape import ensure_schema, TAPE_SCHEMA_SQL
 
 
 def test_ensure_schema_forwards_lock_timeout():
@@ -120,3 +120,61 @@ def test_ensure_schema_forwards_lock_timeout():
             assert call.kwargs.get("lock_timeout_ms") == 90_000 or \
                    (len(call.args) >= 3 and call.args[2] == 90_000), \
                 f"lock_timeout_ms not forwarded: {call}"
+
+
+def test_ensure_schema_skips_v1_bundle_by_default(monkeypatch):
+    """v1 is the declared frozen rollback target. ensure_schema() must not
+    issue the v1 DDL bundle (three CREATE TABLE, ten ADD COLUMN, eleven
+    CREATE INDEX, and one unconditional CREATE OR REPLACE VIEW -- all
+    ACCESS EXCLUSIVE) as a side effect of ensuring v3 exists, unless a
+    caller explicitly opts in via ARBS_ENSURE_V1_TAPE=1."""
+    monkeypatch.delenv("ARBS_ENSURE_V1_TAPE", raising=False)
+    mock_engine = MagicMock()
+    mock_engine.url = "postgresql://test/test-v1-default-off"
+    with patch(
+        "SDRUtils._swappulse_scripts.ingest_usdswaps_tape._schema_already_current",
+        return_value=False,
+    ), patch(
+        "SDRUtils._swappulse_scripts.ingest_usdswaps_tape._execute_ddl_bundle"
+    ) as mock_ddl, patch(
+        "SDRUtils._swappulse_scripts.ingest_usdswaps_tape._schema_ensured",
+        set(),
+    ):
+        ensure_schema(mock_engine)
+        executed_ddls = [call.args[1] for call in mock_ddl.call_args_list]
+        assert TAPE_SCHEMA_SQL not in executed_ddls, (
+            "v1 DDL bundle executed with ARBS_ENSURE_V1_TAPE unset -- it must "
+            "default OFF; v1 is the frozen rollback target and must not take "
+            "ACCESS EXCLUSIVE locks as a side effect of ensuring v3."
+        )
+        assert len(executed_ddls) == 2, (
+            f"expected exactly 2 DDL bundles (current-generation + monitoring) "
+            f"with the v1 gate off, got {len(executed_ddls)}"
+        )
+
+
+def test_ensure_schema_runs_v1_bundle_when_opted_in(monkeypatch):
+    """ARBS_ENSURE_V1_TAPE=1 lets a genuinely fresh environment that needs
+    the v1 rollback path materialise it deliberately."""
+    monkeypatch.setenv("ARBS_ENSURE_V1_TAPE", "1")
+    mock_engine = MagicMock()
+    mock_engine.url = "postgresql://test/test-v1-opt-in"
+    with patch(
+        "SDRUtils._swappulse_scripts.ingest_usdswaps_tape._schema_already_current",
+        return_value=False,
+    ), patch(
+        "SDRUtils._swappulse_scripts.ingest_usdswaps_tape._execute_ddl_bundle"
+    ) as mock_ddl, patch(
+        "SDRUtils._swappulse_scripts.ingest_usdswaps_tape._schema_ensured",
+        set(),
+    ):
+        ensure_schema(mock_engine)
+        executed_ddls = [call.args[1] for call in mock_ddl.call_args_list]
+        assert TAPE_SCHEMA_SQL in executed_ddls, (
+            "v1 DDL bundle NOT executed with ARBS_ENSURE_V1_TAPE=1 -- the "
+            "opt-in path is broken."
+        )
+        assert len(executed_ddls) == 3, (
+            f"expected exactly 3 DDL bundles (v1 + current-generation + "
+            f"monitoring) with the v1 gate on, got {len(executed_ddls)}"
+        )

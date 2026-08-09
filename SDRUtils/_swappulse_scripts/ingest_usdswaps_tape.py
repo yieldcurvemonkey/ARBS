@@ -589,8 +589,18 @@ def ensure_schema(
 ) -> None:
     """Create the current-generation tables / indexes / view if they don't already exist.
 
-    Also runs the v1 DDL so the frozen rollback tables remain valid on
-    fresh environments (§4.11). Writes after Phase 4 cutover target the
+    The v1 DDL (``TAPE_SCHEMA_SQL``) is opt-in, gated on the environment
+    variable ``ARBS_ENSURE_V1_TAPE == "1"``, and OFF by default. v1 is
+    the declared frozen rollback target (§4.11) — re-running its DDL
+    (three ``CREATE TABLE IF NOT EXISTS``, ten ``ADD COLUMN IF NOT
+    EXISTS``, eleven ``CREATE INDEX IF NOT EXISTS``, and one
+    unconditional ``CREATE OR REPLACE VIEW``) is a no-op in steady state
+    but still takes real ACCESS EXCLUSIVE locks on those objects for no
+    gain, and a frozen table is not a table ARBS should be issuing DDL
+    against as a side effect of ensuring v3 exists. The gate exists so a
+    genuinely fresh environment that needs the v1 rollback path
+    materialised can still opt in deliberately with
+    ``ARBS_ENSURE_V1_TAPE=1``. Writes after Phase 4 cutover target the
     current generation (``_tape_tables.TAPE_GENERATION``) only; v1 is
     preserved for instant rollback via the dashboard's TAPE_DISPLAY_VIEW
     constant.
@@ -613,7 +623,8 @@ def ensure_schema(
         return
     for attempt in range(1, _max_retries + 1):
         try:
-            _execute_ddl_bundle(engine, TAPE_SCHEMA_SQL, lock_timeout_ms=lock_timeout_ms)
+            if os.getenv("ARBS_ENSURE_V1_TAPE") == "1":
+                _execute_ddl_bundle(engine, TAPE_SCHEMA_SQL, lock_timeout_ms=lock_timeout_ms)
             _execute_ddl_bundle(engine, TAPE_SCHEMA_SQL_CURRENT, lock_timeout_ms=lock_timeout_ms)
             _execute_ddl_bundle(engine, MONITORING_SQL_V2, lock_timeout_ms=lock_timeout_ms)
             _schema_ensured.add(key)
