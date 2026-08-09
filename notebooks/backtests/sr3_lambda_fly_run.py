@@ -185,17 +185,55 @@ def main() -> int:
     ap.add_argument("--tcost-vol-bp", type=float, default=DEFAULT_TCOST_VOL_BP)
     ap.add_argument("--z-threshold", type=float, default=1.0)
     ap.add_argument("--shuffle-seeds", type=int, default=20)
+    ap.add_argument("--z-window", type=int, default=60)
+    ap.add_argument("--z-min-obs", type=int, default=30)
+    ap.add_argument("--max-fwd-resid-bp", type=float, default=1.0)
+    ap.add_argument("--max-atom-spread", type=float, default=0.60)
+    ap.add_argument(
+        "--exploratory",
+        action="store_true",
+        help=(
+            "Label the run EXPLORATORY. Use whenever any gate differs from the "
+            "pre-registration; the verdict then carries the label and cannot read ALIVE"
+        ),
+    )
     args = ap.parse_args()
 
     from MDP.STIRFutures.STIRFutureOptionMDP import STIRFutureOptionMDP
 
     opt_mdp = STIRFutureOptionMDP(source="BARCHART_STIRFO-QL")
-    config = SignalConfig(z_threshold=args.z_threshold)
+    config = SignalConfig(
+        z_threshold=args.z_threshold,
+        z_window=args.z_window,
+        z_min_obs=args.z_min_obs,
+        max_fwd_resid_bp=args.max_fwd_resid_bp,
+        max_atom_spread=args.max_atom_spread,
+    )
+    default = SignalConfig()
+    exploratory = bool(args.exploratory) or config != default
+    if exploratory:
+        print("\n*** EXPLORATORY RUN: gates differ from the pre-registration. This cannot "
+              "read ALIVE and its configurations count toward n_trials. ***")
     panel = pd.read_csv(args.panel)
 
     # n_trials for the DSR: the real search this result came out of. One live configuration
     # plus every shuffle and placebo run, counted honestly rather than set to 1.
     n_trials = 1 + args.shuffle_seeds + (1 if args.placebo_panel else 0)
+
+    # Diagnose a no-signal run before reporting a verdict on it: "the signal never fired
+    # because there was not enough admissible data to standardise it" and "the signal fired
+    # and lost money" are different findings and must not share a label.
+    probe = prepare_signal_frame(panel, config)
+    n_adm = int(probe["admissible"].sum())
+    n_z = int(probe["lambda_z"].notna().sum())
+    n_fire = int((probe["lambda_z"].abs() >= config.z_threshold).sum())
+    print(f"\nsignal availability: {len(probe)} rows, {n_adm} admissible, {n_z} with a z-score, "
+          f"{n_fire} beyond |z| >= {config.z_threshold}")
+    if n_z == 0:
+        print(f"  NO Z-SCORE ANYWHERE. The trailing window needs {config.z_min_obs} admissible "
+              f"observations and the largest contract supplies "
+              f"{int(probe.groupby('symbol')['admissible'].sum().max())}. This is a "
+              f"DATA-SUFFICIENCY outcome, not evidence about the edge.")
 
     live, live_closed, live_sf = run_panel(
         panel, opt_mdp, config=config, contracts=args.contracts,
@@ -273,9 +311,24 @@ def main() -> int:
     for name, ok, val in checks:
         print(f"  [{'PASS' if ok else 'FAIL'}] {name:<42} {val}")
     first_five = all(ok for _, ok, _ in checks[:5])
-    verdict = "ALIVE" if all(ok for _, ok, _ in checks) else (
-        "MONITOR (clears the economics, fails the sample-size bar)" if first_five else "DEAD"
-    )
+    if live.get("n_trades", 0) == 0:
+        # "The signal never fired for want of data" and "the signal fired and lost money" are
+        # different findings. Reporting the first as DEAD would claim evidence that was never
+        # gathered, which is the failure mode this whole programme is guarding against.
+        verdict = "NO SIGNAL -- the strategy never traded. " + (
+            "Not enough admissible sessions to standardise lambda; this is a data-sufficiency "
+            "result and says nothing about the edge."
+            if n_z == 0 else
+            "lambda never left its trailing distribution by the entry threshold."
+        )
+    elif all(ok for _, ok, _ in checks):
+        verdict = "ALIVE"
+    elif first_five:
+        verdict = "MONITOR (clears the economics, fails the sample-size bar)"
+    else:
+        verdict = "DEAD"
+    if exploratory and verdict == "ALIVE":
+        verdict = "EXPLORATORY-ONLY (gates differ from the pre-registration)"
     print(f"\n  VERDICT: {verdict}")
     return 0
 
