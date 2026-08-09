@@ -1,14 +1,20 @@
-"""Tests for scripts/tape_v3_acceptance.py criterion 1 (day-set parity).
+"""Tests for scripts/tape_v3_acceptance.py criteria 1 and 2b.
 
-No database connection is ever made: `evaluate_day_parity` is a pure
-function over two `set[date]` inputs, extracted specifically so this
-criterion is testable without mocking SQLAlchemy/psycopg2.
+No database connection is ever made: `evaluate_day_parity` and
+`evaluate_marker_thresholds` are pure functions over plain Python data,
+extracted specifically so these criteria are testable without mocking
+SQLAlchemy/psycopg2.
 """
 from __future__ import annotations
 
 from datetime import date
 
-from scripts.tape_v3_acceptance import EXEMPT_MISSING_DAYS, evaluate_day_parity
+from scripts.tape_v3_acceptance import (
+    EXEMPT_MISSING_DAYS,
+    THIN_DAY_LEG_THRESHOLD,
+    evaluate_day_parity,
+    evaluate_marker_thresholds,
+)
 
 
 def test_exempt_missing_days_is_exactly_the_one_documented_date():
@@ -98,3 +104,86 @@ def test_clean_day_parity_reports_zero_missing_zero_exempted():
 
     assert failures == []
     assert any("0 day(s) missing, 0 exempted" in line for line in report_lines)
+
+
+# --- Criterion 2b: enrichment-marker thresholds, thin-day exemption -----
+#
+# 2024-10-14 has 3 legs, all standalone outrights (package_id
+# 'OUTRIGHT-<trade_id>', ptp_group_id and package_transaction_price both
+# NULL) -- PTP grouping requires a package transaction price, so 0% ptp
+# fill is the correct answer, not a defect. It is the only day of 611
+# with fewer than 50 legs; every day with >=50 legs has nonzero ptp fill.
+# These tests call `evaluate_marker_thresholds` WITHOUT an explicit
+# `thin_threshold` so they exercise the real default
+# (`THIN_DAY_LEG_THRESHOLD`), not a value pinned in the test -- a
+# regression that widens or narrows the constant must show up here.
+
+def test_thin_day_leg_threshold_is_fifty():
+    """Guards the specific value, mirroring the EXEMPT_MISSING_DAYS guard
+    above: matches `_RISK_GUARD_MIN_LEGS` in ingest_usdswaps_tape.py, the
+    codebase's existing "too thin to assert on" threshold."""
+    assert THIN_DAY_LEG_THRESHOLD == 50
+
+
+def test_thin_day_with_zero_ptp_passes_and_is_reported():
+    """The motivating case: 2024-10-14, 3 legs, 0% ptp, 100% on the other
+    three markers -- must NOT fail, but the exemption must be visible in
+    the report, not silent."""
+    rows = [
+        {"as_of_date": "2024-10-14", "n": 3, "ptp": 0.0,
+         "spec": 100.0, "evt": 100.0, "ust": 100.0},
+    ]
+
+    report_lines, failures = evaluate_marker_thresholds(rows)
+
+    assert failures == []
+    assert any(
+        "1 thin day(s) (<50 legs) exempt" in line and "2024-10-14" in line
+        for line in report_lines
+    )
+    assert any("0 day(s) below threshold" in line for line in report_lines)
+
+
+def test_large_day_with_zero_ptp_still_fails():
+    """A day at or above the thin-day threshold gets no exemption: zero
+    ptp fill on a substantial day is still the real defect the rule
+    exists to catch."""
+    rows = [
+        {"as_of_date": "2026-08-05", "n": 500, "ptp": 0.0,
+         "spec": 100.0, "evt": 100.0, "ust": 100.0},
+    ]
+
+    report_lines, failures = evaluate_marker_thresholds(rows)
+
+    assert any(
+        "1 day(s) below marker thresholds" in f and "2026-08-05" in f
+        for f in failures
+    )
+    assert any("0 thin day(s)" in line for line in report_lines)
+
+
+def test_thin_day_still_fails_on_low_event_timestamp_fill():
+    """The exemption is narrow: only the ptp clause is thinned. A thin
+    day that also fails event_timestamp must still fail the criterion,
+    not be swept up by the ptp exemption."""
+    rows = [
+        {"as_of_date": "2024-10-14", "n": 3, "ptp": 0.0,
+         "spec": 100.0, "evt": 66.7, "ust": 100.0},
+    ]
+
+    report_lines, failures = evaluate_marker_thresholds(rows)
+
+    assert any(
+        "1 day(s) below marker thresholds" in f and "2024-10-14" in f
+        for f in failures
+    )
+    assert any("0 thin day(s)" in line for line in report_lines)
+
+
+def test_no_bad_days_reports_zero_and_zero():
+    report_lines, failures = evaluate_marker_thresholds([])
+
+    assert failures == []
+    assert any(
+        "0 day(s) below threshold, 0 thin day(s)" in line for line in report_lines
+    )

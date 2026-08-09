@@ -8,7 +8,12 @@ Five checks:
      no daily file for the July-4-observed holiday and three production
      fetch attempts through the real window each returned 0 rows -- see
      EXEMPT_MISSING_DAYS for the full justification.
-  2. Enrichment markers are populated corpus-wide and per-day.
+  2. Enrichment markers are populated corpus-wide and per-day. Criterion
+     2b's ptp_group_id > 0 clause is exempted on days with fewer than
+     THIN_DAY_LEG_THRESHOLD legs -- PTP grouping requires a package
+     transaction price that a thin day of standalone outrights may
+     legitimately never have -- see THIN_DAY_LEG_THRESHOLD for the full
+     justification. The other three 2b markers are never thinned.
   3. The 2026-07-24 hole sky left ~80% short is actually filled.
   4. v2 activity since backfill_start, informational only (does NOT fail
      the run -- see below for why).
@@ -111,6 +116,33 @@ EXEMPT_MISSING_DAYS: frozenset[date] = frozenset({
 })
 
 
+# --- Criterion 2b thin-day exemption -------------------------------------
+#
+# Days with fewer legs than this are too thin for the ptp_group_id > 0
+# rule to be meaningful: PTP grouping keys off a package_transaction_price,
+# and a handful of standalone outright legs can legitimately carry none at
+# all. Confirmed live: 2024-10-14 has exactly 3 legs, each with
+# package_id 'OUTRIGHT-<trade_id>', ptp_group_id NULL and
+# package_transaction_price NULL -- 0% ptp fill is the CORRECT answer for
+# that day, not a defect. It is also the ONLY day in the entire backfill
+# with fewer than 50 legs, and every day with 50 or more legs has nonzero
+# ptp fill -- so this exemption is vacuous everywhere except the one day
+# it exists to cover.
+#
+# 50 is not a fresh number: it matches `_RISK_GUARD_MIN_LEGS = 50` in
+# `ingest_usdswaps_tape.py` (the `n < 50` early-return guarding
+# `_assert_risk_populated`) -- the codebase already has one notion of
+# "too thin to assert on" and this reuses it rather than inventing a
+# second threshold.
+#
+# Only the ptp_group_id > 0 clause is thinned. special_tenor_type,
+# event_timestamp and matched_ust_maturity are NOT size-dependent and stay
+# required at >= 99% on every day regardless of leg count -- the failing
+# day already clears all three at 100%, so this is not a free pass on
+# data quality, only on a clause that cannot be satisfied by construction.
+THIN_DAY_LEG_THRESHOLD = 50
+
+
 def evaluate_day_parity(
     v3_days: set[date],
     v2_days: set[date],
@@ -148,6 +180,54 @@ def evaluate_day_parity(
         )
     if real_missing:
         failures.append(f"missing from v3: {_iso(real_missing)[:20]}")
+    return report_lines, failures
+
+
+def evaluate_marker_thresholds(
+    rows: list[dict],
+    thin_threshold: int = THIN_DAY_LEG_THRESHOLD,
+) -> tuple[list[str], list[str]]:
+    """Pure criterion-2b day-level enrichment-marker check. No I/O.
+
+    ``rows`` is one dict per day that trips at least one of the four raw
+    thresholds -- i.e. exactly what the SQL ``HAVING`` clause in
+    ``main()`` selects (ptp == 0, or spec/evt/ust < 99). Each dict has
+    keys ``as_of_date`` (str), ``n`` (int), and ``ptp``/``spec``/``evt``/
+    ``ust`` (float percentages).
+
+    A day with fewer than ``thin_threshold`` legs is exempt from the
+    ``ptp_group_id > 0`` requirement ONLY, and only when it otherwise
+    clears the 99% metadata thresholds -- a thin day that also fails
+    special_tenor_type/event_timestamp/matched_ust_maturity still fails,
+    exactly like any other day. Thin-day exemptions are always reported,
+    never silent.
+
+    Returns ``(report_lines, failures)`` in the same shape as
+    ``evaluate_day_parity``.
+    """
+    hard_failures: list[dict] = []
+    thin_exempt: list[str] = []
+
+    for row in rows:
+        is_thin = row["n"] < thin_threshold
+        metadata_ok = row["spec"] >= 99 and row["evt"] >= 99 and row["ust"] >= 99
+        ptp_zero = row["ptp"] == 0
+
+        if ptp_zero and is_thin and metadata_ok:
+            thin_exempt.append(row["as_of_date"])
+            continue
+        hard_failures.append(row)
+
+    report_lines = [
+        f"criterion 2b: {len(hard_failures)} day(s) below threshold, "
+        f"{len(thin_exempt)} thin day(s) (<{thin_threshold} legs) exempt "
+        f"from the ptp rule: {thin_exempt}"
+    ]
+    failures: list[str] = []
+    if hard_failures:
+        failures.append(
+            f"{len(hard_failures)} day(s) below marker thresholds, e.g. {hard_failures[:5]}"
+        )
     return report_lines, failures
 
 
@@ -200,9 +280,15 @@ def main() -> int:
                 OR round(100.0*count(matched_ust_maturity)/nullif(count(*),0),1) < 99
             ORDER BY 1
         """), {"cut": CUTOFF}).fetchall()
-        print(f"2b. days below threshold: {len(bad)}")
-        if bad:
-            failures.append(f"{len(bad)} day(s) below marker thresholds, e.g. {bad[:5]}")
+        bad_rows = [
+            {"as_of_date": r[0], "n": r[1], "ptp": float(r[2]), "spec": float(r[3]),
+             "evt": float(r[4]), "ust": float(r[5])}
+            for r in bad
+        ]
+        marker_lines, marker_failures = evaluate_marker_thresholds(bad_rows)
+        for line in marker_lines:
+            print(f"   {line}")
+        failures.extend(marker_failures)
 
         # 3. The 2026-07-24 hole sky left ~80% short.
         n0724 = c.execute(text(
