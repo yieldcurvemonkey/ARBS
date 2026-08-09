@@ -1,0 +1,60 @@
+{
+ "banks": {
+  "NORGES": {
+   "note": "Norges Bank's committee decides by consensus and published NO individual positions in this window. The first meeting summary appeared only in March 2026 and attributes views to 'some members' - Norwegian press covering the June 2026 summary stated flatly that the minutes do not say who thought what. A spectrum exists (both 2026 summaries record some members pressing for an immediate hike against a majority that waited) but cannot be attached to a named speaker, and the two speakers in the corpus are precisely the Governor and First Deputy Governor, whose public role is to deliver the committee line. A flat zero-signed map at LOW confidence is the honest answer: this is an UNOBSERVABLE committee, not a one-signed one. Ranking Bache against Longva on this record would be invention.",
+   "speakers": {
+    "Bache": [
+     {"start": "2021-01", "end": "", "stance": 0, "confidence": "low",
+      "why": "Deputy Governor from 2020, Governor from 2022-03. As chair of a consensus board she is the central voice by construction and no publication records her taking a distinct position. Treat her speeches as the committee median, not as a signal."}
+    ],
+    "Longva": [
+     {"start": "2022-08", "end": "", "stance": 0, "confidence": "low",
+      "why": "Deputy Governor and First Deputy Chair from 2022-08-29. His public output is institutional - presenting decisions and the Norges Bank Watch response - and nothing separates him from Bache or the committee line in either direction."}
+    ]
+   }
+  },
+  "RIKSBANK": {
+   "note": "Sweden's Executive Board records individual votes and publishes named reservations, so the spectrum is directly observable. Reservation record: 2021 none; Feb/Apr 2022 Breman, Floden and Ohlsson reserved against the asset-purchase decisions wanting a faster taper (HAWKISH on the balance sheet); 2023-04-25 Breman and Floden reserved against the 0.50pp hike wanting 0.25pp (DOVISH on the rate); 2024 none; 2025-09 Seim alone reserved against the cut to 1.75%. The axis ROTATED between cycles, which is why no member holds one sign throughout: the hiking cycle put Thedeen and Jansson above a Breman/Floden dovish wing, the easing cycle put Seim above a Jansson/Bunge dovish wing. Jansson is the clearest genuine mover. Tenures respected: Thedeen from 2023-01, Bunge from 2022-12, Seim from 2024-05, Breman until 2025-10 when she left for the RBNZ.",
+   "speakers": {
+    "Thedeen": [
+     {"start": "2023-01", "end": "2023-12", "stance": 1, "confidence": "medium",
+      "why": "Governor from 2023-01. First meeting read as hawkish; anchored policy on a stronger krona. The 50bp hike he carried in April 2023 drew formal DOVISH reservations from Breman and Floden, placing him above them mechanically."},
+     {"start": "2024-01", "end": "2025-12", "stance": 0, "confidence": "medium",
+      "why": "At the median through the easing cycle. 2024 produced no reservations at all; in 2025 the only dissent was Seim's hawkish one against his cut, which places him below her rather than at the hawkish extreme."},
+     {"start": "2026-01", "end": "", "stance": 1, "confidence": "medium",
+      "why": "Grouped by sell-side minutes reviews with Seim on the hawkish side against a Jansson/Bunge dovish camp; has floated the tail where supply shocks force the rate back up, a framing no dovish member uses."}
+    ],
+    "Breman": [
+     {"start": "2021-01", "end": "2021-12", "stance": 0, "confidence": "low",
+      "why": "Every 2021 decision was unanimous; nothing distinguishes her from the Ingves-era median. A genuine no-signal period rather than a measured neutral."},
+     {"start": "2022-01", "end": "2022-04", "stance": 1, "confidence": "medium",
+      "why": "The hawkish end of her record, on the balance sheet rather than the rate: formal reservations with Floden and Ohlsson against both the February and April 2022 asset-purchase decisions, wanting a faster taper than the majority."},
+     {"start": "2022-05", "end": "2025-10", "stance": -1, "confidence": "high",
+      "why": "On the POLICY RATE she sat dovish for the rest of her tenure, which is the axis that matters here. Argued the published path implied too many hikes, then reserved with Floden against the 0.50pp hike in April 2023 wanting 0.25pp. Ends 2025-10 when she left for the RBNZ."}
+    ],
+    "Jansson": [
+     {"start": "2021-01", "end": "2022-12", "stance": 0, "confidence": "low",
+      "why": "No reservations in either year and did not join the 2022 balance-sheet dissents; not separable from the median on this evidence."},
+     {"start": "2023-01", "end": "2023-12", "stance": 1, "confidence": "medium",
+      "why": "Read as 'rather hawkish' in September 2023, cautioning against over-interpreting soft inflation prints, and declined to join the dovish April 2023 reservation."},
+     {"start": "2024-01", "end": "2025-08", "stance": -1, "confidence": "medium",
+      "why": "The turn: minutes show him seeing the case for cuts on below-target underlying inflation and pressing for faster reductions. The single clearest relative repositioning by any member in either committee."},
+     {"start": "2025-09", "end": "", "stance": -2, "confidence": "medium",
+      "why": "The board's most vocal dove once Seim's reservation split the committee open; his remarks are the ones that reprice Swedish cut expectations."}
+    ],
+    "Bunge": [
+     {"start": "2022-12", "end": "2023-12", "stance": 0, "confidence": "low",
+      "why": "Took office 2022-12; no reservations and not separately characterised in her first year. No signal rather than a measured neutral."},
+     {"start": "2024-01", "end": "", "stance": -1, "confidence": "medium",
+      "why": "Steadily dovish without ever dissenting formally - downplayed the May 2024 services upside, still placed 'in the more dovish camp' in late 2025. Held at -1 not -2 because it is risk emphasis rather than an active call for faster cuts."}
+    ],
+    "Seim": [
+     {"start": "2024-05", "end": "2025-08", "stance": 0, "confidence": "low",
+      "why": "Took office 2024-05 at the median, sharing the board's central view that further cuts were coming. Her November 2024 neutral-rate speech is deliberately NOT scored as hawkish - it was an institutional assessment, not a personal lean."},
+     {"start": "2025-09", "end": "", "stance": 2, "confidence": "high",
+      "why": "Unambiguously the most hawkish member, on the strongest evidence available: a formal reservation against the September 2025 cut to 1.75%, the sole reservation of the year, dissenting alone against Thedeen and everyone else. Ranked above Thedeen because she actually broke consensus."}
+    ]
+   }
+  }
+ }
+}
