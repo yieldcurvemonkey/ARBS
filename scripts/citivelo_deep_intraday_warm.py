@@ -586,13 +586,26 @@ def _connect_or_restart(args, logger: logging.Logger) -> Any:
         # driver has to start it.
         from MDP.CitiVelocityExcel.supervisor import excel_pids, launch_excel, wait_for_addin
 
-        if not excel_pids():
+        if not excel_pids() and args.auto_restart:
             logger.warning(
                 "connect failed (%s) and no EXCEL.EXE is running - launching one. "
                 "Note that restart_excel starts Excel as a CHILD of this process, "
                 "so killing a previous run takes its Excel down too.", exc,
             )
             launch_excel(logger=logger)
+        elif not excel_pids():
+            # Deliberately does NOT spawn one. A spawned instance has twice been
+            # measured to load the add-in and never sign in, and leaving a dead
+            # Excel around is worse than leaving none: the user opens Excel, it
+            # attaches to the stuck instance, and the thing that would have
+            # worked no longer does. Wait for a human-signed-in one instead -
+            # ``--ready-timeout`` is how long that patience lasts.
+            logger.warning(
+                "connect failed (%s) and no EXCEL.EXE is running. NOT spawning one - "
+                "a spawned instance does not sign in on this machine. Waiting up to "
+                "%.0f min for Excel to be opened and signed in to Velocity by hand.",
+                exc, getattr(args, "ready_timeout", 1800.0) / 60.0,
+            )
         else:
             logger.warning("connect failed (%s); waiting for the add-in to sign in.", exc)
         client = wait_for_addin(
