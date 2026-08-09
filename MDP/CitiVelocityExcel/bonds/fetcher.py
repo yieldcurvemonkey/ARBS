@@ -103,6 +103,7 @@ except ImportError:  # pragma: no cover - only on ancient interpreters
 from MDP.CitiVelocityExcel import tags as T
 from MDP.CitiVelocityExcel.bonds import values as V
 from MDP.CitiVelocityExcel.bonds.resolution import BondResolution
+from MDP.CitiVelocityExcel.bonds.sanity import RejectedQuote, screen_quotes
 from MDP.CitiVelocityExcel.errors import CitiVelocityError
 from MDP.CitiVelocityExcel.quotes import CitiVeloQuotes
 from MDP.CitiVelocityExcel.windowed import MAX_SPAN, fetch_windowed
@@ -314,6 +315,14 @@ class CitiBondQuote:
         ``{citi_value: reason}`` for values whose tag went out and whose TRANSPORT
         failed. Disjoint from ``empty``, and the distinction is the whole point:
         one means "widen the window", the other means "the fetch did not happen".
+    rejected
+        ``{citi_value: RejectedQuote}`` for values Citi SERVED and that cannot be
+        the quantity they are labelled as - see
+        :mod:`MDP.CitiVelocityExcel.bonds.sanity`. A fourth category on purpose:
+        ``empty`` means Citi said nothing, ``failed`` means the wire broke, and
+        this means Citi said something impossible. Rejected values are removed
+        from ``quoted`` and from ``stamps``, so nothing downstream can price from
+        one or date a response by one.
     serves
         This bond's whole served vocabulary out of the harvested validation set,
         independent of what was asked for. Carried because "Citi does not serve
@@ -350,6 +359,7 @@ class CitiBondQuote:
     stamps: Mapping[str, datetime.datetime] = dataclasses.field(default_factory=dict)
     failed: Mapping[str, str] = dataclasses.field(default_factory=dict)
     coverage_validated: bool = True
+    rejected: Mapping[str, RejectedQuote] = dataclasses.field(default_factory=dict)
 
     @property
     def served(self) -> bool:
@@ -410,6 +420,7 @@ class CitiBondQuote:
             "unavailable": list(self.unavailable),
             "empty": list(self.empty),
             "failed": sorted(self.failed),
+            "rejected": {k: v.reason for k, v in sorted(self.rejected.items())},
             "serves": list(self.serves),
             "validated": bool(self.coverage_validated),
         }
@@ -434,12 +445,17 @@ class CitiBondQuote:
     def describe(self) -> str:
         lag = f", PRICE {self.price_lag} behind" if self.price_lag else ""
         unswept = "" if self.coverage_validated else ", coverage NOT validated"
+        refused = (
+            f", {len(self.rejected)} REFUSED ({', '.join(sorted(self.rejected))})"
+            if self.rejected
+            else ""
+        )
         return (
             f"{self.isin} {self.mode} @ {self.as_of:%Y-%m-%d %H:%M:%S %Z} "
             f"({self.market_date} {self.market_timezone}): "
             f"{len(self.quoted)} quoted, {len(self.empty)} empty, "
             f"{len(self.failed)} failed, {len(self.unavailable)} unavailable"
-            f"{lag}{unswept}"
+            f"{refused}{lag}{unswept}"
         )
 
 
@@ -857,6 +873,27 @@ class CitiVeloBondFetcher:
                 quoted[value] = float(series.iloc[-1])
                 stamps[value] = from_wire_naive(series.index[-1])
 
+            # Impossible numbers leave here, before anything can price from one.
+            # The stamp goes with the value: `as_of` below is the max over stamps
+            # and `build_pricer_args` dates the pricer by stamps['PRICE'], so a
+            # stamp left behind by a refused quote would keep steering both.
+            desc = resolution.descriptor
+            screen = screen_quotes(
+                quoted,
+                isin=isin,
+                country=desc.country if desc else "",
+                currency=desc.currency if desc else "",
+                asset_type=desc.asset_type if desc else "",
+            )
+            if screen.rejected:
+                for value, bad in screen.rejected.items():
+                    _logger.warning(
+                        "citivelo bonds: refusing %s for %s (%s) - %s",
+                        value, isin, resolution.token, bad.reason,
+                    )
+                    stamps.pop(value, None)
+                quoted = dict(screen.kept)
+
             if stamps:
                 as_of = max(stamps.values())
             else:
@@ -885,6 +922,7 @@ class CitiVeloBondFetcher:
                 stamps=stamps,
                 failed=failed,
                 coverage_validated=bool(entry.get("validated", True)),
+                rejected=dict(screen.rejected),
             )
         return out
 
@@ -1048,7 +1086,13 @@ def build_pricer_args(
 
     price = quote.get("PRICE")
     if price is None:
-        if "PRICE" in quote.failed:
+        if "PRICE" in quote.rejected:
+            why = (
+                f"Citi SERVED a PRICE and it was refused: {quote.rejected['PRICE'].reason}. "
+                f"This is an upstream data defect, not a missing quote - it happened for real "
+                f"on 2026-07-14 and 07-15 across four on-the-run Treasuries"
+            )
+        elif "PRICE" in quote.failed:
             why = f"the fetch for PRICE FAILED: {quote.failed['PRICE']}"
         elif "PRICE" in quote.unavailable:
             why = "Citi does not serve PRICE for it"

@@ -171,9 +171,16 @@ _COVERAGE_VALUES = tuple(dict.fromkeys(
     tuple(DEFAULT_BOND_VALUES) + ("OAS", SPLIT_VALUE, UNSERVED_VALUE)))
 #: The base each bond's numbers are built from, so an assertion can name the
 #: value it expects instead of restating an arithmetic coincidence.
+#: Distinct, and also POSSIBLE. The second base was 88.0, which put this fixture's
+#: YIELD at ``88.0 - 95.0 = -7.0``; ``bonds.sanity`` refuses that, correctly - the
+#: most negative yield Citi served in ten years of US tape is -2.39725. Which bond
+#: lands on which base depends on the catalog, so the old value failed here only on
+#: a machine whose catalog had been seeded with matured bonds, which is the worst
+#: way for a fixture to be wrong. Distinctness - the property the offsets exist for
+#: - is untouched: the four bases give YIELDs of 4, 1, 6 and 2.
 _BASE = {
     ISIN_WITH_ASW_USD: 99.0,
-    ISIN_WITHOUT_ASW_USD: 88.0,
+    ISIN_WITHOUT_ASW_USD: 96.0,
     ISIN_JGB: 101.0,
     ISIN_MEX: 97.0,
 }
