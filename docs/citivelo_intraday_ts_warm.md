@@ -62,10 +62,40 @@ missing, so adding a single unwarmed column to a cell of nine warmed ones takes 
 from 0.4 s to 374 s. If a read is unexpectedly slow, the cause is usually one
 column, not the cache.
 
-The grid is the store's own published minutes (typically 01:00–19:00 ET, ~1,100
-per day; some days run to 23:00). Sundays and US bond-market holidays hold no
-priced rows by design — `IRSwapsTB` filters USD-SOFR-1D reference points to US
-government-bond business days.
+The grid is the store's own published minutes. Sundays and US bond-market
+holidays hold no priced rows by design — `IRSwapsTB` filters USD-SOFR-1D
+reference points to US government-bond business days.
+
+### Ask for the resolution the CurveStore actually has
+
+The minute CurveStore is **not one-minute everywhere**, and the warm inherits
+whatever it holds rather than inventing minutes that were never published:
+
+| era | days | minutes/day (median) | ask for |
+|---|---|---|---|
+| 2024-01 → 2026-08 | 632 | **1,209–1,310** | `freq="1min"` |
+| 2022-08 → 2023-12 | 366 | **132** — ten-minute data | `freq="10min"` |
+
+Measured read times for 9 queries over a 04:00–17:00 session:
+
+| | | |
+|---|---|---|
+| 2025-03-12 `freq="1min"` | 781 points | **1.7 s** |
+| 2023-06-14 `freq="10min"` | 79 points | **2.1 s** |
+| 2023-06-14 `freq="1min"` | 781 points | **670 s** ← 90% of the grid has no snapshot |
+
+That last row is not a cache failure — there is no 2023 one-minute data to cache.
+A `freq="1min"` request there asks for 702 instants the store has never held; the
+nearest-snapshot loader serves the same curve to each run of ten, and every one of
+them has to be priced. It is a **one-time** cost per day (the result is then
+cached), but the values it produces are ten-minute data wearing a one-minute
+index, which is worse than useless in a mean-reversion study.
+
+The real fix is upstream: `CVTSHIST` **does** serve true 1-minute history that far
+back — measured at T-1460d while warming the swap-spread axis — so
+`scripts/citivelo_excel_intraday_warm.py fetch` could refill 2022-2023 at MI01 and
+this warm would then cover it on a re-run. That is Excel-bound work and is not
+done here.
 
 ### Swap spreads: minutes that can never be cached
 
