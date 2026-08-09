@@ -56,6 +56,10 @@ __all__ = [
 
 #: Fraction of free memory a build may commit to in-flight sessions.
 _RAM_FRACTION = 0.6
+#: Records decoded per chunk.  Smaller chunks trade a little throughput for a
+#: lower peak, and peak is what fails a build: four consecutive SR3 sessions died
+#: of MemoryError at five million.
+DEFAULT_CHUNK = 2_000_000
 #: Bytes of store written per source record.  **Measured on the pilot**, not
 #: estimated: 7.8 to 9.1 across the six Treasury roots on 2026-07-14, and 13.0
 #: for SR3, whose messages are far more likely to change the touch (75.5 M
@@ -120,7 +124,8 @@ def estimate_bytes(pending: pd.DataFrame,
 def build_session(root: str, archive_roots: Sequence[str], product: str,
                   date: datetime.date, engine_version: str = mf.ENGINE_VERSION,
                   tier: str = "wide", min_records: int = 1,
-                  keep_scratch: bool = False) -> Dict[str, object]:
+                  keep_scratch: bool = False,
+                  chunk: int = DEFAULT_CHUNK) -> Dict[str, object]:
     """Replay one session into the store and return its manifest rows.
 
     Runs in a worker process, so it takes only picklable arguments and builds its
@@ -158,11 +163,27 @@ def build_session(root: str, archive_roots: Sequence[str], product: str,
 
             parts: Dict[int, List[np.ndarray]] = {}
             n_records = 0
-            for arr in store.to_ndarray(count=5_000_000):
+            for arr in store.to_ndarray(count=chunk):
                 n_records += arr.shape[0]
-                iid = arr["instrument_id"]
-                for u in np.unique(iid):
-                    parts.setdefault(int(u), []).append(arr[iid == u])
+                # Sort once and slice, rather than masking per instrument.  The
+                # obvious ``arr[iid == u]`` in a loop allocates a full-length
+                # boolean per unique instrument per chunk: on SR3, 443 active
+                # instruments times a five-million-row chunk is about 2 GB of
+                # transient masks on top of the session itself, and it is what
+                # put four consecutive SR3 sessions into MemoryError.  One
+                # stable argsort plus searchsorted gives the same partition with
+                # a single index array.
+                iid = arr["instrument_id"].astype(np.int64)
+                order_ix = np.argsort(iid, kind="stable")
+                sid = iid[order_ix]
+                sub = arr[order_ix]
+                del order_ix
+                uniq = np.unique(sid)
+                lo = np.searchsorted(sid, uniq, side="left")
+                hi = np.searchsorted(sid, uniq, side="right")
+                for k, u in enumerate(uniq.tolist()):
+                    parts.setdefault(int(u), []).append(sub[lo[k]:hi[k]].copy())
+                del sub, sid, iid
 
             writer = StoreWriter(root, product, date, engine_version)
             # Busiest first: the largest instrument dominates peak memory, and
@@ -225,6 +246,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     p.add_argument("--workers", default="auto")
     p.add_argument("--disk-budget-gb", type=float, default=250.0)
     p.add_argument("--bytes-per-record", type=float, default=DEFAULT_BYTES_PER_RECORD)
+    p.add_argument("--chunk", type=int, default=DEFAULT_CHUNK,
+                   help="records decoded per chunk; lower it if memory is tight")
     p.add_argument("--dry-run", action="store_true")
     p.add_argument("--force", action="store_true",
                    help="rebuild sessions the manifest already calls complete")
@@ -281,7 +304,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     with ProcessPoolExecutor(max_workers=workers) as ex:
         futs = {
             ex.submit(build_session, root, archive.roots, r["product"], r["date"],
-                      mf.ENGINE_VERSION, a.tier): (r["product"], r["date"])
+                      mf.ENGINE_VERSION, a.tier, 1, False, a.chunk):
+                (r["product"], r["date"])
             for _, r in todo.iterrows()
         }
         for i, fut in enumerate(as_completed(futs), 1):
