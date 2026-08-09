@@ -267,10 +267,18 @@ def plan_curve(
 
     store = CurveStore.default()
     asset = asset_name(curve_name)
-    stored_dense = {
-        d for d in store.available_dates(asset)
-        if lo <= d < hi and _stored_curve_count(store, asset, d) >= min_store_curves
-    }
+    # The density threshold only applies where dense data EXISTS. Below a curve's
+    # dense_from, Citi publishes a few hundred prints a day at best, so a flat
+    # "600 curves or refetch" rule would mark every sparse-era day thin forever
+    # and re-run those Excel windows on every invocation.
+    dense_from = horizon.dense_from if horizon else lo
+    stored_dense = set()
+    for d in store.available_dates(asset):
+        if not (lo <= d < hi):
+            continue
+        threshold = min_store_curves if d >= dense_from else 1
+        if _stored_curve_count(store, asset, d) >= threshold:
+            stored_dense.add(d)
 
     plan = CurvePlan(curve_name=curve_name, start=lo, end=hi)
     plan.business_days = _business_days(lo, hi)
@@ -524,22 +532,38 @@ def _ibor_curve_names() -> set:
     return set(IBOR_CURVES)
 
 
-def discount_source_for(curve_name: str, day: datetime.date, work_dir: Path) -> Optional[str]:
-    """Which OIS par cache to discount ``curve_name`` with on ``day``.
+def discount_source_for(
+    curve_name: str, day: datetime.date, work_dir: Path
+) -> Tuple[Optional[str], str]:
+    """Which euro OIS curve discounts ``curve_name`` on ``day``, and from where.
 
-    Returns the OIS curve's name, or ``None`` when no euro OIS curve has intraday
-    data that far back and the build must self-discount. The plan is on the
-    :class:`IborCurveSpec`; this only adds the "is it actually on disk?" half,
-    because a discount curve that was planned and never fetched has to degrade to
-    self-discounting rather than fail the day.
+    Returns ``(curve name, "parquet"|"store")``, or ``(None, "self")`` when no
+    euro OIS curve has intraday data that far back.
+
+    **Both sources have to be checked, and missing the second one is silent.**
+    The fetch planner skips a day the CurveStore already holds densely, so
+    ``EUR-ESTR-1D`` has no work-directory parquet for the 500-odd days it is
+    already warmed for - 2024-08 onward, the two most liquid years in the whole
+    range. A parquet-only lookup falls through ESTR (no file), then through EONIA
+    (its plan stops at 2021-10), and lands on self-discounting for exactly the
+    era where the right discount curve is sitting in the store. The result is
+    labelled, so it would not have been *wrong* so much as quietly worse, for
+    years, in the place it matters most.
     """
+    from Caching.curve_store import CurveStore
+
     from MDP.CitiVelocityExcel.curves.ibor_builder import ibor_spec_for
 
     spec = ibor_spec_for(curve_name)
+    store = CurveStore.default()
     for available_from, name in spec.discount_plan:
-        if day >= available_from and (work_dir / name / f"{day.isoformat()}.parquet").exists():
-            return name
-    return None
+        if day < available_from:
+            continue
+        if (work_dir / name / f"{day.isoformat()}.parquet").exists():
+            return name, "parquet"
+        if store.has_day(asset_name(name), day):
+            return name, "store"
+    return None, "self"
 
 
 def build_ibor_curve_days(curve_name: str, args, logger: logging.Logger) -> int:
@@ -567,18 +591,25 @@ def build_ibor_curve_days(curve_name: str, args, logger: logging.Logger) -> int:
             continue
         if not args.force and store.has_day(asset_name(curve_name), day):
             continue
-        disc_name = discount_source_for(curve_name, day, work_dir)
-        disc_path = str(work_dir / disc_name / f"{day.isoformat()}.parquet") if disc_name else ""
-        tasks.append((curve_name, day, str(path), disc_name or "", disc_path))
+        disc_name, disc_from = discount_source_for(curve_name, day, work_dir)
+        disc_path = (
+            str(work_dir / disc_name / f"{day.isoformat()}.parquet")
+            if disc_name and disc_from == "parquet" else ""
+        )
+        tasks.append((curve_name, day, str(path), disc_name or "", disc_path, disc_from,
+                      bool(args.include_short_tenors)))
 
     if not tasks:
         logger.info("%s: nothing to build", curve_name)
         return 0
 
-    self_discounted = sum(1 for t in tasks if not t[3])
+    by_source: Dict[str, int] = {}
+    for task in tasks:
+        by_source[task[5]] = by_source.get(task[5], 0) + 1
     logger.info(
-        "%s: %d day(s), %d dual-curve, %d self-discounted",
-        curve_name, len(tasks), len(tasks) - self_discounted, self_discounted,
+        "%s: %d day(s); discount source %s",
+        curve_name, len(tasks),
+        ", ".join(f"{k}={v}" for k, v in sorted(by_source.items())),
     )
 
     from concurrent.futures import ProcessPoolExecutor, as_completed
@@ -624,7 +655,7 @@ def _build_ibor_day(task: tuple) -> Dict[str, Any]:
     import citivelo_excel_intraday_warm as base
     from MDP.CitiVelocityExcel.curves.ibor_builder import build_rl_ibor_curve, ibor_spec_for
 
-    curve_name, day, par_path, disc_name, disc_path = task
+    curve_name, day, par_path, disc_name, disc_path, disc_from, include_short = task
     out: Dict[str, Any] = {
         "date": str(day), "n_curves": 0, "n_skipped": 0,
         "discounting": disc_name or "self", "max_reprice_bp": 0.0, "error": None,
@@ -633,14 +664,28 @@ def _build_ibor_day(task: tuple) -> Dict[str, Any]:
         spec = ibor_spec_for(curve_name)
         store = base._WORKER["store"]
         frame = pd.read_parquet(par_path).set_index("timestamp").sort_index()
+        if not include_short:
+            # EUR swaps are annual 30E/360 against SIX-MONTH EURIBOR only from 1Y
+            # out. Citi's PAR grid also carries 1W..11M, and what those quote is
+            # NOT that instrument - short EUR is conventionally deposits or
+            # 3M-indexed - so pricing them with eur_irs6 builds a contract that
+            # does not exist. It would solve, and the reprice guard would pass,
+            # because the guard checks the curve against the same wrong swap.
+            # Excluded until an external anchor says otherwise; see
+            # docs/citivelo_intraday_depth_and_cvsnap.md.
+            frame = frame[[c for c in frame.columns if _tenor_years_of(c) >= 1.0]]
         disc_frame = (
             pd.read_parquet(disc_path).set_index("timestamp").sort_index()
             if disc_path else None
         )
+        disc_store_frame = None
+        if disc_frame is None and disc_name and disc_from == "store":
+            disc_store_frame = _store_curves_for_day(store, asset_name(disc_name), day)
 
         local_tz = zoneinfo.ZoneInfo(spec.local_timezone)
         utc = _dt.timezone.utc
         snapshots: List[Any] = []
+        disc_memo: Dict[int, Any] = {}
         worst = 0.0
 
         for stamp, row in frame.iterrows():
@@ -665,6 +710,13 @@ def _build_ibor_day(task: tuple) -> Dict[str, Any]:
                             curve_id="disc",
                         ).rl_pricing_curve
                         disc_label = disc_name
+            elif disc_store_frame is not None:
+                # The OIS curve is already solved and in the store; rebuilding it
+                # from par rates we do not have on disk would be the wrong kind of
+                # thorough. Nearest snapshot at or before the minute.
+                curve_at = _nearest_stored_curve(disc_store_frame, stamp, disc_memo)
+                if curve_at is not None:
+                    disc_curve, disc_label = curve_at, disc_name
 
             try:
                 result = build_rl_ibor_curve(
@@ -723,6 +775,276 @@ _CITI_INDEX_BY_CURVE: Dict[str, str] = {
     "EUR-ESTR-1D": "EUR_EUROSTR",
     "EUR-EONIA-1D": "EUR_EONIA",
 }
+
+_UNIT_YEARS = {"D": 1.0 / 365.25, "W": 7.0 / 365.25, "M": 1.0 / 12.0, "Y": 1.0}
+
+
+def _tenor_years_of(tenor: str) -> float:
+    text = str(tenor).strip().upper()
+    try:
+        return float(text[:-1]) * _UNIT_YEARS[text[-1]]
+    except (ValueError, KeyError, IndexError):
+        return 0.0
+
+
+def _register_curve_definitions() -> None:
+    """Teach ``reconstruct_curve`` about the Citi Velocity curve names. Idempotent.
+
+    Without this, ``CurveStore.reconstruct_curve`` does not find the stored
+    ``reference_key`` in ``RATESLIB_CURVE_DEFINITIONS`` and falls back to
+    **act360 / nyc / mf**. It warns, and for the USD curves the fallback happens
+    to be correct - which is exactly why it is dangerous. A euro curve rebuilt on
+    the New York calendar instead of TARGET is a different curve, and the only
+    signal is a log line.
+    """
+    from MDP.IRSwaps.CITIVELO_EXCEL.curve_definitions import register
+
+    register(quantlib=False)
+
+
+def _store_curves_for_day(store: Any, asset: str, day: datetime.date):
+    """Every stored curve snapshot for one day, indexed by local timestamp.
+
+    Returns ``None`` when the day is absent, so a caller can tell "no discount
+    curve" from "an empty one".
+    """
+    import pandas as pd
+
+    _register_curve_definitions()
+
+    frame = store.read_raw_day(asset, day)
+    if frame is None or frame.empty:
+        return None
+    stamp = "timestamp_local" if "timestamp_local" in frame.columns else "timestamp_utc"
+    frame = frame.copy()
+    frame["_stamp"] = pd.to_datetime(frame[stamp])
+    return frame.sort_values("_stamp").reset_index(drop=True)
+
+
+def _nearest_stored_curve(frame, stamp, memo: Optional[Dict[int, Any]] = None):
+    """The stored curve at or before ``stamp``, rebuilt. ``None`` if there is none.
+
+    Backward-only on purpose. ``nearest`` would happily discount an 08:05 EURIBOR
+    quote on an 08:40 ESTR curve, which is the same look-ahead the sibling
+    ``citivelo`` source was measured making by up to 55 minutes.
+
+    ``searchsorted`` rather than a boolean mask, and a memo keyed on the row
+    position: two curves published a minute apart resolve to the same discount
+    snapshot most of the time, and rebuilding it is ~1.6 ms that would otherwise
+    be paid ~1,200 times a day for nothing.
+    """
+    import numpy as np
+    import pandas as pd
+
+    from Caching.curve_store import CurveStore
+
+    target = np.datetime64(pd.Timestamp(stamp))
+    pos = int(np.searchsorted(frame["_stamp"].values, target, side="right")) - 1
+    if pos < 0:
+        return None
+    if memo is not None and pos in memo:
+        return memo[pos]
+    try:
+        curve = CurveStore.reconstruct_curve(frame.iloc[pos].to_dict())
+    except Exception:  # noqa: BLE001 - a bad stored row degrades to self-discounting
+        curve = None
+    if memo is not None:
+        memo[pos] = curve
+    return curve
+
+
+def cmd_verify(args, logger: logging.Logger) -> int:
+    """Tie stored curves back to Citi at a handful of minutes, using ``CVSNAP``.
+
+    This is the one job ``CVSNAP`` measured *well* at, and the reason it is worth
+    keeping in the toolkit at all after the depth question came back negative: it
+    reads **one instant** for ~0.5 s and ~4 MB of Excel, where the same question
+    asked through ``CVTSHIST`` costs a 5,800-row window and ~46 MB. For an
+    independent check on a few dozen minutes that ratio is the whole argument.
+
+    Sampling is **per era**, not uniform, because the eras fail differently: the
+    dense era is the one everybody reads, the sparse era has a different tenor
+    set, and the pre-EONIA EURIBOR era is self-discounted. A uniform sample over
+    ten years puts almost nothing in the two that are least proven.
+
+    What it compares is the curve's own ``fair_rate`` for a tenor against Citi's
+    published par quote at the same minute - not the stored par input, which
+    would be a tautology.
+    """
+    import pandas as pd
+
+    from Caching.curve_store import CurveStore
+    from MDP.CitiVelocityExcel.com_client import CitiVelocityExcelClient
+    from MDP.CitiVelocityExcel.memory_guard import assert_safe_to_connect
+
+    store = CurveStore(base_dir=Path(args.base_dir)) if args.base_dir else CurveStore.default()
+    assert_safe_to_connect(args.ceiling_mb, what="the deep intraday warm verifier")
+
+    rows: List[Dict[str, Any]] = []
+    with CitiVelocityExcelClient.connect(workbook_tag=args.workbook_tag) as client:
+        for curve in _curves(args):
+            asset = asset_name(curve)
+            available = [d for d in store.available_dates(asset)]
+            if not available:
+                logger.warning("%s: nothing in the store yet", curve)
+                continue
+            horizon = HORIZONS.get(curve)
+            eras = _sample_eras(available, horizon, args.per_era)
+            tags, zone = tags_and_zone_for(curve)
+            if zone is None:
+                from MDP.IRSwaps.CITIVELO_EXCEL.curve_names import entry_for_curve_name
+
+                zone = entry_for_curve_name(curve).local_timezone
+            for era, days in eras.items():
+                for day in days:
+                    frame = store.read_raw_day(asset, day)
+                    if frame is None or frame.empty:
+                        continue
+                    row = frame.iloc[len(frame) // 2].to_dict()
+                    local = pd.Timestamp(row.get("timestamp_local") or row["timestamp_utc"])
+                    wire = _local_to_wire_instant(local.to_pydatetime(), zone)
+                    tag = _quote_tag_for(curve, args.tenor)
+                    try:
+                        got = client.snapshot([tag], wire)
+                        quote, _ = got.get(tag, (None, None))
+                    except Exception as exc:  # noqa: BLE001
+                        rows.append({"curve": curve, "era": era, "date": str(day),
+                                     "error": f"{type(exc).__name__}: {exc}"})
+                        continue
+                    fair = _fair_rate_of(row, args.tenor)
+                    rows.append({
+                        "curve": curve, "era": era, "date": str(day),
+                        "minute": str(local), "wire": str(wire),
+                        "citi": quote, "curve_rate": fair,
+                        "diff_bp": (None if (quote is None or fair is None)
+                                    else round((fair - quote) * 100.0, 4)),
+                        "source_variant": row.get("source_variant", ""),
+                    })
+                    logger.info("  %-16s %-8s %s %s  citi=%s curve=%s diff=%s bp",
+                                curve, era, day, local.time(), quote,
+                                None if fair is None else round(fair, 5),
+                                rows[-1]["diff_bp"])
+
+    print(f"\n{'curve':<18}{'era':<10}{'n':>4}{'worst |diff| bp':>17}{'median bp':>12}  variants")
+    ok = True
+    for curve in sorted({r["curve"] for r in rows}):
+        for era in sorted({r["era"] for r in rows if r["curve"] == curve}):
+            block = [r for r in rows
+                     if r["curve"] == curve and r["era"] == era and r.get("diff_bp") is not None]
+            if not block:
+                print(f"{curve:<18}{era:<10}{0:>4}{'no comparison':>17}")
+                continue
+            diffs = sorted(abs(r["diff_bp"]) for r in block)
+            worst = diffs[-1]
+            median = diffs[len(diffs) // 2]
+            variants = ",".join(sorted({r["source_variant"] for r in block}))
+            flag = "" if worst <= args.tolerance_bp else "   <-- OVER TOLERANCE"
+            ok = ok and worst <= args.tolerance_bp
+            print(f"{curve:<18}{era:<10}{len(block):>4}{worst:>17.4f}{median:>12.4f}"
+                  f"  {variants}{flag}")
+    if args.out:
+        Path(args.out).parent.mkdir(parents=True, exist_ok=True)
+        Path(args.out).write_text(json.dumps(rows, indent=1, default=str), encoding="utf-8")
+        logger.info("wrote %s", args.out)
+    return 0 if ok else 1
+
+
+def _sample_eras(
+    available: Sequence[datetime.date], horizon: Optional[Horizon], per_era: int
+) -> Dict[str, List[datetime.date]]:
+    """Split stored days into dense / sparse eras and take a spread of each.
+
+    Spread rather than random: evenly-spaced picks cover the range on the first
+    run and are reproducible, which matters more here than independence - the
+    failure this looks for is a whole era being wrong, not one bad day.
+    """
+    days = sorted(available)
+    dense_from = horizon.dense_from if horizon else (days[0] if days else None)
+    eras: Dict[str, List[datetime.date]] = {
+        "dense": [d for d in days if dense_from is None or d >= dense_from],
+        "sparse": [d for d in days if dense_from is not None and d < dense_from],
+    }
+    out: Dict[str, List[datetime.date]] = {}
+    for era, members in eras.items():
+        if not members:
+            continue
+        if len(members) <= per_era:
+            out[era] = members
+            continue
+        step = len(members) / float(per_era)
+        out[era] = [members[min(len(members) - 1, int(i * step))] for i in range(per_era)]
+    return out
+
+
+def _local_to_wire_instant(local: datetime.datetime, tz: str) -> datetime.datetime:
+    """Curve-local wall clock -> the naive New York instant the add-in expects."""
+    import zoneinfo
+
+    aware = local.replace(tzinfo=zoneinfo.ZoneInfo(tz))
+    return aware.astimezone(zoneinfo.ZoneInfo("America/New_York")).replace(tzinfo=None)
+
+
+def _quote_tag_for(curve_name: str, tenor: str) -> str:
+    from MDP.CitiVelocityExcel.curves.ibor_builder import IBOR_CURVES
+
+    spec = IBOR_CURVES.get(curve_name.strip().upper())
+    if spec is not None:
+        return f"RATES.SWAP_LIBOR.{spec.citi_currency}.PAR.{tenor.upper()}"
+    from MDP.IRSwaps.CITIVELO_EXCEL.curve_names import citi_index_for_curve_name
+
+    return f"RATES.OIS.{citi_index_for_curve_name(curve_name)}.PAR.{tenor.upper()}"
+
+
+def _fair_rate_of(row: Dict[str, Any], tenor: str) -> Optional[float]:
+    """The stored curve's own par rate for ``tenor``, in PERCENT.
+
+    The unit is MEASURED, not assumed: on a stored ``USD-FEDFUNDS-1D`` minute of
+    2026-07-08 this returns ``4.10733979`` against Citi's published
+    ``4.10734`` - agreement to **-0.0000 bp**. ``rl.IRS.rate()`` is percent;
+    ``RLCurveBase``-style ``fair_rate()`` helpers are DECIMAL, and confusing the
+    two turns a 4.42% swap into 442 bp of error that reads exactly like a broken
+    curve. The minute-warm tie-out walked into that once already.
+    """
+    import rateslib as rl
+
+    from Caching.curve_store import CurveStore
+
+    _register_curve_definitions()
+    try:
+        curve = CurveStore.reconstruct_curve(row)
+    except Exception:  # noqa: BLE001
+        return None
+    reference = str(row.get("reference_key") or "")
+    # The spec, calendar and settlement lag come from the SAME definitions the
+    # warm solved with, not from a lookup table written here. A 2-day spot on the
+    # wrong calendar moves the effective date and the comparison silently becomes
+    # a different swap - see the QuantLib MakeOIS effective-date case, which cost
+    # 6.5 bp of forward error with nothing raising.
+    from MDP.CitiVelocityExcel.curves.ibor_builder import IBOR_CURVES
+
+    ibor = IBOR_CURVES.get(reference.upper())
+    if ibor is not None:
+        spec, calendar, spot_lag = ibor.rl_spec, ibor.calendar, ibor.spot_lag
+    else:
+        try:
+            import citivelo_excel_intraday_warm as base
+
+            params = base.curve_params(reference)
+        except Exception:  # noqa: BLE001 - an unknown curve is not verifiable here
+            return None
+        spec, calendar, spot_lag = params["spec"], params["calendar"], params["spot_lag"]
+
+    nodes = sorted(curve.nodes._nodes if hasattr(curve.nodes, "_nodes") else dict(curve.nodes))
+    if not nodes:
+        return None
+    ref = nodes[0]
+    try:
+        cal = rl.get_calendar(calendar)
+        spot = cal.add_bus_days(ref, int(spot_lag), True)
+        swap = rl.IRS(effective=spot, termination=tenor, spec=spec, curves=curve)
+        return float(swap.rate(curves=curve))
+    except Exception:  # noqa: BLE001
+        return None
 
 
 def cmd_status(args, logger: logging.Logger) -> int:
@@ -791,7 +1113,30 @@ def _build_parser() -> argparse.ArgumentParser:
     b = sub.add_parser("build", help="solve the fetched days into the CurveStore")
     b.add_argument("--workers", type=int, default=max(1, (os.cpu_count() or 4) - 2))
     b.add_argument("--force", action="store_true")
+    b.add_argument(
+        "--include-short-tenors", action="store_true",
+        help="calibrate IBOR curves on the sub-1Y PAR quotes too. OFF by default: "
+             "EUR swaps are annual vs 6M EURIBOR only from 1Y out, and pricing a "
+             "1M quote with eur_irs6 builds an instrument that does not exist. It "
+             "would still solve, and the reprice guard would still pass, because "
+             "the guard checks the curve against the same wrong swap. Turn this on "
+             "once an external anchor (RATES.BASIS_SWAPS.EUROSTR_EURIBOR_BASIS, or "
+             "a with/without comparison of the 1Y+ forwards) says the short quotes "
+             "belong on this curve.",
+    )
     b.set_defaults(func=cmd_build)
+
+    v = sub.add_parser(
+        "verify",
+        help="CVSNAP a stored minute per era and compare against the curve's own par rate",
+    )
+    v.add_argument("--workbook-tag", default="VERIFY")
+    v.add_argument("--per-era", type=int, default=5)
+    v.add_argument("--tenor", default="10Y")
+    v.add_argument("--tolerance-bp", type=float, default=0.05)
+    v.add_argument("--ceiling-mb", type=float, default=3500.0)
+    v.add_argument("--out", default=None)
+    v.set_defaults(func=cmd_verify)
 
     s = sub.add_parser("status")
     s.set_defaults(func=cmd_status)
