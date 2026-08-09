@@ -77,8 +77,8 @@ def test_comment_line_ending_in_semicolon_is_dropped():
 
 
 def test_no_blank_statements_in_real_schemas():
-    from SDRUtils._swappulse_scripts._tape_schema_v2 import TAPE_SCHEMA_SQL_V2
-    for s in _split_ddl_statements(TAPE_SCHEMA_SQL_V2):
+    from SDRUtils._swappulse_scripts._tape_schema_current import TAPE_SCHEMA_SQL_CURRENT
+    for s in _split_ddl_statements(TAPE_SCHEMA_SQL_CURRENT):
         assert any(
             ln.strip() and not ln.strip().startswith("--")
             for ln in s.splitlines()
@@ -86,11 +86,11 @@ def test_no_blank_statements_in_real_schemas():
 
 
 def test_real_tape_schema_view_stays_atomic():
-    # The real v2 schema's display-view DROP+CREATE must land in one group.
-    from SDRUtils._swappulse_scripts._tape_schema_v2 import TAPE_SCHEMA_SQL_V2
-    groups = _group_ddl_statements(_split_ddl_statements(TAPE_SCHEMA_SQL_V2))
+    # The real current-generation schema's display-view DROP+CREATE must land in one group.
+    from SDRUtils._swappulse_scripts._tape_schema_current import TAPE_SCHEMA_SQL_CURRENT
+    groups = _group_ddl_statements(_split_ddl_statements(TAPE_SCHEMA_SQL_CURRENT))
     view_groups = [g for g in groups if any(_is_view_statement(s) for s in g)]
-    assert view_groups, "expected a view group in the v2 schema"
+    assert view_groups, "expected a view group in the current-generation schema"
     for g in view_groups:
         # every statement in a view group is a view op, and a DROP is paired with a CREATE
         assert all(_is_view_statement(s) for s in g)

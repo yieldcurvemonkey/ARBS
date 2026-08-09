@@ -8,9 +8,10 @@ package-analytics queries previously did `GROUP BY upi_underlier_name`,
 which split a single economic distribution across three buckets.
 
 The function below collapses every observed variation that is the same
-swap-economically into a single canonical token. Persisted on
-``arbs_usd_swap_tape_legs_v2`` as ``canonical_underlier_key`` and read
-by the dashboard's ``groupBy=canonical`` query option.
+swap-economically into a single canonical token. Persisted on the tape
+legs table (see ``SDRUtils._swappulse_scripts._tape_tables.LEGS_TABLE``)
+as ``canonical_underlier_key`` and read by the dashboard's
+``groupBy=canonical`` query option.
 
 The canonical form is a slash-separated, all-uppercase string with a
 stable token order. Single-leg products use

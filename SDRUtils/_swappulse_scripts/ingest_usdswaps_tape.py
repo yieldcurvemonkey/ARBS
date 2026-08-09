@@ -28,16 +28,21 @@ from SDRUtils.analytics.trade_tape import TradeTape
 
 from ._tape_monitoring_v2 import MONITORING_SQL_V2
 from ._tape_schema import TAPE_SCHEMA_SQL  # v1 DDL for back-compat migration
-from ._tape_schema_v2 import (
-    DISPLAY_VIEW_V2,
-    LEGS_TABLE_V2 as LEGS_TABLE,
-    MANUAL_LINKS_TABLE,
-    PACKAGES_TABLE_V2 as PACKAGES_TABLE,
-    RUNS_TABLE_V2 as RUNS_TABLE,
+from ._tape_schema_current import (
     SIGNAL_REALTIME_DDL,
     SIGNAL_TABLE_DDL,
-    SIGNAL_TABLE_V2,
-    TAPE_SCHEMA_SQL_V2,
+    TAPE_SCHEMA_SQL_CURRENT,
+)
+from ._tape_tables import (
+    DISPLAY_VIEW,
+    LEGS_TABLE,
+    MANUAL_LINKS_TABLE,
+    OVERRIDES_TABLE,
+    PACKAGES_TABLE,
+    RUNS_TABLE,
+    SIGNAL_TABLE,
+    VWAP_TABLE,
+    assert_writable_generation,
 )
 from .ingest_usdswaps import get_db_connection_string as _legacy_conn_string
 
@@ -542,23 +547,24 @@ def _execute_ddl_bundle(
 
 _schema_ensured: set[str] = set()
 
+# Migration markers for _schema_already_current(). These MUST name the
+# current generation's tables: the check is by column name against the
+# named table, so pointing it at another generation that happens to have
+# those columns makes ensure_schema() skip all DDL and silently never
+# create this generation's tables at all.
 _LATEST_MIGRATION_COLS = [
-    ("arbs_usd_swap_tape_packages_v2", "ptp_price_notation"),
-    ("arbs_usd_swap_tape_legs_v2", "opa_signed_amount"),
-    ("arbs_usd_swap_tape_overrides_v2", "override_id"),
-    ("arbs_usd_swap_tape_display_v2", "override_map"),
-    # Matched-maturity (MMS) migration markers — without these, ensure_schema's
-    # _schema_already_current() short-circuit would skip the MMS ADD COLUMNs once
-    # the #333 markers exist, leaving the MMS columns unmigrated.
-    ("arbs_usd_swap_tape_packages_v2", "is_matched_maturity_all"),
-    ("arbs_usd_swap_tape_legs_v2", "matched_ust_maturity"),
-    # MMS bond-reference migration marker (CUSIP details in expanded row)
-    ("arbs_usd_swap_tape_legs_v2", "ust_coupon"),
-    # Execution-vs-event timestamp integration (2026-07-17) migration markers.
-    # Without these, _schema_already_current() would skip the new ADD COLUMNs
-    # on a DB that only has the MMS markers.
-    ("arbs_usd_swap_tape_legs_v2", "event_timestamp"),
-    ("arbs_usd_swap_tape_packages_v2", "event_start"),
+    (PACKAGES_TABLE, "ptp_price_notation"),
+    (LEGS_TABLE, "opa_signed_amount"),
+    (OVERRIDES_TABLE, "override_id"),
+    (DISPLAY_VIEW, "override_map"),
+    # Matched-maturity (MMS) migration markers.
+    (PACKAGES_TABLE, "is_matched_maturity_all"),
+    (LEGS_TABLE, "matched_ust_maturity"),
+    # MMS bond-reference marker (CUSIP details in expanded row).
+    (LEGS_TABLE, "ust_coupon"),
+    # Execution-vs-event timestamp integration (2026-07-17).
+    (LEGS_TABLE, "event_timestamp"),
+    (PACKAGES_TABLE, "event_start"),
 ]
 
 
@@ -581,12 +587,13 @@ def _schema_already_current(engine: Engine) -> bool:
 def ensure_schema(
     engine: Engine, _max_retries: int = 5, lock_timeout_ms: int = 5_000
 ) -> None:
-    """Create v2 tables / indexes / view if they don't already exist.
+    """Create the current-generation tables / indexes / view if they don't already exist.
 
     Also runs the v1 DDL so the frozen rollback tables remain valid on
-    fresh environments (§4.11). Writes after Phase 4 cutover target v2
-    only; v1 is preserved for instant rollback via the dashboard's
-    TAPE_DISPLAY_VIEW constant.
+    fresh environments (§4.11). Writes after Phase 4 cutover target the
+    current generation (``_tape_tables.TAPE_GENERATION``) only; v1 is
+    preserved for instant rollback via the dashboard's TAPE_DISPLAY_VIEW
+    constant.
 
     Guarded per-engine-URL so DDL (which takes AccessExclusiveLock on
     views) runs at most once per process, avoiding deadlocks during
@@ -597,6 +604,7 @@ def ensure_schema(
     Retries on deadlock/lock-timeout up to ``_max_retries`` times with
     exponential backoff.
     """
+    assert_writable_generation()
     key = str(engine.url)
     if key in _schema_ensured:
         return
@@ -606,7 +614,7 @@ def ensure_schema(
     for attempt in range(1, _max_retries + 1):
         try:
             _execute_ddl_bundle(engine, TAPE_SCHEMA_SQL, lock_timeout_ms=lock_timeout_ms)
-            _execute_ddl_bundle(engine, TAPE_SCHEMA_SQL_V2, lock_timeout_ms=lock_timeout_ms)
+            _execute_ddl_bundle(engine, TAPE_SCHEMA_SQL_CURRENT, lock_timeout_ms=lock_timeout_ms)
             _execute_ddl_bundle(engine, MONITORING_SQL_V2, lock_timeout_ms=lock_timeout_ms)
             _schema_ensured.add(key)
             return
@@ -1805,7 +1813,7 @@ def _ensure_signal_table(engine: Engine) -> None:
             row = conn.execute(text(
                 "SELECT 1 FROM information_schema.tables "
                 "WHERE table_name = :t AND table_schema = 'public'"
-            ), {"t": SIGNAL_TABLE_V2}).fetchone()
+            ), {"t": SIGNAL_TABLE}).fetchone()
             if row is not None:
                 _signal_ensured = True
                 return
@@ -1840,7 +1848,7 @@ def _signal_tape_update(
         with engine.begin() as conn:
             conn.execute(
                 text(f"""
-                    UPDATE {SIGNAL_TABLE_V2}
+                    UPDATE {SIGNAL_TABLE}
                     SET updated_at = NOW(),
                         as_of_date = :d,
                         packages_written = :p,
@@ -2052,7 +2060,7 @@ def compute_and_write_vwap(
 
     Returns number of ticker rows written.
     """
-    from SDRUtils._swappulse_scripts._tape_schema_v2 import VWAP_TABLE_V2
+    from SDRUtils._swappulse_scripts._tape_tables import VWAP_TABLE
 
     if tape.empty:
         return 0
@@ -2095,7 +2103,7 @@ def compute_and_write_vwap(
 
             conn.execute(
                 text(f"""
-                    INSERT INTO {VWAP_TABLE_V2}
+                    INSERT INTO {VWAP_TABLE}
                         (as_of_date, ticker, vwap_bps, total_risk, total_notional, trade_count)
                     VALUES (:d, :t, :v, :r, :n, :c)
                     ON CONFLICT (as_of_date, ticker) DO UPDATE SET

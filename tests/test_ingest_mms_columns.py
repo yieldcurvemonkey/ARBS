@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 from SDRUtils._swappulse_scripts.ingest_usdswaps_tape import LEG_COLUMNS, PACKAGE_COLUMNS
-from SDRUtils._swappulse_scripts import _tape_schema_v2 as schema
+from SDRUtils._swappulse_scripts import _tape_schema_current as schema
+from SDRUtils._swappulse_scripts import _tape_tables as tt
 
 _NEW_LEG = [
     "matched_ust_maturity", "special_tenor_type", "ust_cusip",
@@ -16,7 +17,7 @@ def test_new_leg_columns_in_tuple():
 
 
 def test_new_leg_columns_in_ddl():
-    sql = schema.TAPE_SCHEMA_SQL_V2
+    sql = schema.TAPE_SCHEMA_SQL_CURRENT
     for c in _NEW_LEG:
         assert f"ADD COLUMN IF NOT EXISTS {c}" in sql, c
 
@@ -30,10 +31,10 @@ def test_new_package_columns_in_tuple():
 
 
 def test_new_package_columns_in_ddl_and_view():
-    sql = schema.TAPE_SCHEMA_SQL_V2
-    pkg = schema.PACKAGES_TABLE_V2
+    sql = schema.TAPE_SCHEMA_SQL_CURRENT
+    pkg = tt.PACKAGES_TABLE
     # Table-qualified so special_tenor_type / tape_label_ust_alias (which share
-    # names with the legs_v2 columns) can't be satisfied by the leg ALTER lines.
+    # names with the legs table's columns) can't be satisfied by the leg ALTER lines.
     for c in _NEW_PKG:
         assert f"ALTER TABLE {pkg} ADD COLUMN IF NOT EXISTS {c}" in sql, c
     # package columns must be hand-listed in the display view SELECT
