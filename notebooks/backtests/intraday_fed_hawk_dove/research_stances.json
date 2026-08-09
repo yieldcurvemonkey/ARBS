@@ -1,0 +1,1807 @@
+{
+ "banks": {
+  "FED": {
+   "note": "Merged from the research map plus two adversarial audits. Both auditors verified the dissent ledger against FOMC statements and both found the same load-bearing error: Logan, Kashkari and Hammack did NOT dissent for a hike in April 2026 - they supported the hold and objected only to the easing bias; only July 2026 is a hike dissent (9-3), and June 2026 was unanimous 12-0. That correction is applied throughout. The research committee note's claim that George's June-2022 dissent was the cycle's only dissent is false (Bullard dissented in March 2022 for 50bp) and is dropped. George's duplicated 'duplicate-guard' period is removed. Flat multi-year periods that both auditors showed were contradicted by roll calls have been split (Daly, Goolsbee, Hammack, Kashkari, Bowman, Waller, Harker, Mester, Collins, Powell). Speakers whose stance rests on emphasis rather than any separating vote (Jefferson, Cook, Barr, Kugler, Quarles, Bowman pre-2024, Warsh) are kept but demoted to low confidence per the UNSUPPORTED rule. Anna Paulson is ADDED (both auditors flagged her omission; she is a confirmed 2026 voter and Reuters places her DOVISH) - she is not on the supplied roster, so drop the key if the backtest roster rejects it.",
+   "speakers": {
+    "Powell": [
+     {
+      "start": "2021-01",
+      "end": "2026-04",
+      "stance": 0,
+      "confidence": "high",
+      "why": "Chair; no dissent in the whole window and sat between the poles in every regime (hawkish of Brainard/Evans in 2021, dovish of Bullard/Mester in 2022-23, between Miran and Schmid in 2025). Median by construction and by revealed behaviour."
+     },
+     {
+      "start": "2026-05",
+      "end": "",
+      "stance": 0,
+      "confidence": "low",
+      "why": "Both auditors: the chair-defines-the-median rule expires when Warsh was sworn in 22 May 2026. As an ordinary governor there is no vote-based evidence either way, so 0 is a placeholder, not a measurement."
+     }
+    ],
+    "Bowman": [
+     {
+      "start": "2021-01",
+      "end": "2023-12",
+      "stance": 1,
+      "confidence": "low",
+      "why": "Auditor A flagged UNSUPPORTED: no dissent, in the majority at both contested 2022 meetings, and the research's own 2021 hawkish tail is Waller/Quarles not her. Lean retained at low confidence."
+     },
+     {
+      "start": "2024-01",
+      "end": "2025-05",
+      "stance": 2,
+      "confidence": "high",
+      "why": "Sept-2024 dissent preferring 25bp to the committee's 50bp - the first Board dissent in roughly 20 years, and the most cut-resistant voter of that phase."
+     },
+     {
+      "start": "2025-06",
+      "end": "2025-12",
+      "stance": -2,
+      "confidence": "high",
+      "why": "July-2025 dissent FOR a cut alongside Waller - the first double governor dissent since 1993. A genuine crossing to the dovish pole."
+     },
+     {
+      "start": "2026-01",
+      "end": "",
+      "stance": -1,
+      "confidence": "medium",
+      "why": "Auditor B, from the roll calls: she voted WITH the majority to hold at both Jan-2026 (Miran and Waller dissenting for cuts) and Apr-2026 (Miran sole dissenter). Still dovish, but not the pole of Warsh's committee."
+     }
+    ],
+    "Williams": [
+     {
+      "start": "2021-01",
+      "end": "",
+      "stance": 0,
+      "confidence": "high",
+      "why": "Both auditors CONFIRMED: votes at every meeting, zero dissents across the entire window, present in the voting-for roster at every contested meeting. Maximal-exposure zero-dissent record - the strongest basis for a structural 0."
+     }
+    ],
+    "Waller": [
+     {
+      "start": "2021-01",
+      "end": "2021-12",
+      "stance": 1,
+      "confidence": "medium",
+      "why": "Auditor B: the 2021 taper pole was Kaplan/Rosengren from spring and Bullard from June; Waller's 'early this fall' call is August, so hawkish of the Board median but not the extreme."
+     },
+     {
+      "start": "2022-01",
+      "end": "2023-10",
+      "stance": 2,
+      "confidence": "high",
+      "why": "The Board's hawkish tail through the hiking cycle, backing the 75bp increments ahead of Cook, Jefferson and Barr."
+     },
+     {
+      "start": "2023-11",
+      "end": "2026-01",
+      "stance": -2,
+      "confidence": "high",
+      "why": "Nov-2023 'something appears to be giving' pivot; argued 50bp in Sept 2024; dissented FOR a cut in July 2025 with Bowman and again in Jan 2026. Reuters 22 Jan 2026 places him in the top DOVE bucket."
+     },
+     {
+      "start": "2026-02",
+      "end": "",
+      "stance": 0,
+      "confidence": "medium",
+      "why": "Dropped the dissent in March 2026 and rejoined the majority; sits between the Bowman/Paulson cut camp and the Logan/Kashkari/Hammack hike camp."
+     }
+    ],
+    "Jefferson": [
+     {
+      "start": "2022-05",
+      "end": "",
+      "stance": -1,
+      "confidence": "low",
+      "why": "Auditor A's thin-record objection extends here: four years of always-voting membership, no dissent, no separating vote. Dovish-leaning centrist lean retained, confidence demoted."
+     }
+    ],
+    "Collins": [
+     {
+      "start": "2022-07",
+      "end": "2025-11",
+      "stance": 0,
+      "confidence": "medium",
+      "why": "Neutral from arrival; voted for all three 2025 cuts without dissenting while Schmid and later Goolsbee did."
+     },
+     {
+      "start": "2025-12",
+      "end": "",
+      "stance": 1,
+      "confidence": "low",
+      "why": "Auditor A: the research's own rationale concedes a late-2025 hawkish drift (supporting a pause) that the flat 0 never registered. She is not a 2026 voter, so this rests on speeches alone."
+     }
+    ],
+    "Logan": [
+     {
+      "start": "2022-08",
+      "end": "",
+      "stance": 2,
+      "confidence": "high",
+      "why": "Persistent hawkish extreme; uneasy about the 50bp Sept-2024 cut, and dissented for a 25bp HIKE in July 2026 (9-3) with Hammack and Kashkari. Correction accepted from both auditors: the April-2026 dissent was against including an easing bias while SUPPORTING the hold, not a vote for a hike."
+     }
+    ],
+    "Barkin": [
+     {
+      "start": "2021-01",
+      "end": "",
+      "stance": 0,
+      "confidence": "medium",
+      "why": "Career centrist, never dissented including as a 2021 and 2024 voter; frames policy as balancing both mandates rather than taking a side."
+     }
+    ],
+    "Kugler": [
+     {
+      "start": "2023-09",
+      "end": "2025-08",
+      "stance": -1,
+      "confidence": "low",
+      "why": "UNSUPPORTED (auditor A): never dissented, voted with the majority at every decisive meeting of her tenure, and was absent from the July-2025 meeting where a dovish lean could have been shown. Lean retained at low confidence."
+     }
+    ],
+    "Cook": [
+     {
+      "start": "2022-05",
+      "end": "",
+      "stance": -1,
+      "confidence": "low",
+      "why": "Same shape as Jefferson: reliable vote for the 2022-23 hikes, never argued for a higher terminal rate, easing-friendly in 2024-26 - but no dissent and no separating vote, so low confidence."
+     }
+    ],
+    "Schmid": [
+     {
+      "start": "2023-08",
+      "end": "",
+      "stance": 2,
+      "confidence": "high",
+      "why": "Both auditors CONFIRMED precisely: voted FOR the Sept-2025 cut, then dissented against the Oct-2025 and Dec-2025 cuts preferring no change. The mirror image of Miran and the hawkish anchor of the 2025 cutting debate."
+     }
+    ],
+    "Musalem": [
+     {
+      "start": "2024-04",
+      "end": "",
+      "stance": 1,
+      "confidence": "medium",
+      "why": "Repeatedly argued inflation risks skewed to the upside and urged caution on the pace of easing, but voted for all three 2025 cuts without dissenting - a notch below the Schmid/Logan/Hammack tail."
+     }
+    ],
+    "Harker": [
+     {
+      "start": "2021-01",
+      "end": "2022-12",
+      "stance": 1,
+      "confidence": "low",
+      "why": "Auditor A: the research documented a mover and then averaged him to 0. In 2021 he was among the earlier voices for tapering 'sooner rather than later', hawkish of Brainard/Evans/Kashkari. He also appears in the March and June 2022 voting rosters as Boston's alternate."
+     },
+     {
+      "start": "2023-01",
+      "end": "2025-06",
+      "stance": -1,
+      "confidence": "low",
+      "why": "The other half of the same shift: among the earlier voices for slowing hikes and then cutting, dovish of Bowman/Logan/Mester. Never dissented, hence low confidence."
+     }
+    ],
+    "Barr": [
+     {
+      "start": "2022-07",
+      "end": "",
+      "stance": -1,
+      "confidence": "low",
+      "why": "UNSUPPORTED (auditor A): a regulatory specialist with no dissent in four years of always-voting membership; he did not join Bowman and Waller when they dissented for a cut in July 2025. Association-based lean retained at low confidence."
+     }
+    ],
+    "Kashkari": [
+     {
+      "start": "2021-01",
+      "end": "2021-12",
+      "stance": -2,
+      "confidence": "high",
+      "why": "The committee's best-known dove in the taper debate and the polar opposite of Kaplan, Rosengren and Bullard."
+     },
+     {
+      "start": "2022-01",
+      "end": "2023-12",
+      "stance": 2,
+      "confidence": "high",
+      "why": "The most dramatic flip in the sample - by the June-2022 SEP he carried one of the most hawkish dots and argued through 2023 for further hikes. (SEP dots are anonymous, so the 'single most hawkish dot' superlative is not verifiable.)"
+     },
+     {
+      "start": "2024-01",
+      "end": "2025-12",
+      "stance": 0,
+      "confidence": "medium",
+      "why": "Supported the 2024-25 easing in principle, more open to cuts than Schmid/Logan/Hammack but never in the Goolsbee/Daly/Miran camp."
+     },
+     {
+      "start": "2026-01",
+      "end": "2026-03",
+      "stance": 1,
+      "confidence": "medium",
+      "why": "Both auditors: he voted WITH the majority to hold in Jan and Mar 2026, and Reuters 22 Jan 2026 puts him in HAWKISH, a bucket below the HAWK heading. +2 from January back-projects three months."
+     },
+     {
+      "start": "2026-04",
+      "end": "",
+      "stance": 2,
+      "confidence": "high",
+      "why": "First formal break in Apr-2026 (dissent against the easing bias while supporting the hold), then the July-2026 dissent for a 25bp hike with Logan and Hammack."
+     }
+    ],
+    "Daly": [
+     {
+      "start": "2021-01",
+      "end": "2021-12",
+      "stance": -2,
+      "confidence": "high",
+      "why": "Dovish pole of the taper debate with Brainard, Evans and Kashkari against the Kaplan/Rosengren/Bullard push."
+     },
+     {
+      "start": "2022-01",
+      "end": "",
+      "stance": -1,
+      "confidence": "medium",
+      "why": "Both auditors reject the flat -2: no dissent in 5.5 years, voted for every 2022-23 hike including the 75bp moves and for the Sept and Dec 2024 cuts. Reuters 22 Jan 2026 places her one notch INSIDE the DOVE bucket that holds Waller and Miran."
+     }
+    ],
+    "Bostic": [
+     {
+      "start": "2021-01",
+      "end": "2022-05",
+      "stance": 1,
+      "confidence": "medium",
+      "why": "One of the earliest hawks of the cycle: flagged a possible 2022 hike in Jan 2021 and backed a faster taper plus one or two 2022 hikes in Nov 2021."
+     },
+     {
+      "start": "2022-06",
+      "end": "2023-12",
+      "stance": -1,
+      "confidence": "medium",
+      "why": "Crossed to the dovish side of a uniformly hawkish committee - first to float a September pause (May 2022) and the leading 'one more hike then stop' voice through 2023."
+     },
+     {
+      "start": "2024-01",
+      "end": "2026-02",
+      "stance": 1,
+      "confidence": "medium",
+      "why": "Auditor B CONFIRMED, and notes Reuters actually puts him in the top HAWK bucket in Jan 2026; held at +1 because he never dissented and was not a 2026 voter. Retired 28 Feb 2026."
+     }
+    ],
+    "Hammack": [
+     {
+      "start": "2024-08",
+      "end": "2024-11",
+      "stance": 0,
+      "confidence": "medium",
+      "why": "Auditor A, from the roll call: her first FOMC vote was FOR the 50bp Sept-2024 cut that Bowman dissented against - 'hawkish from her first months' is refuted."
+     },
+     {
+      "start": "2024-12",
+      "end": "",
+      "stance": 2,
+      "confidence": "high",
+      "why": "Dec-2024 dissent preferring to hold, sustained caution through 2025, and the July-2026 dissent for a 25bp hike. April-2026 was a dissent against the easing bias, not a hike vote."
+     }
+    ],
+    "Mester": [
+     {
+      "start": "2021-01",
+      "end": "2021-12",
+      "stance": 1,
+      "confidence": "medium",
+      "why": "Auditor A: her 2021 taper record is undifferentiated from Bostic's, so the flat +2 back-projects. Early-taper advocate, hawkish of the median."
+     },
+     {
+      "start": "2022-01",
+      "end": "2024-06",
+      "stance": 2,
+      "confidence": "medium",
+      "why": "Loudest advocate of front-loaded 75bp moves and a higher terminal rate. Confidence held at medium because she never dissented - she was in the majority at both the March and June 2022 dissent meetings."
+     }
+    ],
+    "Goolsbee": [
+     {
+      "start": "2023-01",
+      "end": "2024-12",
+      "stance": -2,
+      "confidence": "high",
+      "why": "The committee's leading dove and author of the 'golden path' while Bullard, Mester, Logan and Bowman still wanted tightening."
+     },
+     {
+      "start": "2025-01",
+      "end": "2025-11",
+      "stance": -1,
+      "confidence": "medium",
+      "why": "Auditor A: he voted for the Sept and Oct 2025 cuts sitting in the majority flanked by Miran (50bp) and Schmid (none) - not pole behaviour. A -2 to +1 jump inside one month is a step function fitted to one event."
+     },
+     {
+      "start": "2025-12",
+      "end": "",
+      "stance": 1,
+      "confidence": "high",
+      "why": "Dec-2025 dissent AGAINST the cut with Schmid, preferring no change; Reuters 22 Jan 2026 then classes him HAWKISH. Both auditors CONFIRMED; the research's hedge is unnecessary."
+     }
+    ],
+    "Miran": [
+     {
+      "start": "2025-09",
+      "end": "2026-05",
+      "stance": -2,
+      "confidence": "high",
+      "why": "The best-evidenced entry in the whole set, confirmed by both auditors against all six statements: dissented at every meeting he attended - 50bp in Sept/Oct/Dec 2025 and for a 25bp cut in Jan/Mar/Apr 2026."
+     }
+    ],
+    "Warsh": [
+     {
+      "start": "2026-05",
+      "end": "",
+      "stance": 0,
+      "confidence": "low",
+      "why": "Both auditors: UNSUPPORTED. He did not join the Hammack/Kashkari/Logan hike dissents and characterised the hold as having large majority support, but the affirmative evidence (dropped guidance, June dots penciling a hike) runs hawkish. 0 is a placeholder on three meetings of evidence. Note: the claim that the new statement stopped publishing the vote split is FALSE - July 2026 was 9-3 with dissenters named."
+     }
+    ],
+    "Brainard": [
+     {
+      "start": "2021-01",
+      "end": "2021-12",
+      "stance": -2,
+      "confidence": "high",
+      "why": "The Board's dovish pole through the taper debate and the internal counterweight to Waller and Quarles."
+     },
+     {
+      "start": "2022-01",
+      "end": "2023-02",
+      "stance": -1,
+      "confidence": "medium",
+      "why": "Turned rhetorically hawkish in early 2022 and voted for the 75bp moves, but was the leading voice for slowing the pace and respecting policy lags."
+     }
+    ],
+    "Clarida": [
+     {
+      "start": "2021-01",
+      "end": "2022-01",
+      "stance": 0,
+      "confidence": "medium",
+      "why": "Anchored the 'transitory' centre with Powell and Williams - dovish of Kaplan/Rosengren/Bullard/Waller on tapering, hawkish of Brainard/Evans/Kashkari in flagging a 2022 liftoff."
+     }
+    ],
+    "Quarles": [
+     {
+      "start": "2021-01",
+      "end": "2021-12",
+      "stance": 1,
+      "confidence": "low",
+      "why": "UNSUPPORTED (auditor A): a supervision vice chair with a thin rate-policy record, no dissent, and 2021 produced no dissents at all. The whole case is one mid-2021 taper remark. Lean retained at low confidence."
+     }
+    ],
+    "George": [
+     {
+      "start": "2021-01",
+      "end": "2023-01",
+      "stance": 1,
+      "confidence": "high",
+      "why": "Both auditors CONFIRMED, including the reasoning: a reputational hawk whose only in-window dissent (June 2022, preferring 50bp to 75bp) ran in the DOVISH direction on pace, which correctly places her behind Bullard and Mester. The research's duplicate 'duplicate-guard' period has been deleted."
+     }
+    ],
+    "Evans": [
+     {
+      "start": "2021-01",
+      "end": "2023-01",
+      "stance": -2,
+      "confidence": "high",
+      "why": "Career dove and architect of outcome-based/average-inflation-targeting thinking; the most persistent voice for patience as a 2021 voter."
+     }
+    ],
+    "Bullard": [
+     {
+      "start": "2021-01",
+      "end": "2021-05",
+      "stance": 0,
+      "confidence": "medium",
+      "why": "Still in the 'too early to talk about tapering' camp in early 2021 - not yet the outlier he became."
+     },
+     {
+      "start": "2021-06",
+      "end": "2023-08",
+      "stance": 2,
+      "confidence": "high",
+      "why": "The most hawkish participant of the tightening cycle; DISSENTED in March 2022 for 50bp - the cycle's opening dissent, verified by both auditors and fatal to the research note's claim that George's was the cycle's only dissent."
+     }
+    ],
+    "Rosengren": [
+     {
+      "start": "2021-01",
+      "end": "2021-09",
+      "stance": 2,
+      "confidence": "high",
+      "why": "One of the two loudest early-taper voices of 2021 with Kaplan; called publicly for a September taper announcement. Resigned 30 Sept 2021."
+     }
+    ],
+    "Kaplan": [
+     {
+      "start": "2021-01",
+      "end": "2021-10",
+      "stance": 2,
+      "confidence": "high",
+      "why": "The earliest explicit hawk of the period - taper 'sooner rather than later' from spring 2021 and a 2022 hike dot when almost the whole committee was at zero through 2023."
+     }
+    ],
+    "Paulson": [
+     {
+      "start": "2025-07",
+      "end": "",
+      "stance": -1,
+      "confidence": "low",
+      "why": "ADDED - not on the supplied roster, but both auditors flag the omission as breaking the 2026 dovish end. Confirmed 2026 voting member (Jan-2026 and Apr-2026 roll calls) and Reuters 22 Jan 2026 places her DOVISH on labour-market weakness. Low confidence: no dissent, short record."
+     }
+    ]
+   }
+  },
+  "ECB": {
+   "note": "The ECB publishes no votes and no attributed positions, so this is a communication-and-scorecard ordering, not a voting ledger. Only four members have any attributable dissent evidence in the whole window (Holzmann x3, plus the Dec-2021 PEPP objection attributed to the Belgian, Austrian and German governors, plus Visco's March-2023 public rebuke) - those entries carry high confidence and nothing else should. Both auditors independently verified the Econostream live table (9 Aug 2026) and found the research's transcriptions clean, so no sign is reversed. Both auditors also found the SAME roster hole: seven sitting members omitted, four of them above the median, which made the visible council read ~0.10 more dovish than the real one. Kaasik, Radev, Zigman, Dolenc, Patsalides, Santos Pereira and Demarco are therefore ADDED (all off the supplied roster - drop them if the backtest roster rejects the keys). Bucket rule applied consistently: Econostream >=1.25 -> +2, 0.5-1.0 -> +1, 0.25 -> 0, -0.25 to -0.75 -> -1, <=-1.25 -> -2. The committee note's claim that 'in every case the successor is less extreme than the predecessor' is FALSE on the map's own numbers (Villeroy -1 to Moulin -2, Guindos 0 to Vujcic +1, Muller +1 to Kaasik +2, Scicluna 0 to Demarco -1) and is dropped. Mauderer is NOT a Governing Council member (Bundesbank Vice-President, Nagel's alternate) and is zeroed.",
+   "speakers": {
+    "Lagarde": [
+     {
+      "start": "2021-01",
+      "end": "2022-06",
+      "stance": -1,
+      "confidence": "high",
+      "why": "Anchored the 'transitory' consensus; Econostream -0.5 in Feb 2022 against a council average near -0.05."
+     },
+     {
+      "start": "2022-07",
+      "end": "",
+      "stance": 0,
+      "confidence": "high",
+      "why": "Once she led the 50bp and 75bp hikes she occupied the centre she was constructing; Econostream now scores her 0.25, exactly the committee median."
+     }
+    ],
+    "Nagel": [
+     {
+      "start": "2022-01",
+      "end": "2023-12",
+      "stance": 2,
+      "confidence": "high",
+      "why": "Succeeded Weidmann and joined the top hawk tier - 'several more rate hikes' plus faster balance-sheet run-off."
+     },
+     {
+      "start": "2024-01",
+      "end": "",
+      "stance": 1,
+      "confidence": "high",
+      "why": "Endorsed the easing cycle and avoided Weidmann's vanguard role; Econostream 0.75, level with Wunsch, Kocher and Vujcic and a clear step below Schnabel and Kazimir."
+     }
+    ],
+    "Guindos": [
+     {
+      "start": "2021-01",
+      "end": "2026-05",
+      "stance": 0,
+      "confidence": "low",
+      "why": "Both auditors: UNSUPPORTED. The argument is entirely negative ('no scorecard placed him on either wing'), which supports 'unresolved' rather than 'median', and no scorecard placement exists for any sub-period. 0 retained as the least-wrong integer."
+     }
+    ],
+    "Lane": [
+     {
+      "start": "2021-01",
+      "end": "2022-12",
+      "stance": -2,
+      "confidence": "medium",
+      "why": "Both auditors CONFIRMED: Econostream scored him -1.75 in Feb 2022 against a council average near -0.05 - effectively the floor alongside Panetta. Caveat: some of a chief economist's measured dovishness is institutional, since tabling the staff proposal is the job."
+     },
+     {
+      "start": "2023-01",
+      "end": "",
+      "stance": -1,
+      "confidence": "medium",
+      "why": "Drift to the centre as author of the hiking and then cutting proposals; Econostream -0.75 against a 0.25 median, a full notch above Panetta, Rehn and the -1.25 cluster."
+     }
+    ],
+    "Schnabel": [
+     {
+      "start": "2021-01",
+      "end": "2021-10",
+      "stance": 0,
+      "confidence": "medium",
+      "why": "In 2021 she defended PEPP flexibility and was explicitly not read as a German hawk; near the council median."
+     },
+     {
+      "start": "2021-11",
+      "end": "2023-12",
+      "stance": 1,
+      "confidence": "medium",
+      "why": "Both auditors reject the claim of continuous primacy from Nov 2021: the Econostream ranking of 18 Nov 2021 names Weidmann, Knot and Holzmann at the hawkish end, not her, and she spent 2022 authoring and defending the consensus rather than pushing beyond the 75bp delivered. Hawkish of the median, not its head."
+     },
+     {
+      "start": "2024-01",
+      "end": "",
+      "stance": 2,
+      "confidence": "high",
+      "why": "Econostream 1.5, alone at the top of all 27, and by mid-2026 arguing further hiking would be needed while Rehn, Cipollone, Moulin and Stournaras were on the dovish wing."
+     }
+    ],
+    "Villeroy": [
+     {
+      "start": "2021-01",
+      "end": "2022-12",
+      "stance": 0,
+      "confidence": "low",
+      "why": "Both auditors show the one piece of split-related evidence is inverted - Knot and Holzmann were pressing to WIND DOWN PEPP, not to preserve its flexibility (Austria is among the three Dec-2021 objectors). 0 may survive as a genuine early normaliser ahead of Lane, but the stated basis is gone, so confidence is low. (Auditor B argued for -1.)"
+     },
+     {
+      "start": "2023-01",
+      "end": "2026-06",
+      "stance": -1,
+      "confidence": "high",
+      "why": "Among the earliest and loudest advocates of cutting - 'maximum optionality', pushback on cutting only once a quarter, door open to a larger December move. Grouped with Centeno and Stournaras as particularly dovish."
+     }
+    ],
+    "Knot": [
+     {
+      "start": "2021-01",
+      "end": "2023-06",
+      "stance": 2,
+      "confidence": "high",
+      "why": "Placed at the hawkish extreme with Weidmann and Holzmann in Econostream's Nov-2021 ranking; repeatedly floated further 75bp moves and early QT through 2022-23."
+     },
+     {
+      "start": "2023-07",
+      "end": "2025-06",
+      "stance": 1,
+      "confidence": "high",
+      "why": "Econostream's July-2023 update was headlined 'Knot Ranked Notably Less Hawkish'; by Oct 2024 he was warning about undershoots as much as overshoots. Still above the median but out of the top tier."
+     }
+    ],
+    "Panetta": [
+     {
+      "start": "2021-01",
+      "end": "",
+      "stance": -2,
+      "confidence": "high",
+      "why": "Both auditors CONFIRMED at both ends of the window: Econostream -2.0 (explicit floor) in Feb 2022 and -1.75 (lowest of all 27) on the live table in Aug 2026. The Board-to-governor seat change in Nov 2023 did not move him."
+     }
+    ],
+    "Rehn": [
+     {
+      "start": "2021-01",
+      "end": "2021-12",
+      "stance": -1,
+      "confidence": "medium",
+      "why": "On the dovish wing of the PEPP period with Lagarde, Cos and Centeno, notably softer than the other northern governors."
+     },
+     {
+      "start": "2022-01",
+      "end": "2023-12",
+      "stance": 0,
+      "confidence": "medium",
+      "why": "Backed frontloading and a rapid move to neutral, which was the council consensus - the median position, not a hawkish one."
+     },
+     {
+      "start": "2024-01",
+      "end": "",
+      "stance": -2,
+      "confidence": "medium",
+      "why": "Auditor B CONFIRMED against the live table: Econostream -1.5, second-lowest of 27, strictly below Stournaras, Cipollone and Moulin. Auditor A objected that the 'his 2026 hawkish remarks reflect the council-wide shift' clause is unfalsifiable; the named ranking is the harder evidence and wins."
+     }
+    ],
+    "Makhlouf": [
+     {
+      "start": "2021-01",
+      "end": "2023-12",
+      "stance": 0,
+      "confidence": "medium",
+      "why": "A centrist who tracked the consensus through the hiking cycle and by spring 2023 was suggesting hikes were near their limit."
+     },
+     {
+      "start": "2024-01",
+      "end": "",
+      "stance": 1,
+      "confidence": "low",
+      "why": "Econostream 0.5, a quarter-point above the 0.25 median. Auditor A argues the integer map promotes him spuriously into the 0.75 cluster; auditor B keeps him at +1. Disagreement unresolved, so the stance is kept and the confidence demoted."
+     }
+    ],
+    "Cipollone": [
+     {
+      "start": "2023-11",
+      "end": "",
+      "stance": -2,
+      "confidence": "high",
+      "why": "Took Panetta's Board seat and his position; the council's most persistent undershoot-warner with a dated, distinct, repeated public record. Auditor A explicitly declined to challenge this entry as the best-evidenced of the -1.25 cluster."
+     }
+    ],
+    "Elderson": [
+     {
+      "start": "2021-01",
+      "end": "2023-12",
+      "stance": 0,
+      "confidence": "low",
+      "why": "Both auditors agree the -1 was a placeholder: the research itself says it is 'inferred from Board alignment rather than distinct statements'. He has never been reported on either side of any split, and his one measured data point (Econostream 0.25) is exactly the median."
+     },
+     {
+      "start": "2024-01",
+      "end": "",
+      "stance": 0,
+      "confidence": "medium",
+      "why": "Econostream 0.25, exactly the committee median, level with Lagarde, Escriva and Simkus."
+     }
+    ],
+    "Stournaras": [
+     {
+      "start": "2021-01",
+      "end": "",
+      "stance": -2,
+      "confidence": "medium",
+      "why": "A fixed dovish point on every scorecard - resisted the pace of hikes in 2022-23, asked 'why not cut at every meeting?' in 2024. Auditor A correctly notes Econostream has him at -1.25, i.e. THIRD among national governors behind Panetta (-1.75) and Rehn (-1.5), so the 'most vocal dove among governors' superlative is false and confidence drops to medium; auditor B keeps him in the -2 bucket, which the mapping rule supports."
+     }
+    ],
+    "Mauderer": [
+     {
+      "start": "2024-01",
+      "end": "",
+      "stance": 0,
+      "confidence": "low",
+      "why": "Both auditors: category error. She is Bundesbank Vice-President and Nagel's ALTERNATE, not a Governing Council member, and does not appear on the 27-name Econostream table. Zeroed so she carries no signal; the honest action is deletion."
+     }
+    ],
+    "Centeno": [
+     {
+      "start": "2021-01",
+      "end": "2025-10",
+      "stance": -2,
+      "confidence": "high",
+      "why": "Consistently among the three or four most dovish members - pressed for 'a clear message of gentler rate hikes' in 2022-23 and warned about undershooting from 2024."
+     }
+    ],
+    "Wunsch": [
+     {
+      "start": "2021-01",
+      "end": "2021-11",
+      "stance": 1,
+      "confidence": "medium",
+      "why": "Econostream dated his formal entry into hawkish territory to November 2021; through 2021 he pushed the exit debate with Kazimir and Vasle."
+     },
+     {
+      "start": "2021-12",
+      "end": "2023-12",
+      "stance": 2,
+      "confidence": "high",
+      "why": "Auditor A's dating fix applied: the December-2021 PEPP objection - fxstreet's sourcing names the Belgian, Austrian and German governors - falls one month INSIDE the old +1 period, so the step to +2 starts in Dec 2021. One of only four members in the window with attributable dissent evidence."
+     },
+     {
+      "start": "2024-01",
+      "end": "",
+      "stance": 1,
+      "confidence": "medium",
+      "why": "Econostream 0.75, level with Nagel, Kocher and Vujcic - still hawkish of the median but off the extreme."
+     }
+    ],
+    "Cos": [
+     {
+      "start": "2021-01",
+      "end": "2024-06",
+      "stance": -1,
+      "confidence": "medium",
+      "why": "A consensus technocrat routinely grouped with the doves in accounts of the 2022-23 divide while being distinctly less dovish than any of them; never a wing voice."
+     }
+    ],
+    "Sleijpen": [
+     {
+      "start": "2025-07",
+      "end": "",
+      "stance": 1,
+      "confidence": "low",
+      "why": "Econostream 0.5, a quarter-point above the median. Auditor A argues for 0 (he explicitly refuses the hawk/dove label, non-committal line, barely a year of votes); auditor B keeps +1. Stance kept, confidence low."
+     }
+    ],
+    "Visco": [
+     {
+      "start": "2021-01",
+      "end": "2023-10",
+      "stance": -2,
+      "confidence": "high",
+      "why": "Both auditors CONFIRMED: his March-2023 public rebuke of colleagues for pre-committing to further hikes is the most explicit open expression of a Council split by anyone other than Holzmann - self-attributed, dated and directional."
+     }
+    ],
+    "Delgado": [
+     {
+      "start": "2024-06",
+      "end": "2024-09",
+      "stance": 0,
+      "confidence": "low",
+      "why": "Both auditors: UNSUPPORTED. Three-month acting caretaker between Cos and Escriva with no distinguishing intervention and no scorecard placement. 0 is the right default but it means 'unresolved', not 'centrist'."
+     }
+    ],
+    "Kazimir": [
+     {
+      "start": "2021-01",
+      "end": "2021-12",
+      "stance": 1,
+      "confidence": "low",
+      "why": "UNSUPPORTED (auditor A): the one dissent-type fact offered is false - the Dec-2021 objectors were the Belgian, Austrian and German governors; Slovakia is not among them, and the research states that same three-country set twice elsewhere. Lean retained at low confidence on the exit-debate record only."
+     },
+     {
+      "start": "2022-01",
+      "end": "",
+      "stance": 2,
+      "confidence": "high",
+      "why": "A 'keep powering through' hawk who never left that end; Econostream 1.25 in 2026, second only to Schnabel."
+     }
+    ],
+    "Holzmann": [
+     {
+      "start": "2021-01",
+      "end": "2025-08",
+      "stance": 2,
+      "confidence": "high",
+      "why": "Both auditors CONFIRMED - the only entry in the whole ECB set a voting-and-dissent lens can validate: July-2021 guidance reservations ('a step too far'), sole dissenter on the June-2024 first cut, dissent again June 2025, plus the Dec-2021 PEPP objection attributed to the Austrian governor."
+     }
+    ],
+    "Moulin": [
+     {
+      "start": "2026-06",
+      "end": "",
+      "stance": -2,
+      "confidence": "low",
+      "why": "Both auditors flag UNSUPPORTED - weeks in post, no observed record, and Econostream at two months is pricing a seat rather than a person. The rank survives (-1.25, bottom five of 27, tied with Stournaras and Cipollone), so the bucket is kept and the confidence is low."
+     }
+    ],
+    "Weidmann": [
+     {
+      "start": "2021-01",
+      "end": "2021-12",
+      "stance": 2,
+      "confidence": "high",
+      "why": "Both auditors CONFIRMED: named at the hawkish extreme with Knot and Holzmann in Econostream's Nov-2021 ranking, and the German governor is one of the three named Dec-2021 objectors - a genuine reported dissent, not an inference from tone."
+     }
+    ],
+    "Kazaks": [
+     {
+      "start": "2021-01",
+      "end": "2021-12",
+      "stance": 0,
+      "confidence": "medium",
+      "why": "Notably less hawkish than his Baltic peers in the PEPP period, sitting near the council centre."
+     },
+     {
+      "start": "2022-01",
+      "end": "2023-12",
+      "stance": 2,
+      "confidence": "medium",
+      "why": "The loudest frontloading advocate of 2022 - 50bp for July, 75bp 'appropriate' for October, and warning through Sept 2023 against betting on H1-2024 cuts. Confidence demoted: auditor A argues that advocating exactly the decision delivered is the median under the map's own rule, and he never appears in the reported December-2022 75bp minority."
+     },
+     {
+      "start": "2024-01",
+      "end": "2024-12",
+      "stance": 1,
+      "confidence": "medium",
+      "why": "Moderated to the 'gradual, meeting by meeting' camp, warranting caution on further cuts alongside Muller."
+     },
+     {
+      "start": "2025-01",
+      "end": "",
+      "stance": -1,
+      "confidence": "medium",
+      "why": "Completed the traverse: Econostream -0.25, below the 0.25 median and below Simkus, Escriva and Elderson."
+     }
+    ],
+    "Muller": [
+     {
+      "start": "2021-01",
+      "end": "2021-12",
+      "stance": 1,
+      "confidence": "medium",
+      "why": "A quiet hawk above the Lagarde/Villeroy centre through the PEPP debate."
+     },
+     {
+      "start": "2022-01",
+      "end": "2023-12",
+      "stance": 2,
+      "confidence": "medium",
+      "why": "Auditor B, from the research's own cited source: the Econostream article of 4 Feb 2022 scores Muller at 1.25 (raised from 1.0) on a day when the council average was -0.07 - the same number Kazimir carries today at +2. The flat +1 is refuted for the hiking cycle."
+     },
+     {
+      "start": "2024-01",
+      "end": "2026-06",
+      "stance": 1,
+      "confidence": "medium",
+      "why": "A firm hiker who warned against rushing cuts in June 2024, sitting above the median with Vasle, Simkus and Reinesch but below the top tier."
+     }
+    ],
+    "Vasle": [
+     {
+      "start": "2021-01",
+      "end": "2025-01",
+      "stance": 1,
+      "confidence": "medium",
+      "why": "In the 2021 exit-debate group with Wunsch and Kazimir, a firm hiker through 2022-23, and pushing back on bets on bigger cuts in Oct 2024 - consistently a notch above the median, never in the top tier."
+     }
+    ],
+    "Simkus": [
+     {
+      "start": "2021-01",
+      "end": "2023-12",
+      "stance": 1,
+      "confidence": "medium",
+      "why": "Grouped with the Baltic hawks - as late as June 2023 saying 'at least one more rate hike is required'."
+     },
+     {
+      "start": "2024-01",
+      "end": "",
+      "stance": 0,
+      "confidence": "medium",
+      "why": "Drifted to the middle during the easing cycle; Econostream 0.25, exactly the median."
+     }
+    ],
+    "Vujcic": [
+     {
+      "start": "2023-01",
+      "end": "2026-05",
+      "stance": 1,
+      "confidence": "medium",
+      "why": "Ranked on the hawkish side from Croatia's entry; Econostream 0.75, level with Nagel, Wunsch and Kocher."
+     },
+     {
+      "start": "2026-06",
+      "end": "",
+      "stance": 1,
+      "confidence": "low",
+      "why": "Auditor A: the move from a rotating Group-2 governorship to the always-voting Vice-Presidency is one of the two largest changes in actual influence in the dataset, and the map cannot both say the Vice-Presidency erases a personal line (Guindos) and preserves one (Vujcic). Stance carried forward at low confidence."
+     }
+    ],
+    "Herodotou": [
+     {
+      "start": "2021-01",
+      "end": "2024-04",
+      "stance": 0,
+      "confidence": "low",
+      "why": "Both auditors: UNSUPPORTED, a pure nationality-bloc inference with no dissent, no reported minority and no scorecard placement in three-plus years. The prior is undercut by his successor Patsalides landing at exactly the median (0.25). Both suggested 0, so the correction is taken."
+     }
+    ],
+    "Scicluna": [
+     {
+      "start": "2021-01",
+      "end": "2022-02",
+      "stance": -1,
+      "confidence": "medium",
+      "why": "Ranked among the doves in Econostream's table through 2021, above Lane/Panetta/Visco/Stournaras and well below the northern hawks."
+     },
+     {
+      "start": "2022-03",
+      "end": "2025-12",
+      "stance": 0,
+      "confidence": "low",
+      "why": "Econostream's March-2022 headline says only that he was 'no longer ranked among the doves', which is a boundary crossing rather than a placement at the median, and his final years were dominated by a domestic legal case. UNSUPPORTED (auditor A, who argued for -1); stance kept, confidence low."
+     }
+    ],
+    "Reinesch": [
+     {
+      "start": "2021-01",
+      "end": "",
+      "stance": 1,
+      "confidence": "low",
+      "why": "Econostream 1.0, fourth-equal of 27. The auditors split: A says UNSUPPORTED and would zero him (speaks on monetary policy very rarely, no dissent, not among the Dec-2021 objectors, and citing the scorecard as evidence for a rounding of the scorecard is circular); B says the 1.0 belongs in the +2 bucket with Radev. Researcher's +1 kept as the midpoint, confidence low."
+     }
+    ],
+    "Kocher": [
+     {
+      "start": "2025-09",
+      "end": "",
+      "stance": 1,
+      "confidence": "medium",
+      "why": "Took Holzmann's seat but not his position: Econostream 0.75, a full step below Schnabel, Kazimir and Reinesch, where Holzmann had been the top hawk and the only serial dissenter."
+     }
+    ],
+    "Escriva": [
+     {
+      "start": "2024-09",
+      "end": "",
+      "stance": 0,
+      "confidence": "medium",
+      "why": "Ranked squarely at the median despite the Spanish seat's dovish reputation - Econostream 0.25, level with Lagarde, Elderson and Simkus."
+     }
+    ],
+    "Kaasik": [
+     {
+      "start": "2026-06",
+      "end": "",
+      "stance": 2,
+      "confidence": "medium",
+      "why": "ADDED - both auditors flag the omission. Econostream 1.25 on the live table, joint-SECOND most hawkish of all 27 behind only Schnabel, above Reinesch, Radev, Nagel, Wunsch, Kocher and Vujcic. Took Muller's Estonian seat."
+     }
+    ],
+    "Radev": [
+     {
+      "start": "2026-01",
+      "end": "",
+      "stance": 1,
+      "confidence": "medium",
+      "why": "ADDED - Bulgarian National Bank governor, seated on Bulgaria's January-2026 euro entry, which the research note announces and then never rosters. Econostream 1.0, tied with Reinesch and bucketed identically."
+     }
+    ],
+    "Zigman": [
+     {
+      "start": "2026-06",
+      "end": "",
+      "stance": 1,
+      "confidence": "low",
+      "why": "ADDED - took the Croatian governorship Vujcic vacated for the Vice-Presidency on 1 June 2026. Econostream 0.75, the same score as Nagel, Wunsch, Kocher and Vujcic."
+     }
+    ],
+    "Dolenc": [
+     {
+      "start": "2026-01",
+      "end": "",
+      "stance": 1,
+      "confidence": "low",
+      "why": "ADDED - filled the Slovenian seat the research itself flags as vacant after Vasle. Econostream 0.75. Start date approximate."
+     }
+    ],
+    "Patsalides": [
+     {
+      "start": "2024-04",
+      "end": "",
+      "stance": 0,
+      "confidence": "medium",
+      "why": "ADDED - succeeded Herodotou at the Central Bank of Cyprus in April 2024. Econostream 0.25, exactly the council median; the research even says so inside Herodotou's rationale without creating the entry."
+     }
+    ],
+    "Santos Pereira": [
+     {
+      "start": "2025-10",
+      "end": "",
+      "stance": -1,
+      "confidence": "medium",
+      "why": "ADDED - succeeded Centeno at the Banco de Portugal. Econostream -0.25, dovish of the median, the same score this map gives Kazaks at -1."
+     }
+    ],
+    "Demarco": [
+     {
+      "start": "2026-01",
+      "end": "",
+      "stance": -1,
+      "confidence": "medium",
+      "why": "ADDED - succeeded Scicluna at the Central Bank of Malta. Econostream -0.75, tied with Lane and firmly on the dovish side of the median."
+     }
+    ]
+   }
+  },
+  "BOE": {
+   "note": "The only committee in this set with a fully attributed vote for every member at every meeting, and both auditors independently re-verified the load-bearing votes (Sep-2025 QT: Pill GBP100bn / majority GBP70bn / Mann GBP62bn; Nov-2025 5-4 hold; Dec-2025 5-4 cut; Feb-2026 5-4 hold; the 2026 hike escalation Pill alone in April, +Greene in June, +Mann in July). Two repeated fabrications are removed: there was NO casting vote at Sep-2023 (a 5-4 on a nine-member committee cannot tie), and Nov-2025 was a 5-4 HOLD with Bailey on the hold side, not a hold dissent he declined to join. The 2021 block has been rebuilt: Bank Rate was unanimous at every 2021 meeting and the only dissents all year were on the gilt stock, so the dovish gradations both auditors called pure rhetoric-ranking are removed - Saunders and Haskel go to 0 (both auditors agreed, and both members' own next votes contradict the dovish label), while Vlieghe keeps the dove pole on a published, dated argument for delay. Several period starts that back-projected a later dissent are corrected (Pill, Taylor, Breeden, Greene). The 2026 caveat both auditors flag: since Feb-2026 there has been NO dovish dissent (Mar-2026 unanimous, then 8-1, 7-2, 6-3 hawkish), so Dhingra and Taylor remain the relative doves but the pole is no longer expressed in dissent.",
+   "speakers": {
+    "Bailey": [
+     {
+      "start": "2021-01",
+      "end": "",
+      "stance": 0,
+      "confidence": "high",
+      "why": "Both auditors CONFIRMED the score: no dissent in any of the 45 decisions, and in the majority at every split checked name-by-name. The stated evidence is corrected - there was no Sep-2023 casting vote (5-4 on nine members), and in a 5-4 every member of the five is equally pivotal, so the 0 is a default from 45 non-dissents rather than positional evidence."
+     }
+    ],
+    "Mann": [
+     {
+      "start": "2021-09",
+      "end": "2022-01",
+      "stance": 1,
+      "confidence": "high",
+      "why": "Hawkish on the balance sheet before rates: voted with Ramsden and Saunders in Nov-2021 to cut the gilt target to GBP855bn while still voting to hold Bank Rate."
+     },
+     {
+      "start": "2022-02",
+      "end": "2025-01",
+      "stance": 2,
+      "confidence": "high",
+      "why": "The most persistent hawk on the committee for three years - 50bp Feb/May/Jun 2022, 75bp Sep-2022, alone for 75bp in Dec-2022, hike dissents through Feb-2024, and SOLE dissenter against the Nov-2024 cut."
+     },
+     {
+      "start": "2025-02",
+      "end": "2025-04",
+      "stance": 0,
+      "confidence": "low",
+      "why": "Both auditors reject -1. The window contains two meetings and only the first is dovish: she voted 50bp with Dhingra in Feb-2025, then in Mar-2025 Dhingra was the SOLE cut dissenter, meaning Mann voted to hold. She framed the 50bp as front-loading toward a higher-for-longer path, not easing."
+     },
+     {
+      "start": "2025-05",
+      "end": "",
+      "stance": 2,
+      "confidence": "medium",
+      "why": "Auditor B, on ordering plus a named ranking: Mann is strictly hawkish of Lombardelli (+1) on every divided vote in the period (May-2025 hold vs Lombardelli's cut; Jul-2026 hike vs Lombardelli's hold), which forces +2 on this scale, and MUFG's Jul-2026 member sentiment scoring ranks her top of the committee at 80 (Pill 71, Greene 65). Auditor A argued for +1 on her GBP62bn QT preference and her being last of the three to break for a hike; that nuance survives inside the +2."
+     }
+    ],
+    "Pill": [
+     {
+      "start": "2021-09",
+      "end": "2023-12",
+      "stance": 0,
+      "confidence": "high",
+      "why": "A median voter for his first twenty meetings with not one dissent; 'Table Mountain rather than Matterhorn' described the majority's reaction function rather than a position to the right of it."
+     },
+     {
+      "start": "2024-01",
+      "end": "2024-07",
+      "stance": 0,
+      "confidence": "medium",
+      "why": "Auditor A: his first dissent of his entire MPC career is Aug-2024. Jan-Jun 2024 he voted with the majority at every meeting, identically to Bailey and Broadbent, so the +1 started seven months early."
+     },
+     {
+      "start": "2024-08",
+      "end": "2025-04",
+      "stance": 1,
+      "confidence": "high",
+      "why": "Voted against the Aug-2024 cut with Mann, Haskel and Greene; the most cut-resistant internal member, but still short of Mann, who dissented alone against the Nov-2024 cut when he voted for it."
+     },
+     {
+      "start": "2025-05",
+      "end": "",
+      "stance": 2,
+      "confidence": "high",
+      "why": "Both auditors call this the best-evidenced score on the map: May-2025 hold dissent with Mann; the only GBP100bn QT vote in Sep-2025 against a GBP70bn majority; dissents against the Aug and Dec 2025 cuts; and the SOLE hike vote at Apr-2026 (8-1), two meetings before Greene and three before Mann."
+     }
+    ],
+    "Greene": [
+     {
+      "start": "2023-08",
+      "end": "2024-12",
+      "stance": 1,
+      "confidence": "high",
+      "why": "A hawkish dissenter from the start but a step behind the lead hawks - she took the 25bp majority line at her first meeting when Mann and Haskel wanted 50bp, and dropped the hike call in Feb-2024 while they maintained it."
+     },
+     {
+      "start": "2025-01",
+      "end": "2025-07",
+      "stance": 1,
+      "confidence": "high",
+      "why": "Both auditors: +2 from January is scored with future information. In May-2025 Greene voted FOR the 25bp cut with Bailey while Mann and Pill voted to HOLD - she was dovish of both hawks in the very window she was scored two notches above Mann. Feb-2025 she took the 25bp majority line, Sep-2025 she was in the GBP70bn QT majority."
+     },
+     {
+      "start": "2025-08",
+      "end": "",
+      "stance": 2,
+      "confidence": "high",
+      "why": "Joined the four-strong hold bloc against the Aug-2025 cut and against Nov-2025/Dec-2025/Feb-2026, then was the SECOND member to dissent for a hike in Jun-2026, a meeting at which Mann still voted hold."
+     }
+    ],
+    "Ramsden": [
+     {
+      "start": "2021-01",
+      "end": "2021-06",
+      "stance": 0,
+      "confidence": "low",
+      "why": "UNSUPPORTED (auditor A): the rationale's own first word is 'undifferentiated' and he never appeared on a contested side across four meetings. A blank, not a measured centre."
+     },
+     {
+      "start": "2021-07",
+      "end": "2022-09",
+      "stance": 1,
+      "confidence": "high",
+      "why": "Turned early and hard - gilt dissents Sep and Nov 2021, the Nov-2021 hike vote with Saunders against seven colleagues, 50bp in Feb-2022 and 75bp in Sep-2022. Behind Mann/Haskel/Saunders, who also dissented for 50bp in May and Jun 2022 when he had rejoined the majority."
+     },
+     {
+      "start": "2022-10",
+      "end": "2024-04",
+      "stance": 0,
+      "confidence": "high",
+      "why": "Eighteen months at the median: joined neither the Mann/Haskel/Greene hike dissents nor the Tenreyro/Dhingra cut dissents."
+     },
+     {
+      "start": "2024-05",
+      "end": "",
+      "stance": -1,
+      "confidence": "high",
+      "why": "The first internal member to break for cuts, dissenting with Dhingra in May and Jun 2024; a reliable member of the dovish bloc since, but one notch short of Dhingra and Taylor, who wanted 50bp when he took 25bp."
+     }
+    ],
+    "Haskel": [
+     {
+      "start": "2021-01",
+      "end": "2022-01",
+      "stance": 0,
+      "confidence": "low",
+      "why": "BOTH auditors: UNSUPPORTED. No dovish vote anywhere in the period - his 2021 record is identical to Bailey's, Broadbent's and Pill's (all scored 0), the only cited vote (May-2020 QE) is outside the window, and at Dec-2021 he voted FOR the first hike in the 8-1 majority against Tenreyro."
+     },
+     {
+      "start": "2022-02",
+      "end": "2024-02",
+      "stance": 2,
+      "confidence": "high",
+      "why": "One of the two archetypal BoE hawks with Mann: 50bp Feb/May/Jun 2022, 75bp Sep-2022, 50bp with Mann Aug-2023, and hike dissents through Feb-2024, the last leaving just him and Mann."
+     },
+     {
+      "start": "2024-03",
+      "end": "2024-08",
+      "stance": 1,
+      "confidence": "high",
+      "why": "Dropped the hike call in Mar-2024 but stayed on the hawkish end - held in May and Jun 2024 when Ramsden and Dhingra wanted cuts, and voted AGAINST the Aug-2024 cut at his final meeting."
+     }
+    ],
+    "Dhingra": [
+     {
+      "start": "2022-09",
+      "end": "",
+      "stance": -2,
+      "confidence": "high",
+      "why": "Auditor B CONFIRMED and MUFG's Jul-2026 scoring returns only two negatives on the whole committee, Taylor -33 and Dhingra -28. Lone 25bp voter at her first meeting against a 50bp committee; cut dissents almost every meeting 2022-24; sole dissenter Sep-2024 and Mar-2025; 50bp preferences Feb and May 2025. Caveat from auditor A: she has cast no dissent since Feb-2026 (Mar-2026 unanimous; named in the Jul-2026 hold majority), so the pole is currently unexpressed."
+     }
+    ],
+    "Taylor": [
+     {
+      "start": "2024-09",
+      "end": "2025-04",
+      "stance": -1,
+      "confidence": "medium",
+      "why": "Auditor A, from the roll calls: Sep-2024 was 8-1 with Dhingra the SOLE cut dissenter, so Taylor voted hold; Nov-2024 he was with the 8-1 majority; Feb-2025 he took 25bp while Dhingra and Mann voted 50bp; Mar-2025 Dhingra dissented alone again. His first dissent is Dec-2024 and his first 50bp vote is May-2025."
+     },
+     {
+      "start": "2025-05",
+      "end": "",
+      "stance": -2,
+      "confidence": "high",
+      "why": "50bp with Dhingra in May-2025; a 50bp first preference at Aug-2025 that forced an unprecedented second round of voting; cut dissents Sep-2025, Nov-2025 and Feb-2026. MUFG scores him the committee's lowest at -33."
+     }
+    ],
+    "Broadbent": [
+     {
+      "start": "2021-01",
+      "end": "2024-06",
+      "stance": 0,
+      "confidence": "high",
+      "why": "Both auditors CONFIRMED as the best-evidenced 0 on the map: 27 meetings, no dissent, and informative non-dissent at contested meetings (the Feb-2022 25bp five, the Sep-2022 50bp majority between the 75bp trio and Dhingra, the 2023-24 hold majority). His May-2024 dovish signalling is correctly not converted into a dovish score."
+     }
+    ],
+    "Lombardelli": [
+     {
+      "start": "2024-08",
+      "end": "2025-07",
+      "stance": 0,
+      "confidence": "medium",
+      "why": "Started at the centre, if anything just dovish of it - she voted FOR the Aug-2024 cut on the five-side of a 5-4 and for the May-2025 cut, casting no dissent."
+     },
+     {
+      "start": "2025-08",
+      "end": "",
+      "stance": 1,
+      "confidence": "high",
+      "why": "Auditor A verified end to end: one of the four against the Aug-2025 cut, one of the five holding in Nov-2025, one of the four against the Dec-2025 cut, in the Feb-2026 hold bloc - but she has NOT joined the 2026 hike dissents, so +1 not +2."
+     }
+    ],
+    "Breeden": [
+     {
+      "start": "2023-11",
+      "end": "2025-10",
+      "stance": 0,
+      "confidence": "medium",
+      "why": "Auditor A: her first dovish dissent is Nov-2025, not Aug-2025. At Aug-2025 she was in the 25bp winning majority, not with Taylor's 50bp first preference, and at Sep-2025 she voted to HOLD while Dhingra and Taylor dissented for a cut - the hawkish side of that 7-2."
+     },
+     {
+      "start": "2025-11",
+      "end": "",
+      "stance": -1,
+      "confidence": "high",
+      "why": "Dovish dissents in Nov-2025 (one of the four against the five-member hold bloc) and Feb-2026 (one of the four voting for 3.5%), plus the winning five on the Dec-2025 cut. Short of Dhingra and Taylor - she has never voted for a 50bp move."
+     }
+    ],
+    "Tenreyro": [
+     {
+      "start": "2021-01",
+      "end": "2021-11",
+      "stance": -1,
+      "confidence": "low",
+      "why": "Auditor A deliberately kept the number but rejects the label: no dissent inside the period, so on votes alone she is indistinguishable from Bailey, Broadbent and Pill. The dovish type is validated by her very next meeting rather than by anything in this one, which is why the confidence drops rather than the sign."
+     },
+     {
+      "start": "2021-12",
+      "end": "2023-06",
+      "stance": -2,
+      "confidence": "high",
+      "why": "The committee's dovish pole: SOLE dissenter against the first hike in Dec-2021; 25bp in Aug-2022 against a 50bp committee; 25bp in Nov-2022 against 75bp - more dovish even than Dhingra, who took 50bp; then hold at every meeting to her last."
+     }
+    ],
+    "Cunliffe": [
+     {
+      "start": "2021-01",
+      "end": "2022-02",
+      "stance": 0,
+      "confidence": "medium",
+      "why": "Auditor A: the entire -1 is carried by one vote 14 months into the period. Before Mar-2022 he has no distinguishing vote - Bank Rate was unanimous through 2021, he joined none of the gilt dissents, and in Feb-2022 he sat in the 25bp five."
+     },
+     {
+      "start": "2022-03",
+      "end": "2023-06",
+      "stance": -1,
+      "confidence": "high",
+      "why": "His only dissent of the tightening cycle was DOVISH: in Mar-2022 he alone voted to hold at 0.5% against the other eight, arguing the energy shock was a real-income hit rather than an inflation impulse."
+     },
+     {
+      "start": "2023-07",
+      "end": "2023-09",
+      "stance": 1,
+      "confidence": "medium",
+      "why": "At his final meeting (Sep-2023) he joined Mann, Haskel and Greene voting for one more hike to 5.5% - a 5-4 defeat, NOT a casting-vote tie as the research claimed."
+     }
+    ],
+    "Saunders": [
+     {
+      "start": "2021-01",
+      "end": "2021-06",
+      "stance": 0,
+      "confidence": "low",
+      "why": "BOTH auditors: UNSUPPORTED. Both cited votes (Nov-2019 cut, May-2020 QE) are outside the window; inside it he cast no distinguishing vote, and Ramsden is scored 0 for identical behaviour in identical months. Six weeks later he was the SOLE hawkish gilt dissenter."
+     },
+     {
+      "start": "2021-07",
+      "end": "2022-08",
+      "stance": 2,
+      "confidence": "high",
+      "why": "The fastest hawkish turn on the committee: sole gilt dissenter Aug-2021, then with Ramsden in Sep and with Ramsden and Mann in Nov, the Nov-2021 hike vote against seven colleagues, then 50bp in Feb, May and Jun 2022."
+     }
+    ],
+    "Vlieghe": [
+     {
+      "start": "2021-01",
+      "end": "2021-08",
+      "stance": -2,
+      "confidence": "low",
+      "why": "Auditors split. A says UNSUPPORTED (zero dissents; observationally identical to members scored 0). B keeps -2 and the distinction is deliberate: unlike Saunders and Haskel, Vlieghe published an explicit dated argument for delaying tightening into 2022 ('Running out of room', July 2021), directly against Haldane's framing, and nothing in his record contradicts it. Kept as the 2021 dove pole at low confidence."
+     }
+    ],
+    "Haldane": [
+     {
+      "start": "2021-01",
+      "end": "2021-06",
+      "stance": 2,
+      "confidence": "high",
+      "why": "Both auditors CONFIRMED - the only 2021 score built on actual votes: SOLE dissenter at both May-2021 and Jun-2021 for a GBP825bn gilt target against all eight colleagues, having already dissented against the Jun-2020 QE expansion."
+     }
+    ]
+   }
+  },
+  "BOJ": {
+   "note": "The dissent ledger in the research was verified essentially 100% accurate by both auditors against primary BOJ statements, and the core ordering (Takata/Tamura > Himino/Koeda/Masu > Ueda/Uchida/Nakagawa > Adachi > Noguchi > Nakamura) survives. Four committee-note errors are corrected: Sept/Oct-2025 were NOT the first dissents of the Ueda era (Nakamura dissented Jul-2023, Mar-2024, Jul-2024 and Jan-2025; Tamura Dec-2024 and Jun-2025) nor the first two-dissenter votes in eight years (Mar-2024 and Jul-2024 were both 7-2); the Dec-2022 YCC widening was UNANIMOUS, so the reflationists voted for it; the Jun-2026 hike was 7-1 because Ueda was absent; and Asada replaced Noguchi while Sato replaced Nakagawa, not the reverse. Where the Kuroda board voted unanimously except for Kataoka (off-roster), scores are compressed toward the median per both auditors - Wakatabe and Noguchi drop to -1 for the years in which they never joined a single Kataoka dissent. RE-CENTRING (see notes): Ueda and Uchida are moved to -2 from 2025-07, because between Nakamura's exit and Asada's arrival every seated member is a roster name and the map otherwise carried two +2s and no -2. The 'Toyoaki' row is the given name of NAKAMURA Toyoaki, not a tenth member; it is retained ONLY as a name-variant alias with identical scores and must be de-duplicated before any committee aggregate.",
+   "speakers": {
+    "Ueda": [
+     {
+      "start": "2023-04",
+      "end": "2025-03",
+      "stance": 0,
+      "confidence": "medium",
+      "why": "Reuters factboxes of Mar-2024 and Jan-2025 both put him in the NEUTRAL column, above the Nakamura/Noguchi/Adachi dove bloc and below Tamura/Takata/Himino. He delivered the NIRP exit, 0.25% and 0.50% over this stretch."
+     },
+     {
+      "start": "2025-04",
+      "end": "2025-06",
+      "stance": -1,
+      "confidence": "medium",
+      "why": "Composition-driven re-centring begins as Adachi leaves and Koeda arrives; Reuters names him among the LEAST hawkish members."
+     },
+     {
+      "start": "2025-07",
+      "end": "",
+      "stance": -2,
+      "confidence": "medium",
+      "why": "Auditor B: from Nakamura's 30 Jun 2025 exit until Asada's seating after Mar-2026 ALL NINE sitting members are roster names, so the research's escape hatch ('the true -2 slots belong to the off-roster Takaichi appointees') does not exist. Reuters' Aug-2025 analysis names Ueda and Uchida the dovish camp of that fully observed board. He held rates through the Takata/Tamura 0.75% dissents and the three-way 1.00% dissent. Kept at -2 open-ended because among ROSTER names he remains the dovish anchor even after Sato and Asada join."
+     }
+    ],
+    "Noguchi": [
+     {
+      "start": "2021-04",
+      "end": "2024-02",
+      "stance": -1,
+      "confidence": "medium",
+      "why": "Auditor A: the -2 is earned only at the end of the old block. From his 2021 arrival through 2023 he cast ZERO dissents while Kataoka dissented for more easing at every meeting - he is named among the eight voting FOR in the Dec-2021 8-1 and sat with the unanimous Dec-2022 YCC widening."
+     },
+     {
+      "start": "2024-03",
+      "end": "2024-12",
+      "stance": -2,
+      "confidence": "high",
+      "why": "Voted AGAINST the March-2024 NIRP/YCC exit (7-2 with Nakamura) and AGAINST the July-2024 hike to 0.25% (7-2, same pair) - one of only two members with dovish dissent receipts."
+     },
+     {
+      "start": "2025-01",
+      "end": "2026-03",
+      "stance": -1,
+      "confidence": "medium",
+      "why": "Voted FOR the Jan-2025 hike while Nakamura dissented against it, and Reuters' Aug-2025 analysis lists him as neutral rather than in the dove camp. Left after the March-2026 meeting."
+     }
+    ],
+    "Himino": [
+     {
+      "start": "2023-03",
+      "end": "",
+      "stance": 1,
+      "confidence": "medium",
+      "why": "Both auditors CONFIRMED, and B flags the relativity trap the research avoided: Reuters' wording is scoped - 'among the BOJ's LEADERSHIP... the most hawkish' - not board-wide. He voted to hold every time Takata or Tamura proposed more (Sep and Oct 2025, Jan/Mar/Apr/Jul 2026), so +1 not +2."
+     }
+    ],
+    "Takata": [
+     {
+      "start": "2022-07",
+      "end": "2025-08",
+      "stance": 1,
+      "confidence": "high",
+      "why": "Half of the hawkish wing that replaced Kataoka and Suzuki, named a hawk in the 2024 and 2025 Reuters factboxes - but behind Tamura on revealed action: in Dec-2024 Tamura dissented ALONE for 0.50% and Takata voted with the majority."
+     },
+     {
+      "start": "2025-09",
+      "end": "",
+      "stance": 2,
+      "confidence": "high",
+      "why": "Both auditors verified every vote: co-dissent with Tamura for 0.75% in Sep and Oct 2025 (7-2), SOLE dissenter for 1.00% in Jan-2026 and Mar-2026 (8-1 each, Tamura in the majority both times), the 6-3 April-2026 call for 1.00%, and SOLE dissenter for 1.25% in Jul-2026 (8-1). Three solo escalations ahead of Tamura."
+     }
+    ],
+    "Tamura": [
+     {
+      "start": "2022-07",
+      "end": "2023-07",
+      "stance": 1,
+      "confidence": "medium",
+      "why": "Auditor B: the flat +2 back-projects, and the research explicitly refuses that treatment for a dove (Nakamura). Reuters' own 2024 explainer dates his emergence as pole hawk to August 2023; he cast no dissent at all before Dec-2024, on a board still chaired by Kuroda."
+     },
+     {
+      "start": "2023-08",
+      "end": "",
+      "stance": 2,
+      "confidence": "high",
+      "why": "The reference hawk of the Ueda era: sole dissenter Dec-2024 for 0.50%, sole dissenter Jun-2025 on the JGB taper wanting a faster reduction, co-dissenter for 0.75% in Sep and Oct 2025, and for 1.00% in Apr-2026. From Jan-2026 Takata edged ahead on immediacy, which is why Takata rather than Tamura is the topmost hawk at the end of the window."
+     }
+    ],
+    "Uchida": [
+     {
+      "start": "2023-03",
+      "end": "2025-03",
+      "stance": 0,
+      "confidence": "medium",
+      "why": "Reuters placed him NEUTRAL in both the Mar-2024 and Jan-2025 factboxes, having 'shifted from somewhat dovish to neutral' after the Feb-2024 speech that pre-announced the exit. His Aug-2024 'won't raise rates when markets are unstable' is why this is 0 rather than +1."
+     },
+     {
+      "start": "2025-04",
+      "end": "2025-06",
+      "stance": -1,
+      "confidence": "medium",
+      "why": "Same composition-driven re-centring as Ueda; Reuters reclassifies him out of neutral into the dove camp."
+     },
+     {
+      "start": "2025-07",
+      "end": "",
+      "stance": -2,
+      "confidence": "medium",
+      "why": "Auditor B: with the board fully observed on this roster from Jul-2025 to Mar-2026, Reuters explicitly names 'Ueda and his career central banker-turned deputy Shinichi Uchida in the more dovish camp'. He voted to hold through the Takata/Tamura 0.75% dissents and the three-way 1.00% dissent. Kept open-ended as the roster's dovish anchor once Sato and Asada (off-roster) take the true pole."
+     }
+    ],
+    "Nakagawa": [
+     {
+      "start": "2021-06",
+      "end": "2026-03",
+      "stance": 0,
+      "confidence": "high",
+      "why": "Both auditors CONFIRMED, and B records failing to refute it: classified NEUTRAL in every Reuters vintage, voted FOR the Mar-2024 exit while Nakamura and Noguchi dissented, and voted to hold in Dec-2024 and in Sep/Oct 2025 while Tamura and Takata proposed more."
+     },
+     {
+      "start": "2026-04",
+      "end": "2026-06",
+      "stance": 1,
+      "confidence": "high",
+      "why": "The best-dated call in the set: at Apr-2026 she dissented for the first time, joining Takata and Tamura for 1.00% in a 6-3 split - the widest since 2016. +1 not +2 because she followed rather than led and voted FOR the Jun-2026 hike rather than pressing beyond it."
+     }
+    ],
+    "Adachi": [
+     {
+      "start": "2021-01",
+      "end": "2024-02",
+      "stance": -1,
+      "confidence": "medium",
+      "why": "Grouped with the doves in both Reuters factboxes and arguing as late as May-2024 for maintaining accommodative conditions, but demonstrably less dovish than Nakamura and Noguchi, who actually voted against tightening."
+     },
+     {
+      "start": "2024-03",
+      "end": "2025-03",
+      "stance": 0,
+      "confidence": "low",
+      "why": "Auditor A: from the exit onward his voting record is byte-identical to Nakagawa's, who is scored 0 - he voted FOR the Mar-2024 exit, the Jul-2024 hike, and with the majority at Dec-2024 and Jan-2025. The -1 versus Nakagawa's 0 was a pure label distinction with no voting evidence."
+     }
+    ],
+    "Nakamura": [
+     {
+      "start": "2021-01",
+      "end": "2023-03",
+      "stance": 0,
+      "confidence": "low",
+      "why": "UNSUPPORTED (auditor A): the research concedes this is 'an absence-of-evidence placement'. He cast no Kuroda-era dissent while Kataoka did, so -2 would be wrong; auditor A argues a weak -1 prior from the invariance of his later stated doctrine. 0 retained at low confidence."
+     },
+     {
+      "start": "2023-04",
+      "end": "2025-06",
+      "stance": -2,
+      "confidence": "high",
+      "why": "Both auditors CONFIRMED and both say it is UNDER-documented: five dissent events across four meetings - the uncited Jul-2023 sole dissent on YCC flexibilisation, the Mar-2024 guideline dissent (7-2) AND a separate sole dissent on JGB purchases (8-1) the same day, Jul-2024 (7-2), and Jan-2025 sole dissent against 0.50%. More dissents than any member in either direction."
+     }
+    ],
+    "Toyoaki": [
+     {
+      "start": "2021-01",
+      "end": "2023-03",
+      "stance": 0,
+      "confidence": "low",
+      "why": "ALIAS ROW, NOT A SEPARATE PERSON. 'Toyoaki' is the given name of NAKAMURA Toyoaki. Scores mirror the Nakamura entry exactly so that a name-variant lookup resolves correctly; any committee aggregate MUST de-duplicate this key against Nakamura or it double-counts the board's most dovish member."
+     },
+     {
+      "start": "2023-04",
+      "end": "2025-06",
+      "stance": -2,
+      "confidence": "low",
+      "why": "ALIAS ROW - mirrors Nakamura 2023-04 to 2025-06. De-duplicate before aggregating."
+     }
+    ],
+    "Wakatabe": [
+     {
+      "start": "2021-01",
+      "end": "2023-03",
+      "stance": -1,
+      "confidence": "medium",
+      "why": "Auditor A, and the research refutes itself here: its own note says the -2 dovish extreme belongs to Kataoka, who dissented for more easing at essentially every meeting - and Wakatabe NEVER joined one, appearing among the eight voting FOR in the Dec-2021 8-1 and voting for the UNANIMOUS Dec-2022 YCC widening that the note claims the reflationists disliked. Reflationist rhetoric, median revealed preference."
+     }
+    ],
+    "Masu": [
+     {
+      "start": "2025-07",
+      "end": "2026-03",
+      "stance": 0,
+      "confidence": "medium",
+      "why": "Auditor B: promoting him to +1 in Feb-2026 removed the last neutral and made a fully observed nine-member board median +1, when the revealed votes were 8-1 to HOLD in Jan-2026 and 8-1 to HOLD in Mar-2026. Reuters' Aug-2025 analysis places him in the NEUTRAL column and he has never dissented."
+     },
+     {
+      "start": "2026-04",
+      "end": "",
+      "stance": 1,
+      "confidence": "medium",
+      "why": "By May-2026 saying the BOJ should raise rates 'as soon as possible' absent a slowdown ('joins hawkish chorus'). +1 not +2 because he has never dissented - he held in Apr-2026 while three colleagues proposed 1.00% and in Jul-2026 while Takata proposed 1.25%."
+     }
+    ],
+    "Koeda": [
+     {
+      "start": "2025-03",
+      "end": "",
+      "stance": 1,
+      "confidence": "medium",
+      "why": "Confirmed hawkish on nomination and grouped with Tamura and Takata in Reuters' Aug-2025 analysis, but has never dissented - she voted to hold in Sep and Oct 2025 and in Jan/Mar/Apr/Jul 2026 while Takata proposed larger moves."
+     }
+    ],
+    "Kuroda": [
+     {
+      "start": "2021-01",
+      "end": "2023-04",
+      "stance": 0,
+      "confidence": "medium",
+      "why": "Both auditors CONFIRMED and B calls it the set's best relative call: an absolute super-dove correctly scored at his own committee's median, because Kataoka dissented at essentially every meeting for MORE easing while Suzuki pushed from the side-effects end, and Kuroda's revealed actions (the Mar-2021 band clarification, the Dec-2022 widening) cut against the reflationists."
+     }
+    ],
+    "Amamiya": [
+     {
+      "start": "2021-01",
+      "end": "2023-03",
+      "stance": -1,
+      "confidence": "medium",
+      "why": "Routinely labelled the 'dovish deputy' and explicitly characterised as more dovish than Nakaso and Yamaguchi in the 2023 succession race, but he worked inside the consensus rather than pressing for additional easing the way the reflationist wing did."
+     }
+    ],
+    "Suzuki": [
+     {
+      "start": "2021-01",
+      "end": "2022-07",
+      "stance": 2,
+      "confidence": "medium",
+      "why": "The hawkish pole of the Kuroda board among roster names and the counterweight to its reflationist majority - the side-effects, bank-profitability and super-long-steepening argument. Auditor A argues for +1 because he never cast a dissent of any kind; auditor B CONFIRMS +2 as the relative pole. +2 kept so that the Kuroda-era spectrum retains a hawkish end, but note the argument is on a different axis (financial stability) from a call for a higher policy rate."
+     }
+    ],
+    "Nakaso": [
+     {
+      "start": "2021-01",
+      "end": "",
+      "stance": 0,
+      "confidence": "low",
+      "why": "Both auditors: UNSUPPORTED. He held no Policy Board seat at any point in the window (Deputy Governor 2013-2018), so there is no within-committee position to measure and the +1 was an explicit counterfactual. Zeroed so the key resolves without injecting a phantom hawk; the honest action is exclusion."
+     }
+    ]
+   }
+  },
+  "BOC": {
+   "note": "The Governing Council decides by CONSENSUS - no votes, no dissents, no attributed positions, ever - so the primary lens is structurally empty and every placement is speech-and-portfolio inference. Both auditors converge on the two poles (Beaudry +2 on the 2 June 2022 Gatineau speech, which demonstrably went beyond published guidance; Schembri -2 on the 16 Nov 2021 CABE speech, still leading on 'considerable excess capacity' three weeks AFTER the Bank ended QE with CPI near 4.7%) and on Macklem at 0. The dominant defect both found is COMMUNIQUE RECITATION SCORED AS PERSONAL STANCE: Kozicki's Sep-2023 Regina line is verbatim the Bank's own 6 Sept 2023 statement, Rogers' Calgary remarks restate the 7 Sept 2022 statement she was presenting the day after, Lane's 2021 'transitory' was the published house view, and Gravelle's Dec-2023 look-through argument came in an Economic Progress Report, the institutional day-after-decision slot. Those placements are zeroed or demoted. Mendes is moved to -2 from Oct-2025 on auditor B's argument that the map awarded +2 three times and -2 only once, ending Jun-2022 - four years with a named hawk pole and no dove pole; his Oct-2025 'reacting to temporary movements could cause more volatility' is the explicit mirror of Kozicki's Oslo restraint case. Alexopoulos (from Mar-2025) and Gosselin (from May-2026) are off-roster, so the 2025-26 cross-sections are structurally incomplete.",
+   "speakers": {
+    "Macklem": [
+     {
+      "start": "2021-01",
+      "end": "",
+      "stance": 0,
+      "confidence": "high",
+      "why": "Both auditors CONFIRMED. Under the consensus model the Governor owns the final call and the communique is his, so he is the anchor the deputies are measured against - and his record is genuinely two-sided (the 100bp Jul-2022 hike, but also the dovish 50bp Oct-2022 surprise against a 75bp consensus, the first G7 pause in Jan-2023, and two 50bp cuts in late 2024)."
+     }
+    ],
+    "Rogers": [
+     {
+      "start": "2021-12",
+      "end": "2022-08",
+      "stance": 0,
+      "confidence": "low",
+      "why": "UNSUPPORTED: newly seated and publicly silent on the rate path for her first eight months, across the fastest tightening phase of the cycle. A 0 from absence of information."
+     },
+     {
+      "start": "2022-09",
+      "end": "2024-03",
+      "stance": 1,
+      "confidence": "low",
+      "why": "Auditor B verified the 8 Sep 2022 Calgary speech ('the economy is still overheating'; 'we need a period of lower growth'), which is more than the communique said, and withdrew a challenge as a result. Auditor A flags it as day-after-decision boilerplate restating the 7 Sept 2022 statement, so confidence is demoted. The personally differentiated evidence really begins with Nov-2023 'get used to higher interest rates'."
+     },
+     {
+      "start": "2024-04",
+      "end": "2025-09",
+      "stance": 0,
+      "confidence": "low",
+      "why": "Two-sided public output through the easing cycle - the productivity 'break the glass' argument leans hawkish, the mortgage-renewal payment-shock work leans the other way."
+     },
+     {
+      "start": "2025-10",
+      "end": "",
+      "stance": 1,
+      "confidence": "low",
+      "why": "UNSUPPORTED (auditor A): the rationale's premise that headline CPI was above 3% is contradicted by Rogers' own Mar-2026 Brandon speech, which states inflation had been near 2% for about two years. Strip that and the guard-against-spillover line is standard mandate language. Lean retained at low confidence only."
+     }
+    ],
+    "Gravelle": [
+     {
+      "start": "2021-01",
+      "end": "2022-06",
+      "stance": 1,
+      "confidence": "low",
+      "why": "Auditor A CONFIRMED +1 for the period (12 May 2022: 'our policy rate, at 1%, is too stimulative', capped by 'this is not the 1970s all over again'), and corrects the research: Gravelle raised going BEYOND neutral on 12 May 2022, three weeks before Beaudry, so 'never went past neutral' is wrong. Auditor B notes he gave no speech before 9 Dec 2021, so the first eleven months are unevidenced - hence low confidence rather than a split (see notes on re-centring)."
+     },
+     {
+      "start": "2022-07",
+      "end": "",
+      "stance": -1,
+      "confidence": "low",
+      "why": "The least-hawkish member of every council since the peak: every peer made a distinct public restraint argument and he made none, while his differentiated actions run the other way (the earliest QT exit in the G7 - flagged Mar-2024, dated Jan-2025, completed H1-2026). Start date moved from 2022-09 to 2022-07 on auditor B's dating fix (his last hawk-leaning statement is 12 May 2022), which also repairs the only strictly one-signed slice in the BoC map. Auditor A flags UNSUPPORTED: it is inference from silence plus a portfolio action."
+     }
+    ],
+    "Kozicki": [
+     {
+      "start": "2021-08",
+      "end": "2023-06",
+      "stance": 0,
+      "confidence": "medium",
+      "why": "On-message and hard to separate from Macklem; Lane had already used 'forceful' in February and the Bank adopted it in April, so she was riding the consensus rather than leading it."
+     },
+     {
+      "start": "2023-07",
+      "end": "2024-12",
+      "stance": 0,
+      "confidence": "low",
+      "why": "BOTH auditors: the load-bearing Regina quote ('prepared to raise the policy interest rate further if needed') is verbatim the Bank's own 6 Sept 2023 statement, and she ties it explicitly to 'our most recent monetary policy decision'. Her only other output in the stretch is a QE-to-QT retrospective. Repeating the communique cannot order anyone away from the median."
+     },
+     {
+      "start": "2025-01",
+      "end": "2026-02",
+      "stance": 1,
+      "confidence": "low",
+      "why": "Retained as the lead-in to the verified 2026 restraint case (auditor B explicitly argues the 2025 portion should stand at +1, since knocking it out would leave the 2025 council with no hawk at all)."
+     },
+     {
+      "start": "2026-03",
+      "end": "2026-07",
+      "stance": 2,
+      "confidence": "medium",
+      "why": "Auditor B verified the 2 Mar 2026 Oslo speech verbatim: 'a look-through strategy has limits', 'some degree of policy restraint will be needed', 'monetary policy needs to be tightened even when the economy is weak'. No other member said anything comparable, so she is the late-window hawkish pole. Auditor A disputes the framing (her own speech says inflation stayed near 2%, not above 3%) and the Jan-2026 start date, which is why the period now opens at the speech itself. Ends at her retirement, 15 July 2026."
+     }
+    ],
+    "Vincent": [
+     {
+      "start": "2023-03",
+      "end": "2023-09",
+      "stance": 0,
+      "confidence": "low",
+      "why": "Both auditors: the +2 opened seven months before he said anything in public - his first public act in the role is the 3 Oct 2023 Montreal speech."
+     },
+     {
+      "start": "2023-10",
+      "end": "2024-12",
+      "stance": 1,
+      "confidence": "medium",
+      "why": "BOTH auditors say +2 is too high: the Oct-2023 speech warns firms' price-setting could become self-perpetuating but concludes ON-message ('higher interest rates are working... stay the course'), it is his own academic specialty rather than a rate call, and it double-poles with Beaudry, whom the research itself ranks above him at higher confidence."
+     },
+     {
+      "start": "2025-01",
+      "end": "2025-10",
+      "stance": 0,
+      "confidence": "low",
+      "why": "Both auditors: UNSUPPORTED. His BoC profile shows no speech at all between Sep-2024 and Nov-2025 - a 0 from silence, sitting exactly at the hinge of the claimed hawk-to-dove reversal."
+     },
+     {
+      "start": "2025-11",
+      "end": "",
+      "stance": -1,
+      "confidence": "low",
+      "why": "The 'low hire, low fire' labour-market documentation (May-2026 CIRANO: ~6,000 jobs a month since early 2025 against ~34,000 in 2024, unemployment 6.9%) places him opposite Kozicki's tighten-into-weakness case. Auditor A flags UNSUPPORTED: the Nov-2025 productivity speech contains no statement about the rate path, and describing weak labour data is the Bank's own published assessment."
+     }
+    ],
+    "Beaudry": [
+     {
+      "start": "2021-01",
+      "end": "2022-05",
+      "stance": 0,
+      "confidence": "low",
+      "why": "UNSUPPORTED: seventeen months scored from a single Nov-2021 financial-stability speech with no rate signal. An argument from absence, immediately before the best-evidenced deviation in the file."
+     },
+     {
+      "start": "2022-06",
+      "end": "2023-07",
+      "stance": 2,
+      "confidence": "high",
+      "why": "Both auditors CONFIRMED - the one BoC placement that would survive a strict voting-record standard. 2 June 2022 Gatineau: 'we may need to raise the policy rate to the top end or above the neutral range', beyond the Bank's published guidance and headlined as such, plus the self-fulfilling-expectations argument nobody else pushed. Correction: the Jun-2023 r-star speech is more hedged than the research implies (real neutral likely still 0-1% with risks tilted up), so the +2 rests on June 2022."
+     }
+    ],
+    "Mendes": [
+     {
+      "start": "2023-07",
+      "end": "2024-10",
+      "stance": 0,
+      "confidence": "low",
+      "why": "Auditor B: sixteen months of non-zero stance with zero public output - his BoC profile lists exactly two speeches for his whole tenure, the first on 26 Nov 2024. The research concedes the Finance-Canada background is 'a prior, not evidence'."
+     },
+     {
+      "start": "2024-11",
+      "end": "2025-09",
+      "stance": -1,
+      "confidence": "low",
+      "why": "The Charlottetown debut dwelt on the cost of the tightening and framed the objective as keeping inflation AT 2%, guarding the undershoot - less restrictive than the council's hawks, but the framing is the Bank's own symmetric-target language."
+     },
+     {
+      "start": "2025-10",
+      "end": "2026-04",
+      "stance": -2,
+      "confidence": "low",
+      "why": "RE-CENTRED per auditor B: the map awarded +2 three times and -2 only once, ending Jun-2022, so a hawkish pole was always named and a dovish one never was. His 2 Oct 2025 Ivey argument - underlying inflation 'isn't something we can specifically measure' and 'reacting to temporary movements could end up causing more volatility' given two-year lags - is the explicit mirror of Kozicki's Oslo case, and if the restraint argument earns +2 its mirror earns -2 in the same cross-section. Low confidence: the speech reads only cautious in absolute tone, which is precisely why it must be scored relatively. Ends at his departure, 10 April 2026."
+     }
+    ],
+    "Wilkins": [
+     {
+      "start": "2021-01",
+      "end": "",
+      "stance": 0,
+      "confidence": "low",
+      "why": "Both auditors: UNSUPPORTED and out of scope. She left the Bank on 9 December 2020, three weeks before the window opens, and the research's +1 rested on a June-2017 speech plus reputation, with the entry itself conceding 'a 0 would be equally defensible' and calling it 'a completeness marker, not a placement'. Zeroed so the key resolves and carries no signal."
+     }
+    ],
+    "Schembri": [
+     {
+      "start": "2021-01",
+      "end": "2022-06",
+      "stance": -2,
+      "confidence": "high",
+      "why": "Both auditors CONFIRMED and both fetched the 16 Nov 2021 CABE speech: 'considerable excess capacity remains', elevated unemployment and underemployment, inflation attributed to transitory energy and supply effects, expectations anchored - delivered three weeks AFTER the Bank terminated QE and pulled liftoff guidance forward, with CPI near 4.7%. Off-message dovish against a Bank that had already turned; the symmetric counterpart of Beaudry's deviation."
+     }
+    ],
+    "Lane": [
+     {
+      "start": "2021-01",
+      "end": "2021-12",
+      "stance": 0,
+      "confidence": "low",
+      "why": "BOTH auditors: UNSUPPORTED. 'Transitory' was the Bank of Canada's official 2021 position, stated in the April and July MPRs and by Macklem himself, and the Globe headline cited as evidence attributes the view to the institution ('Bank of Canada shrugs off inflation worries'). You cannot be dovish relative to a committee by agreeing with it."
+     },
+     {
+      "start": "2022-01",
+      "end": "2022-09",
+      "stance": 1,
+      "confidence": "low",
+      "why": "Auditor A flags UNSUPPORTED - the Feb-2022 line is hedged and collective ('We will be nimble - and if necessary, forceful') inside a process speech, delivered after a January decision that had already signalled rates must rise. Auditor B deliberately did NOT challenge it (could not retrieve the text; a fetch failure is not evidence of no basis). Lean retained at low confidence."
+     }
+    ]
+   }
+  },
+  "SNB": {
+   "note": "The smallest and least transparent committee here: a three-member Governing Board that has NEVER published a vote, dissent, minute or attributed view, and the new 'Summary of discussion' (from Sept 2025) is deliberately collective - both auditors fetched it and confirmed it contains no 'one member'/'some members' language. Every placement is portfolio plus speech emphasis. Both auditors independently flagged the same two structural problems: PORTFOLIO DETERMINISM (Dept II -> hawk, Dept III -> dove, Dept I -> house line, so each score transfers to whoever next occupies the chair) and QUOTE SELECTION (the current formula 'negative rates are available if price stability requires it, but the bar is high' is spoken by ALL three sitting members, and the map deals each of them a different half of it). Confidence is therefore low almost everywhere. RE-CENTRING (see notes): the researcher's Maechler 0 for 2022-08 onward left the three-member board at Jordan 0 / Schlegel +1 / Maechler 0 - one-signed - so Maechler is moved to -1 for that stretch; Moser is set to -1 for Jul-2023 to Sep-2024, the only other stretch that came out one-signed, on the strength of his running Department III ad interim; and Schlegel is split at his Oct-2024 accession to the chairmanship, taking auditor A's period boundary with auditor B's magnitude. 'Steiner' is Barbara Janom Steiner, President of the Bank COUNCIL (the supervisory body), with no monetary-policy role - scored 0 so the key resolves without inventing a policymaker. Antoine Martin (Vice-Chairman from Oct 2024, hawkish end with Schlegel) is off-roster, so the post-2024 voting board is only partly scored here.",
+   "speakers": {
+    "Zurbruegg": [
+     {
+      "start": "2021-01",
+      "end": "2022-07",
+      "stance": 1,
+      "confidence": "low",
+      "why": "The hawkish end of the 2021-22 board via the Dept II financial-stability seat: the Aug-2021 Lucerne speech ('vulnerabilities are high', mortgage credit risk up sharply) and the Jan-2022 sectoral CCyB reactivation his department proposed. Both auditors demote the confidence: the CCyB proposal is an INSTITUTIONAL act signed by Jordan and Maechler too, the FSR presentation is his office rather than his preference, the hawkishness is macroprudential rather than a call for a higher policy rate, and his own signature speech is titled 'Negative interest rates: necessary from a monetary policy perspective - but with what risks for the banks?'. He retired six weeks after the first hike without revealing a preference on the pace."
+     }
+    ],
+    "Jordan": [
+     {
+      "start": "2021-01",
+      "end": "2024-09",
+      "stance": 0,
+      "confidence": "low",
+      "why": "Auditor B CONFIRMED: in a three-person collegial board with no published votes the Chairman's line IS the committee line, and Swiss reporting describes Jordan as the dominant force in the Directorate since 2012. He personally owned both poles of the cycle (-0.75% with unlimited intervention, the surprise 50bp Jun-2022 hike ahead of the ECB, the flip to selling FX, the first G10 cut in Mar-2024). Auditor A flags UNSUPPORTED because the score is an identifying normalisation that no conduct could falsify - hence low confidence and the label: this is an anchor, not a measurement."
+     }
+    ],
+    "Maechler": [
+     {
+      "start": "2021-01",
+      "end": "2022-07",
+      "stance": -1,
+      "confidence": "medium",
+      "why": "Auditor A CONFIRMED - the only SNB entry built on dated, first-person, on-point quotes: 'not anywhere close' to changing policy (Jun-2021) and 'our expansionary monetary policy is absolutely necessary', from the Dept III holder who co-authored the Nov-2020 negative-rate steering blueprint, at the exact moment Zurbruegg was warning that mortgage vulnerabilities were high. Auditor B argued for -2 as the dove pole; -1 kept because ±1 already spans both signs on this three-person board. End date moved from 2022-05 to 2022-07 per auditor A: every cause of her repositioning postdates it (Zurbruegg retired 31 Jul 2022, Schlegel arrived 1 Aug, her convergence quotes are Sept/Oct 2022)."
+     },
+     {
+      "start": "2022-08",
+      "end": "2023-06",
+      "stance": -1,
+      "confidence": "low",
+      "why": "RE-CENTRED. She did converge ('quite possible that we have to make further interest rate increases'; welcoming the return to conventional policy) while her desk executed the FX SALES that tightened conditions - but scoring her 0 puts two of three voting members at the identical point and leaves the board one-signed (Jordan 0 / Schlegel + / Maechler 0), erasing the Dept III seat from a spectrum the map itself calls the structural dove seat. Auditor B's -1 is taken. Low confidence: the convergence quotes echo a decision already taken, and Swiss press suggests she carried less internal weight than Jordan or Schlegel."
+     }
+    ],
+    "Schlegel": [
+     {
+      "start": "2022-08",
+      "end": "2024-09",
+      "stance": 1,
+      "confidence": "medium",
+      "why": "As Vice-Chairman the board's most forward-leaning tightening voice, and auditor A explicitly keeps this half: 'we cannot rule out further interest rate increases' (Apr and Jun 2023), inflation 'spreading to other goods and services' beyond energy, second-round effects through rents - ahead of Maechler, who by then framed the same months as a return to conventional policy."
+     },
+     {
+      "start": "2024-10",
+      "end": "",
+      "stance": 2,
+      "confidence": "low",
+      "why": "SYNTHESIS: auditor A's period boundary (the seat and mandate change at the Oct-2024 accession to the chairmanship) with auditor B's magnitude. B's evidence is the hardest in the SNB set: Reuters' 3-8 Dec 2025 poll of 40 economists explicitly credits Schlegel's own repetition of 'the bar is high' because of 'undesirable side effects' for flipping the consensus to 'risk of a negative policy rate is low' (14 of 17 respondents), a complete reversal from June 2025 - the only SNB official in the window to move a market-wide expectation under his own name. Auditor A argued the chair-anchor rule should instead pin him at 0; that is rejected because it would leave the roster's post-2024 board one-signed negative. Low confidence given the direct disagreement and the fact that he delivered five cuts to 0% including a 50bp cut in Dec-2024."
+     }
+    ],
+    "Tschudin": [
+     {
+      "start": "2024-10",
+      "end": "",
+      "stance": -1,
+      "confidence": "low",
+      "why": "Auditor B CONFIRMED the rank: the Feb-2025 emphasis on the IMPORTANCE of negative rates for a small open economy and 30 Oct 2025 Basel ('We would introduce negative rates if we had to. We know that they work.') is materially warmer than Schlegel's 'bar is high / undesirable side effects' and than Antoine Martin's Aug-2025 caution. Confidence cut to low because auditor A shows the selection is one-sided: five days after Basel she said 'Our interest rates are where they should be' and 'We will only use negative interest rates when necessary', and the differentiation is confined to the instrument-availability axis, not the policy level."
+     }
+    ],
+    "Moser": [
+     {
+      "start": "2021-01",
+      "end": "2023-06",
+      "stance": 0,
+      "confidence": "low",
+      "why": "BOTH auditors: UNSUPPORTED, and both suggested 0. He is a NON-VOTING alternate; the research concedes the placement is 'a weak prior from portfolio and emphasis, not a read on a revealed preference'; the sharpest dovish quote dates from 2014, outside the window; his in-window output is implementation mechanics, one item of which (the Apr-2024 study) concerns transmission of TIGHTENING. Zeroed."
+     },
+     {
+      "start": "2023-07",
+      "end": "2024-09",
+      "stance": -1,
+      "confidence": "low",
+      "why": "RE-CENTRED. Between Maechler's departure (30 Jun 2023) and Tschudin's accession (1 Oct 2024) the roster contains only Jordan, Schlegel and Moser, which left the SNB one-signed. Ranking those three against each other: Schlegel (Dept II, the board's most forward-leaning tightener) > Jordan (chair, house line) > Moser, who ran DEPARTMENT III AD INTERIM from July to December 2023, owns the easing toolkit and never took the restraint side of a Swiss policy argument. The real third seat in this stretch was vacant and then held by Antoine Martin (off-roster, hawkish end), so this is a roster artefact as much as a judgement - treat it as weak."
+     },
+     {
+      "start": "2024-10",
+      "end": "",
+      "stance": 0,
+      "confidence": "low",
+      "why": "Back to 0 once Tschudin occupies the Dept III seat and the dovish end. The sole in-window evidence for a dovish Moser (the 13 Nov 2025 bank-funding-costs speech) was CO-DELIVERED WITH TSCHUDIN and is cited by the research to score both of them dovish - one joint technical speech cannot establish two independent placements."
+     }
+    ],
+    "Steiner": [
+     {
+      "start": "2021-01",
+      "end": "",
+      "stance": 0,
+      "confidence": "low",
+      "why": "The only Steiner in the SNB orbit is Barbara Janom Steiner, President of the Bank COUNCIL - the supervisory body overseeing the SNB's business conduct, with no role whatsoever in monetary policy. Both auditors endorse the researcher's refusal to score her as a policymaker; 0 is assigned only so the roster key resolves and carries no signal. She should ideally be excluded from the backtest."
+     }
+    ]
+   }
+  }
+ },
+ "notes": [
+  "COMMITTEES RE-CENTRED (as required by the relative-property rule). (1) BOJ 2025-07 to 2026-03: with Nakamura gone and Asada/Sato not yet seated, all nine sitting members are roster names, yet the map carried two +2s (Takata, Tamura) and no -2. Ueda and Uchida are moved to -2 from 2025-07, which both auditors' evidence supports (Reuters' Aug-2025 analysis names them the dovish camp of that fully observed board); the snapshot then reads -2,-2,-1,0,0,+1,+1,+2,+2. Masu is held at 0 until 2026-04 for the same reason - promoting him in Feb-2026 made the median of a nine-member board +1 in a window whose actual votes were 8-1 to HOLD. (2) SNB 2022-08 to 2023-06: scoring Maechler 0 left the three-member board at Jordan 0 / Schlegel + / Maechler 0, i.e. one-signed; Maechler is moved to -1. (2b) SNB 2023-07 to 2024-09: after Maechler left and before Tschudin arrived, the roster held only Jordan (0), Schlegel (+) and Moser, which was again one-signed; Moser is moved to -1 for exactly that stretch, ranked below Jordan on the strength of his running Department III ad interim, and returned to 0 once Tschudin occupies the dovish end. Both auditors would score Moser 0 throughout, so this is a re-centring imposed by the balance rule, not an evidentiary finding - and it is partly a roster artefact, since the real third seat in that stretch was vacant and then held by the off-roster Antoine Martin. (3) BOC 2021: applying auditor B's dating fix to Gravelle would have zeroed him for Jan-Nov 2021, leaving Schembri (-2) as the only non-zero score and the council one-signed; the +1 is therefore kept for the whole 2021-01 to 2022-06 period at low confidence, while auditor B's separate fix moving his -1 start to 2022-07 is accepted because it repairs the genuinely one-signed Jul-Aug 2022 slice. (4) BOC dovish tail: the map awarded +2 three times and -2 only once (ending Jun-2022), so Mendes is set to -2 from Oct-2025 as the explicit mirror of Kozicki's restraint case.",
+  "SPEAKERS ADDED BEYOND THE SUPPLIED ROSTER, because both auditors showed the map is incoherent without them. FED: Paulson (confirmed 2026 voter, Reuters DOVISH; the research names her as a 2026 dovish pole and then excludes her). ECB: Kaasik, Radev, Zigman, Dolenc, Patsalides, Santos Pereira, Demarco (seven sitting Governing Council members omitted, four of them above the median, which made the visible council read about 0.10 more dovish than the real one; five of the seven are named inside the research's own prose or sources). If the backtest roster rejects unknown keys, these rows can be dropped without affecting any other entry.",
+  "ALIAS ROW: BOJ 'Toyoaki' is the GIVEN NAME of NAKAMURA Toyoaki, not a tenth member of a nine-seat board. It is retained with identical scores so a name-variant lookup resolves, but it MUST be de-duplicated against 'Nakamura' before computing any committee mean, median or dissent count, or the board's most dovish member is counted twice. Both auditors flagged this.",
+  "FACTUAL CORRECTIONS CARRIED THROUGH FROM THE AUDITS. FED: the April-2026 dissents by Logan, Kashkari and Hammack were against including an easing bias while SUPPORTING the hold - only July 2026 is a hike dissent (9-3), and June 2026 was unanimous 12-0; the claim that George's June-2022 dissent was the hiking cycle's only dissent is false (Bullard dissented in March 2022 for 50bp); the claim that the Warsh-era statement stopped publishing the vote split is false (July 2026 named all three dissenters); George's duplicated 'duplicate-guard' period is deleted. BOE: there was no casting vote at Sep-2023 (a 5-4 on nine members cannot tie) and Nov-2025 was a 5-4 HOLD with Bailey on the hold side. BOJ: Sept/Oct-2025 were neither the first Ueda-era dissents nor the first two-dissenter votes in eight years; the Dec-2022 YCC widening was unanimous; the Jun-2026 hike was 7-1 because Ueda was absent; Asada replaced Noguchi and Sato replaced Nakagawa, not the reverse. ECB: the 'every successor is less extreme than the predecessor' generalisation is false on the map's own numbers four times over.",
+  "EVIDENCE CLASS VARIES ENORMOUSLY ACROSS BANKS AND THE CONFIDENCE FIELD NOW REFLECTS IT. Only the BOE publishes an attributed vote for every member at every meeting, and only the FED and BOJ publish named dissents; the ECB publishes nothing attributable (four named individuals across the whole window), the BOC decides by consensus with no attribution ever, and the SNB publishes no votes, dissents or minutes at all. A downstream backtest should not treat a BOE 'high' and an SNB 'high' as the same object - consider weighting FED/BOE/BOJ stances above ECB, and ECB above BOC/SNB.",
+  "UNRESOLVED DISAGREEMENT BETWEEN THE AUDITORS ON A POINT OF FACT: for the BOC 2026 hold phase, auditor A fetched the Rogers (26 Mar 2026) and Kozicki (2 Mar 2026) speeches and reports both say inflation had been near the 2% target, while auditor B asserts headline CPI was above 3%. The Kozicki +2 and Rogers +1 late-window scores depend on which is right; both are marked medium/low accordingly. Worth one human check before the backtest runs.",
+  "PLACEMENTS THAT ARE 0 BECAUSE THERE IS NO EVIDENCE, NOT BECAUSE THE MEMBER WAS CENTRIST (all carry confidence 'low'): FED Warsh, Powell post-2026-05; ECB Guindos, Delgado, Herodotou, Elderson pre-2024, Mauderer (not a Council member); BOE Ramsden H1-2021, Saunders H1-2021, Haskel 2021; BOJ Nakamura pre-2023, Nakaso (never held a seat); BOC Wilkins (out of window), Lane 2021, Beaudry pre-2022-06, Vincent 2023 and 2025, Kozicki 2023-24; SNB Moser (non-voting), Steiner (not a policymaker). Treat these as 'no signal' rather than as measured medians.",
+  "MAGNITUDE DISAGREEMENTS RESOLVED BY THE HARDER-EVIDENCE RULE, listed so they can be reversed cheaply if the backtest is sensitive: BOE Mann 2025-05 onward set to +2 (auditor B's strict-ordering argument versus Lombardelli plus MUFG's Jul-2026 member scoring, over auditor A's +1 based on her GBP62bn QT preference); BOE Vlieghe kept at -2 (published dated argument for delay beats absence of dissent); ECB Rehn kept at -2 (Econostream -1.5, second-lowest of 27, beats the unfalsifiable-rescue-clause objection); ECB Stournaras kept at -2 though Econostream has him only third among governors on the dovish side; ECB Reinesch kept at the researcher's +1 as the midpoint of A's 0 and B's +2; ECB Makhlouf and Sleijpen kept at +1 with low confidence where the two auditors bucketed the same Econostream 0.5 differently; BOJ Suzuki kept at +2 so the Kuroda-era spectrum retains a hawkish end, though he never cast a dissent of any kind; SNB Schlegel post-2024 set to +2 by combining auditor A's period split with auditor B's magnitude."
+ ]
+}

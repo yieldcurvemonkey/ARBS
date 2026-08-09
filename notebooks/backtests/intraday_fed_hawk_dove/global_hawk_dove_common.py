@@ -82,9 +82,27 @@ class CBConfig:
     session_end: datetime.time
     ccy: str
 
+    #: "barchart" (a listed future) or "citivelo" (reconstruct the future from a
+    #: warmed Citi Velocity minute curve, because no listed contract is served).
+    source: str = "barchart"
+    #: citivelo only: the curve to read and the rateslib spec for the synthetic future.
+    curve_name: Optional[str] = None
+    rl_spec: str = "usd_stir"
+
+    #: Which JPM report banks feed this leg's event stream. Usually just the bank
+    #: itself; the EUR leg also trades on the other European central banks, whose
+    #: commentary moves the euro strip.
+    speaker_banks: tuple = ()
+    #: Local time assigned to a speech we know the DAY of but not the minute.
+    synthetic_time: datetime.time = datetime.time(9, 0)
+
     @property
     def tz(self):
         return pytz.timezone(self.market_tz)
+
+    @property
+    def banks(self) -> tuple:
+        return self.speaker_banks or (self.code,)
 
 
 def _ql_cal(name: str):
@@ -93,6 +111,8 @@ def _ql_cal(name: str):
         "UK": ql.UnitedKingdom(ql.UnitedKingdom.Exchange),
         "EU": ql.TARGET(),
         "JP": ql.Japan(),
+        "CA": ql.Canada(),
+        "CH": ql.Switzerland(),
     }[name]
 
 
@@ -115,27 +135,58 @@ CB_CONFIGS: Dict[str, CBConfig] = {
         session_start=datetime.time(7, 0), session_end=datetime.time(16, 45), ccy="USD",
     ),
     "ECB": CBConfig(
-        code="ECB", label="ECB", theme=ForexFactoryTheme.ECB_SPEAKERS,
-        # EB = CME 3M ESTR. Chosen over ICE's RA purely on measured bar density
-        # (EB 121-473 bars/day vs RA 18-213 on the same dates).
-        root="EB", curve_id="EUR-ESTR", market_tz="Europe/London",
+        code="ECB", label="ECB / euro area", theme=ForexFactoryTheme.ECB_SPEAKERS,
+        # IM = ICE 3M EURIBOR, NOT ESTR. Measured coverage 2021-2026 is 352-803
+        # bars every day, where ESTR (EB) serves NOTHING before 2024 and Eurex
+        # Euribor (TV) is mostly a padded grid: TVZ23 returned 1,440 "bars" with
+        # ONE distinct price. Euribor is where the euro front end actually trades.
+        root="IM", curve_id="EUR-ESTR", market_tz="Europe/London",
         ql_calendar=_ql_cal("EU"),
-        session_start=datetime.time(7, 0), session_end=datetime.time(20, 15), ccy="EUR",
+        session_start=datetime.time(7, 0), session_end=datetime.time(17, 45), ccy="EUR",
+        # The euro strip trades on European central-bank commentary generally, not
+        # just the ECB's - Bundesbank sits inside ECB, Norges and the Riksbank are
+        # separate committees whose speakers still move EUR rates.
+        speaker_banks=("ECB", "NORGES", "RIKSBANK"),
+        synthetic_time=datetime.time(9, 30),
     ),
     "BOE": CBConfig(
         code="BOE", label="Bank of England", theme=ForexFactoryTheme.BOE_SPEAKERS,
         root="J8", curve_id="GBP-SONIA", market_tz="Europe/London",
         ql_calendar=_ql_cal("UK"),
         session_start=datetime.time(7, 45), session_end=datetime.time(17, 30), ccy="GBP",
+        speaker_banks=("BOE",), synthetic_time=datetime.time(9, 30),
     ),
     "BOJ": CBConfig(
         code="BOJ", label="Bank of Japan", theme=ForexFactoryTheme.BOJ_SPEAKERS,
-        # T0 = JPX 3M TONA. Barchart serves NOTHING for this root (or TFX's IT):
-        # MDP.get_data raises "returned no data". Kept wired so the leg reports
-        # its own emptiness rather than being silently dropped.
+        # Barchart serves NO JPY STIR future - 14 candidate roots were tried and
+        # T0/IT return "no data" while the rest are JGBs or unrelated products.
+        # So the contract is RECONSTRUCTED from the warmed Citi Velocity minute
+        # curve: forward rate over the IMM quarter -> price = 100 - rate ->
+        # a genuine rl.STIRFuture. Measured: the reconstructed IMM_3 rate moves
+        # 1.48bp across a session, so this is real intraday data, not a daily
+        # curve repeated. Store coverage starts 2024-08-01.
         root="T0", curve_id="JPY-TONA", market_tz="Asia/Tokyo",
         ql_calendar=_ql_cal("JP"),
-        session_start=datetime.time(8, 45), session_end=datetime.time(18, 0), ccy="JPY",
+        session_start=datetime.time(9, 0), session_end=datetime.time(17, 30), ccy="JPY",
+        source="citivelo", curve_name="JPY-TONAR-1D-LCH", rl_spec="jpy_irs",
+        speaker_banks=("BOJ",), synthetic_time=datetime.time(10, 0),
+    ),
+    "BOC": CBConfig(
+        code="BOC", label="Bank of Canada", theme=ForexFactoryTheme.BOC_SPEAKERS,
+        # RG = 3M CORRA. 2021 is a padded grid (1,440 bars, one price) and is
+        # dropped by the synthetic-day filter; real coverage runs 2023 onward.
+        root="RG", curve_id="CAD-CORRA", market_tz="America/Toronto",
+        ql_calendar=_ql_cal("CA"),
+        session_start=datetime.time(8, 0), session_end=datetime.time(16, 15), ccy="CAD",
+        speaker_banks=("BOC",), synthetic_time=datetime.time(10, 0),
+    ),
+    "SNB": CBConfig(
+        code="SNB", label="Swiss National Bank", theme=ForexFactoryTheme.SNB_SPEAKERS,
+        # J2 = 3M SARON. Nothing before 2024; 109-274 bars/day after.
+        root="J2", curve_id="CHF-SARON", market_tz="Europe/Zurich",
+        ql_calendar=_ql_cal("CH"),
+        session_start=datetime.time(8, 45), session_end=datetime.time(18, 30), ccy="CHF",
+        speaker_banks=("SNB",), synthetic_time=datetime.time(10, 0),
     ),
 }
 
@@ -366,6 +417,152 @@ def bucket_split(
     return pd.Series(b).value_counts(normalize=True).sort_index()
 
 
+# ---------------------------------------------------------------------------
+# Relative-to-peers labelling
+# ---------------------------------------------------------------------------
+def make_peer_relative_bucketer(
+    scores: pd.DataFrame,
+    bank: str,
+    score_metric: str,
+    *,
+    peer_window_days: int = 365,
+    min_peers: int = 3,
+    edges: Sequence[tuple] = ((0.60, 2), (0.20, 1), (-0.20, 0), (-0.60, -1)),
+    fallback: Optional[Callable[[str, float, datetime.date], int]] = None,
+) -> Callable[[str, float, datetime.date], int]:
+    """Score a speaker against THEIR OWN COMMITTEE at that moment.
+
+    This is the labelling the whole exercise turns on. Ranking a speaker against
+    their own past (the percentile bucketer) still answers "is this speech
+    hawkish for them", which is a different question from "is this person a hawk
+    ON THIS COMMITTEE". The latter is what moves a rate: a Bank of Japan member
+    who sounds dovish to a global audience can still be the BOJ's hawk, and in
+    2022 every FOMC member sounded hawkish while only some were hawkish RELATIVE
+    to the committee.
+
+    So for each speech we take the cross-section of every OTHER speaker's most
+    recent score on this committee (within ``peer_window_days``), and express the
+    speaker's score as their position inside that cross-section. The result is
+    scale-free, automatically balanced around the committee, and immune to the
+    common drift that made the trailing-percentile version tilt.
+
+    No lookahead: peers are only counted from observations strictly before the
+    speech date.
+    """
+    sub = scores[scores["central_bank"] == bank].sort_values("date")
+    dates = np.array([np.datetime64(d) for d in sub["date"]])
+    vals = sub[score_metric].to_numpy(dtype=float)
+    speakers = sub["speaker"].to_numpy()
+
+    def _fn(speaker: str, score: float, as_of: datetime.date) -> int:
+        if score is None or score != score:
+            return 0
+
+        def _fb():
+            # Small committees genuinely cannot support a cross-section: the SNB
+            # has 4 speakers in the corpus and Norges 2, so the peer set is often
+            # under min_peers and returning 0 would silently delete the whole leg
+            # (measured: 64 of 105 SNB events). Fall back to the speaker's own
+            # trailing distribution rather than dropping the observation.
+            return fallback(speaker, score, as_of) if fallback else 0
+
+        as_of64 = np.datetime64(as_of)
+        lo = as_of64 - np.timedelta64(int(peer_window_days), "D")
+        mask = (dates < as_of64) & (dates >= lo)
+        if not mask.any():
+            return _fb()
+        # most recent observation per OTHER speaker
+        latest: Dict[str, float] = {}
+        for sp, v in zip(speakers[mask], vals[mask]):
+            if sp == speaker or v != v:
+                continue
+            latest[sp] = v          # ordered by date, so the last write wins
+        peers = np.array(list(latest.values()), dtype=float)
+        if len(peers) < min_peers:
+            return _fb()
+        spread = float(np.percentile(peers, 75) - np.percentile(peers, 25))
+        if spread <= 0:
+            spread = float(np.std(peers)) or 0.0
+        if spread <= 0:
+            return _fb()
+        z = (float(score) - float(np.median(peers))) / spread
+        for cutoff, bucket in edges:
+            if z >= cutoff:
+                return bucket
+        return -2
+
+    return _fn
+
+
+def load_researched_stances(path) -> Dict[str, Dict[str, list]]:
+    """Load the hand-researched relative-stance table (see research_stances.json)."""
+    import json
+    from pathlib import Path as _P
+    p = _P(path)
+    if not p.exists():
+        return {}
+    with open(p, encoding="utf-8") as f:
+        blob = json.load(f)
+    return blob.get("banks", blob)
+
+
+def make_researched_bucketer(
+    stances: Dict[str, Dict[str, list]], bank: str
+) -> Callable[[str, float, datetime.date], int]:
+    """Bucket purely from the researched committee-relative stance.
+
+    Deliberately ignores the NLP score: this is the prior a desk would hold about
+    where a speaker sits on their committee, and keeping it independent of the
+    model output is what makes it a genuine cross-check rather than a re-labelling
+    of the same signal.
+    """
+    table = (stances.get(bank) or {}).get("speakers", {}) if stances else {}
+    parsed: Dict[str, list] = {}
+    for sp, periods in (table or {}).items():
+        out = []
+        for p in periods:
+            try:
+                s = pd.Period(p.get("start") or "1900-01", freq="M").start_time.date()
+                e_raw = p.get("end") or ""
+                e = (pd.Period(e_raw, freq="M").end_time.date() if e_raw
+                     else datetime.date(2100, 1, 1))
+                out.append((s, e, int(p.get("stance", 0))))
+            except Exception:  # noqa: BLE001
+                continue
+        if out:
+            parsed[sp] = out
+
+    def _fn(speaker: str, _score: float, as_of: datetime.date) -> int:
+        for s, e, stance in parsed.get(speaker, []):
+            if s <= as_of <= e:
+                return stance
+        return 0
+
+    return _fn
+
+
+def make_blended_bucketer(
+    peer_fn: Callable[[str, float, datetime.date], int],
+    researched_fn: Callable[[str, float, datetime.date], int],
+) -> Callable[[str, float, datetime.date], int]:
+    """Trade only where the message and the messenger agree.
+
+    Takes the position only when the speech's peer-relative reading and the
+    speaker's researched standing point the same way, sized by the weaker of the
+    two. A known hawk sounding hawkish is a different event from a known dove
+    sounding hawkish, and this is the cheapest way to ask whether that distinction
+    carries any information.
+    """
+    def _fn(speaker: str, score: float, as_of: datetime.date) -> int:
+        a = peer_fn(speaker, score, as_of)
+        b = researched_fn(speaker, score, as_of)
+        if a == 0 or b == 0 or (a > 0) != (b > 0):
+            return 0
+        return int(np.sign(a) * min(abs(a), abs(b)))
+
+    return _fn
+
+
 # ===========================================================================
 # Events
 # ===========================================================================
@@ -480,6 +677,7 @@ def build_trade_events(
 
         out.append({
             "bank": cfg.code,
+            "speaker_bank": cfg.code,
             "ccy": cfg.ccy,
             "event_id": row.get("EventId", len(out)),
             "speaker": speaker,
@@ -493,6 +691,141 @@ def build_trade_events(
             "bpv": abs(bucket) * base_bpv,      # magnitude only ...
             "side": -1.0 if bucket > 0 else 1.0,  # ... direction lives here
             "tag": f"{cfg.code}_{row.get('EventId', len(out))}",
+            "timestamp_source": "forexfactory",
+        })
+
+    return out, dict(excluded)
+
+
+def covered_keys(events: List[dict]) -> set:
+    """(speaker_bank, speaker, date) already carrying a REAL timestamp, so the
+    synthetic builder does not duplicate them."""
+    return {(e.get("speaker_bank", e["bank"]), e["speaker"], e["speech_ts"].date())
+            for e in events}
+
+
+def build_leg_events(
+    cfg: CBConfig,
+    scores: pd.DataFrame,
+    *,
+    start: str,
+    end: str,
+    entry_offset: datetime.timedelta,
+    exit_offset: datetime.timedelta,
+    base_bpv: float,
+    contract_rank: int,
+    bucketer_factory: Callable[[str], Callable],
+    blackout_bd: int,
+    include_synthetic: bool = True,
+) -> tuple:
+    """Full event universe for one leg: real ForexFactory timings first, then the
+    JPM-dated speeches ForexFactory never carried."""
+    blackout_fn = make_blackout_fn(cfg, blackout_bd)
+    lookups = {b: ScoreLookup(scores, b, SCORE_METRIC_DEFAULT) for b in cfg.banks}
+    buckets = {b: bucketer_factory(b) for b in cfg.banks}
+
+    raw = fetch_events(cfg, start, end)
+    timed, excl = build_trade_events(
+        cfg, raw, lookups[cfg.code],
+        entry_offset=entry_offset, exit_offset=exit_offset,
+        base_bpv=base_bpv, contract_rank=contract_rank,
+        bucket_fn=buckets[cfg.code], blackout_fn=blackout_fn,
+    )
+
+    synth, sexcl = ([], {})
+    if include_synthetic:
+        synth, sexcl = build_synthetic_events(
+            cfg, scores, lookups, covered_keys(timed),
+            entry_offset=entry_offset, exit_offset=exit_offset,
+            base_bpv=base_bpv, contract_rank=contract_rank,
+            bucket_fn_by_bank=buckets, blackout_fn=blackout_fn,
+        )
+
+    events = sorted(timed + synth, key=lambda e: e["entry_ts"])
+    return events, {"forexfactory": excl, "synthetic": sexcl,
+                    "n_timed": len(timed), "n_synthetic": len(synth),
+                    "n_forexfactory_rows": len(raw)}
+
+
+#: The metric every ScoreLookup defaults to; the runner overrides it explicitly.
+SCORE_METRIC_DEFAULT = "trailing_5_avg"
+
+
+def build_synthetic_events(
+    cfg: CBConfig,
+    scores: pd.DataFrame,
+    lookup_by_bank: Dict[str, "ScoreLookup"],
+    covered: set,
+    *,
+    entry_offset: datetime.timedelta,
+    exit_offset: datetime.timedelta,
+    base_bpv: float,
+    contract_rank: int,
+    bucket_fn_by_bank: Dict[str, Callable],
+    blackout_fn: Callable[[datetime.date], bool],
+) -> tuple:
+    """Events for speeches we know the DAY of but not the minute.
+
+    ForexFactory names only two euro-area speakers - measured, its EUR calendar
+    contains 435 speaker events and every one is Lagarde or Nagel - and it
+    carries no SEK or NOK rows at all. Lane, Schnabel, Villeroy, Knot, Panetta,
+    the Riksbank and Norges Bank are simply absent, which is why the euro leg was
+    thin. The JPM reports do have those speeches, with a date but no time.
+
+    Rather than invent a minute, these trade the SESSION: enter near the open,
+    exit near the close of the speech day. That is the honest reading of what is
+    known - the speech happened that day - and it captures the move wherever in
+    the day it landed. They are tagged ``timestamp_source='synthetic'`` so every
+    result can be split by whether the timing was real or assumed; if the
+    synthetic subset carries the signal and the timed subset does not, that is a
+    finding about the study, not about the market.
+    """
+    excluded: Dict[str, int] = defaultdict(int)
+    out: List[dict] = []
+    tz = cfg.tz
+
+    sub = scores[scores["central_bank"].isin(cfg.banks)]
+    for _, row in sub.iterrows():
+        bank = row["central_bank"]
+        speaker = row["speaker"]
+        d = row["date"]
+        if (bank, speaker, d) in covered:
+            excluded["already_timed"] += 1
+            continue
+
+        if not cfg.ql_calendar.isBusinessDay(ql.Date(d.day, d.month, d.year)):
+            excluded["not_business_day"] += 1
+            continue
+        if blackout_fn(d):
+            excluded["policy_blackout"] += 1
+            continue
+
+        raw_score = lookup_by_bank[bank].get(speaker, d)
+        bucket = bucket_fn_by_bank[bank](speaker, raw_score, d)
+        if bucket == 0:
+            excluded["neutral_or_no_score"] += 1
+            continue
+
+        base = tz.localize(datetime.datetime.combine(d, cfg.synthetic_time))
+        entry_ts = _plain_dt(base)
+        exit_ts = _plain_dt(base.replace(hour=cfg.session_end.hour,
+                                         minute=cfg.session_end.minute) -
+                            datetime.timedelta(minutes=15))
+        if exit_ts - entry_ts < datetime.timedelta(minutes=60):
+            excluded["window_too_short"] += 1
+            continue
+
+        out.append({
+            "bank": cfg.code, "speaker_bank": bank, "ccy": cfg.ccy,
+            "event_id": f"{bank}_{speaker}_{d}", "speaker": speaker,
+            "title": f"[JPM] {bank} {speaker} {d}",
+            "symbol": nth_quarterly_contract(cfg.root, d, contract_rank),
+            "speech_ts": entry_ts, "entry_ts": entry_ts, "exit_ts": exit_ts,
+            "raw_score": raw_score, "bucket": bucket,
+            "bpv": abs(bucket) * base_bpv,
+            "side": -1.0 if bucket > 0 else 1.0,
+            "tag": f"{cfg.code}_SYN_{bank}_{speaker}_{d}",
+            "timestamp_source": "synthetic",
         })
 
     return out, dict(excluded)
@@ -639,6 +972,17 @@ def gate_events(
             diag.append(rec)
             continue
 
+        # Barchart pads days on which an illiquid contract never traded: a full
+        # 24*60 grid carrying ONE price. Measured on TVZ23 2023-06-14 and RGZ21
+        # 2021-06-15 - 1,440 bars, 1 distinct close, a flat run the length of the
+        # day, 0bp range. Those bars pass every timestamp check and then book a
+        # guaranteed zero, inflating the trade count and diluting every statistic.
+        if int(bars["Close"].nunique()) < 2:
+            reasons["synthetic_flat_day"] += 1
+            rec["reason"] = "synthetic_flat_day"
+            diag.append(rec)
+            continue
+
         idx = bars.index
         e_prior = idx[idx <= ev["entry_ts"]]
         x_prior = idx[idx <= ev["exit_ts"]]
@@ -686,6 +1030,188 @@ def gate_events(
 # ===========================================================================
 # Backtest
 # ===========================================================================
+def gate_events_curve(
+    events: List[dict],
+    cfg: CBConfig,
+    mdp,
+    *,
+    max_staleness_min: int = 30,
+    show_progress: bool = True,
+) -> tuple:
+    """The curve-reconstruction equivalent of ``gate_events``.
+
+    Same contract - only events with a genuinely near-in-time mark at BOTH ends
+    survive - but the underlying is a minute curve rather than a bar series, so
+    staleness has to be read off the snapshot the store actually served. That
+    check is the whole point: the store's nearest-snapshot search has no lag
+    tolerance and will happily hand back another day's curve.
+    """
+    reasons: Dict[str, int] = defaultdict(int)
+    kept: List[dict] = []
+    diag: List[dict] = []
+
+    iterator = events
+    if show_progress:
+        try:
+            from tqdm.auto import tqdm
+            iterator = tqdm(events, desc=f"gate {cfg.code}")
+        except Exception:  # noqa: BLE001
+            pass
+
+    for ev in iterator:
+        rec = {"bank": cfg.code, "symbol": ev["symbol"], "date": ev["entry_ts"].date(),
+               "speaker": ev["speaker"]}
+        try:
+            pe = mdp.get_pricer({"symbols": [ev["symbol"]], "timestamp": ev["entry_ts"]})
+            px = mdp.get_pricer({"symbols": [ev["symbol"]], "timestamp": ev["exit_ts"]})
+        except Exception as e:  # noqa: BLE001
+            reasons["curve_unavailable"] += 1
+            rec["reason"] = f"curve_unavailable: {type(e).__name__}"
+            diag.append(rec)
+            continue
+
+        e_px = float(pe[ev["symbol"]].price())
+        x_px = float(px[ev["symbol"]].price())
+
+        # The reference date the store served must be the trading day we asked
+        # for; anything else means the nearest-snapshot search left the session.
+        e_ref = pe[ev["symbol"]].reference_date()
+        x_ref = px[ev["symbol"]].reference_date()
+        want = ev["entry_ts"].astimezone(cfg.tz).date()
+        if abs((e_ref - want).days) > 1 or abs((x_ref - want).days) > 1:
+            reasons["snapshot_wrong_day"] += 1
+            rec["reason"] = "snapshot_wrong_day"
+            diag.append(rec)
+            continue
+
+        if abs(x_px - e_px) < 1e-12:
+            reasons["no_price_change"] += 1
+            rec["reason"] = "no_price_change"
+            diag.append(rec)
+            continue
+
+        ev = dict(ev)
+        ev["entry_bar"] = ev["entry_ts"]
+        ev["exit_bar"] = ev["exit_ts"]
+        ev["entry_bar_px"] = e_px
+        ev["exit_bar_px"] = x_px
+        rec["reason"] = "ok"
+        diag.append(rec)
+        kept.append(ev)
+
+    return kept, dict(reasons), pd.DataFrame(diag)
+
+
+def gate(events: List[dict], cfg: CBConfig, barchart_mdp, **kw) -> tuple:
+    """Dispatch to the gate that matches this leg's data source."""
+    if cfg.source == "citivelo":
+        mdp = mdp_for_config(cfg, barchart_mdp)
+        kw.pop("max_staleness_min", None)
+        return gate_events_curve(events, cfg, mdp, **kw)
+    return gate_events(events, cfg, barchart_mdp, **kw)
+
+
+# ===========================================================================
+# Reconstructing a STIR future where none is listed (JPY)
+# ===========================================================================
+_MONTH_NUM = {v: k for k, v in MONTH_CODES.items()}
+
+
+def imm_dates_for_symbol(symbol: str) -> tuple:
+    """('T0H26') -> (2026-03-18, 2026-06-17): the IMM quarter the contract accrues."""
+    from rateslib.scheduling import get_imm, next_imm
+    code = symbol[-3:]
+    eff = get_imm(code=code)
+    mat = next_imm(eff)
+    to_date = lambda d: d.date() if isinstance(d, datetime.datetime) else d  # noqa: E731
+    return to_date(eff), to_date(mat)
+
+
+class CitiVeloSTIRFutureMDP:
+    """A MarketDataProvider that MAKES the future rather than fetching it.
+
+    Barchart lists no JPY TONA STIR future - 14 candidate roots were tried and
+    none returns a STIR-shaped price - and the repo's JPY-TONA curve config is
+    built from those same absent futures, so the curve route is equally dead.
+    The only remaining path to a BOJ leg is to construct the instrument: read the
+    warmed Citi Velocity minute curve at the timestamp, take the forward rate
+    over the contract's IMM quarter, and hand ``100 - rate`` to rateslib as a
+    STIRFuture price. Downstream nothing changes - the same
+    ``RLSTIRFuturePricer`` builds a genuine ``rl.STIRFuture`` and the same
+    position handler marks it.
+
+    ``max_stale_min`` is not optional. The minute store does a nearest-snapshot
+    search with NO lag tolerance, so a request outside its coverage silently
+    comes back with a snapshot from another day rather than failing.
+    """
+
+    def __init__(self, curve_name: str, rl_spec: str = "jpy_irs", *,
+                 max_stale_min: int = 30):
+        from MDP.IRSwaps.IRSwapsMDP import IRSwapsMDP
+        self.curve_name = curve_name
+        self.rl_spec = rl_spec
+        self.max_stale_min = max_stale_min
+        self._mdp = IRSwapsMDP(source="citivelo_excel")
+        self._cache: Dict[Any, Any] = {}
+
+    # -- MarketDataProvider surface used by QueryDrivenBacktest ---------------
+    def get_pricer(self, request: Dict[str, Any]) -> Dict[str, Any]:
+        import rateslib as rl
+        from Query.STIRFutures.backends.rateslib.RLSTIRFuturePricer import RLSTIRFuturePricer
+
+        ts = request.get("timestamp")
+        symbols = request.get("symbols") or request.get("tickers") or []
+        if not symbols:
+            raise ValueError("CitiVeloSTIRFutureMDP: request needs 'symbols'")
+        if not isinstance(ts, datetime.datetime):
+            raise TypeError(f"CitiVeloSTIRFutureMDP needs a datetime, got {type(ts)}")
+
+        key = ("curve", ts)
+        if key in self._cache:
+            curve_pricer = self._cache[key]
+        else:
+            curve_pricer = self._mdp.get_pricer(
+                {"curve_name": self.curve_name, "timestamp": _plain_dt(ts)})
+            self._cache[key] = curve_pricer
+        if curve_pricer is None:
+            raise RuntimeError(f"no {self.curve_name} curve at {ts}")
+
+        handle = getattr(curve_pricer, "handle", None)
+        curve = handle() if callable(handle) else handle
+        if curve is None:
+            raise RuntimeError(f"{self.curve_name} pricer exposed no rateslib curve")
+
+        ref = getattr(curve_pricer, "reference_date", None)
+        ref = ref() if callable(ref) else ref
+        ref = ref.date() if isinstance(ref, datetime.datetime) else (ref or ts.date())
+
+        out: Dict[str, Any] = {}
+        for sym in symbols:
+            eff, mat = imm_dates_for_symbol(sym)
+            irs = rl.IRS(effective=rl.dt(eff.year, eff.month, eff.day),
+                         termination=rl.dt(mat.year, mat.month, mat.day),
+                         spec=self.rl_spec, curves=curve)
+            price = 100.0 - float(irs.rate())
+            out[sym] = RLSTIRFuturePricer(
+                rl_stirf_id=sym, reference_date=ref,
+                effective_date=eff, maturity_date=mat, price=price,
+            )
+        return out
+
+    def get_data(self, request: Dict[str, Any]) -> Dict[str, Any]:
+        return self.get_pricer(request)
+
+
+def mdp_for_config(cfg: CBConfig, barchart_mdp: STIRFutureMDP):
+    """The right provider for this leg - listed contract or reconstructed one."""
+    if cfg.source == "citivelo":
+        return CitiVeloSTIRFutureMDP(cfg.curve_name, cfg.rl_spec)
+    return barchart_mdp
+
+
+# ===========================================================================
+# Backtest
+# ===========================================================================
 def make_query(ev: dict) -> STIRFutureQuery:
     """One rateslib STIRFuture outright, sized in bpv, direction in risk_weights.
 
@@ -701,9 +1227,13 @@ def make_query(ev: dict) -> STIRFutureQuery:
         tags=(ev["tag"],),
         meta={
             "bank": ev["bank"], "ccy": ev["ccy"], "speaker": ev["speaker"],
+            "speaker_bank": ev.get("speaker_bank", ev["bank"]),
+            "timestamp_source": ev.get("timestamp_source", "forexfactory"),
             "bucket": ev["bucket"], "raw_score": ev["raw_score"],
             "symbol": ev["symbol"], "side": ev["side"], "bpv": ev["bpv"],
             "speech_ts": ev["speech_ts"],
+            "speaker_bank": ev.get("speaker_bank", ev["bank"]),
+            "timestamp_source": ev.get("timestamp_source", "forexfactory"),
         },
     )
 
@@ -755,7 +1285,8 @@ def run_backtest(events: List[dict], mdp: STIRFutureMDP, *, name: str,
 def enrich_closed(closed: pd.DataFrame) -> pd.DataFrame:
     closed = closed.copy()
     m = closed["source_query"].apply(lambda q: q.meta or {})
-    for k in ("bank", "ccy", "speaker", "bucket", "raw_score", "symbol", "side", "bpv"):
+    for k in ("bank", "ccy", "speaker", "bucket", "raw_score", "symbol", "side", "bpv",
+              "speaker_bank", "timestamp_source"):
         closed[k] = m.apply(lambda d, _k=k: d.get(_k))
     closed["opened_at"] = pd.to_datetime(closed["opened_at"])
     closed["closed_at"] = pd.to_datetime(closed["closed_at"])
@@ -862,6 +1393,8 @@ def fast_backtest(events: List[dict]) -> pd.DataFrame:
         pnl_bp = ev["side"] * (ev["exit_bar_px"] - ev["entry_bar_px"]) / 0.01
         rows.append({
             "bank": ev["bank"], "ccy": ev["ccy"], "speaker": ev["speaker"],
+            "speaker_bank": ev.get("speaker_bank", ev["bank"]),
+            "timestamp_source": ev.get("timestamp_source", "forexfactory"),
             "symbol": ev["symbol"], "bucket": ev["bucket"], "side": ev["side"],
             "raw_score": ev["raw_score"], "bpv": ev["bpv"],
             "opened_at": pd.Timestamp(ev["entry_ts"]),
