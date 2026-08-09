@@ -61,7 +61,7 @@ from RVUtils.MBO.book import (
     build_price_grid,
 )
 
-__all__ = ["MlofiResult", "replay_mlofi"]
+__all__ = ["MlofiResult", "mlofi_session", "replay_mlofi"]
 
 UNDEF_PRICE = np.iinfo(np.int64).max
 _A, _C, _M, _R = (ord(x) for x in "ACMR")
@@ -346,3 +346,40 @@ def replay_mlofi(records: np.ndarray, grid: Optional[PriceGrid] = None,
     df = pd.DataFrame(cols)
     df["mid"] = (df["bid_px"] + df["ask_px"]) / 2.0
     return MlofiResult(frame=df, grid=g, levels=levels, n_records=int(records.size))
+
+
+def mlofi_session(product: str, date, symbol: str, levels: int = 10,
+                  archive_roots=None) -> MlofiResult:
+    """Multi-level OFI for one instrument-session, straight from the archive.
+
+    **Deliberately computed on demand rather than persisted.**  A deep tier
+    holding the level vector for every instrument-day would cost tens of
+    gigabytes and hours to build, to save the couple of minutes one session takes
+    here -- and it would freeze the two parameters a study most wants to vary, the
+    number of levels and the bar length.  The top-of-book store exists because
+    every analytic reads it; this one is read by a study at a time.
+    """
+    import databento as db
+
+    from RVUtils.MBO.archive import MboArchive
+
+    d = pd.Timestamp(date).date() if not hasattr(date, "year") else date
+    archive = MboArchive(archive_roots) if archive_roots else MboArchive()
+    with archive.open_session(product, d, keep=True) as path:
+        store = db.DBNStore.from_file(path)
+        sym_to_id = {}
+        for sym, entries in store.metadata.mappings.items():
+            for e in entries:
+                if e["symbol"]:
+                    sym_to_id[sym] = int(e["symbol"])
+        if symbol not in sym_to_id:
+            raise KeyError(
+                f"{symbol!r} is not mapped in {product} on {d}; available: "
+                f"{sorted(sym_to_id)[:8]}"
+            )
+        iid = sym_to_id[symbol]
+        parts = [a[a["instrument_id"] == iid] for a in store.to_ndarray(count=2_000_000)]
+    rec = np.concatenate([p for p in parts if p.size])
+    if rec.size == 0:
+        raise ValueError(f"{symbol} has no records on {d}")
+    return replay_mlofi(rec, levels=levels)

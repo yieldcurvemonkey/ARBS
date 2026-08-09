@@ -235,3 +235,31 @@ def test_a_penalty_on_the_grid_boundary_is_flagged():
     }, index=idx)
     got = mlofi_regression(bars, lambdas=[1e7, 1e8])   # deliberately truncated grid
     assert got["lambda_at_bound"]
+
+
+@pytest.mark.slow
+def test_mlofi_session_reads_a_real_instrument_from_the_archive():
+    import datetime
+    import os
+
+    if not os.path.isdir("D:/zb_mbo"):
+        pytest.skip("archives not present")
+    from RVUtils.MBO.mlofi import mlofi_session
+
+    r = mlofi_session("ZB", datetime.date(2026, 7, 14), "ZBU6", levels=5)
+    assert r.levels == 5
+    assert len(r.frame) > 100_000
+    assert r.frame["e_1"].abs().sum() > 0
+    assert set(r.e_columns) == {f"e_{k}" for k in range(1, 6)}
+
+
+def test_mlofi_session_names_the_available_symbols_when_one_is_wrong():
+    import datetime
+    import os
+
+    if not os.path.isdir("D:/zb_mbo"):
+        pytest.skip("archives not present")
+    from RVUtils.MBO.mlofi import mlofi_session
+
+    with pytest.raises(KeyError, match="available"):
+        mlofi_session("ZB", datetime.date(2026, 7, 14), "NOPE9")
