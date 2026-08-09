@@ -179,6 +179,34 @@ one curve (`CURVE = "USD-SOFR-1D"`). Extending it is a separate piece of work an
 deliberately not bundled here — it is a proven pipeline holding 231M rows, and
 the curve cache has to exist before there is anything to price off.
 
+## What is NOT done, and what would settle it
+
+Three things are deliberately left open rather than guessed at. Each names the
+measurement that closes it.
+
+**Sub-1Y EURIBOR quotes.** `RATES.SWAP_LIBOR.EUR.PAR` carries `1W`…`11M`, and EUR
+swaps are annual 30E/360 vs 6M EURIBOR only from 1Y out. Those short quotes are
+almost certainly deposits or 3M-indexed, so `eur_irs6` would schedule an
+instrument that does not exist — and it would solve, and the reprice guard would
+pass, because the guard checks the curve against the same wrong swap. **They are
+excluded by default.** To settle it: compare the built curve's implied
+6M-forward-vs-ESTR basis against `RATES.BASIS_SWAPS.EUROSTR_EURIBOR_BASIS.EUR` at
+the same instant, or build one real day with and without them and look at what
+moves in the 1Y+ forwards. Then flip `--include-short-tenors`.
+
+**JPY's deep era may be proxied.** At 5 and 7 years back, `JPY_TONAR` returned
+4,497 and 4,480 rows over a 4-day window — *exactly* the USD counts (4,497 /
+4,495), where at ≤4 years it returns ~2,200 against USD's ~4,140. A JPY curve
+carrying a US session profile is a different object from one carrying a Tokyo
+one. To settle it: once deep JPY days land, histogram their stamps **in JST**.
+The modern era reads 08:00–19:59 local; if the deep era reads US hours, those
+days should be flagged rather than silently stored.
+
+**`GBP-SONIA-1D` and `CAD-CORRA-1D` floors are assumed, not measured.** They are
+in `HORIZONS` at the other RFR curves' 2021-09-15 because they were not part of
+the request. One `--stage floor --curves ...` run each settles them; until then
+the entries say so in their own `note`.
+
 ## Reproducing any of this
 
 ```bash

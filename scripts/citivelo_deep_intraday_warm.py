@@ -525,14 +525,29 @@ def _connect_or_restart(args, logger: logging.Logger) -> Any:
     try:
         client = CitiVelocityExcelClient.connect(workbook_tag=args.workbook_tag)
     except Exception as exc:  # noqa: BLE001
-        # An Excel that is UP but still re-authenticating raises
-        # AddInNotSignedInError for ~13 minutes and prints nothing in between.
-        # Refusing there would mean a run relaunched during that window dies on
-        # a state that resolves itself - which is precisely when a relaunch
-        # happens, since the previous run is what restarted Excel.
-        from MDP.CitiVelocityExcel.supervisor import wait_for_addin
+        # Two different states land here and they need different answers.
+        #
+        # Excel is UP but still re-authenticating: AddInNotSignedInError for
+        # ~13 minutes with nothing printed in between. Wait it out - refusing
+        # would kill a run relaunched during exactly the window the PREVIOUS run
+        # created by restarting Excel.
+        #
+        # Excel is GONE: waiting is pointless, because nothing is coming. This
+        # happens for a reason worth writing down - `restart_excel` LAUNCHES
+        # Excel as a child of this process, so killing the run takes Excel with
+        # it, and the next run finds an empty machine. Unattended means the
+        # driver has to start it.
+        from MDP.CitiVelocityExcel.supervisor import excel_pids, launch_excel, wait_for_addin
 
-        logger.warning("connect failed (%s); waiting for the add-in to sign in.", exc)
+        if not excel_pids():
+            logger.warning(
+                "connect failed (%s) and no EXCEL.EXE is running - launching one. "
+                "Note that restart_excel starts Excel as a CHILD of this process, "
+                "so killing a previous run takes its Excel down too.", exc,
+            )
+            launch_excel(logger=logger)
+        else:
+            logger.warning("connect failed (%s); waiting for the add-in to sign in.", exc)
         client = wait_for_addin(
             timeout=getattr(args, "ready_timeout", 1800.0),
             workbook_tag=args.workbook_tag,
