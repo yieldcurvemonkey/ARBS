@@ -56,9 +56,17 @@ __all__ = [
 
 #: Fraction of free memory a build may commit to in-flight sessions.
 _RAM_FRACTION = 0.6
-#: Bytes of store written per source record, measured on the pilot.  Used only
-#: for the pre-flight projection; the manifest carries the real number.
-DEFAULT_BYTES_PER_RECORD = 0.9
+#: Bytes of store written per source record.  **Measured on the pilot**, not
+#: estimated: 7.8 to 9.1 across the six Treasury roots on 2026-07-14, and 13.0
+#: for SR3, whose messages are far more likely to change the touch (75.5 M
+#: top-of-book states from 81.0 M records, against ZN's 4.0 M from 7.1 M).
+#:
+#: The default is the SR3 figure rather than the mean, because this number feeds
+#: a *guard*: over-estimating costs a needlessly cautious refusal, and
+#: under-estimating fills the drive nine hours in.  The first guess here was 0.9,
+#: which is fourteen times optimistic and would have waved through a build that
+#: could not fit.  The manifest carries what each session actually cost.
+DEFAULT_BYTES_PER_RECORD = 13.0
 
 
 def workers_for(session_gb: float, free_ram_gb: float,
