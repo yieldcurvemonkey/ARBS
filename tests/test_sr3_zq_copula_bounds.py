@@ -437,3 +437,60 @@ def test_the_repo_variance_sits_strictly_inside_the_copula_interval():
     assert b.var_min_variance * 625.0 == pytest.approx(56.75, abs=0.05)
     assert b.var_independent * 625.0 == pytest.approx(422.71, abs=0.02)
     assert b.var_comonotone * 625.0 == pytest.approx(1080.50, abs=0.05)
+
+
+# --------------------------------------------------------------------------------------
+# the screener adapter path
+# --------------------------------------------------------------------------------------
+
+def test_screener_adapter_places_a_synthetic_rnd_record_on_the_coordinate():
+    """The screener's RND names its arrays density_pdf / density_cdf; everything in the
+    measurement was written against a BreedenLitzenbergerResult. Exercise the adapter so a
+    rename on either side fails here rather than silently in a daily screen."""
+    import datetime
+    import types
+
+    import pandas as pd
+
+    from RVUtils.SR3ZQDistributionScreener._lambda_signal import measure_lambda_from_rnd_record
+
+    as_of = datetime.date(2026, 8, 7)
+    expiry = datetime.date(2026, 12, 11)
+
+    # A three-atom mixture on the SFRZ26 lattice, wide enough to be admissible.
+    grid = np.linspace(2.5, 5.5, 4001)
+    pins = [3.687, 3.937, 4.187, 4.437]
+    weights = [0.37, 0.21, 0.22, 0.20]
+    pdf = np.zeros_like(grid)
+    for mu, w in zip(pins, weights):
+        pdf += w * np.exp(-0.5 * ((grid - mu) / 0.055) ** 2)
+    pdf /= np.trapezoid(pdf, grid)
+    cdf = np.concatenate([[0.0], np.cumsum(0.5 * (pdf[1:] + pdf[:-1]) * np.diff(grid))])
+    cdf /= cdf[-1]
+    mean = float(np.trapezoid(grid * pdf, grid))
+
+    record = types.SimpleNamespace(
+        strike_grid_rate=grid, density_pdf=pdf, density_cdf=cdf,
+        std_rate=float(np.sqrt(np.trapezoid((grid - mean) ** 2 * pdf, grid))),
+        mean_rate=mean, forward_rate=mean, forward_price=100.0 - mean,
+        n_strikes_observed=54, prices_source="market_listed",
+    )
+
+    zq = {"ZQQ26": 96.3675, "ZQU26": 96.3150, "ZQV26": 96.2550, "ZQX26": 96.2000,
+          "ZQZ26": 96.1200, "ZQF27": 96.0850, "ZQG27": 96.0500, "ZQH27": 96.0200}
+    fomc = pd.DataFrame({
+        "meeting_label": ["sep26", "oct26", "dec26", "jan27", "mar27"],
+        "effective_date": pd.to_datetime(
+            ["2026-09-16", "2026-10-28", "2026-12-09", "2027-01-27", "2027-03-17"]
+        ),
+    })
+
+    m = measure_lambda_from_rnd_record(
+        record=record, as_of=as_of, symbol="SFRZ26",
+        zq_prices=zq, fomc_schedule=fomc, expiry=expiry,
+    )
+    assert m.ok, m.reason
+    assert m.marginals == pytest.approx((0.420, 0.250, 0.4313), abs=2e-3)
+    assert -1.0 <= m.lambda_wing <= 1.5
+    assert len(m.observed_atoms) == 4
+    assert float(sum(m.observed_atoms)) == pytest.approx(1.0, abs=1e-9)
