@@ -611,12 +611,101 @@ def cmd_build(args, logger: logging.Logger) -> int:
         if curve.strip().upper() in _ibor_curve_names():
             rc |= build_ibor_curve_days(curve, args, logger)
             continue
-        sub = argparse.Namespace(
-            curves=curve, start=args.start, end=args.end, workers=args.workers,
-            force=args.force, work_dir=args.work_dir, base_dir=args.base_dir,
-        )
-        rc |= base.cmd_build(sub, logger)
+        rc |= build_ois_curve_days(curve, args, logger)
     return rc
+
+
+def build_ois_curve_days(curve_name: str, args, logger: logging.Logger) -> int:
+    """The existing per-day solver, with a DENSITY-aware skip.
+
+    ``citivelo_excel_intraday_warm.cmd_build`` skips a day the store already
+    holds, which is right when the only question is "has this day been built".
+    It is wrong here, and silently so: the whole point of refetching
+    ``USD-SOFR-1D``'s 2022-08..2023-12 stretch is that the store's version of
+    those days is TEN-MINUTE data - ~130 curves against ~1,250 - acquired before
+    the span cliff was understood. ``has_day`` says yes to every one of them, so
+    the newly fetched minute parquets would sit on disk and never be solved, and
+    the run would report success having changed nothing.
+
+    The fetch planner already makes this distinction. This makes the build agree
+    with it.
+    """
+    from Caching.curve_store import CurveStore
+
+    import citivelo_excel_intraday_warm as base
+
+    work_dir = Path(args.work_dir) if args.work_dir else _default_work_dir()
+    store = CurveStore(base_dir=Path(args.base_dir)) if args.base_dir else CurveStore.default()
+    curve_dir = work_dir / curve_name
+    if not curve_dir.exists():
+        logger.warning("%s: nothing fetched yet (%s)", curve_name, curve_dir)
+        return 0
+
+    params = base.curve_params(curve_name)
+    asset = asset_name(curve_name)
+    tasks: List[tuple] = []
+    upgrades = 0
+    for path in sorted(curve_dir.glob("*.parquet")):
+        try:
+            day = datetime.date.fromisoformat(path.stem)
+        except ValueError:
+            continue
+        if args.start and day < datetime.date.fromisoformat(args.start):
+            continue
+        if args.end and day > datetime.date.fromisoformat(args.end):
+            continue
+        if not args.force and store.has_day(asset, day):
+            if _already_dense(store, asset, day, curve_name, args.min_store_curves):
+                continue
+            upgrades += 1
+        tasks.append((day, str(path), params))
+
+    if not tasks:
+        logger.info("%s: nothing to build - every fetched day is already dense in the store",
+                    curve_name)
+        return 0
+    logger.info("%s: building %d day(s) on %d worker(s) (%d of them UPGRADES of a "
+                "thin stored day)", curve_name, len(tasks), args.workers, upgrades)
+
+    from concurrent.futures import ProcessPoolExecutor, as_completed
+
+    progress = base.Progress(total_days=len(tasks))
+    with ProcessPoolExecutor(
+        max_workers=args.workers, initializer=base._init_worker, initargs=(args.base_dir,)
+    ) as pool:
+        futures = {pool.submit(base._warm_one_day, t): t[0] for t in tasks}
+        for future in as_completed(futures):
+            stat = future.result()
+            progress.record(stat)
+            if stat.error:
+                logger.error("%s %s: %s", curve_name, stat.date, stat.error)
+            if progress.days_done % 25 == 0 or progress.days_done == len(tasks):
+                logger.info("%s: %s", curve_name, progress.heartbeat())
+    logger.info("%s build complete: %s", curve_name, progress.heartbeat())
+    return 1 if progress.errors else 0
+
+
+def _already_dense(
+    store: Any, asset: str, day: datetime.date, curve_name: str, min_store_curves: int
+) -> bool:
+    """Is the stored day already at the resolution this run would produce?
+
+    ``has_day`` alone is the wrong question and fails silently in the one place
+    it matters: ``USD-SOFR-1D``'s 2022-08..2023-12 days ARE in the store, as
+    TEN-MINUTE data (~130 curves against ~1,250), and re-solving them at one
+    minute is the entire point of refetching them. A ``has_day`` skip would leave
+    the new parquets unsolved on disk and report success.
+
+    Below a curve's measured ``dense_from`` the threshold drops to 1, because a
+    sparse-era day cannot reach the dense count and would otherwise rebuild on
+    every run forever.
+    """
+    if not store.has_day(asset, day):
+        return False
+    horizon = HORIZONS.get(curve_name)
+    dense_from = horizon.dense_from if horizon else datetime.date(1900, 1, 1)
+    threshold = min_store_curves if day >= dense_from else 1
+    return _stored_curve_count(store, asset, day) >= threshold
 
 
 def _ibor_curve_names() -> set:
@@ -682,7 +771,9 @@ def build_ibor_curve_days(curve_name: str, args, logger: logging.Logger) -> int:
             continue
         if args.end and day > datetime.date.fromisoformat(args.end):
             continue
-        if not args.force and store.has_day(asset_name(curve_name), day):
+        if not args.force and _already_dense(
+            store, asset_name(curve_name), day, curve_name, args.min_store_curves
+        ):
             continue
         disc_name, disc_from = discount_source_for(curve_name, day, work_dir)
         disc_path = (

@@ -342,3 +342,39 @@ def test_every_curve_keeps_its_newest_first_order_inside_the_queue():
     for curve in ("A", "B"):
         starts = [s for c, s, _ in D._work_queue(plans, interleave=True) if c == curve]
         assert starts == sorted(starts, reverse=True)
+
+
+# --------------------------------------------------------------------------- #
+#                        the BUILD's skip, not the fetch's                     #
+# --------------------------------------------------------------------------- #
+
+
+def test_the_build_rebuilds_a_thin_stored_day(fake_store):
+    """``has_day`` is the wrong question, and it fails silently.
+
+    USD-SOFR's 2022-08..2023-12 days ARE in the store - as ten-minute data - so a
+    has_day skip leaves the newly fetched minute parquets unsolved on disk and
+    the run reports success having changed nothing. The fetch planner already
+    makes this distinction; this is the build agreeing with it.
+    """
+    asset = "USD-SOFR-1D-CITIVELOEXCELMIN"
+    thin, dense = datetime.date(2023, 6, 14), datetime.date(2025, 6, 11)
+    store = fake_store(
+        {asset: {thin: 1, dense: 1}},
+        counts={(asset, thin): 132, (asset, dense): 1250},
+    )
+    assert not D._already_dense(store, asset, thin, "USD-SOFR-1D", 600)
+    assert D._already_dense(store, asset, dense, "USD-SOFR-1D", 600)
+
+
+def test_the_build_does_not_rebuild_a_sparse_era_day_forever(fake_store):
+    asset = "USD-FEDFUNDS-1D-CITIVELOEXCELMIN"
+    day = datetime.date(2018, 3, 14)
+    store = fake_store({asset: {day: 1}}, counts={(asset, day): 224})
+    assert D._already_dense(store, asset, day, "USD-FEDFUNDS-1D", 600)
+
+
+def test_a_day_absent_from_the_store_is_never_dense(fake_store):
+    asset = "USD-SOFR-1D-CITIVELOEXCELMIN"
+    store = fake_store({asset: {}}, counts={})
+    assert not D._already_dense(store, asset, datetime.date(2025, 6, 11), "USD-SOFR-1D", 600)
