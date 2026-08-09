@@ -257,6 +257,11 @@ def compute_signals(
     regime: RegimeBucket,
     residual_ratios_by_contract: Sequence[float] = (),
     config: Optional[DistributionScreenerConfig] = None,
+    lambda_wing: float = float("nan"),
+    lambda_prior: float = float("nan"),
+    lambda_z: float = float("nan"),
+    hard_violation_bp2: float = 0.0,
+    lambda_atom_spread: float = float("nan"),
 ) -> List[TradeFlag]:
     """Compute all four trade signals. Returns list of triggered flags."""
     if config is None:
@@ -293,4 +298,81 @@ def compute_signals(
     if f is not None:
         flags.append(f)
 
+    # Emitted last and gated on its own diagnostics: with no lambda inputs the defaults are
+    # NaN and this is a no-op, so every existing caller is unaffected.
+    f = signal_lambda_dependence(
+        lambda_wing=lambda_wing,
+        lambda_prior=lambda_prior,
+        lambda_z=lambda_z,
+        hard_violation_bp2=hard_violation_bp2,
+        lambda_atom_spread=lambda_atom_spread,
+    )
+    if f is not None:
+        flags.append(f)
+
     return flags
+
+
+def signal_lambda_dependence(
+    *,
+    lambda_wing: float,
+    lambda_prior: float,
+    lambda_z: float,
+    hard_violation_bp2: float = 0.0,
+    lambda_atom_spread: float = float("nan"),
+    z_threshold: float = 1.0,
+    atom_spread_max: float = 0.60,
+) -> Optional[TradeFlag]:
+    """The copula coordinate against a prior. See RVUtils.SR3ZQDistributionScreener._copula.
+
+    Two tiers, and only two, because any payoff LINEAR in the move count is copula-free:
+    there is no copula-free arbitrage between the ZQ strip and SR3 options, so lambda is an
+    unobservable the market must price rather than a mispricing to converge.
+
+    * HARD -- ``hard_violation_bp2 != 0`` means the RND's meeting-attributed variance lies
+      outside ``[Var_min, Var_com]``, i.e. outside what ANY coupling of these marginals can
+      produce. That is a genuine static arbitrage and it dominates everything below.
+    * SOFT -- inside the interval, lambda versus the prior is a VIEW. Fires on the
+      standardised ``lambda_z``, never on the raw level, because the raw level is
+      mechanically confounded with time to expiry and with how many meetings are still
+      unresolved.
+
+    A wide ``lambda_atom_spread`` means the atoms disagree about lambda -- the RND has left
+    the one-parameter family, so a single headline lambda is an average of things that
+    contradict each other. The signal is suppressed rather than emitted with a caveat.
+    """
+    if math.isfinite(hard_violation_bp2) and abs(hard_violation_bp2) > 0.0:
+        return TradeFlag(
+            kind=TradeFlagKind.LAMBDA_ARBITRAGE,
+            severity_decile=10,
+            direction="buy_wings" if hard_violation_bp2 < 0 else "sell_wings",
+            rationale=(
+                f"RND meeting variance is {abs(hard_violation_bp2):.0f}bp^2 outside the "
+                f"[min-variance, comonotone] interval: no coupling of the ZQ marginals can "
+                f"produce it, so this is a static arbitrage, not a view"
+            ),
+            severity_value=float(hard_violation_bp2),
+            severity_threshold=0.0,
+        )
+
+    if not math.isfinite(lambda_wing) or not math.isfinite(lambda_z):
+        return None
+    if math.isfinite(lambda_atom_spread) and lambda_atom_spread > atom_spread_max:
+        return None
+    if abs(lambda_z) < float(z_threshold):
+        return None
+
+    cheap = lambda_z <= -float(z_threshold)
+    return TradeFlag(
+        kind=TradeFlagKind.LAMBDA_DEPENDENCE,
+        severity_decile=_decile(abs(lambda_z), lo=float(z_threshold), hi=3.0),
+        # Low lambda = the market prices a fat middle, so the wings are the cheap side.
+        direction="buy_wings" if cheap else "sell_wings",
+        rationale=(
+            f"lambda_wing {lambda_wing:+.3f} vs prior {lambda_prior:+.3f} "
+            f"(z {lambda_z:+.2f}): the market is pricing the Fed as "
+            f"{'more independent' if cheap else 'more comonotone'} than the prior"
+        ),
+        severity_value=float(lambda_z),
+        severity_threshold=float(z_threshold) * (-1.0 if cheap else 1.0),
+    )

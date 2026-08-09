@@ -257,6 +257,29 @@ def _compute_per_contract(
         config=config,
     )
 
+    # Copula coordinate. Wrapped because the measurement legitimately does not apply on
+    # every session (fewer than two resolved meetings, a fractional day-weight, a mixed
+    # hike/cut set), and an inapplicable measurement must not take the whole record down.
+    lam = None
+    try:
+        from RVUtils.SR3ZQDistributionScreener._lambda_signal import (
+            measure_lambda_from_rnd_record,
+        )
+
+        lam = measure_lambda_from_rnd_record(
+            record=rnd,
+            as_of=as_of,
+            symbol=sr3_contract,
+            zq_prices=zq_prices,
+            fomc_schedule=fomc_in_range,
+            expiry=expiry,
+            non_meeting_vol_bp_per_sqrt_year=config.intermeeting_daily_vol_bp * (252.0 ** 0.5),
+        )
+        if not lam.ok:
+            warnings.append(f"lambda_not_applicable:{sr3_contract}:{lam.reason}")
+    except Exception as exc:  # noqa: BLE001
+        warnings.append(f"lambda_failed:{sr3_contract}:{exc}")
+
     # Per-contract flags (without cross-quarter — handled outside this fn)
     flags = compute_signals(
         residual_ratio=ratio,
@@ -268,6 +291,13 @@ def _compute_per_contract(
         regime=regime,
         residual_ratios_by_contract=(),  # cross-quarter computed at orchestrator level
         config=config,
+        lambda_wing=(lam.lambda_wing if lam is not None and lam.ok else float("nan")),
+        lambda_prior=0.0,  # the independent coupling: the natural null, not a fitted prior
+        # A daily screener has no trailing window of its own, so the z here is the raw
+        # distance from the null in wing-mass units. A backtest standardises properly.
+        lambda_z=(lam.lambda_wing if lam is not None and lam.ok else float("nan")),
+        hard_violation_bp2=(lam.hard_violation_bp2 if lam is not None and lam.ok else 0.0),
+        lambda_atom_spread=(lam.lambda_atom_spread if lam is not None and lam.ok else float("nan")),
     )
 
     record = SignalRecord(
@@ -296,6 +326,24 @@ def _compute_per_contract(
         tail_upper_50=tail_upper_50,
         tail_upper_75=tail_upper_75,
         tail_upper_100=tail_upper_100,
+        lambda_wing=(lam.lambda_wing if lam is not None else float("nan")),
+        lambda_wing_strict=(lam.lambda_wing_raw if lam is not None else float("nan")),
+        lambda_var=(lam.lambda_var if lam is not None else float("nan")),
+        lambda_atom_spread=(lam.lambda_atom_spread if lam is not None else float("nan")),
+        lambda_ok=bool(lam.ok) if lam is not None else False,
+        lambda_reason=(lam.reason if lam is not None else "lambda not computed"),
+        wing_comonotone=(lam.wing_comonotone if lam is not None else float("nan")),
+        wing_independent=(lam.wing_independent if lam is not None else float("nan")),
+        wing_min_variance=(lam.wing_min_variance if lam is not None else float("nan")),
+        wing_observed=(lam.wing_observed_absorbed if lam is not None else float("nan")),
+        var_comonotone_bp2=(lam.var_comonotone_bp2 if lam is not None else float("nan")),
+        var_independent_bp2=(lam.var_independent_bp2 if lam is not None else float("nan")),
+        var_min_variance_bp2=(lam.var_min_variance_bp2 if lam is not None else float("nan")),
+        hard_violation_bp2=(lam.hard_violation_bp2 if lam is not None else float("nan")),
+        lambda_basis_var_share=(lam.basis_var_share if lam is not None else float("nan")),
+        trough_peak_ratio=(lam.trough_peak_ratio if lam is not None else float("nan")),
+        lambda_mode_prices=(lam.mode_prices if lam is not None else ()),
+        lambda_marginals=(lam.marginals if lam is not None else ()),
         stability_flag=str(rnd.stability_flag),
         smoothing_sensitivity_pp=float(rnd.smoothing_sensitivity_pp),
         negative_density_pct=float(rnd.negative_density_pct),

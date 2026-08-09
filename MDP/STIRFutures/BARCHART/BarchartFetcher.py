@@ -586,6 +586,51 @@ class BarchartFetcher(BaseFetcher):
 
         return df
 
+    #: Column labels ``queryeod`` responses use for open interest, in every casing
+    #: seen across the EOD and normalized-history paths.
+    _OPEN_INTEREST_LABELS = ("Open Interest", "openinterest", "openInterest", "OpenInterest", "open_interest")
+
+    @classmethod
+    def _open_interest_column(cls, df: pd.DataFrame) -> Optional[str]:
+        for label in cls._OPEN_INTEREST_LABELS:
+            if label in df.columns:
+                return label
+        return None
+
+    @classmethod
+    def blank_unpublished_open_interest(cls, df: Optional[pd.DataFrame]) -> Optional[pd.DataFrame]:
+        """Replace the final bar's open interest with NaN when the vendor has not published it yet.
+
+        The exchange disseminates a session's open interest the *following* morning, so the
+        newest bar in a ``queryeod`` frame always carries ``Open Interest = 0`` -- for a deep
+        out-of-the-money strike and for a 1.7-million-lot front future alike. That zero is not
+        a measurement, it is an absence, and it is indistinguishable from a real zero within
+        the bar. Downstream the difference is total: an open-interest liquidity screen reads a
+        fabricated zero as "no one holds this" and rejects the entire chain.
+
+        Only the last bar is touched, and only when an earlier bar in the same frame carries
+        non-zero open interest -- so a strike that genuinely has none is left alone, and the
+        blanked bar refills from the vendor on the next session's fetch.
+        """
+        if df is None or not isinstance(df, pd.DataFrame) or len(df) < 2:
+            return df
+        column = cls._open_interest_column(df)
+        if column is None:
+            return df
+
+        values = pd.to_numeric(df[column], errors="coerce")
+        last = values.iloc[-1]
+        if pd.notna(last) and float(last) != 0.0:
+            return df
+        earlier = values.iloc[:-1]
+        if not (earlier.fillna(0.0) > 0.0).any():
+            return df
+
+        out = df.copy()
+        out[column] = values.astype(float)
+        out.iloc[-1, out.columns.get_loc(column)] = float("nan")
+        return out
+
     @staticmethod
     def _history_retry_sleep_seconds(
         attempt: int,
