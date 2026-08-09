@@ -128,7 +128,19 @@ def stage_events(bucket_mode: str, legs) -> dict:
                      "diag": diag, "n_raw": funnel["n_forexfactory_rows"]}
 
     fname = "events.pkl" if bucket_mode == "peer" else f"events_{bucket_mode}.pkl"
-    with open(CACHE / fname, "wb") as f:
+    # MERGE rather than replace: running --legs BOJ must not silently reduce the
+    # cached universe to one leg and invalidate every downstream stage.
+    path = CACHE / fname
+    if path.exists() and set(legs) != set(BANKS):
+        try:
+            with open(path, "rb") as f:
+                prev = pickle.load(f)
+            prev.update(out)
+            out = prev
+            _p(f"  merged into existing {fname} (legs now {sorted(out)})")
+        except Exception:  # noqa: BLE001
+            pass
+    with open(path, "wb") as f:
         pickle.dump(out, f)
     n = G.save_bar_cache(CACHE / "bars.pkl")
     _p(f"\nwrote {CACHE / fname}   (bar cache: {n} symbol-days)")
@@ -184,9 +196,22 @@ def stage_backtest(events_by_bank: dict, legs) -> dict:
         closed[bank] = G.run_backtest(evs, mdp, name=f"hawkdove_{bank}")
         _p(f"  closed trades: {len(closed[bank])}")
 
-    with open(CACHE / "closed.pkl", "wb") as f:
+    # MERGE rather than replace, for the same reason stage_events does: running
+    # --legs BOJ must not reduce the cached results to one leg and quietly
+    # invalidate the pooled report.
+    path = CACHE / "closed.pkl"
+    if path.exists() and set(legs) != set(BANKS):
+        try:
+            with open(path, "rb") as f:
+                prev = pickle.load(f)
+            prev.update(closed)
+            closed = prev
+            _p(f"  merged into existing closed.pkl (legs now {sorted(closed)})")
+        except Exception:  # noqa: BLE001
+            pass
+    with open(path, "wb") as f:
         pickle.dump(closed, f)
-    _p(f"\nwrote {CACHE / 'closed.pkl'}")
+    _p(f"\nwrote {path}")
     return closed
 
 

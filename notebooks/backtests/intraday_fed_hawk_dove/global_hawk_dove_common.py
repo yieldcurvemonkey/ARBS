@@ -1113,11 +1113,13 @@ def gate_events_curve(
             diag.append(rec)
             continue
 
+        # A zero move is a RESULT, not missing data. The bar gate's
+        # same_bar_entry_exit rejects a data artefact - one bar serving both ends -
+        # but two distinct curve snapshots that happen to price the same is a
+        # market outcome, and dropping it is survivorship that mechanically
+        # inflates |mean| and hit rate. Counted, kept.
         if abs(x_px - e_px) < 1e-12:
-            reasons["no_price_change"] += 1
-            rec["reason"] = "no_price_change"
-            diag.append(rec)
-            continue
+            reasons["zero_move_kept"] += 1
 
         ev = dict(ev)
         ev["entry_bar"] = ev["entry_ts"]
