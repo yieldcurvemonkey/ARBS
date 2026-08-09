@@ -151,7 +151,7 @@ class StoreWriter:
         return w
 
     def add(self, symbol: str, instrument_id: int, parsed: ParsedSymbol,
-            result: ReplayResult) -> None:
+            result: ReplayResult, dbn_version: Optional[int] = None) -> None:
         """Append one instrument as a row group in each table."""
         if self._closed:
             raise RuntimeError("writer is closed")
@@ -228,6 +228,15 @@ class StoreWriter:
             "trades_outside_book": _trades_outside_book(trades, prev, g),
             "first_ts": first_ts,
             "last_ts": last_ts,
+            "dbn_version": None if dbn_version is None else int(dbn_version),
+            "n_action_none": int(result.n_action_none),
+            # A session with no 'N' records is only *old* normalization if it had
+            # events at all; a silent instrument proves nothing either way, so it
+            # is labelled unknown rather than guessed.
+            "normalization": (
+                "new" if result.n_action_none > 0
+                else ("old" if result.n_records > 1000 else "unknown")
+            ),
         })
         self.n_symbols += 1
         self.n_tob += len(tob)

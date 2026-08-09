@@ -56,11 +56,16 @@ def invariants(root: Optional[str], product: str,
     cat = read_catalog(root, product, dates)
     if cat.empty:
         return cat
-    out = cat[[
+    cols = [
         "date", "symbol", "kind", "n_records", "n_tob", "n_trades",
         "locked_states", "crossed_states", "trades_outside_book",
         "n_unindexed", "n_out_of_band", "band_lo", "band_hi", "tick",
-    ]].copy()
+        # The source vintage travels with the health numbers on purpose: a
+        # cross-day comparison that does not notice the normalization seam is
+        # averaging two different measurement conventions.
+        "dbn_version", "normalization", "n_action_none",
+    ]
+    out = cat[[c for c in cols if c in cat.columns]].copy()
     out["crossed_frac"] = out["crossed_states"] / out["n_tob"].replace(0, np.nan)
     out["outside_frac"] = out["trades_outside_book"] / out["n_trades"].replace(0, np.nan)
     return out.sort_values(["date", "n_records"], ascending=[True, False])

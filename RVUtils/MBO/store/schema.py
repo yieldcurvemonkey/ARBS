@@ -114,6 +114,23 @@ CATALOG_SCHEMA = pa.schema([
     pa.field("trades_outside_book", pa.int64(), nullable=False),
     pa.field("first_ts", pa.int64(), nullable=True),
     pa.field("last_ts", pa.int64(), nullable=True),
+    # -- source vintage ---------------------------------------------------- #
+    #: Databento changed CME event-boundary normalization in production on
+    #: 2026-08-08 and applied it retroactively.  Under the new convention the
+    #: last book update no longer carries F_LAST; the event end is a separate
+    #: ``action='N'`` record that does.  Records are also published per packet
+    #: rather than buffered until the event completes, so **ts_recv does not mean
+    #: the same thing under the two conventions**.
+    #:
+    #: The archives on D:\ straddle the flip: the SR3 batch downloaded on
+    #: 2026-08-07 (sessions 07-07 to 08-06) is DBN v1 and old-normalization,
+    #: while the batch downloaded on 2026-08-08 (sessions 06-07 to 07-06) is
+    #: DBN v3 and new.  The June sessions therefore carry the *newer* convention
+    #: than the July ones.  Recorded per instrument-day so that a cross-day study
+    #: can see the seam instead of averaging across it.
+    pa.field("dbn_version", pa.int32(), nullable=True),
+    pa.field("n_action_none", pa.int64(), nullable=True),
+    pa.field("normalization", pa.string(), nullable=True),
 ])
 
 RISK_SCHEMA = pa.schema([

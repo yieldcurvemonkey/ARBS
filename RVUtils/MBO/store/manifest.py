@@ -41,7 +41,7 @@ __all__ = [
 
 #: Bump in the same commit as any change to replay or store semantics.  Resume
 #: treats a differing version as "not built", so a bump re-builds -- visibly.
-ENGINE_VERSION = "1.0.0"
+ENGINE_VERSION = "1.1.0"
 
 MANIFEST_SCHEMA = pa.schema([
     pa.field("product", pa.string(), nullable=False),

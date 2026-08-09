@@ -62,6 +62,11 @@ F_MBP = 16
 F_BAD_TS_RECV = 8
 
 _A, _C, _M, _R, _T, _F = (ord(x) for x in "ACMRTF")
+#: Event-boundary marker introduced by Databento's 2026-08-08 CME normalization.
+#: It has no book effect, which is why the kernel needs no branch for it: no
+#: branch matches, so nothing mutates, and the ``F_LAST`` it carries still drives
+#: emission at the right point.
+_N = ord("N")
 _BID, _ASK = ord("B"), ord("A")
 
 #: A dense price ladder is only sane while it stays small.  A fat-finger print
@@ -220,6 +225,11 @@ class ReplayResult:
     #: records is how the most active Treasury contract came to be unreplayable.
     n_unindexed: int = 0
     n_out_of_band: int = 0
+    #: ``action='N'`` records.  These carry no book effect and exist only to mark
+    #: an event boundary under Databento's post-2026-08-08 CME normalization, so
+    #: their presence identifies which convention a session was normalized under
+    #: -- and ``ts_recv`` does not mean the same thing across the two.
+    n_action_none: int = 0
     #: The ladder's price band, in the instrument's own price units.
     band: Tuple[float, float] = (float("nan"), float("nan"))
 
@@ -659,5 +669,6 @@ def replay_book(
         crossed_events=int(crossed), bp_per_unit=float(scale),
         locked_states=n_locked, crossed_states=n_crossed,
         n_unindexed=n_unindexed, n_out_of_band=n_out_of_band,
+        n_action_none=int(np.count_nonzero(action == _N)),
         band=(g.px_min / PRICE_SCALE, g.px_max / PRICE_SCALE),
     )

@@ -167,6 +167,45 @@ def test_an_out_of_band_order_on_the_harmless_side_does_not_raise():
     assert r.tob.iloc[-1]["bid_px"] == 95.98
 
 
+def test_an_action_none_record_marks_the_boundary_without_touching_the_book():
+    """Databento's post-2026-08-08 CME normalization.
+
+    The last book update no longer carries F_LAST; a separate ``action='N'``
+    record does.  The kernel needs no branch for it -- no branch matches, so
+    nothing mutates -- and the F_LAST it carries still drives emission at the
+    right point.  Pinned here so that behaviour is deliberate rather than
+    incidental, because the archives on D:\\ straddle the change.
+    """
+    r = replay_book(make([
+        (1, "A", "B", 96.00, 10, 1, 0),
+        (1, "A", "A", 96.01, 7, 2, 0),
+        (1, "N", "N", None, 0, 0, L),        # event boundary, new normalization
+    ]))
+    assert r.n_action_none == 1
+    assert len(r.tob) == 1
+    last = r.tob.iloc[-1]
+    assert last["bid_px"] == 96.00
+    assert last["ask_px"] == 96.01
+    assert last["bid_sz"] == 10
+
+
+def test_the_two_normalizations_produce_the_same_book():
+    """Old convention: F_LAST on the last book record.  New: on a separate N.
+    The emitted top of book must be identical either way."""
+    old = replay_book(make([
+        (1, "A", "B", 96.00, 10, 1, 0),
+        (1, "A", "A", 96.01, 7, 2, L),
+    ]))
+    new = replay_book(make([
+        (1, "A", "B", 96.00, 10, 1, 0),
+        (1, "A", "A", 96.01, 7, 2, 0),
+        (1, "N", "N", None, 0, 0, L),
+    ]))
+    cols = ["bid_px", "bid_sz", "ask_px", "ask_sz"]
+    assert old.tob[cols].equals(new.tob[cols])
+    assert old.n_action_none == 0 and new.n_action_none == 1
+
+
 def test_locked_and_crossed_states_are_counted_separately_from_packet_boundaries():
     """``crossed_events`` counts packet boundaries and so scales with message
     rate: a book sitting locked through a busy pre-open scores one per packet.

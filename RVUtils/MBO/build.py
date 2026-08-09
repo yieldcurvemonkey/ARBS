@@ -148,6 +148,7 @@ def build_session(root: str, archive_roots: Sequence[str], product: str,
         with archive.open_session(product, date, keep=keep_scratch) as path:
             store = db.DBNStore.from_file(path)
             md = store.metadata
+            dbn_version = int(getattr(md, "version", 0) or 0)
             ref_year = int(pd.to_datetime(md.start, utc=True).year)
             id_to_symbol = {}
             for sym, entries in md.mappings.items():
@@ -177,7 +178,7 @@ def build_session(root: str, archive_roots: Sequence[str], product: str,
                 parsed = parse_symbol(symbol, ref_year)
                 grid = build_price_grid(rec["price"].astype(np.int64))
                 result = replay_book(rec, grid=grid)
-                writer.add(symbol, iid, parsed, result)
+                writer.add(symbol, iid, parsed, result, dbn_version=dbn_version)
                 del rec, result
 
             stats = writer.close()
