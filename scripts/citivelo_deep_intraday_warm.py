@@ -1060,9 +1060,10 @@ def cmd_verify(args, logger: logging.Logger) -> int:
     set, and the pre-EONIA EURIBOR era is self-discounted. A uniform sample over
     ten years puts almost nothing in the two that are least proven.
 
-    What it compares is the curve's own ``fair_rate`` for a tenor against Citi's
-    published par quote at the same minute - not the stored par input, which
-    would be a tautology.
+    What it compares is the stored curve's own PAR RATE for a tenor - priced
+    through ``rl.IRS``, in percent - against Citi's published quote at the same
+    minute. Not against the stored par input, which would be a tautology: that
+    number is what the curve was solved from.
     """
     import pandas as pd
 
@@ -1077,13 +1078,13 @@ def cmd_verify(args, logger: logging.Logger) -> int:
     with CitiVelocityExcelClient.connect(workbook_tag=args.workbook_tag) as client:
         for curve in _curves(args):
             asset = asset_name(curve)
-            available = [d for d in store.available_dates(asset)]
+            available = list(store.available_dates(asset))
             if not available:
                 logger.warning("%s: nothing in the store yet", curve)
                 continue
             horizon = HORIZONS.get(curve)
             eras = _sample_eras(available, horizon, args.per_era)
-            tags, zone = tags_and_zone_for(curve)
+            _tags, zone = tags_and_zone_for(curve)
             if zone is None:
                 from MDP.IRSwaps.CITIVELO_EXCEL.curve_names import entry_for_curve_name
 
