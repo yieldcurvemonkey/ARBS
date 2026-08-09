@@ -116,6 +116,7 @@ from __future__ import annotations
 
 import datetime
 import logging
+import os
 import warnings
 from dataclasses import dataclass
 from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple, Union
@@ -381,10 +382,82 @@ class SwapSpreadQuote:
         }
 
 
+#: A process-wide quotes object used whenever a caller omits ``quotes=``.
+#:
+#: The value map reaches this function through ``value_kwargs``, and anything put
+#: in ``value_kwargs`` becomes part of the query fingerprint that keys the computed
+#: timeseries cache - so a batch job cannot pass ``quotes=`` or ``offline=True``
+#: without forking every symbol it warms away from the symbol a plain user query
+#: would read. This global is the seam that lets a batch bound the data source
+#: without touching the fingerprint. Same shape, and for the same reason, as
+#: ``RLIRSwapCurve.set_omit_unused_fixings``.
+_DEFAULT_QUOTES: Optional[Any] = None
+
+#: Force ``offline=True`` on every lazily-built quotes object in this process.
+#: ``None`` re-reads ``ARBS_CITIVELO_QUOTES_OFFLINE`` on each call.
+#:
+#: Worth having separately from :data:`_DEFAULT_QUOTES`: a pool worker that reaches
+#: Excel is not slow, it is a COM client racing every sibling process into ONE
+#: shared Excel session, which is how the add-in gets driven into an access
+#: violation. Setting this in a worker initializer makes that unreachable rather
+#: than unlikely.
+_FORCE_OFFLINE: Optional[bool] = None
+
+
+def set_default_quotes(quotes: Optional[Any]) -> None:
+    """Install (or clear, with ``None``) the process-wide default quotes object.
+
+    The object only has to expose ``frame(tags, freq, start=..., end=...,
+    force_refresh=...)`` and ``close()`` - the same duck type ``quotes=`` accepts.
+    """
+    global _DEFAULT_QUOTES
+    _DEFAULT_QUOTES = quotes
+
+
+def default_quotes() -> Optional[Any]:
+    """Whatever :func:`set_default_quotes` last installed."""
+    return _DEFAULT_QUOTES
+
+
+def set_force_offline(enabled: Optional[bool]) -> None:
+    """Force/unforce ``offline=True`` for lazily-built quotes (``None`` = read env)."""
+    global _FORCE_OFFLINE
+    _FORCE_OFFLINE = None if enabled is None else bool(enabled)
+
+
+def force_offline() -> bool:
+    """Whether lazily-built quotes are pinned offline in this process."""
+    if _FORCE_OFFLINE is not None:
+        return _FORCE_OFFLINE
+    return str(os.environ.get("ARBS_CITIVELO_QUOTES_OFFLINE", "")).strip().lower() in {
+        "1", "true", "yes", "on",
+    }
+
+
 def _default_quotes(*, offline: bool, client_kwargs: Optional[Mapping[str, Any]]) -> Any:
+    """The quotes object to use when the caller passed none.
+
+    Returns the process-wide default when one is installed, otherwise builds a
+    fresh :class:`CitiVeloQuotes`. Callers decide ownership with
+    :func:`_owns_quotes` - an installed default is reused by every subsequent call
+    and closing it after the first would leave the rest of the run reading through
+    a torn-down client.
+    """
+    installed = _DEFAULT_QUOTES
+    if installed is not None:
+        return installed
+
     from MDP.CitiVelocityExcel.quotes import CitiVeloQuotes
 
-    return CitiVeloQuotes(offline=offline, client_kwargs=dict(client_kwargs or {}))
+    return CitiVeloQuotes(
+        offline=bool(offline or force_offline()),
+        client_kwargs=dict(client_kwargs or {}),
+    )
+
+
+def _owns_quotes(quotes: Any) -> bool:
+    """Whether the caller built ``quotes`` and must therefore close it."""
+    return quotes is not _DEFAULT_QUOTES
 
 
 def _close_quietly(quotes: Any, *, subject: str) -> None:
@@ -594,9 +667,10 @@ def fetch_swap_spreads(
             request.eod_date, subject=f"{resolved_index} SWAP_SPREAD EOD", stacklevel=4
         )
 
-    owns = quotes is None
-    if owns:
+    owns = False
+    if quotes is None:
         quotes = _default_quotes(offline=offline, client_kwargs=client_kwargs)
+        owns = _owns_quotes(quotes)
     try:
         start, end = _window(request)
         frame = quotes.frame(
@@ -687,9 +761,10 @@ def swap_spread_history(
         pd.Timestamp(end).date(), subject=f"{citi_index} SWAP_SPREAD history end", stacklevel=3
     )
 
-    owns = quotes is None
-    if owns:
+    owns = False
+    if quotes is None:
         quotes = _default_quotes(offline=offline, client_kwargs=client_kwargs)
+        owns = _owns_quotes(quotes)
     try:
         frame = quotes.frame(
             list(tag_by_tenor.values()),
