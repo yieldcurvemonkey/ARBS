@@ -247,6 +247,33 @@ def main() -> int:
         print(f"    size_mix {mix:.2f}:  mean lambda {vals.mean():+.3f}  med {np.median(vals):+.3f}"
               f"  sd {vals.std(ddof=1) if vals.size > 1 else float('nan'):.3f}"
               f"  mean shift vs binary {shift:+.3f}")
+    print("\n--- Q5. term structure of dependence (same date, across contracts) ---")
+    print("  Dependence should be higher near-dated -- one decision, clearly framed -- and")
+    print("  decay out the strip. Deviations from that shape are the screen.")
+    wide = (
+        g.pivot_table(index="as_of", columns="symbol", values="lambda_wing", aggfunc="last")
+        if g.symbol.nunique() > 1 else pd.DataFrame()
+    )
+    if wide.shape[1] < 2:
+        print("  needs >= 2 contracts with overlapping admissible sessions; panel has "
+              f"{g.symbol.nunique()}")
+    else:
+        pairs = 0
+        for a, b in zip(wide.columns[:-1], wide.columns[1:]):
+            both = wide[[a, b]].dropna()
+            if len(both) < 5:
+                continue
+            pairs += 1
+            d = both[a] - both[b]
+            dte = g.groupby("symbol")["time_to_expiry"].median()
+            near, far = (a, b) if dte.get(a, np.inf) <= dte.get(b, np.inf) else (b, a)
+            sign = 1.0 if near == a else -1.0
+            print(f"    {near} (near) - {far} (far): n={len(both)}  mean {sign * d.mean():+.3f}  "
+                  f"sd {d.std():.3f}  corr {both[a].corr(both[b]):+.3f}  "
+                  f"{'near > far, as expected' if sign * d.mean() > 0 else 'INVERTED'}")
+        if pairs == 0:
+            print("  no adjacent pair has >= 5 overlapping admissible sessions")
+
     if base.size and per_mix[0.25]:
         a = base
         b = np.array(per_mix[0.25], dtype=float)
