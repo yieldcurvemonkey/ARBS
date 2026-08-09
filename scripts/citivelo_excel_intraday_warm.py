@@ -61,7 +61,7 @@ import zoneinfo
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 import pandas as pd
 import pyarrow as pa
@@ -163,9 +163,17 @@ def fetch_curve(
     recycle_every: int = 25,
     memory_ceiling_mb: float = 3000.0,
     memory_abort_mb: float = 3800.0,
+    tags: Optional[Sequence[str]] = None,
+    timezone: Optional[str] = None,
     logger: logging.Logger = LOGGER,
 ) -> Tuple[int, int]:
     """Fetch ``[start, end)`` of minute par rates for one curve.
+
+    ``tags`` and ``timezone`` override the OIS lookup. They exist for the one
+    family this function cannot resolve on its own: ``RATES.SWAP_LIBOR`` is not
+    an OIS index and has no entry in ``curve_names``, so an IBOR curve supplies
+    its own grid. Everything downstream - the windowing, the wire-to-local
+    conversion, the per-day parquet - is index-agnostic and is reused as is.
 
     ``start`` and ``end`` are dates in the curve's OWN zone, and the window sent
     to the add-in is the wire-zone image of those local midnights - not the wire
@@ -192,11 +200,15 @@ def fetch_curve(
     import datetime as _dt
 
     from MDP.CitiVelocityExcel.windowed import DEFAULT_WINDOW, fetch_windowed
-    from MDP.IRSwaps.CITIVELO_EXCEL.curve_names import entry_for_curve_name
-    from MDP.IRSwaps.CITIVELO_EXCEL.fetcher import CitiVeloExcelCurveFetcher
 
-    entry = entry_for_curve_name(curve_name)
-    tags = CitiVeloExcelCurveFetcher.par_grid_tags(entry.citi_index)
+    if tags is None or timezone is None:
+        from MDP.IRSwaps.CITIVELO_EXCEL.curve_names import entry_for_curve_name
+        from MDP.IRSwaps.CITIVELO_EXCEL.fetcher import CitiVeloExcelCurveFetcher
+
+        entry = entry_for_curve_name(curve_name)
+        tags = list(tags or CitiVeloExcelCurveFetcher.par_grid_tags(entry.citi_index))
+        timezone = timezone or entry.local_timezone
+    tags = list(tags)
     curve_dir = work_dir / curve_name
     curve_dir.mkdir(parents=True, exist_ok=True)
 
@@ -205,7 +217,7 @@ def fetch_curve(
     days_written = 0
     windows_run = 0
 
-    local_zone = zoneinfo.ZoneInfo(entry.local_timezone)
+    local_zone = zoneinfo.ZoneInfo(timezone)
     wire_zone = zoneinfo.ZoneInfo(WIRE_TZ)
 
     def _wire_instant(day: _dt.date) -> _dt.datetime:
@@ -259,7 +271,7 @@ def fetch_curve(
                 frame.index.tz_localize(
                     WIRE_TZ, ambiguous=True, nonexistent="shift_forward"
                 )
-                .tz_convert(entry.local_timezone)
+                .tz_convert(timezone)
                 .tz_localize(None)
             )
             for day, sub in frame.groupby(frame.index.date):

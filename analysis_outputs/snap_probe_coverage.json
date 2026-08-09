@@ -1,0 +1,516 @@
+{
+ "probed_at": "2026-08-09T11:54:37",
+ "stages": [
+  "cvtick",
+  "coverage"
+ ],
+ "depths": [
+  0.25,
+  3.0,
+  8.0
+ ],
+ "freqs": [
+  "MI01",
+  "MI10",
+  "HOURLY"
+ ],
+ "probes": [
+  "USD_SOFR",
+  "USD_FEDFUND",
+  "EUR_EUROSTR",
+  "EUR_EURIBOR",
+  "JPY_TONAR",
+  "JPY_TONAR_LCH"
+ ],
+ "mem_before": 995.92192,
+ "coverage": {
+  "USD_SOFR": {
+   "0.25": {
+    "date": "2026-05-06",
+    "n_tags": 44,
+    "n_served": 44,
+    "n_full": 44,
+    "max_rows": 4129,
+    "missing": [],
+    "thin": []
+   },
+   "3.0": {
+    "date": "2023-08-09",
+    "n_tags": 44,
+    "n_served": 42,
+    "n_full": 42,
+    "max_rows": 4140,
+    "missing": [
+     "35Y",
+     "45Y"
+    ],
+    "thin": []
+   },
+   "8.0": {
+    "date": "2018-08-08",
+    "n_tags": 44,
+    "n_served": 0,
+    "n_full": 0,
+    "max_rows": 0,
+    "missing": [
+     "1D",
+     "1W",
+     "2W",
+     "3W",
+     "1M",
+     "2M",
+     "3M",
+     "4M",
+     "5M",
+     "6M",
+     "7M",
+     "8M",
+     "9M",
+     "10M",
+     "11M",
+     "1Y",
+     "15M",
+     "18M",
+     "21M",
+     "2Y",
+     "3Y",
+     "4Y",
+     "5Y",
+     "6Y",
+     "7Y",
+     "8Y",
+     "9Y",
+     "10Y",
+     "11Y",
+     "12Y",
+     "13Y",
+     "14Y",
+     "15Y",
+     "16Y",
+     "17Y",
+     "18Y",
+     "19Y",
+     "20Y",
+     "25Y",
+     "30Y",
+     "35Y",
+     "40Y",
+     "45Y",
+     "50Y"
+    ],
+    "thin": []
+   }
+  },
+  "USD_FEDFUND": {
+   "0.25": {
+    "date": "2026-05-06",
+    "n_tags": 44,
+    "n_served": 44,
+    "n_full": 44,
+    "max_rows": 4129,
+    "missing": [],
+    "thin": []
+   },
+   "3.0": {
+    "date": "2023-08-09",
+    "n_tags": 44,
+    "n_served": 42,
+    "n_full": 42,
+    "max_rows": 4140,
+    "missing": [
+     "35Y",
+     "45Y"
+    ],
+    "thin": []
+   },
+   "8.0": {
+    "date": "2018-08-08",
+    "n_tags": 44,
+    "n_served": 18,
+    "n_full": 18,
+    "max_rows": 274,
+    "missing": [
+     "1W",
+     "2W",
+     "3W",
+     "2M",
+     "4M",
+     "5M",
+     "7M",
+     "8M",
+     "10M",
+     "11M",
+     "15M",
+     "21M",
+     "6Y",
+     "8Y",
+     "9Y",
+     "11Y",
+     "13Y",
+     "14Y",
+     "16Y",
+     "17Y",
+     "19Y",
+     "25Y",
+     "35Y",
+     "40Y",
+     "45Y",
+     "50Y"
+    ],
+    "thin": []
+   }
+  },
+  "EUR_EUROSTR": {
+   "0.25": {
+    "date": "2026-05-06",
+    "n_tags": 44,
+    "n_served": 44,
+    "n_full": 44,
+    "max_rows": 2160,
+    "missing": [],
+    "thin": []
+   },
+   "3.0": {
+    "date": "2023-08-09",
+    "n_tags": 44,
+    "n_served": 42,
+    "n_full": 42,
+    "max_rows": 2160,
+    "missing": [
+     "35Y",
+     "45Y"
+    ],
+    "thin": []
+   },
+   "8.0": {
+    "date": "2018-08-08",
+    "n_tags": 44,
+    "n_served": 0,
+    "n_full": 0,
+    "max_rows": 0,
+    "missing": [
+     "1D",
+     "1W",
+     "2W",
+     "3W",
+     "1M",
+     "2M",
+     "3M",
+     "4M",
+     "5M",
+     "6M",
+     "7M",
+     "8M",
+     "9M",
+     "10M",
+     "11M",
+     "1Y",
+     "15M",
+     "18M",
+     "21M",
+     "2Y",
+     "3Y",
+     "4Y",
+     "5Y",
+     "6Y",
+     "7Y",
+     "8Y",
+     "9Y",
+     "10Y",
+     "11Y",
+     "12Y",
+     "13Y",
+     "14Y",
+     "15Y",
+     "16Y",
+     "17Y",
+     "18Y",
+     "19Y",
+     "20Y",
+     "25Y",
+     "30Y",
+     "35Y",
+     "40Y",
+     "45Y",
+     "50Y"
+    ],
+    "thin": []
+   }
+  },
+  "EUR_EURIBOR": {
+   "0.25": {
+    "date": "2026-05-06",
+    "n_tags": 36,
+    "n_served": 36,
+    "n_full": 36,
+    "max_rows": 2160,
+    "missing": [],
+    "thin": []
+   },
+   "3.0": {
+    "date": "2023-08-09",
+    "n_tags": 36,
+    "n_served": 36,
+    "n_full": 36,
+    "max_rows": 2160,
+    "missing": [],
+    "thin": []
+   },
+   "8.0": {
+    "date": "2018-08-08",
+    "n_tags": 36,
+    "n_served": 20,
+    "n_full": 20,
+    "max_rows": 1801,
+    "missing": [
+     "1W",
+     "2M",
+     "4M",
+     "5M",
+     "7M",
+     "8M",
+     "9M",
+     "10M",
+     "11M",
+     "11Y",
+     "13Y",
+     "14Y",
+     "16Y",
+     "17Y",
+     "18Y",
+     "19Y"
+    ],
+    "thin": []
+   }
+  },
+  "JPY_TONAR": {
+   "0.25": {
+    "date": "2026-05-06",
+    "n_tags": 44,
+    "n_served": 44,
+    "n_full": 44,
+    "max_rows": 2209,
+    "missing": [],
+    "thin": []
+   },
+   "3.0": {
+    "date": "2023-08-09",
+    "n_tags": 44,
+    "n_served": 42,
+    "n_full": 42,
+    "max_rows": 2220,
+    "missing": [
+     "35Y",
+     "45Y"
+    ],
+    "thin": []
+   },
+   "8.0": {
+    "date": "2018-08-08",
+    "n_tags": 44,
+    "n_served": 18,
+    "n_full": 18,
+    "max_rows": 2386,
+    "missing": [
+     "1W",
+     "2W",
+     "3W",
+     "2M",
+     "4M",
+     "5M",
+     "7M",
+     "8M",
+     "10M",
+     "11M",
+     "15M",
+     "21M",
+     "6Y",
+     "8Y",
+     "9Y",
+     "11Y",
+     "13Y",
+     "14Y",
+     "16Y",
+     "17Y",
+     "19Y",
+     "25Y",
+     "35Y",
+     "40Y",
+     "45Y",
+     "50Y"
+    ],
+    "thin": []
+   }
+  },
+  "JPY_TONAR_LCH": {
+   "0.25": {
+    "date": "2026-05-06",
+    "n_tags": 44,
+    "n_served": 44,
+    "n_full": 44,
+    "max_rows": 2209,
+    "missing": [],
+    "thin": []
+   },
+   "3.0": {
+    "date": "2023-08-09",
+    "n_tags": 44,
+    "n_served": 0,
+    "n_full": 0,
+    "max_rows": 0,
+    "missing": [
+     "1D",
+     "1W",
+     "2W",
+     "3W",
+     "1M",
+     "2M",
+     "3M",
+     "4M",
+     "5M",
+     "6M",
+     "7M",
+     "8M",
+     "9M",
+     "10M",
+     "11M",
+     "1Y",
+     "15M",
+     "18M",
+     "21M",
+     "2Y",
+     "3Y",
+     "4Y",
+     "5Y",
+     "6Y",
+     "7Y",
+     "8Y",
+     "9Y",
+     "10Y",
+     "11Y",
+     "12Y",
+     "13Y",
+     "14Y",
+     "15Y",
+     "16Y",
+     "17Y",
+     "18Y",
+     "19Y",
+     "20Y",
+     "25Y",
+     "30Y",
+     "35Y",
+     "40Y",
+     "45Y",
+     "50Y"
+    ],
+    "thin": []
+   },
+   "8.0": {
+    "date": "2018-08-08",
+    "n_tags": 44,
+    "n_served": 0,
+    "n_full": 0,
+    "max_rows": 0,
+    "missing": [
+     "1D",
+     "1W",
+     "2W",
+     "3W",
+     "1M",
+     "2M",
+     "3M",
+     "4M",
+     "5M",
+     "6M",
+     "7M",
+     "8M",
+     "9M",
+     "10M",
+     "11M",
+     "1Y",
+     "15M",
+     "18M",
+     "21M",
+     "2Y",
+     "3Y",
+     "4Y",
+     "5Y",
+     "6Y",
+     "7Y",
+     "8Y",
+     "9Y",
+     "10Y",
+     "11Y",
+     "12Y",
+     "13Y",
+     "14Y",
+     "15Y",
+     "16Y",
+     "17Y",
+     "18Y",
+     "19Y",
+     "20Y",
+     "25Y",
+     "30Y",
+     "35Y",
+     "40Y",
+     "45Y",
+     "50Y"
+    ],
+    "thin": []
+   }
+  }
+ },
+ "cvtick": {
+  "tag": "RATES.OIS.USD_SOFR.PAR.10Y",
+  "attempts": [
+   {
+    "label": "bare tag",
+    "formula": "=CVTICK(\"RATES.OIS.USD_SOFR.PAR.10Y\")",
+    "seconds": 0.0,
+    "n_rows": 1,
+    "head": [
+     [
+      "Error: Parameter 'Refresh Seconds' must be an integer."
+     ]
+    ],
+    "first_cell": "\"Error: Parameter 'Refresh Seconds' must be an integer.\""
+   },
+   {
+    "label": "tag + recent day",
+    "formula": "=CVTICK(\"RATES.OIS.USD_SOFR.PAR.10Y\",\"20260506\")",
+    "seconds": 0.0,
+    "n_rows": 1,
+    "head": [
+     [
+      "Error: Parameter 'Refresh Seconds' must be an integer."
+     ]
+    ],
+    "first_cell": "\"Error: Parameter 'Refresh Seconds' must be an integer.\""
+   },
+   {
+    "label": "tag + recent bounds",
+    "formula": "=CVTICK(\"RATES.OIS.USD_SOFR.PAR.10Y\",\"202605060900\",\"202605060930\")",
+    "seconds": 0.0,
+    "n_rows": 0,
+    "head": [],
+    "first_cell": "-2146826273"
+   },
+   {
+    "label": "tag + deep bounds",
+    "formula": "=CVTICK(\"RATES.OIS.USD_SOFR.PAR.10Y\",\"201506100900\",\"201506100930\")",
+    "seconds": 0.0,
+    "n_rows": 0,
+    "head": [],
+    "first_cell": "-2146826273"
+   }
+  ]
+ },
+ "mem_after": 1214.672896,
+ "calls": {
+  "calls": 22,
+  "seconds": 19.4,
+  "seconds_per_call": 0.88
+ }
+}

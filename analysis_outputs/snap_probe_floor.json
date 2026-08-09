@@ -1,0 +1,954 @@
+{
+ "probed_at": "2026-08-09T11:52:01",
+ "stages": [
+  "floor",
+  "mechanics"
+ ],
+ "depths": [
+  0.25,
+  1.0,
+  2.0,
+  3.0,
+  4.0,
+  5.0,
+  7.0,
+  10.0
+ ],
+ "freqs": [
+  "MI01",
+  "MI10",
+  "HOURLY"
+ ],
+ "probes": [
+  "USD_SOFR",
+  "USD_FEDFUND",
+  "EUR_EUROSTR",
+  "EUR_EURIBOR",
+  "JPY_TONAR",
+  "JPY_TONAR_LCH"
+ ],
+ "mem_before": 720.46592,
+ "floor": {
+  "freq": "MI01",
+  "tolerance_days": 21,
+  "curves": {
+   "USD_SOFR": {
+    "probes": [
+     {
+      "date": "2026-05-06",
+      "serves": true,
+      "rows": 4129,
+      "first": "2026-05-03 17:00:00",
+      "last": "2026-05-06 19:59:00",
+      "spacing_min": 1.0,
+      "first_value": 3.93617,
+      "last_value": 3.93291
+     },
+     {
+      "date": "2018-02-28",
+      "serves": false,
+      "rows": 0
+     },
+     {
+      "date": "2022-03-30",
+      "serves": true,
+      "rows": 3595,
+      "first": "2022-03-27 22:36:00",
+      "last": "2022-03-30 19:59:00",
+      "spacing_min": 1.0,
+      "first_value": 2.30625,
+      "last_value": 2.13672
+     },
+     {
+      "date": "2020-03-11",
+      "serves": false,
+      "rows": 0
+     },
+     {
+      "date": "2021-03-17",
+      "serves": false,
+      "rows": 0
+     },
+     {
+      "date": "2021-09-22",
+      "serves": true,
+      "rows": 4497,
+      "first": "2021-09-19 17:00:00",
+      "last": "2021-09-22 19:59:00",
+      "spacing_min": 1.0,
+      "first_value": 1.15317,
+      "last_value": 1.08491
+     },
+     {
+      "date": "2021-06-16",
+      "serves": false,
+      "rows": 0
+     },
+     {
+      "date": "2021-08-04",
+      "serves": false,
+      "rows": 0
+     },
+     {
+      "date": "2021-08-25",
+      "serves": false,
+      "rows": 0
+     },
+     {
+      "date": "2021-09-08",
+      "serves": true,
+      "rows": 4107,
+      "first": "2021-09-05 23:27:00",
+      "last": "2021-09-08 19:59:00",
+      "spacing_min": 1.0,
+      "first_value": 1.09097,
+      "last_value": 1.11439
+     }
+    ],
+    "floor": "2021-09-08",
+    "floor_bracket": [
+     "2021-08-25",
+     "2021-09-08"
+    ],
+    "years_of_intraday": 4.92,
+    "snap_below_floor": [
+     {
+      "date": "2021-08-04",
+      "days_below_floor": 30,
+      "values": [
+       {
+        "wire": "2021-08-04 09:30:00",
+        "value": null
+       },
+       {
+        "wire": "2021-08-04 12:00:00",
+        "value": null
+       },
+       {
+        "wire": "2021-08-04 15:00:00",
+        "value": null
+       }
+      ],
+      "n_served": 0,
+      "distinct": 0
+     },
+     {
+      "date": "2021-05-05",
+      "days_below_floor": 120,
+      "values": [
+       {
+        "wire": "2021-05-05 09:30:00",
+        "value": null
+       },
+       {
+        "wire": "2021-05-05 12:00:00",
+        "value": null
+       },
+       {
+        "wire": "2021-05-05 15:00:00",
+        "value": null
+       }
+      ],
+      "n_served": 0,
+      "distinct": 0
+     },
+     {
+      "date": "2020-09-02",
+      "days_below_floor": 365,
+      "values": [
+       {
+        "wire": "2020-09-02 09:30:00",
+        "value": null
+       },
+       {
+        "wire": "2020-09-02 12:00:00",
+        "value": null
+       },
+       {
+        "wire": "2020-09-02 15:00:00",
+        "value": null
+       }
+      ],
+      "n_served": 0,
+      "distinct": 0
+     }
+    ],
+    "snap_reaches_deeper": false
+   },
+   "USD_FEDFUND": {
+    "probes": [
+     {
+      "date": "2026-05-06",
+      "serves": true,
+      "rows": 4129,
+      "first": "2026-05-03 17:00:00",
+      "last": "2026-05-06 19:59:00",
+      "spacing_min": 1.0,
+      "first_value": 3.88233,
+      "last_value": 3.886
+     },
+     {
+      "date": "2018-02-28",
+      "serves": false,
+      "rows": 285,
+      "first": "2018-02-25 19:00:00",
+      "last": "2018-02-28 18:59:00",
+      "spacing_min": 10.0,
+      "first_value": 2.46165,
+      "last_value": 2.49004
+     },
+     {
+      "date": "2022-03-30",
+      "serves": true,
+      "rows": 3606,
+      "first": "2022-03-27 22:36:00",
+      "last": "2022-03-30 19:59:00",
+      "spacing_min": 1.0,
+      "first_value": 2.30537,
+      "last_value": 2.13791
+     },
+     {
+      "date": "2020-03-11",
+      "serves": true,
+      "rows": 4495,
+      "first": "2020-03-08 17:00:00",
+      "last": "2020-03-11 19:59:00",
+      "spacing_min": 1.0,
+      "first_value": 0.587759,
+      "last_value": 0.600697
+     },
+     {
+      "date": "2019-03-06",
+      "serves": true,
+      "rows": 4494,
+      "first": "2019-03-03 16:00:00",
+      "last": "2019-03-06 18:59:00",
+      "spacing_min": 1.0,
+      "first_value": 2.47882,
+      "last_value": 2.42889
+     },
+     {
+      "date": "2018-08-29",
+      "serves": true,
+      "rows": 4495,
+      "first": "2018-08-26 17:00:00",
+      "last": "2018-08-29 19:59:00",
+      "spacing_min": 1.0,
+      "first_value": 2.53397,
+      "last_value": 2.59595
+     },
+     {
+      "date": "2018-05-30",
+      "serves": false,
+      "rows": 219,
+      "first": "2018-05-27 20:00:00",
+      "last": "2018-05-30 19:52:00",
+      "spacing_min": 9.0,
+      "first_value": 2.55265,
+      "last_value": 2.48952
+     },
+     {
+      "date": "2018-07-11",
+      "serves": false,
+      "rows": 253,
+      "first": "2018-07-08 19:15:00",
+      "last": "2018-07-11 19:28:00",
+      "spacing_min": 12.0,
+      "first_value": 2.51408,
+      "last_value": 2.53652
+     },
+     {
+      "date": "2018-08-01",
+      "serves": false,
+      "rows": 243,
+      "first": "2018-07-29 19:03:00",
+      "last": "2018-08-01 19:57:00",
+      "spacing_min": 12.0,
+      "first_value": 2.66992,
+      "last_value": 2.71328
+     },
+     {
+      "date": "2018-08-15",
+      "serves": false,
+      "rows": 289,
+      "first": "2018-08-12 18:58:00",
+      "last": "2018-08-15 19:46:00",
+      "spacing_min": 10.5,
+      "first_value": 2.58362,
+      "last_value": 2.57111
+     }
+    ],
+    "floor": "2018-08-29",
+    "floor_bracket": [
+     "2018-08-15",
+     "2018-08-29"
+    ],
+    "years_of_intraday": 7.95,
+    "snap_below_floor": [
+     {
+      "date": "2018-07-25",
+      "days_below_floor": 30,
+      "values": [
+       {
+        "wire": "2018-07-25 09:30:00",
+        "value": 2.64311
+       },
+       {
+        "wire": "2018-07-25 12:00:00",
+        "value": 2.63639
+       },
+       {
+        "wire": "2018-07-25 15:00:00",
+        "value": 2.64264
+       }
+      ],
+      "n_served": 3,
+      "distinct": 3
+     },
+     {
+      "date": "2018-04-25",
+      "days_below_floor": 120,
+      "values": [
+       {
+        "wire": "2018-04-25 09:30:00",
+        "value": 2.58133
+       },
+       {
+        "wire": "2018-04-25 12:00:00",
+        "value": 2.58133
+       },
+       {
+        "wire": "2018-04-25 15:00:00",
+        "value": 2.58133
+       }
+      ],
+      "n_served": 3,
+      "distinct": 1
+     },
+     {
+      "date": "2017-08-23",
+      "days_below_floor": 365,
+      "values": [
+       {
+        "wire": "2017-08-23 09:30:00",
+        "value": null
+       },
+       {
+        "wire": "2017-08-23 12:00:00",
+        "value": null
+       },
+       {
+        "wire": "2017-08-23 15:00:00",
+        "value": null
+       }
+      ],
+      "n_served": 0,
+      "distinct": 0
+     }
+    ],
+    "snap_reaches_deeper": true
+   },
+   "EUR_EUROSTR": {
+    "probes": [
+     {
+      "date": "2026-05-06",
+      "serves": true,
+      "rows": 2160,
+      "first": "2026-05-04 02:00:00",
+      "last": "2026-05-06 13:59:00",
+      "spacing_min": 1.0,
+      "first_value": 2.8377,
+      "last_value": 2.80324
+     },
+     {
+      "date": "2018-02-28",
+      "serves": false,
+      "rows": 0
+     },
+     {
+      "date": "2022-03-30",
+      "serves": true,
+      "rows": 3634,
+      "first": "2022-03-27 22:36:00",
+      "last": "2022-03-30 19:59:00",
+      "spacing_min": 1.0,
+      "first_value": 0.945282,
+      "last_value": 1.04491
+     },
+     {
+      "date": "2020-03-11",
+      "serves": false,
+      "rows": 0
+     },
+     {
+      "date": "2021-03-17",
+      "serves": false,
+      "rows": 0
+     },
+     {
+      "date": "2021-09-22",
+      "serves": true,
+      "rows": 4497,
+      "first": "2021-09-19 17:00:00",
+      "last": "2021-09-22 19:59:00",
+      "spacing_min": 1.0,
+      "first_value": -0.073033,
+      "last_value": -0.124515
+     },
+     {
+      "date": "2021-06-16",
+      "serves": false,
+      "rows": 0
+     },
+     {
+      "date": "2021-08-04",
+      "serves": false,
+      "rows": 0
+     },
+     {
+      "date": "2021-08-25",
+      "serves": false,
+      "rows": 0
+     },
+     {
+      "date": "2021-09-08",
+      "serves": true,
+      "rows": 4107,
+      "first": "2021-09-05 23:27:00",
+      "last": "2021-09-08 19:59:00",
+      "spacing_min": 1.0,
+      "first_value": -0.159221,
+      "last_value": -0.124639
+     }
+    ],
+    "floor": "2021-09-08",
+    "floor_bracket": [
+     "2021-08-25",
+     "2021-09-08"
+    ],
+    "years_of_intraday": 4.92,
+    "snap_below_floor": [
+     {
+      "date": "2021-08-04",
+      "days_below_floor": 30,
+      "values": [
+       {
+        "wire": "2021-08-04 03:30:00",
+        "value": null
+       },
+       {
+        "wire": "2021-08-04 06:00:00",
+        "value": null
+       },
+       {
+        "wire": "2021-08-04 09:00:00",
+        "value": null
+       }
+      ],
+      "n_served": 0,
+      "distinct": 0
+     },
+     {
+      "date": "2021-05-05",
+      "days_below_floor": 120,
+      "values": [
+       {
+        "wire": "2021-05-05 03:30:00",
+        "value": null
+       },
+       {
+        "wire": "2021-05-05 06:00:00",
+        "value": null
+       },
+       {
+        "wire": "2021-05-05 09:00:00",
+        "value": null
+       }
+      ],
+      "n_served": 0,
+      "distinct": 0
+     },
+     {
+      "date": "2020-09-02",
+      "days_below_floor": 365,
+      "values": [
+       {
+        "wire": "2020-09-02 03:30:00",
+        "value": null
+       },
+       {
+        "wire": "2020-09-02 06:00:00",
+        "value": null
+       },
+       {
+        "wire": "2020-09-02 09:00:00",
+        "value": null
+       }
+      ],
+      "n_served": 0,
+      "distinct": 0
+     }
+    ],
+    "snap_reaches_deeper": false
+   },
+   "EUR_EURIBOR": {
+    "probes": [
+     {
+      "date": "2026-05-06",
+      "serves": true,
+      "rows": 2160,
+      "first": "2026-05-04 02:00:00",
+      "last": "2026-05-06 13:59:00",
+      "spacing_min": 1.0,
+      "first_value": 3.05785,
+      "last_value": 3.02724
+     },
+     {
+      "date": "2018-02-28",
+      "serves": true,
+      "rows": 1803,
+      "first": "2018-02-26 02:00:00",
+      "last": "2018-02-28 12:00:00",
+      "spacing_min": 1.0,
+      "first_value": 1.08752,
+      "last_value": 1.08331
+     },
+     {
+      "date": "2014-01-29",
+      "serves": false,
+      "rows": 0
+     },
+     {
+      "date": "2016-02-10",
+      "serves": false,
+      "rows": 0
+     },
+     {
+      "date": "2017-02-15",
+      "serves": true,
+      "rows": 1801,
+      "first": "2017-02-13 02:00:00",
+      "last": "2017-02-15 12:00:00",
+      "spacing_min": 1.0,
+      "first_value": 0.75737,
+      "last_value": 0.799787
+     },
+     {
+      "date": "2016-08-10",
+      "serves": true,
+      "rows": 1645,
+      "first": "2016-08-08 02:00:00",
+      "last": "2016-08-10 12:00:00",
+      "spacing_min": 1.0,
+      "first_value": 0.310896,
+      "last_value": 0.254582
+     },
+     {
+      "date": "2016-05-11",
+      "serves": false,
+      "rows": 0
+     },
+     {
+      "date": "2016-06-22",
+      "serves": false,
+      "rows": 0
+     },
+     {
+      "date": "2016-07-13",
+      "serves": true,
+      "rows": 4070,
+      "first": "2016-07-11 00:00:00",
+      "last": "2016-07-13 19:59:00",
+      "spacing_min": 1.0,
+      "first_value": 0.25596,
+      "last_value": 0.287908
+     }
+    ],
+    "floor": "2016-07-13",
+    "floor_bracket": [
+     "2016-06-22",
+     "2016-07-13"
+    ],
+    "years_of_intraday": 10.07,
+    "snap_below_floor": [
+     {
+      "date": "2016-06-08",
+      "days_below_floor": 30,
+      "values": [
+       {
+        "wire": "2016-06-08 03:30:00",
+        "value": null
+       },
+       {
+        "wire": "2016-06-08 06:00:00",
+        "value": null
+       },
+       {
+        "wire": "2016-06-08 09:00:00",
+        "value": null
+       }
+      ],
+      "n_served": 0,
+      "distinct": 0
+     },
+     {
+      "date": "2016-03-09",
+      "days_below_floor": 120,
+      "values": [
+       {
+        "wire": "2016-03-09 03:30:00",
+        "value": null
+       },
+       {
+        "wire": "2016-03-09 06:00:00",
+        "value": null
+       },
+       {
+        "wire": "2016-03-09 09:00:00",
+        "value": null
+       }
+      ],
+      "n_served": 0,
+      "distinct": 0
+     },
+     {
+      "date": "2015-07-08",
+      "days_below_floor": 365,
+      "values": [
+       {
+        "wire": "2015-07-08 03:30:00",
+        "value": null
+       },
+       {
+        "wire": "2015-07-08 06:00:00",
+        "value": null
+       },
+       {
+        "wire": "2015-07-08 09:00:00",
+        "value": null
+       }
+      ],
+      "n_served": 0,
+      "distinct": 0
+     }
+    ],
+    "snap_reaches_deeper": false
+   },
+   "JPY_TONAR": {
+    "probes": [
+     {
+      "date": "2026-05-06",
+      "serves": true,
+      "rows": 2209,
+      "first": "2026-05-03 19:00:00",
+      "last": "2026-05-06 19:59:00",
+      "spacing_min": 1.0,
+      "first_value": 2.3025,
+      "last_value": 2.29125
+     },
+     {
+      "date": "2018-02-28",
+      "serves": true,
+      "rows": 2374,
+      "first": "2018-02-26 01:00:00",
+      "last": "2018-02-28 16:45:00",
+      "spacing_min": 1.0,
+      "first_value": 0.163875,
+      "last_value": 4.09291
+     },
+     {
+      "date": "2014-01-29",
+      "serves": false,
+      "rows": 0
+     },
+     {
+      "date": "2016-02-10",
+      "serves": false,
+      "rows": 0
+     },
+     {
+      "date": "2017-02-15",
+      "serves": false,
+      "rows": 0
+     },
+     {
+      "date": "2017-08-23",
+      "serves": false,
+      "rows": 0
+     },
+     {
+      "date": "2017-11-22",
+      "serves": false,
+      "rows": 0
+     },
+     {
+      "date": "2018-01-10",
+      "serves": true,
+      "rows": 2360,
+      "first": "2018-01-08 01:00:00",
+      "last": "2018-01-10 16:29:00",
+      "spacing_min": 1.0,
+      "first_value": 0.190401,
+      "last_value": 0.204851
+     },
+     {
+      "date": "2017-12-13",
+      "serves": true,
+      "rows": 2365,
+      "first": "2017-12-11 01:01:00",
+      "last": "2017-12-13 16:30:00",
+      "spacing_min": 1.0,
+      "first_value": 0.141409,
+      "last_value": 3.37232
+     }
+    ],
+    "floor": "2017-12-13",
+    "floor_bracket": [
+     "2017-11-22",
+     "2017-12-13"
+    ],
+    "years_of_intraday": 8.65,
+    "snap_below_floor": [
+     {
+      "date": "2017-11-08",
+      "days_below_floor": 30,
+      "values": [
+       {
+        "wire": "2017-11-07 19:30:00",
+        "value": null
+       },
+       {
+        "wire": "2017-11-07 22:00:00",
+        "value": null
+       },
+       {
+        "wire": "2017-11-08 01:00:00",
+        "value": null
+       }
+      ],
+      "n_served": 0,
+      "distinct": 0
+     },
+     {
+      "date": "2017-08-09",
+      "days_below_floor": 120,
+      "values": [
+       {
+        "wire": "2017-08-08 20:30:00",
+        "value": null
+       },
+       {
+        "wire": "2017-08-08 23:00:00",
+        "value": null
+       },
+       {
+        "wire": "2017-08-09 02:00:00",
+        "value": null
+       }
+      ],
+      "n_served": 0,
+      "distinct": 0
+     },
+     {
+      "date": "2016-12-07",
+      "days_below_floor": 365,
+      "values": [
+       {
+        "wire": "2016-12-06 19:30:00",
+        "value": null
+       },
+       {
+        "wire": "2016-12-06 22:00:00",
+        "value": null
+       },
+       {
+        "wire": "2016-12-07 01:00:00",
+        "value": null
+       }
+      ],
+      "n_served": 0,
+      "distinct": 0
+     }
+    ],
+    "snap_reaches_deeper": false
+   },
+   "JPY_TONAR_LCH": {
+    "probes": [
+     {
+      "date": "2026-05-06",
+      "serves": true,
+      "rows": 2209,
+      "first": "2026-05-03 19:00:00",
+      "last": "2026-05-06 19:59:00",
+      "spacing_min": 1.0,
+      "first_value": 2.30375,
+      "last_value": 2.2925
+     },
+     {
+      "date": "2018-02-28",
+      "serves": false,
+      "rows": 0
+     },
+     {
+      "date": "2022-03-30",
+      "serves": false,
+      "rows": 0
+     },
+     {
+      "date": "2024-04-17",
+      "serves": true,
+      "rows": 2099,
+      "first": "2024-04-14 19:00:00",
+      "last": "2024-04-17 19:59:00",
+      "spacing_min": 1.0,
+      "first_value": 0.965,
+      "last_value": 0.98125
+     },
+     {
+      "date": "2023-04-05",
+      "serves": false,
+      "rows": 0
+     },
+     {
+      "date": "2023-10-11",
+      "serves": false,
+      "rows": 0
+     },
+     {
+      "date": "2024-01-10",
+      "serves": false,
+      "rows": 0
+     },
+     {
+      "date": "2024-02-28",
+      "serves": true,
+      "rows": 2220,
+      "first": "2024-02-25 18:00:00",
+      "last": "2024-02-28 18:59:00",
+      "spacing_min": 1.0,
+      "first_value": 0.89625,
+      "last_value": 0.86375
+     },
+     {
+      "date": "2024-01-31",
+      "serves": true,
+      "rows": 2098,
+      "first": "2024-01-28 18:01:00",
+      "last": "2024-01-31 18:59:00",
+      "spacing_min": 1.0,
+      "first_value": 0.905,
+      "last_value": 0.93625
+     }
+    ],
+    "floor": "2024-01-31",
+    "floor_bracket": [
+     "2024-01-10",
+     "2024-01-31"
+    ],
+    "years_of_intraday": 2.52,
+    "snap_below_floor": [
+     {
+      "date": "2023-12-27",
+      "days_below_floor": 30,
+      "values": [
+       {
+        "wire": "2023-12-26 19:30:00",
+        "value": null
+       },
+       {
+        "wire": "2023-12-26 22:00:00",
+        "value": null
+       },
+       {
+        "wire": "2023-12-27 01:00:00",
+        "value": null
+       }
+      ],
+      "n_served": 0,
+      "distinct": 0
+     },
+     {
+      "date": "2023-09-27",
+      "days_below_floor": 120,
+      "values": [
+       {
+        "wire": "2023-09-26 20:30:00",
+        "value": null
+       },
+       {
+        "wire": "2023-09-26 23:00:00",
+        "value": null
+       },
+       {
+        "wire": "2023-09-27 02:00:00",
+        "value": null
+       }
+      ],
+      "n_served": 0,
+      "distinct": 0
+     },
+     {
+      "date": "2023-01-25",
+      "days_below_floor": 365,
+      "values": [
+       {
+        "wire": "2023-01-24 19:30:00",
+        "value": null
+       },
+       {
+        "wire": "2023-01-24 22:00:00",
+        "value": null
+       },
+       {
+        "wire": "2023-01-25 01:00:00",
+        "value": null
+       }
+      ],
+      "n_served": 0,
+      "distinct": 0
+     }
+    ],
+    "snap_reaches_deeper": false
+   }
+  }
+ },
+ "mechanics": {
+  "date": "2026-05-06",
+  "wire": "2026-05-06 10:30:00",
+  "trials": [
+   {
+    "label": "1 tag",
+    "n_tags": 1,
+    "served": 1,
+    "seconds": 0.52,
+    "seconds_per_tag": 0.5235,
+    "error": "",
+    "excel_mb": 735.66208
+   },
+   {
+    "label": "44 tags (one par grid)",
+    "n_tags": 44,
+    "served": 44,
+    "seconds": 1.03,
+    "seconds_per_tag": 0.0234,
+    "error": "",
+    "excel_mb": 781.06624
+   },
+   {
+    "label": "88 tags (two par grids)",
+    "n_tags": 88,
+    "served": 88,
+    "seconds": 2.04,
+    "seconds_per_tag": 0.0231,
+    "error": "",
+    "excel_mb": 960.446464
+   }
+  ]
+ },
+ "mem_after": 960.4096,
+ "calls": {
+  "calls": 114,
+  "seconds": 59.3,
+  "seconds_per_call": 0.52
+ }
+}
