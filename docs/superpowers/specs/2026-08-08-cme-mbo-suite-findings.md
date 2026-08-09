@@ -187,7 +187,62 @@ In ZT, UB and TN the listed spread quotes a few dozen times a day. Any execution
 orders a day at 4.7 cancels per fill; `ZNZ6` posts 1,431 cancels per fill. Quoting in the deferred
 contract is almost entirely non-transactional.
 
-## 7. What is built, and what is not
+## 7. Icebergs hide about 2% of ZN's traded volume
+
+Detection uses the exact structural rule from Zotikov and Antonov -- no time window
+and no threshold -- and the sizing uses Kaplan-Meier, because **a cancelled iceberg
+is a censored observation of its own size**: what it traded is only a lower bound,
+so averaging observed totals biases the distribution downward, worst in the tail
+where a hidden-liquidity estimate lives.
+
+ZNU6, 2026-07-14:
+
+| | |
+| --- | ---: |
+| orders | 2,388,658 |
+| detected icebergs | 668 (0.028%) |
+| their share of traded volume | 2.72% |
+| hidden volume, lower bound | 55,982 lots (2.26% of the tape) |
+| median iceberg fill vs ordinary filled order | **20 lots vs 1** |
+
+So they are rare, roughly twenty times larger than an ordinary order, and conceal
+about one lot in forty-four of everything that trades.
+
+**A caveat that matters more than the numbers.** All 668 were found by rule (a) --
+a trade exceeding the resting volume. Not one came from rule (b), an order fully
+traded and returning under the same id: `n_refresh` is zero everywhere. Databento's
+normalization evidently does not re-use order ids across tranches the way the raw
+feed the paper worked from does. Everything here therefore rests on rule (a), which
+sees an iceberg only *after* it has traded through its displayed size, so an
+iceberg cancelled before that is invisible and these counts are lower bounds.
+
+Synthetic iceberg detection is deliberately not implemented: its rule rests on
+assumptions the paper's own authors call very strong, and when candidates collide
+it produces a tree of possible icebergs rather than an answer.
+
+## 8. The fill simulator is exact, not modelled
+
+Most fill simulators are probabilistic because most data is not order-resolved:
+with aggregated depth you cannot tell whether a size decrease happened ahead of
+your order or behind it. Market-by-order removes the guess -- every order at a
+level is named, so the set ahead at any instant is known and so is how each left.
+
+Two corrections during implementation, both of which would have produced a
+plausible and wrong edge:
+
+- An order that never left carries the session's last timestamp as its exit, which
+  read as "already gone" for a later placement. It is the opposite: it is ahead
+  forever.
+- "The first trade after the queue cleared" **double-counts**. The trade clearing
+  the last order ahead is the trade that consumed it; only its residual reaches
+  you. The exact rule is on cumulative volume: you fill when trade volume at the
+  level exceeds the part of the queue ahead that was actually *executed*. An order
+  ahead that was **pulled** advances you for free -- precisely the distinction L3
+  supports and aggregated depth cannot.
+
+The model-free counterpart to check it against is §5's realised fill curve.
+
+## 9. What is built, and what is not
 
 Built and tested (232 tests, all passing under `conda run -n stir` equivalent invocation):
 
@@ -208,8 +263,22 @@ path**, rather than returning the 100.0 that a global kind-set produced — a nu
 much wrong as meaningless, and that nothing downstream would have flagged. In panels, `bp` is a
 linear rescaling whose *differences* are yield basis points; the level is not a yield.
 
-Not yet done: MLOFI and the deep tier (needs M-level depth at every book change), iceberg detection,
-the lead-lag toolkit, the fill simulator, and the full 553-session build.
+- `analytics` — `liquidity`, `flow` (CKS order-flow imbalance and true-aggressor trade flow),
+  `impact` (effective/realised spread, impact by size, Kyle lambda), `icebergs`, and `leadlag`.
+- `sim` — the exact FIFO fill simulator.
+
+**Lead-lag deserves a note, because it is the piece most easily got wrong.** The estimator is
+Hayashi-Yoshida, which needs no common grid; `epps_curve` measures on your own data how much a
+gridded estimate would have attenuated. Three things it refuses to do, all from Hoffmann, Rosenbaum
+and Yoshida: it reports **no t-statistic or standard error for the lag**, because their Proposition
+2 proves no central limit theorem exists for this estimator; it flags the degeneracy where
+maximising the contrast provably fails to locate anything; and significance comes from a
+**permutation test** that shuffles increments rather than prices, so the surrogate keeps the same
+clock, mesh and realised variance.
+
+Not yet done: MLOFI and the deep tier (needs M-level depth at every book change), synthetic iceberg
+detection, Hasbrouck information share and Gonzalo-Granger, and the full 553-session build, which is
+running.
 
 MLOFI is worth the deep pass specifically here: Xu, Gould and Howison measure a 65–75% out-of-sample
 RMSE improvement from ten levels for **large-tick** instruments against 15–30% for small-tick ones,
