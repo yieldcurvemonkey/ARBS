@@ -42,6 +42,7 @@ makes it useless on a machine where they are not.
 
 from __future__ import annotations
 
+import ctypes
 import datetime
 import logging
 import os
@@ -61,7 +62,9 @@ __all__ = [
     "launch_excel",
     "quit_excel",
     "rescue_unsaved_workbooks",
+    "press_addin_login",
     "restart_excel",
+    "signin_anchor_workbook",
     "wait_for_addin",
 ]
 
@@ -76,6 +79,12 @@ DEFAULT_READY_TIMEOUT = 25 * 60.0
 EXE_ENV_VAR = "ARBS_EXCEL_EXE"
 
 _UNSAFE = re.compile(r"[^A-Za-z0-9._ -]+")
+
+#: The ribbon tab the add-in installs, and the button on it that opens the login
+#: task pane. Both are UI Automation ``Name`` values, read off the live ribbon on
+#: 2026-08-09 rather than guessed.
+RIBBON_TAB = "Citi Velocity"
+LOGIN_BUTTON = "Login"
 
 
 class ExcelRestartError(RuntimeError):
@@ -332,13 +341,163 @@ def launch_excel(*, exe: Optional[Path] = None, logger: Optional[logging.Logger]
     # /x asks for a dedicated process rather than a new window on an existing
     # one; there should be no existing one here, and it makes the pid this call
     # returns the pid it actually started.
-    proc = subprocess.Popen(
-        [str(executable), "/x"],
-        stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-        creationflags=getattr(subprocess, "DETACHED_PROCESS", 0),
+    anchor = signin_anchor_workbook()
+    before = set(excel_pids())
+
+    # ShellExecute, i.e. exactly what double-clicking the file does - NOT
+    # subprocess.Popen with DETACHED_PROCESS and null handles. Measured
+    # 2026-08-09 with everything else held equal (same anchor workbook, same
+    # Login press): the ShellExecute instance signed in, the Popen one accepted
+    # the InvokePattern call and did nothing, staying at 71 log lines.
+    #
+    # `/x` STAYS, but it must be paired with a file. On its own it opens the
+    # Start screen: no workbook, therefore no ribbon, therefore no Login button -
+    # and such an instance does not even register in the Running Object Table, so
+    # `GetObject('Excel.Application')` creates a SECOND one rather than finding
+    # it. Without `/x`, ShellExecute hands the file to the ALREADY-RUNNING Excel
+    # and the process started here exits immediately, which is the opposite of
+    # what a restart needs. Measured both ways.
+    parameters = f'/x "{anchor}"' if anchor is not None else "/x"
+    result = ctypes.windll.shell32.ShellExecuteW(  # type: ignore[attr-defined]
+        None, "open", str(executable), parameters, str(executable.parent), 1
     )
-    log.info("launch_excel: started %s (pid %s)", executable, proc.pid)
-    return int(proc.pid)
+    if int(result) <= 32:
+        raise ExcelRestartError(
+            f"ShellExecute refused to start {executable} (code {result})."
+        )
+
+    # ShellExecute returns a shell handle, not Excel's pid, so diff the set.
+    pid = 0
+    deadline = time.time() + 30.0
+    while time.time() < deadline:
+        fresh = set(excel_pids()) - before
+        if fresh:
+            pid = sorted(fresh)[0]
+            break
+        time.sleep(0.5)
+    log.info("launch_excel: started %s (pid %s)%s", executable, pid or "unknown",
+             f" on {anchor.name}" if anchor else " with NO workbook (no ribbon, no Login button)")
+    return int(pid)
+
+
+def signin_anchor_workbook() -> Optional[Path]:
+    """A tiny workbook to open Excel ON, created once and reused.
+
+    **Excel started with no workbook has no ribbon**, and with no ribbon there is
+    no ``Login`` button for :func:`press_addin_login` to press. That is why
+    ``/x`` alone fails: it lands on the Start screen. Measured 2026-08-09 - the
+    same launch that could not find the button with no workbook found it
+    immediately with one.
+
+    Marked in ``A1`` with the package's scratch prefix so
+    :func:`rescue_unsaved_workbooks` recognises it as ours and never tries to
+    save it back to the user's Documents.
+    """
+    from MDP.CitiVelocityExcel.com_client import WORKBOOK_MARKER_PREFIX
+
+    root = Path(os.environ.get("LOCALAPPDATA", str(Path.home()))) / "ARBS" / "excel-scratch"
+    path = root / "velocity_signin_anchor.xlsx"
+    if path.is_file():
+        return path
+    try:
+        import openpyxl  # type: ignore
+
+        root.mkdir(parents=True, exist_ok=True)
+        book = openpyxl.Workbook()
+        book.active["A1"] = f"{WORKBOOK_MARKER_PREFIX}SIGNIN_ANCHOR"
+        book.save(path)
+        return path
+    except Exception as exc:  # noqa: BLE001 - fall back to a workbook-less launch
+        _logger.warning("signin_anchor_workbook: could not create %s (%s)", path, exc)
+        return None
+
+
+def press_addin_login(
+    pid: Optional[int] = None,
+    *,
+    timeout: float = 90.0,
+    logger: Optional[logging.Logger] = None,
+) -> bool:
+    """Click the Velocity ribbon's **Login** button. Returns True if it was pressed.
+
+    This is the step that was missing, and without it an Excel started by a
+    process never signs in no matter how long you wait.
+
+    **The add-in does not resume its session on load.** Measured 2026-08-09 by
+    diffing its own log across five launches: every programmatically started
+    instance stopped at exactly 71 lines, the last being
+    ``Citi.Excel.Presentation.CustomRibbon | onLoad:``. A human-opened one ran to
+    1,329 lines, and the divergence is a single component appearing ~13 s in::
+
+        TaskPaneConductor`1[[...ViewModels.LoginViewModel...]]
+        CookieService   Using proxy: https://www.citivelocity.com/...
+        PortalSession   Resuming user session. <user>@citi.com
+        PortalSession   Report|User session resumed.
+
+    The login **task pane** is what resumes the saved session. Opening it is what
+    the ribbon's ``Login`` button does, and until something presses it the add-in
+    sits there fully loaded and unauthenticated. Four hypotheses were tested and
+    killed before this one - launch mode (``ShellExecute`` fails identically),
+    credential freshness (a restart 37 minutes after a good sign-in failed),
+    workbook presence (opening a real ``.xlsx`` failed), Windows session
+    isolation (everything was already in session 1), and activating the Velocity
+    ribbon *tab* rather than the button (failed).
+
+    No password is typed here and none is available to type: the button opens the
+    pane, and the pane resumes from credentials already saved in the add-in. On a
+    machine where they are not saved this will surface a login form instead, and
+    :func:`wait_for_addin` will simply time out as it did before.
+    """
+    log = logger or _logger
+    try:
+        from pywinauto import Application  # type: ignore
+    except ImportError:
+        log.warning("press_addin_login: pywinauto is not installed; cannot open the login pane.")
+        return False
+
+    candidates = [pid] if pid else excel_pids()
+    for candidate in [c for c in candidates if c]:
+        try:
+            app = Application(backend="uia").connect(process=int(candidate), timeout=10)
+            window = app.top_window()
+
+            # The ribbon only materialises a tab's buttons once that tab is
+            # SELECTED. Measured: 37 buttons and no `Login` before selecting
+            # `Citi Velocity`, 38 with it. Skipping this step is why an earlier
+            # version of this function returned False on an Excel where the very
+            # same click worked by hand - the hand had activated the tab in the
+            # previous command.
+            tab = window.child_window(title=RIBBON_TAB, control_type="TabItem")
+            tab.wait("exists enabled", timeout=max(5.0, timeout))
+            tab.select()
+
+            # The button enters the UIA tree a beat AFTER the tab is selected,
+            # not with it. Measured: the first call found 37 buttons and no
+            # Login; a second call moments later found 38 and pressed it. Poll
+            # rather than assume, and re-select once in case the first did not
+            # take.
+            button = None
+            spec = window.child_window(title=LOGIN_BUTTON, control_type="Button")
+            deadline = time.time() + max(10.0, timeout)
+            while time.time() < deadline:
+                if spec.exists(timeout=1.0):
+                    button = spec
+                    break
+                time.sleep(1.0)
+                tab.select()
+            if button is None:
+                raise RuntimeError(
+                    f"{LOGIN_BUTTON!r} never appeared on the {RIBBON_TAB!r} ribbon tab"
+                )
+            button.wait("exists enabled visible", timeout=max(5.0, timeout))
+            button.invoke()
+            log.info("press_addin_login: pressed %s on EXCEL.EXE pid %s",
+                     LOGIN_BUTTON, candidate)
+            return True
+        except Exception as exc:  # noqa: BLE001 - a window that is not ready yet
+            log.debug("press_addin_login: pid %s not ready (%s: %s)",
+                      candidate, type(exc).__name__, exc)
+    return False
 
 
 def wait_for_addin(
@@ -347,14 +506,18 @@ def wait_for_addin(
     poll: float = 20.0,
     workbook_tag: str = "SCRATCH",
     readiness_timeout: float = 45.0,
+    press_login: bool = True,
     logger: Optional[logging.Logger] = None,
 ) -> Any:
     """Block until ``=CVTODAY()`` answers, then return a connected client.
 
-    ``AddInNotSignedInError`` is the NORMAL state for most of this wait - the
-    add-in is loaded and re-authenticating from saved credentials, which takes
-    ~13 minutes and prints nothing - so it is a reason to keep waiting, not to
-    give up. Only the wall clock ends the wait.
+    ``AddInNotSignedInError`` means the add-in is loaded and not authenticated.
+    That is **not** a state that resolves itself in a started Excel: see
+    :func:`press_addin_login`. So the first time this sees it, it opens the login
+    pane, and from then on the wait is the ordinary one - saved credentials
+    resume in about half a minute.
+
+    ``press_login=False`` restores the old behaviour of waiting only.
     """
     from MDP.CitiVelocityExcel.com_client import CitiVelocityExcelClient
 
@@ -362,6 +525,7 @@ def wait_for_addin(
     started = time.time()
     deadline = started + max(0.0, timeout)
     last = ""
+    pressed = not press_login
     while True:
         try:
             client = CitiVelocityExcelClient.connect(
@@ -371,6 +535,12 @@ def wait_for_addin(
             return client
         except (AddInNotSignedInError, ExcelNotRunningError) as exc:
             state = type(exc).__name__
+            if not pressed and isinstance(exc, AddInNotSignedInError):
+                # The add-in is loaded and will NOT authenticate on its own.
+                # Press once; a second press while the pane is already open is
+                # noise, and a failure here is not fatal - the wait continues and
+                # a human can still sign in.
+                pressed = press_addin_login(logger=log) or pressed
         except Exception as exc:  # noqa: BLE001 - transient COM during startup
             state = f"{type(exc).__name__}: {exc}"
         if state != last:
