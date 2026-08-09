@@ -115,6 +115,7 @@ import hashlib
 import io
 import json
 import logging
+import subprocess
 import sys
 import time
 import zoneinfo
@@ -600,6 +601,55 @@ def _spread_lookback() -> datetime.timedelta:
     return LOOKBACK_BY_MODE["intraday"]
 
 
+def _spread_max_staleness() -> datetime.timedelta:
+    from MDP.IRSwaps.CITIVELO_EXCEL.fetcher import DEFAULT_MAX_STALENESS
+
+    return DEFAULT_MAX_STALENESS
+
+
+def fresh_spread_minutes(
+    minutes: Sequence[datetime.datetime],
+    spread_slice: pd.DataFrame,
+    *,
+    max_staleness: Optional[datetime.timedelta] = None,
+) -> List[datetime.datetime]:
+    """The minutes at which Citi's published spread has a print fresh enough to serve.
+
+    Citi publishes SWAP_SPREAD only during its session, but the minute CurveStore
+    holds the Sunday-evening open and the small hours - so a Monday 01:44 curve
+    exists while the newest spread print is Friday 17:59, 55.8 hours back. The
+    value map REFUSES that, correctly (``StaleCurveError``, 12-hour limit), and it
+    refuses it one (tenor, minute) at a time inside ``IRSwapsTB``, which logs a
+    full traceback for each: ~4,000 tracebacks per Monday, costing more than the
+    pricing and burying every real failure.
+
+    So the warm asks only for minutes that will be served. This changes no value -
+    it applies the same 12-hour rule the value map applies, ahead of it, in one
+    vectorised pass instead of 11 exceptions per minute.
+    """
+    if spread_slice is None or spread_slice.empty or not minutes:
+        return []
+
+    from MDP.IRSwaps.CITIVELO_EXCEL.timestamps import to_wire_naive
+
+    limit = max_staleness if max_staleness is not None else _spread_max_staleness()
+    # Every tag in a slice shares its stamps - they come back from one CVTSHIST
+    # call - so "a row exists here" is the same question for all eleven.
+    published = spread_slice.dropna(how="all").index
+    if published.empty:
+        return []
+
+    wanted = pd.DatetimeIndex([to_wire_naive(m) for m in minutes])
+    position = published.searchsorted(wanted, side="right") - 1
+    out: List[datetime.datetime] = []
+    for minute, wire, pos in zip(minutes, wanted, position):
+        if pos < 0:
+            continue
+        if (wire - published[pos]) <= limit:
+            out.append(minute)
+    return out
+
+
 def slice_spreads_for_day(
     frame: pd.DataFrame, day: datetime.date, *, lookback: datetime.timedelta
 ) -> pd.DataFrame:
@@ -734,6 +784,11 @@ def _price_swap_spreads(
     if not wanted:
         return 0
 
+    # Only the minutes Citi actually published near. See fresh_spread_minutes.
+    usable = fresh_spread_minutes(minutes, spread_slice)
+    if not usable:
+        return 0
+
     queries = [
         IRSwapQuery(curve=cfg.curve, tenor=tenor, value=IRSwapValue.CITIVELO_SWAP_SPREAD)
         for tenor in wanted
@@ -741,10 +796,10 @@ def _price_swap_spreads(
     ss_mod.set_default_quotes(DayQuotes(spread_slice))
     try:
         frame = tb.get_timeseries(
-            start=minutes[0],
-            end=minutes[-1],
+            start=usable[0],
+            end=usable[-1],
             queries=queries,
-            timestamps=list(minutes),
+            timestamps=list(usable),
             n_jobs=1,
             ignore_cache=False,
         )
@@ -885,6 +940,144 @@ def _open_store() -> Any:
     from Caching.curve_store import CurveStore
 
     return CurveStore.default()
+
+
+def all_symbols(cfg: WarmConfig) -> List[str]:
+    """Every computed-timeseries symbol this config will write. Parent-side only."""
+    from MDP.IRSwaps.IRSwapsMDP import IRSwapsMDP
+    from Query.IRSwaps.IRSwapQuery import IRSwapQuery
+    from Query.IRSwaps.IRSwapValue import IRSwapValue
+    from TB.IRSwapsTB import IRSwapsTB
+
+    tb = IRSwapsTB(IRSwapsMDP(source=cfg.source), show_tqdm=False, use_duckdb=False,
+                   ts_base_dir=cfg.ts_base_dir or "./data/ts")
+    tenors: List[Tuple[str, Any]] = [(t, IRSwapValue.RATE) for t in cfg.outrights]
+    if cfg.case_aliases:
+        tenors += [(t.upper(), IRSwapValue.RATE) for t in cfg.outrights if t.upper() != t]
+    if cfg.structures:
+        tenors += [(t, IRSwapValue.RATE) for t in cfg.derived]
+        if cfg.case_aliases:
+            tenors += [(t.upper(), IRSwapValue.RATE) for t in cfg.derived if t.upper() != t]
+    if cfg.swap_spreads:
+        tenors += [(t, IRSwapValue.CITIVELO_SWAP_SPREAD) for t in cfg.spread_tenors]
+
+    out = []
+    for tenor, value in tenors:
+        query = IRSwapQuery(curve=cfg.curve, tenor=tenor, value=value)
+        out.append(tb._ts_symbol_for_query(cfg.curve, query))
+    tb.close()
+    return list(dict.fromkeys(out))
+
+
+def prepare_spill(
+    *, cfg: WarmConfig, ts_dir: Path, spill_dir: Path, logger: logging.Logger
+) -> int:
+    """Point this run's symbol directories at another volume, via NTFS junctions.
+
+    The alternative when the system disk is nearly full is either to fill it or to
+    not warm at all. A junction per symbol keeps ONE logical root - readers still
+    open ``data/ts/asset=<sha1>/date=.../*.parquet`` and never learn that some of
+    those directories live somewhere else - which is what makes this reversible
+    and invisible, unlike moving the root and teaching every caller a new path.
+
+    Only symbols that do not already exist are redirected, so nothing already
+    written is touched or moved.
+
+    The cost is honest and worth stating: those symbols are unreadable while the
+    spill volume is detached. That degrades to a cache MISS rather than an error
+    (``IRSwapsTB`` treats an unreadable symbol as uncached and reprices), and this
+    cache is derived data that can be rebuilt, which is why it is the part that
+    gets exiled rather than anything primary.
+    """
+    from Caching.timeseries_cache import _sanitize_symbol
+
+    spill_dir.mkdir(parents=True, exist_ok=True)
+    ts_dir.mkdir(parents=True, exist_ok=True)
+    made = moved = already = 0
+    symbols = all_symbols(cfg)
+    started = time.time()
+    logger.info("spill: redirecting %d symbol director(ies) to %s", len(symbols), spill_dir)
+    for index, symbol in enumerate(symbols, start=1):
+        if index % 25 == 0:
+            logger.info(
+                "  spill %d/%d (%d moved) %.1f min elapsed",
+                index, len(symbols), moved, (time.time() - started) / 60.0,
+            )
+        name = f"asset={_sanitize_symbol(symbol)}"
+        link = ts_dir / name
+        target = spill_dir / name
+        if _is_reparse_point(link):
+            already += 1
+            continue
+        if link.is_dir():
+            # Redirecting only NEW symbols would not help: a resumed run writes
+            # new date partitions INSIDE symbol directories that already exist, so
+            # the bytes would keep landing on the full volume. The existing
+            # partitions move with it. This cache is derived data - the move is
+            # recoverable by re-running even if it is interrupted.
+            _robocopy_move(link, target)
+            try:
+                link.rmdir()
+            except FileNotFoundError:
+                # robocopy /MOVE removes the emptied source tree itself, so the
+                # directory being GONE is the success case, not a failure.
+                pass
+            except OSError as exc:
+                raise RuntimeError(
+                    f"moved {link} to {target} but the source directory is not empty "
+                    f"({exc}); not junctioning over data."
+                ) from exc
+            moved += 1
+        target.mkdir(parents=True, exist_ok=True)
+        # ``mklink`` is a cmd BUILTIN, not an executable, and it parses its own
+        # command line - passing an argv list through ``cmd /c`` gets "The syntax
+        # of the command is incorrect".
+        result = subprocess.run(
+            f'mklink /J "{link}" "{target}"',
+            shell=True, capture_output=True, text=True,
+        )
+        if result.returncode != 0:
+            raise RuntimeError(
+                f"could not junction {link} -> {target}: "
+                f"{(result.stderr or result.stdout).strip()}"
+            )
+        made += 1
+    logger.warning(
+        "spill: %d symbol director(ies) now live on %s (%d moved, %d already there). "
+        "They are UNREADABLE while that volume is detached - which reads as a cache "
+        "miss and reprices, it does not error.",
+        made + already, spill_dir, moved, already,
+    )
+    return made
+
+
+def _is_reparse_point(path: Path) -> bool:
+    """True for a junction or symlink. ``Path.is_symlink`` misses NTFS junctions."""
+    try:
+        attrs = os.stat(path, follow_symlinks=False).st_file_attributes
+    except (OSError, AttributeError):
+        return False
+    return bool(attrs & getattr(__import__("stat"), "FILE_ATTRIBUTE_REPARSE_POINT", 0x400))
+
+
+def _robocopy_move(source: Path, target: Path) -> None:
+    """Move a directory tree with robocopy. Raises unless it reports success.
+
+    robocopy's exit codes are a bitmask, not a status: 0-7 are success (1 = files
+    copied, 2 = extras, 4 = mismatches) and only >=8 is failure. Treating a
+    non-zero return as an error here would abort on every successful move.
+    """
+    target.mkdir(parents=True, exist_ok=True)
+    result = subprocess.run(
+        ["robocopy", str(source), str(target), "/MOVE", "/E", "/MT:16",
+         "/NFL", "/NDL", "/NJH", "/NJS", "/NP", "/R:2", "/W:1"],
+        capture_output=True, text=True,
+    )
+    if result.returncode >= 8:
+        raise RuntimeError(
+            f"robocopy could not move {source} -> {target} (exit {result.returncode}): "
+            f"{(result.stdout or result.stderr).strip()[-400:]}"
+        )
 
 
 def _ledger_path(args: Any) -> Path:
@@ -1252,33 +1445,59 @@ def cmd_warm(args, logger: logging.Logger) -> int:
 
     ts_dir = cfg.ts_base_dir or str(_REPO_ROOT / "data" / "ts")
     floor = float(args.min_free_gb)
+    if args.spill_dir:
+        prepare_spill(
+            cfg=cfg, ts_dir=Path(ts_dir), spill_dir=Path(args.spill_dir), logger=logger
+        )
+        # The floor now has to watch the volume the bytes actually land on.
+        ts_dir = str(args.spill_dir)
     logger.info("writing to %s (%.1f GB free; floor %.1f GB)", ts_dir, free_gb(ts_dir), floor)
 
     stopped_for_disk = False
 
     def _disk_ok() -> bool:
-        """False once the volume is at the floor. Checked BEFORE each dispatch.
+        """Block until there is room, then True. False once waiting has given up.
 
-        A cache is not worth a full disk. This run writes ~7 GB of Parquet in
-        ~360k files, and the on-disk cost is larger than the byte count because
-        every (symbol, day) partition is its own directory holding one small
-        file - so the point at which it becomes dangerous arrives earlier than
-        the row count suggests. The ledger makes stopping free.
+        A cache is not worth a full disk: this run writes ~7 GB of Parquet across
+        ~360k files, and the on-disk cost exceeds the byte count because every
+        (symbol, day) partition is its own directory holding one small file.
+
+        It WAITS rather than stopping, because on this machine free space is not
+        monotonic - measured 2026-08-08 it moved between 6 GB and 44 GB inside a
+        single minute while other backfills churned a 140 GB pile of ZODB caches.
+        Stopping on the first dip would end an eight-hour run over a condition
+        that cleared thirty seconds later; waiting rides it out and still refuses
+        to be the job that fills the disk. Only a floor that holds for
+        ``--disk-wait-minutes`` ends the run, and the ledger makes that free.
         """
         nonlocal stopped_for_disk
         if stopped_for_disk:
             return False
-        remaining = free_gb(ts_dir)
-        if remaining >= floor:
-            return True
-        logger.error(
-            "STOPPING: %s has %.1f GB free, at or below the %.1f GB floor. %d day(s) were "
-            "warmed; the ledger resumes the rest once there is room (--min-free-gb lowers "
-            "the floor, knowingly).",
-            ts_dir, remaining, floor, progress.days_done,
-        )
-        stopped_for_disk = True
-        return False
+        deadline = time.time() + float(args.disk_wait_minutes) * 60.0
+        warned = False
+        while True:
+            remaining = free_gb(ts_dir)
+            if remaining >= floor:
+                if warned:
+                    logger.info("resuming: %s back to %.1f GB free", ts_dir, remaining)
+                return True
+            if time.time() >= deadline:
+                logger.error(
+                    "STOPPING: %s has %.1f GB free, at or below the %.1f GB floor, and has "
+                    "stayed there for %.0f minute(s). %d day(s) are warmed; the ledger "
+                    "resumes the rest once there is room.",
+                    ts_dir, remaining, floor, float(args.disk_wait_minutes), progress.days_done,
+                )
+                stopped_for_disk = True
+                return False
+            if not warned:
+                logger.warning(
+                    "PAUSING: %s has %.1f GB free, below the %.1f GB floor. Waiting up to "
+                    "%.0f minute(s) for room; %d day(s) warmed so far.",
+                    ts_dir, remaining, floor, float(args.disk_wait_minutes), progress.days_done,
+                )
+                warned = True
+            time.sleep(30.0)
 
     bar = tqdm(total=len(todo), desc="WARM citivelo intraday IRS", disable=not args.tqdm)
     try:
@@ -1552,8 +1771,17 @@ def _build_parser() -> argparse.ArgumentParser:
     warm.add_argument("--limit", type=int, default=None)
     warm.add_argument("--force", action="store_true", help="re-warm days the ledger calls done")
     warm.add_argument("--min-free-gb", type=float, default=12.0,
-                      help="stop cleanly when the timeseries volume drops to this. A cache "
-                           "is not worth a full disk, and the ledger makes stopping free.")
+                      help="pause when the timeseries volume drops to this. A cache is not "
+                           "worth a full disk, and the ledger makes stopping free.")
+    warm.add_argument("--spill-dir", default=None,
+                      help="put THIS RUN's symbol directories on another volume via NTFS "
+                           "junctions, keeping one logical root so readers need no change. "
+                           "For a system disk with no room. Those symbols read as a cache "
+                           "miss while the volume is detached.")
+    warm.add_argument("--disk-wait-minutes", type=float, default=90.0,
+                      help="how long to wait at the floor before giving up. Free space here "
+                           "moves tens of GB in a minute under other jobs, so a run that "
+                           "stopped on the first dip would end over a cleared condition.")
     warm.add_argument("--no-tqdm", dest="tqdm", action="store_false", default=True)
     _add_config_args(warm)
     warm.set_defaults(func=cmd_warm)

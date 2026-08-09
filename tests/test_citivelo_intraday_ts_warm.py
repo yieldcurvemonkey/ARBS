@@ -307,6 +307,42 @@ def test_the_day_slice_reaches_back_a_whole_lookback():
     assert sliced.index.max() >= pd.Timestamp("2026-07-29 23:00")
 
 
+def test_fresh_spread_minutes_drops_the_monday_small_hours():
+    """The curve store holds Monday 01:44; Citi's newest print is Friday 17:59.
+
+    The value map refuses that as 55.8 h stale - one raised exception per (tenor,
+    minute), each logged with a full traceback inside IRSwapsTB. Filtering ahead
+    of it changes no value and removes ~4,000 tracebacks per Monday.
+    """
+    friday = pd.date_range("2026-07-24 09:00", "2026-07-24 17:59", freq="min")
+    frame = pd.DataFrame({"TAG": range(len(friday))}, index=friday, dtype=float)
+
+    monday_small_hours = [
+        datetime.datetime(2026, 7, 27, 1, 44, tzinfo=ET),
+        datetime.datetime(2026, 7, 27, 6, 0, tzinfo=ET),
+    ]
+    assert warm.fresh_spread_minutes(monday_small_hours, frame) == []
+
+    same_session = [datetime.datetime(2026, 7, 24, 12, 0, tzinfo=ET)]
+    assert warm.fresh_spread_minutes(same_session, frame) == same_session
+
+
+def test_fresh_spread_minutes_keeps_an_overnight_gap_inside_the_limit():
+    published = pd.date_range("2026-07-24 09:00", "2026-07-24 17:59", freq="min")
+    frame = pd.DataFrame({"TAG": range(len(published))}, index=published, dtype=float)
+    # 07-25 01:00 is 7 h after the last print - inside the 12 h limit.
+    minute = [datetime.datetime(2026, 7, 25, 1, 0, tzinfo=ET)]
+    assert warm.fresh_spread_minutes(minute, frame) == minute
+
+
+def test_fresh_spread_minutes_drops_everything_before_the_first_print():
+    published = pd.date_range("2026-07-24 09:00", "2026-07-24 17:59", freq="min")
+    frame = pd.DataFrame({"TAG": range(len(published))}, index=published, dtype=float)
+    assert warm.fresh_spread_minutes(
+        [datetime.datetime(2026, 7, 24, 8, 0, tzinfo=ET)], frame
+    ) == []
+
+
 def test_the_day_slice_survives_an_empty_frame():
     assert warm.slice_spreads_for_day(pd.DataFrame(), datetime.date(2026, 7, 29),
                                       lookback=datetime.timedelta(days=5)).empty
