@@ -358,87 +358,98 @@ def cmd_fetch(args, logger: logging.Logger) -> int:
 
     client = _connect_or_restart(args, logger)
 
+    plans: Dict[str, CurvePlan] = {}
+    for curve in _curves(args):
+        plan = plan_curve(curve, work_dir=work_dir, start=_opt_date(args.start),
+                          end=_opt_date(args.end), chunk_days=args.chunk_days,
+                          min_store_curves=args.min_store_curves)
+        plans[curve] = plan
+        logger.info("=== %s: %d chunk(s), %s -> %s (%d bdays, %d on disk, %d dense in store) ===",
+                    curve, len(plan.chunks), plan.start, plan.end,
+                    plan.business_days, plan.on_disk, plan.in_store)
+
+    queue = _work_queue(plans, interleave=not args.no_interleave)
+    logger.info("%d chunk(s) queued %s",
+                len(queue), "round-robin across curves" if not args.no_interleave
+                else "curve by curve")
+
+    tag_cache = {c: tags_and_zone_for(c) for c in plans}
     restarts = 0
+    index = 0
     try:
-        for curve in _curves(args):
-            plan = plan_curve(curve, work_dir=work_dir, start=_opt_date(args.start),
-                              end=_opt_date(args.end), chunk_days=args.chunk_days,
-                              min_store_curves=args.min_store_curves)
-            logger.info("=== %s: %d chunk(s), %s -> %s (%d bdays, %d on disk) ===",
-                        curve, len(plan.chunks), plan.start, plan.end,
-                        plan.business_days, plan.on_disk)
-            tags, zone = tags_and_zone_for(curve)
-            index = 0
-            while index < len(plan.chunks):
-                chunk_start, chunk_end = plan.chunks[index]
-                t0 = time.time()
-                try:
-                    days, windows = fetch_curve(
-                        curve, chunk_start, chunk_end,
-                        work_dir=work_dir, client=client, force=args.force,
-                        freq=args.freq, recycle_every=args.recycle_every,
-                        memory_ceiling_mb=args.memory_ceiling_mb,
-                        memory_abort_mb=args.memory_abort_mb,
-                        tags=tags, timezone=zone, logger=logger,
-                    )
-                except MemoryCeilingReached as exc:
-                    if not args.auto_restart or restarts >= args.max_restarts:
-                        logger.warning(
-                            "%s stopped at %s..%s: %s. %s",
-                            curve, chunk_start, chunk_end, exc,
-                            "Re-run to resume - everything fetched is on disk."
-                            if not args.auto_restart
-                            else f"restart budget exhausted ({restarts}/{args.max_restarts}).",
-                        )
-                        state["errors"].append(f"{curve} {chunk_start}: {exc}")
-                        _write_ledger(ledger, state)
-                        return 3
-                    restarts += 1
-                    state["restarts"] = restarts
-                    logger.warning("Excel is full (%s). Restart %d/%d.",
-                                   exc, restarts, args.max_restarts)
-                    client = _restart(client, args, logger)
-                    continue  # SAME chunk, on a fresh Excel
-                except Exception as exc:  # noqa: BLE001 - one chunk must not end the run
-                    logger.error("%s %s..%s FAILED: %s: %s",
-                                 curve, chunk_start, chunk_end, type(exc).__name__, exc)
-                    state["errors"].append(f"{curve} {chunk_start}: {type(exc).__name__}: {exc}")
-                    index += 1
-                    continue
-
-                used = client.excel_memory_mb()
-                state["chunks_done"] += 1
-                state["days_written"] += days
-                state["excel_mb"] = used
-                logger.info(
-                    "%s %s..%s: %d day(s) from %d window(s) in %.0fs  [Excel %.0f MB]",
-                    curve, chunk_start, chunk_end, days, windows, time.time() - t0, used,
+        while index < len(queue):
+            curve, chunk_start, chunk_end = queue[index]
+            tags, zone = tag_cache[curve]
+            t0 = time.time()
+            try:
+                days, windows = fetch_curve(
+                    curve, chunk_start, chunk_end,
+                    work_dir=work_dir, client=client, force=args.force,
+                    freq=args.freq, recycle_every=args.recycle_every,
+                    memory_ceiling_mb=args.memory_ceiling_mb,
+                    memory_abort_mb=args.memory_abort_mb,
+                    tags=tags, timezone=zone, logger=logger,
                 )
-                _write_ledger(ledger, state)
-                index += 1
-
-                # The guard that does not depend on the inner window counter.
-                if used >= args.memory_ceiling_mb:
-                    if not args.auto_restart or restarts >= args.max_restarts:
-                        logger.warning(
-                            "Excel is at %.0f MB, at or over the %.0f MB ceiling, and "
-                            "%s. Stopping - %d day file(s) are on disk and a re-run resumes.",
-                            used, args.memory_ceiling_mb,
-                            "auto-restart is off" if not args.auto_restart
-                            else f"the restart budget is spent ({restarts}/{args.max_restarts})",
-                            state["days_written"],
-                        )
-                        _write_ledger(ledger, state)
-                        return 3
-                    restarts += 1
-                    state["restarts"] = restarts
+            except MemoryCeilingReached as exc:
+                if not args.auto_restart or restarts >= args.max_restarts:
                     logger.warning(
-                        "Excel at %.0f MB >= %.0f MB ceiling after %d chunk(s). Restart %d/%d.",
-                        used, args.memory_ceiling_mb, state["chunks_done"],
-                        restarts, args.max_restarts,
+                        "%s stopped at %s..%s: %s. %s",
+                        curve, chunk_start, chunk_end, exc,
+                        "Re-run to resume - everything fetched is on disk."
+                        if not args.auto_restart
+                        else f"restart budget exhausted ({restarts}/{args.max_restarts}).",
+                    )
+                    state["errors"].append(f"{curve} {chunk_start}: {exc}")
+                    _write_ledger(ledger, state)
+                    return 3
+                restarts += 1
+                state["restarts"] = restarts
+                logger.warning("Excel is full (%s). Restart %d/%d.",
+                               exc, restarts, args.max_restarts)
+                client = _restart(client, args, logger)
+                continue  # SAME chunk, on a fresh Excel
+            except Exception as exc:  # noqa: BLE001 - one chunk must not end the run
+                logger.error("%s %s..%s FAILED: %s: %s",
+                             curve, chunk_start, chunk_end, type(exc).__name__, exc)
+                state["errors"].append(f"{curve} {chunk_start}: {type(exc).__name__}: {exc}")
+                index += 1
+                continue
+
+            used = client.excel_memory_mb()
+            state["chunks_done"] += 1
+            state["days_written"] += days
+            state["excel_mb"] = used
+            state["last"] = f"{curve} {chunk_start}..{chunk_end}"
+            logger.info(
+                "[%d/%d] %s %s..%s: %d day(s) from %d window(s) in %.0fs  [Excel %.0f MB]",
+                index + 1, len(queue), curve, chunk_start, chunk_end, days, windows,
+                time.time() - t0, used,
+            )
+            _write_ledger(ledger, state)
+            index += 1
+
+            # The guard that does not depend on the inner window counter.
+            if used >= args.memory_ceiling_mb:
+                if not args.auto_restart or restarts >= args.max_restarts:
+                    logger.warning(
+                        "Excel is at %.0f MB, at or over the %.0f MB ceiling, and "
+                        "%s. Stopping - %d day file(s) are on disk and a re-run resumes.",
+                        used, args.memory_ceiling_mb,
+                        "auto-restart is off" if not args.auto_restart
+                        else f"the restart budget is spent ({restarts}/{args.max_restarts})",
+                        state["days_written"],
                     )
                     _write_ledger(ledger, state)
-                    client = _restart(client, args, logger)
+                    return 3
+                restarts += 1
+                state["restarts"] = restarts
+                logger.warning(
+                    "Excel at %.0f MB >= %.0f MB ceiling after %d chunk(s). Restart %d/%d.",
+                    used, args.memory_ceiling_mb, state["chunks_done"],
+                    restarts, args.max_restarts,
+                )
+                _write_ledger(ledger, state)
+                client = _restart(client, args, logger)
     finally:
         try:
             client.close()
@@ -450,6 +461,44 @@ def cmd_fetch(args, logger: logging.Logger) -> int:
                 state["chunks_done"], state["days_written"], state["restarts"],
                 len(state["errors"]))
     return 1 if state["errors"] else 0
+
+
+def _work_queue(
+    plans: Dict[str, CurvePlan], *, interleave: bool = True
+) -> List[Tuple[str, datetime.date, datetime.date]]:
+    """Every chunk to fetch, ordered so that stopping early costs the least.
+
+    Two orderings, and the difference only shows up when the run does not finish
+    - which, at ~20 hours and a 13-25 minute Excel restart every five or six
+    chunks, is the case worth designing for.
+
+    **Curve by curve** finishes ``USD-SOFR-1D`` completely and may never reach
+    ``JPY-TONAR-1D`` at all.
+
+    **Round-robin** (the default) takes one chunk from each curve in turn, so a
+    run cut off at any point has walked all five curves back to roughly the same
+    date. Every curve is already fetched newest-first, so that date is the recent
+    past - the part a reader asks for first. Five curves at three years each is a
+    more useful cache than two curves at ten and three at nothing, and the ask
+    named all five.
+
+    It costs nothing: each chunk is an independent ``fetch_curve`` call with its
+    own tag list, and the add-in has no per-curve state to warm.
+    """
+    ordered = [(c, p) for c, p in plans.items() if p.chunks]
+    if not interleave:
+        return [(c, s, e) for c, p in ordered for s, e in p.chunks]
+    out: List[Tuple[str, datetime.date, datetime.date]] = []
+    depth = 0
+    while True:
+        added = False
+        for curve, plan in ordered:
+            if depth < len(plan.chunks):
+                out.append((curve, plan.chunks[depth][0], plan.chunks[depth][1]))
+                added = True
+        if not added:
+            return out
+        depth += 1
 
 
 def _connect_or_restart(args, logger: logging.Logger) -> Any:
@@ -473,7 +522,22 @@ def _connect_or_restart(args, logger: logging.Logger) -> Any:
         )
         return _restart(None, args, logger)
     assert_safe_to_connect(args.memory_abort_mb, what="the deep intraday warm")
-    client = CitiVelocityExcelClient.connect(workbook_tag=args.workbook_tag)
+    try:
+        client = CitiVelocityExcelClient.connect(workbook_tag=args.workbook_tag)
+    except Exception as exc:  # noqa: BLE001
+        # An Excel that is UP but still re-authenticating raises
+        # AddInNotSignedInError for ~13 minutes and prints nothing in between.
+        # Refusing there would mean a run relaunched during that window dies on
+        # a state that resolves itself - which is precisely when a relaunch
+        # happens, since the previous run is what restarted Excel.
+        from MDP.CitiVelocityExcel.supervisor import wait_for_addin
+
+        logger.warning("connect failed (%s); waiting for the add-in to sign in.", exc)
+        client = wait_for_addin(
+            timeout=getattr(args, "ready_timeout", 1800.0),
+            workbook_tag=args.workbook_tag,
+            logger=logger,
+        )
     logger.info("connected to Excel (%s sheets, %.0f MB)",
                 client.sheet_count(), client.excel_memory_mb())
     return client
@@ -1103,6 +1167,12 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     f.add_argument("--memory-ceiling-mb", type=float, default=3000.0)
     f.add_argument("--memory-abort-mb", type=float, default=3800.0)
+    f.add_argument(
+        "--no-interleave", action="store_true",
+        help="finish one curve before starting the next. The default walks all "
+             "curves back together, so a run that stops early has covered every "
+             "curve rather than the first two.",
+    )
     f.add_argument("--auto-restart", action="store_true",
                    help="restart Excel at the ceiling. Rescues unsaved workbooks first.")
     f.add_argument("--max-restarts", type=int, default=20)

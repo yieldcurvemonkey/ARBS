@@ -293,3 +293,52 @@ def test_the_sample_spreads_rather_than_clustering():
     assert picks == sorted(picks)
     assert len(set(picks)) == 4
     assert (picks[-1] - picks[0]).days > 100
+
+
+# --------------------------------------------------------------------------- #
+#                              the work queue                                  #
+# --------------------------------------------------------------------------- #
+
+
+def _plan(curve, n):
+    plan = D.CurvePlan(curve_name=curve, start=datetime.date(2020, 1, 1),
+                       end=datetime.date(2026, 1, 1))
+    plan.chunks = [
+        (datetime.date(2026, 1, 1) - datetime.timedelta(days=60 * (i + 1)),
+         datetime.date(2026, 1, 1) - datetime.timedelta(days=60 * i))
+        for i in range(n)
+    ]
+    return plan
+
+
+def test_the_queue_walks_every_curve_before_deepening_any_of_them():
+    """A run cut off early must have covered all five curves, not the first two.
+
+    At ~20 hours with a 13-25 minute Excel restart every five or six chunks, not
+    finishing is the case worth designing for - and the request named five
+    curves, not the two that happen to sort first.
+    """
+    plans = {"A": _plan("A", 3), "B": _plan("B", 5), "C": _plan("C", 1)}
+    queue = D._work_queue(plans, interleave=True)
+    assert [c for c, _, _ in queue[:3]] == ["A", "B", "C"]
+    assert [c for c, _, _ in queue[3:5]] == ["A", "B"]
+    assert len(queue) == 9
+
+
+def test_interleaving_can_be_turned_off_and_then_it_is_curve_by_curve():
+    plans = {"A": _plan("A", 2), "B": _plan("B", 2)}
+    queue = D._work_queue(plans, interleave=False)
+    assert [c for c, _, _ in queue] == ["A", "A", "B", "B"]
+
+
+def test_a_curve_with_nothing_to_do_is_not_in_the_queue():
+    plans = {"A": _plan("A", 2), "DONE": _plan("DONE", 0)}
+    queue = D._work_queue(plans, interleave=True)
+    assert {c for c, _, _ in queue} == {"A"}
+
+
+def test_every_curve_keeps_its_newest_first_order_inside_the_queue():
+    plans = {"A": _plan("A", 4), "B": _plan("B", 4)}
+    for curve in ("A", "B"):
+        starts = [s for c, s, _ in D._work_queue(plans, interleave=True) if c == curve]
+        assert starts == sorted(starts, reverse=True)
