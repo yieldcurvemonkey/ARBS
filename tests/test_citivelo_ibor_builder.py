@@ -169,3 +169,48 @@ def test_the_registry_only_holds_measured_currencies():
     """RATES.SWAP_LIBOR coverage is per currency; GBP and JPY were empty in 2026-08."""
     assert set(IBOR_CURVES) == {"EUR-EURIBOR-6M"}
     assert IBOR_CURVES["EUR-EURIBOR-6M"].rl_spec == "eur_irs6"
+
+
+def test_the_curve_is_registered_so_it_does_not_rebuild_on_the_WRONG_CALENDAR():
+    """`CurveStore.reconstruct_curve` falls back to act360/**nyc**/mf silently.
+
+    It warns once per reference_key and carries on, so a EUR curve rebuilt on the
+    New York calendar shows up as a log line nobody reads and date arithmetic
+    that is quietly wrong. MEASURED on 60 real stored EURIBOR days: tying the
+    rebuilt curve back to Citi's published par rate gave a worst error of
+    **0.0452 bp** unregistered and **0.0001 bp** registered - a 450x difference
+    from one dictionary entry.
+    """
+    from Query.IRSwaps.backends.rateslib.rl_curve_definitions_map import (
+        RATESLIB_CURVE_DEFINITIONS,
+    )
+
+    from MDP.CitiVelocityExcel.curves import ibor_builder
+
+    ibor_builder.register()
+    row = RATESLIB_CURVE_DEFINITIONS["EUR-EURIBOR-6M"]
+    assert row["Calendar"] == "tgt", "a EUR curve must rebuild on TARGET, not nyc"
+    assert row["DayCounter"] == "act360"
+    assert row["BusinessConvention"] == "mf"
+    assert row["SettlementDays"] == 2
+    assert row["ReferenceRate"] == "eur_irs6"
+
+
+def test_registration_never_overwrites_someone_elses_definition():
+    """`USD-SOFR-1D` is referenced hundreds of times; a new source redefining a
+    name in place would move numbers it never touched."""
+    from Query.IRSwaps.backends.rateslib.rl_curve_definitions_map import (
+        RATESLIB_CURVE_DEFINITIONS,
+    )
+
+    from MDP.CitiVelocityExcel.curves import ibor_builder
+
+    RATESLIB_CURVE_DEFINITIONS["EUR-EURIBOR-6M"] = {"Calendar": "someone-elses"}
+    try:
+        assert ibor_builder.register() == []
+        assert RATESLIB_CURVE_DEFINITIONS["EUR-EURIBOR-6M"]["Calendar"] == "someone-elses"
+        assert ibor_builder.register(force=True) == ["EUR-EURIBOR-6M"]
+        assert RATESLIB_CURVE_DEFINITIONS["EUR-EURIBOR-6M"]["Calendar"] == "tgt"
+    finally:
+        RATESLIB_CURVE_DEFINITIONS.pop("EUR-EURIBOR-6M", None)
+        ibor_builder.register()

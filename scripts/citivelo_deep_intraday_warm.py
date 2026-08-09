@@ -1116,9 +1116,14 @@ def _register_curve_definitions() -> None:
     the New York calendar instead of TARGET is a different curve, and the only
     signal is a log line.
     """
+    from MDP.CitiVelocityExcel.curves import ibor_builder
     from MDP.IRSwaps.CITIVELO_EXCEL.curve_definitions import register
 
     register(quantlib=False)
+    # The twenty OIS curves come from the call above; an IBOR curve is not in
+    # that table and would otherwise rebuild on act360/nyc/mf - a EUR curve on
+    # the New York calendar, warned once and then carried on with.
+    ibor_builder.register()
 
 
 def _store_curves_for_day(store: Any, asset: str, day: datetime.date):
