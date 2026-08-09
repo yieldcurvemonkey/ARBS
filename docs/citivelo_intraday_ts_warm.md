@@ -67,6 +67,41 @@ per day; some days run to 23:00). Sundays and US bond-market holidays hold no
 priced rows by design — `IRSwapsTB` filters USD-SOFR-1D reference points to US
 government-bond business days.
 
+### Swap spreads and Monday's small hours
+
+Citi publishes `SWAP_SPREAD` only during its session, but the minute CurveStore
+holds the Sunday-evening open. A Monday 01:44 curve therefore meets a Friday
+17:59 print — 55.8 hours against the 12-hour limit — and the value map refuses it,
+correctly, one `StaleCurveError` per (tenor, minute).
+
+**Those minutes can never be cached**, because there is no value to cache. The
+warm skips them, but a *read* that asks for them still pays: the missing pairs
+drag the whole batch back through the pricer (see above), and each spread query
+re-raises with a full traceback, on every read, forever. There is no negative
+caching in `IRSwapsTB`.
+
+So bound an intraday swap-spread read to the session:
+
+```python
+start = NYC_tz.localize(datetime.datetime(d.year, d.month, d.day, 7, 0))   # not 01:00
+```
+
+Reading a Monday from 01:00 costs ~30 s and several thousand tracebacks for
+columns that will be `NaN` regardless.
+
+### Not warmed: IMM structures
+
+The universe is calendar tenors only — spot (`10y`) and `<forward>x<tenor>`
+(`5yx5y`). Relative IMM pairs (`IMM_1xIMM_2`, which `scripts/stirf_curve_service.py`
+warms for STIRT curves) and explicit IMM codes (`IMM_M27xIMM_U27`) reprice on
+demand.
+
+Relative IMM pairs are a reasonable follow-up config: adding them changes the
+config fingerprint, so every day re-runs — but a re-run reads its outrights and
+spreads from cache, so it costs the IMM pricing only, not another full pass.
+Explicit IMM codes are an unbounded vocabulary that shifts with the reference
+date and are deliberately left on demand.
+
 ## Running it
 
 ```bash

@@ -1051,6 +1051,41 @@ def prepare_spill(
     return made
 
 
+def unspill(*, ts_dir: Path, logger: logging.Logger) -> int:
+    """Undo :func:`prepare_spill`: move every junctioned symbol back, then unlink.
+
+    Symmetrical on purpose. A spill is a judgement about a machine at a moment -
+    measured 2026-08-09, moving to a busy USB volume ran at 4 files/s where the
+    same move to an idle one ran at 39 - and a judgement that cannot be reversed
+    with one command is one nobody will make. Order matters: the data comes back
+    FIRST and the junction is removed only once the copy is on the local volume.
+    """
+    moved = 0
+    for link in sorted(ts_dir.glob("asset=*")):
+        if not _is_reparse_point(link):
+            continue
+        # A junction's target comes back with the \\?\ extended-length prefix,
+        # which robocopy rejects outright ("the filename, directory name, or
+        # volume label syntax is incorrect").
+        raw = os.readlink(link)
+        target = Path(raw[4:] if raw.startswith("\\\\?\\") else raw)
+        staging = ts_dir / f"{link.name}.unspill"
+        if target.is_dir():
+            _robocopy_move(target, staging)
+        link.unlink(missing_ok=True)
+        if staging.exists():
+            staging.rename(link)
+        else:
+            link.mkdir(parents=True, exist_ok=True)
+        with contextlib.suppress(OSError):
+            target.rmdir()
+        moved += 1
+        if moved % 25 == 0:
+            logger.info("  unspill %d ...", moved)
+    logger.info("unspill: %d symbol director(ies) back on %s", moved, ts_dir)
+    return moved
+
+
 def _is_reparse_point(path: Path) -> bool:
     """True for a junction or symlink. ``Path.is_symlink`` misses NTFS junctions."""
     try:
@@ -1455,7 +1490,7 @@ def cmd_warm(args, logger: logging.Logger) -> int:
 
     stopped_for_disk = False
 
-    def _disk_ok() -> bool:
+    def _disk_ok(*, wait: bool = True) -> bool:
         """Block until there is room, then True. False once waiting has given up.
 
         A cache is not worth a full disk: this run writes ~7 GB of Parquet across
@@ -1463,12 +1498,17 @@ def cmd_warm(args, logger: logging.Logger) -> int:
         (symbol, day) partition is its own directory holding one small file.
 
         It WAITS rather than stopping, because on this machine free space is not
-        monotonic - measured 2026-08-08 it moved between 6 GB and 44 GB inside a
+        monotonic - measured 2026-08-08/09 it moved between 6 GB and 44 GB inside a
         single minute while other backfills churned a 140 GB pile of ZODB caches.
         Stopping on the first dip would end an eight-hour run over a condition
         that cleared thirty seconds later; waiting rides it out and still refuses
         to be the job that fills the disk. Only a floor that holds for
         ``--disk-wait-minutes`` ends the run, and the ledger makes that free.
+
+        ``wait=False`` answers immediately. The caller passes it while work is
+        still in flight: blocking there would leave ten workers finished and
+        unharvested for up to three hours, so a full disk would cost the results
+        of the day it was already holding.
         """
         nonlocal stopped_for_disk
         if stopped_for_disk:
@@ -1481,6 +1521,8 @@ def cmd_warm(args, logger: logging.Logger) -> int:
                 if warned:
                     logger.info("resuming: %s back to %.1f GB free", ts_dir, remaining)
                 return True
+            if not wait:
+                return False
             if time.time() >= deadline:
                 logger.error(
                     "STOPPING: %s has %.1f GB free, at or below the %.1f GB floor, and has "
@@ -1519,7 +1561,12 @@ def cmd_warm(args, logger: logging.Logger) -> int:
                 # every slice in memory at once for no gain.
                 inflight = max(int(args.workers) * 2, 4)
                 while queue or pending:
-                    while queue and len(pending) < inflight and _disk_ok():
+                    while queue and len(pending) < inflight:
+                        # Only block on the disk when NOTHING is in flight; with
+                        # workers running, a full volume means "stop topping up
+                        # and go harvest", not "sleep on ten finished days".
+                        if not _disk_ok(wait=not pending):
+                            break
                         day = queue.pop(0)
                         pending[pool.submit(warm_one_day, _task(day))] = day
                     if not pending:
@@ -1798,7 +1845,20 @@ def _build_parser() -> argparse.ArgumentParser:
     status = sub.add_parser("status", help="ledger summary")
     _add_config_args(status)
     status.set_defaults(func=cmd_status)
+
+    unspill_cmd = sub.add_parser(
+        "unspill", help="move every junctioned symbol directory back to the local volume"
+    )
+    _add_config_args(unspill_cmd)
+    unspill_cmd.set_defaults(func=cmd_unspill)
     return parser
+
+
+def cmd_unspill(args, logger: logging.Logger) -> int:
+    cfg = _config_from_args(args)
+    ts_dir = Path(cfg.ts_base_dir or (_REPO_ROOT / "data" / "ts"))
+    unspill(ts_dir=ts_dir, logger=logger)
+    return 0
 
 
 def main(argv: Optional[List[str]] = None) -> int:
