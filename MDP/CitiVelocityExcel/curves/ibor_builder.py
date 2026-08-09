@@ -124,6 +124,54 @@ IBOR_CURVES: Dict[str, IborCurveSpec] = {
 }
 
 
+def rateslib_definition(spec: IborCurveSpec) -> Dict[str, Any]:
+    """The ``RATESLIB_CURVE_DEFINITIONS`` row for one IBOR curve."""
+    return {
+        "UseCase": "Fixed_Float_IBOR",
+        "SingleorMultiCurrency": "Single Currency",
+        "ReferenceRate": spec.rl_spec,
+        "NotionalCurrency": spec.curve_name.split("-", 1)[0].lower(),
+        "NotionalSchedule": "Constant",
+        "DeliveryType": "PHYS",
+        "DayCounter": spec.convention,
+        "Calendar": spec.calendar,
+        "BusinessConvention": spec.modifier,
+        "SettlementDays": int(spec.spot_lag),
+        "SDR_UPIs": [],
+        "Provenance": "citivelo_excel_ibor",
+    }
+
+
+def register(*, force: bool = False) -> List[str]:
+    """Teach ``RATESLIB_CURVE_DEFINITIONS`` about these curves. Idempotent.
+
+    Without this, ``CurveStore.reconstruct_curve`` does not find the stored
+    ``reference_key`` and silently falls back to **act360 / nyc / mf** — a EUR
+    curve rebuilt on the *New York* calendar. It warns once per key and then
+    carries on, so the only symptom is a log line nobody reads and date
+    arithmetic that is quietly wrong for anything priced off the rebuilt curve.
+
+    ``MDP.IRSwaps.CITIVELO_EXCEL.curve_definitions.register`` does this for the
+    twenty OIS curves; an IBOR curve is not in that table and needs its own call.
+    An existing name is never overwritten unless ``force`` — another source may
+    already define it, and redefining a name in place would move numbers this
+    package never touched.
+    """
+    from Query.IRSwaps.backends.rateslib.rl_curve_definitions_map import (
+        RATESLIB_CURVE_DEFINITIONS,
+    )
+
+    added: List[str] = []
+    for name, spec in IBOR_CURVES.items():
+        if name in RATESLIB_CURVE_DEFINITIONS and not force:
+            continue
+        RATESLIB_CURVE_DEFINITIONS[name] = rateslib_definition(spec)
+        added.append(name)
+    if added:
+        _logger.info("registered rateslib curve definitions for %s", ", ".join(added))
+    return added
+
+
 def ibor_spec_for(curve_name: str) -> IborCurveSpec:
     token = str(curve_name).strip().upper()
     if token in IBOR_CURVES:
