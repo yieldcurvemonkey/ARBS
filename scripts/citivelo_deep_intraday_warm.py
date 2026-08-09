@@ -52,7 +52,20 @@ Running it
     python scripts/citivelo_deep_intraday_warm.py plan
     python scripts/citivelo_deep_intraday_warm.py fetch --auto-restart
     python scripts/citivelo_deep_intraday_warm.py build --workers 8
+    python scripts/citivelo_deep_intraday_warm.py verify --per-era 5
     python scripts/citivelo_deep_intraday_warm.py status
+
+**Start ``fetch`` DETACHED**, not as a child of a shell you might stop::
+
+    Start-Process -FilePath <env>\python.exe -WindowStyle Hidden `
+        -ArgumentList '-u','scripts\citivelo_deep_intraday_warm.py','fetch','--auto-restart' `
+        -RedirectStandardError logs\deep_intraday_fetch.err
+
+Excel is started as a child of whatever runs this, so killing the backfill takes
+its Excel with it and the next run pays a fresh 13-25 minute sign-in. The driver
+recovers - it launches Excel when there is none - but the twenty minutes are
+real. Progress is in the log and in ``_deep_warm_ledger.json`` beside the day
+files; ``plan`` re-run shows the remaining chunk count shrinking.
 """
 
 from __future__ import annotations
@@ -143,11 +156,12 @@ HORIZONS: Dict[str, Horizon] = {
     )
 }
 
-#: What the ten-year request actually resolves to, in run order. Deepest history
-#: last: the shallow curves finish quickly and bank their days before the long
-#: ones start consuming Excel sessions. ``EUR-EONIA-1D`` is not itself a
-#: requested curve - it is the discount curve the pre-2021 EURIBOR era needs, and
-#: fetching it is what keeps that era from being self-discounted.
+#: What the ten-year request actually resolves to. The ORDER of this tuple is not
+#: the order the fetch runs in - :func:`_work_queue` interleaves these
+#: round-robin so an interrupted run has covered every curve rather than the
+#: first two. ``EUR-EONIA-1D`` is not itself a requested curve: it is the
+#: discount curve the pre-2021 EURIBOR era needs, and fetching it is what keeps
+#: that era from being self-discounted.
 DEFAULT_CURVES: Tuple[str, ...] = (
     "USD-SOFR-1D",
     "EUR-ESTR-1D",
