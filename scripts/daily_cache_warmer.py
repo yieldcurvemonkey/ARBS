@@ -34,6 +34,18 @@ logging.basicConfig(
 )
 log = logging.getLogger("cache-warmer")
 
+#: Where the run's own record goes. ``/logs`` is gitignored.
+#:
+#: This exists because there was no record at all. The scheduled task's action
+#: carries no redirection, so the SUMMARY table went to a console nobody reads,
+#: and Windows' own ``TaskScheduler/Operational`` log is disabled on this
+#: machine - so "did last night's warm work?" had no answer anywhere except by
+#: inspecting the CurveStore and inferring. Dated per run rather than rotated on
+#: a clock, because two tasks (weekday 18:15 and Saturday 10:00) write here and a
+#: rotating handler shared between processes truncates whichever one loses.
+LOG_DIR = os.path.join(REPO_ROOT, "logs", "cache_warmer")
+LOG_RETENTION = 60
+
 N_JOBS = 12
 
 # ─────────────────────────────────────────────────────────────────────
@@ -363,12 +375,24 @@ def _business_days(start, end):
     return [d.date() for d in pd.bdate_range(start, end)]
 
 
+#: Every non-zero subprocess exit seen this run, as ``(label, returncode)``.
+#:
+#: A job that shells out is deliberately allowed to continue past a failed step -
+#: an intraday fetch that dies still leaves work for the build and EOD phases to
+#: do. What was NOT deliberate is that the failure then vanished: every caller of
+#: :func:`_run` discards the return code, ``main`` caught nothing, and the process
+#: exited 0. Recorded here so the run can end honestly even though the step it
+#: lost was survivable.
+_SUBPROCESS_FAILURES: list[tuple[str, int]] = []
+
+
 def _run(cmd, label):
     """Run a warm script as a subprocess and report, without killing the run."""
     log.info("  %s: %s", label, " ".join(cmd[2:]))
     result = subprocess.run(cmd, cwd=REPO_ROOT)
     if result.returncode != 0:
         log.warning("  %s exited %d", label, result.returncode)
+        _SUBPROCESS_FAILURES.append((label, result.returncode))
     return result.returncode
 
 
@@ -817,6 +841,44 @@ JOBS = [j.as_tuple() for j in WARM_JOBS]
 # Main
 # ─────────────────────────────────────────────────────────────────────
 
+def _start_run_log(stamp=None):
+    """Attach a per-run file handler and prune old ones. Returns the path.
+
+    Never fatal: a warm that cannot open its log should still warm.
+    """
+    try:
+        os.makedirs(LOG_DIR, exist_ok=True)
+        stamp = stamp or datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+        path = os.path.join(LOG_DIR, f"cache_warmer_{stamp}.log")
+        handler = logging.FileHandler(path, encoding="utf-8")
+        handler.setLevel(logging.INFO)
+        handler.setFormatter(
+            logging.Formatter(
+                "%(asctime)s [%(levelname)s] %(message)s", datefmt="%Y-%m-%d %H:%M:%S"
+            )
+        )
+        # Attached to THIS logger, not to root. ``basicConfig`` is a no-op once
+        # root has a handler, so root's level is whatever the first importer left
+        # it at - and under pytest the logging plugin owns root outright. Neither
+        # is a dependency worth having for the only durable record of the run.
+        log.addHandler(handler)
+        log.setLevel(logging.INFO)
+
+        existing = sorted(
+            f for f in os.listdir(LOG_DIR)
+            if f.startswith("cache_warmer_") and f.endswith(".log")
+        )
+        for stale in existing[:-LOG_RETENTION]:
+            try:
+                os.remove(os.path.join(LOG_DIR, stale))
+            except OSError:
+                pass
+        return path
+    except Exception as exc:  # noqa: BLE001 - logging must not break the warm
+        log.warning("could not open a run log under %s (%s)", LOG_DIR, exc)
+        return None
+
+
 def main():
     parser = argparse.ArgumentParser(description="Daily cache warmer for notebook sources")
     parser.add_argument("--date", type=str, help="Specific date (YYYY-MM-DD)")
@@ -828,7 +890,11 @@ def main():
     if args.list:
         print("Available jobs (store warms must precede the value jobs that read them):")
         print(describe(WARM_JOBS))
-        return
+        return 0
+
+    log_path = _start_run_log()
+    if log_path:
+        log.info("run log: %s", log_path)
 
     # Determine date range
     if args.date:
@@ -867,23 +933,36 @@ def main():
 
     # Run jobs
     results = []
+    failed = 0
     for idx, (name, fn) in selected:
         log.info("─" * 60)
         log.info("Job %d: %s", idx + 1, name)
         t0 = time.perf_counter()
+        before = len(_SUBPROCESS_FAILURES)
         try:
             result = fn(start, end)
             elapsed = time.perf_counter() - t0
-            shape = getattr(result, "shape", None)
-            status = f"OK ({elapsed:.1f}s"
-            if shape:
-                status += f", {shape[0]} rows x {shape[1]} cols"
-            status += ")"
+            # A job that shells out can return normally having lost a step: every
+            # caller of _run discards the code on purpose, so the only evidence
+            # is what _run recorded while this job was running.
+            lost = _SUBPROCESS_FAILURES[before:]
+            if lost:
+                detail = ", ".join(f"{label} exited {code}" for label, code in lost)
+                status = f"FAILED ({elapsed:.1f}s): {len(lost)} step(s) failed - {detail}"
+                failed += 1
+                log.error("  %s", status)
+            else:
+                shape = getattr(result, "shape", None)
+                status = f"OK ({elapsed:.1f}s"
+                if shape:
+                    status += f", {shape[0]} rows x {shape[1]} cols"
+                status += ")"
+                log.info("  %s", status)
             results.append((name, status))
-            log.info("  %s", status)
         except Exception as e:
             elapsed = time.perf_counter() - t0
             results.append((name, f"FAILED ({elapsed:.1f}s): {e}"))
+            failed += 1
             log.exception("  FAILED: %s", e)
 
     # Summary
@@ -893,6 +972,16 @@ def main():
     for name, status in results:
         log.info("  %-30s %s", name, status)
 
+    # The exit code is the only thing the Windows scheduler records, so it has to
+    # mean something. It used to be 0 unconditionally - every job could fail and
+    # the task still read rc=0x00000000, which is how a warm can look healthy for
+    # weeks while producing nothing.
+    if failed:
+        log.error("%d of %d job(s) FAILED", failed, len(results))
+        return 1
+    log.info("all %d job(s) OK", len(results))
+    return 0
+
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())
