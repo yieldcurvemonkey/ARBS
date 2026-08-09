@@ -23,6 +23,20 @@ sell-initiated one, taken from MBO's true aggressor flag rather than from a
 tick-rule proxy, so the usual 15-20% misclassification is simply absent.  With
 that convention every measure below is positive when the trade paid, whichever
 side it was.
+
+**One policy on a one-sided book, and it holds everywhere in this module: a mid
+that did not exist is never replaced by one that did.**  Both places that need
+the state of the book at a moment -- :func:`_forward_mid` at ``t + h`` and
+:func:`kyle_lambda` at a bar close -- carry the state forward including the
+absence of a mid, rather than reaching back for the last two-sided quote.  The
+alternative is worse than it looks.  Filling a one-sided stretch with the last
+real mid does not merely add noise: it manufactures an observation whose price
+change is exactly zero, and it does so precisely in the stretches where liquidity
+was worst, so every fabricated point pulls an impact estimate toward zero from
+the direction that flatters it.  Measured on the fixture in
+``tests/test_mbo_impact.py``, making a single bar one-sided moved ``lam`` from
+1.00 to 0.75 and ``r2`` from 0.923 to 0.519 while ``n_bars`` stayed at 3 -- the
+count, the one number a caller checks, gave no sign that a mid had been invented.
 """
 from __future__ import annotations
 
@@ -103,7 +117,8 @@ def _forward_mid(target: pd.Series, tob: pd.DataFrame) -> np.ndarray:
       would silently mark a trade against the last *two-sided* mid, which can be
       minutes old -- a plausible number where in truth there was no mid at all.
       Keeping them lets the NaN propagate to the realised spread, which is the
-      honest answer.
+      honest answer.  This is the module-wide policy stated at the top of the
+      file; :func:`kyle_lambda` implements the same rule at a bar close.
     * **Beyond the last observation the answer is NaN, not the last quote.**  A
       backward as-of always finds something, so a trade forty seconds before the
       final quote of the day would otherwise get a sixty-second realised spread
@@ -179,6 +194,11 @@ def effective_spread(
     break and land on the previous session's close.  Read one session at a time
     if that matters.
 
+    An empty tape is answered with an empty typed frame, but only *after* the
+    book has been checked, never instead of checking it: an empty ``tob`` raises
+    and a book covering a second instrument raises, whether the tape has rows or
+    not.  Zero rows is not a licence to publish a column that was never measured.
+
     Returns ``trades`` with the new columns appended.  Row order, index and every
     existing column are preserved; nothing is dropped, including trades whose
     aggressor is unknown (their measures are NaN).
@@ -186,6 +206,22 @@ def effective_spread(
     if trades is None:
         raise ValueError("trades is None; pass the frame from read_trades")
     hs = _horizons(horizons_s)
+
+    # Everything that can be checked without the tape is checked before the tape
+    # is looked at.  The empty-trades branch used to come first, so an empty tape
+    # skipped both guards below: it returned ``real_`` and ``impact_`` columns
+    # that had never been measured against any book -- the exact shape the
+    # empty-``tob`` raise exists to refuse -- and it did so for a tape and a book
+    # that need not have described the same instrument.  A column's presence is a
+    # claim that it was measured, and no row count makes that claim cheaper.
+    _only_symbol(trades, tob)
+    if tob is not None:
+        if len(tob) == 0:
+            raise ValueError(
+                "tob is empty, so there is no forward mid to measure a realised "
+                "spread against; pass tob=None to compute the effective spread alone"
+            )
+        _require(tob, ("ts_recv", "mid"), "tob")
 
     if len(trades) == 0:
         out = trades.copy()
@@ -198,7 +234,10 @@ def effective_spread(
                 out[f"impact_{tag}"] = np.zeros(0, dtype=float)
         return out
 
-    _only_symbol(trades, tob)
+    # The tape's own columns are required only once there is a tape.  A session
+    # missing from the store comes back from ``read_trades`` as a frame with no
+    # columns at all, and demanding ``prev_mid`` of it would turn a quiet day into
+    # an exception in the middle of a sweep.
     _require(trades, ("ts_recv", "price", "prev_mid", "aggressor"), "trades")
 
     d = _direction(trades)
@@ -210,13 +249,6 @@ def effective_spread(
     out["eff"] = eff
     if tob is None:
         return out
-
-    if len(tob) == 0:
-        raise ValueError(
-            "tob is empty, so there is no forward mid to measure a realised spread "
-            "against; pass tob=None to compute the effective spread alone"
-        )
-    _require(tob, ("ts_recv", "mid"), "tob")
 
     for h in hs:
         tag = f"{h:g}s"
@@ -253,6 +285,14 @@ def impact_by_size(
     With ``tob=None`` the realised and impact columns are present and NaN -- the
     columns are part of this frame's contract, and dropping them would make the
     two call shapes concatenate into a ragged table.
+
+    A tape with no trades in it is a day on which every bucket was empty, and it
+    is answered with the same one-row-per-bucket frame as any other day: the bins
+    are an argument, so their shape is known before a single trade is read, and a
+    zero-row frame here would break the very promise the fixed shape exists to
+    make.  The book is not consulted on that path -- with nothing to measure there
+    is nothing to measure it against -- so an empty ``tob`` alongside an empty
+    tape is not an error here, unlike in :func:`effective_spread`.
     """
     cols = ["size_lo", "size_hi", "n", "volume",
             "eff_median", "real_median", "impact_median"]
@@ -261,15 +301,18 @@ def impact_by_size(
         raise ValueError(
             f"bins must be non-empty and strictly increasing, got {tuple(bins)}"
         )
+    size_lo = edges
+    size_hi = np.append(edges[1:], np.inf)
 
     if trades is None or len(trades) == 0:
         return pd.DataFrame({
-            "size_lo": np.zeros(0, dtype=float), "size_hi": np.zeros(0, dtype=float),
-            "n": np.zeros(0, dtype="int64"), "volume": np.zeros(0, dtype="int64"),
-            "eff_median": np.zeros(0, dtype=float),
-            "real_median": np.zeros(0, dtype=float),
-            "impact_median": np.zeros(0, dtype=float),
-        })
+            "size_lo": size_lo, "size_hi": size_hi,
+            "n": np.zeros(edges.size, dtype="int64"),
+            "volume": np.zeros(edges.size, dtype="int64"),
+            "eff_median": np.full(edges.size, np.nan),
+            "real_median": np.full(edges.size, np.nan),
+            "impact_median": np.full(edges.size, np.nan),
+        })[cols]
 
     _require(trades, ("size",), "trades")
     e = effective_spread(trades, tob, horizons_s=(horizon_s,))
@@ -308,8 +351,8 @@ def impact_by_size(
     grp = g.groupby("bucket", sort=True)
     full = pd.RangeIndex(len(edges))
     out = pd.DataFrame({
-        "size_lo": edges,
-        "size_hi": np.append(edges[1:], np.inf),
+        "size_lo": size_lo,
+        "size_hi": size_hi,
         "n": grp.size().reindex(full, fill_value=0).to_numpy(dtype="int64"),
         "volume": grp["size"].sum().reindex(full, fill_value=0).to_numpy(dtype="int64"),
         "eff_median": grp["eff"].median().reindex(full).to_numpy(dtype=float),
@@ -343,6 +386,34 @@ def kyle_lambda(tob: pd.DataFrame, trades: pd.DataFrame,
     of each date has no predecessor, so a whole overnight gap is not charged to
     one minute of volume.  This needs the ``date`` column that ``read_tob`` adds.
 
+    **A bar's mid is the state of the book at the bar's close, and a one-sided
+    close has no mid.**  This is the module policy stated at the top of the file,
+    and it is the same rule :func:`_forward_mid` applies at ``t + h``.  Two
+    consequences follow, both deliberate.  The bar itself drops out, and so does
+    the next one, because a difference needs both ends -- comparing the following
+    bar against the last bar that *did* have a mid would charge a move spanning a
+    one-sided stretch to a single bar's volume.  And a bar with no quote at all
+    inherits the previous close *including its absence*: the book does not become
+    two-sided by nobody touching it.  The ordinary forward-fill is what this
+    replaces, and it is not a small correction -- see the module docstring for the
+    measured 1.00-to-0.75 shift it produced with ``n_bars`` unchanged.
+
+    **Bars are ordered before the close is taken.**  Every record inside a CME
+    packet shares a timestamp, so without sorting on ``('ts_recv', 'sequence')``
+    the "state at the close" would be whichever row of that packet happened to
+    land last in the file.
+
+    **Consecutive bars can be far apart, and ``d_mid`` does not know it.**  Only
+    bars in which something happened exist, so a bar at 09:00 may be followed by
+    one at 09:47, and the whole 47-minute mid move is then regressed on the second
+    bar's volume alone.  Within a liquid session this is rare and harmless; on a
+    listed butterfly that quotes in bursts it is the common case, and it inflates
+    ``lam`` by attributing to one bar's flow a revaluation that took most of an
+    hour.  There is no honest fix inside a single regression -- manufacturing the
+    missing bars is the error this function refuses at the top -- so the caller
+    who cares should either restrict to a contiguous stretch or read
+    ``n_bars`` against the session length before believing the slope.
+
     A degenerate fit -- fewer than three bars, or no variation in signed volume --
     returns NaN values rather than raising.  This runs over a few hundred
     instrument-days at a time and a single quiet contract must not stop the sweep;
@@ -356,11 +427,21 @@ def kyle_lambda(tob: pd.DataFrame, trades: pd.DataFrame,
     _only_symbol(tob, trades)
     _require(tob, ("ts_recv", "mid", "date"), "tob")
 
-    q = tob[["date", "ts_recv", "mid"]].copy()
+    sort_cols = ["ts_recv", "sequence"] if "sequence" in tob.columns else ["ts_recv"]
+    q = tob[["date", "mid"] + sort_cols].sort_values(sort_cols, kind="stable").copy()
     q["bar"] = q["ts_recv"].dt.floor(freq)
-    # ``last`` skips NaN, so a bar that ended one-sided closes on its last
-    # two-sided mid rather than on nothing.
-    bars = q.groupby(["date", "bar"], sort=True).agg(mid=("mid", "last"))
+    # The last row of the sorted bar, taken with ``drop_duplicates`` rather than
+    # ``agg('last')``: the aggregation skips NaN, which would quietly close a
+    # one-sided bar on the last two-sided quote inside it and hand the regression
+    # a mid the book did not have at the close.
+    close = (q.drop_duplicates(["date", "bar"], keep="last")
+              .set_index(["date", "bar"])["mid"])
+    # A one-sided close is carried through the fill as +inf and turned back into
+    # NaN afterwards.  Leaving it NaN would make it indistinguishable from a bar
+    # that simply had no quote in it, and the forward fill would then hand the
+    # one-sided stretch the last real mid -- the fabrication this whole policy
+    # exists to prevent, arriving one bar later than the obvious version of it.
+    bars = close.fillna(np.inf).to_frame("mid")
 
     if trades is not None and len(trades) > 0:
         _require(trades, ("ts_recv", "size", "aggressor", "date"), "trades")
@@ -377,9 +458,12 @@ def kyle_lambda(tob: pd.DataFrame, trades: pd.DataFrame,
 
     bars = bars.sort_index()
     bars["signed_volume"] = bars["signed_volume"].fillna(0.0)
-    # A bar with trades but no quote change inherits the previous bar's mid: the
-    # book did not move, so its contribution is a real zero rather than a hole.
+    # A bar with trades but no quote at all inherits the previous bar's closing
+    # state: nothing touched the book, so its contribution is a real zero rather
+    # than a hole.  What it inherits is the state, not a number -- if that state
+    # was one-sided it arrives as the +inf sentinel and becomes NaN below.
     bars["mid"] = bars.groupby(level="date")["mid"].ffill()
+    bars["mid"] = bars["mid"].mask(np.isinf(bars["mid"]))
     bars["d_mid"] = bars.groupby(level="date")["mid"].diff()
 
     use = bars["d_mid"].notna().to_numpy()
@@ -432,27 +516,61 @@ def permanent_temporary(trades: pd.DataFrame, tob: pd.DataFrame,
     market's revision of fair value; the temporary part is inventory and
     liquidity compensation that a patient counterparty gets back.
 
-    All three medians are taken over the same subset of trades -- those with a
-    finite effective spread *and* a finite forward mid -- so the shares are
-    comparable.  Letting ``eff_median`` use the trades whose horizon ran past the
-    end of the data would make the decomposition not add up, for a reason invisible
-    in the output.
+    **What adds up, exactly, and what does not.**  Three statements, and the third
+    is the one that costs people money:
 
-    ``permanent_share`` is the ratio of the medians, not the median of the
-    per-trade ratios.  A trade that printed at the mid has an effective spread of
-    zero, and its share is a division by zero that no amount of winsorising makes
-    meaningful.
+    * per trade, ``permanent + temporary == eff``, to floating-point;
+    * ``permanent_share + temporary_share == 1``, by construction, over the
+      ``n_share`` trades that enter them;
+    * ``permanent_median + temporary_median`` **need not equal** ``eff_median``,
+      and routinely does not, because a median is not additive.  Measured on
+      effective spreads of ``(1.0, 2.0, 3.0)`` with permanent components
+      ``(0.9, 0.1, 2.9)``: ``eff_median`` 2.0, ``permanent_median`` 0.9,
+      ``temporary_median`` 0.1 -- two components summing to half the spread they
+      are supposed to decompose.  The three medians are each an honest central
+      value of their own per-trade series and none of them is a share of another.
+
+    That third point is why the shares here are medians of **per-trade** shares
+    rather than a ratio of medians.  An earlier version divided
+    ``permanent_median`` by ``eff_median`` and called the result
+    ``permanent_share``, which invited exactly one reading -- that ``1 - share``
+    was the temporary part -- and that reading was wrong by the arithmetic above.
+    A per-trade share is a genuine decomposition of that trade's cost, and because
+    ``temporary_i / eff_i`` is ``1 - permanent_i / eff_i``, a decreasing affine
+    map, its median is exactly one minus the median of the permanent shares.
+    ``temporary_share`` is returned as that complement so the identity is exact
+    rather than merely close.
+
+    A trade that printed at the mid has an effective spread of zero and a share
+    that is a division by zero, so those trades are excluded from the shares and
+    only from the shares; ``n_share`` reports how many remained, against ``n`` for
+    the medians.  Shares are **not** confined to ``[0, 1]``: a trade that printed
+    inside the mid, or one whose mid moved further than the trade paid, gives a
+    share above one or below zero.  Taking the median rather than the mean is what
+    keeps a handful of those from carrying the answer -- the same reason
+    :func:`impact_by_size` reports medians.
+
+    All three medians are taken over the same subset of trades -- those with a
+    finite effective spread *and* a finite forward mid -- so the components are
+    comparable.  Letting ``eff_median`` use the trades whose horizon ran past the
+    end of the data would put the three on different samples, for a reason
+    invisible in the output.
     """
     out: Dict[str, float] = {"n": 0, "eff_median": np.nan, "permanent_median": np.nan,
-                             "temporary_median": np.nan, "permanent_share": np.nan}
-    if trades is None or len(trades) == 0:
-        return out
+                             "temporary_median": np.nan, "n_share": 0,
+                             "permanent_share": np.nan, "temporary_share": np.nan}
+    # The book is demanded before the tape is counted, for the reason
+    # :func:`effective_spread` documents: an empty tape used to return here first
+    # and so answered "nothing to decompose" for a call that could never have
+    # decomposed anything, book or no book.
     if tob is None or len(tob) == 0:
         raise ValueError(
             "permanent_temporary needs the book: the permanent component is a mid "
             "move measured at the horizon, and without tob there is nothing to "
             "measure it against"
         )
+    if trades is None or len(trades) == 0:
+        return out
 
     e = effective_spread(trades, tob, horizons_s=(horizon_s,))
     tag = f"{float(horizon_s):g}s"
@@ -466,12 +584,17 @@ def permanent_temporary(trades: pd.DataFrame, tob: pd.DataFrame,
     if n == 0:
         return out
 
-    eff_med = float(np.median(eff[ok]))
     out.update({
-        "eff_median": eff_med,
+        "eff_median": float(np.median(eff[ok])),
         "permanent_median": float(np.median(perm[ok])),
         "temporary_median": float(np.median(temp[ok])),
-        "permanent_share": (float(np.median(perm[ok])) / eff_med
-                            if eff_med != 0.0 else np.nan),
     })
+
+    priced = ok & (eff != 0.0)
+    n_share = int(priced.sum())
+    out["n_share"] = n_share
+    if n_share > 0:
+        share = float(np.median(perm[priced] / eff[priced]))
+        out["permanent_share"] = share
+        out["temporary_share"] = 1.0 - share
     return out

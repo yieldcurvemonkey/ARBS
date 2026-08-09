@@ -38,6 +38,10 @@ def mlofi_bars(frame: pd.DataFrame, freq: str = "10s") -> pd.DataFrame:
     through empty bars -- not the within-bar move. A bar in which nothing happened
     saw no price change, and taking the within-bar range would score its own
     activity rather than the market's.
+
+    Pass a ``date`` column when the frame spans more than one session, and the
+    difference is taken within each. Without one the whole frame is treated as a
+    single session, which is what :func:`RVUtils.MBO.mlofi.replay_mlofi` returns.
     """
     e_cols = [c for c in frame.columns if c.startswith("e_")]
     if frame.empty or not e_cols:
@@ -47,6 +51,23 @@ def mlofi_bars(frame: pd.DataFrame, freq: str = "10s") -> pd.DataFrame:
     agg = {c: (c, "sum") for c in e_cols}
     agg["n_events"] = ("mid", "size")
     agg["mid_last"] = ("mid", "last")
+
+    # **Difference within a session, never across one.**  Forward-filling and
+    # differencing a concatenated frame charges the whole overnight gap to the
+    # first bar of the next session, and resampling across the gap manufactures a
+    # bar for every empty interval in between: measured on two sessions 24 hours
+    # apart, 8,642 bars of which 99.95% carry no flow and no price change, with
+    # the entire overnight move loaded onto one of them.
+    if "date" in frame.columns:
+        parts = []
+        for _, g in t.groupby(t["date"], sort=True):
+            b = g.resample(freq).agg(**agg)
+            b = b[b["n_events"].gt(0) | b["mid_last"].notna()
+                  | (b.index >= g.index.min()) & (b.index <= g.index.max())]
+            b["d_mid"] = b["mid_last"].ffill().diff()
+            parts.append(b)
+        bars = pd.concat(parts).sort_index() if parts else t.resample(freq).agg(**agg)
+        return bars
     bars = t.resample(freq).agg(**agg)
     bars["d_mid"] = bars["mid_last"].ffill().diff()
     return bars

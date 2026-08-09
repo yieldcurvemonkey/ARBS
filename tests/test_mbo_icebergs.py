@@ -145,7 +145,16 @@ def test_hidden_volume_never_goes_negative():
 # Kaplan-Meier
 # --------------------------------------------------------------------------- #
 
-def test_with_no_censoring_survival_is_the_empirical_tail():
+def test_survival_is_the_empirical_tail_when_nothing_is_censored():
+    """The known answer the old tests could not see.
+
+    With no censoring, Kaplan-Meier must reduce to the empirical survival
+    P(V > v). Three icebergs of 10, 20 and 30 give 2/3, 1/3, 0. The previous
+    version accumulated the product downward from the largest volume, so the
+    terminal (1 - 1/1) = 0 factor entered every row and the whole column was
+    zero -- and the test that was supposed to catch it asserted only that the
+    result was monotone non-increasing, which a column of zeros satisfies.
+    """
     df = _frame([
         {"iceberg": True, "filled_size": v, "exit_reason": "FILLED",
          "n_refresh": 1, "size_initial": 1}
@@ -153,29 +162,55 @@ def test_with_no_censoring_survival_is_the_empirical_tail():
     ])
     km = km_size_distribution(df)
     assert list(km["volume"]) == [10, 20, 30]
-    # every observation is an event, so survival falls to zero at the largest
-    assert km.iloc[-1]["survival"] == pytest.approx(0.0)
-    assert km.iloc[0]["n_at_risk"] == 3
+    assert km["survival"].tolist() == pytest.approx([2 / 3, 1 / 3, 0.0])
+    assert km["n_at_risk"].tolist() == [3, 2, 1]
 
 
-def test_a_cancelled_iceberg_is_censored_not_counted_as_an_event():
-    """The whole point. Its traded volume is a lower bound on its true size, so
-    counting it as complete would drag the distribution down."""
-    complete = _frame([
+def test_survival_starts_below_one_and_is_not_all_zero():
+    """Two properties a column of zeros fails and monotonicity does not."""
+    df = _frame([
         {"iceberg": True, "filled_size": v, "exit_reason": "FILLED",
-         "n_refresh": 1, "size_initial": 1} for v in (10, 20)
+         "n_refresh": 1, "size_initial": 1}
+        for v in (5, 15, 25, 35)
+    ])
+    km = km_size_distribution(df)
+    assert 0.0 < km["survival"].iloc[0] < 1.0
+    assert (km["survival"] > 0).sum() >= 3
+
+
+def test_a_cancelled_iceberg_is_censored_and_lifts_the_tail():
+    """A censored observation contributes to the risk set but not to the events,
+    so survival past it stays above what the uncensored sample would give."""
+    uncensored = _frame([
+        {"iceberg": True, "filled_size": v, "exit_reason": "FILLED",
+         "n_refresh": 1, "size_initial": 1} for v in (10, 20, 30)
     ])
     censored = _frame([
         {"iceberg": True, "filled_size": 10, "exit_reason": "FILLED",
          "n_refresh": 1, "size_initial": 1},
         {"iceberg": True, "filled_size": 20, "exit_reason": "CANCELLED",
          "n_refresh": 1, "size_initial": 1},
+        {"iceberg": True, "filled_size": 30, "exit_reason": "FILLED",
+         "n_refresh": 1, "size_initial": 1},
     ])
-    s_complete = km_size_distribution(complete)
-    s_censored = km_size_distribution(censored)
-    # with the larger one censored, survival past it does not collapse to zero
-    assert s_complete.iloc[-1]["survival"] == pytest.approx(0.0)
-    assert s_censored.iloc[-1]["survival"] > 0.0
+    a = km_size_distribution(uncensored).set_index("volume")["survival"]
+    b = km_size_distribution(censored).set_index("volume")["survival"]
+    assert b.loc[20] > a.loc[20]
+    assert km_size_distribution(censored).set_index("volume").loc[20, "n_events"] == 0
+
+
+def test_an_explicit_completion_mask_overrides_the_exit_reason():
+    """Native detection cannot tell a completed iceberg from a pulled one --
+    rule (a) guarantees filled_size exceeds the displayed size, so the lifecycle
+    kernel calls every one of them FILLED. A caller with a better signal must be
+    able to supply it."""
+    df = _frame([
+        {"iceberg": True, "filled_size": v, "exit_reason": "FILLED",
+         "n_refresh": 1, "size_initial": 1} for v in (10, 20, 30)
+    ])
+    all_censored = km_size_distribution(df, complete=pd.Series([False] * 3))
+    assert (all_censored["n_events"] == 0).all()
+    assert (all_censored["survival"] == 1.0).all()
 
 
 def test_survival_is_monotone_non_increasing_in_volume():
@@ -188,6 +223,8 @@ def test_survival_is_monotone_non_increasing_in_volume():
     km = km_size_distribution(df)
     s = km.sort_values("volume")["survival"].to_numpy()
     assert np.all(np.diff(s) <= 1e-12)
+    assert s[0] < 1.0                      # not the vacuous all-zeros case
+    assert (s > 0).any()
 
 
 def test_km_of_no_icebergs_is_typed_and_empty():

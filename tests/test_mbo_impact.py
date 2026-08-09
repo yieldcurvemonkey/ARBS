@@ -12,8 +12,19 @@ The traps these pin, rather than the mechanics:
   trade's own packet cannot be picked up by an as-of join;
 * the mid at the horizon is the state at the horizon, including no state at all
   when the book was one-sided or when the data had ended;
-* Kyle's lambda differences the mid within a session and counts only the bars in
-  which something happened.
+* Kyle's lambda differences the mid within a session, counts only the bars in
+  which something happened, and never invents a mid for a bar whose book was
+  one-sided -- the fabrication that drags the slope toward zero exactly where
+  liquidity was worst;
+* a decomposition is only a decomposition if it adds up, so the permanent and
+  temporary *shares* are medians of per-trade shares and the three *medians* are
+  not claimed to sum to anything;
+* a frame's shape is a promise about what was measured, so an empty tape neither
+  skips the checks a full one faces nor collapses a fixed bucket table.
+
+Several fixtures below are deliberately DISPERSED rather than symmetric.  A
+fixture whose trades all pay the same effective spread makes the ratio of medians
+and the median of ratios coincide, and pins nothing.
 """
 from __future__ import annotations
 
@@ -164,6 +175,22 @@ def test_the_forward_mid_takes_a_quote_stamped_exactly_at_the_horizon():
     assert out["mid_fwd_10s"].iloc[0] == 6.5
 
 
+def test_the_forward_mid_takes_the_highest_sequence_of_a_tied_timestamp():
+    """The sibling of the bar-close rule in ``kyle_lambda``, and it was undefended.
+
+    Two states are stamped at the horizon -- one packet, two records -- and the
+    later of them by ``sequence`` is the state at that instant.  The frame lists
+    them the other way round, so a sort on ``ts_recv`` alone leaves the earlier
+    state last and the backward as-of takes it: mid 6.75 where the book stood at
+    9.0.  Nothing about the answer would look wrong.
+    """
+    book = _tob([(0, 5.5, 6.5), (11, 8.5, 9.5), (11, 6.5, 7.0)])
+    book["sequence"] = np.array([0, 7, 3], dtype=np.uint32)
+    out = effective_spread(_trades([(1, 6.5, 5, +1, 5.5, 6.5)]), book,
+                           horizons_s=(10.0,))
+    assert out["mid_fwd_10s"].iloc[0] == 9.0
+
+
 def test_the_forward_mid_holds_the_last_state_between_quotes():
     """Nothing happened between 10 s and 30 s, so the mid at 20 s is the 10 s one."""
     out = effective_spread(TAPE, BOOK, horizons_s=(20.0,))
@@ -218,6 +245,31 @@ def test_an_empty_book_raises_rather_than_returning_nan_columns():
         effective_spread(TAPE, pd.DataFrame())
 
 
+def test_an_empty_tape_does_not_buy_an_exemption_from_the_empty_book_raise():
+    """The empty-tape branch used to return first, so this call handed back
+    ``real_10s`` and ``impact_10s`` columns measured against no book at all --
+    the exact shape the raise two tests up exists to refuse.  Zero rows is not a
+    licence to publish a column that was never measured."""
+    with pytest.raises(ValueError, match="tob is empty"):
+        effective_spread(pd.DataFrame(), pd.DataFrame(), horizons_s=(10.0,))
+
+
+def test_an_empty_tape_does_not_buy_an_exemption_from_the_book_column_check():
+    """Same ordering defect, second guard: a book read with ``decode=False``
+    carries tick indices and no ``mid``, and an empty tape used to sail past it."""
+    with pytest.raises(KeyError, match="mid"):
+        effective_spread(pd.DataFrame(), BOOK.drop(columns=["mid"]),
+                         horizons_s=(10.0,))
+
+
+def test_an_empty_tape_does_not_buy_an_exemption_from_the_instrument_check():
+    """A book pooling two instruments is meaningless whether or not a trade
+    printed against it."""
+    two = pd.concat([BOOK, BOOK.assign(symbol="SR3:BF H7-M7-U7")], ignore_index=True)
+    with pytest.raises(ValueError, match="more than one instrument"):
+        effective_spread(pd.DataFrame(), two, horizons_s=(10.0,))
+
+
 def test_the_replay_frames_aggressor_convention_is_refused():
     """``ReplayResult.trades`` carries 'B'/'A'; only the store frame is accepted."""
     t = TAPE.copy()
@@ -227,7 +279,13 @@ def test_the_replay_frames_aggressor_convention_is_refused():
 
 
 def test_a_tape_without_the_prevailing_book_raises():
-    with pytest.raises(KeyError, match="prev_mid"):
+    """And raises with the module's own diagnosis, not pandas'.
+
+    Matching on the column name alone passes whether the guard is there or not --
+    indexing a missing column raises ``KeyError('prev_mid')`` by itself -- so the
+    match is on the sentence that names the fix, which only the guard can produce.
+    """
+    with pytest.raises(KeyError, match="decode=False"):
         effective_spread(TAPE.drop(columns=["prev_mid"]))
 
 
@@ -301,11 +359,48 @@ def test_bins_that_do_not_increase_raise():
         impact_by_size(SIZED, bins=(1, 5, 5))
 
 
-def test_an_empty_tape_gives_an_empty_typed_bucket_frame():
+def test_an_empty_tape_still_gives_one_row_per_bucket():
+    """A day with no trades is a day on which every bucket was empty.
+
+    This test previously asserted ``len(out) == 0``, which pinned the exact
+    contradiction of the function's own promise that "a sweep that concatenates a
+    few hundred of them should not have to reindex".  The bins are an argument,
+    so the frame's shape is known before a single trade is read.
+    """
     out = impact_by_size(pd.DataFrame())
-    assert len(out) == 0
+    assert len(out) == 6
+    assert out["size_lo"].tolist() == [1, 2, 5, 10, 25, 100]
+    assert out["size_hi"].tolist() == [2, 5, 10, 25, 100, np.inf]
+    assert out["n"].tolist() == [0] * 6
+    assert out["volume"].tolist() == [0] * 6
+    assert out["eff_median"].isna().all()
+    assert out["real_median"].isna().all()
+    assert out["impact_median"].isna().all()
     assert out["n"].dtype == np.int64
+    assert out["volume"].dtype == np.int64
     assert out["eff_median"].dtype == np.float64
+
+
+def test_a_quiet_day_concatenates_with_a_busy_one_without_going_ragged():
+    """The promise the fixed shape exists to make, stated as the sweep states it."""
+    quiet = impact_by_size(pd.DataFrame(), bins=(1, 2, 5))
+    busy = impact_by_size(SIZED, SIZED_BOOK, horizon_s=10.0, bins=(1, 2, 5))
+    assert list(quiet.columns) == list(busy.columns)
+    both = pd.concat([quiet, busy], ignore_index=True)
+    assert len(both) == 6
+    assert both["size_lo"].tolist() == [1, 2, 5, 1, 2, 5]
+    assert int(both["volume"].sum()) == int(busy["volume"].sum())
+
+
+def test_the_empty_frame_follows_the_bins_it_was_given():
+    out = impact_by_size(pd.DataFrame(), bins=(3, 17))
+    assert out["size_lo"].tolist() == [3, 17]
+    assert out["size_hi"].tolist() == [17, np.inf]
+
+
+def test_bins_are_validated_even_with_nothing_to_bucket():
+    with pytest.raises(ValueError, match="strictly increasing"):
+        impact_by_size(pd.DataFrame(), bins=(1, 5, 5))
 
 
 # --------------------------------------------------------------------------- #
@@ -389,6 +484,38 @@ def test_the_mid_is_not_differenced_across_a_session_break():
     assert got["t_stat"] == pytest.approx(np.sqrt(48.0))
 
 
+def test_the_mid_is_not_carried_across_a_session_break_either():
+    """Differencing within the date is not enough on its own.
+
+    The second session opens with a bar that traded before it quoted.  Fill the
+    mid globally and that bar inherits the previous session's close, so the NEXT
+    bar of the new session differences against it and the whole overnight gap --
+    a hundred basis points here -- is charged to two lots.  Differencing per date
+    does not catch it, because the contaminated bar is not the first of the date.
+
+    Carried per date, session two contributes its last two bars: moves (0, +3) on
+    volumes (0, +2), which with session one's (-1, 0, +3) on (-2, 0, +2) gives
+    Sxy 12 and Sxx 11.2, so lambda is 15/14 over five bars.  Filled globally there
+    are six bars and one of them says the mid moved 97 on a two-lot sale.
+    """
+    day2 = DATE + datetime.timedelta(days=1)
+    book = pd.concat([
+        _kyle_book(),
+        _tob([(86_400 + 70, 104.5, 105.5), (86_400 + 130, 104.5, 105.5),
+              (86_400 + 190, 107.5, 108.5)], date=day2),
+    ], ignore_index=True)
+    tape = pd.concat([
+        _kyle_tape(),
+        _trades([(86_400 + 20, 104.5, 2, -1, 104.5, 105.5),
+                 (86_400 + 80, 104.5, 2, -1, 104.5, 105.5),
+                 (86_400 + 200, 108.5, 2, +1, 107.5, 108.5)], date=day2),
+    ], ignore_index=True)
+
+    got = kyle_lambda(book, tape, freq="60s")
+    assert got["n_bars"] == 5
+    assert got["lam"] == pytest.approx(15.0 / 14.0)
+
+
 def test_fewer_than_three_bars_is_nan_rather_than_an_exception():
     got = kyle_lambda(_kyle_book(offsets=(10, 70)), _kyle_tape(offsets=(80, 90)),
                       freq="60s")
@@ -432,6 +559,136 @@ def test_kyle_lambda_refuses_a_book_and_a_tape_from_different_instruments():
         kyle_lambda(_kyle_book(), _kyle_tape().assign(symbol="SR3:BF H7-M7-U7"))
 
 
+#: The planted-slope tape: +2, +3 and +1 lots in the second, third and fourth
+#: 60 s bars.  Paired with a book whose closing mids are 6.0, 7.0, 8.5, 9.0 it
+#: gives moves of exactly 0.5 per signed lot.
+SLOPE_TAPE = _trades([
+    (80, 7.5, 2, +1, 6.5, 7.5),
+    (140, 9.0, 3, +1, 8.0, 9.0),
+    (200, 9.5, 1, +1, 8.5, 9.5),
+])
+
+
+def test_the_bar_mid_is_the_last_quote_in_time_not_the_last_one_in_the_file():
+    """A book frame is not guaranteed sorted, and the aggregation does not sort.
+
+    Bar 1 holds two quotes: mid 4.0 at 70 s and mid 7.0 at 100 s, written to the
+    frame in the opposite order.  Read in file order the bar closes at 4.0 and the
+    mid moves (-2.0, +4.5, +0.5) against volumes (2, 3, 1), giving lambda 2.0.
+    Read in time order it closes at 7.0, the moves are (1.0, 1.5, 0.5) and the
+    planted slope of 0.5 per lot comes back exactly.
+    """
+    book = _tob([(10, 5.5, 6.5), (100, 6.5, 7.5), (70, 3.5, 4.5),
+                 (130, 8.0, 9.0), (190, 8.5, 9.5)])
+    got = kyle_lambda(book, SLOPE_TAPE, freq="60s")
+    assert got["n_bars"] == 3
+    assert got["lam"] == pytest.approx(0.5)
+    assert got["r2"] == pytest.approx(1.0)
+
+
+def test_a_tie_in_ts_recv_is_broken_by_sequence_at_the_bar_close():
+    """Every record inside a CME packet shares a timestamp, so the bar's closing
+    state is decided by ``sequence`` or by nothing at all.
+
+    Both bar-1 quotes are stamped at 70 s; the mid-7.0 row carries the higher
+    sequence and is therefore the close, but it is written to the frame first.
+    Sorting on ``ts_recv`` alone leaves the file order intact and closes the bar
+    at 4.0, which is lambda 2.0 rather than the planted 0.5.
+    """
+    book = _tob([(10, 5.5, 6.5), (70, 6.5, 7.5), (70, 3.5, 4.5),
+                 (130, 8.0, 9.0), (190, 8.5, 9.5)])
+    book["sequence"] = np.array([0, 9, 4, 10, 11], dtype=np.uint32)
+    got = kyle_lambda(book, SLOPE_TAPE, freq="60s")
+    assert got["n_bars"] == 3
+    assert got["lam"] == pytest.approx(0.5)
+    assert got["r2"] == pytest.approx(1.0)
+
+
+def test_a_one_sided_bar_is_not_an_observation_with_a_zero_move():
+    """The fabrication the module policy exists to refuse, and its cost.
+
+    ``_kyle_book()`` fits lambda 1.0 with r2 12/13 on three bars.  Make the second
+    bar's book one-sided and a forward fill hands it the first bar's mid, which
+    reads as a move of exactly zero: lambda drops to 0.75 and r2 to 0.519 while
+    ``n_bars`` stays at 3, so nothing in the output says a mid was invented.
+
+    The honest answer is that the bar has no mid, and neither the bar nor the one
+    after it can be differenced -- a difference needs both ends.  One usable
+    observation is below the floor, so the day is NaN and says so.
+    """
+    book = _tob([(10, 5.5, 6.5), (70, np.nan, 5.5), (130, 4.5, 5.5),
+                 (190, 7.5, 8.5)])
+    got = kyle_lambda(book, _kyle_tape(), freq="60s")
+    assert got["n_bars"] == 1
+    assert np.isnan(got["lam"])
+    assert got["lam"] != pytest.approx(0.75)   # what the forward fill reported
+
+    control = kyle_lambda(_kyle_book(), _kyle_tape(), freq="60s")
+    assert control["n_bars"] == 3
+    assert control["lam"] == pytest.approx(1.0)
+
+
+def test_a_one_sided_book_stays_one_sided_through_a_bar_that_only_traded():
+    """The same fabrication arriving one bar later, which is the subtle half.
+
+    The book goes one-sided in bar 2 and the next quote is not until bar 4, so bar
+    3 has trades and no quote at all.  Blanking only the one-sided bar and then
+    forward-filling still hands bar 3 the last two-sided mid -- the book was
+    one-sided throughout bar 3, and nobody touching it does not make it two-sided.
+
+    With the state carried forward rather than the number: bars 2 and 3 have no
+    mid, bar 4 cannot be differenced against bar 3, and only bar 1 survives.  The
+    control, identical but for a two-sided bar 2, keeps all four.
+    """
+    tape = _trades([
+        (80, 4.5, 2, -1, 4.5, 5.5),
+        (190, 5.5, 2, +1, 4.5, 5.5),
+        (260, 8.5, 2, +1, 7.5, 8.5),
+    ])
+    one_sided = kyle_lambda(
+        _tob([(10, 5.5, 6.5), (70, 4.5, 5.5), (130, np.nan, 5.5), (250, 7.5, 8.5)]),
+        tape, freq="60s")
+    assert one_sided["n_bars"] == 1
+    assert np.isnan(one_sided["lam"])
+
+    control = kyle_lambda(
+        _tob([(10, 5.5, 6.5), (70, 4.5, 5.5), (130, 4.5, 5.5), (250, 7.5, 8.5)]),
+        tape, freq="60s")
+    assert control["n_bars"] == 4
+
+
+def test_a_bar_that_closes_one_sided_has_no_mid_however_it_started():
+    """The close is the state, and skipping the NaN is not reading the state.
+
+    Bar 1 quotes 4.0 and then goes one-sided and stays there.  An aggregation that
+    skips missing values -- ``groupby(...).agg('last')`` does -- closes the bar at
+    4.0, a price the book had already left, and the day fits lambda 2.0 on three
+    bars.  Read as the state at the close the bar has no mid, and neither it, the
+    bar before nor the bar after can be differenced.
+    """
+    book = _tob([(10, 5.5, 6.5), (70, 3.5, 4.5), (100, np.nan, 5.0),
+                 (130, 8.0, 9.0), (190, 8.5, 9.5)])
+    got = kyle_lambda(book, SLOPE_TAPE, freq="60s")
+    assert got["n_bars"] == 1
+    assert np.isnan(got["lam"])
+
+
+def test_a_bar_that_closes_two_sided_keeps_its_close_not_a_mid_from_earlier():
+    """The policy is about the state at the CLOSE, not about the bar being clean.
+
+    Bar 1 quotes 4.0, goes one-sided, then comes back at 7.0.  The close is
+    two-sided, so the bar has a mid and it is 7.0 -- the planted slope again.  An
+    implementation that dropped any bar containing a one-sided state would lose
+    it, and one that took the last two-sided quote regardless of order would close
+    it at 4.0.
+    """
+    book = _tob([(10, 5.5, 6.5), (70, 3.5, 4.5), (90, np.nan, 5.0),
+                 (100, 6.5, 7.5), (130, 8.0, 9.0), (190, 8.5, 9.5)])
+    got = kyle_lambda(book, SLOPE_TAPE, freq="60s")
+    assert got["n_bars"] == 3
+    assert got["lam"] == pytest.approx(0.5)
+
+
 # --------------------------------------------------------------------------- #
 # permanent_temporary
 # --------------------------------------------------------------------------- #
@@ -462,23 +719,122 @@ def test_permanent_and_temporary_are_the_hand_computed_medians():
 
     Three quarters of what these trades paid was the market revising its view and
     a quarter was compensation that came back.
+
+    Every trade here pays the same 1.0, which is what makes the ratio of medians
+    and the median of ratios agree.  That coincidence is the whole reason the
+    dispersed fixture below exists; this fixture pins the arithmetic and pins
+    nothing about which share was reported.
     """
     got = permanent_temporary(PT_TAPE, PT_BOOK, horizon_s=10.0)
     assert got["n"] == 4
     assert got["eff_median"] == pytest.approx(1.0)
     assert got["permanent_median"] == pytest.approx(0.75)
     assert got["temporary_median"] == pytest.approx(0.25)
+    assert got["n_share"] == 4
     assert got["permanent_share"] == pytest.approx(0.75)
+    assert got["temporary_share"] == pytest.approx(0.25)
+
+
+#: A DISPERSED book and tape.  Three buys against a prevailing mid of 6.00 pay
+#: 1.0, 2.0 and 4.0, and ten seconds later the mid stands at 6.375, 6.75 and 6.50,
+#: so the permanent components are 0.75, 1.5 and 1.0.  Every reported number is
+#: then distinct, and the ratio of medians is 0.5 against a median share of 0.75.
+DISPERSED_BOOK = _tob([(0, 5.5, 6.5), (11, 6.25, 6.5), (12, 6.5, 7.0),
+                       (13, 6.25, 6.75)])
+DISPERSED_TAPE = _trades([
+    (1, 6.5, 5, +1, 5.5, 6.5),     # eff 1.0, permanent 0.75, temporary 0.25
+    (2, 7.0, 5, +1, 5.5, 6.5),     # eff 2.0, permanent 1.50, temporary 0.50
+    (3, 8.0, 5, +1, 5.5, 6.5),     # eff 4.0, permanent 1.00, temporary 3.00
+])
+
+
+def test_the_three_medians_are_not_a_decomposition_and_are_not_sold_as_one():
+    """Medians are not additive, and on a dispersed tape they are visibly not.
+
+    eff 2.0, permanent 1.0, temporary 0.5: the two components sum to 1.5 against
+    an effective spread of 2.0.  Each median is an honest central value of its own
+    per-trade series; none of them is a share of another, and dividing one by
+    another -- which is what ``permanent_share`` used to be -- produces 0.5, a
+    number whose complement describes nothing at all.
+    """
+    got = permanent_temporary(DISPERSED_TAPE, DISPERSED_BOOK, horizon_s=10.0)
+    assert got["n"] == 3
+    assert got["eff_median"] == pytest.approx(2.0)
+    assert got["permanent_median"] == pytest.approx(1.0)
+    assert got["temporary_median"] == pytest.approx(0.5)
+    assert (got["permanent_median"] + got["temporary_median"]
+            != pytest.approx(got["eff_median"]))
+
+
+def test_the_shares_are_per_trade_shares_and_they_do_add_up():
+    """Per-trade permanent shares 0.75, 0.75 and 0.25 -- median 0.75.
+
+    The ratio of medians is 1.0 / 2.0 = 0.5, so the two definitions are cleanly
+    separated here, and 0.75 is not any of the three medians either.  The
+    temporary share is the exact complement, because ``temp/eff`` is
+    ``1 - perm/eff`` and a decreasing affine map takes the median to the median.
+    """
+    got = permanent_temporary(DISPERSED_TAPE, DISPERSED_BOOK, horizon_s=10.0)
+    assert got["n_share"] == 3
+    assert got["permanent_share"] == pytest.approx(0.75)
+    assert got["temporary_share"] == pytest.approx(0.25)
+    assert got["permanent_share"] + got["temporary_share"] == 1.0
+
+
+def test_a_trade_at_the_mid_leaves_the_shares_but_not_the_medians():
+    """A zero effective spread has no share to contribute, and only that.
+
+    Adding a fourth trade that printed at the mid moves ``n`` to 4 and pulls
+    ``eff_median`` from 2.0 to 1.5, while ``n_share`` stays at 3 and the shares do
+    not move: a division by zero is excluded, not winsorised into the answer.
+    """
+    tape = pd.concat([DISPERSED_TAPE, _trades([(1, 6.0, 5, +1, 5.5, 6.5)])],
+                     ignore_index=True)
+    got = permanent_temporary(tape, DISPERSED_BOOK, horizon_s=10.0)
+    assert got["n"] == 4
+    assert got["eff_median"] == pytest.approx(1.5)
+    assert got["n_share"] == 3
+    assert got["permanent_share"] == pytest.approx(0.75)
+    assert got["temporary_share"] == pytest.approx(0.25)
+
+
+def test_the_book_is_demanded_before_the_tape_is_counted():
+    """An empty tape used to return "nothing to decompose" for a call that could
+    never have decomposed anything -- the same ordering defect as in
+    ``effective_spread``, in the function whose whole contract is the book."""
+    with pytest.raises(ValueError, match="needs the book"):
+        permanent_temporary(pd.DataFrame(), pd.DataFrame())
 
 
 def test_a_trade_whose_horizon_runs_off_the_data_leaves_every_median():
     """Not just the permanent one: measuring the three on different subsets would
-    make the decomposition stop adding up for a reason nothing in the output shows."""
+    put them on different samples for a reason nothing in the output shows."""
     tape = pd.concat([PT_TAPE, _trades([(95, 8.5, 5, +1, 5.5, 6.5)])],
                      ignore_index=True)
     got = permanent_temporary(tape, PT_BOOK, horizon_s=10.0)
     assert got["n"] == 4
+    assert got["eff_median"] == pytest.approx(1.0)
     assert got["permanent_median"] == pytest.approx(0.75)
+
+
+def test_the_dropped_trade_is_dropped_from_eff_median_too():
+    """The same contract on a fixture that can see it.
+
+    Every trade in ``PT_TAPE`` pays 1.0, so admitting a fifth to ``eff_median``
+    alone leaves the median at 1.0 and the test above passes either way.  Here the
+    effective spreads are 1, 2 and 4 and the trade whose horizon runs off the end
+    of the book paid 8: kept, it would drag ``eff_median`` from 2.0 to 3.0 while
+    the other two medians stayed on three trades.
+    """
+    tape = pd.concat([DISPERSED_TAPE, _trades([(10, 10.0, 5, +1, 5.5, 6.5)])],
+                     ignore_index=True)
+    got = permanent_temporary(tape, DISPERSED_BOOK, horizon_s=10.0)
+    assert got["n"] == 3
+    assert got["eff_median"] == pytest.approx(2.0)
+    assert got["permanent_median"] == pytest.approx(1.0)
+    assert got["temporary_median"] == pytest.approx(0.5)
+    assert got["n_share"] == 3
+    assert got["permanent_share"] == pytest.approx(0.75)
 
 
 def test_permanent_share_is_nan_when_every_trade_printed_at_the_mid():
@@ -486,13 +842,19 @@ def test_permanent_share_is_nan_when_every_trade_printed_at_the_mid():
     tape = _trades([(1, 6.0, 5, +1, 5.5, 6.5), (2, 6.0, 5, -1, 5.5, 6.5)])
     got = permanent_temporary(tape, PT_BOOK, horizon_s=10.0)
     assert got["eff_median"] == 0.0
+    assert got["n"] == 2
+    assert got["n_share"] == 0
     assert np.isnan(got["permanent_share"])
+    assert np.isnan(got["temporary_share"])
 
 
 def test_an_empty_tape_decomposes_to_nothing_rather_than_raising():
     got = permanent_temporary(pd.DataFrame(), PT_BOOK)
     assert got["n"] == 0
+    assert got["n_share"] == 0
     assert np.isnan(got["eff_median"])
+    assert np.isnan(got["permanent_share"])
+    assert np.isnan(got["temporary_share"])
 
 
 def test_the_decomposition_needs_the_book():

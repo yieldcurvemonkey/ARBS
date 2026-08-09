@@ -216,9 +216,11 @@ feed the paper worked from does. Everything here therefore rests on rule (a), wh
 sees an iceberg only *after* it has traded through its displayed size, so an
 iceberg cancelled before that is invisible and these counts are lower bounds.
 
-Synthetic iceberg detection is deliberately not implemented: its rule rests on
-assumptions the paper's own authors call very strong, and when candidates collide
-it produces a tree of possible icebergs rather than an answer.
+Synthetic iceberg detection was deferred once for a real reason -- when candidates
+collide the paper's rule produces a *tree* of possible icebergs rather than an
+answer -- and is now implemented, resolving the tree deterministically and
+reporting a per-chain ambiguity count, so that chains are disjoint and their
+volumes add.
 
 ## 8. The fill simulator is exact, not modelled
 
@@ -349,7 +351,8 @@ much wrong as meaningless, and that nothing downstream would have flagged. In pa
 linear rescaling whose *differences* are yield basis points; the level is not a yield.
 
 - `analytics` — `liquidity`, `flow` (CKS order-flow imbalance and true-aggressor trade flow),
-  `impact` (effective/realised spread, impact by size, Kyle lambda), `icebergs`, and `leadlag`.
+  `impact` (effective/realised spread, impact by size, Kyle lambda), `icebergs` (native, synthetic
+  and Kaplan-Meier sizing), `leadlag`, `mlofi` and `pricediscovery`.
 - `sim` — the exact FIFO fill simulator.
 
 **Lead-lag deserves a note, because it is the piece most easily got wrong.** The estimator is
@@ -361,9 +364,17 @@ maximising the contrast provably fails to locate anything; and significance come
 **permutation test** that shuffles increments rather than prices, so the surrogate keeps the same
 clock, mesh and realised variance.
 
-Not yet done: MLOFI and the deep tier (needs M-level depth at every book change), synthetic iceberg
-detection, Hasbrouck information share and Gonzalo-Granger, and the full 553-session build, which is
-running.
+All of these now ship: MLOFI (`RVUtils/MBO/mlofi.py` and `analytics/mlofi.py`, computed on demand
+rather than as a deep tier -- see the commit for why), synthetic iceberg detection, and Hasbrouck /
+Gonzalo-Granger (`analytics/pricediscovery.py`). The build is complete at **527 sessions** -- an
+earlier count of 553 here was a mis-addition; 53 SR3 plus six roots of 79 is 527.
+
+Still open, from the adversarial review of that work and recorded rather than hidden: the price
+discovery module's guards and diagnostics carry several documented-but-unpinned claims, its
+minimum-sample gate admits samples too short for the VECM to have power, and it reports no sampling
+uncertainty; `impact.kyle_lambda`'s promised infinite t-statistic on an exact fit is not actually
+producible; and several empirical figures quoted in `icebergs.detect_synthetic`'s docstring were
+measured by an agent and have not been reproduced here.
 
 MLOFI is worth the deep pass specifically here: Xu, Gould and Howison measure a 65–75% out-of-sample
 RMSE improvement from ten levels for **large-tick** instruments against 15–30% for small-tick ones,
