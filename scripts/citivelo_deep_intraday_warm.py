@@ -844,6 +844,10 @@ def build_ois_curve_days(curve_name: str, args, logger: logging.Logger) -> int:
         logger.info("%s: nothing to build - every fetched day is already dense in the store",
                     curve_name)
         return 0
+    # Newest first, for the same reason the fetch queue is: a build that is
+    # interrupted - and a ten-hour one will be - should leave the RECENT history
+    # solved rather than an arbitrary slice of it.
+    tasks.sort(key=lambda t: t[0], reverse=True)
     logger.info("%s: building %d day(s) on %d worker(s) (%d of them UPGRADES of a "
                 "thin stored day)", curve_name, len(tasks), args.workers, upgrades)
 
@@ -999,6 +1003,7 @@ def build_ibor_curve_days(curve_name: str, args, logger: logging.Logger) -> int:
         logger.info("%s: nothing to build", curve_name)
         return 0
 
+    tasks.sort(key=lambda t: t[1], reverse=True)
     by_source: Dict[str, int] = {}
     for task in tasks:
         by_source[task[5]] = by_source.get(task[5], 0) + 1
