@@ -465,17 +465,38 @@ def dismiss_excel_dialogs(
             try:
                 if window.friendly_class_name() not in {"Dialog", "Pane"}:
                     continue
-                text = " ".join(t for t in window.texts() if t)[:120]
-                for label in ("Yes", "OK", "Enable Editing", "Enable Content", "Close"):
-                    try:
-                        button = window.child_window(title=label, control_type="Button")
-                        if button.exists(timeout=0.5):
-                            button.click_input()
-                            dismissed.append(f"{text!r} -> {label}")
-                            log.warning("dismiss_excel_dialogs: %s -> %s", text, label)
-                            break
-                    except Exception:  # noqa: BLE001
-                        continue
+                text = " ".join(t for t in window.texts() if t)
+                if not text.strip():
+                    continue
+
+                # Some of these carry a CHOICE, and the default is the
+                # destructive one. Document Recovery pre-selects "No, remove the
+                # files. I have saved the files I need." - clicking OK past it
+                # deletes recovered work. Pick the preserving option first.
+                chose = ""
+                for radio in window.descendants(control_type="RadioButton"):
+                    label = radio.window_text() or ""
+                    if label.strip().lower().startswith("yes"):
+                        try:
+                            radio.click_input()
+                            chose = f" [selected {label.strip()[:50]!r}]"
+                        except Exception:  # noqa: BLE001
+                            pass
+                        break
+
+                # Never `Don't Save`, and never OK on a remove-prompt we could
+                # not steer - Cancel leaves the files where they are.
+                order = ("Yes", "OK", "Enable Editing", "Enable Content", "Close")
+                if "remove the files" in text.lower() and not chose:
+                    order = ("Cancel", "Close")
+                for label in order:
+                    button = window.child_window(title=label, control_type="Button")
+                    if button.exists(timeout=0.5):
+                        button.click_input()
+                        dismissed.append(f"{text[:90]!r} -> {label}{chose}")
+                        log.warning("dismiss_excel_dialogs: %s -> %s%s",
+                                    text[:90], label, chose)
+                        break
             except Exception:  # noqa: BLE001
                 continue
     return dismissed
