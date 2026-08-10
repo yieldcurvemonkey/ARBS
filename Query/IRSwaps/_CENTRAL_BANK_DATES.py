@@ -301,9 +301,11 @@ _CENTRAL_BANK_DATES = _load_central_bank_dates()
 _CURVE_TO_CB = {
     "USD-SOFR-1D": "FOMC",
     "USD-FEDFUNDS": "FOMC",
+    "USD-FEDFUNDS-1D": "FOMC",
     "USD-OIS": "FOMC",
     "USD-SOFR-1D-RISK": "FOMC",
     "USD-FEDFUNDS-RISK": "FOMC",
+    "USD-FEDFUNDS-1D-RISK": "FOMC",
     "USD-OIS-RISK": "FOMC",
     "EUR-ESTR": "ECB",
     "JPY-TONA": "BOJ",
