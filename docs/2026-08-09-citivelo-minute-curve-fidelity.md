@@ -345,14 +345,19 @@ See `MDP/IRSwaps/CITIVELO_EXCEL/snapshot_policy.py` and the PR body. In short:
   handlers re-raise by name — so a strict miss cannot be converted back into the
   silent fallback it exists to prevent. A strict request can no longer reach the
   live Excel build; the midnight/EOD branch raises rather than serving the close.
-- **Caller contradictions raise; data misses do not.** A policy combined with
-  `force_refresh`/`no_curve_store`, with `"live"`, or with an exact-midnight
-  (end-of-day) timestamp is a contradiction and raises on both the single-point
-  and the batch path. A *data* miss — no snapshot inside the tolerance — raises
-  on the single-point path (one question, one answer or one exception) and is
+- **Caller contradictions raise everywhere; data misses raise once.** A policy
+  combined with `force_refresh`/`no_curve_store` or with `"live"` is a
+  contradiction and raises on both paths. Everything else — no snapshot inside
+  the tolerance, and an exact-midnight (end-of-day) timestamp — raises on the
+  single-point path (one question, one answer or one exception) and is
   **omitted from the batch's result dict**, which is keyed by the caller's own
-  timestamps, with a single WARNING carrying the count. A batch that raised on
-  the first data miss would be unusable: 2.4 % of tape minutes are one.
+  timestamps, with one WARNING carrying the count. A batch that raised on the
+  first of those would be unusable: 2.4 % of tape minutes have no snapshot in a
+  one-minute tolerance, and 256 legs snap to exact midnight, so a single 00:01
+  print would kill a day's backfill. Note there is no *lenient* answer to a
+  midnight request under a minute policy — every branch that could serve it
+  serves a close — so the refusal itself is not negotiable; only whether it
+  takes the batch down with it.
 
   > This was found by an independent review, not by my own tests. The batch
   > bucketed exact-midnight requests in its *own* first pass and served them
