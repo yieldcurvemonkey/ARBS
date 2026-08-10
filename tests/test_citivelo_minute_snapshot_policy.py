@@ -267,6 +267,32 @@ def test_a_lenient_caller_with_a_tolerance_gets_none_not_an_exception(tmp_path, 
     assert _load(mdp, datetime.datetime(2026, 6, 10, 14, 30, tzinfo=ET), policy=policy) is None
 
 
+def test_a_lenient_policy_still_reaches_the_live_build_through_the_dispatch(
+    tmp_path, monkeypatch, mdp
+):
+    """The loader returning ``None`` is not the whole contract - the dispatch is.
+
+    A backward-only-but-lenient policy documents that a miss falls through to the
+    live build. The terminal "this should be unreachable" guard was keyed on
+    ``is_legacy``, which made that combination impossible to use: the docstring
+    promised a fall-through and the dispatch raised. Found by review; the guard
+    is keyed on ``on_miss`` now.
+    """
+    _install(tmp_path, monkeypatch,
+             {(ASSET, DAY - datetime.timedelta(days=1)): _frame(["2026-06-09 20:00"])})
+    monkeypatch.setattr(
+        IRSwapsMDP, "_get_citivelo_excel_fetcher",
+        lambda self, **kw: (_ for _ in ()).throw(RuntimeError("reached the live path")),
+    )
+    policy = SnapshotPolicy(method="asof", max_lag=datetime.timedelta(minutes=5))
+    with pytest.raises(RuntimeError, match="reached the live path"):
+        mdp._build_citivelo_excel_curve(
+            curve_name=CURVE,
+            timestamp=datetime.datetime(2026, 6, 10, 14, 30, tzinfo=ET),
+            kwargs={"snapshot_policy": policy},
+        )
+
+
 def test_the_tolerance_that_matters_is_minutes_not_the_twelve_hour_guard(store, mdp):
     """Wiring in the existing guard would not have caught this.
 

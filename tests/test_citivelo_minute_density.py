@@ -118,8 +118,21 @@ def test_covers_refuses_a_naive_instant(store):
         d.covers(pd.Timestamp("2026-06-10 09:00"))
 
 
-def test_the_count_only_path_reads_no_timestamps(store):
+def test_the_count_only_path_reads_no_timestamps(store, monkeypatch):
+    """Asserts the READ, not just the result shape.
+
+    "Returns None for the gap fields" is satisfied by a implementation that
+    reads every column and then throws the answer away, which is the cost this
+    module exists to avoid. So the column read is made to explode.
+    """
+    import pyarrow.parquet as pq
+
     store.write(ASSET, DAY, _minutes("2026-06-10", 5, 300))
+
+    def _boom(*a, **kw):
+        raise AssertionError("with_gaps=False must not read the timestamp column")
+
+    monkeypatch.setattr(pq, "read_table", _boom)
     d = day_density(store, ASSET, DAY, with_gaps=False)
     assert d.n_snapshots == 300
     assert d.first_utc is None and d.max_gap_s is None
@@ -155,23 +168,29 @@ def test_duplicate_stamps_are_counted_not_hidden(store):
     assert d.n_snapshots == 55 and d.n_duplicate_stamps == 5
 
 
-def test_a_store_predating_raw_partition_dir_is_cold_not_an_error():
+@pytest.mark.parametrize("has_the_day", [False, True])
+def test_a_store_predating_raw_partition_dir_is_never_certified_dense(has_the_day):
     """``day_cache`` supports a store that cannot expose its partition path.
 
-    It falls back to ``has_day``, so this module must not assume the newer API
-    either - and a store that cannot show its files has no density to report,
-    which is cold, not broken.
+    Both branches, deliberately. ``has_day=False`` is the case where the right
+    and the wrong answer coincide, so it proves nothing on its own. The one that
+    matters is ``has_day=True``: the day EXISTS and its density is
+    **unmeasurable**, and the module must report that as not-dense rather than
+    guess. Reporting a day dense on the strength of a count it could not take
+    would be the same class of defect as the read path this module supports.
     """
 
     class Ancient:
         base_dir = "nowhere"
 
         def has_day(self, asset, day):
-            return False
+            return has_the_day
 
-    assert day_density(Ancient(), ASSET, DAY) == DayDensity(
-        asset=ASSET, local_date=DAY, n_snapshots=0
-    )
+    got = day_density(Ancient(), ASSET, DAY)
+    assert got == DayDensity(asset=ASSET, local_date=DAY, n_snapshots=0)
+    assert got.is_dense(min_snapshots=1) is False
+    assert got.is_dense(min_snapshots=1, max_gap=None) is False
+    assert got.covers(pd.Timestamp("2026-06-10 09:00", tz="UTC")) is False
 
 
 def test_the_count_is_what_is_stored_not_what_the_read_path_serves(store, monkeypatch):

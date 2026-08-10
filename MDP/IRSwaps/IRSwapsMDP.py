@@ -2876,12 +2876,19 @@ class IRSwapsMDP(MarketDataProvider[_GenericPricable]):
                 if hit is not None:
                     return hit
 
-        if not policy.is_legacy:
-            # Structural, not argumentative: reaching this line means a strict
-            # request is about to be answered by a LIVE EXCEL BUILD over COM.
-            # Every strict miss above raises, so this should be unreachable - and
-            # if a future edit makes it reachable, it fails here rather than
-            # silently reintroducing the fallback this change removed.
+        if policy.on_miss == "raise":
+            # Structural, not argumentative: reaching this line means a request
+            # that asked to be TOLD about a miss is about to be answered by a
+            # LIVE EXCEL BUILD over COM. Every such miss above raises, so this
+            # should be unreachable - and if a future edit makes it reachable, it
+            # fails here rather than silently reintroducing the fallback this
+            # change removed.
+            #
+            # Keyed on on_miss, NOT on is_legacy. A policy that is backward-only
+            # but lenient (`on_miss="none"`) documents that it falls through to
+            # the live build, and guarding on is_legacy made that combination
+            # impossible to use - the docstring promised one thing and the
+            # dispatch did another. Found by review.
             raise SnapshotMiss(
                 f"citivelo_excel: a request under snapshot_policy ({policy.describe()}) "
                 f"reached the live Excel build for {curve_name} at {timestamp!r}. "
@@ -3455,6 +3462,15 @@ class IRSwapsMDP(MarketDataProvider[_GenericPricable]):
                 curve = self.get_data(single_request)
             except SnapshotMiss as miss:
                 strict_misses.append((t, str(miss)))
+                return
+            except ValueError:
+                # The policy raises ValueError for caller contradictions. Those
+                # are validated before this loop, so they should not reach here -
+                # except through the paths that route to _single BEFORE step 1
+                # (an unknown curve name, an unusable store layout). Swallowing
+                # one there would turn a contradiction into a short dict.
+                if not policy.is_legacy:
+                    raise
                 return
             except Exception:  # noqa: BLE001 - matches the generic loop this replaces
                 return
