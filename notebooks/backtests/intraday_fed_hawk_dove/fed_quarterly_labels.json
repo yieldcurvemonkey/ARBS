@@ -1,0 +1,1039 @@
+{
+ "speakers": {
+  "Powell": {
+   "full_name": "Jerome H. Powell",
+   "role": "Chair (through May 2026), then Governor",
+   "periods": [
+    {
+     "start_q": "2019Q1",
+     "end_q": "2022Q2",
+     "stance": 0,
+     "confidence": "high",
+     "why": "Chair and the median by construction. He sat between the hawkish dissents against the 2019 'mid-cycle adjustment' cuts (George and Rosengren voted against the July/September cuts) and Bullard's dovish July-2019 dissent for 50bp; through 2020-21 he was the median of a committee whose hawk end ran Bullard/Kaplan/George/Waller ('go early and go fast', Aug 2021) against a dove end of Kashkari, Brainard, Evans and Daly. Never dissented in his career."
+    },
+    {
+     "start_q": "2022Q3",
+     "end_q": "2023Q1",
+     "stance": 1,
+     "confidence": "low",
+     "why": "Kept on the hawkish side of his own committee, but downgraded to low confidence. The researcher's evidence is a named published ranking - Reuters' Doves-and-Hawks grid updated 14 Dec 2022 filed him 'Our call: hawkish', with the note that a Chair 'is typically centrist by definition. Powell however has signaled a personal preference for somewhat tighter policy' - plus the Aug-2022 Jackson Hole 'pain' speech and the 30 Nov 2022 line that rates would likely need to exceed the September dots. The vote-record challenger showed that EVERY FOMC vote in this window was unanimous (12-0 on 27 Jul, 21 Sep, 2 Nov, 14 Dec 2022 and 1 Feb 2023; 11-0 on 22 Mar 2023), so nothing here is vote-revealed. Absence of a split is not harder evidence than a dated published ranking, so the +1 stands at low confidence. Ranked above Brainard, Evans, Harker, Daly and Bostic; below Waller and Bullard, the only two in the HAWK bucket."
+    },
+    {
+     "start_q": "2023Q2",
+     "end_q": "2026Q2",
+     "stance": 0,
+     "confidence": "high",
+     "why": "Back to the median and stayed there through the end of his chairmanship and his first quarter as an ordinary Governor. Reuters' 15 Aug 2024 grid put him CENTRIST with Williams, Waller, Jefferson and Barr while Bowman/Barkin/Schmid/Kashkari/Logan were HAWKISH. In 2025 he held mid-year while Bowman and Waller dissented dovishly (30 Jul 2025) and Schmid, Musalem, Logan and Hammack pressed the other way, then delivered the Sep/Oct/Dec 2025 cuts with Miran dissenting for 50bp at all three; he held again on 28 Jan 2026 over dovish dissents from Miran and Waller. CORRECTED for 2026Q2: the research scored -1, but he voted with the 8-member majority on 29 Apr 2026 and was among the unanimous 12-0 on 17 Jun 2026, the quote offered as dovish support ('maybe a little bit of restriction or the high end of neutral is just the right place to be') argues for restriction and is hawk-leaning, its stated date of 29 Apr 2026 contradicts the claim that he said it as a Governor after handing over in May, and the SEP placement rests on an anonymous dot the June minutes describe only as 'Many participants' versus 'Many other participants'. Median is the supportable score."
+    }
+   ]
+  },
+  "Williams": {
+   "full_name": "John C. Williams",
+   "role": "President (New York); FOMC Vice Chair",
+   "periods": [
+    {
+     "start_q": "2019Q1",
+     "end_q": "2019Q4",
+     "stance": -1,
+     "confidence": "medium",
+     "why": "His 18 Jul 2019 speech - central banks should 'act quickly and forcefully' when rates are low and growth is slowing - drove markets to price a 50bp cut and forced a same-day NY Fed clarification; his r-star work was the intellectual case for pre-emptive easing. More dovish than George and Rosengren, who dissented against the 2019 cuts, and than Barkin/Mester; less dovish than Bullard, who dissented in July 2019 for a bigger cut, and Kashkari."
+    },
+    {
+     "start_q": "2020Q1",
+     "end_q": "2020Q4",
+     "stance": 0,
+     "confidence": "low",
+     "why": "Pandemic year: the committee was dovish in absolute terms and unanimous on the crisis measures, and as the desk's principal he spoke mostly on market functioning rather than the stance. Nothing separates the NY Fed president from the median; unranked-at-the-median is the honest answer."
+    },
+    {
+     "start_q": "2021Q1",
+     "end_q": "2021Q4",
+     "stance": -1,
+     "confidence": "medium",
+     "why": "Core of the 'transitory' leadership with Powell and Clarida and specifically the one holding out that the 'substantial further progress' bar had not been met. Dovish of the early-taper bloc that formed over the year (Bullard after his June flip, Kaplan, George and Waller) but not as dovish as Kashkari, Brainard, Evans or Daly."
+    },
+    {
+     "start_q": "2022Q1",
+     "end_q": "2025Q3",
+     "stance": 0,
+     "confidence": "high",
+     "why": "As FOMC Vice Chair he tracked the Chair almost exactly and never dissented across the hiking cycle, the hold and the 2024-25 cuts. Reuters' 14 Dec 2022 grid put him in the twelve-member HAWKISH bucket that WAS the committee median ('helped Powell lead what has been the most aggressive round of rate hikes in 40 years') - behind the HAWK pair Waller and Bullard, ahead of the DOVISH four. Reuters' 15 Aug 2024 grid put him CENTRIST alongside Powell, with Bowman, Barkin, Schmid, Kashkari and Logan hawkish of him and Kugler dovish of him."
+    },
+    {
+     "start_q": "2025Q4",
+     "end_q": "2026Q3",
+     "stance": -1,
+     "confidence": "medium",
+     "why": "His 21 Nov 2025 remark that there was room for a further adjustment 'in the near term' repriced the December cut and was read as the leadership's dovish signal; he then voted for the 10 Dec 2025 cut over hawkish dissents from Goolsbee and Schmid. Through 2026 he stayed with the no-hike camp ('there are encouraging reasons to expect that inflation has peaked and should edge down in coming quarters', 15 Jul 2026). Reuters' 31 Jul 2026 grid has him CENTRIST when the committee median sits in HAWKISH - more dovish than Warsh, Cook, Barkin, Musalem and the six hawks, less dovish than Bowman."
+    }
+   ]
+  },
+  "Waller": {
+   "full_name": "Christopher J. Waller",
+   "role": "Governor",
+   "periods": [
+    {
+     "start_q": "2021Q1",
+     "end_q": "2021Q2",
+     "stance": 0,
+     "confidence": "low",
+     "why": "Newly sworn in (Dec 2020) and still inside the 'transitory' consensus - he later dated his own holding of that view as 'from April until September 2021'. Nothing separates him from the median; the hawkish end was Bullard (after 18 Jun), Kaplan and George, the dovish end Kashkari, Brainard, Evans and Daly."
+    },
+    {
+     "start_q": "2021Q3",
+     "end_q": "2023Q3",
+     "stance": 2,
+     "confidence": "high",
+     "why": "Among the very most hawkish members for two years. 2 Aug 2021: taper could start by October, 'go early and go fast'; Oct 2021 he raised 'a more aggressive policy response than just tapering'; Nov 2021 he pushed to accelerate the wind-down; through 2022 he championed front-loading. Reuters' 14 Dec 2022 grid put him in the extreme HAWK bucket with only Bullard for company, ahead of Mester, Kashkari, George and Barkin and ahead of Powell and Williams in the median HAWKISH bucket. Reuters' own retrospective: 'Waller was among the Fed's most hawkish from 2021 to 2023.'"
+    },
+    {
+     "start_q": "2023Q4",
+     "end_q": "2024Q2",
+     "stance": 0,
+     "confidence": "high",
+     "why": "The turn to the middle. His 28 Nov 2023 'Something Appears to Be Giving' speech opened the door to cutting on falling inflation alone and was the pivot behind the year-end rally - a striking move from the committee's leading hawk - and he pushed back in March 2024 with 'There's Still No Rush'. No longer hawkish of Bowman, Schmid, Logan or Kashkari, not yet a dove."
+    },
+    {
+     "start_q": "2024Q3",
+     "end_q": "2024Q4",
+     "stance": -1,
+     "confidence": "high",
+     "why": "Moved onto the dovish side. 'I believe the time to lower the policy rate is drawing closer' (17 Jul 2024); he voted for the 50bp cut on 18 Sep 2024 that Bowman dissented against wanting only 25bp. Reuters' 15 Aug 2024 grid placed him on the dovish edge of the CENTRIST block with only Kugler to his left and Bowman/Barkin/Schmid/Kashkari/Logan to his right."
+    },
+    {
+     "start_q": "2025Q1",
+     "end_q": "2025Q1",
+     "stance": 0,
+     "confidence": "medium",
+     "why": "CORRECTED from -1. The research built Waller's whole arc as a dissent narrative and then omitted the only dissent he cast in the 2024Q3-2025Q2 window, one that points the other way: the FOMC statement of 19 Mar 2025 records that 'Voting against this action was Christopher J. Waller, who supported no change for the federal funds target range but preferred to continue the current pace of decline in securities holdings' - a dissent in the TIGHTENING direction against the majority's decision to slow runoff. Independently corroborated by the dated 15 Jan 2025 Reuters/investing.com grid, which places Waller in the HAWKISH bucket (also visible in the research's own Schmid entry, which lists Waller in that tier). His Q1 rate rhetoric was genuinely dovish, which is what the -1 rested on, so the merge lands at the median rather than positive."
+    },
+    {
+     "start_q": "2025Q2",
+     "end_q": "2025Q2",
+     "stance": -1,
+     "confidence": "medium",
+     "why": "Back to the dovish side on rates: he argued tariff effects on prices were a one-off level shift rather than inflation and by June 2025 said publicly he would back a July cut - more dovish than Powell, Williams, Musalem, Schmid and Collins, but he cast no dissent in the quarter."
+    },
+    {
+     "start_q": "2025Q3",
+     "end_q": "2025Q3",
+     "stance": -2,
+     "confidence": "high",
+     "why": "The dove pole, vote-revealed: he dissented with Bowman on 30 Jul 2025 in favour of a 25bp cut while the committee held at 4.25-4.50% - the first double governor dissent since 1993. Only Miran, sworn in 16 Sep 2025 and dissenting for 50bp at the 17 Sep meeting, was arguably further out by quarter-end."
+    },
+    {
+     "start_q": "2025Q4",
+     "end_q": "2025Q4",
+     "stance": -1,
+     "confidence": "high",
+     "why": "CORRECTED from -2 on strict vote ordering. Waller cast no dissent in 2025Q4 and voted with the majority for the 25bp cuts at both meetings - 29 Oct 2025 (10-2; Miran for 50bp, Schmid for a hold) and 10 Dec 2025 (9-3; Miran for more, Goolsbee and Schmid for a hold). His revealed preference in the quarter is identical to Powell's, Williams's, Cook's, Barr's and Jefferson's, while Miran demonstrably dissented further out on the dovish side at both meetings. The research's own text concedes the ordering ('only Miran sat further out on the dovish side in 2025Q4') and then scored both at -2."
+    },
+    {
+     "start_q": "2026Q1",
+     "end_q": "2026Q1",
+     "stance": -2,
+     "confidence": "high",
+     "why": "Back to the pole and voting it: he dissented with Miran on 28 Jan 2026 for a cut when the committee held at 3.50-3.75%. Ahead of Powell, Williams, Cook, Jefferson and Bowman on the dovish side and far ahead of Schmid, Logan and Hammack."
+    },
+    {
+     "start_q": "2026Q2",
+     "end_q": "2026Q3",
+     "stance": 0,
+     "confidence": "medium",
+     "why": "He stopped dissenting - voted with the majority on 18 Mar and 29 Apr 2026 while Miran carried on dissenting for cuts alone - and by 13 Jul 2026 was warning that 'if we get another hot reading on core inflation this week, then the FOMC will need to consider tightening monetary policy', a speech that lifted July hike odds sharply. Reuters' 31 Jul 2026 grid still files him CENTRIST but at the hawkish edge of that block: hawkish of Powell, Williams, Jefferson, Barr and Bowman, short of Warsh, Cook, Barkin, Musalem and the six hawks, and short of Hammack, Kashkari and Logan, who dissented on 29 Jul 2026 for an outright hike."
+    }
+   ]
+  },
+  "Bowman": {
+   "full_name": "Michelle W. Bowman",
+   "role": "Governor; Vice Chair for Supervision from June 2025",
+   "periods": [
+    {
+     "start_q": "2019Q1",
+     "end_q": "2021Q3",
+     "stance": 0,
+     "confidence": "low",
+     "why": "In her first years on the Board she spoke almost entirely on community banking and supervision, her designated seat, and said very little that ranks her on the policy stance. She voted with the majority throughout, including the 2019 cuts that George and Rosengren dissented against. Genuinely unrankable rather than centrist by conviction."
+    },
+    {
+     "start_q": "2021Q4",
+     "end_q": "2022Q4",
+     "stance": 1,
+     "confidence": "medium",
+     "why": "First clear hawkish positioning: 14 Oct 2021 she was 'very comfortable' with a November taper and flagged inflation risks, early among the governors. Through 2022 she was hawkish but not extreme - Reuters' 14 Dec 2022 grid placed her in the twelve-member HAWKISH bucket, noting she expected rates to need to rise 'slightly higher' than her September projection, 'similar to Chair Powell'. Ahead of Brainard, Evans, Harker, Daly and Bostic, level with Powell/Williams, behind Waller and Bullard."
+    },
+    {
+     "start_q": "2023Q1",
+     "end_q": "2025Q1",
+     "stance": 2,
+     "confidence": "high",
+     "why": "The committee's most hawkish governor. Through 2023 she repeatedly said additional rate increases would likely be needed after the committee had stopped hiking. Reuters' 15 Aug 2024 grid placed her in the HAWKISH bucket - the top five of eighteen with Barkin, Schmid, Kashkari and Logan, at a moment when twelve members were CENTRIST and nobody was HAWK. She then cast the lone dissent on 18 Sep 2024 against the 50bp cut, preferring 25bp: the first governor dissent since 2005, in the hawkish direction. The 2025Q1 tail is continuity rather than a dated ranking and is the weakest part of the period."
+    },
+    {
+     "start_q": "2025Q2",
+     "end_q": "2025Q2",
+     "stance": 0,
+     "confidence": "medium",
+     "why": "CORRECTED from -2/high. Every piece of vote evidence the research cites for the flip lands in 2025Q3, not Q2. Her revealed preference across the whole of 2025Q2 is two votes FOR unanimous holds: 7 May 2025 (12-0, no dissents) and 18 Jun 2025, where the statement names her in the 'voting for' list with no dissents recorded. Her late-June remarks signalling support for a July cut are real but post-date her vote for the unanimous June hold and cover roughly one week of a thirteen-week quarter - enough to make -1 arguable for the June tail, nowhere near enough for a 4-point move to the dove pole one quarter before any vote moves."
+    },
+    {
+     "start_q": "2025Q3",
+     "end_q": "2025Q3",
+     "stance": -2,
+     "confidence": "high",
+     "why": "The flip, and the sharpest single reversal on the committee, now dated where the vote is. Confirmed in June 2025 as Vice Chair for Supervision, she dissented alongside Waller on 30 Jul 2025 for a 25bp cut while the committee held at 4.25-4.50% - the first double governor dissent since 1993 - and subsequently penciled three 2026 cuts against a far shallower committee median, citing labour-market deterioration."
+    },
+    {
+     "start_q": "2025Q4",
+     "end_q": "2026Q1",
+     "stance": -1,
+     "confidence": "medium",
+     "why": "CORRECTED from -2 for 2025Q4 on strict vote ordering, and unchanged at -1 for 2026Q1. She cast no dissent in 2025Q4 and voted with the majority for the cuts on 29 Oct 2025 (10-2) and 10 Dec 2025 (9-3), at both of which Miran dissented for a larger cut - so Miran is strictly further out on the vote record while Bowman got the policy she voted for. She then voted for the 28 Jan 2026 hold at 3.50-3.75% while Waller and Miran dissented for a cut, leaving her hawkish of the two doves and dovish of the emerging hike camp (Hammack, Kashkari, Logan)."
+    },
+    {
+     "start_q": "2026Q2",
+     "end_q": "2026Q3",
+     "stance": -2,
+     "confidence": "high",
+     "why": "With Miran gone and Waller turning hawkish, the last dove standing. Reuters' 31 Jul 2026 grid makes her the sole DOVISH member of an eighteen-person committee distributed 1 dovish / 7 centrist / 4 hawkish / 6 hawk - the median member is HAWKISH and she is two buckets below it. Her 29 May 2026 line is that only more persistent oil-price pass-through would make her 'consider shifting my approach to thinking about the balance of risks', at a point when nine colleagues wanted at least one hike by year-end."
+    }
+   ]
+  },
+  "Clarida": {
+   "full_name": "Richard H. Clarida",
+   "role": "Vice Chair (resigned January 14, 2022)",
+   "periods": [
+    {
+     "start_q": "2019Q1",
+     "end_q": "2021Q2",
+     "stance": -1,
+     "confidence": "medium",
+     "why": "Consistently on the dovish side of the leadership. In 2019 he supplied the public case for the 'insurance' cuts ahead of Powell - act before the data turn bad - against George and Rosengren, who dissented against those cuts, though not as dovish as Bullard, who dissented for a larger July 2019 cut. He then architected the Aug 2020 flexible average inflation targeting framework and the outcome-based forward guidance and was the leadership's most explicit 'transitory' voice into 2021 ('the surge of inflation will prove to be largely transitory'), behind Bullard, Kaplan and George on the hawkish side but ahead of Kashkari, Brainard and Evans."
+    },
+    {
+     "start_q": "2021Q3",
+     "end_q": "2021Q4",
+     "stance": 0,
+     "confidence": "medium",
+     "why": "He moved with the pivot rather than lagging it. His 4 Aug 2021 speech said the conditions for liftoff could be met by end-2022 and that tapering could begin later in 2021 - read at the time as a hawkish surprise from the leadership - and by October he said the employment conditions for tapering had 'all but been met', with November remarks raising an accelerated taper. That is the median, still behind Bullard, Waller and George but no longer with Kashkari, Brainard, Evans and Daly. Left the Board 14 Jan 2022, so no 2022 quarters."
+    }
+   ]
+  },
+  "Brainard": {
+   "full_name": "Lael Brainard",
+   "role": "Governor (2019Q1-2022Q1); Vice Chair (2022Q2-2023Q1)",
+   "periods": [
+    {
+     "start_q": "2019Q1",
+     "end_q": "2019Q4",
+     "stance": -1,
+     "confidence": "medium",
+     "why": "Reuters' 2019 doves-and-hawks graphic placed her under 'The Doves - leaning dovish' with Evans, Bostic and Daly, and she pushed the most accommodation-minded framework ideas on the Board ('opportunistic reflation', 16 May 2019; yield-curve caps, 26 Nov 2019). But she voted for all three 2019 cuts without dissent, so she sat INSIDE the dovish extreme - Bullard dissented in June 2019 for an immediate cut and again in September for 50bp. More dovish than Quarles, Clarida and Powell; less so than Bullard and Kashkari."
+    },
+    {
+     "start_q": "2020Q1",
+     "end_q": "2021Q4",
+     "stance": -2,
+     "confidence": "high",
+     "why": "The Board's clearest advocate of maximum accommodation and outcome-based forward guidance through COVID, then the leading 'transitory' voice of 2021 (11 May 'Patience' speech, 30 Jul remarks, 27 Sep Delta speech covered explicitly as a dovish speech). She resisted accelerating taper and hikes while Bullard flipped hawkish and Waller, Kaplan, George, Mester and Quarles pushed the other way, leaving her with Kashkari, Evans and Daly at the dovish pole."
+    },
+    {
+     "start_q": "2022Q1",
+     "end_q": "2022Q2",
+     "stance": -2,
+     "confidence": "medium",
+     "why": "CORRECTED from -1. These are the only two quarters in the research map with no dove pole at all (minimum -1) against three then four members at +2 (Bullard, Mester, Waller, joined by Kashkari) - the textbook signature of an absolute rather than relative scale, appearing exactly as the hiking cycle began. The reasons given for the dip are absolute-tone moves during a quarter in which the entire committee turned hawkish: a Senate CONFIRMATION hearing for the Vice Chair job (12 Jan 2022, 'curbing inflation our most important task') and the 5 Apr 2022 balance-sheet speech. Nobody is scored below her in either quarter, and the research restores her to -2 from 2022Q3 calling her 'back to the dovish pole and now the most senior dove' - so the pole never actually changed hands, only the committee's absolute level did. Note that the auditor's first-choice fix was restoring Charles Evans (Chicago president until Jan 2023, cited by the research itself as sitting in Reuters' Dec-2022 DOVISH bucket but emitted for zero 2022 quarters); the roster caps Evans at 2021Q4, and this is the auditor's own designated within-roster substitute."
+    },
+    {
+     "start_q": "2022Q3",
+     "end_q": "2023Q1",
+     "stance": -2,
+     "confidence": "high",
+     "why": "The dovish pole and now the most senior dove. 7 Sep 2022 'Bringing Inflation Down' explicitly flagged the risks of overtightening, a sentiment absent from Powell's messaging; 30 Sep 2022 global-spillover speech; 14 Nov 2022 she was the first senior official to say it would 'soon' be appropriate to slow the pace of hikes. Reuters' 14 Dec 2022 grid put her first-listed in the most dovish occupied bucket (with Evans, Harker, Daly) when 12 of 19 were 'hawkish' and Waller/Bullard were 'hawk'."
+    }
+   ]
+  },
+  "Quarles": {
+   "full_name": "Randal K. Quarles",
+   "role": "Governor and Vice Chair for Supervision",
+   "periods": [
+    {
+     "start_q": "2019Q1",
+     "end_q": "2019Q4",
+     "stance": 1,
+     "confidence": "medium",
+     "why": "Reuters' 2019 hawks-and-doves graphic placed him under 'The Hawks - leaning hawkish'. In March 2019 Reuters described him as one of the bank's centrists offering an optimistic view of the economy who said more rate INCREASES may be needed - hawkish relative to a Board that went on to cut three times that year. He voted for all three cuts, so he stayed short of George and Rosengren, who dissented against them."
+    },
+    {
+     "start_q": "2020Q1",
+     "end_q": "2021Q2",
+     "stance": 0,
+     "confidence": "low",
+     "why": "Almost no differentiating monetary-policy signal: his bandwidth went to supervision and the COVID facilities. Feb 2020 called the stance 'appropriate'; 23 Sep 2020 said he would be 'more patient' on inflation during the recovery; he endorsed the outcome-based forward guidance; and as late as 28 Jun 2021 still called the supply-chain impulse 'transitory'. Indistinguishable from the median, unlike the hawks (George, Mester, Kaplan) or the doves (Kashkari, who dissented in Sep 2020 for stronger guidance)."
+    },
+    {
+     "start_q": "2021Q3",
+     "end_q": "2021Q4",
+     "stance": 1,
+     "confidence": "medium",
+     "why": "Moved to the hawkish side on the balance sheet: among the earliest to declare the taper test satisfied (20 Oct 2021) and his speech 'How Long is Too Long? How High is Too High?' put persistent upside inflation risk on the table. But he also called rate hikes 'premature' and said the Fed was 'not behind the curve', keeping him behind Bullard, Waller, Mester and Kaplan. Left the Board 31 Dec 2021."
+    }
+   ]
+  },
+  "Jefferson": {
+   "full_name": "Philip N. Jefferson",
+   "role": "Governor (from May 2022); Vice Chair (from Sept 2023)",
+   "periods": [
+    {
+     "start_q": "2022Q4",
+     "end_q": "2023Q2",
+     "stance": 0,
+     "confidence": "low",
+     "why": "Newly seated governor with a thin monetary-policy record and few differentiating remarks. Reuters' 14 Dec 2022 grid put him in the 'hawkish' bucket - but that bucket held 12 of 19 members, i.e. it WAS the committee median, alongside Powell, Williams, Barr and Cook, while Brainard/Evans/Harker/Daly were the doves and Waller/Bullard the hawks. The 23 Jun 2023 vintage again had him in the median bucket."
+    },
+    {
+     "start_q": "2023Q3",
+     "end_q": "2026Q3",
+     "stance": 0,
+     "confidence": "medium",
+     "why": "The committee's stable median as Vice Chair and the flattest speaker in this set - no dissents in his entire tenure. Reuters moved him into the median 'centrist' bucket in Dec 2023 and kept him there in every vintage since (22 May 2024, 15 Aug 2024, 31 Jul 2026), always grouped with Powell and Williams. His 9 Oct 2023 'higher bond yields can substitute for a hike' remark was dovish but became Fed consensus within days. In 2025 his 'proceed slowly' framing put him behind the cut advocates Waller, Bowman and Miran but ahead of Schmid, Logan and Hammack; on 16 Jul 2026 he said the Fed could need to hike if inflation does not ease but policy is 'well positioned' - a notch dovish of Cook and well dovish of Hammack, Logan and Kashkari, who dissented for tighter policy on 29 Jul 2026."
+    }
+   ]
+  },
+  "Cook": {
+   "full_name": "Lisa D. Cook",
+   "role": "Governor",
+   "periods": [
+    {
+     "start_q": "2022Q4",
+     "end_q": "2023Q1",
+     "stance": 0,
+     "confidence": "low",
+     "why": "Newly seated governor voting with a unanimous committee (listed among the unanimous 'voting in favor' at the 13-14 Dec 2022 meeting). Reuters' 14 Dec 2022 grid placed her in the 'hawkish' bucket, which held 12 of 19 members and therefore represented the committee median, alongside Powell, Williams, Barr and Jefferson - not with the doves Brainard, Evans, Harker and Daly."
+    },
+    {
+     "start_q": "2023Q2",
+     "end_q": "2024Q4",
+     "stance": -1,
+     "confidence": "medium",
+     "why": "A mild dovish lean built on labour-market framing rather than any dissent. Reuters' 23 Jun 2023 grid moved her to 'centrist' while the median bucket was still 'hawkish' (only Goolsbee, Harker and Daly below her). CAVEAT: the Dec 2023, May 2024 and Aug 2024 vintages keep her 'centrist' when centrist WAS the median, i.e. those readings argue for 0. The -1 rests on consistent labour-side framing - she 'wholeheartedly supported' the 50bp Sep 2024 cut citing downside employment risks, and Reuters' Aug 2024 note said she 'of late has increased her attention to the labor market'."
+    },
+    {
+     "start_q": "2025Q1",
+     "end_q": "2025Q1",
+     "stance": -2,
+     "confidence": "medium",
+     "why": "CORRECTED from -1 on a directly fetched, dated published ranking. The 15 Jan 2025 Reuters/investing.com 'Fed hawks and doves' scorecard places Lisa Cook ALONE in the DOVE bucket, one full tier below Goolsbee, Kugler and Daly in DOVISH, with Waller in HAWKISH and Kashkari/Logan in HAWK. The research's Goolsbee entry misreads the same source as 'dovish again on 15-Jan-2025 with Cook', flattening a two-bucket gap in which Cook is the extreme, and its stated reason for capping her at -1 ('the 2025 dove pole was Miran plus Waller and Bowman') is drawn entirely from 2025H2: Miran was not sworn in until Sept 2025, Bowman is scored +2 in 2025Q1, and Waller is in the hawkish tier on that January grid. This also fills the last of three consecutive quarters in which the research had no dove pole at all."
+    },
+    {
+     "start_q": "2025Q2",
+     "end_q": "2025Q4",
+     "stance": -1,
+     "confidence": "medium",
+     "why": "Back inside the dove bloc rather than at its edge. Through 2025 she justified the September and October cuts by a weakening job market (3 Nov 2025 Brookings) and called December 'live', but she voted with the majority throughout: the dove pole in this stretch is Miran, who dissented for 50bp in Sept, Oct and Dec, plus Waller and Bowman, who dissented for a cut in July 2025 while Cook did not."
+    },
+    {
+     "start_q": "2026Q1",
+     "end_q": "2026Q3",
+     "stance": 1,
+     "confidence": "medium",
+     "why": "A genuine flip to the hawkish side of a committee now debating HIKES. 4 Feb 2026 (Economic Club of Miami) she said inflation risk was the bigger threat, wanted more proof price pressures were receding before any cut, and called the policy rate only 'ever so mildly' accommodative; 15 Jul 2026 she called the inflation prints 'disappointing'; 5 Aug 2026 in Anchorage: 'I am prepared to act by raising rates, if necessary.' Reuters' 31 Jul 2026 grid places her in the 'hawkish' bucket with Chair Warsh, Barkin and Musalem - one bucket hawkish of the centrist bloc (Powell, Williams, Jefferson, Barr, Waller, Paulson, Daly) and one bucket dovish of Hammack, Logan and Kashkari, who dissented for tighter policy at the 9-3 hold on 28-29 Jul 2026 (the research said '12-3'; the committee has twelve voters and the tally was 9-3). Confidence lowered from high to medium: she has never dissented and voted with the majority on 28 Jan and 18 Mar 2026, so nothing here is vote-revealed."
+    }
+   ]
+  },
+  "Kugler": {
+   "full_name": "Adriana D. Kugler",
+   "role": "Governor",
+   "periods": [
+    {
+     "start_q": "2024Q1",
+     "end_q": "2024Q2",
+     "stance": 0,
+     "confidence": "low",
+     "why": "Reuters' 22 May 2024 grid had her 'centrist' with Powell, Williams, Jefferson, Barr, Waller and Cook; the dove end was Harker alone and the hawk end Bowman, Logan, Kashkari, Schmid, Barkin, Bostic and Mester. Still a relatively new governor with limited differentiating commentary, moving with the median through the first-quarter inflation scare."
+    },
+    {
+     "start_q": "2024Q3",
+     "end_q": "2024Q4",
+     "stance": -2,
+     "confidence": "medium",
+     "why": "CORRECTED from -1 on the research's own citation. Reuters reclassified her to 'dovish' in the 15 Aug 2024 vintage and she was the ONLY member in that bucket - by the grid's own construction the most dovish policymaker on the committee at that moment, with the note that she 'has laid out a more optimistic view about inflation than some of her colleagues'. Naming someone the single most dovish member and then withholding the pole score is precisely the non-relative failure; these are also the first two of three consecutive quarters in which the research had no -2 at all while the hawk pole stayed occupied (Bowman, then Hammack). She then 'strongly supported' the 50bp September cut and signalled openness to further cuts, so nothing in Q4 displaces her."
+    },
+    {
+     "start_q": "2025Q1",
+     "end_q": "2025Q1",
+     "stance": 0,
+     "confidence": "low",
+     "why": "CORRECTED from +1 to the middle rather than all the way to the auditor's -1. The one dated ranking inside the quarter - the 15 Jan 2025 Reuters/investing.com grid, fetched directly - still has her in the DOVISH bucket with Goolsbee and Daly, which rules out +1. But unlike Cook's case there IS countervailing intra-quarter evidence covering two thirds of the quarter: 7 Feb 2025 (appropriate to hold 'for some time' given limited progress on inflation) and 7/10 Mar 2025 (hold, citing upside inflation risks). A January dove and a February-March hawk average to the median, which is the auditor's own stated alternative."
+    },
+    {
+     "start_q": "2025Q2",
+     "end_q": "2025Q3",
+     "stance": 1,
+     "confidence": "high",
+     "why": "A clean reversal to the hawkish side, and the sharpest mover of the 2025 governors. 2 Apr 2025: disinflation 'may have stalled', and she 'strongly supported' holding at 4.25-4.50%. 17 Jul 2025: no rate cut 'for some time' as tariffs pass through to prices. CNBC on her 1 Aug 2025 resignation: 'Kugler of late has expressed generally hawkish views.' Ahead of Waller and Bowman, who dissented for a cut at the July 2025 meeting, and ahead of Powell's median, though behind Schmid, Logan, Musalem and Hammack. She was 'absent and not voting' at the 29-30 Jul 2025 meeting and left the Board 8 Aug 2025."
+    }
+   ]
+  },
+  "Bullard": {
+   "full_name": "James B. Bullard",
+   "role": "President (St. Louis)",
+   "periods": [
+    {
+     "start_q": "2019Q1",
+     "end_q": "2019Q4",
+     "stance": -2,
+     "confidence": "high",
+     "why": "2019 voter and the committee's dovish extreme. Dissented 19 Jun 2019 wanting a 25bp CUT when the FOMC held - the first dissent of Powell's chairmanship - then dissented again 18 Sep 2019 wanting 50bp when the FOMC cut only 25. The only participant asking for more easing than the median at both meetings, at the opposite pole from the hawkish dissenters George and Rosengren."
+    },
+    {
+     "start_q": "2020Q1",
+     "end_q": "2021Q1",
+     "stance": -1,
+     "confidence": "medium",
+     "why": "Non-voter. Backed the full pandemic easing but was NOT the dovish pole in this stretch - Kashkari, Brainard and Evans were. He was conspicuously the reopening optimist (Feb 2020: additional cuts only if the coronavirus becomes a pandemic; Jul 2020 'The State of the COVID-19 Crisis in the U.S.' arguing risk-mitigation could deliver higher incomes AND lower fatalities) and through 2021Q1 still resisted taper talk. A dovish lean, not the extreme."
+    },
+    {
+     "start_q": "2021Q2",
+     "end_q": "2021Q3",
+     "stance": 2,
+     "confidence": "medium",
+     "why": "CORRECTED from +1. The research withheld the pole with the explicit reason that 'in this specific window Kaplan and Rosengren were pushing taper at least as hard' - but the roster emits Kaplan in no quarter after 2020Q4 and Rosengren in none after 2019Q4, so Bullard was being ranked below two members who do not exist anywhere in the map's 2021. That is ranking against a phantom committee, and the within-roster fix is to promote him. On the market's reading his 18 Jun 2021 CNBC flip - pencilling an initial 2022 hike and calling the tightening shift 'natural' - was THE hawkish event of the reflation era, knocking equities and flattening the curve on the day. Boundary caveat: the flip is mid-June, so a majority-of-quarter convention would clip this to 2021Q3 alone; 2021Q3 is unambiguous either way, and the research itself already treated the whole of Q2 as post-flip when it scored +1."
+    },
+    {
+     "start_q": "2021Q4",
+     "end_q": "2022Q4",
+     "stance": 2,
+     "confidence": "high",
+     "why": "The committee's leading hawk once Kaplan and Rosengren resigned in Sep 2021. Nov 2021: urged the Fed to 'tack in a more hawkish direction'; Dec 2021 pushed accelerated taper. As a 2022 voter he DISSENTED on 16 Mar 2022 preferring 50bp, was first to float 75bp, first to call for 3%+ by year-end, and published the 'Bullard rule' chart implying a 5-7% terminal rate. WSJ: he 'has consistently been one of the Fed's most hawkish members, and has in many cases led the way for where policy has gone.'"
+    }
+   ]
+  },
+  "Barr": {
+   "full_name": "Michael S. Barr",
+   "role": "Governor (Vice Chair for Supervision Jul 2022 - Feb 2025)",
+   "periods": [
+    {
+     "start_q": "2022Q3",
+     "end_q": "2025Q3",
+     "stance": 0,
+     "confidence": "low",
+     "why": "Sworn in 19 Jul 2022 as Vice Chair for Supervision and never dissented in this stretch. His public output was overwhelmingly supervisory (Basel endgame, the SVB report), so almost nothing separated him on the rate spectrum, and where he did speak he tracked the Powell consensus: Oct 2023, policy 'at or very near' sufficiently restrictive and the question is 'how long'; May 2024, early-year inflation 'disappointing'; he voted for the Sep 2024 50bp cut while Bowman dissented for 25. He stepped down as Vice Chair for Supervision on 28 Feb 2025 and stayed on as a governor, but his 2025 spring commentary stayed deliberately two-sided (9 May 2025 Reykjavik: tariffs would push inflation UP and unemployment UP, Powell's own 'difficult tradeoff' framing) and he voted with the majority through the July hold and for the September cut. A genuine non-signal rather than a confident median."
+    },
+    {
+     "start_q": "2025Q4",
+     "end_q": "2026Q1",
+     "stance": 1,
+     "confidence": "medium",
+     "why": "Distinguishable as a hawk once the Board split. Waller and Bowman had dissented in Jul 2025 for a cut and Miran was dissenting for 50bp from September; Barr argued the other way. 9 Oct 2025: 'uncertainty about both inflation and jobs warrants a cautious approach to any further interest rate cut... risks of persistent inflation and rising inflation expectations.' The FT, reporting Waller's December-cut push, grouped him explicitly with the hawks alongside Collins and Schmid; Bloomberg: 'Barr Urges Caution on Rate Moves, While Williams Sees More Cuts.' Carries into 2026Q1 on his 26 Mar 2026 line about price shocks and inflation expectations. +1 not +2 - Schmid, Logan, Hammack and Musalem were further out."
+    },
+    {
+     "start_q": "2026Q2",
+     "end_q": "2026Q3",
+     "stance": 0,
+     "confidence": "medium",
+     "why": "Back at the median because the committee moved past him, not because he moved. Reuters' grid updated 31 Jul 2026 places him CENTRIST, fifth of eighteen from the dovish end, on his unchanged 26 Mar 2026 quote 'I am particularly concerned that yet another price shock could increase longer-term inflation expectations.' He did NOT join Hammack, Kashkari and Logan, who dissented for a 25bp HIKE on 28-29 Jul 2026, which caps him below the hawkish wing, and he sits hawkish of Bowman, Powell and Williams."
+    }
+   ]
+  },
+  "Miran": {
+   "full_name": "Stephen I. Miran",
+   "role": "Governor",
+   "periods": [
+    {
+     "start_q": "2025Q3",
+     "end_q": "2026Q2",
+     "stance": -2,
+     "confidence": "high",
+     "why": "The committee's lone dove for his entire tenure, with no phase in which he was anything else. Sworn in 16 Sep 2025 and then dissented at SIX consecutive meetings - Sep 2025, Oct 2025, Dec 2025, Jan 2026, Mar 2026 and 29 Apr 2026 - always for easier policy (50bp when the FOMC cut 25, then 25bp when the FOMC held). His Sep 2025 SEP dot was the most aggressive submitted and a visible outlier. At the 8-4 April 2026 meeting - the most dissents since 1992 - he was the single dove against three regional presidents dissenting the other way (Hammack, Kashkari and Logan, who supported the hold but objected to the easing bias). More dovish than Waller and Bowman, themselves the Board's doves. Resigned 14 May 2026 ahead of Warsh's swearing-in, so April 2026 was his last meeting. Deliberately not split: the 50bp-to-25bp softening tracks the committee moving away from him, not a change in his position within it."
+    }
+   ]
+  },
+  "Paulson": {
+   "full_name": "Anna L. Paulson",
+   "role": "President (Philadelphia)",
+   "periods": [
+    {
+     "start_q": "2025Q4",
+     "end_q": "2025Q4",
+     "stance": -1,
+     "confidence": "medium",
+     "why": "Took office 1 Jul 2025. Her first speech (13 Oct 2025) argued that rising risks to the job market call for more rate cuts and that tariffs now looked unlikely to push inflation up as much as expected - the 'look through tariffs' framing shared with Waller and Miran. Bloomberg: 'Fed's Paulson Favors Two More 2025 Cuts, Looking Through Tariffs.' Dovish of the Schmid/Logan/Hammack/Musalem/Collins/Barr wing then resisting the October and December cuts. Only -1: the two-cut path was also the September median dot, she was a non-voter in 2025, and by December she was 'approaching the meeting cautiously', noting 'each cut raises the bar for the next one'."
+    },
+    {
+     "start_q": "2026Q1",
+     "end_q": "2026Q2",
+     "stance": 0,
+     "confidence": "medium",
+     "why": "She hardened, but the committee hardened more, leaving her at the median. 3 Jan 2026 Philadelphia speech: further cuts 'could be some way off' and appropriate only 'late in 2026' if inflation moderated; 14 Jan she reiterated cuts were a later-in-the-year proposition. Reuters' 31 Jul 2026 grid places her CENTRIST, seventh of eighteen, on her 29 May 2026 line that it is 'healthy that market participants have taken on board scenarios where the funds rate remains unchanged for an extended period, as well as scenarios where further tightening becomes necessary'. As a 2026 voter she voted with the majority to hold in June and July and pointedly did NOT join Hammack, Kashkari and Logan in dissenting for a hike. Range capped at 2026Q2 per the roster."
+    }
+   ]
+  },
+  "Warsh": {
+   "full_name": "Kevin M. Warsh",
+   "role": "Chair",
+   "periods": [
+    {
+     "start_q": "2026Q2",
+     "end_q": "2026Q3",
+     "stance": 0,
+     "confidence": "medium",
+     "why": "Confirmed 13 May 2026 by 54-45 (the narrowest chair vote on record) and sworn in 22 May 2026, so his FOMC tenure inside this window covers only the June and July 2026 meetings. He reads hawkish versus the Powell committee he inherited: his debut on 16-17 Jun 2026 paired a unanimous 12-0 hold with an SEP median that flipped from an implied cut to an implied HIKE (year-end 2026 median 3.8% vs 3.4% in March), 17 of 18 seeing inflation risks tilted to the upside, forward guidance deleted and the statement cut to roughly 130 words. But relative to the committee he actually chairs he is the median: Reuters' grid updated 31 Jul 2026 puts him CENTRIST, ninth of eighteen - dead centre - quoting 'the path to central bank heaven requires delivering on our remit. These days that means delivering on price stability.' He held again on 29 Jul 2026 with three dissents for a 25bp HIKE (Hammack, Kashkari, Logan), i.e. the hawkish wing wanted more than he did, while Bowman, Powell and Williams sit dovish of him. He withheld his own rate-path projection and declined any forward steer, so there is no dot and no dissent to push him off the median. Warsh is absent from the roster CSV and his tenure is inferred from the 22 May 2026 swearing-in - drop this key if the backtest roster rejects it."
+    }
+   ]
+  },
+  "Evans": {
+   "full_name": "Charles L. Evans",
+   "role": "President (Chicago)",
+   "periods": [
+    {
+     "start_q": "2019Q1",
+     "end_q": "2019Q2",
+     "stance": -1,
+     "confidence": "medium",
+     "why": "2019 voter with a dovish lean but not yet the dove anchor: he backed the January 'patient' pivot and by March/June was arguing rates could stay flat through 2020 and that a cut might be needed to lift inflation expectations. Still less forward-leaning than Bullard, who dissented at the 18-19 Jun 2019 meeting for an immediate cut, and than Kashkari. Well below George and Rosengren, who were publicly resisting any easing."
+    },
+    {
+     "start_q": "2019Q3",
+     "end_q": "2021Q3",
+     "stance": -2,
+     "confidence": "high",
+     "why": "Among the FOMC's most dovish members throughout. Voted FOR all three 2019 cuts (31 Jul, 18 Sep, 30 Oct) against hawkish dissents by George and Rosengren - on the opposite pole of every contested 2019 vote. Author of the 'Evans rule' and the intellectual architect of average-inflation targeting; through 2020-21 he repeatedly argued for deliberately running inflation 'modestly above 2% for some time' and was one of the last to abandon the transitory framing. Only Kashkari (whom Reuters called 'the most dovish of all Fed policymakers' in 2021), Brainard and Daly were reliably at or below him."
+    },
+    {
+     "start_q": "2021Q4",
+     "end_q": "2021Q4",
+     "stance": -1,
+     "confidence": "medium",
+     "why": "A genuine move off the dovish extreme: as a 2021 voter he supported the December acceleration of the taper and penciled a 2022 liftoff, conceding inflation was not going to fade on its own. Above Kashkari (who still saw no 2022 hike) and Daly, while remaining clearly dovish of Bullard, Waller, Bowman, Mester and George. Reuters' grid still placed him in the DOVISH column a year later, so this is a shift within the dovish camp, not a crossover. NOTE: Evans served until Jan 2023 and the research cites him as a Dec-2022 dove while emitting no 2022 quarters for him; the roster caps him here, so the 2022 dove pole is restored through Brainard instead."
+    }
+   ]
+  },
+  "George": {
+   "full_name": "Esther L. George",
+   "role": "President (Kansas City)",
+   "periods": [
+    {
+     "start_q": "2019Q1",
+     "end_q": "2019Q4",
+     "stance": 2,
+     "confidence": "high",
+     "why": "2019 voter and, with Rosengren, the hawkish pole. Dissented at three consecutive meetings against the 'insurance' cuts - 31 Jul and 30 Oct (preferring to maintain the target range) and 18 Sep, where the record states she 'preferred to maintain the target range at 1-3/4 to 2 percent.' The maximum-hawkish revealed preference available in 2019, directly opposite Bullard, who dissented at the same September meeting for a 50bp cut."
+    },
+    {
+     "start_q": "2020Q1",
+     "end_q": "2020Q4",
+     "stance": 1,
+     "confidence": "low",
+     "why": "Not a voter in 2020 and comparatively quiet during the pandemic response, which she supported. Retains a hawkish lean on long-standing reputation (persistent balance-sheet and financial-stability scepticism) but nothing in 2020 separates her sharply from the median - the visible poles were Mester in March, then Kaplan and Kashkari with mirror-image dissents in September. Scored +1 on prior rather than on 2020 evidence."
+    },
+    {
+     "start_q": "2021Q1",
+     "end_q": "2021Q4",
+     "stance": 2,
+     "confidence": "medium",
+     "why": "Non-voter but among the earliest and loudest advocates of ending asset purchases, arguing through mid-2021 that the case for continued QE - especially MBS purchases into a hot housing market - had diminished. At the hawkish end of the taper debate with Bullard (after his June flip), Waller, Kaplan and Bostic, far above Evans, Daly, Brainard and Kashkari."
+    },
+    {
+     "start_q": "2022Q1",
+     "end_q": "2022Q1",
+     "stance": 1,
+     "confidence": "medium",
+     "why": "2022 voter entering the year with a hawkish reputation and pressing for balance-sheet runoff to start early, but already less aggressive on the rate path than the front-loaders: she publicly resisted oversized increments and preferred letting runoff do more of the work, while Bullard dissented on 15-16 Mar for 50bp and Waller and Bostic pushed front-loading."
+    },
+    {
+     "start_q": "2022Q2",
+     "end_q": "2022Q4",
+     "stance": 0,
+     "confidence": "medium",
+     "why": "Pace dove, destination hawk - the long-standing hawk ends at the committee median. She cast the SOLE dissent of the June 2022 meeting on 15 Jun, preferring +0.50pp rather than the majority's +0.75pp: a dovish-side vote in the middle of the hiking cycle, against Bullard, Mester, Waller and Bowman. She then voted for the subsequent 75s (the 2 Nov statement records a unanimous vote) and kept arguing rates must go above 5% and stay. Reuters' 14 Dec 2022 grid called her 'hawkish' but mid-pack - above Powell in tone yet well below Bullard and Waller, the only two in the HAWK column."
+    }
+   ]
+  },
+  "Rosengren": {
+   "full_name": "Eric S. Rosengren",
+   "role": "President (Boston)",
+   "periods": [
+    {
+     "start_q": "2019Q1",
+     "end_q": "2019Q2",
+     "stance": 1,
+     "confidence": "medium",
+     "why": "2019 voter and already the committee's most vocal sceptic of easing in the first half of the year - a former dove turned hawkish on financial-stability grounds, arguing the economy did not need accommodation and that further easing would inflate asset prices and encourage leverage. He voted with the majority in January, March and June, so his position had not yet been revealed by a vote; Bullard's June dissent for a cut marks the opposite pole."
+    },
+    {
+     "start_q": "2019Q3",
+     "end_q": "2019Q4",
+     "stance": 2,
+     "confidence": "high",
+     "why": "With George, the hawkish extreme of the 2019 FOMC. Dissented on 31 Jul, 18 Sep and 30 Oct against each cut; the September record states the rationale explicitly - policy was already accommodative and further easing risked inflating asset prices and encouraging excessive leverage. Directly opposite Bullard, who dissented the same day for a 50bp cut. Roster covers 2019 only; no periods emitted for his 2020-2021Q3 tenure."
+    }
+   ]
+  },
+  "Kaplan": {
+   "full_name": "Robert S. Kaplan",
+   "role": "President (Dallas)",
+   "periods": [
+    {
+     "start_q": "2020Q1",
+     "end_q": "2020Q2",
+     "stance": 0,
+     "confidence": "medium",
+     "why": "2020 voter and essentially at the committee median through the crisis phase. He voted FOR the 15 Mar emergency cut to 0-0.25% and the associated purchases - on the opposite side from Mester, the sole dissent that day, who wanted a smaller cut - and was vocal about the depth of the shock and the need for fiscal support. His scepticism of negative rates and yield-curve control was widely shared and does not separate him."
+    },
+    {
+     "start_q": "2020Q3",
+     "end_q": "2020Q4",
+     "stance": 2,
+     "confidence": "high",
+     "why": "The hawkish pole of the 2020 committee from September on. At the 15-16 Sep meeting he cast the only hawkish-side dissent of the year, preferring that the Committee retain 'greater policy rate flexibility' rather than commit to the new outcome-based liftoff guidance - the mirror image of Kashkari, who dissented the same day wanting rates held until core inflation reached 2% sustainably. He voted with the majority on 4-5 Nov, but rhetorically he was the earliest advocate of dialling back accommodation and of an early taper. Roster stops here; he served until Oct 2021."
+    }
+   ]
+  },
+  "Mester": {
+   "full_name": "Loretta J. Mester",
+   "role": "President (Cleveland)",
+   "periods": [
+    {
+     "start_q": "2020Q1",
+     "end_q": "2020Q2",
+     "stance": 2,
+     "confidence": "high",
+     "why": "CORRECTED to extend +2 through 2020Q2. The single clearest hawkish data point of the pandemic is hers: at the 15 Mar 2020 emergency meeting Mester was the SOLE dissenter, supporting the liquidity measures but preferring 'to reduce the target range for the federal funds rate to 1/2 to 3/4 percent at this meeting' - i.e. LESS easing than the majority's cut to 0-0.25%, a hawkish-side vote (0.50-0.75% is HIGHER than 0-0.25%; do not read it as a bigger cut). The research demoted her to +1 from 2020Q2 on the reasoning that 'she voted for the Sep 2020 outcome-based guidance that Kaplan dissented against, so she was less hawkish than Kaplan that quarter' - a September (Q3) event used to date a Q2 demotion, and in 2020Q2 the research scores Kaplan 0, so nobody is above her. 2020Q2 was the only quarter in the entire research map with no +2 anywhere. Nothing between April and June re-ranked the committee; Kaplan takes the pole from Q3 as the research already has him doing."
+    },
+    {
+     "start_q": "2020Q3",
+     "end_q": "2021Q4",
+     "stance": 1,
+     "confidence": "medium",
+     "why": "Hawkish lean but no longer the outlier as the committee closed ranks around emergency accommodation. She voted for the Sep 2020 outcome-based guidance that Kaplan dissented against, so she was less hawkish than Kaplan that quarter, and clearly above the dovish end (Kashkari, Brainard, Evans, Daly). Through 2021 she was a consistent taper advocate and moved her dot to a 2022 hike, but slower and quieter about it than Bullard, Waller, Kaplan and George."
+    },
+    {
+     "start_q": "2022Q1",
+     "end_q": "2023Q4",
+     "stance": 2,
+     "confidence": "high",
+     "why": "Among the most hawkish members for two straight years. 2022 voter: an early and explicit supporter of front-loading and 75bp increments, and by September 2022 she saw no case for any rate cut in all of 2023. Reuters' 14 Dec 2022 grid placed her in the HAWKISH column noting she 'has been a supporter of frontloading and has said she believes the Fed will not cut rates for all of 2023'. Through 2023, as a non-voter, she sat with Bowman, Logan and Kashkari at the top of the dot plot and pushed back publicly on the December repricing toward cuts."
+    },
+    {
+     "start_q": "2024Q1",
+     "end_q": "2024Q2",
+     "stance": 1,
+     "confidence": "medium",
+     "why": "Still hawkish but no longer the extreme, in her final two quarters before retiring in June 2024. She walked back the three-cuts-in-2024 baseline and said it would take longer to gain confidence on inflation, but the hawkish tail had passed to Bowman - who openly kept a rate INCREASE on the table - and to Kashkari, Logan and Schmid. Mester never floated a hike, which puts her a notch below them, while remaining clearly above Goolsbee, Daly and Bostic."
+    }
+   ]
+  },
+  "Harker": {
+   "full_name": "Patrick T. Harker",
+   "role": "President (Philadelphia)",
+   "periods": [
+    {
+     "start_q": "2020Q1",
+     "end_q": "2021Q2",
+     "stance": 0,
+     "confidence": "low",
+     "why": "COVID emergency: the whole FOMC sat at the zero bound and voted unanimously. Harker was a non-voter and unremarkable - nothing separates him from the median. Not a dove on Kashkari's or Evans's scale, not a hawk on George's."
+    },
+    {
+     "start_q": "2021Q3",
+     "end_q": "2022Q3",
+     "stance": 1,
+     "confidence": "medium",
+     "why": "Among the EARLIEST taper advocates: 27 Aug 2021 'I would like to start that sooner rather than later', arguing QE was 'not providing a whole lot' for the jobs recovery - ahead of Daly, Kashkari, Evans and Brainard and in the Bostic/Bullard/Waller camp. He opened 2022 calling for four 25bp hikes when several colleagues still said three."
+    },
+    {
+     "start_q": "2022Q4",
+     "end_q": "2023Q4",
+     "stance": -1,
+     "confidence": "high",
+     "why": "A 2023 VOTER and one of the first officials to name a stopping point: Nov 2022 called for slowing to 25bp steps, Jun 2023 said the Fed should 'at least skip', 8 Aug 2023 'may be at the point to hold rates steady', Oct 2023 'we are at the point where we can hold rates where they are'. Clearly dovish versus fellow 2023 voter Logan and versus Kashkari, Mester and Bowman."
+    },
+    {
+     "start_q": "2024Q1",
+     "end_q": "2025Q2",
+     "stance": 0,
+     "confidence": "low",
+     "why": "Non-voter and low-profile in his final stretch. His base case of one cut in 2025 sat close to the SEP median, and his final speech (5 Jun 2025) urged a 'deliberate' approach and stressed data-quality worries rather than taking a side. Neither with the 2025 cut-now camp (Waller, Bowman) nor with the hold-out hawks (Schmid, Logan, Bostic)."
+    }
+   ]
+  },
+  "Bostic": {
+   "full_name": "Raphael W. Bostic",
+   "role": "President (Atlanta)",
+   "periods": [
+    {
+     "start_q": "2021Q1",
+     "end_q": "2021Q4",
+     "stance": 1,
+     "confidence": "high",
+     "why": "One of the first FOMC members to pencil 2022 liftoff: 23 Jun 2021 he saw a taper decision 'in a few months' and 2022 lift-off; Oct 2021 forecast a 2022 hike; Nov 2021 open to a faster taper and one or two 2022 hikes (and famously put 'transitory' in a swear jar). Hawk-side with Bullard, Waller, George and Kaplan, well ahead of Kashkari, Daly, Evans and Brainard."
+    },
+    {
+     "start_q": "2022Q1",
+     "end_q": "2022Q4",
+     "stance": -1,
+     "confidence": "high",
+     "why": "Flipped to the DOVISH end of a uniformly hawkish committee: in May 2022 he floated a September pause to let the lags work, preferred 50bp to 75bp, and pushed to slow the pace later in the year. Distinctly less hawkish than Bullard, Mester and Kashkari; his natural company was Daly's early-2022 caution plus Evans and Brainard."
+    },
+    {
+     "start_q": "2023Q1",
+     "end_q": "2024Q2",
+     "stance": 1,
+     "confidence": "high",
+     "why": "The higher-for-longer holdout. Through 2023 he insisted cuts would not come 'until well into 2024' (Fortune grouped him explicitly with 'hawkish officials'), and into H1 2024 he carried one of the smallest cut counts in the SEP while the March 2024 median showed three. More hawkish than Goolsbee, Harker and Daly; short of Bowman's absolutism."
+    },
+    {
+     "start_q": "2024Q3",
+     "end_q": "2024Q4",
+     "stance": 0,
+     "confidence": "medium",
+     "why": "As a 2024 VOTER he capitulated to the median: 28 Aug 2024 'it is time to move' on rate cuts, then voted for the 50bp September cut and the November and December cuts. Neither pushing for 50 like the doves nor resisting like Bowman, who dissented in September."
+    },
+    {
+     "start_q": "2025Q1",
+     "end_q": "2025Q4",
+     "stance": 2,
+     "confidence": "medium",
+     "why": "Among the committee's most steadfast inflation hawks - Barron's used exactly that phrase. He held a single 2025 cut in his dot when the median showed two, was openly sceptical that tariff inflation would prove temporary, and by 22 Sep 2025 saw NO further cuts that year while the FOMC went on to cut in September, October and December. Hawk-side with Schmid, Logan, Musalem and Hammack; the polar opposite of Waller, Bowman and Miran."
+    },
+    {
+     "start_q": "2026Q1",
+     "end_q": "2026Q1",
+     "stance": 1,
+     "confidence": "low",
+     "why": "CORRECTED from +2. In 2026Q1 the research had a retiring Atlanta president in his final, lame-duck quarter (he left at the end of February 2026, which the research itself concedes) at the pole and outranking Hammack and Logan, whom the same map elsewhere calls, with Kashkari, 'the most hawkish trio on the committee' for exactly this period - Logan dissented against the easing bias in April and for a hike in July. Schmid still holds the hawk pole in the quarter, so the demotion costs nothing; it removes a mis-ranked pole. His 2025Q4 +2 is left alone, being defensible on his own record."
+    }
+   ]
+  },
+  "Daly": {
+   "full_name": "Mary C. Daly",
+   "role": "President (San Francisco)",
+   "periods": [
+    {
+     "start_q": "2021Q1",
+     "end_q": "2021Q4",
+     "stance": -2,
+     "confidence": "medium",
+     "why": "Core of the dove bloc through the transitory year - she resisted the case for 2022 hikes into late 2021 and argued the inflation impulse would fade. Grouped with Kashkari, Evans and Brainard at the dovish pole, the opposite end from Bullard, Bostic, Waller and George."
+    },
+    {
+     "start_q": "2022Q1",
+     "end_q": "2022Q1",
+     "stance": -1,
+     "confidence": "medium",
+     "why": "Opened 2022 still counselling restraint: 13 Feb 2022 'history tells us with Fed policy that abrupt and aggressive action' can backfire, arguing for a measured path, while Bullard was demanding 100bp by July and Waller and Mester pushed for 50bp in March."
+    },
+    {
+     "start_q": "2022Q2",
+     "end_q": "2022Q4",
+     "stance": 0,
+     "confidence": "medium",
+     "why": "Converted mid-year and moved to the middle of a hawkish committee: 1 Jun 2022 hikes should continue 'until inflation is tamed... we need to do that expeditiously', and by 24 Jun she was open to 75bp and to rates going beyond neutral. Hawkish in absolute terms but at the median - no longer with Bostic and Brainard at the bottom, not with Bullard, Kashkari and Mester at the top."
+    },
+    {
+     "start_q": "2023Q1",
+     "end_q": "2023Q4",
+     "stance": 1,
+     "confidence": "medium",
+     "why": "The most hawkish stretch of her tenure: Mar 2023 rates would need to go 'higher and for longer'; 10 Jul 2023 'a couple more rate hikes' would be appropriate in 2023 when the median dot showed only one more; repeatedly said the Fed had 'more work to do'. Hawk-side of Harker, Goolsbee and Bostic, though short of Kashkari, Logan, Bowman and Mester."
+    },
+    {
+     "start_q": "2024Q1",
+     "end_q": "2024Q2",
+     "stance": 0,
+     "confidence": "medium",
+     "why": "A 2024 VOTER sitting on the median: she accepted that cuts were becoming appropriate as inflation cooled but pushed back on urgency, saying 50bp 'would send off an urgency signal that I don't feel about the strength of the labor market'. Between Bowman and Bostic on one side and Goolsbee on the other."
+    },
+    {
+     "start_q": "2024Q3",
+     "end_q": "2026Q3",
+     "stance": -1,
+     "confidence": "medium",
+     "why": "Settled on the dovish wing and stayed there. She voted for the 50bp September 2024 cut and called 50bp of 2024 easing the right calibration; through 2025 she argued policy was restrictive and backed the September/October/December cuts on labour-market risk management. In the Reuters grid dated 31 Jul 2026 she sits in the same, most dovish populated band as Powell, Williams and Waller, while ten of eighteen members sit strictly hawk-side of that band; she called herself 'completely supportive' of the July 2026 hold rather than joining Kashkari, Logan and Hammack in dissenting for a hike. Consistently more dovish than Barkin, Musalem, Schmid, Logan and Hammack; less dovish than Kugler in Aug 2024, Cook in Jan 2025, and Miran and Bowman thereafter."
+    }
+   ]
+  },
+  "Kashkari": {
+   "full_name": "Neel Kashkari",
+   "role": "President (Minneapolis)",
+   "periods": [
+    {
+     "start_q": "2020Q1",
+     "end_q": "2021Q4",
+     "stance": -2,
+     "confidence": "high",
+     "why": "The FOMC's signature dove, repeatedly described as 'the Fed's biggest pre-pandemic dove'. He dissented on 16 Sep 2020 wanting rates held until core inflation reached 2% sustainably - the mirror image of Kaplan's hawkish dissent the same day - his SEP dot showed NO hikes through end-2023, the single most accommodative dot on the committee, and he argued the labour market had far more room to run."
+    },
+    {
+     "start_q": "2022Q1",
+     "end_q": "2022Q1",
+     "stance": 0,
+     "confidence": "medium",
+     "why": "The flip quarter. By 4 Jan 2022 he had abandoned the zero-dot and penciled two 2022 hikes, reported as 'the abrupt shift to embrace rate hikes by one of the Fed's most dovish policymakers'. Two hikes was still well short of Bullard (100bp by July) and of Waller and Mester, so he landed around the median rather than at either pole."
+    },
+    {
+     "start_q": "2022Q2",
+     "end_q": "2023Q4",
+     "stance": 2,
+     "confidence": "high",
+     "why": "Went straight past the hawks to the top of the dot plot: by August 2022 he wanted 3.9% by end-2022 and 4.4% by end-2023, making him 'the most hawkish participant on the Fed's rate-setting FOMC, according to the so-called dot plot' (Bloomberg). He publicly recanted team-transitory and through 2023 kept publishing essays putting material odds on rates having to go significantly higher."
+    },
+    {
+     "start_q": "2024Q1",
+     "end_q": "2024Q2",
+     "stance": 1,
+     "confidence": "medium",
+     "why": "Stayed on the hawkish wing into 2024, floating the possibility of NO cuts at all that year and declining to rule out a hike, when the March 2024 SEP median showed three cuts. Hawk-side with Bowman, Logan and Mester; well hawkish of Goolsbee and Daly."
+    },
+    {
+     "start_q": "2024Q3",
+     "end_q": "2025Q3",
+     "stance": 0,
+     "confidence": "medium",
+     "why": "Back to the middle. He published 'Why I supported cutting rates last week' defending the 50bp September 2024 cut, and in September 2025 backed the 25bp cut while penciling two more by year-end - essentially the SEP median. Neither with the 2025 cut-now bloc (Waller, Bowman, Miran) nor with the hold-out hawks (Schmid, Logan, Bostic, Musalem)."
+    },
+    {
+     "start_q": "2025Q4",
+     "end_q": "2025Q4",
+     "stance": 1,
+     "confidence": "medium",
+     "why": "Turned against further easing late in 2025 with inflation stuck near 3%, publicly opposing the committee's latest cut as a non-voter. Hawk-leaning versus a committee that was still cutting, but short of the pole occupied by Hammack, Logan and Schmid, who were the actual or would-be dissenters."
+    },
+    {
+     "start_q": "2026Q1",
+     "end_q": "2026Q1",
+     "stance": 0,
+     "confidence": "medium",
+     "why": "Back at the median for one quarter: his March 2026 dot carried one CUT, exactly the March 2026 SEP median (3.4% end-2026, unchanged from December). Not yet with the hike camp, not with Miran, who was dissenting for cuts."
+    },
+    {
+     "start_q": "2026Q2",
+     "end_q": "2026Q2",
+     "stance": 2,
+     "confidence": "medium",
+     "why": "A VOTER (Minneapolis votes 2026) and at the hawkish extreme. He dissented at the 28-29 Apr 2026 meeting - with Hammack and Logan - agreeing with the hold but against retaining the easing bias, then reversed his March one-cut dot to pencil a rate HIKE for 2026 in the June SEP, and dissented outright for a 25bp hike on 29 Jul 2026 (just past this window). The most hawkish trio on the committee with Hammack and Logan; the opposite pole from Miran, who dissented for a cut in April. Range capped at 2026Q2 per the roster."
+    }
+   ]
+  },
+  "Barkin": {
+   "full_name": "Thomas I. Barkin",
+   "role": "President (Richmond)",
+   "periods": [
+    {
+     "start_q": "2021Q1",
+     "end_q": "2021Q4",
+     "stance": 0,
+     "confidence": "low",
+     "why": "Middle of the committee through the transitory debate - he did not join Bostic, Bullard, Waller or George in pushing early liftoff, and he did not defend the dovish position the way Kashkari, Daly, Evans and Brainard did. Non-voter, little separation."
+    },
+    {
+     "start_q": "2022Q1",
+     "end_q": "2022Q4",
+     "stance": 1,
+     "confidence": "medium",
+     "why": "Firmly on the hawkish side: 12 Aug 2022 'rate increases need to continue until inflation holds at 2 percent', and he saw 'no barrier' to going higher if inflation persisted. Hawk-side of Bostic, who was floating a September pause, and of Daly early in the year, but below the Bullard/Kashkari/Mester ceiling."
+    },
+    {
+     "start_q": "2023Q1",
+     "end_q": "2023Q4",
+     "stance": 0,
+     "confidence": "low",
+     "why": "Moderated to the centre as the hiking cycle ended - his 9 Nov 2023 Richmond Fed speech argued that 'with rates restrictive and financial conditions tightened, we have time to reconcile competing narratives', i.e. backing a hold. Less hawkish than Bowman, Logan, Mester and Kashkari; less dovish than Harker and Goolsbee, who were actively calling for the hikes to stop."
+    },
+    {
+     "start_q": "2024Q1",
+     "end_q": "2026Q3",
+     "stance": 1,
+     "confidence": "medium",
+     "why": "Settled as the committee's cautious hawk-leaning centrist and stayed there. As a 2024 VOTER he was among the most patient on starting cuts; through late 2025 he was described as unsupportive of cuts unless jobs data deteriorated while the FOMC cut three times, and MNI framed his line as 'modest economic movement implies modest rate easing'. In the Reuters grid dated 31 Jul 2026 he sits in the second, more hawkish of the populated bands alongside Warsh, Cook and Musalem - hawk-side of Powell, Williams, Bowman, Waller and Daly, but short of the Kashkari/Logan/Hammack dissent bloc, and he did not dissent in April or July 2026."
+    }
+   ]
+  },
+  "Collins": {
+   "full_name": "Susan M. Collins",
+   "role": "President (Boston)",
+   "periods": [
+    {
+     "start_q": "2022Q3",
+     "end_q": "2025Q2",
+     "stance": 0,
+     "confidence": "medium",
+     "why": "The committee's archetypal centrist for three years. Reuters put her in the big middle at every dated reading: Jan-2023 in the 12-strong 'hawkish' tier that WAS the median (below Waller and Bullard, above Brainard/Evans/Harker/Daly); Jul-2023 'centrist' alongside Bostic and Cook; Aug-2024 'centrist'; Jan-2025 'centrist' with Powell, Williams, Jefferson, Kugler, Harker, Daly, Bostic and Barkin. No dissents, no SEP-outlier reputation. She backed the fast 2022 hikes and the 2024 cuts with the majority."
+    },
+    {
+     "start_q": "2025Q3",
+     "end_q": "2025Q4",
+     "stance": -1,
+     "confidence": "low",
+     "why": "KEPT at -1 but downgraded from medium to low confidence. The vote-record challenger showed that as a 2025 voter she supported all three cuts without ever dissenting - 17 Sep (11-1), 29 Oct (10-2), 10 Dec (9-3) - sitting in the undifferentiated majority bloc at each, while the poles were identified by Miran on one side and Schmid and Goolsbee on the other. That is real, but the researcher holds a dated named published ranking: Reuters' 12 Sep 2025 grid moved her up into the 'dovish' tier with Powell and Goolsbee, and she framed her case around labour-market downside. Under the stated merge rule a named published ranking outranks the absence of a dissent, so the sign stands - but it is now the weakest -1 in the map. More dovish than fellow 2025 voters Musalem and Schmid; less dovish than Bowman, Cook and Miran."
+    },
+    {
+     "start_q": "2026Q1",
+     "end_q": "2026Q1",
+     "stance": 0,
+     "confidence": "low",
+     "why": "Genuinely thin quarter: Reuters' 2 Apr 2026 grid did not list her at all (no recent comments) and her next catalogued remark is 13 May 2026. She had rotated off the voting roster (2028 voter). Placed at the median as the honest default between her dovish 2025 voting record and the hawkish May-2026 speech."
+    },
+    {
+     "start_q": "2026Q2",
+     "end_q": "2026Q2",
+     "stance": 1,
+     "confidence": "medium",
+     "why": "Clear hawkish move: on 13 May 2026 she told the Boston Economic Club she 'could envision a scenario in which some policy tightening is needed' - a Boston Fed president openly floating hikes. Reuters' grid updated 31 Jul 2026 places her in the top 'hawk' bucket with Kashkari, Logan, Hammack, Goolsbee and Schmid, against a centrist median of Powell/Williams/Jefferson/Barr/Waller/Paulson/Daly. +1 not +2 because she hedged that tightening was 'not in my most likely outlook' and, unlike Hammack, Logan and Kashkari, cast no dissent (she is not a 2026 voter). Range capped at 2026Q2 per the roster."
+    }
+   ]
+  },
+  "Logan": {
+   "full_name": "Lorie K. Logan",
+   "role": "President (Dallas)",
+   "periods": [
+    {
+     "start_q": "2023Q1",
+     "end_q": "2025Q3",
+     "stance": 1,
+     "confidence": "high",
+     "why": "Consistently on the hawkish side without being at the pole. Reuters placed her in the 'hawkish' tier at every reading in this window - Jan-2023 and Jul-2023 (below the 'hawk' pole of Waller, Mester and Bullard but above Goolsbee, Harker, Daly and Collins), Aug-2024 with Bowman, Barkin, Schmid and Kashkari against a centrist median, Jan-2025 again hawkish. As a 2023 voter she was one of the loudest voices against pausing; in 2024 she warned repeatedly against cutting too soon. Reuters' 12 Sep 2025 grid nominally slid her to 'centrist', but that reading was flagged 'no public comments since July 15' and her 30 Sep 2025 speech was titled 'Why I'll be cautious about further rate cuts'."
+    },
+    {
+     "start_q": "2025Q4",
+     "end_q": "2025Q4",
+     "stance": 2,
+     "confidence": "high",
+     "why": "The hawkish pole. On 31 Oct 2025 she said the Fed 'should not have cut interest rates this week and should not do so again in December'; on 14 Nov 2025 she repeated it would be 'hard to support' a December cut. As a non-voter she could not dissent, but she was saying publicly what Schmid dissented on in October and what Schmid and Goolsbee dissented on in December - at least as hawkish as the actual dissenters and the opposite pole from Miran, who wanted 50bp at each."
+    },
+    {
+     "start_q": "2026Q1",
+     "end_q": "2026Q1",
+     "stance": 1,
+     "confidence": "low",
+     "why": "Reuters' 2 Apr 2026 grid moved her back to 'centrist' with Powell, Cook, Hammack, Williams and Kashkari, quoting her that 'policy is positioned to adjust to the data' - noticeably milder than Schmid, Barkin and Barr in the 'hawkish' tier. Low confidence: it rests on one scorecard reading (a vintage the second auditor fetched and found internally inconsistent) plus a piece of neutral-speak, and her January and March votes to hold are not evidence of softening since she wanted a hold anyway. Kept at +1 rather than dropped to 0 for that reason."
+    },
+    {
+     "start_q": "2026Q2",
+     "end_q": "2026Q3",
+     "stance": 2,
+     "confidence": "high",
+     "why": "Unambiguously at the hawkish pole and voting it. At the 29 Apr 2026 meeting she, Hammack and Kashkari agreed to hold but formally dissented against including an easing bias; on 16 Jul 2026 she said 'modestly higher interest rates would better balance the outlook and risks'; at the 28-29 Jul 2026 meeting she dissented in favour of a hike. Reuters' live grid puts her in the 'hawk' bucket. More hawkish than Musalem, Barkin, Cook and Warsh in the 'hawkish' tier and than the centrist median; the opposite pole from Bowman, the only 'dovish' member."
+    }
+   ]
+  },
+  "Goolsbee": {
+   "full_name": "Austan D. Goolsbee",
+   "role": "President (Chicago)",
+   "periods": [
+    {
+     "start_q": "2023Q1",
+     "end_q": "2024Q2",
+     "stance": -2,
+     "confidence": "high",
+     "why": "The committee's leading dove from the moment he arrived. Reuters' 5 Jul 2023 grid lists him first in the three-name 'dovish' tier (with Harker and Daly) against a median that was 'hawkish' and a 'hawk' pole of Waller, Mester and Bullard. Through 2023-24 he pushed the 'golden path' framing, argued policy was already very restrictive and warned against overtightening while Logan, Bowman, Kashkari and Barkin argued the opposite."
+    },
+    {
+     "start_q": "2024Q3",
+     "end_q": "2025Q3",
+     "stance": -1,
+     "confidence": "medium",
+     "why": "Still on the dove side, but the committee moved toward him so his position within it became less extreme. Reuters had him merely 'centrist' on 22 Aug 2024 (Kugler alone was 'dovish'), then 'dovish' on 15 Jan 2025 - though on that grid Cook sat one tier below him, alone in DOVE - and 'dovish' again on 12 Sep 2025, by which point Bowman, Cook and, from September, Miran occupied the outright dove pole. He voted for the September and October 2025 cuts."
+    },
+    {
+     "start_q": "2025Q4",
+     "end_q": "2025Q4",
+     "stance": 1,
+     "confidence": "high",
+     "why": "CORRECTED from 0. The research scored him at the exact median in the one quarter he cast a recorded dissent against the majority action: on 10 Dec 2025 the FOMC cut to 3.50-3.75% by 9-3 and Goolsbee dissented alongside Schmid, both preferring to maintain the target range, while Miran dissented the other way for a larger cut. Under a voting-and-dissent lens, being one of three dissenters at a 9-3 meeting is by construction not the median voter. The research's own counter-arguments - a timing dissent, he voted for the September and October cuts, he was reportedly projecting more 2026 cuts than most colleagues - support 'not a conversion' and rule out +2; they do not support scoring him identically to the nine members who voted for the cut he voted against. Still dovish on the level relative to Schmid, Logan and Hammack."
+    },
+    {
+     "start_q": "2026Q1",
+     "end_q": "2026Q1",
+     "stance": -1,
+     "confidence": "medium",
+     "why": "Reverted to the dove side once the dissent passed. Reuters' 2 Apr 2026 grid puts him back in the 'dovish' tier with Daly, Waller, Miran and Jefferson, below the centrist median and well below the hawkish tier. Only Bowman, Waller and Miran were more dovish."
+    },
+    {
+     "start_q": "2026Q2",
+     "end_q": "2026Q3",
+     "stance": 1,
+     "confidence": "medium",
+     "why": "Crossed to the hawkish side as inflation re-accelerated under Chair Warsh. Reuters' live grid (31 Jul 2026) moves him into the top 'hawk' bucket with Kashkari, Logan, Hammack, Collins and Schmid, quoting him on 14 Jul 2026: heartened by the CPI print but needing 'a lot more than one month'. The scale re-centred over this window - Barr's unchanged 26 Mar 2026 quote slid from 'hawkish' in April to 'centrist' in July - so the move is genuine but its magnitude is partly the committee moving under him. +1 not +2: he was still 'dovish' on 2 Apr 2026, his rhetoric is the mildest in that bucket, and unlike Hammack, Logan and Kashkari he cast no hawkish dissent (2027 voter)."
+    }
+   ]
+  },
+  "Schmid": {
+   "full_name": "Jeffrey R. Schmid",
+   "role": "President (Kansas City)",
+   "periods": [
+    {
+     "start_q": "2024Q4",
+     "end_q": "2025Q3",
+     "stance": 1,
+     "confidence": "medium",
+     "why": "Hawk-leaning from the start but inside the pack, not at the pole. Reuters had him 'hawkish' on 22 Aug 2024 (with Bowman, Barkin, Kashkari, Logan against a centrist median) and again on 15 Jan 2025 (with Bowman, Musalem, Hammack, Waller, Logan, Kashkari). As a 2025 voter he went along with the majority through the September cut without dissenting, and Reuters' 12 Sep 2025 grid had slid him to 'centrist' - more hawkish than Collins, Goolsbee, Powell, Cook and Bowman, but not yet separated from Musalem, Barkin or Kashkari."
+    },
+    {
+     "start_q": "2025Q4",
+     "end_q": "2026Q3",
+     "stance": 2,
+     "confidence": "high",
+     "why": "Moved to and stayed at the hawkish pole. He was the SOLE hawkish dissenter on 29 Oct 2025, preferring to maintain the rate, and dissented again on 10 Dec 2025 - the only member to dissent against both cuts, unambiguously more hawkish than every other 2025 voter including Musalem and Collins, and the mirror image of Miran, who wanted 50bp at both. Reuters then kept him in the top bucket continuously: 'hawkish' on 2 Apr 2026 and 'hawk' on 31 Jul 2026, quoted as 'uncomfortable ever assuming that a burst of inflation is likely to be temporary'."
+    }
+   ]
+  },
+  "Musalem": {
+   "full_name": "Alberto G. Musalem",
+   "role": "President (St. Louis)",
+   "periods": [
+    {
+     "start_q": "2024Q3",
+     "end_q": "2026Q3",
+     "stance": 1,
+     "confidence": "medium",
+     "why": "A remarkably stable hawk-lean with no genuine turning point, so a single period rather than a manufactured split. Reuters read him 'centrist' on 22 Aug 2024 while he was brand new (he took office April 2024), but from his autumn-2024 'cost of easing too much too soon' framing onward he sat in the 'hawkish' tier at every subsequent dated reading: 15 Jan 2025 (with Bowman, Schmid, Hammack, Logan, Kashkari), 12 Sep 2025 (with Barkin, Bostic, Kashkari, Paulson, above the centrist median and well above dovish Goolsbee and Collins) and 31 Jul 2026 (with Warsh, Cook and Barkin). Held at +1 rather than +2 throughout because he never dissented: as a 2025 voter he backed every cut, unlike Schmid, and in 2026 Reuters ranks him below the six-strong 'hawk' bucket containing Logan, Hammack, Kashkari, Schmid, Goolsbee and Collins."
+    }
+   ]
+  },
+  "Hammack": {
+   "full_name": "Beth M. Hammack",
+   "role": "President (Cleveland)",
+   "periods": [
+    {
+     "start_q": "2024Q4",
+     "end_q": "2025Q4",
+     "stance": 2,
+     "confidence": "high",
+     "why": "At the hawkish pole from her first voting quarter. She was the SOLE dissenter at the 18 Dec 2024 meeting, preferring to maintain the rate (11-1) - by construction more hawkish than every other 2024 voter. Through 2025 she stayed there as a non-voter: MNI's 11 Feb 2025 note tags her flatly '(hawk, non-2025 voter)' over a speech titled 'Show Me The Low Inflation'; on 22 Aug 2025 she said the decision 'comes down to' inflation being too high; on 12 Dec 2025 Reuters reported she 'would prefer monetary policy to be tighter than it is currently' and MNI read her as open to a 2026 HIKE - beyond even the actual December dissenters Schmid and Goolsbee, and the opposite pole from Miran, Bowman and Waller."
+    },
+    {
+     "start_q": "2026Q1",
+     "end_q": "2026Q1",
+     "stance": 1,
+     "confidence": "medium",
+     "why": "A real, brief softening. Reuters' 2 Apr 2026 grid moves her from the top tier down to 'centrist' with Powell, Cook, Williams, Kashkari and Logan, quoting her on 23 Mar 2026: 'it seems like there are two-sided risks' - genuinely more balanced language than Schmid, Barkin and Barr in the 'hawkish' tier that reading. She voted with the majority to hold in January and March. Still above the median on the strength of her prior record, hence +1 rather than 0."
+    },
+    {
+     "start_q": "2026Q2",
+     "end_q": "2026Q2",
+     "stance": 2,
+     "confidence": "high",
+     "why": "Back to the pole and voting it. At the 29 Apr 2026 meeting she, Logan and Kashkari dissented - agreeing with the hold but refusing to support an easing bias in the statement - the only hawkish bloc on the committee, against Miran dissenting for a cut; she then dissented for a 25bp hike on 29 Jul 2026. Reuters' live grid places her in the top 'hawk' bucket: 'Now is the time for the FOMC to act to speed the return of PCE inflation to our 2 percent objective.' More hawkish than Musalem, Barkin, Cook and Chair Warsh and than the centrist median. Range capped at 2026Q2 per the roster."
+    }
+   ]
+  }
+ },
+ "notes": [
+  "MERGE RULE APPLIED: a correction was taken when the challenger produced harder evidence than the researcher - a recorded roll-call dissent, or a dated named published ranking - and declined when the challenger's case was only the ABSENCE of a dissent set against a dated published ranking the researcher already held.",
+  "APPLIED from the vote-record audit: Waller 2025Q1 -1 -> 0 (his omitted 19 Mar 2025 dissent, in the tightening direction, sat inside the block); Bowman 2025Q2 -2 -> 0 (two votes for unanimous holds; her first dovish dissent is 30 Jul 2025, one quarter later); Powell 2026Q2 -1 -> 0 (voted with the majority, and the quote offered as dovish support is hawk-leaning and mis-dated); Goolsbee 2025Q4 0 -> +1 (he dissented against the 10 Dec 2025 cut at a 9-3 meeting); Waller 2025Q4 -2 -> -1 and Bowman 2025Q4 -2 -> -1 (neither dissented in the quarter while Miran dissented further out at both meetings, an ordering the research itself conceded and then flattened).",
+  "APPLIED from the relative-property audit: Kugler 2024Q3-Q4 -1 -> -2 (Reuters 15 Aug 2024 named her the SOLE occupant of the dovish bucket); Mester 2020Q2 +1 -> +2 (the demotion was dated off a September event, and 2020Q2 was the only quarter in the map with no +2 anywhere); Brainard 2022Q1-Q2 -1 -> -2 (the only quarters with no dove pole at all, and the dip was argued from absolute-tone moves during a committee-wide hawkish shift); Cook 2025Q1 -1 -> -2 (the auditor fetched the 15 Jan 2025 grid, which puts Cook ALONE in the DOVE tier, one bucket below Goolsbee/Kugler/Daly); Bullard 2021Q2-Q3 +1 -> +2 (the research ranked him below Kaplan and Rosengren, who are emitted in zero 2021 quarters - a phantom committee); Bostic 2026Q1 +2 -> +1 (a lame-duck Atlanta president outranking the Hammack/Logan/Kashkari bloc the same map calls the committee's most hawkish trio).",
+  "SPLIT DECISION on Kugler 2025Q1: the auditor proposed -1 on the fetched 15 Jan 2025 grid, but unlike Cook's case there is dated countervailing evidence covering two thirds of the quarter (7 Feb, 7/10 Mar 2025 hold-and-inflation-risk remarks). Scored 0, the auditor's own stated alternative. Cook took the full -2 because nothing inside 2025Q1 cuts against it.",
+  "DECLINED - Powell 2022Q3-2023Q1 (+1 -> 0): the challenger correctly showed every vote in the window was unanimous (12-0 on 27 Jul, 21 Sep, 2 Nov, 14 Dec 2022 and 1 Feb 2023; 11-0 on 22 Mar 2023), but the researcher holds a dated named ranking - Reuters 14 Dec 2022, 'Our call: hawkish', with the explicit note that Powell had signalled a personal preference for somewhat tighter policy. Absence of a split is not harder evidence than a published ranking. Stance kept, confidence cut from medium to low.",
+  "DECLINED - Collins 2025Q3-Q4 (-1 -> 0): same shape. She never dissented and voted for all three 2025 cuts, but Reuters' 12 Sep 2025 grid places her in the dovish tier, and the second auditor's independent fetch of that vintage did not contradict it. Stance kept, confidence cut from medium to low; it is the weakest -1 in the map.",
+  "DECLINED - Evans coverage restoration for 2022: the relative-property auditor's first-choice fix for the missing 2022 dove pole was extending Evans (Chicago president until Jan 2023, whom the research itself cites as sitting in Reuters' Dec-2022 DOVISH bucket) but the roster caps him at 2021Q4, exactly as it caps Rosengren at 2019Q4, Kaplan at 2020Q4, Bullard at 2022Q4 and Paulson/Miran/Collins/Kashkari/Hammack/Powell at 2026Q2. The auditor named Brainard 2022Q1-Q2 as the within-roster substitute that fills the same hole, and that is what was applied.",
+  "RELATIVE-PROPERTY CHECK: all 31 quarters from 2019Q1 to 2026Q3 were expanded into a quarter-by-member matrix and every one spans both signs, so NO quarter came out one-signed and no forced re-rank was required. The check was itself validated by running it against a deliberately corrupted copy of the matrix (one quarter's negatives flipped positive), which it correctly flagged. The merge also repaired five of the six quarters in which the second audit found the map spanning both signs but leaving one POLE empty, always in the direction the policy cycle was pulling: 2020Q2 had no +2 (fixed by Mester), 2022Q1-Q2 had no -2 against three then four members at +2 (fixed by Brainard), and 2024Q3-2025Q1 had no -2 while the hawk pole stayed occupied (fixed by Kugler for 2024Q3-Q4 and Cook for 2025Q1).",
+  "RESIDUAL, DISCLOSED RATHER THAN PAPERED OVER: 2025Q2 is now the only quarter in the map with no -2, a direct consequence of striking Bowman's -2 there on the vote record. No replacement dove pole was manufactured, because the quarter genuinely has none to find: both 2025Q2 meetings were unanimous holds (7 May 12-0; 18 Jun with no dissents recorded), so no member's dovish extremity is vote-revealed, and the four members at -1 (Waller, Cook, Daly, Goolsbee) are not separable on anything harder than emphasis. Waller is the quarter's most dovish member on the narrative - he was the only one to pre-commit publicly in June to backing a July cut, and he was vote-confirmed five weeks later by the 30 Jul 2025 dissent - but promoting him to the pole on that basis would repeat exactly the defect both audits were filed against, dating a stance one quarter ahead of the vote that supports it. Both poles are occupied in the other 30 quarters.",
+  "FACT FIX carried into Cook's 2026Q1-Q3 rationale: the research cited 'the 12-3 Jul 28-29 2026 hold'; the FOMC has twelve voters and the actual tally was 9-3, with Hammack, Kashkari and Logan dissenting for a 25bp hike.",
+  "DISSENT LEDGER that both audits verified and that survives unchanged: Bullard 19 Jun and 18 Sep 2019; George and Rosengren against all three 2019 cuts; Mester as sole dissenter on 15 Mar 2020 with the direction read correctly (a 0.50-0.75% preference is LESS easing, not a bigger cut); the mirror-image Kaplan/Kashkari dissents of 16 Sep 2020; Bullard 16 Mar 2022; George 15 Jun 2022 as the only dovish-side vote of the hiking cycle; Bowman 18 Sep 2024; Hammack 18 Dec 2024; Waller 19 Mar 2025; Waller and Bowman 30 Jul 2025; Miran's six consecutive dissents Sep 2025 through Apr 2026; Schmid Oct and Dec 2025 and Goolsbee Dec 2025; Waller and Miran 28 Jan 2026; the 8-4 structure on 29 Apr 2026 where Hammack, Kashkari and Logan supported the HOLD and objected only to the easing bias (not a hike dissent); and the 9-3 hold on 29 Jul 2026 where those three did dissent for a hike.",
+  "CONFIDENCE DOWNGRADES applied without changing a sign, on audit observations filed as notes rather than corrections: Cook 2026Q1-Q3 high -> medium (she has never dissented and voted with the majority on 28 Jan and 18 Mar 2026, so the hawkish flip is speech-based only); Logan 2026Q1 kept at low because it rests on the 2 Apr 2026 scorecard vintage that the second auditor fetched and found internally inconsistent with the research's account of the same page.",
+  "ROSTER CAVEATS: Warsh is absent from the roster CSV and his tenure is inferred from the 22 May 2026 swearing-in - drop the key if the backtest roster rejects it. Rows ending at 2026Q2 (Powell, Miran, Paulson, Collins, Kashkari, Hammack) are roster artifacts, not scoring decisions; Hammack, Kashkari and Logan cast the window's most consequential hawkish votes on 29 Jul 2026 and only Logan's roster row reaches 2026Q3 to record it.",
+  "STANDING CAVEAT on SEP dots: Bowman's three 2026 cuts, Kashkari's March 2026 one-cut dot, Miran's Sep 2025 outlier and the June 2026 9/8/1 split all rest on self-attribution or press reporting; dots are anonymous and the June 2026 minutes record only 'Many participants' versus 'Many other participants'. Neither auditor could independently verify them, and neither could re-read the archived Reuters grid vintages directly (web.archive.org and reuters.com were both blocked for fetching), so the relative rankings drawn from the Dec-2022 and Aug-2024 vintages rest on the researcher's quotation of them."
+ ]
+}
