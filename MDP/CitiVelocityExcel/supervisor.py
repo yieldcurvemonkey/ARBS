@@ -57,6 +57,7 @@ from MDP.CitiVelocityExcel.errors import AddInNotSignedInError, ExcelNotRunningE
 __all__ = [
     "DEFAULT_READY_TIMEOUT",
     "ExcelRestartError",
+    "dismiss_excel_dialogs",
     "excel_executable",
     "excel_pids",
     "launch_excel",
@@ -381,35 +382,103 @@ def launch_excel(*, exe: Optional[Path] = None, logger: Optional[logging.Logger]
 
 
 def signin_anchor_workbook() -> Optional[Path]:
-    """A tiny workbook to open Excel ON, created once and reused.
+    """A tiny workbook to open Excel ON, with a name that has never crashed.
 
     **Excel started with no workbook has no ribbon**, and with no ribbon there is
-    no ``Login`` button for :func:`press_addin_login` to press. That is why
-    ``/x`` alone fails: it lands on the Start screen. Measured 2026-08-09 - the
-    same launch that could not find the button with no workbook found it
-    immediately with one.
+    no ``Login`` button for :func:`press_addin_login` to press. So one is opened.
+
+    **The name is unique per launch, and that is not tidiness.** This code
+    terminates Excel to reclaim the add-in's memory, and a workbook that was open
+    when a process was killed gets remembered: the next open of *that filename*
+    raises
+
+        The last time you opened 'velocity_signin_anchor.xlsx', it caused a
+        serious error. Do you still want to open it?     [Yes] [No]
+
+    which is **modal**. A modal dialog blocks the add-in's own initialisation and
+    swallows the Login click - the button reports a successful ``InvokePattern``
+    and nothing happens. That single prompt accounts for every failed sign-in
+    measured on 2026-08-09: the add-in stopping at 71 log lines, and presses that
+    "worked" without effect.
+
+    A fresh name each time cannot be a remembered name. Older anchors are swept
+    so the directory does not grow.
 
     Marked in ``A1`` with the package's scratch prefix so
-    :func:`rescue_unsaved_workbooks` recognises it as ours and never tries to
-    save it back to the user's Documents.
+    :func:`rescue_unsaved_workbooks` recognises it as ours and never saves it
+    into the user's Documents.
     """
     from MDP.CitiVelocityExcel.com_client import WORKBOOK_MARKER_PREFIX
 
     root = Path(os.environ.get("LOCALAPPDATA", str(Path.home()))) / "ARBS" / "excel-scratch"
-    path = root / "velocity_signin_anchor.xlsx"
-    if path.is_file():
-        return path
     try:
         import openpyxl  # type: ignore
 
         root.mkdir(parents=True, exist_ok=True)
+        for stale in sorted(root.glob("velocity_signin_anchor*.xlsx"))[:-3]:
+            try:
+                stale.unlink()
+            except OSError:
+                pass
+        stamp = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
+        path = root / f"velocity_signin_anchor-{stamp}.xlsx"
         book = openpyxl.Workbook()
         book.active["A1"] = f"{WORKBOOK_MARKER_PREFIX}SIGNIN_ANCHOR"
         book.save(path)
         return path
     except Exception as exc:  # noqa: BLE001 - fall back to a workbook-less launch
-        _logger.warning("signin_anchor_workbook: could not create %s (%s)", path, exc)
+        _logger.warning("signin_anchor_workbook: could not create an anchor (%s)", exc)
         return None
+
+
+def dismiss_excel_dialogs(
+    pid: Optional[int] = None, *, logger: Optional[logging.Logger] = None
+) -> List[str]:
+    """Close any modal Excel is holding up. Returns the titles/texts it dismissed.
+
+    Excel opens a started session with prompts a human clicks past without
+    thinking, and every one of them is **modal**: the crash-recovery question
+    above, Protected View, "a document recovery is available", licence and
+    what's-new panes. Until one is answered the add-in cannot finish loading and
+    the ribbon cannot act, so an unattended launch simply stops - silently, with
+    a perfectly healthy-looking process.
+
+    Answers conservatively: the affirmative button where continuing is what the
+    caller wants (``Yes``/``OK``/``Enable Editing``), otherwise a plain close.
+    It never answers a *save* prompt - losing someone's work to a click is the
+    one outcome worse than stalling - which is why ``Don't Save`` is not in the
+    list.
+    """
+    log = logger or _logger
+    try:
+        from pywinauto import Application  # type: ignore
+    except ImportError:
+        return []
+
+    dismissed: List[str] = []
+    for candidate in ([pid] if pid else excel_pids()):
+        try:
+            app = Application(backend="uia").connect(process=int(candidate), timeout=5)
+        except Exception:  # noqa: BLE001
+            continue
+        for window in app.windows():
+            try:
+                if window.friendly_class_name() not in {"Dialog", "Pane"}:
+                    continue
+                text = " ".join(t for t in window.texts() if t)[:120]
+                for label in ("Yes", "OK", "Enable Editing", "Enable Content", "Close"):
+                    try:
+                        button = window.child_window(title=label, control_type="Button")
+                        if button.exists(timeout=0.5):
+                            button.click_input()
+                            dismissed.append(f"{text!r} -> {label}")
+                            log.warning("dismiss_excel_dialogs: %s -> %s", text, label)
+                            break
+                    except Exception:  # noqa: BLE001
+                        continue
+            except Exception:  # noqa: BLE001
+                continue
+    return dismissed
 
 
 def press_addin_login(
@@ -525,22 +594,33 @@ def wait_for_addin(
     started = time.time()
     deadline = started + max(0.0, timeout)
     last = ""
-    pressed = not press_login
+    presses = 0
     while True:
         try:
             client = CitiVelocityExcelClient.connect(
                 attempts=1, workbook_tag=workbook_tag, readiness_timeout=readiness_timeout
             )
-            log.info("wait_for_addin: signed in after %.1f min", (time.time() - started) / 60.0)
+            log.info("wait_for_addin: signed in after %.1f min (%d login press(es))",
+                     (time.time() - started) / 60.0, presses)
             return client
         except (AddInNotSignedInError, ExcelNotRunningError) as exc:
             state = type(exc).__name__
-            if not pressed and isinstance(exc, AddInNotSignedInError):
-                # The add-in is loaded and will NOT authenticate on its own.
-                # Press once; a second press while the pane is already open is
-                # noise, and a failure here is not fatal - the wait continues and
-                # a human can still sign in.
-                pressed = press_addin_login(logger=log) or pressed
+            if press_login and isinstance(exc, AddInNotSignedInError):
+                # The add-in is loaded and will NOT authenticate on its own, so
+                # press. Press REPEATEDLY, not once: the ribbon's Login button
+                # exists from the moment the tab renders, but its handler is
+                # inert until the add-in has finished composing - the only press
+                # that has ever worked came about four minutes after launch,
+                # and every press that failed came within seconds of it. A
+                # press while the pane is already open is harmless noise; a
+                # press that arrives too early is a silent no-op, and that is
+                # the failure worth designing against.
+                presses += 1
+                # A modal blocks the add-in's initialisation AND swallows the
+                # Login click, so clear the way before pressing rather than
+                # wondering afterwards why an "invoked" button did nothing.
+                dismiss_excel_dialogs(logger=log)
+                press_addin_login(logger=log)
         except Exception as exc:  # noqa: BLE001 - transient COM during startup
             state = f"{type(exc).__name__}: {exc}"
         if state != last:
