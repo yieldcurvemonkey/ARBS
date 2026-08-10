@@ -805,3 +805,35 @@ and record `snapshot_lag_signed_seconds` per trade either way, so the 52-minute
 calls and the 30-second ones stay distinguishable downstream. The two-hour bound
 on the second branch is not decoration: it is what still catches a truncated
 night, whose "last curve" is up to six hours old.
+
+## Appendix — the fast gate after Part II
+
+Three runs of `pytest tests -m "not slow and not network and not db"`:
+
+| run | result | failures |
+|---|---|---|
+| clean `main` worktree | 6,246 passed / **3 failed** | `citivelo_catalog::test_bond_universe_matches_the_harvest`, `eod_vectorized_engine::TestPerformance::test_252_dates_200_tenors_under_5s`, `identifiers::test_corpus_is_present_and_large` |
+| branch, before Part II | 6,382 passed / **2 failed** | catalog, identifiers |
+| branch, after Part II | 6,403 passed / **4 failed** | catalog, identifiers, **+ 2 × `test_citivelo_bond_source`** |
+
+The two extra failures in the last run are **environmental, not code**, established
+three ways rather than assumed:
+
+1. They **passed on this same branch** half an hour earlier. Same commits for the
+   files involved, different outcome — so not the code.
+2. `tests/test_citivelo_bond_source.py` and everything it exercises
+   (`MDP/CitiVelocityExcel/`, `MDP/FixedRateBonds/`) are **byte-identical to
+   `main`** on this branch. Running them "on main" would run the same bytes.
+3. The failure is `BondQuoteTransportError: … Check that Excel is alive and the
+   add-in is signed in`. Excel *is* alive and responding; the **add-in has lost
+   its Velocity session** during the overnight backfill, so every tag returns a
+   non-numeric. 37 of the 39 tests in that file pass — only the two that reach
+   live Excel fail.
+
+Worth noting separately: those two tests reach the live add-in but are **not
+marked `network`**, so they run inside the "fast, offline" gate and make it
+non-deterministic. That is a pre-existing marking gap, not something this branch
+introduced, and it is why the gate's failure set moves with Excel's mood.
+
+The performance-budget test failed on `main` and passed on both branch runs — it
+is a wall-clock assertion and `main`'s run coincided with a curve backfill.
