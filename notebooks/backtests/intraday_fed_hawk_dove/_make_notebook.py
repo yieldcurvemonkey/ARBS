@@ -326,7 +326,11 @@ ax.legend(); ax.grid(alpha=.3)
 
 ax = axes[1]
 c = ["seagreen" if x > 0 else "indianred" for x in pooled["pnl_bp"]]
-ax.bar(pooled["opened_at"].values, pooled["pnl_bp"].values, color=c, width=3, alpha=.7)
+# Width needs a real duration: a bare int is read as NANOSECONDS against a
+# datetime64 x, collapsing every bar to zero width. Cap keeps dense books visible.
+_span = pooled["opened_at"].max() - pooled["opened_at"].min()
+_w = _span / min(len(pooled), 400) if _span and len(pooled) else pd.Timedelta(days=1)
+ax.bar(pooled["opened_at"].values, pooled["pnl_bp"].values, color=c, width=_w, alpha=.7)
 ax.axhline(0, color="k", lw=.6); ax.set_ylabel("per-trade bp"); ax.grid(alpha=.3)
 plt.tight_layout(); plt.show()
 """)

@@ -308,7 +308,11 @@ ax.set_title("FOMC speaker hawk/dove — SR3 3rd quarterly, committee-relative l
 
 ax = axes[1]
 c = ["seagreen" if x > 0 else "indianred" for x in closed.pnl_bp]
-ax.bar(closed.opened_at.values, closed.pnl_bp.values, color=c, width=2.5, alpha=.7)
+# Width needs a real duration: a bare int is read as NANOSECONDS against a
+# datetime64 x, collapsing every bar to zero width. Cap keeps dense books visible.
+_span = closed.opened_at.max() - closed.opened_at.min()
+_w = _span / min(len(closed), 400) if _span and len(closed) else pd.Timedelta(days=1)
+ax.bar(closed.opened_at.values, closed.pnl_bp.values, color=c, width=_w, alpha=.7)
 ax.axhline(0, color="k", lw=.6); ax.set_ylabel("per-trade bp"); ax.grid(alpha=.3)
 plt.tight_layout(); plt.show()
 """)
