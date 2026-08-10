@@ -27,6 +27,9 @@ Stages (each writes a parquet/CSV under ``--out`` and can be re-run alone)
              assert it serves exactly what ``lag`` predicted.
 ``bp``       translate lag into basis points by repricing 2Y/5Y/10Y/30Y par swaps
              on the served snapshot against the true nearest-preceding one.
+``session``  split every request into "Citi never published this minute" vs
+             "Citi published it and we do not hold it", and emit the repair
+             work-list for the days that stop before the session does.
 ``report``   the summary tables that go into the written report.
 
 Sign convention, fixed once and used everywhere
@@ -579,6 +582,120 @@ def stage_bp(out: Path, lag: pd.DataFrame, n: int = 300, seed: int = 20260809) -
 
 
 # --------------------------------------------------------------------------- #
+#                               stage: session                                #
+# --------------------------------------------------------------------------- #
+
+
+def stage_session(out: Path, lag: pd.DataFrame) -> pd.DataFrame:
+    """Split every requested minute into "Citi has nothing" vs "we did not fetch".
+
+    This is the stage that answers whether the boundary contamination is worth
+    chasing upstream. A minute Citi never published is a hard limit on which
+    prints can be classified at all; a minute Citi published and we do not hold
+    is a backlog. The store cannot tell them apart on its own - the stored day
+    just stops - which is why ``CITIVELO_EXCEL/citi_session.py`` exists.
+
+    Also emits the repair work-list: the days that stop before the session does.
+    """
+    from MDP.IRSwaps.CITIVELO_EXCEL.citi_session import (
+        UnknownSessionError,
+        expected_minutes,
+        is_truncated,
+        publishes,
+    )
+    from Caching.curve_store import CurveStore
+
+    import pyarrow.parquet as pq
+
+    store = CurveStore.default()
+
+    # ---- per stored day: what is there, and what should be ---------------
+    day_rows: List[Dict] = []
+    stamps_by_day: Dict[Tuple[str, datetime.date], set] = {}
+    for curve in CURVE_FOR_INDEX.values():
+        asset = _asset(curve)
+        for day in sorted(store.available_dates(asset)):
+            pdir = store.raw_partition_dir(asset, day)
+            try:
+                files = [e.path for e in os.scandir(pdir) if e.name.endswith(".parquet")]
+            except FileNotFoundError:
+                continue
+            if not files:
+                continue
+            arr = np.concatenate(
+                [pq.read_table(f, columns=["timestamp_utc"]).column("timestamp_utc")
+                 .to_pandas().to_numpy() for f in files]
+            )
+            s = pd.to_datetime(pd.Series(arr), utc=True).sort_values()
+            stamps_by_day[(curve, day)] = set(s.values)
+            try:
+                exp = expected_minutes(curve, day)
+                trunc = bool(is_truncated(curve, day, pd.Timestamp(s.iloc[-1])))
+            except UnknownSessionError:
+                exp, trunc = 0, False
+            day_rows.append(
+                {
+                    "curve": curve, "local_date": day, "weekday": day.strftime("%a"),
+                    "stored": int(len(s)), "expected": int(exp),
+                    "first_utc": pd.Timestamp(s.iloc[0]), "last_utc": pd.Timestamp(s.iloc[-1]),
+                    "truncated": trunc,
+                    "completeness": float(len(s) / exp) if exp else np.nan,
+                }
+            )
+    days = pd.DataFrame(day_rows)
+    _write(days, out / "session_days.parquet")
+
+    for curve, g in days.groupby("curve"):
+        g24 = g[[d.year >= 2024 for d in g["local_date"]]]
+        print(f"  {curve}: {len(g)} stored days, {int(g['truncated'].sum())} truncated; "
+              f"2024+: median completeness {g24['completeness'].median():.3f}", flush=True)
+
+    # ---- per requested minute: which side of the line is it on -----------
+    rows: List[Dict] = []
+    idx = days.set_index(["curve", "local_date"]) if len(days) else None
+    for r in lag.itertuples():
+        snap = pd.Timestamp(r.snap_utc)
+        curve = r.curve
+        try:
+            citi_has = publishes(curve, snap)
+        except UnknownSessionError:
+            citi_has = None
+        key = (curve, r.local_date)
+        rec = idx.loc[key] if idx is not None and key in idx.index else None
+        if not citi_has:
+            klass = "citi_publishes_nothing"
+        elif rec is None:
+            klass = "no_stored_day"
+        elif snap < rec["first_utc"] or snap > rec["last_utc"]:
+            klass = "in_session_outside_stored_span"
+        elif np.datetime64(snap.tz_convert(None)) not in stamps_by_day.get(key, ()):
+            klass = "in_session_interior_gap"
+        else:
+            klass = "exact_minute_present"
+        rows.append(
+            {"curve": curve, "klass": klass, "n_legs": int(r.n_legs),
+             "lag_cur_s": getattr(r, "lag_cur_s", np.nan), "snap_utc": snap}
+        )
+    df = pd.DataFrame(rows)
+    _write(df, out / "session_split.parquet")
+
+    # ---- the repair work-list -------------------------------------------
+    repair = days[days["truncated"] | (days["completeness"] < 0.97)].copy()
+    repair["missing_minutes"] = (repair["expected"] - repair["stored"]).clip(lower=0)
+    repair = repair.sort_values(["curve", "local_date"])
+    _write(repair, out / "session_repair_list.parquet")
+    if len(repair):
+        (out / "session_repair_list.csv").write_text(
+            repair[["curve", "local_date", "weekday", "stored", "expected",
+                    "missing_minutes", "truncated"]].to_csv(index=False),
+            encoding="utf-8",
+        )
+        print(f"  repair list: {len(repair)} day(s), "
+              f"{int(repair['missing_minutes'].sum()):,} missing minutes", flush=True)
+    return df
+
+
+# --------------------------------------------------------------------------- #
 #                                stage: drift                                 #
 # --------------------------------------------------------------------------- #
 
@@ -757,6 +874,7 @@ def stage_report(
     density: pd.DataFrame,
     bp: pd.DataFrame,
     drift: Optional[pd.DataFrame] = None,
+    session: Optional[pd.DataFrame] = None,
 ) -> Dict:
     summary: Dict = {"generated": datetime.datetime.now(UTC).isoformat(), "by_curve": {}}
 
@@ -952,6 +1070,36 @@ def stage_report(
             for curve, cg in drift.groupby("curve")
         }
 
+    if session is not None and len(session):
+        # The question this answers: of the contamination, how much could a
+        # better fetch remove, and how much is simply not published?
+        sess: Dict = {}
+        for curve, g in session.groupby("curve"):
+            total = float(g["n_legs"].sum())
+            fut_total = float(g.loc[g["lag_cur_s"] < 0, "n_legs"].sum())
+            entry = {"legs": int(total), "future_served": int(fut_total), "by_class": {}}
+            for klass, gg in g.groupby("klass"):
+                n = float(gg["n_legs"].sum())
+                fut = float(gg.loc[gg["lag_cur_s"] < 0, "n_legs"].sum())
+                entry["by_class"][str(klass)] = {
+                    "legs": int(n),
+                    "frac_legs": n / total if total else np.nan,
+                    "future_served": int(fut),
+                    "frac_of_all_future_served": fut / fut_total if fut_total else np.nan,
+                }
+            recoverable = g[g["klass"].isin(
+                ("in_session_outside_stored_span", "in_session_interior_gap", "no_stored_day")
+            )]
+            rec_fut = float(recoverable.loc[recoverable["lag_cur_s"] < 0, "n_legs"].sum())
+            entry["recoverable_by_fetching"] = {
+                "legs": int(recoverable["n_legs"].sum()),
+                "frac_legs": float(recoverable["n_legs"].sum() / total) if total else np.nan,
+                "future_served": int(rec_fut),
+                "frac_of_all_future_served": rec_fut / fut_total if fut_total else np.nan,
+            }
+            sess[str(curve)] = entry
+        summary["session_split"] = sess
+
     (out / "summary.json").write_text(json.dumps(summary, indent=2, default=str), encoding="utf-8")
     print(json.dumps(summary, indent=2, default=str))
     return summary
@@ -991,7 +1139,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument(
         "stage",
-        choices=["demand", "density", "lag", "verify", "bp", "drift", "report", "all"],
+        choices=["demand", "density", "lag", "verify", "bp", "drift", "session",
+                 "report", "all"],
     )
     ap.add_argument("--out", required=True)
     ap.add_argument("--start", default="2024-03-01")
@@ -1019,9 +1168,12 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     if stage in ("drift", "all"):
         stage_drift(out, _read(out / "density.parquet"), _read(out / "lag.parquet"),
                     n_days=args.drift_days)
+    if stage in ("session", "all"):
+        stage_session(out, _read(out / "lag.parquet"))
     if stage in ("report", "all"):
         stage_report(out, _read(out / "lag.parquet"), _read(out / "density.parquet"),
-                     _read(out / "bp.parquet"), _read(out / "drift.parquet"))
+                     _read(out / "bp.parquet"), _read(out / "drift.parquet"),
+                     _read(out / "session_split.parquet"))
     return 0
 
 
