@@ -69,7 +69,17 @@ def role_of(speaker: str, as_of: Optional[datetime.date] = None) -> str:
 #: (Boston, Philadelphia, Richmond), (Cleveland, Chicago),
 #: (Atlanta, St. Louis, Dallas), (Minneapolis, Kansas City, San Francisco).
 #: This is the published rotation, not an inference.
+#:
+#: 2019-2020 are included because the hand-labelled book starts in 2019, and an
+#: unmapped year returns None from ``is_voter`` — which a voters-only filter reads
+#: as "not a voter" and silently drops. They are not extrapolated from the
+#: six-year periodicity alone; both check against the actual rosters:
+#: 2019 voted Evans (Chicago), Rosengren (Boston), Bullard (St. Louis),
+#: George (Kansas City); 2020 voted Mester (Cleveland), Harker (Philadelphia),
+#: Kaplan (Dallas), Kashkari (Minneapolis).
 VOTING_DISTRICTS: Dict[int, tuple] = {
+    2019: ("Chicago", "Boston", "St. Louis", "Kansas City"),
+    2020: ("Cleveland", "Philadelphia", "Dallas", "Minneapolis"),
     2021: ("Chicago", "Richmond", "Atlanta", "San Francisco"),
     2022: ("Cleveland", "Boston", "St. Louis", "Kansas City"),
     2023: ("Chicago", "Philadelphia", "Dallas", "Minneapolis"),
