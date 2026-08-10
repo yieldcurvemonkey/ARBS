@@ -461,3 +461,14 @@ The three are pre-existing and unrelated:
 - `tests/test_citivelo_catalog.py::test_bond_universe_matches_the_harvest`
 - `tests/test_eod_vectorized_engine.py::TestPerformance::test_252_dates_200_tenors_under_5s`
 - `tests/test_identifiers.py::test_corpus_is_present_and_large`
+
+The same gate on the branch tip: **6,382 passed, 2 failed**, 29 min. The failure
+set is a strict **subset** of the baseline —
+
+- `tests/test_citivelo_catalog.py::test_bond_universe_matches_the_harvest`
+- `tests/test_identifiers.py::test_corpus_is_present_and_large`
+
+— so no test that passed on `main` fails on the branch. The third baseline
+failure, the 5-second performance budget, *passed* here; it is a wall-clock
+assertion and the machine was running a curve backfill during the `main` run, so
+treat it as load-sensitive rather than as anything this branch changed.
