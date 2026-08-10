@@ -19,8 +19,12 @@ The four failure modes these pin, all of which were silent:
 
 Two of these tests (``test_the_shipped_argmin_rule_can_pick_the_future`` and
 ``test_the_shipped_window_spans_neighbouring_days``) are written against the
-*expression that shipped*, not against the new code, so they reproduce the bugs
-independently of the fix and keep doing so if the fix is reverted.
+*expression that shipped*, not against the new code, so they keep demonstrating
+the defect whatever the loader is changed to. Note the limit of that claim,
+which a review pointed out: they touch no production code, but they live in a
+module that imports ``snapshot_policy`` at the top, so deleting that module
+fails them by collection error rather than by assertion. They document the bug;
+they are not a tripwire on the fix.
 """
 
 from __future__ import annotations
@@ -578,25 +582,53 @@ def test_a_strict_data_miss_omits_the_key_rather_than_killing_the_batch(store, m
         _load(mdp, missed, policy=SnapshotPolicy.strict(minutes=30))
 
 
-def test_bulk_refuses_a_midnight_request_under_a_strict_policy(store, mdp):
+def test_bulk_drops_a_midnight_request_under_a_strict_policy(store, mdp, caplog):
     """The batch buckets EOD requests in its own pass - and used to serve them.
 
     An exact-midnight stamp is what ``snap_timestamp`` produces for every 00:01
     ET print, so this is the sixteen-hour lookahead arriving through the door the
     single-point dispatch already guards. The agreement test above could not see
     it, because every timestamp in it is intraday.
+
+    Dropped, not fatal: 256 legs on the tape snap to exact midnight, so a batch
+    that raised would kill a whole day's backfill over one 00:01 print. The
+    single-point path still raises, because a caller who asked one question gets
+    an answer or an exception.
     """
-    with pytest.raises(SnapshotMiss, match="END OF DAY"):
-        mdp._bulk_citivelo_excel_curves(
-            curve_name=CURVE,
-            timestamps=[
-                datetime.datetime(2026, 6, 10, 10, 4, tzinfo=ET),
-                pd.Timestamp("2026-06-10 00:00", tz=ET),
-            ],
+    import logging
+
+    ok = datetime.datetime(2026, 6, 10, 10, 4, tzinfo=ET)
+    midnight = pd.Timestamp("2026-06-10 00:00", tz=ET)
+    with caplog.at_level(logging.WARNING, logger="MDP.IRSwaps.citivelo_excel"):
+        out = mdp._bulk_citivelo_excel_curves(
+            curve_name=CURVE, timestamps=[ok, midnight],
             request={"snapshot_policy": SnapshotPolicy.strict(minutes=5)},
-            ignore_cache=False,
-            n_jobs=1,
+            ignore_cache=False, n_jobs=1,
         )
+    assert ok in out and midnight not in out
+    assert any("ABSENT from the result" in r.message for r in caplog.records)
+
+    with pytest.raises(SnapshotMiss, match="END OF DAY"):
+        mdp._build_citivelo_excel_curve(
+            curve_name=CURVE, timestamp=midnight,
+            kwargs={"snapshot_policy": SnapshotPolicy.strict(minutes=5)},
+        )
+
+
+def test_bulk_never_serves_the_close_for_a_midnight_request_under_a_policy(store, mdp):
+    """The property that actually matters: not raised, but never SERVED either."""
+    served = []
+    original = IRSwapsMDP._wrap_citivelo_excel_eod
+    IRSwapsMDP._wrap_citivelo_excel_eod = lambda self, **kw: served.append(kw) or "EOD"
+    try:
+        out = mdp._bulk_citivelo_excel_curves(
+            curve_name=CURVE, timestamps=[pd.Timestamp("2026-06-10 00:00", tz=ET)],
+            request={"snapshot_policy": SnapshotPolicy.strict(minutes=5)},
+            ignore_cache=False, n_jobs=1,
+        )
+    finally:
+        IRSwapsMDP._wrap_citivelo_excel_eod = original
+    assert out == {} and served == []
 
 
 def test_bulk_still_serves_a_midnight_request_without_a_policy(store, mdp, monkeypatch):

@@ -3530,7 +3530,19 @@ class IRSwapsMDP(MarketDataProvider[_GenericPricable]):
             # CLOSE - the sixteen-hour lookahead, reached through the batch,
             # under the very policy that forbids it. Found by review, not by the
             # bulk-vs-single agreement test, which only used intraday stamps.
-            self._assert_policy_mode(policy, mode=mode, timestamp=t)
+            #
+            # Recorded as a data miss rather than allowed to escape. There is no
+            # lenient answer to an exact-midnight request under a minute policy -
+            # every branch that could serve it serves a close - so the
+            # single-point path is right to raise. But a batch must survive it:
+            # 256 legs on the tape snap to exact midnight, so letting it escape
+            # would kill a whole day's backfill over one 00:01 print. A caller
+            # CONTRADICTION ("live", an unresolvable stamp) still escapes.
+            try:
+                self._assert_policy_mode(policy, mode=mode, timestamp=t)
+            except SnapshotMiss as miss:
+                strict_misses.append((t, str(miss)))
+                continue
             if mode is None:
                 leftover.append(t)
             elif mode.mode == "intraday" and mode.wire_instant is not None:
