@@ -505,6 +505,12 @@ Reproduce with `scripts/citivelo_minute_lag_audit.py session`. Store state as
 measured 2026-08-10: `USD-SOFR-1D-CITIVELOEXCELMIN` 1,237 days,
 `USD-FEDFUNDS-1D-CITIVELOEXCELMIN` 926 days.
 
+The whole measurement was re-run from `density` through `lag` against today's
+store, and the `verify` stage re-checked against production on it: **36/36
+predictions matched** again. The store is still being written to — the backfill
+has ~1,900 day parquets left to build — so treat every count here as a stamp, and
+re-run rather than quoting.
+
 ## 12. The answer: the boundary is Citi's, and I was wrong about what it was worth
 
 §11 said: *"whether the ~01:00 ET session start is a Citi property or a
