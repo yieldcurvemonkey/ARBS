@@ -241,3 +241,53 @@ def test_the_same_print_under_a_strict_policy_is_refused_rather_than_closed(monk
             curve_name="USD-SOFR-1D", timestamp=midnight,
             kwargs={"snapshot_policy": SnapshotPolicy.strict(minutes=1)},
         )
+
+
+@pytest.mark.parametrize("value", ["live", None, pd.NaT, 42, datetime.date(2026, 6, 10)])
+def test_as_intraday_instant_passes_through_anything_that_is_not_a_midnight_datetime(value):
+    """It shares one definition of "ambiguous" with is_ambiguous_midnight.
+
+    An earlier draft parsed the value itself and would have raised on "live" -
+    which the curve APIs accept - so the two helpers now agree by construction
+    rather than by both being edited together.
+    """
+    out = pricing.as_intraday_instant(value)
+    assert out is value or out == value
+
+
+def test_the_nudge_keeps_the_type_and_the_offset():
+    naive = datetime.datetime(2026, 6, 10, 0, 0)
+    assert pricing.as_intraday_instant(naive) == datetime.datetime(2026, 6, 10, 0, 0, 1)
+
+    aware = NY.localize(datetime.datetime(2026, 6, 10, 0, 0))
+    out = pricing.as_intraday_instant(aware)
+    assert isinstance(out, datetime.datetime)
+    assert out.utcoffset() == aware.utcoffset(), "one second cannot cross a DST change"
+    assert out.tzinfo is aware.tzinfo
+
+    ts = pd.Timestamp("2026-06-10 00:00", tz=ET)
+    assert isinstance(pricing.as_intraday_instant(ts), pd.Timestamp)
+
+
+def test_the_nudge_does_not_change_which_snapshot_is_selected():
+    """Invariant (B), arithmetically rather than by assertion.
+
+    Citi's last row before the hole is 22:59 ET and its first after is 01:00 ET.
+    From 00:00:00 those are 3,660 s back and 3,600 s forward; from 00:00:01 they
+    are 3,661 and 3,599. Nearest picks the 01:00 row from both, as-of picks the
+    22:59 row from both. Neither rule changes its answer - and note there is no
+    exact tie at midnight to break, which was the thing worth checking.
+    """
+    import numpy as np
+
+    from MDP.IRSwaps.CITIVELO_EXCEL.snapshot_policy import SnapshotPolicy, select_snapshot
+
+    prev_close = pd.Timestamp("2026-06-09 22:59", tz=ET).tz_convert("UTC")
+    next_open = pd.Timestamp("2026-06-10 01:00", tz=ET).tz_convert("UTC")
+    stamps = np.array([prev_close.value, next_open.value], dtype=np.int64)
+
+    for spelling in ("2026-06-10 00:00:00", "2026-06-10 00:00:01"):
+        wanted = pd.Timestamp(spelling, tz=ET).tz_convert("UTC").value
+        assert select_snapshot(stamps, wanted, SnapshotPolicy.legacy()).position == 1
+        asof = SnapshotPolicy(method="asof", max_lag=datetime.timedelta(hours=3))
+        assert select_snapshot(stamps, wanted, asof).position == 0

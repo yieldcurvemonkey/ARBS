@@ -48,28 +48,43 @@ def as_intraday_instant(et_instant):
     Not applied to a bare ``datetime.date``, which unambiguously means EOD to
     every source and is a legitimate thing to ask for.
     """
-    if isinstance(et_instant, datetime.date) and not isinstance(et_instant, datetime.datetime):
+    if not is_ambiguous_midnight(et_instant):
         return et_instant
-    ts = pd.Timestamp(et_instant)
-    if (ts.hour, ts.minute, ts.second, ts.microsecond) != (0, 0, 0, 0):
-        return et_instant
+    # pytz's own advice is to normalise after arithmetic, but one second past
+    # midnight cannot cross a US DST transition - those happen at 02:00 local -
+    # so the offset the value was localised with is still the right one, and
+    # normalising would be a no-op that implies otherwise.
     return et_instant + datetime.timedelta(seconds=1)
 
 
 def is_ambiguous_midnight(ts) -> bool:
     """Would this value be read as end-of-day by a source that overloads midnight?
 
-    ``True`` only for a *datetime* at exactly 00:00:00.000. A ``datetime.date``
-    is not ambiguous - it means EOD to everything, on purpose.
+    ``True`` only for a wall-clock value at exactly 00:00:00.000. A
+    ``datetime.date`` is not ambiguous - it means EOD to everything, on purpose.
+
+    Two deliberate details:
+
+    * The test is ``(hour, minute, second, microsecond)``, **not** including
+      nanosecond, because that is exactly what ``resolve_request`` tests. The
+      job here is to predict what the *consumer* will do, so matching its rule
+      matters more than being independently stricter.
+    * Only genuinely date-like inputs are considered. ``pd.Timestamp(42)`` is
+      42 nanoseconds past the epoch - hour, minute, second and microsecond all
+      zero - so parsing anything that pandas accepts would call a plain integer
+      "midnight" and then fail trying to add a second to it. Found by a test
+      that passed ``42`` on the way past.
     """
-    if ts is None or isinstance(ts, str):
-        return False
+    import numpy as np
+
     if isinstance(ts, datetime.date) and not isinstance(ts, datetime.datetime):
+        return False
+    if not isinstance(ts, (datetime.datetime, np.datetime64, str)):
         return False
     try:
         t = pd.Timestamp(ts)
     except (TypeError, ValueError):
-        return False
+        return False                      # "live", and anything unparseable
     if t is pd.NaT:
         return False
     return (t.hour, t.minute, t.second, t.microsecond) == (0, 0, 0, 0)
