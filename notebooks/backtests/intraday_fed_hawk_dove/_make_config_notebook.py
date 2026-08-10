@@ -349,7 +349,11 @@ if not CLOSED.empty:
                  f"T{CONFIG['timing']['entry_offset_min']:+d}/"
                  f"T{CONFIG['timing']['exit_offset_min']:+d}")
     ax = axes[1]
-    ax.bar(CLOSED.opened_at.values, CLOSED.pnl_bp.values, width=3, alpha=.7,
+    # Width needs a real duration: a bare int is read as NANOSECONDS against a
+    # datetime64 x, collapsing every bar to zero width. Cap keeps dense books visible.
+    _span = CLOSED.opened_at.max() - CLOSED.opened_at.min()
+    _w = _span / min(len(CLOSED), 400) if _span and len(CLOSED) else pd.Timedelta(days=1)
+    ax.bar(CLOSED.opened_at.values, CLOSED.pnl_bp.values, width=_w, alpha=.7,
            color=["seagreen" if x > 0 else "indianred" for x in CLOSED.pnl_bp])
     ax.axhline(0, color="k", lw=.6); ax.set_ylabel("per-trade bp"); ax.grid(alpha=.3)
     plt.tight_layout(); plt.show()
