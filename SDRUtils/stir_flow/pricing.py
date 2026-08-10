@@ -29,17 +29,54 @@ class LegPricing:
 
 
 class CurvePricer:
-    def __init__(self, mdp=None):
+    """Memoised curve handles for the direction classifier.
+
+    ``curve_kwargs`` is passed through to ``IRSwapsMDP._get_curve`` on every
+    build, and is fixed for the life of the instance. That is deliberate: it is
+    how a caller says "serve me a snapshot at or before this minute, within this
+    tolerance, and raise if you cannot" (see
+    ``MDP/IRSwaps/CITIVELO_EXCEL/snapshot_policy.SnapshotPolicy``), and a
+    per-call spelling would be unsound here - ``_handles`` is keyed on
+    ``(curve_name, ts)``, so the first caller's terms would be silently reused
+    for the next caller's request for the same minute. Per-instance means the
+    cache key and the terms cannot disagree.
+    """
+
+    def __init__(self, mdp=None, *, curve_kwargs: dict | None = None):
         if mdp is None:
             from MDP.IRSwaps.IRSwapsMDP import IRSwapsMDP
             mdp = IRSwapsMDP(source=config.CURVE_SOURCE)
         self._mdp = mdp
+        self._curve_kwargs = dict(curve_kwargs or {})
         self._handles: dict = {}
+
+    @property
+    def curve_kwargs(self) -> dict:
+        """The terms every curve on this pricer is built under. Read-only copy."""
+        return dict(self._curve_kwargs)
+
+    def build(self, curve_name: str, ts):
+        """Build one curve under this pricer's terms, WITHOUT touching the cache.
+
+        Public because the warmer (``curve_warm.warm_pricer``) pre-populates
+        ``_handles`` directly, and it must build on the same terms ``handle``
+        would. It previously called ``_get_curve`` itself, which meant a pricer
+        carrying a strict snapshot policy got its cache seeded with
+        legacy-selected curves and then served them - the cache key and the terms
+        disagreeing, which is the failure the per-instance design was chosen to
+        avoid. One method, both callers.
+        """
+        # Only pass `kwargs` when there is something to say. `mdp` is routinely a
+        # stand-in - a fake in tests, a narrower wrapper in the backtests - and
+        # widening the call for every caller in order to serve the one that set
+        # curve_kwargs would break those for no gain.
+        extra = {"kwargs": dict(self._curve_kwargs)} if self._curve_kwargs else {}
+        return self._mdp._get_curve(curve_name=curve_name, timestamp=ts, **extra)
 
     def handle(self, curve_name: str, ts):
         key = (curve_name, ts)
         if key not in self._handles:
-            self._handles[key] = self._mdp._get_curve(curve_name=curve_name, timestamp=ts)
+            self._handles[key] = self.build(curve_name, ts)
         return self._handles[key]
 
     def price_leg(self, curve_name, ts, effective_date, maturity_date,
