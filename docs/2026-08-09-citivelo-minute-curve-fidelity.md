@@ -712,3 +712,96 @@ partial would replace good data with worse.
   Friday 20:00 ET print and a Monday 20:00 ET print look identical from the
   store — the stored day just stops — and one is the weekend while the other is a
   repairable hole.
+
+## 20. If you accept "serve the last curve" across the nightly hole
+
+That is `method="asof"` with a tolerance wide enough to cross the gap, and it is
+a defensible choice — but it buys three separate things, only two of which are
+cheap.
+
+### It is cheap, on a clean night
+
+The 23:00–00:59 ET hole is two hours wide, and the curve barely moves across it.
+Priced over 30 clean weeknights, 22:59 ET against 01:00 ET the next morning
+(median gap 121 minutes):
+
+| tenor | p50 \|move\| | p90 | max |
+|---|---|---|---|
+| 2Y | 0.27 bp | 0.91 | 1.43 |
+| 5Y | **0.24 bp** | **0.87** | 1.18 |
+| 10Y | 0.29 bp | 0.83 | 1.16 |
+| 30Y | 0.28 bp | 0.71 | 1.34 |
+
+For scale, §7's intraday drift table puts a *120-minute* in-session staleness at
+5Y p50 0.74 / p90 2.63 bp. **The overnight hole moves the curve about three times
+less than an equivalent stretch of the trading day**, because 23:00–01:00 ET is
+the quiet middle of the Asian session with the US shut. It is also comparable to
+a five-minute in-session staleness (p90 0.43 bp), and well under the 1.0–1.3 bp
+the nearest-either-direction rule was introducing.
+
+And it is *unbiased*: a stale curve predates the print, so it cannot contain the
+print's own impact. That is the whole difference between stale and circular.
+
+### The weekend is a non-issue
+
+110 SOFR legs and 5 Fed Funds legs land in the weekend window across the entire
+tape — 0.4 % of the unpublished bucket — with a maximum backward lag of 96
+minutes, because they cluster right at the edges. There is no 60-hour-stale
+Sunday curve waiting to happen. Nothing to decide here.
+
+### But the truncated days quadruple it, for a fifth of the legs
+
+Splitting the 30,078 nightly-hole legs by whether the *preceding* session was
+truncated (§15):
+
+| preceding day | legs | p50 lag | p90 | max |
+|---|---|---|---|---|
+| complete | 23,854 (79 %) | 52 min | 106 min | **120 min** |
+| **truncated** | **6,224 (21 %)** | **244 min** | **304 min** | **360 min** |
+
+The clean-day maximum is exactly 120 minutes, which is the hole and nothing more
+— the model and the data agree to the minute. The truncated-day column is
+entirely self-inflicted: those nights start from a 19:59 or 17:59 ET close
+instead of 22:59, so the "last curve" is four to six hours old rather than two.
+
+So repairing the 302 truncated days is worth more than §16's 12.6 % headline
+suggested. It also fixes a fifth of the overnight population, which is precisely
+the population this section is about accepting.
+
+### The one thing in that hour you should *not* accept
+
+`snap_timestamp` produces **exactly midnight ET** for every print in the
+00:01:00–00:01:59 ET minute, and `resolve_request` reads exact midnight as
+**end of day**. Those requests never reach the minute store; they are answered by
+`_load_citivelo_excel_curve_store_point` with **that day's close** — a curve
+roughly sixteen hours *after* the print.
+
+256 SOFR legs and 3 Fed Funds legs. It sits inside the hour being waved through,
+so it is easy to wave through with it — but it is a different failure. Everything
+else in the hole is *stale*, which is unbiased. This one is *from the future*,
+which is exactly the circularity the whole exercise exists to remove.
+`SnapshotPolicy.strict()` already refuses it (§10); a policy relaxed to admit the
+hole must not relax that too.
+
+### The tolerance trap
+
+The obvious way to admit the hole is `max_lag=2h`. Don't: that also admits a
+two-hour staleness at 10:00 on a Tuesday, which is worth 2.63 bp at the 90th
+percentile rather than 0.87. The bound and the hole are different questions.
+
+Keep the 60-second bound and branch on the session instead:
+
+```python
+from MDP.IRSwaps.CITIVELO_EXCEL.citi_session import publishes
+
+policy = (SnapshotPolicy.strict(minutes=1)
+          if publishes(curve_name, snap)
+          else SnapshotPolicy(method="asof",
+                              max_lag=datetime.timedelta(hours=2),
+                              allow_future=False, on_miss="raise"))
+```
+
+and record `snapshot_lag_signed_seconds` per trade either way, so the 52-minute
+calls and the 30-second ones stay distinguishable downstream. The two-hour bound
+on the second branch is not decoration: it is what still catches a truncated
+night, whose "last curve" is up to six hours old.
