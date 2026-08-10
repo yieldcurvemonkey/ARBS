@@ -123,6 +123,8 @@ class RLSTIRFuturePricer(_STIRFutureGenericPricer):
             "T0": "JPY-TONA",
             "IT": "JPY-TONA",
             "J2": "CHF-SARON",
+            # Eurodollar - see the note in STIRFutureMDP._ROOT_TO_CURVE_MAP
+            "GE": "USD-SOFR-1D",
         }
         if self._rl_stirf_id[:-3] in known_id_to_curve_map:
             self._curve = known_id_to_curve_map[self._rl_stirf_id[:-3]]
