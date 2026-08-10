@@ -234,6 +234,23 @@ def select_snapshot(
     if stamps_ns.size == 0:
         return None
 
+    # NaT arrives here as int64 minimum, which is not a time at all. This is the
+    # ONE place the legacy policy deliberately differs from the expression it
+    # replaced: pandas' `.abs().values.argmin()` propagates NaT to int64 minimum
+    # and therefore SELECTS the corrupt row, which then fails to reconstruct and
+    # takes the whole request down to a miss. Skipping it serves a real snapshot
+    # instead. It requires a null `timestamp_utc` in a partition, so it should
+    # never happen; if it does, losing one row beats losing the request.
+    usable = stamps_ns != np.iinfo(np.int64).min
+    if not usable.all():
+        if not usable.any():
+            return None
+        keep = np.flatnonzero(usable)
+        inner = select_snapshot(stamps_ns[keep], wanted_ns, policy)
+        return None if inner is None else dataclasses.replace(
+            inner, position=int(keep[inner.position])
+        )
+
     delta = stamps_ns - wanted_ns          # served - wanted, in ns
     if policy.method == "asof":
         eligible = delta <= 0

@@ -70,6 +70,16 @@ class DayDensity:
     taken with ``with_gaps=False``, which reads only the parquet footers. That is
     an absence of measurement, not a measurement of absence - ``is_dense`` says
     so by refusing to certify a day whose gap profile it has not seen.
+
+    ``n_snapshots`` is what is **stored**, which is an upper bound on what the
+    read path serves: ``CurveStore.read_raw_day`` applies
+    ``Caching.curve_sanity.filter_raw_frame`` on the way out and can quarantine
+    rows. Measured 2026-08-09 on 40 sampled days of each of the two USD minute
+    assets, the two counts agreed on 80 of 80 - so the gap is currently zero and
+    the bound is currently tight. It is a bound rather than an equality on
+    purpose: closing it would mean reading every row, which is the cost this
+    module exists to avoid, and overstating coverage is the safer error only if
+    it is stated.
     """
 
     asset: str

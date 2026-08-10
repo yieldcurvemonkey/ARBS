@@ -1995,6 +1995,21 @@ class IRSwapsMDP(MarketDataProvider[_GenericPricable]):
     ) -> Optional[_IRSwapGenericCurve]:
         self._validate_curve_request_timestamp(curve_name=curve_name, timestamp=timestamp)
 
+        # A snapshot policy only means anything to the Citi minute store. Every
+        # other source would ignore the key, and the caller would be running
+        # unprotected while believing otherwise - which is the precise failure
+        # this parameter exists to prevent. It is easy to hit: CurvePricer's
+        # default source is BARCHART_STIRF-RL, so setting curve_kwargs without
+        # also switching the source would silently do nothing at all.
+        if (kwargs or {}).get("snapshot_policy") is not None and (
+            self.source.upper() not in CITIVELO_EXCEL_SOURCE_TOKENS
+        ):
+            raise ValueError(
+                f"snapshot_policy governs the Citi Velocity minute CurveStore, and this "
+                f"IRSwapsMDP is source={self.source!r}, which never reads it. Use one of "
+                f"{CITIVELO_EXCEL_RL_TOKENS}."
+            )
+
         if self.source.upper() in ["CME_NY_EOD_LIVE-QL_BASIC", "CME_NY_EOD_LIVE_QL_BASIC"]:
             import QuantLib as ql
 
@@ -3183,8 +3198,12 @@ class IRSwapsMDP(MarketDataProvider[_GenericPricable]):
 
         policy = policy or SnapshotPolicy.legacy()
         asset = f"{curve_name}-CITIVELOEXCELMIN"
+        # OUTSIDE the try, as it was before the policy existed. An unknown curve
+        # name is a caller error, not a cold store, and folding it into the miss
+        # handler would turn a KeyError naming the typo into a quiet fall-through
+        # to a live Excel build that fails later and less usefully.
+        entry = entry_for_curve_name(curve_name)
         try:
-            entry = entry_for_curve_name(curve_name)
             resolved = resolve_request(timestamp)
             local_zone = zoneinfo.ZoneInfo(entry.local_timezone)
         except SnapshotMiss:

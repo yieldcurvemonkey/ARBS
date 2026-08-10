@@ -58,9 +58,22 @@ class _FakeMDP:
 
 
 class _FakePricer:
+    """Models CurvePricer, INCLUDING ``build`` and ``curve_kwargs``.
+
+    ``warm_pricer`` writes straight into ``_handles``, so it must build on the
+    same terms ``CurvePricer.handle`` would - that is what ``build`` is for. A
+    fake without it would let the warmer go back to calling ``_get_curve``
+    directly and this suite would not notice.
+    """
+
+    curve_kwargs: dict = {}
+
     def __init__(self):
         self._mdp = _FakeMDP()
         self._handles = {}
+
+    def build(self, curve_name, ts):
+        return self._mdp._get_curve(curve_name=curve_name, timestamp=ts)
 
 
 def test_warm_builds_all_and_is_idempotent():
@@ -130,9 +143,13 @@ class _BulkMDP:
 
 
 class _P:
-    def __init__(self, mdp):
+    def __init__(self, mdp, curve_kwargs=None):
         self._mdp = mdp
         self._handles = {}
+        self.curve_kwargs = dict(curve_kwargs or {})
+
+    def build(self, curve_name, ts):
+        return self._mdp._get_curve(curve_name=curve_name, timestamp=ts)
 
 
 def _demand(n=5, curve="USD-SOFR-1D-Q12xM12STIRT"):
@@ -217,3 +234,52 @@ def test_bulk_seeds_only_missing_keys():
     assert res["reused"] == 1 and res["bulk_seeded"] == 3
     assert p._handles[demand[0]] == "preexisting"     # not overwritten
     assert len(mdp.bulk_calls[0][1]) == 3             # only the missing three asked for
+
+
+# --------------------------------------------------------------------------
+# the warmer must build on the PRICER's terms, not on the MDP's defaults
+# --------------------------------------------------------------------------
+def test_warm_builds_through_the_pricer_so_its_curve_kwargs_apply():
+    """A warmed handle is served from the cache forever after.
+
+    ``warm_pricer`` pre-populates ``_handles`` directly, so if it built by
+    calling ``_get_curve`` itself it would seed a pricer carrying a strict
+    snapshot policy with legacy-selected curves - the cache key and the terms
+    disagreeing, silently, for every minute it warmed. That is the production
+    dealer-direction path, not a corner.
+    """
+    from SDRUtils.stir_flow.pricing import CurvePricer
+
+    seen = []
+
+    class _RecordingMDP:
+        def _get_curve(self, curve_name, timestamp, kwargs=None):
+            seen.append(dict(kwargs or {}))
+            return f"H:{curve_name}"
+
+        def bulk_get_data(self, request):
+            return {}
+
+    pricer = CurvePricer(mdp=_RecordingMDP(), curve_kwargs={"snapshot_policy": "SENTINEL"})
+    res = warm_pricer(
+        pricer, {("C", pd.Timestamp("2026-07-02T13:04:00Z"))}, max_workers=1, bulk=False
+    )
+    assert res["built"] == 1
+    assert seen == [{"snapshot_policy": "SENTINEL"}]
+
+
+def test_bulk_seed_passes_the_pricers_curve_kwargs_too():
+    """The bulk seeder writes into the same cache and must use the same terms."""
+    requests = []
+
+    class _RecordingMDP:
+        def bulk_get_data(self, request):
+            requests.append(dict(request))
+            return {}
+
+        def _get_curve(self, curve_name=None, timestamp=None, kwargs=None):
+            return "H"
+
+    p = _P(_RecordingMDP(), curve_kwargs={"snapshot_policy": "SENTINEL"})
+    warm_pricer(p, _demand(2), max_workers=1)
+    assert requests and requests[0].get("snapshot_policy") == "SENTINEL"

@@ -368,6 +368,22 @@ def test_a_policy_combined_with_a_store_bypass_is_a_contradiction(store, mdp, fl
         )
 
 
+def test_a_policy_on_a_source_that_cannot_honour_it_is_rejected():
+    """The easiest way to run unprotected while believing otherwise.
+
+    ``CurvePricer``'s default source is BARCHART_STIRF-RL, so a caller who sets
+    ``curve_kwargs={"snapshot_policy": ...}`` and forgets to switch the source
+    would silently get no protection at all.
+    """
+    other = IRSwapsMDP(source="BARCHART_STIRF-RL")
+    with pytest.raises(ValueError, match="never reads it"):
+        other._get_curve(
+            "USD-SOFR-1D-Q12xM12STIRT",
+            datetime.datetime(2026, 6, 10, 10, 4, tzinfo=ET),
+            kwargs={"snapshot_policy": SnapshotPolicy.strict()},
+        )
+
+
 def test_a_non_policy_object_is_rejected_rather_than_ignored(store, mdp):
     """Reading a policy the caller did not set is how "I am protected" goes wrong."""
     with pytest.raises(TypeError, match="must be a"):
@@ -614,6 +630,32 @@ def test_bulk_ignore_cache_argument_counts_as_a_bypass(store, mdp):
             request={"snapshot_policy": SnapshotPolicy.strict()},
             ignore_cache=True, n_jobs=1,
         )
+
+
+def test_a_nat_stamp_is_skipped_rather_than_selected():
+    """The one deliberate divergence from the expression this replaced.
+
+    pandas' ``.abs().values.argmin()`` propagates NaT to int64 minimum and so
+    picks the corrupt row, which then fails to reconstruct and takes the whole
+    request down. It needs a null ``timestamp_utc`` in a partition, so it should
+    never happen - but losing one row beats losing the request.
+    """
+    base = pd.Timestamp("2026-06-10 10:00", tz="UTC").value
+    stamps = np.array([np.iinfo(np.int64).min, base, base + 300 * 10**9], dtype=np.int64)
+    wanted = base + 60 * 10**9
+
+    series = pd.Series(pd.to_datetime(stamps, utc=True))
+    assert series.isna().any(), "fixture must actually contain NaT"
+    assert int((series - pd.Timestamp(wanted, tz="UTC")).abs().values.argmin()) == 0, (
+        "the shipped expression is supposed to select the NaT row"
+    )
+
+    got = select_snapshot(stamps, wanted, SnapshotPolicy.legacy())
+    assert got is not None and got.position == 1
+
+    assert select_snapshot(
+        np.array([np.iinfo(np.int64).min], dtype=np.int64), wanted, SnapshotPolicy.legacy()
+    ) is None
 
 
 def test_select_snapshot_matches_the_expression_it_replaced():

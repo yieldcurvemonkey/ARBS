@@ -82,8 +82,12 @@ def _bulk_seed(pricer, todo, n_jobs):
     seeded = 0
     for cn, ts_list in by_curve.items():
         try:
-            # bulk_get_data POPS from the request dict, so hand it a fresh one
+            # bulk_get_data POPS from the request dict, so hand it a fresh one.
+            # The pricer's own curve_kwargs go in: a warmed handle is served from
+            # the cache thereafter, so seeding on different terms than
+            # ``CurvePricer.handle`` would build under silently overrides them.
             curves = pricer._mdp.bulk_get_data({
+                **getattr(pricer, "curve_kwargs", {}),
                 "curve_name": cn,
                 "timestamps": sorted(ts_list),
                 "n_jobs": int(n_jobs),
@@ -129,8 +133,11 @@ def warm_pricer(pricer, demand, max_workers=8, on_error="skip", bulk=True):
     built = failed = 0
     if todo:
         with _cf.ThreadPoolExecutor(max_workers=max_workers) as ex:
-            futs = {ex.submit(pricer._mdp._get_curve, curve_name=cn, timestamp=ts): (cn, ts)
-                    for cn, ts in todo}
+            # ``pricer.build``, not ``_get_curve`` - the warmer writes straight
+            # into ``_handles``, so building on any other terms than the ones
+            # ``handle`` would use silently overrides the pricer's policy for
+            # every minute it warms.
+            futs = {ex.submit(pricer.build, cn, ts): (cn, ts) for cn, ts in todo}
             for fut in _cf.as_completed(futs):
                 key = futs[fut]
                 try:

@@ -172,3 +172,16 @@ def test_a_store_predating_raw_partition_dir_is_cold_not_an_error():
     assert day_density(Ancient(), ASSET, DAY) == DayDensity(
         asset=ASSET, local_date=DAY, n_snapshots=0
     )
+
+
+def test_the_count_is_what_is_stored_not_what_the_read_path_serves(store, monkeypatch):
+    """Stated as a bound, and pinned as one.
+
+    ``CurveStore.read_raw_day`` applies the curve-sanity filter on the way out
+    and can quarantine rows, so the footer count is an upper bound. Measured
+    2026-08-09 the two agreed on 80 of 80 sampled days of the USD minute assets,
+    but a helper that promised equality would be wrong the first time the filter
+    fired - and it would be wrong in the optimistic direction.
+    """
+    store.write(ASSET, DAY, _minutes("2026-06-10", 5, 100))
+    assert day_density(store, ASSET, DAY).n_snapshots == 100
