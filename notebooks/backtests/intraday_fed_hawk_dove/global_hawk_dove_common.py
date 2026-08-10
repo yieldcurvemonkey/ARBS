@@ -96,6 +96,14 @@ class CBConfig:
     #: Local time assigned to a speech we know the DAY of but not the minute.
     synthetic_time: datetime.time = datetime.time(9, 0)
 
+    #: Optional ((from_date, root), ...) splice, newest last. The USD front end
+    #: was Eurodollar before the SOFR transition, and SR3 barely traded until
+    #: 2022 - measured on the 3rd quarterly: 2021-03 GE 541 bars vs SR3 37;
+    #: 2021-09 GE 379 vs SR3 61; 2022-01 GE 515 vs SR3 331; 2022-09 GE 809 vs
+    #: SR3 926. Trading SR3 in 2019-2021 is trading a contract that was not
+    #: there, so the leg splices at 2022-01-01.
+    root_splice: tuple = ()
+
     @property
     def tz(self):
         return pytz.timezone(self.market_tz)
@@ -103,6 +111,14 @@ class CBConfig:
     @property
     def banks(self) -> tuple:
         return self.speaker_banks or (self.code,)
+
+    def root_for(self, d: datetime.date) -> str:
+        """The contract root that actually traded on this date."""
+        root = self.root
+        for start, r in self.root_splice:
+            if d >= start:
+                root = r
+        return root
 
 
 def _ql_cal(name: str):
@@ -133,6 +149,8 @@ CB_CONFIGS: Dict[str, CBConfig] = {
         root="SR3", curve_id="USD-SOFR-1D", market_tz="America/New_York",
         ql_calendar=_ql_cal("US"),
         session_start=datetime.time(7, 0), session_end=datetime.time(16, 45), ccy="USD",
+        root_splice=((datetime.date(2019, 1, 1), "GE"),
+                     (datetime.date(2022, 1, 1), "SR3")),
     ),
     "ECB": CBConfig(
         code="ECB", label="ECB / euro area", theme=ForexFactoryTheme.ECB_SPEAKERS,
@@ -221,6 +239,19 @@ def nth_quarterly_contract(root: str, ref: datetime.date, n: int) -> str:
 #: 2021-2022 GBP sample would have NO blackout at all, quietly including every
 #: MPC decision day. These are the published announcement dates.
 _PRE2023_DECISIONS: Dict[str, List[datetime.date]] = {
+    # The registry starts 2021-01-27, so a sample reaching into 2020 would carry
+    # no FOMC blackout at all. Includes the two 2020 emergency cuts.
+    "FED": [
+        datetime.date(2019, 1, 30), datetime.date(2019, 3, 20),
+        datetime.date(2019, 5, 1), datetime.date(2019, 6, 19),
+        datetime.date(2019, 7, 31), datetime.date(2019, 9, 18),
+        datetime.date(2019, 10, 30), datetime.date(2019, 12, 11),
+        datetime.date(2020, 1, 29), datetime.date(2020, 3, 3),
+        datetime.date(2020, 3, 15), datetime.date(2020, 4, 29),
+        datetime.date(2020, 6, 10), datetime.date(2020, 7, 29),
+        datetime.date(2020, 9, 16), datetime.date(2020, 11, 5),
+        datetime.date(2020, 12, 16),
+    ],
     "BOE": [
         datetime.date(2021, 2, 4), datetime.date(2021, 3, 18), datetime.date(2021, 5, 6),
         datetime.date(2021, 6, 24), datetime.date(2021, 8, 5), datetime.date(2021, 9, 23),
@@ -371,6 +402,7 @@ def make_percentile_bucketer(
     min_history: int = 30,
     window_obs: Optional[int] = 60,
     edges: Sequence[tuple] = PERCENTILE_EDGES,
+    point_in_time: bool = True,
 ) -> Callable[[str, float, datetime.date], int]:
     """Rank a score inside that BANK's OWN prior distribution, then bucket.
 
@@ -416,7 +448,10 @@ def make_percentile_bucketer(
             return 0
         a = np.datetime64(as_of)
         # the reference distribution has to be knowable too, not just prior
-        hist = vals[(dates < a) & (pubs <= a)]
+        mask = (dates < a)
+        if point_in_time:
+            mask &= (pubs <= a)
+        hist = vals[mask]
         hist = hist[~np.isnan(hist)]
         if len(hist) < min_history:
             return 0
@@ -454,6 +489,7 @@ def make_peer_relative_bucketer(
     min_peers: int = 3,
     edges: Sequence[tuple] = ((0.60, 2), (0.20, 1), (-0.20, 0), (-0.60, -1)),
     fallback: Optional[Callable[[str, float, datetime.date], int]] = None,
+    point_in_time: bool = True,
 ) -> Callable[[str, float, datetime.date], int]:
     """Score a speaker against THEIR OWN COMMITTEE at that moment.
 
@@ -497,7 +533,9 @@ def make_peer_relative_bucketer(
         lo = as_of64 - np.timedelta64(int(peer_window_days), "D")
         # prior AND published: a peer's score that JPM only published later was
         # not part of the cross-section a desk could see
-        mask = (dates < as_of64) & (dates >= lo) & (pubs <= as_of64)
+        mask = (dates < as_of64) & (dates >= lo)
+        if point_in_time:
+            mask &= (pubs <= as_of64)
         if not mask.any():
             return _fb()
         # most recent observation per OTHER speaker
@@ -565,6 +603,60 @@ def make_researched_bucketer(
         for s, e, stance in parsed.get(speaker, []):
             if s <= as_of <= e:
                 return stance
+        return 0
+
+    return _fn
+
+
+def _q_index(q: str) -> int:
+    """'2019Q1' -> a monotone integer, so quarter ranges compare cheaply."""
+    y, qq = q.strip().upper().split("Q")
+    return int(y) * 4 + (int(qq) - 1)
+
+
+def load_quarterly_labels(path) -> Dict[str, Any]:
+    import json
+    from pathlib import Path as _P
+    p_ = _P(path)
+    if not p_.exists():
+        return {}
+    with open(p_, encoding="utf-8") as f:
+        blob = json.load(f)
+    return blob.get("speakers", blob)
+
+
+def make_manual_bucketer(labels: Dict[str, Any]) -> Callable[[str, float, datetime.date], int]:
+    """Hand-assigned committee-relative stance, rebalanced EVERY QUARTER.
+
+    Independent of the NLP score entirely - the label IS the signal. Two
+    consequences worth stating plainly:
+
+      * the event universe is no longer limited to speeches JPM chose to score,
+        so every FOMC speaker the calendar carries becomes tradeable, back to
+        2019 rather than 2023;
+      * it is NOT point-in-time. The labels were assigned in 2026 from published
+        commentary about the whole period, so a quarter's stance can encode what
+        was only understood later. Read the result as an upper bound on what a
+        correct, quarterly-refreshed view of the committee would have been worth.
+    """
+    table: Dict[str, list] = {}
+    for sp, blob in (labels or {}).items():
+        periods = blob.get("periods", blob) if isinstance(blob, dict) else blob
+        out = []
+        for p_ in periods or []:
+            try:
+                out.append((_q_index(p_["start_q"]), _q_index(p_["end_q"]),
+                            int(p_.get("stance", 0))))
+            except Exception:  # noqa: BLE001
+                continue
+        if out:
+            table[sp] = out
+
+    def _fn(speaker: str, _score: float, as_of: datetime.date) -> int:
+        qi = as_of.year * 4 + ((as_of.month - 1) // 3)
+        for lo, hi, st in table.get(speaker, []):
+            if lo <= qi <= hi:
+                return st
         return 0
 
     return _fn
@@ -702,7 +794,8 @@ def build_trade_events(
             excluded["entry_outside_session"] += 1
             continue
 
-        symbol = nth_quarterly_contract(cfg.root, speech_date, contract_rank)
+        symbol = nth_quarterly_contract(cfg.root_for(speech_date), speech_date,
+                                        contract_rank)
 
         out.append({
             "bank": cfg.code,
@@ -746,11 +839,14 @@ def build_leg_events(
     bucketer_factory: Callable[[str], Callable],
     blackout_bd: int,
     include_synthetic: bool = True,
+    point_in_time: bool = True,
+    eligible_speakers: Optional[set] = None,
 ) -> tuple:
     """Full event universe for one leg: real ForexFactory timings first, then the
     JPM-dated speeches ForexFactory never carried."""
     blackout_fn = make_blackout_fn(cfg, blackout_bd)
-    lookups = {b: ScoreLookup(scores, b, SCORE_METRIC_DEFAULT) for b in cfg.banks}
+    lookups = {b: ScoreLookup(scores, b, SCORE_METRIC_DEFAULT,
+                              point_in_time=point_in_time) for b in cfg.banks}
     buckets = {b: bucketer_factory(b) for b in cfg.banks}
 
     raw = fetch_events(cfg, start, end)
@@ -759,6 +855,7 @@ def build_leg_events(
         entry_offset=entry_offset, exit_offset=exit_offset,
         base_bpv=base_bpv, contract_rank=contract_rank,
         bucket_fn=buckets[cfg.code], blackout_fn=blackout_fn,
+        eligible_speakers=eligible_speakers,
     )
 
     synth, sexcl = ([], {})
@@ -848,7 +945,7 @@ def build_synthetic_events(
             "bank": cfg.code, "speaker_bank": bank, "ccy": cfg.ccy,
             "event_id": f"{bank}_{speaker}_{d}", "speaker": speaker,
             "title": f"[JPM] {bank} {speaker} {d}",
-            "symbol": nth_quarterly_contract(cfg.root, d, contract_rank),
+            "symbol": nth_quarterly_contract(cfg.root_for(d), d, contract_rank),
             "speech_ts": entry_ts, "entry_ts": entry_ts, "exit_ts": exit_ts,
             "raw_score": raw_score, "bucket": bucket,
             "bpv": abs(bucket) * base_bpv,
@@ -1399,7 +1496,8 @@ def rebuild_with_contract(events: List[dict], cfg: CBConfig, rank: int) -> List[
     out = []
     for ev in events:
         e = dict(ev)
-        e["symbol"] = nth_quarterly_contract(cfg.root, ev["speech_ts"].date(), rank)
+        d_ = ev["speech_ts"].date()
+        e["symbol"] = nth_quarterly_contract(cfg.root_for(d_), d_, rank)
         out.append(e)
     return out
 

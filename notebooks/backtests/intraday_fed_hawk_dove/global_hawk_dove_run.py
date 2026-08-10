@@ -37,6 +37,7 @@ CACHE.mkdir(exist_ok=True)
 
 SCORES_CSV = r"C:\Users\chris\clee\project-oasis\private\jpm_research\fed_speak_nlp\global_hawk_dove_scores.csv"
 STANCES_JSON = HERE / "research_stances.json"
+QUARTERLY_LABELS = HERE / "fed_quarterly_labels.json"
 
 BT_START = "2021-01-01"
 BT_END = "2026-08-07"
@@ -48,47 +49,65 @@ CONTRACT_RANK = 3
 BLACKOUT_BD = 1
 MAX_STALENESS_MIN = 45
 BANKS = ["FED", "ECB", "BOE", "BOJ", "BOC", "SNB"]
+CLOSED_TAG = ""
 
 
 def _p(*a):
     print(*a, flush=True)
 
 
-def make_bucketer_factory(scores: pd.DataFrame, mode: str):
+def make_bucketer_factory(scores: pd.DataFrame, mode: str, point_in_time: bool = True):
     """mode -> (bank -> bucket_fn). One place so every stage agrees."""
     stances = G.load_researched_stances(STANCES_JSON) if mode in ("researched", "blended") else {}
     if mode in ("researched", "blended") and not stances:
         raise SystemExit(
             f"--bucket {mode} needs {STANCES_JSON.name}; run the research workflow first.")
 
+    manual = G.load_quarterly_labels(QUARTERLY_LABELS) if mode == "manual" else {}
+    if mode == "manual" and not manual:
+        raise SystemExit(f"--bucket manual needs {QUARTERLY_LABELS.name}")
+
     def factory(bank: str):
+        if mode == "manual":
+            return G.make_manual_bucketer(manual)
         if mode == "absolute":
             return lambda _s, x, _d: G.absolute_bucket(x)
         if mode == "percentile":
-            return G.make_percentile_bucketer(scores, bank, SCORE_METRIC)
+            return G.make_percentile_bucketer(scores, bank, SCORE_METRIC,
+                                              point_in_time=point_in_time)
         if mode == "peer":
             return G.make_peer_relative_bucketer(
-                scores, bank, SCORE_METRIC,
-                fallback=G.make_percentile_bucketer(scores, bank, SCORE_METRIC))
+                scores, bank, SCORE_METRIC, point_in_time=point_in_time,
+                fallback=G.make_percentile_bucketer(scores, bank, SCORE_METRIC,
+                                                    point_in_time=point_in_time))
         if mode == "researched":
             return G.make_researched_bucketer(stances, bank)
         if mode == "blended":
             return G.make_blended_bucketer(
                 G.make_peer_relative_bucketer(
-                    scores, bank, SCORE_METRIC,
-                    fallback=G.make_percentile_bucketer(scores, bank, SCORE_METRIC)),
+                    scores, bank, SCORE_METRIC, point_in_time=point_in_time,
+                    fallback=G.make_percentile_bucketer(scores, bank, SCORE_METRIC,
+                                                        point_in_time=point_in_time)),
                 G.make_researched_bucketer(stances, bank))
         raise ValueError(mode)
 
     return factory
 
 
-def stage_events(bucket_mode: str, legs) -> dict:
+def stage_events(bucket_mode: str, legs, start=BT_START, end=BT_END,
+                 point_in_time: bool = True, tag: str = "") -> dict:
     scores = G.load_global_scores(SCORES_CSV, SCORE_METRIC)
     barchart = STIRFutureMDP(source="BARCHART_STIRF-RL")
     n0 = G.load_bar_cache(CACHE / "bars.pkl")
     _p(f"bar cache: {n0} symbol-days preloaded")
-    factory = make_bucketer_factory(scores, bucket_mode)
+    factory = make_bucketer_factory(scores, bucket_mode, point_in_time)
+    # a hand label needs no NLP score, so the universe is every speaker we
+    # labelled rather than only those JPM chose to score
+    eligible = (set(G.load_quarterly_labels(QUARTERLY_LABELS))
+                if bucket_mode == "manual" else None)
+    if eligible:
+        _p(f"manual labels: {len(eligible)} speakers")
+    _p(f"window {start} -> {end}   point_in_time={point_in_time}")
 
     out: dict = {}
     for bank in legs:
@@ -99,10 +118,11 @@ def stage_events(bucket_mode: str, legs) -> dict:
         _p("=" * 92)
 
         events, funnel = G.build_leg_events(
-            cfg, scores, start=BT_START, end=BT_END,
+            cfg, scores, start=start, end=end,
             entry_offset=ENTRY_OFFSET, exit_offset=EXIT_OFFSET,
             base_bpv=BASE_BPV, contract_rank=CONTRACT_RANK,
             bucketer_factory=factory, blackout_bd=BLACKOUT_BD,
+            point_in_time=point_in_time, eligible_speakers=eligible,
         )
         _p(f"  forexfactory rows={funnel['n_forexfactory_rows']}  "
            f"timed={funnel['n_timed']}  synthetic={funnel['n_synthetic']}")
@@ -127,7 +147,8 @@ def stage_events(bucket_mode: str, legs) -> dict:
         out[bank] = {"events": gated, "funnel": funnel, "gate_reasons": reasons,
                      "diag": diag, "n_raw": funnel["n_forexfactory_rows"]}
 
-    fname = "events.pkl" if bucket_mode == "peer" else f"events_{bucket_mode}.pkl"
+    fname = (f"events{tag}.pkl" if bucket_mode == "peer"
+             else f"events_{bucket_mode}{tag}.pkl")
     # MERGE rather than replace: running --legs BOJ must not silently reduce the
     # cached universe to one leg and invalidate every downstream stage.
     path = CACHE / fname
@@ -199,7 +220,7 @@ def stage_backtest(events_by_bank: dict, legs) -> dict:
     # MERGE rather than replace, for the same reason stage_events does: running
     # --legs BOJ must not reduce the cached results to one leg and quietly
     # invalidate the pooled report.
-    path = CACHE / "closed.pkl"
+    path = CACHE / f"closed{CLOSED_TAG}.pkl"
     if path.exists() and set(legs) != set(BANKS):
         try:
             with open(path, "rb") as f:
@@ -299,14 +320,26 @@ def main() -> None:
     ap.add_argument("--stage", default="all",
                     choices=["events", "prewarm", "backtest", "report", "all"])
     ap.add_argument("--bucket", default="peer",
-                    choices=["peer", "percentile", "researched", "blended", "absolute"])
+                    choices=["peer", "percentile", "researched", "blended",
+                             "absolute", "manual"])
     ap.add_argument("--legs", default=",".join(BANKS))
+    ap.add_argument("--start", default=BT_START)
+    ap.add_argument("--end", default=BT_END)
+    ap.add_argument("--no-pit", action="store_true",
+                    help="disable point-in-time gating on the score's PUBLICATION date. "
+                         "The corpus's first report is 2023-05-02, so this is the only way "
+                         "to trade 2020-2022 at all - using scores that did not exist yet.")
+    ap.add_argument("--tag", default="", help="suffix for the cached event/closed files")
     args = ap.parse_args()
     legs = [x.strip().upper() for x in args.legs.split(",") if x.strip()]
+    global CLOSED_TAG
+    CLOSED_TAG = args.tag
 
-    fname = "events.pkl" if args.bucket == "peer" else f"events_{args.bucket}.pkl"
+    fname = (f"events{args.tag}.pkl" if args.bucket == "peer"
+             else f"events_{args.bucket}{args.tag}.pkl")
     if args.stage in ("events", "all"):
-        ev = stage_events(args.bucket, legs)
+        ev = stage_events(args.bucket, legs, start=args.start, end=args.end,
+                          point_in_time=not args.no_pit, tag=args.tag)
     else:
         with open(CACHE / fname, "rb") as f:
             ev = pickle.load(f)
@@ -320,7 +353,7 @@ def main() -> None:
     if args.stage in ("backtest", "all"):
         cl = stage_backtest(ev, legs)
     else:
-        with open(CACHE / "closed.pkl", "rb") as f:
+        with open(CACHE / f"closed{CLOSED_TAG}.pkl", "rb") as f:
             cl = pickle.load(f)
 
     verify_directions(ev, cl)

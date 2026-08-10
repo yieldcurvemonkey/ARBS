@@ -62,6 +62,12 @@ _ROOT_TO_CURVE_MAP = {
     "T0": "JPY-TONA",
     "IT": "JPY-TONA",
     "J2": "CHF-SARON",
+    # GE = CME Eurodollar, the USD front-end contract before the SOFR transition.
+    # Mapped to the SOFR curve DELIBERATELY: it is used only to resolve contract
+    # conventions and a pv01, and a 3M USD contract is $25/bp on either index.
+    # P&L here is a price difference, so the LIBOR/SOFR discounting difference
+    # never enters. Do NOT use this mapping to value a Eurodollar position.
+    "GE": "USD-SOFR-1D",
 }
 _ROOT_TO_STIR_SPEC = {
     "RA": "eur_stir",
@@ -75,6 +81,7 @@ _ROOT_TO_STIR_SPEC = {
     "T0": "jpy_irs",
     "IT": "jpy_irs",
     "J2": "chf_irs",
+    "GE": "usd_stir",
 }
 
 
@@ -143,7 +150,7 @@ def _normalize_symbol(sym: str) -> Optional[str]:
         return f"SR3{s}"
 
     # Accept internal + common aliases + barchart roots
-    m = re.match(r"^(SR[13]|SFR|SER|FF|ZQ|SQ|SL|RA|EB|IJ|RG|IM|TV|J8|JU|T0|IT|J2)([FGHJKMNQUVXZ]\d{2})$", s)
+    m = re.match(r"^(SR[13]|SFR|SER|FF|ZQ|SQ|SL|RA|EB|IJ|RG|IM|TV|J8|JU|T0|IT|J2|GE)([FGHJKMNQUVXZ]\d{2})$", s)
     if m:
         root, code = m.groups()
         root = _ROOT_ALIAS_MAP.get(root, root)
