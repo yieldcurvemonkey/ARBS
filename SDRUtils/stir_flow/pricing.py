@@ -12,13 +12,84 @@ from SDRUtils.stir_flow import config
 NY = pytz.timezone("America/New_York")
 
 
+def as_intraday_instant(et_instant):
+    """An ET instant that no curve API can mistake for "that day's close".
+
+    **Exact midnight is overloaded and does not mean what this module means by
+    it.** ``MDP/IRSwaps/CITIVELO_EXCEL/timestamps.py::resolve_request`` reads a
+    datetime at exactly 00:00:00 as **end of day** - deliberately, because
+    ``pd.Timestamp("2026-08-06")`` is the common spelling of "that day" and the
+    add-in stamps its own DAILY rows at midnight. That rule is right for the API
+    it belongs to and is not being changed here.
+
+    But the snapshot rules in this package produce exact midnight from ordinary
+    prints - ``snap_timestamp`` for anything printed in the 00:01 ET minute,
+    ``book.snap_mtm`` for anything in the 00:00 ET minute - and they mean *an
+    instant*. Handing that value to the citivelo_excel source routes it to the
+    end-of-day branch, which serves **that day's close: roughly sixteen hours
+    AFTER the print**. For dealer direction that is not staleness, it is
+    lookahead - the close of day D contains the very trade being classified, so
+    the inference becomes circular in the one way the whole exercise exists to
+    prevent.
+
+    Measured on the ``_v3`` tape: 256 SOFR legs and 3 Fed Funds legs snap to
+    exact midnight. Small, and completely silent - no exception, no warning, a
+    plausible curve.
+
+    The fix is the escape hatch ``resolve_request`` itself documents: *"To
+    request an intraday curve at exactly midnight - which is a real instant, if
+    an illiquid one - ask for 00:00:01."* So this nudges **only** exact midnight,
+    by one second, and returns every other instant untouched. At minute
+    resolution the two are the same request: 00:00:00 and 00:00:01 fall in the
+    same minute, and every selection rule - nearest or as-of - resolves them to
+    the same stored snapshot. The only thing that changes is which *mode* the
+    request is classified as, which is the entire bug.
+
+    Not applied to a bare ``datetime.date``, which unambiguously means EOD to
+    every source and is a legitimate thing to ask for.
+    """
+    if isinstance(et_instant, datetime.date) and not isinstance(et_instant, datetime.datetime):
+        return et_instant
+    ts = pd.Timestamp(et_instant)
+    if (ts.hour, ts.minute, ts.second, ts.microsecond) != (0, 0, 0, 0):
+        return et_instant
+    return et_instant + datetime.timedelta(seconds=1)
+
+
+def is_ambiguous_midnight(ts) -> bool:
+    """Would this value be read as end-of-day by a source that overloads midnight?
+
+    ``True`` only for a *datetime* at exactly 00:00:00.000. A ``datetime.date``
+    is not ambiguous - it means EOD to everything, on purpose.
+    """
+    if ts is None or isinstance(ts, str):
+        return False
+    if isinstance(ts, datetime.date) and not isinstance(ts, datetime.datetime):
+        return False
+    try:
+        t = pd.Timestamp(ts)
+    except (TypeError, ValueError):
+        return False
+    if t is pd.NaT:
+        return False
+    return (t.hour, t.minute, t.second, t.microsecond) == (0, 0, 0, 0)
+
+
 def snap_timestamp(orig_ts, exec_ts):
+    """The classifier's curve instant: floor the print to the minute, minus one.
+
+    Routed through :func:`as_intraday_instant` so a print in the 00:01 ET minute
+    - which floors-and-decrements to exactly midnight - cannot be read as a
+    request for that day's close.
+    """
     ts = orig_ts
     if ts is None or (isinstance(ts, float) and ts != ts) or pd.isna(ts):
         ts = exec_ts
     et = pd.Timestamp(ts).tz_convert(NY)
     et = et.replace(second=0, microsecond=0) - pd.Timedelta(minutes=1)
-    return NY.localize(datetime.datetime(et.year, et.month, et.day, et.hour, et.minute))
+    return as_intraday_instant(
+        NY.localize(datetime.datetime(et.year, et.month, et.day, et.hour, et.minute))
+    )
 
 
 @dataclasses.dataclass
@@ -58,6 +129,15 @@ class CurvePricer:
     def build(self, curve_name: str, ts):
         """Build one curve under this pricer's terms, WITHOUT touching the cache.
 
+        Refuses a *datetime* at exactly midnight. Every timestamp reaching this
+        pricer is meant to be an instant, and midnight is the one value a source
+        may read as end-of-day instead - serving the day's close, hours after the
+        print. :func:`as_intraday_instant` removes it at both producers
+        (``snap_timestamp`` and ``book.snap_mtm``), so this guard should be
+        unreachable; it exists because the next snapshot rule someone writes will
+        not know about the collision, and a loud refusal here beats a plausible
+        curve from sixteen hours in the future.
+
         Public because the warmer (``curve_warm.warm_pricer``) pre-populates
         ``_handles`` directly, and it must build on the same terms ``handle``
         would. It previously called ``_get_curve`` itself, which meant a pricer
@@ -66,6 +146,15 @@ class CurvePricer:
         disagreeing, which is the failure the per-instance design was chosen to
         avoid. One method, both callers.
         """
+        if is_ambiguous_midnight(ts):
+            raise ValueError(
+                f"CurvePricer was asked for {curve_name!r} at {ts!r}, which is exactly "
+                "midnight. Sources that overload the timestamp argument read that as "
+                "END OF DAY and serve the day's close - hours AFTER the instant you "
+                "meant, which makes a direction call circular. Pass "
+                "SDRUtils.stir_flow.pricing.as_intraday_instant(ts) for the instant, or "
+                "a datetime.date if you genuinely want the close."
+            )
         # Only pass `kwargs` when there is something to say. `mdp` is routinely a
         # stand-in - a fake in tests, a narrower wrapper in the backtests - and
         # widening the call for every caller in order to serve the one that set
