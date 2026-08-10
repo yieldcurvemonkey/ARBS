@@ -439,6 +439,13 @@ FAILED test_6_the_warmer_builds_on_the_pricers_terms
 6 failed
 ```
 
+One name has since drifted: the branch equivalent of
+`test_5_bulk_refuses_a_midnight_request_under_a_strict_policy` is now
+`test_bulk_drops_a_midnight_request_under_a_strict_policy`, because the batch was
+changed after this evidence was captured to drop-and-count rather than raise (a
+single 00:01 print would otherwise kill a day's backfill). The property it pins
+on `main` is unchanged: `main` serves the close and says nothing.
+
 Tests 1 and 2 matter most: their *fixture* assertions passed on `main` — the
 served snapshot really was `10:05` for a `10:04` request, and really did come out
 of the previous day's partition — and only the assertion that this is *reported*
