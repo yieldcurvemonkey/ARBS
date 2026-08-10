@@ -125,17 +125,44 @@ class SnapshotPolicy:
     def strict(
         cls,
         *,
-        minutes: float = 5.0,
+        minutes: float = 1.0,
         allow_future: bool = False,
         on_miss: OnMiss = "raise",
     ) -> "SnapshotPolicy":
         """Backward-only, bounded, loud - what dealer-direction inference needs.
 
-        The default five minutes is not a round number chosen for looking
-        careful. It is where the measured curve drift stops being negligible
-        against the quantity a direction call reads: see the tolerance section
-        of the measurement report. A caller with a different edge should pass a
-        different number rather than inherit this one by accident.
+        **Why one minute.** Loosening it buys almost nothing and admits a lot.
+        Measured over the SDR tape span (2024-03-01 .. 2026-08-07), backward-only
+        selection prices this share of SOFR legs:
+
+        ===========  ====================  ==========================
+        tolerance    share of legs priced  5Y drift admitted (p90/p99)
+        ===========  ====================  ==========================
+        60 s         **97.58 %**           0.21 / 0.44 bp
+        5 min        97.78 %               0.43 / 0.86 bp
+        30 min       98.18 %               1.07 / 3.07 bp
+        60 min       98.60 %               1.77 / 5.32 bp
+        ===========  ====================  ==========================
+
+        Going from 60 s to 60 min recovers **one percent** more legs and admits
+        eight times the drift. Inside the 01:00-16:59 ET session - 94.7 % of the
+        tape - 60 s prices **99.84 %** of legs, so the tolerance is not what
+        constrains coverage; the hours the feed does not publish are.
+
+        The drift column is the measured movement of the curve itself over that
+        elapsed time, not a model: see ``drift`` in
+        ``scripts/citivelo_minute_lag_audit.py``. It is nearly identical on
+        USD-FEDFUNDS-1D (5Y p90 0.22 bp at one minute), so this is not a
+        SOFR-specific number.
+
+        Compare what it replaces: the shipped nearest-either-direction rule
+        introduces a **mean 1.0-1.3 bp** error on the requests where the two
+        rules differ. One minute of drift is an order of magnitude below that,
+        and below the one-to-two basis points from mid at which prints land -
+        which is the quantity the direction call is reading.
+
+        A caller with a different edge should pass a different number rather
+        than inherit this one by accident.
         """
         return cls(
             method="asof",

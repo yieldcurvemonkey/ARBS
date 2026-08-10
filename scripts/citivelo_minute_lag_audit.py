@@ -834,6 +834,58 @@ def stage_report(
                     ),
                 }
             entry["by_day_density"] = by_dens
+
+            # What a strict caller actually gets to keep. Under ``asof`` the
+            # future-served cases are gone by construction, so the only question
+            # left is how many requests still have a snapshot inside the
+            # tolerance - i.e. what the gate costs in legs.
+            fitness = {}
+            for tol in (60, 120, 300, 600, 1800, 3600):
+                keep = s["has_backward"] & (s["lag_back_s"] <= tol)
+                fitness[f"asof_within_{tol}s"] = {
+                    "frac_legs_priced": float(s.loc[keep, "n_legs"].sum() / tot_legs),
+                    "frac_legs_dropped": float(1.0 - s.loc[keep, "n_legs"].sum() / tot_legs),
+                }
+            # The same, restricted to the hours the feed is actually publishing.
+            hours = pd.DatetimeIndex(s["snap_utc"]).tz_convert("America/New_York").hour
+            in_session = (hours >= 1) & (hours <= 16)
+            legs_session = float(s.loc[in_session, "n_legs"].sum())
+            fitness["in_session_01_16_ET"] = {
+                "frac_of_all_legs": float(legs_session / tot_legs),
+                "frac_future_within": float(
+                    s.loc[in_session & (s["lag_cur_s"] < 0), "n_legs"].sum() / legs_session
+                ) if legs_session else np.nan,
+                "frac_priced_asof_60s": float(
+                    s.loc[in_session & s["has_backward"] & (s["lag_back_s"] <= 60),
+                          "n_legs"].sum() / legs_session
+                ) if legs_session else np.nan,
+            }
+            entry["fitness"] = fitness
+
+        # Fitness is not uniform over the tape span, and the answer the next
+        # session needs is "from when", not an average. Quarters, over ALL
+        # outcomes - a quarter with no warmed curve at all is the most important
+        # kind of unfit, and it is invisible in a table built from served rows.
+        g = g.copy()
+        g["quarter"] = pd.PeriodIndex(pd.DatetimeIndex(g["snap_utc"]), freq="Q").astype(str)
+        by_q = {}
+        for q, qg in g.groupby("quarter"):
+            legs_q = float(qg["n_legs"].sum())
+            qs = qg[qg["outcome"] == "served"]
+            by_q[q] = {
+                "legs": int(legs_q),
+                "frac_no_curve": float(
+                    qg.loc[qg["outcome"] != "served", "n_legs"].sum() / legs_q
+                ),
+                "frac_exact": float(
+                    qs.loc[qs["lag_cur_s"] == 0, "n_legs"].sum() / legs_q
+                ),
+                "frac_future": float(qs.loc[qs["lag_cur_s"] < 0, "n_legs"].sum() / legs_q),
+                "frac_priced_asof_60s": float(
+                    qs.loc[qs["has_backward"] & (qs["lag_back_s"] <= 60), "n_legs"].sum() / legs_q
+                ),
+            }
+        entry["by_quarter"] = by_q
         summary["by_curve"][curve] = entry
 
     if len(bp):
