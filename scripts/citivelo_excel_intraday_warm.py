@@ -165,6 +165,8 @@ def fetch_curve(
     memory_abort_mb: float = 3800.0,
     tags: Optional[Sequence[str]] = None,
     timezone: Optional[str] = None,
+    strict_spacing: bool = True,
+    enforce_spacing: bool = True,
     logger: logging.Logger = LOGGER,
 ) -> Tuple[int, int]:
     """Fetch ``[start, end)`` of minute par rates for one curve.
@@ -245,7 +247,8 @@ def fetch_curve(
         w_end = _wire_instant(chunk_end_day)
 
         series, windows = fetch_windowed(
-            client, tags, freq, cursor, w_end, window=window, strict_spacing=True
+            client, tags, freq, cursor, w_end, window=window,
+            strict_spacing=strict_spacing, enforce_spacing=enforce_spacing,
         )
         windows_run += len(windows)
         for w in windows:

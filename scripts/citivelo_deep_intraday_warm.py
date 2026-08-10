@@ -351,6 +351,20 @@ def cmd_plan(args, logger: logging.Logger) -> int:
     return 0
 
 
+def _dense_from_for(curve_name: str) -> datetime.date:
+    """Where true one-minute data starts for a curve; everything before is sparse.
+
+    Sparse does not mean bad. ``USD-FEDFUNDS`` prints roughly every nine minutes
+    before 2018-09 and every published stamp still carries every tenor that
+    exists - it is simply what the market published then. The span-cliff guard
+    exists to catch the add-in silently downsampling a too-wide request, and it
+    cannot tell that apart from genuine sparsity, so below this date it is turned
+    off and whatever Citi serves is kept.
+    """
+    horizon = HORIZONS.get(curve_name)
+    return horizon.dense_from if horizon else datetime.date(1900, 1, 1)
+
+
 def _opt_date(text: Optional[str]) -> Optional[datetime.date]:
     return datetime.date.fromisoformat(text) if text else None
 
@@ -423,7 +437,18 @@ def cmd_fetch(args, logger: logging.Logger) -> int:
                     freq=args.freq, recycle_every=args.recycle_every,
                     memory_ceiling_mb=args.memory_ceiling_mb,
                     memory_abort_mb=args.memory_abort_mb,
-                    tags=tags, timezone=zone, logger=logger,
+                    tags=tags, timezone=zone,
+                    # Below a curve's measured dense_from, ~9-10 minute spacing
+                    # is what the MARKET published, not what the add-in
+                    # downsampled - USD-FEDFUNDS prints roughly every nine
+                    # minutes before 2018-09. The span-cliff guard cannot tell
+                    # those apart and rejects the whole window, which cost five
+                    # chunks and nine months of history on the first full run.
+                    # The horizon table already knows where the boundary is;
+                    # this is the fetcher being told.
+                    strict_spacing=chunk_start >= _dense_from_for(curve),
+                    enforce_spacing=chunk_start >= _dense_from_for(curve),
+                    logger=logger,
                 )
             except MemoryCeilingReached as exc:
                 if not args.auto_restart or restarts >= args.max_restarts:
