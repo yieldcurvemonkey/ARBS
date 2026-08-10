@@ -896,3 +896,13 @@ outright. That guard is unreachable while both producers behave, which is the
 point of it: the next snapshot rule someone writes will not know about the
 collision, and a loud refusal beats a plausible curve from the wrong end of the
 day. A `datetime.date` still passes, because that unambiguously means the close.
+
+### Gate on `fix/stir-flow-midnight-snap`
+
+`pytest tests -m "not slow and not network and not db"`: **6,450 passed, 2
+failed**, 29.5 min. The two are the pinned pre-existing failures
+(`citivelo_catalog::test_bond_universe_matches_the_harvest`,
+`identifiers::test_corpus_is_present_and_large`) — a strict subset of `main`'s
+three, and the same set the parent branch shows. The Excel-dependent
+`test_citivelo_bond_source` pair passed on this run; the add-in was serving
+again.
