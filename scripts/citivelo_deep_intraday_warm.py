@@ -472,6 +472,23 @@ def cmd_fetch(args, logger: logging.Logger) -> int:
             # The guard that does not depend on the inner window counter.
             if used >= args.memory_ceiling_mb:
                 if not args.auto_restart or restarts >= args.max_restarts:
+                    if args.until_done:
+                        # Do NOT restart Excel - that evicts whoever is using it
+                        # and cannot reliably sign back in. Wait for the human to
+                        # recycle it and pick the plan up again. Measured cadence
+                        # is ~12 chunks per sign-in, so this turns a 47-chunk
+                        # backfill into "restart Excel when you notice" rather
+                        # than "type this command four times".
+                        logger.warning(
+                            "Excel is at %.0f MB, over the %.0f MB ceiling. %d day "
+                            "file(s) banked. WAITING for Excel to be restarted and "
+                            "signed in to Velocity - no command needed, this resumes "
+                            "on its own.",
+                            used, args.memory_ceiling_mb, state["days_written"],
+                        )
+                        _write_ledger(ledger, state)
+                        client = _wait_for_fresh_excel(client, args, logger)
+                        continue
                     logger.warning(
                         "Excel is at %.0f MB, at or over the %.0f MB ceiling, and "
                         "%s. Stopping - %d day file(s) are on disk and a re-run resumes.",
@@ -546,6 +563,50 @@ def _work_queue(
         if not added:
             return out
         depth += 1
+
+
+def _wait_for_fresh_excel(client: Any, args, logger: logging.Logger) -> Any:
+    """Block until a DIFFERENT, signed-in Excel with headroom is available.
+
+    The old Excel is left completely alone - not quit, not rescued, not touched.
+    A restart is the user's to make: it evicts whatever they have open, and this
+    code cannot reliably sign the add-in back in afterwards (measured 1 success
+    in 5 attempts). What it can do is notice the moment they have done it.
+
+    "Fresh" is deliberately two conditions, not one. Memory below the ceiling
+    alone would match the same tired process at a quiet moment; a successful
+    connect alone would match the tired process too. Both together mean a new
+    session.
+    """
+    from MDP.CitiVelocityExcel.com_client import CitiVelocityExcelClient
+    from MDP.CitiVelocityExcel.memory_guard import excel_memory_mb
+
+    try:
+        client.close()
+    except Exception:  # noqa: BLE001
+        pass
+
+    deadline = time.time() + float(getattr(args, "ready_timeout", 43200.0))
+    announced = False
+    while time.time() < deadline:
+        time.sleep(20.0)
+        used = excel_memory_mb()
+        if used is None or used >= args.memory_ceiling_mb:
+            if not announced:
+                logger.info("still waiting - Excel at %s MB", used)
+                announced = True
+            continue
+        try:
+            fresh = CitiVelocityExcelClient.connect(workbook_tag=args.workbook_tag)
+        except Exception:  # noqa: BLE001 - restarted but not signed in yet
+            continue
+        logger.info("fresh Excel picked up (%.0f MB); resuming the plan",
+                    fresh.excel_memory_mb())
+        return fresh
+    raise RestartFailed(
+        "No restarted, signed-in Excel appeared within the wait. Everything "
+        "fetched is on disk and re-running this command resumes from it."
+    )
 
 
 def _connect_or_restart(args, logger: logging.Logger) -> Any:
@@ -1469,6 +1530,12 @@ def _build_parser() -> argparse.ArgumentParser:
         help="finish one curve before starting the next. The default walks all "
              "curves back together, so a run that stops early has covered every "
              "curve rather than the first two.",
+    )
+    f.add_argument(
+        "--until-done", action="store_true",
+        help="at the memory ceiling, WAIT for the user to restart Excel and sign "
+             "in, then carry on - instead of exiting. Never restarts Excel itself. "
+             "Turns an N-cycle backfill into 'restart Excel when you notice'.",
     )
     f.add_argument("--auto-restart", action="store_true",
                    help="restart Excel at the ceiling. Rescues unsaved workbooks first.")
