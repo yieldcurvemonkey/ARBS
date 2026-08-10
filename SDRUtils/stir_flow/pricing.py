@@ -36,25 +36,49 @@ def as_intraday_instant(et_instant):
     exact midnight. Small, and completely silent - no exception, no warning, a
     plausible curve.
 
-    The fix is the escape hatch ``resolve_request`` itself documents: *"To
-    request an intraday curve at exactly midnight - which is a real instant, if
-    an illiquid one - ask for 00:00:01."* So this nudges **only** exact midnight,
-    by one second, and returns every other instant untouched. At minute
-    resolution the two are the same request: 00:00:00 and 00:00:01 fall in the
-    same minute, and every selection rule - nearest or as-of - resolves them to
-    the same stored snapshot. The only thing that changes is which *mode* the
-    request is classified as, which is the entire bug.
+    So this nudges **only** exact midnight, and returns every other instant
+    untouched.
+
+    **Why one MICROSECOND and not one second.** ``resolve_request`` tests
+    ``(hour, minute, second, microsecond)``, so a microsecond is already enough
+    to make it read the value as an instant. A whole second is not free, and a
+    review caught why: the source the classifier runs on *today*,
+    ``BARCHART_STIRF-RL``, resolves its CurveStore fast path by **exact key
+    equality**, and ``IRSwapsMDP._curve_store_timestamp_key`` ends with
+    ``value.replace(microsecond=0)`` - it discards microseconds and **keeps
+    seconds**. A one-second nudge therefore changes that key, misses a store
+    whose rows are all stamped on whole minutes, and falls through to a live
+    Barchart build: ~14 s and ~24 vendor requests per curve-minute, on a path
+    that never writes back, for legs that used to be a local Parquet read. Worse,
+    the live build can calibrate differently, so ``dealer_direction`` itself
+    could move - which the golden-file mandate forbids. Measured: 148 of 1,383
+    stored Fed Funds days and 22 of 139 SOFR days hold a 00:00 ET row, and the
+    hit flips to a miss for every one of them.
+
+    A microsecond is invisible to that key (it is zeroed) and decisive for
+    ``resolve_request`` (it is tested). It is the one offset that satisfies both
+    consumers, which is why it is this and not a rounder number.
+
+    Every selection rule still lands on the same stored snapshot, because a
+    microsecond cannot cross a minute boundary and the stores are stamped on
+    whole minutes.
 
     Not applied to a bare ``datetime.date``, which unambiguously means EOD to
     every source and is a legitimate thing to ask for.
     """
     if not is_ambiguous_midnight(et_instant):
         return et_instant
-    # pytz's own advice is to normalise after arithmetic, but one second past
-    # midnight cannot cross a US DST transition - those happen at 02:00 local -
-    # so the offset the value was localised with is still the right one, and
-    # normalising would be a no-op that implies otherwise.
-    return et_instant + datetime.timedelta(seconds=1)
+    nudge = datetime.timedelta(microseconds=1)
+    if isinstance(et_instant, datetime.datetime):
+        # Covers pd.Timestamp. Adding to a pytz-localised datetime does not
+        # renormalise the offset, which is fine here: a microsecond past midnight
+        # cannot cross a US DST transition, since those happen at 02:00 local.
+        return et_instant + nudge
+    # A str or a numpy datetime64 cannot take this addition directly - the first
+    # raises, and a DAY-unit datetime64 silently truncates it to zero and returns
+    # midnight unchanged, which would make this function a no-op exactly when it
+    # matters. Normalise those to pd.Timestamp, which every curve API accepts.
+    return pd.Timestamp(et_instant) + nudge
 
 
 def is_ambiguous_midnight(ts) -> bool:

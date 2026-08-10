@@ -80,30 +80,30 @@ def test_the_two_together_would_ask_for_the_close_of_the_trade_s_own_day():
 def test_snap_timestamp_no_longer_emits_midnight_for_an_00_01_print():
     snap = pricing.snap_timestamp(pd.Timestamp("2026-06-10 00:01:30", tz=ET), None)
     assert (snap.hour, snap.minute) == (0, 0)
-    assert snap.second == 1, "nudged by exactly one second, per resolve_request's own advice"
+    assert (snap.second, snap.microsecond) == (0, 1), "nudged by one MICROSECOND, see the docstring"
     assert resolve_request(snap).mode == "intraday"
 
 
 def test_snap_mtm_no_longer_emits_midnight_for_an_00_00_mark():
     """``snap_mtm`` floors without the minus-one, so it collides one minute earlier."""
     mts = book.snap_mtm(pd.Timestamp("2026-06-10 00:00:30", tz=ET))
-    assert (mts.hour, mts.minute, mts.second) == (0, 0, 1)
+    assert (mts.hour, mts.minute, mts.second, mts.microsecond) == (0, 0, 0, 1)
     assert resolve_request(mts).mode == "intraday"
 
 
 @pytest.mark.parametrize(
     "printed,expected",
     [
-        ("2026-06-10 00:01:00", (0, 0, 1)),    # first second of the colliding minute
-        ("2026-06-10 00:01:59", (0, 0, 1)),    # last second of it
-        ("2026-06-10 00:02:00", (0, 1, 0)),    # one minute later: untouched
-        ("2026-06-10 00:00:30", (23, 59, 0)),  # decrements into the previous day
-        ("2026-06-10 12:34:56", (12, 33, 0)),  # the ordinary case
+        ("2026-06-10 00:01:00", (0, 0, 0, 1)),    # first second of the colliding minute
+        ("2026-06-10 00:01:59", (0, 0, 0, 1)),    # last second of it
+        ("2026-06-10 00:02:00", (0, 1, 0, 0)),    # one minute later: untouched
+        ("2026-06-10 00:00:30", (23, 59, 0, 0)),  # decrements into the previous day
+        ("2026-06-10 12:34:56", (12, 33, 0, 0)),  # the ordinary case
     ],
 )
 def test_only_the_colliding_minute_moves(printed, expected):
     snap = pricing.snap_timestamp(pd.Timestamp(printed, tz=ET), None)
-    assert (snap.hour, snap.minute, snap.second) == expected
+    assert (snap.hour, snap.minute, snap.second, snap.microsecond) == expected
 
 
 def test_the_00_00_print_decrements_into_the_previous_day_not_midnight():
@@ -125,7 +125,7 @@ def test_every_other_minute_of_the_day_is_returned_untouched():
     for m in range(1, 24 * 60):
         printed = base + pd.Timedelta(minutes=m) + pd.Timedelta(seconds=30)
         snap = pricing.snap_timestamp(printed, None)
-        if snap.second != 0:
+        if (snap.second, snap.microsecond) != (0, 0):
             moved.append(printed)
     assert len(moved) == 1, f"exactly one minute of the day should move, got {len(moved)}"
     assert moved[0].hour == 0 and moved[0].minute == 1
@@ -257,7 +257,7 @@ def test_as_intraday_instant_passes_through_anything_that_is_not_a_midnight_date
 
 def test_the_nudge_keeps_the_type_and_the_offset():
     naive = datetime.datetime(2026, 6, 10, 0, 0)
-    assert pricing.as_intraday_instant(naive) == datetime.datetime(2026, 6, 10, 0, 0, 1)
+    assert pricing.as_intraday_instant(naive) == datetime.datetime(2026, 6, 10, 0, 0, 0, 1)
 
     aware = NY.localize(datetime.datetime(2026, 6, 10, 0, 0))
     out = pricing.as_intraday_instant(aware)
@@ -311,3 +311,73 @@ def test_a_pre_seeded_midnight_key_is_still_refused_by_handle():
 
     with pytest.raises(ValueError, match="exactly midnight"):
         p.handle("USD-SOFR-1D", midnight)
+
+
+# --------------------------------------------------------------------------- #
+#      the nudge must be invisible to the CURRENT production store lookup     #
+# --------------------------------------------------------------------------- #
+
+
+def test_the_nudge_does_not_change_the_barchart_curve_store_key():
+    """The regression an earlier draft of this fix actually caused.
+
+    ``BARCHART_STIRF-RL`` is ``config.CURVE_SOURCE`` - the source the classifier
+    runs on today - and its CurveStore fast path matches by EXACT key equality.
+    ``_curve_store_timestamp_key`` ends with ``value.replace(microsecond=0)``: it
+    discards microseconds and **keeps seconds**. So a one-second nudge changed
+    the key, missed a store whose rows are all stamped on whole minutes, and fell
+    through to a live Barchart build - slower, network-bound, never written back,
+    and free to calibrate a different curve than the stored one.
+
+    A microsecond is zeroed by that key and tested by ``resolve_request``. This
+    test is the reason it is a microsecond.
+    """
+    from MDP.IRSwaps.IRSwapsMDP import IRSwapsMDP
+
+    midnight = NY.localize(datetime.datetime(2026, 1, 5, 0, 0))
+    nudged = pricing.as_intraday_instant(midnight)
+
+    assert nudged != midnight, "the value must still change, or resolve_request is unfixed"
+    assert IRSwapsMDP._curve_store_timestamp_key(nudged) == \
+        IRSwapsMDP._curve_store_timestamp_key(midnight), (
+        "the barchart store key must be identical, or every 00:01 ET leg on the "
+        "live source turns a Parquet read into a vendor build"
+    )
+
+
+def test_a_one_second_nudge_would_have_broken_that_key():
+    """Pins the counterfactual, so the choice of unit cannot be casually widened."""
+    from MDP.IRSwaps.IRSwapsMDP import IRSwapsMDP
+
+    midnight = NY.localize(datetime.datetime(2026, 1, 5, 0, 0))
+    one_second = midnight + datetime.timedelta(seconds=1)
+    assert IRSwapsMDP._curve_store_timestamp_key(one_second) != \
+        IRSwapsMDP._curve_store_timestamp_key(midnight)
+
+
+def test_the_nudge_still_flips_resolve_request_to_intraday():
+    """The other consumer, which tests microsecond - so a microsecond suffices."""
+    midnight = NY.localize(datetime.datetime(2026, 6, 10, 0, 0))
+    assert resolve_request(midnight).mode == "eod"
+    assert resolve_request(pricing.as_intraday_instant(midnight)).mode == "intraday"
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "2026-06-10",                       # a str cannot take a timedelta at all
+        __import__("numpy").datetime64("2026-06-10"),        # DAY unit: truncates
+        __import__("numpy").datetime64("2026-06-10T00:00"),  # minute unit
+    ],
+)
+def test_non_datetime_inputs_are_normalised_rather_than_silently_unchanged(value):
+    """A day-unit datetime64 truncates a sub-day timedelta to zero.
+
+    That would make this function a no-op on exactly the input it is meant to
+    repair, and it would do it silently. Those are normalised to pd.Timestamp,
+    which every curve API accepts.
+    """
+    out = pricing.as_intraday_instant(value)
+    assert isinstance(out, pd.Timestamp)
+    assert out.microsecond == 1
+    assert resolve_request(out).mode == "intraday"
