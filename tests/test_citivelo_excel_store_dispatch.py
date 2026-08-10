@@ -39,12 +39,12 @@ def routed(monkeypatch):
     monkeypatch.setattr(
         IRSwapsMDP,
         "_load_citivelo_excel_minute_store_point",
-        lambda self, *, curve_name, timestamp: calls.append("minute") or "MINUTE",
+        lambda self, *, curve_name, timestamp, **kw: calls.append("minute") or "MINUTE",
     )
     monkeypatch.setattr(
         IRSwapsMDP,
         "_load_citivelo_excel_curve_store_point",
-        lambda self, *, curve_name, trading_date: calls.append("eod") or "EOD",
+        lambda self, *, curve_name, trading_date, **kw: calls.append("eod") or "EOD",
     )
     return calls
 

@@ -34,6 +34,41 @@ def test_curve_pricer_memoizes_handles():
     assert h1 is h2 and len(calls) == 1
 
 
+def test_curve_pricer_without_curve_kwargs_does_not_widen_the_call():
+    """``mdp`` is routinely a narrower stand-in, so the default call must not grow.
+
+    A pricer that always passed ``kwargs=`` would break every fake and wrapper
+    in the repo in order to serve the one caller that sets a snapshot policy.
+    """
+    class NarrowMDP:
+        def _get_curve(self, curve_name, timestamp):
+            return object()
+
+    p = pricing.CurvePricer(mdp=NarrowMDP())
+    assert p.handle("X", NY.localize(datetime.datetime(2026, 7, 10, 12, 56))) is not None
+
+
+def test_curve_pricer_passes_curve_kwargs_through():
+    """This is the seam a strict snapshot policy reaches the store through."""
+    seen = {}
+
+    class FakeMDP:
+        def _get_curve(self, curve_name, timestamp, kwargs=None):
+            seen.update(kwargs or {})
+            return object()
+
+    policy = {"snapshot_policy": "SENTINEL"}
+    p = pricing.CurvePricer(mdp=FakeMDP(), curve_kwargs=policy)
+    p.handle("X", NY.localize(datetime.datetime(2026, 7, 10, 12, 56)))
+    assert seen == policy
+
+    # The pricer must not hand out its own dict for a caller to mutate, and must
+    # not be mutated by whatever _get_curve does to what it receives.
+    assert p._curve_kwargs == policy
+    policy["snapshot_policy"] = "CHANGED"
+    assert p._curve_kwargs["snapshot_policy"] == "SENTINEL"
+
+
 @pytest.mark.network
 @pytest.mark.slow
 def test_price_leg_golden_ff_jul26():

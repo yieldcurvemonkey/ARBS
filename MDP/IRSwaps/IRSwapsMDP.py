@@ -405,6 +405,11 @@ class IRSwapsMDP(MarketDataProvider[_GenericPricable]):
             return None
         return datetime.timedelta(hours=hours)
 
+    #: Sentinel for "no explicit limit was given, use the env-var default".
+    #: Distinct from ``None``, which means "unbounded" - conflating the two is
+    #: how a caller asking for no bound would silently inherit twelve hours.
+    _STALENESS_DEFAULT = object()
+
     @classmethod
     def _assert_snapshot_fresh(
         cls,
@@ -412,9 +417,35 @@ class IRSwapsMDP(MarketDataProvider[_GenericPricable]):
         source: str,
         requested: Any,
         snapshot_utc: Any,
+        limit: Any = _STALENESS_DEFAULT,
+        allow_future: bool = True,
     ) -> None:
-        limit = cls._max_snapshot_staleness()
-        if limit is None or requested is None or snapshot_utc is None:
+        """Is ``snapshot_utc`` an acceptable answer to a request for ``requested``?
+
+        One definition of "acceptable lag" for every store-backed curve path.
+
+        ``limit`` defaults to the twelve-hour ``ARBS_MAX_CURVE_STALENESS_HOURS``
+        bound, which exists to catch "the feed died overnight". That is the wrong
+        *order of magnitude* for a minute-resolution question - a 14:32 request
+        served from 02:32 passes it - so a caller with a real tolerance passes
+        one, in whatever unit the question is actually asked in.
+
+        ``allow_future`` exists because the lag computed here is
+        ``requested - snapshot``, and the ``> limit`` test is therefore
+        structurally blind to a NEGATIVE lag: a snapshot from after the request
+        passes every tolerance, including zero. No choice of ``limit`` fixes
+        that, which is why it is a separate parameter rather than a tighter
+        number. Defaults to permissive so the two existing callers are unchanged.
+
+        The Citi minute path expresses these same two bounds through
+        ``CITIVELO_EXCEL/snapshot_policy.SnapshotPolicy``, because it must also
+        *choose* the row and must be able to miss softly rather than raise. The
+        two are pinned to agree by ``tests/test_citivelo_minute_snapshot_policy.py``
+        rather than by hoping.
+        """
+        if limit is cls._STALENESS_DEFAULT:
+            limit = cls._max_snapshot_staleness()
+        if requested is None or snapshot_utc is None:
             return
         req = pd.Timestamp(requested)
         if req.tzinfo is None:
@@ -423,11 +454,17 @@ class IRSwapsMDP(MarketDataProvider[_GenericPricable]):
         if snap.tzinfo is None:
             snap = snap.tz_localize("UTC")
         lag = req.tz_convert("UTC") - snap.tz_convert("UTC")
-        if lag > limit:
+        if not allow_future and lag < datetime.timedelta(0):
+            raise RuntimeError(
+                f"{source}: snapshot {snap} is {-lag.total_seconds():.0f}s AFTER the "
+                f"requested {req}. A post-request curve can already contain the "
+                f"effect of the event being measured against it."
+            )
+        if limit is not None and lag > limit:
             raise RuntimeError(
                 f"{source}: nearest snapshot at or before {req} is {snap} — "
                 f"{lag.total_seconds() / 3600:.1f}h stale (limit "
-                f"{limit.total_seconds() / 3600:.0f}h). The feed has no data for "
+                f"{limit.total_seconds() / 3600:.3g}h). The feed has no data for "
                 f"that instant; set ARBS_MAX_CURVE_STALENESS_HOURS to change or "
                 f"disable this bound."
             )
@@ -2758,8 +2795,29 @@ class IRSwapsMDP(MarketDataProvider[_GenericPricable]):
         """
         from MDP.IRSwaps.CITIVELO_EXCEL import CitiVeloExcelCurveFetcher  # noqa: F401
         from MDP.IRSwaps.CITIVELO_EXCEL import citi_index_for_curve_name
+        from MDP.IRSwaps.CITIVELO_EXCEL.snapshot_policy import SnapshotMiss, policy_from_kwargs
 
         backend = "ql" if self.source.upper() in CITIVELO_EXCEL_QL_TOKENS else "rl"
+
+        # A snapshot policy is a statement about the CurveStore, so combining it
+        # with the flags that RULE THE STORE OUT is a contradiction, not a
+        # preference to be resolved quietly in one direction.
+        policy = policy_from_kwargs(kwargs)
+        if not policy.is_legacy:
+            conflicting = [
+                k for k in ("force_refresh", "ignore_cache", "no_curve_store") if kwargs.get(k)
+            ]
+            if conflicting:
+                raise ValueError(
+                    f"snapshot_policy ({policy.describe()}) selects among STORED minute "
+                    f"snapshots, and {conflicting} bypasses the store entirely. Drop one."
+                )
+            if backend == "ql":
+                raise ValueError(
+                    "snapshot_policy applies to the minute CurveStore, which holds rateslib "
+                    "curves only; the QL backend always builds from live quotes. Use a "
+                    "CITIVELO_EXCEL-RL source."
+                )
 
         # Register the curve definitions HERE, not only in the fetcher. Nineteen
         # of the twenty curve names exist nowhere else in this repo, and a curve
@@ -2801,16 +2859,44 @@ class IRSwapsMDP(MarketDataProvider[_GenericPricable]):
                 _mode = None
             if _mode is not None and _mode.mode == "intraday":
                 hit = self._load_citivelo_excel_minute_store_point(
-                    curve_name=curve_name, timestamp=timestamp
+                    curve_name=curve_name, timestamp=timestamp, policy=policy
                 )
                 if hit is not None:
                     return hit
             elif _mode is not None and _mode.mode == "eod" and _mode.eod_date is not None:
+                if not policy.is_legacy:
+                    # The strict path is minute-resolution by construction. This
+                    # branch serves that DAY'S CLOSE, so honouring it here would
+                    # hand a caller who asked for "one minute before the print" a
+                    # curve up to sixteen hours after it - the exact failure the
+                    # policy exists to prevent, arriving through the door nobody
+                    # was watching. Exact midnight is not a hypothetical: it is
+                    # what snap_timestamp produces for every 00:01 ET print.
+                    raise SnapshotMiss(
+                        f"citivelo_excel: {timestamp!r} resolves to END OF DAY "
+                        f"({_mode.eod_date}), not an intraday instant, and "
+                        f"snapshot_policy ({policy.describe()}) was given. That branch "
+                        "would serve the day's close. Ask for an explicit intraday "
+                        "instant (e.g. 00:00:01) if that is what you meant."
+                    )
                 hit = self._load_citivelo_excel_curve_store_point(
                     curve_name=curve_name, trading_date=_mode.eod_date
                 )
                 if hit is not None:
                     return hit
+
+        if not policy.is_legacy:
+            # Structural, not argumentative: reaching this line means a strict
+            # request is about to be answered by a LIVE EXCEL BUILD over COM.
+            # Every strict miss above raises, so this should be unreachable - and
+            # if a future edit makes it reachable, it fails here rather than
+            # silently reintroducing the fallback this change removed.
+            raise SnapshotMiss(
+                f"citivelo_excel: a request under snapshot_policy ({policy.describe()}) "
+                f"reached the live Excel build for {curve_name} at {timestamp!r}. "
+                "The stored minute path declined it and no strict miss was raised; "
+                "that is a bug in the dispatch, not a cold store."
+            )
 
         fetcher_kwargs = {
             k: kwargs[k]
@@ -2983,10 +3069,40 @@ class IRSwapsMDP(MarketDataProvider[_GenericPricable]):
             },
         )
 
+    @staticmethod
+    def _minute_store_miss(
+        policy: Any, *, asset: str, requested: Any, reason: str
+    ) -> None:
+        """Resolve a minute-store miss according to the caller's policy.
+
+        Every ``return None`` in the minute loader comes through here, so there
+        is exactly one place that decides between "degrade to the live build"
+        and "tell the caller". Under ``on_miss="raise"`` this raises
+        :class:`SnapshotMiss`, which the loader's own ``except Exception``
+        handlers re-raise by name - otherwise the strict path would be converted
+        back into the silent fallback it exists to prevent.
+        """
+        from MDP.IRSwaps.CITIVELO_EXCEL.snapshot_policy import SnapshotMiss
+
+        if getattr(policy, "on_miss", "none") == "raise":
+            raise SnapshotMiss(
+                f"citivelo_excel minute store ({asset}): no snapshot satisfies "
+                f"{requested!r} under {policy.describe()} - {reason}."
+            )
+        _citivelo_excel_logger.debug(
+            "citivelo_excel: minute-store miss for %s %s (%s); building from quotes.",
+            asset, requested, reason,
+        )
+        return None
+
     def _load_citivelo_excel_minute_store_point(
-        self, *, curve_name: str, timestamp: datetime.datetime
+        self,
+        *,
+        curve_name: str,
+        timestamp: datetime.datetime,
+        policy: Optional[Any] = None,
     ) -> Optional["_IRSwapGenericCurve"]:
-        """The warmed minute curve nearest ``timestamp``, or ``None``.
+        """The warmed minute curve for ``timestamp`` under ``policy``, or ``None``.
 
         Asset ``<curve_name>-CITIVELOEXCELMIN``, written by
         ``scripts/citivelo_excel_intraday_warm.py`` - one curve per published
@@ -2999,21 +3115,59 @@ class IRSwapsMDP(MarketDataProvider[_GenericPricable]):
         it is the only path that works when Excel is closed, logged out, or busy,
         and it is reproducible - the same request returns the same curve.
 
-        ``None`` on any miss, so a cold store degrades to the live Excel build.
+        ``policy`` (see ``CITIVELO_EXCEL/snapshot_policy.py``) decides *which*
+        snapshot answers the request and what happens when none qualifies. It
+        defaults to ``SnapshotPolicy.legacy()``, which is bit-identical to what
+        this method did before the policy existed: nearest in either direction,
+        no bound, ``None`` on any miss so a cold store degrades to the live Excel
+        build. A caller that cannot tolerate a post-trade or arbitrarily stale
+        curve passes ``SnapshotPolicy.strict(minutes=...)`` and gets a
+        ``SnapshotMiss`` instead of a plausible wrong answer.
+
+        Regardless of policy the returned metadata now carries the signed lag,
+        the served instant and the two pathology flags - so the default path
+        changes no number and is no longer silent about which minute it served.
         """
+        import numpy as np
+
         from MDP.IRSwaps.CITIVELO_EXCEL.curve_names import entry_for_curve_name
+        from MDP.IRSwaps.CITIVELO_EXCEL.snapshot_policy import (
+            SnapshotMiss,
+            SnapshotPolicy,
+            select_snapshot,
+        )
         from MDP.IRSwaps.CITIVELO_EXCEL.timestamps import from_wire_naive, resolve_request
 
+        policy = policy or SnapshotPolicy.legacy()
         asset = f"{curve_name}-CITIVELOEXCELMIN"
-        entry = entry_for_curve_name(curve_name)
         try:
+            entry = entry_for_curve_name(curve_name)
             resolved = resolve_request(timestamp)
-            if resolved.mode != "intraday" or resolved.wire_instant is None:
-                return None
-            wanted = from_wire_naive(resolved.wire_instant)
             local_zone = zoneinfo.ZoneInfo(entry.local_timezone)
-        except Exception:  # noqa: BLE001 - fall through to the live Excel path
-            return None
+        except SnapshotMiss:
+            raise
+        except Exception as exc:  # noqa: BLE001 - fall through to the live Excel path
+            return self._minute_store_miss(
+                policy, asset=asset, requested=timestamp,
+                reason=f"the request could not be resolved ({exc})",
+            )
+
+        if resolved.mode != "intraday" or resolved.wire_instant is None:
+            # Not a silent decline: ``resolve_request`` reads exact midnight as
+            # END OF DAY, and ``snap_timestamp``'s "one minute before the print"
+            # lands on exact midnight for every trade in the 00:01 ET minute. A
+            # lenient caller falls through to the EOD branch as it always did; a
+            # strict one is told, because that branch serves the day's CLOSE -
+            # up to sixteen hours AFTER the trade being classified.
+            return self._minute_store_miss(
+                policy, asset=asset, requested=timestamp,
+                reason=(
+                    f"resolve_request read it as mode={resolved.mode!r}, not an intraday "
+                    "instant, so the minute store is never consulted (exact midnight means "
+                    "end-of-day; ask for 00:00:01 to mean the instant)"
+                ),
+            )
+        wanted = from_wire_naive(resolved.wire_instant)
 
         # The store partitions by the curve's LOCAL trading date. Check the
         # neighbouring days too: a session running to 19:59 local straddles the
@@ -3022,9 +3176,9 @@ class IRSwapsMDP(MarketDataProvider[_GenericPricable]):
         # The three days are joined and stamp-parsed ONCE per session rather than
         # once per observation - see CITIVELO_EXCEL/day_cache.py, where the 21.4
         # ms/observation this used to cost is broken down. The day order (0, -1,
-        # +1) is part of the contract: the nearest-snapshot search breaks ties
-        # positionally, so reordering the window could change which of two
-        # equidistant snapshots is served.
+        # +1) is part of the contract: BOTH selection rules break ties
+        # positionally-first, so reordering the window could change which of two
+        # equidistant (or duplicated) snapshots is served.
         local_date = wanted.astimezone(local_zone).date()
         try:
             from MDP.IRSwaps.CITIVELO_EXCEL.day_cache import day_window
@@ -3036,21 +3190,39 @@ class IRSwapsMDP(MarketDataProvider[_GenericPricable]):
                 tuple(local_date + datetime.timedelta(days=o) for o in (0, -1, 1)),
             )
             if window.empty:
-                return None
+                return self._minute_store_miss(
+                    policy, asset=asset, requested=wanted,
+                    reason=f"no warmed partition for {local_date} or its neighbours",
+                )
             stamps = window.stamps
-            position = int((stamps - pd.Timestamp(wanted).tz_convert("UTC")).abs().values.argmin())
-            row = window.frame.iloc[[position]]
+            stamps_ns = stamps.to_numpy(dtype="datetime64[ns]").astype(np.int64)
+            selection = select_snapshot(
+                stamps_ns, int(pd.Timestamp(wanted).tz_convert("UTC").value), policy
+            )
+            if selection is None:
+                return self._minute_store_miss(
+                    policy, asset=asset, requested=wanted,
+                    reason=(
+                        f"{len(stamps_ns)} snapshots in the {local_date} +/-1d window, "
+                        "none of them acceptable"
+                    ),
+                )
+            row = window.frame.iloc[[selection.position]]
             curves = store.reconstruct_curves_batch(row, cfg=None, max_workers=1)
             if not curves:
-                return None
+                return self._minute_store_miss(
+                    policy, asset=asset, requested=wanted,
+                    reason="the chosen row did not reconstruct into a curve",
+                )
             rl_curve_handle = next(iter(curves.values()))
-            actual = stamps.iloc[position].to_pydatetime()
+            actual = stamps.iloc[selection.position].to_pydatetime()
+        except SnapshotMiss:
+            raise
         except Exception as exc:  # noqa: BLE001 - a store miss must never be fatal
-            _citivelo_excel_logger.debug(
-                "citivelo_excel: minute-store miss for %s %s (%s); building from quotes.",
-                asset, timestamp, exc,
+            return self._minute_store_miss(
+                policy, asset=asset, requested=wanted,
+                reason=f"the store read failed ({exc})",
             )
-            return None
 
         return self._wrap_citivelo_excel_minute(
             curve_name=curve_name,
@@ -3059,6 +3231,7 @@ class IRSwapsMDP(MarketDataProvider[_GenericPricable]):
             wanted=wanted,
             actual=actual,
             rl_curve_handle=rl_curve_handle,
+            policy=policy,
         )
 
     def _wrap_citivelo_excel_minute(
@@ -3070,23 +3243,53 @@ class IRSwapsMDP(MarketDataProvider[_GenericPricable]):
         wanted: datetime.datetime,
         actual: datetime.datetime,
         rl_curve_handle: Any,
+        policy: Optional[Any] = None,
     ) -> "_IRSwapGenericCurve":
         """The intraday ``RLIRSwapCurve`` for one reconstructed snapshot.
 
         ``wanted`` is what the caller asked for and ``actual`` is what the store
-        had; both go into the metadata, because the whole point of
-        ``snapshot_lag_seconds`` is that a caller holding this to a tolerance
-        needs the number rather than a promise.
+        had; both go into the metadata, because a caller holding this to a
+        tolerance needs the number rather than a promise.
+
+        ``snapshot_lag_seconds`` is kept **absolute** for compatibility with the
+        notebooks and specs that already read it. The sign is the whole finding
+        here, so it is published beside it as ``snapshot_lag_signed_seconds``
+        (positive = the snapshot predates the request) together with the two
+        flags a caller would otherwise have to re-derive. Every one of these is
+        cheap arithmetic on values this method already holds, so they are
+        emitted on the default path too - the point is that a wrong minute is
+        detectable without anyone having opted in to detecting it.
         """
         from MDP.IRSwaps.CITIVELO_EXCEL.curve_names import citi_index_for_curve_name
+        from MDP.IRSwaps.CITIVELO_EXCEL.snapshot_policy import warn_once
         from Query.IRSwaps.backends.rateslib.RLIRSwapCurve import RLIRSwapCurve
 
-        lag = abs((actual - wanted).total_seconds())
+        signed_lag = (wanted - actual).total_seconds()
+        from_future = signed_lag < 0
         citi_index = citi_index_for_curve_name(curve_name)
         reference_date = actual.astimezone(local_zone).date()
+        same_local_date = reference_date == wanted.astimezone(local_zone).date()
         fixings = self._citivelo_excel_store_fixings(
             curve_name=curve_name, citi_index=citi_index, reference_date=reference_date
         )
+
+        if from_future:
+            warn_once(
+                (asset, "future"),
+                f"citivelo_excel: {asset} served a snapshot from AFTER the requested "
+                f"instant ({actual.isoformat()} for {wanted.isoformat()}, "
+                f"{-signed_lag:.0f}s ahead). Measured on 1.09% of SDR-tape requests; "
+                "for anything that infers direction from a print this is circular. "
+                "Pass snapshot_policy=SnapshotPolicy.strict() to forbid it",
+            )
+        if not same_local_date:
+            warn_once(
+                (asset, "wrong_day"),
+                f"citivelo_excel: {asset} served a snapshot from a DIFFERENT local "
+                f"date ({reference_date} for a {wanted.astimezone(local_zone).date()} "
+                "request) out of the +/-1 day window. Pass "
+                "snapshot_policy=SnapshotPolicy.strict() to bound this",
+            )
 
         stamp = actual.astimezone(zoneinfo.ZoneInfo(_CITIVELO_EXCEL_WIRE_TZ))
         return RLIRSwapCurve(
@@ -3105,7 +3308,13 @@ class IRSwapsMDP(MarketDataProvider[_GenericPricable]):
                 "requested": wanted.isoformat(),
                 # How far the served minute sits from the one asked for. A caller
                 # holding this to a tolerance needs the number, not a promise.
-                "snapshot_lag_seconds": lag,
+                "snapshot_lag_seconds": abs(signed_lag),
+                "snapshot_lag_signed_seconds": signed_lag,
+                "snapshot_served_from_future": from_future,
+                "snapshot_same_local_date": same_local_date,
+                "snapshot_requested_utc": wanted.astimezone(datetime.timezone.utc).isoformat(),
+                "snapshot_served_utc": actual.astimezone(datetime.timezone.utc).isoformat(),
+                "snapshot_policy": (policy.describe() if policy is not None else None),
                 "reference_date": reference_date.isoformat(),
             },
         )
@@ -3143,13 +3352,25 @@ class IRSwapsMDP(MarketDataProvider[_GenericPricable]):
         backend, ``force_refresh``/``no_curve_store``, ``live``, an unwarmed day -
         is handed back to ``get_data`` one point at a time, exactly as before.
         """
+        import numpy as np
+
         from MDP.IRSwaps.CITIVELO_EXCEL import register as _register_citivelo_definitions
         from MDP.IRSwaps.CITIVELO_EXCEL.curve_names import entry_for_curve_name
         from MDP.IRSwaps.CITIVELO_EXCEL.day_cache import day_window, single_day
+        from MDP.IRSwaps.CITIVELO_EXCEL.snapshot_policy import (
+            SnapshotMiss,
+            policy_from_kwargs,
+            select_snapshot,
+        )
         from MDP.IRSwaps.CITIVELO_EXCEL.timestamps import from_wire_naive, resolve_request
         from MDP.IRSwaps.CITIVELO_EXCEL.warm import asset_for
 
         out: Dict[Union[datetime.date, datetime.datetime], _IRSwapGenericCurve] = {}
+        # The batch must select exactly what N single calls would select, so it
+        # reads the same policy out of the same request dict and calls the same
+        # select_snapshot. The two paths used to agree by both spelling the argmin
+        # inline, which is agreement until someone edits one of them.
+        policy = policy_from_kwargs(request)
 
         def _single(t) -> None:
             single_request = dict(request)
@@ -3158,6 +3379,11 @@ class IRSwapsMDP(MarketDataProvider[_GenericPricable]):
             single_request["ignore_cache"] = bool(ignore_cache)
             try:
                 curve = self.get_data(single_request)
+            except SnapshotMiss:
+                # A strict caller asked to be told. Dropping the key would leave
+                # them to infer the miss from a short dict, which is the silent
+                # failure in a different costume.
+                raise
             except Exception:  # noqa: BLE001 - matches the generic loop this replaces
                 return
             if curve is not None:
@@ -3220,19 +3446,25 @@ class IRSwapsMDP(MarketDataProvider[_GenericPricable]):
                 if window.empty:
                     raise LookupError("no warmed window")
                 stamps = window.stamps
-                # Same nearest-snapshot rule as the single-point loader, run per
-                # request: positional argmin over the window in its (0, -1, +1)
-                # order, so equidistant snapshots break the same way.
-                positions = {
-                    original: int(
-                        (stamps - pd.Timestamp(wanted).tz_convert("UTC")).abs().values.argmin()
+                stamps_ns = stamps.to_numpy(dtype="datetime64[ns]").astype(np.int64)
+                # The same selection function the single-point loader calls, run
+                # per request: positional over the window in its (0, -1, +1)
+                # order, so equidistant snapshots break the same way. A request
+                # the policy rejects gets no position and is handed to _single,
+                # which raises for a strict caller and falls through for a
+                # lenient one - the same answer either path would have given.
+                selections = {
+                    original: select_snapshot(
+                        stamps_ns, int(pd.Timestamp(wanted).tz_convert("UTC").value), policy
                     )
                     for original, wanted in wants
                 }
-                distinct = sorted(set(positions.values()))
+                distinct = sorted({s.position for s in selections.values() if s is not None})
                 handles = self._reconstruct_rows_by_position(
                     store=store, frame=window.frame, positions=distinct, workers=workers,
                 )
+            except SnapshotMiss:
+                raise
             except Exception as exc:  # noqa: BLE001 - degrade to the proven path
                 _citivelo_excel_logger.debug(
                     "citivelo_excel: bulk minute window failed for %s %s (%s); "
@@ -3243,7 +3475,8 @@ class IRSwapsMDP(MarketDataProvider[_GenericPricable]):
                 continue
 
             for original, wanted in wants:
-                handle = handles.get(positions[original])
+                selection = selections[original]
+                handle = None if selection is None else handles.get(selection.position)
                 if handle is None:
                     _single(original)
                     continue
@@ -3252,8 +3485,9 @@ class IRSwapsMDP(MarketDataProvider[_GenericPricable]):
                     asset=minute_asset,
                     local_zone=local_zone,
                     wanted=wanted,
-                    actual=stamps.iloc[positions[original]].to_pydatetime(),
+                    actual=stamps.iloc[selection.position].to_pydatetime(),
                     rl_curve_handle=handle,
+                    policy=policy,
                 )
 
         # ---- 3. EOD, one row per warmed day, reconstructed in one batch ------
