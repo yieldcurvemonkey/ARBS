@@ -633,13 +633,31 @@ def stage_session(out: Path, lag: pd.DataFrame) -> pd.DataFrame:
                 trunc = bool(is_truncated(curve, day, pd.Timestamp(s.iloc[-1])))
             except UnknownSessionError:
                 exp, trunc = 0, False
+            gaps = s.diff().dropna().dt.total_seconds()
+            median_gap = float(gaps.median()) if len(gaps) else np.nan
+            completeness = float(len(s) / exp) if exp else np.nan
+            # A coarse day and a truncated day are both "incomplete" and want
+            # completely different work. The 2022-2023 era was published to us on
+            # a TEN-MINUTE grid across the same 01:00-22:59 span - 132 rows, not
+            # 1,320 - and re-fetching it at one minute is a different job from
+            # completing a dense day that a chunk boundary cut short. Lumping
+            # them into one list is how the second, smaller, and entirely
+            # self-inflicted problem stays invisible behind the first.
+            if median_gap >= 300:
+                reason = "coarse_era"
+            elif trunc:
+                reason = "truncated_end"
+            elif completeness == completeness and completeness < 0.97:
+                reason = "interior_gaps"
+            else:
+                reason = "complete"
             day_rows.append(
                 {
                     "curve": curve, "local_date": day, "weekday": day.strftime("%a"),
                     "stored": int(len(s)), "expected": int(exp),
                     "first_utc": pd.Timestamp(s.iloc[0]), "last_utc": pd.Timestamp(s.iloc[-1]),
-                    "truncated": trunc,
-                    "completeness": float(len(s) / exp) if exp else np.nan,
+                    "truncated": trunc, "median_gap_s": median_gap,
+                    "completeness": completeness, "reason": reason,
                 }
             )
     days = pd.DataFrame(day_rows)
@@ -647,8 +665,9 @@ def stage_session(out: Path, lag: pd.DataFrame) -> pd.DataFrame:
 
     for curve, g in days.groupby("curve"):
         g24 = g[[d.year >= 2024 for d in g["local_date"]]]
-        print(f"  {curve}: {len(g)} stored days, {int(g['truncated'].sum())} truncated; "
-              f"2024+: median completeness {g24['completeness'].median():.3f}", flush=True)
+        counts = g["reason"].value_counts().to_dict()
+        print(f"  {curve}: {len(g)} stored days {counts}; "
+              f"2024+ median completeness {g24['completeness'].median():.3f}", flush=True)
 
     # ---- per requested minute: which side of the line is it on -----------
     rows: List[Dict] = []
@@ -680,18 +699,19 @@ def stage_session(out: Path, lag: pd.DataFrame) -> pd.DataFrame:
     _write(df, out / "session_split.parquet")
 
     # ---- the repair work-list -------------------------------------------
-    repair = days[days["truncated"] | (days["completeness"] < 0.97)].copy()
+    repair = days[days["reason"] != "complete"].copy()
     repair["missing_minutes"] = (repair["expected"] - repair["stored"]).clip(lower=0)
-    repair = repair.sort_values(["curve", "local_date"])
+    repair = repair.sort_values(["curve", "reason", "local_date"])
     _write(repair, out / "session_repair_list.parquet")
     if len(repair):
         (out / "session_repair_list.csv").write_text(
-            repair[["curve", "local_date", "weekday", "stored", "expected",
-                    "missing_minutes", "truncated"]].to_csv(index=False),
+            repair[["curve", "local_date", "weekday", "reason", "stored", "expected",
+                    "missing_minutes", "median_gap_s"]].to_csv(index=False),
             encoding="utf-8",
         )
-        print(f"  repair list: {len(repair)} day(s), "
-              f"{int(repair['missing_minutes'].sum()):,} missing minutes", flush=True)
+        for (curve, reason), g in repair.groupby(["curve", "reason"]):
+            print(f"  repair {curve:18s} {reason:14s} {len(g):>4d} day(s), "
+                  f"{int(g['missing_minutes'].sum()):>8,} missing minutes", flush=True)
     return df
 
 

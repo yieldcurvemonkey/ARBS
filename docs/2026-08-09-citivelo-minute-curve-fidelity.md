@@ -16,6 +16,13 @@ Reproduce with `scripts/citivelo_minute_lag_audit.py` (stages `demand`, `density
 > store state it was taken against; re-run `density` before designing around them.
 > The *lag* findings are structural and will not move; the *coverage* findings will.
 
+> **UPDATE 2026-08-10 — read Part II first.** Two of this document's conclusions
+> have since been superseded by measurement. §11's open question about the
+> 01:00 ET boundary is **answered** (it is Citi's, and the fetch fix is worth far
+> less than §11 guessed), and §6's Fed Funds coverage cliff is **gone** — an
+> overnight backfill took that curve from 155 stored days to 926 and from 22.9 %
+> to 97.2 % priced. Part I's *lag* findings and its recommendation are unchanged.
+
 ---
 
 ## 1. The headline
@@ -153,6 +160,12 @@ sub-200-snapshot days are future-served — but there are very few of them.
 
 ## 6. The Fed Funds coverage gap dominates everything else
 
+> **SUPERSEDED 2026-08-10 — see §17.** The gap described below was closed by
+> an overnight backfill. Fed Funds now has no uncovered quarter at all. The
+> section is kept because the *shape* of the problem and how it was measured
+> still matter, and because it is the clearest illustration in this document
+> of why a coverage number needs a date stamp.
+
 Of 66,451 eligible Fed Funds legs on the tape, **50,702 (76.3 %) have no warmed
 curve anywhere in the ±1-day window.** That is not a lag problem, it is an absence
 problem, and it is far larger than every lag effect in this document put together.
@@ -251,7 +264,11 @@ Remarkably flat. **There is no unfit period for SOFR** — no quarter drops belo
 The store holds 763 days inside the tape span, of which 605 are dense (≥800
 snapshots *and* no gap over five minutes).
 
-### `USD-FEDFUNDS-1D` — **fit from 2026-02-09, and not before**
+### `USD-FEDFUNDS-1D` — ~~fit from 2026-02-09, and not before~~ **now fit throughout**
+
+> **SUPERSEDED 2026-08-10 — see §17.** Every row in the table below is now
+> false: no quarter is uncovered, and Fed Funds prices 97.19 % of its legs
+> under `asof` ≤60 s against SOFR's 97.58 %.
 
 | quarter | legs | no curve | priced (asof ≤60 s) |
 |---|---|---|---|
@@ -390,12 +407,13 @@ See `MDP/IRSwaps/CITIVELO_EXCEL/snapshot_policy.py` and the PR body. In short:
   latency inside a minute is not measured here.
 - **Fed Funds coverage after the running backfill completes.** It moved during
   the session; the 76 % figure is a snapshot, not a conclusion.
-- **Whether the 01:00 ET session start is a Citi property or a fetch-window
-  property.** The measurement shows the first row of the day is ~01:00 ET
-  consistently; whether earlier data exists upstream and is simply not being
-  requested was not tested. If it is a fetch-window property, fixing it removes
-  most of the hour-00 contamination outright, which would be worth more than
-  anything in the patch.
+- ~~**Whether the 01:00 ET session start is a Citi property or a fetch-window
+  property.**~~ **ANSWERED 2026-08-10 — see §12–§16.** It is Citi's: the fetch
+  already requests from local midnight and gets nothing back, and the same code
+  returns clean 08:00–19:59 *local* sessions for every other currency. The guess
+  that fixing the fetch would be "worth more than anything in the patch" was
+  wrong twice over — hour 00 is irrecoverable, and the fetch-side defect that
+  does exist is worth 12.6 % of the future-serving on SOFR.
 - **The other eighteen minute curves.** Only `USD-SOFR-1D` and
   `USD-FEDFUNDS-1D` were measured, because they are what the direction work
   needs. `SnapshotPolicy.strict()`'s one-minute default applies to all twenty;
@@ -472,3 +490,219 @@ set is a strict **subset** of the baseline —
 failure, the 5-second performance budget, *passed* here; it is a wall-clock
 assertion and the machine was running a curve backfill during the `main` run, so
 treat it as load-sensitive rather than as anything this branch changed.
+
+---
+---
+
+# Part II — 2026-08-10: the 01:00 ET boundary, and Fed Funds after the backfill
+
+Two things changed after Part I was written. An overnight Citi backfill filled in
+`USD-FEDFUNDS-1D`, which invalidates §6 and half of §8. And §11's open question —
+whether the ~01:00 ET session start is Citi's or our fetch window's — has been
+answered.
+
+Reproduce with `scripts/citivelo_minute_lag_audit.py session`. Store state as
+measured 2026-08-10: `USD-SOFR-1D-CITIVELOEXCELMIN` 1,237 days,
+`USD-FEDFUNDS-1D-CITIVELOEXCELMIN` 926 days.
+
+## 12. The answer: the boundary is Citi's, and I was wrong about what it was worth
+
+§11 said: *"whether the ~01:00 ET session start is a Citi property or a
+fetch-window property … If it is a fetch-window property, fixing it removes most
+of the hour-00 contamination outright, which would be worth more than anything in
+the patch."*
+
+**It is a Citi property.** Citi does not publish USD curves between 23:00 and
+00:59 ET on any night. Every leg printed in the 00:xx ET hour is therefore
+*unclassifiable at minute resolution*, permanently, and no change to the fetch
+reaches a single one of them.
+
+There *is* a real fetch-side defect — §15 — but it is worth **12.6 %** of the
+future-serving on SOFR, not "most" of it. The speculation was wrong in both
+directions: wrong about the cause, and wrong about the size.
+
+## 13. How that was established
+
+Five tests, each of which could have gone the other way.
+
+1. **The fetch already asks for the whole day.**
+   `scripts/citivelo_excel_intraday_warm.py::_wire_instant` converts *local
+   midnight* to the wire zone and uses it as the chunk bound. For USD the local
+   zone **is** the wire zone, so every chunk is requested from 00:00 ET. The
+   00:00–00:59 ET hour is requested, every day, and comes back empty. Nothing
+   between the fetch and `_write_day_parquet` filters rows.
+2. **The same code produces clean sessions elsewhere.** From the identical
+   full-local-day request, `GBP-SONIA-1D` returns 08:00–19:59 **London** on
+   105/105 Monday–Friday days, and EUR/JPY/CAD likewise in their own zones. The
+   fetcher is plainly not imposing a window; it is receiving one.
+3. **The boundaries are anchored in two different clocks** (§14). A fetch
+   artifact is anchored in one clock — whichever the chunking uses.
+4. **US holidays publish normally.** Checked on eighteen. 2025-12-25 holds 1,318
+   rows running 01:00–22:59 ET, indistinguishable from a control Wednesday.
+5. **The interior gaps are single minutes.** Across 50 sampled dense days, 96 %
+   of the missing interior minutes are isolated singletons and the longest run is
+   4 minutes. A dropped fetch window would be a contiguous block.
+
+## 14. The session, measured
+
+Over 815 stored days of `USD-SOFR-1D` and 794 of `USD-FEDFUNDS-1D` (2024 onward),
+split by DST regime so that each boundary's *anchoring* is established rather
+than assumed:
+
+| boundary | EDT (Jun–Aug) | EST (Dec–Feb) | anchored in |
+|---|---|---|---|
+| first row, Mon–Thu | 01:00 ET = 05:00 UTC | 01:00 ET = 06:00 UTC | **New York** |
+| last row, Mon–Thu | 22:59 ET = 02:59 UTC | 22:59 ET = 03:59 UTC | **New York** |
+| last row, Friday | 17:59 ET = **21:59 UTC** | 16:59 ET = **21:59 UTC** | **UTC** |
+| first row, Sunday | 17:00 ET = **21:00 UTC** | 16:00 ET = **21:00 UTC** | **UTC** |
+
+138/144 and 138/140 Mon–Thu days start at exactly 01:00 ET; 33/36 and 34/34
+Fridays end at exactly 21:59 UTC; 36/36 and 32/33 Sundays start at exactly
+21:00 UTC.
+
+**The week runs on a UTC clock and the day runs on a New York clock.** So:
+
+- opens **Sunday 21:00 UTC**, closes **Friday 22:00 UTC** (last row 21:59);
+- **no rows between 23:00 and 00:59 ET**, any night — a two-hour nightly hole;
+- nothing at all on Saturday;
+- no holiday calendar.
+
+Both US DST transitions fall on a Sunday, and this session is shut all Sunday
+morning — so the skipped hour and the repeated hour never touch a published USD
+minute. That is luck, but it is worth knowing.
+
+This is now `MDP/IRSwaps/CITIVELO_EXCEL/citi_session.py`. It **raises** for any
+curve whose anatomy was not measured: the non-USD assets run 12 hours in their
+own zone against USD's 22, so extrapolating would report most of a GBP trading
+day as unpublished — wrongly, and confidently.
+
+## 15. What *is* ours: days cut short by a chunk boundary
+
+Roughly 19 % of Mon–Thu days stop at **23:59 UTC** — 19:59 ET on daylight time,
+18:59 ET on standard — instead of 22:59 ET.
+
+That is not a market event:
+
+- the count is **27/144 (EDT) and 27/140 (EST)** — identical on a UTC clock;
+- on **190 dates** one USD curve stops early while the other, fetched in a
+  separate run, runs to 22:59 ET;
+- **zero Fridays** are affected, because Friday's real close (21:59 UTC) is
+  already earlier than the artifact's boundary.
+
+The mechanism is in `citivelo_excel_intraday_warm.py`: a day's parquet is written
+once and never rewritten (`if out.exists() and not force: continue`), and a whole
+window is skipped when every weekday in it is already on disk. So when a chunk
+boundary falls inside a local day, whichever half is written first freezes the
+day, and no later run completes it.
+
+Current backlog, by cause — `session_repair_list.csv`:
+
+| curve | cause | days | missing minutes |
+|---|---|---|---|
+| `USD-SOFR-1D` | ten-minute era (needs a 1-min refetch) | 255 | 255,241 |
+| `USD-SOFR-1D` | **truncated end (chunk boundary)** | **161** | **33,832** |
+| `USD-SOFR-1D` | interior gaps | 65 | 12,153 |
+| `USD-FEDFUNDS-1D` | **truncated end (chunk boundary)** | **141** | **30,034** |
+| `USD-FEDFUNDS-1D` | interior gaps | 96 | 20,705 |
+
+The ten-minute era is already the running backfill's target. The 302
+truncated-end days across the two curves are the self-inflicted part.
+
+## 16. Recoverable vs not
+
+Every requested minute on the tape, split by *why* it is or is not answerable:
+
+### `USD-SOFR-1D` — 1,961,419 legs, 21,451 future-served
+
+| class | legs | share | future-served | of all future-serving |
+|---|---|---|---|---|
+| exact minute present | 1,889,619 | 96.34 % | 0 | — |
+| **Citi publishes nothing** | 30,188 | 1.54 % | 16,343 | **76.2 %** |
+| in-session interior gap | 27,072 | 1.38 % | 2,415 | 11.3 % |
+| in-session, outside stored span | 14,540 | 0.74 % | 2,693 | **12.6 %** |
+
+### `USD-FEDFUNDS-1D` — 66,451 legs, 1,094 future-served
+
+| class | legs | share | future-served | of all future-serving |
+|---|---|---|---|---|
+| exact minute present | 63,752 | 95.94 % | 0 | — |
+| Citi publishes nothing | 604 | 0.91 % | 337 | 30.8 % |
+| in-session interior gap | 941 | 1.42 % | 79 | 7.2 % |
+| **in-session, outside stored span** | 1,154 | 1.74 % | 678 | **62.0 %** |
+
+**Repairing every truncated day removes 12.6 % of SOFR's future-serving and 62 %
+of Fed Funds'.** The interior gaps are Citi's own missing minutes (§13.5), so on
+SOFR **87.5 % of the contamination is irrecoverable** and the gate built in Part I
+is the only remedy. On Fed Funds the balance is the other way round, and the
+repair is worth doing before that curve is used for direction work.
+
+## 17. Fed Funds, re-measured — §6 and §8 are obsolete
+
+The overnight backfill took `USD-FEDFUNDS-1D-CITIVELOEXCELMIN` from 155 stored
+days to **926**, and the coverage cliff is gone:
+
+| | Part I (2026-08-09) | now (2026-08-10) |
+|---|---|---|
+| legs with no warmed window | **50,702 (76.3 %)** | **0** |
+| legs served the exact minute | — | 63,752 (95.94 %) |
+| priced under `asof` ≤60 s | 22.9 % | **97.19 %** |
+
+By quarter, every quarter is now usable — the 2024Q1–2025Q4 "100 % no curve" rows
+in §8 are **false as of today**:
+
+| quarter | legs | no curve | exact minute | priced (asof ≤60 s) |
+|---|---|---|---|---|
+| 2024Q1 | 1,867 | 0.00 % | 97.86 % | 98.82 % |
+| 2024Q2 | 4,061 | 0.02 % | 97.05 % | 98.92 % |
+| 2024Q3 | 6,767 | 0.00 % | 97.67 % | 98.58 % |
+| 2024Q4 | 6,500 | 0.00 % | 94.82 % | 95.28 % |
+| 2025Q1 | 4,918 | 0.02 % | 98.27 % | 98.96 % |
+| 2025Q2 | 6,098 | 0.00 % | 94.69 % | 97.87 % |
+| 2025Q3 | 9,243 | 0.00 % | 95.73 % | 96.77 % |
+| 2025Q4 | 8,443 | 0.00 % | 94.74 % | 96.02 % |
+| 2026Q1 | 6,999 | 0.00 % | 97.17 % | 97.33 % |
+| 2026Q2 | 6,738 | 0.01 % | 94.02 % | 95.47 % |
+| 2026Q3 | 4,817 | 0.00 % | 95.95 % | 98.15 % |
+
+**Fed Funds is now fit across the whole tape span, on the same terms as SOFR**
+(97.19 % vs 97.58 % priced at 60 s). The single largest constraint in Part I has
+been removed by someone else's work, not by this branch.
+
+The SOFR numbers are unchanged to two decimal places against Part I, which is the
+control that says this is a comparable re-measurement rather than a different
+measurement.
+
+## 18. Handover note — a collision with `feat/citivelo-snap-history`
+
+`scripts/citivelo_deep_intraday_warm.py::_already_dense` on that branch documents:
+
+> *"a Sunday-evening partial is ~180 published minutes; Fridays end at 17:59 local
+> against Monday-Thursday's 19:59"*
+
+For the two USD curves the measured Monday–Thursday close is **22:59 ET**, and
+**19:59 ET is precisely the truncation signature** (23:59 UTC). A completeness
+gate built on that model marks the 302 truncated days *complete*, so a repair pass
+would skip exactly the days that need it.
+
+The Sunday and Friday halves of that comment are right, and non-obvious — Sunday
+really is a ~180–420 minute evening, and Friday really does end early. It is only
+the Monday–Thursday close that is off, and it is off in the direction that hides
+this defect.
+
+I have deliberately **not** edited those files. That branch owns them and is
+running; a repair belongs there, driven by `session_repair_list.csv`, and it needs
+a merge-on-write rather than `--force` — forcing a day whose re-fetch is itself
+partial would replace good data with worse.
+
+## 19. What this changes in Part I
+
+- **§11's open question is answered.** The boundary is Citi's, and the fetch fix
+  is worth 12.6 % of the future-serving on SOFR, not "most" of it. Part I's
+  recommendation stands unchanged and is, if anything, more important: since most
+  of the contamination cannot be fetched away, gating and marking is the remedy.
+- **§6 and the Fed Funds half of §8 are obsolete**, superseded by §17.
+- **The recommended gate gains one rule.** Drop or flag prints outside Citi's
+  published session (`citi_session.publishes`) *before* judging them by lag. A
+  Friday 20:00 ET print and a Monday 20:00 ET print look identical from the
+  store — the stored day just stops — and one is the weekend while the other is a
+  repairable hole.
