@@ -467,6 +467,10 @@ of. The two are different questions, and this is the one that asks "what if I on
 
 `voters` is the one cut here that is economically motivated rather than searched: the rotation is
 published years ahead, so it is known at trade time and fitted to nothing.
+
+Two rows below are identical by construction, not by accident: governors vote at every meeting, so
+every non-voter in this book *is* a regional president in an off year. `non-voters` and
+`Presidents, not voting` are the same trades.
 """)
 
 code(r"""
