@@ -161,15 +161,7 @@ class CurvePricer:
         disagreeing, which is the failure the per-instance design was chosen to
         avoid. One method, both callers.
         """
-        if is_ambiguous_midnight(ts):
-            raise ValueError(
-                f"CurvePricer was asked for {curve_name!r} at {ts!r}, which is exactly "
-                "midnight. Sources that overload the timestamp argument read that as "
-                "END OF DAY and serve the day's close - hours AFTER the instant you "
-                "meant, which makes a direction call circular. Pass "
-                "SDRUtils.stir_flow.pricing.as_intraday_instant(ts) for the instant, or "
-                "a datetime.date if you genuinely want the close."
-            )
+        self._reject_ambiguous(curve_name, ts)
         # Only pass `kwargs` when there is something to say. `mdp` is routinely a
         # stand-in - a fake in tests, a narrower wrapper in the backtests - and
         # widening the call for every caller in order to serve the one that set
@@ -177,7 +169,27 @@ class CurvePricer:
         extra = {"kwargs": dict(self._curve_kwargs)} if self._curve_kwargs else {}
         return self._mdp._get_curve(curve_name=curve_name, timestamp=ts, **extra)
 
+    @staticmethod
+    def _reject_ambiguous(curve_name, ts) -> None:
+        if not is_ambiguous_midnight(ts):
+            return
+        raise ValueError(
+            f"CurvePricer was asked for {curve_name!r} at {ts!r}, which is exactly "
+            "midnight. Sources that overload the timestamp argument read that as "
+            "END OF DAY and serve the day's close - hours AFTER the instant you "
+            "meant, which makes a direction call circular. Pass "
+            "SDRUtils.stir_flow.pricing.as_intraday_instant(ts) for the instant, or "
+            "a datetime.date if you genuinely want the close."
+        )
+
     def handle(self, curve_name: str, ts):
+        # Checked HERE, before the cache lookup, and not only inside `build`.
+        # `curve_warm.warm_pricer` and `_bulk_seed` write straight into
+        # `_handles`, so a pre-seeded key is returned without `build` ever
+        # running - and a guard that only lives in `build` would be bypassed by
+        # exactly the path most likely to carry a bad timestamp in bulk. Same
+        # shape of hole as the curve_kwargs one this class already had.
+        self._reject_ambiguous(curve_name, ts)
         key = (curve_name, ts)
         if key not in self._handles:
             self._handles[key] = self.build(curve_name, ts)

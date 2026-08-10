@@ -291,3 +291,23 @@ def test_the_nudge_does_not_change_which_snapshot_is_selected():
         assert select_snapshot(stamps, wanted, SnapshotPolicy.legacy()).position == 1
         asof = SnapshotPolicy(method="asof", max_lag=datetime.timedelta(hours=3))
         assert select_snapshot(stamps, wanted, asof).position == 0
+
+
+def test_a_pre_seeded_midnight_key_is_still_refused_by_handle():
+    """The guard has to sit BEFORE the cache lookup, not only inside build.
+
+    ``curve_warm.warm_pricer`` and ``_bulk_seed`` write straight into
+    ``_handles``. A key seeded that way is returned without ``build`` ever
+    running, so a guard living only in ``build`` would be bypassed by exactly
+    the path most likely to carry a bad timestamp in bulk.
+    """
+    class _MDP:
+        def _get_curve(self, curve_name, timestamp):
+            raise AssertionError("should not be reached")
+
+    p = pricing.CurvePricer(mdp=_MDP())
+    midnight = NY.localize(datetime.datetime(2026, 6, 10, 0, 0))
+    p._handles[("USD-SOFR-1D", midnight)] = "A CURVE FROM THE CLOSE"
+
+    with pytest.raises(ValueError, match="exactly midnight"):
+        p.handle("USD-SOFR-1D", midnight)
