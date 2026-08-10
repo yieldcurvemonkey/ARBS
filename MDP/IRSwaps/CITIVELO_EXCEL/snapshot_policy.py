@@ -152,8 +152,11 @@ class SnapshotPolicy:
         The drift column is the measured movement of the curve itself over that
         elapsed time, not a model: see ``drift`` in
         ``scripts/citivelo_minute_lag_audit.py``. It is nearly identical on
-        USD-FEDFUNDS-1D (5Y p90 0.22 bp at one minute), so this is not a
-        SOFR-specific number.
+        USD-FEDFUNDS-1D (5Y p90 0.22 bp at one minute), so it is not specific to
+        one curve - but note that **only the two USD curves were measured**, and
+        this default applies to all twenty. A caller on a non-USD minute asset,
+        whose session hours and publication cadence differ, should measure before
+        inheriting this number.
 
         Compare what it replaces: the shipped nearest-either-direction rule
         introduces a **mean 1.0-1.3 bp** error on the requests where the two

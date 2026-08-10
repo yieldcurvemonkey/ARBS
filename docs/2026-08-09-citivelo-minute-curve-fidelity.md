@@ -345,6 +345,26 @@ See `MDP/IRSwaps/CITIVELO_EXCEL/snapshot_policy.py` and the PR body. In short:
   handlers re-raise by name — so a strict miss cannot be converted back into the
   silent fallback it exists to prevent. A strict request can no longer reach the
   live Excel build; the midnight/EOD branch raises rather than serving the close.
+- **Caller contradictions raise; data misses do not.** A policy combined with
+  `force_refresh`/`no_curve_store`, with `"live"`, or with an exact-midnight
+  (end-of-day) timestamp is a contradiction and raises on both the single-point
+  and the batch path. A *data* miss — no snapshot inside the tolerance — raises
+  on the single-point path (one question, one answer or one exception) and is
+  **omitted from the batch's result dict**, which is keyed by the caller's own
+  timestamps, with a single WARNING carrying the count. A batch that raised on
+  the first data miss would be unusable: 2.4 % of tape minutes are one.
+
+  > This was found by an independent review, not by my own tests. The batch
+  > bucketed exact-midnight requests in its *own* first pass and served them
+  > from the EOD store with no policy check — reproducing the sixteen-hour
+  > lookahead the single-point dispatch refuses. My bulk-vs-single agreement
+  > test could not see it because every timestamp in it was intraday. Worse,
+  > that test was **vacuous**: `bulk_get_data` reconstructs through
+  > `CurveStore.reconstruct_curve` directly rather than the store's batch
+  > method, so the fixture's rows raised, the bulk window branch took its
+  > `except Exception` fallback, and the test compared the single-point loader
+  > with itself. Both are fixed, and the agreement test now asserts the batch
+  > did not fall back.
 - `_assert_snapshot_fresh` gains `limit` and `allow_future` rather than gaining a
   rival. Its `requested - snapshot > limit` test is structurally blind to a
   *negative* lag, so no tolerance was ever going to catch a future snapshot —
@@ -368,4 +388,16 @@ See `MDP/IRSwaps/CITIVELO_EXCEL/snapshot_policy.py` and the PR body. In short:
 - **Whether the 01:00 ET session start is a Citi property or a fetch-window
   property.** The measurement shows the first row of the day is ~01:00 ET
   consistently; whether earlier data exists upstream and is simply not being
-  requested was not tested.
+  requested was not tested. If it is a fetch-window property, fixing it removes
+  most of the hour-00 contamination outright, which would be worth more than
+  anything in the patch.
+- **The other eighteen minute curves.** Only `USD-SOFR-1D` and
+  `USD-FEDFUNDS-1D` were measured, because they are what the direction work
+  needs. `SnapshotPolicy.strict()`'s one-minute default applies to all twenty;
+  the EUR/GBP/JPY/AUD minute assets have different session hours and were not
+  checked. The lag *mechanism* is shared, but the numbers are not transferable.
+- **Whether the tolerance should vary by tenor.** Drift is nearly flat across
+  2Y/5Y/10Y/30Y at every elapsed time measured (p90 within ~0.03 bp of each
+  other at one minute), so a single tolerance looks right — but that was
+  measured on par rates, not on the package structures the direction work will
+  actually classify.

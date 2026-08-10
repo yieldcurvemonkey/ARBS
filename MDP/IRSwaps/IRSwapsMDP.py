@@ -2803,21 +2803,7 @@ class IRSwapsMDP(MarketDataProvider[_GenericPricable]):
         # with the flags that RULE THE STORE OUT is a contradiction, not a
         # preference to be resolved quietly in one direction.
         policy = policy_from_kwargs(kwargs)
-        if not policy.is_legacy:
-            conflicting = [
-                k for k in ("force_refresh", "ignore_cache", "no_curve_store") if kwargs.get(k)
-            ]
-            if conflicting:
-                raise ValueError(
-                    f"snapshot_policy ({policy.describe()}) selects among STORED minute "
-                    f"snapshots, and {conflicting} bypasses the store entirely. Drop one."
-                )
-            if backend == "ql":
-                raise ValueError(
-                    "snapshot_policy applies to the minute CurveStore, which holds rateslib "
-                    "curves only; the QL backend always builds from live quotes. Use a "
-                    "CITIVELO_EXCEL-RL source."
-                )
+        self._assert_policy_compatible(policy, kwargs=kwargs, backend=backend)
 
         # Register the curve definitions HERE, not only in the fetcher. Nineteen
         # of the twenty curve names exist nowhere else in this repo, and a curve
@@ -2857,6 +2843,11 @@ class IRSwapsMDP(MarketDataProvider[_GenericPricable]):
                 _mode = resolve_request(timestamp)
             except Exception:  # noqa: BLE001 - let the normal path report it
                 _mode = None
+            # Before the branch, not inside one of them: "live" and a malformed
+            # timestamp both fall past every branch, and under a minute-
+            # resolution policy each is a contradiction that must be named
+            # rather than reported as an unreachable-dispatch bug.
+            self._assert_policy_mode(policy, mode=_mode, timestamp=timestamp)
             if _mode is not None and _mode.mode == "intraday":
                 hit = self._load_citivelo_excel_minute_store_point(
                     curve_name=curve_name, timestamp=timestamp, policy=policy
@@ -2864,21 +2855,6 @@ class IRSwapsMDP(MarketDataProvider[_GenericPricable]):
                 if hit is not None:
                     return hit
             elif _mode is not None and _mode.mode == "eod" and _mode.eod_date is not None:
-                if not policy.is_legacy:
-                    # The strict path is minute-resolution by construction. This
-                    # branch serves that DAY'S CLOSE, so honouring it here would
-                    # hand a caller who asked for "one minute before the print" a
-                    # curve up to sixteen hours after it - the exact failure the
-                    # policy exists to prevent, arriving through the door nobody
-                    # was watching. Exact midnight is not a hypothetical: it is
-                    # what snap_timestamp produces for every 00:01 ET print.
-                    raise SnapshotMiss(
-                        f"citivelo_excel: {timestamp!r} resolves to END OF DAY "
-                        f"({_mode.eod_date}), not an intraday instant, and "
-                        f"snapshot_policy ({policy.describe()}) was given. That branch "
-                        "would serve the day's close. Ask for an explicit intraday "
-                        "instant (e.g. 00:00:01) if that is what you meant."
-                    )
                 hit = self._load_citivelo_excel_curve_store_point(
                     curve_name=curve_name, trading_date=_mode.eod_date
                 )
@@ -3067,6 +3043,73 @@ class IRSwapsMDP(MarketDataProvider[_GenericPricable]):
                 "reference_date": trading_date.isoformat(),
                 "wire_timezone": stamp.tzinfo.key if hasattr(stamp.tzinfo, "key") else str(stamp.tzinfo),
             },
+        )
+
+    @staticmethod
+    def _assert_policy_compatible(policy: Any, *, kwargs: Dict[str, Any], backend: str) -> None:
+        """A snapshot policy and a store bypass cannot both be honoured.
+
+        Shared by the single-point dispatch and ``bulk_get_data``. It has to be
+        shared: ``_bulk_citivelo_excel_curves`` routes an ineligible request to
+        ``_single``, whose ``except Exception`` swallows a ``ValueError`` - so
+        validating in only one of the two places turns a loud contradiction into
+        a silently short result dict.
+        """
+        if policy.is_legacy:
+            return
+        conflicting = [
+            k for k in ("force_refresh", "ignore_cache", "no_curve_store") if kwargs.get(k)
+        ]
+        if conflicting:
+            raise ValueError(
+                f"snapshot_policy ({policy.describe()}) selects among STORED minute "
+                f"snapshots, and {conflicting} bypasses the store entirely. Drop one."
+            )
+        if backend == "ql":
+            raise ValueError(
+                "snapshot_policy applies to the minute CurveStore, which holds rateslib "
+                "curves only; the QL backend always builds from live quotes. Use a "
+                "CITIVELO_EXCEL-RL source."
+            )
+
+    @staticmethod
+    def _assert_policy_mode(policy: Any, *, mode: Any, timestamp: Any) -> None:
+        """Refuse a non-intraday request under a minute-resolution policy.
+
+        ``resolve_request`` reads exact midnight as END OF DAY, and
+        ``snap_timestamp``'s "one minute before the print" produces exactly
+        midnight for every trade in the 00:01 ET minute. Serving that branch
+        hands a caller who asked for the minute before a print a curve up to
+        sixteen hours AFTER it.
+
+        Shared for the same reason as ``_assert_policy_compatible``, and this one
+        was found by review: the bulk path buckets ``eod`` requests in its own
+        first pass and served them straight from ``_wrap_citivelo_excel_eod``,
+        reproducing the exact lookahead the single-point dispatch refuses.
+        ``live`` is separated out because it is a caller contradiction rather
+        than a data-shaped miss - there is no stored minute for "now".
+        """
+        from MDP.IRSwaps.CITIVELO_EXCEL.snapshot_policy import SnapshotMiss
+
+        if policy.is_legacy or (mode is not None and mode.mode == "intraday"):
+            return
+        if mode is None:
+            raise ValueError(
+                f"snapshot_policy ({policy.describe()}) was given, but {timestamp!r} could "
+                "not be resolved to a request mode at all. Pass a tz-aware datetime."
+            )
+        if mode.mode == "live":
+            raise ValueError(
+                f"snapshot_policy ({policy.describe()}) bounds the lag between a "
+                "requested instant and a stored one, and 'live' names no instant. "
+                "Ask for the timestamp you mean."
+            )
+        raise SnapshotMiss(
+            f"citivelo_excel: {timestamp!r} resolves to END OF DAY "
+            f"({getattr(mode, 'eod_date', None)}), not an intraday instant, and "
+            f"snapshot_policy ({policy.describe()}) was given. That branch would "
+            "serve the day's close. Ask for an explicit intraday instant "
+            "(e.g. 00:00:01) if that is what you meant."
         )
 
     @staticmethod
@@ -3372,6 +3415,18 @@ class IRSwapsMDP(MarketDataProvider[_GenericPricable]):
         # inline, which is agreement until someone edits one of them.
         policy = policy_from_kwargs(request)
 
+        # Strict misses that are DATA, not caller error. A batch cannot raise on
+        # these: 2.4% of tape minutes have no snapshot inside a one-minute
+        # tolerance, so an all-or-nothing batch would be unusable for exactly the
+        # research this policy exists to serve. They are omitted from the result
+        # - which is per-request and unambiguous, because the dict is keyed by
+        # the caller's own timestamp objects - and reported once at the end.
+        #
+        # Caller CONTRADICTIONS (a policy plus a store bypass, a policy plus
+        # "live" or an exact-midnight EOD request) are a different thing and are
+        # raised up front, before this loop, so they cannot arrive here.
+        strict_misses: List[Tuple[Any, str]] = []
+
         def _single(t) -> None:
             single_request = dict(request)
             single_request["curve_name"] = curve_name
@@ -3379,15 +3434,23 @@ class IRSwapsMDP(MarketDataProvider[_GenericPricable]):
             single_request["ignore_cache"] = bool(ignore_cache)
             try:
                 curve = self.get_data(single_request)
-            except SnapshotMiss:
-                # A strict caller asked to be told. Dropping the key would leave
-                # them to infer the miss from a short dict, which is the silent
-                # failure in a different costume.
-                raise
+            except SnapshotMiss as miss:
+                strict_misses.append((t, str(miss)))
+                return
             except Exception:  # noqa: BLE001 - matches the generic loop this replaces
                 return
             if curve is not None:
                 out[t] = curve
+
+        # Validated HERE and not left to _single: an ineligible request goes to
+        # _single, whose `except Exception` swallows the ValueError, so a
+        # contradiction that raises for one point would return a silently short
+        # dict for a batch of them.
+        self._assert_policy_compatible(
+            policy,
+            kwargs={**request, "ignore_cache": request.get("ignore_cache", ignore_cache)},
+            backend="ql" if self.source.upper() in CITIVELO_EXCEL_QL_TOKENS else "rl",
+        )
 
         # The same three conditions _build_citivelo_excel_curve applies. When any
         # of them rules the store out, so does this: the batch must never serve a
@@ -3425,9 +3488,17 @@ class IRSwapsMDP(MarketDataProvider[_GenericPricable]):
             try:
                 mode = resolve_request(t)
             except Exception:  # noqa: BLE001
+                mode = None
+            # The same refusal the single-point dispatch applies, at the same
+            # point in the decision. Without it this loop bucketed an
+            # exact-midnight request into `eod` and step 3 served it that day's
+            # CLOSE - the sixteen-hour lookahead, reached through the batch,
+            # under the very policy that forbids it. Found by review, not by the
+            # bulk-vs-single agreement test, which only used intraday stamps.
+            self._assert_policy_mode(policy, mode=mode, timestamp=t)
+            if mode is None:
                 leftover.append(t)
-                continue
-            if mode.mode == "intraday" and mode.wire_instant is not None:
+            elif mode.mode == "intraday" and mode.wire_instant is not None:
                 wanted = from_wire_naive(mode.wire_instant)
                 intraday.setdefault(wanted.astimezone(local_zone).date(), []).append((t, wanted))
             elif mode.mode == "eod" and mode.eod_date is not None:
@@ -3536,6 +3607,20 @@ class IRSwapsMDP(MarketDataProvider[_GenericPricable]):
 
         for t in leftover:
             _single(t)
+
+        if strict_misses:
+            # Once, with a count and an example. Per-request it is already
+            # visible as an absent key; what a caller cannot see from the dict is
+            # HOW MANY, and that is the number that decides whether a run is
+            # usable.
+            _citivelo_excel_logger.warning(
+                "citivelo_excel: %d of %d requests for %s had no snapshot acceptable "
+                "under %s and are ABSENT from the result (first: %s). The result dict "
+                "is keyed by your own timestamps, so `set(timestamps) - set(result)` "
+                "enumerates them.",
+                len(strict_misses), len(timestamps), curve_name, policy.describe(),
+                strict_misses[0][1],
+            )
 
         return out
 

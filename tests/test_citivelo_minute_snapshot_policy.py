@@ -121,6 +121,19 @@ def _install(tmp_path, monkeypatch, frames):
         "_citivelo_excel_store_fixings",
         lambda self, **kw: pd.Series(dtype="float64"),
     )
+    # `bulk_get_data` does NOT go through the store's own batch reconstructor -
+    # it calls the CurveStore CLASS method directly, by position. Without this
+    # the fixture's rows raise KeyError('node_dates'), the bulk window branch
+    # takes its `except Exception` fallback, and every bulk assertion silently
+    # becomes an assertion about the single-point path instead. That is exactly
+    # how the agreement test below was vacuous until a review pointed at it.
+    from Caching.curve_store import CurveStore
+
+    monkeypatch.setattr(
+        CurveStore,
+        "reconstruct_curve",
+        staticmethod(lambda row, cfg=None: f"CURVE@{row['timestamp_utc']}"),
+    )
     return fake
 
 
@@ -444,19 +457,163 @@ def test_the_default_limit_is_still_the_env_var(monkeypatch):
 )
 def test_bulk_serves_the_same_snapshot_as_the_single_point_loader(store, mdp, policy):
     wants = [
-        datetime.datetime(2026, 6, 10, 10, 4, tzinfo=ET),
-        datetime.datetime(2026, 6, 10, 10, 0, tzinfo=ET),
-        datetime.datetime(2026, 6, 10, 10, 7, tzinfo=ET),
+        datetime.datetime(2026, 6, 10, 10, 4, tzinfo=ET),   # nearest is in the future
+        datetime.datetime(2026, 6, 10, 10, 0, tzinfo=ET),   # exact
+        datetime.datetime(2026, 6, 10, 10, 7, tzinfo=ET),   # nearest is behind
+        datetime.datetime(2026, 6, 10, 13, 0, tzinfo=ET),   # past the end of the session
+        datetime.datetime(2026, 6, 10, 2, 0, tzinfo=ET),    # before it starts
     ]
     request = {} if policy is None else {"snapshot_policy": policy}
-    bulk = mdp._bulk_citivelo_excel_curves(
-        curve_name=CURVE, timestamps=wants, request=dict(request), ignore_cache=False, n_jobs=1
-    )
+
+    # Non-vacuity guard. The bulk window branch degrades to per-point on any
+    # exception, and a per-point fallback would make every assertion below a
+    # tautology - it would be comparing the single-point loader with itself.
+    per_point = []
+    real_get_data = IRSwapsMDP.get_data
+    mdp_cls = type(mdp)
+    monkeypatch_target = []
+
+    def _spy(self, req):
+        per_point.append(req.get("timestamp"))
+        return real_get_data(self, req)
+
+    mdp_cls.get_data = _spy
+    monkeypatch_target.append(True)
+    try:
+        bulk = mdp._bulk_citivelo_excel_curves(
+            curve_name=CURVE, timestamps=wants, request=dict(request),
+            ignore_cache=False, n_jobs=1,
+        )
+    finally:
+        mdp_cls.get_data = real_get_data
+
+    served_any = False
     for when in wants:
-        single = _load(mdp, when, policy=policy)
+        try:
+            single = _load(mdp, when, policy=policy)
+        except SnapshotMiss:
+            # The batch reports a data miss as an absent key; the single-point
+            # path raises. Same selection, different reporting - pinned by
+            # test_a_strict_data_miss_omits_the_key_rather_than_killing_the_batch.
+            assert when not in bulk, when
+            continue
         assert (when in bulk) == (single is not None), when
         if single is not None:
+            served_any = True
             assert _served(bulk[when]) == _served(single), when
+            assert when not in per_point, (
+                f"{when} was served by the per-point fallback, so this comparison "
+                "says nothing about the batch's own selection"
+            )
+    assert served_any, "no request was served, so this test compared nothing"
+
+
+def test_a_strict_data_miss_omits_the_key_rather_than_killing_the_batch(store, mdp, caplog):
+    """The two paths select identically and REPORT differently, on purpose.
+
+    2.4 % of tape minutes have no snapshot inside a one-minute tolerance, so a
+    batch that raised on the first of them would be unusable for exactly the
+    research this policy exists to serve. Absence from a dict keyed by the
+    caller's own timestamps is unambiguous per request; what it cannot convey is
+    how many, so the count is logged.
+    """
+    import logging
+
+    served = datetime.datetime(2026, 6, 10, 10, 4, tzinfo=ET)
+    missed = datetime.datetime(2026, 6, 10, 13, 0, tzinfo=ET)   # 2h50m past the last stamp
+    with caplog.at_level(logging.WARNING, logger="MDP.IRSwaps.citivelo_excel"):
+        out = mdp._bulk_citivelo_excel_curves(
+            curve_name=CURVE, timestamps=[served, missed],
+            request={"snapshot_policy": SnapshotPolicy.strict(minutes=30)},
+            ignore_cache=False, n_jobs=1,
+        )
+    assert served in out and missed not in out
+    assert any("ABSENT from the result" in r.message for r in caplog.records)
+
+    # ... and the single-point path still raises for the same request, because a
+    # caller who asked one question gets an answer or an exception.
+    with pytest.raises(SnapshotMiss):
+        _load(mdp, missed, policy=SnapshotPolicy.strict(minutes=30))
+
+
+def test_bulk_refuses_a_midnight_request_under_a_strict_policy(store, mdp):
+    """The batch buckets EOD requests in its own pass - and used to serve them.
+
+    An exact-midnight stamp is what ``snap_timestamp`` produces for every 00:01
+    ET print, so this is the sixteen-hour lookahead arriving through the door the
+    single-point dispatch already guards. The agreement test above could not see
+    it, because every timestamp in it is intraday.
+    """
+    with pytest.raises(SnapshotMiss, match="END OF DAY"):
+        mdp._bulk_citivelo_excel_curves(
+            curve_name=CURVE,
+            timestamps=[
+                datetime.datetime(2026, 6, 10, 10, 4, tzinfo=ET),
+                pd.Timestamp("2026-06-10 00:00", tz=ET),
+            ],
+            request={"snapshot_policy": SnapshotPolicy.strict(minutes=5)},
+            ignore_cache=False,
+            n_jobs=1,
+        )
+
+
+def test_bulk_still_serves_a_midnight_request_without_a_policy(store, mdp, monkeypatch):
+    monkeypatch.setattr(
+        IRSwapsMDP, "_load_citivelo_excel_curve_store_point", lambda self, **kw: "EOD"
+    )
+    got = mdp._bulk_citivelo_excel_curves(
+        curve_name=CURVE,
+        timestamps=[pd.Timestamp("2026-06-10 00:00", tz=ET)],
+        request={},
+        ignore_cache=False,
+        n_jobs=1,
+    )
+    assert list(got.values()) == ["EOD"]
+
+
+def test_bulk_refuses_live_under_a_strict_policy(store, mdp):
+    """"live" names no instant, so a lag bound cannot mean anything about it."""
+    with pytest.raises(ValueError, match="names no instant"):
+        mdp._bulk_citivelo_excel_curves(
+            curve_name=CURVE, timestamps=["live"],
+            request={"snapshot_policy": SnapshotPolicy.strict()},
+            ignore_cache=False, n_jobs=1,
+        )
+
+
+def test_single_point_refuses_live_under_a_strict_policy(store, mdp):
+    with pytest.raises(ValueError, match="names no instant"):
+        mdp._build_citivelo_excel_curve(
+            curve_name=CURVE, timestamp="live",
+            kwargs={"snapshot_policy": SnapshotPolicy.strict()},
+        )
+
+
+@pytest.mark.parametrize("flag", ["force_refresh", "ignore_cache", "no_curve_store"])
+def test_bulk_raises_the_same_contradiction_the_single_path_does(store, mdp, flag):
+    """``_single`` swallows ValueError, so validating only there loses it.
+
+    The observable difference would be a silently SHORT result dict - a batch
+    that answered fewer requests than it was asked, with nothing raised.
+    """
+    with pytest.raises(ValueError, match="bypasses the store"):
+        mdp._bulk_citivelo_excel_curves(
+            curve_name=CURVE,
+            timestamps=[datetime.datetime(2026, 6, 10, 10, 4, tzinfo=ET)],
+            request={"snapshot_policy": SnapshotPolicy.strict(), flag: True},
+            ignore_cache=False, n_jobs=1,
+        )
+
+
+def test_bulk_ignore_cache_argument_counts_as_a_bypass(store, mdp):
+    """``ignore_cache`` arrives as an ARGUMENT here, not only in the request."""
+    with pytest.raises(ValueError, match="bypasses the store"):
+        mdp._bulk_citivelo_excel_curves(
+            curve_name=CURVE,
+            timestamps=[datetime.datetime(2026, 6, 10, 10, 4, tzinfo=ET)],
+            request={"snapshot_policy": SnapshotPolicy.strict()},
+            ignore_cache=True, n_jobs=1,
+        )
 
 
 def test_select_snapshot_matches_the_expression_it_replaced():
