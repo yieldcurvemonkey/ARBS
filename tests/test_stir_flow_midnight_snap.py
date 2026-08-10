@@ -362,22 +362,59 @@ def test_the_nudge_still_flips_resolve_request_to_intraday():
     assert resolve_request(pricing.as_intraday_instant(midnight)).mode == "intraday"
 
 
+def _np_units():
+    import numpy as np
+
+    return [
+        np.datetime64("2026-06-10T00:00:00").astype(f"datetime64[{u}]")
+        for u in ("Y", "M", "W", "D", "h", "m", "s", "ms", "us", "ns")
+    ]
+
+
 @pytest.mark.parametrize(
     "value",
-    [
-        "2026-06-10",                       # a str cannot take a timedelta at all
-        __import__("numpy").datetime64("2026-06-10"),        # DAY unit: truncates
-        __import__("numpy").datetime64("2026-06-10T00:00"),  # minute unit
-    ],
+    ["2026-06-10", "2026-06-10 00:00:00", "2026-06-10T00:00:00-04:00"] + _np_units(),
+    ids=str,
 )
-def test_non_datetime_inputs_are_normalised_rather_than_silently_unchanged(value):
-    """A day-unit datetime64 truncates a sub-day timedelta to zero.
+def test_every_admitted_type_is_actually_nudgeable(value):
+    """The classifier's domain must not exceed the nudge's, in either direction.
 
-    That would make this function a no-op on exactly the input it is meant to
-    repair, and it would do it silently. Those are normalised to pd.Timestamp,
-    which every curve API accepts.
+    ``is_ambiguous_midnight`` admits datetimes, numpy datetime64 and strings,
+    because it has to predict what ``resolve_request`` will do and that accepts
+    all three. But raw ``+ timedelta`` is undefined for a str, resolution-
+    dependent for datetime64, and a review found the three distinct outcomes:
+    a str raised TypeError, a **day**-unit datetime64 silently returned an
+    unchanged midnight - a no-op on exactly the input this exists to repair -
+    and an **ns**-unit one raised TypeError from int arithmetic. Only the
+    second-to-microsecond units happened to work.
+
+    Every unit is swept because "I checked the ones I thought of" is how the
+    day and nanosecond ends were missed the first time.
     """
     out = pricing.as_intraday_instant(value)
     assert isinstance(out, pd.Timestamp)
     assert out.microsecond == 1
     assert resolve_request(out).mode == "intraday"
+
+
+def test_a_non_midnight_string_is_still_returned_byte_identical():
+    """Invariant (A) has to survive the normalisation, not just the nudge."""
+    value = "2026-06-10 09:30:00"
+    assert pricing.as_intraday_instant(value) is value
+
+
+def test_the_int_asymmetry_is_a_decision_not_an_accident():
+    """``resolve_request(42)`` says eod; ``is_ambiguous_midnight(42)`` says no.
+
+    Both are right for their own job. ``resolve_request`` parses whatever it is
+    handed, so a bare int becomes 42 nanoseconds past the epoch and reads as
+    midnight. This predicate deliberately declines to chase that: nudging ``42``
+    to ``1970-01-01 00:00:00.000001`` and reporting success is a worse answer
+    than letting a non-temporal input fail as the type error it is.
+
+    Pinned so the asymmetry is a documented choice rather than something a later
+    reader has to rediscover - a review found it by measurement, not by reading.
+    """
+    assert resolve_request(42).mode == "eod"
+    assert pricing.is_ambiguous_midnight(42) is False
+    assert pricing.as_intraday_instant(42) == 42

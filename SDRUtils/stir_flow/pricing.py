@@ -96,8 +96,18 @@ def is_ambiguous_midnight(ts) -> bool:
     * Only genuinely date-like inputs are considered. ``pd.Timestamp(42)`` is
       42 nanoseconds past the epoch - hour, minute, second and microsecond all
       zero - so parsing anything that pandas accepts would call a plain integer
-      "midnight" and then fail trying to add a second to it. Found by a test
-      that passed ``42`` on the way past.
+      "midnight" and then fail trying to nudge it. Found by a test that passed
+      ``42`` on the way past.
+
+    That second rule leaves a **deliberate asymmetry**, and it is worth naming
+    rather than discovering: ``resolve_request(42)`` *does* return ``eod``,
+    because it parses whatever it is given. So this predicts the consumer for
+    every value that is actually a wall clock, and declines to chase values that
+    are not timestamps at all. Chasing them would mean nudging ``42`` to
+    ``1970-01-01 00:00:00.000001`` and reporting success, which is a worse answer
+    than letting a non-temporal input fail as the type error it is. Nothing in
+    this repo passes one; if something ever does, the failure is upstream of
+    here.
     """
     import numpy as np
 
