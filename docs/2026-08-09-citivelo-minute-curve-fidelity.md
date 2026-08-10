@@ -401,3 +401,51 @@ See `MDP/IRSwaps/CITIVELO_EXCEL/snapshot_policy.py` and the PR body. In short:
   other at one minute), so a single tolerance looks right — but that was
   measured on par rates, not on the package structures the direction work will
   actually classify.
+
+---
+
+## Appendix — the tests fail on `main`
+
+The prompt asked for tests that reproduce each failure mode against the *current*
+code and then pass. Two of them (`test_the_shipped_argmin_rule_can_pick_the_future`,
+`test_the_shipped_window_spans_neighbouring_days`) are written against the
+expression that shipped, so they keep demonstrating the defect regardless of what
+the loader is changed to. The rest need the new API to express the property, so
+they were re-written against `main`'s API and run in a clean `main` worktree.
+
+All six fail there, and the equivalents pass on the branch:
+
+```
+$ python -m pytest tests/test_zz_prefix_evidence.py -q          # clean main worktree
+FFFFFF                                                                   [100%]
+E   KeyError: 'snapshot_served_from_future'                    tests/...:84
+E   KeyError: 'snapshot_same_local_date'                       tests/...:95
+E   ModuleNotFoundError: No module named 'MDP.IRSwaps.CITIVELO_EXCEL.snapshot_policy'
+E   ModuleNotFoundError: No module named 'MDP.IRSwaps.CITIVELO_EXCEL.snapshot_policy'
+E   ModuleNotFoundError: No module named 'MDP.IRSwaps.CITIVELO_EXCEL.snapshot_policy'
+E   TypeError: CurvePricer.__init__() got an unexpected keyword argument 'curve_kwargs'
+
+FAILED test_1_future_snapshot_is_reported
+FAILED test_2_wrong_calendar_day_is_reported
+FAILED test_3_a_backward_only_lookup_is_available
+FAILED test_4_a_strict_miss_does_not_reach_the_live_excel_build
+FAILED test_5_bulk_refuses_a_midnight_request_under_a_strict_policy
+FAILED test_6_the_warmer_builds_on_the_pricers_terms
+6 failed
+```
+
+Tests 1 and 2 matter most: their *fixture* assertions passed on `main` — the
+served snapshot really was `10:05` for a `10:04` request, and really did come out
+of the previous day's partition — and only the assertion that this is *reported*
+failed. So `main` does the wrong thing and says nothing, which is the whole
+finding in two lines of pytest output.
+
+## Appendix — pre-existing test failures
+
+The fast gate (`pytest tests -m "not slow and not network and not db"`) was run in
+a clean `main` worktree before any change: **6,246 passed, 3 failed**, 32 min.
+The three are pre-existing and unrelated:
+
+- `tests/test_citivelo_catalog.py::test_bond_universe_matches_the_harvest`
+- `tests/test_eod_vectorized_engine.py::TestPerformance::test_252_dates_200_tenors_under_5s`
+- `tests/test_identifiers.py::test_corpus_is_present_and_large`
