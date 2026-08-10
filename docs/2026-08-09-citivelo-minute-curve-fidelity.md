@@ -856,13 +856,22 @@ it belongs to — `pd.Timestamp("2026-08-06")` really is how people spell "that
 day", and the add-in stamps its DAILY rows at midnight. It is not changed. What
 changed is that the two *snapshot rules* stopped emitting a value that means
 end-of-day when they mean an instant, using the escape hatch `resolve_request`
-itself documents: *"ask for 00:00:01"*.
+itself documents — ask for an instant just past midnight.
 
 Both now route through `stir_flow.pricing.as_intraday_instant`, which nudges
-**only** exact midnight, by one second, and returns every other instant
-untouched. At minute resolution that is the same request — 00:00:00 and 00:00:01
-fall in the same minute and every selection rule resolves them to the same stored
-snapshot. The only thing that changes is the *mode*, which is the entire bug.
+**only** exact midnight, **by one microsecond**, and returns every other instant
+untouched. The only thing that changes is the *mode*, which is the entire bug.
+
+The unit is not arbitrary, and a review is why it is not a second. The source the
+classifier runs on *today*, `BARCHART_STIRF-RL`, resolves its CurveStore fast path
+by **exact key equality**, and `_curve_store_timestamp_key` ends with
+`value.replace(microsecond=0)` — it discards microseconds and **keeps seconds**.
+A one-second nudge therefore missed a store whose rows are all stamped on whole
+minutes (measured: 148 of 1,383 Fed Funds days and 22 of 139 SOFR days hold a
+00:00 ET row, and the hit flipped to a miss for every one) and fell through to a
+live vendor build that can calibrate a different curve. `resolve_request` tests
+microseconds; that key zeroes them. One microsecond is the only offset that
+satisfies both consumers.
 
 Surgical on purpose: `backfill_stir_direction` persists this value as
 `curve_timestamp`, so a rule that shifted every request by a second would rewrite
