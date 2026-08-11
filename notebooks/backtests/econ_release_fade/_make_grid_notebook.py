@@ -158,7 +158,7 @@ RELEASE_SETS = [
     ("clustered", {"impacts": ["high", "medium"], "min_events_in_minute": 2}),
     ("CPI", {"impacts": ["high", "medium"], "titles_include": [r"\bCPI\b"]}),
     ("payrolls", {"impacts": ["high", "medium"],
-                  "titles_include": ["Non-Farm Employment Change", "Unemployment Rate"]}),
+                  "titles_include": [r"^Non-Farm Employment Change$", r"^Unemployment Rate$"]}),
 ]
 MEASURE = [1, 2, 5]
 HOLD = [15, 30, 60, 120, 240]

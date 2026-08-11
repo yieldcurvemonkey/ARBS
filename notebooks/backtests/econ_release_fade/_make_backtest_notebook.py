@@ -524,7 +524,10 @@ years ahead and known at trade time.
 """)
 
 code(r"""
-ENTRY = [1, 2, 5, 10, 15]
+# Starts at 2, not 1: with a one-minute measurement window an entry at T+1
+# fills at the exact price the signal was read from, and the bid-ask bounce
+# that set the side also supplies the entry. build_book refuses it.
+ENTRY = [2, 3, 5, 10, 15]
 EXIT = [5, 15, 30, 60, 120, 240]
 tim_cfgs = [C.variant(CONFIG, f"{e}|{x}",
                       timing={"entry_offset_min": e, "exit_offset_min": x})
@@ -616,7 +619,7 @@ REL_CFGS = [
                            "titles_exclude": None}),
     ("CPI", {"impacts": ["high", "medium"], "titles_include": [r"\bCPI\b"]}),
     ("payrolls", {"impacts": ["high", "medium"],
-                  "titles_include": ["Non-Farm Employment Change", "Unemployment Rate"]}),
+                  "titles_include": [r"^Non-Farm Employment Change$", r"^Unemployment Rate$"]}),
     ("PPI", {"impacts": ["high", "medium"], "titles_include": [r"\bPPI\b"]}),
     ("retail sales", {"impacts": ["high", "medium"], "titles_include": ["Retail Sales"]}),
     ("ISM / PMI", {"impacts": ["high", "medium"], "titles_include": ["ISM", "PMI"]}),

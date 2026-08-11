@@ -166,14 +166,21 @@ def placebo_shift(raw: pd.DataFrame, *, days: int = 1, business_days: bool = Tru
     placebo a second copy of the real book.
     """
     df = raw.copy()
+    tz = raw["release_ts_ny"].iloc[0].tz
+
     if business_days:
         off = pd.offsets.BDay(abs(int(days)))
-        shift = (lambda t: t + off) if days >= 0 else (lambda t: t - off)
+        # Shift in NEW YORK time, then convert back. Adding a business day to a
+        # UTC-stamped release preserves the UTC wall clock, so a shift across a
+        # DST boundary lands an 08:30 New York release at 09:30 New York -- and
+        # the one thing this control has to hold fixed is the time of day.
+        def shift(t, _off=off, _tz=tz, _fwd=days >= 0):
+            local = pd.Timestamp(t).tz_convert(_tz)
+            moved = (local + _off) if _fwd else (local - _off)
+            return moved.tz_convert("UTC")
     else:
         off = pd.Timedelta(days=int(days))
         shift = lambda t: t + off  # noqa: E731
-
-    tz = raw["release_ts_ny"].iloc[0].tz
     df["orig_weekday"] = df["release_ts_ny"].apply(lambda t: t.strftime("%a"))
     df["orig_title"] = df["lead_title"].astype(str)
     df["release_ts"] = df["release_ts"].apply(shift)
@@ -231,9 +238,12 @@ RECIPES: Dict[str, dict] = {
     "tier 1+2": spec("tier 1+2", events={"impacts": ["high", "medium"]}),
     "CPI only": spec("CPI only", events={"impacts": ["high", "medium"],
                                          "titles_include": [r"\bCPI\b"]}),
+    # ANCHORED. An unanchored "Non-Farm Employment Change" also matches
+    # "ADP Non-Farm Employment Change" -- a private payroll estimate released on
+    # a different day of the month, which made the "payrolls" book 44% ADP.
     "payrolls only": spec("payrolls only",
                           events={"impacts": ["high", "medium"],
-                                  "titles_include": [r"Non-Farm Employment Change"]}),
+                                  "titles_include": [r"^Non-Farm Employment Change$"]}),
     "08:30 block": spec("08:30 block", events={"impacts": ["high", "medium"],
                                                "release_times_ny": ["08:30"]}),
     "10:00 block": spec("10:00 block", events={"impacts": ["high", "medium"],
@@ -242,10 +252,10 @@ RECIPES: Dict[str, dict] = {
                              events={"impacts": ["high", "medium"],
                                      "min_events_in_minute": 2}),
     "surprises only": spec("surprises only", events={"surprise": "surprised"}),
-    "fast T+1/T+15": spec("fast T+1/T+15",
-                          timing={"entry_offset_min": 1, "exit_offset_min": 15}),
-    "slow T+1/T+240": spec("slow T+1/T+240",
-                           timing={"entry_offset_min": 1, "exit_offset_min": 240}),
+    "fast T+2/T+15": spec("fast T+2/T+15",
+                          timing={"entry_offset_min": 2, "exit_offset_min": 15}),
+    "slow T+2/T+240": spec("slow T+2/T+240",
+                           timing={"entry_offset_min": 2, "exit_offset_min": 240}),
     "big moves only": spec("big moves only", signal={"min_move_bp": 2.0}),
     "momentum (placebo)": spec("momentum (placebo)", signal={"direction": "momentum"}),
     "10y future": spec("10y future", instrument={"family": "ust", "root": "TY", "rank": 1}),

@@ -157,6 +157,110 @@ def stage_bars(raw: pd.DataFrame, *, only: Sequence[str] = (), force: bool = Fal
               f"{', '.join(sorted(set(led['bars_empty']))[:20])}")
 
 
+# ---------------------------------------------------------------- verify
+def coverage_report(raw: pd.DataFrame) -> pd.DataFrame:
+    """Per contract: what was asked for, what is stored, and whether the shape
+    of what is stored looks like a TRUNCATED fetch.
+
+    A back-month contract that genuinely was not trading yet ramps UP -- a
+    handful of bars a day at first, a full session later. Measured on ZFM22:
+    48 bars across the 13 days from 2021-11-23, against ~870/day once it became
+    the front contract.
+
+    A fetch that stopped early looks nothing like that. ``barchart_timeseries_api``
+    pages intraday BACKWARD in 5,000-row slices and gives up when a slice makes
+    no progress, so an interrupted fetch loses the OLDEST end and leaves the
+    first stored day already carrying a FULL session. Measured: FVM25 was stored
+    with 10 days and exactly 10,000 rows -- 1,000 a day from the very first one
+    -- where a re-fetch of the identical window returns 111 days and 87,482 rows.
+
+    So the discriminator is bars-per-day at the START of what was stored, not
+    the size of the gap.
+    """
+    G.load_bar_cache()
+    span = symbols_needed(raw)
+    by_sym: Dict[str, List[datetime.date]] = defaultdict(list)
+    for (s, d) in G._BAR_CACHE:
+        by_sym[s].append(d)
+
+    rows = []
+    for sym, want in sorted(span.items()):
+        ds = sorted(by_sym.get(sym, []))
+        if not ds:
+            rows.append({"symbol": sym, "instrument": want["instrument"],
+                         "want_first": want["first"], "got_first": None,
+                         "days": 0, "rows": 0, "head_bars_per_day": 0.0,
+                         "gap_days": None, "verdict": "no_bars"})
+            continue
+        n_rows = sum(len(G._BAR_CACHE[(sym, d)]) for d in ds)
+        head = ds[:3]
+        head_bpd = sum(len(G._BAR_CACHE[(sym, d)]) for d in head) / len(head)
+        gap = (ds[0] - want["first"]).days
+        if gap > 10 and head_bpd > 300:
+            verdict = "TRUNCATED"
+        elif gap > 10:
+            verdict = "thin_back_month"
+        else:
+            verdict = "ok"
+        rows.append({"symbol": sym, "instrument": want["instrument"],
+                     "want_first": want["first"], "got_first": ds[0],
+                     "days": len(ds), "rows": n_rows,
+                     "head_bars_per_day": round(head_bpd, 1),
+                     "gap_days": gap, "verdict": verdict})
+    return pd.DataFrame(rows)
+
+
+def stage_verify(raw: pd.DataFrame, *, repair: bool = True,
+                 chunk_days: int = 100) -> pd.DataFrame:
+    """Report coverage, and re-fetch anything that looks truncated in CHUNKS.
+
+    Chunking is the repair, not a retry: a smaller window is a smaller backward
+    page walk, so it cannot exhaust the slice budget. The cache is keyed per
+    (symbol, day), so a second pass MERGES rather than replaces -- a repair can
+    only add days.
+    """
+    rep = coverage_report(raw)
+    bad = rep[rep.verdict.isin(["TRUNCATED", "no_bars"])]
+    print(rep.groupby("verdict").size().to_string())
+    if not len(bad) or not repair:
+        return rep
+
+    from MDP.STIRFutures.STIRFutureMDP import STIRFutureMDP
+    mdp = STIRFutureMDP(source="BARCHART_STIRF-RL")
+    fetcher = mdp._get_barchart_fetcher(required_concurrency=6)
+    span = symbols_needed(raw)
+
+    print(f"\nre-fetching {len(bad)} contracts in {chunk_days}-day chunks")
+    for i, r in enumerate(bad.itertuples(), 1):
+        sym = r.symbol
+        inst = G.INSTRUMENTS[span[sym]["instrument"]]
+        start = span[sym]["first"] - datetime.timedelta(days=3)
+        end = span[sym]["last"] + datetime.timedelta(days=3)
+        before = sum(1 for (s, _d) in G._BAR_CACHE if s == sym)
+        cur = start
+        while cur <= end:
+            nxt = min(cur + datetime.timedelta(days=chunk_days), end)
+            G.warm_symbol(fetcher, sym, cur, nxt, inst.tz)
+            cur = nxt + datetime.timedelta(days=1)
+        after = sum(1 for (s, _d) in G._BAR_CACHE if s == sym)
+        print(f"[{i:>3}/{len(bad)}] {sym:<8} {before:>4} -> {after:>4} days "
+              f"({after - before:+d})")
+        if i % 10 == 0:
+            G.save_bar_cache()
+
+    G.save_bar_cache()
+    rep2 = coverage_report(raw)
+    print("\nafter repair:")
+    print(rep2.groupby("verdict").size().to_string())
+    still = rep2[rep2.verdict.isin(["TRUNCATED", "no_bars"])]
+    if len(still):
+        print(f"\n{len(still)} contracts still short after a chunked re-fetch "
+              f"(the vendor has no more):")
+        print(still[["symbol", "want_first", "got_first", "days", "rows",
+                     "head_bars_per_day"]].to_string(index=False))
+    return rep2
+
+
 # ---------------------------------------------------------------- dv01
 def stage_dv01(raw: pd.DataFrame) -> None:
     """A UST price cannot be turned into basis points without its CTD's DV01.
@@ -188,10 +292,57 @@ def stage_dv01(raw: pd.DataFrame) -> None:
         print(f"FAILED {len(failed)}: {list(failed)[:10]}")
 
 
+# ---------------------------------------------------------------- mdp cache
+#: The pure-MDP notebook prices only USD STIR, so only these need priming.
+#: Rank 3 is the configured leg; the others let the notebook price the strip
+#: through the same provider without a second prime.
+MDP_RANKS = (1, 2, 3, 4)
+
+
+def stage_mdpcache(raw: pd.DataFrame, *, impacts: Sequence[str] = ("high", "medium")) -> None:
+    """Write warmed Barchart bars into STIRFutureMDP's OWN cache.
+
+    Barchart's fetcher cannot run inside a Jupyter kernel, so a notebook that
+    drives the real MDP has to read from a cache somebody else filled. This
+    fills it -- with genuine bars, under the MDP's own key contract, for exactly
+    the minutes the backtest will request and no others.
+    """
+    import econ_fade_mdp as M
+
+    n0 = G.load_bar_cache()
+    print(f"bar cache: {n0:,} symbol-days")
+
+    import econ_fade_config as C
+
+    # The wrong-day placebo asks for DIFFERENT minutes, so it needs priming too.
+    # Without this it would come back with an empty book and read as "the
+    # placebo makes nothing" -- the most flattering possible failure.
+    books = {"real": raw, "placebo +1bd": C.placebo_shift(raw, days=1)}
+
+    mdp = M.open_mdp(armed=True)          # priming writes, it does not fetch
+    total = {"written": 0, "no_bar": 0, "no_day": 0}
+    for label, src in books.items():
+        for rank in MDP_RANKS:
+            cfg = M.merge_config({"instrument": {"root": "USD_STIR", "rank": rank},
+                                  "events": {"impacts": list(impacts)}})
+            wanted = M.wanted_timestamps(src, cfg)
+            print(f"{label}, rank {rank}: {len(wanted):,} (symbol, minute) requests")
+            st = M.prime_mdp_cache(mdp, wanted)
+            for k, v in st.items():
+                total[k] += v
+            print(f"  written {st['written']:,}   no bar that minute {st['no_bar']:,}   "
+                  f"no bars that day {st['no_day']:,}")
+
+    print(f"\nTOTAL written {total['written']:,}   "
+          f"minute had no print {total['no_bar']:,}   day not warmed {total['no_day']:,}")
+    print("A minute with no print stays a miss on purpose: the notebook's gate is")
+    print("'can the MDP price this', so an unprinted minute becomes a counted exclusion.")
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--stage", default="all",
-                    choices=["events", "bars", "dv01", "all", "symbols"])
+                    choices=["events", "bars", "verify", "dv01", "mdpcache", "all", "symbols"])
     ap.add_argument("--start", default=DEFAULT_START)
     ap.add_argument("--end", default=DEFAULT_END)
     ap.add_argument("--only", nargs="*", default=[],
@@ -210,8 +361,14 @@ def main() -> None:
 
     if a.stage in ("bars", "all"):
         stage_bars(raw, only=a.only, force=a.force)
+    if a.stage in ("verify", "all"):
+        rep = stage_verify(raw)
+        rep.to_csv(G.CACHE / "coverage_report.csv", index=False)
+        print(f"wrote {G.CACHE / 'coverage_report.csv'}")
     if a.stage in ("dv01", "all"):
         stage_dv01(raw)
+    if a.stage in ("mdpcache", "all"):
+        stage_mdpcache(raw)
 
 
 if __name__ == "__main__":

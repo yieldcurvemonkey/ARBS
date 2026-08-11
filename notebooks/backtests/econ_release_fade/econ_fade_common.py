@@ -565,14 +565,32 @@ def _contract_dates(symbol: str) -> Tuple[datetime.date, datetime.date]:
     return to_d(e), to_d(m)
 
 
+#: The notional ``measure_ust_dv01`` prices at. ``RLUSTFuturePricer`` defaults to
+#: 100,000 face, so a measured DV01 is dollars per bp on 100,000 -- and one price
+#: POINT on 100,000 face is $1,000, whatever the listed contract's real size.
+_DV01_MEASURED_AT_NOTIONAL = 100_000.0
+_DOLLARS_PER_POINT_AT_MEASURED_NOTIONAL = _DV01_MEASURED_AT_NOTIONAL / 100.0   # $1,000
+
+
 def px_per_bp(inst: Instrument, symbol: str) -> float:
-    """Price points that a ONE basis point change of rate is worth.
+    """Price POINTS that a one basis point change of rate is worth.
 
     STIR is exact -- the contract is quoted as ``100 - rate``, so 0.01 of price
-    is one basis point by construction. A UST future needs its CTD: the DV01
-    table is measured once per contract with ``RLUSTFuturePricer.pv01`` because
-    a 10-year future's DV01 ran $58.08 in 2022 and $69.05 in 2019, so a
-    per-ROOT constant would be wrong by a fifth at the ends of the sample.
+    is one basis point by construction.
+
+    A UST future needs its CTD, and the conversion has a trap in it. The DV01
+    table is measured with ``RLUSTFuturePricer`` at its default 100,000 face, so
+    it must be divided by the $1,000-per-point that 100,000 face implies -- NOT
+    by the tick spec's dollars-per-point, which encodes the contract's REAL
+    size. Those agree for FV/TY/US (100,000 face, $1,000 a point) and disagree
+    for TU by a factor of two: ZT is a 200,000-face contract, so its tick spec
+    gives $2,000 a point. Dividing a 100,000-face DV01 by $2,000 halves
+    ``px_per_bp`` and therefore DOUBLES every ``move_bp`` and every ``pnl_bp``
+    on the 2-year -- which would also have doubled it through the
+    ``min_move_bp`` filter and changed which trades were taken.
+
+    Per CONTRACT and not per root, because a 10-year future's DV01 ran $58.08 in
+    2022 and $69.05 in 2019.
     """
     if inst.family == "stir":
         return 0.01
@@ -583,14 +601,21 @@ def px_per_bp(inst: Instrument, symbol: str) -> float:
             f"`python econ_fade_prewarm.py --stage dv01` -- a UST price cannot be "
             f"turned into basis points without it."
         )
-    tick_size, tick_value = UST_TICKS[inst.root]
-    return dv01 / (tick_value / tick_size)
+    return dv01 / _DOLLARS_PER_POINT_AT_MEASURED_NOTIONAL
 
 
 def dv01_usd(inst: Instrument, symbol: str, contracts: int) -> float:
+    """Dollars per bp for the position AS THE HANDLER PRICES IT.
+
+    The handler's P&L is ``(dprice / tick_size) * tick_value * contracts``, so
+    the dollars-per-bp that makes ``realized_pnl / dv01_usd`` come out in basis
+    points is ``px_per_bp * (tick_value / tick_size) * contracts`` -- the real
+    contract's DV01, which for TU is twice the 100,000-face number in the table.
+    """
     if inst.family == "stir":
         return contracts * stir_pv01(symbol)
-    return contracts * _DV01[symbol]
+    tick_size, tick_value = UST_TICKS[inst.root]
+    return contracts * px_per_bp(inst, symbol) * (tick_value / tick_size)
 
 
 def measure_ust_dv01(symbols: Sequence[str], *, mdp=None,
@@ -989,9 +1014,31 @@ def apply_signal(events: pd.DataFrame, sig: dict, sizing: str, contracts: int,
     return df.reset_index(drop=True), dict(reasons)
 
 
+def assert_entry_is_after_the_signal(timing: dict) -> None:
+    """Refuse a config that fills at the price its signal was read from.
+
+    With ``entry_offset_min == measure_end_min`` the entry price IS the second
+    measurement price, identically. The side is then ``sign(m1 - m0)``, so any
+    bid-ask bounce that made ``m1`` print low both sets the side to LONG and
+    supplies the low entry. Half the tick noise is recovered by construction and
+    the book shows a fade edge that is a property of the quote, not the market.
+
+    This is not a hypothetical: it is what an entry/exit sweep starting at
+    ``entry = 1`` with the default one-minute measurement window selects, and
+    that cell would have reported the contaminated row as its best.
+    """
+    e, m = int(timing["entry_offset_min"]), int(timing["measure_end_min"])
+    if e <= m:
+        raise ValueError(
+            f"entry_offset_min={e} is not after measure_end_min={m}: the trade would fill "
+            f"at the exact price the signal was read from, which manufactures a fade edge "
+            f"out of bid-ask bounce. Use entry_offset_min >= {m + 1}.")
+
+
 def build_book(cfg: dict, raw: pd.DataFrame) -> "Book":
     """RAW calendar -> the exact set of trades one config would have taken."""
     cfg = _merge_config(cfg)
+    assert_entry_is_after_the_signal(cfg["timing"])
     ispec = cfg["instrument"]
     inst = INSTRUMENTS[ispec["root"]]
     rank = int(ispec.get("rank", 1))
