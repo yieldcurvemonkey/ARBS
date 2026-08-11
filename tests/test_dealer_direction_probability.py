@@ -98,13 +98,21 @@ def test_p_at_the_bias_is_exactly_a_coin_flip():
 #    answer is set here, before it is trusted on data whose answer is not.
 # --------------------------------------------------------------------------
 
-@pytest.mark.parametrize(("b0", "h", "s"), [
-    (0.00, 0.25, 0.15),      # well separated, unbiased -- the good case
-    (-0.48, 0.25, 0.20),     # the measured Barchart bias, F-20
-    (0.02, 0.15, 0.30),      # s > h: overlapping, the hard case
-    (0.10, 0.60, 0.10),      # very wide spread, tiny mid error
+@pytest.mark.parametrize(("b0", "h", "s", "expect_flags"), [
+    (0.00, 0.25, 0.15, (prob.FIT_OK,)),      # well separated, unbiased
+    (-0.48, 0.25, 0.20, (prob.FIT_OK,)),     # the measured Barchart bias, F-20
+    # ``h/s = 0.5`` is the regime MIN_BUCKET_N's docstring says is not
+    # identifiable, and the fit says so too -- even at n = 20,000. Its
+    # ``se_log_tau`` measures 0.1547 against a MAX_SE_LOG_TAU of 0.1520, i.e. a
+    # p90 ``tau`` error of ``1.6449 * 0.1547 = 0.254``, just outside
+    # TAU_RECOVERY_TOLERANCE. The point estimates below are still good; the
+    # flag records that this sample cannot promise they are. Under the old
+    # gate's wrong quantile (0.25/1.2816 = 0.1951) this cell came back OK,
+    # which is the over-confidence that correction removes.
+    (0.02, 0.15, 0.30, (prob.FIT_IMPRECISE,)),
+    (0.10, 0.60, 0.10, (prob.FIT_OK,)),      # very wide spread, tiny mid error
 ])
-def test_recovers_known_parameters(b0, h, s):
+def test_recovers_known_parameters(b0, h, s, expect_flags):
     x, _ = prob.simulate(b0=b0, h=h, s=s, n=20_000, rng=_rng(11))
     fit = prob.fit_mixture(x, bucket="SIM")
 
@@ -112,7 +120,7 @@ def test_recovers_known_parameters(b0, h, s):
     assert fit.h == pytest.approx(h, rel=0.10)
     assert fit.s == pytest.approx(s, rel=0.10)
     assert fit.tau == pytest.approx(s * s / (2 * h), rel=0.20)
-    assert fit.flags == (prob.FIT_OK,), fit.flags
+    assert fit.flags == expect_flags, fit.flags
 
 
 def test_the_moment_check_is_a_coin_flip_at_realistic_overlap():
@@ -246,8 +254,14 @@ def test_a_flagged_bucket_falls_back_to_a_robust_scale():
     stops the fallback and the check drifting apart.
     """
     rng = _rng(17)
-    x = np.concatenate([prob.simulate(b0=0.0, h=0.2, s=0.08, n=6000, rng=rng)[0],
-                        rng.standard_t(2.0, 1500) * 2.0])
+    # b0 is the measured Barchart bias, not zero, and that is load-bearing: on
+    # a centred sample ``b0 = median(kept)`` and ``b0 = 0`` are the same number,
+    # so a fallback that dropped the bias entirely would pass unnoticed. It is
+    # the bias term that positions the whole logistic, and this is the code
+    # path 100% of real buckets take (every bucket in scratch/prob05_real.py is
+    # ROBUST_SCALE_FALLBACK), so it is pinned here rather than assumed.
+    x = np.concatenate([prob.simulate(b0=-0.48, h=0.2, s=0.08, n=6000, rng=rng)[0],
+                        -0.48 + rng.standard_t(2.0, 1500) * 2.0])
     stats = frozen_conf.TickStats(median_tick_bps=0.40, disp_jns=None,
                                   futures_tick_bps=0.25)
     fit = prob.fit_mixture(x, bucket="FB", tick_stats=stats)
@@ -258,8 +272,21 @@ def test_a_flagged_bucket_falls_back_to_a_robust_scale():
     # h came from the tick, not from the contaminated sample
     assert fit.h == pytest.approx(0.20)
     kept = x[prob.trim_mask(x)]
-    assert fit.s == pytest.approx(
-        math.sqrt(prob.trimmed_dispersion(kept) ** 2 - 0.20 ** 2), rel=1e-9)
+    # Spelled out rather than called through ``prob.trimmed_dispersion``: using
+    # the module's own helper on both sides makes any change to it cancel, and
+    # the frozen predecessor's documented bug is exactly such a change (an RMS
+    # about ZERO instead of about the mean). This is the one test placed to see
+    # that, so it does the arithmetic itself.
+    rms_about_mean = math.sqrt(float(np.mean((kept - kept.mean()) ** 2)))
+    assert fit.s == pytest.approx(math.sqrt(rms_about_mean ** 2 - 0.20 ** 2),
+                                  rel=1e-9)
+    assert fit.b0 == pytest.approx(float(np.median(kept)), rel=1e-12)
+    # ...and that median really is the bias and not zero. It sits 0.022 off the
+    # true -0.48 because the t(2) contamination is not symmetric about it,
+    # which is the trim-stability question the module docstring discusses --
+    # what matters here is that a fallback which dropped b0 entirely would be
+    # 0.48 out, i.e. p inverted for every deviation in (-0.48, 0).
+    assert fit.b0 == pytest.approx(-0.48, abs=0.05)
 
 
 def test_a_fallback_with_no_outside_estimate_does_not_claim_one():
@@ -363,6 +390,55 @@ def test_crosscheck_flags_a_fit_that_disagrees_with_the_tick():
     assert disagree.h_independent == pytest.approx(2.0)
 
 
+def test_the_crosscheck_checks_s_as_well_as_h():
+    """The other half of the second opinion, which no other test reaches.
+
+    Every other fixture in this file builds ``TickStats(disp_jns=None)``, so
+    ``sigma_mid`` returns its own fallback, ``s_independent`` is None and the
+    ``s`` arm of ``agrees`` is never evaluated. Here ``disp_jns`` is set, and
+    the disagreeing case is constructed so that ``h`` agrees EXACTLY -- the
+    verdict can then only have come from ``s``.
+    """
+    h, s = 0.25, 0.15
+    fit = prob.MixtureFit("S", 5000, 5000, 0.0, h, s, 0.0)
+
+    consistent = prob.tick_stats_implied_by(fit, futures_tick_bps=0.25)
+    xc = prob.crosscheck_against_tick(fit, consistent)
+    assert xc.s_independent == pytest.approx(s, rel=1e-9)
+    assert xc.ratio_h == pytest.approx(1.0) and xc.ratio_s == pytest.approx(1.0)
+    assert xc.agrees
+
+    # same tick, so ratio_h stays exactly 1; a dispersion implying 3x the mid
+    # error must still be a disagreement
+    wide = frozen_conf.TickStats(median_tick_bps=2 * h,
+                                 disp_jns=math.sqrt(h ** 2 + (3 * s) ** 2),
+                                 futures_tick_bps=0.25)
+    xc_bad = prob.crosscheck_against_tick(fit, wide)
+    assert xc_bad.ratio_h == pytest.approx(1.0)
+    assert xc_bad.ratio_s == pytest.approx(1 / 3, rel=1e-6)
+    assert not xc_bad.agrees
+
+
+def test_fit_mixture_raises_the_crosscheck_flag_when_a_good_mle_contradicts_the_tick():
+    """The flag has to be emitted by the FIT, not only by the checker.
+
+    ``test_crosscheck_flags_a_fit_that_disagrees_with_the_tick`` calls
+    :func:`prob.crosscheck_against_tick` directly, so the branch in
+    :func:`prob.fit_mixture` that turns a disagreement into a flag was
+    unexercised: replacing its condition with ``if False`` changed nothing.
+    Here the MLE is reliable (well separated, n = 4,000) so the comparison is a
+    statement, and the tick is 4.4x the fitted half-spread.
+    """
+    x, _ = prob.simulate(b0=0.0, h=0.45, s=0.18, n=4000, rng=_rng(311))
+    stats = frozen_conf.TickStats(median_tick_bps=4.0, disp_jns=None,
+                                  futures_tick_bps=0.25)
+    fit = prob.fit_mixture(x, bucket="XC", tick_stats=stats)
+
+    assert fit.mle_reliable and fit.crosscheck.comparable
+    assert prob.FIT_ANCHORED_H not in fit.flags       # the MLE was kept, as it should be
+    assert prob.FIT_CROSSCHECK_DISAGREES in fit.flags
+
+
 def test_the_crosscheck_is_not_a_tautology_on_an_anchored_fit():
     """An anchored fit's ``h`` came FROM the tick. Comparing them checks nothing.
 
@@ -424,7 +500,123 @@ def test_pooling_walks_the_ladder_and_always_terminates_at_a_global_fit():
     exotic = prob.BucketKey("D2D", "FED_FUNDS", "FLY", "FOMC", "20Y-30Y")
     fit = cal.for_key(exotic)
     assert fit is not None
-    assert fit.bucket == prob.GLOBAL_BUCKET or prob.FIT_POOLED in fit.flags
+    # The donor is named, not just the fact of pooling: ``FIT_POOLED`` is set on
+    # every non-exact match, so asserting the flag alone would pass identically
+    # if the ladder had walked to some wrong bucket. Nothing in this frame
+    # matches any level of the exotic key, so the answer has to be the global.
+    assert prob.FIT_POOLED in fit.flags
+    assert fit.pooled_from == prob.GLOBAL_BUCKET
+    assert fit.bucket == exotic.label()          # asked-for bucket, donor named
+
+
+def _parent_child_frame(n_child, *, h_parent=0.20, h_child=0.07, s=0.20,
+                        seed=5):
+    """A thin child bucket whose PARENT has a three-times wider half-spread.
+
+    :data:`prob.DEFAULT_POOLING_ORDER` drops ``venue_class`` first, so the
+    leaf's immediate parent is the venue-dropped bucket -- here dominated by
+    the 6,000-row D2C population, whose ``h`` is 0.20 while the child's is
+    0.07. This is the shape the tape has: one venue trades a name in size and
+    another trades it thinly, and their spreads are not the same number.
+    """
+    import pandas as pd
+    rng = _rng(seed)
+    x, _ = prob.simulate(b0=0.0, h=h_parent, s=s, n=6000, rng=rng)
+    parts = [prob.frame(x, venue="D2C", rate_index="SOFR",
+                        structure="OUTRIGHT", tenor_band="30Y+")]
+    x, _ = prob.simulate(b0=0.0, h=h_child, s=s, n=n_child, rng=rng)
+    parts.append(prob.frame(x, venue="D2D", rate_index="SOFR",
+                            structure="OUTRIGHT", tenor_band="30Y+"))
+    return pd.concat(parts, ignore_index=True)
+
+
+_VENUE_DROPPED = ("rate_index=SOFR|structure=OUTRIGHT|"
+                  "special_tenor_type=STANDARD|tenor_band=30Y+")
+
+
+def test_a_parents_h_is_not_an_outside_estimate_and_cannot_buy_the_lower_floor():
+    """A parent's sample CONTAINS the child's rows. It is not a second opinion.
+
+    Measured (``scratch/pf02_calfit.py``), child ``h = 0.07``, ``s = 0.20``, so
+    ``tau_true = 0.286`` bp, parent ``h = 0.20``:
+
+        anchored on the parent   tau = 0.0058   -- 49x too NARROW, and admitted
+        no anchor                tau = 2.07     -- 7x too wide, and pooled away
+
+    The narrow one is the dangerous one: at ``tau = 0.0058`` a deviation of
+    0.02 bp -- noise on any curve -- is called at ``p = 0.97``. And it was
+    admitted to the ladder because ``H_FROM_INDEPENDENT_ESTIMATE`` halved the
+    sample floor, on the strength of an ``h`` that is not independent of
+    anything. The anchored floor was measured with an EXACT anchor
+    (``scratch/prob06_anchored.py``); this one is 2.9x too high.
+
+    Borrowing from the parent is what the pooling ladder is for, and it borrows
+    the parent's whole coherent ``(b0, h, s)`` rather than splicing the
+    parent's ``h`` onto the child's second moment.
+    """
+    cal = prob.Calibration.fit(_parent_child_frame(450))
+    key = prob.BucketKey("D2D", "SOFR", "OUTRIGHT", "STANDARD", "30Y+")
+    leaf = cal.fits[key.label()]
+    tau_true = 0.20 ** 2 / (2 * 0.07)
+
+    assert prob.FIT_ANCHORED_H not in leaf.flags
+    assert leaf.min_n_required == prob.MIN_BUCKET_N
+    # unidentifiable and unanchored -> the no-information limit, which is WIDE
+    assert leaf.tau > tau_true
+
+    served = cal.for_key(key)
+    assert prob.FIT_POOLED in served.flags
+    assert served.pooled_from == _VENUE_DROPPED
+    assert abs(prob.p_customer_paid(0.02, served) - 0.5) < 0.10
+
+
+def test_a_large_unidentifiable_bucket_keeps_a_wide_tau_not_its_parents_spread():
+    """The half a sample floor cannot fix, and the reason the route had to go.
+
+    Above the floor the bucket is served on its own, so the floor never gets a
+    say: with the parent's ``h`` spliced in, this bucket reported
+    ``tau = 0.041`` against a true 0.286 (7x narrow) at n = 2,000 and 0.016
+    (18x) at n = 6,000 -- admitted at every size. Flagging the provenance
+    honestly would not have changed one of those numbers.
+    """
+    cal = prob.Calibration.fit(_parent_child_frame(2000))
+    key = prob.BucketKey("D2D", "SOFR", "OUTRIGHT", "STANDARD", "30Y+")
+    served = cal.for_key(key)
+    tau_true = 0.20 ** 2 / (2 * 0.07)
+
+    assert served.pooled_from is None            # big enough to answer for itself
+    assert prob.FIT_ANCHORED_H not in served.flags
+    assert prob.FIT_UNSEPARATED in served.flags
+    assert served.tau > tau_true
+    assert abs(prob.p_customer_paid(0.02, served) - 0.5) < 0.10
+
+
+def test_pooling_reads_the_trimmed_count_because_the_trim_removes_real_mass():
+    """``n`` and ``n_trimmed`` differ by the legacy tape's 1e4 bp pathologies.
+
+    A bucket with 900 prints of which 200 are unusable has 700 usable ones, and
+    700 is below the floor. Reading the raw ``n`` admits it; reading
+    ``n_trimmed`` pools it. That is the difference between a fit on 700
+    observations being published and the parent's fit on 6,900 being published.
+    """
+    import pandas as pd
+    rng = _rng(97)
+    x, _ = prob.simulate(b0=0.0, h=0.25, s=0.18, n=6000, rng=rng)
+    parts = [prob.frame(x, venue="D2C", rate_index="SOFR",
+                        structure="OUTRIGHT", tenor_band="30Y+")]
+    core, _ = prob.simulate(b0=0.0, h=0.25, s=0.18, n=700, rng=rng)
+    junk = rng.normal(0.0, 1.0, 200) * 1e4
+    parts.append(prob.frame(np.concatenate([core, junk]), venue="D2D",
+                            rate_index="SOFR", structure="OUTRIGHT",
+                            tenor_band="30Y+"))
+    cal = prob.Calibration.fit(pd.concat(parts, ignore_index=True))
+
+    key = prob.BucketKey("D2D", "SOFR", "OUTRIGHT", "STANDARD", "30Y+")
+    leaf = cal.fits[key.label()]
+    assert leaf.n >= prob.MIN_BUCKET_N > leaf.n_trimmed      # the whole point
+    served = cal.for_key(key)
+    assert prob.FIT_POOLED in served.flags
+    assert served.pooled_from == _VENUE_DROPPED
 
 
 def test_min_bucket_n_is_the_measured_floor_not_a_round_number():
@@ -432,6 +624,34 @@ def test_min_bucket_n_is_the_measured_floor_not_a_round_number():
     assert prob.MIN_BUCKET_N == prob.MEASURED_MIN_BUCKET_N
     assert prob.MIN_BUCKET_N_ANCHORED == prob.MEASURED_MIN_BUCKET_N_ANCHORED
     assert prob.MIN_BUCKET_N > prob.MIN_BUCKET_N_ANCHORED > 100
+
+
+def test_the_tau_se_gate_is_the_p90_of_an_ABSOLUTE_error():
+    """``MAX_SE_LOG_TAU`` converts a tolerance into a standard error, once.
+
+    :data:`prob.TAU_RECOVERY_TOLERANCE` is a p90 of ``|tau_hat/tau - 1|`` --
+    :func:`prob.tau_recovery_error` takes ``abs`` before the quantile. The p90
+    of ``|N(0, s)|`` is ``1.6449 s`` (it is the 95th percentile of the signed
+    error), not ``1.2816 s``. Using the signed quantile leaves the gate 28.3%
+    too loose, so fits whose own likelihood cannot hold ``tau`` inside the
+    stated tolerance keep it anyway -- in exactly the marginal band the rule
+    exists to police.
+    """
+    from scipy import stats as sps
+
+    z = np.abs(_rng(0).standard_normal(2_000_000))
+    p90_abs = float(np.quantile(z, 0.90))
+    assert p90_abs == pytest.approx(1.6449, abs=0.005)          # measured
+    assert p90_abs == pytest.approx(float(sps.norm.ppf(0.95)), abs=0.005)
+    assert float(sps.norm.ppf(0.90)) == pytest.approx(1.2816, abs=0.001)
+
+    assert prob.MAX_SE_LOG_TAU == pytest.approx(
+        prob.TAU_RECOVERY_TOLERANCE / p90_abs, rel=2e-3)
+    assert prob.MAX_SE_LOG_TAU < prob.TAU_RECOVERY_TOLERANCE / 1.2816
+    # stated the other way round: a fit sitting exactly on the gate is exactly
+    # at the tolerance, which is what "expressed as an SE" has to mean
+    assert p90_abs * prob.MAX_SE_LOG_TAU == pytest.approx(
+        prob.TAU_RECOVERY_TOLERANCE, rel=2e-3)
 
 
 def _refusal_and_error(n, h, s, reps=200, seed=909):
@@ -510,10 +730,22 @@ def test_the_anchored_floor_reproduces_too_and_is_genuinely_lower():
         errs.append(abs(fit.tau / (s * s / (2 * h)) - 1.0))
 
     assert float(np.quantile(errs, 0.90)) <= prob.TAU_RECOVERY_TOLERANCE
-    # It reaches for the anchor on about half the draws here and hardly ever at
-    # h/s >= 1.5, which is the routing behaving as designed rather than the
-    # anchor being used unconditionally.
-    assert 0.3 < anchored / 150 < 0.9
+    # The anchor is the majority route at h/s = 1 and vanishes as the sample
+    # starts to identify itself -- that is the routing behaving as designed
+    # rather than the anchor being used unconditionally. Measured under the
+    # corrected MAX_SE_LOG_TAU (scratch/pf06_routing.py): 0.887 here, 0.117 at
+    # h/s = 1.25, 0.000 at 1.5 and above. The old band (0.3-0.9) was measured
+    # under the gate's wrong quantile, where the anchor was reached for on 0.433
+    # of these draws; the pair of clauses below says more than that band did,
+    # because the second one is what "not unconditional" actually means.
+    assert anchored / 150 > 0.5
+    rng = _rng(217)
+    still = sum(prob.FIT_ANCHORED_H in prob.fit_mixture(
+        prob.simulate(b0=0.0, h=1.5 * s, s=s, n=n, rng=rng)[0], bucket="B",
+        tick_stats=frozen_conf.TickStats(median_tick_bps=3 * s, disp_jns=None,
+                                         futures_tick_bps=0.25)).flags
+        for _ in range(60))
+    assert still / 60 <= 0.05, still
 
     # ...and the same bucket without an anchor refuses on an eighth of draws
     refusal, _ = _refusal_and_error(n, h, s)
@@ -548,6 +780,21 @@ def test_tenor_bands_partition_the_line_with_no_gap_and_no_overlap():
                           (2.0, "1Y-2Y"), (2.0001, "2Y-3Y"),
                           (45.0, prob.TENOR_BAND_LABELS[-1])]:
         assert prob.tenor_band(years) == expect
+
+
+def test_a_tenor_that_is_not_a_tenor_is_refused_rather_than_put_in_the_first_band():
+    """Bands are ``(lo, hi]`` and the first one is ``(0, 1M]``, so zero is not in it.
+
+    A zero or negative tenor is a broken or mis-signed term, and calibrating it
+    against the 0-1M half-spread -- the tightest bucket on the grid, so the
+    most confident ``tau`` -- turns a data defect into a confident call. It has
+    to land in a bucket that has no fit, which is what UNKNOWN is for.
+    """
+    for bad in (0.0, -0.0, -3.0, -1e-9):
+        assert prob.tenor_band(bad) == "UNKNOWN", bad
+    assert prob.tenor_band(float("nan")) == "UNKNOWN"
+    assert prob.tenor_band(None) == "UNKNOWN"
+    assert prob.tenor_band(1e-9) == prob.TENOR_BAND_LABELS[0]   # still a tenor
 
 
 # --------------------------------------------------------------------------
@@ -669,6 +916,116 @@ def test_the_two_stability_nulls_agree():
     assert not prob.tau_stability(stationary, method="bootstrap",
                                   reps=60, seed=5).moves
     assert prob.tau_stability(shifted, method="bootstrap", reps=60, seed=5).moves
+
+
+def test_a_failed_bootstrap_replicate_is_not_counted_as_evidence_for_the_null():
+    """A replicate that could not be fitted is not a draw from the null.
+
+    ``_bootstrap_q_pvalue`` skipped such replicates but kept ``reps`` in the
+    denominator, so each one scored silently as "not worse than observed" and
+    pushed the p-value down -- towards rejecting the null that ``tau`` is
+    constant. Stated as an invariant that does not depend on the sampling: with
+    ``q_obs = 0`` every valid replicate is at least as extreme, so the p-value
+    is 1.0 by construction. Measured before the fix at these settings: 0.122.
+    """
+    fits = [prob.MixtureFit(f"P{i}", 60, 60, 0.0, 0.18, 0.18, 0.0,
+                            se_log_tau=0.2) for i in range(3)]
+    p, used = prob._bootstrap_q_pvalue(fits, 0.0, reps=40, seed=3)
+    assert p == pytest.approx(1.0)
+    # ...and replicates really did fail here, or the invariant pins nothing
+    assert 0 < used < 40, used
+
+
+def test_the_bootstrap_refuses_to_rule_when_every_replicate_failed():
+    """Zero valid replicates is not a null distribution.
+
+    With one observation per period every replicate fit is degenerate and has
+    no standard error, so all of them were skipped -- and the old arithmetic
+    returned ``1/(reps+1) = 0.024``, i.e. ``TauStability(moves=True)``, a
+    verdict manufactured out of total estimation failure. This is the check
+    that is supposed to be independent of ``se_log_tau``, so failing towards
+    "the SE-based test was right" is the worst available direction.
+    """
+    fits = [prob.MixtureFit(f"P{i}", 1, 1, 0.0, 0.18, 0.18, 0.0,
+                            se_log_tau=0.2) for i in range(3)]
+    with pytest.raises(ValueError, match="replicate"):
+        prob._bootstrap_q_pvalue(fits, 1e9, reps=20, seed=1)
+
+
+def test_tau_stability_says_how_many_fits_it_threw_away():
+    """Every fallback fit has ``se_log_tau = None``, and on real data that is all
+    of them. Dropping them is right -- weighting by a fabricated SE would not
+    be -- but reporting ``k`` without the count makes a test on 2 of 30 periods
+    look like a test on the series."""
+    with_se = [prob.MixtureFit(f"S{i}", 800, 800, 0.0, 0.25, 0.18, 0.0,
+                               se_log_tau=0.08) for i in range(4)]
+    without = [prob.MixtureFit(f"N{i}", 800, 800, 0.0, 0.25, 0.18 + 0.01 * i,
+                               0.0) for i in range(6)]
+    st = prob.tau_stability(with_se + without)
+    assert st.k == 4
+    assert st.n_dropped == 6
+
+
+def test_report_of_a_calibration_with_no_fits_still_has_its_columns():
+    """A column-less frame raises far from the cause, in the caller's code."""
+    rep = prob.Calibration({}).report()
+    assert rep.empty
+    for col in ("bucket", "n", "n_trimmed", "b0_bps", "tau_bps", "fit_flags"):
+        assert col in rep.columns
+
+
+def test_the_report_lets_a_reader_reconstruct_tau_from_the_columns_beside_it():
+    """``separation`` is ``h/s`` on the RAW ``h``; ``tau`` uses ``h`` floored at
+    ``MIN_SEPARATION * s``. On a floored bucket the two disagree by the floor,
+    so a reviewer reading ``separation = 0.014`` next to ``tau = 4.879`` cannot
+    get from one to the other. The floored ``h`` is reported too."""
+    rng = _rng(29)
+    x = rng.normal(0.0, 0.2, 3000)                # no spread at all -> floored
+    cal = prob.Calibration({"FLAT": prob.fit_mixture(x, bucket="FLAT", min_n=0)})
+    row = cal.report().iloc[0]
+    assert row["h_used_bps"] >= row["h_bps"]
+    assert row["tau_bps"] == pytest.approx(
+        row["s_bps"] ** 2 / (2 * row["h_used_bps"]))
+
+
+def test_a_rolling_calibration_that_classifies_nothing_raises():
+    """An empty dict is indistinguishable from success at the call site.
+
+    Measured: 200 rows over 10 days returns ``{}`` with no exception, no
+    warning and no flag, and a caller that iterates it classifies nothing and
+    reports a clean run.
+    """
+    import pandas as pd
+    rng = _rng(51)
+    frames = []
+    for d in pd.bdate_range("2026-01-01", periods=10):
+        x, _ = prob.simulate(b0=0.0, h=0.25, s=0.18, n=20, rng=rng)
+        f = prob.frame(x, venue="D2C", rate_index="SOFR",
+                       structure="OUTRIGHT", tenor_band="2Y-3Y")
+        f["as_of_date"] = d.date()
+        frames.append(f)
+    with pytest.raises(ValueError, match="no calibration window"):
+        prob.rolling_calibrations(pd.concat(frames, ignore_index=True),
+                                  window_days=5, min_gap_days=1)
+
+
+def test_a_rolling_calibration_says_how_many_days_it_could_not_calibrate():
+    """The partial case. The first days of any window have nothing behind them,
+    which is expected -- but the count has to be visible, because the same
+    silence covers a genuine hole in the middle of the sample."""
+    import pandas as pd
+    rng = _rng(53)
+    frames = []
+    for d in pd.bdate_range("2026-01-01", periods=40):
+        x, _ = prob.simulate(b0=0.0, h=0.25, s=0.18, n=300, rng=rng)
+        f = prob.frame(x, venue="D2C", rate_index="SOFR",
+                       structure="OUTRIGHT", tenor_band="2Y-3Y")
+        f["as_of_date"] = d.date()
+        frames.append(f)
+    df = pd.concat(frames, ignore_index=True)
+    with pytest.warns(UserWarning, match=r"skipped \d+ of \d+"):
+        windows = prob.rolling_calibrations(df, window_days=10, min_gap_days=1)
+    assert 0 < len(windows) < 40
 
 
 def test_the_rolling_window_never_looks_ahead():
@@ -852,6 +1209,22 @@ def test_fit_rejects_an_empty_or_all_nan_sample():
         prob.fit_mixture(np.array([]), bucket="E")
     with pytest.raises(ValueError):
         prob.fit_mixture(np.array([np.nan, np.nan]), bucket="N")
+
+
+def test_the_likelihood_is_invariant_under_the_label_swap_the_em_relies_on():
+    """``h -> -h`` with the components swapped is the same model.
+
+    This is the algebra behind ``MixtureFit``'s "h is positive by construction"
+    and behind the sign branch in ``_em``: the data cannot choose the sign, the
+    economics does. If the likelihood were NOT invariant, ``h > 0`` would be a
+    constraint the fit is paying for rather than a labelling convention, and
+    the EM's negation would be changing the answer instead of naming it.
+    """
+    x, _ = prob.simulate(b0=0.07, h=0.30, s=0.20, n=4000, rng=_rng(5))
+    for b0, h, s in [(0.07, 0.30, 0.20), (-0.4, 0.12, 0.31), (0.0, 0.6, 0.1)]:
+        assert prob.loglik(x, b0, h, s) == pytest.approx(
+            prob.loglik(x, b0, -h, s), rel=1e-12)
+    assert prob.fit_mixture(x, bucket="SW").h > 0
 
 
 def test_the_em_reaches_at_least_the_moment_solutions_likelihood():

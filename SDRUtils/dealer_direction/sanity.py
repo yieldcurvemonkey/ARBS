@@ -51,8 +51,19 @@ orders of magnitude below the sentinel.
 WHAT THE RATIO CODES DO AND DO NOT MEAN
 ---------------------------------------
 
-Only ``NOTIONAL_SENTINEL`` and ``RATE_SENTINEL`` are corruption in the strict
-sense. The ratio codes say "this row's risk does not follow from its own
+``NOTIONAL_SENTINEL`` is corruption in the strict sense. ``RATE_SENTINEL`` is
+**not, for 96% of what it flags**, and the name oversells it: measured on v3,
+``|fixed_rate| >= 1.0`` hits 1,469 rows, of which only **54** are the spec's
+``9.9`` on a sentinel notional. The other **1,415 carry a perfectly ordinary
+notional** and their rates pile up between 3.0 and 7.0 (412 in [3,4), 415 in
+[6,7)) against a flow median of 0.038 — that is a *percent-scaled rate in a
+fraction column*, a unit error, not a not-available placeholder. Excluding them
+is right either way, because pricing 3.5 as 350% is the same wrong answer. The
+code is kept under its existing name so the exclusion vocabulary does not move
+under the modules that already report it, but read it as "the rate is not on
+the fraction scale", and do not add its 1,415 to a sentinel count.
+
+The ratio codes say "this row's risk does not follow from its own
 notional and tenor" — exclude it from an aggregate, but do not read them as
 proof of which field is wrong. The ``RISK_VS_NOTIONAL_LOW`` band (4,875 flow
 legs, 0.21%) is still unexplained: the obvious candidate, an amortising
@@ -75,9 +86,11 @@ __all__ = [
     "BAND_LO",
     "FLAT_YIELD",
     "NOTIONAL_ABS_MAX",
+    "NOTIONAL_LEGIT_MAX",
     "RATE_ABS_MAX",
     "REASONS",
     "RISK_QUANTUM",
+    "RISK_ZERO_SLACK",
     "annuity",
     "expected_dv01",
     "flag_risk_implausible",
@@ -88,16 +101,58 @@ __all__ = [
 
 # --- calibration constants, every one of them measured ---------------------
 #: Flat continuous yield behind the annuity approximation. Deliberately crude:
-#: this is a plausibility scale, not a pricer.
+#: this is a plausibility scale, not a pricer -- but it is *calibrated*, not
+#: arbitrary, and the calibration is what makes the ratio flat instead of
+#: sliding with tenor. Measured on v3 (2026-08-11), spot-start flow legs with a
+#: non-null non-zero ``risk``: the median of ``|risk| / notional * 1e4`` -- the
+#: tape's own implied annuity factor, computed without touching
+#: :func:`expected_dv01` -- against ``annuity(t)`` at this yield:
+#:
+#: =====  =======  ==========  ==========  ==========
+#: tenor  n legs   A measured  A at 0.04   A at 0.02
+#: =====  =======  ==========  ==========  ==========
+#: 1y      47,677       0.976       0.980       0.990
+#: 5y     231,264       4.545       4.534       4.761
+#: 10y    278,287       8.317       8.246       9.068
+#: 20y     33,120      13.800      13.773      16.493
+#: 30y    125,033      17.571      17.476      22.570
+#: 40y      1,558      20.160      19.958      27.546
+#: =====  =======  ==========  ==========  ==========
+#:
+#: 0.04 holds to 1.0% at every tenor out to 40y. Halving it to 0.02 is 8% out
+#: at 10y and 38% out at 40y, and the error is one-signed, so it would bias the
+#: long end of every band test in the same direction. A test pins the table.
 FLAT_YIELD = 0.04
 #: Largest legitimate notional measured on the tape is 2.86e10 (a $28.6bn 1.5y
 #: print on 2024-03-11); the sentinel is 1e20. Anywhere in between works.
 NOTIONAL_ABS_MAX = 1e11
+#: The measurement :data:`NOTIONAL_ABS_MAX` rests on, kept separately so the
+#: validator can select the known-broken population by *that* bound rather than
+#: by the constant it is supposed to be testing.
+NOTIONAL_LEGIT_MAX = 2.86e10
 #: ``fixed_rate`` is a decimal fraction (flow median 0.0394). 1,465 flow legs
 #: carry |rate| >= 1.0, ranging -40.05 to 785.5.
 RATE_ABS_MAX = 1.0
 #: Every non-null ``risk`` on the tape is an integer multiple of 100.
 RISK_QUANTUM = 100.0
+#: How many quanta of expected DV01 a ``risk = 0`` leg must carry before the
+#: zero is read as wrong rather than as rounding.
+#:
+#: **This is the one constant here chosen as a margin rather than fitted, and
+#: the margin is now measured.** The quantiser rounds to nearest, not down: the
+#: two adjacent populations meet at half a quantum -- ``risk = 0`` flow legs
+#: have expected DV01 p95 = 47.4 and ``risk = 100`` legs have p1 = 49.9 -- so
+#: ``0.5 * RISK_QUANTUM`` is the arithmetic boundary. 3.0 sits 6x above it,
+#: deliberately, because :func:`expected_dv01` is a flat-yield proxy and a leg
+#: should only trip this gate when its DV01 is unambiguously material against
+#: the quantum rather than merely on the wrong side of a rounding step.
+#:
+#: Measured consequence on v3 (2026-08-11): of 16,605 ``risk = 0`` flow legs
+#: with testable inputs, **0 are flagged** and the largest expected DV01 among
+#: them is 260. Tightening to the arithmetic boundary would flag 269 (1.62%).
+#: So the gate is dormant on today's tape by a factor of six, and that is a
+#: judgement about proxy error, not a data finding.
+RISK_ZERO_SLACK = 3.0
 BAND_LO = 0.5
 BAND_HI = 2.0
 
@@ -155,6 +210,7 @@ def flag_risk_implausible(
     band_lo: float = BAND_LO,
     band_hi: float = BAND_HI,
     quantum: float = RISK_QUANTUM,
+    zero_slack: float = RISK_ZERO_SLACK,
 ) -> pd.DataFrame:
     """Per-reason booleans aligned to ``df.index``.
 
@@ -191,7 +247,7 @@ def flag_risk_implausible(
     out["NOTIONAL_SENTINEL"] = np.isfinite(n) & (np.abs(n) >= NOTIONAL_ABS_MAX)
     out["RATE_SENTINEL"] = np.isfinite(rate) & (np.abs(rate) >= RATE_ABS_MAX)
     out["RISK_NULL"] = risk_null
-    out["RISK_ZERO_MATERIAL"] = testable & (r == 0.0) & (exp > 3.0 * quantum)
+    out["RISK_ZERO_MATERIAL"] = testable & (r == 0.0) & (exp > zero_slack * quantum)
     out["RISK_VS_NOTIONAL_LOW"] = (
         testable & (r != 0.0) & (np.abs(r) < band_lo * exp - quantum)
     )
@@ -340,6 +396,10 @@ def _validate() -> int:
     print("=" * 72)
     print("3. SCALAR vs VECTORISED (one predicate, two call shapes)")
     print("=" * 72)
+    # Against `got`, NOT against `want`: comparing both shapes to the expected
+    # list re-runs section 1 through a second entry point and calls it an
+    # agreement check. The two shapes can only be shown to agree by comparing
+    # them to each other, which also stays meaningful if section 1 is failing.
     scalar = [
         implausibility_reason(
             notional=r.notional, tenor_years=r.tenor_years,
@@ -347,8 +407,8 @@ def _validate() -> int:
             fixed_rate=r.fixed_rate, risk=r.risk) or ""
         for r in syn.itertuples()
     ]
-    n_bad = sum(a != b for a, b in zip(scalar, want))
-    print(f"  {len(syn) - n_bad}/{len(syn)} agree")
+    n_bad = sum(a != b for a, b in zip(scalar, got["reason"]))
+    print(f"  {len(syn) - n_bad}/{len(syn)} agree with the vectorised call")
     if n_bad:
         failures.append(f"scalar/vector disagree on {n_bad} synthetic case(s)")
 
@@ -374,11 +434,26 @@ def _validate() -> int:
 
     print()
     print("=" * 72)
-    print("4a. KNOWN-BROKEN: the 55 rows with notional = 1e20")
+    print("4a. KNOWN-BROKEN: the rows above the largest legitimate notional")
     print("=" * 72)
-    bad = q(f"SELECT {COLS} FROM {LEGS_TABLE} WHERE notional >= 1e11")
+    # Selected by NOTIONAL_LEGIT_MAX, not by NOTIONAL_ABS_MAX. Querying
+    # `notional >= NOTIONAL_ABS_MAX` and then asserting the predicate flags
+    # 100% of what came back cannot fail: the predicate's own rule IS that
+    # bound. Selecting on the measurement the bound was derived from makes the
+    # same assertion a real test of the headroom between them.
+    bad = q(f"SELECT {COLS} FROM {LEGS_TABLE} "
+            f"WHERE notional > {NOTIONAL_LEGIT_MAX}")
     fb = flag_risk_implausible(bad)
+    in_gap = bad["notional"].astype(float) < NOTIONAL_ABS_MAX
     print(f"  rows                     : {len(bad)}")
+    print(f"  in the headroom gap      : {int(in_gap.sum())}"
+          f"   (legit max {NOTIONAL_LEGIT_MAX:.3g} .. bound {NOTIONAL_ABS_MAX:.3g})")
+    if int(in_gap.sum()):
+        failures.append(
+            f"headroom: {int(in_gap.sum())} row(s) sit above NOTIONAL_LEGIT_MAX "
+            f"({NOTIONAL_LEGIT_MAX:.3g}) but below NOTIONAL_ABS_MAX "
+            f"({NOTIONAL_ABS_MAX:.3g}). This is the constant drifting, not the "
+            "predicate breaking -- re-measure the largest legitimate notional")
     print(f"  flagged implausible      : {int(fb['is_risk_implausible'].sum())} "
           f"({fb['is_risk_implausible'].mean():.1%})")
     print(f"  NOTIONAL_SENTINEL        : {int(fb['NOTIONAL_SENTINEL'].sum())}")
@@ -398,6 +473,10 @@ def _validate() -> int:
     if not fb["is_risk_implausible"].all():
         failures.append(
             f"known-broken: {int((~fb['is_risk_implausible']).sum())} of {len(bad)} not flagged")
+    if int(fb["NOTIONAL_SENTINEL"].sum()) != int((~in_gap).sum()):
+        failures.append(
+            "known-broken: NOTIONAL_SENTINEL does not cover exactly the rows "
+            "at or above NOTIONAL_ABS_MAX")
     if int(fb.loc[missed_by_tape, "is_risk_implausible"].sum()) != int(missed_by_tape.sum()):
         failures.append("known-broken: a row the tape missed is also missed here")
 

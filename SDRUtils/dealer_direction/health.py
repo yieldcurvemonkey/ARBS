@@ -227,8 +227,11 @@ def d2d_recycling_kappa(d2c, d2d, *, horizon_days: int = 1,
 
     # forward window: the D2D flow strictly AFTER each date, so the pairing can
     # never read a print against itself
+    # k is capped at n: a horizon longer than the history has no forward window
+    # at all, and the uncapped slice pair broadcasts (n-k,) against () instead
+    # of reporting NO_DATA
     fwd = np.zeros(n, dtype="float64")
-    for k in range(1, int(horizon_days) + 1):
+    for k in range(1, min(int(horizon_days), n) + 1):
         fwd[: n - k] += y[k:]
     sy = np.sign(fwd) * int(expected_alignment)
     sx = np.sign(x)
@@ -279,6 +282,16 @@ def d2d_recycling_kappa(d2c, d2d, *, horizon_days: int = 1,
     )
 
 
+#: The rolling frame's shape, defined once. Two paths return an empty version
+#: of it -- no data at all, and a history shorter than one window -- and they
+#: used to disagree: the second returned a one-column frame, so a monitor loop
+#: starting on a short history died on ``out["kappa"]`` instead of reading
+#: NO_DATA off an empty series.
+ROLLING_KAPPA_COLUMNS = ["window_end", "kappa", "hit_rate",
+                         "placebo_kappa_p95", "n_pairs", "reference_kappa",
+                         "status"]
+
+
 def rolling_recycling_kappa(d2c, d2d, *, window_days: int = 90,
                             step_days: int = 5, degradation_ratio: float = 0.5,
                             min_pairs: int = 30, **kwargs) -> pd.DataFrame:
@@ -288,10 +301,10 @@ def rolling_recycling_kappa(d2c, d2d, *, window_days: int = 90,
     exists to say. F-20's mid bias was not present on day one and absent on day
     two; a curve source degrades, and the question is always "is it worse than
     it was", which needs a series. Ninety days is the default window because it
-    is roughly a quarter and because 90 days is also the reach-back that holds
-    90.7% of the flippable lineage population -- long enough for a stable kappa,
-    short enough that a month of degradation is visible in it rather than
-    averaged away.
+    is roughly a quarter and because a ~90-day reach-back holds 90% of the
+    flippable lineage population (LEDGER F-18: 90.7% is the figure for 63 days,
+    95.6% for 252) -- long enough for a stable kappa, short enough that a month
+    of degradation is visible in it rather than averaged away.
 
     Two ways a window fails, and both mean the same thing:
 
@@ -306,11 +319,16 @@ def rolling_recycling_kappa(d2c, d2d, *, window_days: int = 90,
     window being judged, so a slow decay cannot drag its own benchmark down with
     it.
     """
-    x, y = _align_daily(d2c, d2d)
+    if "n_bootstrap" in kwargs:
+        raise TypeError(
+            "rolling_recycling_kappa does not bootstrap per window -- one CI "
+            "per step over a whole sample is the cost this function exists to "
+            "avoid. Read the interval off d2d_recycling_kappa on the window "
+            "you care about."
+        )
+    x, _y = _align_daily(d2c, d2d)
     if len(x) == 0:
-        return pd.DataFrame(columns=["window_end", "kappa", "hit_rate",
-                                     "placebo_kappa_p95", "n_pairs",
-                                     "reference_kappa", "status"])
+        return pd.DataFrame(columns=ROLLING_KAPPA_COLUMNS)
     a = pd.Series(d2c).copy()
     a.index = pd.to_datetime(pd.Index(a.index))
     b = pd.Series(d2d).copy()
@@ -335,8 +353,9 @@ def rolling_recycling_kappa(d2c, d2d, *, window_days: int = 90,
 
     out = pd.DataFrame(rows)
     if out.empty:
-        out["reference_kappa"] = []
-        return out
+        # a history shorter than one window closes none, and it must return the
+        # same shape the no-data path above does
+        return pd.DataFrame(columns=ROLLING_KAPPA_COLUMNS)
     # trailing median of EARLIER windows only -- a benchmark that includes the
     # window it judges cannot detect a slow decay
     out["reference_kappa"] = out["kappa"].shift(1).expanding().median()
@@ -344,8 +363,7 @@ def rolling_recycling_kappa(d2c, d2d, *, window_days: int = 90,
                 & (out["reference_kappa"] > 0)
                 & (out["kappa"] < degradation_ratio * out["reference_kappa"]))
     out.loc[degraded, "status"] = ALARM
-    return out[["window_end", "kappa", "hit_rate", "placebo_kappa_p95",
-                "n_pairs", "reference_kappa", "status"]]
+    return out[ROLLING_KAPPA_COLUMNS]
 
 
 def _align_daily(a, b):
@@ -366,10 +384,21 @@ def _align_daily(a, b):
 def _kappa(sx, sy):
     """Cohen's kappa on two sign vectors, plus the raw and chance rates.
 
-    A degenerate marginal -- one series entirely one sign -- makes the chance
-    rate 1 and kappa ``0/0``. That is exactly the F-20 state, so it resolves to
-    **0.0 with a flag**, never to 1.0 and never to NaN: a series that says the
-    same thing about every print carries no information about any of them.
+    **A degenerate marginal is ONE series entirely one sign, and it does not
+    need the chance rate to reach 1.** ``chance = px*py + (1-px)(1-py)``, so
+    ``px = 1`` against a balanced ``py = 0.5`` gives ``chance = 0.5``, not 1 --
+    and a flag conditioned on ``chance == 1`` therefore only ever fires when
+    *both* series are one-sided the *same* way. That was the bug: the F-20
+    state where the mid has collapsed one population is exactly the
+    single-degenerate case, and it was being scored as an ordinary reading.
+
+    Kappa is nevertheless **exactly 0** whenever either marginal is degenerate
+    (with ``sx = +1`` throughout, ``hit = py`` and ``chance = py``), so the
+    arithmetic never needed protecting -- the *flag* did, because
+    :func:`d2d_recycling_kappa` promotes it straight to ALARM and 0.0 alone
+    only clears the 0.10 warn floor when the placebo is unavailable. A series
+    that says the same thing about every print carries no information about any
+    of them: 0.0 with the flag, never 1.0 and never NaN.
     """
     n = len(sx)
     if n == 0:
@@ -378,9 +407,10 @@ def _kappa(sx, sy):
     px = float((sx > 0).mean())
     py = float((sy > 0).mean())
     chance = px * py + (1.0 - px) * (1.0 - py)
+    degenerate = px in (0.0, 1.0) or py in (0.0, 1.0)
     if chance >= 1.0 - 1e-12:
         return 0.0, hit, chance, True
-    return float((hit - chance) / (1.0 - chance)), hit, chance, False
+    return float((hit - chance) / (1.0 - chance)), hit, chance, degenerate
 
 
 def _placebo_p95(sx, sy, shift_days: int, max_placebo: int):
@@ -513,25 +543,47 @@ def imputed_notional_fraction(prov, *, weights=None) -> Metric:
     but 15.4% of the DV01 imputed (10.6-16.0% across six threshold choices), and
     a model-free cross-check brackets it at 12.8-13.9%. Weighting by DV01 is
     also what would catch a cap-schedule break, since the caps are a function of
-    tenor and every band moved by 1.7-3.6x when the schedule was re-set on
-    2024-10-07 -- to the day, simultaneously across all nine bands.
+    tenor and every band moved by 1.55-3.57x when the schedule was re-set on
+    2024-10-07 -- to the day, simultaneously across all nine bands (F-7's table:
+    the 6m-1y band moved least, $1.1bn to $1.7bn, and 46d-3m most, $2.1bn to
+    $7.5bn).
     """
     prov = pd.DataFrame(prov)
     n = len(prov)
-    if n == 0 or "notional_imputed" not in prov.columns:
-        flags = pd.Series(dtype=bool)
-    else:
-        flags = prov["notional_imputed"].fillna(False).astype(bool)
-    value = float(flags.mean()) if n else float("nan")
+    if n == 0:
+        return Metric(name="imputed_notional_fraction", value=float("nan"), n=0,
+                      threshold=_imputed_threshold(), status=NO_DATA,
+                      detail={"dv01_share": None})
+    # the flag column named rather than `.get`-ed: renamed, this metric reports
+    # a clean 0.00 forever, and with weights it raises an IndexError on a
+    # zero-length boolean mask instead
+    _require(prov, ["notional_imputed"], "imputed_notional_fraction")
+    flags = prov["notional_imputed"].fillna(False).astype(bool)
+    value = float(flags.mean())
 
     dv01_share = None
-    if weights is not None and n:
+    if weights is not None:
+        _require(prov, ["unit_key"], "imputed_notional_fraction(weights=...)")
         w = prov["unit_key"].map(pd.Series(weights, dtype="float64")).abs()
         total = float(w.sum())
         if total > 0:
             dv01_share = float(w[flags.to_numpy()].sum() / total)
 
-    threshold = Threshold(
+    threshold = _imputed_threshold()
+    status = threshold.evaluate(value)
+    if dv01_share is not None:
+        if dv01_share >= IMPUTED_DV01_ALARM:
+            status = _worse(status, ALARM)
+        elif dv01_share >= IMPUTED_DV01_WARN:
+            status = _worse(status, WARN)
+
+    return Metric(name="imputed_notional_fraction", value=value, n=n,
+                  threshold=threshold, status=status,
+                  detail={"dv01_share": dv01_share})
+
+
+def _imputed_threshold() -> Threshold:
+    return Threshold(
         name="imputed_notional_fraction", direction="above",
         warn=0.06, alarm=0.10,
         rationale=(
@@ -548,16 +600,6 @@ def imputed_notional_fraction(prov, *, weights=None) -> Metric:
                 "(their notional IS the cap) before trusting the imputation; a "
                 "stale schedule silently under-imputes the whole long end."),
     )
-    status = threshold.evaluate(value)
-    if dv01_share is not None:
-        if dv01_share >= IMPUTED_DV01_ALARM:
-            status = _worse(status, ALARM)
-        elif dv01_share >= IMPUTED_DV01_WARN:
-            status = _worse(status, WARN)
-
-    return Metric(name="imputed_notional_fraction", value=value, n=n,
-                  threshold=threshold, status=status,
-                  detail={"dv01_share": dv01_share})
 
 
 # --------------------------------------------------------------------------
@@ -565,10 +607,11 @@ def imputed_notional_fraction(prov, *, weights=None) -> Metric:
 # --------------------------------------------------------------------------
 
 _MAX_LAG_RE = re.compile(r"max_lag=(?P<v>unbounded|[0-9.]+)s?")
+_ALLOW_FUTURE_RE = re.compile(r"allow_future=(?P<v>\w+)")
 
 
 def is_overnight_hole(policy) -> bool:
-    """Was this row answered under the out-of-session branch?
+    """Was this row answered by something other than the strict in-session branch?
 
     **Read the policy, not the served timestamp.** The snapshot that answers a
     00:30 ET request is by construction *in* session -- it is the last one Citi
@@ -576,9 +619,31 @@ def is_overnight_hole(policy) -> bool:
     stamp is in session answers a different question and always says yes. The
     policy string is the record of which branch fired, which is the question.
 
-    A policy that is present but has no parseable bound, or an unbounded one,
-    counts as the hole: it is not the strict in-session branch, and the legacy
-    nearest-either-way rule is worse than the 2h reach-back, not better.
+    **The test is affirmative on two fields, not one.** Reading ``max_lag``
+    alone -- the obvious spelling -- lets ``allow_future=True`` through as long
+    as it carries a bound, and a 60-second window *centred* on the print is not
+    the 60-second window *before* it. That is the circularity this whole
+    exercise exists to prevent, and it is the property behind the 1.09% of legs
+    the shipped nearest-either-direction default serves from the future. So the
+    row is the strict branch only if the policy states ``allow_future=False``
+    **and** a parseable bound no looser than ``IN_SESSION_MAX_LAG``.
+
+    ``method`` is deliberately **not** part of the test, and that is a measured
+    call rather than an omission: ``select_snapshot`` picks the globally
+    nearest stamp under ``method=nearest`` and then *rejects* it outright when
+    it is from the future and ``allow_future=False`` -- it does not fall back
+    to the nearest backward stamp. So a row that was actually **served** under
+    ``nearest`` with no-future and a 60s bound came from a backward stamp
+    within the bound, which is the strict outcome; flagging it here would put a
+    fresh row in the stale population and take it out of the
+    ``in_session_lag_over_policy`` check. Verified directly against
+    ``select_snapshot`` on a two-stamp window (30s before / 5s after the
+    request): ``asof`` serves the backward stamp, ``nearest`` with
+    ``allow_future=False`` returns ``None``.
+
+    An unparseable or unbounded policy counts as the hole: it is not the strict
+    in-session branch, and the legacy nearest-either-way rule is worse than the
+    2h reach-back, not better.
 
     An **absent** policy raises instead. ``provenance.build`` writes
     ``snapshot_policy=""`` for a unit that never priced, and answering "hole"
@@ -594,7 +659,11 @@ def is_overnight_hole(policy) -> bool:
             "curve at all; filter to the served population (health.served_mask) "
             "before asking which branch answered it"
         )
-    m = _MAX_LAG_RE.search(str(policy))
+    text = str(policy)
+    future = _ALLOW_FUTURE_RE.search(text)
+    if future is None or future.group("v").lower() != "false":
+        return True
+    m = _MAX_LAG_RE.search(text)
     if m is None or m.group("v") == "unbounded":
         return True
     return float(m.group("v")) > snapshot.IN_SESSION_MAX_LAG.total_seconds()
@@ -686,9 +755,10 @@ def _overnight_threshold() -> Threshold:
             "overnight tail rests on curves up to two hours stale -- priced at "
             "0.24-0.29bp median error and <=1.43bp max, against prints that "
             "land one to two bp from mid -- and a jump means either the session "
-            "model broke (128 truncated SOFR days exist, and the night after "
-            "one is when the 2h bound stops a 4.5h reach-back) or the pricing "
-            "clock is landing rows in the hole that should not be there."),
+            "model broke (161 truncated-end SOFR days and 141 Fed Funds days "
+            "exist in the minute store, and the night after one is when the 2h "
+            "bound stops a 4.5h reach-back) or the pricing clock is landing "
+            "rows in the hole that should not be there."),
         action=("Check the session model against citi_session.publishes for the "
                 "dates involved before using the day; exclude the hole "
                 "population and re-read the ladder to size the damage."),
@@ -775,8 +845,10 @@ def snapshot_lag_metrics(prov) -> list:
         name="overnight_hole_lag_p90_seconds", direction="above",
         warn=3600.0, alarm=snapshot.OUT_OF_SESSION_MAX_LAG.total_seconds(),
         rationale=(
-            "The 2h reach-back is the bound, not the expectation: the observed "
-            "hour-00 population is served at 1-97 minutes. A p90 pressed "
+            "The 2h reach-back is the bound, not the expectation: the seven "
+            "hour-00 prints in the session-branch probe were all served at "
+            "1-97 minutes (7/7 -- a sample, not a population, so treat the "
+            "range as indicative and the bound as the contract). A p90 pressed "
             "against the bound means the feed stopped earlier than the session "
             "model thinks, and the rows at the bound are the ones carrying the "
             "1.43bp tail."),
@@ -891,31 +963,35 @@ def pricing_success_by_stratum(legs) -> pd.DataFrame:
 
     **BASIS inverts.** It is ``EXCL_UNSUPPORTED_INDEX`` by construction, so a
     *successfully priced* BASIS leg is the alarm: the exclusion leaked and a
-    single-curve mid is being taken on a two-index trade.
+    single-curve mid is being taken on a two-index trade. Which is why the
+    index column and ``is_capped`` are ``_require``-d rather than ``.get``-ed:
+    a ``.get`` default makes those two strata empty, empty reports ``NO_DATA``,
+    and a renamed column then disables an **inverted** alarm permanently and
+    quietly. There is no reading of that frame in which the BASIS row's absence
+    looks wrong.
     """
     legs = pd.DataFrame(legs)
     cols = ["stratum", "n", "n_priced", "success_rate", "warn", "alarm",
             "status", "rationale"]
     if legs.empty:
         return pd.DataFrame(columns=cols)
-    _require(legs, ["as_of_date", "effective_date", "priced"],
+    _require(legs, ["as_of_date", "effective_date", "priced", "is_capped"],
              "pricing_success_by_stratum")
+    index_col = ("rate_index" if "rate_index" in legs.columns
+                 else "rate_index_clean")
+    _require(legs, [index_col], "pricing_success_by_stratum (the BASIS alarm)")
 
     as_of = pd.to_datetime(legs["as_of_date"])
     eff = pd.to_datetime(legs["effective_date"])
     horizon = as_of + pd.Timedelta(days=SPOT_WINDOW_DAYS)
-    index_col = ("rate_index" if "rate_index" in legs.columns
-                 else "rate_index_clean")
     priced = legs["priced"].fillna(False).astype(bool)
 
     masks = {
         "SPOT": (eff >= as_of) & (eff <= horizon),
         "FORWARD_START": eff > horizon,
         "PAST_START": eff < as_of,
-        "CAPPED": legs.get("is_capped", pd.Series(False, index=legs.index))
-                      .fillna(False).astype(bool),
-        "BASIS": legs.get(index_col, pd.Series("", index=legs.index))
-                     .astype(str).str.upper().eq("BASIS"),
+        "CAPPED": legs["is_capped"].fillna(False).astype(bool),
+        "BASIS": legs[index_col].astype(str).str.upper().eq("BASIS"),
     }
 
     rows = []

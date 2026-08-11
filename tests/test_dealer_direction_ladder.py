@@ -106,6 +106,15 @@ def _krd(unit_key, *, bucket="5Y", value=1000.0, space="IRS_KRD") -> pd.DataFram
     )
 
 
+def _no_ladder_exclusions() -> pd.DataFrame:
+    """The explicit statement that the ladder threw nothing out.
+
+    `coverage_table` has no default for this, because a caller who never makes
+    the statement gets the ladder's own exclusions read as successes.
+    """
+    return pd.DataFrame(columns=ladder.EXCLUSION_COLUMNS)
+
+
 # ==========================================================================
 # 1. ladder.py -- the weight is 2p-1, not p
 # ==========================================================================
@@ -250,6 +259,10 @@ def test_d2c_d2d_and_venue_unknown_are_three_series_not_two():
     cust = ladder.customer_flow(agg)
     assert list(cust["venue_class"].unique()) == [T.VENUE_D2C]
     assert cust["delta_dv01"].sum() == pytest.approx(1000.0)
+    # ...and so is the recycling view, which is what health reads: swap the two
+    # and the classifier is validated against the population it produced
+    inter = ladder.interdealer_flow(agg)
+    assert list(inter["venue_class"].unique()) == [T.VENUE_D2D]
 
 
 def test_lifecycle_prints_are_their_own_series():
@@ -279,6 +292,35 @@ def test_the_aggregation_key_is_complete():
     assert list(ladder.LADDER_KEYS) == [
         "bucket_space", "bucket_key", "visibility_date", "venue_class", "series"
     ]
+
+
+def test_the_gross_pond_is_not_recoverable_from_the_net():
+    """A net of zero over $40mm gross and a net of zero over nothing are
+    different statements about the day, and only the second one means the
+    ladder is empty. So `abs_dv01` sums `|dv01_if_received|`, never
+    `|delta_dv01|`, and `mean_abs_signed_weight` says how much of that pond
+    survived the confidence weighting.
+    """
+    units, calls = [_unit("A"), _unit("B")], [_call("A", 0.5), _call("B", 0.5)]
+    rows, _ = ladder.unit_ladder_rows(units, calls,
+                                      pd.concat([_krd("A"), _krd("B")]))
+    agg = ladder.aggregate(rows)
+    assert agg["delta_dv01"].iloc[0] == pytest.approx(0.0)
+    assert agg["abs_dv01"].iloc[0] == pytest.approx(2000.0)          # not 0.0
+    assert agg["mean_abs_signed_weight"].iloc[0] == pytest.approx(0.0)  # not 1.0
+
+
+def test_a_duplicated_ladder_key_is_refused_rather_than_summed():
+    """Two rows on one key means the aggregation key is incomplete, and the
+    cell a consumer reads is then the sum of two series it must never pool."""
+    cell = {"bucket_space": "IRS_KRD", "bucket_key": "5Y",
+            "visibility_date": datetime.date(2026, 6, 10),
+            "venue_class": T.VENUE_D2C, "series": ladder.SERIES_FLOW,
+            "delta_dv01": 100.0, "abs_dv01": 100.0, "n_units": 1,
+            "mean_abs_signed_weight": 1.0}
+    ladder.assert_series_disjoint(pd.DataFrame([cell]))
+    with pytest.raises(ValueError, match="duplicated ladder key"):
+        ladder.assert_series_disjoint(pd.DataFrame([cell, cell]))
 
 
 def test_per_unit_rows_survive_the_aggregation():
@@ -374,6 +416,76 @@ def test_a_call_with_no_probability_and_no_reason_is_a_loud_error():
         ladder.unit_ladder_rows([_unit("U")], [bad], _krd("U"))
 
 
+def test_a_unit_with_no_direction_call_is_a_hole_in_the_accounting():
+    """The complement of the above, and the reason every unit must carry a call.
+
+    A unit skipped here reaches neither returned frame, so it is not in the
+    ladder and not in any reason's DV01 share either -- and the coverage table
+    still sums to 1 over what is left.
+    """
+    with pytest.raises(ValueError, match="no direction call"):
+        ladder.unit_ladder_rows([_unit("A"), _unit("B")], [_call("A", 0.9)],
+                                pd.concat([_krd("A"), _krd("B")]))
+
+
+def test_a_risk_row_for_a_unit_that_is_not_in_the_population_is_loud():
+    """The reverse lookup nothing performs.
+
+    The loop runs over `units` and reads the risk frame, so a risk row whose
+    unit is not in the population is read by nobody -- it lands in neither
+    `rows` nor `excluded`, and the pair stops being a partition for exactly the
+    class of row that carries unattributed DV01.
+    """
+    ghost = pd.concat([_krd("A"), _krd("GHOST", value=9_000_000.0)])
+    with pytest.raises(ValueError, match=r"not in `units`"):
+        ladder.unit_ladder_rows([_unit("A")], [_call("A", 0.9)], ghost)
+
+
+def test_the_same_unit_passed_twice_is_loud_rather_than_double_counted():
+    """`n_units` is a nunique, so it reports 1 while carrying two units' risk.
+
+    The one column a reader would check to spot the duplication is the column
+    that conceals it, which is why this is refused where the duplication is
+    still visible rather than caught in the aggregate.
+    """
+    with pytest.raises(ValueError, match="appears twice"):
+        ladder.unit_ladder_rows([_unit("A"), _unit("A")],
+                                [_call("A", 0.9)], _krd("A"))
+
+
+def test_the_weight_guard_is_live_on_both_calls_it_names():
+    """`_assert_weight_agrees_with_side` is the module's central sign guard.
+
+    The `_call` fixture derives `signed_weight` and `dealer_sign` from `p`
+    consistently, so nothing else in this file can construct the two producer
+    errors it exists to catch -- and both are silent downstream, because the
+    ladder only ever reads the weight.
+    """
+    p_as_weight = T.DirectionCall(
+        unit_key="U", rule=conv.RULE_RATE, deviation_bps=1.6, p=0.9,
+        signed_weight=0.9, dealer_sign=1)          # 2p-1 would be 0.8
+    with pytest.raises(ValueError, match="is not 2p-1"):
+        ladder.unit_ladder_rows([_unit("U")], [p_as_weight], _krd("U"))
+
+    flipped_side = T.DirectionCall(
+        unit_key="U", rule=conv.RULE_RATE, deviation_bps=1.6, p=0.9,
+        signed_weight=0.8, dealer_sign=-1)         # p > 0.5 is dealer_sign +1
+    with pytest.raises(ValueError, match="disagree on the side"):
+        ladder.unit_ladder_rows([_unit("U")], [flipped_side], _krd("U"))
+
+
+def test_orienting_a_unit_with_no_call_is_refused_rather_than_zeroed():
+    """`dealer_sign = 0` is not a side. Multiplying by it is silent: the unit
+    keeps its row, its risk becomes 0.0, and it disappears into the ladder as a
+    cell that contributed nothing rather than as a unit with no call."""
+    no_call = pd.DataFrame(
+        [{"unit_key": "U", "bucket_space": "IRS_KRD", "bucket_key": "5Y",
+          "delta_dv01": -1000.0, "dealer_sign": 0}]
+    )
+    with pytest.raises(ValueError, match="dealer_sign=0"):
+        ladder.orient_to_received(no_call)
+
+
 def test_dead_zone_units_are_kept_by_default_and_droppable_on_request():
     """DESIGN 1.3: `2p-1` already makes a marginal call contribute ~nothing.
 
@@ -417,6 +529,12 @@ def test_a_mid_biased_off_venue_scores_zero_not_one():
     matched-sign hit rate goes UP as the mid degrades -- the monitor would
     read healthiest exactly when the ladder is worthless. Correcting for the
     marginals is what makes the statistic read the classifier instead.
+
+    **Two cases, because the limit does not reach the arithmetic.** With every
+    print one way `chance` is 1 and `_kappa` short-circuits, so that half pins
+    the degenerate flag and nothing else -- a `_kappa` that returned the raw
+    hit rate would still pass it. The second case is the same failure short of
+    the limit, 95/5 on both populations, and it goes through the formula.
     """
     n = 200
     d2c = _series([1.0] * n)                          # everything one way
@@ -426,6 +544,47 @@ def test_a_mid_biased_off_venue_scores_zero_not_one():
     assert res.kappa == pytest.approx(0.0)             # the honest one
     assert res.degenerate is True
     assert res.status == health.ALARM
+
+    rng = np.random.default_rng(29)
+    m = 4000
+    x = np.where(rng.random(m) < 0.95, 1.0, -1.0)
+    y = np.where(rng.random(m) < 0.95, 1.0, -1.0)      # independent of x
+    near = health.d2d_recycling_kappa(_series(x), _series(np.r_[0.0, y[:-1]]),
+                                      horizon_days=1, n_bootstrap=0)
+    assert near.hit_rate > 0.85                        # chance alone
+    assert abs(near.kappa) < 0.10                      # and no skill in it
+    assert near.degenerate is False
+
+
+def test_a_one_sided_classifier_alarms_even_with_no_placebo():
+    """One degenerate marginal is the F-20 state, and it does NOT make chance 1.
+
+    `chance = px*py + (1-px)(1-py)`, so `px=1` against a balanced `py=0.5`
+    gives 0.5 -- a flag conditioned on `chance == 1` only ever fires when both
+    series are one-sided the same way. Kappa is exactly 0 either way, but 0.0
+    alone only clears the 0.10 warn floor: on a series short enough that the
+    placebo cannot be built there is no alarm level left, so a classifier that
+    called every single day the same way reported WARN.
+    """
+    rng = np.random.default_rng(5)
+    n = 40
+    x = np.ones(n)                                     # every day the same call
+    y = np.where(rng.random(n) < 0.5, 1.0, -1.0)
+    res = health.d2d_recycling_kappa(_series(x), _series(np.r_[0.0, y[:-1]]),
+                                     horizon_days=1, n_bootstrap=0,
+                                     placebo_shift_days=20, min_pairs=10)
+    assert res.placebo_kappa_p95 is None               # no alarm level exists
+    assert res.chance_rate < 1.0                       # ...and chance is not 1
+    assert res.kappa == pytest.approx(0.0)
+    assert res.degenerate is True
+    assert res.status == health.ALARM
+
+
+def test_a_horizon_longer_than_the_history_is_no_data_not_a_crash():
+    """A monitor loop that starts on two days of history must report NO_DATA."""
+    res = health.d2d_recycling_kappa(_series([1.0, -1.0]), _series([1.0, -1.0]),
+                                     horizon_days=10, n_bootstrap=0)
+    assert res.status == health.NO_DATA
 
 
 def test_a_78_22_split_on_both_sides_is_not_skill():
@@ -511,6 +670,24 @@ def test_a_halving_against_its_own_reference_alarms_before_the_link_is_gone():
     assert last["status"] == health.ALARM
 
 
+def test_the_rolling_monitor_reports_no_data_rather_than_a_missing_column():
+    """A history shorter than one window closes no window at all.
+
+    Both empty paths have to return the documented frame: the no-data one did,
+    and this one returned a single `reference_kappa` column, so a monitor loop
+    starting on a short history died on `out["kappa"]` instead of reading an
+    empty series.
+    """
+    rng = np.random.default_rng(3)
+    signs = np.where(rng.random(30) < 0.5, 1.0, -1.0)
+    out = health.rolling_recycling_kappa(_series(signs),
+                                         _series(np.r_[0.0, signs[:-1]]),
+                                         window_days=90)
+    assert len(out) == 0
+    assert list(out.columns) == health.ROLLING_KAPPA_COLUMNS
+    assert list(out["kappa"]) == []
+
+
 def test_the_bootstrap_keeps_blocks_because_flow_is_autocorrelated():
     rng = np.random.default_rng(17)
     signs = np.where(rng.random(300) < 0.5, 1.0, -1.0)
@@ -551,9 +728,23 @@ def test_the_dead_zone_alarm_is_two_sided():
     many = [_call(f"U{i}", 0.9, dead_zone=True) for i in range(100)]
     assert health.dead_zone_fraction(many).status == health.ALARM
 
+    # ...and with a reference supplied, the absolute limit is still enforced on
+    # top of the band: 0.70 sits inside the 2x warn band around a 0.40
+    # reference, and past 60% the ladder is mostly zeros however good the mid is
+    mostly = [_call(f"U{i}", 0.9, dead_zone=(i < 70)) for i in range(100)]
+    m = health.dead_zone_fraction(mostly, reference=0.40)
+    assert m.value == pytest.approx(0.70)
+    assert m.threshold.evaluate(m.value) == health.OK  # the band alone clears it
+    assert m.status == health.ALARM                    # the absolute limit does not
+
 
 def test_imputed_notional_fraction_is_weighted_as_well_as_counted():
-    """F-7: 3.0% of legs are capped but 15.4% of the DV01 is imputed."""
+    """F-7: 3.0% of legs are capped but 15.4% of the DV01 is imputed.
+
+    Two separate escalations, so the weighted one has to be reachable when the
+    count is clean -- which is the case that matters, since the whole point of
+    F-7 is that the two numbers are five times apart.
+    """
     prov = pd.DataFrame({
         "unit_key": ["A", "B", "C", "D"],
         "notional_imputed": [True, False, False, False],
@@ -562,7 +753,38 @@ def test_imputed_notional_fraction_is_weighted_as_well_as_counted():
         [700.0, 100.0, 100.0, 100.0], index=["A", "B", "C", "D"]))
     assert m.value == pytest.approx(0.25)
     assert m.detail["dv01_share"] == pytest.approx(0.70)
-    assert m.status == health.ALARM                    # 70% of DV01 imputed
+    assert m.status == health.ALARM                    # the count alone, here
+
+    # 1 unit in 20 imputed -- below the 6% count warn -- carrying 35% of the
+    # DV01, which is above the 30% alarm. Only the weighted branch can fire.
+    keys = [f"U{i}" for i in range(20)]
+    lopsided = pd.DataFrame({"unit_key": keys,
+                             "notional_imputed": [True] + [False] * 19})
+    w = pd.Series([700.0] + [1300.0 / 19] * 19, index=keys)
+    m = health.imputed_notional_fraction(lopsided, weights=w)
+    assert m.value == pytest.approx(0.05)
+    assert m.threshold.evaluate(m.value) == health.OK  # the count is clean
+    assert m.detail["dv01_share"] == pytest.approx(0.35)
+    assert m.status == health.ALARM                    # the DV01 is not
+
+
+def test_a_renamed_imputed_flag_column_is_loud_not_no_data():
+    """`prov.get(col, default)` is the convenient spelling and the wrong one.
+
+    Renamed, the unweighted path reported a clean 0.00 forever and the weighted
+    path raised `IndexError: Boolean index has wrong length: 0 instead of 4`.
+    """
+    prov = pd.DataFrame({"unit_key": list("ABCD"),
+                         "notional_imputed_flag": [True, False, False, False]})
+    with pytest.raises(ValueError, match="notional_imputed"):
+        health.imputed_notional_fraction(prov)
+    with pytest.raises(ValueError, match="notional_imputed"):
+        health.imputed_notional_fraction(
+            prov, weights=pd.Series([700.0, 100.0, 100.0, 100.0],
+                                    index=list("ABCD")))
+    # an empty frame is still NO_DATA, not an error -- there is no column to
+    # be wrong about
+    assert health.imputed_notional_fraction(pd.DataFrame()).status == health.NO_DATA
 
 
 def test_the_overnight_hole_is_read_off_the_policy_that_fired():
@@ -581,6 +803,12 @@ def test_the_overnight_hole_is_read_off_the_policy_that_fired():
     assert m.value == pytest.approx(0.25)
     assert m.status == health.ALARM
     assert health.is_overnight_hole(hole) and not health.is_overnight_hole(in_sess)
+
+    # ...and the hole population's own staleness is measured against the 2h
+    # bound, which is the bound and not the expectation
+    lag = {x.name: x for x in health.snapshot_lag_metrics(prov)}
+    assert lag["overnight_hole_lag_p90_seconds"].value == pytest.approx(4200.0)
+    assert lag["overnight_hole_lag_p90_seconds"].status == health.WARN
 
 
 def test_a_unit_that_never_priced_is_not_an_overnight_hole():
@@ -619,6 +847,42 @@ def test_a_unit_that_never_priced_is_not_an_overnight_hole():
     dist = health.snapshot_lag_distribution(prov).set_index("population")
     assert dist.loc["UNSERVED", "n"] == 2              # visible, not omitted
     assert dist.loc["IN_SESSION", "n"] == 2
+
+
+def test_a_bounded_future_allowing_policy_is_not_the_strict_in_session_branch():
+    """A 60s window CENTRED on the print is not the 60s window BEFORE it.
+
+    A `max_lag`-only reading passed `allow_future=True` as long as it carried a
+    bound, so the guard could not fire for the property behind the 1.09% of
+    legs the shipped default serves from the future -- a curve that contains
+    the print the direction call is reading.
+
+    `method` is deliberately not in the test: `select_snapshot` rejects a
+    future pick outright under `allow_future=False` rather than falling back,
+    so a row actually served under `nearest` came from a backward stamp inside
+    the bound and IS the strict outcome.
+    """
+    assert health.is_overnight_hole(
+        "method=asof max_lag=60s allow_future=True on_miss=raise") is True
+    assert health.is_overnight_hole(
+        "method=nearest max_lag=unbounded allow_future=True on_miss=none") is True
+    assert health.is_overnight_hole(
+        "method=asof max_lag=60s allow_future=False on_miss=raise") is False
+    assert health.is_overnight_hole(
+        "method=nearest max_lag=60s allow_future=False on_miss=raise") is False
+
+
+def test_an_in_session_row_staler_than_its_own_policy_is_a_halt():
+    """A row that is in-session by policy and staler than the 60s bound means
+    the snapshot did not come from the branch the provenance says it did: 60s
+    admits 0.21bp of 5Y drift at p90, 30 minutes admits 1.07bp."""
+    in_sess = "method=asof max_lag=60s allow_future=False on_miss=raise"
+    prov = pd.DataFrame({"unit_key": ["A", "B"],
+                         "snapshot_policy": [in_sess] * 2,
+                         "snapshot_lag_seconds": [10.0, 900.0]})
+    metrics = {m.name: m for m in health.snapshot_lag_metrics(prov)}
+    assert metrics["in_session_lag_over_policy"].value == 1
+    assert metrics["in_session_lag_over_policy"].status == health.ALARM
 
 
 def test_a_curve_from_the_future_is_an_immediate_alarm():
@@ -693,9 +957,57 @@ def test_a_priced_basis_leg_is_the_alarm_not_the_success():
     assert out.loc["BASIS", "status"] == health.ALARM
 
 
+def test_a_renamed_index_column_cannot_silently_disable_the_basis_alarm():
+    """The BASIS row is an INVERTED alarm, so its silence looks like health.
+
+    `legs.get(col, default)` made the stratum empty, empty reports NO_DATA, and
+    a renamed column therefore disabled the one alarm here that fires on
+    success -- permanently, on a frame in which nothing looks wrong. CAPPED
+    goes the same way for the same spelling.
+    """
+    as_of = datetime.date(2026, 6, 10)
+    legs = pd.DataFrame({
+        "as_of_date": [as_of] * 2, "effective_date": [as_of] * 2,
+        "is_capped_flag": [False] * 2,             # was is_capped
+        "index_name": ["BASIS", "BASIS"],          # was rate_index
+        "priced": [True, True],
+    })
+    with pytest.raises(ValueError, match="is_capped"):
+        health.pricing_success_by_stratum(legs)
+
+    with pytest.raises(ValueError, match="rate_index_clean"):
+        health.pricing_success_by_stratum(legs.rename(
+            columns={"is_capped_flag": "is_capped"}))
+
+
+def test_the_health_report_puts_the_alarm_first():
+    """A single ALARM must not be lost in a long OK list, which is the failure
+    mode of every monitoring table that sorts by name."""
+    thr = health.Threshold(name="t", direction="above", warn=1, alarm=2,
+                           rationale="x" * 50, action="y")
+    metrics = [health.Metric("a", 0, 1, thr, health.OK),
+               health.Metric("b", 0, 1, thr, health.OK),
+               health.Metric("c", 9, 1, thr, health.ALARM),
+               health.Metric("d", 0, 1, thr, health.WARN)]
+    out = health.health_report(metrics)
+    assert list(out["status"]) == [health.ALARM, health.WARN,
+                                   health.OK, health.OK]
+    assert out["metric"].iloc[0] == "c"
+
+
 def test_the_health_report_names_flattening_as_the_response():
     doc = (health.__doc__ or "").lower()
     assert "flatten" in doc
+
+
+def test_the_overnight_rationale_cites_the_measured_truncated_day_count():
+    """The thresholds carry their derivation into the report, so the numbers in
+    them are read by whoever the alarm wakes up. 161 truncated-end SOFR days
+    and 141 Fed Funds days are what the minute-curve fidelity audit measured;
+    128 is not a number that appears in any of it.
+    """
+    r = health._overnight_threshold().rationale
+    assert "161" in r and "128" not in r
 
 
 # ==========================================================================
@@ -768,6 +1080,45 @@ def test_a_failed_unit_gets_a_provenance_row_too():
     assert p.curve_name in ("", None) or isinstance(p.curve_name, str)
 
 
+class _RenamedPricing:
+    """A `UnitPricing` after an interface rename. Everything priced fine."""
+
+    unit_key = "U"
+    curve_name = "USD-SOFR-1D"
+    curve_timestamp = pd.Timestamp("2026-06-10T13:59:00Z")
+    lag_seconds = 41.0                       # was snapshot_lag_seconds
+    policy = "method=asof max_lag=60s allow_future=False on_miss=raise"
+
+
+def test_a_renamed_pricing_field_raises_instead_of_reporting_never_priced():
+    """The never-priced sentinels exist for `pricing is None` and nothing else.
+
+    Written by a `getattr` default they turn an interface rename into a
+    monitoring blackout that reports clean: every row of a *successful* run
+    gets `snapshot_policy=""`, `health.served_mask` reads that field and says
+    UNSERVED for all of them, `overnight_hole_fraction` goes NO_DATA, and the
+    day looks like one with no curve problems. Nothing raises. This is the
+    `_require` doctrine attacked from the value side.
+    """
+    with pytest.raises(ValueError, match="snapshot_policy"):
+        provenance.build(_unit("U"), _RenamedPricing(), _call("U", 0.9),
+                         pricing_clock_field="execution_timestamp")
+
+
+def test_a_priced_unit_with_no_recorded_policy_is_loud():
+    """`""` is this function's own never-priced marker, so a producer writing
+    it on a priced unit hides a served row inside the failure population."""
+    priced = T.UnitPricing(
+        unit_key="U", curve_name="USD-SOFR-1D",
+        curve_timestamp=_ny(2026, 6, 10, 9, 59),
+        snapshot_lag_seconds=41.0, snapshot_policy="",
+        leg_mid_pct=[3.94], leg_pv01=[4500.0], structure_dv01=4500.0,
+    )
+    with pytest.raises(ValueError, match="no snapshot policy"):
+        provenance.build(_unit("U"), priced, _call("U", 0.9),
+                         pricing_clock_field="execution_timestamp")
+
+
 # ==========================================================================
 # 9. provenance.py -- the coverage accounting, and it must sum
 # ==========================================================================
@@ -780,7 +1131,8 @@ def test_every_unit_is_in_the_ladder_or_carries_exactly_one_reason():
     ]
     prov = pd.DataFrame(rows)
     dv01 = pd.Series({"A": 6000.0, "B": 3000.0, "C": 1000.0})
-    table = provenance.coverage_table(prov, dv01=dv01)
+    table = provenance.coverage_table(prov, dv01=dv01,
+                                      ladder_excluded=_no_ladder_exclusions())
 
     assert table["dv01_share"].sum() == pytest.approx(1.0)
     assert table["n_units"].sum() == 3
@@ -796,7 +1148,8 @@ def test_a_unit_counted_twice_breaks_the_accounting_loudly():
         {"unit_key": "A", "failure_reason": T.EXCL_NO_CURVE},
     ])
     with pytest.raises(ValueError, match="more than one"):
-        provenance.coverage_table(prov, dv01=pd.Series({"A": 1.0}))
+        provenance.coverage_table(prov, dv01=pd.Series({"A": 1.0}),
+                                  ladder_excluded=_no_ladder_exclusions())
 
 
 def test_a_unit_with_no_size_cannot_be_counted_as_a_zero_share():
@@ -809,12 +1162,14 @@ def test_a_unit_with_no_size_cannot_be_counted_as_a_zero_share():
         {"unit_key": "B", "failure_reason": T.EXCL_PRICING_ERROR},
     ])
     with pytest.raises(ValueError, match="no DV01"):
-        provenance.coverage_table(prov, dv01=pd.Series({"A": 1000.0}))
+        provenance.coverage_table(prov, dv01=pd.Series({"A": 1000.0}),
+                                  ladder_excluded=_no_ladder_exclusions())
 
     # ...and the fallback is a size that exists for a unit that never priced
     table = provenance.coverage_table(
         prov, dv01=pd.Series({"A": 1000.0}),
         dv01_fallback=pd.Series({"A": 900.0, "B": 1000.0}),
+        ladder_excluded=_no_ladder_exclusions(),
     )
     assert table["dv01_share"].sum() == pytest.approx(1.0)
     src = table.set_index("reason")["n_fallback_dv01"]
@@ -839,17 +1194,63 @@ def test_the_annuity_proxy_is_the_fallback_size_and_not_a_tenor_times_1e4():
     assert fwd5x5 < 0.7 * naive10
 
 
-def test_the_coverage_table_and_the_ladder_exclusions_join_up():
+def test_a_unit_the_ladder_threw_out_is_not_reported_in_ladder():
     """The written note is built from this table, so the two halves have to be
-    the same population."""
-    units = [_unit("A"), _unit("B")]
-    calls = [_call("A", 0.9), _call("B", None, exclusion=T.EXCL_UNORIENTABLE)]
-    rows, excluded = ladder.unit_ladder_rows(units, calls, _krd("A"))
+    the same population -- and `build` alone cannot make them one.
 
-    prov = pd.concat([
-        pd.DataFrame({"unit_key": rows["unit_key"].unique(), "failure_reason": None}),
-        excluded[["unit_key", "failure_reason"]],
-    ], ignore_index=True)
-    table = provenance.coverage_table(prov, dv01=pd.Series({"A": 100.0, "B": 100.0}))
+    `build` sees `call.exclusion`. `EXCL_PRICING_ERROR` and `EXCL_DEAD_ZONE`
+    are minted *inside* `unit_ladder_rows`, after the record exists, and live
+    only in its second return value. A null reason is read here as IN_LADDER,
+    so without the join a unit the ladder threw out is reported in the ladder
+    at 100% coverage: absence of a reason taken as success. Which is why
+    `ladder_excluded` has no default.
+    """
+    units = [_unit("A"), _unit("B"), _unit("C")]
+    calls = [_call("A", 0.9), _call("B", 0.9),
+             _call("C", None, exclusion=T.EXCL_UNORIENTABLE)]
+    rows, excluded = ladder.unit_ladder_rows(units, calls, _krd("A"))  # B: no risk
+    assert set(zip(excluded["unit_key"], excluded["failure_reason"])) == {
+        ("B", T.EXCL_PRICING_ERROR), ("C", T.EXCL_UNORIENTABLE)}
+
+    # the population as `build` writes it: only C's reason is visible at all
+    prov = provenance.to_frame([
+        provenance.build(u, None, c, pricing_clock_field="event_timestamp")
+        for u, c in zip(units, calls)])
+    assert list(prov["failure_reason"]) == [None, None, T.EXCL_UNORIENTABLE]
+
+    table = provenance.coverage_table(
+        prov, dv01=pd.Series({"A": 100.0, "B": 100.0, "C": 100.0}),
+        ladder_excluded=excluded).set_index("reason")
     assert table["dv01_share"].sum() == pytest.approx(1.0)
-    assert set(table["reason"]) == {provenance.IN_LADDER, T.EXCL_UNORIENTABLE}
+    assert table.loc[provenance.IN_LADDER, "dv01_share"] == pytest.approx(1 / 3)
+    assert table.loc[T.EXCL_PRICING_ERROR, "dv01_share"] == pytest.approx(1 / 3)
+    assert table.loc[T.EXCL_UNORIENTABLE, "dv01_share"] == pytest.approx(1 / 3)
+
+
+def test_coverage_cannot_be_computed_without_the_ladder_exclusions():
+    """No default, because the defect is a caller who never made the join."""
+    prov = pd.DataFrame([{"unit_key": "A", "failure_reason": None}])
+    with pytest.raises(TypeError):
+        provenance.coverage_table(prov, dv01=pd.Series({"A": 1.0}))
+
+
+def test_the_two_halves_of_the_join_are_reconciled_not_overwritten():
+    """Re-applying the same reason is a no-op, so the join is idempotent; a
+    second, different reason means the two stages saw different data, and a
+    ladder exclusion for a unit outside the population means they are different
+    populations. Neither is silently resolved."""
+    prov = pd.DataFrame([{"unit_key": "A", "failure_reason": T.EXCL_NO_CURVE}])
+    dv01 = pd.Series({"A": 1.0})
+
+    same = pd.DataFrame([{"unit_key": "A", "failure_reason": T.EXCL_NO_CURVE}])
+    out = provenance.coverage_table(prov, dv01=dv01, ladder_excluded=same)
+    assert list(out["reason"]) == [T.EXCL_NO_CURVE]
+
+    other = pd.DataFrame([{"unit_key": "A", "failure_reason": T.EXCL_DEAD_ZONE}])
+    with pytest.raises(ValueError, match="disagree"):
+        provenance.coverage_table(prov, dv01=dv01, ladder_excluded=other)
+
+    stray = pd.DataFrame([{"unit_key": "GHOST",
+                           "failure_reason": T.EXCL_DEAD_ZONE}])
+    with pytest.raises(ValueError, match="not in the coverage population"):
+        provenance.coverage_table(prov, dv01=dv01, ladder_excluded=stray)

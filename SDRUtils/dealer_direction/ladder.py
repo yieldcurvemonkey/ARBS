@@ -214,6 +214,20 @@ def unit_ladder_rows(units, calls, krd, *, drop_dead_zone: bool = False,
     call contribute almost nothing, so the dead zone is a monitoring flag and an
     opt-in filter for a consumer who wants a hard cut -- it is not what the
     aggregation depends on (DESIGN 1.3).
+
+    Three ways the caller's three inputs can disagree, all raised rather than
+    absorbed, because each of them breaks the partition in a way no output
+    column shows:
+
+    * a unit with **no call** -- the documented hole in the accounting;
+    * the **same unit twice** -- its risk enters the ladder twice while
+      ``n_units`` is a ``nunique`` and still reports one, so the one column a
+      reader would check to spot it is the column that conceals it;
+    * a **risk row whose unit is not in** ``units`` -- iterating ``units`` and
+      looking up the risk means the reverse direction is never read, so that
+      row appears in neither returned frame. The loudness here used to be
+      backwards: two of the three raised and the one carrying unattributed
+      DV01 was dropped in silence.
     """
     krd = _validated_krd(krd)
     by_unit = ({} if krd.empty
@@ -224,6 +238,28 @@ def unit_ladder_rows(units, calls, krd, *, drop_dead_zone: bool = False,
         if call.unit_key in call_map:
             raise ValueError(f"two direction calls for unit {call.unit_key!r}")
         call_map[call.unit_key] = call
+
+    units = list(units)
+    population: set = set()
+    for unit in units:
+        if unit.unit_key in population:
+            raise ValueError(
+                f"unit {unit.unit_key!r} appears twice in `units`; its risk "
+                "would be added to the ladder twice, and n_units is a nunique "
+                "so the aggregate would still report one unit in that cell"
+            )
+        population.add(unit.unit_key)
+
+    orphans = [k for k in by_unit if k not in population]
+    if orphans:
+        carried = float(sum(by_unit[k][KRD_VALUE_COL].abs().sum()
+                            for k in orphans))
+        raise ValueError(
+            f"{len(orphans)} risk key(s) are not in `units`, e.g. "
+            f"{sorted(map(str, orphans))[:5]}, carrying {carried:,.1f} of "
+            "|DV01|; the loop runs over the units, so that risk reaches "
+            "neither `rows` nor `excluded` and the pair stops being a partition"
+        )
 
     vintage = _prov.code_vintage(curve_source)
     rows: list = []
@@ -357,6 +393,12 @@ def aggregate(unit_rows) -> pd.DataFrame:
     of the pond actually survived the confidence weighting. It falls towards
     zero when the mid stops separating the two sides, which is the same
     degradation :mod:`.health` monitors from the other end.
+
+    ``n_units`` is a ``nunique`` and **cannot see a duplicated feed**: one unit
+    supplied twice and one unit with two legs in the same bucket produce the
+    same rows here, so this function has no way to tell them apart. The guard
+    is upstream, in :func:`unit_ladder_rows`, which refuses a duplicated unit
+    at the point where the two cases are still distinguishable.
     """
     unit_rows = pd.DataFrame(unit_rows)
     if unit_rows.empty:

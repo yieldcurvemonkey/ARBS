@@ -166,6 +166,12 @@ def code_vintage(curve_source: str | None = None) -> str:
 # per-row provenance
 # --------------------------------------------------------------------------
 
+#: The fields :func:`build` reads off a priced unit. Read by name and never
+#: with a default, for the reason ``health._require`` states about columns.
+_PRICING_FIELDS = ("curve_name", "curve_timestamp", "snapshot_lag_seconds",
+                   "snapshot_policy")
+
+
 def build(unit, pricing, call, *, pricing_clock_field: str,
           notional_imputed: bool = False,
           notional_impute_factor: float | None = None,
@@ -176,19 +182,62 @@ def build(unit, pricing, call, *, pricing_clock_field: str,
 
     Works for a unit that never priced -- ``pricing`` may be ``None`` -- because
     those are exactly the rows the coverage table has to account for, and a
-    provenance record that only exists for successes explains nothing.
+    provenance record that only exists for successes explains nothing. That is
+    the *only* reason the never-priced sentinels (``""`` / ``None`` / ``NaT``)
+    exist, so a ``getattr(pricing, ..., sentinel)`` is the wrong spelling here:
+    rename one :class:`types.UnitPricing` field and every row of a *successful*
+    run gets written the never-priced sentinel instead. Nothing raises, and
+    downstream ``health.served_mask`` -- which reads ``snapshot_policy`` --
+    then classifies the whole day UNSERVED, ``overnight_hole_fraction`` goes
+    ``NO_DATA``, and the run looks like a day with no curve problems. This is
+    ``health._require``'s doctrine attacked from the value side rather than the
+    column side, and the answer is the same: read the field by name, and if it
+    is not there, say so.
+
+    An empty ``snapshot_policy`` on a *priced* unit is refused for the same
+    reason: ``""`` is this function's own never-priced marker, so a producer
+    writing it collides with the sentinel and hides a served row inside the
+    pricing-failure population.
 
     ``failure_reason`` defaults to the call's own exclusion rather than being
-    required separately, so the two cannot disagree.
+    required separately, so the two cannot disagree. **It is not the whole
+    story**: ``EXCL_DEAD_ZONE`` and ``EXCL_PRICING_ERROR`` are decided inside
+    :func:`ladder.unit_ladder_rows`, after this record is built, and reach the
+    accounting through :func:`coverage_table`'s ``ladder_excluded`` argument.
     """
     if failure_reason is None and call is not None:
         failure_reason = call.exclusion
+
+    if pricing is None:
+        curve_name, curve_ts, lag, policy = "", pd.NaT, None, ""
+    else:
+        absent = [f for f in _PRICING_FIELDS if not hasattr(pricing, f)]
+        if absent:
+            raise ValueError(
+                f"unit {unit.unit_key!r} priced, but its pricing record has no "
+                f"{absent}; those fields are only defaulted for a unit that "
+                "never priced, so defaulting them here would write the "
+                "never-priced sentinel over a successful row and report the "
+                "whole run UNSERVED without raising"
+            )
+        curve_name = pricing.curve_name or ""
+        curve_ts = pricing.curve_timestamp
+        lag = pricing.snapshot_lag_seconds
+        policy = pricing.snapshot_policy or ""
+        if not str(policy).strip():
+            raise ValueError(
+                f"unit {unit.unit_key!r} priced with no snapshot policy "
+                "recorded; the empty string is this function's never-priced "
+                "marker and health.served_mask reads exactly that field, so a "
+                "served row would be counted as a pricing failure"
+            )
+
     return T.Provenance(
         unit_key=unit.unit_key,
-        curve_name=getattr(pricing, "curve_name", "") or "",
-        curve_timestamp=getattr(pricing, "curve_timestamp", pd.NaT),
-        snapshot_lag_seconds=getattr(pricing, "snapshot_lag_seconds", None),
-        snapshot_policy=getattr(pricing, "snapshot_policy", "") or "",
+        curve_name=curve_name,
+        curve_timestamp=curve_ts,
+        snapshot_lag_seconds=lag,
+        snapshot_policy=policy,
         pricing_clock_field=pricing_clock_field,
         rule=None if call is None else call.rule,
         notional_imputed=bool(notional_imputed),
@@ -253,12 +302,79 @@ def annuity_dv01_proxy_from_dates(*, notional: float, as_of, effective,
 # the coverage accounting
 # --------------------------------------------------------------------------
 
-def coverage_table(prov, *, dv01, dv01_fallback=None) -> pd.DataFrame:
+def merge_ladder_exclusions(prov, ladder_excluded) -> pd.DataFrame:
+    """Fold the ladder's own exclusions into a provenance frame's reasons.
+
+    :func:`build` can only see ``call.exclusion``. Two reasons are decided
+    *later*, inside :func:`ladder.unit_ladder_rows` -- ``EXCL_PRICING_ERROR``
+    for a called unit with no risk row, and ``EXCL_DEAD_ZONE`` under
+    ``drop_dead_zone`` -- and they live only in that function's second return
+    value. Without this join a unit the ladder threw out reaches
+    :func:`coverage_table` with a null reason, and a null reason is read as
+    :data:`IN_LADDER`: the coverage number then reports 100% on a population
+    the ladder did not produce.
+
+    Idempotent by design (re-applying the same reason is a no-op) and loud on
+    the two ways the halves can disagree: a reason that contradicts one already
+    recorded, and an excluded unit that is not in the population at all.
+    """
+    prov = pd.DataFrame(prov).copy()
+    excl = pd.DataFrame(ladder_excluded)
+    if excl.empty:
+        if "failure_reason" not in prov.columns:
+            prov["failure_reason"] = None
+        return prov
+    for col in ("unit_key", "failure_reason"):
+        if col not in excl.columns:
+            raise ValueError(f"ladder_excluded needs a {col!r} column; pass "
+                             "the second frame unit_ladder_rows() returns")
+    if "failure_reason" not in prov.columns:
+        prov["failure_reason"] = None
+
+    reasons = dict(zip(excl["unit_key"], excl["failure_reason"]))
+    known = set(prov["unit_key"])
+    stray = sorted(str(k) for k in reasons if k not in known)
+    if stray:
+        raise ValueError(
+            f"{len(stray)} ladder-excluded unit(s) are not in the coverage "
+            f"population, e.g. {stray[:5]}; the two halves are then different "
+            "populations and the shares sum to 1 over the wrong one"
+        )
+
+    mapped = prov["unit_key"].map(reasons)
+    have = prov["failure_reason"]
+    clash = mapped.notna() & have.notna() & (mapped != have)
+    if clash.any():
+        offenders = [
+            f"{k}: provenance {h!r} vs ladder {m!r}"
+            for k, h, m in zip(prov.loc[clash, "unit_key"],
+                               have[clash], mapped[clash])
+        ][:5]
+        raise ValueError(
+            f"{int(clash.sum())} unit(s) disagree about why they are not in "
+            f"the ladder, e.g. {offenders}; every unit carries exactly one "
+            "reason, so a second one means the two stages saw different data"
+        )
+    prov["failure_reason"] = have.where(have.notna(), mapped)
+    return prov
+
+
+def coverage_table(prov, *, dv01, ladder_excluded, dv01_fallback=None) -> pd.DataFrame:
     """DV01 share by outcome: one row per reason plus :data:`IN_LADDER`.
 
-    Three ways this accounting lies if it is written the obvious way, all
+    ``ladder_excluded`` is the second frame :func:`ladder.unit_ladder_rows`
+    returns and it is **required, with no default**. Absence of a reason is
+    read here as success, and two of the reasons are minted inside the ladder
+    rather than on the call, so a caller who never performs that join gets a
+    unit the ladder threw out reported ``IN_LADDER`` at 100% coverage -- the
+    exact self-flattering failure this whole function exists to prevent, and
+    the one a reader would believe. An empty frame is the explicit statement
+    that the ladder excluded nothing; passing an already-merged one is a no-op.
+
+    Four ways this accounting lies if it is written the obvious way, all
     guarded here:
 
+    0. **A ladder-stage exclusion never reaching ``failure_reason``**, above.
     1. **A unit appearing twice.** Two rows for one unit inflate one reason and
        the shares still sum to 1. Raised, not deduplicated -- a duplicate means
        the caller's two halves disagree about what happened to that unit.
@@ -277,10 +393,24 @@ def coverage_table(prov, *, dv01, dv01_fallback=None) -> pd.DataFrame:
     ``n_fallback_dv01`` reports how much of each row's size came from the proxy,
     because a reason whose share rests entirely on a model is a weaker claim
     than one measured off repriced risk.
+
+    **:data:`IN_LADDER` is still a residual, and the caller owns the
+    population.** Once the ladder-stage join is made, everything that reached
+    the ladder is accounted for -- :func:`ladder.unit_ladder_rows` raises on
+    each of the three ways its own inputs can disagree, so its two frames are a
+    partition of the units it was given. What this function cannot see is a
+    unit that never reached the ladder *and* carries no reason: it has nothing
+    to compare against, and reports it as a success. Build ``prov`` from the
+    same unit population the ladder ran on.
     """
     cols = ["reason", "n_units", "dv01", "dv01_share", "n_fallback_dv01"]
     prov = pd.DataFrame(prov)
     if prov.empty:
+        # an empty population with a non-empty exclusion list is the join
+        # failing, not an empty day; merge_ladder_exclusions says so
+        merge_ladder_exclusions(pd.DataFrame(columns=["unit_key",
+                                                      "failure_reason"]),
+                                ladder_excluded)
         return pd.DataFrame(columns=cols)
 
     dup = prov["unit_key"].duplicated()
@@ -291,6 +421,10 @@ def coverage_table(prov, *, dv01, dv01_fallback=None) -> pd.DataFrame:
             f"population, e.g. {offenders}; every unit is in the ladder or "
             "carries exactly one reason, never both and never two"
         )
+
+    # after the duplicate check, so the join is never asked to reconcile a
+    # population that already contradicts itself
+    prov = merge_ladder_exclusions(prov, ladder_excluded)
 
     dv01 = pd.Series(dv01, dtype="float64")
     fallback = (pd.Series(dtype="float64") if dv01_fallback is None
@@ -340,5 +474,6 @@ def coverage_table(prov, *, dv01, dv01_fallback=None) -> pd.DataFrame:
 __all__ = [
     "IN_LADDER", "VINTAGE_SOURCES", "annuity_dv01_proxy",
     "annuity_dv01_proxy_from_dates", "build", "code_vintage",
-    "coverage_table", "to_frame", "vintage_components",
+    "coverage_table", "merge_ladder_exclusions", "to_frame",
+    "vintage_components",
 ]

@@ -19,6 +19,7 @@ hurt:
 """
 from __future__ import annotations
 
+import dataclasses
 import math
 
 import numpy as np
@@ -415,3 +416,421 @@ def test_a_unit_with_no_fee_cannot_be_classified_by_this_rule():
 def test_zero_dv01_refuses_rather_than_dividing():
     with pytest.raises(ValueError, match="structure_dv01"):
         up.classify(npv_pay=-1.0, upfront=1.0, structure_dv01=0.0)
+
+
+# --------------------------------------------------------------------------
+# 7. The mid bias moves the mid, so it must move the ORIENTATION too.
+# --------------------------------------------------------------------------
+
+def _flow_tau(tau_bps=0.5, bias_bps=0.0):
+    return up.TauUpfront(tau_bps=tau_bps, bias_bps=bias_bps, half_spread_bps=1.0,
+                         sigma_bps=1.0, n=100, bucket="TEST",
+                         population=up.POPULATION_FLOW)
+
+
+@pytest.mark.parametrize("mid_bias", [-0.8, -0.5, -0.05, 0.0, 0.05, 0.5, 0.8])
+@pytest.mark.parametrize("npv_pay", [-4_000.0, -2_000.0, -300.0,
+                                     300.0, 2_000.0, 4_000.0])
+@pytest.mark.parametrize("upfront", [0.0, 1_234.0, 6_789.0])
+def test_a_mid_bias_is_exactly_a_shifted_mid(mid_bias, npv_pay, upfront):
+    """``mid_bias_bps`` shifts the mid, so every output must move with it.
+
+    A bucket mid-bias of ``b`` says the mid we priced against is ``b`` bp away
+    from the true one, which is arithmetically identical to having repriced
+    against the true mid: ``npv_pay -> npv_pay + b * DV01``. So the two calls
+    below are the same print described two ways and every field has to match --
+    including ``dealer_sign``, which is the field that reads the *side of mid*
+    the print is on.
+
+    The failure this catches: the deviation was bias-corrected while the
+    orientation was still taken from the raw ``npv_pay``, so whenever the bias
+    moved a print across mid (``|raw dev| < |b|`` -- precisely the near-mid
+    population this rule exists for) ``dealer_sign`` pointed one way and ``p``
+    the other, on the same row.
+
+    The fees are 1,234 and 6,789 rather than round numbers so that no cell
+    lands on ``|dev| == U/DV01`` exactly: the two subtraction orders agree to
+    1e-16 there but ``dealer_side`` is a discontinuous function of that, so an
+    exact tie would compare one arm's ``+0.0`` against the other's ``-3e-17``
+    and fail on float noise rather than on the invariant.
+    """
+    tau = _flow_tau()
+    biased = up.classify(npv_pay=npv_pay, upfront=upfront, structure_dv01=PV01,
+                         mid_bias_bps=mid_bias, tau=tau, mid_sigma_bps=0.05)
+    repriced = up.classify(npv_pay=npv_pay + mid_bias * PV01, upfront=upfront,
+                           structure_dv01=PV01, tau=tau, mid_sigma_bps=0.05)
+
+    assert biased.dev_bps == pytest.approx(repriced.dev_bps, abs=1e-12)
+    assert biased.residual_bps == pytest.approx(repriced.residual_bps, abs=1e-12)
+    assert biased.edge_bps == pytest.approx(repriced.edge_bps, abs=1e-12)
+    assert biased.dealer_sign == repriced.dealer_sign
+    assert biased.p == pytest.approx(repriced.p, abs=1e-12)
+    assert biased.signed_weight == pytest.approx(repriced.signed_weight, abs=1e-12)
+    assert biased.flags == repriced.flags
+
+
+def test_the_measured_cross_mid_case_agrees_with_itself():
+    """The live measurement: a +0.20 bp print with a +0.5 bp bucket bias.
+
+    The true deviation is -0.30 bp -- printed BELOW mid -- so with no fee the
+    dealer holds the in-the-money PAY side and the call is ``DEALER_PAID``.
+    ``dealer_sign``, ``p`` and ``signed_weight`` are three renderings of one
+    answer and a consumer may build the ladder from any of them, so a row where
+    they disagree is a ladder that points the opposite way depending on which
+    column was read.
+    """
+    call = up.classify(npv_pay=-2_000.0, upfront=0.0, structure_dv01=PV01,
+                       mid_bias_bps=0.5, tau=_flow_tau(), mid_sigma_bps=0.05)
+
+    assert call.dev_bps == pytest.approx(-0.30)
+    assert call.mid_bias_bps == 0.5          # the one input that was not recorded
+    assert call.dealer_sign == conv.DEALER_PAID
+    assert call.edge_bps == pytest.approx(-0.30)
+    assert call.p < 0.5
+    assert call.signed_weight < 0
+
+
+# --------------------------------------------------------------------------
+# 8. The marginalisation integrates the integrand it actually has.
+# --------------------------------------------------------------------------
+
+def _direct_integral(dev, u_bps, tau_bps, s, bias=0.0, is_lifecycle=False):
+    """``p`` by brute force, with the grid SPLIT at the kink at ``d = 0``.
+
+    The edge jumps by ``2(u + b0)`` there, so a single grid laid across it is
+    itself wrong -- which is the finding. Two trapezoid grids, one per smooth
+    branch, +-12 sigma (truncated mass 4e-33).
+    """
+    c = u_bps + bias
+    lo, hi = dev - 12.0 * s, dev + 12.0 * s
+    total = 0.0
+    for a, b, branch in ((lo, min(hi, 0.0), +1.0), (max(lo, 0.0), hi, -1.0)):
+        if b <= a:
+            continue
+        x = np.linspace(a, b, 40001)
+        e = x + branch * c
+        if is_lifecycle:
+            e = -e
+        w = np.exp(-0.5 * ((x - dev) / s) ** 2) / (s * math.sqrt(2.0 * math.pi))
+        total += float(np.trapezoid(
+            w / (1.0 + np.exp(-np.clip(e / tau_bps, -500.0, 500.0))), x))
+    return total
+
+
+@pytest.mark.parametrize("dev", [-1.0, -0.35, -0.18, -0.05, -0.004, 0.0,
+                                 0.004, 0.05, 0.18, 0.35, 1.0, 8.0])
+@pytest.mark.parametrize("u_bps,tau_bps,s", [(2.0, 3.816, 0.2543),
+                                             (5.0, 3.816, 0.2543),
+                                             (5.0, 0.5, 0.2),
+                                             (0.4, 3.816, 0.2543),
+                                             # s/tau = 10, so the logistic
+                                             # saturates INSIDE the domain and
+                                             # the closed-form wing carries real
+                                             # mass. Nothing in the measured
+                                             # regime (s/tau ~ 0.07) reaches
+                                             # this, so nothing tested it.
+                                             (2.0, 0.2, 2.0)])
+def test_marginalised_p_ties_out_to_a_direct_integral(dev, u_bps, tau_bps, s):
+    """Gauss-Hermite is polynomial-exact against a Gaussian weight; the
+    integrand here has a jump discontinuity at ``d = 0``, so the rule does not
+    converge on it and more nodes do not help. Measured against this reference
+    on the real 2,025-print flow sample: max ``|p error|`` 0.030, and 27 rows
+    (1.3%) came back with ``signed_weight`` of the WRONG SIGN.
+    """
+    got = up.p_marginalised(dev, u_bps, tau_bps, mid_sigma_bps=s)
+
+    assert got == pytest.approx(_direct_integral(dev, u_bps, tau_bps, s),
+                                abs=1e-6)
+
+
+def test_a_hair_above_mid_with_a_fee_does_not_get_a_positive_weight():
+    """The wrong-sign case, in one line.
+
+    A print 0.01 bp above mid carrying a 2 bp fee is *just* on the pay-fixed
+    side of a mid known to 0.25 bp, so the honest answer leans -- weakly --
+    towards the dealer having PAID. Quadrature that straddles the kink returned
+    0.5006 here, i.e. a positive ``signed_weight``, and the error is a
+    deterministic function of ``|dev|/s`` so it does not average out of a
+    ladder.
+    """
+    p = up.p_marginalised(0.01, 2.0, 3.816, mid_sigma_bps=0.2543)
+
+    # 0.4966015 from `scipy.integrate.quad` run separately on each branch.
+    assert p == pytest.approx(0.4966015, abs=1e-6)
+    assert conv.signed_weight(p) < 0
+
+
+def test_marginalised_p_has_no_quadrature_staircase():
+    """``p`` was a step function of ``dev`` with the steps at the node
+    positions -- flat for 0.045 bp and then jumping 0.19. On one smooth branch
+    of the true integrand ``p`` is strictly monotone in ``dev``, so any flat
+    run or reversal is quadrature, not the model.
+    """
+    devs = np.linspace(0.005, 0.5, 200)
+    ps = np.array([up.p_marginalised(d, 5.0, 3.816, mid_sigma_bps=0.2543)
+                   for d in devs])
+
+    assert (np.diff(ps) < 0).all()
+    assert ps[0] - ps[-1] > 0.2          # and it moves, so this is not a flat line
+
+
+def test_marginalisation_folds_the_tau_bias_into_the_fee():
+    """``b0`` is a systematic offset in ``z``, so it enters the edge exactly
+    where the fee does -- ``edge = sign(d) * (|d| - u - b0)``. Pinned as an
+    identity because dropping ``b0`` here would leave every other test green.
+    """
+    with_bias = up.p_marginalised(0.3, 2.0, 3.816, mid_sigma_bps=0.2543,
+                                  bias_bps=0.4)
+    folded = up.p_marginalised(0.3, 2.4, 3.816, mid_sigma_bps=0.2543)
+
+    assert with_bias == pytest.approx(folded, abs=1e-12)
+    assert with_bias != pytest.approx(
+        up.p_marginalised(0.3, 2.0, 3.816, mid_sigma_bps=0.2543), abs=1e-6)
+
+
+def test_marginalised_p_refuses_a_non_finite_input():
+    """A NaN deviation used to make every branch test false and return 0.0 --
+    a perfectly valid-looking probability, and the most confident one there is.
+    """
+    for bad in (float("nan"), float("inf")):
+        with pytest.raises(ValueError):
+            up.p_marginalised(bad, 2.0, 3.8, mid_sigma_bps=0.25)
+        with pytest.raises(ValueError):
+            up.p_marginalised(0.1, bad, 3.8, mid_sigma_bps=0.25)
+    with pytest.raises(ValueError, match="tau"):
+        up.p_marginalised(0.1, 2.0, 0.0, mid_sigma_bps=0.25)
+
+
+# --------------------------------------------------------------------------
+# 9. FLAG_SIGN_FRAGILE has to test the quantity the sign actually turns on.
+# --------------------------------------------------------------------------
+
+def test_the_fragile_flag_fires_when_the_fee_matches_the_deviation():
+    """``dealer_sign = sign(dev) * sign(z)``, so the sign flips at
+    ``dev in {-c, 0, +c}`` with ``c = u + b0``: the distance to 0 is ``|dev|``
+    and the distance to ``+-c`` is ``|z|``. The flag tested only ``|dev|``.
+
+    Measured on the 2,025-print flow sample with sigma = 0.254 bp: the old
+    condition fired on 12.4% while a further 46.0% were unflagged with
+    ``|z|`` inside ONE sigma (median ``|z|`` 0.090 bp). Those rows have a
+    coin-flip sign and said nothing about it.
+    """
+    sigma = 0.2543
+    # 2 bp from mid -- nowhere near it -- but the fee matches to 0.05 bp.
+    fragile = up.classify(npv_pay=-2.0 * PV01, upfront=2.05 * PV01,
+                          structure_dv01=PV01, mid_sigma_bps=sigma)
+
+    assert fragile.residual_bps == pytest.approx(-0.05)
+    assert up.FLAG_SIGN_FRAGILE in fragile.flags
+
+    # and the near-mid case the flag already caught must keep firing
+    near_mid = up.classify(npv_pay=-0.01 * PV01, upfront=5.0 * PV01,
+                           structure_dv01=PV01, mid_sigma_bps=0.2)
+    assert up.FLAG_SIGN_FRAGILE in near_mid.flags
+
+    # a print that is far from mid AND far from its fee is not fragile
+    clear = up.classify(npv_pay=-10.0 * PV01, upfront=2.0 * PV01,
+                        structure_dv01=PV01, mid_sigma_bps=0.2)
+    assert up.FLAG_SIGN_FRAGILE not in clear.flags
+
+
+@pytest.mark.parametrize("sigma", [0.05, 0.2543, 1.0])
+@pytest.mark.parametrize("tau_bps", [0.5, 3.816, 11.0])
+@pytest.mark.parametrize("is_lifecycle", [False, True])
+def test_the_sign_and_the_weight_only_disagree_where_the_flag_fires(
+        sigma, tau_bps, is_lifecycle):
+    """``dealer_sign`` and ``signed_weight`` are different estimators -- the
+    point call and the posterior over the mid error -- so they may disagree.
+    The contract is that they only do so on rows the module has already called
+    fragile, because a consumer may build the ladder from either column.
+
+    This is the invariant the mid-bias defect broke wholesale: it read the
+    magnitude off the corrected deviation and the sign off the raw NPV, so a
+    print 0.3 bp from mid -- nowhere near a boundary, flag silent -- came back
+    ``dealer_sign = +1`` with ``signed_weight = -0.29``.
+    """
+    tau = up.TauUpfront(tau_bps=tau_bps, bias_bps=0.0, half_spread_bps=1.0,
+                        sigma_bps=1.0, n=100, bucket="TEST",
+                        population=(up.POPULATION_LIFECYCLE if is_lifecycle
+                                    else up.POPULATION_FLOW))
+    seen_disagreement = False
+    for dev in np.linspace(-6.0, 6.0, 241):
+        for u_bps in (0.0, 0.05, 0.2, 1.0, 5.0, 20.0):
+            call = up.classify(npv_pay=-dev * PV01, upfront=u_bps * PV01,
+                               structure_dv01=PV01, is_lifecycle=is_lifecycle,
+                               tau=tau, mid_sigma_bps=sigma)
+            if call.dealer_sign == 0 or call.signed_weight == 0.0:
+                continue
+            if np.sign(call.signed_weight) != call.dealer_sign:
+                seen_disagreement = True
+                assert up.FLAG_SIGN_FRAGILE in call.flags, (dev, u_bps, call)
+                # and it is genuinely on a boundary, with room to spare
+                assert min(abs(call.dev_bps),
+                           abs(call.residual_bps)) <= 1.5 * sigma
+    assert seen_disagreement           # or the assertions above are vacuous
+
+
+# --------------------------------------------------------------------------
+# 10. Degenerate inputs are refused rather than priced.
+# --------------------------------------------------------------------------
+
+def test_a_non_finite_npv_is_a_pricing_error_not_a_zero_call():
+    """The finiteness guard covered the fee and not the NPV, so a failed
+    repricing returned ``dealer_sign = 0`` with ``exclusion = None`` -- which
+    reads downstream as a successfully classified unit that happened to tie,
+    and lands in the coverage numerator.
+    """
+    for bad in (float("nan"), float("inf"), float("-inf")):
+        call = up.classify(npv_pay=bad, upfront=40_000.0, structure_dv01=PV01,
+                           tau=_flow_tau())
+
+        assert call.exclusion == up.EXCL_PRICING_ERROR
+        assert call.dealer_sign == 0
+        assert call.p is None and call.signed_weight is None
+        assert call.dev_bps is None and call.edge_bps is None
+
+
+def test_a_negative_fee_is_refused():
+    """``#58`` is disseminated as "any value greater than or equal to zero"
+    (spec p.31), and the rule's whole derivation assumes ``U >= 0``. A negative
+    would make ``z = |dev| - U`` LARGER, i.e. turn corrupt data into a more
+    confident call, which is the one direction an error must never go.
+    """
+    with pytest.raises(ValueError, match="negative"):
+        up.classify(npv_pay=-100_000.0, upfront=-40_000.0, structure_dv01=PV01)
+
+
+def test_a_nan_in_the_fee_list_does_not_erase_the_fee():
+    """``trade_selection.resolve_upfront`` sums ``u for u in legs if u`` -- a
+    NaN is truthy, so one NaN leg poisons the sum to NaN and ``ufro_sum > 0``
+    goes False, reporting a fee-bearing unit as having no fee at all. Both
+    frozen call sites pass ``.fillna(0.0)``; this one takes a caller's list, so
+    it has to do the same coercion itself.
+    """
+    got = up.resolve_upfront(None, ufros=[25_000.0, float("nan")])
+
+    assert got.amount == pytest.approx(25_000.0)
+    assert got.source == up.SRC_UFRO
+
+    term = up.resolve_upfront(None, ufros=[7_000.0],
+                              uwins=[5_000.0, float("nan")], is_lifecycle=True)
+    assert term.amount == pytest.approx(5_000.0)
+    assert term.source == up.SRC_UWIN
+
+
+# --------------------------------------------------------------------------
+# 11. The pieces no test reached: the tau bias, and a LIFECYCLE tau.
+# --------------------------------------------------------------------------
+
+def test_the_tau_bias_shifts_the_residual_and_the_edge():
+    """``b0`` is the fitted systematic offset in ``z`` and it is subtracted
+    from every residual. Nothing else in the suite ever supplies a non-zero
+    one, so dropping it entirely left the suite green.
+    """
+    call = up.classify(npv_pay=-100_000.0, upfront=40_000.0,
+                       structure_dv01=PV01, tau=_flow_tau(bias_bps=0.3))
+
+    assert call.residual_bps == pytest.approx(10.0 - 4.0 - 0.3)
+    assert call.edge_bps == pytest.approx(5.7)
+    assert call.bias_bps == pytest.approx(0.3)
+
+
+def test_residual_bps_honours_its_bias_argument():
+    assert up.residual_bps(-100_000.0, 40_000.0, PV01,
+                           bias_bps=0.3) == pytest.approx(5.7)
+    assert up.signed_edge_bps(-100_000.0, 40_000.0, PV01,
+                              bias_bps=0.3) == pytest.approx(5.7)
+
+
+@pytest.mark.parametrize("is_lifecycle", [False, True])
+@pytest.mark.parametrize("npv_pay", [-500_000.0, -40_000.0, -1_000.0, 0.0,
+                                     1_000.0, 40_000.0, 500_000.0])
+@pytest.mark.parametrize("upfront", [0.0, 40_000.0, 400_000.0])
+def test_classify_and_the_public_signed_edge_are_one_rule(npv_pay, upfront,
+                                                          is_lifecycle):
+    """``classify`` orients off its own bias-corrected deviation and
+    :func:`signed_edge_bps` orients off the raw NPV through
+    :func:`orientation`. With no mid bias those are the same quantity, so the
+    two must return the same number -- otherwise the module has two rules for
+    one thing and a consumer's answer depends on which entry point it used.
+
+    Pinned here specifically because ``classify`` stopped calling
+    ``orientation`` when the mid-bias defect was fixed, which left
+    ``orientation``'s lifecycle negation and its ``f == 0`` branch reachable
+    only through this helper -- and both were then deletable with the suite
+    green.
+    """
+    call = up.classify(npv_pay=npv_pay, upfront=upfront, structure_dv01=PV01,
+                       is_lifecycle=is_lifecycle)
+    direct = up.signed_edge_bps(npv_pay, upfront, PV01,
+                                is_lifecycle=is_lifecycle)
+
+    assert call.edge_bps == pytest.approx(direct, abs=1e-12)
+    assert call.dealer_sign == conv.dealer_side(direct)
+
+
+def test_a_non_finite_calibration_input_is_refused():
+    """Same failure as a NaN NPV, one argument along: a NaN bias or sigma makes
+    every deviation NaN, and with no ``tau`` that comes back as
+    ``dealer_sign = 0`` with no exclusion -- an exact tie, apparently. These
+    are calibration inputs rather than per-row data, so a non-finite one is a
+    programming error and is raised rather than given an exclusion name.
+    """
+    with pytest.raises(ValueError, match="mid_bias_bps"):
+        up.classify(npv_pay=-100_000.0, upfront=40_000.0, structure_dv01=PV01,
+                    mid_bias_bps=float("nan"))
+
+    with pytest.raises(ValueError, match="mid_sigma_bps"):
+        up.classify(npv_pay=-100_000.0, upfront=40_000.0, structure_dv01=PV01,
+                    mid_sigma_bps=float("nan"))
+
+
+@pytest.mark.parametrize("mid_sigma", [None, 0.0, 0.2543])
+def test_a_lifecycle_tau_mirrors_the_flow_probability(mid_sigma):
+    """The termination inversion has to survive into ``p``, on all three
+    probability paths -- the bare logistic, the ``s <= 0`` shortcut inside the
+    marginalisation, and the marginalisation proper. No test built a
+    ``POPULATION_LIFECYCLE`` tau at all, so both lifecycle negations in the
+    probability path were deletable with the suite green.
+    """
+    flow_tau = _flow_tau(tau_bps=3.816, bias_bps=0.13)
+    life_tau = dataclasses.replace(flow_tau, population=up.POPULATION_LIFECYCLE)
+
+    flow = up.classify(npv_pay=-120_000.0, upfront=40_000.0,
+                       structure_dv01=PV01, tau=flow_tau, mid_sigma_bps=mid_sigma)
+    life = up.classify(npv_pay=-120_000.0, upfront=40_000.0,
+                       structure_dv01=PV01, is_lifecycle=True, tau=life_tau,
+                       mid_sigma_bps=mid_sigma)
+
+    assert life.dealer_sign == -flow.dealer_sign != 0
+    assert life.p == pytest.approx(1.0 - flow.p, abs=1e-12)
+    assert life.signed_weight == pytest.approx(-flow.signed_weight, abs=1e-12)
+    assert flow.p != pytest.approx(0.5, abs=1e-3)      # or the mirror is trivial
+
+
+def test_a_lifecycle_marginalisation_is_the_flow_one_reflected():
+    p_flow = up.p_marginalised(0.3, 2.0, 3.816, mid_sigma_bps=0.2543,
+                               bias_bps=0.4)
+    p_life = up.p_marginalised(0.3, 2.0, 3.816, mid_sigma_bps=0.2543,
+                               bias_bps=0.4, is_lifecycle=True)
+
+    assert p_life == pytest.approx(1.0 - p_flow, abs=1e-12)
+    assert p_flow == pytest.approx(
+        _direct_integral(0.3, 2.0, 3.816, 0.2543, bias=0.4), abs=1e-6)
+
+
+def test_the_fitters_own_tau_wins_over_recomputing_it():
+    """``probability.MixtureFit.tau`` floors ``h`` at ``MIN_SEPARATION * s``,
+    which caps tau at the no-information limit. Recomputing ``s^2/(2h)`` here
+    throws that floor away: on the measured flow bucket it is the difference
+    between 3.8 bp and a tau fifteen times sharper, i.e. between ``p = 0.512``
+    and a confident call on the same print.
+    """
+    class _Fit:
+        b0, h, s, tau, flags = 0.0, 0.01, 0.4, 3.816, ()
+
+    tau = up.fit_tau_upfront([0.1, -0.2, 0.3], population=up.POPULATION_FLOW,
+                             mixture_fit=lambda x: _Fit())
+
+    assert tau.tau_bps == pytest.approx(3.816)
+    assert 0.4 ** 2 / (2 * 0.01) == pytest.approx(8.0)      # what it is NOT

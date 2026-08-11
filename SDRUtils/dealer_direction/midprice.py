@@ -125,9 +125,40 @@ class CurveMark:
     handle: object
 
 
+def _finite(v) -> bool:
+    """Is this a usable mark? ``None`` means "no mark", which is allowed.
+
+    ``math.isnan`` alone is not the test. ``CurvePricer.price_leg`` returns
+    ``float(vmap.apply(...))``, and that float can be ``inf`` as readily as
+    ``nan`` -- an infinite PV01 puts every edge that divides by it at exactly
+    zero bp, which is inside every dead zone rather than outside every
+    threshold.
+    """
+    if v is None:
+        return True
+    try:
+        return math.isfinite(float(v))
+    except (TypeError, ValueError):
+        return False
+
+
 @dataclasses.dataclass(frozen=True)
 class LegQuote:
-    """One leg's marks, or the named reason it has none."""
+    """One leg's marks, or the named reason it has none.
+
+    A non-finite mark is the second of those, and the contract enforces it
+    rather than trusting each construction site to remember. ``price_leg``
+    returns a float, so a curve that produces a NaN rate *returns* one instead
+    of raising: ``ok`` was ``failure is None`` and nothing looked at the values,
+    so that leg reached the ladder with ``failure=None`` beside a
+    confident-looking ``structure_dv01`` of 4,000. A NaN is worse than a missing
+    answer -- ``traded - nan`` is neither above the mid nor below it, so the row
+    is silently a no-call while still counting as *priced* in the stratified
+    success rate the fixings strata exist to protect.
+
+    The sibling marks are dropped with the offending one: a PV01 out of the same
+    value map that produced a NaN rate is not half-trustworthy.
+    """
 
     trade_id: object
     start_class: str
@@ -137,6 +168,24 @@ class LegQuote:
     npv_pay: float | None = None
     failure: str | None = None
     failure_detail: str | None = None
+
+    _MARKS = ("mid_pct", "pv01", "npv_pay")
+
+    def __post_init__(self):
+        if self.failure is not None:
+            return
+        bad = [n for n in self._MARKS if not _finite(getattr(self, n))]
+        if not bad:
+            return
+        detail = ", ".join(f"{n}={getattr(self, n)!r}" for n in bad)
+        # EXCL_PRICING_ERROR rather than a reason of its own: the exclusion
+        # vocabulary lives in types.py so the coverage accounting adds up, and a
+        # midprice-local string would be a stratum nobody else counts. The
+        # field name is in the detail, which is where the specificity belongs.
+        object.__setattr__(self, "failure", EXCL_PRICING_ERROR)
+        object.__setattr__(self, "failure_detail", f"non-finite mark: {detail}")
+        for n in self._MARKS:
+            object.__setattr__(self, n, None)
 
     @property
     def ok(self) -> bool:
@@ -196,10 +245,13 @@ def structure_dv01(kind: str, pv01s) -> float | None:
     the upper end for a caller that wants the payer-frame denominator instead.
 
     ``None`` when any leg is unpriced, so a partially priced package cannot
-    produce a confident-looking denominator.
+    produce a confident-looking denominator. "Unpriced" includes a leg whose
+    PV01 came back non-finite -- ``isnan`` alone let an ``inf`` through, and the
+    leg's *mid* is covered by :class:`LegQuote`'s contract upstream, which turns
+    a non-finite mark into a named failure before this is ever called.
     """
     vals = list(pv01s)
-    if any(v is None or (isinstance(v, float) and math.isnan(v)) for v in vals):
+    if any(v is None or not _finite(v) for v in vals):
         return None
     a = [abs(float(v)) for v in vals]
     if not a:
@@ -525,7 +577,14 @@ class UnitRepricer:
     # ----------------------------------------------------------------------
 
     def _assert_telemetry(self, mark: CurveMark, flags: list) -> None:
-        if mark.served_from_future:
+        # The flag and the sign of the lag are one fact written twice -- the MDP
+        # publishes `signed = (wanted - actual)` and `from_future = signed < 0`
+        # from the same line (IRSwapsMDP.py:3336). So read both: a missing
+        # `snapshot_served_from_future` is falsy, and testing the boolean alone
+        # waved through a mark carrying `lag_seconds = -900.0` -- the circular
+        # curve this guard exists for, with the evidence already in hand.
+        if mark.served_from_future or (mark.lag_seconds is not None
+                                       and mark.lag_seconds < 0):
             raise CircularCurve(
                 f"{mark.curve_name} at {mark.requested} was served from AFTER the "
                 f"instant asked for (lag {mark.lag_seconds}s) under policy "
@@ -549,10 +608,20 @@ class UnitRepricer:
     def _price_one(self, curve_name, snap, row, *, want_npv: bool) -> LegQuote:
         from MDP.IRSwaps.CITIVELO_EXCEL.snapshot_policy import SnapshotMiss
 
-        stratum = start_class(row["effective_date"], snap)
+        stratum = _stratum(row, snap)
         capped = bool(row.get("is_capped") or False)
         base = {"trade_id": row.get("trade_id"), "start_class": stratum,
                 "is_capped": capped}
+
+        if stratum == START_UNKNOWN:
+            # Refused here rather than sent on: `start_class` used to run
+            # OUTSIDE this try/except and `NaT.date() - date` raised TypeError
+            # straight out of `price_unit`, so one dateless row took a whole
+            # day's pass with it. A leg with no accrual start has no schedule to
+            # price either, so the named failure and the named stratum agree.
+            return LegQuote(**base, failure=EXCL_PRICING_ERROR,
+                            failure_detail="leg carries no effective_date; there is "
+                                           "no schedule to price from")
 
         rate = row.get("fixed_rate")
         if want_npv and (rate is None or pd.isna(rate)):
@@ -583,22 +652,36 @@ class UnitRepricer:
             curve_timestamp=snap if isinstance(snap, datetime.date)
             and not isinstance(snap, datetime.datetime) else pd.Timestamp(snap),
             snapshot_lag_seconds=None,
-            snapshot_policy=policy or "",
+            snapshot_policy=policy or self._default_policy(),
             leg_mid_pct=[None] * n,
             leg_pv01=[None] * n,
             npv_pay=None,
             structure_dv01=None,
         )
         legs = [
-            LegQuote(trade_id=r.get("trade_id"),
-                     start_class=start_class(r["effective_date"], snap)
-                     if _has_date(r) else START_UNKNOWN,
+            LegQuote(trade_id=r.get("trade_id"), start_class=_stratum(r, snap),
                      is_capped=bool(r.get("is_capped") or False),
                      failure=reason, failure_detail=detail)
             for _, r in unit.legs.iterrows()
         ]
+        if legs and FLAG_LEG_FAILURE not in flags:
+            # Every leg on a refused unit carries a failure, so the flag that
+            # says "a leg failed" belongs here too. Without it a health count
+            # keyed on the flag reports only the units that reached a curve.
+            flags.append(FLAG_LEG_FAILURE)
         return RepricedUnit(pricing=pricing, legs=legs, failure=reason,
                             failure_detail=detail, flags=flags)
+
+    def _default_policy(self) -> str:
+        """What ``snapshot_policy`` says on a row that never asked for a curve.
+
+        :data:`POLICY_NONE` is a property of the *source*, not of the instant,
+        so it is knowable even on a refusal -- and this module's docstring
+        claims it is named on every row, which was false for every refused
+        legacy row. A governed source genuinely has two branches and no request
+        to pick between them, so the empty string stays the answer there.
+        """
+        return "" if getattr(self.pricer, "snapshot_governed", True) else POLICY_NONE
 
     def _curve_name_or_none(self, unit):
         try:
@@ -610,6 +693,15 @@ class UnitRepricer:
 def _has_date(row) -> bool:
     v = row.get("effective_date")
     return v is not None and not pd.isna(v)
+
+
+def _stratum(row, instant) -> str:
+    """The leg's coverage stratum, total over rows that have no usable date.
+
+    One helper for both the pricing path and the refusal path, so the same leg
+    cannot be labelled two ways depending on how far it got.
+    """
+    return start_class(row.get("effective_date"), instant) if _has_date(row) else START_UNKNOWN
 
 
 def _implausible(legs) -> tuple | None:

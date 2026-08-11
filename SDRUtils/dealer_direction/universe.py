@@ -10,9 +10,12 @@ WHAT CHANGED FROM ``stir_flow.trade_selection`` AND WHY
 -------------------------------------------------------
 
 **The 3.02y maturity cutoff is gone.** ``config.SUB3Y_HORIZON_DAYS = 1105``
-discards **69.7% of flow legs** (1,595,321 of 2,289,646). It was a short-end
-classifier's scope, not a data statement, and removing it is the point of the
-exercise.
+discards **73.0% of flow legs** — 1,671,827 of 2,289,646 — measured as the
+filter is actually written (``trade_selection.py:79``:
+``expiration_date > as_of_date + 1105 days``), not as the ``tenor_years > 3.02``
+proxy, which is a *different* 1,595,321 legs and 3.3pp smaller. It was a
+short-end classifier's scope, not a data statement, and removing it is the
+point of the exercise.
 
 **The venue whitelist is extended, with evidence, and asymmetrically.** See
 :data:`VENUE_EVIDENCE`.
@@ -20,12 +23,15 @@ exercise.
 **MAC comes back in; the asset-swap families stay out.** See
 :data:`EXCLUDED_TRADE_TYPES`.
 
-**Term SOFR is now excluded as a different index, which it is.** 32,842 flow
-legs carry ``leg_tape_label`` containing ``"CME Term"`` while
-``rate_index_clean`` reads ``'SOFR'``, so the index filter alone lets them
-through and the daily-compounded ``USD-SOFR-1D`` curve then prices a Term SOFR
-swap. The Term/OIS basis is tens of basis points; left in, it reads as
-direction, confidently and in one direction.
+**Term SOFR is now excluded as a different index, which it is.** 32,842 legs
+carry ``leg_tape_label`` containing ``"CME Term"`` while ``rate_index_clean``
+reads ``'SOFR'``, so the index filter alone lets them through and the
+daily-compounded ``USD-SOFR-1D`` curve then prices a Term SOFR swap. The
+Term/OIS basis is tens of basis points; left in, it reads as direction,
+confidently and in one direction. That 32,842 is the *pair*, counted over all
+rows (32,573 over ``ECONOMIC_FLOW``); the gate at :func:`annotate_legs` fires
+on the label alone without consulting the index, so what it actually removes is
+**33,487** ``contributes_to_flow`` legs.
 
 **Non-constant notional schedules are excluded eagerly.** ``schedule_row_count``
 is **0 on all 2,326,781 rows** — the tape carries no amortisation schedule at
@@ -33,8 +39,50 @@ all — so a bullet repricing of an amortiser succeeds numerically and is wrong
 by the schedule effect, which on an upward-sloping curve is signed. That is the
 worst kind of defect: no exception, a biased answer. Gated on the structured
 ``upi_notional_schedule`` column (48,937 flow legs), **not** on
-``config.EXCLUDED_LABEL_TOKENS``' ``"Amortizing"`` token, which catches only
-15,527 of the 35,470 amortisers.
+``config.EXCLUDED_LABEL_TOKENS``' ``"Amortizing"`` token. The reason is *not*
+that the token misses amortisers — measured, it does not: ``leg_tape_label LIKE
+'%Amortizing%'`` and ``upi_notional_schedule = 'Amortizing'`` select the same
+35,470 flow legs, 1:1, in every population tried (35,471 over all rows, 34,656
+over ``ECONOMIC_FLOW``). The reason is the two families the token has no word
+for: **Custom 11,960** and **Accreting 1,507**, which are equally not bullets
+and which a label filter admits and prices as one.
+
+WHAT ``contributes_to_flow`` ADMITS, AND WHAT NO DENOMINATOR HERE COUNTS
+------------------------------------------------------------------------
+
+``EXCL_NOT_FLOW`` is ``~contributes_to_flow``, and that column is **True on two
+economic classes, not one**. Measured on v3: ``ECONOMIC_FLOW`` 2,289,646 and
+``ECONOMIC_UNWIND`` **36,828**, against ``ADMINISTRATIVE`` 307 — so the gate
+removes 307 rows and the universe admits 2,326,474. Every other measured number
+in this module is quoted over ``ECONOMIC_FLOW`` alone, so **none of them
+describes what the code admits**; the 36,828 are reported separately
+(``unwind_units_kept``) rather than folded into a denominator that does not
+contain them.
+
+They are also not caught by ``is_lifecycle``. An ``ECONOMIC_UNWIND`` row here is
+``trade_tape.py``'s H10 rule — a ``NEWT`` whose effective date is backdated more
+than about a week, i.e. a position that already started accruing — and **36,763
+of the 36,828 are stamped ``lifecycle_type = 'NEW_TRADE'``**, so
+``is_lifecycle = ~all_new_trade`` reads False and they enter the primary
+customer-flow series.
+
+**Re-tagging them ``is_lifecycle`` would be worse, not better, and this is the
+reason it is not done here.** ``upfront.orientation`` (``upfront.py:305-315``)
+returns ``-s if is_lifecycle else s``: the flag does not merely select a series,
+it *inverts the inferred direction*, and it does so because on a termination the
+party holding the ITM side pays to exit. A backdated ``NEWT`` is a new swap
+struck today at a seasoned coupon with a balancing fee, so ``sign(-f)`` — the
+new-trade branch — is the correct orientation for it. Flipping 36,763 prints to
+buy a tidier series tag is exactly the silent wrong answer this module exists to
+prevent.
+
+What remains genuinely open is the *confidence* model, not the sign:
+``types.Clocks``/``types.Unit`` describe the lifecycle series as one whose
+deviation is driven by seasoned P&L rather than by bid-offer, and a backdated
+print is that population too. Resolving it needs a third series (or an
+``is_lifecycle`` split into a series tag and a sign rule), which is a
+``types.py``/``ladder.py``/``upfront.py`` decision and not one this module can
+make on its own. Until it is made, the population is counted and named.
 
 THE TOTAL LEG ORDER
 -------------------
@@ -115,7 +163,12 @@ EVIDENCE_UNRECOGNISED = "UNRECOGNISED"
 #: judgement about a new firm.
 #:
 #: *Counts* (ECONOMIC_FLOW legs, measured on v3): TREU 25,192 · BMTF 20,678 ·
-#: RTXF 7,476 · ISWE 6,880 · TWEM 4,775 · BTFE 3,012 · GSEF 2,658.
+#: RTXF 7,476 · ISWE 6,880 · TWEM 4,775 · BTFE 3,012 · GSEF 2,658. The code
+#: gates on ``contributes_to_flow`` alone, which is a slightly wider
+#: population (TREU 25,224 · BMTF 20,699 · TWEM 4,785 · BTFE 3,026 · GSEF
+#: 2,659; RTXF/ISWE/BGCO/TRWB unchanged) — see "WHAT ``contributes_to_flow``
+#: ADMITS" above. The evidence is stated on the narrower one because that is
+#: the population the fingerprint table below was cut on.
 #:
 #: *Fingerprint.* Known-D2C and known-D2D separate cleanly on two axes:
 #:
@@ -147,9 +200,14 @@ EVIDENCE_UNRECOGNISED = "UNRECOGNISED"
 #: operators, and classifying a firm's 25,192-leg code while leaving its
 #: 237-leg one unclassified is arbitrary. The table's FX/NDF entries (``CBNL``,
 #: ``JPCB``, ``EBSS``, ``XEBS``, ``THRE``, ``BHSF``) are deliberately **not**
-#: pre-loaded -- none appears on this tape, and if one ever did, an
-#: unrecognised FX venue on a USD IRS tape is something to look at rather than
-#: to silently absorb.
+#: pre-loaded: an unrecognised FX venue on a USD IRS tape is something to look
+#: at rather than to silently absorb. **One of them is here** -- ``CBNL``, 2
+#: legs (the other five are absent) -- so the intended consequence is live: it
+#: classifies ``VENUE_UNKNOWN`` on fingerprint evidence of two rows, which is
+#: none, and :func:`on_facility` returns ``None`` for it so it takes the
+#: conservative +60 min delay. Two legs is below anything worth a registry
+#: judgement; the number is written down so the next reader checks it against
+#: the tape rather than against this sentence.
 #:
 #: RTXF is the only **fingerprint-tier** entry: the reference table lists
 #: Refinitiv as ``RTX`` (D2D) and ``THRE`` (D2C), and a one-character-off match
@@ -244,6 +302,15 @@ def on_facility(platform_identifier) -> bool | None:
     ``is True`` / ``is False``, so an unrecognised platform falls to
     ``INDETERMINATE`` (+60 min) rather than borrowing a delay class it has no
     claim to.
+
+    **This supersedes ``ladder_conventions.SEF_PLATFORM_CODES``**, which is the
+    8 incumbent codes, and the deviation is listed in :data:`_RELAXATIONS`
+    because it is the only one here that moves a *clock* rather than an
+    admission: the 9 MTF/SEF codes added to :data:`VENUE_EVIDENCE` (~70,700
+    legs) go from INDETERMINATE (+60) to their Appendix C class, which is
+    shorter, and a visibility stamp that is too early is lookahead. The change
+    is substantively right — they are registered MTFs and SEFs — but it errs in
+    the expensive direction, so it is tested rather than assumed.
     """
     pid = _pid(platform_identifier)
     if not pid:
@@ -347,6 +414,14 @@ NON_CONSTANT_SCHEDULES = frozenset({"Amortizing", "Custom", "Accreting"})
 #: bid-offer? — needs the repricing pass and is not available here. Until it
 #: is run, the exclusion stands, and its DV01 share is reported so the size of
 #: what is being given up is visible rather than assumed small.
+#:
+#: *Measured membership*, so the list is not read as more evidenced than it is:
+#: INVOICE 32,073 · INVOICE_SWITCH 4,916 · INVOICE_CALENDAR 792 are live;
+#: ``INVOICE_SWAP`` **does not exist on this tape** and is carried as a
+#: defensive spelling only. ``BASIS_CURVE`` (1,150) and ``BASIS_FLY`` (210) are
+#: deliberately absent from this list because they all carry
+#: ``rate_index_clean = 'BASIS'`` and the index gate, which reads higher in
+#: :data:`EXCLUSION_PRECEDENCE`, is the more informative answer for them.
 EXCLUDED_TRADE_TYPES = (
     "SPREADOVER", "SPREADOVER_CURVE", "SPREADOVER_FLY",
     "MATCHED_MATURITY", "MATCHED_MATURITY_CURVE", "MATCHED_MATURITY_FLY",
@@ -477,6 +552,8 @@ def annotate_legs(legs: pd.DataFrame) -> pd.DataFrame:
 
     df["_venue"] = [classify_venue(p) for p in df["platform_identifier"]]
     df["_is_new_trade"] = df["lifecycle_type"].astype("string").fillna("") == "NEW_TRADE"
+    df["_is_unwind"] = (
+        df["economic_class"].astype("string").fillna("") == "ECONOMIC_UNWIND")
     return df
 
 
@@ -499,9 +576,9 @@ def unit_frame(legs: pd.DataFrame) -> pd.DataFrame:
     if df.empty:
         return pd.DataFrame(columns=[
             "unit_key", "package_id", "as_of_date", "kind", "n_legs",
-            "rate_index", "venue_class", "is_lifecycle", "is_block",
-            "is_capped", "is_mac", "has_sentinel", "upfront", "upfront_source",
-            "dv01_proxy", "exclusion", "exclusion_detail"])
+            "rate_index", "venue_class", "is_lifecycle", "is_unwind",
+            "is_block", "is_capped", "is_mac", "has_sentinel", "upfront",
+            "upfront_source", "dv01_proxy", "exclusion", "exclusion_detail"])
 
     grp = df.groupby("_unit_group", sort=False)
     u = grp.agg(
@@ -514,6 +591,7 @@ def unit_frame(legs: pd.DataFrame) -> pd.DataFrame:
         n_platform=("platform_identifier", "nunique"),
         venue_class=("_venue", "first"),
         all_new_trade=("_is_new_trade", "all"),
+        is_unwind=("_is_unwind", "any"),
         is_block=("is_block", "any"),
         is_capped=("is_capped", "any"),
         is_mac=("is_mac", "any"),
@@ -559,9 +637,9 @@ def unit_frame(legs: pd.DataFrame) -> pd.DataFrame:
 
     u["exclusion_detail"] = _details(df, u, gates)
     cols = ["unit_key", "package_id", "as_of_date", "kind", "n_legs",
-            "rate_index", "venue_class", "is_lifecycle", "is_block",
-            "is_capped", "is_mac", "has_sentinel", "upfront", "upfront_source",
-            "dv01_proxy", "exclusion", "exclusion_detail"]
+            "rate_index", "venue_class", "is_lifecycle", "is_unwind",
+            "is_block", "is_capped", "is_mac", "has_sentinel", "upfront",
+            "upfront_source", "dv01_proxy", "exclusion", "exclusion_detail"]
     return u[cols]
 
 
@@ -675,9 +753,21 @@ def resolve_upfront(legs: pd.DataFrame, *, is_lifecycle: bool) -> tuple:
     rate rule and are reported.
 
     ``PTP`` keeps ``stir_flow``'s precedence -- a package transaction price
-    above ``PTP_USD_FLOOR`` is the package's own fee in dollars and outranks a
-    leg-level sum. Below the floor the field is carrying a price in points, not
-    a dollar amount.
+    above ``PTP_USD_FLOOR`` **in absolute value** is the package's own fee in
+    dollars and outranks a leg-level sum. Below the floor the field is carrying
+    a price in points, not a dollar amount.
+
+    **The ``abs()`` on PTP is load-bearing, not defensive.** Measured on v3:
+    382,815 legs carry a ``package_transaction_price`` below -500 against
+    403,314 above +500, i.e. the field's sign is a direction of payment and
+    roughly half the population is negative. (``other_payment_ufro``, by
+    contrast, is non-negative on every row of the tape, so the ``abs()`` there
+    really is defensive.) Compare a raw PTP against the floor instead and every
+    one of those 382,815 reads as *no fee*: the unit silently falls through to
+    the UFRO sum or to the rate rule, with a real, large, reported fee unused.
+    ``Unit.upfront`` is documented unsigned and the frozen
+    ``trade_selection.resolve_upfront`` takes ``abs()`` too; a test ties out
+    against it on a negative price.
     """
     u = pd.DataFrame([{
         "ptp": next((v for v in legs.get(
@@ -870,6 +960,7 @@ def aggregate_units(u: pd.DataFrame) -> dict:
     if u.empty:
         empty = pd.DataFrame()
         return {"kept_units": 0, "excluded_units": 0, "sentinel_units": 0,
+                "unwind_units_kept": 0, "lifecycle_units_kept": 0,
                 "dv01_proxy_total": 0.0, "dv01_proxy_kept": 0.0,
                 "by_reason": empty, "by_constant": empty, "by_venue": empty,
                 "by_kind": empty, "by_upfront": empty, "per_day": empty}
@@ -900,7 +991,12 @@ def aggregate_units(u: pd.DataFrame) -> dict:
                      n_lifecycle=("is_lifecycle", "sum"),
                      n_with_upfront=("upfront", "count"))
                 .sort_values("dv01_proxy", ascending=False))
-    by_venue["dv01_share_pct"] = (
+    # NOT `dv01_share_pct`: this one is a share of the KEPT total, while
+    # `by_reason` and `by_constant` are shares of the whole universe. Three
+    # columns under one name in one report is how two denominators get read as
+    # one -- the venue lines would sum to 100% beside exclusion lines that sum
+    # to the excluded share, and nothing on the page would say why.
+    by_venue["dv01_share_of_kept_pct"] = (
         100.0 * by_venue["dv01_proxy"] / by_venue["dv01_proxy"].sum()
         if len(by_venue) else np.nan)
 
@@ -926,6 +1022,11 @@ def aggregate_units(u: pd.DataFrame) -> dict:
         "kept_units": int(len(kept)),
         "excluded_units": int(len(excl)),
         "sentinel_units": int(u["has_sentinel"].sum()),
+        # Reported because nothing else in this module counts them and the
+        # measured denominators quoted throughout it do not include them. See
+        # the module docstring, "WHAT `contributes_to_flow` ADMITS".
+        "unwind_units_kept": int(kept["is_unwind"].sum()),
+        "lifecycle_units_kept": int(kept["is_lifecycle"].sum()),
         "dv01_proxy_total": total_dv01,
         "dv01_proxy_kept": float(kept["dv01_proxy"].sum()),
         "by_reason": by_reason,
@@ -1013,15 +1114,26 @@ def _report(start: str | None, end: str | None) -> int:
         part = load_legs(conn, chunk_lo.date(), chunk_hi.date())
         n_legs_seen += len(part)
         u = _slim(unit_frame(part))
+        empty = "   <- EMPTY" if len(part) == 0 else ""
         print(f"  {chunk_lo.date()}..{chunk_hi.date()}  {len(part):>8,} legs "
-              f"-> {len(u):>7,} units", flush=True)
+              f"-> {len(u):>7,} units{empty}", flush=True)
         del part
         frames.append(u)
         gc.collect()
     conn.close()
     print(f"  legs read: {n_legs_seen:,}")
 
-    u = pd.concat(frames, ignore_index=False)
+    # A range that returns nothing is a failed report, not a report of nothing.
+    # Without this the loop prints `0 legs -> 0 units` for every month, the
+    # aggregation returns its zero dict, and the run exits 0 -- and the caller
+    # cannot tell an empty tape from a wrong date range or a connection served
+    # from the wrong database.
+    u = pd.concat(frames, ignore_index=False) if frames else pd.DataFrame()
+    if n_legs_seen == 0 or len(u) == 0:
+        print(f"NO DATA: {n_legs_seen:,} legs / {len(u):,} units over "
+              f"{lo.date()}..{hi.date()}. Nothing was measured; this is a "
+              "failure, not an empty result.")
+        return 2
     _print_report(aggregate_units(u), u)
     return 0
 
@@ -1032,7 +1144,7 @@ def _report(start: str | None, end: str | None) -> int:
 #: size and the difference between the report running and the interpreter
 #: failing to allocate 485 KiB, which is what it did.
 _AGG_COLUMNS = ("as_of_date", "kind", "n_legs", "rate_index", "venue_class",
-                "is_lifecycle", "is_capped", "is_block", "is_mac",
+                "is_lifecycle", "is_unwind", "is_capped", "is_block", "is_mac",
                 "has_sentinel", "upfront", "upfront_source",
                 "dv01_proxy", "exclusion", "exclusion_detail")
 _AGG_CATEGORICAL = ("kind", "rate_index", "venue_class", "upfront_source",
@@ -1048,14 +1160,25 @@ def _slim(u: pd.DataFrame) -> pd.DataFrame:
 
 _RELAXATIONS = """
 EVERY DEVIATION FROM THE FROZEN `stir_flow` FILTER SET, STATED UP FRONT
-  REMOVED  the 1105-day maturity cutoff            (69.7% of flow legs)
+  REMOVED  the 1105-day maturity cutoff            (73.0% of flow legs -- 1,671,827
+           of 2,289,646, measured as the filter is written; the tenor>3.02y proxy
+           is a different and 3.3pp smaller 1,595,321)
   REMOVED  MAC from EXCLUDED_TRADE_TYPES           (98.85% of MAC legs carry a fee)
-  ADDED    Term SOFR -> UNSUPPORTED_INDEX          (32,842 flow legs, index filter missed them)
+  ADDED    Term SOFR -> UNSUPPORTED_INDEX          (33,487 legs; gated on the label
+           alone, so it is wider than the 32,842 label-and-index pair)
   ADDED    non-Constant notional -> PRICING_ERROR  (48,937 flow legs, no schedule on the tape)
   REPLACED the "Amortizing" label token with `upi_notional_schedule`
-                                                   (the token caught 15,527 of 35,470)
+           (NOT because the token misses amortisers -- measured, the two select the
+           same 35,470 legs 1:1 -- but because it has no word for Custom 11,960 or
+           Accreting 1,507, which are equally not bullets)
   ADDED    D2C: TREU TWEM BMTF BTFE TRWB           (+53,664 legs, registry tier)
   ADDED    D2D: ISWE GSEF BGCO RTXF                (+17,251 legs; RTXF fingerprint tier)
+  ADDED    on-facility = "in VENUE_EVIDENCE and not off-facility", superseding
+           ladder_conventions.SEF_PLATFORM_CODES (the 8 incumbents). The 9 added
+           MTF/SEF codes (~70,700 legs) move from INDETERMINATE (+60 min) to their
+           Appendix C class -- a SHORTER availability delay, so it is the direction
+           that can leak lookahead, and it is the one deviation here that changes a
+           clock rather than an admission.
   ADDED    UWIN as an upfront source               (net effect: ZERO kept units --
            all 15 UWIN legs on the tape are Term SOFR or amortising and are
            excluded anyway. The brief's premise that terminations have no fee is
@@ -1064,11 +1187,17 @@ EVERY DEVIATION FROM THE FROZEN `stir_flow` FILTER SET, STATED UP FRONT
            of that decision is in the table below and it is the largest single line
   UNCHANGED and UNFIXABLE: NEWT-EXER / NEWT-NOVA cannot be excluded. All four
            tape flags are literally `false` on all 2,326,781 rows. ~3.1% of legs.
+  UNCHANGED and OPEN: 36,828 ECONOMIC_UNWIND legs are `contributes_to_flow` and
+           36,763 of them are stamped NEW_TRADE, so they enter the PRIMARY series.
+           Re-tagging them is_lifecycle would invert their sign (upfront.py:305);
+           they are counted below instead. See the module docstring.
 """
 
 
 def _print_report(rep: dict, u: pd.DataFrame) -> None:
     n = rep["kept_units"] + rep["excluded_units"]
+    if n == 0:
+        raise ValueError("nothing to report: 0 units")
     print(_RELAXATIONS)
     print()
     print("=" * 84)
@@ -1080,9 +1209,10 @@ def _print_report(rep: dict, u: pd.DataFrame) -> None:
     print(f"  excluded         {rep['excluded_units']:>12,}")
     print(f"  notional-sentinel units (DV01 proxy forced to 0) "
           f"{rep['sentinel_units']:>6,}")
-    print(f"  DV01 proxy total {rep['dv01_proxy_total']:>15,.0f}")
+    tot = rep["dv01_proxy_total"]
+    print(f"  DV01 proxy total {tot:>15,.0f}")
     print(f"  DV01 proxy kept  {rep['dv01_proxy_kept']:>15,.0f}  "
-          f"({100*rep['dv01_proxy_kept']/rep['dv01_proxy_total']:.2f}%)")
+          + (f"({100*rep['dv01_proxy_kept']/tot:.2f}%)" if tot else "(n/a)"))
     p = rep["per_day"]
     print(f"  days             {len(p):>12,}   units/day "
           f"min {p['units'].min():,} · median {p['units'].median():,.0f} · "
@@ -1149,6 +1279,14 @@ def _print_report(rep: dict, u: pd.DataFrame) -> None:
           .agg(n_units=("n_legs", "size"), n_legs=("n_legs", "sum"),
                dv01_proxy=("dv01_proxy", "sum"),
                n_with_upfront=("upfront", "count")).to_string())
+    print()
+    print(f"  ECONOMIC_UNWIND units kept  {rep['unwind_units_kept']:>9,}"
+          "   <- admitted into the PRIMARY series, not the lifecycle one")
+    print(f"  of which flagged lifecycle  "
+          f"{int((kept['is_unwind'] & kept['is_lifecycle']).sum()):>9,}")
+    print("  These are backdated NEW_TRADEs, so `lifecycle_type` does not see")
+    print("  them; see the module docstring for why re-tagging them is NOT the")
+    print("  fix and what the open question actually is.")
 
 
 if __name__ == "__main__":
