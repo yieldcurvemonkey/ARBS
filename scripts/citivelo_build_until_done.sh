@@ -15,7 +15,7 @@
 set -u
 REPO="C:/Users/chris/clee/ARBS-snap"
 PY="C:/Users/chris/anaconda3/envs/stir/python.exe"
-CURVES="USD-FEDFUNDS-1D,USD-SOFR-1D"
+CURVES="${CITIVELO_BUILD_CURVES:-USD-FEDFUNDS-1D,USD-SOFR-1D}"
 LOCK="$REPO/logs/.build_chain.lock"
 cd "$REPO" || exit 1
 export ARBS_SUPABASE_ENABLED=0
