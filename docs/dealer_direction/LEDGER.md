@@ -752,19 +752,81 @@ per-leg KRD hangs off the unit, it does not replace it.
 | D8 | Terminations classified by the upfront rule and kept as a **separate series** | F-8: sign is right but is driven by seasoned P&L, not by bid-offer, so the confidence model does not transfer | yes |
 | D9 | **KRD comes from rateslib's own delta ladder** — `Solver` + `Portfolio(...).delta(solver=...)`. No hand-rolled cashflow bucketing. | user instruction, 2026-08-11. Also the right call on the merits: rateslib's delta is risk to the *calibrating instruments*, so the bucket set is defined by the instruments we choose and the Jacobian comes out of the calibration for free — which is exactly the transformation a desk wants, and it reuses `MDP/IRSwaps/BARCHART_STIRF/risk.py::build_delta_risk_ladder`. | no (instructed) |
 
+### CORRECTION: the per-day solver is REFUTED — shipped per-session-block
+
+The two notes below argued for one solver per `(rate_index, as_of_date)` on the
+strength of a measured per-day Jacobian stability (`max|dJ|` 0.0030). **The
+build measured it end to end and it fails.** Error against per-minute solvers,
+as a percentage of each trade's own total DV01 (max bucket, p95 in brackets),
+five shapes at every tenth stored minute:
+
+| block | 2025-04-07 shape break | 2024-06-12 FOMC | 2026-06-17 FOMC |
+|---|---|---|---|
+| 15 min | 0.842% (0.253%) | 0.262% (0.069%) | 0.346% (0.044%) |
+| 30 min | 1.199% (0.393%) | 0.374% (0.100%) | 0.340% (0.086%) |
+| **60 min (shipped default)** | 1.636% (0.554%) | 1.646% (0.252%) | 0.574% (0.154%) |
+| whole day | **5.614%** (4.638%) | 2.240% (1.857%) | 3.445% (3.429%) |
+
+5.6% on the shape break is the same order as the error that makes 11Y a
+mandatory pillar, so accepting one and rejecting the other is incoherent.
+Shipped **per-session-block, 60 min**, with `block_minutes` a constructor
+argument; 30 min roughly halves the worst case for ~13% more wall clock.
+
+**The diagnosis matters more than the number.** The per-day *Jacobian* is stable
+exactly as measured — what moves is **the trade's own DV01** (a 50Y case's total
+moved 8.1% across 2025-04-07). So this is **pricing staleness, not basis
+staleness**, and the original measurement was not wrong, it was answering a
+different question. That is the trap: a stable Jacobian licenses a stale
+*basis*, not a stale *price*.
+
+### Other corrections the build forced
+
+| claimed | measured |
+|---|---|
+| solver build 42.2 ms | **2,555 ms** with the curve's 7,140 fixings attached, **300 ms** stripped (deltas equal to 6.1e-11, so stripping is safe) |
+| `cond(J) = 2.62` at K=28 | **204.1** (the 2.62 came from a differently-normalised Jacobian). Still safe. |
+| "chunk `Portfolio.delta` at ~100 positions" | **unusable** — `delta` aggregates (a 2-instrument portfolio equals the sum of singles to 1.5e-11), so batching across units destroys the per-unit breakdown. **The unit is the batch.** |
+| `KRD_RESULTS.txt` reprice tie-out | **100x too large** — inherited from `ddkrd_p1.py`, which multiplies a percent difference by 1e4. Real max is 0.0046 bp, not 0.46 bp. |
+| FED_FUNDS needs a curve override | it does not: `USD-FEDFUNDS-1D-RISK` is in `RATESLIB_CURVE_DEFINITIONS` so the second pass resolves. |
+
+Cost: **65.5 s/day, 36 solvers → 11.1 h for 610 days** single-process, of which
+solver builds are only 10.8 s/day. Grid validated independently: the 28-pillar
+reduced curve reprices the dense curve's own pars to **max 0.0046 bp**; dropping
+11Y displaces a spot-11Y trade by **100.0%**, and capping at 30Y turns a 52,853
+USD/bp 50Y trade into a **+149,799 / −99,121 dipole** across 30Y/25Y.
+`validate_pillars` refuses those grids at construction.
+
+### F-22. A lookahead guard caught 3.9% of legs being priced on a FUTURE curve
+
+`krd.py` carries a `LookaheadCurve` guard — a cached block anchor may never
+postdate the unit. On 2026-04-01 it immediately caught **167 of 4,329 legs
+(3.9%)** when the input was sorted by `execution_timestamp`, because a non-NEWT
+row prices on `#30` (F-12) while `#96` is frozen at the original trade. Each
+would have been priced on a curve up to an hour **after** its own print — the
+circularity the whole exercise exists to prevent, arriving through the back door
+of a *sort key*. Sorted on `snap_instant(unit.clocks.pricing)`, coverage is 100%.
+
+**Rule**: any batching or caching keyed on time must key on the **pricing**
+clock, never on `execution_timestamp`.
+
 ### D9 is robust to the R0 outcome, which is why it is safe to finish
 
 KRD is needed under both R0 branches but **needed differently**: a PASS wants an
 intraday hedge-trigger, a FAIL wants a daily street-positioning indicator. That
-looks like a reason to defer it — but the per-`(rate_index, as_of_date)` solver
-choice happens to serve both, because **the risk *basis* is daily under either
-branch**. The Jacobian was measured as a per-day object (`max|dJ|` 0.0030 within
-a day), so a per-minute risk basis would be spurious precision even under PASS.
-What differs between the branches is the *flow timestamping*, and that lives in
-the ladder's aggregation clock, not in the KRD.
+looks like a reason to defer it — and the module serves both, but **not for the
+reason first written here**.
 
-So the module in flight is the right one either way. What R0 changes is the
-bucket granularity a consumer asks of it, not how it is built.
+The original argument was that the risk *basis* is daily under either branch, so
+one solver per day suffices. Half of that survives: the Jacobian genuinely is a
+per-day object. The operational conclusion does not — see the correction above,
+where a whole-day block is 5.6% wrong on a curve-shape break because the trade's
+own DV01 moves within the day. The module ships **per-session-block**, and
+`block_minutes` is the single knob that spans the two branches: 60 min is ample
+for a daily positioning indicator, 15 min is available if a PASS wants an
+intraday trigger, and nothing else in the design changes.
+
+So the module in flight is still the right one either way. What R0 changes is
+one constructor argument, not how it is built.
 
 ### D9 in practice
 
