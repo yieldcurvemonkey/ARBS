@@ -649,6 +649,25 @@ flow:
   one-way from a half-basis-point curve error. **This is worth telling the desk
   regardless of what this task produces.**
 
+### What the curve finding does and does not restore — scope it precisely
+
+The temptation is to read F-20 as reviving the dealer-ladder programme. It does
+not, and being loose about this would repeat the original error in the other
+direction.
+
+**What it restores.** The prior "no signal" verdict was reached on labels that
+are ~78% one-directional. A classifier that one-sided cannot produce a
+meaningful inventory series — the integral is a drift term plus noise — so that
+verdict is **uninformative, not null**. The finding restores the *possibility*
+of signal and earns the ladder a real test. It does not supply one.
+
+**What it leaves untouched.** The front-running premise is a separate question
+and fixing the mid says nothing about it. So are the two constraints that
+actually bound the research: the unknown-constant problem, and `N_eff` of about
+60 trading days rather than the ~50k prints an unclustered count would suggest.
+Those are unaffected by curve quality. **R0 still decides the intraday
+question**, and a better mid does not make R0 easier to pass.
+
 ### The tie-out design has to change (supersedes the earlier D6 gate)
 
 The earlier plan was "reference = a fresh dry-run of frozen `stir_flow` on
