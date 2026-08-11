@@ -30,8 +30,10 @@ from MDP.IRSwaps.IRSwapsMDP import IRSwapsMDP  # noqa: E402
 REFDIR = r"D:\r0b_cache\ref"
 D1DIR = r"D:\r0_cache_moved\cache_d1_ref"
 TSDIR = r"D:\r0b_cache\ts"
+PARTDIR = r"D:\r0b_cache\ref_parts"
 os.makedirs(REFDIR, exist_ok=True)
 os.makedirs(TSDIR, exist_ok=True)
+os.makedirs(PARTDIR, exist_ok=True)
 
 START = pd.Timestamp("2026-04-30 23:00", tz="UTC")
 END = pd.Timestamp("2026-08-07 22:00", tz="UTC")
@@ -52,6 +54,14 @@ for tn in sys.argv[1:]:
     for a, b in zip(edges[:-1], edges[1:]):
         if b <= a:
             continue
+        # chunk-level resume: a 10-minute foreground cap kills the slowest tenors
+        # mid-pull, so each month is banked as its own part file.
+        part = os.path.join(PARTDIR, f"ref_{tn}__{a.date()}_{b.date()}.parquet")
+        if os.path.exists(part):
+            parts.append(pd.read_parquet(part))
+            print(f"  {tn:5s} {a.date()}..{b.date()} {len(parts[-1]):6,}  (part cached)",
+                  flush=True)
+            continue
         ts = tb.get_timeseries(start=pd.Timestamp(a).to_pydatetime(),
                                end=pd.Timestamp(b).to_pydatetime(),
                                queries=[IRSwapQuery(curve="USD-SOFR-1D", tenor=tn,
@@ -61,8 +71,10 @@ for tn in sys.argv[1:]:
         ss = ts.iloc[:, 0].dropna()
         ix = pd.to_datetime(ss.index)
         ix = ix.tz_localize("UTC") if ix.tz is None else ix.tz_convert("UTC")
-        parts.append(pd.DataFrame({"tenor_lc": tn, "ref_min": ix.floor("min"),
-                                   "ref_rate": ss.to_numpy(float)}))
+        p = pd.DataFrame({"tenor_lc": tn, "ref_min": ix.floor("min"),
+                          "ref_rate": ss.to_numpy(float)})
+        p.to_parquet(part, index=False)
+        parts.append(p)
         del ts, ss
         gc.collect()
         print(f"  {tn:5s} {a.date()}..{b.date()} {len(parts[-1]):6,}  "
