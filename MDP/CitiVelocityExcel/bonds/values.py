@@ -182,11 +182,23 @@ FAILURES_KEY = "citivelo_failures"
 class QuoteNotServedError(ValueError):
     """A quote-only value was asked for and no Citi number backs it.
 
+    Carries ``coverage_miss = True``. This is a NORMAL outcome, not a fault:
+    coverage is per bond and uneven, so asking a 349-name basket for ten values
+    means thousands of these in any real warm. A caller that logs it as an
+    exception pays for a formatted traceback each time - measured at 16,722
+    tracebacks in one ten-year alias warm and **57% of the wall time** of a
+    250-date chunk - and buries any real failure in the noise. The marker is an
+    attribute rather than a shared base class so a generic caller can recognise
+    it without importing anything from this package.
+
     A ``ValueError`` subclass so existing broad handlers still catch it, and its
     own type so a caller can tell "Citi did not serve this" from "you passed a
     bad argument". The causes are distinguished in the message by
     :func:`require_quoted`, because they have different fixes.
     """
+
+    #: Expected absence of data, not a fault. See the class docstring.
+    coverage_miss = True
 
 
 class NoQuotedPriceError(ValueError):
