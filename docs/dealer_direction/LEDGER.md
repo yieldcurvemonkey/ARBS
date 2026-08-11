@@ -752,6 +752,20 @@ per-leg KRD hangs off the unit, it does not replace it.
 | D8 | Terminations classified by the upfront rule and kept as a **separate series** | F-8: sign is right but is driven by seasoned P&L, not by bid-offer, so the confidence model does not transfer | yes |
 | D9 | **KRD comes from rateslib's own delta ladder** — `Solver` + `Portfolio(...).delta(solver=...)`. No hand-rolled cashflow bucketing. | user instruction, 2026-08-11. Also the right call on the merits: rateslib's delta is risk to the *calibrating instruments*, so the bucket set is defined by the instruments we choose and the Jacobian comes out of the calibration for free — which is exactly the transformation a desk wants, and it reuses `MDP/IRSwaps/BARCHART_STIRF/risk.py::build_delta_risk_ladder`. | no (instructed) |
 
+### D9 is robust to the R0 outcome, which is why it is safe to finish
+
+KRD is needed under both R0 branches but **needed differently**: a PASS wants an
+intraday hedge-trigger, a FAIL wants a daily street-positioning indicator. That
+looks like a reason to defer it — but the per-`(rate_index, as_of_date)` solver
+choice happens to serve both, because **the risk *basis* is daily under either
+branch**. The Jacobian was measured as a per-day object (`max|dJ|` 0.0030 within
+a day), so a per-minute risk basis would be spurious precision even under PASS.
+What differs between the branches is the *flow timestamping*, and that lives in
+the ladder's aggregation clock, not in the KRD.
+
+So the module in flight is the right one either way. What R0 changes is the
+bucket granularity a consumer asks of it, not how it is built.
+
 ### D9 in practice
 
 `instrument.delta(solver=...)` returns sensitivity **to the solver's calibrating
