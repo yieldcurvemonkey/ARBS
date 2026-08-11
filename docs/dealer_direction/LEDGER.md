@@ -136,6 +136,90 @@ Currently `VENUE_UNKNOWN`: XXXX 51,260 · XOFF 28,401 · TREU 25,192 ·
 BMTF 20,678 · RTXF 7,476 · ISWE 6,880 · TWEM 4,775 · BTFE 3,012 · GSEF 2,658
 and a long tail.
 
+### F-8. What the "unwind" rows actually are — and why flipping matters less than assumed
+
+Probes `scratch/probe_unwinds.py`, `scratch/probe_unwinds2.py`.
+
+`economic_class = ECONOMIC_UNWIND` and `lifecycle_type = TERMINATION` are
+**two disjoint populations**, and neither is what the plan assumed:
+
+| lifecycle_type | economic_class | n | contributes_to_flow |
+|---|---|---|---|
+| NEW_TRADE | ECONOMIC_FLOW | 2,219,906 | yes |
+| TERMINATION | ECONOMIC_FLOW | 50,752 | yes |
+| NEW_TRADE | **ECONOMIC_UNWIND** | **36,763** | yes |
+| OTHER | ECONOMIC_FLOW | 18,988 | yes |
+| TERMINATION | ECONOMIC_UNWIND | 38 | yes |
+
+- The 36,763 `ECONOMIC_UNWIND` rows are `lifecycle_type = NEW_TRADE`. Every
+  single one has `effective_date` more than 5 days before `as_of_date`. They
+  are the **unwind-as-a-new-offsetting-trade** signature, not TERM actions.
+- **97% of them fall in 2024-03..2024-07** (35,689 of 36,828), then the
+  detector all but stops: 3–34/month thereafter, with one 746 spike in
+  2026-04. `lifecycle_type = TERMINATION` is **exactly zero before 2024-07**
+  and 1,600–2,800/month after. The two families are temporally
+  complementary — this is an ingest/source regime change around 2024-07,
+  not a market change. **Pre-2024-07 tape has no termination events at all.**
+- `economic_class_reason` is the same literal string (`§43.2; [Example 1]`)
+  for ECONOMIC_FLOW terminations and ECONOMIC_UNWIND alike, so it cannot be
+  used to tell them apart.
+
+**Why the missing lineage costs less than the plan feared.** When a customer
+unwinds by executing an offsetting swap, the dealer genuinely takes that risk
+on at that moment — so counting the offsetting print as new flow is *correct*,
+not a bug. And per the ISDA best-practice note, the netting leg is a bilateral
+compression, which is **not real-time reported**, so the tape does not
+double-count it either. Lineage would buy two things only: sizing partial
+unwinds (§43 footnote 41 reports *remaining* notional on a partial, so the
+transferred size is `prior − reported` and is unrecoverable from the row), and
+a cross-check.
+
+**And a termination can be direction-classified without lineage.** A TERM
+print carries the original trade's fixed rate plus the settlement fee, so
+repricing the residual swap and comparing NPV to the fee *is* the inference.
+Full terminations report the full terminated notional, so they are sizeable.
+
+### F-9. Lineage confirmed absent, three independent ways
+
+- `original_execution_source` = `newt` for **all 2,326,781 rows**;
+  `alpha_lag_seconds > 0` for **zero** rows — `alpha_join` never resolves.
+- `d2_missing` is NULL on every row; the flag was never populated.
+- `canonical_underlier_key` has **30 distinct values** across 2.33M rows —
+  it is a coarse product key, not a trade identity. Not a lineage route.
+
+Partially working: `lc_was_amended` 59,260, `lc_was_null_filled` 49,731,
+`lc_has_economics_change` 67,144. Not working: everything cross-day.
+
+### F-10. `is_off_market` is itself a crude direction heuristic — do not route on it
+
+`off_market_reason` has exactly three values:
+
+| off_market_reason | n |
+|---|---|
+| `rate_outlier` | 587,216 |
+| `past_effective_with_ufro,rate_outlier` | 194,962 |
+| `past_effective_with_ufro` | 113,463 |
+
+So `is_off_market` is largely "the printed rate is far from where we think the
+market is" — a coarser version of the quantity being built here. Worse, it does
+not agree with the presence of an upfront (flow legs):
+
+| is_off_market | has ufro | n |
+|---|---|---|
+| False | False | 1,142,183 |
+| True | True | 612,132 |
+| False | **True** | **275,540** |
+| True | **False** | **248,469** |
+
+**Decision D6**: route rate-rule vs upfront-rule on the *presence of an
+other-payment amount*, never on `is_off_market`. Carry `is_off_market` as a
+provenance flag only.
+
+### F-11. `notional` has outliers too, not just `risk`
+
+`avg(notional)` over TERMINATION rows is 1.96e15 against a median of 61 MM.
+The sanity gate must cover notional as well as risk.
+
 ---
 
 ## Decisions
@@ -147,6 +231,9 @@ and a long tail.
 | D3 | Availability = `visibility_timestamp` (Appendix C); event+exec both carried | F-3: event ≈ execution, so event time is not an availability bound | yes |
 | D4 | Ladder built from repriced KRD; tape `risk` never summed | F-4 | yes |
 | D5 | `p` is p(customer paid fixed) = p(dealer received fixed) everywhere | one convention, matches persisted ladder sign | no (pinned) |
+| D6 | Route rate-rule vs upfront-rule on the presence of an other-payment amount, never on `is_off_market` | F-10: `is_off_market` is a rate-outlier heuristic that disagrees with upfront presence on 524k legs | yes |
+| D7 | Unwind-as-new-trade prints are classified as ordinary flow, not netted away | F-8: the dealer really takes that risk on, and the offsetting compression is not publicly reported | yes |
+| D8 | Terminations classified by the upfront rule and kept as a **separate series** | F-8: sign is right but is driven by seasoned P&L, not by bid-offer, so the confidence model does not transfer | yes |
 
 ---
 
