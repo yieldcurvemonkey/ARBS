@@ -291,8 +291,58 @@ the effect at the size it would plausibly have". Concretely:
   direction, and two-thirds the size of the pre-print mass actually observed — is **not
   excluded** by this test.
 - For scale, the pre-print sum's own detectability threshold is
-  `1.96 x 0.01823 / 0.405` = **0.088**, and `|S_neg|` = 0.107 clears it. R0 had the power
-  to see the `k < 0` mass. It did not have the power to rule out a moderate `k > 0` one.
+  `1.96 x 0.01823 / 0.405` = **0.088**, and `|S_neg|` = 0.107 clears it.
+
+> **WITHDRAWN on review.** The sentence that stood here — "R0 had the power to see the
+> `k < 0` mass; it did not have the power to rule out a moderate `k > 0` one" — is
+> contradicted by this document's own caveat 1. If the `k < 0` mass is the mechanical
+> stale-median artifact, it is produced by a channel in which X is by construction a
+> lagged function of price, i.e. effective correlation ≈ 1 — **not** by the attenuated
+> true-direction channel. It therefore demonstrates nothing about power at `k > 0`, and
+> the contrast between the two is artifact-versus-signal rather than one attenuation
+> applied twice. Caveat 1 is the correct statement; this was not.
+
+### `rho` is a LOWER BOUND on the attenuation factor, and that cuts toward FAIL
+
+This is the most consequential correction to this document and it is against its own
+headline. Addendum 1 and `ATTENUATION.md:27` both assert that `rho` **is** the attenuation
+factor. That identity holds only if the reference `X_curve` is error-free. It is not. With
+`X_med = a·X* + u` and `X_cur = c·X* + v`,
+
+```
+rho = corr(X_med, X_cur) = corr(X_med, X*) · corr(X*, X_cur)  <=  corr(X_med, X*)
+```
+
+and `corr(X_med, X*)` is the actual attenuation factor. So **the true attenuation is no
+worse than 0.405 and is probably better**, which means:
+
+- **`MDE = 0.0620` is an upper bound on blindness, not a measurement.**
+- The `(−0.043, +0.081)` interval on the true post-print sum is **wider than the truth**.
+- Every statement in this document of the form "a hedge channel of size X is not excluded"
+  is an upper bound presented as a measurement.
+
+**The earned label may well be FAIL.** `ATTENUATION.md:264-270` states this correctly and
+says it "cuts *toward* the FAIL standing"; §27 of the same file and this document
+contradicted it. That is now recorded here, where the label is set.
+
+**The label nevertheless stays UNINFORMATIVE, and that is deliberate.** The
+pre-registered rule was mechanical — `rho < 0.5` on the pre-registered statistic — and
+`rho` measured 0.405. Re-interpreting a rule after seeing which way it fell is precisely
+the manoeuvre this whole design exists to forbid, and it does not become acceptable
+because the re-interpretation would produce the *stronger* conclusion. The rule fired; the
+label is UNINFORMATIVE; the bound is recorded so nobody mistakes the downgrade for
+evidence that a hedge channel exists.
+
+**Stated before R0b lands, so it cannot be claimed afterwards:** because `rho` is a lower
+bound, R0b — which makes `rho ≈ 1` by construction — is **expected to return FAIL rather
+than PASS**. If it returns PASS, something other than X attenuation is going on and this
+prediction was wrong.
+
+Two measurements would resolve the magnitude of the bound directly: a dense-grid `rho`,
+and a within-`(tenor, minute)`-cell variance decomposition separating reference error from
+median damping. Both were attempted during review and lost when a concurrent process —
+**this session's own disk cleanup, moving caches off a drive that had reached 1 MB free** —
+removed `cache/` and `cache_d1_ref/` mid-run. They are folded into R0b.
 
 **The addendum's specific fear is confirmed, not merely possible.** It predicted that if
 the median were high-passing the flow rather than just adding noise, `rho` would *collapse
@@ -305,13 +355,46 @@ construction.
 **What survives the downgrade.** Three findings do not depend on `rho`, because
 attenuation shrinks magnitudes without moving mass across lags:
 
-1. The **location** of the mass — a trough at `k = −5..−11` sitting inside the measured
-   2.77–17.23 minute publication lag.
-2. **D2**, the `|beta_k|` centroid shift of −3.20 bins between the clocks, which is a ratio
-   and so is attenuation-invariant by construction.
-3. The fact that the mass at `k < 0` is **significant while the mass at `k > 0` is not** —
-   both are attenuated by the same factor, so the contrast between them is real even
-   though neither level is.
+1. The **location** of the mass — a trough at `k = −5..−11`, the modal lags sitting inside
+   the measured 2.77–17.23 minute publication window. **Corrected on review:** an earlier
+   draft said the trough sits "exactly inside" that window and called the fit "not a
+   coincidence". That is false as written and contradicted by this document's own table:
+   individually significant negative diss lags run out to **`k = −26` (t = −3.36)**, and
+   24.6% of the diss mass sits at `k = −30..−18`, outside p95. The modal location is
+   consistent with the lag; the tail is not, and the tail was not disclosed.
+2. **D2**, the `|beta_k|` centroid shift of −3.20 bins between the clocks. **Corrected on
+   review: this is NOT "attenuation-invariant by construction".** Under the global null,
+   `E[Σ|β̂_k|] = Σ se_k·√(2/π)` — measured at **0.0928 of the 0.1532 observed on diss
+   (61%)** and **0.0173 of 0.0267 on exec (65%)**. `|β̂|` is a biased estimator of `|β|`,
+   the bias sits roughly uniformly across `k` whose centroid is zero, so **both centroids
+   are shrunk toward zero, and by different amounts** because the two panels carry
+   different noise shares. The −3.20 bin shift is therefore biased by an unquantified,
+   panel-dependent factor and its agreement with a ~5-minute lag is **not** the clean
+   confirmation claimed. The same defect voids the mass-share table above: its exec column
+   in particular is largely a decomposition of noise, with only 8 of 61 exec lags
+   individually significant. No de-noised centroid is published, because
+   `E|β̂| ≠ |β| + se√(2/π)` when `β ≠ 0`; the direction of the bias is solid, the
+   corrected number is not.
+3. ~~The contrast between significant `k < 0` and insignificant `k > 0`.~~ **Withdrawn** —
+   see the boxed correction above.
+
+**And the per-lag inference is unreliable in both directions.** With `G = 67` clusters
+against 66 lag regressors plus fixed effects and five `Y` lags, the cluster meat matrix has
+rank at most 67. Per-lag standard errors — and therefore the chart's per-lag bands, the
+"coherent trough" language, and any individual-lag claim below — cannot be relied on. This
+cuts against the report's own narrative as much as against any counter-example to it. **The
+one-dimensional sums that decide the verdict are unaffected**, because they are single
+linear combinations.
+
+**The exec panel's strongest registered-sign cells, which the narrative omitted.** The two
+largest-magnitude significant exec lags are `k = +3` (β = −0.00112, **t = −5.22**) and
+`k = +7` (β = −0.00110, **t = −3.93**) — both the **pre-registered negative sign**, both at
+hedge-plausible latencies. Reported here because their absence was an omission. Reported
+*with* their counterweight, which is required: `k = +12` is **+0.00089 at t = +5.80**, the
+wrong sign and larger; with 61 lags × 2 clocks roughly 6 cells at `|t| > 1.96` are expected
+by chance and 8 are observed on exec; and the rank deficiency above makes every one of
+these per-lag statistics unreliable. They do not amount to a finding. They should still
+have been in the document.
 
 What does **not** survive is the strength of the negative conclusion about `k > 0`.
 
