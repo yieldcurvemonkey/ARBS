@@ -36,21 +36,49 @@ They are deliberately kept in different trees (:data:`RAW_SUBDIR`) so a reader
 cannot silently pick up the other one's frames and report clean coverage of a
 population that is missing 41% of its terminations.
 
-MULTI-HOP IS NOT AN OPTIMISATION
---------------------------------
+THE WALK IS TRANSITIVE; THE MEASURED DATA DID NOT NEED IT TO BE
+---------------------------------------------------------------
 
 Appendix F Example 1 draws a star: the second dissemination points at the
-original. The data disagrees -- 43 TERM->TERM pointers in a single week, which
-is a chain of partial terminations and which a star topology cannot represent.
-Single-hop resolution stops at the middle termination and books the original as
-unresolved, so the walk here is transitive with a cycle guard.
+original. A chain of partial terminations is not representable in a star, and
+single-hop resolution would stop at the middle termination and book the
+original as unresolved -- so the walk here is transitive with a cycle guard.
+
+**The frequency claim that used to sit here does not reproduce and has been
+withdrawn.** Re-measured on the unfiltered union of 2026-06-15..18 (100,079 raw
+rows, 17,305 pointer rows):
+
+* 197 TERM->TERM pointers, **193 of them self-pointers** (``ODI == own DI``);
+* the 4 genuine ones all point at a self-pointer, so they terminate one hop
+  later anyway;
+* ``coverage_summary`` over the whole union: ``multi_hop = 0``, ``max_hops = 1``.
+
+So the transitive walk resolved **no row that a single hop would have missed**
+in that week. It is kept because the walk is free, the shape is permitted, and
+one week is not the tape -- not because "43 TERM->TERM pointers" was evidence
+for it. That count was self-pointers being read as chain links.
 
 ``SDRUtils/core/graph_resolver.build_synthetic_uti_mapping`` already clusters
 these ids and is **not** used: it builds an *undirected* graph and anchors each
-component on "earliest NEWT, else earliest timestamp". When the original is
-outside the loaded window -- 24.5% of terminations by the measured reach-back --
-the component contains no NEWT, so the anchor lands on the termination itself
-and the pointer target is thrown away. Pinned by test.
+component on "earliest NEWT, else earliest timestamp". Whenever the original is
+outside the loaded window the component contains no NEWT, so the anchor lands on
+the termination itself and the pointer target is thrown away. That is a shape
+defect rather than a rate -- it is wrong on every such row -- and the rate is
+substantial: 28.1% of pointer rows in the measured week (4,864 of 17,305) name
+an id absent from the 4-day window. (An earlier version of this docstring cited
+"24.5% of terminations", which was ``100 - 75.5``, the fraction with reach-back
+**over one day**. That is a reach-back statistic, not a window statistic.)
+Pinned by test.
+
+WHAT THIS SIDECAR DOES NOT CARRY
+--------------------------------
+
+:data:`LINEAGE_SCHEMA` has no publication column and
+:mod:`scripts.build_dd_lineage_store` never runs a slice scan while building it.
+The measured clock in section 4 is reachable only from a live scan
+(``build_dd_lineage_store.py slices --day D --out P``); a consumer reading the
+store alone can only get :data:`VISIBILITY_APPENDIX_C`. Wiring it into the store
+is a per-day ~40 s scan and a schema change, and is deliberately not done here.
 """
 from __future__ import annotations
 
@@ -115,6 +143,26 @@ ST_MAX_HOPS = "MAX_HOPS"
 #: ``ODI == own DI``. 361 rows in the 2026-06-15..18 week, 193 of them TERM.
 #: Not lineage: the "original" it names is the message itself.
 ST_SELF_POINTER = "SELF_POINTER"
+#: The walk ended ON a self-pointing row -- a MODI/TERM/CORR whose own pointer
+#: names itself, so the chain is truncated by a defective pointer rather than
+#: finished. The id is still reported; it is simply not an original. 30 rows in
+#: the measured week (17 MODI, 11 TERM, 2 CORR) were previously booked
+#: ``RESOLVED_RAW_ONLY``, handing a consumer a termination as "the trade this
+#: termination tears up".
+ST_TERMINAL_SELF_POINTER = "TERMINAL_SELF_POINTER"
+
+#: Every status a resolved frame can carry. Exported as one object so a consumer
+#: can validate the vocabulary instead of hardcoding a subset of it --
+#: ``ST_SELF_POINTER`` was missing from ``__all__`` for a whole vintage, and a
+#: consumer filtering on the exported names saw it as an unknown status.
+ALL_STATUSES = (ST_RESOLVED_TAPE, ST_RESOLVED_RAW_ONLY, ST_PRE_TAPE, ST_MISSING_IN_RANGE,
+                ST_ABOVE_RANGE, ST_UNRESOLVED, ST_CYCLE, ST_MAX_HOPS, ST_SELF_POINTER,
+                ST_TERMINAL_SELF_POINTER)
+
+#: The statuses that mean "the walk reached an original", and the base every
+#: coverage number is computed on. A self-pointer, a walk that died on one, a
+#: cycle and an unresolved pointer are all outside it.
+RESOLVED_STATUSES = (ST_RESOLVED_TAPE, ST_RESOLVED_RAW_ONLY)
 
 #: A chain of partial terminations is a handful of hops; anything past this is a
 #: pathology, and an unbounded walk over 1.6M rows is a hang, not an error.
@@ -328,6 +376,14 @@ def resolve_lineage(raw: pd.DataFrame, *, exec_ts_lookup=None, tape_id_range=Non
     if raw is None or raw.empty or DI not in raw.columns:
         return pd.DataFrame(columns=list(LINEAGE_SCHEMA))
 
+    if not raw.index.is_unique:
+        # Every lookup below is by label, and a duplicated label makes
+        # ``series.get(i)`` return a Series -- which then raises "The truth
+        # value of a Series is ambiguous" from inside the walk. That is what
+        # ``pd.concat([a, b])`` without ``ignore_index=True`` produces, i.e. the
+        # ordinary way a caller builds a union.
+        raw = raw.reset_index(drop=True)
+
     ids = raw[DI].map(normalise_id)
     pointers = (raw[ODI].map(normalise_id) if ODI in raw.columns
                 else pd.Series([None] * len(raw), index=raw.index))
@@ -343,6 +399,9 @@ def resolve_lineage(raw: pd.DataFrame, *, exec_ts_lookup=None, tape_id_range=Non
     # have". Collapsing the two -- a single dict with None values -- makes an
     # in-window NEWT and an out-of-window original indistinguishable.
     parent, known, action_of, exec_of = {}, set(), {}, {}
+    #: Rows whose pointer names themselves. Held separately because a walk that
+    #: ENDS on one has not resolved anything -- see ``ST_TERMINAL_SELF_POINTER``.
+    self_pointers = set()
     for i, di in ids.items():
         if di is None:
             continue
@@ -350,7 +409,11 @@ def resolve_lineage(raw: pd.DataFrame, *, exec_ts_lookup=None, tape_id_range=Non
         action_of[di] = actions.get(i)
         exec_of[di] = ex_ts.get(i)
         p = pointers.get(i)
-        if p is not None and p != di:
+        if p is None:
+            continue
+        if p == di:
+            self_pointers.add(di)
+        else:
             parent[di] = p
 
     rows = []
@@ -371,11 +434,15 @@ def resolve_lineage(raw: pd.DataFrame, *, exec_ts_lookup=None, tape_id_range=Non
             if nxt in seen:
                 status = ST_CYCLE
                 break
-            seen.add(nxt)
-            cur, hops = nxt, hops + 1
+            # The cap is tested BEFORE taking the hop, i.e. only when the walk
+            # would actually continue. Testing it after incrementing labels a
+            # chain that finishes in exactly ``max_hops`` hops a pathology and
+            # throws away the reach-back of a fully resolved row.
             if hops >= max_hops:
                 status = ST_MAX_HOPS
                 break
+            seen.add(nxt)
+            cur, hops = nxt, hops + 1
         rows.append({
             "dissemination_id": di,
             "pointer_id": p,
@@ -402,7 +469,7 @@ def resolve_lineage(raw: pd.DataFrame, *, exec_ts_lookup=None, tape_id_range=Non
     tape_ts = {}
     if exec_ts_lookup is not None:
         wanted = sorted({t for t, s in zip(out["resolved_original_id"], out["status"])
-                         if s is None})
+                         if s is None and t not in self_pointers})
         tape_ts = {normalise_id(k): pd.Timestamp(v)
                    for k, v in (exec_ts_lookup(wanted) or {}).items() if v is not None}
 
@@ -412,7 +479,15 @@ def resolve_lineage(raw: pd.DataFrame, *, exec_ts_lookup=None, tape_id_range=Non
             orig_ts.append(pd.NaT)
             status_out.append(st)
             continue
-        if terminal in tape_ts:
+        if terminal in self_pointers:
+            # The chain died on a row whose own pointer names itself. Ahead of
+            # the tape branch on purpose: a self-pointing MODI IS a print the
+            # tape holds, so deciding on "is the terminal in the tape" would
+            # relabel exactly the joinable rows RESOLVED_TAPE and leave the
+            # consumer joining a termination to a termination.
+            orig_ts.append(pd.NaT)
+            status_out.append(ST_TERMINAL_SELF_POINTER)
+        elif terminal in tape_ts:
             orig_ts.append(tape_ts[terminal])
             status_out.append(ST_RESOLVED_TAPE)
         elif terminal in known:
@@ -436,7 +511,10 @@ def _unresolved_status(terminal, tape_id_range) -> str:
     try:
         n = int(str(terminal))
     except (TypeError, ValueError):
-        return ST_MISSING_IN_RANGE
+        # MISSING_IN_RANGE means "inside the tape's id range and genuinely
+        # absent", which is a tape ingestion fact. An id that is not a number is
+        # neither inside nor outside that range.
+        return ST_UNRESOLVED
     if n < int(lo):
         return ST_PRE_TAPE
     if n > int(hi):
@@ -448,11 +526,25 @@ def coverage_summary(lineage: pd.DataFrame, *, reach_days=(0, 1, 7, 63, 90, 252,
     """The numbers the backfill prints and the report quotes.
 
     Reach-back percentiles are reported over the *resolved* rows only, which is
-    the base the 75.5 / 90.7 / 95.6 figures were measured on.
+    the base the 75.5 / 90.7 / 95.6 figures at 1 / 63 / 252 days were measured
+    on. ``resolved`` means the walk reached an original: a self-pointer, a walk
+    that died on one, a cycle and an unresolved pointer are all outside it.
+
+    **Quote the window with the number.** The same three statistics on the
+    4-day 2026-06-15..18 union with no tape lookup are 92.1 / 97.5 / 98.7,
+    because a short window resolves only the near-dated originals and the
+    far-dated ones drop out of the base entirely rather than landing in a high
+    bucket. A reach-back percentile is not a coverage percentile.
+
+    ``reach_back_negative`` is reported beside the percentiles because a
+    negative reach-back -- an "original" executed after the unwind that tears it
+    up -- is impossible, lands in the ``<=0d`` bucket and inflates every
+    cumulative percentile above it. 5 such rows in the measured week, min
+    -2.9 days.
     """
     if lineage is None or lineage.empty:
         return {"n": 0}
-    resolved = lineage["status"].isin([ST_RESOLVED_TAPE, ST_RESOLVED_RAW_ONLY])
+    resolved = lineage["status"].isin(RESOLVED_STATUSES)
     out = {
         "n": int(len(lineage)),
         "by_status": lineage["status"].value_counts().to_dict(),
@@ -467,6 +559,8 @@ def coverage_summary(lineage: pd.DataFrame, *, reach_days=(0, 1, 7, 63, 90, 252,
         out["reach_back_cum_pct"] = {f"<={d}d": round(100.0 * float((rb <= d).mean()), 2)
                                      for d in reach_days}
         out["reach_back_max_days"] = round(float(rb.max()), 1)
+        out["reach_back_negative"] = int((rb < 0).sum())
+        out["reach_back_min_days"] = round(float(rb.min()), 2)
     return out
 
 
@@ -583,8 +677,9 @@ def slice_date_strings(day, seqs) -> list:
     listing count is a rolling window, not a calendar day, and stopping at
     1,333 silently covers only 73.7% of a day's prints while looking complete.
     Measured cost: 27.8 s for 1,333 slices at 8 workers, so ~40 s for a full
-    day; see :data:`~scripts.build_dd_lineage_store.CODE_VINTAGE` runbook notes
-    before promising the whole tape.
+    day. Time it on the day you care about with
+    ``build_dd_lineage_store.py slices --day D`` -- whose ``--total`` default is
+    the bound above, not the listing's -- before promising the whole tape.
     """
     ds = date_string(day)
     return [f"{ds}_{int(s)}" for s in seqs]
@@ -608,7 +703,14 @@ def slice_publication_time(zip_buffer):
         stamp = infos[0].date_time
     if hasattr(buf, "seek"):
         buf.seek(pos)
-    local = pd.Timestamp(datetime.datetime(*stamp)).tz_localize(SLICE_MEMBER_TZ)
+    # ``ambiguous=False`` = standard time, i.e. the SECOND pass through the
+    # November fall-back hour and so the later UTC instant. The default
+    # (``'raise'``) throws for that one hour a year, which :func:
+    # `fetch_slice_publications` swallows -- an invisible loss. Where the wall
+    # clock genuinely cannot say which pass it was, the later reading is the one
+    # that cannot claim a print was visible before it was.
+    local = pd.Timestamp(datetime.datetime(*stamp)).tz_localize(
+        SLICE_MEMBER_TZ, ambiguous=False, nonexistent="shift_forward")
     return local.tz_convert("UTC")
 
 
@@ -618,6 +720,13 @@ def fetch_slice_publications(day, seqs, *, workers=8, slice_source=None,
 
     One HTTP round trip per slice, so this is priced per day, not per row --
     :mod:`scripts.build_dd_lineage_store` measures it before enabling it.
+
+    A single unreadable slice costs one slice. **Every** slice of a non-empty
+    request failing raises :class:`EmptyDTCCDay`: a zero-row frame here builds a
+    zero-length :class:`PublicationClock`, under which every row falls back to
+    the Appendix C 60-minute indeterminate delay in place of the measured
+    5.23-minute median, silently and with only ``visibility_source`` to show for
+    it.
     """
     from SDRUtils.data.builder import DTCCFetcher
 
@@ -653,10 +762,21 @@ def fetch_slice_publications(day, seqs, *, workers=8, slice_source=None,
         return out
 
     names = slice_date_strings(day, seqs)
+    if not names:
+        return pd.DataFrame(columns=[DI, "published_at", "slice"])
     with ThreadPoolExecutor(max_workers=workers) as ex:
         got = [g for g in ex.map(one, names) if g is not None]
     if not got:
-        return pd.DataFrame(columns=[DI, "published_at", "slice"])
+        raise EmptyDTCCDay(
+            f"all {len(names)} slice(s) requested for {_as_date(day)} were unreadable or "
+            "absent; refusing to return an empty publication frame, which reads as "
+            "'this day has no measured clock' rather than 'the scan failed'")
+    if len(got) < len(names):
+        # Expected at the tail: a day ends somewhere around sequence 1,900-1,970
+        # and everything past it 404s. Logged with both counts so a scan that
+        # lost its middle is distinguishable from one that ran off the end.
+        logger.info("slice scan %s: %d of %d sequences returned rows",
+                    _as_date(day), len(got), len(names))
     out = pd.concat(got, ignore_index=True)
     out[DI] = out[DI].map(normalise_id).astype("string")
     # a print can appear in several slices; the FIRST publication is the bound
@@ -690,6 +810,14 @@ class PublicationClock:
     NEWT/OIS/USD publication lag is 5.23 min median / 11.3 min p95, against a
     60-minute *indeterminate* legal delay -- so a consumer that cares must be
     able to gate on ``visibility_source``.
+
+    **The measured side does not come out of the lineage store.**
+    :data:`LINEAGE_SCHEMA` has no publication column, so this class has to be
+    fed from a live scan (:func:`fetch_slice_publications`, or the parquet
+    ``build_dd_lineage_store.py slices --out`` writes). Built with no argument
+    it is a pure Appendix C clock, which is a legitimate mode and not a
+    degradation -- but it is indistinguishable from a scan that failed, which is
+    why :func:`fetch_slice_publications` raises rather than returning nothing.
     """
 
     def __init__(self, published_at=None):
@@ -708,21 +836,37 @@ class PublicationClock:
     def published_at(self, dissemination_id):
         return self._by_id.get(normalise_id(dissemination_id))
 
-    def visibility(self, dissemination_id, execution_ts, **appendix_c_kwargs):
+    def visibility(self, dissemination_id, execution_ts, event_ts=None, **appendix_c_kwargs):
         """``(timestamp, source)`` -- the measured time if there is one.
 
-        A measured time *earlier* than the execution it publishes is refused and
+        A measured time *earlier* than the print it publishes is refused and
         falls back. That is not a tighter bound, it is a broken one: it would
         let an aggregation see a print before it existed, which is the single
         error the visibility clock exists to prevent.
+
+        **Pass ``event_ts`` (field #30) for any lifecycle row.** On every row
+        that does not mint a new UTI, #96 is frozen at the ORIGINAL trade's
+        execution and can be years stale (``types.Clocks.pricing`` says so), and
+        this whole module is about those rows. Bounding a 2026 termination
+        against a 2024 execution admits any 2026 timestamp, so the guard is
+        vacuous exactly where it is needed -- and the Appendix C fallback
+        anchored on that #96 would mark the 2026 unwind as visible in 2024,
+        which is a two-year lookahead handed out as a bound.
+
+        The reference instant is therefore the LATER of the two. For a NEWT they
+        are the same timestamp, so nothing changes there.
         """
         ts = self.published_at(dissemination_id)
-        exec_ts = pd.Timestamp(execution_ts)
-        if ts is not None and ts >= exec_ts:
+        reference = pd.Timestamp(execution_ts)
+        if event_ts is not None:
+            ev = pd.Timestamp(event_ts)
+            if not pd.isna(ev):
+                reference = max(reference, ev)
+        if ts is not None and ts >= reference:
             return ts, VISIBILITY_SLICE_MTIME
         from SDRUtils.stir_flow.ladder_conventions import visibility_timestamp
 
-        return visibility_timestamp(exec_ts, **appendix_c_kwargs), VISIBILITY_APPENDIX_C
+        return visibility_timestamp(reference, **appendix_c_kwargs), VISIBILITY_APPENDIX_C
 
 
 # ==========================================================================
@@ -753,8 +897,16 @@ def unwind_implied_original_sign(npv_pay, upfront) -> int:
     plausible ladder that is exactly wrong.
 
     Returns :data:`~.conventions.DEALER_RECEIVED` / ``DEALER_PAID``, or ``0``
-    when the fee ties the value exactly or an input is missing -- 0 is "no
-    call", never a side.
+    when the fee ties the value exactly, when there is no fee, or when an input
+    is missing -- 0 is "no call", never a side.
+
+    ``upfront == 0`` IS "no fee", not "a fee of zero". ``types.Unit.upfront`` is
+    the *sum* of the legs' other-payment amounts and ~86% of terminations carry
+    none, so every ``.sum()`` / ``.fillna(0)`` path delivers ``0.0`` rather than
+    ``None``; and ``u = 0`` satisfies ``u < |f|`` for every non-zero ``f``,
+    which would turn an absent fee into a confident side decided entirely by
+    ``sign(f)``, for most of the population. The frozen ``classifier.py`` avoids
+    this by routing through ``resolve_upfront(...)``, which returns ``None``.
     """
     if npv_pay is None or upfront is None:
         return 0
@@ -762,7 +914,7 @@ def unwind_implied_original_sign(npv_pay, upfront) -> int:
         f, u = float(npv_pay), abs(float(upfront))
     except (TypeError, ValueError):
         return 0
-    if f != f or u != u or f == 0.0:
+    if f != f or u != u or f == 0.0 or u == 0.0:
         return 0
     if u == abs(f):
         return 0
@@ -828,11 +980,14 @@ def _as_date(day) -> datetime.date:
 
 
 __all__ = [
-    "ACTION", "DEALER_PAID", "DEALER_RECEIVED", "DI", "EVENT", "EVENT_TS", "EXEC_TS",
-    "EmptyDTCCDay", "EmptyLineageDay", "LINEAGE_COLUMNS", "LINEAGE_SCHEMA",
-    "LineageStore", "ODI", "POINTER_ACTIONS", "PublicationClock", "RAW_SUBDIR",
+    "ACTION", "ALL_STATUSES", "DEALER_PAID", "DEALER_RECEIVED", "DEFAULT_MAX_HOPS", "DI",
+    "EVENT", "EVENT_TS", "EXEC_TS",
+    "EmptyDTCCDay", "EmptyLineageDay", "LEDGER_NAME", "LINEAGE_COLUMNS", "LINEAGE_SCHEMA",
+    "LINEAGE_SUBDIR", "LineageStore", "ODI", "POINTER_ACTIONS", "PublicationClock",
+    "RAW_SUBDIR", "RESOLVED_STATUSES", "SLICE_MEMBER_TZ",
     "ST_ABOVE_RANGE", "ST_CYCLE", "ST_MAX_HOPS", "ST_MISSING_IN_RANGE", "ST_PRE_TAPE",
-    "ST_RESOLVED_RAW_ONLY", "ST_RESOLVED_TAPE", "ST_UNRESOLVED",
+    "ST_RESOLVED_RAW_ONLY", "ST_RESOLVED_TAPE", "ST_SELF_POINTER",
+    "ST_TERMINAL_SELF_POINTER", "ST_UNRESOLVED",
     "VISIBILITY_APPENDIX_C", "VISIBILITY_SLICE_MTIME", "coverage_summary",
     "cumulative_url", "date_string", "direction_agreement", "fetch_raw_day",
     "fetch_slice_publications", "load_raw_days", "normalise_id", "raw_day_path",

@@ -17,8 +17,12 @@ Two phases, deliberately separate:
 
 Zero rows on a day is an **abort**, never a skip. A backfill in this repo once
 recorded days as ``ok`` on exit code 0 while the upstream returned an empty
-frame, and six days of data were destroyed. Exit codes: 0 all good, 2 a day
-failed.
+frame, and six days of data were destroyed.
+
+Exit codes: **0** = every day this pass took on is on disk with rows in it;
+**2** = a day failed. Under ``--limit N`` a 0 does NOT mean the whole range is
+built -- the pass reports how many target days remain and the next one to do, and
+resume picks them up. A driver should loop until "nothing to do", not until 0.
 """
 from __future__ import annotations
 
@@ -41,7 +45,13 @@ from SDRUtils.dealer_direction import lineage as lin
 #: Bumped when the RESOLVER changes, so a store holding two vintages is
 #: visible in the ledger instead of being inferred from row counts. v2 added
 #: SELF_POINTER; v1 resolved a self-pointing row to itself and called it a hit.
-CODE_VINTAGE = "dd_lineage_v2"
+#: v3 changes resolver OUTPUT and a v2 partition is not comparable to a v3 one:
+#: a walk that ends ON a self-pointer is now TERMINAL_SELF_POINTER instead of
+#: RESOLVED_RAW_ONLY (30 rows in the measured week, so `resolved` falls), a
+#: chain that finishes in exactly `max_hops` hops now resolves instead of
+#: reporting MAX_HOPS with its reach-back discarded, and a non-numeric pointer
+#: is UNRESOLVED instead of MISSING_IN_RANGE.
+CODE_VINTAGE = "dd_lineage_v3"
 
 
 def business_days(start: datetime.date, end: datetime.date) -> list:
@@ -163,8 +173,13 @@ def resolve_and_write(days, *, root, store, use_tape=True) -> dict:
         part = resolved[resolved["file_date"] == d]
         n = store.write_day(d, part)          # raises EmptyLineageDay on zero rows
         store.record(d, rows=n, code_vintage=CODE_VINTAGE,
-                     resolved=int(part["status"].isin(
-                         [lin.ST_RESOLVED_TAPE, lin.ST_RESOLVED_RAW_ONLY]).sum()))
+                     resolved=int(part["status"].isin(lin.RESOLVED_STATUSES).sum()),
+                     # A day written by a `--limit` pass is resolved against a
+                     # smaller universe than a later pass would give it, and
+                     # `days_needing_work` never revisits it. Recorded so a
+                     # store whose statuses were decided on different universes
+                     # is visible rather than inferred.
+                     universe_days=len(universe))
         written[d] = n
         print(f"  lineage {d}  rows={n:>6,}", flush=True)
     return written
@@ -189,15 +204,15 @@ def cmd_build(args) -> int:
     store = lin.LineageStore(root=args.root)
     todo = days if args.force else store.days_needing_work(days)
     print(f"target {len(days)} business days {days[0]} .. {days[-1]}; "
-          f"{len(todo)} outstanding (resume is keyed to the target set, not the ledger)")
+          f"{len(todo)} outstanding (resume is keyed to the target set, not the ledger)",
+          flush=True)
     if not todo:
-        print("nothing to do")
+        print("nothing to do", flush=True)
         return 0
     if args.limit:
         todo = todo[:int(args.limit)]
-        print(f"limited to {len(todo)} days this pass")
+        print(f"limited to {len(todo)} days this pass", flush=True)
 
-    failures = []
     try:
         fetch_days(todo, root=args.root, force=args.force)
     except lin.EmptyDTCCDay as exc:
@@ -209,25 +224,34 @@ def cmd_build(args) -> int:
         print(f"FAIL resolve: {exc}", file=sys.stderr)
         return 2
 
-    zero = [d for d, n in written.items() if n == 0]
-    failures += zero
-    print(f"\nwrote {sum(written.values()):,} lineage rows over {len(written)} days")
-    if failures:
-        print(f"FAIL: {len(failures)} day(s) produced zero rows: {failures}", file=sys.stderr)
-        return 2
-    # the target-set check again, AFTER writing: a day that reported rows but
-    # left no file on disk is the failure mode the ledger cannot see.
-    still = store.days_needing_work(days)
+    # (a zero-row day cannot reach here: `write_day` raises EmptyLineageDay and
+    # `resolve_and_write` propagates it, which the handler above turns into a 2.)
+    print(f"\nwrote {sum(written.values()):,} lineage rows over {len(written)} days",
+          flush=True)
+    # The target-set check again, AFTER writing: a day that reported rows but
+    # left no file on disk is the failure mode the ledger cannot see. Scoped to
+    # THIS pass's days -- `--limit` is the documented chunking mode ("days per
+    # pass; resume handles the rest"), so checking the full range would make
+    # every successful chunked pass exit 2 and any unattended driver read its
+    # own chunking as a hard failure.
+    still = store.days_needing_work(todo)
     if still:
         print(f"FAIL: {len(still)} day(s) still have no rows on disk: {still[:10]}",
               file=sys.stderr)
         return 2
+    remaining = store.days_needing_work(days)
+    if remaining:
+        print(f"{len(remaining)} day(s) of the target range remain for a later pass; "
+              f"next is {remaining[0]}", flush=True)
     return 0
 
 
 def cmd_report(args) -> int:
     store = lin.LineageStore(root=args.root)
     days = target_days(args) or store.covered_days()
+    if not days:
+        print("store is empty and no range was given", file=sys.stderr)
+        return 2
     df = store.read_range(min(days), max(days))
     if df.empty:
         print("store is empty for that range", file=sys.stderr)
@@ -242,7 +266,7 @@ def cmd_report(args) -> int:
         # Two different numbers, and confusing them overstates the flippable
         # population by 4x: "resolved" is "the walk found an original at all",
         # "tape-resolved" is "that original is a row you can join to".
-        res = term["status"].isin([lin.ST_RESOLVED_TAPE, lin.ST_RESOLVED_RAW_ONLY])
+        res = term["status"].isin(lin.RESOLVED_STATUSES)
         tap = term["status"] == lin.ST_RESOLVED_TAPE
         print(f"\nTERM rows {len(term):,}  resolved to ANY original {int(res.sum()):,} = "
               f"{100 * res.mean():.1f}%  |  resolved to a TAPE row {int(tap.sum()):,} = "
@@ -258,7 +282,13 @@ def cmd_slices(args) -> int:
     seqs = (list(range(1, total + 1)) if args.full
             else list(range(1, total + 1, max(1, total // int(args.sample)))) [:int(args.sample)])
     t0 = time.perf_counter()
-    pubs = lin.fetch_slice_publications(day, seqs, workers=int(args.workers))
+    try:
+        pubs = lin.fetch_slice_publications(day, seqs, workers=int(args.workers))
+    except lin.EmptyDTCCDay as exc:
+        # Every slice unreadable. Reported as a failure, not as "this day has no
+        # measured clock" -- the two are indistinguishable in the output.
+        print(f"FAIL slices: {exc}", file=sys.stderr)
+        return 2
     dt = time.perf_counter() - t0
     n = len(seqs)
     print(f"{n} slices in {dt:.1f}s at {args.workers} workers = {dt / n:.2f}s/slice; "

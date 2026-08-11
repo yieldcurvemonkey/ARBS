@@ -112,7 +112,7 @@ import pandas as pd
 
 from SDRUtils._swappulse_scripts._tape_tables import LEGS_TABLE
 from SDRUtils.analytics.filters import D2D_PLATFORMS as _SDRUTILS_D2D
-from SDRUtils.dealer_direction import sanity, snapshot
+from SDRUtils.dealer_direction import package_price, sanity, snapshot
 from SDRUtils.dealer_direction.types import (
     EXCL_EXERCISE_OR_NOVATION,
     EXCL_NO_FIXED_RATE,
@@ -504,6 +504,7 @@ def annotate_legs(legs: pd.DataFrame) -> pd.DataFrame:
         ("package_id", None), ("leg_order", 0), ("forward_start_years", 0.0),
         ("other_payment_ufro", 0.0), ("other_payment_uwin", 0.0),
         ("other_payment_pexh", 0.0), ("package_transaction_price", np.nan),
+        ("other_payment_amount", np.nan),
         ("upi_notional_schedule", "Constant"), ("leg_tape_label", ""),
         ("special_tenor_type", None), ("is_mac", False), ("is_capped", False),
         ("is_block", False), ("cleared", None), ("platform_identifier", None),
@@ -619,12 +620,24 @@ def unit_frame(legs: pd.DataFrame) -> pd.DataFrame:
     amt, src = _resolve_upfront_vec(u)
     u["upfront"], u["upfront_source"] = amt, src
 
+    # A PKG-N has no quote convention, but it has one price -- and
+    # `package_price.tape_gate` says which of them that price can orient. Only
+    # the leg-count half of the gate is relaxed: `excluded_type` (asset swaps)
+    # stays ahead of it, because there the missing leg is a bond that is not
+    # priced on this tape at all. The gate is curve-free by design so this
+    # stays vectorised over 1.44M units.
+    pkg4 = u["n_legs"] >= 4
+    recovered, pkg_stratum = _package_price_recovery(df, u.index[pkg4])
+    recoverable = pd.Series(False, index=u.index, dtype=bool)
+    if len(recovered):
+        recoverable.loc[recovered.index] = recovered.to_numpy(dtype=bool)
+
     # --- exclusions, in the pinned precedence ------------------------------
     gates = {
         EXCL_NOT_FLOW: u["not_flow"],
         EXCL_EXERCISE_OR_NOVATION: u["exer_nova"],
         EXCL_UNSUPPORTED_INDEX: u["bad_index"] | u["term_sofr"] | (u["n_index"] > 1),
-        EXCL_UNORIENTABLE: u["excluded_type"] | (u["n_legs"] >= 4),
+        EXCL_UNORIENTABLE: u["excluded_type"] | (pkg4 & ~recoverable),
         EXCL_PRICING_ERROR: u["nonconstant"],
         EXCL_RISK_IMPLAUSIBLE: u["risk_bad"],
         EXCL_NO_FIXED_RATE: u["no_rate"],
@@ -635,6 +648,7 @@ def unit_frame(legs: pd.DataFrame) -> pd.DataFrame:
         hit = gates[reason] & u["exclusion"].isna()
         u.loc[hit, "exclusion"] = reason
 
+    u["_pkg_stratum"] = pkg_stratum.reindex(u.index)
     u["exclusion_detail"] = _details(df, u, gates)
     cols = ["unit_key", "package_id", "as_of_date", "kind", "n_legs",
             "rate_index", "venue_class", "is_lifecycle", "is_unwind",
@@ -666,14 +680,40 @@ def _details(df: pd.DataFrame, u: pd.DataFrame, gates: dict) -> pd.Series:
     m = (u["exclusion"] == EXCL_UNSUPPORTED_INDEX) & out.isna()
     out.loc[m & u["term_sofr"]] = "CME_TERM_SOFR"
     out.loc[(u["exclusion"] == EXCL_UNSUPPORTED_INDEX) & out.isna()] = "MIXED_INDEX"
-    # One bucket, not one per leg count: the exact count is already on the
-    # unit row as `n_legs`, and a per-N detail fragments the coverage table
-    # into ~90 rows that each carry a fifth of a percent.
+    # One bucket per REASON, not one per leg count: the exact count is already
+    # on the unit row as `n_legs`, and a per-N detail fragments the coverage
+    # table into ~90 rows that each carry a fifth of a percent. Since the
+    # package-price rule now recovers part of this population, "PKG-4+" alone
+    # would no longer say why the rest was given up -- the stratum does.
+    m = (u["exclusion"] == EXCL_UNORIENTABLE) & out.isna()
+    strat = u["_pkg_stratum"] if "_pkg_stratum" in u.columns else None
+    if strat is not None:
+        out.loc[m] = ("PKG-4+/" + strat.reindex(u.index[m]).astype(object)
+                      .fillna("UNKNOWN")).to_numpy()
     out.loc[(u["exclusion"] == EXCL_UNORIENTABLE) & out.isna()] = "PKG-4+"
     out.loc[u["exclusion"] == EXCL_PRICING_ERROR] = "NOTIONAL_SCHEDULE_NOT_CONSTANT"
     out.loc[u["exclusion"] == EXCL_EXERCISE_OR_NOVATION] = "EXERCISE_OR_NOVATION_FLAG"
     out.loc[u["exclusion"] == EXCL_STANDARD_COUPON] = "MAC_NO_UPFRONT"
     return out
+
+
+def _package_price_recovery(df: pd.DataFrame, groups) -> tuple:
+    """Which ``PKG-N`` units :mod:`.package_price` can orient, and why not.
+
+    Runs the gate on the ``PKG-4+`` groups only. Everything else on the tape is
+    already orientable by quote convention, and the solver inside the gate is
+    per-package work -- restricting it to the ~47k packages that need it is
+    what keeps :func:`unit_frame` a whole-window call.
+    """
+    empty = pd.Series(dtype=bool), pd.Series(dtype=object)
+    if len(groups) == 0:
+        return empty
+    sub = df.loc[df["_unit_group"].isin(set(groups)),
+                 list(package_price.GATE_COLUMNS)]
+    if sub.empty:
+        return empty
+    gate = package_price.tape_gate(sub)
+    return gate["recoverable"], gate["stratum"]
 
 
 def _kind(n_legs: int) -> str:

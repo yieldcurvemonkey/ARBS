@@ -1,0 +1,658 @@
+"""``RULE_PACKAGE_PRICE`` -- orienting a ``PKG-N`` from its one package price.
+
+The module under test recovers the 39.97% of tape DV01 currently thrown away as
+``EXCL_UNORIENTABLE``. Everything it produces rests on one claim:
+
+    the per-leg cash signs that reconcile the legs' ``other payment amount``
+    with the package's ``package_transaction_price`` are the package's
+    orientation, up to a global flip that the price-vs-model comparison then
+    resolves.
+
+That claim is testable on the cases where the answer is *already known* --
+``CURVE`` and ``FLY``, whose base orientation ``conventions.base_orientation``
+fixes by market convention, and ``OUTRIGHT``, which ``upfront.classify``
+already answers. **Those known-answer tests are the point of this file**; if
+they fail the ``PKG-N`` numbers mean nothing, and the task says to stop.
+
+The three layers pinned here, in descending order of how badly a mistake hurts:
+
+1. **Orientation** (``§2``). On a synthetic ``CURVE``/``FLY`` built from a
+   worked example, the fee-derived orientation must equal
+   ``conventions.base_orientation(kind, n, RULE_RATE)`` up to a global sign.
+2. **Direction** (``§3``). With a cash term smaller than the package's own
+   off-market value, the per-leg ``received_signs`` must equal what
+   ``conventions.structure_price`` + ``conventions.dealer_side`` +
+   ``conventions.dealer_received_signs`` give for the same unit -- exactly, on
+   every case where both rules apply.
+3. **Global-flip invariance** (``§4``). The answer must not depend on which of
+   the two symmetric branches the sign solver happened to return. The solver is
+   direction-blind *by symmetry* (``upfront.py`` says so in its docstring); that
+   symmetry is the degree of freedom the price comparison consumes, so any
+   dependence on it is a bug that would show up as a randomly inverted ladder.
+
+Three sign factors multiply in ``received_signs = dealer_sign * s * sign(f)``.
+``conventions.py``'s own docstring records that two of them cancelling is the
+trap that inverted its first draft, so ``§7`` mutates each factor and asserts
+the tests go red.
+"""
+from __future__ import annotations
+
+import dataclasses
+import math
+
+import numpy as np
+import pandas as pd
+import pytest
+
+from SDRUtils.dealer_direction import conventions as conv
+from SDRUtils.dealer_direction import package_price as pp
+from SDRUtils.dealer_direction import upfront as up
+from SDRUtils.stir_flow import config as stir_config
+
+
+# --------------------------------------------------------------------------
+# helpers -- a package expressed the way the tape expresses one
+# --------------------------------------------------------------------------
+
+def npv_pay(mid_pct: float, rate_pct: float, pv01: float) -> float:
+    """``f`` -- the NPV to the fixed PAYER, in dollars.
+
+    ``(mid - R) * 100 * PV01``: percent in, and the ``100`` is the same
+    percent->bp boundary ``conventions.structure_price`` crosses.
+    """
+    return (float(mid_pct) - float(rate_pct)) * 100.0 * float(pv01)
+
+
+def build(kind: str, mids, rates, pv01s, *, charge: float = 0.0,
+          charge_leg: int = 0):
+    """A synthetic package, oriented by market convention, with a dealer charge.
+
+    Returns ``(opas, ptp, npvs, pv01s, orientation)``. The fees are constructed
+    from the *physics* the module claims -- each leg's cash is the value that
+    leg transfers, and it flows from the party receiving that value -- so the
+    test does not merely re-run the module's own arithmetic.
+
+    ``charge`` is added to the leg the base party pays cash on, so the base
+    party ends up over-paying by exactly ``charge`` dollars and is therefore
+    the customer.
+    """
+    n = len(mids)
+    o = conv.base_orientation(kind, n, conv.RULE_RATE)
+    f = [npv_pay(m, r, p) for m, r, p in zip(mids, rates, pv01s)]
+    # a_i = +1 when the base party RECEIVES value on leg i and therefore pays
+    # that leg's cash. This is the physical rule, written out rather than
+    # imported from the module under test.
+    a = [1 if o_i * f_i > 0 else -1 for o_i, f_i in zip(o, f)]
+    opas = [abs(o_i * f_i) for o_i, f_i in zip(o, f)]
+    paid = [i for i, ai in enumerate(a) if ai > 0]
+    j = paid[charge_leg % len(paid)] if paid else 0
+    opas[j] += float(charge)
+    ptp = float(sum(ai * u for ai, u in zip(a, opas)))
+    return opas, ptp, f, list(pv01s), o
+
+
+CURVE_MIDS = (4.00, 4.20)
+CURVE_RATES = (4.01, 4.215)
+CURVE_PV01 = (10_000.0, 10_000.0)
+
+FLY_MIDS = (4.00, 4.20, 4.30)
+FLY_RATES = (4.005, 4.21, 4.305)
+FLY_PV01 = (5_000.0, 10_000.0, 5_000.0)
+
+
+def _dv01(kind, pv01s):
+    from SDRUtils.dealer_direction import midprice
+    return midprice.structure_dv01(kind, pv01s)
+
+
+def in_known_frame(call, known):
+    """The call re-expressed against ``known`` rather than its own orientation.
+
+    ``model_price``, ``reported_price``, ``deviation_*`` and ``dealer_sign``
+    are all defined **relative to ``call.base_orientation``**, and that
+    orientation is only fixed up to a global flip -- which branch comes back is
+    ``opa_sign_solver``'s tie-break, a module this one does not own. Asserting
+    those quantities' absolute signs would therefore pin an implementation
+    detail of somebody else's tie-break, and a mutation that took the other
+    branch would (and did) show up as a failure when the answer had not
+    changed at all.
+
+    So the tests state their expectations in the known market frame and this
+    maps into it. ``received_signs`` is deliberately NOT touched: it is the
+    orientation-free answer and must already be identical in both branches.
+    """
+    g = 1 if tuple(call.base_orientation) == tuple(known) else -1
+    return dataclasses.replace(
+        call,
+        base_orientation=tuple(g * x for x in call.base_orientation),
+        model_price=g * call.model_price,
+        reported_price=g * call.reported_price,
+        deviation_dollars=g * call.deviation_dollars,
+        deviation_bps=g * call.deviation_bps,
+        dealer_sign=g * call.dealer_sign,
+    )
+
+
+CURVE_FRAME = conv.base_orientation(conv.CURVE, 2, conv.RULE_RATE)
+
+
+# --------------------------------------------------------------------------
+# 1. the worked example itself -- pinned before anything reads it
+# --------------------------------------------------------------------------
+
+def test_worked_curve_example_is_what_the_docstring_says():
+    """The fixture must be a real over-pay, or §2/§3 pin nothing."""
+    opas, ptp, f, pv01s, o = build(conv.CURVE, CURVE_MIDS, CURVE_RATES,
+                                   CURVE_PV01, charge=1_000.0)
+    assert o == (-1, 1)
+    assert f == pytest.approx([-10_000.0, -15_000.0])
+    # base receives value on the front leg (it receives fixed above mid), so it
+    # pays that cash; it gives up value on the back leg, so it receives cash.
+    assert opas == pytest.approx([11_000.0, 15_000.0])
+    assert ptp == pytest.approx(-4_000.0)
+
+
+def test_worked_fly_example_is_what_the_docstring_says():
+    opas, ptp, f, pv01s, o = build(conv.FLY, FLY_MIDS, FLY_RATES, FLY_PV01,
+                                   charge=500.0)
+    assert o == (-1, 1, -1)
+    assert f == pytest.approx([-2_500.0, -10_000.0, -2_500.0])
+    assert ptp == pytest.approx(-4_500.0)
+
+
+# --------------------------------------------------------------------------
+# 2. KNOWN ANSWER (i): the fee-derived orientation IS the market convention
+# --------------------------------------------------------------------------
+
+@pytest.mark.parametrize("kind,mids,rates,pv01s", [
+    (conv.CURVE, CURVE_MIDS, CURVE_RATES, CURVE_PV01),
+    (conv.FLY, FLY_MIDS, FLY_RATES, FLY_PV01),
+])
+def test_orientation_reproduces_market_convention(kind, mids, rates, pv01s):
+    opas, ptp, f, pv01s, o = build(kind, mids, rates, pv01s, charge=1_000.0)
+    call = pp.classify(opas=opas, package_price=ptp, npv_pays=f, pv01s=pv01s,
+                       structure_dv01=_dv01(kind, pv01s))
+    assert call.exclusion is None
+    got = call.base_orientation
+    assert got == o or got == tuple(-x for x in o), (
+        f"fee-derived orientation {got} is neither {o} nor its complement; "
+        "the package-price rule disagrees with the known quote convention"
+    )
+
+
+@pytest.mark.parametrize("kind,mids,rates,pv01s", [
+    (conv.CURVE, CURVE_MIDS, CURVE_RATES, CURVE_PV01),
+    (conv.FLY, FLY_MIDS, FLY_RATES, FLY_PV01),
+])
+def test_model_price_is_the_structure_price_deviation_in_dollars(
+        kind, mids, rates, pv01s):
+    """``reported - model`` with no charge is the rate rule's own deviation.
+
+    ``-V = sum(o_i (R_i - M_i) * 100 * PV01_i)``, which for a package balanced
+    in the quote ratio is ``(P_traded - P_mid)`` times the structure's price
+    DV01. This is the identity that makes "the package price" the same object
+    the rate rule compares, and it is checked in dollars because the bp
+    denominator is a separate choice (``structure_dv01`` calls a fly's risk its
+    belly, which is 2x the fly spread's own $/bp).
+    """
+    opas, ptp, f, pv01s, o = build(kind, mids, rates, pv01s, charge=0.0)
+    call = in_known_frame(
+        pp.classify(opas=opas, package_price=ptp, npv_pays=f, pv01s=pv01s,
+                    structure_dv01=_dv01(kind, pv01s)), o)
+    dev_bp = (conv.structure_price(rates, kind, len(rates), conv.RULE_RATE)
+              - conv.structure_price(mids, kind, len(mids), conv.RULE_RATE))
+    q = conv.quote_weights(kind, len(pv01s), conv.RULE_RATE)
+    price_dv01 = sum(abs(w) * p for w, p in zip(q, pv01s)) / sum(w * w for w in q)
+    # the base party's fair cash is the value of what it takes on
+    assert -call.model_price == pytest.approx(dev_bp * price_dv01, rel=1e-9,
+                                              abs=1e-6)
+
+
+# --------------------------------------------------------------------------
+# 3. KNOWN ANSWER (ii): the direction reproduces the rate rule
+# --------------------------------------------------------------------------
+
+@pytest.mark.parametrize("kind,mids,rates,pv01s", [
+    (conv.CURVE, CURVE_MIDS, CURVE_RATES, CURVE_PV01),
+    (conv.FLY, FLY_MIDS, FLY_RATES, FLY_PV01),
+])
+@pytest.mark.parametrize("charge", [1.0, 500.0, 1_000.0])
+def test_received_signs_reproduce_the_rate_rule(kind, mids, rates, pv01s,
+                                                charge):
+    """Both rules apply; they must agree, per leg, exactly."""
+    opas, ptp, f, pv01s_l, o = build(kind, mids, rates, pv01s, charge=charge)
+    call = pp.classify(opas=opas, package_price=ptp, npv_pays=f,
+                       pv01s=pv01s_l, structure_dv01=_dv01(kind, pv01s))
+    dev_bp = (conv.structure_price(rates, kind, len(rates), conv.RULE_RATE)
+              - conv.structure_price(mids, kind, len(mids), conv.RULE_RATE))
+    want = conv.dealer_received_signs(kind, len(mids), conv.RULE_RATE,
+                                      conv.dealer_side(dev_bp))
+    assert call.received_signs == want
+
+
+def test_the_two_rules_disagree_when_the_cash_dominates_and_that_is_correct():
+    """A charge larger than the off-market value flips the answer, on purpose.
+
+    The rate rule sees only ``P_traded - P_mid``; this rule sees that *plus*
+    the cash. When the cash is the bigger term it is the cash that says who
+    paid, and a test that demanded agreement everywhere would be pinning the
+    rate rule's blind spot rather than this rule's correctness.
+    """
+    # rates struck BELOW mid so the base party is up on the swaps, then a cash
+    # term big enough to more than take it back.
+    mids, rates = (4.00, 4.20), (3.99, 4.185)
+    opas, ptp, f, pv01s, o = build(conv.CURVE, mids, rates, CURVE_PV01,
+                                   charge=50_000.0)
+    call = in_known_frame(
+        pp.classify(opas=opas, package_price=ptp, npv_pays=f, pv01s=pv01s,
+                    structure_dv01=_dv01(conv.CURVE, CURVE_PV01)), o)
+    dev_bp = (conv.structure_price(rates, conv.CURVE, 2, conv.RULE_RATE)
+              - conv.structure_price(mids, conv.CURVE, 2, conv.RULE_RATE))
+    rate_answer = conv.dealer_received_signs(conv.CURVE, 2, conv.RULE_RATE,
+                                             conv.dealer_side(dev_bp))
+    assert call.received_signs == tuple(-x for x in rate_answer)
+    assert call.deviation_dollars == pytest.approx(50_000.0)
+
+
+# --------------------------------------------------------------------------
+# 4. KNOWN ANSWER (iii): the outright reproduces the frozen upfront rule
+# --------------------------------------------------------------------------
+
+@pytest.mark.parametrize("f", [-500_000.0, -60_000.0, -1_000.0,
+                               1_000.0, 60_000.0, 500_000.0])
+@pytest.mark.parametrize("u", [1_500.0, 40_000.0, 400_000.0])
+@pytest.mark.parametrize("ptp_sign", [1.0, -1.0])
+def test_outright_reproduces_upfront_rule(f, u, ptp_sign):
+    """One leg, one fee -- the case ``upfront.classify`` already answers.
+
+    ``dealer_sign`` is NOT compared: it is orientation-relative and the two
+    rules use different base orientations (``upfront`` works in the all-pay
+    frame, this rule in the fee-derived one). ``received_signs`` is the
+    orientation-free answer and it must be identical.
+    """
+    pv01 = 10_000.0
+    got = pp.classify(opas=[u], package_price=ptp_sign * u, npv_pays=[f],
+                      pv01s=[pv01], structure_dv01=pv01)
+    want = up.classify(npv_pay=f, upfront=u, structure_dv01=pv01)
+    assert got.received_signs == (want.dealer_sign,)
+
+
+@pytest.mark.parametrize("f,u", [(-60_000.0, 40_000.0), (60_000.0, 40_000.0),
+                                 (-60_000.0, 90_000.0), (60_000.0, 90_000.0)])
+def test_outright_lifecycle_inverts_with_the_upfront_rule(f, u):
+    pv01 = 10_000.0
+    got = pp.classify(opas=[u], package_price=u, npv_pays=[f], pv01s=[pv01],
+                      structure_dv01=pv01, is_lifecycle=True)
+    want = up.classify(npv_pay=f, upfront=u, structure_dv01=pv01,
+                       is_lifecycle=True)
+    assert got.received_signs == (want.dealer_sign,)
+
+
+# --------------------------------------------------------------------------
+# 5. the global flip must not reach the answer
+# --------------------------------------------------------------------------
+
+@pytest.mark.parametrize("kind,mids,rates,pv01s", [
+    (conv.CURVE, CURVE_MIDS, CURVE_RATES, CURVE_PV01),
+    (conv.FLY, FLY_MIDS, FLY_RATES, FLY_PV01),
+])
+def test_negating_the_package_price_leaves_the_answer_unchanged(
+        kind, mids, rates, pv01s):
+    """``s -> -s`` flips the orientation AND the deviation; the product is fixed.
+
+    The solver scores a sign vector and its complement identically, so which
+    one comes back is a tie-break detail. If that detail reached
+    ``received_signs`` the ladder would invert at random.
+    """
+    opas, ptp, f, pv01s_l, _ = build(kind, mids, rates, pv01s, charge=1_000.0)
+    a = pp.classify(opas=opas, package_price=ptp, npv_pays=f, pv01s=pv01s_l,
+                    structure_dv01=_dv01(kind, pv01s))
+    b = pp.classify(opas=opas, package_price=-ptp, npv_pays=f, pv01s=pv01s_l,
+                    structure_dv01=_dv01(kind, pv01s))
+    assert a.received_signs == b.received_signs
+    assert a.base_orientation == tuple(-x for x in b.base_orientation)
+    assert a.deviation_dollars == pytest.approx(-b.deviation_dollars)
+
+
+def test_a_leg_permutation_permutes_the_answer_and_nothing_else():
+    opas, ptp, f, pv01s, o = build(conv.FLY, FLY_MIDS, FLY_RATES, FLY_PV01,
+                                   charge=800.0)
+    perm = [2, 0, 1]
+    a = pp.classify(opas=opas, package_price=ptp, npv_pays=f, pv01s=pv01s,
+                    structure_dv01=_dv01(conv.FLY, FLY_PV01))
+    b = pp.classify(opas=[opas[i] for i in perm], package_price=ptp,
+                    npv_pays=[f[i] for i in perm],
+                    pv01s=[pv01s[i] for i in perm],
+                    structure_dv01=_dv01(conv.FLY, FLY_PV01))
+    assert b.received_signs == tuple(a.received_signs[i] for i in perm)
+    assert b.deviation_dollars == pytest.approx(a.deviation_dollars)
+
+
+# --------------------------------------------------------------------------
+# 6. the gates -- every refusal has a name, and the constants are carried
+# --------------------------------------------------------------------------
+
+def test_floor_and_disagree_ratio_come_from_the_frozen_config():
+    assert pp.PTP_USD_FLOOR == stir_config.PTP_USD_FLOOR == 500.0
+    assert (pp.PTP_UFRO_DISAGREE_RATIO
+            == stir_config.PTP_UFRO_DISAGREE_RATIO == 2.0)
+
+
+@pytest.mark.parametrize("ptp", [None, float("nan"), 0.0, 499.0, -499.0])
+def test_sub_floor_package_price_is_refused_by_name(ptp):
+    """A sub-floor PTP is a notation artefact, not dollars. Named, not guessed."""
+    call = pp.classify(opas=[10_000.0, 15_000.0], package_price=ptp,
+                       npv_pays=[-10_000.0, -15_000.0],
+                       pv01s=[10_000.0, 10_000.0], structure_dv01=10_000.0)
+    assert call.exclusion == pp.EXCL_NO_PACKAGE_PRICE
+    assert call.received_signs is None
+
+
+def test_the_notation_3_sentinel_is_below_the_floor():
+    """``9.9999999999`` with notation 3 is the spec's not-available sentinel.
+
+    It is the modal ``package_transaction_price`` on notation-3 ``PKG-4+``
+    packages, and the floor is what keeps it out -- no notation column is read.
+    """
+    call = pp.classify(opas=[10_000.0], package_price=9.9999999999,
+                       npv_pays=[-10_000.0], pv01s=[10_000.0],
+                       structure_dv01=10_000.0)
+    assert call.exclusion == pp.EXCL_NO_PACKAGE_PRICE
+
+
+def test_a_leg_with_no_reported_cash_is_refused_by_name():
+    call = pp.classify(opas=[10_000.0, None], package_price=-4_000.0,
+                       npv_pays=[-10_000.0, -15_000.0],
+                       pv01s=[10_000.0, 10_000.0], structure_dv01=10_000.0)
+    assert call.exclusion == pp.EXCL_OPA_MISSING
+
+
+def test_a_package_whose_cash_does_not_reconcile_is_refused_by_name():
+    """No sign vector gets near the price -> the orientation is a guess."""
+    call = pp.classify(opas=[10_000.0, 15_000.0], package_price=9_000_000.0,
+                       npv_pays=[-10_000.0, -15_000.0],
+                       pv01s=[10_000.0, 10_000.0], structure_dv01=10_000.0)
+    assert call.exclusion == pp.EXCL_TIEOUT_FAIL
+    assert call.tieout_bps is not None and call.tieout_bps > pp.TIEOUT_MAX_BPS
+
+
+def test_a_reconciling_package_is_not_refused():
+    call = pp.classify(opas=[10_000.0, 15_000.0], package_price=-4_000.0,
+                       npv_pays=[-10_000.0, -15_000.0],
+                       pv01s=[10_000.0, 10_000.0], structure_dv01=10_000.0)
+    assert call.exclusion is None
+    assert call.tieout_bps == pytest.approx(0.1)   # $1,000 on $10,000/bp
+
+
+@pytest.mark.parametrize("npvs", [[0.0, -15_000.0], [-10_000.0, 0.0]])
+def test_a_leg_exactly_at_mid_cannot_be_oriented_and_says_so(npvs):
+    call = pp.classify(opas=[10_000.0, 15_000.0], package_price=-4_000.0,
+                       npv_pays=npvs, pv01s=[10_000.0, 10_000.0],
+                       structure_dv01=10_000.0)
+    assert call.exclusion == pp.EXCL_LEG_AT_MID
+
+
+def test_a_leg_inside_the_mid_resolution_is_flagged_not_refused():
+    """Near-mid is a confidence problem, not an eligibility one.
+
+    The two legs carry DIFFERENT PV01 on purpose: with equal PV01 the reported
+    ``unresolved_pv01`` is the same number whichever leg was flagged, so the
+    test cannot tell the comparison from its inverse. (It could not, until a
+    mutation that flipped ``<`` to ``>`` survived.)
+    """
+    # leg 0 is 0.001 bp from mid: |f| = 0.001 * 10_000 = $10
+    call = pp.classify(opas=[10.0, 15_000.0], package_price=-14_990.0,
+                       npv_pays=[-10.0, -15_000.0],
+                       pv01s=[10_000.0, 20_000.0], structure_dv01=15_000.0,
+                       leg_sign_resolution_bps=0.25)
+    assert call.exclusion is None
+    assert pp.FLAG_LEG_NEAR_MID in call.flags
+    assert call.unresolved_pv01 == pytest.approx(10_000.0)   # leg 0, not leg 1
+
+
+def test_a_package_with_no_near_mid_leg_carries_no_flag_and_no_unresolved_pv01():
+    call = pp.classify(opas=[10_000.0, 15_000.0], package_price=-4_000.0,
+                       npv_pays=[-10_000.0, -15_000.0],
+                       pv01s=[10_000.0, 20_000.0], structure_dv01=15_000.0,
+                       leg_sign_resolution_bps=0.25)
+    assert pp.FLAG_LEG_NEAR_MID not in call.flags
+    assert call.unresolved_pv01 == 0.0
+
+
+def test_orientation_from_cash_refuses_a_leg_exactly_at_mid():
+    """``> 0`` and ``>= 0`` differ at exactly one input; neither is right."""
+    assert pp.orientation_from_cash((1, -1), (5.0, -5.0)) == (1, 1)
+    with pytest.raises(ValueError, match="exactly at mid"):
+        pp.orientation_from_cash((1, -1), (0.0, -5.0))
+
+
+def test_ptp_ufro_disagreement_is_flagged_and_carries_the_frozen_ratio():
+    call = pp.classify(opas=[10_000.0, 15_000.0], package_price=-4_000.0,
+                       npv_pays=[-10_000.0, -15_000.0],
+                       pv01s=[10_000.0, 10_000.0], structure_dv01=10_000.0,
+                       ufro_sum=100.0)
+    assert pp.FLAG_PTP_UFRO_DISAGREE in call.flags
+    call2 = pp.classify(opas=[10_000.0, 15_000.0], package_price=-4_000.0,
+                        npv_pays=[-10_000.0, -15_000.0],
+                        pv01s=[10_000.0, 10_000.0], structure_dv01=10_000.0,
+                        ufro_sum=3_000.0)
+    assert pp.FLAG_PTP_UFRO_DISAGREE not in call2.flags
+
+
+def test_an_unpriced_leg_is_a_pricing_error_not_a_silent_zero():
+    call = pp.classify(opas=[10_000.0, 15_000.0], package_price=-4_000.0,
+                       npv_pays=[-10_000.0, None],
+                       pv01s=[10_000.0, 10_000.0], structure_dv01=10_000.0)
+    assert call.exclusion == pp.EXCL_PRICING_ERROR
+    call = pp.classify(opas=[10_000.0, 15_000.0], package_price=-4_000.0,
+                       npv_pays=[-10_000.0, float("nan")],
+                       pv01s=[10_000.0, 10_000.0], structure_dv01=10_000.0)
+    assert call.exclusion == pp.EXCL_PRICING_ERROR
+
+
+def test_an_exact_tie_is_no_call_not_a_side():
+    """``conventions.dealer_side`` has a zero branch; this rule must use it."""
+    call = pp.classify(opas=[10_000.0, 15_000.0], package_price=-5_000.0,
+                       npv_pays=[-10_000.0, -15_000.0],
+                       pv01s=[10_000.0, 10_000.0], structure_dv01=10_000.0)
+    assert call.deviation_dollars == pytest.approx(0.0)
+    assert call.dealer_sign == 0
+    assert call.received_signs is None
+
+
+def test_unallocated_cash_is_signal_not_noise():
+    """The fees equal their model values exactly; the whole charge is the gap
+    between their signed sum and the reported package price.
+
+    Taking ``reported_price`` from ``sum(s_i * OPA_i)`` instead of from the
+    package price would make this print an exact tie and throw the charge away
+    -- and it is the case the tape produces whenever the venue allocates the
+    fees at fair value and prices the package a tick away.
+    """
+    call = in_known_frame(
+        pp.classify(opas=[10_000.0, 15_000.0], package_price=-4_000.0,
+                    npv_pays=[-10_000.0, -15_000.0],
+                    pv01s=[10_000.0, 10_000.0], structure_dv01=10_000.0),
+        CURVE_FRAME)
+    assert call.reported_price == pytest.approx(-4_000.0)
+    assert call.model_price == pytest.approx(-5_000.0)
+    assert call.deviation_dollars == pytest.approx(1_000.0)
+    assert call.dealer_sign == conv.DEALER_RECEIVED
+
+
+def test_all_zero_fees_against_a_real_price_is_refused():
+    """No sign vector orients anything, and the global flip stops cancelling."""
+    call = pp.classify(opas=[0.0, 0.0], package_price=-4_000.0,
+                       npv_pays=[-10_000.0, -15_000.0],
+                       pv01s=[10_000.0, 10_000.0], structure_dv01=1e9)
+    assert call.exclusion == pp.EXCL_TIEOUT_FAIL
+
+
+def test_bp_denominator_is_the_structure_dv01_and_a_bad_one_is_refused():
+    call = in_known_frame(
+        pp.classify(opas=[10_000.0, 15_000.0], package_price=-4_000.0,
+                    npv_pays=[-10_000.0, -15_000.0],
+                    pv01s=[10_000.0, 10_000.0], structure_dv01=10_000.0),
+        CURVE_FRAME)
+    assert call.deviation_bps == pytest.approx(1_000.0 / 10_000.0)
+    for bad in (0.0, -1.0, None, float("nan")):
+        assert pp.classify(opas=[10_000.0, 15_000.0], package_price=-4_000.0,
+                           npv_pays=[-10_000.0, -15_000.0],
+                           pv01s=[10_000.0, 10_000.0],
+                           structure_dv01=bad).exclusion == pp.EXCL_PRICING_ERROR
+
+
+def test_rule_constant_is_its_own_and_not_one_of_the_pinned_two():
+    assert pp.RULE_PACKAGE_PRICE not in (conv.RULE_RATE, conv.RULE_UPFRONT)
+
+
+def test_conventions_still_refuses_to_orient_a_pkg_n():
+    """``conventions.py`` is pinned; this module must not have relaxed it."""
+    with pytest.raises(conv.UnorientableUnit):
+        conv.base_orientation(conv.PKG, 4, conv.RULE_RATE)
+
+
+# --------------------------------------------------------------------------
+# 7. the vectorised tape gate agrees with the scalar path
+# --------------------------------------------------------------------------
+
+def _legs(pkg: str, opas, ptp, dv01s):
+    return pd.DataFrame([
+        {"_unit_group": pkg, "other_payment_amount": o,
+         "package_transaction_price": ptp, "_dv01_proxy": d}
+        for o, d in zip(opas, dv01s)
+    ])
+
+
+def test_tape_gate_matches_the_scalar_rule_on_every_named_refusal():
+    frames = [
+        _legs("OK", [10_000.0, 15_000.0], -4_000.0, [10_000.0, 10_000.0]),
+        _legs("NOPRICE", [10_000.0, 15_000.0], 100.0, [10_000.0, 10_000.0]),
+        _legs("MISSING", [10_000.0, np.nan], -4_000.0, [10_000.0, 10_000.0]),
+        _legs("TIEOUT", [10_000.0, 15_000.0], 9e6, [10_000.0, 10_000.0]),
+    ]
+    df = pd.concat(frames, ignore_index=True)
+    got = pp.tape_gate(df)
+    assert list(got.loc[["OK", "NOPRICE", "MISSING", "TIEOUT"], "recoverable"]) \
+        == [True, False, False, False]
+    assert list(got.loc[["NOPRICE", "MISSING", "TIEOUT"], "stratum"]) == [
+        pp.EXCL_NO_PACKAGE_PRICE, pp.EXCL_OPA_MISSING, pp.EXCL_TIEOUT_FAIL]
+
+
+def test_tape_gate_is_empty_safe():
+    got = pp.tape_gate(_legs("X", [1.0], None, [1.0]).iloc[:0])
+    assert list(got.columns) == ["recoverable", "stratum", "tieout_bps"]
+    assert len(got) == 0
+
+
+def test_tape_gate_refuses_a_frame_it_cannot_read_rather_than_returning_empty():
+    """A missing column must raise. Silently returning "nothing recoverable"
+    would read downstream as a measurement, not as a wiring bug."""
+    with pytest.raises(KeyError):
+        pp.tape_gate(pd.DataFrame({"_unit_group": ["A"]}))
+
+
+def test_tape_gate_names_a_duplicated_column():
+    """A ``SELECT`` that lists a column twice makes ``legs[col]`` a DataFrame.
+
+    Not hypothetical: routing this gate into ``universe`` did exactly that, and
+    the symptom was a ``to_numeric`` TypeError four frames away.
+    """
+    df = _legs("A", [1.0, 2.0], 5_000.0, [10.0, 10.0])
+    df = pd.concat([df, df[["other_payment_amount"]]], axis=1)
+    with pytest.raises(KeyError, match="duplicated"):
+        pp.tape_gate(df)
+
+
+def test_leg_columns_has_no_duplicates():
+    from SDRUtils.dealer_direction import universe
+    cols = list(universe.LEG_COLUMNS)
+    assert len(cols) == len(set(cols)), \
+        [c for c in set(cols) if cols.count(c) > 1]
+
+
+# --------------------------------------------------------------------------
+# 8. universe routing -- the recovered units leave EXCL_UNORIENTABLE
+# --------------------------------------------------------------------------
+
+def test_universe_routes_a_recoverable_pkg4_out_of_unorientable():
+    from SDRUtils.dealer_direction import types as T
+    from SDRUtils.dealer_direction import universe
+
+    import tests.test_dealer_direction_universe as tu
+
+    legs = tu._frame(*[
+        tu._leg(trade_id=f"T{i}", package_id="P1",
+                other_payment_amount=amt,
+                package_transaction_price=-4_000.0,
+                notional=100_000_000.0, tenor_years=10.0)
+        for i, amt in enumerate([10_000.0, 15_000.0, 6_000.0, 3_000.0])
+    ])
+    # the un-gated PTP makes it recoverable; a package with no price does not
+    u = universe.unit_frame(legs)
+    assert list(u["exclusion"]) == [None]
+
+    legs2 = tu._frame(*[
+        tu._leg(trade_id=f"T{i}", package_id="P2", other_payment_amount=amt,
+                package_transaction_price=None,
+                notional=100_000_000.0, tenor_years=10.0)
+        for i, amt in enumerate([10_000.0, 15_000.0, 6_000.0, 3_000.0])
+    ])
+    u2 = universe.unit_frame(legs2)
+    assert list(u2["exclusion"]) == [T.EXCL_UNORIENTABLE]
+
+
+def test_krd_seam_still_gives_a_package_one_sign_and_this_module_does_not():
+    """The one hazard routing recovered PKG-N units into the ladder creates.
+
+    ``krd.received_hypothesis_signs`` dispatches through ``conventions``: for a
+    PKG-N it RAISES under the rate rule (loud, fine) and returns ``(1,)*n``
+    under the upfront rule -- every leg the same sign. A recovered package has
+    an upfront (its PTP), so a consumer routing on upfront presence lands in
+    the second branch and points a whole package's key-rate profile one way.
+
+    Pinned here so the difference is visible rather than discovered from a
+    ladder that does not move: consumers of a RULE_PACKAGE_PRICE call must read
+    ``package_price.received_hypothesis_signs`` instead.
+    """
+    from SDRUtils.dealer_direction import krd
+
+    with pytest.raises(conv.UnorientableUnit):
+        krd.received_hypothesis_signs(conv.PKG, 4, conv.RULE_RATE)
+    assert krd.received_hypothesis_signs(conv.PKG, 4, conv.RULE_UPFRONT) \
+        == (1, 1, 1, 1)
+
+    call = pp.classify(opas=[10_000.0, 15_000.0, 6_000.0, 3_000.0],
+                       package_price=-4_000.0,
+                       npv_pays=[-10_000.0, -15_000.0, 6_000.0, 3_000.0],
+                       pv01s=[1e4] * 4, structure_dv01=2e4)
+    assert call.exclusion is None
+    got = pp.received_hypothesis_signs(call)
+    assert len(set(got)) > 1, (
+        "the whole point is that the package's legs are NOT all one way")
+    assert got == tuple(call.base_orientation)
+
+
+def test_received_hypothesis_signs_refuses_an_unoriented_call():
+    call = pp.classify(opas=[1.0, 2.0], package_price=None,
+                       npv_pays=[-1.0, -2.0], pv01s=[1e4, 1e4],
+                       structure_dv01=1e4)
+    assert call.exclusion == pp.EXCL_NO_PACKAGE_PRICE
+    with pytest.raises(ValueError, match="not oriented"):
+        pp.received_hypothesis_signs(call)
+
+
+def test_universe_still_excludes_an_asset_swap_package():
+    from SDRUtils.dealer_direction import types as T
+    from SDRUtils.dealer_direction import universe
+
+    import tests.test_dealer_direction_universe as tu
+
+    legs = tu._frame(*[
+        tu._leg(trade_id=f"T{i}", package_id="P3", other_payment_amount=amt,
+                package_transaction_price=-4_000.0, trade_type="SPREADOVER",
+                notional=100_000_000.0, tenor_years=10.0)
+        for i, amt in enumerate([10_000.0, 15_000.0, 6_000.0, 3_000.0])
+    ])
+    u = universe.unit_frame(legs)
+    assert list(u["exclusion"]) == [T.EXCL_UNORIENTABLE]
