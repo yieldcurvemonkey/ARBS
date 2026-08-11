@@ -262,3 +262,23 @@ RECIPES: Dict[str, dict] = {
     "2y future": spec("2y future", instrument={"family": "ust", "root": "TU", "rank": 1}),
     "net of 0.5bp": spec("net of 0.5bp", cost_bp=0.5),
 }
+
+
+def placebo_replicas(raw: pd.DataFrame, shifts: Sequence[int] = (1, 2, 3, 5, -1, -2, -3, -5),
+                     **kw) -> List[pd.DataFrame]:
+    """One placebo book PER shift, each the same size as the real book.
+
+    Pooling the shifts into a single book is the wrong control for a search whose
+    headline is a MAXIMUM. Two things change at once when you pool: each cell
+    gets more trades (narrower sampling distribution, smaller max) and the whole
+    grid has a different number of eligible cells (more draws, bigger max). The
+    two biases run in opposite directions and neither is small, so the comparison
+    of best-real against best-pooled-placebo answers no clean question.
+
+    Running the SAME grid separately on each shift fixes both: every replica has
+    the same number of cells and the same per-cell sample size as the real grid,
+    so its maximum is a genuine draw from the distribution the real maximum has
+    to beat -- and several replicas give that distribution a shape rather than a
+    single point.
+    """
+    return [placebo_shift(raw, days=d, **kw) for d in shifts]

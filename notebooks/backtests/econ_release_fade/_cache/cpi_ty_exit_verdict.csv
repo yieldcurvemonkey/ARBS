@@ -1,0 +1,19 @@
+,value
+best cell,momentum|mv5|tp3b|slinfb|tr-|t118
+trades,26
+of base trades,26
+gross bp/trade,1.3096
+ZN round trip (bp),0.2389
+net bp/trade,1.0707
+total net bp over the sample,27.84
+hit rate,0.7308
+Sharpe per trade,0.3477
+t-stat,1.7729
+avg hold (min),58.9
+exits at target / stop / time,"(0.615, 0.0, 0.385)"
+cells searched,11808
+selection-bias adjusted p,0.7711
+Romano-Wolf adjusted p,0.7711
+RAS lower bound,-1.7661
+best placebo cell net_bp,0.1579
+beats the placebo search,True
