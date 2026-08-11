@@ -265,6 +265,19 @@ def _stored_curve_count(store: Any, asset: str, day: datetime.date) -> int:
     return total
 
 
+
+def _fetched_day_is_complete(curve_name: str, day: datetime.date, path: Path) -> bool:
+    """Does the fetched day run to the end of the session Citi published?
+
+    Delegates to the fetcher's own rule so the planner and the fetcher cannot
+    disagree about which days still need work - they did before, and fixing one
+    without the other produces chunks the other then skips.
+    """
+    import citivelo_excel_intraday_warm as _warm
+
+    return _warm._day_file_is_complete(curve_name, day, path.parent)
+
+
 def plan_curve(
     curve_name: str,
     *,
@@ -295,18 +308,34 @@ def plan_curve(
     lo = start or (horizon.start if horizon else _d("2021-09-15"))
     hi = end or (horizon.until if horizon and horizon.until else datetime.date.today())
     curve_dir = work_dir / curve_name
-    on_disk = {
-        datetime.date.fromisoformat(p.stem)
-        for p in curve_dir.glob("*.parquet")
-    } if curve_dir.exists() else set()
-
-    store = CurveStore.default()
-    asset = asset_name(curve_name)
     # The density threshold only applies where dense data EXISTS. Below a curve's
     # dense_from, Citi publishes a few hundred prints a day at best, so a flat
     # "600 curves or refetch" rule would mark every sparse-era day thin forever
     # and re-run those Excel windows on every invocation.
     dense_from = horizon.dense_from if horizon else lo
+
+    # "On disk" USED to mean "the parquet exists", and that is what made the
+    # truncated days permanent. Roughly 16% of fetched days stop at 23:59 UTC
+    # instead of the session end - a transient partial response, not a market
+    # close, and proven transient because 2026-08-03 came back COMPLETE in one
+    # run and truncated in another. Presence-means-done meant no later run ever
+    # asked for the rest. A day now counts as fetched only if it holds
+    # essentially the whole session Citi published on it.
+    on_disk = set()
+    truncated_on_disk = set()
+    if curve_dir.exists():
+        for path in curve_dir.glob("*.parquet"):
+            try:
+                d = datetime.date.fromisoformat(path.stem)
+            except ValueError:
+                continue
+            if _fetched_day_is_complete(curve_name, d, path):
+                on_disk.add(d)
+            else:
+                truncated_on_disk.add(d)
+
+    store = CurveStore.default()
+    asset = asset_name(curve_name)
     stored_dense = set()
     for d in store.available_dates(asset):
         if not (lo <= d < hi):
@@ -320,7 +349,13 @@ def plan_curve(
     plan.on_disk = sum(1 for d in on_disk if lo <= d < hi)
     plan.in_store = len(stored_dense)
 
-    done = on_disk | stored_dense
+    # A day already solved in the store counts as done - UNLESS the fetched
+    # parquet we have for it is truncated. The store check is a shortcut for
+    # days this work directory never fetched; it must not override direct
+    # evidence that the fetch came up short, which is what kept the truncated
+    # days permanent. A truncated day clears a flat 600-curve bar comfortably
+    # (a narrowed-era truncation still holds ~1,140 of 1,320).
+    done = (on_disk | stored_dense) - truncated_on_disk
     cursor = hi
     while cursor > lo:
         chunk_start = max(lo, cursor - datetime.timedelta(days=chunk_days))
@@ -870,12 +905,22 @@ def _already_dense(
 
     But a raw count threshold has the opposite failure, and it is the one that
     shows up first at scale. **A short day is not a thin day.** A Sunday-evening
-    partial is ~180 published minutes; Fridays end at 17:59 local against
-    Monday-Thursday's 19:59; a holiday may hold a few hundred. Those are complete
-    days, and judging them by the dense-era count marks them thin on every run,
-    so ``status`` shows phantom failures and every ``build`` re-solves them
-    forever. Nine such days were already sitting in ``USD-FEDFUNDS-1D`` after
-    nine weeks of fetching - one per Sunday.
+    partial is ~180-420 published minutes; Fridays end early; a holiday may hold
+    a few hundred. Those are complete days, and judging them by the dense-era
+    count marks them thin on every run, so ``status`` shows phantom failures and
+    every ``build`` re-solves them forever. Nine such days were already sitting
+    in ``USD-FEDFUNDS-1D`` after nine weeks of fetching - one per Sunday.
+
+    **Corrected 2026-08-11.** This used to say Monday-Thursday ends at 19:59
+    local. It does not, and the mistake pointed the wrong way: measured over 810
+    Mon-Thu fetched days, the weekday close is **22:59 ET** from 2022-06-06 and
+    **23:58 ET** before it. 19:59 ET (18:59 on standard time) is exactly
+    **23:59 UTC**, which is the *truncation* signature - a partial fetch cut on a
+    UTC clock, appearing on ~16% of days with the same count in both DST regimes.
+    Treating it as a normal close marked every truncated day complete, which is
+    why they were never re-fetched. Friday and Sunday really are short, and
+    :mod:`MDP.IRSwaps.CITIVELO_EXCEL.citi_session` now carries the whole shape,
+    era by era, so this function no longer has to encode one.
 
     So the strongest signal wins: **if the store holds as many curves as the
     fetched file holds minutes, the day is done, whatever the count is.** The

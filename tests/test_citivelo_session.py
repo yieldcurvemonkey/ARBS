@@ -233,3 +233,79 @@ def test_bounds_walk_in_rather_than_assuming_a_fixed_wall_clock():
     assert summer[0].tz_convert(ET).hour == 17
     assert winter[0].tz_convert(ET).hour == 16
     assert summer[0].tz_convert("UTC").hour == winter[0].tz_convert("UTC").hour == 21
+
+
+# --------------------------------------------------------------------------- #
+#            the daily window narrowed once, on 2022-06-06                    #
+# --------------------------------------------------------------------------- #
+
+
+def test_before_the_change_the_weekday_ran_a_full_24_hours():
+    """Measured: 00:00 -> 23:58 ET, 1,439 rows, no nightly hole.
+
+    A model fixed at 01:00-22:59 answers the first half of the history wrongly,
+    and wrongly in the optimistic direction - it reports a day that is missing
+    four hours as merely missing three.
+    """
+    assert publishes(CURVE, et("2022-05-25 00:30")) is True
+    assert publishes(CURVE, et("2022-05-25 23:30")) is True
+    assert expected_minutes(CURVE, datetime.date(2022, 5, 25)) == 1440
+
+
+def test_after_the_change_the_nightly_hole_appears():
+    assert publishes(CURVE, et("2022-06-08 00:30")) is False
+    assert publishes(CURVE, et("2022-06-08 23:30")) is False
+    assert expected_minutes(CURVE, datetime.date(2022, 6, 8)) == 1320
+
+
+def test_the_changeover_is_a_single_weekend():
+    """Last 24-hour day 2022-06-03 (Fri); first narrowed one 2022-06-06 (Mon).
+
+    Pinned as dates rather than as a vague "mid-2022", because the repair list
+    that depends on this is generated per day.
+    """
+    from MDP.IRSwaps.CITIVELO_EXCEL.citi_session import SESSION_NARROWED_ON
+
+    assert SESSION_NARROWED_ON == datetime.date(2022, 6, 6)
+    # 2022-06-03 is a Friday: 24-hour era, so it runs from 00:00 ET.
+    assert publishes(CURVE, et("2022-06-03 00:30")) is True
+    # 2022-06-06 is the Monday: narrowed, so 00:30 is inside the nightly hole.
+    assert publishes(CURVE, et("2022-06-06 00:30")) is False
+
+
+def test_the_weekly_frame_is_the_same_in_both_eras():
+    """Only the DAILY window moved - which is why one model covers both."""
+    for day, label in (("2021-11-05", "era A"), ("2026-06-19", "era B")):
+        assert publishes(CURVE, utc(f"{day} 21:59")) is True, label   # Friday close
+        assert publishes(CURVE, utc(f"{day} 22:00")) is False, label
+    for day, label in (("2021-11-07", "era A"), ("2026-06-21", "era B")):
+        assert publishes(CURVE, utc(f"{day} 21:00")) is True, label   # Sunday open
+        assert publishes(CURVE, utc(f"{day} 20:59")) is False, label
+
+
+def test_friday_and_sunday_lengths_differ_by_era_only_through_the_daily_open():
+    """Era A's Friday starts at 00:00 ET, era B's at 01:00 - same 21:59 UTC close."""
+    a = expected_minutes(CURVE, datetime.date(2021, 11, 5))   # Fri, era A, EDT->EST?
+    b = expected_minutes(CURVE, datetime.date(2026, 6, 19))   # Fri, era B, EDT
+    assert a == b + 60, "era A gains exactly the 00:00-00:59 ET hour"
+
+
+def test_a_date_before_anything_measured_raises_rather_than_guessing():
+    from MDP.IRSwaps.CITIVELO_EXCEL.citi_session import MEASURED_FROM, UnknownSessionError
+
+    assert MEASURED_FROM == datetime.date(2017, 12, 5)
+    with pytest.raises(UnknownSessionError, match="predates anything"):
+        expected_minutes(CURVE, datetime.date(2015, 1, 5))
+    with pytest.raises(UnknownSessionError, match="predates anything"):
+        publishes(CURVE, et("2015-01-05 10:00"))
+
+
+def test_truncation_detection_uses_the_era_s_own_end():
+    """A 2021 day stopping at 19:59 ET is truncated against a 24-hour session.
+
+    Under the fixed 01:00-22:59 model it looked like a 3-hour shortfall; against
+    the era it is 4 hours, and the day is no less truncated for being old.
+    """
+    assert is_truncated(CURVE, datetime.date(2021, 11, 3), utc("2021-11-03 23:59")) is True
+    # ...and a complete era-A day is not flagged, even though it runs past 22:59.
+    assert is_truncated(CURVE, datetime.date(2021, 11, 3), et("2021-11-03 23:58")) is False

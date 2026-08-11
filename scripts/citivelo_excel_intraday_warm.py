@@ -106,6 +106,76 @@ def _default_work_dir() -> Path:
     return _REPO_ROOT / "MDP" / "IRSwaps" / "CITIVELO_EXCEL" / "_intraday_par_cache"
 
 
+
+def _parquet_row_count(path) -> Optional[int]:
+    """Rows in a day file, from the parquet footer. ``None`` when absent."""
+    from pathlib import Path as _P
+
+    path = _P(path)
+    if not path.exists():
+        return None
+    try:
+        import pyarrow.parquet as pq
+
+        return int(pq.ParquetFile(str(path)).metadata.num_rows)
+    except Exception:  # noqa: BLE001 - an unreadable file is "not there"
+        return None
+
+
+def _parquet_last_stamp(path):
+    """Last timestamp in a day file, tz-aware in the wire zone. ``None`` if absent."""
+    from pathlib import Path as _P
+
+    import pandas as pd
+
+    path = _P(path)
+    if not path.exists():
+        return None
+    try:
+        import pyarrow.parquet as pq
+
+        col = pq.read_table(str(path), columns=["timestamp"]).to_pandas()["timestamp"]
+    except Exception:  # noqa: BLE001 - unreadable, or written before this column existed
+        return None
+    if col.empty:
+        return None
+    idx = pd.DatetimeIndex(col)
+    if idx.tz is None:
+        idx = idx.tz_localize(WIRE_TZ)
+    return idx.max()
+
+
+def _day_file_is_complete(curve_name: str, day, curve_dir) -> bool:
+    """Does the day file run to the end of the session Citi published that day?
+
+    **The test is where the day STOPS, not how many rows it has.** Those are
+    different questions and only the first is repairable. A day cut at 23:59 UTC
+    is missing hours a re-fetch can recover; a day with holes scattered through
+    it is missing minutes Citi never published, and re-fetching it returns the
+    same holes forever. Measured over 4,043 stored days, a row-count rule with a
+    0.97 floor would re-fetch 295 complete days - 8.7 % of them - on every run,
+    to catch truncations the stop-time test finds exactly.
+
+    Falls back to plain existence for any curve or date
+    ``CITIVELO_EXCEL.citi_session`` has not measured, so the eighteen non-USD
+    curves keep exactly the behaviour they had.
+    """
+    from pathlib import Path as _P
+
+    path = _P(curve_dir) / f"{day.isoformat()}.parquet"
+    if not _parquet_row_count(path):
+        return False
+    last = _parquet_last_stamp(path)
+    if last is None:
+        return True                      # readable rows but no usable stamp column
+    try:
+        from MDP.IRSwaps.CITIVELO_EXCEL.citi_session import is_truncated
+
+        return not is_truncated(curve_name, day, last)
+    except Exception:  # noqa: BLE001 - unmodelled curve or unmeasured date
+        return True
+
+
 def curve_params(curve_name: str) -> Dict[str, Any]:
     """Everything Phase 2 needs about a curve, resolved once in the parent."""
     from MDP.IRSwaps.CITIVELO_EXCEL.curve_definitions import (
@@ -231,10 +301,16 @@ def fetch_curve(
     cursor_day = start
     while cursor_day < end:
         chunk_end_day = min(cursor_day + window, end)
-        # Skip a window only when EVERY weekday in it is already on disk.
+        # Skip a window only when every weekday in it is already on disk AND
+        # COMPLETE. Existence alone is what froze the truncated days: ~16% of
+        # fetched days stop at 23:59 UTC rather than the session end, and a
+        # presence test meant no later run ever asked for the rest. That the
+        # partial is transient rather than a market close is not an inference -
+        # 2026-08-03 came back complete in one run and truncated in another.
         needed = [
             d for d in pd.date_range(cursor_day, chunk_end_day, freq="D", inclusive="left").date
-            if d.weekday() < 5 and (force or not (curve_dir / f"{d.isoformat()}.parquet").exists())
+            if d.weekday() < 5
+            and (force or not _day_file_is_complete(curve_name, d, curve_dir))
         ]
         if not needed:
             logger.info("  %s..%s  already on disk, skipped", cursor_day, chunk_end_day)
@@ -276,7 +352,19 @@ def fetch_curve(
             )
             for day, sub in frame.groupby(frame.index.date):
                 out = curve_dir / f"{day.isoformat()}.parquet"
-                if out.exists() and not force:
+                # Keep whichever fetch got MORE of the session, rather than
+                # "first write wins" (which froze truncations) or "--force wins"
+                # (which would replace a good day with a worse one). Both
+                # failures are observed on the same date: 2026-08-03 was fetched
+                # complete at 1,320 minutes in one run and truncated at 1,140 in
+                # another, so either fixed rule loses real data half the time.
+                existing = _parquet_row_count(out)
+                if existing is not None and existing >= len(sub) and not force:
+                    if existing > len(sub):
+                        logger.info(
+                            "  kept %s  %d minutes on disk beats %d just fetched",
+                            out.name, existing, len(sub),
+                        )
                     continue
                 n = _write_day_parquet(out, sub)
                 days_written += 1

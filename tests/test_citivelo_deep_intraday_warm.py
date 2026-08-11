@@ -226,8 +226,17 @@ def test_a_day_already_on_disk_is_not_refetched(tmp_path, fake_store):
     fake_store({})
     day = datetime.date(2025, 6, 11)
     (tmp_path / "USD-SOFR-1D").mkdir(parents=True)
+    # A REAL day file, not a zero-byte stand-in. "On disk" now means the day
+    # runs to the session end, so an empty or corrupt file is correctly treated
+    # as not fetched - which is the point of the change, and which a b"" stub
+    # can no longer express.
+    import pandas as _pd
+
     for d in _days_in((datetime.date(2025, 6, 9), datetime.date(2025, 6, 13))):
-        (tmp_path / "USD-SOFR-1D" / f"{d.isoformat()}.parquet").write_bytes(b"")
+        _pd.DataFrame({
+            "timestamp": _pd.date_range(f"{d} 01:00", f"{d} 22:59", freq="1min"),
+            "1D": 4.3,
+        }).to_parquet(tmp_path / "USD-SOFR-1D" / f"{d.isoformat()}.parquet", index=False)
     plan = D.plan_curve(
         "USD-SOFR-1D", work_dir=tmp_path,
         start=datetime.date(2025, 6, 9), end=datetime.date(2025, 6, 13), chunk_days=5,
