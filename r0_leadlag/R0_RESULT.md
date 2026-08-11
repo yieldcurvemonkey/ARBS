@@ -339,12 +339,49 @@ the addendum licenses `rho` and sign agreement, not another regression.
 **Crucially, the FAIL does not rest on the `k < 0` mass.** It rests on `sum(beta_k, k>=1)`
 being indistinguishable from zero, and no staleness artifact manufactures a zero.
 
-**2. Combo instruments are excluded from Y, and worst exactly where it matters most.**
+**But attenuation does manufacture a zero, and that is the whole point of D1.** An earlier
+draft of this section over-claimed by saying the two-clock design meant attenuation could
+not be blamed for a null on both panels. It cannot: **the same X feeds both panels**, so
+attenuation shrinks every `beta` on both equally. What the two-clock design rules out is a
+**timing** alternative — it says nothing about power. Nor does the `k < 0` significance
+demonstrate power, because on this section's own reading that mass may be generated
+entirely by the staleness channel, with no correlation between X and true customer
+direction at all. D1 is therefore load-bearing rather than a formality, and the verdict is
+conditional in exactly that one respect. It duly fired.
+
+**2. Combo instruments are excluded from Y — and this is NOT classical measurement error.**
 Discarded share of traded futures volume: **sr3 24.66%, zq 20.67%** (both in SFR_FF),
-against 10–15% for the Treasury roots. A dealer hedging a swap with a futures **spread**
-rather than an outright is invisible to Y. This is measurement error in Y — attenuating,
-not sign-flipping — but it is the largest single caveat on Y and it is concentrated in the
-bucket with the fewest sessions.
+against 10–15% for the Treasury roots.
+
+An earlier draft called this "attenuating, not sign-flipping". That is the right
+description of classical measurement error and the wrong description of what this is:
+**selective removal of a component of Y**. Front-end hedging is substantially done in
+**packs and bundles**, which are exactly the combo instruments discarded — so for SFR_FF
+this is plausibly not noise around the hedge, it is the removal of *where the hedge lives*.
+Treasury futures hedging is mostly outright, so TU/FV/TY_UXY/US are not exposed the same
+way.
+
+**Scope the verdict accordingly: decisive for the belly and long end, provisional for
+SFR/ZQ** pending leg-level combo reconstruction. That matters disproportionately here,
+because the meeting-dated front-end is the part of the wider programme that is furthest
+along. Noted as a scoped follow-up; not run.
+
+**2b. Y is aggressor-signed, and a passively worked hedge enters with the OPPOSITE sign.**
+Every trade has one aggressor and one passive side. A dealer who is long duration and
+sells futures by resting offers is *lifted by a buyer* — so that hedge contributes
+**positive** Y where the registered prediction is negative. A hedge executed as a mix of
+aggressive and passive therefore partially self-cancels in Y, and the limit of that
+cancellation is precisely a null.
+
+This is a third mechanism, alongside attenuation and the combo exclusion, that can produce
+the observed zero, and unlike attenuation it is **not** covered by D1. It also offers a
+reading of the split table that the noise interpretation does not: the four significant
+*wrong-sign* cells include IDB US on **both** clocks at t = +4.86 and +3.66 — the largest
+`t` statistics anywhere in the table, same bucket, same sign, both clocks. Three cells one
+way and four the other is what noise looks like on a count; that particular pattern is not
+obviously noise. It is flagged, not claimed: MBO carries no counterparty, so no version of
+this test can separate passive dealer hedging from aggressive customer buying. It is a
+bound on what any aggressor-signed test can conclude.
 
 **3. `side = 'N'` volume is unsigned, not dropped:** 9.54% (sr3) and 9.87% (zq) of
 outright volume, 0.55–1.89% for Treasuries. Attenuating.
