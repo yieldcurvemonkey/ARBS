@@ -1003,6 +1003,11 @@ invariant that should have held all along.
 `docs/2026-08-11-citivelo-minute-repair-list.csv` — **supersedes the 08-10 list**,
 which was generated with the fixed-window model and against a smaller store.
 
+> The counts in this section are the state **before** the repair run of §23.
+> The committed CSV has since been regenerated post-repair (600 truncated days,
+> not 641); the numbers below are kept as the baseline the run is measured
+> against.
+
 | curve | cause | days | missing minutes |
 |---|---|---|---|
 | `USD-FEDFUNDS-1D` | truncated end | 398 | 102,411 |
@@ -1040,3 +1045,86 @@ fetched day — correct, and the fixture now writes a real parquet) and
 0.97 row-count floor calling a 1,250-curve dense day incomplete. That second one
 was a defect in the fix, not a test needing relaxation, and it is why completeness
 is measured as a stop time rather than a count.
+
+---
+
+## 23. The repair, run
+
+Run 2026-08-11 from `fix/citivelo-session-eras` against the `ARBS-snap` work
+directory. Fetch → build → re-measure, with the measurement taken from the store
+rather than from an exit code.
+
+### It stopped where it was designed to
+
+```
+Excel is at 4210 MB, at or over the 4200 MB ceiling, and auto-restart is off.
+Stopping - 47 day file(s) are on disk and a re-run resumes.
+```
+
+**7 of 19 chunks, 0 errors.** Excel began the session at 2,670 MB — already over
+half the ~4.8 GB wedge point, from earlier work — so the headroom was never going
+to cover the whole backlog. The workbook recycle held it in a 3.6–4.4 GB cycle for
+six chunks and then stopped recovering (the last one gave back 61 MB against ~340
+added), which is exactly the trend the memory guard exists to catch.
+
+`--auto-restart` was left off and `--until-done` unused, so it exits rather than
+evicting a live Excel session or hanging on a human.
+
+### What the fetch did
+
+| | count |
+|---|---|
+| days rewritten with more of the session | **47** |
+| days **kept** because the re-fetch came back *worse* | **50** |
+
+A 1:1 ratio. Under `--force` this run would have destroyed about as many days as
+it fixed; under the old first-write-wins it would have written nothing at all.
+The keep-the-better rule is not a nicety here, and the evidence for it was the
+2026-08-03 pair *before* the run rather than a surprise during it.
+
+### What the build did
+
+46 days, 56,758 curves, **0 fallbacks, 0 errors**, max reprice 0.0023 bp. No
+`--force` needed: `_already_dense`'s primary rule is `stored >= fetched_minutes`,
+so a repaired day (1,320 fetched against 1,140 stored) fails it and is rebuilt
+automatically. That part of the function was always right; only its docstring's
+session model was wrong.
+
+### Measured in the store, not asserted
+
+The known-answer day first — 2026-08-03 is the day proven earlier to exist
+complete upstream:
+
+| day | before | after | |
+|---|---|---|---|
+| **2026-08-03** | 1,140 | **1,320** | truncated → **complete** |
+| 2026-07-29 | 1,139 | **1,319** | truncated → **complete** |
+| 2026-08-10 | 1,088 | 1,140 | improved, still short |
+| **2026-08-05** | 1,319 | **1,319** | **held** — the re-fetch offered 1,139 |
+
+Across the whole store:
+
+- **42 days left `truncated_end`** — 36 to `complete`, 6 to `interior_gaps`
+  (they now reach the session end but retain interior holes, which is the correct
+  reclassification);
+- **44 days improved**, 7,830 minutes recovered;
+- **0 days got worse.**
+
+That last line is the keep-the-better rule verified at the outcome level rather
+than from the log.
+
+| | before | after |
+|---|---|---|
+| truncated days | 641 | **600** |
+| missing minutes (truncated) | 155,332 | **147,140** |
+| 2024+ median completeness, SOFR | 0.995 | **0.998** |
+| 2024+ median completeness, Fed Funds | 0.992 | **0.994** |
+
+### What remains
+
+**12 of 19 chunks**, blocked on Excel memory rather than on anything in the code.
+A re-run resumes from where this stopped and needs a fresh Excel — which is a
+human decision on this machine, because restarting it evicts the signed-in
+session and sign-in afterwards has failed here before. Nothing else is in the way:
+the planner sees the days, the fetcher no longer skips them, and a partial
+re-fetch cannot cost anything, as the 50 saves and the zero regressions show.
