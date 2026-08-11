@@ -607,6 +607,12 @@ day, and no later run completes it.
 
 Current backlog, by cause — `session_repair_list.csv`:
 
+> **SUPERSEDED 2026-08-11 — see §22.** This table was generated with a
+> session model fixed at 01:00–22:59 ET, which is wrong before 2022-06-06,
+> and against a store that has since grown by ~2,000 days. The current list
+> is `docs/2026-08-11-citivelo-minute-repair-list.csv`.
+
+
 | curve | cause | days | missing minutes |
 |---|---|---|---|
 | `USD-SOFR-1D` | ten-minute era (needs a 1-min refetch) | 255 | 255,241 |
@@ -906,3 +912,116 @@ failed**, 29.5 min. The two are the pinned pre-existing failures
 three, and the same set the parent branch shows. The Excel-dependent
 `test_citivelo_bond_source` pair passed on this run; the add-in was serving
 again.
+
+---
+
+## 22. The truncated days: why nothing could repair them, and what changed
+
+Part II found ~19 % of days cut at 23:59 UTC and called it self-inflicted. Two
+questions were left open: whether a repair was even possible, and why a repair
+pass would skip exactly the damaged days. Both are answered, and answering them
+turned up a defect in §14's own session model.
+
+### The truncation is in the FETCH, and it is transient
+
+Checked against the fetch's own work directory (`_intraday_par_cache`, 2,708 Fed
+Funds day files):
+
+- for **every** truncated store day that still has its fetched parquet — 37/37
+  SOFR, 124/124 Fed Funds — **the parquet is truncated too**. So a re-build
+  cannot repair anything; the loss happens at fetch time and is frozen there.
+- the parser was validated first on days whose answer was already known: on
+  store-complete days the parquet matches the store exactly (1,318/1,318,
+  1,320/1,320, 960/960 on a Friday, 420/420 on a Sunday).
+
+But it is **not deterministic**, and that is what makes a repair worth running.
+Two days were fetched twice, by two separate runs into two work directories:
+
+| day | run A | run B |
+|---|---|---|
+| **2026-08-03** | **1,320 rows, 01:00–22:59** | 1,140 rows, 01:00–19:59 |
+| 2026-08-02 (Sun) | 180 rows, 20:00–22:59 | **360 rows, 17:00–22:59** |
+
+So a re-fetch really can return the complete session — and really can return
+*less* than what is already on disk. Both directions occur on the same pair of
+runs.
+
+### Why nothing repaired them: both gates tested for presence
+
+`plan_curve` counted a day done if its parquet **existed**; `fetch_curve` skipped
+a window when every weekday in it **existed**. A day cut at 23:59 UTC exists. No
+later run ever asked for the rest.
+
+Fixing one without the other would have produced chunks that the other then
+skipped, so both now share one definition of complete — measured against the
+session, with a 0.97 floor because the feed genuinely skips isolated minutes
+(96 % of interior gaps are a single minute), falling back to plain presence for
+the eighteen curves whose session was never measured.
+
+Measured effect on the planner, same work directory:
+
+| | chunks to fetch |
+|---|---|
+| before | **4** |
+| after | **80** |
+
+And the write rule changed from "first write wins" to **keep whichever fetch got
+more of the session**. That is not a preference: given 2026-08-03, "first wins"
+freezes the truncation and `--force` discards the good day.
+
+### The collision, resolved
+
+`_already_dense` documented *"Fridays end at 17:59 local against Monday-Thursday's
+19:59"*. Measured over 810 Mon–Thu fetched days, the weekday close is **22:59 ET**
+(from 2022-06-06) or **23:58 ET** (before it). **19:59 ET is 23:59 UTC — the
+truncation signature**, not a close, appearing with the *same count in both DST
+regimes*. Treating it as normal is precisely what marked every damaged day
+complete. Corrected in place; the shape now lives in `citi_session`.
+
+### A defect this turned up in §14
+
+§14's session was measured on 2024+ and answered confidently for 2017. **Citi ran
+a full 24-hour weekday session until 2022-06-03** — 00:00–23:58 ET, 1,439 rows —
+and the narrowed 01:00–22:59 one from **2022-06-06**. Measured over 810 Mon–Thu
+days spanning 2021-06 to 2023-06; **no month mixes the two shapes**. The *weekly*
+frame is identical either side, so only the daily window moved.
+
+A model fixed at 01:00–22:59 reports a pre-2022 day missing four hours as missing
+three — wrong, in the direction that hides work. 234 of the 641 truncated days
+are pre-2022. `publishes` and `expected_minutes` resolve the era from the date now,
+and **refuse** for anything before 2017-12-05, the earliest day ever fetched.
+
+Validating that against all 2,498 fetched dense days then found a second bug in
+it: `expected_minutes` was 60 short on every **fall-back Sunday**, because the
+day's end was built as midnight-plus-1,439-minutes and that lands on 22:59 when
+the ET day is 25 hours long. Built as a wall clock now — the maximum
+stored/expected ratio goes from 1.1667 to exactly **1.0000**, which is the
+invariant that should have held all along.
+
+### The current backlog
+
+`docs/2026-08-11-citivelo-minute-repair-list.csv` — **supersedes the 08-10 list**,
+which was generated with the fixed-window model and against a smaller store.
+
+| curve | cause | days | missing minutes |
+|---|---|---|---|
+| `USD-FEDFUNDS-1D` | truncated end | 398 | 102,411 |
+| `USD-FEDFUNDS-1D` | coarse era | 200 | 233,730 |
+| `USD-FEDFUNDS-1D` | interior gaps | 182 | 54,651 |
+| `USD-SOFR-1D` | truncated end | 243 | 52,921 |
+| `USD-SOFR-1D` | interior gaps | 113 | 25,191 |
+
+**641 truncated days, 155,332 minutes** — against 302 in Part II. The increase is
+mostly the store growing: of today's 641, **303 were fetched since the previous
+audit** and 338 were already there. Of those 338 the old model called 298
+truncated and 40 `coarse_era`, so the era correction moved 40 days; what it
+mainly changed is the *size* of the pre-2022 shortfall, not its existence.
+
+### What a repair run needs
+
+It needs Excel, and it is not free — 80 chunks. It is now *possible*, which it
+was not: the planner sees the days, the fetcher no longer skips them, and the
+write rule cannot lose a good day to a worse re-fetch. Run it against the work
+directory that holds the deep fetch (`ARBS-snap`), and re-run
+`citivelo_minute_lag_audit.py session` afterwards to measure what actually landed
+rather than trusting the exit code.
