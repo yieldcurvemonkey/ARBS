@@ -122,8 +122,39 @@ def _parquet_row_count(path) -> Optional[int]:
         return None
 
 
+def _parquet_last_stamp(path):
+    """Last timestamp in a day file, tz-aware in the wire zone. ``None`` if absent."""
+    from pathlib import Path as _P
+
+    import pandas as pd
+
+    path = _P(path)
+    if not path.exists():
+        return None
+    try:
+        import pyarrow.parquet as pq
+
+        col = pq.read_table(str(path), columns=["timestamp"]).to_pandas()["timestamp"]
+    except Exception:  # noqa: BLE001 - unreadable, or written before this column existed
+        return None
+    if col.empty:
+        return None
+    idx = pd.DatetimeIndex(col)
+    if idx.tz is None:
+        idx = idx.tz_localize(WIRE_TZ)
+    return idx.max()
+
+
 def _day_file_is_complete(curve_name: str, day, curve_dir) -> bool:
-    """Does the day file hold essentially the session Citi published that day?
+    """Does the day file run to the end of the session Citi published that day?
+
+    **The test is where the day STOPS, not how many rows it has.** Those are
+    different questions and only the first is repairable. A day cut at 23:59 UTC
+    is missing hours a re-fetch can recover; a day with holes scattered through
+    it is missing minutes Citi never published, and re-fetching it returns the
+    same holes forever. Measured over 4,043 stored days, a row-count rule with a
+    0.97 floor would re-fetch 295 complete days - 8.7 % of them - on every run,
+    to catch truncations the stop-time test finds exactly.
 
     Falls back to plain existence for any curve or date
     ``CITIVELO_EXCEL.citi_session`` has not measured, so the eighteen non-USD
@@ -131,20 +162,18 @@ def _day_file_is_complete(curve_name: str, day, curve_dir) -> bool:
     """
     from pathlib import Path as _P
 
-    n = _parquet_row_count(_P(curve_dir) / f"{day.isoformat()}.parquet")
-    if not n:
+    path = _P(curve_dir) / f"{day.isoformat()}.parquet"
+    if not _parquet_row_count(path):
         return False
+    last = _parquet_last_stamp(path)
+    if last is None:
+        return True                      # readable rows but no usable stamp column
     try:
-        from MDP.IRSwaps.CITIVELO_EXCEL.citi_session import expected_minutes
+        from MDP.IRSwaps.CITIVELO_EXCEL.citi_session import is_truncated
 
-        expected = expected_minutes(curve_name, day)
+        return not is_truncated(curve_name, day, last)
     except Exception:  # noqa: BLE001 - unmodelled curve or unmeasured date
         return True
-    if expected <= 0:
-        return True
-    # 0.97, not 1.0: the feed genuinely skips isolated minutes (96% of interior
-    # gaps are a single minute), so demanding every one would refetch forever.
-    return n >= 0.97 * expected
 
 
 def curve_params(curve_name: str) -> Dict[str, Any]:

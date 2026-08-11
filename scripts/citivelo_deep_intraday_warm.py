@@ -266,62 +266,16 @@ def _stored_curve_count(store: Any, asset: str, day: datetime.date) -> int:
 
 
 
-#: A day is treated as fully fetched when it holds at least this share of the
-#: minutes Citi published on it. Not 1.0: the feed genuinely skips isolated
-#: minutes - measured 96% of interior gaps are a single minute - so demanding
-#: every minute would re-fetch almost every day forever.
-COMPLETE_FRACTION = 0.97
+def _fetched_day_is_complete(curve_name: str, day: datetime.date, path: Path) -> bool:
+    """Does the fetched day run to the end of the session Citi published?
 
-
-def _count_is_complete(
-    curve_name: str,
-    day: datetime.date,
-    n_rows: int,
-    *,
-    dense_from: datetime.date,
-    fraction: float = COMPLETE_FRACTION,
-) -> bool:
-    """Does ``n_rows`` cover the session Citi actually published on ``day``?
-
-    Falls back to "yes" for any curve or date the session model has not
-    measured, which keeps the eighteen non-USD curves on exactly the behaviour
-    they had. Below ``dense_from`` it also returns True: the sparse era holds a
-    few hundred prints against a 1,440-minute session by nature, and judging it
-    against the dense-era shape would mark every one of those days incomplete on
-    every run - the failure `_already_dense` already documents.
+    Delegates to the fetcher's own rule so the planner and the fetcher cannot
+    disagree about which days still need work - they did before, and fixing one
+    without the other produces chunks the other then skips.
     """
-    if day < dense_from:
-        return True
-    try:
-        from MDP.IRSwaps.CITIVELO_EXCEL.citi_session import (
-            UnknownSessionError,
-            expected_minutes,
-        )
+    import citivelo_excel_intraday_warm as _warm
 
-        expected = expected_minutes(curve_name, day)
-    except Exception:  # noqa: BLE001 - UnknownSessionError, or no model at all
-        return True
-    if expected <= 0:
-        return True
-    return n_rows >= fraction * expected
-
-
-def _fetched_day_is_complete(
-    curve_name: str,
-    day: datetime.date,
-    path: Path,
-    *,
-    dense_from: datetime.date,
-) -> bool:
-    """Is the work-directory parquet for ``day`` the whole session?
-
-    Row count only, from the parquet footer - no column read - because this runs
-    over every fetched day of every curve on each ``plan``.
-    """
-    n = _parquet_rows(str(path))
-    if not n:
-        return False
-    return _count_is_complete(curve_name, day, int(n), dense_from=dense_from)
+    return _warm._day_file_is_complete(curve_name, day, path.parent)
 
 
 def plan_curve(
@@ -368,14 +322,17 @@ def plan_curve(
     # asked for the rest. A day now counts as fetched only if it holds
     # essentially the whole session Citi published on it.
     on_disk = set()
+    truncated_on_disk = set()
     if curve_dir.exists():
         for path in curve_dir.glob("*.parquet"):
             try:
                 d = datetime.date.fromisoformat(path.stem)
             except ValueError:
                 continue
-            if _fetched_day_is_complete(curve_name, d, path, dense_from=dense_from):
+            if _fetched_day_is_complete(curve_name, d, path):
                 on_disk.add(d)
+            else:
+                truncated_on_disk.add(d)
 
     store = CurveStore.default()
     asset = asset_name(curve_name)
@@ -384,13 +341,7 @@ def plan_curve(
         if not (lo <= d < hi):
             continue
         threshold = min_store_curves if d >= dense_from else 1
-        if _stored_curve_count(store, asset, d) < threshold:
-            continue
-        # Same correction on the store side: a truncated day clears a flat
-        # 600-curve bar comfortably (a narrowed-era truncation still holds
-        # ~1,140 of 1,320) and would otherwise be reported as already solved.
-        if _count_is_complete(curve_name, d, _stored_curve_count(store, asset, d),
-                              dense_from=dense_from):
+        if _stored_curve_count(store, asset, d) >= threshold:
             stored_dense.add(d)
 
     plan = CurvePlan(curve_name=curve_name, start=lo, end=hi)
@@ -398,7 +349,13 @@ def plan_curve(
     plan.on_disk = sum(1 for d in on_disk if lo <= d < hi)
     plan.in_store = len(stored_dense)
 
-    done = on_disk | stored_dense
+    # A day already solved in the store counts as done - UNLESS the fetched
+    # parquet we have for it is truncated. The store check is a shortcut for
+    # days this work directory never fetched; it must not override direct
+    # evidence that the fetch came up short, which is what kept the truncated
+    # days permanent. A truncated day clears a flat 600-curve bar comfortably
+    # (a narrowed-era truncation still holds ~1,140 of 1,320).
+    done = (on_disk | stored_dense) - truncated_on_disk
     cursor = hi
     while cursor > lo:
         chunk_start = max(lo, cursor - datetime.timedelta(days=chunk_days))

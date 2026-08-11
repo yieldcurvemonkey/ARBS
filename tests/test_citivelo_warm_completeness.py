@@ -33,16 +33,17 @@ CURVE = "USD-FEDFUNDS-1D"
 DENSE_FROM = datetime.date(2018, 9, 1)
 
 
-def _write(dirpath: Path, day: datetime.date, n_rows: int) -> Path:
-    """A day file with ``n_rows`` minutes, shaped like the fetcher's own."""
+def _write(dirpath: Path, day: datetime.date, last: str, first: str = "01:00") -> Path:
+    """A day file running ``first``..``last`` ET, shaped like the fetcher's own.
+
+    Written in terms of where the day STOPS, because that is what the rule
+    tests - not how many rows it has.
+    """
     dirpath.mkdir(parents=True, exist_ok=True)
-    start = pd.Timestamp(f"{day} 01:00")
     frame = pd.DataFrame(
-        {
-            "timestamp": pd.date_range(start, periods=n_rows, freq="1min"),
-            "1D": [4.3] * n_rows,
-        }
+        {"timestamp": pd.date_range(f"{day} {first}", f"{day} {last}", freq="1min")}
     )
+    frame["1D"] = 4.3
     out = dirpath / f"{day.isoformat()}.parquet"
     frame.to_parquet(out, index=False)
     return out
@@ -54,13 +55,13 @@ def _write(dirpath: Path, day: datetime.date, n_rows: int) -> Path:
 
 
 def test_a_full_weekday_is_complete(tmp_path):
-    _write(tmp_path, datetime.date(2026, 6, 17), 1320)
+    _write(tmp_path, datetime.date(2026, 6, 17), "22:59")
     assert warm._day_file_is_complete(CURVE, datetime.date(2026, 6, 17), tmp_path) is True
 
 
 def test_the_23_59_utc_truncation_is_not_complete(tmp_path):
     """1,140 of 1,320 - the exact shape the fetch leaves behind."""
-    _write(tmp_path, datetime.date(2026, 6, 17), 1140)
+    _write(tmp_path, datetime.date(2026, 6, 17), "19:59")
     assert warm._day_file_is_complete(CURVE, datetime.date(2026, 6, 17), tmp_path) is False
 
 
@@ -70,12 +71,12 @@ def test_a_genuinely_short_friday_is_complete(tmp_path):
     Friday really does close at 21:59 UTC. A rule that called it incomplete
     would re-fetch 52 days a year forever, and burn the Excel session doing it.
     """
-    _write(tmp_path, datetime.date(2026, 6, 19), 1020)
+    _write(tmp_path, datetime.date(2026, 6, 19), "17:59")
     assert warm._day_file_is_complete(CURVE, datetime.date(2026, 6, 19), tmp_path) is True
 
 
 def test_a_sunday_evening_is_complete(tmp_path):
-    _write(tmp_path, datetime.date(2026, 6, 21), 360)
+    _write(tmp_path, datetime.date(2026, 6, 21), "22:59", first="17:00")
     assert warm._day_file_is_complete(CURVE, datetime.date(2026, 6, 21), tmp_path) is True
 
 
@@ -86,9 +87,9 @@ def test_a_pre_2022_day_is_judged_against_the_24_hour_session(tmp_path):
     complete - the direction that hides work.
     """
     day = datetime.date(2021, 11, 3)
-    _write(tmp_path, day, 1320)
+    _write(tmp_path, day, "22:59", first="00:00")
     assert warm._day_file_is_complete(CURVE, day, tmp_path) is False
-    _write(tmp_path, day, 1439)
+    _write(tmp_path, day, "23:58", first="00:00")
     assert warm._day_file_is_complete(CURVE, day, tmp_path) is True
 
 
@@ -102,13 +103,13 @@ def test_an_unmodelled_curve_keeps_the_old_presence_behaviour(tmp_path):
     Their session was never measured, so a completeness rule would be a guess -
     and a guess here means re-fetching years of already-good data.
     """
-    _write(tmp_path, datetime.date(2026, 6, 17), 5)
+    _write(tmp_path, datetime.date(2026, 6, 17), "01:05")
     assert warm._day_file_is_complete("GBP-SONIA-1D", datetime.date(2026, 6, 17), tmp_path) is True
 
 
 def test_a_date_before_the_measured_range_keeps_presence_behaviour(tmp_path):
     day = datetime.date(2016, 6, 15)
-    _write(tmp_path, day, 5)
+    _write(tmp_path, day, "01:05")
     assert warm._day_file_is_complete(CURVE, day, tmp_path) is True
 
 
@@ -119,7 +120,7 @@ def test_a_date_before_the_measured_range_keeps_presence_behaviour(tmp_path):
 
 def test_row_count_reads_the_footer_and_handles_absence(tmp_path):
     assert warm._parquet_row_count(tmp_path / "nope.parquet") is None
-    p = _write(tmp_path, datetime.date(2026, 6, 17), 42)
+    p = _write(tmp_path, datetime.date(2026, 6, 17), "01:41")
     assert warm._parquet_row_count(p) == 42
 
 
@@ -141,7 +142,7 @@ def test_the_planner_and_the_fetcher_agree_on_completeness(tmp_path):
     import citivelo_deep_intraday_warm as deep
 
     day = datetime.date(2026, 6, 17)
-    for n, expected in ((1320, True), (1140, False)):
-        _write(tmp_path, day, n)
+    for last, expected in (("22:59", True), ("19:59", False)):
+        path = _write(tmp_path, day, last)
         assert warm._day_file_is_complete(CURVE, day, tmp_path) is expected
-        assert deep._count_is_complete(CURVE, day, n, dense_from=DENSE_FROM) is expected
+        assert deep._fetched_day_is_complete(CURVE, day, path) is expected
