@@ -1,0 +1,6 @@
+# Warmed market data and run artefacts. bars.pkl reaches a couple of GB once the
+# whole 2019-2026 contract universe is warm, and it is reproducible from
+# `python econ_fade_prewarm.py --stage all`.
+_cache/bars.pkl
+_cache/warm.log
+_cache/*.parquet
