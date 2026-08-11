@@ -79,6 +79,30 @@ def grid(book_for):
     return pd.DataFrame(rows).set_index("config") if rows else pd.DataFrame()
 
 
+def replica_summary(variant: str):
+    """Per-shift maxima, read back from whatever replicas are on disk.
+
+    Reading the CSV rather than trusting an in-memory accumulator is what makes
+    the run resumable: the p-value is a function of the replicas that exist, not
+    of the ones this particular process happened to compute.
+    """
+    p = G.CACHE / f"surprise_replicas_{variant}.csv"
+    if not p.exists():
+        return None
+    d = pd.read_csv(p)
+    d = d[d["trades"] >= MIN_TRADES]
+    if not len(d):
+        return None
+    return (d.groupby("shift")
+             .agg(cells=("net_bp", "size"),
+                  **{"median trades": ("trades", "median"),
+                     "best net_bp": ("net_bp", "max"),
+                     "best hit": ("hit_rate", "max"),
+                     "median net_bp": ("net_bp", "median"),
+                     "pct net positive": ("net_bp", lambda s: float((s > 0).mean()))})
+             .reset_index())
+
+
 def main():
     G.load_bar_cache()
     G.load_dv01()
@@ -100,16 +124,34 @@ def main():
           f"best net {elig.net_bp.max():+.4f}   best hit {elig.hit_rate.max():.4f}")
 
     for variant, avoid in (("clean", real_minutes), ("any-day", None)):
-        rows, allc = [], []
+        # APPEND, never re-concat. The first version rebuilt the whole
+        # accumulated frame and rewrote the entire CSV on every shift -- O(n^2)
+        # in both memory and I/O, and it died at replica 13 of 40 with a
+        # MemoryError on a 4 MiB allocation while 15.7 GB of RAM was free,
+        # because the machine's C: drive was down to 0.2 GB and the pagefile
+        # could not grow. Each shift now costs one append of its own rows.
+        out = G.CACHE / f"surprise_replicas_{variant}.csv"
+        done = set()
+        if out.exists():  # resume: never recompute a shift already on disk
+            try:
+                done = set(pd.read_csv(out, usecols=["shift"])["shift"].unique().tolist())
+                print(f"  {variant}: resuming, {len(done)} shifts already on disk")
+            except Exception as ex:  # noqa: BLE001
+                print(f"  {variant}: could not read {out.name} ({ex}); starting over")
+        rows = []
         for k in SHIFTS:
+            if k in done:
+                continue
             t0 = time.time()
             g = grid(lambda d, e, z, _k=k, _a=avoid:
                      S.shift_surprise_book(base[(d, e, z)], _k, avoid=_a))
             if not len(g):
                 continue
             el = g[g.trades >= MIN_TRADES]
-            allc.append(g.assign(shift=k, variant=variant))
-            pd.concat(allc).to_csv(G.CACHE / f"surprise_replicas_{variant}.csv")
+            chunk = g.assign(shift=k, variant=variant)
+            chunk.to_csv(out, mode="a" if out.exists() else "w",
+                         header=not out.exists())
+            del g, chunk
             if len(el):
                 rows.append({"shift": k, "cells": len(el),
                              "median trades": float(el.trades.median()),
@@ -120,8 +162,11 @@ def main():
                 print(f"  {variant} shift {k:+3d}: {len(el):>5} eligible, "
                       f"best net {el.net_bp.max():+.4f}, best hit {el.hit_rate.max():.4f} "
                       f"({time.time() - t0:.0f}s)")
-        reps = pd.DataFrame(rows)
-        if not len(reps):
+        # Rebuilt from the CSV, not from `rows` -- on a resumed run `rows` holds
+        # only the shifts this process computed, and a p-value over those alone
+        # would silently drop every replica the previous process paid for.
+        reps = replica_summary(variant)
+        if reps is None or not len(reps):
             print(f"{variant}: no replica produced an eligible cell")
             continue
         reps.to_csv(G.CACHE / f"surprise_replicas_{variant}_summary.csv", index=False)
