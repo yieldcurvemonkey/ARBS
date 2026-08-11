@@ -366,6 +366,7 @@ def fetch_windowed(
     timeout: Optional[float] = None,
     on_window: Optional[Any] = None,
     strict_spacing: bool = True,
+    enforce_spacing: bool = True,
     keep_sheets: bool = False,
 ) -> Tuple[Dict[str, pd.Series], List[WindowResult]]:
     """Fetch ``[start, end)`` at ``freq`` in windows, and concatenate.
@@ -382,6 +383,18 @@ def fetch_windowed(
         Raise :class:`DownsampledWindowError` when a window comes back coarser
         than ``freq`` even after being retried at half width. Turning this off
         makes silently-coarse data reachable, so it defaults on.
+
+        Note it only stops the RAISE - the window is still discarded. That is
+        the right answer for a suspected downsample and the wrong one for a
+        market that genuinely published slowly; see ``enforce_spacing``.
+    enforce_spacing
+        Check the spacing at all. ``False`` KEEPS whatever the add-in serves,
+        and is for the eras where coarse data is the truth rather than a
+        symptom: ``USD_FEDFUND`` prints roughly every nine minutes before
+        2018-09, and every published stamp still carries every tenor that
+        exists. With the check on, those windows are thrown away and nine
+        months of real history goes with them - measured, five chunks lost on
+        the first full backfill.
     keep_sheets
         Leave each window's worksheet in place instead of dropping it. For
         debugging a single window; ruinous over a backfill.
@@ -393,7 +406,7 @@ def fetch_windowed(
         every window. ``windows`` is the per-window log, including failures.
     """
     token = normalise_frequency(freq)
-    target = TARGET_SPACING.get(token)
+    target = TARGET_SPACING.get(token) if enforce_spacing else None
     wanted = list(dict.fromkeys(str(t).strip() for t in tags if str(t).strip()))
     if not wanted:
         return {}, []

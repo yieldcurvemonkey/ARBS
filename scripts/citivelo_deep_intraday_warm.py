@@ -351,6 +351,20 @@ def cmd_plan(args, logger: logging.Logger) -> int:
     return 0
 
 
+def _dense_from_for(curve_name: str) -> datetime.date:
+    """Where true one-minute data starts for a curve; everything before is sparse.
+
+    Sparse does not mean bad. ``USD-FEDFUNDS`` prints roughly every nine minutes
+    before 2018-09 and every published stamp still carries every tenor that
+    exists - it is simply what the market published then. The span-cliff guard
+    exists to catch the add-in silently downsampling a too-wide request, and it
+    cannot tell that apart from genuine sparsity, so below this date it is turned
+    off and whatever Citi serves is kept.
+    """
+    horizon = HORIZONS.get(curve_name)
+    return horizon.dense_from if horizon else datetime.date(1900, 1, 1)
+
+
 def _opt_date(text: Optional[str]) -> Optional[datetime.date]:
     return datetime.date.fromisoformat(text) if text else None
 
@@ -423,7 +437,18 @@ def cmd_fetch(args, logger: logging.Logger) -> int:
                     freq=args.freq, recycle_every=args.recycle_every,
                     memory_ceiling_mb=args.memory_ceiling_mb,
                     memory_abort_mb=args.memory_abort_mb,
-                    tags=tags, timezone=zone, logger=logger,
+                    tags=tags, timezone=zone,
+                    # Below a curve's measured dense_from, ~9-10 minute spacing
+                    # is what the MARKET published, not what the add-in
+                    # downsampled - USD-FEDFUNDS prints roughly every nine
+                    # minutes before 2018-09. The span-cliff guard cannot tell
+                    # those apart and rejects the whole window, which cost five
+                    # chunks and nine months of history on the first full run.
+                    # The horizon table already knows where the boundary is;
+                    # this is the fetcher being told.
+                    strict_spacing=chunk_start >= _dense_from_for(curve),
+                    enforce_spacing=chunk_start >= _dense_from_for(curve),
+                    logger=logger,
                 )
             except MemoryCeilingReached as exc:
                 if not args.auto_restart or restarts >= args.max_restarts:
@@ -819,6 +844,10 @@ def build_ois_curve_days(curve_name: str, args, logger: logging.Logger) -> int:
         logger.info("%s: nothing to build - every fetched day is already dense in the store",
                     curve_name)
         return 0
+    # Newest first, for the same reason the fetch queue is: a build that is
+    # interrupted - and a ten-hour one will be - should leave the RECENT history
+    # solved rather than an arbitrary slice of it.
+    tasks.sort(key=lambda t: t[0], reverse=True)
     logger.info("%s: building %d day(s) on %d worker(s) (%d of them UPGRADES of a "
                 "thin stored day)", curve_name, len(tasks), args.workers, upgrades)
 
@@ -974,6 +1003,7 @@ def build_ibor_curve_days(curve_name: str, args, logger: logging.Logger) -> int:
         logger.info("%s: nothing to build", curve_name)
         return 0
 
+    tasks.sort(key=lambda t: t[1], reverse=True)
     by_source: Dict[str, int] = {}
     for task in tasks:
         by_source[task[5]] = by_source.get(task[5], 0) + 1
