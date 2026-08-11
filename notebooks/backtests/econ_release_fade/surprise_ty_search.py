@@ -59,7 +59,7 @@ TARGETS = [1.0, 2.0, 3.0, 5.0]
 STOPS = [0.5, 1.0, 2.0, 3.0, 5.0, None]      # the tight end is the point
 TIME_STOPS = [30, 60, 120, 240]
 
-PLACEBO_SHIFTS = (1, 2, 3, 5, -1, -2, -3, -5)
+REPLICA_SHIFTS = (1, 2, -1, -2)     # four matched replicas, each a full grid
 
 
 def build_cfg(direction, entry, zthr):
@@ -94,7 +94,7 @@ def _stats(df, extra):
     return row
 
 
-def search(surprises, raw, label):
+def search(surprises, raw, label, shift_days=None):
     n_cells = (len(ENTRY_OFFSETS) * len(Z_THRESHOLDS) * len(DIRECTIONS) *
                len(TARGETS) * len(STOPS) * len(TIME_STOPS))
     print(f"\n=== {label}: {n_cells:,} cells ({len(ENTRY_OFFSETS)} entry offsets x "
@@ -104,6 +104,12 @@ def search(surprises, raw, label):
     t0 = time.time()
     for direction, entry, zthr in itertools.product(DIRECTIONS, ENTRY_OFFSETS, Z_THRESHOLDS):
         book = S.build_surprise_book(build_cfg(direction, entry, zthr), surprises, raw)
+        if shift_days is not None:
+            # Shift the BOOK, not the calendar. The signal is joined to the
+            # calendar on DATE, so shifting the calendar destroys the join and
+            # returns an EMPTY placebo -- which reads as "the placebo made
+            # nothing", the most flattering possible failure. Measured: it did.
+            book = S.shift_surprise_book(book, shift_days)
         if book.events.empty:
             continue
         n_base = len(book.events)
@@ -128,6 +134,8 @@ def search(surprises, raw, label):
                 "legs": int(df["leg"].max()) if "leg" in df else 1}))
             series[nm] = df.groupby("release_ts")["pnl_bp"].sum()
     print(f"  {len(rows):,} priced in {time.time() - t0:.0f}s")
+    if not rows:
+        return pd.DataFrame(columns=["config"]).set_index("config"), series
     return pd.DataFrame(rows).set_index("config"), series
 
 
@@ -160,27 +168,21 @@ def main():
               f"mean |first-minute move| {g.move_bp_real.abs().mean():.2f} bp")
 
     # --- prime the MDP over every entry offset the search uses -------------
+    # Primed for the REAL book only, and only so the search pricer can be tied to
+    # the engine. The replicas run through the same run_bracket_fast, which reads
+    # the same bars -- priming four replicas x three offsets would write over a
+    # million cache rows for a control that needs no authority beyond being
+    # identical to the pricer it is compared against.
     prime = MX.open_ust_mdp(armed=True)
-    for lbl, sp in (("real", raw), ("placebo", None)):
-        pass
-    parts = []
-    for d in PLACEBO_SHIFTS:
-        q = C.placebo_shift(raw, days=d)
-        parts.append(q)
-    raw_p = pd.concat(parts, ignore_index=True).drop_duplicates(
-        subset=["release_ts"]).sort_values("release_ts").reset_index(drop=True)
-    print(f"\nplacebo book pooled over {PLACEBO_SHIFTS}: {len(raw_p):,} release minutes")
-
-    for lbl, rw in (("real", raw), ("placebo", raw_p)):
-        for e in ENTRY_OFFSETS:
-            bk = S.build_surprise_book({"name": "p", "timing": {"entry_offset_min": e}}, sur, rw)
-            if bk.events.empty:
-                continue
-            st = MX.prime_ust_cache(prime, MX.wanted_minutes(
-                bk.events.assign(m0_ts=bk.events.local_ts - pd.Timedelta(minutes=1),
-                                 m1_ts=bk.events.local_ts), max(TIME_STOPS)),
-                show_progress=False)
-            print(f"  primed {lbl} entry T+{e}: {st}")
+    for e in ENTRY_OFFSETS:
+        bk = S.build_surprise_book({"name": "p", "timing": {"entry_offset_min": e}}, sur, raw)
+        if bk.events.empty:
+            continue
+        st = MX.prime_ust_cache(prime, MX.wanted_minutes(
+            bk.events.assign(m0_ts=bk.events.local_ts - pd.Timedelta(minutes=1),
+                             m1_ts=bk.events.local_ts), max(TIME_STOPS)),
+            show_progress=False)
+        print(f"  primed real entry T+{e}: {st}")
     mdp = MX.open_ust_mdp()
 
     # --- tie the search pricer to QueryDrivenBacktest ----------------------
@@ -201,14 +203,31 @@ def main():
     assert ok, "the search pricer does NOT reproduce the engine"
 
     real, ser = search(sur, raw, "REAL surprises")
-    plac, _ = search(sur, raw_p, "PLACEBO (release dates shifted)")
-    real.to_csv(G.CACHE / "surprise_ty_real.csv")
-    plac.to_csv(G.CACHE / "surprise_ty_placebo.csv")
-
+    real.to_csv(G.CACHE / "surprise_ty_real.csv")     # durable BEFORE anything else runs
     elig = real[real.trades >= MIN_TRADES].copy()
-    eligp = plac[plac.trades >= MIN_TRADES]
-    print(f"\n{len(elig):,} of {len(real):,} real cells have >= {MIN_TRADES} trades "
-          f"({len(eligp):,} placebo)")
+    print(f"\n{len(elig):,} of {len(real):,} real cells have >= {MIN_TRADES} trades")
+
+    # MATCHED replicas: the identical grid, one shifted book per replica, each the
+    # same size as the real book. Pooling shifts changes trades-per-cell AND
+    # cells-per-grid at once and both move a maximum in opposite directions.
+    rep_rows, plac_all = [], []
+    for d in REPLICA_SHIFTS:
+        pl, _ = search(sur, raw, f"PLACEBO shift {d:+d}bd", shift_days=d)
+        if not len(pl):
+            continue
+        plac_all.append(pl.assign(shift=d))
+        pd.concat(plac_all).to_csv(G.CACHE / "surprise_ty_placebo.csv")   # durable each pass
+        el = pl[pl.trades >= MIN_TRADES]
+        if len(el):
+            rep_rows.append({"shift": d, "cells": len(el),
+                             "median trades": float(el.trades.median()),
+                             "best net_bp": float(el.net_bp.max()),
+                             "best hit": float(el.hit_rate.max()),
+                             "median net_bp": float(el.net_bp.median()),
+                             "pct net positive": float((el.net_bp > 0).mean())})
+    plac = pd.concat(plac_all) if plac_all else pd.DataFrame()
+    reps = pd.DataFrame(rep_rows)
+    eligp = plac[plac.trades >= MIN_TRADES] if len(plac) else plac
 
     cols = ["direction", "entry_offset", "z_threshold", "target_bp", "stop_bp", "time_stop",
             "trades", "hit_rate", "avg_win", "avg_loss", "payoff", "net_bp", "total_net_bp",
@@ -251,16 +270,23 @@ def main():
     print(f"Rademacher positive                        : {int((ras.bound > 0).sum()):,} of {ras.N:,}")
     print(ras.terms().round(5).to_string())
 
-    print("\n=== real against placebo ===")
-    rows = []
-    for nm, d in (("REAL", elig), ("placebo", eligp)):
-        if not len(d):
-            rows.append({"grid": nm, "cells": 0})
-            continue
-        rows.append({"grid": nm, "cells": len(d), "median hit": d.hit_rate.median(),
-                     "BEST hit": d.hit_rate.max(), "median net_bp": d.net_bp.median(),
-                     "BEST net_bp": d.net_bp.max(), "% net positive": float((d.net_bp > 0).mean())})
-    print(pd.DataFrame(rows).set_index("grid").round(4).to_string())
+    print("\n=== real against MATCHED placebo replicas ===")
+    if len(reps):
+        print(reps.round(4).to_string(index=False))
+        br, bh = float(elig.net_bp.max()), float(elig.hit_rate.max())
+        pn, ph = reps["best net_bp"].to_numpy(), reps["best hit"].to_numpy()
+        p_net = (1 + int((pn >= br).sum())) / (len(pn) + 1)
+        p_hit = (1 + int((ph >= bh).sum())) / (len(ph) + 1)
+        print(f"\n  REAL best net_bp {br:+.4f}   replicas {pn.min():+.4f}..{pn.max():+.4f} "
+              f"(median {np.median(pn):+.4f})   exceedance p = {p_net:.4f}")
+        print(f"  REAL best hit    {bh:.4f}   replicas {ph.min():.4f}..{ph.max():.4f} "
+              f"(median {np.median(ph):.4f})   exceedance p = {p_hit:.4f}")
+        print(f"  {len(pn)} replicas, so this test cannot report a p below "
+              f"{1 / (len(pn) + 1):.3f} however large the gap")
+        print(f"  net-positive cells: real {float((elig.net_bp > 0).mean()):.3f} vs "
+              f"replica median {reps['pct net positive'].median():.3f}")
+    else:
+        print("  no placebo replica produced an eligible cell")
 
     best_hit = elig.sort_values("hit_rate", ascending=False).iloc[0]
     best_net = elig.sort_values("net_bp", ascending=False).iloc[0]

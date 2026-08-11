@@ -1,0 +1,17 @@
+,value
+best by HIT RATE,fade|e2|z2|tp1|slinf|t240
+  hit rate,0.9062
+  trades,32
+  net bp/trade,0.5066
+  avg win / avg loss,+1.054 / -4.785
+best by NET bp,fade|e2|z2|tp5|slinf|t120
+  hit rate ,0.625
+  trades ,32
+  net bp/trade ,0.8755
+  t-stat,1.5484
+cells searched (both grids),16320
+selection-bias adjusted p,0.8241
+Romano-Wolf rejections,0
+Rademacher positive,0
+best placebo net_bp,0.6019
+best placebo hit,0.7865
