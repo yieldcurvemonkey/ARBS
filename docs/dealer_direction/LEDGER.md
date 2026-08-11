@@ -35,6 +35,128 @@ So `p > 0.5` pushes the ladder positive.
 
 Worktree created off `origin/main` @ `5675ac73`.
 
+### Phase 1 — tie-out surface vs the existing short-end classifier (2026-08-11)
+
+Probes: `scratch/probe_direction_table.py`, `scratch/probe_universe_v2_v3.py`,
+`scratch/compare_0717.py`, `scratch/inspect_flips.py`,
+`scratch/probe_tieout_universe.py`. Prod Supabase, read-only.
+
+**T-1. The old pipeline still runs on today's main.** Production command,
+`--dry-run`, exit 0:
+
+```
+ARBS_SUPABASE_ENABLED=0 python -u -m SDRUtils._swappulse_scripts.backfill_stir_direction \
+  --classify-date 2026-07-17 --calib-start 2026-06-01 --calib-end 2026-06-30 \
+  --warm-jobs 8 --dry-run
+```
+
+484 units (persisted count for that day: 484, same unit_keys), calibration 4,548
+tick rows in 32.7 s, classification 9.2 s against a warm CurveStore.
+
+**T-2. `arbs_stir_direction_v1` state.** 84,586 rows · 2026-01-12 → 2026-07-29 ·
+138 days. Vintages: `468474ca6f84` 84,439 (all 138 days) and NULL 147 (07/02,
+07/09, 07/10). Direction PAID 71.33% / RECEIVED 28.38% / UNKNOWN 0.29% (242).
+Confidence LOW 57.76% / HIGH 34.30% / MEDIUM 7.65% / NULL 0.29%.
+`curve_suspect_trade` TRUE on 31,614 (37.4%). Method: RATE_VS_MID 49,858 ·
+NPV_VS_UPFRONT 19,543 · TICK_RULE 11,185 · SPREAD_VS_MID 3,459 · FLY_VS_MID 392.
+`arbs_stir_tick_size_v1`: 32,075 rows, 2025-12-12 → 2026-07-21.
+
+**T-3. Persisted rows came off the _v2_ tape; today's code reads _v3_.**
+`trade_selection.py` hardcoded `arbs_usd_swap_tape_*_v2` until 570da074
+(2026-08-08). Measured kept-unit overlap (v3 today vs persisted): identical
+unit-for-unit on 01-13, 02-11, 03-11, 04-08, 05-13, 06-10, 07-17; 549/551 on
+07-09; then it breaks — 07-22 674 of 1,078, 07-24 200 of 294, 07-29 699 of 1,450.
+**Clean tie-out window = 2026-01-12 .. 2026-07-20** (77,418 rows, 131 days).
+The 7,168 rows after 07-20 sit on a tape the v3 regeneration has since replaced.
+
+**T-4. Re-running 2026-07-17 today reproduces 482/484 directions (99.59%).**
+Numeric drift is float-noise (`curve_mid` max 8.8e-14, `repriced_pv01` 2.9e-11,
+`repriced_npv` 4.6e-07). Both disagreements are explained:
+
+- `4263694900000000201` — persisted UNKNOWN (`PRICING_ERROR: fixings contain more
+  fixings than expected`, 2026-07-03) now prices under rateslib 2.7.1 → PAID.
+  A repair, not a disagreement.
+- `PTP_4266133321000000101` — `spread_to_mid_bps` moved +1.33e-13 → 0.0, and
+  `classifier.classify_unit` ends `RECEIVED if s2m > 0 else PAID`. **There is no
+  zero branch**, so the sign of a 1e-13 float picks the side. 3 of 376 on-market
+  units on 07-17 have s2m exactly 0.0, all labelled PAID.
+
+**T-5. The tick-rule fallback can never fire for a package.**
+`_onmarket_prints` filters `n_package_legs <= 1` and hardcodes
+`structure_type = "OUTRIGHT"`, so `prev_rate_lookup(bucket, unit.kind, ts)` keyed
+on `(tenor_bucket, kind)` misses for every CURVE / FLY / PKG unit. Those units
+get `confidence=LOW, use_tick_rule=True` and keep the knife-edge sign.
+
+**T-6. `_stir_direction_golden.py` pins nothing and is imported by nothing.**
+No test, notebook or script references it; there is no stored fixture. It is a
+live A/B comparator (`capture_golden` runs the classifier against prod and
+returns the frame; `diff_against_golden` diffs a later run). It still works —
+self-diff 0 rows on 07-17 — but its default `stats=None` means **no calibration**,
+which is not the production row set: vs the prod-calibrated run for 07-17 it
+differs on 4/484 `dealer_direction`, 6/484 `classification_method` and 81/484
+`direction_confidence`.
+
+**T-7. `code_vintage` cannot see the change that actually moved the numbers.**
+Current tree hashes to `870c71f0698b` vs persisted `468474ca6f84`. But the
+rateslib 2.1.1 → 2.7.1 upgrade (2529fee8) is not in `VINTAGE_SOURCES` and is the
+change that repaired T-4's UNKNOWN. Neither is the tape generation. The stamp is
+necessary, not sufficient. Never reason "same vintage ⇒ same rows".
+
+---
+
+## Tie-out design (D6)
+
+**Reference is a FRESH dry-run of frozen `stir_flow` on today's stack, not the
+persisted table.** T-3 and T-4 force it: the persisted rows carry a dead tape and
+a dead rateslib. The persisted table is a *cross-check* only. Cost is known —
+9.2 s/day warm + 32.7 s per monthly calibration — so a 131-day reference costs
+well under an hour using the chunk windows in
+`scripts/backfill_dealer_ladder_window.sh` (calibration window ends the day
+before the chunk, no lookahead).
+
+| | |
+|---|---|
+| window | 2026-01-12 .. 2026-07-20 · 131 days · 77,418 persisted rows |
+| universe | `is_excluded_unit`-surviving units of `ELIGIBLE_LEGS_SQL`: `economic_class='ECONOMIC_FLOW'`, `contributes_to_flow`, `venue='D2C'`, `rate_index_clean IN ('SOFR','FED_FUNDS')`, `fixed_rate NOT NULL`, every leg maturity ≤ `as_of_date + 1105d`, no MAC / SPREADOVER* / MATCHED_MATURITY* / INVOICE* `trade_type`, no `CME Term` / `Amortizing` in `leg_tape_label` |
+| key | `unit_key` — `trade_id` for singletons, `package_id` for packages. Deterministic (self-diff 0 rows). The new per-leg output must be aggregated onto the old unit definition. |
+| exclusions | the 147 NULL-vintage rows (07/02, 07/09, 07/10) |
+
+**Probability → side.** `p` = p(customer paid fixed) = p(dealer RECEIVED).
+`side_new = RECEIVED if p > 0.5 else PAID`; `|p − 0.5| < τ` is `ABSTAIN`, reported
+not counted. Where old `p_flip` is populated (only 32,563 of 84,586 rows), the
+old implied p(received) is `1 − p_flip` when old side is RECEIVED and `p_flip`
+when PAID — a probability-vs-probability check on that subset (Brier / rank
+correlation), not just a side check.
+
+**Metric must be stratified. A flat agreement number is floored at 71.3% by
+"always PAID".** Report side agreement per (`direction_confidence` ×
+`classification_method` × old side), plus Cohen's κ on the 2×2, over
+*decisive* rows only. Reported separately, never counted as agreement:
+old `UNKNOWN` (242), `TICK_RULE` (11,185), `curve_suspect_trade` (31,614),
+and knife-edge rows `|spread_to_mid_bps| ≤ half the futures tick`
+(45 of 376 on-market units within 0.5 bp on 07-17 alone).
+
+**Acceptance.** The measured ceiling for same-logic reproducibility across a
+stack change is 99.59% (T-4), with both residuals named. So:
+≥99% on old-HIGH decisive rows; ≥97% on all decisive rows; κ ≥ 0.90 on
+old-HIGH. **And every disagreement must fall in a named class** — knife-edge
+(|s2m| ≤ half tick), tick-rule, pricing-error repair, curve difference. An
+unexplained residue is the failure signal; the percentage is not.
+
+**When the NEW one is the wrong one.** A disagreement counts against the new
+classifier when the old row is HIGH confidence, not `curve_suspect_trade`,
+`|spread_to_mid_bps| > 2 ×` the bucket median tick, and the new `p` is decisively
+opposite (>0.7 on the other side) **after repricing on the same curve**
+(`BARCHART_STIRF-RL`, `snap_timestamp` minute). The same-curve control is what
+separates a logic error from a curve-basis effect — if the new system prices on
+citivelo minute curves, near-mid flips are expected and prove nothing.
+Two aggregate gates first: (a) near-100% inversion ⇒ sign-convention bug in the
+new code, not a tie-out result; (b) mean new `p` over old-PAID must be < 0.5 <
+mean new `p` over old-RECEIVED.
+
+Conversely the OLD one is wrong where the new one flips a knife-edge s2m
+(T-4/T-5) or a package that the old tick-rule could never reach.
+
 ---
 
 ## Measured facts (v3 tape, `arbs_usd_swap_tape_*_v3`)
@@ -234,6 +356,26 @@ The sanity gate must cover notional as well as risk.
 | D6 | Route rate-rule vs upfront-rule on the presence of an other-payment amount, never on `is_off_market` | F-10: `is_off_market` is a rate-outlier heuristic that disagrees with upfront presence on 524k legs | yes |
 | D7 | Unwind-as-new-trade prints are classified as ordinary flow, not netted away | F-8: the dealer really takes that risk on, and the offsetting compression is not publicly reported | yes |
 | D8 | Terminations classified by the upfront rule and kept as a **separate series** | F-8: sign is right but is driven by seasoned P&L, not by bid-offer, so the confidence model does not transfer | yes |
+| D9 | **KRD comes from rateslib's own delta ladder** — `Solver` + `Portfolio(...).delta(solver=...)`. No hand-rolled cashflow bucketing. | user instruction, 2026-08-11. Also the right call on the merits: rateslib's delta is risk to the *calibrating instruments*, so the bucket set is defined by the instruments we choose and the Jacobian comes out of the calibration for free — which is exactly the transformation a desk wants, and it reuses `MDP/IRSwaps/BARCHART_STIRF/risk.py::build_delta_risk_ladder`. | no (instructed) |
+
+### D9 in practice
+
+`instrument.delta(solver=...)` returns sensitivity **to the solver's calibrating
+instruments**, so the bucket set *is* the instrument set. Consequences that shape
+the runner:
+
+- **One solver per curve-minute, many trades against it.** Solver construction
+  is the expensive part and `Portfolio(pkgs).delta(solver=...)` amortises over
+  arbitrarily many positions. So the runner batches units by their snapped
+  curve-minute — which is also what the existing warm path already wants.
+- **Bucket set**: the Basel GIRR vertices (0.25, 0.5, 1, 2, 3, 5, 10, 15, 20,
+  30y) as the spine, extended with the short-end structure the tape actually
+  carries (1M, 2M, 3M, 6M, 9M) and a coarse 20–30y+ bucket, since the brief
+  accepts coarseness at the long end rather than implied precision.
+- **No PCA.** It reduces dimension against a historical covariance, is not
+  stable out of sample, and a single PC bucket is not hedgeable with one
+  instrument. The consumer wants a hedge-ratio projection, which is a Jacobian
+  change of basis — and rateslib gives that directly.
 
 ---
 

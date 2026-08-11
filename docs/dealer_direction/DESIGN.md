@@ -262,4 +262,6 @@ provenance.py    per-row: curve, snapshot, realised lag, rule, imputation
 | routing on `is_off_market` | F-10: it is a rate-outlier heuristic, disagreeing with upfront presence on 524k legs |
 | free mixture weight | not identifiable from `b0`; would absorb curve bias as flow imbalance |
 | leg-by-leg classification with a vote | confident nonsense on curves and flies |
+| hand-rolled analytic KRD by cashflow bucketing | instructed against, and rateslib's `Solver` + `Portfolio.delta` gives risk to the calibrating instruments directly — the bucket set is the instrument set and the Jacobian is a by-product of the calibration |
+| PCA to reduce the ladder | unstable out of sample, and a PC bucket is not hedgeable with one instrument; the consumer wants a Jacobian change of basis, which rateslib already provides |
 | force-classifying `PKG-N`, N>=4 | no quote convention determines the base orientation; exclusion with a reported DV01 share is the honest answer |
