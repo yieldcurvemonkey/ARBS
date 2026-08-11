@@ -4,3 +4,5 @@
 _cache/bars.pkl
 _cache/warm.log
 _cache/*.parquet
+_cache/run_*.log
+_cache/warm_ledger.json

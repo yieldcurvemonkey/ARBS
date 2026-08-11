@@ -1,0 +1,25 @@
+,value
+config,"{""name"": ""mdp-baseline"", ""instrument"": {""root"": ""USD_STIR"", ""rank"": 3}, ""events"": {""currencies"": [""USD""], ""impacts"": [""high"", ""medium""], ""require_actual"": true, ""include_cb_decisions"": false, ""start"": null, ""end"": null, ""release_times_ny"": null, ""min_events_in_minute"": 1, ""surprise"": ""any""}, ""timing"": {""pre_offset_min"": -1, ""post_offset_min"": 0, ""entry_offset_min"": 1, ""exit_offset_min"": 60}, ""signal"": {""direction"": ""fade"", ""min_move_bp"": 0.0}, ""contracts"": 1, ""cost_bp"": 0.0}"
+provider,"STIRFutureMDP(source='BARCHART_STIRF-RL'), fetcher disarmed"
+engine,QueryDrivenBacktest + STIRFutureHandler
+window,2019-01-03 -> 2026-08-07
+trades,978
+trades per year,128.9
+gross bp / trade,-0.16258
+break-even round trip (bp),-0.16258
+SR3 tick (bp),0.5
+clears one tick,False
+hit rate,0.4223
+annualised Sharpe (gross),-0.6699
+t-stat (gross),-1.8454
+sign-flip p,0.065
+timer permutation p,0.968
+selection-bias p (best of 6 horizons),0.9894
+RAS haircut (Sharpe/trade),0.41754
+best RAS lower bound,-0.4557
+Rademacher positive,0
+wrong-day bp / trade,0.20615
+real minus wrong day,-0.36873
+release minute moves the strip,70.4%
+wrong-day minute moves the strip,41.3%
+mean |initial move| bp,2.1201

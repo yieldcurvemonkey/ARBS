@@ -1,0 +1,15 @@
+,value
+config,"{""name"": ""baseline"", ""instrument"": {""family"": ""stir"", ""root"": ""USD_STIR"", ""rank"": 3}, ""events"": {""currencies"": [""USD""], ""impacts"": [""high""], ""titles_include"": null, ""titles_exclude"": null, ""require_actual"": true, ""include_cb_decisions"": false, ""start"": null, ""end"": null, ""weekdays"": null, ""surprise"": ""any"", ""min_events_in_minute"": 1, ""release_times_ny"": null}, ""timing"": {""measure_start_min"": 0, ""measure_end_min"": 1, ""entry_offset_min"": 2, ""exit_offset_min"": 60, ""max_staleness_min"": 5, ""same_day_exit"": true}, ""signal"": {""direction"": ""fade"", ""source"": ""move"", ""min_move_bp"": 0.0, ""max_move_bp"": null}, ""sizing"": ""equal"", ""contracts"": 1, ""cost_bp"": 0.0}"
+trades,778.0
+total_bp,-168.0
+avg_bp,-0.21594
+std_bp,2.83041
+hit_rate,0.42545
+sharpe,-0.77232
+sr_per_trade,-0.07629
+t_stat,-2.12799
+max_dd_bp,-200.5
+trades_per_year,102.47933
+span_days,2772.89583
+first,2019-01-03 15:00:00+00:00
+last,2026-08-07 12:30:00+00:00
