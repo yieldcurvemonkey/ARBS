@@ -1025,3 +1025,18 @@ write rule cannot lose a good day to a worse re-fetch. Run it against the work
 directory that holds the deep fetch (`ARBS-snap`), and re-run
 `citivelo_minute_lag_audit.py session` afterwards to measure what actually landed
 rather than trusting the exit code.
+
+### Gate on `fix/citivelo-session-eras`
+
+**6,468 passed / 2 failed** — the two pinned pre-existing failures
+(`citivelo_catalog::test_bond_universe_matches_the_harvest`,
+`identifiers::test_corpus_is_present_and_large`), a strict subset of `main`'s
+three.
+
+An earlier run of this branch failed two *more*, and both were real:
+`test_a_day_already_on_disk_is_not_refetched` (its `b""` stub is no longer a
+fetched day — correct, and the fixture now writes a real parquet) and
+`test_a_thin_stored_day_is_refetched_and_a_dense_one_is_not`, which caught the
+0.97 row-count floor calling a 1,250-curve dense day incomplete. That second one
+was a defect in the fix, not a test needing relaxation, and it is why completeness
+is measured as a stop time rather than a count.
