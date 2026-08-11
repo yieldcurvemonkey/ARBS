@@ -1,0 +1,3 @@
+*.log
+_out/
+__pycache__/
