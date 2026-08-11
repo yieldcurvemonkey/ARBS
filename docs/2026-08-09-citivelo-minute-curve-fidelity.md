@@ -123,6 +123,10 @@ Measured: **256 SOFR legs and 3 Fed Funds legs** over the tape span. Tiny, and a
 completely silent 16-hour lookahead, on the one code path that no amount of
 tuning the minute-store search would ever have touched.
 
+> **FIXED** on `fix/stir-flow-midnight-snap` — see §21. Both snapshot rules now
+> route through `stir_flow.pricing.as_intraday_instant`, and all 259 legs resolve
+> to `intraday` instead of `eod`.
+
 ## 5. Density
 
 Store state, re-measured at the end of the session (the Fed Funds row moved three
@@ -780,8 +784,8 @@ roughly sixteen hours *after* the print.
 so it is easy to wave through with it — but it is a different failure. Everything
 else in the hole is *stale*, which is unbiased. This one is *from the future*,
 which is exactly the circularity the whole exercise exists to remove.
-`SnapshotPolicy.strict()` already refuses it (§10); a policy relaxed to admit the
-hole must not relax that too.
+
+> **FIXED** — see §21. You can now wave the hour through safely.
 
 ### The tolerance trap
 
@@ -837,3 +841,68 @@ introduced, and it is why the gate's failure set moves with Excel's mood.
 
 The performance-budget test failed on `main` and passed on both branch runs — it
 is a wall-clock assertion and `main`'s run coincided with a curve backfill.
+
+---
+
+## 21. The midnight trap, fixed
+
+`snap_timestamp` emits exactly midnight ET for a print in the 00:01 ET minute;
+`book.snap_mtm`, which floors without the minus-one, emits it for the 00:00
+minute. `resolve_request` reads exact midnight as **end of day**, so those
+requests were answered with the close of the trade's own day.
+
+**Which end was fixed, and why.** `resolve_request`'s rule is correct for the API
+it belongs to — `pd.Timestamp("2026-08-06")` really is how people spell "that
+day", and the add-in stamps its DAILY rows at midnight. It is not changed. What
+changed is that the two *snapshot rules* stopped emitting a value that means
+end-of-day when they mean an instant, using the escape hatch `resolve_request`
+itself documents — ask for an instant just past midnight.
+
+Both now route through `stir_flow.pricing.as_intraday_instant`, which nudges
+**only** exact midnight, **by one microsecond**, and returns every other instant
+untouched. The only thing that changes is the *mode*, which is the entire bug.
+
+The unit is not arbitrary, and a review is why it is not a second. The source the
+classifier runs on *today*, `BARCHART_STIRF-RL`, resolves its CurveStore fast path
+by **exact key equality**, and `_curve_store_timestamp_key` ends with
+`value.replace(microsecond=0)` — it discards microseconds and **keeps seconds**.
+A one-second nudge therefore missed a store whose rows are all stamped on whole
+minutes (measured: 148 of 1,383 Fed Funds days and 22 of 139 SOFR days hold a
+00:00 ET row, and the hit flipped to a miss for every one) and fell through to a
+live vendor build that can calibrate a different curve. `resolve_request` tests
+microseconds; that key zeroes them. One microsecond is the only offset that
+satisfies both consumers.
+
+Surgical on purpose: `backfill_stir_direction` persists this value as
+`curve_timestamp`, so a rule that shifted every request by a second would rewrite
+the meaning of every stored row to fix 259 of them. A test walks all 1,439
+minutes of a day and asserts exactly one moves.
+
+**Verified end to end**, not asserted: of the tape's requests whose snap lands in
+the 00:00 ET minute — 152 distinct minutes, **259 legs** — all 259 now resolve to
+`intraday` rather than `eod`, and all 259 fall in the nightly hole, so under
+`asof` they are served the previous 22:59 ET snapshot. Stale and unbiased,
+instead of sixteen hours in the future.
+
+**Scope.** This was latent, not live: the current production source
+(`BARCHART_STIRF-RL`) normalises a tz-aware midnight into an *instant* and never
+had the end-of-day form of the defect. It goes live exactly when the direction
+work switches to `citivelo_excel_rl`, which is what the refactor does — so it is
+fixed at the producer, where it is source-agnostic, rather than at either
+consumer.
+
+**Defence in depth.** `CurvePricer.build` refuses a bare midnight *datetime*
+outright. That guard is unreachable while both producers behave, which is the
+point of it: the next snapshot rule someone writes will not know about the
+collision, and a loud refusal beats a plausible curve from the wrong end of the
+day. A `datetime.date` still passes, because that unambiguously means the close.
+
+### Gate on `fix/stir-flow-midnight-snap`
+
+`pytest tests -m "not slow and not network and not db"`: **6,450 passed, 2
+failed**, 29.5 min. The two are the pinned pre-existing failures
+(`citivelo_catalog::test_bond_universe_matches_the_harvest`,
+`identifiers::test_corpus_is_present_and_large`) — a strict subset of `main`'s
+three, and the same set the parent branch shows. The Excel-dependent
+`test_citivelo_bond_source` pair passed on this run; the add-in was serving
+again.
