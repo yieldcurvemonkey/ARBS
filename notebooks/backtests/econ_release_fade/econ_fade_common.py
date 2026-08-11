@@ -655,11 +655,26 @@ def measure_ust_dv01(symbols: Sequence[str], *, mdp=None,
 
 
 def _ust_measure_date(symbol: str) -> datetime.date:
-    """A business day inside the contract's front window, ~1 month before delivery."""
+    """A business day inside the contract's front window, ~1 month before delivery.
+
+    CLAMPED to the recent past. The naive rule puts the measurement date 17 days
+    before the delivery month, which for the two nearest listed contracts is in
+    the FUTURE -- and a deliverable basket cannot be hydrated for a date that has
+    not happened, so the DV01 fetch fails and every configuration using that
+    contract drops out of the grid silently. Measured on 2026-08-11: it asked for
+    2026-08-14 and 2026-11-13 and lost 8 contracts, which took 720 of 2,160 grid
+    cells with them.
+
+    A DV01 measured a few days early is a good approximation of the same
+    contract's DV01; a DV01 that does not exist is not.
+    """
     code = symbol[-3:]
     month = {v: k for k, v in QUARTERLY_CODES.items()}[code[0]]
     year = 2000 + int(code[1:])
     d = datetime.date(year, month, 1) - datetime.timedelta(days=17)
+    latest = datetime.date.today() - datetime.timedelta(days=1)
+    if d > latest:
+        d = latest
     while d.weekday() >= 5:
         d -= datetime.timedelta(days=1)
     return d
@@ -778,6 +793,33 @@ def _merge_config(cfg: Optional[dict]) -> dict:
         else:
             out[k] = v
     return out
+
+
+#: (id(raw), json of the filter dict) -> the filtered frame and its drop counts.
+#:
+#: A parameter search runs thousands of configurations over a handful of
+#: DISTINCT release sets, and the title filters are regex scans over every row.
+#: Without this the same ten scans are redone five thousand times and dominate
+#: the run. Keyed on ``id(raw)`` as well as the filter, so a different event book
+#: -- the placebo, say -- can never be served a cached frame belonging to the
+#: real one.
+_FILTER_CACHE: Dict[Tuple[int, str], Tuple[pd.DataFrame, Dict[str, int]]] = {}
+
+
+def clear_filter_cache() -> None:
+    _FILTER_CACHE.clear()
+
+
+def apply_event_filters_cached(raw: pd.DataFrame, f: dict
+                               ) -> Tuple[pd.DataFrame, Dict[str, int]]:
+    key = (id(raw), json.dumps(f, sort_keys=True, default=str))
+    hit = _FILTER_CACHE.get(key)
+    if hit is None:
+        ev, drops = apply_event_filters(raw, f)
+        _FILTER_CACHE[key] = (ev, drops)
+        return ev, dict(drops)
+    # Copy on the way out: callers add columns to the frame they are handed.
+    return hit[0].copy(), dict(hit[1])
 
 
 def apply_event_filters(raw: pd.DataFrame, f: dict) -> Tuple[pd.DataFrame, Dict[str, int]]:
@@ -1044,7 +1086,7 @@ def build_book(cfg: dict, raw: pd.DataFrame) -> "Book":
     rank = int(ispec.get("rank", 1))
 
     funnel: Dict[str, Any] = {"raw": int(len(raw))}
-    ev, drops = apply_event_filters(raw, cfg["events"])
+    ev, drops = apply_event_filters_cached(raw, cfg["events"])
     funnel["filter_drops"] = drops
     funnel["after_filters"] = int(len(ev))
 
@@ -1393,27 +1435,45 @@ def validate_fast_vs_engine(book: Book, *, tol: float = 1e-6,
 # ===========================================================================
 # Metrics
 # ===========================================================================
+#: A book spanning less than this cannot be annualised, and saying so is better
+#: than emitting a number. The old code floored the span at 1e-9 YEARS, so a
+#: config whose trades all fell on one day got trades_per_year = 1e9 and an
+#: annualised Sharpe of -5.6e11 -- which then topped a leaderboard sorted on
+#: that column. Measured live on the 1,440-cell grid.
+_MIN_SPAN_DAYS_TO_ANNUALISE = 30.0
+
+
 def summarize(closed: pd.DataFrame, pnl_col: str = "pnl_bp") -> Dict[str, Any]:
     if closed is None or closed.empty:
         return {"trades": 0}
     p = closed[pnl_col].astype(float)
     n = len(p)
-    span = (closed["release_ts"].max() - closed["release_ts"].min()).days
-    years = max(span / 365.25, 1e-9)
+    # Fractional days, not ``.days`` -- truncating an intraday span to whole days
+    # sends a one-day book to zero and the annualisation to infinity.
+    span_days = (closed["release_ts"].max() - closed["release_ts"].min()).total_seconds() / 86400.0
+    years = max(span_days, 1.0) / 365.25
     tpy = n / years
     std = float(p.std(ddof=1)) if n > 1 else 0.0
+    sr_trade = float(p.mean() / std) if std > 0 else 0.0
     cum = p.cumsum()
+    # sr_per_trade is the scale-free statistic every downstream test uses (the
+    # deflated Sharpe, Romano-Wolf and RAS all consume it), so it is always
+    # defined; the annualised figure is the derived one and it is withheld when
+    # the sample is too short to support it.
+    annualised = (sr_trade * math.sqrt(tpy)
+                  if std > 0 and span_days >= _MIN_SPAN_DAYS_TO_ANNUALISE else float("nan"))
     return {
         "trades": n,
         "total_bp": float(p.sum()),
         "avg_bp": float(p.mean()),
         "std_bp": std,
         "hit_rate": float((p > 0).mean()),
-        "sharpe": float(p.mean() / std * math.sqrt(tpy)) if std > 0 else 0.0,
-        "sr_per_trade": float(p.mean() / std) if std > 0 else 0.0,
+        "sharpe": annualised,
+        "sr_per_trade": sr_trade,
         "t_stat": float(p.mean() / (std / math.sqrt(n))) if std > 0 else 0.0,
         "max_dd_bp": float((cum - cum.cummax()).min()),
         "trades_per_year": float(tpy),
+        "span_days": float(span_days),
         "first": closed["release_ts"].min(),
         "last": closed["release_ts"].max(),
     }

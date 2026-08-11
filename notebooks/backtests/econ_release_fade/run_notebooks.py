@@ -26,6 +26,7 @@ NOTEBOOKS = {
     "mdp": HERE / "econ_release_fade_mdp_backtest.ipynb",
     "backtest": HERE / "econ_release_fade_backtest.ipynb",
     "grid": HERE / "econ_release_fade_gridsearch.ipynb",
+    "paramsearch": HERE / "econ_release_fade_paramsearch.ipynb",
 }
 
 

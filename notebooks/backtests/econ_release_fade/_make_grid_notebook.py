@@ -232,6 +232,7 @@ def run_grid(cfgs, raw, label, csv_path, *, resume=True):
             "sharpe": s.get("sharpe", np.nan), "sr_per_trade": s.get("sr_per_trade", np.nan),
             "t_stat": s.get("t_stat", np.nan), "max_dd_bp": s.get("max_dd_bp", np.nan),
             "trades_per_year": s.get("trades_per_year", np.nan),
+            "span_days": s.get("span_days", np.nan),
         })
         if not r.closed.empty:
             closed_by[nm] = r.closed.pnl_bp.to_numpy(float)
@@ -265,16 +266,22 @@ elig = RESULTS[RESULTS.trades >= MIN_TRADES].copy()
 elig["gross_vs_tick"] = elig.avg_bp - 0.5
 print(f"{len(elig):,} of {len(RESULTS):,} configurations have >= {MIN_TRADES} trades")
 
-top = elig.sort_values("sharpe", ascending=False).head(25)
+# Ranked on sr_per_trade, NOT the annualised Sharpe. The deflated Sharpe,
+# Romano-Wolf and RAS all consume the per-trade figure, so ranking on the
+# annualised one would select a winner the tests below never scored -- and the
+# annualised column is withheld entirely for books spanning under 30 days,
+# which cannot support it.
+top = elig.sort_values("sr_per_trade", ascending=False).head(25)
 display(top[["config", "instrument", "release_set", "measure_min", "hold_min", "min_move_bp",
-             "trades", "avg_bp", "hit_rate", "sharpe", "t_stat", "max_dd_bp"]]
+             "trades", "span_days", "avg_bp", "hit_rate", "sr_per_trade", "sharpe", "t_stat"]]
         .set_index("config").round(4))
 
 fig, axes = plt.subplots(1, 3, figsize=(20, 4.6))
-axes[0].hist(elig.sharpe, bins=60, color="steelblue", edgecolor="k", lw=.3)
+axes[0].hist(elig.sr_per_trade, bins=60, color="steelblue", edgecolor="k", lw=.3)
 axes[0].axvline(0, color="k", lw=.8)
-axes[0].axvline(elig.sharpe.max(), color="crimson", lw=2, label=f"best {elig.sharpe.max():.2f}")
-axes[0].set_title(f"annualised Sharpe across {len(elig):,} configurations"); axes[0].legend()
+axes[0].axvline(elig.sr_per_trade.max(), color="crimson", lw=2,
+                label=f"best {elig.sr_per_trade.max():.3f}")
+axes[0].set_title(f"Sharpe PER TRADE across {len(elig):,} configurations"); axes[0].legend()
 
 axes[1].hist(elig.avg_bp, bins=60, color="darkslateblue", edgecolor="k", lw=.3)
 axes[1].axvline(0, color="k", lw=.8)
@@ -283,12 +290,12 @@ axes[1].axvline(0.25, color="darkorange", lw=1.6, ls=":", label="half tick")
 axes[1].set_xlabel("gross bp per trade"); axes[1].legend()
 axes[1].set_title("edge per trade against the tick")
 
-sc = axes[2].scatter(elig.trades, elig.avg_bp, c=elig.sharpe, cmap="RdYlGn",
-                     s=14, alpha=.75, vmin=-2, vmax=2)
+sc = axes[2].scatter(elig.trades, elig.avg_bp, c=elig.sr_per_trade, cmap="RdYlGn",
+                     s=14, alpha=.75, vmin=-0.3, vmax=0.3)
 axes[2].axhline(0, color="k", lw=.7); axes[2].axhline(0.5, color="crimson", ls="--", lw=1.4)
 axes[2].set_xscale("log"); axes[2].set_xlabel("trades (log)"); axes[2].set_ylabel("gross bp / trade")
 axes[2].set_title("the small-sample corner is where big numbers live")
-plt.colorbar(sc, ax=axes[2], label="Sharpe")
+plt.colorbar(sc, ax=axes[2], label="Sharpe per trade")
 plt.tight_layout(); plt.show()
 
 n_clear = int((elig.avg_bp > 0.5).sum())
@@ -302,13 +309,13 @@ code(r"""
 fig, axes = plt.subplots(2, 3, figsize=(20, 8))
 for ax, col in zip(axes.ravel(),
                    ["instrument", "release_set", "measure_min", "hold_min", "min_move_bp"]):
-    g = elig.groupby(col).agg(sharpe=("sharpe", "median"), avg_bp=("avg_bp", "median"),
-                              n=("sharpe", "size"))
+    g = elig.groupby(col).agg(sharpe=("sr_per_trade", "median"), avg_bp=("avg_bp", "median"),
+                              n=("sr_per_trade", "size"))
     ax.bar(g.index.astype(str), g.sharpe,
            color=["seagreen" if v > 0 else "indianred" for v in g.sharpe], alpha=.85)
     for i, (nm, r) in enumerate(g.iterrows()):
         ax.text(i, r.sharpe, f"{int(r.n)}", ha="center", fontsize=7)
-    ax.axhline(0, color="k", lw=.7); ax.set_title(f"median Sharpe by {col}")
+    ax.axhline(0, color="k", lw=.7); ax.set_title(f"median Sharpe/trade by {col}")
     ax.tick_params(axis="x", rotation=60)
 axes.ravel()[-1].axis("off")
 plt.tight_layout(); plt.show()
@@ -346,8 +353,8 @@ code(r"""
 # from a partial set would silently use a smaller trial count -- which flatters
 # the winner. Say so rather than quietly deflating by the wrong number.
 if len(PNL) < len(RESULTS):
-    print(f"WARNING: per-trade series available for {len(PNL):,} of {len(RESULTS):,} "
-          f"configurations (the rest were resumed from CSV).")
+    print(f"NOTE: per-trade series available for {len(PNL):,} of {len(RESULTS):,} "
+          f"configurations. The rest either booked no trades or were resumed from CSV.")
     print("The deflation below therefore uses a SMALLER trial count than the grid actually")
     print("ran, so it is too generous. Re-run with a fresh grid_results.csv for the honest number.")
 
@@ -518,8 +525,8 @@ pe = PLACEBO[PLACEBO.trades >= MIN_TRADES]
 rows = []
 for nm, d in (("REAL releases", elig), ("wrong day (+1)", pe)):
     rows.append({"grid": nm, "configs": len(d),
-                 "median sharpe": d.sharpe.median(), "mean sharpe": d.sharpe.mean(),
-                 "best sharpe": d.sharpe.max(),
+                 "median sharpe/trade": d.sr_per_trade.median(),
+                 "best sharpe/trade": d.sr_per_trade.max(),
                  "median bp/trade": d.avg_bp.median(), "best bp/trade": d.avg_bp.max(),
                  "% positive": float((d.avg_bp > 0).mean()),
                  "% clearing a tick": float((d.avg_bp > 0.5).mean())})
@@ -528,7 +535,7 @@ display(pd.DataFrame(rows).set_index("grid").round(4))
 from scipy.stats import mannwhitneyu, ks_2samp
 if len(pe) and len(elig):
     u = mannwhitneyu(elig.avg_bp.dropna(), pe.avg_bp.dropna(), alternative="two-sided")
-    k = ks_2samp(elig.sharpe.dropna(), pe.sharpe.dropna())
+    k = ks_2samp(elig.sr_per_trade.dropna(), pe.sr_per_trade.dropna())
     print(f"\nreal against placebo, bp per trade: Mann-Whitney p = {u.pvalue:.4g}")
     print(f"real against placebo, Sharpe:        KS p = {k.pvalue:.4g}")
     if u.pvalue > 0.05:
@@ -540,10 +547,11 @@ if len(pe) and len(elig):
         print("That gap, not the leaderboard's best cell, is the size of the effect.")
 
 fig, axes = plt.subplots(1, 3, figsize=(20, 4.6))
-axes[0].hist(pe.sharpe, bins=50, alpha=.6, label="wrong day", color="grey", density=True)
-axes[0].hist(elig.sharpe, bins=50, alpha=.6, label="real releases", color="seagreen", density=True)
-axes[0].axvline(0, color="k", lw=.8); axes[0].legend(); axes[0].set_xlabel("Sharpe")
-axes[0].set_title("Sharpe: real against placebo")
+axes[0].hist(pe.sr_per_trade, bins=50, alpha=.6, label="wrong day", color="grey", density=True)
+axes[0].hist(elig.sr_per_trade, bins=50, alpha=.6, label="real releases", color="seagreen",
+             density=True)
+axes[0].axvline(0, color="k", lw=.8); axes[0].legend(); axes[0].set_xlabel("Sharpe per trade")
+axes[0].set_title("Sharpe per trade: real against placebo")
 axes[1].hist(pe.avg_bp, bins=50, alpha=.6, label="wrong day", color="grey", density=True)
 axes[1].hist(elig.avg_bp, bins=50, alpha=.6, label="real releases", color="seagreen", density=True)
 axes[1].axvline(0, color="k", lw=.8); axes[1].axvline(0.5, color="crimson", ls="--", lw=1.5,
@@ -667,8 +675,10 @@ one thing that is certain about it is that it was selected for looking good.
 """)
 
 code(r"""
-best_name = elig.sort_values("sharpe", ascending=False).index[0] if elig.index.name == "config" \
-    else elig.sort_values("sharpe", ascending=False).iloc[0]["config"]
+# The winner is chosen on sr_per_trade, the same statistic the deflated Sharpe,
+# Romano-Wolf and RAS all scored -- selecting on the annualised figure would
+# crown a configuration none of those tests ever ranked.
+best_name = elig.sort_values("sr_per_trade", ascending=False).iloc[0]["config"]
 best_cfg = next(c for c in GRID if c["name"] == best_name)
 print("grid winner:", json.dumps({k: v for k, v in best_cfg.items()
                                   if k in ("name", "instrument", "events", "timing", "signal")},
