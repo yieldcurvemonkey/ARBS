@@ -409,6 +409,11 @@ def _minute_close(symbol: str, ts) -> Optional[float]:
         return None
 
 
+def _first_true(mask: np.ndarray) -> int:
+    """Index of the first True, or a sentinel larger than any index."""
+    return int(np.argmax(mask)) if mask.any() else (1 << 30)
+
+
 def run_bracket_fast(book: G.Book, rule: X.ExitRule, *, cost_bp: float = 0.0) -> pd.DataFrame:
     """``run_bracket_engine`` without the engine, in the engine's own convention.
 
@@ -432,8 +437,50 @@ def run_bracket_fast(book: G.Book, rule: X.ExitRule, *, cost_bp: float = 0.0) ->
             continue
         tp_bp, sl_bp = rule.levels(float(r["move_bp"]))
 
-        mins = path_minutes(sym, entry_ts, int(rule.time_stop_min))
-        if not mins:
+        if rule.trail_bp is not None:
+            mins = path_minutes(sym, entry_ts, int(rule.time_stop_min))
+            if not mins:
+                continue
+        else:
+            mins = None
+
+        if rule.trail_bp is None:
+            # Vectorised: same rules, same order of precedence, no Python loop.
+            # Sliced POSITIONALLY out of the day's numpy arrays. Reindexing on a
+            # DatetimeIndex built from the list of minutes is what a naive
+            # "vectorisation" does, and it is TWICE AS SLOW as the loop it
+            # replaces -- measured, 471ms a cell against 240ms. The list of
+            # timestamps never has to exist.
+            day = G._BAR_CACHE[(sym, pd.Timestamp(entry_ts).date())]
+            didx = day.index
+            pos = int(didx.searchsorted(entry_ts, side="left"))
+            end_pos = int(didx.searchsorted(entry_ts + pd.Timedelta(
+                minutes=int(rule.time_stop_min)), side="right"))
+            if pos + 1 >= end_pos:
+                continue
+            pxv = day["Close"].to_numpy(float)[pos + 1:end_pos]
+            held = (didx[pos + 1:end_pos].asi8 - pd.Timestamp(entry_ts).value) / 6e10
+            mins = didx[pos + 1:end_pos]
+            gain = side * (pxv - entry_px) / ppb
+            ok = held >= rule.min_hold_min
+            i_tp = _first_true(ok & (gain >= tp_bp)) if tp_bp is not None else (1 << 30)
+            i_sl = _first_true(ok & (gain <= -sl_bp)) if sl_bp is not None else (1 << 30)
+            # target is checked BEFORE the stop at any given bar, so a tie is a target
+            if i_tp <= i_sl and i_tp < len(mins):
+                k, reason = i_tp, "target"
+            elif i_sl < len(mins):
+                k, reason = i_sl, "stop"
+            else:
+                k, reason = len(mins) - 1, "time_stop"
+            exit_px, exit_ts = float(pxv[k]), mins[k]
+            pnl_bp = side * (exit_px - entry_px) / ppb
+            d = r.to_dict()
+            d.update({"rule": rule.name, "exit_reason": reason, "entry_px_mdp": entry_px,
+                      "exit_px_rule": exit_px, "exit_ts_rule": exit_ts,
+                      "hold_min": (exit_ts - entry_ts).total_seconds() / 60.0,
+                      "dv01_usd": ppb * dollars_per_point,
+                      "pnl_bp_gross": pnl_bp, "pnl_bp": pnl_bp - cost_bp, "cost_bp": cost_bp})
+            rows.append(d)
             continue
 
         best: Optional[float] = None

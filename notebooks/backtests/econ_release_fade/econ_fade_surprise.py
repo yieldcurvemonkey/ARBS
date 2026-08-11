@@ -330,7 +330,8 @@ def run_surprise_bracket(book: SurpriseBook, rule: X.ExitRule, *,
     return out.sort_values("release_ts").reset_index(drop=True)
 
 
-def shift_surprise_book(book: SurpriseBook, days: int = 1) -> SurpriseBook:
+def shift_surprise_book(book: SurpriseBook, days: int = 1,
+                        avoid: Optional[set] = None) -> SurpriseBook:
     """The same surprises, the same sides, the same clock -- the WRONG day.
 
     The placebo for a move-based study can be built by shifting the calendar and
@@ -370,7 +371,18 @@ def shift_surprise_book(book: SurpriseBook, days: int = 1) -> SurpriseBook:
     out["symbol"] = [G.contract_for(inst, d, rank) for d in out["date_cal"]]
     out["px_per_bp"] = [G.px_per_bp(inst, s) for s in out["symbol"]]
     out["entry_px"] = [MX._minute_close(s, t) for s, t in zip(out["symbol"], out["entry_ts"])]
-    out = out[out["entry_px"].notna()].reset_index(drop=True)
+    out = out[out["entry_px"].notna()]
+
+    if avoid is not None:
+        # A shifted minute that lands on ANOTHER real tier-1/2 release is not a
+        # control -- it is a different release. Measured on this book: a -1
+        # business-day shift of payrolls lands on Thursday, which is jobless
+        # claims at the same 08:30, and 59% of that replica's events sat on a
+        # real release minute (+1bd 38%, +2bd 40%, +3bd 43%, +5bd 44%). Without
+        # this the "no news" placebo is substantially a news placebo.
+        keep = ~pd.to_datetime(out["release_ts"], utc=True).isin(avoid)
+        out = out[keep]
+    out = out.reset_index(drop=True)
     out["tag"] = [f"{book.config['name']}|shift{days:+d}|{s}|{t.strftime('%Y%m%d%H%M')}"
                   for s, t in zip(out["symbol"], out["entry_ts"])]
     funnel = dict(book.funnel)
