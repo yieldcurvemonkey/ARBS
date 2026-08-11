@@ -961,6 +961,134 @@ if not CLOSED.empty:
     plt.tight_layout(); plt.show()
 """)
 
+md(r"""
+### 12.1 The permutation null: the same days, the minutes reordered
+
+Every test so far compares this book against a book taken somewhere else — a different day, the
+opposite sign, a different configuration. This one compares it against **the same days with their
+minutes shuffled**.
+
+`RVUtils.StatisticalFinance.permute_price` reorders a day's minute log-returns and rebuilds the
+price path. The day's open, its close, its realised volatility and its entire set of one-minute
+moves are all preserved exactly; only *when inside the day* each move happened is destroyed. Then
+the whole pipeline re-runs — filters, gate, measurement, side, pricing — on that day.
+
+This is the strongest control in the notebook, and it is strictly stronger than §9's wrong-day
+placebo, which changes the day and therefore also changes the volatility regime, the contract and
+what other news was around. Here nothing changes except that the release minute stops being special.
+
+Two numbers come out of it and they answer different questions. The **trade count** under the null
+measures whether the release moves the market at all: a release minute that moved gets counted, and
+on permuted bars the big move has been relocated somewhere else in the session. The **p-value**
+measures whether the fade's edge survives, and it is computed on Sharpe per trade rather than
+anything annualised, because the permuted books have different trade counts and an annualised figure
+would compare two differently-scaled numbers.
+
+Method after [quantpylib's Statistical Finance notes](https://quantpylib.hangukquant.com/learn/statistical_finance/),
+following Masters, *Permutation and Randomization Tests for Trading System Development*.
+""")
+
+code(r"""
+from RVUtils.StatisticalFinance import (
+    ras_bound, romano_wolf, selection_bias_pvalue, shared_sign_flip_null, timer_pvalue,
+)
+
+MC = G.mcpt_overfit(CONFIG, RAW, draws=200, seed=20260811, show_progress=True)
+print("in-sample overfit test -- the null is that this release calendar marks nothing:")
+print(f"  observed Sharpe/trade {MC.observed:+.5f} over {MC.meta['observed_trades']} trades")
+print(f"  permuted null {MC.null_mean:+.5f} +- {MC.null_std:.5f} "
+      f"over {MC.meta['null_trades_mean']:.0f} trades on average")
+print(f"  p = {MC.p_value:.4f}   observed sits at the {MC.percentile:.1f}th percentile")
+print(f"  {MC.n_failed} draws failed")
+
+shrink = 1 - MC.meta["null_trades_mean"] / max(1, MC.meta["observed_trades"])
+print(f"\nTHE TRADE COUNT is the release effect, measured without reference to direction:")
+print(f"  reordering each day's minutes removes {shrink:.0%} of the tradeable events, because a")
+print(f"  minute that is not the release minute usually did not move.")
+
+tp = timer_pvalue(CLOSED.pnl_bp_gross.to_numpy(float), CLOSED.side.to_numpy(float),
+                  draws=4999, rng=np.random.default_rng(7), label="timer")
+print(f"\ntimer's p-value (permute which release each side received): {tp.p_value:.4f}")
+
+fig, axes = plt.subplots(1, 2, figsize=(16, 4.4))
+axes[0].hist(MC.null, bins=50, color="lightgrey", edgecolor="k", lw=.3)
+axes[0].axvline(MC.observed, color="crimson", lw=2, label=f"observed {MC.observed:+.4f}")
+axes[0].set_xlabel("Sharpe per trade"); axes[0].legend(fontsize=8)
+axes[0].set_title(f"minutes reordered within the day, p={MC.p_value:.4f}")
+axes[1].hist(tp.null, bins=60, color="lightgrey", edgecolor="k", lw=.3)
+axes[1].axvline(tp.observed, color="crimson", lw=2)
+axes[1].set_xlabel("Sharpe per trade")
+axes[1].set_title(f"timer's permutation null, p={tp.p_value:.4f}")
+plt.tight_layout(); plt.show()
+""")
+
+md(r"""
+### 12.2 What the sweeps cost, priced properly
+
+§11 deflates the best Sharpe with the Deflated Sharpe Ratio, which prices the search by its *size*.
+Two better instruments are available now.
+
+**Romano-Wolf stepdown** controls the familywise error rate across every configuration this notebook
+ran, walking down the ranking and shrinking the competing set as hypotheses are rejected. Unlike the
+DSR it needs no distributional assumption, and unlike a Bonferroni it does not treat 90 heavily
+overlapping configurations as 90 independent experiments.
+
+**The Rademacher Anti-Serum** returns a lower bound on the true Sharpe that holds with 95%
+probability in finite samples. Its complexity penalty is *measured on this family*: configurations
+that trade nearly the same releases the same way are charged almost nothing extra, which is exactly
+right here, where the sweeps differ by a knob rather than by an idea.
+
+The null for both is a **shared** Rademacher sign flip across configurations — shared so that
+correlated configurations flip together and the family maximum is not inflated by pretending they
+were independent.
+""")
+
+code(r"""
+BOOKS = {}
+for src in (inst_res, tim_res, mh_res, rel_res):
+    for nm, res_ in src.items():
+        if not res_.closed.empty and len(res_.closed) >= 30:
+            BOOKS[nm] = res_.closed
+BOOKS[CONFIG.get("name", "config")] = CLOSED
+
+X = G.pnl_matrix(BOOKS)
+print(f"{X.shape[1]} configurations x {X.shape[0]} distinct release timestamps")
+
+obs_sr = np.array([X[c].dropna().mean() / X[c].dropna().std(ddof=1)
+                   if X[c].notna().sum() > 1 else 0.0 for c in X.columns])
+NULL = shared_sign_flip_null(X, draws=2000, rng=np.random.default_rng(11))
+
+p_best = selection_bias_pvalue(obs_sr, NULL)
+RW = romano_wolf(obs_sr, NULL, alpha=0.05, names=list(X.columns))
+print(f"selection-bias adjusted p for the BEST configuration: {p_best:.4f}")
+print(f"Romano-Wolf rejects {RW.n_rejected} of {RW.n_strategies} at a 5% familywise level")
+display(RW.table.head(15).round(4))
+
+RAS = ras_bound(X.fillna(0.0), delta=0.05, draws=3000, rng=np.random.default_rng(12),
+                names=list(X.columns))
+display(RAS.terms().to_frame("value").round(5))
+alive = RAS.table()[RAS.table()["rademacher_positive"]]
+print(f"Rademacher-positive configurations: {len(alive)} of {RAS.N}")
+if len(alive):
+    display(alive.round(5).head(10))
+
+fig, axes = plt.subplots(1, 3, figsize=(20, 4.4))
+axes[0].hist(np.nanmax(NULL, axis=1), bins=60, color="lightgrey", edgecolor="k", lw=.3)
+axes[0].axvline(obs_sr.max(), color="crimson", lw=2, label=f"best observed {obs_sr.max():+.4f}")
+axes[0].set_title(f"best-of-{len(X.columns)} null, p={p_best:.4f}"); axes[0].legend(fontsize=8)
+axes[0].set_xlabel("max Sharpe per trade")
+axes[1].scatter(RW.table["observed"], RW.table["p_adjusted"], s=14, alpha=.7, color="darkslateblue")
+axes[1].axhline(0.05, color="crimson", ls="--", lw=1.5, label="FWER 5%")
+axes[1].set_xlabel("Sharpe per trade"); axes[1].set_ylabel("Romano-Wolf adjusted p")
+axes[1].legend(fontsize=8); axes[1].set_title("adjusted p against the statistic it adjusts")
+t = RAS.table()
+axes[2].scatter(t["sharpe"], t["ras_lower_bound"], s=14, alpha=.7, color="seagreen")
+axes[2].axhline(0, color="crimson", ls="--", lw=1.5, label="Rademacher positive above this")
+axes[2].set_xlabel("empirical Sharpe per trade"); axes[2].set_ylabel("RAS lower bound")
+axes[2].legend(fontsize=8); axes[2].set_title(f"a flat {RAS.haircut:.4f} haircut for the search")
+plt.tight_layout(); plt.show()
+""")
+
 # ---------------------------------------------------------------- log
 md("## 13. Trade log")
 

@@ -388,6 +388,107 @@ axes[1].set_title("the top-right quadrant is the only one that matters")
 plt.tight_layout(); plt.show()
 """)
 
+md(r"""
+### 4.1 Two better instruments than the Deflated Sharpe
+
+The DSR above prices the search by its **size**. That is the wrong axis for this grid: 2,000
+configurations that differ by a holding period are not 2,000 experiments, and a penalty driven by
+the count alone over-charges a correlated family and under-charges an independent one.
+
+`RVUtils.StatisticalFinance` implements two methods that price it by **what was actually searched**,
+following [quantpylib's Statistical Finance notes](https://quantpylib.hangukquant.com/learn/statistical_finance/).
+
+**Romano-Wolf stepdown** (Romano & Wolf, 2005) controls the familywise error rate across every
+configuration. It orders the observed statistics, and for the *j*-th it compares against the maximum
+of the null over only the hypotheses not yet rejected — so the reference distribution tightens as
+the procedure descends. Distribution-free, and strictly more powerful than a Bonferroni or than
+comparing every rank against the global maximum.
+
+**The Rademacher Anti-Serum** (Paleologo) returns a lower bound on the true Sharpe holding with 95%
+probability in finite samples:
+
+    θ ≥ θ̂ − 2R̂ − 3·sqrt(2·ln(2/δ)/T) − sqrt(2·ln(2N/δ)/T)
+
+`R̂` is the empirical Rademacher complexity — how much of a *random* pattern of +1/−1 the best
+member of this family can fit. It is measured on the grid itself, so a family of near-duplicates is
+charged nearly nothing for its size while a genuinely diverse family pays. A configuration whose
+bound clears zero is **Rademacher positive**.
+
+The null for both is a **shared** Rademacher sign flip across configurations, aligned on the release
+timestamp. Shared matters: configurations that traded the same prints the same way flip together, so
+the family maximum keeps the grid's real correlation. Flipping each column independently would
+pretend the grid was thousands of independent experiments and inflate the null's maximum, which
+makes every family p-value far too forgiving. A row *permutation* would be useless here — a column's
+mean and standard deviation are both invariant to reordering its rows, so the Sharpe would not move
+at all.
+""")
+
+code(r"""
+from RVUtils.StatisticalFinance import (
+    ras_bound, romano_wolf, selection_bias_pvalue, shared_sign_flip_null,
+)
+
+# Align every scored configuration on its release timestamps. Only configs whose
+# per-trade series survived this kernel can enter -- a resumed grid has summary
+# rows but no series, and silently testing a subset would understate N.
+PNL_BOOKS = {nm: pd.DataFrame({"release_ts": np.arange(len(v)), "pnl_bp": v})
+             for nm, v in PNL.items() if len(v) >= MIN_TRADES}
+X = pd.DataFrame({nm: pd.Series(v) for nm, v in PNL.items() if len(v) >= MIN_TRADES})
+print(f"family: {X.shape[1]:,} configurations, up to {X.shape[0]:,} trades each")
+if X.shape[1] < len(RESULTS):
+    print(f"  ({len(RESULTS) - X.shape[1]:,} configurations are excluded: fewer than "
+          f"{MIN_TRADES} trades, or resumed from CSV without a per-trade series)")
+
+obs_sr = np.array([X[c].dropna().mean() / X[c].dropna().std(ddof=1)
+                   if X[c].notna().sum() > 1 else 0.0 for c in X.columns])
+NULL = shared_sign_flip_null(X, draws=2000, rng=np.random.default_rng(20260811))
+
+p_best = selection_bias_pvalue(obs_sr, NULL)
+RW = romano_wolf(obs_sr, NULL, alpha=0.05, names=list(X.columns))
+print(f"\nselection-bias adjusted p for the BEST configuration: {p_best:.4f}")
+print(f"Romano-Wolf rejects {RW.n_rejected:,} of {RW.n_strategies:,} at a 5% familywise level")
+display(RW.table.head(20).round(4))
+
+RAS = ras_bound(X.fillna(0.0), delta=0.05, draws=2000, rng=np.random.default_rng(4242),
+                names=list(X.columns))
+display(RAS.terms().to_frame("value").round(5))
+pos = RAS.table()[RAS.table()["rademacher_positive"]]
+print(f"Rademacher-positive configurations: {len(pos):,} of {RAS.N:,}")
+if len(pos):
+    display(pos.round(5).head(15))
+
+# The three verdicts side by side. They should agree; where they do not, the one
+# that assumes least about the return distribution is the one to believe.
+survivors = pd.DataFrame({
+    "deflated Sharpe > 0.95": dsr.reindex(X.columns)["dsr"] > 0.95,
+    "Romano-Wolf reject at 5%": RW.table.set_index("strategy").reindex(X.columns)["reject"],
+    "Rademacher positive": pd.Series(RAS.bound > 0, index=X.columns),
+    "gross edge > one tick": pd.Series(
+        [float(X[c].dropna().mean()) > 0.5 for c in X.columns], index=X.columns),
+})
+survivors["ALL FOUR"] = survivors.all(axis=1)
+display(survivors.sum().to_frame("configurations passing"))
+print(f"\nconfigurations passing ALL FOUR: {int(survivors['ALL FOUR'].sum())} of {len(survivors)}")
+
+fig, axes = plt.subplots(1, 3, figsize=(20, 4.4))
+axes[0].hist(np.nanmax(NULL, axis=1), bins=60, color="lightgrey", edgecolor="k", lw=.3)
+axes[0].axvline(obs_sr.max(), color="crimson", lw=2, label=f"best observed {obs_sr.max():+.4f}")
+axes[0].set_xlabel("max Sharpe per trade across the grid"); axes[0].legend(fontsize=8)
+axes[0].set_title(f"best-of-{X.shape[1]:,} null, selection-bias p={p_best:.4f}")
+axes[1].scatter(RW.table["observed"], RW.table["p_adjusted"], s=10, alpha=.5,
+                color="darkslateblue")
+axes[1].axhline(0.05, color="crimson", ls="--", lw=1.5, label="FWER 5%")
+axes[1].set_xlabel("Sharpe per trade"); axes[1].set_ylabel("Romano-Wolf adjusted p")
+axes[1].legend(fontsize=8); axes[1].set_title("familywise-adjusted significance")
+t = RAS.table()
+axes[2].scatter(t["sharpe"], t["ras_lower_bound"], s=10, alpha=.5, color="seagreen")
+axes[2].axhline(0, color="crimson", ls="--", lw=1.5, label="Rademacher positive above")
+axes[2].set_xlabel("empirical Sharpe per trade"); axes[2].set_ylabel("RAS lower bound")
+axes[2].legend(fontsize=8)
+axes[2].set_title(f"R_hat={RAS.rademacher:.4f}, total haircut {RAS.haircut:.4f}")
+plt.tight_layout(); plt.show()
+""")
+
 # ---------------------------------------------------------------- placebo grid
 md(r"""
 ## 5. The same grid on a day with no release

@@ -713,6 +713,84 @@ axes[1].set_title("is it the release, or is it the clock?"); axes[1].set_ylabel(
 plt.tight_layout(); plt.show()
 """)
 
+md(r"""
+### 9.2 Permutation inference
+
+Three tests from `RVUtils.StatisticalFinance`, which implements the methods in
+[quantpylib's Statistical Finance notes](https://quantpylib.hangukquant.com/learn/statistical_finance/).
+Each fixes something different, and the difference is the point.
+
+**Timer's p-value** permutes which release each *side* received, holding the multiset of sides and
+the multiset of moves both exactly fixed. The null is that the strategy had no idea which way any
+particular print would go. This is not the same as the sign-flip test above: sign-flip keeps the
+pairing and randomises the direction, the timer keeps the direction and randomises the pairing. A
+strategy can fail one and pass the other, and the pair is much harder to fool than either alone.
+
+**Selection-bias adjusted p-value** over the holding-period family. §8 priced six horizons and it
+would be natural to report the best one — but the best of six is not a draw from the distribution of
+one. This compares the best horizon against the distribution of the *best of six* under the null.
+
+**The Rademacher Anti-Serum** puts a floor under the Sharpe that survives having searched. It charges
+a complexity penalty measured on the actual family — six horizons of the same trade are nearly the
+same strategy, and RAS prices them as such, where a count-based haircut would treat them as six
+independent tries and over-penalise.
+""")
+
+code(r"""
+from RVUtils.StatisticalFinance import (
+    ras_bound, selection_bias_pvalue, shared_sign_flip_null, timer_pvalue, topk_upper_bound,
+)
+
+RNG = np.random.default_rng(20260811)
+
+tp = timer_pvalue(CLOSED.pnl_bp_gross.to_numpy(float), CLOSED.side.to_numpy(float),
+                  draws=4999, rng=RNG, label="timer")
+print("timer's p-value -- the null is that the strategy could not tell which way a print would go:")
+print(f"  observed Sharpe/trade {tp.observed:+.5f}   null {tp.null_mean:+.5f} +- {tp.null_std:.5f}")
+print(f"  p = {tp.p_value:.4f}   (observed sits at the {tp.percentile:.1f}th percentile of its null)")
+print(f"  resolution of {tp.n_draws} draws: the smallest p this could report is {tp.resolution:.4f}")
+
+# The holding-period family, priced off the same MDP calls the engine marked against.
+HCOLS = [f"px_h{h}" for h in M.HORIZONS if f"px_h{h}" in BOOK.columns]
+fam = pd.DataFrame(
+    {f"T+{h}": (BOOK["side"] * (BOOK[f"px_h{h}"] - BOOK["entry_px"]) / 0.01).to_numpy(float)
+     for h in M.HORIZONS if f"px_h{h}" in BOOK.columns},
+    index=pd.to_datetime(BOOK["release_ts"], utc=True))
+fam = fam.dropna(how="all")
+print(f"\nholding-period family: {fam.shape[1]} horizons x {fam.shape[0]} releases")
+
+obs_sr = np.array([fam[c].dropna().mean() / fam[c].dropna().std(ddof=1) for c in fam.columns])
+null_sr = shared_sign_flip_null(fam, draws=4999, rng=RNG)
+p_family = selection_bias_pvalue(obs_sr, null_sr)
+print(f"selection-bias adjusted p for the BEST horizon: {p_family:.4f}")
+display(topk_upper_bound(obs_sr, null_sr).assign(
+    horizon=[fam.columns[int(s)] for s in topk_upper_bound(obs_sr, null_sr)["strategy"]]).round(4))
+
+R = ras_bound(fam.fillna(0.0), delta=0.05, draws=4000, rng=RNG, names=list(fam.columns))
+display(R.terms().to_frame("value").round(5))
+display(R.table().round(5))
+print(f"\nRademacher-positive horizons: {int((R.bound > 0).sum())} of {R.N}")
+
+fig, axes = plt.subplots(1, 3, figsize=(19, 4.2))
+axes[0].hist(tp.null, bins=60, color="lightgrey", edgecolor="k", lw=.3)
+axes[0].axvline(tp.observed, color="crimson", lw=2, label=f"observed {tp.observed:+.4f}")
+axes[0].set_title(f"timer's permutation null, p={tp.p_value:.4f}"); axes[0].legend(fontsize=8)
+axes[0].set_xlabel("Sharpe per trade")
+
+axes[1].hist(np.nanmax(null_sr, axis=1), bins=60, color="lightgrey", edgecolor="k", lw=.3)
+axes[1].axvline(obs_sr.max(), color="crimson", lw=2, label=f"best observed {obs_sr.max():+.4f}")
+axes[1].set_title(f"best-of-{fam.shape[1]} null, selection-bias p={p_family:.4f}")
+axes[1].legend(fontsize=8); axes[1].set_xlabel("max Sharpe per trade across horizons")
+
+axes[2].bar(R.table().index, R.table()["sharpe"], color="steelblue", alpha=.85, label="empirical")
+axes[2].bar(R.table().index, R.table()["ras_lower_bound"], color="seagreen", alpha=.85,
+            label="RAS lower bound")
+axes[2].axhline(0, color="k", lw=.8)
+axes[2].set_title(f"RAS: haircut {R.haircut:.4f} of Sharpe/trade"); axes[2].legend(fontsize=8)
+axes[2].tick_params(axis="x", rotation=30)
+plt.tight_layout(); plt.show()
+""")
+
 # ---------------------------------------------------------------- verdict
 md("## 10. Verdict")
 
@@ -734,6 +812,11 @@ verdict = {
     "annualised Sharpe (gross)": round(G.summarize(CLOSED, "pnl_bp_gross")["sharpe"], 4),
     "t-stat (gross)": round(G.summarize(CLOSED, "pnl_bp_gross")["t_stat"], 4),
     "sign-flip p": round(r["p_value"], 4),
+    "timer permutation p": round(tp.p_value, 4),
+    "selection-bias p (best of 6 horizons)": round(p_family, 4),
+    "RAS haircut (Sharpe/trade)": round(R.haircut, 5),
+    "best RAS lower bound": round(float(np.nanmax(R.bound)), 5),
+    "Rademacher positive": int((R.bound > 0).sum()),
     "wrong-day bp / trade": round(pl_mean, 5),
     "real minus wrong day": round(gross - pl_mean, 5) if pl_mean == pl_mean else None,
     "release minute moves the strip": f"{rate_r:.1%}",

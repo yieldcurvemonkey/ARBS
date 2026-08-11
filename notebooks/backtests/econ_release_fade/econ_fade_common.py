@@ -1478,6 +1478,148 @@ def deflated_sharpe(pnl: np.ndarray, sr_star: float) -> float:
     return float(norm.cdf((sr - sr_star) * math.sqrt(n - 1) / denom))
 
 
+# ===========================================================================
+# Statistical inference -- RVUtils.StatisticalFinance
+# ===========================================================================
+#: The permutation null: every day's minute bars reordered, nothing else touched.
+#:
+#: This is a far stronger control than the wrong-day placebo. The placebo keeps
+#: the clock and changes the day, so it also changes the volatility regime, the
+#: contract, and which other news was around. A within-day bar permutation keeps
+#: the SAME day -- its open, its close, its realised volatility, its whole set of
+#: minute returns -- and destroys only WHEN inside that day each move happened.
+#: The release minute stops being special and nothing else changes.
+#:
+#: Under it, a real release effect must disappear: the 5.5bp payrolls jump gets
+#: relocated to a random minute, so a strategy that trades T+1 sees a typical
+#: minute. Anything that survives is a property of the measurement, not the news.
+
+
+class _SwapBarCache:
+    """Temporarily serve a different bar cache to every price lookup."""
+
+    def __init__(self, mapping: Dict[Tuple[str, datetime.date], pd.DataFrame]):
+        self._new = mapping
+        self._saved: Optional[Dict] = None
+
+    def __enter__(self):
+        # REBIND the module global rather than mutating the real cache in place.
+        # A draw that raises half way through an in-place edit would leave the
+        # warmed cache holding permuted prices, and every later number in the
+        # notebook would be computed on shuffled data without saying so.
+        global _BAR_CACHE
+        self._saved = _BAR_CACHE
+        _BAR_CACHE = self._new
+        return self
+
+    def __exit__(self, *exc):
+        global _BAR_CACHE
+        _BAR_CACHE = self._saved
+        return False
+
+
+def permuted_bar_cache(keys: Iterable[Tuple[str, datetime.date]],
+                       rng: np.random.Generator,
+                       ) -> Dict[Tuple[str, datetime.date], pd.DataFrame]:
+    """A copy of the cache with each requested day's closes permuted in place.
+
+    Only the (symbol, day) pairs a config actually touches are permuted -- the
+    full cache is 37,000 symbol-days and permuting all of it per draw would cost
+    more than the backtest.
+    """
+    from RVUtils.StatisticalFinance import permute_price
+
+    out = dict(_BAR_CACHE)
+    for key in keys:
+        df = _BAR_CACHE.get(key)
+        if df is None or len(df) < 3:
+            continue
+        new = df.copy()
+        new["Close"] = permute_price(df["Close"], rng=rng).to_numpy()
+        out[key] = new
+    return out
+
+
+def book_symbol_days(book: "Book") -> List[Tuple[str, datetime.date]]:
+    ev = book.events
+    if ev.empty:
+        return []
+    return sorted({(s, t.date()) for s, t in zip(ev["symbol"], ev["entry_ts"])})
+
+
+def mcpt_overfit(cfg: dict, raw: pd.DataFrame, *, draws: int = 200,
+                 seed: int = 0, statistic: Optional[Callable] = None,
+                 show_progress: bool = True):
+    """In-sample overfit test: re-run the WHOLE pipeline on permuted bars.
+
+    Every draw rebuilds the event book from the calendar, re-measures the move,
+    re-decides the side and re-prices -- on a day whose minutes have been
+    reordered. The trade count changes between draws, which is the point: on
+    permuted bars fewer minutes move, so the gate and the zero-move filter bite
+    differently, exactly as they would on a market where the release meant
+    nothing.
+
+    The statistic is Sharpe PER TRADE, never annualised: draws have different
+    trade counts and annualising would compare numbers scaled differently.
+    """
+    from RVUtils.StatisticalFinance import PermutationResult, sharpe_of_book
+
+    statistic = statistic or sharpe_of_book
+    rng = np.random.default_rng(seed)
+
+    base = build_book(cfg, raw)
+    observed_df = fast_backtest(base)
+    observed = float(statistic(observed_df["pnl_bp"].to_numpy(float))) if len(observed_df) else 0.0
+    keys = book_symbol_days(base)
+
+    null, n_trades, n_failed = [], [], 0
+    it = range(int(draws))
+    if show_progress:
+        try:
+            from tqdm.auto import tqdm
+            it = tqdm(it, desc="MCPT overfit")
+        except Exception:  # noqa: BLE001
+            pass
+
+    for _ in it:
+        try:
+            with _SwapBarCache(permuted_bar_cache(keys, rng)):
+                bk = build_book(cfg, raw)
+                df = fast_backtest(bk)
+            null.append(float(statistic(df["pnl_bp"].to_numpy(float))) if len(df) else 0.0)
+            n_trades.append(len(df))
+        except Exception:  # noqa: BLE001
+            n_failed += 1
+
+    arr = np.asarray(null, dtype=float)
+    arr = arr[np.isfinite(arr)]
+    p = float((1 + int(np.sum(arr >= observed))) / (len(arr) + 1)) if len(arr) else float("nan")
+    return PermutationResult(
+        observed=observed, null=arr, p_value=p, n_draws=len(arr), n_failed=n_failed,
+        label=f"{cfg.get('name', 'config')} in-sample overfit",
+        meta={"observed_trades": int(len(observed_df)),
+              "null_trades_mean": float(np.mean(n_trades)) if n_trades else float("nan")})
+
+
+def pnl_matrix(books: Dict[str, pd.DataFrame], pnl_col: str = "pnl_bp") -> pd.DataFrame:
+    """Align many books onto one (release date x config) matrix.
+
+    The family tests need the configurations side by side on a common index so
+    that a shared sign flip hits correlated configurations together. Aligning on
+    the RELEASE timestamp rather than on trade number is what makes that true:
+    two configs that traded the same print land on the same row.
+    """
+    cols = {}
+    for name, df in books.items():
+        if df is None or df.empty:
+            continue
+        s = df.set_index("release_ts")[pnl_col]
+        cols[name] = s[~s.index.duplicated(keep="first")]
+    if not cols:
+        return pd.DataFrame()
+    return pd.DataFrame(cols).sort_index()
+
+
 def bootstrap_ci(pnl: np.ndarray, n_boot: int = 5000, seed: int = 7,
                  alpha: float = 0.05) -> Tuple[float, float]:
     p = np.asarray(pnl, dtype=float)
