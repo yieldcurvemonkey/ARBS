@@ -344,6 +344,30 @@ The sanity gate must cover notional as well as risk.
 
 ---
 
+## Phase 3 — build (2026-08-11)
+
+Interfaces pinned first, then implementations fanned out against them.
+
+| module | state |
+|---|---|
+| `conventions.py` | done — 35 tests, 17 failed before the polarity fix |
+| `types.py` | done — the data contract |
+| `snapshot.py` | done — 17 tests, two silent bugs caught while writing |
+| `universe.py` / `sanity.py`, `midprice.py`, `probability.py`, `upfront.py`, `krd.py`, `imputation.py`, `lineage.py`, `ladder.py` / `health.py` / `provenance.py` | in build |
+| runner + tie-out + written note | after the above |
+
+**The `conventions.py` inversion is worth recording**, because it is the exact
+failure mode the module exists to prevent. Going from the base party to the
+dealer is one negation; going from pay-polarity to received-polarity is a
+second. Two negations are the identity, so
+`dealer_received_signs = dealer_sign * o`. The first draft wrote the first
+negation and forgot that the second undid it, which inverted **every leg of
+every structure at once** — and produced a perfectly plausible result. Caught
+only by the frozen-predecessor test.
+
+**Pilot before backfill**: 15–20 days inside 2026-06..07-17, run on *both*
+curve sources, then logic tie-out → curve effect → only then 610 days.
+
 ## Phase 2 — parallel deep orientation (2026-08-11)
 
 Seven independent probes. Scripts durable in `scratch/`.
@@ -715,10 +739,21 @@ per-leg KRD hangs off the unit, it does not replace it.
 instruments**, so the bucket set *is* the instrument set. Consequences that shape
 the runner:
 
-- **One solver per curve-minute, many trades against it.** Solver construction
-  is the expensive part and `Portfolio(pkgs).delta(solver=...)` amortises over
-  arbitrarily many positions. So the runner batches units by their snapped
-  curve-minute — which is also what the existing warm path already wants.
+- **One solver per (rate_index, as_of_date)** — *not* per curve-minute, and not
+  because delta amortises. **Correction to the first statement of D9**, which
+  said `Portfolio.delta` "amortises over arbitrarily many positions": measured,
+  it does not. 2.2 ms for one swap, 0.59 ms/swap at 100, and *degrading* to
+  1.04 ms/swap at 500 (pandas concat per instrument). Batching buys ~2×, not an
+  order of magnitude, so chunk at ~100 and stop.
+
+  The real fix is the solver count. There are 547,338 distinct
+  (index, exec-minute) pairs — about **4.25 legs per curve-minute** — so a
+  per-minute solver pays the 42.2 ms build essentially *per trade* (~6.4 h).
+  The Jacobian was measured as a per-**day** object (`max|dJ|` 0.0030 within a
+  day, 0.0022 over two weeks), which collapses ~547k builds to ~1,220. Mids and
+  NPVs still come per-minute through `CurvePricer`; only the risk basis is
+  daily. The per-day approximation is re-verified across an FOMC date and a
+  curve-shape break, which the original measurement did not cover.
 - **Bucket set**: the Basel GIRR vertices (0.25, 0.5, 1, 2, 3, 5, 10, 15, 20,
   30y) as the spine, extended with the short-end structure the tape actually
   carries (1M, 2M, 3M, 6M, 9M) and a coarse 20–30y+ bucket, since the brief
