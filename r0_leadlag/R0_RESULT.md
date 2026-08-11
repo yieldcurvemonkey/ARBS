@@ -1,11 +1,20 @@
 # R0 — result
 
-**Verdict: FAIL**, stated against `r0_prereg.md` verbatim, on the dissemination clock.
+**Verdict under `r0_prereg.md`, verbatim, on the dissemination clock: FAIL.**
+**Verdict as reported, after the `r0_prereg_addendum_1.md` downgrade rule fired:
+UNINFORMATIVE.**
 
-The intraday front-running premise does not survive. Customer swap flow, as inferred from
-the public SDR tape, does **not** predict signed aggressor volume in the corresponding
-futures contract at positive lags. What the data shows instead is the mirror image: the
-futures flow is already done by the time the print is public.
+Both labels are stated because the pre-registration and its addendum require different
+things of the same run. The pre-registered decision rule returns FAIL. The addendum's
+downgrade rule — written before any beta was estimated, and able only to soften a FAIL,
+never to create a PASS — then applies, because the measured attenuation of R0's direction
+proxy is `rho = 0.405`, below its 0.50 threshold, in **all five** decision buckets.
+
+**In one sentence:** customer swap flow as inferred from the public SDR tape shows *no*
+detectable relationship with subsequent futures aggressor volume, and what relationship
+there is sits entirely *before* the print — but the direction proxy R0 was required to use
+is too weak (`rho = 0.405`) for that null to be trusted, so the premise is **untested, not
+dead**.
 
 Run once, one specification, on 2026-08-11. Estimator: `r0_leadlag/run_r0.py`.
 Outputs: `out/r0_betas.png`, `out/r0_table.csv`, `out/r0_betas.csv`, `out/r0_run.log`.
@@ -125,9 +134,11 @@ trades futures after taking the swap on."*
 Pooled, execution clock: `sum(beta_k, k>=1)` = **−0.0029, t = −1.51**. Not significant.
 `sum(beta_k, k<=-1)` = −0.0152, t = −1.31. Also not significant.
 
-So it is not merely that the hedge is exhausted before the print is public. On the
-execution clock, at pooled level, there is no detectable post-execution futures hedge
-either. The only place the registered sign appears significantly at `k >= 1` anywhere in
+So it is not merely that the hedge is exhausted before the print is public: on the
+execution clock, at pooled level, no post-execution futures hedge is **detectable at this
+power** either. This panel uses the same X and carries the same `rho = 0.405`, so its null
+is downgraded exactly as the dissemination panel's is — read it as "not seen", not "not
+there". The only place the registered sign appears significantly at `k >= 1` anywhere in
 the all-flow runs is **TU on the execution clock** (−0.0183, t = −2.14) — and Newey-West
 puts it at −1.92, below the threshold. Day-clustered governs per the prereg, so it stands
 as a lone weakly-significant cell out of twelve; it is not the basis for anything.
@@ -135,7 +146,8 @@ as a lone weakly-significant cell out of twelve; it is not the basis for anythin
 ## Splits (block / non-block, D2C / IDB)
 
 Full grid in `out/r0_table.csv` (60 rows: 2 clocks x 5 splits x pooled + 5 buckets).
-No verdict is read off a split. Nothing in them rescues the premise.
+No verdict is read off a split, and every split inherits the same attenuated X, so none of
+them can establish absence either. Nothing in them points the other way.
 
 Cells where `sum(beta_k, k>=1)` is significant with the **pre-registered (negative)** sign:
 
@@ -155,7 +167,8 @@ Cells where it is significant with the **wrong** sign:
 | diss | nonblock | US | +0.0605 | +2.16 |
 
 Three cells the registered way and four the other way, out of 48 split cells, is what
-noise looks like. The pre-print mass, by contrast, is significant and negative in
+noise looks like — and at `rho = 0.405` a real but modest channel would be invisible in
+these cells regardless. The pre-print mass, by contrast, is significant and negative in
 essentially every non-block and D2C cell on both clocks — the same finding as the
 headline, not a new one.
 
@@ -176,12 +189,131 @@ The prereg lists three, recorded in advance so they cannot be invoked selectivel
 | A bucket with no measurable futures flow in the sample | **No.** The smallest decision bucket, US, still carries 25.7m contracts of gross aggressor volume and 2.3m trades; every bucket has substantial flow. |
 | A dissemination clock not actually recoverable, forcing a legal-delay estimate | **No.** Verified first-hand: `dissem_is_real` is true for **292,525 / 292,525** execution-in-window legs (100.00%), with **0** negative lags and a minimum lag of 1.10 min. The dissemination panel tests the clock, not an estimate, and needs no such label. |
 
-So the FAIL is a negative result, not an uninformative one, on the prereg's own terms.
-The one remaining downgrade path is the addendum-1 rule, addressed next.
+So on the prereg's **own three conditions** the result is a negative one, not an
+uninformative one: the sample is long enough, every bucket has flow, and the clock is
+real. The fourth path to "uninformative" was added later by `r0_prereg_addendum_1.md`,
+and it is that one — the attenuation downgrade — which fires. See the next section.
 
-## Addendum-1 D1 — is this a real null, or no power?
+## Addendum-1 D1 — is this a real null, or no power?  →  **no power**
 
-<!--D1-->
+Addendum 1 requires the attenuation of R0's median-based direction sign to be quantified
+before a FAIL can be reported as a FAIL rather than as UNINFORMATIVE. Computed by
+`run_d1.py`; the operationalisation was frozen in `r0_deviations.md` R10 / R10a / R10b /
+R10c **before any `rho` was read**, and the join's known-answer check was run and passed
+before any correlation was printed.
+
+`dev_curve = fixed_rate − Citi minute-curve par rate at the print's execution minute`.
+Reference only: it is never used to build X, and X was not changed. Read through
+`MDP/IRSwaps/CITIVELO_EXCEL` and `Caching`, which the addendum states explicitly is not an
+isolation breach; no `SDRUtils.dealer_direction` or `SDRUtils.stir_flow` import.
+
+**Sample and join.** 140,992 prints (45.4% of legs, 45.8% of DV01), spot-starting,
+non-MAC, twelve tenors covering all five decision buckets, inside Citi's published
+01:00–22:59 ET session. **Join match rate 100.0%** at a 2-minute backward tolerance.
+Known-answer check passed: per-day median `dev_curve` is −0.06 bp (p5 −0.13, p95 −0.01,
+worst day −0.35 bp), and `corr(dev_curve, rate level)` = **−0.008**, so there is no
+timezone or units error in the reference.
+
+**Coverage, reported rather than assumed.** Citi publishes nothing 23:00–00:59 ET, and the
+minute store has no lag tolerance of its own — it will serve a snapshot from the wrong day,
+or from *after* the requested instant, which for a direction diagnostic would be circular.
+Prints in that window are therefore excluded rather than silently filled: the session rule
+retains **140,992 of 143,511 = 98.2%** of otherwise-eligible prints, and inside the session
+the join then matches **every single one**. The 1.8% dropped are plausibly illiquid minutes
+where the median is at its worst, so this restriction if anything flatters `rho`. All
+twelve R10b tenors were pulled complete (97,858–97,861 minutes each, span, duplicates and
+NaNs checked before use), so **no decision bucket is unmeasured** and R10c's
+missing-bucket fallback was never invoked.
+
+**The diagnostic was itself validated before any `rho` was believed.** A `dev_curve` rule
+that is inverted or mis-joined would make a sound proxy look useless, and the per-day-median
+gate above cannot detect that on its own. Three further checks, with results:
+
+- **Units detected, not assumed.** Median `ref_rate / fixed_rate` = **100.013**: the
+  reference is percent, the tape decimal.
+- **Orientation, hand-checked.** A rate above the curve mid must give a positive
+  `dev_curve`. Eight prints at a fixed seed had their raw numbers printed and the sign read
+  off by eye: **8 / 8** correct — including a 10y at 6.56% against a 4.19% mid
+  (`dev_curve` = +237.12 bp) and a 3y where the curve says −9.06 bp while the median says
+  +35.50 bp, the disagreement this diagnostic exists to measure, in a single row.
+  Vectorised over the whole sample the rule holds on **140,992 / 140,992 = 100.0000%**.
+- **The two rules must agree on obviously off-market prints, and agreement must _rise_ with
+  the size of the deviation** — an inverted join makes it fall. It rises monotonically:
+  53 → 91% across deciles of `|dev_median|`, 50 → 92% across deciles of `|dev_curve|`, and
+  **90.3% / 93.8% / 97.9% / 99.5%** on prints at least 5 / 10 / 20 / 50 bp off-market by
+  *both* rules. Where the rules disagree it is because the median is uninformative on small
+  deviations, not because the reference is wrong.
+
+Full D1 record, including the per-bucket damping ratios and the hand-check table, is in
+`ATTENUATION.md`; machine-readable output in `out/attenuation.csv` and `out/r0_d1_rho.csv`;
+console log in `out/r0_d1.log`.
+
+| bucket | `rho` print | `rho` 1-minute | `rho` daily | sign agreement | n prints |
+|---|---|---|---|---|---|
+| SFR_FF | 0.397 | 0.345 | 0.023 | 64.1% | 13,939 |
+| TU | 0.456 | 0.379 | 0.173 | 68.6% | 17,449 |
+| FV | 0.489 | 0.414 | 0.208 | 70.0% | 41,604 |
+| TY_UXY | 0.553 | 0.490 | 0.418 | 68.6% | 42,173 |
+| US | 0.473 | 0.317 | 0.241 | 67.3% | 25,827 |
+| **DV01-weighted pooled** | **0.499** | **0.405** | **0.274** | **68.3%** | 140,992 |
+
+**The downgrade rule fires.** The pooled 1-minute `rho` is **0.405**, below the
+pre-registered 0.50, and **all five** decision buckets are below it individually. (Sign
+agreement, 68.3%, clears its 60% threshold; the rule is an OR, so `rho` alone triggers it.)
+Because **all five buckets sit below 0.50 individually**, the frozen "DV01-weighted pooled
+1-minute" convention of R10 is immaterial to the call — any pooling rule over the decision
+buckets returns the same answer.
+
+> If the verdict is FAIL **and** (`rho < 0.5` in the deciding buckets **or**
+> sign-agreement < 60%), the verdict is reported as **UNINFORMATIVE** under the existing
+> "uninformative rather than negative" clause of `r0_prereg.md`, not as FAIL.
+
+**So two labels must be stated, and both are:**
+
+- **Under `r0_prereg.md`'s decision rule, verbatim: FAIL.**
+- **As reported, after the addendum-1 downgrade: UNINFORMATIVE.**
+
+This is emphatically **not** "the premise survives". It is "this test could not have seen
+the effect at the size it would plausibly have". Concretely:
+
+- **Implied MDE = 1.96 × 0.01280 / 0.405 = 0.0620.** The smallest true post-print effect
+  R0 could have detected is `|sum beta_k| ≈ 0.062` standardised units. Per bucket, using
+  each bucket's own day-clustered SE and its own `rho`: TY_UXY **0.082**, FV **0.089**,
+  TU **0.154**, US **0.185**, SFR_FF **0.263**. Set against each bucket's own `|S_neg|`,
+  **three of the five — SFR_FF (0.263 vs 0.133), TU (0.154 vs 0.051) and US (0.185 vs
+  0.107) — could not have detected a post-print effect even as large as the pre-print mass
+  they did detect on the other side of zero.** FV (0.089 vs 0.118) and TY_UXY (0.082 vs
+  0.154) could have — and in those two the measured post-print sums are +0.0356
+  (t = +1.90, the *wrong* sign) and −0.0162 (t = −0.79, the registered sign), both
+  insignificant and both comfortably inside their own MDEs.
+- Correcting the measurement for attenuation, the 95% interval on the **true** post-print
+  sum is **(−0.043, +0.081)**. A true hedge channel of −0.043 — in the pre-registered
+  direction, and two-thirds the size of the pre-print mass actually observed — is **not
+  excluded** by this test.
+- For scale, the pre-print sum's own detectability threshold is
+  `1.96 x 0.01823 / 0.405` = **0.088**, and `|S_neg|` = 0.107 clears it. R0 had the power
+  to see the `k < 0` mass. It did not have the power to rule out a moderate `k > 0` one.
+
+**The addendum's specific fear is confirmed, not merely possible.** It predicted that if
+the median were high-passing the flow rather than just adding noise, `rho` would *collapse
+under aggregation*. It does: pooled `rho` falls from **0.499 at print level to 0.405 at
+one minute to 0.274 daily**, and in SFR_FF it collapses to **0.023**. The same signature
+appears in the raw deviations — `dev_curve` has an IQR of 4.11 bp against `dev_median`'s
+2.10 bp, so the rolling median absorbs roughly half the deviation amplitude by
+construction.
+
+**What survives the downgrade.** Three findings do not depend on `rho`, because
+attenuation shrinks magnitudes without moving mass across lags:
+
+1. The **location** of the mass — a trough at `k = −5..−11` sitting inside the measured
+   2.77–17.23 minute publication lag.
+2. **D2**, the `|beta_k|` centroid shift of −3.20 bins between the clocks, which is a ratio
+   and so is attenuation-invariant by construction.
+3. The fact that the mass at `k < 0` is **significant while the mass at `k > 0` is not** —
+   both are attenuated by the same factor, so the contrast between them is real even
+   though neither level is.
+
+What does **not** survive is the strength of the negative conclusion about `k > 0`.
 
 ## Caveats
 
@@ -239,7 +371,23 @@ standardisation absorbs the scale but not the relative weighting inside a bucket
 Both straddle the threshold. Day-clustered governs, per the prereg. Neither affects the
 verdict.
 
-**9. A cluster-label defect was caught by the runner's own known-answer gate, fixed, and
+**9. D1's own sample is 45.4% of the tape legs, not all of them.** It is restricted to
+spot-starting, non-MAC prints in twelve tenors inside Citi's 01:00–22:59 ET session
+(`r0_deviations.md` R10/R10a/R10b/R10c, all declared before any `rho` was read). Per-bucket
+retention runs 31.6% (SFR_FF) to 53.8% (TY_UXY) of prints. `rho` is measured on that
+sample and assumed to characterise the rest. Forward-starting and MAC prints, which are
+excluded, are if anything *harder* for a tape-internal median to sign correctly — the mid
+key is thinner — so the true pooled `rho` is more likely below 0.405 than above it, which
+would strengthen the downgrade rather than reverse it.
+
+**10. The `rho < 0.5` threshold was met by a margin, not decisively.** Pooled 1-minute
+`rho` is 0.405 against a threshold of 0.50, and the highest single bucket, TY_UXY, reaches
+0.490 — just under. Had the deciding level been the *print*-level `rho` (0.499) rather than
+the 1-minute one, the call would have been a coin toss. Which level governs was fixed in
+`r0_deviations.md` R10 before any `rho` existed, precisely so this could not be chosen
+afterwards; it is recorded here because the margin is narrow enough to matter.
+
+**11. A cluster-label defect was caught by the runner's own known-answer gate, fixed, and
 the run repeated.** Disclosed in full because it means the script executed twice. The
 first execution derived the CME session date as "the date of the session's last minute in
 Chicago", which mislabels the four evening-only 2026-08-07 sessions as 2026-08-06 and
@@ -308,6 +456,36 @@ regression was written. Everything material reconciled exactly:
 One immaterial discrepancy: the X workstream's `r0_deviations.md` says "292,528 of
 292,528 in-window prints" while its report and the parquet say 292,525 (exec) and 292,547
 (diss). A wording slip in the prose, not a data defect — the file matches the report.
+
+## Provenance note — concurrent activity in this worktree
+
+Recorded because a reader must know which files this agent produced and which it did not.
+
+- **This agent ran no git write command.** A commit nonetheless exists on `r0-leadlag`,
+  `2a66b957` "r0: FAIL — the hedge is already done by the time the print is public",
+  authored 16:40:14 under the repository's own identity, containing this workstream's files
+  in their state at that moment. It was not made by this agent, and nothing was done to
+  undo it — reverting someone else's commit would be a second unrequested git write.
+- **`run_d1.py` was edited by a concurrent process at ~16:47 and re-run**, after this
+  agent's own D1 run at ~16:43. That overwrote `out/r0_d1.log` and `out/r0_d1_rho.csv` and
+  added `out/attenuation.csv`. The edit added diagnostics only; it did not touch the `rho`
+  computation, and **every deciding number is identical** to this agent's run
+  (per-bucket 1-minute `rho` 0.345 / 0.379 / 0.414 / 0.490 / 0.317, pooled 0.405, sign
+  agreement 68.3%, MDE 0.0620, downgrade True). The numbers reported above come from this
+  agent's own console output and are corroborated, not contradicted, by that re-run.
+- The added diagnostics are worth keeping, because they close a gap this agent's D1 left
+  open — that the per-day-median gate alone cannot detect an *inverted* join:
+  orientation (`rate > mid` ⟹ `dev_curve > 0`) holds on **140,992 / 140,992 = 100.0000%**
+  of the sample, and sign agreement **rises monotonically** with the size of the deviation
+  (53% in the smallest `|dev_median|` decile to 91% in the largest, and **99.5%** on the
+  6,457 prints more than 50 bp off-market by both rules). An inverted or mis-scaled join
+  makes that fall, not rise. It also reports `corr(dev_median, dev_curve) = +0.999` on the
+  *continuous* deviations against an IQR ratio of **0.511** — the two rules agree almost
+  perfectly on the large off-market prints and disagree on the bulk near zero, which is
+  precisely why the *sign*, which is what X actually uses, only agrees 68.3% of the time.
+- **The regression outputs were not touched by any of this.** `run_r0.py`,
+  `out/r0_betas.png`, `out/r0_betas.csv`, `out/r0_table.csv` and `out/r0_verdict.txt` all
+  carry their 15:49–15:50 timestamps from this agent's single run.
 
 ---
 

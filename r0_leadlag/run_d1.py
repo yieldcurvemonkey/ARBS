@@ -166,6 +166,28 @@ def main() -> int:
     log(f"  corr(dev_curve, level of the reference rate) = {drift:+.3f}  "
         f"(a tz/units error would drive this toward +-1)")
 
+    # ---- hand-check: is the reference oriented the way the formula says? ----
+    # A rate ABOVE the curve mid must give a POSITIVE dev_curve. Printing the raw
+    # numbers is the only way to see an inverted or mis-scaled join, which the
+    # per-day-median gate above cannot catch on its own.
+    log("")
+    log("HAND-CHECK — eight prints, raw numbers, sign read off by eye:")
+    log(f"  {'tenor':5s} {'exec minute (UTC)':19s} {'fixed_rate%':>11s} {'curve mid%':>10s} "
+        f"{'dev_curve bp':>12s} {'dev_median bp':>13s} {'expect':>7s} {'got':>5s}")
+    hc = j.iloc[np.random.default_rng(0).choice(len(j), size=8, replace=False)]
+    n_hc_ok = 0
+    for _, r in hc.iterrows():
+        expect = "+" if r["fixed_rate"] > r["ref_dec"] else ("-" if r["fixed_rate"] < r["ref_dec"] else "0")
+        got = "+" if r["dev_curve"] > 0 else ("-" if r["dev_curve"] < 0 else "0")
+        n_hc_ok += int(expect == got)
+        log(f"  {r['tenor_lc']:5s} {str(r['exec_min'])[:19]:19s} "
+            f"{r['fixed_rate']*100:11.5f} {r['ref_dec']*100:10.5f} "
+            f"{r['dev_curve']*1e4:+12.2f} {r['dev_median']*1e4:+13.2f} {expect:>7s} {got:>5s}")
+    log(f"  rate>mid => dev_curve>0 on {n_hc_ok}/8 hand-checked prints")
+    n_orient = int(((j["fixed_rate"] > j["ref_dec"]) == (j["dev_curve"] > 0)).sum())
+    log(f"  same check vectorised over the whole D1 sample: {n_orient:,}/{len(j):,} "
+        f"= {n_orient/len(j):.4%}")
+
     # ---- sign agreement, per print ----------------------------------------
     j["sign_median"] = np.sign(j["dev_median"]).astype(int)
     j["sign_curve"] = np.sign(j["dev_curve"]).astype(int)
@@ -178,11 +200,41 @@ def main() -> int:
         if len(bb):
             log(f"    {b:8s} {(bb['sign_median']==bb['sign_curve']).mean():6.1%}  (n={len(bb):,})")
 
+    # ---- orientation check on OBVIOUSLY off-market prints -------------------
+    # If the join or the sign convention were inverted, agreement would not rise with
+    # |dev|; it would fall. A print 20 bp away from the curve is off-market by any rule,
+    # so the two rules MUST agree on it. Reported by decile of |dev_median| and, as the
+    # mirror, by decile of |dev_curve|.
+    log("")
+    log("KNOWN-ANSWER — agreement must RISE with the size of the deviation "
+        "(an inverted join makes it fall):")
+    for lab, col in (("|dev_median|", "dev_median"), ("|dev_curve| ", "dev_curve")):
+        a = both[col].abs()
+        dec = pd.qcut(a, 10, labels=False, duplicates="drop")
+        g = (both["sign_median"] == both["sign_curve"]).groupby(dec).mean()
+        log(f"  by {lab} decile: " + "  ".join(f"{v:.0%}" for v in g))
+    for thr in (5.0, 10.0, 20.0, 50.0):
+        m = (both["dev_curve"].abs() * 1e4 >= thr) & (both["dev_median"].abs() * 1e4 >= thr)
+        if m.sum():
+            log(f"  both deviations >= {thr:4.0f} bp (off-market by either rule): "
+                f"{(both['sign_median'][m]==both['sign_curve'][m]).mean():6.1%}  (n={int(m.sum()):,})")
+
     # ---- rho at print / 1-minute / daily ----------------------------------
     log("")
     log("rho = corr(X_median, X_curve), both built from the SAME print set (R10):")
     j["x_med"] = j["dv01"] * j["sign_median"]
     j["x_cur"] = j["dv01"] * j["sign_curve"]
+
+    # per-bucket day-clustered SE on sum(beta_k, k>=1), dissemination clock, all-flow —
+    # read from the run's own table so the per-bucket MDE uses that bucket's own SE.
+    tab = pd.read_csv(os.path.join(OUT, "r0_table.csv"))
+    tab = tab[(tab["clock"] == "diss") & (tab["split"] == "all")]
+    se_by_bucket = dict(zip(tab["bucket"], tab["se_cluster_kpos"]))
+    se_pooled_tab = float(se_by_bucket["POOLED"])
+    log(f"  (per-bucket SE(sum beta_k,k>=1) read from out/r0_table.csv; its POOLED row is "
+        f"{se_pooled_tab:.5f} against the {SE_SUM_BETA_KPOS:.5f} frozen here — "
+        f"{'MATCH' if abs(se_pooled_tab - SE_SUM_BETA_KPOS) < 5e-6 else 'MISMATCH'})")
+
     rows = []
     for b in DECISION_BUCKETS:
         bb = j[j["bucket"] == b]
@@ -199,16 +251,51 @@ def main() -> int:
         r_min_raw = float(np.corrcoef(mn["x_med"], mn["x_cur"])[0, 1])
         dy = bb.assign(day=bb["exec_min"].dt.date).groupby("day")[["x_med", "x_cur"]].sum()
         r_day = float(np.corrcoef(dy["x_med"], dy["x_cur"])[0, 1])
+        # --- damping, pre-standardisation --------------------------------------
+        # At PRINT level sd(x_med)/sd(x_cur) is ~1 by construction: both are +-dv01 and
+        # only the sign differs. The informative print-level damping measure is on the
+        # deviations themselves, which is what the addendum's high-pass argument is
+        # about. At bucket-MINUTE level the signs no longer cancel identically, so the
+        # literal sd(X_median)/sd(X_curve) is meaningful and is reported too.
+        sd_dev = float(bb["dev_median"].std(ddof=1) / bb["dev_curve"].std(ddof=1))
+        iqr_dev = float((bb["dev_median"].quantile(.75) - bb["dev_median"].quantile(.25))
+                        / (bb["dev_curve"].quantile(.75) - bb["dev_curve"].quantile(.25)))
+        sd_x_print = float(bb["x_med"].std(ddof=1) / bb["x_cur"].std(ddof=1))
+        sd_x_min = float(mn["x_med"].std(ddof=1) / mn["x_cur"].std(ddof=1))
+        se_b = float(se_by_bucket[b])
+        mde_b = 1.96 * se_b / r_min if r_min > 0 else np.nan
         rows.append(dict(bucket=b, n_prints=len(bb), n_minutes=len(mn), n_days=len(dy),
                          dv01=float(bb["dv01"].sum()),
                          rho_print=r_print, rho_minute=r_min, rho_minute_raw=r_min_raw,
                          rho_daily=r_day,
                          sign_agreement=float((bb["sign_median"] == bb["sign_curve"])[
-                             (bb["sign_median"] != 0) & (bb["sign_curve"] != 0)].mean())))
+                             (bb["sign_median"] != 0) & (bb["sign_curve"] != 0)].mean()),
+                         sd_ratio_dev_print=sd_dev, iqr_ratio_dev_print=iqr_dev,
+                         sd_ratio_x_print=sd_x_print, sd_ratio_x_minute=sd_x_min,
+                         se_cluster_kpos=se_b, mde=mde_b))
         log(f"    {b:8s} print {r_print:+.3f}   1-minute {r_min:+.3f} "
             f"(raw {r_min_raw:+.3f})   daily {r_day:+.3f}"
             f"   (n_prints {len(bb):,}, n_min {len(mn):,}, n_days {len(dy)})")
     rdf = pd.DataFrame(rows)
+
+    log("")
+    log("damping, PRE-standardisation (sd ratio median-rule / curve-rule):")
+    log(f"  {'bucket':8s} {'sd(dev_med)/sd(dev_cur)':>23s} {'IQR ratio':>10s} "
+        f"{'sd(X)/sd(X) print':>18s} {'sd(X)/sd(X) 1-min':>18s}")
+    for _, r in rdf.iterrows():
+        log(f"  {r['bucket']:8s} {r['sd_ratio_dev_print']:23.3f} {r['iqr_ratio_dev_print']:10.3f} "
+            f"{r['sd_ratio_x_print']:18.3f} {r['sd_ratio_x_minute']:18.3f}")
+    log(f"  pooled over the D1 sample: sd(dev_median)/sd(dev_curve) = "
+        f"{j['dev_median'].std(ddof=1)/j['dev_curve'].std(ddof=1):.3f},  IQR ratio = "
+        f"{(j['dev_median'].quantile(.75)-j['dev_median'].quantile(.25))/(j['dev_curve'].quantile(.75)-j['dev_curve'].quantile(.25)):.3f}")
+    log(f"  (reference: corr(dev_median, dev_curve) as continuous deviations = "
+        f"{np.corrcoef(j['dev_median'], j['dev_curve'])[0,1]:+.3f})")
+
+    log("")
+    log("per-bucket MDE = 1.96 * that bucket's own SE(sum beta_k,k>=1) / its 1-minute rho:")
+    for _, r in rdf.iterrows():
+        log(f"    {r['bucket']:8s} 1.96 * {r['se_cluster_kpos']:.5f} / {r['rho_minute']:.3f} "
+            f"= {r['mde']:+.4f}")
     w = rdf["dv01"] / rdf["dv01"].sum()
     rho_pooled_min = float((rdf["rho_minute"] * w).sum())
     rho_pooled_print = float((rdf["rho_print"] * w).sum())
@@ -242,6 +329,36 @@ def main() -> int:
     log(f"  -> verdict is reported as {'UNINFORMATIVE' if trigger else 'FAIL'}")
 
     rdf.to_csv(os.path.join(OUT, "r0_d1_rho.csv"), index=False)
+
+    # ---- out/attenuation.csv: the per-bucket table plus the pooled deciding row ----
+    adf = rdf.copy()
+    adf.insert(1, "scope", "bucket")
+    pooled = dict(
+        bucket="POOLED", scope="pooled(DV01-weighted)",
+        n_prints=int(rdf["n_prints"].sum()), n_minutes=np.nan,
+        n_days=int(j.assign(day=j["exec_min"].dt.date)["day"].nunique()),
+        dv01=float(rdf["dv01"].sum()),
+        rho_print=rho_pooled_print, rho_minute=rho_pooled_min,
+        rho_minute_raw=float((rdf["rho_minute_raw"] * w).sum()),
+        rho_daily=rho_pooled_day, sign_agreement=agree_all,
+        sd_ratio_dev_print=float(j["dev_median"].std(ddof=1) / j["dev_curve"].std(ddof=1)),
+        iqr_ratio_dev_print=float(
+            (j["dev_median"].quantile(.75) - j["dev_median"].quantile(.25))
+            / (j["dev_curve"].quantile(.75) - j["dev_curve"].quantile(.25))),
+        sd_ratio_x_print=float(j["x_med"].std(ddof=1) / j["x_cur"].std(ddof=1)),
+        sd_ratio_x_minute=np.nan,
+        se_cluster_kpos=SE_SUM_BETA_KPOS, mde=mde,
+    )
+    adf = pd.concat([adf, pd.DataFrame([pooled])], ignore_index=True)
+    adf["join_match_rate"] = float(matched.mean())
+    adf["citi_session_retained"] = float(sel.sum() / max(n_pre, 1))
+    adf["clock"] = "exec (R10: the sign is a property of the print at execution)"
+    adf["reference_curve"] = CURVE
+    adf["reference_source"] = SOURCE
+    adf["downgrade_threshold_rho"] = 0.50
+    adf["downgrade_threshold_signagree"] = 0.60
+    adf.to_csv(os.path.join(OUT, "attenuation.csv"), index=False)
+    log(f"wrote out/attenuation.csv ({len(adf)} rows)")
     with open(os.path.join(OUT, "r0_d1.log"), "w", encoding="utf-8") as f:
         f.write("\n".join(_L) + "\n")
     with open(os.path.join(OUT, "r0_d1_downgrade.txt"), "w", encoding="utf-8") as f:

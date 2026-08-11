@@ -2,95 +2,91 @@
 
 **A recommendation to be surfaced, not acted on. No ladder code was changed.**
 
-R0's verdict is **FAIL** on the dissemination clock, which selects the pre-registered
-FAIL branch:
+## The branch question comes first
 
-> **FAIL** → retarget the ladder to a DAILY street-positioning indicator: drop the
-> intraday hedge-trigger and max-pain components, keep the tape reconstruction, direction
-> inference, and change-of-basis.
+R0 returns **FAIL** under `r0_prereg.md`'s rule, and **UNINFORMATIVE** as reported, because
+`r0_prereg_addendum_1.md`'s downgrade rule fired: the attenuation of R0's direction proxy
+measured `rho = 0.405`, below the pre-registered 0.50, in **all five** decision buckets.
 
-That is the recommendation. What follows is why it is the right branch and, more usefully,
-what R0 measured that sharpens it.
+The three pre-registered branches are PASS, FAIL and AMBIGUOUS. **UNINFORMATIVE is not one
+of them** — the addendum that created it was written after those branches were set. So:
 
-## Why the FAIL is the branch and not the downgrade
+> **The FAIL branch should not be executed on this evidence.** R0 did not establish the
+> null; it established that it lacked the power to test it. The premise is **untested, not
+> dead**. Which branch to take is the orchestrator's call, not one to make by picking the
+> nearest available label.
 
-None of the prereg's three "uninformative rather than negative" conditions fired: 67
-session dates (44 for SFR_FF) against a ~20-day floor, substantial futures flow in every
-bucket, and a dissemination clock that was **100.00% recovered** rather than estimated.
-Addendum-1's downgrade rule is the only remaining path, and its outcome is recorded in
-`R0_RESULT.md`.
+## Why executing the FAIL branch would be wrong
 
-The failure is also not marginal or a single-bucket artefact. `sum(beta_k, k>=1)` is
-+0.0076 with t = +0.59 pooled; **five of five decision buckets** show significant
-pre-print mass and **zero of five** show significant post-print mass; and the estimator
-was demonstrated, on this same code path and this same grid, to recover an injected effect
-of similar size at k = +7 with t = −41.9.
+Dropping the intraday hedge-trigger and max-pain components is a one-way door justified by
+a null. This null cannot bear it:
 
-## The finding that matters more than the verdict
+- **Implied MDE = 0.062** standardised units — the smallest true post-print effect R0 could
+  have seen.
+- Attenuation-corrected, the 95% interval on the **true** post-print sum is
+  **(−0.043, +0.081)**. A real hedge channel of −0.043 — the pre-registered direction, and
+  two-thirds the size of the pre-print mass that *was* detected — is not excluded.
+- The addendum's specific worry is confirmed, not merely possible: `rho` falls from 0.499
+  at print level to 0.405 at one minute to **0.274 daily** (0.023 in SFR_FF). The rolling
+  median is high-passing the flow, which is exactly what damps a burst of same-direction
+  customer flow — the thing that should generate a hedge.
 
-The premise being tested was that a hedge is *observable and tradeable after the print*.
-R0 says something sharper than "no":
+Attenuation runs one way: it hides real effects and never manufactures them. "Not seen",
+not "not there".
 
-1. **On the dissemination clock the mass is at `k < 0`**, concentrated at k = −5 to −11,
-   with 48% of the `|beta|` mass in k = −17..−2. The independently measured publication
-   lag is p5 2.77 / p50 4.70 / p95 17.23 minutes. The futures flow associated with a print
-   is, on average, **already finished by the time that print is public**. D2 confirms it
-   attenuation-invariantly: the `|beta|` centroid moves 3.20 bins earlier when you switch
-   from the execution clock to the dissemination clock.
+## What R0 did establish (attenuation-proof)
 
-2. **On the execution clock there is no significant post-execution mass either**
-   (pooled `sum(beta_k, k>=1)` = −0.0029, t = −1.51). Addendum 1 fixed in advance that
-   execution-clock `k > 0` mass is what "the hedge mechanism exists" would look like. At
-   pooled level it is not there. This is the more damning of the two panels: it is not
-   only that the opportunity closes before the print, it is that R0 cannot see the
-   mechanism at all at one-minute resolution with a crude tape-internal direction sign.
+Damping shrinks magnitudes without moving mass between lags, so these survive: the mass
+sits at `k = −5..−11`, **inside** the measured 2.77–17.23 min publication lag, with 48% of
+it in `k = −17..−2`; D2's centroid shift of −3.20 bins between clocks is a ratio and so is
+invariant; and `k < 0` is significant (t = −5.90) while `k > 0` is not (t = +0.59), a
+contrast unaffected by a common scale factor.
 
-3. **The significant `k < 0` mass should not be read as leakage or pre-hedging.** A stale
-   trailing median produces exactly that sign mechanically: futures bought → yields fall →
-   later prints sit below a median holding older, higher rates → classified
-   customer-received. This is a price-impact chain with no information content, and it
-   predicts precisely the measured pattern on both clocks. It is a caveat on the `k < 0`
-   finding, not on the FAIL — the FAIL rests on `k >= 1` being zero, which no staleness
-   artefact manufactures.
+*Caveat on reading the `k < 0` mass as leakage:* a stale trailing median produces it
+mechanically — futures bought → yields fall → later prints sit below a median holding
+older, higher rates → classified customer-received. At 68.3% per-print sign agreement that
+channel is live, so this is not evidence of pre-hedging.
 
-## What this recommends, concretely
+## Recommendation
 
-**Drop.** The intraday hedge-trigger component and the max-pain component. Both are
-premised on a post-print window in which dealer hedging is observable and can be traded
-against. R0 measured that window at one-minute resolution across 67 sessions and five
-tenor buckets and found nothing in it. Sizing them "small" is not the answer here — the
-AMBIGUOUS branch, which is what sizing-to-the-measured-share belongs to, was not selected,
-and the measured post-print share is 0.066 with a t-statistic of 0.59, which is not a
-share to size to but an estimate consistent with zero.
+**Do not execute the FAIL branch yet. Re-test with a curve-based direction sign.** The one
+defect that produced UNINFORMATIVE is the proxy, and it exists only because R0's isolation
+rule forbade the curve stack — the right call for a first independent test, and the thing
+that capped the power. The fix is already scoped: `cache_d1_ref/` holds the 12 tenors ×
+~97,861 one-minute par rates D1 built, joining the tape at **100.0%** with a per-day median
+deviation of −0.06 bp. Substituting `dev_curve` for `dev_median` should push `rho` towards
+1 and the MDE from 0.062 towards ~0.025. Y, the grid, the estimator and the chart are built
+and validated. **This needs a new pre-registration** — re-estimating with a better X after
+seeing R0's result is precisely the variant R0's own prereg forbids.
 
-**Keep.** The tape reconstruction, the direction inference, and the change of basis. R0
-tested none of them — it deliberately used a crude, ladder-free direction sign precisely
-so that a negative result would not implicate them. Nothing here is evidence against the
-KRD engine, the projection matrix, or the probability model.
+**And it is a _later, different_ test, not a rerun of this one.** D1 was allowed to read the
+Citi minute curve because it only *sizes the measurement error* in R0's own input, which is
+a property of R0. **Rebuilding X on that curve is a different thing entirely: it breaks
+R0's isolation rule**, which is the constraint that made R0 an independent test of the
+premise rather than a check of the curve stack against itself. So the re-test does not
+inherit R0's status, its prereg, or its claim to independence — it is a new experiment with
+a new question, and it must be labelled and pre-registered as one. What it would need: the
+same Y, grid, estimator and clock machinery (all built and validated), X rebuilt with
+`dev_curve` in place of `dev_median`, and a fresh prereg written before the first beta.
+**The cost of not doing it is now measured, not guessed:** `rho = 0.405` and
+**MDE = 0.062**, against a measured post-print sum of +0.0076 — so the present test can
+only exclude true effects larger than about eight times what it saw, and a curve-based X
+would be expected to pull the MDE down toward ~0.025.
 
-**Retarget.** A daily street-positioning indicator. R0's negative result is specifically
-about a *one-minute, thirty-bin* horizon. Two things in the measurement point the same
-way:
+**If that spend is refused,** treat it as AMBIGUOUS rather than FAIL: keep the intraday
+component, sized to the measured post-print share of **0.066**. That discards nothing on
+evidence that cannot bear it, and sizes nothing as though the premise were confirmed.
 
-- The publication lag alone (p50 4.70 min, p95 17.23 min) consumes a large fraction of a
-  30-minute window. At a daily horizon it is irrelevant.
-- The pre-print mass, whatever its cause, says the tape and the futures book are
-  genuinely coupled — the relationship exists, it is just not *forecastable from the
-  public print* at intraday resolution. A cumulative daily positioning measure does not
-  need the print to lead the hedge; it needs the day's flow to describe the day's
-  inventory.
+**Keep unconditionally:** the tape reconstruction, direction inference, and change of
+basis. R0 tested none of them, deliberately.
 
-**One thing worth knowing before the retarget.** If the daily indicator keeps a
-tape-internal rolling-median direction sign, the staleness channel described above will
-contaminate it in the same way and at a lower frequency it may be worse, not better,
-because a longer window is a staler median. The direction sign should be taken from the
-curve stack the ladder already owns, not from a tape-internal median — the median was
-R0's isolation requirement, not a design recommendation.
+**True on any branch:** the ladder's direction sign should not be a tape-internal rolling
+median. A *daily* street-positioning indicator — the FAIL branch's own retarget — would use
+a longer and therefore staler window, inheriting the defect that made R0 uninformative.
 
 ## What R0 does not license
 
-It does not license a claim that dealers do not hedge swaps with futures. It licenses the
-narrower claim that **the public SDR print is not a usable intraday trigger for that
-hedge** — because the hedge is largely done before the print is public, and because what
-remains after the print is statistically indistinguishable from zero under standard errors
-clustered at the only sample size that matters here, roughly 67 trading days.
+Not a claim that dealers do not hedge swaps with futures, and not dismantling the intraday
+components. One narrow, well-measured claim only: **the futures flow associated with a swap
+print is mostly finished before that print is public.** Anything stronger needs a direction
+sign this test was not allowed to use.
