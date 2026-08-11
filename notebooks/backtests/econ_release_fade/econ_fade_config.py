@@ -51,10 +51,12 @@ def run_config(cfg: dict, raw: pd.DataFrame, *, engine: bool = True,
     book = G.build_book(cfg, raw)
     closed = (G.run_backtest(book, show_progress=show_progress) if engine
               else G.fast_backtest(book))
-    if engine and not closed.empty and len(closed) != len(book.events):
+    if engine and len(book.events) and len(closed) != len(book.events):
         # QueryDrivenBacktest.run() catches every exception and PRINTS it, so a
         # pricing failure degrades the book instead of stopping the run. A trade
-        # count that does not match the gated event count is that happening.
+        # count that does not match the gated event count is that happening --
+        # INCLUDING the case where it swallowed every single one and handed back
+        # a clean-looking empty book.
         raise RuntimeError(
             f"{book.config['name']}: engine booked {len(closed)} of {len(book.events)} "
             f"gated events -- the engine swallowed an exception. Check its stdout.")
@@ -74,9 +76,20 @@ def compare(cfgs: Sequence[dict], raw: pd.DataFrame, *, engine: bool = False,
 
     out: Dict[str, Result] = {}
     rows: List[dict] = []
+    errors: Dict[str, str] = {}
     for c in it:
-        r = run_config(c, raw, engine=engine)
-        nm = r.name
+        nm = c.get("name", "config")
+        try:
+            r = run_config(c, raw, engine=engine)
+        except Exception as ex:  # noqa: BLE001
+            # One un-priceable instrument must not take a whole sweep with it --
+            # but it is RECORDED and printed, never swallowed. A row of NaN with
+            # a reason is a result; a sweep that silently lost a leg is not.
+            errors[nm] = f"{type(ex).__name__}: {ex}"[:200]
+            rows.append({"config": nm, "trades": 0, "total_bp": np.nan, "avg_bp": np.nan,
+                         "hit_rate": np.nan, "sharpe": np.nan, "sr_per_trade": np.nan,
+                         "t_stat": np.nan, "max_dd_bp": np.nan, "error": errors[nm][:80]})
+            continue
         out[nm] = r
         s = r.stats
         rows.append({
@@ -89,8 +102,15 @@ def compare(cfgs: Sequence[dict], raw: pd.DataFrame, *, engine: bool = False,
             "sr_per_trade": s.get("sr_per_trade", np.nan),
             "t_stat": s.get("t_stat", np.nan),
             "max_dd_bp": s.get("max_dd_bp", np.nan),
+            "error": "",
         })
     tbl = pd.DataFrame(rows).set_index("config")
+    if errors:
+        print(f"{len(errors)} of {len(rows)} configurations could not be priced:")
+        for nm, e in list(errors.items())[:10]:
+            print(f"  {nm}: {e}")
+    if "error" in tbl.columns and (tbl["error"] == "").all():
+        tbl = tbl.drop(columns=["error"])
     return tbl, out
 
 
@@ -120,23 +140,74 @@ def variant(base: dict, name: str, **over) -> dict:
 # ===========================================================================
 # Placebos
 # ===========================================================================
-def placebo_shift(raw: pd.DataFrame, *, days: int = 1) -> pd.DataFrame:
+def placebo_shift(raw: pd.DataFrame, *, days: int = 1, business_days: bool = True,
+                  avoid_real: bool = True) -> pd.DataFrame:
     """The same book, on the WRONG day.
 
     Every release timestamp is moved by ``days`` onto a minute that had no
     release. Time of day, instrument, contract, holding period and the whole
     gate are unchanged; only the reason for trading is gone. An edge that
-    survives this is a time-of-day effect -- 08:30 ET is also the New York
-    cash open and the start of the most liquid hour of the session -- and not a
-    release effect.
+    survives this is a time-of-day effect -- 08:30 ET is also an hour before the
+    cash equity open and the start of the most liquid stretch of the Treasury
+    session -- and not a release effect.
+
+    Two details decide whether this is a control or a different sample.
+
+    **The shift is in BUSINESS days.** A calendar shift of +1 moves every Friday
+    release to a Saturday, where the causal gate deletes it as ``no_bars_that
+    day``. Non-farm payrolls is a Friday release, and jobless claims is a
+    Thursday one, so a calendar +1/+2 placebo is not the same book on a quiet
+    day -- it is the book with its two largest families removed, and the
+    distribution it produces is skewed by the composition change rather than by
+    the absence of news.
+
+    **Shifted minutes that land on a REAL release are dropped.** A weekly print
+    shifted by exactly a week lands on next week's print, which would make the
+    placebo a second copy of the real book.
     """
     df = raw.copy()
-    off = pd.Timedelta(days=days)
-    df["release_ts"] = df["release_ts"] + off
-    df["release_ts_ny"] = df["release_ts_ny"] + off
+    if business_days:
+        off = pd.offsets.BDay(abs(int(days)))
+        shift = (lambda t: t + off) if days >= 0 else (lambda t: t - off)
+    else:
+        off = pd.Timedelta(days=int(days))
+        shift = lambda t: t + off  # noqa: E731
+
+    tz = raw["release_ts_ny"].iloc[0].tz
+    df["orig_weekday"] = df["release_ts_ny"].apply(lambda t: t.strftime("%a"))
+    df["orig_title"] = df["lead_title"].astype(str)
+    df["release_ts"] = df["release_ts"].apply(shift)
+    df["release_ts_ny"] = df["release_ts"].apply(lambda t: t.tz_convert(tz))
     df["date"] = df["release_ts_ny"].apply(lambda t: t.date())
+
+    if avoid_real:
+        real = set(pd.to_datetime(raw["release_ts"], utc=True))
+        keep = ~pd.to_datetime(df["release_ts"], utc=True).isin(real)
+        df = df[keep]
+
     df["lead_title"] = "PLACEBO " + df["lead_title"].astype(str)
     return df.sort_values("release_ts").reset_index(drop=True)
+
+
+def placebo_composition(raw: pd.DataFrame, shifted: pd.DataFrame,
+                        by: str = "weekday") -> pd.DataFrame:
+    """How much of each release family the placebo kept.
+
+    Grouped on the ORIGINAL weekday or title, not the shifted one -- the
+    question is "did payrolls survive the shift", and grouping on where the
+    trades landed cannot answer it. A family whose ``kept %`` is far below the
+    others makes the placebo a different sample rather than a control.
+    """
+    if by == "weekday":
+        a = raw["release_ts_ny"].apply(lambda t: t.strftime("%a"))
+        b = shifted["orig_weekday"]
+    else:
+        a = raw["lead_title"].astype(str)
+        b = shifted["orig_title"]
+    out = pd.concat([a.value_counts().rename("real"),
+                     b.value_counts().rename("placebo")], axis=1).fillna(0).astype(int)
+    out["kept %"] = (out["placebo"] / out["real"].replace(0, np.nan) * 100).round(1)
+    return out.sort_values("real", ascending=False)
 
 
 def placebo_shuffle_direction(closed: pd.DataFrame, seed: int = 3) -> pd.DataFrame:

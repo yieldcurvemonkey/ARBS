@@ -706,9 +706,20 @@ start of the most liquid stretch of the Treasury session, and the moment a lot o
 gets recycled. A mean-reversion effect that lives at 08:30 every day would show up in this backtest
 as a release effect and would be nothing of the kind.
 
-So the same trade is taken on the **wrong day**: every release timestamp is shifted forward one
-day, onto a minute that had no release. Time of day, instrument, contract, measurement window,
-holding period and the entire causal gate are unchanged. The only thing removed is the reason.
+So the same trade is taken on the **wrong day**: every release timestamp is shifted onto a minute
+that had no release. Time of day, instrument, contract, measurement window, holding period and the
+entire causal gate are unchanged. The only thing removed is the reason.
+
+The shift is in **business** days, and this is not a detail. A calendar shift of +1 moves every
+Friday release to a Saturday, where the gate deletes it as `no_bars_that_day` — and payrolls is a
+Friday release. At +2 Thursday goes too, taking jobless claims, the single most frequent print in
+the book. A calendar placebo is therefore not the same book on a quiet day; it is the book with its
+two largest families removed, and it would differ from the real one because of the composition
+change rather than because of the absence of news. The weekday table below is there so that can be
+checked rather than trusted.
+
+Shifted minutes that land on a **real** release are dropped, so a weekly print moved by a week
+cannot quietly become a second copy of itself.
 
 The momentum flip is the second control. `fade` and `momentum` are the same trades with the sign
 reversed, so gross of cost they must be near mirror images. If both make money the P&L is coming
@@ -717,13 +728,22 @@ gate, or the marking, and not the idea.
 """)
 
 code(r"""
+RAW_P1 = C.placebo_shift(RAW, days=1)
+comp = C.placebo_composition(RAW, RAW_P1).rename_axis("original weekday")
+display(comp)
+print(f"{len(RAW):,} release minutes -> {len(RAW_P1):,} placebo minutes "
+      f"({len(RAW) - len(RAW_P1):,} landed on a minute that had a REAL release and were dropped)")
+print("Grouped on the ORIGINAL weekday, so 'kept %' answers 'did payrolls survive the shift'.")
+print("A calendar shift would look fine in this table and then lose every Friday event in the")
+print("gate instead -- which is why the traded books are compared again below.\n")
+
 placebo_rows, placebo_res = [], {}
 for shift in (1, 2, 3, -1, -2):
-    RAW_P = C.placebo_shift(RAW, days=shift)
-    r = C.run_config(C.variant(CONFIG, f"shift {shift:+d}d"), RAW_P, engine=False)
-    placebo_res[f"{shift:+d}d"] = r
+    RAW_P = C.placebo_shift(RAW, days=shift)          # business days, real minutes removed
+    r = C.run_config(C.variant(CONFIG, f"shift {shift:+d}bd"), RAW_P, engine=False)
+    placebo_res[f"{shift:+d}bd"] = r
     s = r.stats
-    placebo_rows.append({"book": f"wrong day {shift:+d}", "trades": s.get("trades", 0),
+    placebo_rows.append({"book": f"wrong day {shift:+d}bd", "trades": s.get("trades", 0),
                          "avg_bp": s.get("avg_bp", np.nan), "total_bp": s.get("total_bp", np.nan),
                          "hit": s.get("hit_rate", np.nan), "sharpe": s.get("sharpe", np.nan),
                          "t_stat": s.get("t_stat", np.nan)})
@@ -740,6 +760,17 @@ rows.append({"book": "momentum (sign flipped)", "trades": sm.get("trades", 0),
              "hit": sm.get("hit_rate", np.nan), "sharpe": sm.get("sharpe", np.nan),
              "t_stat": sm.get("t_stat", np.nan)})
 display(pd.DataFrame(rows).set_index("book").round(4))
+
+# The composition check that actually matters: the books as TRADED, after the gate.
+p1 = placebo_res.get("+1bd")
+if p1 is not None and not p1.closed.empty and not CLOSED.empty:
+    wd = lambda d: d.release_ts.dt.tz_convert("America/New_York").dt.strftime("%a")  # noqa: E731
+    tc = pd.concat([wd(CLOSED).value_counts().rename("real trades"),
+                    wd(p1.closed).value_counts().rename("placebo trades")], axis=1).fillna(0).astype(int)
+    tc["ratio"] = (tc["placebo trades"] / tc["real trades"].replace(0, np.nan)).round(2)
+    display(tc.rename_axis("traded weekday"))
+    print("These are the books after the causal gate. A weekday missing here and present above")
+    print("would mean the shift moved it onto a day with no session.\n")
 
 pl_avg = np.array([r["avg_bp"] for r in placebo_rows if r["trades"] > 0], dtype=float)
 if len(pl_avg):

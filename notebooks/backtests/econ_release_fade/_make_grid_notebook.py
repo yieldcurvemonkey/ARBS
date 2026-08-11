@@ -141,9 +141,14 @@ rather than the print.
 """)
 
 code(r"""
+#: The strip is thinned to every rank up to 4 plus 6 and 8 rather than all
+#: eight, and the move filter to two values rather than three. Both are stated
+#: rather than silently applied: at ~0.35s a configuration the full product is
+#: several hours across three grids, and a grid that gets quietly run at a
+#: smaller size than its prose claims is worse than a smaller grid.
 INSTRUMENTS = (
-    [("SR3 r%d" % n, {"family": "stir", "root": "USD_STIR", "rank": n}) for n in range(1, 9)] +
-    [("ZQ r%d" % n, {"family": "stir", "root": "ZQ", "rank": n}) for n in (1, 2, 3, 4)] +
+    [("SR3 r%d" % n, {"family": "stir", "root": "USD_STIR", "rank": n}) for n in (1, 2, 3, 4, 6, 8)] +
+    [("ZQ r%d" % n, {"family": "stir", "root": "ZQ", "rank": n}) for n in (1, 2)] +
     [(k, {"family": "ust", "root": k, "rank": 1}) for k in ("TU", "FV", "TY", "US")]
 )
 RELEASE_SETS = [
@@ -157,7 +162,7 @@ RELEASE_SETS = [
 ]
 MEASURE = [1, 2, 5]
 HOLD = [15, 30, 60, 120, 240]
-MOVE = [0.0, 1.0, 2.0]
+MOVE = [0.0, 2.0]
 
 def build_grid(direction="fade"):
     out = []
@@ -179,6 +184,8 @@ GRID = build_grid()
 print(f"{len(GRID):,} configurations")
 print(f"  {len(INSTRUMENTS)} instruments x {len(RELEASE_SETS)} release sets x "
       f"{len(MEASURE)} measurement x {len(HOLD)} holding x {len(MOVE)} move filters")
+print(f"  dropped: SR3 ranks 5 and 7, ZQ ranks 3-4, the 1bp move filter, and every")
+print(f"  (measure, hold) pair with hold <= measure + 1 -- see the note above the axes")
 """)
 
 code(r"""
@@ -203,10 +210,19 @@ def run_grid(cfgs, raw, label, csv_path, *, resume=True):
         it = todo
 
     t0 = time.time()
+    n_err, errs = 0, {}
     for cfg in it:
-        r = C.run_config(cfg, raw, engine=False)
-        s = r.stats
         nm = cfg["name"]
+        try:
+            r = C.run_config(cfg, raw, engine=False)
+        except Exception as ex:
+            # Recorded and counted, never swallowed -- a grid that quietly lost
+            # an instrument reports a smaller search than it actually ran.
+            n_err += 1
+            errs.setdefault(f"{type(ex).__name__}: {str(ex)[:90]}", 0)
+            errs[f"{type(ex).__name__}: {str(ex)[:90]}"] += 1
+            continue
+        s = r.stats
         inm, rnm, mm, hh, mv = nm.split("|")
         rows.append({
             "config": nm, "instrument": inm, "release_set": rnm,
@@ -224,6 +240,10 @@ def run_grid(cfgs, raw, label, csv_path, *, resume=True):
     out = pd.concat([pd.DataFrame(list(done.values())), new], ignore_index=True) if done else new
     out.to_csv(csv_path, index=False)
     print(f"{label}: {len(out):,} configs in {time.time()-t0:.0f}s -> {csv_path}")
+    if n_err:
+        print(f"  {n_err:,} of {len(todo):,} could not be priced and are ABSENT from the table:")
+        for msg, k in sorted(errs.items(), key=lambda x: -x[1]):
+            print(f"    {k:>5}x  {msg}")
     return out, closed_by
 
 RESULTS, PNL = run_grid(GRID, RAW, "grid", GRID_CSV)
@@ -321,6 +341,16 @@ difference between a result and a bill.
 """)
 
 code(r"""
+# PNL holds only the configurations scored in THIS kernel. On a resumed run the
+# summary CSV is complete but the per-trade series are not, and a DSR computed
+# from a partial set would silently use a smaller trial count -- which flatters
+# the winner. Say so rather than quietly deflating by the wrong number.
+if len(PNL) < len(RESULTS):
+    print(f"WARNING: per-trade series available for {len(PNL):,} of {len(RESULTS):,} "
+          f"configurations (the rest were resumed from CSV).")
+    print("The deflation below therefore uses a SMALLER trial count than the grid actually")
+    print("ran, so it is too generous. Re-run with a fresh grid_results.csv for the honest number.")
+
 sr_pt = {nm: (v.mean() / v.std(ddof=1)) if v.std(ddof=1) > 0 else 0.0
          for nm, v in PNL.items() if len(v) >= MIN_TRADES}
 n_trials = max(len(sr_pt), 1)
@@ -362,8 +392,13 @@ plt.tight_layout(); plt.show()
 md(r"""
 ## 5. The same grid on a day with no release
 
-Every timestamp shifted forward one day. Same instruments, same clock, same windows, same causal
-gate — no release.
+Every timestamp shifted forward one **business** day. Same instruments, same clock, same windows,
+same causal gate — no release.
+
+Business days, not calendar days: a calendar +1 sends every Friday release to a Saturday, where the
+gate deletes it, and payrolls is a Friday release. The composition table below has to show the
+placebo keeping essentially every weekday, or the two distributions differ because the sample
+changed rather than because the news went away.
 
 This is the strongest single test in either notebook, and it is stronger as a **distribution** than
 as a single book. If the real grid's Sharpes are drawn from the same distribution as the placebo
@@ -372,7 +407,10 @@ happens at 08:30 in the Treasury market on any given morning.
 """)
 
 code(r"""
-RAW_PLACEBO = C.placebo_shift(RAW, days=1)
+RAW_PLACEBO = C.placebo_shift(RAW, days=1)   # business day; real release minutes removed
+display(C.placebo_composition(RAW, RAW_PLACEBO).rename_axis("release weekday"))
+print(f"real {len(RAW):,} release minutes -> placebo {len(RAW_PLACEBO):,}\n")
+
 PLACEBO, PNL_P = run_grid(build_grid(), RAW_PLACEBO, "placebo", PLACEBO_CSV)
 
 pe = PLACEBO[PLACEBO.trades >= MIN_TRADES]
@@ -434,13 +472,20 @@ be near mirror images of each other, and a scatter of one against the other must
 `y = -x`. If it does not, the P&L is not coming from the direction of the initial move — it is
 coming from the sizing, the gate, or the marking, and none of those is the strategy.
 
-This is a check on the machinery rather than on the idea, and it is cheap. It is also the check
+This is a check on the machinery rather than on the idea. Because the closed form negates exactly —
+same events, same prices, flipped side — it verifies one function, `apply_signal`'s flip, and a
+sample of the grid proves that as well as the whole grid would. **Every fifth configuration is run**,
+and the count is printed so the sample is not mistaken for the full product. It is also the check
 that catches a sign error, which is the single most common way a fade backtest becomes a momentum
 backtest without anyone noticing.
 """)
 
 code(r"""
-MOM, PNL_M = run_grid(build_grid("momentum"), RAW, "momentum",
+MOM_SAMPLE = build_grid("momentum")[::5]
+print(f"momentum grid: running {len(MOM_SAMPLE):,} of {len(build_grid('momentum')):,} "
+      f"configurations (every 5th) -- the closed form negates exactly, so this checks the")
+print("sign flip rather than searching a second config space.")
+MOM, PNL_M = run_grid(MOM_SAMPLE, RAW, "momentum",
                       G.CACHE / "grid_results_momentum.csv")
 me = MOM[MOM.trades >= MIN_TRADES]
 

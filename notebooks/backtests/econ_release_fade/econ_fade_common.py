@@ -345,11 +345,27 @@ def save_bar_cache(path: Path = BARS_PKL) -> int:
     return len(_BAR_CACHE)
 
 
-def load_bar_cache(path: Path = BARS_PKL) -> int:
+def load_bar_cache(path: Path = BARS_PKL, *, verify: bool = True) -> int:
+    """Load the warmed bars, and check the one property the pricer depends on.
+
+    ``px_before`` finds its bar with ``searchsorted``, which returns a WRONG
+    answer rather than an error on an unsorted index -- a silent mis-mark on
+    every trade in the affected day. The frames are sorted on the way in, but
+    "sorted on the way in" is a claim about code and this is a check on data.
+    """
     if not Path(path).exists():
         return 0
     with open(path, "rb") as f:
-        _BAR_CACHE.update(pickle.load(f))
+        loaded = pickle.load(f)
+    if verify:
+        bad = [k for k, v in loaded.items()
+               if v is not None and len(v) and not v.index.is_monotonic_increasing]
+        if bad:
+            raise RuntimeError(
+                f"{len(bad)} cached bar frames have a non-monotonic index "
+                f"(e.g. {bad[:3]}). searchsorted would mis-mark every trade on those "
+                f"days -- re-run `python econ_fade_prewarm.py --stage bars --force`.")
+    _BAR_CACHE.update(loaded)
     return len(_BAR_CACHE)
 
 
@@ -506,11 +522,15 @@ def save_dv01(path: Path = DV01_JSON) -> int:
 
 
 def stir_pv01(symbol: str) -> float:
-    """USD per bp for ONE contract, from the rateslib pricer.
+    """USD per bp for ONE contract at a $1mm notional, from the rateslib pricer.
 
-    $25 for a 3M contract on $1mm notional and $41.67 for a 30-day ZQ, but the
-    numbers are read rather than assumed so a convention change cannot pass
-    silently into every P&L.
+    $25 for a 3M contract, which is the real SR3/GE contract value. It is NOT
+    the exchange contract value for ZQ: a 30-day accrual on $1mm is $8.33/bp
+    where the listed 30-day Fed Funds future is $5mm and $41.67/bp. That is
+    harmless HERE because the same number sizes the position and divides the
+    P&L, so ``pnl_bp`` is exactly basis points of rate either way -- but the
+    ``dv01_usd`` column is a $1mm-notional figure and must not be quoted as a
+    contract DV01.
     """
     if symbol in _STIR_PV01:
         return _STIR_PV01[symbol]
@@ -1231,7 +1251,7 @@ def enrich_closed(closed: pd.DataFrame, book: Book) -> pd.DataFrame:
     closed = closed.copy()
     m = closed["source_query"].apply(lambda q: q.meta or {})
     for k in ("instrument", "family", "symbol", "side", "contracts", "dv01_usd",
-              "move_bp", "release_ts", "lead_title", "n_events", "impact",
+              "move_bp", "release_ts", "lead_title", "titles", "n_events", "impact",
               "lead_outcome", "currency", "rank", "entry_px", "exit_px"):
         closed[k] = m.apply(lambda d, _k=k: d.get(_k))
     closed["tag"] = closed["source_query"].apply(lambda q: next(iter(q.tags), None))
