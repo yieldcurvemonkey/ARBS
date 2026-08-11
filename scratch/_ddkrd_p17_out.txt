@@ -1,0 +1,86 @@
+citivelo_excel: USD-SOFR-1D-CITIVELOEXCELMIN served a snapshot from a DIFFERENT local date (2026-03-31 for a 2026-04-01 request) out of the +/-1 day window. Pass snapshot_policy=SnapshotPolicy.strict() to bound this (further occurrences of this kind are not logged)
+citivelo_excel: USD-FEDFUNDS-1D-CITIVELOEXCELMIN served a snapshot from a DIFFERENT local date (2026-03-31 for a 2026-04-01 request) out of the +/-1 day window. Pass snapshot_policy=SnapshotPolicy.strict() to bound this (further occurrences of this kind are not logged)
+2026-04-01: 4329 legs; start strata {'SPOT': 1923, 'FORWARD_START': 1677, 'PAST_START': 729}
+SUCCESS: `func_tol` reached after 4 iterations (levenberg_marquardt), `f_val`: 2.5696890833236416e-09, `time`: 0.3062s
+SUCCESS: `func_tol` reached after 4 iterations (levenberg_marquardt), `f_val`: 2.598308923489825e-09, `time`: 0.3257s
+SUCCESS: `func_tol` reached after 4 iterations (levenberg_marquardt), `f_val`: 2.599566230561623e-09, `time`: 0.3340s
+SUCCESS: `func_tol` reached after 4 iterations (levenberg_marquardt), `f_val`: 2.8086811335326305e-09, `time`: 0.3201s
+SUCCESS: `func_tol` reached after 4 iterations (levenberg_marquardt), `f_val`: 2.6097309713346177e-09, `time`: 0.3046s
+SUCCESS: `func_tol` reached after 4 iterations (levenberg_marquardt), `f_val`: 2.6097309713346177e-09, `time`: 0.3244s
+SUCCESS: `func_tol` reached after 4 iterations (levenberg_marquardt), `f_val`: 2.8182625113525958e-09, `time`: 0.3304s
+SUCCESS: `func_tol` reached after 4 iterations (levenberg_marquardt), `f_val`: 2.6052103182752462e-09, `time`: 0.3152s
+SUCCESS: `func_tol` reached after 4 iterations (levenberg_marquardt), `f_val`: 2.6411070580763306e-09, `time`: 0.3164s
+SUCCESS: `func_tol` reached after 4 iterations (levenberg_marquardt), `f_val`: 2.6822298174633412e-09, `time`: 0.2861s
+
+=== cProfile, first 400 legs ===
+
+   ncalls  tottime  percall  cumtime  percall filename:lineno(function)
+        1    0.042    0.042   25.322   25.322 C:\Users/chris/clee/ARBS-dd\SDRUtils\dealer_direction\krd.py:420(krd_frame)
+      400    0.030    0.000   25.254    0.063 C:\Users/chris/clee/ARBS-dd\SDRUtils\dealer_direction\krd.py:395(unit_krd)
+      400    0.025    0.000   19.719    0.049 C:\Users/chris/clee/ARBS-dd\SDRUtils\dealer_direction\krd.py:348(unit_positions)
+      400    0.002    0.000   17.742    0.044 C:\Users/chris/clee/ARBS-dd\SDRUtils\dealer_direction\krd.py:294(model_for)
+       10    0.003    0.000   17.722    1.772 C:\Users/chris/clee/ARBS-dd\SDRUtils\dealer_direction\krd.py:304(_build)
+       10    0.029    0.003    8.902    0.890 C:\Users/chris/clee/ARBS-dd\MDP\IRSwaps\BARCHART_STIRF\risk.py:19(build_delta_risk_ladder)
+       10    0.000    0.000    8.739    0.874 C:\Users/chris/clee/ARBS-dd\SDRUtils\dealer_direction\midprice.py:377(mark_curve)
+       10    0.000    0.000    8.738    0.874 C:\Users/chris/clee/ARBS-dd\SDRUtils\stir_flow\pricing.py:219(handle)
+       10    0.000    0.000    8.738    0.874 C:\Users/chris/clee/ARBS-dd\SDRUtils\stir_flow\pricing.py:178(build)
+       10    0.000    0.000    8.737    0.874 C:\Users/chris/clee/ARBS-dd\MDP\IRSwaps\IRSwapsMDP.py:1993(_get_curve)
+       10    0.000    0.000    8.737    0.874 C:\Users/chris/clee/ARBS-dd\MDP\IRSwaps\IRSwapsMDP.py:2787(_build_citivelo_excel_curve)
+       10    0.001    0.000    8.688    0.869 C:\Users/chris/clee/ARBS-dd\MDP\IRSwaps\IRSwapsMDP.py:3163(_load_citivelo_excel_minute_store_point)
+       10    0.000    0.000    7.798    0.780 C:\Users/chris/clee/ARBS-dd\MDP\IRSwaps\CITIVELO_EXCEL\day_cache.py:192(day_window)
+        4    0.000    0.000    7.786    1.946 C:\Users/chris/clee/ARBS-dd\MDP\IRSwaps\CITIVELO_EXCEL\day_cache.py:173(_build)
+       12    0.001    0.000    7.742    0.645 C:\Users/chris/clee/ARBS-dd\MDP\IRSwaps\CITIVELO_EXCEL\day_cache.py:148(_read_day)
+        8    0.002    0.000    7.741    0.968 C:\Users/chris/clee/ARBS-dd\Caching\curve_store.py:644(read_raw_day)
+        8    0.000    0.000    7.541    0.943 C:\Users/chris/clee/ARBS-dd\Caching\curve_store.py:622(_apply_sanity_filter)
+        8    0.002    0.000    7.539    0.942 C:\Users/chris/clee/ARBS-dd\Caching\curve_sanity.py:487(filter_raw_frame)
+        8    0.069    0.009    7.525    0.941 C:\Users/chris/clee/ARBS-dd\Caching\curve_sanity.py:417(frame_defects)
+      410    0.014    0.000    6.558    0.016 C:\Users\chris\anaconda3\envs\stir\Lib\site-packages\rateslib\mutability\__init__.py:35(wrapper_no_interior_validation)
+     9642    0.133    0.000    6.097    0.001 {built-in method builtins.sum}
+      960    0.011    0.000    5.539    0.006 C:\Users/chris/clee/ARBS-dd\Query\IRSwaps\IRSwapQuery.py:281(resolve_package)
+
+
+
+=== dust floor: rows kept and gross |DV01| dropped, whole day ===
+SUCCESS: `func_tol` reached after 4 iterations (levenberg_marquardt), `f_val`: 2.5696890833236416e-09, `time`: 0.1564s
+SUCCESS: `func_tol` reached after 4 iterations (levenberg_marquardt), `f_val`: 2.598308923489825e-09, `time`: 0.1501s
+SUCCESS: `func_tol` reached after 4 iterations (levenberg_marquardt), `f_val`: 2.599566230561623e-09, `time`: 0.1360s
+SUCCESS: `func_tol` reached after 4 iterations (levenberg_marquardt), `f_val`: 2.8086811335326305e-09, `time`: 0.1436s
+SUCCESS: `func_tol` reached after 4 iterations (levenberg_marquardt), `f_val`: 2.6097309713346177e-09, `time`: 0.1468s
+SUCCESS: `func_tol` reached after 4 iterations (levenberg_marquardt), `f_val`: 2.6097309713346177e-09, `time`: 0.1630s
+SUCCESS: `func_tol` reached after 4 iterations (levenberg_marquardt), `f_val`: 2.8182625113525958e-09, `time`: 0.1498s
+SUCCESS: `func_tol` reached after 4 iterations (levenberg_marquardt), `f_val`: 2.6052103182752462e-09, `time`: 0.1572s
+SUCCESS: `func_tol` reached after 4 iterations (levenberg_marquardt), `f_val`: 2.6411070580763306e-09, `time`: 0.1456s
+SUCCESS: `func_tol` reached after 4 iterations (levenberg_marquardt), `f_val`: 2.6822298174633412e-09, `time`: 0.1409s
+SUCCESS: `func_tol` reached after 4 iterations (levenberg_marquardt), `f_val`: 2.88557742295284e-09, `time`: 0.1368s
+SUCCESS: `func_tol` reached after 4 iterations (levenberg_marquardt), `f_val`: 2.6368133109082912e-09, `time`: 0.1660s
+SUCCESS: `func_tol` reached after 4 iterations (levenberg_marquardt), `f_val`: 2.846642000383537e-09, `time`: 0.1516s
+SUCCESS: `func_tol` reached after 4 iterations (levenberg_marquardt), `f_val`: 2.665297713581137e-09, `time`: 0.1590s
+SUCCESS: `func_tol` reached after 4 iterations (levenberg_marquardt), `f_val`: 2.6342981113811322e-09, `time`: 0.1643s
+SUCCESS: `func_tol` reached after 4 iterations (levenberg_marquardt), `f_val`: 2.8200488290240617e-09, `time`: 0.1693s
+SUCCESS: `func_tol` reached after 4 iterations (levenberg_marquardt), `f_val`: 2.608091505716881e-09, `time`: 0.1587s
+SUCCESS: `func_tol` reached after 4 iterations (levenberg_marquardt), `f_val`: 2.823661622523778e-09, `time`: 0.1638s
+SUCCESS: `func_tol` reached after 4 iterations (levenberg_marquardt), `f_val`: 2.627196341379666e-09, `time`: 0.1493s
+SUCCESS: `func_tol` reached after 4 iterations (levenberg_marquardt), `f_val`: 2.8171618567836672e-09, `time`: 0.1549s
+SUCCESS: `func_tol` reached after 4 iterations (levenberg_marquardt), `f_val`: 2.4988388156697187e-09, `time`: 0.1581s
+SUCCESS: `func_tol` reached after 4 iterations (levenberg_marquardt), `f_val`: 2.693503468855894e-09, `time`: 0.1492s
+SUCCESS: `func_tol` reached after 4 iterations (levenberg_marquardt), `f_val`: 2.5120798224399643e-09, `time`: 0.1437s
+SUCCESS: `func_tol` reached after 4 iterations (levenberg_marquardt), `f_val`: 2.7021684733233317e-09, `time`: 0.1628s
+SUCCESS: `func_tol` reached after 4 iterations (levenberg_marquardt), `f_val`: 2.5837456954476282e-09, `time`: 0.1537s
+SUCCESS: `func_tol` reached after 4 iterations (levenberg_marquardt), `f_val`: 2.794165908717033e-09, `time`: 0.1752s
+SUCCESS: `func_tol` reached after 4 iterations (levenberg_marquardt), `f_val`: 2.5763738952598964e-09, `time`: 0.1643s
+SUCCESS: `func_tol` reached after 4 iterations (levenberg_marquardt), `f_val`: 2.588268795208151e-09, `time`: 0.1951s
+SUCCESS: `func_tol` reached after 4 iterations (levenberg_marquardt), `f_val`: 2.786311437782293e-09, `time`: 0.2084s
+SUCCESS: `func_tol` reached after 4 iterations (levenberg_marquardt), `f_val`: 2.735146615268584e-09, `time`: 0.1757s
+SUCCESS: `func_tol` reached after 4 iterations (levenberg_marquardt), `f_val`: 2.525629787656861e-09, `time`: 0.1719s
+SUCCESS: `func_tol` reached after 4 iterations (levenberg_marquardt), `f_val`: 2.71530922602497e-09, `time`: 0.1504s
+SUCCESS: `func_tol` reached after 4 iterations (levenberg_marquardt), `f_val`: 2.508809255550739e-09, `time`: 0.1379s
+SUCCESS: `func_tol` reached after 4 iterations (levenberg_marquardt), `f_val`: 2.6759881153387846e-09, `time`: 0.1484s
+SUCCESS: `func_tol` reached after 4 iterations (levenberg_marquardt), `f_val`: 2.477577742881641e-09, `time`: 0.1492s
+SUCCESS: `func_tol` reached after 4 iterations (levenberg_marquardt), `f_val`: 2.5071720778745965e-09, `time`: 0.1508s
+  full frame: 121,212 rows in 64s
+  dust=  0.00 USD/bp  rows  121,212 (100.0%)  gross dropped 0.00000%  worst single dropped bucket = 0.0000% of its unit's gross
+  dust=  0.05 USD/bp  rows   56,643 ( 46.7%)  gross dropped 0.00006%  worst single dropped bucket = 95.4080% of its unit's gross
+  dust=  0.50 USD/bp  rows   46,986 ( 38.8%)  gross dropped 0.00107%  worst single dropped bucket = 95.4080% of its unit's gross
+  dust=  1.00 USD/bp  rows   43,168 ( 35.6%)  gross dropped 0.00245%  worst single dropped bucket = 99.3409% of its unit's gross
+  dust=  5.00 USD/bp  rows   33,121 ( 27.3%)  gross dropped 0.01504%  worst single dropped bucket = 100.0000% of its unit's gross
+  dust= 25.00 USD/bp  rows   22,821 ( 18.8%)  gross dropped 0.07678%  worst single dropped bucket = 100.0000% of its unit's gross

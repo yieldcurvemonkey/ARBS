@@ -1,0 +1,12 @@
+CAUGHT by tests/test_dealer_direction_probability.py::test_tau_is_variance_over_twice_the_half_spread_not_the_   <- tau := h  (the brief's reading of tau)
+CAUGHT by tests/test_dealer_direction_probability.py::test_p_is_the_bayes_posterior_of_the_two_component_mixtu   <- mid bias sign flipped in p
+CAUGHT by tests/test_dealer_direction_probability.py::test_the_moment_check_is_a_coin_flip_at_realistic_overla   <- moment closed form takes the WRONG root
+CAUGHT by tests/test_dealer_direction_probability.py::test_the_dead_zone_is_reporting_only_because_2p_minus_1_   <- signed_weight := p  (half a long at a coin flip)
+CAUGHT by tests/test_dealer_direction_probability.py::test_recovers_known_parameters[0.0-0.25-0.15]              <- quantile trim instead of a robust-scale trim
+CAUGHT by tests/test_dealer_direction_probability.py::test_changing_the_dead_zone_cannot_move_the_ladder         <- dead zone measured in bp not probability
+CAUGHT by tests/test_dealer_direction_probability.py::test_the_fit_is_a_stationary_point_of_the_likelihood[0.6   <- EM drops the (1 - ubar^2) denominator
+
+restored: True
+
+7/7 mutations caught
+EXIT=0

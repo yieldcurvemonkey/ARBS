@@ -1,0 +1,9 @@
+m6b_kappa_is_hit_rate :: 6 failed, 64 passed, 1 warning in 10.58s
+m39_degenerate_only_when_chance_is_one :: 1 failed, 69 passed, 1 warning in 10.12s
+m40_hole_reads_max_lag_only :: 1 failed, 69 passed, 1 warning in 10.54s
+m41_build_getattr_defaults :: 2 failed, 68 passed, 1 warning in 10.37s
+m42_ladder_excluded_ignored :: 2 failed, 68 passed, 1 warning in 10.25s
+m43_no_orphan_krd_check :: 1 failed, 69 passed, 1 warning in 10.06s
+m44_no_duplicate_unit_check :: 1 failed, 69 passed, 1 warning in 10.10s
+m45_rolling_empty_one_column :: 1 failed, 69 passed, 1 warning in 10.38s
+ :: 70 passed, 1 warning in 6.77s

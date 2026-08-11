@@ -1,0 +1,89 @@
+=== A. accuracy against an independent scipy.quad reference ===
+HEAD     n=1200  max|err|=8.569e-02  median=2.140e-10  frac>1e-3=0.1800  frac>1e-2=0.0725
+         worst at dev=-0.0960 u=7.2248 tau=1.6317 s=0.4338 -> got 0.500768 ref 0.415074
+CURRENT  n=1200  max|err|=4.774e-15  median=1.110e-16  frac>1e-3=0.0000  frac>1e-2=0.0000
+         worst at dev=-5.8146 u=1.3120 tau=4.1481 s=0.0555 -> got 0.736816 ref 0.736816
+
+=== B. the staircase: p as a function of dev, everything else fixed ===
+largest step between adjacent dev (grid 0.005 bp): HEAD 0.1615   CURRENT 0.0062
+
+=== C. sign of signed_weight: how often does HEAD land on the wrong side of 0.5? ===
+n=4000  HEAD wrong side of 0.5: 17 (0.4250%)   CURRENT: 0 (0.0000%)
+
+=== D2. dealer_sign taken from the RAW npv while p reads the bias-corrected deviation ===
+  HEAD     dev=-0.3000 edge=-1.7000 dealer_sign=-1 p=0.7219 signed_weight=+0.4437 disagree=True flags=('SIGN_FRAGILE',)
+  CURRENT  dev=-0.3000 edge=+1.7000 dealer_sign=+1 p=0.7553 signed_weight=+0.5107 disagree=False flags=('SIGN_FRAGILE',)
+
+  sweep: how often do dealer_sign and signed_weight point opposite ways, and is it flagged?
+  HEAD     n=6000 disagreements=991 (16.517%) UNFLAGGED disagreements=657 max|signed_weight| on a disagreement=0.5066
+  CURRENT  n=6000 disagreements=497 (8.283%) UNFLAGGED disagreements=0 max|signed_weight| on a disagreement=0.1277
+
+=== D3. FLAG_SIGN_FRAGILE: is the new condition a strict superset? ===
+  old-only (a row the OLD flag caught and the new one drops): 0   both 44607   new-only 51756   neither 103637
+  => strict superset: True; flag rate old 0.2230 -> new 0.4818
+
+=== D4. resolve_upfront: one NaN leg in the ufro list ===
+  HEAD     resolve_upfront(ptp=None, ufros=[nan, 25000]) -> ResolvedUpfront(amount=None, source=None, flags=())
+  CURRENT  resolve_upfront(ptp=None, ufros=[nan, 25000]) -> ResolvedUpfront(amount=25000.0, source='UFRO_SUM', flags=())
+
+=== D5. a failed repricing: npv_pay = NaN ===
+  HEAD     raised ValueError: p must be a probability, got nan
+  CURRENT  dealer_sign=0 exclusion='PRICING_ERROR' p=None flags=()
+
+=== D6. a negative fee ===
+  HEAD     z=+8.0000 |edge|=8.0000 p=0.999654  (a POSITIVE fee of 5000 gives p=0.121691)
+  CURRENT  raised ValueError: upfront=-5000.0. `#58 Other payment amount` is disseminated as any value greater
+
+=== D7. non-finite mid calibration ===
+  mid_bias_bps   HEAD     raised ValueError: p must be a probability, got nan
+  mid_bias_bps   CURRENT  raised ValueError: mid_bias_bps=nan is not finite; every deviation would be NaN
+  mid_sigma_bps  HEAD     raised ValueError: p must be a probability, got nan
+  mid_sigma_bps  CURRENT  raised ValueError: mid_sigma_bps=nan is not finite; the comparison against it i
+
+=== D8. M29 (`u_bps` -> `abs(u_bps)`): equivalent mutant or live gap? ===
+  outputs differing over 20,000 random calls: 20000
+  a negative u_bps reachable through classify (negative fee or negative DV01 accepted): True
+
+=== D5 (redone). npv_pay = NaN, tau=None -- the 'silent tie' claim ===
+  HEAD     dealer_sign=0 exclusion=None dev_bps=nan p=None edge=nan
+  CURRENT  dealer_sign=0 exclusion='PRICING_ERROR' dev_bps=None p=None edge=None
+
+=== D7 (redone). non-finite mid calibration, tau=None ===
+  mid_bias_bps   HEAD     dealer_sign=0 exclusion=None dev=nan fragile=False
+  mid_bias_bps   CURRENT  raised ValueError: mid_bias_bps=nan is not finite; every deviation would be NaN
+  mid_sigma_bps  HEAD     dealer_sign=1 exclusion=None dev=3.0 fragile=False
+  mid_sigma_bps  CURRENT  raised ValueError: mid_sigma_bps=nan is not finite; the comparison against it i
+
+=== D8 (redone). is M29 an equivalent mutant on the current code? ===
+  field-wise differences over 20,000 random calls: 0
+
+  can u_bps be negative on the current code? (u_bps = upfront / dv01)
+  negative fee   HEAD     -> u_bps=-0.001 exclusion=None
+  negative fee   CURRENT  -> ValueError: upfront=-1.0. `#58 Other payment amount` is disseminate
+  negative DV01  HEAD     -> u_bps=0.001 exclusion=None
+  negative DV01  CURRENT  -> u_bps=0.001 exclusion=None
+  zero DV01      HEAD     -> ValueError: structure_dv01=0.0; an edge in bp is a dollar amount di
+  zero DV01      CURRENT  -> ValueError: structure_dv01=0.0; an edge in bp is a dollar amount di
+  NaN fee        HEAD     -> u_bps=None exclusion='NO_UPFRONT'
+  NaN fee        CURRENT  -> u_bps=None exclusion='NO_UPFRONT'
+
+=== A. the two formulas on their own, lo >= 0 ===
+  max |stable - cancelling| = 2.359e-16 at lo=1.600 hi=1.600  (1.109207e-07 vs 1.109207e-07)
+  relative error there: 2.127e-09
+
+=== B. does it reach p_marginalised? ===
+  max |p_current - p_M46| over 4,000 draws = 0.000e+00
+  double-precision floor on a probability near 0.5: 1.110e-16
+
+=== C. the regime the docstring names: a saturated tail (beta large) ===
+  beta=    50.0 reach=0.8000  p_cur=0.50000000000000000 p_m46=0.50000000000000000  diff=0.000e+00
+  beta=   100.0 reach=0.4000  p_cur=0.50000000000000000 p_m46=0.49999999999999994  diff=5.551e-17
+  beta=   160.0 reach=0.2500  p_cur=0.49999999999999994 p_m46=0.49999999999999994  diff=0.000e+00
+
+decisive rows      : 119995
+disagreements      : 4006 (3.338%)
+UNFLAGGED          : 0
+max |signed_weight| on a disagreement: 0.3217
+
+p outside [0, 1] anywhere in that search? False
+p exactly 0 or 1 (saturated to a certainty): 18467

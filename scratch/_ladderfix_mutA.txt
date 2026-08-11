@@ -1,0 +1,23 @@
+m2_weight_guard_noop :: 1 failed, 69 passed, 1 warning in 8.93s
+m3_orient_abs :: 1 failed, 69 passed, 1 warning in 8.30s
+ANCHOR/PLUGIN PROBLEM  m4_weight_is_p :: 
+ANCHOR/PLUGIN PROBLEM  m5_decay_row_order :: 
+ANCHOR/PLUGIN PROBLEM  m6_kappa_is_hit_rate :: anchor not found: {old!r}"
+ANCHOR/PLUGIN PROBLEM  m7_hole_always_false :: 
+ANCHOR/PLUGIN PROBLEM  m8_drop_series_key :: 
+ANCHOR/PLUGIN PROBLEM  m9_no_dup_check :: 
+ANCHOR/PLUGIN PROBLEM  m10_served_all_true :: 
+m11_no_placebo :: 3 failed, 67 passed, 1 warning in 10.60s
+m12_dead_zone_one_sided :: 1 failed, 69 passed, 1 warning in 10.47s
+m13_report_lag_pools :: 1 failed, 69 passed, 1 warning in 10.52s
+m14_basis_ok :: 1 failed, 69 passed, 1 warning in 10.86s
+m15_naive_proxy :: 1 failed, 69 passed, 1 warning in 10.23s
+m16_vintage_code_only :: 1 failed, 69 passed, 1 warning in 10.34s
+m17_build_drops_failure :: 2 failed, 68 passed, 1 warning in 10.28s
+m18_visibility_naive_as_utc :: 1 failed, 69 passed, 1 warning in 10.39s
+m19_no_missing_size_check :: 1 failed, 69 passed, 1 warning in 10.23s
+m20_mean_weight_is_one :: 1 failed, 69 passed, 1 warning in 10.06s
+m21_no_krd_double_sign_guard :: 1 failed, 69 passed, 1 warning in 10.51s
+m22_lifecycle_series_ignored :: 1 failed, 69 passed, 1 warning in 10.22s
+m23_no_risk_row_silently_dropped :: 2 failed, 68 passed, 1 warning in 10.02s
+ :: 70 passed, 1 warning in 6.58s

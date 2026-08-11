@@ -1,0 +1,1184 @@
+diff --git a/SDRUtils/dealer_direction/health.py b/SDRUtils/dealer_direction/health.py
+index 4ea687fd..35279d70 100644
+--- a/SDRUtils/dealer_direction/health.py
++++ b/SDRUtils/dealer_direction/health.py
+@@ -227,8 +227,11 @@ def d2d_recycling_kappa(d2c, d2d, *, horizon_days: int = 1,
+ 
+     # forward window: the D2D flow strictly AFTER each date, so the pairing can
+     # never read a print against itself
++    # k is capped at n: a horizon longer than the history has no forward window
++    # at all, and the uncapped slice pair broadcasts (n-k,) against () instead
++    # of reporting NO_DATA
+     fwd = np.zeros(n, dtype="float64")
+-    for k in range(1, int(horizon_days) + 1):
++    for k in range(1, min(int(horizon_days), n) + 1):
+         fwd[: n - k] += y[k:]
+     sy = np.sign(fwd) * int(expected_alignment)
+     sx = np.sign(x)
+@@ -279,6 +282,16 @@ def d2d_recycling_kappa(d2c, d2d, *, horizon_days: int = 1,
+     )
+ 
+ 
++#: The rolling frame's shape, defined once. Two paths return an empty version
++#: of it -- no data at all, and a history shorter than one window -- and they
++#: used to disagree: the second returned a one-column frame, so a monitor loop
++#: starting on a short history died on ``out["kappa"]`` instead of reading
++#: NO_DATA off an empty series.
++ROLLING_KAPPA_COLUMNS = ["window_end", "kappa", "hit_rate",
++                         "placebo_kappa_p95", "n_pairs", "reference_kappa",
++                         "status"]
++
++
+ def rolling_recycling_kappa(d2c, d2d, *, window_days: int = 90,
+                             step_days: int = 5, degradation_ratio: float = 0.5,
+                             min_pairs: int = 30, **kwargs) -> pd.DataFrame:
+@@ -288,10 +301,10 @@ def rolling_recycling_kappa(d2c, d2d, *, window_days: int = 90,
+     exists to say. F-20's mid bias was not present on day one and absent on day
+     two; a curve source degrades, and the question is always "is it worse than
+     it was", which needs a series. Ninety days is the default window because it
+-    is roughly a quarter and because 90 days is also the reach-back that holds
+-    90.7% of the flippable lineage population -- long enough for a stable kappa,
+-    short enough that a month of degradation is visible in it rather than
+-    averaged away.
++    is roughly a quarter and because a ~90-day reach-back holds 90% of the
++    flippable lineage population (LEDGER F-18: 90.7% is the figure for 63 days,
++    95.6% for 252) -- long enough for a stable kappa, short enough that a month
++    of degradation is visible in it rather than averaged away.
+ 
+     Two ways a window fails, and both mean the same thing:
+ 
+@@ -306,11 +319,16 @@ def rolling_recycling_kappa(d2c, d2d, *, window_days: int = 90,
+     window being judged, so a slow decay cannot drag its own benchmark down with
+     it.
+     """
+-    x, y = _align_daily(d2c, d2d)
++    if "n_bootstrap" in kwargs:
++        raise TypeError(
++            "rolling_recycling_kappa does not bootstrap per window -- one CI "
++            "per step over a whole sample is the cost this function exists to "
++            "avoid. Read the interval off d2d_recycling_kappa on the window "
++            "you care about."
++        )
++    x, _y = _align_daily(d2c, d2d)
+     if len(x) == 0:
+-        return pd.DataFrame(columns=["window_end", "kappa", "hit_rate",
+-                                     "placebo_kappa_p95", "n_pairs",
+-                                     "reference_kappa", "status"])
++        return pd.DataFrame(columns=ROLLING_KAPPA_COLUMNS)
+     a = pd.Series(d2c).copy()
+     a.index = pd.to_datetime(pd.Index(a.index))
+     b = pd.Series(d2d).copy()
+@@ -335,8 +353,9 @@ def rolling_recycling_kappa(d2c, d2d, *, window_days: int = 90,
+ 
+     out = pd.DataFrame(rows)
+     if out.empty:
+-        out["reference_kappa"] = []
+-        return out
++        # a history shorter than one window closes none, and it must return the
++        # same shape the no-data path above does
++        return pd.DataFrame(columns=ROLLING_KAPPA_COLUMNS)
+     # trailing median of EARLIER windows only -- a benchmark that includes the
+     # window it judges cannot detect a slow decay
+     out["reference_kappa"] = out["kappa"].shift(1).expanding().median()
+@@ -344,8 +363,7 @@ def rolling_recycling_kappa(d2c, d2d, *, window_days: int = 90,
+                 & (out["reference_kappa"] > 0)
+                 & (out["kappa"] < degradation_ratio * out["reference_kappa"]))
+     out.loc[degraded, "status"] = ALARM
+-    return out[["window_end", "kappa", "hit_rate", "placebo_kappa_p95",
+-                "n_pairs", "reference_kappa", "status"]]
++    return out[ROLLING_KAPPA_COLUMNS]
+ 
+ 
+ def _align_daily(a, b):
+@@ -366,10 +384,21 @@ def _align_daily(a, b):
+ def _kappa(sx, sy):
+     """Cohen's kappa on two sign vectors, plus the raw and chance rates.
+ 
+-    A degenerate marginal -- one series entirely one sign -- makes the chance
+-    rate 1 and kappa ``0/0``. That is exactly the F-20 state, so it resolves to
+-    **0.0 with a flag**, never to 1.0 and never to NaN: a series that says the
+-    same thing about every print carries no information about any of them.
++    **A degenerate marginal is ONE series entirely one sign, and it does not
++    need the chance rate to reach 1.** ``chance = px*py + (1-px)(1-py)``, so
++    ``px = 1`` against a balanced ``py = 0.5`` gives ``chance = 0.5``, not 1 --
++    and a flag conditioned on ``chance == 1`` therefore only ever fires when
++    *both* series are one-sided the *same* way. That was the bug: the F-20
++    state where the mid has collapsed one population is exactly the
++    single-degenerate case, and it was being scored as an ordinary reading.
++
++    Kappa is nevertheless **exactly 0** whenever either marginal is degenerate
++    (with ``sx = +1`` throughout, ``hit = py`` and ``chance = py``), so the
++    arithmetic never needed protecting -- the *flag* did, because
++    :func:`d2d_recycling_kappa` promotes it straight to ALARM and 0.0 alone
++    only clears the 0.10 warn floor when the placebo is unavailable. A series
++    that says the same thing about every print carries no information about any
++    of them: 0.0 with the flag, never 1.0 and never NaN.
+     """
+     n = len(sx)
+     if n == 0:
+@@ -378,9 +407,10 @@ def _kappa(sx, sy):
+     px = float((sx > 0).mean())
+     py = float((sy > 0).mean())
+     chance = px * py + (1.0 - px) * (1.0 - py)
++    degenerate = px in (0.0, 1.0) or py in (0.0, 1.0)
+     if chance >= 1.0 - 1e-12:
+         return 0.0, hit, chance, True
+-    return float((hit - chance) / (1.0 - chance)), hit, chance, False
++    return float((hit - chance) / (1.0 - chance)), hit, chance, degenerate
+ 
+ 
+ def _placebo_p95(sx, sy, shift_days: int, max_placebo: int):
+@@ -513,25 +543,47 @@ def imputed_notional_fraction(prov, *, weights=None) -> Metric:
+     but 15.4% of the DV01 imputed (10.6-16.0% across six threshold choices), and
+     a model-free cross-check brackets it at 12.8-13.9%. Weighting by DV01 is
+     also what would catch a cap-schedule break, since the caps are a function of
+-    tenor and every band moved by 1.7-3.6x when the schedule was re-set on
+-    2024-10-07 -- to the day, simultaneously across all nine bands.
++    tenor and every band moved by 1.55-3.57x when the schedule was re-set on
++    2024-10-07 -- to the day, simultaneously across all nine bands (F-7's table:
++    the 6m-1y band moved least, $1.1bn to $1.7bn, and 46d-3m most, $2.1bn to
++    $7.5bn).
+     """
+     prov = pd.DataFrame(prov)
+     n = len(prov)
+-    if n == 0 or "notional_imputed" not in prov.columns:
+-        flags = pd.Series(dtype=bool)
+-    else:
+-        flags = prov["notional_imputed"].fillna(False).astype(bool)
+-    value = float(flags.mean()) if n else float("nan")
++    if n == 0:
++        return Metric(name="imputed_notional_fraction", value=float("nan"), n=0,
++                      threshold=_imputed_threshold(), status=NO_DATA,
++                      detail={"dv01_share": None})
++    # the flag column named rather than `.get`-ed: renamed, this metric reports
++    # a clean 0.00 forever, and with weights it raises an IndexError on a
++    # zero-length boolean mask instead
++    _require(prov, ["notional_imputed"], "imputed_notional_fraction")
++    flags = prov["notional_imputed"].fillna(False).astype(bool)
++    value = float(flags.mean())
+ 
+     dv01_share = None
+-    if weights is not None and n:
++    if weights is not None:
++        _require(prov, ["unit_key"], "imputed_notional_fraction(weights=...)")
+         w = prov["unit_key"].map(pd.Series(weights, dtype="float64")).abs()
+         total = float(w.sum())
+         if total > 0:
+             dv01_share = float(w[flags.to_numpy()].sum() / total)
+ 
+-    threshold = Threshold(
++    threshold = _imputed_threshold()
++    status = threshold.evaluate(value)
++    if dv01_share is not None:
++        if dv01_share >= IMPUTED_DV01_ALARM:
++            status = _worse(status, ALARM)
++        elif dv01_share >= IMPUTED_DV01_WARN:
++            status = _worse(status, WARN)
++
++    return Metric(name="imputed_notional_fraction", value=value, n=n,
++                  threshold=threshold, status=status,
++                  detail={"dv01_share": dv01_share})
++
++
++def _imputed_threshold() -> Threshold:
++    return Threshold(
+         name="imputed_notional_fraction", direction="above",
+         warn=0.06, alarm=0.10,
+         rationale=(
+@@ -548,16 +600,6 @@ def imputed_notional_fraction(prov, *, weights=None) -> Metric:
+                 "(their notional IS the cap) before trusting the imputation; a "
+                 "stale schedule silently under-imputes the whole long end."),
+     )
+-    status = threshold.evaluate(value)
+-    if dv01_share is not None:
+-        if dv01_share >= IMPUTED_DV01_ALARM:
+-            status = _worse(status, ALARM)
+-        elif dv01_share >= IMPUTED_DV01_WARN:
+-            status = _worse(status, WARN)
+-
+-    return Metric(name="imputed_notional_fraction", value=value, n=n,
+-                  threshold=threshold, status=status,
+-                  detail={"dv01_share": dv01_share})
+ 
+ 
+ # --------------------------------------------------------------------------
+@@ -565,10 +607,11 @@ def imputed_notional_fraction(prov, *, weights=None) -> Metric:
+ # --------------------------------------------------------------------------
+ 
+ _MAX_LAG_RE = re.compile(r"max_lag=(?P<v>unbounded|[0-9.]+)s?")
++_ALLOW_FUTURE_RE = re.compile(r"allow_future=(?P<v>\w+)")
+ 
+ 
+ def is_overnight_hole(policy) -> bool:
+-    """Was this row answered under the out-of-session branch?
++    """Was this row answered by something other than the strict in-session branch?
+ 
+     **Read the policy, not the served timestamp.** The snapshot that answers a
+     00:30 ET request is by construction *in* session -- it is the last one Citi
+@@ -576,9 +619,31 @@ def is_overnight_hole(policy) -> bool:
+     stamp is in session answers a different question and always says yes. The
+     policy string is the record of which branch fired, which is the question.
+ 
+-    A policy that is present but has no parseable bound, or an unbounded one,
+-    counts as the hole: it is not the strict in-session branch, and the legacy
+-    nearest-either-way rule is worse than the 2h reach-back, not better.
++    **The test is affirmative on two fields, not one.** Reading ``max_lag``
++    alone -- the obvious spelling -- lets ``allow_future=True`` through as long
++    as it carries a bound, and a 60-second window *centred* on the print is not
++    the 60-second window *before* it. That is the circularity this whole
++    exercise exists to prevent, and it is the property behind the 1.09% of legs
++    the shipped nearest-either-direction default serves from the future. So the
++    row is the strict branch only if the policy states ``allow_future=False``
++    **and** a parseable bound no looser than ``IN_SESSION_MAX_LAG``.
++
++    ``method`` is deliberately **not** part of the test, and that is a measured
++    call rather than an omission: ``select_snapshot`` picks the globally
++    nearest stamp under ``method=nearest`` and then *rejects* it outright when
++    it is from the future and ``allow_future=False`` -- it does not fall back
++    to the nearest backward stamp. So a row that was actually **served** under
++    ``nearest`` with no-future and a 60s bound came from a backward stamp
++    within the bound, which is the strict outcome; flagging it here would put a
++    fresh row in the stale population and take it out of the
++    ``in_session_lag_over_policy`` check. Verified directly against
++    ``select_snapshot`` on a two-stamp window (30s before / 5s after the
++    request): ``asof`` serves the backward stamp, ``nearest`` with
++    ``allow_future=False`` returns ``None``.
++
++    An unparseable or unbounded policy counts as the hole: it is not the strict
++    in-session branch, and the legacy nearest-either-way rule is worse than the
++    2h reach-back, not better.
+ 
+     An **absent** policy raises instead. ``provenance.build`` writes
+     ``snapshot_policy=""`` for a unit that never priced, and answering "hole"
+@@ -594,7 +659,11 @@ def is_overnight_hole(policy) -> bool:
+             "curve at all; filter to the served population (health.served_mask) "
+             "before asking which branch answered it"
+         )
+-    m = _MAX_LAG_RE.search(str(policy))
++    text = str(policy)
++    future = _ALLOW_FUTURE_RE.search(text)
++    if future is None or future.group("v").lower() != "false":
++        return True
++    m = _MAX_LAG_RE.search(text)
+     if m is None or m.group("v") == "unbounded":
+         return True
+     return float(m.group("v")) > snapshot.IN_SESSION_MAX_LAG.total_seconds()
+@@ -686,9 +755,10 @@ def _overnight_threshold() -> Threshold:
+             "overnight tail rests on curves up to two hours stale -- priced at "
+             "0.24-0.29bp median error and <=1.43bp max, against prints that "
+             "land one to two bp from mid -- and a jump means either the session "
+-            "model broke (128 truncated SOFR days exist, and the night after "
+-            "one is when the 2h bound stops a 4.5h reach-back) or the pricing "
+-            "clock is landing rows in the hole that should not be there."),
++            "model broke (161 truncated-end SOFR days and 141 Fed Funds days "
++            "exist in the minute store, and the night after one is when the 2h "
++            "bound stops a 4.5h reach-back) or the pricing clock is landing "
++            "rows in the hole that should not be there."),
+         action=("Check the session model against citi_session.publishes for the "
+                 "dates involved before using the day; exclude the hole "
+                 "population and re-read the ladder to size the damage."),
+@@ -775,8 +845,10 @@ def snapshot_lag_metrics(prov) -> list:
+         name="overnight_hole_lag_p90_seconds", direction="above",
+         warn=3600.0, alarm=snapshot.OUT_OF_SESSION_MAX_LAG.total_seconds(),
+         rationale=(
+-            "The 2h reach-back is the bound, not the expectation: the observed "
+-            "hour-00 population is served at 1-97 minutes. A p90 pressed "
++            "The 2h reach-back is the bound, not the expectation: the seven "
++            "hour-00 prints in the session-branch probe were all served at "
++            "1-97 minutes (7/7 -- a sample, not a population, so treat the "
++            "range as indicative and the bound as the contract). A p90 pressed "
+             "against the bound means the feed stopped earlier than the session "
+             "model thinks, and the rows at the bound are the ones carrying the "
+             "1.43bp tail."),
+@@ -891,31 +963,35 @@ def pricing_success_by_stratum(legs) -> pd.DataFrame:
+ 
+     **BASIS inverts.** It is ``EXCL_UNSUPPORTED_INDEX`` by construction, so a
+     *successfully priced* BASIS leg is the alarm: the exclusion leaked and a
+-    single-curve mid is being taken on a two-index trade.
++    single-curve mid is being taken on a two-index trade. Which is why the
++    index column and ``is_capped`` are ``_require``-d rather than ``.get``-ed:
++    a ``.get`` default makes those two strata empty, empty reports ``NO_DATA``,
++    and a renamed column then disables an **inverted** alarm permanently and
++    quietly. There is no reading of that frame in which the BASIS row's absence
++    looks wrong.
+     """
+     legs = pd.DataFrame(legs)
+     cols = ["stratum", "n", "n_priced", "success_rate", "warn", "alarm",
+             "status", "rationale"]
+     if legs.empty:
+         return pd.DataFrame(columns=cols)
+-    _require(legs, ["as_of_date", "effective_date", "priced"],
++    _require(legs, ["as_of_date", "effective_date", "priced", "is_capped"],
+              "pricing_success_by_stratum")
++    index_col = ("rate_index" if "rate_index" in legs.columns
++                 else "rate_index_clean")
++    _require(legs, [index_col], "pricing_success_by_stratum (the BASIS alarm)")
+ 
+     as_of = pd.to_datetime(legs["as_of_date"])
+     eff = pd.to_datetime(legs["effective_date"])
+     horizon = as_of + pd.Timedelta(days=SPOT_WINDOW_DAYS)
+-    index_col = ("rate_index" if "rate_index" in legs.columns
+-                 else "rate_index_clean")
+     priced = legs["priced"].fillna(False).astype(bool)
+ 
+     masks = {
+         "SPOT": (eff >= as_of) & (eff <= horizon),
+         "FORWARD_START": eff > horizon,
+         "PAST_START": eff < as_of,
+-        "CAPPED": legs.get("is_capped", pd.Series(False, index=legs.index))
+-                      .fillna(False).astype(bool),
+-        "BASIS": legs.get(index_col, pd.Series("", index=legs.index))
+-                     .astype(str).str.upper().eq("BASIS"),
++        "CAPPED": legs["is_capped"].fillna(False).astype(bool),
++        "BASIS": legs[index_col].astype(str).str.upper().eq("BASIS"),
+     }
+ 
+     rows = []
+diff --git a/SDRUtils/dealer_direction/ladder.py b/SDRUtils/dealer_direction/ladder.py
+index 03500372..ac62bd19 100644
+--- a/SDRUtils/dealer_direction/ladder.py
++++ b/SDRUtils/dealer_direction/ladder.py
+@@ -214,6 +214,20 @@ def unit_ladder_rows(units, calls, krd, *, drop_dead_zone: bool = False,
+     call contribute almost nothing, so the dead zone is a monitoring flag and an
+     opt-in filter for a consumer who wants a hard cut -- it is not what the
+     aggregation depends on (DESIGN 1.3).
++
++    Three ways the caller's three inputs can disagree, all raised rather than
++    absorbed, because each of them breaks the partition in a way no output
++    column shows:
++
++    * a unit with **no call** -- the documented hole in the accounting;
++    * the **same unit twice** -- its risk enters the ladder twice while
++      ``n_units`` is a ``nunique`` and still reports one, so the one column a
++      reader would check to spot it is the column that conceals it;
++    * a **risk row whose unit is not in** ``units`` -- iterating ``units`` and
++      looking up the risk means the reverse direction is never read, so that
++      row appears in neither returned frame. The loudness here used to be
++      backwards: two of the three raised and the one carrying unattributed
++      DV01 was dropped in silence.
+     """
+     krd = _validated_krd(krd)
+     by_unit = ({} if krd.empty
+@@ -225,6 +239,28 @@ def unit_ladder_rows(units, calls, krd, *, drop_dead_zone: bool = False,
+             raise ValueError(f"two direction calls for unit {call.unit_key!r}")
+         call_map[call.unit_key] = call
+ 
++    units = list(units)
++    population: set = set()
++    for unit in units:
++        if unit.unit_key in population:
++            raise ValueError(
++                f"unit {unit.unit_key!r} appears twice in `units`; its risk "
++                "would be added to the ladder twice, and n_units is a nunique "
++                "so the aggregate would still report one unit in that cell"
++            )
++        population.add(unit.unit_key)
++
++    orphans = [k for k in by_unit if k not in population]
++    if orphans:
++        carried = float(sum(by_unit[k][KRD_VALUE_COL].abs().sum()
++                            for k in orphans))
++        raise ValueError(
++            f"{len(orphans)} risk key(s) are not in `units`, e.g. "
++            f"{sorted(map(str, orphans))[:5]}, carrying {carried:,.1f} of "
++            "|DV01|; the loop runs over the units, so that risk reaches "
++            "neither `rows` nor `excluded` and the pair stops being a partition"
++        )
++
+     vintage = _prov.code_vintage(curve_source)
+     rows: list = []
+     excluded: list = []
+@@ -357,6 +393,12 @@ def aggregate(unit_rows) -> pd.DataFrame:
+     of the pond actually survived the confidence weighting. It falls towards
+     zero when the mid stops separating the two sides, which is the same
+     degradation :mod:`.health` monitors from the other end.
++
++    ``n_units`` is a ``nunique`` and **cannot see a duplicated feed**: one unit
++    supplied twice and one unit with two legs in the same bucket produce the
++    same rows here, so this function has no way to tell them apart. The guard
++    is upstream, in :func:`unit_ladder_rows`, which refuses a duplicated unit
++    at the point where the two cases are still distinguishable.
+     """
+     unit_rows = pd.DataFrame(unit_rows)
+     if unit_rows.empty:
+diff --git a/SDRUtils/dealer_direction/provenance.py b/SDRUtils/dealer_direction/provenance.py
+index 0ca607c6..50b665bc 100644
+--- a/SDRUtils/dealer_direction/provenance.py
++++ b/SDRUtils/dealer_direction/provenance.py
+@@ -166,6 +166,12 @@ def code_vintage(curve_source: str | None = None) -> str:
+ # per-row provenance
+ # --------------------------------------------------------------------------
+ 
++#: The fields :func:`build` reads off a priced unit. Read by name and never
++#: with a default, for the reason ``health._require`` states about columns.
++_PRICING_FIELDS = ("curve_name", "curve_timestamp", "snapshot_lag_seconds",
++                   "snapshot_policy")
++
++
+ def build(unit, pricing, call, *, pricing_clock_field: str,
+           notional_imputed: bool = False,
+           notional_impute_factor: float | None = None,
+@@ -176,19 +182,62 @@ def build(unit, pricing, call, *, pricing_clock_field: str,
+ 
+     Works for a unit that never priced -- ``pricing`` may be ``None`` -- because
+     those are exactly the rows the coverage table has to account for, and a
+-    provenance record that only exists for successes explains nothing.
++    provenance record that only exists for successes explains nothing. That is
++    the *only* reason the never-priced sentinels (``""`` / ``None`` / ``NaT``)
++    exist, so a ``getattr(pricing, ..., sentinel)`` is the wrong spelling here:
++    rename one :class:`types.UnitPricing` field and every row of a *successful*
++    run gets written the never-priced sentinel instead. Nothing raises, and
++    downstream ``health.served_mask`` -- which reads ``snapshot_policy`` --
++    then classifies the whole day UNSERVED, ``overnight_hole_fraction`` goes
++    ``NO_DATA``, and the run looks like a day with no curve problems. This is
++    ``health._require``'s doctrine attacked from the value side rather than the
++    column side, and the answer is the same: read the field by name, and if it
++    is not there, say so.
++
++    An empty ``snapshot_policy`` on a *priced* unit is refused for the same
++    reason: ``""`` is this function's own never-priced marker, so a producer
++    writing it collides with the sentinel and hides a served row inside the
++    pricing-failure population.
+ 
+     ``failure_reason`` defaults to the call's own exclusion rather than being
+-    required separately, so the two cannot disagree.
++    required separately, so the two cannot disagree. **It is not the whole
++    story**: ``EXCL_DEAD_ZONE`` and ``EXCL_PRICING_ERROR`` are decided inside
++    :func:`ladder.unit_ladder_rows`, after this record is built, and reach the
++    accounting through :func:`coverage_table`'s ``ladder_excluded`` argument.
+     """
+     if failure_reason is None and call is not None:
+         failure_reason = call.exclusion
++
++    if pricing is None:
++        curve_name, curve_ts, lag, policy = "", pd.NaT, None, ""
++    else:
++        absent = [f for f in _PRICING_FIELDS if not hasattr(pricing, f)]
++        if absent:
++            raise ValueError(
++                f"unit {unit.unit_key!r} priced, but its pricing record has no "
++                f"{absent}; those fields are only defaulted for a unit that "
++                "never priced, so defaulting them here would write the "
++                "never-priced sentinel over a successful row and report the "
++                "whole run UNSERVED without raising"
++            )
++        curve_name = pricing.curve_name or ""
++        curve_ts = pricing.curve_timestamp
++        lag = pricing.snapshot_lag_seconds
++        policy = pricing.snapshot_policy or ""
++        if not str(policy).strip():
++            raise ValueError(
++                f"unit {unit.unit_key!r} priced with no snapshot policy "
++                "recorded; the empty string is this function's never-priced "
++                "marker and health.served_mask reads exactly that field, so a "
++                "served row would be counted as a pricing failure"
++            )
++
+     return T.Provenance(
+         unit_key=unit.unit_key,
+-        curve_name=getattr(pricing, "curve_name", "") or "",
+-        curve_timestamp=getattr(pricing, "curve_timestamp", pd.NaT),
+-        snapshot_lag_seconds=getattr(pricing, "snapshot_lag_seconds", None),
+-        snapshot_policy=getattr(pricing, "snapshot_policy", "") or "",
++        curve_name=curve_name,
++        curve_timestamp=curve_ts,
++        snapshot_lag_seconds=lag,
++        snapshot_policy=policy,
+         pricing_clock_field=pricing_clock_field,
+         rule=None if call is None else call.rule,
+         notional_imputed=bool(notional_imputed),
+@@ -253,12 +302,79 @@ def annuity_dv01_proxy_from_dates(*, notional: float, as_of, effective,
+ # the coverage accounting
+ # --------------------------------------------------------------------------
+ 
+-def coverage_table(prov, *, dv01, dv01_fallback=None) -> pd.DataFrame:
++def merge_ladder_exclusions(prov, ladder_excluded) -> pd.DataFrame:
++    """Fold the ladder's own exclusions into a provenance frame's reasons.
++
++    :func:`build` can only see ``call.exclusion``. Two reasons are decided
++    *later*, inside :func:`ladder.unit_ladder_rows` -- ``EXCL_PRICING_ERROR``
++    for a called unit with no risk row, and ``EXCL_DEAD_ZONE`` under
++    ``drop_dead_zone`` -- and they live only in that function's second return
++    value. Without this join a unit the ladder threw out reaches
++    :func:`coverage_table` with a null reason, and a null reason is read as
++    :data:`IN_LADDER`: the coverage number then reports 100% on a population
++    the ladder did not produce.
++
++    Idempotent by design (re-applying the same reason is a no-op) and loud on
++    the two ways the halves can disagree: a reason that contradicts one already
++    recorded, and an excluded unit that is not in the population at all.
++    """
++    prov = pd.DataFrame(prov).copy()
++    excl = pd.DataFrame(ladder_excluded)
++    if excl.empty:
++        if "failure_reason" not in prov.columns:
++            prov["failure_reason"] = None
++        return prov
++    for col in ("unit_key", "failure_reason"):
++        if col not in excl.columns:
++            raise ValueError(f"ladder_excluded needs a {col!r} column; pass "
++                             "the second frame unit_ladder_rows() returns")
++    if "failure_reason" not in prov.columns:
++        prov["failure_reason"] = None
++
++    reasons = dict(zip(excl["unit_key"], excl["failure_reason"]))
++    known = set(prov["unit_key"])
++    stray = sorted(str(k) for k in reasons if k not in known)
++    if stray:
++        raise ValueError(
++            f"{len(stray)} ladder-excluded unit(s) are not in the coverage "
++            f"population, e.g. {stray[:5]}; the two halves are then different "
++            "populations and the shares sum to 1 over the wrong one"
++        )
++
++    mapped = prov["unit_key"].map(reasons)
++    have = prov["failure_reason"]
++    clash = mapped.notna() & have.notna() & (mapped != have)
++    if clash.any():
++        offenders = [
++            f"{k}: provenance {h!r} vs ladder {m!r}"
++            for k, h, m in zip(prov.loc[clash, "unit_key"],
++                               have[clash], mapped[clash])
++        ][:5]
++        raise ValueError(
++            f"{int(clash.sum())} unit(s) disagree about why they are not in "
++            f"the ladder, e.g. {offenders}; every unit carries exactly one "
++            "reason, so a second one means the two stages saw different data"
++        )
++    prov["failure_reason"] = have.where(have.notna(), mapped)
++    return prov
++
++
++def coverage_table(prov, *, dv01, ladder_excluded, dv01_fallback=None) -> pd.DataFrame:
+     """DV01 share by outcome: one row per reason plus :data:`IN_LADDER`.
+ 
+-    Three ways this accounting lies if it is written the obvious way, all
++    ``ladder_excluded`` is the second frame :func:`ladder.unit_ladder_rows`
++    returns and it is **required, with no default**. Absence of a reason is
++    read here as success, and two of the reasons are minted inside the ladder
++    rather than on the call, so a caller who never performs that join gets a
++    unit the ladder threw out reported ``IN_LADDER`` at 100% coverage -- the
++    exact self-flattering failure this whole function exists to prevent, and
++    the one a reader would believe. An empty frame is the explicit statement
++    that the ladder excluded nothing; passing an already-merged one is a no-op.
++
++    Four ways this accounting lies if it is written the obvious way, all
+     guarded here:
+ 
++    0. **A ladder-stage exclusion never reaching ``failure_reason``**, above.
+     1. **A unit appearing twice.** Two rows for one unit inflate one reason and
+        the shares still sum to 1. Raised, not deduplicated -- a duplicate means
+        the caller's two halves disagree about what happened to that unit.
+@@ -277,10 +393,24 @@ def coverage_table(prov, *, dv01, dv01_fallback=None) -> pd.DataFrame:
+     ``n_fallback_dv01`` reports how much of each row's size came from the proxy,
+     because a reason whose share rests entirely on a model is a weaker claim
+     than one measured off repriced risk.
++
++    **:data:`IN_LADDER` is still a residual, and the caller owns the
++    population.** Once the ladder-stage join is made, everything that reached
++    the ladder is accounted for -- :func:`ladder.unit_ladder_rows` raises on
++    each of the three ways its own inputs can disagree, so its two frames are a
++    partition of the units it was given. What this function cannot see is a
++    unit that never reached the ladder *and* carries no reason: it has nothing
++    to compare against, and reports it as a success. Build ``prov`` from the
++    same unit population the ladder ran on.
+     """
+     cols = ["reason", "n_units", "dv01", "dv01_share", "n_fallback_dv01"]
+     prov = pd.DataFrame(prov)
+     if prov.empty:
++        # an empty population with a non-empty exclusion list is the join
++        # failing, not an empty day; merge_ladder_exclusions says so
++        merge_ladder_exclusions(pd.DataFrame(columns=["unit_key",
++                                                      "failure_reason"]),
++                                ladder_excluded)
+         return pd.DataFrame(columns=cols)
+ 
+     dup = prov["unit_key"].duplicated()
+@@ -292,6 +422,10 @@ def coverage_table(prov, *, dv01, dv01_fallback=None) -> pd.DataFrame:
+             "carries exactly one reason, never both and never two"
+         )
+ 
++    # after the duplicate check, so the join is never asked to reconcile a
++    # population that already contradicts itself
++    prov = merge_ladder_exclusions(prov, ladder_excluded)
++
+     dv01 = pd.Series(dv01, dtype="float64")
+     fallback = (pd.Series(dtype="float64") if dv01_fallback is None
+                 else pd.Series(dv01_fallback, dtype="float64"))
+@@ -340,5 +474,6 @@ def coverage_table(prov, *, dv01, dv01_fallback=None) -> pd.DataFrame:
+ __all__ = [
+     "IN_LADDER", "VINTAGE_SOURCES", "annuity_dv01_proxy",
+     "annuity_dv01_proxy_from_dates", "build", "code_vintage",
+-    "coverage_table", "to_frame", "vintage_components",
++    "coverage_table", "merge_ladder_exclusions", "to_frame",
++    "vintage_components",
+ ]
+diff --git a/tests/test_dealer_direction_ladder.py b/tests/test_dealer_direction_ladder.py
+index dbf48861..fbc29a8b 100644
+--- a/tests/test_dealer_direction_ladder.py
++++ b/tests/test_dealer_direction_ladder.py
+@@ -106,6 +106,15 @@ def _krd(unit_key, *, bucket="5Y", value=1000.0, space="IRS_KRD") -> pd.DataFram
+     )
+ 
+ 
++def _no_ladder_exclusions() -> pd.DataFrame:
++    """The explicit statement that the ladder threw nothing out.
++
++    `coverage_table` has no default for this, because a caller who never makes
++    the statement gets the ladder's own exclusions read as successes.
++    """
++    return pd.DataFrame(columns=ladder.EXCLUSION_COLUMNS)
++
++
+ # ==========================================================================
+ # 1. ladder.py -- the weight is 2p-1, not p
+ # ==========================================================================
+@@ -250,6 +259,10 @@ def test_d2c_d2d_and_venue_unknown_are_three_series_not_two():
+     cust = ladder.customer_flow(agg)
+     assert list(cust["venue_class"].unique()) == [T.VENUE_D2C]
+     assert cust["delta_dv01"].sum() == pytest.approx(1000.0)
++    # ...and so is the recycling view, which is what health reads: swap the two
++    # and the classifier is validated against the population it produced
++    inter = ladder.interdealer_flow(agg)
++    assert list(inter["venue_class"].unique()) == [T.VENUE_D2D]
+ 
+ 
+ def test_lifecycle_prints_are_their_own_series():
+@@ -281,6 +294,35 @@ def test_the_aggregation_key_is_complete():
+     ]
+ 
+ 
++def test_the_gross_pond_is_not_recoverable_from_the_net():
++    """A net of zero over $40mm gross and a net of zero over nothing are
++    different statements about the day, and only the second one means the
++    ladder is empty. So `abs_dv01` sums `|dv01_if_received|`, never
++    `|delta_dv01|`, and `mean_abs_signed_weight` says how much of that pond
++    survived the confidence weighting.
++    """
++    units, calls = [_unit("A"), _unit("B")], [_call("A", 0.5), _call("B", 0.5)]
++    rows, _ = ladder.unit_ladder_rows(units, calls,
++                                      pd.concat([_krd("A"), _krd("B")]))
++    agg = ladder.aggregate(rows)
++    assert agg["delta_dv01"].iloc[0] == pytest.approx(0.0)
++    assert agg["abs_dv01"].iloc[0] == pytest.approx(2000.0)          # not 0.0
++    assert agg["mean_abs_signed_weight"].iloc[0] == pytest.approx(0.0)  # not 1.0
++
++
++def test_a_duplicated_ladder_key_is_refused_rather_than_summed():
++    """Two rows on one key means the aggregation key is incomplete, and the
++    cell a consumer reads is then the sum of two series it must never pool."""
++    cell = {"bucket_space": "IRS_KRD", "bucket_key": "5Y",
++            "visibility_date": datetime.date(2026, 6, 10),
++            "venue_class": T.VENUE_D2C, "series": ladder.SERIES_FLOW,
++            "delta_dv01": 100.0, "abs_dv01": 100.0, "n_units": 1,
++            "mean_abs_signed_weight": 1.0}
++    ladder.assert_series_disjoint(pd.DataFrame([cell]))
++    with pytest.raises(ValueError, match="duplicated ladder key"):
++        ladder.assert_series_disjoint(pd.DataFrame([cell, cell]))
++
++
+ def test_per_unit_rows_survive_the_aggregation():
+     """The consumer needs the cell; the auditor needs the print behind it."""
+     units = [_unit("A"), _unit("B")]
+@@ -374,6 +416,76 @@ def test_a_call_with_no_probability_and_no_reason_is_a_loud_error():
+         ladder.unit_ladder_rows([_unit("U")], [bad], _krd("U"))
+ 
+ 
++def test_a_unit_with_no_direction_call_is_a_hole_in_the_accounting():
++    """The complement of the above, and the reason every unit must carry a call.
++
++    A unit skipped here reaches neither returned frame, so it is not in the
++    ladder and not in any reason's DV01 share either -- and the coverage table
++    still sums to 1 over what is left.
++    """
++    with pytest.raises(ValueError, match="no direction call"):
++        ladder.unit_ladder_rows([_unit("A"), _unit("B")], [_call("A", 0.9)],
++                                pd.concat([_krd("A"), _krd("B")]))
++
++
++def test_a_risk_row_for_a_unit_that_is_not_in_the_population_is_loud():
++    """The reverse lookup nothing performs.
++
++    The loop runs over `units` and reads the risk frame, so a risk row whose
++    unit is not in the population is read by nobody -- it lands in neither
++    `rows` nor `excluded`, and the pair stops being a partition for exactly the
++    class of row that carries unattributed DV01.
++    """
++    ghost = pd.concat([_krd("A"), _krd("GHOST", value=9_000_000.0)])
++    with pytest.raises(ValueError, match=r"not in `units`"):
++        ladder.unit_ladder_rows([_unit("A")], [_call("A", 0.9)], ghost)
++
++
++def test_the_same_unit_passed_twice_is_loud_rather_than_double_counted():
++    """`n_units` is a nunique, so it reports 1 while carrying two units' risk.
++
++    The one column a reader would check to spot the duplication is the column
++    that conceals it, which is why this is refused where the duplication is
++    still visible rather than caught in the aggregate.
++    """
++    with pytest.raises(ValueError, match="appears twice"):
++        ladder.unit_ladder_rows([_unit("A"), _unit("A")],
++                                [_call("A", 0.9)], _krd("A"))
++
++
++def test_the_weight_guard_is_live_on_both_calls_it_names():
++    """`_assert_weight_agrees_with_side` is the module's central sign guard.
++
++    The `_call` fixture derives `signed_weight` and `dealer_sign` from `p`
++    consistently, so nothing else in this file can construct the two producer
++    errors it exists to catch -- and both are silent downstream, because the
++    ladder only ever reads the weight.
++    """
++    p_as_weight = T.DirectionCall(
++        unit_key="U", rule=conv.RULE_RATE, deviation_bps=1.6, p=0.9,
++        signed_weight=0.9, dealer_sign=1)          # 2p-1 would be 0.8
++    with pytest.raises(ValueError, match="is not 2p-1"):
++        ladder.unit_ladder_rows([_unit("U")], [p_as_weight], _krd("U"))
++
++    flipped_side = T.DirectionCall(
++        unit_key="U", rule=conv.RULE_RATE, deviation_bps=1.6, p=0.9,
++        signed_weight=0.8, dealer_sign=-1)         # p > 0.5 is dealer_sign +1
++    with pytest.raises(ValueError, match="disagree on the side"):
++        ladder.unit_ladder_rows([_unit("U")], [flipped_side], _krd("U"))
++
++
++def test_orienting_a_unit_with_no_call_is_refused_rather_than_zeroed():
++    """`dealer_sign = 0` is not a side. Multiplying by it is silent: the unit
++    keeps its row, its risk becomes 0.0, and it disappears into the ladder as a
++    cell that contributed nothing rather than as a unit with no call."""
++    no_call = pd.DataFrame(
++        [{"unit_key": "U", "bucket_space": "IRS_KRD", "bucket_key": "5Y",
++          "delta_dv01": -1000.0, "dealer_sign": 0}]
++    )
++    with pytest.raises(ValueError, match="dealer_sign=0"):
++        ladder.orient_to_received(no_call)
++
++
+ def test_dead_zone_units_are_kept_by_default_and_droppable_on_request():
+     """DESIGN 1.3: `2p-1` already makes a marginal call contribute ~nothing.
+ 
+@@ -417,6 +529,12 @@ def test_a_mid_biased_off_venue_scores_zero_not_one():
+     matched-sign hit rate goes UP as the mid degrades -- the monitor would
+     read healthiest exactly when the ladder is worthless. Correcting for the
+     marginals is what makes the statistic read the classifier instead.
++
++    **Two cases, because the limit does not reach the arithmetic.** With every
++    print one way `chance` is 1 and `_kappa` short-circuits, so that half pins
++    the degenerate flag and nothing else -- a `_kappa` that returned the raw
++    hit rate would still pass it. The second case is the same failure short of
++    the limit, 95/5 on both populations, and it goes through the formula.
+     """
+     n = 200
+     d2c = _series([1.0] * n)                          # everything one way
+@@ -427,6 +545,47 @@ def test_a_mid_biased_off_venue_scores_zero_not_one():
+     assert res.degenerate is True
+     assert res.status == health.ALARM
+ 
++    rng = np.random.default_rng(29)
++    m = 4000
++    x = np.where(rng.random(m) < 0.95, 1.0, -1.0)
++    y = np.where(rng.random(m) < 0.95, 1.0, -1.0)      # independent of x
++    near = health.d2d_recycling_kappa(_series(x), _series(np.r_[0.0, y[:-1]]),
++                                      horizon_days=1, n_bootstrap=0)
++    assert near.hit_rate > 0.85                        # chance alone
++    assert abs(near.kappa) < 0.10                      # and no skill in it
++    assert near.degenerate is False
++
++
++def test_a_one_sided_classifier_alarms_even_with_no_placebo():
++    """One degenerate marginal is the F-20 state, and it does NOT make chance 1.
++
++    `chance = px*py + (1-px)(1-py)`, so `px=1` against a balanced `py=0.5`
++    gives 0.5 -- a flag conditioned on `chance == 1` only ever fires when both
++    series are one-sided the same way. Kappa is exactly 0 either way, but 0.0
++    alone only clears the 0.10 warn floor: on a series short enough that the
++    placebo cannot be built there is no alarm level left, so a classifier that
++    called every single day the same way reported WARN.
++    """
++    rng = np.random.default_rng(5)
++    n = 40
++    x = np.ones(n)                                     # every day the same call
++    y = np.where(rng.random(n) < 0.5, 1.0, -1.0)
++    res = health.d2d_recycling_kappa(_series(x), _series(np.r_[0.0, y[:-1]]),
++                                     horizon_days=1, n_bootstrap=0,
++                                     placebo_shift_days=20, min_pairs=10)
++    assert res.placebo_kappa_p95 is None               # no alarm level exists
++    assert res.chance_rate < 1.0                       # ...and chance is not 1
++    assert res.kappa == pytest.approx(0.0)
++    assert res.degenerate is True
++    assert res.status == health.ALARM
++
++
++def test_a_horizon_longer_than_the_history_is_no_data_not_a_crash():
++    """A monitor loop that starts on two days of history must report NO_DATA."""
++    res = health.d2d_recycling_kappa(_series([1.0, -1.0]), _series([1.0, -1.0]),
++                                     horizon_days=10, n_bootstrap=0)
++    assert res.status == health.NO_DATA
++
+ 
+ def test_a_78_22_split_on_both_sides_is_not_skill():
+     """The softer version of the same failure: matched but independent marginals."""
+@@ -511,6 +670,24 @@ def test_a_halving_against_its_own_reference_alarms_before_the_link_is_gone():
+     assert last["status"] == health.ALARM
+ 
+ 
++def test_the_rolling_monitor_reports_no_data_rather_than_a_missing_column():
++    """A history shorter than one window closes no window at all.
++
++    Both empty paths have to return the documented frame: the no-data one did,
++    and this one returned a single `reference_kappa` column, so a monitor loop
++    starting on a short history died on `out["kappa"]` instead of reading an
++    empty series.
++    """
++    rng = np.random.default_rng(3)
++    signs = np.where(rng.random(30) < 0.5, 1.0, -1.0)
++    out = health.rolling_recycling_kappa(_series(signs),
++                                         _series(np.r_[0.0, signs[:-1]]),
++                                         window_days=90)
++    assert len(out) == 0
++    assert list(out.columns) == health.ROLLING_KAPPA_COLUMNS
++    assert list(out["kappa"]) == []
++
++
+ def test_the_bootstrap_keeps_blocks_because_flow_is_autocorrelated():
+     rng = np.random.default_rng(17)
+     signs = np.where(rng.random(300) < 0.5, 1.0, -1.0)
+@@ -551,9 +728,23 @@ def test_the_dead_zone_alarm_is_two_sided():
+     many = [_call(f"U{i}", 0.9, dead_zone=True) for i in range(100)]
+     assert health.dead_zone_fraction(many).status == health.ALARM
+ 
++    # ...and with a reference supplied, the absolute limit is still enforced on
++    # top of the band: 0.70 sits inside the 2x warn band around a 0.40
++    # reference, and past 60% the ladder is mostly zeros however good the mid is
++    mostly = [_call(f"U{i}", 0.9, dead_zone=(i < 70)) for i in range(100)]
++    m = health.dead_zone_fraction(mostly, reference=0.40)
++    assert m.value == pytest.approx(0.70)
++    assert m.threshold.evaluate(m.value) == health.OK  # the band alone clears it
++    assert m.status == health.ALARM                    # the absolute limit does not
++
+ 
+ def test_imputed_notional_fraction_is_weighted_as_well_as_counted():
+-    """F-7: 3.0% of legs are capped but 15.4% of the DV01 is imputed."""
++    """F-7: 3.0% of legs are capped but 15.4% of the DV01 is imputed.
++
++    Two separate escalations, so the weighted one has to be reachable when the
++    count is clean -- which is the case that matters, since the whole point of
++    F-7 is that the two numbers are five times apart.
++    """
+     prov = pd.DataFrame({
+         "unit_key": ["A", "B", "C", "D"],
+         "notional_imputed": [True, False, False, False],
+@@ -562,7 +753,38 @@ def test_imputed_notional_fraction_is_weighted_as_well_as_counted():
+         [700.0, 100.0, 100.0, 100.0], index=["A", "B", "C", "D"]))
+     assert m.value == pytest.approx(0.25)
+     assert m.detail["dv01_share"] == pytest.approx(0.70)
+-    assert m.status == health.ALARM                    # 70% of DV01 imputed
++    assert m.status == health.ALARM                    # the count alone, here
++
++    # 1 unit in 20 imputed -- below the 6% count warn -- carrying 35% of the
++    # DV01, which is above the 30% alarm. Only the weighted branch can fire.
++    keys = [f"U{i}" for i in range(20)]
++    lopsided = pd.DataFrame({"unit_key": keys,
++                             "notional_imputed": [True] + [False] * 19})
++    w = pd.Series([700.0] + [1300.0 / 19] * 19, index=keys)
++    m = health.imputed_notional_fraction(lopsided, weights=w)
++    assert m.value == pytest.approx(0.05)
++    assert m.threshold.evaluate(m.value) == health.OK  # the count is clean
++    assert m.detail["dv01_share"] == pytest.approx(0.35)
++    assert m.status == health.ALARM                    # the DV01 is not
++
++
++def test_a_renamed_imputed_flag_column_is_loud_not_no_data():
++    """`prov.get(col, default)` is the convenient spelling and the wrong one.
++
++    Renamed, the unweighted path reported a clean 0.00 forever and the weighted
++    path raised `IndexError: Boolean index has wrong length: 0 instead of 4`.
++    """
++    prov = pd.DataFrame({"unit_key": list("ABCD"),
++                         "notional_imputed_flag": [True, False, False, False]})
++    with pytest.raises(ValueError, match="notional_imputed"):
++        health.imputed_notional_fraction(prov)
++    with pytest.raises(ValueError, match="notional_imputed"):
++        health.imputed_notional_fraction(
++            prov, weights=pd.Series([700.0, 100.0, 100.0, 100.0],
++                                    index=list("ABCD")))
++    # an empty frame is still NO_DATA, not an error -- there is no column to
++    # be wrong about
++    assert health.imputed_notional_fraction(pd.DataFrame()).status == health.NO_DATA
+ 
+ 
+ def test_the_overnight_hole_is_read_off_the_policy_that_fired():
+@@ -582,6 +804,12 @@ def test_the_overnight_hole_is_read_off_the_policy_that_fired():
+     assert m.status == health.ALARM
+     assert health.is_overnight_hole(hole) and not health.is_overnight_hole(in_sess)
+ 
++    # ...and the hole population's own staleness is measured against the 2h
++    # bound, which is the bound and not the expectation
++    lag = {x.name: x for x in health.snapshot_lag_metrics(prov)}
++    assert lag["overnight_hole_lag_p90_seconds"].value == pytest.approx(4200.0)
++    assert lag["overnight_hole_lag_p90_seconds"].status == health.WARN
++
+ 
+ def test_a_unit_that_never_priced_is_not_an_overnight_hole():
+     """The natural call is on the WHOLE provenance frame, failures included.
+@@ -621,6 +849,42 @@ def test_a_unit_that_never_priced_is_not_an_overnight_hole():
+     assert dist.loc["IN_SESSION", "n"] == 2
+ 
+ 
++def test_a_bounded_future_allowing_policy_is_not_the_strict_in_session_branch():
++    """A 60s window CENTRED on the print is not the 60s window BEFORE it.
++
++    A `max_lag`-only reading passed `allow_future=True` as long as it carried a
++    bound, so the guard could not fire for the property behind the 1.09% of
++    legs the shipped default serves from the future -- a curve that contains
++    the print the direction call is reading.
++
++    `method` is deliberately not in the test: `select_snapshot` rejects a
++    future pick outright under `allow_future=False` rather than falling back,
++    so a row actually served under `nearest` came from a backward stamp inside
++    the bound and IS the strict outcome.
++    """
++    assert health.is_overnight_hole(
++        "method=asof max_lag=60s allow_future=True on_miss=raise") is True
++    assert health.is_overnight_hole(
++        "method=nearest max_lag=unbounded allow_future=True on_miss=none") is True
++    assert health.is_overnight_hole(
++        "method=asof max_lag=60s allow_future=False on_miss=raise") is False
++    assert health.is_overnight_hole(
++        "method=nearest max_lag=60s allow_future=False on_miss=raise") is False
++
++
++def test_an_in_session_row_staler_than_its_own_policy_is_a_halt():
++    """A row that is in-session by policy and staler than the 60s bound means
++    the snapshot did not come from the branch the provenance says it did: 60s
++    admits 0.21bp of 5Y drift at p90, 30 minutes admits 1.07bp."""
++    in_sess = "method=asof max_lag=60s allow_future=False on_miss=raise"
++    prov = pd.DataFrame({"unit_key": ["A", "B"],
++                         "snapshot_policy": [in_sess] * 2,
++                         "snapshot_lag_seconds": [10.0, 900.0]})
++    metrics = {m.name: m for m in health.snapshot_lag_metrics(prov)}
++    assert metrics["in_session_lag_over_policy"].value == 1
++    assert metrics["in_session_lag_over_policy"].status == health.ALARM
++
++
+ def test_a_curve_from_the_future_is_an_immediate_alarm():
+     """A curve served after the print contains the print. That is circular."""
+     prov = pd.DataFrame({
+@@ -693,11 +957,59 @@ def test_a_priced_basis_leg_is_the_alarm_not_the_success():
+     assert out.loc["BASIS", "status"] == health.ALARM
+ 
+ 
++def test_a_renamed_index_column_cannot_silently_disable_the_basis_alarm():
++    """The BASIS row is an INVERTED alarm, so its silence looks like health.
++
++    `legs.get(col, default)` made the stratum empty, empty reports NO_DATA, and
++    a renamed column therefore disabled the one alarm here that fires on
++    success -- permanently, on a frame in which nothing looks wrong. CAPPED
++    goes the same way for the same spelling.
++    """
++    as_of = datetime.date(2026, 6, 10)
++    legs = pd.DataFrame({
++        "as_of_date": [as_of] * 2, "effective_date": [as_of] * 2,
++        "is_capped_flag": [False] * 2,             # was is_capped
++        "index_name": ["BASIS", "BASIS"],          # was rate_index
++        "priced": [True, True],
++    })
++    with pytest.raises(ValueError, match="is_capped"):
++        health.pricing_success_by_stratum(legs)
++
++    with pytest.raises(ValueError, match="rate_index_clean"):
++        health.pricing_success_by_stratum(legs.rename(
++            columns={"is_capped_flag": "is_capped"}))
++
++
++def test_the_health_report_puts_the_alarm_first():
++    """A single ALARM must not be lost in a long OK list, which is the failure
++    mode of every monitoring table that sorts by name."""
++    thr = health.Threshold(name="t", direction="above", warn=1, alarm=2,
++                           rationale="x" * 50, action="y")
++    metrics = [health.Metric("a", 0, 1, thr, health.OK),
++               health.Metric("b", 0, 1, thr, health.OK),
++               health.Metric("c", 9, 1, thr, health.ALARM),
++               health.Metric("d", 0, 1, thr, health.WARN)]
++    out = health.health_report(metrics)
++    assert list(out["status"]) == [health.ALARM, health.WARN,
++                                   health.OK, health.OK]
++    assert out["metric"].iloc[0] == "c"
++
++
+ def test_the_health_report_names_flattening_as_the_response():
+     doc = (health.__doc__ or "").lower()
+     assert "flatten" in doc
+ 
+ 
++def test_the_overnight_rationale_cites_the_measured_truncated_day_count():
++    """The thresholds carry their derivation into the report, so the numbers in
++    them are read by whoever the alarm wakes up. 161 truncated-end SOFR days
++    and 141 Fed Funds days are what the minute-curve fidelity audit measured;
++    128 is not a number that appears in any of it.
++    """
++    r = health._overnight_threshold().rationale
++    assert "161" in r and "128" not in r
++
++
+ # ==========================================================================
+ # 8. provenance.py -- the audit trail and the extended vintage
+ # ==========================================================================
+@@ -768,6 +1080,45 @@ def test_a_failed_unit_gets_a_provenance_row_too():
+     assert p.curve_name in ("", None) or isinstance(p.curve_name, str)
+ 
+ 
++class _RenamedPricing:
++    """A `UnitPricing` after an interface rename. Everything priced fine."""
++
++    unit_key = "U"
++    curve_name = "USD-SOFR-1D"
++    curve_timestamp = pd.Timestamp("2026-06-10T13:59:00Z")
++    lag_seconds = 41.0                       # was snapshot_lag_seconds
++    policy = "method=asof max_lag=60s allow_future=False on_miss=raise"
++
++
++def test_a_renamed_pricing_field_raises_instead_of_reporting_never_priced():
++    """The never-priced sentinels exist for `pricing is None` and nothing else.
++
++    Written by a `getattr` default they turn an interface rename into a
++    monitoring blackout that reports clean: every row of a *successful* run
++    gets `snapshot_policy=""`, `health.served_mask` reads that field and says
++    UNSERVED for all of them, `overnight_hole_fraction` goes NO_DATA, and the
++    day looks like one with no curve problems. Nothing raises. This is the
++    `_require` doctrine attacked from the value side.
++    """
++    with pytest.raises(ValueError, match="snapshot_policy"):
++        provenance.build(_unit("U"), _RenamedPricing(), _call("U", 0.9),
++                         pricing_clock_field="execution_timestamp")
++
++
++def test_a_priced_unit_with_no_recorded_policy_is_loud():
++    """`""` is this function's own never-priced marker, so a producer writing
++    it on a priced unit hides a served row inside the failure population."""
++    priced = T.UnitPricing(
++        unit_key="U", curve_name="USD-SOFR-1D",
++        curve_timestamp=_ny(2026, 6, 10, 9, 59),
++        snapshot_lag_seconds=41.0, snapshot_policy="",
++        leg_mid_pct=[3.94], leg_pv01=[4500.0], structure_dv01=4500.0,
++    )
++    with pytest.raises(ValueError, match="no snapshot policy"):
++        provenance.build(_unit("U"), priced, _call("U", 0.9),
++                         pricing_clock_field="execution_timestamp")
++
++
+ # ==========================================================================
+ # 9. provenance.py -- the coverage accounting, and it must sum
+ # ==========================================================================
+@@ -780,7 +1131,8 @@ def test_every_unit_is_in_the_ladder_or_carries_exactly_one_reason():
+     ]
+     prov = pd.DataFrame(rows)
+     dv01 = pd.Series({"A": 6000.0, "B": 3000.0, "C": 1000.0})
+-    table = provenance.coverage_table(prov, dv01=dv01)
++    table = provenance.coverage_table(prov, dv01=dv01,
++                                      ladder_excluded=_no_ladder_exclusions())
+ 
+     assert table["dv01_share"].sum() == pytest.approx(1.0)
+     assert table["n_units"].sum() == 3
+@@ -796,7 +1148,8 @@ def test_a_unit_counted_twice_breaks_the_accounting_loudly():
+         {"unit_key": "A", "failure_reason": T.EXCL_NO_CURVE},
+     ])
+     with pytest.raises(ValueError, match="more than one"):
+-        provenance.coverage_table(prov, dv01=pd.Series({"A": 1.0}))
++        provenance.coverage_table(prov, dv01=pd.Series({"A": 1.0}),
++                                  ladder_excluded=_no_ladder_exclusions())
+ 
+ 
+ def test_a_unit_with_no_size_cannot_be_counted_as_a_zero_share():
+@@ -809,12 +1162,14 @@ def test_a_unit_with_no_size_cannot_be_counted_as_a_zero_share():
+         {"unit_key": "B", "failure_reason": T.EXCL_PRICING_ERROR},
+     ])
+     with pytest.raises(ValueError, match="no DV01"):
+-        provenance.coverage_table(prov, dv01=pd.Series({"A": 1000.0}))
++        provenance.coverage_table(prov, dv01=pd.Series({"A": 1000.0}),
++                                  ladder_excluded=_no_ladder_exclusions())
+ 
+     # ...and the fallback is a size that exists for a unit that never priced
+     table = provenance.coverage_table(
+         prov, dv01=pd.Series({"A": 1000.0}),
+         dv01_fallback=pd.Series({"A": 900.0, "B": 1000.0}),
++        ladder_excluded=_no_ladder_exclusions(),
+     )
+     assert table["dv01_share"].sum() == pytest.approx(1.0)
+     src = table.set_index("reason")["n_fallback_dv01"]
+@@ -839,17 +1194,63 @@ def test_the_annuity_proxy_is_the_fallback_size_and_not_a_tenor_times_1e4():
+     assert fwd5x5 < 0.7 * naive10
+ 
+ 
+-def test_the_coverage_table_and_the_ladder_exclusions_join_up():
++def test_a_unit_the_ladder_threw_out_is_not_reported_in_ladder():
+     """The written note is built from this table, so the two halves have to be
+-    the same population."""
+-    units = [_unit("A"), _unit("B")]
+-    calls = [_call("A", 0.9), _call("B", None, exclusion=T.EXCL_UNORIENTABLE)]
+-    rows, excluded = ladder.unit_ladder_rows(units, calls, _krd("A"))
+-
+-    prov = pd.concat([
+-        pd.DataFrame({"unit_key": rows["unit_key"].unique(), "failure_reason": None}),
+-        excluded[["unit_key", "failure_reason"]],
+-    ], ignore_index=True)
+-    table = provenance.coverage_table(prov, dv01=pd.Series({"A": 100.0, "B": 100.0}))
++    the same population -- and `build` alone cannot make them one.
++
++    `build` sees `call.exclusion`. `EXCL_PRICING_ERROR` and `EXCL_DEAD_ZONE`
++    are minted *inside* `unit_ladder_rows`, after the record exists, and live
++    only in its second return value. A null reason is read here as IN_LADDER,
++    so without the join a unit the ladder threw out is reported in the ladder
++    at 100% coverage: absence of a reason taken as success. Which is why
++    `ladder_excluded` has no default.
++    """
++    units = [_unit("A"), _unit("B"), _unit("C")]
++    calls = [_call("A", 0.9), _call("B", 0.9),
++             _call("C", None, exclusion=T.EXCL_UNORIENTABLE)]
++    rows, excluded = ladder.unit_ladder_rows(units, calls, _krd("A"))  # B: no risk
++    assert set(zip(excluded["unit_key"], excluded["failure_reason"])) == {
++        ("B", T.EXCL_PRICING_ERROR), ("C", T.EXCL_UNORIENTABLE)}
++
++    # the population as `build` writes it: only C's reason is visible at all
++    prov = provenance.to_frame([
++        provenance.build(u, None, c, pricing_clock_field="event_timestamp")
++        for u, c in zip(units, calls)])
++    assert list(prov["failure_reason"]) == [None, None, T.EXCL_UNORIENTABLE]
++
++    table = provenance.coverage_table(
++        prov, dv01=pd.Series({"A": 100.0, "B": 100.0, "C": 100.0}),
++        ladder_excluded=excluded).set_index("reason")
+     assert table["dv01_share"].sum() == pytest.approx(1.0)
+-    assert set(table["reason"]) == {provenance.IN_LADDER, T.EXCL_UNORIENTABLE}
++    assert table.loc[provenance.IN_LADDER, "dv01_share"] == pytest.approx(1 / 3)
++    assert table.loc[T.EXCL_PRICING_ERROR, "dv01_share"] == pytest.approx(1 / 3)
++    assert table.loc[T.EXCL_UNORIENTABLE, "dv01_share"] == pytest.approx(1 / 3)
++
++
++def test_coverage_cannot_be_computed_without_the_ladder_exclusions():
++    """No default, because the defect is a caller who never made the join."""
++    prov = pd.DataFrame([{"unit_key": "A", "failure_reason": None}])
++    with pytest.raises(TypeError):
++        provenance.coverage_table(prov, dv01=pd.Series({"A": 1.0}))
++
++
++def test_the_two_halves_of_the_join_are_reconciled_not_overwritten():
++    """Re-applying the same reason is a no-op, so the join is idempotent; a
++    second, different reason means the two stages saw different data, and a
++    ladder exclusion for a unit outside the population means they are different
++    populations. Neither is silently resolved."""
++    prov = pd.DataFrame([{"unit_key": "A", "failure_reason": T.EXCL_NO_CURVE}])
++    dv01 = pd.Series({"A": 1.0})
++
++    same = pd.DataFrame([{"unit_key": "A", "failure_reason": T.EXCL_NO_CURVE}])
++    out = provenance.coverage_table(prov, dv01=dv01, ladder_excluded=same)
++    assert list(out["reason"]) == [T.EXCL_NO_CURVE]
++
++    other = pd.DataFrame([{"unit_key": "A", "failure_reason": T.EXCL_DEAD_ZONE}])
++    with pytest.raises(ValueError, match="disagree"):
++        provenance.coverage_table(prov, dv01=dv01, ladder_excluded=other)
++
++    stray = pd.DataFrame([{"unit_key": "GHOST",
++                           "failure_reason": T.EXCL_DEAD_ZONE}])
++    with pytest.raises(ValueError, match="not in the coverage population"):
++        provenance.coverage_table(prov, dv01=dv01, ladder_excluded=stray)
