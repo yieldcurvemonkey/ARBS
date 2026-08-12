@@ -168,3 +168,81 @@ def test_cost_deviation_changes_the_charge_not_the_signal():
     eb = [r for r in b.log if r["event"] == "ENTER"]
     assert [r["fly_id"] for r in ea] == [r["fly_id"] for r in eb]      # same trades
     assert all(x["rt_cost_bp"] > y["rt_cost_bp"] for x, y in zip(ea, eb))  # different cost
+
+
+# ------------------------------------------- the two defects that voided a run
+def test_the_full_round_trip_is_charged_because_the_exit_is_the_only_hook():
+    """`fly_tcost_bp` is one-way, `rt = 2 x` it, and the unwind is the ONLY fee hook.
+
+    Charging `rt/2` at the exit on the reasoning that entry pays the other half means the entry
+    half is never charged: `GSSEntryAction` emits no fee. The run that reported +$431k had paid
+    $2.82m of a $5.64m true round trip.
+    """
+    import inspect
+
+    import BT.gss_fly.strategy as strat
+
+    src = inspect.getsource(strat.GSSSignalEngine.__call__)
+    assert '"fee_bp": pos.rt_cost_bp,' in src, "the exit must charge the whole round trip"
+    assert "rt_cost_bp / 2" not in src
+
+    # and there is still exactly one fee hook, so a future entry-side fee would double-charge
+    entry_src = inspect.getsource(strat.GSSEntryAction)
+    assert "fee" not in entry_src
+
+
+def test_bpv_carries_the_signal_direction_so_the_fly_is_not_reversed():
+    """`_build_fly` re-signs the package from sign(bpv), overriding the signal if bpv is unsigned.
+
+        risk_weights[1] = copysign(risk_weights[1], bpv)
+        risk_weights[i] = copysign(risk_weights[i], -risk_weights[1])
+
+    With a constant +belly_bpv the belly is forced LONG on every trade. Measured on the first
+    full run: 15 of 35 flies were put on backwards.
+    """
+    import numpy as np
+
+    from BT.gss_fly.config import GSSConfig
+    from BT.gss_fly.flies import FlyState
+    from BT.gss_fly.strategy import GSSEntryAction
+
+    cfg = GSSConfig()
+    act = GSSEntryAction(cfg=cfg)
+
+    def _bpv_for(weights):
+        st = FlyState(fly_id="a/b/c", legs=["a", "b", "c"], weights=list(weights),
+                      ttms=[5.0, 10.0, 30.0], z=1.0, d_abs_z=-0.1, std_bp=1.0,
+                      zsig_bp=5.0, fly_yield_bp=0.0, fly_s2c=0.0)
+        orders = act(now=None, backtest=None,
+                     info={"entries": [{"tag": "t1", "state": st, "rt_cost_bp": 1.0}]})
+        return orders[0].query.structure_kwargs["bpv"]
+
+    long_belly = _bpv_for([-0.8, 1.0, -0.2])
+    short_belly = _bpv_for([0.8, -1.0, 0.2])
+
+    assert long_belly > 0, "a long-belly fly must carry a positive bpv"
+    assert short_belly < 0, "a short-belly fly must carry a NEGATIVE bpv or it is built backwards"
+    assert abs(long_belly) == abs(short_belly) == cfg.backtest.belly_bpv
+
+
+def test_the_reversal_would_actually_happen_without_the_sign():
+    """Guard on the guard: reproduce `_build_fly`'s copysign and show an unsigned bpv reverses.
+
+    Without this the test above proves only that a number is negative, not that the negative
+    number was needed.
+    """
+    import numpy as np
+
+    def build(risk_weights, bpv):
+        w = list(risk_weights)
+        w[1] = float(np.copysign(w[1], bpv))
+        for i in (0, 2):
+            w[i] = float(np.copysign(w[i], -w[1]))
+        return w
+
+    signal_says_short_belly = [0.8, -1.0, 0.2]
+    unsigned = build(signal_says_short_belly, +100_000.0)
+    signed = build(signal_says_short_belly, -100_000.0)
+
+    assert unsigned[1] > 0, "unsigned bpv flips the belly LONG — the reversal"
+    assert signed[1] < 0 and signed[0] > 0 and signed[2] > 0, "signed bpv preserves the direction"

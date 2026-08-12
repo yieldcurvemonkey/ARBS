@@ -135,7 +135,13 @@ class GSSSignalEngine:
                         "tag": tag,
                         "fly_id": pos.fly_id,
                         "reason": "zsig_below_repo" if decayed else "z_rollover",
-                        "fee_bp": pos.rt_cost_bp / 2.0,
+                        # The FULL round trip, not half of it. The unwind is the engine's ONLY
+                        # fee hook (`GSSEntryAction` carries none), so charging `rt/2` here on the
+                        # reasoning that entry pays the other half means the entry half is never
+                        # charged at all. Measured: 34 trades paid $2.82m against a true round-trip
+                        # cost of $5.64m, which is the difference between a book that made +$431k
+                        # and one that lost about $2.4m.
+                        "fee_bp": pos.rt_cost_bp,
                         "zsig_bp": st.zsig_bp,
                         "z": st.z,
                     }
@@ -256,7 +262,17 @@ class GSSEntryAction:
                 cusip="/".join(st.legs),
                 structure_kwargs={
                     "risk_weights": list(st.weights),
-                    "bpv": self.cfg.backtest.belly_bpv,
+                    # SIGNED. `FixedRateBondStructure._build_fly` re-signs the whole package from
+                    # the sign of `bpv`:
+                    #     risk_weights[1] = copysign(risk_weights[1], bpv)
+                    #     risk_weights[i] = copysign(risk_weights[i], -risk_weights[1])
+                    # (FixedRateBondStructure.py:228-231). Passing an unsigned +belly_bpv therefore
+                    # forces the belly LONG on every trade and the wings short, discarding the
+                    # direction the signal chose. Measured on the first full run: 15 of 35 flies
+                    # were put on backwards, and the exit rule then marked them against the
+                    # signal's opposite weights. Carrying the sign on `bpv` makes the copysign
+                    # reproduce the intended direction instead of overriding it.
+                    "bpv": self.cfg.backtest.belly_bpv * (1.0 if st.weights[1] >= 0 else -1.0),
                 },
                 tags=(e["tag"],),
                 meta=q_meta,

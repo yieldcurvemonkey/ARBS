@@ -53,12 +53,26 @@ tests/gss_fly/, tests/xccy_rv/
 
 ## Landmines already paid for (do not re-learn)
 
-`DateTriggerRequirements` needs `.date()`; fee lands only at unwind; `QueryDrivenBacktest.run()`
-swallows per-step exceptions → assert non-zero marks, closed count, no equity holes; derive the bp
-normalisation analytically (`R = bpv/w_belly` for IRSwap FLY); `FixedRateBondStructure._build_fly`
-copysigns wings opposite the belly (GSS weights already have that shape, so they pass through);
-`_frb_structure_sign_mapper` is **identity** for FRB FLY and `calc_spread_rate` scales a 3-leg FRB
-package by **100** (→ bp) and `abs()`es the ytm (benign for USTs).
+`DateTriggerRequirements` needs `.date()`; `QueryDrivenBacktest.run()` swallows per-step exceptions
+→ assert non-zero marks, closed count, no equity holes; derive the bp normalisation analytically
+(`R = bpv/w_belly` for IRSwap FLY); `_frb_structure_sign_mapper` is **identity** for FRB FLY and
+`calc_spread_rate` scales a 3-leg FRB package by **100** (→ bp) and `abs()`es the ytm (benign for
+USTs).
+
+Three that were written down WRONG here and cost a whole run — corrected 2026-08-12:
+
+* **"fee lands only at unwind"** is true and was the trap, not the lesson. The unwind is the only
+  fee hook, so charging `rt/2` there because "entry pays the other half" charges **half a round
+  trip**. Charge the whole thing at the single hook.
+* **"`_build_fly` copysigns wings opposite the belly (GSS weights already have that shape, so they
+  pass through)"** — false. It re-signs the package from `sign(bpv)`
+  (`FixedRateBondStructure.py:228-231`), so an unsigned `+belly_bpv` forces the belly LONG on every
+  trade and discards the signal's direction. Weights "pass through" only when the belly weight is
+  positive, i.e. half the time. **15 of 35 flies were put on backwards.** `bpv` must carry the sign.
+* **The engine marks bonds at DIRTY NPV.** So `closed["realized_pnl"]` contains coupon accrual and
+  the matching coupon *cash* is booked separately via `on_mark`. The two are mirror images: netting
+  them turns +$7.9m and t=+1.47 into **−$368,673 and t=−0.20**, and five trades spanning all four
+  coupon dates were 105% of the headline. Never read a bond trade ledger without netting the cash.
 
 ## Data acquisition — measured 2026-08-12, after three panel builds were lost
 
