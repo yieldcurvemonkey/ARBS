@@ -821,6 +821,7 @@ def build_ois_curve_days(curve_name: str, args, logger: logging.Logger) -> int:
         logger.warning("%s: nothing fetched yet (%s)", curve_name, curve_dir)
         return 0
 
+    _assert_disk_headroom(store, getattr(args, "min_free_gb", DEFAULT_MIN_FREE_GB), logger)
     params = base.curve_params(curve_name)
     asset = asset_name(curve_name)
     tasks: List[tuple] = []
@@ -879,6 +880,42 @@ def _parquet_rows(path: Optional[str]) -> Optional[int]:
         return int(pq.ParquetFile(path).metadata.num_rows)
     except Exception:  # noqa: BLE001
         return None
+
+
+#: Stop building below this much free disk. The store writes temp-then-rename per
+#: day, so running out mid-run costs nothing already written - but it costs
+#: EVERY REMAINING DAY, one `OSError: [Errno 28]` at a time, and the run keeps
+#: going. Measured 2026-08-11: a EURIBOR build spent 1h37m failing every day
+#: after the disk filled, and the per-curve progress line still read
+#: `errors=0` because the failures were counted per day rather than surfaced.
+DEFAULT_MIN_FREE_GB = 3.0
+
+
+def _free_gb(path: Path) -> float:
+    import shutil
+
+    try:
+        return shutil.disk_usage(str(path)).free / (1024 ** 3)
+    except OSError:
+        return float("inf")
+
+
+def _assert_disk_headroom(store: Any, min_free_gb: float, logger: logging.Logger) -> None:
+    """Refuse to start a build that the disk cannot finish.
+
+    Checked before the pool starts rather than per day: a mid-run stop still
+    leaves the days already written, and the chain re-runs, so the only thing
+    lost is the time spent discovering it.
+    """
+    free = _free_gb(Path(getattr(store, "base_dir", Path.cwd())))
+    if free < min_free_gb:
+        raise RuntimeError(
+            f"only {free:.2f} GB free where the CurveStore lives; refusing to build "
+            f"under {min_free_gb:.1f} GB. Every day would fail with OSError 28 and the "
+            f"run would keep going. Free space, or point the store elsewhere with "
+            f"ARBS_CACHE_DIR."
+        )
+    logger.info("disk headroom: %.2f GB free (floor %.1f GB)", free, min_free_gb)
 
 
 def _already_dense(
@@ -976,6 +1013,7 @@ def build_ibor_curve_days(curve_name: str, args, logger: logging.Logger) -> int:
     if not curve_dir.exists():
         logger.warning("%s: nothing fetched yet (%s)", curve_name, curve_dir)
         return 0
+    _assert_disk_headroom(store, getattr(args, "min_free_gb", DEFAULT_MIN_FREE_GB), logger)
 
     tasks: List[tuple] = []
     for path in sorted(curve_dir.glob("*.parquet")):
@@ -1577,6 +1615,12 @@ def _build_parser() -> argparse.ArgumentParser:
     b = sub.add_parser("build", help="solve the fetched days into the CurveStore")
     b.add_argument("--workers", type=int, default=max(1, (os.cpu_count() or 4) - 2))
     b.add_argument("--force", action="store_true")
+    b.add_argument(
+        "--min-free-gb", type=float, default=DEFAULT_MIN_FREE_GB,
+        help="refuse to start a build with less free disk than this. Without it a "
+             "full disk produces one OSError 28 per day, forever, while the "
+             "progress line still says errors=0.",
+    )
     b.add_argument(
         "--include-short-tenors", action="store_true",
         help="calibrate IBOR curves on the sub-1Y PAR quotes too. OFF by default: "
