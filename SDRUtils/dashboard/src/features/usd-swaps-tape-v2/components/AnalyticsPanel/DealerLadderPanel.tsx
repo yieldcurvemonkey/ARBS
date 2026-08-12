@@ -481,7 +481,15 @@ function ZHeatmap({
       {TENOR_BUCKETS.map((b) => {
         const latest = today ? byCell.get(`${b}|${today}`) : undefined
         const latestZ = num(latest?.[zField])
-        const cov = num(latest?.coverage_frac)
+        const covRaw = num(latest?.coverage_frac)
+        // The SMOOTHED coverage, not the day's own. Which packages happened
+        // to print moves a bucket's coverage by more than 25% relative on
+        // between a quarter and two-thirds of days depending on the bucket,
+        // so a chip showing one day's fraction is mostly composition noise
+        // being read as information. Falls back to the raw fraction while
+        // the 63-observation smoother is still filling.
+        const covSmooth = num(latest?.coverage_smooth)
+        const cov = covSmooth ?? covRaw
         const drift = latest?.coverage_drift_flag === true
         return (
           <button
@@ -534,9 +542,16 @@ function ZHeatmap({
                 drift ? 'text-amber-300' : 'text-slate-600'
               }`}
               title={
-                drift
-                  ? 'this bucket\'s coverage DRIFTS — its level moves for measurement reasons that look like information. Read cov-adj.'
-                  : 'coverage fraction behind the latest cell'
+                (covSmooth != null
+                  ? `coverage, trailing 63-session mean: ${fmtPct(covSmooth, 1)}\n`
+                    + `latest session alone: ${fmtPct(covRaw, 1)}`
+                  : `coverage, latest session: ${fmtPct(covRaw, 1)} `
+                    + '(the 63-session smoother has not filled yet)') +
+                (drift
+                  ? '\n\nTHIS BUCKET\'S COVERAGE DRIFTS. Its level moves for '
+                    + 'measurement reasons that look exactly like information. '
+                    + 'Read the cov-adj basis, or read z.'
+                  : '')
               }
             >
               {fmtPct(cov, 0)}

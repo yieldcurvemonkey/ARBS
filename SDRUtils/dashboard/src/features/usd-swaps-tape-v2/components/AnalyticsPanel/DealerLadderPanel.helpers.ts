@@ -163,6 +163,10 @@ export type StandardisedRow = {
   n_units: number | string | null
   mean_abs_signed_weight: number | string | null
   coverage_frac: number | string | null
+  /** The trailing 63-session mean. What the adjusted basis divides by, and
+   *  what the panel shows, because the day's own fraction moves >25% on a
+   *  quarter to two-thirds of days and that is composition, not coverage. */
+  coverage_smooth: number | string | null
   coverage_drift_flag: boolean | null
   coverage_trend_pp_per_yr: number | string | null
   coverage_drift_source: string | null
