@@ -29,6 +29,7 @@ import pandas as pd  # noqa: E402
 logging.basicConfig(level=logging.ERROR, format="%(asctime)s %(levelname)s %(message)s")
 
 from BT.gss_fly import CostConfig, FlyConfig, GSSConfig, build_curve_panel, load_repo_from_workbook  # noqa: E402
+from BT.gss_fly.data import ust_business_days  # noqa: E402
 from BT.gss_fly.backtest import run_gss_backtest  # noqa: E402
 from MDP.FixedRateBonds.FixedRateBondsMDP import FixedRateBondsMDP  # noqa: E402
 
@@ -52,7 +53,9 @@ def main() -> int:
     args = ap.parse_args()
 
     mdp = FixedRateBondsMDP(source="USTS_FEDINVEST_WSJ_LIVE-QL")
-    days = [d.date() for d in pd.bdate_range(args.start, args.end)]
+    # NOT bdate_range: that includes market holidays, which the source never serves and the
+    # fetcher hangs on rather than refusing. One Labor Day stalled two separate warms.
+    days = ust_business_days(args.start, args.end)
     cache = Path(args.cache)
     print(f"PANEL: {len(days)} business days {args.start}..{args.end} -> {cache}", flush=True)
 

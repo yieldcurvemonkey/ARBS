@@ -60,6 +60,37 @@ copysigns wings opposite the belly (GSS weights already have that shape, so they
 `_frb_structure_sign_mapper` is **identity** for FRB FLY and `calc_spread_rate` scales a 3-leg FRB
 package by **100** (→ bp) and `abs()`es the ytm (benign for USTs).
 
+## Data acquisition — measured 2026-08-12, after three panel builds were lost
+
+The GSS panel is I/O-bound, not compute-bound: a serial build sat at **2% CPU** for 35 minutes
+holding one connection to `164.95.95.225:443` (Treasury). Four things were wrong, in the order they
+were found:
+
+1. **The cache was written only at the end.** Three builds were killed; none left a cached day
+   behind. Days are now written to `cache_path/days` as they complete.
+2. **An incomplete panel consolidated anyway** — and the consolidated file wins on read, so every
+   later run loaded the short panel and never retried the missing days. A transient stall became a
+   permanent hole, silently. Hence `consolidate="complete"|"never"|"always"`; a chunked warm must
+   pass `"never"` or chunk one bakes a two-day prefix as the whole range.
+3. **Threading was the wrong lever.** Measured **1.14×** on cold days, not the near-linear first
+   claimed — the MDP serialises internally. `workers` is retained and *is* verified bit-identical to
+   serial against the real source (s2c/ytm/ttm/rmse/reference all equal over 10 days, so the path is
+   thread-safe), but it is not the answer.
+4. **`get_bond_reference_data` bypasses the reference cache entirely**, calling `_fetch_fiscaldata`
+   directly. 350 HTTP round-trips for one static universe file. Per day: **1.62s fetched vs 0.002s
+   local (764×)**, and the reference was **92%** of the per-day cost. `fetch_cash_spline` makes the
+   same call before it fits, so the provider is bound onto the MDP for the build (scoped, restored
+   on exit) rather than only replacing the builder's own call.
+
+**The boundary rule was measured against 48 reference frames built by the fetched path**, which the
+day cache preserved. `issue_date <= as_of < maturity_date` reproduces all 48 exactly — membership
+and on-the-run rank. Neither boundary is `_filter_and_rank_ref_df`'s: its strict `issue_date <
+as_of` drops a bond on its issue day (2024-09-03: the 2Y/5Y/7Y/20Y settling that day, **181 ranks
+moved**), and its `maturity_date >= as_of` keeps a bond on the day it matures (3 dates, 7 bonds).
+Not cosmetic here — with `exclude_ranks=(0,)`, whether the new issue is present decides whether the
+*previous* on-the-run is rank 0 and dropped, or rank 1 and traded. Splines refit under the local
+provider match the cached ones to **3e-13 bp**.
+
 ## Status
 
 - [x] worktree, orientation, specs read from primary sources

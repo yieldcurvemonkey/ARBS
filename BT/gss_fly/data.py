@@ -34,6 +34,7 @@ logger = logging.getLogger(__name__)
 __all__ = [
     "CurvePanel",
     "build_curve_panel",
+    "ust_business_days",
     "apply_universe_filter",
     "fetch_curveset_snapshot",
     "warm_bond_snapshots",
@@ -45,6 +46,9 @@ __all__ = [
 #: The Citi bond values worth pulling for a curveset snapshot. ``PRICE`` is clean and ``DURATION``
 #: is modified — both established previously against Citi's own field dictionary.
 BOND_SNAPSHOT_VALUES = ("YIELD", "PRICE", "DURATION", "DV01", "ASW", "ZSPREAD")
+
+#: Dates that failed in this process. Not persisted — see the note at its use site.
+_FAILED_DAYS: set = set()
 
 
 @dataclass
@@ -83,6 +87,28 @@ class CurvePanel:
             f"CurvePanel {len(self.s2c)} dates {self.dates.min().date()}..{self.dates.max().date()}, "
             f"{self.s2c.shape[1]} bonds, median RMSE {self.rmse.median():.2f}bp"
         )
+
+
+def ust_business_days(start, end) -> List[datetime.date]:
+    """Trading days on the UST government-bond calendar.
+
+    ``pd.bdate_range`` gives weekdays, which includes market holidays. The source never serves a
+    holiday, so a panel asked for one retries it on every chunked call and, because the fetcher
+    hangs rather than 404s, one Labor Day is enough to stall an entire warm — observed, twice.
+    A holiday also never resolves, which under ``consolidate="complete"`` blocks the consolidated
+    cache forever.
+
+    Derive the day set from the calendar the market actually keeps, not from ``bdate_range``.
+    """
+    import QuantLib as ql
+
+    cal = ql.UnitedStates(ql.UnitedStates.GovernmentBond)
+    out: List[datetime.date] = []
+    for ts in pd.bdate_range(start, end):
+        d = ts.date()
+        if cal.isBusinessDay(ql.Date(d.day, d.month, d.year)):
+            out.append(d)
+    return out
 
 
 def _maturity_years(maturity_date, asof) -> float:
@@ -174,6 +200,19 @@ def build_curve_panel(
         if resumed:
             logger.info("resuming: %d of %d days already cached in %s", len(resumed), len(dates), day_dir)
 
+    # A date that already failed in THIS process is not retried. A chunked warm calls the builder
+    # on growing prefixes, so without this a single date the source will not serve is re-attempted
+    # on every chunk — and because the fetcher hangs rather than erroring, one such date stalls the
+    # whole warm. Scoped to the process, not persisted: a transient failure must still be retried
+    # by the next run, and a negative result written to disk is exactly the trap that consolidating
+    # a partial panel was.
+    if _FAILED_DAYS:
+        skip = [d for d in todo if d in _FAILED_DAYS]
+        if skip:
+            logger.info("skipping %d date(s) that already failed this run: %s", len(skip),
+                        ", ".join(str(d) for d in skip[:5]))
+        todo = [d for d in todo if d not in _FAILED_DAYS]
+
     # One universe read serves every date, so the per-date reference fetch disappears entirely --
     # both here and inside `fetch_cash_spline`, which makes the same call before it fits.
     reference_fn = None
@@ -202,6 +241,7 @@ def build_curve_panel(
 
         for d, fetched in results:
             if fetched is None:
+                _FAILED_DAYS.add(d)
                 continue
             frame, ref = fetched
             _absorb_day(pd.Timestamp(d), frame, ref, s2c_rows, ytm_rows, ttm_rows, rmse, ref_frames)
