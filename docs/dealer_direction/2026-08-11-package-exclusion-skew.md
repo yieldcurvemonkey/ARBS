@@ -24,6 +24,9 @@ package mid. Recovering that route alone would take retained DV01 from 56.96% to
 **79.12%** and halve the distortion (bucket-rate spread 26.65 → 16.73 pp;
 L1 4.15 → 2.08 pp).
 
+> **SUPERSEDED 2026-08-11 by measurement.** The 79.12% projection below assumed every price-bearing `PKG-4+` package could be oriented from its price. It cannot. Gating on the **margin to the next distinct sign class** — the statistic that actually separates hits from misses, where the tie-out does not — the recovery is **0.93 pp**, taking retention to **57.89%**, not 79.12%. **64.2% of `PKG-4+` DV01 is genuinely unidentifiable**: several mutually inconsistent sign vectors fit inside the same tolerance. Ambiguity is structural, rising from 61.45% at four legs to 97.25% at eight or more. Evidence: `scratch/ppfix_results.txt`, `scratch/ppfix_known_answer.py`. The cross-bucket distortion is therefore **not** halved.
+
+
 ---
 
 ## Scope, conventions, and how to trust this
@@ -409,7 +412,7 @@ impossibility — but it is a different and larger piece of work than (a), and
 
 | | now | after orienting `PKG-4+` with a package price |
 |---|---:|---:|
-| retained DV01 | 56.96% | **79.12%** |
+| retained DV01 | 56.96% | ~~79.12%~~ **57.89% measured** |
 | bucket exclusion-rate spread | 26.65 pp | **16.73 pp** |
 | L1 composition distance | 4.15 pp | **2.08 pp** |
 | worst bucket delta | +1.88 pp (0-1Y) | −1.24 pp (5-7Y) |

@@ -529,6 +529,9 @@ running it:
   cross-bucket distortion (spread 26.65 → 16.73 pp). That is the change that
   would make §3.1 shorter.
 
+> **SUPERSEDED 2026-08-11 by measurement.** The 79.12% projection below assumed every price-bearing `PKG-4+` package could be oriented from its price. It cannot. Gating on the **margin to the next distinct sign class** — the statistic that actually separates hits from misses, where the tie-out does not — the recovery is **0.93 pp**, taking retention to **57.89%**, not 79.12%. **64.2% of `PKG-4+` DV01 is genuinely unidentifiable**: several mutually inconsistent sign vectors fit inside the same tolerance. Ambiguity is structural, rising from 61.45% at four legs to 97.25% at eight or more. Evidence: `scratch/ppfix_results.txt`, `scratch/ppfix_known_answer.py`. The cross-bucket distortion is therefore **not** halved.
+
+
 ---
 
 ## Reproduction

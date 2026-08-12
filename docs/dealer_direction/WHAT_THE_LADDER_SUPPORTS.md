@@ -77,8 +77,48 @@ cannot orient are not a random sample. So:
 > **You may read "the 5y bucket against its own history."**
 > **You may not read "dealers are longer 5y than 10y."**
 
-The second is exactly what a positioning read wants to say, and it is not
-available at 57% retention. The recovery route below is what buys it back.
+The second is exactly what a positioning read wants to say, and it is **not
+available** — see §5b. The recovery route was attempted and returned 0.93 pp.
+
+**What *is* available cross-bucket is the z-score**, because `z` is *exactly*
+invariant to a constant retention factor. So "5y is unusually one-sided for 5y,
+and more unusually so than 10y is for 10y" is supportable; "dealers are longer
+5y than 10y" is not. That distinction is enforced in the API, not the docs.
+
+### §5b. The recovery route was tried and mostly failed — this is now settled
+
+Orienting a `PKG-N` against its own reported package price recovers **0.93 pp**
+of DV01, not the 22 pp first projected. Retention **56.96% → 57.89%**.
+
+The projection assumed that a package carrying a price could be oriented from
+it. Measured, it usually cannot: for **64.2% of PKG-4+ DV01**, several mutually
+inconsistent sign vectors reconcile the leg fees to the package price *inside
+the same tolerance*, so the orientation returned was the solver's lowest-mask
+tie-break rather than economics.
+
+The discriminating statistic is the **margin to the next distinct sign class**,
+and the evidence that it is the right one is a control:
+
+| identification margin | match rate |
+|---|---|
+| < 0.05 bp | **45.45%** (chance, for two legs) |
+| 0.05–0.25 bp | 68.18% |
+| 0.25–1 bp | 93.40% |
+| 1–5 bp | 97.91% |
+| 5 bp+ | 99.17% |
+
+against match rate by **tie-out** band, which is flat at 95.65 / 88.54 / 97.75 /
+96.92 / 98.02%. The tie-out — what the module originally gated on — does not
+separate hits from misses. On the known-answer population the same split shows
+CURVE at **98.34% identified vs 66.23% ambiguous** and FLY at **100.00% vs
+83.76%**.
+
+Ambiguity is structural, not a threshold choice: **61.45% at four legs rising to
+97.25% at eight or more.** Adding legs adds sign vectors faster than the single
+package price can constrain them.
+
+**Consequence: the cross-sectional limit above stands.** It is not a temporary
+gap pending engineering.
 
 **The 1–2Y bucket's level is contaminated.** Its exclusion rate drifts at
 **+5.07 pp/yr (t = +3.21)**, which moves the level for measurement reasons that
@@ -118,7 +158,7 @@ the reason the recovery route below is the top open item.
 
 | family | treatment | reason |
 |---|---|---|
-| `PKG-N`, N ≥ 4 | **excluded — recovery in flight** | no market quote convention fixes the base orientation, so forcing one manufactures a confident direction from nothing. But **100% of its DV01 carries a package price or spread**, and orienting the *package* rather than its legs takes retention **56.96% → 79.12%** with the cross-bucket distortion halved (spread 26.65 → 16.73 pp). This is what converts a caveated indicator into a clean one. |
+| `PKG-N`, N ≥ 4 | **mostly excluded, and this is now known to be structural** | no market quote convention fixes the base orientation. Orienting the *package* against its reported price was tried and **recovers only 0.93 pp** — retention 56.96% → **57.89%**. The remaining **64.2% of PKG-4+ DV01 is genuinely unidentifiable**: several mutually inconsistent sign vectors reconcile the fees to the package price inside the same tolerance, so any answer is the solver's tie-break rather than economics. Ambiguity rises with leg count — 61.45% at four legs, 97.25% at eight or more. See §5b. |
 | MAC / IMM standard coupons | | off-market *by construction* rather than by negotiation, so they pollute the off-market population |
 | `NEWT-EXER` | | prints at the **strike**, arbitrarily far from mid, with no upfront — so an upfront-presence test calls it on-market and the rate rule returns a large, confident, meaningless deviation (~374/week) |
 | `NEWT-NOVA` | | a dealer-to-dealer transfer that would otherwise count as customer flow (~435/week) |
