@@ -17,6 +17,7 @@ The fake source counts its own calls, so "did not refetch" is measured rather th
 from __future__ import annotations
 
 import datetime
+import time
 
 import numpy as np
 import pandas as pd
@@ -187,6 +188,55 @@ def test_consolidate_always_bakes_a_panel_with_real_gaps(tmp_path, dates):
     assert (cache / "s2c.parquet").exists()
     served = build_curve_panel(dates, _FakeMDP(dates), cache_path=cache, show_progress=False)
     assert len(served.s2c) == 5
+
+
+class _JitteredMDP(_FakeMDP):
+    """Finishes days out of order, so a builder that absorbed by completion order would differ.
+
+    Without this the parallel-equals-serial test is worthless: if every day took the same time the
+    pool would happen to complete them in order and the test would pass for a builder that has no
+    ordering guarantee at all.
+    """
+
+    def fetch_cash_spline(self, d):
+        i = self._order[d]
+        # later days return fastest, so completion order is close to reversed
+        time.sleep(0.02 * (len(self._order) - i))
+        return super().fetch_cash_spline(d)
+
+
+def test_parallel_fetch_equals_serial(tmp_path, dates):
+    serial = build_curve_panel(dates, _JitteredMDP(dates), cache_path=tmp_path / "s", show_progress=False)
+    par = build_curve_panel(dates, _JitteredMDP(dates), cache_path=tmp_path / "p",
+                            show_progress=False, workers=4)
+
+    pd.testing.assert_frame_equal(par.s2c, serial.s2c)
+    pd.testing.assert_frame_equal(par.ytm, serial.ytm)
+    pd.testing.assert_frame_equal(par.ttm, serial.ttm)
+    pd.testing.assert_series_equal(par.rmse, serial.rmse)
+    # row-for-row, in the same order — not merely the same set
+    pd.testing.assert_frame_equal(par.reference, serial.reference)
+
+
+def test_the_jitter_actually_reorders_completions():
+    """Guard on the guard: prove the pool really does finish these days out of order."""
+    from concurrent.futures import ThreadPoolExecutor
+
+    ds = [d.date() for d in pd.bdate_range("2025-01-02", periods=8)]
+    mdp = _JitteredMDP(ds)
+    done: list = []
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        list(pool.map(lambda d: (mdp.fetch_cash_spline(d), done.append(d)), ds))
+    assert done != ds, "days completed in submission order — the ordering test proves nothing"
+
+
+def test_parallel_fetch_still_skips_cached_days(tmp_path, dates):
+    cache = tmp_path / "panel"
+    build_curve_panel(dates, _FakeMDP(dates, fail_from=5), cache_path=cache,
+                      show_progress=False, workers=4)
+    mdp = _FakeMDP(dates)
+    build_curve_panel(dates, mdp, cache_path=cache, show_progress=False, workers=4)
+    assert sorted(mdp.spline_calls) == sorted(dates[5:])
 
 
 def test_consolidated_cache_short_circuits_the_day_scan(tmp_path, dates):

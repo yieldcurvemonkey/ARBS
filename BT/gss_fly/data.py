@@ -96,6 +96,7 @@ def build_curve_panel(
     cache_path: Optional[Path] = None,
     show_progress: bool = True,
     consolidate: str = "complete",
+    workers: int = 1,
 ) -> CurvePanel:
     """Fit the cash spline on every date and assemble the dates × bonds panels.
 
@@ -124,6 +125,13 @@ def build_curve_panel(
       range. That is the same defect as above, arrived at from the other direction.
     * ``"always"`` — bake the panel including its gaps, for a range whose missing dates are known to
       be real rather than transient.
+
+    ``workers > 1`` fetches days on a thread pool. This is worth doing because the work is not
+    compute: a serial build sits at ~2% CPU holding a single connection to the Treasury host, so the
+    hour is one remote server answering one request at a time. Days are absorbed in **date order**
+    regardless of completion order, so the panel is identical to a serial build — a property worth
+    stating because the reference frame is a concatenation and would otherwise inherit whichever
+    day happened to finish first.
     """
     if consolidate not in ("complete", "never", "always"):
         raise ValueError(f"consolidate must be complete|never|always, got {consolidate!r}")
@@ -162,47 +170,24 @@ def build_curve_panel(
         if resumed:
             logger.info("resuming: %d of %d days already cached in %s", len(resumed), len(dates), day_dir)
 
-    iterator = todo
-    if show_progress:
-        try:
-            import tqdm
+    if workers > 1 and todo:
+        results = _fetch_days_concurrently(todo, mdp, workers, show_progress)
+    else:
+        iterator = todo
+        if show_progress:
+            try:
+                import tqdm
 
-            iterator = tqdm.tqdm(todo, desc="GSS curve panel", unit="day")
-        except ImportError:
-            pass
+                iterator = tqdm.tqdm(todo, desc="GSS curve panel", unit="day")
+            except ImportError:
+                pass
+        results = ((d, _fetch_day(d, mdp)) for d in iterator)
 
-    for d in iterator:
-        ts = pd.Timestamp(d)
-        try:
-            spline = mdp.fetch_cash_spline(d)
-        except Exception as exc:  # noqa: BLE001 — logged, not hidden
-            logger.warning("spline failed on %s: %s: %s", d, type(exc).__name__, exc)
+    for d, fetched in results:
+        if fetched is None:
             continue
-        if spline is None or spline.yield_errors is None or spline.yield_errors.empty:
-            logger.warning("spline empty on %s", d)
-            continue
-
-        frame = spline.to_frame().reset_index()
-        if "cusip" not in frame.columns:
-            frame = frame.rename(columns={frame.columns[0]: "cusip"})
-        frame = frame.copy()
-        frame["rmse"] = float(spline.rmse) if spline.rmse is not None else np.nan
-
-        try:
-            ref = mdp.get_bond_reference_data(as_of_date=d)
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("reference data failed on %s: %s", d, exc)
-            continue
-        ref = ref.copy()
-        ref["date"] = ts
-        if "maturity_date" in ref.columns:
-            ref["maturity"] = ref["maturity_date"].map(lambda m: _maturity_years(m, d))
-        if "issue_date" in ref.columns:
-            ref["seasoning_days"] = ref["issue_date"].map(
-                lambda i: (pd.Timestamp(d) - pd.Timestamp(i)).days if pd.notna(i) else np.nan
-            )
-
-        _absorb_day(ts, frame, ref, s2c_rows, ytm_rows, ttm_rows, rmse, ref_frames)
+        frame, ref = fetched
+        _absorb_day(pd.Timestamp(d), frame, ref, s2c_rows, ytm_rows, ttm_rows, rmse, ref_frames)
         if day_dir is not None:
             _save_day(day_dir, d, frame, ref)
 
@@ -233,6 +218,76 @@ def build_curve_panel(
         else:
             _save_panel(panel, cache_path)
     return panel
+
+
+def _fetch_day(d: datetime.date, mdp):
+    """Fetch one day's spline and reference frame. ``None`` if either leg fails.
+
+    Both fetches for a date live here so the threaded and serial paths run *identical* code — the
+    only difference between them is which thread calls this function.
+    """
+    ts = pd.Timestamp(d)
+    try:
+        spline = mdp.fetch_cash_spline(d)
+    except Exception as exc:  # noqa: BLE001 — logged, not hidden
+        logger.warning("spline failed on %s: %s: %s", d, type(exc).__name__, exc)
+        return None
+    if spline is None or spline.yield_errors is None or spline.yield_errors.empty:
+        logger.warning("spline empty on %s", d)
+        return None
+
+    frame = spline.to_frame().reset_index()
+    if "cusip" not in frame.columns:
+        frame = frame.rename(columns={frame.columns[0]: "cusip"})
+    frame = frame.copy()
+    frame["rmse"] = float(spline.rmse) if spline.rmse is not None else np.nan
+
+    try:
+        ref = mdp.get_bond_reference_data(as_of_date=d)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("reference data failed on %s: %s", d, exc)
+        return None
+    ref = ref.copy()
+    ref["date"] = ts
+    if "maturity_date" in ref.columns:
+        ref["maturity"] = ref["maturity_date"].map(lambda m: _maturity_years(m, d))
+    if "issue_date" in ref.columns:
+        ref["seasoning_days"] = ref["issue_date"].map(
+            lambda i: (pd.Timestamp(d) - pd.Timestamp(i)).days if pd.notna(i) else np.nan
+        )
+    return frame, ref
+
+
+def _fetch_days_concurrently(todo, mdp, workers: int, show_progress: bool):
+    """Fetch days on a thread pool, yielding them **in date order**.
+
+    Acquisition here is not compute — a serial build sits at ~2% CPU with a single open connection
+    to the Treasury host, so the wall clock is almost entirely one remote server's response time and
+    threads buy close to linear speedup. The GIL is not in the way of that.
+
+    Yielding in input order is what keeps the result identical to the serial build: the panel's
+    reference frame is a concatenation, so completion order would otherwise leak into the output.
+    ``executor.map`` preserves input order regardless of which day finishes first.
+    """
+    from concurrent.futures import ThreadPoolExecutor
+
+    todo = list(todo)
+    bar = None
+    if show_progress:
+        try:
+            import tqdm
+
+            bar = tqdm.tqdm(total=len(todo), desc=f"GSS curve panel x{workers}", unit="day")
+        except ImportError:
+            pass
+
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        for d, fetched in zip(todo, pool.map(lambda x: _fetch_day(x, mdp), todo)):
+            if bar is not None:
+                bar.update(1)
+            yield d, fetched
+    if bar is not None:
+        bar.close()
 
 
 def _absorb_day(

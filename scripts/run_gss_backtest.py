@@ -47,6 +47,8 @@ def main() -> int:
     ap.add_argument("--cache", default="notebooks/data/gss_fly/panel_cached")
     ap.add_argument("--repo-workbook", default=r"C:/Users/chris/Downloads/gc_repo_hist_example.xlsx")
     ap.add_argument("--panel-only", action="store_true")
+    ap.add_argument("--workers", type=int, default=6,
+                    help="concurrent day fetches; the work is remote I/O, not compute")
     args = ap.parse_args()
 
     mdp = FixedRateBondsMDP(source="USTS_FEDINVEST_WSJ_LIVE-QL")
@@ -63,11 +65,11 @@ def main() -> int:
         # panel. Each call re-reads the day cache and fetches only what is missing; that re-read is
         # cheap next to the fetches it avoids.
         panel = build_curve_panel(days[:chunk_end], mdp, cache_path=cache, show_progress=False,
-                                  consolidate="never")
+                                  consolidate="never", workers=args.workers)
         print(f"PANEL: {chunk_end}/{len(days)} days  ({time.time() - t0:.0f}s)  {panel.summary()}", flush=True)
 
     # One final full-range pass, this time allowed to consolidate if every date resolved.
-    panel = build_curve_panel(days, mdp, cache_path=cache, show_progress=False)
+    panel = build_curve_panel(days, mdp, cache_path=cache, show_progress=False, workers=args.workers)
     if panel is None:
         print("PANEL: nothing built", flush=True)
         return 1
