@@ -129,6 +129,36 @@ provider match the cached ones to **3e-13 bp**.
 - [x] `BT/xccy_rv` — 20 tests **including the archive tie-out**
 - [x] notebook (`notebooks/rv/gss_fly_rv.ipynb`), warm runbook, tests
 
+## Deflated Sharpe 0.177 — there is no config to pick
+
+Over **1,164 configurations** (sweep still extending), with **900 effective independent trials**:
+
+| | |
+|---|---|
+| best per-period Sharpe | +0.1409  (+2.24 annualised) |
+| **SR₀ — the bar the search itself sets** | **+0.1733  (+2.75 annualised)** |
+| **DSR** | **0.177** (needs > 0.95) |
+
+**The best configuration does not even reach the Sharpe expected from the best of that many
+zero-skill strategies.** It is *below* the selection bar, not marginally above it.
+
+This supersedes an earlier note here that the Sharpe spread was smaller than 2 SE — that was
+computed on 36 configs and the spread has since widened to 2.75 annualised. The deflated Sharpe
+handles it properly: with 900 effective trials, noise alone produces a maximum of 2.75 and the
+search achieved 2.24.
+
+The **77% effective-independence** is itself a finding. A parameter grid normally collapses toward
+a few independent bets; this one behaves like ~900 distinct experiments, corroborating the
+decision-space result from the other side — these are genuinely different books, not one book in
+costume. That *raises* the bar the winner must clear, which is why the search fails so cleanly.
+
+**Cost, corrected.** With ≥ 8 trades, m\* median **0.40**, and **130 of 1,019 configs (13%) reach
+m\* ≥ 1** — they do cover their charged spread. So "cost-dead everywhere", said earlier on three
+variants, was too absolute. But those same configs are what the DSR rejects as selection artifacts,
+so both findings agree: a minority of the space clears costs and none of it is defensible.
+
+Integrity: reconciliation gap median and p95 both **0.00** on post-fix rows.
+
 ## The SELECTION is chaotic; the signal is not — measured 2026-08-12
 
 > **Retraction.** An earlier version of this section concluded "the signal reads the interpolator"
