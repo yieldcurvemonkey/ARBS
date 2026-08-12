@@ -219,10 +219,37 @@ fits, i.e. a couple of hours of mixture MLEs.
 
 That would have taken back the whole point of splitting `price` from
 `publish`. `build_calibrations` now caches to
-`D:\ddfe_cache\calibrations\<key>.pkl`, keyed on the **day list, the fit
-parameters and the deviation count** — not the window bounds, so a day
-re-priced after a code change keeps its place in the list, changes the count,
-and misses the cache. That is the direction this particular error has to fall.
-`--refresh-calibration` forces a refit.
+`D:\ddfe_cache\calibrations\<key>.pkl`.
+
+**The key is a hash of the deviation values, not their count.** A count is a
+weak checksum in the wrong direction: a re-price that changes what the
+deviations *are* without changing how many there are — a curve fix, a
+snapshot-policy change, exactly the class of edit that motivates a re-price —
+would hit a stale cache and publish a calibration fitted to numbers that no
+longer exist, with nothing anywhere to say so. `--refresh-calibration` forces
+a refit.
+
+**And the cost, measured rather than inferred** (`ddfe08_calib_cost.py`):
+
+| | |
+|---|---|
+| one `Calibration.fit`, 60-day window, 59,520 deviations | **42.1 s** |
+| buckets fitted | **550** (287 leaf `BucketKey`s + pooled parents), 77 ms each |
+| leaf buckets clearing `MIN_BUCKET_N = 800` | 17, holding 41,628 of 59,520 rows |
+| smoke window, 22 rolling fits | **15 min** uncontended |
+| **full tape, ~121 rolling fits** | **~85 min** uncontended |
+
+The 45+ minutes the first full run spent was contention: eight pricing workers
+against a single-threaded MLE loop. The full-window calibration is therefore
+run **after** `price` finishes, not beside it.
+
+### D6. Chrome verification used `chrome-devtools`, not `claude-in-chrome`
+
+`claude-in-chrome` found two connected browsers and requires the user to
+choose one before any action. The user is away for the duration of this task,
+so that could not be answered. `mcp__chrome-devtools__*` drives the same
+browser without the ambiguity and produced the screenshots. One constraint
+worth recording: it will only write files under `C:\Users\chris\clee\ARBS`, so
+screenshots are saved there and copied into the worktree.
 
 
