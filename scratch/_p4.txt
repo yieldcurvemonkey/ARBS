@@ -1,0 +1,14 @@
+........................................................................ [ 85%]
+............                                                             [100%]
+============================== warnings summary ===============================
+Query\IRSwaps\IRSwapStructure.py:12
+  C:\Users\chris\clee\ARBS-dd\Query\IRSwaps\IRSwapStructure.py:12: LicenceNotice: 
+  Rateslib is source-available (not open-source) software distributed under a dual-licence model.
+  No commercial licence is registered for this installation. Use is therefore permitted for non-commercial purposes only (at-home or university based academic use).
+  Any use in commercial, professional, or for-profit environments, including evaluation or trial use, requires a valid commercial licence or an approved evaluation licence.
+  Certain features may require a registered commercial or evaluation licence in current or future versions.
+  For licensing information or to register a licence, please visit: https://rateslib.com/licence
+    from rateslib.scheduling import get_imm, next_imm
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+84 passed, 1 warning in 9.90s

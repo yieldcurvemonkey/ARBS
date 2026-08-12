@@ -1,0 +1,168 @@
+C:\Users\chris\clee\ARBS-dd\Query\IRSwaps\IRSwapStructure.py:12: LicenceNotice: 
+Rateslib is source-available (not open-source) software distributed under a dual-licence model.
+No commercial licence is registered for this installation. Use is therefore permitted for non-commercial purposes only (at-home or university based academic use).
+Any use in commercial, professional, or for-profit environments, including evaluation or trial use, requires a valid commercial licence or an approved evaluation licence.
+Certain features may require a registered commercial or evaluation licence in current or future versions.
+For licensing information or to register a licence, please visit: https://rateslib.com/licence
+  from rateslib.scheduling import get_imm, next_imm
+tape 2026-06-01 .. 2026-06-30
+  2026-06-01..2026-06-30    96,814 legs
+
+====================================================================================
+UNITS
+====================================================================================
+  units                  57,972
+  kept                   44,651  (77.02%)
+  excluded               13,321
+  notional-sentinel units (DV01 proxy forced to 0)      0
+  DV01 proxy total   3,321,231,750
+  DV01 proxy kept    1,959,363,769  (59.00%)
+  days                       21   units/day min 2,333 · median 2,639 · max 3,861
+  kept/day         median 2,067  (77.2%)
+
+====================================================================================
+EXCLUSIONS -- units, legs, and DV01 share of the whole universe
+====================================================================================
+                                                n_units  n_legs    dv01_proxy  dv01_share_pct
+reason                                                                                       
+UNORIENTABLE_PKG / SPREADOVER                      3601    3601  1.619984e+08        4.877661
+UNORIENTABLE_PKG / PKG-4                            639    2556  1.203345e+08        3.623188
+UNORIENTABLE_PKG / MATCHED_MATURITY                2712    2712  1.122283e+08        3.379116
+UNORIENTABLE_PKG / INVOICE                          766     766  6.624691e+07        1.994649
+UNORIENTABLE_PKG / PKG-6                            243    1458  6.095325e+07        1.835260
+UNORIENTABLE_PKG / SPREADOVER_FLY                   346    1038  5.473455e+07        1.648020
+UNORIENTABLE_PKG / SPREADOVER_CURVE                 515    1030  4.703174e+07        1.416093
+UNSUPPORTED_INDEX / BASIS                           531     584  4.127384e+07        1.242727
+UNORIENTABLE_PKG / PKG-8                            148    1184  3.637605e+07        1.095258
+UNORIENTABLE_PKG / PKG-5                            228    1140  3.452385e+07        1.039489
+UNORIENTABLE_PKG / PKG-12                            63     756  2.948991e+07        0.887921
+PRICING_ERROR / NOTIONAL_SCHEDULE_NOT_CONSTANT      840     846  2.639410e+07        0.794708
+UNORIENTABLE_PKG / PKG-9                             64     576  2.443431e+07        0.735700
+UNORIENTABLE_PKG / PKG-14                            34     476  2.154879e+07        0.648819
+UNORIENTABLE_PKG / PKG-28                            16     448  2.141461e+07        0.644779
+UNORIENTABLE_PKG / PKG-16                            30     480  1.942043e+07        0.584736
+UNORIENTABLE_PKG / PKG-10                            59     590  1.938044e+07        0.583532
+UNORIENTABLE_PKG / MATCHED_MATURITY_CURVE           148     296  1.897258e+07        0.571251
+UNORIENTABLE_PKG / PKG-31                            13     403  1.839244e+07        0.553784
+UNORIENTABLE_PKG / PKG-24                            14     336  1.762834e+07        0.530777
+UNSUPPORTED_INDEX / CME_TERM_SOFR                  1261    1261  1.751733e+07        0.527435
+UNORIENTABLE_PKG / PKG-38                             5     190  1.647923e+07        0.496178
+UNORIENTABLE_PKG / PKG-21                            17     357  1.628648e+07        0.490375
+UNORIENTABLE_PKG / PKG-20                            22     440  1.546903e+07        0.465762
+UNORIENTABLE_PKG / PKG-32                            10     320  1.543600e+07        0.464767
+UNORIENTABLE_PKG / PKG-49                             3     147  1.480548e+07        0.445783
+UNORIENTABLE_PKG / PKG-11                            38     418  1.440615e+07        0.433759
+UNORIENTABLE_PKG / PKG-30                            10     300  1.283429e+07        0.386432
+UNORIENTABLE_PKG / PKG-18                            16     288  1.283077e+07        0.386326
+UNORIENTABLE_PKG / PKG-26                            15     390  1.276972e+07        0.384487
+RISK_IMPLAUSIBLE / RISK_VS_NOTIONAL_LOW             229     246  1.261367e+07        0.379789
+UNORIENTABLE_PKG / PKG-7                             72     504  1.198834e+07        0.360961
+UNORIENTABLE_PKG / PKG-25                            10     250  1.190635e+07        0.358492
+UNORIENTABLE_PKG / PKG-37                             4     148  1.165098e+07        0.350803
+UNORIENTABLE_PKG / INVOICE_SWITCH                    72     144  1.076482e+07        0.324121
+UNORIENTABLE_PKG / PKG-13                            28     364  1.055736e+07        0.317875
+UNORIENTABLE_PKG / PKG-19                            13     247  9.788264e+06        0.294718
+UNORIENTABLE_PKG / PKG-39                             3     117  9.038448e+06        0.272141
+UNORIENTABLE_PKG / PKG-34                             7     238  8.396742e+06        0.252820
+UNORIENTABLE_PKG / PKG-43                             3     129  8.158266e+06        0.245640
+UNORIENTABLE_PKG / PKG-29                             5     145  8.012958e+06        0.241265
+UNORIENTABLE_PKG / PKG-17                            15     255  7.986937e+06        0.240481
+UNORIENTABLE_PKG / PKG-113                            1     113  7.469916e+06        0.224914
+UNORIENTABLE_PKG / PKG-75                             2     150  7.332250e+06        0.220769
+UNORIENTABLE_PKG / PKG-46                             3     138  6.955498e+06        0.209425
+UNORIENTABLE_PKG / PKG-58                             5     290  6.922083e+06        0.208419
+UNORIENTABLE_PKG / PKG-54                             2     108  6.634959e+06        0.199774
+UNORIENTABLE_PKG / PKG-22                            11     242  6.259442e+06        0.188467
+UNORIENTABLE_PKG / PKG-51                             6     306  6.247893e+06        0.188120
+UNORIENTABLE_PKG / PKG-70                             3     210  5.804129e+06        0.174758
+UNORIENTABLE_PKG / PKG-100                            1     100  5.323596e+06        0.160290
+UNORIENTABLE_PKG / PKG-193                            1     193  5.066473e+06        0.152548
+UNORIENTABLE_PKG / PKG-169                            1     169  4.522540e+06        0.136171
+UNORIENTABLE_PKG / PKG-36                             5     180  4.402811e+06        0.132566
+UNORIENTABLE_PKG / PKG-84                             2     168  4.256142e+06        0.128149
+UNORIENTABLE_PKG / PKG-15                            16     240  4.096216e+06        0.123334
+UNORIENTABLE_PKG / PKG-52                             2     104  3.283492e+06        0.098864
+UNORIENTABLE_PKG / PKG-47                             2      94  3.064150e+06        0.092259
+UNORIENTABLE_PKG / PKG-69                             1      69  2.918572e+06        0.087876
+UNORIENTABLE_PKG / PKG-53                             3     159  2.825028e+06        0.085060
+UNORIENTABLE_PKG / PKG-78                             2     156  2.672148e+06        0.080457
+UNORIENTABLE_PKG / PKG-42                             5     210  2.612323e+06        0.078655
+UNORIENTABLE_PKG / PKG-27                             2      54  2.590346e+06        0.077994
+UNORIENTABLE_PKG / PKG-33                             5     165  2.529662e+06        0.076166
+UNORIENTABLE_PKG / PKG-64                             1      64  2.282062e+06        0.068711
+UNORIENTABLE_PKG / PKG-72                             4     288  2.249985e+06        0.067745
+UNSUPPORTED_INDEX / OTHER                           266     267  2.133449e+06        0.064237
+UNORIENTABLE_PKG / PKG-35                             5     175  2.047218e+06        0.061640
+UNORIENTABLE_PKG / PKG-55                             2     110  1.806326e+06        0.054387
+UNORIENTABLE_PKG / MATCHED_MATURITY_FLY               9      27  1.772974e+06        0.053383
+UNORIENTABLE_PKG / PKG-23                             3      69  1.722194e+06        0.051854
+UNORIENTABLE_PKG / PKG-73                             2     146  1.596735e+06        0.048077
+UNORIENTABLE_PKG / PKG-40                             2      80  1.560724e+06        0.046992
+UNORIENTABLE_PKG / PKG-57                             3     171  1.492238e+06        0.044930
+UNORIENTABLE_PKG / PKG-82                             2     164  1.399172e+06        0.042128
+UNORIENTABLE_PKG / PKG-68                             1      68  1.366172e+06        0.041135
+UNORIENTABLE_PKG / PKG-88                             3     264  1.313998e+06        0.039564
+UNORIENTABLE_PKG / PKG-89                             1      89  1.078517e+06        0.032473
+UNORIENTABLE_PKG / PKG-41                             2      82  1.051746e+06        0.031667
+UNORIENTABLE_PKG / PKG-83                             1      83  9.916854e+05        0.029859
+NOT_ECONOMIC_FLOW / ADMINISTRATIVE                   19      20  9.639731e+05        0.029025
+UNORIENTABLE_PKG / PKG-44                             4     176  9.568762e+05        0.028811
+UNORIENTABLE_PKG / PKG-66                             2     132  9.531136e+05        0.028698
+UNORIENTABLE_PKG / PKG-162                            1     162  8.623989e+05        0.025966
+UNORIENTABLE_PKG / PKG-99                             1      99  7.742836e+05        0.023313
+STANDARD_COUPON / MAC_NO_UPFRONT                     11      15  7.456959e+05        0.022452
+UNORIENTABLE_PKG / PKG-71                             1      71  6.455176e+05        0.019436
+UNORIENTABLE_PKG / PKG-101                            1     101  6.234502e+05        0.018772
+UNORIENTABLE_PKG / PKG-60                             1      60  4.924733e+05        0.014828
+UNORIENTABLE_PKG / PKG-81                             1      81  4.627604e+05        0.013933
+UNORIENTABLE_PKG / PKG-56                             2     112  4.355283e+05        0.013113
+UNORIENTABLE_PKG / PKG-103                            1     103  4.178122e+05        0.012580
+UNORIENTABLE_PKG / PKG-45                             2      90  4.128173e+05        0.012430
+UNORIENTABLE_PKG / PKG-48                             2      96  2.195405e+05        0.006610
+UNORIENTABLE_PKG / PKG-50                             3     150  2.191765e+05        0.006599
+UNORIENTABLE_PKG / PKG-59                             1      59  2.086311e+05        0.006282
+UNORIENTABLE_PKG / PKG-65                             2     130  1.831521e+05        0.005515
+UNORIENTABLE_PKG / PKG-77                             1      77  6.386625e+04        0.001923
+RISK_IMPLAUSIBLE / RISK_NULL                          2       2  5.062590e+04        0.001524
+UNORIENTABLE_PKG / PKG-61                             1      61  2.612360e+04        0.000787
+RISK_IMPLAUSIBLE / RATE_SENTINEL                      4       4  8.800962e+03        0.000265
+UNORIENTABLE_PKG / PKG-93                             1      93  6.260581e+03        0.000189
+UNORIENTABLE_PKG / PKG-87                             1      87  5.320287e+03        0.000160
+
+====================================================================================
+VENUE (kept units only; D2D is kept and tagged, never customer flow)
+====================================================================================
+               n_units  n_legs    dv01_proxy  n_lifecycle  n_with_upfront  dv01_share_pct
+venue_class                                                                              
+D2C              42013   56165  1.685621e+09         1525           13386       86.028993
+D2D               1545    3586  2.322490e+08           18               0       11.853285
+VENUE_UNKNOWN     1093    1143  4.149386e+07          154             173        2.117721
+
+====================================================================================
+STRUCTURE MIX (kept units)
+====================================================================================
+                     n_units  n_legs    dv01_proxy  n_with_upfront  n_lifecycle
+kind     rate_index                                                            
+OUTRIGHT SOFR          30565   30565  8.017436e+08            7497         1213
+CURVE    SOFR           7380   14760  4.878701e+08            3537          210
+FLY      SOFR           4032   12096  5.236666e+08            1906           31
+OUTRIGHT FED_FUNDS      1920    1920  7.097825e+07             383          126
+CURVE    FED_FUNDS       709    1418  6.709412e+07             217          114
+FLY      FED_FUNDS        45     135  8.011117e+06              19            3
+
+====================================================================================
+UPFRONT SOURCE (kept units) -- '(none)' is what routes to the rate rule
+====================================================================================
+                n_units    dv01_proxy
+upfront_source                       
+(none)            31092  1.248649e+09
+UFRO_SUM           7293  2.156298e+08
+PTP                6266  4.950852e+08
+
+====================================================================================
+LIFECYCLE (kept units) -- terminations are a separate series (D8)
+====================================================================================
+              n_units  n_legs    dv01_proxy  n_with_upfront
+is_lifecycle                                               
+False           42954   58805  1.858315e+09           13294
+True             1697    2089  1.010484e+08             265

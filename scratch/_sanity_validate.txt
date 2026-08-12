@@ -1,0 +1,76 @@
+C:\Users\chris\clee\ARBS-dd\Query\IRSwaps\IRSwapStructure.py:12: LicenceNotice: 
+Rateslib is source-available (not open-source) software distributed under a dual-licence model.
+No commercial licence is registered for this installation. Use is therefore permitted for non-commercial purposes only (at-home or university based academic use).
+Any use in commercial, professional, or for-profit environments, including evaluation or trial use, requires a valid commercial licence or an approved evaluation licence.
+Certain features may require a registered commercial or evaluation licence in current or future versions.
+For licensing information or to register a licence, please visit: https://rateslib.com/licence
+  from rateslib.scheduling import get_imm, next_imm
+========================================================================
+1. SYNTHETIC CASES (answer known before the predicate runs)
+========================================================================
+                 label     exp_dv01  ratio                        expected                             got   ok
+       clean 5y $100mm 4.531700e+04  1.000                                                                 True
+       clean 30y $50mm 8.735100e+04  1.001                                                                 True
+clean 20y5y fwd $100mm 2.036200e+04  1.002                                                                 True
+ tiny 3m $2mm risk=100 5.000000e+01  2.010                                                                 True
+   risk=0, sub-quantum 2.300000e+01  0.000                                                                 True
+         BILT sentinel 3.938644e+15  1.006 NOTIONAL_SENTINEL,RATE_SENTINEL NOTIONAL_SENTINEL,RATE_SENTINEL True
+         XXXX sentinel 2.580793e+16  1.004               NOTIONAL_SENTINEL               NOTIONAL_SENTINEL True
+      risk 10x too big 4.531700e+04  9.996           RISK_VS_NOTIONAL_HIGH           RISK_VS_NOTIONAL_HIGH True
+    risk 10x too small 4.531700e+04  0.099            RISK_VS_NOTIONAL_LOW            RISK_VS_NOTIONAL_LOW True
+   risk=0 but material 4.531700e+04  0.000              RISK_ZERO_MATERIAL              RISK_ZERO_MATERIAL True
+             risk NULL 4.531700e+04    NaN                       RISK_NULL                       RISK_NULL True
+         notional NULL          NaN    NaN                  INPUTS_MISSING                  INPUTS_MISSING True
+      30y5y fwd $500mm 6.824700e+04  0.982                                                                 True
+            40y $100mm 1.995260e+05  1.012                                                                 True
+
+========================================================================
+2. MUTATION TEST (break a clean row, the predicate must notice)
+========================================================================
+  risk *= 1e12         -> RISK_VS_NOTIONAL_HIGH                    OK
+  risk /= 1e3          -> RISK_VS_NOTIONAL_LOW                     OK
+  notional = 1e20      -> NOTIONAL_SENTINEL,RISK_VS_NOTIONAL_LOW   OK
+  fixed_rate = 9.9     -> RATE_SENTINEL                            OK
+  notional = 0         -> INPUTS_MISSING                           OK
+
+========================================================================
+3. SCALAR vs VECTORISED (one predicate, two call shapes)
+========================================================================
+  14/14 agree
+
+========================================================================
+4a. KNOWN-BROKEN: the 55 rows with notional = 1e20
+========================================================================
+  rows                     : 55
+  flagged implausible      : 55 (100.0%)
+  NOTIONAL_SENTINEL        : 55
+  RATE_SENTINEL            : 54
+  caught by RATIO test only: 0   <- the suggested ratio bound alone
+  median risk_ratio        : 1.0084   <- indistinguishable from 1.0
+  rows the tape's own quality_flags left empty: 2, of which this predicate flags 2
+
+========================================================================
+4b. KNOWN-GOOD: 50k random flow legs (false-positive rate)
+========================================================================
+  rows                : 50000
+  flagged implausible : 130 (0.260%)
+    RATE_SENTINEL            27
+    RISK_VS_NOTIONAL_LOW     101
+    INPUTS_MISSING           2
+  risk_ratio p1/p50/p99: 0.520 / 1.003 / 1.108
+
+========================================================================
+4c. KNOWN-GOOD, ADVERSARIAL: the populations the NAIVE bound gets wrong
+========================================================================
+  deep forward-start (fwd > 10y)   n= 20000  this predicate flags  0.000%  |  naive tenor*1e-4 bound flags 58.080%
+  long tenor (> 25y, spot)         n= 20000  this predicate flags  0.005%  |  naive tenor*1e-4 bound flags  1.890%
+  tiny prints (risk = 100)         n= 18392  this predicate flags  0.560%  |  naive tenor*1e-4 bound flags  6.813%
+
+========================================================================
+4d. HEAD TO HEAD on the 55 known-broken rows
+========================================================================
+  naive tenor*1e-4 bound catches : 0 / 55
+  this predicate catches         : 55 / 55
+
+========================================================================
+VALIDATION PASSED

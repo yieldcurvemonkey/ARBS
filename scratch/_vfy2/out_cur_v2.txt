@@ -1,0 +1,55 @@
+M00_noop                                     GREEN     306 passed
+M01_orientation_global_flip                  RED       33 failed / 273 passed
+M02_lifecycle_no_inversion                   RED       16 failed / 290 passed
+M03_classify_drops_tau_bias                  RED       1 failed / 305 passed
+M04_classify_drops_mid_bias                  RED       109 failed / 197 passed
+M05_residual_bps_drops_bias                  RED       1 failed / 305 passed
+M06_marginalise_no_lifecycle_flip            RED       11 failed / 295 passed
+M07_marginalise_ignores_bias                 RED       2 failed / 304 passed
+M08_marginalise_branch_swap                  RED       77 failed / 229 passed
+M09_fragile_flag_never_fires                 RED       20 failed / 286 passed
+M10_fragile_flag_always_fires                RED       2 failed / 304 passed
+M11_signed_weight_is_p                       RED       23 failed / 283 passed
+M12_tiny_upfront_never_flagged               RED       1 failed / 305 passed
+M13_capped_default_on                        RED       1 failed / 305 passed
+M14_uwin_not_preferred                       RED       2 failed / 304 passed
+M15_no_lifecycle_fallback_flag               RED       1 failed / 305 passed
+M16_disagree_flag_dropped                    RED       1 failed / 305 passed
+M17_tau_recomputed_ignoring_floor            RED       1 failed / 305 passed
+M18_tau_uses_reported_only                   RED       1 failed / 305 passed
+M19_no_population_guard                      RED       1 failed / 305 passed
+M20_degenerate_fit_accepted                  RED       1 failed / 305 passed
+M21_robust_tau_half_spread_zero              RED       1 failed / 305 passed
+M22_no_mid_sigma_flag_dropped                RED       1 failed / 305 passed
+M23_dealer_sign_from_dev_not_edge            RED       52 failed / 254 passed
+M24_no_upfront_returns_a_call                RED       1 failed / 305 passed
+M25_p_from_edge_uses_abs                     RED       3 failed / 303 passed
+M26_edge_from_dev_no_lifecycle               RED       30 failed / 276 passed
+M27_fragile_mult_zero                        RED       20 failed / 286 passed
+M28_zero_dv01_allowed                        RED       1 failed / 305 passed
+M29_upfront_sign_ignored                     GREEN     306 passed
+M30_dev_sign_flip                            RED       166 failed / 140 passed
+M31_marginalise_gets_negated_dev             RED       21 failed / 285 passed
+M32_orientation_zero_branch_gone             RED       4 failed / 302 passed
+M33_upfront_bps_not_scaled                   RED       35 failed / 271 passed
+M34_classify_orients_off_raw_npv             RED       43 failed / 263 passed
+M35_mid_bias_not_recorded                    RED       1 failed / 305 passed
+M36_fragile_tests_dev_only                   RED       7 failed / 299 passed
+M37_fragile_tests_z_only                     RED       2 failed / 304 passed
+M38_nan_npv_guard_removed                    RED       1 failed / 305 passed
+M39_negative_fee_allowed                     RED       1 failed / 305 passed
+M40_fee_list_not_sanitised                   RED       1 failed / 305 passed
+M41_quadrature_back_to_one_grid              RED       77 failed / 229 passed
+M42_panel_width_10_sigma                     RED       2 failed / 304 passed
+M43_gl_two_nodes                             RED       38 failed / 268 passed
+M44_saturation_cut_to_one                    RED       33 failed / 273 passed
+M45_tail_truncated_at_half_sigma             RED       83 failed / 223 passed
+M46_normal_mass_cancels                      GREEN     306 passed
+M47_marginalise_non_finite_guard_gone        RED       1 failed / 305 passed
+M48_marginalise_tau_guard_gone               RED       1 failed / 305 passed
+M49_saturated_wing_dropped                   RED       2 failed / 304 passed
+M50_mid_bias_finite_guard_gone               RED       1 failed / 305 passed
+M51_mid_sigma_finite_guard_gone              RED       1 failed / 305 passed
+
+GREEN (survivors): 3 ['M00_noop', 'M29_upfront_sign_ignored', 'M46_normal_mass_cancels']
+NOT-RUN: 0 []

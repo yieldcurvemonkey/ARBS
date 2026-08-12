@@ -1,0 +1,117 @@
+===== batch A: ddrev2_mut (m2-m23) =====
+m2_weight_guard_noop                       :: KILLED   (1 failed, 69 passed)
+      -> test_the_weight_guard_is_live_on_both_calls_it_names
+m3_orient_abs                              :: KILLED   (1 failed, 69 passed)
+      -> test_a_dealer_signed_krd_is_refused_rather_than_double_signed
+m4_weight_is_p                             :: KILLED   (8 failed, 62 passed)
+      -> test_a_coin_flip_contributes_nothing_to_the_ladder
+      -> test_the_ladder_contribution_is_linear_in_2p_minus_1[0.75-500.0]
+      -> test_the_ladder_contribution_is_linear_in_2p_minus_1[0.5-0.0]
+      -> test_the_ladder_contribution_is_linear_in_2p_minus_1[0.25--500.0]
+      -> test_the_ladder_contribution_is_linear_in_2p_minus_1[0.0--1000.0]
+      -> test_a_dealer_signed_krd_is_refused_rather_than_double_signed
+      -> test_the_gross_pond_is_not_recoverable_from_the_net
+      -> test_dead_zone_units_are_kept_by_default_and_droppable_on_request
+m5_decay_row_order                         :: KILLED   (1 failed, 69 passed)
+      -> test_the_decay_is_applied_on_calendar_days_and_travels_with_the_output
+m6_kappa_is_hit_rate                       :: HARNESS-PROBLEM (rc=3)
+INTERNALERROR>     assert old in src, f"{fn_name}: anchor not found: {old!r}"
+INTERNALERROR> AssertionError: _kappa: anchor not found: 'return float((hit - chance) / (1.0 - chance)), hit, chance, False'
+m7_hole_always_false                       :: KILLED   (3 failed, 67 passed)
+      -> test_the_overnight_hole_is_read_off_the_policy_that_fired
+      -> test_a_unit_that_never_priced_is_not_an_overnight_hole
+      -> test_a_bounded_future_allowing_policy_is_not_the_strict_in_session_branch
+m8_drop_series_key                         :: KILLED   (3 failed, 67 passed)
+      -> test_d2c_d2d_and_venue_unknown_are_three_series_not_two
+      -> test_lifecycle_prints_are_their_own_series
+      -> test_the_aggregation_key_is_complete
+m9_no_dup_check                            :: KILLED   (1 failed, 69 passed)
+      -> test_a_unit_counted_twice_breaks_the_accounting_loudly
+m10_served_all_true                        :: KILLED   (1 failed, 69 passed)
+      -> test_a_unit_that_never_priced_is_not_an_overnight_hole
+m11_no_placebo                             :: KILLED   (3 failed, 67 passed)
+      -> test_the_placebo_shift_preserves_the_marginals_and_kills_the_link
+      -> test_degradation_towards_the_placebo_band_is_an_alarm
+      -> test_a_halving_against_its_own_reference_alarms_before_the_link_is_gone
+m12_dead_zone_one_sided                    :: KILLED   (1 failed, 69 passed)
+      -> test_the_dead_zone_alarm_is_two_sided
+m13_report_lag_pools                       :: KILLED   (1 failed, 69 passed)
+      -> test_report_lag_is_never_pooled_across_the_block_flag
+m14_basis_ok                               :: KILLED   (1 failed, 69 passed)
+      -> test_a_priced_basis_leg_is_the_alarm_not_the_success
+m15_naive_proxy                            :: KILLED   (1 failed, 69 passed)
+      -> test_the_annuity_proxy_is_the_fallback_size_and_not_a_tenor_times_1e4
+m16_vintage_code_only                      :: KILLED   (1 failed, 69 passed)
+      -> test_the_vintage_changes_when_rateslib_or_the_tape_generation_changes
+m17_build_drops_failure                    :: KILLED   (2 failed, 68 passed)
+      -> test_a_failed_unit_gets_a_provenance_row_too
+      -> test_a_unit_the_ladder_threw_out_is_not_reported_in_ladder
+m18_visibility_naive_as_utc                :: KILLED   (1 failed, 69 passed)
+      -> test_a_date_only_event_stamp_keeps_the_day_it_was_reported_on
+m19_no_missing_size_check                  :: KILLED   (1 failed, 69 passed)
+      -> test_a_unit_with_no_size_cannot_be_counted_as_a_zero_share
+m20_mean_weight_is_one                     :: KILLED   (1 failed, 69 passed)
+      -> test_the_gross_pond_is_not_recoverable_from_the_net
+m21_no_krd_double_sign_guard               :: KILLED   (1 failed, 69 passed)
+      -> test_a_dealer_signed_krd_is_refused_rather_than_double_signed
+m22_lifecycle_series_ignored               :: KILLED   (1 failed, 69 passed)
+      -> test_lifecycle_prints_are_their_own_series
+m23_no_risk_row_silently_dropped           :: KILLED   (2 failed, 68 passed)
+      -> test_a_unit_with_no_risk_row_is_excluded_not_silently_dropped
+      -> test_a_unit_the_ladder_threw_out_is_not_reported_in_ladder
+===== batch B: ddrev2_mut_b (m24-m34) -- NO saved rerun existed =====
+m24_series_disjoint_noop                   :: KILLED   (1 failed, 69 passed)
+      -> test_a_duplicated_ladder_key_is_refused_rather_than_summed
+m25_interdealer_returns_d2c                :: KILLED   (1 failed, 69 passed)
+      -> test_d2c_d2d_and_venue_unknown_are_three_series_not_two
+m26_in_session_over_policy_blind           :: KILLED   (1 failed, 69 passed)
+      -> test_an_in_session_row_staler_than_its_own_policy_is_a_halt
+m27_health_report_best_first               :: KILLED   (1 failed, 69 passed)
+      -> test_the_health_report_puts_the_alarm_first
+m28_past_start_not_clamped                 :: SURVIVED (70 passed)
+m29_orient_allows_zero_sign                :: KILLED   (1 failed, 69 passed)
+      -> test_orienting_a_unit_with_no_call_is_refused_rather_than_zeroed
+m30_missing_call_silently_skipped          :: KILLED   (1 failed, 69 passed)
+      -> test_a_unit_with_no_direction_call_is_a_hole_in_the_accounting
+m31_degenerate_scores_one                  :: KILLED   (1 failed, 69 passed)
+      -> test_a_mid_biased_off_venue_scores_zero_not_one
+m32_abs_dv01_is_abs_delta                  :: KILLED   (1 failed, 69 passed)
+      -> test_the_gross_pond_is_not_recoverable_from_the_net
+m33_dead_zone_flag_ignored                 :: KILLED   (1 failed, 69 passed)
+      -> test_dead_zone_units_are_kept_by_default_and_droppable_on_request
+m34_lag_dist_drops_unserved                :: KILLED   (1 failed, 69 passed)
+      -> test_a_unit_that_never_priced_is_not_an_overnight_hole
+===== batch C: ddrev2_mut_c (m35-m38) =====
+m35_no_dv01_escalation                     :: KILLED   (1 failed, 69 passed)
+      -> test_imputed_notional_fraction_is_weighted_as_well_as_counted
+m36_no_abs_dead_zone_override              :: KILLED   (1 failed, 69 passed)
+      -> test_the_dead_zone_alarm_is_two_sided
+m37_hole_lag_p90_untested                  :: KILLED   (1 failed, 69 passed)
+      -> test_the_overnight_hole_is_read_off_the_policy_that_fired
+m38_kappa_alarm_uses_warn_only             :: KILLED   (1 failed, 69 passed)
+      -> test_degradation_towards_the_placebo_band_is_an_alarm
+===== batch D: ladderfix_m6 (re-anchored + new) =====
+m6b_kappa_is_hit_rate                      :: KILLED   (6 failed, 64 passed)
+      -> test_a_mid_biased_off_venue_scores_zero_not_one
+      -> test_a_one_sided_classifier_alarms_even_with_no_placebo
+      -> test_a_78_22_split_on_both_sides_is_not_skill
+      -> test_the_placebo_shift_preserves_the_marginals_and_kills_the_link
+      -> test_the_rolling_monitor_sees_a_classifier_that_stops_working
+      -> test_a_halving_against_its_own_reference_alarms_before_the_link_is_gone
+m39_degenerate_only_when_chance_is_one     :: KILLED   (1 failed, 69 passed)
+      -> test_a_one_sided_classifier_alarms_even_with_no_placebo
+m40_hole_reads_max_lag_only                :: KILLED   (1 failed, 69 passed)
+      -> test_a_bounded_future_allowing_policy_is_not_the_strict_in_session_branch
+m41_build_getattr_defaults                 :: KILLED   (2 failed, 68 passed)
+      -> test_a_renamed_pricing_field_raises_instead_of_reporting_never_priced
+      -> test_a_priced_unit_with_no_recorded_policy_is_loud
+m42_ladder_excluded_ignored                :: KILLED   (2 failed, 68 passed)
+      -> test_a_unit_the_ladder_threw_out_is_not_reported_in_ladder
+      -> test_the_two_halves_of_the_join_are_reconciled_not_overwritten
+m43_no_orphan_krd_check                    :: KILLED   (1 failed, 69 passed)
+      -> test_a_risk_row_for_a_unit_that_is_not_in_the_population_is_loud
+m44_no_duplicate_unit_check                :: KILLED   (1 failed, 69 passed)
+      -> test_the_same_unit_passed_twice_is_loud_rather_than_double_counted
+m45_rolling_empty_one_column               :: KILLED   (1 failed, 69 passed)
+      -> test_the_rolling_monitor_reports_no_data_rather_than_a_missing_column
+===== done =====

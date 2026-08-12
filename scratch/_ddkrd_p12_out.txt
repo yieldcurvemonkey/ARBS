@@ -1,0 +1,104 @@
+C:\Users\chris\clee\ARBS-dd\scratch\ddkrd_p12.py:8: LicenceNotice: 
+Rateslib is source-available (not open-source) software distributed under a dual-licence model.
+No commercial licence is registered for this installation. Use is therefore permitted for non-commercial purposes only (at-home or university based academic use).
+Any use in commercial, professional, or for-profit environments, including evaluation or trial use, requires a valid commercial licence or an approved evaluation licence.
+Certain features may require a registered commercial or evaluation licence in current or future versions.
+For licensing information or to register a licence, please visit: https://rateslib.com/licence
+  import numpy as np, pandas as pd, rateslib as rl, pytz
+C:\Users\chris\anaconda3\envs\stir\Lib\site-packages\rateslib\data\fixings.py:3426: RuntimeWarning: invalid value encountered in divide
+  r = (v[:-1] / v[1:] - 1) * 100 / dcfs_obs[len(populated) :]
+C:\Users\chris\anaconda3\envs\stir\Lib\site-packages\rateslib\data\fixings.py:3485: UserWarning: The fixings series 'reference_date
+1998-02-20    5.37
+1998-02-23    5.51
+1998-02-24    5.48
+1998-02-25    5.61
+1998-02-26    5.60
+              ... 
+2026-06-09    3.60
+2026-06-10    3.59
+2026-06-11    3.60
+2026-06-12    3.65
+2026-06-15    3.69
+Name: rate, Length: 7140, dtype: float64' for the RFR 1B rates contains more fixings than are expected from the fixings calendar.
+Specifically, the extra data item lies within the fixings window: '16-03-2026':'15-06-2026'.
+  warnings.warn(
+C:\Users\chris\anaconda3\envs\stir\Lib\site-packages\rateslib\data\fixings.py:3485: UserWarning: The fixings series 'ARBS_RFR_6A6C57425A86F724D22396C2_1B' for the RFR 1B rates contains more fixings than are expected from the fixings calendar.
+Specifically, the extra data item lies within the fixings window: '16-03-2026':'15-06-2026'.
+  warnings.warn(
+C:\Users\chris\anaconda3\envs\stir\Lib\site-packages\rateslib\data\fixings.py:3485: UserWarning: The fixings series 'reference_date
+1998-02-20    5.37
+1998-02-23    5.51
+1998-02-24    5.48
+1998-02-25    5.61
+1998-02-26    5.60
+              ... 
+2026-06-09    3.60
+2026-06-10    3.59
+2026-06-11    3.60
+2026-06-12    3.65
+2026-06-15    3.69
+Name: rate, Length: 7140, dtype: float64' for the RFR 1B rates contains more fixings than are expected from the fixings calendar.
+Specifically, the extra data item lies within the fixings window: '16-03-2026':'15-06-2026'.
+  warnings.warn(
+C:\Users\chris\anaconda3\envs\stir\Lib\site-packages\rateslib\data\fixings.py:3485: UserWarning: The fixings series 'ARBS_RFR_6A6C57425A86F724D22396C2_1B' for the RFR 1B rates contains more fixings than are expected from the fixings calendar.
+Specifically, the extra data item lies within the fixings window: '16-03-2026':'15-06-2026'.
+  warnings.warn(
+=== solver build cost, fixings attached vs stripped ===
+SUCCESS: `func_tol` reached after 4 iterations (levenberg_marquardt), `f_val`: 2.558809760254574e-09, `time`: 1.2364s
+SUCCESS: `func_tol` reached after 4 iterations (levenberg_marquardt), `f_val`: 2.558809760254574e-09, `time`: 1.2373s
+SUCCESS: `func_tol` reached after 4 iterations (levenberg_marquardt), `f_val`: 2.558809760254574e-09, `time`: 1.0743s
+  strip_fixings=False:    2555 ms   (all [3939, 2555, 2369])
+SUCCESS: `func_tol` reached after 4 iterations (levenberg_marquardt), `f_val`: 2.5588097602600924e-09, `time`: 0.1235s
+SUCCESS: `func_tol` reached after 4 iterations (levenberg_marquardt), `f_val`: 2.5588097602600924e-09, `time`: 0.1103s
+SUCCESS: `func_tol` reached after 4 iterations (levenberg_marquardt), `f_val`: 2.5588097602600924e-09, `time`: 0.1441s
+  strip_fixings=True :     300 ms   (all [283, 300, 332])
+
+=== do the two solvers give the same delta? (must be bit-comparable) ===
+  10Y payer    past_eff=False max|full-stripped| = 6.111800e-11 (sum 82,188.3 vs 82,188.3)
+  50Y payer    past_eff=False max|full-stripped| = 4.045431e-11 (sum 52,867.6 vs 52,867.6)
+  past-eff 5Y  past_eff=True  max|full-stripped| = 6.366463e-12 (sum 13,084.7 vs 13,084.7)
+
+=== KRD error vs solver-block length, worst day 2025-04-07 ===
+SUCCESS: `func_tol` reached after 5 iterations (levenberg_marquardt), `f_val`: 1.8342568316632884e-11, `time`: 0.1563s
+SUCCESS: `func_tol` reached after 5 iterations (levenberg_marquardt), `f_val`: 1.881054160996683e-11, `time`: 0.1408s
+SUCCESS: `func_tol` reached after 5 iterations (levenberg_marquardt), `f_val`: 1.8548699127968765e-11, `time`: 0.1316s
+SUCCESS: `func_tol` reached after 5 iterations (levenberg_marquardt), `f_val`: 1.7950105902720325e-11, `time`: 0.1503s
+SUCCESS: `func_tol` reached after 5 iterations (levenberg_marquardt), `f_val`: 1.6935694447045672e-11, `time`: 0.1437s
+SUCCESS: `func_tol` reached after 5 iterations (levenberg_marquardt), `f_val`: 1.7382057158530774e-11, `time`: 0.1391s
+SUCCESS: `func_tol` reached after 5 iterations (levenberg_marquardt), `f_val`: 1.6537558134433808e-11, `time`: 0.1563s
+SUCCESS: `func_tol` reached after 4 iterations (levenberg_marquardt), `f_val`: 9.908639630721907e-09, `time`: 0.1351s
+SUCCESS: `func_tol` reached after 4 iterations (levenberg_marquardt), `f_val`: 9.175994208686763e-09, `time`: 0.1335s
+SUCCESS: `func_tol` reached after 4 iterations (levenberg_marquardt), `f_val`: 9.003436868926482e-09, `time`: 0.1566s
+SUCCESS: `func_tol` reached after 4 iterations (levenberg_marquardt), `f_val`: 8.887030946797633e-09, `time`: 0.1219s
+SUCCESS: `func_tol` reached after 4 iterations (levenberg_marquardt), `f_val`: 8.677434543532296e-09, `time`: 0.1435s
+SUCCESS: `func_tol` reached after 4 iterations (levenberg_marquardt), `f_val`: 8.528357398268453e-09, `time`: 0.1358s
+SUCCESS: `func_tol` reached after 4 iterations (levenberg_marquardt), `f_val`: 8.324198219998517e-09, `time`: 0.1262s
+SUCCESS: `func_tol` reached after 4 iterations (levenberg_marquardt), `f_val`: 8.768799545809937e-09, `time`: 0.1494s
+SUCCESS: `func_tol` reached after 4 iterations (levenberg_marquardt), `f_val`: 8.657996338814493e-09, `time`: 0.1582s
+SUCCESS: `func_tol` reached after 4 iterations (levenberg_marquardt), `f_val`: 8.570370551839808e-09, `time`: 0.1369s
+SUCCESS: `func_tol` reached after 4 iterations (levenberg_marquardt), `f_val`: 8.662755987223498e-09, `time`: 0.1500s
+SUCCESS: `func_tol` reached after 4 iterations (levenberg_marquardt), `f_val`: 8.544583121527626e-09, `time`: 0.1574s
+SUCCESS: `func_tol` reached after 4 iterations (levenberg_marquardt), `f_val`: 8.47573309222532e-09, `time`: 0.1430s
+SUCCESS: `func_tol` reached after 5 iterations (levenberg_marquardt), `f_val`: 1.8342568316632884e-11, `time`: 0.1659s
+SUCCESS: `func_tol` reached after 5 iterations (levenberg_marquardt), `f_val`: 1.881054160996683e-11, `time`: 0.1841s
+SUCCESS: `func_tol` reached after 5 iterations (levenberg_marquardt), `f_val`: 1.8548699127968765e-11, `time`: 0.1844s
+SUCCESS: `func_tol` reached after 5 iterations (levenberg_marquardt), `f_val`: 1.7950105902720325e-11, `time`: 0.1865s
+SUCCESS: `func_tol` reached after 5 iterations (levenberg_marquardt), `f_val`: 1.6935694447045672e-11, `time`: 0.1805s
+SUCCESS: `func_tol` reached after 5 iterations (levenberg_marquardt), `f_val`: 1.7382057158530774e-11, `time`: 0.1842s
+SUCCESS: `func_tol` reached after 5 iterations (levenberg_marquardt), `f_val`: 1.6537558134433808e-11, `time`: 0.1953s
+SUCCESS: `func_tol` reached after 4 iterations (levenberg_marquardt), `f_val`: 9.908639630721907e-09, `time`: 0.1535s
+SUCCESS: `func_tol` reached after 4 iterations (levenberg_marquardt), `f_val`: 9.175994208686763e-09, `time`: 0.1086s
+SUCCESS: `func_tol` reached after 4 iterations (levenberg_marquardt), `f_val`: 9.003436868926482e-09, `time`: 0.1421s
+SUCCESS: `func_tol` reached after 4 iterations (levenberg_marquardt), `f_val`: 8.895158120798625e-09, `time`: 0.1428s
+SUCCESS: `func_tol` reached after 4 iterations (levenberg_marquardt), `f_val`: 8.695379196955652e-09, `time`: 0.1552s
+SUCCESS: `func_tol` reached after 4 iterations (levenberg_marquardt), `f_val`: 8.4536850268827e-09, `time`: 0.1476s
+SUCCESS: `func_tol` reached after 4 iterations (levenberg_marquardt), `f_val`: 8.336136560565653e-09, `time`: 0.1208s
+SUCCESS: `func_tol` reached after 4 iterations (levenberg_marquardt), `f_val`: 8.737234715146825e-09, `time`: 0.1483s
+SUCCESS: `func_tol` reached after 4 iterations (levenberg_marquardt), `f_val`: 8.534298238059807e-09, `time`: 0.1516s
+SUCCESS: `func_tol` reached after 4 iterations (levenberg_marquardt), `f_val`: 8.634420686696072e-09, `time`: 0.1360s
+SUCCESS: `func_tol` reached after 4 iterations (levenberg_marquardt), `f_val`: 8.662755987223498e-09, `time`: 0.1204s
+SUCCESS: `func_tol` reached after 4 iterations (levenberg_marquardt), `f_val`: 8.541818472723324e-09, `time`: 0.1095s
+  block=  60 min  max bucket err  0.833%  p95  0.408%  median  0.000%  | max total err  1.193%  (19 solvers cached)
+  block= 120 min  max bucket err  0.972%  p95  0.475%  median  0.073%  | max total err  1.671%  (19 solvers cached)
+  block= 240 min  max bucket err  1.436%  p95  0.787%  median  0.100%  | max total err  2.413%  (19 solvers cached)
+  block= 480 min  max bucket err  1.903%  p95  1.322%  median  0.202%  | max total err  3.193%  (19 solvers cached)

@@ -1,0 +1,137 @@
+C:\Users\chris\clee\ARBS-dd\Query\IRSwaps\IRSwapStructure.py:12: LicenceNotice: 
+Rateslib is source-available (not open-source) software distributed under a dual-licence model.
+No commercial licence is registered for this installation. Use is therefore permitted for non-commercial purposes only (at-home or university based academic use).
+Any use in commercial, professional, or for-profit environments, including evaluation or trial use, requires a valid commercial licence or an approved evaluation licence.
+Certain features may require a registered commercial or evaluation licence in current or future versions.
+For licensing information or to register a licence, please visit: https://rateslib.com/licence
+  from rateslib.scheduling import get_imm, next_imm
+==============================================================================
+A. FLAT_YIELD anchors: measured annuity |risk|/notional*1e4 by exact tenor
+==============================================================================
+tenor      n     t_med  A_meas_median     A_p25     A_p75  A_model_004  A_model_002  ratio_004  ratio_002
+   1y  47677  1.000000       0.976087  0.970000  0.980645     0.980264     0.990066   0.995739   0.985880
+   2y 106157  2.000000       1.920000  1.907692  1.926923     1.922091     1.960528   0.998912   0.979328
+   3y  72756  3.002740       2.829545  2.802817  2.846667     2.829419     2.914353   1.000045   0.970900
+   5y 231264  5.002740       4.545455  4.500000  4.586957     4.533974     4.760608   1.002532   0.954805
+   7y  53336  7.005479       6.142857  6.061702  6.200000     6.109547     6.536852   1.005452   0.939727
+  10y 278287 10.005479       8.316667  8.200000  8.400000     8.245671     9.067948   1.008610   0.917150
+  15y  22354 15.010959      11.333333 11.160000 11.470000    11.285722    12.967207   1.004219   0.874000
+  20y  33120 20.013699      13.800000 13.611111 14.000000    13.772929    16.493179   1.001965   0.836710
+  30y 125033 30.019178      17.571429 17.294118 17.870968    17.475919    22.569941   1.005465   0.778532
+  40y   1558 40.027397      20.160000 19.726250 20.900000    19.958115    27.545859   1.010115   0.731870
+
+==============================================================================
+B. the docstring's own tenor-band ratio table (|risk| / expected_dv01)
+==============================================================================
+  band     n  median_ratio
+   <6m 60000      1.010148
+ 6m-2y 60000      0.998747
+  2-5y 60000      1.001183
+ 5-10y 60000      1.004494
+10-25y 60000      1.006589
+  >25y 60000      1.000775
+
+==============================================================================
+C. RISK_ZERO_MATERIAL: exp_dv01 distribution of risk=0 and risk=100 legs
+==============================================================================
+  risk=0 flow legs (testable inputs): 16,605
+    exp_dv01 p0.5             19.0
+    exp_dv01 p0.75            35.0
+    exp_dv01 p0.9             44.7
+    exp_dv01 p0.95            47.4
+    exp_dv01 p0.99            57.7
+    exp_dv01 p1.0            260.3
+    flagged at exp >     50:     269  (1.62%)   admitted:  16,336
+    flagged at exp >    100:      36  (0.22%)   admitted:  16,569
+    flagged at exp >    150:      13  (0.08%)   admitted:  16,592
+    flagged at exp >    200:       3  (0.02%)   admitted:  16,602
+    flagged at exp >    300:       0  (0.00%)   admitted:  16,605
+    flagged at exp >    500:       0  (0.00%)   admitted:  16,605
+    flagged at exp >   1000:       0  (0.00%)   admitted:  16,605
+    flagged at exp >   3000:       0  (0.00%)   admitted:  16,605
+    flagged at exp >  30000:       0  (0.00%)   admitted:  16,605
+  risk=100 flow legs sampled: 18,387
+    exp_dv01 p0.01            49.9
+    exp_dv01 p0.05            54.4
+    exp_dv01 p0.5             93.2
+    exp_dv01 p0.95           147.9
+    exp_dv01 p0.99           237.9
+
+==============================================================================
+D. review 3.1 -- the 1105-day cutoff vs the tenor_years > 3.02 proxy
+==============================================================================
+ n_flow  beyond_1105  tenor_gt_302
+2289646      1671827       1595321
+
+==============================================================================
+E. review 3.2 -- Amortizing label token vs upi_notional_schedule
+==============================================================================
+all rows [{'tok': 35471, 'sched': 35471, 'both': 35471}]
+contributes_to_flow [{'tok': 35470, 'sched': 35470, 'both': 35470}]
+ECONOMIC_FLOW+ctf [{'tok': 34656, 'sched': 34656, 'both': 34656}]
+  schedule mix (contributes_to_flow):
+         s       n
+  Constant 2277485
+Amortizing   35470
+    Custom   11960
+ Accreting    1507
+    (null)      52
+
+==============================================================================
+F. review 3.3 -- the FX/NDF codes said not to appear on this tape
+==============================================================================
+platform_identifier  n
+               CBNL  2
+
+==============================================================================
+G. review 3.4 -- CME Term label populations
+==============================================================================
+ all_rows_pair  flow_pair  ctf_label  all_label
+         32842      32573      33487      33488
+
+==============================================================================
+H. review 4.1 -- contributes_to_flow by economic_class / lifecycle_type
+==============================================================================
+ economic_class  contributes_to_flow       n
+ ADMINISTRATIVE                False     307
+  ECONOMIC_FLOW                 True 2289646
+ECONOMIC_UNWIND                 True   36828
+ economic_class lifecycle_type     n
+ECONOMIC_UNWIND      NEW_TRADE 36763
+ECONOMIC_UNWIND    TERMINATION    38
+ECONOMIC_UNWIND          OTHER    27
+
+==============================================================================
+I. the any->all live reachability: some-but-not-all legs bad in a package
+==============================================================================
+ mixed_norate  mixed_norisk  mixed_notflow  mixed_nonconst  mixed_term  mixed_index  any_null_index
+          136           107              0               0           0            0               0
+
+==============================================================================
+J. review 3.5 -- venue counts under the two populations
+==============================================================================
+platform_identifier  flow_ctf    ctf  all_rows
+               BILT    321545 325339    325595
+               XXXX     51260  51674     51674
+               XOFF     28401  29030     29051
+               TREU     25192  25224     25224
+               BMTF     20678  20699     20708
+               RTXF      7476   7476      7476
+               ISWE      6880   6880      6880
+               TWEM      4775   4785      4785
+               BTFE      3012   3026      3026
+               GSEF      2658   2659      2659
+               BGCO       237    237       237
+               TRWB         7      7         7
+
+==============================================================================
+K. INVOICE_SWAP / trade_type census (review 3.8)
+==============================================================================
+      trade_type     n
+         INVOICE 32073
+  INVOICE_SWITCH  4916
+     BASIS_CURVE  1150
+INVOICE_CALENDAR   792
+       BASIS_FLY   210
+
+DONE

@@ -1,0 +1,205 @@
+.........................s.......................F.........F............ [ 11%]
+........................................................................ [ 22%]
+........................................................................ [ 33%]
+........................................................................ [ 45%]
+................................................................FFF..... [ 56%]
+.FF..................................................................... [ 67%]
+........................................................................ [ 79%]
+........................................................................ [ 90%]
+.............................................................            [100%]
+================================== FAILURES ===================================
+____ test_the_two_families_fail_about_equally_so_the_band_is_within_family ____
+
+    def test_the_two_families_fail_about_equally_so_the_band_is_within_family():
+        """The quoted band is threshold sensitivity, and that is not the big risk.
+    
+        Absolute KS is 0.07-0.28 for the lognormal *and* the Pareto -- notional is
+        rounded onto a round-number lattice and no continuous law fits a lattice --
+        and at the shipped u = C/4 the Pareto is the closer of the two in 10 of 18
+        cells, by at most 0.020. So the family choice is not an empirical win, and
+        the sensitivity band does not contain the uncertainty it creates. Both
+        statistics are stored per band so this stays checkable rather than asserted
+        in prose.
+        """
+        ks_ln = [b.ks_lognormal for b in imp.CAP_BANDS]
+        ks_par = [b.ks_pareto for b in imp.CAP_BANDS]
+        for series in (ks_ln, ks_par):
+>           assert 0.069 <= min(series) and max(series) <= 0.276
+E           assert (0.069 <= 0.06979560598420564 and 0.2861061946902655 <= 0.276)
+E            +  where 0.06979560598420564 = min([0.13299421519345422, 0.15202089774803174, 0.12438625204582651, 0.10199319472824953, 0.0942612221293912, 0.133296314305011, ...])
+E            +  and   0.2861061946902655 = max([0.13299421519345422, 0.15202089774803174, 0.12438625204582651, 0.10199319472824953, 0.0942612221293912, 0.133296314305011, ...])
+
+tests\test_dealer_direction_imputation.py:268: AssertionError
+________ test_the_tenor_mismatch_flag_fires_on_the_measured_edge_case _________
+
+    def test_the_tenor_mismatch_flag_fires_on_the_measured_edge_case():
+        """1.92% of capped legs have keys that disagree, and they are surfaced.
+    
+        A V1 print at $170mm (the 5y-10y cap) with a tenor of 25y is a real row on
+        the tape, not a hypothetical -- 173 legs carry that cap at tenors from 5.06
+        to 25.02 years. It is still imputed, off the cap that was actually applied,
+        but a consumer restricting to the fit's own population needs to see it.
+        """
+        legs = pd.DataFrame({
+            "notional": [170e6, 170e6],
+            "as_of_date": [datetime.date(2024, 5, 1)] * 2,
+            "tenor_years": [7.0, 25.0],
+            "is_capped": [True, True],
+        })
+        out = imp.impute_frame(legs)
+        assert list(out["notional_imputed"]) == [True, True]
+>       assert list(out["notional_impute_factor"]) == [pytest.approx(3.9537, abs=1e-3)] * 2
+E       assert [4.2175770343...7577034379514] == [3.9537 ± 0.0....9537 ± 0.001]
+E         
+E         At index 0 diff: 4.217577034379514 != 3.9537 ± 0.001
+E         Use -v to get more diff
+
+tests\test_dealer_direction_imputation.py:359: AssertionError
+____________ test_pybool_keeps_none_distinct_from_false[None-None] ____________
+
+v = None, want = None
+
+    @pytest.mark.parametrize("v,want", [
+        (None, None), (np.nan, None), (float("nan"), None),
+        (True, True), (False, False), (np.True_, True), (np.False_, False),
+        (1, True), (0, False),
+    ])
+    def test_pybool_keeps_none_distinct_from_false(v, want):
+        """``numpy.True_ is True`` is False, and ``bool(None)`` is not ``None``.
+    
+        Both halves matter and they pull opposite ways. Without the ``bool()`` a
+        numpy flag off a DataFrame column never satisfies ``is True`` and every
+        print silently takes the 60-minute INDETERMINATE delay; with a bare
+        ``bool()`` an unknown flag becomes a definite ``False`` and claims a delay
+        class it was never shown to be in.
+        """
+>       assert universe._pybool(v) is want
+E       assert False is None
+E        +  where False = <function _pybool at 0x0000022D378354E0>(None)
+E        +    where <function _pybool at 0x0000022D378354E0> = universe._pybool
+
+tests\test_dealer_direction_universe.py:691: AssertionError
+____________ test_pybool_keeps_none_distinct_from_false[nan-None0] ____________
+
+v = nan, want = None
+
+    @pytest.mark.parametrize("v,want", [
+        (None, None), (np.nan, None), (float("nan"), None),
+        (True, True), (False, False), (np.True_, True), (np.False_, False),
+        (1, True), (0, False),
+    ])
+    def test_pybool_keeps_none_distinct_from_false(v, want):
+        """``numpy.True_ is True`` is False, and ``bool(None)`` is not ``None``.
+    
+        Both halves matter and they pull opposite ways. Without the ``bool()`` a
+        numpy flag off a DataFrame column never satisfies ``is True`` and every
+        print silently takes the 60-minute INDETERMINATE delay; with a bare
+        ``bool()`` an unknown flag becomes a definite ``False`` and claims a delay
+        class it was never shown to be in.
+        """
+>       assert universe._pybool(v) is want
+E       assert True is None
+E        +  where True = <function _pybool at 0x0000022D378354E0>(nan)
+E        +    where <function _pybool at 0x0000022D378354E0> = universe._pybool
+
+tests\test_dealer_direction_universe.py:691: AssertionError
+____________ test_pybool_keeps_none_distinct_from_false[nan-None1] ____________
+
+v = nan, want = None
+
+    @pytest.mark.parametrize("v,want", [
+        (None, None), (np.nan, None), (float("nan"), None),
+        (True, True), (False, False), (np.True_, True), (np.False_, False),
+        (1, True), (0, False),
+    ])
+    def test_pybool_keeps_none_distinct_from_false(v, want):
+        """``numpy.True_ is True`` is False, and ``bool(None)`` is not ``None``.
+    
+        Both halves matter and they pull opposite ways. Without the ``bool()`` a
+        numpy flag off a DataFrame column never satisfies ``is True`` and every
+        print silently takes the 60-minute INDETERMINATE delay; with a bare
+        ``bool()`` an unknown flag becomes a definite ``False`` and claims a delay
+        class it was never shown to be in.
+        """
+>       assert universe._pybool(v) is want
+E       assert True is None
+E        +  where True = <function _pybool at 0x0000022D378354E0>(nan)
+E        +    where <function _pybool at 0x0000022D378354E0> = universe._pybool
+
+tests\test_dealer_direction_universe.py:691: AssertionError
+_ test_an_unknown_block_flag_does_not_borrow_a_delay_class[None-INDETERMINATE-60] _
+
+is_block = None, cls = 'INDETERMINATE', minutes = 60
+
+    @pytest.mark.parametrize("is_block,cls,minutes", [
+        (None, "INDETERMINATE", 60),
+        (np.nan, "INDETERMINATE", 60),
+        (np.False_, "ON_FACILITY_NON_BLOCK", 1),
+        (np.True_, "SEF_BLOCK", 15),
+    ])
+    def test_an_unknown_block_flag_does_not_borrow_a_delay_class(
+            is_block, cls, minutes):
+        """``bool(None)`` is ``False`` (+1 min) and ``bool(nan)`` is ``True``
+        (+15 min) -- two different wrong answers from the same missing tri-state,
+        and both of them shorten the availability clock."""
+        row = _leg()
+        clocks, _field = universe.build_clocks(
+            row, lifecycle_type="NEW_TRADE", is_block=is_block, is_capped=False,
+            cleared=row["cleared"], platform_identifier=row["platform_identifier"])
+>       assert clocks.visibility_source == f"APPENDIX_C:{cls}"
+E       AssertionError: assert 'APPENDIX_C:O...ITY_NON_BLOCK' == 'APPENDIX_C:INDETERMINATE'
+E         
+E         - APPENDIX_C:INDETERMINATE
+E         + APPENDIX_C:ON_FACILITY_NON_BLOCK
+
+tests\test_dealer_direction_universe.py:709: AssertionError
+_ test_an_unknown_block_flag_does_not_borrow_a_delay_class[nan-INDETERMINATE-60] _
+
+is_block = nan, cls = 'INDETERMINATE', minutes = 60
+
+    @pytest.mark.parametrize("is_block,cls,minutes", [
+        (None, "INDETERMINATE", 60),
+        (np.nan, "INDETERMINATE", 60),
+        (np.False_, "ON_FACILITY_NON_BLOCK", 1),
+        (np.True_, "SEF_BLOCK", 15),
+    ])
+    def test_an_unknown_block_flag_does_not_borrow_a_delay_class(
+            is_block, cls, minutes):
+        """``bool(None)`` is ``False`` (+1 min) and ``bool(nan)`` is ``True``
+        (+15 min) -- two different wrong answers from the same missing tri-state,
+        and both of them shorten the availability clock."""
+        row = _leg()
+        clocks, _field = universe.build_clocks(
+            row, lifecycle_type="NEW_TRADE", is_block=is_block, is_capped=False,
+            cleared=row["cleared"], platform_identifier=row["platform_identifier"])
+>       assert clocks.visibility_source == f"APPENDIX_C:{cls}"
+E       AssertionError: assert 'APPENDIX_C:SEF_BLOCK' == 'APPENDIX_C:INDETERMINATE'
+E         
+E         - APPENDIX_C:INDETERMINATE
+E         + APPENDIX_C:SEF_BLOCK
+
+tests\test_dealer_direction_universe.py:709: AssertionError
+============================== warnings summary ===============================
+Query\IRSwaps\IRSwapStructure.py:12
+  C:\Users\chris\clee\ARBS-dd\Query\IRSwaps\IRSwapStructure.py:12: LicenceNotice: 
+  Rateslib is source-available (not open-source) software distributed under a dual-licence model.
+  No commercial licence is registered for this installation. Use is therefore permitted for non-commercial purposes only (at-home or university based academic use).
+  Any use in commercial, professional, or for-profit environments, including evaluation or trial use, requires a valid commercial licence or an approved evaluation licence.
+  Certain features may require a registered commercial or evaluation licence in current or future versions.
+  For licensing information or to register a licence, please visit: https://rateslib.com/licence
+    from rateslib.scheduling import get_imm, next_imm
+
+tests/test_dealer_direction_probability.py::test_the_rolling_window_never_looks_ahead
+  C:\Users\chris\clee\ARBS-dd\tests\test_dealer_direction_probability.py:1032: UserWarning: rolling_calibrations skipped 7 of 60 dates whose prior window held fewer than 800 rows (2026-01-01..2026-01-09); those days have no calibration and cannot be classified
+    windows = prob.rolling_calibrations(df, window_days=20, min_gap_days=1)
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+=========================== short test summary info ===========================
+FAILED tests/test_dealer_direction_imputation.py::test_the_two_families_fail_about_equally_so_the_band_is_within_family
+FAILED tests/test_dealer_direction_imputation.py::test_the_tenor_mismatch_flag_fires_on_the_measured_edge_case
+FAILED tests/test_dealer_direction_universe.py::test_pybool_keeps_none_distinct_from_false[None-None]
+FAILED tests/test_dealer_direction_universe.py::test_pybool_keeps_none_distinct_from_false[nan-None0]
+FAILED tests/test_dealer_direction_universe.py::test_pybool_keeps_none_distinct_from_false[nan-None1]
+FAILED tests/test_dealer_direction_universe.py::test_an_unknown_block_flag_does_not_borrow_a_delay_class[None-INDETERMINATE-60]
+FAILED tests/test_dealer_direction_universe.py::test_an_unknown_block_flag_does_not_borrow_a_delay_class[nan-INDETERMINATE-60]
+7 failed, 629 passed, 1 skipped, 3 deselected, 2 warnings in 140.20s (0:02:20)

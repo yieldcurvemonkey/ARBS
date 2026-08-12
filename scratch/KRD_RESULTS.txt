@@ -1,0 +1,98 @@
+PER-TRADE SIGNED KEY-RATE DV01 PROFILE -- measured results
+Machine: this box, single-threaded, C:/Users/chris/anaconda3/envs/stir/python.exe
+Curve: USD-SOFR-1D-CITIVELOEXCELMIN, 2026-06-15 16:00Z, 45 nodes, log_linear, Act360
+Scripts: scratch/krd_bench.py krd_analytic.py krd_v3.py krd_multi.py krd_final.py
+         krd_diag.py krd_crosscheck.py krd_tentfix.py tape_shape.py
+
+== INVENTORY ==
+MDP/IRSwaps/BARCHART_STIRF/risk.py  build_delta_risk_ladder / build_basis_risk_ladder
+  -> reduced risk curve (ref + one node per ladder maturity) + rl.Solver. PAR-rate basis.
+SDRUtils/stir_flow/ladder.py  rl.Portfolio(pkgs).delta(solver=model.solver), 3-4 spaces
+  (MEETING / FUTURES / FED_FUNDS / SERFF_BASIS), one Solver per space per curve snapshot.
+Query/IRSwaps/IRSwapValue.py  RATE PV01 DV01 GAMMA_01 NPV ... ALL SCALARS. No bucketed value.
+RVUtils/rl_swap_risk_ladder_utils.py  ladder_from_pkg = Portfolio.delta(solver=) (same route)
+RVUtils/StrikelessVol/decomposition.py  swap_bucket_ladder / package_bucket_ladder /
+  tent_shifted_handle / _phi -> ZERO-rate tent bump-and-reprice. The only bucketed
+  risk producer in the repo that is not a solver delta.
+RVUtils/StrikelessVol/constructions.py  key_rate_ladder (CompositeCurve tents)
+
+== TAPE SHAPE (arbs_usd_swap_tape_legs_v3) ==
+legs 2,326,781 / 610 days
+distinct (rate_index_clean, exec-minute) pairs .......... 547,338   <- curve snapshots needed
+distinct (effective_date, expiration_date) pairs ........ 158,249   <- schedule cache size
+spot-start 691,438 | forward-start 1,295,846 | past-start 339,497 (14.6%)
+rate_index: SOFR 2,234,429 FED_FUNDS 70,709 BASIS 15,259 OTHER 6,384
+max maturity 18,403 days (50.4y); 66,845 legs 30-33y; 2,687 legs >35y
+
+== MEASURED UNIT COSTS ==
+read_raw_nodes, one day ................. 223 ms / 1320 minute rows (0.169 ms per minute)
+CurveStore.reconstruct_curve ............ 0.060 ms
+node arrays only (no rl.Curve) .......... 0.228 ms  (python date loop; vectorisable)
+rl.IRS construction ..................... 0.79-1.30 ms
+15-inst risk curve + rl.Solver .......... 42.2 ms   (per curve snapshot)
+Portfolio.delta, 1 swap ................. 2.2 ms
+Portfolio.delta, 100 swaps .............. 58.8 ms -> 0.59 ms/swap marginal
+Portfolio.delta, 500 swaps .............. 519  ms -> 1.04 ms/swap marginal  (does NOT amortise)
+repo tent bump-and-reprice, 15 buckets .. 15.7 ms/trade
+ANALYTIC krd, warm schedule ............. 0.116 ms (loop) / 0.023 ms (day pipeline, numpy DF)
+ANALYTIC cold schedule (rl.IRS+cashflows) 3.55 ms per distinct (effective,termination)
+zero->par Jacobian 15x15 ................ 52-68 ms   (21x21 96 ms, 28x28 124 ms) per curve
+par conversion matvec ................... 0.06 us/trade
+
+== VALIDATION ==
+V0  OIS float leg telescopes: cf == -N2*(DF(s)/DF(e)-1) exactly, rel err 2.38e-16 (SOFR)
+    and 2.27e-16 (FED_FUNDS).
+V1b analytic (node tent) vs exact-node bump reprice: 0.0000139% of DV01 at 1bp,
+    0.0000001% at 0.1bp -> pure O(h^2) truncation, derivative is exact.
+XC  analytic (node tent) vs RVUtils/StrikelessVol/decomposition.tent_shifted_handle
+    (code I did not write): max 0.00075 USD/bp = 0.0000009% of total DV01, 5 shapes.
+TENT continuous phi*tau vs node-interpolated phi*tau: 0.0002% at 10Y but 0.378% at 30Y,
+    because Citi node spacing jumps to 5y past 20y. USE THE NODE-INTERPOLATED TENT.
+COND cond(J) = 1.99 (K=15) / 2.26 (K=21) / 2.62 (K=28). No inversion risk.
+JSTAB max|dJ| = 0.0030 within a day, 0.0022 over two weeks -> J is a per-DAY object.
+NODE grid: 1 distinct node-date set across all 1320 minutes of a day; changes daily.
+
+== AGREEMENT vs rateslib Portfolio.delta(solver=) ==
+RAW zero-KRD vs solver par delta: 1.6% - 44% of total DV01. DIFFERENT DERIVATIVES.
+Converted through J^-T, 21-bucket ladder (% of total DV01):
+  spot 2Y par 0.0000 | 10Y par 0.0001 | 11Y 0.0001 | 1Yx10Y 0.0003 | 5Yx5Y 0.0007
+  7Y off-mkt 0.0030 | 30Y par 0.0079 | 25Y 0.0315 | 40Y 0.0657 | 20Y off-mkt(6%) 0.2799
+15-bucket ladder same cases: 4.58% (11Y) and 5.14% (1Yx10Y) and 118% (40Y)
+  -> those are BUCKET-GRID GAPS, not analytic error; they vanish at 21 buckets.
+sum(zero-KRD)/par PV01 = 0.9955 (3M) .. 1.025 (2-5Y) .. 1.0215 (10Y) .. 1.0446 (40Y)
+
+== PROJECTED 610 DAYS, single thread ==
+analytic, FULL accounting:
+   parquet reads   610d x 223ms x 2 assets ............  4.5 min
+   schedule warm   158,249 x 3.55 ms ..................  9.4 min   (one-off, cacheable to disk)
+   node arrays     547,338 x 0.228 ms .................  2.1 min
+   KRD             2,326,781 x 0.023 ms ...............  0.9 min
+   Jacobian        610d x 2 idx x 124 ms (K=28) .......  2.5 min   (only if par output wanted)
+   TOTAL ............................................... 19.4 min  (16.9 min zero-only)
+rateslib solver delta ....... 7.8 h  (547,338 x 42.2ms solvers + 2.33M x 2.1ms)
+tent bump-and-reprice ....... 10.1 h (2.33M x 15.7ms)
+
+== COVERAGE ==
+All 610 tape as_of_dates present in BOTH USD-SOFR-1D-CITIVELOEXCELMIN and
+USD-FEDFUNDS-1D-CITIVELOEXCELMIN available_dates(). 0 missing.
+
+== SIGN ==
+Stored vector is dNPV/d(+1bp zero bump) of the DEALER-SIGNED position. To land the
+pinned convention (+ = dealer RECEIVED = long duration = delta_dv01 > 0) it needs the
+same single -1.0 flip as ladder.py's RL_DELTA_TO_FUTURES_EQ. One constant, all buckets.
+
+== FAILURE MODES ==
+1. past-effective legs (339,497 = 14.6%): rateslib RAISES
+   "effective date for rate period is before the initial node date of the Curve...
+    neglected to supply appropriate fixings". Hits BOTH methods equally.
+   Analytic fix: comp factor over [s,e] = R_realised * DF(today)/DF(e); only DF(e), DF(p)
+   carry curve sensitivity. Needs a published SOFR/EFFR fixings series.
+2. maturity beyond the last bucket: total conserved, placement wrong. A 50Y trade on a
+   30Y-capped grid puts 157,374 of 234,097 USD/bp into the 30Y bucket; with 40Y/50Y
+   pillars it splits 96,326 / 34,387 / 26,661 across 50Y/40Y/30Y.
+3. tent time measure: daily_dcf is 1/360 on these Act360 curves, not 1/365. Hard-coding
+   1/365 scales every bucket by 1.39% uniformly (cancels in the par conversion).
+4. USD-FEDFUNDS-1D is NOT in RATESLIB_CURVE_DEFINITIONS -> reconstruct_curve warns and
+   falls back to act360/nyc/mf (correct for USD, but unpinned).
+5. single-curve assumption: telescoping needs forecast == discount. True for the SOFR and
+   FED_FUNDS OIS curves here; a BASIS leg (15,259) or a dual-curve build breaks it.

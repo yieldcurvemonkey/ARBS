@@ -1,0 +1,96 @@
+C:\Users\chris\clee\ARBS-dd\Query\IRSwaps\IRSwapStructure.py:12: LicenceNotice: 
+Rateslib is source-available (not open-source) software distributed under a dual-licence model.
+No commercial licence is registered for this installation. Use is therefore permitted for non-commercial purposes only (at-home or university based academic use).
+Any use in commercial, professional, or for-profit environments, including evaluation or trial use, requires a valid commercial licence or an approved evaluation licence.
+Certain features may require a registered commercial or evaluation licence in current or future versions.
+For licensing information or to register a licence, please visit: https://rateslib.com/licence
+  from rateslib.scheduling import get_imm, next_imm
+
+========================================================================================
+V1. the 55 notional-sentinel legs -- which unit exclusion did they get?
+========================================================================================
+  sentinel legs 55 across 17 as_of_dates
+exclusion          detail                         
+RISK_IMPLAUSIBLE   NOTIONAL_SENTINEL,RATE_SENTINEL    54
+UNSUPPORTED_INDEX  CME_TERM_SOFR                       1
+  sentinel legs whose unit was KEPT: 0  (none, as required)
+
+========================================================================================
+V2. report path vs build_units, on real days
+========================================================================================
+  2024-03-01  legs  3,061  units  2,006  kept(frame)  1,371  kept(objects)  1,371  legs re-summed  3,061  OK
+  2024-10-07  legs  4,247  units  2,535  kept(frame)  2,000  kept(objects)  2,000  legs re-summed  4,247  OK
+  2025-08-11  legs  3,283  units  2,051  kept(frame)  1,496  kept(objects)  1,496  legs re-summed  3,283  OK
+  2026-04-15  legs  3,616  units  2,247  kept(frame)  1,557  kept(objects)  1,557  legs re-summed  3,616  OK
+  2026-06-16  legs  4,877  units  2,787  kept(frame)  2,230  kept(objects)  2,230  legs re-summed  4,877  OK
+    sample unit  key=CURVE_10_3691267289000003201  kind=CURVE  venue=D2C  idx=SOFR  upfront=None (None)  lifecycle=True
+    clocks  pricing=2026-06-16 06:22:57+00:00  event=2026-06-16 06:22:57+00:00
+            visibility=2026-06-16 06:23:57+00:00 [APPENDIX_C:ON_FACILITY_NON_BLOCK]
+
+========================================================================================
+V3. the UWIN legs -- what the routing change actually buys
+========================================================================================
+  legs with a non-zero other_payment_uwin, whole tape: 15
+as_of_date            trade_id                   package_id lifecycle_type economic_class  other_payment_uwin  other_payment_ufro package_transaction_price
+2024-03-28           949203342           OUTRIGHT-949203342      NEW_TRADE  ECONOMIC_FLOW        1.166900e+07                 0.0                      None
+2024-08-08          1109985762          OUTRIGHT-1109985762      NEW_TRADE  ECONOMIC_FLOW        3.030000e+04                 0.0                      None
+2024-08-08          1108038118          OUTRIGHT-1108038118      NEW_TRADE  ECONOMIC_FLOW        3.030000e+04                 0.0                      None
+2024-08-08          1108038117          OUTRIGHT-1108038117          OTHER  ECONOMIC_FLOW        3.030000e+04                 0.0                      None
+2024-08-08          1108038116          OUTRIGHT-1108038116          OTHER  ECONOMIC_FLOW        3.030000e+04                 0.0                      None
+2024-08-22          1125688040          OUTRIGHT-1125688040      NEW_TRADE  ECONOMIC_FLOW        6.045456e+05                 0.0                      None
+2024-09-03          1140585360          OUTRIGHT-1140585360    TERMINATION  ECONOMIC_FLOW        4.268779e+05                 0.0                      None
+2024-11-20          1251787574          OUTRIGHT-1251787574      NEW_TRADE  ECONOMIC_FLOW        6.395460e+04                 0.0                      None
+2025-01-28          1353902776          OUTRIGHT-1353902776      NEW_TRADE  ECONOMIC_FLOW        3.360000e+06                 0.0                      None
+2025-04-22          1484363742          OUTRIGHT-1484363742      NEW_TRADE  ECONOMIC_FLOW        1.860000e+07                 0.0                      None
+2025-07-29          1636160503          OUTRIGHT-1636160503      NEW_TRADE  ECONOMIC_FLOW        2.966664e+04                 0.0                      None
+2025-10-03          1755035202          OUTRIGHT-1755035202      NEW_TRADE  ECONOMIC_FLOW        1.772500e+07                 0.0                      None
+2025-10-15          1771534561          OUTRIGHT-1771534561      NEW_TRADE  ECONOMIC_FLOW        3.555000e+07                 0.0                      None
+2025-10-20          1778461518          OUTRIGHT-1778461518      NEW_TRADE  ECONOMIC_FLOW        1.780000e+07                 0.0                      None
+2026-04-10 2690327376000000401 OUTRIGHT-2690327376000000401      NEW_TRADE  ECONOMIC_FLOW        5.137096e+04                 0.0                      None
+  units whose upfront ends up sourced from UWIN: 3
+  legs with a non-zero other_payment_pexh (never aggregated): 2
+  terminations already carrying a UFRO (the brief said there were none):
+     n_term  n_with_ufro
+      50790        11587
+
+========================================================================================
+V4. what the venue extension moves
+========================================================================================
+old            new          
+D2C            D2C              1901042
+D2D            D2D               237518
+VENUE_UNKNOWN  D2C                53657
+               D2D                17014
+               VENUE_UNKNOWN      80415
+
+  platforms that changed class:
+ pid     n           old new
+TREU 25192 VENUE_UNKNOWN D2C
+BMTF 20678 VENUE_UNKNOWN D2C
+RTXF  7476 VENUE_UNKNOWN D2D
+ISWE  6880 VENUE_UNKNOWN D2D
+TWEM  4775 VENUE_UNKNOWN D2C
+BTFE  3012 VENUE_UNKNOWN D2C
+GSEF  2658 VENUE_UNKNOWN D2D
+
+  remaining VENUE_UNKNOWN, by evidence tier:
+                sum  size
+tier                     
+OFF_FACILITY  79661     2
+UNRECOGNISED    754    15
+
+   pid     n           old           new         tier
+  XXXX 51260 VENUE_UNKNOWN VENUE_UNKNOWN OFF_FACILITY
+  XOFF 28401 VENUE_UNKNOWN VENUE_UNKNOWN OFF_FACILITY
+  BGCO   237 VENUE_UNKNOWN VENUE_UNKNOWN UNRECOGNISED
+(null)   210 VENUE_UNKNOWN VENUE_UNKNOWN UNRECOGNISED
+  BNPS   202 VENUE_UNKNOWN VENUE_UNKNOWN UNRECOGNISED
+  BTBS    50 VENUE_UNKNOWN VENUE_UNKNOWN UNRECOGNISED
+  OTXT    24 VENUE_UNKNOWN VENUE_UNKNOWN UNRECOGNISED
+  TRWB     7 VENUE_UNKNOWN VENUE_UNKNOWN UNRECOGNISED
+  CGMD     4 VENUE_UNKNOWN VENUE_UNKNOWN UNRECOGNISED
+  CGML     4 VENUE_UNKNOWN VENUE_UNKNOWN UNRECOGNISED
+  BGCF     3 VENUE_UNKNOWN VENUE_UNKNOWN UNRECOGNISED
+  IMRD     3 VENUE_UNKNOWN VENUE_UNKNOWN UNRECOGNISED
+
+done

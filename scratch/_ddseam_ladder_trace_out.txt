@@ -1,0 +1,20 @@
+package_price.classify -> dealer_sign=-1, deviation_bps=-1.95, p=<the rule produces none>, base_orientation=(1, 1, -1, -1)
+KRD gross |DV01| available to the ladder: 320,000
+
+A. p=None, no exclusion (what the rule actually produces today)
+    RAISES ValueError: unit 'PKG' has no probability and no exclusion reason; a unit that cannot be called must say why
+
+B. p=None, exclusion=UNORIENTABLE_PKG (the pre-recovery state)
+    rows=0  excluded=1  reason=UNORIENTABLE_PKG
+    |delta_dv01| reaching the ladder: 0 of 320,000 gross (0.0%)
+
+C. p from a fitted package tau (what S3 says is missing)
+    rows=4  excluded=0
+    |delta_dv01| reaching the ladder: 76,800 of 320,000 gross (24.0%)
+
+D. the same p on the WRONG side of 0.5 (a producer constraint)
+    RAISES ValueError: unit 'PKG': signed_weight 0.24 and dealer_sign -1 disagree on the side; one of them is against a flipped convention
+
+EXCL_* names available for 'oriented but not weightable': none.
+  types.EXCL_*: ['EXCL_DEAD_ZONE', 'EXCL_EXERCISE_OR_NOVATION', 'EXCL_NOT_FLOW', 'EXCL_NO_CURVE', 'EXCL_NO_FIXED_RATE', 'EXCL_PRICING_ERROR', 'EXCL_RISK_IMPLAUSIBLE', 'EXCL_STANDARD_COUPON', 'EXCL_UNORIENTABLE', 'EXCL_UNSUPPORTED_INDEX']
+  package_price.STRATA: ['PKG_NO_PACKAGE_PRICE', 'PKG_OPA_MISSING', 'PRICING_ERROR', 'PKG_TIEOUT_FAIL', 'PKG_SIGNS_AMBIGUOUS', 'PKG_LEG_AT_MID']

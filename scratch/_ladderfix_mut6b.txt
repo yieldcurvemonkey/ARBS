@@ -1,0 +1,5 @@
+m6b_kappa_is_hit_rate :: 6 failed, 64 passed, 1 warning in 11.04s
+m39_degenerate_only_when_chance_is_one :: 1 failed, 69 passed, 1 warning in 10.49s
+m40_hole_reads_max_lag_only :: 70 passed, 1 warning in 7.40s
+m41_build_getattr_defaults :: 2 failed, 68 passed, 1 warning in 11.39s
+ :: 70 passed, 1 warning in 7.56s

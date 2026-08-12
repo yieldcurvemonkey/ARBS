@@ -1,0 +1,153 @@
+EEEEEEEEEEEEEEEINTERNALERROR> Traceback (most recent call last):
+INTERNALERROR>   File "C:\Users\chris\anaconda3\envs\stir\Lib\site-packages\_pytest\main.py", line 318, in wrap_session
+INTERNALERROR>     session.exitstatus = doit(config, session) or 0
+INTERNALERROR>                          ~~~~^^^^^^^^^^^^^^^^^
+INTERNALERROR>   File "C:\Users\chris\anaconda3\envs\stir\Lib\site-packages\_pytest\main.py", line 372, in _main
+INTERNALERROR>     config.hook.pytest_runtestloop(session=session)
+INTERNALERROR>     ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^
+INTERNALERROR>   File "C:\Users\chris\anaconda3\envs\stir\Lib\site-packages\pluggy\_hooks.py", line 512, in __call__
+INTERNALERROR>     return self._hookexec(self.name, self._hookimpls.copy(), kwargs, firstresult)
+INTERNALERROR>            ~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+INTERNALERROR>   File "C:\Users\chris\anaconda3\envs\stir\Lib\site-packages\pluggy\_manager.py", line 120, in _hookexec
+INTERNALERROR>     return self._inner_hookexec(hook_name, methods, kwargs, firstresult)
+INTERNALERROR>            ~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+INTERNALERROR>   File "C:\Users\chris\anaconda3\envs\stir\Lib\site-packages\pluggy\_callers.py", line 167, in _multicall
+INTERNALERROR>     raise exception
+INTERNALERROR>   File "C:\Users\chris\anaconda3\envs\stir\Lib\site-packages\pluggy\_callers.py", line 139, in _multicall
+INTERNALERROR>     teardown.throw(exception)
+INTERNALERROR>     ~~~~~~~~~~~~~~^^^^^^^^^^^
+INTERNALERROR>   File "C:\Users\chris\anaconda3\envs\stir\Lib\site-packages\_pytest\logging.py", line 801, in pytest_runtestloop
+INTERNALERROR>     return (yield)  # Run all the tests.
+INTERNALERROR>             ^^^^^
+INTERNALERROR>   File "C:\Users\chris\anaconda3\envs\stir\Lib\site-packages\pluggy\_callers.py", line 139, in _multicall
+INTERNALERROR>     teardown.throw(exception)
+INTERNALERROR>     ~~~~~~~~~~~~~~^^^^^^^^^^^
+INTERNALERROR>   File "C:\Users\chris\anaconda3\envs\stir\Lib\site-packages\_pytest\terminal.py", line 707, in pytest_runtestloop
+INTERNALERROR>     result = yield
+INTERNALERROR>              ^^^^^
+INTERNALERROR>   File "C:\Users\chris\anaconda3\envs\stir\Lib\site-packages\pluggy\_callers.py", line 121, in _multicall
+INTERNALERROR>     res = hook_impl.function(*args)
+INTERNALERROR>   File "C:\Users\chris\anaconda3\envs\stir\Lib\site-packages\_pytest\main.py", line 396, in pytest_runtestloop
+INTERNALERROR>     item.config.hook.pytest_runtest_protocol(item=item, nextitem=nextitem)
+INTERNALERROR>     ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+INTERNALERROR>   File "C:\Users\chris\anaconda3\envs\stir\Lib\site-packages\pluggy\_hooks.py", line 512, in __call__
+INTERNALERROR>     return self._hookexec(self.name, self._hookimpls.copy(), kwargs, firstresult)
+INTERNALERROR>            ~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+INTERNALERROR>   File "C:\Users\chris\anaconda3\envs\stir\Lib\site-packages\pluggy\_manager.py", line 120, in _hookexec
+INTERNALERROR>     return self._inner_hookexec(hook_name, methods, kwargs, firstresult)
+INTERNALERROR>            ~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+INTERNALERROR>   File "C:\Users\chris\anaconda3\envs\stir\Lib\site-packages\pluggy\_callers.py", line 167, in _multicall
+INTERNALERROR>     raise exception
+INTERNALERROR>   File "C:\Users\chris\anaconda3\envs\stir\Lib\site-packages\pluggy\_callers.py", line 139, in _multicall
+INTERNALERROR>     teardown.throw(exception)
+INTERNALERROR>     ~~~~~~~~~~~~~~^^^^^^^^^^^
+INTERNALERROR>   File "C:\Users\chris\anaconda3\envs\stir\Lib\site-packages\_pytest\warnings.py", line 89, in pytest_runtest_protocol
+INTERNALERROR>     return (yield)
+INTERNALERROR>             ^^^^^
+INTERNALERROR>   File "C:\Users\chris\anaconda3\envs\stir\Lib\site-packages\pluggy\_callers.py", line 139, in _multicall
+INTERNALERROR>     teardown.throw(exception)
+INTERNALERROR>     ~~~~~~~~~~~~~~^^^^^^^^^^^
+INTERNALERROR>   File "C:\Users\chris\anaconda3\envs\stir\Lib\site-packages\_pytest\assertion\__init__.py", line 192, in pytest_runtest_protocol
+INTERNALERROR>     return (yield)
+INTERNALERROR>             ^^^^^
+INTERNALERROR>   File "C:\Users\chris\anaconda3\envs\stir\Lib\site-packages\pluggy\_callers.py", line 139, in _multicall
+INTERNALERROR>     teardown.throw(exception)
+INTERNALERROR>     ~~~~~~~~~~~~~~^^^^^^^^^^^
+INTERNALERROR>   File "C:\Users\chris\anaconda3\envs\stir\Lib\site-packages\_pytest\unittest.py", line 587, in pytest_runtest_protocol
+INTERNALERROR>     return (yield)
+INTERNALERROR>             ^^^^^
+INTERNALERROR>   File "C:\Users\chris\anaconda3\envs\stir\Lib\site-packages\pluggy\_callers.py", line 139, in _multicall
+INTERNALERROR>     teardown.throw(exception)
+INTERNALERROR>     ~~~~~~~~~~~~~~^^^^^^^^^^^
+INTERNALERROR>   File "C:\Users\chris\anaconda3\envs\stir\Lib\site-packages\_pytest\faulthandler.py", line 102, in pytest_runtest_protocol
+INTERNALERROR>     return (yield)
+INTERNALERROR>             ^^^^^
+INTERNALERROR>   File "C:\Users\chris\anaconda3\envs\stir\Lib\site-packages\pluggy\_callers.py", line 121, in _multicall
+INTERNALERROR>     res = hook_impl.function(*args)
+INTERNALERROR>   File "C:\Users\chris\anaconda3\envs\stir\Lib\site-packages\_pytest\runner.py", line 118, in pytest_runtest_protocol
+INTERNALERROR>     runtestprotocol(item, nextitem=nextitem)
+INTERNALERROR>     ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^
+INTERNALERROR>   File "C:\Users\chris\anaconda3\envs\stir\Lib\site-packages\_pytest\runner.py", line 131, in runtestprotocol
+INTERNALERROR>     rep = call_and_report(item, "setup", log)
+INTERNALERROR>   File "C:\Users\chris\anaconda3\envs\stir\Lib\site-packages\_pytest\runner.py", line 249, in call_and_report
+INTERNALERROR>     report: TestReport = ihook.pytest_runtest_makereport(item=item, call=call)
+INTERNALERROR>                          ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^
+INTERNALERROR>   File "C:\Users\chris\anaconda3\envs\stir\Lib\site-packages\pluggy\_hooks.py", line 512, in __call__
+INTERNALERROR>     return self._hookexec(self.name, self._hookimpls.copy(), kwargs, firstresult)
+INTERNALERROR>            ~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+INTERNALERROR>   File "C:\Users\chris\anaconda3\envs\stir\Lib\site-packages\pluggy\_manager.py", line 120, in _hookexec
+INTERNALERROR>     return self._inner_hookexec(hook_name, methods, kwargs, firstresult)
+INTERNALERROR>            ~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+INTERNALERROR>   File "C:\Users\chris\anaconda3\envs\stir\Lib\site-packages\pluggy\_callers.py", line 167, in _multicall
+INTERNALERROR>     raise exception
+INTERNALERROR>   File "C:\Users\chris\anaconda3\envs\stir\Lib\site-packages\pluggy\_callers.py", line 139, in _multicall
+INTERNALERROR>     teardown.throw(exception)
+INTERNALERROR>     ~~~~~~~~~~~~~~^^^^^^^^^^^
+INTERNALERROR>   File "C:\Users\chris\anaconda3\envs\stir\Lib\site-packages\pluggy\_callers.py", line 53, in run_old_style_hookwrapper
+INTERNALERROR>     return result.get_result()
+INTERNALERROR>            ~~~~~~~~~~~~~~~~~^^
+INTERNALERROR>   File "C:\Users\chris\anaconda3\envs\stir\Lib\site-packages\pluggy\_result.py", line 103, in get_result
+INTERNALERROR>     raise exc.with_traceback(tb)
+INTERNALERROR>   File "C:\Users\chris\anaconda3\envs\stir\Lib\site-packages\pluggy\_callers.py", line 38, in run_old_style_hookwrapper
+INTERNALERROR>     res = yield
+INTERNALERROR>           ^^^^^
+INTERNALERROR>   File "C:\Users\chris\anaconda3\envs\stir\Lib\site-packages\pluggy\_callers.py", line 139, in _multicall
+INTERNALERROR>     teardown.throw(exception)
+INTERNALERROR>     ~~~~~~~~~~~~~~^^^^^^^^^^^
+INTERNALERROR>   File "C:\Users\chris\anaconda3\envs\stir\Lib\site-packages\_pytest\tmpdir.py", line 311, in pytest_runtest_makereport
+INTERNALERROR>     rep = yield
+INTERNALERROR>           ^^^^^
+INTERNALERROR>   File "C:\Users\chris\anaconda3\envs\stir\Lib\site-packages\pluggy\_callers.py", line 139, in _multicall
+INTERNALERROR>     teardown.throw(exception)
+INTERNALERROR>     ~~~~~~~~~~~~~~^^^^^^^^^^^
+INTERNALERROR>   File "C:\Users\chris\anaconda3\envs\stir\Lib\site-packages\_pytest\skipping.py", line 280, in pytest_runtest_makereport
+INTERNALERROR>     rep = yield
+INTERNALERROR>           ^^^^^
+INTERNALERROR>   File "C:\Users\chris\anaconda3\envs\stir\Lib\site-packages\pluggy\_callers.py", line 121, in _multicall
+INTERNALERROR>     res = hook_impl.function(*args)
+INTERNALERROR>   File "C:\Users\chris\anaconda3\envs\stir\Lib\site-packages\_pytest\runner.py", line 377, in pytest_runtest_makereport
+INTERNALERROR>     return TestReport.from_item_and_call(item, call)
+INTERNALERROR>            ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^
+INTERNALERROR>   File "C:\Users\chris\anaconda3\envs\stir\Lib\site-packages\_pytest\reports.py", line 438, in from_item_and_call
+INTERNALERROR>     longrepr = _format_failed_longrepr(item, call, excinfo)
+INTERNALERROR>   File "C:\Users\chris\anaconda3\envs\stir\Lib\site-packages\_pytest\reports.py", line 266, in _format_failed_longrepr
+INTERNALERROR>     longrepr = item._repr_failure_py(
+INTERNALERROR>         excinfo, style=item.config.getoption("tbstyle", "auto")
+INTERNALERROR>     )
+INTERNALERROR>   File "C:\Users\chris\anaconda3\envs\stir\Lib\site-packages\_pytest\nodes.py", line 456, in _repr_failure_py
+INTERNALERROR>     return excinfo.getrepr(
+INTERNALERROR>            ~~~~~~~~~~~~~~~^
+INTERNALERROR>         funcargs=True,
+INTERNALERROR>         ^^^^^^^^^^^^^^
+INTERNALERROR>     ...<5 lines>...
+INTERNALERROR>         truncate_args=truncate_args,
+INTERNALERROR>         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+INTERNALERROR>     )
+INTERNALERROR>     ^
+INTERNALERROR>   File "C:\Users\chris\anaconda3\envs\stir\Lib\site-packages\_pytest\_code\code.py", line 765, in getrepr
+INTERNALERROR>     return fmt.repr_excinfo(self)
+INTERNALERROR>            ~~~~~~~~~~~~~~~~^^^^^^
+INTERNALERROR>   File "C:\Users\chris\anaconda3\envs\stir\Lib\site-packages\_pytest\_code\code.py", line 1200, in repr_excinfo
+INTERNALERROR>     reprtraceback = self.repr_traceback(excinfo_)
+INTERNALERROR>   File "C:\Users\chris\anaconda3\envs\stir\Lib\site-packages\_pytest\_code\code.py", line 1133, in repr_traceback
+INTERNALERROR>     self.repr_traceback_entry(entry, excinfo if last == entry else None)
+INTERNALERROR>     ~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+INTERNALERROR>   File "C:\Users\chris\anaconda3\envs\stir\Lib\site-packages\_pytest\_code\code.py", line 1063, in repr_traceback_entry
+INTERNALERROR>     source = self._getentrysource(entry)
+INTERNALERROR>   File "C:\Users\chris\anaconda3\envs\stir\Lib\site-packages\_pytest\_code\code.py", line 901, in _getentrysource
+INTERNALERROR>     source = entry.getsource(self.astcache)
+INTERNALERROR>   File "C:\Users\chris\anaconda3\envs\stir\Lib\site-packages\_pytest\_code\code.py", line 299, in getsource
+INTERNALERROR>     astnode, _, end = getstatementrange_ast(
+INTERNALERROR>                       ~~~~~~~~~~~~~~~~~~~~~^
+INTERNALERROR>         self.lineno, source, astnode=astnode
+INTERNALERROR>         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+INTERNALERROR>     )
+INTERNALERROR>     ^
+INTERNALERROR>   File "C:\Users\chris\anaconda3\envs\stir\Lib\site-packages\_pytest\_code\source.py", line 191, in getstatementrange_ast
+INTERNALERROR>     astnode = ast.parse(content, "source", "exec")
+INTERNALERROR>   File "C:\Users\chris\anaconda3\envs\stir\Lib\ast.py", line 50, in parse
+INTERNALERROR>     return compile(source, filename, mode, flags,
+INTERNALERROR>                    _feature_version=feature_version, optimize=optimize)
+INTERNALERROR> MemoryError
+
+1 warning, 15 errors in 20.27s
