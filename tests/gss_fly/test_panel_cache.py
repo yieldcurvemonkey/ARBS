@@ -284,3 +284,30 @@ def test_a_transient_failure_is_retried_in_the_same_process(tmp_path, dates):
     healthy = _FakeMDP(dates)
     panel = build_curve_panel(dates, healthy, cache_path=cache, show_progress=False)
     assert len(panel.s2c) == len(dates), "the previously-failed days were never retried"
+
+
+def test_a_cache_hit_answers_the_REQUESTED_dates_not_whatever_it_holds(tmp_path, dates):
+    """A cache may be faster than the request; it may not answer a different one.
+
+    The consolidated file holds whatever range built it. Returning it whole meant a caller asking
+    for 61 days silently received 332 — a short-window smoke test then scanned the full range,
+    took 646s instead of ~50s, and looked like it was hanging rather than misconfigured.
+    """
+    cache = tmp_path / "panel"
+    build_curve_panel(dates, _FakeMDP(dates), cache_path=cache, show_progress=False)
+    assert (cache / "s2c.parquet").exists()
+
+    subset = dates[:4]
+    got = build_curve_panel(subset, _FakeMDP(dates), cache_path=cache, show_progress=False)
+    assert len(got.s2c) == len(subset), f"asked for {len(subset)} dates, got {len(got.s2c)}"
+    assert set(got.reference["date"].dt.date) == set(subset)
+    assert len(got.rmse) == len(subset)
+
+
+def test_a_cache_hit_for_dates_it_does_not_hold_returns_what_exists(tmp_path, dates):
+    """Not a silently empty panel — the caller still gets the usual missing-date behaviour."""
+    cache = tmp_path / "panel"
+    build_curve_panel(dates, _FakeMDP(dates), cache_path=cache, show_progress=False)
+    other = [d.date() for d in pd.bdate_range("2030-01-01", periods=3)]
+    got = build_curve_panel(other, _FakeMDP(dates), cache_path=cache, show_progress=False)
+    assert len(got.s2c) == len(dates)

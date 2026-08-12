@@ -184,7 +184,12 @@ def build_curve_panel(
             cache_path = cache_path / f"spline_{spline_config_id(spline_config)}"
         if (cache_path / "s2c.parquet").exists():
             logger.info("curve panel cache hit: %s", cache_path)
-            return _load_panel(cache_path)
+            # SLICE to what was asked for. The consolidated file holds whatever range built it, and
+            # returning it whole means a caller who asks for 61 days silently gets 332 — which is
+            # exactly what happened to a "short window" smoke test that then took 646s instead of
+            # 50s and looked like it was hanging. A cache is allowed to be faster than the request;
+            # it is not allowed to answer a different one.
+            return _slice_panel(_load_panel(cache_path), dates)
         day_dir = cache_path / "days"
         day_dir.mkdir(parents=True, exist_ok=True)
 
@@ -585,6 +590,30 @@ def _load_day(day_dir: Path, d: datetime.date):
         logger.warning("cached day %s unreadable (%s); refetching", d, exc)
         return None
     return pd.Timestamp(d), frame, ref
+
+
+def _slice_panel(panel: CurvePanel, dates) -> CurvePanel:
+    """Restrict a loaded panel to the requested dates.
+
+    Returns the panel untouched when the request is not a strict subset — a caller asking for dates
+    the cache does not hold should get what exists plus the usual missing-date warning, not a
+    silently empty panel.
+    """
+    want = pd.DatetimeIndex(sorted({pd.Timestamp(d) for d in dates}))
+    have = pd.DatetimeIndex(panel.s2c.index)
+    keep = have.intersection(want)
+    if len(keep) == 0 or len(keep) == len(have):
+        return panel
+    logger.info("cache holds %d dates; request covers %d — slicing", len(have), len(keep))
+    ref = panel.reference
+    ref = ref[ref["date"].isin(keep)] if "date" in ref.columns else ref
+    return CurvePanel(
+        s2c=panel.s2c.loc[keep],
+        ytm=panel.ytm.loc[panel.ytm.index.intersection(keep)] if len(panel.ytm) else panel.ytm,
+        ttm=panel.ttm.loc[panel.ttm.index.intersection(keep)] if len(panel.ttm) else panel.ttm,
+        reference=ref,
+        rmse=panel.rmse.loc[panel.rmse.index.intersection(keep)] if len(panel.rmse) else panel.rmse,
+    )
 
 
 def _save_panel(panel: CurvePanel, path: Path) -> None:

@@ -38,7 +38,7 @@ import pandas as pd  # noqa: E402
 logging.basicConfig(level=logging.ERROR)
 
 from BT.gss_fly.conditioning import trade_set_jaccard  # noqa: E402
-from BT.gss_fly.data import build_curve_panel, ust_business_days  # noqa: E402
+from BT.gss_fly.data import build_curve_panel, spline_config_id, ust_business_days  # noqa: E402
 from gss_grid import spline_variants  # noqa: E402
 
 
@@ -79,8 +79,17 @@ def main() -> int:
     sv = spline_variants()
     logs = Path("notebooks/data/gss_fly/spline_logs")
 
+    # Load ONLY what is already built. `build_curve_panel` will happily BUILD a missing panel,
+    # which turns a "check" into a silent 21-minute refit — observed, on S4_with_otr. A diagnostic
+    # that quietly does twenty minutes of work is one you stop trusting to run.
     panels = {}
     for name, cfg in sv.items():
+        sub = Path(args.cache) if cfg is None else Path(args.cache) / f"spline_{spline_config_id(cfg)}"
+        if not (sub / "s2c.parquet").exists() and not any((sub / "days").glob("*.spline.parquet")
+                                                          if (sub / "days").exists() else []):
+            print(f"SIG: {name} not built — skipping "
+                  f"(scripts/gss_spline_panels.py --spline {name})", flush=True)
+            continue
         try:
             panels[name] = build_curve_panel(days, mdp, cache_path=Path(args.cache),
                                              show_progress=False, spline_config=cfg)
