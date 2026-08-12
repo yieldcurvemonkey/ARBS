@@ -294,9 +294,17 @@ level-key assertion made a no-op, the suffixing removed, the join key changed
 to `unit_key`, the LEFT JOIN made INNER, a hue put at the diverging midpoint,
 the ramp poles swapped, a missing cell rendered as `z = 0`.
 
-**Pre-existing failures, unrelated:** `LegsSubTable.test.ts` and
-`MmsTab.test.tsx` — 4 tests. Confirmed by stashing this branch's changes and
-re-running: identical failures on the clean tree.
+**Python fast gate** (`-m "not slow and not network and not db"`):
+**7,650 passed, 1 failed**, 56 skipped, in 31 min.
+
+**Pre-existing failures, unrelated, all three confirmed on a clean tree:**
+
+- `LegsSubTable.test.ts`, `MmsTab.test.tsx` — 4 tests. Confirmed by stashing
+  this branch's changes and re-running: identical failures.
+- `test_citivelo_excel_supervisor.py::test_not_signed_in_means_keep_waiting` —
+  confirmed by running it on `main` in the primary checkout, where it fails
+  identically. It is Excel-supervisor code this branch does not touch, and it
+  takes 335 s on its own, so it is waiting on real Excel state.
 
 ---
 
