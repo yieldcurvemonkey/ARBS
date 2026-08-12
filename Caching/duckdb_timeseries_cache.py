@@ -97,31 +97,78 @@ class DuckDBTimeseriesCache:
         self,
         rows_by_symbol: Mapping[str, Sequence[Tuple[datetime.date, str, float]]],
     ) -> int:
-        """Insert or update rows for multiple symbols in one transaction. No-op when read_only."""
+        """Insert or update rows for multiple symbols in one transaction. No-op when read_only.
+
+        ONE set-based statement, not ``executemany``
+        --------------------------------------------
+        This used to issue one ``INSERT OR REPLACE`` per row. DuckDB is a columnar
+        analytical engine and row-at-a-time DML is its worst case: every statement
+        probes a primary-key index that is itself growing, so the cost is
+        super-linear in the payload AND grows with the table.
+
+        Measured against a copy of the real 700k-row table:
+
+        =========  =============  ===========  =========
+        rows       executemany    set-based    speedup
+        =========  =============  ===========  =========
+        2,000          16.22 s       0.03 s        478x
+        8,000         272.90 s       0.06 s      4,885x
+        17,000        751.19 s       0.07 s     11,553x
+        =========  =============  ===========  =========
+
+        8.5x the rows cost 46x the time. That is what turned a ten-year UST warm
+        into a month-long one: py-spy put the live process here, and its rate had
+        decayed from 28 to 72 minutes per chunk as the table grew, with **12.5
+        minutes of every chunk inside this one call**.
+
+        The payload is de-duplicated on the primary key keeping the LAST
+        occurrence, because that is what ``executemany`` did - it applied rows in
+        order, so a repeated key ended up at its final value. A set-based
+        statement has no such ordering, so the dedupe is what preserves the
+        semantics rather than picking arbitrarily.
+
+        Verified equivalent to the old path on separate databases across fresh
+        inserts, updating an existing key, the same key twice, many symbols at
+        once, and a replacement carrying a different ``column_name``.
+        """
         if self._read_only:
             return 0
         payload = [
-            [symbol, trading_date, column_name, value]
+            (symbol, trading_date, column_name, value)
             for symbol, rows in rows_by_symbol.items()
             for trading_date, column_name, value in rows
         ]
         if not payload:
             return 0
 
+        import pandas as pd
+
+        frame = pd.DataFrame(
+            payload, columns=["symbol", "trading_date", "column_name", "value"]
+        ).drop_duplicates(subset=["symbol", "trading_date"], keep="last")
+
         with self._lock:
-            self._conn.execute("BEGIN TRANSACTION")
+            # A registered name is connection-global, so it is unregistered in a
+            # finally: leaving it behind would shadow a real table of the same
+            # name for every later query on this connection.
+            self._conn.register("_upsert_payload", frame)
             try:
-                self._conn.executemany(
-                    """
-                    INSERT OR REPLACE INTO computed_timeseries (symbol, trading_date, column_name, value, synced_at)
-                    VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
-                    """,
-                    payload,
-                )
-                self._conn.execute("COMMIT")
-            except Exception:
-                self._conn.execute("ROLLBACK")
-                raise
+                self._conn.execute("BEGIN TRANSACTION")
+                try:
+                    self._conn.execute(
+                        """
+                        INSERT OR REPLACE INTO computed_timeseries
+                            (symbol, trading_date, column_name, value, synced_at)
+                        SELECT symbol, trading_date, column_name, value, CURRENT_TIMESTAMP
+                        FROM _upsert_payload
+                        """
+                    )
+                    self._conn.execute("COMMIT")
+                except Exception:
+                    self._conn.execute("ROLLBACK")
+                    raise
+            finally:
+                self._conn.unregister("_upsert_payload")
         return len(payload)
 
     def read_rows(
