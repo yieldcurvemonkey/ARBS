@@ -1,0 +1,10 @@
+==========================================================================
+VALIDATION -- the checking tools, against answers known in advance
+==========================================================================
+  null rejection at 5% over 400 panels (8 buckets x 260 days, 5-day overlap, common rate factor, persistent correlated regressor):
+    iid OLS         52.8%   <- must be badly oversized
+    day-clustered   21.8%
+    Driscoll-Kraay   7.8%   <- must be nearest 5%
+  recovers a planted beta=+0.5 within its own CI: 94.0% (must be ~95%)
+  ladder equivalence on 2024-11-25 (200 units, 5572 ladder rows): max |diff| = 0.000e+00
+VALIDATION: all checks passed
