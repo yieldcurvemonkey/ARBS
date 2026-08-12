@@ -352,6 +352,14 @@ sign check from being able to pass vacuously.
   20:00–23:59 ET prints that arrive with the next tape day's `as_of`, and it
   tops itself up on the next run. Published rather than dropped, because
   dropping it would throw away the freshest cell in the series.
+- **There is no ladder-only rebuild.** A defect in the ladder or the indicator
+  alone still pays `publish`'s full 527-day loop, even though
+  `arbs_dd_unit_bucket_v1` and `arbs_dd_coverage_v1` are already correct and
+  sufficient to rebuild it. The fix is ~30 lines — have `publish` drop its
+  per-day `tenor_rows` to local parquet and add a `ladder` stage over that
+  directory — and it would also remove the ~10 GB in-memory concat the build
+  currently does. Not built here. (The two-stage split still does its main
+  job: the repair is 35 minutes of `publish`, not 26 hours of `price`.)
 - **`arbs_dd_unit_bucket_v1` stores numerically-zero buckets.** rateslib's
   delta is non-zero at all 28 pillars, so a 7Y swap carries entries of order
   1e-11 in 20-30Y. No dust floor is applied — the backend measured that a

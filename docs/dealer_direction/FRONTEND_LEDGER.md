@@ -466,6 +466,40 @@ confidence condition; on this evidence the sharper statement is that
 *meeting-dated structures on either index* are the low-confidence population,
 and Fed Funds looks worse mainly because it is 66% of them.
 
+### G-9. The full publish was killed mid-ladder, and the tables stayed consistent
+
+Both the publish and the dev server were killed together partway through the
+final ladder build — no OOM (no system events, 21 GB free of 64 GB), two
+unrelated processes dying at the same instant, so an external reap rather than
+anything the job did.
+
+**The state it left behind is the design working.** Every per-day write
+commits its own day, so:
+
+| table | rows | range |
+|---|---:|---|
+| `arbs_dd_unit_v1` | 1,283,522 | 2024-07-01 … 2026-08-07 ✓ |
+| `arbs_dd_unit_bucket_v1` | 9,571,690 | complete ✓ |
+| `arbs_dd_coverage_v1` | 66,895 | complete ✓ |
+| `arbs_dd_ladder_v1` | 2,006 | **stale — still the 29-day version** |
+
+The kill landed before the ladder's `TRUNCATE`, so nothing was half-written and
+nothing was lost. Re-running `publish` is the whole repair, and it costs the
+day loop (~35 min) rather than the 26 hours of re-pricing — which is the split
+the two stages exist for.
+
+**The refinement worth stating**: a defect in the *ladder alone* still pays the
+full 527-day loop, because `publish` has no ladder-only entry point. The unit
+and coverage tables are already correct and sufficient to rebuild it. That is
+listed as unfinished rather than built, because the cheap fix is to have
+`publish` also drop its per-day `tenor_rows` to local parquet and add a
+`ladder` stage over that directory — about thirty lines, and it would also
+remove the ~10 GB concat this build does in memory.
+
+**Operational note**: long unattended runs are launched detached
+(`Start-Process -WindowStyle Hidden`) rather than as harness background tasks,
+so a session-level reap cannot take them.
+
 ### G-7. Measured read cost
 
 `scratch/ddfe06_read_cost.py`, 5 reps each, against prod over the pooler.
