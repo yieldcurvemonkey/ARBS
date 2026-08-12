@@ -150,9 +150,10 @@ Per-day, on this box (32 cores, 64 GB), against a fully warm curve store:
 |---|---|
 | `price`, one tape day | **57 s** single process (2,752 units, 2,098 priced, 58,520 KRD rows on 2026-04-01) |
 | `price`, 8 workers | ~60 s of wall clock per 2.5 days |
-| one `Calibration.fit` | **42.1 s** over 550 fitted buckets, 60-day window, 59,520 deviations |
-| rolling calibration, full tape | ~121 fits → **~85 min**, then cached |
-| `publish`, one day | **6.5 s** (classify → ladder → roll-up → three writes) |
+| `price`, full tape | **609 days in 114.4 min** at 8 workers (11.3 s/day wall), 0 errors |
+| one `Calibration.fit` | 42.1 s over 550 fitted buckets — *measured under contention* |
+| rolling calibration, full tape | **121 fits in 41.5 min** on a free box (20.6 s/fit), then cached |
+| `publish`, one day | 6.5 s contended, **~4 s** on a free box |
 | ladder rebuild + write | seconds; 2,006 cells for a 29-day window |
 
 The backend's own estimates were 115 s repricing + 65 s key-rate = 180 s/day.

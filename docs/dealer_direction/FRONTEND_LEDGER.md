@@ -236,12 +236,21 @@ a refit.
 | one `Calibration.fit`, 60-day window, 59,520 deviations | **42.1 s** |
 | buckets fitted | **550** (287 leaf `BucketKey`s + pooled parents), 77 ms each |
 | leaf buckets clearing `MIN_BUCKET_N = 800` | 17, holding 41,628 of 59,520 rows |
-| smoke window, 22 rolling fits | **15 min** uncontended |
-| **full tape, ~121 rolling fits** | **~85 min** uncontended |
+| smoke window, 22 rolling fits | 15 min, measured under contention |
+| **full tape, 121 rolling fits, box free** | **41.5 min** |
 
-The 45+ minutes the first full run spent was contention: eight pricing workers
-against a single-threaded MLE loop. The full-window calibration is therefore
-run **after** `price` finishes, not beside it.
+**The projection was 2× too pessimistic, and the reason is the measurement's
+own conditions.** The 42.1 s/fit came from a probe run *while eight pricing
+workers were saturating the box*; with the box free the real cost is 20.6
+s/fit. So the estimate was not wrong about the arithmetic, it was wrong about
+what it had measured — the same shape of error as the per-day-solver
+correction in the backend's own LEDGER, where a stable Jacobian was measured
+correctly and licensed the wrong conclusion.
+
+Practical consequence, and it is the useful half: **run the full-window
+calibration after `price` finishes, not beside it.** Same for the per-day
+publish loop, which runs at ~4 s/day on a free box against 6.5 s/day
+contended.
 
 ### G-6. Three defects on the first live `publish`, all caught by a guard
 
