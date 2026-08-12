@@ -207,3 +207,32 @@ def test_ts_scoring_uses_only_the_past():
 
 def test_config_describe_is_stable():
     assert "gss_fly" in GSSConfig().describe()
+
+
+# ------------------------------------------------- repo workbook header row
+def test_repo_workbook_header_row_is_the_one_with_most_tags(tmp_path):
+    """A Velocity export's row 0 is the formula, not the header.
+
+    `=CVTSHIST("RATES.REPO.USD.USTREASGC.SPOT.ON,RATES.REPO...")` is a single cell that contains
+    "RATES.REPO", so "first row that mentions it" selects the formula and parses a comma-joined
+    tag list as one column name. Every tenor lookup then misses and the workbook reads as having
+    no columns for the collateral — which is exactly how the supplied workbook failed to load.
+    """
+    import pandas as pd
+
+    from BT.gss_fly.costs import load_repo_from_workbook
+
+    formula = '=CVTSHIST("RATES.REPO.USD.USTREASGC.SPOT.ON,RATES.REPO.USD.USTREASGC.SPOT.1M")'
+    rows = [
+        [formula, None, None],
+        ["Date", "RATES.REPO.USD.USTREASGC.SPOT.ON - x", "RATES.REPO.USD.USTREASGC.SPOT.1M - x"],
+        ["2025-01-02", 4.30, 4.31],
+        ["2025-01-03", 4.28, 4.29],
+    ]
+    path = tmp_path / "repo.xlsx"
+    pd.DataFrame(rows).to_excel(path, header=False, index=False)
+
+    rc = load_repo_from_workbook(path, "USTREASGC")
+    assert set(rc.frame.columns) == {"ON", "1M"}
+    assert len(rc.frame) == 2
+    assert rc.frame["ON"].iloc[0] == pytest.approx(4.30)

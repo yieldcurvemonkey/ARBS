@@ -130,12 +130,17 @@ def load_repo_from_workbook(path, collateral: str = "USTREASGC") -> RepoCurve:
     path = Path(path)
     raw = pd.read_excel(path, sheet_name=0, header=None)
 
-    header_row = None
-    for r in range(min(6, len(raw))):
-        if raw.iloc[r].astype(str).str.contains("RATES.REPO", na=False).any():
-            header_row = r
-            break
-    if header_row is None:
+    # Pick the row with the MOST RATES.REPO cells, not the first row containing one. Row 0 of a
+    # Velocity export holds the `=CVTSHIST("RATES.REPO.USD...,RATES.REPO.USD...")` formula as a
+    # single string, so "first row that mentions RATES.REPO" selects the formula and then parses a
+    # comma-joined tag list as one column name — every tenor lookup misses and the whole workbook
+    # reads as having no columns for the collateral.
+    counts = {
+        r: int(raw.iloc[r].astype(str).str.contains(r"RATES\.REPO\.", na=False, regex=True).sum())
+        for r in range(min(8, len(raw)))
+    }
+    header_row = max(counts, key=lambda r: counts[r]) if counts else None
+    if header_row is None or counts.get(header_row, 0) == 0:
         raise ValueError(f"no RATES.REPO header row found in {path}")
 
     headers = raw.iloc[header_row].astype(str)
