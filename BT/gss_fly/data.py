@@ -95,19 +95,38 @@ def build_curve_panel(
     *,
     cache_path: Optional[Path] = None,
     show_progress: bool = True,
+    consolidate_partial: bool = False,
 ) -> CurvePanel:
     """Fit the cash spline on every date and assemble the dates × bonds panels.
 
     ``mdp`` is a :class:`~MDP.FixedRateBonds.FixedRateBondsMDP.FixedRateBondsMDP`. A date whose
     spline fails is skipped and logged rather than aborting the panel — a missing day costs one
     observation, an aborted panel costs the run.
+
+    **The per-day cache is what makes this usable.** Acquisition here is I/O-bound, not
+    compute-bound: the steady state is ~1.7s/day but every thirty-odd days the upstream stalls for
+    minutes at a time, so a 507-day panel runs for an hour at single-digit CPU. Writing the whole
+    panel only at the end meant any interruption in that hour — a kill, a hung fetch, a machine
+    reboot — threw away every completed day and the next attempt started from zero. So each day is
+    written to ``cache_path/days`` as it completes and a rerun fetches only what is missing. The
+    consolidated panel is still written at the end, and a consolidated cache is still preferred on
+    read because loading five parquets beats loading a thousand.
+
+    The consolidated cache is written **only when every requested date resolved**. An incomplete
+    panel that consolidates is worse than no cache at all: every later run reads the short panel and
+    never retries the missing days, so a transient upstream stall silently becomes a permanent hole
+    in the backtest. Pass ``consolidate_partial=True`` to bake a panel whose gaps are known to be
+    real (a date the source will never serve) rather than transient.
     """
     dates = [pd.Timestamp(d).date() for d in dates]
+    day_dir: Optional[Path] = None
     if cache_path is not None:
         cache_path = Path(cache_path)
-        if cache_path.exists():
+        if (cache_path / "s2c.parquet").exists():
             logger.info("curve panel cache hit: %s", cache_path)
             return _load_panel(cache_path)
+        day_dir = cache_path / "days"
+        day_dir.mkdir(parents=True, exist_ok=True)
 
     s2c_rows: Dict[pd.Timestamp, pd.Series] = {}
     ytm_rows: Dict[pd.Timestamp, pd.Series] = {}
@@ -115,12 +134,31 @@ def build_curve_panel(
     ref_frames: List[pd.DataFrame] = []
     rmse: Dict[pd.Timestamp, float] = {}
 
-    iterator = dates
+    todo = list(dates)
+    if day_dir is not None:
+        # A day counts as resumed only once it has actually LOADED. A file that exists but does not
+        # read — a torn write, a half-flushed parquet — must fall through to the fetch path, not be
+        # silently dropped from both the cache and the work list.
+        resumed: List[datetime.date] = []
+        for d in dates:
+            if not _day_files(day_dir, d)[0].exists():
+                continue
+            day = _load_day(day_dir, d)
+            if day is None:
+                continue
+            ts, spline_frame, ref = day
+            _absorb_day(ts, spline_frame, ref, s2c_rows, ytm_rows, ttm_rows, rmse, ref_frames)
+            resumed.append(d)
+        todo = [d for d in dates if d not in set(resumed)]
+        if resumed:
+            logger.info("resuming: %d of %d days already cached in %s", len(resumed), len(dates), day_dir)
+
+    iterator = todo
     if show_progress:
         try:
             import tqdm
 
-            iterator = tqdm.tqdm(dates, desc="GSS curve panel", unit="day")
+            iterator = tqdm.tqdm(todo, desc="GSS curve panel", unit="day")
         except ImportError:
             pass
 
@@ -138,12 +176,8 @@ def build_curve_panel(
         frame = spline.to_frame().reset_index()
         if "cusip" not in frame.columns:
             frame = frame.rename(columns={frame.columns[0]: "cusip"})
-
-        s2c_rows[ts] = pd.Series(frame["yield_error_bp"].to_numpy(), index=frame["cusip"])
-        if "observed" in frame.columns:
-            ytm_rows[ts] = pd.Series(frame["observed"].to_numpy(), index=frame["cusip"])
-        ttm_rows[ts] = pd.Series(frame["ttm"].to_numpy(), index=frame["cusip"])
-        rmse[ts] = float(spline.rmse) if spline.rmse is not None else np.nan
+        frame = frame.copy()
+        frame["rmse"] = float(spline.rmse) if spline.rmse is not None else np.nan
 
         try:
             ref = mdp.get_bond_reference_data(as_of_date=d)
@@ -158,7 +192,10 @@ def build_curve_panel(
             ref["seasoning_days"] = ref["issue_date"].map(
                 lambda i: (pd.Timestamp(d) - pd.Timestamp(i)).days if pd.notna(i) else np.nan
             )
-        ref_frames.append(ref)
+
+        _absorb_day(ts, frame, ref, s2c_rows, ytm_rows, ttm_rows, rmse, ref_frames)
+        if day_dir is not None:
+            _save_day(day_dir, d, frame, ref)
 
     if not s2c_rows:
         raise RuntimeError("no dates produced a spline — check the MDP source and the date range")
@@ -169,9 +206,89 @@ def build_curve_panel(
     reference = pd.concat(ref_frames, ignore_index=True)
     panel = CurvePanel(s2c=s2c, ytm=ytm, ttm=ttm, reference=reference, rmse=pd.Series(rmse).sort_index())
 
+    missing = [d for d in dates if pd.Timestamp(d) not in s2c_rows]
+    if missing:
+        logger.warning(
+            "curve panel incomplete: %d of %d dates did not resolve (first %s, last %s)",
+            len(missing), len(dates), missing[0], missing[-1],
+        )
     if cache_path is not None:
-        _save_panel(panel, cache_path)
+        if missing and not consolidate_partial:
+            logger.info(
+                "consolidated cache NOT written — %d dates still missing. The per-day cache in %s "
+                "is kept, so a rerun refetches only those dates.",
+                len(missing), cache_path / "days",
+            )
+        else:
+            _save_panel(panel, cache_path)
     return panel
+
+
+def _absorb_day(
+    ts: pd.Timestamp,
+    frame: pd.DataFrame,
+    ref: pd.DataFrame,
+    s2c_rows: Dict[pd.Timestamp, pd.Series],
+    ytm_rows: Dict[pd.Timestamp, pd.Series],
+    ttm_rows: Dict[pd.Timestamp, pd.Series],
+    rmse: Dict[pd.Timestamp, float],
+    ref_frames: List[pd.DataFrame],
+) -> None:
+    """Fold one day's spline frame and reference frame into the panel accumulators.
+
+    Shared by the fetch path and the cache-resume path so a resumed panel is assembled by exactly
+    the same code as a freshly built one — a resume that assembles differently is a resume that
+    silently changes the answer.
+    """
+    s2c_rows[ts] = pd.Series(frame["yield_error_bp"].to_numpy(), index=frame["cusip"])
+    if "observed" in frame.columns:
+        ytm_rows[ts] = pd.Series(frame["observed"].to_numpy(), index=frame["cusip"])
+    ttm_rows[ts] = pd.Series(frame["ttm"].to_numpy(), index=frame["cusip"])
+    rmse[ts] = float(frame["rmse"].iloc[0]) if "rmse" in frame.columns and len(frame) else np.nan
+    ref_frames.append(_normalise_datetimes(ref))
+
+
+def _normalise_datetimes(ref: pd.DataFrame) -> pd.DataFrame:
+    """Pin every datetime column to nanosecond resolution.
+
+    A parquet round-trip re-resolves datetimes — a ``date`` column written as ``datetime64[s]``
+    comes back as ``datetime64[ms]``. The values are unchanged, so nothing fails loudly, but a
+    reference frame concatenated from cached and freshly-fetched days would then carry a resolution
+    that depends on which days happened to be cached. Anything that later joins or compares on
+    those columns inherits that dependency.
+    """
+    out = ref.copy()
+    for col in out.columns:
+        if pd.api.types.is_datetime64_any_dtype(out[col]):
+            out[col] = out[col].astype("datetime64[ns]")
+    return out
+
+
+def _day_files(day_dir: Path, d: datetime.date) -> Tuple[Path, Path]:
+    stamp = pd.Timestamp(d).strftime("%Y-%m-%d")
+    return day_dir / f"{stamp}.spline.parquet", day_dir / f"{stamp}.ref.parquet"
+
+
+def _save_day(day_dir: Path, d: datetime.date, frame: pd.DataFrame, ref: pd.DataFrame) -> None:
+    spline_p, ref_p = _day_files(day_dir, d)
+    # Reference first, spline second: the spline file is what the resume scan looks for, so it must
+    # not exist unless its partner does. Writing it last makes a torn write recoverable instead of
+    # producing a day that claims to be cached and then fails to load.
+    ref.to_parquet(ref_p.with_suffix(".tmp"))
+    ref_p.with_suffix(".tmp").replace(ref_p)
+    frame.to_parquet(spline_p.with_suffix(".tmp"))
+    spline_p.with_suffix(".tmp").replace(spline_p)
+
+
+def _load_day(day_dir: Path, d: datetime.date):
+    spline_p, ref_p = _day_files(day_dir, d)
+    try:
+        frame = pd.read_parquet(spline_p)
+        ref = pd.read_parquet(ref_p)
+    except Exception as exc:  # noqa: BLE001 — a corrupt day is refetched, not fatal
+        logger.warning("cached day %s unreadable (%s); refetching", d, exc)
+        return None
+    return pd.Timestamp(d), frame, ref
 
 
 def _save_panel(panel: CurvePanel, path: Path) -> None:
