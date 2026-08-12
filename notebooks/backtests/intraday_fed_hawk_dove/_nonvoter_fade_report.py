@@ -174,11 +174,19 @@ def main() -> None:
     rule("3. the combined book is NOT the voters' book plus extra trades")
     d_v, d_n = D[D.is_voter == True], D[D.is_voter == False]      # noqa: E712
     lost = A[~A.tag.isin(D.tag)]
-    gained_nv = C[~C.tag.isin(D.tag)]
-    print(f"voter trades      standalone {len(A):4d}   inside D {len(d_v):4d}   "
-          f"displaced {len(lost):3d}")
-    print(f"non-voter trades  standalone {len(C):4d}   inside D {len(d_n):4d}   "
-          f"displaced {len(gained_nv):3d}")
+    lost_nv = C[~C.tag.isin(D.tag)]
+    # ...and the other direction: an event its own single-class book dropped for
+    # overlapping a SAME-class predecessor survives here when that predecessor was
+    # itself pre-empted by the other half. So the ledger adds a term; it does not
+    # subtract. Six trades arrive that way.
+    free, free_nv = d_v[~d_v.tag.isin(A.tag)], d_n[~d_n.tag.isin(C.tag)]
+    print(f"voter trades      standalone {len(A):4d} - displaced {len(lost):3d} "
+          f"+ freed {len(free):2d} = inside D {len(d_v):4d}")
+    print(f"non-voter trades  standalone {len(C):4d} - displaced {len(lost_nv):3d} "
+          f"+ freed {len(free_nv):2d} = inside D {len(d_n):4d}")
+    assert len(A) - len(lost) + len(free) == len(d_v)
+    assert len(C) - len(lost_nv) + len(free_nv) == len(d_n)
+    print(f"                  {len(d_v)} + {len(d_n)} = {len(D)}")
     print(f"\nthe {len(lost)} voter speeches a non-voter's position was sitting in front of")
     print(f"were worth {lost.pnl_bp.sum():+.2f}bp in the standalone voter book "
           f"({lost.pnl_bp.mean():+.4f}bp/trade)")
