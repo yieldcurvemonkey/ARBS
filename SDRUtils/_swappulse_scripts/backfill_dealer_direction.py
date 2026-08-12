@@ -1519,12 +1519,22 @@ def stage_publish(days_all: list, publish_days: list, paths: Paths,
           f"({publish_days[0]} .. {publish_days[-1]}), "
           f"calibrating on {len(days_all)} priced days", flush=True)
 
+    # Schema FIRST, on a throwaway connection, before the calibration.
+    # The calibration is ~85 minutes on the full window; discovering a bad
+    # ALTER after it, rather than in the first second, is the difference
+    # between a typo and an evening. The connection is not held across the
+    # calibration -- an idle session that long is its own problem.
+    conn = connect()
+    try:
+        S.ensure_schema(conn)
+    finally:
+        conn.close()
+
     cals = build_calibrations(paths, days_all, refresh=refresh_calibration)
     tau_set = TauSet(cals)
 
     conn = connect()
     try:
-        S.ensure_schema(conn)
         tenor_parts, cov_parts = [], []
         t0 = time.time()
         with probability_clip() as clip:
