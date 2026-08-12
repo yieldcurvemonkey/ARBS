@@ -119,11 +119,17 @@ def build_fly_state(
     asof: pd.Timestamp,
     cfg: Optional[FlyConfig] = None,
     sign_by_z: bool = True,
+    yield_scale: float = 100.0,
 ) -> Optional[FlyState]:
     """Compose a fly's series up to ``asof`` and evaluate its state variables there.
 
     Everything is strictly trailing: the z, its change, and the vol are all read at ``asof`` from
     series built only from data at or before ``asof``.
+
+    ``yield_scale`` converts ``yield_panel`` into **basis points**, because ``ZSig = |z|·σ`` is a
+    bp quantity and is compared against bp thresholds (entry 3.0, repo hurdle 2.5). ARBS carries
+    yields in percent, so the default is 100. GSS carried them as decimals and used 10,000; get
+    this wrong and the vol is off by two orders of magnitude and the book never trades.
     """
     cfg = cfg or FlyConfig()
     legs = list(legs)
@@ -151,7 +157,7 @@ def build_fly_state(
         if asof not in z_hist.index:
             return None
 
-    y_hist = _compose(yield_panel.loc[:asof], legs, w).dropna()
+    y_hist = _compose(yield_panel.loc[:asof], legs, w).dropna() * float(yield_scale)
     if asof not in y_hist.index:
         return None
 
@@ -184,6 +190,7 @@ def scan_flies(
     yield_panel: pd.DataFrame,
     asof: pd.Timestamp,
     cfg: Optional[FlyConfig] = None,
+    yield_scale: float = 100.0,
 ) -> List[FlyState]:
     """Every candidate fly on ``asof``, ranked the way GSS ranks them.
 
@@ -221,6 +228,7 @@ def scan_flies(
             ttms=[curve.loc[c, "ttm"] for c in legs],
             asof=asof,
             cfg=cfg,
+            yield_scale=yield_scale,
         )
         if st is not None:
             out.append(st)
