@@ -135,24 +135,37 @@ def _pnl_components(res: "GSSResult") -> Dict[str, float]:
             return 0.0
         return float(pd.Series(h).sort_index().iloc[-1])
 
-    bond = _last("bond_realized")          # coupons + price convergence realised at unwind
+    bond = _last("bond_realized")          # coupons during the hold + everything booked at unwind
     financing = _last("financing_realized")
     open_mtm = _last("bond_open_mtm")
 
     closed = res.closed
-    fees = (float(closed["fee_allocated"].astype(float).sum())
-            if not closed.empty and "fee_allocated" in closed.columns else 0.0)
+    have = lambda c: (not closed.empty) and c in closed.columns  # noqa: E731
+    fees = float(closed["fee_allocated"].astype(float).sum()) if have("fee_allocated") else 0.0
+    # Everything the unwinds returned, before their fee: cf + price convergence + financing.
+    unwind = float(closed["gross_realized_pnl"].astype(float).sum()) if have("gross_realized_pnl") else np.nan
 
-    out["bond_pnl_usd"] = bond
-    out["financing_pnl_usd"] = financing
+    # Carry accrued while the position was HELD is what is left of the ledgers once the unwind
+    # bookings are removed from them. Splitting it out is the point: for this book it is the
+    # largest single term and it has the opposite sign to the convergence.
+    carry = (bond + financing - unwind) if np.isfinite(unwind) else np.nan
+
+    out["carry_during_hold_usd"] = carry
+    out["unwind_proceeds_usd"] = unwind
     out["fees_usd"] = -fees
     out["open_mtm_usd"] = open_mtm
-    out["gross_before_fees_usd"] = bond + financing + open_mtm
-    if (bond + financing + open_mtm) != 0:
-        out["cost_share_of_gross"] = fees / (bond + financing + open_mtm)
+    out["bond_ledger_usd"] = bond
+    out["financing_ledger_usd"] = financing
+
+    gross = (carry + unwind + open_mtm) if np.isfinite(carry) else (bond + financing + open_mtm)
+    out["gross_before_fees_usd"] = gross
+    if gross:
+        out["cost_share_of_gross"] = fees / gross
 
     eq = res.equity.dropna()
     if len(eq):
+        # equity == bond_ledger + financing_ledger - fees + open_mark, identically; the finer
+        # split above is that same identity with the unwind bookings separated from the carry.
         out["reconciliation_gap_usd"] = float(eq.iloc[-1] - (bond + financing - fees + open_mtm))
     return out
 

@@ -236,3 +236,88 @@ def test_repo_workbook_header_row_is_the_one_with_most_tags(tmp_path):
     assert set(rc.frame.columns) == {"ON", "1M"}
     assert len(rc.frame) == 2
     assert rc.frame["ON"].iloc[0] == pytest.approx(4.30)
+
+
+# ----------------------------------------------- P&L decomposition identity
+class _FakeBT:
+    def __init__(self, hist):
+        self.frb_component_histories = hist
+
+
+def _fake_result(*, bond, financing, open_mtm, unwind, fees, equity_end):
+    """A GSSResult whose ledgers and closed log are set to known values."""
+    import pandas as pd
+
+    from BT.gss_fly.backtest import GSSResult
+
+    idx = pd.date_range("2025-01-01", periods=3, freq="D")
+    hist = {
+        "bond_realized": {idx[-1]: bond},
+        "financing_realized": {idx[-1]: financing},
+        "bond_open_mtm": {idx[-1]: open_mtm},
+    }
+    closed = pd.DataFrame({
+        "realized_pnl": [unwind - fees],
+        "gross_realized_pnl": [unwind],
+        "fee_allocated": [fees],
+        "holding_period_days": [7.5],
+    })
+    return GSSResult(
+        equity=pd.Series([0.0, equity_end / 2, equity_end], index=idx),
+        closed=closed, trade_log=pd.DataFrame(), backtest=_FakeBT(hist), engine=None,
+    )
+
+
+def test_pnl_decomposition_reconciles_to_the_equity_curve():
+    """equity == bond_ledger + financing_ledger - fees + open_mark, identically.
+
+    The numbers are the measured GSS defaults. Two earlier versions of this decomposition were
+    confidently wrong, so the identity is pinned rather than described.
+    """
+    from BT.gss_fly.backtest import summarize
+
+    res = _fake_result(bond=2_450_064.74, financing=355_464.50, open_mtm=444_652.82,
+                       unwind=10_736_110.91, fees=2_818_737.56, equity_end=431_444.50)
+    s = summarize(res)
+    assert s["reconciliation_gap_usd"] == pytest.approx(0.0, abs=1e-6)
+
+
+def test_the_finer_split_also_sums_to_equity():
+    """carry + unwind - fees + open == equity, the split that separates the two economics."""
+    from BT.gss_fly.backtest import summarize
+
+    res = _fake_result(bond=2_450_064.74, financing=355_464.50, open_mtm=444_652.82,
+                       unwind=10_736_110.91, fees=2_818_737.56, equity_end=431_444.50)
+    s = summarize(res)
+    total = (s["carry_during_hold_usd"] + s["unwind_proceeds_usd"]
+             + s["fees_usd"] + s["open_mtm_usd"])
+    assert total == pytest.approx(431_444.50, abs=1e-6)
+    # and carry is the ledgers minus what the unwinds booked, i.e. genuinely disjoint from unwind
+    assert s["carry_during_hold_usd"] == pytest.approx(
+        2_450_064.74 + 355_464.50 - 10_736_110.91, abs=1e-6)
+
+
+def test_the_per_trade_sum_is_not_a_component_and_would_break_the_identity():
+    """Guard on the guard: adding the closed-log sum back in must NOT reconcile.
+
+    This is the exact mistake the first decomposition made — it double-counted every unwind by
+    $10.7m. If the identity still held with that term added, this test would be proving nothing.
+    """
+    from BT.gss_fly.backtest import summarize
+
+    res = _fake_result(bond=2_450_064.74, financing=355_464.50, open_mtm=444_652.82,
+                       unwind=10_736_110.91, fees=2_818_737.56, equity_end=431_444.50)
+    s = summarize(res)
+    wrong = (s["per_trade_pnl_usd"] + s["bond_ledger_usd"]
+             + s["financing_ledger_usd"] + s["open_mtm_usd"])
+    assert abs(wrong - 431_444.50) > 1_000_000
+
+
+def test_cost_share_of_gross_is_reported():
+    from BT.gss_fly.backtest import summarize
+
+    res = _fake_result(bond=2_450_064.74, financing=355_464.50, open_mtm=444_652.82,
+                       unwind=10_736_110.91, fees=2_818_737.56, equity_end=431_444.50)
+    s = summarize(res)
+    assert s["gross_before_fees_usd"] == pytest.approx(431_444.50 + 2_818_737.56, abs=1e-6)
+    assert 0.8 < s["cost_share_of_gross"] < 0.9

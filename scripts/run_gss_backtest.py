@@ -99,8 +99,8 @@ def main() -> int:
             print("   summ " + str({k: (round(v, 1) if isinstance(v, float) else v)
                                     for k, v in sm.items()}), flush=True)
             # the reconciliation, stated rather than assumed
-            print(f"   recon bond={sm.get('bond_pnl_usd', float('nan')):,.0f} "
-                  f"+ financing={sm.get('financing_pnl_usd', float('nan')):,.0f} "
+            print(f"   recon carry={sm.get('carry_during_hold_usd', float('nan')):,.0f} "
+                  f"+ unwind={sm.get('unwind_proceeds_usd', float('nan')):,.0f} "
                   f"+ fees={sm.get('fees_usd', float('nan')):,.0f} "
                   f"+ open={sm.get('open_mtm_usd', float('nan')):,.0f} "
                   f"=> equity={sm.get('end_equity_usd', float('nan')):,.0f} "
