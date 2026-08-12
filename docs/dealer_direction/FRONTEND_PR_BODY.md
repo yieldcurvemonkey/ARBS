@@ -212,6 +212,60 @@ rather than mixing two populations inside one fraction. Nothing had exercised
 this before: the backend built the coverage frame alone, and INDICATOR §6
 records that no composed pipeline existed to put a KRD-derived level beside it.
 
+## A finding for the backend owners: FOMC-dated swaps
+
+Not a defect in this branch, and not something this branch changes — improving
+the inference is out of scope. But it is the kind of thing that has to be said
+out loud rather than left in the data.
+
+**The rate-index routing is provably correct.** `curve_for` raises
+`UnsupportedIndex` rather than defaulting; `krd` keys its solver on
+`(rate_index, curve_name, block)`; on the published rows SOFR →
+`USD-SOFR-1D` (45,551) and FED_FUNDS → `USD-FEDFUNDS-1D` (2,087), with **zero
+mismatches**, and Fed Funds deviations sit at a median +0.068 bp — centred,
+not offset by a basis.
+
+**The FOMC-dated population is a different matter.** Median |deviation|, same
+days, same rules:
+
+| | FOMC-dated | everything else | |
+|---|---:|---:|---:|
+| FED_FUNDS | **1.994 bp** | 0.295 bp | **6.8×** |
+| SOFR | **0.697 bp** | 0.174 bp | **4.0×** |
+
+and the per-meeting median flips sign by 1–2 bp — JUL24 **+1.600** (83.7%
+above mid), SEP24 **−1.230** (33.5%). That is the F-20 signature, the exact
+statistic that condemned the Barchart curve.
+
+**SOFR and Fed Funds flip together**, same direction, similar magnitude. A
+routing fault would make them disagree. Both moving together says the fault is
+in what the curve *is*: the Citi minute curve is a smooth par curve with no
+discrete FOMC steps, so a meeting-to-meeting swap is repriced against a model
+that averages across the very step it trades.
+
+Controls run first: `fomc_meeting_label` is on 2,111 of 3,116 FOMC legs and on
+**zero** legs of every other structure type, so it is a structure tag rather
+than a proximity tag; de-duplicating the leg join moved the numbers by under
+0.1 bp.
+
+**Size** — 1,918 units, 3.33% of the ladder's gross DV01, but **28.17% of the
+0–1Y bucket**, the meeting-dated front end.
+
+What this branch does instead of touching the inference: `special_tenor_type`
+is persisted per unit and joined onto the tape row, an FOMC-dated row says so
+in its tooltip and calls its own direction unreliable, and 0–1Y carries a
+pinned caveat with the measurement — the same spirit as the module's own
+`PINNED_DRIFT_BUCKETS`.
+
+**Suggested follow-up**, not taken here: FOMC-dated units are a candidate for
+their own exclusion reason, or for a meeting-step curve.
+`WHAT_THE_LADDER_SUPPORTS` §3 lists Fed Funds as a low-confidence condition;
+on this evidence the sharper statement is that *meeting-dated structures on
+either index* are the low-confidence population, and Fed Funds looks worse
+mainly because it is 66% of them.
+
+---
+
 And one assumption checked rather than trusted: `RepricedUnit.legs[i]` is
 paired positionally with `unit.legs.iloc[i]`, so a misalignment would match the
 wrong per-leg fee to the wrong NPV and hand `package_price.classify` a
