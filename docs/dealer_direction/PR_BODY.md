@@ -278,6 +278,70 @@ first.
 
 ---
 
+## The research notebook
+
+`notebooks/dealer_direction/dealer_direction_showcase.ipynb` — **78 cells,
+executed, outputs stored, 0 errors, 14 inline figures.** Reads the tape
+read-only and writes its own artefacts. It traces one real print end to end
+(snapped instant → curve → mid → deviation → `tau` → `p` → `signed_weight` →
+dealer side → per-leg signs → the 28-pillar KRD), then the universe, the three
+rules, the risk buckets, the positioning series, and the regression studies.
+
+Underneath it, `dd_nb.py` is a tested pipeline — 45/45 self-test, and validated
+against `s2_positioning.py`'s own cached build of the same three days: 4,806
+shared units with `deviation_bps` / `npv_pay` / `structure_dv01` / `gross_pv01`
+**bit-identical at max |diff| 0.000e+00**.
+
+**The review of it is worth reading as much as the notebook.** It confirmed the
+notebook ran clean and its numbers were right — and that it was **lying about
+which of them it had computed**. Three stages were served from a content-keyed
+stage cache, and the calibration setting `tau` on every one of 4,938 calls was
+unpickled from outside the repo, while every banner said `COMPUTED`. It also
+caught two display defects that taught an **inverted sign**: the centrepiece
+printed a raw decimal with a `%` appended (`fixed 0.037880%` for a 3.788% swap,
+so forming the deviation off the displayed line gave −362 bp and *dealer PAID*
+against the +13.096 bp and *dealer RECEIVED* four lines below), and a canned
+sentence asserted `delta_dv01 > 0` for a package whose net the same cell
+computed as **−5,243.5 USD/bp**.
+
+All fixed, with runtime asserts that fail in both directions. The fixes are
+labelling only: all 14 figures are byte-identical afterwards and no headline
+number moved.
+
+**It also corrected three numbers in these documents** — the best S1 edge, the
+spreadover bucket count, and the "convention-dependent for 11 of 35 cells"
+claim, which is **0 of 35**.
+
+---
+
+## The tie-out — passes exactly
+
+`docs/dealer_direction/2026-08-12-tieout.md`. D11's two measurements, each
+varying one thing.
+
+**Logic tie-out** (same curve, same instants, old code → new): **100.0000%**
+agreement on old-HIGH decisive rows, **100.0000%** on all decisive rows,
+**κ = 1.000000**, and **zero unexplained residue**. All 2,675 disagreements are
+`OLD_TICK_RULE` — a rule the new package does not implement, agreeing at 51.7%,
+a coin flip, exactly as the curve finding predicts for the one curve-blind
+method. Every stratum was measured, not just the decisive one:
+`CURVE_SUSPECT` (12,728), `KNIFE_EDGE` (4,089) and `NEW_ABSTAIN` (11,238) are
+each 100.0000% at κ = 1.000.
+
+The convincing number is not the agreement rate. It is **max
+|s2m_old − dev_new| = 8.9e-14 bp** over 29,812 rate-rule rows and **exactly
+0.000 USD** on 8,021 upfront NPVs — the residual is `(a−b)*100` against
+`a*100−b*100`, not a pricing difference.
+
+**Curve effect** (same code, Barchart → Citi): **74.65% → 55.80% PAID, a 33.92%
+label shift, κ = 0.28** — the curve finding quantified, and the reason a single
+blended gate would have been meaningless.
+
+Sample 64 of 131 days on a deterministic 2-in-3 stride, stopped by disk rather
+than time, and stated as such.
+
+---
+
 ## Provenance and discipline
 
 Every substantive claim in `LEDGER.md` carries the measurement behind it. Where a
