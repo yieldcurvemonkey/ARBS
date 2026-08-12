@@ -1,0 +1,32 @@
+citivelo_excel: USD-SOFR-1D-CITIVELOEXCELMIN served a snapshot from a DIFFERENT local date (2026-06-16 for a 2026-06-17 request) out of the +/-1 day window. Pass snapshot_policy=SnapshotPolicy.strict() to bound this (further occurrences of this kind are not logged)
+ idx tenor                  curve_ts                 policy  lag_s   ref_date  print_eff  grid_spot    own_err_bp  grid_at_t_err_bp  nearest_err_bp
+SOFR    9Y 2026-06-17 04:16:00+00:00 ASOF_2H_OUT_OF_SESSION 4620.0 2026-06-16 2026-06-22 2026-06-18  0.000000e+00         -0.082336       -0.151310
+SOFR    3Y 2026-06-17 04:46:00+00:00 ASOF_2H_OUT_OF_SESSION 6420.0 2026-06-16 2026-06-22 2026-06-18  0.000000e+00         -0.052551       -0.455543
+SOFR   12Y 2025-04-07 04:02:00+00:00 ASOF_2H_OUT_OF_SESSION 3780.0 2025-04-04 2025-04-09 2025-04-08 -8.881784e-14          0.017281       -0.043718
+SOFR    1Y 2025-04-07 04:02:00+00:00 ASOF_2H_OUT_OF_SESSION 3780.0 2025-04-04 2025-04-09 2025-04-08 -1.332268e-13          0.374689       -1.055311
+SOFR    2Y 2025-04-07 04:03:00+00:00 ASOF_2H_OUT_OF_SESSION 3840.0 2025-04-04 2025-04-09 2025-04-08  0.000000e+00          0.182843       -1.203157
+SOFR    5Y 2025-04-07 04:03:00+00:00 ASOF_2H_OUT_OF_SESSION 3840.0 2025-04-04 2025-04-09 2025-04-08  0.000000e+00          0.056768       -0.561232
+SOFR    5Y 2025-04-07 04:04:00+00:00 ASOF_2H_OUT_OF_SESSION 3900.0 2025-04-04 2025-04-09 2025-04-08  4.440892e-14          0.056768       -0.561232
+SOFR    9M 2025-04-07 04:34:00+00:00 ASOF_2H_OUT_OF_SESSION 5700.0 2025-04-04 2025-04-09 2025-04-08 -4.440892e-14          0.419446       -0.919554
+SOFR    7Y 2025-04-07 04:36:00+00:00 ASOF_2H_OUT_OF_SESSION 5820.0 2025-04-04 2025-04-09 2025-04-08 -8.881784e-14          0.035518       -0.348481
+SOFR    2Y 2025-04-07 04:36:00+00:00 ASOF_2H_OUT_OF_SESSION 5820.0 2025-04-04 2025-04-09 2025-04-08  0.000000e+00          0.182843       -1.203157
+SOFR    1Y 2025-04-07 04:43:00+00:00 ASOF_2H_OUT_OF_SESSION 6240.0 2025-04-04 2025-04-09 2025-04-08 -8.881784e-14          0.374689       -1.055311
+
+(a) print's OWN dates at its OWN instant, through the SAME pricer:
+    n=11  median=4.441e-14 bp  max=1.332e-13 bp
+    reproduces implied_mid to <1e-9 bp on 11/11
+
+(b) the GRID's instrument at the same instant: median=0.0823 bp  max=0.4194 bp  <- this is the instrument gap alone
+
+(c) what the chart's nearest-join showed: max=1.2032 bp
+
+spot date the grid used vs the print's own effective date:
+                 curve_ts   ref_date  grid_spot  print_eff
+2026-06-17 04:16:00+00:00 2026-06-16 2026-06-18 2026-06-22
+2026-06-17 04:46:00+00:00 2026-06-16 2026-06-18 2026-06-22
+2025-04-07 04:02:00+00:00 2025-04-04 2025-04-08 2025-04-09
+2025-04-07 04:03:00+00:00 2025-04-04 2025-04-08 2025-04-09
+2025-04-07 04:04:00+00:00 2025-04-04 2025-04-08 2025-04-09
+2025-04-07 04:34:00+00:00 2025-04-04 2025-04-08 2025-04-09
+2025-04-07 04:36:00+00:00 2025-04-04 2025-04-08 2025-04-09
+2025-04-07 04:43:00+00:00 2025-04-04 2025-04-08 2025-04-09

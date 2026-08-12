@@ -1,0 +1,60 @@
+C:\Users\chris\clee\ARBS-fe\Query\IRSwaps\IRSwapStructure.py:12: LicenceNotice: 
+Rateslib is source-available (not open-source) software distributed under a dual-licence model.
+No commercial licence is registered for this installation. Use is therefore permitted for non-commercial purposes only (at-home or university based academic use).
+Any use in commercial, professional, or for-profit environments, including evaluation or trial use, requires a valid commercial licence or an approved evaluation licence.
+Certain features may require a registered commercial or evaluation licence in current or future versions.
+For licensing information or to register a licence, please visit: https://rateslib.com/licence
+  from rateslib.scheduling import get_imm, next_imm
+
+===== Good Friday 2025 = 04-18
+effective_date  2025-04-14  2025-04-15  2025-04-16  2025-04-17  2025-04-18  2025-04-21  2025-04-22  2025-04-23  2025-04-24  2025-04-25  2025-04-26  2025-04-28  2025-04-29  2025-04-30
+et_date                                                                                                                                                                               
+2025-04-14              89          66        1061          96           2           6           0           0           0           0           0           0           0           0
+2025-04-15               0          82          55        1199           1          71           1           0           0           0           0           0           0           0
+2025-04-16               0           0          99          16          16        1112          96          14           0           0           0           0           0           0
+2025-04-17               0           0           0          68           2          34         827           7           1           0           0           0           0           0
+2025-04-20               0           0           0           0           0           0           9          58           0           0           0           0           0           0
+2025-04-21               0           0           0           0           0          57          26         624          94           3           1           1           1           0
+2025-04-22               0           0           0           0           0           0          39          22        1032         179           1           3           3           0
+2025-04-23               0           0           0           0           0           0           0          92          11        1441           0          55           5           9
+
+===== Good Friday 2026 = 04-03
+effective_date  2026-03-30  2026-03-31  2026-04-01  2026-04-02  2026-04-03  2026-04-04  2026-04-05  2026-04-06  2026-04-07  2026-04-08  2026-04-09  2026-04-10  2026-04-13  2026-04-14  2026-04-15  2026-04-16
+et_date                                                                                                                                                                                                       
+2026-03-30              83          33        1122          70           2           1           2           4           0           0           0           0           0           0           0           0
+2026-03-31               0          94          37        1130          74           0           0           3           2           1           0           0           0           0           0           0
+2026-04-01               0           0          94          41        1115           0           0         115           6           7           0           0           0           0           0           0
+2026-04-02               0           0           0          78          29           0           4         854          23           7           3           0           0           0           0           0
+2026-04-03               0           0           0           0          24           0           0          10         217           5           1          11           0           0           0           0
+2026-04-05               0           0           0           0           0           0           0           0           0          29           0           0           0           0           0           0
+2026-04-06               0           0           0           0           0           0           0          32          10         503          60           1           3           0           0           0
+2026-04-07               0           0           0           0           0           0           0           0          52          37         983         177           1           3           0           0
+2026-04-08               0           0           0           0           0           0           0           0           0          49          38        1406          78           4           8           1
+
+===== Good Friday 2024 = 03-29
+effective_date  2024-03-25  2024-03-26  2024-03-27  2024-03-28  2024-03-29  2024-04-01  2024-04-02  2024-04-03  2024-04-04  2024-04-05  2024-04-06  2024-04-08  2024-04-09  2024-04-10
+et_date                                                                                                                                                                               
+2024-03-25              43          15         539          43           3          25           0           0           0           0           0           0           0           0
+2024-03-26               0          36          25         745          12          56          34           0           0           0           0           0           0           0
+2024-03-27               0           0          46          52          78         713          57           1           0           0           0           0           0           0
+2024-03-28               0           0           0          33           6          35         612          11           0           0           0           0           0           0
+2024-03-31               0           0           0           0           0           0           0          16           0           0           0           0           0           0
+2024-04-01               0           0           0           0           0          60          25         644          55           3           0          10           0           0
+2024-04-02               0           0           0           0           0           0          33          21        1136          47           0           3           3           0
+2024-04-03               0           0           0           0           0           0           0          52          36         891           2          42           4          39
+
+===== does Citi publish a curve on Good Friday?
+  2025-04-18 09:30:00-04:00  ref=2025-04-17 lag=0.0s
+  2025-04-18 13:30:00-04:00  ref=2025-04-17 lag=0.0s
+  2026-04-03 09:30:00-04:00  ref=2026-04-02 lag=0.0s
+  2026-04-03 13:30:00-04:00  ref=2026-04-02 lag=0.0s
+  2024-03-29 09:30:00-04:00  ref=2024-03-28 lag=0.0s
+  2024-03-29 13:30:00-04:00  ref=2024-03-28 lag=0.0s
+  2026-07-03 09:30:00-04:00  ref=2026-07-02 lag=0.0s
+  2026-07-03 13:30:00-04:00  ref=2026-07-02 lag=0.0s
+
+===== tape print counts on Good Fridays
+      et_date     n
+0  2025-04-17  2786
+1  2026-04-02  3289
+2  2026-04-03   782

@@ -1,0 +1,108 @@
+########## validate 2026-04-01 ##########
+
+validate: 778 prints in 2026-04-01..2026-04-01, 778 matched to a grid point within 2 h, 0 unmatched
+  exact instant (dt = 0 s): 747 (96.02%) -- the join rule is equality on ts, so this is the number that matters
+  exact-date prints:        13 (1.67%)
+
+============================================================================
+(grid_mid - implied_mid) in bp
+============================================================================
+  ALL prints                   n=   778  med= +0.02016  mean= +0.02605  |p50|=  0.04382  |p95|=  0.16083  |max|= 2.73e+00
+  EXACT-DATE prints            n=    13  med= -0.00000  mean= -0.00000  |p50|=  0.00000  |p95|=  0.00000  |max|= 5.33e-13
+  EXACT-DATE, |dt| <= 30 s     n=    13  med= -0.00000  mean= -0.00000  |p50|=  0.00000  |p95|=  0.00000  |max|= 5.33e-13
+  other-date (bucket width)    n=   765  med= +0.02423  mean= +0.02649  |p50|=  0.04399  |p95|=  0.16259  |max|= 2.73e+00
+
+by rate_index and tenor, EXACT-DATE prints:
+  SOFR 10Y                     n=     1  med= +0.00000  mean= +0.00000  |p50|=  0.00000  |p95|=  0.00000  |max|= 2.22e-13
+  SOFR 1Y                      n=     4  med= -0.00000  mean= -0.00000  |p50|=  0.00000  |p95|=  0.00000  |max|= 3.11e-13
+  SOFR 20Y                     n=     2  med= -0.00000  mean= -0.00000  |p50|=  0.00000  |p95|=  0.00000  |max|= 8.88e-14
+  SOFR 25Y                     n=     1  med= +0.00000  mean= +0.00000  |p50|=  0.00000  |p95|=  0.00000  |max|= 2.66e-13
+  SOFR 2Y                      n=     1  med= +0.00000  mean= +0.00000  |p50|=  0.00000  |p95|=  0.00000  |max|= 1.78e-13
+  SOFR 30Y                     n=     2  med= -0.00000  mean= -0.00000  |p50|=  0.00000  |p95|=  0.00000  |max|= 5.33e-13
+  SOFR 3Y                      n=     2  med= -0.00000  mean= -0.00000  |p50|=  0.00000  |p95|=  0.00000  |max|= 4.00e-13
+
+by distance to the nearest grid point, EXACT-DATE prints:
+  0s                           n=    13  med= -0.00000  mean= -0.00000  |p50|=  0.00000  |p95|=  0.00000  |max|= 5.33e-13
+
+wrote D:midgrid_cacheval_2026-04-01.parquet (778 comparisons)
+########## validate 2026-06-17 ##########
+
+validate: 604 prints in 2026-06-17..2026-06-17, 604 matched to a grid point within 2 h, 0 unmatched
+  exact instant (dt = 0 s): 589 (97.52%) -- the join rule is equality on ts, so this is the number that matters
+  exact-date prints:        213 (35.26%)
+
+============================================================================
+(grid_mid - implied_mid) in bp
+============================================================================
+  ALL prints                   n=   604  med= -0.00000  mean= -0.00958  |p50|=  0.00000  |p95|=  0.33295  |max|= 2.08e+00
+  EXACT-DATE prints            n=   213  med= -0.00000  mean= -0.00285  |p50|=  0.00000  |p95|=  0.00000  |max|= 4.56e-01
+  EXACT-DATE, |dt| <= 30 s     n=   211  med= -0.00000  mean= -0.00000  |p50|=  0.00000  |p95|=  0.00000  |max|= 7.11e-13
+  other-date (bucket width)    n=   391  med= -0.00000  mean= -0.01325  |p50|=  0.00000  |p95|=  0.48171  |max|= 2.08e+00
+
+by rate_index and tenor, EXACT-DATE prints:
+  FED_FUNDS 1M                 n=     1  med= +0.00000  mean= +0.00000  |p50|=  0.00000  |p95|=  0.00000  |max|= 4.00e-13
+  FED_FUNDS 1Y                 n=     4  med= -0.00000  mean= -0.00000  |p50|=  0.00000  |p95|=  0.00000  |max|= 2.66e-13
+  FED_FUNDS 3Y                 n=     1  med= -0.00000  mean= -0.00000  |p50|=  0.00000  |p95|=  0.00000  |max|= 1.78e-13
+  SOFR 12Y                     n=     1  med= -0.00000  mean= -0.00000  |p50|=  0.00000  |p95|=  0.00000  |max|= 2.66e-13
+  SOFR 18M                     n=     9  med= -0.00000  mean= -0.00000  |p50|=  0.00000  |p95|=  0.00000  |max|= 7.11e-13
+  SOFR 1M                      n=     7  med= +0.00000  mean= +0.00000  |p50|=  0.00000  |p95|=  0.00000  |max|= 6.66e-13
+  SOFR 1Y                      n=    60  med= -0.00000  mean= -0.00000  |p50|=  0.00000  |p95|=  0.00000  |max|= 6.22e-13
+  SOFR 20Y                     n=     9  med= +0.00000  mean= +0.00000  |p50|=  0.00000  |p95|=  0.00000  |max|= 5.33e-13
+  SOFR 2M                      n=     1  med= +0.00000  mean= +0.00000  |p50|=  0.00000  |p95|=  0.00000  |max|= 8.88e-14
+  SOFR 3Y                      n=    49  med= -0.00000  mean= -0.00930  |p50|=  0.00000  |p95|=  0.00000  |max|= 4.56e-01
+  SOFR 6M                      n=    20  med= +0.00000  mean= -0.00000  |p50|=  0.00000  |p95|=  0.00000  |max|= 6.66e-13
+  SOFR 6Y                      n=    11  med= -0.00000  mean= -0.00000  |p50|=  0.00000  |p95|=  0.00000  |max|= 4.44e-13
+  SOFR 7Y                      n=    25  med= -0.00000  mean= -0.00000  |p50|=  0.00000  |p95|=  0.00000  |max|= 4.88e-13
+  SOFR 9M                      n=    11  med= -0.00000  mean= -0.00000  |p50|=  0.00000  |p95|=  0.00000  |max|= 4.00e-13
+  SOFR 9Y                      n=     4  med= -0.00000  mean= -0.03783  |p50|=  0.00000  |p95|=  0.12861  |max|= 1.51e-01
+
+by distance to the nearest grid point, EXACT-DATE prints:
+  0s                           n=   211  med= -0.00000  mean= -0.00000  |p50|=  0.00000  |p95|=  0.00000  |max|= 7.11e-13
+  10-30m                       n=     1  med= -0.45554  mean= -0.45554  |p50|=  0.45554  |p95|=  0.45554  |max|= 4.56e-01
+  >30m                         n=     1  med= -0.15131  mean= -0.15131  |p50|=  0.15131  |p95|=  0.15131  |max|= 1.51e-01
+
+wrote D:midgrid_cacheval_2026-06-17.parquet (604 comparisons)
+########## validate 2025-04-07 ##########
+
+validate: 1,277 prints in 2025-04-07..2025-04-07, 1,277 matched to a grid point within 2 h, 0 unmatched
+  exact instant (dt = 0 s): 1,240 (97.10%) -- the join rule is equality on ts, so this is the number that matters
+  exact-date prints:        921 (72.12%)
+
+============================================================================
+(grid_mid - implied_mid) in bp
+============================================================================
+  ALL prints                   n=  1277  med= +0.00000  mean= +0.01810  |p50|=  0.00000  |p95|=  0.47382  |max|= 4.84e+00
+  EXACT-DATE prints            n=   921  med= -0.00000  mean= -0.00755  |p50|=  0.00000  |p95|=  0.00000  |max|= 1.20e+00
+  EXACT-DATE, |dt| <= 30 s     n=   912  med= -0.00000  mean= -0.00000  |p50|=  0.00000  |p95|=  0.00000  |max|= 7.11e-13
+  other-date (bucket width)    n=   356  med= +0.00000  mean= +0.08447  |p50|=  0.11024  |p95|=  1.31005  |max|= 4.84e+00
+
+by rate_index and tenor, EXACT-DATE prints:
+  FED_FUNDS 10Y                n=     2  med= +0.00000  mean= +0.00000  |p50|=  0.00000  |p95|=  0.00000  |max|= 2.66e-13
+  FED_FUNDS 18M                n=     1  med= +0.00000  mean= +0.00000  |p50|=  0.00000  |p95|=  0.00000  |max|= 8.88e-14
+  FED_FUNDS 1M                 n=     9  med= +0.00000  mean= +0.00000  |p50|=  0.00000  |p95|=  0.00000  |max|= 6.22e-13
+  FED_FUNDS 1Y                 n=     3  med= -0.00000  mean= -0.00000  |p50|=  0.00000  |p95|=  0.00000  |max|= 2.22e-13
+  FED_FUNDS 3M                 n=     1  med= +0.00000  mean= +0.00000  |p50|=  0.00000  |p95|=  0.00000  |max|= 0.00e+00
+  SOFR 10Y                     n=   259  med= -0.00000  mean= -0.00000  |p50|=  0.00000  |p95|=  0.00000  |max|= 7.11e-13
+  SOFR 12Y                     n=    10  med= -0.00000  mean= -0.00437  |p50|=  0.00000  |p95|=  0.02405  |max|= 4.37e-02
+  SOFR 15Y                     n=    16  med= -0.00000  mean= -0.00000  |p50|=  0.00000  |p95|=  0.00000  |max|= 4.44e-13
+  SOFR 18M                     n=    14  med= +0.00000  mean= +0.00000  |p50|=  0.00000  |p95|=  0.00000  |max|= 4.44e-13
+  SOFR 1M                      n=    18  med= +0.00000  mean= +0.00000  |p50|=  0.00000  |p95|=  0.00000  |max|= 6.22e-13
+  SOFR 1Y                      n=   107  med= -0.00000  mean= -0.01973  |p50|=  0.00000  |p95|=  0.00000  |max|= 1.06e+00
+  SOFR 2M                      n=     8  med= -0.00000  mean= -0.00000  |p50|=  0.00000  |p95|=  0.00000  |max|= 5.33e-13
+  SOFR 2Y                      n=   108  med= -0.00000  mean= -0.02228  |p50|=  0.00000  |p95|=  0.00000  |max|= 1.20e+00
+  SOFR 30Y                     n=   120  med= -0.00000  mean= -0.00000  |p50|=  0.00000  |p95|=  0.00000  |max|= 5.77e-13
+  SOFR 3M                      n=    15  med= +0.00000  mean= +0.00000  |p50|=  0.00000  |p95|=  0.00000  |max|= 4.44e-13
+  SOFR 4Y                      n=    18  med= -0.00000  mean= -0.00000  |p50|=  0.00000  |p95|=  0.00000  |max|= 6.66e-13
+  SOFR 5Y                      n=   135  med= +0.00000  mean= -0.00831  |p50|=  0.00000  |p95|=  0.00000  |max|= 5.61e-01
+  SOFR 6M                      n=    17  med= -0.00000  mean= -0.00000  |p50|=  0.00000  |p95|=  0.00000  |max|= 5.33e-13
+  SOFR 6Y                      n=    20  med= +0.00000  mean= +0.00000  |p50|=  0.00000  |p95|=  0.00000  |max|= 5.33e-13
+  SOFR 7Y                      n=    20  med= -0.00000  mean= -0.01742  |p50|=  0.00000  |p95|=  0.01742  |max|= 3.48e-01
+  SOFR 8Y                      n=     1  med= -0.00000  mean= -0.00000  |p50|=  0.00000  |p95|=  0.00000  |max|= 2.22e-13
+  SOFR 9M                      n=    19  med= -0.00000  mean= -0.04840  |p50|=  0.00000  |p95|=  0.09196  |max|= 9.20e-01
+
+by distance to the nearest grid point, EXACT-DATE prints:
+  0s                           n=   912  med= -0.00000  mean= -0.00000  |p50|=  0.00000  |p95|=  0.00000  |max|= 7.11e-13
+  10-30m                       n=     4  med= -0.98743  mean= -0.88163  |p50|=  0.98743  |p95|=  1.18098  |max|= 1.20e+00
+  >30m                         n=     5  med= -0.56123  mean= -0.68493  |p50|=  0.56123  |p95|=  1.17359  |max|= 1.20e+00
+
+wrote D:midgrid_cacheval_2025-04-07.parquet (1,277 comparisons)

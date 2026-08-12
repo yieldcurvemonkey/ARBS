@@ -1,0 +1,75 @@
+C:\Users\chris\clee\ARBS-fe\scratch\mid06_cal.py:33: LicenceNotice: 
+Rateslib is source-available (not open-source) software distributed under a dual-licence model.
+No commercial licence is registered for this installation. Use is therefore permitted for non-commercial purposes only (at-home or university based academic use).
+Any use in commercial, professional, or for-profit environments, including evaluation or trial use, requires a valid commercial licence or an approved evaluation licence.
+Certain features may require a registered commercial or evaluation licence in current or future versions.
+For licensing information or to register a licence, please visit: https://rateslib.com/licence
+  import rateslib as rl
+nyc holidays: 2705   Good Fridays removed: 60
+USDCAL 2026: ['2026-01-01', '2026-01-19', '2026-02-16', '2026-05-25', '2026-06-19', '2026-07-03', '2026-09-07', '2026-10-12', '2026-11-11', '2026-11-26', '2026-12-25']
+USDCAL business on 2026-04-03 (Good Friday)? True
+
+629 ET dates, 629 with modal share >= 0.40
+  rule A:  500/629 days ( 79.5%)   modal-weighted  98.2%
+  rule B:  598/629 days ( 95.1%)   modal-weighted  99.3%
+  rule C:  599/629 days ( 95.2%)   modal-weighted  99.4%
+
+rule C misses (30):
+        et_date  dow   modal_eff           A           B           C  n_modal     tot  share
+62   2024-09-13  Fri  2024-09-13  2024-09-17  2024-09-17  2024-09-17       57    91.0  0.626
+63   2024-09-16  Mon  2024-09-16  2024-09-18  2024-09-18  2024-09-18       36    40.0  0.900
+64   2024-09-17  Tue  2024-09-20  2024-09-19  2024-09-19  2024-09-19       31    46.0  0.674
+136  2024-12-13  Fri  2024-12-13  2024-12-17  2024-12-17  2024-12-17       57    78.0  0.731
+137  2024-12-15  Sun  2024-12-20  2024-12-17  2024-12-18  2024-12-18        1     1.0  1.000
+138  2024-12-16  Mon  2024-12-16  2024-12-18  2024-12-18  2024-12-18       34    39.0  0.872
+139  2024-12-17  Tue  2024-12-20  2024-12-19  2024-12-19  2024-12-19       29    49.0  0.592
+210  2025-03-14  Fri  2025-03-14  2025-03-18  2025-03-18  2025-03-18       62    89.0  0.697
+211  2025-03-16  Sun  2025-03-24  2025-03-18  2025-03-19  2025-03-19        1     1.0  1.000
+212  2025-03-17  Mon  2025-03-17  2025-03-19  2025-03-19  2025-03-19       43    55.0  0.782
+213  2025-03-18  Tue  2025-03-21  2025-03-20  2025-03-20  2025-03-20       48    63.0  0.762
+238  2025-04-16  Wed  2025-04-21  2025-04-21  2025-04-21  2025-04-18     1112  1353.0  0.822
+239  2025-04-17  Thu  2025-04-22  2025-04-22  2025-04-22  2025-04-21      827   939.0  0.881
+285  2025-06-13  Fri  2025-06-13  2025-06-17  2025-06-17  2025-06-17       63    78.0  0.808
+286  2025-06-16  Mon  2025-06-16  2025-06-18  2025-06-18  2025-06-18       45    51.0  0.882
+287  2025-06-17  Tue  2025-06-23  2025-06-20  2025-06-20  2025-06-20       63    66.0  0.955
+359  2025-09-12  Fri  2025-09-12  2025-09-16  2025-09-16  2025-09-16       58    76.0  0.763
+360  2025-09-15  Mon  2025-09-15  2025-09-17  2025-09-17  2025-09-17       51    52.0  0.981
+361  2025-09-16  Tue  2025-09-19  2025-09-18  2025-09-18  2025-09-18       26    36.0  0.722
+434  2025-12-12  Fri  2025-12-12  2025-12-16  2025-12-16  2025-12-16      100   121.0  0.826
+435  2025-12-14  Sun  2025-12-14  2025-12-16  2025-12-17  2025-12-17        2     3.0  0.667
+436  2025-12-15  Mon  2025-12-15  2025-12-17  2025-12-17  2025-12-17       49    55.0  0.891
+437  2025-12-16  Tue  2025-12-19  2025-12-18  2025-12-18  2025-12-18       34    51.0  0.667
+508  2026-03-13  Fri  2026-03-13  2026-03-17  2026-03-17  2026-03-17       36    62.0  0.581
+509  2026-03-15  Sun  2026-03-15  2026-03-17  2026-03-18  2026-03-18        1     1.0  1.000
+510  2026-03-16  Mon  2026-03-16  2026-03-18  2026-03-18  2026-03-18       59    67.0  0.881
+511  2026-03-17  Tue  2026-03-20  2026-03-19  2026-03-19  2026-03-19       25    35.0  0.714
+584  2026-06-12  Fri  2026-06-15  2026-06-16  2026-06-16  2026-06-16       69   133.0  0.519
+585  2026-06-15  Mon  2026-06-15  2026-06-17  2026-06-17  2026-06-17       73    76.0  0.961
+586  2026-06-16  Tue  2026-06-22  2026-06-18  2026-06-18  2026-06-18       40    46.0  0.870
+
+days excluded as non-modal (share < 0.40):
+Empty DataFrame
+Columns: [et_date, dow, modal_eff, C, n_modal, tot, share]
+Index: []
+
+==============================================================================
+WHAT BASE DATE THE CURVE ITSELF CARRIES
+  2026-04-01 01:30:00-04:00  policy=STRICT lag=       0s  ref=2026-04-01  ruleC(ref)=2026-04-03  ruleC(ET date)=2026-04-03
+  2026-04-01 06:30:00-04:00  policy=STRICT lag=       0s  ref=2026-04-01  ruleC(ref)=2026-04-03  ruleC(ET date)=2026-04-03
+  2026-04-01 09:30:00-04:00  policy=STRICT lag=       0s  ref=2026-04-01  ruleC(ref)=2026-04-03  ruleC(ET date)=2026-04-03
+  2026-04-01 13:30:00-04:00  policy=STRICT lag=       0s  ref=2026-04-01  ruleC(ref)=2026-04-03  ruleC(ET date)=2026-04-03
+  2026-04-01 16:30:00-04:00  policy=STRICT lag=       0s  ref=2026-04-01  ruleC(ref)=2026-04-03  ruleC(ET date)=2026-04-03
+  2026-04-01 17:30:00-04:00  policy=STRICT lag=       0s  ref=2026-04-01  ruleC(ref)=2026-04-03  ruleC(ET date)=2026-04-03
+  2026-04-01 20:30:00-04:00  policy=STRICT lag=       0s  ref=2026-04-01  ruleC(ref)=2026-04-03  ruleC(ET date)=2026-04-03
+  2026-04-01 22:30:00-04:00  policy=STRICT lag=       0s  ref=2026-04-01  ruleC(ref)=2026-04-03  ruleC(ET date)=2026-04-03
+  2026-04-02 01:30:00-04:00  policy=STRICT lag=       0s  ref=2026-04-02  ruleC(ref)=2026-04-06  ruleC(ET date)=2026-04-06
+  2026-04-02 09:30:00-04:00  policy=STRICT lag=       0s  ref=2026-04-02  ruleC(ref)=2026-04-06  ruleC(ET date)=2026-04-06
+  2026-04-02 16:30:00-04:00  policy=STRICT lag=       0s  ref=2026-04-02  ruleC(ref)=2026-04-06  ruleC(ET date)=2026-04-06
+  2026-04-02 20:30:00-04:00  MISS SnapshotMiss: citivelo_excel minute store (USD-SOFR-1D-CITIVELOEXCELMIN): no snapsho
+  2026-04-02 22:30:00-04:00  MISS SnapshotMiss: citivelo_excel minute store (USD-SOFR-1D-CITIVELOEXCELMIN): no snapsho
+  2026-03-29 20:30:00-04:00  policy=STRICT lag=       0s  ref=2026-03-27  ruleC(ref)=2026-03-31  ruleC(ET date)=2026-04-01
+  2026-03-29 21:30:00-04:00  policy=STRICT lag=       0s  ref=2026-03-27  ruleC(ref)=2026-03-31  ruleC(ET date)=2026-04-01
+  2026-03-29 22:30:00-04:00  policy=STRICT lag=       0s  ref=2026-03-27  ruleC(ref)=2026-03-31  ruleC(ET date)=2026-04-01
+  2026-05-25 09:30:00-04:00  policy=STRICT lag=       0s  ref=2026-05-22  ruleC(ref)=2026-05-27  ruleC(ET date)=2026-05-28
+  2026-05-25 13:30:00-04:00  policy=STRICT lag=       0s  ref=2026-05-22  ruleC(ref)=2026-05-27  ruleC(ET date)=2026-05-28
+  2026-05-25 20:30:00-04:00  policy=STRICT lag=       0s  ref=2026-05-22  ruleC(ref)=2026-05-27  ruleC(ET date)=2026-05-28

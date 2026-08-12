@@ -1,0 +1,123 @@
+C:\Users\chris\clee\ARBS-fe\Query\IRSwaps\IRSwapStructure.py:12: LicenceNotice: 
+Rateslib is source-available (not open-source) software distributed under a dual-licence model.
+No commercial licence is registered for this installation. Use is therefore permitted for non-commercial purposes only (at-home or university based academic use).
+Any use in commercial, professional, or for-profit environments, including evaluation or trial use, requires a valid commercial licence or an approved evaluation licence.
+Certain features may require a registered commercial or evaluation licence in current or future versions.
+For licensing information or to register a licence, please visit: https://rateslib.com/licence
+  from rateslib.scheduling import get_imm, next_imm
+citivelo_excel: USD-FEDFUNDS-1D-CITIVELOEXCELMIN served a snapshot from a DIFFERENT local date (2026-03-30 for a 2026-03-31 request) out of the +/-1 day window. Pass snapshot_policy=SnapshotPolicy.strict() to bound this (further occurrences of this kind are not logged)
+FED_FUNDS OUTRIGHT RATE_VS_MID prints 2026-03-30..04-03: 160
+special_tenor_type
+STANDARD    111
+FOMC         38
+IMM          11
+   tenor       stt                   instant            curve   implied       diff_bp   err
+0     2M  STANDARD 2026-03-30 03:19:00-04:00  USD-FEDFUNDS-1D  3.658385 -8.881784e-14  None
+1     1Y  STANDARD 2026-03-30 07:55:00-04:00  USD-FEDFUNDS-1D  3.725390  0.000000e+00  None
+2     8M  STANDARD 2026-03-30 07:59:00-04:00  USD-FEDFUNDS-1D  3.703550 -1.776357e-13  None
+3    21M  STANDARD 2026-03-30 08:03:00-04:00  USD-FEDFUNDS-1D  3.659960 -4.440892e-14  None
+4     1Y  STANDARD 2026-03-30 09:00:00-04:00  USD-FEDFUNDS-1D  3.715750  0.000000e+00  None
+5     2M      FOMC 2026-03-30 10:43:00-04:00  USD-FEDFUNDS-1D  3.642697 -1.776357e-13  None
+6     2M      FOMC 2026-03-30 12:43:00-04:00  USD-FEDFUNDS-1D  3.606604  0.000000e+00  None
+7     3Y  STANDARD 2026-03-30 15:24:00-04:00  USD-FEDFUNDS-1D  3.550510  0.000000e+00  None
+8     6M  STANDARD 2026-03-31 00:14:00-04:00  USD-FEDFUNDS-1D  3.667277  0.000000e+00  None
+9     2M       IMM 2026-03-31 02:46:00-04:00  USD-FEDFUNDS-1D  3.656642 -1.776357e-13  None
+10    5Y  STANDARD 2026-03-31 05:36:00-04:00  USD-FEDFUNDS-1D  3.580640  0.000000e+00  None
+11    3M  STANDARD 2026-03-31 05:43:00-04:00  USD-FEDFUNDS-1D  3.657710  0.000000e+00  None
+12    2M      FOMC 2026-03-31 07:20:00-04:00  USD-FEDFUNDS-1D  3.649135  0.000000e+00  None
+13    6M  STANDARD 2026-03-31 08:05:00-04:00  USD-FEDFUNDS-1D  3.667380  0.000000e+00  None
+14   18M  STANDARD 2026-03-31 08:17:00-04:00  USD-FEDFUNDS-1D  3.628590 -4.440892e-14  None
+15    8M  STANDARD 2026-03-31 08:22:00-04:00  USD-FEDFUNDS-1D  3.674580 -1.776357e-13  None
+16    3Y  STANDARD 2026-03-31 10:06:00-04:00  USD-FEDFUNDS-1D  3.513110 -4.440892e-14  None
+17    1M  STANDARD 2026-03-31 10:46:00-04:00  USD-FEDFUNDS-1D  3.646750  1.776357e-13  None
+18    2M      FOMC 2026-03-31 11:34:00-04:00  USD-FEDFUNDS-1D  3.653503 -1.332268e-13  None
+19    1M  STANDARD 2026-03-31 15:02:00-04:00  USD-FEDFUNDS-1D  3.647400  2.664535e-13  None
+20    3Y  STANDARD 2026-04-01 00:35:00-04:00  USD-FEDFUNDS-1D  3.501324 -8.881784e-14  None
+21    1M      FOMC 2026-04-01 08:35:00-04:00  USD-FEDFUNDS-1D  3.637077  8.881784e-14  None
+22    1M      FOMC 2026-04-01 08:44:00-04:00  USD-FEDFUNDS-1D  3.636213  1.332268e-13  None
+23   18M  STANDARD 2026-04-01 08:48:00-04:00  USD-FEDFUNDS-1D  3.617700  0.000000e+00  None
+24    2M      FOMC 2026-04-01 08:53:00-04:00  USD-FEDFUNDS-1D  3.650711 -8.881784e-14  None
+25    3M  STANDARD 2026-04-01 10:04:00-04:00  USD-FEDFUNDS-1D  3.658509 -1.332268e-13  None
+26    6M  STANDARD 2026-04-01 12:02:00-04:00  USD-FEDFUNDS-1D  3.662421 -1.776357e-13  None
+27    2Y  STANDARD 2026-04-01 14:47:00-04:00  USD-FEDFUNDS-1D  3.525099  0.000000e+00  None
+28    1Y  STANDARD 2026-04-01 20:24:00-04:00  USD-FEDFUNDS-1D  3.674900 -4.440892e-14  None
+29    3Y  STANDARD 2026-04-02 01:13:00-04:00  USD-FEDFUNDS-1D  3.600566 -4.440892e-14  None
+30    2M      FOMC 2026-04-02 04:28:00-04:00  USD-FEDFUNDS-1D  3.625943  4.440892e-14  None
+31    2M  STANDARD 2026-04-02 05:32:00-04:00  USD-FEDFUNDS-1D  3.655414 -8.881784e-14  None
+32    1Y  STANDARD 2026-04-02 08:35:00-04:00  USD-FEDFUNDS-1D  3.693416  4.440892e-14  None
+33   11M  STANDARD 2026-04-02 08:39:00-04:00  USD-FEDFUNDS-1D  3.690589  0.000000e+00  None
+34   25D  STANDARD 2026-04-02 10:02:00-04:00  USD-FEDFUNDS-1D  3.644532  0.000000e+00  None
+35    6M       IMM 2026-04-02 11:29:00-04:00  USD-FEDFUNDS-1D  3.655186 -4.440892e-14  None
+36    6M  STANDARD 2026-04-02 11:34:00-04:00  USD-FEDFUNDS-1D  3.654120  0.000000e+00  None
+37    2M      FOMC 2026-04-02 11:59:00-04:00  USD-FEDFUNDS-1D  3.651356  0.000000e+00  None
+38    8M  STANDARD 2026-04-02 12:27:00-04:00  USD-FEDFUNDS-1D  3.671575 -1.776357e-13  None
+39    1M      FOMC 2026-04-03 09:46:00-04:00  USD-FEDFUNDS-1D  3.649518  4.440892e-14  None
+
+FED_FUNDS HARNESS: n=40 errors=0  max|diff|=2.665e-13 bp  median=0.000e+00 bp
+  HARNESS OK (float noise)
+
+==============================================================================
+CUMULATIVE TENOR COVERAGE  (2026-01-01..2026-08-07, ECONOMIC_FLOW)
+==============================================================================
+
+SOFR / all legs: total 633,986 legs, |risk| 22,782,841,000
+   first  4 of the candidate list:   1.2% of prints,   0.4% of |risk|
+   first  6 of the candidate list:   2.7% of prints,   0.9% of |risk|
+   first  8 of the candidate list:   3.8% of prints,   1.3% of |risk|
+   first 10 of the candidate list:   4.1% of prints,   1.4% of |risk|
+   first 12 of the candidate list:   4.6% of prints,   1.6% of |risk|
+   first 14 of the candidate list:   9.9% of prints,   4.7% of |risk|
+   first 16 of the candidate list:  10.4% of prints,   5.0% of |risk|
+   first 18 of the candidate list:  21.2% of prints,  12.8% of |risk|
+   first 20 of the candidate list:  30.7% of prints,  23.1% of |risk|
+   first 22 of the candidate list:  51.8% of prints,  42.5% of |risk|
+   first 24 of the candidate list:  58.0% of prints,  51.6% of |risk|
+   first 26 of the candidate list:  79.7% of prints,  75.5% of |risk|
+   first 28 of the candidate list:  80.5% of prints,  76.5% of |risk|
+   first 30 of the candidate list:  84.8% of prints,  82.0% of |risk|
+   first 32 of the candidate list:  97.0% of prints,  94.8% of |risk|
+   FULL candidate set (33):  97.1% of prints,  94.9% of |risk|
+   biggest excluded labels: ~20M(2616), 17Y(1594), 18Y(1474), 26Y(1424), 27Y(1408), ~22M(1258), ~23M(1215), ~21M(754)
+
+SOFR / spot+STANDARD: total 307,129 legs, |risk| 10,312,754,700
+   first  4 of the candidate list:   1.3% of prints,   0.4% of |risk|
+   first  6 of the candidate list:   2.6% of prints,   0.8% of |risk|
+   first  8 of the candidate list:   3.8% of prints,   1.2% of |risk|
+   first 10 of the candidate list:   4.0% of prints,   1.3% of |risk|
+   first 12 of the candidate list:   4.8% of prints,   1.5% of |risk|
+   first 14 of the candidate list:   9.0% of prints,   3.9% of |risk|
+   first 16 of the candidate list:   9.8% of prints,   4.1% of |risk|
+   first 18 of the candidate list:  18.7% of prints,  10.8% of |risk|
+   first 20 of the candidate list:  27.6% of prints,  18.9% of |risk|
+   first 22 of the candidate list:  48.3% of prints,  40.1% of |risk|
+   first 24 of the candidate list:  54.5% of prints,  47.6% of |risk|
+   first 26 of the candidate list:  78.4% of prints,  74.5% of |risk|
+   first 28 of the candidate list:  79.8% of prints,  76.2% of |risk|
+   first 30 of the candidate list:  84.8% of prints,  82.7% of |risk|
+   first 32 of the candidate list:  98.5% of prints,  98.2% of |risk|
+   FULL candidate set (33):  98.7% of prints,  98.4% of |risk|
+   biggest excluded labels: ~13M(283), 35Y(275), ~23M(229), 18Y(228), 14Y(226), 17Y(209), 13Y(167), ~22M(167)
+
+FED_FUNDS / all legs: total 19,271 legs, |risk| 794,244,100
+   first  4 of the candidate list:  73.0% of prints,  81.9% of |risk|
+   first  6 of the candidate list:  78.3% of prints,  84.4% of |risk|
+   first  8 of the candidate list:  81.2% of prints,  85.5% of |risk|
+   first 10 of the candidate list:  84.4% of prints,  86.7% of |risk|
+   first 12 of the candidate list:  85.9% of prints,  87.3% of |risk|
+   first 14 of the candidate list:  88.2% of prints,  88.7% of |risk|
+   first 16 of the candidate list:  90.9% of prints,  91.3% of |risk|
+   first 18 of the candidate list:  93.0% of prints,  92.6% of |risk|
+   FULL candidate set (19):  93.3% of prints,  92.9% of |risk|
+   biggest excluded labels: 6Y(195), 11M(160), 7M(129), 10M(102), 8M(96), ~22M(92), ~20M(64), 3W(55)
+
+FED_FUNDS / spot+STANDARD: total 3,471 legs, |risk| 68,425,900
+   first  4 of the candidate list:  23.0% of prints,  19.3% of |risk|
+   first  6 of the candidate list:  40.0% of prints,  35.8% of |risk|
+   first  8 of the candidate list:  48.7% of prints,  44.6% of |risk|
+   first 10 of the candidate list:  61.0% of prints,  53.3% of |risk|
+   first 12 of the candidate list:  64.6% of prints,  55.2% of |risk|
+   first 14 of the candidate list:  69.2% of prints,  58.8% of |risk|
+   first 16 of the candidate list:  75.6% of prints,  71.1% of |risk|
+   first 18 of the candidate list:  81.9% of prints,  79.1% of |risk|
+   FULL candidate set (19):  82.8% of prints,  81.5% of |risk|
+   biggest excluded labels: 11M(118), 6Y(111), 7M(73), 10M(63), 8M(61), 3W(34), 9Y(21), 30Y(12)

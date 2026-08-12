@@ -538,6 +538,57 @@ have. A run that took its day list once at the start and trusted it would have
 published 609 of 610 days and reported success. `price` resumes by file
 presence, so the fix is a second pass that costs one day.
 
+### G-10. THE FULL BACKFILL, and what it says
+
+`price` 609 days in 114.4 min at 8 workers, 0 errors. `publish` **527 days,
+9,571,690 unit-bucket rows, 37,740 ladder cells over 629 sessions, 62.1 min**
+— on the fourth attempt, the first three lost to a transient read-only
+database and two OOMs, both now fixed rather than worked around.
+
+The probability clip fired **16 times over 1.28M units, worst 2.2e-16** — one
+machine epsilon, exactly the boundary it exists for and nothing else.
+
+**Every check in `ddfe10_published_sanity.py` passes over the full history**,
+and the headline numbers are stronger at scale than on the pilot window:
+
+| check | 1,283,522 units |
+|---|---|
+| `RATE_VS_MID` split | **50.67% PAID over 673,038 calls** (frozen classifier: 78.3%) |
+| median (printed − mid) | **−0.0011 bp**, 49.7% above mid |
+| OUTRIGHT sign agreement | 18 of **695,738** disagree, **all 18** explained by a negative net received DV01 |
+| multi-leg control | 67,195 of 256,483 CURVE/FLY net the other way |
+| coverage | 50.42% of DV01 oriented |
+| join to the display view | **1,283,522 = 1,283,522 = 1,283,522** |
+
+A median of −0.0011 bp over 673,038 prints is the strongest statement
+available that the mid is unbiased, and it is measured against a curve the
+old classifier's 78.3% one-way label set could not have produced.
+
+### G-11. Read cost on the full history — and one regression I chose to keep
+
+| query | median | p95 |
+|---|---:|---:|
+| tape grid, 200 rows, no join | 140.8 ms | 229.0 ms |
+| tape grid, 200 rows, **with** the join | **140.5 ms** | 142.0 ms |
+| tape grid, filtered to dealer RECEIVED | **121.9 ms** | 182.7 ms |
+| `/direction/bucket`, 629 rows | 19.8 ms | 23.0 ms |
+| `/direction/standardised`, 6,290 rows | 48.1 ms | 51.9 ms |
+| `/direction/coverage` | 35.4 ms | 43.3 ms |
+| `/direction/summary` | **435.4 ms** | 488.2 ms |
+| per-trade drill-down | 17.1 ms | 18.9 ms |
+
+**The filtered query's 3,845 ms p95 was a partial-backfill artefact and is
+gone** — 182.7 ms now, and the median is *faster* than the unfiltered
+baseline because the predicate shrinks the working set. That was the
+prediction; this is the measurement.
+
+**`/direction/summary` regressed 40.8 ms → 435 ms, and it is my doing.** It
+now reads `arbs_dd_coverage_v1`, the complete partition, instead of averaging
+over ladder cells — which is what fixed the 67%-versus-44.8% overstatement. The
+cost is a scan of 1.28M unit rows for the called-count. Kept: the route is
+cached for 300 s and fires once per panel load, and trading a correct headline
+back for 400 ms would be the wrong way round. Noted rather than hidden.
+
 ### D6. Chrome verification used `chrome-devtools`, not `claude-in-chrome`
 
 `claude-in-chrome` found two connected browsers and requires the user to

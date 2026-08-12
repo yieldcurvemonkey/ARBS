@@ -309,17 +309,40 @@ the ramp poles swapped, a missing cell rendered as `z = 0`.
 
 ---
 
+## The backfill is complete
+
+`price` **609 days in 114.4 min** at 8 workers, 0 errors.
+`publish` **527 days, 9,571,690 unit-bucket rows, 37,740 ladder cells over
+629 sessions, 62.1 min.**
+
+Fourth attempt. The first three were lost to a transient read-only database
+and two OOMs; all three are fixed rather than worked around — write retry with
+a classifier pinned in both directions, the ladder's input streamed to disk,
+and a `ladder` stage so that step never costs the 527-day loop again.
+
+The probability clip fired **16 times over 1.28M units, worst 2.2e-16** — one
+machine epsilon, exactly the boundary it exists for.
+
 ## Sanity gate on the published rows
 
 `scratch/ddfe10_published_sanity.py`, eight thresholds fixed before running.
 The headline is the best evidence in this branch that the wiring is right:
 
+Over the **full** history, 1,283,522 units:
+
 | | this branch | the frozen classifier / the backend's own sample |
 |---|---:|---:|
-| `RATE_VS_MID` share PAID | **49.97%** | 78.3% |
-| median (printed − mid) | **+0.0120 bp** | +0.021 bp (F-15, sampled independently) |
-| share above mid | 52.3% | 55.5% |
-| unit table ↔ display view on `package_id` | **62,508 = 62,508 = 62,508** | — |
+| `RATE_VS_MID` share PAID | **50.67%** over 673,038 calls | 78.3% |
+| median (printed − mid) | **−0.0011 bp** | +0.021 bp (F-15, sampled independently) |
+| share above mid | 49.7% | 55.5% |
+| OUTRIGHT sign agreement | 18 of **695,738** disagree, all 18 explained | — |
+| multi-leg control | 67,195 of 256,483 net the other way | — |
+| coverage | 50.42% of DV01 oriented | — |
+| unit table ↔ display view on `package_id` | **1,283,522 = 1,283,522 = 1,283,522** | — |
+
+A median of −0.0011 bp across 673,038 prints is the strongest available
+statement that the mid is unbiased — and it is a number the old classifier's
+78.3% one-way label set could not have produced.
 
 Two of the eight failed first time and both were the check, not the data —
 written up in `FRONTEND_LEDGER.md` G-6c, including the control that keeps the

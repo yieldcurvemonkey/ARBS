@@ -1,0 +1,100 @@
+C:\Users\chris\clee\ARBS-fe\Query\IRSwaps\IRSwapStructure.py:12: LicenceNotice: 
+Rateslib is source-available (not open-source) software distributed under a dual-licence model.
+No commercial licence is registered for this installation. Use is therefore permitted for non-commercial purposes only (at-home or university based academic use).
+Any use in commercial, professional, or for-profit environments, including evaluation or trial use, requires a valid commercial licence or an approved evaluation licence.
+Certain features may require a registered commercial or evaluation licence in current or future versions.
+For licensing information or to register a licence, please visit: https://rateslib.com/licence
+  from rateslib.scheduling import get_imm, next_imm
+tape: 610 as_of days  2024-03-01 .. 2026-08-07
+  from 2024-03-01: 610 days
+  from 2024-07-01: 527 days
+
+USD-SOFR-1D-CITIVELOEXCELMIN: 1535 partitions
+  tape days from 2024-03-01: 610, store has 610, MISSING 0
+  tape days from 2024-07-01: 527, store has 527, MISSING 0
+
+USD-FEDFUNDS-1D-CITIVELOEXCELMIN: 2710 partitions
+  tape days from 2024-03-01: 610, store has 610, MISSING 0
+  tape days from 2024-07-01: 527, store has 527, MISSING 0
+
+BOTH curves + tape, from 2024-03-01: 610 days
+
+BOTH curves + tape, from 2024-07-01: 527 days
+
+servable distinct minutes per day, 40 sampled days:
+           day  dow  sofr_min  ff_min
+0   2024-07-01  Mon      1318    1316
+1   2024-07-19  Fri      1020    1020
+2   2024-08-07  Wed      1306    1304
+3   2024-08-27  Tue      1312    1312
+4   2024-09-16  Mon      1320    1320
+5   2024-10-04  Fri      1019    1018
+6   2024-10-23  Wed      1318    1318
+7   2024-11-13  Wed      1079    1317
+8   2024-12-03  Tue      1080    1319
+9   2024-12-23  Mon      1080    1320
+10  2025-01-13  Mon      1320    1320
+11  2025-02-03  Mon      1320    1319
+12  2025-02-21  Fri       960     960
+13  2025-03-13  Thu      1071    1291
+14  2025-04-01  Tue      1296    1296
+15  2025-04-22  Tue       996    1239
+16  2025-05-09  Fri       911     951
+17  2025-05-30  Fri       995    1002
+18  2025-06-18  Wed      1295    1297
+19  2025-07-10  Thu      1299    1300
+20  2025-07-29  Tue      1304    1125
+21  2025-08-18  Mon      1303    1126
+22  2025-09-05  Fri      1006    1005
+23  2025-09-25  Thu      1299    1301
+24  2025-10-15  Wed      1299    1298
+25  2025-11-04  Tue      1291    1293
+26  2025-11-24  Mon      1298    1296
+27  2025-12-15  Mon      1300    1301
+28  2026-01-05  Mon      1306    1068
+29  2026-01-26  Mon      1320    1320
+30  2026-02-12  Thu      1319    1319
+31  2026-03-05  Thu      1320    1320
+32  2026-03-24  Tue      1243    1309
+33  2026-04-13  Mon      1320    1320
+34  2026-04-30  Thu      1320    1320
+35  2026-05-20  Wed      1280    1296
+36  2026-06-09  Tue      1319    1319
+37  2026-06-30  Tue      1320    1320
+38  2026-07-20  Mon      1320    1320
+39  2026-08-07  Fri      1020    1020
+
+  SOFR minutes/day: mean=1221 median=1299 min=911 max=1320
+  FF   minutes/day: mean=1238 median=1301 min=951 max=1320
+
+==============================================================================
+SPOT-RULE COST: rule A (curve ref +2b, nyc) vs rule T (tape modal spot)
+==============================================================================
+
+2026-04-01: (grid_A - grid_T) in bp
+    h         ref       spotA       spotT      1M   3M      6M      1Y      2Y      5Y     10Y     30Y
+0   3  2026-04-01  2026-04-06  2026-04-03  0.1084  0.0  0.0033 -0.0009 -0.0555  0.0469  0.0537 -0.0022
+1   9  2026-04-01  2026-04-06  2026-04-03  0.1004  0.0  0.0186  0.0073 -0.0447  0.0480  0.0527 -0.0024
+2  14  2026-04-01  2026-04-06  2026-04-03  0.1541  0.0  0.0181  0.0069 -0.0419  0.0454  0.0521 -0.0024
+3  20  2026-04-01  2026-04-06  2026-04-03  0.1629  0.0  0.0203  0.0065 -0.0434  0.0463  0.0521 -0.0024
+
+2026-04-02: (grid_A - grid_T) in bp
+    h         ref       spotA       spotT      1M      3M      6M      1Y      2Y      5Y     10Y     30Y           err
+0   3  2026-04-02  2026-04-07  2026-04-06  0.1010  0.0314  0.0231 -0.0018 -0.0305 -0.0074  0.0040  0.0055           NaN
+1   9  2026-04-02  2026-04-07  2026-04-06  0.1044  0.0218  0.0107 -0.0103 -0.0359 -0.0091  0.0034  0.0052           NaN
+2  14  2026-04-02  2026-04-07  2026-04-06  0.0965  0.0082 -0.0017 -0.0176 -0.0380 -0.0102  0.0027  0.0049           NaN
+3  20         NaN         NaN         NaN     NaN     NaN     NaN     NaN     NaN     NaN     NaN     NaN  SnapshotMiss
+
+2026-03-30: (grid_A - grid_T) in bp
+    h         ref       spotA       spotT   1M   3M   6M   1Y   2Y   5Y  10Y  30Y
+0   3  2026-03-30  2026-04-01  2026-04-01  0.0  0.0  0.0  0.0  0.0  0.0  0.0  0.0
+1   9  2026-03-30  2026-04-01  2026-04-01  0.0  0.0  0.0  0.0  0.0  0.0  0.0  0.0
+2  14  2026-03-30  2026-04-01  2026-04-01  0.0  0.0  0.0  0.0  0.0  0.0  0.0  0.0
+3  20  2026-03-30  2026-04-01  2026-04-01  0.0  0.0  0.0  0.0  0.0  0.0  0.0  0.0
+
+2025-04-16: (grid_A - grid_T) in bp
+    h         ref       spotA       spotT   1M   3M   6M   1Y   2Y   5Y  10Y  30Y
+0   3  2025-04-16  2025-04-21  2025-04-21  0.0  0.0  0.0  0.0  0.0  0.0  0.0  0.0
+1   9  2025-04-16  2025-04-21  2025-04-21  0.0  0.0  0.0  0.0  0.0  0.0  0.0  0.0
+2  14  2025-04-16  2025-04-21  2025-04-21  0.0  0.0  0.0  0.0  0.0  0.0  0.0  0.0
+3  20  2025-04-16  2025-04-21  2025-04-21  0.0  0.0  0.0  0.0  0.0  0.0  0.0  0.0
