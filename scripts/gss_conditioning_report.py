@@ -2,10 +2,11 @@
 
 The estimability triage this implements, and why:
 
-**The Sharpe version of the question is not answerable here.** With ~154 active marks the
-annualised-Sharpe standard error is ``sqrt(252/154) = 1.28``, so two configs must differ by ~2.6
-annualised Sharpe before the difference clears estimation noise — and the grid's whole plausible
-range is smaller than that. Ranking configs by Sharpe, decomposing its variance across knobs, or
+**The Sharpe version of the question is not answerable here.** On 331 daily marks the
+annualised-Sharpe standard error is ``sqrt(252/331) = 0.873``, and only 154 of them carry a
+position, so that is a lower bound. A DIFFERENCE between two configs carries ``sqrt(2)`` more, so
+it must exceed ~2.4 annualised Sharpe to be significant at 95% — which almost no pair in the grid
+does. Ranking configs by Sharpe, decomposing its variance across knobs, or
 fitting a response-surface condition number would each turn noise into a structural-sounding
 claim. (The Hessian route was measured returning kappa = 13,498 on a *perfect* fit made only of
 inert knobs.) So none of those is computed.

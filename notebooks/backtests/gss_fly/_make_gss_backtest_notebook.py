@@ -374,7 +374,8 @@ ax[1].legend(); ax[1].set_title("equity vs the entry level"); plt.tight_layout()
 md(r"""
 ## 6. The construction knobs — measured where there is no estimation error
 
-Performance cannot rank these. At ~154 active marks `SE(annualised Sharpe) = 0.87` and the whole
+Performance cannot rank these. On 331 daily marks `SE(annualised Sharpe) = sqrt(252/331) = 0.873` — and only 154 of those
+carry a position, so the effective sample is smaller still and 0.873 is a LOWER bound and the whole
 cross-config spread is 0.88, so the spread *is* the noise (see §8).
 
 **Which trades a config takes is deterministic**, so that is where conditioning is measurable.

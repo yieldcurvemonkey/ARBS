@@ -3,7 +3,8 @@
 This is the part of "how ill-conditioned is this strategy" that the data can actually answer.
 Which trades a configuration takes is a **deterministic** function of its parameters — there is no
 estimation error in it, and no amount of extra data would change the answer. Performance is the
-opposite: at ~154 active marks the annualised-Sharpe standard error is 0.87 while the whole
+opposite: on 331 daily marks the annualised-Sharpe standard error is sqrt(252/331) = 0.873, and only
+154 of them carry a position, so that is a lower bound while the whole
 cross-config spread is ~1.4, so nothing can be ranked on it.
 
 It is also cheap, because it needs no pricing. ``GSSSignalEngine`` is a pure function of the panel

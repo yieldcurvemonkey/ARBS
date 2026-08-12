@@ -220,7 +220,9 @@ somewhere pathological and the claim must be weakened.
 ## Conditioning — measured 2026-08-12. The book is severely ill-conditioned.
 
 **The Sharpe version of the question is not answerable on this sample and was not attempted.** At
-~154 active marks `SE(annualised Sharpe) = 0.87`, while the observed p05–p95 spread across configs
+331 daily marks `SE(annualised Sharpe) = sqrt(252/331) = 0.873` — and only 154 of them carry a
+position, so that is a LOWER bound. A *difference* between two configs carries sqrt(2) more, so it
+needs ~2.4 to be significant at 95%. The observed p05–p95 spread across configs
 is **1.40** — smaller than two standard errors. Ranking configs by Sharpe, decomposing its variance
 across knobs, or fitting a response-surface condition number would each convert noise into a
 structural-sounding claim. (The Hessian route was measured returning κ = 13,498 on a *perfect* fit
