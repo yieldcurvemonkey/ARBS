@@ -93,8 +93,22 @@ def main() -> int:
     section("0. HARNESS INTEGRITY — if these fail, nothing below means anything")
     holes = int(ok["equity_holes"].fillna(0).sum()) if "equity_holes" in ok else -1
     gap = ok["reconciliation_gap_usd"].abs().max() if "reconciliation_gap_usd" in ok else np.nan
-    print(f"  equity holes across all configs : {holes}   (must be 0)", flush=True)
-    print(f"  worst reconciliation gap        : {gap:,.6f} USD   (must be ~0)", flush=True)
+    print(f"  equity holes across all configs : {holes}", flush=True)
+    print(f"  worst reconciliation gap        : {gap:,.2e} USD   (must be ~0)", flush=True)
+
+    # A config with holes was marked on FEWER dates, so its Sharpe and m* are computed on a
+    # truncated series. `QueryDrivenBacktest.run()` swallows per-step exceptions and the sweep runs
+    # with strict=False so one bad config cannot kill it — which is right, but it means partial
+    # curves reach the table looking exactly like complete ones. Name them and drop them from
+    # ranking rather than pooling them silently.
+    if "equity_holes" in ok:
+        holed = ok[ok["equity_holes"].fillna(0) > 0]
+        if len(holed):
+            print(f"  configs WITH holes              : {len(holed)} of {len(ok)} "
+                  f"({len(holed)/len(ok):.1%}) — excluded from ranking below", flush=True)
+            print(f"    their Sharpes span {holed['sharpe_ann'].min():+.2f} to "
+                  f"{holed['sharpe_ann'].max():+.2f}, so the loss is not one-sided", flush=True)
+            ok = ok[ok["equity_holes"].fillna(0) == 0]
     if "trades" in ok:
         print(f"  configs below the {args.min_trades}-trade floor : "
               f"{int((ok['trades'] < args.min_trades).sum())} of {len(ok)} "

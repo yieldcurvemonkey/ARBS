@@ -355,8 +355,18 @@ for e, x in EX:
 EXT = pd.DataFrame(rows)
 print(EXT.to_string(index=False, float_format=lambda v: f"{v:,.2f}"))
 print("\ninverted = X >= E: every entry immediately qualifies to exit.")
-print(f"churn multiple at E=1.0: {EXT.query('E==1.0 and X==2.5').trades.iloc[0]:.0f} trades "
-      f"vs {EXT.query('E==1.0 and X==0.25').trades.iloc[0]:.0f} properly ordered")
+# Derive the comparison from whatever levels are present. A configurable notebook whose narrative
+# assumes the config still holds its shipped values crashes for the first reader who edits EX —
+# which is the entire point of the notebook.
+lo = EXT.E.min()
+inv = EXT[(EXT.E == lo) & EXT.inverted]
+ordered = EXT[(EXT.E == lo) & ~EXT.inverted]
+if len(inv) and len(ordered):
+    print(f"churn multiple at E={lo}: {inv.trades.max():.0f} trades inverted vs "
+          f"{ordered.trades.max():.0f} properly ordered "
+          f"({inv.trades.max() / max(ordered.trades.max(), 1):.1f}x)")
+else:
+    print(f"(no inverted/ordered pair at E={lo} in this sweep — widen EX to see the boundary)")
 
 piv = EXT.pivot(index="X", columns="E", values="trades")
 fig, ax = plt.subplots(1, 2, figsize=(14, 4.5))
