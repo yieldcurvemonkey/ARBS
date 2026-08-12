@@ -33,8 +33,10 @@ follow from one mechanism. That inconsistency is what surfaced the bug.
 
 - It does **not** change the verdict. **Zero cells were significant in either
   direction**: the largest |t| anywhere is **1.66** against size-corrected
-  criticals of 2.51–2.63, and the best edge is 0.117 bp/trade against a 0.659 bp
-  hurdle — **5.6× short**. A sign error cannot rescue a result that is not
+  criticals of 2.51–2.63, and the best edge anywhere is **0.174 bp/trade at 20Y
+  k=5 against its own 1.332 bp hurdle — 7.7x short**. (An earlier draft quoted
+  0.117 against 0.659 as "the best edge"; that is the **10Y k=3** cell, not the
+  maximum. Both readings give DEAD.) A sign error cannot rescue a result that is not
   significant either way.
 - It **does** withdraw a characterisation I reported: that "the deepest buckets
   go the wrong way, 5Y and 30Y β positive where the hypothesis predicts
@@ -42,8 +44,17 @@ follow from one mechanism. That inconsistency is what surfaced the bug.
   are still insignificant and their realised edge is still negative, so nothing
   is rescued — but the "wrong way" reading was produced by my own error and is
   retracted.
-- Per the review, the DEAD-vs-AMBIGUOUS split is **convention-dependent for 11
-  of 35 cells**. None of them crosses into PASS.
+- An earlier draft said, on the review's word, that the DEAD-vs-AMBIGUOUS split
+  is "convention-dependent for 11 of 35 cells". **That does not reproduce — it is
+  0 of 35**, and the correction strengthens the conclusion rather than weakening
+  it. Re-running S1's own frozen verdict ladder
+  (`s1_spread_flow.py:728-739`, `MIN_BUCKET_DAYS = 200`) over `s1_results.csv`
+  reproduces the file **35/35** under the pre-registered sign and changes **0**
+  verdicts under the corrected one. The structural reason: `sign_ok` reaches the
+  ladder only through `(not sign_ok) and sig_beta -> WRONG_SIGN`, and `sig_beta`
+  is False in all 35 cells. What *does* flip on all 35 is the `sign_ok` flag
+  itself — a different quantity, and not a verdict.
+  Measured by the research notebook, `notebooks/dealer_direction/`, cell 65.
 
 **I am not re-reading the results under the corrected sign to look for a
 finding.** The correction is recorded, the verdict stands on the criterion that
@@ -166,8 +177,10 @@ buckets, so nothing shipped on it.
 
 ## What the pre-registration got right, for the next one
 
-The mixture fit **refused to resolve `h`** on all 14 spreadover buckets
-(separation 0.025–0.050 against a gate of 1.0, flagged `SEPARATION_BELOW_FLOOR`
+The mixture fit **refused to resolve `h`** on every spreadover bucket. `costs.csv`
+carries **21** of them (7 tenors x {ALL, D2C, D2D}) with separation
+**0.013–0.050**; the 14 non-`ALL` rows are the 0.025–0.050 subset an earlier
+draft quoted as the whole. All are flagged `SEPARATION_BELOW_FLOOR`
 and `LEPTOKURTIC`) — and validation showed the fit is unbiased only above that
 gate and biased **−80% downward** below it. Had the gate not existed, `2h` would
 have argued the cost **down by 5–20×** and both hypotheses would have "cleared".
