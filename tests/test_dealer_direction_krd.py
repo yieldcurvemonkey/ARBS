@@ -312,6 +312,178 @@ def test_the_notional_sign_comes_from_the_hypothesis_not_from_the_tape(projector
 
 
 # ==========================================================================
+# 2b. the recovered PKG-N seam -- RULE_PACKAGE_PRICE, per-unit orientation
+# ==========================================================================
+#
+# ``package_price`` orients ``PKG-N`` units that ``conventions`` refuses, which
+# routes them here for the first time. Dispatching on ``(kind, n_legs, rule)``
+# alone cannot serve them: a recovered package HAS an upfront (its PTP), so the
+# ``RULE_UPFRONT`` branch is the one a consumer routing on upfront presence
+# lands in, and it returns ``(1,) * n`` -- a whole multi-leg package pointed one
+# way, which is exactly the internal orientation the recovery just worked out.
+# ``package_price``'s own test pins the hazard from its side; these pin it from
+# this one.
+
+#: A curve-shaped four-leg package: receive the front pair, pay the back pair.
+#: ``pay_signs`` for the base party, which is what ``base_orientation`` is.
+#:
+#: **Written down rather than produced by ``package_price.classify``, on
+#: purpose.** What this file pins is the *seam* -- krd's dispatch and the
+#: projection -- and whether ``classify`` can reach a mixed orientation is
+#: ``tests/test_dealer_direction_package_price.py``'s question, pinned there.
+#: Deriving it here couples a red krd suite to every tightening of that rule's
+#: gates: the first draft did exactly that and went red when an ambiguity
+#: margin was added to a rule this file does not test. The accessor that
+#: carries the orientation across the seam IS exercised, below.
+PKG_ORIENTATION = (1, 1, -1, -1)
+PKG_TENORS = ("2Y", "5Y", "10Y", "30Y")
+
+
+def _recovered_call(unit_key="PKG", *, p=0.9, orientation=PKG_ORIENTATION):
+    """A ``RULE_PACKAGE_PRICE`` :class:`types.DirectionCall`, as a producer
+    mapping a ``PackagePriceCall`` onto the ladder's contract would build it."""
+    from SDRUtils.dealer_direction import package_price as pp
+
+    assert len(set(orientation)) > 1, (
+        "the fixture has to be a package whose legs oppose each other, or the "
+        "test cannot tell the two dispatch branches apart")
+    return T.DirectionCall(
+        unit_key=unit_key, rule=pp.RULE_PACKAGE_PRICE,
+        deviation_bps=1.5, p=p, signed_weight=conv.signed_weight(p),
+        dealer_sign=1, tau_bucket="PKG", tau_bps=0.35,
+        base_orientation=tuple(orientation),
+    )
+
+
+def test_the_accessor_this_seam_depends_on_reads_the_orientation():
+    """The one thing krd needs from ``package_price``, pinned from this side.
+
+    ``package_price.received_hypothesis_signs`` returns the call's own
+    ``base_orientation`` -- the per-unit answer krd cannot derive. Duck-typed
+    on both call classes, which is what lets the two modules share one
+    implementation instead of growing two.
+    """
+    from SDRUtils.dealer_direction import package_price as pp
+
+    native = pp.PackagePriceCall(base_orientation=PKG_ORIENTATION,
+                                 dealer_sign=conv.DEALER_RECEIVED,
+                                 received_signs=PKG_ORIENTATION)
+    assert pp.received_hypothesis_signs(native) == PKG_ORIENTATION
+    assert pp.received_hypothesis_signs(_recovered_call()) == PKG_ORIENTATION
+
+
+def _pkg_unit(projector, unit_key="PKG"):
+    return _unit(unit_key, kind=conv.PKG, tenors=PKG_TENORS,
+                 notionals=(100e6,) * 4, rates=_par(projector, *PKG_TENORS))
+
+
+def test_a_recovered_package_keeps_its_legs_pointing_opposite_ways(projector):
+    """The seam, end to end: per-leg signs survive the KRD projection.
+
+    Each leg is struck at par at its own pillar, so the sign of that pillar's
+    ``dv01_if_received`` IS that leg's hypothesis sign -- and it must be the
+    per-unit ``base_orientation`` the recovery produced, not ``(1,) * n``.
+    """
+    call = _recovered_call()
+    unit = _pkg_unit(projector)
+    frame, failures = projector.krd_frame([unit], [call])
+    assert failures.empty, failures.to_dict("records")
+
+    by_bucket = dict(zip(frame["bucket_key"], frame["dv01_if_received"]))
+    signs = tuple(1 if by_bucket[t] > 0 else -1 for t in PKG_TENORS)
+    assert signs == PKG_ORIENTATION
+    assert len(set(signs)) > 1, "the package was pointed one way after all"
+    # ...and each leg's own pillar really does carry that leg's risk.
+    for tenor in PKG_TENORS:
+        assert abs(by_bucket[tenor]) > 1_000.0
+
+
+def test_the_same_package_under_the_upfront_rule_is_the_hazard(projector):
+    """The control. Same unit, same legs, ``RULE_UPFRONT`` -- all one sign.
+
+    Not a bug in ``RULE_UPFRONT``: one fee cannot resolve a package's internal
+    orientation. It is what the recovered units must NOT be routed through, and
+    the two tests are only meaningful as a pair.
+    """
+    unit = _pkg_unit(projector, "PKGU")
+    prof = _profile(projector, unit, rule=conv.RULE_UPFRONT)
+    assert all(prof[t] > 0.0 for t in PKG_TENORS)
+
+
+def test_the_dispatch_reads_the_call_not_only_the_rule_string(projector):
+    """``received_hypothesis_signs`` routes ``RULE_PACKAGE_PRICE`` to the module
+    that owns the orientation, and refuses to invent one from the structure."""
+    from SDRUtils.dealer_direction import package_price as pp
+
+    call = _recovered_call()
+    assert K.received_hypothesis_signs(conv.PKG, 4, pp.RULE_PACKAGE_PRICE,
+                                       call=call) == PKG_ORIENTATION
+    assert (K.received_hypothesis_signs(conv.PKG, 4, pp.RULE_PACKAGE_PRICE,
+                                        call=call)
+            == pp.received_hypothesis_signs(call)), "one implementation, not two"
+
+    with pytest.raises(ValueError, match="carries no orientation|no call"):
+        K.received_hypothesis_signs(conv.PKG, 4, pp.RULE_PACKAGE_PRICE)
+
+    # The two conventions-driven rules are untouched: `package_price`'s own
+    # seam test pins these exact two answers from the other side.
+    with pytest.raises(conv.UnorientableUnit):
+        K.received_hypothesis_signs(conv.PKG, 4, conv.RULE_RATE)
+    assert K.received_hypothesis_signs(conv.PKG, 4, conv.RULE_UPFRONT) == (1, 1, 1, 1)
+
+
+def test_a_call_from_a_different_rule_is_refused_rather_than_half_used(projector):
+    """``rule`` stays the dispatch key, so it must not disagree with the call.
+
+    With ``rule = RULE_UPFRONT`` and a ``RULE_PACKAGE_PRICE`` call the dispatch
+    would take the upfront branch and hand back ``(1,) * n`` while a per-unit
+    orientation sat unread on the call -- the exact seam failure, reached the
+    other way round.
+    """
+    call = _recovered_call("MIX")
+    with pytest.raises(ValueError, match="but its call carries"):
+        projector.unit_krd(_pkg_unit(projector, "MIX"), conv.RULE_UPFRONT,
+                           call=call)
+
+
+def test_an_orientation_of_the_wrong_length_is_refused_not_truncated(projector):
+    """``zip(legs, signs)`` stops at the shorter one, in silence.
+
+    Harmless while every orientation came from ``conventions``, which derives
+    it from ``n_legs``. This rule's comes from per-unit tape data, so a
+    five-leg unit carrying a four-leg orientation would price four legs, report
+    a complete profile, and drop the fifth leg's risk with nothing recording
+    it.
+    """
+    from SDRUtils.dealer_direction import package_price as pp
+
+    call = _recovered_call("SHORT")
+    call.base_orientation = (1, 1, -1)            # one leg short of the unit
+    unit = _pkg_unit(projector, "SHORT")
+    with pytest.raises(ValueError, match="3 leg signs for a 4-leg unit"):
+        projector.unit_krd(unit, pp.RULE_PACKAGE_PRICE, call=call)
+
+
+def test_a_package_price_call_with_no_orientation_is_a_caller_bug(projector):
+    """Raised out of ``krd_frame``, not filed as a row-level PRICING_ERROR.
+
+    A ``RULE_PACKAGE_PRICE`` call with no ``base_orientation`` and no exclusion
+    is a producer that did not wire the recovery through; naming it as a
+    pricing failure would put a wiring bug in the coverage table as if the
+    curve had been at fault.
+    """
+    from SDRUtils.dealer_direction import package_price as pp
+
+    call = _recovered_call("BARE")
+    call.base_orientation = None
+    with pytest.raises(ValueError, match="no .base_orientation. and no exclusion"):
+        projector.krd_frame([_pkg_unit(projector, "BARE")], [call])
+    assert projector.n_models == 1, (
+        "the raise must not be a pricing failure -- only the fixture's own "
+        "`_par` solver should exist, i.e. the unit never reached the pricer")
+
+
+# ==========================================================================
 # 3. the frame is the contract ladder.py consumes
 # ==========================================================================
 

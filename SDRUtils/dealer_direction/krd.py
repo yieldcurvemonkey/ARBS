@@ -34,6 +34,22 @@ later as ``2p-1``. This module deliberately never sees ``dealer_sign``, because
 a profile already signed by it and then weighted by ``2p-1`` -- whose sign IS
 ``dealer_sign`` -- is positive in every bucket on every day and looks fine.
 
+THE ORIENTATION HAS TWO SOURCES, AND THE RULE PICKS
+---------------------------------------------------
+Two of the three rules take their per-leg orientation from the structure, so
+``(kind, n_legs, rule)`` is the whole input. :data:`package_price
+.RULE_PACKAGE_PRICE` does not: it exists because a ``PKG-N`` has no quote
+convention, and it recovers a **per-unit** orientation from the package price.
+:func:`received_hypothesis_signs` therefore takes the call as well, and
+``krd_frame`` threads it through.
+
+Dispatching on ``(kind, n_legs, rule)`` alone does not fail loudly for those
+units, which is why this is written down: a recovered package **has** an
+upfront -- its PTP is what oriented it -- so a consumer routing on upfront
+presence lands in the ``RULE_UPFRONT`` branch, gets ``(1,) * n``, and points a
+whole multi-leg package one way. The profile is complete, the ladder moves, and
+the internal orientation the recovery just worked out is gone.
+
 WHY A BLOCK AND NOT A MINUTE, AND NOT A DAY
 -------------------------------------------
 There are 547,338 distinct ``(rate_index, exec-minute)`` pairs in the v3 tape at
@@ -255,16 +271,59 @@ def block_key(instant, block_minutes: int = BLOCK_MINUTES):
     return (et.date(), (et.hour * 60 + et.minute) // int(block_minutes))
 
 
-def received_hypothesis_signs(kind: str, n_legs: int, rule: str) -> tuple:
+def received_hypothesis_signs(kind: str, n_legs: int, rule: str,
+                              call=None) -> tuple:
     """Per-leg ``received_signs`` under the hypothesis that the dealer received.
 
-    One line, but it is the line the whole module turns on, so it is named: the
-    profile is ``dv01_if_received``, so the side handed to
+    The line the whole module turns on, so it is named: the profile is
+    ``dv01_if_received``, so the side handed to
     :func:`conventions.dealer_received_signs` is always
     :data:`conventions.DEALER_RECEIVED` and never the call's own
     ``dealer_sign``.
+
+    **Two sources of orientation, and the rule chooses.** For the two
+    conventions-driven rules the orientation is a property of the *structure*
+    and ``(kind, n_legs, rule)`` is enough. For
+    :data:`package_price.RULE_PACKAGE_PRICE` it is not: that rule exists
+    precisely because a ``PKG-N`` has no quote convention, and it recovers a
+    per-unit orientation from the package price. So the call has to be read.
+
+    Routing a recovered package on ``(kind, n_legs, rule)`` alone lands it in
+    the ``RULE_UPFRONT`` branch -- a recovered package **has** an upfront, its
+    PTP -- which returns ``(1,) * n`` and points every leg of the package the
+    same way, discarding the internal orientation. That is the seam this
+    argument closes; ``package_price`` pins the hazard from its own side and
+    ``tests/test_dealer_direction_krd.py`` pins the fix from this one.
+
+    The length check is not defensive noise. ``unit_positions`` zips the legs
+    against these signs, and ``zip`` stops at the shorter one in silence: while
+    every orientation came from ``conventions`` its length was ``n_legs`` by
+    construction, but a per-unit orientation carried on a call can disagree,
+    and a unit that priced all but its last leg produces a complete-looking
+    profile with risk missing.
     """
-    return conv.dealer_received_signs(kind, n_legs, rule, conv.DEALER_RECEIVED)
+    from SDRUtils.dealer_direction import package_price
+
+    if rule == package_price.RULE_PACKAGE_PRICE:
+        if call is None or getattr(call, "base_orientation", None) is None:
+            raise ValueError(
+                f"a {rule!r} call carries no orientation, so there is no "
+                "hypothesis to sign; this rule's base orientation is per-unit "
+                "and lives on the call (`DirectionCall.base_orientation`) -- "
+                "it cannot be derived from (kind, n_legs)"
+            )
+        signs = package_price.received_hypothesis_signs(call)
+    else:
+        signs = conv.dealer_received_signs(kind, n_legs, rule,
+                                           conv.DEALER_RECEIVED)
+    if len(signs) != int(n_legs):
+        raise ValueError(
+            f"got {len(signs)} leg signs for a {n_legs}-leg unit under {rule!r}; "
+            "`unit_positions` zips them against the legs and zip truncates in "
+            "silence, so the short vector would drop a leg's risk from an "
+            "otherwise complete-looking profile"
+        )
+    return tuple(int(s) for s in signs)
 
 
 class KrdProjector:
@@ -392,18 +451,31 @@ class KrdProjector:
 
     # --- one unit ---------------------------------------------------------
 
-    def unit_positions(self, unit, rule: str, *, instant=None):
+    def unit_positions(self, unit, rule: str, *, instant=None, call=None):
         """``(model, instruments)`` -- the dealer's hypothesised position, built.
 
         Exposed rather than inlined so a cross-check can price the *same*
         instruments by a different route. Comparing a reimplementation of the
         position against the producer's own would be checking two things at once.
+
+        ``call`` is optional and only :data:`package_price.RULE_PACKAGE_PRICE`
+        needs it -- see :func:`received_hypothesis_signs`. ``rule`` stays the
+        dispatch key rather than being read off the call so the existing two-rule
+        call sites are unchanged; when both are given they must agree, because a
+        call whose rule is not the rule being priced would silently choose the
+        other branch's orientation.
         """
         from Query.IRSwaps.IRSwapQuery import IRSwapQuery
 
+        if call is not None and getattr(call, "rule", rule) != rule:
+            raise ValueError(
+                f"unit {unit.unit_key!r} is being priced under {rule!r} but its "
+                f"call carries {call.rule!r}; the rule selects the leg "
+                "orientation, so the two disagreeing silently picks one"
+            )
         snap = snapshot.snap_instant(unit.clocks.pricing) if instant is None else instant
         model = self.model_for(unit.rate_index, snap)
-        signs = received_hypothesis_signs(unit.kind, unit.n_legs, rule)
+        signs = received_hypothesis_signs(unit.kind, unit.n_legs, rule, call)
         ref = pd.Timestamp(model.reference_date).date()
 
         instruments = []
@@ -439,7 +511,7 @@ class KrdProjector:
             instruments.extend(pkg)
         return model, instruments
 
-    def unit_krd(self, unit, rule: str, *, instant=None) -> dict:
+    def unit_krd(self, unit, rule: str, *, instant=None, call=None) -> dict:
         """``{bucket: dv01_if_received}`` for one unit, summed over its legs.
 
         One ``Portfolio.delta`` call per unit. Not per leg and not per batch of
@@ -450,7 +522,8 @@ class KrdProjector:
         """
         import rateslib as rl
 
-        model, instruments = self.unit_positions(unit, rule, instant=instant)
+        model, instruments = self.unit_positions(unit, rule, instant=instant,
+                                                 call=call)
         col = rl.Portfolio(instruments).delta(solver=model.solver).iloc[:, 0]
         raw = {str(k[-1] if isinstance(k, tuple) else k): float(v)
                for k, v in col.items()}
@@ -505,6 +578,20 @@ class KrdProjector:
                 )
             if call.exclusion is not None:
                 continue
+            # Checked HERE, beside the other caller-contract raises, and
+            # deliberately OUTSIDE the try below: a RULE_PACKAGE_PRICE call
+            # with no orientation and no exclusion is a producer that did not
+            # wire the recovery through, and inside the try the broad
+            # `except Exception` would file that wiring bug as a row-level
+            # PRICING_ERROR -- a curve blamed for a code defect, in the
+            # coverage table, silently.
+            if _needs_call_orientation(call):
+                raise ValueError(
+                    f"unit {unit.unit_key!r} carries a {call.rule!r} call with "
+                    "no `base_orientation` and no exclusion; that rule's "
+                    "orientation is per-unit, so there is nothing to sign the "
+                    "legs with and nothing that says the unit was refused"
+                )
             # Asked here rather than let a KeyError surface from inside
             # `model_for`: `UnsupportedIndex` IS a `KeyError`, so a catch wide
             # enough to see it also swallows every unrelated dictionary miss in
@@ -516,7 +603,8 @@ class KrdProjector:
                 continue
             instant = None if instant_for is None else instant_for(unit)
             try:
-                profile = self.unit_krd(unit, call.rule, instant=instant)
+                profile = self.unit_krd(unit, call.rule, instant=instant,
+                                        call=call)
             except conv.UnorientableUnit as exc:
                 failures.append(_failure(unit, EXCL_UNORIENTABLE, exc))
                 continue
@@ -535,6 +623,14 @@ class KrdProjector:
                              "bucket_key": bucket,
                              "dv01_if_received": value})
         return (_frame(rows, KRD_COLUMNS), _frame(failures, FAILURE_COLUMNS))
+
+
+def _needs_call_orientation(call) -> bool:
+    """A ``RULE_PACKAGE_PRICE`` call that carries no per-unit orientation."""
+    from SDRUtils.dealer_direction import package_price
+
+    return (getattr(call, "rule", None) == package_price.RULE_PACKAGE_PRICE
+            and getattr(call, "base_orientation", None) is None)
 
 
 class MissingFixedRate(ValueError):

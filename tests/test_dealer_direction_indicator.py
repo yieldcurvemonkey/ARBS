@@ -6,7 +6,7 @@ population is a biased sample whose retention factor runs 0.761 at 0-1Y down to
 0.495 at 15-20Y, a 1.54x cross-bucket scaling distortion. Everything asserted
 here follows from that one fact plus the pinned sign convention.
 
-Five failures this file exists to make impossible, every one of them silent:
+Six failures this file exists to make impossible, every one of them silent:
 
 1. **A cross-bucket level comparison.** ``delta_dv01`` at 0-1Y against
    ``delta_dv01`` at 15-20Y compares 76% of one bucket's tape DV01 against 50%
@@ -21,6 +21,17 @@ Five failures this file exists to make impossible, every one of them silent:
 4. **Stamping on execution time.** Every row dated before it could be acted on.
 5. **Pooling venue classes.** "Dealers are distributing risk" is its own signal
    and merging D2D into D2C destroys it.
+6. **A published number that is plausible and wrong.** 1-5 are all statements
+   about the *shape* of the output -- a key, a refusal, a column name -- and a
+   suite that only asserts shape lets the arithmetic inside the columns be
+   anything at all. Mutation testing measured it: **15 of 25 arithmetic
+   mutations survived this file at 59 tests**, and the worst of them published
+   ``z_raw`` and ``z_cov_adj`` **exactly inverted** while every existing z test
+   passed, because every existing z test was *comparative* and a global sign
+   flip cancels inside all of them. So the numbers are now pinned against
+   answers computed away from the code: see section 5 for z, and
+   ``INDICATOR.md`` section 7 for the battery and the two mutations that
+   survive because they are provably equivalent.
 """
 from __future__ import annotations
 
@@ -215,6 +226,25 @@ def test_a_units_pillars_cannot_disagree_about_the_print():
     assert "venue_class" in str(e.value)
 
 
+def test_the_roll_up_is_idempotent_on_its_own_output():
+    """Its docstring promises this and nothing checked it.
+
+    Rows already on the reporting grid must pass through, because the natural
+    caller -- roll up, look, then hand the same frame to ``daily_levels``,
+    which rolls up again -- would otherwise raise ``UnknownPillar`` on a bucket
+    key that is perfectly valid.
+    """
+    rows = _unit_rows([
+        {"unit_key": "U1", "bucket_key": "9Y", "dv01_if_received": 400.0, "date": D0},
+        {"unit_key": "U1", "bucket_key": "10Y", "dv01_if_received": -150.0, "date": D0},
+        {"unit_key": "U2", "bucket_key": "30Y", "dv01_if_received": 900.0, "date": D0},
+    ])
+    once = ind.roll_up_to_tenor_buckets(rows)
+    twice = ind.roll_up_to_tenor_buckets(once)
+    pd.testing.assert_frame_equal(once, twice)
+    assert ind.daily_levels(once).equals(ind.daily_levels(rows))
+
+
 def test_roll_up_refuses_an_unknown_pillar():
     rows = _unit_rows([{"unit_key": "U1", "bucket_key": "13Y",
                         "dv01_if_received": 1.0, "date": D0}])
@@ -380,8 +410,115 @@ def test_rescale_refuses_a_bucket_with_no_factor():
 
 
 # --------------------------------------------------------------------------
-# 5. the z-score -- retention-invariant, and only while retention holds still
+# 5. the z-score -- a KNOWN NUMBER first, then its invariances
+#
+# Everything after 5a is comparative: z under a halved retention factor against
+# z under the original, z on a short window against z on a long one, z alone
+# against z beside another venue class. A global sign flip cancels inside every
+# one of them -- "dealers were lifted in 5y" and "dealers were hit in 5y" are
+# the same test to a comparative assertion. So the value and the sign are
+# pinned first, against arithmetic done away from the code.
 # --------------------------------------------------------------------------
+
+#: Five days at 1,000 / 2,000 / 3,000 / 4,000 / 5,000 DV01. On the fifth day
+#: the trailing window is the whole series:
+#:
+#:     mean = 3,000
+#:     sd(ddof=1) = sqrt(10,000,000 / 4) = 1,581.1388300841897
+#:     z = (5,000 - 3,000) / 1,581.1388300841897 = +1.2649110640673518
+#:
+#: and the three ways to get it wrong are all distinguishable from it:
+#:     ddof=0 (a population sd)  -> +1.4142135623730951
+#:     the sign inverted         -> -1.2649110640673518
+#:     the mirror series' answer -> -1.2649110640673518
+_HAND_Z_LEVELS = [1000.0, 2000.0, 3000.0, 4000.0, 5000.0]
+HAND_Z = 1.2649110640673518
+HAND_Z_DDOF0 = 1.4142135623730951
+
+
+def _hand_z_frame(levels):
+    """One cell, five days, constant coverage, so both z columns are pinnable.
+
+    ``coverage_smooth_obs=1`` is deliberate. With the production 63 the
+    smoother is all-NaN over five days, ``delta_dv01_cov_adj`` is all-NaN and
+    ``z_cov_adj`` cannot be asserted at all -- which is how a sign flip in the
+    *second* z column hides. At 1, with a constant coverage,
+    ``smooth == ref == 0.57`` exactly, the adjusted level is the raw level, and
+    ``z_cov_adj`` must be the same known number as ``z_raw``.
+    """
+    rows = _series_rows(levels, dates=_dates(len(levels)))
+    obj = ind.build(rows, coverage=_coverage(rows, frac=0.57), z_min_obs=5,
+                    z_window_obs=250, coverage_smooth_obs=1)
+    return obj.bucket("5-7Y", venue_class=T.VENUE_D2C, series=ladder.SERIES_FLOW)
+
+
+def test_5a_the_published_z_is_a_known_number_with_a_known_sign():
+    """The headline pin: the VALUE of z, not its behaviour under a transform.
+
+    A rising 1,000 -> 5,000 series is a cell taking on progressively more
+    received-fixed risk, and the last day sits above its own short history. The
+    published z is +1.2649110640673518 and can be nothing else. Both z columns
+    are asserted because both can be inverted independently.
+    """
+    f = _hand_z_frame(_HAND_Z_LEVELS)
+    z = f["z_raw"].to_numpy()
+    assert np.isnan(z[:4]).all(), "z must not exist before z_min_obs observations"
+    assert z[4] == pytest.approx(HAND_Z, rel=1e-9)
+    assert z[4] > 0, "the dealer is longer than its own history; z is positive"
+    # the trailing sd is a SAMPLE sd: ddof=0 would publish 1.41421356
+    assert abs(z[4] - HAND_Z_DDOF0) > 0.1
+    assert f["z_cov_adj"].to_numpy()[4] == pytest.approx(HAND_Z, rel=1e-9)
+    # z_n_obs says how much history is behind that number, and is published
+    assert f["z_n_obs"].tolist() == pytest.approx([1.0, 2.0, 3.0, 4.0, 5.0])
+
+
+def test_5b_the_mirror_series_publishes_the_mirrored_z():
+    """Negate every day and the published z is exactly negated, not unchanged.
+
+    Together with 5a this is what a comparative test cannot do: 5a fixes which
+    end of the number line a dealer taking on risk lands on, 5b fixes that the
+    other case lands on the other end.
+    """
+    up = _hand_z_frame(_HAND_Z_LEVELS)["z_raw"].to_numpy()[4]
+    down = _hand_z_frame([-x for x in _HAND_Z_LEVELS])["z_raw"].to_numpy()[4]
+    assert up == pytest.approx(HAND_Z, rel=1e-9)
+    assert down == pytest.approx(-HAND_Z, rel=1e-9)
+    assert down < 0 < up
+
+
+def test_5c_the_sign_of_z_is_the_sign_of_the_dealers_received_fixed_risk():
+    """The convention, end to end: customer pays fixed -> z > 0. And back.
+
+    ``p`` is the probability the CUSTOMER PAID fixed, so the dealer RECEIVED
+    fixed, so the dealer is long duration, so ``delta_dv01 > 0``. A day of that
+    on top of a quiet history must publish a large POSITIVE z. This is the
+    statement the whole indicator makes, and it is the statement an inverted
+    z-score reverses while every invariance below still holds.
+    """
+    assert conv.signed_weight(0.70) == pytest.approx(+0.4)
+    assert conv.signed_weight(0.30) == pytest.approx(-0.4)
+    rng = np.random.default_rng(101)
+    quiet = list(rng.normal(0.0, 1000.0, 39))
+    dates = _dates(40)
+
+    def _last(levels):
+        rows = _series_rows(levels, dates=dates)
+        f = ind.build(rows, coverage=_coverage(rows), z_min_obs=20,
+                      coverage_smooth_obs=1).bucket(
+            "5-7Y", venue_class=T.VENUE_D2C, series=ladder.SERIES_FLOW)
+        return f.iloc[-1]
+
+    # p = 0.70 on a $1mm/bp print: the dealer received fixed on 400k of DV01
+    received = _last(quiet + [400_000.0])
+    paid = _last([-q for q in quiet] + [-400_000.0])
+    assert received[ind.level_column("5-7Y")] > 0
+    assert received["z_raw"] > 3.0, "dealers were lifted; z must say so"
+    assert received["z_cov_adj"] > 3.0
+    assert paid[ind.level_column("5-7Y")] < 0
+    assert paid["z_raw"] < -3.0, "dealers were hit; z must say so"
+    assert paid["z_cov_adj"] < -3.0
+    assert paid["z_raw"] == pytest.approx(-received["z_raw"], rel=1e-9)
+
 
 def test_z_is_exactly_invariant_to_a_constant_retention_factor():
     """The known answer: halve one bucket's retained DV01 and z does not move.
@@ -425,6 +562,42 @@ def test_the_drift_flag_trips_on_a_known_slope():
     assert abs(drift.loc["5-7Y", "coverage_trend_t"]) > 5
     assert bool(drift.loc["5-7Y", "coverage_drift_flag"]) is True
     assert drift.loc["5-7Y", "coverage_drift_source"] == "MEASURED"
+
+
+def test_the_drift_slope_and_its_t_stat_are_a_hand_computable_regression():
+    """Four months at 50 / 51 / 52 / 56 percent coverage, worked out by hand.
+
+    ``x = [0, 1, 2, 3] / 12`` years, ``y = [50, 51, 52, 56]`` percent::
+
+        sxx    = 5/144
+        slope  = (9.5/12) / (5/144)             = +22.8 pp per year
+        resid  = [+0.6, -0.3, -1.2, +0.9], sse  = 2.70
+        se     = sqrt(sse / (n-2) / sxx)        = 6.2354
+        t      = 22.8 / 6.2354                  = +3.6566
+
+    ``t`` is published as ``coverage_trend_t`` and it is what
+    ``DRIFT_T_THRESHOLD`` is compared against, so the degrees of freedom are
+    part of the answer: dividing by ``n`` rather than ``n - 2`` publishes
+    +5.1711 for the same four numbers -- a 41% inflation on this window, and
+    it would tip a genuinely flat bucket over the |t| > 2 line.
+
+    Four months is also below ``MIN_MONTHS_FOR_DRIFT``, so the *decision* here
+    is PINNED rather than MEASURED even though the trend is still published.
+    """
+    assert ind._ols_trend(np.array([50.0, 51.0, 52.0, 56.0]), 4) == pytest.approx(
+        (22.8, 3.656551704867627), rel=1e-9)
+
+    dates = list(pd.bdate_range("2025-01-02", "2025-04-30").date)
+    by_month = {1: 0.50, 2: 0.51, 3: 0.52, 4: 0.56}
+    rows = _series_rows(np.full(len(dates), 1000.0), dates=dates)
+    covf = _coverage(rows, per_date=lambda b, d, f: by_month[d.month])
+    obj = ind.build(rows, coverage=covf, z_min_obs=5)
+    d = obj.drift.set_index("bucket_key").loc["5-7Y"]
+    assert d["n_months"] == 4
+    assert d["coverage_trend_pp_per_yr"] == pytest.approx(22.8, rel=1e-9)
+    assert d["coverage_trend_t"] == pytest.approx(3.656551704867627, rel=1e-9)
+    assert d["coverage_drift_source"] == "PINNED"
+    assert bool(d["coverage_drift_flag"]) is False
 
 
 def test_a_flat_coverage_does_not_trip_the_flag():
@@ -481,6 +654,52 @@ def test_own_history_is_within_the_full_key_not_pooled_across_venues():
     assert np.allclose(alone["z_raw"].to_numpy()[ok], t["z_raw"].to_numpy()[ok], atol=1e-12)
 
 
+# -- the other own-history statistic, which is published beside z ----------
+
+@pytest.mark.parametrize("window,expected", [
+    ([10., 20., 30., 40., 50.], 1.00),   # today is above all of its history
+    ([10., 20., 30., 40., 5.], 0.00),    # below all of it
+    ([10., 20., 30., 40., 15.], 0.25),   # above one of four
+    ([10., 20., 30., 40., 35.], 0.75),   # above three of four
+])
+def test_the_trailing_percentile_is_the_share_of_history_below_today(window, expected):
+    """``pct_raw`` is published and only its COLUMN was asserted, never a value.
+
+    The 0.25 and 0.75 cases are the point. A function that returns a constant
+    0.5, and a function whose comparison runs the wrong way, both reproduce
+    every symmetric case and both publish "this day is unremarkable" (or its
+    exact opposite) for every day of every bucket.
+    """
+    assert ind._trailing_percentile(np.asarray(window)) == pytest.approx(expected)
+
+
+def test_the_trailing_percentile_of_a_first_observation_is_not_a_number():
+    """One observation has no history to sit in, and 0.5 is not "no history"."""
+    assert np.isnan(ind._trailing_percentile(np.asarray([3.0])))
+
+
+def test_the_published_percentile_column_carries_those_numbers():
+    """End to end, on two series whose answer is 1.0 and 0.0 every single day.
+
+    A strictly rising level is at its own trailing high every day; a strictly
+    falling one is at its own low. Anything that reads 0.5, or reads the two
+    the other way round, is publishing the opposite of what the tape did.
+    """
+    n = 12
+    up_rows = _series_rows(np.arange(1, n + 1) * 1000.0, dates=_dates(n))
+    down_rows = _series_rows(np.arange(n, 0, -1) * 1000.0, dates=_dates(n))
+
+    def _pct(rows):
+        return ind.build(rows, coverage=_coverage(rows), z_min_obs=2).bucket(
+            "5-7Y", venue_class=T.VENUE_D2C,
+            series=ladder.SERIES_FLOW)["pct_raw"].to_numpy()
+
+    up, down = _pct(up_rows), _pct(down_rows)
+    assert np.isnan(up[0]) and np.isnan(down[0])
+    assert up[1:] == pytest.approx(np.ones(n - 1)), "a new high must read 1.0"
+    assert down[1:] == pytest.approx(np.zeros(n - 1)), "a new low must read 0.0"
+
+
 # --------------------------------------------------------------------------
 # 6. coverage is required, and the two bases are both published
 # --------------------------------------------------------------------------
@@ -497,6 +716,24 @@ def test_a_cell_with_no_coverage_row_is_refused():
     with pytest.raises(ind.CoverageGap) as e:
         ind.build(rows, coverage=cov, z_min_obs=2)
     assert "1" in str(e.value)
+
+
+def test_a_duplicated_coverage_key_is_refused():
+    """Two coverage rows for one cell do not average -- they DUPLICATE the cell.
+
+    ``build`` left-joins coverage onto the levels, so a repeated
+    (bucket, day, venue, series) key emits the published cell twice: the day's
+    DV01 is counted twice in every trailing statistic downstream and the frame
+    still looks like a well-formed daily series.
+    """
+    rows = _series_rows([100.0, 200.0], dates=_dates(2))
+    cov = _coverage(rows)
+    doubled = pd.concat([cov, cov.iloc[[0]]], ignore_index=True)
+    with pytest.raises(ValueError) as e:
+        ind.coverage_fraction(doubled)
+    assert "duplicated" in str(e.value)
+    with pytest.raises(ValueError):
+        ind.build(rows, coverage=doubled, z_min_obs=1)
 
 
 def test_coverage_fraction_is_kept_over_total():
@@ -546,6 +783,74 @@ def test_the_adjustment_smooths_coverage_rather_than_dividing_by_the_day():
     assert cv(adj) < cv(naive) / 5.0, (
         f"the adjustment manufactured coverage noise: cv(adj)={cv(adj):.4f} "
         f"vs cv(per-day)={cv(naive):.4f}")
+
+
+def test_the_adjusted_level_is_the_raw_level_when_coverage_holds_still():
+    """The scale of the adjusted level, which no other test pins.
+
+    The two tests around this one are both scale-invariant -- one compares a
+    coefficient of variation, the other a ratio of slopes -- so replacing the
+    reference ``mean(coverage)`` with 1.0 divides every published adjusted
+    level by the coverage fraction (2.5x here) and neither notices. The known
+    answer is: **constant coverage means the adjustment is the identity**, the
+    factor is ``mean(coverage) / smoothed(coverage) = 1``, and it is 1 because
+    the reference is a coverage, not a bare 1.0.
+
+    The NaN prefix is the second half. The smoother must have all 63 of its
+    observations before the adjusted basis exists at all -- an adjustment that
+    starts on day 1 is dividing by something close to the day's own fraction,
+    which is what the raw basis is primary to avoid.
+    """
+    n = 80
+    rng = np.random.default_rng(77)
+    rows = _series_rows(rng.normal(0.0, 3000.0, n), dates=_dates(n))
+    obj = ind.build(rows, coverage=_coverage(rows, frac=0.4), z_min_obs=5,
+                    coverage_smooth_obs=63)
+    f = obj.bucket("5-7Y", venue_class=T.VENUE_D2C, series=ladder.SERIES_FLOW)
+    raw = f[ind.level_column("5-7Y")].to_numpy()
+    adj = f[ind.level_column("5-7Y", basis="cov_adj")].to_numpy()
+    assert np.isnan(adj[:62]).all(), "the smoother must fill before it divides"
+    assert np.isfinite(adj[62:]).all()
+    assert adj[62:] == pytest.approx(raw[62:], rel=1e-9)
+    assert np.abs(raw[62:]).max() > 1000.0, "the fixture must not be all zeros"
+
+
+def test_the_adjusted_level_is_mean_coverage_over_smoothed_coverage_times_the_raw():
+    """A step in coverage with an adjustment factor computable by hand.
+
+    63 days at 0.60 then 63 at 0.30. Three days where every term is known:
+
+    ======  ==================================  ================  ==========
+    row     smoothed coverage (63 obs)          mean(coverage)    adjusted
+    ======  ==================================  ================  ==========
+    62      0.60                                0.45              750
+    80      (45*0.60 + 18*0.30)/63 = 0.5142857  0.45              875
+    125     0.30                                0.45              1500
+    ======  ==================================  ================  ==========
+
+    on a raw level of 1,000 throughout. Row 80 is the one that separates the
+    smoother from the day's own fraction: the day's own coverage there is 0.30
+    and the smoothed value is 0.514, so a published ``coverage_smooth`` of 0.30
+    would be the naive per-day division the module docstring refuses.
+    """
+    n = 126
+    dates = _dates(n)
+    cov = np.array([0.60] * 63 + [0.30] * 63)
+    lookup = dict(zip(dates, cov))
+    rows = _series_rows(np.full(n, 1000.0), dates=dates)
+    obj = ind.build(rows, coverage=_coverage(rows, per_date=lambda b, d, x: lookup[d]),
+                    z_min_obs=5, coverage_smooth_obs=63)
+    f = obj.bucket("5-7Y", venue_class=T.VENUE_D2C, series=ladder.SERIES_FLOW)
+    smooth = f["coverage_smooth"].to_numpy()
+    adj = f[ind.level_column("5-7Y", basis="cov_adj")].to_numpy()
+    assert np.isnan(smooth[:62]).all()
+    for row, want_smooth, want_adj in ((62, 0.60, 750.0),
+                                       (80, 0.45 / 0.875, 875.0),
+                                       (125, 0.30, 1500.0)):
+        assert smooth[row] == pytest.approx(want_smooth, rel=1e-9), f"row {row}"
+        assert adj[row] == pytest.approx(want_adj, rel=1e-9), f"row {row}"
+    # and the direction: coverage fell, so the same tape DV01 means more risk
+    assert adj[125] > f[ind.level_column("5-7Y")].to_numpy()[125]
 
 
 def test_the_coverage_adjustment_removes_a_known_coverage_trend_from_the_level():
@@ -634,6 +939,37 @@ def test_provenance_reaches_the_published_row():
     assert 0.0 <= r["mean_abs_signed_weight"] <= 1.0
 
 
+def test_mean_abs_signed_weight_is_the_gross_weighted_mean_of_the_2p_minus_1s():
+    """Only its BOUNDS are asserted elsewhere, and 1.0 is inside them.
+
+    This is the column a reader uses to discount a day: it says how confident
+    the direction calls behind the net level were. Published as a constant 1.0
+    it claims every print in the cell was a certain call -- that the net level
+    IS the gross pond -- which is the most flattering value it can take and
+    the one that makes a cell of coin flips look like a conviction trade.
+    """
+    rows = _unit_rows([
+        {"unit_key": "A", "bucket_key": "6Y", "dv01_if_received": 1e6,
+         "date": D0, "p": 0.75},                       # |2p-1| = 0.50
+        {"unit_key": "B", "bucket_key": "6Y", "dv01_if_received": 3e6,
+         "date": D0, "p": 0.10},                       # |2p-1| = 0.80
+    ])
+    lv = ind.daily_levels(rows)
+    # gross-weighted: (0.50*1 + 0.80*3) / 4 = 0.725
+    assert lv["mean_abs_signed_weight"].iloc[0] == pytest.approx(0.725)
+    assert lv["delta_dv01"].iloc[0] == pytest.approx(0.5e6 - 2.4e6)
+    assert lv["abs_dv01"].iloc[0] == pytest.approx(4e6)
+
+
+def test_a_cell_of_coin_flips_reports_no_confidence():
+    """p = 0.5 everywhere: the net is zero and the confidence is zero, not one."""
+    rows = _series_rows([0.0, 0.0], dates=_dates(2))
+    lv = ind.daily_levels(rows)
+    assert lv["p"].tolist() == pytest.approx([0.5, 0.5]) if "p" in lv.columns else True
+    assert lv["mean_abs_signed_weight"].tolist() == pytest.approx([0.0, 0.0])
+    assert lv["abs_dv01"].tolist() == pytest.approx([1e6, 1e6])
+
+
 def test_a_single_vintage_is_reported_as_itself():
     rows = _series_rows([100.0], dates=_dates(1))
     obj = _build(rows)
@@ -676,6 +1012,49 @@ def test_autocorrelation_recovers_a_known_ar1():
         ("5-7Y", T.VENUE_D2C, ladder.SERIES_FLOW)]
     assert r["ac1"] == pytest.approx(phi, abs=0.05)
     assert r["n_obs"] == n
+    # AC(5) is published for ten buckets in INDICATOR.md 5.1 and nothing
+    # asserted it. An AR(1) decays geometrically: phi**5 = 0.0778, not 0.6.
+    assert r["ac5"] == pytest.approx(phi ** 5, abs=0.05)
+    assert r["ac5"] < 0.4 * r["ac1"], (
+        "the AC(5) column is reporting AC(1), so the published table claims "
+        "five times the market memory the series has")
+
+
+def test_autocorrelation_reads_the_lag_it_is_given():
+    """The lag argument, on a series whose answer is known at every lag.
+
+    A cosine of period 12 has autocorrelation ``cos(2*pi*k/12)``: +0.866 at
+    lag 1, **-0.866** at lag 5, -1 at lag 6. A ``_autocorr`` that ignores its
+    lag returns +0.866 for all three -- and both the sign and the magnitude of
+    a published column are then wrong with nothing to show for it.
+    """
+    x = np.cos(2.0 * np.pi * np.arange(1200) / 12.0)
+    assert ind._autocorr(x, 1) == pytest.approx(np.cos(2 * np.pi / 12), abs=0.01)
+    assert ind._autocorr(x, 5) == pytest.approx(np.cos(10 * np.pi / 12), abs=0.01)
+    assert ind._autocorr(x, 6) == pytest.approx(-1.0, abs=0.01)
+
+
+def test_an_autocorrelation_from_two_points_is_not_published():
+    """At ``len(x) == lag + 2`` the two lagged vectors are two points long, and
+    the correlation of two points is **+1 or -1 whatever the numbers are**.
+
+    A thin cell early in a backfill would otherwise publish AC(5) = 1.000 --
+    "perfect weekly persistence" -- as an artefact of having seven days of
+    history. Same family as this module's own ADF returning -1086.7: a number
+    manufactured by arithmetic rather than measured.
+    """
+    def _two_point_corr(x, lag):
+        a, b = x[:-lag], x[lag:]
+        xa, xb = a - a.mean(), b - b.mean()
+        return float((xa * xb).sum() / np.sqrt((xa ** 2).sum() * (xb ** 2).sum()))
+
+    # what the guard is standing in front of: any three points, |ac1| == 1
+    assert abs(_two_point_corr(np.array([1.0, 5.0, 9.0]), 1)) == pytest.approx(1.0)
+    assert abs(_two_point_corr(np.array([1.0, 5.0, 2.0]), 1)) == pytest.approx(1.0)
+
+    assert np.isnan(ind._autocorr(np.array([1.0, 5.0, 9.0]), 1)), "3 points, lag 1"
+    assert np.isnan(ind._autocorr(np.arange(7.0) ** 1.3, 5)), "7 points, lag 5"
+    assert np.isfinite(ind._autocorr(np.arange(8.0) ** 1.3, 5)), "8 points, lag 5"
 
 
 def test_stationarity_flags_a_random_walk_and_clears_white_noise():
@@ -692,6 +1071,86 @@ def test_stationarity_flags_a_random_walk_and_clears_white_noise():
                      z_min_obs=20, allow_pre_floor=True).properties()
     assert bool(p_wn["level_stationary"].iloc[0]) is True
     assert bool(p_rw["level_stationary"].iloc[0]) is False
+
+
+def test_the_adf_reproduces_statsmodels_on_five_series_with_known_answers():
+    """The cross-check that lived in ``scratch/`` and therefore in no gate.
+
+    ``_adf`` is written out so the module carries no statistics dependency, and
+    this module has already caught its own ADF returning -1086.7 where the
+    answer is -4.96. The **lag order is part of the statistic**: collapsing it
+    to 1 changes the number on every series, leaves the scale-invariance test
+    below perfectly happy, and no property of ``properties()`` looks wrong. The
+    Schwert rule is written out here rather than imported from the module, so
+    agreement with an independent implementation *at that lag* is evidence
+    about the module's lag choice and not a restatement of it.
+    """
+    sm = pytest.importorskip("statsmodels.tsa.stattools")
+    rng = np.random.default_rng(103)
+    n = 800
+
+    def _ar1(phi):
+        x, e = np.zeros(n), rng.normal(0, 1, n)
+        for i in range(1, n):
+            x[i] = phi * x[i - 1] + e[i]
+        return x
+
+    # The verdicts below are the answers for THIS draw, not guarantees about the
+    # processes: the test is 5% size and ~100% power at n = 800, so an
+    # individual random walk is rejected one time in twenty (seed 101 draws one
+    # such walk, at t = -2.94). The agreement with statsmodels is the part that
+    # holds for every draw, and it is the part that pins the lag order.
+    cases = {
+        "white noise": (rng.normal(0, 1, n), True),
+        "AR(1) phi=0.6": (_ar1(0.6), True),
+        "AR(1) phi=0.98": (_ar1(0.98), None),        # -2.77: genuinely borderline
+        "random walk": (np.cumsum(rng.normal(0, 1, n)), False),
+        "random walk with drift": (np.cumsum(rng.normal(0.05, 1, n)), False),
+    }
+    lags = int(min(25, max(1, np.ceil(12.0 * (n / 100.0) ** 0.25))))
+    assert lags == 21, "Schwert's rule at n=800"
+    # the constant the verdict column is cut at; INDICATOR.md 5.1 reads two
+    # buckets against it by name
+    assert ind.ADF_CRITICAL_5PCT == pytest.approx(-2.86)
+    for name, (x, expect) in cases.items():
+        t_ours, stationary = ind._adf(x)
+        t_sm, p_sm, *_ = sm.adfuller(x, maxlag=lags, regression="c", autolag=None)
+        assert t_ours == pytest.approx(t_sm, abs=1e-8), f"{name}: t"
+        assert stationary is bool(p_sm < 0.05), f"{name}: verdict"
+        if expect is not None:
+            assert stationary is expect, f"{name}: known answer"
+
+
+def test_a_series_too_short_to_test_gets_no_stationarity_verdict():
+    """``None``, never a verdict. A short series is not evidence of stability.
+
+    The lengths here are **absolute, not written as ``MIN_ADF_OBS - 1``**. A
+    forty-observation Dickey-Fuller regression is perfectly well posed
+    arithmetically -- it returns a confident-looking t of -1.37 on the draw
+    below -- so a floor expressed relative to itself is not a floor at all: it
+    moves with the constant it is meant to pin and the published
+    ``level_stationary`` column silently starts answering on two months of
+    data.
+    """
+    assert ind.MIN_ADF_OBS == 60, "two months of business days is not a sample"
+    rng = np.random.default_rng(5)
+    for n_short in (20, 40, 59):
+        t, verdict = ind._adf(rng.normal(0, 1, n_short))
+        assert verdict is None, f"n = {n_short} must get no verdict"
+        assert np.isnan(t)
+    t_ok, verdict_ok = ind._adf(rng.normal(0, 1, 360))
+    assert verdict_ok is not None and np.isfinite(t_ok)
+
+
+def test_a_short_cell_publishes_no_stationarity_verdict():
+    """And the same through the published column, not just the helper."""
+    n = 40
+    rng = np.random.default_rng(13)
+    rows = _series_rows(rng.normal(0.0, 1000.0, n), dates=_dates(n))
+    props = ind.build(rows, coverage=_coverage(rows), z_min_obs=20).properties()
+    assert props["n_obs"].iloc[0] == n
+    assert props["level_stationary"].iloc[0] is None
+    assert np.isnan(props["adf_stat"].iloc[0])
 
 
 def test_the_stationarity_meter_is_invariant_to_the_scale_of_the_level():
@@ -730,6 +1189,71 @@ def test_coverage_moves_are_counted_against_the_level_s_own_noise():
     assert props["n_coverage_moves_that_matter"] >= 1
     flat = ind.build(rows, coverage=_coverage(rows), z_min_obs=20).properties().iloc[0]
     assert flat["n_coverage_moves_that_matter"] == 0
+
+
+def test_whether_a_coverage_move_matters_is_decided_by_the_level_not_the_move():
+    """Identical coverage churn, opposite verdicts, and the LEVEL decides.
+
+    The rule is ``|dc|/c`` applied to the level's typical size, against 0.25
+    standard deviations of the level. Comparing ``rel * sd > 0.25 * sd``
+    instead -- i.e. ``rel > 0.25``, an absolute threshold on the coverage move
+    on its own -- is exactly the absolute-versus-relative confusion the
+    docstring says cannot work, and it is **invisible on any zero-mean level**,
+    because there ``rms == sd`` and the two rules coincide. Real bucket levels
+    are not zero-mean.
+
+    Both cells below see the same ~2% daily coverage churn. The first has a
+    level of 1,000 +- 10 (rms/sd ~ 100), so a 2% measurement wobble is 20 DV01
+    against a 2.5 DV01 threshold and matters every single day. The second has a
+    level of 0 +- 1,000 (rms/sd ~ 1), so the same wobble is 20 DV01 against a
+    250 DV01 threshold and never matters.
+    """
+    n = 250
+    dates = _dates(n)
+    rng = np.random.default_rng(83)
+    cov = np.where(np.arange(n) % 2 == 0, 0.50, 0.51)
+    lookup = dict(zip(dates, cov))
+
+    def _props(level):
+        rows = _series_rows(level, dates=dates)
+        return ind.build(rows,
+                         coverage=_coverage(rows, per_date=lambda b, d, f: lookup[d]),
+                         z_min_obs=20).properties().iloc[0]
+
+    biased = _props(1000.0 + rng.normal(0.0, 10.0, n))
+    centred = _props(rng.normal(0.0, 1000.0, n))
+    # the coverage path -- and therefore every relative move -- is identical
+    assert biased["p95_abs_rel_coverage_move"] == pytest.approx(0.02, abs=0.002)
+    assert centred["p95_abs_rel_coverage_move"] == pytest.approx(0.02, abs=0.002)
+    assert biased["n_coverage_moves_that_matter"] >= 240
+    assert centred["n_coverage_moves_that_matter"] == 0
+
+
+def test_the_published_coverage_move_percentile_is_the_95th_not_the_median():
+    """A hand-built multiset of relative moves: 80 of 1% and 20 of 20%.
+
+    Building the coverage path multiplicatively makes each step's relative move
+    exactly the number chosen for it, so the published statistic has an exact
+    answer: p95 = 0.20 while the median is 0.01, two orders of magnitude apart.
+    A median under a p95 heading would report the real tape's 15-20Y bucket as
+    a 33% churn (INDICATOR.md 5.2) rather than the tail that actually distorts
+    a day, and nothing about the number would look wrong.
+    """
+    steps = 100
+    size = np.where(np.arange(steps) % 5 == 0, 0.20, 0.01)     # 20 big, 80 small
+    sign = np.where(np.arange(steps) % 2 == 0, 1.0, -1.0)      # so it stays put
+    cov = [0.60]
+    for i in range(steps):
+        cov.append(cov[-1] * (1.0 + sign[i] * size[i]))
+    cov = np.array(cov)
+    assert 0.0 < cov.min() and cov.max() <= 1.0
+    dates = _dates(len(cov))
+    lookup = dict(zip(dates, cov))
+    rng = np.random.default_rng(59)
+    rows = _series_rows(rng.normal(1000.0, 50.0, len(cov)), dates=dates)
+    props = ind.build(rows, coverage=_coverage(rows, per_date=lambda b, d, f: lookup[d]),
+                      z_min_obs=20).properties().iloc[0]
+    assert props["p95_abs_rel_coverage_move"] == pytest.approx(0.20, abs=1e-6)
 
 
 # --------------------------------------------------------------------------

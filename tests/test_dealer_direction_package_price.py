@@ -96,7 +96,15 @@ CURVE_RATES = (4.01, 4.215)
 CURVE_PV01 = (10_000.0, 10_000.0)
 
 FLY_MIDS = (4.00, 4.20, 4.30)
-FLY_RATES = (4.005, 4.21, 4.305)
+# The wings are 5 bp off mid, not 0.5 bp, and the reason is §9: a wing fee of
+# 0.25 bp of the belly's DV01 makes the whole package UNIDENTIFIED -- flipping
+# that wing's cash direction moves the reconciliation by 0.5 bp, which is
+# inside the 1 bp of unexplained cash `TIEOUT_MAX_BPS` declares acceptable, so
+# two orientations fit the price equally well and the module now refuses it.
+# All three legs are struck BELOW mid so the fly still prices UP against mid
+# (`-r0 + 2 r1 - r2` rises by 0.08), which is what keeps §3's agreement with
+# the rate rule a live test rather than a sign coincidence.
+FLY_RATES = (3.95, 4.19, 4.25)
 FLY_PV01 = (5_000.0, 10_000.0, 5_000.0)
 
 
@@ -156,8 +164,12 @@ def test_worked_fly_example_is_what_the_docstring_says():
     opas, ptp, f, pv01s, o = build(conv.FLY, FLY_MIDS, FLY_RATES, FLY_PV01,
                                    charge=500.0)
     assert o == (-1, 1, -1)
-    assert f == pytest.approx([-2_500.0, -10_000.0, -2_500.0])
-    assert ptp == pytest.approx(-4_500.0)
+    assert f == pytest.approx([25_000.0, 10_000.0, 25_000.0])
+    # base receives fixed on the wings and pays on the belly; struck below mid
+    # the wings are out of the money to it, so it RECEIVES their cash and pays
+    # the belly's -- and the charge lands on the belly, the leg it pays.
+    assert opas == pytest.approx([25_000.0, 10_500.0, 25_000.0])
+    assert ptp == pytest.approx(-39_500.0)
 
 
 # --------------------------------------------------------------------------
@@ -289,6 +301,101 @@ def test_outright_lifecycle_inverts_with_the_upfront_rule(f, u):
 
 
 # --------------------------------------------------------------------------
+# 4b. the THREE fields have to compose, and the lifecycle negation has to sit
+#     in the same one `upfront.py` puts it in
+# --------------------------------------------------------------------------
+#
+# `received_signs = dealer_sign * base_orientation` is what the dataclass says
+# and what a consumer following the `krd` pattern computes for itself
+# (`dealer_sign * received_hypothesis_signs(...)`). Comparing only
+# `received_signs` against `upfront` -- which is all
+# `test_outright_lifecycle_inverts_with_the_upfront_rule` above does -- cannot
+# see the two fields disagreeing, and they did: the negation was applied to
+# `received_signs` while `dealer_sign` was left alone, so every lifecycle
+# package's key-rate profile came out inverted for anyone who composed it.
+
+# A PKG-4 that is BOTH a real call (not an exact tie, so `dealer_sign != 0`)
+# and identified (one sign class inside the tie-out gate, so §9's margin gate
+# keeps it). The fees are spread so the runner-up sign class is 10 bp of the
+# unit's DV01 away; `test_the_pkg4_fixture_is_a_real_call_and_identified` pins
+# both properties so a later change to the numbers cannot quietly turn this
+# into a fixture that passes for the wrong reason.
+PKG4_OPAS = (10_000.0, 21_000.0, 43_000.0, 87_000.0)
+PKG4_PTP = -55_000.0
+PKG4_NPVS = (-1_000.0, -1_500.0, 600.0, 400.0)
+PKG4_PV01 = (1_000.0, 1_000.0, 1_000.0, 1_000.0)
+PKG4_DV01 = 2_000.0
+
+
+def _pkg4(**kw):
+    args = dict(opas=list(PKG4_OPAS), package_price=PKG4_PTP,
+                npv_pays=list(PKG4_NPVS), pv01s=list(PKG4_PV01),
+                structure_dv01=PKG4_DV01)
+    args.update(kw)
+    return pp.classify(**args)
+
+
+@pytest.mark.parametrize("is_lifecycle", [False, True])
+@pytest.mark.parametrize("kind,mids,rates,pv01s", [
+    (conv.CURVE, CURVE_MIDS, CURVE_RATES, CURVE_PV01),
+    (conv.FLY, FLY_MIDS, FLY_RATES, FLY_PV01),
+])
+def test_received_signs_is_the_composition_of_the_two_fields_it_claims(
+        kind, mids, rates, pv01s, is_lifecycle):
+    """The pinned identity, on the composition rather than on either field.
+
+    A consumer of a ``RULE_PACKAGE_PRICE`` call is told to read
+    ``package_price.received_hypothesis_signs`` and multiply by the call's
+    ``dealer_sign`` -- that is the ``krd`` seam's shape. So THAT product is what
+    has to equal ``received_signs``, whichever field the lifecycle negation
+    lands in.
+    """
+    opas, ptp, f, pv01s_l, _ = build(kind, mids, rates, pv01s, charge=1_000.0)
+    call = pp.classify(opas=opas, package_price=ptp, npv_pays=f,
+                       pv01s=pv01s_l, structure_dv01=_dv01(kind, pv01s),
+                       is_lifecycle=is_lifecycle)
+    assert call.exclusion is None and call.dealer_sign != 0
+    composed = tuple(call.dealer_sign * s
+                     for s in pp.received_hypothesis_signs(call))
+    assert call.received_signs == composed, (
+        f"received_signs {call.received_signs} is not dealer_sign "
+        f"{call.dealer_sign} times the hypothesis signs "
+        f"{pp.received_hypothesis_signs(call)}; a consumer composing them "
+        "gets the whole package's key-rate profile the wrong way round")
+
+
+@pytest.mark.parametrize("is_lifecycle", [False, True])
+def test_the_composition_holds_on_a_pkg4_too(is_lifecycle):
+    call = _pkg4(is_lifecycle=is_lifecycle)
+    assert call.exclusion is None and call.dealer_sign != 0
+    assert call.received_signs == tuple(
+        call.dealer_sign * s for s in pp.received_hypothesis_signs(call))
+
+
+@pytest.mark.parametrize("f,u", [(-60_000.0, 40_000.0), (60_000.0, 40_000.0),
+                                 (-60_000.0, 90_000.0), (60_000.0, 90_000.0)])
+def test_the_lifecycle_negation_sits_in_dealer_sign_like_the_upfront_rule(f, u):
+    """``upfront.py`` negates ``edge`` before ``dealer_side``, so its
+    ``dealer_sign`` flips on a lifecycle row. Both rules feed one pooled
+    population, so the negation cannot sit in a different field here --
+    ``base_orientation`` is a property of the package, not of the print, and it
+    must NOT move.
+    """
+    pv01 = 10_000.0
+    flow = pp.classify(opas=[u], package_price=u, npv_pays=[f], pv01s=[pv01],
+                       structure_dv01=pv01)
+    life = pp.classify(opas=[u], package_price=u, npv_pays=[f], pv01s=[pv01],
+                       structure_dv01=pv01, is_lifecycle=True)
+    up_flow = up.classify(npv_pay=f, upfront=u, structure_dv01=pv01)
+    up_life = up.classify(npv_pay=f, upfront=u, structure_dv01=pv01,
+                          is_lifecycle=True)
+    assert up_life.dealer_sign == -up_flow.dealer_sign     # the frozen rule
+    assert life.base_orientation == flow.base_orientation
+    assert life.dealer_sign == -flow.dealer_sign
+    assert life.received_signs == tuple(-r for r in flow.received_signs)
+
+
+# --------------------------------------------------------------------------
 # 5. the global flip must not reach the answer
 # --------------------------------------------------------------------------
 
@@ -399,9 +506,14 @@ def test_a_leg_inside_the_mid_resolution_is_flagged_not_refused():
     ``unresolved_pv01`` is the same number whichever leg was flagged, so the
     test cannot tell the comparison from its inverse. (It could not, until a
     mutation that flipped ``<`` to ``>`` survived.)
+
+    The near-mid leg's **fee** is large ($40k) while its **NPV** is $10. Those
+    are two different quantities and only the second one is what "near mid"
+    means; a fixture that made both small would be refused by §9's
+    identification gate and would stop testing this at all.
     """
     # leg 0 is 0.001 bp from mid: |f| = 0.001 * 10_000 = $10
-    call = pp.classify(opas=[10.0, 15_000.0], package_price=-14_990.0,
+    call = pp.classify(opas=[40_000.0, 60_000.0], package_price=-20_000.0,
                        npv_pays=[-10.0, -15_000.0],
                        pv01s=[10_000.0, 20_000.0], structure_dv01=15_000.0,
                        leg_sign_resolution_bps=0.25)
@@ -541,7 +653,8 @@ def test_tape_gate_matches_the_scalar_rule_on_every_named_refusal():
 
 def test_tape_gate_is_empty_safe():
     got = pp.tape_gate(_legs("X", [1.0], None, [1.0]).iloc[:0])
-    assert list(got.columns) == ["recoverable", "stratum", "tieout_bps"]
+    assert list(got.columns) == ["recoverable", "stratum", "tieout_bps",
+                                 "margin_bps"]
     assert len(got) == 0
 
 
@@ -581,12 +694,19 @@ def test_universe_routes_a_recoverable_pkg4_out_of_unorientable():
 
     import tests.test_dealer_direction_universe as tu
 
+    # Four 100mm 10y legs is ~$85k/bp each, so the unit's DV01 proxy is ~$170k
+    # and one bp of it is $170k. The fees have to be spread by more than that
+    # for the reconciliation to pick one sign vector out; the original fixture
+    # here ([10k, 15k, 6k, 3k]) had a runner-up sign class $2,000 away --
+    # 0.012 bp -- so it was routed into the kept universe on an orientation the
+    # solver's lowest-mask tie-break chose. See §9.
     legs = tu._frame(*[
         tu._leg(trade_id=f"T{i}", package_id="P1",
                 other_payment_amount=amt,
-                package_transaction_price=-4_000.0,
+                package_transaction_price=-3_000_000.0,
                 notional=100_000_000.0, tenor_years=10.0)
-        for i, amt in enumerate([10_000.0, 15_000.0, 6_000.0, 3_000.0])
+        for i, amt in enumerate([500_000.0, 1_100_000.0, 2_300_000.0,
+                                 4_700_000.0])
     ])
     # the un-gated PTP makes it recoverable; a package with no price does not
     u = universe.unit_frame(legs)
@@ -596,7 +716,8 @@ def test_universe_routes_a_recoverable_pkg4_out_of_unorientable():
         tu._leg(trade_id=f"T{i}", package_id="P2", other_payment_amount=amt,
                 package_transaction_price=None,
                 notional=100_000_000.0, tenor_years=10.0)
-        for i, amt in enumerate([10_000.0, 15_000.0, 6_000.0, 3_000.0])
+        for i, amt in enumerate([500_000.0, 1_100_000.0, 2_300_000.0,
+                                 4_700_000.0])
     ])
     u2 = universe.unit_frame(legs2)
     assert list(u2["exclusion"]) == [T.EXCL_UNORIENTABLE]
@@ -622,10 +743,7 @@ def test_krd_seam_still_gives_a_package_one_sign_and_this_module_does_not():
     assert krd.received_hypothesis_signs(conv.PKG, 4, conv.RULE_UPFRONT) \
         == (1, 1, 1, 1)
 
-    call = pp.classify(opas=[10_000.0, 15_000.0, 6_000.0, 3_000.0],
-                       package_price=-4_000.0,
-                       npv_pays=[-10_000.0, -15_000.0, 6_000.0, 3_000.0],
-                       pv01s=[1e4] * 4, structure_dv01=2e4)
+    call = _pkg4()
     assert call.exclusion is None
     got = pp.received_hypothesis_signs(call)
     assert len(set(got)) > 1, (
@@ -650,9 +768,329 @@ def test_universe_still_excludes_an_asset_swap_package():
 
     legs = tu._frame(*[
         tu._leg(trade_id=f"T{i}", package_id="P3", other_payment_amount=amt,
-                package_transaction_price=-4_000.0, trade_type="SPREADOVER",
+                package_transaction_price=-3_000_000.0,
+                trade_type="SPREADOVER",
                 notional=100_000_000.0, tenor_years=10.0)
-        for i, amt in enumerate([10_000.0, 15_000.0, 6_000.0, 3_000.0])
+        for i, amt in enumerate([500_000.0, 1_100_000.0, 2_300_000.0,
+                                 4_700_000.0])
     ])
     u = universe.unit_frame(legs)
     assert list(u["exclusion"]) == [T.EXCL_UNORIENTABLE]
+
+
+# --------------------------------------------------------------------------
+# 9. IDENTIFICATION -- is the winning sign vector the only one that fits?
+# --------------------------------------------------------------------------
+#
+# Passing the tie-out gate says the winning sign vector reconciles the fees
+# with the price. It does NOT say it is the only one that does, and on a
+# PKG-4+ it usually is not: measured on the tape (see
+# ``scratch/ppfix_measure.py``), the median accepted PKG-4+ unit has several
+# mutually inconsistent orientations inside ``TIEOUT_MAX_BPS``, each implying
+# a different per-leg key-rate profile, with the winner chosen by
+# ``opa_sign_solver``'s lowest-mask tie-break -- a convention, not economics.
+#
+# ``margin_bps`` is the identification statistic: the distance from the
+# winning sign class to the next DISTINCT one, in bp of the unit's own DV01,
+# where a "class" is a sign vector together with its global complement (the
+# degree of freedom the price comparison consumes, so the two are the same
+# answer). A unit is identified when the runner-up class sits OUTSIDE the same
+# gate the winner had to sit inside: if 1 bp of unexplained cash is acceptable
+# noise, then every class within 1 bp is equally consistent with the data.
+
+
+def test_the_pkg4_fixture_is_a_real_call_and_identified():
+    """The fixture 4b leans on, pinned so it cannot rot into passing for the
+    wrong reason (an exact tie would make ``dealer_sign`` 0, and an ambiguous
+    package would be refused)."""
+    call = _pkg4()
+    assert call.exclusion is None
+    assert call.dealer_sign != 0
+    assert call.margin_bps == pytest.approx(10.0)      # $20,000 on $2,000/bp
+
+
+@pytest.mark.parametrize("opas,ptp,want", [
+    # one leg -> one sign class; a vector and its complement are the same
+    # answer, so there is no runner-up and the unit is identified by default.
+    ([40_000.0], 40_000.0, float("inf")),
+    # two legs, two classes: {+,+} nets 20,000 and {+,-} nets 0. Against a
+    # price of 600 the residuals are 19,400 and 600 -> margin 18,800.
+    ([10_000.0, 10_000.0], 600.0, 18_800.0),
+    # the worked CURVE example: {+,+} nets 26,000, {+,-} nets -4,000.
+    ([11_000.0, 15_000.0], -4_000.0, 22_000.0),
+    # duplicated fees make DISTINCT sign vectors net the same, so two classes
+    # tie exactly and the winner is the tie-break's. Margin must be 0.
+    ([10_000.0, 10_000.0, 5_000.0, 5_000.0], 10_000.0, 0.0),
+    # the 4b PKG-4: residuals 86k/22k/0/64k/44k/20k/42k/106k -> runner-up 20k
+    (list(PKG4_OPAS), PKG4_PTP, 20_000.0),
+])
+def test_sign_class_margin_reproduces_hand_computed_answers(opas, ptp, want):
+    """The identification statistic, checked against inputs whose answer is
+    known by enumeration on paper -- not against the module's own arithmetic.
+    """
+    got = pp.sign_class_margin(opas, ptp)
+    if math.isinf(want):
+        assert math.isinf(got) and got > 0
+    else:
+        assert got == pytest.approx(want)
+
+
+def _all_classes(n):
+    for m in range(1 << (n - 1)):
+        yield [1] + [1 if (m >> i) & 1 else -1 for i in range(n - 1)]
+
+
+def test_sign_class_margin_agrees_with_the_solver_on_the_best_residual():
+    """The margin enumeration and ``opa_sign_solver`` must be measuring the
+    same landscape, or the margin is the distance between two different
+    problems."""
+    rng = np.random.default_rng(20260811)
+    seen = 0
+    for _ in range(200):
+        n = int(rng.integers(2, 9))
+        opas = np.round(rng.uniform(1_000, 500_000, size=n), 2).tolist()
+        ptp = float(np.round(rng.uniform(-2e6, 2e6), 2))
+        if abs(ptp) <= pp.PTP_USD_FLOOR:
+            continue
+        seen += 1
+        cash = pp.solve_cash_signs(opas, ptp)
+        best = min(abs(abs(sum(s * v for s, v in zip(sv, opas))) - abs(ptp))
+                   for sv in _all_classes(n))
+        assert cash.residual == pytest.approx(best, abs=1e-6)
+        assert cash.margin >= -1e-9
+    assert seen > 150
+
+
+def test_margin_is_not_enumerated_above_the_leg_cap_and_that_is_ambiguous():
+    """Above ``MARGIN_MAX_LEGS`` the runner-up cannot be enumerated, so the
+    unit cannot be certified identified. It must be refused, not waved through
+    on a silently missing statistic."""
+    n = pp.MARGIN_MAX_LEGS + 1
+    opas = [float(1_000 * (i + 1)) for i in range(n)]
+    ptp = float(sum(opas[:3]) - sum(opas[3:]))
+    assert math.isnan(pp.sign_class_margin(opas, ptp))
+    call = pp.classify(opas=opas, package_price=ptp,
+                       npv_pays=[float(-100 * (i + 1)) for i in range(n)],
+                       pv01s=[10_000.0] * n, structure_dv01=1e5)
+    assert call.exclusion == pp.EXCL_SIGNS_AMBIGUOUS
+    assert call.margin_bps is None or math.isnan(call.margin_bps)
+
+
+def test_an_ambiguous_package_is_refused_by_name_not_oriented_on_a_tie_break():
+    """The original FLY fixture, kept here as the regression it is.
+
+    Wings 0.5 bp off mid put $2,500 of fee on a $10,000/bp belly, so flipping
+    a wing's cash direction moves the reconciliation 0.5 bp -- half the
+    residual the gate already tolerates. Two orientations fit; the module used
+    to return whichever the solver's lowest-mask tie-break produced, and every
+    leg's key-rate sign came from that.
+    """
+    opas, ptp = [3_500.0, 10_000.0, 2_500.0], -4_000.0
+    call = pp.classify(opas=opas, package_price=ptp,
+                       npv_pays=[-2_500.0, -10_000.0, -2_500.0],
+                       pv01s=[5_000.0, 10_000.0, 5_000.0],
+                       structure_dv01=10_000.0)
+    assert call.exclusion == pp.EXCL_SIGNS_AMBIGUOUS
+    assert call.base_orientation is None and call.received_signs is None
+    # the refusal is countable: both statistics survive it
+    assert call.tieout_bps == pytest.approx(0.0)
+    assert call.margin_bps == pytest.approx(0.5)
+
+
+def test_the_identification_gate_is_the_tieout_gate_not_a_new_constant():
+    """A unit is identified iff the runner-up class is outside
+    ``tieout_max_bps`` -- the same number, applied to the second-best fit
+    instead of the best. No second threshold is introduced, and moving the
+    tie-out moves both.
+    """
+    opas, ptp, pv01s = [3_500.0, 10_000.0, 2_500.0], -4_000.0, [5e3, 1e4, 5e3]
+    npvs = [-2_500.0, -10_000.0, -2_500.0]
+    tight = pp.classify(opas=opas, package_price=ptp, npv_pays=npvs,
+                        pv01s=pv01s, structure_dv01=10_000.0,
+                        tieout_max_bps=0.25)
+    assert tight.exclusion is None            # runner-up 0.5 bp > 0.25 bp
+    loose = pp.classify(opas=opas, package_price=ptp, npv_pays=npvs,
+                        pv01s=pv01s, structure_dv01=10_000.0,
+                        tieout_max_bps=1.0)
+    assert loose.exclusion == pp.EXCL_SIGNS_AMBIGUOUS
+
+
+def test_margin_is_reported_on_a_call_that_is_accepted():
+    call = pp.classify(opas=[10_000.0, 15_000.0], package_price=-4_000.0,
+                       npv_pays=[-10_000.0, -15_000.0],
+                       pv01s=[10_000.0, 10_000.0], structure_dv01=10_000.0)
+    assert call.exclusion is None
+    assert call.margin_bps == pytest.approx(2.0)      # $20,000 on $10,000/bp
+
+
+def test_the_tape_gate_reports_the_margin_and_refuses_an_ambiguous_package():
+    df = pd.concat([
+        _legs("IDENT", [10_000.0, 15_000.0], -4_000.0, [10_000.0, 10_000.0]),
+        _legs("AMBIG", [3_500.0, 10_000.0, 2_500.0], -4_000.0,
+              [10_000.0, 5_000.0, 5_000.0]),
+    ], ignore_index=True)
+    got = pp.tape_gate(df)
+    assert list(got.loc[["IDENT", "AMBIG"], "recoverable"]) == [True, False]
+    assert got.loc["AMBIG", "stratum"] == pp.EXCL_SIGNS_AMBIGUOUS
+    assert got.loc["IDENT", "margin_bps"] == pytest.approx(2.0)
+    assert got.loc["AMBIG", "margin_bps"] == pytest.approx(0.5)
+
+
+def test_ambiguous_is_in_the_strata_vocabulary():
+    """The report iterates ``STRATA``; a stratum missing from it is DV01 that
+    vanishes from the coverage accounting rather than being given up by name.
+    """
+    assert pp.EXCL_SIGNS_AMBIGUOUS in pp.STRATA
+
+
+# --------------------------------------------------------------------------
+# 10. the gate and the classifier are ONE rule -- they must not disagree
+# --------------------------------------------------------------------------
+
+def _gate_stratum(opas, ptp, dv01_legs):
+    got = pp.tape_gate(_legs("U", opas, ptp, dv01_legs))
+    return got.loc["U", "stratum"], bool(got.loc["U", "recoverable"])
+
+
+def test_a_package_whose_fees_net_to_zero_is_refused_by_BOTH_paths():
+    """Equal fee allocations. ``classify`` calls this ``TIEOUT_FAIL`` (the
+    base party's cash is zero under either branch, so the deviation would
+    depend on the solver's tie-break) -- and the gate used to call it
+    recoverable, which is the word ``universe.unit_frame`` routes on. The
+    coverage table and the classifier then disagreed about the same package.
+    """
+    opas, ptp, dv01_legs = [10_000.0, 10_000.0], 600.0, [10_000.0, 10_000.0]
+    stratum, recoverable = _gate_stratum(opas, ptp, dv01_legs)
+    call = pp.classify(opas=opas, package_price=ptp,
+                       npv_pays=[-10_000.0, -15_000.0], pv01s=dv01_legs,
+                       structure_dv01=10_000.0)
+    assert call.exclusion == pp.EXCL_TIEOUT_FAIL
+    assert (stratum, recoverable) == (pp.EXCL_TIEOUT_FAIL, False)
+
+
+def test_a_non_finite_fee_names_one_stratum_instead_of_killing_the_day():
+    """``classify``'s ``_num`` refuses ``inf``; the gate's
+    ``to_numeric().isna()`` let it through and the solver died inside
+    ``_select_best`` with "zero-size array to reduction operation minimum",
+    taking the whole day's ``unit_frame`` with it. One corrupt leg must cost
+    one package, not one day.
+    """
+    for bad in (float("inf"), float("-inf")):
+        stratum, recoverable = _gate_stratum([10_000.0, bad], -4_000.0,
+                                             [10_000.0, 10_000.0])
+        call = pp.classify(opas=[10_000.0, bad], package_price=-4_000.0,
+                           npv_pays=[-10_000.0, -15_000.0],
+                           pv01s=[10_000.0, 10_000.0], structure_dv01=10_000.0)
+        assert call.exclusion == pp.EXCL_OPA_MISSING
+        assert (stratum, recoverable) == (pp.EXCL_OPA_MISSING, False)
+
+
+def test_a_non_finite_fee_does_not_take_the_rest_of_the_frame_with_it():
+    df = pd.concat([
+        _legs("GOOD", [10_000.0, 15_000.0], -4_000.0, [10_000.0, 10_000.0]),
+        _legs("BAD", [10_000.0, float("inf")], -4_000.0, [1e4, 1e4]),
+    ], ignore_index=True)
+    got = pp.tape_gate(df)
+    assert list(got.loc[["GOOD", "BAD"], "recoverable"]) == [True, False]
+
+
+#: (opas, ptp, per-leg dv01) -> the two paths must name the same stratum.
+#: The dv01 the classifier is given is the gate's own ``sum(|dv01|)/2`` so the
+#: only thing under test is the ORDER and the PREDICATES, not the denominator.
+_PRECEDENCE_GRID = [
+    ([10_000.0, 15_000.0], -4_000.0, [10_000.0, 10_000.0]),      # clean
+    ([10_000.0, 15_000.0], None, [10_000.0, 10_000.0]),          # no price
+    ([10_000.0, 15_000.0], 100.0, [10_000.0, 10_000.0]),         # sub-floor
+    ([10_000.0, 15_000.0], float("nan"), [1e4, 1e4]),            # nan price
+    ([10_000.0, 15_000.0], float("inf"), [1e4, 1e4]),            # inf price
+    ([10_000.0, None], -4_000.0, [1e4, 1e4]),                    # missing fee
+    ([10_000.0, float("nan")], -4_000.0, [1e4, 1e4]),            # nan fee
+    ([10_000.0, float("inf")], -4_000.0, [1e4, 1e4]),            # inf fee
+    ([10_000.0, 15_000.0], -4_000.0, [0.0, 0.0]),                # no dv01
+    ([10_000.0, 15_000.0], -4_000.0, [float("inf"), 1e4]),       # inf dv01
+    ([10_000.0, 15_000.0], 9e6, [1e4, 1e4]),                     # tie-out fail
+    ([10_000.0, 10_000.0], 600.0, [1e4, 1e4]),                   # net == 0
+    ([0.0, 0.0], -4_000.0, [1e9, 1e9]),                          # zero fees
+    ([3_500.0, 10_000.0, 2_500.0], -4_000.0, [1e4, 5e3, 5e3]),   # ambiguous
+    ([10_000.0, 15_000.0], None, [0.0, 0.0]),             # no price + no dv01
+    ([10_000.0, None], 100.0, [1e4, 1e4]),           # sub-floor + missing fee
+    ([10_000.0, float("inf")], -4_000.0, [0.0, 0.0]),     # inf fee + no dv01
+]
+
+
+@pytest.mark.parametrize("opas,ptp,dv01_legs", _PRECEDENCE_GRID)
+def test_the_gate_and_the_classifier_name_the_same_stratum(opas, ptp,
+                                                           dv01_legs):
+    """One rule, two implementations, and ``universe.unit_frame`` routes on
+    the gate's word while the report reads the classifier's. Where both can
+    see a stratum they must agree -- including which one wins when two apply.
+    """
+    stratum, recoverable = _gate_stratum(opas, ptp, dv01_legs)
+    dv01 = float(np.nansum([abs(d) for d in dv01_legs])) / 2.0
+    call = pp.classify(opas=opas, package_price=ptp,
+                       npv_pays=[-10_000.0 * (i + 1) for i in range(len(opas))],
+                       pv01s=[abs(d) for d in dv01_legs], structure_dv01=dv01)
+    assert call.exclusion == stratum, (
+        f"gate says {stratum!r}, classify says {call.exclusion!r}")
+    assert recoverable is (stratum is None)
+
+
+def test_the_shared_strata_are_evaluated_in_the_declared_order():
+    """``STRATA`` is the order, and it is the order both paths walk. A stratum
+    that is not in it, or is in it in the wrong place, makes the two disagree
+    on any row where more than one applies."""
+    assert pp.STRATA == (
+        pp.EXCL_NO_PACKAGE_PRICE, pp.EXCL_OPA_MISSING, pp.EXCL_PRICING_ERROR,
+        pp.EXCL_TIEOUT_FAIL, pp.EXCL_SIGNS_AMBIGUOUS, pp.EXCL_LEG_AT_MID)
+
+
+def test_the_gate_and_the_classifier_scale_the_same_residual_the_same_way():
+    """M16: deleting the ``/ 2.0`` from the gate's DV01 left the whole suite
+    green. The two paths take DIFFERENT dv01 INPUTS -- the gate a notional x
+    tenor proxy, the classifier repriced PV01s -- but they must apply the same
+    ``PKG-N`` convention, ``sum(|dv01|) / 2``, to whatever they are given.
+
+    Pinned on a residual that lands between the gate and twice the gate, so
+    dropping the halving flips the verdict rather than moving a number nobody
+    reads: best net is 25,000 against a price of 36,000 -> $11,000 residual,
+    which is 1.1 bp on $10,000/bp and 0.55 bp on $20,000/bp.
+    """
+    opas, ptp, dv01_legs = [10_000.0, 15_000.0], 36_000.0, [10_000.0, 10_000.0]
+    stratum, recoverable = _gate_stratum(opas, ptp, dv01_legs)
+    assert (stratum, recoverable) == (pp.EXCL_TIEOUT_FAIL, False)
+    got = pp.tape_gate(_legs("U", opas, ptp, dv01_legs))
+    assert got.loc["U", "tieout_bps"] == pytest.approx(1.1)
+    call = pp.classify(opas=opas, package_price=ptp,
+                       npv_pays=[-10_000.0, -15_000.0], pv01s=dv01_legs,
+                       structure_dv01=sum(dv01_legs) / 2.0)
+    assert call.exclusion == pp.EXCL_TIEOUT_FAIL
+    assert call.tieout_bps == pytest.approx(got.loc["U", "tieout_bps"])
+
+
+# --------------------------------------------------------------------------
+# 11. the greedy solve is recorded, and the leg cap is not a hand-copy
+# --------------------------------------------------------------------------
+
+def test_above_the_solver_exact_limit_the_solve_is_greedy_and_says_so():
+    """M19/M20: ``FLAG_GREEDY_SOLVE`` fired in no test and ``CashSigns.exact``
+    could be hardcoded ``True``. Both survived because nothing exercised more
+    legs than ``opa_sign_solver`` enumerates."""
+    n = pp.EXACT_SOLVE_MAX_LEGS + 2
+    opas = [float(1_000 * (i + 1)) for i in range(n)]
+    cash = pp.solve_cash_signs(opas, 5_000.0)
+    assert cash.exact is False
+    small = pp.solve_cash_signs([10_000.0, 15_000.0], -4_000.0)
+    assert small.exact is True
+    call = pp.classify(opas=opas, package_price=5_000.0,
+                       npv_pays=[float(-100 * (i + 1)) for i in range(n)],
+                       pv01s=[10_000.0] * n, structure_dv01=130_000.0)
+    assert pp.FLAG_GREEDY_SOLVE in call.flags
+
+
+def test_the_exact_solve_cap_is_taken_from_the_solver_not_copied():
+    """A hand-copied 24 lies silently the day ``opa_sign_solver`` moves its
+    own limit: ``exact`` would keep saying ``True`` for a greedy solve."""
+    from SDRUtils.packages import opa_sign_solver
+
+    assert pp.EXACT_SOLVE_MAX_LEGS == opa_sign_solver._MAX_BRUTE_N
+    assert pp.MARGIN_MAX_LEGS <= pp.EXACT_SOLVE_MAX_LEGS

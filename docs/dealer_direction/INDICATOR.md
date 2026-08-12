@@ -202,6 +202,19 @@ would give on a constant true level.
 `adjusted = raw × f`, where `f = mean(coverage) / rolling_mean(coverage, 63)`.
 `f` is a pure function of coverage, so **its path bounds the raw-versus-adjusted
 divergence for any level path** — no signed level is needed to measure it.
+
+> **The reference `mean(coverage)` is a full-sample mean, so the adjusted
+> level's *scale* restates as history extends.** It is there to keep the
+> adjusted series in the same units as the raw one (constant coverage ⇒ `f = 1`
+> ⇒ the adjustment is the identity), and it is a single constant per cell — it
+> moves no shape, no turning point and no sign. `z_cov_adj` does not move at
+> all: a constant factor cancels out of a z-score, which is the same arithmetic
+> §1 rests on. What it does mean is that **an adjusted *level* quoted on day
+> `t` is not the number the same day carries a year later**, so quote the raw
+> level, or `z_cov_adj`, if the number has to be stable. Both halves are pinned
+> by known answer: constant coverage ⇒ adjusted = raw exactly, and a 0.60 → 0.30
+> coverage step ⇒ `f` = 0.45/0.30 = 1.5 on the last day.
+
 D2C / FLOW, 464 days post-floor:
 
 | bucket | f mean | f sd | f p5 | f p95 | f last / first | f trend /yr | sd log f |
@@ -360,10 +373,10 @@ with no new code.
 | **bucket map** vs the skew extract's own `tenor_bucket` | **2,326,777 / 2,326,777 legs agree (100.000000%)**; the 4 legs with no extract bucket carry 0.00 DV01 |
 | **retention factors**, recomputed from the leg cache | reproduce the published table, worst \|diff\| **0.00047** |
 | **drift meter**, monthly, complete months 2024-07…2026-07, n = 25 | **1-2Y +5.072 pp/yr, t = +3.205** against the document's independently computed **+5.07, t = +3.21**; 0-1Y **−2.873 / −2.158** against **−2.87 / −2.16** |
-| **ADF** vs `statsmodels.tsa.stattools.adfuller` | identical to **2.7e-13** on white noise, AR(1) φ=0.6, AR(1) φ=0.98, a random walk and a random walk with drift |
+| **ADF** vs `statsmodels.tsa.stattools.adfuller` | identical to **2.7e-13** on white noise, AR(1) φ=0.6, AR(1) φ=0.98, a random walk and a random walk with drift — **now a test, not a scratch script** (`test_the_adf_reproduces_statsmodels_on_five_series_with_known_answers`) |
 | **ADF size and power**, 400 replications | RW called stationary 2.8% / 4.5% / 5.0% at n = 250 / 610 / 1500 (nominal 5%); white noise detected 91.5% / 100% / 100% |
-| **tests** | 59, all passing |
-| **mutation testing** | **15 / 15 killed**, no survivors |
+| **tests** | 82, all passing |
+| **mutation testing** | **47 / 49 killed**; the 2 survivors are proved equivalent below |
 
 ### A defect this found in its own meter
 
@@ -385,22 +398,104 @@ is not. It is pinned by `test_the_stationarity_meter_is_invariant_to_the_scale_o
 which failed at −1086.7 vs −4.96 before the fix. For reference, `statsmodels`
 itself survives 1e7 but returns −0.011 at 1e11 on the same series.
 
-### The mutations, all killed
+### The mutations
 
-weight check accepts `p`-weighting · `venue_class` dropped from the key ·
-execution-stamped rows not caught · bucket-map right edge moved · `cross_section`
-returns instead of refusing · drift flag never trips · z pooled across venue
-classes · sample floor removed · `cumulate` returns instead of refusing · level
-column loses its bucket suffix · z uses the whole sample instead of a trailing
-window · a missing coverage row tolerated · ADF standardisation removed ·
-roll-up stops checking a unit is one print · coverage smoother replaced by the
-day's own fraction.
+**Round 1 — the API and the refusals (15, all killed).** Weight check accepts
+`p`-weighting · `venue_class` dropped from the key · execution-stamped rows not
+caught · bucket-map right edge moved · `cross_section` returns instead of
+refusing · drift flag never trips · z pooled across venue classes · sample floor
+removed · `cumulate` returns instead of refusing · level column loses its bucket
+suffix · z uses the whole sample instead of a trailing window · a missing
+coverage row tolerated · ADF standardisation removed · roll-up stops checking a
+unit is one print · coverage smoother replaced by the day's own fraction.
 
-The last two **survived the first pass** and are reported as such: no test built
+Two of those **survived the first pass** and are reported as such: no test built
 a unit whose pillar rows disagreed about the venue, and the coverage-adjustment
 test used a noiseless linear coverage path that per-day division removed just as
 well as the smoother did. Two tests were added for exactly those holes and both
 mutants then died.
+
+### Round 2 — the published *numbers*, where the first battery did not look
+
+Round 1 mutated the **shape** of the output — a key, a refusal, a column name —
+and the tests that killed it are structural. An adversarial review pointed out
+that the *values* in those columns were almost unpinned, and a second battery of
+34 mutations confirmed it: **15 of the 25 arithmetic mutations survived a
+59-test green suite.** The headline survivor is the one that matters most.
+
+> **`z_raw` could be published exactly inverted, and all 59 tests passed.**
+> So could `z_cov_adj`. Every z test in the suite was *comparative* — invariance
+> under a constant retention factor, trailing-only, not pooled across venues —
+> and **a global sign flip cancels inside every one of them.** "Dealers were
+> lifted in 5y" and "dealers were hit in 5y" were the same test suite, in the
+> module's single most-read output, the one §1 argues is the only
+> cross-bucket-safe view.
+
+The fix is a known answer rather than another invariance. Five days at
+1,000 → 5,000 DV01 have, on the fifth day, `mean = 3,000`,
+`sd(ddof=1) = 1,581.1388300841897` and therefore
+**`z = +1.2649110640673518`** — a number computed away from the code, whose
+three near-misses are all distinguishable from it (`ddof=0` → +1.41421356; the
+sign flipped → −1.26491106; the mirror series → −1.26491106). The same fixture
+pins `z_cov_adj` (at `coverage_smooth_obs=1`, where the adjusted level *is* the
+raw level) and `z_n_obs`.
+
+The full round-2 result, and what each survivor's failure would have published:
+
+| mutation | what it publishes | killed by |
+|---|---|---|
+| `z_raw` sign inverted | every direction reversed | `test_5a…known_number_with_a_known_sign` |
+| `z_cov_adj` sign inverted | ditto, in the adjusted basis | same |
+| trailing sd is `ddof=0` | z inflated 11.8% at n=5 | same |
+| `z_n_obs` = the window size | every cell claims full history | same |
+| `_trailing_percentile` → 0.5 | every day "unremarkable" | `…percentile_is_the_share_of_history_below_today` |
+| `_trailing_percentile` reversed | a new high reads 0.0 | same |
+| `_trailing_percentile` counts today | never reaches 1.0 (off by `n/(n−1)`) | same |
+| adjustment reference 1.0 not `mean(coverage)` | adjusted level ÷ 0.4, i.e. 2.5× | `…adjusted_level_is_the_raw_level_when_coverage_holds_still` |
+| smoother needs 1 obs not 63 | the per-day division §4 refuses | same |
+| `coverage_smooth` = the day's own fraction | ditto, in the published column | `…mean_coverage_over_smoothed_coverage…` |
+| `_autocorr` ignores its lag | AC(5) = AC(1) for ten buckets in §5.1 | `…recovers_a_known_ar1`, `…reads_the_lag_it_is_given` |
+| `_autocorr` guard off by one | AC = ±1.000 from two points | `…from_two_points_is_not_published` |
+| ADF lag order → 1 | a different statistic under the same name | `…reproduces_statsmodels…` |
+| `MIN_ADF_OBS` 60 → 5 | a unit-root verdict on 40 days | `…too_short_to_test_gets_no_stationarity_verdict` |
+| ADF cut at −2.00 not −2.86 | ~2 extra buckets called stationary | `…reproduces_statsmodels…` |
+| coverage move judged `rel > 0.25` | 0 "moves that matter" on a biased level | `…decided_by_the_level_not_the_move` |
+| the level's size is `|mean|` not rms | same column, wrong scale | same |
+| p95 → p50 | 0.01 published as 0.20 | `…percentile_is_the_95th_not_the_median` |
+| `mean_abs_signed_weight` → 1.0 | coin flips read as conviction | `…gross_weighted_mean_of_the_2p_minus_1s` |
+| trend t-stat dof `n` not `n−2` | t inflated 41% at n = 4 months | `…hand_computable_regression` |
+| duplicated coverage row accepted | the cell published twice | `…duplicated_coverage_key_is_refused` |
+| roll-up not idempotent | its own output raises `UnknownPillar` | `…idempotent_on_its_own_output` |
+
+**Two mutations survive and are not tested, because they cannot change any
+output.** Reported rather than papered over:
+
+- **`n_units` counted with `count` instead of `nunique`.** The roll-up emits
+  exactly one row per `(unit_key, bucket_space, bucket_key)` and the published
+  key is a coarsening of that, with `_assert_unit_constant` guaranteeing the
+  remaining key columns are unit-constant — so no unit can appear twice in a
+  cell. Checked as well as argued: 400 random frames (1–5 units × 1–4 pillars,
+  duplicate pillars allowed), the two agree in every published cell.
+- **`sd.where(sd > 0)` written as `sd.where(sd != 0)`.** A rolling standard
+  deviation is never negative (pandas floors the variance at 0), so the two
+  masks select the same entries, and `NaN` maps to `NaN` under both. Verified
+  on a series built to provoke it (a zero-variance window, a sign change and a
+  1e12 scale jump): the two masked arrays are element-wise identical.
+
+Two further notes on the round-2 battery, both mistakes made and corrected while
+running it:
+
+- **the harness reported a false kill.** A single shared plugin file rewritten
+  per mutant let a stale `.pyc` serve the *previous* mutant — Python invalidates
+  bytecode on `(mtime, size)` and mtime has one-second granularity. It scored
+  the ADF-lag mutation KILLED when it in fact survived. Each mutant now gets its
+  own module name, bytecode writing is off, and the plugin writes a flag file
+  the runner requires before it will score a run at all.
+- **a floor written relative to itself is not a floor.** The first version of
+  the short-sample test called `_adf(MIN_ADF_OBS - 1)`, which moves with the
+  constant it is meant to pin — the `MIN_ADF_OBS = 5` mutation walked straight
+  through it. The lengths are absolute now (20, 40, 59 observations), which is
+  the same error, in miniature, that the sign-flip survivor is an instance of.
 
 ---
 
@@ -446,6 +541,15 @@ Cache on `D:\ddind_cache` (C: had ~3.7 GB free).
 |---|---|
 | `scratch/ddind_coverage.py` | gates 1 and 2 above, then writes the 610-day coverage frame (27,655 cells) |
 | `scratch/ddind_properties.py` | §5 tables and the §4 basis-factor path |
-| `scratch/ddind_adf_check.py` | the ADF cross-check against statsmodels |
-| `scratch/ddind_mutate.py` | the 15 mutations; restores the source in a `finally` |
-| `tests/test_dealer_direction_indicator.py` | 59 tests |
+| `scratch/ddind_adf_check.py` | the ADF cross-check against statsmodels — superseded by `test_the_adf_reproduces_statsmodels_on_five_series_with_known_answers`, which runs in the pre-commit gate |
+| `scratch/ddind_mutate.py` | the round-1 15 mutations; restores the source in a `finally` |
+| `tests/test_dealer_direction_indicator.py` | 82 tests |
+
+The round-2 battery (49 mutations, §7) was run from a session scratch harness
+rather than `scratch/`, because other agents were live in the tree at the time.
+It differs from `ddind_mutate.py` in one way worth keeping if it is ever
+re-homed: it applies the mutation to the module **source text in memory**, via a
+pytest `-p` plugin that compiles the mutated source into `sys.modules` before
+collection, so `indicator.py` on disk is never modified — a mutated module
+sitting on disk for the length of a pytest run is a trap for anyone else working
+in the same checkout.

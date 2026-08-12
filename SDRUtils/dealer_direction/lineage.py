@@ -873,32 +873,121 @@ class PublicationClock:
 # 5. The TERM <-> NEWT direction agreement check
 # ==========================================================================
 
-def unwind_implied_original_sign(npv_pay, upfront) -> int:
+#: The band of ``U / |f|`` on which the unwind fee rule is allowed to make a
+#: call. Outside it the rule's premise -- "this fee is the whole residual
+#: position, priced at fair value plus or minus a dealer spread" -- does not
+#: hold, and the inequality below stops being a statement about who was in the
+#: money. See :func:`unwind_implied_original_sign` for where the edges come
+#: from; they are not symmetric in provenance.
+UNWIND_RATIO_BAND = (0.8, 1.2)
+
+
+def _partial_flag_is_true(value) -> bool:
+    """``True`` only for an explicit true; every spelling of NULL is *unknown*.
+
+    ``float('nan')`` is truthy in Python, and the tape's partial columns are
+    all-NULL (measured -- see :func:`unwind_implied_original_sign`), so a caller
+    passing ``row["lc_was_partially_terminated"]`` straight out of a float
+    column would hand this function a NaN on every row. Reading that as "yes,
+    partial" would silence the entire check while looking like a working guard.
+    """
+    if value is None:
+        return False
+    try:
+        if value != value:                       # NaN
+            return False
+        return bool(value)
+    except (TypeError, ValueError):              # pd.NA and friends
+        return False
+
+
+def unwind_implied_original_sign(npv_pay, upfront, *, partially_terminated=None,
+                                 ratio_band=UNWIND_RATIO_BAND) -> int:
     """The dealer's side **in the original trade**, inferred from the TERM row.
 
     ``npv_pay`` is ``f = (mid - R) * A``, the NPV of the residual original swap
     in the fixed-*payer* frame at the unwind instant; ``upfront`` is the row's
-    unsigned ``Other payment amount``.
-
-    THE INEQUALITY RUNS THE OTHER WAY FROM THE ENTRY RULE. On entry the party
-    taking the in-the-money side *pays* for it, so ``U < |f|`` means the dealer
-    holds the ITM side -- which is what ``stir_flow/classifier.py:77`` encodes.
-    On an unwind the ITM party is *paid out*, and the dealer prices the payout
-    in its own favour: it pays a customer less than the position is worth, and
-    charges a customer more than the position costs it to release. So
+    unsigned ``Other payment amount``. The rule reads the fee against the value:
 
     ::
 
         U < |f|   =>   the ITM party was underpaid   =>   the CUSTOMER is ITM
         U > |f|   =>   the exit was overcharged      =>   the DEALER is ITM
 
-    and the ITM side is pay-fixed exactly when ``f > 0``. Carrying the entry
-    rule over to terminations inverts every call and produces a complete,
-    plausible ladder that is exactly wrong.
+    and the ITM side is pay-fixed exactly when ``f > 0``.
+
+    THE DIRECTION OF THAT INEQUALITY IS UNCONFIRMED IN BOTH DIRECTIONS.
+    The argument for it is verbal: on entry the party taking the in-the-money
+    side *pays* for it, so ``U < |f|`` means the dealer holds the ITM side
+    (``stir_flow/classifier.py:77``); on an unwind the ITM party is *paid out*
+    and the dealer prices the payout in its own favour, which reverses the
+    reading. A previous version of this docstring asserted that reversal as
+    settled. It is not. The only artifact that can falsify it --
+    ``scratch/out_direction_agreement.csv``, 154 on-market TERM/NEWT pairs --
+    gives **34/58 = 58.6% agreement (z = +1.31) on the subset that respects the
+    rule's premise**, so the encoded direction leans the right way and is not
+    distinguishable from a coin flip; the inverse would score 41.4% on the same
+    rows and is equally undistinguished. n = 58 cannot settle it. Both readings
+    differ by a global sign flip, so whichever is wrong produces a complete,
+    plausible ladder that is exactly wrong -- which is why the choice is pinned
+    by test rather than left to be re-derived.
+
+    **The gate is what that same artifact does settle.** Agreement by ``U/|f|``:
+
+    ========  ====  =====  =====  ==============
+    U over f     n  agree   rate  z vs coin flip
+    ========  ====  =====  =====  ==============
+    < 0.5       36      9  0.250          -3.00
+    0.5-0.8     36      6  0.167          -4.00
+    0.8-1.2     58     34  0.586          +1.31
+    1.2-2        8      3  0.375          -0.71
+    > 2         16     11  0.688          +1.50
+    all        154     63  0.409          -2.26
+    ========  ====  =====  =====  ==============
+
+    The aggregate 40.9% is worse than a coin flip and significantly so, and it
+    is *entirely* the zone below 0.8 -- 46.8% of the population, agreeing 20.8%,
+    with ``customer_is_itm`` firing on 72/72 rows and the call equal to
+    ``-sign(npv_pay)`` on 72/72. That is what a **partial termination** looks
+    like: the fee pays for the fraction ``x`` that was torn up while ``npv_pay``
+    is repriced on the *original* notional, so ``U ~ x|f|``, ``u < |f|`` is
+    structurally forced, and the side falls out of ``sign(f)`` alone. It is the
+    failure the ``u == 0`` branch exists to prevent, arriving through a non-zero
+    fee. So a unit whose ratio is far from 1 is not a full unwind at fair value
+    and this rule does not apply to it: out of band is a **no-call**, not a
+    guess. In band the picture is consistent with a genuine dealer spread --
+    median edge 0.87 bp of the unwind's DV01.
+
+    ``ratio_band`` defaults to :data:`UNWIND_RATIO_BAND` and the two edges do
+    NOT have the same standing. 0.8 is measured: it is the boundary of the
+    anti-predictive zone. 1.2 is a mirror: above it the data is too thin to say
+    anything (n = 8 at 0.375, n = 16 at 0.688, neither significant) and the
+    exclusion rests on the premise -- a fee three times the residual value is
+    not a dealer spread either. The band must straddle 1.0 *strictly* or a
+    ``ValueError`` is raised -- an edge sitting exactly at 1.0 is already
+    one-sided, because the tie is a no-call, so only one branch of the
+    inequality would survive and the book would come out systematically
+    one-signed with nothing anywhere for a test to catch. ``ratio_band=None``
+    removes
+    the gate entirely and reproduces the ungated rule, i.e. the 40.9% row above;
+    it exists so the measurement stays executable, not as a normal mode.
+
+    **The tape's own partial flags cannot do this job -- measured, not assumed.**
+    On ``arbs_usd_swap_tape_legs_v3``: ``lc_was_partially_terminated``,
+    ``lc_has_partial_unwind``, ``xd_was_partially_terminated``,
+    ``lc_inception_notional`` and ``lc_current_notional`` are **all-NULL** (0 of
+    187,782 legs over the last 60 days; 0 of the 154 originals behind the
+    measurement). ``xd_has_partial_unwind`` is populated on 17.5% of legs but is
+    TRUE on 1 of those 154, and that row is in band -- it flags **none** of the
+    72 low-ratio rows. ``partially_terminated`` is therefore an input for a
+    caller that has a real indicator, and the ratio gate is the operative guard
+    today. Only an explicit true silences a row; NaN / ``pd.NA`` / ``None`` are
+    "not recorded" and are ignored (see :func:`_partial_flag_is_true`).
 
     Returns :data:`~.conventions.DEALER_RECEIVED` / ``DEALER_PAID``, or ``0``
-    when the fee ties the value exactly, when there is no fee, or when an input
-    is missing -- 0 is "no call", never a side.
+    when the ratio is out of band, when the unit is flagged partial, when the
+    fee ties the value exactly, when there is no fee, or when an input is
+    missing -- 0 is "no call", never a side.
 
     ``upfront == 0`` IS "no fee", not "a fee of zero". ``types.Unit.upfront`` is
     the *sum* of the legs' other-payment amounts and ~86% of terminations carry
@@ -907,7 +996,26 @@ def unwind_implied_original_sign(npv_pay, upfront) -> int:
     which would turn an absent fee into a confident side decided entirely by
     ``sign(f)``, for most of the population. The frozen ``classifier.py`` avoids
     this by routing through ``resolve_upfront(...)``, which returns ``None``.
+
+    A ratio band is a blunt instrument for what it is standing in for. The
+    quantity that actually separates a dealer spread from a premise failure is
+    the edge in bp of the unwind's DV01 (``(|f| - U) / pv01``), and this
+    signature does not carry a pv01. A caller that has one should prefer it.
     """
+    # the band is validated FIRST, before any input guard can return 0: a
+    # malformed band must raise on every row, not only on the rows that happen
+    # to carry a complete fee and value
+    lo = hi = None
+    if ratio_band is not None:
+        lo, hi = (float(x) for x in ratio_band)
+        if not 0.0 < lo < 1.0 < hi:
+            raise ValueError(
+                f"ratio_band {ratio_band!r} must straddle 1.0 strictly, with a "
+                "positive lower edge; an edge AT 1.0 is already one-sided -- the tie "
+                "is a no-call, so only one branch of the inequality survives and the "
+                "book comes out systematically one-signed")
+    if _partial_flag_is_true(partially_terminated):
+        return 0
     if npv_pay is None or upfront is None:
         return 0
     try:
@@ -918,6 +1026,8 @@ def unwind_implied_original_sign(npv_pay, upfront) -> int:
         return 0
     if u == abs(f):
         return 0
+    if lo is not None and not lo <= u / abs(f) <= hi:
+        return 0
     customer_is_itm = u < abs(f)
     itm_is_pay_fixed = f > 0
     customer_paid_fixed = (customer_is_itm == itm_is_pay_fixed)
@@ -925,7 +1035,8 @@ def unwind_implied_original_sign(npv_pay, upfront) -> int:
     return DEALER_RECEIVED if customer_paid_fixed else DEALER_PAID
 
 
-def unwind_dealer_sign(npv_pay, upfront) -> int:
+def unwind_dealer_sign(npv_pay, upfront, *, partially_terminated=None,
+                       ratio_band=UNWIND_RATIO_BAND) -> int:
     """The side the dealer takes **on the unwind transaction**.
 
     Tearing up a position is taking the other side of it, so this is the
@@ -933,8 +1044,14 @@ def unwind_dealer_sign(npv_pay, upfront) -> int:
     because the two framings of the agreement check -- "flip the original and
     compare" versus "compare the two estimates of the original" -- are the same
     statement, and naming only one of them is how a double negation gets in.
+
+    Every guard argument is forwarded. Dropping the forwarding would leave this
+    spelling silently on the defaults while the other honoured the caller, and
+    no test written against the defaults could see the difference.
     """
-    return -unwind_implied_original_sign(npv_pay, upfront)
+    return -unwind_implied_original_sign(
+        npv_pay, upfront, partially_terminated=partially_terminated,
+        ratio_band=ratio_band)
 
 
 def direction_agreement(pairs: pd.DataFrame, *, original_col="original_dealer_sign",
@@ -950,6 +1067,12 @@ def direction_agreement(pairs: pd.DataFrame, *, original_col="original_dealer_si
     * the flip inherits the original print's inference error **in full** -- a
       disagreement does not say which of the two was wrong;
     * it is a consistency check, not ground truth. Both inferences use a curve.
+
+    ``n_called`` is the denominator that matters and it is now much smaller than
+    ``n_pairs``: :data:`UNWIND_RATIO_BAND` no-calls 96 of the 154 measured
+    on-market pairs (62.3%), so a rate quoted off this function is a statement
+    about the in-band population and nothing else. Reporting ``n_called``
+    alongside it is not optional.
     """
     if pairs is None or len(pairs) == 0:
         return {"n_pairs": 0, "n_called": 0, "n_agree": 0, "agreement": None}
@@ -987,7 +1110,7 @@ __all__ = [
     "RAW_SUBDIR", "RESOLVED_STATUSES", "SLICE_MEMBER_TZ",
     "ST_ABOVE_RANGE", "ST_CYCLE", "ST_MAX_HOPS", "ST_MISSING_IN_RANGE", "ST_PRE_TAPE",
     "ST_RESOLVED_RAW_ONLY", "ST_RESOLVED_TAPE", "ST_SELF_POINTER",
-    "ST_TERMINAL_SELF_POINTER", "ST_UNRESOLVED",
+    "ST_TERMINAL_SELF_POINTER", "ST_UNRESOLVED", "UNWIND_RATIO_BAND",
     "VISIBILITY_APPENDIX_C", "VISIBILITY_SLICE_MTIME", "coverage_summary",
     "cumulative_url", "date_string", "direction_agreement", "fetch_raw_day",
     "fetch_slice_publications", "load_raw_days", "normalise_id", "raw_day_path",

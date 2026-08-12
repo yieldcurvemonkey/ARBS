@@ -585,13 +585,22 @@ def test_the_availability_bound_is_the_event_not_the_frozen_execution():
 # The TERM<->NEWT direction agreement check.
 # --------------------------------------------------------------------------
 
-def test_the_unwind_fee_rule_is_the_reverse_of_the_entry_fee_rule():
-    """On entry the dealer *pays* for the in-the-money side, so `U < |f|` means
-    the dealer holds it (`stir_flow/classifier.py:77`). On an unwind the ITM
-    party is *paid out*, so the same inequality means the ITM party was
-    underpaid -- i.e. the ITM party is the customer. Same algebra, opposite
-    conclusion; carrying the entry rule over to terminations inverts every call
-    and produces a complete, plausible, exactly wrong ladder.
+def test_the_encoded_unwind_direction_is_pinned_so_it_cannot_flip_silently():
+    """Pins the direction the module ENCODES. It does not establish it.
+
+    The encoded reading: on entry the party taking the in-the-money side pays
+    for it, so `U < |f|` means the dealer holds it (`stir_flow/classifier.py:77`);
+    on an unwind the ITM party is paid out, so the same inequality means the ITM
+    party was underpaid -- i.e. the customer. Same algebra, opposite conclusion.
+
+    THE ARGUMENT IS VERBAL AND THE DATA DOES NOT SETTLE IT. On the only subset
+    that respects the rule's premise -- U/|f| in [0.8, 1.2], the 58 pairs of
+    `MEASURED_PAIRS` below -- the encoded direction agrees with the original
+    print 34/58 = 58.6% (z = +1.31) and the inverse gets 24/58 = 41.4%. Neither
+    is distinguishable from a coin flip at n = 58. What this test buys is that
+    the choice cannot be inverted without a test going red, because the two
+    readings differ by a global sign flip and a flipped ladder is complete and
+    plausible.
     """
     npv_pay = -1_000_000.0          # receive-fixed is ITM
     assert lin.unwind_implied_original_sign(npv_pay, upfront=1_020_000.0) == lin.DEALER_RECEIVED
@@ -685,6 +694,372 @@ def test_direction_agreement_is_symmetric_under_relabelling():
     flipped = pairs * -1
     assert lin.direction_agreement(pairs)["agreement"] == \
         lin.direction_agreement(flipped)["agreement"]
+
+
+# --------------------------------------------------------------------------
+# The partial-termination hole in the unwind rule.
+#
+# INHERITED MEASUREMENT. Every number below comes from the tracked artifact
+# `scratch/out_direction_agreement.csv` (written 2026-08-11 12:02). The lineage
+# store it was built from -- `scratch/dd_lineage_store/`, gitignored -- has been
+# DELETED, so it cannot be re-derived end to end; re-running the pipeline
+# against a rebuilt store would be a DIFFERENT measurement, not this one. The
+# rows here ARE the artifact, frozen: the 154 pairs whose original repriced
+# within 25 bp of mid, as `(npv_pay, upfront, original_dealer_sign)`, sorted by
+# U/|f|, with `npv_pay` at full float precision (the two smallest are ~1e-5, and
+# rounding them to cents would turn them into a division by zero).
+#
+# Agreement with the original print, by U/|f| -- this is what the gate is for:
+#
+#       U/|f|      n   agree    rate    z vs coin flip
+#       < 0.5     36       9   0.250    -3.00
+#       0.5-0.8   36       6   0.167    -4.00
+#       0.8-1.2   58      34   0.586    +1.31
+#       1.2-2      8       3   0.375    -0.71
+#       > 2       16      11   0.688    +1.50
+#       all      154      63   0.409    -2.26
+#
+# (A review of this same CSV quoted 14/9 in the `> 2` bucket. The two rows it
+# dropped have ratios 8.2e10 and 8.6e11 and both agree, so 14/9 and 16/11
+# reconcile exactly; a finite top bin edge is the likely cause. Every other
+# bucket matches to the row.)
+#
+# The zone below 0.8 is 46.8% of the population and is where a partial
+# termination lands: the fee pays for the fraction x that was torn up, while
+# `npv_pay` is repriced on the ORIGINAL notional, so U ~ x|f| and `u < abs(f)`
+# is structurally forced. It measured 15/72 = 0.208, i.e. significantly WORSE
+# than a coin flip -- an anti-prediction, not a gap.
+# --------------------------------------------------------------------------
+
+MEASURED_PAIRS = (
+    (6714.19489990361, 1.0, +1),
+    (102902.51310971938, 2300.0, -1),
+    (738637.7307156892, 48311.4912, -1),
+    (-6947.526766673662, 500.0, -1),
+    (49180.50512112398, 6300.0, +1),
+    (358907.18180255964, 67654.04231, +1),
+    (103577.10041865056, 20700.0, +1),
+    (1235939.6497339308, 249383.86089, -1),
+    (1358466.401020117, 282628.0464, -1),
+    (35213.61497982533, 7900.0, -1),
+    (3265378.0833800808, 742653.86, -1),
+    (334915.3299778546, 78666.588, -1),
+    (614693.6379498187, 147214.9228, -1),
+    (3825542.773289845, 948688.0, -1),
+    (4090180.4292619377, 1017120.0, -1),
+    (1376863.2410094189, 368547.6007, -1),
+    (-100836.1946082759, 27000.0, +1),
+    (310775.37156315846, 84584.56584, -1),
+    (780571.7918057591, 214000.0, +1),
+    (396635.3874623305, 126812.5463, -1),
+    (994501.1180880108, 321604.33386, -1),
+    (1078833.4341718704, 375166.182, -1),
+    (1066900.147042686, 380460.135, -1),
+    (667625.6302103852, 243606.33185, -1),
+    (5591189.424881771, 2042314.89, +1),
+    (519388.49910673406, 192576.95019, -1),
+    (244828.7801105473, 94931.865, -1),
+    (23397.7428536003, 9200.0, -1),
+    (1850456.071652856, 798978.6, +1),
+    (1850306.7460963016, 799193.0, +1),
+    (5534591.474954478, 2429747.574, -1),
+    (1119262.6580995098, 512800.0, -1),
+    (8122672.916748352, 3800000.0, -1),
+    (545293.9301459892, 261929.27655, -1),
+    (545293.9301459892, 261929.27655, -1),
+    (2423688.622742757, 1175000.0, -1),
+    (36479.82090997882, 19000.0, -1),
+    (26800.608540557325, 14173.2, -1),
+    (-211123.85735386657, 121689.945, +1),
+    (284209.2935859524, 164100.0, -1),
+    (962379.6530043188, 556000.0, -1),
+    (82208.6740677841, 50580.74, +1),
+    (327857.3342591687, 209100.0, -1),
+    (74453.39020738285, 47585.62, -1),
+    (7290194.678977869, 4688000.0, +1),
+    (69533.67581307213, 44720.0, +1),
+    (170030.44426311716, 114200.0, -1),
+    (6955730.226330712, 4672222.944, -1),
+    (203575.14853700344, 137937.858, -1),
+    (204471.9756207117, 139594.23, +1),
+    (204471.9756207117, 139594.23, -1),
+    (-22888.03749830089, 16000.0, +1),
+    (2108535.5532096457, 1485121.696, -1),
+    (1661929.667221047, 1193000.0, +1),
+    (107776.32923395188, 78043.75745, -1),
+    (348804.7958292477, 255500.0, -1),
+    (1073454.708083028, 793253.646, -1),
+    (198460.71941609588, 147964.7984, -1),
+    (198460.71941609588, 147964.7984, -1),
+    (198460.71941609588, 147964.7984, -1),
+    (198460.71941609588, 147964.7984, -1),
+    (51749.86843984085, 39000.0, -1),
+    (56470.61448012863, 42857.2, -1),
+    (5346695.850286104, 4107800.0, -1),
+    (126456.70764907727, 97222.0, -1),
+    (247114.04018425383, 190600.0, -1),
+    (134098.1966194166, 104255.55, -1),
+    (67224.22837184463, 53000.0, +1),
+    (304029.1574766119, 240000.0, -1),
+    (3671185.305478193, 2900000.0, -1),
+    (355441.9575151638, 282543.3072, -1),
+    (-6283.449100400554, 4999.0, +1),
+    (2241053.8654948547, 1820000.0, -1),
+    (193612.9479690697, 157681.6, -1),
+    (280175.0004106886, 230000.0, -1),
+    (-30081.714142743265, 25000.0, -1),
+    (9146.34040243202, 7651.44, -1),
+    (6667658.098554641, 5668248.0, +1),
+    (100765.0961219616, 85820.4608, -1),
+    (16025.991778710972, 14123.395, +1),
+    (-224854.69520948548, 200000.0, +1),
+    (256700.0281704506, 229000.0, +1),
+    (56035.27106831095, 51147.72, +1),
+    (6651388.269024812, 6085521.21, +1),
+    (141217.13474483928, 130000.0, -1),
+    (54805.37004067085, 51300.0, +1),
+    (38897.20966577856, 36458.45, +1),
+    (149219.32712884434, 141000.0, +1),
+    (78278.32051525265, 74567.575, +1),
+    (1776802.513143804, 1705607.4, -1),
+    (7315127.91494669, 7052908.044, +1),
+    (1496567.4420623966, 1444232.0, +1),
+    (1219235.020094729, 1181000.0, +1),
+    (208518.89181111704, 202000.0, -1),
+    (2390909.2469462883, 2318912.4, +1),
+    (124656.067993104, 120996.225, +1),
+    (76169.70815624762, 74000.0, +1),
+    (6904646.720704675, 6718782.0232, +1),
+    (262585.8770541735, 256000.0, +1),
+    (2166444.557746406, 2113000.0, +1),
+    (2338325.073470643, 2285440.0, +1),
+    (2910710.1360516325, 2846884.0, +1),
+    (723757.2021664176, 712363.0, +1),
+    (853342.7368555777, 844000.0, -1),
+    (13740475.95878867, 13595218.45, +1),
+    (208211.91226140969, 206500.0, +1),
+    (3598079.0628851056, 3570000.0, -1),
+    (85050.06766553805, 84449.388, +1),
+    (1070813.3100170456, 1066828.56, +1),
+    (1150100.741022028, 1146119.46, +1),
+    (6870410.978665821, 6847353.0, -1),
+    (135309.43110632803, 135000.0, +1),
+    (116633.86414983356, 117528.0, +1),
+    (1036798.274980437, 1046586.0, +1),
+    (21278.409421242308, 21506.38314, -1),
+    (339050.14797958964, 343691.0, +1),
+    (104093.004878246, 105800.0, +1),
+    (266152.4829648836, 271774.0, +1),
+    (959187.3617600054, 985000.0, -1),
+    (318852.69073543884, 330000.0, -1),
+    (524813.3707686807, 546753.48, -1),
+    (233089.81765386555, 243380.0052, +1),
+    (171779.9351851642, 180000.0, -1),
+    (45218.37984431046, 47599.864, +1),
+    (2051570.282555446, 2161752.888, +1),
+    (-7288.433942150907, 7756.53156, -1),
+    (71629.8619350791, 76643.154, -1),
+    (509019.64568244666, 561000.0, +1),
+    (-793.1305221328657, 883.7312, -1),
+    (176778.2458808273, 207510.66, +1),
+    (26498.802498918027, 33000.0, -1),
+    (116635.55484005064, 148900.0, +1),
+    (3935111.4260634175, 5408853.84, -1),
+    (143302.07080938667, 198000.0, +1),
+    (-47815.68256586557, 78947.25, -1),
+    (420243.17190625984, 695720.871, -1),
+    (-93587.26928285325, 168944.3, -1),
+    (-81395.38810169883, 151072.5, -1),
+    (877691.6995932721, 1884700.0, +1),
+    (16728.27838333696, 48744.63, +1),
+    (46087.85760845686, 136273.224, -1),
+    (42138.97185208998, 129509.223, -1),
+    (1639322.2857652716, 5443700.0, +1),
+    (65464.38086931268, 226374.0, -1),
+    (40625.39674425474, 158390.75836, -1),
+    (33109.45808913035, 165952.215, -1),
+    (3603428.252331618, 18743000.0, +1),
+    (552332.7572493227, 4681000.0, +1),
+    (53751.83016017079, 1231767.97678, -1),
+    (-8384.623068030924, 690923.7, +1),
+    (9.722429611720145, 1141.43, -1),
+    (794.9562012776732, 2529335.9, -1),
+    (2.847927473990236e-05, 2343750.0, -1),
+    (2.1659940185523446e-05, 18554687.5, -1),
+)
+
+
+def _split_by_ratio(band=None):
+    """The measured pairs, split into (below band, in band, above band)."""
+    lo, hi = band if band is not None else lin.UNWIND_RATIO_BAND
+    below, inside, above = [], [], []
+    for f, u, o in MEASURED_PAIRS:
+        ratio = abs(u) / abs(f)
+        (below if ratio < lo else inside if ratio <= hi else above).append((f, u, o))
+    return below, inside, above
+
+
+def test_the_frozen_measurement_is_the_population_the_gate_was_cut_from():
+    """A guard tuned to a fixture that does not match the artifact guards
+    nothing. Pins the three counts and the headline agreements the band edges
+    were chosen from, so a later edit to `MEASURED_PAIRS` cannot quietly move
+    the population under the gate.
+    """
+    below, inside, above = _split_by_ratio(band=(0.8, 1.2))
+    assert (len(below), len(inside), len(above)) == (72, 58, 24)
+    assert len(MEASURED_PAIRS) == 154
+    # the encoded rule, ungated, against the original print
+    def agree(rows):
+        return sum(1 for f, u, o in rows
+                   if lin.unwind_dealer_sign(f, u, ratio_band=None) == -o)
+    assert agree(MEASURED_PAIRS) == 63          # 40.9% aggregate, z = -2.26
+    assert agree(below) == 15                   # 20.8%, the anti-predictive zone
+    assert agree(inside) == 34                  # 58.6%, z = +1.31, not significant
+    assert agree(above) == 14
+
+
+def test_a_partial_termination_is_a_no_call_not_a_confident_side():
+    """The hole. A partial unwind of fraction x pays a fee of about x|f| while
+    `npv_pay` is repriced on the ORIGINAL notional, so `u < abs(f)` is
+    structurally forced and `customer_is_itm` is True for reasons that have
+    nothing to do with who was in the money. The side then falls out of
+    `sign(f)` alone -- exactly what the `u == 0.0` branch exists to prevent,
+    reintroduced through a non-zero fee.
+    """
+    for f in (-1_000_000.0, +1_000_000.0):
+        for x in (0.02, 0.1, 0.25, 0.5, 0.75, 0.79):
+            u = abs(f) * x
+            assert lin.unwind_implied_original_sign(f, u) == 0, (f, x)
+            assert lin.unwind_dealer_sign(f, u) == 0, (f, x)
+    # the fee that dwarfs the residual is the same premise failure from the
+    # other side (the artifact's worst row: a 2-cent residual against an
+    # 18.5mm fee, U/|f| = 8.6e11)
+    assert lin.unwind_implied_original_sign(2.1659940185523446e-05, 18_554_687.5) == 0
+    assert lin.unwind_dealer_sign(-1_000_000.0, 3_000_000.0) == 0
+
+
+def test_the_gate_silences_the_zone_that_measured_worse_than_a_coin_flip():
+    """15/72 = 20.8% agreement below 0.8, and it is not noise: `customer_is_itm`
+    fires on 72/72 of those rows and the call is `-sign(npv_pay)` on 72/72. A
+    rule that is significantly anti-predictive on 46.8% of its population is
+    not making weak calls there, it is making wrong ones.
+    """
+    below, _, above = _split_by_ratio()
+    assert below and above
+    for f, u, _o in below + above:
+        assert lin.unwind_implied_original_sign(f, u) == 0, (f, u)
+        assert lin.unwind_dealer_sign(f, u) == 0, (f, u)
+    # ungated, every single one of them was a call, and the call was sign(f)
+    for f, u, _o in below:
+        ungated = lin.unwind_implied_original_sign(f, u, ratio_band=None)
+        assert ungated != 0
+        assert ungated == (lin.DEALER_RECEIVED if f > 0 else lin.DEALER_PAID)
+
+
+def test_the_gate_leaves_the_premise_respecting_subset_intact():
+    """A guard that silences everything is not a guard. The 58 in-band pairs
+    must still be called, and called the same way they were before -- the gate
+    changes WHICH rows get an answer, never the answer.
+    """
+    _below, inside, _above = _split_by_ratio()
+    assert len(inside) == 58
+    n_agree = 0
+    for f, u, o in inside:
+        gated = lin.unwind_implied_original_sign(f, u)
+        assert gated != 0, (f, u)
+        assert gated == lin.unwind_implied_original_sign(f, u, ratio_band=None)
+        n_agree += (lin.unwind_dealer_sign(f, u) == -o)
+    assert n_agree == 34            # 58.6%; the inverse direction would get 24
+
+
+def test_the_band_edges_are_inclusive_and_a_hair_outside_is_a_no_call():
+    """Where the boundary sits is a stated choice, not a measured one, so it is
+    pinned rather than argued: 0.8 is the measured edge of the anti-predictive
+    zone; 1.2 mirrors it on the overcharge side, where the data is too thin to
+    say anything (n = 8 at 0.375, n = 16 at 0.688, neither significant) and the
+    exclusion rests on the premise, not on evidence.
+    """
+    assert lin.UNWIND_RATIO_BAND == (0.8, 1.2)
+    f = -1_000_000.0
+    assert lin.unwind_implied_original_sign(f, 800_000.0) == lin.DEALER_PAID       # 0.80
+    assert lin.unwind_implied_original_sign(f, 1_200_000.0) == lin.DEALER_RECEIVED  # 1.20
+    assert lin.unwind_implied_original_sign(f, 799_999.0) == 0
+    assert lin.unwind_implied_original_sign(f, 1_200_001.0) == 0
+    # a caller may widen or narrow it, and that has to actually take effect
+    assert lin.unwind_implied_original_sign(f, 500_000.0, ratio_band=(0.4, 2.5)) != 0
+    assert lin.unwind_implied_original_sign(f, 900_000.0, ratio_band=(0.95, 1.05)) == 0
+
+
+def test_a_band_that_does_not_straddle_one_is_refused():
+    """A one-sided band is a one-sided ladder. `(1.0, 1.2)` admits only
+    `u > |f|`, so every call it makes is the DEALER-ITM branch and the flow it
+    produces is a complete, plausible, systematically one-signed book -- with
+    no error anywhere for a test to catch. Refused at the door.
+    """
+    for bad in ((1.0, 1.2), (0.8, 1.0), (0.8, 0.99), (1.2, 0.8), (-0.5, 1.2), (0.0, 1.2)):
+        with pytest.raises(ValueError):
+            lin.unwind_implied_original_sign(-1_000_000.0, 900_000.0, ratio_band=bad)
+        with pytest.raises(ValueError):
+            lin.unwind_dealer_sign(-1_000_000.0, 900_000.0, ratio_band=bad)
+    # and it must raise on EVERY row, not only the ones that carry a fee and a
+    # value: a band checked after the input guards is a band that a population
+    # of no-calls hides completely
+    with pytest.raises(ValueError):
+        lin.unwind_implied_original_sign(None, None, ratio_band=(1.0, 1.2))
+    with pytest.raises(ValueError):
+        lin.unwind_implied_original_sign(-1_000_000.0, 0.0, ratio_band=(1.0, 1.2))
+
+
+def test_an_exact_tie_between_the_fee_and_the_value_is_not_a_call():
+    """`u == abs(f)` is the one point where the inequality carries no
+    information at all: the fee is exactly the residual value, so neither party
+    was paid for anything. It sits in the MIDDLE of the band, so the ratio gate
+    does not cover it -- delete this branch and the tie silently becomes
+    "not less than, therefore dealer ITM", a side invented out of an equality.
+    """
+    for f in (+1_000_000.0, -1_000_000.0):
+        assert lin.unwind_implied_original_sign(f, 1_000_000.0) == 0
+        assert lin.unwind_implied_original_sign(f, -1_000_000.0) == 0   # fee is unsigned
+        assert lin.unwind_dealer_sign(f, 1_000_000.0) == 0
+        assert lin.unwind_implied_original_sign(f, 1_000_000.0, ratio_band=None) == 0
+    # one cent either side of the tie IS a call, and the two calls are opposite
+    assert lin.unwind_implied_original_sign(-1e6, 1_000_000.01) == lin.DEALER_RECEIVED
+    assert lin.unwind_implied_original_sign(-1e6, 999_999.99) == lin.DEALER_PAID
+
+
+def test_an_explicitly_flagged_partial_termination_is_never_a_call():
+    """The flag the tape does not populate. `lc_was_partially_terminated`,
+    `lc_has_partial_unwind`, `xd_was_partially_terminated`,
+    `lc_inception_notional` and `lc_current_notional` are ALL-NULL on
+    `arbs_usd_swap_tape_legs_v3` -- 0 of 187,782 legs over the last 60 days, and
+    0 of the 154 originals behind `MEASURED_PAIRS`. `xd_has_partial_unwind` is
+    populated on 17.5% of legs but is TRUE on 1 of those 154, and that one row
+    is in-band: it flags NONE of the 72 low-ratio rows. So the parameter exists
+    for a caller that has a real indicator, and the ratio gate is what actually
+    does the work today.
+    """
+    f, u = -1_000_000.0, 1_020_000.0                  # in band, otherwise a call
+    assert lin.unwind_implied_original_sign(f, u) == lin.DEALER_RECEIVED
+    assert lin.unwind_implied_original_sign(f, u, partially_terminated=True) == 0
+    assert lin.unwind_dealer_sign(f, u, partially_terminated=True) == 0
+    assert lin.unwind_implied_original_sign(f, u, partially_terminated=True,
+                                            ratio_band=None) == 0
+    # False and "not recorded" are different from True and must not silence it
+    for absent in (False, None, float("nan"), pd.NA):
+        assert lin.unwind_implied_original_sign(f, u, partially_terminated=absent) \
+            == lin.DEALER_RECEIVED, absent
+
+
+def test_the_ungated_escape_hatch_reaches_both_spellings():
+    """`unwind_dealer_sign` is a negation of the other spelling, so it has to
+    forward the guards too. Drop the forwarding and it silently reverts to the
+    defaults -- which no test built out of the defaults can see.
+    """
+    f, u = -1_000_000.0, 300_000.0
+    assert lin.unwind_dealer_sign(f, u) == 0
+    assert lin.unwind_dealer_sign(f, u, ratio_band=None) == -lin.DEALER_PAID
+    assert lin.unwind_implied_original_sign(f, u, ratio_band=None) == lin.DEALER_PAID
+    assert lin.unwind_dealer_sign(f, u, ratio_band=(0.2, 1.8)) == -lin.DEALER_PAID
 
 
 # --------------------------------------------------------------------------
