@@ -155,6 +155,40 @@ def test_a_corrupt_cached_day_is_refetched_not_fatal(tmp_path, dates):
     assert len(mdp.spline_calls) == len(dates) - 4
 
 
+def test_a_chunked_warm_never_bakes_a_prefix_as_the_whole_panel(tmp_path, dates):
+    """The trap on the other side of the same defect.
+
+    A chunked warm calls the builder on growing prefixes. Every prefix resolves completely, so
+    under `consolidate="complete"` the first chunk would write a consolidated cache of 2 days —
+    and the consolidated file wins on read, so every later chunk, and the backtest after them,
+    would be served those 2 days as if they were the whole range.
+    """
+    cache = tmp_path / "panel"
+    mdp = _FakeMDP(dates)
+    for end in (2, 4, 6, 8):
+        build_curve_panel(dates[:end], mdp, cache_path=cache, show_progress=False, consolidate="never")
+        assert not (cache / "s2c.parquet").exists(), f"prefix of {end} consolidated"
+
+    panel = build_curve_panel(dates, mdp, cache_path=cache, show_progress=False)
+    assert (cache / "s2c.parquet").exists()
+    assert len(panel.s2c) == len(dates)
+    assert len(mdp.spline_calls) == len(dates), "the chunked warm should have fetched each day once"
+
+
+def test_consolidate_rejects_an_unknown_mode(tmp_path, dates):
+    with pytest.raises(ValueError):
+        build_curve_panel(dates, _FakeMDP(dates), cache_path=tmp_path / "p", consolidate="partial")
+
+
+def test_consolidate_always_bakes_a_panel_with_real_gaps(tmp_path, dates):
+    cache = tmp_path / "panel"
+    build_curve_panel(dates, _FakeMDP(dates, fail_from=5), cache_path=cache,
+                      show_progress=False, consolidate="always")
+    assert (cache / "s2c.parquet").exists()
+    served = build_curve_panel(dates, _FakeMDP(dates), cache_path=cache, show_progress=False)
+    assert len(served.s2c) == 5
+
+
 def test_consolidated_cache_short_circuits_the_day_scan(tmp_path, dates):
     cache = tmp_path / "panel"
     build_curve_panel(dates, _FakeMDP(dates), cache_path=cache, show_progress=False)

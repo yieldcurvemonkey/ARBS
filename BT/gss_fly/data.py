@@ -95,7 +95,7 @@ def build_curve_panel(
     *,
     cache_path: Optional[Path] = None,
     show_progress: bool = True,
-    consolidate_partial: bool = False,
+    consolidate: str = "complete",
 ) -> CurvePanel:
     """Fit the cash spline on every date and assemble the dates × bonds panels.
 
@@ -112,12 +112,21 @@ def build_curve_panel(
     consolidated panel is still written at the end, and a consolidated cache is still preferred on
     read because loading five parquets beats loading a thousand.
 
-    The consolidated cache is written **only when every requested date resolved**. An incomplete
-    panel that consolidates is worse than no cache at all: every later run reads the short panel and
-    never retries the missing days, so a transient upstream stall silently becomes a permanent hole
-    in the backtest. Pass ``consolidate_partial=True`` to bake a panel whose gaps are known to be
-    real (a date the source will never serve) rather than transient.
+    ``consolidate`` governs the consolidated write, and the default is the safe one:
+
+    * ``"complete"`` (default) — write it only when every requested date resolved. An incomplete
+      panel that consolidates is worse than no cache at all: the consolidated file is preferred on
+      read, so every later run loads the short panel and never retries the missing days, and a
+      transient upstream stall becomes a permanent hole in the backtest without saying so.
+    * ``"never"`` — build and return, but leave only the per-day files. This is what a **chunked**
+      warm must use. A caller warming ``days[:n]`` in growing prefixes is asking about a prefix, not
+      about the panel; if a prefix consolidated, it would be served forever as if it were the whole
+      range. That is the same defect as above, arrived at from the other direction.
+    * ``"always"`` — bake the panel including its gaps, for a range whose missing dates are known to
+      be real rather than transient.
     """
+    if consolidate not in ("complete", "never", "always"):
+        raise ValueError(f"consolidate must be complete|never|always, got {consolidate!r}")
     dates = [pd.Timestamp(d).date() for d in dates]
     day_dir: Optional[Path] = None
     if cache_path is not None:
@@ -213,7 +222,9 @@ def build_curve_panel(
             len(missing), len(dates), missing[0], missing[-1],
         )
     if cache_path is not None:
-        if missing and not consolidate_partial:
+        if consolidate == "never":
+            logger.debug("consolidated cache suppressed (consolidate='never')")
+        elif missing and consolidate == "complete":
             logger.info(
                 "consolidated cache NOT written — %d dates still missing. The per-day cache in %s "
                 "is kept, so a rerun refetches only those dates.",
