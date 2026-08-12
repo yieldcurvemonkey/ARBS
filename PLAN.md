@@ -129,6 +129,53 @@ provider match the cached ones to **3e-13 bp**.
 - [x] `BT/xccy_rv` — 20 tests **including the archive tie-out**
 - [x] notebook (`notebooks/rv/gss_fly_rv.ipynb`), warm runbook, tests
 
+## Conditioning — measured 2026-08-12. The book is severely ill-conditioned.
+
+**The Sharpe version of the question is not answerable on this sample and was not attempted.** At
+~154 active marks `SE(annualised Sharpe) = 0.87`, while the observed p05–p95 spread across configs
+is **1.40** — smaller than two standard errors. Ranking configs by Sharpe, decomposing its variance
+across knobs, or fitting a response-surface condition number would each convert noise into a
+structural-sounding claim. (The Hessian route was measured returning κ = 13,498 on a *perfect* fit
+built only from inert knobs.)
+
+**The decision-space version is exact**, because which trades a config takes is deterministic.
+Jaccard of the trade set against the incumbent (35 entries), one step per knob:
+
+| knob | median J | trades |
+|---|---|---|
+| `require_turning_point` | **0.084** | 55 |
+| `entry_zsig_bp` | **0.090** | **13 → 1,080** |
+| `signal.ts_weight` | 0.097 | 13–44 |
+| `signal.smoothing_halflife` | 0.139 | 30–39 |
+| `fly.fly_scoring_com` | 0.167 | 10–51 |
+| `signal.scoring_com` | 0.169 | 30–38 |
+| `fly.fly_smoothing_halflife` | 0.236 | 32–34 |
+| `fly.std_halflife` | 0.243 | 22–60 |
+| `fly.wing_range_2` | 0.274 | 23–77 |
+| `fly.wing_objective` | 0.429 | 25 |
+| `universe.min_ttm` | 0.443 | 22–81 |
+| `fly.wing_range_1` | 0.581 | 33–46 |
+| `costs.repo_penalty_bp` | 0.750 | 27–34 |
+| `max_concurrent`, `reentry_cooldown_days`, `exit_abs_z` | **1.000** | 35 |
+
+**12 of 16 knobs change more than half the trade set in one step; 9 change more than three
+quarters.** The worst is a boolean — flipping `require_turning_point` retains 8% of the trades —
+and `entry_zsig_bp` spans 13 to 1,080 trades, a 31× swing in book size from one parameter.
+
+So "the GSS strategy" is not a strategy: it is one arbitrary point whose neighbours are different
+strategies sharing a name. Every performance number in this file is a number for that one point.
+
+**Three gate knobs are exactly inert (J = 1.000)**, which is its own finding — the gate has three
+effective degrees of freedom, not six:
+* `max_concurrent` never binds (average concurrency ≈ 0.8 against a cap of 10),
+* `reentry_cooldown_days` never fires (35 entries drawn from 27,194 distinct flies),
+* `exit_abs_z` is dead **at the incumbent** because the repo-decay branch takes every exit and the
+  z-rollover branch never fires. Conditionally inert, not dead: at a tighter hurdle rollovers do
+  occur.
+
+`timing_gap` (tolerant − exact Jaccard) is ~0.000 almost everywhere, so these knobs change *which*
+trades, not *when*. This is not jitter around a stable book.
+
 ## GSS result — 2024-09-03..2026-01-02, 332 dates, 343 bonds, median RMSE 1.94bp
 
 **The book pays carry to collect convergence, and the cost line decides the answer.** Every term
