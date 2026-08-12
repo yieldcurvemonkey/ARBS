@@ -792,6 +792,7 @@ def warm_citivelo_ust_timeseries(start, end):
     altering what already runs.
     """
     from scripts.citivelo_ust_timeseries_warm import (
+        DEFAULT_BUILD_VALUES,
         DEFAULT_VALUES,
         WarmPlan,
         _parse_cusips,
@@ -801,12 +802,21 @@ def warm_citivelo_ust_timeseries(start, end):
 
     days = int(os.environ.get("CITIVELO_UST_TS_DAYS", "5"))
     cusips_env = os.environ.get("CITIVELO_UST_TS_CUSIPS")
+    values_env = os.environ.get("CITIVELO_UST_TS_BUILD_VALUES")
     plan = WarmPlan(
         start=end - datetime.timedelta(days=days),
         end=end,
         aliases=default_aliases(),
         cusips=_parse_cusips([cusips_env] if cusips_env else None),
         values=DEFAULT_VALUES,
+        # TEN values, matching what the ten-year backfill wrote. Derived from the
+        # fetch set this built two of them, and the other eight would have gone
+        # stale from the day the backfill finished - invisibly, because a series
+        # that stops updating looks exactly like one with nothing new to say.
+        build_values=(
+            tuple(v.strip() for v in values_env.split(",") if v.strip())
+            if values_env else DEFAULT_BUILD_VALUES
+        ),
     )
     log.info("  %s", plan.describe().replace("\n", "\n  "))
     out = build(plan, n_jobs=N_JOBS)
