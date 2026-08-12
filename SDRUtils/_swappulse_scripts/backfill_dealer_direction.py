@@ -1164,6 +1164,69 @@ def _sanitize(v):
     return v
 
 
+#: How long to keep retrying a transient database refusal before giving up.
+#: A 527-day publish is ~50 minutes of continuous writing against a managed
+#: Postgres, and managed Postgres has maintenance windows.
+_RETRY_SECONDS = 900.0
+_RETRY_BACKOFF = (5.0, 15.0, 30.0, 60.0, 120.0)
+
+#: Refusals that are a property of the moment rather than of the statement.
+#: `ReadOnlySqlTransaction` is the one that actually happened: a full publish
+#: died 274 days in with "cannot execute INSERT in a read-only transaction"
+#: while the database was briefly read-only, and the whole 50-minute run was
+#: lost to a condition that cleared by itself within minutes. Everything else
+#: here is the same shape -- the connection or the server went away and will
+#: come back.
+_TRANSIENT_PG = (
+    "readonlysqltransaction",
+    "cannot execute insert in a read-only transaction",
+    "cannot execute delete in a read-only transaction",
+    "cannot execute truncate in a read-only transaction",
+    "the database system is in recovery mode",
+    "the database system is starting up",
+    "terminating connection",
+    "server closed the connection unexpectedly",
+    "connection already closed",
+    "ssl connection has been closed unexpectedly",
+    "could not connect to server",
+    "too many connections",
+    "deadlock detected",
+)
+
+
+def _is_transient(exc: Exception) -> bool:
+    msg = f"{type(exc).__name__}: {exc}".lower()
+    return any(t in msg for t in _TRANSIENT_PG)
+
+
+def _with_retry(conn, fn, what: str):
+    """Run a write, waiting out a database that is momentarily refusing.
+
+    Retries only the refusals in ``_TRANSIENT_PG``. A genuine error -- a bad
+    column, a constraint violation, a type mismatch -- must still fail on the
+    first attempt and loudly, because retrying it just delays the same failure
+    and buries the message under five copies of itself.
+    """
+    deadline = time.time() + _RETRY_SECONDS
+    attempt = 0
+    while True:
+        try:
+            return fn()
+        except Exception as exc:  # noqa: BLE001
+            if not _is_transient(exc) or time.time() >= deadline:
+                raise
+            wait = _RETRY_BACKOFF[min(attempt, len(_RETRY_BACKOFF) - 1)]
+            attempt += 1
+            print(f"    {what}: {type(exc).__name__} "
+                  f"({str(exc).strip()[:90]}) -- retry {attempt} in "
+                  f"{wait:.0f}s", flush=True)
+            try:
+                conn.rollback()
+            except Exception:  # noqa: BLE001
+                pass
+            time.sleep(wait)
+
+
 def _write(conn, table: str, columns: list, rows: list,
            conflict: str, batch: int = 5000) -> int:
     from psycopg2.extras import execute_values
@@ -1178,9 +1241,16 @@ def _write(conn, table: str, columns: list, rows: list,
     for i in range(0, len(rows), batch):
         chunk = [tuple(_sanitize(r.get(c)) for c in columns)
                  for r in rows[i:i + batch]]
-        with conn.cursor() as cur:
-            execute_values(cur, sql, chunk, page_size=batch)
-        conn.commit()
+
+        def _go(chunk=chunk):
+            with conn.cursor() as cur:
+                execute_values(cur, sql, chunk, page_size=batch)
+            conn.commit()
+
+        # The whole batch is re-sent on a retry. That is safe because the
+        # statement is an upsert on the table's own key -- replaying it is the
+        # identity, not a duplicate.
+        _with_retry(conn, _go, f"{table} rows {i}..{i + len(chunk)}")
         n += len(chunk)
     return n
 
@@ -1335,14 +1405,17 @@ def publish_day(conn, day: str, paths: Paths, tau_set, vintage: str,
     cov_rows["code_vintage"] = vintage
 
     if not dry_run:
-        with conn.cursor() as cur:
-            cur.execute(f"DELETE FROM {S.UNIT_TABLE} WHERE as_of_date = %s",
-                        (day,))
-            cur.execute(f"DELETE FROM {S.UNIT_BUCKET_TABLE} "
-                        "WHERE as_of_date = %s", (day,))
-            cur.execute(f"DELETE FROM {S.COVERAGE_TABLE} WHERE as_of_date = %s",
-                        (day,))
-        conn.commit()
+        def _clear():
+            with conn.cursor() as cur:
+                cur.execute(f"DELETE FROM {S.UNIT_TABLE} WHERE as_of_date = %s",
+                            (day,))
+                cur.execute(f"DELETE FROM {S.UNIT_BUCKET_TABLE} "
+                            "WHERE as_of_date = %s", (day,))
+                cur.execute(f"DELETE FROM {S.COVERAGE_TABLE} "
+                            "WHERE as_of_date = %s", (day,))
+            conn.commit()
+
+        _with_retry(conn, _clear, f"delete {day}")
         _write(conn, S.UNIT_TABLE, UNIT_DB_COLUMNS, unit_rows_db, "package_id")
         _write(conn, S.UNIT_BUCKET_TABLE, UNIT_BUCKET_DB_COLUMNS, ub_rows,
                "package_id, bucket_key")
@@ -1500,9 +1573,13 @@ def build_and_write_ladder(conn, tenor_rows, cov_rows, dry_run: bool) -> int:
 
     if dry_run:
         return len(cells)
-    with conn.cursor() as cur:
-        cur.execute(f"TRUNCATE {S.LADDER_TABLE}")
-    conn.commit()
+
+    def _truncate():
+        with conn.cursor() as cur:
+            cur.execute(f"TRUNCATE {S.LADDER_TABLE}")
+        conn.commit()
+
+    _with_retry(conn, _truncate, "truncate ladder")
     return _write(
         conn, S.LADDER_TABLE, LADDER_DB_COLUMNS, cells.to_dict("records"),
         "bucket_space, bucket_key, visibility_date, venue_class, series")
