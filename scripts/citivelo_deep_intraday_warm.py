@@ -1136,44 +1136,116 @@ def _build_ibor_day(task: tuple) -> Dict[str, Any]:
         disc_memo: Dict[int, Any] = {}
         worst = 0.0
 
+        # One solver per TENOR SIGNATURE, re-iterated per minute, instead of a
+        # fresh curve + instruments + solver for every row. Measured before this:
+        # EUR-EURIBOR built 25 days in 44 minutes (0.57 days/min) against
+        # JPY-TONAR's 13 days/min - 23x slower, and 2,409 days would have taken
+        # SEVENTY HOURS. The dual-curve path pays it twice, because the ESTR
+        # discount curve was also being re-solved from scratch each minute.
+        # `_build_day_snapshots` has always done it this way for OIS curves;
+        # this is the IBOR path catching up.
+        ibor_state: Dict[Any, Any] = {}
+        checked = 0
+        disc_state: Dict[str, Any] = {"tenors": None, "res": None}
+
+        def _discount_for(stamp):
+            """(curve, label) for this minute, re-iterating a cached solver."""
+            if disc_frame is not None:
+                prior = disc_frame.index[disc_frame.index <= stamp]
+                if not len(prior):
+                    return None, None
+                disc_row = disc_frame.loc[prior.max()]
+                disc_par = {c: float(v) for c, v in disc_row.items() if pd.notna(v)}
+                if len(disc_par) < base.MIN_TENORS:
+                    return None, None
+                from MDP.CitiVelocityExcel.curves.rl_builder import build_rl_ois_curve
+
+                sig = tuple(sorted(disc_par))
+                res = disc_state["res"]
+                if res is None or disc_state["tenors"] != sig:
+                    citi_index = _CITI_INDEX_BY_CURVE.get(disc_name, "EUR_EUROSTR")
+                    res = build_rl_ois_curve(
+                        par_rates=disc_par, ref_date=day, citi_index=citi_index,
+                        curve_id="disc",
+                    )
+                    disc_state["res"], disc_state["tenors"] = res, sig
+                else:
+                    order = list(res.rl_pricing_curve_instruments.keys())
+                    res.rl_pricing_curve_solver.s = [float(disc_par[t]) for t in order]
+                    res.rl_pricing_curve_solver.iterate()
+                    if str(res.rl_pricing_curve_solver.result.get("status", "")).upper() != "SUCCESS":
+                        return None, None
+                return res.rl_pricing_curve, disc_name
+            if disc_store_frame is not None:
+                curve_at = _nearest_stored_curve(disc_store_frame, stamp, disc_memo)
+                if curve_at is not None:
+                    return curve_at, disc_name
+            return None, None
+
         for stamp, row in frame.iterrows():
             par = {c: float(v) for c, v in row.items() if pd.notna(v)}
             if len(par) < base.MIN_TENORS:
                 out["n_skipped"] += 1
                 continue
 
-            disc_curve = None
-            disc_label = None
-            if disc_frame is not None:
-                prior = disc_frame.index[disc_frame.index <= stamp]
-                if len(prior):
-                    disc_row = disc_frame.loc[prior.max()]
-                    disc_par = {c: float(v) for c, v in disc_row.items() if pd.notna(v)}
-                    if len(disc_par) >= base.MIN_TENORS:
-                        from MDP.CitiVelocityExcel.curves.rl_builder import build_rl_ois_curve
+            disc_curve, disc_label = _discount_for(stamp)
 
-                        citi_index = _CITI_INDEX_BY_CURVE.get(disc_name, "EUR_EUROSTR")
-                        disc_curve = build_rl_ois_curve(
-                            par_rates=disc_par, ref_date=day, citi_index=citi_index,
-                            curve_id="disc",
-                        ).rl_pricing_curve
-                        disc_label = disc_name
-            elif disc_store_frame is not None:
-                # The OIS curve is already solved and in the store; rebuilding it
-                # from par rates we do not have on disk would be the wrong kind of
-                # thorough. Nearest snapshot at or before the minute.
-                curve_at = _nearest_stored_curve(disc_store_frame, stamp, disc_memo)
-                if curve_at is not None:
-                    disc_curve, disc_label = curve_at, disc_name
+            # The signature keys the cache: a day where tenors come and go simply
+            # builds one solver per distinct set, which is what the OIS builder
+            # does and why a ragged day costs no more than a clean one.
+            sig = (tuple(sorted(par)), disc_label or "self")
+            result = ibor_state.get(sig)
+            reused = result is not None
+            if result is not None:
+                try:
+                    result.solver.s = [float(par[t]) for t in result.tenors]
+                    result.solver.iterate()
+                    ok = str(result.solver.result.get("status", "")).upper() == "SUCCESS"
+                except Exception:  # noqa: BLE001 - fall back to a clean build
+                    ok = False
+                if not ok:
+                    result = None
+                    ibor_state.pop(sig, None)
 
-            try:
-                result = build_rl_ibor_curve(
-                    par_rates=par, ref_date=day, curve_name=curve_name,
-                    discount_curve=disc_curve, discount_curve_name=disc_label,
-                )
-            except Exception:  # noqa: BLE001 - one bad minute must not lose the day
-                out["n_skipped"] += 1
-                continue
+            if result is None:
+                reused = False
+                try:
+                    result = build_rl_ibor_curve(
+                        par_rates=par, ref_date=day, curve_name=curve_name,
+                        discount_curve=disc_curve, discount_curve_name=disc_label,
+                    )
+                except Exception:  # noqa: BLE001 - one bad minute must not lose the day
+                    out["n_skipped"] += 1
+                    continue
+                ibor_state[sig] = result
+
+            # A re-iterated solver carries the reprice error of the build it came
+            # from, which says nothing about THIS minute. Spot-check periodically -
+            # every 250th row, as the OIS builder does - and fall back to a clean
+            # build if the curve has drifted off its own quotes.
+            checked += 1
+            if reused and checked % 250 == 0:
+                insts = result.meta.get("instruments") or []
+                try:
+                    err = max(
+                        abs(float(inst.rate(solver=result.solver)) - float(par[t])) * 100.0
+                        for inst, t in zip(insts, result.tenors)
+                    )
+                except Exception:  # noqa: BLE001
+                    err = float("inf")
+                if err > 1.0:
+                    ibor_state.pop(sig, None)
+                    try:
+                        result = build_rl_ibor_curve(
+                            par_rates=par, ref_date=day, curve_name=curve_name,
+                            discount_curve=disc_curve, discount_curve_name=disc_label,
+                        )
+                        ibor_state[sig] = result
+                    except Exception:  # noqa: BLE001
+                        out["n_skipped"] += 1
+                        continue
+                else:
+                    result.max_reprice_error_bp = max(result.max_reprice_error_bp, err)
 
             worst = max(worst, result.max_reprice_error_bp)
             raw = (

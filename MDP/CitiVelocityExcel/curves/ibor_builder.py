@@ -390,5 +390,9 @@ def build_rl_ibor_curve(
             "spec": spec.rl_spec,
             "n_tenors": len(tenors),
             "reprice_errors_bp": errors,
+            # Kept so a caller re-iterating this solver over later minutes can
+            # still reprice it. Without them the fast path is unverified, and a
+            # speed-up that removes a guard is not a speed-up.
+            "instruments": instruments,
         },
     )
