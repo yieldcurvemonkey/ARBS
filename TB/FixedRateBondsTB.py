@@ -579,6 +579,30 @@ class FixedRateBondsTB(LayeredCacheMixin, BaseTimeseriesTB):
                     else:
                         pbar.update(1)
 
+            # A value the vendor does not serve for this bond is COVERAGE, not a
+            # fault, and logging it as an exception is ruinously expensive: a
+            # ten-year alias warm wrote 16,722 formatted tracebacks, and on a
+            # 250-date chunk `logging.exception` -> `formatException` was 68 s of
+            # 119 s - **57% of the wall time**, spent rendering a stack for the
+            # normal case. It also buries the abnormal one: a real pricing bug
+            # looks exactly like the other 16,721 lines.
+            #
+            # So they are counted and summarised once, and everything else keeps
+            # its traceback. The marker is read with getattr rather than by
+            # importing the vendor's exception, so this stays source-agnostic.
+            misses: Dict[str, int] = {}
+
+            def _note_failure(q: FixedRateBondQuery, d0: DateLike, exc: Exception) -> None:
+                if getattr(exc, "coverage_miss", False):
+                    misses[type(exc).__name__] = misses.get(type(exc).__name__, 0) + 1
+                    self._logger.debug(
+                        "no quote for cusip=%s date=%s query=%s: %s", q.cusip, d0, q, exc
+                    )
+                    return
+                self._logger.exception(
+                    f"Pricing failed for cusip='{q.cusip}', date='{d0}', query='{q}'. Error: {exc}"
+                )
+
             if (n_jobs or 1) > 1:
                 max_workers = int(n_jobs) if n_jobs and n_jobs > 1 else None
                 with ThreadPoolExecutor(max_workers=max_workers) as ex:
@@ -592,9 +616,7 @@ class FixedRateBondsTB(LayeredCacheMixin, BaseTimeseriesTB):
                             row = fut.result()
                             new_rows_with_q.append((row, q, d0))
                         except Exception as e:
-                            self._logger.exception(
-                                f"Pricing failed for cusip='{q.cusip}', date='{d0}', query='{q}'. Error: {e}"
-                            )
+                            _note_failure(q, d0, e)
                         finally:
                             pbar.update(1)
             else:
@@ -603,11 +625,17 @@ class FixedRateBondsTB(LayeredCacheMixin, BaseTimeseriesTB):
                         row = _build_row_for_query(pr_map, q, d0, self._date_col)
                         new_rows_with_q.append((row, q, d0))
                     except Exception as e:
-                        self._logger.exception(
-                            f"Pricing failed for cusip='{q.cusip}', date='{d0}', query='{q}'. Error: {e}"
-                        )
+                        _note_failure(q, d0, e)
                     finally:
                         pbar.update(1)
+
+        if misses:
+            self._logger.info(
+                "no quote for %d (query, date) pairs: %s. Expected - vendor coverage "
+                "is per bond and uneven; run at DEBUG to see each one.",
+                sum(misses.values()),
+                ", ".join(f"{k} x{v}" for k, v in sorted(misses.items())),
+            )
 
         with self.batched():
             mapping = getattr(self, self._cache_attr)
