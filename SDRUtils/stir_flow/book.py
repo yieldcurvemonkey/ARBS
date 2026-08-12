@@ -17,10 +17,21 @@ NY = pytz.timezone("America/New_York")
 
 
 def snap_mtm(ts):
+    """The MTM mark instant: floor to the minute, with NO minus-one.
+
+    Routed through ``as_intraday_instant`` for the same reason
+    ``snap_timestamp`` is: this rule produces exactly midnight for anything in
+    the 00:00 ET minute, and a source that overloads the timestamp argument
+    reads midnight as end-of-day and marks the book against the day's CLOSE.
+    """
+    from SDRUtils.stir_flow.pricing import as_intraday_instant
+
     et = pd.Timestamp(ts)
     et = et.tz_convert(NY) if et.tzinfo else NY.localize(et.to_pydatetime())
     et = et.replace(second=0, microsecond=0)
-    return NY.localize(datetime.datetime(et.year, et.month, et.day, et.hour, et.minute))
+    return as_intraday_instant(
+        NY.localize(datetime.datetime(et.year, et.month, et.day, et.hour, et.minute))
+    )
 
 
 def reval_unit(legs, signs, pricer, curve_name, ts) -> float:

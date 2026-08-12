@@ -187,6 +187,24 @@ WORKING_CEILING_MB = 3500.0
 #: buys six years of nothing at full Excel price. Widen with ``--values``.
 DEFAULT_VALUES: Tuple[str, ...] = ("PRICE", "YIELD")
 
+#: What the BUILD phase computes, stated directly rather than derived from the
+#: fetch set. The two are not the same list and must not be forced to be:
+#: ``unified_values`` maps one Citi token to at most one ``UnifiedValue``, so a
+#: build driven by the fetch set can only ever produce ``FRB_CLEAN_PRICE`` and
+#: ``FRB_YTM`` - while the ten-year backfill writes ten values per bond. Left
+#: derived, the nightly job would refresh two of those ten and the other eight
+#: would go stale from the day the backfill finished, silently, because a series
+#: that stops updating looks exactly like a series with nothing new to say.
+#:
+#: Four of these need no tag of their own (they are solved from ``PRICE``); the
+#: rest read ``DURATION``, ``DV01`` and ``SPREAD_TSY``, which the EOD universe tag
+#: warm already caches.
+DEFAULT_BUILD_VALUES: Tuple[str, ...] = (
+    "FRB_YTM", "FRB_CLEAN_PRICE", "FRB_DIRTY_PRICE", "FRB_DV01", "FRB_MOD_DURATION",
+    "FRB_SPREAD_TSY", "FRB_CITI_PRICE", "FRB_CITI_YIELD", "FRB_CITI_DURATION",
+    "FRB_CITI_DV01",
+)
+
 #: Bonds per fetch batch, and symbols per build batch. Small enough that the
 #: manifest is fine-grained and a stop loses little.
 DEFAULT_FETCH_BATCH = 16
@@ -276,6 +294,7 @@ class WarmPlan:
         aliases: Sequence[str],
         cusips: Sequence[str],
         values: Sequence[str],
+        build_values: Optional[Sequence[str]] = None,
         force_refresh: bool = False,
         base_universe=None,
     ) -> None:
@@ -290,6 +309,9 @@ class WarmPlan:
         self.aliases = tuple(aliases)
         self.cusips = tuple(cusips)
         self.values = tuple(values)
+        #: ``UnifiedValue`` member names for the build phase. ``None`` keeps the
+        #: old behaviour of deriving them from the fetch set.
+        self.build_values = tuple(build_values) if build_values else None
         # The catalog is an ACCUMULATING UNION and a moving target - it went from
         # 349 to 877 USA.USD.GOVT ISINs in one afternoon. Anything that needs a
         # fixed starting universe (a test, or a caller deliberately restricting
@@ -739,6 +761,51 @@ def _mdp(universe):
     )
 
 
+def build_pairs(plan):
+    """The ``(label, UnifiedValue)`` list the build phase will compute.
+
+    Module level for the same reason as :func:`build_unit_key`: inline, the only
+    way to check it was to call ``build`` with a market data provider, so a
+    mutation that ignored ``plan.build_values`` and fell back to deriving two
+    values from the fetch set passed the whole suite.
+
+    An explicit ``build_values`` wins; without one this derives from the fetch
+    tokens, which is the pre-existing behaviour and only ever yields
+    ``FRB_CLEAN_PRICE`` and ``FRB_YTM``.
+    """
+    if getattr(plan, "build_values", None):
+        from Query.Unified.registry import UnifiedValue
+
+        pairs = []
+        for name in plan.build_values:
+            member = getattr(UnifiedValue, name, None)
+            if member is None:
+                raise ValueError(f"{name!r} is not a UnifiedValue member")
+            pairs.append((name, member))
+        return pairs
+    return unified_values(plan.values)
+
+
+def build_unit_key(plan, symbol: str, year: int, lo, hi):
+    """The manifest key for one build unit: ``(unit, stamp)``.
+
+    Module level rather than a closure inside :func:`build` so a test can drive
+    the real thing. The version that lived inside it could only be checked by
+    calling ``_key`` directly with two different tuples, which asserts that
+    ``_key`` reads its argument - not that the caller passes the right one. That
+    test survived deleting the build values from the key.
+
+    The BUILD values are in the stamp, not just the fetch values. Widening the
+    built set without this reads the manifest, finds every unit already at the
+    right key, does nothing, and reports a ten-value warm holding two - the same
+    silence :func:`_key` already documents for the window.
+    """
+    return (
+        f"{symbol}@{year}",
+        _key(lo, hi, tuple(plan.values) + tuple(plan.build_values or ())),
+    )
+
+
 def build(
     plan: WarmPlan,
     *,
@@ -757,7 +824,7 @@ def build(
     from TB.FixedRateBondsTB import FixedRateBondsTB
     from TB.TimeseriesBuilder import TimeseriesBuilder
 
-    pairs = unified_values(plan.values)
+    pairs = build_pairs(plan)
     if not pairs:
         raise ValueError(
             f"None of {list(plan.values)} maps onto a UnifiedValue, so there is nothing to "
@@ -776,7 +843,7 @@ def build(
             units.append((symbol, year, lo, hi))
 
     def _unit_key(symbol, year, lo, hi):
-        return f"{symbol}@{year}", _key(lo, hi, plan.values)
+        return build_unit_key(plan, symbol, year, lo, hi)
 
     todo = []
     already = 0

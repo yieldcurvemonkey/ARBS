@@ -149,24 +149,69 @@ class CitiVeloTagCache:
 
     # -- read -----------------------------------------------------------
 
+    #: How many parsed series to keep in memory. A bond needs about a dozen tags
+    #: and a warm walks bonds one at a time, so even a small window hits almost
+    #: always; the bound exists so a 900-bond run cannot grow without limit.
+    _PARSE_MEMO_MAX = 256
+
     def read(self, tag: str, freq: str, price_point: str = "CLOSE") -> Optional[pd.Series]:
-        """The whole cached series for one key, or ``None`` when absent."""
+        """The whole cached series for one key, or ``None`` when absent.
+
+        The parquet PARSE is memoised on ``(path, mtime, size)``
+        -------------------------------------------------------
+        Reading a whole tag file to answer one date is the shape of this cache -
+        it stores series, not points - and it is fine until something asks per
+        date. Profiled on a forty-date offline pricer loop, this path was **24%
+        of runtime**: 400 reads of ten files, each re-parsing the parquet,
+        de-duplicating and sorting.
+
+        Keyed on the file's identity AND its stat, so a tag that is rewritten
+        mid-process - which happens, ``get`` writes through here - produces a
+        different key and is re-read. A memo keyed on the path alone would serve
+        a stale series to the very run that had just extended it.
+
+        The arrays are cached; the ``Series`` is rebuilt per call. Sharing one
+        Series would let any caller's in-place edit reach every later reader,
+        and pandas gives no cheap way to forbid that. Rebuilding costs
+        microseconds against the milliseconds the parse costs.
+        """
         path = self.path(tag, freq, price_point)
-        if not path.is_file():
-            return None
         try:
-            table = pq.read_table(path)
-        except Exception as exc:  # noqa: BLE001
-            # A corrupt parquet must not look like a cache miss that silently
-            # refetches forever - say so, then treat it as a miss once.
-            _logger.warning("CitiVeloTagCache: unreadable cache file %s (%s); refetching.", path, exc)
+            st = path.stat()
+        except OSError:
             return None
-        df = table.to_pandas()
-        if df.empty or "timestamp" not in df.columns or "value" not in df.columns:
-            return None
-        idx = pd.DatetimeIndex(pd.to_datetime(df["timestamp"]), name="Date")
-        s = pd.Series(df["value"].astype("float64").to_numpy(), index=idx, name=str(tag))
-        return s[~s.index.duplicated(keep="last")].sort_index()
+        key = (str(path), st.st_mtime_ns, st.st_size)
+        memo = getattr(self, "_parse_memo", None)
+        if memo is None:
+            memo = {}
+            self._parse_memo = memo  # type: ignore[attr-defined]
+        hit = memo.get(key)
+        if hit is None:
+            try:
+                table = pq.read_table(path)
+            except Exception as exc:  # noqa: BLE001
+                # A corrupt parquet must not look like a cache miss that silently
+                # refetches forever - say so, then treat it as a miss once.
+                _logger.warning("CitiVeloTagCache: unreadable cache file %s (%s); refetching.", path, exc)
+                return None
+            df = table.to_pandas()
+            if df.empty or "timestamp" not in df.columns or "value" not in df.columns:
+                return None
+            idx = pd.DatetimeIndex(pd.to_datetime(df["timestamp"]), name="Date")
+            s = pd.Series(df["value"].astype("float64").to_numpy(), index=idx, name=str(tag))
+            s = s[~s.index.duplicated(keep="last")].sort_index()
+            hit = (s.index, s.to_numpy())
+            if len(memo) >= self._PARSE_MEMO_MAX:
+                memo.pop(next(iter(memo)), None)
+            memo[key] = hit
+        index, values = hit
+        # copy=True, and it is not optional. With copy=False the Series wraps the
+        # cached array itself, so ``s.iloc[0] = x`` in any caller rewrites the memo
+        # for every later reader - caught by
+        # test_the_memo_does_not_hand_out_a_shared_mutable_series. The index is
+        # shared deliberately: a DatetimeIndex is immutable, and it is the larger
+        # of the two. Copying ~2,500 float64 is 20 KB against a parquet parse.
+        return pd.Series(values, index=index, name=str(tag), copy=True)
 
     def coverage(self, tag: str, freq: str, price_point: str = "CLOSE") -> Optional[Coverage]:
         """What is cached for one key, including the tag's own history start."""

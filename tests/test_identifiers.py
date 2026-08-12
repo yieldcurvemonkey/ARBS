@@ -123,8 +123,14 @@ def test_transposition_is_caught():
 # ── layer 3: the real corpus ─────────────────────────────────────────────
 
 def test_corpus_is_present_and_large():
-    """Guards the guard: if the catalog moved, the corpus tests would vacuously pass."""
-    assert len(CORPUS) == 2162, f"expected the 2,162-ISIN harvest, got {len(CORPUS)}"
+    """Guards the guard: an empty corpus would make every test below vacuous.
+
+    A FLOOR rather than an equality. The point is that the corpus is large enough
+    for "every Citi ISIN validates" to mean something, and the catalog it comes
+    from is an accumulating union - seeding the matured USTs Citi still quotes
+    took it from 2,162 to 2,690. Growth is not a regression; emptiness is.
+    """
+    assert len(CORPUS) >= 2162, f"corpus shrank below the original harvest: {len(CORPUS)}"
 
 
 def test_every_citi_isin_validates():

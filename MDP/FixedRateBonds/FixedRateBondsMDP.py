@@ -1,6 +1,7 @@
 import contextlib
 import dataclasses
 import datetime
+import functools
 import importlib.util
 import itertools
 import logging
@@ -444,6 +445,51 @@ def _alias_to_cusip(alias: str, ref_table: pd.DataFrame) -> Optional[str]:
     return unique_cusips[0]
 
 
+@functools.lru_cache(maxsize=8192)
+def _auction_roll_date(y: int, m: int, d: int) -> datetime.date:
+    """One auction date, advanced by one US-government business day.
+
+    Memoised because it is a pure function of a date and the answer does not
+    depend on the ``as_of`` it is being asked for. ``_filter_and_rank_ref_df``
+    recomputed it for all 1,785 reference rows on every call, so a per-date loop
+    over one bond paid **107,100 QuantLib ``Calendar.advance`` calls across 60
+    dates** - 2.24 s of a 3.19 s profile, the single largest cost left in the
+    offline pricer path once the catalog parse was cached.
+
+    Keyed on the (y, m, d) triple rather than the object so a ``Timestamp`` and a
+    ``date`` for the same day share an entry.
+    """
+    cal = ql.UnitedStates(ql.UnitedStates.GovernmentBond)
+    nxt = cal.advance(ql.Date(d, m, y), ql.Period("1D"))
+    return datetime.date(nxt.year(), nxt.month(), nxt.dayOfMonth())
+
+
+def _auction_plus_1bd(ad):
+    if ad is None or pd.isna(ad):
+        return pd.NaT
+    return _auction_roll_date(int(ad.year), int(ad.month), int(ad.day))
+
+
+#: ``id(ref_df) -> (len, roll_date Series)``. Keyed on identity because
+#: ``update_reference_data`` hands back the same memoised frame, and paired with
+#: the length so a frame that was rebuilt into a recycled id cannot be mistaken
+#: for the old one. Small and bounded: there is one reference frame per process.
+_ROLL_DATE_CACHE: Dict[int, Tuple[int, "pd.Series"]] = {}
+
+
+def _roll_dates_for(ref_df: "pd.DataFrame") -> "pd.Series":
+    """``auction_date + 1bd``, filled from ``issue_date``, for a whole frame."""
+    key = id(ref_df)
+    hit = _ROLL_DATE_CACHE.get(key)
+    if hit is not None and hit[0] == len(ref_df):
+        return hit[1]
+    roll = ref_df["auction_date"].apply(_auction_plus_1bd).fillna(ref_df["issue_date"])
+    if len(_ROLL_DATE_CACHE) > 8:
+        _ROLL_DATE_CACHE.clear()
+    _ROLL_DATE_CACHE[key] = (len(ref_df), roll)
+    return roll
+
+
 def _filter_and_rank_ref_df(
     ref_df: pd.DataFrame,
     as_of: datetime.date,
@@ -456,18 +502,13 @@ def _filter_and_rank_ref_df(
     issue_date when auction_date is unavailable.
     """
     if "auction_date" in ref_df.columns and ref_df["auction_date"].notna().any():
-        _cal = ql.UnitedStates(ql.UnitedStates.GovernmentBond)
-        as_of_ql = ql.Date(as_of.day, as_of.month, as_of.year)
-
-        def _auction_plus_1bd(ad):
-            if pd.isna(ad):
-                return pd.NaT
-            ql_ad = ql.Date(ad.day, ad.month, ad.year)
-            nxt = _cal.advance(ql_ad, ql.Period("1D"))
-            return datetime.date(nxt.year(), nxt.month(), nxt.dayOfMonth())
-
-        roll_date = ref_df["auction_date"].apply(_auction_plus_1bd)
-        roll_date = roll_date.fillna(ref_df["issue_date"])
+        # The whole COLUMN is cached, not just the scalar map. `_auction_plus_1bd`
+        # is already memoised, but the `.apply` still walks 1,785 rows on every
+        # call and this function runs once per (date, value): profiled at
+        # **5,355,000 calls** over a single 250-date chunk, 9.2 s of 119 s even
+        # with every one of them a dict hit. The answer does not depend on `as_of`
+        # at all, so it is computed once per reference frame.
+        roll_date = _roll_dates_for(ref_df)
     else:
         roll_date = ref_df["issue_date"]
 

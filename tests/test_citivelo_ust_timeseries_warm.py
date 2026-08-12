@@ -1028,3 +1028,169 @@ def test_the_whole_registry_still_passes_the_ordering_check():
     from scripts import daily_cache_warmer as DCW
 
     check(DCW.WARM_JOBS)
+
+
+# ------------------------------------------------------------------ #
+#          the BUILD value set is stated, not derived                #
+# ------------------------------------------------------------------ #
+
+
+def test_the_build_set_is_not_derivable_from_the_fetch_set():
+    """Why `build_values` has to exist at all.
+
+    `unified_values` maps one Citi token to at most one `UnifiedValue`, so a build
+    driven by the fetch set can only ever produce two values. The ten-year backfill
+    writes ten. Left derived, the nightly job refreshes two of them and the other
+    eight go stale from the day the backfill finishes - invisibly, because a series
+    that stops updating looks exactly like one with nothing new to say.
+    """
+    from scripts.citivelo_ust_timeseries_warm import (
+        DEFAULT_BUILD_VALUES,
+        DEFAULT_VALUES,
+        unified_values,
+    )
+
+    derived = {m.name for _, m in unified_values(DEFAULT_VALUES)}
+    assert derived == {"FRB_CLEAN_PRICE", "FRB_YTM"}
+    assert len(DEFAULT_BUILD_VALUES) == 10
+    assert derived < set(DEFAULT_BUILD_VALUES), "the fetch set must be a strict subset"
+
+
+def test_every_declared_build_value_exists():
+    """A typo here is a warm that raises on the first slice, at 3am."""
+    from Query.Unified.registry import UnifiedValue
+    from scripts.citivelo_ust_timeseries_warm import DEFAULT_BUILD_VALUES
+
+    missing = [v for v in DEFAULT_BUILD_VALUES if getattr(UnifiedValue, v, None) is None]
+    assert not missing, f"not UnifiedValue members: {missing}"
+
+
+def test_the_nightly_job_asks_for_all_ten():
+    """The job the cron runs, not the constant it could have used."""
+    import datetime as _dt
+
+    import scripts.daily_cache_warmer as dcw
+    from scripts.citivelo_ust_timeseries_warm import DEFAULT_BUILD_VALUES
+
+    seen = {}
+
+    class _Plan:
+        def __init__(self, **kw):
+            seen.update(kw)
+
+        def describe(self):
+            return "stub"
+
+    orig_plan = dcw.__dict__.get("WarmPlan")
+    import scripts.citivelo_ust_timeseries_warm as tw
+
+    real_plan, real_build = tw.WarmPlan, tw.build
+    tw.WarmPlan = _Plan
+    tw.build = lambda plan, **kw: {"stopped": False}
+    try:
+        dcw.warm_citivelo_ust_timeseries(_dt.date(2026, 8, 3), _dt.date(2026, 8, 7))
+    finally:
+        tw.WarmPlan, tw.build = real_plan, real_build
+
+    assert tuple(seen.get("build_values") or ()) == tuple(DEFAULT_BUILD_VALUES)
+
+
+def test_widening_the_build_set_invalidates_the_resume_key():
+    """The vintage trap, in its own words.
+
+    Widening the built set without touching the key reads the manifest, finds
+    every unit already done, does nothing, and reports a ten-value warm holding
+    two.
+
+    Drives ``build_unit_key`` - the function ``build`` actually calls. The first
+    version of this test compared ``_key`` against two hand-made tuples, which
+    only asserts that ``_key`` reads its argument; it passed happily with the
+    build values deleted from the caller.
+    """
+    import datetime as _dt
+    from types import SimpleNamespace
+
+    from scripts.citivelo_ust_timeseries_warm import build_unit_key
+
+    lo, hi = _dt.date(2026, 1, 1), _dt.date(2026, 8, 7)
+    narrow = SimpleNamespace(values=("PRICE", "YIELD"), build_values=("FRB_YTM",))
+    wide = SimpleNamespace(
+        values=("PRICE", "YIELD"), build_values=("FRB_YTM", "FRB_DV01")
+    )
+    unit_a, stamp_a = build_unit_key(narrow, "CT10", 2026, lo, hi)
+    unit_b, stamp_b = build_unit_key(wide, "CT10", 2026, lo, hi)
+
+    assert unit_a == unit_b == "CT10@2026"
+    assert stamp_a != stamp_b, "the build values never reached the resume key"
+
+    same = build_unit_key(narrow, "CT10", 2026, lo, hi)
+    assert same == (unit_a, stamp_a), "the key must be stable for an unchanged plan"
+
+
+def test_build_computes_the_declared_values_not_the_derived_two():
+    """The behaviour the whole change exists for.
+
+    Drives `build_pairs`, which `build` calls. Checked inline, a mutation that
+    ignored `plan.build_values` and fell back to the fetch set passed the entire
+    suite - the ten-value nightly quietly became a two-value one.
+    """
+    from types import SimpleNamespace
+
+    from scripts.citivelo_ust_timeseries_warm import DEFAULT_BUILD_VALUES, build_pairs
+
+    declared = SimpleNamespace(values=("PRICE", "YIELD"), build_values=DEFAULT_BUILD_VALUES)
+    names = [m.name for _, m in build_pairs(declared)]
+    assert names == list(DEFAULT_BUILD_VALUES)
+    assert len(names) == 10
+
+    # and without one, the old derived behaviour, unchanged
+    derived = SimpleNamespace(values=("PRICE", "YIELD"), build_values=None)
+    assert {m.name for _, m in build_pairs(derived)} == {"FRB_CLEAN_PRICE", "FRB_YTM"}
+
+
+def test_an_unknown_build_value_fails_loudly():
+    """At plan time, not at 3am on the first slice."""
+    from types import SimpleNamespace
+
+    import pytest as _pytest
+
+    from scripts.citivelo_ust_timeseries_warm import build_pairs
+
+    bad = SimpleNamespace(values=("PRICE",), build_values=("FRB_NOT_A_VALUE",))
+    with _pytest.raises(ValueError, match="FRB_NOT_A_VALUE"):
+        build_pairs(bad)
+
+
+def test_build_actually_calls_build_pairs(monkeypatch):
+    """That ``build`` USES the helper, not merely that the helper is right.
+
+    A plan with no symbols is the whole trick: ``pairs`` is computed before the
+    unit list, and an empty unit list returns immediately - so this reaches the
+    value decision and nothing else. No market data provider, no Excel, no store.
+
+    Without it, deleting the ``build_pairs`` call and going back to deriving two
+    values from the fetch set passed all sixty-one other tests.
+    """
+    from types import SimpleNamespace
+
+    import scripts.citivelo_ust_timeseries_warm as tw
+
+    calls = []
+    real = tw.build_pairs
+
+    def _spy(plan):
+        calls.append(plan)
+        return real(plan)
+
+    monkeypatch.setattr(tw, "build_pairs", _spy)
+
+    plan = SimpleNamespace(
+        values=("PRICE", "YIELD"),
+        build_values=tw.DEFAULT_BUILD_VALUES,
+        symbols=lambda: [],
+        slices=lambda s: [],
+    )
+    out = tw.build(plan, n_jobs=1)
+
+    assert out["of"] == 0, "the plan was supposed to have nothing to do"
+    assert len(calls) == 1, "build did not go through build_pairs"
