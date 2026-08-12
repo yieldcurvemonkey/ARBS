@@ -474,6 +474,11 @@ change the total; the question is whether *this* partition is special. So: flip 
 
 This is the sharpest test in the notebook, because it holds the book, the instrument, the window
 and the trade count fixed and varies only *which* trades get the minus sign.
+
+Read what it does and does not say. It tests the **gap** between the two halves of the roster, not
+the **level** of either. The non-voters can sit far below the book's average while still being
+indistinguishable from zero in their own right — and §6 is where that second question is answered.
+The cell prints both so the difference is not left to the reader.
 """)
 
 code(r'''
@@ -492,6 +497,27 @@ pval = float((draws >= real).mean())
 print(f"flipping the {k} non-voter trades : {real:+.2f}bp")
 print(f"flipping a random {k} of {len(pe)}   : {draws.mean():+.2f} +- {draws.std():.2f}bp")
 print(f"the non-voter partition beats {1 - pval:.1%} of random ones   one-sided p = {pval:.4f}")
+print()
+print("what that p-value is made of — the GAP, not the level:")
+print(f"  voters, as read     {pe[~isnv].mean():+.4f} bp/trade   ({int((~isnv).sum())} trades)")
+print(f"  non-voters, as read {pe[isnv].mean():+.4f} bp/trade   ({k} trades)")
+print(f"  gap                 {pe[~isnv].mean() - pe[isnv].mean():+.4f} bp/trade")
+print(f"  and the non-voter level on its own is {pe[isnv].mean():+.4f} "
+      f"+- {pe[isnv].std(ddof=1)/np.sqrt(k):.4f} — see section 6")
+
+# How much of that p-value would survive if the fade were worth exactly nothing?
+# Demean the non-voter rows so their drift is identically zero, and re-run the SAME test.
+pz = pe.copy()
+pz[isnv] = pz[isnv] - pz[isnv].mean()
+rng4 = np.random.default_rng(11)
+real_z = pz.sum() - 2 * pz[isnv].sum()
+draws_z = np.array([pz.sum() - 2 * pz[rng4.choice(idx, size=k, replace=False)].sum()
+                    for _ in range(20000)])
+print(f"\ncounterfactual — non-voter drift set to EXACTLY zero, same test: "
+      f"p = {float((draws_z >= real_z).mean()):.4f}")
+print("it still rejects, because a book where one half has drift and the other has none is")
+print("a real seam. That is the claim this test supports, and it is not the claim that the")
+print("fade makes money.")
 
 fig, ax = plt.subplots(figsize=(10, 4.2))
 ax.hist(draws, bins=80, color="lightgrey", edgecolor="k", lw=.3)
@@ -509,6 +535,11 @@ md(r"""
 
 A book of 196 trades across 13 speakers is not a market-wide behaviour if three of them carry it.
 The column is the drift **as read** — negative means the fade pays.
+
+Concentration is easy to point at and easy to over-read, so the cell also computes what
+concentration a book of this size and this shape produces *by chance*: shuffle the 196 P&Ls across
+the same 13 group sizes and look at the worst three. If the observed figure sits inside that
+distribution, "three people carry it" is a description of arithmetic, not a finding.
 """)
 
 code(r'''
@@ -524,6 +555,23 @@ print(f"the three biggest contributors are {list(top3.index)}: "
       f"on {int(top3.trades.sum())} of {len(B)} trades")
 print(f"the other {len(spk) - 3} non-voters are {spk.iloc[3:].total_bp_as_read.sum():+.1f}bp "
       f"as read — i.e. the fade LOSES on them")
+
+# ...and what that looks like under random assignment, same group sizes.
+sizes = spk.trades.to_numpy()
+pv = B.pnl_bp.to_numpy(float)
+rng3 = np.random.default_rng(7)
+worst3 = np.empty(20000)
+for i in range(20000):
+    sh = rng3.permutation(pv)
+    sums = np.add.reduceat(sh, np.concatenate([[0], np.cumsum(sizes)[:-1]]))
+    worst3[i] = np.sort(sums)[:3].sum()
+obs3 = top3.total_bp_as_read.sum()
+p_conc = float((worst3 <= obs3).mean())
+print(f"\nnull (same 13 group sizes, P&L reshuffled, 20k draws): worst three sum "
+      f"{worst3.mean():+.2f} +- {worst3.std():.2f}bp")
+print(f"observed {obs3:+.1f}bp   ->   P(null at least this concentrated) = {p_conc:.4f}")
+print("so the concentration is ORDINARY for a book this size: it is not evidence against the")
+print("fade, it is what a near-zero book with 13 unequal groups looks like.")
 
 fig, ax = plt.subplots(figsize=(11, 4.4))
 ax.barh(spk.index, -spk.total_bp_as_read,
@@ -591,7 +639,10 @@ md(r"""
 total even at the same edge. D trades 26% more often than A on a thinner average edge — which is
 exactly the shape that loses a comparison as soon as the cost is not zero.
 
-The number to find below is the round trip at which D stops being better than A.
+The number to find below is the round trip at which D stops being better than A. For scale: an SR3
+outright quotes one tick wide, and a tick on a deferred contract is 0.5 bp — so **crossing the
+spread in and out is on the order of 0.5 bp round trip**, before any market impact. That is above
+the crossover, and it is the honest place to read this table from.
 """)
 
 code(r'''
@@ -640,7 +691,7 @@ INSTRUMENTS = ([{"kind": "outright", "rank": r} for r in WARM] +
                 if s.kind != "outright" and set(s.ranks) <= set(WARM)])
 print(f"warm ranks: {WARM}   instruments priced: {len(INSTRUMENTS)}")
 
-rows = []
+rows, SWEEP, NV_SERIES = [], {}, {}
 for i in INSTRUMENTS:
     nm = i.get("structure") or f"OUT_{i['rank']}"
     ra = HC.run_config(cfg(nm, instrument=i), RAW, MDP).closed
@@ -648,6 +699,9 @@ for i in INSTRUMENTS:
                        RAW, MDP).closed
     rd = HC.run_config(cfg(nm, filters={"voters": "all"}, flip="nonvoters",
                            instrument=i), RAW, MDP).closed
+    SWEEP[f"A:{nm}"] = ra.pnl_bp.to_numpy(float)
+    SWEEP[f"D:{nm}"] = rd.pnl_bp.to_numpy(float)
+    NV_SERIES[nm] = rb.set_index("tag").pnl_bp
     rows.append({"instrument": nm,
                  "A_avg": round(ra.pnl_bp.mean(), 4), "A_t": round(G.summarize(ra)["t_stat"], 2),
                  "nonvoter_avg_as_read": round(rb.pnl_bp.mean(), 4),
@@ -665,6 +719,27 @@ print(f"non-voter drift is negative on {neg}/{len(INST)} instruments — consist
 print(f"...and reaches |t| > 2 on {sig}/{len(INST)} — never")
 print(f"D has a higher Sharpe than A on {better}/{len(INST)}")
 
+# 22 instruments is not 22 observations. They re-price the SAME ~196 events, and the
+# legs are nested, so count how many independent directions there actually are:
+# the participation ratio of the correlation matrix's eigenvalues.
+NVP = pd.DataFrame(NV_SERIES).dropna(how="any")
+Cmat = np.corrcoef(NVP.to_numpy(float).T)
+ev = np.linalg.eigvalsh(Cmat)
+eff = float(ev.sum() ** 2 / (ev ** 2).sum())
+print(f"\ncommon events across all instruments: {len(NVP)}")
+print(f"effective independent dimensions among the {len(INST)} instruments: {eff:.2f} "
+      f"(first eigenvalue carries {ev.max() / ev.sum():.1%})")
+print("so 21/22 is worth about two independent observations, not twenty-two — it says the")
+print("result is not an artefact of picking OUT_3, and nothing more than that.")
+
+# where the fade genuinely helped: Sharpe is annualised by trade count, so a book that
+# trades more can score higher on a THINNER edge. Separate the two.
+INST["D_edge_up"] = INST.D_avg > INST.A_avg
+print(f"\nD's Sharpe beats A's on {better}; D's edge PER TRADE beats A's on "
+      f"{int(INST.D_edge_up.sum())}: {list(INST.index[INST.D_edge_up])}")
+print(f"the difference is annualisation — on {list(INST.index[(INST.D_sharpe > INST.A_sharpe) & ~INST.D_edge_up])} "
+      f"D scores higher while earning less per trade")
+
 fig, ax = plt.subplots(figsize=(15, 4.4))
 x = np.arange(len(INST))
 ax.bar(x - .2, INST.A_sharpe, .4, label="A voters only", color="darkslateblue", alpha=.9)
@@ -681,11 +756,18 @@ md(r"""
 
 Same question against entry and exit. The left panel is the non-voter drift **as read** — every
 negative cell is a window in which the fade would have paid.
+
+One thing that grid does not vary, and should be said out loud. A day-only event has no recorded
+speech minute, so `retime_synthetic: False` leaves it trading the whole session in *every* cell —
+its window is identical at T−15/T+30 and at T−120/T+240. Those events are a quarter of the
+non-voter book and they carry most of its drift, so the sweep is less of a sweep than the 25 cells
+suggest. The cell measures both, and re-runs the grid on the events whose window actually moves.
 """)
 
 code(r'''
 ENTRY, EXIT = [-120, -60, -45, -15, 0], [30, 60, 120, 180, 240]
 g_nv = pd.DataFrame(index=ENTRY, columns=EXIT, dtype=float)
+g_nvt = pd.DataFrame(index=ENTRY, columns=EXIT, dtype=float)   # timed speeches only
 g_d = pd.DataFrame(index=ENTRY, columns=EXIT, dtype=float)
 g_a = pd.DataFrame(index=ENTRY, columns=EXIT, dtype=float)
 for e in ENTRY:
@@ -696,8 +778,11 @@ for e in ENTRY:
                            RAW, MDP).closed
         ra = HC.run_config(cfg("a", timing=t), RAW, MDP).closed
         g_nv.loc[e, x] = rb.pnl_bp.mean()
+        g_nvt.loc[e, x] = rb[rb.timestamp_source == "forexfactory"].pnl_bp.mean()
         g_d.loc[e, x] = G.summarize(rd)["sharpe"]
         g_a.loc[e, x] = G.summarize(ra)["sharpe"]
+        SWEEP[f"A:{e}|{x}"] = ra.pnl_bp.to_numpy(float)
+        SWEEP[f"D:{e}|{x}"] = rd.pnl_bp.to_numpy(float)
 
 fig, axes = plt.subplots(1, 3, figsize=(19, 4.4))
 sns.heatmap(g_nv.astype(float), annot=True, fmt=".2f", cmap="RdYlGn_r", center=0, ax=axes[0],
@@ -715,11 +800,116 @@ plt.tight_layout(); plt.show()
 
 print(f"non-voter drift negative in {int((g_nv < 0).sum().sum())}/{g_nv.size} windows")
 print(f"D beats A on Sharpe in {int(((g_d - g_a) > 0).sum().sum())}/{g_nv.size} windows")
+
+b_syn = B[B.timestamp_source == "synthetic"]
+b_ff = B[B.timestamp_source == "forexfactory"]
+print(f"\ncomposition: {len(b_syn)} of {len(B)} non-voter trades ({len(b_syn)/len(B):.0%}) are "
+      f"day-only events on a fixed session window,")
+print(f"and they carry {b_syn.pnl_bp.sum():+.1f}bp of the book's {B.pnl_bp.sum():+.1f}bp "
+      f"({b_syn.pnl_bp.sum()/B.pnl_bp.sum():.0%}). They do not move with the grid.")
+print(f"on the {len(b_ff)} trades whose window DOES move, the drift is "
+      f"{b_ff.pnl_bp.mean():+.4f}bp/trade and negative in "
+      f"{int((g_nvt < 0).sum().sum())}/{g_nvt.size} windows "
+      f"(positive in {int((g_nvt > 0).sum().sum())}).")
+display(pd.DataFrame([perf(b_ff, "B, timed speeches"),
+                      perf(b_syn, "B, day-only (session window)"),
+                      perf(B, "B, all")]).set_index("book"))
 ''')
 
 # ---------------------------------------------------------------------------
 md(r"""
-## 13. Trade log
+## 13. Three things that could have made this wrong, measured
+
+Each of these was raised against the run and each is answered with a number rather than an
+argument. None of them changes the verdict; two of them would have if they had gone the other way.
+
+**The rotation's start date.** `is_voter` keys on the calendar year, but the committee's membership
+actually turns over at the year's first scheduled meeting. Every speech between January 1 and that
+meeting is therefore scored under the incoming year's roster. Re-scoring those speeches under the
+*outgoing* roster moves trades across the fade, and the cell prices that alternative in full.
+
+**Windows that close before the speech.** Entry and exit are clamped into the measured session, so
+a speech late enough in the day can produce a window that ends at the close — before the speaker
+has spoken. Those trades carry no reaction at all. How many, and whose.
+
+**The search.** This notebook priced over a hundred configurations. The parent notebook deflates
+its best Sharpe by its trial count and so should this one — with the caveat that half the "trials"
+here are exact mirrors of each other (C is −B, F is −D), which inflates the spread of Sharpes the
+deflation reads as its null. Both readings are printed.
+""")
+
+code(r'''
+# --- (a) the rotation boundary --------------------------------------------
+import datetime as _dt
+meetings = FX.fomc_decision_dates()
+first_mtg = {}
+for m in meetings:
+    first_mtg.setdefault(m.year, m)
+    first_mtg[m.year] = min(first_mtg[m.year], m)
+
+
+def alt_is_voter(speaker, d):
+    """Score the speech under the roster that was actually seated that day."""
+    if d < first_mtg.get(d.year, d):
+        d = _dt.date(d.year - 1, d.month, d.day)
+    return FX.is_voter(speaker, d)
+
+
+dd = D.copy()
+dd["date"] = dd.opened_at.dt.date
+dd["alt_is_voter"] = [alt_is_voter(s, x) for s, x in zip(dd.speaker, dd.date)]
+dd["in_gap"] = [x < first_mtg.get(x.year, x) for x in dd.date]
+changed = dd[dd.alt_is_voter != dd.is_voter]
+alt_flip = np.where(dd.alt_is_voter == False, -1.0, 1.0)
+dd["pnl_alt"] = dd.pnl_bp * alt_flip / dd["flip"]
+s_alt = G.summarize(dd.assign(pnl_bp=dd.pnl_alt))
+print(f"trades between Jan 1 and that year's first FOMC : {int(dd.in_gap.sum())} of {len(dd)}")
+print(f"of those, class changes under the seated roster : {len(changed)}")
+print(f"D as published        {D.pnl_bp.sum():+.1f}bp   Sharpe {G.summarize(D)['sharpe']:.3f}"
+      f"   t {G.summarize(D)['t_stat']:.3f}")
+print(f"D under the alt rule  {s_alt['total']:+.1f}bp   Sharpe {s_alt['sharpe']:.3f}"
+      f"   t {s_alt['t_stat']:.3f}")
+print(f"A for comparison      {A.pnl_bp.sum():+.1f}bp   Sharpe {G.summarize(A)['sharpe']:.3f}")
+print("-> the convention moves the level; it does not move the ranking, which is the claim.")
+
+# --- (b) windows that end before the speech --------------------------------
+sp = {e["tag"]: pd.Timestamp(e["speech_ts"]) for e in RAW}
+dd["speech_ts"] = dd.tag.map(sp)
+pre = dd[dd.closed_at <= dd.speech_ts]
+print(f"\ntrades whose window closes at or before the speech : {len(pre)} of {len(dd)}"
+      f"   ({pre.pnl_bp.sum():+.1f}bp)")
+if len(pre):
+    print(f"  all voters? {bool((pre.is_voter == True).all())}   "
+          f"speech times {sorted(set(pre.speech_ts.dt.strftime('%H:%M')))}")
+    print("  they are late-session speeches whose exit clamps to the close. Inherited from the")
+    print("  parent config, present in A and D alike, so every A-vs-D comparison is unaffected.")
+
+# --- (c) the search, deflated ----------------------------------------------
+SWEEP["A:headline"] = A.pnl_bp.to_numpy(float)
+SWEEP["D:headline"] = D.pnl_bp.to_numpy(float)
+SWEEP["E:everyone"] = E.pnl_bp.to_numpy(float)
+runs = {k: v for k, v in SWEEP.items() if len(v) >= 20}
+sr_pt = {k: (v.mean() / v.std(ddof=1)) for k, v in runs.items()}
+var_sr = float(np.var(list(sr_pt.values()), ddof=1))
+sr_star = GRID.expected_max_sharpe(var_sr, len(runs))
+print(f"\n{len(runs)} non-mirror configurations scored "
+      f"(C and F are exact negatives of B and D and are excluded)")
+print(f"variance of observed per-trade Sharpes {var_sr:.5f}   "
+      f"selection hurdle sr* = {sr_star:.4f} per trade")
+display(pd.DataFrame([
+    {"book": nm, "trades": len(v), "sr_per_trade": round(v.mean() / v.std(ddof=1), 4),
+     "total_bp": round(v.sum(), 1), "dsr": round(GRID.deflated_sharpe(v, sr_star), 4)}
+    for nm, v in [("A voters only", A.pnl_bp.to_numpy(float)),
+                  ("D combined", D.pnl_bp.to_numpy(float)),
+                  ("C non-voters FADED", Cc.pnl_bp.to_numpy(float)),
+                  ("E everyone as read", E.pnl_bp.to_numpy(float))]]).set_index("book"))
+print("D is not a winner picked from this sweep — it is the config the question defined, and the")
+print("sweep is printed in full, losers included. But the deflation is the right hurdle to read")
+print("it against, and against it neither A nor D is alive.")
+''')
+
+md(r"""
+## 14. Trade log
 """)
 
 code(r'''
@@ -743,12 +933,20 @@ print(f"wrote {out}")
 
 # ---------------------------------------------------------------------------
 md(r"""
-## 14. What this says
+## 15. What this says
 
 **The seam is real; the trade is not.** Splitting the book on the published rotation is not one of
 many arbitrary cuts — §7 shows the non-voter partition beats essentially all random partitions of
 the same size, and the sign of the non-voter drift is negative on 21 of 22 instruments and in all
 25 entry/exit windows. Something genuinely different happens around a president who cannot vote.
+
+Read that carefully, though, because the sign counts are worth less than they look and the p-value
+is measuring something narrower than it appears. The 22 instruments are re-pricings of the same
+~196 events on nested legs — about **two** independent directions, not twenty-two — and the 25
+windows are fewer still, with a quarter of the book on a fixed session window that the grid never
+re-times. And the partition test measures the **gap** between the halves (≈1.39 bp/trade inside the
+combined book), which is carried more by the voters being strongly positive than by the non-voters
+being negative: set the non-voter drift to exactly zero and the same test still rejects at p≈0.02.
 
 **But "different" here means "no drift", and that is what the thesis predicted.** The non-voter
 book as read is −0.38 bp/trade with a standard error of 0.34: a bootstrap CI that contains zero, a
@@ -765,19 +963,32 @@ round trip of 0.371 bp: below that the fade pays for itself, above it the 105 ex
 more than they bring in.
 
 **Where it *did* help is worth saying.** D beat A on Sharpe on 8 of 22 instruments and 7 of 25
-entry/exit windows — and they are the ones where A itself is weak (the back spreads SPR_3_4 through
-SPR_5_6, SPR_2_4, SPR_3_5). On an instrument with no voter signal to dilute, a thin fade is an
-improvement on nothing. That is a much smaller claim than the one this notebook set out to test,
-and it is the only version of it the data supports.
+entry/exit windows. Six of those eight are the back spreads — SPR_3_4, SPR_4_5, SPR_5_6, SPR_2_4,
+SPR_3_5, SPR_4_6 — where A itself has no signal to dilute (five of the six have |t| < 2 on the
+voter book alone), and on those six the fade raised the edge *per trade*, not just the annualised
+Sharpe. The other two, OUT_6 and SPR_2_3, are annualisation artefacts: D's per-trade edge falls
+there and only the higher trade count lifts the Sharpe. On an instrument with nothing to dilute, a
+thin fade is an improvement on nothing — a much smaller claim than the one this notebook set out to
+test, and the only version of it the data supports.
 
-**And the fade is three people.** Goolsbee, Bostic and Mester supply more than the whole of the
-non-voter book's negative drift; the other ten non-voters are net positive as read, so the fade
-loses on them. A "the market ignores non-voters" story should not be carried by a quarter of the
-speakers.
+**The fade is three people — but that is not, by itself, an argument.** Goolsbee, Bostic and
+Mester supply more than the whole of the non-voter book's negative drift, and the other ten
+non-voters are net positive as read. It is tempting to read that as the result falling apart, and
+§8 checks: reshuffling the same P&L across the same thirteen group sizes produces a worst-three
+concentration at least this extreme about 30% of the time. So the concentration is exactly what a
+near-zero book of this shape looks like. It is a reason not to call the fade a market-wide
+behaviour; it is not independent evidence against it.
+
+**And most of the fade is not an intraday reaction at all.** 55 of the 196 non-voter trades are
+day-only events — a date, but no recorded speech minute — so they trade the whole session rather
+than a window around the speaker. Those 55 carry −52.5 bp of the book's −75.0 bp. On the 141 trades
+that *do* have a speech time, the drift is **−0.16 bp/trade, t = −0.43** — for practical purposes
+nothing. The intraday version of this thesis, the one the notebook is named for, is the version the
+data supports least.
 
 **Read the sign flip as one more trial, not as a discovery.** B was already a row on the parent
 notebook's filter table. C is that row with a minus in front of it, and the minus was chosen after
-seeing the row.
+seeing the row. §13 deflates by the trial count and neither A nor D clears the hurdle.
 """)
 
 nb = nbf.v4.new_notebook(cells=C)
