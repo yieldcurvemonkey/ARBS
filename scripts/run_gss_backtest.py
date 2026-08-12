@@ -95,8 +95,16 @@ def main() -> int:
             print(f"VARIANT | {label}", flush=True)
             print("   diag " + str({k: r.diagnostics[k] for k in
                                     ("marked_days", "equity_holes", "signal_entries", "closed_positions")}), flush=True)
-            print("   summ " + str({k: (round(v, 3) if isinstance(v, float) else v)
-                                    for k, v in r.summary().items()}), flush=True)
+            sm = r.summary()
+            print("   summ " + str({k: (round(v, 1) if isinstance(v, float) else v)
+                                    for k, v in sm.items()}), flush=True)
+            # the reconciliation, stated rather than assumed
+            print(f"   recon price={sm.get('price_pnl_usd', float('nan')):,.0f} "
+                  f"+ coupons={sm.get('coupon_pnl_usd', float('nan')):,.0f} "
+                  f"+ financing={sm.get('financing_pnl_usd', float('nan')):,.0f} "
+                  f"+ open={sm.get('open_mtm_usd', float('nan')):,.0f} "
+                  f"=> equity={sm.get('end_equity_usd', float('nan')):,.0f} "
+                  f"(gap {sm.get('reconciliation_gap_usd', float('nan')):,.0f})", flush=True)
         except Exception as exc:  # noqa: BLE001
             print(f"VARIANT | {label} FAILED {type(exc).__name__}: {exc}", flush=True)
     print("GSSDONE", flush=True)

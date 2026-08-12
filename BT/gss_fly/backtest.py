@@ -46,10 +46,30 @@ class GSSResult:
 
 
 def summarize(res: "GSSResult") -> Dict[str, float]:
+    """Summary metrics, with the price leg and the carry leg kept apart.
+
+    The engine's ``mtm_history`` is **cumulative total P&L**: ``mark_to_market`` seeds it with
+    ``self.realized_pnl`` and adds the open positions' marks (``BT/query_engine.py:278``), and the
+    financed-bond handler marks each position net of its entry NPV
+    (``Query/FixedRateBonds/position_handler.py:431``). So ``equity`` is the right object for
+    Sharpe and drawdown.
+
+    ``closed["realized_pnl"]`` is **not** the trade's P&L. It is only the unwind price leg —
+    ``(exit NPV - entry NPV) - fee`` — because coupons and repo financing are realised during the
+    hold via ``on_mark`` and accumulate into ``realized_pnl`` without ever appearing in the closed
+    log. For a cash-bond fly that omission is not a rounding difference: the book is
+    maturity-weighted, not cash-neutral, so it carries a large net financed position and the carry
+    leg is the same order of magnitude as the price leg. Summing the closed log and calling it the
+    strategy's P&L therefore reports the price leg alone, which flatters it.
+
+    Both are reported, explicitly named, and the components are broken out from the handler's own
+    ledgers so the two can be reconciled rather than merely asserted.
+    """
     eq = res.equity.dropna()
     daily = eq.diff().dropna()
     out: Dict[str, float] = {
         "marked_days": int(len(eq)),
+        # cumulative total P&L: price + coupons + financing + open mark
         "end_equity_usd": float(eq.iloc[-1]) if len(eq) else np.nan,
         "closed_trades": int(len(res.closed)),
     }
@@ -57,20 +77,58 @@ def summarize(res: "GSSResult") -> Dict[str, float]:
         out["daily_sharpe_ann"] = float(daily.mean() / daily.std(ddof=1) * np.sqrt(252))
     cum = eq - eq.cummax()
     out["max_dd_usd"] = float(cum.min()) if len(cum) else np.nan
+
+    out.update(_pnl_components(res))
+
     if not res.closed.empty and "realized_pnl" in res.closed.columns:
         p = res.closed["realized_pnl"].astype(float)
         out.update(
             {
-                "net_realized_usd": float(p.sum()),
-                "avg_per_trade_usd": float(p.mean()),
-                "hit_rate": float((p > 0).mean()),
+                # renamed from `net_realized_usd`, which read as the strategy's P&L and is not
+                "price_pnl_usd": float(p.sum()),
+                "avg_price_per_trade_usd": float(p.mean()),
+                "hit_rate_price_only": float((p > 0).mean()),
                 "median_hold_days": float(res.closed["holding_period_days"].median())
                 if "holding_period_days" in res.closed.columns
                 else np.nan,
             }
         )
         if len(p) > 2 and p.std(ddof=1) > 0:
-            out["t_stat"] = float(p.mean() / (p.std(ddof=1) / np.sqrt(len(p))))
+            # a t-stat on the PRICE leg only; carry is not in these numbers
+            out["t_stat_price_only"] = float(p.mean() / (p.std(ddof=1) / np.sqrt(len(p))))
+    return out
+
+
+def _pnl_components(res: "GSSResult") -> Dict[str, float]:
+    """Coupons, financing and open mark, from the financed-bond handler's own ledgers.
+
+    ``FinancedFixedRateBondHandler`` keeps running totals on the backtest object as
+    ``frb_component_histories`` (``Query/FixedRateBonds/position_handler.py:236``). Reading them is
+    what makes the reconciliation checkable: price + coupons + financing + open mark must equal the
+    end of the equity curve, and ``reconciliation_gap_usd`` states by how much it does not.
+    """
+    out: Dict[str, float] = {}
+    hist = getattr(res.backtest, "frb_component_histories", None)
+    if not hist:
+        return out
+
+    def _last(key: str) -> float:
+        h = hist.get(key) or {}
+        if not h:
+            return 0.0
+        return float(pd.Series(h).sort_index().iloc[-1])
+
+    coupons = _last("bond_realized")
+    financing = _last("financing_realized")
+    open_mtm = _last("bond_open_mtm")
+    out["coupon_pnl_usd"] = coupons
+    out["financing_pnl_usd"] = financing
+    out["open_mtm_usd"] = open_mtm
+
+    eq = res.equity.dropna()
+    if len(eq) and not res.closed.empty and "realized_pnl" in res.closed.columns:
+        price = float(res.closed["realized_pnl"].astype(float).sum())
+        out["reconciliation_gap_usd"] = float(eq.iloc[-1] - (price + coupons + financing + open_mtm))
     return out
 
 
