@@ -1,0 +1,361 @@
+"""Materialised dealer-direction tables — DDL and the table-name constants.
+
+Direction cannot be computed at request time. It needs ``rateslib``, the local
+Citi Velocity minute curve store (a DuckDB/parquet cache the web tier has no
+access to) and ~180 s of CPU per tape day for repricing plus key-rate risk. So
+a batch job materialises it here and the front end reads it.
+
+FOUR TABLES, AND WHY FOUR
+=========================
+
+Two are expensive to produce and two are cheap, and the split is drawn on
+exactly that line so that a bug in the cheap half never costs a re-run of the
+expensive half.
+
+``arbs_dd_unit_v1``
+    One row per **unit** — the same object as one row of
+    ``arbs_usd_swap_tape_display_v3``. Carries the call, the three clocks, the
+    exclusion reason where there is one, and the provenance. Expensive.
+
+``arbs_dd_unit_bucket_v1``
+    One row per (unit, tenor bucket), signed. This is
+    ``ladder.unit_ladder_rows()`` rolled up to ``indicator``'s ten reporting
+    buckets. The ladder and the daily indicator are both *pure functions* of
+    this table, so an aggregation or z-score defect is repaired by
+    re-aggregating in minutes rather than repricing for a day. Expensive.
+
+``arbs_dd_coverage_v1``
+    Per (visibility date, bucket, venue class, series, **reason**) the unit
+    count and the DV01 behind it, where ``reason`` is either ``IN_LADDER`` or
+    an exclusion code. Two jobs in one table: ``indicator.build`` *requires*
+    coverage as ``dv01_kept`` **and** ``dv01_total`` (a ratio cannot be
+    re-aggregated), and the front end needs the exclusion breakdown by DV01
+    share. Both roll up from the same rows, so they cannot disagree. Cheap.
+
+``arbs_dd_ladder_v1``
+    The published indicator cell, one row per
+    (bucket_space, bucket_key, visibility_date, venue_class, series). Its
+    columns mirror ``indicator.CELL_COLUMNS`` **verbatim**. Cheap, and
+    rebuilt wholesale on every run — see REBUILD WHOLESALE below.
+
+WHAT IS NOT STORED: THE 28 KRD PILLARS
+======================================
+
+``krd.krd_frame`` produces one row per (unit × KRD pillar) over 28 pillars.
+Across the tape that is tens of millions of rows. It is **not** materialised
+here, deliberately:
+
+* no web view reads a pillar. The panel is on the ten ``TENOR10`` buckets and
+  the per-trade drill-down is a ten-bucket profile;
+* the roll-up is **not lossy for anything published**. ``ladder.aggregate``,
+  ``indicator.daily_levels`` and every column of ``arbs_dd_ladder_v1`` are
+  computed from the ``TENOR10`` rows, so ``arbs_dd_unit_bucket_v1`` is a
+  sufficient statistic for the whole published surface;
+* the pillar frame is written un-lossy to the parquet stage cache on ``D:``
+  by the runner anyway, which is where any future pillar question would be
+  answered — and it is a local file, which the web tier could not read.
+
+Storing 65 M rows that no consumer reads, behind a connection pooler, to
+protect against a re-derivation that is already protected, is a cost with no
+buyer. If a pillar-grained consumer ever appears, the parquet is the source
+and a fifth table is an additive change.
+
+THE JOIN KEY IS ``package_id``, NOT ``unit_key``
+================================================
+
+Measured on five days spanning the whole tape (``scratch/ddfe02_*``): the
+display view and ``universe.unit_frame`` agree on the *grain* exactly and on
+only **21.7–29.3% of the keys**. ``universe.py:614`` sets
+``unit_key = trade_id`` for a single-leg unit, while the view keys that same
+row by its ``package_id`` — and a single-leg print that still carries a
+package id (``MATCHED_MATURITY_…``, ``SPREADOVER_…``) is most of the tape.
+On ``package_id`` the join is **100.0000%**, both directions, every day tried.
+
+Both keys are stored. ``unit_key`` is the backend's identity and every
+``dealer_direction`` frame is keyed on it, so dropping it would break the
+audit trail back to the ladder. ``package_id`` is what the front end joins.
+Deriving one from the other at read time would put the ``n_legs <= 1`` branch
+in a SQL ``CASE`` on the web tier, which is where it would be got wrong.
+
+THE REFUSAL CANNOT LIVE HERE
+============================
+
+``indicator`` refuses a cross-bucket *level* comparison structurally: the
+level column is named for its bucket (``delta_dv01__5_7Y``), so a naive
+concat is a NaN block diagonal. A relational table cannot do that — buckets
+are rows, and ``SELECT bucket_key, delta_dv01 … WHERE visibility_date = $1``
+is one line of SQL. **The enforcement point is therefore the API route**, and
+it is asserted by a route test:
+
+* the level endpoint accepts exactly one ``bucket`` and returns one bucket's
+  series;
+* the all-buckets endpoint returns ``z``/percentile and **no level-named
+  key**.
+
+The measurement that makes this necessary: DV01 retention runs 0.761 at 0-1Y
+down to 0.495 at 15-20Y, a 1.54x cross-bucket scaling distortion, because the
+packages the classifier cannot orient are not a random sample. ``z`` is
+exactly invariant to a constant retention factor and is the one
+cross-bucket-safe view.
+
+REBUILD WHOLESALE
+=================
+
+``arbs_dd_ladder_v1`` must be rebuilt over the **whole** history on every
+run, never appended to. ``indicator``'s adjusted level divides by
+``mean(coverage)`` over the full sample and its ``z`` is a trailing-250
+statistic, so extending history restates earlier cells. Appending would leave
+a table whose old rows were computed against a shorter sample than its new
+ones, with nothing to say so.
+
+``arbs_dd_unit_v1`` / ``arbs_dd_unit_bucket_v1`` / ``arbs_dd_coverage_v1`` are
+per-day and are delete-and-rewritten one ``as_of_date`` at a time.
+
+NAMING
+======
+
+``_v1`` is this feature's own version, not the tape's. The tape generation it
+was built from is carried explicitly in ``tape_generation`` on every unit row
+(and hashed into ``code_vintage``), so a reader can tell without decoding a
+hash. Index names carry the version for the reason ``_tape_tables.py:17-21``
+records: index names are schema-global, so a v2 name on a v1 table silently
+no-ops and leaves the table unindexed with nothing raised.
+"""
+from __future__ import annotations
+
+from ._tape_tables import TAPE_GENERATION
+
+#: This feature's own version. Deliberately a constant, not an env var, for
+#: the reason `tape-tables.ts` gives: a missing env var must never silently
+#: select the wrong generation. Mirrored in the dashboard at
+#: `src/lib/dealer-direction-tables.ts` and asserted equal by a test there.
+DD_GENERATION = "v1"
+
+IDX_INFIX = DD_GENERATION
+
+
+def _t(base: str) -> str:
+    return f"arbs_dd_{base}_{DD_GENERATION}"
+
+
+UNIT_TABLE = _t("unit")
+UNIT_BUCKET_TABLE = _t("unit_bucket")
+COVERAGE_TABLE = _t("coverage")
+LADDER_TABLE = _t("ladder")
+RUNS_TABLE = _t("runs")
+
+#: The tape generation these rows were built from. Written to every unit row.
+SOURCE_TAPE_GENERATION = TAPE_GENERATION
+
+#: ``reason`` value for a unit that reached the ladder. Mirrors
+#: ``provenance.IN_LADDER`` -- imported rather than re-spelled would create an
+#: import cycle from a schema module into the analytics package, so it is
+#: pinned here and asserted equal in the tests.
+IN_LADDER = "IN_LADDER"
+
+
+DDL_STATEMENTS = [
+    # ---------------------------------------------------------------- units
+    f"""
+CREATE TABLE IF NOT EXISTS {UNIT_TABLE} (
+    package_id              TEXT PRIMARY KEY,
+    unit_key                TEXT NOT NULL,
+    as_of_date              DATE NOT NULL,
+
+    -- three clocks, always. Every aggregation stamps on `visibility_*`;
+    -- execution time is lookahead and is carried for transparency only.
+    execution_timestamp     TIMESTAMPTZ,
+    event_timestamp         TIMESTAMPTZ,
+    visibility_timestamp    TIMESTAMPTZ,
+    visibility_date         DATE,
+    visibility_source       TEXT,
+    pricing_timestamp       TIMESTAMPTZ,
+    pricing_clock_field     TEXT,
+    report_lag_seconds      DOUBLE PRECISION,
+    visibility_lag_seconds  DOUBLE PRECISION,
+
+    -- the call. `p` is p(customer paid fixed) = p(dealer RECEIVED fixed).
+    -- NULL `p` is a real state (a recovered PKG-N has a sign but no fitted
+    -- tau); it must never be read as 0.5 or as 1.0.
+    dealer_direction        TEXT NOT NULL,
+    dealer_sign             SMALLINT,
+    p                       DOUBLE PRECISION,
+    signed_weight           DOUBLE PRECISION,
+    rule                    TEXT,
+    deviation_bps           DOUBLE PRECISION,
+    tau_bps                 DOUBLE PRECISION,
+    tau_bucket              TEXT,
+    mid_bias_bps            DOUBLE PRECISION,
+    in_dead_zone            BOOLEAN,
+    exclusion_reason        TEXT,
+    exclusion_detail        TEXT,
+
+    -- unit shape
+    kind                    TEXT,
+    n_legs                  SMALLINT,
+    rate_index              TEXT,
+    venue_class             TEXT,
+    series                  TEXT,
+    is_lifecycle            BOOLEAN,
+    is_block                BOOLEAN,
+    is_capped               BOOLEAN,
+
+    -- risk. `dv01_proxy` is the annuity proxy and is present even on an
+    -- excluded unit, which is what makes the coverage denominator knowable.
+    -- The tape's own `risk` column is never summed anywhere (55 legs carry
+    -- the spec's 1e20 "value not available" sentinel and dominate every
+    -- aggregate).
+    total_dv01_if_received  DOUBLE PRECISION,
+    total_delta_dv01        DOUBLE PRECISION,
+    structure_dv01          DOUBLE PRECISION,
+    dv01_proxy              DOUBLE PRECISION,
+
+    -- provenance
+    curve_name              TEXT,
+    curve_timestamp         TIMESTAMPTZ,
+    snapshot_lag_seconds    DOUBLE PRECISION,
+    snapshot_policy         TEXT,
+    curve_source            TEXT,
+    notional_imputed        BOOLEAN,
+    notional_impute_factor  DOUBLE PRECISION,
+    risk_sanity_reason      TEXT,
+    tape_generation         TEXT NOT NULL,
+    code_vintage            TEXT NOT NULL,
+    computed_at             TIMESTAMPTZ NOT NULL DEFAULT now()
+)""",
+    f"CREATE INDEX IF NOT EXISTS idx_dd_{IDX_INFIX}_unit_asof "
+    f"ON {UNIT_TABLE} (as_of_date)",
+    f"CREATE INDEX IF NOT EXISTS idx_dd_{IDX_INFIX}_unit_vis "
+    f"ON {UNIT_TABLE} (visibility_date)",
+    f"CREATE INDEX IF NOT EXISTS idx_dd_{IDX_INFIX}_unit_key "
+    f"ON {UNIT_TABLE} (unit_key)",
+    f"CREATE INDEX IF NOT EXISTS idx_dd_{IDX_INFIX}_unit_dir "
+    f"ON {UNIT_TABLE} (dealer_direction, as_of_date)",
+    # Partial: the exclusion breakdown only ever scans the excluded rows, and
+    # ~58% of the table has a NULL reason.
+    f"CREATE INDEX IF NOT EXISTS idx_dd_{IDX_INFIX}_unit_excl "
+    f"ON {UNIT_TABLE} (exclusion_reason, as_of_date) "
+    f"WHERE exclusion_reason IS NOT NULL",
+    f"CREATE INDEX IF NOT EXISTS idx_dd_{IDX_INFIX}_unit_vintage "
+    f"ON {UNIT_TABLE} (code_vintage)",
+
+    # --------------------------------------------------------- unit x bucket
+    f"""
+CREATE TABLE IF NOT EXISTS {UNIT_BUCKET_TABLE} (
+    package_id              TEXT NOT NULL,
+    bucket_key              TEXT NOT NULL,
+    unit_key                TEXT NOT NULL,
+    as_of_date              DATE NOT NULL,
+    visibility_date         DATE NOT NULL,
+    venue_class             TEXT NOT NULL,
+    series                  TEXT NOT NULL,
+    bucket_space            TEXT NOT NULL,
+    dv01_if_received        DOUBLE PRECISION NOT NULL,
+    delta_dv01              DOUBLE PRECISION NOT NULL,
+    signed_weight           DOUBLE PRECISION,
+    code_vintage            TEXT NOT NULL,
+    PRIMARY KEY (package_id, bucket_key)
+)""",
+    f"CREATE INDEX IF NOT EXISTS idx_dd_{IDX_INFIX}_ub_asof "
+    f"ON {UNIT_BUCKET_TABLE} (as_of_date)",
+    # Equality columns first, then the range column, per the composite-index
+    # rule: every aggregate read is
+    #   WHERE venue_class = $1 AND series = $2 AND bucket_key = $3
+    #     AND visibility_date BETWEEN $4 AND $5
+    f"CREATE INDEX IF NOT EXISTS idx_dd_{IDX_INFIX}_ub_cell "
+    f"ON {UNIT_BUCKET_TABLE} (venue_class, series, bucket_key, visibility_date)",
+
+    # ------------------------------------------------------------- coverage
+    f"""
+CREATE TABLE IF NOT EXISTS {COVERAGE_TABLE} (
+    visibility_date         DATE NOT NULL,
+    bucket_key              TEXT NOT NULL,
+    venue_class             TEXT NOT NULL,
+    series                  TEXT NOT NULL,
+    reason                  TEXT NOT NULL,
+    n_units                 INTEGER NOT NULL,
+    dv01                    DOUBLE PRECISION NOT NULL,
+    as_of_date              DATE NOT NULL,
+    code_vintage            TEXT NOT NULL,
+    PRIMARY KEY (visibility_date, bucket_key, venue_class, series, reason)
+)""",
+    f"CREATE INDEX IF NOT EXISTS idx_dd_{IDX_INFIX}_cov_asof "
+    f"ON {COVERAGE_TABLE} (as_of_date)",
+    f"CREATE INDEX IF NOT EXISTS idx_dd_{IDX_INFIX}_cov_cell "
+    f"ON {COVERAGE_TABLE} (venue_class, series, bucket_key, visibility_date)",
+
+    # --------------------------------------------------------------- ladder
+    # Column-for-column `indicator.CELL_COLUMNS` plus the two coverage
+    # columns `build` appends. Renaming anything at this seam is where a
+    # translation bug would live, so nothing is renamed.
+    f"""
+CREATE TABLE IF NOT EXISTS {LADDER_TABLE} (
+    bucket_space                    TEXT NOT NULL,
+    bucket_key                      TEXT NOT NULL,
+    visibility_date                 DATE NOT NULL,
+    venue_class                     TEXT NOT NULL,
+    series                          TEXT NOT NULL,
+    observed                        BOOLEAN NOT NULL,
+    delta_dv01                      DOUBLE PRECISION,
+    delta_dv01_cov_adj              DOUBLE PRECISION,
+    abs_dv01                        DOUBLE PRECISION,
+    n_units                         INTEGER,
+    mean_abs_signed_weight          DOUBLE PRECISION,
+    z_raw                           DOUBLE PRECISION,
+    z_cov_adj                       DOUBLE PRECISION,
+    pct_raw                         DOUBLE PRECISION,
+    z_n_obs                         INTEGER,
+    coverage_frac                   DOUBLE PRECISION,
+    coverage_smooth                 DOUBLE PRECISION,
+    coverage_drift_flag             BOOLEAN,
+    coverage_trend_pp_per_yr        DOUBLE PRECISION,
+    coverage_drift_source           TEXT,
+    frac_dv01_block                 DOUBLE PRECISION,
+    frac_dv01_capped                DOUBLE PRECISION,
+    frac_dv01_dead_zone             DOUBLE PRECISION,
+    frac_dv01_visibility_measured   DOUBLE PRECISION,
+    code_vintage                    TEXT,
+    primary_level_basis             TEXT NOT NULL,
+    coverage_dv01_kept              DOUBLE PRECISION,
+    coverage_dv01_total             DOUBLE PRECISION,
+    computed_at                     TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (bucket_space, bucket_key, visibility_date, venue_class, series)
+)""",
+    f"CREATE INDEX IF NOT EXISTS idx_dd_{IDX_INFIX}_lad_series "
+    f"ON {LADDER_TABLE} (venue_class, series, bucket_key, visibility_date)",
+    # The cross-bucket z view reads one date across all buckets.
+    f"CREATE INDEX IF NOT EXISTS idx_dd_{IDX_INFIX}_lad_date "
+    f"ON {LADDER_TABLE} (visibility_date, venue_class, series)",
+
+    # ----------------------------------------------------------------- runs
+    # An audit row per (day, stage). "exit code 0" is not evidence a day
+    # produced anything, so the runner records what it actually wrote and the
+    # completion check reads THIS, not the process's status.
+    f"""
+CREATE TABLE IF NOT EXISTS {RUNS_TABLE} (
+    run_id          BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    as_of_date      DATE NOT NULL,
+    stage           TEXT NOT NULL,
+    started_at      TIMESTAMPTZ NOT NULL,
+    ended_at        TIMESTAMPTZ,
+    status          TEXT NOT NULL,
+    n_legs          INTEGER,
+    n_units         INTEGER,
+    n_units_kept    INTEGER,
+    n_unit_rows     INTEGER,
+    n_coverage_rows INTEGER,
+    seconds         DOUBLE PRECISION,
+    code_vintage    TEXT,
+    error_text      TEXT
+)""",
+    f"CREATE INDEX IF NOT EXISTS idx_dd_{IDX_INFIX}_runs_day "
+    f"ON {RUNS_TABLE} (as_of_date, stage)",
+]
+
+
+def ensure_schema(conn) -> None:
+    """Create the four tables and the runs ledger. Idempotent."""
+    with conn.cursor() as cur:
+        for stmt in DDL_STATEMENTS:
+            cur.execute(stmt)
+    conn.commit()
