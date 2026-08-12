@@ -297,7 +297,12 @@ def _assert_clocks_agree(units, clock_by_group, u) -> None:
             raise AssertionError(
                 f"no locally-built clocks for kept unit {unit.unit_key!r}")
         theirs = unit.clocks
-        for field in ("visibility", "execution", "event", "visibility_source"):
+        # `pricing` is in this list deliberately. It is the clock F-22 exists
+        # about -- a unit sorted or anchored on the wrong one gets a curve
+        # from after its own print -- and it is the field this reimplementation
+        # persists into the audit trail, so it is the one that must not drift.
+        for field in ("pricing", "visibility", "execution", "event",
+                      "visibility_source"):
             a, b = getattr(mine[0], field), getattr(theirs, field)
             if pd.isna(a) if not isinstance(a, str) else False:
                 if not (pd.isna(b) if not isinstance(b, str) else False):
@@ -781,9 +786,13 @@ def build_calibrations(paths: Paths, days: list[str], *, refresh: bool = False):
     repaired in minutes; a two-hour refit on every run would take that back.
 
     The key is the exact input, not the window bounds: the day list, the fit
-    parameters, and the deviation count. A day re-priced after a code change
-    keeps its place in the day list but changes the count, so it misses the
-    cache -- which is the direction this error has to fall.
+    parameters, and a **hash of the deviation values themselves**.
+
+    A count would not do, and the difference matters. A re-price that changes
+    what the deviations *are* without changing how many there are -- a curve
+    fix, a snapshot-policy change, the exact class of edit that motivates a
+    re-price at all -- would hit a stale cache and publish a calibration
+    fitted to numbers that no longer exist, with nothing anywhere to say so.
     """
     import hashlib
     import pickle
@@ -803,10 +812,11 @@ def build_calibrations(paths: Paths, days: list[str], *, refresh: bool = False):
     cal_df["as_of_date"] = pd.to_datetime(cal_df["as_of_date"]).dt.date
     print(f"calibration input: {len(cal_df):,} RATE_VS_MID deviations over "
           f"{cal_df['as_of_date'].nunique()} days", flush=True)
+    content = int(pd.util.hash_pandas_object(cal_df, index=False).sum())
     key = hashlib.sha256(
         ("|".join(days)
          + f"|{CALIB_WINDOW_DAYS}|{CALIB_MIN_GAP_DAYS}|{CALIB_STEP_DAYS}"
-         + f"|{len(cal_df)}").encode()
+         + f"|{len(cal_df)}|{content}").encode()
     ).hexdigest()[:16]
     cache = paths.root / "calibrations" / f"{key}.pkl"
     if cache.exists() and not refresh:
@@ -1353,6 +1363,19 @@ def build_and_write_ladder(conn, tenor_rows, cov_rows, dry_run: bool) -> int:
     saying so.
     """
     from SDRUtils.dealer_direction import indicator as ind
+
+    # Both sides of the coverage merge are forced to `datetime.date`.
+    # `tenor_rows.visibility_date` is a fresh `datetime.date` out of
+    # `ladder._unit_meta`; `cov_rows.visibility_date` has been through a
+    # parquet round trip, which can hand back `datetime64[ns]` or an object
+    # column of dates depending on the writer. A type mismatch here does not
+    # raise -- the merge simply matches nothing, every published cell looks
+    # uncovered, and `indicator.build` raises `CoverageGap` on the whole run.
+    tenor_rows = tenor_rows.copy()
+    cov_rows = cov_rows.copy()
+    for frame in (tenor_rows, cov_rows):
+        frame["visibility_date"] = (
+            pd.to_datetime(frame["visibility_date"]).dt.date)
 
     kept = np.where(cov_rows["reason"].to_numpy() == S.IN_LADDER,
                     cov_rows["dv01"].to_numpy(), 0.0)
