@@ -91,13 +91,49 @@ problem; its objective is `P = 0.5·λ·Σ` against cvxopt's own ½, so the opti
 two against textbook; the sqrt-market-impact + quadratic-constraint path has the author's own
 undiagnosed infeasibility and is untested.
 
+## Live Citi Velocity (2026-08-12, Excel launched and signed in after 4.8 min / 1 login press)
+
+**The sign is SETTLED: `+1`.** Two independent tests agree, and the checker was itself verified
+against synthetic inverted and ambiguous wires before being trusted:
+
+| test | result |
+|---|---|
+| levels | EUR/USD 5Y median **−23.30 bp**, USD/JPY **−67.36**, GBP/USD **−10.42** — all negative, the market convention |
+| COVID squeeze | −15.17 → **−32.83**, i.e. widened *negative* |
+
+**Warm complete** — xccy 102,222 values, repo 78,316 (GC + all three OTR specials), money markets
+16,272, all 2012-11 → today.
+
+### Three findings that change how the port should be read
+
+1. **Citi's xccy history begins 2012-11-01**, not 2005 (3,551 rows on EUR/USD 5Y). **The 2008
+   crisis is not available** — and on the archive's own data that crisis is where essentially all
+   of the IR came from.
+2. **The "which leg" premise is wrong.** `BASE_LEG` and `SPREAD_LEG` are *both* materially non-zero
+   and nearly equal (−22.56 vs −23.30). The module assumes one carries the spread and the other is
+   flat. Collateral currency remains untestable from levels.
+3. **Live carry is a different object.** Same window, same instruments: the archive's model-implied
+   carry is **+1.519 bp/yr** median against Citi's quoted-grid **+0.289** — same sign, ~5× smaller.
+   That is model-vs-market in the forward-basis term structure, and it explains the 4.6× lower
+   turnover and the different era profile.
+
+### Live run — 2013-07 → 2026-08, 16 instruments, `sign=+1`
+
+Panel IR **gross +0.270 / net +0.229**; breakeven cost **3.26 bp**; mean turnover 0.034/day.
+Era split (net): 2013-15 **−0.17**, 2016-19 **+0.46**, 2020-22 **+0.31**, 2023-26 **+0.81**.
+Engine: 3,390 marks, **0 equity holes**, 362 closed positions, +$60.3k.
+
+**Treat the improving profile with caution.** It is the opposite of the banked story, it rests on a
+carry definition five times smaller, and there is still no measured cost line to put against the
+3.26 bp breakeven.
+
 ## Still open
 
-* **Excel was not running**, so no cross-currency or repo history could be warmed. `xccy_rv` ships
-  on the banked 2005-2015 panels; `scripts/warm_citivelo_xccy_repo.py` is the runbook for when it is.
-* The three cross-currency conventions — spread-leg currency, collateral currency, **sign** — remain
-  unverified. The book's direction is unproven until one tenor is cross-checked against a broker run.
-* ARBS has **no measured cost line for cross-currency basis**. The 1.0bp round trip is the
-  original's assumption carried forward, not a measurement.
+* **No measured ARBS cost line for cross-currency basis.** The 1.0bp round trip is the original's
+  assumption carried forward. The live breakeven is 3.26bp, so the verdict hinges entirely on a
+  number nobody in this estate has measured. This is the single most valuable next measurement.
+* **Which leg, and the collateral currency**, remain unsettled — see above.
 * GSS's transaction-cost table is a transparent default, not a calibration: the original's
   country-specific table did not survive.
+* The 2008 crisis cannot be tested on Citi data, so the archive's own headline era is
+  unreproducible in ARBS.
