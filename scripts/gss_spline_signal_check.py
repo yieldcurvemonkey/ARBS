@@ -85,9 +85,14 @@ def main() -> int:
     panels = {}
     for name, cfg in sv.items():
         sub = Path(args.cache) if cfg is None else Path(args.cache) / f"spline_{spline_config_id(cfg)}"
-        if not (sub / "s2c.parquet").exists() and not any((sub / "days").glob("*.spline.parquet")
-                                                          if (sub / "days").exists() else []):
-            print(f"SIG: {name} not built — skipping "
+        # Require the CONSOLIDATED file, not merely some day files. A partially-built panel passes
+        # an "any day files present" test and is then RESUMED — which is how this check quietly
+        # started refitting the 90 missing days of a 242/332 panel. And a partial panel is not
+        # comparable anyway: a correlation computed over a different date set is a different number.
+        if not (sub / "s2c.parquet").exists():
+            n_days = len(list((sub / "days").glob("*.spline.parquet"))) if (sub / "days").exists() else 0
+            state = f"partial, {n_days} days" if n_days else "not built"
+            print(f"SIG: {name} {state} — skipping "
                   f"(scripts/gss_spline_panels.py --spline {name})", flush=True)
             continue
         try:
