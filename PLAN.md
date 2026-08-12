@@ -63,7 +63,41 @@ package by **100** (→ bp) and `abs()`es the ytm (benign for USTs).
 ## Status
 
 - [x] worktree, orientation, specs read from primary sources
-- [ ] RVUtils/PortfolioOpt
-- [ ] BT/gss_fly
-- [ ] BT/xccy_rv
-- [ ] notebook, warm script, tests
+- [x] `RVUtils/PortfolioOpt` — 13 known-answer tests, exact closed form on diagonal and full covariance
+- [x] `BT/gss_fly` — 23 known-answer tests
+- [x] `BT/xccy_rv` — 20 tests **including the archive tie-out**
+- [x] notebook (`notebooks/rv/gss_fly_rv.ipynb`), warm runbook, tests
+
+## Results
+
+**xccy — the tie-out passes.** Panel IR **gross +0.400 / net +0.264** against the reference
++0.39 / +0.25; era split **1.55 / 0.16 / 0.31** against 1.54 / 0.18 / 0.29. The engine run over
+the same 2,003 days: 0 equity holes, 2,973 closed positions, +$24.7k net and +$57.8k gross-of-fee
+on $1m of notional per unit, daily Sharpe +0.14. It is a crisis trade — 2010-12 net IR is 0.02.
+
+**Three unit bugs, each of which left a book that still ran and still looked plausible:**
+
+1. the fee was charged on the whole position at every resize rather than the traded increment
+   ($624m of fees against $47k of gross P&L);
+2. `notional_per_unit` was read as $/bp, inflating every fee by 10,000×;
+3. the archive banks its basis curves in **decimals**, not bp, so every engine mark and every
+   carry accrual was 10,000× too small and the engine reported a flat book.
+
+The GSS fly vol had the mirror of (3): the panel carries yields in percent, and `ZSig` is compared
+against bp thresholds, so `yield_scale=100` is now explicit.
+
+**Inherited behaviours pinned rather than fixed:** the optimizer returns NaN for a single-asset
+problem; its objective is `P = 0.5·λ·Σ` against cvxopt's own ½, so the optimum carries a factor
+two against textbook; the sqrt-market-impact + quadratic-constraint path has the author's own
+undiagnosed infeasibility and is untested.
+
+## Still open
+
+* **Excel was not running**, so no cross-currency or repo history could be warmed. `xccy_rv` ships
+  on the banked 2005-2015 panels; `scripts/warm_citivelo_xccy_repo.py` is the runbook for when it is.
+* The three cross-currency conventions — spread-leg currency, collateral currency, **sign** — remain
+  unverified. The book's direction is unproven until one tenor is cross-checked against a broker run.
+* ARBS has **no measured cost line for cross-currency basis**. The 1.0bp round trip is the
+  original's assumption carried forward, not a measurement.
+* GSS's transaction-cost table is a transparent default, not a calibration: the original's
+  country-specific table did not survive.

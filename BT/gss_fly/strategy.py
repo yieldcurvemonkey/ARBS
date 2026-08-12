@@ -180,7 +180,16 @@ class GSSSignalEngine:
                 ]
                 gated.sort(key=lambda s: s.zsig_bp, reverse=True)
 
-                for st in gated[:slots]:
+                for st in gated:
+                    if slots <= 0:
+                        break
+                    # Re-check the overlap here, not only in the filter above: `gated` is built
+                    # in one pass, so two candidates in the SAME batch can share a leg even though
+                    # neither overlaps anything already held. Taking both would double the real
+                    # position in that bond while the book records two independent flies.
+                    if set(st.legs) & held_legs:
+                        continue
+                    slots -= 1
                     self._seq += 1
                     tag = f"gss{self._seq:05d}"
                     rt = 2.0 * fly_tcost_bp(st.ttms, st.weights, self.cfg.costs)
