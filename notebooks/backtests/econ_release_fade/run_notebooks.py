@@ -1,4 +1,4 @@
-"""Execute the two notebooks in place, with no cell timeout.
+"""Execute the notebooks in place, with no cell timeout.
 
 ``jupyter nbconvert``'s ExecutePreprocessor defaults to a 30-second cell
 timeout, and the grid cells run for tens of minutes -- so an unattended
@@ -27,6 +27,8 @@ NOTEBOOKS = {
     "backtest": HERE / "econ_release_fade_backtest.ipynb",
     "grid": HERE / "econ_release_fade_gridsearch.ipynb",
     "paramsearch": HERE / "econ_release_fade_paramsearch.ipynb",
+    "exits": HERE / "econ_release_fade_exits_backtest.ipynb",
+    "surprise": HERE / "econ_release_fade_surprise_backtest.ipynb",
 }
 
 

@@ -97,11 +97,17 @@ def wanted_minutes(events: pd.DataFrame, time_stop_min: int,
     prime has to cover the whole path, not just the entry and the exit.
     """
     out = []
+    have_measure = {"m0_ts", "m1_ts"} <= set(events.columns)
     for _, r in events.iterrows():
         sym = r["symbol"]
-        # the measurement pair, then every minute of the holding window
-        for k in (r["m0_ts"], r["m1_ts"]):
-            out.append((sym, k))
+        # The measurement pair, then every minute of the holding window.
+        # A book signed off a CONSENSUS surprise never measures a move, so it has
+        # no m0/m1 -- asking for them raised KeyError and made the engine
+        # unreachable for that whole family of strategies.
+        if have_measure:
+            for k in (r["m0_ts"], r["m1_ts"]):
+                if pd.notna(k):
+                    out.append((sym, k))
         t = r["entry_ts"]
         for i in range(int(time_stop_min) + 2):
             out.append((sym, t + pd.Timedelta(minutes=i)))
