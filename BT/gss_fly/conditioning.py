@@ -9,8 +9,14 @@ DESIGN NOTE — the estimability triage this module encodes.
             config is `rt = 2.0 * fly_tcost_bp(...)` AFTER the entry decision is made. So a
             multiplicative rescale of the half-spread table leaves the trade set IDENTICAL and
             the equity curve is recoverable in closed form.  This does NOT extend to
-            `repo_penalty_bp` (it IS the exit gate) or `fallback_repo_pct` (it enters QDB
-            financing).
+            `repo_penalty_bp`, which IS the exit gate.
+
+            (`fallback_repo_pct` does NOT enter QDB financing — an earlier version of this note
+            said it did. It has exactly one occurrence in the tree, its own declaration at
+            `BT/gss_fly/config.py:99`, and no reader. Together with `backtest.entry_abs_z` and
+            `universe.recent_issue_days` it is a PLANTED NULL: sweeping it must move nothing, and
+            a harness that reports otherwise is broken. `tests/gss_fly/test_conditioning.py`
+            pins all three as dead, so this stops being a claim and starts being enforced.)
     Tier 1  exact in DECISION space, cheap.  `GSSSignalEngine.__call__` is a pure function of
             (panel.s2c, panel.ytm, cfg) — no pricing.  Trade-set conditioning is therefore
             exactly computable without QueryDrivenBacktest.
@@ -151,11 +157,46 @@ def trade_key_set(trade_log: pd.DataFrame, *, tolerance_days: int = 0) -> set:
         return set()
     ent = trade_log[trade_log["event"] == "ENTER"]
     d = pd.to_datetime(ent["date"])
-    if tolerance_days > 0:
-        key = (d.astype("int64") // (86_400_000_000_000 * int(tolerance_days)))
-    else:
-        key = d.dt.strftime("%Y-%m-%d")
-    return set(zip(ent["fly_id"].astype(str), key.astype(str)))
+    return set(zip(ent["fly_id"].astype(str), d))
+
+
+def _tolerant_matches(a: set, b: set, tolerance_days: int) -> int:
+    """Count one-to-one matches between two decision sets, allowing a date gap.
+
+    Matching, NOT bucketing. An earlier version keyed the date by
+    ``epoch_days // tolerance_days``, which is not a tolerance at all: two entries three days
+    apart fall in different buckets whenever they straddle a boundary, while two entries two days
+    apart inside one bucket match. The result depended on where the epoch happened to fall, which
+    is exactly the kind of arbitrary that would have shown up as a conditioning finding.
+
+    Greedy nearest-first within each ``fly_id``, one-to-one so N entries of a fly in A cannot all
+    claim the same entry in B.
+    """
+    from collections import defaultdict
+
+    A: dict = defaultdict(list)
+    B: dict = defaultdict(list)
+    for fly, when in a:
+        A[fly].append(pd.Timestamp(when))
+    for fly, when in b:
+        B[fly].append(pd.Timestamp(when))
+
+    matched = 0
+    for fly, a_dates in A.items():
+        b_dates = sorted(B.get(fly, []))
+        taken = [False] * len(b_dates)
+        for da in sorted(a_dates):
+            best_gap, best_i = None, -1
+            for i, db in enumerate(b_dates):
+                if taken[i]:
+                    continue
+                gap = abs((da - db).days)
+                if gap <= tolerance_days and (best_gap is None or gap < best_gap):
+                    best_gap, best_i = gap, i
+            if best_i >= 0:
+                taken[best_i] = True
+                matched += 1
+    return matched
 
 
 def trade_set_jaccard(a: pd.DataFrame, b: pd.DataFrame, *, tolerance_days: int = 0) -> float:
@@ -165,10 +206,15 @@ def trade_set_jaccard(a: pd.DataFrame, b: pd.DataFrame, *, tolerance_days: int =
     the conditioning of the DECISION FUNCTION, not of a P&L estimate.  No amount of extra data
     would change it, and no null is required.
     """
-    sa, sb = trade_key_set(a, tolerance_days=tolerance_days), trade_key_set(b, tolerance_days=tolerance_days)
+    sa, sb = trade_key_set(a), trade_key_set(b)
     if not sa and not sb:
         return float("nan")
-    return len(sa & sb) / max(1, len(sa | sb))
+    if tolerance_days and tolerance_days > 0:
+        inter = _tolerant_matches(sa, sb, int(tolerance_days))
+    else:
+        inter = len(sa & sb)
+    union = len(sa) + len(sb) - inter
+    return inter / max(1, union)
 
 
 def knob_jaccard_profile(

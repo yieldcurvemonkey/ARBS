@@ -318,8 +318,26 @@ def main() -> int:
           f"{args.workers} workers", flush=True)
 
     store = GridStore(Path(args.out) / args.spline)
-    jobs = [(c, gates_incumbent if i == 0 else gates_other, args.min_trades)
-            for i, c in enumerate(constructions)]
+
+    # Resume: a construction whose every gate row is already on disk is skipped entirely. Pricing
+    # scales with trade count (8.5s at 34 trades, 65.8s at 116 measured), so a sweep is hours and
+    # WILL be interrupted; without this a restart repeats the 267s scan for work already done.
+    jobs = []
+    skipped = 0
+    for i, c in enumerate(constructions):
+        gates = gates_incumbent if i == 0 else gates_other
+        want = [_row_id({"spline": args.spline,
+                         **{f"c_{k}": _s(v) for k, v in c.items()},
+                         **{f"g_{k}": _s(v) for k, v in g.items()}}) for g in gates]
+        missing = [g for g, cid in zip(gates, want) if not store.has(cid)]
+        if not missing:
+            skipped += 1
+            continue
+        jobs.append((c, missing, args.min_trades))
+    if skipped:
+        print(f"GRID: resuming — {skipped} constructions already complete", flush=True)
+    if not jobs:
+        print("GRID: nothing to do", flush=True)
 
     import multiprocessing as mp
 
