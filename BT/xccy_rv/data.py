@@ -10,10 +10,30 @@ Two implementations behind one interface, because the two answer different quest
   object RVPF modelled — ``RATES.XCCY_OIS_SWAP.<c1>.<c2>.<fwd>.<tenor>.<leg>.BASIS_SPREAD``,
   a full forward × tenor grid — so the whole bootstrap RVPF carried is unnecessary here.
 
-Three conventions on the Citi path are **unverified** and are exposed as knobs rather than
-assumed, because ``MDP/CitiVelocityExcel/xccy/basis_data.py`` says so itself: which currency
-``SPREAD_LEG`` denotes, the collateral currency, and **the sign**. Signal 1 is
-``-(fwd - rolled)``; if Citi signs its basis the other way the whole book inverts.
+Three conventions on the Citi path were unverified. Two are now settled and one is not:
+
+* **sign — SETTLED, +1** (``scripts/settle_xccy_conventions.py``, 2026-08-12). Levels are negative
+  across EUR/USD, USD/JPY and GBP/USD, and the basis widened negative through the COVID dollar
+  squeeze. Both tests agree, so the wire follows the market convention.
+* **which leg — NOT settled, and not what the module assumes.** ``BASE_LEG`` and ``SPREAD_LEG``
+  are BOTH materially non-zero and nearly equal (EUR/USD 5Y medians -22.56 and -23.30). The
+  premise that one leg carries the spread while the other is flat does not hold on this wire.
+  The default reads ``SPREAD_LEG``; the 0.74bp difference between them is small but it is not
+  noise, and nothing here establishes which one a counterparty would quote.
+* **collateral currency — NOT settled.** Not testable from levels alone.
+
+MEASURED DEPTH: the Citi cross-currency history begins **2012-11-01** (3,551 daily rows on
+EUR/USD 5Y as at 2026-08-11). The 2008 crisis is NOT available -- which matters, because on the
+archive's own data that crisis is where essentially all of the strategy's information ratio came
+from.
+
+CARRY IS NOT THE SAME OBJECT AS THE ARCHIVE'S. On the same window and the same instruments
+(USDEUR, 2013-2015) the archive's model-implied carry has a median of **+1.519 bp/yr** while the
+carry implied by Citi's quoted forward-basis grid is **+0.289** -- same sign, roughly five times
+smaller. The archive derives its rolled-down basis from its own multi-curve model; this derives it
+from Citi's quoted forward axis. Neither is obviously wrong, and the gap between them is precisely
+what the "model-implied versus quoted basis" residual would measure. Do not read a live result
+against the banked tie-out without holding this in mind.
 """
 
 from __future__ import annotations
@@ -178,7 +198,11 @@ class CitiXccySource:
     start: datetime.date
     end: datetime.date
     carry_horizon: float = 0.25
-    #: Unverified conventions, exposed rather than assumed. See the module docstring.
+    #: SETTLED 2026-08-12 by ``scripts/settle_xccy_conventions.py`` against two independent
+    #: market facts: the levels (EUR/USD 5Y median -23.30bp, USD/JPY -67.36, GBP/USD -10.42 -- all
+    #: negative, as the market convention requires) and the COVID dollar squeeze (-15.17 -> -32.83,
+    #: i.e. widened NEGATIVE). Citi's BASIS_SPREAD agrees with the market convention, so +1.
+    #: Re-run the script if the entitlement or the tag family changes.
     sign: int = 1
     leg: str = "SPREAD_LEG"
     quotes: object = None
