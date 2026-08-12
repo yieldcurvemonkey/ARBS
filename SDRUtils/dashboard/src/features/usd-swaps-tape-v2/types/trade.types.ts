@@ -246,6 +246,42 @@ export type UsdSwapTapeRow = SofrSwapTapeRow & {
   override_type?: OverrideType | null
   has_notes?: boolean
   notes_count?: number
+  // Inferred dealer direction, LEFT JOINed onto the row by package_id from
+  // arbs_dd_unit_v1. All optional: the join is skipped when the analytics
+  // table is absent, and a day the batch has not reached yet carries nulls.
+  //
+  // NOT to be confused with dealer_spread_est / opa_sign_confidence above,
+  // which are NOT direction. opa_sign is direction-blind by symmetry — the
+  // solver scores a sign vector and its global complement identically, so the
+  // orientation is a tie-break — and dealer_spread_est is literally the dollar
+  // residual, always non-negative, with a mean flat across the sign of the net.
+  //
+  // dd_p is p(customer paid fixed) = p(dealer RECEIVED fixed).
+  // dd_signed_weight is 2p-1, never p.
+  dd_dealer_direction?: 'RECEIVED' | 'PAID' | 'ABSTAINED' | string | null
+  dd_dealer_sign?: number | null
+  dd_p?: number | null
+  dd_signed_weight?: number | null
+  dd_rule?: string | null
+  dd_deviation_bps?: number | null
+  dd_tau_bps?: number | null
+  dd_in_dead_zone?: boolean | null
+  dd_exclusion_reason?: string | null
+  dd_exclusion_detail?: string | null
+  dd_venue_class?: 'D2C' | 'D2D' | 'VENUE_UNKNOWN' | string | null
+  dd_series?: 'FLOW' | 'LIFECYCLE' | string | null
+  dd_total_delta_dv01?: number | null
+  dd_total_dv01_if_received?: number | null
+  dd_visibility_timestamp?: string | null
+  dd_visibility_lag_seconds?: number | null
+  dd_visibility_source?: string | null
+  dd_curve_name?: string | null
+  dd_curve_timestamp?: string | null
+  dd_snapshot_lag_seconds?: number | null
+  dd_snapshot_policy?: string | null
+  dd_notional_imputed?: boolean | null
+  dd_code_vintage?: string | null
+  dd_tape_generation?: string | null
   legs_json: UsdSwapTapeLeg[]
 }
 

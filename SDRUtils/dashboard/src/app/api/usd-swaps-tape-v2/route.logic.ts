@@ -241,6 +241,21 @@ const COLUMN_FILTER_ALLOWLIST_LEG = new Set([
   'lifecycle_type',
 ])
 
+// Dealer-direction columns live on the `dd` alias, not on `d`, so they need
+// their own map from the wire name to the qualified expression. Only usable
+// when the join is present; buildColumnFilterClause is told so explicitly
+// rather than inferring it, because a `dd.` reference with no join in scope
+// is a 500 on the tape's primary view.
+const COLUMN_FILTER_ALLOWLIST_DIRECTION = new Map<string, string>([
+  ['dd_dealer_direction', 'dd.dealer_direction'],
+  ['dd_exclusion_reason', 'dd.exclusion_reason'],
+  ['dd_rule', 'dd.rule'],
+  ['dd_venue_class', 'dd.venue_class'],
+  ['dd_series', 'dd.series'],
+  ['dd_p', 'dd.p'],
+  ['dd_deviation_bps', 'dd.deviation_bps'],
+])
+
 const TEXT_MATCH_MODES = new Set([
   'contains',
   'notContains',
@@ -265,6 +280,8 @@ const NUMERIC_FIELDS = new Set([
   'total_notional',
   'weighted_fixed_rate',
   'dealer_spread_bps',
+  'dd_p',
+  'dd_deviation_bps',
 ])
 
 const ESCAPE_LIKE_RE = /[%_\\]/g
@@ -277,6 +294,7 @@ function buildSingleConstraint(
   field: string,
   constraint: { value: unknown; matchMode?: string },
   params: unknown[],
+  hasDirection = false,
 ): string | null {
   const { value, matchMode } = constraint
   if (value === null || value === undefined || value === '') return null
@@ -284,9 +302,12 @@ function buildSingleConstraint(
 
   const isLeg = COLUMN_FILTER_ALLOWLIST_LEG.has(field)
   const isPackage = COLUMN_FILTER_ALLOWLIST_PACKAGE.has(field)
-  if (!isLeg && !isPackage) return null
+  const directionExpr = hasDirection
+    ? COLUMN_FILTER_ALLOWLIST_DIRECTION.get(field) ?? null
+    : null
+  if (!isLeg && !isPackage && !directionExpr) return null
 
-  const colExpr = isLeg ? `l->>'${field}'` : `d.${field}`
+  const colExpr = isLeg ? `l->>'${field}'` : (directionExpr ?? `d.${field}`)
 
   // Numeric path
   if (NUMERIC_FIELDS.has(field) && NUMERIC_MATCH_MODES.has(String(matchMode))) {
@@ -454,7 +475,7 @@ function areDatesContiguous(sortedDates: string[]): boolean {
 export function buildColumnFilterClause(
   columnFilters: Record<string, any>,
   params: unknown[],
-  options: { now?: Date } = {},
+  options: { now?: Date; hasDirection?: boolean } = {},
 ): string | null {
   if (!columnFilters || typeof columnFilters !== 'object') return null
   const fieldClauses: string[] = []
@@ -483,7 +504,8 @@ export function buildColumnFilterClause(
 
     const op = meta.operator === 'or' ? ' OR ' : ' AND '
     const built = constraints
-      .map((c: any) => buildSingleConstraint(field, c, params))
+      .map((c: any) =>
+        buildSingleConstraint(field, c, params, options.hasDirection === true))
       .filter((s: string | null): s is string => s !== null)
     if (built.length === 0) continue
     fieldClauses.push(`(${built.join(op)})`)
@@ -547,6 +569,11 @@ export function buildTapeQuery(
   parsed: ParsedParams,
   displayView: string,
   columns: string,
+  // Dealer direction, hung off each row by package_id. Optional and defaulted
+  // to absent so the tape keeps rendering in an environment where the
+  // analytics table has not been created; every dd_* field then arrives
+  // undefined, which the grid renders as an abstention rather than a blank.
+  direction: { columns: string; join: string } = { columns: '', join: '' },
 ): BuiltQuery {
   const params: unknown[] = []
   const where: string[] = []
@@ -602,6 +629,7 @@ export function buildTapeQuery(
   const columnFilterClause = buildColumnFilterClause(
     parsed.columnFilters,
     params,
+    { hasDirection: direction.join !== '' },
   )
   if (columnFilterClause) where.push(columnFilterClause)
 
@@ -628,8 +656,9 @@ export function buildTapeQuery(
   // (~60ms). execution_start is NOT NULL so the orderings return identical
   // rows.
   const sql = `
-    SELECT ${columns}
+    SELECT ${columns}${direction.columns}
     FROM ${displayView} d
+    ${direction.join}
     ${whereSql}
     ORDER BY d.execution_start DESC NULLS LAST
     LIMIT ${limitParam}
