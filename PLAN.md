@@ -115,6 +115,41 @@ provider match the cached ones to **3e-13 bp**.
 - [x] `BT/xccy_rv` — 20 tests **including the archive tie-out**
 - [x] notebook (`notebooks/rv/gss_fly_rv.ipynb`), warm runbook, tests
 
+## GSS result — 2024-09-03..2026-01-02, 332 dates, 343 bonds, median RMSE 1.94bp
+
+**The book pays carry to collect convergence, and the cost line decides the answer.** Every term
+below reconciles to the equity curve to the cent (`reconciliation_gap_usd = -0.0`), asserted per
+run rather than believed:
+
+| term | default (all legs) | belly-only (GSS source) |
+|---|---|---|
+| carry during hold | −7,930,582 | −7,930,582 |
+| unwind proceeds (convergence) | +10,736,111 | +10,736,111 |
+| fees | −2,818,738 | −1,370,000 |
+| open mark | +444,653 | +444,653 |
+| **gross before fees** | **+3,250,182** | **+3,250,182** |
+| **end equity** | **+431,444** | **+1,880,182** |
+| cost share of gross | **87%** | 42% |
+
+Same 35 entries and 34 closes in both; the only difference is which legs are charged. So the
+result is a statement about execution cost, not about the signal — which is exactly what
+`cost_legs` was made configurable to ask.
+
+**Carry is the coupon leg, not repo.** The `financing` ledger is a small *positive* (+355k); the
+drag is coupon accrual, because `w_L + w_R = -1` leaves the book short more coupon than it is long.
+Reading the repo ledger alone produced a confidently wrong claim that carry was a tailwind.
+
+**The entry gate is mis-scaled for USTs.** `ZSig = |z|·σ_fly` with median σ = **0.55bp**, so the
+ported 3.0bp threshold demands **|z| > 5.5σ**. The funnel (`scripts/gss_funnel.py`) measures the
+distribution it cuts into: 186.5 eligible bonds and 170.3 candidate flies per date, `zsig_max`
+median **2.83bp** and p90 **3.83bp** — the gate sits at the top of the daily-maximum distribution
+and admits 130/332 dates, and the turning-point requirement removes a further **56.4%**, leaving
+76 candidate days and 35 actual entries after cooldown, the concurrency cap and the no-shared-leg
+rule. 3.0 came from GSS's EGB book and does not survive the change of market.
+
+**34 trades cannot support a verdict.** The useful outputs here are the reconciliation and the gate
+diagnosis, not a Sharpe.
+
 ## Results
 
 **xccy — the tie-out passes.** Panel IR **gross +0.400 / net +0.264** against the reference
