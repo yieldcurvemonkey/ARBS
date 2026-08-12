@@ -17,6 +17,7 @@ refuse a resolution further from the request than ``max_staleness``.
 
 from __future__ import annotations
 
+import contextlib
 import datetime
 import logging
 from dataclasses import dataclass
@@ -37,6 +38,7 @@ __all__ = [
     "fetch_curveset_snapshot",
     "warm_bond_snapshots",
     "LocalReferenceProvider",
+    "local_reference_data",
     "BOND_SNAPSHOT_VALUES",
 ]
 
@@ -172,34 +174,39 @@ def build_curve_panel(
         if resumed:
             logger.info("resuming: %d of %d days already cached in %s", len(resumed), len(dates), day_dir)
 
-    # One universe read serves every date, so the per-date reference fetch disappears entirely.
+    # One universe read serves every date, so the per-date reference fetch disappears entirely --
+    # both here and inside `fetch_cash_spline`, which makes the same call before it fits.
     reference_fn = None
+    stack = contextlib.ExitStack()
     if todo and local_reference:
         try:
-            reference_fn = LocalReferenceProvider()
+            reference_fn = stack.enter_context(local_reference_data(mdp))
         except Exception as exc:  # noqa: BLE001 — fall back rather than fail the build
             logger.warning("local reference universe unavailable (%s); falling back to per-date fetch", exc)
 
-    if workers > 1 and todo:
-        results = _fetch_days_concurrently(todo, mdp, workers, show_progress, reference_fn)
-    else:
-        iterator = todo
-        if show_progress:
-            try:
-                import tqdm
+    # The provider must stay bound for the whole fetch loop, not just while the results generator
+    # is constructed — the generator is lazy, so the spline calls happen inside this block.
+    with stack:
+        if workers > 1 and todo:
+            results = _fetch_days_concurrently(todo, mdp, workers, show_progress, reference_fn)
+        else:
+            iterator = todo
+            if show_progress:
+                try:
+                    import tqdm
 
-                iterator = tqdm.tqdm(todo, desc="GSS curve panel", unit="day")
-            except ImportError:
-                pass
-        results = ((d, _fetch_day(d, mdp, reference_fn)) for d in iterator)
+                    iterator = tqdm.tqdm(todo, desc="GSS curve panel", unit="day")
+                except ImportError:
+                    pass
+            results = ((d, _fetch_day(d, mdp, reference_fn)) for d in iterator)
 
-    for d, fetched in results:
-        if fetched is None:
-            continue
-        frame, ref = fetched
-        _absorb_day(pd.Timestamp(d), frame, ref, s2c_rows, ytm_rows, ttm_rows, rmse, ref_frames)
-        if day_dir is not None:
-            _save_day(day_dir, d, frame, ref)
+        for d, fetched in results:
+            if fetched is None:
+                continue
+            frame, ref = fetched
+            _absorb_day(pd.Timestamp(d), frame, ref, s2c_rows, ytm_rows, ttm_rows, rmse, ref_frames)
+            if day_dir is not None:
+                _save_day(day_dir, d, frame, ref)
 
     if not s2c_rows:
         raise RuntimeError("no dates produced a spline — check the MDP source and the date range")
@@ -279,6 +286,34 @@ class LocalReferenceProvider:
         out = ref[eligible].copy()
         out["rank"] = out.groupby("oi")["issue_date"].rank(method="first", ascending=False).astype(int) - 1
         return out
+
+
+@contextlib.contextmanager
+def local_reference_data(mdp, provider: Optional["LocalReferenceProvider"] = None):
+    """Serve ``mdp.get_bond_reference_data`` from the local universe for the duration of the block.
+
+    Replacing the call in the panel builder only removes half the waste: ``fetch_cash_spline``
+    calls ``get_bond_reference_data`` itself before fitting, so a cold spline pays the same 1.62s
+    uncached fiscaldata round-trip regardless of what the builder does. Binding the provider onto
+    the instance covers both.
+
+    Scoped and restored on exit, because this mutates an object the caller owns — a permanent
+    monkeypatch would change the behaviour of every other consumer of that MDP without saying so.
+    """
+    provider = provider or LocalReferenceProvider()
+    original = mdp.get_bond_reference_data
+
+    def _local(as_of_date, kwargs=None, **_):
+        # cme_tcf asks a different question of a different source; leave it to the original
+        if kwargs and kwargs.get("cme_tcf"):
+            return original(as_of_date=as_of_date, kwargs=kwargs)
+        return provider(as_of_date)
+
+    mdp.get_bond_reference_data = _local
+    try:
+        yield provider
+    finally:
+        mdp.get_bond_reference_data = original
 
 
 def _fetch_day(d: datetime.date, mdp, reference_fn=None):
