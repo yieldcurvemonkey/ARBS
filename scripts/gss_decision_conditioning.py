@@ -51,6 +51,14 @@ from gss_grid import (CONSTRUCTION_LEVELS, INCUMBENT_CONSTRUCTION, INCUMBENT_GAT
                       make_cfg, valid_construction)
 
 #: gate rays through the incumbent — the levels the user specifically asked about
+#: NOTE the ordering trap these rays exposed. Entry and exit are thresholds on the SAME statistic
+#: (`zsig > E` to enter, `zsig <= X` to exit), so any config with `E < X` enters a fly that
+#: immediately qualifies to exit — a full round trip for nothing. Holding X at the incumbent 2.5
+#: while sweeping E down therefore crosses that boundary and the trade count explodes to 1,080,
+#: which is an INTERACTION artifact and not the entry knob's own sensitivity (properly ordered at
+#: E=1.0/X=0.25 the book takes 150). The rays are kept as-is because the boundary is a real and
+#: under-appreciated property of the design — the shipped config sits 0.5bp from it — but the
+#: result must be read as a pair, never attributed to `entry_zsig_bp` alone.
 GATE_RAYS: List[Tuple[str, Any]] = [
     ("backtest.entry_zsig_bp", v) for v in (1.0, 1.5, 2.0, 2.5, 3.5)
 ] + [

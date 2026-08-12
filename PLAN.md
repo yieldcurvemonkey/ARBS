@@ -144,7 +144,7 @@ Jaccard of the trade set against the incumbent (35 entries), one step per knob:
 | knob | median J | trades |
 |---|---|---|
 | `require_turning_point` | **0.084** | 55 |
-| `entry_zsig_bp` | **0.090** | **13 → 1,080** |
+| `entry_zsig_bp` | **0.090** | 13 → 1,080 † |
 | `signal.ts_weight` | 0.097 | 13–44 |
 | `signal.smoothing_halflife` | 0.139 | 30–39 |
 | `fly.fly_scoring_com` | 0.167 | 10–51 |
@@ -159,8 +159,27 @@ Jaccard of the trade set against the incumbent (35 entries), one step per knob:
 | `max_concurrent`, `reentry_cooldown_days`, `exit_abs_z` | **1.000** | 35 |
 
 **12 of 16 knobs change more than half the trade set in one step; 9 change more than three
-quarters.** The worst is a boolean — flipping `require_turning_point` retains 8% of the trades —
-and `entry_zsig_bp` spans 13 to 1,080 trades, a 31× swing in book size from one parameter.
+quarters.** The worst is a boolean — flipping `require_turning_point` retains 8% of the trades.
+
+† **The entry/exit pair has a degenerate region, and the incumbent sits 0.5bp from it.** Entry and
+exit are thresholds on the *same statistic*: entry needs `zsig > E`, exit fires on `zsig <= X`. So
+whenever `E < X` a fly is entered and immediately qualifies to exit, paying a full round trip for
+nothing. The rays above hold `X = 2.5` (the incumbent), so the low-`E` end crosses that boundary:
+
+    E    X    entries
+    1.0  2.5    1080     <- inverted: churn
+    1.5  2.5     549
+    2.0  2.5     267
+    2.5  2.5      91     <- E == X
+    3.0  2.5      35     <- INCUMBENT, 0.5bp from the boundary
+    3.5  2.5      13
+
+At a properly ordered `E=1.0, X=0.25` the book takes **150** trades, not 1,080 — so the 1,080 is an
+interaction artifact, not the entry knob's own sensitivity. The finding is structural rather than a
+tuning matter: two gates on one statistic with no enforced ordering, and the shipped configuration
+a half-basis-point away from the regime where every extra trade is a round trip for nothing.
+Swept properly (`X <= E - 0.5`), `repo_penalty_bp` alone is the best-behaved knob measured —
+J = 0.72–0.82, monotone, 27–34 trades.
 
 So "the GSS strategy" is not a strategy: it is one arbitrary point whose neighbours are different
 strategies sharing a name. Every performance number in this file is a number for that one point.
