@@ -246,7 +246,58 @@ re-running: identical failures on the clean tree.
 
 ---
 
+## Sanity gate on the published rows
+
+`scratch/ddfe10_published_sanity.py`, eight thresholds fixed before running.
+The headline is the best evidence in this branch that the wiring is right:
+
+| | this branch | the frozen classifier / the backend's own sample |
+|---|---:|---:|
+| `RATE_VS_MID` share PAID | **49.97%** | 78.3% |
+| median (printed − mid) | **+0.0120 bp** | +0.021 bp (F-15, sampled independently) |
+| share above mid | 52.3% | 55.5% |
+| unit table ↔ display view on `package_id` | **62,508 = 62,508 = 62,508** | — |
+
+Two of the eight failed first time and both were the check, not the data —
+written up in `FRONTEND_LEDGER.md` G-6c, including the control that keeps the
+sign check from being able to pass vacuously.
+
 ## Unfinished, stated plainly
 
-*(this section is filled in at hand-off — see FRONTEND_LEDGER.md for the live
-state)*
+*This section is the live state and is updated as the backfill lands. See
+`FRONTEND_LEDGER.md` for the measurements behind each line.*
+
+- **The full backfill is still running.** `price` covers 2024-03-01 onward and
+  `publish` has so far written **2024-07-01 … 2024-08-09** (62,508 units,
+  475,200 unit-bucket rows, 3,225 coverage rows, 2,006 ladder cells). The
+  panel and the grid are verified against that window.
+- **`z` is empty until the full backfill lands.** `Z_MIN_OBS = 60` and the
+  published window is 34 sessions, so the cross-bucket z grid is correctly
+  blank rather than showing a z computed from too little history. Same for
+  `coverage_smooth` (63 observations) and therefore for the cov-adj basis.
+- **A dd-filtered tape query degrades during a partial backfill** — 335 ms
+  median but 3.8 s p95, because `ORDER BY execution_start DESC` walks backward
+  through the months that have no direction yet before finding 200 matches.
+  An artefact of partial coverage, not of the design; re-measured when the
+  backfill completes.
+- **A nightly incremental `publish` changes the day list, which misses the
+  calibration cache and forces a full refit** (~85 min). That is by design —
+  the key is a hash of the deviation values, so a stale fit can never be
+  served — but it means "publish yesterday" is not a cheap operation as
+  written. Not solved here.
+- **The most recent visibility day is provisional.** It is missing the
+  20:00–23:59 ET prints that arrive with the next tape day's `as_of`, and it
+  tops itself up on the next run. Published rather than dropped, because
+  dropping it would throw away the freshest cell in the series.
+- **`arbs_dd_unit_bucket_v1` stores numerically-zero buckets.** rateslib's
+  delta is non-zero at all 28 pillars, so a 7Y swap carries entries of order
+  1e-11 in 20-30Y. No dust floor is applied — the backend measured that a
+  0.05 USD/bp floor removes 53% of rows and that one of them was 95.4% of its
+  own unit's risk — so the table is ~10 rows per kept unit regardless of how
+  many are material.
+- **Fed Funds is included and is the weakest part.** The no-bias curve result
+  behind the whole method was measured on SOFR. `rate_index` is on every row
+  so a consumer can filter, but the panel does not currently offer that
+  toggle.
+- **Two pre-existing dashboard test failures** (`LegsSubTable`, `MmsTab`, 4
+  tests) are untouched by this branch — confirmed by stashing and re-running.
