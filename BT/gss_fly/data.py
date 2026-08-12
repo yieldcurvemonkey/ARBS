@@ -257,6 +257,8 @@ def build_curve_panel(
     reference = pd.concat(ref_frames, ignore_index=True)
     panel = CurvePanel(s2c=s2c, ytm=ytm, ttm=ttm, reference=reference, rmse=pd.Series(rmse).sort_index())
 
+    _assert_reference_is_usable(panel)
+
     missing = [d for d in dates if pd.Timestamp(d) not in s2c_rows]
     if missing:
         logger.warning(
@@ -316,6 +318,22 @@ class LocalReferenceProvider:
             return _roll_dates_for(ref)
         return ref["issue_date"]
 
+    @staticmethod
+    def _ttm_years(maturity, as_of) -> float:
+        """Time to maturity on **ActualActual(ISDA)**, which is what the fetched path returns.
+
+        Not a detail. `days/365.25` differs by up to 1.4e-3 years — about half a day — and
+        `min_ttm` is a hard cutoff at exactly 3.0, so the wrong convention silently moves bonds
+        in and out of the tradeable universe near the boundary. Verified to 0.0 against six
+        fetched reference frames.
+        """
+        import QuantLib as ql
+
+        a, m = pd.Timestamp(as_of), pd.Timestamp(maturity)
+        return ql.ActualActual(ql.ActualActual.ISDA).yearFraction(
+            ql.Date(a.day, a.month, a.year), ql.Date(m.day, m.month, m.year)
+        )
+
     def __call__(self, as_of: datetime.date) -> pd.DataFrame:
         ref = self.universe
         eligible = (
@@ -325,6 +343,13 @@ class LocalReferenceProvider:
         )
         out = ref[eligible].copy()
         out["rank"] = out.groupby("oi")["issue_date"].rank(method="first", ascending=False).astype(int) - 1
+        # `ttm` is NOT in the cached universe — it is per-date, so the fetched path computes it and
+        # the universe file cannot carry it. Omitting it does not fail loudly: `apply_universe_filter`
+        # skips a missing column, but once ANY date in the panel supplies one the concatenated frame
+        # has the column with NaN for every other date, and `NaN >= min_ttm` is False. That silently
+        # emptied the tradeable universe on 284 of 332 dates while the panel still reported 343 bonds
+        # and the backtest still produced plausible-looking numbers.
+        out["ttm"] = [self._ttm_years(m, as_of) for m in out["maturity_date"]]
         return out
 
 
@@ -424,6 +449,41 @@ def _fetch_days_concurrently(todo, mdp, workers: int, show_progress: bool, refer
             yield d, fetched
     if bar is not None:
         bar.close()
+
+
+#: Columns `apply_universe_filter` gates on. A column that is present but null does not disable the
+#: gate — it fails it, for every row.
+_UNIVERSE_COLUMNS = ("ttm", "cpn", "rank")
+
+
+def _assert_reference_is_usable(panel: CurvePanel) -> None:
+    """Refuse a panel whose reference frame cannot support the universe filter.
+
+    This exists because the failure it catches was completely silent. When the local reference
+    provider omitted ``ttm``, the concatenated frame still *had* the column — supplied by the days
+    that came from the fetched path — and it was NaN for every other date. ``apply_universe_filter``
+    skips a **missing** column but applies a **null** one, and ``NaN >= min_ttm`` is False, so the
+    tradeable universe was empty on 284 of 332 dates. Nothing failed: the panel still reported 343
+    bonds and a 1.94bp RMSE, the backtest still ran, and it still produced entirely plausible
+    numbers — computed from the 48 usable dates alone.
+
+    So: a gating column that is present must be populated on essentially every date.
+    """
+    ref = panel.reference
+    if ref.empty or "date" not in ref.columns:
+        return
+    n_dates = ref["date"].nunique()
+    for col in _UNIVERSE_COLUMNS:
+        if col not in ref.columns:
+            continue
+        good = ref.loc[ref[col].notna(), "date"].nunique()
+        if good < n_dates:
+            raise RuntimeError(
+                f"reference column {col!r} is null on {n_dates - good} of {n_dates} dates. "
+                f"`apply_universe_filter` gates on it, and a null gate excludes every bond rather "
+                f"than being skipped, so those dates would silently trade nothing. "
+                f"This usually means a reference source did not populate {col!r}."
+            )
 
 
 def _absorb_day(

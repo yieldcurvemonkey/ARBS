@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import datetime
 
+import numpy as np
 import pandas as pd
 import pytest
 
@@ -96,3 +97,64 @@ def test_rank_is_per_on_the_run_bucket(provider):
 
 def test_a_bond_issued_after_as_of_is_absent(provider):
     assert "NEW5Y" not in set(provider(datetime.date(2023, 8, 30))["cusip"])
+
+
+# ---------------------------------------------------- the silent-universe guard
+def test_local_provider_supplies_ttm(provider):
+    """The column whose absence emptied the universe on 284 of 332 dates."""
+    out = provider(datetime.date(2023, 8, 31))
+    assert "ttm" in out.columns
+    assert out["ttm"].notna().all()
+    # OLD5Y matures 2028-02-28, so ~4.5y out from 2023-08-31
+    assert out.set_index("cusip").loc["OLD5Y", "ttm"] == pytest.approx(4.5, abs=0.02)
+
+
+def test_ttm_uses_actualactual_isda_not_365_25():
+    """`days/365.25` is off by ~half a day, and `min_ttm` is a hard cutoff at exactly 3.0."""
+    import QuantLib as ql
+
+    from BT.gss_fly.data import LocalReferenceProvider as P
+
+    as_of, mat = datetime.date(2024, 9, 25), datetime.date(2027, 9, 30)
+    got = P._ttm_years(mat, as_of)
+    want = ql.ActualActual(ql.ActualActual.ISDA).yearFraction(ql.Date(25, 9, 2024), ql.Date(30, 9, 2027))
+    assert got == pytest.approx(want, abs=1e-12)
+    naive = (pd.Timestamp(mat) - pd.Timestamp(as_of)).days / 365.25
+    assert abs(got - naive) > 1e-4, "if these agreed the convention would not matter"
+
+
+def test_a_null_gating_column_is_refused_not_ignored():
+    """A present-but-null gate excludes every bond. Refuse the panel rather than trade nothing."""
+    from BT.gss_fly.data import CurvePanel, _assert_reference_is_usable
+
+    dates = pd.to_datetime(["2025-01-02", "2025-01-03"])
+    ref = pd.DataFrame(
+        {
+            "date": list(dates) * 2,
+            "cusip": ["A", "A", "B", "B"],
+            "ttm": [5.0, np.nan, 7.0, np.nan],   # second date never populated
+            "cpn": [4.0, 4.0, 4.0, 4.0],
+            "rank": [1, 1, 2, 2],
+        }
+    )
+    panel = CurvePanel(
+        s2c=pd.DataFrame(index=dates), ytm=pd.DataFrame(index=dates),
+        ttm=pd.DataFrame(index=dates), reference=ref, rmse=pd.Series(index=dates, dtype=float),
+    )
+    with pytest.raises(RuntimeError, match="ttm"):
+        _assert_reference_is_usable(panel)
+
+
+def test_a_fully_populated_reference_passes_the_guard():
+    from BT.gss_fly.data import CurvePanel, _assert_reference_is_usable
+
+    dates = pd.to_datetime(["2025-01-02", "2025-01-03"])
+    ref = pd.DataFrame(
+        {"date": list(dates) * 2, "cusip": ["A", "A", "B", "B"],
+         "ttm": [5.0, 5.0, 7.0, 7.0], "cpn": [4.0] * 4, "rank": [1, 1, 2, 2]}
+    )
+    panel = CurvePanel(
+        s2c=pd.DataFrame(index=dates), ytm=pd.DataFrame(index=dates),
+        ttm=pd.DataFrame(index=dates), reference=ref, rmse=pd.Series(index=dates, dtype=float),
+    )
+    _assert_reference_is_usable(panel)  # must not raise
