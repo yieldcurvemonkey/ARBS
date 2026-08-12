@@ -243,6 +243,99 @@ The 45+ minutes the first full run spent was contention: eight pricing workers
 against a single-threaded MLE loop. The full-window calibration is therefore
 run **after** `price` finishes, not beside it.
 
+### G-6. Three defects on the first live `publish`, all caught by a guard
+
+**(a) The two clocks do not share a day boundary.** The tape's `as_of` day
+runs 20:00 ET the previous evening to 19:59 ET; the ladder stamps a New York
+*availability* date. So for `as_of = D` the visibility dates are `{D-1, D}`,
+and publishing `as_of >= SAMPLE_FLOOR` produced 1,050 unit-bucket rows stamped
+**2024-06-30** — built only from the sliver of 07-01's prints that executed
+the previous evening. `indicator.build` refused the entire run over it, which
+is how it was found.
+
+Dropped. Nothing that belongs to a published day goes with them: a FLOOR-1
+cell would need `as_of = FLOOR-1`, which is outside the window by
+construction. **The other end is different and is left alone**: the most
+recent visibility day is missing the 20:00–23:59 ET prints that arrive with
+the next tape day's `as_of`, so it is *provisional* rather than wrong and tops
+itself up on the next run. Dropping it would throw away the freshest cell in
+the series to fix an under-read in the thinnest hours of the session. Stated
+in the consumer note instead.
+
+**(b) The level and the coverage are on two different grids.** INDICATOR.md §2
+says so; this is where it bites. The level is key-rate risk — rateslib's delta
+is non-zero at **all 28 pillars** for a single swap (measured: 28.0 rows per
+unit), so one 10Y trade publishes a level cell in 0-1Y as well as in 7-10Y.
+Coverage is a maturity-point allocation of gross |DV01|, and it has to be,
+because an excluded unit has no key-rate profile *by construction* — that is
+why it was excluded. So the two grids have different cell sets and
+`indicator.build` requires one coverage row per published cell.
+
+**Nothing had exercised this before.** `ddind_coverage.py` built the coverage
+frame alone, and INDICATOR §6 records that no composed pipeline existed to put
+a KRD-derived level beside it.
+
+187 of 1,420 cells had a level and no denominator. Dropped, at a measured cost
+of **0.253% of |delta_dv01|**. The alternative — numerator on the KRD grid,
+denominator on the maturity grid — makes the ratio cell-consistent by putting
+two different populations inside one fraction, which is the incoherence §2
+exists to name. `coverage_fraction` refuses a ratio over no size and it is
+right to.
+
+**(c) The coverage headline was 22 points too flattering.** `summarySql`
+summed `coverage_dv01_kept / coverage_dv01_total` over `arbs_dd_ladder_v1`. A
+ladder cell only exists where at least one unit was oriented, so that average
+**conditions on the very thing it measures**: a bucket-day whose units were
+all excluded contributes its whole DV01 to the true denominator and nothing at
+all to the average.
+
+| D2C / FLOW, 2024-07-01 … 2024-08-09 | |
+|---|---:|
+| over ladder cells | **67.0%** |
+| over `arbs_dd_coverage_v1`, the complete partition | **44.8%** |
+
+On the one number whose entire job is to stop the panel reading as complete.
+Fixed to read the coverage table; verified live at 44.84% D2C / 57.02% D2D,
+matching the table to the digit.
+
+The exclusion breakdown over the window, all series:
+
+| reason | DV01 share | units |
+|---|---:|---:|
+| `IN_LADDER` | 48.01% | 20,917 |
+| `UNORIENTABLE_PKG` | **44.15%** | 8,476 |
+| `UNSUPPORTED_INDEX` | 4.07% | 2,351 |
+| `PRICING_ERROR` | 1.90% | 955 |
+| `NO_FIXED_RATE` | 1.66% | 581 |
+| `RISK_IMPLAUSIBLE` | 0.09% | 100 |
+| everything else | < 0.15% | 61 |
+
+### G-7. Measured read cost
+
+`scratch/ddfe06_read_cost.py`, 5 reps each, against prod over the pooler.
+
+| query | median | p95 | rows |
+|---|---:|---:|---:|
+| tape grid, 200 rows, **no** direction join | 133.2 ms | 337.4 ms | 200 |
+| tape grid, 200 rows, **with** the join | **128.0 ms** | 141.7 ms | 200 |
+| tape grid, filtered to dealer RECEIVED | 334.9 ms | **3,845 ms** | 200 |
+| `/direction/bucket`, one bucket, whole history | 13.4 ms | 17.2 ms | 34 |
+| `/direction/standardised`, ten buckets | 17.2 ms | 18.3 ms | 340 |
+| `/direction/coverage`, breakdown by bucket | 17.0 ms | 20.6 ms | 85 |
+| `/direction/summary` | 40.8 ms | 43.7 ms | 1 |
+| per-trade drill-down by `package_id` | 15.9 ms | 18.5 ms | 10 |
+
+**The join is free.** `EXPLAIN (ANALYZE, BUFFERS)` on the tape grid shows
+`Index Scan using arbs_dd_unit_v1_pkey`, **0.004 ms per row over 200 loops**;
+the joined query is if anything faster than the baseline, which is noise on a
+133 ms query.
+
+**The one number to watch is the filtered query**, and it is an artefact of a
+*partial* backfill rather than of the design: with only 2024-07/08 populated,
+`WHERE dealer_direction = 'RECEIVED' ORDER BY execution_start DESC` walks
+backward through ten months of unmatched packages before it finds 200 that
+match. Re-measured after the full backfill.
+
 ### D6. Chrome verification used `chrome-devtools`, not `claude-in-chrome`
 
 `claude-in-chrome` found two connected browsers and requires the user to

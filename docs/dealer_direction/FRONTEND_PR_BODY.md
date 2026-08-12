@@ -142,21 +142,82 @@ and identity is never colour alone: the badge carries the word.
 
 ---
 
+## Measured cost
+
+Per-day, on this box (32 cores, 64 GB), against a fully warm curve store:
+
+| stage | measured |
+|---|---|
+| `price`, one tape day | **57 s** single process (2,752 units, 2,098 priced, 58,520 KRD rows on 2026-04-01) |
+| `price`, 8 workers | ~60 s of wall clock per 2.5 days |
+| one `Calibration.fit` | **42.1 s** over 550 fitted buckets, 60-day window, 59,520 deviations |
+| rolling calibration, full tape | ~121 fits → **~85 min**, then cached |
+| `publish`, one day | **6.5 s** (classify → ladder → roll-up → three writes) |
+| ladder rebuild + write | seconds; 2,006 cells for a 29-day window |
+
+The backend's own estimates were 115 s repricing + 65 s key-rate = 180 s/day.
+Measured together against a warm minute store, with the projector taking the
+repricer's own pricer, a day costs a third of the sum.
+
+## Measured read cost
+
+`scratch/ddfe06_read_cost.py`, 5 reps each, against prod over the pooler:
+
+| query | median | p95 |
+|---|---:|---:|
+| tape grid, 200 rows, **no** direction join | 133.2 ms | 337.4 ms |
+| tape grid, 200 rows, **with** the join | **128.0 ms** | 141.7 ms |
+| `/direction/bucket` — one bucket, whole history | 13.4 ms | 17.2 ms |
+| `/direction/standardised` — ten buckets | 17.2 ms | 18.3 ms |
+| `/direction/coverage` — breakdown by bucket | 17.0 ms | 20.6 ms |
+| `/direction/summary` | 40.8 ms | 43.7 ms |
+| per-trade drill-down by `package_id` | 15.9 ms | 18.5 ms |
+
+**The join is free.** `EXPLAIN (ANALYZE, BUFFERS)` shows `Index Scan using
+arbs_dd_unit_v1_pkey`, **0.004 ms per row over 200 loops**.
+
 ## Defects this found
 
-**`if nan:` is `True`, and it excluded every package unit.** The first
-`publish` run stopped on its own coverage guard. `pkg_exclusion` is only
-assigned on a `PKG` unit; on a day where no package is refused, no row assigns
-it, `reindex` creates it as an all-NaN **float64** column, parquet round-trips
-that as float64, and `bool(nan)` is `True` — so a presence test on a string
-field fired on every package unit and handed the reason `nan` downstream.
+Four, and every one of them was caught by a guard rather than by looking.
 
-It had **no symptom of its own**: the units would have shipped as abstentions
-with a blank tooltip and the ladder would have been quietly short. It surfaced
-only because the coverage accounting is required to be a partition and refuses
-a unit with no reason. Fixed by one reader (`_s`) for every string field
-leaving the stage cache, plus two assertions that state the invariant instead
-of relying on the next guard downstream.
+**1. `if nan:` is `True`, and it excluded every package unit.**
+`pkg_exclusion` is only assigned on a `PKG` unit; on a day where no package is
+refused, no row assigns it, `reindex` creates it as an all-NaN **float64**
+column, parquet round-trips that as float64, and `bool(nan)` is `True` — so a
+presence test on a string field fired on every package unit and handed the
+reason `nan` downstream. **No symptom of its own**: the units would have
+shipped as abstentions with a blank tooltip and the ladder would have been
+quietly short. It surfaced only because the coverage accounting is required to
+be a partition and refuses a unit with no reason.
+
+**2. The coverage headline was 22 points too flattering.** It summed
+`coverage_dv01_kept / coverage_dv01_total` over the *ladder*, and a ladder cell
+only exists where at least one unit was oriented — so the average conditions
+on the very thing it measures. **67.0% against a true 44.8%**, on the one
+number whose entire job is to stop the panel reading as complete. Now read
+from `arbs_dd_coverage_v1`, which is a partition by construction.
+
+**3. The two clocks do not share a day boundary.** The tape's `as_of` day
+starts 20:00 ET the previous evening; the ladder stamps a New York
+*availability* date. Publishing `as_of >= SAMPLE_FLOOR` produced 1,050 rows
+stamped **the day before the floor**, and `indicator.build` refused the whole
+run over it. Dropped; nothing that belongs to a published day goes with them.
+
+**4. The level and the coverage are on two different grids** — INDICATOR.md §2
+says so and this is where it bites. rateslib's delta is non-zero at all 28
+pillars (measured: 28.0 rows per unit), so one 10Y trade publishes a level cell
+in every bucket while its gross DV01 matures in one. 187 of 1,420 cells had a
+level and no denominator. Dropped, at a measured **0.253% of |delta_dv01|**,
+rather than mixing two populations inside one fraction. Nothing had exercised
+this before: the backend built the coverage frame alone, and INDICATOR §6
+records that no composed pipeline existed to put a KRD-derived level beside it.
+
+And one assumption checked rather than trusted: `RepricedUnit.legs[i]` is
+paired positionally with `unit.legs.iloc[i]`, so a misalignment would match the
+wrong per-leg fee to the wrong NPV and hand `package_price.classify` a
+scrambled input — a confident, wrong orientation with no symptom. Measured on a
+real day: **0 mismatches over 621 multi-leg units**, and the probe refuses to
+pass if the sample contains no multi-leg unit. Asserted in the code as well.
 
 ---
 
