@@ -35,7 +35,8 @@ from Query.FixedRateBonds.FixedRateBondValue import FixedRateBondValue
 
 logger = logging.getLogger(__name__)
 
-__all__ = ["GSSSignalEngine", "GSSEntryAction", "GSSExitAction", "build_gss_trigger", "OpenFly"]
+__all__ = ["GSSSignalEngine", "GSSEntryAction", "GSSExitAction", "build_gss_trigger", "OpenFly",
+           "scan_candidates"]
 
 
 @dataclass
@@ -67,12 +68,19 @@ class GSSSignalEngine:
         *,
         repo_curve: Optional[RepoCurve] = None,
         repo_tenor: str = "ON",
+        candidates: Optional[Dict[pd.Timestamp, List["FlyState"]]] = None,
     ):
         self.panel = panel
         self.signal = signal_frame
         self.cfg = cfg or GSSConfig()
         self.repo_curve = repo_curve
         self.repo_tenor = repo_tenor
+        # Precomputed {date -> [FlyState]} from `scan_candidates`. The scan depends only on the
+        # CONSTRUCTION knobs (signal/universe/fly) and not on any gate, and it is 98% of a run's
+        # cost — 247s of 251s. Caching it lets a parameter sweep hold the construction fixed and
+        # move the gates for ~1s a config. The gating itself is still done by this engine, so a
+        # swept result cannot drift from a real one the way a reimplemented replay could.
+        self.candidates = candidates
 
         self.open: Dict[str, OpenFly] = {}
         self.closed_at: Dict[str, pd.Timestamp] = {}
@@ -168,13 +176,16 @@ class GSSSignalEngine:
             if not curve.empty and curve["signal"].notna().any():
                 held_ids = {p.fly_id for p in self.open.values()}
                 held_legs = {leg for p in self.open.values() for leg in p.legs}
-                candidates = scan_flies(
-                    curve,
-                    s2c_panel=self.panel.s2c,
-                    yield_panel=self.panel.ytm,
-                    asof=now,
-                    cfg=self.cfg.fly,
-                )
+                if self.candidates is not None:
+                    candidates = self.candidates.get(pd.Timestamp(now), [])
+                else:
+                    candidates = scan_flies(
+                        curve,
+                        s2c_panel=self.panel.s2c,
+                        yield_panel=self.panel.ytm,
+                        asof=now,
+                        cfg=self.cfg.fly,
+                    )
                 gated = [
                     st
                     for st in candidates
@@ -231,6 +242,32 @@ class GSSSignalEngine:
 
         fired = bool(entries or exits)
         return TriggerInfo(fired, {"entries": entries, "exits": exits, "engine": self})
+
+
+def scan_candidates(engine: "GSSSignalEngine", dates) -> Dict[pd.Timestamp, List[FlyState]]:
+    """Precompute the per-date candidate flies for one CONSTRUCTION.
+
+    Uses the engine's own eligibility filter and ``scan_flies``, so the cache is by construction
+    identical to what the engine would have computed inline — this is a hoist, not a reimplementation.
+
+    Depends only on the signal, universe and fly configuration (and the panel). It is independent of
+    every gate, which is what makes a gate sweep nearly free: 247s once, then ~1s per gate config.
+    """
+    out: Dict[pd.Timestamp, List[FlyState]] = {}
+    for d in dates:
+        now = pd.Timestamp(d)
+        curve = engine._eligible_curve(now)
+        if curve.empty or not curve["signal"].notna().any():
+            out[now] = []
+            continue
+        out[now] = scan_flies(
+            curve,
+            s2c_panel=engine.panel.s2c,
+            yield_panel=engine.panel.ytm,
+            asof=now,
+            cfg=engine.cfg.fly,
+        )
+    return out
 
 
 @dataclass

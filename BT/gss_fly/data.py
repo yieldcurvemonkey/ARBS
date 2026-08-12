@@ -20,6 +20,7 @@ from __future__ import annotations
 import contextlib
 import datetime
 import logging
+import dataclasses
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Sequence, Tuple
@@ -35,6 +36,7 @@ __all__ = [
     "CurvePanel",
     "build_curve_panel",
     "ust_business_days",
+    "spline_config_id",
     "apply_universe_filter",
     "fetch_curveset_snapshot",
     "warm_bond_snapshots",
@@ -127,6 +129,7 @@ def build_curve_panel(
     consolidate: str = "complete",
     workers: int = 1,
     local_reference: bool = True,
+    spline_config=None,
 ) -> CurvePanel:
     """Fit the cash spline on every date and assemble the dates × bonds panels.
 
@@ -169,6 +172,10 @@ def build_curve_panel(
     day_dir: Optional[Path] = None
     if cache_path is not None:
         cache_path = Path(cache_path)
+        # A non-default spline gets its own directory: the day cache is keyed by DATE, so two
+        # fits sharing one directory would interleave into a panel that means nothing.
+        if spline_config is not None:
+            cache_path = cache_path / f"spline_{spline_config_id(spline_config)}"
         if (cache_path / "s2c.parquet").exists():
             logger.info("curve panel cache hit: %s", cache_path)
             return _load_panel(cache_path)
@@ -227,7 +234,8 @@ def build_curve_panel(
     # is constructed — the generator is lazy, so the spline calls happen inside this block.
     with stack:
         if workers > 1 and todo:
-            results = _fetch_days_concurrently(todo, mdp, workers, show_progress, reference_fn)
+            results = _fetch_days_concurrently(todo, mdp, workers, show_progress, reference_fn,
+                                              spline_config)
         else:
             iterator = todo
             if show_progress:
@@ -237,7 +245,7 @@ def build_curve_panel(
                     iterator = tqdm.tqdm(todo, desc="GSS curve panel", unit="day")
                 except ImportError:
                     pass
-            results = ((d, _fetch_day(d, mdp, reference_fn)) for d in iterator)
+            results = ((d, _fetch_day(d, mdp, reference_fn, spline_config)) for d in iterator)
 
         for d, fetched in results:
             if fetched is None:
@@ -381,7 +389,25 @@ def local_reference_data(mdp, provider: Optional["LocalReferenceProvider"] = Non
         mdp.get_bond_reference_data = original
 
 
-def _fetch_day(d: datetime.date, mdp, reference_fn=None):
+def spline_config_id(spline_config) -> str:
+    """Short stable id for a spline config, used to keep panels for different fits apart.
+
+    The day cache is keyed by DATE. Two spline configurations writing into one cache directory
+    would silently interleave fits, and the resulting panel would be a mixture that reconciles,
+    loads, and means nothing. Every non-default spline therefore gets its own subdirectory.
+    """
+    import hashlib
+
+    if spline_config is None:
+        return "default"
+    try:
+        payload = repr(dataclasses.asdict(spline_config))
+    except Exception:  # noqa: BLE001 — not a dataclass; fall back to repr
+        payload = repr(spline_config)
+    return hashlib.sha1(payload.encode("utf-8")).hexdigest()[:10]
+
+
+def _fetch_day(d: datetime.date, mdp, reference_fn=None, spline_config=None):
     """Fetch one day's spline and reference frame. ``None`` if either leg fails.
 
     Both fetches for a date live here so the threaded and serial paths run *identical* code — the
@@ -389,7 +415,8 @@ def _fetch_day(d: datetime.date, mdp, reference_fn=None):
     """
     ts = pd.Timestamp(d)
     try:
-        spline = mdp.fetch_cash_spline(d)
+        spline = (mdp.fetch_cash_spline(d, config=spline_config) if spline_config is not None
+                  else mdp.fetch_cash_spline(d))
     except Exception as exc:  # noqa: BLE001 — logged, not hidden
         logger.warning("spline failed on %s: %s: %s", d, type(exc).__name__, exc)
         return None
@@ -419,7 +446,8 @@ def _fetch_day(d: datetime.date, mdp, reference_fn=None):
     return frame, ref
 
 
-def _fetch_days_concurrently(todo, mdp, workers: int, show_progress: bool, reference_fn=None):
+def _fetch_days_concurrently(todo, mdp, workers: int, show_progress: bool, reference_fn=None,
+                             spline_config=None):
     """Fetch days on a thread pool, yielding them **in date order**.
 
     Acquisition here is not compute — a serial build sits at ~2% CPU with a single open connection
@@ -443,7 +471,7 @@ def _fetch_days_concurrently(todo, mdp, workers: int, show_progress: bool, refer
             pass
 
     with ThreadPoolExecutor(max_workers=workers) as pool:
-        for d, fetched in zip(todo, pool.map(lambda x: _fetch_day(x, mdp, reference_fn), todo)):
+        for d, fetched in zip(todo, pool.map(lambda x: _fetch_day(x, mdp, reference_fn, spline_config), todo)):
             if bar is not None:
                 bar.update(1)
             yield d, fetched

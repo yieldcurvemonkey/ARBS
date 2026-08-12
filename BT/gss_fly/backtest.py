@@ -23,7 +23,7 @@ from BT.gss_fly.config import GSSConfig
 from BT.gss_fly.costs import RepoCurve
 from BT.gss_fly.data import CurvePanel
 from BT.gss_fly.signals import build_bond_signals
-from BT.gss_fly.strategy import GSSSignalEngine, build_gss_trigger
+from BT.gss_fly.strategy import GSSSignalEngine, build_gss_trigger, scan_candidates
 from BT.query_engine import QueryDrivenBacktest
 from BT.query_strategy import QueryStrategy
 
@@ -181,6 +181,7 @@ def run_gss_backtest(
     leg_specialness_bps: Optional[Dict[str, float]] = None,
     show_progress: bool = True,
     strict: bool = True,
+    candidates=None,
 ) -> GSSResult:
     """Fit the signals, wire the trigger, run the engine, and prove it actually traded.
 
@@ -190,7 +191,8 @@ def run_gss_backtest(
     cfg = cfg or GSSConfig()
 
     sig = build_bond_signals(panel.s2c, cfg.signal)
-    engine = GSSSignalEngine(panel, sig["signal"], cfg, repo_curve=repo_curve, repo_tenor=repo_tenor)
+    engine = GSSSignalEngine(panel, sig["signal"], cfg, repo_curve=repo_curve,
+                             repo_tenor=repo_tenor, candidates=candidates)
 
     gc_rate = None
     if repo_curve is not None:
