@@ -7,6 +7,8 @@
 import { describe, expect, it } from '@jest/globals'
 import {
   DD_COVERAGE,
+  DD_CURVE_MID,
+  DD_CURVE_MID_DAY,
   DD_GENERATION,
   DD_IN_LADDER,
   DD_LADDER,
@@ -24,6 +26,17 @@ describe('the generation is a constant, not an env var', () => {
     expect(DD_COVERAGE).toBe('arbs_dd_coverage_v1')
     expect(DD_LADDER).toBe('arbs_dd_ladder_v1')
     expect(DD_RUNS).toBe('arbs_dd_runs_v1')
+    expect(DD_CURVE_MID).toBe('arbs_dd_curve_mid_v1')
+    expect(DD_CURVE_MID_DAY).toBe('arbs_dd_curve_mid_day_v1')
+  })
+
+  it('derives the mid grid from the same generation as the units it is drawn under', () => {
+    // The chart and the annotations on it come from one pricer; they must also
+    // come from one generation. A _v2 unit table beside a _v1 mid grid would
+    // render annotations against a mid built by different code, and the
+    // disagreement would look like market noise.
+    expect(DD_CURVE_MID.endsWith(`_${DD_GENERATION}`)).toBe(true)
+    expect(DD_CURVE_MID_DAY.endsWith(`_${DD_GENERATION}`)).toBe(true)
   })
 
   it('agrees with provenance.IN_LADDER', () => {

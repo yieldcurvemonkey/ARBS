@@ -21,5 +21,33 @@ export const DD_COVERAGE = d('coverage')
 export const DD_LADDER = d('ladder')
 export const DD_RUNS = d('runs')
 
+/**
+ * The intraday mid grid: the model par rate per (rate_index, tenor_label,
+ * minute), so prints can be drawn against where the market actually was.
+ *
+ * Written by SDRUtils/_swappulse_scripts/backfill_curve_mids.py through the
+ * SAME pricer that produced every direction annotation, which is what stops
+ * the chart and the annotations on it from disagreeing.
+ *
+ * TWO RULES FOR READING IT, both measured:
+ *
+ * 1. Look a print up at its dealer-direction `curve_timestamp`, by EQUALITY
+ *    on `ts`. That column already holds `snap_instant(pricing_ts)` — floor to
+ *    the minute in New York, then step back one — and the grid is built on the
+ *    same instants, so the lookup is exact (max error 2.7e-13 bp over 890
+ *    prints). Looking up at the print's own execution minute returns the
+ *    minute AFTER the one the annotation priced at.
+ * 2. Citi publishes nothing from 23:00 to 00:59 ET, so there is no row in
+ *    those two hours. CARRY THE LAST POINT FORWARD rather than interpolating
+ *    or drawing a gap: the direction pipeline serves those prints from the
+ *    previous 22:59 snapshot, so LOCF reproduces its mid exactly.
+ */
+export const DD_CURVE_MID = d('curve_mid')
+
+/** Per (grid_date, rate_index) accounting for the grid: how many minutes the
+ * curve store held, how many were served, how many rows resulted. The
+ * completion check is `n_rows === n_tenors * minutes_served`. */
+export const DD_CURVE_MID_DAY = d('curve_mid_day')
+
 /** The reason code a unit that reached the ladder carries. */
 export const DD_IN_LADDER = 'IN_LADDER'

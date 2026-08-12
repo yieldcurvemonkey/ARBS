@@ -38,6 +38,32 @@ expensive half.
     columns mirror ``indicator.CELL_COLUMNS`` **verbatim**. Cheap, and
     rebuilt wholesale on every run — see REBUILD WHOLESALE below.
 
+AND TWO MORE, ADDED LATER: THE INTRADAY MID GRID
+================================================
+
+``arbs_dd_curve_mid_v1``
+    One row per (rate_index, tenor_label, minute) — the model **par rate**, so
+    a print can be drawn against where the market actually was. It exists for
+    the same reason the four above do: the Citi minute curve store is local
+    parquet/DuckDB and the web tier cannot reach it.
+
+    **The mid comes from ``midprice.SessionBranchPricer.price_leg``, the same
+    object that priced the deviation behind every direction annotation.** A
+    second, independent discount-factor path would let the chart and the
+    annotations drawn on it disagree with nothing to say so. Measured on 890
+    single-leg ``RATE_VS_MID`` prints over three days: the grid reproduces
+    ``fixed_rate*100 - deviation_bps/100`` to a **max of 2.7e-13 bp** at
+    1-minute spacing. That is not "close"; it is the same number.
+
+``arbs_dd_curve_mid_day_v1``
+    One row per (grid_date, rate_index): how many minutes the store partition
+    held, how many were served, how many were refused, and how many grid rows
+    resulted. The completion check for the grid is an **equality**
+    (``n_rows == n_tenors * minutes_served``), and the denominator is a
+    property of the curve store, which the database cannot see. Storing it is
+    what lets ``verify`` run against the database alone — and what stops
+    "exit code 0" from standing in for "the day produced its rows".
+
 WHAT IS NOT STORED: THE 28 KRD PILLARS
 ======================================
 
@@ -143,6 +169,8 @@ UNIT_BUCKET_TABLE = _t("unit_bucket")
 COVERAGE_TABLE = _t("coverage")
 LADDER_TABLE = _t("ladder")
 RUNS_TABLE = _t("runs")
+CURVE_MID_TABLE = _t("curve_mid")
+CURVE_MID_DAY_TABLE = _t("curve_mid_day")
 
 #: The tape generation these rows were built from. Written to every unit row.
 SOURCE_TAPE_GENERATION = TAPE_GENERATION
@@ -369,11 +397,130 @@ CREATE TABLE IF NOT EXISTS {RUNS_TABLE} (
 )""",
     f"CREATE INDEX IF NOT EXISTS idx_dd_{IDX_INFIX}_runs_day "
     f"ON {RUNS_TABLE} (as_of_date, stage)",
+
+    # ----------------------------------------------------- intraday mid grid
+    # The model par rate per (index, tenor, minute), so a print can be drawn
+    # against where the market actually was. Produced by
+    # `backfill_curve_mids.py` through `midprice.SessionBranchPricer` -- the
+    # same pricer the direction inference uses, deliberately, so the chart and
+    # the annotations on it cannot disagree.
+    f"""
+CREATE TABLE IF NOT EXISTS {CURVE_MID_TABLE} (
+    -- The ET CALENDAR DATE of the curve-store partition the minute came from.
+    -- NOT `as_of_date`, and the difference is not cosmetic: the tape's
+    -- `as_of_date` is a UTC date, so ~4% of a tape day's prints (ET hours
+    -- 20-23) were executed the PREVIOUS ET evening. Keying the grid on
+    -- `as_of_date` puts those prints a whole day away from their own minutes;
+    -- every "no grid point within 30 minutes" case in the sizing probe was
+    -- this artifact, and all of them disappeared on the ET date.
+    grid_date               DATE NOT NULL,
+    rate_index              TEXT NOT NULL,
+    -- A standard-tenor label ('10Y'), NOT the print's own tenor. The tape's
+    -- `tenor_label` is a bucket -- '10Y' spans 3,468-3,830 days over 273
+    -- distinct offsets -- so `maturity_date` below is what says which
+    -- instrument this row actually is.
+    tenor_label             TEXT NOT NULL,
+
+    -- THE INSTANT ASKED FOR, on a whole minute, tz-aware. This is the join
+    -- key: `snapshot.snap_instant` floors to the minute and steps back one,
+    -- and `arbs_dd_unit_v1.curve_timestamp` already IS that instant
+    -- (973,305/973,305 rows carry second = 0). So an annotated print joins to
+    -- its own mid by EQUALITY on this column. Joining at the print's raw
+    -- execution minute silently returns the minute AFTER the one the
+    -- annotation priced at, and the bit-exactness is gone.
+    ts                      TIMESTAMPTZ NOT NULL,
+
+    -- ...and the instant actually SERVED, with the realised staleness. A row
+    -- served from a stale snapshot must SAY so: a chart that draws a
+    -- 90-minute-old mid as if it were live is the failure these three columns
+    -- exist to prevent. `ts` + `snapshot_lag_seconds` reconstructs
+    -- `served_ts` exactly, so nothing is inferred at read time.
+    -- `snapshot_policy` is STRICT_1MIN_IN_SESSION or ASOF_2H_OUT_OF_SESSION;
+    -- a lag of 90 s means something different under each.
+    served_ts               TIMESTAMPTZ,
+    snapshot_lag_seconds    DOUBLE PRECISION,
+    snapshot_policy         TEXT NOT NULL,
+
+    -- The par (fair) rate in PERCENT -- `IRSwapValue.RATE` on a ONE-leg query
+    -- is percent; two- and three-leg queries return bp. NOT NULL because a
+    -- non-finite mark on a curve that was served is a pricing defect, and the
+    -- runner fails the day rather than writing a hole that reads as a quiet
+    -- market.
+    mid_pct                 DOUBLE PRECISION NOT NULL,
+    pv01                    DOUBLE PRECISION,
+
+    -- The instrument, stored rather than implied. `effective_date` is
+    -- `calendar_advance(curve.reference_date(), '2b')` on `nyc` -- the rule
+    -- `RLIRSwapCurve.build_irswap(fwd="0D")` already uses in this repo, which
+    -- reproduces the tape's own modal spot on 598/629 days (99.3% by print
+    -- count; the residue is IMM roll weeks, which have no modal convention).
+    -- Writing both dates makes the row auditable instead of folklore, and is
+    -- what lets a reader tell a bucket-width difference from a pipeline
+    -- error.
+    effective_date          DATE NOT NULL,
+    maturity_date           DATE NOT NULL,
+
+    curve_name              TEXT NOT NULL,
+    curve_source            TEXT NOT NULL,
+    code_vintage            TEXT NOT NULL,
+    computed_at             TIMESTAMPTZ NOT NULL DEFAULT now(),
+
+    -- Matches the read: one index, one tenor, a time range. A day's series
+    -- for one tenor is then a ~1,300-row btree range scan.
+    PRIMARY KEY (rate_index, tenor_label, ts)
+)""",
+    # "one day, one curve, one tenor, ordered by time" -- equality columns
+    # first, then the range column, per the composite-index rule used above.
+    f"CREATE INDEX IF NOT EXISTS idx_dd_{IDX_INFIX}_mid_day "
+    f"ON {CURVE_MID_TABLE} (grid_date, rate_index, tenor_label, ts)",
+
+    # ------------------------------------------- mid grid, per-day accounting
+    # Citi publishes nothing between 23:00 and 00:59 ET, so no grid row exists
+    # for a print in those two hours. THE CONSUMER CARRIES THE LAST POINT
+    # FORWARD, and that is not a convenience: the direction pipeline serves
+    # those prints from an ASOF_2H_OUT_OF_SESSION curve, which IS the previous
+    # 22:59 snapshot, so LOCF reproduces the annotation's own mid exactly.
+    # Interpolating across the hole, or drawing a gap, would both disagree
+    # with the annotation drawn on top of it.
+    f"""
+CREATE TABLE IF NOT EXISTS {CURVE_MID_DAY_TABLE} (
+    grid_date               DATE NOT NULL,
+    rate_index              TEXT NOT NULL,
+    curve_name              TEXT NOT NULL,
+
+    -- The DENOMINATOR, and it is a property of the curve store, which the
+    -- database cannot see. `partition_minutes` is how many distinct minutes
+    -- the store partition held; `minutes_served` how many the snapshot policy
+    -- answered; `minutes_missed` the rest, SKIPPED rather than fabricated.
+    -- The completion check is the equality
+    --     n_rows = n_tenors * minutes_served
+    -- which is exact, so it is used instead of "non-zero". It is NOT checked
+    -- against 1,320: truncated sessions are real (min 911 minutes observed)
+    -- and interior holes exist, so `session_expected_minutes` is carried
+    -- beside it as the soft, reportable comparison.
+    partition_minutes       INTEGER NOT NULL,
+    session_expected_minutes INTEGER,
+    minutes_served          INTEGER NOT NULL,
+    minutes_missed          INTEGER NOT NULL,
+    n_rows                  INTEGER NOT NULL,
+    n_tenors                SMALLINT NOT NULL,
+    -- How many distinct curve reference dates the day's minutes carried.
+    -- Normally 1. More than one means the spot date moved inside the day, and
+    -- the instrument therefore changed inside the day -- a reportable fact,
+    -- not an error, and the per-row dates are what resolve it.
+    n_reference_dates       SMALLINT,
+    seconds                 DOUBLE PRECISION,
+    status                  TEXT NOT NULL,
+    error_text              TEXT,
+    code_vintage            TEXT,
+    computed_at             TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (grid_date, rate_index)
+)""",
 ]
 
 
 def ensure_schema(conn) -> None:
-    """Create the four tables and the runs ledger. Idempotent."""
+    """Create the six tables and the runs ledger. Idempotent."""
     with conn.cursor() as cur:
         for stmt in DDL_STATEMENTS:
             cur.execute(stmt)
