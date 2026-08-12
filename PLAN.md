@@ -129,6 +129,40 @@ provider match the cached ones to **3e-13 bp**.
 - [x] `BT/xccy_rv` — 20 tests **including the archive tie-out**
 - [x] notebook (`notebooks/rv/gss_fly_rv.ipynb`), warm runbook, tests
 
+## The signal reads the interpolator — measured 2026-08-12
+
+**Jaccard 0.045.** Sliding the spline knots **1.25 years** — same knot count, same bonds, same
+prices, nothing about the market changed — produces a book sharing **3 of 66** trades with the
+original.
+
+| | S0 baseline | S3 knot-shift |
+|---|---|---|
+| median RMSE | 1.939 bp | 1.933 bp |
+| s2c std | 1.946 bp | 1.947 bp |
+| entries | 35 | 34 |
+| **Jaccard vs S0** | 1.000 | **0.045** |
+
+The tolerant Jaccard is *also* 0.045, so these are not the same trades a few days apart — they are
+different bonds.
+
+The two fits are statistically indistinguishable: RMSE differs by 0.006bp, residual dispersion by
+0.001bp, trade count by one. By every aggregate measure they are the same curve. Yet they disagree
+about which bonds are cheap on 95% of occasions.
+
+**So the s2c residual is not a measurement of bond richness.** It is substantially a measurement of
+where the spline was allowed to bend: a bond looks cheap because a knot sits near it, and moving the
+knot moves the cheapness.
+
+This subsumes the economics below. The cost wall, the 4.5× cost/gross and the parameter fragility
+all presumed the signal measured something. Tuning parameters on a signal that is an artifact of its
+own estimator cannot produce a strategy. It also compounds the unresolved FedInvest question —
+off-the-run closes that may themselves be matrix-priced from a curve, fed into a spline that adds
+its own curvature: two interpolators between the market and the "signal".
+
+**Status: one alternate fit.** `S1_coarse` and `S2_dense` are building. If Jaccard stays ~0.05
+across all of them the conclusion is robust; if S3 is uniquely bad, the 1.25y shift may have landed
+somewhere pathological and the claim must be weakened.
+
 ## Conditioning — measured 2026-08-12. The book is severely ill-conditioned.
 
 **The Sharpe version of the question is not answerable on this sample and was not attempted.** At

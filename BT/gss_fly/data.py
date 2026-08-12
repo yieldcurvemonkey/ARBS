@@ -49,8 +49,14 @@ __all__ = [
 #: is modified — both established previously against Citi's own field dictionary.
 BOND_SNAPSHOT_VALUES = ("YIELD", "PRICE", "DURATION", "DV01", "ASW", "ZSPREAD")
 
-#: Dates that failed in this process. Not persisted — see the note at its use site.
-_FAILED_DAYS: set = set()
+#: date -> how many times it has failed in THIS process. Not persisted; see the use site.
+_FAILED_DAYS: dict = {}
+
+#: Attempts allowed per date per process before it is skipped. Bounded rather than absolute: the
+#: guard exists to stop ONE unserveable date stalling a chunked warm forever, but a date that
+#: failed once is usually transient, and refusing to retry it defeats the resume the guard was
+#: written to protect. Two attempts keeps the anti-stall property and still recovers.
+_MAX_DAY_ATTEMPTS = 2
 
 
 @dataclass
@@ -214,11 +220,11 @@ def build_curve_panel(
     # by the next run, and a negative result written to disk is exactly the trap that consolidating
     # a partial panel was.
     if _FAILED_DAYS:
-        skip = [d for d in todo if d in _FAILED_DAYS]
+        skip = [d for d in todo if _FAILED_DAYS.get(d, 0) >= _MAX_DAY_ATTEMPTS]
         if skip:
-            logger.info("skipping %d date(s) that already failed this run: %s", len(skip),
-                        ", ".join(str(d) for d in skip[:5]))
-        todo = [d for d in todo if d not in _FAILED_DAYS]
+            logger.info("skipping %d date(s) that failed %d+ times this run: %s", len(skip),
+                        _MAX_DAY_ATTEMPTS, ", ".join(str(d) for d in skip[:5]))
+        todo = [d for d in todo if _FAILED_DAYS.get(d, 0) < _MAX_DAY_ATTEMPTS]
 
     # One universe read serves every date, so the per-date reference fetch disappears entirely --
     # both here and inside `fetch_cash_spline`, which makes the same call before it fits.
@@ -249,7 +255,7 @@ def build_curve_panel(
 
         for d, fetched in results:
             if fetched is None:
-                _FAILED_DAYS.add(d)
+                _FAILED_DAYS[d] = _FAILED_DAYS.get(d, 0) + 1
                 continue
             frame, ref = fetched
             _absorb_day(pd.Timestamp(d), frame, ref, s2c_rows, ytm_rows, ttm_rows, rmse, ref_frames)

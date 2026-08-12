@@ -36,6 +36,16 @@ def build_curve_panel(*args, **kwargs):
     kwargs.setdefault("local_reference", False)
     return _build_curve_panel(*args, **kwargs)
 
+@pytest.fixture(autouse=True)
+def _clear_failed_days():
+    """`_FAILED_DAYS` is process-global on purpose; tests must not inherit each other's failures."""
+    import BT.gss_fly.data as _d
+
+    _d._FAILED_DAYS.clear()
+    yield
+    _d._FAILED_DAYS.clear()
+
+
 CUSIPS = ["912810AA1", "912810BB2", "912810CC3", "912810DD4"]
 
 
@@ -259,3 +269,18 @@ def test_consolidated_cache_short_circuits_the_day_scan(tmp_path, dates):
     panel = build_curve_panel(dates, again, cache_path=cache, show_progress=False)
     assert again.spline_calls == []
     assert len(panel.s2c) == len(dates)
+
+
+def test_a_transient_failure_is_retried_in_the_same_process(tmp_path, dates):
+    """The bug the bounded guard fixes.
+
+    An absolute "failed once, never retry" guard means a transient upstream failure is never
+    retried within the run — so a chunked warm that hits a blip loses those days for the whole
+    process, which is precisely the resume the guard exists to protect.
+    """
+    cache = tmp_path / "panel"
+    build_curve_panel(dates, _FakeMDP(dates, fail_from=5), cache_path=cache,
+                      show_progress=False, consolidate="never")
+    healthy = _FakeMDP(dates)
+    panel = build_curve_panel(dates, healthy, cache_path=cache, show_progress=False)
+    assert len(panel.s2c) == len(dates), "the previously-failed days were never retried"

@@ -54,11 +54,15 @@ def test_ust_business_days_is_a_strict_subset_of_bdate_range():
     assert len(bd) - len(cal) >= 9  # the UST calendar drops roughly ten sessions a year
 
 
-def test_a_dead_date_is_attempted_once_per_run_not_once_per_chunk(tmp_path):
+def test_a_dead_date_is_attempted_a_bounded_number_of_times_not_once_per_chunk(tmp_path):
     """The chunked-warm pathology, in miniature.
 
     Days 0-3 resolve; day 4 never will. A chunked warm walks prefixes 3, 4, 5, 6 — without the
     guard the dead date is attempted on every prefix that contains it.
+
+    The bound is `_MAX_DAY_ATTEMPTS`, not one. An absolute one-strike guard also blocks a
+    TRANSIENT failure from ever being retried in the same process, which defeats the resume it
+    was written to protect — that is a real bug this test used to enforce.
     """
     dates = [d.date() for d in pd.bdate_range("2025-03-03", periods=6)]
     mdp = _FakeMDP(dates, fail_from=4)
@@ -68,4 +72,6 @@ def test_a_dead_date_is_attempted_once_per_run_not_once_per_chunk(tmp_path):
                           consolidate="never", local_reference=False)
 
     dead = dates[4]
-    assert mdp.spline_calls.count(dead) == 1, mdp.spline_calls
+    n = mdp.spline_calls.count(dead)
+    assert n <= data_mod._MAX_DAY_ATTEMPTS, f"unbounded retry: {n} attempts"
+    assert n < 3, f"the dead date rode 3 chunks; the guard did not bind ({n})"
