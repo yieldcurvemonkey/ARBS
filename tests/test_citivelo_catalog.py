@@ -282,12 +282,20 @@ def test_stale_curves_warn_rather_than_being_hidden():
 
 
 def test_bond_universe_matches_the_harvest(cat: CitiVeloCatalog):
+    """Floors, not equalities.
+
+    The catalog is an accumulating union that never removes, so pinning its size
+    turns growth into a failure. It grew twice for good reasons: seeding the 525
+    matured USTs Citi quotes but ``CVCURVEBOND`` no longer lists took the whole
+    file from 2,162 to 2,690 and the US GOVT slice from 349 to 877. Both are the
+    feature. A SHRINK is the regression, and that is what these still catch.
+    """
     bonds = cat.bonds()
-    assert len(bonds) == 2162
-    assert len({b.country for b in bonds}) == 18
+    assert len(bonds) >= 2162, f"catalog shrank below the original harvest: {len(bonds)}"
+    assert len({b.country for b in bonds}) >= 18
     assert {b.asset_type for b in bonds} == {"GOVT", "AGENCY", "COVERED"}
     usa_govt = cat.bonds(country="USA", asset_type="GOVT")
-    assert len(usa_govt) == 349
+    assert len(usa_govt) >= 349, f"US GOVT shrank below the original harvest: {len(usa_govt)}"
     assert cat.bond_isin_lookup("US91282CCS89") is not None
 
 

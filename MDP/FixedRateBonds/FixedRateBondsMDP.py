@@ -1,6 +1,7 @@
 import contextlib
 import dataclasses
 import datetime
+import functools
 import importlib.util
 import itertools
 import logging
@@ -444,6 +445,31 @@ def _alias_to_cusip(alias: str, ref_table: pd.DataFrame) -> Optional[str]:
     return unique_cusips[0]
 
 
+@functools.lru_cache(maxsize=8192)
+def _auction_roll_date(y: int, m: int, d: int) -> datetime.date:
+    """One auction date, advanced by one US-government business day.
+
+    Memoised because it is a pure function of a date and the answer does not
+    depend on the ``as_of`` it is being asked for. ``_filter_and_rank_ref_df``
+    recomputed it for all 1,785 reference rows on every call, so a per-date loop
+    over one bond paid **107,100 QuantLib ``Calendar.advance`` calls across 60
+    dates** - 2.24 s of a 3.19 s profile, the single largest cost left in the
+    offline pricer path once the catalog parse was cached.
+
+    Keyed on the (y, m, d) triple rather than the object so a ``Timestamp`` and a
+    ``date`` for the same day share an entry.
+    """
+    cal = ql.UnitedStates(ql.UnitedStates.GovernmentBond)
+    nxt = cal.advance(ql.Date(d, m, y), ql.Period("1D"))
+    return datetime.date(nxt.year(), nxt.month(), nxt.dayOfMonth())
+
+
+def _auction_plus_1bd(ad):
+    if ad is None or pd.isna(ad):
+        return pd.NaT
+    return _auction_roll_date(int(ad.year), int(ad.month), int(ad.day))
+
+
 def _filter_and_rank_ref_df(
     ref_df: pd.DataFrame,
     as_of: datetime.date,
@@ -456,16 +482,6 @@ def _filter_and_rank_ref_df(
     issue_date when auction_date is unavailable.
     """
     if "auction_date" in ref_df.columns and ref_df["auction_date"].notna().any():
-        _cal = ql.UnitedStates(ql.UnitedStates.GovernmentBond)
-        as_of_ql = ql.Date(as_of.day, as_of.month, as_of.year)
-
-        def _auction_plus_1bd(ad):
-            if pd.isna(ad):
-                return pd.NaT
-            ql_ad = ql.Date(ad.day, ad.month, ad.year)
-            nxt = _cal.advance(ql_ad, ql.Period("1D"))
-            return datetime.date(nxt.year(), nxt.month(), nxt.dayOfMonth())
-
         roll_date = ref_df["auction_date"].apply(_auction_plus_1bd)
         roll_date = roll_date.fillna(ref_df["issue_date"])
     else:
