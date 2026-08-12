@@ -624,6 +624,22 @@ function BucketCaveats({
           'sends the contribution towards zero automatically.',
       )
     }
+    // Which clock this cell is stamped on. The tape has no dissemination
+    // timestamp of its own -- its `report_lag_seconds` is event minus
+    // execution and is 0 at p90, so it is not a publication delay at all --
+    // and the fallback is the Part 43 Appendix C legal estimate. Where the
+    // lineage sidecar covers the window the real publication time is known
+    // (median 5.23 min, p95 11.3 min); where it does not, the stamp is a
+    // legal bound rather than an observation, and the panel should say so
+    // rather than let the x-axis imply otherwise.
+    const measured = num(last.frac_dv01_visibility_measured as number | null)
+    if (measured != null && measured < 0.5) {
+      notes.push(
+        `${fmtPct(1 - measured, 0)} of this cell is stamped with the Part 43 ` +
+          'legal-delay estimate rather than a measured publication time. The ' +
+          'day is right; the intraday position within it is a bound.',
+      )
+    }
   }
   if (!notes.length) return null
   return (
