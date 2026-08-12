@@ -23,7 +23,18 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from BT.gss_fly.data import build_curve_panel
+from BT.gss_fly.data import build_curve_panel as _build_curve_panel
+
+
+def build_curve_panel(*args, **kwargs):
+    """These tests are about the CACHE, so they must exercise the caller's MDP.
+
+    `local_reference=True` (the production default) derives reference data from the fiscaldata
+    universe instead of calling the MDP, which would make a fake MDP's `ref_calls` silently empty
+    and quietly couple these tests to real on-disk data.
+    """
+    kwargs.setdefault("local_reference", False)
+    return _build_curve_panel(*args, **kwargs)
 
 CUSIPS = ["912810AA1", "912810BB2", "912810CC3", "912810DD4"]
 

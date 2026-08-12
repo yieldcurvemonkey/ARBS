@@ -36,6 +36,7 @@ __all__ = [
     "apply_universe_filter",
     "fetch_curveset_snapshot",
     "warm_bond_snapshots",
+    "LocalReferenceProvider",
     "BOND_SNAPSHOT_VALUES",
 ]
 
@@ -97,6 +98,7 @@ def build_curve_panel(
     show_progress: bool = True,
     consolidate: str = "complete",
     workers: int = 1,
+    local_reference: bool = True,
 ) -> CurvePanel:
     """Fit the cash spline on every date and assemble the dates × bonds panels.
 
@@ -170,8 +172,16 @@ def build_curve_panel(
         if resumed:
             logger.info("resuming: %d of %d days already cached in %s", len(resumed), len(dates), day_dir)
 
+    # One universe read serves every date, so the per-date reference fetch disappears entirely.
+    reference_fn = None
+    if todo and local_reference:
+        try:
+            reference_fn = LocalReferenceProvider()
+        except Exception as exc:  # noqa: BLE001 — fall back rather than fail the build
+            logger.warning("local reference universe unavailable (%s); falling back to per-date fetch", exc)
+
     if workers > 1 and todo:
-        results = _fetch_days_concurrently(todo, mdp, workers, show_progress)
+        results = _fetch_days_concurrently(todo, mdp, workers, show_progress, reference_fn)
     else:
         iterator = todo
         if show_progress:
@@ -181,7 +191,7 @@ def build_curve_panel(
                 iterator = tqdm.tqdm(todo, desc="GSS curve panel", unit="day")
             except ImportError:
                 pass
-        results = ((d, _fetch_day(d, mdp)) for d in iterator)
+        results = ((d, _fetch_day(d, mdp, reference_fn)) for d in iterator)
 
     for d, fetched in results:
         if fetched is None:
@@ -220,7 +230,58 @@ def build_curve_panel(
     return panel
 
 
-def _fetch_day(d: datetime.date, mdp):
+class LocalReferenceProvider:
+    """Derive each date's bond reference frame locally instead of fetching it per date.
+
+    ``FixedRateBondsMDP.get_bond_reference_data`` calls ``_fetch_fiscaldata`` directly and so
+    bypasses the reference cache entirely — a 350-day panel made 350 HTTP round-trips to
+    fiscaldata for what is **one static universe file**. A bond's identity does not change: its
+    coupon, issue date, auction date and maturity are fixed at auction, and the only thing that
+    varies by date is which bonds are alive and how they rank within their on-the-run bucket. Both
+    are local computations over the universe.
+
+    ``update_reference_data("fiscaldata")`` already caches that universe (1,785 rows, all issues
+    back to 1982 — matured bonds are retained, so historical dates reconstruct correctly), and
+    ``_rl_prefetch_intraday`` already derives per-date frames from it this way.
+
+    **The boundary rule was measured, not assumed.** Against 48 reference frames built by the
+    fetched path, ``issue_date <= as_of < maturity_date`` reproduces all 48 exactly — membership
+    and on-the-run rank. Neither boundary is the one ``_filter_and_rank_ref_df`` uses: its strict
+    ``issue_date < as_of`` drops a bond on its issue day, which cascades (181 ranks moved on
+    2024-09-03), and its ``maturity_date >= as_of`` keeps a bond on the day it matures. Those are
+    not cosmetic for this book — with ``exclude_ranks=(0,)``, whether a new issue is present
+    decides whether the *previous* on-the-run is rank 0 and dropped, or rank 1 and traded.
+    """
+
+    def __init__(self, *, force_refresh: bool = False):
+        from MDP.FixedRateBonds.reference_data_cache.ust_reference_data import update_reference_data
+
+        self.universe = update_reference_data(source="fiscaldata", force_refresh=force_refresh)
+        self._roll = self._roll_dates(self.universe)
+        logger.info("local reference universe: %d issues, no per-date fetch", len(self.universe))
+
+    @staticmethod
+    def _roll_dates(ref: pd.DataFrame):
+        """On-the-run roll takes effect the business day after auction; issue_date is the fallback."""
+        if "auction_date" in ref.columns and ref["auction_date"].notna().any():
+            from MDP.FixedRateBonds.FixedRateBondsMDP import _roll_dates_for
+
+            return _roll_dates_for(ref)
+        return ref["issue_date"]
+
+    def __call__(self, as_of: datetime.date) -> pd.DataFrame:
+        ref = self.universe
+        eligible = (
+            (self._roll < as_of)
+            & (ref["issue_date"] <= as_of)      # a bond IS tradeable on its issue day
+            & (ref["maturity_date"] > as_of)    # and is NOT on the day it matures
+        )
+        out = ref[eligible].copy()
+        out["rank"] = out.groupby("oi")["issue_date"].rank(method="first", ascending=False).astype(int) - 1
+        return out
+
+
+def _fetch_day(d: datetime.date, mdp, reference_fn=None):
     """Fetch one day's spline and reference frame. ``None`` if either leg fails.
 
     Both fetches for a date live here so the threaded and serial paths run *identical* code — the
@@ -243,7 +304,7 @@ def _fetch_day(d: datetime.date, mdp):
     frame["rmse"] = float(spline.rmse) if spline.rmse is not None else np.nan
 
     try:
-        ref = mdp.get_bond_reference_data(as_of_date=d)
+        ref = reference_fn(d) if reference_fn is not None else mdp.get_bond_reference_data(as_of_date=d)
     except Exception as exc:  # noqa: BLE001
         logger.warning("reference data failed on %s: %s", d, exc)
         return None
@@ -258,7 +319,7 @@ def _fetch_day(d: datetime.date, mdp):
     return frame, ref
 
 
-def _fetch_days_concurrently(todo, mdp, workers: int, show_progress: bool):
+def _fetch_days_concurrently(todo, mdp, workers: int, show_progress: bool, reference_fn=None):
     """Fetch days on a thread pool, yielding them **in date order**.
 
     Acquisition here is not compute — a serial build sits at ~2% CPU with a single open connection
@@ -282,7 +343,7 @@ def _fetch_days_concurrently(todo, mdp, workers: int, show_progress: bool):
             pass
 
     with ThreadPoolExecutor(max_workers=workers) as pool:
-        for d, fetched in zip(todo, pool.map(lambda x: _fetch_day(x, mdp), todo)):
+        for d, fetched in zip(todo, pool.map(lambda x: _fetch_day(x, mdp, reference_fn), todo)):
             if bar is not None:
                 bar.update(1)
             yield d, fetched
