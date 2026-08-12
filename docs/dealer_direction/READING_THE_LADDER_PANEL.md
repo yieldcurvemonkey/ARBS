@@ -55,14 +55,27 @@ for 5y than 10y is for 10y" is a real statement. "Dealers are longer 5y than
 
 ## The number next to every aggregate
 
-**Coverage.** Roughly **58% of the tape's DV01 reaches the ladder.** Click it
-and you get the rest, by reason and by dollar share.
+**Coverage.** Under half of the tape's DV01 reaches the ladder. The exact
+figure is on the panel — click it and you get the rest, by reason and by
+dollar share. It is computed over the complete partition, not over the cells
+that happen to have an answer, which is a distinction worth a moment:
+averaging coverage across the cells that *do* have a direction quietly skips
+every bucket-day where nothing could be oriented, and on one window that read
+67% where the truth was 45%.
 
-The biggest hole — about **40% of all DV01** — is packages of four or more legs.
-For most of those, several *different and mutually contradictory* sets of leg
-directions reconcile to the reported package price equally well. There is no
-right answer to pick, so none is picked. This is structural. It is not waiting
-on engineering.
+The biggest hole — **more than 40% of all DV01** — is packages of four or more
+legs. For most of those, several *different and mutually contradictory* sets of
+leg directions reconcile to the reported package price equally well. There is
+no right answer to pick, so none is picked. This is structural. It is not
+waiting on engineering.
+
+> **The panel's number will not match the 57.89% in the backend's own write-up,
+> and they are not the same statistic.** That figure is *universe-level*
+> retention over the whole 610-day tape: what survives the eligibility rules.
+> The panel's is what survives everything — eligibility, then repricing, then
+> the key-rate projection, then the ladder — over whatever window is loaded,
+> and it includes Fed Funds and the lifecycle series. Lower, and it is the one
+> that describes what you are actually looking at.
 
 That hole is not random, and it leans the wrong way: the packages we drop are
 **more** customer-facing than the ones we keep (98% customer-to-dealer against
