@@ -341,6 +341,42 @@ why the ladder weights by `2p−1` rather than by `p`.
 
 Net over the window, D2C / FLOW: **+81.2 MM/bp against 981.7 MM/bp gross**.
 
+### G-6c. `dealer_sign` orients the STRUCTURE, not its net duration
+
+`scratch/ddfe10_published_sanity.py` is a gate on the published rows with
+eight thresholds fixed before running. Two failed on the first run and **both
+were the check, not the data** — worth recording because the second one looked
+exactly like a sign bug.
+
+**"signed KRD points the way the call does" — 3,840 units disagreed (8%).**
+The breakdown is the whole answer:
+
+| kind | called | disagree | |
+|---|---:|---:|---:|
+| OUTRIGHT | 34,684 | **1** | **0.0%** |
+| CURVE | 8,505 | 2,295 | 27.0% |
+| FLY | 4,057 | 1,442 | 35.5% |
+| PKG | 274 | 102 | 37.2% |
+
+A 2s10s curve the dealer "received" has legs of opposite sign, so its **net**
+DV01 across buckets may point either way. `dealer_sign` is the orientation of
+the structure; the net duration is a different quantity. For an OUTRIGHT the
+two must coincide — and they do on 34,683 of 34,684, the one exception having
+a negative net received DV01 (a forward-start).
+
+So the OUTRIGHT population is the sharp form of the check and is where an
+inverted convention would show. The gate now asserts that, **plus a companion
+asserting that multi-leg units DO net the other way** — otherwise the first
+check could pass by every unit being effectively an outright, which is a
+vacuous pass rather than a result.
+
+**"every unit has exactly one of (p, reason)"** was never an invariant the
+design claimed: `ladder.unit_ladder_rows` names a called unit with no risk
+profile `PRICING_ERROR`, so the probability exists and the unit still did not
+reach the ladder. Measured: 86 such units, every one a `CURVE` whose KRD
+projection failed. *Both* is legal and honest; *neither* is the thing that
+must never happen.
+
 ### G-7. Measured read cost
 
 `scratch/ddfe06_read_cost.py`, 5 reps each, against prod over the pooler.
