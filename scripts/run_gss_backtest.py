@@ -99,12 +99,14 @@ def main() -> int:
             print("   summ " + str({k: (round(v, 1) if isinstance(v, float) else v)
                                     for k, v in sm.items()}), flush=True)
             # the reconciliation, stated rather than assumed
-            print(f"   recon price={sm.get('price_pnl_usd', float('nan')):,.0f} "
-                  f"+ coupons={sm.get('coupon_pnl_usd', float('nan')):,.0f} "
+            print(f"   recon bond={sm.get('bond_pnl_usd', float('nan')):,.0f} "
                   f"+ financing={sm.get('financing_pnl_usd', float('nan')):,.0f} "
+                  f"+ fees={sm.get('fees_usd', float('nan')):,.0f} "
                   f"+ open={sm.get('open_mtm_usd', float('nan')):,.0f} "
                   f"=> equity={sm.get('end_equity_usd', float('nan')):,.0f} "
-                  f"(gap {sm.get('reconciliation_gap_usd', float('nan')):,.0f})", flush=True)
+                  f"(gap {sm.get('reconciliation_gap_usd', float('nan')):,.2f})", flush=True)
+            print(f"   costs  gross_before_fees={sm.get('gross_before_fees_usd', float('nan')):,.0f} "
+                  f"cost_share_of_gross={sm.get('cost_share_of_gross', float('nan')):.1%}", flush=True)
         except Exception as exc:  # noqa: BLE001
             print(f"VARIANT | {label} FAILED {type(exc).__name__}: {exc}", flush=True)
     print("GSSDONE", flush=True)

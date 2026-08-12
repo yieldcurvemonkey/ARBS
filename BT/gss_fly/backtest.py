@@ -46,30 +46,29 @@ class GSSResult:
 
 
 def summarize(res: "GSSResult") -> Dict[str, float]:
-    """Summary metrics, with the price leg and the carry leg kept apart.
+    """Summary metrics, with the book-level view and the per-trade view kept apart.
 
-    The engine's ``mtm_history`` is **cumulative total P&L**: ``mark_to_market`` seeds it with
-    ``self.realized_pnl`` and adds the open positions' marks (``BT/query_engine.py:278``), and the
-    financed-bond handler marks each position net of its entry NPV
-    (``Query/FixedRateBonds/position_handler.py:431``). So ``equity`` is the right object for
-    Sharpe and drawdown.
+    ``equity`` is the number that means "what the book made". The engine's ``mtm_history`` is
+    **cumulative total P&L** — ``mark_to_market`` seeds it with ``self.realized_pnl`` and adds the
+    open positions' marks (``BT/query_engine.py:278``), and the financed-bond handler marks each
+    position net of its entry NPV (``Query/FixedRateBonds/position_handler.py:431``) — so Sharpe
+    and drawdown are computed from it.
 
-    ``closed["realized_pnl"]`` is **not** the trade's P&L. It is only the unwind price leg —
-    ``(exit NPV - entry NPV) - fee`` — because coupons and repo financing are realised during the
-    hold via ``on_mark`` and accumulate into ``realized_pnl`` without ever appearing in the closed
-    log. For a cash-bond fly that omission is not a rounding difference: the book is
-    maturity-weighted, not cash-neutral, so it carries a large net financed position and the carry
-    leg is the same order of magnitude as the price leg. Summing the closed log and calling it the
-    strategy's P&L therefore reports the price leg alone, which flatters it.
+    Everything named ``*_per_trade`` is the **trade ledger** view: it answers "what did the average
+    trade do", not "what did the strategy return". The two are not interchangeable and are never
+    given the same name here, because the first version of this function reported the ledger sum as
+    ``net_realized_usd`` and it was read — by me — as the strategy's P&L. It is not: it is already
+    net of fees, already contains the carry realised at unwind, and for this book it came to
+    +$7.9m against a book that made +$431k.
 
-    Both are reported, explicitly named, and the components are broken out from the handler's own
-    ledgers so the two can be reconciled rather than merely asserted.
+    :func:`_pnl_components` supplies the disjoint decomposition and asserts that it sums to the
+    equity curve.
     """
     eq = res.equity.dropna()
     daily = eq.diff().dropna()
     out: Dict[str, float] = {
         "marked_days": int(len(eq)),
-        # cumulative total P&L: price + coupons + financing + open mark
+        # cumulative total P&L: bond + financing - fees + open mark
         "end_equity_usd": float(eq.iloc[-1]) if len(eq) else np.nan,
         "closed_trades": int(len(res.closed)),
     }
@@ -84,28 +83,46 @@ def summarize(res: "GSSResult") -> Dict[str, float]:
         p = res.closed["realized_pnl"].astype(float)
         out.update(
             {
-                # renamed from `net_realized_usd`, which read as the strategy's P&L and is not
-                "price_pnl_usd": float(p.sum()),
-                "avg_price_per_trade_usd": float(p.mean()),
-                "hit_rate_price_only": float((p > 0).mean()),
+                # A DIFFERENT CUT, not a component: already net of fees and already containing
+                # the carry realised at unwind, so it must never be added to the ledgers above.
+                "per_trade_pnl_usd": float(p.sum()),
+                "avg_per_trade_usd": float(p.mean()),
+                "hit_rate_per_trade": float((p > 0).mean()),
                 "median_hold_days": float(res.closed["holding_period_days"].median())
                 if "holding_period_days" in res.closed.columns
                 else np.nan,
             }
         )
         if len(p) > 2 and p.std(ddof=1) > 0:
-            # a t-stat on the PRICE leg only; carry is not in these numbers
-            out["t_stat_price_only"] = float(p.mean() / (p.std(ddof=1) / np.sqrt(len(p))))
+            # tests whether the mean TRADE differs from zero; not a strategy Sharpe
+            out["t_stat_per_trade"] = float(p.mean() / (p.std(ddof=1) / np.sqrt(len(p))))
     return out
 
 
 def _pnl_components(res: "GSSResult") -> Dict[str, float]:
-    """Coupons, financing and open mark, from the financed-bond handler's own ledgers.
+    """The book's P&L as four **disjoint** parts that sum to the equity curve.
+
+    The identity, derived from the engine and then checked against two variants that differ only
+    in their fee::
+
+        equity[-1] == bond_total + financing_total - fees + open_mark
 
     ``FinancedFixedRateBondHandler`` keeps running totals on the backtest object as
-    ``frb_component_histories`` (``Query/FixedRateBonds/position_handler.py:236``). Reading them is
-    what makes the reconciliation checkable: price + coupons + financing + open mark must equal the
-    end of the equity curve, and ``reconciliation_gap_usd`` states by how much it does not.
+    ``frb_component_histories`` (``Query/FixedRateBonds/position_handler.py:236-262``).
+    ``bond_total`` is coupons **plus** the price convergence booked at unwind, because
+    ``on_unwind`` records ``bond_delta = cf + gross_mtm`` into that ledger *and* returns it to the
+    engine (``position_handler.py:496-501``). Financing is the same shape.
+
+    That overlap is why the first attempt at this did not reconcile. ``sum(closed["realized_pnl"])``
+    is **not** a component: it is a different cut of the same money — the per-trade view, already
+    net of fees and already containing the carry realised at unwind. Adding it alongside the
+    ledgers double-counted every unwind, by $10.7m on the first GSS run. It is still reported,
+    because the per-trade view is what a trade-level statistic needs, but it is named
+    ``per_trade_pnl_usd`` and kept out of the sum.
+
+    ``reconciliation_gap_usd`` asserts the identity rather than asking to be believed. It was worth
+    adding: it refuted two successive and confident explanations of this book's P&L, including one
+    that had already been reported.
     """
     out: Dict[str, float] = {}
     hist = getattr(res.backtest, "frb_component_histories", None)
@@ -118,17 +135,25 @@ def _pnl_components(res: "GSSResult") -> Dict[str, float]:
             return 0.0
         return float(pd.Series(h).sort_index().iloc[-1])
 
-    coupons = _last("bond_realized")
+    bond = _last("bond_realized")          # coupons + price convergence realised at unwind
     financing = _last("financing_realized")
     open_mtm = _last("bond_open_mtm")
-    out["coupon_pnl_usd"] = coupons
+
+    closed = res.closed
+    fees = (float(closed["fee_allocated"].astype(float).sum())
+            if not closed.empty and "fee_allocated" in closed.columns else 0.0)
+
+    out["bond_pnl_usd"] = bond
     out["financing_pnl_usd"] = financing
+    out["fees_usd"] = -fees
     out["open_mtm_usd"] = open_mtm
+    out["gross_before_fees_usd"] = bond + financing + open_mtm
+    if (bond + financing + open_mtm) != 0:
+        out["cost_share_of_gross"] = fees / (bond + financing + open_mtm)
 
     eq = res.equity.dropna()
-    if len(eq) and not res.closed.empty and "realized_pnl" in res.closed.columns:
-        price = float(res.closed["realized_pnl"].astype(float).sum())
-        out["reconciliation_gap_usd"] = float(eq.iloc[-1] - (price + coupons + financing + open_mtm))
+    if len(eq):
+        out["reconciliation_gap_usd"] = float(eq.iloc[-1] - (bond + financing - fees + open_mtm))
     return out
 
 
