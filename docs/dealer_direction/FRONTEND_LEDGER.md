@@ -377,6 +377,86 @@ reach the ladder. Measured: 86 such units, every one a `CURVE` whose KRD
 projection failed. *Both* is legal and honest; *neither* is the thing that
 must never happen.
 
+### G-6d. FOMC-dated swaps are priced against a curve with no meeting steps
+
+Prompted by the question "did you properly distinguish the SOFR and Fed Funds
+curves — this is especially important for the FOMC swaps". The routing is
+clean; the answer underneath it is not.
+
+**The routing is provably correct.** `midprice.SessionBranchPricer.curve_for`
+does `self._curve_for[rate_index]` and raises `UnsupportedIndex` on a miss —
+there is no silent default in the pricing path — and `krd.model_for` keys its
+solver on `(rate_index, curve_name, block)`. On the published rows:
+
+| rate_index | curve_name | units |
+|---|---|---:|
+| SOFR | `USD-SOFR-1D` | 45,551 |
+| FED_FUNDS | `USD-FEDFUNDS-1D` | 2,087 |
+| **mismatched** | | **0** |
+
+and Fed Funds deviations sit at a median **+0.068 bp** — centred, not shifted
+by a basis, which is what pricing FF on a SOFR curve would produce.
+
+**But the FOMC-dated population is a different story.** Median |deviation|,
+same days, same rules:
+
+| | FOMC-dated | everything else | ratio |
+|---|---:|---:|---:|
+| FED_FUNDS | **1.994 bp** | 0.295 bp | **6.8×** |
+| SOFR | **0.697 bp** | 0.174 bp | **4.0×** |
+
+and per meeting the median **flips sign by 1–2 bp**:
+
+| meeting | index | n | median bp | % above mid |
+|---|---|---:|---:|---:|
+| JUL24 | FED_FUNDS | 363 | **+1.600** | 83.7% |
+| JUL24 | SOFR | 62 | **+2.206** | 95.2% |
+| NOV24 | FED_FUNDS | 181 | +1.353 | 65.2% |
+| SEP24 | FED_FUNDS | 328 | **−1.230** | 33.5% |
+| SEP24 | SOFR | 35 | **−1.491** | 37.1% |
+| DEC24 | FED_FUNDS | 102 | −0.540 | 41.2% |
+
+This is the F-20 signature — the exact statistic that condemned the Barchart
+curve ("Fed Funds meeting buckets flip sign across meetings … the MIX23
+meeting steps are misplaced"). **The decisive detail is that SOFR and Fed
+Funds flip TOGETHER, in the same direction, by a similar magnitude.** A
+routing fault would make them disagree. Both moving together says the fault is
+in what the curve is, not in which one was chosen: the Citi minute curve is a
+smooth par curve with no discrete FOMC steps, so a meeting-to-meeting swap is
+repriced against a model that averages across the very step it trades.
+
+Controls run before believing it: `fomc_meeting_label` is populated on **2,111
+of 3,116 FOMC legs and on zero legs of every other structure type**, so it is
+a structure tag rather than a proximity tag; and de-duplicating the leg join
+moved the numbers by less than 0.1 bp.
+
+**Size.** 1,918 units, **3.33% of the ladder's gross DV01** — but concentrated:
+
+| bucket | FOMC share of gross DV01 |
+|---|---:|
+| **0-1Y** | **28.17%** |
+| 2-3Y | 3.25% |
+| everything else | < 2.1% |
+
+So more than a quarter of the **0-1Y** bucket — the meeting-dated front end,
+the bucket a positioning read cares about most — comes from units whose
+direction is driven by curve model error rather than by bid-offer.
+
+**What was done about it.** Nothing to the inference: the brief puts improving
+it out of scope, and this is a property of the curve the backend chose, not a
+defect in this branch. What this branch does is stop it being invisible —
+`special_tenor_type` is now persisted per unit and joined onto the tape row,
+an FOMC-dated row says so in its tooltip and calls its own direction
+unreliable, and the 0-1Y bucket carries a pinned caveat with the measurement,
+in the same spirit as the module's `PINNED_DRIFT_BUCKETS`.
+
+**Recommendation for the backend owners**, stated and not acted on: FOMC-dated
+units are a candidate for their own exclusion reason, or for a meeting-step
+curve. `WHAT_THE_LADDER_SUPPORTS` §3 already lists Fed Funds as a low-
+confidence condition; on this evidence the sharper statement is that
+*meeting-dated structures on either index* are the low-confidence population,
+and Fed Funds looks worse mainly because it is 66% of them.
+
 ### G-7. Measured read cost
 
 `scratch/ddfe06_read_cost.py`, 5 reps each, against prod over the pooler.

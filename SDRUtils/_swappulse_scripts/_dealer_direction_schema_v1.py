@@ -193,6 +193,18 @@ CREATE TABLE IF NOT EXISTS {UNIT_TABLE} (
     -- unit shape
     kind                    TEXT,
     n_legs                  SMALLINT,
+    -- STANDARD | IMM | FOMC | MATCHED_MATURITY | INVOICE_SWAP | MAC.
+    -- Carried in its own column, not only inside `tau_bucket`, because FOMC
+    -- is the one value a consumer has to be able to filter on: a
+    -- meeting-to-meeting swap is repriced against a curve with no discrete
+    -- meeting steps, so its deviation is dominated by that model error rather
+    -- than by bid-offer. Measured on 2024-07-01..2024-08-09, median
+    -- |deviation| against everything else on the same days:
+    --   FED_FUNDS  1.994 bp vs 0.295 bp   (6.8x)
+    --   SOFR       0.697 bp vs 0.174 bp   (4.0x)
+    -- and the per-meeting median flips sign by 1-2 bp on BOTH indices
+    -- together -- which is what rules out a rate-index routing fault.
+    special_tenor_type      TEXT,
     rate_index              TEXT,
     venue_class             TEXT,
     series                  TEXT,
@@ -238,6 +250,13 @@ CREATE TABLE IF NOT EXISTS {UNIT_TABLE} (
     f"WHERE exclusion_reason IS NOT NULL",
     f"CREATE INDEX IF NOT EXISTS idx_dd_{IDX_INFIX}_unit_vintage "
     f"ON {UNIT_TABLE} (code_vintage)",
+    # Added after the first backfill: see the column comment above. ALTER
+    # rather than a new file, per the convention in _stir_flow_schema_v1.py.
+    f"ALTER TABLE {UNIT_TABLE} ADD COLUMN IF NOT EXISTS "
+    f"special_tenor_type TEXT",
+    f"CREATE INDEX IF NOT EXISTS idx_dd_{IDX_INFIX}_unit_stt "
+    f"ON {UNIT_TABLE} (special_tenor_type, as_of_date) "
+    f"WHERE special_tenor_type IS DISTINCT FROM 'STANDARD'",
 
     # --------------------------------------------------------- unit x bucket
     f"""

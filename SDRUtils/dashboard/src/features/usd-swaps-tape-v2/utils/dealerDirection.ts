@@ -76,6 +76,7 @@ export type DirectionRowFields = {
   dd_exclusion_detail?: string | null
   dd_venue_class?: string | null
   dd_series?: string | null
+  dd_special_tenor_type?: string | null
   dd_total_delta_dv01?: number | string | null
   dd_total_dv01_if_received?: number | string | null
   dd_visibility_timestamp?: string | Date | null
@@ -185,6 +186,18 @@ export function directionView(row: DirectionRowFields): DirectionView {
     `rule ${row.dd_rule ?? '—'}   deviation ${fmt(dev, 3)} bp   tau ${fmt(tau, 3)} bp`,
     row.dd_in_dead_zone
       ? 'IN THE DEAD ZONE: the deviation is inside the mid\'s own measurement error.'
+      : null,
+    // A meeting-to-meeting swap is repriced against a smooth par curve that
+    // has no discrete FOMC steps in it, so the model averages across the very
+    // step the trade is expressing. Measured on 2024-07/08, median |deviation|
+    // against everything else on the same days: Fed Funds 1.994 bp vs 0.295 bp
+    // (6.8x), SOFR 0.697 bp vs 0.174 bp (4.0x) -- and the per-meeting median
+    // flips sign by 1-2 bp on both indices TOGETHER, which is what rules out a
+    // rate-index routing fault and points at the curve's meeting structure.
+    row.dd_special_tenor_type === 'FOMC'
+      ? 'FOMC-DATED. Repriced against a curve with no discrete meeting steps, '
+        + 'so this deviation is dominated by model error rather than by '
+        + 'bid-offer. Treat the direction as unreliable.'
       : null,
     row.dd_notional_imputed
       ? 'Notional is CAPPED — the size was not read, so this DV01 is a low reading.'

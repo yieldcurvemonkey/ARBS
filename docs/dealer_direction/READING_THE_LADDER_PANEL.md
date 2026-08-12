@@ -118,6 +118,19 @@ you "see" trades before the market could.
 Hover it — it says which of the reasons applies. An empty cell on a busy day is
 a missing call, not a quiet market.
 
+**7. Do not trade the 0–1Y bucket off this.** FOMC-dated swaps — the
+meeting-to-meeting ones — are **28% of that bucket's risk**, and we price them
+against a curve that has no meeting steps in it. It is a smooth curve, so it
+averages straight across the step the trade exists to express. Measured: those
+prints land 4–7× further from our mid than everything else on the same day, and
+which side they land on **flips from one meeting to the next** — +1.6 bp into
+July 2024, −1.2 bp into September. Both Fed Funds and SOFR do it together,
+which is how we know it is the curve and not a plumbing mistake.
+
+The rest of the ladder is unaffected: outside 0–1Y and 2–3Y, meeting-dated
+trades are under 2% of any bucket. Individual FOMC-dated rows in the tape say
+so when you hover them.
+
 ---
 
 ## What it is not

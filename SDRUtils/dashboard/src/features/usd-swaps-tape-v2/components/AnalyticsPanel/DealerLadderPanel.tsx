@@ -594,6 +594,26 @@ function BucketCaveats({
 }): JSX.Element | null {
   const last = rows.length ? rows[rows.length - 1] : null
   const notes: string[] = []
+  // Pinned, not computed per cell, in the same spirit as the module's own
+  // PINNED_DRIFT_BUCKETS: a consumer on a short window cannot see this from
+  // the data, and it is the bucket where it matters most.
+  //
+  // FOMC-dated (meeting-to-meeting) swaps are repriced against a smooth par
+  // curve with no discrete meeting steps, so their deviation is dominated by
+  // model error. Measured over 2024-07-01..2024-08-09: median |deviation|
+  // 1.994 bp on Fed Funds against 0.295 bp for everything else on the same
+  // days (6.8x), 0.697 vs 0.174 on SOFR (4.0x), and the per-meeting median
+  // flips sign by 1-2 bp on both indices together. They are 28.17% of this
+  // bucket's gross DV01.
+  if (bucket === '0-1Y') {
+    notes.push(
+      'FOMC-dated swaps are 28% of this bucket\'s gross DV01, and they are ' +
+        'repriced against a curve with no discrete meeting steps — their ' +
+        'deviations run 4–7x wider than everything else on the same days and ' +
+        'flip sign by meeting. This bucket\'s level is the least trustworthy ' +
+        'of the ten, and it is the meeting-dated front end.',
+    )
+  }
   if (bucket === '1-2Y') {
     notes.push(
       'This bucket\'s exclusion rate drifts at +5.07 pp/yr (t = +3.21), so its ' +

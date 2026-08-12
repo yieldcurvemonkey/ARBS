@@ -190,6 +190,28 @@ describe('flags that change how the number should be read', () => {
     expect(v.title).toContain('low reading')
   })
 
+  it('says an FOMC-dated swap is repriced against a curve with no meeting steps', () => {
+    // Measured on 2024-07/08: median |deviation| 1.994 bp on Fed Funds
+    // against 0.295 bp for everything else on the same days (6.8x), 0.697 vs
+    // 0.174 on SOFR (4.0x), and the per-meeting median flips sign by 1-2 bp
+    // on BOTH indices together -- so it is the curve's missing meeting
+    // structure, not a rate-index routing fault. They are 28% of the 0-1Y
+    // bucket's gross DV01.
+    const v = directionView({
+      dd_dealer_direction: 'RECEIVED', dd_dealer_sign: 1,
+      dd_p: 0.95, dd_signed_weight: 0.9, dd_special_tenor_type: 'FOMC',
+    })
+    expect(v.title).toContain('FOMC-DATED')
+    expect(v.title).toContain('no discrete meeting steps')
+    expect(v.title).toContain('unreliable')
+    // and an ordinary swap does NOT carry the warning
+    const plain = directionView({
+      dd_dealer_direction: 'RECEIVED', dd_dealer_sign: 1,
+      dd_p: 0.95, dd_signed_weight: 0.9, dd_special_tenor_type: 'STANDARD',
+    })
+    expect(plain.title).not.toContain('FOMC')
+  })
+
   it('shows the publication lag in minutes', () => {
     const v = directionView({
       dd_dealer_direction: 'RECEIVED', dd_dealer_sign: 1,

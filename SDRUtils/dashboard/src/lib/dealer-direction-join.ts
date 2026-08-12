@@ -33,6 +33,10 @@ const DIRECTION_FIELDS: [string, string][] = [
   ['exclusion_detail', 'dd_exclusion_detail'],
   ['venue_class', 'dd_venue_class'],
   ['series', 'dd_series'],
+  // FOMC is the value that changes how the row should be read: a
+  // meeting-to-meeting swap is repriced against a curve with no discrete
+  // meeting steps. See dealerDirection.ts for the measurement.
+  ['special_tenor_type', 'dd_special_tenor_type'],
   ['total_delta_dv01', 'dd_total_delta_dv01'],
   ['total_dv01_if_received', 'dd_total_dv01_if_received'],
   ['visibility_timestamp', 'dd_visibility_timestamp'],
