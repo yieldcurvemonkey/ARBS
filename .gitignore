@@ -223,6 +223,11 @@ frontend/.next/
 frontend/node_modules/
 
 *.xlsx
+# ...except the consensus workbook the econ-release-fade notebooks read. It is
+# 23 KB of strategy INPUT, not a working spreadsheet: without it those notebooks
+# cannot execute, and the alternative was reading it from a session uploads
+# directory that exists on exactly one machine.
+!notebooks/backtests/econ_release_fade/data/econ_actual_vs_consensus.xlsx
 
 _temp_raw_raw_trades.csv
 

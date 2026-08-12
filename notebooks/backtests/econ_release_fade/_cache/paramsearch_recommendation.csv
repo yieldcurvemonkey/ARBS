@@ -1,0 +1,19 @@
+,value
+configuration,grid|SR3 r2|PCE|m5|h60|fade
+trades,60
+trades per year,8.2
+gross bp / trade,0.3583
+SR3 tick (bp),0.5
+clears one tick,False
+net bp / trade at one tick,-0.1417
+hit rate,0.55
+Sharpe per trade,0.3029
+t-stat,2.3466
+configurations searched,2608
+selection-bias adjusted p,0.8821
+Romano-Wolf adjusted p,0.8821
+Romano-Wolf rejects at 5%,False
+RAS lower bound,-0.3778
+Rademacher positive,False
+best placebo cell (Sharpe/trade),0.3652
+beats the placebo search,False
