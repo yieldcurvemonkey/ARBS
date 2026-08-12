@@ -129,7 +129,31 @@ provider match the cached ones to **3e-13 bp**.
 - [x] `BT/xccy_rv` — 20 tests **including the archive tie-out**
 - [x] notebook (`notebooks/rv/gss_fly_rv.ipynb`), warm runbook, tests
 
-## The signal reads the interpolator — measured 2026-08-12
+## The SELECTION is chaotic; the signal is not — measured 2026-08-12
+
+> **Retraction.** An earlier version of this section concluded "the signal reads the interpolator"
+> from the trade-set Jaccard alone. That was wrong, and wrong in an instructive way: trade-set
+> Jaccard **cannot distinguish "the signal changed" from "the ranking reshuffled"**, and the
+> deciding measurement — the s2c values themselves — says the signal barely moved.
+
+| S0 vs S3 (knots slid 1.25y) | |
+|---|---|
+| cross-sectional **corr(s2c)** | **0.983** median, p05 0.955 |
+| **Spearman rank** corr | **0.944** median, p05 0.895 |
+| mean abs difference | 0.264 bp against 1.946 bp dispersion |
+| trade-set Jaccard | **0.045** |
+
+The residual is almost perfectly preserved. The two fits agree on which bonds are cheap to 0.98 and
+on their ordering to 0.94 — and still share 3 of 66 trades.
+
+**The cascade is the mechanism.** Selection is a hard top-N over ~173 near-tied candidates a day, so
+a 0.26 bp perturbation — a seventh of a standard deviation — reorders the top of the list and
+rewrites the entire book. The signal is reproducible; the selection built on it is not.
+
+That is a **fixable design fault**, unlike a fake signal: rank-average across fits, require a minimum
+richness gap over the next-best candidate, or size by conviction rather than selecting top-N. It
+also means the economics below stand on their own — the cost wall never depended on the signal
+being real, and remains the binding constraint.
 
 **Jaccard 0.045.** Sliding the spline knots **1.25 years** — same knot count, same bonds, same
 prices, nothing about the market changed — produces a book sharing **3 of 66** trades with the
@@ -149,7 +173,7 @@ The two fits are statistically indistinguishable: RMSE differs by 0.006bp, resid
 0.001bp, trade count by one. By every aggregate measure they are the same curve. Yet they disagree
 about which bonds are cheap on 95% of occasions.
 
-**So the s2c residual is not a measurement of bond richness.** It is substantially a measurement of
+**Superseded — see the retraction above.** The original reasoning ran: the s2c residual is not a
 where the spline was allowed to bend: a bond looks cheap because a knot sits near it, and moving the
 knot moves the cheapness.
 
