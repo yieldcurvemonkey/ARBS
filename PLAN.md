@@ -213,9 +213,25 @@ own estimator cannot produce a strategy. It also compounds the unresolved FedInv
 off-the-run closes that may themselves be matrix-priced from a curve, fed into a spline that adds
 its own curvature: two interpolators between the market and the "signal".
 
-**Status: one alternate fit.** `S1_coarse` and `S2_dense` are building. If Jaccard stays ~0.05
-across all of them the conclusion is robust; if S3 is uniquely bad, the 1.25y shift may have landed
-somewhere pathological and the claim must be weakened.
+**Settled across five fits.** The pattern is the decisive one:
+
+| fit | RMSE | corr(s2c) | Spearman | mean abs diff | trade Jaccard |
+|---|---|---|---|---|---|
+| S4_with_otr | 1.926 | **0.992** | 0.977 | 0.14 bp | — |
+| S3_shift | 1.933 | **0.983** | 0.944 | 0.26 bp | **0.045** |
+| S2_dense | 1.900 | **0.975** | 0.929 | 0.31 bp | **0.059** |
+| S1_coarse | 2.260 | 0.865 | 0.748 | 0.79 bp | **0.071** |
+
+**Jaccard is flat at ~0.06 while corr ranges 0.865 → 0.992.** If the trade set tracked the signal,
+Jaccard would rise with correlation. It does not move at all — direct evidence that the selection is
+decoupled from the measurement. Even S4, agreeing to corr 0.992 with a mean difference of 0.14bp (a
+fourteenth of a standard deviation), rewrites the book.
+
+**One caveat.** `S1_coarse` genuinely degrades the signal: corr 0.865, Spearman 0.748, mean
+difference 0.79bp against a 1.95bp dispersion. A 5-knot fit is a different *measurement*, not merely
+a different selection. So "the signal is fit-independent" would be too strong — it is fit-**robust**
+across reasonable knot choices (S2/S3/S4, corr 0.975–0.992) and degrades under a genuinely coarse
+one.
 
 ## Conditioning — measured 2026-08-12. The book is severely ill-conditioned.
 
