@@ -403,6 +403,18 @@ the joined query is if anything faster than the baseline, which is noise on a
 backward through ten months of unmatched packages before it finds 200 that
 match. Re-measured after the full backfill.
 
+### G-8. The tape's day set is not stable during a long run
+
+`price` launched against `tape_days(2024-03-01, 2026-08-07)` = **609** days.
+Four hours later the same query over the same fixed range returned **610** —
+the tape had backfilled a day inside a window that does not move.
+
+This is exactly why `assert_priced_complete` re-derives the day set from the
+tape at `publish` time and refuses rather than publishing what it happens to
+have. A run that took its day list once at the start and trusted it would have
+published 609 of 610 days and reported success. `price` resumes by file
+presence, so the fix is a second pass that costs one day.
+
 ### D6. Chrome verification used `chrome-devtools`, not `claude-in-chrome`
 
 `claude-in-chrome` found two connected browsers and requires the user to
