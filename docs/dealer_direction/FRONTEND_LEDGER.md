@@ -168,4 +168,61 @@ package-price branch (`s2_positioning.py:283`), so reusing it would silently
 narrow the published product to a different question. It is kept as an
 independent cross-check on the overlapping days instead.
 
+### G-4. `if nan:` is `True`, and it excluded every package unit
+
+The first `publish` run stopped on its own guard:
+
+```
+RuntimeError: 2024-07-01: 15 coverage leg(s) belong to a unit with no reason;
+the coverage accounting would not sum
+```
+
+Probes `ddfe04_coverage_orphans.py` and `ddfe05_reason_nan.py`. The first
+ruled out the obvious explanation: the two frames agree on **2,364 unit keys
+with zero orphans in either direction**, so `.map()` was not missing a key — it
+was mapping to a NaN.
+
+The cause: `pkg_exclusion` is only ever assigned on a `PKG` unit. On a day
+where no package is refused, no row assigns it, and
+`DataFrame.reindex(columns=UNIT_COLS)` creates it as an **all-NaN `float64`**
+column. Parquet round-trips that as `float64`, `r.get("pkg_exclusion")` returns
+`nan` — and **`bool(nan)` is `True`**. So
+
+```python
+if r.get("pkg_exclusion"):        # fires on EVERY package unit
+    out["exclusion"] = r["pkg_exclusion"]   # ... with the reason `nan`
+```
+
+Every package-price unit was marked excluded, with a reason that is neither a
+reason nor a null.
+
+**It had no symptom of its own.** The units would have shipped as abstentions
+with a blank tooltip; the ladder would have been quietly short 15 units a day;
+the coverage percentage would have been slightly wrong in the direction that
+flatters nothing in particular. It surfaced only because the coverage
+accounting is required to be a partition and refuses a unit with no reason.
+
+Fixed by `_s()` — one reader for every string field coming back out of the
+stage cache — plus two assertions that state the invariant rather than relying
+on the next guard downstream: `classify_day` refuses a non-string exclusion,
+and `publish_day` refuses a non-string reason. Pinned by
+`test_a_string_field_that_came_back_as_nan_reads_as_absent`, which asserts
+`bool(nan) is True` alongside it so the premise is in the test rather than in a
+comment, and by a test that reproduces the parquet round-trip rather than
+asserting it from memory.
+
+### G-5. The calibration is the only slow thing in `publish`, so it is cached
+
+Measured: **22 rolling fits over 112 priced days cost ~14 minutes** (longer
+with 8 pricing workers competing for the CPU). The full 610-day window is ~120
+fits, i.e. a couple of hours of mixture MLEs.
+
+That would have taken back the whole point of splitting `price` from
+`publish`. `build_calibrations` now caches to
+`D:\ddfe_cache\calibrations\<key>.pkl`, keyed on the **day list, the fit
+parameters and the deviation count** — not the window bounds, so a day
+re-priced after a code change keeps its place in the list, changes the count,
+and misses the cache. That is the direction this particular error has to fall.
+`--refresh-calibration` forces a refit.
+
 

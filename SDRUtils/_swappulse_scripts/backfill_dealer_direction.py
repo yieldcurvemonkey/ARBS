@@ -132,6 +132,34 @@ def _as_date(v):
     return pd.Timestamp(v).date()
 
 
+def _s(v):
+    """A string field read back from parquet, or None. NEVER a NaN.
+
+    ``if r["pkg_exclusion"]:`` was true on every package unit for a day, and
+    the reason is worth stating because it will happen again. A column in
+    ``UNIT_COLS`` that no row on that day assigns is created by ``reindex`` as
+    an all-NaN **float64** column. Parquet round-trips it as ``float64``,
+    ``r.get(col)`` hands back ``nan`` -- and ``bool(nan) is True``, so a
+    presence test on a string field silently fires on every row.
+
+    The failure had no symptom of its own: the package units were marked
+    excluded with the reason ``nan``, which is neither a reason nor a null, and
+    it surfaced only because the coverage accounting refuses a unit with no
+    reason. Every string field read out of the stage cache goes through here.
+    """
+    if v is None:
+        return None
+    if isinstance(v, float):
+        return None                       # NaN or a float where a string goes
+    try:
+        if pd.isna(v):
+            return None
+    except (TypeError, ValueError):
+        pass
+    s = str(v)
+    return s or None
+
+
 def tape_days(start: str, end: str) -> list[str]:
     """The day set, from the tape. Never from a calendar."""
     conn = connect()
@@ -738,14 +766,28 @@ def probability_clip():
         conv.signed_weight = original
 
 
-def build_calibrations(paths: Paths, days: list[str]):
+def build_calibrations(paths: Paths, days: list[str], *, refresh: bool = False):
     """Trailing rolling mixture fits over the whole priced history.
 
-    The backend's calibration pickle stops at 2025-08-22 (it was built for a
-    design window that ends there), so it cannot serve this window. Refitted
+    The backend's calibration pickle stops at 2025-08-22 -- it was built for a
+    design window that ends there -- so it cannot serve this window. Refitted
     here from this runner's own deviations, with the same window / gap / step
     the backend used.
+
+    **Cached, because it is the only slow thing in `publish`.** Measured: 22
+    rolling fits over 112 priced days cost ~14 minutes, so the full 610-day
+    window is a couple of hours of mixture MLEs. The whole point of splitting
+    `price` from `publish` is that a defect in the ladder or the indicator is
+    repaired in minutes; a two-hour refit on every run would take that back.
+
+    The key is the exact input, not the window bounds: the day list, the fit
+    parameters, and the deviation count. A day re-priced after a code change
+    keeps its place in the day list but changes the count, so it misses the
+    cache -- which is the direction this error has to fall.
     """
+    import hashlib
+    import pickle
+
     from SDRUtils.dealer_direction import probability as P
 
     cols = ["unit_key", "as_of_date", "rule", "deviation_bps", "venue_class",
@@ -761,11 +803,31 @@ def build_calibrations(paths: Paths, days: list[str]):
     cal_df["as_of_date"] = pd.to_datetime(cal_df["as_of_date"]).dt.date
     print(f"calibration input: {len(cal_df):,} RATE_VS_MID deviations over "
           f"{cal_df['as_of_date'].nunique()} days", flush=True)
+    key = hashlib.sha256(
+        ("|".join(days)
+         + f"|{CALIB_WINDOW_DAYS}|{CALIB_MIN_GAP_DAYS}|{CALIB_STEP_DAYS}"
+         + f"|{len(cal_df)}").encode()
+    ).hexdigest()[:16]
+    cache = paths.root / "calibrations" / f"{key}.pkl"
+    if cache.exists() and not refresh:
+        with open(cache, "rb") as fh:
+            cals = pickle.load(fh)
+        print(f"calibration: {len(cals)} rolling fits from cache "
+              f"({cache.name}), {min(cals)} .. {max(cals)}", flush=True)
+        return cals
+
+    t0 = time.time()
     cals = P.rolling_calibrations(cal_df, window_days=CALIB_WINDOW_DAYS,
                                   min_gap_days=CALIB_MIN_GAP_DAYS,
                                   step_days=CALIB_STEP_DAYS)
-    print(f"calibration: {len(cals)} rolling fits, "
-          f"{min(cals)} .. {max(cals)}", flush=True)
+    cache.parent.mkdir(parents=True, exist_ok=True)
+    tmp = cache.with_suffix(".tmp")
+    with open(tmp, "wb") as fh:
+        pickle.dump(cals, fh)
+    os.replace(tmp, cache)
+    print(f"calibration: {len(cals)} rolling fits in "
+          f"{(time.time() - t0) / 60:.1f} min, {min(cals)} .. {max(cals)} "
+          f"-> {cache.name}", flush=True)
     return cals
 
 
@@ -813,22 +875,31 @@ def classify_day(units_df, plegs_df, tau_set):
                    for k, v in plegs_df.groupby("unit_key", sort=False)})
 
     for r in units_df.to_dict("records"):
-        key = r["unit_key"]
+        key = str(r["unit_key"])
+        # Every string field goes through `_s`. See its docstring: a column no
+        # row assigned that day comes back as float NaN, and `bool(nan)` is
+        # True, so a bare presence test fires on every row.
+        rule = _s(r.get("rule"))
+        universe_exclusion = _s(r.get("universe_exclusion"))
+        failure = _s(r.get("failure"))
+        pkg_exclusion = _s(r.get("pkg_exclusion"))
+        pkg_orient = _s(r.get("pkg_base_orientation"))
+
         out = {"p": None, "signed_weight": None, "dealer_sign": 0,
                "tau_bucket": None, "tau_bps": None, "mid_bias_bps": None,
                "in_dead_zone": False, "exclusion": None,
-               "deviation_bps": r.get("deviation_bps")}
+               "deviation_bps": _f(r.get("deviation_bps"))}
 
-        if r.get("universe_exclusion"):
-            out["exclusion"] = r["universe_exclusion"]
-        elif r.get("rule") is None:
-            out["exclusion"] = r.get("failure") or T.EXCL_UNORIENTABLE
-        elif r.get("failure") is not None:
-            out["exclusion"] = r["failure"]
+        if universe_exclusion:
+            out["exclusion"] = universe_exclusion
+        elif rule is None:
+            out["exclusion"] = failure or T.EXCL_UNORIENTABLE
+        elif failure is not None:
+            out["exclusion"] = failure
 
         if out["exclusion"] is not None:
             calls.append(T.DirectionCall(
-                unit_key=key, rule=r.get("rule") or conv.RULE_RATE,
+                unit_key=key, rule=rule or conv.RULE_RATE,
                 deviation_bps=_f(r.get("deviation_bps")), p=None,
                 signed_weight=None, dealer_sign=0,
                 exclusion=out["exclusion"]))
@@ -844,23 +915,23 @@ def classify_day(units_df, plegs_df, tau_set):
             extra[key] = out
             continue
 
-        bk = P.BucketKey(venue_class=r["venue_class"],
-                         rate_index=r["rate_index"],
-                         structure=r["kind"],
-                         special_tenor_type=r["special_tenor_type"],
-                         tenor_band=r["tenor_band"])
+        bk = P.BucketKey(venue_class=str(r["venue_class"]),
+                         rate_index=str(r["rate_index"]),
+                         structure=str(r["kind"]),
+                         special_tenor_type=str(r["special_tenor_type"]),
+                         tenor_band=str(r["tenor_band"]))
         memo = (id(cal), bk)
         fit = fit_memo.get(memo)
         if fit is None:
             fit = cal.for_key(bk)
             fit_memo[memo] = fit
 
-        if r["rule"] == conv.RULE_RATE:
+        if rule == conv.RULE_RATE:
             dev = _f(r["deviation_bps"])
             if dev is None:
                 out["exclusion"] = T.EXCL_PRICING_ERROR
                 calls.append(T.DirectionCall(
-                    unit_key=key, rule=r["rule"], deviation_bps=None, p=None,
+                    unit_key=key, rule=rule, deviation_bps=None, p=None,
                     signed_weight=None, dealer_sign=0,
                     exclusion=T.EXCL_PRICING_ERROR))
                 extra[key] = out
@@ -882,16 +953,16 @@ def classify_day(units_df, plegs_df, tau_set):
                 mid_bias_bps=c.mid_bias_bps,
                 in_dead_zone=bool(c.in_dead_zone)))
 
-        elif r["rule"] == conv.RULE_UPFRONT:
+        elif rule == conv.RULE_UPFRONT:
             tau = U.TauUpfront(
                 tau_bps=fit.tau, bias_bps=fit.b0, half_spread_bps=fit.h,
                 sigma_bps=fit.s, n=fit.n_trimmed,
                 population=(U.POPULATION_LIFECYCLE if r["is_lifecycle"]
                             else U.POPULATION_FLOW),
                 bucket=fit.bucket)
-            c = U.classify(npv_pay=r["npv_pay"], upfront=r["upfront"],
-                           structure_dv01=r["structure_dv01"],
-                           upfront_source=r["upfront_source"],
+            c = U.classify(npv_pay=_f(r["npv_pay"]), upfront=_f(r["upfront"]),
+                           structure_dv01=_f(r["structure_dv01"]),
+                           upfront_source=_s(r["upfront_source"]),
                            is_lifecycle=bool(r["is_lifecycle"]),
                            is_capped=bool(r["is_capped"]),
                            tau=tau, mid_sigma_bps=fit.s, mid_bias_bps=fit.b0)
@@ -920,19 +991,19 @@ def classify_day(units_df, plegs_df, tau_set):
                 dealer_sign=side, tau_bucket=c.tau_bucket, tau_bps=c.tau_bps,
                 mid_bias_bps=c.mid_bias_bps))
 
-        elif r["rule"] == pp.RULE_PACKAGE_PRICE:
-            if r.get("pkg_exclusion"):
-                out.update({"exclusion": r["pkg_exclusion"],
+        elif rule == pp.RULE_PACKAGE_PRICE:
+            if pkg_exclusion:
+                out.update({"exclusion": pkg_exclusion,
                             "deviation_bps": _f(r.get("pkg_deviation_bps"))})
                 calls.append(T.DirectionCall(
                     unit_key=key, rule=pp.RULE_PACKAGE_PRICE,
                     deviation_bps=_f(r.get("pkg_deviation_bps")), p=None,
                     signed_weight=None, dealer_sign=0,
-                    exclusion=r["pkg_exclusion"]))
+                    exclusion=pkg_exclusion))
                 extra[key] = out
                 continue
             dev = _f(r.get("pkg_deviation_bps"))
-            orient = r.get("pkg_base_orientation")
+            orient = pkg_orient
             if dev is None or not orient:
                 out["exclusion"] = T.EXCL_PRICING_ERROR
                 calls.append(T.DirectionCall(
@@ -950,7 +1021,7 @@ def classify_day(units_df, plegs_df, tau_set):
             if r["is_lifecycle"]:
                 p = 1.0 - p
             w = conv.signed_weight(p)
-            side = int(r["pkg_dealer_sign"])
+            side = int(_f(r["pkg_dealer_sign"]) or 0)
             if side != 0 and w != 0.0 and (w > 0) != (side > 0):
                 raise AssertionError(
                     f"unit {key!r}: the borrowed p landed on the opposite side "
@@ -969,9 +1040,23 @@ def classify_day(units_df, plegs_df, tau_set):
                 in_dead_zone=bool(abs(dev) < half),
                 base_orientation=tuple(json.loads(orient))))
         else:
-            raise ValueError(f"unrouted rule {r['rule']!r}")
+            raise ValueError(f"unrouted rule {rule!r}")
 
         extra[key] = out
+
+    # Every unit leaves with either a probability or a reason, and the reason
+    # is a string. Asserted rather than assumed: a NaN exclusion is neither a
+    # reason nor a null, and it reads downstream as "excluded" with nothing to
+    # say why.
+    for key, out in extra.items():
+        ex = out["exclusion"]
+        if ex is not None and not isinstance(ex, str):
+            raise TypeError(
+                f"unit {key!r} carries a non-string exclusion {ex!r} "
+                f"({type(ex).__name__}); see `_s`")
+        if ex is None and (out["p"] is None or out["signed_weight"] is None):
+            raise ValueError(
+                f"unit {key!r} has neither a probability nor a reason")
 
     return calls, extra
 
@@ -1120,8 +1205,12 @@ def publish_day(conn, day: str, paths: Paths, tau_set, vintage: str,
     reason_by_unit = {}
     for r in units_df.to_dict("records"):
         key = str(r["unit_key"])
-        ex = extra.get(key, {}).get("exclusion") or ladder_reason.get(key)
+        ex = _s(extra.get(key, {}).get("exclusion")) or _s(ladder_reason.get(key))
         reason_by_unit[key] = ex or S.IN_LADDER
+    bad = {k: v for k, v in reason_by_unit.items() if not isinstance(v, str)}
+    if bad:
+        raise TypeError(f"{len(bad)} unit(s) carry a non-string reason, "
+                        f"e.g. {list(bad.items())[:3]}")
 
     agg = ({} if tenor_rows.empty else
            tenor_rows.groupby("unit_key", observed=True)
@@ -1152,7 +1241,7 @@ def publish_day(conn, day: str, paths: Paths, tau_set, vintage: str,
             "pricing_timestamp": (r["pricing_ts"]
                                   if isinstance(r["pricing_ts"], pd.Timestamp)
                                   else None),
-            "pricing_clock_field": r["pricing_clock_field"],
+            "pricing_clock_field": _s(r["pricing_clock_field"]),
             "report_lag_seconds": _f(r["report_lag_seconds"]),
             "visibility_lag_seconds": lag,
             "dealer_direction": direction_label(e.get("dealer_sign"), excl),
@@ -1160,28 +1249,30 @@ def publish_day(conn, day: str, paths: Paths, tau_set, vintage: str,
                             else int(e.get("dealer_sign") or 0)),
             "p": _f(e.get("p")),
             "signed_weight": _f(e.get("signed_weight")),
-            "rule": r["rule"],
+            "rule": _s(r["rule"]),
             "deviation_bps": _f(e.get("deviation_bps")),
             "tau_bps": _f(e.get("tau_bps")),
-            "tau_bucket": e.get("tau_bucket"),
+            "tau_bucket": _s(e.get("tau_bucket")),
             "mid_bias_bps": _f(e.get("mid_bias_bps")),
             "in_dead_zone": bool(e.get("in_dead_zone")),
             "exclusion_reason": excl,
-            "exclusion_detail": (r["universe_exclusion_detail"]
-                                 or r["failure_detail"] or r["pkg_flags"]),
-            "kind": r["kind"], "n_legs": int(r["n_legs"]),
-            "rate_index": r["rate_index"], "venue_class": r["venue_class"],
-            "series": r["series"],
+            "exclusion_detail": (_s(r["universe_exclusion_detail"])
+                                 or _s(r["failure_detail"])
+                                 or _s(r["pkg_flags"])),
+            "kind": str(r["kind"]), "n_legs": int(r["n_legs"]),
+            "rate_index": str(r["rate_index"]),
+            "venue_class": str(r["venue_class"]),
+            "series": str(r["series"]),
             "is_lifecycle": bool(r["is_lifecycle"]),
             "is_block": bool(r["is_block"]), "is_capped": bool(r["is_capped"]),
             "total_dv01_if_received": _f(a.get("total_dv01_if_received")),
             "total_delta_dv01": _f(a.get("total_delta_dv01")),
             "structure_dv01": _f(r["structure_dv01"]),
             "dv01_proxy": _f(r["dv01_proxy"]),
-            "curve_name": r["curve_name"],
+            "curve_name": _s(r["curve_name"]),
             "curve_timestamp": r["curve_timestamp"],
             "snapshot_lag_seconds": _f(r["snapshot_lag_s"]),
-            "snapshot_policy": r["snapshot_policy"],
+            "snapshot_policy": _s(r["snapshot_policy"]),
             "curve_source": snap.CURVE_SOURCE,
             # The capped-notional imputation is REPORTED, not applied: the
             # ladder's DV01 comes from the printed notional, so a capped unit
@@ -1189,7 +1280,7 @@ def publish_day(conn, day: str, paths: Paths, tau_set, vintage: str,
             # multiplier here would silently inflate the level.
             "notional_imputed": bool(r["is_capped"]),
             "notional_impute_factor": None,
-            "risk_sanity_reason": r["risk_sanity_reason"],
+            "risk_sanity_reason": _s(r["risk_sanity_reason"]),
             "tape_generation": S.SOURCE_TAPE_GENERATION,
             "code_vintage": vintage,
         })
@@ -1293,7 +1384,7 @@ def build_and_write_ladder(conn, tenor_rows, cov_rows, dry_run: bool) -> int:
 
 
 def stage_publish(days_all: list, publish_days: list, paths: Paths,
-                  dry_run: bool) -> int:
+                  dry_run: bool, refresh_calibration: bool = False) -> int:
     from SDRUtils.dealer_direction import provenance as prov
     from SDRUtils.dealer_direction import snapshot as snap
 
@@ -1303,7 +1394,7 @@ def stage_publish(days_all: list, publish_days: list, paths: Paths,
           f"({publish_days[0]} .. {publish_days[-1]}), "
           f"calibrating on {len(days_all)} priced days", flush=True)
 
-    cals = build_calibrations(paths, days_all)
+    cals = build_calibrations(paths, days_all, refresh=refresh_calibration)
     tau_set = TauSet(cals)
 
     conn = connect()
@@ -1417,6 +1508,8 @@ def main(argv=None) -> int:
     ap.add_argument("--budget-min", type=float, default=10_000.0)
     ap.add_argument("--cache-dir", default=str(DEFAULT_CACHE))
     ap.add_argument("--dry-run", action="store_true")
+    ap.add_argument("--refresh-calibration", action="store_true",
+                    help="refit the rolling calibrations even if cached")
     args = ap.parse_args(argv)
 
     os.environ.setdefault("TMPDIR", str(pathlib.Path(args.cache_dir) / "tmp"))
@@ -1447,7 +1540,8 @@ def main(argv=None) -> int:
     pdays = [d for d in days if d >= floor]
     if not pdays:
         raise RuntimeError(f"no priced days at or after the floor {floor}")
-    return stage_publish(days, pdays, paths, args.dry_run)
+    return stage_publish(days, pdays, paths, args.dry_run,
+                         args.refresh_calibration)
 
 
 if __name__ == "__main__":
