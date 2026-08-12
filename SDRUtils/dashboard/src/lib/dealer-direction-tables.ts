@@ -39,8 +39,15 @@ export const DD_RUNS = d('runs')
  *    minute AFTER the one the annotation priced at.
  * 2. Citi publishes nothing from 23:00 to 00:59 ET, so there is no row in
  *    those two hours. CARRY THE LAST POINT FORWARD rather than interpolating
- *    or drawing a gap: the direction pipeline serves those prints from the
- *    previous 22:59 snapshot, so LOCF reproduces its mid exactly.
+ *    or drawing a gap — it is the closest of the three, not an exact one.
+ *    The direction pipeline serves an hour-00 print from that same previous
+ *    22:59 snapshot, so the curve matches; the instrument does not, because
+ *    at 00:xx ET the curve's reference date is still the previous business
+ *    day and the grid's spot point is a business day behind the print's own.
+ *    Measured on those prints: LOCF disagrees with the annotation by up to
+ *    ~0.42 bp (joining forward to the next 01:00 point instead: up to
+ *    ~1.20 bp). So expect a sub-basis-point gap on the ~1% of prints in ET
+ *    hour 00, and none at all on the rest — rule 1 is exact, this one is not.
  */
 export const DD_CURVE_MID = d('curve_mid')
 

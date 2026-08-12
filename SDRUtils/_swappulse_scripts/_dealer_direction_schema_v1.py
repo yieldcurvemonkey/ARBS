@@ -477,11 +477,23 @@ CREATE TABLE IF NOT EXISTS {CURVE_MID_TABLE} (
     # ------------------------------------------- mid grid, per-day accounting
     # Citi publishes nothing between 23:00 and 00:59 ET, so no grid row exists
     # for a print in those two hours. THE CONSUMER CARRIES THE LAST POINT
-    # FORWARD, and that is not a convenience: the direction pipeline serves
-    # those prints from an ASOF_2H_OUT_OF_SESSION curve, which IS the previous
-    # 22:59 snapshot, so LOCF reproduces the annotation's own mid exactly.
-    # Interpolating across the hole, or drawing a gap, would both disagree
-    # with the annotation drawn on top of it.
+    # FORWARD -- it is the closest of the available choices, not an exact one,
+    # and the difference was measured rather than assumed.
+    #
+    # The direction pipeline serves an hour-00 print from an
+    # ASOF_2H_OUT_OF_SESSION curve, which IS the previous 22:59 snapshot, so
+    # the CURVE matches. The INSTRUMENT does not: at 00:xx ET the served
+    # curve's reference date is still the previous business day, so the grid's
+    # spot-start point is one business day behind the print's own effective
+    # date. Decomposed on 11 such prints: repricing each print's OWN dates at
+    # its own instant reproduces the annotation to 1.3e-13 bp, while the grid's
+    # constant-maturity point disagrees by <= 0.42 bp under LOCF (<= 1.20 bp if
+    # the consumer instead joins forward to the next session's 01:00 point).
+    #
+    # So: LOCF for line continuity, and expect up to ~0.4 bp of disagreement
+    # against the annotation on the ~1% of prints in ET hour 00. Interpolating
+    # across the hole invents a market that was not publishing; drawing a gap
+    # loses the print entirely. Both are worse.
     f"""
 CREATE TABLE IF NOT EXISTS {CURVE_MID_DAY_TABLE} (
     grid_date               DATE NOT NULL,
