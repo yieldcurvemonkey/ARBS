@@ -401,11 +401,6 @@ def price_one_day(day: str, paths: Paths) -> dict:
            .sum().reset_index().reindex(columns=COVLEG_COLS))
 
     # ---- static rows for EVERY unit, kept or excluded ----------------------
-    pkg_by_group = {}
-    if hasattr(pp, "tape_gate"):
-        with contextlib.suppress(Exception):
-            pkg_by_group = pp.tape_gate(ann).to_dict("index")
-
     rows_by_key: dict[str, dict] = {}
     for g in u.index:
         row = u.loc[g]
@@ -502,7 +497,20 @@ def price_one_day(day: str, paths: Paths) -> dict:
                     signed_weight=None, dealer_sign=0, exclusion=out.failure))
                 continue
 
+            # The fee and the NPV are paired POSITIONALLY, and a package's
+            # sign solve is only as good as that pairing: match the wrong fee
+            # to the wrong leg and `package_price.classify` returns a
+            # confident orientation for a scrambled input, with no symptom.
+            # Measured on 2026-04-01 (`scratch/ddfe09_leg_alignment.py`): 0
+            # mismatches over 621 multi-leg units. Asserted anyway, because
+            # "it held on the day I looked" is not an invariant.
             for i, leg in enumerate(out.legs):
+                want = str(unit.legs["trade_id"].iloc[i])
+                if str(leg.trade_id) != want:
+                    raise AssertionError(
+                        f"unit {key!r} leg {i}: the repriced leg is "
+                        f"{leg.trade_id!r} but unit.legs holds {want!r}; the "
+                        "per-leg fee would be paired with the wrong NPV")
                 pleg_rows.append({
                     "unit_key": key, "leg_index": i,
                     "trade_id": str(leg.trade_id),
@@ -1377,6 +1385,46 @@ def build_and_write_ladder(conn, tenor_rows, cov_rows, dry_run: bool) -> int:
         frame["visibility_date"] = (
             pd.to_datetime(frame["visibility_date"]).dt.date)
 
+    # ---- the two clocks do not share a day boundary --------------------
+    #
+    # The tape's `as_of` day runs 20:00 ET the previous evening to 19:59 ET.
+    # The ladder stamps on availability, a New York date. So for `as_of = D`
+    # the visibility dates are {D-1, D}: a print at 20:30 ET on D-1 carries
+    # `as_of = D` and becomes public on D-1.
+    #
+    # Publishing `as_of >= SAMPLE_FLOOR` therefore produces a cell stamped
+    # FLOOR-1, built only from the sliver of FLOOR's prints that executed the
+    # previous evening. `indicator.build` refuses the whole run over it, which
+    # is the right behaviour and is how this was found -- the floor exists
+    # because the DV01 exclusion rate steps 3.2 pp across the 2024-07 ingest
+    # break and the tape carries no termination events before it.
+    #
+    # Dropped rather than published, and nothing that belongs to a published
+    # day is lost with it: the FLOOR-1 cell would need `as_of = FLOOR-1`,
+    # which is outside the window by construction.
+    #
+    # THE OTHER END IS DIFFERENT AND IS NOT DROPPED. The most recent
+    # visibility day is missing the 20:00-23:59 ET prints that will arrive
+    # with the next tape day's `as_of`, so it is *provisional* rather than
+    # wrong, and it tops itself up on the next run. Dropping it would throw
+    # away the freshest cell in the series -- the one a reader looks at first
+    # -- to fix an under-read in the thinnest hours of the session. It is
+    # stated in the consumer note instead.
+    n_before = len(tenor_rows)
+    floor = ind.SAMPLE_FLOOR
+    tenor_rows = tenor_rows[tenor_rows["visibility_date"] >= floor]
+    cov_rows = cov_rows[cov_rows["visibility_date"] >= floor]
+    dropped = n_before - len(tenor_rows)
+    if dropped:
+        print(f"ladder: dropped {dropped:,} unit-bucket rows stamped before "
+              f"the {floor} sample floor (prints that executed after 20:00 ET "
+              "the previous evening and so carry the next tape day's as_of)",
+              flush=True)
+    if tenor_rows.empty:
+        raise RuntimeError(
+            f"every published row is stamped before the {floor} floor; "
+            "nothing to build")
+
     kept = np.where(cov_rows["reason"].to_numpy() == S.IN_LADDER,
                     cov_rows["dv01"].to_numpy(), 0.0)
     coverage = (cov_rows.assign(_kept=kept)
@@ -1384,6 +1432,59 @@ def build_and_write_ladder(conn, tenor_rows, cov_rows, dry_run: bool) -> int:
                           "series"], observed=True)
                 .agg(dv01_kept=("_kept", "sum"), dv01_total=("dv01", "sum"))
                 .reset_index())
+
+    # ---- the level and the coverage are on two different grids ---------
+    #
+    # INDICATOR.md §2 says so, and this is where it bites. The LEVEL is
+    # key-rate risk: rateslib's delta ladder puts a non-zero number at all 28
+    # pillars for a single swap, so one 10Y trade publishes a cell in 0-1Y as
+    # well as in 7-10Y. The COVERAGE is a maturity-point allocation of gross
+    # |DV01| -- it has to be, because an excluded unit has no key-rate profile
+    # *by construction*, which is why it was excluded -- so that same trade
+    # contributes to the 7-10Y denominator and to nothing else.
+    #
+    # The two grids therefore do not have the same cell set, and
+    # `indicator.build` requires one coverage row per published cell. Nothing
+    # exercised this before: the backend's own `ddind_coverage.py` built the
+    # coverage frame alone, and INDICATOR §6 records that no composed
+    # pipeline existed to put a KRD-derived level beside it.
+    #
+    # A cell the ladder publishes with no coverage row is one where **no tape
+    # DV01 matured in that bucket that day**: the risk in it is key-rate spill
+    # from longer-dated trades. Its coverage is 0/0, and `coverage_fraction`
+    # refuses that outright -- "a coverage fraction over no size reports
+    # nothing" -- which is the right stance and not one to route around.
+    #
+    # Two ways not taken:
+    #
+    #   * publish it with an unknown coverage. The module refuses, and the
+    #     refusal is correct: every cell here is meant to be gateable on its
+    #     coverage, and one that cannot be gated is worse than absent.
+    #   * allocate the NUMERATOR on the KRD grid and the denominator on the
+    #     maturity grid, which would make the ratio cell-consistent by putting
+    #     two different populations inside one fraction -- exactly the
+    #     incoherence §2 exists to name.
+    #
+    # So the cells are dropped, and the cost is measured rather than assumed:
+    # on the smoke window, 187 of 1,420 cells and **0.253% of |delta_dv01|**.
+    # With `session_dates` passed, the affected day still appears in its
+    # bucket's series as `observed=False` rather than vanishing.
+    key = ["bucket_key", "visibility_date", "venue_class", "series"]
+    cells = tenor_rows[key].drop_duplicates()
+    orphan = (cells.merge(coverage, how="left", on=key, indicator=True)
+              .query("_merge == 'left_only'")[key])
+    if len(orphan):
+        drop = tenor_rows.merge(orphan.assign(_o=1), on=key, how="left")
+        mask = drop["_o"].notna().to_numpy()
+        share = float(tenor_rows["delta_dv01"].abs().to_numpy()[mask].sum())
+        total = float(tenor_rows["delta_dv01"].abs().sum())
+        print(f"ladder: dropped {len(orphan):,} of {len(cells):,} cells where "
+              f"no tape DV01 MATURED in that bucket-day, so the coverage "
+              f"fraction would be 0/0 "
+              f"({100.0 * share / max(total, 1e-9):.3f}% of |delta_dv01|)",
+              flush=True)
+        tenor_rows = tenor_rows[~mask]
+
     coverage = coverage[list(ind.COVERAGE_COLUMNS)]
 
     session_dates = sorted(set(
@@ -1471,10 +1572,13 @@ def _assert_published(conn, days: list) -> None:
     """A day succeeded only if the rows it was supposed to produce exist."""
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
+        # ::date[] is load-bearing -- psycopg2 sends a Python list of ISO
+        # strings as text[], and `date = text` has no operator, so the check
+        # that a day produced rows would itself fail rather than report.
         got = pd.read_sql(
             f"SELECT as_of_date, count(*) n FROM {S.UNIT_TABLE} "
-            "WHERE as_of_date = ANY(%(d)s) GROUP BY as_of_date",
-            conn, params={"d": days})
+            "WHERE as_of_date = ANY(%(d)s::date[]) GROUP BY as_of_date",
+            conn, params={"d": list(days)})
     have = {pd.Timestamp(d).date().isoformat() for d in got["as_of_date"]}
     missing = [d for d in days if d not in have]
     if missing:

@@ -204,12 +204,16 @@ export function DealerLadderPanel(): JSX.Element {
       bucketRows.map((r) => ({
         day: String(r.visibility_date).slice(0, 10),
         level: num(r[levelField]),
+        // The pond the net was formed from. A net of zero over $40mm of gross
+        // is a different day from a net of zero over nothing, and only the
+        // gross tells them apart — so it is on the tooltip beside the net.
         gross: num(r[grossField]),
         coverage: num(r.coverage_frac),
         n_units: num(r.n_units),
-        z: num(r.z_raw),
+        z: num(r[basis === 'raw' ? 'z_raw' : 'z_cov_adj']),
+        weight: num(r.mean_abs_signed_weight),
       })),
-    [bucketRows, levelField, grossField],
+    [bucketRows, levelField, grossField, basis],
   )
 
   const covFrac = num(summary?.coverage_frac)
@@ -388,8 +392,11 @@ export function DealerLadderPanel(): JSX.Element {
                 labelFormatter={(l: string) => {
                   const row = chartData.find((d) => d.day === l)
                   return (
-                    `${l}   coverage ${fmtPct(row?.coverage ?? null, 0)}` +
-                    `   n=${row?.n_units ?? '—'}   z=${fmtZ(row?.z ?? null)}`
+                    `${l}   z ${fmtZ(row?.z ?? null)}\n` +
+                    `gross pond ${fmtSignedDv01(row?.gross ?? null).replace('+', '')}` +
+                    `   n=${row?.n_units ?? '—'}` +
+                    `   mean |2p-1| ${(row?.weight ?? 0).toFixed(2)}\n` +
+                    `coverage ${fmtPct(row?.coverage ?? null, 0)}`
                   )
                 }}
               />

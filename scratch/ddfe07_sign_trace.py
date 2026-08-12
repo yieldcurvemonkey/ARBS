@@ -46,9 +46,17 @@ def _read(conn, sql, **params):
 def main(day: str | None) -> int:
     conn = psycopg2.connect(resolve_pg_url())
 
-    # A single-leg OUTRIGHT decided by the rate rule, as far from mid as we
-    # have, so the call is unambiguous and every intermediate number is large
-    # enough to read.
+    # A single-leg SOFR OUTRIGHT decided by the rate rule, decisive (p > 0.90, so |2p-1| > 0.8)
+    # but **within MAX_DEV_BPS of mid**, and then the largest of those.
+    #
+    # The bound is deliberate. Without it the query returns the most
+    # off-market print on the tape -- the first run pinned a 30Y at 95.5 bp
+    # above mid -- which pins the sign perfectly well but is not the case a
+    # reader meets, and invites the reasonable objection that the trade
+    # should not be in the ladder at all. A print a couple of basis points
+    # off mid is the ordinary decisive call, and pinning THAT is the more
+    # informative statement about the production path.
+    MAX_DEV_BPS = 5.0
     where = "AND u.as_of_date = %(d)s" if day else ""
     u = _read(conn, f"""
         SELECT * FROM {S.UNIT_TABLE} u
@@ -56,7 +64,8 @@ def main(day: str | None) -> int:
           AND u.kind = 'OUTRIGHT'
           AND u.exclusion_reason IS NULL
           AND u.p IS NOT NULL
-          AND u.p > 0.98
+          AND u.p > 0.90
+          AND abs(u.deviation_bps) < {MAX_DEV_BPS}
           AND u.rate_index = 'SOFR'
           AND u.n_legs = 1
           {where}

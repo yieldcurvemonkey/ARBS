@@ -270,7 +270,28 @@ export function coverageSql(byBucket: boolean): string {
   `
 }
 
-/** Headline numbers for the panel header: latest day, coverage, unit counts. */
+/**
+ * Headline numbers for the panel header: window, coverage, unit counts.
+ *
+ * THE COVERAGE COMES FROM THE COVERAGE TABLE, NOT FROM THE LADDER.
+ *
+ * The obvious implementation sums `coverage_dv01_kept / coverage_dv01_total`
+ * over `arbs_dd_ladder_v1`, and it is wrong in the direction that flatters.
+ * A ladder cell only exists where at least one unit was oriented, so
+ * averaging coverage over ladder cells conditions on the very thing being
+ * measured: every bucket-day whose units were *all* excluded contributes its
+ * whole DV01 to the true denominator and nothing at all to that average.
+ *
+ * Measured on the 2024-07-01..2024-08-09 window, D2C / FLOW:
+ *
+ *     over ladder cells        67.0%     <- the flattering one
+ *     over the coverage table  44.8%     <- the complete partition
+ *
+ * A 22-point overstatement, on the single number whose whole job is to stop
+ * the panel reading as though it were complete. `arbs_dd_coverage_v1` is a
+ * partition by construction -- every unit lands in exactly one reason -- so
+ * it is the only correct source.
+ */
 export function summarySql(): string {
   return `
     WITH bounds AS (
@@ -278,10 +299,10 @@ export function summarySql(): string {
       FROM ${DD_LADDER}
       WHERE bucket_space = '${BUCKET_SPACE}'
     ), cov AS (
-      SELECT SUM(coverage_dv01_kept)  AS kept,
-             SUM(coverage_dv01_total) AS total
-      FROM ${DD_LADDER}
-      WHERE bucket_space = '${BUCKET_SPACE}' AND venue_class = $1 AND series = $2
+      SELECT SUM(dv01) FILTER (WHERE reason = '${DD_IN_LADDER}') AS kept,
+             SUM(dv01)                                           AS total
+      FROM ${DD_COVERAGE}
+      WHERE venue_class = $1 AND series = $2
     ), units AS (
       SELECT count(*)::bigint AS n_units,
              count(*) FILTER (WHERE exclusion_reason IS NULL)::bigint AS n_called,

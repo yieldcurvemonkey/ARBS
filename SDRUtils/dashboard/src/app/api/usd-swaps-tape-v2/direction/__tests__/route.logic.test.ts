@@ -182,11 +182,17 @@ describe('the SQL is parameterised and reads the right tables', () => {
     expect(coverageSql(false)).not.toMatch(/PARTITION BY bucket_key/)
   })
 
-  it('summarySql reports coverage as kept AND total, not a ratio alone', () => {
-    // A ratio cannot be re-aggregated; the denominator is the only thing that
-    // knows about the units that were excluded.
+  it('summarySql takes coverage from the COVERAGE table, not the ladder', () => {
+    // A ladder cell only exists where at least one unit was oriented, so
+    // averaging coverage over ladder cells conditions on the thing being
+    // measured. Measured on one window: 67.0% that way against 44.8% over
+    // the complete partition -- a 22-point overstatement on the one number
+    // whose job is to stop the panel reading as complete.
     const sql = summarySql()
-    expect(sql).toMatch(/coverage_dv01_kept/)
-    expect(sql).toMatch(/coverage_dv01_total/)
+    expect(sql).toMatch(/arbs_dd_coverage_v1/)
+    expect(sql).toMatch(/FILTER \(WHERE reason = 'IN_LADDER'\)/)
+    // and NOT from the ladder's per-cell copies
+    expect(sql).not.toMatch(/SUM\(coverage_dv01_kept\)/)
+    expect(sql).not.toMatch(/SUM\(coverage_dv01_total\)/)
   })
 })
