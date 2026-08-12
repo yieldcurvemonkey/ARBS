@@ -82,6 +82,22 @@ were found:
    same call before it fits, so the provider is bound onto the MDP for the build (scoped, restored
    on exit) rather than only replacing the builder's own call.
 
+5. **A narrow check certified a broken path.** The first equivalence test compared CUSIP membership
+   and rank and reported 48/48 — true, and useless: the local frame was missing `ttm` entirely.
+   `apply_universe_filter` *skips* a missing column but *applies* a null one, and `NaN >= min_ttm`
+   is False, so once the 48 fetched days supplied a `ttm` column the concatenated panel carried it
+   as NaN for the other 284 and **the tradeable universe was empty on 284 of 332 dates**. Nothing
+   failed: 343 bonds, 1.94bp RMSE, zero equity holes, plausible P&L — from 14% of the sample.
+   `scripts/gss_funnel.py` caught it because the count of dates with any eligible bond was
+   *exactly* 48. `ttm` is now computed on **ActualActual(ISDA)** (exact against six fetched frames;
+   `days/365.25` is off by half a day and `min_ttm` is a hard cutoff at 3.0), the check compares
+   every shared column, and `_assert_reference_is_usable` refuses a panel whose gating column is
+   present-but-null. **Any GSS result produced before this is void.**
+
+Also measured: the supplied `gc_repo_hist_example.xlsx` GC curve is **flat across all 14 tenors on
+100% of days** — Citi serves the identical number for ON through 10Y — so `repo_tenor` cannot
+matter for this collateral and leg-level specialness is the only possible differentiator.
+
 **The boundary rule was measured against 48 reference frames built by the fetched path**, which the
 day cache preserved. `issue_date <= as_of < maturity_date` reproduces all 48 exactly — membership
 and on-the-run rank. Neither boundary is `_filter_and_rank_ref_df`'s: its strict `issue_date <
