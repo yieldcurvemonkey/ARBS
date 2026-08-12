@@ -310,6 +310,37 @@ The exclusion breakdown over the window, all series:
 | `RISK_IMPLAUSIBLE` | 0.09% | 100 |
 | everything else | < 0.15% | 61 |
 
+### G-6b. The published split is balanced — the strongest evidence the wiring is right
+
+The single best check available, and it is independent of every test: the old
+short-end classifier came out **78.3% PAID** because the Barchart
+`Q12xM12STIRT` mid it priced against runs ~0.5 bp high with ~7× the dispersion
+(F-20). If anything in this pipeline — the curve token, the sign convention,
+the bias correction, the probability model — were wrong in the same way, the
+published directions would lean the same way.
+
+Measured over the 29-day published window, called units only:
+
+| rule | PAID | RECEIVED |
+|---|---:|---:|
+| `RATE_VS_MID` | 17,222 (**49.97%**) | 17,245 (**50.03%**) |
+| `NPV_VS_UPFRONT` | 6,051 (47.35%) | 6,728 (52.65%) |
+| `PACKAGE_PRICE_VS_MODEL` | 136 (49.64%) | 138 (50.36%) |
+
+and on the deviations themselves, 34,467 `RATE_VS_MID` calls:
+
+| | this run | backend's F-15, sampled independently |
+|---|---:|---:|
+| share printed above mid | **52.3%** | 55.5% |
+| median (printed − mid) | **+0.012 bp** | +0.021 bp, 95% CI [−0.0015, +0.0463] |
+| IQR | [−0.167, +0.205] bp | [−0.096, +0.170] bp |
+
+Mean conviction `|2p−1|` is **0.129** — most calls are marginal, which is what
+the mixture model should say about prints inside a half-spread, and is exactly
+why the ladder weights by `2p−1` rather than by `p`.
+
+Net over the window, D2C / FLOW: **+81.2 MM/bp against 981.7 MM/bp gross**.
+
 ### G-7. Measured read cost
 
 `scratch/ddfe06_read_cost.py`, 5 reps each, against prod over the pooler.
