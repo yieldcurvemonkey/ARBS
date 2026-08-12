@@ -1612,15 +1612,48 @@ def stage_publish(days_all: list, publish_days: list, paths: Paths,
 
     conn = connect()
     try:
-        tenor_parts, cov_parts = [], []
+        # ---- the ladder's input is STREAMED TO DISK, not accumulated -----
+        #
+        # It used to be two Python lists of 527 DataFrames, ~9.6M unit-bucket
+        # rows, concatenated at the end. Measured consequence: a publish was
+        # OOM-killed 23 days in, failing to allocate 52 KiB, on a box whose
+        # COMMIT CHARGE was at 129.8 GB of 139.2 GB. Physical RAM was not the
+        # binding constraint and 64 GB was never the number that mattered --
+        # the machine is shared, and a job that holds ~14 GB across a
+        # 50-minute run is a job that will eventually meet a busy hour.
+        #
+        # Per-day parquet costs one atomic write per day and turns the peak
+        # into a single read. It also gives the ladder-only rebuild that was
+        # listed as unfinished: this directory IS the input a `ladder` stage
+        # needs, so a defect in the indicator no longer costs the 527-day
+        # loop.
+        stage = paths.root / "ladderstage"
+        for sub in ("tenor", "cov"):
+            (stage / sub).mkdir(parents=True, exist_ok=True)
+        # Clear only days OUTSIDE this window. A staged day from a different
+        # window is stale and would silently join this ladder; a staged day
+        # inside it is about to be overwritten anyway. Keeping the rest is
+        # what lets the window be published in halves on a memory-tight box
+        # and the ladder built once at the end from `ladder`.
+        keep = set(publish_days)
+        n_stale = 0
+        for old in stage.glob("*/*.parquet"):
+            if old.stem not in keep:
+                old.unlink()
+                n_stale += 1
+        if n_stale:
+            print(f"ladder stage: dropped {n_stale} staged file(s) from "
+                  "outside this window", flush=True)
         t0 = time.time()
         with probability_clip() as clip:
             for i, day in enumerate(publish_days, 1):
                 started = datetime.datetime.now(datetime.timezone.utc)
                 t1 = time.perf_counter()
                 res = publish_day(conn, day, paths, tau_set, vintage, dry_run)
-                tenor_parts.append(res.pop("tenor_rows"))
-                cov_parts.append(res.pop("cov_rows"))
+                _atomic_parquet(res.pop("tenor_rows"),
+                                stage / "tenor" / f"{day}.parquet")
+                _atomic_parquet(res.pop("cov_rows"),
+                                stage / "cov" / f"{day}.parquet")
                 secs = time.perf_counter() - t1
                 if not dry_run:
                     _record_run(conn, day, "publish", started, "ok", res,
@@ -1630,8 +1663,15 @@ def stage_publish(days_all: list, publish_days: list, paths: Paths,
                       f"{res['n_cov_rows']} coverage rows, {secs:.1f}s "
                       f"[{i}/{len(publish_days)}]", flush=True)
         print(f"probability clip fired: {dict(clip)}", flush=True)
-        tenor_rows = pd.concat(tenor_parts, ignore_index=True)
-        cov_rows = pd.concat(cov_parts, ignore_index=True)
+        # One read of a directory, not a concat of 527 frames. pyarrow builds
+        # the result in a single allocation and dictionary-encodes the
+        # repeated strings, so the peak is the frame itself rather than the
+        # frame plus its parts.
+        tenor_rows = pd.read_parquet(stage / "tenor")
+        cov_rows = pd.read_parquet(stage / "cov")
+        print(f"ladder input: {len(tenor_rows):,} unit-bucket rows, "
+              f"{len(cov_rows):,} coverage rows, read from "
+              f"{stage}", flush=True)
         n_cells = build_and_write_ladder(conn, tenor_rows, cov_rows, dry_run)
         print(f"publish: {len(publish_days)} days, {len(tenor_rows):,} "
               f"unit-bucket rows, {n_cells:,} ladder cells, "
@@ -1640,6 +1680,40 @@ def stage_publish(days_all: list, publish_days: list, paths: Paths,
             _assert_published(conn, publish_days)
     finally:
         conn.close()
+    return 0
+
+
+def stage_ladder(paths: Paths, dry_run: bool) -> int:
+    """Rebuild ONLY the ladder, from the parquet `publish` already staged.
+
+    The two expensive stages are `price` (~57 s/tape day) and the classify
+    loop inside `publish` (~5 s/day over 527 days). The ladder is arithmetic
+    over frames and takes seconds -- but until the ladder's input was streamed
+    to disk it lived in a Python list, so any defect in it, or any OOM during
+    it, cost the whole 527-day loop. Twice, measured.
+
+    Now the input is on disk, so it does not. This stage is what makes the
+    "a bug in the cheap half is repaired in minutes" claim actually true.
+    """
+    stage = paths.root / "ladderstage"
+    tdir, cdir = stage / "tenor", stage / "cov"
+    if not tdir.exists() or not any(tdir.glob("*.parquet")):
+        raise RuntimeError(
+            f"no staged ladder input under {stage}. Run `publish` first -- "
+            "this stage rebuilds the ladder, it cannot produce its own input.")
+    tenor_rows = pd.read_parquet(tdir)
+    cov_rows = pd.read_parquet(cdir)
+    n_days = len(list(tdir.glob("*.parquet")))
+    print(f"ladder: {len(tenor_rows):,} unit-bucket rows and "
+          f"{len(cov_rows):,} coverage rows over {n_days} staged days",
+          flush=True)
+    conn = connect()
+    try:
+        S.ensure_schema(conn)
+        n = build_and_write_ladder(conn, tenor_rows, cov_rows, dry_run)
+    finally:
+        conn.close()
+    print(f"ladder: {n:,} cells written", flush=True)
     return 0
 
 
@@ -1714,7 +1788,8 @@ def stage_status(days: list, paths: Paths) -> int:
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(
         description="Materialise dealer direction and the risk-bucket ladder")
-    ap.add_argument("stage", choices=["price", "publish", "status", "schema"])
+    ap.add_argument("stage",
+                    choices=["price", "publish", "ladder", "status", "schema"])
     ap.add_argument("--start", default=PRICE_FLOOR)
     ap.add_argument("--end", default=None)
     ap.add_argument("--publish-start", default=None,
@@ -1741,6 +1816,9 @@ def main(argv=None) -> int:
             (S.UNIT_TABLE, S.UNIT_BUCKET_TABLE, S.COVERAGE_TABLE,
              S.LADDER_TABLE, S.RUNS_TABLE)))
         return 0
+
+    if args.stage == "ladder":
+        return stage_ladder(paths, args.dry_run)
 
     end = args.end or datetime.date.today().isoformat()
     days = tape_days(args.start, end)
