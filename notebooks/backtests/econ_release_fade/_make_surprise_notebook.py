@@ -87,6 +87,7 @@ import econ_fade_config as C
 import econ_fade_exits as X
 import econ_fade_mdp_exits as MX
 import econ_fade_surprise as S
+import econ_fade_plotly as P
 from econ_fade_prewarm import load_events
 
 from RVUtils.StatisticalFinance import (
@@ -128,6 +129,12 @@ BRACKET = dict(tp_bp=1.0, sl_bp=None, trail_bp=None,
 
 COST_BP  = 0.2389                  # one ZN tick, one round trip
 MIN_TRADES = 30
+
+#: Annualising an event-driven book needs a span, and there is no natural one --
+#: so it is stated here rather than inferred from whichever trades happened to
+#: survive a filter, which would shrink the span every time the gate tightened
+#: and inflate the Sharpe for doing it.
+SPAN_YEARS = (pd.Timestamp("2026-08-07") - pd.Timestamp("2019-01-03")).days / 365.25
 
 RULE = X.ExitRule(name="headline", **BRACKET)
 print(json.dumps(CONFIG, indent=1, default=str))
@@ -318,6 +325,36 @@ plt.show()
 """)
 
 md(r"""
+### 5.1 The book, interactively
+
+The same 41 trades, with the whole record of each one attached. Hover any marker for the release
+that triggered it, its surprise and z, which way it went, both prices, how long it was held, why it
+ended, and what it paid gross and net. The crosshair runs through every panel, so a trade on the
+equity curve lines up against its own drawdown and its own signal.
+
+Three things a static curve cannot show, and this is built to.
+
+**Which trades the line is made of.** A curve that ends positive can be one enormous winner and
+forty small losers. The per-trade bars sit directly under the curve, coloured by how each trade
+ended, so the distribution and the cumulative shape are read together.
+
+**That the strategy is almost never on.** Forty-one trades over seven years is a very sparse book,
+and a continuous line invites the eye to read continuous exposure. Markers rather than a dense line
+keep that honest.
+
+**Where the money is not.** With a 1 bp target and no stop, the losers are unbounded and the winners
+are capped — the `avg win / avg loss` and `payoff ratio` rows in the summary are the two numbers that
+matter most, and they are computed from the same frame that draws the curve.
+""")
+
+code(r"""
+fig = P.trade_dashboard(engine, title=f"consensus surprise fade | {book.instrument.root} | "
+                                      f"|z| >= {CONFIG['z']['min_abs_z']:g}",
+                        span_years=SPAN_YEARS, signal_col="z")
+fig.show()
+""")
+
+md(r"""
 ## 6. Dose response — does a bigger surprise pay more?
 
 The single most informative plot in this notebook. If fading works *because* the market overshoots a
@@ -391,7 +428,7 @@ second, separately-charged trade.
 """)
 
 code(r"""
-rows = {}
+rows, frames = {}, {}
 for direction in ("fade", "momentum", "fade_then_flip"):
     cfg = copy.deepcopy(CONFIG)
     cfg["signal"] = {**CONFIG["signal"], "direction": direction}
@@ -410,6 +447,7 @@ for direction in ("fade", "momentum", "fade_then_flip"):
     if df.empty:
         continue
     rows[direction] = stats_of(df, direction)
+    frames[direction] = df
 
 dir_tbl = pd.DataFrame(rows.values()).set_index("label")
 print(dir_tbl[["trades", "net_bp", "gross_bp", "hit_rate", "payoff", "sr_per_trade",
@@ -424,6 +462,39 @@ if "fade" in rows and "momentum" in rows:
     print("different distances, so the two sides exit at different minutes. The residual is how")
     print("much asymmetry the bracket introduces, and it is small relative to the effect")
     print(f"({abs(resid) / abs(rows['fade']['gross_bp']) * 100:.1f}% of the fade's own gross).")
+""")
+
+code(r"""
+fig = P.compare_curves(frames, title="the fork: fade vs momentum vs fade-then-flip")
+fig.show()
+""")
+
+md(r"""
+### 7.1 Which way the edge actually runs
+
+The split that matters most in this book is not the release — it is the **sign of the surprise**. A
+cold print and a hot print are not the same trade in reverse once a bracket is attached, and pooling
+them hides which one is carrying the result.
+""")
+
+code(r"""
+d = engine.copy()
+d["surprise_dir"] = np.where(d["z"] > 0, "upside (hot)", "downside (cold)")
+print(d.groupby("surprise_dir").agg(
+    trades=("pnl_bp", "size"), net_bp=("pnl_bp", "mean"),
+    hit=("pnl_bp", lambda s: float((s > 0).mean())),
+    median=("pnl_bp", "median"), total=("pnl_bp", "sum")).round(4).to_string())
+print()
+print("by release and sign -- read the zeros as carefully as the numbers")
+print(pd.crosstab(d["release"], d["surprise_dir"]).to_string())
+print()
+print(d.groupby("release").agg(trades=("pnl_bp", "size"), net_bp=("pnl_bp", "mean"),
+                               hit=("pnl_bp", lambda s: float((s > 0).mean())),
+                               total=("pnl_bp", "sum")).round(4).to_string())
+
+fig = P.compare_curves({k: g for k, g in d.groupby("surprise_dir")},
+                       title="cold surprises against hot ones")
+fig.show()
 """)
 
 md(r"""

@@ -86,6 +86,7 @@ import econ_fade_common as G
 import econ_fade_config as C
 import econ_fade_exits as X
 import econ_fade_mdp_exits as MX
+import econ_fade_plotly as P
 from econ_fade_prewarm import load_events
 
 from RVUtils.StatisticalFinance import (
@@ -318,6 +319,52 @@ d = engine.copy()
 d["year"] = pd.to_datetime(d["release_ts"], utc=True).dt.tz_convert("America/New_York").dt.year
 print(d.groupby("year").agg(trades=("pnl_bp", "size"), net_bp=("pnl_bp", "mean"),
                             hit=("pnl_bp", lambda s: float((s > 0).mean()))).round(4).to_string())
+""")
+
+md(r"""
+### 5.1 The book, interactively
+
+Every trade with its whole record attached: the release that triggered it, the size of the burst,
+which way it went, both prices, the hold, why it ended, and what it paid gross and net. The crosshair
+runs through all four panels, so a trade on the equity curve lines up against its own drawdown and
+its own signal.
+
+For a **level** exit the panel to read first is the per-trade bar coloured by `exit_reason`. A book
+that mostly hits its target and a book that mostly times out can post the same mean and are not the
+same strategy — one is being paid for the level and the other is being paid for the clock.
+""")
+
+code(r"""
+SPAN_YEARS = (pd.Timestamp("2026-08-07") - pd.Timestamp("2019-01-03")).days / 365.25
+fig = P.trade_dashboard(engine, title=f"CPI x {book.instrument.root} bracket | {RULE.name}",
+                        span_years=SPAN_YEARS, signal_col="move_bp")
+fig.show()
+""")
+
+md(r"""
+### 5.2 The bracket against the alternatives it has to beat
+
+Three books on the same trades: the configured bracket, the same trades held to the time stop with
+no levels at all, and the pure clock exit the rest of this study uses. If the bracket is doing
+something, the gap between these curves is where it is.
+""")
+
+code(r"""
+alts = {
+    RULE.name: engine,
+    "no levels, time stop only": MX.run_bracket_fast(
+        book, X.ExitRule(name="time only", time_stop_min=RULE.time_stop_min, mode="close"),
+        cost_bp=COST_BP),
+    "target only, no stop": MX.run_bracket_fast(
+        book, X.ExitRule(name="tp only", tp_frac=BRACKET["tp_frac"],
+                         time_stop_min=RULE.time_stop_min, mode="close"), cost_bp=COST_BP),
+}
+print(pd.DataFrame([stats_of(v, k) for k, v in alts.items() if v is not None and not v.empty])
+      .set_index("label")[["trades", "net_bp", "hit_rate", "payoff", "sr_per_trade",
+                           "t_stat", "pct_target", "pct_stop", "pct_time"]].round(4).to_string())
+
+fig = P.compare_curves(alts, title="does the bracket beat simply holding to the clock?")
+fig.show()
 """)
 
 md(r"""
