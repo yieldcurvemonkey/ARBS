@@ -1,0 +1,161 @@
+C:\Users\chris\clee\ARBS-dd\Query\IRSwaps\IRSwapStructure.py:12: LicenceNotice: 
+Rateslib is source-available (not open-source) software distributed under a dual-licence model.
+No commercial licence is registered for this installation. Use is therefore permitted for non-commercial purposes only (at-home or university based academic use).
+Any use in commercial, professional, or for-profit environments, including evaluation or trial use, requires a valid commercial licence or an approved evaluation licence.
+Certain features may require a registered commercial or evaluation licence in current or future versions.
+For licensing information or to register a licence, please visit: https://rateslib.com/licence
+  from rateslib.scheduling import get_imm, next_imm
+tape 2024-03-01 .. 2026-08-07
+  2024-03-01..2024-03-31    59,986 legs ->  36,556 units
+  2024-04-01..2024-04-30    65,716 legs ->  42,013 units
+  2024-05-01..2024-05-31    62,099 legs ->  37,592 units
+  2024-06-01..2024-06-30    61,047 legs ->  38,155 units
+  2024-07-01..2024-07-31    65,417 legs ->  42,142 units
+  2024-08-01..2024-08-31    80,133 legs ->  49,406 units
+  2024-09-01..2024-09-30    78,497 legs ->  46,742 units
+  2024-10-01..2024-10-31    78,477 legs ->  48,673 units
+  2024-11-01..2024-11-30    69,149 legs ->  44,163 units
+  2024-12-01..2024-12-31    66,392 legs ->  39,421 units
+  2025-01-01..2025-01-31    75,889 legs ->  46,597 units
+  2025-02-01..2025-02-28    76,415 legs ->  48,368 units
+  2025-03-01..2025-03-31    86,606 legs ->  52,434 units
+  2025-04-01..2025-04-30    99,733 legs ->  65,960 units
+  2025-05-01..2025-05-31    81,983 legs ->  50,766 units
+  2025-06-01..2025-06-30    76,009 legs ->  46,336 units
+  2025-07-01..2025-07-31    78,833 legs ->  48,388 units
+  2025-08-01..2025-08-31    81,234 legs ->  49,741 units
+  2025-09-01..2025-09-30    94,384 legs ->  56,653 units
+  2025-10-01..2025-10-31    83,221 legs ->  52,216 units
+  2025-11-01..2025-11-30    69,507 legs ->  43,396 units
+  2025-12-01..2025-12-31    76,450 legs ->  47,184 units
+  2026-01-01..2026-01-31    87,104 legs ->  54,385 units
+  2026-02-01..2026-02-28    82,525 legs ->  51,338 units
+  2026-03-01..2026-03-31   115,208 legs ->  70,831 units
+  2026-04-01..2026-04-30    79,718 legs ->  48,033 units
+  2026-05-01..2026-05-31    85,397 legs ->  52,780 units
+  2026-06-01..2026-06-30    96,814 legs ->  57,972 units
+  2026-07-01..2026-07-31    93,375 legs ->  57,418 units
+  2026-08-01..2026-08-07    19,463 legs ->  12,179 units
+  legs read: 2,326,781
+
+EVERY DEVIATION FROM THE FROZEN `stir_flow` FILTER SET, STATED UP FRONT
+  REMOVED  the 1105-day maturity cutoff            (69.7% of flow legs)
+  REMOVED  MAC from EXCLUDED_TRADE_TYPES           (98.85% of MAC legs carry a fee)
+  ADDED    Term SOFR -> UNSUPPORTED_INDEX          (32,842 flow legs, index filter missed them)
+  ADDED    non-Constant notional -> PRICING_ERROR  (48,937 flow legs, no schedule on the tape)
+  REPLACED the "Amortizing" label token with `upi_notional_schedule`
+                                                   (the token caught 15,527 of 35,470)
+  ADDED    D2C: TREU TWEM BMTF BTFE TRWB           (+53,664 legs, registry tier)
+  ADDED    D2D: ISWE GSEF BGCO RTXF                (+17,251 legs; RTXF fingerprint tier)
+  ADDED    UWIN as an upfront source               (net effect: ZERO kept units --
+           all 15 UWIN legs on the tape are Term SOFR or amortising and are
+           excluded anyway. The brief's premise that terminations have no fee is
+           false for a second reason too: 11,587 of 50,790 already carry a UFRO.)
+  KEPT     SPREADOVER* / MATCHED_MATURITY* / INVOICE* excluded -- the DV01 share
+           of that decision is in the table below and it is the largest single line
+  UNCHANGED and UNFIXABLE: NEWT-EXER / NEWT-NOVA cannot be excluded. All four
+           tape flags are literally `false` on all 2,326,781 rows. ~3.1% of legs.
+
+
+====================================================================================
+UNITS
+====================================================================================
+  units               1,437,838
+  kept                1,082,393  (75.28%)
+  excluded              355,445
+  notional-sentinel units (DV01 proxy forced to 0)     55
+  DV01 proxy total  80,660,906,449
+  DV01 proxy kept   45,941,783,080  (56.96%)
+  days                      610   units/day min 3 · median 2,330 · max 5,647
+  kept/day         median 1,742  (75.2%)
+
+====================================================================================
+EXCLUSIONS by pinned constant -- DV01 share of the whole universe
+====================================================================================
+                   n_units  n_legs    dv01_proxy  dv01_share_pct
+exclusion                                                       
+UNORIENTABLE_PKG    272373  768706  3.224310e+10       39.973637
+UNSUPPORTED_INDEX    52672   54470  1.371419e+09        1.700227
+PRICING_ERROR        19212   19341  5.053664e+08        0.626532
+NO_FIXED_RATE         8006   10164  4.714574e+08        0.584493
+RISK_IMPLAUSIBLE      2735    3080  9.793948e+07        0.121421
+NOT_ECONOMIC_FLOW      302     307  2.141536e+07        0.026550
+STANDARD_COUPON        145     153  8.427934e+06        0.010449
+
+====================================================================================
+EXCLUSIONS by constant / detail
+====================================================================================
+                                                           n_units  n_legs    dv01_proxy  dv01_share_pct
+reason                                                                                                  
+UNORIENTABLE_PKG / PKG-4+                                    46946  505455  1.820312e+10       22.567462
+UNORIENTABLE_PKG / SPREADOVER                               106125  106125  4.872473e+09        6.040688
+UNORIENTABLE_PKG / MATCHED_MATURITY                          57182   57182  3.158349e+09        3.915588
+UNORIENTABLE_PKG / INVOICE                                   31693   31693  2.470560e+09        3.062897
+UNORIENTABLE_PKG / SPREADOVER_CURVE                          17694   35388  1.584313e+09        1.964164
+UNORIENTABLE_PKG / SPREADOVER_FLY                             7181   21543  1.093179e+09        1.355278
+UNSUPPORTED_INDEX / BASIS                                    13617   15245  9.112506e+08        1.129730
+PRICING_ERROR / NOTIONAL_SCHEDULE_NOT_CONSTANT               19212   19341  5.053664e+08        0.626532
+NO_FIXED_RATE / -                                             8006   10164  4.714574e+08        0.584493
+UNORIENTABLE_PKG / INVOICE_SWITCH                             2454    4908  4.016233e+08        0.497916
+UNSUPPORTED_INDEX / CME_TERM_SOFR                            32691   32841  4.001608e+08        0.496103
+UNORIENTABLE_PKG / MATCHED_MATURITY_CURVE                     2486    4972  3.206928e+08        0.397581
+UNORIENTABLE_PKG / INVOICE_CALENDAR                            396     792  9.882681e+07        0.122521
+RISK_IMPLAUSIBLE / RISK_VS_NOTIONAL_LOW                       2249    2562  8.286015e+07        0.102727
+UNSUPPORTED_INDEX / OTHER                                     6364    6384  6.000742e+07        0.074395
+UNORIENTABLE_PKG / MATCHED_MATURITY_FLY                        216     648  3.996193e+07        0.049543
+NOT_ECONOMIC_FLOW / ADMINISTRATIVE                             302     307  2.141536e+07        0.026550
+RISK_IMPLAUSIBLE / RATE_SENTINEL                               339     341  1.316054e+07        0.016316
+STANDARD_COUPON / MAC_NO_UPFRONT                               145     153  8.427934e+06        0.010449
+RISK_IMPLAUSIBLE / RISK_NULL                                    62      92  1.918793e+06        0.002379
+RISK_IMPLAUSIBLE / RATE_SENTINEL,RISK_NULL,INPUTS_MISSING        1       1  0.000000e+00        0.000000
+RISK_IMPLAUSIBLE / NOTIONAL_SENTINEL,RATE_SENTINEL              54      54  0.000000e+00        0.000000
+RISK_IMPLAUSIBLE / INPUTS_MISSING                               16      16  0.000000e+00        0.000000
+RISK_IMPLAUSIBLE / RISK_NULL,INPUTS_MISSING                     14      14  0.000000e+00        0.000000
+
+====================================================================================
+VENUE (kept units only; D2D is kept and tagged, never customer flow)
+====================================================================================
+               n_units   n_legs    dv01_proxy  n_lifecycle  n_with_upfront  dv01_share_pct
+venue_class                                                                               
+D2C            1001795  1325463  3.773676e+10        36968          308990       82.140393
+D2D              45742   108266  6.717810e+09          565               8       14.622440
+VENUE_UNKNOWN    34856    36831  1.487212e+09         6103            4817        3.237167
+
+====================================================================================
+STRUCTURE MIX (kept units)
+====================================================================================
+                     n_units  n_legs    dv01_proxy  n_with_upfront  n_lifecycle
+kind     rate_index                                                            
+OUTRIGHT SOFR         749502  749502  1.821398e+10          175040        32587
+CURVE    SOFR         187808  375616  1.287772e+10           88280         6250
+FLY      SOFR          95683  287049  1.267325e+10           39321         1185
+OUTRIGHT FED_FUNDS     41173   41173  1.380260e+09            7816         2734
+CURVE    FED_FUNDS      7461   14922  6.833705e+08            2935          846
+FLY      FED_FUNDS       766    2298  1.132037e+08             423           34
+
+====================================================================================
+UPFRONT SOURCE (kept units) -- '(none)' is what routes to the rate rule
+====================================================================================
+                n_units    dv01_proxy
+upfront_source                       
+(none)           768578  3.027442e+10
+UFRO_SUM         171422  4.478828e+09
+PTP              142393  1.118853e+10
+
+====================================================================================
+TIE-OUTS -- each against a SQL measurement made before the code existed
+====================================================================================
+  MAC units kept                        14,856   (14,877 pre-gate, less 21 UNORIENTABLE)
+  MAC units excluded (no upfront)          145   (149 pre-gate, less 4 UNSUPPORTED_INDEX)
+  MAC units, all reasons                15,026   (SQL said 15,026)
+  notional-sentinel units                   55   (SQL said 55) -- all excluded, verified per-leg
+  capped units kept                     31,535
+  block units kept                      20,228
+
+====================================================================================
+LIFECYCLE (kept units) -- terminations are a separate series (D8)
+====================================================================================
+              n_units   n_legs    dv01_proxy  n_with_upfront
+is_lifecycle                                                
+False         1038757  1417390  4.343847e+10          306142
+True            43636    53170  2.503318e+09            7673
