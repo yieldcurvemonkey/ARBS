@@ -352,8 +352,13 @@ def main() -> int:
                 store.put(r)
             done += 1
             el = time.time() - t0
+            # ETA must account for the pool: `elapsed/done * remaining` assumes SERIAL execution
+            # and, with 20 workers all finishing their first job at once, reported 39 hours for a
+            # 2-hour run. A progress line that alarming is how a healthy run gets killed.
+            per_wave = el / max(1, np.ceil(done / args.workers))
+            waves_left = max(0.0, np.ceil((len(jobs) - done) / args.workers))
             print(f"GRID: {done}/{len(jobs)} constructions  ({el/60:.1f} min, "
-                  f"eta {el/max(done,1)*(len(jobs)-done)/60:.1f} min)", flush=True)
+                  f"eta {per_wave * waves_left / 60:.0f} min)", flush=True)
 
     df = store.load()
     print(f"GRID: {len(df)} rows written to {store.root}", flush=True)

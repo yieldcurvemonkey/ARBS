@@ -321,3 +321,58 @@ def test_cost_share_of_gross_is_reported():
     s = summarize(res)
     assert s["gross_before_fees_usd"] == pytest.approx(431_444.50 + 2_818_737.56, abs=1e-6)
     assert 0.8 < s["cost_share_of_gross"] < 0.9
+
+
+def test_open_mark_is_read_at_the_last_date_not_the_last_entry():
+    """A config that ends FLAT must not inherit a stale open mark.
+
+    `bond_open_mtm` is a per-DATE value, not a running total. Taking "the last entry present"
+    credited a book that had closed everything with an open position it no longer had — the
+    reconciliation guard caught it at $181,386 across the sweep. The incumbent never showed it
+    because the incumbent ends with one fly still open.
+    """
+    import pandas as pd
+
+    from BT.gss_fly.backtest import summarize
+
+    idx = pd.date_range("2025-01-01", periods=5, freq="D")
+    hist = {
+        "bond_realized": {idx[2]: 900_000.0},
+        "financing_realized": {idx[2]: 0.0},
+        # last open mark recorded on day 2; the book is FLAT on days 3-4
+        "bond_open_mtm": {idx[1]: 250_000.0, idx[2]: 0.0},
+    }
+
+    class _BT:
+        frb_component_histories = hist
+
+    from BT.gss_fly.backtest import GSSResult
+
+    closed = pd.DataFrame({"realized_pnl": [500_000.0], "gross_realized_pnl": [900_000.0],
+                           "fee_allocated": [400_000.0], "holding_period_days": [3.0]})
+    res = GSSResult(equity=pd.Series([0.0, 250_000.0, 500_000.0, 500_000.0, 500_000.0], index=idx),
+                    closed=closed, trade_log=pd.DataFrame(), backtest=_BT(), engine=None)
+    s = summarize(res)
+    assert s["open_mtm_usd"] == pytest.approx(0.0), "flat book must carry no open mark"
+    assert s["reconciliation_gap_usd"] == pytest.approx(0.0, abs=1e-6)
+
+
+def test_gross_is_taken_from_the_equity_endpoint_not_the_ledgers():
+    """The cost verdict must not depend on the ledgers the reconciliation gap is testing."""
+    import pandas as pd
+
+    from BT.gss_fly.backtest import GSSResult, summarize
+
+    idx = pd.date_range("2025-01-01", periods=3, freq="D")
+
+    class _BT:
+        frb_component_histories = {"bond_realized": {idx[1]: 1.0},   # deliberately wrong ledger
+                                   "financing_realized": {}, "bond_open_mtm": {}}
+
+    closed = pd.DataFrame({"realized_pnl": [-100.0], "gross_realized_pnl": [300.0],
+                           "fee_allocated": [400.0], "holding_period_days": [1.0]})
+    res = GSSResult(equity=pd.Series([0.0, 0.0, -100.0], index=idx), closed=closed,
+                    trade_log=pd.DataFrame(), backtest=_BT(), engine=None)
+    s = summarize(res)
+    assert s["gross_before_fees_usd"] == pytest.approx(-100.0 + 400.0)
+    assert s["breakeven_cost_multiplier"] == pytest.approx(300.0 / 400.0)

@@ -129,15 +129,36 @@ def _pnl_components(res: "GSSResult") -> Dict[str, float]:
     if not hist:
         return out
 
-    def _last(key: str) -> float:
+    eq_all = res.equity.dropna()
+    last_ts = pd.Timestamp(eq_all.index[-1]) if len(eq_all) else None
+
+    def _last_cumulative(key: str) -> float:
+        """For a RUNNING TOTAL, the final recorded value is the total — carry it forward."""
         h = hist.get(key) or {}
         if not h:
             return 0.0
         return float(pd.Series(h).sort_index().iloc[-1])
 
-    bond = _last("bond_realized")          # coupons during the hold + everything booked at unwind
-    financing = _last("financing_realized")
-    open_mtm = _last("bond_open_mtm")
+    def _at(key: str, when) -> float:
+        """For a PER-DATE value, read that date and treat absence as zero.
+
+        `bond_open_mtm` is the sum of the open positions' marks ON a date, not a running total.
+        Reading "the last entry present" instead returns a stale mark from whenever the book last
+        held something — so a config that ends FLAT was credited with an open position it no
+        longer had. Caught by the reconciliation guard at $181,386 on the sweep; the incumbent
+        never showed it because the incumbent ends with one position still open.
+        """
+        h = hist.get(key) or {}
+        if not h or when is None:
+            return 0.0
+        s = pd.Series(h)
+        s.index = pd.to_datetime(s.index)
+        val = s.reindex([when]).iloc[0]
+        return 0.0 if pd.isna(val) else float(val)
+
+    bond = _last_cumulative("bond_realized")   # coupons during the hold + everything at unwind
+    financing = _last_cumulative("financing_realized")
+    open_mtm = _at("bond_open_mtm", last_ts)
 
     closed = res.closed
     have = lambda c: (not closed.empty) and c in closed.columns  # noqa: E731
@@ -157,10 +178,18 @@ def _pnl_components(res: "GSSResult") -> Dict[str, float]:
     out["bond_ledger_usd"] = bond
     out["financing_ledger_usd"] = financing
 
-    gross = (carry + unwind + open_mtm) if np.isfinite(carry) else (bond + financing + open_mtm)
+    # Gross from the ENGINE's own endpoint, not from the ledgers: the identity says
+    # equity = gross - fees, so gross = equity + fees exactly. `end_equity_usd` comes straight
+    # from `mtm_history` and `fees` straight from the closed log, so this survives any defect in
+    # the component ledgers — which is worth having, since a ledger defect is precisely what the
+    # reconciliation gap below exists to detect, and a cost verdict must not depend on the thing
+    # under test.
+    gross = float(eq_all.iloc[-1]) + fees if len(eq_all) else np.nan
     out["gross_before_fees_usd"] = gross
-    if gross:
+    if gross and np.isfinite(gross):
         out["cost_share_of_gross"] = fees / gross
+    # m*: the fraction of the CHARGED bid/offer this book can actually pay. >= 1 survives.
+    out["breakeven_cost_multiplier"] = (gross / fees) if fees > 0 and np.isfinite(gross) else np.nan
 
     eq = res.equity.dropna()
     if len(eq):
