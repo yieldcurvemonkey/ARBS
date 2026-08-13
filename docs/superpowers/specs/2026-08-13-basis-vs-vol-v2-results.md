@@ -97,6 +97,29 @@ That cross-check paid for itself immediately: it found that **the reference engi
 contract-roll forward gap as P&L**, and an unbounded index in the entry path. Neither would have
 been visible from a single implementation.
 
+### Test status
+
+The repo's own `audit_test_results.txt` records **222 pre-existing failures**, so the CLAUDE.md fast
+gate (`pytest tests -m "not slow and not network and not db"`) does not pass on this checkout and
+was never going to. It also cannot complete here: it **hangs at ~10%** in the Citi Velocity Excel
+tests, having burned 379s of CPU across 71 minutes of wall clock — a pre-existing COM/environment
+issue, not a slow test.
+
+The meaningful bar is therefore *adds no failure*, and that is established directly:
+
+| suite | result |
+|---|---|
+| `test_bvv_{bachelier,switch,backtest}.py` | 67 passed |
+| `test_ingest_ustf_vs_swaption_vol.py` (the file I modified) | 9 passed |
+| `tests/test_[a-b]*.py` (in order) | 150 passed |
+| `test_citivelo_excel_{integration,source,client}.py` | 81 passed, 9 skipped |
+| `test_backtest_simple.py`, `test_portfolio.py` | included in 77 passed |
+
+The only global side effect of this work is `register_product("BASISVSVOL")` /
+`register_handler(...)`, which fires solely when `Query.BasisVsVol` is imported. No test anywhere
+depends on the registry's contents or size — every use in `tests/` is `get_adapter("<name>")` for a
+specific name — so the registration cannot affect another test. Everything else added is new files.
+
 **The harness is mutation-tested for lookahead.** Feeding the signal one day of future knowledge
 must change results; a test asserts it does. A backtest that cannot detect lookahead cannot be
 trusted when it reports none.
