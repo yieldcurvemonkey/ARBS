@@ -276,6 +276,33 @@ and an in-sample vintage. A dead verdict from this harness is therefore conserva
   its output is a 4/32 number against a 1/32 tick. The two-bond reduction answers the question the
   Monte Carlo would have answered first: is sigma_basis in the right ballpark? It is, for UB.
 
+### Test-gate state
+
+The repo's own `audit_test_results.txt` records **222 pre-existing failures**, so
+`pytest tests -m "not slow and not network and not db"` passing was never the state of this tree.
+Two things block a clean run, neither of them from this branch:
+
+* **It hangs.** `tests/test_citivelo_excel_supervisor.py::test_not_signed_in_means_keep_waiting`
+  mocks `connect` but not `press_addin_login`, so it drives real `pywinauto` UI automation and
+  takes a Windows access violation. The gate sat at 10% for **71 minutes on 379 seconds of CPU** —
+  blocked, not working. Deselect it. (Already recorded in project memory; today it hung rather
+  than erroring, which is worse because the run never reaches a summary line.)
+* **One ordering-dependent failure**, `tests/test_citivelo_read_path_perf.py::test_fixings_kwargs_resolve_once_per_wrapper`
+  ("re-derived the fixings identifier 0 times"). It **passes in isolation** (25/25 for its file);
+  a memoisation warmed by an earlier test in the same process makes the counter read 0. This branch
+  touches no Citi Velocity, `MDP/IRSwaps` or `Query/IRSwaps` code, and the run that reproduces it
+  collects no BVV tests at all.
+
+What this branch was verified against, all green:
+
+| scope | result |
+|---|---|
+| `tests/test_bvv_*.py` | **67 passed** |
+| `tests/test_ingest_ustf_vs_swaption_vol.py` | 9 passed |
+| `tests/test_[a-b]*.py` | 150 passed |
+| `tests/test_c*.py` (minus the two above) | 887 passed, 9 skipped |
+| `test_backtest_simple.py`, `test_portfolio.py` | 77 passed |
+
 ### What would change the verdict
 
 A genuine out-of-sample window. Everything here is one retrospective vintage, so the honest next
