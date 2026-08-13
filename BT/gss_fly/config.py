@@ -77,13 +77,30 @@ class FlyConfig:
     max_bellies_per_date: int = 0  # 0 == no cap
 
 
+#: Half-spreads MEASURED from FedInvest's own bid/offer, priced to yield on 1,890 note/bond quotes
+#: across 6 dates in 2025 (`scripts/gss_measure_cost_table.py`). Medians per bucket.
+#:
+#: The shape is the finding. The default table rises monotonically with maturity; the market's is
+#: **U-shaped** — widest at the front (0.63bp, 3x the assumption) and TIGHTEST in 7-10y (0.11bp, a
+#: quarter of it), because 0-3y is dominated by heavily seasoned issues nobody trades while 7-10y is
+#: the actively quoted benchmark sector. The 20y+ assumption is 5x too punitive.
+#:
+#: Net effect is small: overall median half-spread 0.326bp, so a 3-leg fly (|w| summing to 2) costs
+#: ~1.31bp round trip measured against ~1.66bp charged — the book was overcharged by about 21%,
+#: which does not begin to close a gap where costs are 4.5x gross and break-even needs 0.37bp.
+MEASURED_HALF_SPREAD_BP: Dict[float, float] = {
+    0.0: 0.625, 3.0: 0.244, 5.0: 0.156, 7.0: 0.111, 10.0: 0.368, 20.0: 0.161,
+}
+
+
 @dataclass(frozen=True)
 class CostConfig:
     """``fly_tcost`` plus the repo hurdle."""
 
     #: One-way bid/offer in **bp of yield**, keyed by the lower edge of a TTM bucket.
-    #: The original carried a country-specific calibrated table; none survived, so this is a
-    #: transparent default and is meant to be overridden per market.
+    #: The original carried a country-specific calibrated table; none survived, so this default is
+    #: transparent rather than measured. See :data:`MEASURED_HALF_SPREAD_BP` for one derived from
+    #: FedInvest's own quoted bid/offer, and `scripts/gss_measure_cost_table.py` for how.
     half_spread_bp: Dict[float, float] = field(
         default_factory=lambda: {0.0: 0.20, 3.0: 0.25, 5.0: 0.30, 7.0: 0.40, 10.0: 0.50, 20.0: 0.80}
     )
