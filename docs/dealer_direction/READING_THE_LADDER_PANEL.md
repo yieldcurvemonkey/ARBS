@@ -156,3 +156,97 @@ the answer matters.
 Every row carries the git revision that produced it and the tape generation it
 read; both are printed in the panel header. The limits above are measured, and
 each of them is sourced in `WHAT_THE_LADDER_SUPPORTS.md` and `INDICATOR.md`.
+
+---
+
+# Reading the intraday prints chart
+
+The second panel is a different tool with a different question. The ladder asks
+*how is the dealer community positioned in 7-10y this week*. This one asks
+**where did 10y actually trade today, and which way did the dealer go on each
+print**.
+
+## What is on it
+
+One day, one tenor, one index, one venue class. Never two of anything — a 2Y and
+a 30Y do not share a rate axis, and SOFR sits 1.5-2.4 bp off the Fed Funds curve,
+so overlaying them would draw that basis as if it were bid-offer.
+
+- **A triangle per print.** Up and sky = the dealer RECEIVED fixed (long
+  duration). Down and amber = the dealer PAID fixed. A grey dot is a print the
+  model declined to call. The area is the structure's DV01, so a big triangle is
+  a big risk transfer, not a big number of trades.
+- **A line: the mid.** Solid means it is the real thing — a modelled par rate
+  every minute, from the same curve every mark was priced against. Dashed means
+  there was no grid for that tenor and the line is only joining the prints to
+  each other.
+- **Stems below**, showing how far off mid each print landed.
+
+## The single most important sentence
+
+**The line is modelled. It is not a quote and it is not a level you could have
+traded on.** It is the same model the direction call comes from, which is why
+the marks sit on it — not evidence that the model is right.
+
+## Why a mark can sit off the line
+
+Because it is a **different swap**, nearly always. The line is the canonical
+spot swap for that tenor. A print with a broken maturity, or an IMM start, is a
+few days away from that, and a few days of maturity moves the fair rate a
+fraction of a basis point.
+
+The panel gives you the number rather than making you guess: the **`mark vs
+line`** chip reports the median, p95 and max distance between each mark's own
+mid and the line above it. Median is normally **0.0000 bp** — for a spot
+standard swap the two are literally the same instrument. If the median moves off
+zero, something has changed and you should not trust the chart until you know
+what.
+
+## Where the line stops
+
+It **breaks** across 23:00-00:59 ET. That is Citi's publication gap: no curve
+exists there. Prints in that window were repriced off a stale snapshot, and
+their tooltip says so. A line drawn across it would be asserting the mid did not
+move through two hours when the truth is that nobody knows.
+
+It also breaks on any gap over 10 minutes. Inside a live session the grid is
+never more than 5 minutes apart, so a break is always a real absence.
+
+## What is filtered out by default, and why it matters
+
+These are not tidying. Each one changes what the chart is *about*:
+
+- **Off-market prints.** A trade with an upfront has an arbitrary fixed rate —
+  it is off mid *by construction*. Showing them stretched the y-axis **31x** on
+  the reference day, from about 8% of the rows. You can switch them on; they are
+  pinned to the edge as hollow chevrons and never allowed to own the axis.
+- **Forward starts.** A 10y10y is not a 10Y. Measured 66 bp apart.
+- **FOMC-dated swaps.** Repriced against a curve with no meeting steps, so their
+  distance from mid is mostly model error: 6.8x wider on Fed Funds, 4.0x on
+  SOFR.
+- **Package legs.** A steepener's dealer received one leg and paid the other, so
+  painting a leg with the structure's direction would be wrong half the time.
+  They can be shown, as rings, with no direction and no mid.
+
+Every one of these reports how many it hid. "11 off-market prints were hidden"
+and "there were none today" are different facts.
+
+## Tenor matching is stricter than it looks
+
+The chart matches on the strict tenor label, not the loose one. `10Y` in the
+loose sense spans 9.50-10.49 years — a **six-month band**. Strict is
+9.984-10.027. There is a `band` toggle if you want the wider set; it tells you
+how many extra prints that bought.
+
+## What it will not do
+
+- It will not put a per-leg mid on a package. A curve or fly deviation is a
+  spread across legs and cannot be split back into per-leg mids.
+- It will not plot on the availability clock. This chart is on the **execution**
+  clock — where it traded, not what you could have known — because the mid it is
+  drawn against is a function of execution time. The ladder is the opposite, and
+  deliberately so.
+- It will not fade marks by conviction. Most calls sit inside the mid's own
+  measurement error; fading by that would grey out nearly everything while
+  removing no error at all.
+

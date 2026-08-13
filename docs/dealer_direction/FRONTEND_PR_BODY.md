@@ -276,6 +276,73 @@ pass if the sample contains no multi-leg unit. Asserted in the code as well.
 
 ---
 
+## The chart's mid line is now the real 1-minute grid
+
+The intraday prints chart was specced before `arbs_dd_curve_mid_v1` existed, so
+it drew its line by joining the prints to each other — `mid = traded −
+deviation/100` at each mark, a polyline through wherever somebody happened to
+trade. The grid now exists (22.7M rows, 639 days, both indices), so the line is
+a curve.
+
+**Two different objects share that axis and they no longer render alike:**
+
+| | what it is | drawn as |
+|---|---|---|
+| the LINE | `arbs_dd_curve_mid_v1` — a modelled par rate every minute, from the same `SessionBranchPricer` against the same Citi minute curve that repriced every mark | solid, no dots |
+| each MARK's mid | `traded − deviation/100`, exact for that print, and what `deviation_bps` — hence the direction call — is measured against | kept, and diffed against the line |
+
+**They agree where they are the same instrument.** Measured over 3,206 OUTRIGHT
+prints on 7 days spanning the window, joined at the minute of each print's *own*
+curve snapshot:
+
+| | n | median resid | p95 abs | max abs |
+|---|---|---|---|---|
+| SOFR STANDARD | 2,850 | **0.000000 bp** | 0.132 bp | 15.62 bp |
+| SOFR IMM | 334 | 0.000000 bp | 0.010 bp | 1.49 bp |
+| FED_FUNDS STANDARD | 19 | 4.4e-14 bp | 0.276 bp | 0.276 bp |
+
+The median is *exactly* zero because a spot STANDARD swap and the grid point are
+the same instrument priced by the same code. **The tail is the instrument
+differing, not the mid**: of the 9 prints beyond 0.5 bp the median maturity gap
+to the grid's canonical swap is 6 days and the median effective-date gap 4 days,
+and **not one is an exact instrument match** — against 62.5% exact in the
+sub-0.5bp population. So the residual is a **chip on screen** (`mark vs line:
+med / p95 / max / n`) rather than a hidden assertion: a reader who sees a mark
+off the line gets the number instead of guessing whether the chart is broken.
+
+Verified end to end through the running API, not just in the unit tests —
+median residual **+0.000000 bp** at 2Y, 5Y, 10Y and 30Y.
+
+**The line breaks rather than bridging, at a measured threshold.** On SOFR 10Y
+across those 7 days the consecutive intra-day gap is 1 min 8,293×, 2 min 170×,
+3 min 17×, 4 min once and 5 min once — and **no intra-day gap exceeds 5 minutes
+on any of the seven days**, while the narrowest genuine hole (23:00–00:59 ET,
+Citi's publication gap) is ~2 hours. 10 minutes sits two orders of magnitude
+clear of both sides.
+
+**I dropped the LOCF plan I had written down.** Carrying the last point across a
+two-hour hole draws a flat line asserting the mid did not move, when the truth
+is that no curve exists there. The panel's governing rule is that a blank
+carries its reason, so the line breaks and the gap is disclosed. Prints inside
+the hole (measured 102 of 5,401, 1.9%) were repriced off a stale snapshot under
+the out-of-session policy, which their own tooltip shows.
+
+**Where there is no grid, the panel says so in amber.** SOFR carries all eight
+chart tenors; **Fed Funds carries 12 tenors and has no 7Y, 20Y or 30Y**. Those
+fall back to the reconstruction, labelled, with the dashed swatch and a
+different caption — a legend that described a chart other than the one on screen
+would be believed. Worth stating precisely: **no Fed Funds day anywhere in the
+tape has ≥12 prints at 7Y/20Y/30Y**, so this is a guard that does not fire on
+today's data rather than a routine path.
+
+12 mutations of this logic were applied and **all 12 killed** — including
+matching the residual on the execution clock instead of the curve clock (which
+would manufacture a disagreement the chart then reports), selling the modelled
+line as a quote in the disclosures, and looking the grid up by the ±6-month band
+column.
+
+---
+
 ## Tests
 
 | suite | count |
@@ -350,48 +417,40 @@ sign check from being able to pass vacuously.
 
 ## Unfinished, stated plainly
 
-*This section is the live state and is updated as the backfill lands. See
-`FRONTEND_LEDGER.md` for the measurements behind each line.*
-
-- **The full backfill is still running.** `price` covers 2024-03-01 onward and
-  `publish` has so far written **2024-07-01 … 2024-08-09** (62,508 units,
-  475,200 unit-bucket rows, 3,225 coverage rows, 2,006 ladder cells). The
-  panel and the grid are verified against that window.
-- **`z` is empty until the full backfill lands.** `Z_MIN_OBS = 60` and the
-  published window is 34 sessions, so the cross-bucket z grid is correctly
-  blank rather than showing a z computed from too little history. Same for
-  `coverage_smooth` (63 observations) and therefore for the cov-adj basis.
-- **A dd-filtered tape query degrades during a partial backfill** — 335 ms
-  median but 3.8 s p95, because `ORDER BY execution_start DESC` walks backward
-  through the months that have no direction yet before finding 200 matches.
-  An artefact of partial coverage, not of the design; re-measured when the
-  backfill completes.
 - **A nightly incremental `publish` changes the day list, which misses the
-  calibration cache and forces a full refit** (~85 min). That is by design —
-  the key is a hash of the deviation values, so a stale fit can never be
-  served — but it means "publish yesterday" is not a cheap operation as
-  written. Not solved here.
+  calibration cache and forces a full refit** (~85 min). By design — the key is
+  a hash of the deviation values, so a stale fit can never be served — but it
+  means "publish yesterday" is not a cheap operation as written. Not solved
+  here.
 - **The most recent visibility day is provisional.** It is missing the
   20:00–23:59 ET prints that arrive with the next tape day's `as_of`, and it
   tops itself up on the next run. Published rather than dropped, because
   dropping it would throw away the freshest cell in the series.
-- **There is no ladder-only rebuild.** A defect in the ladder or the indicator
-  alone still pays `publish`'s full 527-day loop, even though
-  `arbs_dd_unit_bucket_v1` and `arbs_dd_coverage_v1` are already correct and
-  sufficient to rebuild it. The fix is ~30 lines — have `publish` drop its
-  per-day `tenor_rows` to local parquet and add a `ladder` stage over that
-  directory — and it would also remove the ~10 GB in-memory concat the build
-  currently does. Not built here. (The two-stage split still does its main
-  job: the repair is 35 minutes of `publish`, not 26 hours of `price`.)
-- **`arbs_dd_unit_bucket_v1` stores numerically-zero buckets.** rateslib's
-  delta is non-zero at all 28 pillars, so a 7Y swap carries entries of order
-  1e-11 in 20-30Y. No dust floor is applied — the backend measured that a
-  0.05 USD/bp floor removes 53% of rows and that one of them was 95.4% of its
-  own unit's risk — so the table is ~10 rows per kept unit regardless of how
-  many are material.
+- **`arbs_dd_unit_bucket_v1` stores numerically-zero buckets.** rateslib's delta
+  is non-zero at all 28 pillars, so a 7Y swap carries entries of order 1e-11 in
+  20-30Y. No dust floor is applied — the backend measured that a 0.05 USD/bp
+  floor removes 53% of rows and that one of them was 95.4% of its own unit's
+  risk — so the table is ~10 rows per kept unit regardless of how many are
+  material.
 - **Fed Funds is included and is the weakest part.** The no-bias curve result
-  behind the whole method was measured on SOFR. `rate_index` is on every row
-  so a consumer can filter, but the panel does not currently offer that
-  toggle.
+  behind the whole method was measured on SOFR. `rate_index` is on every row so
+  a consumer can filter, and the prints chart is one-index-at-a-time by
+  construction, but the *ladder* does not currently offer that toggle.
+- **FOMC-dated units are surfaced, not fixed.** They deviate 6.8× wider on Fed
+  Funds and 4.0× on SOFR because the Citi minute curve is smooth and has no
+  discrete meeting steps. They are excluded from the prints chart by default and
+  flagged in the ladder; improving the inference is out of scope for this PR.
+- **The mid grid costs 6.6 GB** of the 10.95 GB these tables occupy (~4.5% of a
+  246 GB database). Reversible by date range; cheaper trims are fewer tenors or
+  a shorter window; the deeper fix is normalising the repeated text columns to
+  codes. Flagged rather than decided unilaterally.
 - **Two pre-existing dashboard test failures** (`LegsSubTable`, `MmsTab`, 4
-  tests) are untouched by this branch — confirmed by stashing and re-running.
+  tests) are untouched by this branch — **verified**, not assumed, by checking
+  out `origin/main` into a throwaway worktree and running both suites there:
+  the same 4 fail.
+- **Screenshots are puppeteer, not Chrome MCP.** `chrome-devtools` disconnected
+  mid-session and `claude-in-chrome` requires a human to choose between two
+  connected browsers. Puppeteer already drives this package's e2e suite, so
+  `scratch/shot_dealer_direction.mjs` captures the eight views headless with
+  page-error and console-error assertions. Equivalent evidence, different
+  driver.

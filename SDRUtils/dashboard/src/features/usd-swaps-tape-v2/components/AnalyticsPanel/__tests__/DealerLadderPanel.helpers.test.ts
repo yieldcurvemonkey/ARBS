@@ -5,6 +5,7 @@ import {
   CrossBucketLevelComparison,
   fmtSignedDv01,
   fmtZ,
+  heatmapState,
   indexByBucketDate,
   latestDate,
   levelKey,
@@ -154,5 +155,33 @@ describe('heatmap indexing', () => {
     expect(m.get('5-7Y|2026-04-01')).toBeDefined()
     expect(m.get('7-10Y|2026-04-01')).toBeUndefined()
     expect(m.size).toBe(3)
+  })
+})
+
+
+describe('an empty heatmap says WHY it is empty', () => {
+  // OBSERVED, and the reason this exists: /standardised returns 6,290 rows and
+  // a screenshot taken 2.5s after the Analytics tab opens caught the panel
+  // mid-flight. It drew ten labelled bucket rows with empty strips and an
+  // em-dash where z goes -- pixel-for-pixel what "nothing could be oriented
+  // here" looks like. On a panel whose governing rule is that an abstention is
+  // information rather than a blank, an in-flight fetch rendering as an empty
+  // ladder is the same defect wearing a different hat.
+  it('is ready as soon as there is one column, loading or not', () => {
+    expect(heatmapState(true, ['2026-08-07'])).toBe('ready')
+    expect(heatmapState(false, ['2026-08-07'])).toBe('ready')
+  })
+
+  it('separates in-flight from genuinely empty', () => {
+    // These need DIFFERENT sentences. A bare `loading` boolean cannot tell
+    // them apart, and neither can an empty array.
+    expect(heatmapState(true, [])).toBe('loading')
+    expect(heatmapState(false, [])).toBe('empty')
+  })
+
+  it('never returns ready with nothing to draw', () => {
+    for (const loading of [true, false]) {
+      expect(heatmapState(loading, [])).not.toBe('ready')
+    }
   })
 })

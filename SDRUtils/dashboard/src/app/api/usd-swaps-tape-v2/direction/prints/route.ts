@@ -1,6 +1,7 @@
 // ABOUTME: One day of USD-swap prints for one tenor, on the EXECUTION clock,
-// with the mid reconstructed per print. See ../prints.logic.ts for why there is
-// no continuous mid, and why a package leg can never carry one.
+// against the continuous 1-minute par grid, with each mark's own mid still
+// reconstructed from its deviation. See ../prints.logic.ts for the measured
+// agreement between the two, and for why a package leg can never carry a mid.
 import { NextResponse } from 'next/server'
 import { analyticsQuery } from '@/lib/db'
 import { DD_GENERATION } from '@/lib/dealer-direction-tables'
@@ -10,7 +11,12 @@ import {
   buildDisclosures,
   latestDateSql,
   median,
+  midGridAvailabilitySql,
+  midGridSql,
+  midWindow,
   parsePrintsParams,
+  type MidGrid,
+  type MidGridPoint,
   type PrintRow,
   type PrintsCounts,
   type PrintsProvenance,
@@ -48,14 +54,58 @@ export async function GET(req: Request) {
 
     const q = printsSql(p)
     const c = printsCountsSql(p)
-    const [res, cnt] = await Promise.all([
+    // Availability does NOT depend on the rows, so it rides along in phase 1.
+    // It answers a question the grid query cannot: an empty result means "this
+    // tenor has no grid at all" (Fed Funds 7Y/20Y/30Y) or "the grid exists but
+    // this window is a hole", and those are different sentences on screen.
+    const [res, cnt, avail] = await Promise.all([
       analyticsQuery(q.text, q.values),
       analyticsQuery(c.text, c.values),
+      analyticsQuery(midGridAvailabilitySql(), [p.rateIndex, p.tenor]),
     ])
 
     const rows = res.rows as PrintRow[]
     // The control, not a comment. Throws rather than rendering a fiction.
     assertNoPackageMid(rows)
+
+    // --- phase 2: the continuous mid over the window the marks actually span --
+    //
+    // A SECOND ROUND TRIP, DELIBERATELY. The window could be computed inside
+    // the grid statement as a CTE, which would save ~20ms — at the cost of
+    // restating printsSql's twelve-clause driving predicate in a second place,
+    // where it would drift out of step the first time a filter is added and
+    // silently draw the line over the wrong span. The window is taken from the
+    // rows that are actually drawn, so it cannot disagree with them.
+    const gridAvailable = avail.rows[0]?.ok === true
+    const window = midWindow(rows)
+    let points: MidGridPoint[] = []
+    let gridCurve: string | null = null
+    let gridPolicy: string | null = null
+    if (gridAvailable && window != null) {
+      const g = midGridSql(p.rateIndex, p.tenor, window[0], window[1])
+      const gr = await analyticsQuery(g.text, g.values)
+      const raw = gr.rows as {
+        ts: string | Date
+        mid_pct: number | string
+        curve_name: string | null
+        snapshot_policy: string | null
+      }[]
+      points = raw.map((r) => ({
+        ts: r.ts instanceof Date ? r.ts.toISOString() : String(r.ts),
+        mid_pct: Number(r.mid_pct),
+      }))
+      const names = [...new Set(raw.map((r) => r.curve_name).filter((x): x is string => !!x))]
+      const pols = [...new Set(raw.map((r) => r.snapshot_policy).filter((x): x is string => !!x))]
+      gridCurve = names.length ? names.sort().join(' · ') : null
+      gridPolicy = pols.length ? pols.sort().join(' · ') : null
+    }
+    const mid: MidGrid = {
+      available: gridAvailable,
+      points,
+      curve_name: gridCurve,
+      snapshot_policy: gridPolicy,
+      window,
+    }
 
     const cr = (cnt.rows[0] ?? {}) as Partial<CountsRow>
     const n = (v: unknown): number => (v == null ? 0 : Number(v))
@@ -139,6 +189,7 @@ export async function GET(req: Request) {
       admittedByLoosening,
       observedTenorYears,
       rows,
+      mid,
       counts,
       disclosures: [],
       provenance,
@@ -151,6 +202,8 @@ export async function GET(req: Request) {
       admittedByLoosening,
       observedTenorYears,
       tenor: p.tenor,
+      mid,
+      rateIndex: p.rateIndex,
     })
 
     return NextResponse.json(body, {

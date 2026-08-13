@@ -36,6 +36,24 @@ median 4.4e-14 bp**. That is the ``validate`` stage, and it is a first-class
 stage precisely because a pipeline that is subtly wrong on conventions looks
 completely plausible and is off by a basis point.
 
+NOTHING IS DRAWN FROM ITS OWN FUTURE
+====================================
+
+Every mark passes the direction pipeline's own
+``UnitRepricer._assert_telemetry`` before a single tenor is priced from it --
+called, not re-spelled, because a second spelling of the circularity rule is
+the same class of defect as a second pricer. It refuses a snapshot served from
+after the instant it will be stamped with (reading ``served_from_future`` *and*
+the sign of the lag, since a missing flag is falsy and the boolean alone once
+waved through ``lag = -900 s``), and it refuses a governed source that reports
+no lag at all.
+
+Both are structurally impossible under the two policies here -- ``strict()``
+and the out-of-session ``asof`` both set ``allow_future=False`` -- which is
+exactly why they are checked. And ``verify`` re-checks both **from the table**,
+with ``min(lag) < 0`` and a NULL count rather than ``max(abs(lag))``, because an
+in-process guard can only speak for the rows written after it existed.
+
 ONE MINUTE, AND WHY IT IS NOT A TASTE CALL
 ==========================================
 
@@ -205,6 +223,38 @@ DEFAULT_DENSITY_WARN = 0.65
 STATUS_OK = "ok"
 STATUS_NO_SESSION = "NO_SESSION"
 
+#: ``validate``: the gate, in bp, on the subset the grid claims to be **the
+#: same number** as the direction pipeline's own mid -- exact-date prints
+#: joined at ``dt = 0``, which is the join the front end actually makes.
+#:
+#: This is a machine-precision gate, NOT a tolerance. The measured maximum over
+#: 1,136 such prints on three days is 7.1e-13 bp; 1e-6 bp is seven orders of
+#: magnitude above that noise floor and six below anything a trader could see.
+#: Nothing real lands in between: a convention fault (day count, roll, spot lag,
+#: curve selection) moves the number by a fraction of a basis point, not by a
+#: millionth of one. So a failure here means the two paths have genuinely
+#: diverged, and widening this number would be the precise way to hide that.
+#:
+#: **Where the 7.1e-13 comes from, since it is not the pricing.** Re-pricing an
+#: already-published day with a later build of this runner produces a
+#: *byte-identical* parquet, so the mid itself is reproducible exactly. The
+#: residual is the database read: this connection reports
+#: ``extra_float_digits = 0`` (the pooler's default), so Postgres formats every
+#: ``float8`` back as 15 significant digits and a value near 4 loses ~6 ULPs --
+#: measured directly at 5.7e-16 relative on a round-trip, which is the
+#: 1e-15-percent scale seen here. Both sides of the identity are read through
+#: it. That is transport precision, not model error, and it is seven orders
+#: below this gate; a reader chasing the last digit of a published mid should
+#: know it is there before concluding the curve moved.
+#:
+#: Deliberately scoped to ``dt = 0``. Off the grid point the comparison is not
+#: an identity: in the 23:00-00:59 ET hole no grid row exists at all, so an
+#: hour-00 print matches forward to the next session's 01:00 point, where the
+#: grid's spot is a business day behind the print's own -- measured at <= 0.42
+#: bp under LOCF and <= 1.20 bp nearest-join. That is the instrument differing,
+#: not the mid, and gating on it would fail the pipeline for the calendar.
+VALIDATE_MAX_ABS_BP = 1e-6
+
 
 # ==========================================================================
 # small helpers
@@ -369,6 +419,16 @@ def _day_minutes(store, asset: str, day: datetime.date, ny) -> list:
         return []
     ts = (pd.to_datetime(raw["timestamp_utc"], utc=True)
           .dt.floor("min").dt.tz_convert(ny))
+    # Confined to the ET date this partition is FOR. `read_raw_day` returns
+    # whatever the partition directory holds, and the primary key here is
+    # (rate_index, tenor_label, ts) while the delete is by `grid_date` -- so a
+    # stamp that strayed across the date boundary would let two days claim one
+    # row, and the second publish would silently rewrite the first's
+    # `grid_date` out from under it. Keeping `grid_date` a true function of
+    # `ts` closes that by construction. Measured on the pilot days this drops
+    # nothing (partitions run 01:00-22:59 ET, and served == partition), so it
+    # costs no minute that exists.
+    ts = ts[ts.dt.date == day]
     return sorted(pd.Timestamp(t) for t in ts.unique())
 
 
@@ -399,7 +459,7 @@ def build_one_day(day: str, paths: Paths, *, dry_run: bool = False,
         for r in day_rows:
             r["code_vintage"] = r.get("code_vintage") or vintage
     else:
-        _rep, pricer, store = _engines()
+        rep, pricer, store = _engines()
         rows: list[tuple] = []
         day_rows: list[dict] = []
 
@@ -438,6 +498,26 @@ def build_one_day(day: str, paths: Paths, *, dry_run: bool = False,
                         # mark on the chart.
                         missed += 1
                         continue
+                    # THE CIRCULARITY AND TELEMETRY GUARD, and it is the
+                    # direction pipeline's OWN, called rather than re-spelled.
+                    # `UnitRepricer._assert_telemetry` raises `CircularCurve`
+                    # when the snapshot came from after the instant asked for
+                    # -- reading `served_from_future` AND the sign of the lag,
+                    # because a missing `snapshot_served_from_future` is falsy
+                    # and the boolean alone once waved through a mark carrying
+                    # lag = -900 s -- and `LagTelemetryMissing` when a governed
+                    # source reports no lag at all.
+                    #
+                    # Both matter more here than on a single print. A chart is
+                    # read as "where the market was": a mid drawn from after
+                    # its own timestamp is a curve that already contains the
+                    # prints being drawn on it, and a whole run with lag=None
+                    # is indistinguishable from a correct one -- that exact run
+                    # happened once and is what `snapshot.snapshot_lag_seconds`
+                    # is written about. `verify` re-checks both from the table
+                    # afterwards, because this guard only protects rows written
+                    # after it existed.
+                    rep._assert_telemetry(mark, [])
                     handle = mark.handle
                     ref = pd.Timestamp(handle.reference_date()).date()
                     dates = dates_by_ref.get(ref)
@@ -567,6 +647,16 @@ def _load_cached(paths: Paths, day: str):
         return None
     if not isinstance(rows, list) or not rows:
         return None
+    # A parquet staged by an OLDER version of this runner is a cache miss, not
+    # a frame to be padded. `reindex` manufactures an absent column as all-NaN
+    # float64, and the NOT NULL columns would at least fail the insert loudly
+    # -- but `served_ts`, `pv01` and `snapshot_lag_seconds` are nullable, so a
+    # stale stage would publish NULL provenance on every row of the day and
+    # read as a curve that reported nothing. Republishing from a cache is
+    # supposed to be the cheap half; it is not licence to invent columns.
+    absent = [c for c in GRID_COLS if c not in df.columns]
+    if absent:
+        return None
     return df.reindex(columns=GRID_COLS), rows
 
 
@@ -610,8 +700,18 @@ def publish_day(day: str, grid_df: pd.DataFrame, day_rows: list) -> int:
     """Delete-then-insert this ET date, then upsert its accounting.
 
     One connection per worker, opened here and closed here. The delete is
-    scoped to ``grid_date`` and runs only once the whole day priced, so a
-    failure mid-day leaves the previous run's rows rather than half of them.
+    scoped to ``grid_date`` and runs only once the whole day has **priced**, so
+    no curve failure can ever reach this function -- which is the property that
+    matters, because pricing is the part that takes two minutes.
+
+    It is **not** atomic across the delete and the inserts: the delete commits
+    first, so a crash between them leaves the day empty rather than leaving the
+    previous run's rows. That is recoverable rather than wrong, and deliberately
+    so: :func:`pending_days` compares the table's row count against the ledger's
+    ``n_rows`` and re-does any day where they disagree, and the retry republishes
+    from the staged parquet without touching a curve. An empty day is also what
+    ``verify`` shouts about; a half-written one is what it would have to be
+    clever to notice.
     """
     conn = connect()
     try:
@@ -760,6 +860,17 @@ def stage_verify(days: list[str], served_floor: float,
                 f"SELECT grid_date, rate_index, count(*) n, "
                 "count(*) FILTER (WHERE mid_pct IS NULL) n_null, "
                 "max(abs(snapshot_lag_seconds)) max_lag, "
+                # BOTH, not either. `min()` ignores NULLs, so it cannot see a
+                # row that has no telemetry at all, and `max(abs(...))` cannot
+                # see a NEGATIVE lag under the tolerance -- a curve served 30 s
+                # from the FUTURE reads as a 30 s lag and passes. Between them
+                # these two see every row the in-process guard would refuse,
+                # which is what makes this check retroactive: it is the only
+                # thing that can speak for rows written before that guard
+                # existed.
+                "min(snapshot_lag_seconds) min_lag, "
+                "count(*) FILTER (WHERE snapshot_lag_seconds IS NULL) "
+                "n_null_lag, "
                 "count(DISTINCT tenor_label) n_tenors "
                 f"FROM {S.CURVE_MID_TABLE} "
                 "WHERE grid_date = ANY(%(d)s::date[]) "
@@ -824,6 +935,27 @@ def stage_verify(days: list[str], served_floor: float,
             if lag is not None and float(lag) > MAX_EXPECTED_LAG_SECONDS:
                 warn.append(f"{day}/{index}: max |snapshot lag| {float(lag):.0f}s "
                             f"exceeds {MAX_EXPECTED_LAG_SECONDS:.0f}s")
+            # A PROBLEM, not a warning. A negative lag is a snapshot served
+            # from AFTER the instant it is stamped with: the chart would draw,
+            # as "where the market was at 14:32", a curve built at 14:33 that
+            # can already contain the print being drawn on it. Structurally
+            # impossible under both policies (`strict()` and the out-of-session
+            # asof both set allow_future=False), which is exactly why it is
+            # checked -- and checking it here rather than only in-process is
+            # what lets this stage speak for rows written earlier.
+            min_lag = counts.get(key, {}).get("min_lag")
+            if min_lag is not None and float(min_lag) < 0.0:
+                problems.append(
+                    f"{day}/{index}: minimum snapshot lag {float(min_lag):.0f}s "
+                    "is NEGATIVE -- that row was served from AFTER its own "
+                    "timestamp and can contain the prints drawn on it")
+            n_null_lag = int(counts.get(key, {}).get("n_null_lag") or 0)
+            if n_null_lag:
+                problems.append(
+                    f"{day}/{index}: {n_null_lag:,} rows carry no snapshot lag "
+                    "at all. RLIRSwapCurve exposes .meta(), not .meta_data; a "
+                    "silent None means the session branch was flying blind "
+                    "while the prices looked fine")
             if int(counts[key]["n_null"]):
                 problems.append(f"{day}/{index}: {counts[key]['n_null']} NULL mids")
             if int(counts[key]["n_tenors"]) != len(TENORS[index]):
@@ -1029,7 +1161,55 @@ def stage_validate(start: str, end: str, tenors: list | None,
         out_path.parent.mkdir(parents=True, exist_ok=True)
         df.to_parquet(out_path, index=False)
         print(f"\nwrote {out_path} ({len(df):,} comparisons)", flush=True)
-    return 0
+
+    # ------------------------------------------------------------------
+    # THE GATE. Everything above is a report, and a report exits 0 whatever it
+    # says -- so a five-basis-point divergence on a whole-history run would
+    # have been printed and then blessed by the exit code. The claim this
+    # stage exists to defend is narrow and absolute: at the join the front end
+    # actually makes, the grid IS the direction pipeline's mid.
+    # ------------------------------------------------------------------
+    rc, msg = validate_gate(exact)
+    print("\n" + msg, flush=True)
+    return rc
+
+
+def validate_gate(exact) -> tuple[int, str]:
+    """Pass/fail on the one subset the grid claims to be the *same* number.
+
+    Everything the ``validate`` stage prints above this is a report, and a
+    report exits 0 whatever it says -- so a five-basis-point divergence over the
+    whole history would have been printed and then blessed by the exit code.
+
+    The subset is exact-date prints joined at ``dt = 0``: the print's own
+    instrument, at the instant the front end's join actually lands on. Off that
+    point the comparison is not an identity and gating on it would fail the
+    pipeline for the calendar -- see :data:`VALIDATE_MAX_ABS_BP`.
+
+    A separate function so it can be exercised without a database, in both
+    directions. A gate that has only ever been run against passing data is not
+    known to be able to fail.
+    """
+    if exact is None or not len(exact):
+        gated = pd.Series(dtype=float)
+    else:
+        gated = pd.Series(
+            exact.loc[exact["dt_s"] == 0, "err_bp"]).dropna().astype(float)
+    if not len(gated):
+        return 1, ("validate: FAIL -- not one exact-date print joined at "
+                   "dt = 0, so the identity was never actually tested. An "
+                   "empty check is not a pass.")
+    worst = float(gated.abs().max())
+    if worst > VALIDATE_MAX_ABS_BP:
+        return 1, (f"validate: FAIL -- {len(gated):,} exact-date prints joined "
+                   f"at dt = 0 and the worst |grid - implied| is {worst:.3e} "
+                   f"bp, over the {VALIDATE_MAX_ABS_BP:.0e} bp gate. These two "
+                   "paths are meant to be the SAME number (measured max "
+                   "7.1e-13 bp); a divergence here is a convention fault, not "
+                   "noise.")
+    return 0, (f"validate: PASS -- {len(gated):,} exact-date prints joined at "
+               f"dt = 0, worst |grid - implied| {worst:.3e} bp, gate "
+               f"{VALIDATE_MAX_ABS_BP:.0e} bp.")
 
 
 def _dist(s, label: str) -> str:

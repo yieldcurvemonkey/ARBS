@@ -122,10 +122,21 @@ export type PrintsResponse = {
   admittedByLoosening: number | null
   observedTenorYears: [number, number] | null
   rows: PrintRow[]
+  mid: MidGrid
   counts: PrintsCounts
   disclosures: string[]
   provenance: PrintsProvenance
   error?: string
+}
+
+export type MidGridPoint = { ts: string; mid_pct: number }
+
+export type MidGrid = {
+  available: boolean
+  points: MidGridPoint[]
+  curve_name: string | null
+  snapshot_policy: string | null
+  window: [string, string] | null
 }
 
 export const PRINT_TENORS = ['1Y', '2Y', '3Y', '5Y', '7Y', '10Y', '20Y', '30Y'] as const
@@ -214,6 +225,141 @@ export function buildMidSeries(rows: PrintRow[], gapMinutes: number = GAP_MINUTE
 }
 
 // ---------------------------------------------------------------------------
+// The continuous mid — the real one
+// ---------------------------------------------------------------------------
+
+/**
+ * Above this, no segment is drawn between two consecutive GRID points.
+ *
+ * Measured on SOFR 10Y across 7 days spanning the window: intra-day consecutive
+ * gaps are 1 min (8,293x), 2 min (170), 3 min (17), 4 min (1) and 5 min (1),
+ * and no intra-day gap exceeds 5 minutes on any of the seven days. Every larger
+ * gap is a jump between days — the overnight hole, ~2 hours at minimum. So 10
+ * minutes never breaks a live session and always breaks the hole.
+ *
+ * Distinct from GAP_MINUTES, which is 20 because it governs the spacing between
+ * PRINTS (p50 5.0 / p90 23.0 / max 177.8 min), a completely different process.
+ */
+export const MID_GRID_GAP_MINUTES = 10
+
+/** Which object the line is drawn from. Shown on screen; never inferred. */
+export type MidSource = 'grid' | 'reconstructed' | 'none'
+
+/**
+ * The grid as chart points, with an explicit null spacer at every break.
+ *
+ * Same contract as buildMidSeries — paired with `connectNulls={false}` the line
+ * breaks rather than bridging — but the input is a modelled 1-minute curve
+ * rather than a polyline through wherever somebody traded.
+ */
+export function buildGridMidSeries(
+  points: MidGridPoint[],
+  gapMinutes: number = MID_GRID_GAP_MINUTES,
+): MidPoint[] {
+  const pts: MidPoint[] = []
+  for (const p of points) {
+    const t = tsMillis(p.ts)
+    if (t == null) continue
+    const mid = Number(p.mid_pct)
+    if (!Number.isFinite(mid)) continue
+    pts.push({ t, mid })
+  }
+  pts.sort((a, b) => a.t - b.t)
+
+  const gapMs = gapMinutes * 60_000
+  const out: MidPoint[] = []
+  for (let i = 0; i < pts.length; i += 1) {
+    const cur = pts[i]!
+    if (i > 0) {
+      const prev = pts[i - 1]!
+      if (cur.t - prev.t > gapMs) {
+        out.push({ t: prev.t + Math.floor((cur.t - prev.t) / 2), mid: null })
+      }
+    }
+    out.push(cur)
+  }
+  return out
+}
+
+/**
+ * Which mid the line gets, and why.
+ *
+ * The grid wins whenever it has enough points, because it is a curve rather
+ * than a join-the-dots. It is ABSENT for Fed Funds 7Y, 20Y and 30Y — measured,
+ * the grid carries 12 FF tenors and 21 SOFR tenors — and on those the
+ * reconstruction is the only line there is. Falling back silently would let a
+ * reader take a polyline through eight prints for a picture of the market, so
+ * the source is returned alongside the points and rendered as a label.
+ */
+export function chooseMidSeries(
+  rows: PrintRow[],
+  grid: MidGrid | null | undefined,
+): { source: MidSource; points: MidPoint[] } {
+  if (grid?.available && grid.points.length >= MIN_MID_POINTS) {
+    return { source: 'grid', points: buildGridMidSeries(grid.points) }
+  }
+  const recon = buildMidSeries(rows)
+  const n = recon.filter((m) => m.mid != null).length
+  if (n >= MIN_MID_POINTS) return { source: 'reconstructed', points: recon }
+  // Below the floor the dots stand alone — see MIN_MID_POINTS.
+  return { source: 'none', points: recon }
+}
+
+export type MidResidual = {
+  n: number
+  medianBps: number
+  p95Bps: number
+  maxBps: number
+}
+
+/**
+ * How far each mark's OWN mid sits from the line above it, in bp.
+ *
+ * The two are independent objects: the mark's mid is traded - deviation (exact
+ * for that print, and what the direction call was made against), the line is
+ * the 1-minute grid. They are matched on the minute of the print's own curve
+ * snapshot, which is an EQUALITY — 0 of 22.7M grid rows carry a non-zero
+ * second.
+ *
+ * This is a diagnostic on screen rather than a hidden check, because the
+ * residual is real and nameable: it is ~0 for a spot STANDARD swap, which is
+ * literally the same instrument as the grid point, and grows with the maturity
+ * gap for a broken-dated one. A reader looking at a mark sitting off the line
+ * deserves the number rather than a guess about whether the chart is broken.
+ */
+export function midGridResidual(
+  rows: PrintRow[],
+  points: MidGridPoint[],
+): MidResidual | null {
+  const byMinute = new Map<number, number>()
+  for (const p of points) {
+    const t = tsMillis(p.ts)
+    if (t == null) continue
+    byMinute.set(Math.floor(t / 60_000), Number(p.mid_pct))
+  }
+  const resid: number[] = []
+  for (const r of rows) {
+    if (r.mid_pct == null || r.is_off_market === true) continue
+    const t = tsMillis(r.curve_timestamp)
+    if (t == null) continue
+    const g = byMinute.get(Math.floor(t / 60_000))
+    if (g == null || !Number.isFinite(g)) continue
+    resid.push((Number(r.mid_pct) - g) * 100)
+  }
+  if (resid.length === 0) return null
+  const abs = resid.map((x) => Math.abs(x)).sort((a, b) => a - b)
+  const sorted = [...resid].sort((a, b) => a - b)
+  const q = (xs: number[], f: number) => xs[Math.min(xs.length - 1, Math.floor(f * xs.length))]!
+  const m = Math.floor(sorted.length / 2)
+  return {
+    n: resid.length,
+    medianBps: sorted.length % 2 ? sorted[m]! : (sorted[m - 1]! + sorted[m]!) / 2,
+    p95Bps: q(abs, 0.95),
+    maxBps: abs[abs.length - 1]!,
+  }
+}
+
+// ---------------------------------------------------------------------------
 // The axes
 // ---------------------------------------------------------------------------
 
@@ -244,14 +390,26 @@ export function domainRows(rows: PrintRow[], fwdMaxYears: number = FWD_MAX_DEFAU
   )
 }
 
+/**
+ * `mid` IS ADMITTED TO THE DOMAIN, unlike an off-market print.
+ *
+ * The grid runs 15 minutes past the last mark, and the mid can move inside that
+ * pad. Excluded, the line would be silently clipped at the frame edge — which
+ * reads as the mid going flat rather than as the axis ending. It is the same
+ * instrument as the marks and it is on-market by construction, so it belongs.
+ */
 export function yDomain(
   rows: PrintRow[],
   fwdMaxYears: number = FWD_MAX_DEFAULT,
+  mid: MidPoint[] = [],
 ): [number, number] | null {
   const vals: number[] = []
   for (const r of domainRows(rows, fwdMaxYears)) {
     if (Number.isFinite(r.traded_pct)) vals.push(Number(r.traded_pct))
     if (r.mid_pct != null && Number.isFinite(r.mid_pct)) vals.push(Number(r.mid_pct))
+  }
+  for (const m of mid) {
+    if (m.mid != null && Number.isFinite(m.mid)) vals.push(m.mid)
   }
   if (vals.length === 0) return null
   let lo = Math.min(...vals)

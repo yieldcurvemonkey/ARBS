@@ -386,21 +386,310 @@ def test_the_completion_check_is_an_equality_over_served_minutes():
     assert row["partition_minutes"] <= row["session_expected_minutes"]
 
 
-def test_a_skipped_minute_is_counted_rather_than_interpolated():
-    row = B._day_row(day="2026-04-01", index="SOFR", curve="USD-SOFR-1D",
-                     partition_minutes=1299, expected=1320, served=1290,
-                     missed=9, n_rows=1290 * 21, n_tenors=21, n_refs=1,
-                     status=B.STATUS_OK, error=None, vintage="v")
-    assert row["minutes_served"] + row["minutes_missed"] == row["partition_minutes"]
-    assert row["n_rows"] == 21 * row["minutes_served"], (
-        "a refused minute must produce NO rows; a fabricated value there is "
-        "indistinguishable from a real mark on the chart")
-
-
 def test_the_ledger_carries_the_denominator_the_database_cannot_see():
     for c in ("partition_minutes", "session_expected_minutes", "minutes_served",
               "minutes_missed", "n_rows", "n_tenors"):
         assert c in B.DAY_COLS, c
+
+
+# ==========================================================================
+# build_one_day itself, against a fake pricer
+#
+# Everything above this point pins constants, DDL and arithmetic. These drive
+# the real `build_one_day` -- the skip path, the row-count equality, the
+# circularity guard and the non-finite refusal -- through a substituted pricer,
+# because those are behaviours no assertion about a constant can reach. The
+# seam substituted is the one `midprice.UnitRepricer` documents as five members
+# wide; the guard object itself is the real `UnitRepricer`, so the rule under
+# test is the frozen package's own and not a copy of it.
+# ==========================================================================
+
+DAY = datetime.date(2026, 4, 1)          # a Wednesday, 1,320 published minutes
+
+
+def _minutes(n: int, *, day: datetime.date = DAY, start_hour: int = 13):
+    """`n` consecutive whole minutes of one ET date, as the store stamps them."""
+    base = pd.Timestamp(datetime.datetime.combine(
+        day, datetime.time(start_hour, 0)), tz=NY)
+    return [base + pd.Timedelta(minutes=i) for i in range(n)]
+
+
+class _FakeStore:
+    """`read_raw_day` -> the stamps this partition holds, in UTC, unsorted."""
+
+    def __init__(self, stamps):
+        self._stamps = list(stamps)
+
+    def read_raw_day(self, asset, day):
+        return pd.DataFrame({"timestamp_utc": pd.to_datetime(
+            [pd.Timestamp(t).tz_convert("UTC") for t in self._stamps],
+            utc=True)})
+
+
+class _FakeHandle:
+    """Enough of a curve handle to define the instrument, and nothing more."""
+
+    def __init__(self, ref: datetime.date):
+        self._ref = ref
+
+    def reference_date(self):
+        return self._ref
+
+    def calendar_advance(self, d, tenor):
+        d = pd.Timestamp(d)
+        if tenor == "2b":
+            return (d + pd.Timedelta(days=2)).date()
+        n, unit = int(tenor[:-1]), tenor[-1]
+        step = {"D": pd.DateOffset(days=n), "W": pd.DateOffset(weeks=n),
+                "M": pd.DateOffset(months=n), "Y": pd.DateOffset(years=n)}[unit]
+        return (d + step).date()
+
+
+class _FakeLegPricing:
+    def __init__(self, mid, pv01):
+        self.mid_pct = mid
+        self.pv01 = pv01
+
+
+class _FakePricer:
+    """The five-member seam. Refuses named minutes; marks are configurable."""
+
+    def __init__(self, *, refuse=(), lag=0.0, from_future=False,
+                 mid=3.9251, ref=datetime.date(2026, 4, 1)):
+        self.refuse = {pd.Timestamp(t) for t in refuse}
+        self.lag, self.from_future, self.mid = lag, from_future, mid
+        self.handle = _FakeHandle(ref)
+        self.priced = []
+
+    snapshot_governed = True
+
+    def curve_for(self, rate_index):
+        return snapshot.CURVE_FOR[rate_index]
+
+    def day_scope(self):
+        import contextlib
+        return contextlib.nullcontext(self)
+
+    def mark_curve(self, curve_name, instant):
+        from MDP.IRSwaps.CITIVELO_EXCEL.snapshot_policy import SnapshotMiss
+        if pd.Timestamp(instant) in self.refuse:
+            raise SnapshotMiss(f"no snapshot for {instant}")
+        return midprice.CurveMark(
+            policy=midprice.POLICY_STRICT, curve_name=curve_name,
+            requested=pd.Timestamp(instant), lag_seconds=self.lag,
+            served_from_future=self.from_future,
+            served_utc=(None if self.lag is None else
+                        pd.Timestamp(instant).tz_convert("UTC")
+                        - pd.Timedelta(seconds=self.lag)),
+            handle=self.handle)
+
+    def price_leg(self, curve_name, instant, eff, mat, notional,
+                  fixed_rate=None):
+        self.priced.append((curve_name, pd.Timestamp(instant), eff, mat))
+        return _FakeLegPricing(self.mid, 950.0)
+
+
+def _install(monkeypatch, pricer, stamps):
+    """`_ENGINES` is the worker's lazily-built (repricer, pricer, store)."""
+    rep = midprice.UnitRepricer(pricer)      # the REAL guard, a fake seam
+    monkeypatch.setattr(B, "_ENGINES", (rep, pricer, _FakeStore(stamps)))
+
+
+def _run(tmp_path, monkeypatch, pricer, stamps):
+    _install(monkeypatch, pricer, stamps)
+    paths = B.Paths(tmp_path)
+    paths.mkdirs()
+    return B.build_one_day(DAY.isoformat(), paths, dry_run=True, reprice=True)
+
+
+def test_a_refused_minute_produces_no_row_and_is_counted_instead(tmp_path,
+                                                                 monkeypatch):
+    """The whole "skipped and counted, never fabricated" rule, on real code.
+
+    A carried-forward or interpolated value for a minute the store could not
+    answer is indistinguishable from a real mark once it is on the chart, so
+    the refused minutes must be absent from the frame AND present in the
+    accounting.
+    """
+    stamps = _minutes(6)
+    refused = {stamps[2], stamps[4]}
+    res = _run(tmp_path, monkeypatch, _FakePricer(refuse=refused), stamps)
+
+    n_sofr, n_ff = len(B.TENORS["SOFR"]), len(B.TENORS["FED_FUNDS"])
+    assert res["missed"] == 2 * len(B.INDICES)
+    assert res["rows"] == 4 * n_sofr + 4 * n_ff
+    df = pd.read_parquet(B.Paths(tmp_path).parquet(DAY.isoformat()))
+    got = {pd.Timestamp(t) for t in pd.to_datetime(df["ts"], utc=True)}
+    for t in refused:
+        assert pd.Timestamp(t).tz_convert("UTC") not in got, (
+            "a minute the store refused has a row anyway -- something "
+            "fabricated it")
+    assert len(got) == 4
+
+
+def test_the_row_count_is_the_equality_the_completion_check_asserts(tmp_path,
+                                                                    monkeypatch):
+    stamps = _minutes(5)
+    res = _run(tmp_path, monkeypatch, _FakePricer(), stamps)
+    assert res["rows"] == 5 * (len(B.TENORS["SOFR"]) + len(B.TENORS["FED_FUNDS"]))
+    import json
+    rows = json.loads(B.Paths(tmp_path).stats(DAY.isoformat()).read_text())
+    for r in rows:
+        assert r["n_rows"] == r["n_tenors"] * r["minutes_served"]
+        assert r["minutes_served"] + r["minutes_missed"] == r["partition_minutes"]
+        assert r["session_expected_minutes"] == 1320
+
+
+def test_a_snapshot_served_from_after_its_own_timestamp_fails_the_day(
+        tmp_path, monkeypatch):
+    """A negative lag is a curve that can contain the prints drawn on it.
+
+    Structurally impossible under both policies here -- `strict()` and the
+    out-of-session `asof` both set `allow_future=False` -- which is exactly why
+    it is checked. `verify`'s `max(abs(lag))` is blind to it by construction.
+    """
+    with pytest.raises(midprice.CircularCurve):
+        _run(tmp_path, monkeypatch, _FakePricer(lag=-30.0), _minutes(3))
+
+
+def test_the_served_from_future_flag_alone_also_fails_the_day(tmp_path,
+                                                              monkeypatch):
+    # The flag and the sign of the lag are one fact written twice, and the
+    # guard reads both: a guard that tested only the lag sign would pass this.
+    with pytest.raises(midprice.CircularCurve):
+        _run(tmp_path, monkeypatch,
+             _FakePricer(lag=30.0, from_future=True), _minutes(3))
+
+
+def test_a_mark_with_no_lag_telemetry_at_all_fails_the_day(tmp_path,
+                                                           monkeypatch):
+    """A whole run of `lag=None` is indistinguishable from a correct one.
+
+    `RLIRSwapCurve` exposes `.meta()`, not `.meta_data`; that exact run
+    happened once and every price on it looked fine.
+    """
+    with pytest.raises(midprice.LagTelemetryMissing):
+        _run(tmp_path, monkeypatch, _FakePricer(lag=None), _minutes(3))
+
+
+@pytest.mark.parametrize("bad", [float("nan"), float("inf")])
+def test_a_non_finite_mid_fails_the_day_rather_than_writing_a_hole(
+        bad, tmp_path, monkeypatch):
+    # The curve WAS served, so this is a pricing defect, not a store hole. A
+    # skipped row here would read as a market that was not publishing.
+    with pytest.raises(RuntimeError, match="non-finite mid"):
+        _run(tmp_path, monkeypatch, _FakePricer(mid=bad), _minutes(2))
+
+
+def test_every_grid_row_is_priced_at_its_own_stamped_instant(tmp_path,
+                                                             monkeypatch):
+    """`ts` is the instant the row was priced at, not a nearby one.
+
+    The front end joins by equality on this column, so a row stamped with a
+    minute it was not priced at is a silent one-minute lookahead or lookbehind
+    on every point of the chart.
+    """
+    stamps = _minutes(4)
+    pricer = _FakePricer()
+    _run(tmp_path, monkeypatch, pricer, stamps)
+    df = pd.read_parquet(B.Paths(tmp_path).parquet(DAY.isoformat()))
+    priced_at = sorted({t for _, t, _, _ in pricer.priced})
+    assert priced_at == sorted(pd.Timestamp(t) for t in stamps)
+    assert {pd.Timestamp(t) for t in pd.to_datetime(df["ts"], utc=True)} == {
+        pd.Timestamp(t).tz_convert("UTC") for t in stamps}
+
+
+def test_a_stamp_from_a_neighbouring_ET_date_is_not_drawn_into_this_day():
+    """`grid_date` must stay a true function of `ts`.
+
+    The primary key is (rate_index, tenor_label, ts) and the delete is by
+    `grid_date`, so a stamp that strayed across the date boundary would let two
+    days claim one row and the later publish would rewrite the earlier day's
+    `grid_date` out from under it.
+    """
+    stamps = _minutes(2) + [pd.Timestamp(datetime.datetime(2026, 4, 2, 0, 30),
+                                         tz=NY)]
+    got = B._day_minutes(_FakeStore(stamps), "X", DAY, NY)
+    assert len(got) == 2
+    assert {t.date() for t in got} == {DAY}
+
+
+def test_a_stale_staged_parquet_is_a_cache_MISS_not_a_frame_to_be_padded(
+        tmp_path):
+    """`reindex` would manufacture an absent column as all-NaN.
+
+    The NOT NULL columns fail the insert loudly, but `served_ts`, `pv01` and
+    `snapshot_lag_seconds` are nullable -- so a stage written by an older
+    version of this runner would publish NULL provenance for a whole day and
+    read as a curve that reported nothing.
+    """
+    import json
+    paths = B.Paths(tmp_path)
+    paths.mkdirs()
+    day = DAY.isoformat()
+    full = pd.DataFrame([{c: 1 for c in B.GRID_COLS}])
+    paths.stats(day).write_text(json.dumps([{"rate_index": "SOFR"}]),
+                                encoding="utf-8")
+    full.to_parquet(paths.parquet(day), index=False)
+    assert B._load_cached(paths, day) is not None
+
+    full.drop(columns=["served_ts"]).to_parquet(paths.parquet(day), index=False)
+    assert B._load_cached(paths, day) is None
+
+
+# ==========================================================================
+# the validate gate can fail, and has been run in both directions
+# ==========================================================================
+
+def _gate_frame(errs, dts=None):
+    dts = [0.0] * len(errs) if dts is None else dts
+    return pd.DataFrame({"err_bp": errs, "dt_s": dts})
+
+
+def test_the_validate_gate_passes_at_the_measured_noise_floor():
+    rc, msg = B.validate_gate(_gate_frame([7.1e-13, -4.4e-14, 0.0]))
+    assert rc == 0 and "PASS" in msg
+
+
+def test_the_validate_gate_fails_on_a_divergence_a_trader_could_see():
+    # Half a basis point: the exact failure this stage exists to catch, and the
+    # size a convention fault (day count, roll, spot lag) actually produces.
+    rc, msg = B.validate_gate(_gate_frame([1e-13, 0.5]))
+    assert rc == 1 and "FAIL" in msg
+
+
+def test_the_validate_gate_fails_on_an_empty_sample():
+    """An empty check is not a pass -- and this is the realistic way to get one.
+
+    A window whose grid was never backfilled matches no prints at all; without
+    this the stage would print "n=0" and exit 0.
+    """
+    assert B.validate_gate(_gate_frame([]))[0] == 1
+    assert B.validate_gate(None)[0] == 1
+    # ...including when prints exist but none of them land ON a grid point,
+    # which is what a coarser grid would look like.
+    assert B.validate_gate(_gate_frame([1e-13, 1e-13], dts=[45.0, 900.0]))[0] == 1
+
+
+def test_the_gate_is_machine_precision_and_not_a_tolerance():
+    # Seven orders above the measured 7.1e-13 bp maximum and six below
+    # anything a trader could see. Nothing real lands in between, so widening
+    # this is the precise way to hide a convention fault.
+    assert B.VALIDATE_MAX_ABS_BP == 1e-6
+    assert 7.1e-13 < B.VALIDATE_MAX_ABS_BP < 0.01
+
+
+def test_the_gate_is_scoped_to_the_join_the_front_end_actually_makes():
+    """dt = 0 only. Off the grid point the comparison is not an identity.
+
+    In the 23:00-00:59 ET hole no grid row exists, so an hour-00 print matches
+    forward to the next session's 01:00 point where the grid's spot is a
+    business day behind the print's own -- <= 0.42 bp, measured, and the
+    instrument differing rather than the mid. Gating on those would fail the
+    pipeline for the calendar.
+    """
+    rc, _ = B.validate_gate(_gate_frame([1e-13, 0.42], dts=[0.0, 3600.0]))
+    assert rc == 0
 
 
 # ==========================================================================

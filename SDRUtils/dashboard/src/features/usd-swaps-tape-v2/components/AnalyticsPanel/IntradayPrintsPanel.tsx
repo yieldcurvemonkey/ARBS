@@ -1,25 +1,43 @@
 'use client'
-// ABOUTME: Every print of one tenor, on one day, on the EXECUTION clock, with
-// the mid reconstructed per print. Reads arbs_dd_unit_v1 joined to the v3 tape
-// legs through /api/usd-swaps-tape-v2/direction/prints.
+// ABOUTME: Every print of one tenor, on one day, on the EXECUTION clock,
+// against the continuous 1-minute par grid. Reads arbs_dd_unit_v1 joined to the
+// v3 tape legs, plus arbs_dd_curve_mid_v1, through
+// /api/usd-swaps-tape-v2/direction/prints.
 //
 // ===================================================================
 // THE MID IS NOT A QUOTE, AND THE CHART IS BUILT SO IT CANNOT PRETEND TO BE
 // ===================================================================
 //
-// There is NO intraday par-rate table in Postgres. Every candidate was closed
-// by measurement (see prints.logic.ts), so the mid here is reconstructed per
-// print as `traded - deviation/100` — exact by construction, and existing ONLY
-// at print times. Four mechanisms stop it reading as a continuous market:
+// TWO DIFFERENT OBJECTS SHARE THIS AXIS, and they must never render alike:
+//
+//   THE LINE   arbs_dd_curve_mid_v1 — a MODELLED par rate every minute, built
+//              by the same SessionBranchPricer against the same Citi minute
+//              curve that repriced every mark. Solid, no dots.
+//   EACH MARK  its own mid, reconstructed as `traded - deviation/100`. Exact
+//              for that print by construction, and what deviation_bps — hence
+//              the direction call — is measured against.
+//
+// They agree where they are the same instrument: median residual EXACTLY 0.000000
+// bp, p95 0.132 bp over 3,206 prints. The tail is the instrument differing (of 9
+// prints beyond 0.5bp the median maturity gap to the grid swap is 6 days and none
+// is an exact match), so the residual is a CHIP ON SCREEN rather than a hidden
+// check. Where there is no grid — Fed Funds 7Y/20Y/30Y, measured: 12 FF tenors
+// against SOFR's 21 — the line falls back to a polyline through the prints and
+// says so in an amber strip.
+//
+// Four mechanisms stop either one reading as a continuous quoted market:
 //
 //   1. dots first, and the dots are the data;
-//   2. segments only across gaps <= 20 min (p50 gap 5.0 min, p90 23.0, max
-//      177.8), so the overnight hole ALWAYS breaks;
-//   3. dashed everywhere — a solid line is the visual grammar of a quote;
+//   2. the line BREAKS rather than bridging — grid segments only across gaps
+//      <= 10 min (measured: no intra-day grid gap exceeds 5 min on any sampled
+//      day, the overnight hole is ~2h), reconstruction only across <= 20 min
+//      (p50 print gap 5.0 min, p90 23.0, max 177.8);
+//   3. the RECONSTRUCTION is dashed — a solid line is the visual grammar of a
+//      quote, and a join-the-dots has not earned it;
 //   4. type="linear", never "monotone" — a spline invents curvature between two
 //      model points.
 //
-// Below 12 mid points the line is suppressed entirely and only dots are drawn.
+// Below 12 mid points neither line is drawn and only dots are.
 //
 // WHAT IS DELIBERATELY NOT HERE
 // -----------------------------
@@ -57,8 +75,8 @@ import {
   DIRECTION_SKY,
 } from '../../utils/dealerDirection'
 import {
-  buildMidSeries,
   chevronPath,
+  chooseMidSeries,
   clampToDomain,
   diamondPath,
   directionOf,
@@ -79,8 +97,10 @@ import {
   legendSizeRefs,
   markerOpacity,
   markerRadius,
-  MIN_MID_POINTS,
   type MidPoint,
+  midGridResidual,
+  type MidSource,
+  MIN_MID_POINTS,
   type Pinned,
   PRINT_TENORS,
   type PrintRow,
@@ -210,9 +230,19 @@ export function IntradayPrintsPanel(): JSX.Element {
   const rows = useMemo(() => data?.rows ?? [], [data])
   const shownDate = date ?? data?.date ?? ''
 
-  const midSeries: MidPoint[] = useMemo(() => buildMidSeries(rows), [rows])
+  // The line comes from the 1-minute par grid where there is one, and from the
+  // per-print reconstruction where there is not (Fed Funds 7Y/20Y/30Y). Which
+  // one is RENDERED, not inferred: solid for a curve, dashed for a polyline.
+  const { source: midSource, points: midSeries } = useMemo(
+    () => chooseMidSeries(rows, data?.mid),
+    [rows, data?.mid],
+  )
   const midCount = useMemo(() => midSeries.filter((m) => m.mid != null).length, [midSeries])
-  const yDom = useMemo(() => yDomain(rows, fwdMaxYears), [rows, fwdMaxYears])
+  const midResid = useMemo(
+    () => (midSource === 'grid' ? midGridResidual(rows, data?.mid?.points ?? []) : null),
+    [midSource, rows, data?.mid],
+  )
+  const yDom = useMemo(() => yDomain(rows, fwdMaxYears, midSeries), [rows, fwdMaxYears, midSeries])
   const tDom = useMemo(() => tDomain(rows, midSeries), [rows, midSeries])
   const etMidnight = useMemo(() => etMidnightFor(rows), [rows])
   const ticks = useMemo(() => hourlyTicks(tDom), [tDom])
@@ -433,10 +463,39 @@ export function IntradayPrintsPanel(): JSX.Element {
         </div>
       ) : null}
 
-      {midCount > 0 && midCount < MIN_MID_POINTS ? (
+      {midSource === 'none' && midCount > 0 ? (
         <div className="rounded border border-slate-700 bg-slate-900/50 px-2 py-1 text-[10px] text-slate-300">
           not enough clean prints to draw a mid (n={midCount}, floor={MIN_MID_POINTS}) — the dots
           are still the data
+        </div>
+      ) : null}
+
+      {/* WHAT THE LINE IS. Two different objects render as one shape unless the
+          chart says which; a polyline through eight prints read as a curve is
+          exactly the misreading this panel exists to prevent. */}
+      {midSource === 'grid' ? (
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-1 rounded border border-slate-700 bg-slate-900/50 px-2 py-1 text-[10px] text-slate-300">
+          <span>
+            <span className="text-slate-500">line:</span> modelled 1-min par grid,{' '}
+            {data?.mid.points.length ?? 0} pts · {data?.mid.curve_name ?? '—'}
+          </span>
+          {midResid != null ? (
+            <span title="Each mark's own mid (traded − deviation) against the grid point at the minute of that print's curve snapshot. ~0 for a spot standard swap — literally the same instrument. Grows with the maturity gap for a broken-dated one.">
+              <span className="text-slate-500">mark vs line:</span> med{' '}
+              {fmtSignedBps(midResid.medianBps, 4)} · p95 {fmtNum(midResid.p95Bps, 3)}bp · max{' '}
+              {fmtNum(midResid.maxBps, 3)}bp (n={midResid.n})
+            </span>
+          ) : null}
+          <span className="text-slate-500">breaks at gaps &gt; 10 min</span>
+        </div>
+      ) : midSource === 'reconstructed' ? (
+        <div className="rounded border border-amber-700/50 bg-amber-950/20 px-2 py-1 text-[10px] text-amber-200">
+          <span className="font-semibold">no continuous mid for {rateIndex} {tenor}</span> —{' '}
+          {data?.mid.available === false
+            ? 'the 1-minute par grid does not carry this tenor on this index (Fed Funds is built on 12 tenors and has no 7Y, 20Y or 30Y; SOFR carries all eight). '
+            : 'the grid is empty over this window. '}
+          The dashed line is a polyline through the prints themselves, not a curve: it exists only
+          where somebody traded.
         </div>
       ) : null}
 
@@ -507,9 +566,33 @@ export function IntradayPrintsPanel(): JSX.Element {
             }}
           />
 
-          {/* The mid: dashed, never smoothed, broken across every gap > 20 min,
-              and suppressed below 12 points. */}
-          {midCount >= MIN_MID_POINTS ? (
+          {/* THE MID. Never smoothed, always broken rather than bridged, and
+              drawn differently depending on what it IS:
+
+                grid          solid, no dots     — a modelled curve sampled every
+                                                   minute. Dots would put ~1,000
+                                                   markers on screen, which reads
+                                                   as a band, not a line.
+                reconstructed dashed, with dots  — a polyline through the prints.
+                                                   The dots ARE the observations;
+                                                   the dashes say the segments
+                                                   between them are drawn, not
+                                                   measured.
+
+              Suppressed entirely below MIN_MID_POINTS. */}
+          {midSource === 'grid' ? (
+            <Line
+              type="linear"
+              dataKey="mid"
+              stroke={ANALYTICS_COLORS.slate400}
+              strokeWidth={1.5}
+              connectNulls={false}
+              dot={false}
+              activeDot={false}
+              isAnimationActive={false}
+              name="mid"
+            />
+          ) : midSource === 'reconstructed' ? (
             <Line
               type="linear"
               dataKey="mid"
@@ -559,7 +642,11 @@ export function IntradayPrintsPanel(): JSX.Element {
         </ComposedChart>
       </ResponsiveContainer>
 
-      <MarkLegend showPackageLegs={showPackageLegs} includeOffMarket={includeOffMarket} />
+      <MarkLegend
+        showPackageLegs={showPackageLegs}
+        includeOffMarket={includeOffMarket}
+        midSource={midSource}
+      />
 
       <DeviationStrip rows={rows} tDom={tDom} />
 
@@ -634,9 +721,11 @@ function Mark(props: { cx?: number; cy?: number; payload?: MarkDatum }): JSX.Ele
 function MarkLegend({
   showPackageLegs,
   includeOffMarket,
+  midSource,
 }: {
   showPackageLegs: boolean
   includeOffMarket: boolean
+  midSource: MidSource
 }): JSX.Element {
   // The size key calls markerRadius() itself, so it cannot drift from the
   // marks it is a key for.
@@ -661,20 +750,27 @@ function MarkLegend({
         </svg>
         no call
       </span>
-      <span className="flex items-center gap-1">
-        <svg width="24" height="10" aria-hidden>
-          <line
-            x1="1"
-            y1="5"
-            x2="23"
-            y2="5"
-            stroke={ANALYTICS_COLORS.slate400}
-            strokeWidth="1.25"
-            strokeDasharray="4 3"
-          />
-        </svg>
-        model mid at print times — reconstructed from deviation, not a quoted mid
-      </span>
+      {/* THE KEY MUST DESCRIBE THE CHART ON SCREEN. A dashed swatch captioned
+          "at print times" beside a solid modelled curve is a legend for a
+          different chart, and the reader believes the legend. */}
+      {midSource !== 'none' ? (
+        <span className="flex items-center gap-1">
+          <svg width="24" height="10" aria-hidden>
+            <line
+              x1="1"
+              y1="5"
+              x2="23"
+              y2="5"
+              stroke={ANALYTICS_COLORS.slate400}
+              strokeWidth={midSource === 'grid' ? 1.5 : 1.25}
+              strokeDasharray={midSource === 'grid' ? undefined : '4 3'}
+            />
+          </svg>
+          {midSource === 'grid'
+            ? 'modelled 1-min par mid — the same curve every mark was repriced against, not a quoted mid'
+            : 'model mid at print times — reconstructed from deviation, not a quoted mid'}
+        </span>
+      ) : null}
       <span className="flex items-center gap-1">
         <svg width={sizes.length * 30} height="28" aria-hidden>
           {sizes.map((s, i) => (

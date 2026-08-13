@@ -220,6 +220,29 @@ export function recentDates(rows: StandardisedRow[], n: number): string[] {
   return all.slice(Math.max(0, all.length - n))
 }
 
+export type HeatmapState = 'ready' | 'loading' | 'empty'
+
+/**
+ * Why the heatmap has no columns — because "no columns" must never render as a
+ * bare empty row.
+ *
+ * OBSERVED, and the reason this exists: /standardised returns 6,290 rows over
+ * the full window and takes long enough that a screenshot taken 2.5s after the
+ * Analytics tab opens catches the panel mid-flight. It rendered ten labelled
+ * bucket rows, each with an empty strip and an em-dash where z goes — which is
+ * pixel-for-pixel what "we have no data for you" looks like. On a panel whose
+ * governing rule is that an abstention is information rather than a blank, an
+ * in-flight fetch that renders as an empty ladder is the same defect wearing a
+ * different hat.
+ *
+ * A bare `loading` boolean is not enough on its own: loading=false with no
+ * dates is a genuinely empty window, and it needs a different sentence.
+ */
+export function heatmapState(loading: boolean, dates: string[]): HeatmapState {
+  if (dates.length > 0) return 'ready'
+  return loading ? 'loading' : 'empty'
+}
+
 /** (bucket, date) -> row, for O(1) heatmap lookup. */
 export function indexByBucketDate(
   rows: StandardisedRow[],

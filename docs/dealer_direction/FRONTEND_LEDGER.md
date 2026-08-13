@@ -598,4 +598,116 @@ browser without the ambiguity and produced the screenshots. One constraint
 worth recording: it will only write files under `C:\Users\chris\clee\ARBS`, so
 screenshots are saved there and copied into the worktree.
 
+## G-12. The chart's mid line, wired to the real grid
+
+`prints.logic.ts` reconstructed the mid per print because it was specced before
+`arbs_dd_curve_mid_v1` existed. Four things had to be measured before the swap,
+not argued (`scratch/mid21_grid_vs_reconstructed.py`):
+
+1. **Coverage.** SOFR carries all 8 chart tenors; **FED_FUNDS carries 12 and is
+   missing 7Y, 20Y, 30Y**. So the fallback is a real path, not a formality —
+   though *no FF day in the tape has >=12 prints at those tenors*, so it does
+   not fire on today's data.
+2. **The join is an equality.** 0 of 22.7M grid rows carry a non-zero second.
+3. **Agreement.** Median residual EXACTLY 0.000000 bp on SOFR STANDARD (n=2,850),
+   p95 0.132 bp, max 15.62 bp. Section 4 of the probe explains the tail: of the
+   9 prints beyond 0.5 bp the median maturity gap is 6 days, the median
+   effective gap 4 days, and **0% are exact instrument matches** against 62.5%
+   in the sub-0.5bp group. The mid is right; the swap is different.
+4. **The hole.** ET hours 0 and 23 have **zero** grid coverage — 102 of 5,401
+   prints (1.9%).
+
+### The LOCF plan was wrong and I dropped it
+
+The prior write-up said to carry the last point across the 23:00-00:59 ET hole
+with a documented <=0.42 bp residual. That is a flat line asserting the mid did
+not move through a two-hour window where no curve exists. The panel's rule
+everywhere else is that a blank carries its reason. **The line breaks; the gap
+is disclosed.**
+
+### The break threshold is measured, not chosen
+
+SOFR 10Y, 7 days: intra-day consecutive gaps are 1 min (8,293x), 2 (170), 3 (17),
+4 (1), 5 (1). **Intra-day gaps over 5 minutes: zero, on every one of the seven
+days.** Every larger gap in the distribution is a jump between grid days. The
+overnight hole is ~2 h. `MID_GRID_GAP_MINUTES = 10` is two orders of magnitude
+clear of both sides. (Distinct from `GAP_MINUTES = 20`, which governs gaps
+between *prints* — p50 5.0, p90 23.0, max 177.8 min — a different process.)
+
+### A second round trip, deliberately
+
+The window could be a CTE inside the grid statement, saving ~20 ms. It would
+also restate `printsSql`'s twelve-clause driving predicate in a second place,
+where it drifts the first time a filter is added and silently draws the line
+over the wrong span. The window comes from the rows actually drawn, so it cannot
+disagree with them. Measured: 175-211 ms warm for the whole endpoint.
+
+### Verified end to end, not just in unit tests
+
+Through the running API: median residual **+0.000000 bp** at 2Y / 5Y / 10Y /
+30Y (p95 0.009-0.055 bp). FED_FUNDS 5Y served `USD-FEDFUNDS-1D`, SOFR served
+`USD-SOFR-1D`, band mode used the canonical grid.
+
+**12 mutants, 12 killed** (`scratch/ddfe12_mid_mutants.py`) — including
+residual-on-the-execution-clock, the line sold as a quote, the grid looked up by
+the band column, and the fallback going silent.
+
+---
+
+## G-13. Looking at the page found a defect the tests could not
+
+The Chrome MCP was unusable (see D6; `chrome-devtools` later disconnected too),
+so `scratch/shot_dealer_direction.mjs` drives puppeteer — already a dependency
+of this package, already driving the e2e suite — and asserts on page errors,
+console errors and file size as well as writing the images.
+
+**The z heatmap screenshotted BLANK.** Ten labelled bucket rows, empty strips,
+an em-dash where z goes — pixel-for-pixel what "nothing could be oriented here"
+looks like. The data was fine (34,176 of 37,740 cells carry `z_raw`; the latest
+session carries all 10 at `z_n_obs = 250`). A DOM probe
+(`scratch/ddfe13_zheatmap_dom.mjs`) showed the strip container 746 px wide with
+**zero children**: `/standardised` returns 6,290 rows and the fixed 2.5 s sleep
+fired while it was still in flight.
+
+Two fixes, because the timing bug hid a real one:
+
+- **The harness now waits for content**, not a clock. A fixed sleep is exactly
+  what would have banked a picture of a defect as evidence the feature works.
+- **The panel no longer renders an unlabelled empty ladder.** `heatmapState()`
+  separates `ready` / `loading` / `empty` — a bare `loading` boolean cannot,
+  since loading=false with no dates is a genuinely empty window and needs a
+  different sentence. On a panel whose governing rule is that an abstention is
+  information rather than a blank, an in-flight fetch rendering as an empty
+  ladder was the same defect wearing a different hat.
+
+Also fixed while looking: the **onboarding modal** ("How to use the USD swaps
+tape") overlays every panel, so the first capture photographed the tour; and the
+**legend swatch** still described the reconstruction — a dashed key captioned
+"at print times" beside a solid modelled curve is a legend for a different
+chart, and the reader believes the legend.
+
+Eight views captured, no page errors, no console errors:
+`fe-01`..`fe-07` in `docs/dealer_direction/img/`.
+
+---
+
+## G-14. `git worktree remove` deleted through a `node_modules` junction
+
+To *verify* rather than assume that the 4 failing dashboard tests are
+pre-existing, I checked `origin/main` out into a throwaway worktree and
+junctioned its `node_modules` at this one's. `git worktree remove --force` then
+followed the junction: it errored with `Invalid argument` **after** removing 27
+top-level packages from the real tree (799 -> 772). Every direct dependency
+still resolved, so nothing looked broken.
+
+Recovered with `npm install --legacy-peer-deps` (back to 799), suite re-run
+clean. The safe order is `[System.IO.Directory]::Delete(link, $false)` first —
+that removes a reparse point and never its target — then `Remove-Item -Recurse`,
+then `worktree prune`. Note `git worktree list` had already dropped the entry
+even though the delete failed, so the listing is not evidence of a clean
+removal.
+
+The check was still worth it: **the same 4 tests fail at `origin/main`**, which
+is now a measurement rather than an inference from "those files aren't in my
+diff".
 

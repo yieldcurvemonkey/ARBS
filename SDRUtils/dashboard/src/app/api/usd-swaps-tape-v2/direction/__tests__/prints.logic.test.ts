@@ -14,7 +14,13 @@ import {
   FWD_MAX_DEFAULT,
   latestDateSql,
   median,
+  MID_PAD_MINUTES,
+  midGridAvailabilitySql,
+  midGridSql,
+  midWindow,
+  type MidGrid,
   parsePrintsParams,
+  type PrintsFilters,
   PRINT_TENORS,
   printsCountsSql,
   printsSql,
@@ -298,6 +304,24 @@ describe('the disclosures carry their measurements', () => {
       packageLegs: 120,
     },
   }
+  /** No grid: the fallback branch, which is what Fed Funds 7Y/20Y/30Y gets. */
+  const noGrid = {
+    available: false,
+    points: [],
+    curve_name: null,
+    snapshot_policy: null,
+    window: null,
+  }
+  const withGrid = {
+    available: true,
+    points: [
+      { ts: '2026-08-07T13:00:00.000Z', mid_pct: 4.27 },
+      { ts: '2026-08-07T13:01:00.000Z', mid_pct: 4.271 },
+    ],
+    curve_name: 'USD-SOFR-1D',
+    snapshot_policy: 'STRICT_1MIN_IN_SESSION',
+    window: ['2026-08-07T12:45:00.000Z', '2026-08-07T21:15:00.000Z'] as [string, string],
+  }
   const base = {
     counts,
     provenance,
@@ -305,6 +329,8 @@ describe('the disclosures carry their measurements', () => {
     admittedByLoosening: null,
     observedTenorYears: [9.989, 10.0082] as [number, number],
     tenor: '10Y',
+    mid: noGrid,
+    rateIndex: 'SOFR',
   }
 
   it('states the FOMC multiples when FOMC is included', () => {
@@ -334,8 +360,8 @@ describe('the disclosures carry their measurements', () => {
         includeOffMarket: false,
       },
     }).join('\n')
-    expect(d).toMatch(/RECONSTRUCTED, not quoted/)
-    expect(d).toMatch(/0\.32-0\.57 bp/)
+    expect(d).toMatch(/Each MARK’s own mid is reconstructed/)
+    expect(d).toMatch(/0\.32-0\.57bp/)
     expect(d).toMatch(/EXECUTION clock/)
     expect(d).toMatch(/9[23]% of these calls sit inside the dead zone/)
     expect(d).toMatch(/31x/)
@@ -353,5 +379,159 @@ describe('median', () => {
     expect(median([3, 1, 2])).toBe(2)
     expect(median([4, 1, 3, 2])).toBe(2.5)
     expect(median([null, 5, 1])).toBe(3)
+  })
+})
+
+// ===========================================================================
+// THE CONTINUOUS MID
+// ===========================================================================
+
+describe('the grid window comes from the marks, never from a calendar', () => {
+  const row = (iso: string) => ({ execution_timestamp: iso })
+
+  it('pads the observed span by MID_PAD_MINUTES on both sides', () => {
+    const w = midWindow([
+      row('2026-08-07T14:00:00.000Z'),
+      row('2026-08-07T13:00:00.000Z'),
+      row('2026-08-07T20:30:00.000Z'),
+    ])
+    expect(w).not.toBeNull()
+    expect(w![0]).toBe('2026-08-07T12:45:00.000Z')
+    expect(w![1]).toBe('2026-08-07T20:45:00.000Z')
+    expect(MID_PAD_MINUTES).toBe(15)
+  })
+
+  it('is order-independent — min/max, not first/last', () => {
+    const asc = midWindow([row('2026-08-07T13:00:00.000Z'), row('2026-08-07T20:00:00.000Z')])
+    const desc = midWindow([row('2026-08-07T20:00:00.000Z'), row('2026-08-07T13:00:00.000Z')])
+    expect(asc).toEqual(desc)
+  })
+
+  it('is null on an empty day rather than inventing a span', () => {
+    // A line with no marks under it is a chart about a curve. This panel is a
+    // chart about trades, so it draws nothing rather than something.
+    expect(midWindow([])).toBeNull()
+    expect(midWindow([row('not-a-date')])).toBeNull()
+  })
+})
+
+describe('the grid statement', () => {
+  it('is (equality, equality, range) on the primary key, in PK order', () => {
+    // The PK is (rate_index, tenor_label, ts). Anything else here turns a
+    // single ordered index scan over 22.7M rows into something much worse.
+    const { text, values } = midGridSql('SOFR', '10Y', '2026-08-07T12:45:00Z', '2026-08-07T21:15:00Z')
+    const q = sqlOnly(text)
+    expect(q).toContain('g.rate_index  = $1')
+    expect(q).toContain('g.tenor_label = $2')
+    expect(q).toContain('g.ts >= $3::timestamptz')
+    expect(q).toContain('g.ts <= $4::timestamptz')
+    expect(q).toContain('ORDER BY g.ts')
+    expect(values).toEqual(['SOFR', '10Y', '2026-08-07T12:45:00Z', '2026-08-07T21:15:00Z'])
+    // Every value is bound. A window pasted into the text is an injection seam
+    // AND defeats the plan cache.
+    expect(q).not.toMatch(/2026-08-07/)
+  })
+
+  it('never selects the fuzzy band column', () => {
+    // THE SAME TRIPWIRE AS THE MARKS. The grid is built on canonical tenors
+    // only; in band mode the marks may span 9.50-10.49y but there is exactly
+    // one 10Y grid. Looking it up by a row's own tenor_label would mean a
+    // different line per mark.
+    const { text } = midGridSql('FED_FUNDS', '5Y', '2026-01-01T00:00:00Z', '2026-01-02T00:00:00Z')
+    expect(sqlOnly(text)).not.toMatch(/tenor_display/)
+  })
+
+  it('asks availability by the PK prefix only', () => {
+    const q = sqlOnly(midGridAvailabilitySql())
+    expect(q).toMatch(/EXISTS/)
+    expect(q).toContain('rate_index = $1')
+    expect(q).toContain('tenor_label = $2')
+    // No ts predicate: "this tenor has no grid at all" must be answerable
+    // independently of whichever window happens to be on screen.
+    expect(q).not.toMatch(/\bts\b/)
+  })
+})
+
+describe('the disclosures say WHICH mid drew the line', () => {
+  const provenance = {
+    curve_name: 'USD-SOFR-1D',
+    snapshot_policy: 'STRICT_1MIN_IN_SESSION',
+    median_snapshot_lag_seconds: 0,
+    median_visibility_lag_seconds: 60,
+    max_visibility_lag_seconds: 3600,
+    dead_zone_share: 0.9,
+    size_not_read: 0,
+    tape_generation: 'v3',
+    code_vintage: 'abc123',
+    dd_generation: 'v1',
+  }
+  const counts = {
+    drawn: 100, onMarket: 100, withMid: 100,
+    dropped: { offMarket: 0, forwardStart: 0, specialTenorType: 0, unknownSpecialTenorType: 0, packageLegs: 0 },
+  }
+  const filters: PrintsFilters = {
+    kinds: ['OUTRIGHT'],
+    specialTenorTypes: ['STANDARD'],
+    fwdMaxYears: 0.02,
+    tenorMatch: 'strict',
+    includeOffMarket: false,
+  }
+  const call = (mid: MidGrid, rateIndex = 'SOFR', tenor = '10Y') =>
+    buildDisclosures({
+      filters,
+      counts,
+      provenance,
+      looseTenor: false,
+      admittedByLoosening: null,
+      observedTenorYears: null,
+      tenor,
+      mid,
+      rateIndex,
+    }).join('\n')
+
+  const grid: MidGrid = {
+    available: true,
+    points: [{ ts: '2026-08-07T13:00:00.000Z', mid_pct: 4.27 }],
+    curve_name: 'USD-SOFR-1D',
+    snapshot_policy: 'STRICT_1MIN_IN_SESSION',
+    window: ['2026-08-07T12:45:00.000Z', '2026-08-07T21:15:00.000Z'],
+  }
+
+  it('calls the grid line MODELLED and refuses to call it quoted or tradable', () => {
+    // The whole reason this line is allowed to exist. A modelled curve that
+    // reads as a quote is a worse chart than no curve at all.
+    const d = call(grid)
+    expect(d).toMatch(/MODELLED 1-minute par grid/)
+    expect(d).toMatch(/not a quoted mid and not a tradable level/)
+    expect(d).toMatch(/median residual 0\.000000bp/)
+    expect(d).toMatch(/p95 0\.132bp/)
+    expect(d).toMatch(/BREAKS rather than bridging/)
+    expect(d).toMatch(/23:00-00:59 ET/)
+  })
+
+  it('names the missing-tenor case explicitly for Fed Funds', () => {
+    // Silence here is the failure mode: a reader takes a polyline through
+    // eight prints for a picture of the market.
+    const d = call({ ...grid, available: false, points: [] }, 'FED_FUNDS', '30Y')
+    expect(d).toMatch(/NO CONTINUOUS MID IS AVAILABLE for FED_FUNDS 30Y/)
+    expect(d).toMatch(/no 7Y, 20Y or 30Y/)
+    expect(d).toMatch(/not a picture of the market between trades/)
+    expect(d).not.toMatch(/MODELLED 1-minute par grid/)
+  })
+
+  it('distinguishes an absent tenor from an empty window', () => {
+    const absent = call({ ...grid, available: false, points: [] })
+    const empty = call({ ...grid, available: true, points: [] })
+    expect(absent).toMatch(/does not carry this tenor on this index/)
+    expect(empty).toMatch(/over this window/)
+    expect(empty).not.toMatch(/does not carry this tenor/)
+  })
+
+  it('keeps the per-mark reconstruction disclosed under BOTH branches', () => {
+    // deviation_bps — and therefore the direction call — is measured against
+    // the reconstruction, not against the line. That never stops being true.
+    for (const m of [grid, { ...grid, available: false, points: [] }]) {
+      expect(call(m)).toMatch(/Each MARK’s own mid is reconstructed/)
+    }
   })
 })

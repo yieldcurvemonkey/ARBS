@@ -46,7 +46,7 @@
 //    under NPV_VS_UPFRONT, deviation_bps is edge_bps (NPV-vs-fee over DV01) — a
 //    different quantity, mean 793.67 bp, max 1,362,687 bp. Feeding that into
 //    mid = traded - dev/100 produces a garbage mid, not a wide one.
-import { DD_UNIT } from '@/lib/dealer-direction-tables'
+import { DD_CURVE_MID, DD_UNIT } from '@/lib/dealer-direction-tables'
 import { TAPE_LEGS } from '@/lib/tape-tables'
 import { BadRequest, parseCommon, SAMPLE_FLOOR, type VenueClass } from './route.logic'
 
@@ -492,6 +492,152 @@ export function printsCountsSql(p: ResolvedPrintsParams): BoundSql {
 }
 
 // ---------------------------------------------------------------------------
+// The continuous mid
+// ---------------------------------------------------------------------------
+
+/**
+ * THE LINE IS NOW REAL, AND IT IS A DIFFERENT OBJECT FROM THE MARKS' MID.
+ *
+ * arbs_dd_curve_mid_v1 holds a 1-minute par grid built by the SAME
+ * SessionBranchPricer, against the SAME Citi minute curve, that repriced every
+ * print. So the chart no longer has to draw its line through the prints
+ * themselves — which was never a mid, only a polyline through wherever somebody
+ * happened to trade.
+ *
+ * Measured, 3,206 OUTRIGHT prints over 7 days spanning the whole window, grid
+ * point taken at the minute of the print's OWN curve snapshot:
+ *
+ *   special_tenor_type   n       median resid    p95 |resid|   max |resid|
+ *   SOFR STANDARD        2,850   0.000000 bp     0.132 bp      15.62 bp
+ *   SOFR IMM               334   0.000000 bp     0.010 bp       1.49 bp
+ *   FED_FUNDS STANDARD      19   4.4e-14 bp      0.276 bp       0.276 bp
+ *   FED_FUNDS IMM            3   8.9e-14 bp      8.9e-14 bp     8.9e-14 bp
+ *
+ * The median is EXACTLY zero because for a spot STANDARD swap the grid point
+ * and the print are the same instrument priced by the same code. The tail is
+ * the instrument differing, not the mid: of the 9 prints beyond 0.5 bp, the
+ * median maturity gap to the grid's canonical swap is 6 days and the median
+ * effective-date gap 4 days, and NOT ONE is an exact instrument match, against
+ * 62.5% exact in the sub-0.5bp population. A broken maturity inside the strict
+ * tenor_display band is a different swap; the line is right and the mark is
+ * somewhere else for a nameable reason.
+ *
+ * This is why the reconstructed per-print mid is KEPT rather than replaced. It
+ * is exact for its own print by construction, it is what deviation_bps is
+ * measured against, and the residual between the two is a diagnostic the panel
+ * puts on screen rather than a discrepancy it hides.
+ */
+
+/**
+ * Minutes of grid either side of the first and last drawn print.
+ *
+ * The window is taken from the DRAWN ROWS, not from a calendar day, and that is
+ * deliberate: a tape as_of_date is not an ET calendar day (prints land at ET
+ * hours 20-23 of the previous evening through 17 of the day), so any
+ * date-to-window rule would be a calendar theory that could quietly go wrong.
+ * min/max of what is actually on screen cannot.
+ */
+export const MID_PAD_MINUTES = 15
+
+/**
+ * Above this, no segment is drawn between two consecutive grid points.
+ *
+ * Measured on SOFR 10Y over the same 7 days: WITHIN a grid day the consecutive
+ * gap is 1 min 8,293 times, 2 min 170, 3 min 17, 4 min once and 5 min once —
+ * and the count of intra-day gaps exceeding 5 minutes is ZERO on every one of
+ * the seven days. Every larger gap in the table is a jump BETWEEN days: the
+ * overnight hole, which is ~2 hours at minimum.
+ *
+ * 10 minutes therefore sits two orders of magnitude clear of both sides. It
+ * never breaks a live session and it always breaks the hole.
+ */
+export const MID_GRID_GAP_MINUTES = 10
+
+export type MidGridPoint = {
+  /** ISO instant. Always on a whole minute — 0 of 22.7M rows carry a second. */
+  ts: string
+  mid_pct: number
+}
+
+export type MidGrid = {
+  /**
+   * Whether a grid exists for this (rate_index, tenor) AT ALL, which is a
+   * different fact from "the grid is empty over this window".
+   *
+   * MEASURED COVERAGE: SOFR carries all 8 chart tenors. FED_FUNDS carries 12
+   * tenors and is MISSING 7Y, 20Y and 30Y. On those three the panel falls back
+   * to the reconstructed polyline and says so — it does not draw a blank and
+   * leave the reader to guess whether the market or the pipeline is absent.
+   */
+  available: boolean
+  points: MidGridPoint[]
+  curve_name: string | null
+  snapshot_policy: string | null
+  /** ISO bounds actually queried, so the client can show what it asked for. */
+  window: [string, string] | null
+}
+
+/** Does the grid carry this (index, tenor) at all? Index-only on the PK prefix. */
+export function midGridAvailabilitySql(): string {
+  return `SELECT EXISTS (
+            SELECT 1 FROM ${DD_CURVE_MID} WHERE rate_index = $1 AND tenor_label = $2
+          ) AS ok`
+}
+
+/**
+ * The grid over one window.
+ *
+ * TENOR IS ALWAYS p.tenor, NEVER the tenor_label of a band-mode row. The grid
+ * is built on canonical tenors only; in band mode the marks may span
+ * 9.50-10.49y but there is exactly one 10Y grid, and pretending otherwise would
+ * mean picking a different line per mark.
+ *
+ * WHERE is (equality, equality, range) on the primary key
+ * (rate_index, tenor_label, ts), so this is a single ordered index scan.
+ */
+export function midGridSql(
+  rateIndex: RateIndex,
+  tenor: PrintTenor,
+  t0Iso: string,
+  t1Iso: string,
+): BoundSql {
+  const text = `
+    SELECT g.ts, g.mid_pct, g.curve_name, g.snapshot_policy
+    FROM ${DD_CURVE_MID} g
+    WHERE g.rate_index  = $1
+      AND g.tenor_label = $2
+      AND g.ts >= $3::timestamptz
+      AND g.ts <= $4::timestamptz
+    ORDER BY g.ts
+  `
+  return { text, values: [rateIndex, tenor, t0Iso, t1Iso] }
+}
+
+/**
+ * The [first print - pad, last print + pad] window, or null when nothing is
+ * drawn.
+ *
+ * Null is the honest answer for an empty day: a line with no marks under it is
+ * a chart about a curve, and this panel is a chart about trades.
+ */
+export function midWindow(
+  rows: Pick<PrintRow, 'execution_timestamp'>[],
+  padMinutes: number = MID_PAD_MINUTES,
+): [string, string] | null {
+  let lo = Number.POSITIVE_INFINITY
+  let hi = Number.NEGATIVE_INFINITY
+  for (const r of rows) {
+    const t = new Date(r.execution_timestamp).getTime()
+    if (!Number.isFinite(t)) continue
+    if (t < lo) lo = t
+    if (t > hi) hi = t
+  }
+  if (!Number.isFinite(lo) || !Number.isFinite(hi)) return null
+  const pad = padMinutes * 60_000
+  return [new Date(lo - pad).toISOString(), new Date(hi + pad).toISOString()]
+}
+
+// ---------------------------------------------------------------------------
 // The payload
 // ---------------------------------------------------------------------------
 
@@ -581,6 +727,8 @@ export type PrintsResponse = {
   admittedByLoosening: number | null
   observedTenorYears: [number, number] | null
   rows: PrintRow[]
+  /** The continuous 1-minute par grid over the drawn window. */
+  mid: MidGrid
   counts: PrintsCounts
   disclosures: string[]
   provenance: PrintsProvenance
@@ -623,6 +771,8 @@ export type DisclosureInput = {
   admittedByLoosening: number | null
   observedTenorYears: [number, number] | null
   tenor: string
+  mid: MidGrid
+  rateIndex: string
 }
 
 /**
@@ -643,12 +793,50 @@ export function buildDisclosures(d: DisclosureInput): string[] {
       'model reads which side of the mid the print landed. A model-labelled ' +
       'flow proxy, not a counterparty record.',
   )
+  // THE LINE AND THE MARKS' MID ARE TWO OBJECTS. Which one the line came from
+  // changes what the chart is claiming, so it is stated first and never
+  // inferred from whether the line happens to be there.
+  if (d.mid.available && d.mid.points.length > 0) {
+    out.push(
+      `The LINE is a MODELLED 1-minute par grid — ${d.mid.points.length} points ` +
+        `from ${d.mid.curve_name ?? '—'} under ${d.mid.snapshot_policy ?? '—'} — ` +
+        'not a quoted mid and not a tradable level. It is built by the same ' +
+        'pricer, against the same curve, that repriced every mark. Where the ' +
+        'print is the same instrument as the grid point the two agree EXACTLY ' +
+        '(median residual 0.000000bp, p95 0.132bp over 3,206 prints); the tail ' +
+        'is the instrument differing, not the mid — of 9 prints beyond 0.5bp, ' +
+        'the median maturity gap to the grid swap is 6 days and none is an ' +
+        'exact instrument match.',
+    )
+    out.push(
+      'The line BREAKS rather than bridging: no segment is drawn across a gap ' +
+        'over 10 minutes. Measured, intra-session consecutive gaps are 1-5 ' +
+        'minutes and NO intra-day gap exceeds 5 minutes on any sampled day, ' +
+        'while the overnight hole is ~2 hours — so a break is always a real ' +
+        'absence. The 23:00-00:59 ET hole is Citi’s publication gap and ' +
+        'carries no curve at all; prints there were repriced off a stale ' +
+        'snapshot under the out-of-session policy, which their tooltip shows.',
+    )
+  } else {
+    out.push(
+      `NO CONTINUOUS MID IS AVAILABLE for ${d.rateIndex} ${d.tenor}` +
+        (d.mid.available
+          ? ' over this window, so the line falls back to the per-print reconstruction.'
+          : ': the 1-minute par grid does not carry this tenor on this index. ' +
+            'Fed Funds is built on 12 tenors and has no 7Y, 20Y or 30Y; SOFR ' +
+            'carries all eight. The line falls back to the per-print ' +
+            'reconstruction.') +
+        ' That fallback is a polyline through the prints themselves — mid = ' +
+        'traded - deviation, exact per print but existing only at print times, ' +
+        'with a noise floor of 0.32-0.57bp of adjacent-diff stdev. It is not a ' +
+        'picture of the market between trades.',
+    )
+  }
   out.push(
-    `The mid is RECONSTRUCTED, not quoted: mid = traded - deviation, against ` +
+    `Each MARK’s own mid is reconstructed: mid = traded - deviation, against ` +
       `${d.provenance.curve_name ?? '—'} under ${d.provenance.snapshot_policy ?? '—'}. ` +
-      'It exists only at print times and there is no continuous mid behind it. ' +
-      'Its own noise floor is 0.32-0.57 bp of adjacent-diff stdev, measured on ' +
-      'every day across two years.',
+      'That is what deviation_bps — and therefore the direction call — is ' +
+      'measured against, so it is kept even when the grid draws the line.',
   )
   out.push(
     `EXECUTION clock — where it traded, not what you could have known. Median ` +

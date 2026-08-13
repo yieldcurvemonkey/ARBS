@@ -55,6 +55,8 @@ import {
   fmtPct,
   fmtSignedDv01,
   fmtZ,
+  type HeatmapState,
+  heatmapState,
   indexByBucketDate,
   type LadderSummary,
   latestDate,
@@ -194,6 +196,7 @@ export function DealerLadderPanel(): JSX.Element {
   const dates = useMemo(() => recentDates(std, HEATMAP_DAYS), [std])
   const byCell = useMemo(() => indexByBucketDate(std), [std])
   const today = useMemo(() => latestDate(std), [std])
+  const hmState = useMemo(() => heatmapState(loading, dates), [loading, dates])
 
   const zField = basis === 'raw' ? 'z_raw' : 'z_cov_adj'
 
@@ -342,6 +345,7 @@ export function DealerLadderPanel(): JSX.Element {
             selected={bucket}
             onSelect={setBucket}
             today={today}
+            state={hmState}
           />
           <ZLegend />
         </div>
@@ -468,6 +472,7 @@ function ZHeatmap({
   selected,
   onSelect,
   today,
+  state,
 }: {
   dates: string[]
   byCell: Map<string, StandardisedRow>
@@ -475,6 +480,7 @@ function ZHeatmap({
   selected: TenorBucket
   onSelect: (b: TenorBucket) => void
   today: string | null
+  state: HeatmapState
 }): JSX.Element {
   return (
     <div className="flex flex-col gap-[2px]" data-testid="dd-z-heatmap">
@@ -509,8 +515,24 @@ function ZHeatmap({
               {b}
             </span>
             {/* 2px surface gaps between cells: adjacent fills need a gap or
-                they read as one continuous block. */}
-            <span className="flex min-w-0 flex-1 gap-[1px]">
+                they read as one continuous block.
+
+                WITH NO COLUMNS THIS STRIP SAYS WHY. An empty strip beside a
+                labelled bucket is exactly what "nothing was oriented here"
+                looks like, and the panel is otherwise built so that every
+                blank carries its reason. */}
+            <span className="flex min-w-0 flex-1 items-center gap-[1px]">
+              {state !== 'ready' ? (
+                <span
+                  className="h-[13px] flex-1 rounded-[1px] px-1 text-[9px] leading-[13px] text-slate-500"
+                  style={{ backgroundColor: '#0b1220' }}
+                  data-testid={`dd-z-strip-${state}`}
+                >
+                  {state === 'loading'
+                    ? 'loading the session history…'
+                    : 'no published sessions in this window'}
+                </span>
+              ) : null}
               {dates.map((d) => {
                 const r = byCell.get(`${b}|${d}`)
                 const z = num(r?.[zField])
