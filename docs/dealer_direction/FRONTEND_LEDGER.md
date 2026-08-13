@@ -711,3 +711,43 @@ The check was still worth it: **the same 4 tests fail at `origin/main`**, which
 is now a measurement rather than an inference from "those files aren't in my
 diff".
 
+---
+
+## G-15. The same defect, three times, all found by looking
+
+G-13 recorded the z heatmap rendering as an unlabelled blank while
+`/standardised` was in flight. Reviewing the *remaining* screenshots -- the ones
+I had captured but not opened -- found two more instances of exactly the same
+thing:
+
+- **The exclusion drawer** said `no coverage rows` and `0 of 0 excluded`, beside
+  a headline reading `DV01 oriented 47.4%`. Those cannot both be true. The
+  drawer opens instantly and `/coverage` lands later; the capture was in
+  between. **The blank was labelled, and the label was a false claim** -- worse
+  than the heatmap's silence, not better.
+- **The prints chart** drew an empty plot frame for a cell with no prints. A
+  frame with nothing in it reads as "nothing traded" whether the day is empty,
+  the filters removed everything, or the fetch has not landed.
+
+So it is one rule now, `panelState(loading, n) -> ready | loading | empty`, with
+`heatmapState` delegating to it. A bare `loading` boolean cannot do this job:
+`loading=false` with zero rows is a genuinely empty window and needs a different
+sentence from an in-flight fetch. The exclusion drawer's `n of m excluded`
+headline is gated on the same state, since a total is a claim too.
+
+**This class of defect is invisible to the test suite.** All three render
+without error, without a console warning, and with a plausible-looking layout.
+The only thing that catches them is opening the image. The harness now waits for
+content in both places (heatmap columns, coverage rows) rather than sleeping,
+because a fixed sleep is what banks a picture of a defect as evidence the
+feature works.
+
+### The fe-06b caption was overselling, and is corrected
+
+It claimed to photograph the amber "no continuous mid" strip. That strip needs
+`midSource === 'reconstructed'`, which needs >= 12 prints, and **no Fed Funds
+day in the tape has >= 12 prints at 7Y/20Y/30Y** -- so it cannot be photographed
+on real data at all. What the image *does* show is the API-served disclosure
+line naming the missing grid, plus the newly-labelled empty plot. Caption fixed
+to say that. The in-chart strip remains covered by unit tests only, stated
+rather than implied.

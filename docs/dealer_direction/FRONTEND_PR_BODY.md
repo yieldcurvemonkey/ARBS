@@ -440,6 +440,21 @@ sign check from being able to pass vacuously.
   Funds and 4.0× on SOFR because the Citi minute curve is smooth and has no
   discrete meeting steps. They are excluded from the prints chart by default and
   flagged in the ladder; improving the inference is out of scope for this PR.
+- **Nothing keeps `arbs_dd_curve_mid_v1` current.** The chart now depends on a
+  second table whose last day is 2026-08-07. A future `publish` day with no
+  matching grid day flips that day's chart to the reconstruction fallback —
+  labelled and honest, not silently wrong — but the daily grid extension is
+  unowned. `backfill_curve_mids.py --stage backfill` is the command; scheduling
+  it is not done here.
+- **Three panels rendered an unlabelled blank while a fetch was in flight**, and
+  every one was found by LOOKING at a screenshot rather than by a test, because
+  all three render perfectly: the z heatmap (ten labelled bucket rows, empty
+  strips), the exclusion drawer ("no coverage rows" beside a headline saying
+  47.4% of DV01 was oriented), and the prints chart (an empty plot frame). Now
+  one `panelState()` rule — `ready` / `loading` / `empty` — because a bare
+  `loading` boolean cannot tell an in-flight fetch from a genuinely empty
+  window, and those need different sentences. Fixed, but it is a class of defect
+  no unit test in this repo would have caught, and there are other panels.
 - **The mid grid costs 6.6 GB** of the 10.95 GB these tables occupy (~4.5% of a
   246 GB database). Reversible by date range; cheaper trims are fewer tenors or
   a shorter window; the deeper fix is normalising the repeated text columns to

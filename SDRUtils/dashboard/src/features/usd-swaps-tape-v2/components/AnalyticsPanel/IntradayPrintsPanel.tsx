@@ -499,6 +499,23 @@ export function IntradayPrintsPanel(): JSX.Element {
         </div>
       ) : null}
 
+      {/* AN EMPTY PLOT IS A CLAIM. Same defect as the blank heatmap and the
+          blank exclusion drawer: a frame with nothing in it reads as "nothing
+          traded" whether the day is genuinely empty, the filters removed
+          everything, or the fetch is still in flight. Those are three
+          different sentences. */}
+      {rows.length === 0 ? (
+        <div
+          className="rounded border border-slate-700 bg-slate-900/50 px-2 py-3 text-center text-[10px] text-slate-400"
+          data-testid={`prints-empty-${loading ? 'loading' : 'empty'}`}
+        >
+          {loading
+            ? 'loading prints…'
+            : `no ${rateIndex} ${tenor} ${venueClass} prints on ${shownDate || 'this day'} ` +
+              'after the filters above. The counts strip says how many each filter removed.'}
+        </div>
+      ) : null}
+
       {/* ------------------------------------------------------------------ */}
       {/* the chart                                                           */}
       {/* ------------------------------------------------------------------ */}

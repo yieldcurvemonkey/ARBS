@@ -6,6 +6,7 @@ import {
   fmtSignedDv01,
   fmtZ,
   heatmapState,
+  panelState,
   indexByBucketDate,
   latestDate,
   levelKey,
@@ -183,5 +184,27 @@ describe('an empty heatmap says WHY it is empty', () => {
     for (const loading of [true, false]) {
       expect(heatmapState(loading, [])).not.toBe('ready')
     }
+  })
+})
+
+describe('panelState is the one rule, because three panels hit it', () => {
+  // The heatmap, the exclusion drawer and the prints chart each rendered an
+  // unlabelled blank while a fetch was in flight. Every one of them was found
+  // by LOOKING at a screenshot -- none by a test, because all three render
+  // perfectly. One function so a fix to one is a fix to all.
+  it('is ready on any non-empty result', () => {
+    expect(panelState(true, 1)).toBe('ready')
+    expect(panelState(false, 6290)).toBe('ready')
+  })
+
+  it('separates in-flight from genuinely empty at zero', () => {
+    expect(panelState(true, 0)).toBe('loading')
+    expect(panelState(false, 0)).toBe('empty')
+  })
+
+  it('agrees with heatmapState, which delegates to it', () => {
+    expect(heatmapState(true, [])).toBe(panelState(true, 0))
+    expect(heatmapState(false, [])).toBe(panelState(false, 0))
+    expect(heatmapState(false, ['2026-08-07'])).toBe(panelState(false, 1))
   })
 })

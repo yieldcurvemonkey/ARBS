@@ -237,10 +237,20 @@ export type HeatmapState = 'ready' | 'loading' | 'empty'
  *
  * A bare `loading` boolean is not enough on its own: loading=false with no
  * dates is a genuinely empty window, and it needs a different sentence.
+ *
+ * THREE PLACES HIT THIS, WHICH IS WHY IT IS ONE FUNCTION. The heatmap, the
+ * exclusion drawer ("no coverage rows" while /coverage was still in flight,
+ * beside a headline saying 47.4% of DV01 was oriented -- so there are certainly
+ * excluded rows) and the prints chart's empty plot. Each was found by LOOKING
+ * at a screenshot, not by a test, because each renders perfectly.
  */
-export function heatmapState(loading: boolean, dates: string[]): HeatmapState {
-  if (dates.length > 0) return 'ready'
+export function panelState(loading: boolean, n: number): HeatmapState {
+  if (n > 0) return 'ready'
   return loading ? 'loading' : 'empty'
+}
+
+export function heatmapState(loading: boolean, dates: string[]): HeatmapState {
+  return panelState(loading, dates.length)
 }
 
 /** (bucket, date) -> row, for O(1) heatmap lookup. */

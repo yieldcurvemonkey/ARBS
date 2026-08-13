@@ -62,6 +62,7 @@ import {
   latestDate,
   levelKey,
   num,
+  panelState,
   recentDates,
   SERIES_OPTIONS,
   type SeriesName,
@@ -125,6 +126,7 @@ export function DealerLadderPanel(): JSX.Element {
   const [std, setStd] = useState<StandardisedRow[]>([])
   const [bucketRows, setBucketRows] = useState<BucketRow[]>([])
   const [coverage, setCoverage] = useState<CoverageRow[]>([])
+  const [coverageLoading, setCoverageLoading] = useState(false)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
 
@@ -180,12 +182,15 @@ export function DealerLadderPanel(): JSX.Element {
   useEffect(() => {
     if (!showExclusions) return
     let cancelled = false
+    setCoverageLoading(true)
     void (async () => {
       try {
         const r = await fetch(`${API}/coverage?${qs}`).then((x) => x.json())
         if (!cancelled && !r?.error) setCoverage((r.rows ?? []) as CoverageRow[])
       } catch {
         /* ignore */
+      } finally {
+        if (!cancelled) setCoverageLoading(false)
       }
     })()
     return () => {
@@ -301,7 +306,11 @@ export function DealerLadderPanel(): JSX.Element {
       </div>
 
       {showExclusions ? (
-        <ExclusionBreakdown rows={coverage} totals={totalDv01Excluded} />
+        <ExclusionBreakdown
+          rows={coverage}
+          totals={totalDv01Excluded}
+          loading={coverageLoading}
+        />
       ) : null}
 
       {error ? (
@@ -696,9 +705,11 @@ function BucketCaveats({
 function ExclusionBreakdown({
   rows,
   totals,
+  loading,
 }: {
   rows: CoverageRow[]
   totals: { total: number; kept: number; excluded: number }
+  loading: boolean
 }): JSX.Element {
   const sorted = [...rows].sort((a, b) => (num(b.dv01) ?? 0) - (num(a.dv01) ?? 0))
   return (
@@ -709,12 +720,21 @@ function ExclusionBreakdown({
       <div className="flex items-baseline justify-between">
         <span className={TITLE}>where the DV01 went, by reason</span>
         <span className="text-[10px] text-slate-500">
-          {fmtSignedDv01(totals.excluded).replace('−', '')} of{' '}
-          {fmtSignedDv01(totals.total).replace('−', '')} excluded
+          {panelState(loading, rows.length) === 'ready'
+            ? `${fmtSignedDv01(totals.excluded).replace('−', '')} of ` +
+              `${fmtSignedDv01(totals.total).replace('−', '')} excluded`
+            : '—'}
         </span>
       </div>
+      {/* "still fetching" and "genuinely nothing" are different sentences, and
+          the second one is a claim. Beside a headline reading 47.4% oriented,
+          "no coverage rows" mid-flight asserts something false. */}
       {sorted.length === 0 ? (
-        <span className="text-[10px] text-slate-600">no coverage rows</span>
+        <span className="text-[10px] text-slate-600" data-testid={`dd-coverage-${panelState(loading, rows.length)}`}>
+          {panelState(loading, rows.length) === 'loading'
+            ? 'loading the exclusion breakdown…'
+            : 'no coverage rows for this venue class and series'}
+        </span>
       ) : null}
       {sorted.map((r) => {
         const share = num(r.dv01_share) ?? 0

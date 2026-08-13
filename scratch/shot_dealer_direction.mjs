@@ -193,7 +193,16 @@ try {
     // silently lands on whatever overlaps.
     await page.evaluate(() => document.querySelector('[data-testid="dd-coverage-toggle"]')?.click())
     await page.waitForSelector('[data-testid="dd-exclusion-breakdown"]', { timeout: 60_000 })
-    await sleep(900)
+    // ...and wait for its ROWS. The drawer opens instantly and /coverage lands
+    // later; capturing in between photographs "no coverage rows" beside a
+    // headline saying 47.4% of DV01 was oriented.
+    await page.waitForFunction(
+      () => !document.querySelector('[data-testid="dd-coverage-loading"]') &&
+            (document.querySelector('[data-testid="dd-exclusion-breakdown"]')
+               ?.querySelectorAll('div').length ?? 0) > 2,
+      { timeout: 60_000, polling: 250 },
+    )
+    await sleep(700)
     await shoot(page, '[data-testid="dd-exclusion-breakdown"]', 'fe-03-exclusion-breakdown',
       'every excluded unit, one reason code each')
     await page.evaluate(() => document.querySelector('[data-testid="dd-coverage-toggle"]')?.click())
@@ -239,7 +248,8 @@ try {
       await waitForPrints(page)
       await sleep(1000)
       await shoot(page, P, 'fe-06b-intraday-prints-ff-no-grid',
-        'FED_FUNDS 30Y — the grid does not carry this tenor')
+        'FED_FUNDS 30Y — 0 prints; the missing-grid DISCLOSURE renders, the '
+        + 'amber in-chart strip needs >=12 prints and no FF day has that here')
     }
   } else {
     fail.push('could not switch rateIndex to FED_FUNDS')
