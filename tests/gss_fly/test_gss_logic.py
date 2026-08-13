@@ -238,6 +238,49 @@ def test_repo_workbook_header_row_is_the_one_with_most_tags(tmp_path):
     assert rc.frame["ON"].iloc[0] == pytest.approx(4.30)
 
 
+def _repo_workbook(path):
+    import pandas as pd
+
+    pd.DataFrame([
+        ['=CVTSHIST("RATES.REPO.USD.USTREASGC.SPOT.ON")', None],
+        ["Date", "RATES.REPO.USD.USTREASGC.SPOT.ON - x"],
+        ["2025-01-02", 4.30],
+        ["2025-01-03", 4.28],
+    ]).to_excel(path, header=False, index=False)
+    return path
+
+
+def test_resolve_repo_curve_never_degrades_in_silence(tmp_path):
+    """A run that lost its repo curve must SAY so — the mislabel is not recoverable afterwards.
+
+    Every entry point in this package defaulted to one workbook under ``Downloads``; the
+    ``if wb.exists()`` false branch printed nothing at all. When that file was deleted the runs
+    that followed became gross of funding and were still read, and reported, as financed. This
+    pins all four branches: the returned basis, and that *something was announced every time*.
+    """
+    from BT.gss_fly.costs import FINANCED, UNFINANCED, resolve_repo_curve
+
+    said = []
+    rc, basis = resolve_repo_curve(_repo_workbook(tmp_path / "repo.xlsx"), announce=said.append)
+    assert basis == FINANCED and rc is not None and "ON" in rc.frame.columns
+
+    rc, basis = resolve_repo_curve(tmp_path / "gone.xlsx", announce=said.append)
+    assert basis == UNFINANCED and rc is None
+
+    rc, basis = resolve_repo_curve(None, announce=said.append)
+    assert basis == UNFINANCED and rc is None
+
+    junk = tmp_path / "junk.xlsx"
+    __import__("pandas").DataFrame([["not", "a", "repo", "export"]]).to_excel(junk, header=False, index=False)
+    rc, basis = resolve_repo_curve(junk, announce=said.append)
+    assert basis == UNFINANCED and rc is None
+
+    assert len(said) == 4, "a branch resolved without announcing anything"
+    assert sum("UNFINANCED" in m for m in said) == 3
+    with pytest.raises(FileNotFoundError):
+        resolve_repo_curve(tmp_path / "gone.xlsx", required=True, announce=said.append)
+
+
 # ----------------------------------------------- P&L decomposition identity
 class _FakeBT:
     def __init__(self, hist):

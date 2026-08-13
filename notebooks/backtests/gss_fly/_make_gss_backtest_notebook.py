@@ -91,7 +91,7 @@ pylab.rcParams.update({{"figure.figsize": (14, 6), "axes.titlesize": "large",
 pd.set_option("display.width", 180)
 
 from MDP.FixedRateBonds.FixedRateBondsMDP import FixedRateBondsMDP
-from BT.gss_fly import GSSConfig, build_curve_panel, load_repo_from_workbook
+from BT.gss_fly import GSSConfig, build_curve_panel, resolve_repo_curve
 from BT.gss_fly.backtest import run_gss_backtest
 from BT.gss_fly.data import ust_business_days
 from BT.gss_fly.signals import build_bond_signals
@@ -108,11 +108,15 @@ CACHE = Path(REPO) / "notebooks" / "data" / "gss_fly" / "panel_cached"
 DAYS = ust_business_days("2024-09-02", "2026-01-02")
 PANEL = build_curve_panel(DAYS, MDP, cache_path=CACHE, show_progress=False)
 
+# `resolve_repo_curve` ANNOUNCES which funding basis you ended up on. The earlier
+# `... if REPO_WB.exists() else None` degraded in silence, and when that workbook was deleted every
+# number below became gross of funding while still being read as financed. BASIS is stamped into
+# every table and figure title in this notebook for exactly that reason.
 REPO_WB = Path(r"C:/Users/chris/Downloads/gc_repo_hist_example.xlsx")
-REPO_CURVE = load_repo_from_workbook(REPO_WB, "USTREASGC") if REPO_WB.exists() else None
+REPO_CURVE, BASIS = resolve_repo_curve(REPO_WB, "USTREASGC")
 
 print(PANEL.summary())
-print(f"repo curve     : {{REPO_CURVE}}")
+print(f"funding basis  : {{BASIS}}")
 print(f"grid           : {{len(DAYS)}} UST trading days")
 """)
 
@@ -301,7 +305,7 @@ ledgers double-counted every unwind by $10.7m in an earlier version of this anal
 code(r"""
 def perf(sm, label=""):
     g, f = sm["gross_before_fees_usd"], -sm["fees_usd"]
-    print(f"{label}")
+    print(f"{label}  [{BASIS}]")
     print(f"  carry during hold   {sm['carry_during_hold_usd']:>15,.0f}")
     print(f"  unwind proceeds     {sm['unwind_proceeds_usd']:>15,.0f}")
     print(f"  fees                {sm['fees_usd']:>15,.0f}")
@@ -323,7 +327,8 @@ fig, ax = plt.subplots(2, 1, figsize=(14, 7), sharex=True,
                        gridspec_kw={"height_ratios": [2, 1]})
 eq.plot(ax=ax[0], lw=1.6, color="#4dabf7")
 ax[0].axhline(0, color="k", lw=0.8); ax[0].set_ylabel("USD")
-ax[0].set_title("cumulative total P&L (engine mtm_history: realized + open mark, net of fees)")
+ax[0].set_title(f"cumulative total P&L [{BASIS}] "
+                f"(engine mtm_history: realized + open mark, net of fees)")
 (eq - eq.cummax()).plot(ax=ax[1], lw=1.2, color="#d55")
 ax[1].fill_between((eq - eq.cummax()).index, (eq - eq.cummax()).to_numpy(), 0,
                    color="#d55", alpha=.2)

@@ -34,7 +34,16 @@ __all__ = [
     "repo_carry_bp",
     "RepoCurve",
     "load_repo_from_workbook",
+    "resolve_repo_curve",
+    "basis_note",
+    "FINANCED",
+    "UNFINANCED",
 ]
+
+#: The two funding bases a run can end up on. Print one of these next to every P&L number: which
+#: one you were on is not recoverable from the result afterwards. See :func:`resolve_repo_curve`.
+FINANCED = "financed"
+UNFINANCED = "UNFINANCED"
 
 REPO_TENORS = ("ON", "TN", "1W", "1M", "3M", "6M", "9M", "1Y", "2Y", "3Y", "4Y", "5Y", "7Y", "10Y")
 REPO_COLLATERAL = ("USTREASGC", "USD5YOTR", "USD10YOTR", "USD30YOTR")
@@ -162,6 +171,50 @@ def load_repo_from_workbook(path, collateral: str = "USTREASGC") -> RepoCurve:
     frame = pd.DataFrame(cols, index=dates).dropna(how="all")
     frame = frame[~frame.index.isna()]
     return RepoCurve(frame.sort_index(), collateral=collateral)
+
+
+def resolve_repo_curve(path, collateral: str = "USTREASGC", *, required: bool = False,
+                       announce=print) -> tuple[Optional[RepoCurve], str]:
+    """Load the repo curve if it is there, and **say out loud** which funding basis you got.
+
+    Every entry point in this package defaulted to one workbook under ``Downloads`` and degraded to
+    ``repo_curve=None`` when it was absent. That file was later deleted, and the runs that followed
+    relabelled themselves unfinanced *without printing anything* — the missing branch was the
+    ``if wb.exists()`` false case, which said nothing at all. Their Sharpe and equity figures were
+    then read and reported as financed. A fallback nobody is told about is not graceful
+    degradation; it is a mislabelled result, and the label is not recoverable from the output.
+
+    Returns ``(repo, basis)`` with ``basis`` one of :data:`FINANCED` / :data:`UNFINANCED`. Put that
+    string in the header of anything you print, and in any figure title — a chart is what gets
+    screenshotted, and it travels without its log.
+
+    ``required=True`` raises instead of degrading; use it wherever the carry leg is the point of
+    the run rather than an input to it.
+    """
+    p = Path(path) if path is not None else None
+    if p is not None and p.exists():
+        try:
+            repo = load_repo_from_workbook(p, collateral)
+            announce(f"REPO: {basis_note(FINANCED)} {repo}")
+            return repo, FINANCED
+        except Exception as exc:  # noqa: BLE001 — a malformed workbook is a data fact, not a crash
+            if required:
+                raise
+            announce(f"REPO: workbook {p} unreadable ({type(exc).__name__}: {exc})\n"
+                     f"      {basis_note(UNFINANCED)}")
+            return None, UNFINANCED
+    where = "no path given" if p is None else f"{p} does not exist"
+    if required:
+        raise FileNotFoundError(f"repo workbook required but {where}")
+    announce(f"REPO: {where}\n      {basis_note(UNFINANCED)}")
+    return None, UNFINANCED
+
+
+def basis_note(basis: str) -> str:
+    """One line naming the funding basis, for a log header or a figure title."""
+    if basis == FINANCED:
+        return "FINANCED — carry marked against the supplied GC repo curve"
+    return "UNFINANCED — no repo curve; carry is NOT charged and every P&L below is gross of funding"
 
 
 def repo_carry_bp(

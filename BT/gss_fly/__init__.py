@@ -27,14 +27,18 @@ from BT.gss_fly.config import (
     UniverseConfig,
 )
 from BT.gss_fly.costs import (
+    FINANCED,
     REPO_COLLATERAL,
     REPO_TENORS,
+    UNFINANCED,
     RepoCurve,
+    basis_note,
     fly_tcost_bp,
     load_repo_from_workbook,
     repo_carry_bp,
     repo_tag,
     repo_tag_grid,
+    resolve_repo_curve,
 )
 from BT.gss_fly.data import (
     BOND_SNAPSHOT_VALUES,
@@ -87,6 +91,10 @@ __all__ = [
     "repo_carry_bp",
     "RepoCurve",
     "load_repo_from_workbook",
+    "resolve_repo_curve",
+    "basis_note",
+    "FINANCED",
+    "UNFINANCED",
     "repo_tag",
     "repo_tag_grid",
     "REPO_TENORS",

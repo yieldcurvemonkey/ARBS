@@ -97,7 +97,7 @@ from BT.gss_fly import (
     GSSConfig, FlyConfig, CostConfig, BacktestConfig,
     build_curve_panel, build_bond_signals, apply_universe_filter,
     scan_flies, select_wings, build_weights, fly_tcost_bp,
-    load_repo_from_workbook, repo_tag_grid,
+    load_repo_from_workbook, resolve_repo_curve, repo_tag_grid,
 )
 from BT.gss_fly.backtest import run_gss_backtest
 
@@ -291,10 +291,14 @@ md("## 4. Repo — the hurdle the exit is measured against")
 code(r"""
 from pathlib import Path
 REPO_XLSX = Path(r"C:/Users/chris/Downloads/gc_repo_hist_example.xlsx")
-repo = None
-if REPO_XLSX.exists():
-    repo = load_repo_from_workbook(REPO_XLSX, collateral="USTREASGC")
-    print(repo)
+
+# `resolve_repo_curve` returns the basis as well as the curve, and prints it either way. There is
+# NO flat-rate fallback: `CostConfig.fallback_repo_pct` is declared and read by nothing (it is one
+# of the harness's planted nulls, pinned dead in tests/gss_fly/test_conditioning.py). Without a
+# workbook the run is simply UNFINANCED — carry is not charged at all — so `basis` has to be
+# carried into every number below rather than assumed.
+repo, basis = resolve_repo_curve(REPO_XLSX, collateral="USTREASGC")
+if repo is not None:
     display(repo.frame.tail(5)[["ON", "1W", "1M", "3M", "1Y"]])
     # The OTR specials are why the universe drops rank 0: a 10y OTR finances well below GC.
     otr = load_repo_from_workbook(REPO_XLSX, collateral="USD10YOTR")
@@ -302,7 +306,6 @@ if REPO_XLSX.exists():
     print(f"\n10y OTR special vs GC, overnight: median {spread.median()*100:.1f}bp, "
           f"max {spread.max()*100:.1f}bp over {len(spread)} days")
 else:
-    print(f"{REPO_XLSX} not found — the book will fall back to a flat GC rate.")
     print("Online path: scripts/warm_citivelo_xccy_repo.py --what repo")
 print("\nrepo tag grid:", repo_tag_grid()[:4], "...", len(repo_tag_grid()), "tags")
 """)
@@ -331,7 +334,7 @@ fig.add_trace(go.Scatter(x=eq.index, y=eq.values, mode="lines", name="account va
                          line=dict(color="#2F4B7C", width=2)))
 fig.add_hline(y=0, line_dash="dash", line_color="grey")
 fig.update_layout(template="plotly_dark", height=520,
-                  title=f"GSS UST butterfly book — {len(eq)} marked days, net of costs and repo",
+                  title=f"GSS UST butterfly book — {len(eq)} marked days [{basis}]",
                   xaxis_title="", yaxis_title="USD")
 fig.show()
 

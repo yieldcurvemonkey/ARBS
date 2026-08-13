@@ -215,7 +215,7 @@ _W: Dict[str, Any] = {}
 
 def _init_worker(cache: str, start: str, end: str, repo_wb: str, spline_name: str):
     os.environ.setdefault("ARBS_SUPABASE_ENABLED", "0")
-    from BT.gss_fly import load_repo_from_workbook
+    from BT.gss_fly import resolve_repo_curve
     from MDP.FixedRateBonds.FixedRateBondsMDP import FixedRateBondsMDP
 
     mdp = FixedRateBondsMDP(source="USTS_FEDINVEST_WSJ_LIVE-QL")
@@ -223,13 +223,11 @@ def _init_worker(cache: str, start: str, end: str, repo_wb: str, spline_name: st
     sp = spline_variants()[spline_name]
     panel = build_curve_panel(days, mdp, cache_path=Path(cache), show_progress=False,
                               spline_config=sp)
-    repo = None
-    if repo_wb and Path(repo_wb).exists():
-        try:
-            repo = load_repo_from_workbook(Path(repo_wb), "USTREASGC")
-        except Exception:  # noqa: BLE001
-            repo = None
-    _W.update({"mdp": mdp, "panel": panel, "repo": repo, "spline": spline_name})
+    # Announce through the worker's own stdout so the funding basis appears once per worker in the
+    # sweep log. A grid whose rows are unfinanced and whose report says otherwise is 3,432 rows of
+    # mislabelled Sharpe, and nothing in the parquet records which basis produced it.
+    repo, basis = resolve_repo_curve(repo_wb, announce=lambda m: print(f"WORKER: {m}", flush=True))
+    _W.update({"mdp": mdp, "panel": panel, "repo": repo, "spline": spline_name, "basis": basis})
 
 
 def _run_construction(args) -> List[Dict[str, Any]]:
@@ -254,7 +252,8 @@ def _run_construction(args) -> List[Dict[str, Any]]:
                  **{f"c_{k}": _s(v) for k, v in construction.items()}, "spline": _W["spline"]}]
 
     for gate in gates:
-        row: Dict[str, Any] = {"spline": _W["spline"], "scan_s": scan_s, "n_candidates": n_cand,
+        row: Dict[str, Any] = {"spline": _W["spline"], "basis": _W["basis"],
+                               "scan_s": scan_s, "n_candidates": n_cand,
                                **{f"c_{k}": _s(v) for k, v in construction.items()},
                                **{f"g_{k}": _s(v) for k, v in gate.items()}}
         try:

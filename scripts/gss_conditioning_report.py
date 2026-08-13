@@ -96,6 +96,21 @@ def main() -> int:
     print(f"  equity holes across all configs : {holes}", flush=True)
     print(f"  worst reconciliation gap        : {gap:,.2e} USD   (must be ~0)", flush=True)
 
+    # Which funding basis produced these rows? Not recoverable from a Sharpe afterwards, and the
+    # repo workbook this port depended on was deleted mid-project, so every run after that silently
+    # became gross of funding. Rows swept before the stamp existed carry no column — say so rather
+    # than defaulting to the flattering reading.
+    if "basis" in ok.columns and ok["basis"].notna().any():
+        for b, n in ok["basis"].fillna("(unstamped)").value_counts().items():
+            print(f"  funding basis                   : {b} on {n:,} of {len(ok):,} rows", flush=True)
+    else:
+        print("  funding basis                   : UNSTAMPED — these rows pre-date "
+              "scripts/gss_grid.py's basis column.", flush=True)
+        print("                                    Every one of them was UNFINANCED: no repo curve "
+              "was on disk, and", flush=True)
+        print("                                    CostConfig.fallback_repo_pct is read by nothing. "
+              "Carry is NOT charged below.", flush=True)
+
     # A config with holes was marked on FEWER dates, so its Sharpe and m* are computed on a
     # truncated series. `QueryDrivenBacktest.run()` swallows per-step exceptions and the sweep runs
     # with strict=False so one bad config cannot kill it — which is right, but it means partial

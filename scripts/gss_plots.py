@@ -27,7 +27,7 @@ import pandas as pd  # noqa: E402
 
 logging.basicConfig(level=logging.ERROR)
 
-from BT.gss_fly import CostConfig, FlyConfig, GSSConfig, build_curve_panel, load_repo_from_workbook  # noqa: E402
+from BT.gss_fly import CostConfig, FlyConfig, GSSConfig, build_curve_panel, resolve_repo_curve  # noqa: E402
 from BT.gss_fly.backtest import run_gss_backtest  # noqa: E402
 from BT.gss_fly.data import ust_business_days  # noqa: E402
 from MDP.FixedRateBonds.FixedRateBondsMDP import FixedRateBondsMDP  # noqa: E402
@@ -81,13 +81,9 @@ def main() -> int:
     panel = build_curve_panel(days, mdp, cache_path=Path(args.cache), show_progress=False)
     print(f"PLOT: {panel.summary()}", flush=True)
 
-    repo = None
-    wb = Path(args.repo_workbook)
-    if wb.exists():
-        try:
-            repo = load_repo_from_workbook(wb, "USTREASGC")
-        except Exception as exc:  # noqa: BLE001
-            print(f"PLOT: repo unavailable ({exc}); running unfinanced", flush=True)
+    # The basis goes in every FIGURE TITLE, not only the log. A chart is what gets screenshotted,
+    # and it travels without the log that would have said how it was funded.
+    repo, basis = resolve_repo_curve(args.repo_workbook, announce=lambda m: print("PLOT: " + m, flush=True))
 
     span = (pd.Timestamp(args.end) - pd.Timestamp(args.start)).days / 365.25
     curves = {}
@@ -96,7 +92,7 @@ def main() -> int:
                                show_progress=False, strict=False)
         sm = res.summary()
         fig = book_dashboard(
-            res.closed, title=f"GSS butterfly — {name}", spec=SPEC,
+            res.closed, title=f"GSS butterfly — {name} [{basis}]", spec=SPEC,
             equity=res.equity, components=_components(res), span_years=span, height=1180,
         )
         slug = name.split(" (")[0].replace(" ", "_")
@@ -111,7 +107,7 @@ def main() -> int:
               f"Σtrades={sm['per_trade_pnl_usd']:,.0f} "
               f"gap={sm['reconciliation_gap_usd']:,.2f} -> {p}", flush=True)
 
-    cmp_fig = compare_books(curves, title="GSS variants — marked equity", unit="USD", height=620)
+    cmp_fig = compare_books(curves, title=f"GSS variants — marked equity [{basis}]", unit="USD", height=620)
     p = out / "gss_variants.html"
     cmp_fig.write_html(p, include_plotlyjs="cdn")
     print(f"PLOT: comparison -> {p}", flush=True)

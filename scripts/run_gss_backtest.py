@@ -28,7 +28,7 @@ import pandas as pd  # noqa: E402
 
 logging.basicConfig(level=logging.ERROR, format="%(asctime)s %(levelname)s %(message)s")
 
-from BT.gss_fly import CostConfig, FlyConfig, GSSConfig, build_curve_panel, load_repo_from_workbook  # noqa: E402
+from BT.gss_fly import CostConfig, FlyConfig, GSSConfig, build_curve_panel, resolve_repo_curve  # noqa: E402
 from BT.gss_fly.data import ust_business_days  # noqa: E402
 from BT.gss_fly.backtest import run_gss_backtest  # noqa: E402
 from MDP.FixedRateBonds.FixedRateBondsMDP import FixedRateBondsMDP  # noqa: E402
@@ -80,19 +80,13 @@ def main() -> int:
     if args.panel_only:
         return 0
 
-    repo = None
-    wb = Path(args.repo_workbook)
-    if wb.exists():
-        try:
-            repo = load_repo_from_workbook(wb, "USTREASGC")
-            print(f"REPO: {repo}", flush=True)
-        except Exception as exc:  # noqa: BLE001
-            print(f"REPO: unavailable ({type(exc).__name__}: {exc}) — running unfinanced", flush=True)
+    repo, basis = resolve_repo_curve(args.repo_workbook,
+                                     announce=lambda m: print(m, flush=True))
 
     for label, make in VARIANTS:
         try:
             r = run_gss_backtest(panel, mdp, cfg=make(), repo_curve=repo, show_progress=False, strict=False)
-            print(f"VARIANT | {label}", flush=True)
+            print(f"VARIANT | {label}  [{basis}]", flush=True)
             print("   diag " + str({k: r.diagnostics[k] for k in
                                     ("marked_days", "equity_holes", "signal_entries", "closed_positions")}), flush=True)
             sm = r.summary()

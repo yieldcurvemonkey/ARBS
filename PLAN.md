@@ -179,35 +179,57 @@ most charitable combination (measured costs *and* the source's belly-only conven
 of three legs at zero) reaches 0.663. **The book needs execution ~2.8× tighter than the market
 quotes.** That is no longer a calibration question.
 
-## Deflated Sharpe 0.177 — there is no config to pick
+## Deflated Sharpe 0.188 — FINAL, on the completed sweep. There is no config to pick.
 
-Over **1,164 configurations** (sweep still extending), with **900 effective independent trials**:
+The sweep finished at **3,432 rows** (`notebooks/data/gss_fly/grid/S0_jpm/grid.parquet`); 17 had
+equity holes and are excluded, leaving **3,415 clean configs** with **2,854 effective independent
+trials (83.6%)**. Re-derived from the consolidated grid, not carried forward:
 
 | | |
 |---|---|
-| best per-period Sharpe | +0.1409  (+2.24 annualised) |
-| **SR₀ — the bar the search itself sets** | **+0.1733  (+2.75 annualised)** |
-| **DSR** | **0.177** (needs > 0.95) |
+| best per-period Sharpe | +0.1800  (**+2.86** annualised) |
+| **SR₀ — the bar the search itself sets** | **+0.2227  (+3.53 annualised)** |
+| **DSR** | **0.188** (needs > 0.95) |
 
 **The best configuration does not even reach the Sharpe expected from the best of that many
 zero-skill strategies.** It is *below* the selection bar, not marginally above it.
 
-This supersedes an earlier note here that the Sharpe spread was smaller than 2 SE — that was
-computed on 36 configs and the spread has since widened to 2.75 annualised. The deflated Sharpe
-handles it properly: with 900 effective trials, noise alone produces a maximum of 2.75 and the
-search achieved 2.24.
+Two earlier numbers in this file are superseded, and one earlier *story* is withdrawn:
 
-The **77% effective-independence** is itself a finding. A parameter grid normally collapses toward
-a few independent bets; this one behaves like ~900 distinct experiments, corroborating the
+* the "2 SE spread" note was computed on 36 configs and no longer holds — the observed p05..p95
+  spread is now 3.29 annualised against SE 0.87;
+* DSR was quoted at 0.177 (1,164 configs) and at points during the sweep as low as 0.04 on partial
+  extracts. **It did not decline monotonically**, and any narrative built on "the DSR falls as the
+  sweep grows" was reading partial grids. The honest statement is that across every partial and the
+  complete grid it stayed in **0.04–0.19, never within a factor of five of 0.95** — the conclusion
+  was never sensitive to which slice you looked at, which is the only robustness that matters here.
+
+The **83.6% effective-independence** is itself a finding. A parameter grid normally collapses toward
+a few independent bets; this one behaves like ~2,854 distinct experiments, corroborating the
 decision-space result from the other side — these are genuinely different books, not one book in
 costume. That *raises* the bar the winner must clear, which is why the search fails so cleanly.
 
-**Cost, corrected.** With ≥ 8 trades, m\* median **0.40**, and **130 of 1,019 configs (13%) reach
+**Cost.** With ≥ 8 trades, m\* median **0.377**, max 9.64, and **538 of 3,041 configs (17.7%) reach
 m\* ≥ 1** — they do cover their charged spread. So "cost-dead everywhere", said earlier on three
 variants, was too absolute. But those same configs are what the DSR rejects as selection artifacts,
-so both findings agree: a minority of the space clears costs and none of it is defensible.
+so both findings agree: a sixth of the space clears costs and none of it is defensible.
 
-Integrity: reconciliation gap median and p95 both **0.00** on post-fix rows.
+Integrity: worst reconciliation gap across all 3,432 rows **8.2e-08 USD**.
+
+### Every figure in this file is UNFINANCED
+
+`gc_repo_hist_example.xlsx` — the only repo curve this port ever had — **no longer exists on disk**,
+and every entry point silently degraded to `repo_curve=None` when it went. There is no flat-rate
+fallback: `CostConfig.fallback_repo_pct` is declared and read by nothing (it is one of the harness's
+planted nulls). So the sweep, the variants and the tables above all charge **no financing at all**,
+and on a book whose thesis is convergence financed in repo they are **upper bounds, not estimates**.
+
+Fixed rather than noted: `BT/gss_fly/costs.py::resolve_repo_curve` now announces the funding basis
+on all four branches and returns it as a string, `scripts/gss_grid.py` stamps it into every row, and
+the notebooks put it in the figure titles — a chart is what gets screenshotted and it travels
+without its log. `tests/gss_fly/test_gss_logic.py::test_resolve_repo_curve_never_degrades_in_silence`
+pins it (verified by mutation: restoring the silent branch fails the test). The 3,432 rows already
+on disk pre-date the stamp and carry no `basis` column; they are all unfinanced.
 
 ## The SELECTION is chaotic; the signal is not — measured 2026-08-12
 
