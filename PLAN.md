@@ -164,20 +164,32 @@ The **shape** is the finding: the assumed table rises with maturity, the market'
 widest at the front (heavily seasoned issues nobody trades) and tightest in 7–10y (the actively
 quoted benchmark sector).
 
-**Re-pricing the book on the measured table** (identical 34-trade set; the fee never feeds back
-into the decision):
+**Re-pricing the book on each basis** — `scripts/gss_cost_basis.py`, one candidate scan shared
+across all five rows because the fee is a gate-layer knob that never feeds back into the decision.
+**Funding basis: UNFINANCED** (see below). The trade set is identical in every row and the script
+asserts it:
 
-| cost basis | fees | end equity | m\* |
-|---|---|---|---|
-| assumed | −5,637,475 | −4,254,352 | 0.245 |
-| **measured** | −3,928,142 | **−2,545,020** | **0.352** |
-| measured, belly-only | −2,084,800 | −701,677 | 0.663 |
+| cost basis | fees | end equity | m\* | Sharpe (ann) | max DD |
+|---|---|---|---|---|---|
+| gross (no costs charged) | 0 | +1,383,123 | — | **+0.73** | −860,625 |
+| assumed | −5,637,475 | −4,254,352 | 0.245 | −1.90 | −4,812,053 |
+| **measured** | −3,928,142 | **−2,545,020** | **0.352** | **−1.24** | −3,159,686 |
+| assumed, belly-only | −2,740,000 | −1,356,877 | 0.505 | −0.68 | −2,054,082 |
+| measured, belly-only | −2,084,800 | −701,677 | 0.663 | −0.36 | −1,489,334 |
 
-Fees fall 30% — more than the 21% an aggregate estimate suggested, because the fly's legs sit in
-the buckets the assumed table over-charged most. **m\* still only reaches 0.352**, and even the
-most charitable combination (measured costs *and* the source's belly-only convention, charging two
-of three legs at zero) reaches 0.663. **The book needs execution ~2.8× tighter than the market
-quotes.** That is no longer a calibration question.
+Same 34 trades throughout; the ledgers are identical too (carry during hold −7,278,913, unwind
+proceeds +8,217,382, open mark +444,653, and a financing ledger of **exactly 0.000**, which is what
+proves the basis rather than the label claiming it).
+
+Fees fall 30% on the measured table — more than the 21% an aggregate estimate suggested, because
+the fly's legs sit in the buckets the assumed table over-charged most. **m\* still only reaches
+0.352**, and even the most charitable combination (measured costs *and* the source's belly-only
+convention, charging two of three legs at zero) reaches 0.663. **The book needs execution ~2.8×
+tighter than the market quotes.** That is no longer a calibration question.
+
+The gross row is the sanity anchor: **+0.73 ann against SE 0.87**, i.e. before any cost at all the
+book is indistinguishable from zero. Costs are not the difference between a good strategy and a bad
+one here — they are the difference between nothing and a loss.
 
 ## Deflated Sharpe 0.188 — FINAL, on the completed sweep. There is no config to pick.
 
@@ -216,13 +228,20 @@ so both findings agree: a sixth of the space clears costs and none of it is defe
 
 Integrity: worst reconciliation gap across all 3,432 rows **8.2e-08 USD**.
 
-### Every figure in this file is UNFINANCED
+### The sweep and everything after it are UNFINANCED — and the file is not uniform
 
 `gc_repo_hist_example.xlsx` — the only repo curve this port ever had — **no longer exists on disk**,
 and every entry point silently degraded to `repo_curve=None` when it went. There is no flat-rate
 fallback: `CostConfig.fallback_repo_pct` is declared and read by nothing (it is one of the harness's
-planted nulls). So the sweep, the variants and the tables above all charge **no financing at all**,
-and on a book whose thesis is convergence financed in repo they are **upper bounds, not estimates**.
+planted nulls). So the sweep and every table derived from it charge **no financing at all**, and on
+a book whose thesis is convergence financed in repo they are **upper bounds, not estimates**.
+
+**This file therefore mixes two funding bases, and the older one is identifiable.** `GSSEntryAction`
+attaches its `financing` meta block only when `gc_rate is not None`, so the financing ledger is
+*exactly* zero on an unfinanced run. The "GSS result" table further down reports a financing ledger
+of **+355k**, which is proof that it was produced while the workbook still existed — and its fees
+are exactly half the current ones, which dates it before the exit-fee correction as well. Read it as
+a historical record, not as the current book; the re-priced table above is the current one.
 
 Fixed rather than noted: `BT/gss_fly/costs.py::resolve_repo_curve` now announces the funding basis
 on all four branches and returns it as a string, `scripts/gss_grid.py` stamps it into every row, and
@@ -374,6 +393,14 @@ effective degrees of freedom, not six:
 trades, not *when*. This is not jitter around a stable book.
 
 ## GSS result — 2024-09-03..2026-01-02, 332 dates, 343 bonds, median RMSE 1.94bp
+
+> **Historical run — do not read these magnitudes as current.** Three tells, in increasing order of
+> how much they change: its financing ledger is +355k, which is only possible with a repo curve
+> loaded (an unfinanced run books *exactly* 0); its fees are exactly half the current ones, dating
+> it before the exit-fee correction; and its unwind proceeds are +10.7m against +8.2m today, which
+> is a different book, not a different fee. Kept because the *decomposition* — carry against
+> convergence, and the cost line deciding it — is what this section is about and that is unchanged.
+> For current magnitudes see the re-priced table above (`scripts/gss_cost_basis.py`).
 
 **The book pays carry to collect convergence, and the cost line decides the answer.** Every term
 below reconciles to the equity curve to the cent (`reconciliation_gap_usd = -0.0`), asserted per

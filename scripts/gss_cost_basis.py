@@ -52,7 +52,13 @@ from MDP.FixedRateBonds.FixedRateBondsMDP import FixedRateBondsMDP  # noqa: E402
 
 ASSUMED = CostConfig().half_spread_bp
 
+ZERO = {k: 0.0 for k in ASSUMED}
+
 BASES = [
+    # The zero row is the sanity anchor: it says whether there is anything here BEFORE costs at all.
+    # Its equity must equal `end_equity + fees` from every other row, because the trade set is
+    # identical — that identity is asserted below rather than eyeballed.
+    ("gross (no costs)", dict(half_spread_bp=ZERO, cost_legs="all")),
     ("assumed", dict(half_spread_bp=ASSUMED, cost_legs="all")),
     ("measured", dict(half_spread_bp=dict(MEASURED_HALF_SPREAD_BP), cost_legs="all")),
     ("assumed, belly-only", dict(half_spread_bp=ASSUMED, cost_legs="belly_only")),
@@ -110,6 +116,15 @@ def main() -> int:
             "n_obs": met["n_obs"],
             "max_dd_usd": float(sm.get("max_dd_usd", np.nan)),
             "recon_gap_usd": float(sm.get("reconciliation_gap_usd", np.nan)),
+            # the four ledger terms, so the decomposition is re-stated on the CURRENT code rather
+            # than quoted from an older run. `financing_ledger_usd` is the tell for the funding
+            # basis: it is exactly 0 when no repo curve was supplied, because `GSSEntryAction`
+            # attaches the `financing` meta block only when `gc_rate is not None`.
+            "carry_during_hold_usd": float(sm.get("carry_during_hold_usd", np.nan)),
+            "unwind_proceeds_usd": float(sm.get("unwind_proceeds_usd", np.nan)),
+            "open_mtm_usd": float(sm.get("open_mtm_usd", np.nan)),
+            "bond_ledger_usd": float(sm.get("bond_ledger_usd", np.nan)),
+            "financing_ledger_usd": float(sm.get("financing_ledger_usd", np.nan)),
         })
         print(f"COST: {label:24s} fees {-fees:>13,.0f}  equity {eq:>13,.0f}  "
               f"m* {rows[-1]['m_star']:.3f}  SR {met['sharpe_ann']:+.2f}", flush=True)
@@ -122,8 +137,22 @@ def main() -> int:
     assert t["trades"].nunique() == 1, f"cost basis changed the trade set: {t['trades'].tolist()}"
     assert t["recon_gap_usd"].abs().max() < 1e-3, t["recon_gap_usd"].tolist()
 
+    # gross must be recoverable from every priced row: equity + fees is the same number in all of
+    # them, and it must be the zero-cost row's equity. If it is not, the fee is feeding back into
+    # the decision somewhere and this table is four backtests, not one re-pricing.
+    gross_rows = (t["end_equity_usd"] + t["fees_usd"].abs())
+    assert gross_rows.std() < 1.0, f"gross is not invariant across cost bases: {gross_rows.tolist()}"
+
+    # The funding basis has an observable consequence, so check it rather than trusting the label:
+    # with no repo curve the financing ledger must be exactly zero.
+    fin = t["financing_ledger_usd"]
+    if basis == "financed":
+        assert fin.abs().max() > 0, "labelled financed but the financing ledger is empty"
+    else:
+        assert fin.abs().max() == 0, f"labelled UNFINANCED but financing booked {fin.tolist()}"
+
     print(f"\n=== GSS by cost basis — funding basis {basis} ===", flush=True)
-    print(t.drop(columns=["n_obs", "recon_gap_usd"]).to_string(
+    print(t.drop(columns=["n_obs", "recon_gap_usd", "bond_ledger_usd"]).to_string(
         index=False, float_format=lambda v: f"{v:,.3f}"), flush=True)
     print(f"\n  same {int(t['trades'].iloc[0])} trades in every row — the fee never feeds back "
           f"into the decision.", flush=True)
