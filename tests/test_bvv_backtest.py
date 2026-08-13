@@ -113,12 +113,22 @@ def test_gap_guard_prevents_holding_through_the_80_day_hole(vd, book):
 
 
 def test_support_gate_removes_the_extrapolated_edge(vd, book):
-    """The 1M cell's apparent edge lives entirely below the shortest quoted node."""
+    """The 1M cell's apparent edge lives entirely below the shortest quoted node.
+
+    A 1M position opens at the shortest quoted maturity, so from day one it is priced by
+    extrapolation. With the gate on, every such trade is closed immediately and the edge is gone.
+    Note the trade *count* can rise when the gate is on -- closing sooner frees the book to
+    re-enter -- so counting trades is not the test; the P&L and the holding period are.
+    """
     base = ST.StrategyConfig(product="US", expiry_label="1M", entry_z=2.0, max_hold_days=21)
     off = ST.run_strategy(vd, replace(base, require_on_support=False), book)
     on = ST.run_strategy(vd, replace(base, require_on_support=True), book)
+
     assert off.daily["pnl_volbp"].sum() > on.daily["pnl_volbp"].sum()
-    assert on.diagnostics["n_trades"] < off.diagnostics["n_trades"]
+    assert off.trades["pnl_volbp"].mean() > 0 > on.trades["pnl_volbp"].mean()
+    assert on.trades["held_days"].mean() < off.trades["held_days"].mean()
+    # the gate, not chance, is what ends these trades
+    assert (on.trades["reason"] == "off_support").all()
 
 
 def test_a_contract_roll_is_never_booked_as_pnl(vd, book):

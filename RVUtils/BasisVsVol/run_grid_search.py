@@ -8,6 +8,8 @@ Pre-registered before the run, so that the result is a test rather than a search
 * **Support.** Only configurations whose positions stay inside the quoted term structure are
   admissible. The 1M slot cannot satisfy this and is excluded: its apparent Sharpe of 1.94 is
   produced entirely below the shortest quoted node and inverts to -0.19 on support.
+* **Sample.** Starts 2023-12-12. Before that the swaption smile is a flat fallback (NULL SABR,
+  skew sd exactly 0.0000) and the ATM level steps 15.3bp at the seam.
 * **Universe.** TU/FV/TY/TN/US. UL is excluded for data corruption, not for performance.
 * **Kill conditions.** A cell is not alive unless it clears ALL of: deflated Sharpe > 0.95 against
   the full trial count; survival at 2x costs; a shuffled-signal placebo it beats at the 95th

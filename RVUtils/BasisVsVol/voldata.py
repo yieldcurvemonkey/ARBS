@@ -66,6 +66,21 @@ PRODUCT_TAIL = {"TU": "2Y", "FV": "5Y", "TY": "7Y", "TN": "10Y", "US": "20Y", "U
 
 _EXPIRY_YEARS = {"1M": 1 / 12, "2M": 2 / 12, "3M": 0.25, "6M": 0.5, "1Y": 1.0}
 
+# HARD SAMPLE START. On 248 days -- 2022-12-09 through 2023-12-11, a single contiguous block --
+# the swaption ingest could not reach its vol cube and fell back to flat extrapolation. Those rows
+# carry NULL SABR parameters and a smile that is *mathematically* flat: the 25bp payer-minus-
+# receiver skew has mean 0.0000 and standard deviation 0.0000, not approximately zero. Nothing in
+# the table distinguishes them but the NULL alpha; the `source` column is identical.
+#
+# Two consequences, both fatal to a struck comparison:
+#   1. any offset != 0 differences a REAL futures smile against a flat line for a third of the
+#      sample, which is a large, persistent, structurally mean-reverting wing spread that
+#      terminates on a known date;
+#   2. the ATM level steps 15.3bp across the seam, which any z-window straddling 2023-12-11 reads
+#      as an enormous reversion opportunity.
+# The honest sample is the post-seam one, even though it costs 40% of the days.
+FLAT_SMILE_SEAM = pd.Timestamp("2023-12-12")
+
 
 @dataclass
 class VolData:
@@ -91,12 +106,26 @@ def _norm_date(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def load(data_dir: str | pathlib.Path | None = None, products: list[str] | None = None,
-         sanitize: bool = True) -> VolData:
-    """Load the parquet mirrors and normalise types. Cheap; no smile expansion."""
+         sanitize: bool = True, start: str | pd.Timestamp | None = "seam") -> VolData:
+    """Load the parquet mirrors and normalise types.
+
+    ``start="seam"`` (the default) drops everything before :data:`FLAT_SMILE_SEAM`. Pass ``None``
+    to keep the full history -- only do that to study the seam itself, never to backtest across it.
+    """
     d = pathlib.Path(data_dir) if data_dir is not None else DEFAULT_DATA_DIR
     ustf = _norm_date(pd.read_parquet(d / "arbs_ustf_vol_snapshots_v2.parquet"))
     swpt = _norm_date(pd.read_parquet(d / "arbs_swaption_vol_snapshots_v2.parquet"))
     cmp_ = _norm_date(pd.read_parquet(d / "arbs_ustf_vs_swaption_comparison_v2.parquet"))
+    if start is not None:
+        lo = FLAT_SMILE_SEAM if start == "seam" else pd.Timestamp(start)
+        ustf = ustf[ustf["as_of_date"] >= lo].copy()
+        swpt = swpt[swpt["as_of_date"] >= lo].copy()
+        cmp_ = cmp_[cmp_["as_of_date"] >= lo].copy()
+        n_flat = int(swpt["sabr_alpha"].isna().sum())
+        if n_flat:
+            raise ValueError(
+                f"{n_flat} swaption rows after {lo.date()} still carry a NULL SABR alpha, i.e. a "
+                "flat fallback smile. The sample start no longer excludes the flat-smile block.")
     if products:
         ustf = ustf[ustf["product"].isin(products)].copy()
         cmp_ = cmp_[cmp_["product"].isin(products)].copy()

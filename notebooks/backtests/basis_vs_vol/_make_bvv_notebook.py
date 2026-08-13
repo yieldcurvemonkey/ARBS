@@ -52,7 +52,7 @@ legs priced as Bachelier options on a rate. And symmetrically for `z > +entry_z`
 
 ## READ THIS BEFORE READING ANY P&L
 
-Four properties of the underlying data bound what this backtest can claim. None of them is a
+Five properties of the underlying data bound what this backtest can claim. None of them is a
 modelling choice; all were measured.
 
 1. **The history is a single retrospective vintage.** `updated_at` on both source tables spans
@@ -70,6 +70,13 @@ modelling choice; all were measured.
    as-stored would have produced a large, stable, entirely artificial skew spread.
 4. **There is no liquidity data at all** — no open interest, no bid/ask, no volume. Costs here are
    *assumed*, so the honest output is a **break-even cost multiple**, not a net P&L.
+5. **The first 248 days are a flat fallback smile and are excluded.** From 2022-12-09 to
+   2023-12-11 the swaption ingest could not reach its vol cube and fell back to flat
+   extrapolation: those rows carry a NULL SABR alpha and a 25bp payer-minus-receiver skew whose
+   standard deviation is *exactly* 0.0000. Differencing a real futures smile against a flat line
+   for a third of the sample manufactures a large, structurally mean-reverting wing spread that
+   ends on a known date, and the ATM level steps 15.3bp at the seam. The sample therefore starts
+   **2023-12-12**, at the cost of 40% of the days.
 
 The `cost_mult` knob and the cost ladder in §7 exist because of (4).
 
@@ -83,8 +90,9 @@ The `cost_mult` knob and the cost ladder in §7 exist because of (4).
 * It cannot re-enable `UL`. That product's forward yield moves 20bp across 3.3 years while US moves
   163bp, and a block of its rows has a dropped leading digit in the price. It is excluded as corrupt.
 * It cannot price a position outside the quoted term structure while `require_on_support=True`.
-  The 1M slot's apparent Sharpe of 1.94 lives entirely below the shortest quoted node and inverts
-  to -0.19 on support.
+  A 1M position opens at the shortest quoted node, so it is extrapolated from day one: allowed to
+  run it earns +5.6 vol bp a trade over a 7-day hold; gated, every one of those trades closes after
+  a single day for -0.1. The 1M slot is not tradeable from this data, it is unmeasurable.
 * It cannot book P&L across a data gap or a contract roll. Both are re-anchored, never claimed.
 """))
 
@@ -115,6 +123,7 @@ RESULTS = pathlib.Path(REPO) / "notebooks" / "backtests" / "basis_vs_vol" / "_re
 VD = V.load(products=list(ST.DEFAULT_UNIVERSE))
 BOOK = S.SurfaceBook(VD)
 print("universe:", VD.products())
+print("seam    :", V.FLAT_SMILE_SEAM.date(), "(sample starts here; pre-seam smile is a flat fallback)")
 print("dates   :", VD.dates().min().date(), "->", VD.dates().max().date(), f"({{len(VD.dates())}} days)")
 print("vintage :", VD.ustf["updated_at"].min(), "->", VD.ustf["updated_at"].max())'''))
 
@@ -201,9 +210,11 @@ raw = V.load(sanitize=False)
 clean, dropped = V.sanitize_ustf(raw.ustf)
 panel = RES.signal
 gaps = pd.Series(panel.index).diff().dt.days
+raw_full = V.load(sanitize=False, start=None)
 funnel = pd.DataFrame([
-    ("rows in source table",              len(raw.ustf)),
-    ("dropped: implausible price/yield",  -len(dropped)),
+    ("rows in source table (full history)", len(raw_full.ustf)),
+    ("dropped: pre-seam flat-smile block", -int((raw_full.ustf["as_of_date"] < V.FLAT_SMILE_SEAM).sum())),
+    ("dropped: implausible price/yield",   -len(dropped)),
     ("dropped: UL excluded from universe", -int((clean["product"]=="UL").sum())),
     ("panel days for this config",        len(panel)),
     ("  of which flagged as a roll",      int(panel["is_roll"].sum())),
