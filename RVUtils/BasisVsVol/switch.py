@@ -17,16 +17,26 @@ with ``m = DV01_c/CF_c - DV01_alt/CF_alt`` (the CF-adjusted DV01 gap, signed) an
 parallel shift**, struck at ``s*``, with payoff slope ``CF_c * |m|`` per bp. If ``m < 0`` the
 switch is triggered by a selloff (a call on the shift, payer-like); if ``m > 0`` by a rally.
 
-**Validation.** Against the J.P. Morgan U.S. Futures and Options Package of 2026-08-12 this
-two-bond reduction reproduces the Ultra Bond Sep26 delivery option value to within a tick
-(1.05/32 computed vs 0-01 printed), and recovers a crossover of 24.6bp against JPM's printed
-28.3bp -- the residual being their beta-adjusted yields and convexity, both of which this
-linearisation drops.
+**Validation, and a retraction.** Against the J.P. Morgan U.S. Futures and Options Package of
+2026-08-12 this reduction recovers a crossover of 24.6bp against JPM's printed 28.3bp -- the
+residual being their beta-adjusted yields and convexity, both of which this linearisation drops.
+That part stands.
+
+What does **not** stand is the delivery-option tie-out originally claimed here. Switch-only gives
+1.05/32 for Ultra Bond Sep26 against a printed 0-01, which looked like agreement to within a tick.
+It was two omissions cancelling. The same framework's wildcard module prices that contract's
+wildcard at 1.57/32 (:mod:`RVUtils.BasisVsVol.wildcard`), so switch + wildcard is 2.62/32 against
+the same printed 1.00 -- a 2.6x overshoot. And the sheet prints delivery option values to the
+half-tick, so a 1-tick number carries +/-50% anyway: **at these magnitudes the vendor sheet cannot
+discriminate between a switch-only and a switch-plus-wildcard model.** Treat the crossover as
+validated and the option value as unvalidated.
 
 **Where it fails, and why that matters.** For the classic Bond (ZB) Sep26 contract the same
-calculation gives 1.39/32 against a printed 0-04. It misses 65% of the option value because ZB has
-*seven* deliverables with delivery probability above 1% spanning 33 months of maturity, and a
-two-bond model can only see one of the six available switches. That is the same conclusion the
+calculation gives 1.39/32 against a printed 0-04. ZB has *seven* deliverables with delivery
+probability above 1% spanning 33 months of maturity, and a two-bond model can only see one of the
+six available switches. The wildcard does not close that gap either -- ZB's conversion factor of
+0.8892 leaves a tail of only 0.125, so its wildcard prices at 0.25/32 and switch + wildcard reaches
+1.64 against 4.00. That is the same conclusion the
 CTD-probability sheets force, reached by an independent route, and it is why :func:`map_is_valid`
 exists.
 """

@@ -83,10 +83,11 @@ tests/test_bvv_{bachelier,switch,backtest}.py   67 tests (incl. the ingest regre
 | Ultra Bond Sep26 | **1.05/32** | 0-01 | 24.6bp | 28.3bp |
 | Bond Sep26 | **1.39/32** | 0-04 | 14.6bp | 10.9bp |
 
-UB ties out to within a tick. ZB captures **35%** — as it must, because ZB has seven deliverables
-above 1% delivery probability spanning 33 months and a two-bond model can see only one switch. That
-is the diffuse-basket conclusion of the earlier design review, reached by a completely independent
-route.
+> **RETRACTED 2026-08-14 — see `2026-08-14-basis-vs-vol-adversarial-review-2.md`.** The crossover
+> column stands. The delivery-option column does not: adding the wildcard option (which the dealer
+> literature says dominates the switch in the modern regime) takes Ultra Bond Sep26 to 2.62/32
+> against the same printed 1.00. The apparent tie-out was two omissions cancelling, and the sheet's
+> half-tick print resolution means it could not have discriminated between the models anyway.
 
 **Two independent engines agree exactly.** The QueryDrivenBacktest path (framework MDP, query,
 adapter, handler, triggers) and the standalone vectorised engine produce identical P&L —

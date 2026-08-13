@@ -76,12 +76,32 @@ def test_ub_crossover_matches_published_baseline_yield_shift():
     assert abs(s - 28.3) / 28.3 < 0.20
 
 
-def test_ub_two_bond_reproduces_published_delivery_option_value():
-    """JPM's Sep26 Ultra Bond delivery option value is 0-01 (1/32). Two-bond gives ~1.05/32."""
+def test_ub_two_bond_switch_component_is_about_one_tick():
+    """The switch component alone for Sep26 Ultra Bond is ~1.05/32.
+
+    This is NOT a tie-out to JPM's printed 0-01, though it was once reported as one. Adding the
+    wildcard -- the component the dealer literature says dominates in the modern regime -- takes
+    the same contract to 2.62/32 against that same printed 1.00. And the sheet prints to the
+    half-tick, so a 1-tick number is consistent with anything in [0.75, 1.25]: at these magnitudes
+    it cannot discriminate between a switch-only and a switch-plus-wildcard model. The test pins
+    the switch component's magnitude and nothing more.
+    """
     r = delivery_option_two_bond(UB_CTD, UB_ALT, UB_SIGMA_BP, UB_TTE)
     assert r["w"] == 1  # payer-like
-    assert r["value"] == pytest.approx(1.0, abs=0.5)
+    assert r["value"] == pytest.approx(1.05, abs=0.35)
     assert r["value"] > 0
+
+
+def test_switch_plus_wildcard_overshoots_the_printed_value_for_ultra_bond():
+    """The retraction, as an executable fact rather than a note in a docstring."""
+    from RVUtils.BasisVsVol.wildcard import wildcard_value
+
+    wc = wildcard_value(cf=0.7383, dv01_points_per_bp=0.1215,
+                        daily_carry_points=3.5 / 32 / 48, n_delivery_days=14,
+                        sigma_yield_bp=1.0).value_ticks
+    switch = delivery_option_two_bond(UB_CTD, UB_ALT, UB_SIGMA_BP, UB_TTE)["value"]
+    assert wc > switch          # the wildcard is the larger component for a low-CF contract
+    assert switch + wc > 2.0    # against a printed 0-01
 
 
 def test_zb_two_bond_understates_a_diffuse_basket():
