@@ -1,0 +1,54 @@
+M00_noop                                   GREEN (test cannot fail)               306 passed, 1 warning in 9.53s
+M01_orientation_global_flip                red                                    33 failed, 273 passed, 1 warning in 10.64s
+M02_lifecycle_no_inversion                 red                                    16 failed, 290 passed, 1 warning in 9.50s
+M03_classify_drops_tau_bias                red                                    1 failed, 305 passed, 1 warning in 9.11s
+M04_classify_drops_mid_bias                red                                    109 failed, 197 passed, 1 warning in 9.67s
+M05_residual_bps_drops_bias                red                                    1 failed, 305 passed, 1 warning in 9.25s
+M06_marginalise_no_lifecycle_flip          red                                    11 failed, 295 passed, 1 warning in 7.76s
+M07_marginalise_ignores_bias               red                                    2 failed, 304 passed, 1 warning in 9.57s
+M08_marginalise_branch_swap                red                                    77 failed, 229 passed, 1 warning in 6.79s
+M09_fragile_flag_never_fires               red                                    20 failed, 286 passed, 1 warning in 7.56s
+M10_fragile_flag_always_fires              red                                    2 failed, 304 passed, 1 warning in 8.81s
+M11_signed_weight_is_p                     red                                    23 failed, 283 passed, 1 warning in 6.43s
+M12_tiny_upfront_never_flagged             red                                    1 failed, 305 passed, 1 warning in 8.87s
+M13_capped_default_on                      red                                    1 failed, 305 passed, 1 warning in 8.81s
+M14_uwin_not_preferred                     red                                    2 failed, 304 passed, 1 warning in 8.64s
+M15_no_lifecycle_fallback_flag             red                                    1 failed, 305 passed, 1 warning in 8.80s
+M16_disagree_flag_dropped                  red                                    1 failed, 305 passed, 1 warning in 8.88s
+M17_tau_recomputed_ignoring_floor          red                                    1 failed, 305 passed, 1 warning in 8.82s
+M18_tau_uses_reported_only                 red                                    1 failed, 305 passed, 1 warning in 8.87s
+M19_no_population_guard                    red                                    1 failed, 305 passed, 1 warning in 8.98s
+M20_degenerate_fit_accepted                red                                    1 failed, 305 passed, 1 warning in 8.94s
+M21_robust_tau_half_spread_zero            red                                    1 failed, 305 passed, 1 warning in 8.57s
+M22_no_mid_sigma_flag_dropped              red                                    1 failed, 305 passed, 1 warning in 8.62s
+M23_dealer_sign_from_dev_not_edge          red                                    52 failed, 254 passed, 1 warning in 6.41s
+M24_no_upfront_returns_a_call              red                                    1 failed, 305 passed, 1 warning in 8.40s
+M25_p_from_edge_uses_abs                   red                                    3 failed, 303 passed, 1 warning in 8.73s
+M26_edge_from_dev_no_lifecycle             red                                    30 failed, 276 passed, 1 warning in 7.72s
+M27_fragile_mult_zero                      red                                    20 failed, 286 passed, 1 warning in 7.68s
+M28_zero_dv01_allowed                      red                                    1 failed, 305 passed, 1 warning in 8.83s
+M29_upfront_sign_ignored                   GREEN (test cannot fail)               306 passed, 1 warning in 8.90s
+M30_dev_sign_flip                          red                                    166 failed, 140 passed, 1 warning in 9.94s
+M31_marginalise_gets_negated_dev           red                                    21 failed, 285 passed, 1 warning in 6.31s
+M32_orientation_zero_branch_gone           red                                    4 failed, 302 passed, 1 warning in 8.76s
+M33_upfront_bps_not_scaled                 red                                    35 failed, 271 passed, 1 warning in 8.96s
+M34_classify_orients_off_raw_npv           red                                    43 failed, 263 passed, 1 warning in 9.21s
+M35_mid_bias_not_recorded                  red                                    1 failed, 305 passed, 1 warning in 8.31s
+M36_fragile_tests_dev_only                 red                                    7 failed, 299 passed, 1 warning in 8.22s
+M37_fragile_tests_z_only                   red                                    2 failed, 304 passed, 1 warning in 8.60s
+M38_nan_npv_guard_removed                  red                                    1 failed, 305 passed, 1 warning in 8.54s
+M39_negative_fee_allowed                   red                                    1 failed, 305 passed, 1 warning in 8.66s
+M40_fee_list_not_sanitised                 red                                    1 failed, 305 passed, 1 warning in 8.48s
+M41_quadrature_back_to_one_grid            red                                    77 failed, 229 passed, 1 warning in 6.35s
+M42_panel_width_10_sigma                   red                                    2 failed, 304 passed, 1 warning in 8.32s
+M43_gl_two_nodes                           red                                    38 failed, 268 passed, 1 warning in 8.18s
+M44_saturation_cut_to_one                  red                                    33 failed, 273 passed, 1 warning in 8.35s
+M45_tail_truncated_at_half_sigma           red                                    83 failed, 223 passed, 1 warning in 6.99s
+M46_normal_mass_cancels                    GREEN (test cannot fail)               306 passed, 1 warning in 8.95s
+M47_marginalise_non_finite_guard_gone      red                                    1 failed, 305 passed, 1 warning in 9.28s
+M48_marginalise_tau_guard_gone             red                                    1 failed, 305 passed, 1 warning in 9.16s
+M49_saturated_wing_dropped                 red                                    2 failed, 304 passed, 1 warning in 8.67s
+M50_mid_bias_finite_guard_gone             red                                    1 failed, 305 passed, 1 warning in 9.06s
+M51_mid_sigma_finite_guard_gone            red                                    1 failed, 305 passed, 1 warning in 8.70s
+
+survivors: 3  ['M00_noop', 'M29_upfront_sign_ignored', 'M46_normal_mass_cancels']

@@ -1,0 +1,552 @@
+--- scratch/_mut/probability_none.py	2026-08-11 13:38:18.790746900 -0400
++++ SDRUtils/dealer_direction/probability.py	2026-08-11 15:09:14.855786800 -0400
+@@ -43,12 +43,17 @@
+ ``b0``, and letting it float books a curve bias as a flow imbalance -- which
+ inverts calls rather than degrading them.
+ 
+-WHAT HAS BEEN CHECKED AGAINST A NUMBER THIS MODULE DID NOT PRODUCE
+-------------------------------------------------------------------
++THE F-20 COMPARISON IS NOT AN EXTERNAL CHECK, AND SAYING SO IS THE POINT
++------------------------------------------------------------------------
+ 
+-``b0`` reproduces LEDGER F-20's independently measured Barchart tenor gradient
+-on the legacy deviations (``scratch/prob05_real.py``), which is the closest
+-thing to a known answer real data offers::
++This section used to be headed "what has been checked against a number this
++module did not produce". It is kept, with the numbers unchanged, because the
++comparison is worth having -- but it does not validate the estimator, and
++reading it as though it does is the exact error this module is built to
++prevent.
++
++On the legacy deviations (``scratch/prob05_real.py``) the fitted ``b0`` sits
++beside LEDGER F-20's independently measured Barchart tenor gradient::
+ 
+     bucket    F-20 median    fitted b0
+     3M            -0.136       -0.129
+@@ -57,8 +62,22 @@
+     3Y            -1.237       -1.114
+     IMM_2Y        -6.840       -6.584
+ 
+-Sign, monotone shape and magnitude all reproduce; the mild compression at 2Y-3Y
+-is the trim removing an asymmetric tail that the raw median keeps.
++**Every one of those buckets is flagged ``ROBUST_SCALE_FALLBACK``, where
++``b0 := median(trimmed sample)``** (:func:`_anchored_decomposition`) -- 27 of
++27 buckets with n >= 300, and ``b0 == median(trimmed)`` to float equality in
++every row of the table above (re-measured, ``scratch/pf07_real.py``). F-20's
++number is the raw median of the same rows. So the two columns are the trimmed
++and untrimmed median of one sample, and the EM never produced the right-hand
++column at all. What agrees is a statistic with itself under a trim.
++
++That is still worth reporting -- it measures TRIM STABILITY, and the 25%
++compression at 2Y-3Y is the trim removing an asymmetric tail that the raw
++median keeps, which is a real property of that bucket -- but it is not
++evidence that the mixture fit recovers a bias. The evidence for that is
++:func:`test_recovers_known_parameters`, on simulated data where ``b0`` is set.
++An external check on real deviations needs either labels (the D2D-print
++monitor, ``health.py``, which does not exist yet) or a bucket whose MLE
++survives, which on the Barchart curve is 1 in 22.
+ 
+ WHAT THIS MODULE DOES NOT CLAIM
+ -------------------------------
+@@ -89,6 +108,7 @@
+ import datetime
+ import math
+ import typing
++import warnings
+ 
+ import numpy as np
+ import pandas as pd
+@@ -153,10 +173,10 @@
+ MEASURED_MIN_BUCKET_N = 800
+ MIN_BUCKET_N = MEASURED_MIN_BUCKET_N
+ 
+-#: Minimum sample size when ``h`` comes from outside the sample (the tick
+-#: lattice sub-3y, or the parent bucket). Less than half the unanchored floor,
+-#: because only ``s`` is being estimated and it comes out of one second moment
+-#: rather than a three-parameter likelihood. Measured the same way --
++#: Minimum sample size when ``h`` comes from outside the sample -- which means
++#: the tick lattice sub-3y, and nothing else. Less than half the unanchored
++#: floor, because only ``s`` is being estimated and it comes out of one second
++#: moment rather than a three-parameter likelihood. Measured the same way --
+ #: ``scratch/prob06_anchored.py``, p90 ``tau`` error with an exact anchor::
+ #:
+ #:     n \ h/s    0.50    0.75    1.00    1.50    2.50
+@@ -178,6 +198,30 @@
+ #: honest is :data:`MAX_SE_LOG_TAU`: the anchor is only consulted where the
+ #: sample's own likelihood cannot pin ``tau`` down, which is precisely the
+ #: low-separation regime where the anchor is least sensitive.
++#:
++#: A PARENT BUCKET'S ``h`` IS NOT AN OUTSIDE ESTIMATE AND NO LONGER EARNS THIS
++#: FLOOR. It used to: a thin child with no tick borrowed its parent's fitted
++#: ``h``, took :data:`FIT_ANCHORED_H`, and the floor halved. The parent's
++#: sample is a strict SUPERSET of the child's rows, so the borrowed number is
++#: not independent of anything, and the sensitivity above applies to it at full
++#: force. Measured end to end through :meth:`Calibration.fit`
++#: (``scratch/pf02_calfit.py``), child ``h = 0.07``, ``s = 0.20`` --
++#: ``tau_true = 0.286`` bp -- under a parent whose ``h`` is 0.20::
++#:
++#:     child n     parent-anchored tau     unanchored tau     admitted?
++#:     450         0.0058  (49x narrow)    2.07  (7x wide)    yes / no (pooled)
++#:     2000        0.0406  ( 7x narrow)    2.00  (7x wide)    yes / yes
++#:     6000        0.0157  (18x narrow)    1.90  (7x wide)    yes / yes
++#:
++#: At ``tau = 0.0058`` a 0.02 bp deviation -- noise on any curve -- is called at
++#: ``p = 0.97``. Note the second and third rows: above the floor the bucket is
++#: served on its own, so relabelling the provenance and restoring the 800 floor
++#: would not have moved either number. The route had to go, not be renamed.
++#: Borrowing from the parent is what the pooling ladder is for, and it borrows
++#: the parent's whole coherent ``(b0, h, s)`` -- in the 450-row case above,
++#: ``tau = 0.100`` against a true 0.286 -- rather than splicing the parent's
++#: ``h`` onto the child's second moment, which is what produced a ``tau``
++#: narrower than either bucket's own fit.
+ MEASURED_MIN_BUCKET_N_ANCHORED = 400
+ MIN_BUCKET_N_ANCHORED = MEASURED_MIN_BUCKET_N_ANCHORED
+ 
+@@ -198,9 +242,23 @@
+ #: threshold has no such selection effect, because it asks about this fit
+ #: rather than about whether a hypothesis test happened to clear.
+ #:
+-#: ``TAU_RECOVERY_TOLERANCE / 1.2816`` -- the p90 of a symmetric error is
+-#: 1.2816 standard errors, so this is the tolerance expressed as an SE.
+-MAX_SE_LOG_TAU = TAU_RECOVERY_TOLERANCE / 1.2816
++#: ``TAU_RECOVERY_TOLERANCE / 1.6449`` -- the tolerance expressed as an SE.
++#:
++#: THE QUANTILE HAS TO MATCH THE QUANTITY. :data:`TAU_RECOVERY_TOLERANCE` is a
++#: p90 of an **absolute** relative error: :func:`_tau_errors` takes ``abs``
++#: and :func:`tau_recovery_error` then takes the 0.90 quantile. The p90 of
++#: ``|N(0, s)|`` is ``1.6449 s`` -- the 95th percentile of the signed error --
++#: not the 1.2816 that the p90 of the signed error would give. Coded with
++#: 1.2816 this gate stood at 0.1951, 28.3% looser than the tolerance it claims
++#: to express, and every fit with ``se_log_tau`` in (0.152, 0.195] kept its own
++#: over-confident ``tau`` instead of being routed to the anchor or the pool.
++#:
++#: The normal-theory factor is itself slightly conservative on this estimator:
++#: measured over 300 fits at n = 800, ``h/s = 1.39``, the realised p90 of
++#: ``|log tau - log tau_true|`` is 1.49 analytic SEs rather than 1.6449, the
++#: log-tau error not being quite normal. That errs towards consulting the
++#: anchor a little too readily, which is the safe direction.
++MAX_SE_LOG_TAU = TAU_RECOVERY_TOLERANCE / 1.6449
+ 
+ #: Default dead-zone half-width in probability space. Reporting only --
+ #: ``signed_weight = 2p-1`` already makes a coin flip contribute zero, so the
+@@ -253,6 +311,16 @@
+ #: The bucket label the pooling ladder terminates at.
+ GLOBAL_BUCKET = "GLOBAL"
+ 
++#: Columns of :meth:`Calibration.report`, named once so that a calibration with
++#: no fits returns an EMPTY frame with them rather than a column-less one.
++REPORT_COLUMNS = (
++    "bucket", "n", "n_trimmed", "b0_bps", "h_bps", "s_bps", "tau_bps",
++    "h_used_bps", "separation", "se_log_tau", "dead_zone_bps",
++    "excess_kurtosis", "excess_kurtosis_z", "moment_h", "moment_s",
++    "crosscheck_ratio_h", "crosscheck_comparable", "separation_pvalue",
++    "fit_flags",
++)
++
+ #: Column names :class:`Calibration` expects.
+ DEVIATION_COL = "deviation_bps"
+ BUCKET_COLS = ("venue_class", "rate_index", "structure",
+@@ -596,7 +664,6 @@
+     trim_k: float = TRIM_MAD_K,
+     min_n: int = MIN_BUCKET_N,
+     tick_stats=None,
+-    parent_h: float | None = None,
+     max_iter: int = 500,
+     tol: float = 1e-11,
+     as_of: datetime.date | None = None,
+@@ -643,8 +710,12 @@
+     are tried and the highest likelihood wins; the moment solution supplies one
+     of them whenever it is real.
+ 
+-    ``tick_stats`` and ``parent_h`` are the fallbacks for a bucket that fails
+-    the moment check -- see :data:`FIT_ROBUST_FALLBACK`.
++    ``tick_stats`` is the fallback for a bucket that fails the moment check --
++    see :data:`FIT_ROBUST_FALLBACK`. It is the only anchor there is: a parent
++    bucket's ``h`` used to be a second one and was removed, because a parent's
++    sample contains the child's rows and the spliced ``tau`` came out up to 49x
++    too narrow (:data:`MIN_BUCKET_N_ANCHORED`). Pooling, not anchoring, is how
++    a bucket borrows from its parent.
+     """
+     x = np.asarray(x, dtype=float).ravel()
+     x = x[np.isfinite(x)]
+@@ -656,14 +727,11 @@
+     if xt.size == 0:
+         raise ValueError(f"bucket {bucket!r}: trim removed every observation")
+ 
+-    # An h from outside this sample -- the tick lattice sub-3y, or the parent
+-    # bucket -- changes what has to be estimated, and therefore how much data
+-    # it takes. See MIN_BUCKET_N's docstring for why that matters so much.
+-    anchor_h = None
+-    if tick_stats is not None:
+-        anchor_h = _independent_half_spread(tick_stats)
+-    if anchor_h is None and parent_h is not None and parent_h > 0:
+-        anchor_h = float(parent_h)
++    # An h from outside this sample -- the tick lattice sub-3y -- changes what
++    # has to be estimated, and therefore how much data it takes. See
++    # MIN_BUCKET_N's docstring for why that matters so much, and for the
++    # measurement that removed the parent bucket as a second source of one.
++    anchor_h = _independent_half_spread(tick_stats) if tick_stats is not None else None
+     min_n_given = min_n
+     flags: list[str] = []
+ 
+@@ -748,7 +816,7 @@
+             # dispersion has to come from this sample, and one second moment
+             # needs a few hundred observations rather than the many thousands
+             # the three-parameter likelihood needs at h/s ~ 1.
+-            b0, h, s, extra = _anchored_decomposition(xt, anchor_h)
++            b0, h, s, extra = _anchored_decomposition(xt, anchor_h, external=True)
+         elif FIT_LEPTOKURTIC in flags:
+             # Same decomposition, but h is this sample's own MLE -- so it is
+             # NOT an independent estimate and must not be labelled as one.
+@@ -827,7 +895,20 @@
+         h_new = (float((u * x).mean()) - xbar * ubar) / denom
+         b0_new = xbar - h_new * ubar
+         if h_new < 0.0:
+-            # Label swap. The likelihood is invariant; h > 0 is the convention.
++            # Label swap. The likelihood is invariant (pinned in
++            # ``test_the_likelihood_is_invariant_under_the_label_swap_the_em_relies_on``)
++            # and h > 0 is the convention, so this renames the components
++            # rather than changing the answer -- which is why b0_new is
++            # recomputed with the sign put back: under h -> -h the
++            # responsibilities flip too, u -> -u, and the two negations cancel
++            # in ``b0 = xbar - h ubar``.
++            #
++            # UNREACHABLE FROM THESE STARTS, and kept as a guard rather than as
++            # live code: u = tanh(h (x - b0) / s^2) is increasing in x for
++            # h > 0, so cov(u, x) >= 0 and h_new is never negative; every start
++            # in `fit_mixture` has h > 0. A mutation raising inside this branch
++            # leaves the suite green, and that is the correct report, not a
++            # coverage hole to be papered over with a contrived call.
+             h_new = -h_new
+             b0_new = xbar - (-h_new) * ubar
+         d = x - b0_new
+@@ -844,7 +925,7 @@
+     return b0, abs(h), s, ll
+ 
+ 
+-def _anchored_decomposition(xt, h_anchor: float, external: bool = True):
++def _anchored_decomposition(xt, h_anchor: float, *, external: bool):
+     """``h`` asserted, ``s`` by subtraction from a robust total dispersion.
+ 
+     Deliberately the **frozen predecessor's own arithmetic**
+@@ -863,12 +944,20 @@
+     convenience, it is the only route to a ``tau`` in those buckets.
+ 
+     ``external`` MUST be False when ``h_anchor`` is the sample's own MLE, which
+-    is what a leptokurtic bucket with no tick and no parent gets. Emitting
+-    ``FIT_ANCHORED_H`` there would claim an independent estimate that does not
+-    exist, and -- worse than the cosmetic lie -- it would grant the bucket
++    is what a leptokurtic bucket with no tick gets. Emitting ``FIT_ANCHORED_H``
++    there would claim an independent estimate that does not exist, and -- worse
++    than the cosmetic lie -- it would grant the bucket
+     :data:`MIN_BUCKET_N_ANCHORED`, a floor measured only for an external and
+     approximately correct ``h``. The bucket would then refuse to pool on the
+-    strength of the one number in it that cannot be trusted.
++    strength of the one number in it that cannot be trusted. It is
++    keyword-only and has no default for the same reason: a caller that forgets
++    to say gets a TypeError rather than an independence claim.
++
++    ``b0`` is the trimmed sample's median, and it is the estimate every real
++    bucket ends up with -- every bucket in ``scratch/prob05_real.py`` takes
++    this path. It is a bias term, so an error in it does not widen ``p``, it
++    moves the point where ``p`` crosses 0.5, which is a sign change for every
++    deviation between the true and assumed bias.
+     """
+     extra = [FIT_ROBUST_FALLBACK] + ([FIT_ANCHORED_H] if external else [])
+     h_fb = float(h_anchor)
+@@ -1135,14 +1224,24 @@
+ # --------------------------------------------------------------------------
+ 
+ def tenor_band(years) -> str:
+-    """Band label for a tenor in years. Bands are ``(lo, hi]``."""
++    """Band label for a tenor in years. Bands are ``(lo, hi]``.
++
++    A tenor that is zero, negative or infinite is not a tenor, and it gets
++    ``UNKNOWN`` rather than the nearest band. The first band is ``(0, 1M]``, so
++    zero is not a member of it -- and it is the tightest bucket on the grid,
++    hence the most confident ``tau``, which is the worst possible place to put
++    a term that is broken or mis-signed. UNKNOWN has no fit, so such a unit
++    pools instead of being called.
++    """
+     if years is None or (isinstance(years, float) and years != years):
+         return "UNKNOWN"
+     y = float(years)
++    if not math.isfinite(y) or y <= 0.0:
++        return "UNKNOWN"
+     for i in range(len(TENOR_BAND_LABELS)):
+         if TENOR_BAND_EDGES[i] < y <= TENOR_BAND_EDGES[i + 1]:
+             return TENOR_BAND_LABELS[i]
+-    return TENOR_BAND_LABELS[0] if y <= 0 else TENOR_BAND_LABELS[-1]
++    return TENOR_BAND_LABELS[-1]
+ 
+ 
+ def frame(deviation_bps, *, venue: str, rate_index: str, structure: str,
+@@ -1185,27 +1284,6 @@
+     return "|".join(f"{k}={dims[k]}" for k in BUCKET_COLS if k in dims)
+ 
+ 
+-def _parent_h(fits: dict, dims: dict, order: tuple[str, ...]) -> float | None:
+-    """The already-fitted parent's ``h``, as an anchor for a thin child.
+-
+-    Only a parent whose own fit was not itself forced is offered: passing down
+-    an ``h`` that was pinned at the no-information floor would propagate the
+-    floor through the whole subtree and turn one unidentifiable bucket into a
+-    branch of them.
+-    """
+-    for dropped in order:
+-        if dropped not in dims:
+-            continue
+-        parent = _label({k: v for k, v in dims.items() if k != dropped})
+-        f = fits.get(parent or GLOBAL_BUCKET)
+-        if f is None:
+-            f = fits.get(GLOBAL_BUCKET)
+-        if f is not None and FIT_UNSEPARATED not in f.flags and f.h > 0:
+-            return float(f.h)
+-        return None
+-    return None
+-
+-
+ def rank_bucket_dimensions(df: pd.DataFrame,
+                            value_col: str = DEVIATION_COL) -> pd.DataFrame:
+     """How much of the dispersion in robust scale each dimension explains.
+@@ -1274,7 +1352,10 @@
+         materialises when a child turns out thin would be fitted on a different
+         sample depending on which children happened to be thin that window,
+         which is a silent dependence of one bucket's ``tau`` on another
+-        bucket's activity.
++        bucket's activity. They are also what :meth:`for_key` pools into, and
++        pooling is the ONLY way a bucket borrows from a coarser one: see
++        :data:`MIN_BUCKET_N_ANCHORED` for the measurement that removed the
++        alternative.
+         """
+         missing = [c for c in (DEVIATION_COL,) + BUCKET_COLS if c not in df.columns]
+         if missing:
+@@ -1286,9 +1367,11 @@
+             nxt = [c for c in levels[-1] if c != dropped]
+             levels.append(nxt)
+ 
+-        # Coarsest first, so that a fine bucket with no tick estimate of its
+-        # own can borrow its parent's fitted h as an anchor. Going the other
+-        # way would need the parent before it exists.
++        # Coarsest first. Nothing depends on the order any more -- each level
++        # is fitted on its own rows and the global is just another level -- but
++        # it is kept so that a `fits` dict is never half-built when a coarse
++        # fit raises, and so the global, the one bucket `for_key` must always
++        # find, exists before anything can look for it.
+         fits[GLOBAL_BUCKET] = fit_mixture(
+             df[DEVIATION_COL].to_numpy(float), bucket=GLOBAL_BUCKET,
+             trim_k=trim_k, min_n=min_n, as_of=as_of)
+@@ -1306,8 +1389,7 @@
+                 ts = (tick_stats_by_bucket or {}).get(label)
+                 fits[label] = fit_mixture(
+                     g[DEVIATION_COL].to_numpy(float), bucket=label,
+-                    trim_k=trim_k, min_n=min_n, tick_stats=ts,
+-                    parent_h=_parent_h(fits, dims, order), as_of=as_of)
++                    trim_k=trim_k, min_n=min_n, tick_stats=ts, as_of=as_of)
+ 
+         return cls(fits, order=order, min_n=min_n)
+ 
+@@ -1344,12 +1426,26 @@
+ 
+     # -- reporting ---------------------------------------------------------
+     def report(self, delta: float = DEAD_ZONE_DELTA) -> pd.DataFrame:
+-        """One row per fitted bucket. This is the artefact a reviewer reads."""
++        """One row per fitted bucket. This is the artefact a reviewer reads.
++
++        ``h_used_bps`` is there because ``separation`` and ``tau_bps`` are not
++        computed from the same ``h``: ``separation`` is the raw ``h/s`` and
++        ``tau`` floors ``h`` at ``MIN_SEPARATION * s`` (:func:`_h_floor`), so on
++        a floored bucket the report showed ``separation = 0.014`` beside a
++        ``tau`` that implies 0.05 and a reader could not get from one to the
++        other. Both are wanted -- the raw ratio is the diagnostic, the floored
++        one is what ``p`` was computed with -- so both are printed.
++
++        An empty calibration returns an empty frame WITH these columns. A
++        column-less ``DataFrame([])`` raises in whatever touches it next,
++        which is a long way from the calibration that produced nothing.
++        """
+         rows = []
+         for label, f in sorted(self.fits.items()):
+             rows.append(dict(
+                 bucket=label, n=f.n, n_trimmed=f.n_trimmed,
+                 b0_bps=f.b0, h_bps=f.h, s_bps=f.s, tau_bps=f.tau,
++                h_used_bps=max(float(f.h), _h_floor(f.s)),
+                 separation=f.separation, se_log_tau=f.se_log_tau,
+                 dead_zone_bps=dead_zone_half_width_bps(f.tau, delta),
+                 excess_kurtosis=(f.moment.excess_kurtosis if f.moment else None),
+@@ -1365,7 +1461,7 @@
+                 # ``rep.flags`` silently returns pandas' own Flags object.
+                 fit_flags=",".join(f.flags),
+             ))
+-        return pd.DataFrame(rows)
++        return pd.DataFrame(rows, columns=list(REPORT_COLUMNS))
+ 
+ 
+ # --------------------------------------------------------------------------
+@@ -1408,6 +1504,14 @@
+     the day being classified contains the very prints whose direction is being
+     inferred, which makes ``b0`` partly a function of the answer.
+ 
++    A DAY WITH TOO LITTLE HISTORY BEHIND IT IS REPORTED, NOT DROPPED IN
++    SILENCE. The first days of any sample have nothing before them and are
++    expected to be skipped -- but the same silence covers a genuine hole in the
++    middle, and a caller iterating the returned dict sees a clean run either
++    way. Measured: 200 rows over 10 days returned ``{}`` with no exception and
++    no warning. So a partial result warns with the count, and a result with no
++    calibrations at all raises.
++
+     Returns ``{as_of_date: (window_lo, window_hi, Calibration)}``.
+     """
+     if min_gap_days < 1:
+@@ -1419,19 +1523,36 @@
+     dates = sorted({pd.Timestamp(d).date() for d in df[date_col]})
+     d = pd.to_datetime(df[date_col]).dt.date.to_numpy()
+ 
++    min_rows = fit_kwargs.get("min_n", MIN_BUCKET_N)
+     out: dict[datetime.date, tuple] = {}
++    considered = 0
++    thin: list[datetime.date] = []
+     for i, as_of in enumerate(dates):
+         if i % step_days:
+-            continue
++            continue                      # not asked for, so not a failure
++        considered += 1
+         hi = as_of - datetime.timedelta(days=min_gap_days)
+         lo = hi - datetime.timedelta(days=window_days)
+         sel = (d >= lo) & (d <= hi)
+-        if not sel.any():
+-            continue
+         window = df.loc[sel]
+-        if len(window) < fit_kwargs.get("min_n", MIN_BUCKET_N):
++        if not sel.any() or len(window) < min_rows:
++            thin.append(as_of)
+             continue
+         out[as_of] = (lo, hi, Calibration.fit(window, as_of=as_of, **fit_kwargs))
++    if not out:
++        raise ValueError(
++            f"no calibration window in {considered} candidate dates held the "
++            f"{min_rows} rows a fit needs (window_days={window_days}, "
++            f"min_gap_days={min_gap_days}, dates "
++            f"{dates[0]}..{dates[-1]}); returning an empty mapping here would "
++            "look identical to a run that classified everything")
++    if thin:
++        warnings.warn(
++            f"rolling_calibrations skipped {len(thin)} of {considered} dates "
++            f"whose prior window held fewer than {min_rows} rows "
++            f"({thin[0]}..{thin[-1]}); those days have no calibration and "
++            "cannot be classified",
++            stacklevel=2)
+     return out
+ 
+ 
+@@ -1447,6 +1568,14 @@
+     spread_ratio: float
+     pooled_tau: float
+     method: str
++    #: Fits handed in that had no ``se_log_tau`` and were therefore not tested.
++    #: Every fallback fit has none -- and on real deviations that is all of
++    #: them -- so ``k`` alone can make a test on 2 of 30 periods read as a test
++    #: on the series.
++    n_dropped: int = 0
++    #: Bootstrap only: replicates that produced a usable Q. A replicate whose
++    #: fits failed is not a draw from the null and is not in the denominator.
++    bootstrap_reps_used: int | None = None
+ 
+ 
+ def tau_stability(fits, *, alpha: float = 0.05, method: str = "chi2",
+@@ -1466,8 +1595,14 @@
+     """
+     fits = list(fits)
+     usable = [f for f in fits if f.se_log_tau and math.isfinite(f.se_log_tau)]
++    dropped = len(fits) - len(usable)
+     if len(usable) < 2:
+-        raise ValueError("tau_stability needs at least two fits with standard errors")
++        raise ValueError(
++            f"tau_stability needs at least two fits with standard errors; got "
++            f"{len(usable)} usable out of {len(fits)} ({dropped} have none). A "
++            "forced or imported (b0, h, s) has no standard error by "
++            "construction, so a window of fallback fits cannot be tested this "
++            "way at all")
+ 
+     y = np.array([math.log(f.tau) for f in usable])
+     se = np.array([f.se_log_tau for f in usable], dtype=float)
+@@ -1478,27 +1613,45 @@
+     taus = np.array([f.tau for f in usable])
+     spread = float(taus.max() / max(taus.min(), 1e-300))
+ 
++    used = None
+     if method == "chi2":
+         from scipy import stats as sps
+         p = float(sps.chi2.sf(q, dof))
+     elif method == "bootstrap":
+-        p = _bootstrap_q_pvalue(usable, q, reps=reps, seed=seed)
++        p, used = _bootstrap_q_pvalue(usable, q, reps=reps, seed=seed)
+     else:
+         raise ValueError(f"unknown method {method!r}")
+ 
+     return TauStability(k=len(usable), q=q, dof=dof, p_value=p,
+                         moves=p < alpha, spread_ratio=spread,
+-                        pooled_tau=float(math.exp(mu)), method=method)
++                        pooled_tau=float(math.exp(mu)), method=method,
++                        n_dropped=dropped, bootstrap_reps_used=used)
+ 
+ 
+-def _bootstrap_q_pvalue(fits, q_obs: float, *, reps: int, seed: int) -> float:
+-    """Null distribution of Q by resimulating each period from the pooled fit."""
++def _bootstrap_q_pvalue(fits, q_obs: float, *, reps: int,
++                        seed: int) -> tuple[float, int]:
++    """Null distribution of Q by resimulating each period from the pooled fit.
++
++    Returns ``(p_value, replicates_used)``.
++
++    A REPLICATE THAT COULD NOT BE FITTED IS NOT A DRAW FROM THE NULL. It used
++    to be counted in the denominator anyway, so every failure scored silently
++    as "not worse than observed" and pushed ``p`` down -- towards rejecting the
++    null that ``tau`` is constant. Measured at ``h/s = 0.75``, n = 400: 4 of 60
++    replicates skipped, a 6.7% downward bias. The degenerate case is worse than
++    the bias: with every replicate failing, ``(0 + 1)/(reps + 1) = 0.016``
++    returned ``moves=True`` from zero replicates -- and this test exists
++    precisely to be the check that does NOT depend on ``se_log_tau``, so
++    failing towards agreement with the SE-based test is the worst direction
++    available.
++    """
+     rng = np.random.default_rng(seed)
+     h = float(np.median([f.h for f in fits]))
+     s = float(np.median([f.s for f in fits]))
+     b0 = float(np.median([f.b0 for f in fits]))
+     ns = [f.n_trimmed for f in fits]
+     worse = 0
++    used = 0
+     for _ in range(reps):
+         ys, ses = [], []
+         for n in ns:
+@@ -1510,10 +1663,18 @@
+             ses.append(f.se_log_tau)
+         if len(ys) < 2:
+             continue
++        used += 1
+         y = np.asarray(ys); w = 1.0 / np.asarray(ses) ** 2
+         mu = float((w * y).sum() / w.sum())
+         worse += float((w * (y - mu) ** 2).sum()) >= q_obs
+-    return (worse + 1) / (reps + 1)
++    if used == 0:
++        raise ValueError(
++            f"the bootstrap null is empty: all {reps} replicate sets failed to "
++            f"produce two fits with standard errors at n={ns}. There is no "
++            "distribution to compare Q against, and returning the smallest "
++            "attainable p-value here would report that tau moves on the "
++            "strength of nothing at all")
++    return (worse + 1) / (used + 1), used
+ 
+ 
+ # --------------------------------------------------------------------------
+@@ -1676,7 +1837,8 @@
+     "LEPTOKURTOSIS_Z", "SEPARATION_ALPHA", "MEASURED_MIN_BUCKET_N_ANCHORED",
+     "MIN_BUCKET_N_ANCHORED",
+     "MAD_TO_SIGMA", "MEASURED_MIN_BUCKET_N", "MIN_BUCKET_N", "MIN_SEPARATION",
+-    "MixtureFit", "MomentCheck", "ProbabilityCall", "SpreadCrossCheck",
++    "MixtureFit", "MomentCheck", "ProbabilityCall", "REPORT_COLUMNS",
++    "SpreadCrossCheck",
+     "TAU_RECOVERY_TOLERANCE", "TENOR_BAND_EDGES", "TENOR_BAND_LABELS",
+     "TRIM_MAD_K", "TauStability", "brier", "crosscheck_against_tick",
+     "dead_zone_half_width_bps", "delta_for_dead_zone_bps",

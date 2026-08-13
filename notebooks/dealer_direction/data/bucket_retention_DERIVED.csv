@@ -1,0 +1,11 @@
+source_md_line,bucket,tape_dv01_bn,tape_share_pct,retained_share_pct,delta_pp,delta_relative_pct,excl_rate_pct,excl_of_which_pkg4plus_pct,excl_of_which_asset_swap_pct,retention_factor,vs_best_bucket
+"2026-08-11-package-exclusion-skew.md:89 (cols 2-9), :108 (retention_factor), :109 (vs_best_bucket)",0-1Y,4.51,5.59,7.47,1.88,33.6,23.9,14.96,1.52,0.761,1.0
+"2026-08-11-package-exclusion-skew.md:89 (cols 2-9), :108 (retention_factor), :109 (vs_best_bucket)",1-2Y,4.55,5.64,5.16,-0.47,-8.4,47.83,26.89,15.93,0.522,0.69
+"2026-08-11-package-exclusion-skew.md:89 (cols 2-9), :108 (retention_factor), :109 (vs_best_bucket)",2-3Y,5.01,6.22,6.57,0.35,5.7,39.81,23.28,12.51,0.602,0.79
+"2026-08-11-package-exclusion-skew.md:89 (cols 2-9), :108 (retention_factor), :109 (vs_best_bucket)",3-5Y,8.61,10.67,10.38,-0.29,-2.7,44.6,23.29,16.81,0.554,0.73
+"2026-08-11-package-exclusion-skew.md:89 (cols 2-9), :108 (retention_factor), :109 (vs_best_bucket)",5-7Y,15.65,19.4,17.86,-1.54,-8.0,47.58,21.99,23.16,0.524,0.69
+"2026-08-11-package-exclusion-skew.md:89 (cols 2-9), :108 (retention_factor), :109 (vs_best_bucket)",7-10Y,8.07,10.01,9.43,-0.58,-5.8,46.32,24.27,19.9,0.537,0.71
+"2026-08-11-package-exclusion-skew.md:89 (cols 2-9), :108 (retention_factor), :109 (vs_best_bucket)",10-15Y,16.38,20.3,21.41,1.11,5.5,39.93,21.33,17.24,0.601,0.79
+"2026-08-11-package-exclusion-skew.md:89 (cols 2-9), :108 (retention_factor), :109 (vs_best_bucket)",15-20Y,3.48,4.32,3.75,-0.57,-13.2,50.55,27.5,18.79,0.495,0.65
+"2026-08-11-package-exclusion-skew.md:89 (cols 2-9), :108 (retention_factor), :109 (vs_best_bucket)",20-30Y,5.6,6.94,6.24,-0.7,-10.1,48.79,24.94,18.44,0.512,0.67
+"2026-08-11-package-exclusion-skew.md:89 (cols 2-9), :108 (retention_factor), :109 (vs_best_bucket)",30Y+,8.8,10.91,11.72,0.81,7.5,38.8,21.43,16.28,0.612,0.8

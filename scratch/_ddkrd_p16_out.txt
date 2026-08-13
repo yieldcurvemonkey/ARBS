@@ -1,0 +1,113 @@
+citivelo_excel: USD-SOFR-1D-CITIVELOEXCELMIN served a snapshot from a DIFFERENT local date (2026-03-31 for a 2026-04-01 request) out of the +/-1 day window. Pass snapshot_policy=SnapshotPolicy.strict() to bound this (further occurrences of this kind are not logged)
+citivelo_excel: USD-FEDFUNDS-1D-CITIVELOEXCELMIN served a snapshot from a DIFFERENT local date (2026-03-31 for a 2026-04-01 request) out of the +/-1 day window. Pass snapshot_policy=SnapshotPolicy.strict() to bound this (further occurrences of this kind are not logged)
+2026-04-01: 4329 eligible flow legs ({'SOFR': 4241, 'FED_FUNDS': 88})
+SUCCESS: `func_tol` reached after 4 iterations (levenberg_marquardt), `f_val`: 2.5696890833236416e-09, `time`: 0.1452s
+SUCCESS: `func_tol` reached after 4 iterations (levenberg_marquardt), `f_val`: 2.598308923489825e-09, `time`: 0.1388s
+SUCCESS: `func_tol` reached after 4 iterations (levenberg_marquardt), `f_val`: 2.599566230561623e-09, `time`: 0.1558s
+SUCCESS: `func_tol` reached after 4 iterations (levenberg_marquardt), `f_val`: 2.8086811335326305e-09, `time`: 0.1386s
+SUCCESS: `func_tol` reached after 4 iterations (levenberg_marquardt), `f_val`: 2.6097309713346177e-09, `time`: 0.1685s
+SUCCESS: `func_tol` reached after 4 iterations (levenberg_marquardt), `f_val`: 2.6097309713346177e-09, `time`: 0.1674s
+SUCCESS: `func_tol` reached after 4 iterations (levenberg_marquardt), `f_val`: 2.8182625113525958e-09, `time`: 0.1708s
+SUCCESS: `func_tol` reached after 4 iterations (levenberg_marquardt), `f_val`: 2.6052103182752462e-09, `time`: 0.1677s
+SUCCESS: `func_tol` reached after 4 iterations (levenberg_marquardt), `f_val`: 2.6411070580763306e-09, `time`: 0.1579s
+SUCCESS: `func_tol` reached after 4 iterations (levenberg_marquardt), `f_val`: 2.6822298174633412e-09, `time`: 0.1640s
+SUCCESS: `func_tol` reached after 4 iterations (levenberg_marquardt), `f_val`: 2.88557742295284e-09, `time`: 0.1537s
+SUCCESS: `func_tol` reached after 4 iterations (levenberg_marquardt), `f_val`: 2.6368133109082912e-09, `time`: 0.1549s
+SUCCESS: `func_tol` reached after 4 iterations (levenberg_marquardt), `f_val`: 2.846642000383537e-09, `time`: 0.1671s
+SUCCESS: `func_tol` reached after 4 iterations (levenberg_marquardt), `f_val`: 2.665297713581137e-09, `time`: 0.1571s
+SUCCESS: `func_tol` reached after 4 iterations (levenberg_marquardt), `f_val`: 2.6342981113811322e-09, `time`: 0.1906s
+SUCCESS: `func_tol` reached after 4 iterations (levenberg_marquardt), `f_val`: 2.8200488290240617e-09, `time`: 0.1463s
+SUCCESS: `func_tol` reached after 4 iterations (levenberg_marquardt), `f_val`: 2.608091505716881e-09, `time`: 0.1679s
+SUCCESS: `func_tol` reached after 4 iterations (levenberg_marquardt), `f_val`: 2.823661622523778e-09, `time`: 0.1642s
+SUCCESS: `func_tol` reached after 4 iterations (levenberg_marquardt), `f_val`: 2.627196341379666e-09, `time`: 0.1508s
+SUCCESS: `func_tol` reached after 4 iterations (levenberg_marquardt), `f_val`: 2.8171618567836672e-09, `time`: 0.1676s
+SUCCESS: `func_tol` reached after 4 iterations (levenberg_marquardt), `f_val`: 2.4988388156697187e-09, `time`: 0.1439s
+SUCCESS: `func_tol` reached after 4 iterations (levenberg_marquardt), `f_val`: 2.693503468855894e-09, `time`: 0.1434s
+SUCCESS: `func_tol` reached after 4 iterations (levenberg_marquardt), `f_val`: 2.5120798224399643e-09, `time`: 0.1460s
+SUCCESS: `func_tol` reached after 4 iterations (levenberg_marquardt), `f_val`: 2.7021684733233317e-09, `time`: 0.1639s
+SUCCESS: `func_tol` reached after 4 iterations (levenberg_marquardt), `f_val`: 2.5837456954476282e-09, `time`: 0.1533s
+SUCCESS: `func_tol` reached after 4 iterations (levenberg_marquardt), `f_val`: 2.794165908717033e-09, `time`: 0.1599s
+SUCCESS: `func_tol` reached after 4 iterations (levenberg_marquardt), `f_val`: 2.5763738952598964e-09, `time`: 0.1623s
+SUCCESS: `func_tol` reached after 4 iterations (levenberg_marquardt), `f_val`: 2.588268795208151e-09, `time`: 0.1555s
+SUCCESS: `func_tol` reached after 4 iterations (levenberg_marquardt), `f_val`: 2.786311437782293e-09, `time`: 0.1647s
+SUCCESS: `func_tol` reached after 4 iterations (levenberg_marquardt), `f_val`: 2.735146615268584e-09, `time`: 0.1588s
+SUCCESS: `func_tol` reached after 4 iterations (levenberg_marquardt), `f_val`: 2.525629787656861e-09, `time`: 0.1546s
+SUCCESS: `func_tol` reached after 4 iterations (levenberg_marquardt), `f_val`: 2.71530922602497e-09, `time`: 0.1526s
+SUCCESS: `func_tol` reached after 4 iterations (levenberg_marquardt), `f_val`: 2.508809255550739e-09, `time`: 0.1343s
+SUCCESS: `func_tol` reached after 4 iterations (levenberg_marquardt), `f_val`: 2.6759881153387846e-09, `time`: 0.1723s
+SUCCESS: `func_tol` reached after 4 iterations (levenberg_marquardt), `f_val`: 2.477577742881641e-09, `time`: 0.1726s
+SUCCESS: `func_tol` reached after 4 iterations (levenberg_marquardt), `f_val`: 2.5071720778745965e-09, `time`: 0.1657s
+
+  block=  60 min      70.3 s    16.25 ms/unit   solvers=  36  curve handles=   36
+    4329/4329 units projected (100.0%), 121,212 risk rows (28.0 per unit)
+    610-day single-process projection: 11.92 h
+    of which solver builds ~=   10.8 s (1.83 h over 610 days)
+SUCCESS: `func_tol` reached after 4 iterations (levenberg_marquardt), `f_val`: 2.5696890833236416e-09, `time`: 0.1702s
+SUCCESS: `func_tol` reached after 4 iterations (levenberg_marquardt), `f_val`: 2.5927786036474275e-09, `time`: 0.1720s
+SUCCESS: `func_tol` reached after 4 iterations (levenberg_marquardt), `f_val`: 2.598308923489825e-09, `time`: 0.1682s
+SUCCESS: `func_tol` reached after 4 iterations (levenberg_marquardt), `f_val`: 2.6072735584065383e-09, `time`: 0.2088s
+SUCCESS: `func_tol` reached after 4 iterations (levenberg_marquardt), `f_val`: 2.599566230561623e-09, `time`: 0.1866s
+SUCCESS: `func_tol` reached after 4 iterations (levenberg_marquardt), `f_val`: 2.8086811335326305e-09, `time`: 0.1842s
+SUCCESS: `func_tol` reached after 4 iterations (levenberg_marquardt), `f_val`: 2.5978605691087e-09, `time`: 0.1736s
+SUCCESS: `func_tol` reached after 4 iterations (levenberg_marquardt), `f_val`: 2.6097309713346177e-09, `time`: 0.1913s
+SUCCESS: `func_tol` reached after 4 iterations (levenberg_marquardt), `f_val`: 2.6097309713346177e-09, `time`: 0.2089s
+SUCCESS: `func_tol` reached after 4 iterations (levenberg_marquardt), `f_val`: 2.6097309713346177e-09, `time`: 0.1856s
+SUCCESS: `func_tol` reached after 4 iterations (levenberg_marquardt), `f_val`: 2.6097309713346177e-09, `time`: 0.1473s
+SUCCESS: `func_tol` reached after 4 iterations (levenberg_marquardt), `f_val`: 2.8182625113525958e-09, `time`: 0.1671s
+SUCCESS: `func_tol` reached after 4 iterations (levenberg_marquardt), `f_val`: 2.6052103182752462e-09, `time`: 0.1710s
+SUCCESS: `func_tol` reached after 4 iterations (levenberg_marquardt), `f_val`: 2.619864006458325e-09, `time`: 0.1725s
+SUCCESS: `func_tol` reached after 4 iterations (levenberg_marquardt), `f_val`: 2.6411070580763306e-09, `time`: 0.1542s
+SUCCESS: `func_tol` reached after 4 iterations (levenberg_marquardt), `f_val`: 2.6723952049111732e-09, `time`: 0.1547s
+SUCCESS: `func_tol` reached after 4 iterations (levenberg_marquardt), `f_val`: 2.6822298174633412e-09, `time`: 0.1568s
+SUCCESS: `func_tol` reached after 4 iterations (levenberg_marquardt), `f_val`: 2.88557742295284e-09, `time`: 0.1685s
+SUCCESS: `func_tol` reached after 4 iterations (levenberg_marquardt), `f_val`: 2.667556564762444e-09, `time`: 0.1740s
+SUCCESS: `func_tol` reached after 4 iterations (levenberg_marquardt), `f_val`: 2.6368133109082912e-09, `time`: 0.1635s
+SUCCESS: `func_tol` reached after 4 iterations (levenberg_marquardt), `f_val`: 2.846642000383537e-09, `time`: 0.1637s
+SUCCESS: `func_tol` reached after 4 iterations (levenberg_marquardt), `f_val`: 2.6476211456722286e-09, `time`: 0.2032s
+SUCCESS: `func_tol` reached after 4 iterations (levenberg_marquardt), `f_val`: 2.875624224331259e-09, `time`: 0.1971s
+SUCCESS: `func_tol` reached after 4 iterations (levenberg_marquardt), `f_val`: 2.665297713581137e-09, `time`: 0.2056s
+SUCCESS: `func_tol` reached after 4 iterations (levenberg_marquardt), `f_val`: 2.6446954619936254e-09, `time`: 0.1926s
+SUCCESS: `func_tol` reached after 4 iterations (levenberg_marquardt), `f_val`: 2.6342981113811322e-09, `time`: 0.1832s
+SUCCESS: `func_tol` reached after 4 iterations (levenberg_marquardt), `f_val`: 2.8200488290240617e-09, `time`: 0.2150s
+SUCCESS: `func_tol` reached after 4 iterations (levenberg_marquardt), `f_val`: 2.6117717494687955e-09, `time`: 0.1753s
+SUCCESS: `func_tol` reached after 4 iterations (levenberg_marquardt), `f_val`: 2.82760462667202e-09, `time`: 0.1679s
+SUCCESS: `func_tol` reached after 4 iterations (levenberg_marquardt), `f_val`: 2.608091505716881e-09, `time`: 0.1451s
+SUCCESS: `func_tol` reached after 4 iterations (levenberg_marquardt), `f_val`: 2.823661622523778e-09, `time`: 0.1585s
+SUCCESS: `func_tol` reached after 4 iterations (levenberg_marquardt), `f_val`: 2.6173955297203875e-09, `time`: 0.1756s
+SUCCESS: `func_tol` reached after 4 iterations (levenberg_marquardt), `f_val`: 2.627196341379666e-09, `time`: 0.1680s
+SUCCESS: `func_tol` reached after 4 iterations (levenberg_marquardt), `f_val`: 2.8171618567836672e-09, `time`: 0.1763s
+SUCCESS: `func_tol` reached after 4 iterations (levenberg_marquardt), `f_val`: 2.539534490793111e-09, `time`: 0.1512s
+SUCCESS: `func_tol` reached after 4 iterations (levenberg_marquardt), `f_val`: 2.7353963980565127e-09, `time`: 0.1642s
+SUCCESS: `func_tol` reached after 4 iterations (levenberg_marquardt), `f_val`: 2.4988388156697187e-09, `time`: 0.1577s
+SUCCESS: `func_tol` reached after 4 iterations (levenberg_marquardt), `f_val`: 2.693503468855894e-09, `time`: 0.1720s
+SUCCESS: `func_tol` reached after 4 iterations (levenberg_marquardt), `f_val`: 2.5077392250867407e-09, `time`: 0.1689s
+SUCCESS: `func_tol` reached after 4 iterations (levenberg_marquardt), `f_val`: 2.7292160727891127e-09, `time`: 0.1693s
+SUCCESS: `func_tol` reached after 4 iterations (levenberg_marquardt), `f_val`: 2.5120798224399643e-09, `time`: 0.1686s
+SUCCESS: `func_tol` reached after 4 iterations (levenberg_marquardt), `f_val`: 2.7021684733233317e-09, `time`: 0.1765s
+SUCCESS: `func_tol` reached after 4 iterations (levenberg_marquardt), `f_val`: 2.5216419522464466e-09, `time`: 0.1727s
+SUCCESS: `func_tol` reached after 4 iterations (levenberg_marquardt), `f_val`: 2.7410606308498823e-09, `time`: 0.1514s
+SUCCESS: `func_tol` reached after 4 iterations (levenberg_marquardt), `f_val`: 2.5837456954476282e-09, `time`: 0.1540s
+SUCCESS: `func_tol` reached after 4 iterations (levenberg_marquardt), `f_val`: 2.5920008333524757e-09, `time`: 0.1435s
+SUCCESS: `func_tol` reached after 4 iterations (levenberg_marquardt), `f_val`: 2.794165908717033e-09, `time`: 0.1415s
+SUCCESS: `func_tol` reached after 4 iterations (levenberg_marquardt), `f_val`: 2.5763738952598964e-09, `time`: 0.1764s
+SUCCESS: `func_tol` reached after 4 iterations (levenberg_marquardt), `f_val`: 2.588268795208151e-09, `time`: 0.1548s
+SUCCESS: `func_tol` reached after 4 iterations (levenberg_marquardt), `f_val`: 2.786311437782293e-09, `time`: 0.1847s
+SUCCESS: `func_tol` reached after 4 iterations (levenberg_marquardt), `f_val`: 2.5896419697391094e-09, `time`: 0.1645s
+SUCCESS: `func_tol` reached after 4 iterations (levenberg_marquardt), `f_val`: 2.795055492666888e-09, `time`: 0.1712s
+SUCCESS: `func_tol` reached after 4 iterations (levenberg_marquardt), `f_val`: 2.5460061282263352e-09, `time`: 0.2056s
+SUCCESS: `func_tol` reached after 4 iterations (levenberg_marquardt), `f_val`: 2.735146615268584e-09, `time`: 0.2106s
+SUCCESS: `func_tol` reached after 4 iterations (levenberg_marquardt), `f_val`: 2.525629787656861e-09, `time`: 0.2216s
+SUCCESS: `func_tol` reached after 4 iterations (levenberg_marquardt), `f_val`: 2.52330385274925e-09, `time`: 0.1908s
+SUCCESS: `func_tol` reached after 4 iterations (levenberg_marquardt), `f_val`: 2.71530922602497e-09, `time`: 0.1774s
+SUCCESS: `func_tol` reached after 4 iterations (levenberg_marquardt), `f_val`: 2.508809255550739e-09, `time`: 0.1644s
+SUCCESS: `func_tol` reached after 4 iterations (levenberg_marquardt), `f_val`: 2.6759881153387846e-09, `time`: 0.1871s
+SUCCESS: `func_tol` reached after 4 iterations (levenberg_marquardt), `f_val`: 2.479294253550513e-09, `time`: 0.1812s
+SUCCESS: `func_tol` reached after 4 iterations (levenberg_marquardt), `f_val`: 2.6685125608190488e-09, `time`: 0.1715s
+SUCCESS: `func_tol` reached after 4 iterations (levenberg_marquardt), `f_val`: 2.477577742881641e-09, `time`: 0.1669s
+SUCCESS: `func_tol` reached after 4 iterations (levenberg_marquardt), `f_val`: 2.5168317314609415e-09, `time`: 0.1703s
+SUCCESS: `func_tol` reached after 4 iterations (levenberg_marquardt), `f_val`: 2.5071720778745965e-09, `time`: 0.1793s
+
+  block=  30 min      84.8 s    19.59 ms/unit   solvers=  64  curve handles=   64
+    4329/4329 units projected (100.0%), 121,212 risk rows (28.0 per unit)
+    610-day single-process projection: 14.37 h
+    of which solver builds ~=   19.2 s (3.25 h over 610 days)

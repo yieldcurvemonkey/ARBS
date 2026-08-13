@@ -1,0 +1,200 @@
+C:\Users\chris\clee\ARBS-dd\scratch\ddkrd_p14.py:26: LicenceNotice: 
+Rateslib is source-available (not open-source) software distributed under a dual-licence model.
+No commercial licence is registered for this installation. Use is therefore permitted for non-commercial purposes only (at-home or university based academic use).
+Any use in commercial, professional, or for-profit environments, including evaluation or trial use, requires a valid commercial licence or an approved evaluation licence.
+Certain features may require a registered commercial or evaluation licence in current or future versions.
+For licensing information or to register a licence, please visit: https://rateslib.com/licence
+  import rateslib as rl
+C:\Users\chris\anaconda3\envs\stir\Lib\site-packages\rateslib\data\fixings.py:3426: RuntimeWarning: invalid value encountered in divide
+  r = (v[:-1] / v[1:] - 1) * 100 / dcfs_obs[len(populated) :]
+C:\Users\chris\anaconda3\envs\stir\Lib\site-packages\rateslib\data\fixings.py:3485: UserWarning: The fixings series 'reference_date
+1998-02-20    5.37
+1998-02-23    5.51
+1998-02-24    5.48
+1998-02-25    5.61
+1998-02-26    5.60
+              ... 
+2026-06-09    3.60
+2026-06-10    3.59
+2026-06-11    3.60
+2026-06-12    3.65
+2026-06-15    3.69
+Name: rate, Length: 7140, dtype: float64' for the RFR 1B rates contains more fixings than are expected from the fixings calendar.
+Specifically, the extra data item lies within the fixings window: '16-03-2026':'15-06-2026'.
+  warnings.warn(
+C:\Users\chris\anaconda3\envs\stir\Lib\site-packages\rateslib\data\fixings.py:3485: UserWarning: The fixings series 'ARBS_RFR_6A6C57425A86F724D22396C2_1B' for the RFR 1B rates contains more fixings than are expected from the fixings calendar.
+Specifically, the extra data item lies within the fixings window: '16-03-2026':'15-06-2026'.
+  warnings.warn(
+C:\Users\chris\anaconda3\envs\stir\Lib\site-packages\rateslib\data\fixings.py:3485: UserWarning: The fixings series 'reference_date
+1998-02-20    5.37
+1998-02-23    5.51
+1998-02-24    5.48
+1998-02-25    5.61
+1998-02-26    5.60
+              ... 
+2026-06-09    3.60
+2026-06-10    3.59
+2026-06-11    3.60
+2026-06-12    3.65
+2026-06-15    3.69
+Name: rate, Length: 7140, dtype: float64' for the RFR 1B rates contains more fixings than are expected from the fixings calendar.
+Specifically, the extra data item lies within the fixings window: '16-03-2026':'15-06-2026'.
+  warnings.warn(
+C:\Users\chris\anaconda3\envs\stir\Lib\site-packages\rateslib\data\fixings.py:3485: UserWarning: The fixings series 'ARBS_RFR_6A6C57425A86F724D22396C2_1B' for the RFR 1B rates contains more fixings than are expected from the fixings calendar.
+Specifically, the extra data item lies within the fixings window: '16-03-2026':'15-06-2026'.
+  warnings.warn(
+C:\Users\chris\anaconda3\envs\stir\Lib\site-packages\rateslib\data\fixings.py:3485: UserWarning: The fixings series 'reference_date
+1998-02-20    5.37
+1998-02-23    5.51
+1998-02-24    5.48
+1998-02-25    5.61
+1998-02-26    5.60
+              ... 
+2026-06-09    3.60
+2026-06-10    3.59
+2026-06-11    3.60
+2026-06-12    3.65
+2026-06-15    3.69
+Name: rate, Length: 7140, dtype: float64' for the RFR 1B rates contains more fixings than are expected from the fixings calendar.
+Specifically, the extra data item lies within the fixings window: '16-03-2026':'15-06-2026'.
+  warnings.warn(
+C:\Users\chris\anaconda3\envs\stir\Lib\site-packages\rateslib\data\fixings.py:3485: UserWarning: The fixings series 'ARBS_RFR_6A6C57425A86F724D22396C2_1B' for the RFR 1B rates contains more fixings than are expected from the fixings calendar.
+Specifically, the extra data item lies within the fixings window: '16-03-2026':'15-06-2026'.
+  warnings.warn(
+C:\Users\chris\anaconda3\envs\stir\Lib\site-packages\rateslib\data\fixings.py:3485: UserWarning: The fixings series 'reference_date
+1998-02-20    5.37
+1998-02-23    5.51
+1998-02-24    5.48
+1998-02-25    5.61
+1998-02-26    5.60
+              ... 
+2026-06-09    3.60
+2026-06-10    3.59
+2026-06-11    3.60
+2026-06-12    3.65
+2026-06-15    3.69
+Name: rate, Length: 7140, dtype: float64' for the RFR 1B rates contains more fixings than are expected from the fixings calendar.
+Specifically, the extra data item lies within the fixings window: '16-03-2026':'15-06-2026'.
+  warnings.warn(
+C:\Users\chris\anaconda3\envs\stir\Lib\site-packages\rateslib\data\fixings.py:3485: UserWarning: The fixings series 'ARBS_RFR_6A6C57425A86F724D22396C2_1B' for the RFR 1B rates contains more fixings than are expected from the fixings calendar.
+Specifically, the extra data item lies within the fixings window: '16-03-2026':'15-06-2026'.
+  warnings.warn(
+C:\Users\chris\anaconda3\envs\stir\Lib\site-packages\rateslib\data\fixings.py:3485: UserWarning: The fixings series 'reference_date
+1998-02-20    5.37
+1998-02-23    5.51
+1998-02-24    5.48
+1998-02-25    5.61
+1998-02-26    5.60
+              ... 
+2026-06-09    3.60
+2026-06-10    3.59
+2026-06-11    3.60
+2026-06-12    3.65
+2026-06-15    3.69
+Name: rate, Length: 7140, dtype: float64' for the RFR 1B rates contains more fixings than are expected from the fixings calendar.
+Specifically, the extra data item lies within the fixings window: '16-03-2026':'15-06-2026'.
+  warnings.warn(
+C:\Users\chris\anaconda3\envs\stir\Lib\site-packages\rateslib\data\fixings.py:3485: UserWarning: The fixings series 'ARBS_RFR_6A6C57425A86F724D22396C2_1B' for the RFR 1B rates contains more fixings than are expected from the fixings calendar.
+Specifically, the extra data item lies within the fixings window: '16-03-2026':'15-06-2026'.
+  warnings.warn(
+====================================================================================================
+(a) FED_FUNDS curve definition
+    RATESLIB_CURVE_DEFINITIONS has USD-SOFR-1D             : True
+    RATESLIB_CURVE_DEFINITIONS has USD-FEDFUNDS-1D         : False
+    RATESLIB_CURVE_DEFINITIONS has USD-SOFR-1D-RISK        : True
+    RATESLIB_CURVE_DEFINITIONS has USD-FEDFUNDS-1D-RISK    : True
+
+  [SOFR] curve=USD-SOFR-1D id=USD-SOFR-1D ref=2026-06-16 00:00:00 nodes=45 conv=Act360 cal=<rl.NamedCal:'nyc' at 0x1a5b0c18d00> fixings=7140
+        _curve_definition() -> OK (in the map)
+SUCCESS: `func_tol` reached after 4 iterations (levenberg_marquardt), `f_val`: 2.5588097602600924e-09, `time`: 0.1503s
+        build_delta_risk_ladder(P28) -> OK in 338 ms, labels match=True, J(28, 28) cond=204.060
+        par (%): 1M=3.6368  3M=3.6680  1Y=3.8736  2Y=3.9187  5Y=3.8892  10Y=4.0388  30Y=4.2350  50Y=3.9878
+        risk curve id=USD-SOFR-1D-RISK nodes=29 conv=Act360 cal=<rl.NamedCal:'nyc' at 0x1a5b0c18d00>
+
+  [FED_FUNDS] curve=USD-FEDFUNDS-1D id=USD-FEDFUNDS-1D ref=2026-06-16 00:00:00 nodes=45 conv=Act360 cal=<rl.NamedCal:'nyc' at 0x1a5b421c180> fixings=6521
+        _curve_definition() -> OK (in the map)
+SUCCESS: `func_tol` reached after 4 iterations (levenberg_marquardt), `f_val`: 2.713808870647769e-09, `time`: 0.1442s
+        build_delta_risk_ladder(P28) -> OK in 300 ms, labels match=True, J(28, 28) cond=205.740
+        par (%): 1M=3.6312  3M=3.6545  1Y=3.8511  2Y=3.8885  5Y=3.8512  10Y=3.9987  30Y=4.1910  50Y=3.9418
+        risk curve id=USD-FEDFUNDS-1D-RISK nodes=29 conv=Act360 cal=<rl.NamedCal:'nyc' at 0x1a5b421c180>
+
+====================================================================================================
+(b) 28-pillar grid validation, SOFR
+  ref=2026-06-16 00:00:00 spot=2026-06-18 00:00:00
+SUCCESS: `func_tol` reached after 4 iterations (levenberg_marquardt), `f_val`: 2.5588097602600924e-09, `time`: 0.1522s
+SUCCESS: `func_tol` reached after 4 iterations (levenberg_marquardt), `f_val`: 2.5588097602600924e-09, `time`: 0.1354s
+  [K28        ] K=28  build    319 ms  cond(J)= 204.060
+SUCCESS: `func_tol` reached after 4 iterations (levenberg_marquardt), `f_val`: 9.78474481261527e-10, `time`: 0.0995s
+SUCCESS: `func_tol` reached after 4 iterations (levenberg_marquardt), `f_val`: 9.78474481261527e-10, `time`: 0.1042s
+  [K21        ] K=21  build    236 ms  cond(J)=  66.724
+SUCCESS: `func_tol` reached after 3 iterations (levenberg_marquardt), `f_val`: 2.63361242495967e-09, `time`: 0.0517s
+SUCCESS: `func_tol` reached after 3 iterations (levenberg_marquardt), `f_val`: 2.63361242495967e-09, `time`: 0.0637s
+  [K15        ] K=15  build    156 ms  cond(J)=  61.655
+SUCCESS: `func_tol` reached after 4 iterations (levenberg_marquardt), `f_val`: 2.5631708928143236e-09, `time`: 0.0837s
+SUCCESS: `func_tol` reached after 4 iterations (levenberg_marquardt), `f_val`: 2.5631708928143236e-09, `time`: 0.1266s
+  [K27_no11Y  ] K=27  build    317 ms  cond(J)= 204.060
+SUCCESS: `func_tol` reached after 3 iterations (levenberg_marquardt), `f_val`: 4.29429758343813e-09, `time`: 0.0583s
+SUCCESS: `func_tol` reached after 3 iterations (levenberg_marquardt), `f_val`: 4.29429758343813e-09, `time`: 0.0853s
+  [K26_no40Y+ ] K=26  build    193 ms  cond(J)= 168.602
+
+  reprice tie-out (risk curve vs dense curve, bp):
+   tenor  dense_pct  risk_pct   diff_bp
+      1M   3.636830  3.636830 -0.000011
+      2M   3.659080  3.659080  0.000000
+      3M   3.668040  3.668040  0.000000
+      4M   3.689390  3.689390 -0.000000
+      6M   3.731440  3.731440  0.000000
+      9M   3.806900  3.806900 -0.000000
+      1Y   3.873570  3.873570  0.000033
+     15M   3.892360  3.892360 -0.000002
+     18M   3.905790  3.905790  0.000000
+     21M   3.913550  3.913550 -0.000000
+      2Y   3.918740  3.918740  0.000071
+     30M   3.897655  3.897655 -0.000001
+      3Y   3.896950  3.896950  0.000117
+      4Y   3.884250  3.884250  0.000185
+      5Y   3.889170  3.889170  0.000277
+      6Y   3.911340  3.911340  0.000408
+      7Y   3.940060  3.940060  0.000603
+      8Y   3.971620  3.971620  0.000854
+      9Y   4.004610  4.004610  0.001187
+     10Y   4.038800  4.038800  0.001612
+     11Y   4.073230  4.073230  0.002113
+     12Y   4.106830  4.106831  0.006122
+     15Y   4.195910  4.195913  0.028215
+     20Y   4.272180  4.272183  0.027484
+     25Y   4.270981  4.270987  0.054922
+     30Y   4.234980  4.235000  0.194995
+     40Y   4.117628  4.117625 -0.030276
+     50Y   3.987775  3.987728 -0.460789
+  max|reprice err| = 0.46078853 bp
+
+  sum(delta) vs PV01, and bucket-grid necessity (max |reduced - K28| as % of the trade's total DV01):
+                case       sum_K28          pv01  ratio      K21      K15  K27_no11Y  K26_no40Y+
+       spot 2Y payer   38,397.4719   38,396.7592 1.0000   0.0000   0.0000     0.0000      0.0000
+      spot 10Y payer   82,188.3470   82,183.3516 1.0001   0.0001   0.0176     0.0000      0.0000
+      spot 11Y payer   88,637.8090   88,653.5211 0.9998   0.0001 100.0146   100.0146      0.0000
+       spot 30Y recv  -84,739.5104  -84,791.0452 0.9994   0.0000   0.0044     0.0011      0.0005
+      spot 40Y payer   96,784.2077   96,750.2112 1.0004   0.0001 220.8146     0.0004    220.8274
+      spot 50Y payer   52,867.5743   52,847.1790 1.0004 160.8598 283.3223     0.0002    283.3411
+     1Yx10Y receiver -118,518.4707 -118,356.0241 1.0014   0.0013 112.2314   112.2314      0.0000
+         5Yx5Y payer  111,752.0625  110,946.6164 1.0073   0.0021   0.3414     0.0054      0.0000
+   past-eff 5Y payer   13,084.6679   14,215.6482 0.9204  47.1206  47.1206     0.0000      0.0000
+    7Y off-mkt payer  144,228.9088  152,511.3548 0.9457   0.0128   1.2532     0.0000      0.0000
+
+  50Y payer 25mm placement, K28 vs a 30Y-capped grid:
+    20Y   K28            1.1   no40Y+           18.2
+    25Y   K28            1.5   no40Y+      -99,120.8
+    30Y   K28            3.3   no40Y+      149,798.9
+    40Y   K28            7.3   no40Y+            0.0
+    50Y   K28       52,853.0   no40Y+            0.0
+    SUM   K28       52,867.6   no40Y+       50,718.8
+
+  does rl.Portfolio.delta aggregate across instruments? (batching check)
+    shape(2 instruments) = (28, 1), columns = [('usd', 'usd')]
+    max|d(a+b) - (d(a)+d(b))| = 1.455e-11
+
+  per-unit cost on the risk handle (no fixings attached):
+    2Y   build  0.443 ms | Portfolio.delta  3.289 ms
+    10Y  build  1.690 ms | Portfolio.delta  3.887 ms
+    30Y  build  4.054 ms | Portfolio.delta  6.382 ms

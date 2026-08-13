@@ -1,0 +1,7 @@
+m4_weight_is_p :: 8 failed, 62 passed, 1 warning in 10.29s
+m5_decay_row_order :: 1 failed, 69 passed, 1 warning in 10.10s
+ANCHOR PROBLEM  m6_kappa_is_hit_rate :: anchor not found: {old!r}"
+m7_hole_always_false :: 3 failed, 67 passed, 1 warning in 10.49s
+m8_drop_series_key :: 3 failed, 67 passed, 1 warning in 10.64s
+m9_no_dup_check :: 1 failed, 69 passed, 1 warning in 10.01s
+m10_served_all_true :: 1 failed, 69 passed, 1 warning in 10.58s

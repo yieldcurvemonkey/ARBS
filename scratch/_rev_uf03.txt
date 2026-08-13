@@ -1,0 +1,97 @@
+=== 0. the harness reproduces F-15 on the on-market control ===
+n=507  median dev -0.0028 bp  IQR [-0.1880, +0.1550]  within +-0.1bp 0.373   (F-15: +0.021, [-0.096,+0.170], 0.405)
+rate-rule mixture on the control: b0=-0.1138 h=0.0000 s=1.0031  (h -> 0 means the two components are not separable here); robust s from the IQR = 0.2543 bp
+
+=== A. THE SIGN: rate rule vs upfront rule, where both apply ===
+n decisive = 2025 of 2025
+AGREEMENT (derived sign)  = 0.4805
+AGREEMENT (inverted sign) = 0.5195
+  rate rule   RECEIVED 0.504
+  upfront rule RECEIVED 0.482
+
+by u/|dev| (agreement is FORCED below 1 and impossible above it -- the number is the geometry, the strata are the content):
+                n    agree  med_|dev|  med_u_bps  med_ratio
+ratio_bin                                                  
+(0.0, 0.25]    99  1.00000   0.789720   0.074764   0.104668
+(0.25, 0.5]    92  1.00000   0.525931   0.184023   0.381038
+(0.5, 0.9]    245  1.00000   1.300405   0.967294   0.781678
+(0.9, 1.1]   1062  0.50565   5.630509   5.616149   0.999629
+(1.1, 2.0]    300  0.00000   1.356780   1.852175   1.268730
+(2.0, 5.0]    112  0.00000   0.233809   0.571009   3.134148
+(5.0, inf]    115  0.00000   0.091949   1.072509  12.552565
+
+by |dev| (bp):
+               n     agree  med_|dev|  med_u_bps  med_ratio
+dev_bin                                                    
+(0.0, 0.1]   152  0.250000   0.036291   0.095352   3.195980
+(0.1, 0.3]   169  0.502959   0.183185   0.181407   0.998743
+(0.3, 1.0]   258  0.569767   0.611862   0.585663   0.956033
+(1.0, 3.0]   447  0.492170   1.854002   1.938136   1.001849
+(3.0, 10.0]  723  0.497925   5.656022   5.835196   1.000658
+(10.0, inf]  276  0.445652  14.511663  14.070991   1.001830
+
+by fee size ($; 500 is stir_flow's PTP_USD_FLOOR):
+                       n     agree  med_|dev|  med_u_bps  med_ratio
+fee_bin                                                            
+(0.0, 500.0]         115  0.713043   0.131361   0.058802   0.482128
+(500.0, 5000.0]      348  0.543103   0.603255   0.423623   0.977326
+(5000.0, 50000.0]    827  0.463120   2.750662   2.788062   1.008158
+(50000.0, 500000.0]  622  0.442122   5.895520   5.990326   1.004601
+(500000.0, inf]      113  0.389381   8.969800  12.105582   1.010669
+
+by tenor band:
+        n     agree  med_|dev|  med_u_bps  med_ratio
+band                                                
+0      76  0.618421   1.180008   0.708090   0.834611
+1      70  0.571429   0.670782   0.505832   0.888983
+2      27  0.444444   1.793104   1.950558   1.043084
+3     195  0.415385   4.548414   5.426771   1.007910
+4     225  0.395556   3.916701   3.983770   1.015953
+5     414  0.483092   3.572844   3.592753   1.002363
+6     596  0.491611   2.641012   2.810128   1.000813
+7     420  0.500000   3.477859   3.311897   1.000369
+8       2  0.500000   0.586873   1.502566   4.559267
+
+does the fee TRACK the rate deviation on the disagreement stratum?
+  agree (u<|dev|)      n=  973  median u/|dev| 0.925  spearman(u,|dev|) +0.940  median |z| 0.159 bp
+  disagree (u>|dev|)   n= 1052  median u/|dev| 1.101  spearman(u,|dev|) +0.900  median |z| 0.197 bp
+
+fragility: how many calls have their SIGN inside the mid's own error?
+  |dev| <= 1*s (0.254 bp) and u > |dev|: 0.0884 of decisive rows
+  |dev| <= 2*s (0.509 bp) and u > |dev|: 0.1215 of decisive rows
+
+=== B. tau_upfront, fitted on z = (|f| - U)/DV01 ===
+flow_fee ALL                 n= 2025  b0=-0.152  h=0.000  s=0.998  tau=4832.306 bp  [moment: LEPTOKURTIC, no real solution, exkurt +22.02, MAD-sigma 0.261, med|z| 0.178]
+flow_fee band 0              n=   76  b0=+0.150  h=0.000  s=0.879  tau=2754.663 bp  [moment: LEPTOKURTIC, no real solution, exkurt +3.76, MAD-sigma 0.789, med|z| 0.529]
+flow_fee band 1              n=   70  b0=+0.042  h=0.000  s=0.523  tau=1469.356 bp  [moment: LEPTOKURTIC, no real solution, exkurt +3.39, MAD-sigma 0.366, med|z| 0.263]
+flow_fee band 2              n=27 -- too few
+flow_fee band 3              n=  195  b0=+27.359  h=0.000  s=8.958  tau=90777125097998432.000 bp  [moment: LEPTOKURTIC, no real solution, exkurt +19.22, MAD-sigma 0.315, med|z| 0.198]
+flow_fee band 4              n=  225  b0=-0.177  h=0.000  s=0.698  tau=3834.703 bp  [moment: LEPTOKURTIC, no real solution, exkurt +15.42, MAD-sigma 0.276, med|z| 0.180]
+flow_fee band 5              n=  414  b0=-0.195  h=0.000  s=2.249  tau=21507.198 bp  [moment: LEPTOKURTIC, no real solution, exkurt +33.96, MAD-sigma 0.282, med|z| 0.192]
+flow_fee band 6              n=  596  b0=-0.048  h=0.000  s=0.410  tau=5075263331202.492 bp  [moment: LEPTOKURTIC, no real solution, exkurt +21.94, MAD-sigma 0.201, med|z| 0.139]
+flow_fee band 7              n=  420  b0=+0.006  h=0.000  s=0.683  tau=259117.805 bp  [moment: LEPTOKURTIC, no real solution, exkurt +25.69, MAD-sigma 0.271, med|z| 0.183]
+flow_fee band 8              n=2 -- too few
+offmkt_fee ALL               n=  988  MIXTURE REFUSED: the mixture fit returned h=0.0, s=315.1834868598636; tau = s...  [moment: LEPTOKURTIC, no real solution, exkurt +10.33, MAD-sigma 0.475, med|z| 0.321]
+term_fee ALL                 n=  870  b0=-21.609  h=0.000  s=46.396  tau=5542598015801965206812845184804454131564544.000 bp  [moment: LEPTOKURTIC, no real solution, exkurt +19.12, MAD-sigma 1.794, med|z| 1.204]
+
+=== C. capped prints: |NPV|/U, which is scale-free in notional ===
+  capped           n=  952  median |NPV|/U 1.004  IQR [0.978, 1.304]  frac>1 0.563
+  uncapped>=250mm  n=  979  median |NPV|/U 1.000  IQR [0.950, 1.088]  frac>1 0.490
+
+  paired by (tenor band, cap vintage) -- the cap is a function of both:
+ band vintage  n_cap  n_unc  med_cap  med_unc    ratio  frac>1_cap  frac>1_unc
+    1      V1     43     25 1.040320 1.057021 0.984200    0.581395    0.640000
+    3      V1     39     50 1.010513 0.993246 1.017384    0.666667    0.360000
+    3      V2     54    199 1.011687 0.997880 1.013836    0.611111    0.447236
+    4      V1     85     22 1.001254 1.001637 0.999618    0.529412    0.545455
+    4      V2     60    150 0.998540 0.999848 0.998692    0.466667    0.493333
+    5      V2    180    195 1.005217 0.999534 1.005686    0.577778    0.476923
+    6      V2    176     76 1.002345 1.000597 1.001747    0.551136    0.526316
+
+=== D. terminations: does U/|f| cluster near 1? ===
+  all fee-bearing                  n=  870  median U/|f| 0.996  IQR [0.846, 1.053]  within 10% of 1: 0.506
+     dealer RECEIVED (side held on the dying swap) 0.490; the FLOW rule would say 0.510
+     median |edge| 1.20 bp (a bid-offer is a fraction of a bp)
+  seasoned (>30d past effective)   n=  662  median U/|f| 0.998  IQR [0.925, 1.015]  within 10% of 1: 0.674
+     dealer RECEIVED (side held on the dying swap) 0.612; the FLOW rule would say 0.388
+     median |edge| 0.82 bp (a bid-offer is a fraction of a bp)

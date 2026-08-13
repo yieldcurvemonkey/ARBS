@@ -1,0 +1,24 @@
+cache window 2024-03-01 .. 2026-08-07
+cache module vintage: {'universe.py': 'b90632e210e4400274d4eafd8a7a7c7f88a59b5e50864564c21254400eaffc55', 'sanity.py': '0a9805bd0270c311b57d9779bc9de81afc00ef9188a7411f3347fc497539128d'}
+
+30 monthly frames, 1,437,838 units, 2024-03-01 .. 2026-08-07, 610 distinct tape days
+
+universe DV01 (proxy)                80,660,906,449
+retained, pre-recovery               45,941,783,080   56.96%   units 1,082,393
+PKG-4+ UNORIENTABLE                  18,203,119,196   22.57%   units    46,946
+  ...any leg carries a PTP           17,876,422,208   22.16%   units    46,057   (98.21% of the PKG-4+ pond)
+    ^ the CRUDE gate (`pkgskew_analyse.py` section 8) and an upper bound only:
+      it asks whether a PTP exists, not whether it reconciles.
+  ...`tape_gate` recoverable         12,070,000,000   14.96%   (66.31% of the pond)   [input, see constant]
+retained, post-recovery              58,011,783,080   71.92%
+
+cross-check: recomputed post-recovery retention 71.92% vs the reported 71.92%  ->  AGREES (0.001 pp)
+
+--- what reaches the ladder -------------------------------------
+universe retention    56.96% ->  71.92%   (+14.96 pp)
+ladder-weightable     56.96% ->  56.96%   (+0.00 pp)
+  because `package_price` produces no `p`: with `p = None` and no
+  exclusion `ladder.unit_ladder_rows` RAISES, and with an exclusion
+  set the unit lands in `excluded` and `delta_dv01` is never formed.
+  A package tau fitted on the package `z` with
+  `probability.fit_mixture` is what closes the gap.

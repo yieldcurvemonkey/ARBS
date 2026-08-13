@@ -1,0 +1,14 @@
+........................................................................ [ 47%]
+.................................................F...................... [ 94%]
+.........                                                                [100%]Traceback (most recent call last):
+  File "<frozen runpy>", line 198, in _run_module_as_main
+  File "<frozen runpy>", line 88, in _run_code
+  File "C:\Users\chris\anaconda3\envs\stir\Lib\site-packages\pytest\__main__.py", line 9, in <module>
+    raise SystemExit(pytest.console_main())
+                     ~~~~~~~~~~~~~~~~~~~^^
+object address  : 000001DCAA2836D0
+object refcount : 3
+object type     : 00007FFCF2B8A480
+object type name: OSError
+object repr     : 
+lost sys.stderr

@@ -1,0 +1,37 @@
+M00_noop                                     GREEN     43 passed
+M01_orientation_global_flip                  RED       23 failed / 20 passed
+M02_lifecycle_no_inversion                   RED       2 failed / 41 passed
+M03_classify_drops_tau_bias                  GREEN     43 passed
+M04_classify_drops_mid_bias                  GREEN     43 passed
+M05_residual_bps_drops_bias                  GREEN     43 passed
+M06_marginalise_no_lifecycle_flip            GREEN     43 passed
+M07_marginalise_ignores_bias                 GREEN     43 passed
+M08_marginalise_branch_flip                  GREEN     43 passed
+M09_fragile_flag_never_fires                 RED       1 failed / 42 passed
+M10_fragile_flag_always_fires                RED       1 failed / 42 passed
+M11_signed_weight_is_p                       RED       1 failed / 42 passed
+M12_tiny_upfront_never_flagged               RED       1 failed / 42 passed
+M13_capped_default_on                        RED       1 failed / 42 passed
+M14_uwin_not_preferred                       RED       1 failed / 42 passed
+M15_no_lifecycle_fallback_flag               RED       1 failed / 42 passed
+M16_disagree_flag_dropped                    RED       1 failed / 42 passed
+M17_tau_recomputed_ignoring_floor            GREEN     43 passed
+M18_tau_uses_reported_only                   RED       1 failed / 42 passed
+M19_no_population_guard                      RED       1 failed / 42 passed
+M20_degenerate_fit_accepted                  RED       1 failed / 42 passed
+M21_robust_tau_half_spread_zero              RED       1 failed / 42 passed
+M22_no_mid_sigma_flag_dropped                RED       1 failed / 42 passed
+M23_dealer_sign_from_dev_not_edge            RED       11 failed / 32 passed
+M24_no_upfront_returns_a_call                RED       1 failed / 42 passed
+M25_p_from_edge_uses_abs                     RED       1 failed / 42 passed
+M26_edge_from_dev_no_lifecycle               GREEN     43 passed
+M27_fragile_mult_zero                        RED       1 failed / 42 passed
+M28_zero_dv01_allowed                        RED       1 failed / 42 passed
+M29_upfront_sign_ignored                     GREEN     43 passed
+M30_dev_sign_flip                            RED       1 failed / 42 passed
+M31_marginalise_gets_negated_dev             RED       1 failed / 42 passed
+M32_orientation_zero_branch_gone             RED       1 failed / 42 passed
+M33_upfront_bps_not_scaled                   RED       5 failed / 38 passed
+
+GREEN (survivors): 10 ['M00_noop', 'M03_classify_drops_tau_bias', 'M04_classify_drops_mid_bias', 'M05_residual_bps_drops_bias', 'M06_marginalise_no_lifecycle_flip', 'M07_marginalise_ignores_bias', 'M08_marginalise_branch_flip', 'M17_tau_recomputed_ignoring_floor', 'M26_edge_from_dev_no_lifecycle', 'M29_upfront_sign_ignored']
+NOT-RUN: 0 []

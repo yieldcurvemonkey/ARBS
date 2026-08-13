@@ -10,6 +10,7 @@ can be compared without editing code.
         "instrument": {"kind": "outright", "rank": 3},
         "timing":     {"entry_offset_min": -45, "exit_offset_min": 180},
         "filters":    {"voters": "voters", "roles": ["President"]},
+        "flip":       "none",          # or "nonvoters": fade the ones who cannot vote
         "sizing":     "equal",
         "cost_bp":    0.25,
     }
@@ -92,10 +93,45 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         "weekdays": None,            # [0..4], Monday=0
     },
 
+    # WHICH WAY -----------------------------------------------------------
+    # Inverts the position for part of the book. The default reads every
+    # label the same way — hawk long the rate, dove short it. ``nonvoters``
+    # FADES the speakers the published rotation gives no vote this year: it
+    # pays before a dove and receives before a hawk, on the thesis that a
+    # speech carrying no vote is not priced.
+    #
+    # The flip is applied at pricing, AFTER the one-position-at-a-time rule,
+    # so a faded event still occupies the book's single slot and can still
+    # displace a voter's speech. That is the honest accounting: a combined
+    # book is not the voters' book plus extra trades.
+    #
+    # A speaker whose voting status is unknown (``is_voter`` is None) is never
+    # flipped by ``nonvoters`` — unknown is not the same as not voting. This
+    # FED book has none, but the rule should not depend on that.
+    "flip": "none",                  # none | nonvoters | voters | all
+
     # HOW MUCH ------------------------------------------------------------
     "sizing": "equal",               # equal | conviction  (x |bucket|)
     "cost_bp": 0.0,                  # round trip, per unit of gross risk
 }
+
+#: Every direction rule a config may name. A typo must raise rather than fall
+#: through to "none" — a silently un-flipped book looks exactly like a flipped
+#: one that found no edge.
+FLIP_RULES = ("none", "nonvoters", "voters", "all")
+
+
+def flip_sign(attrs: Dict[str, Any], rule: Optional[str]) -> float:
+    """+1 to trade the label as read, -1 to trade against it."""
+    if rule is None or rule == "none":
+        return 1.0
+    if rule == "all":
+        return -1.0
+    if rule == "nonvoters":
+        return -1.0 if attrs.get("is_voter") is False else 1.0
+    if rule == "voters":
+        return -1.0 if attrs.get("is_voter") is True else 1.0
+    raise ValueError(f"unknown flip rule {rule!r}; use one of {FLIP_RULES}")
 
 
 def merge(*overrides: Dict[str, Any]) -> Dict[str, Any]:
@@ -300,6 +336,9 @@ def run_config(config: Dict[str, Any], raw_events: List[dict], mdp,
     cfg = G.CB_CONFIGS[cf["bank"]]
     st = resolve_instrument(cf["instrument"])
     t = cf["timing"]
+    flip_rule = cf.get("flip", "none")
+    if flip_rule not in FLIP_RULES:          # up front, not per trade
+        raise ValueError(f"unknown flip rule {flip_rule!r}; use one of {FLIP_RULES}")
 
     filtered, drops = apply_filters(raw_events, cf["filters"])
     timed, tdrops = retime(filtered, cfg, t["entry_offset_min"], t["exit_offset_min"],
@@ -356,17 +395,19 @@ def run_config(config: Dict[str, Any], raw_events: List[dict], mdp,
             continue
         # `side` is the PRICE side (-1 short the future for a hawk); in rate space
         # a hawk is +1, so side_rate = -side and the structure's own sign never
-        # has to be guessed.
-        unit = (-ev["side"]) * dr / gross
-        size = abs(ev["bucket"]) if sized else 1.0
+        # has to be guessed. `fl` then trades that reading backwards where the
+        # config says to fade it.
         a = ev.get("_attrs") or event_attrs(ev)
+        fl = flip_sign(a, flip_rule)
+        unit = fl * (-ev["side"]) * dr / gross
+        size = abs(ev["bucket"]) if sized else 1.0
         rows.append({
             "tag": tag, "bank": ev["bank"], "ccy": ev["ccy"], "speaker": ev["speaker"],
             "role": a["role"], "is_voter": a["is_voter"], "era": a["era"],
             "days_to_fomc": a["days_to_fomc"],
             "timestamp_source": ev.get("timestamp_source", "forexfactory"),
             "symbol": ev["symbol"], "structure": st.name,
-            "bucket": ev["bucket"], "abs_bucket": abs(ev["bucket"]),
+            "bucket": ev["bucket"], "abs_bucket": abs(ev["bucket"]), "flip": fl,
             "opened_at": pd.Timestamp(ev["entry_ts"]),
             "closed_at": pd.Timestamp(ev["exit_ts"]),
             "d_rate_bp": dr,
@@ -378,7 +419,15 @@ def run_config(config: Dict[str, Any], raw_events: List[dict], mdp,
 
     df = pd.DataFrame(rows).sort_values("opened_at").reset_index(drop=True)
     df["year"] = df["opened_at"].dt.year
+    # The label's reading, then the position actually taken. They differ only
+    # where the config faded that event, and a trade log that showed the first
+    # while booking the second would be wrong on both halves of the book.
     df["direction"] = np.where(df["bucket"] > 0, "hawk (short fut)", "dove (long fut)")
+    faded = df["flip"] < 0
+    if faded.any():
+        df.loc[faded, "direction"] = np.where(df.loc[faded, "bucket"] > 0,
+                                              "hawk, FADED (long fut)",
+                                              "dove, FADED (short fut)")
     df["profitable"] = df["pnl_bp"] > 0
     return Result(cf, st, df, funnel)
 

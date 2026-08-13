@@ -1,0 +1,22 @@
+           exclusion: None
+    base_orientation: (1, 1, -1, -1)
+         model_price: -6000.0
+      reported_price: -45000.0
+   deviation_dollars: -39000.0
+       deviation_bps: -1.95
+         dealer_sign: -1
+      received_signs: (-1, -1, 1, 1)
+          tieout_bps: 0.0
+     unresolved_pv01: 0.0
+               flags: ()
+    hypothesis signs: (1, 1, -1, -1)
+
+lifecycle variant -- the invariant `dealer_sign * base_orientation ==
+received_signs` must hold on BOTH branches, or a producer piping the
+accessor into `DirectionCall.base_orientation` inverts every tear-up:
+    base_orientation: (1, 1, -1, -1)
+         dealer_sign: 1
+      received_signs: (1, 1, -1, -1)
+    hypothesis signs: (1, 1, -1, -1)
+                flow: dealer_sign*base = (-1, -1, 1, 1)  received_signs = (-1, -1, 1, 1)  -> HOLDS
+           lifecycle: dealer_sign*base = (1, 1, -1, -1)  received_signs = (1, 1, -1, -1)  -> HOLDS
