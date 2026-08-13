@@ -1,6 +1,6 @@
 """Statistical inference for trading strategies.
 
-Four families of tool, each answering a question a Sharpe ratio cannot.
+Five families of tool, each answering a question a Sharpe ratio cannot.
 
 ``permutation``  Resample market data so that the ONLY thing destroyed is
                  temporal ordering. Log returns keep their marginal
@@ -19,6 +19,14 @@ Four families of tool, each answering a question a Sharpe ratio cannot.
                  every rank, and the Romano-Wolf stepdown with strong familywise
                  error control.
 
+``deflated_sharpe``
+                 The Bailey / Lopez de Prado Probabilistic and Deflated Sharpe
+                 ratios: the probability the true Sharpe clears a bar, corrected
+                 for skew, kurtosis, sample length, and the expected maximum of a
+                 search of N trials. Complements ``ras`` -- DSR prices the search
+                 parametrically through N and the cross-trial variance, where RAS
+                 measures the penalty on the actual family. Read both.
+
 ``ras``          The Rademacher Anti-Serum -- a finite-sample lower bound on the
                  true Sharpe after paying for the search, with the penalty
                  measured on the actual family rather than assumed from its size.
@@ -32,6 +40,21 @@ reads the global RNG, because a seed set once at the top of a notebook stops
 meaning anything the moment a second consumer draws from it.
 """
 
+from RVUtils.StatisticalFinance.deflated_sharpe import (
+    EULER_MASCHERONI,
+    MIN_OBS,
+    annualised_to_per_period,
+    deflated_sharpe_from_sharpes,
+    deflated_sharpe_of_best,
+    deflated_sharpe_ratio,
+    effective_trials,
+    effective_trials_from_corr,
+    expected_max_sharpe,
+    min_track_record_length,
+    probabilistic_sharpe_ratio,
+    sharpe_moments,
+    sharpe_std_error,
+)
 from RVUtils.StatisticalFinance.family import (
     FamilyTestResult,
     romano_wolf,
@@ -73,4 +96,9 @@ __all__ = [
     "selection_bias_pvalue", "topk_upper_bound", "romano_wolf", "FamilyTestResult",
     # ras
     "standardize_returns", "empirical_rademacher_complexity", "ras_bound", "RASResult",
+    # deflated sharpe
+    "EULER_MASCHERONI", "MIN_OBS", "sharpe_moments", "probabilistic_sharpe_ratio",
+    "sharpe_std_error", "expected_max_sharpe", "deflated_sharpe_ratio", "effective_trials",
+    "effective_trials_from_corr", "deflated_sharpe_of_best", "deflated_sharpe_from_sharpes",
+    "min_track_record_length", "annualised_to_per_period",
 ]
