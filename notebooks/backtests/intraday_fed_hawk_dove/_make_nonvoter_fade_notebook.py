@@ -12,6 +12,11 @@ import nbformat as nbf
 
 HERE = Path(__file__).parent
 OUT = HERE / "usd_fomc_nonvoter_fade.ipynb"
+#: The notebook needs an absolute path in its first cell -- a kernel does not
+#: know where it was launched from. Take it from this file rather than typing a
+#: checkout name, so regenerating from any worktree points the notebook at the
+#: worktree that generated it. Same convention as the econ-release generators.
+REPO_ROOT = str(Path(__file__).resolve().parents[3])
 
 C = []
 
@@ -21,7 +26,7 @@ def md(t):
 
 
 def code(t):
-    C.append(nbf.v4.new_code_cell(t.strip("\n")))
+    C.append(nbf.v4.new_code_cell(t.replace("__REPO_ROOT__", REPO_ROOT).strip("\n")))
 
 
 # ===========================================================================
@@ -79,9 +84,10 @@ code(r'''
 import sys, pickle, datetime, json, copy
 from pathlib import Path
 
-# The `flip` knob lives on feat/fomc-nonvoter-fade. Point REPO at whichever
-# checkout carries it — after that branch merges, that is any of them.
-REPO = r"C:\Users\chris\clee\ARBS-nvf"
+# Stamped by the generator with the checkout it ran from. Repoint it at any
+# checkout that carries `hawk_dove_config.flip` and `BT.trade_dashboard`, or
+# just regenerate from the one you want.
+REPO = r"__REPO_ROOT__"
 HERE = Path(REPO) / "notebooks" / "backtests" / "intraday_fed_hawk_dove"
 sys.path.insert(0, REPO); sys.path.insert(0, str(HERE))
 
@@ -309,6 +315,68 @@ ax.bar(D.opened_at.values, D.pnl_bp.values, width=w, alpha=.75,
        color=["seagreen" if v > 0 else "indianred" for v in D.pnl_bp])
 ax.axhline(0, color="k", lw=.6); ax.grid(alpha=.3); ax.set_ylabel("per-trade bp (D)")
 plt.tight_layout(); plt.show()
+''')
+
+# ---------------------------------------------------------------------------
+md(r"""
+### 3.1 The same book, one trade at a time
+
+The curve above is the summary. This is the book itself: five panels on a shared time axis, a
+crosshair that runs through all of them, and every marker carrying its whole record — who spoke,
+which way the position went, what the market did, and what the trade paid gross and net.
+
+Three things a static curve cannot show, and this is built to.
+
+**Which trades the line is made of.** A curve that ends positive can be one enormous winner and
+forty small losers. The per-trade bars sit directly under the curve, coloured by **which half of
+the combined book the trade came from**, so the voters' contribution and the fade's are read
+together rather than pooled.
+
+**That the strategy is almost never on.** 504 trades over four and a half years is sparse, and a
+continuous line invites the eye to read continuous exposure. Markers keep that honest.
+
+**Whether the stance bucket did any work.** Panel 4 puts the label that triggered the trade against
+what the trade earned. If ±2 conviction is worth more than ±1, it shows up as a tilt there and
+nowhere else in this notebook.
+
+The renderer is `BT.trade_dashboard`, which reads any book this repo produces — a closed-form trade
+log like this one, or a `QueryDrivenBacktest` straight off the engine.
+""")
+
+code(r'''
+import plotly.io as pio
+
+# nbclient has no browser to negotiate with, so the renderer is pinned here. The
+# mimetype bundle is what a saved .ipynb replays; the connected notebook renderer
+# keeps plotly.js on a CDN rather than embedding ~3MB of javascript per execution.
+pio.renderers.default = "plotly_mimetype+notebook_connected"
+
+from BT.trade_dashboard import compare_curves, trade_dashboard
+
+SPAN_YEARS = (D.opened_at.max() - D.opened_at.min()).days / 365.25
+
+# Colour the combined book by which half a trade came from: that is the whole
+# question this notebook asks, and it is invisible in a pooled equity curve.
+DB = D.assign(leg=np.where(D.is_voter, "voter — as read", "non-voter — FADED"))
+
+# 504 trades and two speeches in an afternoon: left to itself plotly sizes every
+# bar off the SMALLEST gap between two of them and draws all 504 one pixel wide,
+# which throws away the colour axis. Size them off the span instead.
+BAR_MS = (D.opened_at.max() - D.opened_at.min()) / min(len(D), 400) / pd.Timedelta("1ms")
+
+fig = trade_dashboard(
+    DB, title="D — voters as read + non-voting presidents FADED",
+    span_years=SPAN_YEARS, signal_col="bucket", colour_col="leg",
+    bar_width=BAR_MS)
+fig.show()
+''')
+
+code(r'''
+fig = compare_curves(
+    {"A voters only": A, "C non-voters FADED": Cc,
+     "D combined": D, "E everyone as read": E},
+    title="the four books that differ only in what they do with a non-voter")
+fig.show()
 ''')
 
 # ---------------------------------------------------------------------------

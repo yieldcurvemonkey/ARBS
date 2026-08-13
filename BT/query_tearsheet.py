@@ -103,7 +103,23 @@ class QueryBacktestTearSheet:
             return self.plot_matplotlib(**kwargs)
         if backend_name in {"plotly", "interactive"}:
             return self.plot_plotly(**kwargs)
-        raise ValueError("backend must be one of {'matplotlib', 'plotly'}.")
+        if backend_name in {"dashboard", "trades"}:
+            return self.plot_dashboard(**kwargs)
+        raise ValueError("backend must be one of {'matplotlib', 'plotly', 'dashboard'}.")
+
+    def plot_dashboard(self, **kwargs: Any) -> Any:
+        """The per-trade dashboard: one marker per closed position, drawn from
+        the closed log with ``mtm_history`` overlaid so the carry that the log
+        cannot see is visible rather than merely absent.
+
+        Imported here rather than at module scope: ``BT.trade_dashboard`` reads
+        this module for the closed-trade frame, and a top-level import would
+        close the loop.
+        """
+        from BT.trade_dashboard import trade_dashboard
+
+        kwargs.setdefault("title", self.analytics.name)
+        return trade_dashboard(self.analytics.backtest, **kwargs)
 
     def plot_matplotlib(self, *, figsize: tuple[float, float] = (22.0, 28.0)) -> Any:
         import matplotlib.pyplot as plt
@@ -353,6 +369,21 @@ def build_query_backtest_analytics(
         top_trades=top_trades,
         worst_trades=worst_trades,
     )
+
+
+def closed_trade_frame(backtest: Any, *, size_metric: Optional[str] = None) -> pd.DataFrame:
+    """The closed-position log as a frame, without building a whole tearsheet.
+
+    Public because more than one renderer wants it -- ``BT.trade_dashboard``
+    draws a book straight from this. Note what it is: ``realized_pnl`` here is
+    the PRICE leg, net of allocated fees. Coupons and financing are realised
+    during the hold and never reach this log, and open positions are absent
+    entirely, so this frame does not have to agree with ``backtest.mtm_history``
+    and on a financed book it will not.
+    """
+    bt = _unwrap_backtest(backtest)
+    metric = size_metric if size_metric is not None else _infer_preferred_size_metric(bt)
+    return _build_closed_trade_frame(bt, size_metric=metric)
 
 
 def _unwrap_backtest(value: Any) -> QueryDrivenBacktest:
