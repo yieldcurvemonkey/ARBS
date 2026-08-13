@@ -418,6 +418,58 @@ def spline_config_id(spline_config) -> str:
     return hashlib.sha1(payload.encode("utf-8")).hexdigest()[:10]
 
 
+#: A UST does not yield outside this band. Solving a yield from a price of **zero** lands at
+#: 605%–5,408%, which is exactly what FedInvest produced on 2026-07-09/10 — see
+#: :func:`_day_is_usable`.
+_SANE_YIELD_PCT = (-5.0, 25.0)
+#: A fit this bad is not a curve. Measured p95 across 332 good days is 2.40bp and the worst is 2.6;
+#: the poisoned days sit at 45,000–110,000. Anything between is a judgement call this refuses to
+#: make silently.
+_MAX_SANE_RMSE_BP = 25.0
+#: Below this share of in-band yields the day is junk rather than a day with a few bad prints.
+_MIN_SANE_YIELD_SHARE = 0.90
+
+
+def _day_is_usable(d, frame: pd.DataFrame) -> bool:
+    """Refuse a day whose fitted curve is not a curve. Returns False and logs why.
+
+    **Zero is not a price.** On 2026-07-09 and 2026-07-10 FedInvest published ``eod_price = 0.0``
+    for all 463 bonds while ``bid_price`` and ``offer_price`` stayed perfectly sane (94.97 / 94.98).
+    Nothing raised: the pricer solved a yield from a zero price and got 605%–5,408%, the spline
+    fitted a curve through *that*, the day recorded an RMSE of 80,876bp — against 1.9bp on either
+    side — and the builder cached it and served it as valid ever after. Nine days in 2026-07/08
+    failed this way, and the equity curve that consumed them reached $178 trillion.
+
+    Absence encoded as a number is the failure mode; the same shape as an open-interest field that
+    reports 0 for "not published". A numeric sentinel passes every null check there is, so the only
+    defence is a plausibility band on the value itself.
+
+    The 332-day window 2024-09-03..2026-01-02 that every result in this package rests on was
+    checked against this guard and is clean: max RMSE 2.6bp, zero days out of band.
+
+    Refusing rather than substituting is deliberate. The bid/offer *were* good on those days and a
+    mid could have been used — but a panel silently made of two different price series is a worse
+    object than a panel with a hole in it, and the hole is visible.
+    """
+    if "observed" in frame.columns:
+        obs = pd.to_numeric(frame["observed"], errors="coerce").dropna()
+        if len(obs):
+            lo, hi = _SANE_YIELD_PCT
+            share = float(((obs >= lo) & (obs <= hi)).mean())
+            if share < _MIN_SANE_YIELD_SHARE:
+                logger.warning(
+                    "REFUSED %s: only %.1f%% of %d observed yields are within [%.0f, %.0f]%% "
+                    "(median %.1f%%) — the source almost certainly served a zero/absent price",
+                    d, share * 100, len(obs), lo, hi, float(obs.median()))
+                return False
+    rmse = frame["rmse"].iloc[0] if "rmse" in frame.columns and len(frame) else np.nan
+    if np.isfinite(rmse) and rmse > _MAX_SANE_RMSE_BP:
+        logger.warning("REFUSED %s: fit RMSE %.1fbp exceeds %.1fbp — that is not a curve",
+                       d, float(rmse), _MAX_SANE_RMSE_BP)
+        return False
+    return True
+
+
 def _fetch_day(d: datetime.date, mdp, reference_fn=None, spline_config=None):
     """Fetch one day's spline and reference frame. ``None`` if either leg fails.
 
@@ -440,6 +492,12 @@ def _fetch_day(d: datetime.date, mdp, reference_fn=None, spline_config=None):
         frame = frame.rename(columns={frame.columns[0]: "cusip"})
     frame = frame.copy()
     frame["rmse"] = float(spline.rmse) if spline.rmse is not None else np.nan
+
+    # Before anything is cached. A refused day flows through the same path as a failed fetch, so it
+    # is retried on the next build and never written to disk — which matters, because the cache is
+    # preferred on read and a poisoned day that reaches it is served forever.
+    if not _day_is_usable(d, frame):
+        return None
 
     try:
         ref = reference_fn(d) if reference_fn is not None else mdp.get_bond_reference_data(as_of_date=d)
@@ -588,6 +646,11 @@ def _load_day(day_dir: Path, d: datetime.date):
         ref = pd.read_parquet(ref_p)
     except Exception as exc:  # noqa: BLE001 — a corrupt day is refetched, not fatal
         logger.warning("cached day %s unreadable (%s); refetching", d, exc)
+        return None
+    # Also on READ, not only on fetch. Nine poisoned days were already on disk before this guard
+    # existed, and the cache is preferred over a refetch — so a fetch-side check alone would have
+    # left them serving indefinitely. One column comparison per day; the cost is nothing.
+    if not _day_is_usable(d, frame):
         return None
     return pd.Timestamp(d), frame, ref
 

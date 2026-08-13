@@ -148,6 +148,40 @@ comparison structurally could not have detected it. Five fingerprints on 3,149 n
 
 An interpolated value is a continuous real and would land on a 32nd essentially never.
 
+**1b. Zero is not a price — and the panel used to believe it was.** On **nine days in 2026-07/08**
+FedInvest published `eod_price = 0.0` for **all 463 bonds** while `bid_price` and `offer_price`
+stayed perfectly sane (94.97 / 94.98 on the same CUSIP the day before and after). Nothing raised:
+the pricer solved a yield from a zero price and got **605%–5,408%**, the spline fitted a curve
+through that, the day recorded an RMSE of **80,876bp** against 1.9bp on either side, and
+`build_curve_panel` **cached it and served it as valid ever after**. The book that consumed those
+days reached **$178 trillion** in equity.
+
+| date | fit RMSE | median observed yield |
+|---|---|---|
+| 2026-07-08 | 1.7bp | 4.31% |
+| **2026-07-09** | **80,876.6bp** | **873.4%** |
+| 2026-07-10, 07-13, 07-17, 07-20, 07-24, 07-27 | 45,196–77,581bp | 772–842% |
+| 2026-08-07, 08-10 | 106,944 / 110,443bp | 1,501 / 1,513% |
+
+**Nothing in this PR is contaminated, and that was checked rather than assumed.** Every cached day
+in both panels was scanned: the 332-day window 2024-09-03..2026-01-02 that the sweep, the DSR and
+the cost table all rest on has **max RMSE 2.6bp and zero out-of-band days**. Only the RV notebook
+ever ran the extended range, and it is now pinned to the validated window — where it reproduces the
+cost table's `assumed` row to the cent from a different code path (equity −4,254,352.40, fees
+−5,637,475.12, gross +1,383,122.72, m\* 0.245, financing ledger 0.0).
+
+`BT/gss_fly/data.py::_day_is_usable` now refuses a day whose observed yields fall outside
+[−5%, 25%] or whose fit RMSE exceeds 25bp — **on fetch and on cache read**. Read-side is the
+load-bearing half: nine poisoned days were already on disk and the cache is preferred over a
+refetch, so a fetch-only check would have left them serving indefinitely. Refusing rather than
+substituting the bid/offer mid is deliberate: a panel silently made of two price series is a worse
+object than one with a visible hole. Mutation-verified in `tests/gss_fly/test_panel_cache.py`.
+
+This *strengthens* the finding above rather than weakening it: bid and offer survived intact on the
+days `eod` died, which is further evidence they are genuine quotes and that the measured cost table
+below was built on the right column. (Unrelated source, same July window: see the Citi bond-tape
+corruption of 2026-07-14/15.)
+
 **2. The cost table is measured.** Pricing bid and offer to yield on 1,890 quotes
 (`scripts/gss_measure_cost_table.py` → `config.MEASURED_HALF_SPREAD_BP`):
 

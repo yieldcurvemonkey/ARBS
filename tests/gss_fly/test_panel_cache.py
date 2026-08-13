@@ -311,3 +311,94 @@ def test_a_cache_hit_for_dates_it_does_not_hold_returns_what_exists(tmp_path, da
     other = [d.date() for d in pd.bdate_range("2030-01-01", periods=3)]
     got = build_curve_panel(other, _FakeMDP(dates), cache_path=cache, show_progress=False)
     assert len(got.s2c) == len(dates)
+
+
+# ------------------------------------------------- zero is not a price
+class _ZeroPriceSpline(_Spline):
+    """What a day looks like when the source publishes `eod_price = 0.0` for the whole tape.
+
+    Not hypothetical: FedInvest did exactly this on 2026-07-09 and 2026-07-10 while `bid_price` and
+    `offer_price` stayed sane. The pricer solved a yield from a zero price and got 605%-5,408%, the
+    spline fitted a curve through that, and the day recorded RMSE 80,876bp against 1.9bp either
+    side. Nine such days were cached and served as valid; the book that consumed them reached $178
+    trillion in equity.
+    """
+
+    def __init__(self, day_index: int):
+        super().__init__(day_index)
+        self.rmse = 80_876.6
+
+    def to_frame(self) -> pd.DataFrame:
+        f = super().to_frame()
+        f["observed"] = [873.4, 3_880.6, 5_407.7, 604.9]
+        return f
+
+
+class _ZeroPriceMDP(_FakeMDP):
+    def __init__(self, dates, poison: set[int]):
+        super().__init__(dates)
+        self.poison = poison
+
+    def fetch_cash_spline(self, d):
+        self.spline_calls.append(d)
+        i = self._guard(d)
+        return _ZeroPriceSpline(i) if i in self.poison else _Spline(i)
+
+
+def test_a_day_priced_off_a_zero_is_refused_not_cached(tmp_path, dates):
+    """Absence encoded as a number passes every null check; only a plausibility band catches it."""
+    cache = tmp_path / "panel"
+    mdp = _ZeroPriceMDP(dates, poison={2, 5})
+    panel = build_curve_panel(dates, mdp, cache_path=cache, show_progress=False)
+
+    assert len(panel.s2c) == len(dates) - 2, "a 5,408% yield reached the panel"
+    kept = {pd.Timestamp(d) for d in panel.s2c.index}
+    assert pd.Timestamp(dates[2]) not in kept and pd.Timestamp(dates[5]) not in kept
+
+    written = sorted(p.name.split(".")[0] for p in (cache / "days").glob("*.spline.parquet"))
+    assert str(dates[2]) not in written, "the poisoned day was cached and will be served forever"
+    assert str(dates[5]) not in written
+    # the good days are unaffected — this is a filter, not a kill switch
+    assert len(written) == len(dates) - 2
+
+
+def test_a_poisoned_day_already_on_disk_is_refused_on_READ(tmp_path, dates):
+    """The nine bad days pre-dated the guard, and the cache is preferred over a refetch.
+
+    A fetch-side check alone would have left them serving indefinitely, which is the same shape as
+    every other cache-poisoning bug in this estate: the fix reaches nothing until the read path
+    validates too.
+    """
+    cache = tmp_path / "panel"
+    build_curve_panel(dates, _FakeMDP(dates), cache_path=cache, show_progress=False)
+
+    # poison one cached day in place, exactly as the real cache was poisoned
+    from BT.gss_fly.data import _day_files
+
+    spline_p, _ = _day_files(cache / "days", dates[3])
+    f = pd.read_parquet(spline_p)
+    f["observed"] = 873.4
+    f["rmse"] = 80_876.6
+    f.to_parquet(spline_p)
+    for stale in ("s2c.parquet", "ytm.parquet", "ttm.parquet", "reference.parquet", "rmse.parquet"):
+        (cache / stale).unlink(missing_ok=True)
+
+    second = _FakeMDP(dates)
+    panel = build_curve_panel(dates, second, cache_path=cache, show_progress=False)
+
+    # The poisoned day must be REFETCHED, not served. Refusing it on read is what forces that, and
+    # here the fake source supplies a good day, so the panel is whole again — which is the point:
+    # the guard removes bad data from circulation, it does not punch a permanent hole.
+    assert dates[3] in second.spline_calls, "the poisoned cached day was served instead of refetched"
+    assert second.spline_calls == [dates[3]], (
+        f"only the poisoned day should be refetched, got {second.spline_calls}")
+    assert pd.Timestamp(dates[3]) in {pd.Timestamp(d) for d in panel.s2c.index}
+    assert float(panel.rmse.max()) < 25.0, "the poisoned value survived into the panel"
+
+
+def test_the_guard_passes_a_normal_day(tmp_path, dates):
+    """The control. A band that rejects good days is worse than no band."""
+    panel = build_curve_panel(dates, _FakeMDP(dates), cache_path=tmp_path / "panel",
+                              show_progress=False)
+    assert len(panel.s2c) == len(dates)
+    assert float(panel.rmse.max()) < 25.0

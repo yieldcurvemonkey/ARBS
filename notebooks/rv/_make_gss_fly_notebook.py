@@ -83,6 +83,14 @@ import warnings
 warnings.filterwarnings("ignore")
 logging.basicConfig(level=logging.ERROR)
 
+# Required, not decorative. `FixedRateBondsMDP._get_multi_pricers` falls back to
+# `WSJFetcher.ust_intraday_timeseries` for any CUSIP FedInvest has not published, and that fetcher
+# calls `asyncio.run()` — which raises "cannot be called from a running event loop" inside a Jupyter
+# kernel. The fallback is reachable on ANY date (coverage is per-CUSIP, not per-day), so pinning
+# `as_of` to an older date does not avoid it.
+import nest_asyncio
+nest_asyncio.apply()
+
 from MDP.FixedRateBonds.FixedRateBondsMDP import FixedRateBondsMDP
 from Query.FixedRateBonds.FixedRateBondQuery import FixedRateBondQuery
 from Query.FixedRateBonds.FixedRateBondValue import FixedRateBondValue
@@ -100,6 +108,7 @@ from BT.gss_fly import (
     load_repo_from_workbook, resolve_repo_curve, repo_tag_grid,
 )
 from BT.gss_fly.backtest import run_gss_backtest
+from BT.gss_fly.data import ust_business_days
 
 usts_mdp = FixedRateBondsMDP(source="USTS_FEDINVEST_WSJ_LIVE-QL")
 tb = TimeseriesBuilder(fixedratebonds_tb=FixedRateBondsTB(usts_mdp))
@@ -160,7 +169,12 @@ md(r"""
 """)
 
 code(r"""
-compare = as_of - datetime.timedelta(days=30)
+# NOT `as_of - timedelta(days=30)` on its own: that landed on Sunday 2026-07-12, FedInvest has no
+# snapshot for it, every one of the 295 pricers failed, and the empty frame then died in the merge
+# with `KeyError: 'cusip'` — a calendar bug wearing a pandas error. Snap back to the last UST
+# trading day on or before the target. Same landmine as `pd.bdate_range` vs `ust_business_days`.
+_target = as_of - datetime.timedelta(days=30)
+compare = ust_business_days(_target - datetime.timedelta(days=10), _target)[-1]
 
 old_ref = (
     usts_mdp.get_bond_reference_data(as_of_date=compare)
@@ -168,6 +182,12 @@ old_ref = (
 )
 old_ref = old_ref[old_ref["ttm"] >= 1]
 old_pricers = usts_mdp.get_pricer(request=dict(cusips=old_ref["cusip"].to_list(), timestamp=compare, show_tqdm=True))
+# Say what actually went wrong. An empty fetch produces a frame with no columns, and the merge below
+# then raises `KeyError: 'cusip'` — which reads as a schema bug and is really "the source served
+# nothing for this date". The MDP logs each failure at WARNING and returns normally, so without this
+# the only signal is 295 warnings scrolling past followed by an unrelated-looking exception.
+if not old_pricers:
+    raise RuntimeError(f"no pricers for {compare} — FedInvest served nothing for that date")
 old_market = pd.DataFrame([{"cusip": c, "ytm": p.ytm()} for c, p in old_pricers.items()]).merge(old_ref, on="cusip")
 
 old_fit = old_ref[~old_ref["rank"].isin([0, 1, 2])]["cusip"].to_list()
@@ -230,9 +250,21 @@ md("## 3. The panel, the signal, and the flies")
 code(r"""
 from pathlib import Path
 
-PANEL_CACHE = Path("../data/gss_fly/panel_2024_2026")   # built once, reused thereafter
-start, end = datetime.date(2024, 9, 2), as_of
-days = [d.date() for d in pd.bdate_range(start, end)]
+# The SAME window and the SAME cache the sweep, the cost table and the configurable-backtest
+# notebook use, so the numbers below corroborate those rather than introducing a third set a reader
+# has to reconcile. It also ends where the data is known good.
+#
+# It used to run to `as_of`, and that is how the zero-price days were found: FedInvest published
+# `eod_price = 0.0` for all 463 bonds on nine days in 2026-07/08 while bid/offer stayed sane, the
+# spline fitted a curve through 605%-5,408% yields, and this book's equity reached $178 trillion.
+# `BT/gss_fly/data.py::_day_is_usable` now refuses such a day on both fetch and cache read, so the
+# extended range is safe to run again — it is pinned here for comparability, not for safety.
+PANEL_CACHE = Path("../data/gss_fly/panel_cached")
+start, end = datetime.date(2024, 9, 2), datetime.date(2026, 1, 2)
+
+# NOT pd.bdate_range: it includes market holidays, which the source never serves and whose fetcher
+# HANGS rather than refusing. One Labor Day stalled two separate panel builds.
+days = ust_business_days(start, end)
 
 panel = build_curve_panel(days, usts_mdp, cache_path=PANEL_CACHE)
 print(panel.summary())
