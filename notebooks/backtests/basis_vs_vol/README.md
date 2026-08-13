@@ -72,15 +72,21 @@ every position is priced as a call on the rate.
 | gap guard, roll guard, support gate | `test_gap_guard_*`, `test_a_contract_roll_is_never_booked_as_pnl`, `test_support_gate_*` |
 
 ```
-conda activate stir && python -m pytest tests/test_bvv_*.py -q      # 58 tests
+conda activate stir && python -m pytest tests/test_bvv_*.py tests/test_ingest_ustf_vs_swaption_vol.py -q   # 67 tests
 ```
 
 ## Notes / caveats — read before quoting any P&L
 
+0. **The sample starts 2023-12-12.** Before that the swaption smile is a flat fallback: 248
+   contiguous days with a NULL SABR alpha and a 25bp payer-minus-receiver skew whose standard
+   deviation is *exactly* 0.0000, plus a 15.3bp step in the ATM level at the seam. Enforced in
+   `voldata.load()`, which raises if any NULL-alpha row survives the cut. Usable sample: 545 days
+   across the universe (per product: TY 508, US 497, FV 483, TU 460, TN 457 -- see
+   `_results/data_quality.csv`).
 1. **The source history is a single retrospective vintage.** `updated_at` spans 2026-03-12 to
    2026-03-17 for `as_of_date` 2022-12-09 to 2026-03-13. Results are in-sample model output.
 2. **1M/2M/3M are synthetic constant-maturity vols, not instruments.** `forward_price` and `fv01`
-   are identical across all three slots on all 665 days — one front-contract forward serves every
+   are identical across all three slots on every day — one front-contract forward serves every
    tenor.
 3. **`strike_offset_otm_vols` is corrupt on the futures leg** (`/10_000` against an `fv01` already
    in per-bp units): every stored "OTM" bucket sits ~1/100 of the requested distance from the
@@ -101,6 +107,21 @@ conda activate stir && python -m pytest tests/test_bvv_*.py -q      # 58 tests
 7. **The futures leg has 13 holes longer than a week, one of them 80 days**, clustered at the
    quarterly roll. Positions are liquidated at the last observed mark and no return is claimed for
    the gap. The missingness is not random — it coincides with the roll.
+
+## Known asymmetries, disclosed rather than fixed
+
+* **The two engines are proven identical at zero costs only.** The framework has no entry-side fee
+  hook, so QueryDrivenBacktest charges the whole round trip at unwind while the reference charges
+  entry and a vega-decayed exit separately. Pricing agrees exactly; cost conventions differ by
+  construction.
+* **Hedge-cost cadence differs at `rehedge_days > 1`** — the reference counts panel index steps,
+  the handler counts calendar days. Identical at the default of 1.
+* **Entries are lagged one day; the signal-driven exit fires on the same close.** `lag_exits=True`
+  closes it, and is run as a sensitivity rather than as the default so the pre-registered grid is
+  not silently re-specified.
+
+**Every bias left open points in the strategy's favour**, so a dead verdict from this harness is
+conservative.
 
 ## Results
 

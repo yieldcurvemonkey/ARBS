@@ -66,6 +66,11 @@ class StrategyConfig:
     max_hold_days: int = 21
     min_tte_days: float = 10.0
     exec_lag_days: int = 1
+    # Entries are lagged by exec_lag_days; the signal-driven EXIT test fires on the same close by
+    # default, which is a (smaller) version of the same bias -- measured elsewhere at SR 2.80 for
+    # same-day entry fills against 1.28 at t+1. Set True to lag the z-exit too. Left False by
+    # default so the pre-registered grid is not silently re-specified; run it as a sensitivity.
+    lag_exits: bool = False
     rehedge_days: int = 1  # 0 disables delta hedging
     roll_policy: Literal["exit", "reanchor"] = "exit"
     stop_loss_vega_mult: float | None = None  # stop at this many x target_vega of loss
@@ -282,13 +287,18 @@ def run_strategy(vd: VolData, cfg: StrategyConfig, book: SurfaceBook | None = No
                 reason = "tte_floor"
             elif held >= cfg.max_hold_days:
                 reason = "max_hold"
-            elif np.isfinite(row["z"]) and abs(row["z"]) <= cfg.exit_z:
-                reason = "z_exit"
-            elif (cfg.stop_loss_vega_mult is not None
-                  and pos["cum_pnl"] < -cfg.stop_loss_vega_mult * cfg.target_vega_usd):
-                reason = "stop"
-            elif not np.isfinite(pu) or not np.isfinite(ps):
-                reason = "no_mark"
+            else:
+                z_exit_val = row["z"]
+                if cfg.lag_exits:
+                    k = i - cfg.exec_lag_days
+                    z_exit_val = panel["z"].iloc[k] if 0 <= k < len(panel) else np.nan
+                if np.isfinite(z_exit_val) and abs(z_exit_val) <= cfg.exit_z:
+                    reason = "z_exit"
+                elif (cfg.stop_loss_vega_mult is not None
+                      and pos["cum_pnl"] < -cfg.stop_loss_vega_mult * cfg.target_vega_usd):
+                    reason = "stop"
+                elif not np.isfinite(pu) or not np.isfinite(ps):
+                    reason = "no_mark"
 
             if reason is not None:
                 # Charge the exit on the vega actually held, not the vega opened with. Vega decays
