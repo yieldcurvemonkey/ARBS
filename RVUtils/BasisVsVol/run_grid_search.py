@@ -80,7 +80,7 @@ def main() -> int:
     ranked = grid.sort_values("sharpe", ascending=False)
     print("\n=== top 15 by Sharpe ===", flush=True)
     cols = ["expiry_label", "offset_bps", "z_window", "entry_z", "exit_z", "max_hold_days",
-            "rehedge_days", "n_trades", "mean_volbp", "hit_rate", "sharpe", "t_nw", "dsr",
+            "rehedge_days", "n_trades", "mean_volbp", "hit_rate", "sharpe", "t_nw",
             "top3_share", "cost_over_gross"]
     print(ranked[cols].head(15).round(3).to_string(index=False), flush=True)
 

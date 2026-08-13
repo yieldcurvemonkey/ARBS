@@ -1,6 +1,6 @@
 # Basis vs Swaption — adversarial review, implementation, and V2 backtest results
 
-**Date:** 2026-08-13 · **Branch:** `feat/basis-vs-vol` (worktree `ARBS-bvv`) · **Commit:** `bf2b02f7`
+**Date:** 2026-08-13 · **Branch:** `feat/basis-vs-vol` (worktree `ARBS-bvv`)
 
 Covers: adversarial review of the design doc and its implementation plan, the fixes that review
 forced, the code that was built, and the backtest results.
@@ -68,7 +68,7 @@ Query/BasisVsVol/     BASISVSVOL product: query, inert adapter, position handler
 MDP/BasisVsVol/       offline snapshot MDP (returns absence, never the nearest neighbour)
 BT/signals/basis_vs_vol.py   QueryDrivenBacktest runner
 notebooks/backtests/basis_vs_vol/   generated configurable notebook + builder + README
-tests/test_bvv_{bachelier,switch,backtest}.py   58 tests
+tests/test_bvv_{bachelier,switch,backtest}.py   67 tests (incl. the ingest regression)
 ```
 
 ---
@@ -111,7 +111,7 @@ trusted when it reports none.
 | `UL` forward yield corrupt | forward price stored as `11.28` for `111.28`; forward yield spans **20bp in 3.3 years** against 163bp for US; implied/realized 3.5 vs 0.97–1.13 | product excluded; 642 rows dropped by the sanitizer |
 | 13 gaps > 1 week, one of **80 days** | clustered at the quarterly roll | positions liquidated at the last observed mark; **no return claimed for the gap** |
 | single retrospective vintage | `updated_at` 2026-03-12 → 2026-03-17 | all results labelled in-sample |
-| CM slots share one forward | `forward_price`/`fv01` identical across 1M/2M/3M on 665/665 days | the series are synthetic, not instruments |
+| CM slots share one forward | `forward_price`/`fv01` identical across 1M/2M/3M on every day of the full sample (665/665) | the series are synthetic, not instruments |
 | model-not-market ATM | `market_vol_bps` exceeds the SABR value by +0.4 to +1.0bp, product-dependent | measured and reported |
 
 **Limitation 3 (from the theory review), stated precisely.** The futures leg's bp vol is
@@ -124,6 +124,9 @@ not zero, and it cannot be checked from this vintage.
 ---
 
 ## 6. The result that decides the V2 leg
+
+*(Measured on the full sample, before the flat-smile seam exclusion of §5 — this is when and how
+the problem was found. The clean-sample equivalents are given below the table.)*
 
 The first grid put the strongest cell at the **1M** expiry: pooled Sharpe **1.94**, t(NW) 3.43, hit
 rate 76%, top-3 concentration 0.26, costs 26% of gross. 2M and 3M showed nothing.
@@ -144,14 +147,116 @@ Confining positions to the quoted range:
 The entire result was produced outside the data's support and inverts on contact with it. This is
 now a hard gate (`require_on_support=True`) and the 1M slot is inadmissible.
 
+**On the clean post-seam sample the same test is starker.** A 1M position opens at the shortest
+quoted node, so it is extrapolated from day one: allowed to run it earns **+5.63 vol bp per trade**
+over a 7-day hold; gated, **all 11 trades exit after exactly one day** with reason `off_support`, at
+**−0.12 vol bp** each. The 1M slot is not a losing configuration — it is an unmeasurable one.
+
 ---
 
 ## 7. Grid search results
 
-*(filled from `_results/verdict.json` — see §8)*
+**1,296 pre-registered configurations**, each pooled across TU/FV/TY/TN/US at equal vega, on the
+clean sample (2023-12-12 to 2026-03-13; per product TY 508, US 497, FV 483, TU 460, TN 457 days).
+
+Axes: `expiry_label` {2M, 3M} x `offset_bps` {-25, 0, +25} x `z_window` {63, 126, 252} x `entry_z`
+{1.0, 1.5, 2.0, 2.5} x `exit_z` {0.0, 0.5, 1.0} x `max_hold_days` {10, 21, 42} x `rehedge_days`
+{1, 5}.
+
+### The grid as a whole
+
+| statistic | value |
+|---|---|
+| cells | 1,296 |
+| median Sharpe | **-0.19** |
+| mean Sharpe | -0.44 |
+| cells with positive Sharpe | 444 / 1,296 (**34%**) |
+| best Sharpe | **0.970** |
+| **E[max Sharpe \| null]** at 1,296 trials | **2.73** |
+
+The best cell in the entire search scores **0.97 against the 2.73 that a null grid of this size
+produces by chance**. Deflated Sharpe = **6.6e-06**.
+
+### The winning cell
+
+`US/3M/20Y/off-25/w63/e2/x0/h42/rh5` — 3M expiry, -25bp strike offset, 63-day z-window, entry
+|z| >= 2.0, exit_z 0.0, 42-day max hold, 5-day rehedge.
+
+| | |
+|---|---|
+| Sharpe | 0.970 |
+| t(Newey-West) | **1.085** |
+| bootstrap 95% CI on Sharpe | **[-0.54, 1.76]** |
+| trades | 42 |
+| mean per trade | +9.87 vol bp |
+| **hit rate** | **40.5%** |
+| **top-3 trade share** | **111%** |
+| deflated Sharpe | **0.0000066** |
+| shuffled-signal placebo percentile | **0.678** (needs > 0.95) |
+| break-even cost multiple | 3.0x |
+| lagged-exit sensitivity | identical (0.970) |
+
+### Why it is noise, in four independent ways
+
+1. **It is one product.** TY contributes **+434.6** vol bp of a **+414.5** total; the other four
+   products sum to **-20.1**. Pooling across five products was supposed to buy breadth and instead
+   the "portfolio" is a single duration bucket.
+2. **It is five trades.** The top five trades make **+477.5**; the remaining thirty-seven make
+   **-63.0**.
+3. **It never uses its own signal to exit.** `exit_z = 0.0` means the reversion test
+   `|z| <= exit_z` essentially never fires. Of 42 trades, **zero** exit on the signal: 22 are closed
+   by data gaps, 12 by contract rolls, 8 by the 42-day cap — and **all the profit is in those 8**
+   (+449.9, against -20.3 for gaps and -15.1 for rolls). The winner of a mean-reversion grid search
+   is not a mean-reversion strategy; it is "enter when |z| > 2 and hold for six weeks".
+4. **It is one year.** 2024 loses (-17.5, Sharpe -0.375); 2025 makes all of it (+444.3); 2026 is 48
+   days.
+
+**Costs are not what kills it.** At `cost_mult = 0` the cell still only reaches Sharpe 1.19 with
+t = 1.34, and the break-even multiple is 3.0x. For once in this programme the edge is not lost to
+the bid/offer — there is no edge to lose.
 
 ---
 
 ## 8. Verdict
 
-*(pending)*
+**V2 is dead. `alive = false` on every pre-registered criterion except the cost gate.**
+
+| kill condition | required | actual | pass |
+|---|---|---|---|
+| deflated Sharpe | > 0.95 | 6.6e-06 | **no** |
+| top-3 trade share | < 0.60 | 1.114 | **no** |
+| shuffled-signal placebo | > 0.95 pct | 0.678 | **no** |
+| survives 2x costs | yes | yes (break-even 3.0x) | yes |
+
+The one positive is that the **matched pairing beats the mismatched one** — US against its 20Y tail
+scores 0.227 versus -0.516 against a deliberately wrong 2Y tail, and TY against 7Y scores 0.989
+versus -0.143 against 2Y. So the tail map is not arbitrary. But the matched numbers are themselves
+insignificant, so this says the construction is sane, not that the trade is there.
+
+**Every bias left open in the harness points in the strategy's favour** — same-day signal-driven
+exits (measured: no effect on this cell, because it has none), a cost model with no market impact,
+and an in-sample vintage. A dead verdict from this harness is therefore conservative.
+
+### What was deliberately not done, and why
+
+* **V1 (`sigma_basis - sigma_exchange`) was not backtested.** ARBS has no term repo: the basis path
+  applies the last *overnight unsecured* SOFR fixing as the term repo to delivery for every bond in
+  the basket, with specialness a hand-typed per-root constant defaulting to zero. Net basis moves
+  0.08/32 per bp of term repo, so ZB Sep26's entire 4/32 delivery option is 50bp of repo. Inverting
+  that to a vol and comparing it to a 4-13bp signal is not a measurement. The *core* was built and
+  validated (§4); the backtest waits on a repo curve.
+* **The stale ingest was not restarted.** Both upstream producers are dead (the MONKEYCUBE cube
+  files stop in 2026-04), and the tables' primary key means a restart UPSERTs over the only copy of
+  the vintage. The parquet mirror in `_data/` is that snapshot.
+* **The full-basket two-factor Monte Carlo (M3) was not built.** It needs a term repo,
+  per-CUSIP specialness, when-issued handling and an end-of-month option, none of which exist, and
+  its output is a 4/32 number against a 1/32 tick. The two-bond reduction answers the question the
+  Monte Carlo would have answered first: is sigma_basis in the right ballpark? It is, for UB.
+
+### What would change the verdict
+
+A genuine out-of-sample window. Everything here is one retrospective vintage, so the honest next
+step is not a better model but a **point-in-time recorder**: run the vendor-package parser and the
+vol ingest forward from today, and re-test on data that was not manufactured with hindsight. Until
+then no configuration of this signal should be traded, and the framework's value is as a valuation
+lens and a set of gates, not as a strategy.
