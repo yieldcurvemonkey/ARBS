@@ -58,3 +58,14 @@ export const DD_CURVE_MID_DAY = d('curve_mid_day')
 
 /** The reason code a unit that reached the ladder carries. */
 export const DD_IN_LADDER = 'IN_LADDER'
+
+/**
+ * The STIR classifier's per-trade direction table.
+ *
+ * NOT part of the dd_* generation and deliberately not suffixed with it: this
+ * table is owned by the STIR flow pipeline (SDRUtils/stir_flow), predates the
+ * dealer-direction work, and versions on its own clock. The two are never
+ * joined — different classifiers, different instrument spaces, different mids.
+ * Measured 84,586 rows over 2026-01-12..2026-07-29.
+ */
+export const STIR_DIRECTION = 'arbs_stir_direction_v1'
