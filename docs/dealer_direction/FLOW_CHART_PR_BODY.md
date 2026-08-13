@@ -1,9 +1,10 @@
 # dealer_flow_chart on the front end — a Plotly figure on the Citi curves
 
-Stacked on [#445](https://github.com/yieldcurvemonkey/ARBS/pull/445). Base is
-`feat/tape-flow-chart-base` (= `4df5e368`), so this PR is only the flow-chart
-work; everything under it — the materialisation tables, the ladder, the prints
-API, the performance fixes — is #445's.
+Follows [#445](https://github.com/yieldcurvemonkey/ARBS/pull/445), now **merged**.
+Targets `main` directly: #445 merged at `4df5e368`, which is exactly the commit
+this work sits on, so an intermediate base branch was redundant. Everything
+under this PR — the materialisation tables, the ladder, the prints API, the
+performance fixes — landed with #445.
 
 Ports `notebooks/exploratory/dealer_flow_chart.ipynb` to the Analytics view:
 **the intraday timeseries of swap mids, annotated with which side the dealer
