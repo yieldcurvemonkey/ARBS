@@ -23,7 +23,7 @@ import logging
 import dataclasses
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, Iterable, List, Optional, Sequence, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
 import numpy as np
 import pandas as pd
@@ -43,11 +43,21 @@ __all__ = [
     "LocalReferenceProvider",
     "local_reference_data",
     "BOND_SNAPSHOT_VALUES",
+    "PLAUSIBLE_YIELD_PCT",
+    "cusip_to_isin",
+    "citi_curve_quotes",
 ]
 
 #: The Citi bond values worth pulling for a curveset snapshot. ``PRICE`` is clean and ``DURATION``
 #: is modified — both established previously against Citi's own field dictionary.
 BOND_SNAPSHOT_VALUES = ("YIELD", "PRICE", "DURATION", "DV01", "ASW", "ZSPREAD")
+
+#: Band a UST yield must sit in to be fitted, in **percent** — Citi's ``YIELD`` and QuantLib's
+#: ``ytm()`` are both percent, verified, so no conversion is involved anywhere on this path.
+#: This is not defensive padding. The cache currently holds seven impossible cells across four
+#: ISINs (one non-UST series tops out at 10,040), and two of the offenders are the on-the-runs Citi
+#: corrupted on 2026-07-14/15. One such point drags a b-spline across the whole long end.
+PLAUSIBLE_YIELD_PCT = (-1.0, 25.0)
 
 #: date -> how many times it has failed in THIS process. Not persisted; see the use site.
 _FAILED_DAYS: dict = {}
@@ -652,6 +662,145 @@ def apply_universe_filter(curve: pd.DataFrame, cfg: Optional[UniverseConfig] = N
 
 
 # --------------------------------------------------------------------------- CVSNAP curveset
+def citi_curve_quotes(
+    when,
+    reference: pd.DataFrame,
+    *,
+    values: Sequence[str] = ("YIELD", "PRICE"),
+    exclude_ranks: Sequence[int] = (0, 1, 2),
+    min_ttm: float = 1.0,
+    min_bonds: int = 30,
+    plausible_pct: Tuple[float, float] = PLAUSIBLE_YIELD_PCT,
+    max_dev_bp: Optional[float] = 100.0,
+    max_stale_days: int = 0,
+    quotes=None,
+    max_staleness: Optional[datetime.timedelta] = None,
+    strict: bool = False,
+) -> Tuple[pd.DataFrame, Dict[str, Any]]:
+    """Citi's own yields for the UST complex on ``when``, ready to fit a curve to.
+
+    This is the CVSNAP path made usable as a *curve input* rather than a display table. It returns
+    ``(frame, report)`` where ``frame`` has one row per fittable bond — ``isin``, ``cusip``,
+    ``ttm``, ``yield`` and whatever else was requested — and ``report`` records what was dropped and
+    why. Nothing is filtered silently: on this data the interesting number is usually what fell out.
+
+    Three filters, each measured rather than assumed:
+
+    ``min_ttm``
+        Sub-year bills are not part of the fitted complex, and QuantLib cannot bracket a yield for
+        some of them at all.
+    ``exclude_ranks``
+        The GSS universe drops the on-the-runs: they finance below GC, so their richness is not
+        tradeable against a GC hurdle. Ranks 0-2 by default, matching the backtest.
+    ``plausible_pct``
+        See :data:`PLAUSIBLE_YIELD_PCT`. Citi has served impossible yields on real dates.
+    ``max_dev_bp``
+        Cross-sectional outlier cut, and the one that actually earns its keep. An absolute band
+        cannot catch a value that is plausible for *some* bond but impossible for *this* one:
+        ``912810UV8`` (May-2046) came back at **-0.679%** on 2026-07-15 with its neighbours at
+        4-5%, which sails through any band wide enough to admit a real curve. Points are compared
+        to a rolling median **in maturity order**, so the curve's own shape is not read as error.
+
+        The threshold is measured, and the first attempt at it was wrong in an instructive way. A
+        median-absolute-deviation rule looked principled and cut 20 genuine bonds on a clean date:
+        MAD on this cross-section is ~0.4bp, so even 8 MADs lands at ~3.2bp — inside the real
+        dispersion, which is dominated by seasoned high-coupon issues whose spread to the fitted
+        curve *is* the richness this strategy trades. Measured on three dates, the largest genuine
+        residual is **13.5 / 14.0 / 14.3 bp** while the corruption sits at **581.8 bp**. The 100bp
+        default is 7x above the largest real value and 5.8x below the corruption. Pass ``None`` to
+        disable.
+
+    ``max_stale_days``
+        Compared on **dates**, not timestamps. `fetch_curveset_snapshot` measures staleness as a
+        timedelta, so asking a DAILY series for "15:00" is always 15 hours stale and a strict check
+        there rejects every well-formed request. The question that matters for a curve is whether
+        this is the right *day*.
+
+    Raises
+    ------
+    RuntimeError
+        When the resolution is more than ``max_stale_days`` old, or fewer than ``min_bonds``
+        survive. A curve fitted to a handful of bonds is worse than no curve because it still looks
+        like a curve, and per-date coverage here genuinely swings (18 to 327 bonds across the
+        sample) — both are live failure modes, not hypotheticals.
+    """
+    ref = reference.copy()
+    if "ttm" not in ref.columns:
+        raise ValueError("reference frame has no `ttm` column — nothing to fit against")
+
+    n_all = len(ref)
+    ref = ref[ref["ttm"] >= float(min_ttm)]
+    if exclude_ranks and "rank" in ref.columns:
+        ref = ref[~ref["rank"].isin(list(exclude_ranks))]
+
+    snap = fetch_curveset_snapshot(
+        when, reference=ref, values=values, quotes=quotes,
+        max_staleness=max_staleness, strict=strict,
+    )
+
+    have = snap["yield"].notna() & snap["ttm"].notna() if "yield" in snap.columns else pd.Series(False, index=snap.index)
+    lo, hi = plausible_pct
+    ok = have & snap["yield"].between(lo, hi)
+    band_dropped = snap[have & ~ok]
+
+    out = snap[ok].sort_values("ttm").reset_index(drop=True)
+
+    # Cross-sectional pass, in maturity order so the curve's own shape is not read as error.
+    outlier_dropped = out.iloc[:0]
+    if max_dev_bp is not None and len(out) >= 15:
+        med = out["yield"].rolling(15, center=True, min_periods=5).median()
+        resid_bp = (out["yield"] - med).abs() * 100.0
+        keep = ~(resid_bp > float(max_dev_bp))  # NaN residual (window edge) must not drop a bond
+        outlier_dropped = out[~keep]
+        out = out[keep].reset_index(drop=True)
+
+    requested = pd.Timestamp(when)
+    resolved = pd.Timestamp(snap["snap_stamp"].iloc[0]) if len(snap) else None
+    stale_days = None if resolved is None else (requested.normalize() - resolved.normalize()).days
+
+    report = {
+        "requested_stamp": requested,
+        "resolved_stamp": resolved,
+        "stale_days": stale_days,
+        "reference_bonds": n_all,
+        "after_universe_filter": len(ref),
+        "quoted_by_citi": int(have.sum()),
+        "band_dropped": int(len(band_dropped)),
+        "band_cusips": band_dropped["cusip"].dropna().astype(str).tolist() if len(band_dropped) else [],
+        "outlier_dropped": int(len(outlier_dropped)),
+        "outlier_cusips": outlier_dropped["cusip"].dropna().astype(str).tolist() if len(outlier_dropped) else [],
+        "fittable": len(out),
+    }
+
+    if stale_days is not None and stale_days > int(max_stale_days):
+        raise RuntimeError(
+            f"Citi resolved {requested.date()} to {resolved.date()} ({stale_days}d stale, limit "
+            f"{max_stale_days}d). Citi resolves as-of, so this is an older curve wearing today's "
+            "label — raise max_stale_days deliberately if that is what you want."
+        )
+    if len(out) < int(min_bonds):
+        raise RuntimeError(
+            f"only {len(out)} fittable Citi quotes at {when} (need {min_bonds}). "
+            f"{report['after_universe_filter']} bonds were requested and {report['quoted_by_citi']} "
+            "came back quoted — the cache is thin for this date; warm it or pick an earlier one."
+        )
+    return out, report
+
+
+def cusip_to_isin(cusip: str, country_code: str = "US") -> str:
+    """9-character CUSIP -> 12-character ISIN, which is what Citi keys its bond tags by.
+
+    Delegates to the estate's existing implementation rather than re-deriving the Luhn check digit:
+    two implementations of a check digit is one more than can be kept correct, and a wrong check
+    digit fails the way this whole class of bug fails — a tag that resolves to nothing, reported as
+    a missing data source.
+    """
+    from MDP.FixedRateBonds.WSJ.WSJFetcher import get_isin_from_cusip
+
+    c = str(cusip).strip().upper()
+    return c if len(c) == 12 and c[:2].isalpha() else get_isin_from_cusip(c, country_code)
+
+
 def fetch_curveset_snapshot(
     when,
     *,
@@ -693,8 +842,18 @@ def fetch_curveset_snapshot(
     if isins is None:
         if reference is None:
             raise ValueError("supply either isins= or reference=")
-        col = "isin" if "isin" in reference.columns else "cusip"
-        isins = reference[col].dropna().astype(str).unique().tolist()
+        if "isin" in reference.columns:
+            isins = reference["isin"].dropna().astype(str).unique().tolist()
+        else:
+            # CONVERT, do not pass through. Citi keys bonds by the 12-character ISIN
+            # (`RATES.BOND.US912810EX29.YIELD`); every UST reference frame in this repo is keyed by
+            # the 9-character CUSIP. Handing the CUSIP straight to the tag builder produced
+            # `RATES.BOND.912810EX2.YIELD`, which resolves to nothing — so the call failed with
+            # "Citi returned no rows", the notebook's `except` reported "CVSNAP unavailable, run
+            # with Excel signed in", and a key-format bug read as a missing Excel bridge for as
+            # long as this function has existed. With real ISINs it serves 349/349 bonds from the
+            # disk cache with no Excel at all.
+            isins = [cusip_to_isin(c) for c in reference["cusip"].dropna().astype(str).unique()]
 
     if quotes is None:
         from MDP.CitiVelocityExcel.quotes import CitiVeloQuotes
@@ -759,8 +918,25 @@ def fetch_curveset_snapshot(
     out["snap_request"] = when
 
     if reference is not None:
-        col = "isin" if "isin" in reference.columns else "cusip"
-        out = out.merge(reference.rename(columns={col: "isin"}), on="isin", how="left")
+        ref = reference.copy()
+        if "isin" not in ref.columns:
+            # RENAMING `cusip` to `isin` was the silent half of the same bug. `out` is keyed by the
+            # 12-character ISIN Citi returned; a renamed 9-character CUSIP matches none of it, so
+            # the left join succeeded with every reference column NaN. `ttm` all-null then gives a
+            # spline with no x-axis and a universe filter that admits nothing — a blank result, not
+            # an exception. Derive the join key instead of relabelling one.
+            ref["isin"] = [cusip_to_isin(c) for c in ref["cusip"].astype(str)]
+        out = out.merge(ref, on="isin", how="left")
+
+        # A join that matched nothing is a defect, not an empty result. Say so here rather than
+        # letting it surface downstream as an unfittable curve.
+        for col in ("ttm", "cusip"):
+            if col in out.columns and out[col].notna().sum() == 0:
+                raise RuntimeError(
+                    f"reference merge matched 0 of {len(out)} snapshot rows on `isin` — every "
+                    f"`{col}` is null. Citi keys 12-character ISINs; check the reference frame's "
+                    "key format."
+                )
 
     return out
 

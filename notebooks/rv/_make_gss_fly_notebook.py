@@ -83,6 +83,14 @@ import warnings
 warnings.filterwarnings("ignore")
 logging.basicConfig(level=logging.ERROR)
 
+# Required, not decorative. `FixedRateBondsMDP._get_multi_pricers` falls back to
+# `WSJFetcher.ust_intraday_timeseries` for any CUSIP FedInvest has not published, and that fetcher
+# calls `asyncio.run()` — which raises "cannot be called from a running event loop" inside a Jupyter
+# kernel. The fallback is reachable on ANY date (coverage is per-CUSIP, not per-day), so pinning
+# `as_of` to an older date does not avoid it.
+import nest_asyncio
+nest_asyncio.apply()
+
 from MDP.FixedRateBonds.FixedRateBondsMDP import FixedRateBondsMDP
 from Query.FixedRateBonds.FixedRateBondQuery import FixedRateBondQuery
 from Query.FixedRateBonds.FixedRateBondValue import FixedRateBondValue
@@ -100,6 +108,7 @@ from BT.gss_fly import (
     load_repo_from_workbook, resolve_repo_curve, repo_tag_grid,
 )
 from BT.gss_fly.backtest import run_gss_backtest
+from BT.gss_fly.data import citi_curve_quotes, ust_business_days
 
 usts_mdp = FixedRateBondsMDP(source="USTS_FEDINVEST_WSJ_LIVE-QL")
 tb = TimeseriesBuilder(fixedratebonds_tb=FixedRateBondsTB(usts_mdp))
@@ -108,10 +117,29 @@ cfg = GSSConfig()
 print(cfg.describe())
 """)
 
-md("## 1. The curve, and the spline the richness is measured against")
+md(r"""
+## 1. The curve, and the spline the richness is measured against
+
+**The spline is fitted on Citi Velocity's own yields**, pulled through the CVSNAP path
+(`citi_curve_quotes`). Three reasons this is the better input, all measured rather than assumed:
+
+* **It is the vendor's own mark, not a re-derivation.** Citi publishes `YIELD` per ISIN; the
+  alternative re-solves a yield from a FedInvest clean price through QuantLib, adding a second
+  place for conventions to disagree. Where both work they agree to **0.60bp median, 1.04bp p95**.
+* **The FedInvest path is not reliable on recent dates.** Running the previous version of this cell
+  unchanged: 2025-06-16, 2025-11-14 and 2026-01-02 give 290/291/292 sane yields out of 290/291/292,
+  but **2026-07-10 gives 0 of 295** and **2026-08-07 gives 7 of 295** — medians of 1172 and 1433
+  percent. Nothing raises; the spline just fits to noise. (The backtest range ends 2026-01-02 and is
+  unaffected, which is why the port's numbers stand.)
+* **It runs offline.** No Excel, no add-in, no sign-in — `citi_curve_quotes` resolves from the
+  Velocity disk cache. It reads the wire only when the cache is cold.
+
+`citi_curve_quotes` returns `(frame, report)` and the report is worth reading every time: it names
+every bond dropped and why, because on this data what fell out is usually the interesting part.
+""")
 
 code(r"""
-as_of = datetime.date(2026, 8, 11)
+as_of = datetime.date(2026, 8, 7)
 
 ref_df = (
     usts_mdp.get_bond_reference_data(as_of_date=as_of)
@@ -120,25 +148,25 @@ ref_df = (
 )
 ref_df = ref_df[ref_df["ttm"] >= 1]
 
-pricers = usts_mdp.get_pricer(
-    request=dict(cusips=ref_df["cusip"].to_list(),
-                 timestamp="live" if as_of == datetime.date.today() else as_of,
-                 show_tqdm=True)
+# Citi's own yields. `exclude_ranks` drops the on-the-runs, matching the backtest universe: their
+# specialness in repo is not priced by a GC hurdle, so a rich OTR is not a tradeable richness.
+# Note the fit set and the DISPLAY set differ deliberately — the OTRs are plotted, just not fitted.
+market_df, snap_report = citi_curve_quotes(
+    pd.Timestamp(as_of), ref_df, exclude_ranks=(), values=("YIELD", "PRICE", "DURATION"),
 )
-ref_df["mdur"] = ref_df["cusip"].apply(lambda c: pricers[c].mod_duration() if c in pricers else np.nan)
-market_df = pd.DataFrame([{"cusip": c, "ytm": p.ytm()} for c, p in pricers.items()]).merge(ref_df, on="cusip")
-
-# The GSS universe excludes the on-the-runs: their specialness in repo is not priced by a GC
-# hurdle, so a rich OTR is not a tradeable richness.
-cusips_to_fit = ref_df[~ref_df["rank"].isin([0, 1, 2])]["cusip"].to_list()
-ttm = [pricers[c].time_to_maturity() for c in cusips_to_fit if c in pricers]
-ytm = [pricers[c].ytm() for c in cusips_to_fit if c in pricers]
-
-# The spline build from usts_rv.ipynb, unchanged.
-ytm_bspline = GeneralCurveInterpolator(x=ttm, y=ytm).b_spline_with_knots_interpolation(
-    knots=[2, 3, 5, 7, 10, 20, 25], k=3, return_func=True
+fit_df, fit_report = citi_curve_quotes(
+    pd.Timestamp(as_of), ref_df, exclude_ranks=(0, 1, 2), values=("YIELD",),
 )
-ytm_loess = GeneralCurveInterpolator(x=ttm, y=ytm).loess_interpolation(frac=0.15, it=50, delta=0, return_func=True)
+market_df = market_df.rename(columns={"yield": "ytm", "duration": "mdur"})
+
+for k, v in fit_report.items():
+    print(f"  {k:22s} {v}")
+
+# The spline build from usts_rv.ipynb — same knots, same call, Citi's yields underneath.
+ytm_bspline = GeneralCurveInterpolator(x=fit_df["ttm"].to_list(), y=fit_df["yield"].to_list()) \
+    .b_spline_with_knots_interpolation(knots=[2, 3, 5, 7, 10, 20, 25], k=3, return_func=True)
+ytm_loess = GeneralCurveInterpolator(x=fit_df["ttm"].to_list(), y=fit_df["yield"].to_list()) \
+    .loess_interpolation(frac=0.15, it=50, delta=0, return_func=True)
 
 plot_usts(
     curve_set_df=market_df,
@@ -146,10 +174,46 @@ plot_usts(
     ytm_col="ytm",
     label_col="oi",
     cusip_col="cusip",
-    hover_data=ref_df.columns.to_list(),
+    hover_data=[c for c in ("ust_label", "cpn", "rank", "maturity_date", "mdur") if c in market_df.columns],
     splines=[(ytm_bspline, "BSpline", "red"), (ytm_loess, "LOESS", "orange")],
-    title=f"UST complex and the fitted curve — {as_of}",
+    title=f"UST complex and the fitted curve — {as_of} (Citi Velocity)",
 )
+""")
+
+md(r"""
+### 1.0 The two vendors against each other
+
+The check that makes the swap verifiable rather than an act of faith. FedInvest clean prices are
+re-solved to yield through QuantLib and differenced against Citi's published yield, bond by bond.
+
+Read the **count** first, not the spread: `sane` below is how many FedInvest yields land in a
+believable band at all. When that number collapses, the difference column is meaningless and the
+FedInvest curve for that date is the broken one.
+""")
+
+code(r"""
+fed = usts_mdp.get_pricer(request=dict(cusips=fit_df["cusip"].astype(str).to_list(),
+                                       timestamp=as_of, show_tqdm=False))
+rows = []
+for c, p in fed.items():
+    try:
+        rows.append({"cusip": c, "fed_ytm": p.ytm()})
+    except Exception:
+        pass                                     # a bill QuantLib cannot bracket is not a finding
+fed_df = pd.DataFrame(rows)
+cmp_df = fit_df[["cusip", "ttm", "yield"]].merge(fed_df, on="cusip", how="inner")
+sane = cmp_df[cmp_df["fed_ytm"].between(0.0, 20.0)]
+print(f"matched {len(cmp_df)} bonds; FedInvest yields in a believable band: {len(sane)}")
+
+if len(sane) < 0.5 * len(cmp_df):
+    print(f"\n  >>> FedInvest is UNUSABLE on {as_of}: only {len(sane)} of {len(cmp_df)} yields are")
+    print("  >>> believable. The Citi curve above stands; a FedInvest-fitted curve for this date")
+    print("  >>> would be noise, and nothing in that path raises to tell you so.")
+else:
+    d_bp = (sane["yield"] - sane["fed_ytm"]) * 100.0
+    print(f"  median |Citi - FedInvest|  {d_bp.abs().median():.3f} bp")
+    print(f"  p95    |Citi - FedInvest|  {d_bp.abs().quantile(.95):.3f} bp")
+    print(f"  mean signed                {d_bp.mean():+.3f} bp")
 """)
 
 md(r"""
@@ -160,31 +224,46 @@ md(r"""
 """)
 
 code(r"""
-compare = as_of - datetime.timedelta(days=30)
+# NOT `as_of - timedelta(days=30)` on its own: that landed on Sunday 2026-07-12, no snapshot exists
+# for it, every one of the 295 pricers failed, and the empty frame then died in a merge with
+# `KeyError: 'cusip'` — a calendar bug wearing a pandas error. Snap back to the last UST trading day
+# on or before the target. Same landmine as `pd.bdate_range` vs `ust_business_days`.
+_target = as_of - datetime.timedelta(days=30)
+compare = ust_business_days(_target - datetime.timedelta(days=10), _target)[-1]
 
 old_ref = (
     usts_mdp.get_bond_reference_data(as_of_date=compare)
     .drop(columns=["record_date"]).rename(columns={"label": "ust_label"})
 )
 old_ref = old_ref[old_ref["ttm"] >= 1]
-old_pricers = usts_mdp.get_pricer(request=dict(cusips=old_ref["cusip"].to_list(), timestamp=compare, show_tqdm=True))
-old_market = pd.DataFrame([{"cusip": c, "ytm": p.ytm()} for c, p in old_pricers.items()]).merge(old_ref, on="cusip")
 
-old_fit = old_ref[~old_ref["rank"].isin([0, 1, 2])]["cusip"].to_list()
+# Same Citi path as `as_of`. Note this comparison lands on 2026-07-10, five days before the date on
+# which Citi published an impossible -0.679% for the May-2046 bond — `citi_curve_quotes` reports
+# anything it drops, so if the window ever moves onto 07-14/15 the drop is visible rather than
+# silently bent into the curve.
+old_market, _ = citi_curve_quotes(pd.Timestamp(compare), old_ref, exclude_ranks=(),
+                                  values=("YIELD", "PRICE"))
+old_fit, old_report = citi_curve_quotes(pd.Timestamp(compare), old_ref, exclude_ranks=(0, 1, 2),
+                                        values=("YIELD",))
+old_market = old_market.rename(columns={"yield": "ytm"})
+print(f"{compare}: {old_report['fittable']} fittable, "
+      f"dropped {old_report['band_dropped']} out-of-band + {old_report['outlier_dropped']} outlier "
+      f"{old_report['band_cusips'] + old_report['outlier_cusips']}")
+
 old_bspline = GeneralCurveInterpolator(
-    x=[old_pricers[c].time_to_maturity() for c in old_fit if c in old_pricers],
-    y=[old_pricers[c].ytm() for c in old_fit if c in old_pricers],
+    x=old_fit["ttm"].to_list(), y=old_fit["yield"].to_list(),
 ).b_spline_with_knots_interpolation(knots=[2, 3, 5, 7, 10, 20, 25], k=3, return_func=True)
 
+_hover = [c for c in ("ust_label", "cpn", "rank", "maturity_date") if c in old_market.columns]
 fig, cmap = plot_usts_comparison(
     curve_set_df=old_market, ttm_col="ttm", ytm_col="ytm", label_col="oi", cusip_col="cusip",
-    hover_data=old_ref.columns.to_list(), splines=[(old_bspline, "BSpline", "lightcoral")],
+    hover_data=_hover, splines=[(old_bspline, "BSpline", "lightcoral")],
     opacity=0.45, name_suffix=str(compare), show=False, return_color_map=True,
 )
 plot_usts_comparison(
     curve_set_df=market_df, ttm_col="ttm", ytm_col="ytm", label_col="oi", cusip_col="cusip",
-    hover_data=ref_df.columns.to_list(), splines=[(ytm_bspline, "BSpline", "red")],
-    title=f"UST complex: {compare} vs {as_of}",
+    hover_data=_hover, splines=[(ytm_bspline, "BSpline", "red")],
+    title=f"UST complex: {compare} vs {as_of} (Citi Velocity)",
     fig=fig, opacity=1.0, name_suffix=str(as_of), color_discrete_map=cmap, show=True,
 )
 """)
