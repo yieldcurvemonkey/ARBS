@@ -1,0 +1,83 @@
+{
+  "package_id": "OUTRIGHT-1066934340",
+  "trade_id": "1066934340",
+  "as_of_date": "2024-07-09",
+  "fixed_rate": 0.04163,
+  "notional": 170000000.0,
+  "tenor_years": 7.005479452054795,
+  "deviation_bps": 4.97250792252652,
+  "mid_bias_bps": -0.0129619576782147,
+  "tau_bps": 1.64191422320616,
+  "p": 0.954190706661473,
+  "signed_weight": 0.908381413322946,
+  "dealer_sign": 1,
+  "dealer_direction": "RECEIVED",
+  "rule": "RATE_VS_MID",
+  "tau_bucket": "venue_class=D2C|rate_index=SOFR|structure=OUTRIGHT|special_tenor_type=IMM|tenor_band=7Y-10Y",
+  "curve_name": "USD-SOFR-1D",
+  "snapshot_policy": "STRICT_1MIN_IN_SESSION",
+  "total_dv01_if_received": 93549.37870449557,
+  "total_delta_dv01": 84978.51684307322,
+  "buckets": [
+    {
+      "bucket_key": "0-1Y",
+      "dv01_if_received": -223.518896185655,
+      "delta_dv01": -203.04041082151,
+      "signed_weight": 0.908381413322946
+    },
+    {
+      "bucket_key": "10-15Y",
+      "dv01_if_received": -3.36815602853405e-11,
+      "delta_dv01": -3.05957033349196e-11,
+      "signed_weight": 0.908381413322946
+    },
+    {
+      "bucket_key": "1-2Y",
+      "dv01_if_received": 186.879609616548,
+      "delta_dv01": 169.757963904721,
+      "signed_weight": 0.908381413322946
+    },
+    {
+      "bucket_key": "15-20Y",
+      "dv01_if_received": 1.23587785513094e-11,
+      "delta_dv01": 1.12264847273837e-11,
+      "signed_weight": 0.908381413322946
+    },
+    {
+      "bucket_key": "20-30Y",
+      "dv01_if_received": -3.40888828386246e-11,
+      "delta_dv01": -3.09657075715501e-11,
+      "signed_weight": 0.908381413322946
+    },
+    {
+      "bucket_key": "2-3Y",
+      "dv01_if_received": 356.382137303047,
+      "delta_dv01": 323.730909566394,
+      "signed_weight": 0.908381413322946
+    },
+    {
+      "bucket_key": "30Y+",
+      "dv01_if_received": -3.08129938932763e-11,
+      "delta_dv01": -2.79899509414857e-11,
+      "signed_weight": 0.908381413322946
+    },
+    {
+      "bucket_key": "3-5Y",
+      "dv01_if_received": 282.794257814306,
+      "delta_dv01": 256.885047592973,
+      "signed_weight": 0.908381413322946
+    },
+    {
+      "bucket_key": "5-7Y",
+      "dv01_if_received": 92947.3050567553,
+      "delta_dv01": 84431.6043320144,
+      "signed_weight": 0.908381413322946
+    },
+    {
+      "bucket_key": "7-10Y",
+      "dv01_if_received": -0.463460807888222,
+      "delta_dv01": -0.420999183689297,
+      "signed_weight": 0.908381413322946
+    }
+  ]
+}

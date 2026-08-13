@@ -1,0 +1,14 @@
+--- SERIAL (1 process), ['2025-10-15', '2026-01-26']
+    {'day': '2025-10-15', 'rows': 61036, 'seconds': 135.80508189997636, 'handles_peak': 0, 'SOFR': {'minutes': 1299, 'served': 1299, 'miss': 0}, 'FED_FUNDS': {'minutes': 1298, 'served': 1298, 'miss': 0}}
+    {'day': '2026-01-26', 'rows': 62040, 'seconds': 129.24482460017316, 'handles_peak': 0, 'SOFR': {'minutes': 1320, 'served': 1320, 'miss': 0}, 'FED_FUNDS': {'minutes': 1320, 'served': 1320, 'miss': 0}}
+    wall = 265.1s
+
+--- 2 WORKERS, ['2025-11-04', '2026-02-12']
+    {'day': '2025-11-04', 'rows': 60711, 'seconds': 130.34764749999158, 'handles_peak': 0, 'SOFR': {'minutes': 1291, 'served': 1291, 'miss': 0}, 'FED_FUNDS': {'minutes': 1293, 'served': 1293, 'miss': 0}}
+    {'day': '2026-02-12', 'rows': 61993, 'seconds': 147.25235640001483, 'handles_peak': 0, 'SOFR': {'minutes': 1319, 'served': 1319, 'miss': 0}, 'FED_FUNDS': {'minutes': 1319, 'served': 1319, 'miss': 0}}
+    wall = 149.0s
+
+--- SCALING
+    serial:   265.0s CPU / 265.1s wall
+    2 worker: 277.6s CPU / 149.0s wall  -> speedup 1.86x, per-day CPU inflation 1.05x
+    245780 rows over 10459 served curve-minutes; per-day rows ~61445

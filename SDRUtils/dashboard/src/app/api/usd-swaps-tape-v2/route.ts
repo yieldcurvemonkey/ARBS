@@ -2,6 +2,7 @@
 import { NextResponse } from 'next/server'
 import { query } from '@/lib/db'
 import { resolveDisplayView } from '@/lib/usd-swaps-tape-v2'
+import { resolveDirectionJoin } from '@/lib/dealer-direction-join'
 import type { UsdSwapTapeRow } from '@/features/usd-swaps-tape-v2/types'
 import { buildTapeQuery, parseParams } from './route.logic'
 
@@ -26,8 +27,11 @@ export async function GET(req: Request) {
   }
 
   try {
-    const { view, columns } = await resolveDisplayView()
-    const { sql, params } = buildTapeQuery(parsed.value, view, columns)
+    const [{ view, columns }, direction] = await Promise.all([
+      resolveDisplayView(),
+      resolveDirectionJoin(),
+    ])
+    const { sql, params } = buildTapeQuery(parsed.value, view, columns, direction)
     const result = await query<UsdSwapTapeRow>(sql, params)
     const rows = result.rows.slice(0, parsed.value.limit)
     const hasMore = result.rows.length > parsed.value.limit

@@ -1,0 +1,66 @@
+==============================================================================
+day=2026-04-01  omit_unused_fixings=True  import=2.22s
+==============================================================================
+curves: {'SOFR': 'USD-SOFR-1D', 'FED_FUNDS': 'USD-FEDFUNDS-1D'}
+
+---------------- SOFR  (USD-SOFR-1D) ----------------
+  first build (incl. lazy import/store open) = 1301.3 ms   policy=STRICT_1MIN_IN_SESSION lag=0.0s
+  reference_date=2026-04-01  spot(2b)=2026-04-06  instant ET date=2026-04-01
+  (a) mark_curve, cold minute                  n= 20  median=     3.6 ms  mean=     3.4  min=     2.7  max=     4.1
+  (b) mark_curve, cached minute                n= 60  median=     0.0 ms  mean=     0.0  min=     0.0  max=     0.2
+  (c) price_leg, ONE tenor (10Y), warm curve   n= 30  median=     3.8 ms  mean=     6.7  min=     2.9  max=    90.8
+  (d) price_leg x22 tenors, warm curve         n=  5  median=    67.5 ms  mean=    67.6  min=    66.6  max=    68.6
+      -> per tenor                             n=  5  median=     3.1 ms  mean=     3.1  min=     3.0  max=     3.1
+
+  par rates at 2026-04-01 09:00:00-04:00  (spot 2026-04-06):
+      1M  mat=2026-05-06  rate= 3.661360 %  pv01=        8.30
+      2M  mat=2026-06-08  rate= 3.667500 %  pv01=       17.38
+      3M  mat=2026-07-06  rate= 3.674960 %  pv01=       25.03
+      6M  mat=2026-10-06  rate= 3.688090 %  pv01=       49.86
+      9M  mat=2027-01-06  rate= 3.701350 %  pv01=       74.24
+      1Y  mat=2027-04-06  rate= 3.705760 %  pv01=       97.65
+     18M  mat=2027-10-06  rate= 3.663740 %  pv01=      145.77
+      2Y  mat=2028-04-06  rate= 3.627520 %  pv01=      192.14
+      3Y  mat=2029-04-06  rate= 3.589600 %  pv01=      283.13
+      4Y  mat=2030-04-08  rate= 3.602350 %  pv01=      371.37
+      5Y  mat=2031-04-07  rate= 3.641550 %  pv01=      455.63
+      6Y  mat=2032-04-06  rate= 3.689571 %  pv01=      536.86
+      7Y  mat=2033-04-06  rate= 3.739311 %  pv01=      614.86
+      8Y  mat=2034-04-06  rate= 3.787051 %  pv01=      689.66
+      9Y  mat=2035-04-06  rate= 3.834001 %  pv01=      761.36
+     10Y  mat=2036-04-07  rate= 3.879971 %  pv01=      830.38
+     12Y  mat=2038-04-06  rate= 3.970610 %  pv01=      958.58
+     15Y  mat=2041-04-08  rate= 4.082388 %  pv01=     1130.53
+     20Y  mat=2046-04-06  rate= 4.170888 %  pv01=     1368.40
+     25Y  mat=2051-04-06  rate= 4.173202 %  pv01=     1560.52
+     30Y  mat=2056-04-06  rate= 4.136622 %  pv01=     1718.50
+     40Y  mat=2066-04-06  rate= 4.021587 %  pv01=     1963.87
+
+---------------- FED_FUNDS  (USD-FEDFUNDS-1D) ----------------
+  first build (incl. lazy import/store open) = 1724.9 ms   policy=STRICT_1MIN_IN_SESSION lag=0.0s
+  reference_date=2026-04-01  spot(2b)=2026-04-06  instant ET date=2026-04-01
+  (a) mark_curve, cold minute                  n= 20  median=     3.4 ms  mean=     3.2  min=     2.3  max=     3.8
+  (b) mark_curve, cached minute                n= 60  median=     0.1 ms  mean=     0.1  min=     0.1  max=     0.2
+  (c) price_leg, ONE tenor (10Y), warm curve   n= 30  median=     3.6 ms  mean=     3.6  min=     2.8  max=     5.4
+  (d) price_leg x11 tenors, warm curve         n=  5  median=    17.1 ms  mean=    17.0  min=    16.6  max=    17.6
+      -> per tenor                             n=  5  median=     1.6 ms  mean=     1.5  min=     1.5  max=     1.6
+
+  par rates at 2026-04-01 09:00:00-04:00  (spot 2026-04-06):
+      1M  mat=2026-05-06  rate= 3.646180 %  pv01=        8.30
+      2M  mat=2026-06-08  rate= 3.652080 %  pv01=       17.38
+      3M  mat=2026-07-06  rate= 3.656460 %  pv01=       25.03
+      6M  mat=2026-10-06  rate= 3.664260 %  pv01=       49.87
+      9M  mat=2027-01-06  rate= 3.671880 %  pv01=       74.25
+      1Y  mat=2027-04-06  rate= 3.673030 %  pv01=       97.68
+     18M  mat=2027-10-06  rate= 3.625720 %  pv01=      145.83
+      2Y  mat=2028-04-06  rate= 3.583230 %  pv01=      192.25
+      3Y  mat=2029-04-06  rate= 3.541060 %  pv01=      283.38
+      5Y  mat=2031-04-07  rate= 3.589110 %  pv01=      456.27
+     10Y  mat=2036-04-07  rate= 3.823741 %  pv01=      832.65
+
+==============================================================================
+SUMMARY (ms)
+  SOFR       cold_build=    3.6  cached=  0.045  1 tenor=   3.8  22 tenors=   67.5  per-tenor=  3.1
+             one grid point (build + 22 tenors) =    71.1 ms   build share =  5.0%
+  FED_FUNDS  cold_build=    3.4  cached=  0.082  1 tenor=   3.6  11 tenors=   17.1  per-tenor=  1.6
+             one grid point (build + 11 tenors) =    20.5 ms   build share = 16.7%

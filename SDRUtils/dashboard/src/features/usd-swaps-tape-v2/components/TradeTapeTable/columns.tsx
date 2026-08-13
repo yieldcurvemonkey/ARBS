@@ -17,6 +17,11 @@ import {
 } from '../../utils/format'
 import { computePackageConfidence } from '../../utils/packageConfidence'
 import {
+  BAND_WIDTH,
+  DIRECTION_TONES,
+  directionView,
+} from '../../utils/dealerDirection'
+import {
   canonicalDisplayLabel,
   canonicalSourceVariants,
 } from '../../utils/canonicalDisplay'
@@ -566,6 +571,56 @@ export function getColumns(
         </span>
       )}
       style={{ width: 64 }}
+    />,
+    // Inferred dealer direction. Sits immediately after the reported level
+    // because that is what it is inferred FROM: the printed price against a
+    // repriced mid.
+    //
+    // RCVD (emerald) = dealer received fixed = dealer long duration.
+    // PAID (rose)    = dealer paid fixed     = dealer short duration.
+    // n/a  (slate)   = we declined, and the tooltip says why.
+    //
+    // The bar under the badge is |2p-1|, the ladder's own weight — not p.
+    // At p = 0.5 it is zero, which is what a coin flip is worth.
+    <Column
+      key="dealer_direction"
+      field="dd_dealer_direction"
+      filterField="dd_dealer_direction"
+      filter
+      {...compactFilterMenuProps}
+      header={renderHeader(
+        'Dealer',
+        summaryFor('dd_dealer_direction', config.activeFilters),
+      )}
+      body={(row: UsdSwapTapeRow) => {
+        const v = directionView(row)
+        return (
+          <div className="flex flex-col items-center gap-0.5" title={v.title}>
+            <span
+              className={`inline-flex items-center rounded px-1 py-0.5 font-mono text-[10px] ${DIRECTION_TONES[v.tone]}`}
+              data-testid={`dd-direction-${row.package_id}`}
+              /* the canonical state, never the abbreviated label */
+              data-direction={v.state}
+            >
+              {v.label}
+            </span>
+            {v.conviction != null ? (
+              <span className="block h-[2px] w-8 rounded-full bg-slate-800">
+                <span
+                  className={`block h-[2px] rounded-full ${BAND_WIDTH[v.band]} ${
+                    v.tone === 'received' ? 'bg-sky-400/70' : 'bg-amber-400/70'
+                  }`}
+                />
+              </span>
+            ) : v.reasonPhrase ? (
+              <span className="max-w-[64px] truncate text-[8.5px] leading-none text-slate-500">
+                {v.reason}
+              </span>
+            ) : null}
+          </div>
+        )
+      }}
+      style={{ width: 62 }}
     />,
     <Column
       key="other_lvl"

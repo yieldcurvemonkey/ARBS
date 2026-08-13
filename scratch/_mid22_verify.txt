@@ -1,0 +1,9 @@
+===== verify 2026-04-01 =====
+2 ET calendar dates from the tape: 2026-03-31 .. 2026-04-01
+verify: 2 target ET dates x 2 indices; 4 complete, 0 with no session, 0 problems, 0 warnings
+===== verify 2026-06-17 =====
+2 ET calendar dates from the tape: 2026-06-16 .. 2026-06-17
+verify: 2 target ET dates x 2 indices; 4 complete, 0 with no session, 0 problems, 0 warnings
+===== verify 2025-04-07 =====
+2 ET calendar dates from the tape: 2025-04-06 .. 2025-04-07
+verify: 2 target ET dates x 2 indices; 4 complete, 0 with no session, 0 problems, 0 warnings

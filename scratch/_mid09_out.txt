@@ -1,0 +1,172 @@
+C:\Users\chris\clee\ARBS-fe\Query\IRSwaps\IRSwapStructure.py:12: LicenceNotice: 
+Rateslib is source-available (not open-source) software distributed under a dual-licence model.
+No commercial licence is registered for this installation. Use is therefore permitted for non-commercial purposes only (at-home or university based academic use).
+Any use in commercial, professional, or for-profit environments, including evaluation or trial use, requires a valid commercial licence or an approved evaluation licence.
+Certain features may require a registered commercial or evaluation licence in current or future versions.
+For licensing information or to register a licence, please visit: https://rateslib.com/licence
+  from rateslib.scheduling import get_imm, next_imm
+
+==============================================================================
+2026-04-01  ref=2026-04-01  spotA=2026-04-06  spotT=2026-04-03 (modal, n=985)  prints=462
+  grid: 1320/1320 minutes served (0 strict misses) in 55.3s  = 41.9 ms/minute for 12 legs
+
+==============================================================================
+2025-10-15  ref=2025-10-15  spotA=2025-10-17  spotT=2025-10-17 (modal, n=930)  prints=400
+  grid: 1320/1320 minutes served (0 strict misses) in 51.2s  = 38.8 ms/minute for 12 legs
+
+==============================================================================
+2026-06-05  ref=2026-06-05  spotA=2026-06-09  spotT=2026-06-09 (modal, n=982)  prints=443
+  grid: 1140/1320 minutes served (180 strict misses) in 42.9s  = 37.7 ms/minute for 12 legs
+
+wrote C:\Users\chris\clee\ARBS-fe\scratch\_mid09_rows.parquet  (1305 print comparisons)
+
+==============================================================================
+(grid_mid - implied_mid) in bp   -- SPOT RULE A (curve ref +2b, nyc)
+==============================================================================
+
+3M:
+  1-min grid, ALL prints             n=   57  med= +0.000  mean= -0.349  sd= 0.797  p05= -1.753  p95= +0.093  |p50|= 0.000  |p95|= 1.753
+  1-min grid, EXACT-DATE prints      n=   13  med= +0.000  mean= -0.012  sd= 0.028  p05= -0.075  p95= +0.000  |p50|= 0.000  |p95|= 0.075
+  1-min grid, other-date prints      n=   44  med= +0.000  mean= -0.449  sd= 0.884  p05= -1.753  p95= +0.102  |p50|= 0.024  |p95|= 1.753
+
+1Y:
+  1-min grid, ALL prints             n=  189  med= +0.000  mean= +0.011  sd= 0.158  p05= -0.112  p95= +0.247  |p50|= 0.000  |p95|= 0.402
+  1-min grid, EXACT-DATE prints      n=   52  med= +0.000  mean= -0.013  sd= 0.053  p05= -0.097  p95= +0.000  |p50|= 0.000  |p95|= 0.097
+  1-min grid, other-date prints      n=  137  med= +0.000  mean= +0.020  sd= 0.182  p05= -0.112  p95= +0.348  |p50|= 0.001  |p95|= 0.536
+
+2Y:
+  1-min grid, ALL prints             n=  233  med= -0.000  mean= -0.013  sd= 0.262  p05= -0.107  p95= +0.012  |p50|= 0.028  |p95|= 0.180
+  1-min grid, EXACT-DATE prints      n=   84  med= +0.000  mean= -0.005  sd= 0.046  p05= -0.000  p95= +0.000  |p50|= 0.000  |p95|= 0.000
+  1-min grid, other-date prints      n=  149  med= -0.044  mean= -0.017  sd= 0.326  p05= -0.161  p95= +0.062  |p50|= 0.044  |p95|= 0.310
+
+5Y:
+  1-min grid, ALL prints             n=  322  med= +0.000  mean= +0.023  sd= 0.228  p05= -0.044  p95= +0.163  |p50|= 0.000  |p95|= 0.411
+  1-min grid, EXACT-DATE prints      n=  165  med= +0.000  mean= +0.006  sd= 0.054  p05= -0.000  p95= +0.000  |p50|= 0.000  |p95|= 0.000
+  1-min grid, other-date prints      n=  157  med= +0.046  mean= +0.040  sd= 0.322  p05= -0.426  p95= +0.242  |p50|= 0.047  |p95|= 0.683
+
+10Y:
+  1-min grid, ALL prints             n=  363  med= +0.000  mean= +0.010  sd= 0.134  p05= -0.000  p95= +0.054  |p50|= 0.000  |p95|= 0.054
+  1-min grid, EXACT-DATE prints      n=  248  med= +0.000  mean= -0.000  sd= 0.032  p05= -0.000  p95= +0.000  |p50|= 0.000  |p95|= 0.000
+  1-min grid, other-date prints      n=  115  med= +0.052  mean= +0.032  sd= 0.233  p05= -0.326  p95= +0.170  |p50|= 0.052  |p95|= 0.572
+
+30Y:
+  1-min grid, ALL prints             n=  141  med= -0.000  mean= -0.022  sd= 0.144  p05= -0.002  p95= +0.000  |p50|= 0.000  |p95|= 0.044
+  1-min grid, EXACT-DATE prints      n=   48  med= -0.000  mean= +0.006  sd= 0.043  p05= -0.000  p95= +0.000  |p50|= 0.000  |p95|= 0.000
+  1-min grid, other-date prints      n=   93  med= -0.002  mean= -0.036  sd= 0.173  p05= -0.035  p95= +0.000  |p50|= 0.002  |p95|= 0.070
+
+==============================================================================
+(grid_mid - implied_mid) in bp   -- SPOT RULE T (tape modal spot)
+==============================================================================
+
+3M:
+  1-min grid, ALL prints             n=   57  med= +0.000  mean= -0.349  sd= 0.797  p05= -1.753  p95= +0.093  |p50|= 0.000  |p95|= 1.753
+  1-min grid, EXACT-DATE prints      n=   13  med= +0.000  mean= -0.012  sd= 0.028  p05= -0.075  p95= +0.000  |p50|= 0.000  |p95|= 0.075
+  1-min grid, other-date prints      n=   44  med= +0.000  mean= -0.449  sd= 0.884  p05= -1.753  p95= +0.102  |p50|= 0.024  |p95|= 1.753
+
+1Y:
+  1-min grid, ALL prints             n=  189  med= -0.000  mean= +0.009  sd= 0.158  p05= -0.113  p95= +0.243  |p50|= 0.000  |p95|= 0.400
+  1-min grid, EXACT-DATE prints      n=   52  med= +0.000  mean= -0.013  sd= 0.053  p05= -0.097  p95= +0.000  |p50|= 0.000  |p95|= 0.097
+  1-min grid, other-date prints      n=  137  med= -0.000  mean= +0.018  sd= 0.182  p05= -0.113  p95= +0.347  |p50|= 0.000  |p95|= 0.536
+
+2Y:
+  1-min grid, ALL prints             n=  233  med= -0.000  mean= +0.009  sd= 0.261  p05= -0.084  p95= +0.037  |p50|= 0.000  |p95|= 0.203
+  1-min grid, EXACT-DATE prints      n=  175  med= -0.000  mean= -0.017  sd= 0.122  p05= -0.006  p95= +0.000  |p50|= 0.000  |p95|= 0.027
+  1-min grid, other-date prints      n=   58  med= +0.000  mean= +0.086  sd= 0.473  p05= -0.134  p95= +0.373  |p50|= 0.000  |p95|= 0.521
+
+5Y:
+  1-min grid, ALL prints             n=  322  med= +0.000  mean= +0.004  sd= 0.230  p05= -0.048  p95= +0.163  |p50|= 0.000  |p95|= 0.413
+  1-min grid, EXACT-DATE prints      n=  267  med= +0.000  mean= -0.024  sd= 0.159  p05= -0.000  p95= +0.000  |p50|= 0.000  |p95|= 0.000
+  1-min grid, other-date prints      n=   55  med= +0.032  mean= +0.141  sd= 0.409  p05= -0.125  p95= +0.789  |p50|= 0.047  |p95|= 0.789
+
+10Y:
+  1-min grid, ALL prints             n=  363  med= +0.000  mean= -0.005  sd= 0.136  p05= -0.000  p95= +0.000  |p50|= 0.000  |p95|= 0.052
+  1-min grid, EXACT-DATE prints      n=  342  med= +0.000  mean= -0.008  sd= 0.071  p05= -0.000  p95= +0.000  |p50|= 0.000  |p95|= 0.000
+  1-min grid, other-date prints      n=   21  med= +0.026  mean= +0.044  sd= 0.498  p05= -1.159  p95= +0.881  |p50|= 0.053  |p95|= 1.159
+
+30Y:
+  1-min grid, ALL prints             n=  141  med= +0.000  mean= -0.021  sd= 0.144  p05= -0.000  p95= +0.000  |p50|= 0.000  |p95|= 0.044
+  1-min grid, EXACT-DATE prints      n=   91  med= -0.000  mean= -0.020  sd= 0.132  p05= -0.000  p95= +0.000  |p50|= 0.000  |p95|= 0.000
+  1-min grid, other-date prints      n=   50  med= +0.000  mean= -0.022  sd= 0.164  p05= -0.009  p95= +0.002  |p50|= 0.000  |p95|= 0.054
+
+==============================================================================
+SPACING: EXACT-DATE prints only (rule T), by grid spacing
+==============================================================================
+
+3M:  (n=13)
+   1-min grid                        n=   13  med= +0.000  mean= -0.012  sd= 0.028  p05= -0.075  p95= +0.000  |p50|= 0.000  |p95|= 0.075
+   5-min grid                        n=   13  med= +0.000  mean= +0.006  sd= 0.058  p05= -0.075  p95= +0.107  |p50|= 0.014  |p95|= 0.107
+  15-min grid                        n=   13  med= -0.004  mean= +0.012  sd= 0.156  p05= -0.118  p95= +0.227  |p50|= 0.020  |p95|= 0.305
+  30-min grid                        n=   13  med= -0.004  mean= +0.010  sd= 0.156  p05= -0.118  p95= +0.227  |p50|= 0.039  |p95|= 0.305
+  60-min grid                        n=   13  med= -0.001  mean= -0.047  sd= 0.097  p05= -0.215  p95= +0.046  |p50|= 0.050  |p95|= 0.215
+
+1Y:  (n=52)
+   1-min grid                        n=   52  med= +0.000  mean= -0.013  sd= 0.053  p05= -0.097  p95= +0.000  |p50|= 0.000  |p95|= 0.097
+   5-min grid                        n=   52  med= -0.003  mean= +0.027  sd= 0.508  p05= -0.274  p95= +0.205  |p50|= 0.040  |p95|= 0.455
+  15-min grid                        n=   52  med= -0.023  mean= -0.052  sd= 0.728  p05= -0.763  p95= +0.420  |p50|= 0.101  |p95|= 1.687
+  30-min grid                        n=   52  med= -0.022  mean= -0.114  sd= 1.007  p05= -2.310  p95= +0.909  |p50|= 0.111  |p95|= 2.836
+  60-min grid                        n=   52  med= +0.024  mean= +0.266  sd= 0.712  p05= -0.318  p95= +1.759  |p50|= 0.132  |p95|= 1.759
+
+2Y:  (n=175)
+   1-min grid                        n=  175  med= -0.000  mean= -0.017  sd= 0.122  p05= -0.006  p95= +0.000  |p50|= 0.000  |p95|= 0.027
+   5-min grid                        n=  175  med= -0.005  mean= -0.062  sd= 0.338  p05= -0.528  p95= +0.289  |p50|= 0.073  |p95|= 0.580
+  15-min grid                        n=  175  med= -0.006  mean= -0.126  sd= 0.576  p05= -0.876  p95= +0.475  |p50|= 0.164  |p95|= 0.945
+  30-min grid                        n=  175  med= +0.000  mean= -0.007  sd= 0.987  p05= -0.914  p95= +1.313  |p50|= 0.278  |p95|= 1.782
+  60-min grid                        n=  175  med= -0.006  mean= +0.060  sd= 0.845  p05= -1.122  p95= +1.599  |p50|= 0.295  |p95|= 1.650
+
+5Y:  (n=267)
+   1-min grid                        n=  267  med= +0.000  mean= -0.024  sd= 0.159  p05= -0.000  p95= +0.000  |p50|= 0.000  |p95|= 0.000
+   5-min grid                        n=  267  med= +0.000  mean= -0.000  sd= 0.370  p05= -0.431  p95= +0.374  |p50|= 0.100  |p95|= 0.575
+  15-min grid                        n=  267  med= -0.000  mean= -0.014  sd= 0.625  p05= -0.704  p95= +0.629  |p50|= 0.150  |p95|= 0.953
+  30-min grid                        n=  267  med= +0.000  mean= +0.016  sd= 0.725  p05= -0.818  p95= +0.946  |p50|= 0.265  |p95|= 1.194
+  60-min grid                        n=  267  med= +0.057  mean= +0.131  sd= 0.717  p05= -0.883  p95= +1.419  |p50|= 0.395  |p95|= 1.516
+
+10Y:  (n=342)
+   1-min grid                        n=  342  med= +0.000  mean= -0.008  sd= 0.071  p05= -0.000  p95= +0.000  |p50|= 0.000  |p95|= 0.000
+   5-min grid                        n=  342  med= -0.000  mean= -0.024  sd= 0.310  p05= -0.387  p95= +0.295  |p50|= 0.080  |p95|= 0.498
+  15-min grid                        n=  342  med= +0.000  mean= -0.048  sd= 0.541  p05= -0.767  p95= +0.523  |p50|= 0.156  |p95|= 0.864
+  30-min grid                        n=  342  med= +0.009  mean= -0.037  sd= 0.632  p05= -0.875  p95= +0.793  |p50|= 0.229  |p95|= 1.342
+  60-min grid                        n=  342  med= +0.058  mean= +0.059  sd= 0.697  p05= -0.906  p95= +1.242  |p50|= 0.326  |p95|= 1.459
+
+30Y:  (n=91)
+   1-min grid                        n=   91  med= -0.000  mean= -0.020  sd= 0.132  p05= -0.000  p95= +0.000  |p50|= 0.000  |p95|= 0.000
+   5-min grid                        n=   91  med= -0.000  mean= -0.023  sd= 0.322  p05= -0.631  p95= +0.311  |p50|= 0.089  |p95|= 0.662
+  15-min grid                        n=   91  med= -0.000  mean= -0.027  sd= 0.538  p05= -0.817  p95= +0.587  |p50|= 0.180  |p95|= 0.878
+  30-min grid                        n=   91  med= +0.000  mean= -0.033  sd= 0.576  p05= -0.817  p95= +0.652  |p50|= 0.247  |p95|= 0.939
+  60-min grid                        n=   91  med= -0.033  mean= -0.053  sd= 0.519  p05= -0.812  p95= +0.797  |p50|= 0.361  |p95|= 0.987
+
+==============================================================================
+SPACING vs |dt| to nearest grid point, EXACT-DATE prints, rule T, pooled over tenors
+==============================================================================
+                  n           med        absmed         abs95
+spacing bucket                                               
+1       <=30s   890  0.000000e+00  4.440892e-14  1.776357e-13
+        5-10m     1 -3.794687e-01  3.794687e-01  3.794687e-01
+        10-30m    1 -4.241151e-01  4.241151e-01  4.241151e-01
+        >30m     48 -1.821270e-01  3.018918e-01  1.030650e+00
+5       <=30s   161 -4.440892e-14  4.440892e-14  1.776357e-13
+        30-60s  382 -2.265827e-03  8.700989e-02  4.169413e-01
+        1-2m    347 -2.098219e-03  1.359810e-01  5.898088e-01
+        5-10m     1 -3.794687e-01  3.794687e-01  3.794687e-01
+        10-30m    1 -4.241151e-01  4.241151e-01  4.241151e-01
+        >30m     48 -1.821270e-01  3.018918e-01  1.030650e+00
+15      <=30s    57  0.000000e+00  4.440892e-14  1.776357e-13
+        30-60s  139 -6.728072e-03  7.501774e-02  1.210984e+00
+        1-2m    108 -2.548113e-03  1.265474e-01  9.152704e-01
+        2-5m    348 -4.500000e-03  1.735889e-01  1.354338e+00
+        5-10m   239  5.803752e-02  2.660410e-01  8.700524e-01
+        10-30m    1 -4.241151e-01  4.241151e-01  4.241151e-01
+        >30m     48 -1.821270e-01  3.018918e-01  1.030650e+00
+30      <=30s    32 -2.220446e-14  6.661338e-14  1.287859e-13
+        30-60s   81 -4.440892e-14  8.514068e-02  1.794999e+00
+        1-2m     49  2.101798e-02  1.400154e-01  1.546865e+00
+        2-5m    166  1.457628e-02  1.950931e-01  2.372990e+00
+        5-10m   284  6.805295e-02  2.850333e-01  1.127640e+00
+        10-30m  280 -1.376849e-02  3.419200e-01  1.321669e+00
+        >30m     48 -1.821270e-01  3.018918e-01  1.030650e+00
+60      <=30s    17 -4.440892e-14  8.881784e-14  1.776357e-13
+        30-60s   41 -6.728072e-03  7.017119e-02  4.699855e-01
+        1-2m     22  4.103649e-02  2.099396e-01  5.122862e-01
+        2-5m     86  2.149975e-02  1.735889e-01  8.719789e-01
+        5-10m   135  8.400673e-02  2.990566e-01  1.003775e+00
+        10-30m  591  6.900000e-02  4.040643e-01  1.652512e+00
+        >30m     48 -1.821270e-01  3.018918e-01  1.030650e+00
