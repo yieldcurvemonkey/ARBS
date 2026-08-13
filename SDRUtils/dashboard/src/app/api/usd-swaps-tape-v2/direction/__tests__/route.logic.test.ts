@@ -16,6 +16,8 @@ import {
   parseCommon,
   SAMPLE_FLOOR,
   slug,
+  DEFAULT_LAST_SESSIONS,
+  MAX_LAST_SESSIONS,
   STANDARDISED_COLUMNS,
   standardisedSql,
   suffixLevels,
@@ -194,5 +196,71 @@ describe('the SQL is parameterised and reads the right tables', () => {
     // and NOT from the ladder's per-cell copies
     expect(sql).not.toMatch(/SUM\(coverage_dv01_kept\)/)
     expect(sql).not.toMatch(/SUM\(coverage_dv01_total\)/)
+  })
+})
+
+
+// ===========================================================================
+// THE RESPONSE-SIZE CONTROL
+// ===========================================================================
+
+describe('/standardised is bounded, because unbounded has a dated failure', () => {
+  // MEASURED on the production build: 541 B per row, 10 buckets per session.
+  const BYTES_PER_ROW = 541
+  const BUCKETS = 10
+  /** Vercel's documented serverless response cap. Exceeding it is a 500. */
+  const VERCEL_RESPONSE_CAP = 4.5 * 1024 * 1024
+
+  it('the default window leaves 4x headroom under the cap', () => {
+    // The unbounded version returned 629 sessions = 3.24 MB and was growing one
+    // session a trading day: 873 sessions is the cap, i.e. ~11.6 months away.
+    // This is the tripwire that stops it coming back.
+    const bytes = DEFAULT_LAST_SESSIONS * BUCKETS * BYTES_PER_ROW
+    expect(bytes).toBeLessThan(VERCEL_RESPONSE_CAP / 4)
+  })
+
+  it('even the MAXIMUM a caller may ask for stays under the cap', () => {
+    // Raising MAX_LAST_SESSIONS past ~870 reintroduces the outage. This fires
+    // first.
+    const bytes = MAX_LAST_SESSIONS * BUCKETS * BYTES_PER_ROW
+    expect(bytes).toBeLessThan(VERCEL_RESPONSE_CAP * 0.6)
+  })
+
+  it('covers what the heatmap actually draws', () => {
+    // HEATMAP_DAYS is 60. A default below it would silently crop the chart.
+    expect(DEFAULT_LAST_SESSIONS).toBeGreaterThanOrEqual(60)
+  })
+
+  it('windows by DISTINCT SESSION, never by a row limit', () => {
+    // A row LIMIT would slice mid-session and hand the heatmap a ragged final
+    // column — some buckets with a cell, some without — which renders as
+    // "nothing was oriented in 20-30Y today". That is a claim, and a false one.
+    // no `--` comments inside this statement, so the raw text IS the
+    // executable text; nothing to strip.
+    const sql = standardisedSql()
+    expect(sql).not.toContain('--')
+    expect(sql).toMatch(/SELECT DISTINCT visibility_date/)
+    expect(sql).toMatch(/ORDER BY visibility_date DESC/)
+    expect(sql).toContain('LIMIT $6')
+    expect(sql).toMatch(/visibility_date >= \(SELECT min\(visibility_date\) FROM win\)/)
+    // and the outer statement still orders ascending for the chart
+    expect(sql).toMatch(/ORDER BY visibility_date ASC, bucket_key ASC/)
+  })
+
+  it('parses lastSessions, defaults it, and refuses a window that would 500', () => {
+    const sp = (q: string) => new URLSearchParams(q)
+    expect(parseCommon(sp('')).lastSessions).toBe(DEFAULT_LAST_SESSIONS)
+    expect(parseCommon(sp('lastSessions=250')).lastSessions).toBe(250)
+    expect(parseCommon(sp(`lastSessions=${MAX_LAST_SESSIONS}`)).lastSessions).toBe(MAX_LAST_SESSIONS)
+    for (const bad of ['0', '-1', '1.5', 'all', String(MAX_LAST_SESSIONS + 1)]) {
+      expect(() => parseCommon(sp(`lastSessions=${bad}`))).toThrow(BadRequest)
+    }
+    try {
+      parseCommon(sp('lastSessions=99999'))
+    } catch (e) {
+      // the refusal carries the measurement, not just a range
+      expect((e as Error).message).toMatch(/5,407 B per session/)
+      expect((e as Error).message).toMatch(/4\.5 MB/)
+    }
   })
 })

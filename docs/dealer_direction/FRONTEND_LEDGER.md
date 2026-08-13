@@ -831,3 +831,92 @@ predates this API.
   overwhelmingly pre-existing rather than anything this PR added.
 - First paint: TTFB 15 ms, FCP 996 ms, tape table at 212 ms, direction column
   populated at 528 ms. CLS 0.147.
+
+---
+
+## G-17. The performance patch, and the bug the measurement found
+
+G-16 measured. This fixes. All numbers below are `next build && next start`,
+warm, before -> after.
+
+### The bug: a Scatter with no data does not draw nothing
+
+`<Scatter data={[]}>` does NOT render an empty layer. Recharts falls back to
+the **chart's** `data` prop -- which here is the 1-minute mid grid -- and emits
+one empty `<g class="recharts-scatter-symbol">` per grid minute.
+
+Both the package-legs and off-market layers are off by default, so the ordinary
+case paid two of them:
+
+| | scatter symbols | recharts layers | panel DOM nodes |
+|---|---:|---:|---:|
+| default day (72 marks) | **2,332** -> **72** | 2,368 -> 104 | 2,707 -> 443 |
+| busiest day (313 marks) | **2,643** -> **313** | 2,680 -> 346 | 3,504 -> 1,171 |
+
+2,643 = 2 x 1,164 grid points + 313 real marks, exactly. **The marks were never
+the cost.** DOM mutations during a date change: 5,022 -> 436.
+
+This is why G-16's "the fix is a rewrite of the mark renderer" was wrong. It was
+a three-line guard. The profile pointed at recharts and at
+`React.createElement`, and both were true and both were misleading -- they were
+building 2,300 empty groups.
+
+### /standardised: the response-size cliff is gone
+
+| | before | after |
+|---|---:|---:|
+| rows | 6,290 (all history) | 900 (90 sessions) |
+| raw | 3,322 KB | **487 KB** |
+| warm | 102 ms | **30 ms** |
+| Vercel 4.5 MB cap | ~244 sessions away | structurally unreachable |
+
+`DEFAULT_LAST_SESSIONS = 90`, `MAX_LAST_SESSIONS = 400`, windowed over DISTINCT
+`visibility_date` -- never a row LIMIT, which would slice mid-session and hand
+the heatmap a ragged final column that reads as "nothing was oriented in 20-30Y
+today". The response carries `sessions` and `truncated` so a window can never
+silently crop someone's history, and a unit test asserts both the default and
+the maximum stay under the cap with headroom.
+
+### The heatmap no longer waits on a call it does not read
+
+`Promise.all([summary, standardised])` -> two awaits. Time from clicking
+Analytics to a drawn z grid: **817 ms -> 166-226 ms**. `/summary` is still ~400
+ms and still correct; it just no longer gates a chart that never reads it.
+
+### Cold open of the Analytics tab
+
+**3,938 KB -> 1,103 KB.** FCP 996 -> 552 ms. Direction column populated 528 ->
+316 ms. Heap at tab open 110.6 -> 79.1 MB.
+
+### What did NOT improve, stated plainly
+
+- **The busiest-day wall clock is 2.1-3.0 s against 3.2 s before -- inside the
+  run-to-run noise on this box.** The DOM win is unambiguous and the wall-clock
+  win is not, because that number is dominated by the fetch and by the four
+  sibling analytics panels that mount on the same tab.
+- **CLS is unchanged at ~0.23.** Decomposed with `layout-shift` sources: 0.120
+  is the initial page layout and 0.083 the Analytics tab switch, both
+  pre-existing; **mine was 0.018** -- one strip appearing after the fetch and
+  pushing the chart 54 px down. That strip now has a reserved row, but the
+  effect is below the measurement noise of the two shifts around it.
+- **Long tasks on tab open remain ~1.0-1.2 s.** Not attributable to these two
+  panels; the tab mounts `net-new-risk`, `compression-cycles`,
+  `ccp-market-share` and `block-heatmap` at the same moment.
+
+### Two defects the e2e suite was hiding
+
+Running it against the production build turned up both:
+
+1. **Puppeteer's default 800x600 viewport renders ZERO tape rows** (measured: 0
+   `tbody tr` at 800px, 31 at 1680px). Every spec that waited on a row timed out
+   at 30 s against a page that was working. This is why the e2e suite was red --
+   including the pre-existing golden-paths file, which had nothing to do with
+   this branch. Every spec now sets a viewport, and **8/8 pass**.
+2. **`data-direction` carried the abbreviated LABEL, not the state.** It emitted
+   `RCVD` where the contract says `RECEIVED`. The reason this survived is the
+   nasty part: **`PAID` is spelled the same both ways**, so anything reading that
+   attribute agreed on paid prints and silently disagreed on received ones. A
+   direction that is right half the time is precisely the failure this feature
+   exists to prevent. `DirectionView` now carries a canonical
+   `state: 'RECEIVED' | 'PAID' | 'ABSTAINED' | 'UNKNOWN'` and the grid renders
+   that; a unit test asserts `state !== label`.

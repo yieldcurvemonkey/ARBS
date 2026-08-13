@@ -91,9 +91,24 @@ export type DirectionRowFields = {
   dd_tape_generation?: string | null
 }
 
+/**
+ * The CANONICAL state, which is not the same string as the label.
+ *
+ * `label` is display text and is abbreviated ('RCVD'); `state` is the machine
+ * value and never is. They were conflated in the grid's data-direction
+ * attribute, and the bug was invisible for exactly the wrong reason: 'PAID'
+ * happens to be spelled the same both ways, so anything reading the attribute
+ * worked for paid prints and silently disagreed on received ones. A direction
+ * that is right half the time is the failure mode this whole feature is built
+ * to avoid.
+ */
+export type DirectionState = 'RECEIVED' | 'PAID' | 'ABSTAINED' | 'UNKNOWN'
+
 export type DirectionView = {
   /** Present at all? (false when the batch has not covered this day yet.) */
   known: boolean
+  /** Machine-readable. NEVER the abbreviation — see DirectionState. */
+  state: DirectionState
   label: string
   tone: DirectionTone
   band: ConfidenceBand
@@ -139,6 +154,7 @@ export function directionView(row: DirectionRowFields): DirectionView {
   if (raw == null) {
     return {
       known: false,
+      state: 'UNKNOWN',
       label: '—',
       tone: 'abstained',
       band: 'none',
@@ -155,6 +171,7 @@ export function directionView(row: DirectionRowFields): DirectionView {
     const detail = row.dd_exclusion_detail
     return {
       known: true,
+      state: 'ABSTAINED',
       label: 'n/a',
       tone: 'abstained',
       band: 'none',
@@ -214,6 +231,7 @@ export function directionView(row: DirectionRowFields): DirectionView {
 
   return {
     known: true,
+    state: raw === DIRECTION_RECEIVED ? 'RECEIVED' : 'PAID',
     label: raw === DIRECTION_RECEIVED ? 'RCVD' : 'PAID',
     tone,
     band,

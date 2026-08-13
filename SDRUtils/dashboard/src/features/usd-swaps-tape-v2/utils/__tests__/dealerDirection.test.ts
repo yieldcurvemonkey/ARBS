@@ -240,3 +240,32 @@ describe('pg hands NUMERIC back as a string', () => {
     expect(v.band).toBe('high')
   })
 })
+
+describe('state is the machine value and label is the display text', () => {
+  // THE BUG THIS PINS: the grid's data-direction attribute carried `label`,
+  // which is abbreviated. 'PAID' is spelled the same both ways and 'RECEIVED'
+  // is not, so every consumer of that attribute agreed on paid prints and
+  // silently disagreed on received ones. Half-right direction is the exact
+  // failure mode this feature exists to prevent.
+  it('never lets the abbreviation stand in for the state', () => {
+    const rcvd = directionView({ dd_dealer_direction: 'RECEIVED', dd_p: 0.8, dd_signed_weight: 0.6 })
+    expect(rcvd.state).toBe('RECEIVED')
+    expect(rcvd.label).toBe('RCVD')
+    expect(rcvd.state).not.toBe(rcvd.label)
+  })
+
+  it('covers all four states, and only those four', () => {
+    const paid = directionView({ dd_dealer_direction: 'PAID', dd_p: 0.2, dd_signed_weight: -0.6 })
+    const abst = directionView({ dd_dealer_direction: 'ABSTAINED' })
+    const excl = directionView({ dd_dealer_direction: 'RECEIVED', dd_exclusion_reason: 'NO_CURVE' })
+    const none = directionView({})
+    expect(paid.state).toBe('PAID')
+    expect(abst.state).toBe('ABSTAINED')
+    // an excluded row is a DECLINED call whatever direction the raw field says
+    expect(excl.state).toBe('ABSTAINED')
+    expect(none.state).toBe('UNKNOWN')
+    for (const v of [paid, abst, excl, none]) {
+      expect(['RECEIVED', 'PAID', 'ABSTAINED', 'UNKNOWN']).toContain(v.state)
+    }
+  })
+})

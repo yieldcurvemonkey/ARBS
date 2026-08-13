@@ -20,6 +20,11 @@ describeIfUrl('USD swap tape v2 — golden paths', () => {
     const browser = await puppeteer.launch({ headless: true })
     try {
       const page = await browser.newPage()
+      // A VIEWPORT IS NOT COSMETIC HERE. Puppeteer defaults to 800x600, and at
+      // that width the tape renders ZERO rows (measured: 0 tbody rows at 800px,
+      // 31 at 1680px) — so every wait below times out at 30s against a page
+      // that is working fine. This is why these specs were red.
+      await page.setViewport({ width: 1680, height: 1100 })
       await page.goto(`${url}/usd-swaps-v2`, { waitUntil: 'networkidle0' })
       await page.waitForSelector('[data-testid="trade-tape-table"]', {
         timeout: 15_000,
@@ -35,6 +40,11 @@ describeIfUrl('USD swap tape v2 — golden paths', () => {
     const browser = await puppeteer.launch({ headless: true })
     try {
       const page = await browser.newPage()
+      // A VIEWPORT IS NOT COSMETIC HERE. Puppeteer defaults to 800x600, and at
+      // that width the tape renders ZERO rows (measured: 0 tbody rows at 800px,
+      // 31 at 1680px) — so every wait below times out at 30s against a page
+      // that is working fine. This is why these specs were red.
+      await page.setViewport({ width: 1680, height: 1100 })
       await page.goto(`${url}/usd-swaps-v2`, { waitUntil: 'networkidle0' })
       await page.waitForSelector('[data-testid="trade-tape-table"]')
       const before = (await page.$$('tbody tr')).length
@@ -56,6 +66,11 @@ describeIfUrl('USD swap tape v2 — golden paths', () => {
     const browser = await puppeteer.launch({ headless: true })
     try {
       const page = await browser.newPage()
+      // A VIEWPORT IS NOT COSMETIC HERE. Puppeteer defaults to 800x600, and at
+      // that width the tape renders ZERO rows (measured: 0 tbody rows at 800px,
+      // 31 at 1680px) — so every wait below times out at 30s against a page
+      // that is working fine. This is why these specs were red.
+      await page.setViewport({ width: 1680, height: 1100 })
       await page.goto(`${url}/usd-swaps-v2?sidecar=fomc`, {
         waitUntil: 'networkidle0',
       })

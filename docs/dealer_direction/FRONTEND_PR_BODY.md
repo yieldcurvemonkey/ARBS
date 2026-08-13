@@ -415,6 +415,62 @@ Two of the eight failed first time and both were the check, not the data —
 written up in `FRONTEND_LEDGER.md` G-6c, including the control that keeps the
 sign check from being able to pass vacuously.
 
+## Performance: measured, then fixed
+
+Measured on a production build (`next build && next start`), warm, five repeats.
+Full numbers in `FRONTEND_LEDGER.md` G-16/G-17.
+
+**The bug the measurement found.** `<Scatter data={[]}>` does not draw nothing --
+recharts falls back to the **chart's** `data` prop, here the 1-minute mid grid,
+and emits one empty `<g>` per grid minute. Package-legs and off-market are both
+off by default, so the ordinary case paid two of them: **2,332 scatter-symbol
+nodes on a day with 72 marks**, and 2,643 on the busiest day (= 2 x 1,164 grid
+points + 313 real marks, exactly). Three-line guard; the marks were never the
+cost.
+
+| | before | after |
+|---|---:|---:|
+| scatter symbols, default day | 2,332 | **72** |
+| prints panel DOM nodes | 2,707 | **443** |
+| chart mutations on a date change | 5,022 | **436** |
+| `/standardised` payload | 3,322 KB | **487 KB** |
+| `/standardised` warm | 102 ms | **30 ms** |
+| click Analytics -> z grid drawn | 817 ms | **166-226 ms** |
+| cold Analytics tab, total bytes | 3,938 KB | **1,103 KB** |
+| FCP | 996 ms | **552 ms** |
+
+**A dated outage is gone.** `/standardised` returned all 6,290 rows of history
+while the heatmap draws 60 sessions. At a measured 5,407 B per session, Vercel's
+4.5 MB serverless response cap was **244 trading sessions away -- about 11.6
+months -- and past it the panel 500s rather than slows.** It is now windowed over
+DISTINCT `visibility_date` (never a row limit, which would slice mid-session and
+render as "nothing was oriented in 20-30Y today"), the response carries
+`sessions`/`truncated`, and a unit test asserts the default *and* the maximum
+stay under the cap with headroom.
+
+**The heatmap no longer waits on `/summary`**, which it does not read. That call
+is still ~400 ms and still correct; it just no longer gates a chart.
+
+**Two defects the e2e suite was hiding**, both found by running it against the
+production build:
+
+- Puppeteer's default 800x600 viewport renders **zero** tape rows (0 vs 31 at
+  1680px), so every spec waiting on a row timed out against a working page. That
+  is why the suite was red -- including the pre-existing golden-paths file. Every
+  spec now sets a viewport and **8/8 pass**.
+- `data-direction` carried the abbreviated *label*, emitting `RCVD` where the
+  contract says `RECEIVED`. It survived because **`PAID` is spelled the same both
+  ways**, so any consumer agreed on paid prints and silently disagreed on
+  received ones. `DirectionView` now carries a canonical `state` and a test
+  asserts `state !== label`.
+
+**Not improved, stated plainly:** the busiest-day wall clock is 2.1-3.0 s against
+3.2 s before, inside run-to-run noise -- the DOM win is unambiguous, that one is
+not. CLS is unchanged at ~0.23, of which mine was 0.018. Long tasks on tab open
+remain ~1.0-1.2 s and belong to the four sibling analytics panels, not these two.
+
+---
+
 ## Unfinished, stated plainly
 
 - **A nightly incremental `publish` changes the day list, which misses the
@@ -440,6 +496,11 @@ sign check from being able to pass vacuously.
   Funds and 4.0× on SOFR because the Citi minute curve is smooth and has no
   discrete meeting steps. They are excluded from the prints chart by default and
   flagged in the ladder; improving the inference is out of scope for this PR.
+- **Route handlers are served uncompressed by `next start`** (pages and static
+  chunks do get gzip; Next's `compress` default does not reach Route Handlers).
+  Moot on Vercel, whose edge compresses -- the live site serves `br` -- so this is
+  documented rather than worked around. Unverified on the deployment itself:
+  every v2 tape route 404s there, so that build predates this API.
 - **Nothing keeps `arbs_dd_curve_mid_v1` current.** The chart now depends on a
   second table whose last day is 2026-08-07. A future `publish` day with no
   matching grid day flips that day's chart to the reconstruction fallback —

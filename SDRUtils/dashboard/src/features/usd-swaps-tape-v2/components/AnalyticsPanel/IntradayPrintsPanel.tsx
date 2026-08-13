@@ -472,8 +472,19 @@ export function IntradayPrintsPanel(): JSX.Element {
 
       {/* WHAT THE LINE IS. Two different objects render as one shape unless the
           chart says which; a polyline through eight prints read as a curve is
-          exactly the misreading this panel exists to prevent. */}
-      {midSource === 'grid' ? (
+          exactly the misreading this panel exists to prevent.
+
+          THE ROW IS ALWAYS PRESENT, so the chart below it does not jump when
+          the fetch lands. Measured: this strip appearing pushed the content
+          under it 54px and was 0.018 of a 0.230 cumulative layout shift —
+          small next to the page's own 0.120, but it is the one that moves
+          while the reader is already looking at the chart. */}
+      <div className="min-h-[22px]">
+      {loading && midSource === 'none' ? (
+        <div className="rounded border border-slate-800 bg-slate-900/30 px-2 py-1 text-[10px] text-slate-600">
+          measuring the mid…
+        </div>
+      ) : midSource === 'grid' ? (
         <div className="flex flex-wrap items-center gap-x-3 gap-y-1 rounded border border-slate-700 bg-slate-900/50 px-2 py-1 text-[10px] text-slate-300">
           <span>
             <span className="text-slate-500">line:</span> modelled 1-min par grid,{' '}
@@ -498,6 +509,7 @@ export function IntradayPrintsPanel(): JSX.Element {
           where somebody traded.
         </div>
       ) : null}
+      </div>
 
       {/* AN EMPTY PLOT IS A CLAIM. Same defect as the blank heatmap and the
           blank exclusion drawer: a frame with nothing in it reads as "nothing
@@ -635,27 +647,43 @@ export function IntradayPrintsPanel(): JSX.Element {
             />
           )}
 
-          <Scatter
-            data={packageMarks}
-            dataKey="y"
-            shape={<Mark />}
-            isAnimationActive={false}
-            name="package legs"
-          />
-          <Scatter
-            data={offMarketMarks}
-            dataKey="y"
-            shape={<Mark />}
-            isAnimationActive={false}
-            name="off-market"
-          />
-          <Scatter
-            data={directionalMarks}
-            dataKey="y"
-            shape={<Mark />}
-            isAnimationActive={false}
-            name="prints"
-          />
+          {/* NEVER RENDER A SCATTER WITH NO DATA.
+              A <Scatter data={[]}> does not draw nothing — recharts falls back
+              to the CHART's data prop, which here is the 1-minute mid grid, and
+              emits one empty <g class="recharts-scatter-symbol"> per grid
+              minute. MEASURED on the production build before this guard: 2,332
+              scatter-symbol nodes on a day with 72 marks, and 2,643 on the
+              busiest day (= 2 x 1,164 grid points + 313 real marks, exactly).
+              Both package-legs and off-market are off by default, so the common
+              case paid ~2,330 dead DOM nodes on every render of the panel.
+              The marks themselves were never the cost. */}
+          {packageMarks.length > 0 ? (
+            <Scatter
+              data={packageMarks}
+              dataKey="y"
+              shape={<Mark />}
+              isAnimationActive={false}
+              name="package legs"
+            />
+          ) : null}
+          {offMarketMarks.length > 0 ? (
+            <Scatter
+              data={offMarketMarks}
+              dataKey="y"
+              shape={<Mark />}
+              isAnimationActive={false}
+              name="off-market"
+            />
+          ) : null}
+          {directionalMarks.length > 0 ? (
+            <Scatter
+              data={directionalMarks}
+              dataKey="y"
+              shape={<Mark />}
+              isAnimationActive={false}
+              name="prints"
+            />
+          ) : null}
         </ComposedChart>
       </ResponsiveContainer>
 

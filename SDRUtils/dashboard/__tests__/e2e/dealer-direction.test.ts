@@ -22,6 +22,11 @@ describeIfUrl('dealer direction — end to end', () => {
     const browser = await puppeteer.launch({ headless: true })
     try {
       const page = await browser.newPage()
+      // A VIEWPORT IS NOT COSMETIC HERE. Puppeteer defaults to 800x600, and at
+      // that width the tape renders ZERO rows (measured: 0 tbody rows at 800px,
+      // 31 at 1680px) — so every wait below times out at 30s against a page
+      // that is working fine. This is why these specs were red.
+      await page.setViewport({ width: 1680, height: 1100 })
       await page.goto(`${url}/usd-swaps-v2`, { waitUntil: 'domcontentloaded' })
       await page.waitForSelector('[data-testid="trade-tape-table"]', {
         timeout: 30_000,
@@ -52,9 +57,20 @@ describeIfUrl('dealer direction — end to end', () => {
     const browser = await puppeteer.launch({ headless: true })
     try {
       const page = await browser.newPage()
+      // A VIEWPORT IS NOT COSMETIC HERE. Puppeteer defaults to 800x600, and at
+      // that width the tape renders ZERO rows (measured: 0 tbody rows at 800px,
+      // 31 at 1680px) — so every wait below times out at 30s against a page
+      // that is working fine. This is why these specs were red.
+      await page.setViewport({ width: 1680, height: 1100 })
       await page.goto(`${url}/usd-swaps-v2`, { waitUntil: 'domcontentloaded' })
       await page.waitForSelector('[data-testid="trade-tape-table"]', {
         timeout: 30_000,
+      })
+      // The onboarding tour renders over everything and swallows clicks.
+      await page.evaluate(() => {
+        const b = [...document.querySelectorAll('button')].find((x) =>
+          /^(skip|close|got it|dismiss)$/i.test((x.textContent ?? '').trim()))
+        ;(b as HTMLElement | undefined)?.click()
       })
       // The Analytics view is where the panel is mounted.
       await page.evaluate(() => {
@@ -72,7 +88,14 @@ describeIfUrl('dealer direction — end to end', () => {
       // target for the breakdown.
       const toggle = await page.$('[data-testid="dd-coverage-toggle"]')
       expect(toggle).not.toBeNull()
-      await toggle!.click()
+      // Click from the PAGE, not the handle. ElementHandle.click() scrolls to
+      // the element and dispatches a real mouse event at its centre, so it
+      // hit-tests — and lands on whatever overlaps, silently doing nothing.
+      // The onboarding modal is exactly such an overlay.
+      await page.evaluate(() => {
+        const b = document.querySelector('[data-testid="dd-coverage-toggle"]')
+        ;(b as HTMLElement | null)?.click()
+      })
       await page.waitForSelector('[data-testid="dd-exclusion-breakdown"]', {
         timeout: 15_000,
       })
@@ -85,6 +108,11 @@ describeIfUrl('dealer direction — end to end', () => {
     const browser = await puppeteer.launch({ headless: true })
     try {
       const page = await browser.newPage()
+      // A VIEWPORT IS NOT COSMETIC HERE. Puppeteer defaults to 800x600, and at
+      // that width the tape renders ZERO rows (measured: 0 tbody rows at 800px,
+      // 31 at 1680px) — so every wait below times out at 30s against a page
+      // that is working fine. This is why these specs were red.
+      await page.setViewport({ width: 1680, height: 1100 })
       // Navigate first: a fetch from about:blank has a null origin and fails
       // CORS before it reaches the route, which looks exactly like the route
       // being broken.
@@ -105,6 +133,11 @@ describeIfUrl('dealer direction — end to end', () => {
     const browser = await puppeteer.launch({ headless: true })
     try {
       const page = await browser.newPage()
+      // A VIEWPORT IS NOT COSMETIC HERE. Puppeteer defaults to 800x600, and at
+      // that width the tape renders ZERO rows (measured: 0 tbody rows at 800px,
+      // 31 at 1680px) — so every wait below times out at 30s against a page
+      // that is working fine. This is why these specs were red.
+      await page.setViewport({ width: 1680, height: 1100 })
       await page.goto(`${url}/usd-swaps-v2`, { waitUntil: 'domcontentloaded' })
       const keys = await page.evaluate(async (base: string) => {
         const r = await fetch(
@@ -135,4 +168,60 @@ describeIfUrl('dealer direction — end to end', () => {
       await browser.close()
     }
   }, 60_000)
+
+  it('does not emit a scatter symbol per MID-GRID MINUTE', async () => {
+    // THE REGRESSION THIS PINS. A <Scatter data={[]}> does not draw nothing:
+    // recharts falls back to the CHART's data prop — here the 1-minute mid
+    // grid — and emits one empty <g class="recharts-scatter-symbol"> per grid
+    // minute. Both the package-legs and off-market layers are off by default,
+    // so the panel paid ~2,330 dead DOM nodes on every render.
+    //
+    // MEASURED before the guard: 2,332 scatter symbols on a day with 72 marks;
+    // 2,643 on the busiest day (= 2 x 1,164 grid points + 313 real marks).
+    // After: one symbol per drawn mark.
+    //
+    // The assertion is against the GRID SIZE, not a magic number, so it keeps
+    // meaning if the tape gets busier or the grid gets denser.
+    const browser = await puppeteer.launch({ headless: true })
+    try {
+      const page = await browser.newPage()
+      await page.setViewport({ width: 1680, height: 1100 })
+      await page.goto(`${url}/usd-swaps-v2`, { waitUntil: 'domcontentloaded' })
+      await page.waitForSelector('[data-testid="trade-tape-table"]', { timeout: 60_000 })
+      await page.evaluate(() => {
+        const b = [...document.querySelectorAll('button,a,div[role=tab]')]
+          .find((x) => (x.textContent ?? '').trim() === 'Analytics')
+        ;(b as HTMLElement | undefined)?.click()
+      })
+      await page.waitForSelector('[data-testid="intraday-prints-panel"]', { timeout: 60_000 })
+      await page.waitForFunction(
+        () => {
+          const p = document.querySelector('[data-testid="intraday-prints-panel"]')
+          return !!p && !/loading prints/i.test(p.textContent ?? '')
+        },
+        { timeout: 60_000, polling: 200 },
+      )
+
+      const seen = await page.evaluate(async (base: string) => {
+        // ask the API what the panel is drawing, so the bound is derived
+        const r = await fetch(
+          `${base}/api/usd-swaps-tape-v2/direction/prints?tenor=10Y&rateIndex=SOFR`
+          + `&venueClass=D2C&kinds=OUTRIGHT&tenorMatch=strict&fwdMaxYears=0.02`)
+        const j = await r.json()
+        return {
+          marks: (j.rows ?? []).length,
+          grid: (j.mid?.points ?? []).length,
+          symbols: document.querySelectorAll(
+            '[data-testid="intraday-prints-panel"] .recharts-scatter-symbol').length,
+        }
+      }, url)
+
+      // A symbol per mark is the design. A symbol per grid minute is the bug.
+      expect(seen.grid).toBeGreaterThan(100) // the grid is genuinely there
+      expect(seen.symbols).toBeLessThanOrEqual(Math.max(seen.marks * 2, 50))
+      expect(seen.symbols).toBeLessThan(seen.grid)
+    } finally {
+      await browser.close()
+    }
+  }, 120_000)
 })

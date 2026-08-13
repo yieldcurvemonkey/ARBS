@@ -20,14 +20,22 @@ import {
 export async function GET(req: Request) {
   const sp = new URL(req.url).searchParams
   try {
-    const { venueClass, series, from, to } = parseCommon(sp)
+    const { venueClass, series, from, to, lastSessions } = parseCommon(sp)
     const res = await analyticsQuery(standardisedSql(), [
-      BUCKET_SPACE, venueClass, series, from, to,
+      BUCKET_SPACE, venueClass, series, from, to, lastSessions,
     ])
     const rows = res.rows as Record<string, unknown>[]
     assertNoLevelKeys(rows)
+    // Whether the window BOUND the result, so a consumer can never mistake a
+    // truncated history for a short one. Exact rather than inferred from the
+    // row count: sessions, which is what lastSessions counts.
+    const nSessions = new Set(rows.map((r) => String(r.visibility_date))).size
     return NextResponse.json(
-      { buckets: TENOR_BUCKETS, venueClass, series, from, to, rows },
+      {
+        buckets: TENOR_BUCKETS, venueClass, series, from, to,
+        lastSessions, sessions: nSessions, truncated: nSessions >= lastSessions,
+        rows,
+      },
       { headers: { 'Cache-Control': 'private, max-age=120, stale-while-revalidate=300' } },
     )
   } catch (error: unknown) {

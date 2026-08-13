@@ -128,24 +128,47 @@ export function DealerLadderPanel(): JSX.Element {
   const [coverage, setCoverage] = useState<CoverageRow[]>([])
   const [coverageLoading, setCoverageLoading] = useState(false)
   const [loading, setLoading] = useState(true)
+  const [summaryLoading, setSummaryLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
 
+  // HEATMAP_DAYS + headroom, asked for EXPLICITLY. The endpoint defaults to
+  // the same bound, but a panel that declares the window it draws cannot be
+  // silently widened by a change to somebody else's default.
   const qs = useMemo(
-    () => `venueClass=${venueClass}&series=${series}`,
+    () => `venueClass=${venueClass}&series=${series}&lastSessions=${HEATMAP_DAYS + 30}`,
     [venueClass, series],
   )
 
+  /**
+   * BOTH CALLS FIRE TOGETHER; THEY ARE AWAITED SEPARATELY.
+   *
+   * They used to share a Promise.all, so `setStd` — and therefore the entire z
+   * heatmap — waited on whichever was slower. MEASURED on the production build:
+   * /summary 363 ms against /standardised's 102, so the chart sat blank for
+   * ~260 ms longer than its own data took to arrive, every time the panel
+   * opened or the venue/series changed.
+   *
+   * /summary is slow for a reason worth keeping (it reads the complete coverage
+   * partition rather than averaging over ladder cells, which is what fixed the
+   * 67%-vs-44.8% overstatement) — but it feeds a headline number, and a
+   * headline must not gate a chart that does not read it.
+   */
   const load = useCallback(async () => {
     setLoading(true)
+    setSummaryLoading(true)
     setError(null)
+
+    const summaryP = fetch(`${API}/summary?${qs}`).then((r) => r.json())
+    const stdP = fetch(`${API}/standardised?${qs}`).then((r) => r.json())
+
+    void summaryP
+      .then((s) => { if (!s?.error) setSummary(s.summary ?? null) })
+      .catch(() => { /* the headline degrades to a dash; the charts stand */ })
+      .finally(() => setSummaryLoading(false))
+
     try {
-      const [s, z] = await Promise.all([
-        fetch(`${API}/summary?${qs}`).then((r) => r.json()),
-        fetch(`${API}/standardised?${qs}`).then((r) => r.json()),
-      ])
-      if (s?.error) throw new Error(s.error)
+      const z = await stdP
       if (z?.error) throw new Error(z.error)
-      setSummary(s.summary ?? null)
       const rows = (z.rows ?? []) as StandardisedRow[]
       // The control, not a comment: if a level key ever appears in the
       // all-bucket payload this throws rather than rendering.
@@ -286,7 +309,10 @@ export function DealerLadderPanel(): JSX.Element {
               covFrac != null && covFrac < 0.65 ? 'text-amber-300' : 'text-slate-100'
             }`}
           >
-            {fmtPct(covFrac, 1)}
+            {/* The summary now lands independently of the heatmap, so this can
+                be in flight while the charts are already drawn. An em-dash
+                would read as "no coverage was measured" — a claim. */}
+            {covFrac == null && summaryLoading ? '…' : fmtPct(covFrac, 1)}
           </span>
           <span className="text-[9.5px] text-sky-300/70">
             {showExclusions ? 'hide breakdown ▾' : 'why? ▸'}

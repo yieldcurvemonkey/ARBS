@@ -599,7 +599,8 @@ export function getColumns(
             <span
               className={`inline-flex items-center rounded px-1 py-0.5 font-mono text-[10px] ${DIRECTION_TONES[v.tone]}`}
               data-testid={`dd-direction-${row.package_id}`}
-              data-direction={v.known ? (v.reason ? 'ABSTAINED' : v.label) : 'UNKNOWN'}
+              /* the canonical state, never the abbreviated label */
+              data-direction={v.state}
             >
               {v.label}
             </span>
