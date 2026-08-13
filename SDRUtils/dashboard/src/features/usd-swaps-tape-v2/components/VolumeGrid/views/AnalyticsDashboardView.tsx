@@ -11,7 +11,6 @@ import { MaturityWallCard } from '../../AnalyticsPanel/MaturityWallCard'
 import { NetNewRiskCard } from '../../AnalyticsPanel/NetNewRiskCard'
 import { NovationVelocityCard } from '../../AnalyticsPanel/NovationVelocityCard'
 import { PackageMixCard } from '../../AnalyticsPanel/PackageMixCard'
-import { StirFlowPanel } from '../../AnalyticsPanel/StirFlowPanel'
 import { VenueShiftCard } from '../../AnalyticsPanel/VenueShiftCard'
 
 export function AnalyticsDashboardView(_props: ViewProps): JSX.Element {
@@ -27,15 +26,6 @@ export function AnalyticsDashboardView(_props: ViewProps): JSX.Element {
           aggregate reads next to the prints it was aggregated from. */}
       <div className="md:col-span-2 xl:col-span-3">
         <IntradayPrintsPanel />
-      </div>
-      {/* Full width, and immediately below the vanilla prints chart on purpose:
-          the two answer the same question about different instruments — that
-          one about outright SOFR/FF at a standard tenor, this one about a
-          meeting-dated STIR structure — and they read as a pair. They are
-          never merged: different classifier, different mid, different
-          instrument space. */}
-      <div className="md:col-span-2 xl:col-span-3">
-        <StirFlowPanel />
       </div>
       <NetNewRiskCard />
       <BlockHeatmapCard />
