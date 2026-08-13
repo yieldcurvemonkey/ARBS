@@ -237,10 +237,10 @@ old_ref = (
 )
 old_ref = old_ref[old_ref["ttm"] >= 1]
 
-# Same Citi path as `as_of`. Note this comparison lands on 2026-07-10, five days before the date on
-# which Citi published an impossible -0.679% for the May-2046 bond — `citi_curve_quotes` reports
-# anything it drops, so if the window ever moves onto 07-14/15 the drop is visible rather than
-# silently bent into the curve.
+# Same Citi path as `as_of`. This window currently resolves to 2026-07-08, a week before the dates
+# on which Citi published an impossible -0.679% for the May-2046 bond (07-14/15) — and the window
+# MOVES with `as_of`, so it can land on them. `citi_curve_quotes` reports anything it drops, which
+# is why the drop count is printed here rather than being bent silently into the curve.
 old_market, _ = citi_curve_quotes(pd.Timestamp(compare), old_ref, exclude_ranks=(),
                                   values=("YIELD", "PRICE"))
 old_fit, old_report = citi_curve_quotes(pd.Timestamp(compare), old_ref, exclude_ranks=(0, 1, 2),
@@ -269,36 +269,56 @@ plot_usts_comparison(
 """)
 
 md(r"""
-## 2. The curveset at an instant — CVSNAP
+## 2. The curveset at an instant — CVSNAP, and what needs the bridge
 
-`build_curve_panel` marks on the FedInvest/WSJ close, which is what the backtest wants. When the
-question is instead *what did the whole complex look like at 10:35 on the day of the auction*,
-that is a snapshot, and it comes from Citi Velocity's `CVSNAP`.
+Section 1 already used this path, and used it **offline**. That is worth stating plainly, because
+until recently this cell reported *"CVSNAP unavailable — run with Excel signed in"* on every run and
+the reason was never Excel: `fetch_curveset_snapshot` was building its tags from **CUSIPs** while
+Citi keys bonds by the 12-character **ISIN**, so it asked for `RATES.BOND.912810EX2.YIELD` against a
+wire that answers to `RATES.BOND.US912810EX29.YIELD`. Nothing matched, and the `except` blamed the
+bridge. A key-format bug read as a missing spreadsheet.
 
-The guard matters more than the call. Citi resolves **as-of**, so a request for an instant the
-wire never published silently returns an earlier one. `fetch_curveset_snapshot` attaches the stamp
-it actually resolved to and refuses a resolution staler than the tolerance.
+So the honest split is per **value**, not per section:
 
-This needs a signed-in Excel with the Velocity add-in; the cell reports and moves on if not.
+* `YIELD` and `PRICE` are warmed for the UST complex and resolve **from disk** — this is what the
+  curve in section 1 is fitted on, and it needs no Excel at all;
+* the richer analytics (`ASW`, `ZSPREAD`, `DV01`, `DURATION`) are warmed for far fewer bonds, so
+  asking for them generally **does** go to the wire, and the wire needs a human-authenticated Excel
+  with the Velocity add-in signed in. It cannot spawn one; a spawned instance never registers the
+  `CV*` UDFs.
+
+The guard still matters more than the call. Citi resolves **as-of**, so a request for an instant the
+wire never published silently returns an earlier one. Every snapshot carries the stamp it actually
+resolved to, and a resolution staler than the tolerance is refused rather than quietly served.
 """)
 
 code(r"""
 from BT.gss_fly import fetch_curveset_snapshot, warm_bond_snapshots, BOND_SNAPSHOT_VALUES
 
 snap_when = pd.Timestamp(f"{as_of} 15:00:00")
+
+# The cached values, so this resolves offline like section 1 did.
+snap = fetch_curveset_snapshot(
+    snap_when,
+    reference=ref_df.head(60),
+    values=("YIELD", "PRICE"),
+    max_staleness=datetime.timedelta(days=1),
+    strict=True,
+)
+print(f"offline: resolved {len(snap)} bonds at {snap['snap_stamp'].iloc[0]} (requested {snap_when})")
+display(snap[["isin", "cusip", "yield", "price", "ttm", "rank"]].head(12))
+
+# The full value set, which normally needs the bridge. Reported rather than raised — its absence is
+# a statement about this machine, not about the code.
 try:
-    snap = fetch_curveset_snapshot(
-        snap_when,
-        reference=ref_df.head(60),          # widen once the warm below has been run
-        values=BOND_SNAPSHOT_VALUES,
-        max_staleness=datetime.timedelta(days=1),
-        strict=True,
+    rich = fetch_curveset_snapshot(
+        snap_when, reference=ref_df.head(60), values=BOND_SNAPSHOT_VALUES,
+        max_staleness=datetime.timedelta(days=1), strict=True,
     )
-    print(f"resolved {len(snap)} bonds at {snap['snap_stamp'].iloc[0]} (requested {snap_when})")
-    display(snap[["isin", "yield", "price", "duration", "ttm", "oi"]].head(12))
+    print(f"\nwith analytics: {len(rich)} bonds, columns {sorted(rich.columns)}")
 except Exception as exc:
-    print(f"CVSNAP unavailable: {type(exc).__name__}: {exc}")
-    print("Run scripts/warm_citivelo_xccy_repo.py with Excel signed in, then retry.")
+    print(f"\nanalytics ({', '.join(BOND_SNAPSHOT_VALUES)}) need the Excel bridge: {type(exc).__name__}")
+    print("Warm them once with warm_bond_snapshots below and they resolve from disk thereafter.")
 
 # Cache warm — pull the history once so later snapshots resolve from disk rather than the wire.
 # warm_bond_snapshots(ref_df["cusip"].tolist(), start="2024-01-01", end=str(as_of))
@@ -310,8 +330,19 @@ code(r"""
 from pathlib import Path
 
 PANEL_CACHE = Path("../data/gss_fly/panel_2024_2026")   # built once, reused thereafter
-start, end = datetime.date(2024, 9, 2), as_of
-days = [d.date() for d in pd.bdate_range(start, end)]
+
+# `end` is PINNED, and deliberately not `as_of`. The panel below fits on FedInvest, and FedInvest
+# serves unusable yields on some dates after this boundary — 0 of 295 believable on 2026-07-10, 7 of
+# 295 on 2026-08-07 (see section 1.0). Running to `as_of` pulled those in and the book reported an
+# entry signal of **323,332bp**, which is what corruption looks like once it reaches a z-score.
+# 2026-01-02 is the last date verified clean and is the range every published GSS number uses.
+start, end = datetime.date(2024, 9, 2), datetime.date(2026, 1, 2)
+
+# NOT `pd.bdate_range`: that yields weekdays, which includes market holidays. The source never
+# serves a holiday and its fetcher HANGS rather than refusing, so one Labor Day is enough to stall
+# the whole build — this is the landmine `ust_business_days` was written for, and this cell was
+# still stepping on it.
+days = ust_business_days(start, end)
 
 panel = build_curve_panel(days, usts_mdp, cache_path=PANEL_CACHE)
 print(panel.summary())
