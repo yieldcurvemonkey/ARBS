@@ -416,7 +416,12 @@ def _build_ustf_strike_offset_otm_payload(smile: Any) -> dict[str, dict[str, Any
         side_payload: dict[str, Any] = {}
         for offset_bps in OTM_STRIKE_OFFSET_BUCKETS:
             signed_offset_bps = float(sign) * float(offset_bps)
-            strike_price = forward_price + signed_offset_bps * fv01 / 10_000.0
+            # fv01 is already price points per bp of futures yield, so the bp offset converts to a
+            # price offset by multiplying by fv01. The historical `/ 10_000` here made every bucket
+            # 100x too close to the forward -- a requested 25bp strike landed 0.25bp away, so the
+            # whole stored strike ladder was ATM in disguise. Rows written before this fix cannot
+            # be used for struck comparisons; rebuild the smile from `smile_points` instead.
+            strike_price = forward_price + signed_offset_bps * fv01
             strike_futures_ytm = _safe_float(smile.price_to_futures_ytm(strike_price))
             side_payload[str(offset_bps)] = {
                 "selector": str(offset_bps),
