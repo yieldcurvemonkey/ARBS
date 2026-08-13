@@ -389,44 +389,49 @@ ax[1].legend(); ax[1].set_title("equity vs the entry level"); plt.tight_layout()
 md(r"""
 ## 6. The construction knobs — measured where there is no estimation error
 
-Performance cannot rank these. On 331 daily marks `SE(annualised Sharpe) = sqrt(252/331) = 0.873` — and only 154 of those
-carry a position, so the effective sample is smaller still and 0.873 is a LOWER bound and the whole
-cross-config spread is 0.88, so the spread *is* the noise (see §8).
+Performance cannot rank these. On 331 daily marks `SE(annualised Sharpe) = sqrt(252/331) = 0.87`,
+and a *difference* between two configs needs roughly **2.4** before it means anything. The completed
+3,432-row sweep spans p05–p95 of **3.29** — wider than two standard errors, unlike an early
+36-config draft — but a ranking over 3,415 configs separated by less than 2.4 is still noise wearing
+a leaderboard, which is what the deflated Sharpe in §8 is for.
 
 **Which trades a config takes is deterministic**, so that is where conditioning is measurable.
 Jaccard against the incumbent, one step per knob: `J ~ 0.9` is a nuisance knob, `J ~ 0.5` means the
 knob redefines the book, `J <= 0.2` means a different strategy entirely.
 
-Each row here costs a fresh 267s scan, so this cell is the slow one.
+Each step costs a fresh ~325s scan and there are 25 of them, so this is **not** computed here — it
+is read from what `scripts/gss_decision_conditioning.py` already produced. A notebook cell that
+quietly spends two and a half hours is one you stop trusting to run; this one says what to run
+instead when the artifact is missing.
 """)
 
 code(r"""
-base_log = res.trade_log
-rows = []
-for knob, levels in G.CONSTRUCTION_LEVELS.items():
-    for lv in levels:
-        if lv == CONFIG["construction"][knob]:
-            continue
-        c = json.loads(json.dumps(CONFIG)); c["construction"][knob] = lv
-        if not G.valid_construction(c["construction"]):
-            continue
-        cd, _, _ = scan(c)
-        r = run(c, cands=cd)
-        rows.append({"knob": knob, "level": lv,
-                     "trades": r.diagnostics["signal_entries"],
-                     "jaccard": trade_set_jaccard(base_log, r.trade_log),
-                     "jaccard_tol3": trade_set_jaccard(base_log, r.trade_log, tolerance_days=3)})
-CJ = pd.DataFrame(rows)
-prof = (CJ.groupby("knob").agg(steps=("level", "count"), min_J=("jaccard", "min"),
-                               median_J=("jaccard", "median"), median_tol=("jaccard_tol3", "median"))
-          .assign(timing_gap=lambda d: d.median_tol - d.median_J)
-          .sort_values("median_J"))
-print(prof.to_string(float_format=lambda v: f"{v:.3f}"))
-print("\ntiming_gap ~ 0 means the knob changes WHICH trades, not WHEN — not jitter around a"
-      " stable book.")
-prof["median_J"].plot(kind="barh", figsize=(11, 5), color="#4a7")
-plt.axvline(0.5, color="r", ls="--"); plt.xlabel("Jaccard vs incumbent")
-plt.title("one step of each construction knob"); plt.tight_layout()
+COND = Path(REPO) / "notebooks" / "data" / "gss_fly" / "decision_conditioning.csv"
+if not COND.exists():
+    print(f"{COND} not built — run:\n"
+          f"    conda run -n stir python scripts/gss_decision_conditioning.py\n"
+          f"(~25 scans, about 2.5h. Deliberately NOT done inline.)")
+else:
+    CJ = pd.read_csv(COND)
+    CJ["group"] = np.where(CJ["knob"].str.startswith(("backtest.", "costs.")), "gate", "construction")
+    prof = (CJ.groupby(["group", "knob"])
+              .agg(steps=("setting", "count"), min_J=("jaccard_exact", "min"),
+                   median_J=("jaccard_exact", "median"), median_tol=("jaccard_tol", "median"),
+                   trades_lo=("n_enter", "min"), trades_hi=("n_enter", "max"))
+              .assign(timing_gap=lambda d: d.median_tol - d.median_J)
+              .sort_values("median_J"))
+    print(prof.to_string(float_format=lambda v: f"{v:.3f}"))
+    print("\ntiming_gap ~ 0 means the knob changes WHICH trades, not WHEN — not jitter around a"
+          " stable book.")
+    print("NB entry_zsig_bp's 13 -> 1,080 trade span is an E/X INTERACTION, not the knob's own"
+          "\nsensitivity: entry and exit threshold the same statistic, so sweeping E below X=2.5"
+          "\nenters flies that immediately qualify to exit. Properly ordered at E=1.0/X=0.25 the"
+          "\nbook takes 150. The shipped config sits 0.5bp from that boundary.")
+    ax = prof.reset_index().set_index("knob")["median_J"].plot(
+        kind="barh", figsize=(11, 6), color="#4a7")
+    ax.axvline(0.5, color="r", ls="--"); ax.set_xlabel("Jaccard vs incumbent")
+    ax.set_title("one step of each knob — below the line, it is a different strategy")
+    plt.tight_layout()
 """)
 
 # ---------------------------------------------------------------------------- 8 costs
