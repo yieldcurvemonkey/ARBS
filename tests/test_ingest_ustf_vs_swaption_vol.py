@@ -462,7 +462,9 @@ def test_build_ustf_otm_payloads_include_price_and_ytm_metadata():
 
     class FakeSmile:
         params = FakeParams()
-        fv01 = 0.8
+        # 0.08 price points per bp -- the realistic order for a Treasury future. The old 0.8 only
+        # produced sane strikes because the offset builder was dividing them by 10,000.
+        fv01 = 0.08
         points = (
             FakePoint(
                 label="5D Call",
@@ -492,7 +494,9 @@ def test_build_ustf_otm_payloads_include_price_and_ytm_metadata():
             return vol_price
 
         def price_to_futures_ytm(self, strike):
-            return self.params.forward_futures_ytm - (float(strike) - self.params.forward_price) * 0.01
+            # Self-consistent with fv01: fv01 price points per bp of yield, price down = yield up.
+            return (self.params.forward_futures_ytm
+                    - (float(strike) - self.params.forward_price) / self.fv01 / 10_000.0)
 
     delta_payload = ingest_mod._build_ustf_delta_otm_payload(FakeSmile())
     offset_payload = ingest_mod._build_ustf_strike_offset_otm_payload(FakeSmile())
@@ -508,9 +512,46 @@ def test_build_ustf_otm_payloads_include_price_and_ytm_metadata():
     offset_put = offset_payload["put"]["10"]
     assert offset_put["selector"] == "10"
     assert offset_put["signed_offset_bps"] == pytest.approx(-10.0)
-    assert offset_put["vol_bps"] == pytest.approx(0.01249)
-    assert offset_put["strike_price"] == pytest.approx(109.9992)
-    assert offset_put["strike_futures_ytm_offset_bps"] == pytest.approx(0.08)
+    # fv01 = 0.08 price points per bp, so a 10bp strike offset is 0.8 price points from the
+    # forward. The old expectations (109.9992, i.e. 0.0008 points) pinned a bug: the builder
+    # divided by 10,000 against an fv01 that already carried per-bp units, so every stored "OTM"
+    # bucket sat 1/100th of the requested distance and was ATM in disguise.
+    assert offset_put["strike_price"] == pytest.approx(109.2)
+    assert offset_put["strike_price_offset"] == pytest.approx(-0.8)
+    assert offset_put["vol_bps"] == pytest.approx((0.01 - 0.8 * 0.01) / 0.08)
+    assert offset_put["strike_futures_ytm_offset_bps"] == pytest.approx(10.0)
+
+
+def test_ustf_strike_offset_buckets_land_at_the_requested_yield_distance():
+    """The regression guard for the 10,000x strike-offset bug.
+
+    A bucket labelled Nbp must sit N basis points from the forward in yield terms. Before the fix
+    a requested 25bp strike landed 0.25bp away, which made the whole stored strike ladder ATM and
+    would have produced a large artificial skew spread against the (correct) swaption leg.
+    """
+    class P:
+        forward_price = 110.0
+        forward_futures_ytm = 0.0410
+
+    class Smile:
+        params = P()
+        fv01 = 0.8
+
+        def normal_vol(self, strike, strike_space="price", vol_units="price"):
+            return 0.01 if vol_units != "bps" else 0.0125
+
+        def price_to_futures_ytm(self, strike):
+            return P.forward_futures_ytm - (float(strike) - P.forward_price) / self.fv01 / 10_000.0
+
+    payload = ingest_mod._build_ustf_strike_offset_otm_payload(Smile())
+    for sel in ("5", "25", "100"):
+        want = float(sel)
+        put = payload["put"][sel]
+        call = payload["call"][sel]
+        # a put on price is a call on yield: it sits ABOVE the forward yield
+        assert put["strike_futures_ytm_offset_bps"] == pytest.approx(+want, rel=1e-9)
+        assert call["strike_futures_ytm_offset_bps"] == pytest.approx(-want, rel=1e-9)
+        assert put["strike_price"] == pytest.approx(110.0 - want * 0.8, rel=1e-12)
 
 
 def test_build_swaption_otm_payloads_include_delta_and_offset_nodes(monkeypatch):
@@ -602,7 +643,9 @@ def test_build_ustf_snapshot_row_serializes_otm_payloads():
 
     class FakeSmile:
         params = FakeParams()
-        fv01 = 0.8
+        # 0.08 price points per bp -- the realistic order for a Treasury future. The old 0.8 only
+        # produced sane strikes because the offset builder was dividing them by 10,000.
+        fv01 = 0.08
         points = (FakePoint(),)
         underlying_contract = "TYM6"
         source = "USTFO_DUAL-QL"
