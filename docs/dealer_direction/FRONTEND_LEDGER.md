@@ -751,3 +751,83 @@ on real data at all. What the image *does* show is the API-served disclosure
 line naming the missing grid, plus the newly-labelled empty plot. Caption fixed
 to say that. The in-chart strip remains covered by unit tests only, stated
 rather than implied.
+
+---
+
+## G-16. Front-end performance, measured on a PRODUCTION build
+
+Dev-mode React re-renders under StrictMode and skips every shipped
+optimisation, so all of this is `next build && next start -p 3100`, warm, five
+repeats. Probes: `scratch/perf01_endpoint_cost.py`, `perf02_client.mjs`,
+`perf03_profile_busy_day.mjs`.
+
+### Server, warm
+
+| endpoint | ms | raw KB | gzip KB | shape |
+|---|---:|---:|---:|---|
+| tape grid, 200 rows, dd join | 146 | 2,533 | 99 | 200 rows |
+| `/direction/summary` | **363** | 0.3 | 0.2 | scalar |
+| `/direction/standardised` | 102 | **3,322** | 497 | 6,290 rows |
+| `/direction/standardised&from=` | 24 | 375 | 63 | 690 rows |
+| `/direction/bucket` | 30 | 467 | 82 | 629 rows |
+| `/direction/coverage` | 44 | 1.5 | 0.6 | 12 rows |
+| `/direction/prints` latest | 85 | 149 | 22 | 72 rows + 1,129 grid |
+| `/direction/prints` busiest day | 76 | 407 | 42 | 313 rows + 1,164 grid |
+| `/direction/prints` every filter relaxed | 103 | 703 | 66 | 593 rows + 1,175 grid |
+
+Latency is not the problem anywhere except `/summary`. **Payload is.**
+
+### Four findings, in order of how much they matter
+
+**1. `/standardised` will exceed Vercel's response cap in ~11.6 months.** It
+returns the whole history -- 6,290 rows, 3.24 MB -- while the heatmap draws
+`HEATMAP_DAYS = 60`. Measured 541 B/row x 10 buckets = 5,407 B per session; the
+documented serverless response cap is 4.5 MB, so 873 sessions. At 629 today that
+is **244 trading sessions of runway**, after which the panel 500s rather than
+slows. Passing the `from` the endpoint already supports takes it to 375 KB and
+24 ms -- an **8.9x** cut for one line, and it removes the cliff.
+
+**2. The heatmap waits on a call it does not use.** `load()` does
+`Promise.all([summary, standardised])` and only then `setStd`, so the z grid is
+gated by `/summary` at 363 ms against `/standardised`'s 102. That 363 ms is the
+regression G-11 records and knowingly kept for a correct coverage headline --
+correct, but it should not also be blocking a chart that does not read it.
+Splitting the two awaits is ~5 lines.
+
+**3. The prints chart's cost is per-MARK React overhead, not data.** Switching
+to the busiest measured day (2025-04-09, 313 drawn) profiles at **2,494 ms of JS
+over a 3,220 ms wall clock**, and the DOM says why: **2,680 `.recharts-layer`
+nodes for 316 paths**. Self time is dominated by one minified recharts chunk
+(~1,476 ms across `D`/`E`/`f`/`C`) plus `React.createElement` at 382 ms. It
+scales with mark count, so the relaxed-filter case (593 rows) is roughly double.
+The fix is to stop giving recharts one `<Scatter>` shape per print and draw the
+marks as a few batched paths in a single custom layer -- a real change to the
+mark renderer, not a tweak.
+
+An earlier run measured 11,979 ms for the same interaction. **That was not
+reproducible** and is not the number to quote: it was contention with four other
+analytics panels fetching at the same moment (`net-new-risk`,
+`compression-cycles`, `ccp-market-share`, `block-heatmap`). Worth knowing that
+the tab open is contended, but the chart's own cost is 3.2 s.
+
+**4. Route handlers are served UNCOMPRESSED by `next start`.** Verified: the page
+HTML and static chunks come back `gzip`, every `/api/*` route comes back with no
+`Content-Encoding` at all -- 3.4 MB on the wire for `/standardised`. Next's
+`compress: true` default does not reach Route Handlers. **On Vercel this is moot**
+(the live site serves `br`, and the edge compresses function responses), so this
+only bites a self-hosted `next start`. I could not verify it on the deployment
+directly: every v2 tape route 404s at swap-pulse-sdr.vercel.app, so that build
+predates this API.
+
+### What is NOT a problem
+
+- **The 30s tape poll does not touch these panels.** MutationObserver over 40 s
+  idle: **0 mutations** in both the prints panel and the heatmap, 0 long tasks.
+- **No leak evident.** Heap 26 MB on load -> 110 MB with Analytics open -> 245 MB
+  on the busiest day -> **118 MB after 40 s idle**, so it is reclaimed.
+- **The direction join is a small part of the tape payload.** Of the 2.53 MB the
+  grid returns for 200 rows, `dd_*` is **169 KB (6.5%)**; `legs_json` is **2.10 MB
+  (80.8%)**. The tape grid is 12,969 B per row across 107 columns, and that is
+  overwhelmingly pre-existing rather than anything this PR added.
+- First paint: TTFB 15 ms, FCP 996 ms, tape table at 212 ms, direction column
+  populated at 528 ms. CLS 0.147.
