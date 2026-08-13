@@ -496,6 +496,17 @@ remain ~1.0-1.2 s and belong to the four sibling analytics panels, not these two
   Funds and 4.0× on SOFR because the Citi minute curve is smooth and has no
   discrete meeting steps. They are excluded from the prints chart by default and
   flagged in the ladder; improving the inference is out of scope for this PR.
+- **The main tape route has the same response-size cliff, already live.**
+  `MAX_LIMIT = 500` at a measured 12,969 B/row is **6.18 MB** against Vercel's
+  4.5 MB cap, crossed at **~363 rows**. Pre-existing and not this PR's to fix --
+  `legs_json` is 80.8% of that row against the direction join's 6.5% -- and
+  deliberately not "fixed" by lowering `MAX_LIMIT`, which would silently
+  truncate a row count somebody asked for. Measured and handed over.
+- **Nothing schedules the direction `publish` either.** The bullet above is
+  about the mid grid; the direction tables have the same gap. Both end
+  2026-08-07, and every day that passes is another day of tape whose direction
+  column renders `—` ("not computed yet") rather than a call. The nightly-refit
+  cost noted above is why it is not trivial, but the ownership is the point.
 - **Route handlers are served uncompressed by `next start`** (pages and static
   chunks do get gzip; Next's `compress` default does not reach Route Handlers).
   Moot on Vercel, whose edge compresses -- the live site serves `br` -- so this is

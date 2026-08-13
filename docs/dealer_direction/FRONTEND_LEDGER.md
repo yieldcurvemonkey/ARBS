@@ -903,6 +903,35 @@ ms and still correct; it just no longer gates a chart that never reads it.
   panels; the tab mounts `net-new-risk`, `compression-cycles`,
   `ccp-market-share` and `block-heatmap` at the same moment.
 
+
+### Three loose ends, checked and stated
+
+**The empty-Scatter guard's only regression net is an e2e assertion**, and that
+suite is gated on `E2E_BASE_URL`, so it does NOT run in the fast gate. The unit
+suite cannot see this defect at all -- it is a DOM-count property of a rendered
+recharts tree. Run `E2E_BASE_URL=... npm run test:e2e` before trusting that the
+guard still holds.
+
+**`data-direction` has exactly one writer and one reader** (`columns.tsx` and
+the e2e spec) -- grepped, because the `RCVD`/`PAID` coincidence that hid the
+original bug would equally hide a leftover consumer somewhere else.
+
+**The main tape route has the SAME response-size cliff, and it is already
+live.** `MAX_LIMIT = 500` at a measured 12,969 B/row is **6.18 MB**, against the
+4.5 MB cap -- crossed at **~363 rows**. This is pre-existing and not this PR's
+to fix: `legs_json` is 80.8% of that row (2.10 MB of 2.53 MB per 200 rows)
+against the direction join's 6.5%, so the fix is trimming `legs_json`, not
+anything here. Deliberately NOT patched by lowering `MAX_LIMIT`: that silently
+truncates a row count somebody asked for, which is a product decision rather
+than a performance one. Measured and handed over.
+
+**fe-01 was re-checked, not assumed.** It halved in bytes between captures
+(582 KB -> 305 KB), which is the same size-anomaly signature that caught the
+blank heatmap. Opened it: the direction column is fully populated (RCVD, PAID,
+and `n/a` with `UNORIENTABLE_PKG` / `UNSUPPORTED_INDEX` reason codes) and the
+top rows are 2026-08-07, which IS the latest published day. The byte drop is row
+count, not content.
+
 ### Two defects the e2e suite was hiding
 
 Running it against the production build turned up both:
