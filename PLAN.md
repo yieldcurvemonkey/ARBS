@@ -129,6 +129,56 @@ provider match the cached ones to **3e-13 bp**.
 - [x] `BT/xccy_rv` — 20 tests **including the archive tie-out**
 - [x] notebook (`notebooks/rv/gss_fly_rv.ipynb`), warm runbook, tests
 
+## Provenance and cost — both now MEASURED, not assumed (2026-08-12)
+
+`FedInvestDataFetcher` returns `bid_price` and `offer_price`, not just `eod_price`. Two questions
+that had been flagged as open are closed from that data.
+
+**1. The matrix-pricing concern is refuted.** Off-the-run closes are genuine dealer quotes, not
+interpolations — which matters because all five spline fits share the same prices, so the S1–S4
+comparison structurally could not have detected it. Five fingerprints on 3,149 note/bond quotes:
+
+| test | result |
+|---|---|
+| price on the 1/32 quote grid | **100%**, every seasoning bucket |
+| spread vs seasoning | 0 ticks OTR → 0.5 rank 1–6 → 1.0 (p95 4.0) deep off-run |
+| `eod` equals the mid | only **1.4%** for deep off-runs |
+| spread as f(maturity) | not deterministic (within-bucket sd 0.5–1.9 ticks) |
+| spread constant per bond | only **5%** never change it |
+
+An interpolated value is a continuous real and would land on a 32nd essentially never.
+
+**2. The cost table is measured.** Pricing bid and offer to yield on 1,890 quotes
+(`scripts/gss_measure_cost_table.py` → `config.MEASURED_HALF_SPREAD_BP`):
+
+| bucket | measured | assumed | ratio |
+|---|---|---|---|
+| 0–3y | 0.625 | 0.200 | **3.12×** |
+| 3–5y | 0.244 | 0.250 | 0.98× |
+| 5–7y | 0.156 | 0.300 | 0.52× |
+| 7–10y | 0.111 | 0.400 | 0.28× |
+| 10–20y | 0.368 | 0.500 | 0.74× |
+| 20y+ | 0.161 | 0.800 | **0.20×** |
+
+The **shape** is the finding: the assumed table rises with maturity, the market's is **U-shaped** —
+widest at the front (heavily seasoned issues nobody trades) and tightest in 7–10y (the actively
+quoted benchmark sector).
+
+**Re-pricing the book on the measured table** (identical 34-trade set; the fee never feeds back
+into the decision):
+
+| cost basis | fees | end equity | m\* |
+|---|---|---|---|
+| assumed | −5,637,475 | −4,254,352 | 0.245 |
+| **measured** | −3,928,142 | **−2,545,020** | **0.352** |
+| measured, belly-only | −2,084,800 | −701,677 | 0.663 |
+
+Fees fall 30% — more than the 21% an aggregate estimate suggested, because the fly's legs sit in
+the buckets the assumed table over-charged most. **m\* still only reaches 0.352**, and even the
+most charitable combination (measured costs *and* the source's belly-only convention, charging two
+of three legs at zero) reaches 0.663. **The book needs execution ~2.8× tighter than the market
+quotes.** That is no longer a calibration question.
+
 ## Deflated Sharpe 0.177 — there is no config to pick
 
 Over **1,164 configurations** (sweep still extending), with **900 effective independent trials**:
