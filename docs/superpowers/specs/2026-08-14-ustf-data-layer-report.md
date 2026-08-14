@@ -465,14 +465,21 @@ panels is the obvious next step and is deliberately left undone rather than done
 - **Every test module that touches the changed code** — all 25 of them, found by grepping `tests/`
   for `USTFutures`, `USTFuture`, `ustf_basis` and `treasury_conversion`:
   **285 passed, 1 skipped, 23 deselected.**
-- **Full fast gate**: started, and *not* finished — it paces to roughly nine hours in this
-  environment (~6 s/test; `tests/test_citivelo_excel_supervisor.py` alone takes 3m37s). At the point
-  of writing it had run 823 tests with exactly one failure:
-  `test_citivelo_excel_supervisor.py::test_not_signed_in_means_keep_waiting`. That is the known
-  pywinauto hazard — the intended deselect used the wrong path (`tests/test_excel_supervisor.py`
-  rather than `tests/test_citivelo_excel_supervisor.py`), so it ran. It hangs on `main` too, the
-  other 13 tests in its module pass, and it touches nothing in this branch. **I am reporting this
-  as an incomplete verification rather than a green one**, because it is.
+- **Full fast gate: 7,973 passed, 2 failed, 59 skipped, in 41 minutes.** (An earlier estimate of
+  "~9 hours" in this document was wrong — the apparent pacing came from one Excel module taking
+  3m37s, not from the suite.) Both failures are in Citi Velocity **Excel** tests and are
+  environmental — the add-in is not signed in, per their own error text
+  (`AddInNotSignedInError: Excel is running but the Citi Velocity add-in is not signed in`):
+
+  | test | verdict |
+  |---|---|
+  | `test_citivelo_excel_supervisor.py::test_not_signed_in_means_keep_waiting` | the known pywinauto hazard; hangs on `main` too |
+  | `test_citivelo_read_path_perf.py::test_fixings_kwargs_resolve_once_per_wrapper` | **passes in isolation on both `main` and this branch** — a full-suite state effect, not a regression |
+
+  Neither module is touched by this branch: the diff is 13 files, all under `MDP/USTFutures`,
+  `Query/USTFutures`, `definitions/USTFutures.py`, `BT/signals/ustf_basis.py` and `tests/`.
+  The second one was checked against `main` rather than assumed, because a new failure in an
+  untouched module is exactly the kind of thing that deserves five minutes before being waved away.
 - **End-to-end**, `force_refresh=True`, so no value can have come from a cache:
 
 | symbol | date | futures px | min clean/CF | min net basis | max IRR | repo |
