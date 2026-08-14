@@ -102,7 +102,11 @@ def add_model_option(panel: pd.DataFrame, cfg: V1Config) -> pd.DataFrame:
     p["wildcard32"] = wc
     p["dov32"] = np.nansum(np.vstack([p["switch32"].to_numpy(float),
                                       p["wildcard32"].to_numpy(float)]), axis=0)
-    p.loc[p[["switch32", "wildcard32"]].isna().all(axis=1), "dov32"] = np.nan
+    # A component switched OFF by config contributes zero; a component that FAILED to compute is
+    # missing. Conflating the two makes the no-model ablation arm -- the one that asks whether the
+    # delivery-option machinery earns its place -- silently produce an empty result.
+    if cfg.use_switch or cfg.use_wildcard:
+        p.loc[p[["switch32", "wildcard32"]].isna().all(axis=1), "dov32"] = np.nan
     p["oabnoc32"] = p["ctd_bnoc32"] - p["dov32"]
 
     mu = p["oabnoc32"].rolling(cfg.z_window, min_periods=cfg.z_min_periods).mean()
