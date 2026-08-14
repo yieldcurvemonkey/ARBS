@@ -94,6 +94,8 @@ import {
   fmtSignedBps,
   FWD_MAX_DEFAULT,
   FWD_MAX_OPTIONS,
+  followFocused,
+  type FollowSource,
   hourlyTicks,
   legendSizeRefs,
   markerOpacity,
@@ -163,7 +165,20 @@ type MarkDatum = {
   row: PrintRow
 }
 
-export function IntradayPrintsPanel(): JSX.Element {
+/**
+ * In the analytics dock this panel FOLLOWS the tape's focused trade: the tenor,
+ * the rate index, the venue class and the day all come from whatever row is
+ * selected. That is the point of it living in the dock rather than in a
+ * standalone view.
+ *
+ * Following is a toggle, not a cage — pinning lets you keep one instrument on
+ * screen while clicking around the tape. And nothing is ever guessed: a
+ * selection this chart cannot draw (a 4Y, a basis trade, a `~10Y`) leaves the
+ * controls where they were and says so, because silently swapping in a
+ * different instrument under the reader's own selection is the failure this
+ * whole panel is built against.
+ */
+export function IntradayPrintsPanel({ focused }: { focused?: FollowSource | null } = {}): JSX.Element {
   const [date, setDate] = useState<string | null>(null)
   const [latestDate, setLatestDate] = useState<string | null>(null)
   const [tenor, setTenor] = useState<string>('10Y')
@@ -173,10 +188,27 @@ export function IntradayPrintsPanel(): JSX.Element {
   const [includeOffMarket, setIncludeOffMarket] = useState(false)
   const [tenorMatch, setTenorMatch] = useState<'strict' | 'band'>('strict')
   const [fwdMaxYears, setFwdMaxYears] = useState<number>(FWD_MAX_DEFAULT)
+  const [followSelection, setFollowSelection] = useState(true)
+  const [followRefusals, setFollowRefusals] = useState<string[]>([])
 
   const [data, setData] = useState<PrintsResponse | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+
+  // Take what the selection can give and REPORT what it could not.
+  const followKey = focused
+    ? `${focused.tenor_display ?? ''}|${focused.rate_index_clean ?? ''}|`
+      + `${focused.execution_start ?? ''}|${focused.dd_venue_class ?? ''}`
+    : ''
+  useEffect(() => {
+    if (!followSelection || !focused) return
+    const f = followFocused(focused)
+    if (f.tenor) setTenor(f.tenor)
+    if (f.rateIndex) setRateIndex(f.rateIndex)
+    if (f.venueClass) setVenueClass(f.venueClass)
+    if (f.date) setDate(f.date)
+    setFollowRefusals(f.refusals)
+  }, [followSelection, followKey, focused])
 
   const qs = useMemo(() => {
     const p = new URLSearchParams()
@@ -374,6 +406,15 @@ export function IntradayPrintsPanel(): JSX.Element {
           </Chip>
         ))}
         <span className="mx-1 h-3 w-px bg-slate-800" />
+        {focused ? (
+          <Chip
+            active={followSelection}
+            onClick={() => setFollowSelection((x) => !x)}
+            title="Follow the trade selected in the tape above — its tenor, rate index, venue and tape day. Unpin to hold one instrument on screen while clicking around the tape."
+          >
+            follow selection
+          </Chip>
+        ) : null}
         <Chip
           active={includeOffMarket}
           onClick={() => setIncludeOffMarket((x) => !x)}
@@ -480,6 +521,15 @@ export function IntradayPrintsPanel(): JSX.Element {
           under it 54px and was 0.018 of a 0.230 cumulative layout shift —
           small next to the page's own 0.120, but it is the one that moves
           while the reader is already looking at the chart. */}
+      {followSelection && followRefusals.length > 0 ? (
+        <div className="rounded border border-amber-700/50 bg-amber-950/20 px-2 py-1 text-[10px] text-amber-200">
+          <span className="font-semibold">the selected trade was only partly followed</span>
+          {followRefusals.map((r) => (
+            <span key={r.slice(0, 40)} className="block">— {r}</span>
+          ))}
+        </div>
+      ) : null}
+
       <div className="min-h-[22px]">
       {loading && midSource === 'none' ? (
         <div className="rounded border border-slate-800 bg-slate-900/30 px-2 py-1 text-[10px] text-slate-600">

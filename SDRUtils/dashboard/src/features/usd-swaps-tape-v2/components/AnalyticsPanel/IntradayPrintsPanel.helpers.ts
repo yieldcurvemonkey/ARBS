@@ -755,3 +755,145 @@ export function fmtLagSeconds(x: number | null | undefined): string {
 export function fmtPctShare(x: number | null | undefined, digits = 1): string {
   return x == null || !Number.isFinite(Number(x)) ? '—' : `${(Number(x) * 100).toFixed(digits)}%`
 }
+
+// ---------------------------------------------------------------------------
+// Following the tape's selection
+// ---------------------------------------------------------------------------
+
+/**
+ * The hour (ET) at which the tape's as_of_date rolls to the next day.
+ *
+ * MEASURED, and it is why the selected trade's calendar date is NOT the day to
+ * ask for: prints land at ET hours 20-23 of the previous evening under the
+ * FOLLOWING as_of_date. Deriving the day from the execution date alone would
+ * silently query the wrong session for every evening print and render an empty
+ * chart that looks like "nothing traded".
+ */
+export const TAPE_DAY_ROLL_ET_HOUR = 20
+
+/** The tape day (as_of_date) an execution instant belongs to. */
+export function tapeDayFor(iso: string | null | undefined): string | null {
+  const t = tsMillis(iso)
+  if (t == null) return null
+  const etHour = Number(fmtEtClock(t).slice(0, 2))
+  if (!Number.isFinite(etHour)) return null
+  const day = etDateOf(t)
+  if (etHour < TAPE_DAY_ROLL_ET_HOUR) return day
+  const next = new Date(`${day}T00:00:00Z`)
+  next.setUTCDate(next.getUTCDate() + 1)
+  return next.toISOString().slice(0, 10)
+}
+
+/** What a tape row's rate index maps to, or null when it is neither. */
+export function normaliseRateIndex(raw: string | null | undefined): string | null {
+  if (!raw) return null
+  const u = String(raw).toUpperCase()
+  if (u.includes('SOFR')) return 'SOFR'
+  if (u.includes('FED') || u.includes('FF') || u.includes('H.15')) return 'FED_FUNDS'
+  return null
+}
+
+export type FollowLeg = {
+  tenor_display?: string | null
+  rate_index_clean?: string | null
+}
+
+/**
+ * THE TENOR IS ON THE LEGS, NOT ON THE ROW. Measured against the live payload:
+ * a tape row exposes `package_tenors`, `legs_count`, `rate_index_clean` and
+ * `legs_json`, and has no `tenor_display` of its own — that field lives on each
+ * leg. Reading it off the row returns undefined for every trade, which is
+ * exactly what the first cut of this did.
+ */
+export type FollowSource = {
+  tenor_display?: string | null
+  rate_index_clean?: string | null
+  execution_start?: string | null
+  dd_venue_class?: string | null
+  legs_json?: FollowLeg[] | null
+}
+
+/**
+ * The one tenor a trade is about, or null when it is not about one.
+ *
+ * A package genuinely has no single tenor: the first row of the live tape is a
+ * 17-leg trade whose legs run 4Y/5Y/7Y. Picking one of them — the biggest, the
+ * first, the longest — would put an instrument on screen that the reader did
+ * not select. So multi-tenor returns null and the caller says which tenors
+ * were there, leaving the choice to the tenor chips.
+ */
+export function soleTenorOf(row: FollowSource | null | undefined): {
+  tenor: string | null
+  distinct: string[]
+} {
+  if (!row) return { tenor: null, distinct: [] }
+  const fromLegs = (row.legs_json ?? [])
+    .map((l) => l?.tenor_display)
+    .filter((t): t is string => !!t)
+  const all = row.tenor_display ? [row.tenor_display, ...fromLegs] : fromLegs
+  const distinct = [...new Set(all)]
+  return { tenor: distinct.length === 1 ? distinct[0]! : null, distinct }
+}
+
+export type Followed = {
+  tenor: string | null
+  rateIndex: string | null
+  venueClass: string | null
+  date: string | null
+  /** Everything the selection could NOT set, and why. Never silent. */
+  refusals: string[]
+}
+
+/**
+ * What the panel can take from the tape's focused trade.
+ *
+ * NOTHING IS GUESSED. A tenor outside the eight the chart draws does not fall
+ * back to 10Y — that would put a completely different instrument on screen
+ * under the reader's selection, which is the whole failure mode this panel is
+ * built against. It returns null and says which tenor it was.
+ */
+export function followFocused(row: FollowSource | null | undefined): Followed {
+  const refusals: string[] = []
+  if (!row) return { tenor: null, rateIndex: null, venueClass: null, date: null, refusals }
+
+  const { tenor: sole, distinct } = soleTenorOf(row)
+  let tenor: string | null = null
+  if (sole && (PRINT_TENORS as readonly string[]).includes(sole)) {
+    tenor = sole
+  } else if (distinct.length > 1) {
+    refusals.push(
+      `this trade has legs at ${distinct.join(', ')} — a package has no single ` +
+        'tenor, so the chart kept the one it was on. Pick a tenor above to ' +
+        'follow one leg of it',
+    )
+  } else if (sole) {
+    refusals.push(
+      `tenor ${sole} is not one of the eight this chart draws ` +
+        `(${PRINT_TENORS.join(', ')}), so the tenor was left as it was rather ` +
+        'than silently swapped for a different instrument',
+    )
+  } else {
+    refusals.push('the selected trade carries no leg tenor')
+  }
+
+  const rateIndex =
+    normaliseRateIndex(row.rate_index_clean) ??
+    normaliseRateIndex((row.legs_json ?? []).map((l) => l?.rate_index_clean).find((x) => !!x))
+  if (rateIndex == null && row.rate_index_clean) {
+    refusals.push(
+      `rate index ${row.rate_index_clean} is neither SOFR nor Fed Funds; one ` +
+        'index per chart, never mixed',
+    )
+  }
+
+  const date = tapeDayFor(row.execution_start)
+  if (date == null && row.execution_start) {
+    refusals.push('the selected trade has no readable execution timestamp')
+  }
+
+  const vc = row.dd_venue_class ?? null
+  const venueClass =
+    vc && (VENUE_CLASSES as readonly string[]).includes(vc) ? vc : null
+
+  return { tenor, rateIndex, venueClass, date, refusals }
+}

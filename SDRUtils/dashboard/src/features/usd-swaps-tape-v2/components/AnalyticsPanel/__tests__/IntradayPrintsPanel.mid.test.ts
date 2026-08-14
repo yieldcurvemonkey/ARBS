@@ -10,6 +10,9 @@
 import { describe, expect, it } from '@jest/globals'
 import {
   buildGridMidSeries,
+  followFocused,
+  soleTenorOf,
+  tapeDayFor,
   chooseMidSeries,
   FWD_MAX_DEFAULT,
   type MidGrid,
@@ -274,5 +277,74 @@ describe('the grid is admitted to the y-domain', () => {
       mk({ traded_pct: 2.38, is_off_market: true }),
     ]
     expect(yDomain(rows, FWD_MAX_DEFAULT, [{ t: 1, mid: 4.28 }])![0]).toBeGreaterThan(4.0)
+  })
+})
+
+// ===========================================================================
+// FOLLOWING THE TAPE'S SELECTION
+// ===========================================================================
+
+describe('the tenor comes from the LEGS, because the row has none', () => {
+  // MEASURED against the live payload: a tape row exposes package_tenors,
+  // legs_count, rate_index_clean and legs_json — and NO tenor_display. Reading
+  // it off the row returns undefined for every trade, which is exactly what
+  // the first cut did, and the panel then refused to follow anything.
+  it('takes the tenor off a single-tenor trade', () => {
+    const f = followFocused({
+      legs_json: [{ tenor_display: '5Y' }, { tenor_display: '5Y' }],
+      rate_index_clean: 'SOFR',
+      execution_start: '2026-08-07T14:00:00.000Z',
+    })
+    expect(f.tenor).toBe('5Y')
+    expect(f.rateIndex).toBe('SOFR')
+    expect(f.refusals).toHaveLength(0)
+  })
+
+  it('refuses a PACKAGE rather than picking one of its legs', () => {
+    // The live tape's first row is a 17-leg trade running 4Y/5Y/7Y. Picking
+    // the biggest, the first or the longest would put an instrument on screen
+    // that the reader did not select.
+    const f = followFocused({
+      legs_json: [{ tenor_display: '4Y' }, { tenor_display: '7Y' }, { tenor_display: '5Y' }],
+      rate_index_clean: 'SOFR',
+    })
+    expect(f.tenor).toBeNull()
+    expect(f.refusals.join(' ')).toMatch(/legs at 4Y, 7Y, 5Y/)
+    expect(f.refusals.join(' ')).toMatch(/no single tenor/)
+  })
+
+  it('refuses a tenor outside the eight, and names it', () => {
+    const f = followFocused({ legs_json: [{ tenor_display: '~10Y' }] })
+    expect(f.tenor).toBeNull()
+    expect(f.refusals.join(' ')).toMatch(/~10Y is not one of the eight/)
+  })
+
+  it('falls back to a leg rate index when the row has none', () => {
+    const f = followFocused({ legs_json: [{ tenor_display: '2Y', rate_index_clean: 'FED_FUNDS' }] })
+    expect(f.rateIndex).toBe('FED_FUNDS')
+  })
+
+  it('soleTenorOf reports every distinct tenor it saw', () => {
+    expect(soleTenorOf({ legs_json: [{ tenor_display: '10Y' }, { tenor_display: '10Y' }] }))
+      .toEqual({ tenor: '10Y', distinct: ['10Y'] })
+    expect(soleTenorOf(null)).toEqual({ tenor: null, distinct: [] })
+  })
+})
+
+describe('the tape day is not the execution date', () => {
+  it('rolls to the NEXT day at 20:00 ET', () => {
+    // MEASURED: the tape's as_of_date starts at 20:00 ET the previous evening,
+    // so an evening print belongs to the following session. Deriving the day
+    // from the calendar date alone would query the wrong session for every
+    // evening trade and render an empty chart that reads as "nothing traded".
+    // 2026-08-07 23:30 ET = 2026-08-08T03:30Z
+    expect(tapeDayFor('2026-08-08T03:30:00.000Z')).toBe('2026-08-08')
+    // 2026-08-07 15:00 ET = 2026-08-07T19:00Z -> same day
+    expect(tapeDayFor('2026-08-07T19:00:00.000Z')).toBe('2026-08-07')
+  })
+
+  it('is null on junk rather than guessing a day', () => {
+    expect(tapeDayFor(null)).toBeNull()
+    expect(tapeDayFor('not-a-date')).toBeNull()
   })
 })
