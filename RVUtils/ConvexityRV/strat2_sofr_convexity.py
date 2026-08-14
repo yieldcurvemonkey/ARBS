@@ -61,6 +61,16 @@ a negative control so a regression cannot quietly put the 4bp back.
 measurement above rules that out -- SOFR CCP basis is sub-basis-point, and a
 clearing basis would not scale with the rate level.)
 
+**One inconsistency, recorded rather than hidden.** The *measured* adjustment now
+uses the Q/Q swap, but the swap leg that is actually *traded* in the backtest is
+built as an ``IRSwapQuery`` and therefore still prices at the curve spec's
+annual-fixed convention. The two differ by ~3.8bp in the par rate, which sets the
+traded leg's fixed coupon and so shifts its NPV by a constant; it does not change
+the P&L *path*, and the measured backtest totals were identical before and after
+the frequency fix (+$3,209,018 unhedged / +$1,264,288 hedged), which is the
+empirical confirmation. Aligning the traded leg would need a quarterly variant of
+the query-level swap builder and is left undone deliberately.
+
 :attr:`Strat2Config.ca_basis_bp` survives, default ``0.0``, for any *genuine*
 residual a user wants to apply; it is added to the raw computed CA. Nothing is
 silently fudged to match Citi. The strategy is in any case driven off the
