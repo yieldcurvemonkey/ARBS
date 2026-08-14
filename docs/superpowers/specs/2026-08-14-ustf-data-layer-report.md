@@ -346,9 +346,14 @@ them up is housekeeping, not correctness.
 `MDP/USTFutures/basis_report_quality.py`, applied inside `get_basis_report` on **both** the freshly
 built and the cached path, and before any write.
 
-- **Raises by default.** A caller that does nothing still cannot consume a broken report. That is
-  the whole point: the historic failure was a `data_ok` flag that a builder computed and no consumer
-  applied.
+- **Raises by default.** A caller that does nothing still cannot consume a broken report.
+
+  A correction to the handover's framing here, since I originally repeated it: the previous
+  `data_ok` flag **was** read — `RVUtils/BasisVsVol/run_v1_results.py:51` and the v1 notebook
+  builder both call `filter_data_ok`. The failure was not an unread flag. **The rule was wrong**: it
+  gated on *gross* basis, so it rejected healthy high-carry data and passed nothing that would have
+  caught the Ultra Bond. A gate that is read but wrong is not better than one that is unread, and it
+  is more dangerous, because its output looks like diligence.
 - `on_bad_data="warn"/"ignore"` for backfills, and the verdict is attached as `data_ok` /
   `data_quality_reason` columns, so a caller that chose `"warn"` has it *in the data*, not only in a
   log line.
@@ -367,6 +372,33 @@ built and the cached path, and before any write.
 Calibrated so ZB passes the Feb–Jun 2020 dislocation cleanly. A gate that cannot tell a stressed
 market from a broken feed makes the most interesting period in the sample unusable — which is what
 happened last time.
+
+**Operational consequence, stated plainly:** `MDP/cache_populator.py`'s nightly warmer calls
+`get_basis_report` and will now surface a **FAILED** status on gate-rejected days (~0–6% per root
+per year on healthy roots, concentrated in 2021–23 for ZB). Because a failing report is deliberately
+not persisted, those days re-fail on every run rather than being silently cached. That is the
+intended trade — a recurring visible failure beats a one-time silent one — but an operator who wants
+the warmer quiet should pass `on_bad_data="warn"`, which records the verdict in `data_ok` instead of
+raising.
+
+### The gate immediately earned its keep on a defect nobody was looking for
+
+Rebuilding the panels, the gate flagged **2023-02-10 on two roots at once** — `USH23` net basis
+−293/32 with implied repo +113.6%, and `WNH23` −355/32 with +169.9%. A defect hitting the classic
+bond and the Ultra Bond on the same day is a **cash**-side problem, not a futures one. The basket
+yields say so plainly:
+
+| date | ZB basket YTM (min–median–max) |
+|---|---|
+| 2023-02-03 | 3.598 – 3.790 – 3.826 |
+| **2023-02-10** | **4.571 – 4.738 – 4.772** |
+| 2023-02-17 | 3.896 – 4.053 – 4.087 |
+
+The long bond did not yield 95bp more on one Friday and 69bp less the next. The **futures** prices
+across those three days (130.06 → 126.94 → 125.81) move smoothly, so the futures leg is fine and the
+FedInvest cash prints for 2023-02-10 are wrong — the same class as the recorded FedInvest
+degenerate-price days. Nothing in this branch was aimed at the cash leg; the gate caught it because
+"a 113% implied repo against 4.55% funding is not a market" is true regardless of which leg broke.
 
 ### An honest caveat on the thresholds
 
@@ -396,6 +428,13 @@ panels is the obvious next step and is deliberately left undone rather than done
 - **Did not modify `ARBS-bvv`/PR #454.** Its `build_basis_panel.py:197` still uses the old
   gross-basis rule `abs(min_gross32) < 32.0`. If that branch is ever revived, that line should call
   the shared gate instead. Flagged, not changed.
+- **Did not fix the BarChart EOD path.** Every `interval=None` call fails with
+  `Invalid comparison between dtype=datetime64[ns] and datetime`, so only the minute/intraday
+  endpoint works. That matters here because minute history for old contracts far from delivery is
+  thin — the very first probe found essentially no `UBU18` minute data — and the EOD endpoint is
+  what would serve settlement prices for those days. Out of scope for a mapping fix, but it is the
+  reason a `force_refresh` backfill over deep history has holes, and it is the highest-value
+  follow-up for anyone wanting a complete panel.
 - **Did not fix `_resolve_contract_symbol`'s use of IMM dates** (handover Lead C). Confirmed as a
   latent bug — Treasury futures' last trading day is not the IMM date — but it only fires for
   callers passing a bare root, and the roll convention a caller wants there is genuinely ambiguous
@@ -408,13 +447,28 @@ panels is the obvious next step and is deliberately left undone rather than done
 ## Verification
 
 - **Regression tests**: `tests/test_ustf_data_layer.py` + a rewritten
-  `tests/test_ust_futures_price_normalization.py`, **35 passing**. Each was run against the unfixed
-  tree at `f42e9c14` in a scratch worktree first: **8 of 8** that could import there **failed**; the
-  rest could not import at all, because the modules are new. A test that passes on both sides of a
-  change is not a regression test.
+  `tests/test_ust_futures_price_normalization.py`, plus the two pre-existing UST-futures modules —
+  **56 passing**.
+
+  On the *first* batch of tests I built a scratch worktree at the unfixed commit `f42e9c14` and ran
+  them there: **8 of 8 that could import against base failed**. The rest could not import at all,
+  because the modules they exercise are new — which is proof of novelty rather than of redness, and
+  is worth stating as such. The later tests (the ZN grade vintage, the spec fingerprint) were added
+  after that exercise and were **never run against base**; on base their file fails at import, for
+  the same reason. So: per-test red evidence exists for the first batch, not for all of them.
 - The old test file asserted `11.13 → 111.40625` outright. It now asserts the opposite and says so
   in its docstring — a test can lock in a bug as effectively as it can prevent one.
-- **Fast gate**: see `PANEL_AND_GATE_RESULTS` below.
+- **Every test module that touches the changed code** — all 25 of them, found by grepping `tests/`
+  for `USTFutures`, `USTFuture`, `ustf_basis` and `treasury_conversion`:
+  **285 passed, 1 skipped, 23 deselected.**
+- **Full fast gate**: started, and *not* finished — it paces to roughly nine hours in this
+  environment (~6 s/test; `tests/test_citivelo_excel_supervisor.py` alone takes 3m37s). At the point
+  of writing it had run 823 tests with exactly one failure:
+  `test_citivelo_excel_supervisor.py::test_not_signed_in_means_keep_waiting`. That is the known
+  pywinauto hazard — the intended deselect used the wrong path (`tests/test_excel_supervisor.py`
+  rather than `tests/test_citivelo_excel_supervisor.py`), so it ran. It hangs on `main` too, the
+  other 13 tests in its module pass, and it touches nothing in this branch. **I am reporting this
+  as an incomplete verification rather than a green one**, because it is.
 - **End-to-end**, `force_refresh=True`, so no value can have come from a cache:
 
 | symbol | date | futures px | min clean/CF | min net basis | max IRR | repo |
@@ -430,6 +484,87 @@ on the contract's tick grid, at a level consistent with the instrument.
 
 ---
 
-## PANEL_AND_GATE_RESULTS
+## Panels rebuilt, and the improvement measured
 
-_(filled in below when the rebuild completes)_
+Rebuilt with `python -m MDP.USTFutures.rebuild_basis_panels --roots US TY WN --start 2018-06-01
+--end 2026-08-13`, same date span as the original panels.
+
+**Two deviations from the original build, stated rather than buried:**
+1. the rebuild samples **every 5th business day** (~50 rows/year/root) rather than daily — enough
+   for a pass-rate table, and it is what fits in the time available;
+2. it uses the **overnight SOFR fixing at the reference date** as the repo rate, where the original
+   used a term financing rate from a module that exists only on the PR #454 branch. This is the
+   likeliest source of the residual ZB flags (below), since an overnight rate is weakest exactly
+   where term repo and specials matter.
+
+### Consistency-gate pass rate, before vs after
+
+"Before" is the original panels under the old gross-basis rule (`abs(min_gross32) < 32`); "after" is
+the rebuilt panels under the shared carry-adjusted gate.
+
+| root | year | before | after | | root | year | before | after |
+|---|---|---|---|---|---|---|---|---|
+| ZB→US | 2018 | 100.0% | 100.0% | | ZN→TY | 2018 | 8.3% | **100.0%** |
+| | 2019 | 100.0% | 100.0% | | | 2019 | 0.0% | **100.0%** |
+| | 2020 | **62.1%** | **100.0%** | | | 2020 | 0.0% | **100.0%** |
+| | 2021 | **41.9%** | **94.1%** | | | 2021 | 13.3% | **100.0%** |
+| | 2022 | 83.7% | 85.7% | | | 2022 | 0.5% | **100.0%** |
+| | 2023 | 88.9% | 94.2% | | | 2023 | 28.8% | 98.1% |
+| | 2024 | 100.0% | 100.0% | | | 2024 | 63.4% | 100.0% |
+| | 2025 | 100.0% | 100.0% | | | 2025 | 97.2% | 100.0% |
+| | 2026 | 98.7% | 100.0% | | | 2026 | 99.4% | 100.0% |
+
+| root | before | after |
+|---|---|---|
+| **ZB → US** | 85.4% of 1,905 rows | **96.8%** of 410 rows |
+| **ZN → TY** | 35.1% of 1,886 rows | **99.8%** of 416 rows |
+| **UB → WN** | **1.9%** of 1,669 rows | **99.7%** of 365 rows |
+
+ZB 2020 goes 62.1% → 100% and 2021 goes 41.9% → 94.1% **without any change to ZB's data** — the
+whole difference is a gate that subtracts carry before judging. That is the COVID window becoming
+claimable, which was the point.
+
+### The Ultra Bond is a bond again
+
+Median futures price per year — the clearest single picture of what was wrong:
+
+| year | before (EUR/NOK) | after (Ultra Bond) |
+|---|---|---|
+| 2018 | 110.71 | **156.92** |
+| 2019 | 111.24 | **175.62** |
+| 2020 | 112.09 | **218.03** |
+| 2021 | 110.83 | **196.31** |
+| 2022 | 111.09 | **152.28** |
+| 2023 | 112.57 | **134.80** |
+| 2024 | 113.13 | **126.11** |
+| 2025 | 113.35 | **118.59** |
+| 2026 | 112.00 | **118.00** |
+
+The "before" column is flat because an exchange rate does not care about the Fed. The "after" column
+is the rate cycle: the 2020 low-yield peak at 218, the 2022–23 selloff, the 2024–26 range.
+
+### ZN's basket size, both eras
+
+| era | before | after |
+|---|---|---|
+| pre-Sept-2023 | 21–23 | **17** |
+| post-Sept-2023 | 18–19 | **10** |
+
+Both move down, for different reasons: pre-2023 the old basket admitted short notes *and* old
+30-year bonds while wrongly capping at 8 years; post-2023 the cap is real and the short notes and
+bonds are gone.
+
+### What still fails, honestly
+
+- **ZB 2021–22 (13 of 410 rows).** Ten are one contract, `USH22` over Nov-2021–Feb-2022: net basis
+  +80 to +100/32 with implied repo −7% to −33% against 0.05% funding. That signature is consistent
+  with either a genuinely delivery-option-rich period or with the overnight-vs-term repo deviation
+  above; **I did not resolve which**, and net basis excludes the delivery option by construction, so
+  a large value there is not automatically wrong.
+- **2023-02-10 on ZB and WN** — a corrupt FedInvest cash day, diagnosed above. A true positive.
+- **WN and TY 2023 (one row each)** — the same 2023-02-10 cash day.
+- Gaps in the WN panel are a mix of **market holidays** (Good Friday 2019-04-19 and 2022-04-15 raise
+  "No deliverable bond pricers resolved" because there is no cash data — correct behaviour) and
+  **transient BarChart failures** under `force_refresh`; the latter succeed on retry
+  (2018-08-31 → 159.34, 2019-07-19 → 176.00) and the tool's resume picks them up on a second pass.
+  Both are counted and printed, never silently dropped.
