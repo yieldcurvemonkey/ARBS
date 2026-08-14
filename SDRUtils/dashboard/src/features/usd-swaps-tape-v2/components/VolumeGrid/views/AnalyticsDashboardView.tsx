@@ -6,7 +6,6 @@ import { CcpMarketShareCard } from '../../AnalyticsPanel/CcpMarketShareCard'
 import { CompressionCyclesCard } from '../../AnalyticsPanel/CompressionCyclesCard'
 import { DealerLadderPanel } from '../../AnalyticsPanel/DealerLadderPanel'
 import { ForwardCalendarCard } from '../../AnalyticsPanel/ForwardCalendarCard'
-import { IntradayPrintsPanel } from '../../AnalyticsPanel/IntradayPrintsPanel'
 import { MaturityWallCard } from '../../AnalyticsPanel/MaturityWallCard'
 import { NetNewRiskCard } from '../../AnalyticsPanel/NetNewRiskCard'
 import { NovationVelocityCard } from '../../AnalyticsPanel/NovationVelocityCard'
@@ -20,12 +19,6 @@ export function AnalyticsDashboardView(_props: ViewProps): JSX.Element {
           bucket's own history) and does not fit a third of a row. */}
       <div className="md:col-span-2 xl:col-span-3">
         <DealerLadderPanel />
-      </div>
-      {/* Full width for the same reason: a time axis of one session with a
-          reconstructed mid on it needs the horizontal room, and the ladder's
-          aggregate reads next to the prints it was aggregated from. */}
-      <div className="md:col-span-2 xl:col-span-3">
-        <IntradayPrintsPanel />
       </div>
       <NetNewRiskCard />
       <BlockHeatmapCard />

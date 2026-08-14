@@ -7,7 +7,12 @@ import type { UsdSwapTapeRow } from '../../types'
 // without a circular import.
 export type AnalyticsMode = 'empty' | 'single' | 'sequence'
 
-export type AnalyticsTab = 'timeseries' | 'rarity' | 'levels' | 'sequence' | 'mms'
+export type AnalyticsTab =
+  | 'timeseries' | 'rarity' | 'levels' | 'sequence' | 'mms'
+  // Intraday prints: like 'mms', this one is NOT about a focused trade. It
+  // draws a whole session of one tenor, so its body renders outside the
+  // baseTrade guard in AnalyticsPanel.
+  | 'prints'
 
 // Phase 4 contract: matches the groupBy whitelist documented on every
 // /api/usd-swaps-tape-v2 analytics route. `canonical` routes through
