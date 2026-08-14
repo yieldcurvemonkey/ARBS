@@ -69,6 +69,7 @@ import {
   YAxis,
 } from 'recharts'
 import { ANALYTICS_COLORS } from './analytics-format'
+import { IntradayPrintsPlot } from './IntradayPrintsPlot'
 import {
   DIRECTION_AMBER,
   DIRECTION_NEUTRAL,
@@ -531,161 +532,21 @@ export function IntradayPrintsPanel(): JSX.Element {
       {/* ------------------------------------------------------------------ */}
       {/* the chart                                                           */}
       {/* ------------------------------------------------------------------ */}
-      <ResponsiveContainer width="100%" height={CHART_H}>
-        <ComposedChart data={midSeries} margin={{ top: 6, right: 8, bottom: 2, left: 0 }}>
-          <CartesianGrid
-            strokeDasharray="3 3"
-            stroke={ANALYTICS_COLORS.slate800}
-            vertical={false}
-          />
-          {/* type="number" is MANDATORY. The recharts default (category) spaces
-              points evenly, which would draw a 3-minute gap and a 178-minute
-              gap identically — a lie about time on a chart whose subject is
-              time. The domain is computed across EVERY series because recharts
-              takes its own domain from chart-level data only. */}
-          <XAxis
-            dataKey="t"
-            type="number"
-            scale="time"
-            domain={tDom ?? ['dataMin', 'dataMax']}
-            ticks={ticks}
-            allowDataOverflow={false}
-            tick={{ fill: ANALYTICS_COLORS.slate500, fontSize: 9 }}
-            // The first tick carries its date, and the date is the ET one. The
-            // UTC date would read "06-18 21:00" for a bar that is 21:00 ET on
-            // 06-17 — the same off-by-one-day the whole panel exists to make
-            // visible, printed on its own axis.
-            tickFormatter={(v: number, i: number) =>
-              i === 0 ? `${etDateOf(v).slice(5)} ${fmtEtClock(v)}` : fmtEtClock(v)
-            }
-            minTickGap={24}
-          />
-          {/* ONE axis, rate in percent. Deviation in bp is not a second scale —
-              it gets its own chart below. Two measures of different scale on
-              one plot is the single most misread chart there is. */}
-          <YAxis
-            type="number"
-            domain={yDom ?? ['auto', 'auto']}
-            allowDataOverflow={false}
-            tick={{ fill: ANALYTICS_COLORS.slate500, fontSize: 9 }}
-            tickFormatter={(v: number) => v.toFixed(3)}
-            width={54}
-          />
-          {etMidnight != null ? (
-            <ReferenceLine
-              x={etMidnight}
-              stroke={ANALYTICS_COLORS.slate700}
-              strokeDasharray="2 4"
-              label={{
-                value: '00:00 ET',
-                position: 'insideTopLeft',
-                fill: ANALYTICS_COLORS.slate500,
-                fontSize: 9,
-              }}
-            />
-          ) : null}
-          <Tooltip
-            content={<PrintTooltip />}
-            cursor={{ stroke: '#334155', strokeDasharray: '3 3' }}
-            contentStyle={{
-              backgroundColor: '#0f172a',
-              border: '1px solid #334155',
-              fontSize: 10,
-              fontFamily: 'monospace',
-            }}
-          />
-
-          {/* THE MID. Never smoothed, always broken rather than bridged, and
-              drawn differently depending on what it IS:
-
-                grid          solid, no dots     — a modelled curve sampled every
-                                                   minute. Dots would put ~1,000
-                                                   markers on screen, which reads
-                                                   as a band, not a line.
-                reconstructed dashed, with dots  — a polyline through the prints.
-                                                   The dots ARE the observations;
-                                                   the dashes say the segments
-                                                   between them are drawn, not
-                                                   measured.
-
-              Suppressed entirely below MIN_MID_POINTS. */}
-          {midSource === 'grid' ? (
-            <Line
-              type="linear"
-              dataKey="mid"
-              stroke={ANALYTICS_COLORS.slate400}
-              strokeWidth={1.5}
-              connectNulls={false}
-              dot={false}
-              activeDot={false}
-              isAnimationActive={false}
-              name="mid"
-            />
-          ) : midSource === 'reconstructed' ? (
-            <Line
-              type="linear"
-              dataKey="mid"
-              stroke={ANALYTICS_COLORS.slate400}
-              strokeWidth={1.25}
-              strokeDasharray="4 3"
-              connectNulls={false}
-              dot={{ r: 2, fill: ANALYTICS_COLORS.slate400, stroke: 'none' }}
-              activeDot={false}
-              isAnimationActive={false}
-              name="mid"
-            />
-          ) : (
-            <Line
-              type="linear"
-              dataKey="mid"
-              stroke="none"
-              connectNulls={false}
-              dot={{ r: 2, fill: ANALYTICS_COLORS.slate400, stroke: 'none' }}
-              activeDot={false}
-              isAnimationActive={false}
-              name="mid"
-            />
-          )}
-
-          {/* NEVER RENDER A SCATTER WITH NO DATA.
-              A <Scatter data={[]}> does not draw nothing — recharts falls back
-              to the CHART's data prop, which here is the 1-minute mid grid, and
-              emits one empty <g class="recharts-scatter-symbol"> per grid
-              minute. MEASURED on the production build before this guard: 2,332
-              scatter-symbol nodes on a day with 72 marks, and 2,643 on the
-              busiest day (= 2 x 1,164 grid points + 313 real marks, exactly).
-              Both package-legs and off-market are off by default, so the common
-              case paid ~2,330 dead DOM nodes on every render of the panel.
-              The marks themselves were never the cost. */}
-          {packageMarks.length > 0 ? (
-            <Scatter
-              data={packageMarks}
-              dataKey="y"
-              shape={<Mark />}
-              isAnimationActive={false}
-              name="package legs"
-            />
-          ) : null}
-          {offMarketMarks.length > 0 ? (
-            <Scatter
-              data={offMarketMarks}
-              dataKey="y"
-              shape={<Mark />}
-              isAnimationActive={false}
-              name="off-market"
-            />
-          ) : null}
-          {directionalMarks.length > 0 ? (
-            <Scatter
-              data={directionalMarks}
-              dataKey="y"
-              shape={<Mark />}
-              isAnimationActive={false}
-              name="prints"
-            />
-          ) : null}
-        </ComposedChart>
-      </ResponsiveContainer>
+      {/* ONE PLOTLY FIGURE, TWO PANELS, ONE CROSSHAIR.
+          The rate on top and the signed distance from mid below share an x
+          axis, so a spike line crosses both: the question a reader has at a
+          mark is "how far off mid was that", and the answer is directly under
+          it. Dark, pannable, scroll-zoomable. */}
+      <IntradayPrintsPlot
+        rows={rows}
+        mid={midSeries}
+        midSource={midSource}
+        yDomain={yDom}
+        tDomain={tDom}
+        height={CHART_H + DEV_H}
+        tenor={tenor}
+        rateIndex={rateIndex}
+      />
 
       <MarkLegend
         showPackageLegs={showPackageLegs}
@@ -693,7 +554,6 @@ export function IntradayPrintsPanel(): JSX.Element {
         midSource={midSource}
       />
 
-      <DeviationStrip rows={rows} tDom={tDom} />
 
       {data?.disclosures?.length ? (
         <ul className="mt-0.5 flex flex-col gap-0.5 text-[9.5px] leading-tight text-slate-500">
