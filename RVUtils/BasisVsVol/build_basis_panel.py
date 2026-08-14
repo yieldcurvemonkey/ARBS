@@ -166,7 +166,11 @@ def build(root: str, start: dt.date, end: dt.date, out: pathlib.Path,
         try:
             deliv = None
             fin = R.term_financing_rate(repo_df, d, 90)  # provisional; refined below
-            rep = mdp.get_basis_report(symbol=sym, timestamp=d,
+            # on_bad_data="warn": the shared gate raises by default, and this loop swallows
+            # exceptions, so a raise here would delete every gate-failing day from the panel as
+            # though it were a market holiday -- silently changing the sample. Ask for the verdict
+            # in the data instead; filter_data_ok applies it at the load boundary.
+            rep = mdp.get_basis_report(symbol=sym, timestamp=d, on_bad_data="warn",
                                        repo_rate=float(fin) if np.isfinite(fin) else 4.0)
             if rep is None or not len(rep):
                 fails += 1
@@ -176,7 +180,8 @@ def build(root: str, start: dt.date, end: dt.date, out: pathlib.Path,
                 h = max((deliv - d).days, 1)
                 fin2 = R.term_financing_rate(repo_df, d, h)
                 if np.isfinite(fin2) and abs(fin2 - fin) > 0.02:
-                    rep = mdp.get_basis_report(symbol=sym, timestamp=d, repo_rate=float(fin2))
+                    rep = mdp.get_basis_report(symbol=sym, timestamp=d, on_bad_data="warn",
+                                               repo_rate=float(fin2))
                     fin = fin2
             # CTD is the MINIMUM net basis. Selecting by max IRR agrees with it on clean data and
             # is less robust when the feed is not.
@@ -188,13 +193,20 @@ def build(root: str, start: dt.date, end: dt.date, out: pathlib.Path,
                    "repo_pct": float(fin), "delivery_date": deliv,
                    "n_deliverable": int(len(r)),
                    "min_gross32": min_gross32,
-                   # INTERNAL CONSISTENCY GATE. The futures price is pinned to the cheapest
-                   # CF-adjusted forward, so the smallest gross basis in the basket must be small.
-                   # Where it is not, the cash and futures feeds disagree about the same day and no
-                   # net basis computed from them means anything. Measured: 2024 gives ~0-5/32;
-                   # early 2015 gives 135-509/32 across the WHOLE basket, which is a feed break,
-                   # not a market.
-                   "data_ok": bool(abs(min_gross32) < 32.0)}
+                   "min_bnoc32": float(r["bnoc"].min()) * 32.0,
+                   # CONSISTENCY GATE -- now the SHARED one from MDP/USTFutures/basis_report_quality,
+                   # which travels in the report frame as data_ok.
+                   #
+                   # This used to be a bespoke rule, abs(min_gross32) < 32. That rule was wrong in
+                   # both directions: GROSS basis contains carry, so it rejected 58% of healthy ZB
+                   # in 2021 purely because repo near zero against a 2-3% coupon makes carry large,
+                   # and it passed nothing that would have caught the Ultra Bond serving an FX rate.
+                   # The shared gate is carry-adjusted (net basis and implied repo) and is
+                   # calibrated to pass ZB through the Feb-Jun 2020 dislocation.
+                   "data_ok": bool(r["data_ok"].iloc[0]) if "data_ok" in r.columns else True,
+                   "data_quality_reason": (
+                       str(r["data_quality_reason"].iloc[0]) if "data_quality_reason" in r.columns else ""
+                   )}
             for tag, b in (("ctd", ctd), ("alt", alt)):
                 cpn, yrs = _coupon_years(b.get("label"), d, b.get("maturity_date"))
                 ytm = float(b.get("ytm", np.nan))
