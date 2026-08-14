@@ -106,11 +106,29 @@ spot-versus-forward comparison the JPM note turns on — and in the direction th
 makes the forwards look better.
 
 `horizon_handle(..., horizon_date=...)` now raises `HorizonAgeingUnsupported`.
-Carry enters as `payoff_profile(carry_ccy=...)`, sourced from
-`CARRY_AND_ROLL_BPS_RUNNING` × package DV01: **convexity is the shape of the
+Carry enters as `payoff_profile(carry_ccy=...)`: **convexity is the shape of the
 profile, carry is its level**, which is exactly how the note describes it —
 "the payoff profile of an aged flattener at fixed coupon, primarily to
-incorporate carry costs".
+incorporate carry costs". JPM's own Exhibit 3 footnote confirms the construction
+is note-faithful: *"Net P/L for a **spot** 30s/50s flattener under parallel
+shifts in rate, **with coupons equal to the 1-year forward rates**"*.
+
+### 2.2 …and `CARRY_AND_ROLL_BPS_RUNNING` is not Citi's carry either
+
+The obvious source for that level term is the query field. Measured against
+Citi's published Figure 7 (close 5/8/2019, eight pairs with printed "1y carry"):
+
+| carry source | correlation vs Citi | MAE |
+|---|---:|---:|
+| `IRSwapValue.CARRY_AND_ROLL_BPS_RUNNING` @1Y | **−0.136** | 1.28 bp |
+| repriced 1y `rl.Curve.roll` of the aged package / DV01 | **+0.991** | 0.354 bp |
+
+The query field gets the *rank order across pairs wrong*, which is fatal for a
+screen that ranks pairs. Strat 3 uses the repriced roll as primary and reports
+the query value alongside as `carry_query_bp`. Strat 1's profile level still
+uses the query field; its pinned carry values are internally consistent and its
+signal is a within-structure time series rather than a cross-sectional rank, but
+the discrepancy is recorded here rather than smoothed over.
 
 ---
 
@@ -189,6 +207,62 @@ timing.
 *(An earlier hypothesis attributed the offset to CME-vs-LCH clearing basis. The
 measurement above rules that out: SOFR CCP basis is sub-bp, and the offset scales
 with the rate level exactly as compounding predicts.)*
+
+Re-running strat 2's own tie-out through its own code path after the fix:
+median error **−4.31bp → +0.77bp** on the same packs. The backtest P&L is
+unchanged, because P&L comes from the traded instruments rather than from the
+measured adjustment; what improves is the screen's fidelity.
+
+---
+
+## 5a. Results at a glance
+
+Measured, not projected. Full detail in `docs/convexityrv/results/`.
+
+| | strat 1 (best structure) | strat 2 | strat 3 (objective-matching cell) |
+|---|---|---|---|
+| structure | 20Yx5Y/25Yx5Y | short SOFR pack CA, unhedged | 15Yx5Y/20Yx5Y @15bp |
+| window | 2019-01..2026-08 (7.61y) | 2020-02..2023-09 (3.63y) | 2019-01..2026-08 |
+| total | +468.3 bp net | +$3,209,018 | +$4,362,913 |
+| annualised Sharpe | 2.95 (overlapping cohorts) | 0.191 | 0.335 |
+| Sharpe ex-direction | — | — | **0.186** |
+| hit rate | 84.2% gross | 74.3% per trade | — |
+| mean carry | +0.000 bp/yr | — | **+0.087 bp/yr** |
+
+The honest caveats attached to each of these are in §8 and are not optional
+reading.
+
+---
+
+## 8. What the results do *not* show
+
+* **Strat 1's signal is degenerate on the long end.** The curve breakeven vol is
+  below 1Yx30Y ATMF on *every* day a vol exists (97.3%), so for the three
+  long-end structures the rule never says "rich" and the book is a permanently-on
+  flattener, not a timing strategy. 5Y/30Y is the two-sided control and does
+  switch (45 flattener / 43 steepener cohorts). The 2.95 Sharpe is also an
+  overlapping-cohort number — 76 one-year holds a month apart contain ~7.6
+  independent years.
+* **Strat 1 does not reproduce JPM's carry claim.** On 2019–2026 SOFR, 30s/50s
+  carried *positively* (+1.36 bp/yr mean); JPM's −100.6 bp belongs to 2009–2017
+  LIBOR. The forward structure's carry advantage here exists only against spot
+  5Y/30Y (−5.44 bp/yr). Hit rate and dispersion do reproduce the ordering.
+* **Strat 2 does not survive costs.** At 1bp round-trip per $100k DV01 both books
+  go negative. The fly hedge *reduced* return (Sharpe 0.191 → 0.070) because on
+  the near-dated packs the data can reach, the hedge regression is unstable
+  (R² 0.2–0.6, β sign-flipping) — Citi fitted Blues, 3–4y out, which are not in
+  daily reach offline. Two 2020 epochs nearly cancel (−$3.10M then +$2.85M).
+* **Strat 3's headline Sharpes are mostly direction.** The mtm share of net
+  averages 1.29 across the 15 pairs and is ≥0.88 for every one: the ultra-long
+  forward curve inverted ~40bp over the sample, so a DV01-neutral flattener was
+  long the biggest move in the window. Only **8 of 15 pairs** are profitable
+  ex-direction. The whole `10Yx10Y/*` family's gamma harvest covers only
+  0.48–0.63× its carry bill.
+* **The grid winner fails multiple-testing.** `10Yx10Y/25Yx10Y` @40bp scores
+  Sharpe 0.765, but expected max Sharpe under the null across 5,040 cells is
+  **1.599**, and its deflated Sharpe gives p(true SR>0) = **0.011**. It is also
+  short theta (−4.17 bp/yr, positive-carry on 2.0% of days). Flagged, not
+  crowned.
 
 ---
 
