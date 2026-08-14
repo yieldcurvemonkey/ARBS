@@ -38,7 +38,7 @@ The sample cannot be extended. The vol-snapshot vintage does not exist before 20
 
 ---
 
-## V1 — option-adjusted basis · BUILT AND VALIDATED · results pending the data build
+## V1 — option-adjusted basis · COMPLETE · **DEAD**
 
 `OABNOC = BNOC_market − (switch + wildcard)`. Long basis when the market pays less than the delivery
 option is worth. **P&L is exactly the change in net basis** — `d(P_cash) − CF·d(F) + coupon − repo`
@@ -55,25 +55,91 @@ before first notice, checkpointed and resumable) → `v1.py` (delivery-option mo
 chronology, lookahead sensitivity, and **exact agreement between QueryDrivenBacktest and the
 reference engine**.
 
-**Status**: three panels (ZB, ZN, UB) building 2018-06 → 2026-08 at ~12s/day; `run_v1_results.py`
-is armed and fires automatically when they settle, writing `_results/v1_verdict.json`,
-`v1_grid.csv`, `v1_ablation.csv`, `v1_cost_ladder.csv`, `v1_best_{daily,trades}.csv`.
+### Result
 
-### The 10-year target is not available, and here is the measurement
+Panels built 2018-06 → 2026-08. **216 pre-registered configurations** (the grid was fixed before
+the first run and not touched after seeing results), 2 roots × 4 entry_z × 3 max_hold × 3 z_window
+× 3 switch_vol.
 
-The design asked for 10+ years. The feeds do not support it. The futures price is pinned to the
-cheapest CF-adjusted forward, so `min(gross basis)` across the basket must be small. Measured:
+| | |
+|---|---|
+| best cell | `ZN/w252/e1.5/x0.5/h10/sv90` |
+| Sharpe | 0.381 |
+| **E[max Sharpe \| null] at 216 trials** | **0.478** |
+| **deflated Sharpe** | **0.435** (needs > 0.95) |
+| t(Newey–West) | 0.981 |
+| bootstrap 95% CI | [−0.24, 0.84] |
+| hit rate | 42.9% (21 trades) |
+| top-3 trade share | 1.27 (needs < 0.60) |
+| sign-flip permutation | 0.811 (needs > 0.95) |
+| grid median Sharpe | −0.144 (25% of cells positive) |
+| **alive** | **false** |
 
-| era | min gross basis across the basket | gate passes | CTD net basis |
-|---|---|---|---|
-| 2015 | **+135.9/32** (max +509) | **0%** | −278/32 |
-| 2019 | +13.6/32 | 100% | −0.14/32 |
-| 2024 | −3.8/32 | 100% | +0.38/32 |
+As with V2, the winner of the whole search scores **below what chance produces at that trial
+count**, and it fails every other kill condition independently.
 
-A net basis of −278/32 is not a market; on 2015-01-02 the *smallest* gross basis over every
-deliverable was +135/32. The cash and futures feeds disagree about the same day. This is now an
-executable gate (`data_ok`), the builds run from 2018-06 so the funnel brackets the transition, and
-the usable V1 sample is **roughly 2019 → 2026, about 7 years of daily marks**.
+**The decisive number is not in that table.** Split the grid by root:
+
+| root | usable days | cells | median Sharpe | % positive | best |
+|---|---|---|---|---|---|
+| **ZB** — the only root whose data is coherent | 1,627 | 108 | **−0.217** | **0%** | **−0.000** |
+| ZN — 35% intact, effectively 2024→ | 662 | 108 | −0.002 | 49% | +0.381 |
+
+**On ZB, not one configuration of 108 made money.** Every positive cell in the pooled grid comes
+from ZN, the root whose panel is two-thirds rejected and whose futures-vs-basket relationship is
+systematically biased (below). The strategy is dead, and on the clean root it is dead without
+ambiguity.
+
+The ablation is moot at these levels but points the same way: switch-only (0.469) beats
+switch+wildcard (0.381), so the **wildcard subtracts**; no-model raw BNOC is 0.094. Every arm is
+below E[max|null].
+
+### The gate was written and never read
+
+`build_basis_panel` computed `data_ok` per row — the internal-consistency check that the cheapest
+CF-adjusted forward in the basket must sit at the futures price — and **nothing ever read it**. The
+first V1 grid therefore ran over rows where the cash and futures feeds disagree about the same day,
+including a UB panel that is 98% rejected. It reported "dead" too, but that was not a measurement.
+
+Fixed by `filter_data_ok()`, applied at the **load boundary** (runner, notebook, QDB path) rather
+than inside `run_v1`: the engine also runs on synthetic test panels that carry no `data_ok` column,
+so an engine-internal `if "data_ok" in p` would silently no-op on exactly the inputs the tests use.
+The helper also **re-derives `is_roll`**, which the builder computed before any filtering — drop
+rows and a contract change can land on a row flagged `False`, and the entry gate tests `not roll[i]`
+directly. Both failure modes are pinned by tests, each confirmed to fail under mutation.
+
+### What the gate found: two roots are not usable
+
+| root | gate passes | verdict |
+|---|---|---|
+| ZB | 85% | usable, 1,627 days |
+| ZN | 35% | usable ~2024 → only |
+| UB | 2% | **unmeasurable, dropped below the 200-row floor** |
+
+**UB's price series is not the Ultra Bond's price.** It sits in 110.0–114.1 for all nine years while
+ZB ranges 107.9–185.6; a 25y+ future with ~19y duration cannot move 4 points through a cycle that
+moved the classic bond 78. It also lands on no tick grid (25.7% on 1/64, vs ZB 88% on 1/32 and ZN
+100% on 1/64 — both correct for their contracts), and its basket is frozen at exactly 19
+deliverables every year from 2018 to 2026. On 2024-04-15 the served price is 112.86 while every
+CF-adjusted forward in its own basket sits at 120.7–124.6; the cash leg is verifiably right
+(T 2¼ Aug '49 at 62.47 is what that bond prices to at those yields), so the futures leg is broken.
+
+**ZN's price series is fine** — correct range, perfect 1/64 conformity — but `min(gross basis)`
+across its basket is systematically negative and decays monotonically, −149/32 (2020) → −16/32
+(2026). That is a bias on the cash/basket side, not the price.
+
+Both are defects in the shared `USTFuturesMDP` basis-report path, not in this branch. They are
+recorded here rather than fixed: the fix is a basket/symbol-map change in shared infrastructure plus
+a multi-hour rebuild, and it cannot rescue V1 — ZB is already clean, already eight years long, and
+already 0-for-108.
+
+### The regime the gate cannot vouch for
+
+ZB's rejected rows are not the same animal as ZN's and UB's. They cluster in 2020 (62% pass) and
+2021 (42%) at a median 8/32 — plausibly the **real** COVID basis dislocation rather than a feed
+break, and the gate cannot tell the two apart. So V1 is untested in precisely the regime where
+basis risk is largest, and the ZB result above should be read as "dead in normal markets", with
+the 2020–21 stress period excluded rather than survived.
 
 ---
 
@@ -86,6 +152,7 @@ the usable V1 sample is **roughly 2019 → 2026, about 7 years of daily marks**.
 | `build_basis_panel.front_symbol` | iterated months-outer/years-inner, so it returned next March before this June and silently picked a contract a year away. |
 | `v1.add_model_option` | with both option components disabled, `dov32` was NaN not 0, so the **no-model ablation arm** — the one that asks whether the delivery-option machinery earns its place — silently produced nothing. |
 | CTD selection | was max implied repo; now min net basis, which is the standard definition and the more robust of the two on imperfect data. |
+| `data_ok` | the build-time consistency gate was **written by the builder and read by nothing**, so the first V1 grid ran over feed-break rows including a 98%-rejected UB panel. Now applied at the load boundary by `filter_data_ok()`, which also re-derives `is_roll` (stale after any row drop). |
 
 ---
 

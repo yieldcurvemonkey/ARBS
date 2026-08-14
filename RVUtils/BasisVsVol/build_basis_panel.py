@@ -113,6 +113,30 @@ def _coupon_years(label: str, as_of: dt.date, maturity=None) -> tuple:
     return cpn, yrs
 
 
+def filter_data_ok(panel: pd.DataFrame, *, require: bool = True) -> pd.DataFrame:
+    """Drop rows the build-time consistency gate rejected, and re-derive ``is_roll``.
+
+    The gate is written by :func:`build` and, until this helper existed, was read by nothing --
+    the whole V1 grid ran over rows where the cash and futures feeds disagree about the same day.
+
+    Filtering happens HERE, at the load boundary, not inside ``run_v1``: the engine also runs on
+    synthetic panels that carry no ``data_ok`` column, so an engine-internal ``if "data_ok" in p``
+    would silently no-op on exactly the inputs the tests use, and the QueryDrivenBacktest path
+    would disagree with the reference engine about which rows exist.
+
+    ``is_roll`` MUST be recomputed. The builder derived it before any filtering, so dropping rows
+    can leave a contract change sitting on a row flagged ``False`` -- and the entry gate in
+    ``run_v1`` tests ``not roll[i]`` directly.
+    """
+    p = panel.copy()
+    if require and "data_ok" in p.columns:
+        p = p[p["data_ok"].astype(bool)]
+    p = p.sort_values("date").reset_index(drop=True)
+    if len(p):
+        p["is_roll"] = p["symbol"].ne(p["symbol"].shift(1)) & p["symbol"].shift(1).notna()
+    return p
+
+
 def _flush(rows, out: pathlib.Path) -> None:
     df = pd.DataFrame(rows)
     df["is_roll"] = df["symbol"].ne(df["symbol"].shift(1)) & df["symbol"].shift(1).notna()

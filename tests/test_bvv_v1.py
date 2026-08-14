@@ -69,6 +69,43 @@ def _panel(n=400, seed=7, roll_every=60):
     }).assign(is_roll=lambda d: d["symbol"].ne(d["symbol"].shift(1)) & d["symbol"].shift(1).notna())
 
 
+# --------------------------------------------------------------------------- the data_ok gate
+def test_gate_drops_bad_rows_and_recomputes_the_roll_flag():
+    """The defect: ``data_ok`` was written by the builder and read by nothing.
+
+    Also pins the trap that filtering creates -- ``is_roll`` was derived BEFORE the drop, so
+    removing rows can leave a contract change sitting on a row flagged False, and ``run_v1``
+    tests ``not roll[i]`` directly when deciding whether it may open.
+    """
+    from RVUtils.BasisVsVol.build_basis_panel import filter_data_ok
+
+    p = _panel(n=120, roll_every=40)
+    p["data_ok"] = True
+    # reject the row that carries the roll, plus a block elsewhere
+    roll_i = int(np.flatnonzero(p["is_roll"].to_numpy())[0])
+    p.loc[roll_i, "data_ok"] = False
+    p.loc[5:9, "data_ok"] = False
+
+    g = filter_data_ok(p)
+    assert len(g) == len(p) - 6
+    assert g["data_ok"].all()
+    # the contract change survives the drop: it now sits on the FIRST kept row of the new symbol
+    new_sym = p.loc[roll_i, "symbol"]
+    assert bool(g.loc[g["symbol"] == new_sym, "is_roll"].iloc[0]) is True
+    assert int(g["is_roll"].sum()) == int(p["is_roll"].sum())
+    # opting out is explicit, and must not silently reorder or re-flag
+    assert len(filter_data_ok(p, require=False)) == len(p)
+
+
+def test_gate_is_a_noop_on_panels_without_the_column():
+    """Synthetic panels carry no ``data_ok``; the gate must not invent one or drop everything."""
+    from RVUtils.BasisVsVol.build_basis_panel import filter_data_ok
+
+    p = _panel(n=80)
+    assert "data_ok" not in p.columns
+    assert len(filter_data_ok(p)) == len(p)
+
+
 def test_model_option_has_both_components_and_they_are_positive():
     p = add_model_option(_panel(), V1Config())
     assert p["switch32"].notna().sum() > 300

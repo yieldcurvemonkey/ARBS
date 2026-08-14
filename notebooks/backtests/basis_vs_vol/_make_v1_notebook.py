@@ -84,26 +84,34 @@ from RVUtils.BasisVsVol.switch import Deliverable, delivery_option_two_bond
 DATA = pathlib.Path(REPO) / "notebooks" / "backtests" / "basis_vs_vol" / "_data"
 RESULTS = pathlib.Path(REPO) / "notebooks" / "backtests" / "basis_vs_vol" / "_results"
 
+from RVUtils.BasisVsVol.build_basis_panel import filter_data_ok
+
 def load_panel(root, gate=True):
     """Load a panel and apply the internal-consistency gate.
 
     The futures price is pinned to the cheapest CF-adjusted forward, so the smallest gross basis in
     the basket must be small. Where it is not, the cash and futures feeds disagree about the same
-    day and nothing computed from them is a net basis. Measured: 2024 gives ~0-5/32 and 2019 ~14/32,
-    but early 2015 gives 135-509/32 across the WHOLE basket -- a feed break, not a market.
+    day and nothing computed from them is a net basis.
+
+    The gate lives in ONE helper, shared with ``run_v1_results``. It used to be re-implemented
+    inline here, which is how the notebook and the runner came to disagree about which days exist:
+    the inline version also left ``is_roll`` as the builder computed it, BEFORE any rows were
+    dropped, so a contract change could end up on a row flagged False.
     """
     p = pd.read_parquet(DATA / f"basis_panel_{{root}}.parquet")
-    if gate and "data_ok" in p:
-        n0 = len(p)
-        p = p[p["data_ok"]].reset_index(drop=True)
-        if n0 != len(p):
-            print(f"  {{root}}: consistency gate dropped {{n0-len(p)}} of {{n0}} days")
+    n0 = len(p)
+    p = filter_data_ok(p, require=gate)
+    if n0 != len(p):
+        print(f"  {{root}}: consistency gate dropped {{n0-len(p)}} of {{n0}} days")
     return p
 
 PANELS = {{r: load_panel(r) for r in ("ZB", "ZN", "UB") if (DATA / f"basis_panel_{{r}}.parquet").exists()}}
-for r, p in PANELS.items():
+MIN_PANEL_DAYS = 200   # below this a root is unmeasurable, not weak: report it, do not trade it
+for r, p in sorted(PANELS.items()):
+    flag = "" if len(p) >= MIN_PANEL_DAYS else "   <-- BELOW FLOOR, excluded from results"
     print(f"{{r}}: {{len(p):5d}} days  {{p['date'].min().date()}} -> {{p['date'].max().date()}}  "
-          f"contracts={{p['symbol'].nunique()}}  median BNOC {{p['ctd_bnoc32'].median():+.2f}}/32")'''))
+          f"contracts={{p['symbol'].nunique()}}  median BNOC {{p['ctd_bnoc32'].median():+.2f}}/32{{flag}}")
+PANELS = {{r: p for r, p in PANELS.items() if len(p) >= MIN_PANEL_DAYS}}'''))
 
 cells.append(md("""## 1. CONFIG"""))
 cells.append(code('''CONFIG = dict(
