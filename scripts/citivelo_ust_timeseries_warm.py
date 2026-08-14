@@ -541,8 +541,27 @@ def _load_manifest() -> dict:
 
 
 def _save_manifest(man: dict) -> None:
+    """Atomic: temp file, fsync, ``os.replace``. See the sibling warm's ``_save``.
+
+    ``write_text`` truncates first, so a write that fails destroys the resume
+    state it was recording. The sibling script lost 754 chunks - about nineteen
+    hours - to exactly that when the disk filled mid-save with
+    ``OSError: [Errno 28] No space left on device``. This one has the same shape
+    and the same exposure, so it gets the same fix rather than waiting its turn.
+    """
     MANIFEST.parent.mkdir(parents=True, exist_ok=True)
-    MANIFEST.write_text(json.dumps(man, indent=1, sort_keys=True), encoding="utf-8")
+    tmp = MANIFEST.with_name(MANIFEST.name + f".tmp{os.getpid()}")
+    try:
+        with open(tmp, "w", encoding="utf-8") as fh:
+            json.dump(man, fh, indent=1, sort_keys=True)
+            fh.flush()
+            os.fsync(fh.fileno())
+        os.replace(tmp, MANIFEST)
+    finally:
+        try:
+            tmp.unlink()
+        except OSError:
+            pass
 
 
 def cached_tags(freq: str, tags: Sequence[str]) -> int:
