@@ -50,6 +50,25 @@ enormous vol (front packs here invert to 700bp+ against a realistic SOFR vol of
 ~100-250bp) because ``sigma = sqrt(2*CA/mean(T1^2))`` divides by a very small
 number. This is why Citi's own tables start at Reds, not Whites. Near packs are
 numerically unfit for vol inversion even when their CA is fine.
+
+**5. Curve resolution -- the blind spot of test 1.** Added after the full-sample
+scan. ``CA_synthetic`` compares an arithmetic mean of four quarterly forwards
+against the par rate of the swap spanning them; if the discount curve carries no
+node inside that window, log-linear interpolation makes all four forwards
+identical and the two numbers agree *by construction*. The control then returns
+0.00bp on a swap leg that is not a market observation at all. Measured: this
+repo's ``USD-SOFR-1D`` runs on 26 nodes with a single 735-day segment covering
+the whole front end until **2019-07-08**, when it jumps to 45. So the first six
+months of the sample must be excluded on grounds the first four tests cannot
+see. :func:`window_resolution` and :func:`control_power_bp` make it visible.
+
+**6. The annual/quarterly gap is a prediction.** ``3/8 * q^2`` with no free
+parameter (:data:`COMPOUNDING_GAP_SLOPE`); :func:`regress_gap_on_rate_squared`
+tests it rather than asserting it.
+
+**7. Inversion conditioning.** :func:`vol_sensitivity_bp_per_bp` returns
+``dsigma/dCA = sigma/(2*CA)``, which turns a measured CA noise into a vol noise
+and so sets the minimum usable pack rank from the data.
 """
 
 from __future__ import annotations
@@ -67,6 +86,7 @@ from RVUtils.ConvexityRV.packs import imm_date, matched_swap_dates, pack_t1s
 
 __all__ = [
     "next_quarterly",
+    "imm_forward_map",
     "synthetic_pack_rate",
     "decompose_ca",
     "flag_quality",
@@ -74,6 +94,15 @@ __all__ = [
     "CADecomposition",
     "PLAUSIBLE_VOL_BP",
     "MIN_T1_FOR_VOL_YEARS",
+    # --- extensions used by scripts/strat2_ca_quality_scan.py -----------
+    "curve_nodes",
+    "window_resolution",
+    "annuity_weight_residual_bp",
+    "control_power_bp",
+    "compounding_gap_bp",
+    "COMPOUNDING_GAP_SLOPE",
+    "vol_sensitivity_bp_per_bp",
+    "regress_gap_on_rate_squared",
 ]
 
 #: A SOFR normal vol outside this band is not a market observation, it is an
@@ -90,12 +119,42 @@ def next_quarterly(year: int, month: int) -> Tuple[int, int]:
     return (year, month + 3) if month < 10 else (year + 1, month - 9)
 
 
-def synthetic_pack_rate(pricer: Any, contracts: Sequence[Tuple[int, int]]) -> float:
+def imm_forward_map(
+    pricer: Any, contracts: Sequence[Tuple[int, int]]
+) -> Dict[Tuple[int, int], float]:
+    """``(year, month) -> IMM x IMM quarterly forward rate`` (percent) off *pricer*.
+
+    Computed once per date over the whole strip rather than once per pack:
+    ten rolling pack windows share thirteen quarterly forwards, so the per-pack
+    loop does 40 curve calls where 13 suffice **and** lets two overlapping packs
+    disagree about the same quarter if anything is ever memoised per call.
+    """
+    out: Dict[Tuple[int, int], float] = {}
+    for y, m in contracts:
+        if (y, m) in out:
+            continue
+        a = imm_date(y, m)
+        b = imm_date(*next_quarterly(y, m))
+        out[(y, m)] = matched_forward_swap_rate(pricer, a, b)
+    return out
+
+
+def synthetic_pack_rate(
+    pricer: Any,
+    contracts: Sequence[Tuple[int, int]],
+    *,
+    forwards: Optional[Mapping[Tuple[int, int], float]] = None,
+) -> float:
     """Arithmetic mean of the CURVE's own forward rates for the pack's quarters.
 
     The zero-convexity counterfactual: what the pack rate would print at if
     futures carried no convexity adjustment at all.
+
+    Pass ``forwards`` (from :func:`imm_forward_map`) to reuse a strip that has
+    already been priced; omit it and the four forwards are built on the spot.
     """
+    if forwards is not None:
+        return float(np.mean([forwards[k] for k in contracts]))
     rates: List[float] = []
     for y, m in contracts:
         a = imm_date(y, m)
@@ -125,6 +184,203 @@ class CADecomposition:
         """Convention error as a fraction of the measured adjustment."""
         d = abs(self.ca_observed_bp)
         return float("nan") if d == 0 else abs(self.ca_synthetic_bp) / d
+
+
+# ===========================================================================
+# 5. Curve resolution -- the blind spot of test 1
+# ===========================================================================
+def curve_nodes(pricer: Any) -> List[datetime.date]:
+    """The discount curve's node dates, ascending.
+
+    Not cosmetic. The matched swap is priced *off this node grid*, and a par
+    rate for a window that contains no node is an interpolation, not a market
+    observation.
+    """
+    handle = pricer._rl_curve_handle
+    curve = getattr(handle, "curve", handle)
+    nodes = curve.nodes
+    keys = nodes.keys if hasattr(nodes, "keys") and not callable(nodes.keys) else list(nodes)
+    out: List[datetime.date] = []
+    for k in keys:
+        out.append(k.date() if isinstance(k, datetime.datetime) else k)
+    return sorted(out)
+
+
+def window_resolution(
+    nodes: Sequence[datetime.date],
+    start: datetime.date,
+    end: datetime.date,
+) -> Dict[str, float]:
+    """How much curve there is inside ``[start, end]``.
+
+    **This is the test the zero-convexity control cannot do.** The control
+    compares the arithmetic mean of four quarterly forwards against the par rate
+    of the swap that spans them. If the curve is *flat* across the window --
+    because it has no node there and log-linear interpolation carries a single
+    constant forward -- then those two numbers are equal by construction and
+    ``CA_synthetic`` is exactly 0.00 no matter how wrong the swap leg is. A
+    passing control on a flat segment is not evidence; it is an absence of
+    evidence, and it looks identical.
+
+    Measured on this repo's ``USD-SOFR-1D``: before **2019-07-08** the curve
+    carries 26 nodes with the second at *start + ~735 days*, i.e. the entire
+    first two years is one log-linear segment. Every IMM x IMM forward inside it
+    prints the same rate to 4dp (2019-03-15: 2.2866% for all eight of the first
+    two years) while the SR3 strip declines 2.4300 -> 2.1450 across the same
+    span. On 2019-07-08 the grid jumps to 45 nodes (monthly to 1y, quarterly to
+    2y, annual thereafter) and the front end becomes representable.
+
+    Returns ``n_nodes_inside`` (strictly inside the window), ``segment_days``
+    (the length of the node interval containing the window's midpoint) and
+    ``spans_window`` (1.0 when a single node interval swallows the whole
+    window, i.e. the control has no power).
+    """
+    ns = sorted(nodes)
+    inside = [d for d in ns if start < d < end]
+    mid = start + (end - start) / 2
+    lo = max([d for d in ns if d <= mid], default=ns[0] if ns else start)
+    hi = min([d for d in ns if d > mid], default=ns[-1] if ns else end)
+    return {
+        "n_nodes": float(len(ns)),
+        "n_nodes_inside": float(len(inside)),
+        "segment_days": float((hi - lo).days),
+        "spans_window": float(lo <= start and hi >= end),
+    }
+
+
+def annuity_weight_residual_bp(
+    forwards: Sequence[float], rate_percent: float, accrual: float = 0.25
+) -> float:
+    """The residual the zero-convexity control *should* return, in bp.
+
+    ``CA_synthetic`` is not testing whether the arithmetic is right so much as
+    the size of one known, second-order term: the pack rate is an **equally
+    weighted** mean of four quarterly forwards, while the matched swap's par
+    rate is the **annuity-weighted** one,
+
+        par = sum_i w_i f_i,     w_i ∝ DF_i * tau_i
+
+    Later quarters discount harder, so they carry slightly less weight than
+    1/4. On an upward-sloping strip that makes the arithmetic mean exceed the
+    par rate and the control residual positive; on an inverted strip, negative.
+    The size is first order in ``r * tau`` and in the strip's own slope, which
+    is why the residual is ~0 when the curve is flat and grows with dispersion.
+
+    Returns ``sum_i (1/4 - w_i) * f_i * 100`` in bp, with ``DF_i`` taken as
+    ``exp(-r * tau * i)`` off the swap rate itself. Approximate by construction
+    -- it is a *prediction to compare the measurement against*, not a
+    correction to apply.
+    """
+    f = np.asarray(list(forwards), dtype=float)
+    n = f.size
+    if n == 0 or not np.all(np.isfinite(f)) or not np.isfinite(rate_percent):
+        return float("nan")
+    r = float(rate_percent) / 100.0
+    t = accrual * np.arange(1, n + 1)
+    w = np.exp(-r * t)
+    w = w / w.sum()
+    return float(np.dot(1.0 / n - w, f) * 100.0)
+
+
+def control_power_bp(forwards: Sequence[float]) -> float:
+    """Curvature the zero-convexity control actually gets to see, in bp.
+
+    The peak-to-trough spread of a pack's four quarterly forwards. The control
+    residual ``CA_synthetic`` is an *arithmetic-mean minus annuity-weighted-mean*
+    discrepancy, and that discrepancy is identically zero when the four forwards
+    are identical. So a ``CA_synthetic`` of 0.00bp on a pack whose forwards
+    spread 0.0bp says nothing at all, while the same 0.00bp on a pack whose
+    forwards spread 150bp is a strong statement. Report the two together or the
+    control is unfalsifiable.
+    """
+    f = np.asarray(list(forwards), dtype=float)
+    if f.size == 0 or not np.all(np.isfinite(f)):
+        return float("nan")
+    return float((f.max() - f.min()) * 100.0)
+
+
+# ===========================================================================
+# 6. The annual-vs-quarterly compounding gap -- a *prediction*, not a fudge
+# ===========================================================================
+#: ``gap_bp = COMPOUNDING_GAP_SLOPE * rate_percent**2``.
+#:
+#: A 1y swap paying a fixed rate ``a`` annually is equivalent to one paying
+#: ``q`` quarterly when ``(1 + q/4)^4 = 1 + a``, so
+#: ``a = q + (6/16) q^2 + O(q^3)`` and the gap is ``3/8 * q^2`` in decimal.
+#: With ``q`` in **percent** and the gap in **bp** the 1e4/1e4 scalings cancel
+#: to a bare ``0.375``: at 5% that is 9.38bp, at 3.4% it is 4.34bp -- which is
+#: the 4.25-9.47bp range measured on this repo's data, predicted with no free
+#: parameter.
+COMPOUNDING_GAP_SLOPE = 0.375
+
+
+def compounding_gap_bp(rate_percent: Any) -> Any:
+    """Predicted annual-minus-quarterly par-rate gap, bp, from the rate alone.
+
+    Vectorised: a float in gives a float out, an array or Series gives the same
+    shape back, because the whole point is to overlay it on a scatter of 11,900
+    measured gaps.
+    """
+    if np.isscalar(rate_percent):
+        return COMPOUNDING_GAP_SLOPE * float(rate_percent) ** 2
+    return COMPOUNDING_GAP_SLOPE * np.asarray(rate_percent, dtype=float) ** 2
+
+
+def regress_gap_on_rate_squared(
+    gap_bp: Sequence[float], rate_percent: Sequence[float]
+) -> Dict[str, float]:
+    """OLS ``gap_bp ~ b * rate^2`` (no intercept) plus the free-intercept fit.
+
+    The no-intercept slope is the number to compare with
+    :data:`COMPOUNDING_GAP_SLOPE` = 0.375. The intercept version is the honesty
+    check: a materially non-zero intercept would mean something *other* than
+    compounding is in the gap.
+    """
+    g = np.asarray(list(gap_bp), dtype=float)
+    r = np.asarray(list(rate_percent), dtype=float)
+    ok = np.isfinite(g) & np.isfinite(r)
+    g, r = g[ok], r[ok]
+    if g.size < 3:
+        out = {k: float("nan") for k in ("slope_no_intercept", "slope", "intercept", "r2")}
+        out["n"] = float(g.size)
+        return out
+    x = r ** 2
+    slope0 = float(np.dot(x, g) / np.dot(x, x))
+    a = np.stack([x, np.ones_like(x)], axis=1)
+    (slope, intercept), *_ = np.linalg.lstsq(a, g, rcond=None)
+    pred = a @ np.array([slope, intercept])
+    ss_res = float(np.sum((g - pred) ** 2))
+    ss_tot = float(np.sum((g - g.mean()) ** 2))
+    return {
+        "slope_no_intercept": slope0,
+        "slope": float(slope),
+        "intercept": float(intercept),
+        "r2": float(1.0 - ss_res / ss_tot) if ss_tot > 0 else float("nan"),
+        "n": float(g.size),
+    }
+
+
+# ===========================================================================
+# 7. Conditioning of the vol inversion
+# ===========================================================================
+def vol_sensitivity_bp_per_bp(ca_bp: float, t1s: Sequence[float]) -> float:
+    """``d(sigma)/d(CA)`` in bp of vol per bp of adjustment.
+
+    ``sigma = sqrt(2*CA/M)`` so ``dsigma/dCA = sigma / (2*CA)``: the inversion's
+    gain is inversely proportional to the size of the thing being inverted.
+    That is the whole story of why near packs are unusable -- not the ``T1``
+    directly, but that ``CA`` itself is tiny there.
+
+    Combine with the *measured* CA noise (see the settle-timing test) to get a
+    minimum tradeable rank from this data instead of from Citi's convention.
+    """
+    ca = float(ca_bp)
+    if not np.isfinite(ca) or ca <= 0:
+        return float("nan")
+    sigma = implied_vol_from_ca_bp(ca, t1s)
+    if not np.isfinite(sigma):
+        return float("nan")
+    return float(sigma / (2.0 * ca))
 
 
 def decompose_ca(
@@ -217,12 +473,13 @@ def shape_diagnostics(df: pd.DataFrame, *, ca_col: str = "ca_bp",
     if len(g) < 4:
         return {"loglog_slope": float("nan"), "corr_t1_squared": float("nan"), "n": len(g)}
     x, y = np.log(g[t1_col].to_numpy()), np.log(g[ca_col].to_numpy())
-    try:
-        slope = float(np.polyfit(x, y, 1)[0])
-    except Exception:
-        slope = float("nan")
-    try:
-        corr = float(np.corrcoef(g[t1_col].to_numpy() ** 2, g[ca_col].to_numpy())[0, 1])
-    except Exception:
-        corr = float("nan")
+    with np.errstate(invalid="ignore", divide="ignore"):
+        try:
+            slope = float(np.polyfit(x, y, 1)[0])
+        except Exception:
+            slope = float("nan")
+        try:
+            corr = float(np.corrcoef(g[t1_col].to_numpy() ** 2, g[ca_col].to_numpy())[0, 1])
+        except Exception:
+            corr = float("nan")
     return {"loglog_slope": slope, "corr_t1_squared": corr, "n": int(len(g))}

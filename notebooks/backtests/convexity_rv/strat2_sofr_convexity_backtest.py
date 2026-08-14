@@ -137,6 +137,15 @@ CFG = Strat2Config(
     n_packs=9,             # windows 2..10 = Whites through Greens+
     # --- the CA level. 0.0 = report the raw number. Citi's leg is CME-cleared
     # and this curve is not; the measured gap on 6/9/23 was about -3.9bp.
+    # --- the CA level. 0.0 = report the raw number.
+    # NOTE (corrected): the ~-3.9bp gap against Citi on 6/9/23 was NOT a CME-vs-LCH
+    # clearing basis. It was the matched swap's payment frequency: Citi specifies
+    # quarterly on both legs, the usd_irs spec quotes ANNUAL fixed, and the gap is
+    # the compounding term 3q^2/8. Measured across 11,900 pack-days,
+    # OLS gap ~ b*r^2 gives b = 0.36886 against the parameter-free prediction
+    # 0.375 (-1.6%), r^2 = 0.9981. With the swap built Q/Q the residual against
+    # Citi is mean -0.11bp / median -0.58bp, which now bounds the true clearing
+    # basis at under 2bp rather than attributing 4bp to it.
     ca_basis_bp=0.0,
     round_pack_price_to_tick=False,   # a 1/4 tick is 0.25bp of CA; the raw average is what tied out
     # --- the model. "fit" = smooth variance term structure across packs, fitted
@@ -167,7 +176,18 @@ CFG = Strat2Config(
     max_hold_months=3,                # carry is quoted "over a 3m term"
     rebalance_freq="BMS",             # consult the screen on the 1st business day of the month
     cost_bp_per_roundtrip=0.0,        # Citi excludes costs explicitly; section 11 prices them
-    start=datetime.date(2019, 1, 1),
+    # --- sample. The start is 2019-07-08, NOT 2019-01-01, and the reason is a
+    # limitation of the zero-convexity control rather than anything visible in
+    # the data. Until that date USD-SOFR-1D is built on 26 nodes whose second
+    # node sits 735 days out, so a single log-linear segment spans the whole
+    # front end. Every quarterly forward inside a pack window is then identical
+    # by interpolation, the forward spread measures 8.9e-12bp, and CA_synthetic
+    # returns EXACTLY 0 -- a perfect control pass -- on a swap leg that is not a
+    # market observation at all. Measured: 520 rows affected (514 of them in
+    # 2019), CA_observed spanning -91.6 to +27.6bp with 42.7% negative.
+    # Node counts: 2019-06-20 -> 26, 2019-07-01 -> 33, 2019-07-08 -> 45.
+    # The control cannot see this, so the cut is imposed from curve structure.
+    start=datetime.date(2019, 7, 8),
     end=datetime.date(2026, 8, 14),
 )
 print(json.dumps({k: str(v) for k, v in CFG.__dict__.items()}, indent=1))

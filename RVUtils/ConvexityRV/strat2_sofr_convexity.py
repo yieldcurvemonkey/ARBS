@@ -792,9 +792,10 @@ def local_cached_dates(cfg: Strat2Config, *, cache_root: Optional[str] = None,
     import sqlite3
 
     if cache_root is None:
-        from Caching.DiskCacheMixin import LayeredCacheMixin  # noqa: PLC0415
         try:
-            cache_root = str(LayeredCacheMixin.default_cache_path("STIRFuturePricer_Cache"))
+            from Caching.DiskCacheMixin import DiskCacheMixin  # noqa: PLC0415
+
+            cache_root = str(DiskCacheMixin.default_cache_path("STIRFuturePricer_Cache"))
         except Exception:                                     # noqa: BLE001
             cache_root = os.path.join(
                 os.environ.get("LOCALAPPDATA", ""), "ARBS", "Cache", "diskcache",
