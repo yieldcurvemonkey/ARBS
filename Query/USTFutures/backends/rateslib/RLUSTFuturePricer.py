@@ -342,7 +342,7 @@ class RLUSTFuturePricer(_USTFutureGenericPricer):
         prices: Optional[Sequence[float]] = None,
         settlement: Optional[DateLike] = None,
         delivery: Optional[DateLike] = None,
-        convention: Optional[str] = "ActAct",
+        convention: Optional[str] = "Act360",
         dirty: bool = False,
         curve_name: Optional[str] = None,
     ) -> Tuple[float, ...]:
@@ -368,7 +368,7 @@ class RLUSTFuturePricer(_USTFutureGenericPricer):
         prices: Optional[Sequence[float]] = None,
         settlement: Optional[DateLike] = None,
         delivery: Optional[DateLike] = None,
-        convention: Optional[str] = "ActAct",
+        convention: Optional[str] = "Act360",
         dirty: bool = False,
         curve_name: Optional[str] = None,
     ) -> Tuple[float, ...]:
@@ -389,7 +389,7 @@ class RLUSTFuturePricer(_USTFutureGenericPricer):
         prices: Optional[Sequence[float]] = None,
         settlement: Optional[DateLike] = None,
         delivery: Optional[DateLike] = None,
-        convention: Optional[str] = None,
+        convention: Optional[str] = "Act360",
         dirty: bool = False,
     ) -> Tuple[float, ...]:
         if not self._basket_pricers:
