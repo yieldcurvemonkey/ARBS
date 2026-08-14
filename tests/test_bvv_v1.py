@@ -167,6 +167,43 @@ def test_query_driven_backtest_matches_the_reference_engine():
     assert len(bt.portfolio.closed_positions_log) == len(ref.trades)
 
 
+def test_query_driven_backtest_marking_convention_is_pinned():
+    """The two engines agree on totals but NOT on the daily path, and the difference is a
+    convention rather than a disagreement. Pin it, because Sharpe is a property of the path.
+
+    QueryDrivenBacktest marks an open position at the PREVIOUS close and settles the trade in full
+    at unwind:
+
+        qdb_equity[t] == reference.equity[t]        on exit days
+        qdb_equity[t] == reference.equity[t - 1]    on every other day
+
+    Measured on the real rebuilt ZN panel, all 160 divergent days are exit days and none is a roll
+    day, so nothing about this convention touches the roll guard. Its only practical effect is on
+    Sharpe: 0.1250 (reference) vs 0.1354 (QDB) on ZN, the gap coming from the round-trip fee being
+    charged at unwind because the framework has no entry-side hook.
+
+    Without this test the pre-existing agreement check -- finals and trade counts, with costs off --
+    would let a genuine daily-marking regression through unnoticed.
+    """
+    from BT.signals.basis_pair import qdb_equity, run_v1_qdb
+
+    cfg = V1Config(entry_z=1.0, max_hold_days=21, cost_32nds=0.0)
+    bt, ref = run_v1_qdb(_panel(), cfg)
+
+    eq = qdb_equity(bt).astype(float)
+    ref_eq = ref.daily["equity"].astype(float)
+    exit_days = set(pd.to_datetime(ref.trades["exit_date"]))
+    lagged = ref_eq.shift(1).fillna(0.0)
+
+    expected = pd.Series(
+        [ref_eq.loc[d] if d in exit_days else lagged.loc[d] for d in eq.index], index=eq.index
+    )
+    assert float((eq - expected).abs().max()) < 1e-6
+
+    # and the totals still agree, which is the claim the results doc makes
+    assert float(eq.iloc[-1]) == pytest.approx(float(ref_eq.iloc[-1]), abs=1e-2)
+
+
 def test_harness_detects_deliberate_lookahead():
     cfg = V1Config(entry_z=1.0, exec_lag_days=1, cost_32nds=0.0)
     honest = run_v1(_panel(), cfg).daily["pnl"].sum()
