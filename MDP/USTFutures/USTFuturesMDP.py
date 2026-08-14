@@ -30,6 +30,7 @@ from definitions.USTFutures import (
 from MDP.FixedRateBonds.FixedRateBondsMDP import FixedRateBondsMDP
 from MDP.USTFutures.treasury_conversion_factors import (
     build_delivery_basket_frame,
+    contract_specs_fingerprint,
     delivery_business_window,
     get_contract_spec,
     resolve_delivery_contract,
@@ -64,9 +65,16 @@ _CME_QUARTERLY_MONTH_CODES = {
 # put the EUR/NOK future under the Ultra Bond's key.
 _USTF_CACHE_VERSION = "USTF_GET_DATA_v3"
 
-# Bump to invalidate the basket-definition cache. v1 -> v2: the TY deliverable window changed, so
-# every cached ZN basket is wrong.
-_USTF_BASKET_CACHE_VERSION = "USTF_BASKET_v2"
+# Bump to invalidate the basket-definition cache. BUMP THIS ON EVERY CHANGE TO _CONTRACT_SPECS.
+#   v1 -> v2: the TY deliverable window changed, so every cached ZN basket was wrong.
+#   v2 -> v3: the TY grade became vintage-aware (no 8-year cap before Sept 2023).
+#
+# v3 exists because v2 was not enough and the failure was invisible: after the vintage change the
+# rebuilt TY panel still showed a median basket of 10 deliverables in EVERY year, when pre-2023
+# years should hold ~16-17. The spec was right -- a direct build_delivery_basket_frame call
+# reproduced CME's published December-2017 basket 17/17 -- but this cache was still serving
+# baskets computed by the previous spec, and nothing in the returned dict says which spec built it.
+_USTF_BASKET_CACHE_VERSION = "USTF_BASKET_v3"
 
 # Stamped into every basis report and REQUIRED on read. Any cached report without it -- or with an
 # older value -- is treated as a cache miss and rebuilt.
@@ -646,6 +654,7 @@ class USTFuturesMDP(MarketDataProvider[InstrumentLike], LayeredCacheMixin):
             "data_ok",
             "data_quality_reason",
             "schema_version",
+            "spec_fingerprint",
         ]
 
     @staticmethod
@@ -654,10 +663,14 @@ class USTFuturesMDP(MarketDataProvider[InstrumentLike], LayeredCacheMixin):
 
         Anything without a schema_version column predates the stamp and is therefore pre-fix.
         """
-        if "schema_version" not in df.columns:
+        if "schema_version" not in df.columns or "spec_fingerprint" not in df.columns:
             return False
         versions = pd.to_numeric(df["schema_version"], errors="coerce").dropna()
-        return bool(len(versions)) and bool((versions == _BASIS_REPORT_SCHEMA_VERSION).all())
+        if not len(versions) or not bool((versions == _BASIS_REPORT_SCHEMA_VERSION).all()):
+            return False
+        # The deliverable-grade table is an input to every number in the report, so a report built
+        # under a different spec is stale even at the same schema version.
+        return bool((df["spec_fingerprint"].astype(str) == contract_specs_fingerprint()).all())
 
     def _basis_report_core_timestamp(
         self,
@@ -953,7 +966,13 @@ class USTFuturesMDP(MarketDataProvider[InstrumentLike], LayeredCacheMixin):
 
         # cache only the *reference* basket definition (cusips/cfs/delivery window/etc),
         # NOT the live cash pricers (they depend on usts_mdp + timestamp).
-        cache_key = f"{_USTF_BASKET_CACHE_VERSION}|{source}|{symbol}|{as_of.isoformat()}"
+        # The spec fingerprint is part of the key, so ANY change to _CONTRACT_SPECS invalidates
+        # every cached basket automatically. Relying on a hand-bumped version is what let a
+        # corrected spec sit behind stale baskets earlier in this very branch.
+        cache_key = (
+            f"{_USTF_BASKET_CACHE_VERSION}|{contract_specs_fingerprint()}|"
+            f"{source}|{symbol}|{as_of.isoformat()}"
+        )
         with self:
             cached = self._threadsafe_basket_cache_get(cache_key)
 
@@ -1151,6 +1170,7 @@ class USTFuturesMDP(MarketDataProvider[InstrumentLike], LayeredCacheMixin):
                     "settlement_date": settlement_date,
                     "delivery_date": delivery_date,
                     "schema_version": _BASIS_REPORT_SCHEMA_VERSION,
+                    "spec_fingerprint": contract_specs_fingerprint(),
                 }
             )
 

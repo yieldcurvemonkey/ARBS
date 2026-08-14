@@ -1,4 +1,5 @@
 import datetime
+import hashlib
 import math
 from calendar import monthrange
 from dataclasses import dataclass
@@ -145,6 +146,39 @@ _CONTRACT_SPECS: tuple[TreasuryFutureConversionSpec, ...] = (
 _SPEC_BY_ALIAS: Dict[str, TreasuryFutureConversionSpec] = {
     alias: spec for spec in _CONTRACT_SPECS for alias in spec.aliases
 }
+
+
+def contract_specs_fingerprint() -> str:
+    """Short stable hash of the whole deliverable-grade table.
+
+    Anything that caches a basket, or a number derived from one, should include this in its key.
+    Hand-maintained cache versions do not survive contact with a real change: during this file's
+    own repair the basket cache version was bumped BEFORE the last spec edit, so a rebuilt panel
+    silently kept the previous baskets -- median 10 deliverables per ZN contract in every year,
+    where pre-2023 years should hold 16-17. The spec was already correct; the cache was not, and
+    nothing in the cached value recorded which spec had produced it.
+
+    Deriving the version from the specs themselves removes the step that can be forgotten.
+    """
+    payload = repr(
+        [
+            (
+                s.root,
+                s.rounding_months,
+                s.min_remaining_months_from_first,
+                s.max_remaining_months_from_first,
+                s.max_remaining_months_from_last,
+                s.max_remaining_months_from_first_exclusive,
+                s.max_remaining_effective_period,
+                s.min_original_term_months,
+                s.max_original_term_months,
+                sorted(s.exact_original_term_months),
+                s.calc_mode,
+            )
+            for s in _CONTRACT_SPECS
+        ]
+    )
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:12]
 
 
 def _normalize_root(root: str) -> str:
@@ -424,6 +458,7 @@ __all__ = [
     "TreasuryFutureConversionSpec",
     "build_delivery_basket_frame",
     "calculate_conversion_factor",
+    "contract_specs_fingerprint",
     "delivery_basket_cusips",
     "delivery_business_window",
     "delivery_calendar_window",

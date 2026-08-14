@@ -4,6 +4,7 @@ import pandas as pd
 import pytest
 import pytz
 
+from MDP.USTFutures.treasury_conversion_factors import contract_specs_fingerprint
 from MDP.USTFutures.USTFuturesMDP import _BASIS_REPORT_SCHEMA_VERSION, USTFuturesMDP
 
 CHI = pytz.timezone("America/Chicago")
@@ -253,6 +254,7 @@ def test_get_basis_report_reuses_core_snapshot(monkeypatch):
                 # read path treats it as a miss, because a report built by older code cannot be
                 # distinguished from a correct one by inspection
                 "schema_version": _BASIS_REPORT_SCHEMA_VERSION,
+                "spec_fingerprint": contract_specs_fingerprint(),
             }
         ]
     )

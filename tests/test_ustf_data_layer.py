@@ -26,6 +26,7 @@ from MDP.USTFutures.basis_report_quality import (
 )
 from MDP.USTFutures.treasury_conversion_factors import (
     build_delivery_basket_frame,
+    contract_specs_fingerprint,
     get_contract_spec,
 )
 from MDP.USTFutures.USTFuturesMDP import _BASIS_REPORT_SCHEMA_VERSION, USTFuturesMDP
@@ -306,8 +307,20 @@ def test_a_cached_report_without_the_schema_stamp_is_a_cache_miss():
 
     current = _report()
     current["schema_version"] = _BASIS_REPORT_SCHEMA_VERSION
+    current["spec_fingerprint"] = contract_specs_fingerprint()
     assert USTFuturesMDP._basis_report_cache_is_current(current)
 
     older = _report()
     older["schema_version"] = _BASIS_REPORT_SCHEMA_VERSION - 1
+    older["spec_fingerprint"] = contract_specs_fingerprint()
     assert not USTFuturesMDP._basis_report_cache_is_current(older)
+
+
+def test_a_cached_report_built_under_a_different_deliverable_spec_is_a_cache_miss():
+    """The version integer is hand-maintained and WILL be forgotten -- it was, in this very branch:
+    the basket cache version was bumped before the last spec edit, so a rebuilt panel silently kept
+    the old baskets. The spec fingerprint removes the step that can be forgotten."""
+    stale = _report()
+    stale["schema_version"] = _BASIS_REPORT_SCHEMA_VERSION
+    stale["spec_fingerprint"] = "deadbeef0000"
+    assert not USTFuturesMDP._basis_report_cache_is_current(stale)
