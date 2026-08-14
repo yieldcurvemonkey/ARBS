@@ -1,4 +1,5 @@
 import datetime
+import hashlib
 import math
 from calendar import monthrange
 from dataclasses import dataclass
@@ -18,12 +19,46 @@ class TreasuryFutureConversionSpec:
     max_remaining_months_from_first: Optional[int] = None
     max_remaining_months_from_last: Optional[int] = None
     max_remaining_months_from_first_exclusive: bool = False
+    # First delivery period (YYYYMM) from which ``max_remaining_months_from_first`` applies.
+    # None means "always". A deliverable grade is not a constant: see the TY entry below.
+    max_remaining_effective_period: Optional[int] = None
     min_original_term_months: Optional[int] = None
     max_original_term_months: Optional[int] = None
     exact_original_term_months: frozenset[int] = frozenset()
     calc_mode: str = "ust_short"
 
 
+# Deliverable-grade specifications, audited 2026-08-14 against the CBOT rulebook and CME's
+# "Understanding Treasury Futures" (Table 2, Treasury Futures Contracts Summary).
+#
+#   root  contract              original term      remaining term (from 1st day of delivery month)
+#   ----  --------------------  -----------------  ----------------------------------------------
+#   TU    2-Year T-Note         <= 5y 3m           >= 1y 9m, <= 2y from the LAST day of the month
+#   Z3N   3-Year T-Note         <= 7y              >= 2y 9m, <= 3y from the LAST day of the month
+#   FV    5-Year T-Note         <= 5y 3m           >= 4y 2m
+#   TY    10-Year T-Note        <= 10y             >= 6y 6m and < 8y
+#   UXY   Ultra 10-Year T-Note  original-issue 10y >= 9y 5m, <= 10y
+#   TWE   20-Year T-Bond        --                 >= 19y 2m, <= 19y 11m
+#   US    Classic T-Bond        --                 >= 15y and < 25y
+#   WN    Ultra T-Bond          --                 >= 25y
+#
+# Only TY was wrong: it used 72 months (6y 0m) and set no original-term limit, so the basket
+# admitted both notes 6 months too short AND old 30-year BONDS with 6.5-8y left to run. The old
+# bonds carry 5.5-7.625% coupons, which makes them cheapest-to-deliver in a sub-6% world, and they
+# were named CTD on 1,103 of 1,886 ZN panel days with a median implied repo of 14.6% against
+# funding of 0.05-5.3%. An implied repo that far above funding is not a market; it is a bond that
+# cannot actually be delivered. See CBOT Rulebook Chapter 19 (U.S. Treasury Note Futures, 6 1/2 to
+# 8-Year), https://www.cmegroup.com/content/dam/cmegroup/rulebook/CBOT/II/19.pdf :
+#
+#   "The contract grade for delivery on futures made under these Rules shall be U.S. Treasury
+#    fixed-principal notes which have fixed semi-annual coupon payments, and which have: (a) an
+#    original term to maturity (i.e., term to maturity at issue) of not more than 10 years; and
+#    (b) a remaining term to maturity of not less than 6 years 6 months and less than 8 years."
+#
+# That rule also restricts the grade to FIXED-PRINCIPAL securities, which excludes TIPS and FRNs.
+# The fiscaldata reference frame carries no security-type column (its only descriptor is `oi`,
+# whose values are just 2/3/5/7/10/20/30-Year), so that leg of the rule is NOT enforced here.
+# It is latent rather than active: see _prepare_reference_data.
 _CONTRACT_SPECS: tuple[TreasuryFutureConversionSpec, ...] = (
     TreasuryFutureConversionSpec(
         root="TU",
@@ -55,9 +90,22 @@ _CONTRACT_SPECS: tuple[TreasuryFutureConversionSpec, ...] = (
         root="TY",
         aliases=("TY", "ZN", "10Y"),
         rounding_months=3,
-        min_remaining_months_from_first=72,
+        # CBOT Ch.19: "not less than 6 years 6 months" -> 78, not 72.
+        min_remaining_months_from_first=78,
+        # "and less than 8 years" -- but ONLY from the September 2023 contract month. Before that
+        # the grade had no maximum, which is why CME's own published December-2017 ZN basket
+        # ("Understanding Treasury Futures", Table 3) runs from 6.50 to 9.67 years and holds 17
+        # securities; under an 8-year cap it would hold 4. Per CME SER-9102 (2022-12-06),
+        # "Amendments to Rule 19101.A ... Commencing with the September 2023 Contract Month",
+        # the prior text read "(b) a remaining term to maturity of not less than 6 years 6 months."
+        # Applying today's cap to all history silently drops ~7 genuinely deliverable notes per
+        # contract for every ZN month through June 2023.
         max_remaining_months_from_first=96,
         max_remaining_months_from_first_exclusive=True,
+        max_remaining_effective_period=202309,
+        # CBOT Ch.19: "an original term to maturity ... of not more than 10 years".
+        # Keeps 7-year notes (84) in and old 30-year bonds (360) / 20-year bonds (240) out.
+        max_original_term_months=120,
         calc_mode="ust_long",
     ),
     TreasuryFutureConversionSpec(
@@ -98,6 +146,39 @@ _CONTRACT_SPECS: tuple[TreasuryFutureConversionSpec, ...] = (
 _SPEC_BY_ALIAS: Dict[str, TreasuryFutureConversionSpec] = {
     alias: spec for spec in _CONTRACT_SPECS for alias in spec.aliases
 }
+
+
+def contract_specs_fingerprint() -> str:
+    """Short stable hash of the whole deliverable-grade table.
+
+    Anything that caches a basket, or a number derived from one, should include this in its key.
+    Hand-maintained cache versions do not survive contact with a real change: during this file's
+    own repair the basket cache version was bumped BEFORE the last spec edit, so a rebuilt panel
+    silently kept the previous baskets -- median 10 deliverables per ZN contract in every year,
+    where pre-2023 years should hold 16-17. The spec was already correct; the cache was not, and
+    nothing in the cached value recorded which spec had produced it.
+
+    Deriving the version from the specs themselves removes the step that can be forgotten.
+    """
+    payload = repr(
+        [
+            (
+                s.root,
+                s.rounding_months,
+                s.min_remaining_months_from_first,
+                s.max_remaining_months_from_first,
+                s.max_remaining_months_from_last,
+                s.max_remaining_months_from_first_exclusive,
+                s.max_remaining_effective_period,
+                s.min_original_term_months,
+                s.max_original_term_months,
+                sorted(s.exact_original_term_months),
+                s.calc_mode,
+            )
+            for s in _CONTRACT_SPECS
+        ]
+    )
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:12]
 
 
 def _normalize_root(root: str) -> str:
@@ -243,11 +324,17 @@ def _eligible_remaining_terms(
     delivery_first: datetime.date,
     delivery_last: datetime.date,
     end_dates: pd.Series,
+    period: Optional[int] = None,
 ) -> pd.Series:
     mask = pd.Series(True, index=end_dates.index)
     if spec.min_remaining_months_from_first is not None:
         mask &= end_dates >= _add_months(delivery_first, spec.min_remaining_months_from_first)
-    if spec.max_remaining_months_from_first is not None:
+    max_applies = spec.max_remaining_months_from_first is not None and (
+        spec.max_remaining_effective_period is None
+        or period is None
+        or int(period) >= int(spec.max_remaining_effective_period)
+    )
+    if max_applies:
         upper = _add_months(delivery_first, spec.max_remaining_months_from_first)
         if spec.max_remaining_months_from_first_exclusive:
             mask &= end_dates < upper
@@ -301,7 +388,13 @@ def build_delivery_basket_frame(
         ]
 
     eligible = _eligible_original_terms(spec, ref_df["original_term_months"])
-    eligible &= _eligible_remaining_terms(spec, delivery_first=delivery_first, delivery_last=delivery_last, end_dates=ref_df["end_date"])
+    eligible &= _eligible_remaining_terms(
+        spec,
+        delivery_first=delivery_first,
+        delivery_last=delivery_last,
+        end_dates=ref_df["end_date"],
+        period=int(period),
+    )
     basket = ref_df.loc[eligible].copy()
     if basket.empty:
         return pd.DataFrame(
@@ -365,6 +458,7 @@ __all__ = [
     "TreasuryFutureConversionSpec",
     "build_delivery_basket_frame",
     "calculate_conversion_factor",
+    "contract_specs_fingerprint",
     "delivery_basket_cusips",
     "delivery_business_window",
     "delivery_calendar_window",

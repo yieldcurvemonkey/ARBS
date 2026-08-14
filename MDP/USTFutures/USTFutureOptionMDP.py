@@ -50,7 +50,7 @@ from MDP.USTFutures.QuikStrikeSDK.core.QuikStrikeFetcher import QuikStrikeFetche
 from MDP.USTFutures.QuikStrikeSDK.core.types.QuikVolQuery import QuikVolQuery
 from MDP.USTFutures.QuikStrikeSDK.core.types.QuikVolValueType import QuikVolValueType
 from MDP.USTFutures.QuikStrikeSDK.core.utils.auth import walk_quikstrike_auth_flow
-from definitions.USTFutures import UST_FUTURE_BARCHART_TO_INTERNAL, normalize_barchart_ust_future_price, to_barchart_root
+from definitions.USTFutures import UST_FUTURE_BARCHART_TO_INTERNAL, to_barchart_root
 from definitions.USTFutureOptions import (
     ALL_OPTION_ROOTS,
     MONTH_CODE_TO_NUM as _MONTH_CODE_TO_NUM,
@@ -134,7 +134,9 @@ _QS_UST_GLOBEX_TO_BARCHART_ROOT: Dict[str, str] = {
     "FV": "ZF",
     "TY": "ZN",
     "US": "ZB",
-    "UL": "UB",
+    # BarChart's Ultra 30-Year Treasury-Bond root is "UD"; its "UB" is the Euro/Krone FX future.
+    # See definitions/USTFutures.UST_FUTURE_BARCHART_ROOTS for the measurements.
+    "UL": "UD",
     "TN": "TN",
 }
 _QS_UST_GLOBEX_TO_STRIKE_CODEC_ROOT: Dict[str, str] = {
@@ -1490,12 +1492,21 @@ def _extract_row_price(row: Dict[str, Any], price_mode: str = "mid_then_fallback
 
 
 def _normalize_barchart_quote_row(symbol: str, row: Dict[str, Any]) -> Dict[str, Any]:
+    """Coerce BarChart quote fields to float.
+
+    These fields carry OPTION PREMIUMS (fractions of a point) as well as underlying prices, so no
+    price-band guard belongs here -- see ``normalize_barchart_ust_future_price``, which is for the
+    futures leg only. BarChart quotes both in plain decimal points, so there is nothing to decode.
+    A previous version ran every one of these fields through a "compact 32nds" decoder that mapped
+    a 1.25 premium to 101.78; it existed only to explain EUR/NOK values arriving under a mis-mapped
+    Ultra Bond root, and both the decoder and the mapping are now gone.
+    """
     out = dict(row or {})
     for key in _BARCHART_PRICE_FIELDS:
         value = _to_float(out.get(key))
         if value is None:
             continue
-        out[key] = normalize_barchart_ust_future_price(symbol, value)
+        out[key] = float(value)
     return out
 
 
@@ -1506,9 +1517,7 @@ def _normalize_barchart_quote_frame(symbol: str, df: pd.DataFrame) -> pd.DataFra
     for key in _BARCHART_PRICE_FIELDS:
         if key not in out.columns:
             continue
-        out[key] = pd.to_numeric(out[key], errors="coerce").map(
-            lambda value: normalize_barchart_ust_future_price(symbol, float(value)) if pd.notna(value) else value
-        )
+        out[key] = pd.to_numeric(out[key], errors="coerce")
     return out
 
 
