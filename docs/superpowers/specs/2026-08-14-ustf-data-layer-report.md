@@ -20,7 +20,25 @@ inferred or unverified it says so.
 | 4 | Repo rate **ignored the reference date** | **Fixed** | every historical report used *today's* SOFR |
 | 5 | `get_basis_report` **raised for every root** on rateslib 2.7.1 | **Fixed** | bare `"ActAct"` rejected by 2.7.1 |
 | 6 | Report builder zipped **one basket's labels against another's risk** | **Fixed** | latent; fires on the first `force_refresh` after a spec change |
+| 7 | The ZN grade is **vintage-dependent**; the 8-year cap starts Sept 2023 | **Fixed** | CME's own Dec-2017 basket runs to 9.67y |
+| 8 | `get_ctd` was a **third, ungated** public exit | **Fixed** | calls the builder directly |
 | — | Conversion-factor formula | **Correct as written** | 182-row tie-out; 165 Burghardt values matched |
+
+Findings 7 and 8 came from a parallel adversarial audit run against this branch after the first four
+commits. That audit also **independently validated** the ZN fix against a source I had not used —
+CME's own published Treasury Conversion Factor basket files — reproducing `ZNU26` 11/11 and `ZNM24`
+12/12 CUSIP-for-CUSIP, and tying out 128/128 overlapping conversion factors to 4dp across seven
+roots. It is worth recording that the audit's most useful output was not agreement: it caught a
+regression I had introduced (below) and two defects I had left standing.
+
+### One regression I introduced, caught and fixed
+
+Pointing the Ultra Bond at BarChart's `UD` also changed the **Schwab/thinkorswim** live-quote symbol
+from `/UB` to `/UD`, because `_to_tos_symbol` resolved through `to_barchart_root`. Broker feeds speak
+**CME Globex**, where the Ultra Bond genuinely *is* `UB`. The two namespaces agree for every other
+root — which is precisely why conflating them went unnoticed and produced this entire class of bug
+in the first place. They are now separate maps (`UST_FUTURE_GLOBEX_ROOTS` vs
+`UST_FUTURE_BARCHART_ROOTS`) rather than one map doing two jobs.
 
 ---
 
@@ -122,6 +140,27 @@ the intervening months reopening them), so the set with ≥25 years remaining is
 2054-02-15 — a 4.5-year span at ~4 per year. **The number was right all along; only the price
 attached to it was wrong.** Worth recording because it is the one place where the handover's
 instinct pointed at a healthy part of the system.
+
+### Defect 7 — the ZN grade is not a constant, and applying today's rule to all history is its own bug
+
+Fixing the minimum exposed a second, opposite error that had been masked. Per CME **SER-9102**
+(2022-12-06), the "less than 8 years" cap **commences with the September 2023 contract month**.
+Before that the grade was original term ≤ 10y and remaining ≥ 6y6m with **no maximum** — which is why
+the contract's rulebook chapter was once titled "(6½ to 10-Year)".
+
+The decisive corroboration is CME's own worked example rather than a rule filing. *Understanding
+Treasury Futures*, **Table 3 — December 2017 Ten-Year T-Note Futures Basis** — lists **17 securities
+running from 6.50 to 9.67 delivery years**. Under an 8-year cap that basket would hold 4.
+
+The pre-existing code applied `max = 96` unconditionally, dropping ~7 genuinely deliverable notes per
+contract for every ZN month through June 2023. The spec is now vintage-aware
+(`max_remaining_effective_period = 202309`), and the result is checked against that published basket:
+
+> **17/17 CUSIPs reproduced exactly, and 17/17 of CME's published conversion factors match to 4
+> decimal places.** `ZNM24` (post-cap) is unchanged at 10 CUSIPs.
+
+That is an independent ground truth — a basket CME published, reproduced from the rulebook text —
+and it validates the minimum, the original-term cap, the vintage rule and the CF formula in one shot.
 
 ### The rest of the table was audited too
 
@@ -268,9 +307,27 @@ built and the cached path, and before any write.
 - Implied repo is checked only ≥21 days from delivery, because it annualises a shrinking horizon and
   is legitimately wild near expiry.
 
+- **An empty report is absence, not corruption.** A holiday, an unlisted contract or a symbol with
+  no basket produces no rows; there is nothing there to contradict itself. Failing those would make
+  every such day look like a feed break. (The gate got this wrong initially and the audit caught it.)
+- **`get_ctd` is gated too.** It calls the builder directly and was the one remaining way to read a
+  corrupt basis report without being told.
+- **A failing report is never persisted**, whatever `on_bad_data` says. A backfill saying "carry on
+  past a bad day" is not saying "cache it for everyone else".
+
 Calibrated so ZB passes the Feb–Jun 2020 dislocation cleanly. A gate that cannot tell a stressed
 market from a broken feed makes the most interesting period in the sample unusable — which is what
 happened last time.
+
+### An honest caveat on the thresholds
+
+They were calibrated against panels built with the **old** repo rate, because that was the data
+available at the time. With the repo fix in, healthy net basis is much tighter than the calibration
+assumed (|min net basis| ≤ 11/32 across every root and era spot-checked, against a 96/32 limit). The
+thresholds are therefore **looser than they need to be** — they will catch gross corruption of the
+kind found here and will not catch something subtler. That is the safe direction to err for a gate
+that raises by default, but it is a known slack, not a tuned value. Re-deriving them from the rebuilt
+panels is the obvious next step and is deliberately left undone rather than done hastily.
 
 ---
 
