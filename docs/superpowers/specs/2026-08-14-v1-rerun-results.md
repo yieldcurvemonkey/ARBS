@@ -45,7 +45,7 @@ point of the exercise, and it could not be made before.
 Two numbers finish it independently of any deflation argument:
 
 - **One year is the whole P&L.** 2020 contributes **+238.70/32** of a **+209.03/32** total. Every
-  other year sums to **−29.67**. Six of nine years are negative.
+  other year sums to **−29.67**, and five of the nine are negative.
 - **Three trades are 110% of the P&L.** Top-3 = 230.78/32; the other 49 trades sum to **−21.75**.
 
 | year | 2018 | 2019 | **2020** | 2021 | 2022 | 2023 | 2024 | 2025 | 2026 |
@@ -127,6 +127,14 @@ where the CTD was a bond that could not be delivered.
 | ZB | 108 | 0.242 | 0.300 | −0.165 | 9% |
 | **ZN** | 108 | 0.314 | 0.505 | **+0.157** | **72%** |
 
+One number in that table deserves naming rather than leaving for a reader to find: **UB's best
+(0.320) exceeds UB's own per-root E[max | null] (0.246)**, where ZN's does not. It changes nothing,
+for three reasons. Choosing UB *because it won* is precisely the selection the 324-trial null
+(0.503) exists to price, so the per-root figure is computed on a subgrid picked after the fact. The
+cell fails top-3 share, the permutation test and the ablation independently of any null. And all of
+its P&L is in one year. A per-root null is the right comparison only for a root chosen in advance —
+which UB was not.
+
 **ZN's whole surface lifted.** Prior ZN: grid median −0.144, 25% of cells positive. Now: median
 **+0.157**, **72%** positive, inter-quartile range [−0.055, +0.236]. A fluke lifts one cell; a
 *level* shift across 108 configurations is what a weak-but-real effect looks like.
@@ -166,14 +174,17 @@ UB/w126/e2.5/x0.5/h10/sv90
 
 The prior claim of "exact agreement" turned out to be weaker than it sounds — the test behind it
 compares the **final total and the trade count, with costs switched off**. On real panels the totals
-do agree to the cent and trade counts agree exactly (ZN 174/174, ZB 133/133, UB 156/156), but the
+do agree to the cent and trade counts agree exactly (ZN 175/175, ZB 134/134, UB 167/167), but the
 daily **paths** differ, and Sharpe is a property of the path:
 
-| cell | ref Sharpe | QDB Sharpe |
-|---|---|---|
-| ZN | 0.1250 | 0.1354 |
-| ZB | −0.2203 | −0.2546 |
-| UB | −0.0961 | −0.1098 |
+(on the committed panels; an earlier version of this table was measured on pre-resume panels and
+its numbers will not reproduce)
+
+| cell | ref final | QDB final | ref Sharpe | QDB Sharpe | trades |
+|---|---|---|---|---|---|
+| `ZN/w252/e1.5/x0.5/h10/sv90` | 1,088,198.01 | 1,088,198.01 | 0.1814 | 0.1968 | 175/175 |
+| `ZB/w126/e1.5/x0.5/h21/sv70` | −3,406,378.88 | −3,406,378.88 | −0.2120 | −0.2462 | 134/134 |
+| `UB/w126/e1.5/x0.5/h21/sv70` | −1,794,432.15 | −1,794,432.15 | −0.0775 | −0.0887 | 167/167 |
 
 That is a convention, not a disagreement, and it is now characterised and pinned by test:
 
