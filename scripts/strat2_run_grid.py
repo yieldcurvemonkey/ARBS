@@ -90,8 +90,7 @@ def main() -> None:
     from RVUtils.ConvexityRV.strat2_grid import hypothesis_slope
 
     hs = hypothesis_slope(frames)
-    print("
-*** THE HYPOTHESIS TEST ***")
+    print("\n*** THE HYPOTHESIS TEST ***")
     print(f"  argmax-T1 regressed on fly forward start over {hs['n']} (shape, start) cells:")
     print(f"    slope = {hs['slope']:+.3f} years of pack T1 per year of forward start "
           f"(hypothesis predicts ~+1.0)")
