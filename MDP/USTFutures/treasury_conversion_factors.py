@@ -24,6 +24,37 @@ class TreasuryFutureConversionSpec:
     calc_mode: str = "ust_short"
 
 
+# Deliverable-grade specifications, audited 2026-08-14 against the CBOT rulebook and CME's
+# "Understanding Treasury Futures" (Table 2, Treasury Futures Contracts Summary).
+#
+#   root  contract              original term      remaining term (from 1st day of delivery month)
+#   ----  --------------------  -----------------  ----------------------------------------------
+#   TU    2-Year T-Note         <= 5y 3m           >= 1y 9m, <= 2y from the LAST day of the month
+#   Z3N   3-Year T-Note         <= 7y              >= 2y 9m, <= 3y from the LAST day of the month
+#   FV    5-Year T-Note         <= 5y 3m           >= 4y 2m
+#   TY    10-Year T-Note        <= 10y             >= 6y 6m and < 8y
+#   UXY   Ultra 10-Year T-Note  original-issue 10y >= 9y 5m, <= 10y
+#   TWE   20-Year T-Bond        --                 >= 19y 2m, <= 19y 11m
+#   US    Classic T-Bond        --                 >= 15y and < 25y
+#   WN    Ultra T-Bond          --                 >= 25y
+#
+# Only TY was wrong: it used 72 months (6y 0m) and set no original-term limit, so the basket
+# admitted both notes 6 months too short AND old 30-year BONDS with 6.5-8y left to run. The old
+# bonds carry 5.5-7.625% coupons, which makes them cheapest-to-deliver in a sub-6% world, and they
+# were named CTD on 1,103 of 1,886 ZN panel days with a median implied repo of 14.6% against
+# funding of 0.05-5.3%. An implied repo that far above funding is not a market; it is a bond that
+# cannot actually be delivered. See CBOT Rulebook Chapter 19 (U.S. Treasury Note Futures, 6 1/2 to
+# 8-Year), https://www.cmegroup.com/content/dam/cmegroup/rulebook/CBOT/II/19.pdf :
+#
+#   "The contract grade for delivery on futures made under these Rules shall be U.S. Treasury
+#    fixed-principal notes which have fixed semi-annual coupon payments, and which have: (a) an
+#    original term to maturity (i.e., term to maturity at issue) of not more than 10 years; and
+#    (b) a remaining term to maturity of not less than 6 years 6 months and less than 8 years."
+#
+# That rule also restricts the grade to FIXED-PRINCIPAL securities, which excludes TIPS and FRNs.
+# The fiscaldata reference frame carries no security-type column (its only descriptor is `oi`,
+# whose values are just 2/3/5/7/10/20/30-Year), so that leg of the rule is NOT enforced here.
+# It is latent rather than active: see _prepare_reference_data.
 _CONTRACT_SPECS: tuple[TreasuryFutureConversionSpec, ...] = (
     TreasuryFutureConversionSpec(
         root="TU",
@@ -55,9 +86,13 @@ _CONTRACT_SPECS: tuple[TreasuryFutureConversionSpec, ...] = (
         root="TY",
         aliases=("TY", "ZN", "10Y"),
         rounding_months=3,
-        min_remaining_months_from_first=72,
-        max_remaining_months_from_first=96,
+        # CBOT Ch.19: "not less than 6 years 6 months" -> 78, not 72.
+        min_remaining_months_from_first=78,
+        max_remaining_months_from_first=96,  # "and less than 8 years"
         max_remaining_months_from_first_exclusive=True,
+        # CBOT Ch.19: "an original term to maturity ... of not more than 10 years".
+        # Keeps 7-year notes (84) in and old 30-year bonds (360) / 20-year bonds (240) out.
+        max_original_term_months=120,
         calc_mode="ust_long",
     ),
     TreasuryFutureConversionSpec(
