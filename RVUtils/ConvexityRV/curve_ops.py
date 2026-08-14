@@ -19,12 +19,37 @@ Two curve transforms are used, both native to rateslib:
     Parallel shift of the zero curve. Gives the terminal-rate axis of the
     payoff profile.
 
-``translate(date)``
-    The curve as seen from a future date, holding discount factors fixed --
-    i.e. the forwards are *realised*. This is what ages a position to the
-    horizon and is what makes carry show up in the profile: a flattener struck
-    at market today has NPV 0 today, but its aged NPV at horizon under a zero
-    shift is exactly its carry-and-roll.
+**Ageing is NOT done with ``Curve.translate``.** That was the obvious approach
+and it is wrong here; it was measured rather than assumed, and the measurement
+killed it. Repricing an already-struck swap on ``handle.translate(horizon)``
+gives, as of 2022-09-13 at a 1y horizon and $100k DV01:
+
+======================  =====================================================
+package                 aged NPV at zero shift
+======================  =====================================================
+20Yx5Y/25Yx5Y            -0.000 bp   (carry-and-roll says +0.006 -- ~nothing)
+10Yx10Y/20Yx10Y           0.000 bp   (carry-and-roll says -2.840)
+30Y/50Y                -147.739 bp   (carry-and-roll says +0.363)
+30Y outright           -531.94  bp   (a $100k DV01 payer cannot lose 532bp to
+                                      one year of ageing with rates unchanged)
+======================  =====================================================
+
+``translate`` renormalises discount factors onto a new initial node. For a
+DV01-neutral forward package that renormalisation cancels and no carry is
+captured at all; for a swap whose effective date now sits *behind* the curve's
+initial node it needs a year of intervening fixings that are not there, and the
+number becomes meaningless. Silently, in the direction that would have flattered
+or wrecked whichever structure happened to be spot.
+
+So carry enters the profile the way the JPM note actually describes it -- as the
+level of an otherwise-spot payoff profile::
+
+    "the payoff profile of an aged flattener at fixed coupon -- primarily to
+     incorporate carry costs"
+
+i.e. pass ``carry_ccy`` to :func:`payoff_profile`, sourced from
+``IRSwapValue.CARRY_AND_ROLL_BPS_RUNNING`` (an independent, validated code path)
+times the package DV01. Two verified paths, no broken third one.
 """
 
 from __future__ import annotations
@@ -41,16 +66,26 @@ __all__ = [
     "npv_on_handle",
     "package_npv",
     "payoff_profile",
+    "matched_forward_swap_rate",
+    "HorizonAgeingUnsupported",
 ]
 
 
-def _as_date(d: Any) -> datetime.date:
+def _as_dt(d: Any) -> datetime.datetime:
+    """Normalise to a midnight ``datetime.datetime``.
+
+    rateslib curve nodes are keyed by ``datetime.datetime``, and
+    ``Curve.translate`` compares ``start < curve.nodes.initial`` directly, so a
+    ``datetime.date`` raises ``TypeError: '<' not supported between instances of
+    'datetime.date' and 'datetime.datetime'``. Everything upstream here (pandas
+    Timestamps, ``datetime.date`` horizons) funnels through this.
+    """
     if isinstance(d, datetime.datetime):
-        return d.date()
+        return datetime.datetime(d.year, d.month, d.day)
     if isinstance(d, datetime.date):
-        return d
+        return datetime.datetime(d.year, d.month, d.day)
     # pandas Timestamp and friends
-    return d.date()
+    return datetime.datetime(d.year, d.month, d.day)
 
 
 def shifted_handle(pricer: Any, shift_bp: float) -> Any:
@@ -61,20 +96,34 @@ def shifted_handle(pricer: Any, shift_bp: float) -> Any:
     return handle.shift(float(shift_bp))
 
 
+class HorizonAgeingUnsupported(NotImplementedError):
+    """Raised on the ``translate``-based ageing path. See the module docstring."""
+
+
 def horizon_handle(
     pricer: Any,
     horizon_date: Optional[datetime.date] = None,
     shift_bp: float = 0.0,
 ) -> Any:
-    """Curve aged to *horizon_date* (forwards realised), then shifted.
+    """Shift the curve. ``horizon_date`` is refused -- see the module docstring.
 
-    Order matters: translate first, then shift. Translating a shifted curve and
-    shifting a translated curve differ, and the economically meaningful one is
-    "roll to the horizon along today's forwards, then apply the terminal shock".
+    Kept as a named failure rather than deleted: ``translate``-based ageing is
+    the intuitive thing to reach for, it runs without complaint, and it returns
+    numbers that are merely wrong (0.000 bp of carry on a forward flattener,
+    -531.94 bp on a 1y-aged 30Y payer). A loud refusal is the only safe
+    behaviour. Use ``payoff_profile(..., carry_ccy=...)`` instead.
     """
-    handle = pricer._rl_curve_handle
     if horizon_date is not None:
-        handle = handle.translate(_as_date(horizon_date))
+        raise HorizonAgeingUnsupported(
+            "Curve.translate() does not age a struck swap correctly here: it "
+            "renormalises discount factors, which cancels for a DV01-neutral "
+            "forward package (0.000bp of carry) and is meaningless once the "
+            "swap's effective date precedes the translated curve's initial node "
+            "(-531.94bp on a 1y-aged 30Y payer). Pass the horizon carry to "
+            "payoff_profile(carry_ccy=...) instead, sourced from "
+            "IRSwapValue.CARRY_AND_ROLL_BPS_RUNNING x package DV01."
+        )
+    handle = pricer._rl_curve_handle
     if shift_bp:
         handle = handle.shift(float(shift_bp))
     return handle
@@ -112,6 +161,54 @@ def package_npv(
     return float(sum(npv_on_handle(pricer, s, handle) for s in package))
 
 
+def matched_forward_swap_rate(
+    pricer: Any,
+    start: datetime.date,
+    end: datetime.date,
+    *,
+    frequency: str = "Q",
+    leg2_frequency: Optional[str] = "Q",
+) -> float:
+    """Par rate (in %) of an explicit-dated forward swap, at a chosen frequency.
+
+    Exists because the frequency is not a detail here. Citi's matched-maturity
+    swap is specified verbatim as *"both fixed and floating legs of this swap
+    have a quarterly payment frequency"*, while the ``usd_irs`` rateslib spec
+    this curve carries quotes **annual** fixed (``spec frequency: 'a'``). At a
+    ~3.2% rate the compounding difference is ~3q^2/8 ~ 3.8bp -- the same order
+    as the convexity adjustment being measured, so getting it wrong does not
+    perturb the answer, it *is* the answer.
+
+    Measured against Citi's published 13-pack SOFR screen (close 6/9/2023),
+    computing the adjustment as ``pack_rate - this_rate``:
+
+    ==================  ===================  ===================
+    matched swap        mean error vs Citi   median error
+    ==================  ===================  ===================
+    spec default (ann)        -3.89 bp             -4.31 bp
+    quarterly/quarterly       -0.11 bp             -0.58 bp
+    ==================  ===================  ===================
+
+    Pass ``frequency=None`` to fall back to the spec's own default.
+    """
+    handle = pricer._rl_curve_handle
+    curve_def = pricer._curve_definition()
+    kwargs: dict = {}
+    if frequency is not None:
+        kwargs["frequency"] = frequency
+    if leg2_frequency is not None:
+        kwargs["leg2_frequency"] = leg2_frequency
+    swap = rl.IRS(
+        effective=_as_dt(start),
+        termination=_as_dt(end),
+        spec=curve_def["ReferenceRate"],
+        curves=handle,
+        notional=1e6,
+        **kwargs,
+    )
+    return float(swap.rate(curves=handle).real)
+
+
 def payoff_profile(
     pricer: Any,
     package: Sequence[Any],
@@ -119,20 +216,29 @@ def payoff_profile(
     horizon_date: Optional[datetime.date] = None,
     *,
     net_of_spot: bool = True,
+    carry_ccy: float = 0.0,
 ) -> np.ndarray:
     """P&L of *package* across terminal parallel shifts, in currency.
 
     ``net_of_spot=True`` subtracts today's NPV so the profile is a P&L relative
-    to inception. For a package struck at market today that subtraction is ~0,
-    but for an aged book it is the difference that matters.
+    to inception -- ~0 for a package struck at market today.
 
-    The returned array INCLUDES carry: at ``shift=0`` the value is the aged
-    package's NPV, which for a negative-carry flattener is negative. That is
-    the whole point -- the option-like payoff has to pay for its premium.
+    ``carry_ccy`` is the horizon carry-and-roll of the package **in currency**,
+    added as a level to every point. This is how the note's "aged flattener at
+    fixed coupon" enters: the convexity is the *shape* of the profile and the
+    carry is its *level*, and a long-gamma position only pays if the shape beats
+    the level. For a negative-carry flattener pass a negative number; the
+    resulting profile then sits below zero at small shifts and lifts in both
+    tails, which is exactly the option-like payoff Exhibit 3 draws.
+
+    Source it from ``IRSwapValue.CARRY_AND_ROLL_BPS_RUNNING`` (with ``horizon``
+    in ``structure_kwargs``) times the package DV01 -- an independent, validated
+    code path. Do NOT try to get it from ``horizon_date``; see the module
+    docstring for why that path is refused.
     """
     shifts = np.asarray(list(shifts), dtype=float)
     base = package_npv(pricer, package, horizon_date=None, shift_bp=0.0) if net_of_spot else 0.0
     out = np.empty(shifts.shape[0], dtype=float)
     for i, s in enumerate(shifts):
         out[i] = package_npv(pricer, package, horizon_date=horizon_date, shift_bp=float(s)) - base
-    return out
+    return out + float(carry_ccy)
