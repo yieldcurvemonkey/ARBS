@@ -261,6 +261,31 @@ def priceable_days(
 # ── the worker ────────────────────────────────────────────────────────────
 
 
+def _release_day_caches() -> None:
+    """Drop the per-process caches that are keyed by DATE.
+
+    Measured the hard way: the first run of this script held every day's cube in
+    ``provider._CUBE_CACHE`` for the life of the worker, so ten processes walking
+    forward through history grew without bound. Peak pagefile usage hit 8.7 GB,
+    Windows grew ``C:\\pagefile.sys`` on the system disk, free space fell from
+    8 GB to 0.2 GB, and the disk guard aborted the run. The cache writes were
+    never the problem - they were 28 MB.
+
+    A day's cube costs 0.06 s to rebuild from the store, so holding it across days
+    buys nothing here: a worker never revisits a date.
+    """
+    for module, fn in (
+        ("MDP.IRSwaptions.CITIVELO.provider", "clear_citivelo_cube_cache"),
+        ("MDP.IRSwaptions.CITIVELO.cube_store", "clear_stored_cube_cache"),
+    ):
+        try:
+            mod = sys.modules.get(module)
+            if mod is not None:
+                getattr(mod, fn)()
+        except Exception:  # noqa: BLE001 - a cache that will not clear is not fatal
+            pass
+
+
 def _warm_one_day(payload: dict) -> dict:
     """Price every query for one date. Runs in its own process."""
     day: dt.date = payload["day"]
@@ -295,6 +320,7 @@ def _warm_one_day(payload: dict) -> dict:
         result["metrics_calls"] = memo["calls"]
         result["metrics_misses"] = memo["misses"]
         uninstall_leg_metrics_memo(memo)
+        _release_day_caches()
     except Exception as exc:  # noqa: BLE001 - one bad day must not kill the run
         result["error"] = f"{type(exc).__name__}: {exc}"
         result["traceback"] = traceback.format_exc()[-1200:]
@@ -434,7 +460,19 @@ def cmd_warm(args: argparse.Namespace) -> int:
     excel_touches = 0
     aborted = False
 
-    with ProcessPoolExecutor(max_workers=args.processes) as pool:
+    # max_tasks_per_child recycles a worker periodically. Belt to _release_day_caches'
+    # braces: anything else in the import graph that quietly accumulates per date
+    # (rateslib fixings frames, QuantLib globals) is bounded by process lifetime
+    # rather than by run length.
+    pool_kwargs: dict[str, Any] = {"max_workers": args.processes}
+    if args.max_tasks_per_child:
+        try:
+            ProcessPoolExecutor(max_workers=1, max_tasks_per_child=1).shutdown()
+            pool_kwargs["max_tasks_per_child"] = args.max_tasks_per_child
+        except TypeError:  # pragma: no cover - Python < 3.11
+            print("  (max_tasks_per_child unsupported on this Python; relying on cache release)")
+
+    with ProcessPoolExecutor(**pool_kwargs) as pool:
         futures = {
             pool.submit(_warm_one_day, {**payload_base, "day": day}): day
             for day in days
@@ -480,7 +518,16 @@ def cmd_warm(args: argparse.Namespace) -> int:
     print(f"\n{status}: {done}/{len(days)} days, {rows:,} rows, {el / 3600:.2f} h, "
           f"{_free_gb(_cache_volume()):.1f} GB free")
     if excel_touches:
-        print(f"WARNING: {excel_touches} Excel COM attempt(s) - a requested day was not in a store.")
+        # Expect roughly one per worker PROCESS, not per day: the published-fixings
+        # lookup asks Excel once per process, fails, warns, and re-serves the cached
+        # series (CITIVELO_EXCEL/fixings.py degrades on CitiVelocityError). That is
+        # the degrade working. A count that scales with DAYS means something else -
+        # a requested date the cube store could not serve - and the day list is
+        # built to make that impossible, so it would be a real bug.
+        expected = args.processes * (1 + (len(days) // max(args.max_tasks_per_child or len(days), 1)))
+        verdict = "consistent with the per-process fixings degrade" if excel_touches <= expected else \
+                  "MORE than the fixings degrade explains - investigate"
+        print(f"Excel COM attempts: {excel_touches} (<= ~{expected} expected) - {verdict}.")
     if failures:
         print(f"{len(failures)} day(s) failed:")
         for line in failures[:20]:
@@ -521,6 +568,10 @@ def build_parser() -> argparse.ArgumentParser:
     common(w)
     w.add_argument("--dry-run", action="store_true", help="print the projection and stop")
     w.add_argument("--log-every", type=int, default=10)
+    w.add_argument("--max-tasks-per-child", type=int, default=40,
+                   help="Recycle each worker after N days, to bound memory. 0 disables. "
+                        "Worker memory, not cache size, is what fills the disk here - it "
+                        "grows the pagefile.")
     w.add_argument("--min-free-gb", type=float, default=4.0,
                    help="Abort (keeping what is written) if the cache volume drops below this. "
                         "The cache lives on the system disk.")
