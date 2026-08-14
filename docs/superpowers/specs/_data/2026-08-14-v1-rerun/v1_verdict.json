@@ -1,0 +1,50 @@
+{
+  "sample": {
+    "ZB": [
+      "2018-06-01",
+      "2026-08-13",
+      1984
+    ],
+    "ZN": [
+      "2018-06-01",
+      "2026-08-13",
+      2043
+    ],
+    "UB": [
+      "2018-06-01",
+      "2026-08-13",
+      2026
+    ]
+  },
+  "best_key": "UB/w126/e2.5/x0.5/h10/sv90/wc1/cm1",
+  "sharpe": 0.3199621228712046,
+  "t_nw": 1.3309441557248736,
+  "n_trades": 52,
+  "hit_rate": 0.5192307692307693,
+  "top3_share": 1.1040454385097702,
+  "mean_32nds_per_trade": 4.019804194702838,
+  "n_trials": 324,
+  "expected_max_sharpe_null": 0.5028443067222614,
+  "dsr": 0.297309743670794,
+  "sharpe_ci95": [
+    -0.2235130121656066,
+    0.6508539843481177
+  ],
+  "permutation_pct": 0.9095,
+  "breakeven_cost_mult": 3.0,
+  "grid_median_sharpe": -0.08950841181561439,
+  "grid_pct_positive": 0.33024691358024694,
+  "ablation_full_vs_raw_sharpe": [
+    0.3199621228712046,
+    0.28518549226708606
+  ],
+  "model_adds_value": false,
+  "gate_applied": true,
+  "alive_criteria": {
+    "min_dsr": 0.95,
+    "max_top3": 0.6,
+    "cost_mult": 2.0,
+    "perm_pct": 0.95
+  },
+  "alive": false
+}

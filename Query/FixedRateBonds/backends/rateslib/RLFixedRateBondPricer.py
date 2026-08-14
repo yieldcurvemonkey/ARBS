@@ -189,10 +189,17 @@ class RLFixedRateBondPricer(_FixedRateBondGenericPricer):
         )
 
     def time_to_maturity(self):
+        conv = rl.defaults.spec[RATESLIB_FRB_DEFINITIONS[self._rl_frb_id]["spec"]]["convention"]
+        # rateslib 2.7 refuses the bare "ActAct" it still returns from its own spec table:
+        # "`ActAct` must be directly specified as `ActActICMA` ... or `ActActISDA`". This is a
+        # schedule-free year fraction, and ActAct(ICMA) needs a coupon schedule to be meaningful,
+        # so ISDA is the correct disambiguation here -- ICMA would be the right answer for accrual.
+        if str(conv).upper() == "ACTACT":
+            conv = "ActActISDA"
         return rl.dcf(
             self._to_rl_dt(self.reference_date()),
             self._to_rl_dt(self.maturity_date()),
-            rl.defaults.spec[RATESLIB_FRB_DEFINITIONS[self._rl_frb_id]["spec"]]["convention"],
+            conv,
         )
 
     def zspread(self):
