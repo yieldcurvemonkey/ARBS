@@ -33,19 +33,40 @@ Citi's swap leg is **CME-cleared**. ``USD-SOFR-1D`` in this repo is not. On
 2023-06-09, reproducing Citi's Figure 58 with Barchart SR3 settles against
 ``USD-SOFR-1D`` gives a **correlation of levels of 0.968** against Citi's 13
 published rows -- the shape is reproduced -- but a **level offset of about
--3.9bp** (mean -3.89, median -4.31, range -0.86 .. -5.66). That offset is
-expected and explainable: the CME-LCH SOFR basis ran several basis points in
-2023, and Citi's own ED note says so explicitly (*"convexity adjustments will
-appear wider if clearing the swap leg on LCH"*).
+-3.9bp** (mean -3.89, median -4.31, range -0.86 .. -5.66) *when the matched swap
+is built at the curve spec's default frequency*.
 
-This module does **not** silently fudge the level to match Citi. It exposes
-:attr:`Strat2Config.ca_basis_bp`, default ``0.0``, which is *added* to the raw
-computed CA, and drives the strategy off the **basis-robust** metrics -- CA
-z-scores, the dislocation to the fitted model and its z-scores, and the 3m roll.
-Four of Citi's six ranking families are already differences or z-scores and are
-therefore invariant to a constant basis; the two that are not (the CA level and
-implied/realized) are reported but carry the offset, and the config knob makes
-that explicit rather than hidden.
+**That offset was payment frequency, not a clearing basis.** Citi specifies the
+matched swap verbatim -- *"both fixed and floating legs of this swap have a
+quarterly payment frequency"* -- while the ``usd_irs`` spec carried by
+``USD-SOFR-1D`` quotes **annual** fixed (``rl.defaults.spec['usd_irs']`` has
+``frequency: 'a'``). At a ~3.2% rate the compounding difference is about
+``3q^2/8`` ~ 3.8bp, the same order as the adjustment being measured, and the
+measured offset scales with the rate level exactly as compounding predicts.
+Rebuilding the swap quarterly/quarterly collapses it:
+
+==============================  ==================  ==============
+matched swap                    mean error vs Citi  median error
+==============================  ==================  ==============
+spec default (annual fixed)          -3.89 bp          -4.31 bp
+**quarterly / quarterly**            **-0.11 bp**      **-0.58 bp**
+==============================  ==================  ==============
+
+So the swap leg now goes through
+:func:`RVUtils.ConvexityRV.curve_ops.matched_forward_swap_rate`, which defaults
+to Q/Q; ``tests/test_convexity_rv_matched_swap.py`` keeps the annual variant as
+a negative control so a regression cannot quietly put the 4bp back.
+
+(An earlier reading of this offset attributed it to CME-vs-LCH clearing. The
+measurement above rules that out -- SOFR CCP basis is sub-basis-point, and a
+clearing basis would not scale with the rate level.)
+
+:attr:`Strat2Config.ca_basis_bp` survives, default ``0.0``, for any *genuine*
+residual a user wants to apply; it is added to the raw computed CA. Nothing is
+silently fudged to match Citi. The strategy is in any case driven off the
+**basis-robust** metrics -- CA z-scores, the dislocation to the fitted model and
+its z-scores, and the 3m roll -- four of Citi's six ranking families being
+differences or z-scores and therefore invariant to a constant level shift.
 
 
 THE HO-LEE MODEL AND THE ONE GENUINELY UNSPECIFIED DEGREE OF FREEDOM
@@ -494,13 +515,32 @@ def pack_windows(as_of: datetime.date, cfg: Strat2Config) -> List[PackSpec]:
 # ===========================================================================
 def _swap_par_rate(pricer: Any, curve: str, *, tenor: Optional[str] = None,
                    effective_date: Optional[datetime.date] = None,
-                   maturity_date: Optional[datetime.date] = None) -> float:
+                   maturity_date: Optional[datetime.date] = None,
+                   frequency: Optional[str] = "Q",
+                   leg2_frequency: Optional[str] = "Q") -> float:
     """Par rate in PERCENT of one swap, priced off an already-built curve.
 
     Either ``tenor`` (a standard or forward tenor string) or BOTH explicit
     dates -- which are QUERY-level fields on ``IRSwapQuery``, not
     ``structure_kwargs``.
+
+    **The matched-maturity swap is quarterly/quarterly, and that is not a
+    detail.** Citi specifies it verbatim; the ``usd_irs`` spec on this curve
+    quotes annual fixed, and the ~3.8bp compounding gap is the same order as the
+    convexity adjustment being measured. When explicit dates are supplied -- the
+    matched-swap case -- the rate is built through
+    ``curve_ops.matched_forward_swap_rate`` at the requested frequency. Pass
+    ``frequency=None`` to fall back to the spec default (the negative control in
+    ``tests/test_convexity_rv_matched_swap.py``). See the module docstring.
     """
+    if effective_date is not None and maturity_date is not None:
+        from RVUtils.ConvexityRV.curve_ops import matched_forward_swap_rate
+
+        return matched_forward_swap_rate(
+            pricer, effective_date, maturity_date,
+            frequency=frequency, leg2_frequency=leg2_frequency,
+        )
+
     from Query.IRSwaps.IRSwapQuery import IRSwapQuery
     from Query.IRSwaps.IRSwapStructure import IRSwapStructure
     from Query.IRSwaps.IRSwapValue import IRSwapValue
