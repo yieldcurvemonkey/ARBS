@@ -308,6 +308,8 @@ def run_v3(panel: pd.DataFrame, cfg: V3Config) -> V3Result:
     swpt_entry_val = 0.0
 
     pnl = np.zeros(n)
+    pnl_b = np.zeros(n)   # basis leg only
+    pnl_s = np.zeros(n)   # swaption leg only
     cost = np.zeros(n)
     in_pos = np.zeros(n, int)
     trades = []
@@ -320,20 +322,23 @@ def run_v3(panel: pd.DataFrame, cfg: V3Config) -> V3Result:
             if roll[i] or gaps[i] > cfg.max_gap_days:
                 reason = "roll" if roll[i] else "gap"
                 # no P&L across a roll or a data gap
-                trades.append(_close(p, entry_i, i, entry_nb, nb, reason, cfg, pnl, cost,
+                trades.append(_close(p, entry_i, i, entry_nb, nb, reason, cfg, pnl, pnl_b, pnl_s, cost,
                                      use_swaption, fwd, vol, tex, ann, strike, swpt_ratio,
                                      swpt_entry_val, book_today=False))
                 pos = 0
                 in_pos[i] = 0
                 continue
 
-            day_pnl = (nb[i] - nb[i - 1]) * TICK_USD_PER_MM * cfg.face_mm
+            leg_b = (nb[i] - nb[i - 1]) * TICK_USD_PER_MM * cfg.face_mm
+            leg_s = 0.0
             if use_swaption and np.isfinite(strike):
                 v_now = mark_short_receiver(fwd[i], strike, vol[i], tex[i], ann[i]) * swpt_ratio
                 v_prev = mark_short_receiver(fwd[i - 1], strike, vol[i - 1], tex[i - 1], ann[i - 1]) * swpt_ratio
                 if np.isfinite(v_now) and np.isfinite(v_prev):
-                    day_pnl += v_now - v_prev
-            pnl[i] += day_pnl
+                    leg_s = v_now - v_prev
+            pnl_b[i] += leg_b
+            pnl_s[i] += leg_s
+            pnl[i] += leg_b + leg_s
             in_pos[i] = 1
 
             held = i - entry_i
@@ -346,7 +351,7 @@ def run_v3(panel: pd.DataFrame, cfg: V3Config) -> V3Result:
             if hit_tp or hit_stop or exit_sig or held >= cfg.max_hold_days or i == n - 1:
                 reason = ("take_profit" if hit_tp else "stop" if hit_stop else
                           "signal" if exit_sig else "max_hold" if held >= cfg.max_hold_days else "end")
-                trades.append(_close(p, entry_i, i, entry_nb, nb, reason, cfg, pnl, cost,
+                trades.append(_close(p, entry_i, i, entry_nb, nb, reason, cfg, pnl, pnl_b, pnl_s, cost,
                                      use_swaption, fwd, vol, tex, ann, strike, swpt_ratio,
                                      swpt_entry_val, book_today=True))
                 pos = 0
@@ -377,7 +382,7 @@ def run_v3(panel: pd.DataFrame, cfg: V3Config) -> V3Result:
         pnl[i] -= c
 
     daily = pd.DataFrame(
-        {"pnl": pnl, "cost": cost, "in_pos": in_pos,
+        {"pnl": pnl, "pnl_basis": pnl_b, "pnl_swaption": pnl_s, "cost": cost, "in_pos": in_pos,
          "richness": rich, "nb32": nb},
         index=pd.DatetimeIndex(dates, name="date"),
     )
@@ -387,7 +392,7 @@ def run_v3(panel: pd.DataFrame, cfg: V3Config) -> V3Result:
     return V3Result(daily, pd.DataFrame(trades), p, cfg)
 
 
-def _close(p, entry_i, i, entry_nb, nb, reason, cfg, pnl, cost, use_swaption,
+def _close(p, entry_i, i, entry_nb, nb, reason, cfg, pnl, pnl_b, pnl_s, cost, use_swaption,
            fwd, vol, tex, ann, strike, swpt_ratio, swpt_entry_val, book_today: bool) -> dict:
     """Book the unwind. ``book_today=False`` is the roll/gap path: flatten without P&L."""
     c = cfg.cost_mult * cfg.cost_32nds * TICK_USD_PER_MM * cfg.face_mm
@@ -406,5 +411,8 @@ def _close(p, entry_i, i, entry_nb, nb, reason, cfg, pnl, cost, use_swaption,
         "entry_richness": float(p["richness"].iloc[entry_i]),
         "symbol": p["symbol"].iloc[entry_i] if "symbol" in p.columns else "",
         "pnl": float(np.nansum(pnl[entry_i:i + 1])),
+        "pnl_basis": float(np.nansum(pnl_b[entry_i:i + 1])),
+        "pnl_swaption": float(np.nansum(pnl_s[entry_i:i + 1])),
+        "fees": float(np.nansum(cost[entry_i:i + 1])),
         "pnl_volbp": float(np.nansum(pnl[entry_i:i + 1]) / (TICK_USD_PER_MM * cfg.face_mm)),
     }
