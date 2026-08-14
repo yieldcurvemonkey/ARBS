@@ -271,11 +271,12 @@ So invalidation is done with **stamps the read path requires**:
 
 | layer | mechanism | effect |
 |---|---|---|
-| basis-report store (parquet + Supabase) | `_BASIS_REPORT_SCHEMA_VERSION = 2` | **1,988 of 1,991** partitions carry no stamp → cache miss |
-| price-snapshot store (parquet + Supabase) | `_SNAPSHOT_SCHEMA_VERSION = 2`, enforced only for `_SNAPSHOT_QUARANTINE_ROOTS = {"WN"}` | only WN's root was mis-mapped; requiring it everywhere would discard ~10,760 sound partitions |
+| basis-report store (parquet + Supabase) | `_BASIS_REPORT_SCHEMA_VERSION` **+ `spec_fingerprint`** | **2,910 of 2,941** partitions rejected (see the proof below) |
+| price-snapshot store (parquet + Supabase) | `_SNAPSHOT_SCHEMA_VERSION`, enforced only for `_SNAPSHOT_QUARANTINE_ROOTS = {"WN"}` | only WN's root was mis-mapped; requiring it everywhere would discard ~10,760 sound partitions |
 | layered price cache | `_USTF_CACHE_VERSION` v2 → **v3** | key prefix change |
-| basket-definition cache | new `_USTF_BASKET_CACHE_VERSION` | the TY window change invalidates every cached ZN basket |
-| panel checkpoints | `--fresh` on the rebuild tool | a resume onto a stale panel silently carries old rows into a "rebuilt" one |
+| basket-definition cache | `_USTF_BASKET_CACHE_VERSION` **+ `contract_specs_fingerprint()`** | any spec change now invalidates it automatically |
+| BT signal panel cache | schema stamp in the **filename** | `BT/signals/_ustf_basis_cache/panel_*.parquet` had no version at all |
+| rebuild checkpoints | `--fresh` on the rebuild tool | a resume onto a stale panel silently carries old rows into a "rebuilt" one |
 
 Two further defects surfaced **while proving the invalidation works** — both are the kind that only
 appear when you actually check:
@@ -289,6 +290,54 @@ appear when you actually check:
   the next run served them back *with a fresh stamp*, so they looked current.
 
 `MDP/USTFutures/purge_ustf_cache.py` handles the cases stamps cannot.
+
+### And then I made the same mistake myself
+
+After the deliverable grade became vintage-aware, the rebuilt TY panel showed a **median basket of
+10 deliverables in every year** — where pre-2023 years should hold 16–17. The spec was already
+correct: a direct `build_delivery_basket_frame` call reproduced CME's published December-2017 basket
+17/17. The **basket cache** was still serving baskets computed by the previous spec, because its
+version constant had been bumped *before* the last spec edit rather than after.
+
+Nothing in a cached basket recorded which spec built it, and 10 deliverables is a perfectly
+plausible number — only a by-year sanity check on basket size caught it.
+
+So the hand-maintained version is gone. `contract_specs_fingerprint()` is a short stable hash of the
+whole `_CONTRACT_SPECS` table, and it is now part of both the basket cache key and every basis
+report (a `spec_fingerprint` column the read path requires alongside `schema_version`). **Any change
+to a deliverable grade invalidates the derived data automatically, with no step left to forget.**
+
+After invalidation, measured through the MDP rather than the spec function:
+
+| contract | before | after |
+|---|---|---|
+| `TYU18` @ 2018-06-12 | 10 | **16** |
+| `TYZ20` @ 2020-10-15 | 10 | **17** |
+| `TYM24` @ 2024-04-15 | 10 | 10 (post-cap, unchanged) |
+| `TYU26` @ 2026-08-13 | 10 | **11** — matches CME's published `ZNU26` basket |
+
+I am recording this at length because it is the most transferable finding here. The original defects
+were exotic; this one is ordinary, and it is the reason "fixed the code" and "fixed the data" are
+different claims.
+
+### Proof the invalidation reaches everything
+
+Scanning the whole local basis-report store against the current stamp *and* fingerprint:
+
+```
+2,941 basis-report partitions on disk
+  WOULD BE SERVED : 31      <- all TY partitions the in-flight rebuild had just written
+  treated as stale: 2,910
+  implausible futures price among served: 0
+```
+
+The 31 servable partitions are precisely the ones written by the running rebuild under the current
+spec. Nothing built by older code can reach a consumer.
+
+One residue worth naming: some reports written during this session's own pilot runs were pushed to
+Supabase before the "never persist a failing report" fix landed. They are **inert** — the fingerprint
+no longer matches, so they can never be served — but they are still sitting there as junk. Cleaning
+them up is housekeeping, not correctness.
 
 ---
 
