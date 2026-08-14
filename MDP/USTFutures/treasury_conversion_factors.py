@@ -18,6 +18,9 @@ class TreasuryFutureConversionSpec:
     max_remaining_months_from_first: Optional[int] = None
     max_remaining_months_from_last: Optional[int] = None
     max_remaining_months_from_first_exclusive: bool = False
+    # First delivery period (YYYYMM) from which ``max_remaining_months_from_first`` applies.
+    # None means "always". A deliverable grade is not a constant: see the TY entry below.
+    max_remaining_effective_period: Optional[int] = None
     min_original_term_months: Optional[int] = None
     max_original_term_months: Optional[int] = None
     exact_original_term_months: frozenset[int] = frozenset()
@@ -88,8 +91,17 @@ _CONTRACT_SPECS: tuple[TreasuryFutureConversionSpec, ...] = (
         rounding_months=3,
         # CBOT Ch.19: "not less than 6 years 6 months" -> 78, not 72.
         min_remaining_months_from_first=78,
-        max_remaining_months_from_first=96,  # "and less than 8 years"
+        # "and less than 8 years" -- but ONLY from the September 2023 contract month. Before that
+        # the grade had no maximum, which is why CME's own published December-2017 ZN basket
+        # ("Understanding Treasury Futures", Table 3) runs from 6.50 to 9.67 years and holds 17
+        # securities; under an 8-year cap it would hold 4. Per CME SER-9102 (2022-12-06),
+        # "Amendments to Rule 19101.A ... Commencing with the September 2023 Contract Month",
+        # the prior text read "(b) a remaining term to maturity of not less than 6 years 6 months."
+        # Applying today's cap to all history silently drops ~7 genuinely deliverable notes per
+        # contract for every ZN month through June 2023.
+        max_remaining_months_from_first=96,
         max_remaining_months_from_first_exclusive=True,
+        max_remaining_effective_period=202309,
         # CBOT Ch.19: "an original term to maturity ... of not more than 10 years".
         # Keeps 7-year notes (84) in and old 30-year bonds (360) / 20-year bonds (240) out.
         max_original_term_months=120,
@@ -278,11 +290,17 @@ def _eligible_remaining_terms(
     delivery_first: datetime.date,
     delivery_last: datetime.date,
     end_dates: pd.Series,
+    period: Optional[int] = None,
 ) -> pd.Series:
     mask = pd.Series(True, index=end_dates.index)
     if spec.min_remaining_months_from_first is not None:
         mask &= end_dates >= _add_months(delivery_first, spec.min_remaining_months_from_first)
-    if spec.max_remaining_months_from_first is not None:
+    max_applies = spec.max_remaining_months_from_first is not None and (
+        spec.max_remaining_effective_period is None
+        or period is None
+        or int(period) >= int(spec.max_remaining_effective_period)
+    )
+    if max_applies:
         upper = _add_months(delivery_first, spec.max_remaining_months_from_first)
         if spec.max_remaining_months_from_first_exclusive:
             mask &= end_dates < upper
@@ -336,7 +354,13 @@ def build_delivery_basket_frame(
         ]
 
     eligible = _eligible_original_terms(spec, ref_df["original_term_months"])
-    eligible &= _eligible_remaining_terms(spec, delivery_first=delivery_first, delivery_last=delivery_last, end_dates=ref_df["end_date"])
+    eligible &= _eligible_remaining_terms(
+        spec,
+        delivery_first=delivery_first,
+        delivery_last=delivery_last,
+        end_dates=ref_df["end_date"],
+        period=int(period),
+    )
     basket = ref_df.loc[eligible].copy()
     if basket.empty:
         return pd.DataFrame(

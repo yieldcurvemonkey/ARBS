@@ -66,6 +66,20 @@ UST_FUTURE_BARCHART_TO_INTERNAL: Dict[str, str] = {
     "TN": "UXY",
 }
 
+# CME **Globex** root per internal root. This is a DIFFERENT namespace from the BarChart map
+# above, and the two agree for every root except the Ultra Bond: Globex calls it UB, BarChart calls
+# it UD (BarChart's UB is Euro/Krone). Broker feeds that speak Globex -- Schwab / thinkorswim, which
+# quote /ZN, /ZB, /UB -- must use THIS map. Conflating the two namespaces is what produced the
+# Ultra Bond defect in the first place, so they are kept separate rather than merged.
+UST_FUTURE_GLOBEX_ROOTS: Dict[str, str] = {
+    "TU": "ZT",
+    "FV": "ZF",
+    "TY": "ZN",
+    "US": "ZB",
+    "WN": "UB",
+    "UXY": "TN",
+}
+
 # Exchange / vendor spellings that callers reasonably type, mapped to the internal root.
 # "UB" is the CME **Globex** code for the Ultra Bond, so callers do type it even though it is
 # also BarChart's EUR/NOK root -- accept it on the way in, but never emit it on the way out.
@@ -101,6 +115,12 @@ def normalize_root(root: str) -> str:
 def to_barchart_root(root: str) -> str:
     norm = normalize_root(root)
     return UST_FUTURE_BARCHART_ROOTS.get(norm, norm)
+
+
+def to_globex_root(root: str) -> str:
+    """CME Globex root -- for broker feeds, NOT for BarChart. See UST_FUTURE_GLOBEX_ROOTS."""
+    norm = normalize_root(root)
+    return UST_FUTURE_GLOBEX_ROOTS.get(norm, norm)
 
 
 def is_plausible_ust_future_price(price: float) -> bool:

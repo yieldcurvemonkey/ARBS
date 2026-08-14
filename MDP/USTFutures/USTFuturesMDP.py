@@ -24,6 +24,7 @@ from definitions.USTFutures import (
     UST_FUTURE_ROOT_ALIASES,
     normalize_barchart_ust_future_price,
     to_barchart_root,
+    to_globex_root,
 )
 
 from MDP.FixedRateBonds.FixedRateBondsMDP import FixedRateBondsMDP
@@ -76,7 +77,10 @@ _USTF_BASKET_CACHE_VERSION = "USTF_BASKET_v2"
 # read. Bump this whenever a change alters the numbers in a report.
 #   v1 -> v2 (2026-08-14): Ultra Bond vendor root, ZN deliverable window, historical repo rate,
 #                          Act/360 conventions, basket/risk alignment.
-_BASIS_REPORT_SCHEMA_VERSION = 2
+#   v2 -> v3 (2026-08-14): the ZN deliverable grade is vintage-dependent -- the "less than 8 years"
+#                          cap commences with the September 2023 contract month, so v2 truncated
+#                          every pre-2023 ZN basket by ~7 notes.
+_BASIS_REPORT_SCHEMA_VERSION = 3
 
 # Same idea for the price SNAPSHOT store, which had no version marker at all.
 #
@@ -160,7 +164,9 @@ def _to_tos_symbol(sym: str) -> str:
         return f"/{norm}" if norm else str(sym)
     root = m.group("root")
     code = m.group("code")
-    return f"/{to_barchart_root(root)}{code}"
+    # thinkorswim / Schwab speak CME Globex, where the Ultra Bond is /UB. BarChart's UD belongs
+    # only on the BarChart path.
+    return f"/{to_globex_root(root)}{code}"
 
 
 def _from_tos_symbol(sym: str) -> str:
@@ -1221,7 +1227,13 @@ class USTFuturesMDP(MarketDataProvider[InstrumentLike], LayeredCacheMixin):
         return report_df
 
     def get_ctd(
-        self, as_of: datetime.date, symbol: str, usts_mdp: Optional[FixedRateBondsMDP] = None, repo: Optional[float] = None, source: Optional[str] = "RL_CME_TCF"
+        self,
+        as_of: datetime.date,
+        symbol: str,
+        usts_mdp: Optional[FixedRateBondsMDP] = None,
+        repo: Optional[float] = None,
+        source: Optional[str] = "RL_CME_TCF",
+        on_bad_data: OnBadData = "raise",
     ):
         # symbol_to_rl_spec = {
         #     "TU": "us_gb_2y",
@@ -1243,6 +1255,12 @@ class USTFuturesMDP(MarketDataProvider[InstrumentLike], LayeredCacheMixin):
                 curve_id="USD-SOFR-1D",
                 repo_rate=repo,
                 usts_mdp=usts_mdp,
+            )
+            # get_ctd is a THIRD public exit from this surface -- it calls the builder directly and
+            # so never passed through get_basis_report's gate. Gate it here or it stays the one way
+            # to read a corrupt basis report without being told.
+            report_df = enforce_basis_report_quality(
+                report_df, symbol=str(symbol), on_bad_data=on_bad_data
             )
             legacy_df = report_df.rename(columns={"invoice_cf": "invoice_conversion_factor"}).copy()
             legacy_df["gross_basis_rl"] = legacy_df["gross_basis"]

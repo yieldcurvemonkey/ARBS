@@ -104,7 +104,12 @@ def check_basis_report(
     metrics: Dict[str, Any] = {"symbol": symbol}
 
     if df is None or len(df) == 0:
-        return BasisReportQuality(False, ("report is empty",), metrics)
+        # An empty report is ABSENCE, not corruption, and the two must not be conflated. Callers
+        # already handle "no rows" (a holiday, a contract that has not listed, a symbol with no
+        # basket); turning that into a gate failure would make every such day look like a feed
+        # break -- and, when the gate raises, would break callers that legitimately expect an
+        # empty frame. There is nothing here to contradict itself, so there is nothing to fail.
+        return BasisReportQuality(True, (), {**metrics, "n_deliverable": 0, "empty": True})
 
     missing = [c for c in _REQUIRED_COLUMNS if c not in df.columns]
     if missing:

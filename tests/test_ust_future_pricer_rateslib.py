@@ -125,7 +125,8 @@ def test_bnoc_defaults_repo_fixing_contract_imm_and_settlement(monkeypatch):
     assert dummy_bf.net_basis_inputs[0][2] == pytest.approx(4.32)
     assert dummy_bf.net_basis_inputs[0][3] == datetime.datetime(2026, 3, 4)
     assert dummy_bf.net_basis_inputs[0][4] == datetime.datetime(2026, 6, 17)
-    assert dummy_bf.net_basis_inputs[0][5] == "ActAct"
+    # rateslib 2.7.1 rejects a bare "ActAct"; Act/360 is also the right convention for US repo.
+    assert dummy_bf.net_basis_inputs[0][5] == "Act360"
     assert dummy_bf.net_basis_inputs[0][6] is False
 
 def test_ust_proxy_fallback_when_socksio_missing(monkeypatch):
@@ -181,7 +182,7 @@ def test_ust_get_pricer_defaults_bond_source_when_basket_requested(monkeypatch):
     monkeypatch.setattr(mdp, "_threadsafe_cache_get", lambda key: {"timestamp": "2026-03-04T20:00:00+00:00", "price": 112.0, "schema": 1})
     monkeypatch.setattr(mdp, "_threadsafe_cache_put", lambda key, value: None)
 
-    def _fake_delivery_basket(*, as_of, symbol, usts_mdp_source, source, usts_mdp=None):
+    def _fake_delivery_basket(*, as_of, symbol, usts_mdp_source, source, usts_mdp=None, ignore_cache=False):
         seen["usts_mdp_source"] = usts_mdp_source
         seen["basket_source"] = source
         return {

@@ -4,7 +4,7 @@ import pandas as pd
 import pytest
 import pytz
 
-from MDP.USTFutures.USTFuturesMDP import USTFuturesMDP
+from MDP.USTFutures.USTFuturesMDP import _BASIS_REPORT_SCHEMA_VERSION, USTFuturesMDP
 
 CHI = pytz.timezone("America/Chicago")
 
@@ -81,6 +81,11 @@ class _FakeFuturePricer:
 
     def ctd(self):
         return self._basket_pricers[1]
+
+    def conversion_factors(self):
+        # the report is now built from the pricer's OWN basket, so a fake pricer must carry
+        # factors aligned with its basket rather than relying on a second basket fetch
+        return [0.8123, 0.7654][: len(self._basket_pricers)]
 
     def gross_basis(self):
         return (0.55, 0.40)
@@ -244,6 +249,10 @@ def test_get_basis_report_reuses_core_snapshot(monkeypatch):
                 "repo_rate": 4.33,
                 "settlement_date": datetime.date(2026, 3, 26),
                 "delivery_date": datetime.date(2026, 6, 17),
+                # a cached report must carry the CURRENT schema stamp to be served; without it the
+                # read path treats it as a miss, because a report built by older code cannot be
+                # distinguished from a correct one by inspection
+                "schema_version": _BASIS_REPORT_SCHEMA_VERSION,
             }
         ]
     )
@@ -290,8 +299,10 @@ def test_get_ctd_reuses_basis_report_frame(monkeypatch):
     mdp = USTFuturesMDP(source="BARCHART_USTF-RL")
     basis_df = pd.DataFrame(
         [
-            {"cusip": "A", "label": "A", "clean_price": 90.0, "ytm": 4.9, "invoice_cf": 0.80, "gross_basis": 0.20, "bnoc": 0.10, "irr": 5.0, "is_ctd": False},
-            {"cusip": "B", "label": "B", "clean_price": 91.0, "ytm": 4.8, "invoice_cf": 0.81, "gross_basis": 0.10, "bnoc": 0.05, "irr": 5.2, "is_ctd": True},
+            # futures_price / repo_rate are required by the consistency gate that get_ctd now
+            # applies -- it is a third public exit from this surface and used to be ungated.
+            {"cusip": "A", "label": "A", "clean_price": 90.0, "ytm": 4.9, "invoice_cf": 0.80, "gross_basis": 0.20, "bnoc": 0.10, "irr": 5.0, "is_ctd": False, "futures_price": 112.25, "repo_rate": 5.1},
+            {"cusip": "B", "label": "B", "clean_price": 91.0, "ytm": 4.8, "invoice_cf": 0.81, "gross_basis": 0.10, "bnoc": 0.05, "irr": 5.2, "is_ctd": True, "futures_price": 112.25, "repo_rate": 5.1},
         ]
     )
     monkeypatch.setattr(mdp, "_build_basis_report_frame", lambda **kwargs: basis_df.copy())

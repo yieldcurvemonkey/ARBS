@@ -103,6 +103,39 @@ def test_ty_spec_matches_the_cbot_rulebook():
     assert spec.max_remaining_months_from_first == 96
     assert spec.max_remaining_months_from_first_exclusive is True, "less than 8 years"
     assert spec.max_original_term_months == 120, "notes only: original term <= 10 years"
+    assert spec.max_remaining_effective_period == 202309, "the 8-year cap starts Sept 2023"
+
+
+# The ZN grade is not a constant. Per CME SER-9102 the "less than 8 years" cap commences with the
+# September 2023 contract month; before that there was no maximum. CME's own published December-2017
+# ZN basket ("Understanding Treasury Futures", Table 3) runs 6.50-9.67 years and holds 17
+# securities, which an 8-year cap would cut to 4.
+_VINTAGE_FIXTURE = _refdata(
+    [
+        ("SHORT", "T 4 Jan 27", "10-Year", datetime.date(2027, 1, 15), 4.0),   # 6y1m from 2020-12 -- too short
+        ("MID", "T 4 Nov 27", "10-Year", datetime.date(2027, 11, 15), 4.0),    # 6y11m -- deliverable in both eras
+        ("LONG", "T 4 Aug 29", "10-Year", datetime.date(2029, 8, 15), 4.0),    # 8y8m -- only pre-cap
+    ]
+)
+
+
+def test_pre_september_2023_zn_grade_has_no_maximum_remaining_term():
+    """ZNZ20: delivery period 202012, before the cap commenced."""
+    basket = build_delivery_basket_frame(
+        as_of=datetime.date(2020, 10, 15), symbol="ZNZ20", reference_data=_VINTAGE_FIXTURE
+    )
+    cusips = set(basket["cusip"])
+    assert "LONG" in cusips, "an 8y8m note WAS deliverable into pre-Sept-2023 ZN"
+    assert "MID" in cusips
+    assert "SHORT" not in cusips, "the 6y6m minimum applied in both eras"
+
+
+def test_post_september_2023_zn_grade_applies_the_eight_year_cap():
+    """ZNZ26: delivery period 202612, after the cap commenced. Same fixture, different answer."""
+    basket = build_delivery_basket_frame(
+        as_of=datetime.date(2026, 8, 13), symbol="ZNZ26", reference_data=_VINTAGE_FIXTURE
+    )
+    assert "LONG" not in set(basket["cusip"]), "the 8-year cap applies from Sept 2023"
 
 
 @pytest.mark.parametrize(
@@ -236,9 +269,14 @@ def test_gate_catches_nan_contamination():
     assert any("non-finite" in r for r in verdict.reasons)
 
 
-def test_gate_catches_an_empty_report():
-    assert not check_basis_report(pd.DataFrame()).ok
-    assert not check_basis_report(None).ok
+def test_gate_treats_an_empty_report_as_absence_not_corruption():
+    """A holiday, an unlisted contract or a symbol with no basket produces no rows. There is
+    nothing there to contradict itself, so there is nothing to fail -- and raising would break
+    callers that legitimately expect an empty frame."""
+    assert check_basis_report(pd.DataFrame()).ok
+    assert check_basis_report(None).ok
+    out = enforce_basis_report_quality(pd.DataFrame(), symbol="USM26")
+    assert out.empty
 
 
 def test_enforce_raises_by_default_so_a_passive_caller_cannot_consume_bad_data():
