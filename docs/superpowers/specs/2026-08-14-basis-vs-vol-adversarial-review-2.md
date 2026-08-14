@@ -188,7 +188,7 @@ rather than the docstring quietly going stale.
 |---|---|---|
 | GC overnight (secured) | 1,255 days from 2020-10 | **Replaces the overnight *unsecured* SOFR fixing** the basis path uses as its term repo today. Ties out: Citi 3.69188% on 2026-08-12 vs the 3.69% JPM used for Sep26. |
 | OTR specialness (5y/10y/30y) | ~1,200 days | Sizing a sensitivity band only — see below. |
-| **Term SOFR 1M/3M/6M/1Y** | 1,890 days from 2019 | **The only genuine term structure here**, and a defensible term-financing proxy: on 2026-08-12 it runs 3.6444 / 3.7558 / 3.8754 / 4.0330, and JPM's own Sep→Dec term repo (3.69 → 3.84) tracks its 1M→6M slope. |
+| **The swaps/OIS short end** | 1,890 days from 2019 | **This is the term financing curve.** See below. |
 
 **Specialness is real, large in the tail, and about the wrong bonds.** The 10y OTR is more than 1bp
 special on 31% of days and more than 10bp special on 16%, with a 1st percentile of −50bp. Against
@@ -198,8 +198,33 @@ half the entire ZB Sep26 delivery option. But a future's CTD is **off-the-run** 
 **upper bound** on plausible CTD specialness, not an estimate of it. The store's docstring says so
 and the accessor is named to make misuse awkward.
 
-Net effect on V1: the term-repo blocker is **partially** cleared. A secured GC rate and a term SOFR
-proxy are available; per-CUSIP CTD specialness still is not.
+### Use the swaps curve for the term structure — and it validates to ~1bp
+
+SOFR *is* an overnight Treasury repo rate, so the OIS curve to a delivery date is the natural proxy
+for a term GC repo. `term_financing_rate()` builds it from the swaps short end, interpolating
+**linearly in log discount factor** (piecewise-flat forwards). Against the only two term repo rates
+in evidence — J.P. Morgan's own, on 2026-08-12:
+
+| horizon | JPM published | log-DF interp | linear interp | log-DF + GC basis |
+|---|---|---|---|---|
+| Sep26, 49d | 3.6900 | **3.7089 (+1.9bp)** | 3.6791 (−1.1bp) | 3.7808 (+9.1bp) |
+| Dec26, 141d | 3.8400 | **3.8407 (+0.1bp)** | 3.8216 (−1.8bp) | 3.9125 (+7.3bp) |
+
+Two construction choices settled by measurement rather than taste. **Log-DF beats linear**, which is
+biased 1–2bp low. And **do not add the GC-minus-SOFR basis**: it was +7.19bp overnight on that date
+and adding it degrades the fit from ~1bp to ~8bp. JPM's "Term Repo Rate" is the OIS curve, not GC
+plus a spread — the overnight secured/unsecured wedge does not survive into the term structure.
+
+At the design's own sensitivity (0.08/32 per bp per quarter), a 1–2bp error is ~2% of a 4/32
+delivery option. That is precise enough to invert one.
+
+Par OIS tags (`RATES.OIS.USD_SOFR.PAR.{1W…1Y}`) are now requested on every refresh, so the curve
+densifies from 5 nodes to 15 as soon as a live refresh runs; the builder uses whatever is present.
+
+Net effect on V1: **the term-repo blocker is cleared.** A term financing curve accurate to ~1bp is
+available for any delivery date, and it carries the Sep→Dec slope (15bp, worth 1.8/32 on the Dec ZB
+contract) that an overnight rate cannot. What remains missing is per-CUSIP CTD specialness, which
+stays a sensitivity band rather than a number.
 
 ---
 

@@ -169,3 +169,63 @@ def test_specialness_is_negative_or_zero_and_otr_only():
         assert s.median() <= 0.0
         assert s.min() < -5.0          # specialness episodes are real and large
         assert s.quantile(0.95) <= 1.0  # and essentially one-sided
+
+
+@repo_only
+def test_term_financing_from_the_swaps_curve_matches_published_term_repo():
+    """The swaps/OIS short end reproduces J.P. Morgan's term repo to ~1bp.
+
+    SOFR is itself an overnight Treasury repo rate, so the OIS curve to a delivery date is the
+    natural proxy for a term GC repo -- and Citi's own repo tags cannot supply one (see
+    test_citi_repo_tenor_axis_is_degenerate). Both published points on 2026-08-12:
+    Sep26 delivery at 49 days = 3.69%, Dec26 at 141 days = 3.84%.
+    """
+    from MDP.CitiVelocityExcel.repo import store as R
+
+    df = R.load(STORE)
+    sep = R.term_financing_rate(df, "2026-08-12", 49)
+    dec = R.term_financing_rate(df, "2026-08-12", 141)
+    assert sep == pytest.approx(3.69, abs=0.03), sep
+    assert dec == pytest.approx(3.84, abs=0.03), dec
+    # and it carries the term slope an overnight rate cannot
+    assert dec - sep > 0.10
+
+
+@repo_only
+def test_log_df_interpolation_beats_linear_and_gc_basis_makes_it_worse():
+    """Two construction choices, both settled by measurement rather than taste.
+
+    Linear-in-rate is biased 1-2bp low. Adding the overnight GC-minus-SOFR basis (+7.2bp on this
+    date) pushes the fit from ~1bp to ~8bp: J.P. Morgan's term repo is the OIS curve, not GC plus a
+    spread, so the overnight secured/unsecured wedge does not survive into the term curve.
+    """
+    import numpy as np
+
+    from MDP.CitiVelocityExcel.repo import store as R
+
+    df = R.load(STORE)
+    days, rates = R.term_financing_curve(df, "2026-08-12")
+    published = {49: 3.69, 141: 3.84}
+    gc_basis = R.gc_rate(df, "2026-08-12") - R.term_sofr(df, "2026-08-12", "ON")
+    assert gc_basis > 0.05  # ~7bp
+
+    err_logdf = err_linear = err_with_basis = 0.0
+    for h, ref in published.items():
+        v = R.term_financing_rate(df, "2026-08-12", h)
+        err_logdf += abs(v - ref)
+        err_linear += abs(float(np.interp(h, days, rates)) - ref)
+        err_with_basis += abs(v + gc_basis - ref)
+    assert err_logdf < err_linear
+    assert err_logdf < err_with_basis / 3.0
+
+
+@repo_only
+def test_term_financing_accepts_a_delivery_date_and_refuses_a_dead_horizon():
+    from MDP.CitiVelocityExcel.repo import store as R
+
+    df = R.load(STORE)
+    by_days = R.term_financing_rate(df, "2026-08-12", 49)
+    by_date = R.term_financing_rate(df, "2026-08-12", delivery_date="2026-09-30")
+    assert by_date == pytest.approx(by_days, abs=1e-9)
+    assert math.isnan(R.term_financing_rate(df, "2026-08-12", 0))
+    assert math.isnan(R.term_financing_rate(df, "2026-08-12", -5))

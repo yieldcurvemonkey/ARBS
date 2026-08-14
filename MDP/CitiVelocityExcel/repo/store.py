@@ -21,8 +21,20 @@ exactly the defect it was meant to fix. So:
 * :func:`gc_rate` serves the single secured GC overnight rate. It is still a real improvement on
   what the basis path uses today -- the last *overnight unsecured* SOFR fixing.
 * :func:`specialness_bps` serves OTR collateral minus GC. Also overnight only.
-* :func:`term_sofr` serves ``RATES.MONEY_MARKETS.USD.SOFR.{1M,3M,6M,1Y}``, which **is** a genuine
-  term structure (1,890 days from 2019) -- the only one in this dataset.
+* :func:`term_financing_rate` builds the **term financing curve from the swaps/OIS short end** and
+  is what a basis calculation should use. SOFR is itself an overnight Treasury repo rate, so the
+  OIS curve to a delivery date is the natural proxy for a term GC repo. Validated against the two
+  term repo rates J.P. Morgan published on 2026-08-12: log-discount-factor interpolation gives
+  3.7089% at 49 days against their 3.69% (+1.9bp) and 3.8407% at 141 days against their 3.84%
+  (+0.1bp). At the design's own sensitivity of 0.08/32 per bp per quarter, a 1-2bp error is ~2% of
+  a 4/32 delivery option -- precise enough to invert one.
+
+  Two findings worth keeping. **Log-DF interpolation beats linear** (linear is biased 1-2bp low).
+  And **do not add the GC-minus-SOFR basis**: it was +7.19bp overnight on that date, and adding it
+  pushes the fit to +9.1/+7.3bp. J.P. Morgan's "Term Repo Rate" is the OIS curve, not GC plus a
+  spread -- the overnight GC/SOFR wedge does not survive into the term curve.
+
+* :func:`term_sofr` serves the raw ``RATES.MONEY_MARKETS.USD.SOFR.{1M,3M,6M,1Y}`` nodes.
 * :func:`assert_tenor_axis_is_degenerate` is a guard, not a comment. If Citi ever starts serving a
   real term repo curve, that test fails and this docstring is wrong.
 
@@ -55,11 +67,24 @@ __all__ = [
     "gc_rate",
     "specialness_bps",
     "term_sofr",
+    "term_financing_curve",
+    "term_financing_rate",
+    "ois_par_tags",
+    "OIS_PAR_TENORS",
     "assert_tenor_axis_is_degenerate",
 ]
 
 REPO_TENORS = ("ON", "TN", "1W", "1M", "3M", "6M", "9M", "1Y", "2Y", "3Y", "4Y", "5Y", "7Y", "10Y")
 REPO_COLLATERAL = ("USTREASGC", "USD5YOTR", "USD10YOTR", "USD30YOTR")
+#: Par OIS swap tags. The short end of the swaps curve is the term financing curve; these are
+#: requested on every refresh so the curve densifies over time. Whatever is present is used.
+OIS_PAR_TENORS = ("1W", "2W", "1M", "2M", "3M", "4M", "5M", "6M", "9M", "1Y")
+OIS_PAR_TEMPLATE = "RATES.OIS.USD_SOFR.PAR.{tenor}"
+
+#: Node tenors in days, for curve assembly. ACT/360 money-market convention.
+_TENOR_DAYS = {"ON": 1, "TN": 2, "1W": 7, "2W": 14, "1M": 30, "2M": 61, "3M": 91, "4M": 122,
+               "5M": 152, "6M": 182, "9M": 273, "1Y": 365}
+
 MONEY_MARKET_TAGS = (
     "RATES.MONEY_MARKETS.USD.BGCR",
     "RATES.MONEY_MARKETS.USD.TGCR",
@@ -85,9 +110,13 @@ def repo_tag(collateral: str = "USTREASGC", tenor: str = "ON", currency: str = "
     return f"RATES.REPO.{currency.upper()}.{coll}.SPOT.{ten}"
 
 
+def ois_par_tags() -> list[str]:
+    return [OIS_PAR_TEMPLATE.format(tenor=t) for t in OIS_PAR_TENORS]
+
+
 def all_tags(currency: str = "USD") -> list[str]:
     grid = [repo_tag(c, t, currency) for c in REPO_COLLATERAL for t in REPO_TENORS]
-    return grid + list(MONEY_MARKET_TAGS)
+    return grid + list(MONEY_MARKET_TAGS) + ois_par_tags()
 
 
 # --------------------------------------------------------------------------- store
@@ -234,6 +263,74 @@ def term_sofr(df: pd.DataFrame, on: pd.Timestamp | str, tenor: str = "3M") -> fl
     s = df[["date", tag]].dropna()
     s = s[s["date"] <= pd.Timestamp(on)]
     return float(s.iloc[-1, 1]) if len(s) else float("nan")
+
+
+def term_financing_curve(df: pd.DataFrame, on: pd.Timestamp | str) -> tuple:
+    """Assemble the term financing curve for ``on`` from the swaps/OIS short end.
+
+    Prefers par OIS tags where present and falls back to the SOFR money-market tags, so the curve
+    densifies automatically as refreshes pick the OIS tags up. Returns ``(days, rates_pct)`` sorted
+    by tenor, using the most recent quote at or before ``on`` for each node.
+    """
+    ts = pd.Timestamp(on)
+    nodes: dict[int, float] = {}
+
+    def _latest(col: str):
+        if col not in df.columns:
+            return None
+        s = df[["date", col]].dropna()
+        s = s[s["date"] <= ts]
+        return float(s.iloc[-1, 1]) if len(s) else None
+
+    for tenor in OIS_PAR_TENORS:                       # preferred: the swaps curve itself
+        v = _latest(OIS_PAR_TEMPLATE.format(tenor=tenor))
+        if v is not None and np.isfinite(v):
+            nodes[_TENOR_DAYS[tenor]] = v
+    for tenor in ("ON", "1M", "3M", "6M", "1Y"):       # fallback / fill: money-market SOFR
+        d = _TENOR_DAYS[tenor]
+        if d in nodes:
+            continue
+        v = _latest(f"RATES.MONEY_MARKETS.USD.SOFR.{tenor}")
+        if v is not None and np.isfinite(v):
+            nodes[d] = v
+
+    if not nodes:
+        return (np.array([]), np.array([]))
+    days = np.array(sorted(nodes), dtype=float)
+    return days, np.array([nodes[int(d)] for d in days], dtype=float)
+
+
+def term_financing_rate(df: pd.DataFrame, on: pd.Timestamp | str, horizon_days: float | None = None,
+                        *, delivery_date=None, basis_days: float = 360.0) -> float:
+    """Term financing rate (percent) from ``on`` to a horizon, off the swaps/OIS short end.
+
+    Interpolates **linearly in log discount factor**, i.e. piecewise-flat forwards, which is what a
+    curve build gives and which fits J.P. Morgan's published term repo to ~1bp. Interpolating the
+    rate linearly instead is biased 1-2bp low. Outside the node range the rate is held flat.
+
+    This is the number the basis path should use as its term repo to delivery. It replaces the last
+    *overnight unsecured* SOFR fixing that ``RLUSTFuturePricer._resolve_repo_rate`` applies to every
+    bond in the basket, and it carries the Sep-to-Dec term slope that an overnight rate cannot.
+    """
+    if horizon_days is None:
+        if delivery_date is None:
+            raise ValueError("pass horizon_days or delivery_date")
+        horizon_days = (pd.Timestamp(delivery_date) - pd.Timestamp(on)).days
+    h = float(horizon_days)
+    if not np.isfinite(h) or h <= 0:
+        return float("nan")
+
+    days, rates = term_financing_curve(df, on)
+    if days.size == 0:
+        return float("nan")
+    if days.size == 1 or h <= days[0]:
+        return float(rates[0])
+    if h >= days[-1]:
+        return float(rates[-1])
+
+    log_df = -rates / 100.0 * days / basis_days
+    ld = float(np.interp(h, days, log_df))
+    return float(-ld / (h / basis_days) * 100.0)
 
 
 def main(argv=None) -> int:
