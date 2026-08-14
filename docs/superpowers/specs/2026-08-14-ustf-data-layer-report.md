@@ -491,7 +491,9 @@ on the contract's tick grid, at a level consistent with the instrument.
 ## Panels rebuilt, and the improvement measured
 
 Rebuilt with `python -m MDP.USTFutures.rebuild_basis_panels --roots US TY WN --start 2018-06-01
---end 2026-08-13`, same date span as the original panels.
+--end 2026-08-13`, same date span as the original panels. **The rebuilt panels are committed** at
+`docs/superpowers/specs/_data/2026-08-14-ustf-panels/` (168 KB) so these numbers can be audited
+without rerunning the build.
 
 **Two deviations from the original build, stated rather than buried:**
 1. the rebuild samples **every 5th business day** (~50 rows/year/root) rather than daily — enough
@@ -522,7 +524,7 @@ the rebuilt panels under the shared carry-adjusted gate.
 |---|---|---|
 | **ZB → US** | 85.4% of 1,905 rows | **96.8%** of 410 rows |
 | **ZN → TY** | 35.1% of 1,886 rows | **99.8%** of 416 rows |
-| **UB → WN** | **1.9%** of 1,669 rows | **99.7%** of 386 rows |
+| **UB → WN** | **1.9%** of 1,669 rows | **99.7%** of 395 rows |
 
 ZB 2020 goes 62.1% → 100% and 2021 goes 41.9% → 94.1% **without any change to ZB's data** — the
 whole difference is a gate that subtracts carry before judging. That is the COVID window becoming
@@ -567,8 +569,19 @@ bonds are gone.
   a large value there is not automatically wrong.
 - **2023-02-10 on ZB and WN** — a corrupt FedInvest cash day, diagnosed above. A true positive.
 - **WN and TY 2023 (one row each)** — the same 2023-02-10 cash day.
-- Gaps in the WN panel are a mix of **market holidays** (Good Friday 2019-04-19 and 2022-04-15 raise
-  "No deliverable bond pricers resolved" because there is no cash data — correct behaviour) and
-  **transient BarChart failures** under `force_refresh`; the latter succeed on retry
-  (2018-08-31 → 159.34, 2019-07-19 → 176.00) and the tool's resume picks them up on a second pass.
-  Both are counted and printed, never silently dropped.
+- **Gaps in the WN panel** are a mix of **market holidays** and **transient vendor failures**, and
+  the split was checked rather than assumed. Good Friday 2019-04-19 and 2022-04-15 raise "No
+  deliverable bond pricers resolved" because there is no cash data — correct behaviour, and they
+  fail identically on retry. Everything else succeeds when retried individually
+  (2018-08-31 → 159.34, 2019-07-19 → 176.00, 2021-04-09 → 184.78, 2024-06-07 → 124.53,
+  2026-07-10 → 113.25), so those are BarChart failing under burst load, not missing data.
+
+  I had a tidier hypothesis first — the gaps cluster in runs of about four weekly samples around
+  quarter ends, which looked like a contract-roll problem — and it was **wrong**. Probing the dates
+  killed it. Recording that because the clustering is genuinely suggestive and would have made a
+  plausible-sounding paragraph.
+
+  The resume path works: a second pass over the same range identified exactly the 42 failed days and
+  re-fetched them. It recovered only 6, because a burst of 42 back-to-back fetches hits the same
+  rate limiting that caused the original failures — so the practical recipe is several cheap resume
+  passes, not one. All of it is counted and printed, never silently dropped.
