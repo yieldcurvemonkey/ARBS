@@ -518,7 +518,7 @@ the rebuilt panels under the shared carry-adjusted gate.
 |---|---|---|
 | **ZB → US** | 85.4% of 1,905 rows | **96.8%** of 410 rows |
 | **ZN → TY** | 35.1% of 1,886 rows | **99.8%** of 416 rows |
-| **UB → WN** | **1.9%** of 1,669 rows | **99.7%** of 365 rows |
+| **UB → WN** | **1.9%** of 1,669 rows | **99.7%** of 386 rows |
 
 ZB 2020 goes 62.1% → 100% and 2021 goes 41.9% → 94.1% **without any change to ZB's data** — the
 whole difference is a gate that subtracts carry before judging. That is the COVID window becoming
@@ -538,7 +538,7 @@ Median futures price per year — the clearest single picture of what was wrong:
 | 2023 | 112.57 | **134.80** |
 | 2024 | 113.13 | **126.11** |
 | 2025 | 113.35 | **118.59** |
-| 2026 | 112.00 | **118.00** |
+| 2026 | 112.00 | **115.98** |
 
 The "before" column is flat because an exchange rate does not care about the Fed. The "after" column
 is the rate cycle: the 2020 low-yield peak at 218, the 2022–23 selloff, the 2024–26 range.
