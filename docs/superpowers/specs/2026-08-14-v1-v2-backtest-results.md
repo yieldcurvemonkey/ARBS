@@ -1,6 +1,6 @@
 # V1 and V2 backtests — results
 
-**Date:** 2026-08-14 · **Branch:** `feat/basis-vs-vol` · 96 tests
+**Date:** 2026-08-14 · **Branch:** `feat/basis-vs-vol` · 98 tests
 
 Both legs are built on the QueryDrivenBacktest framework with daily mark-to-market, each with a
 configurable notebook and each cross-checked against an independent standalone engine.
@@ -137,9 +137,24 @@ already 0-for-108.
 
 ZB's rejected rows are not the same animal as ZN's and UB's. They cluster in 2020 (62% pass) and
 2021 (42%) at a median 8/32 — plausibly the **real** COVID basis dislocation rather than a feed
-break, and the gate cannot tell the two apart. So V1 is untested in precisely the regime where
-basis risk is largest, and the ZB result above should be read as "dead in normal markets", with
-the 2020–21 stress period excluded rather than survived.
+break, and the gate cannot tell the two apart. So the gated ZB result excludes precisely the regime
+where basis risk is largest.
+
+**Running ZB ungated closes that hole**, and costs no new trial — the first pass already computed
+those 108 cells on the unfiltered panel, stress rows included:
+
+| ZB panel | cells | median Sharpe | % positive | best | E[max\|null] |
+|---|---|---|---|---|---|
+| gated (stress rows dropped) | 108 | −0.217 | **0%** | −0.000 | 0.287 |
+| ungated (stress rows kept) | 108 | −0.082 | 14% | +0.186 | 0.287 |
+
+Keeping the 2020–21 rows lifts the best ZB cell from −0.000 to +0.186, still **below its own
+E[max|null] of 0.287**, with 86% of cells negative. So V1 is dead on ZB *whether or not* the stress
+regime is included — the caveat is closed, not merely stated. (The ungated line is a sensitivity
+read off an existing grid, not a fresh search, so it carries no additional deflation.)
+
+For completeness, UB ungated is the worst panel in the study — 0% of 108 cells positive, median
+−0.371 — which is what backtesting a price series that isn't a price looks like.
 
 ---
 
