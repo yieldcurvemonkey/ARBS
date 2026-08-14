@@ -310,8 +310,26 @@ class RLUSTFuturePricer(_USTFutureGenericPricer):
         if repo_rate is not None:
             return repo_rate
         fixing_curve = curve_name or (self._curve_id if isinstance(self._curve_id, str) else "USD-SOFR-1D")
-        fixings = _fetch_fixings(as_of_date=self._reference_date, curve_name=fixing_curve)
-        return float(fixings.sort_index().tail(1).iloc[0]) * 100.0
+        fixings = _fetch_fixings(as_of_date=self._reference_date, curve_name=fixing_curve).sort_index()
+        if fixings.empty:
+            raise ValueError(f"No {fixing_curve} fixings available for {self._reference_date}")
+
+        # _fetch_fixings ignores its as_of_date argument and returns the WHOLE series (measured
+        # 2026-08-14: as_of=2018-06-12 still returns 2018-04-02..2026-08-13). Taking .tail(1) of
+        # that therefore used TODAY's overnight rate as the repo rate for every historical date --
+        # 3.62% for a June-2018 report whose real fixing was 1.67%, and for an October-2020 report
+        # whose real fixing was 0.10%. That silently corrupts net basis, BNOC and implied repo
+        # across all history, which is exactly where a basis strategy reads. Slice by the
+        # reference date here rather than changing _fetch_fixings, which has callers outside this
+        # path that do want the full series.
+        as_of = pd.Timestamp(self._reference_date)
+        on_or_before = fixings[pd.to_datetime(fixings.index) <= as_of]
+        if on_or_before.empty:
+            raise ValueError(
+                f"No {fixing_curve} fixing on or before {self._reference_date}; "
+                f"earliest available is {fixings.index[0]}"
+            )
+        return float(on_or_before.iloc[-1]) * 100.0
 
     def conversion_factors(self) -> List[float]:
         return list(self._conversion_factors)
@@ -342,7 +360,7 @@ class RLUSTFuturePricer(_USTFutureGenericPricer):
         prices: Optional[Sequence[float]] = None,
         settlement: Optional[DateLike] = None,
         delivery: Optional[DateLike] = None,
-        convention: Optional[str] = "ActAct",
+        convention: Optional[str] = "Act360",
         dirty: bool = False,
         curve_name: Optional[str] = None,
     ) -> Tuple[float, ...]:
@@ -368,7 +386,7 @@ class RLUSTFuturePricer(_USTFutureGenericPricer):
         prices: Optional[Sequence[float]] = None,
         settlement: Optional[DateLike] = None,
         delivery: Optional[DateLike] = None,
-        convention: Optional[str] = "ActAct",
+        convention: Optional[str] = "Act360",
         dirty: bool = False,
         curve_name: Optional[str] = None,
     ) -> Tuple[float, ...]:
@@ -389,7 +407,7 @@ class RLUSTFuturePricer(_USTFutureGenericPricer):
         prices: Optional[Sequence[float]] = None,
         settlement: Optional[DateLike] = None,
         delivery: Optional[DateLike] = None,
-        convention: Optional[str] = None,
+        convention: Optional[str] = "Act360",
         dirty: bool = False,
     ) -> Tuple[float, ...]:
         if not self._basket_pricers:

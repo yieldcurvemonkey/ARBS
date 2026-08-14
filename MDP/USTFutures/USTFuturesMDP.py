@@ -17,9 +17,14 @@ from Caching.layered_cache_mixin import LayeredCacheMixin
 from MDP.IRSwaps.SDR_INTRADAY.rl_curve_utils.tos import get_quotes
 from MDP.MarketDataProvider import MarketDataProvider
 from MDP.USTFutures.BARCHART.BarchartFetcher import BarchartFetcher
+from MDP.USTFutures.basis_report_quality import OnBadData, enforce_basis_report_quality
 from Query.USTFutures._USTFutureGenericPricer import _USTFutureGenericPricer
 from Query.USTFutures.backends.rateslib.RLUSTFuturePricer import RLUSTFuturePricer
-from definitions.USTFutures import normalize_barchart_ust_future_price, to_barchart_root
+from definitions.USTFutures import (
+    UST_FUTURE_ROOT_ALIASES,
+    normalize_barchart_ust_future_price,
+    to_barchart_root,
+)
 
 from MDP.FixedRateBonds.FixedRateBondsMDP import FixedRateBondsMDP
 from MDP.USTFutures.treasury_conversion_factors import (
@@ -73,6 +78,11 @@ def _normalize_symbol(sym: str) -> Optional[str]:
         return s
     if root in _BARCHART_ROOTS:
         return f"{_BARCHART_ROOTS[root]}{code}"
+    # Exchange spellings a caller may reasonably type -- notably "UB", the CME Globex code for the
+    # Ultra Bond, which is NOT its BarChart root. Resolving it here keeps every downstream key
+    # (cache keys, store partitions, fetched column names) on the one internal spelling.
+    if root in UST_FUTURE_ROOT_ALIASES:
+        return f"{UST_FUTURE_ROOT_ALIASES[root]}{code}"
     return s
 
 
@@ -572,6 +582,10 @@ class USTFuturesMDP(MarketDataProvider[InstrumentLike], LayeredCacheMixin):
             "repo_rate",
             "settlement_date",
             "delivery_date",
+            # Written by enforce_basis_report_quality so the verdict travels WITH the data.
+            # A flag that only exists in a log line is a flag nobody reads.
+            "data_ok",
+            "data_quality_reason",
         ]
 
     def _basis_report_core_timestamp(
@@ -713,6 +727,7 @@ class USTFuturesMDP(MarketDataProvider[InstrumentLike], LayeredCacheMixin):
                                 usts_mdp=_shared_usts_mdp,
                                 usts_mdp_source=usts_mdp_source,
                                 source=basket_source,
+                                ignore_cache=force_refresh,
                             )
                         snapshot_ts = pd.Timestamp(core_row.get("timestamp_utc", self._to_utc_datetime(core_ts_dt)))
                         if snapshot_ts.tzinfo is None:
@@ -750,6 +765,7 @@ class USTFuturesMDP(MarketDataProvider[InstrumentLike], LayeredCacheMixin):
                             usts_mdp=_shared_usts_mdp,
                             usts_mdp_source=usts_mdp_source,
                             source=basket_source,
+                            ignore_cache=force_refresh,
                         )
                     out[sym] = self._build_pricer(
                         symbol=sym,
@@ -809,6 +825,7 @@ class USTFuturesMDP(MarketDataProvider[InstrumentLike], LayeredCacheMixin):
                             usts_mdp=_shared_usts_mdp,
                             usts_mdp_source=usts_mdp_source,
                             source=basket_source,
+                            ignore_cache=force_refresh,
                         )
                     out[sym] = self._build_pricer(
                         symbol=sym,
@@ -985,14 +1002,23 @@ class USTFuturesMDP(MarketDataProvider[InstrumentLike], LayeredCacheMixin):
             }
         )
         resolved_symbol, pricer = next(iter(pricers.items()))
-        basket = self.get_delivery_basket(
-            as_of=as_of_date,
-            symbol=resolved_symbol,
-            usts_mdp_source=usts_mdp_source,
-            usts_mdp=usts_mdp,
-            source=basket_source,
-            ignore_cache=force_refresh,
-        )
+
+        # Use the pricer's OWN basket rather than fetching a second one.
+        #
+        # This used to call get_delivery_basket() again here, with ignore_cache=force_refresh,
+        # while get_pricer() had already built its basket straight off the basket cache. The row
+        # loop below then zipped THAT basket's cusips/labels/prices/CFs against gross_basis,
+        # bnoc and irr vectors computed from the pricer's basket. Whenever the two disagreed --
+        # exactly what happens on the first force_refresh after a deliverable-window change, when
+        # the cache still holds the old basket -- every risk number was silently attached to the
+        # wrong bond. It also cost a duplicate FixedRateBondsMDP round-trip per report.
+        basket_pricers = list(pricer._basket_pricers)
+        basket_cfs = pricer.conversion_factors()
+        if len(basket_pricers) != len(basket_cfs):
+            raise ValueError(
+                f"Basket/conversion-factor length mismatch for {resolved_symbol}: "
+                f"{len(basket_pricers)} pricers vs {len(basket_cfs)} factors"
+            )
 
         fut = pricer.build_pricable()
         fut_price = float(pricer.price(fut))
@@ -1017,10 +1043,17 @@ class USTFuturesMDP(MarketDataProvider[InstrumentLike], LayeredCacheMixin):
         settlement_date = settlement_dt.date() if isinstance(settlement_dt, datetime.datetime) else settlement_dt
         delivery_date = delivery_dt.date() if isinstance(delivery_dt, datetime.datetime) else delivery_dt
 
+        if not (len(basket_pricers) == len(gross_basis_vec) == len(bnoc_vec) == len(irr_vec)):
+            raise ValueError(
+                f"Basis vectors misaligned with the basket for {resolved_symbol}: "
+                f"basket={len(basket_pricers)} gross={len(gross_basis_vec)} "
+                f"bnoc={len(bnoc_vec)} irr={len(irr_vec)}"
+            )
+
         rows: List[Dict[str, Any]] = []
         for bond_pricer, cf, gross_basis, bnoc, irr in zip(
-            basket["basket_pricers"],
-            basket["conversion_factors"],
+            basket_pricers,
+            basket_cfs,
             gross_basis_vec,
             bnoc_vec,
             irr_vec,
@@ -1068,6 +1101,7 @@ class USTFuturesMDP(MarketDataProvider[InstrumentLike], LayeredCacheMixin):
         curve_id: str = "USD-SOFR-1D",
         repo_rate: Optional[float] = None,
         force_refresh: bool = False,
+        on_bad_data: OnBadData = "raise",
     ) -> pd.DataFrame:
         ts_dt = _as_datetime(timestamp)
         resolved_symbol = self._resolve_contract_symbol(_normalize_symbol(symbol) or symbol, ts_dt)
@@ -1083,7 +1117,14 @@ class USTFuturesMDP(MarketDataProvider[InstrumentLike], LayeredCacheMixin):
         if core_ts_dt is not None:
             cached_df = self._get_ust_future_store().read_basis_report_day(resolved_symbol, trading_date)
             if not cached_df.empty:
-                return cached_df.loc[:, [col for col in self._basis_report_columns() if col in cached_df.columns]].copy()
+                cached_df = cached_df.loc[
+                    :, [col for col in self._basis_report_columns() if col in cached_df.columns]
+                ].copy()
+                # Gate the CACHED path too. A cache written before a fix still holds the corrupt
+                # rows, and the read path is where a consumer meets them.
+                return enforce_basis_report_quality(
+                    cached_df, symbol=resolved_symbol, on_bad_data=on_bad_data
+                )
 
         report_df = self._build_basis_report_frame(
             symbol=resolved_symbol,
@@ -1093,6 +1134,10 @@ class USTFuturesMDP(MarketDataProvider[InstrumentLike], LayeredCacheMixin):
             curve_id=curve_id,
             repo_rate=repo_rate,
             force_refresh=force_refresh,
+        )
+        # Validate BEFORE persisting, so a bad report is never written into the day cache.
+        report_df = enforce_basis_report_quality(
+            report_df, symbol=resolved_symbol, on_bad_data=on_bad_data
         )
         if core_ts_dt is not None and not report_df.empty:
             self._get_ust_future_store().write_basis_report_day(resolved_symbol, trading_date, report_df, overwrite=force_refresh)
