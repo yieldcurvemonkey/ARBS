@@ -59,7 +59,42 @@ _CME_QUARTERLY_MONTH_CODES = {
     "U": [7, 8, 9],
     "Z": [10, 11, 12],
 }
-_USTF_CACHE_VERSION = "USTF_GET_DATA_v2"
+# Bump to invalidate the layered price cache. v2 -> v3: prices cached under the old vendor-root map
+# put the EUR/NOK future under the Ultra Bond's key.
+_USTF_CACHE_VERSION = "USTF_GET_DATA_v3"
+
+# Bump to invalidate the basket-definition cache. v1 -> v2: the TY deliverable window changed, so
+# every cached ZN basket is wrong.
+_USTF_BASKET_CACHE_VERSION = "USTF_BASKET_v2"
+
+# Stamped into every basis report and REQUIRED on read. Any cached report without it -- or with an
+# older value -- is treated as a cache miss and rebuilt.
+#
+# This is the invalidation knob for the basis-report store, and it has to be a stamp rather than a
+# file delete: USTFutureStore._read_partition falls back to pulling the partition from Supabase
+# when the local files are missing, so `rm -rf` on the local cache is silently undone by the next
+# read. Bump this whenever a change alters the numbers in a report.
+#   v1 -> v2 (2026-08-14): Ultra Bond vendor root, ZN deliverable window, historical repo rate,
+#                          Act/360 conventions, basket/risk alignment.
+_BASIS_REPORT_SCHEMA_VERSION = 2
+
+# Same idea for the price SNAPSHOT store, which had no version marker at all.
+#
+# Deleting the local partitions is NOT enough and is not a theory: after removing all 1,855 local
+# WN snapshot partitions, USTFutureStore._read_partition pulled WNM20 straight back from Supabase
+# still carrying price=112.496875 -- the EUR/NOK-derived value. A plausibility band cannot catch
+# these either, because the old decoder mapped the FX rate INTO the range of a real bond price.
+#
+# Requiring the stamp for every root would invalidate ~10,760 good partitions and force a full
+# refetch of contracts that were never wrong. Only WN's vendor root was mis-mapped, so only WN is
+# quarantined. If another root's vendor mapping ever changes, add it here and bump the version.
+_SNAPSHOT_SCHEMA_VERSION = 2
+_SNAPSHOT_QUARANTINE_ROOTS = {"WN"}
+
+
+def _snapshot_root(symbol: str) -> str:
+    m = re.match(r"^(?P<root>[A-Z0-9]{1,3}?)[FGHJKMNQUVXZ]\d{1,2}$", str(symbol).strip().upper())
+    return m.group("root") if m else str(symbol).strip().upper()
 
 
 def _normalize_symbol(sym: str) -> Optional[str]:
@@ -532,6 +567,20 @@ class USTFuturesMDP(MarketDataProvider[InstrumentLike], LayeredCacheMixin):
             df = df[pd.to_datetime(df["trading_date"], errors="coerce").dt.date == trading_date]
         if df.empty:
             return None
+        if _snapshot_root(symbol) in _SNAPSHOT_QUARANTINE_ROOTS:
+            # A partition can hold BOTH a stale unstamped row and a fresh stamped one (a non
+            # overwrite write lands a second file in the same directory and _read_partition
+            # concatenates them), and both carry the same timestamp -- so filter rather than
+            # inspect, or which row wins is down to file ordering.
+            if "schema_version" not in df.columns:
+                return None
+            versions = pd.to_numeric(df["schema_version"], errors="coerce")
+            df = df[versions >= _SNAPSHOT_SCHEMA_VERSION]
+            if df.empty:
+                # Pre-stamp snapshot for a quarantined root -> cannot be trusted. Treat as a miss
+                # so the price is refetched under the corrected vendor root and rewritten (which
+                # also pushes the correction back to Supabase).
+                return None
         if "timestamp_utc" in df.columns:
             df = df.sort_values("timestamp_utc", kind="mergesort")
         return df.iloc[-1].to_dict()
@@ -556,9 +605,13 @@ class USTFuturesMDP(MarketDataProvider[InstrumentLike], LayeredCacheMixin):
                     "trading_date": trading_date,
                     "session_minute": self._session_minute_for_timestamp(canonical_ts_dt),
                     "price": float(price),
+                    "schema_version": _SNAPSHOT_SCHEMA_VERSION,
                 }
             ]
         )
+        # Quarantined roots always overwrite: leaving the stale unstamped file beside the new one
+        # keeps a known-bad price on disk (and in Supabase) for no benefit.
+        overwrite = overwrite or (_snapshot_root(symbol) in _SNAPSHOT_QUARANTINE_ROOTS)
         self._get_ust_future_store().write_snapshot_day(symbol, trading_date, snapshot_df, overwrite=overwrite)
 
     @staticmethod
@@ -586,7 +639,19 @@ class USTFuturesMDP(MarketDataProvider[InstrumentLike], LayeredCacheMixin):
             # A flag that only exists in a log line is a flag nobody reads.
             "data_ok",
             "data_quality_reason",
+            "schema_version",
         ]
+
+    @staticmethod
+    def _basis_report_cache_is_current(df: pd.DataFrame) -> bool:
+        """Is this cached basis report one the CURRENT code produced?
+
+        Anything without a schema_version column predates the stamp and is therefore pre-fix.
+        """
+        if "schema_version" not in df.columns:
+            return False
+        versions = pd.to_numeric(df["schema_version"], errors="coerce").dropna()
+        return bool(len(versions)) and bool((versions == _BASIS_REPORT_SCHEMA_VERSION).all())
 
     def _basis_report_core_timestamp(
         self,
@@ -882,7 +947,7 @@ class USTFuturesMDP(MarketDataProvider[InstrumentLike], LayeredCacheMixin):
 
         # cache only the *reference* basket definition (cusips/cfs/delivery window/etc),
         # NOT the live cash pricers (they depend on usts_mdp + timestamp).
-        cache_key = f"{source}|{symbol}|{as_of.isoformat()}"
+        cache_key = f"{_USTF_BASKET_CACHE_VERSION}|{source}|{symbol}|{as_of.isoformat()}"
         with self:
             cached = self._threadsafe_basket_cache_get(cache_key)
 
@@ -1079,6 +1144,7 @@ class USTFuturesMDP(MarketDataProvider[InstrumentLike], LayeredCacheMixin):
                     "repo_rate": repo_used,
                     "settlement_date": settlement_date,
                     "delivery_date": delivery_date,
+                    "schema_version": _BASIS_REPORT_SCHEMA_VERSION,
                 }
             )
 
@@ -1105,7 +1171,10 @@ class USTFuturesMDP(MarketDataProvider[InstrumentLike], LayeredCacheMixin):
     ) -> pd.DataFrame:
         ts_dt = _as_datetime(timestamp)
         resolved_symbol = self._resolve_contract_symbol(_normalize_symbol(symbol) or symbol, ts_dt)
-        core_ts_dt = None if force_refresh else self._basis_report_core_timestamp(
+        # force_refresh skips the cache READ but must NOT skip the WRITE -- otherwise there is no
+        # way to repair a poisoned entry through this API, and the store (plus whatever Supabase
+        # holds) keeps serving the old value forever.
+        core_ts_dt = self._basis_report_core_timestamp(
             timestamp=timestamp,
             basket_source=basket_source,
             usts_mdp_source=usts_mdp_source,
@@ -1114,8 +1183,11 @@ class USTFuturesMDP(MarketDataProvider[InstrumentLike], LayeredCacheMixin):
         )
         trading_date = self._trading_date_for_timestamp(core_ts_dt or ts_dt)
 
-        if core_ts_dt is not None:
+        if core_ts_dt is not None and not force_refresh:
             cached_df = self._get_ust_future_store().read_basis_report_day(resolved_symbol, trading_date)
+            if not cached_df.empty and not self._basis_report_cache_is_current(cached_df):
+                # Stale schema -> treat as a miss. Do NOT trust a report built by older code.
+                cached_df = pd.DataFrame()
             if not cached_df.empty:
                 cached_df = cached_df.loc[
                     :, [col for col in self._basis_report_columns() if col in cached_df.columns]
@@ -1135,11 +1207,16 @@ class USTFuturesMDP(MarketDataProvider[InstrumentLike], LayeredCacheMixin):
             repo_rate=repo_rate,
             force_refresh=force_refresh,
         )
-        # Validate BEFORE persisting, so a bad report is never written into the day cache.
         report_df = enforce_basis_report_quality(
             report_df, symbol=resolved_symbol, on_bad_data=on_bad_data
         )
-        if core_ts_dt is not None and not report_df.empty:
+        # Never persist a report that failed the gate, whatever on_bad_data says. "warn" means the
+        # CALLER wants to carry on past a bad day; it does not mean the bad day should be cached
+        # and handed to everyone else afterwards. (Learned the hard way: a backfill running with
+        # on_bad_data="warn" wrote the failing reports into the store, and the next run served
+        # them from cache -- with a fresh schema stamp, so they looked current.)
+        failed_gate = "data_ok" in report_df.columns and not bool(report_df["data_ok"].all())
+        if core_ts_dt is not None and not report_df.empty and not failed_gate:
             self._get_ust_future_store().write_basis_report_day(resolved_symbol, trading_date, report_df, overwrite=force_refresh)
         return report_df
 
