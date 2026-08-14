@@ -154,12 +154,23 @@ def build(root: str, start: dt.date, end: dt.date, out: pathlib.Path,
                 if np.isfinite(fin2) and abs(fin2 - fin) > 0.02:
                     rep = mdp.get_basis_report(symbol=sym, timestamp=d, repo_rate=float(fin2))
                     fin = fin2
-            r = rep.sort_values("irr", ascending=False).reset_index(drop=True)
+            # CTD is the MINIMUM net basis. Selecting by max IRR agrees with it on clean data and
+            # is less robust when the feed is not.
+            r = rep.sort_values("bnoc").reset_index(drop=True)
             ctd, alt = r.iloc[0], (r.iloc[1] if len(r) > 1 else r.iloc[0])
+            min_gross32 = float(r["gross_basis"].min()) * 32.0
             rec = {"date": ts, "root": root, "symbol": sym,
                    "futures_price": float(ctd.get("futures_price", np.nan)),
                    "repo_pct": float(fin), "delivery_date": deliv,
-                   "n_deliverable": int(len(r))}
+                   "n_deliverable": int(len(r)),
+                   "min_gross32": min_gross32,
+                   # INTERNAL CONSISTENCY GATE. The futures price is pinned to the cheapest
+                   # CF-adjusted forward, so the smallest gross basis in the basket must be small.
+                   # Where it is not, the cash and futures feeds disagree about the same day and no
+                   # net basis computed from them means anything. Measured: 2024 gives ~0-5/32;
+                   # early 2015 gives 135-509/32 across the WHOLE basket, which is a feed break,
+                   # not a market.
+                   "data_ok": bool(abs(min_gross32) < 32.0)}
             for tag, b in (("ctd", ctd), ("alt", alt)):
                 cpn, yrs = _coupon_years(b.get("label"), d, b.get("maturity_date"))
                 ytm = float(b.get("ytm", np.nan))

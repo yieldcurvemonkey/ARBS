@@ -48,7 +48,7 @@ One 32nd on $1mm face is $312.50.
 
 ## What this backtest is, and what bounds it
 
-* **Sample: 2015→2026, daily mark-to-market**, front contract rolled 7 days before first notice.
+* **Sample: daily mark-to-market** over whatever survives the consistency gate, front contract rolled 7 days before first notice.
   The panel is built by the repo's own basket machinery (`USTFuturesMDP.get_basis_report`) — CME
   conversion factors, FedInvest cash marks, Barchart futures settles.
 * **Financing is the swaps/OIS term rate to each contract's own delivery date**, not an overnight
@@ -84,8 +84,21 @@ from RVUtils.BasisVsVol.switch import Deliverable, delivery_option_two_bond
 DATA = pathlib.Path(REPO) / "notebooks" / "backtests" / "basis_vs_vol" / "_data"
 RESULTS = pathlib.Path(REPO) / "notebooks" / "backtests" / "basis_vs_vol" / "_results"
 
-def load_panel(root):
-    return pd.read_parquet(DATA / f"basis_panel_{{root}}.parquet")
+def load_panel(root, gate=True):
+    """Load a panel and apply the internal-consistency gate.
+
+    The futures price is pinned to the cheapest CF-adjusted forward, so the smallest gross basis in
+    the basket must be small. Where it is not, the cash and futures feeds disagree about the same
+    day and nothing computed from them is a net basis. Measured: 2024 gives ~0-5/32 and 2019 ~14/32,
+    but early 2015 gives 135-509/32 across the WHOLE basket -- a feed break, not a market.
+    """
+    p = pd.read_parquet(DATA / f"basis_panel_{{root}}.parquet")
+    if gate and "data_ok" in p:
+        n0 = len(p)
+        p = p[p["data_ok"]].reset_index(drop=True)
+        if n0 != len(p):
+            print(f"  {{root}}: consistency gate dropped {{n0-len(p)}} of {{n0}} days")
+    return p
 
 PANELS = {{r: load_panel(r) for r in ("ZB", "ZN", "UB") if (DATA / f"basis_panel_{{r}}.parquet").exists()}}
 for r, p in PANELS.items():
