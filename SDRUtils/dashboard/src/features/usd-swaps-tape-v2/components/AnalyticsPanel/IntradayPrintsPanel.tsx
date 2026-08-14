@@ -69,6 +69,7 @@ import {
   YAxis,
 } from 'recharts'
 import { ANALYTICS_COLORS } from './analytics-format'
+import { IntradayPrintsPlot } from './IntradayPrintsPlot'
 import {
   DIRECTION_AMBER,
   DIRECTION_NEUTRAL,
@@ -93,6 +94,8 @@ import {
   fmtSignedBps,
   FWD_MAX_DEFAULT,
   FWD_MAX_OPTIONS,
+  followFocused,
+  type FollowSource,
   hourlyTicks,
   legendSizeRefs,
   markerOpacity,
@@ -162,7 +165,20 @@ type MarkDatum = {
   row: PrintRow
 }
 
-export function IntradayPrintsPanel(): JSX.Element {
+/**
+ * In the analytics dock this panel FOLLOWS the tape's focused trade: the tenor,
+ * the rate index, the venue class and the day all come from whatever row is
+ * selected. That is the point of it living in the dock rather than in a
+ * standalone view.
+ *
+ * Following is a toggle, not a cage — pinning lets you keep one instrument on
+ * screen while clicking around the tape. And nothing is ever guessed: a
+ * selection this chart cannot draw (a 4Y, a basis trade, a `~10Y`) leaves the
+ * controls where they were and says so, because silently swapping in a
+ * different instrument under the reader's own selection is the failure this
+ * whole panel is built against.
+ */
+export function IntradayPrintsPanel({ focused }: { focused?: FollowSource | null } = {}): JSX.Element {
   const [date, setDate] = useState<string | null>(null)
   const [latestDate, setLatestDate] = useState<string | null>(null)
   const [tenor, setTenor] = useState<string>('10Y')
@@ -172,10 +188,27 @@ export function IntradayPrintsPanel(): JSX.Element {
   const [includeOffMarket, setIncludeOffMarket] = useState(false)
   const [tenorMatch, setTenorMatch] = useState<'strict' | 'band'>('strict')
   const [fwdMaxYears, setFwdMaxYears] = useState<number>(FWD_MAX_DEFAULT)
+  const [followSelection, setFollowSelection] = useState(true)
+  const [followRefusals, setFollowRefusals] = useState<string[]>([])
 
   const [data, setData] = useState<PrintsResponse | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+
+  // Take what the selection can give and REPORT what it could not.
+  const followKey = focused
+    ? `${focused.tenor_display ?? ''}|${focused.rate_index_clean ?? ''}|`
+      + `${focused.execution_start ?? ''}|${focused.dd_venue_class ?? ''}`
+    : ''
+  useEffect(() => {
+    if (!followSelection || !focused) return
+    const f = followFocused(focused)
+    if (f.tenor) setTenor(f.tenor)
+    if (f.rateIndex) setRateIndex(f.rateIndex)
+    if (f.venueClass) setVenueClass(f.venueClass)
+    if (f.date) setDate(f.date)
+    setFollowRefusals(f.refusals)
+  }, [followSelection, followKey, focused])
 
   const qs = useMemo(() => {
     const p = new URLSearchParams()
@@ -373,6 +406,15 @@ export function IntradayPrintsPanel(): JSX.Element {
           </Chip>
         ))}
         <span className="mx-1 h-3 w-px bg-slate-800" />
+        {focused ? (
+          <Chip
+            active={followSelection}
+            onClick={() => setFollowSelection((x) => !x)}
+            title="Follow the trade selected in the tape above — its tenor, rate index, venue and tape day. Unpin to hold one instrument on screen while clicking around the tape."
+          >
+            follow selection
+          </Chip>
+        ) : null}
         <Chip
           active={includeOffMarket}
           onClick={() => setIncludeOffMarket((x) => !x)}
@@ -479,6 +521,15 @@ export function IntradayPrintsPanel(): JSX.Element {
           under it 54px and was 0.018 of a 0.230 cumulative layout shift —
           small next to the page's own 0.120, but it is the one that moves
           while the reader is already looking at the chart. */}
+      {followSelection && followRefusals.length > 0 ? (
+        <div className="rounded border border-amber-700/50 bg-amber-950/20 px-2 py-1 text-[10px] text-amber-200">
+          <span className="font-semibold">the selected trade was only partly followed</span>
+          {followRefusals.map((r) => (
+            <span key={r.slice(0, 40)} className="block">— {r}</span>
+          ))}
+        </div>
+      ) : null}
+
       <div className="min-h-[22px]">
       {loading && midSource === 'none' ? (
         <div className="rounded border border-slate-800 bg-slate-900/30 px-2 py-1 text-[10px] text-slate-600">
@@ -531,161 +582,21 @@ export function IntradayPrintsPanel(): JSX.Element {
       {/* ------------------------------------------------------------------ */}
       {/* the chart                                                           */}
       {/* ------------------------------------------------------------------ */}
-      <ResponsiveContainer width="100%" height={CHART_H}>
-        <ComposedChart data={midSeries} margin={{ top: 6, right: 8, bottom: 2, left: 0 }}>
-          <CartesianGrid
-            strokeDasharray="3 3"
-            stroke={ANALYTICS_COLORS.slate800}
-            vertical={false}
-          />
-          {/* type="number" is MANDATORY. The recharts default (category) spaces
-              points evenly, which would draw a 3-minute gap and a 178-minute
-              gap identically — a lie about time on a chart whose subject is
-              time. The domain is computed across EVERY series because recharts
-              takes its own domain from chart-level data only. */}
-          <XAxis
-            dataKey="t"
-            type="number"
-            scale="time"
-            domain={tDom ?? ['dataMin', 'dataMax']}
-            ticks={ticks}
-            allowDataOverflow={false}
-            tick={{ fill: ANALYTICS_COLORS.slate500, fontSize: 9 }}
-            // The first tick carries its date, and the date is the ET one. The
-            // UTC date would read "06-18 21:00" for a bar that is 21:00 ET on
-            // 06-17 — the same off-by-one-day the whole panel exists to make
-            // visible, printed on its own axis.
-            tickFormatter={(v: number, i: number) =>
-              i === 0 ? `${etDateOf(v).slice(5)} ${fmtEtClock(v)}` : fmtEtClock(v)
-            }
-            minTickGap={24}
-          />
-          {/* ONE axis, rate in percent. Deviation in bp is not a second scale —
-              it gets its own chart below. Two measures of different scale on
-              one plot is the single most misread chart there is. */}
-          <YAxis
-            type="number"
-            domain={yDom ?? ['auto', 'auto']}
-            allowDataOverflow={false}
-            tick={{ fill: ANALYTICS_COLORS.slate500, fontSize: 9 }}
-            tickFormatter={(v: number) => v.toFixed(3)}
-            width={54}
-          />
-          {etMidnight != null ? (
-            <ReferenceLine
-              x={etMidnight}
-              stroke={ANALYTICS_COLORS.slate700}
-              strokeDasharray="2 4"
-              label={{
-                value: '00:00 ET',
-                position: 'insideTopLeft',
-                fill: ANALYTICS_COLORS.slate500,
-                fontSize: 9,
-              }}
-            />
-          ) : null}
-          <Tooltip
-            content={<PrintTooltip />}
-            cursor={{ stroke: '#334155', strokeDasharray: '3 3' }}
-            contentStyle={{
-              backgroundColor: '#0f172a',
-              border: '1px solid #334155',
-              fontSize: 10,
-              fontFamily: 'monospace',
-            }}
-          />
-
-          {/* THE MID. Never smoothed, always broken rather than bridged, and
-              drawn differently depending on what it IS:
-
-                grid          solid, no dots     — a modelled curve sampled every
-                                                   minute. Dots would put ~1,000
-                                                   markers on screen, which reads
-                                                   as a band, not a line.
-                reconstructed dashed, with dots  — a polyline through the prints.
-                                                   The dots ARE the observations;
-                                                   the dashes say the segments
-                                                   between them are drawn, not
-                                                   measured.
-
-              Suppressed entirely below MIN_MID_POINTS. */}
-          {midSource === 'grid' ? (
-            <Line
-              type="linear"
-              dataKey="mid"
-              stroke={ANALYTICS_COLORS.slate400}
-              strokeWidth={1.5}
-              connectNulls={false}
-              dot={false}
-              activeDot={false}
-              isAnimationActive={false}
-              name="mid"
-            />
-          ) : midSource === 'reconstructed' ? (
-            <Line
-              type="linear"
-              dataKey="mid"
-              stroke={ANALYTICS_COLORS.slate400}
-              strokeWidth={1.25}
-              strokeDasharray="4 3"
-              connectNulls={false}
-              dot={{ r: 2, fill: ANALYTICS_COLORS.slate400, stroke: 'none' }}
-              activeDot={false}
-              isAnimationActive={false}
-              name="mid"
-            />
-          ) : (
-            <Line
-              type="linear"
-              dataKey="mid"
-              stroke="none"
-              connectNulls={false}
-              dot={{ r: 2, fill: ANALYTICS_COLORS.slate400, stroke: 'none' }}
-              activeDot={false}
-              isAnimationActive={false}
-              name="mid"
-            />
-          )}
-
-          {/* NEVER RENDER A SCATTER WITH NO DATA.
-              A <Scatter data={[]}> does not draw nothing — recharts falls back
-              to the CHART's data prop, which here is the 1-minute mid grid, and
-              emits one empty <g class="recharts-scatter-symbol"> per grid
-              minute. MEASURED on the production build before this guard: 2,332
-              scatter-symbol nodes on a day with 72 marks, and 2,643 on the
-              busiest day (= 2 x 1,164 grid points + 313 real marks, exactly).
-              Both package-legs and off-market are off by default, so the common
-              case paid ~2,330 dead DOM nodes on every render of the panel.
-              The marks themselves were never the cost. */}
-          {packageMarks.length > 0 ? (
-            <Scatter
-              data={packageMarks}
-              dataKey="y"
-              shape={<Mark />}
-              isAnimationActive={false}
-              name="package legs"
-            />
-          ) : null}
-          {offMarketMarks.length > 0 ? (
-            <Scatter
-              data={offMarketMarks}
-              dataKey="y"
-              shape={<Mark />}
-              isAnimationActive={false}
-              name="off-market"
-            />
-          ) : null}
-          {directionalMarks.length > 0 ? (
-            <Scatter
-              data={directionalMarks}
-              dataKey="y"
-              shape={<Mark />}
-              isAnimationActive={false}
-              name="prints"
-            />
-          ) : null}
-        </ComposedChart>
-      </ResponsiveContainer>
+      {/* ONE PLOTLY FIGURE, TWO PANELS, ONE CROSSHAIR.
+          The rate on top and the signed distance from mid below share an x
+          axis, so a spike line crosses both: the question a reader has at a
+          mark is "how far off mid was that", and the answer is directly under
+          it. Dark, pannable, scroll-zoomable. */}
+      <IntradayPrintsPlot
+        rows={rows}
+        mid={midSeries}
+        midSource={midSource}
+        yDomain={yDom}
+        tDomain={tDom}
+        height={CHART_H + DEV_H}
+        tenor={tenor}
+        rateIndex={rateIndex}
+      />
 
       <MarkLegend
         showPackageLegs={showPackageLegs}
@@ -693,7 +604,6 @@ export function IntradayPrintsPanel(): JSX.Element {
         midSource={midSource}
       />
 
-      <DeviationStrip rows={rows} tDom={tDom} />
 
       {data?.disclosures?.length ? (
         <ul className="mt-0.5 flex flex-col gap-0.5 text-[9.5px] leading-tight text-slate-500">

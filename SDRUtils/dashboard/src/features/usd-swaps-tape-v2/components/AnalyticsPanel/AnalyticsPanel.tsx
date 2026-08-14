@@ -16,6 +16,7 @@ import {
 import { COLUMN_FILTER_QUERY_KEY } from '../../hooks/useColumnFilters'
 import { CardsDrawer } from './CardsDrawer'
 import { FocusedTradeBar } from './FocusedTradeBar'
+import { IntradayPrintsPanel } from './IntradayPrintsPanel'
 import { MmsTab } from './MmsTab'
 import { SequenceBar } from './SequenceBar'
 import { SequenceTab } from './SequenceTab'
@@ -479,6 +480,7 @@ export function AnalyticsPanel(props: AnalyticsPanelProps): JSX.Element {
             },
             { key: 'levels', label: 'Traded Levels', icon: '◈', badge: String(extremes.extremes.length) },
             { key: 'mms', label: 'MMS', icon: '⬡', badge: String(mmsSummary.mmsCount) },
+            { key: 'prints', label: 'Intraday Prints', icon: '◰' },
             ...(mode === 'sequence' && sequence
               ? ([{ key: 'sequence' as const, label: 'Sequence', icon: '⇉', badge: String(sequence.length) }])
               : []),
@@ -568,6 +570,22 @@ export function AnalyticsPanel(props: AnalyticsPanelProps): JSX.Element {
               state={mmsState}
               setState={setMmsState}
             />
+          </div>
+        ) : null}
+
+        {/*
+          Intraday prints renders OUTSIDE the baseTrade guard for the same
+          reason MMS does, and one more: it does not read  at all. It
+          queries one session of one tenor from its own endpoint and carries
+          its own filters, so a focused trade is neither needed nor used.
+        */}
+        {activeTab === 'prints' ? (
+          <div className="mt-0.5">
+            {/* The panel FOLLOWS this row: tenor, rate index, venue class and
+                tape day all come from the tape's selection. `source` is the
+                raw tape row, which is where tenor_display and
+                rate_index_clean live. */}
+            <IntradayPrintsPanel focused={baseTrade?.source ?? null} />
           </div>
         ) : null}
       </div>
