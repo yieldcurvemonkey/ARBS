@@ -4,7 +4,7 @@
 market-data path (`MDP/USTFutures`, `Query/USTFutures`, `definitions/USTFutures.py`)
 
 This started from a handover listing three measured defects that made 2 of 3 futures roots
-unmeasurable. It found **six**, of which the largest was not in the handover: the Ultra Bond's
+unmeasurable. It found **eight**, of which the largest was not in the handover: the Ultra Bond's
 price was never a Treasury price at all. Every claim below is a measurement; where something is
 inferred or unverified it says so.
 
@@ -124,12 +124,16 @@ thermometer for the gap between yields and 6%, not a market signal.
 
 Measured basket effect:
 
-| contract | before | after |
+| contract | before | after (final, vintage-aware) |
 |---|---|---|
-| `ZNU18` @ 2018-06-12 | 21 bonds (4× 30-Year) | 9 bonds, notes only |
-| `ZNU20` @ 2020-08-04 | 24 bonds (5× 30-Year) | 11 bonds, notes only |
-| `ZNM24` @ 2024-04-15 | 19 bonds (1× 30-Year) | 10 bonds, notes only |
+| `ZNU18` @ 2018-06-12 | 21 bonds, 4 of them 30-Year | **16** bonds — 13 ten-year + 3 seven-year notes |
+| `ZNU20` @ 2020-08-04 | 24 bonds, 5 of them 30-Year | **18** bonds — 13 ten-year + 5 seven-year notes |
+| `ZNM24` @ 2024-04-15 | 19 bonds, 1 of them 30-Year | **10** bonds — post-cap, so the 8-year ceiling bites |
 | `ZBM24`, `WNM24` | 56 / 19 | **unchanged** — no collateral damage |
+
+(The pre-2023 counts drop less than the post-2023 one because removing the non-deliverables is
+partly offset by restoring the 8–10 year notes that the wrongly-applied modern cap had excluded —
+see defect 7.)
 
 ### A handover suspicion that does not survive: UB's `n_deliverable = 19`
 
