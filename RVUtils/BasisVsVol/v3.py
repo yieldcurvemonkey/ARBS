@@ -375,8 +375,17 @@ def run_v3(panel: pd.DataFrame, cfg: V3Config) -> V3Result:
             swpt_ratio = (g_b / g_s) if (np.isfinite(g_s) and g_s > 0) else 0.0
             strike = fwd[i]
             swpt_entry_val = mark_short_receiver(fwd[i], strike, vol[i], tex[i], ann[i]) * swpt_ratio
-            # swaption round trip, charged as a vol-bp cost on the matched notional
-            c += cfg.cost_mult * abs(swpt_ratio) * ann[i] * (cfg.swaption_cost_vol_bp / 1e4) * math.sqrt(
+            # Swaption round trip, charged as a vol-bp cost on the matched notional.
+            #
+            # NO /1e4. This module is bp-native by declaration (see atmf_normal_gamma) and
+            # `swaption_annuity` is "$ per bp on $1mm notional" (v3_panel.py:249), so the ATM
+            # Bachelier price IS `ann * vol_bp * sqrt(T/2pi)` -- verified against this module's own
+            # `normal_receiver_price` at ratio 1.00000000. The extra division was a leftover from a
+            # decimal-rate convention and under-charged the swaption leg by a factor of 10,000:
+            # UB $0.63 instead of $6,332, ZB $2.39 instead of $23,948, ZN $2.22 instead of $22,203.
+            # The pre-registration required "a separate swaption round-trip cost in normal-bp of
+            # vol -- an RV trade costed on one leg only flatters itself"; until now it was not met.
+            c += cfg.cost_mult * abs(swpt_ratio) * ann[i] * cfg.swaption_cost_vol_bp * math.sqrt(
                 max(tex[i], 0.0) / (2.0 * math.pi))
         cost[i] += c
         pnl[i] -= c
@@ -397,7 +406,8 @@ def _close(p, entry_i, i, entry_nb, nb, reason, cfg, pnl, pnl_b, pnl_s, cost, us
     """Book the unwind. ``book_today=False`` is the roll/gap path: flatten without P&L."""
     c = cfg.cost_mult * cfg.cost_32nds * TICK_USD_PER_MM * cfg.face_mm
     if use_swaption:
-        c += cfg.cost_mult * abs(swpt_ratio) * ann[i] * (cfg.swaption_cost_vol_bp / 1e4) * math.sqrt(
+        # bp-native, no /1e4 -- see the entry leg above.
+        c += cfg.cost_mult * abs(swpt_ratio) * ann[i] * cfg.swaption_cost_vol_bp * math.sqrt(
             max(tex[i], 0.0) / (2.0 * math.pi))
     cost[i] += c
     pnl[i] -= c
