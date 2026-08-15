@@ -358,11 +358,16 @@ def get_current_fixing(
             f"No fixings available for {curve_name} as of {as_of_date}"
         )
 
-    # fixings is a Series indexed by date, values in decimal (e.g. 0.043)
-    valid = fixings[fixings.index <= pd.Timestamp(as_of_date)]
+    # fixings is a Series indexed by date, values in decimal (e.g. 0.043).
+    #
+    # Strictly BEFORE as_of_date: SOFR and EFFR for day D publish on the morning of D+1, so a
+    # valuation dated D cannot know D's own fixing. `_fetch_fixings` returns the WHOLE history
+    # regardless of its as_of_date argument, so this filter is the only thing standing between a
+    # historical call and today's overnight rate.
+    valid = fixings[fixings.index < pd.Timestamp(as_of_date)]
     if valid.empty:
         raise ValueError(
-            f"No fixings on or before {as_of_date} for {curve_name}"
+            f"No fixings published before {as_of_date} for {curve_name}"
         )
 
     latest_date = valid.index.max()

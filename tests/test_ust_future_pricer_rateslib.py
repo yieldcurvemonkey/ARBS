@@ -98,7 +98,19 @@ def test_gross_basis_uses_default_future_price_and_basket_prices(monkeypatch):
     assert dummy_bf.gross_basis_inputs[0] == (112.0, (100.0, 100.0), None, False)
 
 
-def test_bnoc_defaults_repo_fixing_contract_imm_and_settlement(monkeypatch):
+def test_bnoc_defaults_repo_fixing_last_delivery_day_and_settlement(monkeypatch):
+    """The default delivery date is the contract's LAST DELIVERY DAY, not its IMM date.
+
+    This test previously asserted ``datetime(2026, 6, 17)`` -- the third Wednesday -- and so pinned
+    the defect it was written to describe. The third Wednesday is a Eurodollar convention; a
+    Treasury future delivers across the business days of the delivery month. Carrying to it instead
+    of to the last delivery day moved min net basis by -0.71 to -5.67/32 on the dates measured, and
+    flipped the sign of the maximum implied repo on the 2020 ones (USZ20 -39.23% -> +26.04%).
+
+    ``resolve_delivery_contract`` is still monkeypatched to return the IMM date, because that is
+    genuinely what it returns -- it is the contract's month LABEL. What changed is that
+    ``_resolve_delivery`` no longer mistakes that label for a delivery date.
+    """
     pricer = RLUSTFuturePricer(
         symbol="TYM26",
         reference_date=datetime.date(2026, 3, 4),
@@ -124,7 +136,9 @@ def test_bnoc_defaults_repo_fixing_contract_imm_and_settlement(monkeypatch):
     assert dummy_bf.net_basis_inputs[0][1] == (100.0, 100.0)
     assert dummy_bf.net_basis_inputs[0][2] == pytest.approx(4.32)
     assert dummy_bf.net_basis_inputs[0][3] == datetime.datetime(2026, 3, 4)
-    assert dummy_bf.net_basis_inputs[0][4] == datetime.datetime(2026, 6, 17)
+    # Last business day of the June-2026 delivery month, derived from the contract -- not the
+    # 2026-06-17 IMM date the patched resolver returns.
+    assert dummy_bf.net_basis_inputs[0][4] == datetime.datetime(2026, 6, 30)
     # rateslib 2.7.1 rejects a bare "ActAct"; Act/360 is also the right convention for US repo.
     assert dummy_bf.net_basis_inputs[0][5] == "Act360"
     assert dummy_bf.net_basis_inputs[0][6] is False
