@@ -173,3 +173,49 @@ def test_parallel_builder_clips_fixings_per_day_not_per_batch(monkeypatch):
     assert early.index.max().date() < datetime.date(2018, 6, 12)
     assert late.index.max().date() < datetime.date(2018, 9, 20)
     assert len(early) < len(late), "each day must get its own point-in-time series"
+
+
+# --------------------------------------------------------------------------------------------
+# the ordering guarantee
+# --------------------------------------------------------------------------------------------
+
+
+def test_the_returned_series_is_chronological():
+    """`.iloc[-1]` must mean "the latest fixing", on every curve.
+
+    Measured 2026-08-15, before the fix: `_fetch_fixings` returned USD-SOFR-1D ASCENDING and
+    USD-OIS DESCENDING, from the same cache on the same call. So `.iloc[-1]` gave 3.62% for SOFR
+    and 7.03% for EFFR -- the latter being the fixing for 2000-07-03, not the 3.63% of 2026-08-13.
+    A 340 bp error, on one curve and not the other, from an identical expression.
+
+    That reached a published result: `notebooks/backtests/linvol_grid_common` computed its
+    SOFR-EFFR basis as a CONSTANT -523.0 bp on all 3,230 rows, which is exactly
+    (first-ever SOFR 1.80%) - (first-ever EFFR 7.03%).
+    """
+    from MDP.IRSwaps.fixings_cache.fixings_cache import _chronological
+
+    descending = pd.Series([7.03, 5.0, 3.63], index=pd.to_datetime(["2026-08-13", "2010-01-04", "2000-07-03"]))
+    out = _chronological(descending)
+    assert out.index.is_monotonic_increasing
+    assert out.iloc[-1] == pytest.approx(7.03)
+    assert out.index[-1] == pd.Timestamp("2026-08-13")
+
+
+def test_chronological_tolerates_empty_and_none():
+    from MDP.IRSwaps.fixings_cache.fixings_cache import _chronological
+
+    assert _chronological(None) is None
+    empty = pd.Series(dtype=float)
+    assert len(_chronological(empty)) == 0
+
+
+def test_fixings_before_is_order_independent():
+    """The clip must not depend on how the cache happened to be written."""
+    from MDP.IRSwaps.fixings_cache.fixings_cache import fixings_before
+
+    ascending = pd.Series([1.0, 2.0, 3.0], index=pd.to_datetime(["2018-06-08", "2018-06-11", "2018-06-12"]))
+    descending = ascending.iloc[::-1]
+    a = fixings_before(ascending, datetime.date(2018, 6, 12)).sort_index()
+    d = fixings_before(descending, datetime.date(2018, 6, 12)).sort_index()
+    pd.testing.assert_series_equal(a, d)
+    assert a.iloc[-1] == pytest.approx(2.0)

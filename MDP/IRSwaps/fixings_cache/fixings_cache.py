@@ -49,6 +49,28 @@ def _has_date(series: pd.Series, target: pd.Timestamp) -> bool:
     return target in set(idx)
 
 
+def _chronological(series: Optional[pd.Series]) -> Optional[pd.Series]:
+    """Sort a fixing series oldest-first. Cheap, and it removes a whole class of silent error.
+
+    The cached CSVs are not order-guaranteed, and measured 2026-08-15 they are NOT consistent with
+    each other: ``USD-SOFR-1D`` came back ascending while ``USD-OIS`` came back **descending**. A
+    caller doing ``.iloc[-1]`` -- which reads like "the latest fixing" -- therefore got 3.62% for
+    SOFR and **7.03%** for EFFR, the latter being the fixing for 2000-07-03 rather than the 3.63%
+    of 2026-08-13. A 340 bp error, on one curve and not the other, from the same expression.
+
+    That is worse than a plain bug: it is curve-dependent and cache-vintage-dependent, so it shows
+    up in one place and not the next and looks like a data problem rather than an ordering one. It
+    reached a published result -- ``notebooks/backtests/linvol_grid_common`` computed its SOFR-EFFR
+    basis as a CONSTANT -523.0 bp on all 3,230 rows, which is exactly
+    ``(first-ever SOFR 1.80%) - (first-ever EFFR 7.03%)``.
+
+    No caller can want a descending series, so the order is fixed here rather than at each of them.
+    """
+    if series is None or len(series) == 0:
+        return series
+    return series.sort_index()
+
+
 def _read_cached_if_valid(root: Path, curve_name: str, expected_dt: pd.Timestamp) -> Optional[pd.Series]:
     dated_dirs = sorted([p for p in root.iterdir() if p.is_dir()], reverse=True)  # newest first
     for d in dated_dirs:
@@ -228,6 +250,9 @@ def _fetch_fixings(
     history; a few callers do (they fetch once at the batch maximum and clip per date themselves,
     or the full panel *is* the deliverable), which is why this function's behaviour is documented
     rather than changed.
+
+    The returned series IS sorted oldest-first -- see :func:`_chronological` for the 340 bp error
+    that was not.
     """
 
     if as_of_date == "live":
@@ -246,7 +271,7 @@ def _fetch_fixings(
     if not force_refresh and not runtime_stale:
         cached = _read_cached_if_valid(fixings_cache, curve_name, expected_dt)
         if cached is not None:
-            return cached
+            return _chronological(cached)
 
     # If force_refresh, clear only today's files (do NOT delete prior days – we may need them as fallback).
     if force_refresh:
@@ -280,9 +305,9 @@ def _fetch_fixings(
         # (Comment out if you always want the freshest pull, even if incomplete.)
         cached_fallback = _read_cached_if_valid(fixings_cache, curve_name, expected_dt)
         if cached_fallback is not None:
-            return cached_fallback
+            return _chronological(cached_fallback)
 
     # Light cleanup of very old dated dirs (keeps recent for resilience).
     _cleanup_old_cache_dirs(fixings_cache, keep_last=_KEEP_LAST_N_DATED_DIRS)
 
-    return fixings_series
+    return _chronological(fixings_series)
