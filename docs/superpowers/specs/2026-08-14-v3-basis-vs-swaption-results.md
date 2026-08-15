@@ -145,13 +145,32 @@ roots (UB −344,187.34, ZB −1,446,945.45, ZN −528,986.27; trade counts 15/1
 agrees to within **$2.40 on $1.5m** because its swaption leg is booked at unwind rather than marked
 as a second product — a stated limitation, not a silent one.
 
+> **Addendum, 2026-08-15 (branch `fix/ustf-data-layer-2`).** That $2.40 was measuring a defect, and
+> it identifies it exactly. `v3.py` charged the swaption round trip as
+> `ann * (swaption_cost_vol_bp / 1e4) * sqrt(T/2π)`, but the module is bp-native and
+> `swaption_annuity` is already "$ per bp", so the `/1e4` under-charged the leg by a factor of
+> **10,000**: UB $0.63 instead of $6,332, ZB $2.39 instead of $23,948, ZN $2.22 instead of $22,203.
+> The QDB path folded in the swaption's marks and never charged its cost, so the residual WAS the
+> uncharged cost, to the cent. Fixed; the pre-registered "separate swaption round-trip cost in
+> normal-bp of vol" is met for the first time. The verdict does not move — the correction is
+> strictly negative-going against 0 of 198 profitable cells.
+
 ## Limitations, declared
 
 1. **Sticky-ATM marking** of an open short receiver: the cube is ATM-only before 2020-01-24.
 2. **2020-01-24 → 2020-03-24** carries no expiry under 4Y in the cube — 40 days, exactly COVID, and
    exactly the short-expiry vol this trade most wants. Those days are **dropped, not bridged**;
    bridging a vol spike is how a backtest invents a trade that never existed.
+   **Addendum, 2026-08-15: no longer true, and it was never a data gap.** The warm ranked candidate
+   cubes by smile richness rather than curve coverage, so it kept a tiny 13-offset rectangle over
+   the full ATM surface. The complete 17×9 surface was in the tag cache the whole time. Rebuilt
+   offline: 60 degraded days (59 contiguous, 2020-01-24 → 2020-04-21) → **0**, and 1M×10Y ATM vol
+   now runs through the crisis (168.2bp on 2020-03-09). The V3 grid has not been re-run on it.
 3. **Static gamma matching** at entry; no re-hedging.
-4. **Arm B's QDB path** marks the basis leg only.
+4. **Arm B's QDB path** marks the basis leg only. **Addendum, 2026-08-15:** still true — the
+   swaption is booked as a cash adjustment at unwind rather than through the registered
+   `Query/IRSwaptions` product, so its intraday marks are wrong by up to **$121,703 on ZB**
+   (measured). The wiring design exists; it was not implemented. See
+   `2026-08-15-ustf-data-layer-round-2.md`.
 5. **Small trade counts.** The winning cell has 15 trades. Nothing here would be significant even if
    the sign were positive, which it is not.

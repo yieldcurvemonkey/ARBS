@@ -50,7 +50,7 @@ def _has_date(series: pd.Series, target: pd.Timestamp) -> bool:
 
 
 def _chronological(series: Optional[pd.Series]) -> Optional[pd.Series]:
-    """Sort a fixing series oldest-first. Cheap, and it removes a whole class of silent error.
+    """Sort a fixing series oldest-first and drop non-publication days. Two classes of silent error.
 
     The cached CSVs are not order-guaranteed, and measured 2026-08-15 they are NOT consistent with
     each other: ``USD-SOFR-1D`` came back ascending while ``USD-OIS`` came back **descending**. A
@@ -64,11 +64,19 @@ def _chronological(series: Optional[pd.Series]) -> Optional[pd.Series]:
     basis as a CONSTANT -523.0 bp on all 3,230 rows, which is exactly
     ``(first-ever SOFR 1.80%) - (first-ever EFFR 7.03%)``.
 
-    No caller can want a descending series, so the order is fixed here rather than at each of them.
+    Non-finite rows are dropped for the same reason. The NY Fed series carries an explicit NaN on
+    days the benchmark does not publish -- Good Friday, which is a SIFMA holiday -- and `.iloc[-1]`
+    on a slice ending there returns that NaN, not the last real fixing. Measured: SOFR for
+    2021-04-02 is NaN, so `RLUSTFuturePricer._resolve_repo_rate` returned NaN, so **every net basis
+    in every basis report on every Good Friday was NaN** and the whole day failed the consistency
+    gate. One day a year per root, on all six, since 2018. A NaN is not a published fixing.
+
+    No caller can want a descending series or a NaN fixing, so both are handled here rather than at
+    each of the forty call sites.
     """
     if series is None or len(series) == 0:
         return series
-    return series.sort_index()
+    return series.dropna().sort_index()
 
 
 def _read_cached_if_valid(root: Path, curve_name: str, expected_dt: pd.Timestamp) -> Optional[pd.Series]:

@@ -219,3 +219,34 @@ def test_fixings_before_is_order_independent():
     d = fixings_before(descending, datetime.date(2018, 6, 12)).sort_index()
     pd.testing.assert_series_equal(a, d)
     assert a.iloc[-1] == pytest.approx(2.0)
+
+
+def test_non_publication_days_are_dropped():
+    """Good Friday carries an explicit NaN, and `.iloc[-1]` on a slice ending there returns it.
+
+    SOFR does not publish on Good Friday -- SIFMA closes -- and the NY Fed series says so with a
+    NaN row rather than an absent one. Measured before the fix: SOFR for 2021-04-02 is NaN, so
+    `RLUSTFuturePricer._resolve_repo_rate` returned NaN, so EVERY net basis in EVERY basis report on
+    EVERY Good Friday was NaN and the whole day failed the consistency gate -- one day a year, per
+    root, on all six, since 2018. It read as a market-holiday data gap; it was an arithmetic one.
+
+    After the fix, those days price: TUM21 2021-04-02 repo 0.010% min net basis +0.14/32,
+    FVM23 2023-04-07 4.810% +2.57/32, UXYM24 2024-03-29 5.340% +3.98/32, TUM26 2026-04-03 3.660%
+    -1.44/32 -- all passing the gate.
+    """
+    from MDP.IRSwaps.fixings_cache.fixings_cache import _chronological
+
+    with_hole = pd.Series(
+        [0.0001, 0.0001, float("nan"), 0.0001],
+        index=pd.to_datetime(["2021-03-31", "2021-04-01", "2021-04-02", "2021-04-05"]),
+    )
+    out = _chronological(with_hole)
+    assert len(out) == 3
+    assert pd.Timestamp("2021-04-02") not in out.index
+
+    from MDP.IRSwaps.fixings_cache.fixings_cache import fixings_before
+
+    # The repo rate for a Good Friday valuation is Thursday's fixing, not NaN.
+    as_of_good_friday = fixings_before(out, datetime.date(2021, 4, 3))
+    assert as_of_good_friday.index[-1] == pd.Timestamp("2021-04-02") - pd.Timedelta(days=1)
+    assert float(as_of_good_friday.iloc[-1]) == pytest.approx(0.0001)

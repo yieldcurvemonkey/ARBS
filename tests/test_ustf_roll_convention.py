@@ -194,3 +194,35 @@ def test_every_resolution_site_agrees():
 def test_two_digit_year_keeps_its_leading_zero():
     """`int(strftime('%y'))` dropped it, giving `TYH8` for 2008. Harmless now, wrong pre-2010."""
     assert front_month(datetime.date(2008, 1, 15), "TY") == "TYH08"
+
+
+def test_the_invoice_swap_lookup_keeps_the_expiring_contract_through_the_roll():
+    """The one place the roll change could make production WORSE, closed by construction.
+
+    `usd_swaps._build_invoice_swap_lookup` resolves contracts from a bare root. Moving the roll to
+    the first position day drops the expiring contract a median 16 business days earlier than the
+    IMM rule did -- and SDR invoice swaps go on referencing it for those weeks, so they would have
+    stopped matching, silently. The lookup now takes the UNION of front, back and still-deliverable,
+    which is a strict superset of either rule's coverage: two symbols outside the roll, three
+    inside.
+    """
+    import inspect
+
+    from SDRUtils.products.usd import usd_swaps
+
+    src = inspect.getsource(usd_swaps._build_invoice_swap_lookup)
+    assert "ust_deliverable_contract" in src, "the expiring contract must stay in the lookup"
+
+    roll_day = ust_first_position_day(2025, 9)
+    before = roll_day - datetime.timedelta(days=1)
+    while before.weekday() >= 5:
+        before -= datetime.timedelta(days=1)
+
+    def union(day):
+        return {front_month(day, "TY"), ust_deliverable_contract(day, "TY"), back_months(day, "TY", 1)[0]}
+
+    assert union(before) == {"TYU25", "TYZ25"}
+    assert union(roll_day) == {"TYU25", "TYZ25", "TYH26"}, "the expiring contract survives the roll"
+    # ... and past its last trading day it drops out again.
+    after_ltd = ust_last_trading_day("TY", 2025, 9) + datetime.timedelta(days=1)
+    assert "TYU25" not in union(after_ltd)
