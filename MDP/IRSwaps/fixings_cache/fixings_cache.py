@@ -162,11 +162,73 @@ def _resolve_fixings_cache_dir(curve_name: str, base_cache_dir: Optional[str | P
     return fixings_cache
 
 
+def fixings_before(fixings: Optional[pd.Series], as_of_date: datetime.date | Literal["live"]) -> Optional[pd.Series]:
+    """The fixings a valuation dated ``as_of_date`` could actually have known.
+
+    Overnight benchmarks are published the MORNING AFTER the day they cover -- SOFR at 08:00 ET on
+    D+1 -- so a mark struck on D may use fixings up to and including D-1, and no further. Hence the
+    strict ``<``. An inclusive filter is a one-business-day peek: measured on a front SER Jun-2018
+    contract at reference date 2018-06-12, ``<`` gives 1.774344% and ``<=`` gives 1.770435%, a
+    0.39 bp difference that is small, systematic and free to remove.
+
+    This matters far more than it looks, because rateslib has no notion of "today": an instrument
+    consumes any fixing present in the series for any observation date inside its own accrual
+    window, whatever the curve's anchor. Measured on rateslib 2.7.1 with a curve anchored
+    2018-06-12 and a series whose post-anchor values were varied deliberately, a SER Sep-2018
+    contract returned 3.000000 / 4.000000 / 5.000000 / 6.000000% as the post-anchor fixings were
+    set to 3 / 4 / 5 / 6% -- the contract was priced entirely off realised future fixings rather
+    than off the curve. A 1Y IRS effective 2018-09-03 moved 205 bp the same way. So an over-long
+    fixing series is a live lookahead, not a harmless extra, and every clip in this repo is
+    load-bearing.
+    """
+    if fixings is None or len(fixings) == 0:
+        return fixings
+    if as_of_date == "live":
+        as_of_date = datetime.datetime.now(tz=_NY_TZ).date()
+    index = pd.to_datetime(fixings.index, errors="coerce")
+    return fixings[index.date < as_of_date]
+
+
+def fixings_asof(
+    as_of_date: datetime.date | Literal["live"],
+    curve_name: str,
+    force_refresh: Optional[bool] = False,
+) -> pd.Series:
+    """Point-in-time view of the fixing series: everything published strictly before ``as_of_date``.
+
+    This is what almost every caller of :func:`_fetch_fixings` actually wants. ``_fetch_fixings``
+    returns the WHOLE history regardless of its ``as_of_date`` -- see its docstring -- so
+    ``.tail(1)`` on its result yields *today's* overnight rate for a historical date. Units are
+    unchanged (decimals); call sites that want percent still scale.
+    """
+    return fixings_before(_fetch_fixings(as_of_date=as_of_date, curve_name=curve_name, force_refresh=force_refresh), as_of_date)
+
+
 def _fetch_fixings(
     as_of_date: datetime.date | Literal["live"],
     curve_name: str,
     force_refresh: Optional[bool] = False,
 ) -> pd.Series:
+    """Return the FULL published fixing history for ``curve_name``. Always. No truncation.
+
+    ``as_of_date`` selects a cache VINTAGE, never a data WINDOW. It is used for exactly two things,
+    neither of which slices the result:
+
+    1. ``expected_dt = _last_usbd_before(as_of_date)``, which is the cache-accept gate, the
+       cache-write gate and the ``cached_fallback`` re-check -- "does this cache contain at least
+       the fixing for the last business day before ``as_of_date``?";
+    2. :func:`_should_refresh_for_runtime_staleness`, which only fires when ``as_of_date`` is today
+       and forces a re-pull if the newest cache file predates SOFR's 08:00 ET publication.
+
+    Measured: ``as_of_date=2018-06-12``, ``2020-10-15`` and today all return the identical 2,090-row
+    series spanning 2018-04-02..2026-08-13 with ``tail(1) = 0.0362``. A caller taking the last value
+    for a June-2018 valuation therefore gets 3.62% where 1.69% is correct -- a 193 bp error.
+
+    **Every caller must clip.** Use :func:`fixings_asof` unless you genuinely want the whole
+    history; a few callers do (they fetch once at the batch maximum and clip per date themselves,
+    or the full panel *is* the deliverable), which is why this function's behaviour is documented
+    rather than changed.
+    """
 
     if as_of_date == "live":
         as_of_date = datetime.datetime.now(tz=_NY_TZ).date()

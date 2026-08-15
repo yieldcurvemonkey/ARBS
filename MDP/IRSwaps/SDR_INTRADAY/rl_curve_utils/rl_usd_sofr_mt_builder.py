@@ -8,6 +8,7 @@ import pytz
 import QuantLib as ql
 import rateslib as rl
 
+from MDP.IRSwaps.fixings_cache.fixings_cache import fixings_before
 from MDP.IRSwaps.SDR_INTRADAY.rl_curve_utils.tos import get_quotes
 from MDP.IRSwaps.SDR_INTRADAY.rl_curve_utils.SDRDataBuilder import SDRDataBuilder
 from MDP.IRSwaps.SDR_INTRADAY.rl_curve_utils.stir_curve_building_utils import (
@@ -269,7 +270,10 @@ def rl_usd_sofr_mt_builder(
     stir_timestamp, rl_stirfs, _ = _fetch_stir_market_data(
         curve_id_local=curve_id,
         snap_local=snap,
-        fixings=sofr_fixings,
+        # Clipped to what this snapshot could have known. Enforced here rather than trusted from
+        # the caller: rateslib prices a STIRFuture straight off any realised fixing inside its
+        # accrual, so a series that runs past `snap` is a lookahead, not spare data.
+        fixings=fixings_before(sofr_fixings, snap.date() if isinstance(snap, datetime.datetime) else snap),
         side=live_side,
         include_serff=False,
     )

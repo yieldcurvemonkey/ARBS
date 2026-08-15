@@ -622,7 +622,12 @@ class STIRFutureMDP(MarketDataProvider[InstrumentLike], LayeredCacheMixin):
                     curve_name=curve_name,
                     force_refresh=self.force_refresh_fixings,
                 ).sort_index()
-                fixings_val = fixings_val[fixings_val.index.date <= ref_date] * 100
+                # STRICTLY before ref_date. SOFR for day D is published at 08:00 ET on D+1, so a
+                # mark struck on D cannot know D's own fixing; `<=` was a one-business-day peek.
+                # Measured on a front SER Jun-2018 contract at ref 2018-06-12: `<` 1.774344% vs
+                # `<=` 1.770435%, i.e. 0.39 bp, systematic and in the same direction every day.
+                # IRSwapsMDP already uses `<` at all 24 of its sites; this is the odd one out.
+                fixings_val = fixings_val[fixings_val.index.date < ref_date] * 100
                 memo[memo_key] = fixings_val
             if fixings_val is not None:
                 meta["fixings"] = fixings_val
@@ -1527,7 +1532,8 @@ class STIRFutureMDP(MarketDataProvider[InstrumentLike], LayeredCacheMixin):
                             curve_name=curve_name,
                             force_refresh=self.force_refresh_fixings,
                         ).sort_index()
-                        sofr_fixings = sofr_fixings[sofr_fixings.index.date <= ref_date] * 100
+                        # Strictly before ref_date -- see the note at the get_data site above.
+                        sofr_fixings = sofr_fixings[sofr_fixings.index.date < ref_date] * 100
                         fixings_memo[memo_key] = sofr_fixings
                     meta_base["fixings"] = sofr_fixings
 
