@@ -88,7 +88,14 @@ _USTF_BASKET_CACHE_VERSION = "USTF_BASKET_v3"
 #   v2 -> v3 (2026-08-14): the ZN deliverable grade is vintage-dependent -- the "less than 8 years"
 #                          cap commences with the September 2023 contract month, so v2 truncated
 #                          every pre-2023 ZN basket by ~7 notes.
-_BASIS_REPORT_SCHEMA_VERSION = 3
+#   v3 -> v4 (2026-08-15): the delivery date used for carry was the contract's IMM DATE. Line 1210
+#                          calls `_resolve_delivery(None)`, and that fallback returned the third
+#                          Wednesday -- which is not a delivery date. Every net basis, BNOC and
+#                          implied repo in every report carried to the wrong day. Measured on the
+#                          existing reports: min net basis moves -0.71 to -5.67/32 and the maximum
+#                          implied repo changes sign on the 2020 dates (USZ20 -39.23% -> +26.04%,
+#                          TYZ20 -26.22% -> +17.69%). Reports built before this cannot be reused.
+_BASIS_REPORT_SCHEMA_VERSION = 4
 
 # Which BarChart series a stored price came from. Until the EOD endpoint was repaired, `interval=1`
 # was the only thing that worked, so every price in the store and in the layered cache is a
@@ -587,26 +594,23 @@ class USTFuturesMDP(MarketDataProvider[InstrumentLike], LayeredCacheMixin):
 
     @classmethod
     def _resolve_contract_symbol(cls, sym: str, ts_dt: datetime.datetime) -> str:
+        """Resolve a bare root to a contract. One resolver, shared -- see definitions.USTFutures.
+
+        This used to inline its own IMM-date arithmetic. Three other sites did the same, and they
+        agreed only because all four happened to be written identically; a fix to one would have
+        made `warm_ustf_cache` warm `TYU26` while `usd_swaps` read `TYZ26`, and every warm would
+        have become a miss with no error. They now all call `front_month`.
+
+        Note the two-digit year here was also `int(...strftime('%y'))`, which drops the leading zero
+        (`TYH8`, not `TYH08`). Harmless 2010-2069, wrong for any pre-2010 backfill. `front_month`
+        formats it properly.
+        """
         resolved = str(sym)
         if len(resolved) > 3:
             return resolved
-        import rateslib as rl
+        from definitions.USTFutures import front_month
 
-        if rl.dt(ts_dt.year, ts_dt.month, ts_dt.day) >= rl.get_imm(year=ts_dt.year, month=ts_dt.month):
-            contract_imm_date = rl.next_imm(start=rl.dt(ts_dt.year, ts_dt.month, ts_dt.day))
-            if contract_imm_date.month == 3:
-                return f"{resolved}H{int(contract_imm_date.strftime('%y'))}"
-            if contract_imm_date.month == 6:
-                return f"{resolved}M{int(contract_imm_date.strftime('%y'))}"
-            if contract_imm_date.month == 9:
-                return f"{resolved}U{int(contract_imm_date.strftime('%y'))}"
-            if contract_imm_date.month == 12:
-                return f"{resolved}Z{int(contract_imm_date.strftime('%y'))}"
-
-        for m_code, month_nums in _CME_QUARTERLY_MONTH_CODES.items():
-            if ts_dt.month in month_nums:
-                return f"{resolved}{m_code}{int(ts_dt.strftime('%y'))}"
-        return resolved
+        return front_month(cls._to_chicago_datetime(ts_dt).date(), resolved)
 
     @classmethod
     def _get_ust_future_store(cls):

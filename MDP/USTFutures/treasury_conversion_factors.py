@@ -234,8 +234,14 @@ def resolve_delivery_contract(symbol: str, as_of: datetime.date) -> tuple[str, d
         root = _normalize_root(token[:-3])
         contract_imm_date = rl.get_imm(code=token[-3:])
     else:
+        # Bare root. Resolve through the ONE shared front-month rule rather than a fourth private
+        # copy of the IMM arithmetic -- the four copies agreed only by having been written the same
+        # way, so any partial fix would have split them silently. See definitions.USTFutures.
+        # front_month for why the roll is the first position day and not the IMM date.
+        from definitions.USTFutures import front_month
+
         root = _normalize_root(token)
-        contract_imm_date = rl.next_imm(start=datetime.datetime(as_of.year, as_of.month, as_of.day))
+        contract_imm_date = rl.get_imm(code=front_month(as_of, root)[-3:])
 
     if isinstance(contract_imm_date, datetime.datetime):
         imm_date = contract_imm_date.date()

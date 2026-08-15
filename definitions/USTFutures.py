@@ -5,7 +5,22 @@ import logging
 import math
 from typing import Dict, List, Sequence, Tuple
 
-from MDP.IRSwaps.SDR_INTRADAY.rl_curve_utils.tos import CME_MONTH_CODE, _imm_cutoff, _next_contracts
+import pandas as pd
+from pandas.tseries.holiday import (
+    AbstractHolidayCalendar,
+    GoodFriday,
+    Holiday,
+    USLaborDay,
+    USMartinLutherKingJr,
+    USMemorialDay,
+    USPresidentsDay,
+    USThanksgivingDay,
+    nearest_workday,
+    sunday_to_monday,
+)
+from pandas.tseries.offsets import CustomBusinessDay
+
+from MDP.IRSwaps.SDR_INTRADAY.rl_curve_utils.tos import CME_MONTH_CODE, _monthly_cutoff, _next_contracts
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -163,18 +178,151 @@ def normalize_barchart_ust_future_price(symbol: str, price: float) -> float:
     return float("nan")
 
 
+class CMEInterestRateCalendar(AbstractHolidayCalendar):
+    """CBOT/CME interest-rate trading holidays.
+
+    Not the federal calendar, and the difference is not cosmetic. CME closes on **Good Friday**,
+    which the federal calendar has no rule for, and CME **trades** on Columbus Day and Veterans Day,
+    which the federal calendar closes. New Year is ``sunday_to_monday``, not ``nearest_workday``:
+    when 1 January falls on a Saturday the exchange trades 31 December (it did in 2021).
+
+    Verified against the last bar BarChart holds for every expired contract, 6 roots x 2018-2025:
+    **192/192 exact**. The same code on ``pandas.USFederalHolidayCalendar`` scores **174/192** -- so
+    the check discriminates, and these three rules are exactly the 18 contracts it gets wrong
+    (``ZNH18``/``ZBH18``/``UDH18``/``TNH18`` and the ``ZTH18``/``ZFH18`` pair on Good Friday 2018;
+    ``*Z21`` on the 2021 New Year; ``*H24`` on Good Friday 2024).
+
+    Known limitation, not currently load-bearing: CME has opened on Good Friday when it collided
+    with the payrolls release (2023-04-07, 2026-04-03). Neither lands in a last-trading-day window.
+    """
+
+    rules = [
+        Holiday("NewYearsDay", month=1, day=1, observance=sunday_to_monday),
+        USMartinLutherKingJr,
+        USPresidentsDay,
+        GoodFriday,
+        USMemorialDay,
+        Holiday("Juneteenth", month=6, day=19, start_date=pd.Timestamp("2022-06-19"), observance=nearest_workday),
+        Holiday("IndependenceDay", month=7, day=4, observance=nearest_workday),
+        USLaborDay,
+        USThanksgivingDay,
+        Holiday("Christmas", month=12, day=25, observance=nearest_workday),
+    ]
+
+
+_CME_BD = CustomBusinessDay(calendar=CMEInterestRateCalendar())
+
+# Business days between the last trading day and the last business day of the delivery month.
+# The short end trades through the whole delivery month; the long end stops seven business days
+# early so the short has time to declare intention.
+UST_FUTURE_LAST_TRADE_BD_BEFORE_MONTH_END: Dict[str, int] = {
+    "TU": 0,
+    "Z3N": 0,
+    "FV": 0,
+    "TY": 7,
+    "UXY": 7,
+    "US": 7,
+    "WN": 7,
+    "TWE": 7,
+}
+
+#: First position (intention) day: two business days before the first business day of the delivery
+#: month. This is the roll the market uses -- see ``ust_front_month``.
+_UST_POSITION_DAY_BD_BEFORE_MONTH_START = 2
+
+
+def _last_business_day_of_month(year: int, month: int) -> datetime.date:
+    stamp = pd.Timestamp(year=year, month=month, day=1) + pd.offsets.MonthEnd(0)
+    if not _CME_BD.is_on_offset(stamp):
+        stamp = stamp - _CME_BD
+    return stamp.date()
+
+
+def _first_business_day_of_month(year: int, month: int) -> datetime.date:
+    stamp = pd.Timestamp(year=year, month=month, day=1)
+    if not _CME_BD.is_on_offset(stamp):
+        stamp = stamp + _CME_BD
+    return stamp.date()
+
+
+def ust_last_trading_day(root: str, year: int, month: int) -> datetime.date:
+    """Last trading day of the ``root`` contract delivering in ``year``/``month``.
+
+    TU/Z3N/FV trade to the last business day of the delivery month; TY/UXY/US/WN/TWE stop seven
+    business days before it. Validated against observed final bars, 192/192 (see
+    :class:`CMEInterestRateCalendar`).
+    """
+    key = (root or "").strip().upper()
+    offset = UST_FUTURE_LAST_TRADE_BD_BEFORE_MONTH_END.get(key)
+    if offset is None:
+        offset = UST_FUTURE_LAST_TRADE_BD_BEFORE_MONTH_END[normalize_root(key)]
+    last_bd = pd.Timestamp(_last_business_day_of_month(year, month))
+    return (last_bd - offset * _CME_BD).date() if offset else last_bd.date()
+
+
+def ust_first_position_day(year: int, month: int) -> datetime.date:
+    """First position (intention) day: two business days before the delivery month's first bd."""
+    first_bd = pd.Timestamp(_first_business_day_of_month(year, month))
+    return (first_bd - _UST_POSITION_DAY_BD_BEFORE_MONTH_START * _CME_BD).date()
+
+
+def _ust_position_day_cutoff(year: int, month: int) -> datetime.date:
+    if month in UST_FUTURE_VALID_MONTHS:
+        return ust_first_position_day(year, month)
+    return _monthly_cutoff(year, month)
+
+
+def _ust_last_trade_cutoff_for(root: str):
+    def _cutoff(year: int, month: int) -> datetime.date:
+        if month in UST_FUTURE_VALID_MONTHS:
+            # `_next_contracts` skips a month when as_of >= cutoff, so the cutoff is the first day
+            # the contract is no longer tradeable: the day after its last trading day.
+            return ust_last_trading_day(root, year, month) + datetime.timedelta(days=1)
+        return _monthly_cutoff(year, month)
+
+    return _cutoff
+
+
 def build_contract_symbol(root: str, month_code: str) -> str:
     return f"{normalize_root(root)}{month_code}"
 
 
 def front_month(as_of: datetime.date, root: str) -> str:
+    """The contract the MARKET is trading -- rolled on the first position day.
+
+    This used to roll on the IMM date (third Wednesday), which is a Eurodollar/SOFR convention with
+    no meaning for a Treasury future. The handover's suspicion was that it therefore named expired
+    contracts; measured over 2,168 CME business days and 2018-2026, it **never** does -- the IMM
+    date always falls before the last trading day. The real defect is the opposite one: it holds
+    the expiring contract a median **16 business days** past the liquidity roll.
+
+    Measured against the contract actually carrying the most open interest, 2018-2026:
+
+    ==========================  ==========  ==========  ==========
+    rule                        TY          TU          WN
+    ==========================  ==========  ==========  ==========
+    IMM (previous)              25.3% wrong 25.4% wrong 26.9% wrong
+    last trading day            28.8% wrong 39.9% wrong 29.4% wrong
+    **first position day**      **3.7%**    **3.8%**    **4.4%**
+    ==========================  ==========  ==========  ==========
+
+    On the days the IMM rule was wrong, the contract it named held a **median 0.8-1.2%** of the
+    liquid contract's open interest, and was under 10% of it on 88% of them -- roughly 56-60 days a
+    year, per root, of quoting a contract nobody trades. The price was never garbage, which is
+    exactly why this was invisible.
+
+    Rolling at the last trading day -- the obvious "fix" -- is measurably WORSE than the status quo
+    for quoting, most of all for TU (100.5 days a year wrong vs 9.5). Delivery-side callers do not
+    need it: they all pass an explicit contract symbol. Use :func:`ust_deliverable_contract` when
+    the question really is "what can still be delivered".
+    """
     norm = normalize_root(root)
     contracts = _next_contracts(
         start_date=as_of,
         prefix=norm,
         count=1,
         valid_months=UST_FUTURE_VALID_MONTHS,
-        cutoff_fn=_imm_cutoff,
+        cutoff_fn=_ust_position_day_cutoff,
     )
     return contracts[0]
 
@@ -188,9 +336,28 @@ def back_months(as_of: datetime.date, root: str, count: int) -> List[str]:
         prefix=norm,
         count=count + 1,
         valid_months=UST_FUTURE_VALID_MONTHS,
-        cutoff_fn=_imm_cutoff,
+        cutoff_fn=_ust_position_day_cutoff,
     )
     return contracts[1 : count + 1]
+
+
+def ust_deliverable_contract(as_of: datetime.date, root: str) -> str:
+    """The nearest contract still TRADEABLE on ``as_of`` -- rolled after its last trading day.
+
+    Deliberately separate from :func:`front_month`. The two answer different questions and the
+    answers differ on 3.6% (TY) to 14.5% (TU) of days; collapsing them into one function is how the
+    IMM rule ended up serving both. Nothing calls this today; it exists so the next person asking
+    "is this contract still alive" does not reach for ``front_month``.
+    """
+    norm = normalize_root(root)
+    contracts = _next_contracts(
+        start_date=as_of,
+        prefix=norm,
+        count=1,
+        valid_months=UST_FUTURE_VALID_MONTHS,
+        cutoff_fn=_ust_last_trade_cutoff_for(norm),
+    )
+    return contracts[0]
 
 
 def month_code_to_month(month_code: str) -> int:

@@ -7,7 +7,7 @@ import rateslib as rl
 import pandas as pd
 
 from MDP.IRSwaps.fixings_cache.fixings_cache import _fetch_fixings
-from MDP.USTFutures.treasury_conversion_factors import resolve_delivery_contract
+from MDP.USTFutures.treasury_conversion_factors import delivery_business_window, resolve_delivery_contract
 from Query.FixedRateBonds.backends.rateslib.RLFixedRateBondPricer import RLFixedRateBondPricer
 from Query.USTFutures._USTFutureGenericPricer import _USTFutureGenericPricer
 from Query.USTFutures.backends.rateslib.RLUSTFuturePricable import RLUSTFuturePricable
@@ -296,11 +296,29 @@ class RLUSTFuturePricer(_USTFutureGenericPricer):
         return self._coerce_datetime(settlement) or self._coerce_datetime(self._basket_settlement())
 
     def _resolve_delivery(self, delivery: Optional[DateLike] = None) -> datetime.datetime:
+        """Delivery date for carry: an explicit argument, else this contract's LAST DELIVERY DAY.
+
+        The fallback used to be the contract's **IMM date**, which is not a delivery date at all --
+        the third Wednesday is a Eurodollar convention. Measured over 36 quarters, the first
+        delivery day is 9-14 business days AFTER the IMM date and the last is 6-15 after, so every
+        net basis, BNOC and implied repo computed without an explicit ``delivery=`` was short by
+        roughly two to three weeks of carry.
+
+        Worse, the pricer already knew the right answer: ``_delivery_dates`` carries the
+        ``(first, last)`` business-day window the MDP computed from the contract, and this method
+        ignored it. It is used first now. The degenerate ``(ref, ref)`` case is the constructor's
+        no-delivery default (``delivery or self._reference_date``), and only then is the window
+        derived from the contract.
+        """
         delivery_date = self._coerce_datetime(delivery)
         if delivery_date is not None:
             return delivery_date
+        window_start, window_end = self._delivery_dates
+        if window_start != window_end:
+            return self._coerce_datetime(window_end)
         _, contract_imm_date, _ = resolve_delivery_contract(self._symbol, self._reference_date)
-        return datetime.datetime(contract_imm_date.year, contract_imm_date.month, contract_imm_date.day)
+        _, last_delivery_day = delivery_business_window(contract_imm_date)
+        return datetime.datetime(last_delivery_day.year, last_delivery_day.month, last_delivery_day.day)
 
     def _resolve_repo_rate(
         self,
