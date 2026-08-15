@@ -25,6 +25,9 @@ class TreasuryFutureConversionSpec:
     min_original_term_months: Optional[int] = None
     max_original_term_months: Optional[int] = None
     exact_original_term_months: frozenset[int] = frozenset()
+    # First delivery period (YYYYMM) from which the CBOT re-opening clause applies, or None if the
+    # chapter has no such clause. 0 means "always". See _eligible_original_terms.
+    reopening_effective_period: Optional[int] = None
     calc_mode: str = "ust_short"
 
 
@@ -80,6 +83,13 @@ class TreasuryFutureConversionSpec:
 # catch.
 
 
+# Bumped when the ELIGIBILITY LOGIC changes without the spec table changing. `contract_specs_
+# fingerprint()` hashes the table, so a pure logic change would otherwise leave every cached basket
+# and basis report looking current -- the same class of miss the fingerprint was built to end.
+#   v1 -> v2 (2026-08-15): the CBOT re-opening clause (see _eligible_original_terms).
+_ELIGIBILITY_RULE_VERSION = 2
+
+
 # (column, value) pairs that mark a security as NOT fixed-principal. Compared case-insensitively.
 # `security_type` is deliberately absent: measured, it discriminates nothing, because TIPS are
 # served as security_type='Note'/'Bond' like any other coupon security.
@@ -97,6 +107,8 @@ _CONTRACT_SPECS: tuple[TreasuryFutureConversionSpec, ...] = (
         min_remaining_months_from_first=21,
         max_remaining_months_from_last=24,
         max_original_term_months=63,
+        # CBOT Ch.21 carries the re-opening clause today, with no start date.
+        reopening_effective_period=0,
         calc_mode="ust_short",
     ),
     TreasuryFutureConversionSpec(
@@ -114,6 +126,8 @@ _CONTRACT_SPECS: tuple[TreasuryFutureConversionSpec, ...] = (
         rounding_months=1,
         min_remaining_months_from_first=50,
         max_original_term_months=63,
+        # CBOT Ch.20 has carried the re-opening clause longest -- 25-099 cites it as the model.
+        reopening_effective_period=0,
         calc_mode="ust_short",
     ),
     TreasuryFutureConversionSpec(
@@ -136,6 +150,11 @@ _CONTRACT_SPECS: tuple[TreasuryFutureConversionSpec, ...] = (
         # CBOT Ch.19: "an original term to maturity ... of not more than 10 years".
         # Keeps 7-year notes (84) in and old 30-year bonds (360) / 20-year bonds (240) out.
         max_original_term_months=120,
+        # CBOT 25-099 (CFTC filing 2025-02-21, SER #9520) adds the re-opening clause to Ch.19 and
+        # Ch.26 "commencing with the March 2026 contract month and beyond". Ch.20/Ch.21 already had
+        # it; these two did not. Measured exposure to date: ZERO CUSIPs cross the 120-month cap with
+        # a shorter tranche, so nothing changes yet -- but the clause is now expressible.
+        reopening_effective_period=202603,
         calc_mode="ust_long",
     ),
     TreasuryFutureConversionSpec(
@@ -143,8 +162,20 @@ _CONTRACT_SPECS: tuple[TreasuryFutureConversionSpec, ...] = (
         aliases=("UXY", "TN", "ULTRA10Y"),
         rounding_months=3,
         min_remaining_months_from_first=113,
+        # NOT in rule 26101.A, which bounds the remaining term only from below ("not less than 9
+        # years 5 months"). Kept deliberately as an extra guard -- a security with MORE than ten
+        # years to run cannot have been a ten-year note, so this also catches a retrospective
+        # rebuild picking up something that did not exist yet. Measured impact of removing it: zero
+        # across all 52 UXY contract months 2016H-2028Z.
         max_remaining_months_from_first=120,
-        exact_original_term_months=frozenset({120}),
+        # CBOT Ch.26101.A, verbatim from the CFTC copy of submission 25-099: "an original term to
+        # maturity (i.e., term to maturity at issue) of not more than 10 years". Was
+        # `exact_original_term_months={120}`, which is stricter than the rule; measured identical
+        # across all 52 UXY contract months (only a 120-month note can carry 113+ months remaining),
+        # so this is a fidelity change, not a behaviour change.
+        max_original_term_months=120,
+        # Per CBOT 25-099, same March-2026 commencement as Ch.19. See the TY entry.
+        reopening_effective_period=202603,
         calc_mode="ust_long",
     ),
     TreasuryFutureConversionSpec(
@@ -203,6 +234,8 @@ def contract_specs_fingerprint() -> str:
                 s.min_original_term_months,
                 s.max_original_term_months,
                 sorted(s.exact_original_term_months),
+                s.reopening_effective_period,
+                _ELIGIBILITY_RULE_VERSION,
                 s.calc_mode,
             )
             for s in _CONTRACT_SPECS
@@ -343,15 +376,84 @@ def _coerce_date_columns(df: pd.DataFrame, columns: Sequence[str]) -> pd.DataFra
     return out
 
 
-def _eligible_original_terms(spec: TreasuryFutureConversionSpec, original_term_months: pd.Series) -> pd.Series:
-    mask = pd.Series(True, index=original_term_months.index)
+def _passes_original_term(spec: TreasuryFutureConversionSpec, term_months: pd.Series) -> pd.Series:
+    mask = pd.Series(True, index=term_months.index)
     if spec.min_original_term_months is not None:
-        mask &= original_term_months >= spec.min_original_term_months
+        mask &= term_months >= spec.min_original_term_months
     if spec.max_original_term_months is not None:
-        mask &= original_term_months <= spec.max_original_term_months
+        mask &= term_months <= spec.max_original_term_months
     if spec.exact_original_term_months:
-        mask &= original_term_months.isin(spec.exact_original_term_months)
+        mask &= term_months.isin(spec.exact_original_term_months)
     return mask
+
+
+def _eligible_original_terms(
+    spec: TreasuryFutureConversionSpec,
+    ref_df: pd.DataFrame,
+    *,
+    as_of: datetime.date,
+    period: Optional[int] = None,
+) -> pd.Series:
+    """Original-term eligibility, including CBOT's RE-OPENING clause.
+
+    The static bounds are the easy part. The clause that the static bounds cannot express, verbatim
+    from CBOT Chapters 19/20/21/26::
+
+        If the U.S. Treasury Department auctions and issues a Treasury security that meets these
+        standards, such that said security is a re-opening of an extant Treasury issue that had not
+        previously met these standards, then the extant Treasury issue shall be deemed to be a
+        Treasury note meeting these standards and shall be added to the contract grade as of the
+        issue date of said newly auctioned Treasury security.
+
+    So a 7-year note reopened later as a 5-year becomes deliverable into ZF, from the reopening's
+    issue date. The code keyed eligibility off ``oi`` -- and ``fiscaldata`` collapses a CUSIP's
+    tranches keeping the EARLIEST one -- so ``oi`` reported "7-Year" forever and the 63-month cap
+    dropped it. Measured against CME's published conversion-factor file for 2025-03-03:
+
+    ======  ==============  ============================================
+    root    CME basket      ours before
+    ======  ==============  ============================================
+    ZTH25   11 CUSIPs       10 -- missing ``912828Z78`` (T 1.5% Jan-27)
+    ZFH25   10 CUSIPs        9 -- missing ``91282CGQ8`` (T 4.0% Feb-30)
+    ======  ==============  ============================================
+
+    Both are 7-year notes reopened as 5-year notes; the auction record shows it plainly
+    (``912828Z78``: 7-Year issued 2020-01-31, reopened ``security_term='5-Year'`` 2022-01-31,
+    ``reopening='Yes'``).
+
+    The obvious fix -- relax TU's cap from 63 to 84 months -- is REFUTED by measurement: it
+    reproduces ZTH25 11/11 but also admits three securities CME does not list (``912828YX2``,
+    ``912828ZB9``, ``912828ZE3``). Eligibility has to key on the term of the shortest TRANCHE at
+    its own issue date, which is why the repair reaches the fiscaldata layer and not only this
+    table.
+
+    Vintage: per CBOT submission 25-099 (CFTC filing 2025-02-21, SER #9520) the clause is added to
+    Chapters 19 (TY) and 26 (UXY) "commencing with the March 2026 contract month", while Chapters
+    20 (FV) and 21 (TU) already carry it -- 25-099 says so itself, describing the new text as
+    "language similar to what currently exists in ... Rulebook Chapter 20". Applying one rule to
+    all four roots across all history would repeat exactly the mistake this file documents for the
+    TY 8-year cap.
+
+    Z3N is left with the clause unimplemented: its chapter text could not be read, and the exposure
+    is measured at zero anyway (exactly one CUSIP in history crosses its 84-month cap with a shorter
+    tranche, ``912828TY6``, and it would have landed only in period 201912 -- a contract month
+    BarChart shows was never listed).
+    """
+    mask = _passes_original_term(spec, ref_df["original_term_months"])
+
+    effective = spec.reopening_effective_period
+    if effective is None or (period is not None and int(period) < int(effective)):
+        return mask
+    if "reopened_term_months" not in ref_df.columns:
+        return mask
+
+    reopened = _passes_original_term(spec, ref_df["reopened_term_months"])
+    if "reopened_issue_date" in ref_df.columns:
+        issued = pd.to_datetime(ref_df["reopened_issue_date"], errors="coerce").dt.date
+        reopened &= issued.notna() & (issued <= as_of)
+    else:
+        reopened &= False
+    return mask | reopened
 
 
 def _eligible_remaining_terms(
@@ -429,7 +531,7 @@ def build_delivery_basket_frame(
             for maturity, call_date in zip(ref_df["maturity_date"], ref_df["call_date"])
         ]
 
-    eligible = _eligible_original_terms(spec, ref_df["original_term_months"])
+    eligible = _eligible_original_terms(spec, ref_df, as_of=as_of, period=int(period))
     eligible &= _eligible_remaining_terms(
         spec,
         delivery_first=delivery_first,
