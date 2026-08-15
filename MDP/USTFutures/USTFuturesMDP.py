@@ -90,6 +90,34 @@ _USTF_BASKET_CACHE_VERSION = "USTF_BASKET_v3"
 #                          every pre-2023 ZN basket by ~7 notes.
 _BASIS_REPORT_SCHEMA_VERSION = 3
 
+# Which BarChart series a stored price came from. Until the EOD endpoint was repaired, `interval=1`
+# was the only thing that worked, so every price in the store and in the layered cache is a
+# one-minute bar taken nearest 14:00 Chicago. `interval=None` now serves the exchange's daily
+# SETTLEMENT instead, and the two are not the same number: measured over 59 sampled days across six
+# contracts and three eras, settle vs the 14:00 CT bar has median 0.0/32, mean absolute 0.79/32 and
+# a maximum of 4.0/32 (October 2020).
+#
+# 0.79/32 is small but not nothing against a net basis whose healthy range is +-11/32, so the two
+# conventions must not be mixed in one panel without saying so. Neither the layered cache key nor
+# the snapshot partition used to record which one it held, so an EOD backfill would have silently
+# overwritten -- and been served in place of -- minute-derived prices. Both now carry the tag.
+#
+# Rows written before this existed carry no tag and are all one-minute bars, hence the legacy
+# default. The default interval is unchanged (1), so warm caches stay warm.
+_PRICE_SOURCE_EOD_SETTLE = "barchart_eod_settle"
+_PRICE_SOURCE_LEGACY = "barchart_1m"
+
+
+def _price_source_tag(interval: Optional[int]) -> str:
+    return _PRICE_SOURCE_EOD_SETTLE if interval is None else f"barchart_{int(interval)}m"
+
+
+def _price_cache_suffix(interval: Optional[int]) -> str:
+    """Cache-key suffix for the price series. Empty for the historical default, so v3 stays valid."""
+    tag = _price_source_tag(interval)
+    return "" if tag == _PRICE_SOURCE_LEGACY else f"-{tag}"
+
+
 # Same idea for the price SNAPSHOT store, which had no version marker at all.
 #
 # Deleting the local partitions is NOT enough and is not a theory: after removing all 1,855 local
@@ -426,6 +454,26 @@ class USTFuturesMDP(MarketDataProvider[InstrumentLike], LayeredCacheMixin):
                 bcf.close()
             except Exception:
                 pass
+        if interval is None and isinstance(df, pd.DataFrame) and not df.empty:
+            # ``queryeod`` bars are date-stamped and timezone-naive, but everything downstream
+            # works in Chicago wall time and locates the price with
+            # ``index.get_indexer([ts_dt], method="nearest")`` -- which raises outright on a naive
+            # index against an aware target ("Cannot compare dtypes datetime64[ns] and
+            # datetime64[ns, America/Chicago]"). So an EOD frame is stamped at the moment its price
+            # actually refers to: the daily settlement, which this module already treats as 14:00
+            # Chicago (see ``_as_datetime``).
+            #
+            # That 14:00 is measured, not assumed. Over 59 sampled days across six contracts and
+            # three eras, the settle and the 14:00 CT one-minute bar agree with median 0.0/32 and
+            # mean absolute 0.79/32 (max 4.0/32, in October 2020).
+            df = df.copy()
+            idx = pd.to_datetime(df.index)
+            if getattr(idx, "tz", None) is None:
+                df.index = (idx.normalize() + pd.Timedelta(hours=14)).tz_localize(chi)
+            else:
+                df.index = idx.tz_convert(chi)
+            df.index.name = "Date"
+
         if isinstance(df, pd.DataFrame) and not df.empty:
             df = df.copy()
             for col in df.columns:
@@ -570,7 +618,13 @@ class USTFuturesMDP(MarketDataProvider[InstrumentLike], LayeredCacheMixin):
                 state["store"] = USTFutureStore.default()
             return state["store"]
 
-    def _read_core_snapshot_row(self, *, symbol: str, trading_date: datetime.date) -> Optional[dict]:
+    def _read_core_snapshot_row(
+        self,
+        *,
+        symbol: str,
+        trading_date: datetime.date,
+        price_source: str = _PRICE_SOURCE_LEGACY,
+    ) -> Optional[dict]:
         store = self._get_ust_future_store()
         df = store.read_snapshot_day(symbol, trading_date)
         if df.empty:
@@ -579,6 +633,18 @@ class USTFuturesMDP(MarketDataProvider[InstrumentLike], LayeredCacheMixin):
             df = df[df["symbol"].astype(str) == str(symbol)]
         if "trading_date" in df.columns:
             df = df[pd.to_datetime(df["trading_date"], errors="coerce").dt.date == trading_date]
+        if df.empty:
+            return None
+        # A settlement price and a one-minute bar for the same instant are different numbers
+        # (see _PRICE_SOURCE_EOD_SETTLE), and a partition can hold both. Select rather than take
+        # the last row, or which convention a panel gets is down to file ordering. Untagged rows
+        # predate the tag and are all one-minute bars.
+        sources = (
+            df["price_source"].astype("string").fillna(_PRICE_SOURCE_LEGACY)
+            if "price_source" in df.columns
+            else pd.Series(_PRICE_SOURCE_LEGACY, index=df.index, dtype="string")
+        )
+        df = df[sources == str(price_source)]
         if df.empty:
             return None
         if _snapshot_root(symbol) in _SNAPSHOT_QUARANTINE_ROOTS:
@@ -606,6 +672,7 @@ class USTFuturesMDP(MarketDataProvider[InstrumentLike], LayeredCacheMixin):
         price: float,
         canonical_ts_dt: datetime.datetime,
         overwrite: bool = False,
+        price_source: str = _PRICE_SOURCE_LEGACY,
     ) -> None:
         if not self._core_source_enabled(self.source):
             return
@@ -620,6 +687,7 @@ class USTFuturesMDP(MarketDataProvider[InstrumentLike], LayeredCacheMixin):
                     "session_minute": self._session_minute_for_timestamp(canonical_ts_dt),
                     "price": float(price),
                     "schema_version": _SNAPSHOT_SCHEMA_VERSION,
+                    "price_source": str(price_source),
                 }
             ]
         )
@@ -769,6 +837,10 @@ class USTFuturesMDP(MarketDataProvider[InstrumentLike], LayeredCacheMixin):
         timestamp: DateLike = request.get("timestamp", "live")
         show_tqdm = bool(request.get("show_tqdm", False))
         interval = request.get("interval", 1)
+        # A settlement price and a one-minute bar are different numbers for the same instant, so
+        # they must not share a cache key or a snapshot row. See _PRICE_SOURCE_EOD_SETTLE.
+        price_source = _price_source_tag(interval)
+        price_cache_suffix = _price_cache_suffix(interval)
         force_refresh = bool(request.get("force_refresh", False))
         include_basket = bool(request.get("include_basket", True))
         basket_source = request.get("basket_source", "RL_CME_TCF")
@@ -801,7 +873,9 @@ class USTFuturesMDP(MarketDataProvider[InstrumentLike], LayeredCacheMixin):
 
             for sym in resolved_symbols:
                 if core_ts_dt is not None and not force_refresh:
-                    core_row = self._read_core_snapshot_row(symbol=sym, trading_date=as_of_date)
+                    core_row = self._read_core_snapshot_row(
+                        symbol=sym, trading_date=as_of_date, price_source=price_source
+                    )
                     if core_row is not None:
                         basket_data = None
                         if include_basket:
@@ -837,7 +911,7 @@ class USTFuturesMDP(MarketDataProvider[InstrumentLike], LayeredCacheMixin):
                         )
                         continue
 
-                cache_key = f"{_USTF_CACHE_VERSION}::{ts_iso}-{sym}-{self.source}"
+                cache_key = f"{_USTF_CACHE_VERSION}::{ts_iso}-{sym}-{self.source}{price_cache_suffix}"
                 cached = None if (force_refresh or use_live) else self._threadsafe_cache_get(cache_key)
                 if cached is not None:
                     ref_dt = self._parse_reference_date(cached.get("timestamp"))
@@ -865,7 +939,13 @@ class USTFuturesMDP(MarketDataProvider[InstrumentLike], LayeredCacheMixin):
                         meta_data=cached,
                     )
                     if core_ts_dt is not None:
-                        self._persist_core_snapshot(symbol=sym, price=float(cached["price"]), canonical_ts_dt=core_ts_dt, overwrite=force_refresh)
+                        self._persist_core_snapshot(
+                            symbol=sym,
+                            price=float(cached["price"]),
+                            canonical_ts_dt=core_ts_dt,
+                            overwrite=force_refresh,
+                            price_source=price_source,
+                        )
                 else:
                     missing.append(sym)
 
@@ -900,6 +980,7 @@ class USTFuturesMDP(MarketDataProvider[InstrumentLike], LayeredCacheMixin):
                         "price": float(series.loc[idx]),
                         "timestamp": ts_stamp,
                         "schema": 1,
+                        "price_source": price_source,
                     }
                     basket_data = None
                     if include_basket:
@@ -925,12 +1006,18 @@ class USTFuturesMDP(MarketDataProvider[InstrumentLike], LayeredCacheMixin):
                         meta_data=args,
                     )
                     if not use_live:
-                        cache_key = f"{_USTF_CACHE_VERSION}::{ts_iso}-{sym}-{self.source}"
-                        cache_key2 = f"{_USTF_CACHE_VERSION}::{args['timestamp']}-{sym}-{self.source}"
+                        cache_key = f"{_USTF_CACHE_VERSION}::{ts_iso}-{sym}-{self.source}{price_cache_suffix}"
+                        cache_key2 = f"{_USTF_CACHE_VERSION}::{args['timestamp']}-{sym}-{self.source}{price_cache_suffix}"
                         self._threadsafe_cache_put(cache_key, args)
                         self._threadsafe_cache_put(cache_key2, args)
                     if core_ts_dt is not None:
-                        self._persist_core_snapshot(symbol=sym, price=float(series.loc[idx]), canonical_ts_dt=core_ts_dt, overwrite=force_refresh)
+                        self._persist_core_snapshot(
+                            symbol=sym,
+                            price=float(series.loc[idx]),
+                            canonical_ts_dt=core_ts_dt,
+                            overwrite=force_refresh,
+                            price_source=price_source,
+                        )
 
             if not out:
                 raise ValueError("No matching UST futures prices for requested symbols.")
