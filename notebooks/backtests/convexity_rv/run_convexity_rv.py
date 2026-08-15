@@ -48,9 +48,15 @@ REPO = HERE.parents[2]
 NOTEBOOKS = [
     "strat1_curve_gamma_backtest",
     "strat2_sofr_convexity_backtest",
+    "strat2_q20_deep_packs",
     "strat3_strikeless_vol_backtest",
     "strat3_strikeless_vol_gridsearch",
 ]
+
+#: ``strat2_q20_deep_packs`` reads panels built by
+#: ``scripts/strat2_q20_build.py``. Build them first on a cold machine; the
+#: notebook raises on a missing parquet rather than rebuilding silently, because
+#: the build enumerates the local SR3 diskcache and its coverage is the result.
 
 #: nbconvert timeout per notebook, seconds. The grid search needs the headroom.
 EXEC_TIMEOUT = 10800
