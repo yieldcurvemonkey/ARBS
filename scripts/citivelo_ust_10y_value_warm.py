@@ -124,9 +124,39 @@ def _load() -> dict:
 
 
 def _save(man: dict) -> None:
+    """Write the manifest ATOMICALLY: temp file, flush, then ``os.replace``.
+
+    ``Path.write_text`` opens with truncate. If the write then fails, the old
+    manifest is already gone and what remains is a zero-byte file - the resume
+    state destroyed by the act of recording it.
+
+    That is not hypothetical. On 2026-08-13 the disk filled mid-save:
+
+        OSError: [Errno 28] No space left on device
+
+    and 754 completed chunks - roughly nineteen hours of work - became an empty
+    file. They were recoverable only because the store itself could be re-read,
+    and that is luck, not design.
+
+    ``os.replace`` is atomic on Windows and POSIX alike, so a reader either sees
+    the whole previous manifest or the whole new one, and a failed write leaves
+    the previous one untouched. The temp file sits in the same directory so the
+    replace cannot cross a filesystem boundary.
+    """
     p = _manifest_path()
     p.parent.mkdir(parents=True, exist_ok=True)
-    p.write_text(json.dumps(man, indent=1, sort_keys=True), encoding="utf-8")
+    tmp = p.with_name(p.name + f".tmp{os.getpid()}")
+    try:
+        with open(tmp, "w", encoding="utf-8") as fh:
+            json.dump(man, fh, indent=1, sort_keys=True)
+            fh.flush()
+            os.fsync(fh.fileno())
+        os.replace(tmp, p)
+    finally:
+        try:
+            tmp.unlink()
+        except OSError:
+            pass
 
 
 def _queries(target: str, values):
