@@ -1,0 +1,287 @@
+units=36991  2026-05-13..2026-08-07 days=60  CURVE=24774 FLY=12217
+family mix:
+kind                  CURVE    FLY
+family                            
+ASW_INVOICE             247      0
+ASW_MATCHED_MATURITY   1451    238
+ASW_SPREADOVER         1506    859
+BASIS                    71      7
+MAC                      16      3
+RATE                  21483  11110
+
+==============================================================================================================
+A. KEY on hand-checked packages
+==============================================================================================================
+                  package_id             trade_type                                                    key
+CURVE_12_4645295537000000101 MATCHED_MATURITY_CURVE     CURVE|SOFR|ASW_MATCHED_MATURITY|SPOT:~3Y/SPOT:~10Y
+CURVE_14_4646203141000000701                  CURVE                       CURVE|SOFR|RATE|SPOT:5Y/SPOT:30Y
+CURVE_15_4646577783000000101                  CURVE              CURVE|SOFR|RATE|IMM_U2028:3Y/IMM_U2033:3Y
+CURVE_16_4646806983000000401       SPREADOVER_CURVE              CURVE|SOFR|ASW_SPREADOVER|SPOT:2Y/SPOT:5Y
+CURVE_18_4647210006000000101                  CURVE CURVE|FED_FUNDS|RATE|FOMC_20261209:2M/FOMC_20270127:2M
+CURVE_27_4648113837000000201                  CURVE                            CURVE|SOFR|RATE|3Y:2Y/7Y:2Y
+
+==============================================================================================================
+B. LITERAL KEY (kind+tenor_display tuple+rate_index) COLLISIONS
+==============================================================================================================
+distinct literal keys=1518   distinct final keys=5347
+literal keys lumping >1 instrument: 575/1518; units affected 34931 (94.4%)
+
+  LITERAL CURVE|SOFR|1Y/1Y  (605 units) -> 221 instruments; top:
+         70  CURVE|SOFR|RATE|SPOT:1Y/SPOT:1Y
+         19  CURVE|SOFR|RATE|IMM_M2029:1Y/IMM_M2031:1Y
+         14  CURVE|SOFR|RATE|IMM_U2030:1Y/IMM_U2031:1Y
+         13  CURVE|SOFR|RATE|1Y:1Y/2Y:1Y
+         13  CURVE|SOFR|RATE|IMM_M2030:1Y/IMM_M2031:1Y
+
+  LITERAL CURVE|SOFR|10Y/10Y  (685 units) -> 181 instruments; top:
+        197  CURVE|SOFR|RATE|SPOT:10Y/SPOT:10Y
+         69  CURVE|SOFR|RATE|SPOT:10Y/FOMC_20260916:10Y
+         51  CURVE|SOFR|RATE|FOMC_20260916:10Y/FOMC_20260916:10Y
+         25  CURVE|SOFR|RATE|FOMC_20260617:10Y/FOMC_20260916:10Y
+         16  CURVE|SOFR|RATE|SPOT:10Y/FOMC_20260617:10Y
+
+  LITERAL CURVE|SOFR|2Y/2Y  (533 units) -> 168 instruments; top:
+         58  CURVE|SOFR|RATE|SPOT:2Y/SPOT:2Y
+         43  CURVE|SOFR|RATE|SPOT:2Y/FOMC_20260916:2Y
+         33  CURVE|SOFR|RATE|FOMC_20260916:2Y/FOMC_20260916:2Y
+         26  CURVE|SOFR|RATE|FOMC_20260617:2Y/FOMC_20260916:2Y
+         17  CURVE|SOFR|RATE|IMM_M2029:2Y/IMM_M2031:2Y
+
+  LITERAL CURVE|SOFR|5Y/5Y  (778 units) -> 158 instruments; top:
+        160  CURVE|SOFR|RATE|SPOT:5Y/SPOT:5Y
+         79  CURVE|SOFR|RATE|SPOT:5Y/FOMC_20260916:5Y
+         41  CURVE|SOFR|RATE|10Y:5Y/15Y:5Y
+         35  CURVE|SOFR|RATE|FOMC_20260916:5Y/FOMC_20260916:5Y
+         34  CURVE|SOFR|RATE|FOMC_20260617:5Y/FOMC_20260916:5Y
+
+  LITERAL CURVE|SOFR|30Y/30Y  (308 units) -> 135 instruments; top:
+         89  CURVE|SOFR|RATE|SPOT:30Y/SPOT:30Y
+         17  CURVE|SOFR|RATE|FOMC_20260916:30Y/FOMC_20260916:30Y
+         13  CURVE|SOFR|RATE|SPOT:30Y/FOMC_20260916:30Y
+          9  CURVE|SOFR|RATE|FOMC_20260916:30Y/IMM_Z2026:30Y
+          8  CURVE|SOFR|RATE|FOMC_20260617:30Y/FOMC_20260617:30Y
+
+  LITERAL CURVE|SOFR|5Y/30Y  (1871 units) -> 94 instruments; top:
+        891  CURVE|SOFR|RATE|SPOT:5Y/SPOT:30Y
+        362  CURVE|SOFR|RATE|FOMC_20260916:5Y/FOMC_20260916:30Y
+        196  CURVE|SOFR|ASW_SPREADOVER|SPOT:5Y/SPOT:30Y
+        111  CURVE|SOFR|RATE|IMM_Z2026:5Y/IMM_Z2026:30Y
+         90  CURVE|SOFR|RATE|FOMC_20260617:5Y/FOMC_20260617:30Y
+
+==============================================================================================================
+C. CANONICAL SORT
+==============================================================================================================
+units where leg_order tuple != canonical tuple: 1670 (4.51%)
+instruments that SPLIT into >1 key if leg_order trusted: 42/5347 (284 units)
+units where ORDER BY tenor_years != ORDER BY (effective,expiration): 2905
+instruments that SPLIT if sorted by tenor_years: 24/5347 (255 units)
+  examples of tenor_years mis-sort:
+                  package_id special_tenor_type                      tup_fwd_disp                   tup_fwd_disp_ty
+CURVE_10_3158980408000000601               FOMC FOMC_20260729:2M/FOMC_20261028:1M FOMC_20261028:1M/FOMC_20260729:2M
+CURVE_10_3233616162000000201               FOMC FOMC_20260729:2M/FOMC_20260916:1M FOMC_20260916:1M/FOMC_20260729:2M
+CURVE_10_3353083852000000101               FOMC FOMC_20260729:2M/FOMC_20260916:1M FOMC_20260916:1M/FOMC_20260729:2M
+CURVE_10_3989803100000000401               FOMC FOMC_20260729:2M/FOMC_20260916:1M FOMC_20260916:1M/FOMC_20260729:2M
+CURVE_10_4086416181000000401                IMM         IMM_U2031:5Y/IMM_U2036:5Y         IMM_U2036:5Y/IMM_U2031:5Y
+CURVE_10_4183498709000000901               FOMC FOMC_20260729:2M/FOMC_20260916:1M FOMC_20260916:1M/FOMC_20260729:2M
+
+  over-split test: does keeping special_tenor_type in the key fragment instruments?
+    keys that split when special_tenor_type is added: 233 (16320 units)
+      CURVE|BASIS|BASIS|SPOT:6M/SPOT:6M (3) -> {'IMM': np.int64(2), 'STANDARD': np.int64(1)}
+      CURVE|FED_FUNDS|RATE|SPOT:1M/FOMC_20260916:1M (4) -> {'FOMC': np.int64(3), 'IMM': np.int64(1)}
+      CURVE|FED_FUNDS|RATE|SPOT:2M/SPOT:2M (25) -> {'FOMC': np.int64(24), 'STANDARD': np.int64(1)}
+      CURVE|FED_FUNDS|RATE|SPOT:4M/FOMC_20261028:1M (9) -> {'IMM': np.int64(6), 'STANDARD': np.int64(3)}
+
+==============================================================================================================
+D. DISTINCT KEYS / CONCENTRATION
+==============================================================================================================
+CURVE: units=24774  distinct keys=3702  (RATE-family only: 3060)
+   top5=15%  top10=25%  top15=33%  top25=41%  top50=50%  top100=60%
+   keys with >=10 prints: 314  >=50: 74  >=100: 32  >=300: 16
+FLY: units=12217  distinct keys=1645  (RATE-family only: 1483)
+   top5=27%  top10=41%  top15=52%  top25=63%  top50=72%  top100=78%
+   keys with >=10 prints: 114  >=50: 33  >=100: 23  >=300: 11
+
+==============================================================================================================
+E. BUSIEST STRUCTURES (60 published days 2026-05-13..2026-08-07)
+==============================================================================================================
+--- TOP 15 CURVE  ---
+                                                   key  prints  days  per_day  med_day_venue  max_day_venue  priced  D2C  D2D  UNK
+                      CURVE|SOFR|RATE|SPOT:2Y/SPOT:10Y     909    60     15.2             13             36     896  892    6   11
+                      CURVE|SOFR|RATE|SPOT:5Y/SPOT:30Y     891    60     14.8             13             40     878  886    2    3
+     CURVE|SOFR|RATE|FOMC_20260916:3Y/FOMC_20260916:5Y     668    43     15.5             16             40     654  668    0    0
+    CURVE|SOFR|RATE|FOMC_20260916:2Y/FOMC_20260916:10Y     641    60     10.7             10             34     634  641    0    0
+            CURVE|SOFR|ASW_SPREADOVER|SPOT:5Y/SPOT:10Y     580    60      9.7              6             25       0   72  508    0
+                      CURVE|SOFR|RATE|SPOT:2Y/SPOT:30Y     536    59      9.1              8             26     532  536    0    0
+                     CURVE|SOFR|RATE|SPOT:10Y/SPOT:30Y     510    60      8.5              7             30     503  498   12    0
+           CURVE|SOFR|ASW_SPREADOVER|SPOT:10Y/SPOT:30Y     499    57      8.8              8             23       0    2  497    0
+     CURVE|SOFR|RATE|FOMC_20260617:3Y/FOMC_20260617:5Y     485    19     25.5             24             54     472  485    0    0
+                      CURVE|SOFR|RATE|SPOT:5Y/SPOT:10Y     469    57      8.2              7             24     460  460    7    2
+                       CURVE|SOFR|RATE|SPOT:2Y/SPOT:5Y     463    59      7.8              6             25     456  454    7    2
+     CURVE|SOFR|RATE|FOMC_20260916:2Y/FOMC_20260916:5Y     443    58      7.6              6             22     438  443    0    0
+   CURVE|SOFR|RATE|FOMC_20260916:10Y/FOMC_20260916:30Y     374    57      6.6              6             21     373  374    0    0
+    CURVE|SOFR|RATE|FOMC_20260916:5Y/FOMC_20260916:30Y     362    59      6.1              6             20     355  362    0    0
+CURVE|FED_FUNDS|RATE|FOMC_20260916:1M/FOMC_20261028:1M     337    56      6.0              4             24     330  316   20    1
+
+--- TOP 15 FLY  ---
+                                                               key  prints  days  per_day  med_day_venue  max_day_venue  priced  D2C  D2D  UNK
+                           FLY|SOFR|RATE|SPOT:5Y/SPOT:10Y/SPOT:30Y    1397    60     23.3             19             47    1381 1357   40    0
+                             FLY|SOFR|RATE|SPOT:3Y/SPOT:4Y/SPOT:5Y     634    60     10.6              6             18     624   82  552    0
+                            FLY|SOFR|RATE|SPOT:3Y/SPOT:5Y/SPOT:10Y     449    52      8.6              5             25     441  434   15    0
+                  FLY|SOFR|ASW_SPREADOVER|SPOT:5Y/SPOT:7Y/SPOT:10Y     435    50      8.7              8             20       0    8  427    0
+                          FLY|SOFR|RATE|SPOT:10Y/SPOT:15Y/SPOT:30Y     375    55      6.8              5             15     368   24  351    0
+                            FLY|SOFR|RATE|SPOT:2Y/SPOT:5Y/SPOT:10Y     371    59      6.3              5             24     362  371    0    0
+FLY|SOFR|RATE|FOMC_20260916:5Y/FOMC_20260916:10Y/FOMC_20260916:30Y     350    52      6.7              6             20     347  350    0    0
+                             FLY|SOFR|RATE|SPOT:5Y/SPOT:6Y/SPOT:7Y     343    60      5.7              3             13     338   31  312    0
+                           FLY|SOFR|RATE|SPOT:3Y/SPOT:10Y/SPOT:30Y     332    35      9.5             10             19     326  332    0    0
+                            FLY|SOFR|RATE|SPOT:8Y/SPOT:9Y/SPOT:10Y     331    58      5.7              3             10     327   37  294    0
+ FLY|SOFR|RATE|FOMC_20260916:2Y/FOMC_20260916:5Y/FOMC_20260916:10Y     315    57      5.5              5             13     311  315    0    0
+FLY|SOFR|RATE|FOMC_20260617:3Y/FOMC_20260617:10Y/FOMC_20260617:30Y     275    19     14.5             14             27     273  275    0    0
+                          FLY|SOFR|RATE|SPOT:20Y/SPOT:25Y/SPOT:30Y     268    54      5.0              4             15     262    5  263    0
+                          FLY|SOFR|RATE|SPOT:10Y/SPOT:20Y/SPOT:30Y     256    51      5.0              3             12     253   46  209    1
+                             FLY|SOFR|RATE|SPOT:7Y/SPOT:8Y/SPOT:9Y     238    56      4.2              3             15     236   16  222    0
+
+--- TOP 10 CURVE [NON-RATE families] ---
+                                                key  prints  days  per_day  med_day_venue  max_day_venue  priced  D2C  D2D  UNK
+         CURVE|SOFR|ASW_SPREADOVER|SPOT:5Y/SPOT:10Y     580    60      9.7              6             25       0   72  508    0
+        CURVE|SOFR|ASW_SPREADOVER|SPOT:10Y/SPOT:30Y     499    57      8.8              8             23       0    2  497    0
+         CURVE|SOFR|ASW_SPREADOVER|SPOT:5Y/SPOT:30Y     196    54      3.6              3              9       0   19  176    1
+CURVE|SOFR|ASW_MATCHED_MATURITY|SPOT:~10Y/SPOT:~30Y      71    30      2.4              1             10       4   69    0    2
+CURVE|SOFR|ASW_MATCHED_MATURITY|SPOT:~10Y/SPOT:~10Y      57    33      1.7              1             15      57   57    0    0
+  CURVE|SOFR|ASW_MATCHED_MATURITY|SPOT:~5Y/SPOT:~5Y      51    33      1.5              1              6      46   48    0    3
+        CURVE|SOFR|ASW_SPREADOVER|SPOT:20Y/SPOT:30Y      51    29      1.8              1              4       0   41   10    0
+ CURVE|SOFR|ASW_MATCHED_MATURITY|SPOT:~7Y/SPOT:~10Y      42    10      4.2              2             14       1   42    0    0
+CURVE|SOFR|ASW_MATCHED_MATURITY|SPOT:~30Y/SPOT:~30Y      39    18      2.2              1             14      39   39    0    0
+  CURVE|SOFR|ASW_MATCHED_MATURITY|SPOT:~4Y/SPOT:~5Y      39    26      1.5              1              4      34   39    0    0
+
+--- TOP 6 FLY [NON-RATE families] ---
+                                                        key  prints  days  per_day  med_day_venue  max_day_venue  priced  D2C  D2D  UNK
+           FLY|SOFR|ASW_SPREADOVER|SPOT:5Y/SPOT:7Y/SPOT:10Y     435    50      8.7              8             20       0    8  427    0
+           FLY|SOFR|ASW_SPREADOVER|SPOT:2Y/SPOT:5Y/SPOT:10Y     236    52      4.5              3             13       0  224   12    0
+         FLY|SOFR|ASW_SPREADOVER|SPOT:10Y/SPOT:20Y/SPOT:30Y      93    16      5.8              4             18       0    2   91    0
+            FLY|SOFR|ASW_SPREADOVER|SPOT:2Y/SPOT:3Y/SPOT:5Y      52    27      1.9              1              5       0   41   11    0
+          FLY|SOFR|ASW_SPREADOVER|SPOT:5Y/SPOT:10Y/SPOT:30Y      14     6      2.3              1              8       0   12    2    0
+FLY|SOFR|ASW_MATCHED_MATURITY|SPOT:~10Y/SPOT:~20Y/SPOT:~30Y      12     7      1.7              1              4       7   12    0    0
+
+==============================================================================================================
+F. PRINTS PER (as_of_date, key, venue_class)
+==============================================================================================================
+
+### CURVE: 11427 (day,key,venue) cells / 24774 prints; 11211 (day,key) cells
+  day,key,venue     : mean=2.17 p50=1 p75=2 p90=4 p95=7 p99=17 max=54
+      >=2:32%  >=3:17%  >=5:9%  >=10:4%  >=20:1%
+  day,key,venue PRICED: mean=2.13 p50=1 p75=2 p90=4 p95=7 p99=17 max=54
+      >=2:31%  >=3:17%  >=5:9%  >=10:3%  >=20:1%
+  day,key (venue merged): mean=2.21 p50=1 p75=2 p90=4 p95=8 p99=18 max=54
+      >=2:32%  >=3:18%  >=5:10%  >=10:4%  >=20:1%
+  TOP-15 keys only (903 cells): mean=9.04 p50=7 p75=12 p90=18 max=54
+      >=2:91%  >=3:85%  >=5:71%  >=10:36%  >=20:9%
+  cells by venue_class: {'D2C': (10766, np.float64(2.13)), 'D2D': (502, np.float64(3.31)), 'VENUE_UNKNOWN': (159, np.float64(1.13))}
+
+### FLY: 4782 (day,key,venue) cells / 12217 prints; 4543 (day,key) cells
+  day,key,venue     : mean=2.55 p50=1 p75=2 p90=6 p95=10 p99=20 max=47
+      >=2:33%  >=3:22%  >=5:14%  >=10:5%  >=20:1%
+  day,key,venue PRICED: mean=2.48 p50=1 p75=2 p90=6 p95=9 p99=20 max=47
+      >=2:32%  >=3:21%  >=5:13%  >=10:5%  >=20:1%
+  day,key (venue merged): mean=2.69 p50=1 p75=2 p90=7 p95=10 p99=20 max=51
+      >=2:34%  >=3:23%  >=5:15%  >=10:6%  >=20:1%
+  TOP-15 keys only (943 cells): mean=6.75 p50=5 p75=9 p90=14 max=47
+      >=2:82%  >=3:71%  >=5:53%  >=10:23%  >=20:5%
+  cells by venue_class: {'D2C': (4001, np.float64(2.18)), 'D2D': (771, np.float64(4.5)), 'VENUE_UNKNOWN': (10, np.float64(1.0))}
+
+==============================================================================================================
+G. GRID COVERAGE
+==============================================================================================================
+
+### CURVE n=24774
+  (a) every de-fuzzed leg tenor_label in the grid  :  94.6%  (23429)
+  (b) (a) AND every leg spot-starting              :  42.1%  (10438)
+  (c) (b) AND no fuzzy (~) leg                     :  37.7%  (9349)
+      all legs spot alone: 45.2%   any fuzzy leg: 9.7%
+                          n  in_grid  all_spot  constructible
+family                                                       
+ASW_INVOICE             247     36.4       0.4            0.0
+ASW_MATCHED_MATURITY   1451     72.4      81.1            7.3
+ASW_SPREADOVER         1506     99.3     100.0           97.3
+BASIS                    71      0.0      91.5            0.0
+MAC                      16    100.0      12.5           12.5
+RATE                  21483     96.7      39.3           36.2
+                        n  in_grid  all_spot  constructible
+special_tenor_type                                         
+FOMC                 1813     99.7       1.9            1.9
+IMM                  9591     98.4      10.5            9.8
+INVOICE_SWAP          247     36.4       0.4            0.0
+MAC                    14    100.0      14.3           14.3
+MATCHED_MATURITY     1482     72.7      81.5            7.2
+STANDARD            11627     94.6      76.9           71.1
+  top-15 keys: in_grid=100.0% constructible=59.5% of 8167 units
+
+### FLY n=12217
+  (a) every de-fuzzed leg tenor_label in the grid  :  97.0%  (11851)
+  (b) (a) AND every leg spot-starting              :  63.3%  (7735)
+  (c) (b) AND no fuzzy (~) leg                     :  61.9%  (7568)
+      all legs spot alone: 65.8%   any fuzzy leg: 2.8%
+                          n  in_grid  all_spot  constructible
+family                                                       
+ASW_MATCHED_MATURITY    238     69.7      76.5            8.8
+ASW_SPREADOVER          859     99.9     100.0           99.7
+BASIS                     7      0.0      85.7            0.0
+MAC                       3    100.0       0.0            0.0
+RATE                  11110     97.4      62.9           60.2
+                       n  in_grid  all_spot  constructible
+special_tenor_type                                        
+FOMC                 144     97.2       7.6            7.6
+IMM                 4745     99.5      32.9           32.4
+MAC                    3    100.0       0.0            0.0
+MATCHED_MATURITY     239     69.9      76.6            8.8
+STANDARD            7086     96.2      88.6           84.6
+  top-15 keys: in_grid=100.0% constructible=85.2% of 6369 units
+
+rate_index breakdown (CURVE+FLY):
+                n  in_grid  constructible
+rate_index                               
+BASIS          84      0.0            0.0
+FED_FUNDS    1797     98.8            2.7
+OTHER           5      0.0            0.0
+SOFR        35105     95.4           48.1
+
+==============================================================================================================
+H. 2026-08-07  CURVE 10Y/30Y SOFR
+==============================================================================================================
+units on 2026-08-07: 528 (CURVE 381, FLY 147)
+CURVE/SOFR units: 348;  de-fuzzed tenor tuple == 10Y/30Y: 21
+venue_class                                          D2C  D2D  TOTAL
+key                                                                 
+CURVE|SOFR|RATE|FOMC_20260916:10Y/FOMC_20260916:30Y    7    0      7
+CURVE|SOFR|RATE|SPOT:10Y/SPOT:30Y                      7    0      7
+CURVE|SOFR|ASW_SPREADOVER|SPOT:10Y/SPOT:30Y            0    5      5
+CURVE|SOFR|RATE|FOMC_20270317:10Y/FOMC_20270317:30Y    1    0      1
+CURVE|SOFR|RATE|IMM_Z2026:10Y/IMM_Z2026:30Y            1    0      1
+
+HEADLINE key CURVE|SOFR|RATE|SPOT:10Y/SPOT:30Y
+  prints=7  priced=7
+  by venue_class : {'D2C': np.int64(7)}
+  priced by venue: {'D2C': np.int64(7)}
+  tape_labels present in this one instrument on this one day:
+tape_label_min
+USD-SOFR-COMPOUND 1D Constant Spot 10Y/30Y CURVE PHYS        6
+USD-SOFR-OIS Compound 1D Constant Spot 10Y/30Y CURVE PHYS    1
+
+  what a tape_label-keyed UI would show for 'USD-SOFR-COMPOUND 1D Constant Spot 10Y/30Y CURVE PHYS':
+    6 of 7 prints
+
+  same-day 10Y/30Y in OTHER families (excluded by the key):
+family          key                                        
+ASW_SPREADOVER  CURVE|SOFR|ASW_SPREADOVER|SPOT:10Y/SPOT:30Y    5
+
+60-day per-day history of the headline instrument:
+  prints=510 over 60 days; per-day p50=8 mean=8.5 min=2 max=30
+  days with >=2: 100%  >=5: 78%  >=10: 33%
+
+  tape_label fragmentation of this instrument over 60 days:
+tape_label_min
+USD-SOFR-COMPOUND 1D Constant Spot 10Y/30Y CURVE PHYS        324
+USD-SOFR-OIS Compound 1D Constant Spot 10Y/30Y CURVE PHYS    161
+USD-SOFR-COMPOUND 1D Constant PKG-2 PHYS                      16
+USD-SOFR-OIS Compound 1D Constant PKG-2 PHYS                   9
+
+DONE

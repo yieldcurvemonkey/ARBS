@@ -811,6 +811,61 @@ export type FollowSource = {
   execution_start?: string | null
   dd_venue_class?: string | null
   legs_json?: FollowLeg[] | null
+  /** The tape's own structure name: '5Y Outright', '10Y/30Y Curve',
+   *  '10Y/15Y/30Y Fly', '30Y Spreadover'. */
+  package_structure?: string | null
+}
+
+export type StructurePick = { kind: 'CURVE' | 'FLY'; tenors: string[] }
+
+/**
+ * Is the selected trade a CURVE or a FLY, and which one?
+ *
+ * THIS REPLACES A REFUSAL. The panel used to say "a package has no single
+ * tenor, pick a leg", which mistook "no single tenor" for "no instrument". A
+ * 10s30s curve has a level (a bp spread), a continuous mid (the two legs of the
+ * 1-minute grid combined) and a direction the pipeline already computes at
+ * structure grain. It is an instrument and it gets its own chart.
+ *
+ * Keyed off `package_structure` — the tape's own naming — rather than a leg
+ * count, because a 17-leg package running 4Y/5Y/7Y is a PKG and emphatically
+ * not a fly. The leg count is then required to agree, so a mislabelled row
+ * draws nothing rather than the wrong weights.
+ */
+export function structureOf(row: FollowSource | null | undefined): StructurePick | null {
+  if (!row) return null
+  const name = String(row.package_structure ?? '')
+  // NO  HERE, DELIBERATELY: `$` already anchors, and a  written through a
+  // shell heredoc arrives as a literal BACKSPACE byte (0x08). That is exactly
+  // what happened: the pattern became /<BS>curve$/i, matched nothing, and every
+  // CURVE and FLY fell through to the outright chart while every probe showed
+  // perfect inputs. CLAUDE.md warns about this; use the Write tool for anything
+  // containing a backslash.
+  // NO \b HERE, DELIBERATELY. `$` already anchors, and a `\b` written through a
+  // shell heredoc arrives as a literal BACKSPACE byte (0x08). That is exactly
+  // what happened: the pattern became /<BS>curve$/i, matched nothing, and every
+  // CURVE and FLY fell through to the outright chart while every probe showed
+  // perfect inputs — package_structure "10Y/15Y/30Y Fly", legs ["10Y","15Y","30Y"],
+  // structureOf null. CLAUDE.md warns about this; use the Write tool for
+  // anything containing a backslash.
+  const kind: 'CURVE' | 'FLY' | null =
+    /curve$/i.test(name) ? 'CURVE' : /fly$/i.test(name) ? 'FLY' : null
+  if (kind == null) return null
+
+  const tenors = [...new Set((row.legs_json ?? [])
+    .map((l) => l?.tenor_display)
+    .filter((t): t is string => !!t))]
+  const want = kind === 'CURVE' ? 2 : 3
+  if (tenors.length !== want) return null
+
+  // Ascending by tenor-years is the canonical order for a spot structure, and
+  // the API canonicalises again server-side, so a client that sorts differently
+  // still selects the same instrument.
+  const yrs = (t: string) => {
+    const m = /^~?(\d+)([MY])$/.exec(t)
+    return m ? (m[2] === 'Y' ? Number(m[1]) : Number(m[1]) / 12) : Number.POSITIVE_INFINITY
+  }
+  return { kind, tenors: [...tenors].sort((a, b) => yrs(a) - yrs(b)) }
 }
 
 /**
