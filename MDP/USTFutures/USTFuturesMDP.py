@@ -53,7 +53,10 @@ def _as_datetime(ts: DateLike) -> datetime.datetime:
     raise TypeError("timestamp must be date, datetime, or 'live'")
 
 
-_INTERNAL_ROOTS = {"TU", "FV", "TY", "US", "WN", "UXY"}
+# Z3N (3-Year) and TWE (20-Year) are reachable now that their BarChart roots are known -- ZE and
+# ZZ, verified on the tick grid rather than the price band. TWE is listed but effectively
+# untraded from 2024 (flat prints, zero volume), so expect a symbol, not a panel.
+_INTERNAL_ROOTS = {"TU", "FV", "TY", "US", "WN", "UXY", "Z3N", "TWE"}
 _BARCHART_ROOTS = {to_barchart_root(k): k for k in _INTERNAL_ROOTS}
 _CME_QUARTERLY_MONTH_CODES = {
     "H": [1, 2, 3],
@@ -149,7 +152,7 @@ def _normalize_symbol(sym: str) -> Optional[str]:
     if not s:
         return None
 
-    m = re.match(r"^(?P<root>[A-Z]{1,3})(?P<code>[FGHJKMNQUVXZ]\d{1,2})$", s)
+    m = re.match(r"^(?P<root>[A-Z][A-Z0-9]{0,2})(?P<code>[FGHJKMNQUVXZ]\d{1,2})$", s)
     if not m:
         return s
 
@@ -170,7 +173,7 @@ def _normalize_symbol(sym: str) -> Optional[str]:
 
 def _to_barchart_symbol(sym: str) -> str:
     s = (sym or "").strip().upper().replace("/", "")
-    m = re.match(r"^(?P<root>[A-Z]{1,3})(?P<code>[FGHJKMNQUVXZ]\d{1,2})$", s)
+    m = re.match(r"^(?P<root>[A-Z][A-Z0-9]{0,2})(?P<code>[FGHJKMNQUVXZ]\d{1,2})$", s)
     if not m:
         return s
     root = m.group("root")
@@ -181,7 +184,7 @@ def _to_barchart_symbol(sym: str) -> str:
 
 def _from_barchart_symbol(sym: str) -> str:
     s = (sym or "").strip().upper().replace("/", "")
-    m = re.match(r"^(?P<root>[A-Z]{1,3})(?P<code>[FGHJKMNQUVXZ]\d{1,2})$", s)
+    m = re.match(r"^(?P<root>[A-Z][A-Z0-9]{0,2})(?P<code>[FGHJKMNQUVXZ]\d{1,2})$", s)
     if not m:
         return s
     root = m.group("root")
@@ -202,7 +205,7 @@ def _clean_symbols(symbols: Sequence[str]) -> List[str]:
 
 def _to_tos_symbol(sym: str) -> str:
     norm = _normalize_symbol(sym) or str(sym or "").strip().upper().replace("/", "")
-    m = re.match(r"^(?P<root>[A-Z]{1,3})(?P<code>[FGHJKMNQUVXZ]\d{1,2})$", norm)
+    m = re.match(r"^(?P<root>[A-Z][A-Z0-9]{0,2})(?P<code>[FGHJKMNQUVXZ]\d{1,2})$", norm)
     if not m:
         return f"/{norm}" if norm else str(sym)
     root = m.group("root")

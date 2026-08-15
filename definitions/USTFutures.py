@@ -26,6 +26,8 @@ _LOGGER = logging.getLogger(__name__)
 
 UST_FUTURE_ROOTS: Dict[str, str] = {
     "2Y": "TU",
+    "3Y": "Z3N",
+    "20Y": "TWE",
     "5Y": "FV",
     "10Y": "TY",
     "30Y": "US",
@@ -46,6 +48,17 @@ UST_FUTURE_ROOTS: Dict[str, str] = {
 #     UDM24 118.8-127.3 (vol 43,087) vs UBM24 11.59-11.85 (vol 6)
 #     UDU26 109.8-111.7 (vol 54,285) vs UBU26 10.94-11.04 (vol 6); Yahoo UB=F 110.41
 # UD lands 100% on the contract's 1/32 tick grid; UB lands on it ~5% of the time (i.e. by chance).
+#
+# Z3N -> "ZE" and TWE -> "ZZ" are the second and third instances of the same namespace split, and
+# were verified the same way rather than guessed. Measured 2026-08-15 over 2020-2026 EOD history:
+#     ZEM22 106.52-115.53 (max vol 31,176), ZEU26 104.06-107.13 (9,690) -- 100% in the 50-300 band
+#                                                                       and 100% on the 1/256 grid
+#     ZZM22 136.34-175.63 (1,896), ZZU26 constant 125.50 (max vol 0)    -- 100% in band, 100% on 1/32
+#     UBU26 10.81-12.45 (398)      -- 0% in band, 2.8% on tick: the EUR/NOK future, as recorded
+#     TBU26 96.03-97.19 (4,921)    -- 100% IN BAND but 4.3% on tick, i.e. a candidate the price band
+#                                     alone would have admitted. The tick grid is the discriminator.
+# ZZ's 20-Year contract is listed but effectively untraded from 2024: ZZU26 prints a flat 125.50
+# with zero volume. The root is correct; a TWE panel is not buildable from it.
 UST_FUTURE_BARCHART_ROOTS: Dict[str, str] = {
     "TU": "ZT",
     "FV": "ZF",
@@ -53,6 +66,8 @@ UST_FUTURE_BARCHART_ROOTS: Dict[str, str] = {
     "US": "ZB",
     "WN": "UD",
     "UXY": "TN",
+    "Z3N": "ZE",
+    "TWE": "ZZ",
 }
 
 UST_FUTURE_VALID_MONTHS: Sequence[int] = (3, 6, 9, 12)
@@ -79,6 +94,8 @@ UST_FUTURE_BARCHART_TO_INTERNAL: Dict[str, str] = {
     "ZB": "US",
     "UD": "WN",
     "TN": "UXY",
+    "ZE": "Z3N",
+    "ZZ": "TWE",
 }
 
 # CME **Globex** root per internal root. This is a DIFFERENT namespace from the BarChart map
@@ -93,12 +110,19 @@ UST_FUTURE_GLOBEX_ROOTS: Dict[str, str] = {
     "US": "ZB",
     "WN": "UB",
     "UXY": "TN",
+    # Globex keeps its own spellings for these two; BarChart calls them ZE and ZZ.
+    "Z3N": "Z3N",
+    "TWE": "TWE",
 }
 
 # Exchange / vendor spellings that callers reasonably type, mapped to the internal root.
 # "UB" is the CME **Globex** code for the Ultra Bond, so callers do type it even though it is
 # also BarChart's EUR/NOK root -- accept it on the way in, but never emit it on the way out.
 UST_FUTURE_ROOT_ALIASES: Dict[str, str] = {
+    "ZE": "Z3N",
+    "Z3N": "Z3N",
+    "ZZ": "TWE",
+    "TWE": "TWE",
     "UB": "WN",
     "UD": "WN",
     "WN": "WN",
