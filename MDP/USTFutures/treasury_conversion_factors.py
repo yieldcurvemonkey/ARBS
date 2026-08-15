@@ -56,9 +56,39 @@ class TreasuryFutureConversionSpec:
 #    (b) a remaining term to maturity of not less than 6 years 6 months and less than 8 years."
 #
 # That rule also restricts the grade to FIXED-PRINCIPAL securities, which excludes TIPS and FRNs.
-# The fiscaldata reference frame carries no security-type column (its only descriptor is `oi`,
-# whose values are just 2/3/5/7/10/20/30-Year), so that leg of the rule is NOT enforced here.
-# It is latent rather than active: see _prepare_reference_data.
+#
+# THIS IS ENFORCED, AND THE ENFORCEMENT IS LOAD-BEARING ON EVERY ROOT. It happens at FETCH time,
+# not here: `fiscaldata._fetch_auctions_raw_fiscaldata` sends `inflation_index_security:eq:No` to
+# the Treasury auctions API and drops rows whose `frn_index_determination_rate` is populated.
+# Measured 2026-08-15 by re-fetching with that one filter removed: 106 TIPS CUSIPs enter the frame
+# and contaminate the December-2026 basket of all six roots -- TYZ26 3, TUZ26 1, FVZ26 1, USZ26 10,
+# WNZ26 5, TNZ26 1. Nothing in this module would stop them: a 10-year TIPS is `security_type='Note'`
+# with a fixed `int_rate` and semi-annual payments, so `oi` says "10-Year" and every filter below
+# passes it, after which a conversion factor is computed off its real coupon -- meaningless.
+#
+# (An earlier version of this note said the frame "carries no security-type column ... so that leg
+# of the rule is NOT enforced here ... latent rather than active". That was wrong in the direction
+# that invites damage: a reader could delete the fetch filter as redundant. `security_type` really
+# is redundant -- measured, the API returns the identical 2,375 rows with and without it, because
+# TIPS ride as Note/Bond -- but `inflation_index_security` is not.)
+#
+# `_prepare_reference_data` now also drops flagged rows when the frame carries the markers, so the
+# grade is enforced where the basket is built and not only in a query string in another package.
+# Frames without the columns -- cached parquet written before they were requested, or a
+# treasurydirect-sourced frame, which filters none of this -- are passed through unchanged rather
+# than failed closed; see tests/test_ustf_fixed_principal_grade.py for what that does and does not
+# catch.
+
+
+# (column, value) pairs that mark a security as NOT fixed-principal. Compared case-insensitively.
+# `security_type` is deliberately absent: measured, it discriminates nothing, because TIPS are
+# served as security_type='Note'/'Bond' like any other coupon security.
+_NOT_FIXED_PRINCIPAL_MARKERS: tuple[tuple[str, str], ...] = (
+    ("inflation_index_security", "yes"),
+    ("floating_rate", "yes"),
+)
+
+
 _CONTRACT_SPECS: tuple[TreasuryFutureConversionSpec, ...] = (
     TreasuryFutureConversionSpec(
         root="TU",
@@ -359,6 +389,12 @@ def _prepare_reference_data(
         raise KeyError(f"UST reference data missing columns required for basket construction: {', '.join(missing)}")
 
     out = ref_df.copy()
+    # Fixed-principal only: no TIPS, no FRNs. See the grade note at the top of this module. The
+    # markers are optional because a frame may predate them or come from another source; when they
+    # ARE present they are authoritative, and `_NOT_FIXED_PRINCIPAL_MARKERS` is the whole rule.
+    for column, flag in _NOT_FIXED_PRINCIPAL_MARKERS:
+        if column in out.columns:
+            out = out[out[column].astype("string").str.strip().str.casefold() != flag].copy()
     out = out[out["issue_date"].notna() & out["maturity_date"].notna() & out["cpn"].notna()].copy()
     as_of_col = "auction_date" if "auction_date" in out.columns else "issue_date"
     out = out[out[as_of_col].notna() & (out[as_of_col] <= as_of)].copy()
