@@ -585,7 +585,23 @@ export function AnalyticsPanel(props: AnalyticsPanelProps): JSX.Element {
                 tape day all come from the tape's selection. `source` is the
                 raw tape row, which is where tenor_display and
                 rate_index_clean live. */}
-            <IntradayPrintsPanel focused={baseTrade?.source ?? null} />
+            {/* `source` is the raw tape row and carries legs_json, but
+                package_structure is only GUARANTEED on the FocusedTrade —
+                useFocusedTrade defaults it from package_type when the display
+                row lacks it. Passing the raw row alone made every CURVE and
+                FLY fall through to the outright chart. Merge, so the structure
+                switch sees a name and the leg tenors both. */}
+            <IntradayPrintsPanel
+              focused={
+                baseTrade
+                  ? {
+                      ...(baseTrade.source ?? {}),
+                      package_structure: baseTrade.package_structure,
+                      execution_start: baseTrade.execution_start,
+                    }
+                  : null
+              }
+            />
           </div>
         ) : null}
       </div>

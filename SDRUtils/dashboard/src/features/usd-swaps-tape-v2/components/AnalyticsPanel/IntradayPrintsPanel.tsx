@@ -70,6 +70,7 @@ import {
 } from 'recharts'
 import { ANALYTICS_COLORS } from './analytics-format'
 import { IntradayPrintsPlot } from './IntradayPrintsPlot'
+import { StructurePrintsPanel } from './StructurePrintsPanel'
 import {
   DIRECTION_AMBER,
   DIRECTION_NEUTRAL,
@@ -96,11 +97,14 @@ import {
   FWD_MAX_OPTIONS,
   followFocused,
   type FollowSource,
+  structureOf,
   hourlyTicks,
   legendSizeRefs,
   markerOpacity,
   markerRadius,
   type MidPoint,
+  normaliseRateIndex,
+  tapeDayFor,
   midGridResidual,
   type MidSource,
   MIN_MID_POINTS,
@@ -179,6 +183,30 @@ type MarkDatum = {
  * whole panel is built against.
  */
 export function IntradayPrintsPanel({ focused }: { focused?: FollowSource | null } = {}): JSX.Element {
+  // A CURVE or FLY selection is a DIFFERENT INSTRUMENT with a different axis —
+  // a spread in bp, not a rate in percent — so it gets its own chart rather
+  // than being squeezed onto this one. Delegating here keeps the switch at the
+  // one place that knows what is selected.
+  const structure = structureOf(focused)
+  if (structure) {
+    return (
+      <StructurePrintsPanel
+        selection={{
+          kind: structure.kind,
+          tenors: structure.tenors,
+          rateIndex: normaliseRateIndex(focused?.rate_index_clean)
+            ?? normaliseRateIndex((focused?.legs_json ?? []).map((l) => l?.rate_index_clean).find((x) => !!x))
+            ?? 'SOFR',
+          venueClass: focused?.dd_venue_class ?? 'D2C',
+          date: tapeDayFor(focused?.execution_start),
+        }}
+      />
+    )
+  }
+  return <OutrightPrintsPanel focused={focused} />
+}
+
+function OutrightPrintsPanel({ focused }: { focused?: FollowSource | null } = {}): JSX.Element {
   const [date, setDate] = useState<string | null>(null)
   const [latestDate, setLatestDate] = useState<string | null>(null)
   const [tenor, setTenor] = useState<string>('10Y')

@@ -1,0 +1,121 @@
+ADVERSARIAL CHECK of the CURVE/FLY structure-price formula -- pulled evidence
+=============================================================================
+All numbers below are from arbs_dd_unit_v1 / arbs_usd_swap_tape_legs_v3 /
+arbs_dd_curve_mid_v1 / arbs_dd_unit_bucket_v1 on the PRODUCTION Supabase,
+read-only, pulled by scratch/wfstr_*.py in this worktree.
+
+Sample: 138 as_of_dates, 2024-07-01 .. 2026-06-15, in 6 blocks spanning the
+whole 26-month window (322,755 leg rows, 237,995 units).  The table carries a
+SINGLE code_vintage (2939a2760e5c) over all 1,283,522 rows, so there is no
+vintage drift for a subsample to miss.
+
+VERDICT: NOT REFUTED for the arithmetic, the leg order, the quote weights and
+the units.  ONE material correction: the formula holds only under
+rule = 'RATE_VS_MID'.
+
+0. CHECKER VALIDATED ON A KNOWN ANSWER FIRST
+   grid join uniqueness .......... 0 legs matched >1 grid row (322,755 rows)
+   leg count vs n_legs .......... 0 units disagreed (237,995 units)
+   OUTRIGHT, rate rule, grid-clean: 42,736 / 42,736 EXACT
+       median |err| 2.276e-13 bp, max 4.547e-12 bp
+   Only then were CURVE / FLY run.
+
+1. THE CLAIM REPRODUCES (join success only -- never filtered by residual)
+   CURVE  4,629 / 4,629 exact  median 2.736e-13  max 1.208e-12 bp
+   FLY    2,129 / 2,129 exact  median 5.240e-13  max 2.167e-12 bp
+   exact on both dealer_sign sides; exact in every |deviation| decile up to
+   |dev| = 27.9 bp; traded_bp spans -144.6 .. +87.9 bp (CURVE).
+   NOTE the claimed "max |error| 1.251e-12 bp" is not a bound: I measure
+   2.167e-12 on a 26% subsample. Float round-off either way.
+
+2. SCOPE DEFECT -- the formula needs rule = 'RATE_VS_MID'
+   backfill_dealer_direction.py writes deviation_bps = tp - mp ONLY under
+   RULE_RATE; under RULE_UPFRONT it writes upfront.UpfrontCall.edge_bps, a
+   signed NPV-vs-fee residual. Measured on grid-clean upfront units:
+       CURVE   n=317  median|err| 0.431 bp  p95 21.99  max 141.95  0 exact
+       FLY     n=110  median|err| 0.361 bp  max 119.56            0 exact
+       OUTRIGHT n=888 median|err| 1.192 bp  max 2.68e7            0 exact
+   Population: 82,004 CURVE units (46.7% of all CURVE) and 36,218 FLY (41.6%)
+   carry NPV_VS_UPFRONT.  The claim's own nTested reproduces the rate-rule
+   grid-clean subset exactly (4,629 CURVE / 2,129 FLY over 138 days scales to
+   ~17.7k / ~8.1k over 527 days vs the claimed 17,197 / 8,495), so the filter
+   existed in their work but is absent from the stated formula.
+
+3. LEG ORDER -- discriminated, not assumed
+   physical row order (ctid) differs from canonical on 37,765 / 63,378
+     multi-leg units. On the 4,099 grid-clean rate-rule ones: canonical max
+     2.167e-12 bp, physical max 39.867 bp with only 376 exact.
+   trade_id-only order differs on 30,884; on 3,951 grid-clean: max 39.867 bp,
+     133 exact.
+   leg_order / tenor_years / effective_date orderings NEVER differ from
+     canonical inside the grid-joinable set (0 units) -> the arithmetic test
+     cannot separate those tie-breaks. Closed by 3a and 3b below.
+
+3a. TRADE_ID TIE-BREAK -- a GRID-FREE one-sided test
+   494 rate-rule CURVE units whose two legs share BOTH expiration and
+   effective date but traded at different rates. Both legs then price at the
+   same model mid, so mid_bp = 0 exactly and deviation_bps = +-traded spread
+   with the sign set by the trade_id tie-break alone:
+       canonical  494 / 494 exact, max 1.279e-13 bp
+       reversed     0 / 494,       median 1.600 bp, max 200.0 bp
+   195 of the 494 are grid-UNREACHABLE, i.e. outside the claim's tested set.
+   Collation trap checked and absent: db collate en_US.UTF-8, but 0 of
+   2,327,452 trade_ids are non-digit and 0 of 40,944 multi-leg units have legs
+   whose trade_ids differ in LENGTH, so text order == numeric order and
+   postgres ORDER BY == python sorted() on all 2,596 tie-unit ids.
+
+3b. EXPIRATION-BEFORE-EFFECTIVE -- closed with an independent risk read
+   236 rate-rule CURVE units where exp-order and eff-order disagree; NONE are
+   grid-joinable. arbs_dd_unit_bucket_v1.dv01_if_received (the profile under
+   received_signs = +1 * base_orientation) puts the NEGATIVE mass at the
+   EARLIEST-EXPIRING leg on 143/143 units with legs >=3y apart (89/89 at >=5y,
+   65/65 at >=8y). Expiration wins, effective does not.
+
+4. QUOTE WEIGHTS AND UNIT SCALES -- every alternative rejected
+   CURVE  (-1,+1) CLAIMED ......... 3,660 / 3,660 exact
+          (+1,-1) global flip .....     1 / 3,660  median 0.206 bp  max 55.8
+   FLY    (-1,+2,-1) CLAIMED ...... 1,641 / 1,641 exact
+          (+1,-2,+1) global flip ..     1 / 1,641  median 0.084 bp
+          (+2,-1,-1) belly=index0 .     7 / 1,641  median 0.156 bp
+          (-1,-1,+2) belly=index2 .     1 / 1,641  median 0.135 bp
+          (-1,+1,0) front curve ...     1 / 1,641
+          (-0.5,+1,-0.5) ..........     1 / 1,641
+   traded side *1e2 or *1e6 instead of *1e4: 2/3,660 exact (median err 11.75 /
+     1175 bp).  mid side *1e4 or *1.0 instead of *1e2: 239/3,660 -- and those
+     239 are exactly the tie units where mid_bp = 0, so scaling zero is a no-op.
+
+5. DEALER_DIRECTION SIGN IDENTITY -- FULL population, per side, no sampling
+   dealer_direction <-> dealer_sign is 1:1 (PAID=-1, RECEIVED=+1, ABSTAINED=0).
+   dealer_sign == sign(deviation_bps - mid_bias_bps):
+       CURVE     0 mismatches of 40,846 on the -1 side, 0 of 48,296 on +1
+       FLY       0 of 26,348 / 0 of 23,828
+       OUTRIGHT  0 of 273,819 / 0 of 259,893
+   The RAW (unbiased) identity FAILS, and asymmetrically -- exactly the
+   "right on one side" failure mode the task warns about:
+       CURVE 2,943 / 40,846 on PAID vs 1,275 / 48,296 on RECEIVED (4.7% total)
+       FLY 1,629 / 1,004;  OUTRIGHT 13,529 / 13,260
+   sign(signed_weight) == dealer_sign and (p>0.5) == (dealer_sign==1):
+       0 violations in all 673,038 rate-rule units.
+   Caveat: 79,356 / 89,142 rate-rule CURVE units (89.0%) are in_dead_zone.
+
+6. ORIENTATION CORROBORATED OUTSIDE THE PAR GRID
+   a) share of |dv01| that is NEGATIVE, median per unit:
+        RATE_VS_MID    0.4993  (one payer + one receiver -> (-1,+1))
+        NPV_VS_UPFRONT 0.0212  (both legs one sign      -> (+1,+1))
+      the two rules genuinely carry different orientations, as conventions.py
+      says they do.
+   b) positive dv01_if_received mass sits at longer maturity than the negative
+      mass on 1,034 / 1,037 (99.71%) rate-rule CURVE units with legs >=3y
+      apart; 99.78% on dealer_sign=-1 and 99.66% on +1 (no side split); and
+      335 / 336 (99.70%) on FORWARD-STARTING units, which the spot par grid
+      cannot reach at all.
+   c) EXTERNAL: on 2,262 CURVE units whose venue-reported
+      package_transaction_spread has a magnitude that is a clean power of ten
+      times |(r1-r0)*1e4|, its SIGN agrees with the canonical orientation on
+      2,232 (98.67%) and with the reversed orientation on 30 (1.33%).
+
+7. COVERAGE OF THE ORIGINAL TEST
+   grid-joinable share of clean rate-rule units: CURVE 20.3%, FLY 17.1%,
+   OUTRIGHT 31.9%.  The grid is a SPOT par grid, so every forward-starting or
+   broken-date print is outside the claim's 25,692 -- which is why 3a, 3b and
+   6b above were run on populations the grid cannot price.
