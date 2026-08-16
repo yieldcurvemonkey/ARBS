@@ -254,3 +254,7 @@ MDP/IRSwaps/CITIVELO_EXCEL/_intraday_par_cache/
 # v3 tape backfill run ledgers (runtime artifacts, not source)
 tape_v3_backfill_ledger.jsonl
 tape_v3_repair_ledger.jsonl
+
+# JPM package parser fixtures: page extracts from licensed research PDFs.
+# Regenerate with `python tests/fixtures/build_jpm_package_fixtures.py`.
+tests/fixtures/jpm_packages/
