@@ -65,12 +65,57 @@ A junction **must not** be used inside a git worktree: `git clean -xfd` and
 `git worktree remove` delete straight through a reparse point on Windows and would take the
 real data on `D:` with them. These resolve through the new `utils/storage_paths.py` instead.
 
-| store | size | status |
-|---|---|---|
-| `notebooks/sdr/_cache/trade_tape` | 10.26 GB / 4,553 files | ⏳ pending |
-| `data/ts` | 8.98 GB / 1,921,019 files | ⏳ pending |
-| `sdr_cache` | 2.49 GB / 12,325 files | ⏳ pending |
-| `BT/signals/_ustf_basis_cache` | small | ⏳ pending |
+| store | destination | size | status |
+|---|---|---|---|
+| `notebooks/sdr/_cache/trade_tape` | `D:\ARBS_DATA\repo\notebooks\sdr\_cache\trade_tape` | 10.26 GB / 4,553 files | ✅ **moved**, 4,553 files at destination |
+| `data/ts` | `D:\ARBS_DATA\repo\data\ts` | 8.98 GB / 1,921,159 files | ⛔ **deferred — see below** |
+| `sdr_cache` | `D:\ARBS_DATA\repo\sdr_cache` | 2.49 GB / 12,325 files | ⏳ pending |
+| `BT/signals/_ustf_basis_cache` | mirrored | small | ⏳ pending |
+
+#### The one place the plan was overridden mid-flight
+
+`C:` fell to **0.48 GB free** while the 151 GB background copy was still running — a full
+system drive would have broken the migration itself, not just the workload. The trade-tape
+move was therefore done immediately, and with `robocopy /MOVE` rather than the
+copy → verify → delete used everywhere else, because `/MOVE` frees the source progressively
+instead of only at the end. That trades away single-step rollback, which is the right way
+round *for this store specifically*: it is a derived cache rebuildable from the tape DB, not
+primary data. `C:` went 0.48 GB → **29.18 GB**.
+
+It was also moved **before** the code merge, so there was a window in which old code would
+have found the repo-relative path empty. Nothing was running against it: the two cache
+warmers were already disabled, ERIS does not touch this store, and the one other active
+session works in the `ARBS-cvx` worktree, which owns a separate copy.
+
+#### `data/ts` is deferred, and deliberately so
+
+The move refused at its first step:
+
+```
+before: 1921159 files, 8.98 GB
+ABORT: cannot rename source -- a process holds a handle inside it.
+```
+
+That is the rename-first detector doing its job — **nothing was changed**. Both `data/ts`
+*and* its parent `data/` are handle-locked, so an open file sits somewhere beneath them.
+The holders are almost certainly the two VS Code Jupyter kernels running since 19:44
+(PIDs 127564 and 39772); `notebooks/timeseries/eod_linear_rates.ipynb` shows as modified in
+the working tree, so a notebook is mid-session against this store.
+
+**Killing those kernels would throw away the user's in-memory notebook state**, and there is
+no longer any pressure to: `C:` sits at ~26 GB and the AppData swap returns ~151 GB more.
+So this one waits. Once the kernels are restarted, one command finishes it:
+
+```powershell
+pwsh -File <scratchpad>\migrate_repo_store.ps1 `
+     -Repo 'C:\Users\chris\clee\ARBS' -Relative 'data\ts' `
+     -DataRoot 'D:\ARBS_DATA\repo' -Threads 64
+```
+
+It is safe to run at any time: it re-checks the handle, copies rather than moves, verifies a
+zero residual, and only then removes the staging tree. Until it runs, `data/ts` stays on `C:`
+and the code keeps resolving it there — the resolver's fallback is the historical path, so
+nothing is broken in the meantime.
 
 `notebooks/sdr/_cache/trade_tape` alone is **94% of the entire 10.91 GB `notebooks/` tree**,
 and it is written by `SDRUtils/analytics/trade_tape.py` — a library module reaching sideways
