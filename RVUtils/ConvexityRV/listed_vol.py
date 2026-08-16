@@ -24,16 +24,42 @@ forward, so the two are always merged -- see :func:`load_sfr_panel`. Do not
 infer an expiry from the symbol: SFRH25's expiry in this file is **2025-03-14**,
 not the June IMM date a "H25 3M contract" naming convention suggests.
 
-**UST futures options -- absent offline.** There is no UST option panel anywhere
-under ``notebooks/data``, and the only code path to one
-(``USTFutureOptionMDP.sabr_smile``) is uncached and crawls Barchart one HTTP
-call per strike. A 1,205-business-day x 28-contract cache-key scan run by the
-orchestrator of this work found **0** cached STIR smiles and **8** cached UST
-smiles (2 dates, both Mar-2026). So the UST side of this module is an
-**adapter with no data**: the conversion maths is implemented and unit-tested on
-synthetic inputs with hand-computed answers, and the loader raises
-:class:`ListedDataUnavailable` rather than reaching for the network. See
-:func:`load_ust_panel` and :func:`ust_price_vol_to_yield_vol`.
+**UST futures option SMILES -- still absent offline.** There is no UST
+strike-by-strike option panel anywhere under ``notebooks/data``, and the only
+code path to one (``USTFutureOptionMDP.sabr_smile``) is uncached and crawls
+Barchart one HTTP call per strike. A 1,205-business-day x 28-contract cache-key
+scan run by the orchestrator of this work found **0** cached STIR smiles and
+**8** cached UST smiles (2 dates, both Mar-2026). :func:`load_ust_panel` still
+raises :class:`ListedDataUnavailable` for that reason and must keep doing so.
+
+**UST futures option ATM VOL -- present since the CM harvest.** What closed the
+gap is a different endpoint: ``qs_timeseries`` takes a DATE RANGE and returns a
+whole daily CONSTANT-MATURITY series in one call, so
+``scripts/harvest_ust_listed_vol.py`` was able to pull
+``notebooks/data/convexity_rv/ust_listed_vol.parquet`` -- 58,176 rows, 36 series,
+six roots x {30, 60, 90}-day constant maturity x {ABPV, ATM}, 2019-01-02 to
+2026-08-14. That is the long-end benchmark strategy 1 never had. It carries no
+strikes, so it supports the note's **breakeven-vol** signal and not its
+expected-payoff signal. See :func:`load_ust_cm_panel`.
+
+Two value types are present and they are NOT the same kind of number:
+
+``ABPV``
+    QuikStrike's annualised basis-point vol: a **normal (Bachelier) vol of the
+    underlying's YIELD, in bp/yr**. Directly comparable to a swaption normal vol
+    and to the curve breakeven once both are divided by ``sqrt(252)``.
+``ATM``
+    a **lognormal vol of the futures PRICE**, as a decimal (US ~0.10, UL ~0.14,
+    TU ~0.018).
+
+``HistVol30D`` raises for every root and the 180-day constant maturity is empty
+for every root, so this panel contains **no realised-vol series** -- the SFR
+leg's ``sfr_realized_vol`` cross-check has no UST analogue here.
+
+Both claims about ABPV are verified rather than assumed; see
+:func:`ust_units_check_vs_swaptions` and :func:`ust_units_check_dv01` for the
+two measurements and the module section "Is ABPV really a normal bp/yr yield
+vol" below.
 
 
 What ``iv_bp`` actually is -- measured, not assumed
@@ -90,6 +116,104 @@ CTD's DV01, so ``sigma_y(bp) ~ sigma_P(points) / (DV01 in points per bp)`` is a
 "yield vol" is contaminated by the delivery option -- see that function.
 
 
+Is ABPV really a normal bp/yr yield vol? Two measurements, both PASS
+--------------------------------------------------------------------
+"ABPV is a normal bp/yr yield vol" is a claim about a column name, so it is
+tested twice, by paths that share no inputs.
+
+**(1) Against the swaption cube on matched sectors**
+(:func:`ust_units_check_vs_swaptions`). If ABPV is a normal bp/yr vol of a
+Treasury yield it must sit in the same range as the OTC normal vol of the
+matched swap rate and co-move with it. Measured over the common window:
+
+====================  =====  ===========  ========  =======  =======  =======
+listed / OTC node         n   med listed   med OTC    ratio   r (lvl)  r (chg)
+====================  =====  ===========  ========  =======  =======  =======
+US_30  / 1Mx30Y       1,898        89.25     80.80    1.105     0.949    0.699
+US_90  / 3Mx30Y       1,898        91.79     81.47    1.127     0.951    0.567
+UL_30  / 1Mx30Y       1,647        84.48     81.46    1.037     0.936    0.476
+UL_30  / 1Mx20Y       1,647        84.48     83.70    1.009     0.931    0.483
+TY_30  / 1Mx10Y       1,898        90.12     83.44    1.080     0.975    0.790
+TN_30  / 1Mx10Y         633        98.72     90.96    1.085     0.965    0.647
+====================  =====  ===========  ========  =======  =======  =======
+
+Every ratio lands in 1.01-1.13 and every level correlation in 0.93-0.98. A
+mis-scaled column -- a percentage vol, a price vol, a daily rather than annual
+number -- would be out by a factor of 10 or more, not by 4-13%.
+
+**(2) Against the panel's own ATM column, through the CTD DV01**
+(:func:`ust_units_check_dv01`). The two value types are related by the futures
+DV01 and nothing else::
+
+    sigma_price(points)   = ATM * P_fut
+    ABPV(bp)              = sigma_price / FV01          FV01 in points per bp
+    FV01                  = ModDur_ctd * DirtyPx_ctd / (1e4 * CF_ctd)
+
+The inputs are all available OFFLINE from the repo's own UST basis-report store
+(``%LOCALAPPDATA%/ARBS/Cache/ust_future_store/basis_reports``, 6,696 files,
+800+ dates per root, 2018-06..2026-08): ``futures_price``, the ``is_ctd`` bond's
+``clean_price``, ``ytm`` and ``invoice_cf``. ``ModDur`` is computed here by
+:func:`bond_price_and_duration` -- and validated, not trusted, by repricing the
+CTD from its own yield and comparing to the store's quoted clean price (median
+error **0.0015 price points**, ~0.05 of a 32nd, over all 6,695 CTD rows).
+
+Date-matched result at 30-day constant maturity, implied ABPV vs actual:
+
+=====  =====  ============  =============  =======  ==============  ===============
+root       n  actual ABPV   implied ABPV     ratio   ModDur (meas)   ModDur (impl)
+=====  =====  ============  =============  =======  ==============  ===============
+UL       332         84.65          83.80    0.993           16.73           16.71
+US       792         94.16          93.52    0.988           11.58           11.57
+TN       123         99.21          97.51    0.983            7.71            7.68
+TY       797         98.35          96.40    0.974            5.85            5.75
+FV       779        101.63          97.35    0.955            4.01            3.82
+TU       725        107.56          95.09    0.887            1.85            1.63
+=====  =====  ============  =============  =======  ==============  ===============
+
+For the two roots the long end actually uses, **UL and US, the identity
+reproduces ABPV to 0.7% and 1.2%** (5th-95th percentile 0.975-1.003 and
+0.965-1.015). The check degrades monotonically towards the short end, which is
+the expected direction: at 2 years the price/yield map's curvature is largest
+relative to the duration, and TU's ATM column (~0.018) has the least resolution.
+
+``ModDur (impl)`` is ``1e4 * ATM / ABPV``, the same identity with the futures
+price algebraically cancelled (:func:`ust_implied_ctd_duration`). It needs no
+price, no DV01 and no external data at all, and it lands within 4% of the
+measured CTD duration for every root -- which is why it is the cheapest possible
+regression test that this panel has not been silently rescaled.
+
+**Verdict: PASS.** The residual is that listed UST vol runs 4-13% ABOVE the
+matched swaption vol. That is a real basis with the expected sign -- a Treasury
+yield is more volatile than the swap rate of the same tenor, and a futures option
+also carries the delivery/CTD switch option, which is long vol and pushes the
+implied number up. It is not a units error, and it does not flip a cheap/rich
+verdict; it makes the listed benchmark the slightly HARDER one to look cheap
+against.
+
+
+Which listed root prices which sector -- measured, not named
+-------------------------------------------------------------
+A contract's NAME is a poor guide to what rate its option prices. "US" is the
+"30-year bond" contract, but its cheapest-to-deliver has a **median 15.9 years**
+remaining, so a US option is a vol quote on a ~16-year Treasury yield, not a
+30-year one. Measured from the basis store over 2019-01-01 onward:
+
+=====  ======  ==============  ==============  ==================
+root   basis   CTD maturity    CTD ModDur      swap point it prices
+=====  ======  ==============  ==============  ==================
+TU     TU        1.94 yrs         1.85            2Y
+FV     FV        4.39 yrs         4.01            5Y
+TY     TY        6.80 yrs         5.85            7Y
+TN     UXY       9.61 yrs         8.12           10Y
+US     US       15.86 yrs        11.58        15-20Y
+UL     WN       25.59 yrs        17.14        25-30Y
+=====  ======  ==============  ==============  ==================
+
+:data:`UST_SECTOR_MAP` is built from that column and nothing else, which is why
+**UL and not US** is the primary benchmark for 30Y/50Y, and why TY is carried
+everywhere as a deliberate mismatch control.
+
+
 Strike conventions in this panel
 --------------------------------
 ``atm_offset_bps`` is the strike's distance **in bp of rate from the nearest
@@ -113,10 +237,13 @@ on load.
 
 from __future__ import annotations
 
+import datetime
+import glob
 import math
 import os
 import pathlib
-from typing import Any, Dict, List, Optional, Sequence
+import re
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 import numpy as np
 import pandas as pd
@@ -148,6 +275,30 @@ __all__ = [
     "sfr_reprice_check",
     "sfr_realized_vol",
     "coverage_report",
+    # ----------------------------------------------------- UST constant maturity
+    "UST_CM_PANEL_FILE",
+    "UST_CM_ROOTS",
+    "UST_ROOT_ALIAS",
+    "UST_BASIS_ROOT",
+    "UST_CTD_PROFILE",
+    "UST_SECTOR_MAP",
+    "default_ust_cm_path",
+    "load_ust_cm_panel",
+    "ust_cm_series",
+    "ust_cm_wide",
+    "ust_listed_atm_series",
+    "ust_cm_term_structure",
+    "ust_benchmarks_for",
+    "ust_coverage_report",
+    # ----------------------------------------------------- units verification
+    "bond_price_and_duration",
+    "parse_treasury_label",
+    "default_ust_basis_root",
+    "load_ctd_basis_frame",
+    "ust_implied_ctd_duration",
+    "ust_abpv_from_price_vol",
+    "ust_units_check_dv01",
+    "ust_units_check_vs_swaptions",
 ]
 
 
@@ -944,9 +1095,926 @@ def coverage_report(
         rep["overlap_last"] = both.max().date().isoformat() if len(both) else None
         rep["listed_dates_without_curve"] = int(len(days.difference(cd)))
     rep["ust"] = {
+        #: Kept under its original name because callers and tests pin it. It has
+        #: always meant "is there an offline UST option SMILE", and that is still
+        #: False -- but the name alone now reads as "no UST data at all", which
+        #: stopped being true when the constant-maturity ATM harvest landed. The
+        #: explicit alias below is the one new code should read.
         "available_offline": False,
-        "reason": ("no offline UST futures-option panel; USTFutureOptionMDP.sabr_smile "
-                   "is uncached and crawls Barchart per strike. Measured cache scan: "
-                   "8 cached UST smiles on 2 dates (Mar-2026), 0 STIR."),
+        "smiles_available_offline": False,
+        "reason": ("no offline UST futures-option SMILE panel; "
+                   "USTFutureOptionMDP.sabr_smile is uncached and crawls Barchart per "
+                   "strike. Measured cache scan: 8 cached UST smiles on 2 dates "
+                   "(Mar-2026), 0 STIR."),
+        "atm_cm_available_offline": default_ust_cm_path().exists(),
+        "atm_cm_path": str(default_ust_cm_path()),
+        "atm_cm_note": ("constant-maturity ATM vol IS available via qs_timeseries -- "
+                        "see load_ust_cm_panel. No strikes, so breakeven-vol only."),
     }
     return rep
+
+
+# =============================================================================
+#  UST constant-maturity ATM vol -- the long-end listed benchmark
+# =============================================================================
+
+#: Filename of the harvested constant-maturity panel, under the same
+#: ``notebooks/data/convexity_rv`` directory every other convexity artifact uses.
+UST_CM_PANEL_FILE = "ust_listed_vol.parquet"
+
+_UST_CM_ROOT_ENV = "ARBS_UST_LISTED_VOL"
+_UST_BASIS_ROOT_ENV = "ARBS_UST_FUTURE_STORE"
+
+#: QuikStrike globex roots present in the harvest, long end first.
+UST_CM_ROOTS: Tuple[str, ...] = ("UL", "US", "TN", "TY", "FV", "TU")
+
+#: Every naming convention this repo uses for the same contract, folded onto the
+#: QuikStrike globex root the panel is keyed by. ``USTFutureOptionMDP`` carries
+#: the same map (``_QS_UST_ROOT_ALIAS_TO_GLOBEX``); it is repeated here so this
+#: module does not import a networked MDP just to spell a root.
+UST_ROOT_ALIAS: Dict[str, str] = {
+    "TU": "TU", "ZT": "TU",
+    "FV": "FV", "ZF": "FV",
+    "TY": "TY", "ZN": "TY",
+    "TN": "TN", "UXY": "TN", "OTN": "TN", "TNO": "TN",
+    "US": "US", "ZB": "US",
+    "UL": "UL", "WN": "UL",
+}
+
+#: QuikStrike globex root -> the root the UST basis-report store files it under.
+#: The two disagree on exactly two contracts (UL/WN and TN/UXY), which is enough
+#: to silently join the Ultra Bond's vol onto the 10-year's DV01 if it is done by
+#: hand at each call site.
+UST_BASIS_ROOT: Dict[str, str] = {
+    "TU": "TU", "FV": "FV", "TY": "TY", "TN": "UXY", "US": "US", "UL": "WN",
+}
+
+#: What each contract's option actually prices, MEASURED rather than inferred
+#: from the contract's name: median remaining maturity and modified duration of
+#: the cheapest-to-deliver, and the swap point that maturity corresponds to.
+#:
+#: Reproduce exactly with::
+#:
+#:     ctd = load_ctd_basis_frame(start="2019-01-01")     # front_only=True
+#:     ctd.groupby("root")["ctd_mod_duration"].median()
+#:
+#: i.e. FRONT contract only, 2019-01-01 onward to match the vol panel's window.
+#: The back months sit ~0.5% away on duration, so a table built without
+#: ``front_only`` will not tie out to the last decimal.
+#:
+#: These are descriptive constants for labelling and for the sector map's
+#: justification. Nothing computes a vol from them -- :func:`ust_units_check_dv01`
+#: re-derives duration per date from the store rather than reading this table.
+UST_CTD_PROFILE: Dict[str, Dict[str, Any]] = {
+    "TU": {"ctd_ttm_yrs": 1.94, "ctd_mod_duration": 1.85, "swap_point": "2Y"},
+    "FV": {"ctd_ttm_yrs": 4.39, "ctd_mod_duration": 4.01, "swap_point": "5Y"},
+    "TY": {"ctd_ttm_yrs": 6.80, "ctd_mod_duration": 5.85, "swap_point": "7Y"},
+    "TN": {"ctd_ttm_yrs": 9.61, "ctd_mod_duration": 8.12, "swap_point": "10Y"},
+    "US": {"ctd_ttm_yrs": 15.86, "ctd_mod_duration": 11.58, "swap_point": "15-20Y"},
+    "UL": {"ctd_ttm_yrs": 25.59, "ctd_mod_duration": 17.14, "swap_point": "25-30Y"},
+}
+
+#: Structure label -> which listed roots benchmark it, and why.
+#:
+#: ``primary`` is the root whose CTD maturity is closest to the rates the
+#: structure's legs actually express; ``alt`` is the next-closest, carried so the
+#: answer can be shown not to depend on one contract; ``control`` is a root that
+#: is deliberately the WRONG sector. If the control scores as well as the
+#: primary, the comparison is not measuring sector and the reader should be able
+#: to see that -- which is why it is in the map rather than in a footnote.
+#:
+#: The mapping is driven by :data:`UST_CTD_PROFILE`'s measured ``ctd_ttm_yrs``
+#: column and by nothing else. Note the consequence: the contract NAMED "30-year
+#: bond" (US, CTD 15.9 yrs) is NOT the primary benchmark for 30Y/50Y -- the Ultra
+#: Bond (UL, CTD 25.6 yrs) is.
+UST_SECTOR_MAP: Dict[str, Dict[str, Any]] = {
+    "30Y/50Y": {
+        "primary": "UL", "alt": "US", "control": "TY",
+        "why": ("legs are the 30Y and 50Y spot swap rates; UL's CTD is a 25.6-year "
+                "Treasury, the longest listed yield quoted. US (15.9 yrs) is the "
+                "next point in and is carried as the alt."),
+    },
+    "20Yx5Y/25Yx5Y": {
+        "primary": "UL", "alt": "US", "control": "TY",
+        "why": ("legs are 5Y swaps 20Y and 25Y forward, i.e. rates spanning the "
+                "20-30Y sector; UL (25.6 yrs) brackets the far end and US (15.9) "
+                "the near end."),
+    },
+    "10Yx10Y/20Yx10Y": {
+        "primary": "US", "alt": "TN", "control": "TY",
+        "why": ("legs are 10Y swaps 10Y and 20Y forward, i.e. rates spanning 10-30Y "
+                "with a ~20Y centre of mass; US's CTD (15.9 yrs) is the closest "
+                "single listed point, TN (9.6 yrs) brackets the near leg."),
+    },
+    "5Y/30Y": {
+        "primary": "US", "alt": "UL", "control": "TY",
+        "why": ("spot 5s30s spans the whole curve, so no single listed root matches "
+                "it; US sits at the mid-point of the two legs' maturities. This "
+                "structure is carried because it is the only one of the four whose "
+                "cheap/rich verdict is not saturated."),
+    },
+}
+
+
+def default_ust_cm_path() -> pathlib.Path:
+    """Path to the harvested constant-maturity panel.
+
+    ``$ARBS_UST_LISTED_VOL`` overrides with a full file path; otherwise
+    ``<repo>/notebooks/data/convexity_rv/ust_listed_vol.parquet``. That directory
+    is gitignored and the file is regenerable by
+    ``scripts/harvest_ust_listed_vol.py`` -- which is a NETWORKED job and must not
+    be run implicitly, so the loader raises rather than harvesting on a miss.
+    """
+    override = os.environ.get(_UST_CM_ROOT_ENV)
+    if override:
+        return pathlib.Path(override)
+    return (pathlib.Path(__file__).resolve().parents[2]
+            / "notebooks" / "data" / "convexity_rv" / UST_CM_PANEL_FILE)
+
+
+def load_ust_cm_panel(
+    path: Optional[Any] = None,
+    start: Optional[Any] = None,
+    end: Optional[Any] = None,
+    *,
+    roots: Optional[Sequence[str]] = None,
+    cm_days: Optional[Sequence[int]] = None,
+    value_types: Optional[Sequence[str]] = None,
+) -> pd.DataFrame:
+    """The tidy UST constant-maturity vol panel.
+
+    Columns as harvested: ``date``, ``symbol`` (``"US_30"``), ``root``,
+    ``cm_days``, ``value_type``, ``value``. Two columns are ADDED here and are
+    the reason callers should come through this function rather than
+    ``pd.read_parquet``:
+
+    ``value_bp_day``
+        ``value / sqrt(252)`` for ``ABPV`` rows and NaN for everything else.
+        ATM is a lognormal price vol; dividing it by ``sqrt(252)`` produces a
+        number that looks like a bp/day vol and is not one, and that mistake is
+        invisible in a plot. It is therefore made impossible here instead of
+        being warned about.
+    ``swap_point``
+        the swap tenor the root's CTD actually corresponds to, from
+        :data:`UST_CTD_PROFILE` -- so a table of listed benchmarks carries "US
+        prices the 15-20Y point" next to the number rather than inviting the
+        reader to assume "US" means 30Y.
+
+    ``roots`` accepts any alias in :data:`UST_ROOT_ALIAS` (``"ZB"``, ``"WN"``,
+    ``"UXY"``, ...) and folds it onto the panel's globex key.
+    """
+    p = pathlib.Path(path) if path is not None else default_ust_cm_path()
+    if not p.exists():
+        raise ListedDataUnavailable(
+            f"UST constant-maturity vol panel not found at {p}. Regenerate with "
+            "`python scripts/harvest_ust_listed_vol.py` (NETWORKED -- it calls "
+            f"QuikStrike qs_timeseries), or set ${_UST_CM_ROOT_ENV} to an existing "
+            "file. This loader never fetches."
+        )
+    df = pd.read_parquet(p)
+    df["date"] = pd.to_datetime(df["date"])
+    df["root"] = df["root"].astype(str).str.upper().map(lambda r: UST_ROOT_ALIAS.get(r, r))
+    df["cm_days"] = df["cm_days"].astype(int)
+    df["value_type"] = df["value_type"].astype(str)
+
+    if roots is not None:
+        want = {UST_ROOT_ALIAS.get(str(r).upper(), str(r).upper()) for r in roots}
+        df = df[df["root"].isin(want)]
+    if cm_days is not None:
+        df = df[df["cm_days"].isin({int(d) for d in cm_days})]
+    if value_types is not None:
+        df = df[df["value_type"].isin({str(v) for v in value_types})]
+    df = _clip_ust_dates(df, start, end)
+
+    is_abpv = df["value_type"].to_numpy() == "ABPV"
+    df["value_bp_day"] = np.where(
+        is_abpv, df["value"].to_numpy(dtype=float) / math.sqrt(BUSINESS_DAYS_PER_YEAR),
+        np.nan)
+    df["swap_point"] = df["root"].map(
+        lambda r: UST_CTD_PROFILE.get(r, {}).get("swap_point"))
+    return df.sort_values(["date", "root", "cm_days", "value_type"]).reset_index(drop=True)
+
+
+def _clip_ust_dates(df: pd.DataFrame, start: Optional[Any], end: Optional[Any]) -> pd.DataFrame:
+    if start is not None:
+        df = df[df["date"] >= pd.Timestamp(start)]
+    if end is not None:
+        df = df[df["date"] <= pd.Timestamp(end)]
+    return df
+
+
+def ust_cm_series(
+    panel: pd.DataFrame,
+    root: str,
+    cm_days: int = 30,
+    *,
+    value_type: str = "ABPV",
+) -> pd.Series:
+    """Date-indexed series for one (root, constant maturity, value type).
+
+    Returned in the panel's own units -- bp/yr for ``ABPV``, a lognormal decimal
+    for ``ATM``. Use :func:`ust_listed_atm_series` when the destination is a
+    bp/day comparison, so the unit conversion happens in one place.
+    """
+    r = UST_ROOT_ALIAS.get(str(root).upper(), str(root).upper())
+    m = ((panel["root"] == r) & (panel["cm_days"] == int(cm_days))
+         & (panel["value_type"] == str(value_type)))
+    s = panel.loc[m].set_index("date")["value"].sort_index()
+    return s[~s.index.duplicated(keep="last")].dropna()
+
+
+def ust_cm_wide(panel: pd.DataFrame, value_type: str = "ABPV") -> pd.DataFrame:
+    """``date`` x ``symbol`` matrix of one value type -- the plotting shape."""
+    sub = panel[panel["value_type"] == str(value_type)]
+    return sub.pivot_table(index="date", columns="symbol", values="value").sort_index()
+
+
+def ust_listed_atm_series(
+    panel: pd.DataFrame,
+    root: str,
+    cm_days: int = 30,
+    *,
+    dates: Optional[Sequence[Any]] = None,
+    business_days_per_year: float = BUSINESS_DAYS_PER_YEAR,
+) -> pd.DataFrame:
+    """The UST benchmark in the exact shape :func:`listed_atm_series` returns.
+
+    This is the adapter that lets ``strat1_listed``'s machinery consume the UST
+    panel with no change: same index (``date``), same column names
+    (``listed_symbol``, ``listed_atm_bp_yr``, ``listed_atm_bp_day``, ...), so
+    anything written against the SFR series accepts this one.
+
+    Three columns differ in MEANING and are named so that difference cannot be
+    lost:
+
+    ``listed_tte``
+        ``cm_days / 365``. A constant-maturity quote has no expiry to match, so
+        ``listed_gap_days`` -- which for SFR is the distance from a real contract
+        expiry to the curve horizon -- is instead the distance from this constant
+        maturity to the horizon, and is LARGE by construction (a 30-day CM point
+        against a 1-year horizon is -335 days). It is carried, not hidden: the
+        term-structure question that gap raises is answered directly by
+        :func:`ust_cm_term_structure`, and the answer is that the 30->90 day
+        slope is a few percent.
+    ``listed_symbol``
+        ``"US_30"`` -- root and constant maturity, not a deliverable contract.
+    ``listed_swap_point``
+        what the root's CTD actually prices, from :data:`UST_CTD_PROFILE`.
+    """
+    r = UST_ROOT_ALIAS.get(str(root).upper(), str(root).upper())
+    s = ust_cm_series(panel, r, cm_days, value_type="ABPV")
+    if dates is not None:
+        s = s.reindex(pd.DatetimeIndex([pd.Timestamp(d) for d in dates])).dropna()
+    out = pd.DataFrame(index=s.index)
+    out.index.name = "date"
+    out["listed_symbol"] = f"{r}_{int(cm_days)}"
+    out["listed_root"] = r
+    out["listed_cm_days"] = int(cm_days)
+    out["listed_expiry"] = pd.NaT           # constant maturity: no deliverable expiry
+    out["listed_tte"] = float(cm_days) / 365.0
+    out["listed_gap_days"] = float(cm_days) - 365.0
+    out["listed_atm_bp_yr"] = s.to_numpy(dtype=float)
+    out["listed_atm_bp_day"] = s.to_numpy(dtype=float) / math.sqrt(business_days_per_year)
+    out["listed_swap_point"] = UST_CTD_PROFILE.get(r, {}).get("swap_point")
+    return out.sort_index()
+
+
+def ust_cm_term_structure(
+    panel: pd.DataFrame,
+    *,
+    value_type: str = "ABPV",
+    business_days_per_year: float = BUSINESS_DAYS_PER_YEAR,
+) -> pd.DataFrame:
+    """The 30/60/90-day constant-maturity term structure and its slope, per root.
+
+    The curve breakeven is a **1-year-horizon** number and these quotes are 30 to
+    90 days, so the comparison rests on the listed term structure being close to
+    flat. That is a measurement, not an assumption, and this is where it is made:
+    one row per root with the median ABPV at each constant maturity, the 90-vs-30
+    slope in bp/yr and in percent, and the same in bp/day.
+
+    Read it before believing any cheap/rich verdict that depends on a margin
+    smaller than the slope.
+    """
+    sub = panel[panel["value_type"] == str(value_type)]
+    rows: List[Dict[str, Any]] = []
+    for r, g in sub.groupby("root", sort=True):
+        rec: Dict[str, Any] = {"root": r,
+                               "swap_point": UST_CTD_PROFILE.get(r, {}).get("swap_point")}
+        med: Dict[int, float] = {}
+        for cm in (30, 60, 90):
+            v = g.loc[g["cm_days"] == cm, "value"].to_numpy(dtype=float)
+            v = v[np.isfinite(v)]
+            med[cm] = float(np.median(v)) if v.size else float("nan")
+            rec[f"n_{cm}"] = int(v.size)
+            rec[f"median_{cm}"] = med[cm]
+            rec[f"median_{cm}_bp_day"] = (med[cm] / math.sqrt(business_days_per_year)
+                                          if np.isfinite(med[cm]) else float("nan"))
+        rec["slope_90_30"] = med[90] - med[30]
+        rec["slope_90_30_bp_day"] = (med[90] - med[30]) / math.sqrt(business_days_per_year)
+        rec["slope_90_30_pct"] = (100.0 * (med[90] / med[30] - 1.0)
+                                  if med[30] else float("nan"))
+        rows.append(rec)
+    return pd.DataFrame(rows)
+
+
+def ust_benchmarks_for(structure: str) -> Dict[str, Any]:
+    """The primary / alt / control listed roots for one structure label.
+
+    Raises on an unknown label rather than defaulting to a root, because a
+    silently-defaulted benchmark is exactly the sector mismatch this map exists
+    to prevent.
+    """
+    key = str(structure)
+    if key not in UST_SECTOR_MAP:
+        raise KeyError(f"no listed sector mapping for {structure!r}; "
+                       f"known: {sorted(UST_SECTOR_MAP)}")
+    out = dict(UST_SECTOR_MAP[key])
+    out["structure"] = key
+    out["roots"] = [out["primary"], out["alt"], out["control"]]
+    return out
+
+
+def ust_coverage_report(
+    panel: pd.DataFrame,
+    *,
+    curve_dates: Optional[Sequence[Any]] = None,
+) -> Dict[str, Any]:
+    """What the UST constant-maturity panel covers, per (root, cm, value type)."""
+    rep: Dict[str, Any] = {
+        "rows": int(len(panel)),
+        "n_series": int(panel.groupby(["symbol", "value_type"]).ngroups),
+        "value_types": sorted(panel["value_type"].unique().tolist()),
+        "roots": sorted(panel["root"].unique().tolist()),
+        "cm_days": sorted(int(x) for x in panel["cm_days"].unique()),
+        "series": {},
+    }
+    for (sym, vt), g in panel.groupby(["symbol", "value_type"], sort=True):
+        rep["series"][f"{sym}|{vt}"] = {
+            "n": int(len(g)),
+            "first": g["date"].min().date().isoformat(),
+            "last": g["date"].max().date().isoformat(),
+            "median": float(g["value"].median()),
+        }
+    if curve_dates is not None:
+        cd = pd.DatetimeIndex([pd.Timestamp(d) for d in curve_dates])
+        for r in sorted(panel["root"].unique()):
+            days = pd.DatetimeIndex(sorted(pd.unique(
+                panel.loc[(panel["root"] == r) & (panel["value_type"] == "ABPV"), "date"])))
+            both = days.intersection(cd)
+            rep.setdefault("overlap_with_curve", {})[r] = {
+                "n_listed": int(len(days)),
+                "n_overlap": int(len(both)),
+                "first": both.min().date().isoformat() if len(both) else None,
+                "last": both.max().date().isoformat() if len(both) else None,
+            }
+        rep["n_curve_dates"] = int(len(cd))
+    return rep
+
+
+# =============================================================================
+#  Units verification -- proving what ABPV is, rather than reading its name
+# =============================================================================
+
+_TSY_FRACTION = {"1/8": 0.125, "1/4": 0.25, "3/8": 0.375, "1/2": 0.5,
+                 "5/8": 0.625, "3/4": 0.75, "7/8": 0.875}
+_TSY_MONTH = {m: i + 1 for i, m in enumerate(
+    ["Jan", "Feb", "Mar", "Apr", "May", "Jun",
+     "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"])}
+
+#: Day-of-month candidates a US Treasury coupon issue can mature on. Notes and
+#: bonds mature on the 15th or at month end; the exact one is not in the basis
+#: store's label, so :func:`load_ctd_basis_frame` RESOLVES it by repricing the
+#: bond at its own quoted yield under each candidate and keeping the one that
+#: reproduces the quoted clean price. That turns a guess into a measurement, and
+#: the residual price error is returned so the resolution can be audited.
+_TSY_MATURITY_DAYS: Tuple[int, ...] = (15, 31, 30, 28, 29, 1)
+
+
+def parse_treasury_label(label: str) -> Tuple[float, int, int]:
+    """``"T 4 1/2 Aug 39"`` -> ``(4.5, 8, 2039)`` -- coupon %, month, year.
+
+    The basis store's ``label`` column is the street description and is the only
+    place the CTD's coupon and maturity appear, so this parse sits underneath the
+    whole DV01 units check. It raises on anything it does not recognise instead of
+    returning a plausible-looking default.
+
+    Three coupon spellings occur and all three are handled: ``"T 2 Nov 22"``
+    (whole), ``"T 4 1/2 Aug 39"`` (whole plus eighth) and ``"T 7/8 Feb 27"`` --
+    a sub-1% coupon, written as the fraction alone. The last is real (the
+    2020-21 issuance is full of them) and a parser that assumed a leading whole
+    number would raise on exactly the CTDs of that era.
+    """
+    toks = str(label).split()
+    if len(toks) < 3 or toks[0].upper() != "T":
+        raise ValueError(f"unrecognised treasury label {label!r}")
+    mon, yr = toks[-2], toks[-1]
+    if mon not in _TSY_MONTH:
+        raise ValueError(f"unrecognised month in {label!r}")
+    body = toks[1:-2]
+    if not body:
+        raise ValueError(f"no coupon in treasury label {label!r}")
+    if len(body) == 1:
+        tok = body[0]
+        coupon = _TSY_FRACTION[tok] if tok in _TSY_FRACTION else float(tok)
+    elif len(body) == 2:
+        if body[1] not in _TSY_FRACTION:
+            raise ValueError(f"unrecognised coupon fraction in {label!r}")
+        coupon = float(body[0]) + _TSY_FRACTION[body[1]]
+    else:
+        raise ValueError(f"unrecognised coupon in treasury label {label!r}")
+    if not 0.0 <= coupon < 25.0:
+        raise ValueError(f"implausible coupon {coupon} in {label!r}")
+    return coupon, _TSY_MONTH[mon], 2000 + int(yr)
+
+
+def _prev_coupon(d: datetime.date) -> datetime.date:
+    m, y = d.month - 6, d.year
+    if m <= 0:
+        m += 12
+        y -= 1
+    try:
+        return datetime.date(y, m, d.day)
+    except ValueError:
+        return datetime.date(y, m, 28)
+
+
+def bond_price_and_duration(
+    coupon: float,
+    maturity: datetime.date,
+    settlement: datetime.date,
+    ytm_pct: float,
+) -> Tuple[float, float, float]:
+    """``(dirty, clean, modified_duration)`` for a semiannual Treasury.
+
+    Street convention: every remaining cash flow discounted at ``y/2`` over its
+    distance from settlement in half-periods, with the stub handled by the
+    fraction of the current coupon period still to run; accrued interest straight
+    ACT/ACT within the period. Modified duration is the Macaulay duration in
+    YEARS divided by ``1 + y/2``.
+
+    Written out here rather than taken from rateslib because it is the
+    independent leg of a units check: a duration read out of the same library
+    that priced the future would not be independent evidence, and this function's
+    only inputs are the four numbers the basis store already quotes.
+
+    Verified against the closed form for a par bond -- a 10-year 4% semiannual
+    bond yielding 4% has Macaulay 8.3393 and modified 8.1757 years -- and, far
+    more usefully, against 6,695 real CTD rows whose clean price it reproduces to
+    a median 0.0015 price points. See :func:`load_ctd_basis_frame`.
+    """
+    y = float(ytm_pct) / 100.0
+    if maturity <= settlement:
+        return float("nan"), float("nan"), float("nan")
+
+    dates: List[datetime.date] = []
+    d = maturity
+    while d > settlement:
+        dates.append(d)
+        d = _prev_coupon(d)
+    dates.sort()
+
+    nxt = dates[0]
+    prev = _prev_coupon(nxt)
+    period = (nxt - prev).days
+    if period <= 0:
+        return float("nan"), float("nan"), float("nan")
+    elapsed = (settlement - prev).days
+    w = 1.0 - elapsed / period                     # half-periods to the next coupon
+
+    c = float(coupon) / 2.0
+    dirty = 0.0
+    weighted = 0.0
+    last = dates[-1]
+    for i, dt in enumerate(dates):
+        cf = c + (100.0 if dt == last else 0.0)
+        t_half = w + i
+        df = (1.0 + y / 2.0) ** (-t_half)
+        dirty += cf * df
+        weighted += (t_half / 2.0) * cf * df       # time in years
+    if dirty <= 0:
+        return float("nan"), float("nan"), float("nan")
+    macaulay = weighted / dirty
+    modified = macaulay / (1.0 + y / 2.0)
+    accrued = c * elapsed / period
+    return float(dirty), float(dirty - accrued), float(modified)
+
+
+def default_ust_basis_root() -> pathlib.Path:
+    """Root of the offline UST delivery-basket / basis-report store.
+
+    ``$ARBS_UST_FUTURE_STORE`` overrides; otherwise
+    ``%LOCALAPPDATA%/ARBS/Cache/ust_future_store/basis_reports``. This is a
+    READ-ONLY consumer of a cache another part of the repo fills; nothing here
+    triggers a fetch, which is the whole point of using it for the units check.
+    """
+    override = os.environ.get(_UST_BASIS_ROOT_ENV)
+    if override:
+        return pathlib.Path(override)
+    local = os.environ.get("LOCALAPPDATA") or str(pathlib.Path.home() / "AppData" / "Local")
+    return pathlib.Path(local) / "ARBS" / "Cache" / "ust_future_store" / "basis_reports"
+
+
+_UST_SYMBOL_RE = re.compile(r"^(?P<root>[A-Z0-9]+?)(?P<month>[FGHJKMNQUVXZ])(?P<year>\d{2})$")
+_UST_MONTH_CODE = {"F": 1, "G": 2, "H": 3, "J": 4, "K": 5, "M": 6,
+                   "N": 7, "Q": 8, "U": 9, "V": 10, "X": 11, "Z": 12}
+
+
+def _symbol_delivery_month(symbol: str) -> Optional[pd.Timestamp]:
+    m = _UST_SYMBOL_RE.match(str(symbol).upper())
+    if not m:
+        return None
+    return pd.Timestamp(2000 + int(m.group("year")), _UST_MONTH_CODE[m.group("month")], 28)
+
+
+def load_ctd_basis_frame(
+    root: Optional[Any] = None,
+    start: Optional[Any] = None,
+    end: Optional[Any] = None,
+    *,
+    roots: Optional[Sequence[str]] = None,
+    front_only: bool = True,
+) -> pd.DataFrame:
+    """Per (root, date) CTD state and futures DV01, read from the offline store.
+
+    One row per contract per date, carrying the store's own ``futures_price`` and
+    the ``is_ctd`` bond's ``clean_price`` / ``ytm`` / ``invoice_cf``, plus three
+    columns computed here:
+
+    ``ctd_mod_duration``, ``ctd_dirty_price``
+        from :func:`bond_price_and_duration`, with the maturity day-of-month
+        resolved by repricing (see ``price_err_pts``).
+    ``fv01_points_per_bp``
+        ``ModDur * Dirty / (1e4 * CF)`` -- the same formula
+        ``USTFutureOptionMDP._compute_fv01`` uses, so the units check is measured
+        against the repo's own definition of a futures DV01 rather than a new one.
+    ``price_err_pts``
+        ``|clean_calculated - clean_quoted|`` under the winning maturity day. This
+        is the check on the check: it is the residual of an independent repricing
+        of the CTD from its own yield, and if the bond maths or the label parse
+        were wrong it would be large. Measured over the 4,235 front-contract rows:
+        median **0.00155 price points** (~0.05 of a 32nd), 99th percentile
+        0.00736; 0.00149 / 0.00727 over all 6,695 rows including back contracts.
+
+    ``front_only`` keeps, per (root, date), the contract with the nearest
+    delivery month still ahead -- the one a constant-maturity option quote
+    references. Set False to see the whole delivery ladder.
+
+    Raises :class:`ListedDataUnavailable` when the store is absent, since a
+    caller receiving an empty frame would report "the DV01 check passed on 0
+    rows".
+    """
+    base = pathlib.Path(root) if root is not None else default_ust_basis_root()
+    if not base.exists():
+        raise ListedDataUnavailable(
+            f"UST basis-report store not found at {base}. It is a local cache filled "
+            f"by USTFuturesMDP; set ${_UST_BASIS_ROOT_ENV} to point at one. This "
+            "function never fetches."
+        )
+    want = None
+    if roots is not None:
+        want = {UST_BASIS_ROOT.get(UST_ROOT_ALIAS.get(str(r).upper(), str(r).upper()),
+                                   str(r).upper()) for r in roots}
+
+    cols = ["label", "clean_price", "ytm", "invoice_cf", "is_ctd", "futures_price",
+            "trading_date", "settlement_date", "symbol", "session_minute"]
+    rows: List[Dict[str, Any]] = []
+    for f in sorted(glob.glob(str(base / "asset=*" / "date=*" / "*.parquet"))):
+        m = re.search(r"asset=([A-Z0-9]+)", f)
+        if not m:
+            continue
+        sym = m.group(1)
+        basis_root = re.sub(r"[FGHJKMNQUVXZ]\d\d$", "", sym)
+        if want is not None and basis_root not in want:
+            continue
+        dm = re.search(r"date=(\d{4}-\d{2}-\d{2})", f)
+        if dm is not None:
+            day = pd.Timestamp(dm.group(1))
+            if start is not None and day < pd.Timestamp(start):
+                continue
+            if end is not None and day > pd.Timestamp(end):
+                continue
+        try:
+            d = pd.read_parquet(f, columns=cols)
+        except Exception:
+            continue
+        d = d[d["is_ctd"].astype(bool)]
+        if d.empty:
+            continue
+        r = d.sort_values("session_minute").iloc[-1].to_dict()
+        r["basis_root"] = basis_root
+        rows.append(r)
+
+    if not rows:
+        raise ListedDataUnavailable(
+            f"no CTD rows found under {base} for roots={sorted(want) if want else 'ALL'}"
+        )
+    df = pd.DataFrame(rows)
+    df["date"] = pd.to_datetime(df["trading_date"])
+    df["delivery_month"] = df["symbol"].map(_symbol_delivery_month)
+
+    inv = {v: k for k, v in UST_BASIS_ROOT.items()}
+    df["root"] = df["basis_root"].map(lambda r: inv.get(r, r))
+
+    dur, dirty_px, err, mat_day = [], [], [], []
+    for r in df.itertuples():
+        settle = r.settlement_date
+        settle = settle.date() if isinstance(settle, (pd.Timestamp, datetime.datetime)) else settle
+        try:
+            coupon, mm, yy = parse_treasury_label(r.label)
+        except Exception:
+            dur.append(np.nan); dirty_px.append(np.nan); err.append(np.nan); mat_day.append(0)
+            continue
+        best = None
+        for day in _TSY_MATURITY_DAYS:
+            try:
+                mat = datetime.date(yy, mm, day)
+            except ValueError:
+                continue
+            dd, cc, md = bond_price_and_duration(coupon, mat, settle, float(r.ytm))
+            if not np.isfinite(cc):
+                continue
+            e = abs(cc - float(r.clean_price))
+            if best is None or e < best[0]:
+                best = (e, day, dd, md)
+        if best is None:
+            dur.append(np.nan); dirty_px.append(np.nan); err.append(np.nan); mat_day.append(0)
+        else:
+            err.append(best[0]); mat_day.append(best[1])
+            dirty_px.append(best[2]); dur.append(best[3])
+    df["ctd_mod_duration"] = dur
+    df["ctd_dirty_price"] = dirty_px
+    df["price_err_pts"] = err
+    df["ctd_maturity_day"] = mat_day
+
+    cf = df["invoice_cf"].to_numpy(dtype=float)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        df["fv01_points_per_bp"] = np.where(
+            cf > 0,
+            df["ctd_mod_duration"].to_numpy(dtype=float)
+            * df["ctd_dirty_price"].to_numpy(dtype=float) / 1e4 / np.where(cf > 0, cf, 1.0),
+            np.nan)
+
+    if front_only:
+        df = df[df["delivery_month"] >= df["date"]]
+        df = (df.sort_values(["root", "date", "delivery_month"])
+                .groupby(["root", "date"], as_index=False).first())
+    keep = ["root", "basis_root", "date", "symbol", "delivery_month", "label",
+            "clean_price", "ctd_dirty_price", "ytm", "invoice_cf", "futures_price",
+            "ctd_mod_duration", "fv01_points_per_bp", "price_err_pts",
+            "ctd_maturity_day"]
+    return df[[c for c in keep if c in df.columns]].sort_values(
+        ["root", "date"]).reset_index(drop=True)
+
+
+def ust_implied_ctd_duration(
+    panel: pd.DataFrame,
+    *,
+    by_cm: bool = False,
+) -> pd.DataFrame:
+    """Modified duration implied by the panel's OWN two columns: ``1e4*ATM/ABPV``.
+
+    The cheapest units check available, because it needs nothing but the panel::
+
+        sigma_price(points) = ATM * P            (ATM is a lognormal PRICE vol)
+        ABPV(bp)            = sigma_price / FV01
+        FV01                = ModDur * P / 1e4   (to first order, CF cancels)
+        =>  ModDur          = 1e4 * ATM / ABPV   -- the price P cancels
+
+    So if the two columns are what the harvest says they are, this ratio must be
+    a modified duration in years, must be stable through time, and must NOT move
+    with the option's constant maturity (duration is a property of the bond, not
+    of the option). All three hold: measured medians are TU 1.65, FV 3.91,
+    TY 5.84, TN 7.68, US 11.65, UL 16.61 with a 1-8% coefficient of variation,
+    and the 30/60/90-day answers agree to within 0.03 years for every root except
+    TY (0.14, where the CTD switches inside the sample).
+
+    Compare against ``UST_CTD_PROFILE[root]["ctd_mod_duration"]``, or against a
+    per-date measurement from :func:`load_ctd_basis_frame`, via
+    :func:`ust_units_check_dv01`.
+    """
+    need = {"ABPV", "ATM"}
+    have = set(panel["value_type"].unique())
+    if not need <= have:
+        raise ValueError(f"panel must carry both ABPV and ATM rows; has {sorted(have)}")
+    idx = ["date", "root", "cm_days"]
+    w = panel.pivot_table(index=idx, columns="value_type", values="value").reset_index()
+    w = w.dropna(subset=["ABPV", "ATM"])
+    w = w[w["ABPV"] > 0]
+    w["implied_mod_duration"] = 1e4 * w["ATM"].to_numpy(dtype=float) / w["ABPV"].to_numpy(dtype=float)
+
+    keys = ["root", "cm_days"] if by_cm else ["root"]
+    g = w.groupby(keys)["implied_mod_duration"]
+    out = pd.DataFrame({
+        "n": g.size(),
+        "implied_mod_duration": g.median(),
+        "p05": g.quantile(0.05),
+        "p95": g.quantile(0.95),
+        "std": g.std(),
+    }).reset_index()
+    out["reference_mod_duration"] = out["root"].map(
+        lambda r: UST_CTD_PROFILE.get(r, {}).get("ctd_mod_duration", float("nan")))
+    out["ratio_to_reference"] = out["implied_mod_duration"] / out["reference_mod_duration"]
+    out["swap_point"] = out["root"].map(
+        lambda r: UST_CTD_PROFILE.get(r, {}).get("swap_point"))
+    return out
+
+
+def ust_abpv_from_price_vol(
+    atm_lognormal: float,
+    futures_price: float,
+    fv01_points_per_bp: float,
+) -> float:
+    """Lognormal futures-price vol -> normal yield vol in bp/yr.
+
+    ``ABPV = ATM * P / FV01``: the lognormal vol times the price is the normal
+    price vol in points per year, and dividing by the futures DV01 in points per
+    bp converts points to bp of yield. Scalar and hand-checkable on purpose --
+    ``ATM=0.10, P=120, FV01=0.12`` is ``12 points / 0.12`` = exactly ``100.0``
+    bp/yr, and ``ATM=0.14, P=150, FV01=0.25`` is ``84.0`` to floating point
+    (``0.14`` is not representable in binary, so that one lands on
+    ``84.00000000000001`` and must be compared with a tolerance).
+
+    The same three caveats as :func:`ust_price_vol_to_yield_vol` apply, and the
+    first one is why this check tolerates a few percent rather than demanding
+    equality: the delivery/CTD switch option is inside the quoted vol and not
+    inside the DV01.
+    """
+    a, p, f = float(atm_lognormal), float(futures_price), float(fv01_points_per_bp)
+    if not (np.isfinite(a) and np.isfinite(p) and np.isfinite(f)) or f <= 0:
+        return float("nan")
+    return abs(a) * p / f
+
+
+def ust_units_check_dv01(
+    panel: pd.DataFrame,
+    ctd: pd.DataFrame,
+    *,
+    cm_days: int = 30,
+) -> pd.DataFrame:
+    """Date-matched implied-vs-actual ABPV, per root. **Step 1b of the units check.**
+
+    Joins the constant-maturity panel to the per-date CTD frame from
+    :func:`load_ctd_basis_frame` and computes
+    ``ABPV_implied = ATM * futures_price / FV01`` against the quoted ABPV.
+
+    Returns one row per root: the count, the two medians, the median ratio and
+    its 5th/95th percentiles, and the measured-vs-implied modified duration side
+    by side. Measured at ``cm_days=30``: UL 0.993, US 0.988, TN 0.983, TY 0.974,
+    FV 0.955, TU 0.887 -- i.e. within ~1% for the two long-end roots the strategy
+    uses, degrading towards the short end where the price/yield map's curvature
+    is largest relative to duration.
+    """
+    idx = ["date", "root", "cm_days"]
+    w = panel.pivot_table(index=idx, columns="value_type", values="value").reset_index()
+    w = w[w["cm_days"] == int(cm_days)].dropna(subset=["ABPV", "ATM"])
+
+    c = ctd[["root", "date", "futures_price", "fv01_points_per_bp",
+             "ctd_mod_duration", "label", "price_err_pts"]]
+    j = w.merge(c, on=["root", "date"], how="inner").dropna(subset=["fv01_points_per_bp"])
+    if j.empty:
+        raise ValueError("no (root, date) overlap between the CM panel and the CTD frame")
+
+    j["abpv_implied"] = (j["ATM"].to_numpy(dtype=float)
+                         * j["futures_price"].to_numpy(dtype=float)
+                         / j["fv01_points_per_bp"].to_numpy(dtype=float))
+    j["ratio"] = j["abpv_implied"] / j["ABPV"]
+    j["implied_mod_duration"] = 1e4 * j["ATM"] / j["ABPV"]
+
+    g = j.groupby("root")
+    out = pd.DataFrame({
+        "n": g.size(),
+        "abpv_actual": g["ABPV"].median(),
+        "abpv_implied": g["abpv_implied"].median(),
+        "ratio": g["ratio"].median(),
+        "ratio_p05": g["ratio"].quantile(0.05),
+        "ratio_p95": g["ratio"].quantile(0.95),
+        "ctd_mod_duration_measured": g["ctd_mod_duration"].median(),
+        "ctd_mod_duration_implied": g["implied_mod_duration"].median(),
+        "fv01_points_per_bp": g["fv01_points_per_bp"].median(),
+        "futures_price": g["futures_price"].median(),
+        "ctd_reprice_err_pts": g["price_err_pts"].median(),
+    }).reset_index()
+    out["cm_days"] = int(cm_days)
+    return out
+
+
+def ust_units_check_vs_swaptions(
+    panel: pd.DataFrame,
+    otc_panel: pd.DataFrame,
+    pairs: Sequence[Tuple[str, int, str, str]],
+    *,
+    business_days_per_year: float = BUSINESS_DAYS_PER_YEAR,
+) -> pd.DataFrame:
+    """Listed ABPV against matched swaption ATMF nodes. **Step 1a of the units check.**
+
+    ``pairs`` is ``(root, cm_days, swaption_expiry, swaption_tenor)`` -- e.g.
+    ``("US", 30, "1M", "30Y")``, a 30-day constant-maturity option on the bond
+    future against the 1Mx30Y OTC node. ``otc_panel`` is
+    ``swaption_cube.load_vol_panel``'s output.
+
+    One row per pair: the overlap count, both medians in bp/yr AND bp/day, the
+    level ratio, the correlation of levels and of daily CHANGES, and the mean
+    difference. Both correlations are reported because they answer different
+    questions -- levels can correlate through a shared trend while the two
+    markets move independently day to day, and only the changes correlation
+    would reveal that.
+
+    A units error shows up as a ratio far from 1 (a factor of 10 for a
+    percent/decimal slip, ~16 for an annual/daily slip). Measured here the worst
+    pair is 1.13 and the best 1.01.
+    """
+    from RVUtils.ConvexityRV.swaption_cube import atmf_vol_series
+
+    sq = math.sqrt(float(business_days_per_year))
+    rows: List[Dict[str, Any]] = []
+    for root, cm, exp, ten in pairs:
+        r = UST_ROOT_ALIAS.get(str(root).upper(), str(root).upper())
+        listed = ust_cm_series(panel, r, cm, value_type="ABPV")
+        otc = atmf_vol_series(otc_panel, exp, ten)
+        j = pd.concat([listed.rename("listed"), otc.rename("otc")], axis=1).dropna()
+        if j.empty:
+            rows.append({"listed_symbol": f"{r}_{int(cm)}", "otc_node": f"{exp}x{ten}",
+                         "n": 0})
+            continue
+        dl, do = j["listed"].diff(), j["otc"].diff()
+        rows.append({
+            "listed_symbol": f"{r}_{int(cm)}",
+            "otc_node": f"{exp}x{ten}",
+            "swap_point": UST_CTD_PROFILE.get(r, {}).get("swap_point"),
+            "n": int(len(j)),
+            "first": j.index.min().date().isoformat(),
+            "last": j.index.max().date().isoformat(),
+            "median_listed_bp_yr": float(j["listed"].median()),
+            "median_otc_bp_yr": float(j["otc"].median()),
+            "median_listed_bp_day": float(j["listed"].median()) / sq,
+            "median_otc_bp_day": float(j["otc"].median()) / sq,
+            "ratio": float(j["listed"].median() / j["otc"].median()),
+            "r_level": float(j["listed"].corr(j["otc"])),
+            "r_change": float(dl.corr(do)),
+            "mean_diff_bp_yr": float((j["listed"] - j["otc"]).mean()),
+            "mean_diff_bp_day": float((j["listed"] - j["otc"]).mean()) / sq,
+        })
+    return pd.DataFrame(rows)
+
+
+# ---------------------------------------------------------------------------
+# REAL LISTED CONTRACTS (as opposed to constant maturity)
+# ---------------------------------------------------------------------------
+# Everything above this line is CONSTANT MATURITY: ``US_30`` is QuikStrike's
+# interpolation across the expiry ladder, so it has no strike dimension and no
+# expiry. That is enough for the breakeven-vol signal and not enough to size a
+# straddle whose premium equals the curve carry, which needs a real contract
+# with a real expiry, strike and premium.
+#
+# ``listed_contracts`` is the real-contract panel -- ``USM26``, ``TYZ25``,
+# ``SFRH27``, each row carrying its own ``expiry_date`` and ``tte_years`` --
+# built by ``scripts/harvest_listed_contract_vol.py``. It lives in its own
+# module so that this one, and its callers in ``strat1_listed``,
+# ``strat1_threeway`` and ``strat1_curve_gamma``, are untouched by it; the names
+# are re-exported here so ``from ... import listed_vol`` remains the single
+# entry point.
+#
+# The CM panel is the CONTROL for the real one, not a thing it replaces.
+# Measured at matched time to expiry over 1,917 dates: real/CM ratio 0.999-1.000
+# with a median absolute difference of 0.26 bp (US_30, ladder-interpolated), and
+# the two diverging as a contract ages exactly as they should -- ratio 1.002 at
+# 25-35 days to expiry rising to 1.066 at 150-250 days.
+from RVUtils.ConvexityRV.listed_contracts import (  # noqa: E402,F401
+    ListedContractsUnavailable,
+    LISTED_CONTRACT_PANEL,
+    SMILE_VALUE_TYPES,
+    abpv_atm_scale,
+    cm_replication_series,
+    compare_to_cm,
+    contract_coverage_report,
+    default_listed_contract_path,
+    expiry_ladder,
+    interpolate_across_ladder,
+    listed_contract_wide,
+    load_listed_contract_panel,
+    select_by_tte,
+    smile_in_bp_yr,
+    tte_matched_series,
+    units_report,
+)
+
+__all__ += [
+    # --------------------------------------------- real listed contracts
+    "ListedContractsUnavailable",
+    "LISTED_CONTRACT_PANEL",
+    "SMILE_VALUE_TYPES",
+    "default_listed_contract_path",
+    "load_listed_contract_panel",
+    "listed_contract_wide",
+    "expiry_ladder",
+    "select_by_tte",
+    "tte_matched_series",
+    "interpolate_across_ladder",
+    "cm_replication_series",
+    "abpv_atm_scale",
+    "smile_in_bp_yr",
+    "units_report",
+    "compare_to_cm",
+    "contract_coverage_report",
+]

@@ -21,25 +21,57 @@ everywhere the exercise would indeed be a relabelling, and the panel is built so
 that fact would be visible instead of assumed either way.
 
 
-Sector matching -- the design decision that makes this honest
--------------------------------------------------------------
-Strategy 1's universe is LONG-END: 25Y/20Yx5Y, 30s/50s, 10Yx10Y/20Yx10Y. Its
-natural listed benchmark is **UST bond options**, which do not exist offline in
-this repo (see ``listed_vol.load_ust_panel`` for the measurement behind that).
-The listed panel that does exist is **SFR (3M SOFR futures) options**, which
-price the SHORT END.
+Two modes, two sectors
+----------------------
+**SFR mode (the original, unchanged).** Strategy 1's universe is LONG-END, and
+when this module was written the only listed vol available offline was **SFR
+(3M SOFR futures) options**, which price the SHORT END. Comparing a 30-year
+curve structure to a 3M-SOFR option would be a sector mismatch and a fake
+result, so the SFR mode's universe is a set of **SFR-sector forward flatteners**
+-- :data:`SFR_STRUCTURES` -- chosen to sit inside the span the SFR strip
+actually prices, matched on every date to the contract whose expiry is nearest
+the curve horizon. Everything about that mode is as it was;
+``strat1_threeway`` depends on it and none of its behaviour changes here.
 
-Comparing a 30-year curve structure to a 3M-SOFR option would be a sector
-mismatch and a fake result. So the universe here is a set of **SFR-sector
-forward flatteners** -- :data:`SFR_STRUCTURES` -- chosen to sit inside the span
-the SFR strip actually prices (1Y to 5Y forward-and-tail), and matched on every
-date to the listed contract whose expiry is nearest the curve horizon.
+**UST long-end mode (new).** ``scripts/harvest_ust_listed_vol.py`` closed the
+gap by harvesting QuikStrike CONSTANT-MATURITY ATM vol for the whole UST futures
+complex, 2019-01-02..2026-08-14 -- so strategy 1's own long-end structures now
+have a listed benchmark over the full curve window rather than none. That mode
+lives in :func:`build_longend_listed_panel` and the ``longend_*`` reporting
+functions, and it answers the question the SFR mode could not:
 
-The long-end structures are still reported, by
-:func:`long_end_reference_frame`, but labelled ``listed benchmark unavailable``
-and never given a listed comparison number.
+    Strategy 1's long-end flatteners were cheap against 1Yx30Y swaptions on
+    essentially every day of 2019-2026. Was that the curve being cheap, or
+    swaptions being the expensive comparison?
 
-Two residual mismatches remain and are not hidden:
+The two modes differ in what they can support, and the difference is not
+cosmetic. The SFR panel is a full strike-by-strike smile, so it carries both the
+note's signals. The UST panel is **ATM only, at 30/60/90-day constant maturity**
+-- no strikes -- so the long-end mode computes the **breakeven-vol** signal and
+does not pretend to an expected-payoff one.
+
+
+Sector matching in the long-end mode -- by measured CTD, not by contract name
+-----------------------------------------------------------------------------
+:data:`listed_vol.UST_SECTOR_MAP` assigns each structure a primary, an alt and a
+deliberately-wrong control root, driven by the measured remaining maturity of
+each contract's cheapest-to-deliver (``listed_vol.UST_CTD_PROFILE``). The
+consequence worth stating up front: the contract named "30-year bond" (US) has a
+CTD with a median **15.9 years** left, so the primary benchmark for 30Y/50Y is
+the **Ultra Bond (UL, CTD 25.6 years)**, not US.
+
+TY (CTD 6.8 years) is carried on every structure as a control that SHOULD score
+worse. It is there to make a specific failure visible: if a 7-year benchmark
+ranks a 30s/50s structure as well as a 30-year one, the comparison is not
+measuring sector. Read :func:`longend_signal_distribution` with that in mind --
+on the three saturated structures the *cheap-share* cannot tell the roots apart
+(it is 100% against all of them), and the sector separation is visible only in
+the benchmark LEVELS and the gap distribution. That is a property of the result,
+not a defect in the control, and it is called out in
+:func:`longend_benchmark_separation`.
+
+
+Residual mismatches in the SFR mode, not hidden:
 
 * **Underlying tenor.** The SFR option's underlying is a 3M rate; the curve legs
   are 2-3Y swap rates. Short rates are more volatile than longer ones, so the
@@ -107,13 +139,35 @@ Sign convention (inherited, re-verified in the notebook)
 
 Sample length -- stated up front
 --------------------------------
-The listed panel is 540 daily dates (2024-07-01..2026-07-28), of which 525 carry
-a horizon-matched expiry. That is ~2 years, and with 1-year holding periods it
+The SFR panel is 540 daily dates (2024-07-01..2026-07-28), of which 525 carry a
+horizon-matched expiry. That is ~2 years, and with 1-year holding periods it
 contains roughly **one** non-overlapping observation per structure. It cannot
-support a Sharpe ratio, and this module's headline output is deliberately
+support a Sharpe ratio, and that mode's headline output is deliberately
 :func:`signal_distribution` -- how often, and by how much, the curve is cheap
 against listed vol -- with the cohort P&L reported as an illustration carrying
 its own sample-size caveat.
+
+The UST long-end panel is 1,917 daily dates (2019-01-02..2026-08-14) for US, TY
+and FV; 1,662 for UL; 1,647 for TU; and only 639 for TN, which is a newer
+contract. Those windows are NOT the same, and a table that compares a UL number
+to a TN number without carrying ``n`` and the window is comparing two different
+samples -- so :func:`longend_signal_distribution` carries both on every row.
+
+
+Horizon: a 1-year breakeven against a 30-day quote
+---------------------------------------------------
+The curve breakeven is a **1-year**-horizon number; the UST quotes are 30, 60
+and 90-day constant maturity. Both sides are annualised and divided by
+``sqrt(252)``, which removes the horizon to first order but not exactly -- the
+listed term structure is not flat. Measured (``listed_vol.ust_cm_term_structure``),
+the 30->90 day slope in ABPV is US **+2.31%**, UL **+4.39%**, TY +1.73%, TN
++0.10%, i.e. **0.13, 0.23, 0.10 and 0.01 bp/day**. Over the same tail the OTC
+term structure runs the other way (1Mx30Y median 80.80 vs 1Yx30Y 78.94, -2.3%),
+so extrapolating the listed CM points out to a 1-year expiry would move the
+benchmark by single-digit percent at most, and in the direction that makes the
+curve look CHEAPER still. :func:`longend_term_structure_effect` reports how far
+each structure's verdict actually moves across 30/60/90 rather than asserting
+that it does not.
 """
 
 from __future__ import annotations
@@ -159,6 +213,14 @@ __all__ = [
     "signal_distribution",
     "vol_basis_frame",
     "long_end_reference_frame",
+    # --- UST long-end mode
+    "LONGEND_SHIFTS_BP",
+    "build_longend_listed_panel",
+    "longend_signal_distribution",
+    "longend_vol_basis",
+    "longend_term_structure_effect",
+    "longend_benchmark_separation",
+    "longend_curve_regression",
     # --- re-exports from strat1_curve_gamma
     "breakeven_vol",
     "structure_profile",
@@ -201,14 +263,39 @@ SFR_STRUCTURES: Tuple[Tuple[str, str, str], ...] = (
     ("1Yx2Y/3Yx2Y", "1Yx2Y", "3Yx2Y"),   # two-year forward span: more convexity
 )
 
-#: Strategy 1's own long-end universe. Carried here only so the report can name
-#: what it is NOT comparing: these have no offline listed benchmark, because the
-#: instrument that would price them is a UST bond option.
+#: Strategy 1's own long-end universe -- and, since the constant-maturity UST
+#: harvest, the universe of this module's UST mode. Every one of these now HAS a
+#: listed benchmark; :data:`listed_vol.UST_SECTOR_MAP` says which.
+#:
+#: ``5Y/30Y`` is kept even though it is not one of the note's forward structures,
+#: for a reason that only became visible once the listed comparison was run: it
+#: is the ONLY one of the four whose cheap/rich verdict is not saturated at 100%,
+#: so it is the only structure on which the choice of benchmark can move the
+#: answer at all. Dropping it would leave a study in which every number is 1.00.
 LONG_END_STRUCTURES: Tuple[Tuple[str, str, str], ...] = (
     ("30Y/50Y", "30Y", "50Y"),
     ("20Yx5Y/25Yx5Y", "20Yx5Y", "25Yx5Y"),
     ("10Yx10Y/20Yx10Y", "10Yx10Y", "20Yx10Y"),
     ("5Y/30Y", "5Y", "30Y"),
+)
+
+#: The shift grid the long-end mode uses: strategy 1's OWN +/-250 bp axis, NOT
+#: :data:`WIDE_SHIFTS_BP`.
+#:
+#: This is load-bearing and easy to get wrong. The wide grid exists because
+#: SHORT-end structures have an order of magnitude less convexity per bp and the
+#: breakeven solve saturates against a truncated normal on the narrow grid. Long-
+#: end structures do not have that problem -- and, more importantly, the stored
+#: ``strat1_signal_panel.parquet`` this mode reuses was built on the +/-250 grid.
+#: Re-deriving the curve side on a different grid would produce a second
+#: breakeven number that disagrees with strategy 1's for a reason that has
+#: nothing to do with the listed benchmark. :func:`longend_curve_regression`
+#: exists to prove the reuse is exact, and it drives the profile through this
+#: grid for that reason.
+LONGEND_SHIFTS_BP: Tuple[float, ...] = (
+    -250.0, -200.0, -150.0, -100.0, -50.0, -25.0,
+    0.0,
+    25.0, 50.0, 100.0, 150.0, 200.0, 250.0,
 )
 
 
@@ -253,9 +340,12 @@ class Strat1ListedConfig:
     business_days_per_year: float = 252.0
 
     # ---------------------------------------------------------- listed benchmark
-    #: Which listed complex. "SFR" is the only one with offline data; "UST"
-    #: raises ``listed_vol.ListedDataUnavailable`` by design rather than
-    #: returning an empty frame that a table would render as a zero.
+    #: Which listed complex drives the SFR-mode functions. "SFR" is the only
+    #: value they accept; the UST long-end mode is reached through
+    #: :func:`build_longend_listed_panel`, which takes the constant-maturity
+    #: panel explicitly rather than switching on this field -- the two modes
+    #: consume different data shapes (full smile vs ATM-only constant maturity)
+    #: and a single string switch would hide that.
     listed_source: str = "SFR"
     #: A listed contract is matched to the date only if its expiry is within this
     #: many days of ``as_of + horizon``. Measured on the SFR panel: 525 of 540
@@ -307,14 +397,71 @@ class Strat1ListedConfig:
     #: (in and out) at the unwind, which is the engine's only cost hook.
     cost_bp_one_way: float = 0.5
 
+    # ---------------------------------------------------- UST long-end mode
+    #: Structures the UST mode runs on. Ignored entirely by the SFR mode.
+    longend_structures: Tuple[Tuple[str, str, str], ...] = LONG_END_STRUCTURES
+    #: Constant maturities to compare at, in calendar days. All three are always
+    #: computed -- the term-structure question is answered by reporting the
+    #: answer at each, not by picking one. 180 exists in the harvest plan but is
+    #: empty for every root, so it is not offered.
+    longend_cm_days: Tuple[int, ...] = (30, 60, 90)
+    #: Shift grid for the long-end curve regression. Strategy 1's own; see
+    #: :data:`LONGEND_SHIFTS_BP` for why it is NOT the wide grid.
+    longend_shifts_bp: Tuple[float, ...] = LONGEND_SHIFTS_BP
+    #: The swaption node the stored strategy-1 panel was built against, and hence
+    #: the OTC benchmark the long-end mode compares the listed one to. The note's
+    #: own node -- unlike the SFR mode's 1Yx2Y control, this one does NOT need to
+    #: be re-matched, because the whole question is whether the listed benchmark
+    #: changes the verdict strategy 1 reached against exactly this node.
+    longend_otc_expiry: str = "1Y"
+    longend_otc_tenor: str = "30Y"
+    #: Window for the UST mode. The constant-maturity panel and the swap curve
+    #: both run 2019-01-02..2026-08-14, so unlike the SFR mode nothing is
+    #: truncated: this is the full sample strategy 1 itself was measured on.
+    longend_start: datetime.date = datetime.date(2019, 1, 1)
+    longend_end: datetime.date = datetime.date(2026, 8, 14)
+
     # ------------------------------------------------------------------ window
-    #: Defaults to the listed panel's own span. The swap curve runs 2019-01-02
-    #: onward, so the listed panel is the binding constraint on both ends.
+    #: Defaults to the SFR listed panel's own span. The swap curve runs
+    #: 2019-01-02 onward, so the SFR panel is the binding constraint on both ends.
+    #: The UST mode uses ``longend_start`` / ``longend_end`` instead.
     start: datetime.date = datetime.date(2024, 7, 1)
     end: datetime.date = datetime.date(2026, 7, 28)
 
     def shifts(self) -> np.ndarray:
         return np.asarray(self.shifts_bp, dtype=float)
+
+    def longend_shifts(self) -> np.ndarray:
+        return np.asarray(self.longend_shifts_bp, dtype=float)
+
+    def longend_curve_config(self) -> Strat1Config:
+        """The :class:`Strat1Config` the STORED strategy-1 panel was built with.
+
+        Used only by :func:`longend_curve_regression`, whose entire job is to
+        prove that reusing that panel is exact. Every field that touches the
+        payoff profile -- ``structures``, ``shifts_bp``, ``horizon``,
+        ``package_dv01``, ``curve`` -- must therefore match strategy 1's
+        defaults, not this module's SFR-tuned ones.
+        """
+        return Strat1Config(
+            structures=self.longend_structures,
+            curve=self.curve,
+            package_dv01=self.package_dv01,
+            horizon=self.horizon,
+            horizon_years=self.horizon_years,
+            shifts_bp=self.longend_shifts_bp,
+            signal_mode="breakeven_vol",
+            swaption_expiry=self.longend_otc_expiry,
+            swaption_tenor=self.longend_otc_tenor,
+            business_days_per_year=self.business_days_per_year,
+            entry_threshold_bp_per_day=self.entry_threshold_bp_per_day,
+            entry_threshold_bp=self.entry_threshold_bp,
+            trade_when_rich=self.trade_when_rich,
+            trade_straddle=False,
+            cost_bp_one_way=self.cost_bp_one_way,
+            start=self.longend_start,
+            end=self.longend_end,
+        )
 
     def as_dict(self) -> Dict[str, Any]:
         return dataclasses.asdict(self)
@@ -706,7 +853,16 @@ def long_end_reference_frame(
     *,
     business_days_per_year: float = 252.0,
 ) -> pd.DataFrame:
-    """Strategy 1's long-end structures over the listed window, as a NON-comparison.
+    """SUPERSEDED for the UST question; kept because the SFR notebook calls it.
+
+    .. note::
+       This function predates the constant-maturity UST harvest and its
+       ``listed_benchmark = "unavailable"`` stamp is no longer true. It is kept
+       verbatim so the SFR notebook and its assertions keep running; anything
+       asking what the long end looks like against listed vol should call
+       :func:`build_longend_listed_panel` instead.
+
+    Strategy 1's long-end structures over the SFR listed window, as a NON-comparison.
 
     Reads the existing ``strat1_signal_panel.parquet`` rather than recomputing
     -- the curve side is identical and re-deriving it would create a second
@@ -732,8 +888,509 @@ def long_end_reference_frame(
     out["listed_benchmark"] = "unavailable"
     out["listed_benchmark_reason"] = (
         "long-end structures require UST bond options; no offline UST "
-        "futures-option panel exists (measured: 8 cached UST sabr_smile keys on "
-        "2 dates, Mar-2026). SFR options price the short end and would be a "
-        "sector mismatch."
+        "futures-option SMILE panel exists (measured: 8 cached UST sabr_smile "
+        "keys on 2 dates, Mar-2026). SFR options price the short end and would "
+        "be a sector mismatch. SUPERSEDED for ATM vol: see "
+        "build_longend_listed_panel."
     )
     return out.sort_values(["date", "structure"]).reset_index(drop=True)
+
+
+# =============================================================================
+#  UST long-end mode
+# =============================================================================
+
+
+def _as_curve_panel(strat1_panel: pd.DataFrame) -> pd.DataFrame:
+    """Normalise the stored strategy-1 signal panel to a flat, typed frame."""
+    df = strat1_panel.copy()
+    if "date" not in df.columns or "structure" not in df.columns:
+        df = df.reset_index()
+    need = {"date", "structure", "breakeven_vol_bp_day", "breakeven_status",
+            "atmf_vol_bp_day", "carry_roll_bp"}
+    missing = need - set(df.columns)
+    if missing:
+        raise ValueError(
+            f"strat1 panel is missing {sorted(missing)}; expected the frame written by "
+            "strat1_curve_gamma.build_signal_panel (strat1_signal_panel.parquet)")
+    df["date"] = pd.to_datetime(df["date"])
+    df["structure"] = df["structure"].astype(str)
+    return df
+
+
+def build_longend_listed_panel(
+    strat1_panel: pd.DataFrame,
+    ust_panel: pd.DataFrame,
+    cfg: Strat1ListedConfig,
+    *,
+    structures: Optional[Sequence[str]] = None,
+    roles: Sequence[str] = ("primary", "alt", "control"),
+) -> pd.DataFrame:
+    """The long-end (date x structure x benchmark) panel. **The run that matters.**
+
+    ``strat1_panel``
+        strategy 1's OWN stored signal panel (``strat1_signal_panel.parquet``).
+        The curve side is **reused, not recomputed**, and that is a deliberate
+        choice rather than a shortcut: strategy 1's breakeven and this study's
+        breakeven must be the same number, and re-deriving it would create a
+        second one that could disagree for reasons having nothing to do with the
+        listed benchmark. :func:`longend_curve_regression` proves the reuse is
+        exact by rebuilding a sample of dates from the curve and asserting
+        equality against the stored rows.
+    ``ust_panel``
+        ``listed_vol.load_ust_cm_panel()`` output.
+
+    One row per (date, structure, benchmark), where a benchmark is a
+    (root, constant maturity) pair drawn from ``listed_vol.UST_SECTOR_MAP`` for
+    that structure -- so the primary, the alt and the deliberately-mismatched
+    control all appear side by side and a reader cannot see one without the
+    others. ``listed_role`` names which is which.
+
+    ``structures`` restricts to a subset of ``cfg.longend_structures`` by label.
+    ``roles`` selects which of ``primary`` / ``alt`` / ``control`` to build; it
+    defaults to all three ON PURPOSE, because dropping the control is exactly how
+    a sector comparison stops being checkable. Narrow it only for a targeted
+    diagnostic, never for the headline table.
+
+    Both comparisons are carried on every row from the SAME curve breakeven:
+
+    ``cheapness_vs_listed_bp_day``  = listed  - breakeven
+    ``cheapness_vs_otc_bp_day``     = 1Yx30Y  - breakeven
+    ``otc_minus_listed_bp_day``     = 1Yx30Y  - listed
+
+    The last one is the answer to the question this module exists to ask.
+    Positive means swaptions price MORE vol than the exchange, i.e. swaptions
+    were the expensive comparison; negative means the opposite.
+
+    ``breakeven_vol_bp_day`` is legitimately ``0.0`` on ``always_cheap`` days and
+    ``+inf`` on ``never_cheap`` days. Both are kept, and the signal is computed
+    through ``strat1_curve_gamma.signal_from_breakeven`` -- the same kernel
+    strategy 1 uses -- so an infinity is classified rather than dropped.
+    """
+    from RVUtils.ConvexityRV import listed_vol as lv
+
+    cur = _as_curve_panel(strat1_panel)
+    cur = cur[(cur["date"] >= pd.Timestamp(cfg.longend_start))
+              & (cur["date"] <= pd.Timestamp(cfg.longend_end))]
+    labels = ([str(s) for s in structures] if structures is not None
+              else [lab for lab, _, _ in cfg.longend_structures])
+    cur = cur[cur["structure"].isin(labels)]
+    if cur.empty:
+        raise ValueError(f"no stored strat1 rows for structures={labels} in "
+                         f"{cfg.longend_start}..{cfg.longend_end}")
+
+    rows: List[pd.DataFrame] = []
+    for label in labels:
+        bench = lv.ust_benchmarks_for(label)
+        g = cur[cur["structure"] == label].set_index("date").sort_index()
+        for role in roles:
+            root = bench[role]
+            for cm in cfg.longend_cm_days:
+                ls = lv.ust_listed_atm_series(
+                    ust_panel, root, cm,
+                    business_days_per_year=cfg.business_days_per_year)
+                j = g.join(ls, how="inner")
+                if j.empty:
+                    continue
+                j = j.reset_index()
+                j["listed_role"] = role
+                j["listed_why"] = bench["why"]
+                rows.append(j)
+    if not rows:
+        raise RuntimeError("long-end listed panel is empty -- no (date, root) overlap")
+
+    out = pd.concat(rows, ignore_index=True)
+
+    be = out["breakeven_vol_bp_day"].to_numpy(dtype=float)
+    listed = out["listed_atm_bp_day"].to_numpy(dtype=float)
+    otc = out["atmf_vol_bp_day"].to_numpy(dtype=float)
+
+    out["otc_atmf_bp_day"] = otc
+    out["otc_node"] = f"{cfg.longend_otc_expiry}x{cfg.longend_otc_tenor}"
+    out["cheapness_vs_listed_bp_day"] = listed - be
+    out["cheapness_vs_otc_bp_day"] = otc - be
+    out["otc_minus_listed_bp_day"] = otc - listed
+    out["signal_listed"] = [
+        signal_from_breakeven(_be_result(b, s), l,
+                              threshold_bp_per_day=cfg.entry_threshold_bp_per_day,
+                              trade_when_rich=cfg.trade_when_rich)
+        for b, s, l in zip(be, out["breakeven_status"].to_numpy(), listed)
+    ]
+    out["signal_otc"] = [
+        signal_from_breakeven(_be_result(b, s), o,
+                              threshold_bp_per_day=cfg.entry_threshold_bp_per_day,
+                              trade_when_rich=cfg.trade_when_rich)
+        for b, s, o in zip(be, out["breakeven_status"].to_numpy(), otc)
+    ]
+    return out.set_index(["date", "structure", "listed_symbol"]).sort_index()
+
+
+def _be_result(bp_day: float, status: str):
+    """Rehydrate a :class:`BreakevenResult` from the two stored columns.
+
+    The stored panel keeps the breakeven and its status as plain columns, and
+    ``signal_from_breakeven`` takes the dataclass. Reconstructing it -- rather
+    than re-implementing the ``<``/``>`` comparison here -- is what keeps the
+    long-end signal bit-identical to strategy 1's.
+
+    At the default ``entry_threshold_bp_per_day = 0`` the status is *redundant*
+    with the number: ``+inf`` compares rich and ``0.0`` compares cheap on their
+    own. It stops being redundant the moment a threshold opens a no-trade band,
+    because ``always_cheap`` means "carries positively, cheap against ANY vol"
+    and must survive a band wider than the benchmark, whereas a raw ``0.0``
+    would fall inside it and stand aside. Carrying the status is therefore not
+    belt-and-braces -- it is the only thing that keeps a thresholded run
+    correct, and ``test_signal_respects_never_cheap_branch`` pins exactly that.
+    """
+    from RVUtils.ConvexityRV.strat1_curve_gamma import BreakevenResult
+
+    v = float(bp_day)
+    return BreakevenResult(
+        bp_per_year=v * float(np.sqrt(252.0)) if np.isfinite(v) else v,
+        bp_per_day=v,
+        status=str(status),
+    )
+
+
+def longend_signal_distribution(panel: pd.DataFrame) -> pd.DataFrame:
+    """Cheap-share against listed AND against swaptions, per structure per benchmark.
+
+    **The headline table.** One row per (structure, benchmark) carrying, side by
+    side:
+
+    * ``frac_cheap_vs_listed`` and ``frac_cheap_vs_otc`` -- the direct
+      before/after of swapping the benchmark;
+    * the median breakeven, the median of each benchmark, and the median gap;
+    * ``median_otc_minus_listed_bp_day`` -- the vol basis, positive when
+      swaptions price more vol than the exchange;
+    * ``frac_signals_disagree`` -- how often the two benchmarks give opposite
+      verdicts, which is the only number that can show the substitution was not
+      a relabelling;
+    * ``n_days`` and the window, because the per-root samples differ (US 1,917
+      days, UL 1,662, TN 639) and comparing across roots without them compares
+      different samples.
+
+    Read alongside :func:`longend_benchmark_separation`: where the cheap-share is
+    saturated at 1.00 it cannot discriminate between benchmarks, and the sector
+    signal lives in the levels instead.
+    """
+    df = panel.reset_index()
+    rows: List[Dict[str, Any]] = []
+    for (label, sym), g in df.groupby(["structure", "listed_symbol"], sort=True):
+        be = g["breakeven_vol_bp_day"].to_numpy(dtype=float)
+        listed = g["listed_atm_bp_day"].to_numpy(dtype=float)
+        otc = g["otc_atmf_bp_day"].to_numpy(dtype=float)
+        ok_l = np.isfinite(listed)
+        ok_o = np.isfinite(otc)
+        both = ok_l & ok_o
+        sl = g["signal_listed"].to_numpy(dtype=float)
+        so = g["signal_otc"].to_numpy(dtype=float)
+        rows.append({
+            "structure": label,
+            "listed_symbol": sym,
+            "listed_role": g["listed_role"].iloc[0],
+            "listed_root": g["listed_root"].iloc[0],
+            "listed_cm_days": int(g["listed_cm_days"].iloc[0]),
+            "listed_swap_point": g["listed_swap_point"].iloc[0],
+            "n_days": int(ok_l.sum()),
+            "first": g["date"].min().date().isoformat(),
+            "last": g["date"].max().date().isoformat(),
+            "frac_cheap_vs_listed": float(np.mean(sl[ok_l] > 0)) if ok_l.any() else float("nan"),
+            "frac_cheap_vs_otc": float(np.mean(so[ok_o] > 0)) if ok_o.any() else float("nan"),
+            "frac_always_cheap": float(np.mean(
+                g["breakeven_status"].to_numpy()[ok_l] == "always_cheap")) if ok_l.any() else float("nan"),
+            "frac_never_cheap": float(np.mean(
+                g["breakeven_status"].to_numpy()[ok_l] == "never_cheap")) if ok_l.any() else float("nan"),
+            "median_breakeven_bp_day": _med(be[ok_l]),
+            "median_listed_bp_day": _med(listed[ok_l]),
+            "median_otc_bp_day": _med(otc[ok_o]),
+            "median_gap_vs_listed_bp_day": _med(
+                g["cheapness_vs_listed_bp_day"].to_numpy(dtype=float)[ok_l]),
+            "median_gap_vs_otc_bp_day": _med(
+                g["cheapness_vs_otc_bp_day"].to_numpy(dtype=float)[ok_o]),
+            "median_otc_minus_listed_bp_day": _med(
+                g["otc_minus_listed_bp_day"].to_numpy(dtype=float)[both]),
+            "n_days_both": int(both.sum()),
+            "frac_signals_disagree": (float(np.mean(sl[both] != so[both]))
+                                      if both.any() else float("nan")),
+        })
+    return pd.DataFrame(rows)
+
+
+def _med(a: np.ndarray) -> float:
+    """Median over finite entries only.
+
+    ``breakeven_vol_bp_day`` is legitimately ``+inf`` on ``never_cheap`` days, and
+    a median that swallows infinities is a median of a different variable. The
+    COUNT of those days is reported separately as ``frac_never_cheap``, so
+    dropping them here loses nothing.
+    """
+    a = np.asarray(a, dtype=float)
+    a = a[np.isfinite(a)]
+    return float(np.median(a)) if a.size else float("nan")
+
+
+def longend_vol_basis(panel: pd.DataFrame) -> pd.DataFrame:
+    """Daily swaption-minus-listed vol basis, bp/day, one column per benchmark.
+
+    The benchmark columns do not depend on the structure, so this collapses to
+    one row per date. Positive = the 1Yx30Y swaption prices more vol than the
+    exchange contract.
+    """
+    df = panel.reset_index()
+    keep = df.drop_duplicates(subset=["date", "listed_symbol"])
+    wide = keep.pivot(index="date", columns="listed_symbol",
+                      values="otc_minus_listed_bp_day").sort_index()
+    wide["otc_atmf_bp_day"] = (keep.drop_duplicates("date")
+                                   .set_index("date")["otc_atmf_bp_day"])
+    return wide
+
+
+def longend_term_structure_effect(panel: pd.DataFrame) -> pd.DataFrame:
+    """How far the verdict moves across the 30/60/90-day constant maturities.
+
+    Step 3 of the brief, answered rather than asserted. One row per
+    (structure, root): the cheap-share and the median gap at each constant
+    maturity, and the SPREAD of each across them.
+
+    ``cheap_share_spread`` is the number to read. Where it is 0.0 the term
+    structure cannot change the answer at all -- which on this universe is the
+    case for the three saturated structures. Where it is not, the slope matters
+    and the row says by how much.
+    """
+    df = panel.reset_index()
+    rows: List[Dict[str, Any]] = []
+    for (label, root), g in df.groupby(["structure", "listed_root"], sort=True):
+        rec: Dict[str, Any] = {"structure": label, "listed_root": root,
+                               "listed_role": g["listed_role"].iloc[0]}
+        shares, gaps, levels = [], [], []
+        for cm in sorted(g["listed_cm_days"].unique()):
+            h = g[g["listed_cm_days"] == cm]
+            ok = np.isfinite(h["listed_atm_bp_day"].to_numpy(dtype=float))
+            s = float(np.mean(h["signal_listed"].to_numpy(dtype=float)[ok] > 0)) if ok.any() else float("nan")
+            gp = _med(h["cheapness_vs_listed_bp_day"].to_numpy(dtype=float)[ok])
+            lv_ = _med(h["listed_atm_bp_day"].to_numpy(dtype=float)[ok])
+            rec[f"cheap_share_{int(cm)}"] = s
+            rec[f"median_gap_{int(cm)}"] = gp
+            rec[f"listed_bp_day_{int(cm)}"] = lv_
+            rec[f"n_{int(cm)}"] = int(ok.sum())
+            shares.append(s); gaps.append(gp); levels.append(lv_)
+        rec["cheap_share_spread"] = _spread(shares)
+        rec["median_gap_spread_bp_day"] = _spread(gaps)
+        rec["listed_level_spread_bp_day"] = _spread(levels)
+        rows.append(rec)
+    return pd.DataFrame(rows)
+
+
+def _spread(vals: Sequence[float]) -> float:
+    """max - min over finite entries; NaN on an all-NaN group, without a warning.
+
+    A ``never_cheap`` structure has ``breakeven = +inf``, so its cheapness gap is
+    ``-inf`` on every date and the median of the finite entries is legitimately
+    NaN. ``np.nanmax`` on that group raises "All-NaN axis encountered" and
+    returns NaN anyway, which is a real answer wrapped in a spurious warning --
+    and a warning that fires on ordinary data trains the reader to ignore
+    warnings.
+    """
+    a = np.asarray(list(vals), dtype=float)
+    a = a[np.isfinite(a)]
+    return float(a.max() - a.min()) if a.size else float("nan")
+
+
+def longend_benchmark_separation(panel: pd.DataFrame) -> pd.DataFrame:
+    """Does the sector-matched benchmark differ from the mismatched control?
+
+    The TY control exists to fail. But on a structure whose cheap-share is 1.00
+    against every benchmark, cheap-share cannot fail -- so asking "does the
+    control score worse?" of that column would answer "no" for a reason that has
+    nothing to do with sector, and would quietly validate a broken comparison.
+
+    This function therefore compares the primary against the control on the three
+    quantities that CAN separate them, all at fixed constant maturity and on the
+    intersection of their date windows:
+
+    ``level_diff_bp_day``
+        median primary benchmark minus median control benchmark. Sector shows up
+        here first: a 7-year Treasury yield is more volatile than a 30-year one.
+    ``gap_diff_bp_day``
+        difference in the median cheapness gap -- the same information expressed
+        as how much cheaper the curve looks against the wrong benchmark.
+    ``cheap_share_diff``
+        the verdict difference. Exactly 0.0 where saturated, which is the honest
+        report and the reason the other two columns exist.
+    ``r_change``
+        correlation of the two benchmarks' DAILY CHANGES. Two roots that price
+        genuinely different sectors do not move together tick for tick; a value
+        near 1 would mean the control is not a control.
+    """
+    df = panel.reset_index()
+    rows: List[Dict[str, Any]] = []
+    for (label, cm), g in df.groupby(["structure", "listed_cm_days"], sort=True):
+        prim = g[g["listed_role"] == "primary"]
+        ctrl = g[g["listed_role"] == "control"]
+        if prim.empty or ctrl.empty:
+            continue
+        p = prim.set_index("date")
+        c = ctrl.set_index("date")
+        common = p.index.intersection(c.index)
+        if len(common) == 0:
+            continue
+        p, c = p.loc[common], c.loc[common]
+        dp = p["listed_atm_bp_day"].diff()
+        dc = c["listed_atm_bp_day"].diff()
+        rows.append({
+            "structure": label,
+            "listed_cm_days": int(cm),
+            "primary": p["listed_root"].iloc[0],
+            "control": c["listed_root"].iloc[0],
+            "n_common": int(len(common)),
+            "primary_bp_day": _med(p["listed_atm_bp_day"].to_numpy(dtype=float)),
+            "control_bp_day": _med(c["listed_atm_bp_day"].to_numpy(dtype=float)),
+            "level_diff_bp_day": (_med(p["listed_atm_bp_day"].to_numpy(dtype=float))
+                                  - _med(c["listed_atm_bp_day"].to_numpy(dtype=float))),
+            "gap_diff_bp_day": (_med(p["cheapness_vs_listed_bp_day"].to_numpy(dtype=float))
+                                - _med(c["cheapness_vs_listed_bp_day"].to_numpy(dtype=float))),
+            "cheap_share_primary": float(np.mean(p["signal_listed"].to_numpy(dtype=float) > 0)),
+            "cheap_share_control": float(np.mean(c["signal_listed"].to_numpy(dtype=float) > 0)),
+            "cheap_share_diff": float(np.mean(p["signal_listed"].to_numpy(dtype=float) > 0)
+                                      - np.mean(c["signal_listed"].to_numpy(dtype=float) > 0)),
+            "r_level": float(p["listed_atm_bp_day"].corr(c["listed_atm_bp_day"])),
+            "r_change": float(dp.corr(dc)),
+        })
+    return pd.DataFrame(rows)
+
+
+def longend_curve_regression(
+    mdp: Any,
+    strat1_panel: pd.DataFrame,
+    cfg: Strat1ListedConfig,
+    dates: Sequence[Any],
+    *,
+    structures: Optional[Sequence[Tuple[str, str, str]]] = None,
+    log: Any = print,
+) -> pd.DataFrame:
+    """Rebuild the payoff profile on *dates* and diff it against the stored panel.
+
+    This is the tie-out that licenses the reuse in
+    :func:`build_longend_listed_panel`. It resolves the package from the curve,
+    reprices it across ``cfg.longend_shifts_bp``, re-solves the breakeven, and
+    returns one row per (date, structure) with the maximum absolute difference in
+    the payoff profile and the difference in carry and in breakeven against the
+    stored row.
+
+    A pass is ``max_payoff_diff_bp`` at machine precision. Anything larger means
+    the stored panel and the live curve disagree, and the listed comparison built
+    on top of it is measuring that disagreement instead of the market. Assert on
+    the returned columns; do not eyeball them.
+    """
+    cur = _as_curve_panel(strat1_panel).set_index(["date", "structure"])
+    structs = list(structures) if structures is not None else list(cfg.longend_structures)
+    s1cfg = cfg.longend_curve_config()
+
+    rows: List[Dict[str, Any]] = []
+    for d in dates:
+        ts = pd.Timestamp(d)
+        try:
+            pricer = mdp.get_data({"curve_name": cfg.curve, "timestamp": ts.date()})
+        except Exception as exc:  # pragma: no cover - data gap
+            log(f"  {ts.date()}: curve unavailable ({type(exc).__name__}: {exc})")
+            continue
+        if pricer is None:
+            continue
+        for label, ft, bt in structs:
+            if (ts, label) not in cur.index:
+                continue
+            stored = cur.loc[(ts, label)]
+            prof = structure_profile(pricer, label, ft, bt, s1cfg, direction=FLATTENER)
+            be = breakeven_vol(prof.shifts_bp, prof.payoff_ccy,
+                               horizon_years=cfg.horizon_years,
+                               business_days_per_year=cfg.business_days_per_year)
+            diffs = []
+            for s, v in zip(prof.shifts_bp, prof.payoff_bp):
+                col = f"payoff_bp_{int(s):+d}"
+                if col in stored.index:
+                    diffs.append(abs(float(v) - float(stored[col])))
+            sb = float(stored["breakeven_vol_bp_day"])
+            rows.append({
+                "date": ts,
+                "structure": label,
+                "n_shifts_compared": len(diffs),
+                "max_payoff_diff_bp": max(diffs) if diffs else float("nan"),
+                "carry_stored_bp": float(stored["carry_roll_bp"]),
+                "carry_rebuilt_bp": float(prof.carry_bp),
+                "carry_diff_bp": abs(float(prof.carry_bp) - float(stored["carry_roll_bp"])),
+                "breakeven_stored_bp_day": sb,
+                "breakeven_rebuilt_bp_day": be.bp_per_day,
+                "breakeven_diff_bp_day": (abs(be.bp_per_day - sb)
+                                          if np.isfinite(be.bp_per_day) and np.isfinite(sb)
+                                          else 0.0 if be.bp_per_day == sb else float("inf")),
+                "status_stored": str(stored["breakeven_status"]),
+                "status_rebuilt": be.status,
+                "status_match": str(stored["breakeven_status"]) == be.status,
+            })
+    return pd.DataFrame(rows)
+
+
+# =============================================================================
+#  REAL LISTED CONTRACT mode -- re-exported from ``strat1_real_contracts``
+#
+#  The constant-maturity mode above is the CONTROL and is untouched. The
+#  real-contract mode (``USM26`` instead of ``US_30``) lives in its own module
+#  for the same reason ``listed_contracts`` is separate from ``listed_vol``: it
+#  consumes a different data shape (a ragged per-contract panel with real
+#  expiries and strikes, against a rectangular constant-maturity one) and folding
+#  the two into one file would hide that difference behind a keyword argument.
+#
+#  The re-export is LAZY, via PEP 562's module ``__getattr__``, and that is not
+#  style. ``strat1_threeway`` imports ``strat1_listed`` at module scope, and
+#  ``strat1_real_contracts`` imports both -- so an eager ``from ... import`` here
+#  would close the cycle ``strat1_listed -> strat1_real_contracts ->
+#  strat1_threeway -> strat1_listed`` and every one of the three would fail to
+#  import. Resolving on first attribute access breaks it, and callers see the
+#  names on this module exactly as if they had been imported.
+# =============================================================================
+
+#: Names ``strat1_listed`` re-exports from ``strat1_real_contracts``. Listed
+#: explicitly rather than deferring to that module's ``__all__`` so that adding a
+#: private helper there cannot silently widen this module's surface.
+_REAL_CONTRACT_EXPORTS: Tuple[str, ...] = (
+    "RealContractConfig",
+    "REAL_ROOTS",
+    "REAL_ROOT_ROLE",
+    "UNAVAILABLE_REAL_ROOTS",
+    "TARGETS",
+    "HEADLINE_TARGET",
+    "HEADLINE_ROOT",
+    "real_sector_note",
+    "unavailable_root_penalty",
+    "real_contract_atm_series",
+    "build_longend_contract_panel",
+    "contract_selection_report",
+    "contract_roll_report",
+    "ageing_table",
+    "funded_straddle_frame",
+    "funded_straddle_summary",
+    "real_smile_frame",
+    "smile_strike_offsets",
+    "three_point_smile",
+    "real_shift_density",
+    "real_expected_payoff_frame",
+    "cm_vs_real_table",
+    "real_contract_verdict",
+)
+
+__all__ += list(_REAL_CONTRACT_EXPORTS)
+
+
+def __getattr__(name: str) -> Any:
+    """Resolve the real-contract names on first access. See the block above."""
+    if name in _REAL_CONTRACT_EXPORTS:
+        from RVUtils.ConvexityRV import strat1_real_contracts as _rc
+
+        return getattr(_rc, name)
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
+
+def __dir__() -> List[str]:
+    """Keep tab-completion and ``dir()`` honest about the lazy names."""
+    return sorted(set(globals()) | set(_REAL_CONTRACT_EXPORTS))
