@@ -66,6 +66,35 @@ def test_blank_values_count_as_unset(monkeypatch, blank):
     assert repo_store("data", "ts", env_var="ARBS_COMPUTED_TS_DIR") == REPO_ROOT / "data" / "ts"
 
 
+def test_relative_base_dir_follows_the_data_root(monkeypatch):
+    """``"./data/ts"`` is passed as a literal by ~15 call sites, not as ``None``.
+
+    Anchoring it to the checkout would send all of them to a directory the store
+    has been moved out of -- an empty tree, which reads as a cold cache and not
+    as an error.
+    """
+    from Caching.computed_timeseries_store import _resolve_computed_timeseries_base_dir as res
+
+    monkeypatch.setenv(DATA_ROOT_ENV, r"D:\ARBS_DATA\repo")
+    assert res("./data/ts") == Path(r"D:\ARBS_DATA\repo\data\ts")
+    assert res("data/ts") == Path(r"D:\ARBS_DATA\repo\data\ts")
+
+
+def test_relative_base_dir_is_unchanged_when_no_root_is_set():
+    from Caching.computed_timeseries_store import REPO_ROOT as CTS_REPO_ROOT
+    from Caching.computed_timeseries_store import _resolve_computed_timeseries_base_dir as res
+
+    assert res("./data/ts") == (CTS_REPO_ROOT / "data" / "ts").resolve()
+
+
+def test_absolute_base_dir_ignores_the_data_root(monkeypatch, tmp_path):
+    """Every test in the suite passes an absolute tmp_path; it must win."""
+    from Caching.computed_timeseries_store import _resolve_computed_timeseries_base_dir as res
+
+    monkeypatch.setenv(DATA_ROOT_ENV, r"D:\ARBS_DATA\repo")
+    assert res(str(tmp_path)) == tmp_path
+
+
 def test_callers_agree_with_the_resolver(monkeypatch):
     """The modules that were rewired read the same location the resolver names."""
     monkeypatch.setenv(DATA_ROOT_ENV, r"D:\ARBS_DATA\repo")

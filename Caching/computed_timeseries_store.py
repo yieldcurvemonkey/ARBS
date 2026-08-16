@@ -11,7 +11,7 @@ from typing import TYPE_CHECKING, Any, Iterable, List, Mapping, Optional, Sequen
 import pandas as pd
 
 from Caching.timeseries_cache import WriteOptions, append_timeseries, append_timeseries_many, read_timeseries
-from utils.storage_paths import repo_store
+from utils.storage_paths import data_root, repo_store
 
 DateLike = Union[datetime.date, datetime.datetime]
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -62,13 +62,32 @@ def default_computed_timeseries_base_dir() -> str:
 
 
 def _resolve_computed_timeseries_base_dir(base_dir: Union[str, Path, None]) -> Path:
+    """Anchor a relative ``base_dir`` to the configured data root.
+
+    Roughly fifteen call sites pass the literal ``"./data/ts"`` rather than
+    ``None`` -- ``TB/IRSwapsTB.py:417``, ``TB/FixedRateBondsTB.py:182``,
+    ``TB/USTFuturesTB.py:72``, ``scripts/_ust_service_common.py:47``,
+    ``scripts/eod_curve_service.py:61``, ``scripts/citivelo_intraday_ts_warm.py``
+    and others. Anchoring those to ``REPO_ROOT`` would send every one of them to
+    a directory the store has been moved out of: an empty tree, read as a cold
+    cache rather than as an error. Anchoring to the root instead means one rule
+    covers all of them, and the relative path is preserved on the far side, so
+    ``./data/ts`` under ``$ARBS_DATA_ROOT`` is still ``data/ts``.
+
+    With ``ARBS_DATA_ROOT`` unset this is exactly the old behaviour --
+    :func:`utils.storage_paths.data_root` returns ``None`` and the anchor falls
+    back to ``REPO_ROOT``. Absolute paths, which is what the tests pass, are
+    untouched either way.
+    """
     if base_dir is None:
         return DEFAULT_COMPUTED_TS_BASE_DIR
 
     path = Path(base_dir)
     if path.is_absolute():
         return path
-    return (REPO_ROOT / path).resolve()
+
+    anchor = data_root() or REPO_ROOT
+    return (anchor / path).resolve()
 
 
 def _open_duckdb_graceful(db_path: str) -> Optional["DuckDBTimeseriesCache"]:
