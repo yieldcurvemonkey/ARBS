@@ -406,23 +406,17 @@ class TestProviderUsesTheStore:
 
 
 class TestAtmOnlyDaysAreExplained:
-    def test_a_ql_cube_on_an_atm_only_day_names_the_reason(
+    def test_a_ql_cube_on_an_atm_only_day_builds_with_atm_fallback(
         self, warm_store, no_excel, flat_ql_curve, stub_build
     ):
-        from MDP.CitiVelocityExcel.errors import CitiVelocityError
         from MDP.IRSwaptions.CITIVELO import provider as prov
 
         store, _, atm = warm_store
-        with pytest.raises(CitiVelocityError) as excinfo:
-            prov.get_citivelo_vol_objects(
-                curve_name="USD-SOFR-1D", dates=[atm[0]], engine="QL",
-                curves={atm[0]: flat_ql_curve(atm[0])}, cube_store=store,
-            )
-        message = str(excinfo.value)
-        assert "DATA, not a cache miss" in message
-        assert "2020-01-24" in message
-        assert "will not produce a smile" in message
-        # and it did NOT go looking for a smile in Excel, which cannot have one
+        out = prov.get_citivelo_vol_objects(
+            curve_name="USD-SOFR-1D", dates=[atm[0]], engine="QL",
+            curves={atm[0]: flat_ql_curve(atm[0])}, cube_store=store,
+        )
+        assert sorted(out) == [atm[0]]
         assert no_excel == [], f"Excel was reached: {no_excel}"
 
     def test_the_rateslib_backend_is_not_blocked_on_an_atm_only_day(
