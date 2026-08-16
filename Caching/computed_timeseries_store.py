@@ -62,22 +62,31 @@ def default_computed_timeseries_base_dir() -> str:
 
 
 def _resolve_computed_timeseries_base_dir(base_dir: Union[str, Path, None]) -> Path:
-    """Anchor a relative ``base_dir`` to the configured data root.
+    """Resolve ``base_dir``, honouring the store's configured location.
 
     Roughly fifteen call sites pass the literal ``"./data/ts"`` rather than
     ``None`` -- ``TB/IRSwapsTB.py:417``, ``TB/FixedRateBondsTB.py:182``,
     ``TB/USTFuturesTB.py:72``, ``scripts/_ust_service_common.py:47``,
     ``scripts/eod_curve_service.py:61``, ``scripts/citivelo_intraday_ts_warm.py``
-    and others. Anchoring those to ``REPO_ROOT`` would send every one of them to
-    a directory the store has been moved out of: an empty tree, read as a cold
-    cache rather than as an error. Anchoring to the root instead means one rule
-    covers all of them, and the relative path is preserved on the far side, so
-    ``./data/ts`` under ``$ARBS_DATA_ROOT`` is still ``data/ts``.
+    and others. Anchoring those to ``REPO_ROOT`` bypasses the configuration
+    entirely, so once the store moves they all read an empty directory -- not an
+    error, a cold cache.
 
-    With ``ARBS_DATA_ROOT`` unset this is exactly the old behaviour --
-    :func:`utils.storage_paths.data_root` returns ``None`` and the anchor falls
-    back to ``REPO_ROOT``. Absolute paths, which is what the tests pass, are
-    untouched either way.
+    Those call sites are spelling out the store's *default* location rather than
+    passing ``None``, so that is what they get: ``"./data/ts"`` is a synonym for
+    ``None`` and resolves through :data:`DEFAULT_COMPUTED_TS_BASE_DIR`, honouring
+    ``ARBS_COMPUTED_TS_DIR``, then ``ARBS_DATA_ROOT``, then the checkout.
+
+    Routing it through the *store's own* variable rather than the shared root
+    matters, because the two deliberately differ: ``data/ts`` is 1.92 M files
+    whose cluster rounding costs roughly 3x its logical size, which is why it is
+    pinned to the system drive while its peers live on the data drive.
+
+    Any other relative path is anchored to the data root when one is set, so the
+    layout there stays a mirror of the checkout. With no variables set this is
+    exactly the old behaviour -- :func:`utils.storage_paths.data_root` returns
+    ``None`` and the anchor falls back to ``REPO_ROOT``. Absolute paths, which is
+    what the tests pass, are untouched in every case.
     """
     if base_dir is None:
         return DEFAULT_COMPUTED_TS_BASE_DIR
@@ -85,6 +94,10 @@ def _resolve_computed_timeseries_base_dir(base_dir: Union[str, Path, None]) -> P
     path = Path(base_dir)
     if path.is_absolute():
         return path
+
+    # "./data/ts", "data/ts", ".\\data\\ts" -- the default, spelled out longhand.
+    if tuple(p for p in path.parts if p not in (".", "")) == ("data", "ts"):
+        return DEFAULT_COMPUTED_TS_BASE_DIR
 
     anchor = data_root() or REPO_ROOT
     return (anchor / path).resolve()

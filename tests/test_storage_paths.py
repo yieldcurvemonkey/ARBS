@@ -66,18 +66,38 @@ def test_blank_values_count_as_unset(monkeypatch, blank):
     assert repo_store("data", "ts", env_var="ARBS_COMPUTED_TS_DIR") == REPO_ROOT / "data" / "ts"
 
 
-def test_relative_base_dir_follows_the_data_root(monkeypatch):
+@pytest.mark.parametrize("spelling", ["./data/ts", "data/ts", ".\\data\\ts"])
+def test_the_default_spelled_longhand_follows_the_store_pin(monkeypatch, spelling):
     """``"./data/ts"`` is passed as a literal by ~15 call sites, not as ``None``.
 
-    Anchoring it to the checkout would send all of them to a directory the store
-    has been moved out of -- an empty tree, which reads as a cold cache and not
-    as an error.
+    It has to land wherever the store is actually configured, which is not
+    necessarily under ``ARBS_DATA_ROOT``: ``data/ts`` is pinned separately
+    because its 1.92 M files cost ~3x their logical size in cluster rounding.
+    Sending these call sites to the shared root would give them an empty tree,
+    which reads as a cold cache rather than as an error.
     """
+    import importlib
+
+    import Caching.computed_timeseries_store as cts
+
+    monkeypatch.setenv(DATA_ROOT_ENV, r"D:\ARBS_DATA\repo")
+    monkeypatch.setenv("ARBS_COMPUTED_TS_DIR", r"C:\pinned\data\ts")
+    importlib.reload(cts)
+    try:
+        assert cts._resolve_computed_timeseries_base_dir(spelling) == Path(r"C:\pinned\data\ts")
+        assert cts._resolve_computed_timeseries_base_dir(None) == Path(r"C:\pinned\data\ts")
+    finally:
+        monkeypatch.delenv(DATA_ROOT_ENV, raising=False)
+        monkeypatch.delenv("ARBS_COMPUTED_TS_DIR", raising=False)
+        importlib.reload(cts)
+
+
+def test_other_relative_paths_follow_the_data_root(monkeypatch):
+    """Only the store's own default is special-cased; everything else mirrors."""
     from Caching.computed_timeseries_store import _resolve_computed_timeseries_base_dir as res
 
     monkeypatch.setenv(DATA_ROOT_ENV, r"D:\ARBS_DATA\repo")
-    assert res("./data/ts") == Path(r"D:\ARBS_DATA\repo\data\ts")
-    assert res("data/ts") == Path(r"D:\ARBS_DATA\repo\data\ts")
+    assert res("data/ts_warm") == Path(r"D:\ARBS_DATA\repo\data\ts_warm")
 
 
 def test_relative_base_dir_is_unchanged_when_no_root_is_set():
@@ -85,6 +105,7 @@ def test_relative_base_dir_is_unchanged_when_no_root_is_set():
     from Caching.computed_timeseries_store import _resolve_computed_timeseries_base_dir as res
 
     assert res("./data/ts") == (CTS_REPO_ROOT / "data" / "ts").resolve()
+    assert res("data/ts_warm") == (CTS_REPO_ROOT / "data" / "ts_warm").resolve()
 
 
 def test_absolute_base_dir_ignores_the_data_root(monkeypatch, tmp_path):
