@@ -28,6 +28,7 @@ from BT.query_engine import QueryDrivenBacktest
 from BT.query_strategy import QueryStrategy
 from BT.triggers import DateTrigger, DateTriggerRequirements
 from MDP.USTFutures.USTFuturesMDP import _BASIS_REPORT_SCHEMA_VERSION, USTFuturesMDP
+from utils.storage_paths import repo_store
 from Query.USTFutureBasis.USTFutureBasisQuery import USTFutureBasisQuery
 
 # ----------------------------------------------------------------------------
@@ -225,7 +226,7 @@ def run_ustf_basis_backtest(config: UstfBasisConfig, mdp: Optional[USTFuturesMDP
 # ----------------------------------------------------------------------------
 # Daily basis panel (for signals: notebooks 2 & 4)
 # ----------------------------------------------------------------------------
-_CACHE_DIR = os.path.join(os.path.dirname(__file__), "_ustf_basis_cache")
+_CACHE_DIR = str(repo_store("BT", "signals", "_ustf_basis_cache"))
 
 _PANEL_COLS = ("symbol", "ctd_cusip", "gross_basis", "bnoc", "irr", "cf", "future_price", "futures_ytm", "repo_rate")
 
