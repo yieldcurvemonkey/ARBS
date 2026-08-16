@@ -6,11 +6,15 @@
 
 | | before | after |
 |---|---|---|
-| `C:` free | **11.9 GB** of 951 GB (hit **0.48 GB** mid-session) | **155.1 GB** |
+| `C:` free | **11.9 GB** of 951 GB (hit **0.48 GB** mid-session) | **152.5 GB** |
 | `D:` free | 268.5 GB of 466 GB | 67.8 GB |
 
-**~143 GB returned to the system drive.** Every store was verified after moving — see
-*Verification* below. Two items remain outstanding and are described honestly at the end.
+**~141 GB returned to the system drive.** Every store was verified after moving — see
+*Verification* below.
+
+Two things did **not** move, both on purpose and both explained below: `Cache\diskcache`
+(27.31 GB) and `data/ts` (8.98 GB). One thing moved and was **put back**:
+`BT/signals/_ustf_basis_cache`, which turned out to be tracked in git.
 
 ---
 
