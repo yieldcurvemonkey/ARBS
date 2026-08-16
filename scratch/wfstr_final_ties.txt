@@ -1,0 +1,13 @@
+141 days, 330,707 leg rows
+
+same-exp+same-eff rate-rule CURVE units: 1,298   (grid-clean 335, grid-UNREACHABLE 963)
+of which the two legs traded at DIFFERENT rates (the tie-break decides the sign): 494
+
+  canonical order  : median|err| 1.976e-14  max 1.279e-13 bp   n_exact(<1e-9) 494/494
+  REVERSED order   : median|err| 1.6000  max 200.0000 bp   n_exact(<1e-9) 0/494
+  |traded_bp| on those units: median 0.800 p95 2.003 max 100.000 bp
+  and on the GRID-UNREACHABLE ones only: n=195  max|err| 1.279e-13
+
+collation: ('en_US.UTF-8', 'en_US.UTF-8')
+postgres ORDER BY == python sorted() on 2,596 tie-unit trade_ids: True
+trade_ids that are not pure digits, whole table: 0

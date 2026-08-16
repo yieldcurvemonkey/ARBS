@@ -255,6 +255,6 @@ MDP/IRSwaps/CITIVELO_EXCEL/_intraday_par_cache/
 tape_v3_backfill_ledger.jsonl
 tape_v3_repair_ledger.jsonl
 
-# JPM package parser fixtures: page extracts from licensed research PDFs.
-# Regenerate with `python tests/fixtures/build_jpm_package_fixtures.py`.
-tests/fixtures/jpm_packages/
+# basis-vs-vol local data mirror + run outputs
+notebooks/backtests/basis_vs_vol/_data/
+notebooks/backtests/basis_vs_vol/_results/

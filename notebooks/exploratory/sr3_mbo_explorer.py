@@ -44,6 +44,7 @@
 from __future__ import annotations
 
 import gc
+import os
 import sys
 import time
 from pathlib import Path
@@ -79,7 +80,9 @@ DBN_PATH = r"C:\Users\chris\Downloads\glbx-mdp3-20260715.mbo.dbn.zst"
 
 # The cache sits OUTSIDE the repo and outside any worktree: it holds a few
 # hundred MB of extracts and `git worktree remove` must not be able to eat it.
-CACHE_DIR = r"C:\Users\chris\clee\mbo_cache"
+# On D: with the rest of the MBO stores (D:\mbo_store, D:\sr3_mbo, ...) rather
+# than on the system drive; the old C: location survives as a junction.
+CACHE_DIR = os.environ.get("ARBS_MBO_CACHE", r"D:\ARBS_DATA\mbo_cache")
 
 # CME trades 17:00-16:00 Chicago; in July that is UTC-5, so the daily settlement
 # break falls at 21:00-22:00 UTC.  The file's own message histogram confirms it:

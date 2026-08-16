@@ -27,7 +27,7 @@ from BT.query_actions import AddQueryAction, UnwindPositionsAction
 from BT.query_engine import QueryDrivenBacktest
 from BT.query_strategy import QueryStrategy
 from BT.triggers import DateTrigger, DateTriggerRequirements
-from MDP.USTFutures.USTFuturesMDP import USTFuturesMDP
+from MDP.USTFutures.USTFuturesMDP import _BASIS_REPORT_SCHEMA_VERSION, USTFuturesMDP
 from Query.USTFutureBasis.USTFutureBasisQuery import USTFutureBasisQuery
 
 # ----------------------------------------------------------------------------
@@ -225,6 +225,12 @@ def run_ustf_basis_backtest(config: UstfBasisConfig, mdp: Optional[USTFuturesMDP
 # ----------------------------------------------------------------------------
 # Daily basis panel (for signals: notebooks 2 & 4)
 # ----------------------------------------------------------------------------
+# Stays anchored to this file, NOT routed through utils.storage_paths: four of
+# these panels are TRACKED IN GIT (`git ls-files BT/signals/_ustf_basis_cache`).
+# Routing it through the shared data root moves the tracked files out of the
+# checkout, which shows up as four deletions in `git status` and splits the
+# directory in two -- committed panels in the repo, new ones on another drive.
+# "Not gitignored" is the test, and this directory fails it.
 _CACHE_DIR = os.path.join(os.path.dirname(__file__), "_ustf_basis_cache")
 
 _PANEL_COLS = ("symbol", "ctd_cusip", "gross_basis", "bnoc", "irr", "cf", "future_price", "futures_ytm", "repo_rate")
@@ -247,7 +253,14 @@ def build_basis_panel(
     (NB 2) and the CTD-switch (NB 4) notebooks.
     """
     os.makedirs(_CACHE_DIR, exist_ok=True)
-    cache_path = os.path.join(_CACHE_DIR, f"panel_{root}_{start:%Y%m%d}_{end:%Y%m%d}_r{roll_days}.parquet")
+    # The schema stamp is part of the filename so a panel built by older code cannot be served
+    # after a data-layer fix. Without it this cache is a permanent hiding place: nothing in the
+    # file or its name distinguishes a pre-fix panel from a post-fix one, and the parquet is read
+    # in preference to rebuilding.
+    cache_path = os.path.join(
+        _CACHE_DIR,
+        f"panel_{root}_{start:%Y%m%d}_{end:%Y%m%d}_r{roll_days}_v{_BASIS_REPORT_SCHEMA_VERSION}.parquet",
+    )
     if os.path.exists(cache_path) and not force_refresh:
         return pd.read_parquet(cache_path)
 
@@ -272,11 +285,20 @@ def build_basis_panel(
         pass
 
     rows = []
+    n_rejected = 0
+    n_error = 0
     for d in iterator:
         sym = front_contract(root, d, roll_days, cal)
         try:
-            rep = mdp.get_basis_report(symbol=sym, timestamp=d)
+            # on_bad_data="warn" rather than the default raise: this loop wraps everything in
+            # `except Exception: continue`, so a raise here would be indistinguishable from a
+            # market holiday -- the exact failure this whole exercise was about. Ask for the
+            # verdict in the data instead, and drop the flagged days explicitly.
+            rep = mdp.get_basis_report(symbol=sym, timestamp=d, on_bad_data="warn")
             if rep is None or rep.empty:
+                continue
+            if "data_ok" in rep.columns and not bool(rep["data_ok"].iloc[0]):
+                n_rejected += 1
                 continue
             rep_sorted = rep.sort_values("irr", ascending=False) if "irr" in rep.columns else rep
             ctd = rep_sorted.iloc[0]
@@ -298,7 +320,17 @@ def build_basis_panel(
                 }
             )
         except Exception:
+            n_error += 1
             continue
+
+    # Say what was dropped. A silently truncated panel reads as "covered everything" when it did
+    # not, and that is how a strategy ends up backtested on the days that happened to survive.
+    if n_rejected or n_error:
+        print(
+            f"basis panel {root}: {len(rows)} rows kept, {n_rejected} dropped by the consistency "
+            f"gate, {n_error} dropped by errors",
+            flush=True,
+        )
 
     panel = pd.DataFrame(rows)
     if not panel.empty:

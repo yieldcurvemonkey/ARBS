@@ -17,13 +17,20 @@ from Caching.layered_cache_mixin import LayeredCacheMixin
 from MDP.IRSwaps.SDR_INTRADAY.rl_curve_utils.tos import get_quotes
 from MDP.MarketDataProvider import MarketDataProvider
 from MDP.USTFutures.BARCHART.BarchartFetcher import BarchartFetcher
+from MDP.USTFutures.basis_report_quality import OnBadData, enforce_basis_report_quality
 from Query.USTFutures._USTFutureGenericPricer import _USTFutureGenericPricer
 from Query.USTFutures.backends.rateslib.RLUSTFuturePricer import RLUSTFuturePricer
-from definitions.USTFutures import normalize_barchart_ust_future_price, to_barchart_root
+from definitions.USTFutures import (
+    UST_FUTURE_ROOT_ALIASES,
+    normalize_barchart_ust_future_price,
+    to_barchart_root,
+    to_globex_root,
+)
 
 from MDP.FixedRateBonds.FixedRateBondsMDP import FixedRateBondsMDP
 from MDP.USTFutures.treasury_conversion_factors import (
     build_delivery_basket_frame,
+    contract_specs_fingerprint,
     delivery_business_window,
     get_contract_spec,
     resolve_delivery_contract,
@@ -46,7 +53,10 @@ def _as_datetime(ts: DateLike) -> datetime.datetime:
     raise TypeError("timestamp must be date, datetime, or 'live'")
 
 
-_INTERNAL_ROOTS = {"TU", "FV", "TY", "US", "WN", "UXY"}
+# Z3N (3-Year) and TWE (20-Year) are reachable now that their BarChart roots are known -- ZE and
+# ZZ, verified on the tick grid rather than the price band. TWE is listed but effectively
+# untraded from 2024 (flat prints, zero volume), so expect a symbol, not a panel.
+_INTERNAL_ROOTS = {"TU", "FV", "TY", "US", "WN", "UXY", "Z3N", "TWE"}
 _BARCHART_ROOTS = {to_barchart_root(k): k for k in _INTERNAL_ROOTS}
 _CME_QUARTERLY_MONTH_CODES = {
     "H": [1, 2, 3],
@@ -54,7 +64,87 @@ _CME_QUARTERLY_MONTH_CODES = {
     "U": [7, 8, 9],
     "Z": [10, 11, 12],
 }
-_USTF_CACHE_VERSION = "USTF_GET_DATA_v2"
+# Bump to invalidate the layered price cache. v2 -> v3: prices cached under the old vendor-root map
+# put the EUR/NOK future under the Ultra Bond's key.
+_USTF_CACHE_VERSION = "USTF_GET_DATA_v3"
+
+# Bump to invalidate the basket-definition cache. BUMP THIS ON EVERY CHANGE TO _CONTRACT_SPECS.
+#   v1 -> v2: the TY deliverable window changed, so every cached ZN basket was wrong.
+#   v2 -> v3: the TY grade became vintage-aware (no 8-year cap before Sept 2023).
+#
+# v3 exists because v2 was not enough and the failure was invisible: after the vintage change the
+# rebuilt TY panel still showed a median basket of 10 deliverables in EVERY year, when pre-2023
+# years should hold ~16-17. The spec was right -- a direct build_delivery_basket_frame call
+# reproduced CME's published December-2017 basket 17/17 -- but this cache was still serving
+# baskets computed by the previous spec, and nothing in the returned dict says which spec built it.
+_USTF_BASKET_CACHE_VERSION = "USTF_BASKET_v3"
+
+# Stamped into every basis report and REQUIRED on read. Any cached report without it -- or with an
+# older value -- is treated as a cache miss and rebuilt.
+#
+# This is the invalidation knob for the basis-report store, and it has to be a stamp rather than a
+# file delete: USTFutureStore._read_partition falls back to pulling the partition from Supabase
+# when the local files are missing, so `rm -rf` on the local cache is silently undone by the next
+# read. Bump this whenever a change alters the numbers in a report.
+#   v1 -> v2 (2026-08-14): Ultra Bond vendor root, ZN deliverable window, historical repo rate,
+#                          Act/360 conventions, basket/risk alignment.
+#   v2 -> v3 (2026-08-14): the ZN deliverable grade is vintage-dependent -- the "less than 8 years"
+#                          cap commences with the September 2023 contract month, so v2 truncated
+#                          every pre-2023 ZN basket by ~7 notes.
+#   v3 -> v4 (2026-08-15): the delivery date used for carry was the contract's IMM DATE. Line 1210
+#                          calls `_resolve_delivery(None)`, and that fallback returned the third
+#                          Wednesday -- which is not a delivery date. Every net basis, BNOC and
+#                          implied repo in every report carried to the wrong day. Measured on the
+#                          existing reports: min net basis moves -0.71 to -5.67/32 and the maximum
+#                          implied repo changes sign on the 2020 dates (USZ20 -39.23% -> +26.04%,
+#                          TYZ20 -26.22% -> +17.69%). Reports built before this cannot be reused.
+_BASIS_REPORT_SCHEMA_VERSION = 4
+
+# Which BarChart series a stored price came from. Until the EOD endpoint was repaired, `interval=1`
+# was the only thing that worked, so every price in the store and in the layered cache is a
+# one-minute bar taken nearest 14:00 Chicago. `interval=None` now serves the exchange's daily
+# SETTLEMENT instead, and the two are not the same number: measured over 59 sampled days across six
+# contracts and three eras, settle vs the 14:00 CT bar has median 0.0/32, mean absolute 0.79/32 and
+# a maximum of 4.0/32 (October 2020).
+#
+# 0.79/32 is small but not nothing against a net basis whose healthy range is +-11/32, so the two
+# conventions must not be mixed in one panel without saying so. Neither the layered cache key nor
+# the snapshot partition used to record which one it held, so an EOD backfill would have silently
+# overwritten -- and been served in place of -- minute-derived prices. Both now carry the tag.
+#
+# Rows written before this existed carry no tag and are all one-minute bars, hence the legacy
+# default. The default interval is unchanged (1), so warm caches stay warm.
+_PRICE_SOURCE_EOD_SETTLE = "barchart_eod_settle"
+_PRICE_SOURCE_LEGACY = "barchart_1m"
+
+
+def _price_source_tag(interval: Optional[int]) -> str:
+    return _PRICE_SOURCE_EOD_SETTLE if interval is None else f"barchart_{int(interval)}m"
+
+
+def _price_cache_suffix(interval: Optional[int]) -> str:
+    """Cache-key suffix for the price series. Empty for the historical default, so v3 stays valid."""
+    tag = _price_source_tag(interval)
+    return "" if tag == _PRICE_SOURCE_LEGACY else f"-{tag}"
+
+
+# Same idea for the price SNAPSHOT store, which had no version marker at all.
+#
+# Deleting the local partitions is NOT enough and is not a theory: after removing all 1,855 local
+# WN snapshot partitions, USTFutureStore._read_partition pulled WNM20 straight back from Supabase
+# still carrying price=112.496875 -- the EUR/NOK-derived value. A plausibility band cannot catch
+# these either, because the old decoder mapped the FX rate INTO the range of a real bond price.
+#
+# Requiring the stamp for every root would invalidate ~10,760 good partitions and force a full
+# refetch of contracts that were never wrong. Only WN's vendor root was mis-mapped, so only WN is
+# quarantined. If another root's vendor mapping ever changes, add it here and bump the version.
+_SNAPSHOT_SCHEMA_VERSION = 2
+_SNAPSHOT_QUARANTINE_ROOTS = {"WN"}
+
+
+def _snapshot_root(symbol: str) -> str:
+    m = re.match(r"^(?P<root>[A-Z0-9]{1,3}?)[FGHJKMNQUVXZ]\d{1,2}$", str(symbol).strip().upper())
+    return m.group("root") if m else str(symbol).strip().upper()
 
 
 def _normalize_symbol(sym: str) -> Optional[str]:
@@ -62,7 +152,7 @@ def _normalize_symbol(sym: str) -> Optional[str]:
     if not s:
         return None
 
-    m = re.match(r"^(?P<root>[A-Z]{1,3})(?P<code>[FGHJKMNQUVXZ]\d{1,2})$", s)
+    m = re.match(r"^(?P<root>[A-Z][A-Z0-9]{0,2})(?P<code>[FGHJKMNQUVXZ]\d{1,2})$", s)
     if not m:
         return s
 
@@ -73,12 +163,17 @@ def _normalize_symbol(sym: str) -> Optional[str]:
         return s
     if root in _BARCHART_ROOTS:
         return f"{_BARCHART_ROOTS[root]}{code}"
+    # Exchange spellings a caller may reasonably type -- notably "UB", the CME Globex code for the
+    # Ultra Bond, which is NOT its BarChart root. Resolving it here keeps every downstream key
+    # (cache keys, store partitions, fetched column names) on the one internal spelling.
+    if root in UST_FUTURE_ROOT_ALIASES:
+        return f"{UST_FUTURE_ROOT_ALIASES[root]}{code}"
     return s
 
 
 def _to_barchart_symbol(sym: str) -> str:
     s = (sym or "").strip().upper().replace("/", "")
-    m = re.match(r"^(?P<root>[A-Z]{1,3})(?P<code>[FGHJKMNQUVXZ]\d{1,2})$", s)
+    m = re.match(r"^(?P<root>[A-Z][A-Z0-9]{0,2})(?P<code>[FGHJKMNQUVXZ]\d{1,2})$", s)
     if not m:
         return s
     root = m.group("root")
@@ -89,7 +184,7 @@ def _to_barchart_symbol(sym: str) -> str:
 
 def _from_barchart_symbol(sym: str) -> str:
     s = (sym or "").strip().upper().replace("/", "")
-    m = re.match(r"^(?P<root>[A-Z]{1,3})(?P<code>[FGHJKMNQUVXZ]\d{1,2})$", s)
+    m = re.match(r"^(?P<root>[A-Z][A-Z0-9]{0,2})(?P<code>[FGHJKMNQUVXZ]\d{1,2})$", s)
     if not m:
         return s
     root = m.group("root")
@@ -110,12 +205,14 @@ def _clean_symbols(symbols: Sequence[str]) -> List[str]:
 
 def _to_tos_symbol(sym: str) -> str:
     norm = _normalize_symbol(sym) or str(sym or "").strip().upper().replace("/", "")
-    m = re.match(r"^(?P<root>[A-Z]{1,3})(?P<code>[FGHJKMNQUVXZ]\d{1,2})$", norm)
+    m = re.match(r"^(?P<root>[A-Z][A-Z0-9]{0,2})(?P<code>[FGHJKMNQUVXZ]\d{1,2})$", norm)
     if not m:
         return f"/{norm}" if norm else str(sym)
     root = m.group("root")
     code = m.group("code")
-    return f"/{to_barchart_root(root)}{code}"
+    # thinkorswim / Schwab speak CME Globex, where the Ultra Bond is /UB. BarChart's UD belongs
+    # only on the BarChart path.
+    return f"/{to_globex_root(root)}{code}"
 
 
 def _from_tos_symbol(sym: str) -> str:
@@ -367,6 +464,26 @@ class USTFuturesMDP(MarketDataProvider[InstrumentLike], LayeredCacheMixin):
                 bcf.close()
             except Exception:
                 pass
+        if interval is None and isinstance(df, pd.DataFrame) and not df.empty:
+            # ``queryeod`` bars are date-stamped and timezone-naive, but everything downstream
+            # works in Chicago wall time and locates the price with
+            # ``index.get_indexer([ts_dt], method="nearest")`` -- which raises outright on a naive
+            # index against an aware target ("Cannot compare dtypes datetime64[ns] and
+            # datetime64[ns, America/Chicago]"). So an EOD frame is stamped at the moment its price
+            # actually refers to: the daily settlement, which this module already treats as 14:00
+            # Chicago (see ``_as_datetime``).
+            #
+            # That 14:00 is measured, not assumed. Over 59 sampled days across six contracts and
+            # three eras, the settle and the 14:00 CT one-minute bar agree with median 0.0/32 and
+            # mean absolute 0.79/32 (max 4.0/32, in October 2020).
+            df = df.copy()
+            idx = pd.to_datetime(df.index)
+            if getattr(idx, "tz", None) is None:
+                df.index = (idx.normalize() + pd.Timedelta(hours=14)).tz_localize(chi)
+            else:
+                df.index = idx.tz_convert(chi)
+            df.index.name = "Date"
+
         if isinstance(df, pd.DataFrame) and not df.empty:
             df = df.copy()
             for col in df.columns:
@@ -480,26 +597,23 @@ class USTFuturesMDP(MarketDataProvider[InstrumentLike], LayeredCacheMixin):
 
     @classmethod
     def _resolve_contract_symbol(cls, sym: str, ts_dt: datetime.datetime) -> str:
+        """Resolve a bare root to a contract. One resolver, shared -- see definitions.USTFutures.
+
+        This used to inline its own IMM-date arithmetic. Three other sites did the same, and they
+        agreed only because all four happened to be written identically; a fix to one would have
+        made `warm_ustf_cache` warm `TYU26` while `usd_swaps` read `TYZ26`, and every warm would
+        have become a miss with no error. They now all call `front_month`.
+
+        Note the two-digit year here was also `int(...strftime('%y'))`, which drops the leading zero
+        (`TYH8`, not `TYH08`). Harmless 2010-2069, wrong for any pre-2010 backfill. `front_month`
+        formats it properly.
+        """
         resolved = str(sym)
         if len(resolved) > 3:
             return resolved
-        import rateslib as rl
+        from definitions.USTFutures import front_month
 
-        if rl.dt(ts_dt.year, ts_dt.month, ts_dt.day) >= rl.get_imm(year=ts_dt.year, month=ts_dt.month):
-            contract_imm_date = rl.next_imm(start=rl.dt(ts_dt.year, ts_dt.month, ts_dt.day))
-            if contract_imm_date.month == 3:
-                return f"{resolved}H{int(contract_imm_date.strftime('%y'))}"
-            if contract_imm_date.month == 6:
-                return f"{resolved}M{int(contract_imm_date.strftime('%y'))}"
-            if contract_imm_date.month == 9:
-                return f"{resolved}U{int(contract_imm_date.strftime('%y'))}"
-            if contract_imm_date.month == 12:
-                return f"{resolved}Z{int(contract_imm_date.strftime('%y'))}"
-
-        for m_code, month_nums in _CME_QUARTERLY_MONTH_CODES.items():
-            if ts_dt.month in month_nums:
-                return f"{resolved}{m_code}{int(ts_dt.strftime('%y'))}"
-        return resolved
+        return front_month(cls._to_chicago_datetime(ts_dt).date(), resolved)
 
     @classmethod
     def _get_ust_future_store(cls):
@@ -511,7 +625,13 @@ class USTFuturesMDP(MarketDataProvider[InstrumentLike], LayeredCacheMixin):
                 state["store"] = USTFutureStore.default()
             return state["store"]
 
-    def _read_core_snapshot_row(self, *, symbol: str, trading_date: datetime.date) -> Optional[dict]:
+    def _read_core_snapshot_row(
+        self,
+        *,
+        symbol: str,
+        trading_date: datetime.date,
+        price_source: str = _PRICE_SOURCE_LEGACY,
+    ) -> Optional[dict]:
         store = self._get_ust_future_store()
         df = store.read_snapshot_day(symbol, trading_date)
         if df.empty:
@@ -522,6 +642,32 @@ class USTFuturesMDP(MarketDataProvider[InstrumentLike], LayeredCacheMixin):
             df = df[pd.to_datetime(df["trading_date"], errors="coerce").dt.date == trading_date]
         if df.empty:
             return None
+        # A settlement price and a one-minute bar for the same instant are different numbers
+        # (see _PRICE_SOURCE_EOD_SETTLE), and a partition can hold both. Select rather than take
+        # the last row, or which convention a panel gets is down to file ordering. Untagged rows
+        # predate the tag and are all one-minute bars.
+        sources = (
+            df["price_source"].astype("string").fillna(_PRICE_SOURCE_LEGACY)
+            if "price_source" in df.columns
+            else pd.Series(_PRICE_SOURCE_LEGACY, index=df.index, dtype="string")
+        )
+        df = df[sources == str(price_source)]
+        if df.empty:
+            return None
+        if _snapshot_root(symbol) in _SNAPSHOT_QUARANTINE_ROOTS:
+            # A partition can hold BOTH a stale unstamped row and a fresh stamped one (a non
+            # overwrite write lands a second file in the same directory and _read_partition
+            # concatenates them), and both carry the same timestamp -- so filter rather than
+            # inspect, or which row wins is down to file ordering.
+            if "schema_version" not in df.columns:
+                return None
+            versions = pd.to_numeric(df["schema_version"], errors="coerce")
+            df = df[versions >= _SNAPSHOT_SCHEMA_VERSION]
+            if df.empty:
+                # Pre-stamp snapshot for a quarantined root -> cannot be trusted. Treat as a miss
+                # so the price is refetched under the corrected vendor root and rewritten (which
+                # also pushes the correction back to Supabase).
+                return None
         if "timestamp_utc" in df.columns:
             df = df.sort_values("timestamp_utc", kind="mergesort")
         return df.iloc[-1].to_dict()
@@ -533,6 +679,7 @@ class USTFuturesMDP(MarketDataProvider[InstrumentLike], LayeredCacheMixin):
         price: float,
         canonical_ts_dt: datetime.datetime,
         overwrite: bool = False,
+        price_source: str = _PRICE_SOURCE_LEGACY,
     ) -> None:
         if not self._core_source_enabled(self.source):
             return
@@ -546,9 +693,14 @@ class USTFuturesMDP(MarketDataProvider[InstrumentLike], LayeredCacheMixin):
                     "trading_date": trading_date,
                     "session_minute": self._session_minute_for_timestamp(canonical_ts_dt),
                     "price": float(price),
+                    "schema_version": _SNAPSHOT_SCHEMA_VERSION,
+                    "price_source": str(price_source),
                 }
             ]
         )
+        # Quarantined roots always overwrite: leaving the stale unstamped file beside the new one
+        # keeps a known-bad price on disk (and in Supabase) for no benefit.
+        overwrite = overwrite or (_snapshot_root(symbol) in _SNAPSHOT_QUARANTINE_ROOTS)
         self._get_ust_future_store().write_snapshot_day(symbol, trading_date, snapshot_df, overwrite=overwrite)
 
     @staticmethod
@@ -572,7 +724,28 @@ class USTFuturesMDP(MarketDataProvider[InstrumentLike], LayeredCacheMixin):
             "repo_rate",
             "settlement_date",
             "delivery_date",
+            # Written by enforce_basis_report_quality so the verdict travels WITH the data.
+            # A flag that only exists in a log line is a flag nobody reads.
+            "data_ok",
+            "data_quality_reason",
+            "schema_version",
+            "spec_fingerprint",
         ]
+
+    @staticmethod
+    def _basis_report_cache_is_current(df: pd.DataFrame) -> bool:
+        """Is this cached basis report one the CURRENT code produced?
+
+        Anything without a schema_version column predates the stamp and is therefore pre-fix.
+        """
+        if "schema_version" not in df.columns or "spec_fingerprint" not in df.columns:
+            return False
+        versions = pd.to_numeric(df["schema_version"], errors="coerce").dropna()
+        if not len(versions) or not bool((versions == _BASIS_REPORT_SCHEMA_VERSION).all()):
+            return False
+        # The deliverable-grade table is an input to every number in the report, so a report built
+        # under a different spec is stale even at the same schema version.
+        return bool((df["spec_fingerprint"].astype(str) == contract_specs_fingerprint()).all())
 
     def _basis_report_core_timestamp(
         self,
@@ -671,6 +844,10 @@ class USTFuturesMDP(MarketDataProvider[InstrumentLike], LayeredCacheMixin):
         timestamp: DateLike = request.get("timestamp", "live")
         show_tqdm = bool(request.get("show_tqdm", False))
         interval = request.get("interval", 1)
+        # A settlement price and a one-minute bar are different numbers for the same instant, so
+        # they must not share a cache key or a snapshot row. See _PRICE_SOURCE_EOD_SETTLE.
+        price_source = _price_source_tag(interval)
+        price_cache_suffix = _price_cache_suffix(interval)
         force_refresh = bool(request.get("force_refresh", False))
         include_basket = bool(request.get("include_basket", True))
         basket_source = request.get("basket_source", "RL_CME_TCF")
@@ -703,7 +880,9 @@ class USTFuturesMDP(MarketDataProvider[InstrumentLike], LayeredCacheMixin):
 
             for sym in resolved_symbols:
                 if core_ts_dt is not None and not force_refresh:
-                    core_row = self._read_core_snapshot_row(symbol=sym, trading_date=as_of_date)
+                    core_row = self._read_core_snapshot_row(
+                        symbol=sym, trading_date=as_of_date, price_source=price_source
+                    )
                     if core_row is not None:
                         basket_data = None
                         if include_basket:
@@ -713,6 +892,7 @@ class USTFuturesMDP(MarketDataProvider[InstrumentLike], LayeredCacheMixin):
                                 usts_mdp=_shared_usts_mdp,
                                 usts_mdp_source=usts_mdp_source,
                                 source=basket_source,
+                                ignore_cache=force_refresh,
                             )
                         snapshot_ts = pd.Timestamp(core_row.get("timestamp_utc", self._to_utc_datetime(core_ts_dt)))
                         if snapshot_ts.tzinfo is None:
@@ -738,7 +918,7 @@ class USTFuturesMDP(MarketDataProvider[InstrumentLike], LayeredCacheMixin):
                         )
                         continue
 
-                cache_key = f"{_USTF_CACHE_VERSION}::{ts_iso}-{sym}-{self.source}"
+                cache_key = f"{_USTF_CACHE_VERSION}::{ts_iso}-{sym}-{self.source}{price_cache_suffix}"
                 cached = None if (force_refresh or use_live) else self._threadsafe_cache_get(cache_key)
                 if cached is not None:
                     ref_dt = self._parse_reference_date(cached.get("timestamp"))
@@ -750,6 +930,7 @@ class USTFuturesMDP(MarketDataProvider[InstrumentLike], LayeredCacheMixin):
                             usts_mdp=_shared_usts_mdp,
                             usts_mdp_source=usts_mdp_source,
                             source=basket_source,
+                            ignore_cache=force_refresh,
                         )
                     out[sym] = self._build_pricer(
                         symbol=sym,
@@ -765,7 +946,13 @@ class USTFuturesMDP(MarketDataProvider[InstrumentLike], LayeredCacheMixin):
                         meta_data=cached,
                     )
                     if core_ts_dt is not None:
-                        self._persist_core_snapshot(symbol=sym, price=float(cached["price"]), canonical_ts_dt=core_ts_dt, overwrite=force_refresh)
+                        self._persist_core_snapshot(
+                            symbol=sym,
+                            price=float(cached["price"]),
+                            canonical_ts_dt=core_ts_dt,
+                            overwrite=force_refresh,
+                            price_source=price_source,
+                        )
                 else:
                     missing.append(sym)
 
@@ -800,6 +987,7 @@ class USTFuturesMDP(MarketDataProvider[InstrumentLike], LayeredCacheMixin):
                         "price": float(series.loc[idx]),
                         "timestamp": ts_stamp,
                         "schema": 1,
+                        "price_source": price_source,
                     }
                     basket_data = None
                     if include_basket:
@@ -809,6 +997,7 @@ class USTFuturesMDP(MarketDataProvider[InstrumentLike], LayeredCacheMixin):
                             usts_mdp=_shared_usts_mdp,
                             usts_mdp_source=usts_mdp_source,
                             source=basket_source,
+                            ignore_cache=force_refresh,
                         )
                     out[sym] = self._build_pricer(
                         symbol=sym,
@@ -824,12 +1013,18 @@ class USTFuturesMDP(MarketDataProvider[InstrumentLike], LayeredCacheMixin):
                         meta_data=args,
                     )
                     if not use_live:
-                        cache_key = f"{_USTF_CACHE_VERSION}::{ts_iso}-{sym}-{self.source}"
-                        cache_key2 = f"{_USTF_CACHE_VERSION}::{args['timestamp']}-{sym}-{self.source}"
+                        cache_key = f"{_USTF_CACHE_VERSION}::{ts_iso}-{sym}-{self.source}{price_cache_suffix}"
+                        cache_key2 = f"{_USTF_CACHE_VERSION}::{args['timestamp']}-{sym}-{self.source}{price_cache_suffix}"
                         self._threadsafe_cache_put(cache_key, args)
                         self._threadsafe_cache_put(cache_key2, args)
                     if core_ts_dt is not None:
-                        self._persist_core_snapshot(symbol=sym, price=float(series.loc[idx]), canonical_ts_dt=core_ts_dt, overwrite=force_refresh)
+                        self._persist_core_snapshot(
+                            symbol=sym,
+                            price=float(series.loc[idx]),
+                            canonical_ts_dt=core_ts_dt,
+                            overwrite=force_refresh,
+                            price_source=price_source,
+                        )
 
             if not out:
                 raise ValueError("No matching UST futures prices for requested symbols.")
@@ -865,7 +1060,13 @@ class USTFuturesMDP(MarketDataProvider[InstrumentLike], LayeredCacheMixin):
 
         # cache only the *reference* basket definition (cusips/cfs/delivery window/etc),
         # NOT the live cash pricers (they depend on usts_mdp + timestamp).
-        cache_key = f"{source}|{symbol}|{as_of.isoformat()}"
+        # The spec fingerprint is part of the key, so ANY change to _CONTRACT_SPECS invalidates
+        # every cached basket automatically. Relying on a hand-bumped version is what let a
+        # corrected spec sit behind stale baskets earlier in this very branch.
+        cache_key = (
+            f"{_USTF_BASKET_CACHE_VERSION}|{contract_specs_fingerprint()}|"
+            f"{source}|{symbol}|{as_of.isoformat()}"
+        )
         with self:
             cached = self._threadsafe_basket_cache_get(cache_key)
 
@@ -985,14 +1186,23 @@ class USTFuturesMDP(MarketDataProvider[InstrumentLike], LayeredCacheMixin):
             }
         )
         resolved_symbol, pricer = next(iter(pricers.items()))
-        basket = self.get_delivery_basket(
-            as_of=as_of_date,
-            symbol=resolved_symbol,
-            usts_mdp_source=usts_mdp_source,
-            usts_mdp=usts_mdp,
-            source=basket_source,
-            ignore_cache=force_refresh,
-        )
+
+        # Use the pricer's OWN basket rather than fetching a second one.
+        #
+        # This used to call get_delivery_basket() again here, with ignore_cache=force_refresh,
+        # while get_pricer() had already built its basket straight off the basket cache. The row
+        # loop below then zipped THAT basket's cusips/labels/prices/CFs against gross_basis,
+        # bnoc and irr vectors computed from the pricer's basket. Whenever the two disagreed --
+        # exactly what happens on the first force_refresh after a deliverable-window change, when
+        # the cache still holds the old basket -- every risk number was silently attached to the
+        # wrong bond. It also cost a duplicate FixedRateBondsMDP round-trip per report.
+        basket_pricers = list(pricer._basket_pricers)
+        basket_cfs = pricer.conversion_factors()
+        if len(basket_pricers) != len(basket_cfs):
+            raise ValueError(
+                f"Basket/conversion-factor length mismatch for {resolved_symbol}: "
+                f"{len(basket_pricers)} pricers vs {len(basket_cfs)} factors"
+            )
 
         fut = pricer.build_pricable()
         fut_price = float(pricer.price(fut))
@@ -1017,10 +1227,17 @@ class USTFuturesMDP(MarketDataProvider[InstrumentLike], LayeredCacheMixin):
         settlement_date = settlement_dt.date() if isinstance(settlement_dt, datetime.datetime) else settlement_dt
         delivery_date = delivery_dt.date() if isinstance(delivery_dt, datetime.datetime) else delivery_dt
 
+        if not (len(basket_pricers) == len(gross_basis_vec) == len(bnoc_vec) == len(irr_vec)):
+            raise ValueError(
+                f"Basis vectors misaligned with the basket for {resolved_symbol}: "
+                f"basket={len(basket_pricers)} gross={len(gross_basis_vec)} "
+                f"bnoc={len(bnoc_vec)} irr={len(irr_vec)}"
+            )
+
         rows: List[Dict[str, Any]] = []
         for bond_pricer, cf, gross_basis, bnoc, irr in zip(
-            basket["basket_pricers"],
-            basket["conversion_factors"],
+            basket_pricers,
+            basket_cfs,
             gross_basis_vec,
             bnoc_vec,
             irr_vec,
@@ -1046,6 +1263,8 @@ class USTFuturesMDP(MarketDataProvider[InstrumentLike], LayeredCacheMixin):
                     "repo_rate": repo_used,
                     "settlement_date": settlement_date,
                     "delivery_date": delivery_date,
+                    "schema_version": _BASIS_REPORT_SCHEMA_VERSION,
+                    "spec_fingerprint": contract_specs_fingerprint(),
                 }
             )
 
@@ -1068,10 +1287,14 @@ class USTFuturesMDP(MarketDataProvider[InstrumentLike], LayeredCacheMixin):
         curve_id: str = "USD-SOFR-1D",
         repo_rate: Optional[float] = None,
         force_refresh: bool = False,
+        on_bad_data: OnBadData = "raise",
     ) -> pd.DataFrame:
         ts_dt = _as_datetime(timestamp)
         resolved_symbol = self._resolve_contract_symbol(_normalize_symbol(symbol) or symbol, ts_dt)
-        core_ts_dt = None if force_refresh else self._basis_report_core_timestamp(
+        # force_refresh skips the cache READ but must NOT skip the WRITE -- otherwise there is no
+        # way to repair a poisoned entry through this API, and the store (plus whatever Supabase
+        # holds) keeps serving the old value forever.
+        core_ts_dt = self._basis_report_core_timestamp(
             timestamp=timestamp,
             basket_source=basket_source,
             usts_mdp_source=usts_mdp_source,
@@ -1080,10 +1303,20 @@ class USTFuturesMDP(MarketDataProvider[InstrumentLike], LayeredCacheMixin):
         )
         trading_date = self._trading_date_for_timestamp(core_ts_dt or ts_dt)
 
-        if core_ts_dt is not None:
+        if core_ts_dt is not None and not force_refresh:
             cached_df = self._get_ust_future_store().read_basis_report_day(resolved_symbol, trading_date)
+            if not cached_df.empty and not self._basis_report_cache_is_current(cached_df):
+                # Stale schema -> treat as a miss. Do NOT trust a report built by older code.
+                cached_df = pd.DataFrame()
             if not cached_df.empty:
-                return cached_df.loc[:, [col for col in self._basis_report_columns() if col in cached_df.columns]].copy()
+                cached_df = cached_df.loc[
+                    :, [col for col in self._basis_report_columns() if col in cached_df.columns]
+                ].copy()
+                # Gate the CACHED path too. A cache written before a fix still holds the corrupt
+                # rows, and the read path is where a consumer meets them.
+                return enforce_basis_report_quality(
+                    cached_df, symbol=resolved_symbol, on_bad_data=on_bad_data
+                )
 
         report_df = self._build_basis_report_frame(
             symbol=resolved_symbol,
@@ -1094,12 +1327,27 @@ class USTFuturesMDP(MarketDataProvider[InstrumentLike], LayeredCacheMixin):
             repo_rate=repo_rate,
             force_refresh=force_refresh,
         )
-        if core_ts_dt is not None and not report_df.empty:
+        report_df = enforce_basis_report_quality(
+            report_df, symbol=resolved_symbol, on_bad_data=on_bad_data
+        )
+        # Never persist a report that failed the gate, whatever on_bad_data says. "warn" means the
+        # CALLER wants to carry on past a bad day; it does not mean the bad day should be cached
+        # and handed to everyone else afterwards. (Learned the hard way: a backfill running with
+        # on_bad_data="warn" wrote the failing reports into the store, and the next run served
+        # them from cache -- with a fresh schema stamp, so they looked current.)
+        failed_gate = "data_ok" in report_df.columns and not bool(report_df["data_ok"].all())
+        if core_ts_dt is not None and not report_df.empty and not failed_gate:
             self._get_ust_future_store().write_basis_report_day(resolved_symbol, trading_date, report_df, overwrite=force_refresh)
         return report_df
 
     def get_ctd(
-        self, as_of: datetime.date, symbol: str, usts_mdp: Optional[FixedRateBondsMDP] = None, repo: Optional[float] = None, source: Optional[str] = "RL_CME_TCF"
+        self,
+        as_of: datetime.date,
+        symbol: str,
+        usts_mdp: Optional[FixedRateBondsMDP] = None,
+        repo: Optional[float] = None,
+        source: Optional[str] = "RL_CME_TCF",
+        on_bad_data: OnBadData = "raise",
     ):
         # symbol_to_rl_spec = {
         #     "TU": "us_gb_2y",
@@ -1121,6 +1369,12 @@ class USTFuturesMDP(MarketDataProvider[InstrumentLike], LayeredCacheMixin):
                 curve_id="USD-SOFR-1D",
                 repo_rate=repo,
                 usts_mdp=usts_mdp,
+            )
+            # get_ctd is a THIRD public exit from this surface -- it calls the builder directly and
+            # so never passed through get_basis_report's gate. Gate it here or it stays the one way
+            # to read a corrupt basis report without being told.
+            report_df = enforce_basis_report_quality(
+                report_df, symbol=str(symbol), on_bad_data=on_bad_data
             )
             legacy_df = report_df.rename(columns={"invoice_cf": "invoice_conversion_factor"}).copy()
             legacy_df["gross_basis_rl"] = legacy_df["gross_basis"]

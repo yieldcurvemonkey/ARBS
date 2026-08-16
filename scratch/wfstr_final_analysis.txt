@@ -1,0 +1,116 @@
+day files: 138  2024-07-01.parquet .. 2026-06-15.parquet
+raw leg rows: 322,755   units: 237,995   days: 138
+
+[0a] legs matching >1 grid row: 0 rows over 0 units
+[0b] units whose joined leg count != n_legs: 0 of 237,995
+
+unit frame: 237,995 units
+
+==============================================================================
+[1] POPULATION AND GRID COVERAGE, by kind x rule
+==============================================================================
+                              n  n_grid_clean  n_excl_null  pct_clean
+kind     rule                                                        
+CURVE    NPV_VS_UPFRONT   18973           317        18973        1.7
+         RATE_VS_MID      23023          4664        22296       20.3
+FLY      NPV_VS_UPFRONT    8924           110         8924        1.2
+         RATE_VS_MID      12458          2129        12458       17.1
+OUTRIGHT NPV_VS_UPFRONT   40488           888        40488        2.2
+         RATE_VS_MID     134129         42736       134129       31.9
+
+==============================================================================
+[2] KNOWN-ANSWER: OUTRIGHT, rate rule, grid-clean
+==============================================================================
+n=42,736  median|err|=2.276e-13  max|err|=4.547e-12 bp  n<1e-9=42,736  n>=1e-6=0
+
+==============================================================================
+[3] CLAIM UNDER TEST: CURVE / FLY, rate rule, grid-clean (join success only)
+==============================================================================
+CURVE    n= 4,629  median|err|=2.736e-13  max|err|=1.208e-12  n<1e-9= 4,629  n>=1e-6=0
+           i_phys   median|err|=3.996e-03  max=1.524e+01  n_exact= 2,298
+           i_lo     median|err|=2.736e-13  max=1.208e-12  n_exact= 4,629
+           i_tid    median|err|=5.402e-02  max=1.524e+01  n_exact= 1,841
+           i_ten    median|err|=2.736e-13  max=1.208e-12  n_exact= 4,629
+           i_eff    median|err|=2.736e-13  max=1.208e-12  n_exact= 4,629
+           reversed-traded-only: median|err|=23.7160  max=390.0000  n_exact=2
+FLY      n= 2,129  median|err|=5.240e-13  max|err|=2.167e-12  n<1e-9= 2,129  n>=1e-6=0
+           i_phys   median|err|=6.320e-02  max=3.987e+01  n_exact=   737
+           i_lo     median|err|=5.240e-13  max=2.167e-12  n_exact= 2,129
+           i_tid    median|err|=1.503e-12  max=3.987e+01  n_exact= 1,099
+           i_ten    median|err|=5.240e-13  max=2.167e-12  n_exact= 2,129
+           i_eff    median|err|=5.240e-13  max=2.167e-12  n_exact= 2,129
+
+==============================================================================
+[4] NEGATIVE CONTROL: same formula on NPV_VS_UPFRONT units
+==============================================================================
+OUTRIGHT n=   888  median|err|=1.1916  p95=103.7591  max=26832255.3429  n_exact(<1e-9)=0
+CURVE    n=   317  median|err|=0.4309  p95=21.9933  max=141.9546  n_exact(<1e-9)=0
+FLY      n=   110  median|err|=0.3611  p95=13.2619  max=119.5625  n_exact(<1e-9)=0
+
+==============================================================================
+[5] LEG-ORDER DISCRIMINATION
+==============================================================================
+physical(ctid)   differs from canonical on 37,765 of 63,378 multi-leg units;  grid-clean rate-rule subset: 4,099
+                 on THOSE units: canonical max|err|=2.167e-12   physical(ctid) max|err|=39.8670  physical(ctid) n_exact=376
+leg_order        differs from canonical on  1,942 of 63,378 multi-leg units;  grid-clean rate-rule subset:     0
+trade_id         differs from canonical on 30,884 of 63,378 multi-leg units;  grid-clean rate-rule subset: 3,951
+                 on THOSE units: canonical max|err|=2.167e-12   trade_id max|err|=39.8670  trade_id n_exact=133
+tenor_years      differs from canonical on  3,184 of 63,378 multi-leg units;  grid-clean rate-rule subset:     0
+effective_date   differs from canonical on  1,862 of 63,378 multi-leg units;  grid-clean rate-rule subset:     0
+
+==============================================================================
+[6] TIES: CURVE units whose two legs share an expiration date
+==============================================================================
+CURVE units total 41,996; same expiration_date on both legs 3,833; same expiration AND effective 3,341
+rule         grid_clean
+RATE_VS_MID  False         953
+             True          333
+  grid-clean tie units n=333  max|err|=1.171e-13  mid_bp range 0.0000..0.0000
+                               kind            rule   tenors  grid_clean        dev
+package_id                                                                         
+CURVE_12_3481542693000000601  CURVE     RATE_VS_MID    5Y/5Y       False   0.000000
+PTP_1055315749                CURVE  NPV_VS_UPFRONT  10Y/10Y       False   0.216720
+PTP_1055348648                CURVE  NPV_VS_UPFRONT    5Y/5Y       False -27.960855
+PTP_1055479394                CURVE  NPV_VS_UPFRONT    5Y/5Y       False  -0.228886
+PTP_1055856319                CURVE  NPV_VS_UPFRONT    5Y/5Y       False  14.183767
+PTP_1055857441                CURVE  NPV_VS_UPFRONT    3Y/3Y       False  -5.628230
+PTP_1055904115                CURVE  NPV_VS_UPFRONT    7Y/7Y       False  -4.869214
+PTP_1055913195                CURVE     RATE_VS_MID  10Y/10Y       False   0.000000
+PTP_1055913209                CURVE     RATE_VS_MID    5Y/5Y       False   0.000000
+PTP_1055920644                CURVE  NPV_VS_UPFRONT  10Y/10Y        True   0.358196
+
+==============================================================================
+[7] TAILS: largest |err| rows among rate-rule grid-clean CURVE/FLY
+==============================================================================
+                        kind  as_of_date rate_index       tenors       dev  traded_i_can  mid_i_can     err_i_can       stt  offmkt       vintage
+package_id                                                                                                                                       
+PTS_1646109894           FLY  2025-08-04       SOFR   5Y/10Y/30Y  0.227915        1.4500   1.222085  2.166961e-12  STANDARD   False  2939a2760e5c
+PTS_1318265544           FLY  2025-01-06       SOFR   5Y/10Y/30Y  0.301021       15.9500  15.648979  2.064404e-12  STANDARD   False  2939a2760e5c
+PTS_1803316333000000101  FLY  2026-01-21       SOFR  10Y/15Y/20Y  0.006535       12.5625  12.555965 -1.993071e-12  STANDARD   False  2939a2760e5c
+PTS_1601252286           FLY  2025-07-08       SOFR   9Y/10Y/12Y  0.070006       -4.2000  -4.270006 -1.966441e-12  STANDARD   False  2939a2760e5c
+PTP_1358723404           FLY  2025-02-03       SOFR    2Y/5Y/10Y  0.122623       -7.0250  -7.147623  1.950815e-12  STANDARD   False  2939a2760e5c
+FLY_1711977278000000101  FLY  2026-01-13       SOFR  10Y/12Y/15Y  0.008020       -2.1000  -2.108020 -1.945109e-12  STANDARD   False  2939a2760e5c
+FLY_1711977281000000401  FLY  2026-01-13       SOFR  10Y/12Y/15Y  0.008020       -2.1000  -2.108020 -1.945109e-12  STANDARD   False  2939a2760e5c
+PTS_1354924530           FLY  2025-01-29       SOFR     4Y/5Y/6Y  0.118000       -0.3000  -0.418000  1.918063e-12  STANDARD   False  2939a2760e5c
+FLY_1090389988           FLY  2024-07-26       SOFR     5Y/6Y/7Y -0.034001       -1.6000  -1.565999  1.907842e-12  STANDARD    True  2939a2760e5c
+PTS_1372242731           FLY  2025-02-11       SOFR     5Y/6Y/7Y -0.059500       -0.1875  -0.128000 -1.872322e-12  STANDARD   False  2939a2760e5c
+PTS_1372242513           FLY  2025-02-11       SOFR     5Y/6Y/7Y -0.059500       -0.1875  -0.128000 -1.872322e-12  STANDARD   False  2939a2760e5c
+PTS_1062205433           FLY  2024-07-05       SOFR    2Y/7Y/30Y  0.221002      -35.3000 -35.521002 -1.861289e-12  STANDARD   False  2939a2760e5c
+
+[7b] err by code_vintage (rate-rule grid-clean CURVE+FLY)
+                 n           med            mx
+vintage                                       
+2939a2760e5c  6758  3.339967e-13  2.166961e-12
+
+[7c] err by month
+           n            mx
+m                         
+2024-07  928  1.907842e-12
+2024-08  923  1.847023e-12
+2024-11  228  1.369578e-12
+2025-01  983  2.064404e-12
+2025-02  729  1.950815e-12
+2025-07  941  1.966441e-12
+2025-08  614  2.166961e-12
+2026-01  818  1.993071e-12
+2026-06  594  1.708858e-12

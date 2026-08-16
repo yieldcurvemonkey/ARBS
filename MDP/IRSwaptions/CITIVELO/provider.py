@@ -152,6 +152,41 @@ def _fetch_cube_from_excel(**kwargs: Any) -> Tuple[Any, str]:
     return fetch_cube(**kwargs), "excel"
 
 
+_MAX_SKEW_DONOR_DAYS = 7
+
+
+def _find_skew_donor(
+    currency: str,
+    as_of: dt.date,
+    stored: Dict[dt.date, Any],
+) -> Any:
+    """The nearest prior full-smile cube, or ``None``.
+
+    Walks the ``stored`` dict (already loaded from the cube store for this
+    request) backwards from ``as_of``, returning the first cube whose
+    data carries non-zero skew offsets.  Stops at ``_MAX_SKEW_DONOR_DAYS``
+    to avoid stale skew on long holidays.
+    """
+    from MDP.IRSwaptions.CITIVELO.cube_store import _stored_one, _default_store, store_asset
+
+    try:
+        store = _default_store()
+        asset = store_asset(currency)
+    except Exception:
+        return None
+
+    for lag in range(1, _MAX_SKEW_DONOR_DAYS + 1):
+        candidate = as_of - dt.timedelta(days=lag)
+        hit = stored.get(candidate)
+        if hit is not None and hit.has_smile:
+            return hit.data
+        if hit is None:
+            loaded = _stored_one(store, asset, candidate)
+            if loaded is not None and loaded.has_smile:
+                return loaded.data
+    return None
+
+
 def _cube_for_date(
     *,
     currency: str,
@@ -342,21 +377,26 @@ def get_citivelo_vol_objects(
         )
         backend = "rl-native" if engine_token == "RL" else ("ql-sabr" if sabr else "ql")
 
-        # A QuantLib CUBE needs at least one non-zero offset. Say why when the day
-        # has none, before build_ql_swaption_cube's generic message sends the
-        # caller off to refetch from Excel for quotes that were never published.
-        #
-        # Gated on `origin`, not on "is this date in the store": the store can
-        # hold an ATM-only copy of a date the CALLER supplied a full-smile cube
-        # for, and judging their cube by the store's shape would refuse a request
-        # that is perfectly buildable.
         hit = stored.get(when) if origin == "swaption_cube_store" else None
-        if hit is not None and not hit.has_smile and backend in ("ql", "ql-sabr"):
-            from MDP.IRSwaptions.CITIVELO.cube_store import explain_missing_smile
 
-            raise CitiVelocityError(
-                explain_missing_smile(hit, backend=f"the {backend!r} backend")
-            )
+        # Forward-fill skew from the nearest prior full cube when the
+        # fetched data is ATM-only (holidays, unwarmed dates).  The skew
+        # shape from the donor is additive on the current ATM level, so
+        # the smile moves with the ATM but keeps its shape.
+        if (
+            origin != "caller"
+            and not any(o != 0.0 for o in data.skew_offsets())
+            and stored
+        ):
+            donor_cube = _find_skew_donor(ccy, when, stored)
+            if donor_cube is not None:
+                from MDP.CitiVelocityExcel.vol.cube_data import ffill_skew
+
+                data = ffill_skew(data, donor_cube)
+                _logger.warning(
+                    "Skew for %s forward-filled from %s (%d offsets).",
+                    when, donor_cube.as_of, len(donor_cube.skew_offsets()),
+                )
 
         # `verify` is passed through because it is the single biggest cost on this
         # path and there was no way to reach it. Profiled 2026-08-08 on one USD

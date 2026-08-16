@@ -85,6 +85,7 @@ from MDP.CitiVelocityExcel.vol.cube_data import SwaptionCubeData
 from MDP.CitiVelocityExcel.vol.ql_cube import (
     VOL_CCY_DEFAULT_OIS_INDEX,
     QLSwaptionCube,
+    build_ql_atm_matrix,
     build_ql_swaption_cube,
 )
 
@@ -216,13 +217,42 @@ class QLSwaptionPricer:
         with evaluation_date(self._ql_as_of):
             self.on_index = self.convention.ql_index(self.handle)
             self.calendar = self.on_index.fixingCalendar()
-            self.ql_cube = ql_cube or build_ql_swaption_cube(
-                cube=cube,
-                curve=self.handle,
-                citi_index=self.convention.citi_index,
-                sabr=bool(sabr),
-                **build_kwargs,
-            )
+            if ql_cube is not None:
+                self.ql_cube = ql_cube
+            else:
+                caller_offsets = build_kwargs.get("offsets_bp")
+                offsets = (
+                    [float(o) for o in caller_offsets]
+                    if caller_offsets is not None
+                    else cube.skew_offsets()
+                )
+                if any(o != 0.0 for o in offsets):
+                    self.ql_cube = build_ql_swaption_cube(
+                        cube=cube,
+                        curve=self.handle,
+                        citi_index=self.convention.citi_index,
+                        sabr=bool(sabr),
+                        **build_kwargs,
+                    )
+                else:
+                    # ATM-only data (e.g. COM fallback on holidays or unwarmed
+                    # dates).  A ql.SwaptionVolatilityMatrix serves ATMF vol
+                    # correctly; off-ATM queries return flat ATM vol.
+                    atm = build_ql_atm_matrix(cube, calendar=self.calendar)
+                    self.ql_cube = QLSwaptionCube(
+                        handle=ql.SwaptionVolatilityStructureHandle(atm),
+                        structure=atm,
+                        atm_matrix=atm,
+                        cube=cube,
+                        option_tenors=cube.expiries(),
+                        swap_tenors=cube.tenors(),
+                        strike_spreads=[0.0],
+                    )
+                    _logger.warning(
+                        "Cube data for %s has no strike offsets; built ATM-only "
+                        "surface. Off-ATM reads will serve flat ATM vol.",
+                        cube.as_of,
+                    )
         self.sabr = bool(getattr(self.ql_cube, "sabr", sabr))
         self.eval_date_gap_days = self._check_date_alignment()
         self._point_cache: Dict[Tuple[str, str], Tuple[float, float, float]] = {}

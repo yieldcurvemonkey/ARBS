@@ -85,7 +85,7 @@ from __future__ import annotations
 
 import datetime
 import logging
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any, Dict, Iterable, Mapping, Optional, Sequence, Tuple
 
 import numpy as np
@@ -489,6 +489,57 @@ class SwaptionCubeData:
             f"{len(self.atm.index)}x{len(self.atm.columns)} nodes, "
             f"offsets={[f'{o:+g}' for o in self.skew_offsets()]}, unit={self.vol_unit})"
         )
+
+
+# ------------------------------------------------------------------ #
+#                       skew forward-fill                            #
+# ------------------------------------------------------------------ #
+
+
+def ffill_skew(
+    current: SwaptionCubeData,
+    donor: SwaptionCubeData,
+) -> SwaptionCubeData:
+    """Augment an ATM-only cube with the skew shape from a donor cube.
+
+    For each offset the donor carries, the synthetic vol is::
+
+        synthetic[offset] = current.atm + (donor.skew[offset] - donor.atm)
+
+    The skew shape is preserved; only the ATM level shifts.  Nodes that
+    exist in ``current`` but not in ``donor`` are dropped (intersection
+    only).
+
+    Returns a new ``SwaptionCubeData`` whose ``source`` records the donor
+    date.  Raises nothing — an empty intersection returns ``current``
+    unchanged.
+    """
+    donor_offsets = [o for o in donor.skew_offsets() if o != 0.0]
+    if not donor_offsets:
+        return current
+
+    shared_exp = [e for e in current.expiries() if e in donor.atm.index]
+    shared_ten = [t for t in current.tenors() if t in donor.atm.columns]
+    if not shared_exp or not shared_ten:
+        return current
+
+    atm = current.atm.loc[shared_exp, shared_ten]
+    donor_spreads = donor.spreads()
+
+    synthetic_skew: Dict[float, pd.DataFrame] = {}
+    for off in donor_offsets:
+        spread = donor_spreads[off]
+        spread_aligned = spread.reindex(index=shared_exp, columns=shared_ten)
+        mask = spread_aligned.notna()
+        synthetic_skew[off] = atm.where(~mask, atm + spread_aligned)
+
+    return replace(
+        current,
+        atm=atm,
+        skew=synthetic_skew,
+        skew_measure=donor.skew_measure,
+        source=current.source + f"/skew_ffill<{donor.as_of}>",
+    )
 
 
 # ------------------------------------------------------------------ #

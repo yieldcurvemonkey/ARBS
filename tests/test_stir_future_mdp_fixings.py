@@ -38,8 +38,13 @@ def test_sofr_symbol_injects_fixings_scaled_and_filtered(monkeypatch):
     assert calls == [(datetime.date(2025, 1, 7), "USD-SOFR-1D", False)]
     fixings = pr.meta()["fixings"]
     assert isinstance(fixings, pd.Series)
-    assert list(fixings.index.date) == [datetime.date(2025, 1, 5), datetime.date(2025, 1, 6), datetime.date(2025, 1, 7)]
-    assert list(fixings.values) == pytest.approx([4.75, 4.8, 4.85])
+    # The reference date's OWN fixing must not appear. SOFR for day D publishes at 08:00 ET on
+    # D+1, so a mark struck on 2025-01-07 cannot know 2025-01-07's fixing. This assertion used to
+    # require 2025-01-07 to be present -- an inclusive filter that pinned a one-business-day peek
+    # into the marks (measured at 0.39 bp on a front SER Jun-2018 contract). Everything else in
+    # the repo, including all 24 IRSwapsMDP sites, uses the strict form.
+    assert list(fixings.index.date) == [datetime.date(2025, 1, 5), datetime.date(2025, 1, 6)]
+    assert list(fixings.values) == pytest.approx([4.75, 4.8])
 
 
 def test_fed_funds_symbol_also_fetches_fixings(monkeypatch):

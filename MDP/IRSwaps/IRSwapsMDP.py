@@ -4051,7 +4051,19 @@ class IRSwapsMDP(MarketDataProvider[_GenericPricable]):
             from Query.IRSwaps.backends.rateslib.RLIRSwapCurve import RLIRSwapCurve
 
             max_ref_date = max(t.date() if isinstance(t, (datetime.date, datetime.datetime)) else datetime.date.today() for t in timestamps)
-            full_fixings_series = _fetch_fixings(as_of_date=max_ref_date, curve_name="USD-SOFR-1D", force_refresh=self.force_refresh_fixings).sort_index()
+            # Scaled to percent, like every other call site. This series was previously handed to
+            # the curve solver in DECIMALS and unclipped, while the very same series was scaled by
+            # 100 and clipped before being attached to each output curve at line ~4079 -- so the
+            # calibration input and the curve's own fixings disagreed by 100x. It did not surface a
+            # wrong number only because this source sets _N_SER_CONTRACTS = 0, so no instrument
+            # reads the fixings at all (measured: get_short_end_curve_tickers(first_n_sr1=0) returns
+            # no SER ticker, and build_rl_stirf attaches fixings to the SER leg only -- the SFR line
+            # is commented out). Raising that constant would have activated a 100x unit error and a
+            # full-history lookahead in one step. The per-snapshot clip is enforced downstream in
+            # rl_usd_sofr_mt_builder_parallel; this is the units fix and the landmine removal.
+            full_fixings_series = (
+                _fetch_fixings(as_of_date=max_ref_date, curve_name="USD-SOFR-1D", force_refresh=self.force_refresh_fixings).sort_index() * 100.0
+            )
 
             datetime_snaps = [t for t in timestamps if isinstance(t, datetime.datetime)]
             live_snap_requested = "live" in timestamps
@@ -4072,7 +4084,7 @@ class IRSwapsMDP(MarketDataProvider[_GenericPricable]):
                 if rl_curve is None:
                     continue
                 ref_date = ts.date()
-                fixings_for_curve = full_fixings_series[full_fixings_series.index.date < ref_date] * 100.0
+                fixings_for_curve = full_fixings_series[full_fixings_series.index.date < ref_date]
                 curve_id_for_snap = f"{ts}-SDR_INTRADAY-RL_USD_SOFR_MT_Q12"
                 out[ts] = RLIRSwapCurve(
                     rl_curve_id=curve_name,
@@ -4083,7 +4095,7 @@ class IRSwapsMDP(MarketDataProvider[_GenericPricable]):
 
             if live_snap_requested:
                 ref_date = datetime.date.today()
-                fixings_for_curve = full_fixings_series[full_fixings_series.index.date < ref_date] * 100.0
+                fixings_for_curve = full_fixings_series[full_fixings_series.index.date < ref_date]
                 curve_id = "live-SDR_INTRADAY-RL_USD_SOFR_MT_Q12"
                 ts_out, rl_curve = rl_usd_sofr_mt_curve(
                     curve_id=curve_id,

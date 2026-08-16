@@ -49,6 +49,51 @@ def _add_label_column(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
+
+def _add_reopening_columns(df: pd.DataFrame) -> pd.DataFrame:
+    """Per CUSIP: the term at issue of its SHORTEST tranche, and that tranche's issue date.
+
+    CBOT's re-opening clause (Chapters 19/20/21/26) reads:
+
+        "If the U.S. Treasury Department auctions and issues a Treasury security that meets these
+         standards, such that said security is a re-opening of an extant Treasury issue that had
+         not previously met these standards, then the extant Treasury issue shall be deemed to be a
+         Treasury note meeting these standards and shall be added to the contract grade as of the
+         issue date of said newly auctioned Treasury security."
+
+    "Term to maturity at issue" for a re-opening tranche is measured from THAT tranche's issue date,
+    which is why this is computed from dates rather than parsed out of `security_term`: that string
+    runs to forms like "29-Year 6-Month", and a parser keeping only the leading number rounds DOWN
+    -- the permissive direction for a cap, i.e. the direction that admits bonds that cannot be
+    delivered.
+
+    Measured on the two CUSIPs CME's published conversion-factor file named and this repo missed:
+    912828Z78 (7-Year issued 2020-01-31, reopened as a 5-Year 2022-01-31 -> 60 months) and
+    91282CGQ8 (7-Year issued 2023-02-28, reopened as a 5-Year 2025-02-28 -> 60 months).
+    """
+    out = df.copy()
+    if "cusip" not in out.columns or "issue_date" not in out.columns or "maturity_date" not in out.columns:
+        out["reopened_term_months"] = pd.NA
+        out["reopened_issue_date"] = pd.NaT
+        return out
+
+    issue = pd.to_datetime(out["issue_date"], errors="coerce")
+    maturity = pd.to_datetime(out["maturity_date"], errors="coerce")
+    months = (maturity.dt.year - issue.dt.year) * 12 + (maturity.dt.month - issue.dt.month)
+    months = months.where(maturity.dt.day >= issue.dt.day, months - 1)
+    out["_tranche_term_months"] = months.where(issue.notna() & maturity.notna())
+
+    valid = out[out["_tranche_term_months"].notna()]
+    if valid.empty:
+        out["reopened_term_months"] = pd.NA
+        out["reopened_issue_date"] = pd.NaT
+    else:
+        shortest = valid.loc[valid.groupby("cusip")["_tranche_term_months"].idxmin()]
+        out["reopened_term_months"] = out["cusip"].map(dict(zip(shortest["cusip"], shortest["_tranche_term_months"])))
+        out["reopened_issue_date"] = out["cusip"].map(dict(zip(shortest["cusip"], shortest["issue_date"])))
+    return out.drop(columns=["_tranche_term_months"])
+
+
 def _fetch_auctions_raw_fiscaldata(as_of: Union[datetime.date, Literal["all"]], term_strings: List[str]) -> pd.DataFrame:
     base = "https://api.fiscaldata.treasury.gov/services/api/fiscal_service/v1/accounting/od/auctions_query?"
     terms_csv = ",".join(term_strings)
@@ -135,6 +180,13 @@ def _fetch_fiscaldata(
     if df.empty:
         return pd.DataFrame()
 
+    # A CUSIP can be auctioned more than once. Collapsing to the EARLIEST tranche is right for the
+    # label and the original term, but it destroys the RE-OPENING information CBOT's deliverable
+    # grade turns on: a 7-year note reopened later as a 5-year becomes deliverable into ZF from the
+    # reopening's issue date (Chapters 20/21 carry that clause today, 19/26 from March 2026).
+    # Keying eligibility off `oi` alone made the basket miss 912828Z78 from CME's own published
+    # ZTH25 grade and 91282CGQ8 from ZFH25. So carry the shortest tranche forward alongside it.
+    df = _add_reopening_columns(df)
     df = df.sort_values(["cusip", "issue_date"]).drop_duplicates(subset=["cusip"], keep="first")
     if fetch_as_of != "all":
         df = df[df["maturity_date"] > process_as_of].copy()
@@ -145,7 +197,18 @@ def _fetch_fiscaldata(
     df = _add_label_column(df)
     keep = [
         c
-        for c in ["record_date", "label", "cusip", "rank", "original_security_term", "auction_date", "issue_date", "maturity_date", "ttm_y", "int_rate"]
+        # `inflation_index_security` and `floating_rate` are kept so the CBOT fixed-principal grade
+        # (no TIPS, no FRNs) can be enforced where a basket is BUILT, not only by the server-side
+        # filter in _fetch_auctions_raw_fiscaldata. Both are exact partitions of the dataset.
+        # `security_type` is NOT kept: measured, the API returns the identical 2,375 rows with and
+        # without it, because TIPS ride as security_type='Note'/'Bond'.
+        # `reopened_*` carry the shortest tranche, which CBOT's re-opening clause turns on.
+        for c in [
+            "record_date", "label", "cusip", "rank", "original_security_term", "auction_date",
+            "issue_date", "maturity_date", "ttm_y", "int_rate",
+            "inflation_index_security", "floating_rate",
+            "reopened_term_months", "reopened_issue_date",
+        ]
         if c in df.columns
     ]
     df = df[keep].copy()
