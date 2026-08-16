@@ -93,7 +93,7 @@ path**, so the ~60 sibling worktrees running older code are unaffected.
 |---|---|---|
 | `notebooks/sdr/_cache/trade_tape` | 10.26 GB / 4,553 files | ✅ verified (count + bytes exact) |
 | `sdr_cache` | 2.49 GB / 12,325 files | ✅ verified (hash-sampled, 41 files incl. the largest) |
-| `BT/signals/_ustf_basis_cache` | 4 files | ✅ verified |
+| `BT/signals/_ustf_basis_cache` | 4 files | ↩️ **moved, then reverted — it is tracked in git** |
 | `data/ts` | 8.98 GB / 1,921,159 files | ⛔ **stays on `C:`, pinned** — see below |
 
 Set at **User** scope:
@@ -110,6 +110,24 @@ would point the computed-timeseries store at an empty `D:` directory, which read
 cache rather than as an error.
 
 ---
+
+### A mistake, caught and undone
+
+`BT/signals/_ustf_basis_cache` was moved to `D:` — and it should not have been. Four parquet
+panels under it are **tracked in git**. The move showed up as four deletions in the primary
+checkout's `git status`.
+
+The rule had already been written down ("tracked → never move") and the check had already been
+run: `git check-ignore` reported the directory *not ignored*. The failure was acting on the
+directory's name rather than on the answer the check gave.
+
+Restored from `HEAD` and verified **byte-identical (SHA-256)** against the copies that had been
+written to `D:`, so nothing was lost; the stray `D:` copy is deleted, and the routing change for
+that one store is reverted. Every other relocated directory was then audited against
+`git ls-files` — `notebooks/sdr/_cache`, `sdr_cache`, `data/ts`, `data`, `notebooks/data` all
+return **zero** tracked files. This was the only one.
+`tests/test_storage_paths.py::test_no_tracked_directory_is_routed_off_the_checkout` now fails if
+it is ever routed off the checkout again.
 
 ## Verification
 
@@ -154,11 +172,18 @@ Two defects fixed that had nothing to do with the drive:
 
 ### Test gate
 
-`8,311 passed, 1 failed`. The failure —
-`test_citivelo_read_path_perf.py::test_fixings_kwargs_resolve_once_per_wrapper` — is
-**pre-existing**: a clean `origin/main` worktree with none of these changes fails the identical
-test (`8,394 passed, 1 failed`). It passes in isolation and with its own file, so it is a
-full-suite ordering effect that predates this work.
+`8,629 passed, 3 failed` on the final code. **All three failures are pre-existing**, each
+confirmed against a checkout without these changes:
+
+- `test_citivelo_read_path_perf.py::test_fixings_kwargs_resolve_once_per_wrapper` — a clean
+  `origin/main` worktree fails the identical test (`8,394 passed, 1 failed`). It passes in
+  isolation and with its own file, so it is a full-suite ordering effect.
+- `test_citivelo_bond_source.py::test_an_eod_request_is_cached_and_a_live_one_is_not` and
+  `::test_the_live_reference_date_comes_from_the_wire_zone_not_the_machine` — both fail
+  identically on the parent commit `d1253fd5` with none of the follow-up applied. The error is a
+  `TypeError: cannot convert the series to <class 'float'>` inside
+  `MDP/CitiVelocityExcel/bonds/fetcher.py:979`, which is unrelated to storage paths. **These two
+  are worth a look independently of this work.**
 
 ---
 
