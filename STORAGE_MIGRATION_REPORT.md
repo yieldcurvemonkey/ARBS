@@ -163,17 +163,27 @@ full-suite ordering effect that predates this work.
 
 ## Outstanding
 
-**1. `Cache\diskcache` — 27.31 GB, still on `C:`.** Blocked by a directory handle held by one
-of the two VS Code Jupyter kernels the user has had open since 19:44. Killing it would discard
-their notebook state, which is not a trade worth making for disk space that is no longer
-scarce. After restarting those kernels:
+**1. `Cache\diskcache` — 27.31 GB, still on `C:`. Recommendation: leave it there.**
 
-```powershell
-pwsh -File <scratchpad>\appdata_swap_children.ps1   # re-run; it skips what is already junctioned
-```
+It was blocked by a directory handle held by one of the two VS Code Jupyter kernels open since
+19:44, and killing that would have discarded the user's notebook state. But the arithmetic has
+since changed the answer from "finish it later" to "don't":
 
-Add `'Cache\diskcache'` to the `$children` list first — it was omitted precisely because it was
-locked.
+**`D:` is now the tighter drive.** `C:` has ~155 GB free; `D:` has ~50 GB. And `D:` costs more
+per byte than the logical size suggests — 1.92 M tiny files in `data/ts` consumed ~14 GB for
+8.98 GB of data, about **1.6×**, because each file rounds up to a whole cluster. Moving another
+27 GB across would leave `D:` near 20 GB while `C:` sat above 180 GB. That is the original
+problem with the drives swapped.
+
+So this is only worth doing if `C:` gets tight again. If it does, restart the kernels, add
+`'Cache\diskcache'` to the `$children` list in `<scratchpad>\appdata_swap_children.ps1` (it was
+omitted precisely because it was locked), and re-run — the script skips whatever is already
+junctioned.
+
+Note for whoever restarts those kernels: they also captured the old repo-relative `data/ts`
+constant at import time, so a notebook cell writing computed-timeseries *after* the move would
+write into a fresh empty `C:` tree. Restart them before touching that store from those
+notebooks.
 
 **2. `data/ts` — 8.98 GB / 1.92 M files, migration launched and running.** It was blocked
 earlier by the same kernels and freed up later. The script copies, verifies a zero residual, and
