@@ -15,8 +15,9 @@ import warnings
 warnings.filterwarnings("ignore")
 
 from SDRUtils.data.builder import SDRDataBuilder
+from utils.storage_paths import repo_store
 
-CACHE = r"C:/Users/chris/clee/ARBS/sdr_cache"
+CACHE = str(repo_store("sdr_cache", env_var="ARBS_SDR_CACHE_DIR"))
 
 
 def main() -> int:

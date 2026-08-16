@@ -35,6 +35,7 @@ from .fomc import (
 from ..core.tenors import get_imm_label
 from ..core.underlier_canonical import canonical_underlier_key
 from Query.IRSwaps._CME_INVOICE_SWAP_TICKERS import invoice_swap_product_label
+from utils.storage_paths import repo_store
 from .intraday import trade_clustering
 from .seasonality import add_event_classifications
 from .trade_quality import TradeQualityFlag, flag_outliers
@@ -118,9 +119,13 @@ def _pretty_forward(fwd: str) -> str:
         if short:
             return f"FOMC {short}"
     return fwd
-DEFAULT_CACHE_DIR = os.path.join(
-    os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
-    "notebooks", "sdr", "_cache", "trade_tape",
+#: 10.26 GB in 4,553 pickles as of 2026-08-15 -- 94% of everything under
+#: ``notebooks/``, written by this library module reaching sideways out of
+#: ``SDRUtils/`` into the notebook tree. Routed through the shared resolver so
+#: it can leave the system drive; the historical location is still the default
+#: when neither ``ARBS_TRADE_TAPE_CACHE`` nor ``ARBS_DATA_ROOT`` is set.
+DEFAULT_CACHE_DIR = str(
+    repo_store("notebooks", "sdr", "_cache", "trade_tape", env_var="ARBS_TRADE_TAPE_CACHE")
 )
 
 

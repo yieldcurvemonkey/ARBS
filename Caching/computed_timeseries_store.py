@@ -11,10 +11,16 @@ from typing import TYPE_CHECKING, Any, Iterable, List, Mapping, Optional, Sequen
 import pandas as pd
 
 from Caching.timeseries_cache import WriteOptions, append_timeseries, append_timeseries_many, read_timeseries
+from utils.storage_paths import repo_store
 
 DateLike = Union[datetime.date, datetime.datetime]
 REPO_ROOT = Path(__file__).resolve().parents[1]
-DEFAULT_COMPUTED_TS_BASE_DIR = REPO_ROOT / "data" / "ts"
+
+#: 8.98 GB across 1.9 M files as of 2026-08-15, which is why it is the first
+#: store routed off the checkout. ``ARBS_COMPUTED_TS_DIR`` pins it alone;
+#: ``ARBS_DATA_ROOT`` moves it along with its peers; neither set keeps the
+#: historical ``<repo>/data/ts``. See :mod:`utils.storage_paths`.
+DEFAULT_COMPUTED_TS_BASE_DIR = repo_store("data", "ts", env_var="ARBS_COMPUTED_TS_DIR")
 
 logger = logging.getLogger(__name__)
 

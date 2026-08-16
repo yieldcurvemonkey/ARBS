@@ -110,7 +110,10 @@ SPECIAL_TENOR_COLORS = {
     "INVOICE_SWAP": "#B279A2",
 }
 
-DEFAULT_CACHE_PATH = "C:/sdr_cache"
+#: Was ``C:/sdr_cache`` -- a 274 MB store at the root of a system drive that ran
+#: to 2 GB free. ``ARBS_SDR_TAPE_CACHE`` overrides; the old location survives as
+#: a junction so an older worktree still resolves it.
+DEFAULT_CACHE_PATH = os.environ.get("ARBS_SDR_TAPE_CACHE", r"D:\ARBS_DATA\sdr_cache_root")
 
 
 # ---------------------------------------------------------------------------
