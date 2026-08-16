@@ -94,19 +94,20 @@ path**, so the ~60 sibling worktrees running older code are unaffected.
 | `notebooks/sdr/_cache/trade_tape` | 10.26 GB / 4,553 files | ✅ verified (count + bytes exact) |
 | `sdr_cache` | 2.49 GB / 12,325 files | ✅ verified (hash-sampled, 41 files incl. the largest) |
 | `BT/signals/_ustf_basis_cache` | 4 files | ✅ verified |
-| `data/ts` | 8.98 GB / 1,921,159 files | ⏳ **running** (see below) |
+| `data/ts` | 8.98 GB / 1,921,159 files | ⛔ **stays on `C:`, pinned** — see below |
 
 Set at **User** scope:
 
 ```
 ARBS_DATA_ROOT        = D:\ARBS_DATA\repo
-ARBS_COMPUTED_TS_DIR  = C:\Users\chris\clee\ARBS\data\ts     # temporary pin — remove when data\ts lands
+ARBS_COMPUTED_TS_DIR  = C:\Users\chris\clee\ARBS\data\ts     # PERMANENT — keeps data/ts on C:
 ARBS_CACHE_DIR        = (deliberately unset)
 ```
 
-The `ARBS_COMPUTED_TS_DIR` pin matters: without it `ARBS_DATA_ROOT` would point the
-computed-timeseries store at an empty `D:` directory, which reads as a cold cache rather than
-an error. **Delete that variable once `data/ts` finishes moving.**
+**Do not delete `ARBS_COMPUTED_TS_DIR`.** It is what holds `data/ts` on `C:` while every other
+repo-relative store lives on `D:` — see item 2 under *Outstanding*. Without it `ARBS_DATA_ROOT`
+would point the computed-timeseries store at an empty `D:` directory, which reads as a cold
+cache rather than as an error.
 
 ---
 
@@ -185,11 +186,26 @@ constant at import time, so a notebook cell writing computed-timeseries *after* 
 write into a fresh empty `C:` tree. Restart them before touching that store from those
 notebooks.
 
-**2. `data/ts` — 8.98 GB / 1.92 M files, migration launched and running.** It was blocked
-earlier by the same kernels and freed up later. The script copies, verifies a zero residual, and
-only then deletes the staging tree; if it reports `MISMATCH`, the staging copy is intact and the
-rollback is a single `Rename-Item` printed in its output. **Check
-`<scratchpad>\data_ts_move.log`, then delete the `ARBS_COMPUTED_TS_DIR` variable.**
+**2. `data/ts` — 8.98 GB / 1.92 M files. Attempted, measured, and deliberately rolled back.**
+
+The move ran, and while it ran it was measured: it had consumed **24.5 GB of `D:` for 8.98 GB
+of logical data and was not finished** — roughly **3×**, because every one of 1.92 M files
+rounds up to a whole cluster. Copying a 9 GB store at a 3× cost onto the drive with *less*
+headroom, in order to free 9 GB on a drive that by then had 155 GB, is a worse position than
+not moving it. So it was stopped and reverted.
+
+Reverting was safe by construction: the script **copies** rather than `/MOVE`s, so the renamed
+staging tree was complete and untouched the whole time. Rollback was one `Rename-Item`, and the
+restored tree was confirmed to hold all 7,633 asset directories. The partial `D:` copy was
+deleted.
+
+`ARBS_COMPUTED_TS_DIR=C:\Users\chris\clee\ARBS\data\ts` is therefore **permanent, not
+temporary** — it is what keeps this one store on `C:` while its peers live on `D:`. Do not
+delete it.
+
+This is also why `_resolve_computed_timeseries_base_dir` routes the longhand `"./data/ts"`
+through the store's own variable rather than through `ARBS_DATA_ROOT` (PR #464): the two point
+at different drives on purpose.
 
 ---
 
