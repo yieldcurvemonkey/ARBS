@@ -116,6 +116,42 @@ def test_absolute_base_dir_ignores_the_data_root(monkeypatch, tmp_path):
     assert res(str(tmp_path)) == tmp_path
 
 
+def test_no_tracked_directory_is_routed_off_the_checkout(monkeypatch):
+    """A store whose contents are committed must resolve inside the checkout.
+
+    ``BT/signals/_ustf_basis_cache`` is named like a cache and holds four
+    parquet panels that are *tracked in git*. Routing it through the shared data
+    root moved those files out of the working tree -- four deletions in
+    ``git status`` -- and split the directory across two drives. "Not
+    gitignored" is the test a store has to pass before it can be relocated, and
+    this one fails it.
+    """
+    import subprocess
+
+    monkeypatch.setenv(DATA_ROOT_ENV, r"D:\ARBS_DATA\repo")
+
+    import importlib
+
+    import BT.signals.ustf_basis as ub
+
+    importlib.reload(ub)
+    try:
+        cache = Path(ub._CACHE_DIR)
+        assert REPO_ROOT in cache.parents, f"{cache} escaped the checkout"
+
+        tracked = subprocess.run(
+            ["git", "-C", str(REPO_ROOT), "ls-files", "BT/signals/_ustf_basis_cache"],
+            capture_output=True,
+            text=True,
+            check=False,
+        ).stdout.split()
+        if tracked:  # skip the assertion in a checkout that never committed them
+            assert cache.exists(), "tracked panels must live where the code looks for them"
+    finally:
+        monkeypatch.delenv(DATA_ROOT_ENV, raising=False)
+        importlib.reload(ub)
+
+
 def test_callers_agree_with_the_resolver(monkeypatch):
     """The modules that were rewired read the same location the resolver names."""
     monkeypatch.setenv(DATA_ROOT_ENV, r"D:\ARBS_DATA\repo")
