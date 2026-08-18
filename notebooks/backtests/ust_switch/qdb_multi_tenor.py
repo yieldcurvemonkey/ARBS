@@ -123,7 +123,32 @@ def build_schedule(panel: pd.DataFrame, amap: pd.DataFrame, tenor: int) -> tuple
              "cusip_old": str(r_o["cusip"]), "cusip_young": str(r_y["cusip"]),
              "fee_bp": float(fee)}
         )
-    return dates, cycles, skipped
+
+    # Align QDB's information set with the vectorised engine's: a cycle only ever marks
+    # on days where BOTH its legs have a gated panel row, and its exit steps BACK to the
+    # last such day. Without this, QDB prices through days the panel could not -- measured
+    # consequence: on 2023-12-04 the 20y old leg printed a ~50bp-rich mark (4.02% vs a
+    # 4.52% market) that passed the 100bp cross-rank gate while the young leg's row was
+    # absent entirely; the vectorised engine's per-CUSIP date intersection skipped the
+    # day, but QDB unwound ON it and baked +15.3bp into realized -- 6x the tenor's true
+    # annual P&L, from one mark.
+    by_cusip_dates = {c: set(g) for c, g in p.groupby("cusip")["date"]}
+    kept, grid_days = [], set()
+    for c in cycles:
+        valid = by_cusip_dates.get(c["cusip_old"], set()) & by_cusip_dates.get(c["cusip_young"], set())
+        ok = [d for d in dates if c["entry"] <= d <= c["exit"] and d in valid]
+        if len(ok) < 3:
+            skipped += 1
+            continue
+        c["entry"], c["exit"] = ok[0], ok[-1]
+        kept.append(c)
+        grid_days.update(ok)
+    # The grid is the UNION of the cycles' own valid day-sets, not the tenor's full date
+    # list. A day one cycle's legs cannot price may be another cycle's (adjusted) entry
+    # day, so filtering the shared list would silently kill that entry; the union keeps
+    # each cycle's days independent. Days outside every cycle carry no positions and add
+    # nothing but flat equity, so losing them costs nothing.
+    return pd.DatetimeIndex(sorted(grid_days)), kept, skipped
 
 
 # ------------------------------------------------------------------ QDB

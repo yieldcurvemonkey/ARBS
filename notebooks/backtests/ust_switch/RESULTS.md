@@ -89,6 +89,32 @@ multiple-testing correction. +9.7 of its +24.7 total bp came from 2010 alone.
    best cell (t=3.4) and December is negative, but pooled across configs nothing
    survives that isn't better explained by cycle position.
 
+## QueryDrivenBacktest: per-tenor every-cycle equity curves
+
+The same trade run END TO END through the repo's own engine — one QDB pass per tenor,
+every auction cycle, pinned per-cycle CUSIPs, $1/bp legs (equity natively bp), SR1170
+fees at unwind, grid restricted to days both legs actually price (without that
+restriction one bad 20y mark on 2023-12-04, ~50bp rich and inside the 100bp gate, baked
++15.3bp into a book whose true annual P&L is ~2bp):
+
+| tenor | trades | QDB zero-financing (bp) | net of per-issue financing (bp) | net/trade | vectorised net/trade |
+|---|---|---|---|---|---|
+| 2Y | 187 | −46.99 | −195.61 | −1.046 | −1.004 |
+| 3Y | 197 | −141.64 | −183.90 | −0.934 | −0.921 |
+| 5Y | 189 | −102.39 | −155.16 | −0.821 | −0.814 |
+| 7Y | 197 | −176.37 | −186.01 | −0.944 | −0.940 |
+| 10Y | 65 | **+40.40** | −1.36 | −0.021 | −0.021 |
+| 20Y | 22 | −9.00 | −18.56 | −0.844 | −0.482 |
+| 30Y | 65 | −37.88 | −39.26 | −0.604 | −0.596 |
+
+Six of seven tenors agree with the vectorised engine to ≤0.05bp/trade; the 20Y differs
+by 0.36 (22 trades, 13–15y durations where the yield-space carry identity is roughest —
+the engines bracket it, and both say dead). The 10Y is the only tenor where the
+zero-financing book is even positive — +40bp over 16 years — and per-issue financing
+takes all of it. Splitting the same books into odd/even cycles halves each tenor's loss
+almost exactly: the losses are cost-driven and scale with trade count, not with any
+particular subset of cycles. Figures 13–15; artefacts in `_out/qdb/`.
+
 ## Validation chain (all pass)
 
 | check | result |
