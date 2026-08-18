@@ -226,7 +226,20 @@ def summarize(name, tenor, pair, instrument, direction, entry_off, exit_rule, zf
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--min-trades", type=int, default=8)
+    ap.add_argument("--start", default=None, help="clip cycles to entries >= this date")
+    ap.add_argument("--end", default=None)
+    ap.add_argument("--no-z", action="store_true",
+                    help="every-new-issue signals only: drop the z-filter axis, so every "
+                         "config trades every auction cycle rather than a hand-picked few")
+    ap.add_argument("--out-suffix", default="")
     a = ap.parse_args(argv)
+    global OUT, ZFILTERS
+    if a.out_suffix:
+        OUT = OUT.with_name(OUT.name + a.out_suffix)
+    if a.no_z:
+        ZFILTERS = (None,)
+    clip_lo = pd.Timestamp(a.start) if a.start else None
+    clip_hi = pd.Timestamp(a.end) if a.end else None
     OUT.mkdir(parents=True, exist_ok=True)
 
     panel = pd.read_parquet(HERE / "_data" / "prepared_panel.parquet")
@@ -248,6 +261,12 @@ def main(argv=None) -> int:
             if not (SEGS / f"segs_{tenor}_{pair}.parquet").exists():
                 continue
             pdata = PairData(tenor, pair, panel, mms)
+            if clip_lo is not None or clip_hi is not None:
+                pdata.cycles = {
+                    ci: c for ci, c in pdata.cycles.items()
+                    if (clip_lo is None or c["dates"][0] >= clip_lo)
+                    and (clip_hi is None or c["dates"][-1] <= clip_hi)
+                }
             instruments = ["bond"] + (["mms"] if mms is not None else [])
             for inst in instruments:
                 swap_costs = (0.0, SWAP_RT_BP) if inst == "mms" else (0.0,)
@@ -291,6 +310,17 @@ def main(argv=None) -> int:
     with open(OUT / "effective_trials.json", "w") as f:
         json.dump({k: (float(v) if isinstance(v, (int, float)) else str(v))
                    for k, v in eff.items()}, f, indent=2)
+
+    # canonical every-new-issue daily MTM per (tenor, instrument): CTvO, long old,
+    # e1, exit next roll -- the series the bond-vs-box figure draws.
+    canon = {}
+    for nm, d in daily_by_name.items():
+        parts = nm.split("_")
+        if ("CTvO" in nm and "_LO_" in nm and "_e1_" in nm and "next_roll" in nm
+                and not nm.endswith("_z") and "sc0_" not in nm):
+            canon[nm] = d.cumsum()
+    if canon:
+        pd.DataFrame(canon).to_parquet(OUT / "canonical_equity.parquet")
 
     # save winners' daily series for figures
     top = league.head(40)
