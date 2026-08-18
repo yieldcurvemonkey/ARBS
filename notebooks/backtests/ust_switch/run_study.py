@@ -68,6 +68,40 @@ def main(argv=None) -> int:
     print(f"rows with MEASURED financing: {panel['has_actual_financing'].mean():.1%} "
           f"(JPM window 2016-08-10 .. 2025-08-26)")
 
+    # ---------------------------------------------------------------- 1b. QC
+    # Before anything is measured on these spreads, check they ARE spreads. The 100bp
+    # cross-rank gate catches a yield solved onto the wrong root; it cannot catch one that
+    # is merely 10bp wrong, and 10bp on a series whose true sd is 0.86bp is still fatal.
+    # Lag-1 autocorrelation is the discriminator: a real rank spread runs 0.85-0.99, and
+    # the same series with one bad row in 2,004 runs 0.014.
+    hdr("1b. QC -- is each rank spread a real series, or noise?")
+    qc_rows = []
+    for tenor in G.TENORS:
+        pt = panel[panel["tenor"] == tenor]
+        if pt.empty:
+            continue
+        piv = pt.pivot_table(index="date", columns="rank", values="YTM", aggfunc="first") * 100.0
+        for ry, ro in G.PAIRS:
+            if ry not in piv.columns or ro not in piv.columns:
+                continue
+            ser = (piv[ro] - piv[ry]).dropna()
+            if len(ser) < 50:
+                continue
+            dser = ser.diff().dropna()
+            qc_rows.append({
+                "tenor": tenor, "pair": f"{'CT O OO OOO'.split()[ry]}v{'CT O OO OOO'.split()[ro]}",
+                "n": len(ser), "mean_bp": ser.mean(), "sd_bp": ser.std(ddof=1),
+                "autocorr1": ser.autocorr(1), "daily_chg_sd_bp": dser.std(ddof=1),
+            })
+    qc = pd.DataFrame(qc_rows)
+    qc.to_csv(OUT / "qc_panel.csv", index=False)
+    print(qc.round(4).to_string(index=False))
+    bad_qc = qc[qc["autocorr1"] < 0.50]
+    print(f"\ncells with lag-1 autocorr < 0.50: {len(bad_qc)} of {len(qc)}"
+          + ("  *** residual corruption, do not believe results on these ***" if len(bad_qc) else "  (none)"))
+    if len(bad_qc):
+        print(bad_qc.round(4).to_string(index=False))
+
     # ---------------------------------------------------------------- 2. raw object
     hdr("2. THE RAW OBJECT -- yield pickup over the on-the-run, before any trading rule")
     ts = {t: A.spread_term_structure(panel, t) for t in G.TENORS}

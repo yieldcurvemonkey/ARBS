@@ -156,6 +156,11 @@ def _sanity_check_model(model: pd.DataFrame, panel: pd.DataFrame) -> pd.DataFram
 #: they cannot differ by a full percent. 100bp is therefore a catastrophe detector, not a
 #: tuned threshold; nothing legitimate is anywhere near it.
 MAX_CROSS_RANK_YTM_DEV_BP = 100.0
+#: A US Treasury clean price. Observed range on the 2010-2026 panel: 79.9 (1st pct) to
+#: 146.5 (max). 20/200 is a catastrophe bound, not a tuned one.
+MIN_CLEAN_PRICE, MAX_CLEAN_PRICE = 20.0, 200.0
+#: No UST has printed outside this. The 1981 peak was ~15%; the US never went negative.
+MIN_YTM_PCT, MAX_YTM_PCT = -1.0, 25.0
 
 
 def gate_ytm(panel: pd.DataFrame, *, verbose: bool = True) -> pd.DataFrame:
@@ -184,12 +189,31 @@ def gate_ytm(panel: pd.DataFrame, *, verbose: bool = True) -> pd.DataFrame:
     p = panel.copy()
     med = p.groupby(["date", "tenor"])["YTM"].transform("median")
     dev_bp = (p["YTM"] - med).abs() * 100.0
-    bad = dev_bp > MAX_CROSS_RANK_YTM_DEV_BP
+    bad_xrank = dev_bp > MAX_CROSS_RANK_YTM_DEV_BP
+
+    # Two INDEPENDENT backstops. On the 2010-2026 panel they are redundant -- the
+    # cross-rank test alone caught all 283 bad rows, i.e. the union equals its own count --
+    # but redundancy here is luck, not design, and the luck is visible in the data:
+    #
+    #   2014-09-12, 2014-11-21, 2026-07-09: FedInvest returns CLEAN_PRICE = 0.00 for EVERY
+    #   rank of a tenor at once, and QuantLib solves yields of 3917%, 1890%, 1727%, 1974%
+    #   against them. The cross-rank test only fires because those four garbage numbers
+    #   disagree with EACH OTHER. Had the solver failed identically on all four, the median
+    #   would have been garbage too and nothing would have fired.
+    #
+    # So gate the price directly: a US Treasury does not trade at 0, and has never traded
+    # below 20 or above 200 in this sample (observed range 79.9 at the 1st percentile to
+    # 146.5 at the maximum). And bound the yield: no UST has ever printed outside
+    # [-1%, 25%] -- the 1981 peak was ~15% and the US never went negative.
+    bad_price = ~p["CLEAN_PRICE"].between(MIN_CLEAN_PRICE, MAX_CLEAN_PRICE)
+    bad_ytm = ~p["YTM"].between(MIN_YTM_PCT, MAX_YTM_PCT)
+
+    bad = bad_xrank | bad_price | bad_ytm
     n = int(bad.sum())
     if verbose:
-        print(f"[ytm gate] dropping {n} bond-days of {len(p):,} "
-              f"({n / max(len(p), 1):.4%}) whose yield differs from the same-day, "
-              f"same-tenor median by > {MAX_CROSS_RANK_YTM_DEV_BP:.0f}bp")
+        print(f"[ytm gate] dropping {n} bond-days of {len(p):,} ({n / max(len(p), 1):.4%})  "
+              f"[cross-rank {int(bad_xrank.sum())} | price {int(bad_price.sum())} | "
+              f"ytm-bound {int(bad_ytm.sum())}]")
         if n:
             show = p.loc[bad, ["date", "tenor", "rank", "cusip", "cpn", "CLEAN_PRICE", "YTM"]]
             print(show.head(12).to_string(index=False))
