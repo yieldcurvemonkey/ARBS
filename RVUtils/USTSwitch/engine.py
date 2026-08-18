@@ -356,10 +356,16 @@ def _entry_zscore(by_dr, cfg: SwitchConfig, entry: pd.Timestamp, all_dates) -> O
     if len(win) < max(20, cfg.z_window // 3):
         return None
     try:
-        sub = by_dr.loc[(win, [cfg.rank_young, cfg.rank_old]), ["YTM", "rank"]]
+        # `rank` is an INDEX level here, not a column -- asking for it in the column
+        # selector raises KeyError. Select the value only and recover the level via
+        # reset_index.
+        sub = by_dr.loc[(win, slice(None)), ["YTM"]].reset_index()
     except KeyError:
         return None
-    piv = sub.reset_index().pivot_table(index="date", columns="rank", values="YTM", aggfunc="first")
+    sub = sub[sub["rank"].isin([cfg.rank_young, cfg.rank_old])]
+    if sub.empty:
+        return None
+    piv = sub.pivot_table(index="date", columns="rank", values="YTM", aggfunc="first")
     if cfg.rank_young not in piv.columns or cfg.rank_old not in piv.columns:
         return None
     ser = (piv[cfg.rank_old] - piv[cfg.rank_young]) * 100.0

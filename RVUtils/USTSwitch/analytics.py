@@ -290,3 +290,57 @@ def verdict_row(row: pd.Series, *, dsr_threshold: float = 0.95) -> str:
     if np.isfinite(dsr) and dsr < dsr_threshold:
         return "SELECTION-ARTIFACT"
     return "UNKNOWN"
+
+
+def deflate_with_effective_trials(
+    daily_by_name: Dict[str, pd.Series],
+    *,
+    method: str = "bailey",
+    max_series: int = 400,
+    seed: int = 12345,
+) -> Dict[str, float]:
+    """DSR of the grid's WINNER, judged against the grid's own correlation structure.
+
+    Two trial counts are honest and they bracket the answer, so both are reported:
+
+    * the RAW count -- every configuration evaluated. Correct if the configurations were
+      independent experiments. They are emphatically not: the same seven tenors are
+      re-paired six ways and swept over neighbouring entry offsets, so adjacent cells hold
+      almost the same positions on almost the same days.
+    * the EFFECTIVE count from ``RVUtils/StatisticalFinance/deflated_sharpe.effective_trials``,
+      which reduces M correlated trials to N independent ones via their return correlation.
+
+    ``effective_trials`` needs more observations than trials to estimate a correlation
+    matrix at all, so the grid is subsampled to ``max_series`` when it is larger --
+    deterministically, by rank, not randomly, because a seeded RNG consumed positionally is
+    not reproducibility if the row order moves (a trap this repo has already been bitten by).
+    """
+    from RVUtils.StatisticalFinance.deflated_sharpe import (
+        deflated_sharpe_of_best,
+        effective_trials,
+    )
+
+    names = sorted(daily_by_name)
+    series = [np.asarray(daily_by_name[n].dropna().values, float) for n in names]
+    keep = [(n, s) for n, s in zip(names, series) if len(s) > 2 and np.isfinite(s).all() and s.std(ddof=1) > 0]
+    if len(keep) < 2:
+        return {}
+    if len(keep) > max_series:
+        step = len(keep) / max_series
+        keep = [keep[int(i * step)] for i in range(max_series)]
+    mats = [s for _, s in keep]
+    out: Dict[str, float] = {"n_raw_trials": len(daily_by_name), "n_series_used": len(mats)}
+    try:
+        out["n_effective_trials"] = float(
+            effective_trials(mats, method=method, rng=np.random.default_rng(seed))
+        )
+    except Exception as exc:
+        out["effective_trials_error"] = str(exc)
+    try:
+        best = deflated_sharpe_of_best(
+            mats, use_effective_n=True, method=method, rng=np.random.default_rng(seed)
+        )
+        out.update({f"best_{k}": v for k, v in best.items() if isinstance(v, (int, float))})
+    except Exception as exc:
+        out["dsr_of_best_error"] = str(exc)
+    return out

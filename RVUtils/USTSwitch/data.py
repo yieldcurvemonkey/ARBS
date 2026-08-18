@@ -47,6 +47,10 @@ def load_prepared(
     for c in ("date", "issue_date", "maturity_date"):
         panel[c] = pd.to_datetime(panel[c])
 
+    # BEFORE anything else touches the yields. A solver-failure row propagates into the
+    # specialness model, the term structure and every trade that spans it.
+    panel = gate_ytm(panel)
+
     repo = load_repo_panel()
     panel = attach_financing(panel, repo, horizon=repo_horizon)
     panel = attach_gc_fallback(panel)
@@ -144,3 +148,50 @@ def _sanity_check_model(model: pd.DataFrame, panel: pd.DataFrame) -> pd.DataFram
                                aggfunc="median")
         print(piv.round(2).to_string().replace("\n", "\n                    "))
     return out
+
+
+#: Maximum plausible yield difference between two bonds of the same original-issue tenor
+#: at adjacent ranks. Their maturities are one auction cycle apart -- at most ~3 months for
+#: 10y/20y/30y and ~1 month at the front -- so even in the steepest curve regime on record
+#: they cannot differ by a full percent. 100bp is therefore a catastrophe detector, not a
+#: tuned threshold; nothing legitimate is anywhere near it.
+MAX_CROSS_RANK_YTM_DEV_BP = 100.0
+
+
+def gate_ytm(panel: pd.DataFrame, *, verbose: bool = True) -> pd.DataFrame:
+    """Drop bond-days whose yield is a solver failure rather than a market price.
+
+    Measured on the 2015-16 slice: 2015-01-02 prints ``YTM = -2.1158%`` for the 10y
+    on-the-run against a CLEAN PRICE of 101.19 and a 2.25% coupon. A negative yield on a
+    premium-priced Treasury is not a market state -- the US never printed one in this
+    sample -- it is QuantLib's yield solve landing on the wrong root.
+
+    One such row is not a rounding nuisance. The rank1-rank0 spread that day reads
+    **+422.7bp** against a true range of -1.6 to +1.5bp, and it turns the whole 2015-16
+    series into what looks like white noise: standard deviation 18.9bp with lag-1
+    autocorrelation 0.014. A backtest run over that panel would book a 422bp move on
+    whichever trade happened to span the date, and no amount of tuning downstream would
+    reveal why.
+
+    The test is CROSS-SECTIONAL rather than a level bound, because it needs no view on what
+    yields are possible in a given decade -- only on how far apart two nearly identical
+    bonds can be. The median of the four ranks is robust to one bad leg by construction.
+
+    Rows are DROPPED, not filled. The engine intersects each leg's dates, so a dropped day
+    simply is not marked; forward-filling would invent a price and zero-filling would
+    invent a return.
+    """
+    p = panel.copy()
+    med = p.groupby(["date", "tenor"])["YTM"].transform("median")
+    dev_bp = (p["YTM"] - med).abs() * 100.0
+    bad = dev_bp > MAX_CROSS_RANK_YTM_DEV_BP
+    n = int(bad.sum())
+    if verbose:
+        print(f"[ytm gate] dropping {n} bond-days of {len(p):,} "
+              f"({n / max(len(p), 1):.4%}) whose yield differs from the same-day, "
+              f"same-tenor median by > {MAX_CROSS_RANK_YTM_DEV_BP:.0f}bp")
+        if n:
+            show = p.loc[bad, ["date", "tenor", "rank", "cusip", "cpn", "CLEAN_PRICE", "YTM"]]
+            print(show.head(12).to_string(index=False))
+            print("  by tenor:", show.groupby("tenor").size().to_dict())
+    return p[~bad].reset_index(drop=True)

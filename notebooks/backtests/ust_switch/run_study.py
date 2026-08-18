@@ -163,6 +163,19 @@ def main(argv=None) -> int:
         alive = defl[defl["verdict"] == "ALIVE"]
         print(f"\nALIVE: {len(alive)} of {len(defl)}")
 
+    # The raw trial count treats every one of the 3,360 overlapping cells as an independent
+    # experiment, which over-deflates a grid whose neighbours hold nearly the same positions
+    # on nearly the same days. Both bounds are honest -- report both rather than pick the
+    # flattering one. Raw is the HARSHER direction, so it stays the headline.
+    eff = A.deflate_with_effective_trials({**daily, **pl_daily})
+    if eff:
+        print("\neffective-trial deflation (correlation-aware):")
+        for k, v in eff.items():
+            print(f"  {k:30s} {v}")
+        with open(OUT / "effective_trials.json", "w") as f:
+            json.dump({k: (float(v) if isinstance(v, (int, float)) else str(v))
+                       for k, v in eff.items()}, f, indent=2)
+
     # ---------------------------------------------------------------- 7. cost curve
     hdr("7. COST CURVE -- at what fraction of the assumed cost does it stop working")
     if len(defl):
