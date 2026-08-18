@@ -27,7 +27,7 @@ import pandas as pd  # noqa: E402
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[3]))
 
-from RVUtils.USTSwitch.costs import CostModel  # noqa: E402
+from RVUtils.USTSwitch.costs import CostModel, is_stressed  # noqa: E402
 from RVUtils.USTSwitch.data import load_prepared, select_financing  # noqa: E402
 from RVUtils.USTSwitch.engine import SwitchConfig, run_switch  # noqa: E402
 
@@ -69,9 +69,12 @@ def hand_compute(panel: pd.DataFrame, tr: pd.Series, cfg: SwitchConfig, cm: Cost
     # --- cost ----------------------------------------------------------------------
     md_old = float(old["MOD_DURATION"].iloc[0])
     md_young = float(young["MOD_DURATION"].iloc[0])
+    # Same stress flag the engine applies, or a trade that happens to straddle March 2020
+    # reconciles against the wrong cost table and the mismatch looks like an arithmetic bug.
+    stressed = is_stressed(tr["entry"]) or is_stressed(tr["exit"])
     cost_bp = (
-        cm.full_price_bp(cfg.tenor, cfg.rank_old) / md_old
-        + cm.full_price_bp(cfg.tenor, cfg.rank_young) / md_young
+        cm.full_price_bp(cfg.tenor, cfg.rank_old, stressed=stressed) / md_old
+        + cm.full_price_bp(cfg.tenor, cfg.rank_young, stressed=stressed) / md_young
     ) * cm.uncertainty_mult.get(cfg.tenor, 1.0) * cm.multiplier
 
     return {
