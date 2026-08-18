@@ -76,6 +76,33 @@ def main(argv=None) -> int:
     amap["maturity_date"] = pd.to_datetime(amap["maturity_date"])
 
     mdp = IRSwapsMDP(source="CITIVELO_EXCEL")
+
+    # BACKWARD-ONLY snapshots, bounded lag. The store's nearest-snapshot default will
+    # happily serve a curve stamped AFTER the requested instant (observed on the first
+    # run: a 10:30 request served from 34,200s ahead), and for an event study whose whole
+    # point is the 13:00 -> 13:30 auction jump, a future serve FABRICATES the jump at the
+    # earlier stamp. asof + allow_future=False forbids it; 12 minutes of tolerance covers
+    # the store's 10-minute cadence before 2024; on_miss="none" lets a dead stamp fall
+    # through to NaN handling instead of killing the whole event.
+    import datetime as _dt
+
+    from MDP.IRSwaps.CITIVELO_EXCEL.snapshot_policy import SnapshotPolicy
+
+    POLICY = SnapshotPolicy(method="asof", max_lag=_dt.timedelta(minutes=12),
+                            allow_future=False, on_miss="none")
+    for _name in ("get_data", "bulk_get_data"):
+        _orig = getattr(mdp, _name)
+
+        def _patched(request, *args, _o=_orig, **kw):
+            try:
+                request = dict(request)
+                request["snapshot_policy"] = POLICY
+            except Exception:
+                pass
+            return _o(request, *args, **kw)
+
+        setattr(mdp, _name, _patched)
+
     tb = IRSwapsTB(mdp, show_tqdm=False)
 
     tenors = tuple(int(x) for x in a.tenors.split(","))

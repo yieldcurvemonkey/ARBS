@@ -39,7 +39,9 @@ def main() -> int:
         axes = [axes]
     for ax, t in zip(axes, tenors):
         d = g[g["tenor"] == t].copy()
-        d["x"] = d["rel_day"] * len(STAMP_ORDER) + d["stamp"].map(
+        # 0-based day offset so the day-boundary guides and the 13:00 marker land on
+        # the data (rel_day runs -2..+2; the guides assume x starts at 0).
+        d["x"] = (d["rel_day"] + 2) * len(STAMP_ORDER) + d["stamp"].map(
             {s: i for i, s in enumerate(STAMP_ORDER)})
         d = d.sort_values("x")
         ax.plot(d["x"], d["mean"], color=F.PAL[1], lw=1.8, marker="o", ms=3)

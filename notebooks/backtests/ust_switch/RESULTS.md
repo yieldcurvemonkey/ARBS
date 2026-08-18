@@ -176,6 +176,37 @@ only after the ~3bp hedged appreciation has run (roll+10 by the daily evidence),
 intraday at or after the post-result richening -- not into the 13:00 print, where the
 concession is at its widest and the new issue at its cheapest.
 
+## Best intraday timestamps (measured, 124 auctions, Citi minute SOFR curve 2022-09..2026-08)
+
+Backward-only snapshots (asof, 12-min tolerance, no future serves -- the store's default
+nearest-snapshot policy DID serve future curves on the first run and was rejected).
+Sector rate level, + = cheaper; anchored to D-1 15:00 ET; auction result 13:00 ET.
+
+| tenor group | concession peak (cheapest) | release (richest in window) | 13:00->13:30 jump |
+|---|---|---|---|
+| 2Y (47 ev) | auction day 12:00-15:00 (+0.9 to +1.1bp) | **D+1 09:00 -> D+2 16:00** (-1.9 to -2.7bp) | -0.07bp (t=-0.6) |
+| 5Y (47 ev) | auction day 12:00-15:00 (+1.2 to +1.6bp) | D+1 09:00 -> D+2 16:00 (-1.6 to -2.2bp) | +0.04bp (t=+0.4) |
+| 10Y (15 ev) | D+2 09:00-10:30 (+2.5 to +3.0bp, refunding wave) | **D-1 13:15** (-0.6bp, post-3Y-result) | -0.20bp (t=-0.6) |
+| 30Y (15 ev) | D+2 09:00 (+2.7bp) | D-1 13:15 (-0.4bp) | -0.10bp (t=-0.4) |
+
+Three usable conclusions:
+
+1. **There is no 13:00 scalp.** The average result-window move is 0-0.2bp with t < 0.7
+   everywhere. The concession does not release at the print; at the front end it
+   releases OVERNIGHT into D+1 morning (a ~3bp swing from D 15:00 cheap to D+1 09:00
+   rich at 2Y), which is where the LYZ/w22461 appreciation lives intraday.
+2. **Front end**: establish the LONG (old) leg on auction day 12:00-15:00 ET at the
+   concession peak; establish the SHORT (new) leg no earlier than D+1 09:00, after the
+   overnight release -- and the daily bond-specific evidence pushes it to roll+10.
+3. **Long end (refunding week)**: the auctions stack (3Y -> 10Y -> 30Y), so the sector
+   keeps CHEAPENING through D+2; the richest moment in the window is D-1 13:15, right
+   after the preceding leg's result. A 10Y/30Y switch entered before the refunding wave
+   completes fights supply; enter D+2 or later (daily evidence: roll+10).
+
+Caveat, stated: these are SECTOR rate paths. Individual off-the-run intraday prices do
+not exist in this stack, so the bond-specific intraday component (the new issue vs the
+sector) is inferred from the daily cycle profile, not measured intraday.
+
 ## Validation chain (all pass)
 
 | check | result |
