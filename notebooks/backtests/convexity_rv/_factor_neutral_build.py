@@ -3,7 +3,8 @@
     python notebooks/backtests/convexity_rv/_factor_neutral_build.py leg 30Y
     python notebooks/backtests/convexity_rv/_factor_neutral_build.py legs        # all 8
     python notebooks/backtests/convexity_rv/_factor_neutral_build.py greeks
-    python notebooks/backtests/convexity_rv/_factor_neutral_build.py certify "5Y/30Y"
+    python notebooks/backtests/convexity_rv/_factor_neutral_build.py weights
+    python notebooks/backtests/convexity_rv/_factor_neutral_build.py certify "5Y/30Y" pc12_neutral
 
 ``leg`` / ``legs``
     Opens ONE outright leg at $100k DV01 on every cohort date of strategy 1's
@@ -18,11 +19,22 @@
     its 1-year carry-and-roll. Needed to express any sizing at matched convexity
     and to price the hedge's own carry. Minutes, not hours.
 
+``weights``
+    The WALK-FORWARD per-cohort weight table, cached to
+    ``fns_cohort_weights.parquet``. No engine and no market data: an expanding
+    PCA re-fitted at each of the 91 cohort entries on data strictly before it,
+    then the ``pc1_neutral`` / ``pc12_neutral`` solves off those loadings. Cached
+    because ``certify`` has to be fed exactly the weights the composition uses --
+    re-deriving them in two places is how a certification quietly starts
+    certifying a different book.
+
 ``certify``
-    A GENUINE three-leg ``QueryDrivenBacktest`` of the composed ``pc12_neutral``
-    book -- same per-cohort weights the composition uses, fed to the engine as
-    three tagged legs. Reproducing the old two-leg book from per-leg marks
-    certifies the composition arithmetic; only this certifies the NEW weights.
+    A GENUINE multi-leg ``QueryDrivenBacktest`` of the composed book -- the same
+    per-cohort weights the composition uses, fed to the engine as tagged legs.
+    Reproducing the old two-leg book from per-leg marks certifies the composition
+    ARITHMETIC; only this certifies the NEW weights, because those weights vary
+    by cohort and are not equal and opposite, which is the one thing the stored
+    unit runs cannot exercise.
 """
 
 from __future__ import annotations
@@ -161,8 +173,58 @@ def run_greeks() -> None:
     print(f"wrote {out} ({len(df)} rows)", flush=True)
 
 
-def run_certify(structure: str) -> None:
-    """A genuine 3-leg engine run of the composed ``pc12_neutral`` book."""
+def run_weights() -> None:
+    """Walk-forward per-cohort weights for every static sizing -> parquet.
+
+    The PCA is expanding and STRICTLY causal: at each cohort entry it sees every
+    curve day the panel had printed before that date and nothing after. Fitting
+    on the full 2019-2026 sample is right for the attribution report -- that is a
+    description of what happened -- and would be look-ahead here, because a 2019
+    cohort would be sized with 2026's covariance.
+    """
+    from RVUtils.ConvexityRV import factor_attribution as fa
+
+    out = DATA / "fns_cohort_weights.parquet"
+    diag_p = DATA / "fns_walkforward_diag.parquet"
+    if out.exists() and diag_p.exists():
+        print(f"weights cache already complete at {out}", flush=True)
+        return
+
+    cfg = ll.strat1_config()
+    fcfg = fa.FactorConfig()
+    fcv = fns.FactorNeutralConfig()
+    panel = pd.read_parquet(DATA / "factor_rate_panel.parquet")
+    panel.index = pd.to_datetime(panel.index)
+
+    legs, _idx = fns.load_leg_runs(DATA, log=print)
+    sched = legs["5Y"].cohorts
+    entries = list(pd.to_datetime(sched["entry"]))
+    print(f"walk-forward PCA on {len(entries)} cohort entries", flush=True)
+
+    t0 = time.time()
+    lbd, diag, vbd = fns.walk_forward_loadings(
+        panel, fcfg, entries, fns.LEG_UNIVERSE,
+        min_fit_days=fcv.min_fit_days, hard_floor=fcv.hard_fit_floor)
+    print(f"fitted in {time.time() - t0:.0f}s; "
+          f"{int(diag['short_fit'].sum())} short fits, "
+          f"{int((~diag['label_ok']).sum())} with non-canonical PC labels", flush=True)
+
+    W = fns.cohort_weights(sched, fa.STRAT1_STRUCTURES, lbd,
+                           hedge_leg=fcv.hedge_leg, dv01=cfg.package_dv01,
+                           neutralize=fcv.neutralize, sizings=fns.STATIC_SIZINGS)
+    W.to_parquet(out, index=False)
+    diag.to_parquet(diag_p, index=False)
+    # The per-date eigenvectors, long, so the overlay's trailing dPC2 is built
+    # from the basis the trader had at each rebalance rather than the final one.
+    vlong = pd.concat([v.assign(date=d, tenor=v.index) for d, v in vbd.items()],
+                      ignore_index=True)
+    vlong.to_parquet(DATA / "fns_walkforward_V.parquet", index=False)
+    print(f"wrote {out} ({len(W)} rows, {W['sizing'].nunique()} sizings) "
+          f"and {diag_p}", flush=True)
+
+
+def run_certify(structure: str, sizing: str = "pc12_neutral") -> None:
+    """A genuine multi-leg engine run of one composed book."""
     from MDP.IRSwaps.IRSwapsMDP import IRSwapsMDP
     from BT.data_handler import TimeGrid
     from BT.query_actions import AddQueryAction, UnwindPositionsAction
@@ -173,21 +235,20 @@ def run_certify(structure: str) -> None:
     from Query.IRSwaps.IRSwapStructure import IRSwapStructure
     from Query.IRSwaps.IRSwapValue import IRSwapValue
 
-    safe = fns.safe_leg(structure)
+    safe = f"{fns.safe_leg(structure)}_{sizing}"
     eq_p = DATA / f"fns_certify_equity_{safe}.parquet"
     co_p = DATA / f"fns_certify_cohorts_{safe}.parquet"
     wt_p = DATA / "fns_cohort_weights.parquet"
     if eq_p.exists() and co_p.exists():
-        print(f"{structure}: certify cache already complete", flush=True)
+        print(f"{structure} {sizing}: certify cache already complete", flush=True)
         return
     if not wt_p.exists():
-        raise SystemExit(f"{wt_p} missing -- build the weights first "
-                         "(notebook cell or fns.cohort_weights)")
+        raise SystemExit(f"{wt_p} missing -- run `weights` first")
 
     W = pd.read_parquet(wt_p)
-    W = W[(W["structure"] == structure) & (W["sizing"] == "pc12_neutral")]
+    W = W[(W["structure"] == structure) & (W["sizing"] == sizing)]
     if W.empty:
-        raise SystemExit(f"no pc12_neutral weights for {structure}")
+        raise SystemExit(f"no {sizing} weights for {structure}")
 
     grid = _grid()
     cfg = ll.strat1_config()
@@ -217,9 +278,12 @@ def run_certify(structure: str) -> None:
     bt = QueryDrivenBacktest(time_grid=TimeGrid(list(grid)),
                              strategy=QueryStrategy(name="fns_certify", triggers=triggers),
                              mdp=mdp, show_progress=False)
-    print(f"{structure}: 3-leg certify run, {len(rows)} cohorts", flush=True)
+    print(f"{structure} {sizing}: certify run, {len(rows)} cohorts, "
+          f"{sum(r['n_legs'] for r in rows)} leg-positions", flush=True)
     t0 = time.time()
     bt.run()
+    # QueryDrivenBacktest.run() SWALLOWS exceptions, so a dead run is an empty
+    # mtm_history and never a traceback. Asserted, every time.
     if not getattr(bt, "mtm_history", None):
         raise SystemExit(f"{structure}: engine produced no mtm_history -- run() failed")
     print(f"{structure}: ran in {time.time() - t0:.0f}s", flush=True)
@@ -250,7 +314,11 @@ if __name__ == "__main__":
             run_leg(lg)
     elif cmd == "greeks":
         run_greeks()
+    elif cmd == "weights":
+        run_weights()
     elif cmd == "certify":
-        run_certify(sys.argv[2] if len(sys.argv) > 2 else "5Y/30Y")
+        run_certify(sys.argv[2] if len(sys.argv) > 2 else "5Y/30Y",
+                    sys.argv[3] if len(sys.argv) > 3 else "pc12_neutral")
     else:
-        raise SystemExit(f"unknown command {cmd!r} (leg | legs | greeks | certify)")
+        raise SystemExit(
+            f"unknown command {cmd!r} (leg | legs | greeks | weights | certify)")

@@ -1,0 +1,78 @@
+{
+ "jpm_2019-08-27.pdf": {
+  "source": "2019-08-27_U.S. Futures and Options Package.pdf",
+  "source_pages_1based": [
+   1,
+   24,
+   31
+  ],
+  "titles": [
+   "Eurodollar MidCurve Volatility Summary",
+   "Short-Dated Swaption Volatility Report"
+  ],
+  "bytes": 190053
+ },
+ "jpm_2023-06-09.pdf": {
+  "source": "2023-06-09_U.S. Futures and Options Package.pdf",
+  "source_pages_1based": [
+   1,
+   25,
+   26,
+   27,
+   28,
+   55,
+   56,
+   70,
+   71
+  ],
+  "titles": [
+   "Treasury Volatility Summary",
+   "Eurodollar Volatility Summary",
+   "Eurodollar MidCurve Volatility Summary",
+   "U.S. Treasuries Volatility Skew Report",
+   "Maturity Structure of Treasury Volatility",
+   "Treasury OTC and Exchange Volatility",
+   "Short-Dated SOFR Swaption Volatility Report"
+  ],
+  "bytes": 751109
+ },
+ "jpm_2024-12-12.pdf": {
+  "source": "2024-12-12_U.S. Futures and Options Package.pdf",
+  "source_pages_1based": [
+   1,
+   30,
+   31
+  ],
+  "titles": [
+   "Treasury Volatility Summary"
+  ],
+  "bytes": 40145
+ },
+ "jpm_2025-06-12.pdf": {
+  "source": "2025-06-12_U.S. Futures and Options Package.pdf",
+  "source_pages_1based": [
+   1,
+   29
+  ],
+  "titles": [
+   "Short-Dated SOFR Swaption Volatility Report"
+  ],
+  "bytes": 35140
+ },
+ "jpm_2026-08-13.pdf": {
+  "source": "2026-08-13_U.S. Futures and Options Package.pdf",
+  "source_pages_1based": [
+   1,
+   29,
+   30,
+   31,
+   83
+  ],
+  "titles": [
+   "Treasury Volatility Summary",
+   "Maturity Structure of Treasury Volatility",
+   "Short-Dated SOFR Swaption Volatility Report"
+  ],
+  "bytes": 507588
+ }
+}
