@@ -30,6 +30,19 @@ convergence pays.
 Gross hit rate **72.3%** — the convergence itself is one of the most reliable effects
 this program has measured. Net hit rate 47.7%.
 
+**The financing assumption IS the result.** The same baseline under the three modes:
+
+| financing | n | price | carry (special) | cost | net/trade | Sharpe | NW-t | hit |
+|---|---|---|---|---|---|---|---|---|
+| none (flat GC — ARBS' native carry) | 65 | +1.117 | 0.000 | 0.675 | **+0.441** | +0.34 | **+2.05** | 0.66 |
+| modelled (JPM + tenor/rank/age model) | 65 | +1.117 | −0.462 (−0.516) | 0.675 | −0.021 | −0.02 | −0.10 | 0.48 |
+| actual (measured only, 2016-08–2025-08) | 36 | +0.970 | −0.619 (−0.629) | 0.676 | **−0.325** | −0.23 | −1.07 | 0.42 |
+
+A flat-financing backtest would have called this trade alive at t=+2.05. Per-issue
+specialness is the entire distance between that and dead — and the measured-only window
+is *worse* than the modelled full sample, because 2016–25 contains the high-specialness
+hiking cycle.
+
 ## What killed it, by channel
 
 * **Execution.** Full effective spreads by off-the-run rank (NY Fed SR1170 Table 3),
@@ -83,7 +96,7 @@ multiple-testing correction. +9.7 of its +24.7 total bp came from 2010 alone.
 | specialness vs JPM published `3m Repo Special` | corr 0.9997, mae 0.037bp, per-tenor 0.986–1.000 |
 | carry formula vs JPM published `3m Carry` | corr 0.962, R² 0.926, median abs err 0.48bp |
 | hand-reconciled trade vs engine | exact (0.00e+00); direction-flip and specialness-removal mutations both break it |
-| QueryDrivenBacktest cross-check (price leg, pinned CUSIPs) | corr 0.98 over 6 cycles; offset = QDB's total-return marks vs spread-only |
+| QueryDrivenBacktest cross-check (price leg, pinned CUSIPs) | corr 0.98 over 6 cycles; offset **verified** as cross-leg carry: predicted (y_L/D_L − y_S/D_S)·Δt matches at corr 0.97, residual ≤ 0.05bp |
 | panel QC: rank-spread lag-1 autocorrelation | 42/42 cells ≥ 0.55 (median ~0.95) |
 | placebo (off-auction-clock entries) | degrades as the mechanism predicts |
 
@@ -96,6 +109,11 @@ multiple-testing correction. +9.7 of its +24.7 total bp came from 2010 alone.
   refunding) — positions pinned to CUSIPs at entry, always.
 * JPM tabula noise gated on the repo LEVEL, not the spread, so ZIRP and the March-2020
   fails episode survive.
+* One known surviving mark artifact: **2023-02-10**, both 10y legs repriced ~5.5 points
+  (≈70bp of yield) in a single FedInvest snapshot and recovered over two days — a
+  common-mode bad-price day the cross-rank gate structurally cannot see. It telescopes
+  to +0.25bp within the trade that spans it and inflates daily vol, i.e. it deflates
+  the reported Sharpe (conservative direction).
 
 ## Blocked / out of scope
 
