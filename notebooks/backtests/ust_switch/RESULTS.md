@@ -141,6 +141,41 @@ often (3Y 47%, 2Y 35%) is exactly where the curve is steepest and choppiest; at 
 it improves 1-4% of cells. Figures 16-18; artefacts in `_out/qdb_grid/` and
 `_out/qdb_allpairs/`, swap rates in `_out/mms_rates/`.
 
+## Dealer auction concession: what the literature says and what this study measured
+
+**Mechanism** (Boyarchenko-Lucca-Veldkamp, NBER w22461; practitioner framing in the MND
+"What's an Auction Concession?" note): ~22 primary dealers absorb ~40% of every auction
+under minimum-bidding obligations -- underwriting under a shadow cost. The market "makes
+room" by cheapening the sector into the auction (the concession), and dealers aggregate
+client order flow ("market color"), which the paper estimates is worth ~$5bn/yr of
+auction revenue versus a Chinese-wall regime. The compensation for absorbing supply
+shows up as **post-auction appreciation**: on 494 auctions the interest-rate-hedged new
+issue gains **~3bp of value between auction date and issue date**, more when the
+competitive (informed) share is higher (t=3.5), and the distribution is positively
+skewed -- badly-concessed auctions produce outsized rebounds, which the paper attributes
+to bad news being shared through dealers (their "financial accelerator").
+
+**This study measured the same object from the switch's side, three ways:**
+
+1. *Daily, bond-specific*: the pooled auction-cycle profile -- days 0-7 after the roll
+   cost the long-old switch −0.25 to −0.8bp/day, which IS the new issue's post-auction
+   appreciation seen from the short-the-new leg. Every surviving grid cell delays entry
+   to roll+10, i.e. past the concession release.
+2. *Placebo direction*: entering 7bd BEFORE the roll (inside the concession build-up)
+   destroys the trade (Sharpe −0.88); after, it merely decays -- the asymmetry the
+   mechanism predicts.
+3. *Intraday, sector-level* (Citi minute SOFR curve, backward-only snapshots): rates
+   cheapen into the 13:00 ET result and richen after -- see the event-study figures and
+   the per-tenor 13:00→13:30 result-jump table. (Bond-specific intraday prices for
+   individual off-the-runs do not exist in this stack; the intraday evidence is the
+   sector rate level, stated as such.)
+
+**Trading implication for the switch**: the classic long-old/short-current switch is
+structurally short the concession-release. The short-current leg should be established
+only after the ~3bp hedged appreciation has run (roll+10 by the daily evidence), and
+intraday at or after the post-result richening -- not into the 13:00 print, where the
+concession is at its widest and the new issue at its cheapest.
+
 ## Validation chain (all pass)
 
 | check | result |
