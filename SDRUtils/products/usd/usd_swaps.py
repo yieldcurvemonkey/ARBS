@@ -321,7 +321,7 @@ def _build_invoice_swap_lookup(
         print(f"  [CACHE HIT] Invoice swap lookup for {cache_key}")
         return _INVOICE_LOOKUP_CACHE[cache_key]
 
-    from definitions.USTFutures import back_months, front_month
+    from definitions.USTFutures import back_months, front_month, ust_deliverable_contract
     from MDP.USTFutures.USTFuturesMDP import USTFuturesMDP
     from MDP.USTFutures.treasury_conversion_factors import (
         build_delivery_basket_frame,
@@ -333,16 +333,33 @@ def _build_invoice_swap_lookup(
     roots = sorted({spec["root"] for spec in _CME_INVOICE_SWAP_TICKERS.values()})
     invoice_specs = []
 
+    # {front, back, still-deliverable}. The union matters during the roll: `front_month` now rolls
+    # on the FIRST POSITION DAY, which is where the market's open interest actually moves, and that
+    # is a MEDIAN 16 BUSINESS DAYS earlier than the IMM date it used to roll on. The expiring
+    # contract stays tradeable for those weeks, and SDR invoice swaps go on referencing it -- so
+    # resolving only the new front would drop them from this lookup and they would silently stop
+    # matching. `ust_deliverable_contract` rolls on the true last trading day and equals
+    # `front_month` outside the roll window, so this is 2 symbols normally and 3 during the roll.
+    #
+    # Adding rather than measuring is deliberate: the union is a strict superset of either rule's
+    # coverage, and the lookup is keyed by (delivery_date, ctd_maturity), which differs between the
+    # expiring and the new contract -- so an extra entry can add a match but cannot change one.
     contract_root_pairs: list[tuple[str, str]] = []
     for root in roots:
-        fm = front_month(as_of, root)
-        contract_root_pairs.append((root, fm))
+        seen: set[str] = set()
+        candidates: list[str] = [front_month(as_of, root)]
         try:
-            bm_list = back_months(as_of, root, count=1)
-            if bm_list:
-                contract_root_pairs.append((root, bm_list[0]))
+            candidates.append(ust_deliverable_contract(as_of, root))
         except Exception:
             pass
+        try:
+            candidates.extend(back_months(as_of, root, count=1))
+        except Exception:
+            pass
+        for contract in candidates:
+            if contract and contract not in seen:
+                seen.add(contract)
+                contract_root_pairs.append((root, contract))
 
     # Batch all contracts into ONE get_pricer call so the shared FixedRateBondsMDP
     # instance inside get_pricer reuses disk-cached CUSIPs across overlapping baskets.

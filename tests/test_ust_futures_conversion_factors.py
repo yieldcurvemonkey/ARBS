@@ -77,7 +77,26 @@ def test_build_delivery_basket_frame_applies_tu_contract_filters():
     assert basket["cusip"].tolist() == ["ELIGIBLE_TU"]
 
 
-def test_build_delivery_basket_frame_applies_uxy_exact_original_term_and_bounds():
+def test_build_delivery_basket_frame_applies_uxy_original_term_cap_and_bounds():
+    """UXY: original term NOT MORE THAN 10 years, remaining term 9y5m to 10y.
+
+    This asserted ``exact_original_term_months={120}`` and so required a row's ``oi`` to read
+    exactly "10-Year". CBOT rule 26101.A -- verbatim, from the CFTC copy of submission 25-099 --
+    says "an original term to maturity (i.e., term to maturity at issue) of not more than 10
+    years", which is a cap, not an equality. On real reference data the two are identical: measured
+    across all 52 UXY contract months 2016H-2028Z the baskets are the same, because among real UST
+    original terms {36, 60, 84, 120, 240, 360} only a 120-month note can carry 113+ months
+    remaining. They differ only for a row whose ``oi`` contradicts its own issue-to-maturity span,
+    which is a data-integrity question rather than a grade rule.
+
+    The cap has to be the rule and not the equality for a second reason: from the March 2026
+    contract month the re-opening clause admits an aged bond reissued as a 10-Year note, and such a
+    reissue can be a few months short of exactly 120.
+
+    The exclusion cases below therefore test the cap with a security that genuinely violates it --
+    an aged 30-year bond sitting inside the remaining-term window -- rather than with a
+    self-contradictory row.
+    """
     ref_df = pd.DataFrame(
         [
             {
@@ -88,11 +107,12 @@ def test_build_delivery_basket_frame_applies_uxy_exact_original_term_and_bounds(
                 "cpn": 4.5,
             },
             {
-                "cusip": "WRONG_OI_UXY",
-                "oi": "7-Year",
-                "issue_date": dt.date(2023, 11, 15),
+                # In the 9y5m-10y remaining window, but a 30-year bond: original term 360 > 120.
+                "cusip": "AGED_BOND_UXY",
+                "oi": "30-Year",
+                "issue_date": dt.date(2003, 11, 15),
                 "maturity_date": dt.date(2033, 11, 15),
-                "cpn": 4.5,
+                "cpn": 5.25,
             },
             {
                 "cusip": "TOO_SHORT_UXY",

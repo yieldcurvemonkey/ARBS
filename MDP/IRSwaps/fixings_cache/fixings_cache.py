@@ -49,6 +49,36 @@ def _has_date(series: pd.Series, target: pd.Timestamp) -> bool:
     return target in set(idx)
 
 
+def _chronological(series: Optional[pd.Series]) -> Optional[pd.Series]:
+    """Sort a fixing series oldest-first and drop non-publication days. Two classes of silent error.
+
+    The cached CSVs are not order-guaranteed, and measured 2026-08-15 they are NOT consistent with
+    each other: ``USD-SOFR-1D`` came back ascending while ``USD-OIS`` came back **descending**. A
+    caller doing ``.iloc[-1]`` -- which reads like "the latest fixing" -- therefore got 3.62% for
+    SOFR and **7.03%** for EFFR, the latter being the fixing for 2000-07-03 rather than the 3.63%
+    of 2026-08-13. A 340 bp error, on one curve and not the other, from the same expression.
+
+    That is worse than a plain bug: it is curve-dependent and cache-vintage-dependent, so it shows
+    up in one place and not the next and looks like a data problem rather than an ordering one. It
+    reached a published result -- ``notebooks/backtests/linvol_grid_common`` computed its SOFR-EFFR
+    basis as a CONSTANT -523.0 bp on all 3,230 rows, which is exactly
+    ``(first-ever SOFR 1.80%) - (first-ever EFFR 7.03%)``.
+
+    Non-finite rows are dropped for the same reason. The NY Fed series carries an explicit NaN on
+    days the benchmark does not publish -- Good Friday, which is a SIFMA holiday -- and `.iloc[-1]`
+    on a slice ending there returns that NaN, not the last real fixing. Measured: SOFR for
+    2021-04-02 is NaN, so `RLUSTFuturePricer._resolve_repo_rate` returned NaN, so **every net basis
+    in every basis report on every Good Friday was NaN** and the whole day failed the consistency
+    gate. One day a year per root, on all six, since 2018. A NaN is not a published fixing.
+
+    No caller can want a descending series or a NaN fixing, so both are handled here rather than at
+    each of the forty call sites.
+    """
+    if series is None or len(series) == 0:
+        return series
+    return series.dropna().sort_index()
+
+
 def _read_cached_if_valid(root: Path, curve_name: str, expected_dt: pd.Timestamp) -> Optional[pd.Series]:
     dated_dirs = sorted([p for p in root.iterdir() if p.is_dir()], reverse=True)  # newest first
     for d in dated_dirs:
@@ -162,11 +192,76 @@ def _resolve_fixings_cache_dir(curve_name: str, base_cache_dir: Optional[str | P
     return fixings_cache
 
 
+def fixings_before(fixings: Optional[pd.Series], as_of_date: datetime.date | Literal["live"]) -> Optional[pd.Series]:
+    """The fixings a valuation dated ``as_of_date`` could actually have known.
+
+    Overnight benchmarks are published the MORNING AFTER the day they cover -- SOFR at 08:00 ET on
+    D+1 -- so a mark struck on D may use fixings up to and including D-1, and no further. Hence the
+    strict ``<``. An inclusive filter is a one-business-day peek: measured on a front SER Jun-2018
+    contract at reference date 2018-06-12, ``<`` gives 1.774344% and ``<=`` gives 1.770435%, a
+    0.39 bp difference that is small, systematic and free to remove.
+
+    This matters far more than it looks, because rateslib has no notion of "today": an instrument
+    consumes any fixing present in the series for any observation date inside its own accrual
+    window, whatever the curve's anchor. Measured on rateslib 2.7.1 with a curve anchored
+    2018-06-12 and a series whose post-anchor values were varied deliberately, a SER Sep-2018
+    contract returned 3.000000 / 4.000000 / 5.000000 / 6.000000% as the post-anchor fixings were
+    set to 3 / 4 / 5 / 6% -- the contract was priced entirely off realised future fixings rather
+    than off the curve. A 1Y IRS effective 2018-09-03 moved 205 bp the same way. So an over-long
+    fixing series is a live lookahead, not a harmless extra, and every clip in this repo is
+    load-bearing.
+    """
+    if fixings is None or len(fixings) == 0:
+        return fixings
+    if as_of_date == "live":
+        as_of_date = datetime.datetime.now(tz=_NY_TZ).date()
+    index = pd.to_datetime(fixings.index, errors="coerce")
+    return fixings[index.date < as_of_date]
+
+
+def fixings_asof(
+    as_of_date: datetime.date | Literal["live"],
+    curve_name: str,
+    force_refresh: Optional[bool] = False,
+) -> pd.Series:
+    """Point-in-time view of the fixing series: everything published strictly before ``as_of_date``.
+
+    This is what almost every caller of :func:`_fetch_fixings` actually wants. ``_fetch_fixings``
+    returns the WHOLE history regardless of its ``as_of_date`` -- see its docstring -- so
+    ``.tail(1)`` on its result yields *today's* overnight rate for a historical date. Units are
+    unchanged (decimals); call sites that want percent still scale.
+    """
+    return fixings_before(_fetch_fixings(as_of_date=as_of_date, curve_name=curve_name, force_refresh=force_refresh), as_of_date)
+
+
 def _fetch_fixings(
     as_of_date: datetime.date | Literal["live"],
     curve_name: str,
     force_refresh: Optional[bool] = False,
 ) -> pd.Series:
+    """Return the FULL published fixing history for ``curve_name``. Always. No truncation.
+
+    ``as_of_date`` selects a cache VINTAGE, never a data WINDOW. It is used for exactly two things,
+    neither of which slices the result:
+
+    1. ``expected_dt = _last_usbd_before(as_of_date)``, which is the cache-accept gate, the
+       cache-write gate and the ``cached_fallback`` re-check -- "does this cache contain at least
+       the fixing for the last business day before ``as_of_date``?";
+    2. :func:`_should_refresh_for_runtime_staleness`, which only fires when ``as_of_date`` is today
+       and forces a re-pull if the newest cache file predates SOFR's 08:00 ET publication.
+
+    Measured: ``as_of_date=2018-06-12``, ``2020-10-15`` and today all return the identical 2,090-row
+    series spanning 2018-04-02..2026-08-13 with ``tail(1) = 0.0362``. A caller taking the last value
+    for a June-2018 valuation therefore gets 3.62% where 1.69% is correct -- a 193 bp error.
+
+    **Every caller must clip.** Use :func:`fixings_asof` unless you genuinely want the whole
+    history; a few callers do (they fetch once at the batch maximum and clip per date themselves,
+    or the full panel *is* the deliverable), which is why this function's behaviour is documented
+    rather than changed.
+
+    The returned series IS sorted oldest-first -- see :func:`_chronological` for the 340 bp error
+    that was not.
+    """
 
     if as_of_date == "live":
         as_of_date = datetime.datetime.now(tz=_NY_TZ).date()
@@ -184,7 +279,7 @@ def _fetch_fixings(
     if not force_refresh and not runtime_stale:
         cached = _read_cached_if_valid(fixings_cache, curve_name, expected_dt)
         if cached is not None:
-            return cached
+            return _chronological(cached)
 
     # If force_refresh, clear only today's files (do NOT delete prior days – we may need them as fallback).
     if force_refresh:
@@ -218,9 +313,9 @@ def _fetch_fixings(
         # (Comment out if you always want the freshest pull, even if incomplete.)
         cached_fallback = _read_cached_if_valid(fixings_cache, curve_name, expected_dt)
         if cached_fallback is not None:
-            return cached_fallback
+            return _chronological(cached_fallback)
 
     # Light cleanup of very old dated dirs (keeps recent for resilience).
     _cleanup_old_cache_dirs(fixings_cache, keep_last=_KEEP_LAST_N_DATED_DIRS)
 
-    return fixings_series
+    return _chronological(fixings_series)

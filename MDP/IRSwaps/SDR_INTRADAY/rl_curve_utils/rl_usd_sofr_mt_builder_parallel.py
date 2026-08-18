@@ -15,6 +15,7 @@ from urllib.parse import quote
 import requests
 import itertools
 
+from MDP.IRSwaps.fixings_cache.fixings_cache import fixings_before
 from MDP.IRSwaps.SDR_INTRADAY.rl_curve_utils.BarchartFetcher import BarchartFetcher
 from MDP.IRSwaps.SDR_INTRADAY.rl_curve_utils.SDRDataBuilder import SDRDataBuilder
 from MDP.IRSwaps.SDR_INTRADAY.rl_curve_utils.stir_curve_building_utils import (
@@ -476,7 +477,13 @@ def rl_usd_sofr_mt_builder_parallel(
                     _build_one_mt_curve_worker,
                     base_curve_id=base_curve_id,
                     snap_iso=s.isoformat(),
-                    sofr_fixings=sofr_fixings,
+                    # Per DAY, not per batch. The caller hands in one series clipped at the LATEST
+                    # timestamp in the request, so the earliest snapshot in a multi-day batch would
+                    # otherwise calibrate against fixings published months after it -- and rateslib
+                    # does consume them (a SER contract whose accrual is entirely after the curve
+                    # anchor prices straight off the realised fixings, measured 1:1 on 2.7.1).
+                    # A single-day batch is unaffected; a multi-quarter one is not.
+                    sofr_fixings=fixings_before(sofr_fixings, day),
                     n_ser_contracts=n_ser_contracts,
                     n_sfr_contracts=n_sfr_contracts,
                     n_plus_fomc_years=n_plus_fomc_years,

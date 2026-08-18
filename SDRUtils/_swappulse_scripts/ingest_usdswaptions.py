@@ -26,6 +26,8 @@ from sqlalchemy.exc import OperationalError
 from sqlalchemy.engine import Engine
 from tqdm import tqdm
 
+from utils.storage_paths import repo_store
+
 
 # Table/view names (versioned so we can cut over safely)
 PACKAGES_TABLE = "arbs_swaption_packages_v1"
@@ -1197,7 +1199,19 @@ def _resolve_start_of_day_fetch_timestamp(value: Any, market_timezone: str) -> p
 
 
 def _resolve_cache_path(cache_path: Optional[str]) -> str:
-    return cache_path or os.getenv("SDR_CACHE_PATH", "./sdr_cache")
+    """Explicit argument, then ``SDR_CACHE_PATH``, then the resolved store.
+
+    Same reasoning as ``ingest_usdswaps._resolve_cache_path``: the old
+    ``"./sdr_cache"`` fallback was relative to the process working directory, so
+    running from anywhere but the repo root read an empty cache without saying
+    so. ``SDR_CACHE_PATH=NONE`` in ``.env`` is treated as unset.
+    """
+    if cache_path:
+        return cache_path
+    from_env = os.getenv("SDR_CACHE_PATH")
+    if from_env and from_env.strip() and from_env.strip().upper() != "NONE":
+        return from_env
+    return str(repo_store("sdr_cache", env_var="ARBS_SDR_CACHE_DIR"))
 
 
 def get_last_ingested_timestamp(engine: Engine) -> Optional[pd.Timestamp]:

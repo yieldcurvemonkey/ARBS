@@ -11,10 +11,16 @@ from typing import TYPE_CHECKING, Any, Iterable, List, Mapping, Optional, Sequen
 import pandas as pd
 
 from Caching.timeseries_cache import WriteOptions, append_timeseries, append_timeseries_many, read_timeseries
+from utils.storage_paths import data_root, repo_store
 
 DateLike = Union[datetime.date, datetime.datetime]
 REPO_ROOT = Path(__file__).resolve().parents[1]
-DEFAULT_COMPUTED_TS_BASE_DIR = REPO_ROOT / "data" / "ts"
+
+#: 8.98 GB across 1.9 M files as of 2026-08-15, which is why it is the first
+#: store routed off the checkout. ``ARBS_COMPUTED_TS_DIR`` pins it alone;
+#: ``ARBS_DATA_ROOT`` moves it along with its peers; neither set keeps the
+#: historical ``<repo>/data/ts``. See :mod:`utils.storage_paths`.
+DEFAULT_COMPUTED_TS_BASE_DIR = repo_store("data", "ts", env_var="ARBS_COMPUTED_TS_DIR")
 
 logger = logging.getLogger(__name__)
 
@@ -56,13 +62,45 @@ def default_computed_timeseries_base_dir() -> str:
 
 
 def _resolve_computed_timeseries_base_dir(base_dir: Union[str, Path, None]) -> Path:
+    """Resolve ``base_dir``, honouring the store's configured location.
+
+    Roughly fifteen call sites pass the literal ``"./data/ts"`` rather than
+    ``None`` -- ``TB/IRSwapsTB.py:417``, ``TB/FixedRateBondsTB.py:182``,
+    ``TB/USTFuturesTB.py:72``, ``scripts/_ust_service_common.py:47``,
+    ``scripts/eod_curve_service.py:61``, ``scripts/citivelo_intraday_ts_warm.py``
+    and others. Anchoring those to ``REPO_ROOT`` bypasses the configuration
+    entirely, so once the store moves they all read an empty directory -- not an
+    error, a cold cache.
+
+    Those call sites are spelling out the store's *default* location rather than
+    passing ``None``, so that is what they get: ``"./data/ts"`` is a synonym for
+    ``None`` and resolves through :data:`DEFAULT_COMPUTED_TS_BASE_DIR`, honouring
+    ``ARBS_COMPUTED_TS_DIR``, then ``ARBS_DATA_ROOT``, then the checkout.
+
+    Routing it through the *store's own* variable rather than the shared root
+    matters, because the two deliberately differ: ``data/ts`` is 1.92 M files
+    whose cluster rounding costs roughly 3x its logical size, which is why it is
+    pinned to the system drive while its peers live on the data drive.
+
+    Any other relative path is anchored to the data root when one is set, so the
+    layout there stays a mirror of the checkout. With no variables set this is
+    exactly the old behaviour -- :func:`utils.storage_paths.data_root` returns
+    ``None`` and the anchor falls back to ``REPO_ROOT``. Absolute paths, which is
+    what the tests pass, are untouched in every case.
+    """
     if base_dir is None:
         return DEFAULT_COMPUTED_TS_BASE_DIR
 
     path = Path(base_dir)
     if path.is_absolute():
         return path
-    return (REPO_ROOT / path).resolve()
+
+    # "./data/ts", "data/ts", ".\\data\\ts" -- the default, spelled out longhand.
+    if tuple(p for p in path.parts if p not in (".", "")) == ("data", "ts"):
+        return DEFAULT_COMPUTED_TS_BASE_DIR
+
+    anchor = data_root() or REPO_ROOT
+    return (anchor / path).resolve()
 
 
 def _open_duckdb_graceful(db_path: str) -> Optional["DuckDBTimeseriesCache"]:

@@ -1,0 +1,50 @@
+{
+  "sample": {
+    "ZB": [
+      "2019-01-02",
+      "2026-08-11",
+      1837
+    ],
+    "ZN": [
+      "2019-01-02",
+      "2026-08-11",
+      1896
+    ],
+    "UB": [
+      "2019-01-04",
+      "2026-08-11",
+      1879
+    ]
+  },
+  "best_key": "UB/B/e1.1/x1/h10/tp4/cm1",
+  "best_arm": "B",
+  "sharpe": -0.22981746693329008,
+  "t_nw": -0.6827468568583261,
+  "n_trades": 15,
+  "hit_rate": 0.5333333333333333,
+  "total_32nds": -10.759740843606647,
+  "top3_share": -1.016985393567701,
+  "n_trials": 162,
+  "expected_max_sharpe_null": 0.6384816209896825,
+  "dsr": 0.004028783849548589,
+  "sharpe_ci95": [
+    -0.7349210955823806,
+    0.4618646822610514
+  ],
+  "permutation_pct": 0.2335,
+  "breakeven_cost_mult": 0.0,
+  "grid_median_sharpe": -0.7206527360558428,
+  "grid_pct_positive": 0.0,
+  "ablation": {
+    "A: long basis (richness)": -0.2455127000312198,
+    "B: basis vs swaption": -0.22981746693329008,
+    "C: cheap net basis only": -0.39459031708246306
+  },
+  "alive_criteria": {
+    "min_dsr": 0.95,
+    "max_top3": 0.6,
+    "cost_mult": 2.0,
+    "perm_pct": 0.95
+  },
+  "alive": false
+}

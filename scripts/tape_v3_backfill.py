@@ -20,9 +20,12 @@ from sqlalchemy.engine import Engine
 
 from SDRUtils._swappulse_scripts import _tape_tables as tt
 from SDRUtils._swappulse_scripts.ingest_usdswaps import get_db_connection_string
+from utils.storage_paths import repo_store
 
 PYTHON = r"C:\Users\chris\anaconda3\envs\stir\python.exe"
-DEFAULT_CACHE = r"C:\Users\chris\clee\ARBS\sdr_cache"
+# Resolved rather than hardcoded to one worktree: the store moved off the
+# system drive and `repo_store` is what knows where it went.
+DEFAULT_CACHE = str(repo_store("sdr_cache", env_var="ARBS_SDR_CACHE_DIR"))
 # Absolute, not relative-to-CWD: a relative default silently starts a FRESH
 # ledger when invoked from the wrong directory, turning a resume into a
 # full restart. Anchored to the worktree root (this file's grandparent),

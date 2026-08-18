@@ -902,16 +902,87 @@ class BarchartFetcher(BaseFetcher):
             return symbol, None
 
     @staticmethod
-    def _format_eod_boundary(value: Optional[datetime | date | str]) -> Optional[str]:
-        """Format a date boundary as YYYYMMDD for the queryeod ``start``/``end`` params."""
+    def _eod_boundary_date(value: Optional[datetime | date | str]) -> Optional[date]:
+        """The calendar day an EOD window boundary names, in the boundary's **own** timezone.
+
+        ``queryeod`` bars are date-stamped: no time of day and no timezone. Callers, however, hand
+        this fetcher timestamped windows -- and two of them hand it timezone-aware ones
+        (``USTFuturesMDP._fetch_barchart_timeseries`` localizes 00:01 and 23:59 to America/Chicago).
+        Comparing those against the bar stamps at *timestamp* granularity fails two different ways,
+        both measured against the live endpoint:
+
+        * a tz-aware boundary raises ``Invalid comparison between dtype=datetime64[ns] and
+          datetime``, which the retry handler swallowed -- so the call returned an empty frame after
+          five wasted round trips rather than an error;
+        * a ``00:01`` start against a bar stamped ``00:00`` silently drops that whole day. Since the
+          MDP asks for exactly one day at a time, that alone would return nothing for every request.
+
+        So the comparison is done at DATE granularity, inclusive at both ends. The date is taken in
+        the boundary's own timezone and never via UTC: 23:59 in Chicago is 04:59 the *next* day in
+        UTC, and normalizing through it would silently widen the window by a day.
+        """
         if value is None:
             return None
-        if isinstance(value, (datetime, date)):
-            return value.strftime("%Y%m%d")
+        # pd.Timestamp and datetime both subclass date, so order matters here.
+        if isinstance(value, datetime):
+            return value.date()
+        if isinstance(value, date):
+            return value
         ts = pd.to_datetime(value, errors="coerce")
-        if pd.isna(ts):
+        if ts is None or pd.isna(ts):
             return None
-        return ts.strftime("%Y%m%d")
+        return ts.date()
+
+    @staticmethod
+    def _format_eod_boundary(value: Optional[datetime | date | str]) -> Optional[str]:
+        """Format a date boundary as YYYYMMDD for the queryeod ``start``/``end`` params.
+
+        Routed through :meth:`_eod_boundary_date` so the day sent to the server and the day kept by
+        the client-side filter cannot disagree -- a disagreement there trims the payload to a window
+        the client then rejects, and the result is an empty frame with no error anywhere.
+        """
+        boundary = BarchartFetcher._eod_boundary_date(value)
+        if boundary is None:
+            return None
+        return boundary.strftime("%Y%m%d")
+
+    @staticmethod
+    def _filter_eod_frame(
+        df: Optional[pd.DataFrame],
+        *,
+        start_date: Optional[datetime | date | str] = None,
+        end_date: Optional[datetime | date | str] = None,
+        set_dt_index: bool = True,
+    ) -> Optional[pd.DataFrame]:
+        """Clip a ``queryeod`` frame to ``[start_date, end_date]`` by calendar day, inclusive.
+
+        See :meth:`_eod_boundary_date` for why the comparison is by day rather than by timestamp.
+        This is the single place the rule lives, so the per-symbol filter and the ``one_df`` merge
+        filter cannot fork.
+        """
+        if df is None or "Date" not in getattr(df, "columns", []):
+            return df
+
+        out = df.copy()
+        out["Date"] = pd.to_datetime(out["Date"], errors="coerce")
+        if getattr(out["Date"].dt, "tz", None) is not None:
+            # Drop the offset, keeping the wall-clock day the vendor stamped.
+            out["Date"] = out["Date"].dt.tz_localize(None)
+
+        start_day = BarchartFetcher._eod_boundary_date(start_date)
+        end_day = BarchartFetcher._eod_boundary_date(end_date)
+        if start_day is not None or end_day is not None:
+            day = out["Date"].dt.normalize()
+            mask = pd.Series(True, index=out.index)
+            if start_day is not None:
+                mask &= day >= pd.Timestamp(start_day)
+            if end_day is not None:
+                mask &= day <= pd.Timestamp(end_day)
+            out = out[mask]
+
+        if set_dt_index:
+            out = out.set_index("Date")
+        return out
 
     def _build_eod_url(
         self,
@@ -959,6 +1030,7 @@ class BarchartFetcher(BaseFetcher):
     ) -> Tuple[str, pd.DataFrame] | Tuple[str, pd.DataFrame, str]:
         token = session_token
         saw_429 = False
+        parsed: Optional[pd.DataFrame] = None
 
         try:
             if token is None:
@@ -1038,29 +1110,19 @@ class BarchartFetcher(BaseFetcher):
 
                     response.raise_for_status()
                     last_status_code = None
-                    df = self._parse_aspx_response_to_df(response.content, columns=columns)
-
-                    if "Symbol" in df.columns:
-                        df = df.drop(columns=["Symbol"])
-
-                    if "Date" in df.columns:
-                        df["Date"] = pd.to_datetime(df["Date"], errors="coerce")
-                        if set_dt_index:
-                            df = df.set_index("Date")
-                        if start_date:
-                            df = df[df["Date"] >= start_date] if not set_dt_index else df[df.index >= start_date]
-                        if end_date:
-                            df = df[df["Date"] <= end_date] if not set_dt_index else df[df.index <= end_date]
+                    parsed = self._parse_aspx_response_to_df(response.content, columns=columns)
 
                     self._last_history_status_by_symbol[str(symbol)] = {
                         "status_code": 200,
                         "reason": "ok",
                         "saw_429": saw_429,
                     }
-
-                    if uid:
-                        return symbol, df, uid
-                    return symbol, df
+                    # Everything downstream of here is deterministic local work, and it is done
+                    # OUTSIDE this loop on purpose. The windowing bug fixed in _filter_eod_frame
+                    # used to raise here, be caught by the generic handler below, and be "retried"
+                    # five times against a rate-limited vendor -- turning a TypeError into an empty
+                    # frame, five wasted round trips, and no error reaching the caller.
+                    break
 
                 except pd.errors.EmptyDataError:
                     self._logger.error(f"Barchart EOD - Empty data error: No columns to parse from file for symbol {symbol}")
@@ -1137,6 +1199,19 @@ class BarchartFetcher(BaseFetcher):
                     if uid:
                         return symbol, None, uid
                     return symbol, None
+
+            if parsed is not None:
+                if "Symbol" in parsed.columns:
+                    parsed = parsed.drop(columns=["Symbol"])
+                df = self._filter_eod_frame(
+                    parsed,
+                    start_date=start_date,
+                    end_date=end_date,
+                    set_dt_index=set_dt_index,
+                )
+                if uid:
+                    return symbol, df, uid
+                return symbol, df
 
             self._last_history_status_by_symbol[str(symbol)] = {
                 "status_code": last_status_code,
@@ -1318,10 +1393,22 @@ class BarchartFetcher(BaseFetcher):
                 return merged_df
 
             merged = merge_dfs_on_column(dict(dfs), "Date", merge_val_col)
-            if len(merged.columns) - 2 == len(barchart_symbols):
-                print(f"MISSING DATA! Expected #Cols {len(barchart_symbols)}, Got {len(merged.columns)}")
-            df = merged.set_index("Date")
-            return df[(df.index >= start_date) & (df.index <= end_date)]
+            # One column per symbol plus "Date". The old test was `len(columns) - 2 ==
+            # len(symbols)`, i.e. it fired only when a symbol had gone missing AND another had
+            # appeared from nowhere -- so it never fired, including on the all-symbols-failed
+            # path that returns a bare "Date" frame.
+            got = len(merged.columns) - 1
+            if got != len(barchart_symbols):
+                self._logger.warning(
+                    f"Barchart timeseries - MISSING DATA: expected {len(barchart_symbols)} symbol "
+                    f"column(s), got {got} ({sorted(set(barchart_symbols) - set(merged.columns))} absent)"
+                )
+            if interval:
+                df = merged.set_index("Date")
+                return df[(df.index >= start_date) & (df.index <= end_date)]
+            # EOD bars are date-stamped and tz-naive; the boundaries usually are not. See
+            # _eod_boundary_date.
+            return self._filter_eod_frame(merged, start_date=start_date, end_date=end_date, set_dt_index=True)
 
         return dict(dfs)
 

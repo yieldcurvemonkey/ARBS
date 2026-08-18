@@ -94,6 +94,7 @@ from pathlib import Path
 import pandas as pd
 
 from SDRUtils.dealer_direction.conventions import DEALER_PAID, DEALER_RECEIVED
+from utils.storage_paths import repo_store
 
 logger = logging.getLogger(__name__)
 
@@ -117,7 +118,10 @@ POINTER_ACTIONS = ("MODI", "CORR", "TERM", "EROR", "REVI")
 
 # --- where the sidecar lives ----------------------------------------------
 STORE_ROOT_ENV = "DD_LINEAGE_STORE"
-DEFAULT_STORE_ROOT = "./dd_lineage_store"
+#: Anchored to the checkout, not to ``./`` -- a CWD-relative store root starts a
+#: fresh, empty sidecar whenever the process is launched from anywhere but the
+#: repo root, and nothing in the result says so.
+DEFAULT_STORE_ROOT = str(repo_store("dd_lineage_store"))
 #: Deliberately not ``sdr_cache`` and deliberately self-describing.
 RAW_SUBDIR = "raw_dtcc_unfiltered"
 LINEAGE_SUBDIR = "lineage"

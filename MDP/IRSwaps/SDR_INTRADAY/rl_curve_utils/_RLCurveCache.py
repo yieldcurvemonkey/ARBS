@@ -6,6 +6,7 @@ from typing import List, Optional, Union, Literal, Tuple, Dict
 import pandas as pd
 
 from Caching.layered_cache_mixin import LayeredCacheMixin
+from MDP.IRSwaps.fixings_cache.fixings_cache import fixings_before
 
 
 def _series_sha1(s: pd.Series) -> str:
@@ -31,6 +32,17 @@ def _normalize_snap(snap: Union[datetime.date, datetime.datetime, List[Union[dat
     return [_one(snap)]
 
 
+def _snap_date(snap) -> Optional[datetime.date]:
+    if isinstance(snap, (list, tuple)):
+        dates = [d for d in (_snap_date(x) for x in snap) if d is not None]
+        return max(dates) if dates else None
+    if isinstance(snap, datetime.datetime):
+        return snap.date()
+    if isinstance(snap, datetime.date):
+        return snap
+    return None
+
+
 def _make_key(
     curve_id: str,
     snap: Union[datetime.date, datetime.datetime, List[Union[datetime.date, datetime.datetime]]],
@@ -40,7 +52,14 @@ def _make_key(
     n_plus_fomc_years: int,
 ) -> str:
     snap_norm = _normalize_snap(snap)
-    fhash = _series_sha1(sofr_fixings)
+    # Hash only the fixings this snap could have known. Callers hand in one batch-wide series --
+    # whatever `_fetch_fixings` returned at max(batch) -- which grows every day, so hashing it raw
+    # made the key for a 2018 snapshot change daily and the cache never hit for any historical
+    # curve. Clipping here makes the key a function of the snap alone, and makes it agree with what
+    # the builder actually calibrates against (see rl_usd_sofr_mt_builder_parallel).
+    snap_day = _snap_date(snap)
+    keyed_fixings = fixings_before(sofr_fixings, snap_day) if snap_day is not None else sofr_fixings
+    fhash = _series_sha1(keyed_fixings)
     base = f"{curve_id}__snap={','.join(snap_norm)}__fx={fhash}__ser={n_ser}__sfr={n_sfr}__fomc={n_plus_fomc_years}"
     return re.sub(r"[^A-Za-z0-9_.-]", "_", base)[:200]
 

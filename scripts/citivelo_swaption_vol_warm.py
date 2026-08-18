@@ -181,6 +181,34 @@ def fetch(
 # ------------------------------------------------------------------ #
 
 
+
+def _cube_rank(candidate: Tuple[int, int, object]) -> Tuple[int, int]:
+    """Rank key: expiry x tenor COVERAGE first, smile richness only as a tie-break."""
+    nodes, n_offsets, _ = candidate
+    return (int(nodes), int(n_offsets))
+
+
+def pick_widest_cube(candidates: Sequence[Tuple[int, int, object]]):
+    """Choose among successfully-built cubes for one day. Widest axes win.
+
+    ``candidates`` is ``[(atm_node_count, n_offsets, cube), ...]``.
+
+    The warm used to try the full offset grid first and take the first build that succeeded,
+    whatever survived. That ranks a day by smile richness when what matters is which part of
+    the curve you can price at all, and it cost the short end for 59 consecutive stored days --
+    2020-01-24 to 2020-04-21, exactly across COVID. On 2020-03-09 it preferred a 1 expiry x 5
+    tenor cube (65 nodes, minimum expiry 15Y) over the full 17 x 9 ATM surface; on 2026-08-12 it
+    preferred 2 nodes over 153.
+
+    The cause is structural rather than a run of bad days: the rectangle search requires EVERY
+    offset present, and a 1Y option has no -200bp strike when rates are ~1.5%, so one
+    structurally unquotable wing amputates a whole expiry row.
+    """
+    if not candidates:
+        return None
+    return max(candidates, key=_cube_rank)[2]
+
+
 def build(
     *,
     currency: str,
@@ -190,8 +218,14 @@ def build(
     freq: str = "DAILY",
     atm_fallback: bool = True,
     push_l2: bool = False,
+    start: Optional[datetime.date] = None,
+    end: Optional[datetime.date] = None,
 ) -> int:
-    """Assemble one cube per observation date from the CACHE. No Excel, no network."""
+    """Assemble one cube per observation date from the CACHE. No Excel, no network.
+
+    ``start``/``end`` bound the rebuild. Without them a repair of a handful of days means
+    rebuilding all 2,702, which is slow enough that it does not get done.
+    """
     from Caching.swaption_cube_store import SwaptionCubeStore, asset_for
     from MDP.CitiVelocityExcel.cache import CitiVeloTagCache
     from MDP.CitiVelocityExcel.vol.cube_data import (
@@ -238,6 +272,10 @@ def build(
     written = skipped = failed = 0
     last_exc: Optional[BaseException] = None
     dates = list(frame.index)
+    if start is not None:
+        dates = [d for d in dates if (d.date() if hasattr(d, "date") else d) >= start]
+    if end is not None:
+        dates = [d for d in dates if (d.date() if hasattr(d, "date") else d) <= end]
     if max_days:
         dates = dates[-int(max_days):]
     for stamp in dates:
@@ -257,7 +295,31 @@ def build(
         row = row[row != 0.0]
         if row.empty:
             continue
-        cube = None
+        # Build every candidate shape and keep the one with the LARGEST expiry x tenor
+        # coverage, breaking ties toward the richer smile.
+        #
+        # This used to try the full offset grid first and `break` on the first success,
+        # whatever survived. That ordering ranks a day by smile richness when the thing
+        # that matters is axis coverage, and it lost the short end of the curve for 59
+        # consecutive stored days -- 2020-01-24 to 2020-04-21, i.e. exactly across COVID.
+        # Measured: on 2020-01-24 the 13-offset grid yielded 8 expiries x 9 tenors with a
+        # minimum expiry of 4Y and that won, while the ATM-only build would have given the
+        # full 17 x 9 from 1M. On 2020-03-09 the winner was 1 expiry x 5 tenors; on 2026-08-12,
+        # 1 x 2. The rank below is the ATM RECTANGLE (expiries x tenors), not the cube's total
+        # number of quotes -- 8 x 9 x 13 is 936 numbers against the ATM surface's 153, so ranking
+        # by total would have kept the truncated axis and changed nothing.
+        #
+        # The cause is structural, not a bad day: `_drop_incomplete`/`_largest_rectangle`
+        # needs EVERY offset present, and a 1Y option has no -200bp strike when rates are
+        # ~1.5%, so one structurally unquotable wing amputates a whole expiry row. The
+        # rectangle search maximises area over a sparse mask, which is why the orientation
+        # flips between dropping expiries and dropping tenors, and why the shape wobbles
+        # day to day. Ranking by coverage makes that irrelevant.
+        #
+        # The data was never missing upstream: all 2,702 stored days -- including all 60
+        # degraded ones -- hold a complete 17 x 9 ATM surface in the tag cache, so the 59
+        # days are recoverable offline with `--overwrite`.
+        candidates: list[tuple[int, int, object]] = []
         for offsets, tag in (
             (list(DEFAULT_OFFSETS_BP), ""),
             # Citi's OTM skew history is shorter than its ATM history: before
@@ -270,9 +332,9 @@ def build(
             ((), "/atm_only") if atm_fallback else (None, None),
         ):
             if offsets is None:
-                break
+                continue
             try:
-                cube = cube_from_quotes(
+                built = cube_from_quotes(
                     quotes=row.to_dict(),
                     currency=currency,
                     as_of=as_of,
@@ -281,10 +343,19 @@ def build(
                     strict=False,
                     source=f"citivelo_excel_warm/{freq}{tag}",
                 )
-                break
             except (RaggedCubeError, ValueError, KeyError) as exc:
                 last_exc = exc
                 continue
+            candidates.append((int(built.atm.size), len(offsets), built))
+
+        cube = pick_widest_cube(candidates)
+        if len(candidates) > 1:
+            best, other = sorted(candidates, key=_cube_rank, reverse=True)[:2]
+            if best[0] > other[0]:
+                _logger.info(
+                    "build: %s kept %d ATM cells (%d offsets) over %d cells (%d offsets) -- coverage wins",
+                    as_of, best[0], best[1], other[0], other[1],
+                )
         if cube is None:
             # A day with too few served nodes is a real gap, not an error to
             # paper over. Skip it and say so; the store stays honest about which
@@ -342,6 +413,8 @@ def main() -> int:
     parser.add_argument("--memory-abort-mb", type=float, default=DEFAULT_MEMORY_ABORT_MB)
     parser.add_argument("--overwrite", action="store_true")
     parser.add_argument("--max-days", type=int, default=None)
+    parser.add_argument("--start", default=None, help="build phase: earliest observation date (YYYY-MM-DD)")
+    parser.add_argument("--end", default=None, help="build phase: latest observation date (YYYY-MM-DD)")
     parser.add_argument(
         "--push-l2",
         action="store_true",
@@ -377,6 +450,8 @@ def main() -> int:
             max_days=args.max_days,
             atm_fallback=not args.no_atm_fallback,
             push_l2=args.push_l2,
+            start=datetime.date.fromisoformat(args.start) if args.start else None,
+            end=datetime.date.fromisoformat(args.end) if args.end else None,
         )
     return status(currency=args.currency)
 

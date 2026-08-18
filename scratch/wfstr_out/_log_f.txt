@@ -1,0 +1,64 @@
+40 days 2024-11-01 .. 2024-12-31
+[1/40] 2024-11-01 rows=  2684  49.4s  tot=    49s
+[2/40] 2024-11-04 rows=  2393  60.4s  tot=   110s
+[3/40] 2024-11-05 rows=  2606  80.6s  tot=   190s
+Traceback (most recent call last):
+  File "C:\Users\chris\anaconda3\envs\stir\Lib\site-packages\pandas\io\sql.py", line 2664, in execute
+    cur.execute(sql, *args)
+    ~~~~~~~~~~~^^^^^^^^^^^^
+psycopg2.errors.QueryCanceled: canceling statement due to statement timeout
+
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "C:\Users\chris\clee\ARBS-fe\scratch\wfstr_core.py", line 85, in <module>
+    main()
+    ~~~~^^
+  File "C:\Users\chris\clee\ARBS-fe\scratch\wfstr_core.py", line 77, in main
+    df = pd.read_sql(SQL, conn, params={'d': d})
+  File "C:\Users\chris\anaconda3\envs\stir\Lib\site-packages\pandas\io\sql.py", line 708, in read_sql
+    return pandas_sql.read_query(
+           ~~~~~~~~~~~~~~~~~~~~~^
+        sql,
+        ^^^^
+    ...<6 lines>...
+        dtype=dtype,
+        ^^^^^^^^^^^^
+    )
+    ^
+  File "C:\Users\chris\anaconda3\envs\stir\Lib\site-packages\pandas\io\sql.py", line 2728, in read_query
+    cursor = self.execute(sql, params)
+  File "C:\Users\chris\anaconda3\envs\stir\Lib\site-packages\pandas\io\sql.py", line 2676, in execute
+    raise ex from exc
+pandas.errors.DatabaseError: Execution failed on sql '
+WITH u AS (
+    SELECT package_id, as_of_date, kind, n_legs, rule, deviation_bps,
+           rate_index, curve_timestamp, dealer_sign, dealer_direction,
+           mid_bias_bps, p, signed_weight, in_dead_zone, special_tenor_type,
+           venue_class, series, structure_dv01, code_vintage, tau_bps,
+           exclusion_reason
+    FROM arbs_dd_unit_v1
+    WHERE as_of_date = %(d)s
+      AND kind IN ('CURVE','FLY','OUTRIGHT')
+      AND deviation_bps IS NOT NULL
+      AND curve_timestamp IS NOT NULL
+),
+lg AS (
+    SELECT u.*, l.trade_id, l.leg_order, l.fixed_rate,
+           l.effective_date, l.expiration_date, l.tenor_label,
+           l.tenor_display, l.forward_start_years, l.is_off_market,
+           l.is_mac, l.tenor_years, l.ctid::text AS phys
+    FROM u JOIN arbs_usd_swap_tape_legs_v3 l
+      ON l.package_id = u.package_id AND l.as_of_date = u.as_of_date
+)
+SELECT lg.*, g.mid_pct, g.tenor_label AS grid_tenor, g.pv01 AS grid_pv01
+FROM lg
+LEFT JOIN arbs_dd_curve_mid_v1 g
+       ON g.grid_date BETWEEN %(d)s::date - 1 AND %(d)s::date + 1
+      AND g.rate_index = lg.rate_index
+      AND g.ts = lg.curve_timestamp
+      AND g.effective_date = lg.effective_date
+      AND g.maturity_date = lg.expiration_date
+': canceling statement due to statement timeout
+

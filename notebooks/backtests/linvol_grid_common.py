@@ -386,7 +386,7 @@ def ics_residual_series(panels: dict, ladders: dict,
                         symbols: Sequence[str]) -> pd.DataFrame:
     """Daily decomposed ICS residual per quarterly, from settles + fixings."""
     from BT.serff.futures_data import load_cached
-    from MDP.IRSwaps.fixings_cache.fixings_cache import _fetch_fixings
+    from MDP.IRSwaps.fixings_cache.fixings_cache import _fetch_fixings, fixings_before
     from MDP.STIRFutures._sofr_option_contracts import quarterly_reference_window
     from RVUtils.MeetingProb.ics import (
         compounding_wedge_bp, ics_blend_contracts, proxy_wedge_bp)
@@ -430,8 +430,18 @@ def ics_residual_series(panels: dict, ladders: dict,
                 continue
             spread = ((p1 + p2) / 2.0 - (100.0 - fwd)) * 100.0
             try:
-                sofr = float(sofr_fix[sofr_fix.index <= ts].iloc[-1])
-                effr = float(effr_fix[effr_fix.index <= ts].iloc[-1])
+                # Strictly BEFORE ts, and off a chronologically sorted series.
+                #
+                # Both halves were wrong. `_fetch_fixings` returned USD-OIS DESCENDING (it still
+                # returned USD-SOFR-1D ascending), so `.iloc[-1]` took the OLDEST fixing on one
+                # curve and the newest on the other: this basis was a CONSTANT -523.0 bp on all
+                # 3,230 rows, which is exactly (first-ever SOFR 1.80%) - (first-ever EFFR 7.03%).
+                # `_fetch_fixings` now guarantees the order.
+                #
+                # `<= ts` was also a one-business-day peek -- SOFR for day d publishes 08:00 ET on
+                # d+1 -- worth a mean 2.08 bp and up to 19 bp at month and quarter ends.
+                sofr = float(fixings_before(sofr_fix, ts.date()).iloc[-1])
+                effr = float(fixings_before(effr_fix, ts.date()).iloc[-1])
             except (IndexError, TypeError):
                 continue
             basis = (sofr - effr) * 1e4

@@ -1,0 +1,365 @@
+units=36991  window=2026-05-13..2026-08-07  days=60
+{'CURVE': 24774, 'FLY': 12217}
+n_joined == n_legs for all: True
+
+====================================================================================================
+A. KEY VALIDATION on hand-inspected packages (2026-08-07)
+====================================================================================================
+                  package_id           key_literal                                                    key_full
+CURVE_12_4645295537000000101     CURVE|SOFR|3Y/10Y           CURVE|SOFR|MATCHED_MATURITY|RATE|SPOT:3Y/SPOT:10Y
+CURVE_14_4646203141000000701     CURVE|SOFR|5Y/30Y                   CURVE|SOFR|STANDARD|RATE|SPOT:5Y/SPOT:30Y
+CURVE_15_4646577783000000101      CURVE|SOFR|3Y/3Y               CURVE|SOFR|IMM|RATE|IMM_U2028:3Y/IMM_U2033:3Y
+CURVE_16_4646806983000000401      CURVE|SOFR|2Y/5Y                    CURVE|SOFR|STANDARD|RATE|SPOT:2Y/SPOT:5Y
+CURVE_18_4647210006000000101 CURVE|FED_FUNDS|2M/2M CURVE|FED_FUNDS|FOMC|RATE|FOMC_20261209:2M/FOMC_20270127:2M
+CURVE_27_4648113837000000201      CURVE|SOFR|2Y/2Y                        CURVE|SOFR|STANDARD|RATE|3Y:2Y/7Y:2Y
+
+====================================================================================================
+B. IS THE LITERAL KEY (kind + tenor_display tuple + rate_index) SUFFICIENT?
+====================================================================================================
+distinct key_literal (CURVE+FLY) = 1240
+distinct key_full    (CURVE+FLY) = 5299
+literal keys that lump >1 real instrument: 549 / 1240 (35865 units = 97.0% of CURVE+FLY)
+
+worst literal collisions:
+  LITERAL CURVE|SOFR|1Y/1Y   (607 units) splits into 227:
+          59  CURVE|SOFR|STANDARD|RATE|SPOT:1Y/SPOT:1Y
+          19  CURVE|SOFR|IMM|RATE|IMM_M2029:1Y/IMM_M2031:1Y
+          14  CURVE|SOFR|IMM|RATE|IMM_U2030:1Y/IMM_U2031:1Y
+          13  CURVE|SOFR|STANDARD|RATE|1Y:1Y/2Y:1Y
+          13  CURVE|SOFR|IMM|RATE|IMM_M2030:1Y/IMM_M2031:1Y
+          13  CURVE|SOFR|IMM|RATE|IMM_M2027:1Y/IMM_M2028:1Y
+  LITERAL CURVE|SOFR|10Y/10Y   (757 units) splits into 192:
+         174  CURVE|SOFR|STANDARD|RATE|SPOT:10Y/SPOT:10Y
+          64  CURVE|SOFR|IMM|RATE|SPOT:10Y/FOMC_20260916:10Y
+          59  CURVE|SOFR|MATCHED_MATURITY|RATE|SPOT:10Y/SPOT:10Y
+          51  CURVE|SOFR|IMM|RATE|FOMC_20260916:10Y/FOMC_20260916:10Y
+          31  CURVE|SOFR|IMM|RATE|SPOT:10Y/SPOT:10Y
+          25  CURVE|SOFR|IMM|RATE|FOMC_20260617:10Y/FOMC_20260916:10Y
+  LITERAL CURVE|SOFR|2Y/2Y   (569 units) splits into 175:
+          55  CURVE|SOFR|STANDARD|RATE|SPOT:2Y/SPOT:2Y
+          42  CURVE|SOFR|IMM|RATE|SPOT:2Y/FOMC_20260916:2Y
+          33  CURVE|SOFR|IMM|RATE|FOMC_20260916:2Y/FOMC_20260916:2Y
+          26  CURVE|SOFR|IMM|RATE|FOMC_20260617:2Y/FOMC_20260916:2Y
+          20  CURVE|SOFR|IMM|RATE|SPOT:2Y/SPOT:2Y
+          17  CURVE|SOFR|IMM|RATE|IMM_M2029:2Y/IMM_M2031:2Y
+  LITERAL CURVE|SOFR|5Y/5Y   (900 units) splits into 165:
+         183  CURVE|SOFR|STANDARD|RATE|SPOT:5Y/SPOT:5Y
+          80  CURVE|SOFR|IMM|RATE|SPOT:5Y/FOMC_20260916:5Y
+          68  CURVE|SOFR|MATCHED_MATURITY|RATE|SPOT:5Y/SPOT:5Y
+          41  CURVE|SOFR|STANDARD|RATE|10Y:5Y/15Y:5Y
+          35  CURVE|SOFR|IMM|RATE|FOMC_20260916:5Y/FOMC_20260916:5Y
+          34  CURVE|SOFR|IMM|RATE|FOMC_20260617:5Y/FOMC_20260916:5Y
+  LITERAL CURVE|SOFR|30Y/30Y   (357 units) splits into 140:
+          83  CURVE|SOFR|STANDARD|RATE|SPOT:30Y/SPOT:30Y
+          44  CURVE|SOFR|MATCHED_MATURITY|RATE|SPOT:30Y/SPOT:30Y
+          17  CURVE|SOFR|IMM|RATE|FOMC_20260916:30Y/FOMC_20260916:30Y
+          11  CURVE|SOFR|IMM|RATE|SPOT:30Y/SPOT:30Y
+           9  CURVE|SOFR|IMM|RATE|FOMC_20260916:30Y/IMM_Z2026:30Y
+           8  CURVE|SOFR|IMM|RATE|FOMC_20260617:30Y/FOMC_20260617:30Y
+  LITERAL CURVE|SOFR|5Y/30Y   (1895 units) splits into 95:
+        1025  CURVE|SOFR|STANDARD|RATE|SPOT:5Y/SPOT:30Y
+         362  CURVE|SOFR|IMM|RATE|FOMC_20260916:5Y/FOMC_20260916:30Y
+         111  CURVE|SOFR|IMM|RATE|IMM_Z2026:5Y/IMM_Z2026:30Y
+          90  CURVE|SOFR|IMM|RATE|FOMC_20260617:5Y/FOMC_20260617:30Y
+          65  CURVE|SOFR|IMM|RATE|SPOT:5Y/SPOT:30Y
+          21  CURVE|SOFR|MATCHED_MATURITY|RATE|SPOT:5Y/SPOT:30Y
+  LITERAL CURVE|SOFR|2Y/10Y   (2095 units) splits into 90:
+         832  CURVE|SOFR|STANDARD|RATE|SPOT:2Y/SPOT:10Y
+         641  CURVE|SOFR|IMM|RATE|FOMC_20260916:2Y/FOMC_20260916:10Y
+         147  CURVE|SOFR|IMM|RATE|FOMC_20260617:2Y/FOMC_20260617:10Y
+         102  CURVE|SOFR|IMM|RATE|SPOT:2Y/SPOT:10Y
+          94  CURVE|SOFR|IMM|RATE|IMM_Z2026:2Y/IMM_Z2026:10Y
+          28  CURVE|SOFR|STANDARD|RATE|2M:2Y/2M:10Y
+  LITERAL CURVE|SOFR|2Y/5Y   (1391 units) splits into 89:
+         443  CURVE|SOFR|IMM|RATE|FOMC_20260916:2Y/FOMC_20260916:5Y
+         405  CURVE|SOFR|STANDARD|RATE|SPOT:2Y/SPOT:5Y
+         177  CURVE|SOFR|IMM|RATE|FOMC_20260617:2Y/FOMC_20260617:5Y
+          74  CURVE|SOFR|IMM|RATE|IMM_Z2026:2Y/IMM_Z2026:5Y
+          70  CURVE|SOFR|IMM|RATE|SPOT:2Y/SPOT:5Y
+          17  CURVE|SOFR|IMM|RATE|FOMC_20270915:2Y/FOMC_20270915:5Y
+
+====================================================================================================
+C. MUST THE TUPLE BE CANONICALLY SORTED?
+====================================================================================================
+units whose leg_order tuple != canonical tuple: 1618 / 36991 (4.37%)
+{'CURVE': 1001, 'FLY': 617}
+instruments that would SPLIT into >1 key if leg_order were trusted: 35 / 5299  (269 units affected)
+examples:
+  CURVE|SOFR|IMM|RATE|SPOT:10Y/FOMC_20260617:10Y  (7 units) -> ['CURVE|SOFR|IMM|RATE|FOMC_20260617:10Y/SPOT:10Y', 'CURVE|SOFR|IMM|RATE|SPOT:10Y/FOMC_20260617:10Y']
+  CURVE|SOFR|IMM|RATE|SPOT:3Y/FOMC_20260617:3Y  (5 units) -> ['CURVE|SOFR|IMM|RATE|FOMC_20260617:3Y/SPOT:3Y', 'CURVE|SOFR|IMM|RATE|SPOT:3Y/FOMC_20260617:3Y']
+  CURVE|SOFR|IMM|RATE|SPOT:5Y/FOMC_20260916:5Y  (80 units) -> ['CURVE|SOFR|IMM|RATE|FOMC_20260916:5Y/SPOT:5Y', 'CURVE|SOFR|IMM|RATE|SPOT:5Y/FOMC_20260916:5Y']
+  CURVE|SOFR|INVOICE_SWAP|RATE|39D:7Y/130D:7Y  (3 units) -> ['CURVE|SOFR|INVOICE_SWAP|RATE|130D:7Y/39D:7Y', 'CURVE|SOFR|INVOICE_SWAP|RATE|39D:7Y/130D:7Y']
+  CURVE|SOFR|INVOICE_SWAP|RATE|40D:7Y/131D:7Y  (2 units) -> ['CURVE|SOFR|INVOICE_SWAP|RATE|131D:7Y/40D:7Y', 'CURVE|SOFR|INVOICE_SWAP|RATE|40D:7Y/131D:7Y']
+
+units where ORDER BY tenor_years differs from ORDER BY (effective,expiration): 2048
+{('CURVE', 'FOMC'): 535, ('CURVE', 'IMM'): 223, ('CURVE', 'MAC'): 1, ('CURVE', 'MATCHED_MATURITY'): 136, ('CURVE', 'STANDARD'): 550, ('FLY', 'FOMC'): 66, ('FLY', 'IMM'): 195, ('FLY', 'MATCHED_MATURITY'): 51, ('FLY', 'STANDARD'): 291}
+                  package_id special_tenor_type tup_disp_canon tup_disp_tenyrs                    tup_full_canon
+CURVE_10_3158980408000000601               FOMC          2M/1M           1M/2M FOMC_20260729:2M/FOMC_20261028:1M
+CURVE_10_3233616162000000201               FOMC          2M/1M           1M/2M FOMC_20260729:2M/FOMC_20260916:1M
+CURVE_10_3353083852000000101               FOMC          2M/1M           1M/2M FOMC_20260729:2M/FOMC_20260916:1M
+CURVE_10_3989803100000000401               FOMC          2M/1M           1M/2M FOMC_20260729:2M/FOMC_20260916:1M
+CURVE_10_4183498709000000901               FOMC          2M/1M           1M/2M FOMC_20260729:2M/FOMC_20260916:1M
+CURVE_10_4363670943000000201               FOMC          2M/1M           1M/2M          SPOT:2M/FOMC_20260916:1M
+CURVE_10_4459616225000000501               FOMC          2M/1M           1M/2M          SPOT:2M/FOMC_20260916:1M
+CURVE_11_3431222434000000501               FOMC          2M/1M           1M/2M FOMC_20260729:2M/FOMC_20261028:1M
+
+====================================================================================================
+D. HOW MANY DISTINCT STRUCTURE KEYS  (60 published days)
+====================================================================================================
+CURVE: units=24774  distinct key_full=3654  distinct key_literal=637
+    top   5 keys cover  18.0% of prints
+    top  10 keys cover  27.9% of prints
+    top  15 keys cover  34.6% of prints
+    top  25 keys cover  41.1% of prints
+    top  50 keys cover  49.6% of prints
+    top 100 keys cover  60.2% of prints
+    keys with >=1 print: 3654;  >=10: 315;  >=50: 79;  >=100: 29
+FLY: units=12217  distinct key_full=1645  distinct key_literal=603
+    top   5 keys cover  27.5% of prints
+    top  10 keys cover  41.2% of prints
+    top  15 keys cover  52.5% of prints
+    top  25 keys cover  61.8% of prints
+    top  50 keys cover  70.4% of prints
+    top 100 keys cover  77.3% of prints
+    keys with >=1 print: 1645;  >=10: 123;  >=50: 32;  >=100: 21
+
+====================================================================================================
+E. BUSIEST STRUCTURES
+====================================================================================================
+--- TOP 15 CURVE  (60 published days 2026-05-13..2026-08-07) ---
+                                                        key  prints  days  per_day  priced  D2C  D2D  UNK
+                  CURVE|SOFR|STANDARD|RATE|SPOT:5Y/SPOT:30Y    1025    60     17.1     817  843  177    5
+                  CURVE|SOFR|STANDARD|RATE|SPOT:5Y/SPOT:10Y     984    58     17.0     415  485  496    3
+                 CURVE|SOFR|STANDARD|RATE|SPOT:10Y/SPOT:30Y     954    60     15.9     461  456  497    1
+                  CURVE|SOFR|STANDARD|RATE|SPOT:2Y/SPOT:10Y     832    60     13.9     799  821    6    5
+      CURVE|SOFR|IMM|RATE|FOMC_20260916:3Y/FOMC_20260916:5Y     668    43     15.5     654  668    0    0
+     CURVE|SOFR|IMM|RATE|FOMC_20260916:2Y/FOMC_20260916:10Y     641    60     10.7     634  641    0    0
+      CURVE|SOFR|IMM|RATE|FOMC_20260617:3Y/FOMC_20260617:5Y     485    19     25.5     472  485    0    0
+                  CURVE|SOFR|STANDARD|RATE|SPOT:2Y/SPOT:30Y     481    56      8.6     479  481    0    0
+      CURVE|SOFR|IMM|RATE|FOMC_20260916:2Y/FOMC_20260916:5Y     443    58      7.6     438  443    0    0
+                   CURVE|SOFR|STANDARD|RATE|SPOT:2Y/SPOT:5Y     405    57      7.1     393  395    8    2
+    CURVE|SOFR|IMM|RATE|FOMC_20260916:10Y/FOMC_20260916:30Y     374    57      6.6     373  374    0    0
+     CURVE|SOFR|IMM|RATE|FOMC_20260916:5Y/FOMC_20260916:30Y     362    59      6.1     355  362    0    0
+CURVE|FED_FUNDS|FOMC|RATE|FOMC_20260916:1M/FOMC_20261028:1M     337    56      6.0     330  316   20    1
+     CURVE|SOFR|IMM|RATE|FOMC_20260916:5Y/FOMC_20260916:10Y     302    59      5.1     299  302    0    0
+CURVE|FED_FUNDS|FOMC|RATE|FOMC_20260729:2M/FOMC_20260916:1M     282    45      6.3     281  279    1    2
+
+--- TOP 15 FLY  (60 published days 2026-05-13..2026-08-07) ---
+                                                                   key  prints  days  per_day  priced  D2C  D2D  UNK
+                      FLY|SOFR|STANDARD|RATE|SPOT:5Y/SPOT:10Y/SPOT:30Y    1304    58     22.5    1274 1262   42    0
+                        FLY|SOFR|STANDARD|RATE|SPOT:3Y/SPOT:4Y/SPOT:5Y     581    58     10.0     575   70  511    0
+                       FLY|SOFR|STANDARD|RATE|SPOT:5Y/SPOT:7Y/SPOT:10Y     536    58      9.2     112   44  492    0
+                       FLY|SOFR|STANDARD|RATE|SPOT:2Y/SPOT:5Y/SPOT:10Y     530    59      9.0     313  518   12    0
+                            FLY|SOFR|IMM|RATE|SPOT:3Y/SPOT:5Y/SPOT:10Y     406    39     10.4     399  406    0    0
+                     FLY|SOFR|STANDARD|RATE|SPOT:10Y/SPOT:15Y/SPOT:30Y     357    52      6.9     355   24  333    0
+FLY|SOFR|IMM|RATE|FOMC_20260916:5Y/FOMC_20260916:10Y/FOMC_20260916:30Y     350    52      6.7     347  350    0    0
+                           FLY|SOFR|IMM|RATE|SPOT:3Y/SPOT:10Y/SPOT:30Y     332    34      9.8     324  332    0    0
+                     FLY|SOFR|STANDARD|RATE|SPOT:10Y/SPOT:20Y/SPOT:30Y     327    54      6.1     233   31  295    1
+ FLY|SOFR|IMM|RATE|FOMC_20260916:2Y/FOMC_20260916:5Y/FOMC_20260916:10Y     315    57      5.5     311  315    0    0
+                        FLY|SOFR|STANDARD|RATE|SPOT:5Y/SPOT:6Y/SPOT:7Y     308    57      5.4     306   20  288    0
+                       FLY|SOFR|STANDARD|RATE|SPOT:8Y/SPOT:9Y/SPOT:10Y     308    54      5.7     304   34  274    0
+FLY|SOFR|IMM|RATE|FOMC_20260617:3Y/FOMC_20260617:10Y/FOMC_20260617:30Y     275    19     14.5     273  275    0    0
+                     FLY|SOFR|STANDARD|RATE|SPOT:20Y/SPOT:25Y/SPOT:30Y     261    51      5.1     255    3  258    0
+                        FLY|SOFR|STANDARD|RATE|SPOT:7Y/SPOT:8Y/SPOT:9Y     226    52      4.3     223   17  209    0
+
+--- TOP 12 CURVE [STANDARD spot-family, non-ASW] (60 published days 2026-05-13..2026-08-07) ---
+                                       key  prints  days  per_day  priced  D2C  D2D  UNK
+ CURVE|SOFR|STANDARD|RATE|SPOT:5Y/SPOT:30Y    1025    60     17.1     817  843  177    5
+ CURVE|SOFR|STANDARD|RATE|SPOT:5Y/SPOT:10Y     984    58     17.0     415  485  496    3
+CURVE|SOFR|STANDARD|RATE|SPOT:10Y/SPOT:30Y     954    60     15.9     461  456  497    1
+ CURVE|SOFR|STANDARD|RATE|SPOT:2Y/SPOT:10Y     832    60     13.9     799  821    6    5
+ CURVE|SOFR|STANDARD|RATE|SPOT:2Y/SPOT:30Y     481    56      8.6     479  481    0    0
+  CURVE|SOFR|STANDARD|RATE|SPOT:2Y/SPOT:5Y     405    57      7.1     393  395    8    2
+  CURVE|SOFR|STANDARD|RATE|SPOT:5Y/SPOT:5Y     183    58      3.2     176  161   20    2
+CURVE|SOFR|STANDARD|RATE|SPOT:10Y/SPOT:10Y     174    56      3.1     163  125   49    0
+  CURVE|SOFR|STANDARD|RATE|SPOT:3Y/SPOT:5Y     148    45      3.3     137  124   21    3
+  CURVE|SOFR|STANDARD|RATE|SPOT:4Y/SPOT:5Y     114    42      2.7     113  110    4    0
+  CURVE|SOFR|STANDARD|RATE|SPOT:2Y/SPOT:3Y     109    45      2.4      91   99    8    2
+  CURVE|SOFR|STANDARD|RATE|SPOT:1Y/SPOT:2Y     102    45      2.3      98   99    0    3
+
+--- TOP 12 FLY [STANDARD spot-family, non-ASW] (60 published days 2026-05-13..2026-08-07) ---
+                                              key  prints  days  per_day  priced  D2C  D2D  UNK
+ FLY|SOFR|STANDARD|RATE|SPOT:5Y/SPOT:10Y/SPOT:30Y    1304    58     22.5    1274 1262   42    0
+   FLY|SOFR|STANDARD|RATE|SPOT:3Y/SPOT:4Y/SPOT:5Y     581    58     10.0     575   70  511    0
+  FLY|SOFR|STANDARD|RATE|SPOT:5Y/SPOT:7Y/SPOT:10Y     536    58      9.2     112   44  492    0
+  FLY|SOFR|STANDARD|RATE|SPOT:2Y/SPOT:5Y/SPOT:10Y     530    59      9.0     313  518   12    0
+FLY|SOFR|STANDARD|RATE|SPOT:10Y/SPOT:15Y/SPOT:30Y     357    52      6.9     355   24  333    0
+FLY|SOFR|STANDARD|RATE|SPOT:10Y/SPOT:20Y/SPOT:30Y     327    54      6.1     233   31  295    1
+  FLY|SOFR|STANDARD|RATE|SPOT:8Y/SPOT:9Y/SPOT:10Y     308    54      5.7     304   34  274    0
+   FLY|SOFR|STANDARD|RATE|SPOT:5Y/SPOT:6Y/SPOT:7Y     308    57      5.4     306   20  288    0
+FLY|SOFR|STANDARD|RATE|SPOT:20Y/SPOT:25Y/SPOT:30Y     261    51      5.1     255    3  258    0
+   FLY|SOFR|STANDARD|RATE|SPOT:7Y/SPOT:8Y/SPOT:9Y     226    52      4.3     223   17  209    0
+FLY|SOFR|STANDARD|RATE|SPOT:10Y/SPOT:12Y/SPOT:15Y     224    50      4.5     223    8  216    0
+FLY|SOFR|STANDARD|RATE|SPOT:10Y/SPOT:11Y/SPOT:12Y     111    47      2.4     108   37   74    0
+
+====================================================================================================
+F. PRINTS PER (as_of_date, structure key, venue_class)
+====================================================================================================
+
+### CURVE: 11370 non-empty (day,key,venue) cells, 24774 prints
+  ALL cells      p50/p75/p90/p95/p99/max = 1/2/4/8/17/54   mean=2.18
+  priced-only    p50/p75/p90/p95/p99/max = 1/2/4/7/17/54   mean=2.12
+    cells with >= 2 prints:  32.1%  ( 3654 cells, holding  68.9% of prints)
+    cells with >= 3 prints:  17.4%  ( 1974 cells, holding  55.3% of prints)
+    cells with >= 5 prints:   9.3%  ( 1059 cells, holding  42.9% of prints)
+    cells with >=10 prints:   3.5%  (  403 cells, holding  25.7% of prints)
+    cells with >=20 prints:   0.8%  (   86 cells, holding   9.0% of prints)
+  -- restricted to the top-15 keys (1016 cells) --
+     p50/p75/p90/p95/max = 7/11/17/22/54   mean=8.44
+     cells with >= 2 prints:  89.7%
+     cells with >= 3 prints:  82.7%
+     cells with >= 5 prints:  67.2%
+     cells with >=10 prints:  33.0%
+     cells with >=20 prints:   7.7%
+  -- venue merged (day,key): 11009 cells, p50/p75/p90/p95/max = 1/2/4/8/54
+     cells with >= 2 prints:  32.1%
+     cells with >= 3 prints:  17.1%
+     cells with >= 5 prints:   9.1%
+     cells with >=10 prints:   3.9%
+     cells with >=20 prints:   1.1%
+
+### FLY: 4776 non-empty (day,key,venue) cells, 12217 prints
+  ALL cells      p50/p75/p90/p95/p99/max = 1/2/6/10/20/42   mean=2.56
+  priced-only    p50/p75/p90/p95/p99/max = 1/2/6/9/19/42   mean=2.44
+    cells with >= 2 prints:  33.1%  ( 1579 cells, holding  73.8% of prints)
+    cells with >= 3 prints:  22.0%  ( 1051 cells, holding  65.2% of prints)
+    cells with >= 5 prints:  13.6%  (  650 cells, holding  54.2% of prints)
+    cells with >=10 prints:   5.4%  (  256 cells, holding  32.8% of prints)
+    cells with >=20 prints:   1.1%  (   51 cells, holding  10.9% of prints)
+  -- restricted to the top-15 keys (930 cells) --
+     p50/p75/p90/p95/max = 5/9/15/20/42   mean=6.90
+     cells with >= 2 prints:  82.4%
+     cells with >= 3 prints:  72.5%
+     cells with >= 5 prints:  54.6%
+     cells with >=10 prints:  24.4%
+     cells with >=20 prints:   5.2%
+  -- venue merged (day,key): 4526 cells, p50/p75/p90/p95/max = 1/2/7/11/43
+     cells with >= 2 prints:  33.9%
+     cells with >= 3 prints:  23.2%
+     cells with >= 5 prints:  15.2%
+     cells with >=10 prints:   6.0%
+     cells with >=20 prints:   1.2%
+
+====================================================================================================
+G. GRID COVERAGE: can a continuous mid be drawn?
+====================================================================================================
+
+### CURVE  (n=24774)
+  (a) LITERAL  - every leg tenor_label in the CURVE's rate_index grid: 94.6%  (23429)
+  (b) CONSTRUCTIBLE - (a) AND every leg spot-starting:                 42.1%  (10438)
+      all legs spot-starting alone:                                    45.2%
+                        n  tenors_in_grid  all_spot  constructible
+special_tenor_type                                                
+FOMC                 1813            99.7       1.9            1.9
+IMM                  9591            98.4      10.5           10.3
+INVOICE_SWAP          247            36.4       0.4            0.0
+MAC                    14           100.0      14.3           14.3
+MATCHED_MATURITY     1482            72.7      81.5           60.8
+STANDARD            11627            94.6      76.9           73.2
+                n  tenors_in_grid  constructible
+rate_index                                      
+BASIS          76             0.0            0.0
+FED_FUNDS    1679            99.0            2.1
+OTHER           5             0.0            0.0
+SOFR        23014            94.6           45.2
+
+### FLY  (n=12217)
+  (a) LITERAL  - every leg tenor_label in the FLY's rate_index grid: 97.0%  (11851)
+  (b) CONSTRUCTIBLE - (a) AND every leg spot-starting:                 63.3%  (7735)
+      all legs spot-starting alone:                                    65.8%
+                       n  tenors_in_grid  all_spot  constructible
+special_tenor_type                                               
+FOMC                 144            97.2       7.6            7.6
+IMM                 4745            99.5      32.9           32.7
+MAC                    3           100.0       0.0            0.0
+MATCHED_MATURITY     239            69.9      76.6           55.6
+STANDARD            7086            96.2      88.6           85.3
+                n  tenors_in_grid  constructible
+rate_index                                      
+BASIS           8             0.0            0.0
+FED_FUNDS     118            94.9           10.2
+SOFR        12091            97.1           63.9
+
+top missing (rate_index:tenor_label) among units failing the grid test:
+SOFR:11Y    277
+SOFR:21M    251
+SOFR:26Y    214
+SOFR:17Y    174
+SOFR:22M    119
+SOFR:18Y    104
+SOFR:27Y     85
+SOFR:23M     72
+SOFR:11M     70
+SOFR:5M      67
+SOFR:40Y     65
+SOFR:19Y     61
+SOFR:4M      56
+SOFR:35Y     52
+SOFR:31Y     50
+SOFR:20M     48
+SOFR:28Y     47
+SOFR:14Y     43
+SOFR:10M     42
+SOFR:7M      33
+SOFR:8M      30
+SOFR:15M     29
+SOFR:29Y     28
+SOFR:17M     25
+BASIS:5Y     22
+
+CURVE top-15 keys: constructible = 54.6% of 8575 units
+FLY top-15 keys: constructible = 85.3% of 6416 units
+
+====================================================================================================
+H. 2026-08-07  'CURVE 10Y/30Y SOFR'  by venue_class
+====================================================================================================
+all CURVE SOFR units 2026-08-07: 348;  with de-fuzzed tenor tuple 10Y/30Y: 21
+
+by FULL key:
+venue_class                                              D2C  D2D  TOTAL
+key_full                                                                
+CURVE|SOFR|STANDARD|RATE|SPOT:10Y/SPOT:30Y                 7    5     12
+CURVE|SOFR|IMM|RATE|FOMC_20260916:10Y/FOMC_20260916:30Y    7    0      7
+CURVE|SOFR|IMM|RATE|FOMC_20270317:10Y/FOMC_20270317:30Y    1    0      1
+CURVE|SOFR|IMM|RATE|IMM_Z2026:10Y/IMM_Z2026:30Y            1    0      1
+
+headline - the instrument the user means (CURVE|SOFR|STANDARD|RATE|SPOT:10Y/SPOT:30Y):
+  total prints                 : 12
+venue_class
+D2C    7
+D2D    5
+  priced (deviation_bps not null): 7
+venue_class
+D2C    7
+
+  what a tape_label key would have shown instead:
+
+====================================================================================================
+I. per-day counts for the headline instrument over the window
+====================================================================================================
+venue_class  D2C  D2D  VENUE_UNKNOWN  TOTAL
+as_of_date                                 
+2026-07-13     6    7              0     13
+2026-07-14     9   10              0     19
+2026-07-15     5    1              0      6
+2026-07-16     5   10              0     15
+2026-07-17     5    3              0      8
+2026-07-20     8    1              0      9
+2026-07-21     3    7              0     10
+2026-07-22     4    2              0      6
+2026-07-23     5    9              0     14
+2026-07-24     2   10              0     12
+2026-07-27     2    0              0      2
+2026-07-28     4    8              0     12
+2026-07-29    29    7              0     36
+2026-07-30    10   11              0     21
+2026-07-31    10    7              0     17
+2026-08-03     7   13              0     20
+2026-08-04     4   22              0     26
+2026-08-05     2   18              0     20
+2026-08-06     4    0              0      4
+2026-08-07     7    5              0     12
+
+per-day TOTAL: p50=14 mean=15.9 max=36 min=1 days=60
+
+DONE
