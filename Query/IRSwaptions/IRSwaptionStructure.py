@@ -527,8 +527,18 @@ class IRSwaptionStructureFunctionMap(BaseStructureFunctionMap[IRSwaptionStructur
         if wing_strike is None:
             guess = base + direction * wing_bps / 10_000.0
             if costless:
+                # ``base`` is invariant throughout the root solve.  Repricing
+                # it inside every objective evaluation used to rebuild the same
+                # swaption 10s of times for one date/tenor.
+                base_npv = self._leg_npv(
+                    option_type=option_type,
+                    strike=base,
+                    dates=dates,
+                    notional=1.0,
+                )
+
                 def objective(k: float) -> float:
-                    return self._leg_npv(option_type=option_type, strike=base, dates=dates, notional=1.0) - 2.0 * self._leg_npv(
+                    return base_npv - 2.0 * self._leg_npv(
                         option_type=option_type, strike=k, dates=dates, notional=1.0
                     )
 
@@ -579,9 +589,18 @@ class IRSwaptionStructureFunctionMap(BaseStructureFunctionMap[IRSwaptionStructur
         mid_guess = base + direction * wing_bps / 10_000.0
 
         if costless:
+            # Like the 1x2 above, the ATM leg is constant while the solver
+            # moves only the two OTM strikes.  Calculate it once per package.
+            base_npv = self._leg_npv(
+                option_type=option_type,
+                strike=base,
+                dates=dates,
+                notional=1.0,
+            )
+
             def objective(mid_k: float) -> float:
                 wing_k = mid_k + direction * wing_bps / 10_000.0
-                return self._leg_npv(option_type=option_type, strike=base, dates=dates, notional=1.0) - self._leg_npv(
+                return base_npv - self._leg_npv(
                     option_type=option_type, strike=mid_k, dates=dates, notional=1.0
                 ) - self._leg_npv(option_type=option_type, strike=wing_k, dates=dates, notional=1.0)
 

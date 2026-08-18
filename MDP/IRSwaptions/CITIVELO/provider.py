@@ -199,6 +199,7 @@ def _cube_for_date(
     offsets_bp: Optional[Sequence[float]],
     strict: bool,
     client: Any,
+    offline_only: bool = False,
     stored: Optional[Dict[dt.date, Any]] = None,
 ) -> Tuple[Any, str]:
     """``(SwaptionCubeData, origin)`` from whichever source was configured.
@@ -240,6 +241,13 @@ def _cube_for_date(
         hit = stored.get(when)
         if hit is not None:
             return hit.data, "swaption_cube_store"
+
+    if offline_only:
+        raise CitiVelocityError(
+            f"Citi vol for {when} is absent from the swaption cube store; "
+            "offline_only=True refuses the Excel COM fallback. Run the cube warm "
+            "first, or request a date covered by the persisted store."
+        )
 
     if client is None:
         from MDP.CitiVelocityExcel.com_client import CitiVelocityExcelClient
@@ -286,6 +294,7 @@ def get_citivelo_vol_objects(
     cube_store: Any = None,
     timestamp_mode: str = "eod",
     verify: bool = True,
+    offline_only: bool = False,
     **kwargs: Any,
 ) -> Dict[dt.date, Any]:
     """Build one Citi vol object per date, for ``IRSwaptionMDP.VOL_PROVIDERS``.
@@ -373,6 +382,7 @@ def get_citivelo_vol_objects(
             offsets_bp=offsets_bp,
             strict=strict,
             client=client,
+            offline_only=bool(offline_only),
             stored=stored,
         )
         backend = "rl-native" if engine_token == "RL" else ("ql-sabr" if sabr else "ql")

@@ -95,6 +95,78 @@ def _group_queries_by_curve(queries: Iterable[IRSwapQuery]) -> Dict[str, List[IR
     return buckets
 
 
+def _standard_linear_rate_package(
+    *,
+    curve: _IRSwapGenericCurve,
+    q: IRSwapQuery,
+    q_eff: IRSwapQuery,
+) -> Optional[float]:
+    """Price the canonical 2-/3-leg RATE package without sizing throwaways.
+
+    A historical curve/fly RATE reports a fixed linear combination of each
+    component's par rate.  The general structure builder additionally creates
+    unit swaps, calculates their BPVs, solves balanced notionals, and creates a
+    second set of swaps; those notionals never enter ``IRSwapValue.RATE``.  For
+    the plain slash-tenor convention we can build one par swap per component and
+    apply the same default weights exactly.  Anything customized continues down
+    the general path.
+    """
+    if q.value is not IRSwapValue.RATE or q_eff.value is not IRSwapValue.RATE:
+        return None
+    if q.risk_weight is not None or q.value_kwargs or q.effective_date or q.maturity_date or q.is_mms:
+        return None
+
+    # The constructor supplies ``notional=1mm`` for a vanilla outright-like
+    # query.  Other sizing/weight/coupon controls make the package semantic
+    # rather than merely presentational, so retain the full structure builder.
+    raw_kwargs = dict(q.structure_kwargs or {})
+    if set(raw_kwargs) - {"tenor", "notional"}:
+        return None
+    if raw_kwargs.get("notional") not in (None, 1_000_000, 1_000_000.0):
+        return None
+
+    if q_eff.structure == IRSwapStructure.CURVE:
+        component_keys = ("front_tenor", "back_tenor")
+        weights = (-1.0, 1.0)
+    elif q_eff.structure == IRSwapStructure.FLY:
+        component_keys = ("front_tenor", "belly_tenor", "back_tenor")
+        weights = (-1.0, 2.0, -1.0)
+    else:
+        return None
+
+    try:
+        tenors = [str(q_eff.structure_kwargs[key]) for key in component_keys]
+    except (KeyError, TypeError):
+        return None
+    if not all(tenors) or any("IMM_" in tenor.upper() for tenor in tenors):
+        return None
+
+    rates: list[float] = []
+    for token in tenors:
+        # This is exactly IRSwapStructureFunctionMap._leg's ordinary tenor
+        # branch, minus the BPV-sizing pass that is irrelevant to RATE.
+        if token.count("x") == 1:
+            fwd, swap_tenor = token.split("x", 1)
+            if not fwd or not swap_tenor:
+                return None
+        elif "x" not in token:
+            fwd, swap_tenor = "0D", token
+        else:
+            return None
+        try:
+            swap = curve.build_irswap(
+                fwd=fwd,
+                tenor=swap_tenor,
+                fixed_rate=-0.0,
+                notional=None,
+                bpv=None,
+            )
+            rates.append(float(curve.fair_rate(swap)))
+        except Exception:
+            return None
+    return float(sum(weight * rate for weight, rate in zip(weights, rates)) * 10_000.0)
+
+
 def _build_row_for_query(
     curve: _IRSwapGenericCurve,
     q: IRSwapQuery,
@@ -121,6 +193,11 @@ def _build_row_for_query(
         tenor_txt = str(getattr(q, "tenor", "") or "")
         if ("CT" in tenor_txt) or ("9128" in tenor_txt):
             col_name = q.col_name()
+
+    linear_rate = _standard_linear_rate_package(curve=curve, q=q, q_eff=q_eff)
+    if linear_rate is not None:
+        return ref_dt, col_name, linear_rate
+
     pkg, rw = q_eff.resolve_package(pricer_or_curve=curve, is_for_timeseries=True)
     val_map = q_eff.build_value_map(pricer_or_curve=curve, package=pkg, risk_weights=rw)
     value = val_map.apply(value=q_eff.value, **_value_apply_kwargs(q_eff))

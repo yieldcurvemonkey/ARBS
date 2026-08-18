@@ -11,6 +11,7 @@ from Query.IRSwaptions.pricer import (
     build_underlying_swap,
     leg_cube_vol,
     leg_forward_rate,
+    leg_implied_normal_vol_bps,
     leg_metrics,
     leg_model_vol,
     leg_swap_length_years,
@@ -77,10 +78,62 @@ class IRSwaptionValueFunctionMap(BaseValueFunctionMap[IRSwaptionValue, float]):
         }
 
     @staticmethod
-    def _metrics(kwargs: dict[str, Any]) -> list[dict[str, float]]:
+    def _leg_identity(leg: IRSwaptionPricable) -> tuple[Any, ...]:
+        """The part of a leg that changes a calculated metric.
+
+        Labels are deliberately excluded: named and unnamed queries often use the
+        same economic leg, and a label must never turn one expensive risk
+        calculation into another.  This cache lives only on the in-process market
+        context; serialising QL/rateslib pricers is neither reliable nor useful.
+        """
+        return (
+            str(getattr(leg, "option_type", "")),
+            getattr(leg, "exercise_date", None),
+            getattr(leg, "underlying_effective_date", None),
+            getattr(leg, "underlying_maturity_date", None),
+            float(getattr(leg, "strike", 0.0) or 0.0),
+            float(getattr(leg, "notional", 0.0) or 0.0),
+            getattr(leg, "premium_override", None),
+        )
+
+    @classmethod
+    def _metrics(cls, kwargs: dict[str, Any]) -> list[dict[str, float]]:
+        """Return full leg metrics, once per economic leg/context.
+
+        Several value selectors share the exact same expensive ``leg_metrics``
+        calculation.  A wide historical request used to recompute NPV, theta,
+        vega, DV01, delta, gamma, charm, and veta once for *each* selector.  The
+        context is naturally scoped to one market date, which makes it the right
+        lifetime for this small in-memory memo.
+        """
         context = kwargs["context"]
         package = kwargs["package"]
-        return [leg_metrics(context, leg) for leg in package]
+        metadata = getattr(context, "metadata", None)
+        if not isinstance(metadata, dict):
+            return [leg_metrics(context, leg) for leg in package]
+
+        cache = metadata.setdefault("_arbs_leg_metrics_v1", {})
+        if not isinstance(cache, dict):
+            return [leg_metrics(context, leg) for leg in package]
+
+        out: list[dict[str, float]] = []
+        for leg in package:
+            key = cls._leg_identity(leg)
+            metrics = cache.get(key)
+            if metrics is None:
+                metrics = leg_metrics(context, leg)
+                cache[key] = metrics
+            out.append(metrics)
+        return out
+
+    @staticmethod
+    def _nvols(kwargs: dict[str, Any]) -> list[float]:
+        """Read only normal vol instead of calculating every risk metric."""
+        context = kwargs["context"]
+        return [
+            float(leg_implied_normal_vol_bps(context, leg))
+            for leg in kwargs["package"]
+        ]
 
     @staticmethod
     def _weighted(metrics: list[dict[str, float]], rws: list[float], key: str) -> float:
@@ -218,37 +271,37 @@ class IRSwaptionValueFunctionMap(BaseValueFunctionMap[IRSwaptionValue, float]):
         return self._safe_sqrt_variance(var_fwd, label="Forward vol")
 
     def _nvol(self, **kwargs: Any) -> float:
-        mets = self._metrics(kwargs)
+        vols = self._nvols(kwargs)
         rws = kwargs["risk_weights"]
-        if len(mets) == 1:
-            return float(mets[0]["NVOL"])
+        if len(vols) == 1:
+            return float(vols[0])
         denom = sum(abs(float(rw)) for rw in rws) or 1.0
-        return float(sum(abs(float(rw)) * float(m["NVOL"]) for rw, m in zip(rws, mets)) / denom)
+        return float(sum(abs(float(rw)) * vol for rw, vol in zip(rws, vols)) / denom)
 
     def _spread_nvol(self, **kwargs: Any) -> float:
-        mets = self._metrics(kwargs)
+        vols = self._nvols(kwargs)
         package = kwargs["package"]
         rws = [float(x) for x in kwargs["risk_weights"]]
 
         if len(package) == 1:
-            return float(mets[0]["NVOL"])
+            return float(vols[0])
 
         if len(package) == 2:
             t0 = str(package[0].option_type).lower()
             t1 = str(package[1].option_type).lower()
             if t0 == t1:
-                return float(rws[0] * mets[0]["NVOL"] + rws[1] * mets[1]["NVOL"])
+                return float(rws[0] * vols[0] + rws[1] * vols[1])
 
             # Strangle/straddle (payer+receiver both long/short): average by abs weights.
             if (rws[0] * rws[1]) > 0:
                 denom = abs(rws[0]) + abs(rws[1]) or 1.0
-                return float((abs(rws[0]) * mets[0]["NVOL"] + abs(rws[1]) * mets[1]["NVOL"]) / denom)
+                return float((abs(rws[0]) * vols[0] + abs(rws[1]) * vols[1]) / denom)
 
             # Risk reversal style payer-receiver spread.
-            return float(rws[0] * mets[0]["NVOL"] + rws[1] * mets[1]["NVOL"])
+            return float(rws[0] * vols[0] + rws[1] * vols[1])
 
         if len(package) == 3:
-            return float(rws[0] * mets[0]["NVOL"] + rws[1] * mets[1]["NVOL"] + rws[2] * mets[2]["NVOL"])
+            return float(rws[0] * vols[0] + rws[1] * vols[1] + rws[2] * vols[2])
 
         raise NotImplementedError(
             "SPREAD_NVOL for packages with more than 3 legs is ambiguous without additional structure metadata."
@@ -257,7 +310,7 @@ class IRSwaptionValueFunctionMap(BaseValueFunctionMap[IRSwaptionValue, float]):
     def _fwd_nvol(self, **kwargs: Any) -> float:
         context = kwargs["context"]
         package = kwargs["package"]
-        mets = self._metrics(kwargs)
+        vols = self._nvols(kwargs)
 
         # Midcurve single-leg mode:
         #   use midcurve vol (market or fair) + longer-expiry vanilla to infer forward vol.
@@ -273,7 +326,7 @@ class IRSwaptionValueFunctionMap(BaseValueFunctionMap[IRSwaptionValue, float]):
             if use_fair_midcurve:
                 sigma_mid = self._midcurve_fair_sigma(context=context, midcurve_leg=leg, rho=rho, wa=wa, wb=wb)
             else:
-                sigma_mid = self._sigma_from_nvol_bps(float(mets[0]["NVOL"]))
+                sigma_mid = self._sigma_from_nvol_bps(float(vols[0]))
             sigma_fwd = self._fwd_sigma_from_midcurve(context=context, midcurve_leg=leg, midcurve_sigma=sigma_mid)
             return self._nvol_bps_from_sigma(sigma_fwd)
 
@@ -289,8 +342,8 @@ class IRSwaptionValueFunctionMap(BaseValueFunctionMap[IRSwaptionValue, float]):
 
             t_long = t0 if long_idx == 0 else t1
             t_short = t1 if long_idx == 0 else t0
-            sigma_long = self._sigma_from_nvol_bps(float(mets[long_idx]["NVOL"]))
-            sigma_short = self._sigma_from_nvol_bps(float(mets[short_idx]["NVOL"]))
+            sigma_long = self._sigma_from_nvol_bps(float(vols[long_idx]))
+            sigma_short = self._sigma_from_nvol_bps(float(vols[short_idx]))
             var_fwd = ((t_long * sigma_long * sigma_long) - (t_short * sigma_short * sigma_short)) / (t_long - t_short)
             return self._nvol_bps_from_sigma(self._safe_sqrt_variance(var_fwd, label="Forward vol"))
 

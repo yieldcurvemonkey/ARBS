@@ -34,6 +34,7 @@ from __future__ import annotations
 
 import datetime as dt
 import logging
+import threading
 from typing import Any, Optional
 
 from MDP.CitiVelocityExcel.errors import CitiVelocityError
@@ -78,6 +79,14 @@ class RLSwaptionEngine:
     def __init__(self, *, cube: Any, notional: float = 1e8):
         self.cube = cube
         self.notional = float(notional)
+        # A value request regularly asks for several strikes/structures on the
+        # same underlying.  Building a rateslib IRS to recover its par rate and
+        # PV01 is materially more expensive than the cube lookup, and neither
+        # number depends on a swaption strike or side.  Keep it on the engine
+        # (one engine per market context in the Citi provider), rather than in a
+        # process-wide cache where a new curve snapshot could alias an old one.
+        self._underlying_cache: dict[tuple[Any, ...], tuple[float, float]] = {}
+        self._underlying_cache_lock = threading.RLock()
         if not getattr(cube, "is_rateslib", False):
             raise CitiVelocityError(
                 f"RLSwaptionEngine needs a rateslib-backed CitiVeloSwaptionCube; got "
@@ -85,6 +94,44 @@ class RLSwaptionEngine:
             )
 
     # -- the pieces every metric is built from --------------------------
+
+    @staticmethod
+    def _underlying_key(context: Any, leg: Any) -> tuple[Any, ...]:
+        """Identity for curve quantities shared by all strikes of one swap."""
+        return (
+            id(getattr(context, "curve", None)),
+            getattr(context, "as_of_date", None),
+            getattr(leg, "underlying_effective_date", None),
+            getattr(leg, "underlying_maturity_date", None),
+        )
+
+    def _underlying_inputs(self, context: Any, leg: Any) -> tuple[float, float]:
+        """Return ``(forward, annuity)`` once for a curve/date/underlying.
+
+        ``RLSwaptionEngine`` is shared by the thread pool for a single context,
+        so the lock intentionally covers construction too: it prevents a wide
+        package request from simultaneously rebuilding the exact same IRS for
+        payer, receiver, and package legs.  Distinct context engines never
+        contend with one another.
+        """
+        key = self._underlying_key(context, leg)
+        with self._underlying_cache_lock:
+            cached = self._underlying_cache.get(key)
+            if cached is not None:
+                return cached
+
+            swap = context.curve.build_irswap(
+                effective_date=leg.underlying_effective_date,
+                maturity_date=leg.underlying_maturity_date,
+                fixed_rate=-0.0,
+                notional=1.0,
+            )
+            inputs = (
+                abs(float(context.curve.fair_rate(swap))),
+                abs(float(context.curve.pv01(swap))) * 1e4,
+            )
+            self._underlying_cache[key] = inputs
+            return inputs
 
     def _tte(self, context: Any, leg: Any) -> float:
         day_count = 365.0
@@ -97,13 +144,7 @@ class RLSwaptionEngine:
 
     def forward(self, context: Any, leg: Any) -> float:
         """The par rate of the leg's own underlying, DECIMAL."""
-        swap = context.curve.build_irswap(
-            effective_date=leg.underlying_effective_date,
-            maturity_date=leg.underlying_maturity_date,
-            fixed_rate=-0.0,
-            notional=1.0,
-        )
-        return abs(float(context.curve.fair_rate(swap)))
+        return self._underlying_inputs(context, leg)[0]
 
     def annuity(self, context: Any, leg: Any) -> float:
         """Discounted fixed-leg annuity per unit notional, in years.
@@ -112,13 +153,7 @@ class RLSwaptionEngine:
         the PV change per basis point for the notional given; times 1e4 over the
         notional, that is the annuity.
         """
-        swap = context.curve.build_irswap(
-            effective_date=leg.underlying_effective_date,
-            maturity_date=leg.underlying_maturity_date,
-            fixed_rate=-0.0,
-            notional=1.0,
-        )
-        return abs(float(context.curve.pv01(swap))) * 1e4
+        return self._underlying_inputs(context, leg)[1]
 
     def normal_vol(self, context: Any, leg: Any, *, strike: Optional[float] = None) -> float:
         """The cube's volatility for this leg, DECIMAL.

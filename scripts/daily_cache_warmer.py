@@ -117,6 +117,14 @@ _CITIVELO_EOD_OUTRIGHTS = (
 _CITIVELO_EOD_FORWARDS = (
     "1y1y", "1y5y", "2y5y", "5y5y", "5y10y", "10y10y",
 )
+# The old grid could synthesize common packages only when every primitive leg
+# happened to be present. In particular it omitted 1Y30Y, so the research fly
+# 1Y5Y/1Y10Y/1Y30Y priced from scratch on every day. Keep the non-USD grid
+# bounded, but make the USD-SOFR 1Y-forward strip package-complete through 30Y.
+_CITIVELO_USD_SOFR_EOD_FORWARDS = tuple(dict.fromkeys((
+    *_CITIVELO_EOD_FORWARDS,
+    "1y2y", "1y3y", "1y7y", "1y10y", "1y15y", "1y20y", "1y30y",
+)))
 _CITIVELO_EOD_SPREADS = (
     "2y/5y", "2y/10y", "5y/10y", "10y/30y", "2y/5y/10y", "5y/10y/30y",
 )
@@ -136,6 +144,16 @@ _OIS_FORWARD_TENORS = (
     "5y5y", "5y10y", "5y25y",
     "10y10y", "10y20y",
 )
+
+
+def _citivelo_eod_tenors(curve: str):
+    """Canonical EOD primitive/package grid for one warmed Citi curve."""
+    forwards = (
+        _CITIVELO_USD_SOFR_EOD_FORWARDS
+        if str(curve).upper() == "USD-SOFR-1D"
+        else _CITIVELO_EOD_FORWARDS
+    )
+    return (*_CITIVELO_EOD_OUTRIGHTS, *forwards, *_CITIVELO_EOD_SPREADS)
 
 
 # ─────────────────────────────────────────────────────────────────────
@@ -472,10 +490,10 @@ def warm_citivelo_timeseries_eod(start, end):
     queries = [
         UnifiedQuery(curve=curve, tenor=tenor, value=UnifiedValue.IRS_RATE)
         for curve in _CITIVELO_CURVES
-        for tenor in (*_CITIVELO_EOD_OUTRIGHTS, *_CITIVELO_EOD_FORWARDS, *_CITIVELO_EOD_SPREADS)
+        for tenor in _citivelo_eod_tenors(curve)
     ]
-    log.info("  %d queries (%d curves x %d tenors)", len(queries), len(_CITIVELO_CURVES),
-             len(_CITIVELO_EOD_OUTRIGHTS) + len(_CITIVELO_EOD_FORWARDS) + len(_CITIVELO_EOD_SPREADS))
+    log.info("  %d queries (%d curves; USD-SOFR includes the 1Y forward strip through 30Y)",
+             len(queries), len(_CITIVELO_CURVES))
 
     return tb.get_timeseries(
         start=start,
@@ -485,6 +503,21 @@ def warm_citivelo_timeseries_eod(start, end):
         routers={"IRS": IRSwapsTB(mdp, show_tqdm=True)},
         ignore_cache_miss=True,
     )
+
+
+def warm_citivelo_swaption_timeseries_eod(start, end):
+    """Warm durable USD-SOFR swaption values from persisted Citi inputs only.
+
+    The raw cube warm is intentionally separate from this job: a cube is a
+    market-data input, while notebooks consume scalar package values. The helper
+    intersects CurveStore and CubeStore coverage, enables its COM tripwire, and
+    raises if anything tries to fall back to live Excel.
+    """
+    from scripts.citivelo_swaption_eod_warm import warm_eod_values
+
+    start_date = start.date() if isinstance(start, datetime.datetime) else start
+    end_date = end.date() if isinstance(end, datetime.datetime) else end
+    return warm_eod_values(start=start_date, end=end_date, n_jobs=N_JOBS)
 
 
 def warm_citivelo_timeseries_intraday(start, end):
@@ -902,6 +935,8 @@ WARM_JOBS = [
     # -- then the value jobs that read them --
     WarmJob("CitiVelo EOD timeseries", warm_citivelo_timeseries_eod,
             requires=(_CV_CURVE_STORE,)),
+    WarmJob("CitiVelo swaption values EOD", warm_citivelo_swaption_timeseries_eod,
+            requires=(_CV_CURVE_STORE, _CV_SWAPTION_CUBE)),
     WarmJob("CitiVelo intraday timeseries", warm_citivelo_timeseries_intraday,
             requires=(_CV_CURVE_STORE,)),
     WarmJob("CITIVELO FRB values EOD", warm_citivelo_frb_values,

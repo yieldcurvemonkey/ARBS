@@ -42,6 +42,7 @@ def test_the_citivelo_jobs_are_registered(warmer):
         "CitiVelo CurveStore (intraday + EOD)",
         "CitiVelo swaption cube",
         "CitiVelo EOD timeseries",
+        "CitiVelo swaption values EOD",
         "CitiVelo intraday timeseries",
     ):
         assert expected in names, f"{expected} is not in JOBS"
@@ -56,8 +57,11 @@ def test_the_store_warms_run_before_the_value_jobs(warmer):
     store = names.index("CitiVelo CurveStore (intraday + EOD)")
     cube = names.index("CitiVelo swaption cube")
     eod = names.index("CitiVelo EOD timeseries")
+    swaption_values = names.index("CitiVelo swaption values EOD")
     intraday = names.index("CitiVelo intraday timeseries")
     assert store < eod, "the curve store must be warmed before EOD values are priced"
+    assert store < swaption_values, "the curve store must be warmed before swaption values are priced"
+    assert cube < swaption_values, "the cube must be warmed before swaption values are priced"
     assert store < intraday, "the curve store must be warmed before intraday values"
     assert cube < eod or cube < intraday, "the cube warm belongs with the other store warms"
 
@@ -67,6 +71,7 @@ def test_every_script_the_citivelo_jobs_shell_out_to_exists(warmer):
         "citivelo_excel_intraday_warm.py",
         "citivelo_excel_warm.py",
         "citivelo_swaption_vol_warm.py",
+        "citivelo_swaption_eod_warm.py",
     ):
         assert (REPO / "scripts" / name).is_file(), f"scripts/{name} is missing"
 
@@ -130,3 +135,13 @@ def test_only_warmed_currencies_are_scheduled(warmer):
     assert set(warmer._CITIVELO_CURVES) == {
         "USD-SOFR-1D", "EUR-ESTR-1D", "GBP-SONIA-1D", "CAD-CORRA-1D", "JPY-TONAR-1D-LCH",
     }
+
+
+def test_usd_sofr_forward_strip_can_synthesize_the_notebook_fly(warmer):
+    tenors = warmer._citivelo_eod_tenors("USD-SOFR-1D")
+    assert {"1y5y", "1y10y", "1y30y"}.issubset(tenors)
+
+
+def test_swaption_value_warm_declares_both_persisted_inputs(warmer):
+    job = next(j for j in warmer.WARM_JOBS if j.name == "CitiVelo swaption values EOD")
+    assert set(job.requires) == {warmer._CV_CURVE_STORE, warmer._CV_SWAPTION_CUBE}
