@@ -115,6 +115,32 @@ takes all of it. Splitting the same books into odd/even cycles halves each tenor
 almost exactly: the losses are cost-driven and scale with trade count, not with any
 particular subset of cycles. Figures 13–15; artefacts in `_out/qdb/`.
 
+## The QDB all-pairs grid, and the matched-maturity swap box
+
+Second grid, run entirely on QueryDrivenBacktest marks: all 42 (tenor, rank-pair) books
+through QDB in parity-split passes (per-cycle daily marks, exactly attributed), then
+**8,716 configurations** recombining those marks -- direction x entry offset {0,1,3,5,10}
+x exit {next-roll, 10/21/42d} x z-filter x instrument {bond switch, MMS box} x swap cost
+{0, 0.5bp}. The MMS box hedges each leg with a matched-maturity USD-SOFR swap (Citi
+curves; the window starts 2018-04 because SOFR does).
+
+**0 of 8,716 ALIVE** (8,474 dead, 242 selection-artifacts). The whole top-25 is one
+overfit corner: z-filtered FADES (long the current) entering roll+10 holding 10 days,
+8-27 trades, hit rates 7-44% -- a few monster wins carrying rare books. Best
+effective-trials DSR 0.024. Best cells by Sharpe: bond 10Y CTvOOO 1.54, MMS 30Y CTvOO
+1.49 -- both artifacts.
+
+**The matched-maturity hedge does not help: it hurts.** Across 2,816 cells matched on
+(tenor, pair, direction, entry, exit, filter), the MMS box improves the bond switch in
+only **23.5%**, mean dSharpe **-0.22**. The mechanism is the one the study already
+measured from the other side: the curve-slope contamination in the raw spread is a
+LEVEL effect that is nearly static over a one-cycle hold (both bonds age together), so
+the swap legs hedge a term that produces little P&L while adding a real 0.5bp round
+trip and, at the front end, doubling the cost line. Where the hedge does help most
+often (3Y 47%, 2Y 35%) is exactly where the curve is steepest and choppiest; at 5Y-7Y
+it improves 1-4% of cells. Figures 16-18; artefacts in `_out/qdb_grid/` and
+`_out/qdb_allpairs/`, swap rates in `_out/mms_rates/`.
+
 ## Validation chain (all pass)
 
 | check | result |
