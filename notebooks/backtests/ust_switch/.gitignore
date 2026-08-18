@@ -1,0 +1,8 @@
+# Derived panels and study artefacts. Rebuildable from the scripts in this directory:
+#   build_jpm_repo_panel.py  ->  _data/jpm_*.parquet
+#   build_bond_panel.py      ->  _data/alias_cusip_map.parquet, _data/bond_panel.parquet
+#   run_study.py             ->  _out/*
+# The bond panel alone is ~4000 business days x 28 alias slots and takes ~40 min to fetch,
+# so it is cached locally rather than committed.
+_data/
+_out/
