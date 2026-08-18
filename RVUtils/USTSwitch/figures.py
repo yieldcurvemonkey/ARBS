@@ -153,8 +153,14 @@ def plot_auction_cycle(profile: pd.DataFrame, *, ax=None, title: str = "Auction-
         return ax
     n = profile["n"].values.astype(float)
     alpha = 0.25 + 0.75 * (n / n.max())
-    cols = [ROLE["price"] if v >= 0 else ROLE["cost"] for v in profile["mean_pnl_bp"]]
-    ax.bar(profile["cycle_day"], profile["mean_pnl_bp"], color=cols, alpha=alpha, width=0.85)
+    # bar() rejects an ARRAY alpha; bake the per-bar alpha into RGBA colours instead.
+    from matplotlib.colors import to_rgba
+
+    cols = [
+        to_rgba(ROLE["price"] if v >= 0 else ROLE["cost"], a)
+        for v, a in zip(profile["mean_pnl_bp"], alpha)
+    ]
+    ax.bar(profile["cycle_day"], profile["mean_pnl_bp"], color=cols, width=0.85)
     ax.axhline(0, color=INK2, lw=1.0)
     ax.set_xlabel("business days since auction roll")
     ax.set_ylabel("mean P&L (bp/day)")
