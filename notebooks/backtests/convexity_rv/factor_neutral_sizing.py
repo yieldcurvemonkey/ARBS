@@ -439,7 +439,7 @@ print(_pivs.round(4).to_string())
 # Note also that `pc12_neutral` does not drive the analytic level and slope
 # exposures to *exactly* zero here, and should not: the weights were solved on
 # each cohort's own walk-forward basis and are being scored on the full-sample
-# one. The residue (`var_level` 0.09–0.29 against 0.05–0.69 unhedged) is the
+# one. The residue (`var_level` 0.04–0.29 against 0.05–0.69 unhedged) is the
 # honest cost of not knowing the covariance in advance, and section 10 confirms
 # it on realised P&L rather than on the solve.
 
@@ -558,15 +558,28 @@ a 0.4% bookkeeping difference, which is the side to be on.""")
 # tight pairs need 2.9%–8.5% of package size and cost an order of magnitude less.
 # This is the same finding as the attribution's, arrived at from the cost side.
 #
-# **Where the tight pairs' overlay P&L comes from, stated plainly.** On 30Y/50Y
-# the overlay adds $26.9m net to a $34.1m base — 44% of the hedged book. That is
-# not extra convexity; it is the *absence of a slope loss*. The attribution shows
-# these flatteners were losing on slope (`share_slope` = −149% on 5Y/30Y, −10% on
-# 30Y/50Y), so a position that cancels slope adds back what slope took away. The
-# risk reduction is real and causally sized. Its magnitude is a property of what
-# slope did in 2019–2026 and should not be extrapolated.
+# **Where the tight pairs' overlay P&L comes from, stated plainly.** The overlay
+# supplies **28% (20Yx5Y/25Yx5Y), 43% (30Y/50Y) and 47% (10Yx10Y/20Yx10Y)** of the
+# hedged book's total. That is not extra convexity; it is the *absence of a slope
+# loss*. The attribution shows these flatteners were losing on slope
+# (`share_slope` = −149% on 5Y/30Y, −10% on 30Y/50Y), so a position that cancels
+# slope adds back what slope took away. Its magnitude is a property of what slope
+# did in 2019–2026 and should not be extrapolated.
 #
-# `beta_t_median` of 3.4–4.6 says the beta is estimated, not fitted to noise;
+# **And `beta_t_median` is the column that disciplines this book.** It reads
+# **52.1** on 5Y/30Y, **4.57** on 30Y/50Y, **2.18** on 20Yx5Y/25Yx5Y and
+# **0.39** on 10Yx10Y/20Yx10Y, with median R² of 0.917, 0.086, 0.029 and 0.010.
+# Only 5Y/30Y has a slope beta that is genuinely identified — which is precisely
+# what the attribution said, since that is the only structure with meaningful
+# slope variance (88.9% against 0.2% for 10Yx10Y/20Yx10Y).
+#
+# So **the 10Yx10Y/20Yx10Y overlay is fitting noise.** A `t` of 0.39 on the
+# hedge ratio means there is no slope exposure to hedge, and the $44.0m the
+# overlay earned there is an unmotivated short-slope position that happened to
+# pay. It is reported at full size because suppressing it would be choosing the
+# result, but it must not be read as a hedge working. Section 13 carries that
+# caveat into the scoreboard.
+#
 # `n_short_window` of 44 says half the rebalances ran on less than a full 252-day
 # window, which is unavoidable — the alternative is leaving the first years
 # unhedged and comparing two different trade sets.
@@ -634,8 +647,11 @@ print(_rel.round(3).to_string())
 # is the same two legs at the same size; that is exactly what stops working when
 # `pc12_neutral` trades three legs and `pc1_neutral` trades two of unequal size.
 # The denominator used is the gross DV01 actually traded, so the number is
-# comparable across sizings: **1.21–1.83 bp per leg** on the surviving books
-# against a charged 0.25 bp, i.e. 5–7x headroom.
+# comparable across sizings: **1.21–1.63 bp per leg** on the three surviving
+# headline books against a charged 0.25 bp — 4.8x to 6.5x headroom. The one
+# negative entry is `pc12_neutral` on 5Y/30Y (−1.04 bp): that book loses money
+# gross, so no cost level rescues it, and the number says so rather than being
+# clipped to zero.
 
 # %%
 COSTS = {}
@@ -787,18 +803,22 @@ print(f"{'5Y/30Y':18s} slope  {_a:.4f} -> {_b:.4f}   ({100*(1-_b/_a):+.0f}%)")
 # measured on realised P&L, on the same ruler as the attribution report, and it is
 # the part of the answer that does not depend on a small sample.
 #
-# **And the convexity term survives on the tight pairs.** At trade level,
-# `incr_convexity` is 0.32–0.36 with `t_convexity` = 4.1–4.9 on every
-# `pc1_neutral` and `pc12_neutral` book of the three tight pairs — essentially
-# unchanged from the incumbent's 0.31–0.35. The hedge removed the factor and left
-# the convexity where it was, which is the good outcome and the one the prior
-# predicted.
+# **And the convexity term survives on the tight pairs.** At TRADE level — where
+# the convexity regressor is the squared terminal move, the right one for a
+# 1-year buy-and-hold — `incr_convexity` on the three tight pairs' `pc1_neutral`
+# books is **0.317, 0.339, 0.360** at `t_convexity` = **4.1–4.9**, against the
+# incumbent's 0.321, 0.306, 0.348 at t = 3.5–4.9. Including `pc12_neutral` widens
+# the t range to 3.4–5.2 and leaves the incremental R² in the same band. The
+# hedge removed the factor and left the convexity exactly where it was, which is
+# the good outcome and the one the prior predicted.
 #
 # **5Y/30Y is the counter-case, and it is instructive.** Its incumbent book has
-# `incr_slope = 0.883` and `incr_convexity = 0.004` — the convexity term explains
-# essentially *nothing*. Hedge the slope out and `incr_convexity` rises to 0.315
-# because it is now the largest thing left, while the P&L goes to −740 bp. The
-# convexity was always there as an *exposure*; it was never the earner.
+# `incr_slope = 0.677` and `incr_convexity = 0.004` at trade level (0.883 and
+# 0.0001 daily) — the convexity term explains essentially *nothing*. Hedge the
+# slope out and `incr_convexity` rises to 0.315, not because convexity started
+# earning but because it is now the largest thing left, while the P&L goes to
+# −740 bp. The convexity was always there as an *exposure*; it was never the
+# earner.
 
 # %% [markdown]
 # ## 11. Certification II — a genuine multi-leg engine run of the new weights
@@ -839,9 +859,37 @@ if _ep.exists() and _cp.exists():
     print(f"leg-positions opened: {int(ENG_COH['n_legs'].sum())}")
     assert abs(CERT_ENGINE["terminal_gap_pct"]) < 1e-6
     assert CERT_ENGINE["corr_daily_changes"] > 1 - 1e-9
+
+    # A second, independent leg of the same certification: the engine's own
+    # per-cohort REALISED P&L against the weighted sum of the per-leg realised
+    # P&L. The equity comparison above tests the marks; this tests the unwind,
+    # which is a different code path (`closed_positions_log`, not
+    # `_position_value`) and the one that carries the fee convention.
+    _by = ENG_COH.set_index("cohort")["gross_pnl_ccy"].astype(float)
+    _mine = {}
+    for _k3, _gk in _gw.groupby("cohort"):
+        if not bool(_gk["closed"].iloc[0]):
+            continue
+        _t = 0.0
+        for _, _r in _gk.iterrows():
+            _cr = LEGS[_r["leg"]].cohorts
+            _t += (float(_r["dv01"]) / fns.UNIT_DV01
+                   * float(_cr.loc[_cr["cohort"] == _k3, "gross_pnl_ccy"].iloc[0]))
+        _mine[int(_k3)] = _t
+    _m = pd.Series(_mine)
+    _e = _by.reindex(_m.index)
+    print(f"per-cohort realised P&L: n={len(_m)}  "
+          f"max abs err ${float((_m - _e).abs().max()):.6f}  "
+          f"max rel {float(((_m - _e).abs() / _e.abs()).max()):.3e}  "
+          f"corr {float(_m.corr(_e)):.10f}")
+    assert float(((_m - _e).abs() / _e.abs()).max()) < 1e-9
     print("\nThe composed pc12_neutral book IS the engine's own three-leg run, on")
-    print("the level and on the path. Every other book in this notebook is built")
-    print("by the same arithmetic from the same eight mark matrices.")
+    print("the level, on the path AND on every individual unwind. Every other book")
+    print("in this notebook is built by the same arithmetic from the same eight")
+    print("mark matrices, so this certifies all sixteen.")
+    print("\nNote the engine run carries 1908 marks to the composition's 1907: it")
+    print("marked Good Friday 2019-04-19 because its 5Y leg priced that day. The")
+    print("comparison is on the intersection, which is the grid section 2 fixed.")
 else:
     CERT_ENGINE = {}
     raise FileNotFoundError(
@@ -958,10 +1006,12 @@ print(CLEARS.to_string(index=False) if len(CLEARS) else "  NONE")
 #   the structure, not the re-sizing. Counting them as four independent survivals
 #   is precisely the error `k_eff = 1.31` exists to prevent.
 # * **Two of the remaining three are `slope_beta_hedged`** (30Y/50Y 0.508,
-#   10Yx10Y/20Yx10Y 0.414), and section 7 showed roughly 43% of that book's P&L
+#   10Yx10Y/20Yx10Y 0.414), and section 7 showed 43% and 47% of those books' P&L
 #   is the overlay itself — a short-slope position that paid because slope was
-#   what the flatteners were losing on. Real, causally sized, honestly costed,
-#   and a bet on the sample.
+#   what the flatteners were losing on. Causally sized and honestly costed, but a
+#   bet on the sample; and on 10Yx10Y/20Yx10Y the hedge ratio is estimated at
+#   `t = 0.39` with `R² = 0.010`, i.e. it is not estimated at all. That book
+#   should be read as an accidental short-slope overlay, not as a hedge.
 # * **The third is `pc12_neutral` on 30Y/50Y** (0.347 against the incumbent's
 #   0.311) — a genuine, tiny improvement, well inside noise at `n_eff = 9.8`.
 #
@@ -1131,5 +1181,7 @@ print(f"Certification II (3-leg engine run of pc12_neutral 5Y/30Y): "
       f"terminal gap {CERT_ENGINE.get('terminal_gap_pct', float('nan')):.1e}%, "
       f"daily corr {CERT_ENGINE.get('corr_daily_changes', float('nan')):.8f}")
 print(f"E[max Sharpe | null], {N_TRIALS} sizings at n_eff {N_EFF_POOLED:.2f}: {BAR:.4f}")
-print(f"clears: {len(CLEARS)} book(s), all on 20Yx5Y/25Yx5Y -- one bet, three rows")
+print(f"clears: {len(CLEARS)} of {len(SCORE)} books across "
+      f"{CLEARS['structure'].nunique()} structures -- but {int((CLEARS['structure'] == '20Yx5Y/25Yx5Y').sum())} "
+      f"of them are 20Yx5Y/25Yx5Y, one bet appearing that many times")
 print(f"\nnotebook ran in {time.time() - T_START:.0f}s")

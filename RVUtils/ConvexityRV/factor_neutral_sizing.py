@@ -112,9 +112,19 @@ strategy 1's always-on control. Only the leg weights differ.
     ``r_front = +D * v1_back / v1_front``. Net DV01 is NOT zero and is not meant
     to be: the package is neutral to the level FACTOR, which is the thing the
     curve actually moves by, rather than to a parallel shift the curve never
-    performs. Residual exposure: PC2, PC3 and convexity. For 5Y/30Y this is a
-    small adjustment (the two legs' PC1 loadings are close) and it is reported
-    for completeness; for the forward pairs it is the whole story.
+    performs. Residual exposure: PC2, PC3 and convexity.
+
+    For the three tight pairs this is the whole story and it works: the level
+    share of package variance falls 0.433 -> 0.214, 0.690 -> 0.102 and
+    0.613 -> 0.083, and the level regressor's incremental R^2 on realised daily
+    P&L falls 0.0111 -> 0.0005, 0.162 -> 0.019 and 0.215 -> 0.073.
+
+    For 5Y/30Y it is reported and then DISQUALIFIED. Level is only 5.1% of that
+    book's variance, so the constraint is not binding on anything that matters,
+    and the walk-forward PC1 shape moves enough over 2019-2026 (the 5Y leg
+    ranges $70,557 to $134,875 against a full-sample $85,700) that the rule
+    scores +1408 bp walk-forward against -66 bp full-sample. A 1474 bp gap
+    between two estimates of one sizing is the estimator moving, not a trade.
 
 ``pc12_neutral``
     A THIRD leg at :data:`HEDGE_LEG` and a re-solve of the front leg, chosen so
