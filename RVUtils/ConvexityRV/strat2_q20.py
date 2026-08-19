@@ -284,7 +284,16 @@ __all__ = [
 ]
 
 #: The curve. Defined in ``MDP/IRSwaps/BARCHART_STIRF/rl.py``; instruments
-#: ``SFRCM1..SFRCM20``, ``max_tenor_from_timestamp_months=60``.
+#: ``SFRCM1..SFRCM20``, ``max_tenor_from_timestamp_months=66``.
+#:
+#: The horizon is ``3*20 + 6``, not ``3*20``. Node construction is driven by the
+#: horizon ALONE -- ``_build_stirf_nodes`` filters central-bank ends and pricer
+#: maturities alike by ``d <= horizon`` and never looks at the instrument count
+#: -- and ``SFRCM20`` matures at ``IMM_1 + 60m``, which is always past
+#: ``as_of + 60m``. Under the old 60 the terminal instrument was excluded from
+#: the grid on every date and priced by extrapolation, which is what held rank
+#: 17 at a median 3.7bp against the 2.0bp gate. See
+#: ``tests/test_q20_curve_horizon.py``.
 Q20_CURVE = "USD-SOFR-1D-Q20STIRT"
 
 #: Continuous-contract instrument prefix. ``SFRCM{k}`` is the k-th quarterly SR3
