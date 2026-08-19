@@ -339,13 +339,16 @@ YEARTAB["pct_ok"] = (100 * YEARTAB["ok"] / YEARTAB["cells"]).round(1)
 print("\nby year:")
 print(YEARTAB.to_string())
 
-# `contract_mismatch` is not random: it lands on IMM dates. `packs.quarterly_imm_
-# sequence(include_current=True)` keeps a contract whose IMM date IS today (it is
-# still the live front contract); the option MDP's `_imm_cutoff` has already
-# rolled past it. The two then disagree about which four contracts a pack is, and
-# the leg-identity guard refuses the cell rather than calibrating the model leg
-# off the wrong strip. That is the guard doing its job, and it is the right
-# answer -- but it costs one date per quarter and is worth fixing upstream.
+# `contract_mismatch` was not random: it landed on IMM dates, because
+# `packs.quarterly_imm_sequence(include_current=True)` keeps a contract whose IMM
+# date IS today while the option MDP's `_imm_cutoff` had already rolled past it.
+# The two then disagreed about which four contracts a pack is and the
+# leg-identity guard refused the cell -- the guard doing its job -- at a cost of
+# one date per quarter, all 26 lost cells. FIXED UPSTREAM 2026-08-19: both sides
+# now keep the contract (`tos._imm_cutoff` returns IMM + 1 day; see `packs`'s
+# module docstring for the evidence). This block is kept because it is the
+# detector: a non-zero count here again means the two ladders have drifted apart
+# a second time.
 from RVUtils.ConvexityRV.packs import imm_date as _imm
 
 _mis = VOLS[VOLS["reason"] == "contract_mismatch"]
@@ -1042,14 +1045,18 @@ print(f"\nOUTBOUND NETWORK CALLS MADE: 0 "
 # > by running the strike sensitivity on a QuantLib-backed curve with an
 # > explicit control.
 #
-# > **Third, smaller: the IMM-date roll convention.** On an IMM date itself,
+# > **Third, smaller: the IMM-date roll convention.** ~~On an IMM date itself,
 # > `packs.quarterly_imm_sequence(include_current=True)` keeps the contract whose
 # > IMM date is today — it is still the live front contract — while the option
-# > MDP's `_imm_cutoff` has already rolled past it. The two then disagree about
-# > which four contracts a pack window contains, and the leg-identity guard
-# > correctly refuses the cell. It costs one date per quarter. Whichever
-# > convention is right, the two should agree; the guard should not have to
-# > absorb it.
+# > MDP's `_imm_cutoff` has already rolled past it.~~ **Fixed upstream
+# > 2026-08-19.** Both sides now keep it: `_imm_cutoff` returns IMM + 1 day, so
+# > the contract survives its own IMM date and rolls the next. The evidence that
+# > settled it — the vendor "continuous ladder" corroboration was circular, and
+# > the settlement grid classifies the starting contract as live on 32/32 IMM
+# > dates — is written up in `RVUtils/ConvexityRV/packs.py`'s module docstring,
+# > and `tests/test_sr3_imm_roll_convention.py` holds the two ladders together.
+# > The leg-identity guard no longer has to absorb it; the 26 refused cells were
+# > every one of them on an IMM date.
 #
 # One more, deliberately not done: **`RVUtils/ConvexityRV/__init__.py` was not
 # updated to re-export `ca_valuation`.** This work was scoped to new files only

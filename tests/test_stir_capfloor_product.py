@@ -262,10 +262,22 @@ def test_roll_handling_and_partial_strip_rejection(monkeypatch):
         lambda req: {req["symbols"][0]: [_mk_pricer(symbol=f"{req['symbols'][0].split('|', 1)[0]}|9687P", price=1.0, delta=-0.4)]},
     )
 
+    # 2026-03-18 IS the March IMM date. The strip rolls the day AFTER it, not on
+    # it: SFRH26 references the quarter that BEGINS 2026-03-18, so on that date
+    # zero of its ~91 days have been observed and it is still the front listed
+    # contract -- it settles on the 0.0025 grid and trades all session, while the
+    # contract it replaces has already settled off-grid. This test used to assert
+    # the roll landed ON the 18th, which was the repo's other convention; both
+    # sites now keep the contract. See `tos._imm_cutoff` and the module docstring
+    # of `RVUtils/ConvexityRV/packs.py`.
     q_roll = STIRCapFloorQuery(shorthand="3Mx1Y", value=STIRCapFloorValue.PRICE)
     before_roll = mdp.get_pricer(q_roll.build_mdp_request(datetime.datetime(2026, 3, 17, 10, 0)))
-    after_roll = mdp.get_pricer(q_roll.build_mdp_request(datetime.datetime(2026, 3, 18, 10, 0)))
+    on_imm = mdp.get_pricer(q_roll.build_mdp_request(datetime.datetime(2026, 3, 18, 10, 0)))
+    after_roll = mdp.get_pricer(q_roll.build_mdp_request(datetime.datetime(2026, 3, 19, 10, 0)))
     assert before_roll.meta()["strip_contracts"] == ["SFRM26", "SFRU26", "SFRZ26", "SFRH27"]
+    assert on_imm.meta()["strip_contracts"] == ["SFRM26", "SFRU26", "SFRZ26", "SFRH27"]
+    # ...and it really does roll, one day later -- "keep it" must not silently
+    # become "keep it forever".
     assert after_roll.meta()["strip_contracts"] == ["SFRU26", "SFRZ26", "SFRH27", "SFRM27"]
 
     with pytest.raises(ValueError, match="before the first live quarterly contract"):

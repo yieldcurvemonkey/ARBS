@@ -252,6 +252,13 @@ def _front_sfr_option_contracts(as_of: datetime.date) -> List[str]:
         count=4,
         valid_months=serial_months,
     )
+    # This is the UNDERLYING quarterly ladder, so it uses the repo-wide roll
+    # convention (`_imm_cutoff`: keep the contract whose reference quarter begins
+    # today, roll the next day). On an IMM date that front quarterly's OPTION
+    # series has already terminated -- the Friday before, per
+    # :func:`sofr_option_last_trade_date` -- and that is a different concept, not
+    # a disagreement about the ladder. Callers that need live options filter on
+    # last trade date, which they already do: see `STIRFutureOptionMDP` ~:2792.
     quarterlies = _next_contracts(
         start_date=as_of,
         prefix="SFR",

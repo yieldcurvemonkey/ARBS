@@ -207,9 +207,11 @@ assert int(round(100_000.0 / (4.0 * DV01_PER_CONTRACT))) == 1000, "1000 packs = 
 print(f"  $100k DV01 = {int(round(100_000.0/(4*DV01_PER_CONTRACT)))} packs "
       f"x 4 legs x ${DV01_PER_CONTRACT:.0f}/bp  OK")
 
-# roll-date off-by-one: the SFRCM ladder rolls, the pack universe does not
+# IMM roll date: since 2026-08-19 the SFRCM ladder and the pack universe keep
+# the same contract, so depth maps 1:1 onto instruments on EVERY date. This
+# asserted `19` while the two ladders disagreed; see packs' module docstring.
 _roll = imm_date(2019, 6)
-assert Q.is_imm_roll_date(_roll) and Q.instrument_count(_roll, 20) == 19
+assert Q.is_imm_roll_date(_roll) and Q.instrument_count(_roll, 20) == 20
 assert Q.instrument_count(NB.citi_date, 20) == 20
 print(f"  IMM roll {_roll}: strip depth 20 -> {Q.instrument_count(_roll, 20)} SFRCM "
       f"instruments  OK")
@@ -868,7 +870,7 @@ print("=> the ~10% of days where the two disagree is what produces the P&L gap a
 # | 2 | **Wrong futures source.** The production builder fetches from `BARCHART_TOS_LIVE_STIRF-RL` (22:xx intraday, depth 20 on zero local dates), not the 17:00 EOD settle. | would be a 52–57-request-per-date crawl AND the wrong mark | **fixed by injection**; guard asserts 0 requests |
 # | 3 | **Settle-timing.** Barchart "EOD" is ~2h after the CME settle. | 0.6–1.6bp/pack-day; **30.1%** of the CA level at ranks 1–8, **6.7%** at 13–17 | irreducible; the reason to trade deep |
 # | 4 | **Selection fragility.** A 0.03bp CA difference flips the ranked winner on ~10% of screen days. | ~2× on total P&L | **reported, not fixed** — the dominant caveat |
-# | 5 | **IMM roll off-by-one.** The `SFRCM` ladder rolls on the IMM date; the pack universe does not. | 8 of 10 network reaches in a full build | fixed (`instrument_count`) |
+# | 5 | **IMM roll off-by-one.** The `SFRCM` ladder rolled on the IMM date; the pack universe did not. | 8 of 10 network reaches in a full build | **fixed at source** 2026-08-19 (`tos._imm_cutoff` keeps the contract; the `instrument_count` shim was deleted with it) |
 # | 6 | **Swap-leg frequency.** `usd_irs` quotes annual fixed; Citi specifies Q/Q. | up to 12bp (`0.375·r²`) | fixed upstream (`matched_forward_swap_rate`) |
 # | 7 | **Stale deferred settles.** | `stale_run` 0.055%, 4 catch-up dates; removing them moves deep hedged P&L by ~$0.8mn | **reported both ways** |
 # | 8 | **Universe truncation.** Golds needs depth 20 → 681 dates whose longest contiguous run (309 days) is entirely inside ZIRP. | Golds cannot be backtested daily | **documented gap** |

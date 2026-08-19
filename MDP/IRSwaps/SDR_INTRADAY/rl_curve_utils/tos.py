@@ -148,9 +148,57 @@ def _monthly_cutoff(year: int, month: int) -> datetime.date:
 
 
 def _imm_cutoff(year: int, month: int) -> datetime.date:
-    """Use IMM date (3rd Wed) if month is IMM; otherwise fall back to monthly cutoff."""
+    """First date an IMM quarterly month is no longer forward-starting: IMM + 1.
+
+    ``_next_contracts`` drops a month once ``as_of >= cutoff``, so the cutoff is
+    an EXCLUSIVE upper bound and the ``+ 1`` is what **keeps the contract on its
+    own IMM date**. An SR3 contract references the quarter that BEGINS at its
+    IMM date, so on that date zero of its ~91 days have been observed: it is the
+    last moment of purely forward-starting and the first moment of the new
+    quarter at once. Both readings are defensible from CME's text -- "the
+    nearest four forward-starting quarterly delivery months" does not adjudicate
+    a zero-day-elapsed accrual -- so it was settled on evidence instead:
+
+    * **The vendor "corroboration" was circular.** ``SFRCM1`` never reaches
+      Barchart; it is our own alias, resolved in-process by
+      ``STIRFutureMDP._resolve_aliases_bulk`` through this very function, and
+      the wire request on 2023-06-21 is the dated symbol ``SQU23``. So the
+      continuous ladder rolling a day earlier was this line reading itself back.
+    * **The settlement grid says the starting contract is the live one.** SR3
+      trades on a 0.0025 grid and finally settles at ``100 - compounded SOFR``,
+      which is essentially never on it. Classifying every quarterly IMM date
+      2018-2026 in the local store: the ENDING contract is off-grid 18/18 (it
+      has settled), the STARTING contract is on-grid 32/32 (it is tradable).
+      2023-06-21: ``SR3H23 px=95.0571`` (settlement), ``SR3M23 px=94.7700``.
+    * **Intraday, same date, same fetch:** the ending contract has 0 rows (or 1,
+      the settlement); the starting contract has 1,262 rows across 8-21 distinct
+      prices, and its quoted life runs from that day to the end of its reference
+      quarter -- ``SR3M23``: 64 quoted dates, 2023-06-21 to 2023-09-20.
+    * **T1 never goes negative either way.** ``packs.pack_t1s`` puts the front
+      leg at exactly 0.0 on the IMM date under this convention; the strict rule
+      rolled one day early, while a T1 = 0 still-listed contract was admissible.
+
+    Dropping it deleted the largest-open-interest contract from the *entire*
+    ladder for one session a quarter, which is not a labelling nicety.
+
+    **This does not undo the roll.** The cutoff still fires the very next day,
+    which is the property the strict version was introduced for -- see
+    ``get_short_end_curve_tickers``: "SR3 rolls on IMM (3rd Wednesday) -- this
+    fixes the U25 issue after 2025-09-17". On 2025-09-17 the front is now
+    ``SR3U25``; on 2025-09-18 it is ``SR3Z25``, exactly as before. Because dates
+    are whole days, ``as_of < cutoff`` can only change on the IMM date itself,
+    so no other date in the repo can move -- verified over a 1,946-date panel
+    rebuild in which every non-IMM row was bit-identical.
+
+    Non-quarterly months are untouched: this is a statement about an IMM accrual
+    period, not about month ends, so serial SR1/ZQ months keep
+    :func:`_monthly_cutoff`.
+
+    The full write-up, and the list of every site that inherits this, is in
+    ``RVUtils/ConvexityRV/packs.py``'s module docstring.
+    """
     if month in (3, 6, 9, 12):
-        return _third_wednesday(year, month)
+        return _third_wednesday(year, month) + datetime.timedelta(days=1)
     return _monthly_cutoff(year, month)
 
 
@@ -234,7 +282,9 @@ def get_short_end_curve_tickers(
     # SR1 rolls at start of next month (monthly cutoff)
     sr1_list = _next_contracts(as_of_date, sr1_prefix, first_n_sr1, valid_months=sr1_months, cutoff_fn=_monthly_cutoff)
 
-    # SR3 rolls on IMM (3rd Wednesday) — this fixes the U25 issue after 2025-09-17
+    # SR3 rolls the day AFTER IMM (3rd Wednesday) — this fixes the U25 issue after
+    # 2025-09-17 and still keeps U25 itself on the 17th, whose reference quarter
+    # starts that day. See `_imm_cutoff`.
     sr3_list = _next_contracts(as_of_date, sr3_prefix, first_n_sr3, valid_months=sr3_months, cutoff_fn=_imm_cutoff)
 
     if include_serff:

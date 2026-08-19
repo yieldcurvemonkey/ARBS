@@ -42,8 +42,15 @@ _PANEL = _REPO / "notebooks" / "data" / "convexity_rv" / "strat2_q20_panel.parqu
 
 
 # ===========================================================================
-# Pure logic: the IMM roll-date off-by-one
+# Pure logic: IMM roll dates
 # ===========================================================================
+# These used to be the "off-by-one" tests. The off-by-one is gone -- both
+# ladders now keep the contract whose reference quarter begins on the IMM date
+# (``tos._imm_cutoff``, and ``packs``'s module docstring for why). What survives
+# here is the date arithmetic that names those dates, because they remain the
+# only dates on which a roll-convention regression could show up, and the
+# cross-site invariant that would catch one lives in
+# ``tests/test_sr3_imm_roll_convention.py``.
 def test_imm_roll_dates_are_detected():
     """3rd Wednesdays of Mar/Jun/Sep/Dec are roll dates; neighbours are not."""
     for y, m in ((2019, 6), (2021, 9), (2023, 3), (2018, 12)):
@@ -53,18 +60,30 @@ def test_imm_roll_dates_are_detected():
         assert not Q.is_imm_roll_date(d + datetime.timedelta(days=1))
 
 
-def test_instrument_count_drops_one_on_roll_dates():
-    """The SFRCM ladder has rolled past the expiring contract; the pack universe
-    has not. Measured: 8 of the 10 dates that reached for the network in a full
-    build were IMM roll dates, and all resolved at ``depth - 1``."""
+def test_instrument_count_is_the_strip_depth_on_every_date():
+    """Since the 2026-08-19 roll-convention repair the ``SFRCM`` ladder indexes
+    the pack sequence on every date, IMM dates included, so a strip of depth *d*
+    supplies *d* calibration instruments and there is no roll-date correction
+    left. This test previously asserted ``depth - 1`` on roll dates; the offset
+    was removed at source rather than compensated here. The identity itself --
+    ``SFRCM{k}`` IS ``quarterly_imm_sequence(...)[k-1]`` -- is asserted against
+    the live alias resolver in ``tests/test_sr3_imm_roll_convention.py``."""
     roll = imm_date(2019, 6)
-    assert Q.instrument_count(roll, 20) == 19
+    assert Q.instrument_count(roll, 20) == 20
     assert Q.instrument_count(roll - datetime.timedelta(days=1), 20) == 20
+    assert Q.instrument_count(roll + datetime.timedelta(days=1), 20) == 20
     assert Q.instrument_count(datetime.date(2023, 6, 9), 20) == 20
+    assert Q.instrument_count(roll, 7) == 7
 
 
 def test_roll_date_sequence_shifts_by_exactly_one():
-    """The mechanism behind the fix, stated as an identity rather than a claim."""
+    """The two candidate conventions, stated as an identity rather than a claim.
+
+    This is the whole disagreement in three lines: on an IMM date the sequences
+    differ by exactly one contract at the front and agree everywhere after. The
+    repo keeps ``include_current=True``; this test does not endorse either side,
+    it pins what the choice is worth, and it is the only caller in the repo that
+    passes ``False``."""
     d = imm_date(2019, 6)
     incl = quarterly_imm_sequence(d, 21, include_current=True)
     excl = quarterly_imm_sequence(d, 20, include_current=False)

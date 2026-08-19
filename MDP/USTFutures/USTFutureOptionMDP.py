@@ -1356,6 +1356,15 @@ def _qs_front_barchart_contract_for_date(*, root_globex: str, as_of: datetime.da
     prefix = _QS_UST_GLOBEX_TO_BARCHART_ROOT.get(root)
     if not prefix:
         raise ValueError(f"Unsupported UST root for constant maturity symbol: {root_globex!r}")
+    # `_imm_cutoff` is a SOFR/Eurodollar rule and a Treasury future has no IMM
+    # accrual, so the third Wednesday means nothing here -- this site is
+    # inherited, not chosen. It deliberately shares the primitive rather than
+    # pinning the pre-2026-08 strict form: freezing it would enshrine a rule
+    # `definitions/USTFutures.py:front_month` measures as wrong 25-27% of days
+    # (it holds the expiring contract a median 16 business days past the
+    # liquidity roll), and the roll-convention repair moves this by at most one
+    # day per quarter. The real fix is `USTFutures.front_month` (first position
+    # day, 3.7-4.4% wrong); this is left as a separate, larger change.
     front = _next_contracts(
         start_date=as_of,
         prefix=prefix,

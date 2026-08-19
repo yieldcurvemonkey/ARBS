@@ -125,8 +125,10 @@ and is call-capped by ``max_network_cells``.
 
 THREE UPSTREAM DEFECTS, WORKED AROUND HERE AND REPORTED RATHER THAN PATCHED
 ---------------------------------------------------------------------------
-All three live in ``MDP/STIRCapFloors/STIRCapFloorMDP.py``, which this work was
-not permitted to modify. The notebook's final section carries the full write-up.
+The first two live in ``MDP/STIRCapFloors/STIRCapFloorMDP.py``, which this work
+was not permitted to modify. The notebook's final section carries the full
+write-up. **The third has since been fixed at source** -- see below; it is left
+in place because the workaround is now a detector.
 
 1. ``_contracts_for_explicit_window`` sizes its candidate ladder as
    ``ceil(window_days/75) + 4`` contracts **from the front of the curve**, so a
@@ -143,11 +145,23 @@ not permitted to modify. The notebook's final section carries the full write-up.
    ``atm_per_caplet`` (which never reaches ``_discount``) and by running
    :func:`strike_convention_sensitivity` on a QuantLib-backed curve, with a
    control proving the swap does not move the ATM leg.
-3. On an IMM date itself, ``packs.quarterly_imm_sequence(include_current=True)``
-   keeps the contract whose IMM date is today while the option MDP's
-   ``_imm_cutoff`` has already rolled past it. The two then disagree about which
-   four contracts a pack contains and the leg-identity guard refuses the cell --
-   the right answer, but it costs one date per quarter.
+3. **FIXED AT SOURCE, 2026-08-19.** On an IMM date itself,
+   ``packs.quarterly_imm_sequence(include_current=True)`` keeps the contract
+   whose IMM date is today while the option MDP's ``_imm_cutoff`` had already
+   rolled past it. The two then disagreed about which four contracts a pack
+   contains and the leg-identity guard refused the cell -- the right answer, but
+   it cost one date per quarter, and all 26 refused cells were IMM dates. Both
+   ladders now keep the contract: ``tos._imm_cutoff`` returns IMM + 1 day, so a
+   contract survives its own IMM date and rolls the next. The evidence (the
+   vendor "continuous ladder" corroboration was circular; the settlement grid
+   classifies the starting contract as live on 32/32 IMM dates and the ending
+   one as settled on 18/18) is in ``packs``'s module docstring, and
+   ``tests/test_sr3_imm_roll_convention.py`` is the cross-site invariant.
+
+   The leg-identity guard in :func:`pack_capfloor_vol` STAYS. It is now a
+   detector rather than a workaround: ``reason == "contract_mismatch"`` should
+   be empty, and if it ever returns it means the two ladders have drifted apart
+   again. Do not weaken it to "probably fine now".
 """
 
 from __future__ import annotations

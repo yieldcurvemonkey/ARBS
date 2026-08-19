@@ -26,6 +26,92 @@ The matched-maturity swap, pinned verbatim by Citi's own trade recommendation
 For SR3 this tiles *exactly*: the four reference quarters concatenate to
 ``[start, end]``, which makes the SOFR adjustment cleaner than the ED one (3M
 LIBOR deposits from each IMM date only tiled approximately).
+
+
+THE IMM DATE ITSELF -- ONE CONVENTION, AND WHY IT IS THIS ONE (2026-08-19)
+==========================================================================
+On the ~4 days a year that are quarterly IMM dates, and on no other day, this
+repo used to hold two answers to "what are the front four contracts".
+
+:func:`quarterly_imm_sequence` with ``include_current=True`` -- the default, and
+what every pack consumer uses -- **keeps** the contract whose reference quarter
+begins today. ``MDP``'s ``tos._imm_cutoff`` + ``_next_contracts``, which every
+colour alias, ``SFRCM{k}``, cap/floor strip and listed-option ladder resolves
+through, used a strict ``<`` and **dropped** it. Measured on 2023-06-21: packs
+gave ``M23,U23,Z23,H24``; the MDP gave ``U23,Z23,H24,M24``. On 2023-06-20 and
+2023-06-22 they agreed exactly. **Both sites now keep it.**
+
+CME defines the White pack as the "nearest four **forward-starting** quarterly
+delivery months", and that text does not adjudicate this case. An SR3 contract
+references the quarter that BEGINS at its IMM date, so on that date zero of its
+~91 days have been observed: it is simultaneously the last moment of purely
+forward-starting and the first moment of the new quarter. Genuinely ambiguous.
+It was settled on evidence instead, and the evidence is one-sided:
+
+* **The vendor "corroboration" for dropping it was circular.** ``SFRCM1`` never
+  reaches Barchart -- it is our own alias, resolved in-process by
+  ``STIRFutureMDP._resolve_aliases_bulk`` through the very function under
+  question, and what goes on the wire on 2023-06-21 is the dated symbol
+  ``SQU23``. Both independent findings of the disagreement bottomed out in the
+  same line of our own code. There was no external witness for the drop side.
+* **The settlement grid says the starting contract is the live one.** SR3 trades
+  on a 0.0025 grid and finally settles at ``100 - compounded SOFR``, which is
+  essentially never on that grid. Over every quarterly IMM date 2018-2026 in the
+  local store, the ENDING contract is off-grid **18/18** (it has settled) and
+  the STARTING contract is on-grid **32/32** (it is tradable). No exceptions.
+  2023-06-21: ``SR3H23 px=95.0571``, ``SR3M23 px=94.7700``.
+* **Intraday on the IMM date, same fetch:** the ending contract has 0 rows (or
+  1, the settlement print); the starting contract has 1,262 rows over 8-21
+  distinct prices, and its whole quoted life begins that day -- ``SR3M23``: 64
+  quoted dates, 2023-06-21 through 2023-09-20, none after.
+* **The matched swap makes the steelman net out.** At the 17:00 mark, day 1 of
+  91 is economically in flight, which is the honest argument for dropping it.
+  But :func:`matched_swap_dates` pins the pack's swap to the first leg's IMM
+  date, so the 1y swap starts the same day and takes the same first fixing --
+  the CA is a difference of two instruments sharing that contamination. Under
+  the drop convention the rank-1 *matched swap* silently becomes a 3m-forward
+  1y on four days a year, which is a definitional inconsistency in the screen's
+  own reference instrument.
+* **T1 crosses zero exactly here.** :func:`pack_t1s` puts the front leg at
+  exactly 0.0 on the IMM date and at -1/365 the day after, so keeping it rolls
+  precisely when T1 goes negative. The drop rule rolled one day early, while a
+  T1 = 0, still-listed, most-open-interest contract was admissible.
+
+So dropping it deleted the front of the curve for one session a quarter. What it
+cost, measured: 24 of the 32 IMM dates in the local store carry pack depth >= 13;
+the mean absolute CA offset between the window our rank-k named and the one it
+should have named was 1.88bp (the clean roll_3m-magnitude estimate is ~0.4-2bp;
+larger rank-5/9 readings were contaminated by stale deferred settles that
+``flag_negative_ca`` catches independently). The cap/floor valuation work lost
+exactly 26 cells to the disagreement, every one of them on an IMM date.
+
+**Nature of the old defect, stated precisely, because it bounds what can move.**
+It was a RELABELING, not a wrong CA. Every window was still four consecutive
+contracts against its own correctly-matched swap; what shifted was which window
+carried the rank/colour name. Label-keyed series (z-scores, realised vol) are
+constant-contract and were untouched; only rank-following series took the roll
+step a day late.
+
+**Where the convention lives now.** One primitive: ``tos._imm_cutoff`` returns
+IMM + 1 day, and ``_next_contracts`` drops a month once ``as_of >= cutoff``, so
+the contract survives its own IMM date and rolls the next day. Everything on the
+MDP side inherits it -- colour packs, ``CM{n}``/``SFRCM{n}``, X-year bundles,
+cap/floor strips, listed-option underlying ladders, the screeners, the flow
+ladder. Nothing else in the repo compares a date against an IMM date to build a
+quarterly universe. ``strat2_q20.instrument_count`` used to carry a ``-1`` shim
+that translated between the two ladders; it was deleted in the same change,
+because with both sides keeping the contract the shim would have made the
+``SFRCM`` ladder roll twice.
+
+:func:`imm_date` / :func:`third_wednesday` (pure calendar), :func:`pack_t1s` and
+:func:`matched_swap_dates` are pass-throughs -- pure functions of the contract
+list handed to them. They propagate whichever ladder built it and are not a
+third convention; do not "fix" them.
+
+``tests/test_sr3_imm_roll_convention.py`` is the executable half of all this,
+including the cross-site invariant that the two ladders name the same twenty
+contracts on every day around every IMM date 2018-2027. It is pure date
+arithmetic and never skips.
 """
 
 from __future__ import annotations
@@ -112,7 +198,12 @@ def quarterly_imm_sequence(
     """The next *n* quarterly ``(year, month)`` contracts from *as_of*.
 
     ``include_current=True`` keeps a contract whose IMM date is still ahead of
-    (or on) *as_of*, which is the live front contract.
+    (or on) *as_of*, which is the live front contract. **It is the default and
+    nothing in the repo passes False** except the test that pins the difference:
+    ``include_current=False`` is the convention this repo examined and rejected,
+    kept only so the rejected side stays expressible. See the module docstring
+    for the evidence, and ``tos._imm_cutoff`` for the MDP-side implementation
+    that now agrees with it day for day.
     """
     out: List[Tuple[int, int]] = []
     year, month = as_of.year, 3

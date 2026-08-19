@@ -372,9 +372,9 @@ class Q20Config:
 
     Four contiguous contracts is one pack window (rank 1), so this is the
     smallest strip that can produce any CA at all. Keeping it separate from
-    :attr:`min_instruments` is what lets an IMM roll date at depth 4 -- three
-    calibration instruments, one pack -- into the panel with a settle-based CA
-    and ``q20_built=False`` recorded on the row, instead of vanishing."""
+    :attr:`min_instruments` is what lets a depth-4 date -- one pack, and a curve
+    that may or may not solve -- into the panel with a settle-based CA and
+    ``q20_built`` recorded on the row, instead of vanishing."""
 
     # ---------------------------------------------------------------- gate
     gate_max_settle_diff_bp: float = 2.0
@@ -542,18 +542,28 @@ def strip_depth_by_date(
 def is_imm_roll_date(as_of: datetime.date) -> bool:
     """Is *as_of* itself the IMM date of the front quarterly contract?
 
-    Matters because the two ladders disagree on exactly these ~4 days a year.
-    ``packs.quarterly_imm_sequence(..., include_current=True)`` -- what the pack
-    universe and the settle fetch use -- **keeps** a contract whose IMM date is
-    today, while Barchart's continuous ``SFRCM`` ladder has already rolled past
-    it, so ``SFRCM1`` is the *second* entry of that sequence.
+    Kept as a **diagnostic**, no longer as a correction. These ~4 days a year are
+    the only ones on which the two ladders in this repo could ever have
+    disagreed, so they stay nameable: an IMM-date-only anomaly in any series is
+    a roll-convention smell and this is how you select for it.
 
-    Left unhandled this is not a rounding error, it is a request for a contract
-    one quarter beyond the cached strip, which misses and goes to the vendor.
-    Measured before the fix: 8 of the 10 dates that reached for the network in a
-    full 1,433-date build were IMM roll dates (2018-06-20, 2018-09-19,
-    2018-12-19, 2019-03-20, 2019-06-19, 2019-09-18, 2021-09-15, 2021-12-15) and
-    every one of them resolved cleanly at ``SFRCM1..depth-1``.
+    History, because the function used to mean something stronger. Until
+    2026-08 ``MDP``'s ``_imm_cutoff`` used a strict ``<`` and had already rolled
+    past a contract whose reference quarter begins today, while
+    ``packs.quarterly_imm_sequence(..., include_current=True)`` kept it -- so
+    ``SFRCM1`` was the *second* entry of the pack sequence on exactly these
+    dates. Left unhandled that was not a rounding error, it was a request for a
+    contract one quarter beyond the cached strip, which missed and went to the
+    vendor: 8 of the 10 dates that reached for the network in a full 1,433-date
+    build were IMM roll dates (2018-06-20, 2018-09-19, 2018-12-19, 2019-03-20,
+    2019-06-19, 2019-09-18, 2021-09-15, 2021-12-15), and every one of them
+    resolved cleanly at ``SFRCM1..depth-1``. :func:`instrument_count` carried
+    that ``-1``.
+
+    The repo now keeps the contract at BOTH sites -- see ``tos._imm_cutoff`` for
+    the evidence and ``packs`` for the write-up -- so the offset is gone at
+    source and the shim with it. ``tests/test_sr3_imm_roll_convention.py`` is
+    the cross-site invariant that holds the two together.
     """
     y, m = quarterly_imm_sequence(as_of, 1)[0]
     return imm_date(y, m) == as_of
@@ -563,11 +573,19 @@ def instrument_count(as_of: datetime.date, depth: int) -> int:
     """Calibration instruments available from a strip of *depth* contracts.
 
     ``depth`` counts contracts from :func:`packs.quarterly_imm_sequence` with
-    ``include_current=True``. On an IMM roll date the ``SFRCM`` ladder starts one
-    contract later, so one fewer instrument is reachable. See
-    :func:`is_imm_roll_date`.
+    ``include_current=True``, and ``SFRCM{k}`` now indexes that same sequence on
+    every date including IMM dates, so the count IS the depth. The identity is
+    asserted directly at ``tests/test_convexity_rv_strat2_q20.py:63``, and the
+    two ladders are held together by ``tests/test_sr3_imm_roll_convention.py``;
+    it is not something to take on trust, because when it was false the only
+    symptom was a cache miss.
+
+    The function survives the ``-1`` it used to apply (see
+    :func:`is_imm_roll_date` for why it was there). It is the one place that
+    names the depth-to-instrument mapping, and a future ladder change that
+    reintroduces an offset should reappear here rather than at ~15 call sites.
     """
-    return int(depth) - 1 if is_imm_roll_date(as_of) else int(depth)
+    return int(depth)
 
 
 def max_rank_for_depth(depth: int) -> int:
@@ -651,10 +669,12 @@ def build_q20_pricer(
 
     ``depth`` is the **strip depth** (contracts from
     ``quarterly_imm_sequence(..., include_current=True)``). The instrument count
-    is derived from it by :func:`instrument_count`, which is one lower on IMM
-    roll dates because the ``SFRCM`` ladder has already rolled. Asking for the
-    strip depth on those ~4 days a year requests a contract past the cached
-    strip and goes to the vendor.
+    is derived from it by :func:`instrument_count`, which since the 2026-08-19
+    roll-convention repair is the identity: ``SFRCM{k}`` indexes the same
+    sequence on every date, IMM dates included. Before that repair the ``SFRCM``
+    ladder had already rolled on those ~4 days a year, so the count was
+    ``depth - 1`` and asking for the strip depth requested a contract past the
+    cached strip and went to the vendor.
 
     The whole call sits inside ``cache_only()`` when ``cfg.block_network``, so a
     date needing the network raises ``CacheMissOffline`` in microseconds instead
@@ -911,8 +931,7 @@ def day_rows(
 
     **Degradation is per rate source, and it is recorded as data, never as
     absence.** If the Q20 curve cannot be built for this date -- too few
-    calibration instruments (an IMM roll date at strip depth 4 has three), or a
-    solver failure -- the date is NOT dropped. The settle rows are still emitted
+    calibration instruments, or a solver failure -- the date is NOT dropped. The settle rows are still emitted
     with ``q20_built=False``, every ``q20_*`` / ``*_q20`` column ``NaN``, and
     ``gate_resolved`` / ``gate_settle_agrees`` ``False``, so the row can never be
     mistaken for a resolved one. This is the difference between a sparse series
@@ -922,7 +941,8 @@ def day_rows(
     Row-level availability columns, all written on every row:
 
     ``strip_depth``     contiguous contracts available on this date
-    ``n_instruments``   calibration instruments (one lower on IMM roll dates)
+    ``n_instruments``   calibration instruments (= ``strip_depth``; see
+                        :func:`instrument_count`)
     ``q20_built``       did the Q20 curve solve
     ``q20_error``       the exception type if it did not, else ``""``
     ``max_rank_available`` deepest pack this date's strip can quote (``depth-3``)
