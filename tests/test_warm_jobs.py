@@ -144,11 +144,6 @@ def test_unknown_kind_is_rejected():
         WarmJob(name="x", fn=_noop, kind="whenever")
 
 
-def test_as_tuple_matches_the_runner_shape():
-    j = _store("a", "A")
-    assert j.as_tuple() == ("a", _noop)
-
-
 def test_describe_shows_the_dependency_structure():
     text = describe([_store("warm A", "ASSET-A"), _value("read A", "ASSET-A")])
     assert "[store]" in text and "[value]" in text
@@ -171,8 +166,15 @@ def test_the_shipped_warmer_registry_is_ordered_and_unique():
     assert jobs is not None, "daily_cache_warmer must expose WARM_JOBS"
     assert all(isinstance(j, WarmJob) for j in jobs)
     check(jobs)          # must not raise
-    # and the legacy shape the runner consumes is still derivable
-    assert getattr(mod, "JOBS", None) == [j.as_tuple() for j in jobs]
+    # The runner consumes WarmJob objects directly. There must be no ``(name, fn)``
+    # projection beside them: the runner reads ``requires``/``provides``/
+    # ``needs_excel`` to tell SKIPPED from FAILED, and a second exported shape
+    # that drops those fields is one a test can substitute by accident - which
+    # would run the seventeen REAL jobs, five of which drive the user's Excel.
+    assert not hasattr(mod, "JOBS"), (
+        "daily_cache_warmer must not export a (name, fn) JOBS projection; the "
+        "runner needs the WarmJob metadata and a stale patch point is dangerous"
+    )
 
 
 def test_the_shipped_registry_would_fail_the_guard_if_inverted():

@@ -74,6 +74,19 @@ class WarmJob:
     requires
         Store asset keys this job reads. A value job that reads nothing from a
         store leaves this empty and is then unconstrained.
+    needs_excel
+        This job cannot do ANY useful work without a live, human-authenticated
+        Excel carrying the Velocity add-in. Declared rather than inferred,
+        because the runner uses it to decide the difference between a job that
+        FAILED and one that was SKIPPED, and that decision has to be reviewable
+        next to the job it describes.
+
+        Set it only where it is true of the WHOLE job. Two of the Velocity jobs
+        drive Excel in one step out of four and do real offline work in the
+        others - the CurveStore warm's ``build``/``EOD warm`` phases read the
+        banked tag cache and touch nothing live - so marking them here would
+        throw away the offline phases every time Excel happened to be shut. They
+        probe around their own fetch step instead.
     """
 
     name: str
@@ -81,6 +94,7 @@ class WarmJob:
     kind: str = VALUE
     provides: Tuple[str, ...] = ()
     requires: Tuple[str, ...] = ()
+    needs_excel: bool = False
 
     def __post_init__(self) -> None:
         if self.kind not in (STORE, VALUE):
@@ -91,10 +105,6 @@ class WarmJob:
                 f"A job that writes a store partition is a {STORE} job — the distinction "
                 "is what the ordering check runs on."
             )
-
-    def as_tuple(self) -> Tuple[str, Callable]:
-        """``(name, fn)``, the shape the warmer's runner already consumes."""
-        return (self.name, self.fn)
 
 
 def assert_ordered(jobs: Sequence[WarmJob]) -> None:
@@ -176,7 +186,7 @@ def describe(jobs: Iterable[WarmJob]) -> str:
     """A listing that shows the dependency structure, for ``--list``."""
     lines = []
     for i, job in enumerate(jobs, 1):
-        bits = [f"  {i}. {job.name}  [{job.kind}]"]
+        bits = [f"  {i}. {job.name}  [{job.kind}{', needs Excel' if job.needs_excel else ''}]"]
         if job.provides:
             bits.append(f"       provides: {', '.join(job.provides)}")
         if job.requires:

@@ -37,7 +37,7 @@ def warmer():
 
 
 def test_the_citivelo_jobs_are_registered(warmer):
-    names = [name for name, _ in warmer.JOBS]
+    names = [job.name for job in warmer.WARM_JOBS]
     for expected in (
         "CitiVelo CurveStore (intraday + EOD)",
         "CitiVelo swaption cube",
@@ -45,7 +45,7 @@ def test_the_citivelo_jobs_are_registered(warmer):
         "CitiVelo swaption values EOD",
         "CitiVelo intraday timeseries",
     ):
-        assert expected in names, f"{expected} is not in JOBS"
+        assert expected in names, f"{expected} is not in WARM_JOBS"
 
 
 def test_the_store_warms_run_before_the_value_jobs(warmer):
@@ -53,7 +53,7 @@ def test_the_store_warms_run_before_the_value_jobs(warmer):
 
     A value job on an unwarmed date reaches Excel. On a schedule, unattended.
     """
-    names = [name for name, _ in warmer.JOBS]
+    names = [job.name for job in warmer.WARM_JOBS]
     store = names.index("CitiVelo CurveStore (intraday + EOD)")
     cube = names.index("CitiVelo swaption cube")
     eod = names.index("CitiVelo EOD timeseries")

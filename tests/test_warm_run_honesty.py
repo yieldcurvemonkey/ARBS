@@ -43,6 +43,11 @@ def warmer(tmp_path, monkeypatch):
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     monkeypatch.setattr(module, "LOG_DIR", str(tmp_path / "cache_warmer"))
+    # Neutralise the Excel pre-flight. It shells out to PowerShell and reads the
+    # USER'S live Excel, so leaving it real would make these tests both slow and
+    # dependent on whether someone happens to have a workbook open. Tests that
+    # care about the pre-flight patch it themselves.
+    monkeypatch.setattr(module, "_excel_preflight", lambda: None)
     # Detach the file handler this test's run adds, so handlers do not pile up
     # across tests and keep writing into deleted tmp dirs.
     before = list(module.log.handlers)
@@ -54,7 +59,20 @@ def warmer(tmp_path, monkeypatch):
 
 
 def _run_with(module, monkeypatch, jobs, argv=("daily_cache_warmer.py",)):
-    monkeypatch.setattr(module, "JOBS", jobs)
+    """Run the warmer over a substituted registry.
+
+    ``jobs`` takes ``(name, fn)`` pairs for brevity or ready-made ``WarmJob``s
+    when a test needs ``requires``/``provides``/``needs_excel``. The runner
+    consumes ``WARM_JOBS`` directly - there is no ``(name, fn)`` projection to
+    patch, on purpose, because patching a projection the runner had stopped
+    reading would have silently run the seventeen REAL jobs.
+    """
+    from utils.warm_jobs import WarmJob
+
+    monkeypatch.setattr(
+        module, "WARM_JOBS",
+        [j if isinstance(j, WarmJob) else WarmJob(*j) for j in jobs],
+    )
     monkeypatch.setattr(sys, "argv", list(argv))
     return module.main()
 
@@ -95,7 +113,9 @@ def test_a_failed_SUBPROCESS_makes_the_run_exit_nonzero(warmer, monkeypatch):
 
     code = _run_with(warmer, monkeypatch, [("shells out", shells_out)])
     assert code == 1
-    assert warmer._SUBPROCESS_FAILURES == [("intraday fetch", 3)]
+    assert [(f.label, f.returncode) for f in warmer._SUBPROCESS_FAILURES] == [
+        ("intraday fetch", 3)
+    ]
 
 
 def test_a_lost_step_is_attributed_to_the_job_that_lost_it(warmer, monkeypatch):
@@ -172,6 +192,40 @@ def test_old_run_logs_are_pruned(warmer, monkeypatch):
     assert (directory / "cache_warmer_20260102_000000.log").exists()
 
 
+def test_a_pruned_run_takes_its_child_output_sidecar_with_it(warmer):
+    r"""The sidecar is retained in LOCKSTEP with the run log it belongs to.
+
+    Two files per run now: the run log a human reads, and
+    ``cache_warmer_<stamp>.children.txt`` carrying every subprocess's full
+    output. An orphaned sidecar is worse than useless - it is the bulky half of
+    the pair, and it accumulates with nothing pointing at it. The glob that
+    drives the prune is deliberately ``*.log`` and not ``cache_warmer_*``, so
+    that a sidecar is never counted as a run and the retention is not silently
+    halved; this pins the other half of that arrangement.
+
+    Measured for scale rather than assumed: the ten retained runs currently
+    occupy 136 KB in total, so retention is a correctness property here, not a
+    disk-space one.
+    """
+    directory = pathlib.Path(warmer.LOG_DIR)
+    directory.mkdir(parents=True)
+    for i in range(warmer.LOG_RETENTION + 3):
+        stem = f"cache_warmer_20260101_{i:06d}"
+        (directory / f"{stem}.log").write_text("old", encoding="utf-8")
+        (directory / f"{stem}.children.txt").write_text("child output", encoding="utf-8")
+
+    warmer._start_run_log(stamp="20260102_000000")
+
+    logs = {p.stem for p in directory.glob("cache_warmer_*.log")}
+    sidecars = {
+        p.name[: -len(".children.txt")] for p in directory.glob("*.children.txt")
+    }
+    assert len(logs) == warmer.LOG_RETENTION
+    assert sidecars <= logs, (
+        f"orphaned sidecar(s) survived their run log: {sorted(sidecars - logs)}"
+    )
+
+
 def test_a_log_directory_that_cannot_be_created_does_not_break_the_warm(warmer, monkeypatch):
     """Logging is bookkeeping; it must never be the reason a warm does not run."""
     monkeypatch.setattr(
@@ -179,3 +233,109 @@ def test_a_log_directory_that_cannot_be_created_does_not_break_the_warm(warmer, 
     )
     code = _run_with(warmer, monkeypatch, [("fine", lambda s, e: None)])
     assert code == 0
+
+
+# ------------------------------------------------------------------ #
+#                     the STIRF wall-clock budget                    #
+# ------------------------------------------------------------------ #
+#
+# ``warm_stirf_cme_session`` shells out once per curve with a 3,600 s cap and no
+# run-level budget, so three curves could occupy three hours inside a warm whose
+# whole nightly span is 2 h 45 m. Measured over the ten retained runs the job
+# takes 1,275-1,648 s on a normal night; the one timeout on record (2026-08-15,
+# a five-day catch-up) killed the job outright, and the two curves that had
+# already succeeded were the only ones that ever ran.
+
+
+class _Timeout:
+    """A ``subprocess.run`` stand-in: times out on the Nth call, else exits 0."""
+
+    def __init__(self, module, fail_on):
+        self._module = module
+        self._fail_on = fail_on
+        self.calls = []
+
+    def __call__(self, cmd, **kw):
+        self.calls.append((cmd, kw.get("timeout")))
+        if len(self.calls) == self._fail_on:
+            raise self._module.subprocess.TimeoutExpired(cmd, kw.get("timeout") or 0)
+
+        class _Result:
+            returncode = 0
+            stdout = ""
+            stderr = ""
+
+        return _Result()
+
+
+def test_one_timed_out_curve_does_not_cost_the_others(warmer, monkeypatch):
+    """The 2026-08-15 loss, inverted: the remaining curves must still be tried."""
+    import datetime
+
+    runner = _Timeout(warmer, fail_on=1)
+    monkeypatch.setattr(warmer.subprocess, "run", runner)
+
+    day = datetime.date(2026, 8, 18)  # a Tuesday
+    warmer.warm_stirf_cme_session(day, day)
+
+    assert len(runner.calls) == 3, (
+        f"a timeout on the first curve stopped the other two: {len(runner.calls)} call(s)"
+    )
+
+
+def test_a_timed_out_curve_still_makes_the_job_FAIL(warmer, monkeypatch):
+    """Containment must not become concealment: a timeout genuinely lost work."""
+    import datetime
+
+    monkeypatch.setattr(warmer.subprocess, "run", _Timeout(warmer, fail_on=1))
+    day = datetime.date(2026, 8, 18)
+
+    def job(start, end):
+        return warmer.warm_stirf_cme_session(day, day)
+
+    code = _run_with(warmer, monkeypatch, [("STIRF CME Session", job)])
+
+    assert code == 1, "a lost curve must not report success to the scheduler"
+    assert [f.returncode for f in warmer._SUBPROCESS_FAILURES] == ["TIMEOUT"]
+    rendered = warmer._describe_step_failure(warmer._SUBPROCESS_FAILURES[0])
+    assert "timed out" in rendered, rendered
+    assert "exited TIMEOUT" not in rendered, rendered
+
+
+def test_the_shared_budget_stops_the_job_overrunning(warmer, monkeypatch):
+    """A spent budget must stop the job starting curves, and say so.
+
+    The per-curve cap bounds one child; only this bounds the job.
+    """
+    import datetime
+
+    runner = _Timeout(warmer, fail_on=0)  # never times out
+    monkeypatch.setattr(warmer.subprocess, "run", runner)
+    monkeypatch.setattr(warmer, "_STIRF_TOTAL_BUDGET_S", 0.0)
+
+    day = datetime.date(2026, 8, 18)
+    warmer.warm_stirf_cme_session(day, day)
+
+    assert runner.calls == [], "no curve may start once the budget is spent"
+    assert [f.returncode for f in warmer._SUBPROCESS_FAILURES] == ["NOT RUN"] * 3, (
+        "a curve that never ran must be recorded, not silently dropped"
+    )
+
+
+def test_each_curve_is_capped_by_whichever_bound_binds_first(warmer, monkeypatch):
+    """The timeout handed to the child is ``min(per-curve cap, budget left)``."""
+    import datetime
+
+    runner = _Timeout(warmer, fail_on=0)
+    monkeypatch.setattr(warmer.subprocess, "run", runner)
+    monkeypatch.setattr(warmer, "_STIRF_TOTAL_BUDGET_S", 100.0)
+
+    day = datetime.date(2026, 8, 18)
+    warmer.warm_stirf_cme_session(day, day)
+
+    caps = [t for _, t in runner.calls]
+    assert caps, "no curve ran"
+    assert all(0 < c <= 100.0 for c in caps), (
+        f"a curve was given longer than the whole job's budget: {caps}"
+    )
+    assert all(c <= warmer._STIRF_CURVE_TIMEOUT_S for c in caps), caps

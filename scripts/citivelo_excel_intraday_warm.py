@@ -67,6 +67,8 @@ import pandas as pd
 import pyarrow as pa
 import pyarrow.parquet as pq
 
+from utils.atomic_replace import replace_with_retry
+
 _REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
@@ -147,7 +149,9 @@ def _write_day_parquet(out: Path, frame: pd.DataFrame) -> int:
     table = pa.Table.from_arrays(arrays, names=names)
     tmp = out.with_suffix(".parquet.tmp")
     pq.write_table(table, tmp, compression="zstd")
-    os.replace(tmp, out)
+    # Retried, not bare - the same WinError 5 as every other temp-then-rename on
+    # this path. See ``utils/atomic_replace.py``.
+    replace_with_retry(tmp, out)
     return len(frame)
 
 

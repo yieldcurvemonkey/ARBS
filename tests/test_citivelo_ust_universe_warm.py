@@ -93,6 +93,17 @@ class FakeQuotes:
     frequency token reproduces a working transport, through the REAL
     :class:`CitiVeloTagCache`, so a positive test also proves the cache layout
     and :func:`cached_tags` still agree about where a warmed tag lives.
+
+    It RETURNS the rows it served, and that is not decoration. The two halves of
+    the defect this fake exists for are "rows came back" and "nothing was
+    persisted", and an earlier version of this fake modelled only the second: it
+    wrote to the cache as a side effect and always returned an empty frame. That
+    was harmless while the warm's guard looked at nothing but the cache, and
+    became actively misleading once the guard had to tell a transport that lost
+    698 tags from a window that legitimately holds none — a matured bond asked
+    for MI01 — because under the old fake those two are the same object. A fake
+    that cannot express the difference the code under test turns on is a fake
+    that will agree with whatever the code does.
     """
 
     offline = True
@@ -119,12 +130,17 @@ class FakeQuotes:
         if self.raise_on is not None and len(self.calls) == self.raise_on:
             raise RuntimeError("Excel went away mid-batch")
         target = freq if self.writes_at == "same" else self.writes_at
+        index = pd.date_range("2026-08-01", periods=2, freq="D")
+        served = {str(t): pd.Series([1.0, 2.0], index=index) for t in tags}
         if target is not None:
             cache = CitiVeloTagCache(base_dir=default_cache_dir())
-            index = pd.date_range("2026-08-01", periods=2, freq="D")
-            for tag in tags:
-                cache.write(tag, target, pd.Series([1.0, 2.0], index=index))
-        return pd.DataFrame(index=pd.DatetimeIndex([], name="Date"))
+            for tag, series in served.items():
+                cache.write(tag, target, series)
+        if not served:
+            return pd.DataFrame(index=pd.DatetimeIndex([], name="Date"))
+        frame = pd.concat(served, axis=1)
+        frame.index.name = "Date"
+        return frame.sort_index()
 
     def close(self):
         self.closed = True
@@ -834,3 +850,473 @@ def test_the_saved_entries_carry_the_key_they_were_warmed_at(env, monkeypatch):
 
     book = _book(env.manifest, "eod")
     assert {entry["key"] for entry in book.values()} == {WARM._key("eod", start, end, values)}
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# 6. COVERAGE: A FILE THAT EXISTS IS NOT A WINDOW THAT IS COVERED
+# ══════════════════════════════════════════════════════════════════════════
+#
+# ``cached_tags`` above answers "did the transport write anything at all". It
+# cannot answer "is what it wrote current", and because the tag cache is
+# CUMULATIVE the file is always there after the first ever run. Measured against
+# the real cache on 2026-08-19 for the nightly window 2026-07-19..2026-08-18:
+# 877/877 bonds stamped done, 522 of them holding DAILY data that ENDS BEFORE
+# the window starts, 0 missing sidecars — and at tag level, 2,891 of the 8,510
+# tags belonging to bonds that were ALIVE through that window hold no row in it.
+#
+# The predicate under test has to separate three things that all look like an
+# empty window, and only one of them is a fault. Every number below is the
+# measured one, not an illustration.
+
+
+_WIN_START = datetime.date(2026, 7, 19)
+_WIN_END = datetime.date(2026, 8, 18)
+
+#: A real UST that is alive through the window: ``T 3.875 05/31/2030``.
+_ALIVE = "US91282CNG23"
+#: A real UST that redeemed four days before it: ``T 4.5 7/15/2026``. Its last
+#: DAILY row in the real cache is 2026-07-14, one day before maturity.
+_MATURED = "US91282CHM64"
+
+
+def _plant(tag, freq, dates):
+    """Write a real parquet AND sidecar through the real cache writer.
+
+    Hand-built files would pin a layout nobody uses; this is the same
+    ``CitiVeloTagCache.write`` the warm's own transport goes through, so the
+    sidecar the predicate reads is the sidecar production writes.
+    """
+    index = pd.DatetimeIndex([pd.Timestamp(d) for d in dates])
+    cache = CitiVeloTagCache(base_dir=default_cache_dir())
+    cache.write(tag, freq, pd.Series([1.0] * len(index), index=index))
+
+
+def _run_of(last, n, step=1):
+    """``n`` dates ending at ``last``, ``step`` days apart, ascending."""
+    stop = pd.Timestamp(last)
+    return [stop - pd.Timedelta(days=step * i) for i in range(n)][::-1]
+
+
+def _resolutions(*isins):
+    """Real :class:`BondResolution` objects for named ISINs, off the catalog.
+
+    Real ones, because the maturity the exemption turns on comes from
+    ``descriptor.maturity`` and a hand-made stub would let the test agree with
+    whatever the code happens to read. It also lets a test name two bonds
+    instead of walking 522 matured ISINs with ``limit`` to reach a live one.
+    """
+    by_isin = {r.isin: r for r in WARM.universe()}
+    return [by_isin[i] for i in isins]
+
+
+# ── the predicate on its own ─────────────────────────────────────────────
+
+
+def test_a_tag_with_a_row_inside_the_window_is_covered(env):
+    """The positive control: the bar must not refuse a tag that is up to date."""
+    _plant("RATES.BOND.X.PRICE", "DAILY", _run_of("2026-08-18", 40))
+    states = WARM.tag_states(
+        "DAILY", {"PRICE": "RATES.BOND.X.PRICE"},
+        start=_WIN_START, end=_WIN_END, maturity=datetime.date(2030, 5, 31),
+    )
+    assert states["PRICE"] == (WARM.COVERED, datetime.date(2026, 8, 18))
+
+
+def test_a_row_ON_the_window_start_counts_as_covered(env):
+    """The window is CLOSED at both ends, and the boundary is a real day.
+
+    The nightly window is the last 30 days and its first day is an ordinary
+    business day with ordinary prints. A bar of ``last > start`` reads the same
+    on almost every tag and silently reclassifies every tag whose only row in
+    the window is on its first day — which for a monthly-cadence tag like
+    ``ASW_4_CHF`` is the difference between "covered" and "quiet", and it is the
+    boundary the whole predicate turns on.
+    """
+    _plant("RATES.BOND.X.PRICE", "DAILY", _run_of(_WIN_START, 40))
+    states = WARM.tag_states(
+        "DAILY", {"PRICE": "RATES.BOND.X.PRICE"},
+        start=_WIN_START, end=_WIN_END, maturity=datetime.date(2030, 5, 31),
+    )
+    assert states["PRICE"] == (WARM.COVERED, _WIN_START)
+
+
+def test_a_row_inside_the_window_beats_maturity(env):
+    """Six of the 877 bonds matured DURING the nightly window.
+
+    Coverage is the stronger claim and has to be tested first, or a bond that
+    redeemed on the 30th is filed under "nothing to see here" while it still
+    holds exactly the rows the window asked for.
+    """
+    _plant("RATES.BOND.X.PRICE", "DAILY", _run_of("2026-07-28", 20))
+    states = WARM.tag_states(
+        "DAILY", {"PRICE": "RATES.BOND.X.PRICE"},
+        start=_WIN_START, end=_WIN_END, maturity=datetime.date(2026, 7, 30),
+    )
+    assert states["PRICE"][0] == WARM.COVERED
+
+
+@pytest.mark.parametrize(
+    "offset_days,expected",
+    [
+        (-3000, "matured"),   # a 2018 vintage: the bulk of the catalog
+        (-1, "matured"),      # redeemed the day before the window opened
+        (0, "matured"),       # redeemed on the window's first day
+        (4, "matured"),       # inside the measured 1-5 day quiet tail
+        (5, "stalled"),       # past it: the silence is no longer explained
+        (30, "stalled"),
+    ],
+)
+def test_maturity_exempts_a_bond_only_within_the_measured_tail(env, offset_days, expected):
+    """The grace is measured, and both of its edges matter.
+
+    Over the 522 catalogued USTs that had already matured on 2026-08-19, the gap
+    between the maturity date and the last DAILY row is 1 day for 127 bonds, 2
+    for 202, 3 for 80, 4 for 95 and 5 for 18 — never 0, never above 5, and never
+    negative. So a bond stops printing up to five days BEFORE it redeems, and an
+    exemption pinned to the maturity date alone false-flags every maturing bond
+    for the few nights the rolling window start sits inside that tail. Five days
+    and no more: at six the silence is not explained by maturity any longer, and
+    granting it anyway would rebuild the 522-bond blind spot in miniature.
+    """
+    _plant("RATES.BOND.X.PRICE", "DAILY", _run_of("2026-06-01", 60))
+    states = WARM.tag_states(
+        "DAILY", {"PRICE": "RATES.BOND.X.PRICE"},
+        start=_WIN_START, end=_WIN_END,
+        maturity=_WIN_START + datetime.timedelta(days=offset_days),
+    )
+    assert states["PRICE"][0] == expected
+
+
+def test_a_sparse_tag_inside_its_own_envelope_is_not_stalled(env):
+    """``ASW_4_CHF/EUR/GBP``, and the reason no calendar bar can do this.
+
+    Measured over 60 bonds: median gap 1 day, WIDEST gap 76 days, trailing gap
+    on 2026-08-19 of 48 days. The series went from daily to roughly monthly in
+    October 2024 and is still printing. A fixed "no row in the last 30 days" bar
+    calls 345 bonds × 3 currencies stale every month for ever, on data behaving
+    exactly as it has for two years — and the reader stops looking.
+    """
+    dates = _run_of("2026-02-13", 400) + [
+        pd.Timestamp(d) for d in ("2026-04-30", "2026-05-13", "2026-06-18", "2026-07-02")
+    ]
+    _plant("RATES.BOND.X.ASW_4_CHF", "DAILY", dates)
+    states = WARM.tag_states(
+        "DAILY", {"ASW_4_CHF": "RATES.BOND.X.ASW_4_CHF"},
+        start=_WIN_START, end=_WIN_END, maturity=datetime.date(2030, 5, 31),
+    )
+    assert states["ASW_4_CHF"] == (WARM.SPARSE, datetime.date(2026, 7, 2)), (
+        "a 47-day silence on a tag whose own history holds a 76-day gap is not "
+        "evidence of anything"
+    )
+
+
+def test_a_dense_tag_that_went_quiet_is_stalled(env):
+    """``CAS``/``ZSPREAD``/``ASW``/``OISS``, which stop dead on 2025-10-03.
+
+    Measured over 60 bonds: median gap 1 day, widest gap 4 days, trailing gap
+    320 days — the same date on every bond that serves them. The four ``*_SOFR``
+    spreads do the same on 2025-11-28 with a trailing 264. The same envelope
+    that clears the sparse tag above convicts these, with nothing configured and
+    no per-value list for anyone to keep up to date.
+    """
+    _plant("RATES.BOND.X.CAS", "DAILY", _run_of("2025-10-03", 90))
+    states = WARM.tag_states(
+        "DAILY", {"CAS": "RATES.BOND.X.CAS"},
+        start=_WIN_START, end=_WIN_END, maturity=datetime.date(2030, 5, 31),
+    )
+    assert states["CAS"] == (WARM.STALLED, datetime.date(2025, 10, 3))
+
+
+def test_the_envelope_is_the_tag_own_history_and_not_a_constant(env):
+    """The two cases above differ ONLY in the history, and that is the point.
+
+    Same window, same maturity, same trailing silence to the day — one tag has
+    seen a 76-day gap and the other has never seen more than four. Anything that
+    reads the calendar instead of the history has to give these two the same
+    answer, and both answers are wrong for one of them.
+    """
+    quiet_since = "2026-07-02"
+    _plant("RATES.BOND.X.SPARSE", "DAILY",
+           _run_of("2026-02-13", 400) + [pd.Timestamp(quiet_since)])
+    _plant("RATES.BOND.X.DENSE", "DAILY", _run_of(quiet_since, 90))
+    states = WARM.tag_states(
+        "DAILY",
+        {"SPARSE": "RATES.BOND.X.SPARSE", "DENSE": "RATES.BOND.X.DENSE"},
+        start=_WIN_START, end=_WIN_END, maturity=datetime.date(2030, 5, 31),
+    )
+    assert states["SPARSE"][1] == states["DENSE"][1] == datetime.date(2026, 7, 2)
+    assert states["SPARSE"][0] == WARM.SPARSE
+    assert states["DENSE"][0] == WARM.STALLED
+
+
+def test_a_live_bond_with_no_file_at_all_is_absent(env):
+    """Three USTs auctioned 2026-07-31 have never been warmed at ``MI01``.
+
+    528 of the 877 bonds have no MI01 parquet and 525 of those matured. The
+    other three are live on-the-run issues, and existence-counting reports them
+    exactly as it reports the 525 — as nothing at all, silently.
+    """
+    states = WARM.tag_states(
+        "MI01", {"PRICE": "RATES.BOND.US91282CRA17.PRICE"},
+        start=_WIN_START, end=_WIN_END, maturity=datetime.date(2031, 7, 31),
+    )
+    assert states["PRICE"] == (WARM.ABSENT, None)
+    assert WARM.ABSENT in WARM.ALARMING_STATES
+
+
+def test_a_tag_too_short_to_calibrate_is_never_called_stalled(env):
+    """Two rows give one gap, which is not an envelope.
+
+    "I have never seen this tag print three times" is not evidence that it
+    stopped, and a warm that alarms on it teaches its reader to ignore alarms.
+    """
+    _plant("RATES.BOND.X.DV01", "DAILY", ["2026-05-01", "2026-05-02"])
+    states = WARM.tag_states(
+        "DAILY", {"DV01": "RATES.BOND.X.DV01"},
+        start=_WIN_START, end=_WIN_END, maturity=datetime.date(2030, 5, 31),
+    )
+    assert states["DV01"][0] == WARM.UNCALIBRATED
+    assert WARM.UNCALIBRATED not in WARM.ALARMING_STATES
+
+
+def test_an_unknown_maturity_is_treated_as_alive(env):
+    """Fails towards visibility. Measured: no USA.USD.GOVT bond has one today.
+
+    The exemption is the only thing keeping 522 bonds quiet, so handing it to an
+    unknown maturity would be a silent hole that grows with the catalog.
+    """
+    _plant("RATES.BOND.X.PRICE", "DAILY", _run_of("2025-10-03", 90))
+    states = WARM.tag_states(
+        "DAILY", {"PRICE": "RATES.BOND.X.PRICE"},
+        start=_WIN_START, end=_WIN_END, maturity=None,
+    )
+    assert states["PRICE"][0] == WARM.STALLED
+
+
+def test_coverage_is_read_at_the_frequency_that_was_asked_for(env):
+    """One minute and one day are different data and are never the same key.
+
+    A DAILY-warm universe would otherwise mark every intraday tag covered off
+    its own EOD parquets — the 349/349 lie moved one layer down.
+    """
+    _plant("RATES.BOND.X.PRICE", "DAILY", _run_of("2026-08-18", 40))
+    tags = {"PRICE": "RATES.BOND.X.PRICE"}
+    live = datetime.date(2030, 5, 31)
+    assert WARM.tag_states("DAILY", tags, start=_WIN_START, end=_WIN_END,
+                           maturity=live)["PRICE"][0] == WARM.COVERED
+    assert WARM.tag_states("MI01", tags, start=_WIN_START, end=_WIN_END,
+                           maturity=live)["PRICE"][0] == WARM.ABSENT
+
+
+def test_the_record_names_the_quiet_values_and_counts_the_rest():
+    """The manifest has to carry the OBSERVATION, not a boolean.
+
+    "Done" used to mean "this batch did not abort", which is equally true of a
+    night that fetched nothing new for two thirds of the universe. A record that
+    cannot say WHICH value went quiet leaves its reader with a number that never
+    moves and no way to ask why.
+    """
+    record = WARM.coverage_record({
+        "PRICE": (WARM.COVERED, datetime.date(2026, 8, 18)),
+        "YIELD": (WARM.COVERED, datetime.date(2026, 8, 18)),
+        "CAS": (WARM.STALLED, datetime.date(2025, 10, 3)),
+        "ASW_4_CHF": (WARM.SPARSE, datetime.date(2026, 7, 2)),
+        "OAS": (WARM.MATURED, datetime.date(2016, 3, 31)),
+        "DV01": (WARM.ABSENT, None),
+    })
+    assert record["covered"] == 2
+    assert record["matured"] == 1
+    assert record["stalled"] == ["CAS", "DV01"]
+    assert record["quiet"] == {
+        "ASW_4_CHF": "2026-07-02", "CAS": "2025-10-03", "DV01": "",
+    }
+    assert json.loads(json.dumps(record)) == record, "it lives in a JSON manifest"
+
+
+# ── the predicate inside the warm ────────────────────────────────────────
+
+
+def test_a_warm_over_a_stale_window_records_the_shortfall_instead_of_hiding_it(
+    env, monkeypatch
+):
+    """The green-while-stale night, pinned.
+
+    Every file here EXISTS, so ``cached_tags`` counts them all and the warm used
+    to stamp both bonds done with nothing but a tag count — which is what 877/877
+    said on every retained nightly run while 522 of them held nothing inside the
+    window. The run must now come back saying what it measured: one value
+    covered, one stalled, and the matured bond explained rather than flagged.
+    """
+    alive, matured = _resolutions(_ALIVE, _MATURED)
+    monkeypatch.setattr(WARM, "universe", lambda: [alive, matured])
+
+    _plant(f"RATES.BOND.{_ALIVE}.YIELD", "DAILY", _run_of("2026-08-18", 60))
+    _plant(f"RATES.BOND.{_ALIVE}.PRICE", "DAILY", _run_of("2025-10-03", 90))
+    for value in ("PRICE", "YIELD"):
+        _plant(f"RATES.BOND.{_MATURED}.{value}", "DAILY", _run_of("2026-07-13", 60))
+
+    quotes = FakeQuotes(writes_at=None)   # answers, persists nothing new
+    _install_fetcher(monkeypatch, quotes)
+
+    out = WARM.warm(
+        "eod", start=_WIN_START, end=_WIN_END, values=("PRICE", "YIELD"),
+        batch=8, do_refresh=False,
+    )
+
+    assert quotes.calls, "nothing was fetched; this is not exercising the warm"
+    assert out["stopped"] is False, out.get("reason")
+    assert out["coverage"] == {
+        WARM.COVERED: 1, WARM.STALLED: 1, WARM.MATURED: 2,
+    }, "the run has to report what the cache holds, not how many files exist"
+
+    book = _book(env.manifest, "eod")
+    assert book[_ALIVE]["covered"] == 1
+    assert book[_ALIVE]["stalled"] == ["PRICE"]
+    assert book[_ALIVE]["quiet"] == {"PRICE": "2025-10-03"}
+    assert book[_MATURED]["matured"] == 2
+    assert "stalled" not in book[_MATURED], (
+        "528 of 877 bonds have matured — flagging them is the batch-0 abort that "
+        "lost five of ten retained nightly runs"
+    )
+
+
+def test_a_matured_universe_is_never_a_shortfall(env, monkeypatch):
+    """The control for the exemption, and the one that must never regress.
+
+    ``universe()`` sorts by ISIN and the lowest ISINs are 2016 vintages, so with
+    ``DEFAULT_BATCH = 8`` the first batch of the real run is all-dead by
+    construction. A freshness check without the maturity exemption stops there
+    every night having warmed nothing, which is precisely the failure that was
+    just fixed.
+    """
+    matured, = _resolutions(_MATURED)
+    monkeypatch.setattr(WARM, "universe", lambda: [matured])
+    for value in ("PRICE", "YIELD"):
+        _plant(f"RATES.BOND.{_MATURED}.{value}", "DAILY", _run_of("2026-07-13", 60))
+
+    quotes = FakeQuotes(writes_at=None)
+    _install_fetcher(monkeypatch, quotes)
+
+    out = WARM.warm(
+        "eod", start=_WIN_START, end=_WIN_END, values=("PRICE", "YIELD"),
+        batch=8, do_refresh=False,
+    )
+
+    assert out["stopped"] is False
+    assert out["done"] == 1
+    assert out["coverage"] == {WARM.MATURED: 2}
+    assert out["regressed"] == {}
+
+
+def test_only_a_NEW_silence_is_reported_as_a_regression(env, monkeypatch):
+    """The standing level cannot drive an exit code; the change can.
+
+    Ten value families have been silent since 2025-10-03 and 2025-11-28. A job
+    that exits 1 for them every night is the always-1 exit code the parent
+    warmer's own docstring says nobody reads — and an alarm nobody reads is how
+    a real new outage arrives unnoticed among 2,891 standing ones.
+    """
+    alive, = _resolutions(_ALIVE)
+    monkeypatch.setattr(WARM, "universe", lambda: [alive])
+    _plant(f"RATES.BOND.{_ALIVE}.PRICE", "DAILY", _run_of("2025-10-03", 90))
+    _plant(f"RATES.BOND.{_ALIVE}.YIELD", "DAILY", _run_of("2026-08-18", 60))
+    env.manifest.write_text(
+        json.dumps({"eod": {_ALIVE: {"key": "an older window", "stalled": ["PRICE"]}}}),
+        encoding="utf-8",
+    )
+
+    quotes = FakeQuotes(writes_at=None)
+    _install_fetcher(monkeypatch, quotes)
+    out = WARM.warm("eod", start=_WIN_START, end=_WIN_END, values=("PRICE", "YIELD"),
+                    batch=8, do_refresh=False)
+
+    assert out["coverage"] == {WARM.COVERED: 1, WARM.STALLED: 1}
+    assert out["regressed"] == {}, (
+        "PRICE was already recorded silent — re-alarming on it every night is how "
+        "an alarm stops being read"
+    )
+    assert _book(env.manifest, "eod")[_ALIVE]["stalled"] == ["PRICE"]
+
+
+def test_a_value_that_falls_silent_since_the_last_run_is_a_regression(env, monkeypatch):
+    """The event nothing in this job could see before.
+
+    A tag that was answering yesterday and is not today is the outage a warm
+    exists to notice, and it is invisible to a file-existence check for ever:
+    the parquet is still on disk and still counts.
+    """
+    alive, = _resolutions(_ALIVE)
+    monkeypatch.setattr(WARM, "universe", lambda: [alive])
+    _plant(f"RATES.BOND.{_ALIVE}.PRICE", "DAILY", _run_of("2025-10-03", 90))
+    _plant(f"RATES.BOND.{_ALIVE}.YIELD", "DAILY", _run_of("2026-08-18", 60))
+    env.manifest.write_text(
+        json.dumps({"eod": {_ALIVE: {"key": "an older window", "covered": 2}}}),
+        encoding="utf-8",
+    )
+
+    quotes = FakeQuotes(writes_at=None)
+    _install_fetcher(monkeypatch, quotes)
+    out = WARM.warm("eod", start=_WIN_START, end=_WIN_END, values=("PRICE", "YIELD"),
+                    batch=8, do_refresh=False)
+
+    assert out["regressed"] == {_ALIVE: ["PRICE"]}
+
+
+def test_a_shortfall_does_not_stop_the_run(env, monkeypatch):
+    """Coverage is a report, never a brake.
+
+    Stopping on a quiet tag would abort on the first batch that serves ``CAS`` —
+    304 of the 355 live bonds do — which is the 0/877 abort in a new costume.
+    The refetch already happens: ``missing_spans`` asks for the tail every night
+    and 13,119 sidecars were rewritten on 2026-08-18. What was missing was the
+    report, not the request.
+    """
+    alive, = _resolutions(_ALIVE)
+    monkeypatch.setattr(WARM, "universe", lambda: [alive] * 3)
+    _plant(f"RATES.BOND.{_ALIVE}.PRICE", "DAILY", _run_of("2025-10-03", 90))
+    _plant(f"RATES.BOND.{_ALIVE}.YIELD", "DAILY", _run_of("2025-10-03", 90))
+
+    quotes = FakeQuotes(writes_at=None)
+    _install_fetcher(monkeypatch, quotes)
+    out = WARM.warm("eod", start=_WIN_START, end=_WIN_END, values=("PRICE", "YIELD"),
+                    batch=1, do_refresh=False)
+
+    assert out["stopped"] is False, out.get("reason")
+    assert out["done"] == 3, "every batch ran; a shortfall is not a fault"
+    assert out["coverage"][WARM.STALLED] == 6
+
+
+@pytest.mark.parametrize(
+    "label,summary,expected",
+    [
+        ("everything warmed", {"stopped": False, "regressed": {}}, None),
+        ("a standing shortfall is not a failure",
+         {"stopped": False, "regressed": {},
+          "coverage": {"covered": 5619, "stalled": 1854, "sparse": 1025}}, None),
+        ("a NEW silence", {"stopped": False, "regressed": {"US91282CNG23": ["CAS"]}}, 1),
+        ("stopped mid-run", {"stopped": True, "reason": "Excel reached the ceiling",
+                             "regressed": {}}, 2),
+        ("stopped wins over a regression",
+         {"stopped": True, "reason": "ceiling", "regressed": {"US1": ["CAS"]}}, 2),
+    ],
+)
+def test_the_exit_code_says_which_of_the_three_things_happened(
+    monkeypatch, label, summary, expected
+):
+    """The exit code is the only thing the Windows scheduler records.
+
+    Three codes, matching the parent warmer's own scheme: 0 completed, 1 a real
+    defect to read the log about, 2 stopped part-way with progress kept. The
+    STANDING shortfall deliberately does not reach here — 1,854 tags across ten
+    value families have been silent since 2025-10-03 and 2025-11-28, and a job
+    that exits 1 for them every night is the always-1 exit code the parent
+    warmer's docstring says nobody reads. Only the CHANGE gets an exit code.
+    """
+    monkeypatch.setattr(sys, "argv", ["citivelo_ust_universe_warm.py", "eod"])
+    monkeypatch.setattr(WARM, "warm", lambda *a, **k: dict(summary))
+    if expected is None:
+        WARM.main()
+        return
+    with pytest.raises(SystemExit) as exc:
+        WARM.main()
+    assert exc.value.code == expected, label
