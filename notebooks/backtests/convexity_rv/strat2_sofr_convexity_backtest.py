@@ -115,6 +115,7 @@ from RVUtils.ConvexityRV.strat2_sofr_convexity import (
     rank_flags,
     run_backtest,
     select_pack,
+    coverage_by_run,
     trim_to_contiguous_run,
 )
 
@@ -484,18 +485,34 @@ else:
     # NOT bdate_range: the SR3 store is demand-driven and a cold contract costs
     # about a minute, so the local shards are enumerated first. That also makes
     # the effective window an observable rather than an assumption.
-    _dates = local_cached_dates(CFG)
-    print(f"{len(_dates)} dates carry the full {CFG.n_contracts}-contract strip locally: "
-          f"{_dates[0]} .. {_dates[-1]}")
+    # `min_contracts=4` is the 2026-08-19 coverage repair. The default is
+    # STRICT -- the full 13-contract strip must be present -- and that dropped a
+    # date for the front packs it could price perfectly well whenever its
+    # deferred end was cold. Measured: 2024 holds 252 dates able to quote rank 1
+    # and the strict rule admitted 19. Four contracts is one pack window; what
+    # each date could NOT do is recorded on its rows as `strip_depth` /
+    # `max_rank_available` rather than erasing the date.
+    _dates = local_cached_dates(CFG, min_contracts=4)
+    print(f"{len(_dates)} dates carry at least 4 contiguous contracts locally "
+          f"(strict full-{CFG.n_contracts} rule would give "
+          f"{len(local_cached_dates(CFG))}): {_dates[0]} .. {_dates[-1]}")
     PANEL_RAW, RATES_RAW = build_panel(_dates, CFG, futures_mdp=_fut, swaps_mdp=_swp)
     PANEL_RAW.to_parquet(_PANEL_F)
     RATES_RAW.to_parquet(_RATES_F)
     print(f"built panel {PANEL_RAW.shape} and rates {RATES_RAW.shape}")
 
-PANEL, RATES = trim_to_contiguous_run(PANEL_RAW, RATES_RAW)
+# `keep="latest"`, not the legacy `"longest"`. The longest-run rule truncated
+# this series at 2024-05-08 -- the "~May-2024" of the sparse-series complaint --
+# because the 2019-2024 block is longer than the recovered tail, not because the
+# tail is worse data. Coverage is reported BOTH ways so the trim is an argument
+# rather than a silence.
+print("every contiguous run in the raw panel:")
+print(coverage_by_run(PANEL_RAW).to_string(index=False))
+PANEL, RATES = trim_to_contiguous_run(PANEL_RAW, RATES_RAW, keep="latest")
 DAYS = pd.DatetimeIndex(sorted(PANEL["date"].unique()))
 print(f"panel days {len(DAYS)}: {DAYS[0].date()} .. {DAYS[-1].date()} "
-      f"(dropped {len(PANEL_RAW['date'].unique()) - len(DAYS)} isolated strays)")
+      f"(dropped {len(PANEL_RAW['date'].unique()) - len(DAYS)} dates outside the "
+      f"latest gap-free run)")
 assert len(DAYS) > 500, "panel is too short to run a 1y z-score on"
 
 # %% [markdown]

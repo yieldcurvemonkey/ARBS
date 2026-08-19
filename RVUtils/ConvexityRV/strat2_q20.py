@@ -191,6 +191,40 @@ So **Blues (rank 13) needs depth 16 -> 1,192 dates** and **Golds (rank 17) needs
 depth 20 -> 681 dates**, against 1,396 for the existing rank-10 strategy. The
 depth is *variable by date* and this module treats it that way -- a fixed
 all-20 rule would throw away ~500 Blues dates for nothing.
+
+
+THE HOLE THAT ARGUMENT LEFT, AND THE 2026-08-19 REPAIR
+=======================================================
+The paragraph above is right and the code implementing it was wrong in one
+place, which is worth stating plainly because the wrongness was invisible from
+inside the design it belongs to.
+
+Depth was treated as variable **per rank** (``gate_covered = spec.rank + 3 <=
+depth``) but as fixed **per date**: :func:`strip_depth_by_date` admitted a date
+only if ``instrument_count(date, depth) >= min_instruments`` -- the CURVE floor,
+then 12 -- so a date holding four perfectly good front settles was discarded for
+*every* rank, including the ranks that never look past contract 4. Measured
+2026-08-19 on the same shards:
+
+===========  =======================  ======================  ============
+year          dates able to quote      dates in the shipped    lost
+              rank 1 (depth >= 4)      panel at rank 1
+===========  =======================  ======================  ============
+2023          258                      222                     36
+2024          252                      **19**                  **233**
+2025          198                      **2**                   **196**
+2026          37                       **3**                   **34**
+===========  =======================  ======================  ============
+
+That is the "sparse from ~May-2024" complaint, and none of it is a data
+shortage. The repair separates the two floors -- :attr:`Q20Config.min_strip_depth`
+(universe, 4 contracts = one pack) from :attr:`Q20Config.min_instruments`
+(curve solve, now 4 after measuring depths 4/5/6 solve and agree with settles to
+0.37-0.81bp) -- and makes :func:`day_rows` degrade to settle-only rows with
+``q20_built=False`` rather than dropping a date whose curve will not build.
+Deep-rank sparsity after 2023 is NOT affected by any of this: it is a genuine
+absence of deferred settles in the local store, and the only cure is a fetch
+(``scripts/warm_sr3_deferred.py``).
 """
 
 from __future__ import annotations
@@ -210,9 +244,14 @@ import pandas as pd
 from RVUtils.ConvexityRV.listed_cache_guard import cache_only, network_calls_blocked
 from RVUtils.ConvexityRV.packs import imm_date, quarterly_imm_sequence
 from RVUtils.ConvexityRV.strat2_sofr_convexity import (
+    INTRADAY_SOURCE_MARKERS,
+    LIVE_SOURCE,
     Strat2Config,
+    _tz_readable,
+    assert_settle_source,
     ca_snapshot,
     futures_symbol,
+    ny_utc_offset,
     pack_windows,
 )
 
@@ -220,6 +259,9 @@ __all__ = [
     "Q20_CURVE",
     "Q20_INSTRUMENT_PREFIX",
     "EOD_SOURCE",
+    "LIVE_SOURCE",
+    "INTRADAY_SOURCE_MARKERS",
+    "assert_settle_source",
     "Q20Config",
     "strip_depth_by_date",
     "is_imm_roll_date",
@@ -254,6 +296,14 @@ Q20_INSTRUMENT_PREFIX = "SFRCM"
 #: deferred-contract depth locally. See the module docstring.
 EOD_SOURCE = "BARCHART_STIRF-RL"
 
+#: The intraday quote source, and the guard that refuses it. Both live in
+#: :mod:`RVUtils.ConvexityRV.strat2_sofr_convexity` -- the base module both
+#: configs are defined against -- and are re-exported here because this is the
+#: module whose docstring documents the trap. Measured 2026-08-19 over the whole
+#: 12,724,720-key local slice: ``BARCHART_TOS_LIVE_STIRF-RL`` reaches contiguous
+#: depth 20 on **zero dates in every year** 2018-2026, so it cannot even buy the
+#: deep packs it would be reached for.
+
 
 # ===========================================================================
 # Config
@@ -286,10 +336,45 @@ class Q20Config:
     """Cap on calibration instruments. The Q20 config carries exactly 20
     (``SFRCM1..SFRCM20``); asking for more would index past it."""
 
-    min_instruments: int = 12
-    """Refuse to build below this depth. A 20-node curve fitted to 6 contracts
-    is mostly interpolation, and the resolution gate would reject its windows
-    anyway -- this just avoids paying for the solve."""
+    min_instruments: int = 4
+    """Refuse to build the CURVE below this many calibration instruments.
+
+    **Was 12, and that number was the single largest cause of the sparse
+    2024-2026 CA series.** The rationale on record -- "a 20-node curve fitted to
+    6 contracts is mostly interpolation, and the resolution gate would reject its
+    windows anyway" -- is about the curve, but the floor was applied to
+    :func:`strip_depth_by_date`, i.e. to UNIVERSE ADMISSION, so a date holding
+    four good settles was dropped for **every** rank rather than for the deep
+    ranks it genuinely could not price. Measured cost: 2024 fell from 252 dates
+    able to quote rank 1 to 19; 2025 from 198 to 3; 2026 from 37 to 5.
+
+    Both halves of the rationale were then tested rather than assumed
+    (2026-08-19, offline, ``network_calls_blocked`` delta 0):
+
+    ==========  ============  ==========  =====================================
+    strip depth  date          solver      max |settle - Q20 fwd| over the strip
+    ==========  ============  ==========  =====================================
+    4            2025-06-20    converged   0.81bp
+    5            2025-03-20    converged   0.64bp
+    6            2024-12-19    converged   0.37bp
+    7            2024-09-19    converged   4.06bp  (IMM roll; gate REJECTS it)
+    ==========  ============  ==========  =====================================
+
+    So the curve does resolve at depth 4-6 and agrees with the settles well
+    inside the 2.0bp gate, and where it does not the gate catches it on the row
+    -- which is the point: a shallow date is now *admitted and judged* rather
+    than *discarded unjudged*. Universe admission is governed separately by
+    :attr:`min_strip_depth`, so a date whose curve cannot be built is still kept
+    and priced off raw settles (see :func:`day_rows`)."""
+
+    min_strip_depth: int = 4
+    """Universe admission floor, in CONTRACTS -- decoupled from the curve floor.
+
+    Four contiguous contracts is one pack window (rank 1), so this is the
+    smallest strip that can produce any CA at all. Keeping it separate from
+    :attr:`min_instruments` is what lets an IMM roll date at depth 4 -- three
+    calibration instruments, one pack -- into the panel with a settle-based CA
+    and ``q20_built=False`` recorded on the row, instead of vanishing."""
 
     # ---------------------------------------------------------------- gate
     gate_max_settle_diff_bp: float = 2.0
@@ -338,6 +423,11 @@ class Q20Config:
             raise ValueError(
                 f"need 1 <= min_instruments ({self.min_instruments}) <= "
                 f"max_instruments ({self.max_instruments}) <= 20")
+        if self.min_strip_depth < 4:
+            raise ValueError(
+                f"min_strip_depth={self.min_strip_depth} cannot quote any pack; "
+                "a pack window is four consecutive contracts")
+        assert_settle_source(self.eod_source, field="eod_source")
 
 
 # ===========================================================================
@@ -364,6 +454,8 @@ def strip_depth_by_date(
     *,
     cache_root: Optional[str] = None,
     session_time: str = "17:00:00",
+    min_depth: Optional[int] = None,
+    require_readable_offset: bool = True,
 ) -> Dict[datetime.date, int]:
     """``date -> length of the CONTIGUOUS front SR3 strip already on this machine``.
 
@@ -380,8 +472,31 @@ def strip_depth_by_date(
 
     Reads the diskcache's sqlite shards read-only. Probing the MDP instead is
     precisely the expensive thing being avoided.
+
+    **Admission is PER DATE and the returned depth is used PER RANK.** A date is
+    admitted when its contiguous strip reaches ``cfg.min_strip_depth`` (four
+    contracts = one pack), NOT when it reaches the depth the deepest requested
+    pack needs. The caller then asks ``max_rank_for_depth(depth)`` what that date
+    can quote. This is the difference between the shipped 1,434-date universe and
+    the 1,922-date one: 488 dates were being dropped for want of contracts no
+    front pack ever reads. See :attr:`Q20Config.min_instruments` for the measured
+    per-year cost of the old rule.
+
+    ``require_readable_offset`` (default True) drops 17:00 keys whose UTC offset
+    is not New York's for that date. They match the key regex but the EOD fetcher
+    asks for the New-York-stamped alias and misses -- see
+    :func:`strat2_sofr_convexity._tz_readable`. Set it False ONLY to measure the
+    defect; a panel build that turns it off manufactures dates that then reach
+    for the vendor.
+
+    ``min_depth`` overrides ``cfg.min_strip_depth`` for callers that need a
+    DIFFERENT lens on the same scan. There is exactly one: a **warm** wants to
+    see the dates that hold one or two contracts, because those are precisely the
+    dates it exists to fill, and a config floored at 4 (the smallest depth that
+    can quote a pack) cannot see them. Panel builders should never pass this.
     """
     root = cache_root or _default_cache_root()
+    floor = int(cfg.min_strip_depth if min_depth is None else min_depth)
     have: Dict[str, set] = defaultdict(set)
     for db in sorted(glob.glob(os.path.join(root, "*", "cache.db"))):
         con = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
@@ -393,6 +508,15 @@ def strip_depth_by_date(
                 if not m:
                     continue
                 if m.group("t") != session_time or m.group("src") != cfg.eod_source:
+                    continue
+                # A key stamped in the wrong UTC offset matches this regex but is
+                # NOT what the EOD fetcher asks for -- see `_tz_readable`. Counting
+                # it inflates the universe with dates that then miss and reach for
+                # the vendor. Measured: 51 such dates, 2026-07-09 among them at a
+                # scanned depth of 12 against a resolvable depth of 0.
+                if require_readable_offset and not _tz_readable(
+                        m.group("d"), m.group("tz"),
+                        session_hour=int(session_time[:2])):
                     continue
                 have[m.group("d")].add(m.group("sym"))
         finally:
@@ -410,7 +534,7 @@ def strip_depth_by_date(
                 depth += 1
             else:
                 break
-        if instrument_count(dd, depth) >= cfg.min_instruments:
+        if depth >= floor:
             out[dd] = depth
     return dict(sorted(out.items()))
 
@@ -784,6 +908,25 @@ def day_rows(
         The matched swap at the ``usd_irs`` spec default (annual fixed) minus the
         quarterly/quarterly rate Citi specifies. A prediction, not a fudge:
         ``0.375 * r^2`` with no free parameter.
+
+    **Degradation is per rate source, and it is recorded as data, never as
+    absence.** If the Q20 curve cannot be built for this date -- too few
+    calibration instruments (an IMM roll date at strip depth 4 has three), or a
+    solver failure -- the date is NOT dropped. The settle rows are still emitted
+    with ``q20_built=False``, every ``q20_*`` / ``*_q20`` column ``NaN``, and
+    ``gate_resolved`` / ``gate_settle_agrees`` ``False``, so the row can never be
+    mistaken for a resolved one. This is the difference between a sparse series
+    and a series that is honest about being sparse: previously the whole date
+    vanished and the chart drew a straight line through it.
+
+    Row-level availability columns, all written on every row:
+
+    ``strip_depth``     contiguous contracts available on this date
+    ``n_instruments``   calibration instruments (one lower on IMM roll dates)
+    ``q20_built``       did the Q20 curve solve
+    ``q20_error``       the exception type if it did not, else ``""``
+    ``max_rank_available`` deepest pack this date's strip can quote (``depth-3``)
+    ``ca_source_ok``    is the column named ``ca_bp`` finite on this row
     """
     from RVUtils.ConvexityRV.ca_diagnostics import (
         annuity_weight_residual_bp,
@@ -809,28 +952,51 @@ def day_rows(
         # curve against live settles manufactures a CA move out of nothing.
         raise LookupError(f"{as_of}: swap curve reference date is {ref}")
 
-    pricer = builder.pricer(as_of, depth)
-    nodes = curve_nodes(pricer)
     seq = quarterly_imm_sequence(as_of, depth)
-    fwds = q20_imm_forwards(pricer, seq)
     setl = builder.settles(as_of, depth)
+
+    # The Q20 curve is an ENHANCEMENT of the settle panel, not a precondition for
+    # it. A build failure costs this date its q20 columns and nothing else.
+    pricer = None
+    q20_error = ""
+    try:
+        pricer = builder.pricer(as_of, depth)
+    except Exception as exc:                                   # noqa: BLE001
+        q20_error = type(exc).__name__
+    nodes = curve_nodes(pricer) if pricer is not None else []
+    fwds = q20_imm_forwards(pricer, seq) if pricer is not None else {}
 
     px_q20 = forwards_to_prices(fwds, cfg.futures_root)
     px_set = forwards_to_prices(setl, cfg.futures_root)
 
-    snap_q20 = ca_snapshot(as_of, s2cfg, futures_prices=px_q20, swap_pricer=swap_pricer)
+    snap_q20 = (ca_snapshot(as_of, s2cfg, futures_prices=px_q20, swap_pricer=swap_pricer)
+                if pricer is not None else pd.DataFrame())
     snap_set = ca_snapshot(as_of, s2cfg, futures_prices=px_set, swap_pricer=swap_pricer)
     ca_set = dict(zip(snap_set["pack"], snap_set["ca_bp"])) if len(snap_set) else {}
     pr_set = dict(zip(snap_set["pack"], snap_set["pack_rate"])) if len(snap_set) else {}
+
+    # The row set is the UNION of what either source can quote, keyed by pack
+    # label, with the Q20 row preferred as the base when both exist. The two
+    # snapshots share their swap leg exactly, so the non-futures columns
+    # (swap_rate, time_weight, t_mid, the window dates) are identical either way
+    # and the choice of base cannot move them.
+    base: Dict[str, Any] = {}
+    if len(snap_set):
+        base.update({r["pack"]: r for _, r in snap_set.iterrows()})
+    if len(snap_q20):
+        base.update({r["pack"]: r for _, r in snap_q20.iterrows()})
+    q20_packs = set(snap_q20["pack"]) if len(snap_q20) else set()
 
     # --- zero-convexity control, off the SWAP curve's own IMM forwards
     swap_nodes = curve_nodes(swap_pricer)
     swap_fwds = imm_forward_map(swap_pricer, seq)
 
     specs = {s.label: s for s in pack_windows(as_of, s2cfg)}
+    n_inst = instrument_count(as_of, depth)
     rows: List[Dict[str, Any]] = []
-    for _, r in snap_q20.iterrows():
-        spec = specs.get(r["pack"])
+    for label in sorted(base, key=lambda p: specs[p].rank if p in specs else 10**6):
+        r = base[label]
+        spec = specs.get(label)
         if spec is None:
             continue
         g = window_gate(spec, q20_nodes=nodes, q20_fwds=fwds, settles=setl,
@@ -849,16 +1015,27 @@ def day_rows(
         g["annual_qq_gap_bp"] = (s_an - float(r["swap_rate"])) * 100.0
         row: Dict[str, Any] = dict(r)
         row.update(g)
-        row["pack_rate_q20"] = float(r["pack_rate"])
-        row["ca_bp_q20"] = float(r["ca_bp"])
-        row["pack_rate_settle"] = float(pr_set.get(r["pack"], np.nan))
-        row["ca_bp_settle"] = float(ca_set.get(r["pack"], np.nan))
+        has_q20 = label in q20_packs
+        row["pack_rate_q20"] = float(r["pack_rate"]) if has_q20 else float("nan")
+        row["ca_bp_q20"] = float(r["ca_bp"]) if has_q20 else float("nan")
+        row["pack_rate_settle"] = float(pr_set.get(label, np.nan))
+        row["ca_bp_settle"] = float(ca_set.get(label, np.nan))
         row["ca_diff_bp"] = row["ca_bp_q20"] - row["ca_bp_settle"]
         row["t1_first"] = float(spec.t1s[0])
         row["colour"] = spec.colour
-        if cfg.rate_source == "settle":
-            row["pack_rate"] = row["pack_rate_settle"]
-            row["ca_bp"] = row["ca_bp_settle"]
+        # --- availability, recorded as data so sparsity is visible downstream
+        row["strip_depth"] = int(depth)
+        row["n_instruments"] = int(n_inst)
+        row["max_rank_available"] = int(max_rank_for_depth(depth))
+        row["q20_built"] = bool(pricer is not None)
+        row["q20_error"] = q20_error
+        # `ca_bp` is whatever `cfg.rate_source` names, ALWAYS -- never a silent
+        # fallback to the other source. A missing q20 curve gives NaN under
+        # rate_source="q20", which is the honest answer.
+        src = "settle" if cfg.rate_source == "settle" else "q20"
+        row["pack_rate"] = row[f"pack_rate_{src}"]
+        row["ca_bp"] = row[f"ca_bp_{src}"]
+        row["ca_source_ok"] = bool(np.isfinite(row["ca_bp"]))
         rows.append(row)
     return rows
 
