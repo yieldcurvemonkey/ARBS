@@ -62,6 +62,16 @@ class WarmStat:
     last: Optional[datetime.date] = None
     worst_reprice_bp: float = 0.0
     errors: List[str] = field(default_factory=list)
+    #: The last day the BANKED par grid holds, set only when this curve wrote
+    #: nothing BECAUSE the requested window starts after the grid ends.
+    #:
+    #: A structured field rather than a parsed error string, because the caller
+    #: turns it into an exit code and matching on prose is how an exit code
+    #: silently stops meaning anything. ``None`` means "this curve's emptiness is
+    #: not explained by a stale grid" - either it wrote, or it failed for some
+    #: other reason - and the two must not be conflated: a stale grid is a human
+    #: harvest away from fixed, and everything else here is a defect.
+    stale_grid: Optional[datetime.date] = None
 
     def describe(self) -> str:
         span = f"{self.first} .. {self.last}" if self.first else "-"
@@ -142,6 +152,17 @@ def warm_curve(
     # of all, because the nightly warm asks for TODAY and nothing on the nightly
     # schedule refreshes the DAILY par grid - only a manual harvest does.
     if frame.empty:
+        # The DATE, recorded structurally, is what lets the caller tell this
+        # apart from every other way a curve can write nothing. Set before the
+        # message so the two can never disagree.
+        #
+        # Narrow on purpose: ONLY when the grid ends before the window begins.
+        # An empty window whose grid extends past it is a different animal - a
+        # caller asking for 1990, or a window inside a hole - and calling that
+        # "stale, run the harvest" would send a human to do something that
+        # cannot help.
+        if start is not None and banked_last < start:
+            stat.stale_grid = banked_last
         # Compact on purpose: this string is carried up into the warmer's SUMMARY
         # table, and the actionable half must survive the clip.
         stat.errors.append(

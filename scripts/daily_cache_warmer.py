@@ -21,10 +21,20 @@ carry a decision:
 0   Everything selected was warmed.
 1   At least one job FAILED. A real defect - read the run log, and the child
     output sidecar beside it.
-2   Nothing failed, but at least one job was SKIPPED. Excel was shut, bloated,
-    or signed out, or a job's provider did not deliver. Someone opens Excel;
-    there is no bug to find.
+2   Nothing failed, but at least one job - or one STEP inside a job - was
+    SKIPPED. Excel was shut, bloated, or signed out; a job's provider did not
+    deliver; or a step exited on one of its own declared skip codes because it
+    needs a human to act first. Someone opens Excel or runs what the message
+    names; there is no bug to find.
 ==  ===========================================================================
+
+The step-level half of 2 is newer than the job-level half and was added for one
+measured case: the EOD CurveStore warm is OFFLINE by construction and can only
+build curves as far as the banked DAILY par grid reaches. Nothing on this
+schedule advanced that grid, so it reported "EOD warm exited 1" on six of ten
+retained nights for an input it does not own. ``scripts/citivelo_daily_par_refresh.py``
+now advances it, and when that cannot run the warm says SKIPPED and names the
+command instead of failing opaquely.
 
 Two codes were not enough, and the reason is operational rather than tidy. Five
 Velocity jobs depend on a human-authenticated Excel whose memory only ever grows
@@ -499,6 +509,21 @@ class _StepFailure(NamedTuple):
 #: lost was survivable.
 _SUBPROCESS_FAILURES: list[_StepFailure] = []
 
+#: Every step that exited with one of its own declared SKIP codes this run.
+#:
+#: Separate from :data:`_SUBPROCESS_FAILURES` because the two need opposite
+#: reactions and merging them is what trained the exit code to be ignored. A skip
+#: here means "this step did nothing and a HUMAN has to act before it can" - the
+#: EOD warm finding the banked DAILY par grid ending before its window is the
+#: case this was built for, and it happened on six of ten retained nights while
+#: being reported as FAILED. Nobody can fix a stale grid by reading code at
+#: 18:15; they can run the refresh.
+#:
+#: It is still recorded rather than swallowed. A step that quietly does nothing
+#: is the "green while stale" shape this warm has now been bitten by twice, so
+#: the skip is named in SUMMARY and moves the run's exit code to 2.
+_SUBPROCESS_SKIPS: list[_StepFailure] = []
+
 #: How many trailing child lines go into the RUN log on a failure. The full
 #: output always goes to the sidecar, so this only has to be big enough to carry
 #: the cause - a Python traceback's last frame plus its exception line fits.
@@ -608,7 +633,7 @@ def _archive_child_output(label, cmd, returncode, out, err):
         log.warning("  could not archive %s output (%s)", label, exc)
 
 
-def _run(cmd, label, timeout=None, record=True):
+def _run(cmd, label, timeout=None, record=True, skip_codes=()):
     """Run a warm script as a subprocess and report, without killing the run.
 
     Captures the child's streams rather than letting them inherit the scheduled
@@ -622,6 +647,17 @@ def _run(cmd, label, timeout=None, record=True):
     warning rather than a job failure; capturing their output is a diagnostic
     change, and changing what counts as a failed job is not one to smuggle in
     alongside it.
+
+    ``skip_codes`` are exit codes THAT CHILD defines as "I did nothing and a
+    human has to act first". They go to :data:`_SUBPROCESS_SKIPS` instead of
+    :data:`_SUBPROCESS_FAILURES`, so the step is named in SUMMARY and moves the
+    run to exit 2 rather than exit 1.
+
+    Per call site, never global. The same integer means different things to
+    different children - 3 is "stale par grid, run the refresh" to
+    ``citivelo_excel_warm.py`` and "stopped at the Excel memory ceiling" to
+    ``citivelo_excel_intraday_warm.py``, and the second of those IS worth a
+    red line. A blanket "3 means skip" would silently reclassify it.
     """
     log.info("  %s: %s", label, " ".join(cmd[2:]))
     env = dict(os.environ)
@@ -648,6 +684,15 @@ def _run(cmd, label, timeout=None, record=True):
     out = _as_text(getattr(result, "stdout", ""))
     err = _as_text(getattr(result, "stderr", ""))
     _archive_child_output(label, cmd, result.returncode, out, err)
+    if result.returncode in tuple(skip_codes) and result.returncode != 0:
+        # The child's own last line is the actionable half - it names what a
+        # human has to run. Carried into SUMMARY verbatim rather than replaced
+        # with a generic "skipped", because "EOD warm exited 1" naming no cause
+        # is the failure this whole path exists to stop repeating.
+        detail = _last_meaningful_line(out, err)
+        log.warning("  %s SKIPPED (not a failure): %s", label, detail)
+        _SUBPROCESS_SKIPS.append(_StepFailure(label, result.returncode, detail))
+        return result.returncode
     if result.returncode != 0:
         log.warning("  %s exited %d", label, result.returncode)
         for line in _tail(out):
@@ -707,13 +752,35 @@ def warm_citivelo_curve_stores(start, end):
               "--recycle-every", "20", "--memory-ceiling-mb", "2500",
               "--memory-abort-mb", "3800"], "intraday fetch")
 
+        # THE DAILY PAR GRID, which nothing on this schedule used to advance.
+        #
+        # This is the half of the job that was missing, not a tuning change.
+        # ``intraday fetch`` above writes MINUTE par rates into
+        # ``_intraday_par_cache``; the ``EOD warm`` below reads the DAILY par
+        # tags in the ``CitiVeloTagCache``. Two different stores, and only a
+        # human running the harvest ever wrote the second one - so the minute
+        # store was current to 2026-08-18 on all five curves while the EOD store
+        # sat on 2026-08-07, and "EOD warm exited 1" on six of ten nights was
+        # simply the warm being asked to build curves from data nobody fetched.
+        #
+        # Second in the Excel block and inside the same pre-flight, because it is
+        # one ``CVTSHIST`` per curve - measured 44/44 tags in 1.4 s against
+        # explicit bounds - so it costs seconds next to the intraday fetch's
+        # minutes, and it must not run at all when Excel is unusable.
+        _run([py, "-u", "scripts/citivelo_daily_par_refresh.py", "refresh",
+              "--curves", curves, "--end", max(days).isoformat(),
+              "--ceiling-mb", "3000"], "DAILY par refresh", skip_codes=(3,))
+
     _run([py, "-u", "scripts/citivelo_excel_intraday_warm.py", "build",
           "--curves", curves], "intraday build")
 
-    # EOD runs entirely offline against the banked tag cache.
+    # EOD runs entirely offline against the banked tag cache - so a stale grid is
+    # an INPUT it does not own, and exit 3 says exactly that. It stays a skip
+    # rather than a failure whether the refresh above ran and could not reach a
+    # curve, or was itself skipped because Excel was shut.
     _run([py, "-u", "scripts/citivelo_excel_warm.py", "warm",
           "--curves", curves, "--start", min(days).isoformat(),
-          "--end", max(days).isoformat()], "EOD warm")
+          "--end", max(days).isoformat()], "EOD warm", skip_codes=(3,))
 
     _run([py, "-u", "scripts/citivelo_excel_intraday_warm.py", "status"], "status")
     return None
@@ -1079,7 +1146,38 @@ def warm_citivelo_ust_universe_eod(start, end):
             f"UST universe EOD warm stopped after {out['done']}/{out['of']} bonds: "
             f"{out['reason']}. Progress is in the manifest; re-run to continue."
         )
+    _raise_on_coverage_regression(out, "EOD")
     return None
+
+
+#: A coverage regression has to reach the SCHEDULER, not just the CLI.
+#:
+#: ``citivelo_ust_universe_warm.main`` exits 1 on ``regressed``, but the nightly
+#: does not go through ``main`` - it calls ``warm()`` and, until this existed,
+#: read only ``stopped``. So a bond that fell silent since the last run returned
+#: ``None`` here, printed OK, and the run exited 0. That is defect 2's own shape
+#: one layer up: a warm that cannot fail on coverage grounds cannot be trusted to
+#: report coverage.
+#:
+#: Only the CHANGE escalates, never the LEVEL - deliberately, and for the reason
+#: the CLI already documents: ten value families have been dead since 2025-10-03
+#: and 2025-11-28, so escalating the level would exit non-zero every night for a
+#: condition nobody can act on, which is precisely the always-failing exit code
+#: this warmer's docstring says trains an operator to stop reading exit codes.
+#: The level goes to the log and to ``status``.
+def _raise_on_coverage_regression(out, label):
+    regressed = out.get("regressed") or {}
+    if not regressed:
+        return
+    shown = ", ".join(
+        f"{isin}: {', '.join(vals)}" for isin, vals in sorted(regressed.items())[:5]
+    )
+    more = f" and {len(regressed) - 5} more" if len(regressed) > 5 else ""
+    raise RuntimeError(
+        f"UST universe {label} warm: {len(regressed)} bond(s) newly stopped updating "
+        f"since the last run ({shown}{more}). The warm itself completed - this is a "
+        f"coverage regression, not a partial run, so re-running will not clear it."
+    )
 
 
 def warm_citivelo_ust_universe_intraday(start, end):
@@ -1109,6 +1207,7 @@ def warm_citivelo_ust_universe_intraday(start, end):
             f"UST universe intraday warm stopped after {out['done']}/{out['of']} bonds: "
             f"{out['reason']}. Progress is in the manifest; re-run to continue."
         )
+    _raise_on_coverage_regression(out, "intraday")
     return None
 
 
@@ -1544,6 +1643,7 @@ def main():
 
         t0 = time.perf_counter()
         before = len(_SUBPROCESS_FAILURES)
+        before_skips = len(_SUBPROCESS_SKIPS)
         try:
             result = job.fn(start, end)
             elapsed = time.perf_counter() - t0
@@ -1551,6 +1651,10 @@ def main():
             # caller of _run discards the code on purpose, so the only evidence
             # is what _run recorded while this job was running.
             lost = _SUBPROCESS_FAILURES[before:]
+            # Steps that exited on one of their own declared skip codes. Counted
+            # and named separately: a failure means "read the log, something is
+            # broken", a skip means "run the thing the message names".
+            waived = _SUBPROCESS_SKIPS[before_skips:]
             if lost:
                 detail = ", ".join(_describe_step_failure(f) for f in lost)
                 status = f"FAILED ({elapsed:.1f}s): {len(lost)} step(s) failed - {detail}"
@@ -1565,6 +1669,17 @@ def main():
                     status += f", {shape[0]} rows x {shape[1]} cols"
                 status += ")"
                 log.info("  %s", status)
+            if waived:
+                # Appended to whatever the job's own status is, so a job that did
+                # four things and skipped the fifth reads as exactly that. The
+                # run-level ``skipped`` counter moves too, which is what makes
+                # the process exit 2 instead of 0 - the documented meaning of 2
+                # is "nothing failed, but something did not happen", and a stale
+                # par grid awaiting a human is precisely that.
+                detail = "; ".join(f"{s.label}: {s.detail}" for s in waived)
+                status += f" [{len(waived)} step(s) SKIPPED - {detail}]"
+                skipped += 1
+                log.warning("  %d step(s) SKIPPED in %s - %s", len(waived), job.name, detail)
             results.append((job.name, status + provenance))
         except excel_errors as e:
             # Not a failure of this warm. Excel was absent, unreadable, over the

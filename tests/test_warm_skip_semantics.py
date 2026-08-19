@@ -719,14 +719,72 @@ def test_a_blocked_preflight_costs_the_curvestore_fetch_and_nothing_else(warmer,
 
 
 def test_an_open_preflight_still_runs_the_curvestore_fetch(warmer, monkeypatch):
-    """The control: with Excel healthy, all four phases run as before."""
+    """The control: with Excel healthy, every phase runs.
+
+    ``refresh`` is the DAILY par grid, and it is inside the Excel block on
+    purpose. ``fetch`` writes MINUTE par rates into ``_intraday_par_cache``;
+    ``warm`` reads the DAILY par tags in the ``CitiVeloTagCache``. Two different
+    stores, and until this step existed nothing on the nightly schedule wrote the
+    second one - the minute store was current to 2026-08-18 on all five curves
+    while the EOD grid sat on 2026-08-07.
+    """
     rec = _Recorder()
     monkeypatch.setattr(warmer.subprocess, "run", rec)
     monkeypatch.setattr(warmer, "_excel_preflight", lambda: None)
 
     warmer.warm_citivelo_curve_stores(_TUESDAY, _TUESDAY)
 
-    assert rec.steps() == ["fetch", "build", "warm", "status"], rec.steps()
+    assert rec.steps() == ["fetch", "refresh", "build", "warm", "status"], rec.steps()
+
+
+def test_the_DAILY_par_refresh_runs_BEFORE_the_EOD_warm_that_reads_it(warmer, monkeypatch):
+    """Ordering is the correctness constraint, not the presence of the step.
+
+    The EOD warm builds curves out of the grid the refresh advances. Refreshing
+    afterwards would leave the store exactly one night behind for ever - a
+    failure that never raises and only shows up as a store whose last day is
+    always yesterday.
+    """
+    rec = _Recorder()
+    monkeypatch.setattr(warmer.subprocess, "run", rec)
+    monkeypatch.setattr(warmer, "_excel_preflight", lambda: None)
+
+    warmer.warm_citivelo_curve_stores(_TUESDAY, _TUESDAY)
+
+    steps = rec.steps()
+    assert steps.index("refresh") < steps.index("warm"), steps
+
+
+def test_the_DAILY_par_refresh_does_not_run_when_excel_is_blocked(warmer, monkeypatch):
+    """It drives Excel, so it belongs behind the same gate as the intraday fetch."""
+    rec = _Recorder()
+    monkeypatch.setattr(warmer.subprocess, "run", rec)
+    monkeypatch.setattr(warmer, "_excel_preflight", lambda: "Excel is at 6526 MB")
+
+    warmer.warm_citivelo_curve_stores(_TUESDAY, _TUESDAY)
+
+    assert "refresh" not in rec.steps(), rec.steps()
+
+
+def test_the_refresh_asks_for_the_same_curves_the_EOD_warm_will_build(warmer, monkeypatch):
+    """A refresh of the wrong curves advances a grid nobody reads.
+
+    ``JPY-TONAR-1D`` and ``JPY-TONAR-1D-LCH`` are different Citi indices with
+    their own banked grids, so this divergence would be silent: the refresh would
+    report success every night and the EOD warm would stay just as stale.
+    """
+    rec = _Recorder()
+    monkeypatch.setattr(warmer.subprocess, "run", rec)
+    monkeypatch.setattr(warmer, "_excel_preflight", lambda: None)
+
+    warmer.warm_citivelo_curve_stores(_TUESDAY, _TUESDAY)
+
+    by_step = {c[3]: c for c in rec.cmds}
+    refresh_curves = by_step["refresh"][by_step["refresh"].index("--curves") + 1]
+    warm_curves = by_step["warm"][by_step["warm"].index("--curves") + 1]
+    assert refresh_curves == warm_curves, (
+        f"refresh warms {refresh_curves!r} but the EOD warm reads {warm_curves!r}"
+    )
 
 
 def test_a_blocked_preflight_costs_the_vol_fetch_and_nothing_else(warmer, monkeypatch):
@@ -749,3 +807,70 @@ def test_an_open_preflight_still_runs_the_vol_fetch(warmer, monkeypatch):
     warmer.warm_citivelo_swaption_cube(_TUESDAY, _TUESDAY)
 
     assert rec.steps() == ["fetch", "build", "status"], rec.steps()
+
+
+# ------------------------------------------------------------------ #
+#      a SKIPPED step inside an otherwise healthy job reaches 2       #
+# ------------------------------------------------------------------ #
+#
+# The step-level half of exit 2. A job can do four things and be unable to do the
+# fifth, and both halves of that have to reach the scheduler: not FAILED, because
+# nothing is broken and there is no log worth reading; not silently OK, because a
+# warm that cannot report doing nothing is the "green while stale" shape this
+# codebase has now been bitten by twice.
+
+
+def _child_exiting(tmp_path, code: int, line: str) -> pathlib.Path:
+    path = tmp_path / f"child_{code}.py"
+    path.write_text(f"import sys\nprint({line!r})\nsys.exit({code})\n", encoding="utf-8")
+    return path
+
+
+def test_a_skipped_step_makes_the_run_exit_2_and_names_it_in_SUMMARY(
+    warmer, monkeypatch, tmp_path
+):
+    """Not 1, and not 0.
+
+    1 would be the always-red exit code that nobody reads - the state that let a
+    cache write persisting nothing survive ten runs. 0 would be the silent
+    version of the same lie.
+    """
+    script = _child_exiting(
+        tmp_path, 3,
+        "SKIPPED: grid ends 2026-08-07; run scripts/citivelo_daily_par_refresh.py refresh",
+    )
+    lines = _summary(warmer, monkeypatch)
+
+    def job(start, end):
+        warmer._run([sys.executable, "-u", str(script)], "EOD warm", skip_codes=(3,))
+
+    code = _run(warmer, monkeypatch, [WarmJob("CitiVelo CurveStore", job, kind=STORE)])
+
+    assert code == 2, "a step nobody can fix at 18:15 is SKIPPED, not FAILED"
+    summary = [l for l in lines if "CitiVelo CurveStore" in l and "SKIPPED" in l]
+    assert summary, f"the skip must reach SUMMARY, got {lines!r}"
+    assert any("citivelo_daily_par_refresh" in l for l in summary), (
+        f"SUMMARY must name the command a human should run, got {summary!r}"
+    )
+
+
+def test_a_job_whose_steps_all_succeed_still_exits_0(warmer, monkeypatch, tmp_path):
+    """The control: the new branch must not turn healthy runs amber."""
+    script = _child_exiting(tmp_path, 0, "wrote 12 curve-days")
+
+    def job(start, end):
+        warmer._run([sys.executable, "-u", str(script)], "EOD warm", skip_codes=(3,))
+
+    assert _run(warmer, monkeypatch, [WarmJob("CitiVelo CurveStore", job, kind=STORE)]) == 0
+
+
+def test_a_failed_step_still_outranks_a_skipped_one(warmer, monkeypatch, tmp_path):
+    """A run with both is a run with a defect. The failure must not be softened."""
+    skipped = _child_exiting(tmp_path, 3, "SKIPPED: grid ends 2026-08-07")
+    failed = _child_exiting(tmp_path, 1, "ValueError: bad node")
+
+    def job(start, end):
+        warmer._run([sys.executable, "-u", str(skipped)], "EOD warm", skip_codes=(3,))
+        warmer._run([sys.executable, "-u", str(failed)], "intraday build")
+
+    assert _run(warmer, monkeypatch, [WarmJob("CitiVelo CurveStore", job, kind=STORE)]) == 1

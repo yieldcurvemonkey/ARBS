@@ -381,3 +381,105 @@ def test_a_window_inside_the_grid_still_warms_normally():
 
     assert stat.skipped_existing == 3
     assert not stat.errors, f"a healthy warm must record no error: {stat.errors}"
+
+
+# ------------------------------------------------------------------ #
+#   a child's own SKIP code is not a failed step, and stays per-site   #
+# ------------------------------------------------------------------ #
+#
+# The EOD CurveStore warm is offline by construction: it builds curves out of the
+# banked DAILY par grid and cannot fetch. When the grid ends before the window it
+# has nothing to do and nothing is broken - an input it does not own has not been
+# advanced. It reported that as exit 1 on six of ten retained nights, which is
+# how FAILED became the normal nightly state and the exit code stopped being
+# read. Exit 3 now says "a human must act" and names the command.
+
+
+def test_a_declared_skip_code_is_not_recorded_as_a_failed_step(warmer, tmp_path):
+    """The whole point: SKIPPED must not count towards the job's failures."""
+    script = _child(tmp_path, """
+        import sys
+        print("SKIPPED: no banked DAILY rows; run scripts/citivelo_daily_par_refresh.py")
+        sys.exit(3)
+    """)
+
+    code = warmer._run([sys.executable, "-u", str(script)], "EOD warm", skip_codes=(3,))
+
+    assert code == 3, "the child's own code is still returned"
+    assert warmer._SUBPROCESS_FAILURES == [], (
+        "a stale par grid is not a defect of this warm and must not fail the job"
+    )
+    assert len(warmer._SUBPROCESS_SKIPS) == 1
+    assert warmer._SUBPROCESS_SKIPS[0].label == "EOD warm"
+
+
+def test_a_skip_carries_the_childs_last_word_so_a_human_knows_what_to_run(warmer, tmp_path):
+    """"EOD warm exited 1" naming no cause is the failure this replaces.
+
+    The actionable half is the command, and it has to survive into the record
+    the SUMMARY line is built from.
+    """
+    script = _child(tmp_path, """
+        import sys
+        print("noise about licences")
+        print("SKIPPED: grid ends 2026-08-07; run scripts/citivelo_daily_par_refresh.py refresh")
+        sys.exit(3)
+    """)
+
+    warmer._run([sys.executable, "-u", str(script)], "EOD warm", skip_codes=(3,))
+
+    detail = warmer._SUBPROCESS_SKIPS[0].detail
+    assert "citivelo_daily_par_refresh" in detail, detail
+    assert "2026-08-07" in detail, detail
+
+
+def test_an_UNdeclared_code_from_the_same_child_still_fails(warmer, tmp_path):
+    """Only the codes the call site declares are waived.
+
+    A child that dies for a real reason must still be a failure, or the skip
+    branch becomes a blanket amnesty and the exit code stops meaning anything
+    again.
+    """
+    script = _child(tmp_path, """
+        import sys
+        print("nothing written and nothing already present: EUR-ESTR-1D: ValueError")
+        sys.exit(1)
+    """)
+
+    warmer._run([sys.executable, "-u", str(script)], "EOD warm", skip_codes=(3,))
+
+    assert warmer._SUBPROCESS_SKIPS == []
+    assert len(warmer._SUBPROCESS_FAILURES) == 1
+
+
+def test_the_same_code_from_a_call_site_that_did_not_declare_it_is_a_failure(warmer, tmp_path):
+    """``skip_codes`` is per call site, and that is deliberate.
+
+    3 means "stale par grid, run the refresh" to ``citivelo_excel_warm.py`` and
+    "stopped at the Excel memory ceiling" to ``citivelo_excel_intraday_warm.py``.
+    The second IS worth a red line, so a blanket "3 means skip" would silently
+    reclassify a wedged Excel as routine.
+    """
+    script = _child(tmp_path, """
+        import sys
+        print("fetch stopped early at 12 day file(s); restart Excel")
+        sys.exit(3)
+    """)
+
+    warmer._run([sys.executable, "-u", str(script)], "intraday fetch")
+
+    assert warmer._SUBPROCESS_SKIPS == []
+    assert len(warmer._SUBPROCESS_FAILURES) == 1, (
+        "the memory ceiling is a real outcome and must stay visible"
+    )
+
+
+def test_exit_0_is_never_a_skip(warmer, tmp_path):
+    """The control: a healthy child must not be recorded anywhere."""
+    script = _child(tmp_path, """
+        print("wrote 12 curve-days across 5 curve(s)")
+    """)
+
+    assert warmer._run([sys.executable, "-u", str(script)], "EOD warm", skip_codes=(3,)) == 0
+    assert warmer._SUBPROCESS_SKIPS == []
+    assert warmer._SUBPROCESS_FAILURES == []
