@@ -281,6 +281,129 @@ def test_roll_handling_and_partial_strip_rejection(monkeypatch):
         )
 
 
+# ---------------------------------------------------------------------------
+# Forward-starting explicit windows (regression: the short-strip defect).
+#
+# ``_contracts_for_explicit_window`` used to size its candidate ladder from the
+# FRONT of the curve as ``ceil(window_days / 75) + 4`` contracts and then filter
+# to the requested window.  That sizes the ladder to the window's *length*, not
+# to its *end*, so a forward-starting window ran off the end of the ladder and
+# came back short with no error.  Measured on 2023-06-09: the rank-9 pack window
+# 2025-06-18..2026-06-17 returned ONE leg instead of four, and rank 13 raised
+# "No quarterly SFR contracts fall inside" even though all four contracts exist.
+#
+# The windows below are the real IMM reference-quarter boundaries for those
+# packs, hardcoded on purpose so the assertions do not depend on the same
+# resolver they are policing.
+# ---------------------------------------------------------------------------
+
+# (rank, swap_start, swap_end, contracts) for as_of = 2023-06-09.
+_FORWARD_PACK_WINDOWS_2023_06_09 = [
+    (1, datetime.date(2023, 6, 21), datetime.date(2024, 6, 19), ["SFRM23", "SFRU23", "SFRZ23", "SFRH24"]),
+    (6, datetime.date(2024, 9, 18), datetime.date(2025, 9, 17), ["SFRU24", "SFRZ24", "SFRH25", "SFRM25"]),
+    (7, datetime.date(2024, 12, 18), datetime.date(2025, 12, 17), ["SFRZ24", "SFRH25", "SFRM25", "SFRU25"]),
+    (8, datetime.date(2025, 3, 19), datetime.date(2026, 3, 18), ["SFRH25", "SFRM25", "SFRU25", "SFRZ25"]),
+    (9, datetime.date(2025, 6, 18), datetime.date(2026, 6, 17), ["SFRM25", "SFRU25", "SFRZ25", "SFRH26"]),
+    (13, datetime.date(2026, 6, 17), datetime.date(2027, 6, 16), ["SFRM26", "SFRU26", "SFRZ26", "SFRH27"]),
+]
+
+
+@pytest.mark.parametrize("rank,swap_start,swap_end,expected", _FORWARD_PACK_WINDOWS_2023_06_09)
+def test_explicit_forward_window_returns_the_whole_strip(rank, swap_start, swap_end, expected):
+    """A forward-starting pack window resolves to its own four contracts.
+
+    Pre-fix this returned 4/4/3/2/1/raise for ranks 1/6/7/8/9/13.
+    """
+    mdp = STIRCapFloorMDP()
+    got = mdp._contracts_for_explicit_window(
+        as_of=datetime.date(2023, 6, 9), swap_start=swap_start, swap_end=swap_end
+    )
+    assert got == expected, f"rank {rank}: expected {expected}, got {got}"
+    assert len(got) == 4
+
+
+def test_explicit_forward_window_builds_four_legs_end_to_end(monkeypatch):
+    """The measured case, through the public ``get_data`` path.
+
+    Measured on 2023-06-09: the rank-9 window came back as a one-caplet
+    "strip" and the value map happily aggregated it into a pack vol.
+    """
+    mdp = STIRCapFloorMDP()
+    monkeypatch.setattr(mdp._curve_mdp, "get_pricer", lambda req: _DummyCurve(req["timestamp"]))
+    monkeypatch.setattr(
+        mdp._option_mdp,
+        "get_data",
+        lambda req: {req["symbols"][0]: [_mk_pricer(symbol=f"{req['symbols'][0].split('|', 1)[0]}|9687P", price=1.0, delta=-0.4)]},
+    )
+
+    ctx = mdp.get_data(
+        {
+            "endpoint": "synthetic_capfloor_snapshot",
+            "structure": "CAP",
+            "curve_name": "USD-SOFR-1D",
+            "timestamp": datetime.date(2023, 6, 9),
+            "swap_start": datetime.date(2025, 6, 18),
+            "swap_end": datetime.date(2026, 6, 17),
+        }
+    )
+    assert ctx.meta()["strip_contracts"] == ["SFRM25", "SFRU25", "SFRZ25", "SFRH26"]
+    assert len(ctx.legs) == 4
+    assert [leg.underlying_contract for leg in ctx.legs] == ["SFRM25", "SFRU25", "SFRZ25", "SFRH26"]
+    # The strip must tile the requested window exactly, with no gap at either end.
+    assert ctx.legs[0].reference_quarter_start == datetime.date(2025, 6, 18)
+    assert ctx.legs[-1].reference_quarter_end == datetime.date(2026, 6, 17)
+
+
+def test_explicit_window_matches_expiry_tail_form_for_the_same_strip(monkeypatch):
+    """The two request forms must agree; pre-fix they diverged past rank 6.
+
+    ``expiry``/``tail`` resolves via ``resolve_quarterly_contracts(start_index=
+    expiry//3, count=tail//3)`` and was always exact, which is why callers
+    routed around the explicit form.
+    """
+    mdp = STIRCapFloorMDP()
+    monkeypatch.setattr(mdp._curve_mdp, "get_pricer", lambda req: _DummyCurve(req["timestamp"]))
+    monkeypatch.setattr(
+        mdp._option_mdp,
+        "get_data",
+        lambda req: {req["symbols"][0]: [_mk_pricer(symbol=f"{req['symbols'][0].split('|', 1)[0]}|9687P", price=1.0, delta=-0.4)]},
+    )
+    base = {
+        "endpoint": "synthetic_capfloor_snapshot",
+        "structure": "CAP",
+        "curve_name": "USD-SOFR-1D",
+        "timestamp": datetime.date(2023, 6, 9),
+    }
+    for rank, swap_start, swap_end, expected in _FORWARD_PACK_WINDOWS_2023_06_09:
+        by_tail = mdp.get_data({**base, "expiry": f"{3 * (rank - 1)}M", "tail": "12M"})
+        by_window = mdp.get_data({**base, "swap_start": swap_start, "swap_end": swap_end})
+        assert by_tail.meta()["strip_contracts"] == expected
+        assert by_window.meta()["strip_contracts"] == by_tail.meta()["strip_contracts"], f"rank {rank}"
+        assert (by_window.swap_start, by_window.swap_end) == (by_tail.swap_start, by_tail.swap_end), f"rank {rank}"
+
+
+def test_explicit_window_raises_rather_than_returning_a_partial_cover():
+    """A window the quarterly grid cannot tile is an error, not a short strip.
+
+    Callers aggregate over ``ctx.legs`` without checking the count (see
+    ``STIRCapFloorValueFunctionMap``), so a partial cover is indistinguishable
+    from a correct answer.  The near-end guard already raises on an
+    uncoverable window; this is the same rule at the far end.
+    """
+    mdp = STIRCapFloorMDP()
+    as_of = datetime.date(2023, 6, 9)
+    # Ends mid reference-quarter: SFRH26's quarter runs 2026-03-18..2026-06-17.
+    with pytest.raises(ValueError, match="does not tile"):
+        mdp._contracts_for_explicit_window(
+            as_of=as_of, swap_start=datetime.date(2025, 6, 18), swap_end=datetime.date(2026, 5, 1)
+        )
+    # Starts mid reference-quarter: 2025-07-01 is inside SFRM25's quarter.
+    with pytest.raises(ValueError, match="does not tile"):
+        mdp._contracts_for_explicit_window(
+            as_of=as_of, swap_start=datetime.date(2025, 7, 1), swap_end=datetime.date(2026, 6, 17)
+        )
+
+
 def test_weights_sum_to_one_and_duration_differs_from_equal(monkeypatch):
     mdp = STIRCapFloorMDP()
     monkeypatch.setattr(mdp._curve_mdp, "get_pricer", lambda req: _DummyCurve(req["timestamp"], zero_rate=0.07))
