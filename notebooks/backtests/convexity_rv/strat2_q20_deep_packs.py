@@ -673,8 +673,16 @@ print("   real panel is a real measurement: these deep SR3 settles are NOT stale
 # not.
 
 # %%
-def prep(lo, hi, source):
-    """Gate -> require every rank present -> longest contiguous run."""
+def prep(lo, hi, source, keep="latest"):
+    """Gate -> require every rank present -> keep one contiguous run.
+
+    `keep="latest"` since 2026-08-19. The legacy `"longest"` rule cut this
+    notebook's NEAR band from 518 dates to **301**, discarding every date in
+    2023, 2024 and 2025 because the longest gap-free block happened to sit in
+    2021 -- there it was the single largest killer in the whole pipeline, larger
+    than the depth gate. Coverage is printed both ways below rather than one
+    being chosen in silence.
+    """
     sub = Q.apply_gate(PANEL)
     sub = sub[(sub["rank"] >= lo) & (sub["rank"] <= hi)].copy()
     _full = sub.groupby("date")["rank"].nunique()
@@ -682,15 +690,16 @@ def prep(lo, hi, source):
     sub["ca_bp"] = sub[f"ca_bp_{source}"]
     sub["pack_rate"] = sub[f"pack_rate_{source}"]
     return S2.trim_to_contiguous_run(
-        sub, RATES.loc[RATES.index.isin(sub["date"].unique())])
+        sub, RATES.loc[RATES.index.isin(sub["date"].unique())], keep=keep)
 
 
 _lo, _hi = DEEP.rank_start - 1, DEEP.rank_start + DEEP.n_packs - 1
 for _src in ("q20", "settle"):
-    _p, _r = prep(_lo, _hi, _src)
-    _dd = pd.DatetimeIndex(sorted(_p["date"].unique()))
-    print(f"deep/{_src:6s}: {len(_p):,} rows, {len(_dd)} days "
-          f"{_dd[0].date()}..{_dd[-1].date()}")
+    for _keep in ("longest", "latest", "none"):
+        _p, _r = prep(_lo, _hi, _src, keep=_keep)
+        _dd = pd.DatetimeIndex(sorted(_p["date"].unique()))
+        print(f"deep/{_src:6s} keep={_keep:<7s}: {len(_p):,} rows, {len(_dd)} days "
+              f"{_dd[0].date()}..{_dd[-1].date()}")
 DEEP_PANEL, DEEP_RATES = prep(_lo, _hi, "q20")
 DEEP_DAYS = pd.DatetimeIndex(sorted(DEEP_PANEL["date"].unique()))
 SPAN_YEARS = (DEEP_DAYS[-1] - DEEP_DAYS[0]).days / 365.25

@@ -248,15 +248,21 @@ from RVUtils.ConvexityRV.packs import (
 __all__ = [
     "Strat2Config",
     "PackSpec",
+    "LIVE_SOURCE",
+    "INTRADAY_SOURCE_MARKERS",
+    "assert_settle_source",
     "pack_windows",
     "futures_symbol",
     "ca_snapshot",
     "fit_sigma_model",
     "build_panel",
     "local_cached_dates",
+    "local_strip_depths",
     "trim_to_contiguous_run",
+    "coverage_by_run",
     "panel_diagnostics",
     "panel_timeseries",
+    "window_span_ok",
     "model_timeseries",
     "daily_screen",
     "assert_ran",
@@ -271,6 +277,48 @@ __all__ = [
     "run_backtest",
     "RANK_METRICS",
 ]
+
+
+# ===========================================================================
+# Settlement source guard
+# ===========================================================================
+#: The Barchart INTRADAY quote feed. Named so it can be rejected by name rather
+#: than warned against in prose. It is the source ``BARCHART_STIRF_CURVE``
+#: reaches for internally, so the trap is one keyword argument away at all times.
+LIVE_SOURCE = "BARCHART_TOS_LIVE_STIRF-RL"
+
+#: Substrings marking a futures source as an intraday quote feed rather than a
+#: settlement mark. Matched case-insensitively.
+INTRADAY_SOURCE_MARKERS: Tuple[str, ...] = ("TOS_LIVE", "_LIVE", "INTRADAY")
+
+
+def assert_settle_source(source: str, *, field: str = "futures_source") -> str:
+    """Raise unless *source* is a settlement mark rather than a live quote.
+
+    The convexity adjustment is a difference between a futures rate and a swap
+    rate **at the same instant**. Swapping an intraday quote in for the 17:00
+    settle does not degrade gracefully: it re-times one leg of a difference whose
+    whole magnitude is a few basis points, and the error lands entirely in the
+    signal. Nor is there a coverage argument for it -- measured over the whole
+    12.7M-key local slice of ``BARCHART_TOS_LIVE_STIRF-RL``, its contiguous strip
+    reaches depth 20 on **zero dates in every year 2018-2026**, so it cannot
+    supply the deep packs it would be reached for either.
+
+    A separate audit (2026-08-19) confirmed the shipped panels are clean: of
+    130,044 (date, contract) cells asserted by ``strat2_q20_panel`` and
+    ``strat2_panel``, **0** were absent from ``BARCHART_STIRF-RL``@17:00 and
+    **0** were sourced from the live feed. This function is what keeps that true
+    by construction rather than by audit.
+    """
+    s = str(source)
+    up = s.upper()
+    if any(m in up for m in INTRADAY_SOURCE_MARKERS):
+        raise ValueError(
+            f"{field}={s!r} is an intraday quote feed, not a settlement source. "
+            "The convexity adjustment marks a futures leg against a swap leg at "
+            "the same instant; a live quote re-times one of them. Use "
+            "'BARCHART_STIRF-RL'.")
+    return s
 
 
 # ===========================================================================
@@ -329,6 +377,23 @@ class Strat2Config:
 
     n_packs: int = 9
     """How many consecutive pack windows to rank. Citi printed 13."""
+
+    min_priced_contracts: int = 4
+    """Fewest resolved settles a date needs before :func:`build_panel` will keep
+    it. **Four -- one pack window -- and this used to be an all-or-nothing rule.**
+
+    The line was ``if len(prices) < cfg.rank_start + cfg.n_packs + 2: continue``,
+    i.e. a date had to price the *deepest requested* pack or it priced nothing at
+    all. Since ``ca_snapshot`` already skips the windows it cannot quote, that
+    test bought no correctness; it only threw away the near packs of any date
+    whose deferred end was cold. Measured on this store: 2024 holds 252 dates
+    able to quote rank 1 and 180 able to quote rank 5, and the shipped near-pack
+    panel carries 19.
+
+    Set it higher to restore the old behaviour for a specific run; the per-date
+    availability is recorded on every row (``n_priced``, ``strip_depth``,
+    ``max_rank_available``) either way, so what a date could NOT do is data
+    rather than absence."""
 
     # ---------------------------------------------------------------- CA level
     ca_basis_bp: float = 0.0
@@ -391,6 +456,26 @@ class Strat2Config:
     min_history_for_z1y: int = 252
     """A label needs at least this many observations before its 1Y z-score is
     emitted. Short of it the metric is NaN and simply does not vote."""
+
+    window_span_tolerance: float = 0.0
+    """Calendar-span guard on every rolling window. ``0.0`` = OFF (legacy).
+
+    ``rolling(252)`` counts **rows**, not days, so on a gappy panel a "1Y"
+    z-score can be computed from rows spanning years. Measured on the shipped
+    near-pack panel: as of 2024-01-03 the 252-row window spans **883 calendar
+    days** and the 63-row window spans **532**; as of 2025-03-05 the 252-row
+    window spans **1,289 days**. That was invisible only because
+    :func:`trim_to_contiguous_run` deleted the gappy tail before anyone looked.
+
+    The moment coverage is restored -- which is the whole point of the repair --
+    that defect becomes live, so un-trimming without this guard would swap a
+    truncated series for a silently wrong one. With a tolerance of ``t``, a
+    ``w``-row window is emitted only if its rows span at most
+    ``w / 252 * 365.25 * t`` calendar days; otherwise the value is ``NaN``.
+    ``1.5`` is the value used by the rebuilt panels: it admits ordinary holiday
+    clustering (a clean 252-row year spans ~365 days = 1.0) and rejects a window
+    that has bridged a hole. Off by default so a shipped artifact still
+    reproduces bit-for-bit."""
 
     # ---------------------------------------------------------------- ranking
     rank_metrics: Tuple[str, ...] = RANK_METRICS
@@ -460,6 +545,13 @@ class Strat2Config:
     def __post_init__(self) -> None:
         if self.sigma_model_mode not in ("fit", "external", "constant"):
             raise ValueError(f"bad sigma_model_mode {self.sigma_model_mode!r}")
+        assert_settle_source(self.futures_source, field="futures_source")
+        if self.min_priced_contracts < 4:
+            raise ValueError(
+                f"min_priced_contracts={self.min_priced_contracts} cannot quote "
+                "any pack; a pack window is four consecutive contracts")
+        if self.window_span_tolerance < 0:
+            raise ValueError("window_span_tolerance must be >= 0 (0 = off)")
         if self.rank_start < 2:
             raise ValueError("rank_start must be >= 2 so the 3m roll has a nearer pack")
         if self.rank_start + self.n_packs - 1 + 3 > self.n_contracts:
@@ -691,6 +783,7 @@ def build_panel(
     futures_mdp: Any = None,
     swaps_mdp: Any = None,
     progress: bool = True,
+    _depth: int = 0,
 ) -> Tuple[pd.DataFrame, pd.DataFrame]:
     """Daily CA panel and daily hedge-rate panel.
 
@@ -711,6 +804,22 @@ def build_panel(
     price rather than filled -- the Barchart EOD path already ffills/bfills
     within its own price frame, and stacking another fill on top of that would
     manufacture CA history that never printed.
+
+    **That sentence describes what this function was always meant to do, and
+    until 2026-08-19 a single line above it prevented it.** ``if len(prices) <
+    cfg.rank_start + cfg.n_packs + 2: continue`` demanded the *deepest* requested
+    pack before it would keep *any* pack, so a date whose deferred end was cold
+    was skipped for the front packs it could price perfectly well. The floor is
+    now :attr:`Strat2Config.min_priced_contracts` (4 = one window), and what each
+    date could not do is written onto its rows instead of erasing the date:
+
+    ``n_priced``            resolved settles among the requested ``n_contracts``
+    ``strip_depth``         contiguous front run of those (what packs can use)
+    ``max_rank_available``  deepest quotable pack window, ``strip_depth - 3``
+
+    Sparsity is thereby visible downstream -- a reader can plot ``ca_bp`` and
+    ``max_rank_available`` on the same date axis -- rather than being a hole that
+    every chart then draws a straight line through.
     """
     from MDP.IRSwaps.IRSwapsMDP import IRSwapsMDP
     from MDP.STIRFutures.STIRFutureMDP import STIRFutureMDP
@@ -720,6 +829,7 @@ def build_panel(
 
     panel_parts: List[pd.DataFrame] = []
     rate_rows: List[Dict[str, Any]] = []
+    retry: List[Any] = []
     n = len(dates)
     for i, d in enumerate(dates):
         d = d.date() if isinstance(d, (pd.Timestamp, datetime.datetime)) else d
@@ -737,7 +847,16 @@ def build_panel(
                             prices[s] = p
                     except Exception:
                         pass
-            if len(prices) < cfg.rank_start + cfg.n_packs + 2:
+            # Contiguous front run -- what a pack window can actually use. A hole
+            # at rank 7 does not stop ranks 1..4 from being priced, so this is
+            # measured rather than assumed equal to len(prices).
+            strip_depth = 0
+            for s in syms:
+                if s in prices:
+                    strip_depth += 1
+                else:
+                    break
+            if strip_depth < cfg.min_priced_contracts:
                 continue
             pricer = swaps_mdp.get_pricer({"curve_name": cfg.curve, "timestamp": d,
                                            "offline": True})
@@ -748,6 +867,9 @@ def build_panel(
             part = ca_snapshot(d, cfg, futures_prices=prices, swap_pricer=pricer)
             if part.empty:
                 continue
+            part["n_priced"] = int(len(prices))
+            part["strip_depth"] = int(strip_depth)
+            part["max_rank_available"] = int(strip_depth - 3)
             panel_parts.append(part)
             row: Dict[str, Any] = {"date": pd.Timestamp(d)}
             for t in cfg.hedge_tenors:
@@ -756,9 +878,28 @@ def build_panel(
         except Exception as exc:                              # noqa: BLE001
             if progress:
                 print(f"  {d}: skipped ({type(exc).__name__}: {exc})", flush=True)
+            retry.append(d)
             continue
         if progress and (i + 1) % 100 == 0:
             print(f"  panel {i + 1}/{n} ({d})", flush=True)
+
+    # One serial retry of every skipped date. The eight sqlite shards behind the
+    # SR3 store are shared, and contention on them surfaces as a cache MISS
+    # rather than as a lock error -- the MDP shrugs and reaches for the vendor,
+    # which under `cache_only()` is an exception and here a silently dropped
+    # date. Measured on the Q20 build: dates that dropped in one pass priced
+    # cleanly in the next with zero blocked requests. Retrying once makes the
+    # panel deterministic, which is what a before/after comparison needs; dates
+    # that fail twice are genuine and stay skipped.
+    if retry and _depth != 1:
+        if progress:
+            print(f"  retrying {len(retry)} skipped dates", flush=True)
+        rp, rr = build_panel(retry, cfg, futures_mdp=futures_mdp,
+                             swaps_mdp=swaps_mdp, progress=False, _depth=1)
+        if len(rp):
+            panel_parts.append(rp)
+        if len(rr):
+            rate_rows.extend(rr.reset_index().to_dict("records"))
 
     panel = (pd.concat(panel_parts, ignore_index=True) if panel_parts
              else pd.DataFrame(columns=["date", "rank", "pack"]))
@@ -774,9 +915,93 @@ _STIR_CACHE_KEY = re.compile(
     r"-(?P<sym>SR3[FGHJKMNQUVXZ]\d{2})-(?P<src>[A-Z0-9_\-]+)$")
 
 
+def ny_utc_offset(as_of: datetime.date, hour: int = 17) -> str:
+    """``"-04:00"`` or ``"-05:00"`` -- New York's UTC offset at *hour* on *as_of*.
+
+    The EOD request alias ``STIRFutureMDP`` writes and later reads is stamped in
+    New York local time, so its offset flips with daylight saving. Any scan that
+    ignores the offset is counting keys the fetcher will not find.
+    """
+    try:
+        from zoneinfo import ZoneInfo                          # noqa: PLC0415
+
+        off = datetime.datetime(as_of.year, as_of.month, as_of.day, hour,
+                                tzinfo=ZoneInfo("America/New_York")).utcoffset()
+    except Exception:                                          # noqa: BLE001
+        return ""
+    if off is None:
+        return ""
+    total = int(off.total_seconds())
+    sign = "-" if total < 0 else "+"
+    total = abs(total)
+    return f"{sign}{total // 3600:02d}:{(total % 3600) // 60:02d}"
+
+
+def _tz_readable(day: str, tz: Optional[str], *, session_hour: int = 17) -> bool:
+    """Is a key with this UTC offset one the EOD fetcher will actually resolve?
+
+    **This is a measurement bug that was inflating the universe, found while
+    rebuilding on 2026-08-19.** The store also carries 17:00 keys stamped
+    ``+00:00`` (1,061 of them, concentrated in 2024-2026) and ``-06:00`` (902, in
+    2022-2023), written by other jobs. They match the key regex, so a scan that
+    accepts any offset counts them -- but ``STIRFutureMDP.get_data`` asks for the
+    New-York-stamped alias and misses, then goes to the vendor.
+
+    Measured consequence before this filter: **51 dates** whose scanned depth
+    exceeded the depth actually resolvable, all but one of them in 2025-2026 --
+    including 2026-07-09 and 2026-07-10, which scanned at depth **12** and
+    resolve at **0**. Those dates entered the rebuilt universe, failed inside
+    ``cache_only()``, and accounted for 906 blocked requests.
+
+    ``None`` (no offset in the key) is accepted: those are pre-normalisation keys
+    and the fetcher's candidate list includes the bare form.
+    """
+    if not tz:
+        return True
+    want = ny_utc_offset(datetime.date.fromisoformat(day), hour=session_hour)
+    return (not want) or tz == want
+
+
+def local_strip_depths(cfg: Strat2Config, *, cache_root: Optional[str] = None,
+                       eod_only: bool = True) -> Dict[datetime.date, int]:
+    """``date -> length of the CONTIGUOUS front SR3 strip already on this machine``.
+
+    The permissive universe, and the one panel building should use. It answers
+    *how deep is this date* rather than *is this date complete*, which is the
+    only form of the question a per-rank screen can act on:
+    ``max_rank_available = depth - 3``.
+
+    Contiguity rather than mere presence, for the same reason
+    :func:`strat2_q20.strip_depth_by_date` requires it -- a pack is four
+    CONSECUTIVE contracts, so "11 of the first 13 present" overstates what is
+    quotable. Measured on this store the distinction never binds (0 dates in
+    every year at every depth have a hole before their nominal depth), but it is
+    the correct measure and costs nothing.
+
+    Reads the diskcache's sqlite shards directly (read-only) rather than probing
+    the MDP, because probing IS the expensive thing being avoided.
+    """
+    have = _cached_symbols_by_date(cfg, cache_root=cache_root, eod_only=eod_only)
+    out: Dict[datetime.date, int] = {}
+    for d in sorted(have):
+        dd = datetime.date.fromisoformat(d)
+        if not (cfg.start <= dd <= cfg.end):
+            continue
+        seq = quarterly_imm_sequence(dd, cfg.n_contracts)
+        depth = 0
+        for y, m in seq:
+            if futures_symbol(y, m, cfg.futures_root) in have[d]:
+                depth += 1
+            else:
+                break
+        out[dd] = depth
+    return dict(sorted(out.items()))
+
+
 def local_cached_dates(cfg: Strat2Config, *, cache_root: Optional[str] = None,
-                       eod_only: bool = True) -> List[datetime.date]:
-    """Dates whose FULL ``n_contracts`` SR3 strip is already on this machine.
+                       eod_only: bool = True,
+                       min_contracts: Optional[int] = None) -> List[datetime.date]:
+    """Dates whose SR3 strip is already on this machine, to a chosen depth.
 
     Building the panel over ``pd.bdate_range(start, end)`` would be wrong here,
     not merely slow: the SR3 store is demand-driven, a miss goes to the network,
@@ -785,8 +1010,47 @@ def local_cached_dates(cfg: Strat2Config, *, cache_root: Optional[str] = None,
     not touch the network at all -- and, just as important, makes the effective
     backtest window an observable rather than an assumption.
 
-    This reads the diskcache's sqlite shards directly (read-only) rather than
-    probing the MDP, because probing IS the expensive thing being avoided.
+    ``min_contracts`` chooses the rule:
+
+    ``None`` (default)
+        **Strict** -- the FULL ``cfg.n_contracts`` strip must be present. Kept
+        unchanged as the default because callers exist that genuinely want "every
+        requested pack is quotable on every returned date", and because a shipped
+        artifact must stay reproducible.
+    an int
+        **Permissive** -- the contiguous front strip must reach this many
+        contracts. ``4`` is one pack window.
+
+    The strict rule was the near-pack half of the sparse-series defect. It is
+    all-or-nothing over the whole strip (``all(s in have[d] for s in names)``),
+    so a date whose deferred end was cold was dropped for the front packs too.
+    Prefer :func:`local_strip_depths` for new code -- it returns the depth rather
+    than a yes/no, which is what lets a caller keep a date *and* know exactly how
+    much of it is real.
+    """
+    have = _cached_symbols_by_date(cfg, cache_root=cache_root, eod_only=eod_only)
+    if min_contracts is not None:
+        depths = local_strip_depths(cfg, cache_root=cache_root, eod_only=eod_only)
+        return [d for d, n in depths.items() if n >= int(min_contracts)]
+
+    out: List[datetime.date] = []
+    for d in sorted(have):
+        dd = datetime.date.fromisoformat(d)
+        if not (cfg.start <= dd <= cfg.end):
+            continue
+        seq = quarterly_imm_sequence(dd, cfg.n_contracts)
+        names = [futures_symbol(y, m, cfg.futures_root) for y, m in seq]
+        if all(s in have[d] for s in names):
+            out.append(dd)
+    return out
+
+
+def _cached_symbols_by_date(cfg: Strat2Config, *, cache_root: Optional[str] = None,
+                            eod_only: bool = True) -> Dict[str, set]:
+    """``"YYYY-MM-DD" -> {SR3 tickers present at 17:00 for cfg.futures_source}``.
+
+    One read-only sweep of the eight sqlite shards, shared by the strict and
+    permissive universes so they can never disagree about what is on disk.
     """
     import glob
     import sqlite3
@@ -812,27 +1076,48 @@ def local_cached_dates(cfg: Strat2Config, *, cache_root: Optional[str] = None,
                 if not m:
                     continue
                 if eod_only and (m.group("t") != "17:00:00"
-                                 or m.group("src") != cfg.futures_source):
+                                 or m.group("src") != cfg.futures_source
+                                 or not _tz_readable(m.group("d"), m.group("tz"))):
                     continue
                 have.setdefault(m.group("d"), set()).add(m.group("sym"))
         finally:
             con.close()
+    return have
 
-    out: List[datetime.date] = []
-    for d in sorted(have):
-        dd = datetime.date.fromisoformat(d)
-        if not (cfg.start <= dd <= cfg.end):
-            continue
-        seq = quarterly_imm_sequence(dd, cfg.n_contracts)
-        names = [futures_symbol(y, m, cfg.futures_root) for y, m in seq]
-        if all(s in have[d] for s in names):
-            out.append(dd)
-    return out
+
+def _runs_of(days: pd.DatetimeIndex, max_gap_days: int) -> List[Tuple[int, int]]:
+    """``[(lo, hi), ...]`` index slices of *days* with no internal gap > the max."""
+    gap = pd.Series(days).diff().dt.days.fillna(0)
+    breaks = [0] + list(np.where(gap > max_gap_days)[0]) + [len(days)]
+    return [(breaks[i], breaks[i + 1]) for i in range(len(breaks) - 1)]
+
+
+def coverage_by_run(panel: pd.DataFrame, *, max_gap_days: int = 15) -> pd.DataFrame:
+    """Every contiguous run in *panel*, so trimming can be argued rather than assumed.
+
+    :func:`trim_to_contiguous_run` throws data away. That is sometimes right, but
+    it must never be the only view a reader gets -- the shipped near-pack panel
+    was truncated at **2024-05-08** and nothing printed said so. This returns the
+    runs with their spans and row counts; report it beside any trimmed result.
+    """
+    days = pd.DatetimeIndex(sorted(panel["date"].unique()))
+    if not len(days):
+        return pd.DataFrame(columns=["start", "end", "n_days", "span_days", "n_rows"])
+    rows = []
+    for lo, hi in _runs_of(days, max_gap_days):
+        keep = days[lo:hi]
+        rows.append({
+            "start": keep[0].date(), "end": keep[-1].date(), "n_days": len(keep),
+            "span_days": int((keep[-1] - keep[0]).days),
+            "n_rows": int(panel["date"].isin(keep).sum()),
+        })
+    return pd.DataFrame(rows).sort_values("start").reset_index(drop=True)
 
 
 def trim_to_contiguous_run(panel: pd.DataFrame, rates: pd.DataFrame,
-                           *, max_gap_days: int = 15) -> Tuple[pd.DataFrame, pd.DataFrame]:
-    """Keep only the LONGEST run of dates with no gap longer than *max_gap_days*.
+                           *, max_gap_days: int = 15,
+                           keep: str = "longest") -> Tuple[pd.DataFrame, pd.DataFrame]:
+    """Keep one run of dates with no gap longer than *max_gap_days*, or keep all.
 
     The Barchart store is demand-driven, so a panel built over "every date whose
     strip is cached" comes back with the main 2019-2023 block plus a handful of
@@ -844,17 +1129,43 @@ def trim_to_contiguous_run(panel: pd.DataFrame, rates: pd.DataFrame,
 
     Dropping them is a data-availability decision, not a filter on the signal --
     no date is removed because of what its CA says.
+
+    **What that argument does not license is `max(runs, key=length)`.** Measured
+    2026-08-19 at the three shipped call sites, the longest-run rule:
+
+    * truncated the near-pack panel at **2024-05-08** -- 1,084 dates to 1,081,
+      and the three it removed are precisely the ones after the complaint's
+      "~May-2024";
+    * cut the Q20 deep band to 743 dates ending 2023-02-01; and
+    * cut the Q20 **near** band from 518 dates to **301**, discarding every date
+      in 2023, 2024 and 2025 because the longest gap-free block happened to be a
+      2021 one. There it is the single largest killer in the whole pipeline,
+      bigger than the depth gate.
+
+    So the choice is now explicit, and the caller must make it:
+
+    ``"longest"``  legacy. Longest run wins. Default, so shipped artifacts
+                   reproduce; **not** what a rebuilt panel should use.
+    ``"latest"``   the run ending on the most recent date. What you want when the
+                   question is "what does the series look like now".
+    ``"none"``     no trimming. Requires the caller to have gated its rolling
+                   windows on calendar span (:attr:`Strat2Config.window_span_tolerance`),
+                   or the statistics silently bridge the holes instead.
+
+    Report :func:`coverage_by_run` alongside whichever is used.
     """
+    if keep not in ("longest", "latest", "none"):
+        raise ValueError(f"keep must be 'longest' | 'latest' | 'none', got {keep!r}")
+    if keep == "none":
+        return panel, rates
     days = pd.DatetimeIndex(sorted(panel["date"].unique()))
     if len(days) < 2:
         return panel, rates
-    gap = pd.Series(days).diff().dt.days.fillna(0)
-    breaks = [0] + list(np.where(gap > max_gap_days)[0]) + [len(days)]
-    runs = [(breaks[i], breaks[i + 1]) for i in range(len(breaks) - 1)]
-    lo, hi = max(runs, key=lambda r: r[1] - r[0])
-    keep = days[lo:hi]
-    return (panel[panel["date"].isin(keep)].copy(),
-            rates.loc[rates.index.isin(keep)].copy() if len(rates) else rates)
+    runs = _runs_of(days, max_gap_days)
+    lo, hi = (max(runs, key=lambda r: r[1] - r[0]) if keep == "longest" else runs[-1])
+    keep_days = days[lo:hi]
+    return (panel[panel["date"].isin(keep_days)].copy(),
+            rates.loc[rates.index.isin(keep_days)].copy() if len(rates) else rates)
 
 
 def panel_diagnostics(panel: pd.DataFrame, cfg: Strat2Config) -> pd.DataFrame:
@@ -890,15 +1201,57 @@ def _label_series(panel: pd.DataFrame, col: str) -> pd.DataFrame:
     return panel.pivot_table(index="date", columns="pack", values=col, aggfunc="last").sort_index()
 
 
+def window_span_ok(index: pd.DatetimeIndex, window: int,
+                   tolerance: float) -> Optional[pd.Series]:
+    """Which rows may carry a ``window``-row rolling statistic, by CALENDAR span.
+
+    ``rolling(w)`` counts rows. On a panel with holes that is not a time window
+    at all, and nothing in pandas will say so: a "1Y" z-score computed from 252
+    rows that happen to span 1,289 calendar days looks exactly like a real one.
+
+    Returns a boolean Series aligned to *index* -- ``True`` where the trailing
+    ``window`` rows span at most ``window / 252 * 365.25 * tolerance`` days -- or
+    ``None`` when ``tolerance <= 0``, meaning the guard is off. See
+    :attr:`Strat2Config.window_span_tolerance`.
+    """
+    if tolerance is None or tolerance <= 0:
+        return None
+    idx = pd.DatetimeIndex(index)
+    allowed = float(window) / 252.0 * 365.25 * float(tolerance)
+    start = pd.Series(idx, index=idx).shift(window - 1)
+    span = (pd.Series(idx, index=idx) - start).dt.days
+    return span.notna() & (span <= allowed)
+
+
+def _apply_span_mask(x: pd.DataFrame, ok: Optional[pd.Series]) -> pd.DataFrame:
+    """NaN out every row of *x* whose rolling window bridged a hole.
+
+    The mask is per DATE and applies to every pack column, so it is broadcast
+    across the columns rather than passed as an (n, 1) array -- ``DataFrame.where``
+    requires a conditional of the same shape and will not broadcast for you.
+    """
+    if ok is None:
+        return x
+    m = ok.reindex(x.index).fillna(False).to_numpy()
+    return x.where(np.repeat(m[:, None], x.shape[1], axis=1))
+
+
 def panel_timeseries(panel: pd.DataFrame, cfg: Strat2Config) -> Dict[str, pd.DataFrame]:
     """The label-keyed time series every metric is derived from.
 
     ``ca`` and ``pack_rate`` wide frames plus the derived ``rv`` (3m realized
     vol of the pack rate, bp/yr normal), ``ca_z3m``/``ca_z1y``, and the 1-week
     change. All of them are constant-contract because the columns are labels.
+
+    Every rolling statistic is additionally gated on the CALENDAR span of its
+    window when :attr:`Strat2Config.window_span_tolerance` is set -- see
+    :func:`window_span_ok`. Off by default; on in every rebuilt panel, because
+    restoring coverage restores the gaps these windows would otherwise bridge in
+    silence.
     """
     ca = _label_series(panel, "ca_bp")
     pr = _label_series(panel, "pack_rate")
+    tol = float(getattr(cfg, "window_span_tolerance", 0.0) or 0.0)
 
     d = pr.diff() * 100.0                                     # bp/day
     rv = (d.rolling(cfg.realized_window_days, min_periods=cfg.realized_window_days)
@@ -907,12 +1260,14 @@ def panel_timeseries(panel: pd.DataFrame, cfg: Strat2Config) -> Dict[str, pd.Dat
     def _z(x: pd.DataFrame, w: int, min_p: int) -> pd.DataFrame:
         mu = x.rolling(w, min_periods=min_p).mean()
         sd = x.rolling(w, min_periods=min_p).std(ddof=1)
-        return (x - mu) / sd.replace(0.0, np.nan)
+        return _apply_span_mask((x - mu) / sd.replace(0.0, np.nan),
+                                window_span_ok(x.index, w, tol))
 
     return {
         "ca": ca,
         "pack_rate": pr,
-        "rv": rv,
+        "rv": _apply_span_mask(
+            rv, window_span_ok(rv.index, cfg.realized_window_days, tol)),
         "ca_z3m": _z(ca, cfg.z_window_3m, cfg.z_window_3m),
         "ca_z1y": _z(ca, cfg.z_window_1y, cfg.min_history_for_z1y),
         "ca_chg_1w": ca.diff(cfg.week_days),
@@ -941,11 +1296,13 @@ def model_timeseries(panel: pd.DataFrame, cfg: Strat2Config,
     fit["vs_model_bp"] = fit["ca_bp"] - fit["ca_model_bp"]
 
     vs = _label_series(fit, "vs_model_bp")
+    tol = float(getattr(cfg, "window_span_tolerance", 0.0) or 0.0)
 
     def _z(x: pd.DataFrame, w: int, min_p: int) -> pd.DataFrame:
         mu = x.rolling(w, min_periods=min_p).mean()
         sd = x.rolling(w, min_periods=min_p).std(ddof=1)
-        return (x - mu) / sd.replace(0.0, np.nan)
+        return _apply_span_mask((x - mu) / sd.replace(0.0, np.nan),
+                                window_span_ok(x.index, w, tol))
 
     return {
         "fit": fit,

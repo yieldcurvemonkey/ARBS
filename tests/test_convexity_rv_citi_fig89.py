@@ -437,16 +437,31 @@ def test_3y1y_vol_is_normal_vol_in_bp_and_covers_the_window():
 
 @pytest.mark.skipif(not _Q20_PANEL.exists(), reason="Q20 deep-pack panel not built")
 def test_blues_coverage_is_the_binding_constraint():
-    """The finding, asserted so it cannot rot: Blues exists over 2021-01..2026-07
-    but the SR3 strip stops reaching 16 contiguous contracts after mid-2023."""
+    """The finding, asserted so it cannot rot: Blues needs a contiguous
+    16-contract SR3 strip, and the local store stops supplying one after
+    mid-2023.
+
+    **The upper bound was removed on 2026-08-19.** It read
+    ``480 <= len(blues) <= 530`` and the ceiling was a snapshot of a DEFECT, not
+    a property of the market: a universe gate discarded whole dates for want of
+    contracts the front packs never read, and a 103-date SR3 settle warm then
+    restored the deferred end over 2026-03..08. Blues went 503 -> 607 pack-days
+    with 2026 rising from 1 to 104. A test that pins a coverage ceiling fails the
+    moment coverage is repaired, which is backwards — so the floor stays (a
+    collapse to nothing is still a regression) and the ceiling goes.
+    """
     _, fit = CF.load_ca_panel(_Q20_PANEL, start=datetime.date(2021, 1, 1),
                               end=datetime.date(2026, 8, 31))
     blues = CF.colour_frame(fit, "Blues")
-    assert 480 <= len(blues) <= 530
+    assert len(blues) >= 480
     by_year = blues.groupby(blues.index.year).size()
     assert by_year.loc[2021] > 200 and by_year.loc[2022] > 150
     assert by_year.loc[2023] < 80, "the 2023 collapse is the finding"
-    assert blues.index.max() >= pd.Timestamp("2025-01-01")
+    # 2024-2025 remain the hole: those years were NOT warmed inside the 400-call
+    # budget, so they must still be sparse. If this ever fails upward, the rest
+    # of the warm has been run and the docstring above needs re-measuring.
+    assert by_year.get(2024, 0) < 80 and by_year.get(2025, 0) < 80
+    assert blues.index.max() >= pd.Timestamp("2026-01-01")
 
 
 @pytest.mark.skipif(not _Q20_PANEL.exists(), reason="Q20 deep-pack panel not built")
