@@ -295,6 +295,22 @@ def warm_stirf_cme_session(start, end):
     return f"STIRF backfill: {len(bdates)} days x {len(curves)} curves"
 
 
+def warm_sr3_settles_eod(start, end):
+    """Job: SR3 **EOD settles** at pack depth 20.
+
+    Distinct from "STIRF CME Session", which warms *curves* through the intraday
+    path (fetcher wired to ``BARCHART_TOS_LIVE_STIRF-RL``), and from "STIRFO SFR
+    Options EOD", which warms options at depth 12. Neither writes the 17:00 EOD
+    settle cache the convexity-adjustment panel reads, so nothing did.
+
+    Depth 20 because Golds (rank 17) spans contracts 17..20. Idempotent: dates
+    already at depth are skipped, so the daily run is a no-op on a warm cache.
+    """
+    from scripts.warm_sr3_settles import warm_sr3_eod_settles
+
+    return warm_sr3_eod_settles(start, end)
+
+
 def warm_stirfo_eod(start, end):
     """Job 6: SFR options EOD — option snapshots + SABR smiles.
 
@@ -883,6 +899,7 @@ WARM_JOBS = [
     WarmJob("GSQUANT USD-OIS EOD", warm_gsquant_ois_eod),
     WarmJob("ERIS USD-SOFR-1D EOD", warm_eris_eod),
     WarmJob("FRB FedInvest EOD", warm_frb_fedinvest_eod),
+    WarmJob("SR3 EOD settles (depth 20)", warm_sr3_settles_eod),
     WarmJob("STIRF CME Session", warm_stirf_cme_session),
     WarmJob("UST Futures Invoice Caches", warm_ustf_invoice_caches),
     WarmJob("STIRFO SFR Options EOD", warm_stirfo_eod),
