@@ -1119,7 +1119,24 @@ class BARCHART_STIRF_CURVE(LayeredCacheMixin):
                     "SFRCM20",
                 ],
                 "reference_key": "USD-SOFR-1D",
-                "max_tenor_from_timestamp_months": 60,
+                # 66 = 3*20 + 6, NOT 3*20. `_build_stirf_nodes` filters every
+                # candidate node by `d <= base_ts + max_tenor months`, and the
+                # instrument count never enters, so an instrument maturing past
+                # the horizon supplies a solver target but gets no node.
+                # SFRCM20 references [IMM_20, IMM_21] and so matures at
+                # IMM_1 + 60m, which is strictly later than as_of + 60m because
+                # IMM_1 > as_of always -- under the old 60 it was excluded on
+                # EVERY date and priced by log_linear extrapolation off the last
+                # segment. At a full-quarter gap it had no degree of freedom at
+                # all: 2026-06-15 returned bit-identical model rates for
+                # contracts 19 and 20 against settles 3.5bp apart, and the
+                # solver bled that unrepresentable slope backwards into 17-18.
+                # Measured effect on rank 17 (Golds, contracts 17..20) at the
+                # unchanged 2.0bp settle-agreement gate: 2026 0.0% -> 100% pass,
+                # 2021 45.4% -> 99.5%. The extra 6 months is one quarter of
+                # slack, which is what IMM_1 - as_of can reach; wider would add
+                # nodes no instrument constrains. See tests/test_q20_curve_horizon.py.
+                "max_tenor_from_timestamp_months": 66,
                 "rl_irs_spec": "usd_irs",
             },
             "USD-SOFR-1D-Q12x3STIRT": {
