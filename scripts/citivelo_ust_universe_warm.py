@@ -61,6 +61,25 @@ in flight, and the next run skips everything already done. That is what makes
 "warm the entire universe" a thing you can finish across several sessions instead
 of one heroic pass that must not fail.
 
+An outage and a matured bond are the same observation until you ask
+-------------------------------------------------------------------
+``CitiVeloQuotes.frame`` returns an EMPTY FRAME and raises NOTHING both when every
+tag in the request failed and when every tag legitimately held no rows - its own
+docstring says a failed tag "is simply an absent COLUMN here, which is
+indistinguishable from a tag that returned no rows unless the reasons are asked
+for". Both cases are real here: 528 of the 877 catalogued bonds have matured, and
+Velocity does go away.
+
+Conflating them has now cost this warm in both directions. Calling "no rows" a
+fault aborted the whole 877-bond intraday warm at 0/877 on five of ten retained
+nightly runs. Calling a fault "no rows" is worse and silent: measured against a
+dead transport, the warm stamped 877 bonds done, warmed 0, returned
+``stopped=False`` - so the job wrapper did not raise, the warmer exited 0, and the
+stamped manifest blocked the same-day re-run that would have recovered the day.
+
+So the reasons ARE asked for, through ``failures=``, and
+:data:`BENIGN_FAILURE_REASONS` is the line between them.
+
 Usage
 -----
 ::
@@ -121,8 +140,54 @@ INTRADAY_VALUES = ("PRICE", "YIELD")
 #: loses little; large enough that per-call overhead is not the cost.
 DEFAULT_BATCH = 8
 
+#: Per-tag failure reasons that mean "the add-in ANSWERED for this column, and
+#: the answer was that there is nothing here". These are not a transport fault
+#: and must not stop the warm.
+#:
+#: The split is by whether the add-in answered, not by whether the caller liked
+#: the answer, and the reasons are the ones ``block_parser.parse_tshist_block``
+#: actually writes (``block_parser.py:360, 365, 385``):
+#:
+#: ``"empty"``      the column came back with no rows in this window. Exactly
+#:                  what an MI01 request against a bond that matured in 2016
+#:                  returns, and 528 of the 877 catalogued bonds have matured.
+#: ``"bad tag"``    the add-in replied ``Bad tag: ...`` in the column. A live
+#:                  add-in rejecting one symbol, not a dead wire.
+#: ``"no column"``  the block came back and this tag was not in it. Same.
+#:
+#: Everything else - ``"no block"``, ``"no header row"``, and any Excel error
+#: NAME - means the request did not produce a readable block at all, which is
+#: the signature of the outage this discriminates against: ``fetch_timeseries``
+#: writes ``failures[tag] = excel_error_name(value) or "no block"`` for EVERY
+#: tag in a chunk that came back with no rows (``com_client.py:968-971``).
+#:
+#: Unknown reasons fall in the STOP set on purpose. A reason nobody has seen is
+#: not evidence that the wire is healthy, and this guard exists because the
+#: previous version failed open. If nightly evidence ever shows a matured bond
+#: producing a per-column Excel error name, demote that name here - with the
+#: measurement, as everything else in this file is.
+BENIGN_FAILURE_REASONS = frozenset({"empty", "bad tag", "no column"})
 
-def _warm_intraday(quotes, tags: Sequence[str], *, start: datetime.date, end: datetime.date) -> None:
+
+def _transport_faults(reported) -> Dict[str, str]:
+    """The subset of ``{tag: reason}`` that means the transport did not answer."""
+    if not reported:
+        return {}
+    return {
+        str(tag): str(why)
+        for tag, why in reported.items()
+        if str(why).strip().lower() not in BENIGN_FAILURE_REASONS
+    }
+
+
+def _warm_intraday(
+    quotes,
+    tags: Sequence[str],
+    *,
+    start: datetime.date,
+    end: datetime.date,
+    failures: Optional[Dict[str, str]] = None,
+) -> None:
     r"""Fetch ``MI01`` through the CACHE, in windows held under the cliff.
 
     This is deliberately NOT ``CitiVeloBondFetcher.fetch``. That is the right call
@@ -145,16 +210,32 @@ def _warm_intraday(quotes, tags: Sequence[str], *, start: datetime.date, end: da
     The loop itself now lives in ``windowed.warm_windows``, because the intraday
     FRB read path needs exactly the same warm and a second copy of a bound whose
     whole value is that it is measured once is how the two drift apart.
+
+    Returns the number of ROWS Velocity served across every window. The caller
+    needs that number to tell the two things apart that the cache check alone
+    cannot: a transport that fetched rows and persisted none (the real fault) and
+    a window that legitimately held no rows at all (a matured bond). See the
+    guard in :func:`warm`.
+
+    ``failures`` is threaded through to :func:`warm_windows`, which merges the
+    per-tag reasons across every window it issues. This used to be passed as
+    ``None``, and passing ``None`` discarded the ONE piece of information that
+    separates "Velocity has nothing for this window" from "Velocity answered
+    nothing at all": ``frame`` returns an empty frame and raises nothing in both
+    cases, so a total outage was byte-for-byte a batch of matured bonds. See the
+    guard in :func:`warm` and :data:`BENIGN_FAILURE_REASONS`.
     """
     from MDP.CitiVelocityExcel.windowed import warm_windows
 
-    warm_windows(
+    windows = warm_windows(
         quotes,
         list(tags),
         "MI01",
         datetime.datetime.combine(start, datetime.time(0, 0)),
         datetime.datetime.combine(end, datetime.time(23, 59)),
+        failures=failures,
     )
+    return sum(int(w.n_rows) for w in windows)
 
 
 def cached_tags(freq: str, tags: Sequence[str]) -> int:
@@ -334,14 +415,53 @@ def warm(
                 for r in chunk:
                     book[r.isin] = {"key": stamp, "tags": 0, "note": "serves none of these values"}
                 continue
+            # ASK FOR THE REASONS. ``frame`` returns an empty frame and raises
+            # nothing whether every tag failed or every tag legitimately held no
+            # rows - its own docstring says so - and this loop used to ask for
+            # neither, which made a total Velocity outage indistinguishable from
+            # a batch of matured bonds. It is only indistinguishable if you do
+            # not ask.
+            reported: Dict[str, str] = {}
             try:
                 if mode == "eod":
-                    quotes.frame(tags, "DAILY", start=start, end=end)
+                    frame = quotes.frame(tags, "DAILY", start=start, end=end,
+                                         failures=reported)
+                    rows_served = int(len(frame)) if frame is not None else 0
                 else:
-                    _warm_intraday(quotes, tags, start=start, end=end)
+                    rows_served = _warm_intraday(quotes, tags, start=start, end=end,
+                                                 failures=reported)
             except Exception as exc:  # noqa: BLE001 - one bad batch must not lose the rest
                 stopped_reason = f"{type(exc).__name__}: {exc}"
                 log.warning("STOPPING at batch %d: %s", i // batch, stopped_reason[:200])
+                break
+
+            # DID THE TRANSPORT ANSWER? That question comes first, deliberately
+            # before anything looks at the cache, and it is the one the guards
+            # below cannot ask.
+            #
+            # ``landed`` cannot carry it, because the tag cache is CUMULATIVE: on
+            # any night after the first, last night's parquets are still on disk,
+            # so ``landed`` is the full tag count even while tonight's wire is
+            # serving nothing at all. A fault check gated on ``landed == 0``
+            # would pass on precisely the nights it exists for.
+            #
+            # ``rows_served`` cannot carry it either - zero rows is what a total
+            # outage and a matured bond both look like. The REASONS separate
+            # them, they are scoped to the call that just happened, and
+            # ``failures=`` is how they are asked for. See
+            # :data:`BENIGN_FAILURE_REASONS` for which reason means which.
+            faults = _transport_faults(reported)
+            if faults:
+                shown = ", ".join(f"{t} ({why})" for t, why in sorted(faults.items())[:5])
+                stopped_reason = (
+                    f"batch {i // batch}: Velocity FAILED {len(faults)} of {len(tags)} "
+                    f"tag(s) - {shown}"
+                    f"{f' and {len(faults) - 5} more' if len(faults) > 5 else ''}. "
+                    f"That is the transport, not a matured bond: a bond with nothing "
+                    f"in this window comes back as {sorted(BENIGN_FAILURE_REASONS)}. "
+                    f"Nothing in this batch is recorded, so a re-run retries it."
+                )
+                log.error("STOPPING: %s", stopped_reason)
                 break
 
             # A warm is the file on disk, not the call returning. The first
@@ -349,14 +469,61 @@ def warm(
             # left zero MI01 parquets, because the transport it used bypassed the
             # cache — and recorded 349/349 done. Nothing is marked done now until
             # the cache is asked whether it actually holds the tags.
+            #
+            # But "nothing landed" has TWO causes and they need opposite actions,
+            # and conflating them cost this warm more than the bug it was written
+            # to catch. ``rows_served`` is what separates them.
+            #
+            # Rows came back and none of them landed: that IS the transport, stop.
+            # NO rows came back: Velocity was asked for a window it has nothing
+            # in, which for an MI01 request against a matured bond is the correct
+            # and expected answer. 528 of the 877 bonds in the catalog have
+            # matured, ``universe()`` sorts by ISIN, and the 22 lowest ISINs all
+            # matured between 2016 and 2025 — so with ``DEFAULT_BATCH = 8``,
+            # batch 0 is all-dead BY CONSTRUCTION. Treating that as a broken
+            # transport aborted the whole 877-bond intraday warm at 0/877 on five
+            # of ten retained nightly runs, in 2.9-4.4 s each, and it had never
+            # once warmed a bond since the universe grew past the live 349.
             landed = cached_tags("DAILY" if mode == "eod" else "MI01", tags)
-            if landed == 0:
+            if landed == 0 and rows_served > 0:
                 stopped_reason = (
-                    f"batch {i // batch} fetched {len(tags)} tags without error and cached "
-                    f"NONE of them — the transport is not writing to the tag cache"
+                    f"batch {i // batch} fetched {len(tags)} tags and {rows_served} rows "
+                    f"without error and cached NONE of them — the transport is not "
+                    f"writing to the tag cache"
                 )
                 log.error("STOPPING: %s", stopped_reason)
                 break
+            if landed == 0:
+                # Recorded, not skipped. A bond left out of the manifest is a
+                # bond re-requested from Velocity on every run for ever — and
+                # these are precisely the ones that will never have anything to
+                # serve. The ``note`` idiom is the one already used above for a
+                # bond that serves none of the requested values, so ``status``
+                # and any later reader can tell "warm" from "nothing to warm"
+                # without inventing a second vocabulary.
+                #
+                # Reaching here now MEANS something it did not mean before: the
+                # reasons were asked for above and none of them was a transport
+                # fault, so "no rows" is Velocity's answer rather than its
+                # silence. The answer it gave is recorded alongside, because a
+                # note that cannot say WHY there were no rows is the same
+                # unfalsifiable claim in a smaller place.
+                why = sorted({str(w) for w in reported.values()}) or ["nothing reported"]
+                log.info(
+                    "  batch %d served no rows for %d tags (%s) — recorded and "
+                    "skipped, not treated as a fault",
+                    i // batch, len(tags), ", ".join(why),
+                )
+                for r in chunk:
+                    book[r.isin] = {
+                        "key": stamp,
+                        "tags": 0,
+                        "note": "no rows in this window",
+                        "why": ", ".join(why),
+                        "at": datetime.datetime.now().isoformat(timespec="seconds"),
+                    }
+                _save_manifest(man)
+                continue
 
             for r in chunk:
                 book[r.isin] = {

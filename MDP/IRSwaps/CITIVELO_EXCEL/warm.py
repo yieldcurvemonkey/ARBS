@@ -131,10 +131,25 @@ def warm_curve(
     if frame.empty:
         stat.errors.append("no banked daily par grid; run the harvest first")
         return stat
+    banked_first, banked_last = frame.index[0].date(), frame.index[-1].date()
     if start is not None:
         frame = frame[frame.index.date >= start]
     if end is not None:
         frame = frame[frame.index.date <= end]
+    # The window can empty a NON-empty grid, and that used to be silent: every
+    # counter stayed 0, ``errors`` stayed empty, and the caller turned "wrote
+    # nothing" into exit 1 with no reason anywhere. It is the commonest outcome
+    # of all, because the nightly warm asks for TODAY and nothing on the nightly
+    # schedule refreshes the DAILY par grid - only a manual harvest does.
+    if frame.empty:
+        # Compact on purpose: this string is carried up into the warmer's SUMMARY
+        # table, and the actionable half must survive the clip.
+        stat.errors.append(
+            f"no banked DAILY rows in {start}..{end}; the banked par grid ends "
+            f"{banked_last} (spans from {banked_first}) - nothing on the nightly "
+            f"schedule fetches DAILY par tags, run the harvest"
+        )
+        return stat
 
     _CHI = pytz.timezone("America/Chicago")
     _NY = pytz.timezone("America/New_York")

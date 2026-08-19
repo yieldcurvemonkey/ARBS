@@ -16,6 +16,8 @@ import pandas as pd
 import pyarrow as pa
 import pyarrow.parquet as pq
 
+from utils.atomic_replace import replace_with_retry
+
 # --------------- Thread-safe DuckDB connection for read-only queries ----------
 _duckdb_local = threading.local()
 
@@ -71,7 +73,11 @@ def _atomic_write_bytes(dst_path: Path, data: bytes) -> None:
         tmp.flush()
         os.fsync(tmp.fileno())
         tmp_path = Path(tmp.name)
-    os.replace(_path_str(tmp_path), _path_str(dst_path))
+    # Retried, not bare - the same WinError 5 as every other temp-then-rename on
+    # this path. The ``\\?\`` extended-length STRINGS are passed straight
+    # through: rebuilding them as ``Path`` would drop the prefix that makes a
+    # long partition path work at all. See ``utils/atomic_replace.py``.
+    replace_with_retry(_path_str(tmp_path), _path_str(dst_path))
 
 
 def _df_min_max_ts(df: pd.DataFrame) -> Tuple[str, str]:

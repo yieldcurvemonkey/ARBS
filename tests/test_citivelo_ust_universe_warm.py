@@ -93,6 +93,17 @@ class FakeQuotes:
     frequency token reproduces a working transport, through the REAL
     :class:`CitiVeloTagCache`, so a positive test also proves the cache layout
     and :func:`cached_tags` still agree about where a warmed tag lives.
+
+    It RETURNS the rows it served, and that is not decoration. The two halves of
+    the defect this fake exists for are "rows came back" and "nothing was
+    persisted", and an earlier version of this fake modelled only the second: it
+    wrote to the cache as a side effect and always returned an empty frame. That
+    was harmless while the warm's guard looked at nothing but the cache, and
+    became actively misleading once the guard had to tell a transport that lost
+    698 tags from a window that legitimately holds none — a matured bond asked
+    for MI01 — because under the old fake those two are the same object. A fake
+    that cannot express the difference the code under test turns on is a fake
+    that will agree with whatever the code does.
     """
 
     offline = True
@@ -119,12 +130,17 @@ class FakeQuotes:
         if self.raise_on is not None and len(self.calls) == self.raise_on:
             raise RuntimeError("Excel went away mid-batch")
         target = freq if self.writes_at == "same" else self.writes_at
+        index = pd.date_range("2026-08-01", periods=2, freq="D")
+        served = {str(t): pd.Series([1.0, 2.0], index=index) for t in tags}
         if target is not None:
             cache = CitiVeloTagCache(base_dir=default_cache_dir())
-            index = pd.date_range("2026-08-01", periods=2, freq="D")
-            for tag in tags:
-                cache.write(tag, target, pd.Series([1.0, 2.0], index=index))
-        return pd.DataFrame(index=pd.DatetimeIndex([], name="Date"))
+            for tag, series in served.items():
+                cache.write(tag, target, series)
+        if not served:
+            return pd.DataFrame(index=pd.DatetimeIndex([], name="Date"))
+        frame = pd.concat(served, axis=1)
+        frame.index.name = "Date"
+        return frame.sort_index()
 
     def close(self):
         self.closed = True

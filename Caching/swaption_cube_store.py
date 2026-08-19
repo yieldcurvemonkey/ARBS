@@ -88,6 +88,8 @@ import pandas as pd
 import pyarrow as pa
 import pyarrow.parquet as pq
 
+from utils.atomic_replace import replace_with_retry
+
 __all__ = [
     "SwaptionCubeStore",
     "asset_for",
@@ -170,7 +172,9 @@ def _atomic_content_write(part_dir: Path, data: bytes, *, overwrite: bool = Fals
         os.fsync(tmp.fileno())
         tmp_path = Path(tmp.name)
 
-    os.replace(tmp_path, final_path)
+    # Retried, not bare - the same WinError 5 as every other temp-then-rename on
+    # this path. See ``utils/atomic_replace.py``.
+    replace_with_retry(tmp_path, final_path)
     return {"path": str(final_path), "size": len(data), "sha256": sha}
 
 

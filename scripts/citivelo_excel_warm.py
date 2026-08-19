@@ -72,7 +72,25 @@ def cmd_warm(args) -> int:
     )
     total = sum(s.written for s in stats.values())
     print(f"\nwrote {total} curve-days across {len(stats)} curve(s)")
-    return 0 if total or all(s.skipped_existing for s in stats.values()) else 1
+
+    # A curve that wrote nothing AND kept nothing warmed nothing at all. Say so
+    # even when the run "succeeded": ``total`` is a sum across curves, so one
+    # curve writing masks four writing nothing - which is exactly what happened
+    # on 2026-08-15, when USD wrote 2 days, the other four curves were stale
+    # since 2026-08-07, and this returned 0.
+    idle = [s for s in stats.values() if not s.written and not s.skipped_existing]
+    for s in idle:
+        reason = s.errors[0] if s.errors else "no reason recorded"
+        print(f"  WARMED NOTHING: {s.curve_name}: {reason}", flush=True)
+
+    if total or all(s.skipped_existing for s in stats.values()):
+        return 0
+    # The exit code has to carry a cause. Printing it LAST is what puts it in
+    # front of a caller that keeps only the child's final line.
+    lead = idle[0] if idle else next(iter(stats.values()))
+    why = lead.errors[0] if lead.errors else "no reason recorded"
+    print(f"nothing written and nothing already present: {lead.curve_name}: {why}", flush=True)
+    return 1
 
 
 def cmd_status(args) -> int:
