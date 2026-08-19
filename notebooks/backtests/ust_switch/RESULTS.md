@@ -207,6 +207,46 @@ Caveat, stated: these are SECTOR rate paths. Individual off-the-run intraday pri
 not exist in this stack, so the bond-specific intraday component (the new issue vs the
 sector) is inferred from the daily cycle profile, not measured intraday.
 
+## The catalyst loop, and the Month-End Switch Harvest
+
+A directed search over structural catalysts (auction release, concession momentum,
+issue-date/index-inclusion exits, specialness gating, month-end, quarter-end) on the QDB
+marks. Trail: the auction-release trade is UNTRADEABLE in this data (the roll is
+issue+1bd, so the w22461 auction->issue window closes before the new bond has a price
+here -- WI prices do not exist in FedInvest); concession-momentum and specialness gates
+produce no rescuing uplift (specialness terciles ARE monotone in subsequent LO pnl,
+pooled -0.20/+0.06/+0.45 gross, but the gated books stay net-negative); quarter-end is
+flat.
+
+**The discovery: the old richens against the current on month-end day.** Pooled across
+7 tenors on 26,855 QDB day-marks: month-end day +0.137bp (t=3.96), day before +0.043
+(t=2.12), every other day of the cycle ~0. Positive in BOTH halves (2010-18 t=2.2,
+2018-26 t=3.9), at 6 of 7 tenors (10Y t=4.1, 3Y t=3.6, 5Y t=3.4; only 7Y flat), and in
+**16 of 17 calendar years**. It does not fully reverse in the next month's first days
+(-0.10bp day-0, t=-1.6, ~30% of the gain) -- repricing around index duration-extension /
+new-issue-settlement flow, not a month-end mark artifact.
+
+**The strategy** (no fitted parameters -- the window is where the diagnostic located the
+effect): hold LO CTvO, $1/bp per tenor, over the LAST THREE BUSINESS DAYS of each month.
+199 month-ends, 2010-2026:
+
+| cost assumption | net/event | monthly hit | event t | bp/yr | ann. Sharpe |
+|---|---|---|---|---|---|
+| gross (mid execution) | +1.175bp | 61.3% | +5.70 | +14.1 | 1.40 |
+| 0.10x SR1170 | +0.551 | 47.2% | +2.67 | +6.6 | 0.66 |
+| **0.19x SR1170** | **0 (break-even)** | | | | |
+| full SR1170 taker | -5.070 | 5.0% | -24.6 | -60.8 | -6.03 |
+
+Per-tenor break-even multiples: 3Y 0.54x, 2Y 0.22x, 5Y 0.15x, 20Y 0.13x, 10Y 0.12x,
+30Y 0.06x, 7Y 0.02x. Figures 22-24.
+
+**Verdict, stated plainly**: this is the highest-conviction structural regularity the
+whole program has found (event t=5.7, 16/17 years, mechanism-first window), and it has
+the respectable-Sharpe/high-hit-rate character asked for -- at mid execution. It clears
+costs only below ~0.2x institutional effective spreads (0.5x at the 3Y alone), i.e. it
+is a desk overlay for internalised flow, not a taker strategy. At full SR1170 costs the
+session's cumulative verdict stands: ~14,000 configurations, zero alive.
+
 ## Validation chain (all pass)
 
 | check | result |
