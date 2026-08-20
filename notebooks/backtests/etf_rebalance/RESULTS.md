@@ -383,6 +383,12 @@ $PY -m MDP.ETFHoldings.backfill --plan all --verify
 $PY -m RVUtils.ETFRebalance.bond_panel  --start 2015-06-01
 $PY -m RVUtils.ETFRebalance.float_panel --start 2015-06-01
 
+# warm the GC fixing cache over EVERY panel date FIRST. engine._gc_series fetches
+# missing dates one at a time; warmed over only one fund's universe, the other funds'
+# extra dates become hundreds of serialised live lookups INSIDE a notebook cell, and
+# the kernel reads as hung (100 threads, open sockets, ~25 CPU-seconds per hour).
+$PY RVUtils/ETFRebalance/_prewarm_gc.py
+
 # the checks that must pass before any number is believed
 $PY RVUtils/ETFRebalance/_tie_out_panel.py      # panel vs FixedRateBondsMDP, an identity
 $PY -m pytest tests/test_etf_rebalance.py -q

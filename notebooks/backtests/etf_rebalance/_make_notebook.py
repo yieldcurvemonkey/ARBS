@@ -581,19 +581,25 @@ holdings data knows and the price does not. **The signs flip.**
 
 code(r"""
 def _orth(df, target, control):
-    out = pd.Series(np.nan, index=df.index)
-    for _, g in df.groupby("date", sort=False):
-        x, y = g[control].to_numpy(float), g[target].to_numpy(float)
-        ok = np.isfinite(x) & np.isfinite(y)
-        if ok.sum() < 8:
-            continue
-        xc = x[ok] - x[ok].mean(); den = float(xc @ xc)
-        if den <= 0:
-            continue
-        b = float(xc @ (y[ok] - y[ok].mean()) / den)
-        r = np.full(len(g), np.nan); r[ok] = y[ok] - (y[ok].mean() + b * xc)
-        out.loc[g.index] = r
-    return out
+    """Residual of `target` on `control`, cross-sectionally, one date at a time.
+
+    Vectorised through groupby transforms rather than a Python loop. The loop version
+    did `out.loc[g.index] = r` once per date per signal -- 12 signals x 2,528 dates of
+    O(n) assignment into an 81,000-row Series -- and it was the single slowest thing in
+    this notebook by a wide margin, to the point of looking like a hang.
+    """
+    ok = np.isfinite(df[target]) & np.isfinite(df[control])
+    x = df[control].where(ok)
+    y = df[target].where(ok)
+    g = df["date"]
+    n = ok.groupby(g).transform("sum")
+    xb = x.groupby(g).transform("mean")
+    yb = y.groupby(g).transform("mean")
+    xc, yc = x - xb, y - yb
+    num = (xc * yc).groupby(g).transform("sum")
+    den = (xc * xc).groupby(g).transform("sum")
+    b = (num / den.where(den > 0)).where(n >= 8)
+    return (yc - b * xc).where(ok)
 
 TARGETS = [c for c in SIG_COLS if c not in ("z_resid",)]
 _p = _sc.copy()
@@ -1121,12 +1127,19 @@ from BT.signals import etf_rebalance as QDB
 # because three near-identical legs cancel the level and leave exactly that. Measured on
 # ten packages: mid-vs-eod marks disagreed 13x on one day of the March 2023 SVB week;
 # on a common basis the same book agrees to 0.011bp on the level.
+# A deliberately SMALL, RECENT slice. The QDB prices through FixedRateBondsMDP, and a
+# (date, CUSIP) whose pricer is not already on disk is a live fetch: a wider window sent
+# the kernel to 97 threads blocked on open sockets and it made 20 CPU-seconds of progress
+# in an hour. The tie-out is a check on the marking model, not a study, so it is scoped to
+# a window the cache covers. Widen it only after pre-warming the pricer cache.
 CFG_Q = EN.merge_config({**CONFIG, "name": "qdb tie-out", "price_basis": "eod",
-                         "universe": {**CONFIG["universe"], "start": "2022-01-01"}})
+                         "universe": {**CONFIG["universe"], "start": "2023-01-01"},
+                         "timing": {**CONFIG["timing"], "hold_days": 10,
+                                    "entry_every": 21}})
 UNI_Q, FUN_Q = EN.prepare_universe(CFG_Q, joined=JOINED, panel=PANEL)
 RES_Q = EN.run_config(CFG_Q, universe=UNI_Q, prepared_funnel=FUN_Q, keep_segments=True)
 
-SUB = RES_Q.closed.sort_values("opened_at").head(60)      # a slice; the full book is slow
+SUB = RES_Q.closed.sort_values("opened_at").head(20)      # a slice; the full book is slow
 SUB_LEGS = RES_Q.legs[RES_Q.legs.trade_id.isin(SUB.trade_id)]
 mark_dates = RES_Q.daily.loc[
     (RES_Q.daily["date"] >= SUB["opened_at"].min()) &
@@ -1157,7 +1170,7 @@ fig, axes = plt.subplots(1, 2, figsize=(17, 4.4))
 axes[0].plot(j.index, j["fast_bp"], lw=1.8, label="fast engine (yield space + carry)")
 axes[0].plot(j.index, j["qdb_bp"], lw=1.4, ls="--", label="QueryDrivenBacktest (dirty NPV)")
 axes[0].axhline(0, color="k", lw=.6); axes[0].legend()
-axes[0].set_ylabel("cumulative bp"); axes[0].set_title("the same 60 packages, marked two ways")
+axes[0].set_ylabel("cumulative bp"); axes[0].set_title("the same 20 packages, marked two ways")
 axes[1].plot(j.index, j["gap_bp"], lw=1.2, color="crimson")
 axes[1].axhline(0, color="k", lw=.6)
 axes[1].set_title("QDB minus fast engine: coupon cash + dirty NPV against one carry "

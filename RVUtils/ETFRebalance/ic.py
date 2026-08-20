@@ -126,15 +126,24 @@ def ic_table(
         for c in signal_cols:
             d[c] = d.groupby("cusip")[c].shift(exec_lag)
 
+    # Group ONCE, not once per (signal, horizon). The naive form re-runs
+    # ``d.groupby("date")`` for every cell of the surface -- 13 signals x 6 horizons is
+    # 78 full passes over ~81,000 rows, ~200,000 group extractions -- and it was by far
+    # the slowest thing in the notebook. Slicing precomputed positional blocks turns it
+    # into one pass.
+    d = d.sort_values("date", kind="stable")
+    dates = d["date"].to_numpy()
+    bounds = np.flatnonzero(np.r_[True, dates[1:] != dates[:-1], True])
+    blocks = [(a, b) for a, b in zip(bounds[:-1], bounds[1:]) if b - a >= min_names]
+    cols = {c: d[c].to_numpy(float) for c in signal_cols}
+    cols.update({f"fwd_{h}": d[f"fwd_{h}"].to_numpy(float) for h in horizons})
+
     rows = []
     for sig in signal_cols:
+        sig_arr = cols[sig]
         for h in horizons:
-            per_date = []
-            for _, g in d.groupby("date", sort=True):
-                if len(g) < min_names:
-                    continue
-                per_date.append(_spearman(g[sig].to_numpy(float),
-                                          g[f"fwd_{h}"].to_numpy(float)))
+            fwd_arr = cols[f"fwd_{h}"]
+            per_date = [_spearman(sig_arr[a:b], fwd_arr[a:b]) for a, b in blocks]
             v = np.array([x for x in per_date if np.isfinite(x)], float)
             if v.size < 20:
                 continue
