@@ -52,6 +52,29 @@ floor counts ``len(prices)``, not the contiguous run  ``..._four_settles_still_y
 ``cache_only`` stops patching httpx                   ``..._blocks_httpx_directly``
 ``coverage_by_run`` collapses every run into one      ``..._reports_both_sides_of_the_hole``
 ===================================================  ==================================
+
+MUTATION-CHECKED AGAIN, 8/8 caught (2026-08-20), for the `min_days` viability
+floor below. Same harness discipline: control run green first, every anchor
+normalised to the file's own CRLF, anchor uniqueness enforced, every mutated
+source `compile()`d, and the source restored by byte copy with a sha256 compare.
+Independently, 7 of the 9 new tests were run against the REAL pre-fix module
+(ARBS-cvx's byte-identical copy, not a mutant) and FAILED there -- the
+`assert_ran` one reproducing the reported `equity is identically zero -- no
+trigger fired` verbatim. The 2 that pass pre-fix are a characterization test and
+a positive control; M5/M6/M8 below show both have teeth.
+
+===================================================  ==================================
+mutation                                              test that caught it
+===================================================  ==================================
+M1 floor ignored in run selection                     ``..._refuses_the_island_and_takes_the_latest_viable_run``
+M2 empty-plan assertion removed                       ``..._names_the_empty_plan_instead_of_blaming_the_equity``
+M3 negative floor accepted                            ``..._rejects_a_negative_floor``
+M4 ``len(days) < 2`` return bypasses the floor        ``..._floors_a_one_date_panel_too``
+M5 ``latest`` takes ``usable[0]``, not ``usable[-1]`` ``..._latest_alone_selects_the_short_trailing_island``
+M6 ``min_days`` defaults to 252, not 0                ``..._zero_is_exactly_the_legacy_behaviour``
+M7 ``longest`` uses ``min()`` over usable runs        ``..._leaves_longest_alone_when_the_longest_run_clears_it``
+M8 ``len(specs) > 0`` -> ``len(specs) > 1``           ``..._still_passes_a_book_that_actually_traded``
+===================================================  ==================================
 """
 from __future__ import annotations
 
@@ -583,3 +606,126 @@ def test_rebuilt_panel_records_availability_on_every_row():
         assert c in p.columns, f"missing availability column {c}"
     assert p["strip_depth"].notna().all()
     assert p["q20_built"].dtype == bool
+
+
+# ===========================================================================
+# A run too short to carry the statistic is not a candidate
+# ===========================================================================
+# Added 2026-08-20. `keep="latest"` is `runs[-1]`, and `runs[-1]` is whatever
+# the store happened to warm last. On the rebuilt Q20 panel that is a **12-date**
+# trailing island for the deep band (2026-07-31..2026-08-18) and a 9-date one for
+# the near band, both cut off from 2026-07-01 by an 18-day hole. Against
+# `min_history_for_z1y` = 252 every `vs_model_z1y` there is NaN, `plan_epochs`
+# warm-up-skips every rebalance mark and returns zero epochs, and the notebook
+# died 600 lines later on `equity is identically zero -- no trigger fired`.
+# Total, silent data loss with no warning anywhere upstream.
+def _island_panel(long_days: int = 300, island_days: int = 12):
+    """A long earlier run plus a short trailing island, the panel's real shape."""
+    a = pd.bdate_range("2024-01-01", periods=long_days)
+    b = pd.bdate_range(a[-1] + pd.Timedelta(days=60), periods=island_days)
+    days = a.append(b)
+    return (pd.DataFrame({"date": days, "rank": 1, "pack": "X",
+                          "ca_bp": np.arange(len(days), dtype=float),
+                          "pack_rate": 4.0}),
+            pd.DataFrame({"2Y": 4.0}, index=days))
+
+
+def test_trim_latest_alone_selects_the_short_trailing_island():
+    """The defect, pinned. Unfloored ``latest`` hands back the island."""
+    panel, rates = _island_panel()
+    p, r = S2.trim_to_contiguous_run(panel, rates, keep="latest")
+    assert p["date"].nunique() == 12 and len(r) == 12
+
+
+def test_min_days_refuses_the_island_and_takes_the_latest_viable_run():
+    panel, rates = _island_panel()
+    p, r = S2.trim_to_contiguous_run(panel, rates, keep="latest", min_days=252)
+    assert p["date"].nunique() == 300 and len(r) == 300
+    # The floor SELECTS; it never admits. Nothing appears that the caller's own
+    # gate had not already passed -- that is what keeps this out of the
+    # "coverage bought with correctness" failure mode.
+    assert set(p["date"]).issubset(set(panel["date"]))
+
+
+def test_min_days_raises_with_the_coverage_table_when_nothing_qualifies():
+    """Better a loud stop than a statistically inert slice returned in silence."""
+    panel, rates = _island_panel()
+    with pytest.raises(ValueError) as ei:
+        S2.trim_to_contiguous_run(panel, rates, keep="latest", min_days=400)
+    msg = str(ei.value)
+    assert "min_days=400" in msg
+    assert "n_days" in msg and "300" in msg and "12" in msg, msg
+
+
+def test_min_days_zero_is_exactly_the_legacy_behaviour():
+    """Shipped artifacts and the other three call sites must not move."""
+    panel, rates = _island_panel()
+    for keep in ("longest", "latest", "none"):
+        a, ar = S2.trim_to_contiguous_run(panel, rates, keep=keep)
+        b, br = S2.trim_to_contiguous_run(panel, rates, keep=keep, min_days=0)
+        pd.testing.assert_frame_equal(a, b)
+        pd.testing.assert_frame_equal(ar, br)
+
+
+def test_min_days_leaves_longest_alone_when_the_longest_run_clears_it():
+    panel, rates = _island_panel()
+    a, _ = S2.trim_to_contiguous_run(panel, rates, keep="longest")
+    b, _ = S2.trim_to_contiguous_run(panel, rates, keep="longest", min_days=252)
+    pd.testing.assert_frame_equal(a, b)
+
+
+def test_min_days_rejects_a_negative_floor():
+    panel, rates = _island_panel()
+    with pytest.raises(ValueError, match="min_days"):
+        S2.trim_to_contiguous_run(panel, rates, min_days=-1)
+
+
+# ===========================================================================
+# An empty plan is a planning failure, and has to say so
+# ===========================================================================
+class _Portfolio:
+    def __init__(self, closed):
+        self.closed_positions_log = list(closed)
+
+
+class _FlatBook:
+    """What ``run_backtest`` returns when ``plan_epochs`` planned nothing: a full
+    grid of marks, every one of them zero, and no closed positions."""
+
+    def __init__(self, days, marks=None, closed=()):
+        self.mtm_history = ({d: 0.0 for d in days} if marks is None
+                            else dict(zip(days, marks)))
+        self.portfolio = _Portfolio(closed)
+
+
+def test_assert_ran_names_the_empty_plan_instead_of_blaming_the_equity():
+    """``equity is identically zero -- no trigger fired`` reads as "the strategy
+    made no money" and sends the reader to the P&L. With zero specs the cause is
+    upstream -- the window, not the book -- and the message must say which."""
+    bt = _FlatBook(pd.bdate_range("2026-07-31", periods=12))
+    with pytest.raises(AssertionError, match="plan_epochs produced NO epochs"):
+        S2.assert_ran(bt, [], hedged=False, expect_days=12)
+
+
+def test_assert_ran_still_passes_a_book_that_actually_traded():
+    """Positive control: the new first assertion must not fire on a real run."""
+    days = pd.bdate_range("2026-07-31", periods=12)
+    bt = _FlatBook(days, marks=[float(i) for i in range(12)], closed=range(5))
+
+    class _Spec:
+        hedge = None
+
+    eq = S2.assert_ran(bt, [_Spec()], hedged=False, expect_days=12)
+    assert len(eq) == 12 and float(eq.iloc[-1]) == 11.0
+
+
+def test_min_days_floors_a_one_date_panel_too():
+    """The ``len(days) < 2`` early return must not become a hole in the floor."""
+    days = pd.to_datetime(["2026-08-18"])
+    panel = pd.DataFrame({"date": days, "rank": 1, "pack": "X", "ca_bp": 0.0,
+                          "pack_rate": 4.0})
+    rates = pd.DataFrame({"2Y": 4.0}, index=days)
+    with pytest.raises(ValueError, match="min_days=252"):
+        S2.trim_to_contiguous_run(panel, rates, keep="latest", min_days=252)
+    p, r = S2.trim_to_contiguous_run(panel, rates, keep="latest")
+    assert len(p) == 1 and len(r) == 1
