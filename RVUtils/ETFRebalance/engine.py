@@ -494,9 +494,15 @@ def run_config(
                 # while the trade log kept it, leaving a 0.96bp gap across 1,407 trades.
                 dt = day_frac[sl].copy()
                 dt[0] = 0.0
-                # np.cumsum propagates NaN exactly as pandas' does, which is what the
-                # complete-case rule wants: after a leg fails, the accrual is unknown.
-                carry_cum = np.cumsum(side * per_year * dt)
+                # nancumsum, NOT cumsum. A plain cumsum propagates a NaN forward for the
+                # rest of the trade, so ONE mid-hold day on which a leg did not price
+                # turned that trade's ``carry_bp`` -- and therefore its ``gross_bp``,
+                # ``pnl_bp`` and the whole configuration's ``avg_bp`` and ``t_stat`` --
+                # into NaN. Found in a grid peek: several configurations reported
+                # ``sr_per_trade = 0.0`` and a NaN t, which reads as an inert result
+                # rather than a broken one. The position IS held across that day; only
+                # its carry is unmeasured, so the increment is dropped, not the trade.
+                carry_cum = np.nancumsum(side * per_year * dt)
                 carry_cum = np.where(good, carry_cum, np.nan)
 
             conv_bp = float((CX[i0][idx] * w).sum())

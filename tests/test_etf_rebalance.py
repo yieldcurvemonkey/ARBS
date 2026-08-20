@@ -463,6 +463,42 @@ def test_the_charged_cost_is_a_FULL_round_trip_on_all_three_legs():
     assert (per_trade_legs == 3).all()
 
 
+def test_a_mid_hold_pricing_hole_does_not_nan_the_whole_trade():
+    """One unpriced day inside a hold must not destroy the trade's carry.
+
+    A plain ``cumsum`` propagates NaN for the rest of the trade, so a single mid-hold day
+    on which one leg did not price turned that trade's ``carry_bp`` -- and hence its
+    ``gross_bp``, ``pnl_bp``, and the whole configuration's ``avg_bp`` and ``t_stat`` --
+    into NaN. Found in a grid peek where several configurations reported
+    ``sr_per_trade = 0.0`` with a NaN t: an inert-looking result rather than a broken one.
+    The position IS held across that day; only its carry is unmeasured.
+    """
+    uni = _synthetic_universe(n_days=40)
+    hole = sorted(uni["date"].unique())[6]
+    victim = sorted(uni["cusip"].unique())[3]
+    uni.loc[(uni["date"] == hole) & (uni["cusip"] == victim), "ytm"] = np.nan
+
+    # Carry must be ON -- the NaN travels through the carry accumulation, so a test with
+    # carry disabled cannot see the defect. (Verified by mutation: with carry off, the
+    # mutant survived.) A flat stub avoids the network lookup a real GC series needs.
+    orig_gc = EN._gc_series
+    EN._gc_series = lambda dates: pd.Series(0.04, index=pd.DatetimeIndex(dates))
+    try:
+        cfg = EN.merge_config({
+            "signal": {"components": {"active_w": 1.0}},
+            "timing": {"exec_lag": 1, "hold_days": 10, "entry_every": 5},
+            "carry": {"enabled": True},
+        })
+        res = EN.run_config(cfg, universe=uni, prepared_funnel={})
+    finally:
+        EN._gc_series = orig_gc
+    assert not res.closed.empty
+    for col in ("price_bp", "carry_bp", "gross_bp", "cost_bp", "pnl_bp"):
+        assert res.closed[col].notna().all(), f"{col} went NaN on a mid-hold hole"
+    assert float(res.daily["mtm_bp"].iloc[-1]) == pytest.approx(
+        float(res.closed["pnl_bp"].sum()), abs=1e-9)
+
+
 def test_the_same_belly_is_never_open_twice():
     """A bond that stays underweight for a month must not be entered twenty times."""
     uni = _synthetic_universe(n_days=120)

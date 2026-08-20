@@ -17,7 +17,7 @@ Four things exist that did not before.
 
 | Artefact | What it is |
 |---|---|
-| `MDP/ETFHoldings/` | Daily iShares holdings, 2016–2026, 7 funds, ~16,000 documents. Rotating-exit fetcher, resumable manifest, content-hash dedup. |
+| `MDP/ETFHoldings/` | Daily iShares holdings, 2016–2026, **12 funds, 22,904 documents**. Rotating-exit fetcher, resumable manifest, content-hash dedup. |
 | `RVUtils/ETFRebalance/` | UST price/yield/duration/convexity panel, monthly float panel, the constant-maturity ladder, the signal family, a local curve model, a measured cost model, an IC toolkit, a vectorised backtester and a grid searcher. |
 | `BT/signals/etf_rebalance.py` | The same book on `QueryDrivenBacktest`, marked at dirty NPV with coupon cash. |
 | `etf_rebalance_configurable_backtest.ipynb` | One `CONFIG` dict = one backtest. Knob sweeps, grid search, DSR, robustness, trade log. |
@@ -39,8 +39,10 @@ offer**, per completed round trip:
 |---|---|---|---|---|---|---|
 | butterfly round trip (yield bp) | 0.30 | 0.35 | 0.50 | 0.94 | 0.94 | 0.58 |
 
-The cross-sectional standard deviation of a bond's richness against its local fitted curve is
-**≈1.1bp**. So the entire dispersion this trade can capture is about **two round trips wide**.
+The median **cross-sectional** standard deviation of a bond's richness against its local fitted
+curve is **0.434bp** (mean 0.53, p90 1.05; per-CUSIP time-series sd 0.384bp, lag-1
+autocorrelation 0.958). So the entire dispersion this trade can capture is **smaller than a
+single round trip**.
 
 ### Why not the two cost tables already in the repo
 
@@ -61,7 +63,7 @@ The cross-sectional standard deviation of a bond's richness against its local fi
 TLT, 2016–2026, 80,953 gated bond-days, `exec_lag=1`, target = forward change in the richness
 residual. Mean cross-sectional Spearman IC, t across dates:
 
-| signal | 5d | 10d | 21d | 42d | 63d | t @ 63d |
+| signal | 5d | 10d | 21d | 42d | 63d | naive t @ 63d |
 |---|---|---|---|---|---|---|
 | `resid` *(control — no ETF data)* | 0.128 | 0.177 | 0.243 | 0.309 | **0.349** | **+50.7** |
 | `ownership` | 0.014 | 0.021 | 0.035 | 0.056 | 0.068 | +15.3 |
@@ -77,6 +79,9 @@ the other side.
 A fund that overweights large, liquid, recently issued bonds is overweighting a set that is *also*
 systematically rich. Orthogonalising each signal against `resid` cross-sectionally, date by date:
 
+All t-statistics in this sub-section are **naive** (uncorrected for overlapping
+windows); §3.4 restates them.
+
 | signal | | 5d | 10d | 21d | 42d | 63d |
 |---|---|---|---|---|---|---|
 | `active_w` | raw t | −3.8 | −5.5 | −8.7 | −12.5 | −14.4 |
@@ -91,7 +96,7 @@ richen — and it is significant. It is also tiny.
 
 Bivariate cross-sectional regression, forward bp of richening per unit of signal z:
 
-| horizon | β(`active_w`) | t | β(`resid`) | t |
+| horizon | β(`active_w`) | naive t | β(`resid`) | naive t |
 |---|---|---|---|---|
 | 10d | +0.0032 | 3.25 | 0.0395 | 21.7 |
 | 21d | +0.0029 | 2.55 | 0.0628 | 24.5 |
@@ -165,10 +170,10 @@ Sorting on richness first and on `active_w` inside each richness quintile, 63-da
 |---|---|---|---|---|---|
 | high-minus-low `active_w` | +0.029 | +0.012 | −0.019 | −0.033 | +0.030 |
 
-Not monotone, sign-flipping, and of the same size as its own noise. **A t of 4 that a double sort
-refuses to reproduce is a linear artefact.**
+Not monotone, sign-flipping, and of the same size as its own noise. **A naive t of 4 that survives neither a
+HAC correction nor a double sort is a linear artefact.**
 
-### 3.5 The backtest agrees
+### 3.7 The backtest agrees
 
 Baseline config (per-CUSIP `active_w`, 10-day hold, `exec_lag=1`, 3 bellies each side): **1,407
 butterflies, gross +0.0045bp per trade, cost 0.502bp, net −0.498bp.** The book loses almost exactly

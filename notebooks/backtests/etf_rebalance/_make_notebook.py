@@ -48,10 +48,10 @@ far the fund's weight sits from the index weight.
 ### The measuring stick, stated before any result
 
 A DV01-neutral butterfly among 20-30y Treasuries costs, on FedInvest's own published bid and offer,
-**0.30bp per round trip in 2016 and 0.95bp in 2023** — about 0.5bp on median. The cross-sectional
-standard deviation of a bond's richness against its local curve is about **1.1bp**. So the entire
-dispersion this trade can capture is roughly two round trips wide, and a signal has to explain a
-large fraction of it rather than a detectable fraction. §3 prints the cost before any P&L appears,
+**0.30bp per round trip in 2016 and 0.95bp in 2023** — about 0.5bp on median. The median
+cross-sectional standard deviation of a bond's richness against its local curve is **0.434bp**. So
+the entire dispersion this trade can capture is **smaller than a single round trip**, and a signal
+would have to explain most of it rather than a detectable part of it. §3 prints the cost before any P&L appears,
 which is the house convention: the prior labs died on cost and cost was the last thing shown.
 
 ### What was actually found
@@ -334,8 +334,9 @@ print(f"median cross-sectional sd of the richness residual : {resid_sd:.3f} bp")
 print(f"median butterfly round trip                        : {cs['fly_rt_bp_med'].median():.3f} bp")
 print(f"                                             ratio : "
       f"{resid_sd / cs['fly_rt_bp_med'].median():.2f}x")
-print("\nThe whole dispersion a butterfly can capture is about two round trips wide.")
-print("A signal has to explain a large FRACTION of it, not a detectable fraction.")
+print()
+print("The whole cross-sectional dispersion a butterfly can capture is SMALLER than one")
+print("round trip. A signal would have to explain most of it, not a detectable part.")
 """)
 
 # =====================================================================================
@@ -1195,7 +1196,7 @@ why the trade log is written out with its config attached.
 
 **Read the cost line before the P&L line.** §3 prints it first on purpose. A butterfly in the
 20-30y sector costs 0.30–0.95bp per round trip and the entire cross-sectional richness dispersion
-is about 1.1bp. Almost everything in this space dies there, and this one does too.
+is 0.434bp. Almost everything in this space dies there, and this one does too.
 
 **Read the partial IC before the raw IC.** §7.2 is the section that decides the project. The raw
 relationship between a fund's active weight and subsequent richening is strong, significant, and
